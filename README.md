@@ -15,6 +15,88 @@ LimitUpLab 是一个面向 A 股涨停股的开源分析工具，用于追踪涨
 - 不同封板时间、换手率、成交额下的炸板风险有什么差异？
 - 当前市场短线情绪是在升温、分歧，还是退潮？
 
+## Current Scaffold
+
+The repository is now split into a Python backend and a TypeScript React frontend:
+
+```text
+backend/
+  app/
+    main.py                 FastAPI application entry
+    models.py               Pydantic API/data models
+    routers/                API routes
+    services/               sample data and analysis functions
+  requirements.txt
+
+frontend/
+  src/
+    App.tsx                 dashboard page
+    api.ts                  API client
+    types.ts                shared frontend types
+    styles.css              responsive UI styling
+  package.json
+  vite.config.ts
+```
+
+The first version uses sample data so the dashboard and analysis flow can be developed before connecting AKShare, Tushare, or exchange public data.
+
+## Quick Start
+
+Start the backend:
+
+```bash
+cd backend
+python -m venv .venv
+source .venv/bin/activate
+pip install -r requirements.txt
+uvicorn app.main:app --reload --port 8000
+```
+
+Start the frontend in another terminal:
+
+```bash
+cd frontend
+npm install
+npm run dev
+```
+
+Open `http://localhost:5173`.
+
+## API
+
+- `GET /health`
+- `GET /api/market/overview`
+- `GET /api/market/summary`
+- `GET /api/limit-up/events`
+- `GET /api/limit-up/first-board`
+- `GET /api/limit-up/continued-board`
+- `GET /api/limit-up/failed`
+- `GET /api/limit-up/recent?days=3`
+- `GET /api/analysis/continuation`
+- `GET /api/analysis/failed-rate`
+- `GET /api/analysis/post-performance`
+
+## First Product Flow
+
+The dashboard now starts with a market overview page instead of a dense all-in-one table:
+
+- 首板票数量
+- 连板票数量和最高连板高度
+- 炸板票数量和炸板率
+- 涨停成交额
+- 上证指数、深证成指、创业板指走势
+- 热门题材热度
+- 最近三个交易日涨停票走势入口
+
+Users can click into:
+
+- `/stocks/first-board` 首板票
+- `/stocks/continued-board` 连板票
+- `/stocks/failed` 炸板票
+- `/stocks/recent-limit-up` 近三日涨停票复盘
+
+Because the product is currently positioned as an after-close review tool, stock lists only show data available as of the latest trading day's close. Forward-looking fields such as next-day close or 1/3/5-day returns are intentionally kept out of the current stock detail tables.
+
 ## MVP
 
 - Track daily A-share limit-up stocks
@@ -95,26 +177,16 @@ LimitUpLab 目标是帮助用户回答一些具体、可验证的问题：
 - 市场涨停数量增加时，连板概率是否同步上升？
 - 某个行业成为热点后，涨停持续性通常能维持几天？
 
-## Possible Tech Stack
-
-项目技术栈会随着实现推进逐步确定。初步方向：
-
-- Data source: AKShare / Tushare / exchange public data
-- Backend: Python
-- Data processing: pandas / polars
-- Database: SQLite for local MVP, PostgreSQL for production
-- Dashboard: Streamlit / FastAPI + React
-- Visualization: ECharts / Plotly
-
 ## Roadmap
 
-- [ ] Initialize project structure
+- [x] Initialize project structure
+- [x] Build first dashboard page
+- [x] Add sample limit-up event analysis API
 - [ ] Build daily limit-up stock data collector
 - [ ] Store limit-up events in local database
-- [ ] Calculate board continuation probability
-- [ ] Calculate failed limit-up rate
-- [ ] Add post-limit-up performance analysis
-- [ ] Build first dashboard page
+- [ ] Calculate board continuation probability from persisted data
+- [ ] Calculate failed limit-up rate from persisted data
+- [ ] Add post-limit-up performance analysis from historical quotes
 - [ ] Add historical backfill script
 - [ ] Add documentation for data fields and formulas
 
