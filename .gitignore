@@ -6,10 +6,16 @@ __pycache__/
 .pytest_cache/
 .ruff_cache/
 .mypy_cache/
+.test-tmp/
+backend/.test-tmp/
 .venv/
 venv/
 data/*.db
 data/*.sqlite
+backend/*.db
+backend/*.sqlite
+backend/data/*.db
+backend/data/*.sqlite
 
 # Frontend
 node_modules/
