@@ -4,6 +4,8 @@ import type {
   LimitUpEvent,
   MarketSummary,
   PostPerformanceStat,
+  StockIntradayKLineBar,
+  StockKLineBar,
 } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -52,4 +54,14 @@ export function fetchFailedRateStats() {
 
 export function fetchPostPerformanceStats() {
   return request<PostPerformanceStat[]>("/api/analysis/post-performance");
+}
+
+export function fetchStockKLine(symbol: string, days = 5) {
+  return request<StockKLineBar[]>(`/api/stocks/${symbol}/kline?days=${days}`);
+}
+
+export function fetchStockTradingDayKLine(symbol: string, period = 5) {
+  return request<StockIntradayKLineBar[]>(
+    `/api/stocks/${symbol}/trading-day-kline?period=${period}`,
+  );
 }

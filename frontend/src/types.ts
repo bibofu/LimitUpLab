@@ -52,6 +52,25 @@ export interface LimitUpEvent {
   continued_next_day: boolean;
 }
 
+export interface StockKLineBar {
+  trade_date: string;
+  open: number;
+  close: number;
+  high: number;
+  low: number;
+  volume: number;
+}
+
+export interface StockIntradayKLineBar {
+  timestamp: string;
+  open: number;
+  close: number;
+  high: number;
+  low: number;
+  volume: number;
+  amount: number;
+}
+
 export interface ContinuationStat {
   board_height: number;
   sample_size: number;

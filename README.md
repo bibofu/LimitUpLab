@@ -24,8 +24,12 @@ backend/
   app/
     main.py                 FastAPI application entry
     models.py               Pydantic API/data models
+    database.py             SQLite connection and schema setup
+    collectors/             AKShare market, limit-up, and K-line collectors
+    repositories/           SQLite-backed persistence layer
     routers/                API routes
-    services/               sample data and analysis functions
+    services/               analysis functions and fallback sample data
+  scripts/                  data import scripts
   requirements.txt
 
 frontend/
@@ -38,7 +42,7 @@ frontend/
   vite.config.ts
 ```
 
-The first version uses sample data so the dashboard and analysis flow can be developed before connecting AKShare, Tushare, or exchange public data.
+The backend uses SQLite for local persistence. If the database is empty, the development server seeds bundled sample events so the dashboard still works after a fresh clone. Real limit-up, failed limit-up, index, daily K-line, and trading-day intraday review data are collected through AKShare-backed data sources.
 
 ## Quick Start
 
@@ -50,6 +54,13 @@ python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
 uvicorn app.main:app --reload --port 8000
+```
+
+Import real limit-up and failed limit-up events for a trading day:
+
+```bash
+cd backend
+python scripts/import_limit_up_from_akshare.py --date 20260520 --replace-date
 ```
 
 Start the frontend in another terminal:
@@ -75,6 +86,8 @@ Open `http://localhost:5173`.
 - `GET /api/analysis/continuation`
 - `GET /api/analysis/failed-rate`
 - `GET /api/analysis/post-performance`
+- `GET /api/stocks/{symbol}/kline?days=5`
+- `GET /api/stocks/{symbol}/trading-day-kline?period=5`
 
 ## First Product Flow
 
@@ -94,8 +107,15 @@ Users can click into:
 - `/stocks/continued-board` 连板票
 - `/stocks/failed` 炸板票
 - `/stocks/recent-limit-up` 近三日涨停票复盘
+- `/stocks/:symbol` 个股详情页
 
 Because the product is currently positioned as an after-close review tool, stock lists only show data available as of the latest trading day's close. Forward-looking fields such as next-day close or 1/3/5-day returns are intentionally kept out of the current stock detail tables.
+
+The stock detail page focuses on review context:
+
+- 封板信息：高度、封板状态、首次/最后封板时间、封板次数、炸板次数
+- 五日日 K：最近 5 个交易日的开高低收
+- 交易日走势：收盘后读取该交易日的 5 分钟 K 线，用于复盘从开盘到收盘的走势过程，不提供实时盘中监控
 
 ## MVP
 
@@ -166,6 +186,15 @@ Because the product is currently positioned as an after-close review tool, stock
 - 热门行业与概念
 - 近期涨停股走势
 
+### Stock Detail Review
+
+个股详情页用于把涨停事件放回价格走势里复盘：
+
+- 最近 5 个交易日的日 K
+- 最新交易日的 5 分钟 K 线走势
+- 涨停高度、封板/炸板信息
+- 成交额、换手率、行业和题材
+
 ## Example Questions
 
 LimitUpLab 目标是帮助用户回答一些具体、可验证的问题：
@@ -182,8 +211,10 @@ LimitUpLab 目标是帮助用户回答一些具体、可验证的问题：
 - [x] Initialize project structure
 - [x] Build first dashboard page
 - [x] Add sample limit-up event analysis API
-- [ ] Build daily limit-up stock data collector
-- [ ] Store limit-up events in local database
+- [x] Build daily limit-up stock data collector
+- [x] Store limit-up events in local database
+- [x] Add real market index snapshots
+- [x] Add stock detail page with daily and trading-day K-line review
 - [ ] Calculate board continuation probability from persisted data
 - [ ] Calculate failed limit-up rate from persisted data
 - [ ] Add post-limit-up performance analysis from historical quotes

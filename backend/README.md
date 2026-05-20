@@ -1,6 +1,7 @@
 # LimitUpLab Backend
 
-Python backend for collecting, storing, and analyzing A-share limit-up events.
+Python backend for collecting, storing, and analyzing A-share limit-up events
+for after-close market review.
 
 ## Quick Start
 
@@ -50,7 +51,7 @@ To import real limit-up and failed limit-up events from AKShare:
 
 ```bash
 cd backend
-python scripts/import_limit_up_from_akshare.py --date 20260515 --replace-date
+python scripts/import_limit_up_from_akshare.py --date 20260520 --replace-date
 ```
 
 Set `LIMITUPLAB_DATABASE_PATH` to use a different SQLite file:
@@ -62,11 +63,29 @@ LIMITUPLAB_DATABASE_PATH=/tmp/limituplab.sqlite uvicorn app.main:app --reload --
 ## Endpoints
 
 - `GET /health` - service health check
-- `GET /api/market/summary` - market sentiment summary
+- `GET /api/market/summary` - market sentiment summary with real index snapshots
+- `GET /api/market/overview` - dashboard overview
 - `GET /api/limit-up/events` - latest limit-up events
+- `GET /api/limit-up/first-board` - first-board stocks for the latest trading day
+- `GET /api/limit-up/continued-board` - continued-board stocks for the latest trading day
+- `GET /api/limit-up/failed` - failed or unstable limit-up events for the latest trading day
+- `GET /api/limit-up/recent?days=3` - recent trading-day limit-up review list
 - `GET /api/analysis/continuation` - board continuation probability
 - `GET /api/analysis/failed-rate` - failed limit-up rate by board height
 - `GET /api/analysis/post-performance` - next-day and short-window return stats
+- `GET /api/stocks/{symbol}/kline?days=5` - recent daily K-line bars
+- `GET /api/stocks/{symbol}/trading-day-kline?period=5` - after-close trading-day intraday K-line review
+
+## Data Sources
+
+Current collectors use AKShare-backed sources:
+
+- 东方财富涨停池 and 炸板池 for limit-up events
+- Index daily data for market snapshots
+- Tencent/Sina historical K-line sources for stock daily and trading-day review charts
+
+The product is not designed for live intraday monitoring. The trading-day K-line
+endpoint is intended for after-close review of the latest persisted trading day.
 
 ## Tests
 

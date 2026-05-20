@@ -1,4 +1,4 @@
-from datetime import date, time
+from datetime import date, datetime, time
 from typing import Literal
 
 from pydantic import BaseModel, Field
@@ -32,6 +32,25 @@ class MarketIndexSnapshot(BaseModel):
     close: float
     change_pct: float
     trend: list[float]
+
+
+class StockKLineBar(BaseModel):
+    trade_date: date
+    open: float
+    close: float
+    high: float
+    low: float
+    volume: float
+
+
+class StockIntradayKLineBar(BaseModel):
+    timestamp: datetime
+    open: float
+    close: float
+    high: float
+    low: float
+    volume: float
+    amount: float
 
 
 class ConceptHeat(BaseModel):

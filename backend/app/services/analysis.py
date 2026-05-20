@@ -8,10 +8,10 @@ from app.models import (
     ConceptHeat,
     FailedRateStat,
     LimitUpEvent,
+    MarketIndexSnapshot,
     MarketSummary,
     PostPerformanceStat,
 )
-from app.services.sample_data import SAMPLE_INDICES
 
 
 def latest_trade_date(events: list[LimitUpEvent]) -> date:
@@ -26,7 +26,10 @@ def events_for_date(
     return [event for event in events if event.trade_date == target_date]
 
 
-def summarize_market(events: list[LimitUpEvent]) -> MarketSummary:
+def summarize_market(
+    events: list[LimitUpEvent],
+    indices: Optional[list[MarketIndexSnapshot]] = None,
+) -> MarketSummary:
     latest_date = latest_trade_date(events)
     latest_events = events_for_date(events, latest_date)
     failed_count = sum(1 for event in latest_events if event.break_count > 0)
@@ -67,7 +70,7 @@ def summarize_market(events: list[LimitUpEvent]) -> MarketSummary:
             )
             for name, count in concept_counts.most_common(5)
         ],
-        indices=SAMPLE_INDICES,
+        indices=indices or [],
         sentiment=sentiment,
     )
 
