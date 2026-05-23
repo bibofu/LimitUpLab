@@ -91,6 +91,7 @@ export function App() {
   const location = useLocation();
   const activeView = routeToView[location.pathname] ?? "overview";
 
+  /** Load the dashboard summary and the list data needed by every route. */
   async function loadDashboard() {
     setLoading(true);
     setError(null);
@@ -173,6 +174,8 @@ export function App() {
 }
 
 function Overview({ data }: { data: DashboardData }) {
+  /** Render the top-level after-close market review dashboard. */
+
   const sentiment = sentimentCopy[data.summary.sentiment];
 
   return (
@@ -263,6 +266,8 @@ function Overview({ data }: { data: DashboardData }) {
 }
 
 function DetailView({ view, data }: { view: ViewKey; data: DashboardData }) {
+  /** Render one of the latest-day stock list views. */
+
   const eventsByView = {
     first: data.firstBoard,
     continued: data.continuedBoard,
@@ -279,6 +284,8 @@ function DetailView({ view, data }: { view: ViewKey; data: DashboardData }) {
 }
 
 function RecentLimitUp({ events }: { events: LimitUpEvent[] }) {
+  /** Group recent events by persisted trading date for review. */
+
   const grouped = useMemo(() => {
     return events.reduce<Record<string, LimitUpEvent[]>>((groups, event) => {
       groups[event.trade_date] = groups[event.trade_date] ?? [];
@@ -305,6 +312,8 @@ function StockTable({
   events: LimitUpEvent[];
   variant: ViewKey;
 }) {
+  /** Shared clickable table for all stock-list routes. */
+
   const navigate = useNavigate();
 
   function openStock(symbol: string) {
@@ -367,6 +376,8 @@ function StockTable({
 }
 
 function StockDetail({ data }: { data: DashboardData }) {
+  /** Render one stock's event facts together with daily and intraday K-lines. */
+
   const { symbol = "" } = useParams();
   const [kline, setKline] = useState<StockKLineBar[]>([]);
   const [tradingDayKline, setTradingDayKline] = useState<StockIntradayKLineBar[]>([]);
@@ -488,6 +499,8 @@ function Fact({ label, value }: { label: string; value: string }) {
 }
 
 function toDailyCandleBars(bars: StockKLineBar[]): CandleBar[] {
+  /** Convert API daily K-line bars into chart-friendly candle bars. */
+
   return bars.map((bar) => ({
     label: bar.trade_date.slice(5),
     open: bar.open,
@@ -498,6 +511,8 @@ function toDailyCandleBars(bars: StockKLineBar[]): CandleBar[] {
 }
 
 function toIntradayCandleBars(bars: StockIntradayKLineBar[]): CandleBar[] {
+  /** Convert API intraday bars into chart-friendly candle bars. */
+
   return bars.map((bar) => ({
     label: bar.timestamp.slice(11, 16),
     open: bar.open,
@@ -516,6 +531,8 @@ function CandlestickChart({
   emptyLabel: string;
   dense?: boolean;
 }) {
+  /** Draw a lightweight SVG candlestick chart without external chart libraries. */
+
   if (bars.length === 0) {
     return <div className="chart-state">{emptyLabel}</div>;
   }
@@ -680,6 +697,8 @@ function Panel({
 }
 
 function Sparkline({ values }: { values: number[] }) {
+  /** Draw the compact index trend sparkline shown on overview cards. */
+
   const min = Math.min(...values);
   const max = Math.max(...values);
   const range = max - min || 1;

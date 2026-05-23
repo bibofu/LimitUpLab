@@ -5,6 +5,8 @@ from pydantic import BaseModel, Field
 
 
 class LimitUpEvent(BaseModel):
+    """One stock's daily limit-up or failed limit-up event."""
+
     symbol: str = Field(examples=["600519"])
     name: str = Field(examples=["贵州茅台"])
     trade_date: date
@@ -27,6 +29,8 @@ class LimitUpEvent(BaseModel):
 
 
 class MarketIndexSnapshot(BaseModel):
+    """Compact index snapshot used by the dashboard."""
+
     name: str
     symbol: str
     close: float
@@ -35,6 +39,8 @@ class MarketIndexSnapshot(BaseModel):
 
 
 class StockKLineBar(BaseModel):
+    """Daily OHLCV bar for stock detail review."""
+
     trade_date: date
     open: float
     close: float
@@ -44,6 +50,8 @@ class StockKLineBar(BaseModel):
 
 
 class StockIntradayKLineBar(BaseModel):
+    """Intraday OHLCV bar for after-close trading-day review."""
+
     timestamp: datetime
     open: float
     close: float
@@ -54,12 +62,16 @@ class StockIntradayKLineBar(BaseModel):
 
 
 class ConceptHeat(BaseModel):
+    """Limit-up and failed-count summary for one concept or topic."""
+
     name: str
     limit_up_count: int
     failed_count: int
 
 
 class MarketSummary(BaseModel):
+    """Dashboard summary for the latest persisted trading day."""
+
     trade_date: date
     limit_up_count: int
     first_board_count: int
@@ -76,6 +88,8 @@ class MarketSummary(BaseModel):
 
 
 class ContinuationStat(BaseModel):
+    """Continuation probability bucket grouped by board height."""
+
     board_height: int
     sample_size: int
     continued_count: int
@@ -83,6 +97,8 @@ class ContinuationStat(BaseModel):
 
 
 class FailedRateStat(BaseModel):
+    """Intraday break-rate bucket grouped by board height."""
+
     board_height: int
     sample_size: int
     failed_count: int
@@ -90,6 +106,8 @@ class FailedRateStat(BaseModel):
 
 
 class PostPerformanceStat(BaseModel):
+    """Average post-limit-up performance bucket grouped by board height."""
+
     board_height: int
     sample_size: int
     avg_next_open_pct: float

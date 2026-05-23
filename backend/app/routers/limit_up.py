@@ -1,3 +1,5 @@
+"""Limit-up event list API routes."""
+
 from fastapi import APIRouter
 
 from app.models import LimitUpEvent
@@ -14,6 +16,8 @@ router = APIRouter()
 
 @router.get("/events", response_model=list[LimitUpEvent])
 def list_limit_up_events() -> list[LimitUpEvent]:
+    """Return all persisted limit-up events, newest first."""
+
     events = get_limit_up_repository().list_events()
     return sorted(
         events,
@@ -24,19 +28,27 @@ def list_limit_up_events() -> list[LimitUpEvent]:
 
 @router.get("/first-board", response_model=list[LimitUpEvent])
 def list_first_board_events() -> list[LimitUpEvent]:
+    """Return first-board events for the latest persisted trading day."""
+
     return list_first_board(get_limit_up_repository().list_events())
 
 
 @router.get("/continued-board", response_model=list[LimitUpEvent])
 def list_continued_board_events() -> list[LimitUpEvent]:
+    """Return continued-board events for the latest persisted trading day."""
+
     return list_continued_board(get_limit_up_repository().list_events())
 
 
 @router.get("/failed", response_model=list[LimitUpEvent])
 def list_failed_limit_up_events() -> list[LimitUpEvent]:
+    """Return latest-day events that had at least one intraday break."""
+
     return list_failed_events(get_limit_up_repository().list_events())
 
 
 @router.get("/recent", response_model=list[LimitUpEvent])
 def list_recent_limit_up_events(days: int = 3) -> list[LimitUpEvent]:
+    """Return events from the most recent N persisted trading days."""
+
     return list_recent_limit_up(get_limit_up_repository().list_events(), days=days)

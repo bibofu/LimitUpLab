@@ -1,3 +1,5 @@
+"""SQLite connection and schema initialization helpers."""
+
 import os
 import sqlite3
 from pathlib import Path
@@ -8,6 +10,8 @@ DEFAULT_DATABASE_PATH = BACKEND_ROOT / "data" / "limituplab.sqlite"
 
 
 def get_database_path() -> Path:
+    """Return the configured SQLite database path."""
+
     configured_path = os.getenv("LIMITUPLAB_DATABASE_PATH")
     if configured_path:
         return Path(configured_path)
@@ -15,6 +19,8 @@ def get_database_path() -> Path:
 
 
 def connect(database_path: Path | None = None) -> sqlite3.Connection:
+    """Open a SQLite connection and create the parent directory when needed."""
+
     path = database_path or get_database_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     connection = sqlite3.connect(path)
@@ -23,6 +29,8 @@ def connect(database_path: Path | None = None) -> sqlite3.Connection:
 
 
 def initialize_database(connection: sqlite3.Connection) -> None:
+    """Create database tables and indexes required by the current application."""
+
     connection.execute(
         """
         CREATE TABLE IF NOT EXISTS limit_up_events (

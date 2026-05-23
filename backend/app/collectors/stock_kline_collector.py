@@ -1,3 +1,5 @@
+"""AKShare-backed stock K-line collectors for after-close review pages."""
+
 import os
 from collections.abc import Iterator
 from contextlib import contextmanager
@@ -14,6 +16,8 @@ def collect_stock_kline(
     days: int = 5,
     end_date: date | None = None,
 ) -> list[StockKLineBar]:
+    """Collect recent daily K-line bars ending at the latest persisted trade date."""
+
     normalized_symbol = _normalize_stock_symbol(symbol)
     target_end_date = end_date or date.today()
     start_date = target_end_date - timedelta(days=max(days * 3, 15))
@@ -44,6 +48,12 @@ def collect_stock_intraday_kline(
     trade_date: date,
     period: int = 5,
 ) -> list[StockIntradayKLineBar]:
+    """Collect intraday K-line bars for reviewing one completed trading day.
+
+    Sina is tried first because it exposes period-based minute bars directly.
+    Eastmoney is used as a fallback and then aggregated to the requested period.
+    """
+
     normalized_symbol = _normalize_stock_symbol(symbol)
     rows = _collect_intraday_rows_from_sina(normalized_symbol, trade_date, period)
     if rows:
@@ -70,6 +80,8 @@ def _collect_intraday_rows_from_sina(
     trade_date: date,
     period: int,
 ) -> list[StockIntradayKLineBar]:
+    """Read minute bars from Sina and keep only the requested trading date."""
+
     with _without_proxy():
         frame = ak.stock_zh_a_minute(
             symbol=symbol,
@@ -93,6 +105,8 @@ def _collect_intraday_rows_from_sina(
 
 
 def _intraday_rows_from_frame(frame: Any) -> list[StockIntradayKLineBar]:
+    """Convert Eastmoney minute K-line rows into internal intraday bar models."""
+
     return [
         StockIntradayKLineBar(
             timestamp=_parse_datetime(row["时间"]),
@@ -111,6 +125,8 @@ def _aggregate_intraday_rows(
     rows: list[StockIntradayKLineBar],
     period: int,
 ) -> list[StockIntradayKLineBar]:
+    """Aggregate 1-minute rows into N-minute OHLCV bars."""
+
     if period <= 1:
         return rows
 
@@ -134,6 +150,8 @@ def _aggregate_intraday_rows(
 
 
 def _normalize_stock_symbol(symbol: str) -> str:
+    """Normalize a 6-digit A-share code to AKShare's `sh`/`sz` symbol format."""
+
     value = symbol.strip().lower()
     if value.startswith(("sh", "sz")):
         return value
@@ -144,12 +162,16 @@ def _normalize_stock_symbol(symbol: str) -> str:
 
 
 def _parse_date(value: Any) -> date:
+    """Parse collector date values into `date`."""
+
     if isinstance(value, date):
         return value
     return date.fromisoformat(str(value))
 
 
 def _parse_datetime(value: Any) -> datetime:
+    """Parse collector timestamp values into `datetime`."""
+
     if isinstance(value, datetime):
         return value
     return datetime.fromisoformat(str(value))
@@ -157,6 +179,8 @@ def _parse_datetime(value: Any) -> datetime:
 
 @contextmanager
 def _without_proxy() -> Iterator[None]:
+    """Temporarily clear proxy env vars for data sources that reject the proxy."""
+
     proxy_names = (
         "HTTP_PROXY",
         "HTTPS_PROXY",

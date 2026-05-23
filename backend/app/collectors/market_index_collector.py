@@ -1,3 +1,5 @@
+"""AKShare-backed market index snapshots for dashboard context."""
+
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -17,6 +19,8 @@ _cache: dict[date | None, tuple[datetime, list[MarketIndexSnapshot]]] = {}
 
 
 def collect_market_indices(trade_date: date | None = None) -> list[MarketIndexSnapshot]:
+    """Collect major index snapshots, cached briefly by requested trade date."""
+
     cached = _cache.get(trade_date)
     now = datetime.now()
     if cached and now - cached[0] < _CACHE_TTL:
@@ -41,6 +45,8 @@ def _collect_market_index(
     akshare_symbol: str,
     trade_date: date | None,
 ) -> MarketIndexSnapshot:
+    """Collect and normalize one index's latest close, change, and five-day trend."""
+
     frame = ak.stock_zh_index_daily(symbol=akshare_symbol)
     rows = frame.to_dict("records")
     if trade_date:
@@ -71,10 +77,14 @@ def _collect_market_index(
 
 
 def _normalize_row(row: dict[str, Any]) -> dict[str, Any]:
+    """Normalize AKShare index rows so `date` is always a `date` object."""
+
     return {**row, "date": _parse_date(row["date"])}
 
 
 def _parse_date(value: Any) -> date:
+    """Parse AKShare date values into `date`."""
+
     if isinstance(value, date):
         return value
     return date.fromisoformat(str(value))

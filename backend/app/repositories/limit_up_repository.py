@@ -1,3 +1,5 @@
+"""Persistence adapters for limit-up events."""
+
 import sqlite3
 from datetime import date, time
 from pathlib import Path
@@ -9,21 +11,37 @@ from app.services.sample_data import SAMPLE_EVENTS
 
 
 class LimitUpRepository(Protocol):
+    """Read interface used by routers and analysis services."""
+
     def list_events(self) -> list[LimitUpEvent]:
         """Return limit-up events available to the analysis layer."""
 
 
 class SampleLimitUpRepository:
+    """In-memory repository used as a lightweight development fallback."""
+
     def list_events(self) -> list[LimitUpEvent]:
+        """Return bundled sample events without mutating them."""
+
         return list(SAMPLE_EVENTS)
 
 
 class SQLiteLimitUpRepository:
+    """SQLite-backed repository for persisted limit-up events."""
+
     def __init__(self, database_path: Path | None = None, seed_if_empty: bool = False):
+        """Create a repository bound to a database path.
+
+        When `seed_if_empty` is true, the first read bootstraps bundled sample
+        events so a fresh clone can render the dashboard before importing data.
+        """
+
         self.database_path = database_path
         self.seed_if_empty = seed_if_empty
 
     def list_events(self) -> list[LimitUpEvent]:
+        """Load all persisted events ordered newest and strongest first."""
+
         connection = connect(self.database_path)
         try:
             initialize_database(connection)
@@ -66,6 +84,8 @@ class SQLiteLimitUpRepository:
         events: list[LimitUpEvent],
         connection: sqlite3.Connection | None = None,
     ) -> None:
+        """Replace the entire event table with the provided event list."""
+
         owns_connection = connection is None
         active_connection = connection or connect(self.database_path)
 
@@ -83,6 +103,8 @@ class SQLiteLimitUpRepository:
         events: list[LimitUpEvent],
         connection: sqlite3.Connection | None = None,
     ) -> None:
+        """Insert or update events using `(trade_date, symbol)` as the key."""
+
         owns_connection = connection is None
         active_connection = connection or connect(self.database_path)
 
@@ -139,6 +161,8 @@ class SQLiteLimitUpRepository:
                 active_connection.close()
 
     def delete_events_for_date(self, trade_date: date | str) -> None:
+        """Delete all persisted events for a single trading date."""
+
         connection = connect(self.database_path)
         try:
             initialize_database(connection)
@@ -152,10 +176,14 @@ class SQLiteLimitUpRepository:
             connection.close()
 
     def _count_events(self, connection: sqlite3.Connection) -> int:
+        """Return the current number of persisted event rows."""
+
         row = connection.execute("SELECT COUNT(*) AS count FROM limit_up_events").fetchone()
         return int(row["count"])
 
     def _event_to_record(self, event: LimitUpEvent) -> tuple[object, ...]:
+        """Serialize a Pydantic event to a SQLite record tuple."""
+
         return (
             event.symbol,
             event.name,
@@ -179,6 +207,8 @@ class SQLiteLimitUpRepository:
         )
 
     def _event_from_row(self, row: sqlite3.Row) -> LimitUpEvent:
+        """Deserialize a SQLite row into a `LimitUpEvent` model."""
+
         return LimitUpEvent(
             symbol=row["symbol"],
             name=row["name"],
@@ -206,4 +236,6 @@ _repository = SQLiteLimitUpRepository(seed_if_empty=True)
 
 
 def get_limit_up_repository() -> LimitUpRepository:
+    """Return the process-wide repository used by API routes."""
+
     return _repository

@@ -1,3 +1,5 @@
+"""Import real limit-up events from AKShare into the local SQLite database."""
+
 import argparse
 import sys
 from pathlib import Path
@@ -11,6 +13,8 @@ from app.repositories import SQLiteLimitUpRepository
 
 
 def main() -> None:
+    """Parse CLI options, collect AKShare events, and upsert them into SQLite."""
+
     parser = argparse.ArgumentParser(
         description="Import A-share limit-up events from AKShare into SQLite.",
     )

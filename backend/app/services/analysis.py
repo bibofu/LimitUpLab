@@ -1,7 +1,14 @@
+"""Pure analysis helpers for limit-up events.
+
+This module intentionally avoids database or network access. Routers and
+repositories pass in already-loaded events, which keeps the calculations easy to
+test and reusable for future agent/reporting features.
+"""
+
 from collections import Counter, defaultdict
 from datetime import date
-from typing import Optional
 from statistics import mean
+from typing import Optional
 
 from app.models import (
     ContinuationStat,
@@ -15,6 +22,8 @@ from app.models import (
 
 
 def latest_trade_date(events: list[LimitUpEvent]) -> date:
+    """Return the newest trading date available in a non-empty event list."""
+
     return max(event.trade_date for event in events)
 
 
@@ -22,6 +31,8 @@ def events_for_date(
     events: list[LimitUpEvent],
     trade_date: Optional[date] = None,
 ) -> list[LimitUpEvent]:
+    """Filter events to a trading date, defaulting to the latest available date."""
+
     target_date = trade_date or latest_trade_date(events)
     return [event for event in events if event.trade_date == target_date]
 
@@ -30,6 +41,13 @@ def summarize_market(
     events: list[LimitUpEvent],
     indices: Optional[list[MarketIndexSnapshot]] = None,
 ) -> MarketSummary:
+    """Build the dashboard market summary for the latest persisted trading day.
+
+    `failed_count` currently means events with at least one intraday break
+    (`break_count > 0`). This is a seal-quality metric, not strictly the same
+    as the number of stocks that failed to close at limit-up.
+    """
+
     latest_date = latest_trade_date(events)
     latest_events = events_for_date(events, latest_date)
     failed_count = sum(1 for event in latest_events if event.break_count > 0)
@@ -76,6 +94,8 @@ def summarize_market(
 
 
 def list_first_board(events: list[LimitUpEvent]) -> list[LimitUpEvent]:
+    """Return latest-day first-board events sorted by first seal time."""
+
     return sorted(
         [event for event in events_for_date(events) if event.board_height == 1],
         key=lambda event: event.first_limit_time,
@@ -83,6 +103,8 @@ def list_first_board(events: list[LimitUpEvent]) -> list[LimitUpEvent]:
 
 
 def list_continued_board(events: list[LimitUpEvent]) -> list[LimitUpEvent]:
+    """Return latest-day continued-board events, highest board first."""
+
     return sorted(
         [event for event in events_for_date(events) if event.board_height > 1],
         key=lambda event: (-event.board_height, event.first_limit_time),
@@ -90,6 +112,8 @@ def list_continued_board(events: list[LimitUpEvent]) -> list[LimitUpEvent]:
 
 
 def list_failed_events(events: list[LimitUpEvent]) -> list[LimitUpEvent]:
+    """Return latest-day events with intraday breaks, sorted by break pressure."""
+
     return sorted(
         [event for event in events_for_date(events) if event.break_count > 0],
         key=lambda event: (-event.break_count, event.first_limit_time),
@@ -97,6 +121,8 @@ def list_failed_events(events: list[LimitUpEvent]) -> list[LimitUpEvent]:
 
 
 def list_recent_limit_up(events: list[LimitUpEvent], days: int = 3) -> list[LimitUpEvent]:
+    """Return events from the most recent N trading dates in reverse order."""
+
     trade_dates = sorted({event.trade_date for event in events}, reverse=True)[:days]
     return sorted(
         [event for event in events if event.trade_date in trade_dates],
@@ -106,6 +132,8 @@ def list_recent_limit_up(events: list[LimitUpEvent], days: int = 3) -> list[Limi
 
 
 def calculate_continuation(events: list[LimitUpEvent]) -> list[ContinuationStat]:
+    """Calculate next-day continuation probability grouped by board height."""
+
     grouped: dict[int, list[LimitUpEvent]] = defaultdict(list)
     for event in events:
         grouped[event.board_height].append(event)
@@ -125,6 +153,8 @@ def calculate_continuation(events: list[LimitUpEvent]) -> list[ContinuationStat]
 
 
 def calculate_failed_rates(events: list[LimitUpEvent]) -> list[FailedRateStat]:
+    """Calculate intraday break rate grouped by board height."""
+
     grouped: dict[int, list[LimitUpEvent]] = defaultdict(list)
     for event in events:
         grouped[event.board_height].append(event)
@@ -144,6 +174,8 @@ def calculate_failed_rates(events: list[LimitUpEvent]) -> list[FailedRateStat]:
 
 
 def calculate_post_performance(events: list[LimitUpEvent]) -> list[PostPerformanceStat]:
+    """Calculate average post-limit-up returns grouped by board height."""
+
     grouped: dict[int, list[LimitUpEvent]] = defaultdict(list)
     for event in events:
         grouped[event.board_height].append(event)

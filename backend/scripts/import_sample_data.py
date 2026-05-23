@@ -1,3 +1,5 @@
+"""Import bundled sample events into the local SQLite database."""
+
 import sys
 from pathlib import Path
 
@@ -10,6 +12,8 @@ from app.services.sample_data import SAMPLE_EVENTS
 
 
 def main() -> None:
+    """Replace existing persisted events with the bundled sample dataset."""
+
     repository = SQLiteLimitUpRepository()
     repository.replace_events(SAMPLE_EVENTS)
     print(f"Imported {len(SAMPLE_EVENTS)} sample events into {get_database_path()}")

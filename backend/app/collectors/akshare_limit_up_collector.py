@@ -1,3 +1,10 @@
+"""AKShare-backed collector for daily A-share limit-up events.
+
+The collector maps Eastmoney limit-up pools into the internal `LimitUpEvent`
+shape. Closed limit-up events are imported first; failed/open-board events are
+then added only when they are not already present for the same date and symbol.
+"""
+
 from datetime import date, time
 from math import isnan
 from typing import Any
@@ -8,12 +15,16 @@ from app.models import LimitUpEvent
 
 
 def parse_akshare_trade_date(value: str) -> date:
+    """Parse AKShare's `YYYYMMDD` trading-date argument into a date object."""
+
     if len(value) != 8 or not value.isdigit():
         raise ValueError("date must use YYYYMMDD format")
     return date(int(value[:4]), int(value[4:6]), int(value[6:8]))
 
 
 def collect_limit_up_events(trade_date: str) -> list[LimitUpEvent]:
+    """Collect closed and failed limit-up events for one trading date."""
+
     parsed_date = parse_akshare_trade_date(trade_date)
     events_by_key: dict[tuple[date, str], LimitUpEvent] = {}
 
@@ -36,6 +47,8 @@ def collect_limit_up_events(trade_date: str) -> list[LimitUpEvent]:
 
 
 def _collect_closed_limit_up_events(parsed_date: date, trade_date: str) -> list[LimitUpEvent]:
+    """Collect stocks that closed at limit-up from Eastmoney's limit-up pool."""
+
     frame = ak.stock_zt_pool_em(date=trade_date)
     events: list[LimitUpEvent] = []
 
@@ -69,6 +82,8 @@ def _collect_closed_limit_up_events(parsed_date: date, trade_date: str) -> list[
 
 
 def _collect_failed_limit_up_events(parsed_date: date, trade_date: str) -> list[LimitUpEvent]:
+    """Collect stocks from Eastmoney's failed/open-board observation pool."""
+
     frame = ak.stock_zt_pool_zbgc_em(date=trade_date)
     events: list[LimitUpEvent] = []
 
@@ -103,6 +118,8 @@ def _collect_failed_limit_up_events(parsed_date: date, trade_date: str) -> list[
 
 
 def _parse_hhmmss(value: Any) -> time:
+    """Parse AKShare time values such as `092500` into `datetime.time`."""
+
     text = str(value).strip().zfill(6)
     if len(text) != 6 or not text.isdigit():
         return time(0, 0)
@@ -110,6 +127,8 @@ def _parse_hhmmss(value: Any) -> time:
 
 
 def _parse_board_height(value: Any) -> int:
+    """Parse Eastmoney limit-up statistic text such as `5/3` into board height."""
+
     text = str(value).strip()
     if "/" in text:
         _, height = text.split("/", maxsplit=1)
