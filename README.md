@@ -86,6 +86,7 @@ Open `http://localhost:5173`.
 - `GET /api/analysis/continuation`
 - `GET /api/analysis/failed-rate`
 - `GET /api/analysis/post-performance`
+- `GET /api/agents/daily-review`
 - `GET /api/stocks/{symbol}/kline?days=5`
 - `GET /api/stocks/{symbol}/trading-day-kline?period=5`
 

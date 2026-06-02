@@ -93,3 +93,29 @@ export interface PostPerformanceStat {
   avg_next_close_pct: number;
   avg_five_day_return_pct: number;
 }
+
+export interface BoardLadderItem {
+  board_height: number;
+  count: number;
+}
+
+export interface DailyReviewFacts {
+  trade_date: string;
+  sentiment: Sentiment;
+  limit_up_count: number;
+  first_board_count: number;
+  continued_board_count: number;
+  unstable_count: number;
+  unclosed_count: number;
+  failed_limit_up_rate: number;
+  max_board_height: number;
+  total_amount: number;
+  hot_industries: string[];
+  board_ladder: BoardLadderItem[];
+  risk_signals: string[];
+}
+
+export interface DailyReview {
+  facts: DailyReviewFacts;
+  narrative: string;
+}

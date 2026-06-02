@@ -356,6 +356,47 @@ a.entry-card {
   margin-bottom: 18px;
 }
 
+.review-panel {
+  display: grid;
+  gap: 18px;
+  padding: 20px;
+}
+
+.review-facts {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 10px;
+}
+
+.review-facts span,
+.review-facts strong {
+  display: inline-flex;
+  align-items: center;
+  min-height: 32px;
+  padding: 0 10px;
+  border: 1px solid #eaecf0;
+  border-radius: 8px;
+  background: #f9fafb;
+  color: #344054;
+  font-size: 13px;
+}
+
+.review-facts strong {
+  background: #fff1f0;
+  color: #b42318;
+}
+
+.review-narrative {
+  display: grid;
+  gap: 8px;
+}
+
+.review-narrative p {
+  margin-bottom: 0;
+  color: #344054;
+  line-height: 1.7;
+}
+
 .panel {
   overflow: hidden;
 }

@@ -1,7 +1,7 @@
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app.routers import analysis, limit_up, market, stocks
+from app.routers import agents, analysis, limit_up, market, stocks
 
 
 app = FastAPI(
@@ -31,3 +31,4 @@ app.include_router(market.router, prefix="/api/market", tags=["market"])
 app.include_router(limit_up.router, prefix="/api/limit-up", tags=["limit-up"])
 app.include_router(analysis.router, prefix="/api/analysis", tags=["analysis"])
 app.include_router(stocks.router, prefix="/api/stocks", tags=["stocks"])
+app.include_router(agents.router, prefix="/api/agents", tags=["agents"])

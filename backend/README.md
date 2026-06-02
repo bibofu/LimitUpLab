@@ -73,6 +73,7 @@ LIMITUPLAB_DATABASE_PATH=/tmp/limituplab.sqlite uvicorn app.main:app --reload --
 - `GET /api/analysis/continuation` - board continuation probability
 - `GET /api/analysis/failed-rate` - failed limit-up rate by board height
 - `GET /api/analysis/post-performance` - next-day and short-window return stats
+- `GET /api/agents/daily-review` - rule-based after-close daily review
 - `GET /api/stocks/{symbol}/kline?days=5` - recent daily K-line bars
 - `GET /api/stocks/{symbol}/trading-day-kline?period=5` - after-close trading-day intraday K-line review
 

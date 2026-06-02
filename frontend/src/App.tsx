@@ -23,6 +23,7 @@ import {
 
 import {
   fetchContinuedBoardEvents,
+  fetchDailyReview,
   fetchFailedLimitUpEvents,
   fetchFirstBoardEvents,
   fetchMarketSummary,
@@ -31,6 +32,7 @@ import {
   fetchStockTradingDayKLine,
 } from "./api";
 import type {
+  DailyReview,
   LimitUpEvent,
   MarketSummary,
   StockIntradayKLineBar,
@@ -45,6 +47,7 @@ interface DashboardData {
   continuedBoard: LimitUpEvent[];
   failed: LimitUpEvent[];
   recent: LimitUpEvent[];
+  dailyReview: DailyReview;
 }
 
 interface CandleBar {
@@ -97,15 +100,16 @@ export function App() {
     setError(null);
 
     try {
-      const [summary, firstBoard, continuedBoard, failed, recent] = await Promise.all([
+      const [summary, firstBoard, continuedBoard, failed, recent, dailyReview] = await Promise.all([
         fetchMarketSummary(),
         fetchFirstBoardEvents(),
         fetchContinuedBoardEvents(),
         fetchFailedLimitUpEvents(),
         fetchRecentLimitUpEvents(3),
+        fetchDailyReview(),
       ]);
 
-      setData({ summary, firstBoard, continuedBoard, failed, recent });
+      setData({ summary, firstBoard, continuedBoard, failed, recent, dailyReview });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "加载数据失败");
     } finally {
@@ -254,6 +258,8 @@ function Overview({ data }: { data: DashboardData }) {
         </Panel>
       </section>
 
+      <DailyReviewPanel review={data.dailyReview} />
+
       <Link className="recent-entry" to="/stocks/recent-limit-up">
         <div>
           <TrendingUp size={22} />
@@ -262,6 +268,30 @@ function Overview({ data }: { data: DashboardData }) {
         <span>{data.recent.length} 个涨停事件</span>
       </Link>
     </>
+  );
+}
+
+function DailyReviewPanel({ review }: { review: DailyReview }) {
+  /** Render the rule-based daily review generated from deterministic facts. */
+
+  const facts = review.facts;
+
+  return (
+    <Panel title="智能复盘" icon={<BarChart3 size={18} />}>
+      <div className="review-panel">
+        <div className="review-facts">
+          <span>{facts.trade_date}</span>
+          <strong>{facts.max_board_height} 板最高</strong>
+          <strong>{formatPercent(facts.failed_limit_up_rate)} 炸板压力</strong>
+          <strong>{facts.unclosed_count} 个未封住</strong>
+        </div>
+        <div className="review-narrative">
+          {review.narrative.split("\n").map((line, index) => (
+            <p key={`${line}-${index}`}>{line || "\u00a0"}</p>
+          ))}
+        </div>
+      </div>
+    </Panel>
   );
 }
 

@@ -114,3 +114,35 @@ class PostPerformanceStat(BaseModel):
     avg_next_high_pct: float
     avg_next_close_pct: float
     avg_five_day_return_pct: float
+
+
+class BoardLadderItem(BaseModel):
+    """Count of latest-day events at one board height."""
+
+    board_height: int
+    count: int
+
+
+class DailyReviewFacts(BaseModel):
+    """Structured facts used by rule-based and future LLM daily reviews."""
+
+    trade_date: date
+    sentiment: Literal["heating", "diverging", "cooling"]
+    limit_up_count: int
+    first_board_count: int
+    continued_board_count: int
+    unstable_count: int
+    unclosed_count: int
+    failed_limit_up_rate: float
+    max_board_height: int
+    total_amount: float
+    hot_industries: list[str]
+    board_ladder: list[BoardLadderItem]
+    risk_signals: list[str]
+
+
+class DailyReview(BaseModel):
+    """Rule-based daily market review response."""
+
+    facts: DailyReviewFacts
+    narrative: str

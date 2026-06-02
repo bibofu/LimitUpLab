@@ -1,5 +1,6 @@
 import type {
   ContinuationStat,
+  DailyReview,
   FailedRateStat,
   LimitUpEvent,
   MarketSummary,
@@ -65,4 +66,8 @@ export function fetchStockTradingDayKLine(symbol: string, period = 5) {
   return request<StockIntradayKLineBar[]>(
     `/api/stocks/${symbol}/trading-day-kline?period=${period}`,
   );
+}
+
+export function fetchDailyReview() {
+  return request<DailyReview>("/api/agents/daily-review");
 }
