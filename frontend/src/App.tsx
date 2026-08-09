@@ -1,10 +1,12 @@
-import {
+﻿import {
   ArrowLeft,
   BarChart3,
   Flame,
   Layers3,
   LineChart,
+  MessageCircle,
   RefreshCcw,
+  Send,
   ShieldAlert,
   TrendingUp,
   WalletCards,
@@ -23,18 +25,25 @@ import {
 
 import {
   fetchContinuedBoardEvents,
-  fetchDailyReview,
+  fetchFirstBoardRatings,
+  fetchFirstBoardSimilarCases,
   fetchFailedLimitUpEvents,
   fetchFirstBoardEvents,
   fetchMarketSummary,
   fetchRecentLimitUpEvents,
   fetchStockKLine,
+  fetchStockLatestClose,
   fetchStockTradingDayKLine,
+  sendAgentChatMessage,
 } from "./api";
 import type {
-  DailyReview,
+  AgentChatResponse,
+  FirstBoardRating,
+  FirstBoardRatingsResponse,
   LimitUpEvent,
   MarketSummary,
+  SimilarFirstBoardCasesResponse,
+  StockCloseSnapshot,
   StockIntradayKLineBar,
   StockKLineBar,
 } from "./types";
@@ -47,7 +56,7 @@ interface DashboardData {
   continuedBoard: LimitUpEvent[];
   failed: LimitUpEvent[];
   recent: LimitUpEvent[];
-  dailyReview: DailyReview;
+  firstBoardRatings: FirstBoardRatingsResponse;
 }
 
 interface CandleBar {
@@ -58,6 +67,13 @@ interface CandleBar {
   low: number;
 }
 
+interface ChatMessage {
+  id: string;
+  role: "user" | "agent";
+  content: string;
+  meta?: AgentChatResponse;
+}
+
 const viewMeta: Record<ViewKey, { title: string; eyebrow: string }> = {
   overview: { title: "短线市场概况", eyebrow: "Overview" },
   first: { title: "首板票", eyebrow: "First Board" },
@@ -65,6 +81,191 @@ const viewMeta: Record<ViewKey, { title: string; eyebrow: string }> = {
   failed: { title: "炸板票", eyebrow: "Failed Limit-Up" },
   recent: { title: "近三日涨停票复盘", eyebrow: "Recent Limit-Up" },
 };
+
+function AgentChatDock({
+  tradeDate,
+  symbol,
+}: {
+  tradeDate: string;
+  symbol?: string;
+}) {
+  /** Provide a lightweight tool-grounded Agent chat entry point. */
+
+  const [message, setMessage] = useState("");
+  const [sending, setSending] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [messages, setMessages] = useState<ChatMessage[]>([
+    {
+      id: "welcome",
+      role: "agent",
+      content: "可以问我：总结今天首板、为什么当前股票评分高、主要风险是什么、有没有历史相似案例。",
+    },
+  ]);
+  const [sessionId] = useState(() => `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+
+  async function sendMessage() {
+    const trimmed = message.trim();
+    if (!trimmed || sending) {
+      return;
+    }
+
+    const userMessage: ChatMessage = {
+      id: `user-${Date.now()}`,
+      role: "user",
+      content: trimmed,
+    };
+    setMessages((current) => [...current, userMessage]);
+    setMessage("");
+    setSending(true);
+    setError(null);
+
+    try {
+      const response = await sendAgentChatMessage({
+        session_id: sessionId,
+        message: trimmed,
+        intent_hint: inferChatIntent(trimmed),
+        trade_date: tradeDate,
+        symbol,
+        page_context: {
+          page: symbol ? "stock_detail" : "dashboard",
+        },
+      });
+      setMessages((current) => [
+        ...current,
+        {
+          id: `agent-${Date.now()}`,
+          role: "agent",
+          content: response.answer,
+          meta: response,
+        },
+      ]);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Agent 回答失败");
+    } finally {
+      setSending(false);
+    }
+  }
+
+  return (
+    <div className="agent-chat-dock">
+      <section className="agent-chat-panel">
+        <header>
+          <div>
+            <MessageCircle size={18} />
+            <strong>首板 Agent 工作台</strong>
+          </div>
+          <div className="agent-chat-context">
+            <span>{tradeDate}</span>
+            {symbol ? <span>{symbol}</span> : <span>全市场首板</span>}
+          </div>
+        </header>
+
+        <div className="agent-chat-messages">
+          {messages.map((item) => (
+            <article className={`chat-message chat-${item.role}`} key={item.id}>
+              <p>{item.content}</p>
+              {item.meta ? (
+                <>
+                  <div className="chat-message-meta">
+                    {item.meta.run_id ? <span>{item.meta.run_id.slice(0, 12)}</span> : null}
+                    <span>{item.meta.intent}</span>
+                    {item.meta.tool_calls.map((tool) => (
+                      <span key={tool}>{tool}</span>
+                    ))}
+                  </div>
+                  {item.meta.tool_results.length > 0 ? (
+                    <div className="chat-tool-traces">
+                      {item.meta.tool_results.map((tool) => (
+                        <div key={`${item.id}-${tool.name}`}>
+                          <strong>{tool.name}</strong>
+                          <span>{tool.summary}</span>
+                        </div>
+                      ))}
+                    </div>
+                  ) : null}
+                </>
+              ) : null}
+            </article>
+          ))}
+          {sending ? <div className="chat-state">Agent 正在检索工具...</div> : null}
+          {error ? <div className="chat-state error">{error}</div> : null}
+        </div>
+
+        <div className="agent-chat-prompts">
+            {[
+              symbol ? "详细解释一下" : "总结一下今天首板",
+              symbol ? "为什么评分高" : "哪些候选评分靠前",
+              symbol ? "主要风险是什么" : "总结今天首板候选",
+              symbol ? "有没有历史相似案例" : "今天市场环境如何",
+              "A股几点开盘",
+            ].map((prompt) => (
+            <button
+              key={prompt}
+              type="button"
+              onClick={() => setMessage(prompt)}
+            >
+              {prompt}
+            </button>
+          ))}
+        </div>
+
+        <form
+          className="agent-chat-input"
+          onSubmit={(event) => {
+            event.preventDefault();
+            void sendMessage();
+          }}
+        >
+          <input
+            value={message}
+            onChange={(event) => setMessage(event.target.value)}
+            placeholder={symbol ? "问当前股票评分、风险或相似案例" : "问今天首板总结"}
+          />
+          <button className="icon-button" disabled={sending || !message.trim()} title="发送">
+            <Send size={17} />
+          </button>
+        </form>
+      </section>
+    </div>
+  );
+}
+
+function inferChatIntent(message: string) {
+  /** Infer a deterministic tool hint before the backend performs final routing. */
+
+  if (
+    /相似|历史|案例/.test(message)
+    && /首板/.test(message)
+    && /医药|医疗|制药|药业|生物|中药|相关|行业|题材/.test(message)
+  ) {
+    return "first_board_filter_similar";
+  }
+  if (/相似|历史|案例/.test(message)) {
+    return "similar_cases";
+  }
+  if (/开盘|收盘|集合竞价|交易时间/.test(message)) {
+    return "market_schedule";
+  }
+  if (/市场|情绪|赚钱效应|亏钱效应|氛围/.test(message)) {
+    return "market_context";
+  }
+  if (/风险|缺点|问题/.test(message)) {
+    return "risk_summary";
+  }
+  if (/详细|解释|分析/.test(message)) {
+    return "llm_explanation";
+  }
+  if (/为什么|评分|评级|高分|低分/.test(message)) {
+    return "rating_explain";
+  }
+  if (/医药|医疗|制药|药业|生物|中药|相关|行业|题材/.test(message)) {
+    return "first_board_filter";
+  }
+  if (/总结|今天|首板|候选|市场环境/.test(message)) {
+    return "today_summary";
+  }
+  return undefined;
+}
 
 const routeToView: Record<string, ViewKey> = {
   "/": "overview",
@@ -100,16 +301,16 @@ export function App() {
     setError(null);
 
     try {
-      const [summary, firstBoard, continuedBoard, failed, recent, dailyReview] = await Promise.all([
+      const [summary, firstBoard, continuedBoard, failed, recent, firstBoardRatings] = await Promise.all([
         fetchMarketSummary(),
         fetchFirstBoardEvents(),
         fetchContinuedBoardEvents(),
         fetchFailedLimitUpEvents(),
         fetchRecentLimitUpEvents(3),
-        fetchDailyReview(),
+        fetchFirstBoardRatings(),
       ]);
 
-      setData({ summary, firstBoard, continuedBoard, failed, recent, dailyReview });
+      setData({ summary, firstBoard, continuedBoard, failed, recent, firstBoardRatings });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "加载数据失败");
     } finally {
@@ -140,6 +341,7 @@ export function App() {
   const activeMeta = isStockDetail
     ? { title: "个股详情", eyebrow: "Stock Detail" }
     : viewMeta[activeView];
+  const chatSymbol = isStockDetail ? location.pathname.split("/").pop() : undefined;
 
   return (
     <main className="app-shell">
@@ -160,6 +362,8 @@ export function App() {
           </button>
         </div>
       </header>
+
+      <AgentChatDock tradeDate={data.summary.trade_date} symbol={chatSymbol} />
 
       <Routes>
         <Route path="/" element={<Overview data={data} />} />
@@ -258,7 +462,7 @@ function Overview({ data }: { data: DashboardData }) {
         </Panel>
       </section>
 
-      <DailyReviewPanel review={data.dailyReview} />
+      <FirstBoardRatingPanel ratings={data.firstBoardRatings} />
 
       <Link className="recent-entry" to="/stocks/recent-limit-up">
         <div>
@@ -271,30 +475,38 @@ function Overview({ data }: { data: DashboardData }) {
   );
 }
 
-function DailyReviewPanel({ review }: { review: DailyReview }) {
-  /** Render the rule-based daily review generated from deterministic facts. */
+function FirstBoardRatingPanel({ ratings }: { ratings: FirstBoardRatingsResponse }) {
+  /** Render the first-board rating summary generated from deterministic facts. */
 
-  const facts = review.facts;
+  const topCandidate = ratings.candidates[0];
 
   return (
-    <Panel title="智能复盘" icon={<BarChart3 size={18} />}>
-      <div className="review-panel">
-        <div className="review-facts">
-          <span>{facts.trade_date}</span>
-          <strong>{facts.max_board_height} 板最高</strong>
-          <strong>{formatPercent(facts.failed_limit_up_rate)} 炸板压力</strong>
-          <strong>{facts.unclosed_count} 个未封住</strong>
+    <Panel title="首板评级 Agent" icon={<BarChart3 size={18} />}>
+      <div className="rating-summary-panel">
+        <div className="rating-summary-facts">
+          <span>{ratings.trade_date}</span>
+          <strong>{ratings.candidates.length} 只入池</strong>
+          <strong>{ratings.filtered_out.length} 只过滤</strong>
+          <strong>{topCandidate ? `${topCandidate.rating} / ${topCandidate.score.toFixed(1)}` : "暂无候选"}</strong>
         </div>
-        <div className="review-narrative">
-          {review.narrative.split("\n").map((line, index) => (
-            <p key={`${line}-${index}`}>{line || "\u00a0"}</p>
-          ))}
-        </div>
+        {topCandidate ? (
+          <div className="rating-summary-copy">
+            <p>
+              当前最高评分为 {topCandidate.facts.name}（{topCandidate.facts.symbol}），
+              评级 {topCandidate.rating}，置信度 {formatPercent(topCandidate.confidence)}。
+            </p>
+            <p>{topCandidate.reasons.slice(0, 3).join("；")}。</p>
+            <p>风险观察：{topCandidate.risks.slice(0, 3).join("；")}。</p>
+          </div>
+        ) : (
+          <div className="rating-summary-copy">
+            <p>当前交易日没有满足过滤条件的首板候选。</p>
+          </div>
+        )}
       </div>
     </Panel>
   );
 }
-
 function DetailView({ view, data }: { view: ViewKey; data: DashboardData }) {
   /** Render one of the latest-day stock list views. */
 
@@ -305,6 +517,14 @@ function DetailView({ view, data }: { view: ViewKey; data: DashboardData }) {
     overview: [],
     recent: [],
   };
+
+  if (view === "first") {
+    return (
+      <Panel title="首板智能评级" icon={detailIcon(view)}>
+        <FirstBoardRatingTable ratings={data.firstBoardRatings.candidates} />
+      </Panel>
+    );
+  }
 
   return (
     <Panel title={viewMeta[view].title} icon={detailIcon(view)}>
@@ -335,6 +555,75 @@ function RecentLimitUp({ events }: { events: LimitUpEvent[] }) {
   );
 }
 
+function FirstBoardRatingTable({ ratings }: { ratings: FirstBoardRating[] }) {
+  /** Render first-board candidates sorted by agent score. */
+
+  const navigate = useNavigate();
+
+  if (ratings.length === 0) {
+    return <div className="empty-state">当前交易日没有满足过滤条件的首板候选。</div>;
+  }
+
+  return (
+    <div className="table-wrap">
+      <table>
+        <thead>
+          <tr>
+            <th>股票</th>
+            <th>评分</th>
+            <th>评级</th>
+            <th>置信度</th>
+            <th>首封</th>
+            <th>炸板</th>
+            <th>成交额</th>
+            <th>换手</th>
+            <th>行业热度</th>
+            <th>理由 / 风险</th>
+          </tr>
+        </thead>
+        <tbody>
+          {ratings.map((rating) => (
+            <tr
+              className="stock-row"
+              key={`${rating.facts.trade_date}-${rating.facts.symbol}`}
+              onClick={() => navigate(`/stocks/${rating.facts.symbol}`)}
+              onKeyDown={(keyboardEvent) => {
+                if (keyboardEvent.key === "Enter" || keyboardEvent.key === " ") {
+                  keyboardEvent.preventDefault();
+                  navigate(`/stocks/${rating.facts.symbol}`);
+                }
+              }}
+              tabIndex={0}
+            >
+              <td>
+                <strong>{rating.facts.name}</strong>
+                <span>{rating.facts.symbol}</span>
+              </td>
+              <td>
+                <strong>{rating.score.toFixed(1)}</strong>
+              </td>
+              <td>
+                <span className={`rating-badge rating-${rating.rating.toLowerCase()}`}>
+                  {rating.rating}
+                </span>
+              </td>
+              <td>{formatPercent(rating.confidence)}</td>
+              <td>{rating.facts.first_limit_time.slice(0, 5)}</td>
+              <td>{rating.facts.break_count}</td>
+              <td>{formatAmount(rating.facts.amount)}</td>
+              <td>{rating.facts.turnover_rate.toFixed(1)}%</td>
+              <td>{rating.facts.same_industry_limit_up_count} 只</td>
+              <td>
+                <strong>{rating.reasons.slice(0, 2).join("；")}</strong>
+                <span>{rating.risks.slice(0, 2).join("；")}</span>
+              </td>
+            </tr>
+          ))}
+        </tbody>
+      </table>
+    </div>
+  );
+}
 function StockTable({
   events,
   variant,
@@ -411,10 +700,16 @@ function StockDetail({ data }: { data: DashboardData }) {
   const { symbol = "" } = useParams();
   const [kline, setKline] = useState<StockKLineBar[]>([]);
   const [tradingDayKline, setTradingDayKline] = useState<StockIntradayKLineBar[]>([]);
+  const [latestClose, setLatestClose] = useState<StockCloseSnapshot | null>(null);
+  const [similarCases, setSimilarCases] = useState<SimilarFirstBoardCasesResponse | null>(null);
   const [klineLoading, setKlineLoading] = useState(true);
   const [klineError, setKlineError] = useState<string | null>(null);
   const [tradingDayLoading, setTradingDayLoading] = useState(true);
   const [tradingDayError, setTradingDayError] = useState<string | null>(null);
+  const [latestCloseLoading, setLatestCloseLoading] = useState(true);
+  const [latestCloseError, setLatestCloseError] = useState<string | null>(null);
+  const [similarCasesLoading, setSimilarCasesLoading] = useState(false);
+  const [similarCasesError, setSimilarCasesError] = useState<string | null>(null);
   const events = useMemo(
     () => [...data.firstBoard, ...data.continuedBoard, ...data.failed, ...data.recent],
     [data],
@@ -424,14 +719,32 @@ function StockDetail({ data }: { data: DashboardData }) {
       .filter((event) => event.symbol === symbol)
       .sort((left, right) => right.trade_date.localeCompare(left.trade_date))[0];
   }, [events, symbol]);
+  const firstBoardRating = useMemo(() => {
+    return data.firstBoardRatings.candidates.find(
+      (rating) => rating.facts.symbol === symbol,
+    ) ?? null;
+  }, [data.firstBoardRatings.candidates, symbol]);
 
   useEffect(() => {
     const tradeDate = stockEvent?.trade_date;
     if (!tradeDate) {
       setKlineLoading(false);
       setTradingDayLoading(false);
+      setLatestCloseLoading(false);
+      setSimilarCasesLoading(false);
+      setSimilarCases(null);
       return;
     }
+
+    setLatestCloseLoading(true);
+    setLatestCloseError(null);
+    fetchStockLatestClose(symbol)
+      .then(setLatestClose)
+      .catch((caught) => {
+        setLatestClose(null);
+        setLatestCloseError(caught instanceof Error ? caught.message : "加载最新收盘数据失败");
+      })
+      .finally(() => setLatestCloseLoading(false));
 
     setKlineLoading(true);
     setKlineError(null);
@@ -450,7 +763,23 @@ function StockDetail({ data }: { data: DashboardData }) {
         setTradingDayError(caught instanceof Error ? caught.message : "加载交易日走势失败");
       })
       .finally(() => setTradingDayLoading(false));
-  }, [stockEvent?.trade_date, symbol]);
+
+    if (firstBoardRating) {
+      setSimilarCasesLoading(true);
+      setSimilarCasesError(null);
+      fetchFirstBoardSimilarCases(symbol, firstBoardRating.facts.trade_date, 5)
+        .then(setSimilarCases)
+        .catch((caught) => {
+          setSimilarCases(null);
+          setSimilarCasesError(caught instanceof Error ? caught.message : "加载历史相似案例失败");
+        })
+        .finally(() => setSimilarCasesLoading(false));
+    } else {
+      setSimilarCases(null);
+      setSimilarCasesLoading(false);
+      setSimilarCasesError(null);
+    }
+  }, [firstBoardRating, stockEvent?.trade_date, symbol]);
 
   if (!stockEvent) {
     return (
@@ -475,50 +804,265 @@ function StockDetail({ data }: { data: DashboardData }) {
         </div>
       </section>
 
-      <section className="stock-detail-grid">
-        <div className="chart-stack">
-          <Panel title="五日 K 线" icon={<LineChart size={18} />}>
-            {klineLoading ? (
-              <div className="chart-state">正在加载 K 线...</div>
-            ) : klineError ? (
-              <div className="chart-state">{klineError}</div>
-            ) : (
-              <CandlestickChart bars={toDailyCandleBars(kline)} emptyLabel="暂无五日 K 线数据" />
-            )}
-          </Panel>
+      <LatestCloseStrip
+        snapshot={latestClose}
+        loading={latestCloseLoading}
+        error={latestCloseError}
+      />
 
-          <Panel title="交易日走势" icon={<LineChart size={18} />}>
-            {tradingDayLoading ? (
-              <div className="chart-state">正在加载交易日走势...</div>
-            ) : tradingDayError ? (
-              <div className="chart-state">{tradingDayError}</div>
-            ) : (
-              <CandlestickChart
-                bars={toIntradayCandleBars(tradingDayKline)}
-                emptyLabel="暂无交易日走势数据"
-                dense
-              />
-            )}
-          </Panel>
-        </div>
+      <section className="stock-kline-grid">
+        <Panel title="五日 K 线" icon={<LineChart size={18} />}>
+          {klineLoading ? (
+            <div className="chart-state">正在加载 K 线...</div>
+          ) : klineError ? (
+            <div className="chart-state">{klineError}</div>
+          ) : (
+            <CandlestickChart bars={toDailyCandleBars(kline)} emptyLabel="暂无五日 K 线数据" />
+          )}
+        </Panel>
 
-        <Panel title="封板信息" icon={<Flame size={18} />}>
-          <div className="stock-facts">
-            <Fact label="首次封板" value={stockEvent.first_limit_time.slice(0, 5)} />
-            <Fact label="最后封板" value={stockEvent.last_limit_time.slice(0, 5)} />
-            <Fact label="封板次数" value={`${stockEvent.seal_count}`} />
-            <Fact label="炸板次数" value={`${stockEvent.break_count}`} />
-            <Fact label="成交额" value={formatAmount(stockEvent.amount)} />
-            <Fact label="换手率" value={`${stockEvent.turnover_rate.toFixed(1)}%`} />
-            <Fact label="行业" value={stockEvent.industry} />
-            <Fact label="题材" value={stockEvent.concept || "暂无"} />
-          </div>
+        <Panel title="交易日走势" icon={<LineChart size={18} />}>
+          {tradingDayLoading ? (
+            <div className="chart-state">正在加载交易日走势...</div>
+          ) : tradingDayError ? (
+            <div className="chart-state">{tradingDayError}</div>
+          ) : (
+            <CandlestickChart
+              bars={toIntradayCandleBars(tradingDayKline)}
+              emptyLabel="暂无交易日走势数据"
+              dense
+            />
+          )}
         </Panel>
       </section>
+
+      <section className="stock-agent-grid">
+        <FirstBoardRatingDetail rating={firstBoardRating} />
+        <SimilarCasesPanel
+          data={similarCases}
+          loading={similarCasesLoading}
+          error={similarCasesError}
+        />
+      </section>
+
+      <Panel title="封板信息" icon={<Flame size={18} />}>
+        <div className="stock-facts">
+          <Fact label="首次封板" value={stockEvent.first_limit_time.slice(0, 5)} />
+          <Fact label="最后封板" value={stockEvent.last_limit_time.slice(0, 5)} />
+          <Fact label="封板次数" value={`${stockEvent.seal_count}`} />
+          <Fact label="炸板次数" value={`${stockEvent.break_count}`} />
+          <Fact label="成交额" value={formatAmount(stockEvent.amount)} />
+          <Fact label="换手率" value={`${stockEvent.turnover_rate.toFixed(1)}%`} />
+          <Fact label="行业" value={stockEvent.industry} />
+          <Fact label="题材" value={stockEvent.concept || "暂无"} />
+        </div>
+      </Panel>
     </div>
   );
 }
 
+
+function SimilarCasesPanel({
+  data,
+  loading,
+  error,
+}: {
+  data: SimilarFirstBoardCasesResponse | null;
+  loading: boolean;
+  error: string | null;
+}) {
+  /** Render historical first-board similar cases for the selected target. */
+
+  if (loading) {
+    return (
+      <Panel title="历史相似案例" icon={<Layers3 size={18} />}>
+        <div className="rating-detail-empty">正在检索历史相似首板案例...</div>
+      </Panel>
+    );
+  }
+
+  if (error) {
+    return (
+      <Panel title="历史相似案例" icon={<Layers3 size={18} />}>
+        <div className="rating-detail-empty">{error}</div>
+      </Panel>
+    );
+  }
+
+  if (!data) {
+    return (
+      <Panel title="历史相似案例" icon={<Layers3 size={18} />}>
+        <div className="rating-detail-empty">当前股票暂无首板相似案例。</div>
+      </Panel>
+    );
+  }
+
+  return (
+    <Panel title="历史相似案例" icon={<Layers3 size={18} />}>
+      <div className="similar-cases">
+        <div className="similar-cases-meta">
+          <span>窗口 {data.window_days} 个交易日</span>
+          <span>召回 {data.recall_count} 条</span>
+        </div>
+        {data.cases.length === 0 ? (
+          <div className="rating-detail-empty">未找到足够相似的历史首板样本。</div>
+        ) : (
+          data.cases.map((item) => (
+            <article className="similar-case-card" key={`${item.trade_date}-${item.symbol}`}>
+              <header>
+                <div>
+                  <strong>{item.name}</strong>
+                  <span>{item.symbol} / {item.trade_date}</span>
+                </div>
+                <b>{formatPercent(item.similarity)}</b>
+              </header>
+
+              <TagSection title="相似原因" items={item.reasons.length ? item.reasons : ["结构特征接近"]} tone="good" />
+              {item.differences.length > 0 ? (
+                <TagSection title="差异点" items={item.differences} tone="muted" />
+              ) : null}
+
+              <div className="case-outcome-grid">
+                <Fact label="晋级二板" value={item.outcome?.promoted_to_second_board ? "是" : "否"} />
+                <Fact label="次日最高" value={formatOptionalPercent(item.outcome?.next_high_pct)} />
+                <Fact label="三日最高" value={formatOptionalPercent(item.outcome?.three_day_high_pct)} />
+                <Fact label="三日回撤" value={formatOptionalPercent(item.outcome?.max_drawdown_3d)} />
+              </div>
+
+              {item.post_bars.length > 0 ? (
+                <div className="post-bars-mini">
+                  {item.post_bars.map((bar) => (
+                    <div key={bar.trade_date}>
+                      <span>{bar.trade_date.slice(5)}</span>
+                      <strong>{bar.close.toFixed(2)}</strong>
+                    </div>
+                  ))}
+                </div>
+              ) : (
+                <p className="case-note">暂无首板后走势缓存。</p>
+              )}
+            </article>
+          ))
+        )}
+      </div>
+    </Panel>
+  );
+}
+function FirstBoardRatingDetail({ rating }: { rating: FirstBoardRating | null }) {
+  /** Render explainable first-board score details for the selected stock. */
+
+  if (!rating) {
+    return (
+      <Panel title="Agent 评分拆解" icon={<BarChart3 size={18} />}>
+        <div className="rating-detail-empty">
+          当前股票不在首板评级候选池中。
+        </div>
+      </Panel>
+    );
+  }
+
+  return (
+    <Panel title="Agent 评分拆解" icon={<BarChart3 size={18} />}>
+      <div className="rating-detail">
+        <div className="rating-detail-head">
+          <span className={`rating-badge rating-${rating.rating.toLowerCase()}`}>
+            {rating.rating}
+          </span>
+          <div>
+            <strong>{rating.score.toFixed(1)}</strong>
+            <span>置信度 {formatPercent(rating.confidence)}</span>
+          </div>
+        </div>
+
+        <div className="rating-detail-section">
+          <h3>评分项</h3>
+          <div className="score-breakdown-list">
+            {rating.score_breakdown.map((item) => (
+              <div className="score-breakdown-item" key={item.name}>
+                <div>
+                  <strong>{item.name}</strong>
+                  <span>{item.evidence.join("；")}</span>
+                </div>
+                <b>{item.score.toFixed(1)} / {item.max_score}</b>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <TagSection title="主要理由" items={rating.reasons} tone="good" />
+        <TagSection title="风险观察" items={rating.risks} tone="risk" />
+        {rating.facts.data_missing.length > 0 ? (
+          <TagSection title="缺失数据" items={rating.facts.data_missing} tone="muted" />
+        ) : null}
+      </div>
+    </Panel>
+  );
+}
+
+function TagSection({
+  title,
+  items,
+  tone,
+}: {
+  title: string;
+  items: string[];
+  tone: "good" | "risk" | "muted";
+}) {
+  return (
+    <div className="rating-detail-section">
+      <h3>{title}</h3>
+      <div className="tag-list">
+        {items.map((item) => (
+          <span className={`detail-tag tag-${tone}`} key={item}>{item}</span>
+        ))}
+      </div>
+    </div>
+  );
+}
+function LatestCloseStrip({
+  snapshot,
+  loading,
+  error,
+}: {
+  snapshot: StockCloseSnapshot | null;
+  loading: boolean;
+  error: string | null;
+}) {
+  /** Show latest available after-close price data without blocking charts. */
+
+  if (loading) {
+    return <div className="latest-close-strip">正在加载最新收盘数据...</div>;
+  }
+
+  if (error || !snapshot) {
+    return <div className="latest-close-strip muted">暂无最新收盘数据</div>;
+  }
+
+  return (
+    <section className="latest-close-strip">
+      <div>
+        <span>最新收盘</span>
+        <strong>{snapshot.close.toFixed(2)}</strong>
+      </div>
+      <div>
+        <span>涨跌幅</span>
+        <strong className={snapshot.change_pct !== null && snapshot.change_pct >= 0 ? "positive" : "negative"}>
+          {snapshot.change_pct === null ? "暂无" : `${formatSigned(snapshot.change_pct, 2)}%`}
+        </strong>
+      </div>
+      <div>
+        <span>涨跌额</span>
+        <strong>
+          {snapshot.change === null ? "暂无" : formatSigned(snapshot.change, 2)}
+        </strong>
+      </div>
+      <div>
+        <span>交易日</span>
+        <strong>{snapshot.trade_date}</strong>
+      </div>
+    </section>
+  );
+}
 function Fact({ label, value }: { label: string; value: string }) {
   return (
     <div className="fact-row">
@@ -768,6 +1312,21 @@ function formatAmount(value: number) {
   return `${(value / 100_000_000).toFixed(1)} 亿`;
 }
 
+function formatOptionalPercent(value: number | null | undefined) {
+  return value === null || value === undefined ? "暂无" : `${formatSigned(value, 1)}%`;
+}
+
 function formatSigned(value: number, decimals = 1) {
   return value > 0 ? `+${value.toFixed(decimals)}` : value.toFixed(decimals);
 }
+
+
+
+
+
+
+
+
+
+
+

@@ -1,4 +1,4 @@
-# LimitUpLab Backend
+﻿# LimitUpLab Backend
 
 Python backend for collecting, storing, and analyzing A-share limit-up events
 for after-close market review.
@@ -27,6 +27,24 @@ py -3.13 -m venv .venv
 ```
 
 The API will be available at `http://localhost:8000`.
+
+## LLM Explanation
+
+LLM integration is disabled by default. When disabled, the Explanation Agent
+uses a deterministic template fallback, so local development still works
+without external API access.
+
+To enable a DeepSeek/OpenAI-compatible provider:
+
+```powershell
+$env:LIMITUPLAB_LLM_ENABLED = "true"
+$env:LIMITUPLAB_LLM_BASE_URL = "https://api.deepseek.com"
+$env:LIMITUPLAB_LLM_MODEL = "deepseek-v4-flash"
+$env:DEEPSEEK_API_KEY = "<your-api-key>"
+.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+```
+
+Do not commit real API keys to the repository.
 
 ## Local Data
 
@@ -73,7 +91,9 @@ LIMITUPLAB_DATABASE_PATH=/tmp/limituplab.sqlite uvicorn app.main:app --reload --
 - `GET /api/analysis/continuation` - board continuation probability
 - `GET /api/analysis/failed-rate` - failed limit-up rate by board height
 - `GET /api/analysis/post-performance` - next-day and short-window return stats
-- `GET /api/agents/daily-review` - rule-based after-close daily review
+- `GET /api/agents/first-board-ratings` - explainable first-board candidate ratings
+- `GET /api/agents/first-board-similar-cases` - historical similar first-board cases
+- `POST /api/agents/chat` - tool-grounded Agent chat and LLM/template explanations
 - `GET /api/stocks/{symbol}/kline?days=5` - recent daily K-line bars
 - `GET /api/stocks/{symbol}/trading-day-kline?period=5` - after-close trading-day intraday K-line review
 
@@ -94,3 +114,5 @@ endpoint is intended for after-close review of the latest persisted trading day.
 cd backend
 python -m unittest discover -s tests
 ```
+
+

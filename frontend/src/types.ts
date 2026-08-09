@@ -1,4 +1,4 @@
-export type Sentiment = "heating" | "diverging" | "cooling";
+﻿export type Sentiment = "heating" | "diverging" | "cooling";
 
 export interface MarketIndexSnapshot {
   name: string;
@@ -71,6 +71,17 @@ export interface StockIntradayKLineBar {
   amount: number;
 }
 
+export interface StockCloseSnapshot {
+  symbol: string;
+  trade_date: string;
+  close: number;
+  previous_close: number | null;
+  change: number | null;
+  change_pct: number | null;
+  volume: number;
+  source: string;
+}
+
 export interface ContinuationStat {
   board_height: number;
   sample_size: number;
@@ -93,29 +104,130 @@ export interface PostPerformanceStat {
   avg_next_close_pct: number;
   avg_five_day_return_pct: number;
 }
-
-export interface BoardLadderItem {
-  board_height: number;
-  count: number;
+export interface FirstBoardFilterResult {
+  symbol: string;
+  name: string;
+  included: boolean;
+  excluded_reasons: string[];
+  data_missing: string[];
 }
 
-export interface DailyReviewFacts {
+export interface FirstBoardCandidateFacts {
+  symbol: string;
+  name: string;
   trade_date: string;
-  sentiment: Sentiment;
-  limit_up_count: number;
-  first_board_count: number;
-  continued_board_count: number;
-  unstable_count: number;
-  unclosed_count: number;
-  failed_limit_up_rate: number;
-  max_board_height: number;
-  total_amount: number;
-  hot_industries: string[];
-  board_ladder: BoardLadderItem[];
-  risk_signals: string[];
+  first_limit_time: string;
+  last_limit_time: string;
+  seal_count: number;
+  break_count: number;
+  closed_limit: boolean;
+  board_height: number;
+  amount: number;
+  turnover_rate: number;
+  industry: string;
+  concept: string;
+  same_industry_limit_up_count: number;
+  same_concept_limit_up_count: number;
+  market_limit_up_count: number;
+  market_first_board_count: number;
+  market_failed_limit_up_rate: number;
+  market_max_board_height: number;
+  market_sentiment: Sentiment;
+  data_missing: string[];
 }
 
-export interface DailyReview {
-  facts: DailyReviewFacts;
-  narrative: string;
+export interface ScoreBreakdownItem {
+  name: string;
+  score: number;
+  max_score: number;
+  evidence: string[];
+}
+
+export interface FirstBoardRating {
+  facts: FirstBoardCandidateFacts;
+  score: number;
+  rating: "A" | "B" | "C" | "D";
+  confidence: number;
+  score_breakdown: ScoreBreakdownItem[];
+  reasons: string[];
+  risks: string[];
+}
+
+export interface FirstBoardRatingsResponse {
+  trade_date: string;
+  candidates: FirstBoardRating[];
+  filtered_out: FirstBoardFilterResult[];
+  universe_count: number;
+  generated_by: string;
+}
+export interface SimilarCaseOutcome {
+  next_trade_date: string | null;
+  next_open_pct: number | null;
+  next_high_pct: number | null;
+  next_close_pct: number | null;
+  three_day_high_pct: number | null;
+  three_day_close_pct: number | null;
+  max_drawdown_3d: number | null;
+  promoted_to_second_board: boolean;
+  outcome_ready: boolean;
+}
+
+export interface SimilarCaseDailyBar {
+  trade_date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  volume: number;
+  amount: number;
+}
+
+export interface SimilarFirstBoardCase {
+  symbol: string;
+  name: string;
+  trade_date: string;
+  similarity: number;
+  reasons: string[];
+  differences: string[];
+  outcome: SimilarCaseOutcome | null;
+  post_bars: SimilarCaseDailyBar[];
+}
+
+export interface SimilarFirstBoardCasesResponse {
+  target: {
+    trade_date: string;
+    symbol: string;
+    name: string;
+  };
+  cases: SimilarFirstBoardCase[];
+  window_days: number;
+  recall_count: number;
+  generated_by: string;
+}
+
+export interface AgentChatRequest {
+  session_id: string;
+  message: string;
+  intent_hint?: string;
+  trade_date?: string;
+  symbol?: string;
+  page_context?: Record<string, string>;
+}
+
+export interface AgentChatResponse {
+  session_id: string;
+  run_id: string | null;
+  intent: string;
+  answer: string;
+  tool_calls: string[];
+  tool_results: AgentToolTrace[];
+  references: string[];
+  warnings: string[];
+  generated_by: string;
+}
+
+export interface AgentToolTrace {
+  name: string;
+  input: Record<string, unknown>;
+  summary: string;
 }

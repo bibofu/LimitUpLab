@@ -15,9 +15,14 @@ def get_market_summary() -> MarketSummary:
     """Return the latest market sentiment summary with index snapshots."""
 
     events = get_limit_up_repository().list_events()
+    trade_date = latest_trade_date(events)
+    try:
+        indices = collect_market_indices(trade_date)
+    except Exception:
+        indices = []
     return summarize_market(
         events,
-        indices=collect_market_indices(latest_trade_date(events)),
+        indices=indices,
     )
 
 
@@ -26,7 +31,12 @@ def get_market_overview() -> MarketSummary:
     """Return the dashboard overview payload."""
 
     events = get_limit_up_repository().list_events()
+    trade_date = latest_trade_date(events)
+    try:
+        indices = collect_market_indices(trade_date)
+    except Exception:
+        indices = []
     return summarize_market(
         events,
-        indices=collect_market_indices(latest_trade_date(events)),
+        indices=indices,
     )

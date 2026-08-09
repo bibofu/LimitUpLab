@@ -31,7 +31,12 @@ def collect_limit_up_events(trade_date: str) -> list[LimitUpEvent]:
     for event in _collect_closed_limit_up_events(parsed_date, trade_date):
         events_by_key[(event.trade_date, event.symbol)] = event
 
-    for event in _collect_failed_limit_up_events(parsed_date, trade_date):
+    try:
+        failed_events = _collect_failed_limit_up_events(parsed_date, trade_date)
+    except Exception:
+        failed_events = []
+
+    for event in failed_events:
         events_by_key.setdefault((event.trade_date, event.symbol), event)
 
     return sorted(

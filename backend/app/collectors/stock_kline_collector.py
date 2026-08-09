@@ -1,4 +1,4 @@
-"""AKShare-backed stock K-line collectors for after-close review pages."""
+﻿"""AKShare-backed stock K-line collectors for after-close review pages."""
 
 import os
 from collections.abc import Iterator
@@ -8,7 +8,7 @@ from typing import Any
 
 import akshare as ak
 
-from app.models import StockIntradayKLineBar, StockKLineBar
+from app.models import StockCloseSnapshot, StockIntradayKLineBar, StockKLineBar
 
 
 def collect_stock_kline(
@@ -22,12 +22,13 @@ def collect_stock_kline(
     target_end_date = end_date or date.today()
     start_date = target_end_date - timedelta(days=max(days * 3, 15))
 
-    frame = ak.stock_zh_a_hist_tx(
-        symbol=normalized_symbol,
-        start_date=start_date.strftime("%Y%m%d"),
-        end_date=target_end_date.strftime("%Y%m%d"),
-        adjust="",
-    )
+    with _without_proxy():
+        frame = ak.stock_zh_a_hist_tx(
+            symbol=normalized_symbol,
+            start_date=start_date.strftime("%Y%m%d"),
+            end_date=target_end_date.strftime("%Y%m%d"),
+            adjust="",
+        )
 
     rows = frame.to_dict("records")[-days:]
     return [
@@ -43,6 +44,54 @@ def collect_stock_kline(
     ]
 
 
+
+def collect_stock_close_snapshot(
+    symbol: str,
+    end_date: date | None = None,
+) -> StockCloseSnapshot:
+    """Collect the latest available close snapshot from recent daily K-line bars."""
+
+    bars = collect_stock_kline(symbol=symbol, days=2, end_date=end_date)
+    return build_stock_close_snapshot(
+        symbol=symbol,
+        bars=bars,
+        source="akshare.stock_zh_a_hist_tx",
+    )
+
+def build_stock_close_snapshot(
+    symbol: str,
+    bars: list[StockKLineBar],
+    source: str,
+) -> StockCloseSnapshot:
+    """Build a latest close snapshot from ordered daily K-line bars."""
+
+    if not bars:
+        raise ValueError("stock close data is empty")
+
+    latest_bar = bars[-1]
+    previous_bar = bars[-2] if len(bars) >= 2 else None
+    previous_close = previous_bar.close if previous_bar else None
+    change = (
+        round(latest_bar.close - previous_close, 2)
+        if previous_close is not None
+        else None
+    )
+    change_pct = (
+        round((latest_bar.close - previous_close) / previous_close * 100, 2)
+        if previous_close not in (None, 0)
+        else None
+    )
+
+    return StockCloseSnapshot(
+        symbol=symbol,
+        trade_date=latest_bar.trade_date,
+        close=latest_bar.close,
+        previous_close=previous_close,
+        change=change,
+        change_pct=change_pct,
+        volume=latest_bar.volume,
+        source=source,
+    )
 def collect_stock_intraday_kline(
     symbol: str,
     trade_date: date,
@@ -200,3 +249,6 @@ def _without_proxy() -> Iterator[None]:
                 os.environ.pop(name, None)
             else:
                 os.environ[name] = value
+
+
+
