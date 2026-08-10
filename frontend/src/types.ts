@@ -160,6 +160,65 @@ export interface FirstBoardRatingsResponse {
   universe_count: number;
   generated_by: string;
 }
+
+export interface RatingBacktestBucket {
+  rating: string;
+  sample_size: number;
+  outcome_ready_count: number;
+  avg_next_open_pct: number | null;
+  avg_next_high_pct: number | null;
+  avg_next_close_pct: number | null;
+  avg_three_day_high_pct: number | null;
+  avg_three_day_close_pct: number | null;
+  promoted_to_second_board_rate: number | null;
+}
+
+export interface RatingBacktestFailureSample {
+  symbol: string;
+  name: string;
+  trade_date: string;
+  rating: string;
+  score: number;
+  next_close_pct: number | null;
+  three_day_close_pct: number | null;
+  promoted_to_second_board: boolean;
+  reasons: string[];
+  risks: string[];
+}
+
+export interface RatingBacktestResponse {
+  start_date: string;
+  end_date: string;
+  trade_dates: string[];
+  sample_size: number;
+  outcome_ready_count: number;
+  buckets: RatingBacktestBucket[];
+  failure_samples: RatingBacktestFailureSample[];
+  observations: string[];
+  warnings: string[];
+  generated_by: string;
+}
+
+export interface FirstBoardCriticResponse {
+  symbol: string;
+  name: string;
+  trade_date: string;
+  rating: string;
+  score: number;
+  original_confidence: number;
+  suggested_confidence: number;
+  confidence_delta: number;
+  verdict: "supportive" | "cautious" | "fragile";
+  support_evidence: string[];
+  counter_evidence: string[];
+  missing_data: string[];
+  critic_warnings: string[];
+  review_questions: string[];
+  similar_case_count: number;
+  similar_case_outcome_ready_count: number;
+  generated_by: string;
+}
+
 export interface SimilarCaseOutcome {
   next_trade_date: string | null;
   next_open_pct: number | null;
@@ -226,8 +285,35 @@ export interface AgentChatResponse {
   generated_by: string;
 }
 
+export interface AgentDataHealthTopCandidate {
+  symbol: string;
+  name: string;
+  score: number;
+  rating: string;
+  feature_ready: boolean;
+  similar_case_count: number;
+  similar_cases_with_post_bars: number;
+}
+
+export interface AgentDataHealthResponse {
+  trade_date: string | null;
+  status: "healthy" | "partial" | "missing";
+  raw_events_ready: boolean;
+  raw_event_count: number;
+  first_board_features_ready: boolean;
+  first_board_feature_count: number;
+  top_candidates_checked: number;
+  similar_cases_ready: boolean;
+  post_bars_ready: boolean;
+  top_candidates: AgentDataHealthTopCandidate[];
+  warnings: string[];
+}
+
 export interface AgentToolTrace {
   name: string;
   input: Record<string, unknown>;
   summary: string;
+  status: "success" | "error" | "skipped";
+  output: Record<string, unknown>;
+  error: string | null;
 }

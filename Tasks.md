@@ -186,11 +186,68 @@ Critic Agent
   - 执行链路为：首板评级候选池 -> 行业/题材筛选 -> 选择目标股票 -> 历史相似案例检索。
   - 如果相似案例特征缓存缺失，明确说明缺失原因，不编造历史案例。
 
+- `[x]` 增加首板板块问答能力。
+  - 可处理“某日首板票主要板块有哪些”。
+  - 先调用 `first_board_ratings` 获取结构化候选池，再聚合行业分布、平均评分和代表股票。
+  - 回答统一走 LLM 生成入口，LLM 不可用时使用同一份 facts 的模板兜底。
+
+- `[x]` 重构开放问答为统一工具事实生成通道。
+  - 对市场环境、今日首板、板块分布、候选排序和未知首板相关问题，统一构建 `market_summary` + `first_board_ratings` facts 包。
+  - LLM 负责基于 facts 生成最终回答，规则模板只作为 LLM 不可用时的兜底。
+  - 保留语义 intent 便于前端和日志理解问题类型，但不再为每种问法写独立回答模板。
+  - 补充“哪些候选评分靠前”测试，避免自然语言问法再次落入错误分支。
+
+- `[x]` 增加 Conversation Router 入口层。
+  - 先判断用户是在问能力说明、普通寒暄、越界问题、交易指令风险，还是股票工具问题。
+  - `capability_intro`、`smalltalk`、`out_of_scope`、`unsafe_investment_advice` 不再触发股票数据工具。
+  - 明确回答“你能做什么”，并说明当前 Agent 的工具边界。
+  - 对直接交易类问题做安全降级，不输出交易指令、资金配比、价格预测或回报承诺。
+
+- `[x]` 增加 LLM Planner 优先的工具调用主链路。
+  - 正常链路调整为：用户问题 -> 拼接系统指令、工具描述和上下文 -> LLM 输出 JSON 工具计划 -> 后端执行工具 -> LLM 基于工具 facts 生成最终回答。
+  - `intent` 降级为日志和审计标签，不再作为真实 LLM 可用时的主控制流。
+  - 支持的工具计划包括 `market_summary`、`first_board_ratings`、`first_board_filter`、`first_board_similar_cases`。
+  - LLM 不可用、未配置 key 或计划 JSON 解析失败时，自动回落到原有确定性规则链路，保证本地演示不崩。
+  - 增加 Fake LLM 单测，验证 Agent 会先规划工具，再执行工具并生成回答。
+
+- `[x]` 标准化 Agent 工具 schema 和执行轨迹。
+  - 每个 Agent 工具统一声明 `name`、`description`、`args_schema`、`returns`。
+  - Planner prompt 从工具 schema 自动生成，减少手写工具描述漂移。
+  - 工具 trace 统一包含 `status`、`input`、`summary`、`output`、`error`。
+  - 工具失败或模型请求未知工具时，不直接中断，改为记录 error trace 并交给 LLM 解释。
+  - 前端对话区支持展开查看每次工具调用的输入和输出摘要。
+
+- `[x]` 增加每日数据更新流水线。
+  - 新增 `scripts/update_daily_data.py`，串联涨停/炸板导入、近 60 个交易日首板特征同步、Top 候选相似案例后续 K 线回填。
+  - 输出 JSON 健康报告，检查原始涨停数据、首板特征、Top 候选相似案例和 post bars 是否可用。
+  - 支持 `--skip-import`、`--replace-date`、`--top-targets`、`--similar-limit`、`--max-kline-fetches` 等参数，便于本地调试和后续定时任务接入。
+  - 补充单元测试，避免再次出现“只拉原始数据但忘记同步派生特征”的问题。
+
+- `[x]` 增加 Agent 数据健康状态可见化。
+  - 新增 `/api/agents/data-health`，返回最新交易日、原始涨停数据、首板特征、Top 候选相似案例和 post bars 覆盖情况。
+  - 抽出 `app.services.data_health`，让 API 和每日更新脚本复用同一套健康检查逻辑。
+  - 前端 Agent 工作台顶部展示“数据健康 / 部分可用 / 数据缺失”状态和关键数量。
+  - `backend/README.md` 补充每日更新流水线命令和 data-health endpoint。
+
+- `[x]` 增加评分回测与自我评价 MVP。
+  - 新增 `app.services.rating_backtest`，按日期范围重算首板评分并对齐 `first_board_outcomes`。
+  - 新增 `/api/agents/rating-backtest`，输出 A/B/C/D 分桶表现、失败样本和自我评价观察。
+  - Agent 工具层新增 `rating_backtest`，用户可询问“最近首板评分准吗”“做个回测和自我评价”。
+  - LLM Planner 漏调回测工具时，后端会根据问题自动补调用。
+  - 前端首页新增“评分回测与自我评价”面板，展示评级分桶表现、走势覆盖率、回测观察和高分弱表现样本。
+  - 补充回测服务和 Agent 工具调用测试。
+
 - `[x]` 实现受控上下文管理第一版。
   - 保留最近 6-10 轮对话。
   - 保存当前 `trade_date` 和 `symbol`。
   - 工具大结果只保存引用或摘要。
   - 股票或日期指代不清时要求用户澄清。
+
+- `[x]` 增强多轮指代解析第一版。
+  - 从上一轮 `agent_plan`、`references` 和工具轨迹中恢复日期、筛选条件、命中股票列表和当前目标股票。
+  - 支持追问“那里面评分最高的是谁”，复用上一轮行业/题材筛选池并选出最高评分候选。
+  - 支持追问“它有没有历史相似案例”，复用上一轮选出的股票继续调用相似案例工具。
+  - 当股票已识别但相似案例特征缓存缺失时，明确说明缓存缺失，不误报为股票不存在。
 
 - `[x]` 增加问答安全边界。
   - 回答必须基于工具返回的 facts。
@@ -240,17 +297,23 @@ LLM 不输出买卖建议。
 
 目标：让系统具备自我质疑能力，避免评分结论过度乐观。
 
-- `[ ]` 实现 Critic Agent。
+- `[x]` 实现 Critic Agent。
   - 检查是否过度乐观。
   - 检查是否缺失关键数据。
   - 检查是否有反向市场证据。
   - 检查是否越过投资建议边界。
+  - 新增 `/api/agents/first-board-critic`，按股票和交易日输出结构化复核结果。
+  - Agent 工具层新增 `first_board_critic`，支持用户询问“评分靠谱吗”“帮我反驳一下高分理由”。
+  - LLM Planner 漏调 Critic 工具时，后端会根据问题自动补调用。
 
-- `[ ]` 实现置信度调整逻辑。
+- `[x]` 实现置信度调整逻辑。
   - Critic 可以降低 confidence。
   - Critic 不直接重写评分规则。
+  - 输出原始置信度、建议置信度、confidence delta 和 `supportive / cautious / fragile` verdict。
 
-- `[ ]` 前端展示 Critic warnings。
+- `[x]` 前端展示 Critic warnings。
+  - 个股详情页新增“Critic 复核”面板。
+  - 展示支持证据、反向证据、缺失数据、复盘问题和数据边界提示。
 
 验收标准：
 

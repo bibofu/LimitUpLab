@@ -25,11 +25,14 @@ import {
 
 import {
   fetchContinuedBoardEvents,
+  fetchAgentDataHealth,
+  fetchFirstBoardCritic,
   fetchFirstBoardRatings,
   fetchFirstBoardSimilarCases,
   fetchFailedLimitUpEvents,
   fetchFirstBoardEvents,
   fetchMarketSummary,
+  fetchRatingBacktest,
   fetchRecentLimitUpEvents,
   fetchStockKLine,
   fetchStockLatestClose,
@@ -38,10 +41,13 @@ import {
 } from "./api";
 import type {
   AgentChatResponse,
+  AgentDataHealthResponse,
+  FirstBoardCriticResponse,
   FirstBoardRating,
   FirstBoardRatingsResponse,
   LimitUpEvent,
   MarketSummary,
+  RatingBacktestResponse,
   SimilarFirstBoardCasesResponse,
   StockCloseSnapshot,
   StockIntradayKLineBar,
@@ -57,6 +63,8 @@ interface DashboardData {
   failed: LimitUpEvent[];
   recent: LimitUpEvent[];
   firstBoardRatings: FirstBoardRatingsResponse;
+  agentDataHealth: AgentDataHealthResponse;
+  ratingBacktest: RatingBacktestResponse;
 }
 
 interface CandleBar {
@@ -74,6 +82,16 @@ interface ChatMessage {
   meta?: AgentChatResponse;
 }
 
+function formatTracePayload(payload: Record<string, unknown>) {
+  return JSON.stringify(payload, null, 2);
+}
+
+const healthCopy = {
+  healthy: { label: "数据健康", detail: "工具数据链完整" },
+  partial: { label: "部分可用", detail: "部分相似案例或走势缓存缺失" },
+  missing: { label: "数据缺失", detail: "需要运行每日更新流水线" },
+};
+
 const viewMeta: Record<ViewKey, { title: string; eyebrow: string }> = {
   overview: { title: "短线市场概况", eyebrow: "Overview" },
   first: { title: "首板票", eyebrow: "First Board" },
@@ -85,9 +103,11 @@ const viewMeta: Record<ViewKey, { title: string; eyebrow: string }> = {
 function AgentChatDock({
   tradeDate,
   symbol,
+  dataHealth,
 }: {
   tradeDate: string;
   symbol?: string;
+  dataHealth: AgentDataHealthResponse;
 }) {
   /** Provide a lightweight tool-grounded Agent chat entry point. */
 
@@ -160,6 +180,22 @@ function AgentChatDock({
           </div>
         </header>
 
+        <div className={`agent-data-health health-${dataHealth.status}`}>
+          <div>
+            <strong>{healthCopy[dataHealth.status].label}</strong>
+            <span>{healthCopy[dataHealth.status].detail}</span>
+          </div>
+          <div className="agent-health-metrics">
+            <span>原始 {dataHealth.raw_event_count}</span>
+            <span>特征 {dataHealth.first_board_feature_count}</span>
+            <span>Top {dataHealth.top_candidates_checked}</span>
+            <span>{dataHealth.post_bars_ready ? "走势已缓存" : "走势待补齐"}</span>
+          </div>
+          {dataHealth.warnings.length > 0 ? (
+            <p>{dataHealth.warnings[0]}</p>
+          ) : null}
+        </div>
+
         <div className="agent-chat-messages">
           {messages.map((item) => (
             <article className={`chat-message chat-${item.role}`} key={item.id}>
@@ -176,10 +212,29 @@ function AgentChatDock({
                   {item.meta.tool_results.length > 0 ? (
                     <div className="chat-tool-traces">
                       {item.meta.tool_results.map((tool) => (
-                        <div key={`${item.id}-${tool.name}`}>
-                          <strong>{tool.name}</strong>
-                          <span>{tool.summary}</span>
-                        </div>
+                        <details
+                          className={`chat-tool-trace trace-${tool.status}`}
+                          key={`${item.id}-${tool.name}-${tool.summary}`}
+                        >
+                          <summary>
+                            <strong>{tool.name}</strong>
+                            <span>{tool.status}</span>
+                          </summary>
+                          <p>{tool.summary}</p>
+                          {tool.error ? <p className="trace-error">{tool.error}</p> : null}
+                          <div className="trace-grid">
+                            <section>
+                              <span>输入</span>
+                              <pre>{formatTracePayload(tool.input)}</pre>
+                            </section>
+                            {Object.keys(tool.output).length > 0 ? (
+                              <section>
+                                <span>输出摘要</span>
+                                <pre>{formatTracePayload(tool.output)}</pre>
+                              </section>
+                            ) : null}
+                          </div>
+                        </details>
                       ))}
                     </div>
                   ) : null}
@@ -301,16 +356,36 @@ export function App() {
     setError(null);
 
     try {
-      const [summary, firstBoard, continuedBoard, failed, recent, firstBoardRatings] = await Promise.all([
+      const [
+        summary,
+        firstBoard,
+        continuedBoard,
+        failed,
+        recent,
+        firstBoardRatings,
+        agentDataHealth,
+        ratingBacktest,
+      ] = await Promise.all([
         fetchMarketSummary(),
         fetchFirstBoardEvents(),
         fetchContinuedBoardEvents(),
         fetchFailedLimitUpEvents(),
         fetchRecentLimitUpEvents(3),
         fetchFirstBoardRatings(),
+        fetchAgentDataHealth(),
+        fetchRatingBacktest(),
       ]);
 
-      setData({ summary, firstBoard, continuedBoard, failed, recent, firstBoardRatings });
+      setData({
+        summary,
+        firstBoard,
+        continuedBoard,
+        failed,
+        recent,
+        firstBoardRatings,
+        agentDataHealth,
+        ratingBacktest,
+      });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "加载数据失败");
     } finally {
@@ -363,7 +438,11 @@ export function App() {
         </div>
       </header>
 
-      <AgentChatDock tradeDate={data.summary.trade_date} symbol={chatSymbol} />
+      <AgentChatDock
+        tradeDate={data.summary.trade_date}
+        symbol={chatSymbol}
+        dataHealth={data.agentDataHealth}
+      />
 
       <Routes>
         <Route path="/" element={<Overview data={data} />} />
@@ -464,6 +543,8 @@ function Overview({ data }: { data: DashboardData }) {
 
       <FirstBoardRatingPanel ratings={data.firstBoardRatings} />
 
+      <RatingBacktestPanel backtest={data.ratingBacktest} />
+
       <Link className="recent-entry" to="/stocks/recent-limit-up">
         <div>
           <TrendingUp size={22} />
@@ -507,6 +588,140 @@ function FirstBoardRatingPanel({ ratings }: { ratings: FirstBoardRatingsResponse
     </Panel>
   );
 }
+
+function RatingBacktestPanel({ backtest }: { backtest: RatingBacktestResponse }) {
+  /** Show whether the current first-board scoring rubric has worked recently. */
+
+  const readyRate = backtest.sample_size > 0
+    ? backtest.outcome_ready_count / backtest.sample_size
+    : 0;
+
+  return (
+    <Panel title="评分回测与自我评价" icon={<BarChart3 size={18} />}>
+      <div className="backtest-panel">
+        <div className="backtest-summary">
+          <div>
+            <span>回测区间</span>
+            <strong>
+              {backtest.start_date} 至 {backtest.end_date}
+            </strong>
+          </div>
+          <div>
+            <span>样本数量</span>
+            <strong>{backtest.sample_size} 个</strong>
+          </div>
+          <div>
+            <span>走势覆盖</span>
+            <strong>{formatPercent(readyRate)}</strong>
+          </div>
+          <div>
+            <span>生成方式</span>
+            <strong>{backtest.generated_by}</strong>
+          </div>
+        </div>
+
+        <div className="backtest-buckets">
+          {backtest.buckets.map((bucket) => (
+            <article className="backtest-bucket" key={bucket.rating}>
+              <header>
+                <span className={`rating-badge rating-${bucket.rating.toLowerCase()}`}>
+                  {bucket.rating}
+                </span>
+                <div>
+                  <strong>{bucket.outcome_ready_count} / {bucket.sample_size}</strong>
+                  <span>已完成走势样本</span>
+                </div>
+              </header>
+              <dl>
+                <div>
+                  <dt>次日最高</dt>
+                  <dd>{formatOptionalPercent(bucket.avg_next_high_pct)}</dd>
+                </div>
+                <div>
+                  <dt>次日收盘</dt>
+                  <dd>{formatOptionalPercent(bucket.avg_next_close_pct)}</dd>
+                </div>
+                <div>
+                  <dt>三日最高</dt>
+                  <dd>{formatOptionalPercent(bucket.avg_three_day_high_pct)}</dd>
+                </div>
+                <div>
+                  <dt>晋级率</dt>
+                  <dd>
+                    {bucket.promoted_to_second_board_rate === null
+                      ? "暂无"
+                      : formatPercent(bucket.promoted_to_second_board_rate)}
+                  </dd>
+                </div>
+              </dl>
+            </article>
+          ))}
+        </div>
+
+        <div className="backtest-insights">
+          <section>
+            <h3>回测观察</h3>
+            {backtest.observations.length > 0 ? (
+              <ul>
+                {backtest.observations.map((observation) => (
+                  <li key={observation}>{observation}</li>
+                ))}
+              </ul>
+            ) : (
+              <p>暂无足够样本形成稳定观察。</p>
+            )}
+            {backtest.warnings.length > 0 ? (
+              <div className="backtest-warnings">
+                {backtest.warnings.map((warning) => (
+                  <span key={warning}>{warning}</span>
+                ))}
+              </div>
+            ) : null}
+          </section>
+
+          <section>
+            <h3>高分弱表现样本</h3>
+            {backtest.failure_samples.length > 0 ? (
+              <div className="failure-sample-list">
+                {backtest.failure_samples.slice(0, 4).map((sample) => (
+                  <article className="failure-sample-card" key={`${sample.symbol}-${sample.trade_date}`}>
+                    <header>
+                      <div>
+                        <strong>{sample.name}</strong>
+                        <span>{sample.symbol} / {sample.trade_date}</span>
+                      </div>
+                      <span className={`rating-badge rating-${sample.rating.toLowerCase()}`}>
+                        {sample.rating}
+                      </span>
+                    </header>
+                    <dl>
+                      <div>
+                        <dt>评分</dt>
+                        <dd>{sample.score.toFixed(1)}</dd>
+                      </div>
+                      <div>
+                        <dt>次日收盘</dt>
+                        <dd>{formatOptionalPercent(sample.next_close_pct)}</dd>
+                      </div>
+                      <div>
+                        <dt>三日收盘</dt>
+                        <dd>{formatOptionalPercent(sample.three_day_close_pct)}</dd>
+                      </div>
+                    </dl>
+                    <p>{sample.risks[0] ?? sample.reasons[0] ?? "需要结合分时与题材强度复盘。"}</p>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p>当前没有可展示的高分弱表现样本。</p>
+            )}
+          </section>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
 function DetailView({ view, data }: { view: ViewKey; data: DashboardData }) {
   /** Render one of the latest-day stock list views. */
 
@@ -702,6 +917,7 @@ function StockDetail({ data }: { data: DashboardData }) {
   const [tradingDayKline, setTradingDayKline] = useState<StockIntradayKLineBar[]>([]);
   const [latestClose, setLatestClose] = useState<StockCloseSnapshot | null>(null);
   const [similarCases, setSimilarCases] = useState<SimilarFirstBoardCasesResponse | null>(null);
+  const [critic, setCritic] = useState<FirstBoardCriticResponse | null>(null);
   const [klineLoading, setKlineLoading] = useState(true);
   const [klineError, setKlineError] = useState<string | null>(null);
   const [tradingDayLoading, setTradingDayLoading] = useState(true);
@@ -710,6 +926,8 @@ function StockDetail({ data }: { data: DashboardData }) {
   const [latestCloseError, setLatestCloseError] = useState<string | null>(null);
   const [similarCasesLoading, setSimilarCasesLoading] = useState(false);
   const [similarCasesError, setSimilarCasesError] = useState<string | null>(null);
+  const [criticLoading, setCriticLoading] = useState(false);
+  const [criticError, setCriticError] = useState<string | null>(null);
   const events = useMemo(
     () => [...data.firstBoard, ...data.continuedBoard, ...data.failed, ...data.recent],
     [data],
@@ -733,6 +951,8 @@ function StockDetail({ data }: { data: DashboardData }) {
       setLatestCloseLoading(false);
       setSimilarCasesLoading(false);
       setSimilarCases(null);
+      setCriticLoading(false);
+      setCritic(null);
       return;
     }
 
@@ -774,10 +994,23 @@ function StockDetail({ data }: { data: DashboardData }) {
           setSimilarCasesError(caught instanceof Error ? caught.message : "加载历史相似案例失败");
         })
         .finally(() => setSimilarCasesLoading(false));
+
+      setCriticLoading(true);
+      setCriticError(null);
+      fetchFirstBoardCritic(symbol, firstBoardRating.facts.trade_date)
+        .then(setCritic)
+        .catch((caught) => {
+          setCritic(null);
+          setCriticError(caught instanceof Error ? caught.message : "加载 Critic 复核失败");
+        })
+        .finally(() => setCriticLoading(false));
     } else {
       setSimilarCases(null);
       setSimilarCasesLoading(false);
       setSimilarCasesError(null);
+      setCritic(null);
+      setCriticLoading(false);
+      setCriticError(null);
     }
   }, [firstBoardRating, stockEvent?.trade_date, symbol]);
 
@@ -842,6 +1075,11 @@ function StockDetail({ data }: { data: DashboardData }) {
           data={similarCases}
           loading={similarCasesLoading}
           error={similarCasesError}
+        />
+        <FirstBoardCriticPanel
+          data={critic}
+          loading={criticLoading}
+          error={criticError}
         />
       </section>
 
@@ -948,6 +1186,89 @@ function SimilarCasesPanel({
     </Panel>
   );
 }
+
+function FirstBoardCriticPanel({
+  data,
+  loading,
+  error,
+}: {
+  data: FirstBoardCriticResponse | null;
+  loading: boolean;
+  error: string | null;
+}) {
+  /** Render critic-side review that challenges the original rating. */
+
+  const verdictCopy = {
+    supportive: "证据较稳",
+    cautious: "需要谨慎",
+    fragile: "结论偏脆弱",
+  };
+
+  if (loading) {
+    return (
+      <Panel title="Critic 复核" icon={<ShieldAlert size={18} />}>
+        <div className="rating-detail-empty">正在复核评分可靠性...</div>
+      </Panel>
+    );
+  }
+
+  if (error) {
+    return (
+      <Panel title="Critic 复核" icon={<ShieldAlert size={18} />}>
+        <div className="rating-detail-empty">{error}</div>
+      </Panel>
+    );
+  }
+
+  if (!data) {
+    return (
+      <Panel title="Critic 复核" icon={<ShieldAlert size={18} />}>
+        <div className="rating-detail-empty">当前股票暂无 Critic 复核结果。</div>
+      </Panel>
+    );
+  }
+
+  return (
+    <Panel title="Critic 复核" icon={<ShieldAlert size={18} />}>
+      <div className="critic-detail">
+        <div className={`critic-verdict critic-${data.verdict}`}>
+          <div>
+            <span>复核结论</span>
+            <strong>{verdictCopy[data.verdict]}</strong>
+          </div>
+          <div>
+            <span>置信度建议</span>
+            <strong>
+              {formatPercent(data.original_confidence)} {"->"} {formatPercent(data.suggested_confidence)}
+            </strong>
+          </div>
+          <div>
+            <span>相似案例覆盖</span>
+            <strong>
+              {data.similar_case_outcome_ready_count} / {data.similar_case_count}
+            </strong>
+          </div>
+        </div>
+
+        <TagSection title="支持证据" items={data.support_evidence} tone="good" />
+        <TagSection title="反向证据" items={data.counter_evidence} tone="risk" />
+        {data.missing_data.length > 0 ? (
+          <TagSection title="缺失数据" items={data.missing_data} tone="muted" />
+        ) : null}
+        <TagSection title="复盘问题" items={data.review_questions} tone="muted" />
+
+        {data.critic_warnings.length > 0 ? (
+          <div className="critic-warnings">
+            {data.critic_warnings.map((warning) => (
+              <span key={warning}>{warning}</span>
+            ))}
+          </div>
+        ) : null}
+      </div>
+    </Panel>
+  );
+}
+
 function FirstBoardRatingDetail({ rating }: { rating: FirstBoardRating | null }) {
   /** Render explainable first-board score details for the selected stock. */
 

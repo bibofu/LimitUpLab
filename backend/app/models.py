@@ -308,6 +308,72 @@ class FirstBoardRatingsResponse(BaseModel):
     generated_by: str
 
 
+class RatingBacktestBucket(BaseModel):
+    """Aggregated post-board outcome metrics for one rating bucket."""
+
+    rating: str
+    sample_size: int
+    outcome_ready_count: int
+    avg_next_open_pct: float | None = None
+    avg_next_high_pct: float | None = None
+    avg_next_close_pct: float | None = None
+    avg_three_day_high_pct: float | None = None
+    avg_three_day_close_pct: float | None = None
+    promoted_to_second_board_rate: float | None = None
+
+
+class RatingBacktestFailureSample(BaseModel):
+    """High-rated candidate whose post-board outcome was weak."""
+
+    symbol: str
+    name: str
+    trade_date: date
+    rating: str
+    score: float
+    next_close_pct: float | None = None
+    three_day_close_pct: float | None = None
+    promoted_to_second_board: bool
+    reasons: list[str]
+    risks: list[str]
+
+
+class RatingBacktestResponse(BaseModel):
+    """Self-evaluation summary for first-board ratings over a date range."""
+
+    start_date: date
+    end_date: date
+    trade_dates: list[date]
+    sample_size: int
+    outcome_ready_count: int
+    buckets: list[RatingBacktestBucket]
+    failure_samples: list[RatingBacktestFailureSample]
+    observations: list[str]
+    warnings: list[str] = Field(default_factory=list)
+    generated_by: str
+
+
+class FirstBoardCriticResponse(BaseModel):
+    """Critic review for one first-board rating without changing the score."""
+
+    symbol: str
+    name: str
+    trade_date: date
+    rating: str
+    score: float
+    original_confidence: float
+    suggested_confidence: float
+    confidence_delta: float
+    verdict: Literal["supportive", "cautious", "fragile"]
+    support_evidence: list[str]
+    counter_evidence: list[str]
+    missing_data: list[str]
+    critic_warnings: list[str]
+    review_questions: list[str]
+    similar_case_count: int
+    similar_case_outcome_ready_count: int
+    generated_by: str
+
+
 class AgentChatRequest(BaseModel):
     """User chat request with optional page context."""
 
@@ -339,6 +405,37 @@ class AgentToolTrace(BaseModel):
     name: str
     input: dict[str, Any] = Field(default_factory=dict)
     summary: str
+    status: Literal["success", "error", "skipped"] = "success"
+    output: dict[str, Any] = Field(default_factory=dict)
+    error: str | None = None
+
+
+class AgentDataHealthTopCandidate(BaseModel):
+    """Health status for one top-rated first-board candidate."""
+
+    symbol: str
+    name: str
+    score: float
+    rating: str
+    feature_ready: bool
+    similar_case_count: int
+    similar_cases_with_post_bars: int
+
+
+class AgentDataHealthResponse(BaseModel):
+    """Health status for Agent data dependencies."""
+
+    trade_date: date | None
+    status: Literal["healthy", "partial", "missing"]
+    raw_events_ready: bool
+    raw_event_count: int
+    first_board_features_ready: bool
+    first_board_feature_count: int
+    top_candidates_checked: int
+    similar_cases_ready: bool
+    post_bars_ready: bool
+    top_candidates: list[AgentDataHealthTopCandidate] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
 
 
 class AgentRun(BaseModel):

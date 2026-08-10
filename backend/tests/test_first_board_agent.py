@@ -3,6 +3,7 @@ from datetime import date, time
 
 from app.agents import build_first_board_ratings
 from app.models import LimitUpEvent
+from app.services.first_board_critic import build_first_board_critic
 from app.services.sample_data import SAMPLE_EVENTS
 
 
@@ -93,6 +94,25 @@ class FirstBoardAgentTest(unittest.TestCase):
         forbidden_terms = ["买入", "卖出", "仓位", "目标价", "收益承诺"]
         for term in forbidden_terms:
             self.assertNotIn(term, rendered)
+
+    def test_first_board_critic_challenges_rating_without_changing_score(self) -> None:
+        ratings = build_first_board_ratings(SAMPLE_EVENTS)
+        rating = ratings.candidates[0]
+
+        critic = build_first_board_critic(
+            events=SAMPLE_EVENTS,
+            symbol=rating.facts.symbol,
+            trade_date=rating.facts.trade_date,
+            similar_limit=0,
+        )
+
+        self.assertEqual(critic.symbol, rating.facts.symbol)
+        self.assertEqual(critic.score, rating.score)
+        self.assertEqual(critic.rating, rating.rating)
+        self.assertLessEqual(critic.suggested_confidence, critic.original_confidence)
+        self.assertTrue(critic.counter_evidence)
+        self.assertTrue(critic.review_questions)
+        self.assertIn("listing_date", critic.missing_data)
 
 
 if __name__ == "__main__":

@@ -1,12 +1,15 @@
 import type {
   AgentChatRequest,
   AgentChatResponse,
+  AgentDataHealthResponse,
   ContinuationStat,
   FailedRateStat,
+  FirstBoardCriticResponse,
   FirstBoardRatingsResponse,
   LimitUpEvent,
   MarketSummary,
   PostPerformanceStat,
+  RatingBacktestResponse,
   SimilarFirstBoardCasesResponse,
   StockCloseSnapshot,
   StockIntradayKLineBar,
@@ -79,6 +82,25 @@ export function fetchStockTradingDayKLine(symbol: string, period = 5) {
 export function fetchFirstBoardRatings(tradeDate?: string) {
   const query = tradeDate ? `?trade_date=${tradeDate}` : "";
   return request<FirstBoardRatingsResponse>(`/api/agents/first-board-ratings${query}`);
+}
+
+export function fetchAgentDataHealth(tradeDate?: string) {
+  const query = tradeDate ? `?trade_date=${tradeDate}` : "";
+  return request<AgentDataHealthResponse>(`/api/agents/data-health${query}`);
+}
+
+export function fetchRatingBacktest() {
+  return request<RatingBacktestResponse>("/api/agents/rating-backtest");
+}
+
+export function fetchFirstBoardCritic(symbol: string, tradeDate?: string) {
+  const params = new URLSearchParams({ symbol });
+  if (tradeDate) {
+    params.set("trade_date", tradeDate);
+  }
+  return request<FirstBoardCriticResponse>(
+    `/api/agents/first-board-critic?${params.toString()}`,
+  );
 }
 
 export function fetchFirstBoardSimilarCases(symbol: string, tradeDate: string, limit = 5) {

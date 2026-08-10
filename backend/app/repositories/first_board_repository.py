@@ -363,6 +363,30 @@ class SQLiteFirstBoardRepository:
 
         return self._outcome_from_row(row) if row else None
 
+    def list_outcomes_between(
+        self,
+        start_date: date,
+        end_date: date,
+    ) -> list[FirstBoardOutcome]:
+        """Return outcome summaries in an inclusive base-date range."""
+
+        connection = connect(self.database_path)
+        try:
+            initialize_database(connection)
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM first_board_outcomes
+                WHERE base_trade_date >= ? AND base_trade_date <= ?
+                ORDER BY base_trade_date ASC, symbol ASC
+                """,
+                (start_date.isoformat(), end_date.isoformat()),
+            ).fetchall()
+        finally:
+            connection.close()
+
+        return [self._outcome_from_row(row) for row in rows]
+
     def _feature_to_record(self, feature: FirstBoardFeature) -> tuple[object, ...]:
         """Serialize a first-board feature model for SQLite."""
 

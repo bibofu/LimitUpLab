@@ -1,7 +1,9 @@
 """Tool-grounded first-board chat agent."""
 
+import json
 import re
 from datetime import date
+from typing import Any
 
 from app.agents.explanation import explain_first_board_rating
 from app.agents.tools import AgentToolRegistry, ToolResult
@@ -16,34 +18,47 @@ from app.models import (
     MarketSummary,
 )
 from app.repositories import SQLiteFirstBoardRepository
-from app.services.llm_provider import get_llm_provider
+from app.services.llm_provider import LLMProvider, get_llm_provider
 
 
 CHAT_AGENT_VERSION = "first-board-chat-rule-v1"
 SEMI = "\uff1b"
 IDEOGRAPHIC_COMMA = "\u3001"
 SUPPORTED_INTENTS = {
+    "capability_intro",
     "greeting",
+    "smalltalk",
+    "out_of_scope",
+    "unsafe_investment_advice",
     "market_schedule",
     "market_context",
     "general_llm",
+    "tool_grounded_answer",
     "similar_cases",
     "risk_summary",
     "rating_explain",
     "first_board_filter",
     "first_board_filter_similar",
+    "first_board_context_top",
+    "first_board_sector_summary",
     "today_summary",
     "llm_explanation",
 }
 
 TEXT = {
     "greeting": "\u4f60\u597d\uff0c\u6211\u662f LimitUpLab \u7684\u9996\u677f Agent\u3002\u6211\u53ef\u4ee5\u5e2e\u4f60\u603b\u7ed3\u4eca\u5929\u9996\u677f\u3001\u89e3\u91ca\u4e2a\u80a1\u8bc4\u5206\u3001\u68c0\u7d22\u5386\u53f2\u76f8\u4f3c\u6848\u4f8b\uff0c\u4e5f\u53ef\u4ee5\u5bf9\u5f53\u524d\u4e2a\u80a1\u505a\u8be6\u7ec6\u89e3\u91ca\u3002",
+    "capability": "\u6211\u662f LimitUpLab \u7684\u9996\u677f\u7814\u7a76 Agent\u3002\u6211\u80fd\u505a\u7684\u4e8b\u60c5\u4e3b\u8981\u662f\uff1a\n- \u603b\u7ed3\u67d0\u4e2a\u4ea4\u6613\u65e5\u7684\u9996\u677f\u5019\u9009\u6c60\n- \u5217\u51fa\u8bc4\u5206\u9760\u524d\u7684\u5019\u9009\u80a1\n- \u5206\u6790\u9996\u677f\u7968\u4e3b\u8981\u677f\u5757\u548c\u884c\u4e1a\u5206\u5e03\n- \u6309\u533b\u836f\u3001AI\u3001\u673a\u5668\u4eba\u7b49\u9898\u6750\u7b5b\u9009\u9996\u677f\u5019\u9009\n- \u89e3\u91ca\u67d0\u53ea\u80a1\u7968\u7684\u8bc4\u5206\u3001\u7406\u7531\u548c\u98ce\u9669\n- \u68c0\u7d22\u67d0\u53ea\u9996\u677f\u80a1\u7684\u5386\u53f2\u76f8\u4f3c\u6848\u4f8b\n- \u57fa\u4e8e\u4e0a\u4e00\u8f6e\u7ed3\u679c\u8ffd\u95ee\uff0c\u6bd4\u5982\u201c\u90a3\u91cc\u9762\u8bc4\u5206\u6700\u9ad8\u7684\u662f\u8c01\u201d\u3001\u201c\u5b83\u6709\u6ca1\u6709\u76f8\u4f3c\u6848\u4f8b\u201d\u3002\n\u6211\u53ea\u57fa\u4e8e\u672c\u5730\u7ed3\u6784\u5316\u884c\u60c5\u548c\u9996\u677f facts \u56de\u7b54\uff0c\u4e0d\u63d0\u4f9b\u4e70\u5356\u6307\u4ee4\u3001\u4ed3\u4f4d\u3001\u76ee\u6807\u4ef7\u6216\u6536\u76ca\u627f\u8bfa\u3002",
+    "smalltalk": "\u6211\u5728\u3002\u4f60\u53ef\u4ee5\u76f4\u63a5\u95ee\u9996\u677f\u5019\u9009\u3001\u677f\u5757\u5206\u5e03\u3001\u8bc4\u5206\u7406\u7531\u6216\u5386\u53f2\u76f8\u4f3c\u6848\u4f8b\u3002",
+    "out_of_scope": "\u8fd9\u4e2a\u95ee\u9898\u8d85\u51fa\u6211\u5f53\u524d\u5de5\u5177\u80fd\u529b\u8fb9\u754c\u3002\u6211\u73b0\u5728\u4e3b\u8981\u80fd\u56de\u7b54\u672c\u5730 A \u80a1\u9996\u677f\u5019\u9009\u3001\u8bc4\u5206\u3001\u677f\u5757\u5206\u5e03\u3001\u98ce\u9669\u548c\u5386\u53f2\u76f8\u4f3c\u6848\u4f8b\u3002\u5982\u679c\u4f60\u628a\u95ee\u9898\u6539\u6210\u8fd9\u4e2a\u8303\u56f4\uff0c\u6211\u53ef\u4ee5\u7ee7\u7eed\u67e5\u5de5\u5177\u56de\u7b54\u3002",
+    "unsafe": "\u6211\u4e0d\u80fd\u7ed9\u51fa\u76f4\u63a5\u4ea4\u6613\u6307\u4ee4\u3001\u8d44\u91d1\u914d\u6bd4\u3001\u4ef7\u683c\u9884\u6d4b\u6216\u56de\u62a5\u627f\u8bfa\u3002\u6211\u53ef\u4ee5\u6539\u4e3a\u57fa\u4e8e\u9996\u677f facts \u5206\u6790\u8bc4\u5206\u7406\u7531\u3001\u98ce\u9669\u70b9\u3001\u677f\u5757\u70ed\u5ea6\u548c\u5386\u53f2\u76f8\u4f3c\u6837\u672c\u3002",
     "unknown": "\u6211\u73b0\u5728\u53ef\u4ee5\u57fa\u4e8e\u9996\u677f\u8bc4\u7ea7\u3001\u8bc4\u5206\u62c6\u89e3\u548c\u5386\u53f2\u76f8\u4f3c\u6848\u4f8b\u56de\u7b54\u3002\u4f60\u53ef\u4ee5\u95ee\uff1a\u603b\u7ed3\u4eca\u5929\u9996\u677f\u3001\u4e3a\u4ec0\u4e48\u67d0\u53ea\u80a1\u7968\u8bc4\u5206\u9ad8\u3001\u4e3b\u8981\u98ce\u9669\u662f\u4ec0\u4e48\uff0c\u6216\u8005\u67d0\u53ea\u80a1\u7968\u6709\u6ca1\u6709\u5386\u53f2\u76f8\u4f3c\u6848\u4f8b\u3002",
     "safety": "\u4ee5\u4e0a\u4e3a\u57fa\u4e8e\u672c\u5730\u7ed3\u6784\u5316\u6570\u636e\u7684\u590d\u76d8\u5206\u6790\uff0c\u4e0d\u6784\u6210\u4e70\u5356\u5efa\u8bae\u3002",
 }
 
 KEYWORDS = {
+    "capability_intro": ("\u4f60\u80fd\u505a\u4ec0\u4e48", "\u4f60\u4f1a\u4ec0\u4e48", "\u600e\u4e48\u7528", "\u80fd\u529b", "\u529f\u80fd", "\u5e2e\u52a9", "help"),
     "greeting": ("\u4f60\u597d", "\u55e8", "hello", "hi"),
+    "smalltalk": ("\u8c22\u8c22", "\u597d\u7684", "\u7ee7\u7eed", "ok", "thanks"),
     "market_schedule": ("\u5f00\u76d8", "\u6536\u76d8", "\u96c6\u5408\u7ade\u4ef7", "\u4ea4\u6613\u65f6\u95f4", "open", "close"),
     "market_context": ("\u5e02\u573a", "\u60c5\u7eea", "\u8d5a\u94b1\u6548\u5e94", "\u4e8f\u94b1\u6548\u5e94", "\u6c1b\u56f4", "sentiment", "market"),
     "similar_cases": ("\u76f8\u4f3c", "\u5386\u53f2", "\u6848\u4f8b", "similar"),
@@ -51,6 +66,7 @@ KEYWORDS = {
     "llm_explanation": ("\u8be6\u7ec6", "\u89e3\u91ca", "\u5206\u6790", "explain"),
     "rating_explain": ("\u4e3a\u4ec0\u4e48", "\u8bc4\u5206", "\u8bc4\u7ea7", "\u9ad8\u5206", "\u4f4e\u5206", "score"),
     "first_board_filter": ("\u76f8\u5173", "\u884c\u4e1a", "\u9898\u6750", "\u533b\u836f", "\u533b\u7597", "\u5236\u836f", "\u836f\u4e1a", "\u751f\u7269"),
+    "first_board_sector_summary": ("\u677f\u5757", "\u884c\u4e1a", "\u4e3b\u8981\u677f\u5757", "\u54ea\u4e9b\u677f\u5757"),
     "today_summary": ("\u603b\u7ed3", "\u4eca\u5929", "\u9996\u677f", "\u5019\u9009", "summary"),
 }
 
@@ -110,19 +126,37 @@ def answer_first_board_chat(
     events: list[LimitUpEvent],
     repository: SQLiteFirstBoardRepository | None = None,
     recent_runs: list[AgentRun] | None = None,
+    llm_provider: LLMProvider | None = None,
 ) -> AgentChatResponse:
-    """Answer a user question by routing to deterministic first-board tools."""
+    """Answer a user question with LLM-planned tools and deterministic fallback."""
 
     active_repository = repository or SQLiteFirstBoardRepository()
     tools = AgentToolRegistry(events=events, first_board_repository=active_repository)
     context = _build_session_context(recent_runs or [])
+    llm_response = _answer_with_llm_tool_agent(
+        request=request,
+        tools=tools,
+        context=context,
+        provider=llm_provider,
+    )
+    if llm_response is not None:
+        return llm_response
+
     plan = _build_agent_plan(request=request, context=context)
     intent = plan.intent
     trade_date = plan.trade_date
     first_board_filter = plan.filter_query
 
+    if intent == "capability_intro":
+        return _with_plan_trace(_answer_static_text(request, "capability_intro", TEXT["capability"]), plan)
     if intent == "greeting":
         return _with_plan_trace(_answer_greeting(request), plan)
+    if intent == "smalltalk":
+        return _with_plan_trace(_answer_static_text(request, "smalltalk", TEXT["smalltalk"]), plan)
+    if intent == "unsafe_investment_advice":
+        return _with_plan_trace(_answer_static_text(request, "unsafe_investment_advice", TEXT["unsafe"]), plan)
+    if intent == "out_of_scope":
+        return _with_plan_trace(_answer_static_text(request, "out_of_scope", TEXT["out_of_scope"]), plan)
     if intent == "market_schedule":
         latest_tool = tools.market_summary()
         return _with_plan_trace(
@@ -145,7 +179,17 @@ def answer_first_board_chat(
     plan.symbol = symbol or plan.symbol
 
     if intent == "market_context":
-        return _with_plan_trace(_answer_market_context(request, tools), plan)
+        return _with_plan_trace(
+            _answer_tool_grounded_question(
+                request=request,
+                tools=tools,
+                ratings_tool=ratings_tool,
+                filter_query=first_board_filter,
+                symbol=symbol,
+                intent=intent,
+            ),
+            plan,
+        )
     if intent == "llm_explanation" and symbol:
         return _with_plan_trace(
             _answer_llm_explanation(request, symbol, ratings, tools),
@@ -165,6 +209,28 @@ def answer_first_board_chat(
                 filter_query=first_board_filter,
                 tools=tools,
                 preferred_symbol=symbol,
+            ),
+            plan,
+        )
+    if intent == "first_board_context_top" and first_board_filter:
+        return _with_plan_trace(
+            _answer_first_board_context_top(
+                request=request,
+                ratings_tool=ratings_tool,
+                filter_query=first_board_filter,
+                context_symbols=context.matched_symbols,
+            ),
+            plan,
+        )
+    if intent == "first_board_sector_summary":
+        return _with_plan_trace(
+            _answer_tool_grounded_question(
+                request=request,
+                tools=tools,
+                ratings_tool=ratings_tool,
+                filter_query=first_board_filter,
+                symbol=symbol,
+                intent=intent,
             ),
             plan,
         )
@@ -200,22 +266,753 @@ def answer_first_board_chat(
             plan,
         )
     if intent == "today_summary":
-        return _with_plan_trace(_answer_today_summary(request, ratings_tool), plan)
+        return _with_plan_trace(
+            _answer_tool_grounded_question(
+                request=request,
+                tools=tools,
+                ratings_tool=ratings_tool,
+                filter_query=first_board_filter,
+                symbol=symbol,
+                intent=intent,
+            ),
+            plan,
+        )
     if symbol:
         return _with_plan_trace(
             _answer_rating_explain(request, symbol, ratings.candidates),
             plan,
         )
 
-    return _with_plan_trace(_answer_general_llm(request, tools, ratings_tool), plan)
+    return _with_plan_trace(
+        _answer_tool_grounded_question(
+            request=request,
+            tools=tools,
+            ratings_tool=ratings_tool,
+            filter_query=first_board_filter,
+            symbol=symbol,
+            intent=intent,
+        ),
+        plan,
+    )
+
+
+def _answer_with_llm_tool_agent(
+    request: AgentChatRequest,
+    tools: AgentToolRegistry,
+    context: "_SessionContext",
+    provider: LLMProvider | None = None,
+) -> AgentChatResponse | None:
+    """Let the LLM choose tools first, then answer from executed tool facts."""
+
+    active_provider = provider or get_llm_provider()
+    try:
+        plan_result = active_provider.generate(
+            _tool_planner_system_prompt(tools.schema_prompt()),
+            _tool_planner_user_prompt(request, context, tools.events),
+        )
+        tool_plan = _parse_json_object(plan_result.content)
+    except Exception:
+        return None
+
+    safety = str(tool_plan.get("safety", "normal"))
+    intent = str(tool_plan.get("intent_label") or "llm_tool_agent")
+    if safety == "refuse_trade_instruction":
+        return _answer_static_text(
+            request,
+            "unsafe_investment_advice",
+            TEXT["unsafe"],
+        )
+
+    tool_calls = _normalize_tool_calls(tool_plan.get("tool_calls"))
+    direct_answer = str(tool_plan.get("answer_directly") or "").strip()
+    if not tool_calls and direct_answer:
+        return AgentChatResponse(
+            session_id=request.session_id,
+            intent=intent,
+            answer=_ensure_safety_boundary(direct_answer),
+            tool_calls=["llm_planner_direct_answer"],
+            tool_results=[
+                _llm_plan_trace(tool_plan, plan_result.model, plan_result.provider)
+            ],
+            references=[],
+            warnings=[_safety_warning()],
+            generated_by=CHAT_AGENT_VERSION,
+        )
+
+    execution = _execute_llm_tool_calls(tool_calls, tools)
+    _ensure_similar_case_tool_if_needed(
+        request=request,
+        tools=tools,
+        execution=execution,
+    )
+    _ensure_rating_backtest_tool_if_needed(
+        request=request,
+        tools=tools,
+        execution=execution,
+    )
+    _ensure_critic_tool_if_needed(
+        request=request,
+        tools=tools,
+        execution=execution,
+    )
+    if not execution["tool_results"] and not direct_answer:
+        return None
+
+    fallback = direct_answer or TEXT["unknown"]
+    try:
+        final_result = active_provider.generate(
+            _tool_answer_system_prompt(),
+            _tool_answer_user_prompt(request, tool_plan, execution["facts"]),
+        )
+        answer = _ensure_safety_boundary(final_result.content)
+        source = "llm_tool_answer"
+        warnings = [_safety_warning()]
+        if _contains_forbidden_terms(answer):
+            answer = _ensure_safety_boundary(fallback)
+            source = "template_general_answer"
+            warnings = [
+                _safety_warning(),
+                "LLM output failed safety validation; template fallback used.",
+            ]
+    except Exception as error:
+        answer = _ensure_safety_boundary(fallback)
+        source = "template_general_answer"
+        warnings = [
+            _safety_warning(),
+            f"LLM unavailable during final answer; template fallback used: {error}",
+        ]
+
+    return AgentChatResponse(
+        session_id=request.session_id,
+        intent=intent,
+        answer=answer,
+        tool_calls=[
+            "llm_tool_planner",
+            *execution["tool_call_names"],
+            source,
+        ],
+        tool_results=[
+            _llm_plan_trace(tool_plan, plan_result.model, plan_result.provider),
+            *execution["tool_results"],
+        ],
+        references=execution["references"],
+        warnings=warnings,
+        generated_by=CHAT_AGENT_VERSION,
+    )
+
+
+def _tool_planner_system_prompt(tool_schema_prompt: str) -> str:
+    """Describe the Agent tools and require a strict JSON tool plan."""
+
+    return (
+        "You are LimitUpLab's A-share first-board research agent. "
+        "Your first job is to decide which tools are needed, not to answer directly "
+        "unless the question is greeting, capability, or out of scope. "
+        "Return only valid JSON. No markdown. "
+        f"Available tools are described as JSON schemas: {tool_schema_prompt}. "
+        "Do not provide direct trading instructions, position sizing, target prices, or return promises. "
+        "If the user asks for those, set safety to refuse_trade_instruction. "
+        "JSON schema: {"
+        "\"intent_label\": string, "
+        "\"safety\": \"normal\"|\"refuse_trade_instruction\", "
+        "\"tool_calls\": [{\"name\": string, \"arguments\": object}], "
+        "\"answer_directly\": string"
+        "}."
+    )
+
+
+def _tool_planner_user_prompt(
+    request: AgentChatRequest,
+    context: "_SessionContext",
+    events: list[LimitUpEvent],
+) -> str:
+    """Build the planner prompt from question and compact conversation context."""
+
+    available_dates = sorted({event.trade_date for event in events}, reverse=True)
+    latest_local_trade_date = available_dates[0] if available_dates else None
+    context_payload = {
+        "calendar_today": date.today().isoformat(),
+        "latest_local_trade_date": (
+            latest_local_trade_date.isoformat() if latest_local_trade_date else None
+        ),
+        "available_trade_dates": [
+            item.isoformat() for item in available_dates[:20]
+        ],
+        "date_instruction": (
+            "If the user says today/latest/current without an explicit date, "
+            "use latest_local_trade_date, not calendar_today. "
+            "If the user asks for a date outside available_trade_dates, call no "
+            "rating tool for that date and explain data is missing."
+        ),
+        "message": request.message,
+        "request_trade_date": (
+            request.trade_date.isoformat() if request.trade_date else None
+        ),
+        "request_symbol": request.symbol,
+        "page_context": request.page_context,
+        "recent_context": {
+            "symbol": context.symbol,
+            "trade_date": context.trade_date.isoformat() if context.trade_date else None,
+            "filter": context.filter_query.label if context.filter_query else None,
+            "matched_symbols": context.matched_symbols[:20],
+        },
+    }
+    return json.dumps(context_payload, ensure_ascii=False)
+
+
+def _tool_answer_system_prompt() -> str:
+    """Instruct the LLM to answer only from executed tool facts."""
+
+    return (
+        "You are LimitUpLab's A-share first-board research agent. "
+        "Answer in Chinese using only the executed tool facts. "
+        "If the facts are insufficient, say exactly what is missing and what tool/data "
+        "would be needed. Keep the answer concise, structured, and useful. "
+        "Do not provide direct trading instructions, position sizing, target prices, "
+        "or return promises."
+    )
+
+
+def _tool_answer_user_prompt(
+    request: AgentChatRequest,
+    tool_plan: dict[str, Any],
+    facts: dict[str, Any],
+) -> str:
+    """Build the final answer prompt from question, plan and tool outputs."""
+
+    payload = {
+        "user_question": request.message,
+        "tool_plan": tool_plan,
+        "executed_tool_facts": facts,
+    }
+    return json.dumps(payload, ensure_ascii=False)
+
+
+def _parse_json_object(content: str) -> dict[str, Any]:
+    """Parse a JSON object from an LLM response."""
+
+    text = content.strip()
+    if text.startswith("```"):
+        text = re.sub(r"^```(?:json)?", "", text).strip()
+        text = re.sub(r"```$", "", text).strip()
+    try:
+        parsed = json.loads(text)
+    except json.JSONDecodeError:
+        start = text.find("{")
+        end = text.rfind("}")
+        if start < 0 or end <= start:
+            raise
+        parsed = json.loads(text[start : end + 1])
+    if not isinstance(parsed, dict):
+        raise ValueError("LLM planner did not return a JSON object")
+    return parsed
+
+
+def _normalize_tool_calls(raw_calls: object) -> list[dict[str, Any]]:
+    """Normalize planner tool calls into a predictable list."""
+
+    if not isinstance(raw_calls, list):
+        return []
+    calls: list[dict[str, Any]] = []
+    for raw in raw_calls:
+        if not isinstance(raw, dict):
+            continue
+        name = str(raw.get("name") or "").strip()
+        arguments = raw.get("arguments") or {}
+        if name and isinstance(arguments, dict):
+            calls.append({"name": name, "arguments": arguments})
+    return calls[:6]
+
+
+def _execute_llm_tool_calls(
+    tool_calls: list[dict[str, Any]],
+    tools: AgentToolRegistry,
+) -> dict[str, Any]:
+    """Execute planner-selected tools and return compact facts and traces."""
+
+    facts: dict[str, Any] = {}
+    traces: list[AgentToolTrace] = []
+    call_names: list[str] = []
+    references: list[str] = []
+    latest_ratings: FirstBoardRatingsResponse | None = None
+    latest_ratings_tool: ToolResult | None = None
+
+    for call in tool_calls:
+        name = call["name"]
+        arguments = call["arguments"]
+        if name == "market_summary":
+            result = tools.market_summary()
+            summary: MarketSummary = result.output
+            facts["market_summary"] = {
+                "trade_date": summary.trade_date.isoformat(),
+                "sentiment": summary.sentiment,
+                "limit_up_count": summary.limit_up_count,
+                "first_board_count": summary.first_board_count,
+                "continued_board_count": summary.continued_board_count,
+                "failed_limit_up_rate": summary.failed_limit_up_rate,
+                "max_board_height": summary.max_board_height,
+                "hot_industries": summary.hot_industries,
+            }
+            traces.append(result.trace())
+            call_names.append(name)
+            references.append(f"trade_date={summary.trade_date.isoformat()}")
+        elif name == "first_board_ratings":
+            trade_date = _parse_optional_date(arguments.get("trade_date"))
+            if trade_date and not _has_events_for_date(tools.events, trade_date):
+                available_dates = sorted(
+                    {event.trade_date for event in tools.events},
+                    reverse=True,
+                )
+                facts["first_board_ratings_error"] = {
+                    "requested_trade_date": trade_date.isoformat(),
+                    "reason": "No local first-board events for requested date.",
+                    "latest_local_trade_date": (
+                        available_dates[0].isoformat() if available_dates else None
+                    ),
+                    "available_trade_dates": [
+                        item.isoformat() for item in available_dates[:20]
+                    ],
+                }
+                call_names.append(name)
+                references.append(f"missing_trade_date={trade_date.isoformat()}")
+                traces.append(
+                    _tool_error_trace(
+                        name=name,
+                        tool_input={"trade_date": trade_date.isoformat()},
+                        summary=(
+                            f"{trade_date.isoformat()} 本地暂无首板涨停数据，"
+                            "已将缺失原因交给 LLM 回答。"
+                        ),
+                        error="No local first-board events for requested date.",
+                    )
+                )
+                continue
+            result = tools.first_board_ratings(trade_date=trade_date)
+            latest_ratings_tool = result
+            latest_ratings = result.output
+            facts["first_board_ratings"] = _compact_ratings_facts(latest_ratings)
+            traces.append(result.trace())
+            call_names.append(name)
+            references.append(f"trade_date={latest_ratings.trade_date.isoformat()}")
+        elif name == "first_board_filter":
+            if latest_ratings is None:
+                result = tools.first_board_ratings(trade_date=None)
+                latest_ratings_tool = result
+                latest_ratings = result.output
+                facts["first_board_ratings"] = _compact_ratings_facts(latest_ratings)
+                traces.append(result.trace())
+                call_names.append("first_board_ratings")
+                references.append(f"trade_date={latest_ratings.trade_date.isoformat()}")
+            query = str(arguments.get("query") or arguments.get("filter") or "").strip()
+            filter_query = _filter_query_from_context(query or "\u7528\u6237\u95ee\u53e5")
+            matches = _filter_first_board_candidates(latest_ratings, filter_query)
+            facts["first_board_filter"] = {
+                "query": filter_query.label,
+                "matched_count": len(matches),
+                "matches": [_rating_fact(item) for item in matches[:12]],
+            }
+            traces.append(
+                _build_first_board_filter_trace(latest_ratings, filter_query, matches)
+            )
+            call_names.append(name)
+            references.append(f"filter={filter_query.label}")
+        elif name == "first_board_similar_cases":
+            symbol = str(arguments.get("symbol") or "").strip()
+            trade_date = _parse_optional_date(arguments.get("trade_date"))
+            limit = int(arguments.get("limit") or 5)
+            if not symbol or trade_date is None:
+                facts["first_board_similar_cases_error"] = (
+                    "symbol and trade_date are required"
+                )
+                traces.append(
+                    _tool_error_trace(
+                        name=name,
+                        tool_input=arguments,
+                        summary="相似案例工具缺少 symbol 或 trade_date，未执行检索。",
+                        error="symbol and trade_date are required",
+                    )
+                )
+                continue
+            try:
+                result = tools.similar_cases(
+                    symbol=symbol,
+                    trade_date=trade_date,
+                    limit=max(1, min(limit, 10)),
+                )
+            except ValueError as error:
+                facts["first_board_similar_cases_error"] = str(error)
+                traces.append(
+                    _tool_error_trace(
+                        name=name,
+                        tool_input=arguments,
+                        summary="相似案例检索失败，已将失败原因交给 LLM 回答。",
+                        error=str(error),
+                    )
+                )
+                continue
+            facts["first_board_similar_cases"] = result.output.model_dump(mode="json")
+            traces.append(result.trace())
+            call_names.append(name)
+            references.extend(
+                [f"symbol={symbol}", f"trade_date={trade_date.isoformat()}"]
+            )
+        elif name == "rating_backtest":
+            available_dates = sorted({event.trade_date for event in tools.events})
+            if not available_dates:
+                facts["rating_backtest_error"] = "No local limit-up events available."
+                traces.append(
+                    _tool_error_trace(
+                        name=name,
+                        tool_input=arguments,
+                        summary="本地没有涨停数据，无法执行评分回测。",
+                        error="No local limit-up events available.",
+                    )
+                )
+                continue
+            end_date = _parse_optional_date(arguments.get("end_date")) or available_dates[-1]
+            start_date = _parse_optional_date(arguments.get("start_date")) or available_dates[
+                max(0, len(available_dates) - 20)
+            ]
+            failure_limit = int(arguments.get("failure_limit") or 8)
+            result = tools.rating_backtest(
+                start_date=start_date,
+                end_date=end_date,
+                failure_limit=max(0, min(failure_limit, 30)),
+            )
+            response = result.output
+            facts["rating_backtest"] = response.model_dump(mode="json")
+            traces.append(result.trace())
+            call_names.append(name)
+            references.extend(
+                [
+                    f"start_date={response.start_date.isoformat()}",
+                    f"end_date={response.end_date.isoformat()}",
+                ]
+            )
+        elif name == "first_board_critic":
+            symbol = str(arguments.get("symbol") or "").strip()
+            trade_date = _parse_optional_date(arguments.get("trade_date"))
+            similar_limit = int(arguments.get("similar_limit") or 5)
+            if not symbol:
+                facts["first_board_critic_error"] = "symbol is required"
+                traces.append(
+                    _tool_error_trace(
+                        name=name,
+                        tool_input=arguments,
+                        summary="Critic tool skipped because symbol is missing.",
+                        error="symbol is required",
+                    )
+                )
+                continue
+            try:
+                result = tools.first_board_critic(
+                    symbol=symbol,
+                    trade_date=trade_date,
+                    similar_limit=max(0, min(similar_limit, 10)),
+                )
+            except ValueError as error:
+                facts["first_board_critic_error"] = str(error)
+                traces.append(
+                    _tool_error_trace(
+                        name=name,
+                        tool_input=arguments,
+                        summary="Critic review failed; the failure reason is passed to the LLM.",
+                        error=str(error),
+                    )
+                )
+                continue
+            response = result.output
+            facts["first_board_critic"] = response.model_dump(mode="json")
+            traces.append(result.trace())
+            call_names.append(name)
+            references.extend(
+                [
+                    f"symbol={response.symbol}",
+                    f"trade_date={response.trade_date.isoformat()}",
+                    f"critic_verdict={response.verdict}",
+                ]
+            )
+        else:
+            facts[f"{name}_error"] = "Unsupported tool requested by LLM planner."
+            traces.append(
+                _tool_error_trace(
+                    name=name,
+                    tool_input=arguments,
+                    summary=f"LLM 请求了未注册工具 {name}，后端已跳过。",
+                    error="Unsupported tool requested by LLM planner.",
+                )
+            )
+
+    return {
+        "facts": facts,
+        "tool_results": traces,
+        "tool_call_names": call_names,
+        "references": list(dict.fromkeys(references)),
+    }
+
+
+def _ensure_similar_case_tool_if_needed(
+    request: AgentChatRequest,
+    tools: AgentToolRegistry,
+    execution: dict[str, Any],
+) -> None:
+    """Repair planner omissions when the user explicitly asks for similar cases."""
+
+    if not _looks_like_similar_question(request.message):
+        return
+    facts = execution["facts"]
+    if "first_board_similar_cases" in facts or "first_board_similar_cases_error" in facts:
+        return
+
+    target = _resolve_target_from_tool_facts(request.message, facts)
+    if target is None:
+        return
+
+    symbol, trade_date = target
+    try:
+        result = tools.similar_cases(symbol=symbol, trade_date=trade_date, limit=5)
+    except ValueError as error:
+        facts["first_board_similar_cases_error"] = str(error)
+        execution["tool_results"].append(
+            _tool_error_trace(
+                name="first_board_similar_cases",
+                tool_input={
+                    "symbol": symbol,
+                    "trade_date": trade_date.isoformat(),
+                    "limit": 5,
+                },
+                summary="Planner 漏掉相似案例工具，后端补调用时失败。",
+                error=str(error),
+            )
+        )
+        execution["tool_call_names"].append("first_board_similar_cases")
+        return
+
+    facts["first_board_similar_cases"] = result.output.model_dump(mode="json")
+    execution["tool_results"].append(result.trace())
+    execution["tool_call_names"].append("first_board_similar_cases")
+    execution["references"] = list(
+        dict.fromkeys(
+            [
+                *execution["references"],
+                f"symbol={symbol}",
+                f"trade_date={trade_date.isoformat()}",
+            ]
+        )
+    )
+
+
+def _resolve_target_from_tool_facts(
+    message: str,
+    facts: dict[str, Any],
+) -> tuple[str, date] | None:
+    """Resolve a target symbol/date from executed rating or filter facts."""
+
+    explicit_symbol = _extract_symbol_hint(message)
+    rating_facts = facts.get("first_board_ratings")
+    filter_facts = facts.get("first_board_filter")
+    trade_date = _parse_optional_date(
+        (rating_facts or {}).get("trade_date")
+        if isinstance(rating_facts, dict)
+        else None
+    )
+    if trade_date is None:
+        return None
+
+    candidates: list[dict[str, Any]] = []
+    if isinstance(filter_facts, dict):
+        candidates.extend(
+            item
+            for item in filter_facts.get("matches", [])
+            if isinstance(item, dict)
+        )
+    if isinstance(rating_facts, dict):
+        candidates.extend(
+            item
+            for item in rating_facts.get("top_candidates", [])
+            if isinstance(item, dict)
+        )
+
+    if explicit_symbol:
+        return explicit_symbol, trade_date
+    for item in candidates:
+        symbol = str(item.get("symbol") or "")
+        name = str(item.get("name") or "")
+        if symbol and (symbol in message or (name and name in message)):
+            return symbol, trade_date
+    if len(candidates) == 1 and candidates[0].get("symbol"):
+        return str(candidates[0]["symbol"]), trade_date
+    return None
+
+
+def _ensure_rating_backtest_tool_if_needed(
+    request: AgentChatRequest,
+    tools: AgentToolRegistry,
+    execution: dict[str, Any],
+) -> None:
+    """Repair planner omissions for explicit rating self-evaluation questions."""
+
+    if not _looks_like_rating_backtest_question(request.message):
+        return
+    facts = execution["facts"]
+    if "rating_backtest" in facts or "rating_backtest_error" in facts:
+        return
+
+    available_dates = sorted({event.trade_date for event in tools.events})
+    if not available_dates:
+        facts["rating_backtest_error"] = "No local limit-up events available."
+        execution["tool_results"].append(
+            _tool_error_trace(
+                name="rating_backtest",
+                tool_input={},
+                summary="本地没有涨停数据，无法执行评分回测。",
+                error="No local limit-up events available.",
+            )
+        )
+        execution["tool_call_names"].append("rating_backtest")
+        return
+
+    result = tools.rating_backtest(
+        start_date=available_dates[max(0, len(available_dates) - 20)],
+        end_date=available_dates[-1],
+        failure_limit=8,
+    )
+    response = result.output
+    facts["rating_backtest"] = response.model_dump(mode="json")
+    execution["tool_results"].append(result.trace())
+    execution["tool_call_names"].append("rating_backtest")
+    execution["references"] = list(
+        dict.fromkeys(
+            [
+                *execution["references"],
+                f"start_date={response.start_date.isoformat()}",
+                f"end_date={response.end_date.isoformat()}",
+            ]
+        )
+    )
+
+
+def _ensure_critic_tool_if_needed(
+    request: AgentChatRequest,
+    tools: AgentToolRegistry,
+    execution: dict[str, Any],
+) -> None:
+    """Repair planner omissions for explicit critic or reliability questions."""
+
+    if not _looks_like_critic_question(request.message):
+        return
+    facts = execution["facts"]
+    if "first_board_critic" in facts or "first_board_critic_error" in facts:
+        return
+
+    target = _resolve_target_from_tool_facts(request.message, facts)
+    if target is None:
+        return
+
+    symbol, trade_date = target
+    try:
+        result = tools.first_board_critic(
+            symbol=symbol,
+            trade_date=trade_date,
+            similar_limit=5,
+        )
+    except ValueError as error:
+        facts["first_board_critic_error"] = str(error)
+        execution["tool_results"].append(
+            _tool_error_trace(
+                name="first_board_critic",
+                tool_input={
+                    "symbol": symbol,
+                    "trade_date": trade_date.isoformat(),
+                    "similar_limit": 5,
+                },
+                summary="Planner omitted critic tool; backend repair call failed.",
+                error=str(error),
+            )
+        )
+        execution["tool_call_names"].append("first_board_critic")
+        return
+
+    response = result.output
+    facts["first_board_critic"] = response.model_dump(mode="json")
+    execution["tool_results"].append(result.trace())
+    execution["tool_call_names"].append("first_board_critic")
+    execution["references"] = list(
+        dict.fromkeys(
+            [
+                *execution["references"],
+                f"symbol={response.symbol}",
+                f"trade_date={response.trade_date.isoformat()}",
+                f"critic_verdict={response.verdict}",
+            ]
+        )
+    )
+
+
+def _tool_error_trace(
+    name: str,
+    tool_input: dict[str, Any],
+    summary: str,
+    error: str,
+) -> AgentToolTrace:
+    """Build a trace for skipped or failed planner tool calls."""
+
+    return AgentToolTrace(
+        name=name,
+        input=tool_input,
+        summary=summary,
+        status="error",
+        output={},
+        error=error,
+    )
+
+
+def _compact_ratings_facts(ratings: FirstBoardRatingsResponse) -> dict[str, Any]:
+    """Serialize rating facts into a compact shape for the final LLM answer."""
+
+    return {
+        "trade_date": ratings.trade_date.isoformat(),
+        "candidate_count": len(ratings.candidates),
+        "filtered_out_count": len(ratings.filtered_out),
+        "top_candidates": [_rating_fact(item) for item in ratings.candidates[:12]],
+        "industry_distribution": _summarize_first_board_industries(ratings.candidates),
+    }
+
+
+def _llm_plan_trace(
+    tool_plan: dict[str, Any],
+    model: str,
+    provider: str,
+) -> AgentToolTrace:
+    """Expose the LLM planner decision as an Agent trace."""
+
+    return AgentToolTrace(
+        name="llm_tool_planner",
+        input={
+            "model": model,
+            "provider": provider,
+            "intent_label": tool_plan.get("intent_label"),
+            "safety": tool_plan.get("safety"),
+            "tool_calls": tool_plan.get("tool_calls") or [],
+        },
+        summary="\u7531 LLM \u6839\u636e\u5de5\u5177\u63cf\u8ff0\u751f\u6210\u5de5\u5177\u8c03\u7528\u8ba1\u5212\u3002",
+    )
 
 
 class _SessionContext:
     """Minimal chat context recovered from recent Agent runs."""
 
-    def __init__(self, symbol: str | None = None, trade_date: date | None = None):
+    def __init__(
+        self,
+        symbol: str | None = None,
+        trade_date: date | None = None,
+        filter_query: _FirstBoardFilterQuery | None = None,
+        matched_symbols: list[str] | None = None,
+    ):
         self.symbol = symbol
         self.trade_date = trade_date
+        self.filter_query = filter_query
+        self.matched_symbols = matched_symbols or []
 
 
 def _build_agent_plan(
@@ -227,11 +1024,22 @@ def _build_agent_plan(
     parsed_trade_date = _extract_trade_date(request.message)
     trade_date = request.trade_date or parsed_trade_date or context.trade_date
     filter_query = _extract_first_board_filter(request.message)
+    if filter_query is None and _looks_like_context_pool_question(request.message):
+        filter_query = context.filter_query
     intent = _detect_intent(request.message, request.intent_hint)
+    if (
+        filter_query
+        and context.matched_symbols
+        and _looks_like_context_top_question(request.message)
+    ):
+        intent = "first_board_context_top"
+    if _looks_like_first_board_sector_question(request.message):
+        intent = "first_board_sector_summary"
     if (
         parsed_trade_date
         and _looks_like_first_board_data_question(request.message)
         and filter_query is None
+        and intent != "first_board_sector_summary"
     ):
         intent = "today_summary"
     if filter_query and _looks_like_first_board_data_question(request.message):
@@ -243,7 +1051,11 @@ def _build_agent_plan(
     ):
         intent = "first_board_filter_similar"
 
-    symbol = request.symbol or _extract_symbol_hint(request.message) or context.symbol
+    symbol = request.symbol or _extract_symbol_hint(request.message)
+    if symbol is None and _looks_like_context_symbol_question(request.message):
+        symbol = context.symbol
+    if intent == "rating_explain" and symbol is None and _looks_like_top_candidate_question(request.message):
+        intent = "today_summary"
     tool_steps = _plan_tool_steps(intent=intent, trade_date=trade_date, symbol=symbol)
     if filter_query and not any(step["name"] == "first_board_filter" for step in tool_steps):
         tool_steps.append(
@@ -284,6 +1096,8 @@ def _plan_tool_steps(
     dated_input = {"trade_date": trade_date.isoformat() if trade_date else None}
     if intent == "greeting":
         return []
+    if intent in {"capability_intro", "smalltalk", "out_of_scope", "unsafe_investment_advice"}:
+        return []
     if intent == "market_schedule":
         return [{"name": "market_summary", "input": {}}]
     if intent == "market_context":
@@ -311,6 +1125,19 @@ def _plan_tool_steps(
                     "limit": 5,
                 },
             },
+        ]
+    if intent == "first_board_context_top":
+        return [
+            {"name": "first_board_ratings", "input": dated_input},
+            {
+                "name": "first_board_filter",
+                "input": {"fields": ["name", "industry", "concept"]},
+            },
+        ]
+    if intent == "first_board_sector_summary":
+        return [
+            {"name": "first_board_ratings", "input": dated_input},
+            {"name": "llm_answer", "input": {"mode": "tool_facts_only"}},
         ]
     if intent == "similar_cases":
         return [
@@ -387,6 +1214,24 @@ def _answer_greeting(request: AgentChatRequest) -> AgentChatResponse:
         session_id=request.session_id,
         intent="greeting",
         answer=TEXT["greeting"],
+        tool_calls=[],
+        references=[],
+        warnings=[],
+        generated_by=CHAT_AGENT_VERSION,
+    )
+
+
+def _answer_static_text(
+    request: AgentChatRequest,
+    intent: str,
+    answer: str,
+) -> AgentChatResponse:
+    """Return a non-tool conversational answer."""
+
+    return AgentChatResponse(
+        session_id=request.session_id,
+        intent=intent,
+        answer=answer,
         tool_calls=[],
         references=[],
         warnings=[],
@@ -475,17 +1320,82 @@ def _answer_market_context(
 
 
 def _build_session_context(recent_runs: list[AgentRun]) -> _SessionContext:
-    """Recover the latest symbol and trade date from successful session runs."""
+    """Recover useful symbols, dates and filters from recent successful runs."""
 
+    context = _SessionContext()
     for run in recent_runs:
-        if run.status != "success" or not run.input_json:
+        if run.status != "success":
             continue
-        symbol = run.input_json.get("symbol")
-        trade_date_value = run.input_json.get("trade_date")
-        trade_date = date.fromisoformat(trade_date_value) if trade_date_value else None
-        if symbol or trade_date:
-            return _SessionContext(symbol=symbol, trade_date=trade_date)
-    return _SessionContext()
+        _merge_context_from_run(context, run)
+        if (
+            context.symbol
+            and context.trade_date
+            and context.filter_query
+            and context.matched_symbols
+        ):
+            break
+    return context
+
+
+def _merge_context_from_run(context: _SessionContext, run: AgentRun) -> None:
+    """Merge context from one persisted Agent run without overwriting newer data."""
+
+    input_json = run.input_json or {}
+    output_json = run.output_json or {}
+    if context.symbol is None:
+        context.symbol = input_json.get("symbol")
+    if context.trade_date is None:
+        context.trade_date = _parse_optional_date(input_json.get("trade_date"))
+
+    for reference in output_json.get("references", []) or []:
+        if context.symbol is None and reference.startswith("symbol="):
+            context.symbol = reference.split("=", 1)[1]
+        elif context.trade_date is None and reference.startswith("trade_date="):
+            context.trade_date = _parse_optional_date(reference.split("=", 1)[1])
+        elif context.filter_query is None and reference.startswith("filter="):
+            label = reference.split("=", 1)[1]
+            context.filter_query = _filter_query_from_context(label)
+
+    for tool_result in output_json.get("tool_results", []) or []:
+        tool_input = tool_result.get("input", {})
+        if tool_result.get("name") == "agent_plan":
+            if context.symbol is None:
+                context.symbol = tool_input.get("symbol")
+            if context.trade_date is None:
+                context.trade_date = _parse_optional_date(tool_input.get("trade_date"))
+            if context.filter_query is None and tool_input.get("filter"):
+                context.filter_query = _filter_query_from_context(tool_input["filter"])
+        if tool_result.get("name") == "first_board_filter":
+            if context.filter_query is None and tool_input.get("label"):
+                aliases = tuple(tool_input.get("aliases") or (tool_input["label"],))
+                context.filter_query = _FirstBoardFilterQuery(
+                    label=tool_input["label"],
+                    aliases=aliases,
+                )
+            if not context.matched_symbols:
+                context.matched_symbols = list(tool_input.get("matched_symbols") or [])
+
+
+def _parse_optional_date(value: object) -> date | None:
+    """Parse a date-like value from saved JSON context."""
+
+    if isinstance(value, date):
+        return value
+    if not value:
+        return None
+    try:
+        return date.fromisoformat(str(value))
+    except ValueError:
+        return None
+
+
+def _filter_query_from_context(label: str) -> _FirstBoardFilterQuery:
+    """Rebuild a filter query from a saved context label."""
+
+    return _extract_first_board_filter(label) or _FirstBoardFilterQuery(
+        label=label,
+        aliases=(label,),
+    )
 
 
 def _extract_trade_date(message: str) -> date | None:
@@ -523,6 +1433,110 @@ def _looks_like_similar_question(message: str) -> bool:
     """Return whether a question asks for historical similar cases."""
 
     return any(keyword in message for keyword in KEYWORDS["similar_cases"])
+
+
+def _looks_like_rating_backtest_question(message: str) -> bool:
+    """Return whether a question asks the Agent to evaluate rating quality."""
+
+    return any(
+        keyword in message
+        for keyword in (
+            "\u56de\u6d4b",
+            "\u51c6\u4e0d\u51c6",
+            "\u51c6\u5417",
+            "\u81ea\u6211\u8bc4\u4ef7",
+            "\u8bc4\u5206\u6548\u679c",
+            "\u8bc4\u7ea7\u8868\u73b0",
+            "\u8868\u73b0\u600e\u4e48\u6837",
+            "\u5931\u8d25\u6837\u672c",
+        )
+    )
+
+
+def _looks_like_critic_question(message: str) -> bool:
+    """Return whether a question asks for rating criticism or reliability."""
+
+    return any(
+        keyword in message
+        for keyword in (
+            "\u9760\u8c31",
+            "\u53ef\u4fe1",
+            "\u53ef\u9760",
+            "\u8d28\u7591",
+            "\u53cd\u9a73",
+            "\u6253\u8138",
+            "\u9ad8\u4f30",
+            "\u4f4e\u4f30",
+            "\u8fc7\u5ea6\u4e50\u89c2",
+            "critic",
+            "critique",
+        )
+    )
+
+
+def _looks_like_context_pool_question(message: str) -> bool:
+    """Return whether text refers to a previous candidate pool."""
+
+    return any(
+        keyword in message
+        for keyword in (
+            "\u90a3\u91cc\u9762",
+            "\u5176\u4e2d",
+            "\u521a\u624d",
+            "\u8fd9\u4e9b",
+            "\u90a3\u4e9b",
+            "\u8fd9\u4e2a\u6c60\u5b50",
+            "\u5019\u9009\u91cc",
+        )
+    )
+
+
+def _looks_like_context_top_question(message: str) -> bool:
+    """Return whether text asks for the best or top-scored context item."""
+
+    return any(
+        keyword in message
+        for keyword in (
+            "\u8bc4\u5206\u6700\u9ad8",
+            "\u6700\u9ad8\u5206",
+            "\u5206\u6700\u9ad8",
+            "\u8c01\u6700\u9ad8",
+            "\u7b2c\u4e00\u4e2a",
+            "\u6392\u7b2c\u4e00",
+            "\u6700\u5f3a",
+        )
+    )
+
+
+def _looks_like_context_symbol_question(message: str) -> bool:
+    """Return whether the user likely refers to a stock from prior turns."""
+
+    return any(
+        keyword in message
+        for keyword in (
+            "\u5b83",
+            "\u8fd9\u53ea",
+            "\u8be5\u80a1",
+            "\u8fd9\u4e2a\u80a1",
+            "\u521a\u624d\u90a3\u53ea",
+            "\u4e0a\u9762\u90a3\u53ea",
+        )
+    )
+
+
+def _looks_like_first_board_sector_question(message: str) -> bool:
+    """Return whether text asks for sectors among first-board candidates."""
+
+    return _looks_like_first_board_data_question(message) and any(
+        keyword in message
+        for keyword in (
+            "\u677f\u5757",
+            "\u4e3b\u8981\u677f\u5757",
+            "\u884c\u4e1a\u5206\u5e03",
+            "\u884c\u4e1a",
+            "\u9898\u6750\u5206\u5e03",
+        )
+    )
 
 
 def _extract_first_board_filter(message: str) -> _FirstBoardFilterQuery | None:
@@ -761,6 +1775,64 @@ def _answer_first_board_filter_similar(
     )
 
 
+def _answer_first_board_context_top(
+    request: AgentChatRequest,
+    ratings_tool: ToolResult,
+    filter_query: _FirstBoardFilterQuery,
+    context_symbols: list[str],
+) -> AgentChatResponse:
+    """Answer follow-up questions about the top stock in a previous pool."""
+
+    ratings: FirstBoardRatingsResponse = ratings_tool.output
+    matches = _filter_first_board_candidates(ratings, filter_query)
+    if context_symbols:
+        symbol_set = set(context_symbols)
+        matches = [item for item in matches if item.facts.symbol in symbol_set]
+    filter_trace = _build_first_board_filter_trace(ratings, filter_query, matches)
+    trade_date = ratings.trade_date
+    if not matches:
+        answer = (
+            "\u6211\u7406\u89e3\u4f60\u5728\u95ee\u4e0a\u4e00\u8f6e\u7684\u5019\u9009\u6c60\uff0c"
+            "\u4f46\u5f53\u524d\u6ca1\u6709\u627e\u5230\u53ef\u590d\u7528\u7684\u5339\u914d\u80a1\u7968\u5217\u8868\u3002"
+            "\u53ef\u4ee5\u5148\u91cd\u95ee\u4e00\u6b21\u5177\u4f53\u884c\u4e1a\u6216\u9898\u6750\u3002"
+        )
+        return AgentChatResponse(
+            session_id=request.session_id,
+            intent="first_board_context_top",
+            answer=answer,
+            tool_calls=["first_board_ratings", "first_board_filter"],
+            tool_results=[ratings_tool.trace(), filter_trace],
+            references=[f"trade_date={trade_date.isoformat()}"],
+            warnings=[_safety_warning()],
+            generated_by=CHAT_AGENT_VERSION,
+        )
+
+    target = matches[0]
+    facts = target.facts
+    answer = (
+        f"\u4e0a\u4e00\u8f6e\u201c{filter_query.label}\u201d\u5019\u9009\u6c60\u91cc\uff0c"
+        f"{trade_date.isoformat()} \u8bc4\u5206\u6700\u9ad8\u7684\u662f "
+        f"{facts.name}({facts.symbol})\uff0c"
+        f"\u8bc4\u7ea7 {target.rating}\uff0c\u8bc4\u5206 {target.score:.1f}\uff0c"
+        f"\u7f6e\u4fe1\u5ea6 {target.confidence:.0%}\u3002\n"
+        f"\u4e3b\u8981\u7406\u7531\uff1a{SEMI.join(target.reasons[:3])}\u3002"
+    )
+    return AgentChatResponse(
+        session_id=request.session_id,
+        intent="first_board_context_top",
+        answer=answer,
+        tool_calls=["first_board_ratings", "first_board_filter"],
+        tool_results=[ratings_tool.trace(), filter_trace],
+        references=[
+            f"trade_date={trade_date.isoformat()}",
+            f"filter={filter_query.label}",
+            f"symbol={facts.symbol}",
+        ],
+        warnings=[_safety_warning()],
+        generated_by=CHAT_AGENT_VERSION,
+    )
+
+
 def _filter_first_board_candidates(
     ratings: FirstBoardRatingsResponse,
     filter_query: _FirstBoardFilterQuery,
@@ -800,6 +1872,7 @@ def _build_first_board_filter_trace(
             "trade_date": ratings.trade_date.isoformat(),
             "label": filter_query.label,
             "aliases": list(filter_query.aliases),
+            "matched_symbols": [item.facts.symbol for item in matches],
         },
         summary=(
             f"\u4ece {len(ratings.candidates)} \u53ea\u9996\u677f\u5019\u9009\u4e2d"
@@ -895,6 +1968,109 @@ def _answer_today_summary(
     )
 
 
+def _answer_first_board_sector_summary(
+    request: AgentChatRequest,
+    ratings_tool: ToolResult,
+) -> AgentChatResponse:
+    """Summarize major sectors in the first-board pool via tool facts and LLM."""
+
+    ratings: FirstBoardRatingsResponse = ratings_tool.output
+    sector_rows = _summarize_first_board_industries(ratings.candidates)
+    facts = {
+        "trade_date": ratings.trade_date.isoformat(),
+        "candidate_count": len(ratings.candidates),
+        "industry_distribution": sector_rows,
+        "top_candidates": [
+            {
+                "symbol": item.facts.symbol,
+                "name": item.facts.name,
+                "industry": item.facts.industry,
+                "concept": item.facts.concept,
+                "rating": item.rating,
+                "score": item.score,
+                "first_limit_time": item.facts.first_limit_time.strftime("%H:%M"),
+                "break_count": item.facts.break_count,
+            }
+            for item in ratings.candidates[:10]
+        ],
+    }
+    answer, source, warnings = _generate_llm_answer(
+        request=request,
+        intent="first_board_sector_summary",
+        facts=facts,
+        fallback=_template_first_board_sector_summary(ratings, sector_rows),
+    )
+    return AgentChatResponse(
+        session_id=request.session_id,
+        intent="first_board_sector_summary",
+        answer=answer,
+        tool_calls=["first_board_ratings", source],
+        tool_results=[ratings_tool.trace()],
+        references=[f"trade_date={ratings.trade_date.isoformat()}"],
+        warnings=[_safety_warning(), *warnings],
+        generated_by=CHAT_AGENT_VERSION,
+    )
+
+
+def _summarize_first_board_industries(
+    candidates: list[FirstBoardRating],
+) -> list[dict]:
+    """Aggregate first-board candidates by industry for LLM consumption."""
+
+    grouped: dict[str, list[FirstBoardRating]] = {}
+    for item in candidates:
+        industry = item.facts.industry or "\u672a\u6807\u6ce8"
+        grouped.setdefault(industry, []).append(item)
+
+    rows = []
+    for industry, items in grouped.items():
+        top_items = sorted(items, key=lambda item: (-item.score, item.facts.first_limit_time))[:5]
+        rows.append(
+            {
+                "industry": industry,
+                "count": len(items),
+                "avg_score": round(sum(item.score for item in items) / len(items), 1),
+                "top_symbols": [
+                    {
+                        "symbol": item.facts.symbol,
+                        "name": item.facts.name,
+                        "rating": item.rating,
+                        "score": item.score,
+                    }
+                    for item in top_items
+                ],
+            }
+        )
+    return sorted(rows, key=lambda item: (-item["count"], -item["avg_score"], item["industry"]))[:8]
+
+
+def _template_first_board_sector_summary(
+    ratings: FirstBoardRatingsResponse,
+    sector_rows: list[dict],
+) -> str:
+    """Fallback sector answer when the LLM provider is unavailable."""
+
+    if not sector_rows:
+        return (
+            f"{ratings.trade_date.isoformat()} \u9996\u677f\u8bc4\u7ea7\u5019\u9009\u6c60\u6682\u65e0\u5165\u6c60\u80a1\u7968\u3002"
+        )
+    lines = [
+        (
+            f"{ratings.trade_date.isoformat()} \u9996\u677f\u8bc4\u7ea7\u5019\u9009\u6c60\u5171 "
+            f"{len(ratings.candidates)} \u53ea\uff0c\u4e3b\u8981\u677f\u5757\u5982\u4e0b\uff1a"
+        )
+    ]
+    for row in sector_rows[:5]:
+        names = IDEOGRAPHIC_COMMA.join(
+            f"{item['name']}({item['symbol']}) {item['rating']}/{item['score']:.1f}"
+            for item in row["top_symbols"][:3]
+        )
+        lines.append(
+            f"- {row['industry']}\uff1a{row['count']} \u53ea\uff0c\u5e73\u5747\u5206 {row['avg_score']:.1f}\uff1b\u4ee3\u8868\uff1a{names}"
+        )
+    return "\n".join(lines)
+
+
 def _answer_rating_explain(
     request: AgentChatRequest,
     symbol: str,
@@ -976,7 +2152,23 @@ def _answer_similar_cases(
         similar_tool = tools.similar_cases(symbol=symbol, trade_date=trade_date, limit=5)
         response = similar_tool.output
     except ValueError:
-        return _missing_symbol_response(request, symbol)
+        answer = (
+            f"\u6211\u5df2\u7ecf\u8bc6\u522b\u5230\u4f60\u5728\u95ee {symbol} \u7684\u5386\u53f2\u76f8\u4f3c\u6848\u4f8b\uff0c"
+            "\u4f46\u672c\u5730\u5c1a\u672a\u627e\u5230\u8fd9\u53ea\u80a1\u7968\u5bf9\u5e94\u4ea4\u6613\u65e5\u7684\u9996\u677f\u7279\u5f81\u7f13\u5b58\u3002"
+            "\u56e0\u6b64\u8fd8\u4e0d\u80fd\u7ed9\u51fa\u53ef\u9a8c\u8bc1\u7684\u5386\u53f2\u76f8\u4f3c\u6848\u4f8b\u3002"
+        )
+        return AgentChatResponse(
+            session_id=request.session_id,
+            intent="similar_cases",
+            answer=answer,
+            tool_calls=["first_board_similar_cases"],
+            references=[
+                f"symbol={symbol}",
+                f"trade_date={trade_date.isoformat()}",
+            ],
+            warnings=[_safety_warning()],
+            generated_by=CHAT_AGENT_VERSION,
+        )
 
     if not response.cases:
         answer = f"{symbol} \u6682\u672a\u627e\u5230\u8db3\u591f\u76f8\u4f3c\u7684\u5386\u53f2\u9996\u677f\u6837\u672c\u3002"
@@ -1063,6 +2255,256 @@ def _answer_general_llm(
     )
 
 
+def _answer_tool_grounded_question(
+    request: AgentChatRequest,
+    tools: AgentToolRegistry,
+    ratings_tool: ToolResult,
+    filter_query: _FirstBoardFilterQuery | None,
+    symbol: str | None,
+    intent: str,
+) -> AgentChatResponse:
+    """Answer open-ended first-board questions from a reusable facts package."""
+
+    market_tool = tools.market_summary()
+    ratings: FirstBoardRatingsResponse = ratings_tool.output
+    filtered_candidates = (
+        _filter_first_board_candidates(ratings, filter_query)
+        if filter_query
+        else []
+    )
+    selected_rating = _find_rating(symbol, ratings.candidates) if symbol else None
+    sector_rows = _summarize_first_board_industries(ratings.candidates)
+    facts = _build_tool_grounded_facts(
+        market_tool=market_tool,
+        ratings=ratings,
+        sector_rows=sector_rows,
+        filtered_candidates=filtered_candidates,
+        filter_query=filter_query,
+        selected_rating=selected_rating,
+    )
+    fallback = _template_tool_grounded_answer(
+        request=request,
+        ratings=ratings,
+        sector_rows=sector_rows,
+        filtered_candidates=filtered_candidates,
+        filter_query=filter_query,
+        selected_rating=selected_rating,
+    )
+    answer, source, warnings = _generate_llm_answer(
+        request=request,
+        intent=intent,
+        facts=facts,
+        fallback=fallback,
+    )
+
+    tool_results = [market_tool.trace(), ratings_tool.trace()]
+    if filter_query:
+        tool_results.append(
+            _build_first_board_filter_trace(
+                ratings,
+                filter_query,
+                filtered_candidates,
+            )
+        )
+    references = [f"trade_date={ratings.trade_date.isoformat()}"]
+    if filter_query:
+        references.append(f"filter={filter_query.label}")
+    if selected_rating:
+        references.append(f"symbol={selected_rating.facts.symbol}")
+
+    return AgentChatResponse(
+        session_id=request.session_id,
+        intent=intent,
+        answer=answer,
+        tool_calls=["market_summary", "first_board_ratings", source],
+        tool_results=tool_results,
+        references=references,
+        warnings=warnings,
+        generated_by=CHAT_AGENT_VERSION,
+    )
+
+
+def _build_tool_grounded_facts(
+    market_tool: ToolResult,
+    ratings: FirstBoardRatingsResponse,
+    sector_rows: list[dict],
+    filtered_candidates: list[FirstBoardRating],
+    filter_query: _FirstBoardFilterQuery | None,
+    selected_rating: FirstBoardRating | None,
+) -> dict:
+    """Build the reusable facts package for model-generated chat answers."""
+
+    summary: MarketSummary = market_tool.output
+    return {
+        "data_scope": (
+            "\u672c\u5730\u9996\u677f\u8bc4\u7ea7\u5019\u9009\u6c60\uff0c"
+            "\u5df2\u6392\u9664 ST\u3001\u5317\u4ea4\u6240\u3001\u79d1\u521b\u677f\u3001"
+            "\u65b0\u80a1/\u6b21\u65b0\u548c\u6210\u4ea4\u989d\u8fc7\u5c0f\u6837\u672c"
+        ),
+        "trade_date": ratings.trade_date.isoformat(),
+        "market_summary": {
+            "sentiment": summary.sentiment,
+            "limit_up_count": summary.limit_up_count,
+            "first_board_count": summary.first_board_count,
+            "continued_board_count": summary.continued_board_count,
+            "failed_limit_up_rate": summary.failed_limit_up_rate,
+            "max_board_height": summary.max_board_height,
+            "hot_industries": summary.hot_industries,
+        },
+        "first_board_candidate_count": len(ratings.candidates),
+        "top_first_board_candidates": [
+            _rating_fact(item) for item in ratings.candidates[:12]
+        ],
+        "industry_distribution": sector_rows,
+        "filter": filter_query.label if filter_query else None,
+        "filtered_candidates": [
+            _rating_fact(item) for item in filtered_candidates[:12]
+        ],
+        "selected_candidate": _rating_fact(selected_rating) if selected_rating else None,
+    }
+
+
+def _rating_fact(rating: FirstBoardRating | None) -> dict | None:
+    """Serialize one rating into compact facts for LLM prompts."""
+
+    if rating is None:
+        return None
+    facts = rating.facts
+    return {
+        "symbol": facts.symbol,
+        "name": facts.name,
+        "industry": facts.industry,
+        "concept": facts.concept,
+        "rating": rating.rating,
+        "score": rating.score,
+        "confidence": rating.confidence,
+        "first_limit_time": facts.first_limit_time.strftime("%H:%M"),
+        "break_count": facts.break_count,
+        "amount": facts.amount,
+        "turnover_rate": facts.turnover_rate,
+        "reasons": rating.reasons[:4],
+        "risks": rating.risks[:3],
+    }
+
+
+def _template_tool_grounded_answer(
+    request: AgentChatRequest,
+    ratings: FirstBoardRatingsResponse,
+    sector_rows: list[dict],
+    filtered_candidates: list[FirstBoardRating],
+    filter_query: _FirstBoardFilterQuery | None,
+    selected_rating: FirstBoardRating | None,
+) -> str:
+    """Fallback answer for open-ended tool-grounded questions."""
+
+    message = request.message
+    if filter_query:
+        return _template_filtered_candidate_answer(ratings, filter_query, filtered_candidates)
+    if selected_rating:
+        return _template_selected_rating_answer(selected_rating)
+    if _looks_like_first_board_sector_question(message):
+        return _template_first_board_sector_summary(ratings, sector_rows)
+    if _looks_like_top_candidate_question(message):
+        return _template_top_candidate_answer(ratings)
+    return _template_today_summary_answer(ratings)
+
+
+def _looks_like_top_candidate_question(message: str) -> bool:
+    """Return whether the user asks for top-scored candidates."""
+
+    return any(
+        keyword in message
+        for keyword in (
+            "\u8bc4\u5206\u9760\u524d",
+            "\u9ad8\u5206",
+            "\u524d\u51e0",
+            "top",
+            "\u6392\u540d",
+            "\u5019\u9009",
+        )
+    )
+
+
+def _template_top_candidate_answer(ratings: FirstBoardRatingsResponse) -> str:
+    """Fallback answer for top first-board candidate questions."""
+
+    top_items = ratings.candidates[:8]
+    if not top_items:
+        return f"{ratings.trade_date.isoformat()} \u6ca1\u6709\u9996\u677f\u8bc4\u7ea7\u5165\u6c60\u5019\u9009\u3002"
+    lines = [
+        (
+            f"{ratings.trade_date.isoformat()} \u9996\u677f\u8bc4\u7ea7\u5019\u9009\u6c60\u4e2d\uff0c"
+            f"\u8bc4\u5206\u9760\u524d\u7684\u5019\u9009\u6709\uff1a"
+        )
+    ]
+    for item in top_items:
+        facts = item.facts
+        lines.append(
+            (
+                f"- {facts.name}({facts.symbol}) {item.rating}/{item.score:.1f}\uff0c"
+                f"\u884c\u4e1a\uff1a{facts.industry}\uff0c"
+                f"\u9996\u5c01\uff1a{facts.first_limit_time.strftime('%H:%M')}\uff0c"
+                f"\u70b8\u677f {facts.break_count} \u6b21"
+            )
+        )
+    return "\n".join(lines)
+
+
+def _template_today_summary_answer(ratings: FirstBoardRatingsResponse) -> str:
+    """Fallback broad summary from first-board ratings."""
+
+    sector_rows = _summarize_first_board_industries(ratings.candidates)
+    sector_text = IDEOGRAPHIC_COMMA.join(
+        f"{row['industry']} {row['count']} \u53ea" for row in sector_rows[:3]
+    )
+    top_text = IDEOGRAPHIC_COMMA.join(
+        f"{item.facts.name}({item.facts.symbol}) {item.rating}/{item.score:.1f}"
+        for item in ratings.candidates[:5]
+    )
+    return (
+        f"{ratings.trade_date.isoformat()} \u9996\u677f\u8bc4\u7ea7\u5019\u9009\u6c60\u5171 "
+        f"{len(ratings.candidates)} \u53ea\u3002"
+        f"\u4e3b\u8981\u677f\u5757\uff1a{sector_text or '\u6682\u65e0'}\u3002"
+        f"\u8bc4\u5206\u9760\u524d\uff1a{top_text or '\u6682\u65e0'}\u3002"
+    )
+
+
+def _template_filtered_candidate_answer(
+    ratings: FirstBoardRatingsResponse,
+    filter_query: _FirstBoardFilterQuery,
+    candidates: list[FirstBoardRating],
+) -> str:
+    """Fallback answer for topic-filtered candidate questions."""
+
+    if not candidates:
+        return (
+            f"{ratings.trade_date.isoformat()} \u9996\u677f\u8bc4\u7ea7\u5019\u9009\u6c60\u91cc"
+            f"\u6ca1\u6709\u547d\u4e2d\u201c{filter_query.label}\u201d\u7684\u80a1\u7968\u3002"
+        )
+    lines = [
+        (
+            f"{ratings.trade_date.isoformat()} \u9996\u677f\u8bc4\u7ea7\u5019\u9009\u6c60\u91cc\uff0c"
+            f"{filter_query.label}\u76f8\u5173\u5019\u9009\u6709 {len(candidates)} \u53ea\uff1a"
+        )
+    ]
+    for item in candidates[:8]:
+        lines.append(
+            f"- {item.facts.name}({item.facts.symbol}) {item.rating}/{item.score:.1f}\uff0c\u884c\u4e1a\uff1a{item.facts.industry}"
+        )
+    return "\n".join(lines)
+
+
+def _template_selected_rating_answer(rating: FirstBoardRating) -> str:
+    """Fallback answer for a selected candidate."""
+
+    return (
+        f"{rating.facts.name}({rating.facts.symbol}) \u5f53\u524d\u8bc4\u7ea7 {rating.rating}\uff0c"
+        f"\u8bc4\u5206 {rating.score:.1f}\uff0c\u7f6e\u4fe1\u5ea6 {rating.confidence:.0%}\u3002"
+        f"\u4e3b\u8981\u7406\u7531\uff1a{SEMI.join(rating.reasons[:3])}\u3002"
+        f"\u98ce\u9669\u89c2\u5bdf\uff1a{SEMI.join(rating.risks[:2])}\u3002"
+    )
+
+
 def _answer_llm_explanation(
     request: AgentChatRequest,
     symbol: str,
@@ -1115,6 +2557,14 @@ def _detect_intent(message: str, intent_hint: str | None = None) -> str:
         return intent_hint
 
     normalized = message.strip().lower()
+    if _looks_like_capability_question(normalized):
+        return "capability_intro"
+    if _looks_like_unsafe_investment_question(normalized):
+        return "unsafe_investment_advice"
+    if any(keyword in normalized for keyword in KEYWORDS["greeting"]):
+        return "greeting"
+    if _looks_like_smalltalk(normalized):
+        return "smalltalk"
     for intent in (
         "greeting",
         "market_schedule",
@@ -1124,11 +2574,74 @@ def _detect_intent(message: str, intent_hint: str | None = None) -> str:
         "llm_explanation",
         "rating_explain",
         "first_board_filter",
+        "first_board_sector_summary",
         "today_summary",
     ):
         if any(keyword in normalized for keyword in KEYWORDS[intent]):
             return intent
-    return "unknown"
+    if _looks_like_domain_question(normalized):
+        return "unknown"
+    return "out_of_scope"
+
+
+def _looks_like_capability_question(message: str) -> bool:
+    """Return whether the user asks what the Agent can do."""
+
+    return any(keyword in message for keyword in KEYWORDS["capability_intro"])
+
+
+def _looks_like_smalltalk(message: str) -> bool:
+    """Return whether the message is conversational but not data seeking."""
+
+    return message in KEYWORDS["greeting"] or any(
+        keyword == message for keyword in KEYWORDS["smalltalk"]
+    )
+
+
+def _looks_like_unsafe_investment_question(message: str) -> bool:
+    """Return whether the user asks for direct investment instructions."""
+
+    return any(
+        keyword in message
+        for keyword in (
+            "\u4e70\u4e0d\u4e70",
+            "\u80fd\u4e0d\u80fd\u4e70",
+            "\u8981\u4e0d\u8981\u4e70",
+            "\u53ef\u4ee5\u4e70",
+            "\u4e70\u5165",
+            "\u5356\u51fa",
+            "\u4ed3\u4f4d",
+            "\u51e0\u6210\u4ed3",
+            "\u76ee\u6807\u4ef7",
+            "\u80fd\u6da8\u5230",
+            "\u4f1a\u6da8\u5417",
+        )
+    )
+
+
+def _looks_like_domain_question(message: str) -> bool:
+    """Return whether a broad question belongs to the current stock-agent domain."""
+
+    return any(
+        keyword in message
+        for keyword in (
+            "a\u80a1",
+            "\u80a1",
+            "\u9996\u677f",
+            "\u6da8\u505c",
+            "\u5019\u9009",
+            "\u8bc4\u5206",
+            "\u8bc4\u7ea7",
+            "\u677f\u5757",
+            "\u884c\u4e1a",
+            "\u9898\u6750",
+            "\u5e02\u573a",
+            "\u60c5\u7eea",
+            "\u98ce\u9669",
+            "\u76f8\u4f3c",
+            "\u6848\u4f8b",
+        )
+    ) or _extract_symbol_hint(message) is not None
 
 
 def _generate_llm_answer(
