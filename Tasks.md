@@ -65,6 +65,16 @@ Critic Agent
   - 明确区分 `score` 和 `confidence`。
   - 评分结果必须可解释、可测试、可复盘。
 
+- `[x]` 完成首板评分扩展输入 v2。
+  - 为当日合格首板候选缓存截至评分日的最近 60 日 K 线，并派生 5/20/60 日涨幅、距阶段高点、量比、波动率和均线结构。
+  - 接入 CNInfo 上市日期，计算上市天数并用于新股/次新股过滤。
+  - 流通市值优先使用龙虎榜明细真实值，缺失时使用成交额/换手率估算并记录来源。
+  - 从个股 60 日 K 线按主板约 10%、创业板约 20% 的涨停阈值识别近 20/60 个交易日涨停次数，不依赖涨停池历史接口的保留期限。
+  - 细化行业首板数、连板数、炸板数、板块高度、首封位次、昨日首板晋级率和市场首板封住率。
+  - 接入东方财富龙虎榜和人气 Top100 时点快照；接口失败可降级并写入 `data_missing`，不编造数据。
+  - 新增 `first_board_enrichment_snapshots` 时点快照表，评分版本升级为 `first-board-rule-v2-enriched`。
+  - 2026-08-13 实测：32/32 候选具备 60 日 K 线、上市日期和流通市值，8 只命中龙虎榜，14 只进入人气 Top100。
+
 - `[x]` 新增首板评级 API。
   - 建议接口：`GET /api/agents/first-board-ratings`。
   - 支持日期参数和最新日期 fallback。
@@ -326,25 +336,41 @@ Critic 输出能解释为什么降低或不降低置信度。
 
 目标：让 Agent 对自己的历史评级结果进行事后评价，形成闭环。
 
-- `[ ]` 设计预测和结果存储。
-  - 候选表：`agent_predictions`、`agent_outcomes`、`agent_evaluations`。
+- `[x]` 设计预测和结果存储。
+  - 新增 `agent_predictions`，保存每日首板评分快照。
+  - 复用现有 `first_board_outcomes` 作为后续走势结果表。
+  - Evaluation 输出暂不落独立表，先由服务实时生成，后续可扩展为 `agent_evaluations`。
 
-- `[ ]` 保存每日评级结果。
+- `[x]` 保存每日评级结果。
   - 保存 score、rating、confidence、reasons、risks、scoring_version、facts snapshot。
+  - 新增 `app.services.evaluation_agent`，在评价前自动生成并 upsert 评分预测快照。
+  - 每日数据更新阶段固定保存最近 6 个交易日的每日 Top10，避免复盘时临时重算导致追踪对象漂移。
 
-- `[ ]` 回填或计算次日结果。
+- `[x]` 保证每日 Top10 后续走势缓存。
+  - 每次数据更新优先校验最近 6 个交易日 Top10 的“首板日 + 后续 5 个交易日”K 线。
+  - 对远端空结果和临时失败执行重试，并把未补齐样本保留到下一次更新继续处理。
+  - 前端固定展示首板至 D+5 六个槽位，区分“待收盘”和“缺缓存”。
+
+- `[x]` 回填或计算次日结果。
   - 是否晋级二板。
   - 次日开盘涨跌幅。
   - 次日最高涨跌幅。
   - 次日收盘涨跌幅。
   - 最大回撤。
+  - MVP 阶段复用每日数据流水线维护的 `first_board_outcomes`。
 
-- `[ ]` 实现 Evaluation Agent。
+- `[x]` 实现 Evaluation Agent。
   - 分类 `success`、`partial`、`miss`、`avoid_success`、`false_negative`。
   - 生成经验教训和评分规则调整建议。
   - 只给建议，不自动修改评分规则。
+  - 新增 `/api/agents/rating-evaluation`，输出预测数量、outcome 覆盖、标签分布、样本评价和复盘摘要。
+  - Agent 工具层新增 `rating_evaluation`，用户可询问“复盘一下最近哪些评分错了”“昨天评分最高的票表现怎么样”。
+  - LLM Planner 漏调 Evaluation 工具时，后端会根据问题自动补调用。
 
-- `[ ]` 前端展示复盘结果。
+- `[x]` 前端展示复盘结果。
+  - 首页新增“Evaluation Agent 预测复盘”面板。
+  - 展示预测快照数、Outcome 覆盖率、误判/漏判数量、标签分布。
+  - 展示重点复盘样本，包括 lesson 和 scoring suggestion。
 
 验收标准：
 
@@ -360,14 +386,75 @@ Critic 输出能解释为什么降低或不降低置信度。
 - `[x]` 新增 `agent_runs` 运行记录。
   - 记录 run type、status、input hash、input JSON、output JSON、error message、started_at、finished_at。
 
-- `[ ]` 新增结果缓存机制。
+- `[x]` 新增 Agent 运行可观测性 MVP。
+  - 后端提供 `/api/agents/runs` 查询最近运行记录。
+  - 前端聊天工作台展示最近运行状态、耗时、工具链路、warning/error。
+  - 保留单轮回答下方的详细 tool trace，方便演示 Agent 如何按需使用工具和结构化数据。
+
+- `[x]` 新增结果缓存机制 MVP。
+  - 新增 `agent_cache` SQLite 表和 `SQLiteAgentCacheRepository`。
+  - 缓存 key 包含接口参数和本地行情事件签名，避免数据更新后继续读取旧结果。
+  - 先缓存低风险结构化结果：首板评分、评分回测、Evaluation Agent。
+  - 暂不缓存 LLM 对话文本，避免多轮上下文和页面上下文串味。
+
+- `[x]` 完成 Agent 问答延迟优化第一版。
+  - DeepSeek `deepseek-v4-flash` 的 Planner 和事实回答默认关闭 thinking，避免结构化任务把时间和 token 消耗在长 reasoning 上。
+  - 同一请求复用 HTTP Session 和 HTTPS 连接，Planner / Answer 分别限制为 320 / 480 tokens。
+  - Planner 工具 schema 只保留工具名、用途、参数类型和必填项；最终 facts 使用前 5 只详细、后 5 只摘要的紧凑结构。
+  - API 返回 Planner、工具、Answer 和总耗时，以及两段 prompt 字符数。
+  - 前端等待期间显示动态计时和“规划工具 / 查询数据 / 生成结论”，完成后展示分段耗时。
+  - 2026-08-13 实测：“金开新能怎么样”从 15.9 秒降至约 4.4 秒；“总结今天首板”从 7.1 秒降至约 5.2 秒，均保留完整 LLM 工具调用链。
+
+- `[ ]` 扩展结果缓存机制。
   - 缓存首板总结、评级结果、市场环境、行业热度、相似案例、LLM 解释。
   - 数据版本或评分版本变化时失效。
 
-- `[ ]` 预留异步执行路径。
-  - MVP 先保留同步调用。
-  - 为长耗时 LLM 任务预留后台 Worker。
-  - 后续支持轮询、SSE 或 WebSocket 返回进度。
+- `[x]` 完成 Agent SSE 流式回答 MVP。
+  - 保留同步 `/api/agents/chat`，新增 `/api/agents/chat/stream` 流式接口。
+  - 按 `planning -> tools -> answering -> answer_delta -> completed` 推送执行阶段、LLM 文本增量和完整响应。
+  - DeepSeek 最终回答使用原生 `stream=true`，前端通过 Fetch ReadableStream 逐段解析 SSE 并实时追加文本。
+  - 完成事件继续携带 run id、工具 trace、证据卡、Planner/Answer 耗时，并在服务端持久化完整 Agent run。
+  - 后端修复首板数据问题被 Planner 直接回答的情况，强制先查 `first_board_ratings` 再流式生成事实回答。
+  - 2026-08-13 实测：阶段事件约 0.04 秒到达，首个回答分片约 1.91 秒到达，完整回答约 4.05 秒，共 337 个文本增量。
+
+- `[ ]` 扩展异步执行路径。
+  - 为超长复盘和批量评测任务增加后台 Worker。
+  - 支持客户端断开后取消上游 LLM 请求，并补充单用户并发上限。
+
+- `[x]` 新增本地启动健康检查闭环。
+  - 新增 `app.services.system_health` 和 `/api/agents/system-health`。
+  - 检查本地最新数据日期、预期数据日期、数据是否新鲜、Agent data health、LLM 配置、代理异常、离线 eval 状态。
+  - 新增 `backend/scripts/dev_check.py --ensure-data`，启动前可自动尝试更新最新收盘数据。
+  - 新增 `scripts/start_local.cmd`，Windows 一键执行数据新鲜度检查后启动后端和前端。
+  - 前端 Agent 工作台新增系统状态条，展示数据日期、数据新鲜度、LLM 状态和 eval 状态。
+
+## Milestone 9：Agent 评测和回归体系
+
+目标：让 Agent 的工具调用、回答事实和安全边界可以被持续验证，而不是靠人工随手试问。
+
+- `[x]` 新增 Agent 问答评测集 MVP。
+  - 新增 `tests/fixtures/agent_eval_cases.json`。
+  - 覆盖能力说明、开盘时间、今日首板、指定日期、评分靠前、单股解释、历史相似案例、市场情绪、连板查询、缺失日期、越界交易问题。
+
+- `[x]` 新增 deterministic eval runner。
+  - 新增 `app.agents.eval_runner`，使用离线 LLM provider 强制走稳定兜底链路。
+  - 检查 expected intent、required tools、forbidden tools、answer_contains、warnings、投资建议禁词。
+  - 新增 `scripts/run_agent_eval.py`，可命令行输出评测报告。
+
+- `[x]` 扩展真实 LLM 评测 MVP。
+  - `scripts/run_agent_eval.py --mode live-llm` 会调用当前配置的 LLM provider。
+  - live 模式记录 planner 原始工具、最终工具、后端修复工具、trace、warning 和回答预览。
+  - 失败样本和后端修复样本输出到 `backend/data/agent_eval_failures.json`，该文件不进入 git。
+  - 默认 live 模式不因模型抽样失败返回非零退出码；需要严格检查时使用 `--fail-on-failures`。
+  - 当前 DeepSeek 抽样结果：11 个 case 中 7 个通过，4 个进入失败复盘，主要问题是能力说明未出现产品名、日期格式表达差异、评分解释时 planner 只选 Critic、缺失日期问题直接回答未调用数据可用性工具。
+
+- `[ ]` 增加前端/文档化评测报告。
+  - 展示通过率、失败 case、工具调用准确率、越界拦截情况。
+
+- `[x]` 扩展 Agent 通用涨停事件查询能力。
+  - 新增 `limit_up_events` 工具，支持按日期、板数、连板、炸板、行业/题材关键词过滤。
+  - 修复“涨停 + 行业/板块”被误判为首板筛选的问题。
+  - 增加“今天二连板有哪些”“今天涨停里医药相关有哪些”的回归测试。
 
 - `[ ]` 增加超时、重试和失败降级。
   - LLM 不可用时展示规则评分和模板化解释。

@@ -55,7 +55,11 @@ def build_rating_backtest(
     for trade_date in trade_dates:
         from app.agents.first_board import build_first_board_ratings
 
-        ratings = build_first_board_ratings(events=events, trade_date=trade_date)
+        ratings = build_first_board_ratings(
+            events=events,
+            trade_date=trade_date,
+            first_board_repository=repository,
+        )
         samples.extend(
             _BacktestSample(
                 rating=item,

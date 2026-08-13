@@ -7,6 +7,7 @@ from typing import Any
 
 from app.agents.first_board import build_first_board_ratings
 from app.models import (
+    AgentEvaluationResponse,
     AgentToolTrace,
     FirstBoardCriticResponse,
     FirstBoardRatingsResponse,
@@ -16,10 +17,12 @@ from app.models import (
     SimilarFirstBoardCasesResponse,
 )
 from app.repositories import SQLiteFirstBoardRepository
-from app.services.analysis import summarize_market
+from app.services.analysis import events_for_date, summarize_market
+from app.services.evaluation_agent import build_agent_evaluation
 from app.services.first_board_critic import build_first_board_critic
 from app.services.rating_backtest import build_rating_backtest
 from app.services.similar_cases import find_similar_first_board_cases
+from app.agents.review_agent import build_review_agent_report
 
 
 @dataclass(frozen=True)
@@ -39,6 +42,20 @@ class AgentToolSchema:
             "description": self.description,
             "args_schema": self.args_schema,
             "returns": self.returns,
+        }
+
+    def planner_dump(self) -> dict[str, Any]:
+        """Serialize only fields needed by the LLM to choose and call a tool."""
+
+        properties = self.args_schema.get("properties", {})
+        return {
+            "name": self.name,
+            "description": self.description,
+            "arguments": {
+                name: definition.get("type", "any")
+                for name, definition in properties.items()
+            },
+            "required": self.args_schema.get("required", []),
         }
 
 
@@ -88,6 +105,42 @@ TOOL_SCHEMAS = [
             "required": [],
         },
         returns="First-board candidate ratings, top candidates, filters and industry distribution.",
+    ),
+    AgentToolSchema(
+        name="limit_up_events",
+        description="查询某个交易日的涨停事件列表，可按板数、首板/连板、炸板次数、行业、题材或股票名称过滤。",
+        args_schema={
+            "type": "object",
+            "properties": {
+                "trade_date": {
+                    "type": ["string", "null"],
+                    "description": "YYYY-MM-DD; omit or null for latest local trade date.",
+                },
+                "board_height": {
+                    "type": ["integer", "null"],
+                    "description": "Limit-up board height, e.g. 1 for first-board, 2 for second-board.",
+                },
+                "min_board_height": {
+                    "type": ["integer", "null"],
+                    "description": "Minimum board height; use 2 for all continued-board stocks.",
+                },
+                "query": {
+                    "type": ["string", "null"],
+                    "description": "Optional industry, concept, stock name or symbol keyword.",
+                },
+                "broken_only": {
+                    "type": ["boolean", "null"],
+                    "description": "Only return stocks with intraday breaks when true.",
+                },
+                "closed_only": {
+                    "type": ["boolean", "null"],
+                    "description": "Only return stocks that closed at limit-up when true.",
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+            },
+            "required": [],
+        },
+        returns="Filtered limit-up events with board height, industry, concept, first seal time and break count.",
     ),
     AgentToolSchema(
         name="first_board_filter",
@@ -149,6 +202,34 @@ TOOL_SCHEMAS = [
         },
         returns="Critic verdict, supporting evidence, opposing evidence, missing data and suggested confidence.",
     ),
+    AgentToolSchema(
+        name="rating_evaluation",
+        description="Evaluate saved first-board rating predictions against later outcomes and summarize successes, misses and false negatives.",
+        args_schema={
+            "type": "object",
+            "properties": {
+                "start_date": {"type": "string", "description": "YYYY-MM-DD inclusive start date."},
+                "end_date": {"type": "string", "description": "YYYY-MM-DD inclusive end date."},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+            },
+            "required": [],
+        },
+        returns="Prediction evaluation labels, lessons, scoring suggestions and summary counts.",
+    ),
+    AgentToolSchema(
+        name="review_high_score_picks",
+        description="Run the Review Agent to review high-score first-board picks, later outcomes, successful/failed patterns and scoring taste adjustments.",
+        args_schema={
+            "type": "object",
+            "properties": {
+                "start_date": {"type": "string", "description": "YYYY-MM-DD inclusive start date."},
+                "end_date": {"type": "string", "description": "YYYY-MM-DD inclusive end date."},
+                "min_score": {"type": "number", "minimum": 0, "maximum": 100},
+            },
+            "required": [],
+        },
+        returns="Review Agent report with findings, successful patterns, failed patterns, scoring bias and adjustment suggestions.",
+    ),
 ]
 
 
@@ -174,8 +255,9 @@ class AgentToolRegistry:
         """Return a JSON tool description block for the planner prompt."""
 
         return json.dumps(
-            [schema.model_dump() for schema in self.schemas()],
+            [schema.planner_dump() for schema in self.schemas()],
             ensure_ascii=False,
+            separators=(",", ":"),
         )
 
     def market_summary(self) -> ToolResult:
@@ -212,7 +294,11 @@ class AgentToolRegistry:
     def first_board_ratings(self, trade_date: date | None = None) -> ToolResult:
         """Return explainable first-board ratings."""
 
-        ratings = build_first_board_ratings(events=self.events, trade_date=trade_date)
+        ratings = build_first_board_ratings(
+            events=self.events,
+            trade_date=trade_date,
+            first_board_repository=self.first_board_repository,
+        )
         top = ratings.candidates[0] if ratings.candidates else None
         top_summary = (
             f"最高分 {top.facts.name}({top.facts.symbol}) {top.rating}/{top.score:.1f}"
@@ -241,6 +327,90 @@ class AgentToolRegistry:
             summary=(
                 f"{ratings.trade_date.isoformat()} 首板评级入池{len(ratings.candidates)}只，"
                 f"{top_summary}。"
+            ),
+            trace_output=trace_output,
+        )
+
+    def limit_up_events(
+        self,
+        trade_date: date | None = None,
+        board_height: int | None = None,
+        min_board_height: int | None = None,
+        query: str | None = None,
+        broken_only: bool | None = None,
+        closed_only: bool | None = None,
+        limit: int = 30,
+    ) -> ToolResult:
+        """Return filtered limit-up events for general limit-up questions."""
+
+        target_events = events_for_date(self.events, trade_date)
+        if board_height is not None:
+            target_events = [
+                event for event in target_events if event.board_height == board_height
+            ]
+        if min_board_height is not None:
+            target_events = [
+                event for event in target_events if event.board_height >= min_board_height
+            ]
+        if broken_only:
+            target_events = [event for event in target_events if event.break_count > 0]
+        if closed_only:
+            target_events = [event for event in target_events if event.closed_limit]
+        if query:
+            normalized_query = query.strip().lower()
+            target_events = [
+                event
+                for event in target_events
+                if normalized_query in event.symbol.lower()
+                or normalized_query in event.name.lower()
+                or normalized_query in event.industry.lower()
+                or normalized_query in event.concept.lower()
+            ]
+
+        target_events = sorted(
+            target_events,
+            key=lambda event: (-event.board_height, event.first_limit_time, event.symbol),
+        )[: max(1, min(limit, 50))]
+        if trade_date is not None:
+            trade_date_text = trade_date.isoformat()
+        elif self.events:
+            trade_date_text = max(event.trade_date for event in self.events).isoformat()
+        else:
+            trade_date_text = ""
+        board_text = f"{board_height}板" if board_height is not None else "涨停"
+        names = "、".join(f"{event.name}({event.symbol})" for event in target_events[:5])
+        trace_output = {
+            "trade_date": trade_date_text,
+            "matched_count": len(target_events),
+            "events": [
+                {
+                    "symbol": event.symbol,
+                    "name": event.name,
+                    "board_height": event.board_height,
+                    "industry": event.industry,
+                    "concept": event.concept,
+                    "first_limit_time": event.first_limit_time.strftime("%H:%M"),
+                    "break_count": event.break_count,
+                    "closed_limit": event.closed_limit,
+                }
+                for event in target_events
+            ],
+        }
+        return ToolResult(
+            name="limit_up_events",
+            input={
+                "trade_date": trade_date.isoformat() if trade_date else None,
+                "board_height": board_height,
+                "min_board_height": min_board_height,
+                "query": query,
+                "broken_only": broken_only,
+                "closed_only": closed_only,
+                "limit": limit,
+            },
+            output=target_events,
+            summary=(
+                f"{trade_date_text} {board_text}查询命中 {len(target_events)} 只"
+                f"{f'：{names}' if names else '。'}"
             ),
             trace_output=trace_output,
         )
@@ -373,6 +543,95 @@ class AgentToolRegistry:
             summary=(
                 f"{response.name}({response.symbol}) Critic verdict={response.verdict}, "
                 f"confidence {response.original_confidence:.0%}->{response.suggested_confidence:.0%}."
+            ),
+            trace_output=trace_output,
+        )
+
+    def rating_evaluation(
+        self,
+        start_date: date,
+        end_date: date,
+        limit: int = 30,
+    ) -> ToolResult:
+        """Return Evaluation Agent facts for persisted first-board predictions."""
+
+        response: AgentEvaluationResponse = build_agent_evaluation(
+            events=self.events,
+            start_date=start_date,
+            end_date=end_date,
+            first_board_repository=self.first_board_repository,
+            limit=limit,
+        )
+        trace_output = {
+            "start_date": response.start_date.isoformat(),
+            "end_date": response.end_date.isoformat(),
+            "prediction_count": response.prediction_count,
+            "outcome_ready_count": response.outcome_ready_count,
+            "label_counts": response.label_counts,
+            "top_evaluations": [
+                {
+                    "symbol": item.symbol,
+                    "name": item.name,
+                    "trade_date": item.trade_date.isoformat(),
+                    "rating": item.rating,
+                    "score": item.score,
+                    "evaluation_label": item.evaluation_label,
+                }
+                for item in response.evaluations[:5]
+            ],
+        }
+        return ToolResult(
+            name="rating_evaluation",
+            input={
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "limit": limit,
+            },
+            output=response,
+            summary=(
+                f"Evaluation {response.start_date.isoformat()} to "
+                f"{response.end_date.isoformat()}: {response.prediction_count} predictions, "
+                f"{response.outcome_ready_count} ready outcomes."
+            ),
+            trace_output=trace_output,
+        )
+
+    def review_high_score_picks(
+        self,
+        start_date: date,
+        end_date: date,
+        min_score: float = 85,
+    ) -> ToolResult:
+        """Run Review Agent over high-score picks and post-board outcomes."""
+
+        response = build_review_agent_report(
+            events=self.events,
+            start_date=start_date,
+            end_date=end_date,
+            repository=self.first_board_repository,
+            min_score=min_score,
+        )
+        trace_output = {
+            "start_date": response.start_date.isoformat(),
+            "end_date": response.end_date.isoformat(),
+            "sample_size": response.sample_size,
+            "success_count": response.success_count,
+            "failed_count": response.failed_count,
+            "pending_count": response.pending_count,
+            "main_findings": response.main_findings[:3],
+            "adjustment_suggestions": response.adjustment_suggestions[:3],
+        }
+        return ToolResult(
+            name="review_high_score_picks",
+            input={
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "min_score": min_score,
+            },
+            output=response,
+            summary=(
+                f"Review Agent checked {response.sample_size} high-score picks "
+                f"from {response.start_date.isoformat()} to {response.end_date.isoformat()}."
             ),
             trace_output=trace_output,
         )

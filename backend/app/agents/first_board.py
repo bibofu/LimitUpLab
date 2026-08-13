@@ -10,6 +10,7 @@ from typing import Optional
 
 from app.models import (
     FirstBoardCandidateFacts,
+    FirstBoardEnrichmentSnapshot,
     FirstBoardFilterResult,
     FirstBoardRating,
     FirstBoardRatingsResponse,
@@ -17,23 +18,33 @@ from app.models import (
     MarketSummary,
     ScoreBreakdownItem,
 )
+from app.repositories import SQLiteFirstBoardRepository
 from app.services.analysis import events_for_date, latest_trade_date, summarize_market
 
 
 MIN_AMOUNT = 100_000_000
-FIRST_BOARD_AGENT_VERSION = "first-board-rule-v1"
+FIRST_BOARD_AGENT_VERSION = "first-board-rule-v2-enriched"
 
 
 def build_first_board_ratings(
     events: list[LimitUpEvent],
     trade_date: Optional[date] = None,
+    first_board_repository: SQLiteFirstBoardRepository | None = None,
 ) -> FirstBoardRatingsResponse:
     """Build first-board ratings for a trade date from persisted events."""
 
     target_date = trade_date or latest_trade_date(events)
     latest_events = events_for_date(events, target_date)
     summary = summarize_market(latest_events)
-    filter_results = [_evaluate_candidate_filter(event) for event in latest_events]
+    repository = first_board_repository or SQLiteFirstBoardRepository()
+    enrichments = {
+        item.symbol: item
+        for item in repository.list_enrichment_for_date(target_date)
+    }
+    filter_results = [
+        _evaluate_candidate_filter(event, enrichments.get(event.symbol))
+        for event in latest_events
+    ]
     included_symbols = {
         result.symbol for result in filter_results if result.included
     }
@@ -42,6 +53,7 @@ def build_first_board_ratings(
             event=event,
             same_day_events=latest_events,
             summary=summary,
+            enrichment=enrichments.get(event.symbol),
             data_missing=next(
                 result.data_missing
                 for result in filter_results
@@ -56,7 +68,7 @@ def build_first_board_ratings(
         trade_date=target_date,
         candidates=sorted(
             [_rate_candidate(item) for item in facts],
-            key=lambda item: (-item.score, -item.confidence, item.facts.first_limit_time),
+            key=lambda item: (-item.score, -item.confidence, item.facts.symbol),
         ),
         filtered_out=[result for result in filter_results if not result.included],
         universe_count=len(latest_events),
@@ -68,6 +80,7 @@ def build_first_board_candidate_facts(
     event: LimitUpEvent,
     same_day_events: list[LimitUpEvent],
     summary: MarketSummary,
+    enrichment: FirstBoardEnrichmentSnapshot | None = None,
     data_missing: Optional[list[str]] = None,
 ) -> FirstBoardCandidateFacts:
     """Create verifiable first-board facts for one included candidate."""
@@ -97,11 +110,15 @@ def build_first_board_candidate_facts(
         market_failed_limit_up_rate=summary.failed_limit_up_rate,
         market_max_board_height=summary.max_board_height,
         market_sentiment=summary.sentiment,
+        enrichment=enrichment,
         data_missing=data_missing or [],
     )
 
 
-def _evaluate_candidate_filter(event: LimitUpEvent) -> FirstBoardFilterResult:
+def _evaluate_candidate_filter(
+    event: LimitUpEvent,
+    enrichment: FirstBoardEnrichmentSnapshot | None = None,
+) -> FirstBoardFilterResult:
     """Evaluate hard candidate-pool filters and record unavailable fields."""
 
     excluded_reasons: list[str] = []
@@ -117,10 +134,14 @@ def _evaluate_candidate_filter(event: LimitUpEvent) -> FirstBoardFilterResult:
         excluded_reasons.append("北交所股票")
     if _is_star_market(event.symbol):
         excluded_reasons.append("科创板股票")
-    if _looks_like_new_stock_name(event.name):
+    if enrichment and enrichment.listing_age_days is not None and enrichment.listing_age_days < 120:
+        excluded_reasons.append("上市未满 120 天")
+    elif _looks_like_new_stock_name(event.name):
         excluded_reasons.append("新股 / 次新股")
+    elif enrichment:
+        data_missing.extend(enrichment.data_missing)
     else:
-        data_missing.append("listing_date")
+        data_missing.extend(["enrichment_snapshot", "listing_date"])
     if event.amount < MIN_AMOUNT:
         excluded_reasons.append("成交额过小")
 
@@ -136,7 +157,7 @@ def _evaluate_candidate_filter(event: LimitUpEvent) -> FirstBoardFilterResult:
 def _rate_candidate(facts: FirstBoardCandidateFacts) -> FirstBoardRating:
     """Score one first-board candidate with transparent factor weights."""
 
-    breakdown = [
+    base_breakdown = [
         _score_first_limit_time(facts.first_limit_time),
         _score_seal_stability(facts.break_count, facts.closed_limit),
         _score_seal_pressure(facts.seal_count),
@@ -144,6 +165,16 @@ def _rate_candidate(facts: FirstBoardCandidateFacts) -> FirstBoardRating:
         _score_amount(facts.amount),
         _score_industry_heat(facts.same_industry_limit_up_count),
         _score_market_context(facts.market_failed_limit_up_rate, facts.market_max_board_height),
+    ]
+    breakdown = [
+        _scale_score_item(item, 0.65)
+        for item in base_breakdown
+    ] + [
+        _score_pre_limit_structure(facts.enrichment),
+        _score_sector_and_relay(facts.enrichment),
+        _score_profile_and_history(facts.enrichment),
+        _score_dragon_tiger(facts.enrichment),
+        _score_popularity(facts.enrichment),
     ]
     raw_score = sum(item.score for item in breakdown)
     score = round(max(0, min(100, raw_score)), 1)
@@ -157,6 +188,240 @@ def _rate_candidate(facts: FirstBoardCandidateFacts) -> FirstBoardRating:
         score_breakdown=breakdown,
         reasons=_build_reasons(facts),
         risks=_build_risks(facts),
+    )
+
+
+def _scale_score_item(item: ScoreBreakdownItem, ratio: float) -> ScoreBreakdownItem:
+    """Scale legacy factor weights while retaining their evidence."""
+
+    return ScoreBreakdownItem(
+        name=item.name,
+        score=round(item.score * ratio, 2),
+        max_score=round(item.max_score * ratio, 2),
+        evidence=item.evidence,
+    )
+
+
+def _score_pre_limit_structure(
+    enrichment: FirstBoardEnrichmentSnapshot | None,
+) -> ScoreBreakdownItem:
+    """Score 60-day price, volume and moving-average structure."""
+
+    if enrichment is None or enrichment.kline_bar_count < 20:
+        return ScoreBreakdownItem(
+            name="涨停前走势结构",
+            score=7.5,
+            max_score=15,
+            evidence=["历史 K 线不足，按中性分处理并降低置信度"],
+        )
+
+    score = 0.0
+    evidence: list[str] = []
+    return_20d = enrichment.return_20d_pct
+    if return_20d is not None:
+        if -5 <= return_20d <= 25:
+            score += 4
+            evidence.append(f"近 20 日涨幅 {return_20d:.1f}%，未出现明显过热")
+        elif 25 < return_20d <= 40:
+            score += 2.5
+            evidence.append(f"近 20 日涨幅 {return_20d:.1f}%，已有一定涨幅")
+        else:
+            score += 1
+            evidence.append(f"近 20 日涨幅 {return_20d:.1f}%，趋势偏弱或偏热")
+
+    distance = enrichment.distance_60d_high_pct
+    if distance is not None:
+        if distance >= -5:
+            score += 4
+            evidence.append(f"距 60 日高点 {distance:.1f}%，接近平台突破")
+        elif distance >= -20:
+            score += 3
+            evidence.append(f"距 60 日高点 {distance:.1f}%，上方空间适中")
+        else:
+            score += 1
+            evidence.append(f"距 60 日高点 {distance:.1f}%，仍处于深度回撤区")
+
+    volume_ratio = enrichment.volume_ratio_5d
+    if volume_ratio is not None:
+        if 1.5 <= volume_ratio <= 4:
+            score += 3
+            evidence.append(f"量能为前 5 日均量的 {volume_ratio:.1f} 倍，放量较健康")
+        elif 1 <= volume_ratio < 1.5 or 4 < volume_ratio <= 6:
+            score += 2
+            evidence.append(f"量能为前 5 日均量的 {volume_ratio:.1f} 倍")
+        else:
+            score += 1
+            evidence.append(f"量能比 {volume_ratio:.1f}，缩量或过度放量")
+
+    alignment_scores = {"bullish": 4, "mixed": 2, "bearish": 0, "unknown": 2}
+    score += alignment_scores.get(enrichment.ma_alignment, 2)
+    evidence.append(f"均线结构：{enrichment.ma_alignment}")
+    return ScoreBreakdownItem(
+        name="涨停前走势结构",
+        score=min(15, score),
+        max_score=15,
+        evidence=evidence,
+    )
+
+
+def _score_sector_and_relay(
+    enrichment: FirstBoardEnrichmentSnapshot | None,
+) -> ScoreBreakdownItem:
+    """Score sector breadth, hierarchy and prior-day promotion rate."""
+
+    if enrichment is None:
+        return ScoreBreakdownItem(
+            name="板块强度与接力",
+            score=4,
+            max_score=8,
+            evidence=["板块梯队快照缺失，按中性分处理"],
+        )
+    score = 0.0
+    evidence = [
+        f"行业首板 {enrichment.industry_first_board_count} 只、连板 "
+        f"{enrichment.industry_continued_board_count} 只、炸板 {enrichment.industry_failed_count} 只"
+    ]
+    if enrichment.industry_first_board_count >= 3:
+        score += 2
+    elif enrichment.industry_first_board_count >= 2:
+        score += 1
+    if enrichment.industry_continued_board_count >= 1:
+        score += 2
+    if enrichment.industry_first_limit_rank is not None:
+        if enrichment.industry_first_limit_rank <= 2:
+            score += 2
+        elif enrichment.industry_first_limit_rank <= 4:
+            score += 1
+        evidence.append(f"该股在行业首板中封板顺序第 {enrichment.industry_first_limit_rank}")
+    promotion_rate = enrichment.previous_first_board_promotion_rate
+    if promotion_rate is not None:
+        if promotion_rate >= 0.15:
+            score += 2
+        elif promotion_rate >= 0.08:
+            score += 1
+        evidence.append(f"昨日首板今日晋级率 {promotion_rate:.0%}")
+    return ScoreBreakdownItem(
+        name="板块强度与接力",
+        score=min(8, score),
+        max_score=8,
+        evidence=evidence,
+    )
+
+
+def _score_profile_and_history(
+    enrichment: FirstBoardEnrichmentSnapshot | None,
+) -> ScoreBreakdownItem:
+    """Score tradable float size and recent limit-up frequency."""
+
+    if enrichment is None:
+        return ScoreBreakdownItem(
+            name="流通盘与近期股性",
+            score=2.5,
+            max_score=5,
+            evidence=["流通盘与近期涨停数据缺失，按中性分处理"],
+        )
+    score = 0.0
+    evidence: list[str] = []
+    market_cap = enrichment.float_market_cap
+    if market_cap is not None:
+        cap_yi = market_cap / 100_000_000
+        if 20 <= cap_yi <= 200:
+            score += 3
+        elif 10 <= cap_yi < 20 or 200 < cap_yi <= 500:
+            score += 2
+        else:
+            score += 1
+        evidence.append(f"估算流通市值 {cap_yi:.1f} 亿元")
+    count_20d = enrichment.recent_limit_up_count_20d
+    if 2 <= count_20d <= 4:
+        score += 2
+    elif count_20d == 1 or count_20d == 5:
+        score += 1
+    evidence.append(f"近 20 个交易日 K 线识别涨停 {count_20d} 次")
+    return ScoreBreakdownItem(
+        name="流通盘与近期股性",
+        score=min(5, score),
+        max_score=5,
+        evidence=evidence,
+    )
+
+
+def _score_dragon_tiger(
+    enrichment: FirstBoardEnrichmentSnapshot | None,
+) -> ScoreBreakdownItem:
+    """Use Dragon-Tiger List flow as a small after-close confirmation factor."""
+
+    if enrichment is None:
+        return ScoreBreakdownItem(
+            name="龙虎榜资金",
+            score=1.5,
+            max_score=3,
+            evidence=["龙虎榜快照缺失，按中性分处理"],
+        )
+    if not enrichment.dragon_tiger_on_list:
+        return ScoreBreakdownItem(
+            name="龙虎榜资金",
+            score=1.5,
+            max_score=3,
+            evidence=["当日未上龙虎榜，不作正负判断"],
+        )
+    net_buy = enrichment.dragon_tiger_net_buy_amount
+    if net_buy is None:
+        score = 1.5
+    elif net_buy > 0:
+        score = 3
+    else:
+        score = 0.5
+    evidence = [
+        f"龙虎榜净买额 {net_buy / 100_000_000:+.2f} 亿元"
+        if net_buy is not None
+        else "已上龙虎榜，但净买额缺失"
+    ]
+    if enrichment.dragon_tiger_reason:
+        evidence.append(enrichment.dragon_tiger_reason)
+    return ScoreBreakdownItem(name="龙虎榜资金", score=score, max_score=3, evidence=evidence)
+
+
+def _score_popularity(
+    enrichment: FirstBoardEnrichmentSnapshot | None,
+) -> ScoreBreakdownItem:
+    """Score attention confirmation while limiting crowding bias."""
+
+    if enrichment is None or "eastmoney_popularity" in enrichment.data_missing:
+        return ScoreBreakdownItem(
+            name="东方财富人气",
+            score=2,
+            max_score=4,
+            evidence=["人气快照缺失，按中性分处理"],
+        )
+    rank = enrichment.popularity_rank
+    if rank is None:
+        return ScoreBreakdownItem(
+            name="东方财富人气",
+            score=1.5,
+            max_score=4,
+            evidence=["未进入东方财富人气 Top100"],
+        )
+    if rank <= 5:
+        score = 2.5
+        label = "关注度极高，同时存在拥挤风险"
+    elif rank <= 20:
+        score = 3
+        label = "关注度较高"
+    elif rank <= 50:
+        score = 2.5
+        label = "具备一定关注度"
+    else:
+        score = 2
+        label = "进入人气 Top100"
+    if enrichment.popularity_rank_change is not None and enrichment.popularity_rank_change >= 20:
+        score += 1
+        label += "，排名快速上升"
+    return ScoreBreakdownItem(
+        name="东方财富人气",
+        score=min(4, score),
+        max_score=4,
+        evidence=[f"收盘后人气排名第 {rank}，{label}"],
     )
 
 
@@ -315,7 +580,19 @@ def _calculate_confidence(facts: FirstBoardCandidateFacts) -> float:
     """Calculate rating reliability separately from candidate strength."""
 
     confidence = 0.9
-    confidence -= 0.08 * len(facts.data_missing)
+    missing = set(facts.data_missing)
+    if "enrichment_snapshot" in missing:
+        confidence -= 0.15
+    if "kline_20d" in missing:
+        confidence -= 0.12
+    if "eastmoney_popularity" in missing:
+        confidence -= 0.04
+    if "listing_date" in missing:
+        confidence -= 0.03
+    if "float_market_cap" in missing:
+        confidence -= 0.05
+    if "limit_up_history_60d" in missing:
+        confidence -= 0.05
 
     if facts.market_failed_limit_up_rate >= 0.55:
         confidence -= 0.12
@@ -356,8 +633,17 @@ def _build_reasons(facts: FirstBoardCandidateFacts) -> list[str]:
         reasons.append("同行业涨停扩散较好")
     if facts.market_max_board_height >= 4:
         reasons.append("市场仍有连板高度")
+    enrichment = facts.enrichment
+    if enrichment and enrichment.ma_alignment == "bullish":
+        reasons.append("涨停前均线呈多头排列")
+    if enrichment and enrichment.industry_continued_board_count >= 1:
+        reasons.append("所属行业存在连板梯队")
+    if enrichment and enrichment.dragon_tiger_net_buy_amount is not None and enrichment.dragon_tiger_net_buy_amount > 0:
+        reasons.append("龙虎榜呈净买入")
+    if enrichment and enrichment.popularity_rank is not None and enrichment.popularity_rank <= 20:
+        reasons.append("东方财富人气排名靠前")
 
-    return reasons or ["首板基础条件满足，但优势信号不突出"]
+    return (reasons or ["首板基础条件满足，但优势信号不突出"])[:7]
 
 
 def _build_risks(facts: FirstBoardCandidateFacts) -> list[str]:
@@ -378,8 +664,23 @@ def _build_risks(facts: FirstBoardCandidateFacts) -> list[str]:
         risks.append("当日市场炸板率偏高")
     if facts.same_industry_limit_up_count <= 1:
         risks.append("同行业扩散不足")
+    enrichment = facts.enrichment
+    if enrichment and enrichment.return_20d_pct is not None and enrichment.return_20d_pct > 40:
+        risks.append("近 20 日累计涨幅较高，存在过热风险")
+    if enrichment and enrichment.recent_limit_up_count_20d >= 5:
+        risks.append("近期涨停频繁，情绪拥挤度偏高")
+    if enrichment and enrichment.dragon_tiger_net_buy_amount is not None and enrichment.dragon_tiger_net_buy_amount < 0:
+        risks.append("龙虎榜呈净卖出")
+    if enrichment and enrichment.popularity_rank is not None and enrichment.popularity_rank <= 5:
+        risks.append("人气排名极高，需关注交易拥挤")
+    if (
+        enrichment
+        and enrichment.previous_first_board_promotion_rate is not None
+        and enrichment.previous_first_board_promotion_rate < 0.08
+    ):
+        risks.append("昨日首板晋级率偏低")
 
-    return risks or ["未触发明显风险标签"]
+    return (risks or ["未触发明显风险标签"])[:7]
 
 
 def _is_risk_warning_name(name: str) -> bool:

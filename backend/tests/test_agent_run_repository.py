@@ -28,6 +28,7 @@ class AgentRunRepositoryTest(unittest.TestCase):
 
             repository.save_run(run)
             rows = repository.list_recent_runs("session-a")
+            all_rows = repository.list_runs(limit=5)
         finally:
             if database_path.exists():
                 database_path.unlink()
@@ -36,6 +37,8 @@ class AgentRunRepositoryTest(unittest.TestCase):
         self.assertEqual(rows[0].run_id, "run_test")
         self.assertEqual(rows[0].tool_calls, ["first_board_ratings"])
         self.assertEqual(rows[0].input_json["symbol"], "301489")
+        self.assertEqual(len(all_rows), 1)
+        self.assertEqual(all_rows[0].session_id, "session-a")
 
 
 if __name__ == "__main__":

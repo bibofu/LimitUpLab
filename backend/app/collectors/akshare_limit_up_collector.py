@@ -12,6 +12,7 @@ from typing import Any
 import akshare as ak
 
 from app.models import LimitUpEvent
+from app.collectors.stock_kline_collector import _without_proxy
 
 
 def parse_akshare_trade_date(value: str) -> date:
@@ -28,13 +29,14 @@ def collect_limit_up_events(trade_date: str) -> list[LimitUpEvent]:
     parsed_date = parse_akshare_trade_date(trade_date)
     events_by_key: dict[tuple[date, str], LimitUpEvent] = {}
 
-    for event in _collect_closed_limit_up_events(parsed_date, trade_date):
-        events_by_key[(event.trade_date, event.symbol)] = event
+    with _without_proxy():
+        for event in _collect_closed_limit_up_events(parsed_date, trade_date):
+            events_by_key[(event.trade_date, event.symbol)] = event
 
-    try:
-        failed_events = _collect_failed_limit_up_events(parsed_date, trade_date)
-    except Exception:
-        failed_events = []
+        try:
+            failed_events = _collect_failed_limit_up_events(parsed_date, trade_date)
+        except Exception:
+            failed_events = []
 
     for event in failed_events:
         events_by_key.setdefault((event.trade_date, event.symbol), event)

@@ -1,10 +1,10 @@
 import os
 import unittest
-from datetime import date, time
+from datetime import date, datetime, time, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from app.models import LimitUpEvent
+from app.models import LimitUpEvent, StockDailyBar
 from app.repositories import SQLiteFirstBoardRepository, SQLiteLimitUpRepository
 from scripts.update_daily_data import run_daily_update
 
@@ -81,8 +81,10 @@ class DailyUpdatePipelineTest(unittest.TestCase):
                 similar_limit=2,
                 max_kline_fetches=0,
                 skip_import=True,
+                refresh_enrichment=False,
                 limit_up_repository=limit_repo,
                 first_board_repository=first_board_repo,
+                post_bar_collector=lambda _symbol, _base_date, _as_of_date: [],
             )
 
             self.assertEqual(report.trade_date, "2026-08-10")
@@ -103,6 +105,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             report = run_daily_update(
                 trade_date=date(2026, 8, 10),
                 skip_import=True,
+                refresh_enrichment=False,
                 limit_up_repository=SQLiteLimitUpRepository(database_path=database_path),
                 first_board_repository=SQLiteFirstBoardRepository(database_path=database_path),
             )
@@ -110,6 +113,86 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             self.assertFalse(report.health["raw_events_ready"])
             self.assertFalse(report.health["first_board_features_ready"])
             self.assertTrue(report.warnings)
+        finally:
+            self._cleanup_database(database_path)
+
+    def test_recent_daily_top_picks_cache_all_available_follow_up_bars(self) -> None:
+        database_path = self._database_path()
+        try:
+            limit_repo = SQLiteLimitUpRepository(database_path=database_path)
+            first_board_repo = SQLiteFirstBoardRepository(database_path=database_path)
+            trade_dates = [
+                date(2026, 8, 6),
+                date(2026, 8, 7),
+                date(2026, 8, 10),
+                date(2026, 8, 11),
+                date(2026, 8, 12),
+                date(2026, 8, 13),
+            ]
+            events = [
+                self._make_event(
+                    f"00{date_index + 1}{symbol_index + 1:03d}",
+                    f"candidate-{date_index}-{symbol_index}",
+                    item_date,
+                )
+                for date_index, item_date in enumerate(trade_dates)
+                for symbol_index in range(2)
+            ]
+            limit_repo.upsert_events(events)
+
+            def fake_bar_collector(
+                symbol: str,
+                base_date: date,
+                as_of_date: date,
+            ) -> list[StockDailyBar]:
+                return [
+                    StockDailyBar(
+                        symbol=symbol,
+                        trade_date=item_date,
+                        open=10,
+                        high=11,
+                        low=9.5,
+                        close=10.5,
+                        volume=1_000_000,
+                        amount=10_000_000,
+                        change_pct=5,
+                        source="test",
+                        created_at=datetime.now(timezone.utc),
+                    )
+                    for item_date in trade_dates
+                    if base_date <= item_date <= as_of_date
+                ][:6]
+
+            report = run_daily_update(
+                trade_date=trade_dates[-1],
+                history_days=60,
+                top_targets=2,
+                similar_limit=0,
+                max_tracked_kline_fetches=20,
+                skip_import=True,
+                refresh_enrichment=False,
+                limit_up_repository=limit_repo,
+                first_board_repository=first_board_repo,
+                post_bar_collector=fake_bar_collector,
+            )
+
+            self.assertEqual(report.persisted_top_predictions, 12)
+            self.assertEqual(report.tracked_candidate_references, 12)
+            self.assertEqual(report.tracked_cache_ready, 12)
+            self.assertEqual(report.tracked_cache_complete, 2)
+            self.assertEqual(report.tracked_cache_missing, 0)
+            self.assertEqual(
+                len(first_board_repo.list_predictions_between(trade_dates[0], trade_dates[-1])),
+                12,
+            )
+            self.assertEqual(
+                len(first_board_repo.list_post_bars(events[0].symbol, trade_dates[0], limit=6)),
+                6,
+            )
+            self.assertEqual(
+                len(first_board_repo.list_post_bars(events[-1].symbol, trade_dates[-1], limit=6)),
+                1,
+            )
         finally:
             self._cleanup_database(database_path)
 

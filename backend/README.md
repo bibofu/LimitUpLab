@@ -34,14 +34,49 @@ LLM integration is disabled by default. When disabled, the Explanation Agent
 uses a deterministic template fallback, so local development still works
 without external API access.
 
-To enable a DeepSeek/OpenAI-compatible provider:
+For local development, copy the example env file and fill in your own API key:
 
 ```powershell
-$env:LIMITUPLAB_LLM_ENABLED = "true"
-$env:LIMITUPLAB_LLM_BASE_URL = "https://api.deepseek.com"
-$env:LIMITUPLAB_LLM_MODEL = "deepseek-v4-flash"
-$env:DEEPSEEK_API_KEY = "<your-api-key>"
-.\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
+cd backend
+Copy-Item .env.example .env
+notepad .env
+```
+
+The backend loads `backend/.env` automatically. A typical DeepSeek-compatible
+configuration looks like this:
+
+```powershell
+LIMITUPLAB_LLM_ENABLED=true
+LIMITUPLAB_LLM_BASE_URL=https://api.deepseek.com
+LIMITUPLAB_LLM_MODEL=deepseek-v4-flash
+LIMITUPLAB_LLM_THINKING_ENABLED=false
+LIMITUPLAB_LLM_PLANNER_MAX_TOKENS=320
+LIMITUPLAB_LLM_ANSWER_MAX_TOKENS=480
+DEEPSEEK_API_KEY=<your-api-key>
+```
+
+Chat uses non-thinking mode by default because tool selection and grounded
+summaries are latency-sensitive structured tasks. Planner, local-tool and
+answer latency plus prompt sizes are returned in `response.performance`.
+
+If your network requires a local proxy, set `LIMITUPLAB_PROXY_URL` in `.env`.
+The backend will apply it to `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` when
+those process variables are not already set.
+
+On Windows, prefer the startup script below. It also reads a `DEEPSEEK_API_KEY`
+from the current process, User environment, or Machine environment when the key
+is not present in `.env`:
+
+```powershell
+cd backend
+.\scripts\start_backend.ps1 -Port 8001
+```
+
+If PowerShell script execution is disabled on Windows, use the wrapper instead:
+
+```powershell
+cd backend
+.\scripts\start_backend.cmd -Port 8001
 ```
 
 Do not commit real API keys to the repository.
@@ -54,6 +89,12 @@ created at:
 ```text
 backend/data/limituplab.sqlite
 ```
+
+Agent structured responses use a small SQLite cache table (`agent_cache`) to
+avoid repeated computation under concurrent website usage. The MVP currently
+caches first-board ratings, rating backtests, and rating evaluations for a short
+TTL. Cache keys include request parameters and a local event-data signature, so
+freshly imported market data naturally produces new cache entries.
 
 If the database is empty, the development server seeds it with the bundled
 sample events so the dashboard remains usable after a fresh clone.
@@ -88,6 +129,18 @@ data:
 .\.venv\Scripts\python.exe scripts\update_daily_data.py --date 20260810 --skip-import
 ```
 
+Before local demos, run the development health check. With `--ensure-data`, it
+checks the expected local data date based on China market hours and runs the
+daily update pipeline when the local database is stale:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe scripts\dev_check.py --ensure-data
+```
+
+The check writes a local report to `backend/data/dev_check_report.json`, which is
+ignored by git.
+
 Set `LIMITUPLAB_DATABASE_PATH` to use a different SQLite file:
 
 ```bash
@@ -109,8 +162,11 @@ LIMITUPLAB_DATABASE_PATH=/tmp/limituplab.sqlite uvicorn app.main:app --reload --
 - `GET /api/analysis/post-performance` - next-day and short-window return stats
 - `GET /api/agents/first-board-ratings` - explainable first-board candidate ratings
 - `GET /api/agents/data-health` - Agent raw-data, feature and similar-case cache health
+- `GET /api/agents/system-health` - local runtime health for data freshness, LLM configuration and eval status
 - `GET /api/agents/rating-backtest` - rating bucket backtest and self-evaluation summary
 - `GET /api/agents/first-board-critic` - critic review for one first-board rating
+- `GET /api/agents/rating-evaluation` - Evaluation Agent review for saved rating predictions
+- `GET /api/agents/runs` - recent Agent run traces for observability
 - `GET /api/agents/first-board-similar-cases` - historical similar first-board cases
 - `POST /api/agents/chat` - tool-grounded Agent chat and LLM/template explanations
 - `GET /api/stocks/{symbol}/kline?days=5` - recent daily K-line bars
@@ -133,5 +189,37 @@ endpoint is intended for after-close review of the latest persisted trading day.
 cd backend
 python -m unittest discover -s tests
 ```
+
+## Agent Evals
+
+The chat Agent has a deterministic regression suite for common questions and
+safety boundaries. It checks intent routing, required/forbidden tool calls,
+answer facts, warnings, and investment-advice guardrails without depending on a
+live LLM provider:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py
+```
+
+Eval cases live in `tests/fixtures/agent_eval_cases.json`.
+
+To sample the configured live LLM planner and capture cases where the model
+chooses weak tools or needs backend repair:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py --mode live-llm
+```
+
+Live eval writes failed or backend-repaired samples to
+`backend/data/agent_eval_failures.json` by default. This file is local output and
+is ignored by git. Use `--fail-on-failures` when you explicitly want live eval
+failures to return a non-zero exit code.
+
+The chat Agent also exposes a general `limit_up_events` internal tool for
+same-day limit-up questions such as continued-board lists, board-height filters,
+intraday-broken limit-up events, and topic/industry filters. This keeps broad
+limit-up questions from being incorrectly routed through first-board-only tools.
 
 

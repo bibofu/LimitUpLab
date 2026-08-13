@@ -1,3 +1,4 @@
+from app.repositories.agent_cache_repository import SQLiteAgentCacheRepository
 from app.repositories.agent_run_repository import SQLiteAgentRunRepository
 from app.repositories.first_board_repository import SQLiteFirstBoardRepository
 from app.repositories.limit_up_repository import (
@@ -10,6 +11,7 @@ from app.repositories.limit_up_repository import (
 __all__ = [
     "LimitUpRepository",
     "SampleLimitUpRepository",
+    "SQLiteAgentCacheRepository",
     "SQLiteAgentRunRepository",
     "SQLiteFirstBoardRepository",
     "SQLiteLimitUpRepository",

@@ -60,18 +60,25 @@ class SQLiteAgentRunRepository:
     def list_recent_runs(self, session_id: str, limit: int = 10) -> list[AgentRun]:
         """Return recent runs for a chat session, newest first."""
 
+        return self.list_runs(session_id=session_id, limit=limit)
+
+    def list_runs(self, session_id: str | None = None, limit: int = 10) -> list[AgentRun]:
+        """Return recent runs, optionally scoped to one session."""
+
         connection = connect(self.database_path)
         try:
             initialize_database(connection)
+            where_clause = "WHERE session_id = ?" if session_id else ""
+            params: tuple[object, ...] = (session_id, limit) if session_id else (limit,)
             rows = connection.execute(
-                """
+                f"""
                 SELECT *
                 FROM agent_runs
-                WHERE session_id = ?
+                {where_clause}
                 ORDER BY started_at DESC
                 LIMIT ?
                 """,
-                (session_id, limit),
+                params,
             ).fetchall()
         finally:
             connection.close()

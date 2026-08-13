@@ -1,17 +1,22 @@
 """Tool-grounded first-board chat agent."""
 
 import json
+import os
 import re
 from datetime import date
-from typing import Any
+from time import perf_counter
+from typing import Any, Callable
 
 from app.agents.explanation import explain_first_board_rating
 from app.agents.tools import AgentToolRegistry, ToolResult
 from app.models import (
     AgentChatRequest,
+    AgentChatPerformance,
     AgentChatResponse,
     AgentToolTrace,
     AgentRun,
+    build_agent_evidence_cards,
+    build_agent_tool_policy_audit,
     FirstBoardRating,
     FirstBoardRatingsResponse,
     LimitUpEvent,
@@ -41,6 +46,7 @@ SUPPORTED_INTENTS = {
     "first_board_filter_similar",
     "first_board_context_top",
     "first_board_sector_summary",
+    "limit_up_query",
     "today_summary",
     "llm_explanation",
 }
@@ -67,9 +73,9 @@ KEYWORDS = {
     "rating_explain": ("\u4e3a\u4ec0\u4e48", "\u8bc4\u5206", "\u8bc4\u7ea7", "\u9ad8\u5206", "\u4f4e\u5206", "score"),
     "first_board_filter": ("\u76f8\u5173", "\u884c\u4e1a", "\u9898\u6750", "\u533b\u836f", "\u533b\u7597", "\u5236\u836f", "\u836f\u4e1a", "\u751f\u7269"),
     "first_board_sector_summary": ("\u677f\u5757", "\u884c\u4e1a", "\u4e3b\u8981\u677f\u5757", "\u54ea\u4e9b\u677f\u5757"),
+    "limit_up_query": ("\u6da8\u505c", "\u8fde\u677f", "\u4e8c\u8fde\u677f", "\u4e09\u8fde\u677f", "\u6700\u9ad8\u677f", "\u68af\u961f", "\u70b8\u677f"),
     "today_summary": ("\u603b\u7ed3", "\u4eca\u5929", "\u9996\u677f", "\u5019\u9009", "summary"),
 }
-
 
 class _FirstBoardFilterQuery:
     """Structured filter parsed from a first-board natural-language question."""
@@ -127,6 +133,8 @@ def answer_first_board_chat(
     repository: SQLiteFirstBoardRepository | None = None,
     recent_runs: list[AgentRun] | None = None,
     llm_provider: LLMProvider | None = None,
+    progress_callback: Callable[[str, str], None] | None = None,
+    answer_delta_callback: Callable[[str], None] | None = None,
 ) -> AgentChatResponse:
     """Answer a user question with LLM-planned tools and deterministic fallback."""
 
@@ -138,6 +146,8 @@ def answer_first_board_chat(
         tools=tools,
         context=context,
         provider=llm_provider,
+        progress_callback=progress_callback,
+        answer_delta_callback=answer_delta_callback,
     )
     if llm_response is not None:
         return llm_response
@@ -166,6 +176,11 @@ def answer_first_board_chat(
     if trade_date and not _has_events_for_date(events, trade_date):
         return _with_plan_trace(
             _answer_missing_trade_date(request, trade_date, events),
+            plan,
+        )
+    if intent == "limit_up_query":
+        return _with_plan_trace(
+            _answer_limit_up_query(request, tools, trade_date, first_board_filter),
             plan,
         )
 
@@ -301,18 +316,36 @@ def _answer_with_llm_tool_agent(
     tools: AgentToolRegistry,
     context: "_SessionContext",
     provider: LLMProvider | None = None,
+    progress_callback: Callable[[str, str], None] | None = None,
+    answer_delta_callback: Callable[[str], None] | None = None,
 ) -> AgentChatResponse | None:
     """Let the LLM choose tools first, then answer from executed tool facts."""
 
+    deterministic = _deterministic_pre_llm_response(request, tools.events)
+    if deterministic is not None:
+        return deterministic
+
+    agent_started_at = perf_counter()
     active_provider = provider or get_llm_provider()
+    if progress_callback:
+        progress_callback("planning", "正在理解问题并选择所需工具")
+    planner_system_prompt = _tool_planner_system_prompt(tools.schema_prompt())
+    planner_user_prompt = _tool_planner_user_prompt(request, context, tools.events)
+    planner_started_at = perf_counter()
     try:
         plan_result = active_provider.generate(
-            _tool_planner_system_prompt(tools.schema_prompt()),
-            _tool_planner_user_prompt(request, context, tools.events),
+            planner_system_prompt,
+            planner_user_prompt,
         )
         tool_plan = _parse_json_object(plan_result.content)
     except Exception:
         return None
+    planner_duration_ms = plan_result.duration_ms or round(
+        (perf_counter() - planner_started_at) * 1000
+    )
+    planner_prompt_chars = plan_result.prompt_chars or (
+        len(planner_system_prompt) + len(planner_user_prompt)
+    )
 
     safety = str(tool_plan.get("safety", "normal"))
     intent = str(tool_plan.get("intent_label") or "llm_tool_agent")
@@ -325,22 +358,136 @@ def _answer_with_llm_tool_agent(
 
     tool_calls = _normalize_tool_calls(tool_plan.get("tool_calls"))
     direct_answer = str(tool_plan.get("answer_directly") or "").strip()
+    if not tool_calls and _looks_like_general_limit_up_question(request.message):
+        tool_calls = [
+            {
+                "name": "limit_up_events",
+                "arguments": _limit_up_query_arguments_from_message(request),
+            }
+        ]
+        direct_answer = ""
+    if (
+        not tool_calls
+        and direct_answer
+        and _looks_like_first_board_data_question(request.message)
+    ):
+        tool_calls = [
+            {
+                "name": "first_board_ratings",
+                "arguments": {
+                    "trade_date": (
+                        request.trade_date.isoformat() if request.trade_date else None
+                    )
+                },
+            }
+        ]
+        direct_answer = ""
     if not tool_calls and direct_answer:
-        return AgentChatResponse(
-            session_id=request.session_id,
-            intent=intent,
-            answer=_ensure_safety_boundary(direct_answer),
-            tool_calls=["llm_planner_direct_answer"],
-            tool_results=[
-                _llm_plan_trace(tool_plan, plan_result.model, plan_result.provider)
-            ],
-            references=[],
-            warnings=[_safety_warning()],
-            generated_by=CHAT_AGENT_VERSION,
+        requested_date = _extract_trade_date(request.message)
+        if requested_date and not _has_events_for_date(tools.events, requested_date):
+            direct_answer = ""
+            tool_calls = []
+        else:
+            return AgentChatResponse(
+                session_id=request.session_id,
+                intent=intent,
+                answer=_ensure_safety_boundary(direct_answer),
+                tool_calls=["llm_planner_direct_answer"],
+                tool_results=[
+                    _llm_plan_trace(
+                        tool_plan,
+                        plan_result.model,
+                        plan_result.provider,
+                        planner_duration_ms,
+                        planner_prompt_chars,
+                        plan_result.completion_chars,
+                    )
+                ],
+                references=[],
+                warnings=[_safety_warning()],
+                performance=AgentChatPerformance(
+                    planner_duration_ms=planner_duration_ms,
+                    total_duration_ms=round((perf_counter() - agent_started_at) * 1000),
+                    planner_prompt_chars=planner_prompt_chars,
+                ),
+                generated_by=CHAT_AGENT_VERSION,
+            )
+    if not tool_calls and not direct_answer and _extract_trade_date(request.message):
+        requested_date = _extract_trade_date(request.message)
+        if requested_date and not _has_events_for_date(tools.events, requested_date):
+            available_dates = sorted({event.trade_date for event in tools.events}, reverse=True)
+            answer = _answer_missing_trade_date(request, requested_date, tools.events)
+            return AgentChatResponse(
+                session_id=request.session_id,
+                intent="data_availability",
+                answer=answer.answer,
+                tool_calls=["llm_tool_planner", "limit_up_event_dates"],
+                tool_results=[
+                    _llm_plan_trace(
+                        tool_plan,
+                        plan_result.model,
+                        plan_result.provider,
+                        planner_duration_ms,
+                        planner_prompt_chars,
+                        plan_result.completion_chars,
+                    ),
+                    AgentToolTrace(
+                        name="limit_up_event_dates",
+                        input={"requested_trade_date": requested_date.isoformat()},
+                        summary=f"本地没有 {requested_date.isoformat()}，已返回可用交易日列表。",
+                        output={
+                            "requested_trade_date": requested_date.isoformat(),
+                            "latest_local_trade_date": (
+                                available_dates[0].isoformat() if available_dates else None
+                            ),
+                            "available_trade_dates": [
+                                item.isoformat() for item in available_dates[:20]
+                            ],
+                        },
+                    ),
+                ],
+                references=[f"missing_trade_date={requested_date.isoformat()}"],
+                warnings=answer.warnings,
+                performance=AgentChatPerformance(
+                    planner_duration_ms=planner_duration_ms,
+                    total_duration_ms=round((perf_counter() - agent_started_at) * 1000),
+                    planner_prompt_chars=planner_prompt_chars,
+                ),
+                generated_by=CHAT_AGENT_VERSION,
+            )
+    if (
+        _looks_like_general_limit_up_question(request.message)
+        and not any(call.get("name") == "limit_up_events" for call in tool_calls)
+    ):
+        tool_calls.insert(
+            0,
+            {
+                "name": "limit_up_events",
+                "arguments": _limit_up_query_arguments_from_message(request),
+            },
         )
 
+    tools_started_at = perf_counter()
+    if progress_callback:
+        selected_tools = "、".join(
+            str(call.get("name")) for call in tool_calls if call.get("name")
+        )
+        progress_callback(
+            "tools",
+            f"正在查询 {selected_tools}" if selected_tools else "正在查询本地事实数据",
+        )
     execution = _execute_llm_tool_calls(tool_calls, tools)
     _ensure_similar_case_tool_if_needed(
+        request=request,
+        tools=tools,
+        execution=execution,
+    )
+    _ensure_rating_tool_if_needed(
+        request=request,
+        tools=tools,
+        execution=execution,
+    )
+    _ensure_data_availability_tool_if_needed(
         request=request,
         tools=tools,
         execution=execution,
@@ -355,16 +502,45 @@ def _answer_with_llm_tool_agent(
         tools=tools,
         execution=execution,
     )
+    _ensure_evaluation_tool_if_needed(
+        request=request,
+        tools=tools,
+        execution=execution,
+    )
+    _ensure_review_tool_if_needed(
+        request=request,
+        tools=tools,
+        execution=execution,
+    )
+    tool_duration_ms = round((perf_counter() - tools_started_at) * 1000)
     if not execution["tool_results"] and not direct_answer:
         return None
 
-    fallback = direct_answer or TEXT["unknown"]
+    fallback = direct_answer or _template_answer_from_tool_facts(
+        request=request,
+        intent=intent,
+        facts=execution["facts"],
+    )
+    answer_system_prompt = _tool_answer_system_prompt()
+    answer_user_prompt = _tool_answer_user_prompt(request, tool_plan, execution["facts"])
+    answer_started_at = perf_counter()
+    final_result = None
+    if progress_callback:
+        progress_callback("answering", "正在基于工具事实生成回答")
     try:
-        final_result = active_provider.generate(
-            _tool_answer_system_prompt(),
-            _tool_answer_user_prompt(request, tool_plan, execution["facts"]),
-        )
+        if answer_delta_callback:
+            final_result = active_provider.stream_generate(
+                answer_system_prompt,
+                answer_user_prompt,
+                answer_delta_callback,
+            )
+        else:
+            final_result = active_provider.generate(
+                answer_system_prompt,
+                answer_user_prompt,
+            )
         answer = _ensure_safety_boundary(final_result.content)
+        answer = _ensure_explicit_symbol_mentioned(request, answer)
         source = "llm_tool_answer"
         warnings = [_safety_warning()]
         if _contains_forbidden_terms(answer):
@@ -376,11 +552,22 @@ def _answer_with_llm_tool_agent(
             ]
     except Exception as error:
         answer = _ensure_safety_boundary(fallback)
+        answer = _ensure_explicit_symbol_mentioned(request, answer)
         source = "template_general_answer"
         warnings = [
             _safety_warning(),
             f"LLM unavailable during final answer; template fallback used: {error}",
         ]
+    answer_duration_ms = (
+        final_result.duration_ms
+        if final_result and final_result.duration_ms
+        else round((perf_counter() - answer_started_at) * 1000)
+    )
+    answer_prompt_chars = (
+        final_result.prompt_chars
+        if final_result and final_result.prompt_chars
+        else len(answer_system_prompt) + len(answer_user_prompt)
+    )
 
     return AgentChatResponse(
         session_id=request.session_id,
@@ -392,11 +579,26 @@ def _answer_with_llm_tool_agent(
             source,
         ],
         tool_results=[
-            _llm_plan_trace(tool_plan, plan_result.model, plan_result.provider),
+            _llm_plan_trace(
+                tool_plan,
+                plan_result.model,
+                plan_result.provider,
+                planner_duration_ms,
+                planner_prompt_chars,
+                plan_result.completion_chars,
+            ),
             *execution["tool_results"],
         ],
         references=execution["references"],
         warnings=warnings,
+        performance=AgentChatPerformance(
+            planner_duration_ms=planner_duration_ms,
+            tool_duration_ms=tool_duration_ms,
+            answer_duration_ms=answer_duration_ms,
+            total_duration_ms=round((perf_counter() - agent_started_at) * 1000),
+            planner_prompt_chars=planner_prompt_chars,
+            answer_prompt_chars=answer_prompt_chars,
+        ),
         generated_by=CHAT_AGENT_VERSION,
     )
 
@@ -410,6 +612,11 @@ def _tool_planner_system_prompt(tool_schema_prompt: str) -> str:
         "unless the question is greeting, capability, or out of scope. "
         "Return only valid JSON. No markdown. "
         f"Available tools are described as JSON schemas: {tool_schema_prompt}. "
+        "Use YYYY-MM-DD for all dates. "
+        "For capability questions, answer_directly must mention LimitUpLab. "
+        "For rating explanation questions, first call first_board_ratings before critic tools. "
+        "For review questions about recent high-score picks, model performance, misses, or scoring taste, call review_high_score_picks. "
+        "For unavailable date/data-availability questions, do not answer directly; let backend verify local dates. "
         "Do not provide direct trading instructions, position sizing, target prices, or return promises. "
         "If the user asks for those, set safety to refuse_trade_instruction. "
         "JSON schema: {"
@@ -457,7 +664,87 @@ def _tool_planner_user_prompt(
             "matched_symbols": context.matched_symbols[:20],
         },
     }
-    return json.dumps(context_payload, ensure_ascii=False)
+    return json.dumps(context_payload, ensure_ascii=False, separators=(",", ":"))
+
+
+def _template_answer_from_tool_facts(
+    *,
+    request: AgentChatRequest,
+    intent: str,
+    facts: dict[str, Any],
+) -> str:
+    """Build a useful fallback answer from tool facts when final LLM times out."""
+
+    if "first_board_ratings" in facts:
+        ratings = facts["first_board_ratings"]
+        candidates = ratings.get("candidates", []) if isinstance(ratings, dict) else []
+        lines = [f"{ratings.get('trade_date')} 首板候选评分靠前的股票如下："]
+        for index, item in enumerate(candidates[:8], start=1):
+            fact = item.get("facts", {}) if isinstance(item, dict) else {}
+            lines.append(
+                f"{index}. {fact.get('name')}({fact.get('symbol')}) "
+                f"{item.get('score')}分/{item.get('rating')}，"
+                f"行业 {fact.get('industry')}，首封 {str(fact.get('first_limit_time', ''))[:5]}，"
+                f"炸板 {fact.get('break_count')} 次。"
+            )
+        if not candidates:
+            lines.append("当前没有满足过滤条件的首板候选。")
+        lines.append(TEXT["safety"])
+        return "\n".join(lines)
+
+    if "limit_up_events" in facts:
+        payload = facts["limit_up_events"]
+        events = payload.get("events", []) if isinstance(payload, dict) else []
+        lines = [f"{payload.get('trade_date')} 查询到 {len(events)} 条匹配涨停事件："]
+        for item in events[:12]:
+            lines.append(
+                f"- {item.get('name')}({item.get('symbol')}) {item.get('board_height')}板，"
+                f"行业 {item.get('industry')}，炸板 {item.get('break_count')} 次。"
+            )
+        lines.append(TEXT["safety"])
+        return "\n".join(lines)
+
+    if "review_high_score_picks" in facts:
+        review = facts["review_high_score_picks"]
+        lines = [
+            f"{review.get('start_date')} 至 {review.get('end_date')} 高分首板复盘：",
+            f"样本 {review.get('sample_size')} 只，成功 {review.get('success_count')}，"
+            f"失败 {review.get('failed_count')}，待观察 {review.get('pending_count')}。",
+        ]
+        for title, key in (
+            ("主要发现", "main_findings"),
+            ("成功共性", "successful_patterns"),
+            ("失败共性", "failed_patterns"),
+            ("审美调整", "adjustment_suggestions"),
+        ):
+            values = review.get(key) or []
+            if values:
+                lines.append(f"{title}：{'; '.join(str(item) for item in values[:3])}")
+        lines.append(TEXT["safety"])
+        return "\n".join(lines)
+
+    if "rating_evaluation" in facts:
+        evaluation = facts["rating_evaluation"]
+        lines = [
+            f"{evaluation.get('start_date')} 至 {evaluation.get('end_date')} 评分复盘："
+            f"共 {evaluation.get('prediction_count')} 条预测，"
+            f"{evaluation.get('outcome_ready_count')} 条已有后续走势。",
+        ]
+        for item in evaluation.get("summary", [])[:4]:
+            lines.append(f"- {item}")
+        lines.append(TEXT["safety"])
+        return "\n".join(lines)
+
+    if "market_summary" in facts:
+        summary = facts["market_summary"]
+        return (
+            f"{summary.get('trade_date')} 本地数据显示，涨停 {summary.get('limit_up_count')} 只，"
+            f"首板 {summary.get('first_board_count')} 只，连板 {summary.get('continued_board_count')} 只，"
+            f"炸板率 {summary.get('failed_limit_up_rate')}，最高连板 {summary.get('max_board_height')} 板。\n"
+            f"{TEXT['safety']}"
+        )
+
+    return TEXT["unknown"]
 
 
 def _tool_answer_system_prompt() -> str:
@@ -466,8 +753,10 @@ def _tool_answer_system_prompt() -> str:
     return (
         "You are LimitUpLab's A-share first-board research agent. "
         "Answer in Chinese using only the executed tool facts. "
+        "When mentioning dates, include ISO format YYYY-MM-DD even if also using Chinese date wording. "
         "If the facts are insufficient, say exactly what is missing and what tool/data "
         "would be needed. Keep the answer concise, structured, and useful. "
+        "Usually stay within 600 Chinese characters and at most 8 list items. "
         "Do not provide direct trading instructions, position sizing, target prices, "
         "or return promises."
     )
@@ -482,10 +771,15 @@ def _tool_answer_user_prompt(
 
     payload = {
         "user_question": request.message,
-        "tool_plan": tool_plan,
+        "intent": tool_plan.get("intent_label"),
+        "tools_used": [
+            call.get("name")
+            for call in tool_plan.get("tool_calls", [])
+            if isinstance(call, dict)
+        ],
         "executed_tool_facts": facts,
     }
-    return json.dumps(payload, ensure_ascii=False)
+    return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
 def _parse_json_object(content: str) -> dict[str, Any]:
@@ -556,6 +850,54 @@ def _execute_llm_tool_calls(
             traces.append(result.trace())
             call_names.append(name)
             references.append(f"trade_date={summary.trade_date.isoformat()}")
+        elif name == "limit_up_events":
+            trade_date = _parse_optional_date(arguments.get("trade_date"))
+            if trade_date and not _has_events_for_date(tools.events, trade_date):
+                available_dates = sorted(
+                    {event.trade_date for event in tools.events},
+                    reverse=True,
+                )
+                facts["limit_up_events_error"] = {
+                    "requested_trade_date": trade_date.isoformat(),
+                    "reason": "No local limit-up events for requested date.",
+                    "latest_local_trade_date": (
+                        available_dates[0].isoformat() if available_dates else None
+                    ),
+                    "available_trade_dates": [
+                        item.isoformat() for item in available_dates[:20]
+                    ],
+                }
+                call_names.append(name)
+                references.append(f"missing_trade_date={trade_date.isoformat()}")
+                traces.append(
+                    _tool_error_trace(
+                        name=name,
+                        tool_input=arguments,
+                        summary=f"{trade_date.isoformat()} 本地暂无涨停事件数据。",
+                        error="No local limit-up events for requested date.",
+                    )
+                )
+                continue
+            board_height = _parse_optional_int(arguments.get("board_height"))
+            min_board_height = _parse_optional_int(arguments.get("min_board_height"))
+            limit = _parse_optional_int(arguments.get("limit")) or 30
+            result = tools.limit_up_events(
+                trade_date=trade_date,
+                board_height=board_height,
+                min_board_height=min_board_height,
+                query=_optional_str(arguments.get("query")),
+                broken_only=_parse_optional_bool(arguments.get("broken_only")),
+                closed_only=_parse_optional_bool(arguments.get("closed_only")),
+                limit=limit,
+            )
+            facts["limit_up_events"] = {
+                "trade_date": result.trace_output.get("trade_date"),
+                "matched_count": len(result.output),
+                "events": [_event_fact(event) for event in result.output],
+            }
+            traces.append(result.trace())
+            call_names.append(name)
+            references.append(f"trade_date={result.trace_output.get('trade_date')}")
         elif name == "first_board_ratings":
             trade_date = _parse_optional_date(arguments.get("trade_date"))
             if trade_date and not _has_events_for_date(tools.events, trade_date):
@@ -732,6 +1074,73 @@ def _execute_llm_tool_calls(
                     f"critic_verdict={response.verdict}",
                 ]
             )
+        elif name == "rating_evaluation":
+            available_dates = sorted({event.trade_date for event in tools.events})
+            if not available_dates:
+                facts["rating_evaluation_error"] = "No local limit-up events available."
+                traces.append(
+                    _tool_error_trace(
+                        name=name,
+                        tool_input=arguments,
+                        summary="No local limit-up events; evaluation cannot run.",
+                        error="No local limit-up events available.",
+                    )
+                )
+                continue
+            end_date = _parse_optional_date(arguments.get("end_date")) or available_dates[-1]
+            start_date = _parse_optional_date(arguments.get("start_date")) or available_dates[
+                max(0, len(available_dates) - 20)
+            ]
+            limit = int(arguments.get("limit") or 30)
+            result = tools.rating_evaluation(
+                start_date=start_date,
+                end_date=end_date,
+                limit=max(1, min(limit, 100)),
+            )
+            response = result.output
+            facts["rating_evaluation"] = response.model_dump(mode="json")
+            traces.append(result.trace())
+            call_names.append(name)
+            references.extend(
+                [
+                    f"start_date={response.start_date.isoformat()}",
+                    f"end_date={response.end_date.isoformat()}",
+                ]
+            )
+        elif name == "review_high_score_picks":
+            available_dates = sorted({event.trade_date for event in tools.events})
+            if not available_dates:
+                facts["review_high_score_picks_error"] = "No local limit-up events available."
+                traces.append(
+                    _tool_error_trace(
+                        name=name,
+                        tool_input=arguments,
+                        summary="No local limit-up events; Review Agent cannot run.",
+                        error="No local limit-up events available.",
+                    )
+                )
+                continue
+            end_date = _parse_optional_date(arguments.get("end_date")) or available_dates[-1]
+            start_date = _parse_optional_date(arguments.get("start_date")) or available_dates[
+                max(0, len(available_dates) - 20)
+            ]
+            min_score = float(arguments.get("min_score") or 85)
+            result = tools.review_high_score_picks(
+                start_date=start_date,
+                end_date=end_date,
+                min_score=max(0, min(min_score, 100)),
+            )
+            response = result.output
+            facts["review_high_score_picks"] = response.model_dump(mode="json")
+            traces.append(result.trace())
+            call_names.append(name)
+            references.extend(
+                [
+                    f"start_date={response.start_date.isoformat()}",
+                    f"end_date={response.end_date.isoformat()}",
+                    f"review_sample_size={response.sample_size}",
+                ]
+            )
         else:
             facts[f"{name}_error"] = "Unsupported tool requested by LLM planner."
             traces.append(
@@ -749,6 +1158,88 @@ def _execute_llm_tool_calls(
         "tool_call_names": call_names,
         "references": list(dict.fromkeys(references)),
     }
+
+
+def _deterministic_pre_llm_response(
+    request: AgentChatRequest,
+    events: list[LimitUpEvent],
+) -> AgentChatResponse | None:
+    """Handle stable product and availability questions before LLM planning."""
+
+    plan = _build_agent_plan(request=request, context=_SessionContext())
+    if plan.intent == "capability_intro":
+        return _with_plan_trace(
+            _answer_static_text(request, "capability_intro", TEXT["capability"]),
+            plan,
+        )
+    if plan.intent == "market_schedule":
+        latest_date = max((event.trade_date for event in events), default=date.today())
+        return _with_plan_trace(_answer_market_schedule(request, latest_date), plan)
+    if plan.trade_date and not _has_events_for_date(events, plan.trade_date):
+        return _with_plan_trace(
+            _answer_missing_trade_date(request, plan.trade_date, events),
+            plan,
+        )
+    return None
+
+
+def _ensure_rating_tool_if_needed(
+    request: AgentChatRequest,
+    tools: AgentToolRegistry,
+    execution: dict[str, Any],
+) -> None:
+    """Repair planner omissions for rating explanation questions."""
+
+    if not _looks_like_rating_explain_question(request.message):
+        return
+    facts = execution["facts"]
+    if "first_board_ratings" in facts or "first_board_ratings_error" in facts:
+        return
+
+    trade_date = request.trade_date or _extract_trade_date(request.message)
+    if trade_date and not _has_events_for_date(tools.events, trade_date):
+        return
+    result = tools.first_board_ratings(trade_date=trade_date)
+    ratings = result.output
+    facts["first_board_ratings"] = _compact_ratings_facts(ratings)
+    execution["tool_results"].insert(0, result.trace())
+    execution["tool_call_names"].insert(0, "first_board_ratings")
+    execution["references"] = list(
+        dict.fromkeys([*execution["references"], f"trade_date={ratings.trade_date.isoformat()}"])
+    )
+
+
+def _ensure_data_availability_tool_if_needed(
+    request: AgentChatRequest,
+    tools: AgentToolRegistry,
+    execution: dict[str, Any],
+) -> None:
+    """Repair planner direct answers for missing requested dates."""
+
+    requested_date = _extract_trade_date(request.message)
+    if requested_date is None or _has_events_for_date(tools.events, requested_date):
+        return
+    facts = execution["facts"]
+    if "limit_up_event_dates" in facts:
+        return
+    available_dates = sorted({event.trade_date for event in tools.events}, reverse=True)
+    facts["limit_up_event_dates"] = {
+        "requested_trade_date": requested_date.isoformat(),
+        "latest_local_trade_date": available_dates[0].isoformat() if available_dates else None,
+        "available_trade_dates": [item.isoformat() for item in available_dates[:20]],
+    }
+    execution["tool_results"].append(
+        AgentToolTrace(
+            name="limit_up_event_dates",
+            input={"requested_trade_date": requested_date.isoformat()},
+            summary=f"本地没有 {requested_date.isoformat()}，已返回可用交易日列表。",
+            output=facts["limit_up_event_dates"],
+        )
+    )
+    execution["tool_call_names"].append("limit_up_event_dates")
+    execution["references"] = list(
+        dict.fromkeys([*execution["references"], f"missing_trade_date={requested_date.isoformat()}"])
+    )
 
 
 def _ensure_similar_case_tool_if_needed(
@@ -949,6 +1440,101 @@ def _ensure_critic_tool_if_needed(
     )
 
 
+def _ensure_evaluation_tool_if_needed(
+    request: AgentChatRequest,
+    tools: AgentToolRegistry,
+    execution: dict[str, Any],
+) -> None:
+    """Repair planner omissions for prediction evaluation questions."""
+
+    if _looks_like_review_question(request.message) or not _looks_like_evaluation_question(request.message):
+        return
+    facts = execution["facts"]
+    if "rating_evaluation" in facts or "rating_evaluation_error" in facts:
+        return
+
+    available_dates = sorted({event.trade_date for event in tools.events})
+    if not available_dates:
+        facts["rating_evaluation_error"] = "No local limit-up events available."
+        execution["tool_results"].append(
+            _tool_error_trace(
+                name="rating_evaluation",
+                tool_input={},
+                summary="No local limit-up events; evaluation cannot run.",
+                error="No local limit-up events available.",
+            )
+        )
+        execution["tool_call_names"].append("rating_evaluation")
+        return
+
+    result = tools.rating_evaluation(
+        start_date=available_dates[max(0, len(available_dates) - 20)],
+        end_date=available_dates[-1],
+        limit=30,
+    )
+    response = result.output
+    facts["rating_evaluation"] = response.model_dump(mode="json")
+    execution["tool_results"].append(result.trace())
+    execution["tool_call_names"].append("rating_evaluation")
+    execution["references"] = list(
+        dict.fromkeys(
+            [
+                *execution["references"],
+                f"start_date={response.start_date.isoformat()}",
+                f"end_date={response.end_date.isoformat()}",
+            ]
+        )
+    )
+
+
+def _ensure_review_tool_if_needed(
+    request: AgentChatRequest,
+    tools: AgentToolRegistry,
+    execution: dict[str, Any],
+) -> None:
+    """Repair planner omissions for high-score pick review questions."""
+
+    if not _looks_like_review_question(request.message):
+        return
+    facts = execution["facts"]
+    if "review_high_score_picks" in facts or "review_high_score_picks_error" in facts:
+        return
+
+    available_dates = sorted({event.trade_date for event in tools.events})
+    if not available_dates:
+        facts["review_high_score_picks_error"] = "No local limit-up events available."
+        execution["tool_results"].append(
+            _tool_error_trace(
+                name="review_high_score_picks",
+                tool_input={},
+                summary="No local limit-up events; Review Agent cannot run.",
+                error="No local limit-up events available.",
+            )
+        )
+        execution["tool_call_names"].append("review_high_score_picks")
+        return
+
+    result = tools.review_high_score_picks(
+        start_date=available_dates[max(0, len(available_dates) - 20)],
+        end_date=available_dates[-1],
+        min_score=85,
+    )
+    response = result.output
+    facts["review_high_score_picks"] = response.model_dump(mode="json")
+    execution["tool_results"].append(result.trace())
+    execution["tool_call_names"].append("review_high_score_picks")
+    execution["references"] = list(
+        dict.fromkeys(
+            [
+                *execution["references"],
+                f"start_date={response.start_date.isoformat()}",
+                f"end_date={response.end_date.isoformat()}",
+                f"review_sample_size={response.sample_size}",
+            ]
+        )
+    )
+
+
 def _tool_error_trace(
     name: str,
     tool_input: dict[str, Any],
@@ -974,8 +1560,11 @@ def _compact_ratings_facts(ratings: FirstBoardRatingsResponse) -> dict[str, Any]
         "trade_date": ratings.trade_date.isoformat(),
         "candidate_count": len(ratings.candidates),
         "filtered_out_count": len(ratings.filtered_out),
-        "top_candidates": [_rating_fact(item) for item in ratings.candidates[:12]],
-        "industry_distribution": _summarize_first_board_industries(ratings.candidates),
+        "top_candidates": [
+            _rating_fact(item) if index < 5 else _brief_rating_fact(item)
+            for index, item in enumerate(ratings.candidates[:10])
+        ],
+        "industry_distribution": _summarize_first_board_industries(ratings.candidates)[:12],
     }
 
 
@@ -983,6 +1572,9 @@ def _llm_plan_trace(
     tool_plan: dict[str, Any],
     model: str,
     provider: str,
+    duration_ms: int | None = None,
+    prompt_chars: int = 0,
+    completion_chars: int = 0,
 ) -> AgentToolTrace:
     """Expose the LLM planner decision as an Agent trace."""
 
@@ -996,6 +1588,11 @@ def _llm_plan_trace(
             "tool_calls": tool_plan.get("tool_calls") or [],
         },
         summary="\u7531 LLM \u6839\u636e\u5de5\u5177\u63cf\u8ff0\u751f\u6210\u5de5\u5177\u8c03\u7528\u8ba1\u5212\u3002",
+        output={
+            "prompt_chars": prompt_chars,
+            "completion_chars": completion_chars,
+        },
+        duration_ms=duration_ms,
     )
 
 
@@ -1027,6 +1624,8 @@ def _build_agent_plan(
     if filter_query is None and _looks_like_context_pool_question(request.message):
         filter_query = context.filter_query
     intent = _detect_intent(request.message, request.intent_hint)
+    if _looks_like_general_limit_up_question(request.message):
+        intent = "limit_up_query"
     if (
         filter_query
         and context.matched_symbols
@@ -1038,15 +1637,21 @@ def _build_agent_plan(
     if (
         parsed_trade_date
         and _looks_like_first_board_data_question(request.message)
+        and _mentions_first_board_scope(request.message)
         and filter_query is None
         and intent != "first_board_sector_summary"
     ):
         intent = "today_summary"
-    if filter_query and _looks_like_first_board_data_question(request.message):
+    if (
+        filter_query
+        and _looks_like_first_board_data_question(request.message)
+        and _mentions_first_board_scope(request.message)
+    ):
         intent = "first_board_filter"
     if (
         filter_query
         and _looks_like_first_board_data_question(request.message)
+        and _mentions_first_board_scope(request.message)
         and _looks_like_similar_question(request.message)
     ):
         intent = "first_board_filter_similar"
@@ -1056,7 +1661,12 @@ def _build_agent_plan(
         symbol = context.symbol
     if intent == "rating_explain" and symbol is None and _looks_like_top_candidate_question(request.message):
         intent = "today_summary"
-    tool_steps = _plan_tool_steps(intent=intent, trade_date=trade_date, symbol=symbol)
+    tool_steps = _plan_tool_steps(
+        intent=intent,
+        trade_date=trade_date,
+        symbol=symbol,
+        message=request.message,
+    )
     if filter_query and not any(step["name"] == "first_board_filter" for step in tool_steps):
         tool_steps.append(
             {
@@ -1090,6 +1700,7 @@ def _plan_tool_steps(
     intent: str,
     trade_date: date | None,
     symbol: str | None,
+    message: str,
 ) -> list[dict]:
     """Return the deterministic tools needed for an intent."""
 
@@ -1102,6 +1713,18 @@ def _plan_tool_steps(
         return [{"name": "market_summary", "input": {}}]
     if intent == "market_context":
         return [{"name": "market_summary", "input": {}}]
+    if intent == "limit_up_query":
+        return [
+            {
+                "name": "limit_up_events",
+                "input": {
+                    "trade_date": trade_date.isoformat() if trade_date else None,
+                    "board_height": _extract_board_height(message),
+                    "min_board_height": 2 if _looks_like_all_continued_board_question(message) else None,
+                    "broken_only": _looks_like_broken_limit_up_question(message),
+                },
+            }
+        ]
     if intent == "first_board_filter":
         return [
             {"name": "first_board_ratings", "input": dated_input},
@@ -1204,6 +1827,15 @@ def _with_plan_trace(
             if step["name"] == "first_board_similar_cases":
                 step["input"]["symbol"] = plan.symbol
     response.tool_results = [plan.trace(), *response.tool_results]
+    response.evidence_cards = build_agent_evidence_cards(
+        response.tool_results,
+        response.warnings,
+    )
+    response.tool_policy = build_agent_tool_policy_audit(
+        tool_calls=response.tool_calls,
+        tool_results=response.tool_results,
+        warnings=response.warnings,
+    )
     return response
 
 
@@ -1389,6 +2021,41 @@ def _parse_optional_date(value: object) -> date | None:
         return None
 
 
+def _parse_optional_int(value: object) -> int | None:
+    """Parse an optional integer from LLM tool arguments."""
+
+    if value is None or value == "":
+        return None
+    try:
+        return int(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _parse_optional_bool(value: object) -> bool | None:
+    """Parse an optional boolean from LLM tool arguments."""
+
+    if isinstance(value, bool):
+        return value
+    if value is None or value == "":
+        return None
+    normalized = str(value).strip().lower()
+    if normalized in {"1", "true", "yes", "on"}:
+        return True
+    if normalized in {"0", "false", "no", "off"}:
+        return False
+    return None
+
+
+def _optional_str(value: object) -> str | None:
+    """Return a stripped string or None."""
+
+    if value is None:
+        return None
+    text = str(value).strip()
+    return text or None
+
+
 def _filter_query_from_context(label: str) -> _FirstBoardFilterQuery:
     """Rebuild a filter query from a saved context label."""
 
@@ -1429,6 +2096,12 @@ def _looks_like_first_board_data_question(message: str) -> bool:
     )
 
 
+def _mentions_first_board_scope(message: str) -> bool:
+    """Return whether the user explicitly asks about the first-board pool."""
+
+    return "\u9996\u677f" in message or "\u5019\u9009" in message
+
+
 def _looks_like_similar_question(message: str) -> bool:
     """Return whether a question asks for historical similar cases."""
 
@@ -1449,6 +2122,50 @@ def _looks_like_rating_backtest_question(message: str) -> bool:
             "\u8bc4\u7ea7\u8868\u73b0",
             "\u8868\u73b0\u600e\u4e48\u6837",
             "\u5931\u8d25\u6837\u672c",
+        )
+    )
+
+
+def _looks_like_evaluation_question(message: str) -> bool:
+    """Return whether a question asks for post-outcome prediction evaluation."""
+
+    return any(
+        keyword in message
+        for keyword in (
+            "\u590d\u76d8",
+            "\u9884\u6d4b",
+            "\u8868\u73b0\u600e\u4e48\u6837",
+            "\u8bc4\u5206\u6700\u9ad8\u7684\u7968\u8868\u73b0",
+            "\u6628\u5929\u8bc4\u5206\u6700\u9ad8",
+            "\u54ea\u4e9b\u8bc4\u5206\u9519\u4e86",
+            "\u8bef\u5224",
+            "\u6f0f\u5224",
+            "\u56e0\u5b50\u6709\u6548",
+            "\u56e0\u5b50\u5931\u6548",
+            "\u81ea\u6211\u6539\u8fdb",
+            "evaluation",
+        )
+    )
+
+
+def _looks_like_review_question(message: str) -> bool:
+    """Return whether a question asks the Review Agent to improve first-board taste."""
+
+    return any(
+        keyword in message
+        for keyword in (
+            "\u9ad8\u5206\u7968",
+            "\u9ad8\u8bc4\u5206",
+            "\u9996\u677f\u5ba1\u7f8e",
+            "\u5ba1\u7f8e",
+            "\u6700\u8fd1\u8bc4\u5206",
+            "\u540e\u7eed\u8d70\u52bf",
+            "\u8d70\u5f97\u600e\u4e48\u6837",
+            "\u89c4\u5219\u6539\u8fdb",
+            "\u6743\u91cd",
+            "\u504f\u5dee",
+            "\u590d\u76d8\u9ad8\u5206",
+            "\u590d\u76d8\u4e00\u4e0b\u9ad8\u5206",
         )
     )
 
@@ -1527,7 +2244,7 @@ def _looks_like_context_symbol_question(message: str) -> bool:
 def _looks_like_first_board_sector_question(message: str) -> bool:
     """Return whether text asks for sectors among first-board candidates."""
 
-    return _looks_like_first_board_data_question(message) and any(
+    return _mentions_first_board_scope(message) and _looks_like_first_board_data_question(message) and any(
         keyword in message
         for keyword in (
             "\u677f\u5757",
@@ -1831,6 +2548,127 @@ def _answer_first_board_context_top(
         warnings=[_safety_warning()],
         generated_by=CHAT_AGENT_VERSION,
     )
+
+
+def _answer_limit_up_query(
+    request: AgentChatRequest,
+    tools: AgentToolRegistry,
+    trade_date: date | None,
+    filter_query: _FirstBoardFilterQuery | None,
+) -> AgentChatResponse:
+    """Answer general same-day limit-up event questions."""
+
+    board_height = _extract_board_height(request.message)
+    min_board_height = 2 if _looks_like_all_continued_board_question(request.message) else None
+    broken_only = _looks_like_broken_limit_up_question(request.message)
+    query = filter_query.label if filter_query else None
+    result = tools.limit_up_events(
+        trade_date=trade_date,
+        board_height=board_height,
+        min_board_height=min_board_height,
+        query=query,
+        broken_only=broken_only,
+        closed_only=None,
+        limit=50,
+    )
+    events: list[LimitUpEvent] = result.output
+    if "\u6700\u9ad8\u677f" in request.message and events:
+        max_height = max(event.board_height for event in events)
+        events = [event for event in events if event.board_height == max_height]
+        result = result.__class__(
+            name=result.name,
+            input={**result.input, "derived_max_board_height": max_height},
+            output=events,
+            summary=f"{result.trace_output.get('trade_date')} 最高板为 {max_height} 板，命中 {len(events)} 只。",
+            trace_output={
+                **result.trace_output,
+                "matched_count": len(events),
+                "derived_max_board_height": max_height,
+                "events": [_event_fact(event) for event in events],
+            },
+        )
+
+    answer = _template_limit_up_events_answer(
+        request=request,
+        trade_date=str(result.trace_output.get("trade_date")),
+        events=events,
+        board_height=board_height,
+        min_board_height=min_board_height,
+        query=query,
+        broken_only=broken_only,
+    )
+    return AgentChatResponse(
+        session_id=request.session_id,
+        intent="limit_up_query",
+        answer=answer,
+        tool_calls=["limit_up_events"],
+        tool_results=[result.trace()],
+        references=[f"trade_date={result.trace_output.get('trade_date')}"],
+        warnings=[_safety_warning()],
+        generated_by=CHAT_AGENT_VERSION,
+    )
+
+
+def _template_limit_up_events_answer(
+    *,
+    request: AgentChatRequest,
+    trade_date: str,
+    events: list[LimitUpEvent],
+    board_height: int | None,
+    min_board_height: int | None,
+    query: str | None,
+    broken_only: bool,
+) -> str:
+    """Build a deterministic answer for general limit-up event queries."""
+
+    scope = "\u6da8\u505c\u80a1"
+    if board_height is not None:
+        scope = f"{board_height}\u677f\u80a1"
+    elif min_board_height == 2:
+        scope = "\u8fde\u677f\u80a1"
+    if broken_only:
+        scope = "\u70b8\u677f\u80a1"
+    if query:
+        scope = f"{query}\u76f8\u5173{scope}"
+    if "\u6700\u9ad8\u677f" in request.message and events:
+        scope = f"\u6700\u9ad8\u677f\uff08{events[0].board_height}\u677f\uff09"
+
+    if not events:
+        return f"{trade_date} \u672c\u5730\u6570\u636e\u4e2d\u6ca1\u6709\u547d\u4e2d\u201c{scope}\u201d\u7684\u6837\u672c\u3002"
+
+    lines = [f"{trade_date} \u672c\u5730\u6570\u636e\u4e2d\uff0c{scope}\u5171 {len(events)} \u53ea\uff1a"]
+    for event in events[:20]:
+        lines.append(
+            (
+                f"- {event.name}({event.symbol}) {event.board_height}\u677f\uff0c"
+                f"\u884c\u4e1a\uff1a{event.industry}\uff0c"
+                f"\u9898\u6750\uff1a{event.concept}\uff0c"
+                f"\u9996\u5c01\uff1a{event.first_limit_time.strftime('%H:%M')}\uff0c"
+                f"\u70b8\u677f {event.break_count} \u6b21"
+            )
+        )
+    if len(events) > 20:
+        lines.append(f"\u8fd8\u6709 {len(events) - 20} \u53ea\u672a\u5c55\u793a\u3002")
+    return "\n".join(lines)
+
+
+def _event_fact(event: LimitUpEvent) -> dict[str, Any]:
+    """Serialize one limit-up event into compact Agent facts."""
+
+    return {
+        "symbol": event.symbol,
+        "name": event.name,
+        "trade_date": event.trade_date.isoformat(),
+        "board_height": event.board_height,
+        "industry": event.industry,
+        "concept": event.concept,
+        "first_limit_time": event.first_limit_time.strftime("%H:%M"),
+        "last_limit_time": event.last_limit_time.strftime("%H:%M"),
+        "break_count": event.break_count,
+        "closed_limit": event.closed_limit,
+        "amount": event.amount,
+        "turnover_rate": event.turnover_rate,
+    }
 
 
 def _filter_first_board_candidates(
@@ -2387,6 +3225,20 @@ def _rating_fact(rating: FirstBoardRating | None) -> dict | None:
     }
 
 
+def _brief_rating_fact(rating: FirstBoardRating) -> dict[str, Any]:
+    """Serialize enough data to list a candidate without repeating evidence."""
+
+    facts = rating.facts
+    return {
+        "symbol": facts.symbol,
+        "name": facts.name,
+        "industry": facts.industry,
+        "rating": rating.rating,
+        "score": rating.score,
+        "confidence": rating.confidence,
+    }
+
+
 def _template_tool_grounded_answer(
     request: AgentChatRequest,
     ratings: FirstBoardRatingsResponse,
@@ -2569,10 +3421,12 @@ def _detect_intent(message: str, intent_hint: str | None = None) -> str:
         "greeting",
         "market_schedule",
         "market_context",
+        "limit_up_query",
         "similar_cases",
         "risk_summary",
         "llm_explanation",
         "rating_explain",
+        "limit_up_query",
         "first_board_filter",
         "first_board_sector_summary",
         "today_summary",
@@ -2628,6 +3482,7 @@ def _looks_like_domain_question(message: str) -> bool:
             "a\u80a1",
             "\u80a1",
             "\u9996\u677f",
+            "\u8fde\u677f",
             "\u6da8\u505c",
             "\u5019\u9009",
             "\u8bc4\u5206",
@@ -2644,6 +3499,100 @@ def _looks_like_domain_question(message: str) -> bool:
     ) or _extract_symbol_hint(message) is not None
 
 
+def _looks_like_general_limit_up_question(message: str) -> bool:
+    """Return whether the user asks for same-day limit-up event lists."""
+
+    normalized = message.lower()
+    if "\u9996\u677f" in normalized:
+        return False
+    return any(
+        keyword in normalized
+        for keyword in (
+            "\u8fde\u677f",
+            "\u4e8c\u677f",
+            "\u4e8c\u8fde",
+            "\u4e09\u677f",
+            "\u4e09\u8fde",
+            "\u56db\u677f",
+            "\u4e94\u677f",
+            "\u6700\u9ad8\u677f",
+            "\u68af\u961f",
+            "\u6da8\u505c\u7684\u7968",
+            "\u6da8\u505c\u7968",
+            "\u70b8\u677f",
+        )
+    )
+
+
+def _extract_board_height(message: str) -> int | None:
+    """Extract requested board height from Chinese limit-up phrases."""
+
+    normalized = message.lower()
+    digit_match = re.search(r"(?<!\d)(\d{1,2})(?:\u8fde\u677f|\u677f)", normalized)
+    if digit_match:
+        return int(digit_match.group(1))
+    board_map = {
+        "\u4e00": 1,
+        "\u9996": 1,
+        "\u4e8c": 2,
+        "\u4e24": 2,
+        "\u4e09": 3,
+        "\u56db": 4,
+        "\u4e94": 5,
+        "\u516d": 6,
+        "\u4e03": 7,
+        "\u516b": 8,
+        "\u4e5d": 9,
+        "\u5341": 10,
+    }
+    for text, height in board_map.items():
+        if f"{text}\u8fde\u677f" in normalized or f"{text}\u677f" in normalized:
+            return height
+    return None
+
+
+def _looks_like_all_continued_board_question(message: str) -> bool:
+    """Return whether the user asks for all continued-board events."""
+
+    return "\u8fde\u677f" in message and _extract_board_height(message) is None
+
+
+def _looks_like_broken_limit_up_question(message: str) -> bool:
+    """Return whether the user asks for intraday-broken limit-up events."""
+
+    return "\u70b8\u677f" in message
+
+
+def _looks_like_rating_explain_question(message: str) -> bool:
+    """Return whether a question needs original rating facts."""
+
+    if _looks_like_rating_backtest_question(message) or _looks_like_evaluation_question(message):
+        return False
+    return any(keyword in message for keyword in KEYWORDS["rating_explain"])
+
+
+def _limit_up_query_arguments_from_message(request: AgentChatRequest) -> dict[str, Any]:
+    """Build limit-up event tool arguments from a user question."""
+
+    message = request.message
+    return {
+        "trade_date": (
+            request.trade_date.isoformat()
+            if request.trade_date
+            else (_extract_trade_date(message).isoformat() if _extract_trade_date(message) else None)
+        ),
+        "board_height": _extract_board_height(message),
+        "min_board_height": 2 if _looks_like_all_continued_board_question(message) else None,
+        "query": (
+            _extract_first_board_filter(message).label
+            if _extract_first_board_filter(message)
+            else None
+        ),
+        "broken_only": _looks_like_broken_limit_up_question(message),
+        "limit": 50,
+    }
+
+
 def _generate_llm_answer(
     request: AgentChatRequest,
     intent: str,
@@ -2651,6 +3600,9 @@ def _generate_llm_answer(
     fallback: str,
 ) -> tuple[str, str, list[str]]:
     """Ask the configured LLM to answer from tool facts, with fallback."""
+
+    if os.getenv("LIMITUPLAB_FORCE_TEMPLATE_ANSWER", "").lower() in {"1", "true", "yes"}:
+        return fallback, "template_general_answer", [_safety_warning()]
 
     system_prompt = (
         "You are LimitUpLab's A-share first-board research agent. "
@@ -2706,6 +3658,17 @@ def _contains_forbidden_terms(content: str) -> bool:
 
     forbidden_terms = ("\u4e70\u5165", "\u5356\u51fa", "\u4ed3\u4f4d", "\u76ee\u6807\u4ef7", "\u6536\u76ca\u627f\u8bfa")
     return any(term in content for term in forbidden_terms)
+
+
+def _ensure_explicit_symbol_mentioned(request: AgentChatRequest, answer: str) -> str:
+    """Preserve an explicitly requested stock symbol in final LLM answers."""
+
+    symbol = request.symbol or _extract_symbol_hint(request.message)
+    if not symbol or symbol in answer:
+        return answer
+    if _looks_like_rating_explain_question(request.message) or _looks_like_similar_question(request.message):
+        return f"关于 {symbol}：\n{answer}"
+    return answer
 
 
 def _ensure_safety_boundary(content: str) -> str:

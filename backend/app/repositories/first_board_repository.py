@@ -1,11 +1,18 @@
 ﻿"""SQLite persistence for first-board feature and outcome data."""
 
+import json
 import sqlite3
 from datetime import date, datetime
 from pathlib import Path
 
 from app.database import connect, initialize_database
-from app.models import FirstBoardFeature, FirstBoardOutcome, StockDailyBar
+from app.models import (
+    AgentPrediction,
+    FirstBoardEnrichmentSnapshot,
+    FirstBoardFeature,
+    FirstBoardOutcome,
+    StockDailyBar,
+)
 
 
 class SQLiteFirstBoardRepository:
@@ -160,6 +167,154 @@ class SQLiteFirstBoardRepository:
                     created_at = excluded.created_at
                 """,
                 [self._outcome_to_record(outcome) for outcome in outcomes],
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def upsert_enrichment_snapshots(
+        self,
+        snapshots: list[FirstBoardEnrichmentSnapshot],
+    ) -> None:
+        """Insert or update point-in-time candidate enrichment snapshots."""
+
+        connection = connect(self.database_path)
+        try:
+            initialize_database(connection)
+            connection.executemany(
+                """
+                INSERT INTO first_board_enrichment_snapshots (
+                    trade_date, symbol, kline_bar_count, return_5d_pct,
+                    return_20d_pct, return_60d_pct, distance_20d_high_pct,
+                    distance_60d_high_pct, volume_ratio_5d, volatility_20d,
+                    close_above_ma20, ma_alignment, listing_date,
+                    listing_age_days, float_market_cap, float_market_cap_source,
+                    recent_limit_up_count_20d, recent_limit_up_count_60d,
+                    industry_first_board_count, industry_continued_board_count,
+                    industry_failed_count, industry_max_board_height,
+                    industry_first_limit_rank, previous_first_board_promotion_rate,
+                    market_first_board_seal_rate, dragon_tiger_on_list,
+                    dragon_tiger_net_buy_amount, dragon_tiger_buy_amount,
+                    dragon_tiger_sell_amount, dragon_tiger_reason, popularity_rank,
+                    popularity_rank_change, popularity_snapshot_at,
+                    data_missing_json, feature_version, created_at
+                )
+                VALUES (
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                )
+                ON CONFLICT(trade_date, symbol) DO UPDATE SET
+                    kline_bar_count = excluded.kline_bar_count,
+                    return_5d_pct = excluded.return_5d_pct,
+                    return_20d_pct = excluded.return_20d_pct,
+                    return_60d_pct = excluded.return_60d_pct,
+                    distance_20d_high_pct = excluded.distance_20d_high_pct,
+                    distance_60d_high_pct = excluded.distance_60d_high_pct,
+                    volume_ratio_5d = excluded.volume_ratio_5d,
+                    volatility_20d = excluded.volatility_20d,
+                    close_above_ma20 = excluded.close_above_ma20,
+                    ma_alignment = excluded.ma_alignment,
+                    listing_date = excluded.listing_date,
+                    listing_age_days = excluded.listing_age_days,
+                    float_market_cap = excluded.float_market_cap,
+                    float_market_cap_source = excluded.float_market_cap_source,
+                    recent_limit_up_count_20d = excluded.recent_limit_up_count_20d,
+                    recent_limit_up_count_60d = excluded.recent_limit_up_count_60d,
+                    industry_first_board_count = excluded.industry_first_board_count,
+                    industry_continued_board_count = excluded.industry_continued_board_count,
+                    industry_failed_count = excluded.industry_failed_count,
+                    industry_max_board_height = excluded.industry_max_board_height,
+                    industry_first_limit_rank = excluded.industry_first_limit_rank,
+                    previous_first_board_promotion_rate = excluded.previous_first_board_promotion_rate,
+                    market_first_board_seal_rate = excluded.market_first_board_seal_rate,
+                    dragon_tiger_on_list = excluded.dragon_tiger_on_list,
+                    dragon_tiger_net_buy_amount = excluded.dragon_tiger_net_buy_amount,
+                    dragon_tiger_buy_amount = excluded.dragon_tiger_buy_amount,
+                    dragon_tiger_sell_amount = excluded.dragon_tiger_sell_amount,
+                    dragon_tiger_reason = excluded.dragon_tiger_reason,
+                    popularity_rank = excluded.popularity_rank,
+                    popularity_rank_change = excluded.popularity_rank_change,
+                    popularity_snapshot_at = excluded.popularity_snapshot_at,
+                    data_missing_json = excluded.data_missing_json,
+                    feature_version = excluded.feature_version,
+                    created_at = excluded.created_at
+                """,
+                [self._enrichment_to_record(item) for item in snapshots],
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def list_enrichment_for_date(
+        self,
+        trade_date: date,
+    ) -> list[FirstBoardEnrichmentSnapshot]:
+        """Return all enrichment snapshots for one rating date."""
+
+        connection = connect(self.database_path)
+        try:
+            initialize_database(connection)
+            rows = connection.execute(
+                """
+                SELECT *
+                FROM first_board_enrichment_snapshots
+                WHERE trade_date = ?
+                ORDER BY symbol ASC
+                """,
+                (trade_date.isoformat(),),
+            ).fetchall()
+        finally:
+            connection.close()
+        return [self._enrichment_from_row(row) for row in rows]
+
+    def get_enrichment(
+        self,
+        symbol: str,
+        trade_date: date,
+    ) -> FirstBoardEnrichmentSnapshot | None:
+        """Return one candidate's enrichment snapshot if it exists."""
+
+        connection = connect(self.database_path)
+        try:
+            initialize_database(connection)
+            row = connection.execute(
+                """
+                SELECT *
+                FROM first_board_enrichment_snapshots
+                WHERE trade_date = ? AND symbol = ?
+                """,
+                (trade_date.isoformat(), symbol),
+            ).fetchone()
+        finally:
+            connection.close()
+        return self._enrichment_from_row(row) if row else None
+
+    def upsert_predictions(self, predictions: list[AgentPrediction]) -> None:
+        """Insert or update persisted Agent rating predictions."""
+
+        connection = connect(self.database_path)
+        try:
+            initialize_database(connection)
+            connection.executemany(
+                """
+                INSERT INTO agent_predictions (
+                    prediction_id,
+                    trade_date,
+                    symbol,
+                    name,
+                    score,
+                    rating,
+                    confidence,
+                    scoring_version,
+                    facts_json,
+                    reasons_json,
+                    risks_json,
+                    created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT(trade_date, symbol, scoring_version) DO NOTHING
+                """,
+                [self._prediction_to_record(prediction) for prediction in predictions],
             )
             connection.commit()
         finally:
@@ -387,6 +542,35 @@ class SQLiteFirstBoardRepository:
 
         return [self._outcome_from_row(row) for row in rows]
 
+    def list_predictions_between(
+        self,
+        start_date: date,
+        end_date: date,
+        scoring_version: str | None = None,
+    ) -> list[AgentPrediction]:
+        """Return persisted predictions in an inclusive trade-date range."""
+
+        connection = connect(self.database_path)
+        try:
+            initialize_database(connection)
+            sql = """
+                SELECT *
+                FROM agent_predictions
+                WHERE trade_date >= ? AND trade_date <= ?
+            """
+            parameters: list[object] = [start_date.isoformat(), end_date.isoformat()]
+            if scoring_version:
+                sql += " AND scoring_version = ?"
+                parameters.append(scoring_version)
+            sql += """
+                ORDER BY trade_date ASC, score DESC, symbol ASC
+            """
+            rows = connection.execute(sql, parameters).fetchall()
+        finally:
+            connection.close()
+
+        return [self._prediction_from_row(row) for row in rows]
+
     def _feature_to_record(self, feature: FirstBoardFeature) -> tuple[object, ...]:
         """Serialize a first-board feature model for SQLite."""
 
@@ -452,6 +636,69 @@ class SQLiteFirstBoardRepository:
             int(outcome.outcome_ready),
             outcome.outcome_version,
             outcome.created_at.isoformat(),
+        )
+
+    def _enrichment_to_record(
+        self,
+        item: FirstBoardEnrichmentSnapshot,
+    ) -> tuple[object, ...]:
+        """Serialize a first-board enrichment snapshot for SQLite."""
+
+        return (
+            item.trade_date.isoformat(),
+            item.symbol,
+            item.kline_bar_count,
+            item.return_5d_pct,
+            item.return_20d_pct,
+            item.return_60d_pct,
+            item.distance_20d_high_pct,
+            item.distance_60d_high_pct,
+            item.volume_ratio_5d,
+            item.volatility_20d,
+            int(item.close_above_ma20) if item.close_above_ma20 is not None else None,
+            item.ma_alignment,
+            item.listing_date.isoformat() if item.listing_date else None,
+            item.listing_age_days,
+            item.float_market_cap,
+            item.float_market_cap_source,
+            item.recent_limit_up_count_20d,
+            item.recent_limit_up_count_60d,
+            item.industry_first_board_count,
+            item.industry_continued_board_count,
+            item.industry_failed_count,
+            item.industry_max_board_height,
+            item.industry_first_limit_rank,
+            item.previous_first_board_promotion_rate,
+            item.market_first_board_seal_rate,
+            int(item.dragon_tiger_on_list),
+            item.dragon_tiger_net_buy_amount,
+            item.dragon_tiger_buy_amount,
+            item.dragon_tiger_sell_amount,
+            item.dragon_tiger_reason,
+            item.popularity_rank,
+            item.popularity_rank_change,
+            item.popularity_snapshot_at.isoformat() if item.popularity_snapshot_at else None,
+            json.dumps(item.data_missing, ensure_ascii=False),
+            item.feature_version,
+            item.created_at.isoformat(),
+        )
+
+    def _prediction_to_record(self, prediction: AgentPrediction) -> tuple[object, ...]:
+        """Serialize a prediction model for SQLite."""
+
+        return (
+            prediction.prediction_id,
+            prediction.trade_date.isoformat(),
+            prediction.symbol,
+            prediction.name,
+            prediction.score,
+            prediction.rating,
+            prediction.confidence,
+            prediction.scoring_version,
+            json.dumps(prediction.facts_json, ensure_ascii=False),
+            json.dumps(prediction.reasons, ensure_ascii=False),
+            json.dumps(prediction.risks, ensure_ascii=False),
+            prediction.created_at.isoformat(),
         )
 
     def _feature_from_row(self, row: sqlite3.Row) -> FirstBoardFeature:
@@ -520,6 +767,74 @@ class SQLiteFirstBoardRepository:
             promoted_to_second_board=bool(row["promoted_to_second_board"]),
             outcome_ready=bool(row["outcome_ready"]),
             outcome_version=row["outcome_version"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    def _enrichment_from_row(self, row: sqlite3.Row) -> FirstBoardEnrichmentSnapshot:
+        """Deserialize a first-board enrichment snapshot from SQLite."""
+
+        return FirstBoardEnrichmentSnapshot(
+            trade_date=date.fromisoformat(row["trade_date"]),
+            symbol=row["symbol"],
+            kline_bar_count=row["kline_bar_count"],
+            return_5d_pct=row["return_5d_pct"],
+            return_20d_pct=row["return_20d_pct"],
+            return_60d_pct=row["return_60d_pct"],
+            distance_20d_high_pct=row["distance_20d_high_pct"],
+            distance_60d_high_pct=row["distance_60d_high_pct"],
+            volume_ratio_5d=row["volume_ratio_5d"],
+            volatility_20d=row["volatility_20d"],
+            close_above_ma20=(
+                bool(row["close_above_ma20"])
+                if row["close_above_ma20"] is not None
+                else None
+            ),
+            ma_alignment=row["ma_alignment"],
+            listing_date=date.fromisoformat(row["listing_date"])
+            if row["listing_date"]
+            else None,
+            listing_age_days=row["listing_age_days"],
+            float_market_cap=row["float_market_cap"],
+            float_market_cap_source=row["float_market_cap_source"],
+            recent_limit_up_count_20d=row["recent_limit_up_count_20d"],
+            recent_limit_up_count_60d=row["recent_limit_up_count_60d"],
+            industry_first_board_count=row["industry_first_board_count"],
+            industry_continued_board_count=row["industry_continued_board_count"],
+            industry_failed_count=row["industry_failed_count"],
+            industry_max_board_height=row["industry_max_board_height"],
+            industry_first_limit_rank=row["industry_first_limit_rank"],
+            previous_first_board_promotion_rate=row["previous_first_board_promotion_rate"],
+            market_first_board_seal_rate=row["market_first_board_seal_rate"],
+            dragon_tiger_on_list=bool(row["dragon_tiger_on_list"]),
+            dragon_tiger_net_buy_amount=row["dragon_tiger_net_buy_amount"],
+            dragon_tiger_buy_amount=row["dragon_tiger_buy_amount"],
+            dragon_tiger_sell_amount=row["dragon_tiger_sell_amount"],
+            dragon_tiger_reason=row["dragon_tiger_reason"],
+            popularity_rank=row["popularity_rank"],
+            popularity_rank_change=row["popularity_rank_change"],
+            popularity_snapshot_at=datetime.fromisoformat(row["popularity_snapshot_at"])
+            if row["popularity_snapshot_at"]
+            else None,
+            data_missing=json.loads(row["data_missing_json"]),
+            feature_version=row["feature_version"],
+            created_at=datetime.fromisoformat(row["created_at"]),
+        )
+
+    def _prediction_from_row(self, row: sqlite3.Row) -> AgentPrediction:
+        """Deserialize a SQLite row into a prediction model."""
+
+        return AgentPrediction(
+            prediction_id=row["prediction_id"],
+            trade_date=date.fromisoformat(row["trade_date"]),
+            symbol=row["symbol"],
+            name=row["name"],
+            score=row["score"],
+            rating=row["rating"],
+            confidence=row["confidence"],
+            scoring_version=row["scoring_version"],
+            facts_json=json.loads(row["facts_json"]),
+            reasons=json.loads(row["reasons_json"]),
+            risks=json.loads(row["risks_json"]),
             created_at=datetime.fromisoformat(row["created_at"]),
         )
 

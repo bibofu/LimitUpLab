@@ -4,6 +4,7 @@
   Flame,
   Layers3,
   LineChart,
+  LoaderCircle,
   MessageCircle,
   RefreshCcw,
   Send,
@@ -13,6 +14,7 @@
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useState } from "react";
+import ReactMarkdown from "react-markdown";
 import {
   Link,
   Navigate,
@@ -22,10 +24,15 @@ import {
   useNavigate,
   useParams,
 } from "react-router-dom";
+import remarkGfm from "remark-gfm";
 
 import {
   fetchContinuedBoardEvents,
   fetchAgentDataHealth,
+  fetchAgentEvalReport,
+  fetchAgentRuns,
+  fetchAgentSystemHealth,
+  fetchReviewAgentReport,
   fetchFirstBoardCritic,
   fetchFirstBoardRatings,
   fetchFirstBoardSimilarCases,
@@ -33,21 +40,31 @@ import {
   fetchFirstBoardEvents,
   fetchMarketSummary,
   fetchRatingBacktest,
+  fetchRatingEvaluation,
   fetchRecentLimitUpEvents,
   fetchStockKLine,
   fetchStockLatestClose,
   fetchStockTradingDayKLine,
-  sendAgentChatMessage,
+  streamAgentChatMessage,
 } from "./api";
 import type {
   AgentChatResponse,
+  AgentChatStreamStage,
   AgentDataHealthResponse,
+  AgentEvalCaseReport,
+  AgentEvalReportResponse,
+  AgentEvidenceCard,
+  AgentEvaluationResponse,
+  AgentRunSummary,
+  AgentSystemHealthResponse,
   FirstBoardCriticResponse,
   FirstBoardRating,
   FirstBoardRatingsResponse,
   LimitUpEvent,
   MarketSummary,
   RatingBacktestResponse,
+  ReviewAgentPick,
+  ReviewAgentReportResponse,
   SimilarFirstBoardCasesResponse,
   StockCloseSnapshot,
   StockIntradayKLineBar,
@@ -64,7 +81,9 @@ interface DashboardData {
   recent: LimitUpEvent[];
   firstBoardRatings: FirstBoardRatingsResponse;
   agentDataHealth: AgentDataHealthResponse;
+  systemHealth: AgentSystemHealthResponse;
   ratingBacktest: RatingBacktestResponse;
+  ratingEvaluation: AgentEvaluationResponse;
 }
 
 interface CandleBar {
@@ -86,6 +105,42 @@ function formatTracePayload(payload: Record<string, unknown>) {
   return JSON.stringify(payload, null, 2);
 }
 
+function formatMetricLabel(key: string) {
+  const labels: Record<string, string> = {
+    trade_date: "交易日",
+    candidate_count: "候选数",
+    matched_count: "匹配数",
+    event_count: "事件数",
+    first_board_count: "首板",
+    continued_board_count: "连板",
+    failed_count: "炸板",
+    limit_up_count: "涨停",
+    recall_count: "召回",
+    case_count: "案例",
+    outcome_ready_count: "有走势",
+    universe_count: "样本池",
+    score: "评分",
+    rating: "评级",
+    confidence: "置信度",
+    verdict: "结论",
+    status: "状态",
+  };
+  return labels[key] ?? key;
+}
+
+function formatMetricValue(value: string | number | boolean | null) {
+  if (value === null) {
+    return "无";
+  }
+  if (typeof value === "boolean") {
+    return value ? "是" : "否";
+  }
+  if (typeof value === "number") {
+    return Number.isInteger(value) ? String(value) : value.toFixed(2);
+  }
+  return value;
+}
+
 const healthCopy = {
   healthy: { label: "数据健康", detail: "工具数据链完整" },
   partial: { label: "部分可用", detail: "部分相似案例或走势缓存缺失" },
@@ -104,16 +159,22 @@ function AgentChatDock({
   tradeDate,
   symbol,
   dataHealth,
+  systemHealth,
 }: {
   tradeDate: string;
   symbol?: string;
   dataHealth: AgentDataHealthResponse;
+  systemHealth: AgentSystemHealthResponse;
 }) {
   /** Provide a lightweight tool-grounded Agent chat entry point. */
 
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
+  const [elapsedMs, setElapsedMs] = useState(0);
+  const [streamStage, setStreamStage] = useState<AgentChatStreamStage>("planning");
+  const [streamStatus, setStreamStatus] = useState("正在理解问题并规划工具");
   const [error, setError] = useState<string | null>(null);
+  const [runs, setRuns] = useState<AgentRunSummary[]>([]);
   const [messages, setMessages] = useState<ChatMessage[]>([
     {
       id: "welcome",
@@ -122,6 +183,31 @@ function AgentChatDock({
     },
   ]);
   const [sessionId] = useState(() => `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+
+  useEffect(() => {
+    void refreshAgentRuns();
+  }, [sessionId]);
+
+  useEffect(() => {
+    if (!sending) {
+      setElapsedMs(0);
+      return undefined;
+    }
+    const startedAt = Date.now();
+    const timer = window.setInterval(() => {
+      setElapsedMs(Date.now() - startedAt);
+    }, 100);
+    return () => window.clearInterval(timer);
+  }, [sending]);
+
+  async function refreshAgentRuns() {
+    try {
+      const response = await fetchAgentRuns(sessionId, 6);
+      setRuns(response.runs);
+    } catch {
+      setRuns([]);
+    }
+  }
 
   async function sendMessage() {
     const trimmed = message.trim();
@@ -137,10 +223,14 @@ function AgentChatDock({
     setMessages((current) => [...current, userMessage]);
     setMessage("");
     setSending(true);
+    setStreamStage("planning");
+    setStreamStatus("正在理解问题并规划工具");
     setError(null);
 
     try {
-      const response = await sendAgentChatMessage({
+      const agentMessageId = `agent-${Date.now()}`;
+      let receivedAnswer = false;
+      const response = await streamAgentChatMessage({
         session_id: sessionId,
         message: trimmed,
         intent_hint: inferChatIntent(trimmed),
@@ -149,16 +239,53 @@ function AgentChatDock({
         page_context: {
           page: symbol ? "stock_detail" : "dashboard",
         },
+      }, (event) => {
+        if (event.event === "progress") {
+          setStreamStage(event.data.stage);
+          setStreamStatus(event.data.message);
+          return;
+        }
+        if (event.event === "answer_delta") {
+          const delta = event.data.delta;
+          setStreamStage("answering");
+          setStreamStatus("正在生成回答");
+          setMessages((current) => {
+            const existing = current.find((item) => item.id === agentMessageId);
+            if (existing) {
+              return current.map((item) => (
+                item.id === agentMessageId
+                  ? { ...item, content: item.content + delta }
+                  : item
+              ));
+            }
+            receivedAnswer = true;
+            return [
+              ...current,
+              { id: agentMessageId, role: "agent", content: delta },
+            ];
+          });
+        }
       });
-      setMessages((current) => [
-        ...current,
-        {
-          id: `agent-${Date.now()}`,
-          role: "agent",
-          content: response.answer,
-          meta: response,
-        },
-      ]);
+      setMessages((current) => {
+        const existing = current.find((item) => item.id === agentMessageId);
+        if (existing || receivedAnswer) {
+          return current.map((item) => (
+            item.id === agentMessageId
+              ? { ...item, content: response.answer, meta: response }
+              : item
+          ));
+        }
+        return [
+          ...current,
+          {
+            id: agentMessageId,
+            role: "agent",
+            content: response.answer,
+            meta: response,
+          },
+        ];
+      });
+      void refreshAgentRuns();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Agent 回答失败");
     } finally {
@@ -188,6 +315,7 @@ function AgentChatDock({
           <div className="agent-health-metrics">
             <span>原始 {dataHealth.raw_event_count}</span>
             <span>特征 {dataHealth.first_board_feature_count}</span>
+            <span>扩展 {dataHealth.enrichment_count}</span>
             <span>Top {dataHealth.top_candidates_checked}</span>
             <span>{dataHealth.post_bars_ready ? "走势已缓存" : "走势待补齐"}</span>
           </div>
@@ -196,10 +324,22 @@ function AgentChatDock({
           ) : null}
         </div>
 
+        <SystemHealthStrip systemHealth={systemHealth} />
+
+        <AgentRunObserver runs={runs} />
+
         <div className="agent-chat-messages">
           {messages.map((item) => (
             <article className={`chat-message chat-${item.role}`} key={item.id}>
-              <p>{item.content}</p>
+              {item.role === "agent" ? (
+                <div className="chat-markdown">
+                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
+                    {item.content}
+                  </ReactMarkdown>
+                </div>
+              ) : (
+                <p>{item.content}</p>
+              )}
               {item.meta ? (
                 <>
                   <div className="chat-message-meta">
@@ -208,41 +348,31 @@ function AgentChatDock({
                     {item.meta.tool_calls.map((tool) => (
                       <span key={tool}>{tool}</span>
                     ))}
+                    {item.meta.performance.total_duration_ms > 0 ? (
+                      <span>
+                        总耗时 {(item.meta.performance.total_duration_ms / 1000).toFixed(1)}s
+                        {" · "}Planner {(item.meta.performance.planner_duration_ms / 1000).toFixed(1)}s
+                        {" · "}Answer {(item.meta.performance.answer_duration_ms / 1000).toFixed(1)}s
+                      </span>
+                    ) : null}
                   </div>
-                  {item.meta.tool_results.length > 0 ? (
-                    <div className="chat-tool-traces">
-                      {item.meta.tool_results.map((tool) => (
-                        <details
-                          className={`chat-tool-trace trace-${tool.status}`}
-                          key={`${item.id}-${tool.name}-${tool.summary}`}
-                        >
-                          <summary>
-                            <strong>{tool.name}</strong>
-                            <span>{tool.status}</span>
-                          </summary>
-                          <p>{tool.summary}</p>
-                          {tool.error ? <p className="trace-error">{tool.error}</p> : null}
-                          <div className="trace-grid">
-                            <section>
-                              <span>输入</span>
-                              <pre>{formatTracePayload(tool.input)}</pre>
-                            </section>
-                            {Object.keys(tool.output).length > 0 ? (
-                              <section>
-                                <span>输出摘要</span>
-                                <pre>{formatTracePayload(tool.output)}</pre>
-                              </section>
-                            ) : null}
-                          </div>
-                        </details>
-                      ))}
-                    </div>
-                  ) : null}
+                  <AgentEvidencePanel response={item.meta} />
                 </>
               ) : null}
             </article>
           ))}
-          {sending ? <div className="chat-state">Agent 正在检索工具...</div> : null}
+          {sending ? (
+            <div className="chat-progress" role="status">
+              <LoaderCircle aria-hidden="true" size={18} />
+              <div>
+                <strong>
+                  {streamStage === "answering" ? "Agent 输出中" : "Agent 执行中"}
+                  {" · "}{(elapsedMs / 1000).toFixed(1)}s
+                </strong>
+                <span>{streamStatus}</span>
+              </div>
+            </div>
+          ) : null}
           {error ? <div className="chat-state error">{error}</div> : null}
         </div>
 
@@ -282,6 +412,264 @@ function AgentChatDock({
         </form>
       </section>
     </div>
+  );
+}
+
+function AgentEvidencePanel({ response }: { response: AgentChatResponse }) {
+  const cards = response.evidence_cards ?? [];
+  const confidence = buildAnswerConfidence(response);
+
+  if (cards.length === 0 && response.tool_results.length === 0) {
+    return null;
+  }
+
+  return (
+    <section className="agent-evidence-panel">
+      <div className="agent-evidence-header">
+        <div>
+          <strong>回答证据链</strong>
+          <span>{confidence.label}</span>
+        </div>
+        <div className="agent-evidence-score">
+          <span>{confidence.score}</span>
+          <small>可信度</small>
+        </div>
+      </div>
+
+      {confidence.notes.length > 0 ? (
+        <div className="agent-evidence-notes">
+          {confidence.notes.map((note) => (
+            <span key={note}>{note}</span>
+          ))}
+        </div>
+      ) : null}
+
+      <PlannerPolicyView response={response} />
+
+      <div className="agent-evidence-cards">
+        {cards.map((card, index) => (
+          <AgentEvidenceCardView card={card} key={`${card.title}-${index}`} />
+        ))}
+      </div>
+
+      {response.tool_results.length > 0 ? (
+        <details className="chat-tool-raw">
+          <summary>开发 trace</summary>
+          <div className="chat-tool-traces">
+            {response.tool_results.map((tool) => (
+              <details
+                className={`chat-tool-trace trace-${tool.status}`}
+                key={`${tool.name}-${tool.summary}`}
+              >
+                <summary>
+                  <strong>{tool.name}</strong>
+                  <span>{tool.status}</span>
+                </summary>
+                <p>{tool.summary}</p>
+                {tool.error ? <p className="trace-error">{tool.error}</p> : null}
+                <div className="trace-grid">
+                  <section>
+                    <span>输入</span>
+                    <pre>{formatTracePayload(tool.input)}</pre>
+                  </section>
+                  {Object.keys(tool.output).length > 0 ? (
+                    <section>
+                      <span>输出摘要</span>
+                      <pre>{formatTracePayload(tool.output)}</pre>
+                    </section>
+                  ) : null}
+                </div>
+              </details>
+            ))}
+          </div>
+        </details>
+      ) : null}
+    </section>
+  );
+}
+
+function PlannerPolicyView({ response }: { response: AgentChatResponse }) {
+  const policy = response.tool_policy;
+  const planner = policy?.planner_tool_calls ?? [];
+  const final = policy?.final_tool_calls ?? [];
+  const repaired = policy?.backend_repaired_tools ?? [];
+  const shouldShow = planner.length > 0 || final.length > 0 || repaired.length > 0;
+
+  if (!shouldShow) {
+    return null;
+  }
+
+  return (
+    <section className="planner-policy">
+      <div>
+        <span>Planner</span>
+        <strong>{planner.length > 0 ? planner.join(" -> ") : "direct"}</strong>
+      </div>
+      <div>
+        <span>Final</span>
+        <strong>{final.length > 0 ? final.join(" -> ") : "direct"}</strong>
+      </div>
+      <div className={repaired.length > 0 ? "policy-repaired" : "policy-clean"}>
+        <span>Repair</span>
+        <strong>{repaired.length > 0 ? repaired.join(", ") : "none"}</strong>
+      </div>
+      {policy.safety_fallback_used ? <p>已触发模板/安全兜底。</p> : null}
+      {policy.repair_reasons.length > 0 ? (
+        <ul>
+          {policy.repair_reasons.map((reason) => (
+            <li key={reason}>{reason}</li>
+          ))}
+        </ul>
+      ) : null}
+    </section>
+  );
+}
+
+function AgentEvidenceCardView({ card }: { card: AgentEvidenceCard }) {
+  const metrics = Object.entries(card.metrics ?? {});
+
+  return (
+    <article className={`agent-evidence-card evidence-${card.kind} evidence-${card.status}`}>
+      <header>
+        <strong>{card.title}</strong>
+        <span>{card.status}</span>
+      </header>
+      <p>{card.summary}</p>
+      {metrics.length > 0 ? (
+        <div className="agent-evidence-metrics">
+          {metrics.slice(0, 6).map(([key, value]) => (
+            <span key={key}>
+              <small>{formatMetricLabel(key)}</small>
+              <strong>{formatMetricValue(value)}</strong>
+            </span>
+          ))}
+        </div>
+      ) : null}
+      {card.facts.length > 0 ? (
+        <ul>
+          {card.facts.map((fact) => (
+            <li key={fact}>{fact}</li>
+          ))}
+        </ul>
+      ) : null}
+      {card.source_tools.length > 0 ? (
+        <div className="agent-evidence-sources">
+          {card.source_tools.map((tool) => (
+            <span key={tool}>{tool}</span>
+          ))}
+        </div>
+      ) : null}
+    </article>
+  );
+}
+
+function buildAnswerConfidence(response: AgentChatResponse) {
+  const cards = response.evidence_cards ?? [];
+  const toolCount = response.tool_results.length;
+  const errorCount = response.tool_results.filter((tool) => tool.status === "error").length;
+  const skippedCount = response.tool_results.filter((tool) => tool.status === "skipped").length;
+  const hasWarnings = response.warnings.length > 0;
+  const hasStructuredEvidence = cards.some(
+    (card) => card.kind !== "execution" && card.status === "success",
+  );
+
+  let score = 50;
+  score += Math.min(toolCount, 4) * 10;
+  if (hasStructuredEvidence) {
+    score += 15;
+  }
+  score -= errorCount * 20;
+  score -= skippedCount * 8;
+  if (hasWarnings) {
+    score -= 10;
+  }
+  score = Math.max(20, Math.min(95, score));
+
+  const notes = [
+    `${toolCount} 个工具`,
+    hasStructuredEvidence ? "有结构化事实" : "证据较少",
+    errorCount > 0 ? `${errorCount} 个工具失败` : "工具成功",
+    hasWarnings ? "存在数据限制" : "无显著数据告警",
+  ];
+
+  return {
+    score,
+    label: score >= 80 ? "证据充分" : score >= 60 ? "可参考" : "需要谨慎",
+    notes,
+  };
+}
+
+function SystemHealthStrip({ systemHealth }: { systemHealth: AgentSystemHealthResponse }) {
+  return (
+    <section className={`system-health-strip system-${systemHealth.status}`}>
+      <div>
+        <strong>系统状态</strong>
+        <span>{systemHealth.status === "healthy" ? "就绪" : systemHealth.status === "partial" ? "部分可用" : "缺失"}</span>
+      </div>
+      <div className="system-health-items">
+        <span>数据 {systemHealth.latest_local_trade_date ?? "无"}</span>
+        <span>{systemHealth.data_fresh ? "数据新鲜" : "数据待更新"}</span>
+        <span>{systemHealth.llm_enabled && systemHealth.llm_provider_configured ? `LLM ${systemHealth.llm_model ?? "on"}` : "LLM 未就绪"}</span>
+        <span>
+          Eval {systemHealth.offline_eval_passed === null ? "未跑" : systemHealth.offline_eval_passed ? "通过" : `${systemHealth.offline_eval_failed ?? 0} 失败`}
+        </span>
+      </div>
+      {systemHealth.warnings.length > 0 ? <p>{systemHealth.warnings[0]}</p> : null}
+    </section>
+  );
+}
+
+function AgentRunObserver({ runs }: { runs: AgentRunSummary[] }) {
+  const latestRun = runs[0];
+  const traceChain = latestRun?.tool_results.map((tool) => tool.name) ?? [];
+  const hasWarnings = Boolean(latestRun?.warnings.length || latestRun?.error_message);
+
+  return (
+    <section className="agent-run-observer">
+      <div className="agent-run-observer-header">
+        <div>
+          <strong>Agent 运行观察</strong>
+          <span>
+            {latestRun
+              ? `${latestRun.status === "success" ? "成功" : "失败"} · ${latestRun.duration_ms}ms`
+              : "等待首次对话"}
+          </span>
+        </div>
+        {latestRun ? (
+          <span className={`run-status run-${latestRun.status}`}>
+            {latestRun.intent ?? "unknown"}
+          </span>
+        ) : null}
+      </div>
+
+      {latestRun ? (
+        <>
+          <div className="agent-run-chain">
+            {(traceChain.length > 0 ? traceChain : latestRun.tool_calls).map((tool, index) => (
+              <span key={`${latestRun.run_id}-${tool}-${index}`}>{tool}</span>
+            ))}
+            {traceChain.length === 0 && latestRun.tool_calls.length === 0 ? (
+              <span>direct_answer</span>
+            ) : null}
+          </div>
+          {hasWarnings ? (
+            <p className="agent-run-warning">
+              {latestRun.error_message ?? latestRun.warnings[0]}
+            </p>
+          ) : null}
+        </>
+      ) : null}
+
+      {runs.length > 1 ? (
+        <div className="agent-run-history">
+          {runs.slice(1, 4).map((run) => (
+            <span key={run.run_id}>
+              {run.intent ?? "unknown"} · {run.tool_calls.length || run.tool_results.length} tools
+            </span>
+          ))}
+        </div>
+      ) : null}
+    </section>
   );
 }
 
@@ -364,7 +752,9 @@ export function App() {
         recent,
         firstBoardRatings,
         agentDataHealth,
+        systemHealth,
         ratingBacktest,
+        ratingEvaluation,
       ] = await Promise.all([
         fetchMarketSummary(),
         fetchFirstBoardEvents(),
@@ -373,7 +763,9 @@ export function App() {
         fetchRecentLimitUpEvents(3),
         fetchFirstBoardRatings(),
         fetchAgentDataHealth(),
+        fetchAgentSystemHealth(false),
         fetchRatingBacktest(),
+        fetchRatingEvaluation(),
       ]);
 
       setData({
@@ -384,7 +776,9 @@ export function App() {
         recent,
         firstBoardRatings,
         agentDataHealth,
+        systemHealth,
         ratingBacktest,
+        ratingEvaluation,
       });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "加载数据失败");
@@ -416,7 +810,6 @@ export function App() {
   const activeMeta = isStockDetail
     ? { title: "个股详情", eyebrow: "Stock Detail" }
     : viewMeta[activeView];
-  const chatSymbol = isStockDetail ? location.pathname.split("/").pop() : undefined;
 
   return (
     <main className="app-shell">
@@ -438,11 +831,13 @@ export function App() {
         </div>
       </header>
 
-      <AgentChatDock
-        tradeDate={data.summary.trade_date}
-        symbol={chatSymbol}
-        dataHealth={data.agentDataHealth}
-      />
+      {!isStockDetail ? (
+        <AgentChatDock
+          tradeDate={data.summary.trade_date}
+          dataHealth={data.agentDataHealth}
+          systemHealth={data.systemHealth}
+        />
+      ) : null}
 
       <Routes>
         <Route path="/" element={<Overview data={data} />} />
@@ -543,7 +938,13 @@ function Overview({ data }: { data: DashboardData }) {
 
       <FirstBoardRatingPanel ratings={data.firstBoardRatings} />
 
-      <RatingBacktestPanel backtest={data.ratingBacktest} />
+      <HighScoreReviewPanel
+        backtest={data.ratingBacktest}
+        evaluation={data.ratingEvaluation}
+        latestTradeDate={data.summary.trade_date}
+      />
+
+      <AgentEvalPanel />
 
       <Link className="recent-entry" to="/stocks/recent-limit-up">
         <div>
@@ -556,10 +957,548 @@ function Overview({ data }: { data: DashboardData }) {
   );
 }
 
+function HighScoreReviewPanel({
+  backtest,
+  evaluation,
+  latestTradeDate,
+}: {
+  backtest: RatingBacktestResponse;
+  evaluation: AgentEvaluationResponse;
+  latestTradeDate: string;
+}) {
+  const [report, setReport] = useState<ReviewAgentReportResponse | null>(null);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+  const [activeReviewDate, setActiveReviewDate] = useState<string | null>(null);
+
+  useEffect(() => {
+    void loadReview();
+  }, [latestTradeDate]);
+
+  async function loadReview() {
+    setRunning(true);
+    setError(null);
+    try {
+      const response = await fetchReviewAgentReport({
+        top_per_day: 10,
+        follow_days: 5,
+        use_llm: false,
+      });
+      setReport(response);
+      const grouped = groupReviewPicksByDate(response.reviewed_picks);
+      const trackDates = buildReviewTrackDates(grouped, response.end_date);
+      setActiveReviewDate((current) => (
+        current && trackDates.includes(current) ? current : trackDates[0] ?? null
+      ));
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Review Agent 复盘失败");
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  const readyCount = report
+    ? report.sample_size - report.pending_count
+    : 0;
+  const successRate = readyCount > 0 && report
+    ? report.success_count / readyCount
+    : null;
+  const evaluationReadyRate = evaluation.prediction_count > 0
+    ? evaluation.outcome_ready_count / evaluation.prediction_count
+    : 0;
+  const backtestReadyRate = backtest.sample_size > 0
+    ? backtest.outcome_ready_count / backtest.sample_size
+    : 0;
+  const reviewedPicks = report?.reviewed_picks ?? [];
+  const reviewDates = groupReviewPicksByDate(reviewedPicks);
+  const trackDates = report ? buildReviewTrackDates(reviewDates, report.end_date) : [];
+  const trackedSampleSize = trackDates.reduce(
+    (total, tradeDate) => total + (reviewDates[tradeDate]?.length ?? 0),
+    0,
+  );
+  const trackedPendingCount = trackDates.reduce(
+    (total, tradeDate) => total + (reviewDates[tradeDate] ?? []).filter((item) => !item.outcome_ready).length,
+    0,
+  );
+  const trackedReadyCount = trackedSampleSize - trackedPendingCount;
+  const trackedSuccessCount = trackDates.reduce(
+    (total, tradeDate) => total + (reviewDates[tradeDate] ?? []).filter((item) => item.evaluation_label === "success").length,
+    0,
+  );
+  const trackedSuccessRate = trackedReadyCount > 0 ? trackedSuccessCount / trackedReadyCount : null;
+  const selectedReviewDate = activeReviewDate && trackDates.includes(activeReviewDate)
+    ? activeReviewDate
+    : trackDates[0] ?? null;
+  const selectedPicks = selectedReviewDate ? reviewDates[selectedReviewDate] : [];
+
+  return (
+    <Panel title="高分票追踪复盘" icon={<TrendingUp size={18} />}>
+      <div className="review-agent-panel">
+        <div className="review-agent-hero">
+          <div>
+            <span>High Score Review</span>
+            <strong>
+              {report
+                ? `${report.start_date} 至 ${report.end_date}`
+                : `${evaluation.start_date} 至 ${evaluation.end_date || latestTradeDate}`}
+            </strong>
+            <p>
+              {report
+                ? `过去 5 个交易日，每天一个卡片；点进去看当日 Top10 到 ${report.end_date} 收盘的走势。`
+                : "自动加载过去 5 个交易日的每日 Top10 评分票，点击日期卡片查看到最新收盘的兑现情况。"}
+            </p>
+          </div>
+        </div>
+
+        {error ? <p className="review-agent-error">{error}</p> : null}
+
+        {running && !report ? (
+          <div className="review-agent-empty">
+            <strong>正在加载过去 5 个交易日 Top10 追踪</strong>
+            <p>加载完成后可以按日期查看当天预测 Top10 到最新收盘的走势。</p>
+          </div>
+        ) : report ? (
+          <>
+            <div className="review-agent-metrics">
+              <span>
+                <small>样本</small>
+                <strong>{trackedSampleSize}</strong>
+              </span>
+              <span>
+                <small>日期卡片</small>
+                <strong>{trackDates.length}</strong>
+              </span>
+              <span>
+                <small>每日数量</small>
+                <strong>Top10</strong>
+              </span>
+              <span>
+                <small>待观察</small>
+                <strong>{trackedPendingCount}</strong>
+              </span>
+              <span>
+                <small>兑现率</small>
+                <strong>{trackedSuccessRate === null ? "暂无" : formatPercent(trackedSuccessRate)}</strong>
+              </span>
+              <span>
+                <small>置信度</small>
+                <strong>{formatPercent(report.confidence)}</strong>
+              </span>
+            </div>
+
+            <DailyTopReview
+              activeDate={selectedReviewDate}
+              latestTradeDate={report.end_date}
+              groupedPicks={reviewDates}
+              onSelectDate={setActiveReviewDate}
+              picks={selectedPicks}
+              trackDates={trackDates}
+            />
+
+            {report.warnings.length > 0 ? (
+              <div className="review-agent-warnings">
+                {report.warnings.map((warning) => (
+                  <span key={warning}>{warning}</span>
+                ))}
+              </div>
+            ) : null}
+          </>
+        ) : (
+          <>
+            <div className="review-agent-metrics">
+              <span>
+                <small>预测快照</small>
+                <strong>{evaluation.prediction_count}</strong>
+              </span>
+              <span>
+                <small>走势覆盖</small>
+                <strong>{formatPercent(evaluationReadyRate)}</strong>
+              </span>
+              <span>
+                <small>误判</small>
+                <strong>{evaluation.label_counts.miss ?? 0}</strong>
+              </span>
+              <span>
+                <small>漏判</small>
+                <strong>{evaluation.label_counts.false_negative ?? 0}</strong>
+              </span>
+              <span>
+                <small>目标口径</small>
+                <strong>5日 x Top10</strong>
+              </span>
+              <span>
+                <small>回测覆盖</small>
+                <strong>{formatPercent(backtestReadyRate)}</strong>
+              </span>
+            </div>
+
+            <div className="review-agent-empty">
+              <strong>暂无 Top10 追踪明细</strong>
+              <p>当前只能看到已有预测概览，明细加载失败时请检查后端 Review Agent 接口。</p>
+            </div>
+          </>
+        )}
+      </div>
+    </Panel>
+  );
+}
+
+function DailyTopReview({
+  activeDate,
+  latestTradeDate,
+  groupedPicks,
+  onSelectDate,
+  picks,
+  trackDates,
+}: {
+  activeDate: string | null;
+  latestTradeDate: string;
+  groupedPicks: Record<string, ReviewAgentPick[]>;
+  onSelectDate: (tradeDate: string) => void;
+  picks: ReviewAgentPick[];
+  trackDates: string[];
+}) {
+  return (
+    <div className="daily-top-review">
+      <div className="daily-top-cards">
+        {trackDates.map((tradeDate) => {
+          const dailyPicks = groupedPicks[tradeDate] ?? [];
+          const readyCount = dailyPicks.filter((item) => item.post_bar_cache_complete).length;
+          const bestPick = dailyPicks[0];
+          return (
+          <button
+            className={tradeDate === activeDate ? "active" : ""}
+            key={tradeDate}
+            type="button"
+            onClick={() => onSelectDate(tradeDate)}
+          >
+            <span>{tradeDate}</span>
+            <strong>Top10 追踪</strong>
+            <small>{readyCount} / {dailyPicks.length} 缓存已同步</small>
+            {bestPick ? <b>{bestPick.name} {bestPick.score.toFixed(1)}</b> : null}
+          </button>
+          );
+        })}
+      </div>
+
+      <section className="daily-top-body">
+        <div className="daily-top-title">
+          <div>
+            <strong>{activeDate ?? "暂无日期"}</strong>
+            <span>当日预测 Top10，到 {latestTradeDate} 收盘为止的走势</span>
+          </div>
+          <span>
+            {picks.filter((item) => item.post_bar_cache_complete).length} / {picks.length} 缓存已同步
+          </span>
+        </div>
+
+        <ReviewPickTable picks={picks} />
+      </section>
+    </div>
+  );
+}
+
+function groupReviewPicksByDate(picks: ReviewAgentPick[]) {
+  return picks.reduce<Record<string, ReviewAgentPick[]>>((groups, pick) => {
+    groups[pick.trade_date] = groups[pick.trade_date] ?? [];
+    groups[pick.trade_date].push(pick);
+    groups[pick.trade_date].sort((left, right) => right.score - left.score);
+    return groups;
+  }, {});
+}
+
+function buildReviewTrackDates(
+  groupedPicks: Record<string, ReviewAgentPick[]>,
+  latestTradeDate: string,
+) {
+  return Object.keys(groupedPicks)
+    .filter((tradeDate) => tradeDate < latestTradeDate)
+    .sort()
+    .reverse()
+    .slice(0, 5);
+}
+
+function ReviewInsightCard({
+  title,
+  items,
+  tone = "neutral",
+}: {
+  title: string;
+  items: string[];
+  tone?: "neutral" | "good" | "risk" | "warn";
+}) {
+  return (
+    <article className={`review-insight-card review-${tone}`}>
+      <strong>{title}</strong>
+      {items.length > 0 ? (
+        <ul>
+          {items.slice(0, 5).map((item) => (
+            <li key={item}>{item}</li>
+          ))}
+        </ul>
+      ) : (
+        <p>暂无足够样本。</p>
+      )}
+    </article>
+  );
+}
+
+function ReviewToolTraceCard({ traces }: { traces: ReviewAgentReportResponse["tool_results"] }) {
+  return (
+    <article className="review-insight-card review-tools">
+      <strong>工具链</strong>
+      <div className="review-tool-chain">
+        {traces.length > 0 ? (
+          traces.map((trace) => (
+            <span key={trace.name}>{trace.name}</span>
+          ))
+        ) : (
+          <span>暂无工具 trace</span>
+        )}
+      </div>
+    </article>
+  );
+}
+
+function ReviewPickTable({ picks }: { picks: ReviewAgentPick[] }) {
+  const visible = picks.slice(0, 10);
+
+  if (visible.length === 0) {
+    return <div className="review-agent-empty">暂无高分票追踪样本。</div>;
+  }
+
+  return (
+    <div className="review-pick-table">
+      <div className="review-pick-table-head">
+        <span>股票</span>
+        <span>评分</span>
+        <span>结论</span>
+        <span>次日收盘</span>
+        <span>走势追踪</span>
+      </div>
+      {visible.map((pick) => (
+        <Link
+          className={`review-pick-row pick-${pick.evaluation_label}`}
+          key={`${pick.trade_date}-${pick.symbol}`}
+          to={`/stocks/${pick.symbol}`}
+        >
+          <strong>
+            {pick.name}
+            <small>{pick.symbol}</small>
+          </strong>
+          <span>{pick.score.toFixed(1)} / {pick.rating}</span>
+          <span>{reviewLabelCopy(pick.evaluation_label)}</span>
+          <span>{formatOptionalPercent(pick.next_close_pct)}</span>
+          <ReviewPostBars
+            bars={pick.post_bars}
+            expectedCount={pick.expected_post_bar_count}
+          />
+        </Link>
+      ))}
+    </div>
+  );
+}
+
+function ReviewPostBars({
+  bars,
+  expectedCount,
+}: {
+  bars: ReviewAgentPick["post_bars"];
+  expectedCount: number;
+}) {
+  return (
+    <div className="review-post-bars">
+      {Array.from({ length: 6 }, (_, index) => {
+        const bar = bars[index];
+        const label = index === 0 ? "首板" : `D+${index}`;
+        if (!bar) {
+          const cacheMissing = index < expectedCount;
+          return (
+            <span
+              className={cacheMissing ? "cache-missing" : "awaiting-close"}
+              key={`${label}-empty`}
+              title={cacheMissing ? "该交易日行情缓存缺失" : "等待后续交易日收盘"}
+            >
+              <small>{label}</small>
+              <strong>{cacheMissing ? "缺缓存" : "待收盘"}</strong>
+            </span>
+          );
+        }
+        return (
+          <span
+            className={
+              bar.return_from_base_pct === null
+                ? ""
+                : bar.return_from_base_pct >= 0
+                  ? "positive"
+                  : "negative"
+            }
+            key={bar.trade_date}
+            title={`${bar.trade_date} 收盘 ${bar.close.toFixed(2)}`}
+          >
+            <small>{label}</small>
+            <strong>{formatOptionalPercent(bar.return_from_base_pct)}</strong>
+          </span>
+        );
+      })}
+    </div>
+  );
+}
+
+function reviewLabelCopy(label: string) {
+  const labels: Record<string, string> = {
+    success: "兑现",
+    partial: "部分兑现",
+    miss: "失败",
+    avoid_success: "规避有效",
+    false_negative: "漏判",
+    pending: "待观察",
+  };
+  return labels[label] ?? label;
+}
+
+function AgentEvalPanel() {
+  const [report, setReport] = useState<AgentEvalReportResponse | null>(null);
+  const [running, setRunning] = useState(false);
+  const [error, setError] = useState<string | null>(null);
+
+  async function runEval() {
+    setRunning(true);
+    setError(null);
+    try {
+      const response = await fetchAgentEvalReport();
+      setReport(response);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "Agent 评测失败");
+    } finally {
+      setRunning(false);
+    }
+  }
+
+  const failedCases = report?.results.filter((item) => !item.passed) ?? [];
+  const repairedCases = report?.results.filter((item) => item.backend_repaired_tools.length > 0) ?? [];
+
+  return (
+    <Panel title="Agent 质量评测" icon={<ShieldAlert size={18} />}>
+      <div className="agent-eval-panel">
+        <div className="agent-eval-summary">
+          <div>
+            <span>离线回归套件</span>
+            <strong>
+              {report ? `${Math.round(report.pass_rate * 100)}%` : "未运行"}
+            </strong>
+            <p>
+              {report
+                ? `${report.passed}/${report.total} 通过，${report.failed} 个失败`
+                : "运行内置问题集，检查意图、工具调用、回答事实和安全边界。"}
+            </p>
+          </div>
+          <button type="button" onClick={runEval} disabled={running}>
+            {running ? "评测中..." : "运行评测"}
+          </button>
+        </div>
+
+        {error ? <p className="agent-eval-error">{error}</p> : null}
+
+        {report ? (
+          <>
+            <div className="agent-eval-metrics">
+              <span>
+                <small>用例数</small>
+                <strong>{report.total}</strong>
+              </span>
+              <span>
+                <small>通过</small>
+                <strong>{report.passed}</strong>
+              </span>
+              <span>
+                <small>失败</small>
+                <strong>{report.failed}</strong>
+              </span>
+              <span>
+                <small>后端修复</small>
+                <strong>{repairedCases.length}</strong>
+              </span>
+            </div>
+
+            {failedCases.length > 0 ? (
+              <div className="agent-eval-section">
+                <strong>失败用例</strong>
+                {failedCases.map((item) => (
+                  <AgentEvalCaseRow item={item} key={item.case_id} />
+                ))}
+              </div>
+            ) : (
+              <p className="agent-eval-pass">当前离线评测全部通过。</p>
+            )}
+
+            <div className="agent-eval-section">
+              <strong>评测明细</strong>
+              <div className="agent-eval-case-grid">
+                {report.results.map((item) => (
+                  <AgentEvalCaseRow compact item={item} key={item.case_id} />
+                ))}
+              </div>
+            </div>
+          </>
+        ) : null}
+      </div>
+    </Panel>
+  );
+}
+
+function AgentEvalCaseRow({
+  item,
+  compact = false,
+}: {
+  item: AgentEvalCaseReport;
+  compact?: boolean;
+}) {
+  const tools = item.final_tool_calls.length > 0 ? item.final_tool_calls : item.trace_names;
+
+  return (
+    <article className={`agent-eval-case ${item.passed ? "case-pass" : "case-fail"}`}>
+      <header>
+        <strong>{item.case_id}</strong>
+        <span>{item.passed ? "pass" : "fail"}</span>
+      </header>
+      <div className="agent-eval-case-tags">
+        <span>{item.intent}</span>
+        {tools.slice(0, compact ? 2 : 5).map((tool) => (
+          <span key={`${item.case_id}-${tool}`}>{tool}</span>
+        ))}
+      {item.backend_repaired_tools.length > 0 ? (
+        <span>repair {item.backend_repaired_tools.join(", ")}</span>
+      ) : null}
+      </div>
+      {!compact || !item.passed ? (
+        <>
+          {item.failures.length > 0 ? (
+            <ul>
+              {item.failures.map((failure) => (
+                <li key={failure}>{failure}</li>
+              ))}
+            </ul>
+          ) : null}
+          {item.repair_reasons.length > 0 ? (
+            <ul className="agent-eval-repair-reasons">
+              {item.repair_reasons.map((reason) => (
+                <li key={reason}>{reason}</li>
+              ))}
+            </ul>
+          ) : null}
+          <p>{item.answer_preview}</p>
+        </>
+      ) : null}
+    </article>
+  );
+}
+
 function FirstBoardRatingPanel({ ratings }: { ratings: FirstBoardRatingsResponse }) {
   /** Render the first-board rating summary generated from deterministic facts. */
 
-  const topCandidate = ratings.candidates[0];
+  const topCandidates = ratings.candidates.slice(0, 5);
+  const topCandidate = topCandidates[0];
 
   return (
     <Panel title="首板评级 Agent" icon={<BarChart3 size={18} />}>
@@ -570,14 +1509,53 @@ function FirstBoardRatingPanel({ ratings }: { ratings: FirstBoardRatingsResponse
           <strong>{ratings.filtered_out.length} 只过滤</strong>
           <strong>{topCandidate ? `${topCandidate.rating} / ${topCandidate.score.toFixed(1)}` : "暂无候选"}</strong>
         </div>
-        {topCandidate ? (
-          <div className="rating-summary-copy">
-            <p>
-              当前最高评分为 {topCandidate.facts.name}（{topCandidate.facts.symbol}），
-              评级 {topCandidate.rating}，置信度 {formatPercent(topCandidate.confidence)}。
-            </p>
-            <p>{topCandidate.reasons.slice(0, 3).join("；")}。</p>
-            <p>风险观察：{topCandidate.risks.slice(0, 3).join("；")}。</p>
+        {topCandidates.length > 0 ? (
+          <div className="rating-top-list">
+            {topCandidates.map((candidate, index) => (
+              <Link
+                className="rating-top-card"
+                key={`${candidate.facts.trade_date}-${candidate.facts.symbol}`}
+                to={`/stocks/${candidate.facts.symbol}`}
+              >
+                <header>
+                  <div>
+                    <span>Top {index + 1}</span>
+                    <strong>{candidate.facts.name}</strong>
+                    <small>{candidate.facts.symbol} / {candidate.facts.industry}</small>
+                  </div>
+                  <div className="rating-top-score">
+                    <b>{candidate.score.toFixed(1)}</b>
+                    <span className={`rating-badge rating-${candidate.rating.toLowerCase()}`}>
+                      {candidate.rating}
+                    </span>
+                  </div>
+                </header>
+
+                <div className="rating-top-facts">
+                  <Fact label="首封" value={candidate.facts.first_limit_time.slice(0, 5)} />
+                  <Fact label="炸板" value={`${candidate.facts.break_count}`} />
+                  <Fact label="换手" value={`${candidate.facts.turnover_rate.toFixed(1)}%`} />
+                  <Fact label="成交额" value={formatAmount(candidate.facts.amount)} />
+                  <Fact label="置信度" value={formatPercent(candidate.confidence)} />
+                  <Fact label="市场情绪" value={sentimentCopy[candidate.facts.market_sentiment].label} />
+                </div>
+
+                <section className="rating-top-reasons">
+                  <strong>评分高的原因</strong>
+                  <ul>
+                    {candidate.reasons.slice(0, 3).map((reason) => (
+                      <li key={reason}>{reason}</li>
+                    ))}
+                  </ul>
+                </section>
+
+                {candidate.risks.length > 0 ? (
+                  <p className="rating-top-risk">
+                    风险观察：{candidate.risks.slice(0, 2).join("；")}
+                  </p>
+                ) : null}
+              </Link>
+            ))}
           </div>
         ) : (
           <div className="rating-summary-copy">
@@ -721,6 +1699,135 @@ function RatingBacktestPanel({ backtest }: { backtest: RatingBacktestResponse })
     </Panel>
   );
 }
+
+function RatingEvaluationPanel({ evaluation }: { evaluation: AgentEvaluationResponse }) {
+  /** Render saved prediction review results from the Evaluation Agent. */
+
+  const readyRate = evaluation.prediction_count > 0
+    ? evaluation.outcome_ready_count / evaluation.prediction_count
+    : 0;
+  const priorityItems = evaluation.evaluations.slice(0, 6);
+
+  return (
+    <Panel title="Evaluation Agent 预测复盘" icon={<ShieldAlert size={18} />}>
+      <div className="evaluation-panel">
+        <div className="evaluation-summary">
+          <div>
+            <span>复盘区间</span>
+            <strong>{evaluation.start_date} 至 {evaluation.end_date}</strong>
+          </div>
+          <div>
+            <span>预测快照</span>
+            <strong>{evaluation.prediction_count} 条</strong>
+          </div>
+          <div>
+            <span>Outcome 覆盖</span>
+            <strong>{formatPercent(readyRate)}</strong>
+          </div>
+          <div>
+            <span>误判 / 漏判</span>
+            <strong>
+              {evaluation.label_counts.miss ?? 0} / {evaluation.label_counts.false_negative ?? 0}
+            </strong>
+          </div>
+        </div>
+
+        <div className="evaluation-labels">
+          {evaluationLabelOrder.map((label) => (
+            <div className={`evaluation-label label-${label}`} key={label}>
+              <span>{evaluationLabelCopy[label]}</span>
+              <strong>{evaluation.label_counts[label] ?? 0}</strong>
+            </div>
+          ))}
+        </div>
+
+        <div className="evaluation-insights">
+          <section>
+            <h3>复盘摘要</h3>
+            {evaluation.summary.length > 0 ? (
+              <ul>
+                {evaluation.summary.map((item) => (
+                  <li key={item}>{item}</li>
+                ))}
+              </ul>
+            ) : (
+              <p>暂无可展示的复盘摘要。</p>
+            )}
+            {evaluation.warnings.length > 0 ? (
+              <div className="backtest-warnings">
+                {evaluation.warnings.map((warning) => (
+                  <span key={warning}>{warning}</span>
+                ))}
+              </div>
+            ) : null}
+          </section>
+
+          <section>
+            <h3>重点样本</h3>
+            {priorityItems.length > 0 ? (
+              <div className="evaluation-card-list">
+                {priorityItems.map((item) => (
+                  <article
+                    className={`evaluation-card label-${item.evaluation_label}`}
+                    key={item.prediction_id}
+                  >
+                    <header>
+                      <div>
+                        <strong>{item.name}</strong>
+                        <span>{item.symbol} / {item.trade_date}</span>
+                      </div>
+                      <b>{evaluationLabelCopy[item.evaluation_label]}</b>
+                    </header>
+                    <dl>
+                      <div>
+                        <dt>评分</dt>
+                        <dd>{item.rating} / {item.score.toFixed(1)}</dd>
+                      </div>
+                      <div>
+                        <dt>晋级二板</dt>
+                        <dd>{item.promoted_to_second_board ? "是" : "否"}</dd>
+                      </div>
+                      <div>
+                        <dt>次日最高</dt>
+                        <dd>{formatOptionalPercent(item.next_high_pct)}</dd>
+                      </div>
+                      <div>
+                        <dt>三日收盘</dt>
+                        <dd>{formatOptionalPercent(item.three_day_close_pct)}</dd>
+                      </div>
+                    </dl>
+                    <p>{item.lesson}</p>
+                    <p>{item.scoring_suggestion}</p>
+                  </article>
+                ))}
+              </div>
+            ) : (
+              <p>暂无重点复盘样本。</p>
+            )}
+          </section>
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+const evaluationLabelOrder = [
+  "success",
+  "partial",
+  "miss",
+  "false_negative",
+  "avoid_success",
+  "pending",
+] as const;
+
+const evaluationLabelCopy: Record<(typeof evaluationLabelOrder)[number], string> = {
+  success: "成功",
+  partial: "部分验证",
+  miss: "误判",
+  false_negative: "漏判",
+  avoid_success: "规避有效",
+  pending: "待验证",
+};
 
 function DetailView({ view, data }: { view: ViewKey; data: DashboardData }) {
   /** Render one of the latest-day stock list views. */
@@ -987,7 +2094,7 @@ function StockDetail({ data }: { data: DashboardData }) {
     if (firstBoardRating) {
       setSimilarCasesLoading(true);
       setSimilarCasesError(null);
-      fetchFirstBoardSimilarCases(symbol, firstBoardRating.facts.trade_date, 5)
+      fetchFirstBoardSimilarCases(symbol, firstBoardRating.facts.trade_date, 3)
         .then(setSimilarCases)
         .catch((caught) => {
           setSimilarCases(null);
@@ -1043,6 +2150,19 @@ function StockDetail({ data }: { data: DashboardData }) {
         error={latestCloseError}
       />
 
+      <Panel title="封板信息" icon={<Flame size={18} />}>
+        <div className="stock-facts">
+          <Fact label="首次封板" value={stockEvent.first_limit_time.slice(0, 5)} />
+          <Fact label="最后封板" value={stockEvent.last_limit_time.slice(0, 5)} />
+          <Fact label="封板次数" value={`${stockEvent.seal_count}`} />
+          <Fact label="炸板次数" value={`${stockEvent.break_count}`} />
+          <Fact label="成交额" value={formatAmount(stockEvent.amount)} />
+          <Fact label="换手率" value={`${stockEvent.turnover_rate.toFixed(1)}%`} />
+          <Fact label="行业" value={stockEvent.industry} />
+          <Fact label="题材" value={stockEvent.concept || "暂无"} />
+        </div>
+      </Panel>
+
       <section className="stock-kline-grid">
         <Panel title="五日 K 线" icon={<LineChart size={18} />}>
           {klineLoading ? (
@@ -1082,19 +2202,6 @@ function StockDetail({ data }: { data: DashboardData }) {
           error={criticError}
         />
       </section>
-
-      <Panel title="封板信息" icon={<Flame size={18} />}>
-        <div className="stock-facts">
-          <Fact label="首次封板" value={stockEvent.first_limit_time.slice(0, 5)} />
-          <Fact label="最后封板" value={stockEvent.last_limit_time.slice(0, 5)} />
-          <Fact label="封板次数" value={`${stockEvent.seal_count}`} />
-          <Fact label="炸板次数" value={`${stockEvent.break_count}`} />
-          <Fact label="成交额" value={formatAmount(stockEvent.amount)} />
-          <Fact label="换手率" value={`${stockEvent.turnover_rate.toFixed(1)}%`} />
-          <Fact label="行业" value={stockEvent.industry} />
-          <Fact label="题材" value={stockEvent.concept || "暂无"} />
-        </div>
-      </Panel>
     </div>
   );
 }
@@ -1145,7 +2252,7 @@ function SimilarCasesPanel({
         {data.cases.length === 0 ? (
           <div className="rating-detail-empty">未找到足够相似的历史首板样本。</div>
         ) : (
-          data.cases.map((item) => (
+          data.cases.slice(0, 3).map((item) => (
             <article className="similar-case-card" key={`${item.trade_date}-${item.symbol}`}>
               <header>
                 <div>
@@ -1295,6 +2402,43 @@ function FirstBoardRatingDetail({ rating }: { rating: FirstBoardRating | null })
           </div>
         </div>
 
+        {rating.facts.enrichment ? (
+          <div className="rating-enrichment-facts">
+            <span>
+              <small>近20日涨幅</small>
+              <strong>{formatOptionalPercent(rating.facts.enrichment.return_20d_pct)}</strong>
+            </span>
+            <span>
+              <small>距60日高点</small>
+              <strong>{formatOptionalPercent(rating.facts.enrichment.distance_60d_high_pct)}</strong>
+            </span>
+            <span>
+              <small>流通市值</small>
+              <strong>
+                {rating.facts.enrichment.float_market_cap === null
+                  ? "暂无"
+                  : formatAmount(rating.facts.enrichment.float_market_cap)}
+              </strong>
+            </span>
+            <span>
+              <small>上市日期</small>
+              <strong>{rating.facts.enrichment.listing_date ?? "早期上市"}</strong>
+            </span>
+            <span>
+              <small>龙虎榜</small>
+              <strong>{rating.facts.enrichment.dragon_tiger_on_list ? "上榜" : "未上榜"}</strong>
+            </span>
+            <span>
+              <small>东财人气</small>
+              <strong>
+                {rating.facts.enrichment.popularity_rank === null
+                  ? "Top100 外"
+                  : `第 ${rating.facts.enrichment.popularity_rank}`}
+              </strong>
+            </span>
+          </div>
+        ) : null}
+
         <div className="rating-detail-section">
           <h3>评分项</h3>
           <div className="score-breakdown-list">
@@ -1304,7 +2448,7 @@ function FirstBoardRatingDetail({ rating }: { rating: FirstBoardRating | null })
                   <strong>{item.name}</strong>
                   <span>{item.evidence.join("；")}</span>
                 </div>
-                <b>{item.score.toFixed(1)} / {item.max_score}</b>
+                <b>{item.score.toFixed(1)} / {item.max_score.toFixed(1)}</b>
               </div>
             ))}
           </div>

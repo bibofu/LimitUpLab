@@ -133,7 +133,47 @@ export interface FirstBoardCandidateFacts {
   market_failed_limit_up_rate: number;
   market_max_board_height: number;
   market_sentiment: Sentiment;
+  enrichment: FirstBoardEnrichmentSnapshot | null;
   data_missing: string[];
+}
+
+export interface FirstBoardEnrichmentSnapshot {
+  trade_date: string;
+  symbol: string;
+  kline_bar_count: number;
+  return_5d_pct: number | null;
+  return_20d_pct: number | null;
+  return_60d_pct: number | null;
+  distance_20d_high_pct: number | null;
+  distance_60d_high_pct: number | null;
+  volume_ratio_5d: number | null;
+  volatility_20d: number | null;
+  close_above_ma20: boolean | null;
+  ma_alignment: string;
+  listing_date: string | null;
+  listing_age_days: number | null;
+  float_market_cap: number | null;
+  float_market_cap_source: string | null;
+  recent_limit_up_count_20d: number;
+  recent_limit_up_count_60d: number;
+  industry_first_board_count: number;
+  industry_continued_board_count: number;
+  industry_failed_count: number;
+  industry_max_board_height: number;
+  industry_first_limit_rank: number | null;
+  previous_first_board_promotion_rate: number | null;
+  market_first_board_seal_rate: number | null;
+  dragon_tiger_on_list: boolean;
+  dragon_tiger_net_buy_amount: number | null;
+  dragon_tiger_buy_amount: number | null;
+  dragon_tiger_sell_amount: number | null;
+  dragon_tiger_reason: string | null;
+  popularity_rank: number | null;
+  popularity_rank_change: number | null;
+  popularity_snapshot_at: string | null;
+  data_missing: string[];
+  feature_version: string;
+  created_at: string;
 }
 
 export interface ScoreBreakdownItem {
@@ -219,6 +259,117 @@ export interface FirstBoardCriticResponse {
   generated_by: string;
 }
 
+export interface AgentEvaluationItem {
+  prediction_id: string;
+  trade_date: string;
+  symbol: string;
+  name: string;
+  score: number;
+  rating: string;
+  confidence: number;
+  evaluation_label:
+    | "success"
+    | "partial"
+    | "miss"
+    | "avoid_success"
+    | "false_negative"
+    | "pending";
+  outcome_ready: boolean;
+  promoted_to_second_board: boolean;
+  next_high_pct: number | null;
+  next_close_pct: number | null;
+  three_day_high_pct: number | null;
+  three_day_close_pct: number | null;
+  lesson: string;
+  scoring_suggestion: string;
+}
+
+export interface AgentEvaluationResponse {
+  start_date: string;
+  end_date: string;
+  prediction_count: number;
+  outcome_ready_count: number;
+  label_counts: Record<string, number>;
+  evaluations: AgentEvaluationItem[];
+  summary: string[];
+  warnings: string[];
+  generated_by: string;
+}
+
+export interface AgentEvalCaseReport {
+  case_id: string;
+  passed: boolean;
+  failures: string[];
+  intent: string;
+  planner_tool_calls: string[];
+  final_tool_calls: string[];
+  backend_repaired_tools: string[];
+  repair_reasons: string[];
+  trace_names: string[];
+  warnings: string[];
+  answer_preview: string;
+}
+
+export interface AgentEvalReportResponse {
+  mode: "offline";
+  total: number;
+  passed: number;
+  failed: number;
+  pass_rate: number;
+  results: AgentEvalCaseReport[];
+  generated_by: string;
+}
+
+export interface ReviewAgentPick {
+  trade_date: string;
+  symbol: string;
+  name: string;
+  score: number;
+  rating: string;
+  confidence: number;
+  evaluation_label: string;
+  outcome_ready: boolean;
+  promoted_to_second_board: boolean;
+  next_high_pct: number | null;
+  next_close_pct: number | null;
+  three_day_high_pct: number | null;
+  three_day_close_pct: number | null;
+  reasons: string[];
+  risks: string[];
+  post_bars: ReviewAgentPostBar[];
+  expected_post_bar_count: number;
+  post_bar_cache_complete: boolean;
+}
+
+export interface ReviewAgentPostBar {
+  trade_date: string;
+  open: number;
+  high: number;
+  low: number;
+  close: number;
+  change_pct: number | null;
+  return_from_base_pct: number | null;
+}
+
+export interface ReviewAgentReportResponse {
+  start_date: string;
+  end_date: string;
+  sample_size: number;
+  success_count: number;
+  failed_count: number;
+  pending_count: number;
+  main_findings: string[];
+  successful_patterns: string[];
+  failed_patterns: string[];
+  scoring_bias: string[];
+  adjustment_suggestions: string[];
+  confidence: number;
+  reviewed_picks: ReviewAgentPick[];
+  tool_results: AgentToolTrace[];
+  warnings: string[];
+  generated_by: string;
+}
+
 export interface SimilarCaseOutcome {
   next_trade_date: string | null;
   next_open_pct: number | null;
@@ -280,8 +431,61 @@ export interface AgentChatResponse {
   answer: string;
   tool_calls: string[];
   tool_results: AgentToolTrace[];
+  evidence_cards: AgentEvidenceCard[];
+  tool_policy: AgentToolPolicyAudit;
   references: string[];
   warnings: string[];
+  performance: AgentChatPerformance;
+  generated_by: string;
+}
+
+export interface AgentChatPerformance {
+  planner_duration_ms: number;
+  tool_duration_ms: number;
+  answer_duration_ms: number;
+  total_duration_ms: number;
+  planner_prompt_chars: number;
+  answer_prompt_chars: number;
+}
+
+export type AgentChatStreamStage = "planning" | "tools" | "answering";
+
+export type AgentChatStreamEvent =
+  | {
+      event: "progress";
+      data: { stage: AgentChatStreamStage; message: string };
+    }
+  | {
+      event: "answer_delta";
+      data: { delta: string };
+    }
+  | {
+      event: "completed";
+      data: AgentChatResponse;
+    }
+  | {
+      event: "error";
+      data: { message: string; run_id?: string };
+    };
+
+export interface AgentRunSummary {
+  run_id: string;
+  session_id: string;
+  status: "success" | "error";
+  intent: string | null;
+  message: string;
+  answer_preview: string | null;
+  tool_calls: string[];
+  tool_results: AgentToolTrace[];
+  warnings: string[];
+  error_message: string | null;
+  started_at: string;
+  finished_at: string;
+  duration_ms: number;
+}
+
+export interface AgentRunsResponse {
+  runs: AgentRunSummary[];
   generated_by: string;
 }
 
@@ -291,6 +495,7 @@ export interface AgentDataHealthTopCandidate {
   score: number;
   rating: string;
   feature_ready: boolean;
+  enrichment_ready: boolean;
   similar_case_count: number;
   similar_cases_with_post_bars: number;
 }
@@ -302,11 +507,35 @@ export interface AgentDataHealthResponse {
   raw_event_count: number;
   first_board_features_ready: boolean;
   first_board_feature_count: number;
+  enrichment_ready: boolean;
+  enrichment_count: number;
   top_candidates_checked: number;
   similar_cases_ready: boolean;
   post_bars_ready: boolean;
   top_candidates: AgentDataHealthTopCandidate[];
   warnings: string[];
+}
+
+export interface AgentSystemHealthResponse {
+  status: "healthy" | "partial" | "missing";
+  current_date: string;
+  current_time: string;
+  latest_local_trade_date: string | null;
+  expected_data_date: string | null;
+  data_fresh: boolean;
+  data_update_recommended: boolean;
+  data_update_reason: string;
+  llm_enabled: boolean;
+  llm_provider_configured: boolean;
+  llm_model: string | null;
+  proxy_configured: boolean;
+  proxy_warning: string | null;
+  offline_eval_passed: boolean | null;
+  offline_eval_total: number | null;
+  offline_eval_failed: number | null;
+  data_health: AgentDataHealthResponse;
+  warnings: string[];
+  generated_by: string;
 }
 
 export interface AgentToolTrace {
@@ -316,4 +545,33 @@ export interface AgentToolTrace {
   status: "success" | "error" | "skipped";
   output: Record<string, unknown>;
   error: string | null;
+  duration_ms: number | null;
+}
+
+export interface AgentToolPolicyAudit {
+  planner_tool_calls: string[];
+  final_tool_calls: string[];
+  backend_repaired_tools: string[];
+  repair_reasons: string[];
+  safety_fallback_used: boolean;
+}
+
+export interface AgentEvidenceCard {
+  title: string;
+  kind:
+    | "execution"
+    | "market"
+    | "candidate_pool"
+    | "limit_up_events"
+    | "rating"
+    | "critic"
+    | "similar_cases"
+    | "evaluation"
+    | "data_availability"
+    | "tool";
+  status: "success" | "error" | "skipped";
+  summary: string;
+  facts: string[];
+  metrics: Record<string, string | number | boolean | null>;
+  source_tools: string[];
 }

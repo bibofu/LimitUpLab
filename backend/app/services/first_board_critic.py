@@ -25,7 +25,12 @@ def build_first_board_critic(
 ) -> FirstBoardCriticResponse:
     """Review one first-board rating and surface opposing evidence."""
 
-    ratings = build_first_board_ratings(events=events, trade_date=trade_date)
+    repository = first_board_repository or SQLiteFirstBoardRepository()
+    ratings = build_first_board_ratings(
+        events=events,
+        trade_date=trade_date,
+        first_board_repository=repository,
+    )
     rating = next(
         (item for item in ratings.candidates if item.facts.symbol == symbol),
         None,
@@ -33,7 +38,6 @@ def build_first_board_critic(
     if rating is None:
         raise ValueError("target first-board rating not found")
 
-    repository = first_board_repository or SQLiteFirstBoardRepository()
     similar_cases: list[SimilarFirstBoardCase] = []
     try:
         similar_response = find_similar_first_board_cases(

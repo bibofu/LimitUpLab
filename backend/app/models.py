@@ -1,7 +1,7 @@
 ﻿from datetime import date, datetime, time
 from typing import Any, Literal
 
-from pydantic import BaseModel, Field
+from pydantic import BaseModel, Field, model_validator
 
 
 class LimitUpEvent(BaseModel):
@@ -251,6 +251,47 @@ class FirstBoardFilterResult(BaseModel):
     data_missing: list[str]
 
 
+class FirstBoardEnrichmentSnapshot(BaseModel):
+    """Point-in-time enrichment facts available after the first-board close."""
+
+    trade_date: date
+    symbol: str
+    kline_bar_count: int = 0
+    return_5d_pct: float | None = None
+    return_20d_pct: float | None = None
+    return_60d_pct: float | None = None
+    distance_20d_high_pct: float | None = None
+    distance_60d_high_pct: float | None = None
+    volume_ratio_5d: float | None = None
+    volatility_20d: float | None = None
+    close_above_ma20: bool | None = None
+    ma_alignment: str = "unknown"
+    listing_date: date | None = None
+    listing_age_days: int | None = None
+    float_market_cap: float | None = None
+    float_market_cap_source: str | None = None
+    recent_limit_up_count_20d: int = 0
+    recent_limit_up_count_60d: int = 0
+    industry_first_board_count: int = 0
+    industry_continued_board_count: int = 0
+    industry_failed_count: int = 0
+    industry_max_board_height: int = 0
+    industry_first_limit_rank: int | None = None
+    previous_first_board_promotion_rate: float | None = None
+    market_first_board_seal_rate: float | None = None
+    dragon_tiger_on_list: bool = False
+    dragon_tiger_net_buy_amount: float | None = None
+    dragon_tiger_buy_amount: float | None = None
+    dragon_tiger_sell_amount: float | None = None
+    dragon_tiger_reason: str | None = None
+    popularity_rank: int | None = None
+    popularity_rank_change: int | None = None
+    popularity_snapshot_at: datetime | None = None
+    data_missing: list[str] = Field(default_factory=list)
+    feature_version: str
+    created_at: datetime
+
+
 class FirstBoardCandidateFacts(BaseModel):
     """Structured facts used to rate one first-board limit-up candidate."""
 
@@ -274,6 +315,7 @@ class FirstBoardCandidateFacts(BaseModel):
     market_failed_limit_up_rate: float
     market_max_board_height: int
     market_sentiment: Literal["heating", "diverging", "cooling"]
+    enrichment: FirstBoardEnrichmentSnapshot | None = None
     data_missing: list[str] = Field(default_factory=list)
 
 
@@ -374,6 +416,149 @@ class FirstBoardCriticResponse(BaseModel):
     generated_by: str
 
 
+class AgentPrediction(BaseModel):
+    """Persisted first-board rating snapshot for later evaluation."""
+
+    prediction_id: str
+    trade_date: date
+    symbol: str
+    name: str
+    score: float
+    rating: str
+    confidence: float
+    scoring_version: str
+    facts_json: dict[str, Any]
+    reasons: list[str]
+    risks: list[str]
+    created_at: datetime
+
+
+class AgentEvaluationItem(BaseModel):
+    """Post-outcome evaluation for one persisted first-board prediction."""
+
+    prediction_id: str
+    trade_date: date
+    symbol: str
+    name: str
+    score: float
+    rating: str
+    confidence: float
+    evaluation_label: Literal[
+        "success",
+        "partial",
+        "miss",
+        "avoid_success",
+        "false_negative",
+        "pending",
+    ]
+    outcome_ready: bool
+    promoted_to_second_board: bool
+    next_high_pct: float | None = None
+    next_close_pct: float | None = None
+    three_day_high_pct: float | None = None
+    three_day_close_pct: float | None = None
+    lesson: str
+    scoring_suggestion: str
+
+
+class AgentEvaluationResponse(BaseModel):
+    """Evaluation Agent summary for persisted first-board predictions."""
+
+    start_date: date
+    end_date: date
+    prediction_count: int
+    outcome_ready_count: int
+    label_counts: dict[str, int]
+    evaluations: list[AgentEvaluationItem]
+    summary: list[str]
+    warnings: list[str] = Field(default_factory=list)
+    generated_by: str
+
+
+class ReviewAgentPick(BaseModel):
+    """One high-score first-board pick reviewed by the Review Agent."""
+
+    trade_date: date
+    symbol: str
+    name: str
+    score: float
+    rating: str
+    confidence: float
+    evaluation_label: str
+    outcome_ready: bool
+    promoted_to_second_board: bool
+    next_high_pct: float | None = None
+    next_close_pct: float | None = None
+    three_day_high_pct: float | None = None
+    three_day_close_pct: float | None = None
+    reasons: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+    post_bars: list["ReviewAgentPostBar"] = Field(default_factory=list)
+    expected_post_bar_count: int = 0
+    post_bar_cache_complete: bool = False
+
+
+class ReviewAgentPostBar(BaseModel):
+    """One cached daily bar after a reviewed first-board pick."""
+
+    trade_date: date
+    open: float
+    high: float
+    low: float
+    close: float
+    change_pct: float | None = None
+    return_from_base_pct: float | None = None
+
+
+class ReviewAgentReportResponse(BaseModel):
+    """LLM tool-driven review report for high-score first-board picks."""
+
+    start_date: date
+    end_date: date
+    sample_size: int
+    success_count: int
+    failed_count: int
+    pending_count: int
+    main_findings: list[str] = Field(default_factory=list)
+    successful_patterns: list[str] = Field(default_factory=list)
+    failed_patterns: list[str] = Field(default_factory=list)
+    scoring_bias: list[str] = Field(default_factory=list)
+    adjustment_suggestions: list[str] = Field(default_factory=list)
+    confidence: float
+    reviewed_picks: list[ReviewAgentPick] = Field(default_factory=list)
+    tool_results: list["AgentToolTrace"] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    generated_by: str
+
+
+class AgentEvalCaseReport(BaseModel):
+    """One deterministic chat eval case shown in the frontend quality panel."""
+
+    case_id: str
+    passed: bool
+    failures: list[str] = Field(default_factory=list)
+    intent: str
+    planner_tool_calls: list[str] = Field(default_factory=list)
+    final_tool_calls: list[str] = Field(default_factory=list)
+    backend_repaired_tools: list[str] = Field(default_factory=list)
+    repair_reasons: list[str] = Field(default_factory=list)
+    trace_names: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    answer_preview: str
+
+
+class AgentEvalReportResponse(BaseModel):
+    """Deterministic Agent regression suite report for local quality checks."""
+
+    mode: Literal["offline"]
+    total: int
+    passed: int
+    failed: int
+    pass_rate: float
+    results: list[AgentEvalCaseReport]
+    generated_by: str
+
+
 class AgentChatRequest(BaseModel):
     """User chat request with optional page context."""
 
@@ -385,6 +570,50 @@ class AgentChatRequest(BaseModel):
     page_context: dict[str, str] = Field(default_factory=dict)
 
 
+class AgentChatPerformance(BaseModel):
+    """Measured latency and prompt sizes for one LLM-backed chat turn."""
+
+    planner_duration_ms: int = 0
+    tool_duration_ms: int = 0
+    answer_duration_ms: int = 0
+    total_duration_ms: int = 0
+    planner_prompt_chars: int = 0
+    answer_prompt_chars: int = 0
+
+
+class AgentEvidenceCard(BaseModel):
+    """User-facing evidence extracted from raw Agent tool traces."""
+
+    title: str
+    kind: Literal[
+        "execution",
+        "market",
+        "candidate_pool",
+        "limit_up_events",
+        "rating",
+        "critic",
+        "similar_cases",
+        "evaluation",
+        "data_availability",
+        "tool",
+    ]
+    status: Literal["success", "error", "skipped"] = "success"
+    summary: str
+    facts: list[str] = Field(default_factory=list)
+    metrics: dict[str, Any] = Field(default_factory=dict)
+    source_tools: list[str] = Field(default_factory=list)
+
+
+class AgentToolPolicyAudit(BaseModel):
+    """Planner-vs-final audit for one Agent response."""
+
+    planner_tool_calls: list[str] = Field(default_factory=list)
+    final_tool_calls: list[str] = Field(default_factory=list)
+    backend_repaired_tools: list[str] = Field(default_factory=list)
+    repair_reasons: list[str] = Field(default_factory=list)
+    safety_fallback_used: bool = False
+
+
 class AgentChatResponse(BaseModel):
     """Tool-grounded chat response from the first-board Agent."""
 
@@ -394,9 +623,26 @@ class AgentChatResponse(BaseModel):
     answer: str
     tool_calls: list[str] = Field(default_factory=list)
     tool_results: list["AgentToolTrace"] = Field(default_factory=list)
+    evidence_cards: list[AgentEvidenceCard] = Field(default_factory=list)
+    tool_policy: AgentToolPolicyAudit = Field(default_factory=AgentToolPolicyAudit)
     references: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    performance: AgentChatPerformance = Field(default_factory=AgentChatPerformance)
     generated_by: str
+
+    @model_validator(mode="after")
+    def populate_agent_ui_fields(self) -> "AgentChatResponse":
+        """Build UI evidence and planner audit fields when callers omit them."""
+
+        if not self.evidence_cards:
+            self.evidence_cards = build_agent_evidence_cards(self.tool_results, self.warnings)
+        if not self.tool_policy.final_tool_calls:
+            self.tool_policy = build_agent_tool_policy_audit(
+                tool_calls=self.tool_calls,
+                tool_results=self.tool_results,
+                warnings=self.warnings,
+            )
+        return self
 
 
 class AgentToolTrace(BaseModel):
@@ -408,6 +654,318 @@ class AgentToolTrace(BaseModel):
     status: Literal["success", "error", "skipped"] = "success"
     output: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
+    duration_ms: int | None = None
+
+
+def build_agent_tool_policy_audit(
+    *,
+    tool_calls: list[str],
+    tool_results: list[AgentToolTrace],
+    warnings: list[str] | None = None,
+) -> AgentToolPolicyAudit:
+    """Compare the LLM planner's requested tools with final backend execution."""
+
+    planner_calls = _extract_planner_tool_calls(tool_results)
+    final_calls = [
+        tool
+        for tool in tool_calls
+        if tool not in {"llm_tool_planner", "llm_tool_answer", "template_general_answer"}
+    ]
+    if not final_calls:
+        final_calls = [
+            trace.name
+            for trace in tool_results
+            if trace.name not in {"llm_tool_planner", "llm_tool_answer", "template_general_answer"}
+        ]
+    backend_repaired = [
+        tool for tool in final_calls if planner_calls and tool not in planner_calls
+    ]
+    warnings = warnings or []
+    return AgentToolPolicyAudit(
+        planner_tool_calls=planner_calls,
+        final_tool_calls=final_calls,
+        backend_repaired_tools=backend_repaired,
+        repair_reasons=[_repair_reason(tool) for tool in backend_repaired],
+        safety_fallback_used=any(
+            "template fallback" in warning.lower()
+            or "safety" in warning.lower()
+            or "disabled" in warning.lower()
+            for warning in warnings
+        ),
+    )
+
+
+def build_agent_evidence_cards(
+    tool_results: list[AgentToolTrace],
+    warnings: list[str] | None = None,
+) -> list[AgentEvidenceCard]:
+    """Convert raw tool traces into user-facing evidence cards."""
+
+    if not tool_results and not warnings:
+        return []
+
+    cards: list[AgentEvidenceCard] = []
+    if tool_results:
+        policy = build_agent_tool_policy_audit(
+            tool_calls=[],
+            tool_results=tool_results,
+            warnings=warnings,
+        )
+        success_count = sum(1 for trace in tool_results if trace.status == "success")
+        error_count = sum(1 for trace in tool_results if trace.status == "error")
+        skipped_count = sum(1 for trace in tool_results if trace.status == "skipped")
+        cards.append(
+            AgentEvidenceCard(
+                title="Agent 执行摘要",
+                kind="execution",
+                status="error" if error_count else "success",
+                summary=f"本次回答调用 {len(tool_results)} 个工具，其中 {success_count} 个成功。",
+                facts=_compact_texts([trace.summary for trace in tool_results[:4]]),
+                metrics={
+                    "tool_count": len(tool_results),
+                    "success_count": success_count,
+                    "error_count": error_count,
+                    "skipped_count": skipped_count,
+                    "repair_count": len(policy.backend_repaired_tools),
+                },
+                source_tools=[trace.name for trace in tool_results],
+            )
+        )
+        if policy.planner_tool_calls or policy.backend_repaired_tools:
+            cards.append(
+                AgentEvidenceCard(
+                    title="Planner vs Final",
+                    kind="execution",
+                    status="skipped" if policy.backend_repaired_tools else "success",
+                    summary=(
+                        "后端对 LLM 工具计划进行了补救。"
+                        if policy.backend_repaired_tools
+                        else "LLM 工具计划与最终执行一致。"
+                    ),
+                    facts=[
+                        f"Planner: {', '.join(policy.planner_tool_calls) or '无'}",
+                        f"Final: {', '.join(policy.final_tool_calls) or '无'}",
+                        *policy.repair_reasons,
+                    ],
+                    metrics={"repair_count": len(policy.backend_repaired_tools)},
+                    source_tools=["llm_tool_planner"],
+                )
+            )
+
+    for trace in tool_results:
+        card = _evidence_card_from_trace(trace)
+        if card is not None:
+            cards.append(card)
+
+    if warnings:
+        cards.append(
+            AgentEvidenceCard(
+                title="数据与回答限制",
+                kind="data_availability",
+                status="skipped",
+                summary="本次回答存在需要注意的数据限制。",
+                facts=_compact_texts(warnings, limit=5),
+                source_tools=[],
+            )
+        )
+    return cards
+
+
+def _evidence_card_from_trace(trace: AgentToolTrace) -> AgentEvidenceCard | None:
+    """Create one evidence card from a trace."""
+
+    output = trace.output or {}
+    metrics = _evidence_metrics(output)
+    facts = _evidence_facts(trace, output)
+    title, kind = _evidence_title_kind(trace.name)
+
+    if trace.name in {"llm_tool_answer", "template_general_answer"}:
+        return None
+
+    return AgentEvidenceCard(
+        title=title,
+        kind=kind,
+        status=trace.status,
+        summary=trace.error or trace.summary,
+        facts=facts,
+        metrics=metrics,
+        source_tools=[trace.name],
+    )
+
+
+def _evidence_title_kind(tool_name: str) -> tuple[str, str]:
+    """Map internal tool names to UI evidence categories."""
+
+    mapping: dict[str, tuple[str, str]] = {
+        "agent_plan": ("问题理解与工具计划", "execution"),
+        "llm_tool_planner": ("LLM 工具规划", "execution"),
+        "market_summary": ("市场环境事实", "market"),
+        "first_board_ratings": ("首板候选池与评分", "candidate_pool"),
+        "limit_up_events": ("涨停事件查询", "limit_up_events"),
+        "first_board_filter": ("首板条件筛选", "candidate_pool"),
+        "first_board_critic": ("评分反证与风险", "critic"),
+        "first_board_similar_cases": ("历史相似案例", "similar_cases"),
+        "rating_backtest": ("评分历史回测", "evaluation"),
+        "rating_evaluation": ("Agent 自我评价", "evaluation"),
+        "limit_up_event_dates": ("本地数据日期", "data_availability"),
+    }
+    return mapping.get(tool_name, (tool_name, "tool"))
+
+
+def _extract_planner_tool_calls(tool_results: list[AgentToolTrace]) -> list[str]:
+    """Extract tool names from the LLM planner trace."""
+
+    for trace in tool_results:
+        if trace.name != "llm_tool_planner":
+            continue
+        raw_calls = trace.input.get("tool_calls") or []
+        if not isinstance(raw_calls, list):
+            return []
+        names: list[str] = []
+        for raw_call in raw_calls:
+            if isinstance(raw_call, dict) and raw_call.get("name"):
+                names.append(str(raw_call["name"]))
+        return names
+    return []
+
+
+def _repair_reason(tool_name: str) -> str:
+    """Explain why the backend inserted a missing tool."""
+
+    reasons = {
+        "first_board_ratings": "用户问题需要评分或候选池事实，planner 未覆盖，后端补充 first_board_ratings。",
+        "first_board_critic": "用户要求反证、风险或可靠性检查，后端补充 first_board_critic。",
+        "first_board_similar_cases": "用户询问历史相似案例，后端补充 first_board_similar_cases。",
+        "limit_up_event_dates": "用户询问本地是否有某日数据，后端补充 limit_up_event_dates。",
+        "limit_up_events": "用户询问当天涨停/连板/炸板明细，后端补充 limit_up_events。",
+        "rating_backtest": "用户询问评分效果或回测，后端补充 rating_backtest。",
+        "rating_evaluation": "用户询问模型复盘或错判样本，后端补充 rating_evaluation。",
+    }
+    return reasons.get(tool_name, f"后端补充 {tool_name} 以满足问题所需事实。")
+
+
+def _evidence_metrics(output: dict[str, Any]) -> dict[str, Any]:
+    """Extract displayable numeric/string metrics from trace output."""
+
+    allowed = (
+        "trade_date",
+        "candidate_count",
+        "matched_count",
+        "event_count",
+        "first_board_count",
+        "continued_board_count",
+        "failed_count",
+        "limit_up_count",
+        "recall_count",
+        "case_count",
+        "outcome_ready_count",
+        "universe_count",
+        "score",
+        "rating",
+        "confidence",
+        "verdict",
+        "status",
+    )
+    metrics: dict[str, Any] = {}
+    for key in allowed:
+        value = output.get(key)
+        if isinstance(value, (str, int, float, bool)) or value is None:
+            metrics[key] = value
+    return {key: value for key, value in metrics.items() if value is not None}
+
+
+def _evidence_facts(trace: AgentToolTrace, output: dict[str, Any]) -> list[str]:
+    """Extract short factual bullets from common trace output fields."""
+
+    raw: list[Any] = [trace.summary]
+    for key in (
+        "top_candidates",
+        "matches",
+        "events",
+        "cases",
+        "support_evidence",
+        "counter_evidence",
+        "warnings",
+        "available_dates",
+        "reason",
+    ):
+        value = output.get(key)
+        if value:
+            raw.extend(_flatten_evidence_value(value))
+    return _compact_texts(raw, limit=5)
+
+
+def _flatten_evidence_value(value: Any) -> list[str]:
+    """Flatten nested trace output into short display strings."""
+
+    if isinstance(value, str):
+        return [value]
+    if isinstance(value, list):
+        flattened: list[str] = []
+        for item in value[:5]:
+            flattened.extend(_flatten_evidence_value(item))
+        return flattened
+    if isinstance(value, dict):
+        name = value.get("name") or value.get("symbol") or value.get("title")
+        symbol = value.get("symbol")
+        score = value.get("score")
+        rating = value.get("rating")
+        trade_date_value = value.get("trade_date")
+        parts = []
+        if name:
+            parts.append(str(name))
+        if symbol and symbol != name:
+            parts.append(str(symbol))
+        if trade_date_value:
+            parts.append(str(trade_date_value))
+        if rating:
+            parts.append(f"评级 {rating}")
+        if isinstance(score, (int, float)):
+            parts.append(f"评分 {score:.1f}")
+        if parts:
+            return [" · ".join(parts)]
+    return []
+
+
+def _compact_texts(values: list[Any], limit: int = 4) -> list[str]:
+    """Deduplicate and trim text fragments for card facts."""
+
+    seen: set[str] = set()
+    result: list[str] = []
+    for value in values:
+        text = str(value).strip()
+        if not text or text in seen:
+            continue
+        seen.add(text)
+        result.append(text[:160])
+        if len(result) >= limit:
+            break
+    return result
+
+
+class AgentRunSummary(BaseModel):
+    """Frontend-friendly summary of a persisted Agent execution."""
+
+    run_id: str
+    session_id: str
+    status: Literal["success", "error"]
+    intent: str | None = None
+    message: str
+    answer_preview: str | None = None
+    tool_calls: list[str] = Field(default_factory=list)
+    tool_results: list[AgentToolTrace] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    error_message: str | None = None
+    started_at: datetime
+    finished_at: datetime
+    duration_ms: int
+
+
+class AgentRunsResponse(BaseModel):
+    """Recent Agent execution summaries for observability UI."""
+
+    runs: list[AgentRunSummary]
+    generated_by: str
 
 
 class AgentDataHealthTopCandidate(BaseModel):
@@ -418,6 +976,7 @@ class AgentDataHealthTopCandidate(BaseModel):
     score: float
     rating: str
     feature_ready: bool
+    enrichment_ready: bool = False
     similar_case_count: int
     similar_cases_with_post_bars: int
 
@@ -431,11 +990,37 @@ class AgentDataHealthResponse(BaseModel):
     raw_event_count: int
     first_board_features_ready: bool
     first_board_feature_count: int
+    enrichment_ready: bool = False
+    enrichment_count: int = 0
     top_candidates_checked: int
     similar_cases_ready: bool
     post_bars_ready: bool
     top_candidates: list[AgentDataHealthTopCandidate] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+
+
+class AgentSystemHealthResponse(BaseModel):
+    """System status used by local startup checks and the frontend."""
+
+    status: Literal["healthy", "partial", "missing"]
+    current_date: date
+    current_time: str
+    latest_local_trade_date: date | None
+    expected_data_date: date | None
+    data_fresh: bool
+    data_update_recommended: bool
+    data_update_reason: str
+    llm_enabled: bool
+    llm_provider_configured: bool
+    llm_model: str | None = None
+    proxy_configured: bool
+    proxy_warning: str | None = None
+    offline_eval_passed: bool | None = None
+    offline_eval_total: int | None = None
+    offline_eval_failed: int | None = None
+    data_health: AgentDataHealthResponse
+    warnings: list[str] = Field(default_factory=list)
+    generated_by: str
 
 
 class AgentRun(BaseModel):

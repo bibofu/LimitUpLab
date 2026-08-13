@@ -1,7 +1,12 @@
 import type {
   AgentChatRequest,
   AgentChatResponse,
+  AgentChatStreamEvent,
   AgentDataHealthResponse,
+  AgentEvalReportResponse,
+  AgentEvaluationResponse,
+  AgentRunsResponse,
+  AgentSystemHealthResponse,
   ContinuationStat,
   FailedRateStat,
   FirstBoardCriticResponse,
@@ -10,6 +15,7 @@ import type {
   MarketSummary,
   PostPerformanceStat,
   RatingBacktestResponse,
+  ReviewAgentReportResponse,
   SimilarFirstBoardCasesResponse,
   StockCloseSnapshot,
   StockIntradayKLineBar,
@@ -89,8 +95,61 @@ export function fetchAgentDataHealth(tradeDate?: string) {
   return request<AgentDataHealthResponse>(`/api/agents/data-health${query}`);
 }
 
+export function fetchAgentSystemHealth(runOfflineEval = false) {
+  return request<AgentSystemHealthResponse>(
+    `/api/agents/system-health?run_offline_eval=${runOfflineEval ? "true" : "false"}`,
+  );
+}
+
+export function fetchAgentEvalReport() {
+  return request<AgentEvalReportResponse>("/api/agents/eval");
+}
+
+export function fetchReviewAgentReport(params?: {
+  start_date?: string;
+  end_date?: string;
+  min_score?: number;
+  top_per_day?: number;
+  follow_days?: number;
+  use_llm?: boolean;
+}) {
+  const query = new URLSearchParams();
+  if (params?.start_date) {
+    query.set("start_date", params.start_date);
+  }
+  if (params?.end_date) {
+    query.set("end_date", params.end_date);
+  }
+  if (params?.min_score !== undefined) {
+    query.set("min_score", String(params.min_score));
+  }
+  if (params?.top_per_day !== undefined) {
+    query.set("top_per_day", String(params.top_per_day));
+  }
+  if (params?.follow_days !== undefined) {
+    query.set("follow_days", String(params.follow_days));
+  }
+  if (params?.use_llm !== undefined) {
+    query.set("use_llm", params.use_llm ? "true" : "false");
+  }
+  const suffix = query.toString() ? `?${query.toString()}` : "";
+  return request<ReviewAgentReportResponse>(`/api/agents/review-report${suffix}`);
+}
+
 export function fetchRatingBacktest() {
   return request<RatingBacktestResponse>("/api/agents/rating-backtest");
+}
+
+export function fetchRatingEvaluation() {
+  return request<AgentEvaluationResponse>("/api/agents/rating-evaluation");
+}
+
+export function fetchAgentRuns(sessionId?: string, limit = 8) {
+  const params = new URLSearchParams({ limit: String(limit) });
+  if (sessionId) {
+    params.set("session_id", sessionId);
+  }
+  return request<AgentRunsResponse>(`/api/agents/runs?${params.toString()}`);
 }
 
 export function fetchFirstBoardCritic(symbol: string, tradeDate?: string) {
@@ -122,4 +181,75 @@ export function sendAgentChatMessage(payload: AgentChatRequest) {
     },
     body: JSON.stringify(payload),
   });
+}
+
+export async function streamAgentChatMessage(
+  payload: AgentChatRequest,
+  onEvent: (event: AgentChatStreamEvent) => void,
+): Promise<AgentChatResponse> {
+  const response = await fetch(`${API_BASE_URL}/api/agents/chat/stream`, {
+    method: "POST",
+    headers: {
+      Accept: "text/event-stream",
+      "Content-Type": "application/json",
+    },
+    body: JSON.stringify(payload),
+  });
+
+  if (!response.ok || !response.body) {
+    throw new Error(`Stream failed: ${response.status} ${response.statusText}`);
+  }
+
+  const reader = response.body.getReader();
+  const decoder = new TextDecoder();
+  let buffer = "";
+  let completed: AgentChatResponse | null = null;
+
+  function consumeRecord(record: string) {
+    let eventName = "message";
+    const dataLines: string[] = [];
+    for (const line of record.split("\n")) {
+      if (line.startsWith("event:")) {
+        eventName = line.slice(6).trim();
+      } else if (line.startsWith("data:")) {
+        dataLines.push(line.slice(5).trimStart());
+      }
+    }
+    if (dataLines.length === 0) {
+      return;
+    }
+    const event = {
+      event: eventName,
+      data: JSON.parse(dataLines.join("\n")),
+    } as AgentChatStreamEvent;
+    if (event.event === "error") {
+      throw new Error(event.data.message);
+    }
+    if (event.event === "completed") {
+      completed = event.data;
+    }
+    onEvent(event);
+  }
+
+  while (true) {
+    const { done, value } = await reader.read();
+    buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, "\n");
+    let boundary = buffer.indexOf("\n\n");
+    while (boundary >= 0) {
+      consumeRecord(buffer.slice(0, boundary));
+      buffer = buffer.slice(boundary + 2);
+      boundary = buffer.indexOf("\n\n");
+    }
+    if (done) {
+      if (buffer.trim()) {
+        consumeRecord(buffer);
+      }
+      break;
+    }
+  }
+
+  if (!completed) {
+    throw new Error("Agent stream ended before completion");
+  }
+  return completed;
 }

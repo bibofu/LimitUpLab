@@ -4,10 +4,13 @@
 __pycache__/
 *.py[cod]
 .pytest_cache/
+pytest-cache-files-*/
 .ruff_cache/
 .mypy_cache/
 .test-tmp/
 backend/.test-tmp/
+backend/.test_tmp/
+backend/pytest-cache-files-*/
 .venv/
 venv/
 data/*.db
@@ -16,6 +19,8 @@ backend/*.db
 backend/*.sqlite
 backend/data/*.db
 backend/data/*.sqlite
+backend/data/agent_eval_failures.json
+backend/data/dev_check_report.json
 
 # Frontend
 node_modules/
@@ -24,6 +29,10 @@ coverage/
 .vite/
 .npm-cache/
 *.tsbuildinfo
+
+# Local development logs
+backend/*.log
+frontend/*.log
 
 # Local env
 .env

@@ -38,6 +38,31 @@ class FakeToolPlanningProvider(LLMProvider):
         )
 
 
+class FakeDirectFirstBoardProvider(FakeToolPlanningProvider):
+    """Fake planner that incorrectly tries to answer a data question directly."""
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        self.calls.append((system_prompt, user_prompt))
+        if "first job is to decide which tools are needed" in system_prompt:
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": "today_summary",
+                        "safety": "normal",
+                        "tool_calls": [],
+                        "answer_directly": "\u76f4\u63a5\u731c\u6d4b\u7684\u9996\u677f\u7b54\u6848",
+                    }
+                ),
+                model="fake-planner",
+                provider="fake",
+            )
+        return LLMResult(
+            content="\u6839\u636e\u9996\u677f\u8bc4\u5206\u5de5\u5177\uff0c301489 \u8bc4\u5206\u9760\u524d\u3002",
+            model="fake-answer",
+            provider="fake",
+        )
+
+
 class AgentChatTest(unittest.TestCase):
     def _make_event(
         self,
@@ -224,7 +249,57 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("first_board_ratings", response.tool_calls)
         self.assertIn("llm_tool_answer", response.tool_calls)
         self.assertEqual(response.tool_results[0].name, "llm_tool_planner")
+        self.assertGreater(response.performance.planner_prompt_chars, 0)
+        self.assertGreater(response.performance.answer_prompt_chars, 0)
         self.assertIn("301489", response.answer)
+        self.assertGreaterEqual(len(response.evidence_cards), 2)
+        self.assertTrue(
+            any(card.title == "首板候选池与评分" for card in response.evidence_cards)
+        )
+
+    def test_llm_answer_reports_progress_and_streams_deltas(self) -> None:
+        provider = FakeToolPlanningProvider()
+        progress: list[tuple[str, str]] = []
+        deltas: list[str] = []
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="s1",
+                message="\u54ea\u4e9b\u5019\u9009\u8bc4\u5206\u9760\u524d",
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=provider,
+            progress_callback=lambda stage, message: progress.append((stage, message)),
+            answer_delta_callback=deltas.append,
+        )
+
+        self.assertEqual(
+            [stage for stage, _ in progress],
+            ["planning", "tools", "answering"],
+        )
+        self.assertEqual(len(deltas), 1)
+        self.assertIn("301489", "".join(deltas))
+        self.assertIn("".join(deltas), response.answer)
+
+    def test_first_board_question_repairs_planner_direct_answer(self) -> None:
+        provider = FakeDirectFirstBoardProvider()
+        deltas: list[str] = []
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="s1",
+                message="\u603b\u7ed3\u4e00\u4e0b\u4eca\u5929\u9996\u677f\u8bc4\u5206\u9760\u524d\u4e09\u53ea",
+                trade_date=date(2026, 5, 15),
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=provider,
+            answer_delta_callback=deltas.append,
+        )
+
+        self.assertIn("first_board_ratings", response.tool_calls)
+        self.assertIn("llm_tool_answer", response.tool_calls)
+        self.assertNotIn("llm_planner_direct_answer", response.tool_calls)
+        self.assertIn("301489", "".join(deltas))
 
     def test_similar_question_repairs_missing_planner_tool_call(self) -> None:
         provider = FakeToolPlanningProvider()
@@ -275,6 +350,36 @@ class AgentChatTest(unittest.TestCase):
 
         self.assertIn("first_board_critic", response.tool_calls)
         self.assertTrue(any(trace.name == "first_board_critic" for trace in response.tool_results))
+
+    def test_evaluation_question_repairs_missing_planner_tool_call(self) -> None:
+        provider = FakeToolPlanningProvider()
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="s1",
+                message="\u590d\u76d8\u4e00\u4e0b\u6700\u8fd1\u54ea\u4e9b\u8bc4\u5206\u9519\u4e86",
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=provider,
+        )
+
+        self.assertIn("rating_evaluation", response.tool_calls)
+        self.assertTrue(any(trace.name == "rating_evaluation" for trace in response.tool_results))
+
+    def test_review_question_repairs_to_review_agent_tool(self) -> None:
+        provider = FakeToolPlanningProvider()
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="s1",
+                message="\u6700\u8fd1\u9ad8\u5206\u7968\u540e\u7eed\u8d70\u52bf\u600e\u4e48\u6837\uff0c\u5ba1\u7f8e\u9700\u8981\u600e\u4e48\u6539",
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=provider,
+        )
+
+        self.assertIn("review_high_score_picks", response.tool_calls)
+        self.assertTrue(any(trace.name == "review_high_score_picks" for trace in response.tool_results))
 
     def test_broad_top_candidate_question_does_not_inherit_previous_symbol(self) -> None:
         previous = AgentRun(
@@ -332,6 +437,66 @@ class AgentChatTest(unittest.TestCase):
         self.assertEqual(response.tool_results[0].input["intent"], "first_board_filter")
         self.assertIn("002001", response.answer)
         self.assertNotIn("002002", response.answer)
+
+    def test_second_board_question_uses_general_limit_up_tool(self) -> None:
+        events = [
+            self._make_event(
+                symbol="002101",
+                name="\u4e8c\u8fde\u6837\u672c",
+                industry="\u8f6f\u4ef6\u5f00\u53d1",
+                concept="AI",
+            ).model_copy(update={"board_height": 2}),
+            self._make_event(
+                symbol="002102",
+                name="\u9996\u677f\u6837\u672c",
+                industry="\u5143\u4ef6",
+                concept="\u534a\u5bfc\u4f53",
+            ),
+        ]
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="s1",
+                message="\u4eca\u5929\u4e8c\u8fde\u677f\u7684\u7968\u6709\u54ea\u4e9b",
+            ),
+            events=events,
+        )
+
+        self.assertEqual(response.intent, "limit_up_query")
+        self.assertEqual(response.tool_calls, ["limit_up_events"])
+        self.assertIn("002101", response.answer)
+        self.assertNotIn("002102", response.answer)
+        tool_trace = next(trace for trace in response.tool_results if trace.name == "limit_up_events")
+        self.assertEqual(tool_trace.input["board_height"], 2)
+
+    def test_limit_up_topic_question_does_not_route_to_first_board_filter(self) -> None:
+        events = [
+            self._make_event(
+                symbol="002201",
+                name="\u533b\u836f\u8fde\u677f",
+                industry="\u5316\u5b66\u5236\u836f",
+                concept="\u533b\u836f\u751f\u7269",
+            ).model_copy(update={"board_height": 2}),
+            self._make_event(
+                symbol="002202",
+                name="\u79d1\u6280\u6da8\u505c",
+                industry="\u5143\u4ef6",
+                concept="\u534a\u5bfc\u4f53",
+            ),
+        ]
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="s1",
+                message="\u4eca\u5929\u6da8\u505c\u7684\u7968\u91cc\u533b\u836f\u76f8\u5173\u7684\u6709\u54ea\u4e9b",
+            ),
+            events=events,
+        )
+
+        self.assertEqual(response.intent, "limit_up_query")
+        self.assertEqual(response.tool_calls, ["limit_up_events"])
+        self.assertIn("002201", response.answer)
+        self.assertNotIn("first_board_filter", response.tool_calls)
 
     def test_dated_first_board_sector_question_summarizes_industries(self) -> None:
         events = [

@@ -171,6 +171,55 @@ def initialize_database(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         """
+        CREATE TABLE IF NOT EXISTS first_board_enrichment_snapshots (
+            trade_date TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            kline_bar_count INTEGER NOT NULL,
+            return_5d_pct REAL,
+            return_20d_pct REAL,
+            return_60d_pct REAL,
+            distance_20d_high_pct REAL,
+            distance_60d_high_pct REAL,
+            volume_ratio_5d REAL,
+            volatility_20d REAL,
+            close_above_ma20 INTEGER,
+            ma_alignment TEXT NOT NULL,
+            listing_date TEXT,
+            listing_age_days INTEGER,
+            float_market_cap REAL,
+            float_market_cap_source TEXT,
+            recent_limit_up_count_20d INTEGER NOT NULL,
+            recent_limit_up_count_60d INTEGER NOT NULL,
+            industry_first_board_count INTEGER NOT NULL,
+            industry_continued_board_count INTEGER NOT NULL,
+            industry_failed_count INTEGER NOT NULL,
+            industry_max_board_height INTEGER NOT NULL,
+            industry_first_limit_rank INTEGER,
+            previous_first_board_promotion_rate REAL,
+            market_first_board_seal_rate REAL,
+            dragon_tiger_on_list INTEGER NOT NULL,
+            dragon_tiger_net_buy_amount REAL,
+            dragon_tiger_buy_amount REAL,
+            dragon_tiger_sell_amount REAL,
+            dragon_tiger_reason TEXT,
+            popularity_rank INTEGER,
+            popularity_rank_change INTEGER,
+            popularity_snapshot_at TEXT,
+            data_missing_json TEXT NOT NULL,
+            feature_version TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (trade_date, symbol)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_first_board_enrichment_symbol_date
+        ON first_board_enrichment_snapshots (symbol, trade_date DESC)
+        """
+    )
+    connection.execute(
+        """
         CREATE TABLE IF NOT EXISTS agent_runs (
             run_id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,
@@ -190,6 +239,54 @@ def initialize_database(connection: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_agent_runs_session_started
         ON agent_runs (session_id, started_at DESC)
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_predictions (
+            prediction_id TEXT PRIMARY KEY,
+            trade_date TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            name TEXT NOT NULL,
+            score REAL NOT NULL,
+            rating TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            scoring_version TEXT NOT NULL,
+            facts_json TEXT NOT NULL,
+            reasons_json TEXT NOT NULL,
+            risks_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(trade_date, symbol, scoring_version)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_agent_predictions_date
+        ON agent_predictions (trade_date)
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_agent_predictions_symbol_date
+        ON agent_predictions (symbol, trade_date)
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_cache (
+            cache_key TEXT PRIMARY KEY,
+            scope TEXT NOT NULL,
+            payload_json TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_agent_cache_scope_expires
+        ON agent_cache (scope, expires_at)
         """
     )
     connection.commit()
