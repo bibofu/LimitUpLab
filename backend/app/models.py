@@ -1,4 +1,5 @@
 ﻿from datetime import date, datetime, time
+from math import isfinite
 from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
@@ -388,6 +389,89 @@ class FirstBoardRatingsResponse(BaseModel):
     generated_by: str
 
 
+class ScoringPolicy(BaseModel):
+    """Versioned first-board scoring weights and promotion metadata."""
+
+    version: str
+    parent_version: str | None = None
+    status: Literal["champion", "challenger", "archived"]
+    factor_weights: dict[str, float]
+    source: Literal["default", "optimizer", "manual"] = "default"
+    rationale: list[str] = Field(default_factory=list)
+    training_start_date: date | None = None
+    training_end_date: date | None = None
+    created_at: datetime
+    activated_at: datetime | None = None
+
+    @model_validator(mode="after")
+    def validate_weights(self) -> "ScoringPolicy":
+        """Require finite non-negative weights whose total is 100 points."""
+
+        if not self.factor_weights:
+            raise ValueError("factor_weights cannot be empty")
+        if any(
+            not isfinite(value) or value < 0
+            for value in self.factor_weights.values()
+        ):
+            raise ValueError("factor weights must be finite and non-negative")
+        if abs(sum(self.factor_weights.values()) - 100.0) > 0.05:
+            raise ValueError("factor weights must sum to 100")
+        return self
+
+
+class ScoringPolicyMetrics(BaseModel):
+    """Out-of-sample Top-K ranking metrics for one scoring policy."""
+
+    policy_version: str
+    trade_date_count: int
+    pool_sample_size: int
+    top_sample_size: int
+    top_k: int
+    avg_next_open_to_close_pct: float | None = None
+    positive_rate: float | None = None
+    avg_three_day_open_to_close_pct: float | None = None
+    avg_max_drawdown_from_next_open_3d: float | None = None
+    pool_avg_next_open_to_close_pct: float | None = None
+    excess_next_open_to_close_pct: float | None = None
+    objective_score: float | None = None
+
+
+class ScoringPolicyComparison(BaseModel):
+    """Champion-versus-challenger validation and promotion decision."""
+
+    champion: ScoringPolicyMetrics
+    challenger: ScoringPolicyMetrics
+    objective_delta: float | None = None
+    positive_rate_delta: float | None = None
+    drawdown_delta: float | None = None
+    promotion_eligible: bool
+    gate_reasons: list[str] = Field(default_factory=list)
+
+
+class ScoringPolicyOptimizationResponse(BaseModel):
+    """One constrained scoring-policy optimization run."""
+
+    run_id: str
+    champion_policy: ScoringPolicy
+    challenger_policy: ScoringPolicy
+    train_dates: list[date]
+    validation_dates: list[date]
+    test_dates: list[date]
+    factor_correlations: dict[str, float]
+    comparison: ScoringPolicyComparison
+    activated: bool = False
+    warnings: list[str] = Field(default_factory=list)
+    generated_by: str
+
+
+class ScoringPolicyRegistryResponse(BaseModel):
+    """Current champion and recent registered scoring policies."""
+
+    champion: ScoringPolicy
+    policies: list[ScoringPolicy]
+    generated_by: str
+
+
 class RatingBacktestBucket(BaseModel):
     """Aggregated post-board outcome metrics for one rating bucket."""
 
@@ -731,6 +815,9 @@ def build_agent_tool_policy_audit(
     """Compare the LLM planner's requested tools with final backend execution."""
 
     planner_calls = _extract_planner_tool_calls(tool_results)
+    planner_trace_present = any(
+        trace.name == "llm_tool_planner" for trace in tool_results
+    )
     final_calls = [
         tool
         for tool in tool_calls
@@ -743,14 +830,18 @@ def build_agent_tool_policy_audit(
             if trace.name not in {"llm_tool_planner", "llm_tool_answer", "template_general_answer"}
         ]
     backend_repaired = [
-        tool for tool in final_calls if planner_calls and tool not in planner_calls
+        tool
+        for tool in final_calls
+        if planner_trace_present and tool not in planner_calls
     ]
     warnings = warnings or []
     return AgentToolPolicyAudit(
         planner_tool_calls=planner_calls,
         final_tool_calls=final_calls,
         backend_repaired_tools=backend_repaired,
-        repair_reasons=[_repair_reason(tool) for tool in backend_repaired],
+        repair_reasons=[
+            _repair_reason(tool, tool_results) for tool in backend_repaired
+        ],
         safety_fallback_used=any(
             "template fallback" in warning.lower()
             or "safety" in warning.lower()
@@ -872,6 +963,7 @@ def _evidence_title_kind(tool_name: str) -> tuple[str, str]:
         "first_board_similar_cases": ("历史相似案例", "similar_cases"),
         "rating_backtest": ("评分历史回测", "evaluation"),
         "rating_evaluation": ("Agent 自我评价", "evaluation"),
+        "scoring_policy_status": ("评分策略迭代", "evaluation"),
         "limit_up_event_dates": ("本地数据日期", "data_availability"),
     }
     return mapping.get(tool_name, (tool_name, "tool"))
@@ -894,8 +986,18 @@ def _extract_planner_tool_calls(tool_results: list[AgentToolTrace]) -> list[str]
     return []
 
 
-def _repair_reason(tool_name: str) -> str:
+def _repair_reason(
+    tool_name: str,
+    tool_results: list[AgentToolTrace],
+) -> str:
     """Explain why the backend inserted a missing tool."""
+
+    for trace in reversed(tool_results):
+        if trace.name != tool_name:
+            continue
+        policy = trace.output.get("policy_repair")
+        if isinstance(policy, dict) and policy.get("reason"):
+            return str(policy["reason"])
 
     reasons = {
         "first_board_ratings": "用户问题需要评分或候选池事实，planner 未覆盖，后端补充 first_board_ratings。",
@@ -905,6 +1007,7 @@ def _repair_reason(tool_name: str) -> str:
         "limit_up_events": "用户询问当天涨停/连板/炸板明细，后端补充 limit_up_events。",
         "rating_backtest": "用户询问评分效果或回测，后端补充 rating_backtest。",
         "rating_evaluation": "用户询问模型复盘或错判样本，后端补充 rating_evaluation。",
+        "scoring_policy_status": "用户询问评分策略或权重迭代，后端补充 scoring_policy_status。",
     }
     return reasons.get(tool_name, f"后端补充 {tool_name} 以满足问题所需事实。")
 
@@ -930,6 +1033,11 @@ def _evidence_metrics(output: dict[str, Any]) -> dict[str, Any]:
         "confidence",
         "verdict",
         "status",
+        "champion_version",
+        "challenger_count",
+        "latest_challenger",
+        "promotion_eligible",
+        "activated",
     )
     metrics: dict[str, Any] = {}
     for key in allowed:

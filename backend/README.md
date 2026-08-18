@@ -168,6 +168,8 @@ LIMITUPLAB_DATABASE_PATH=/tmp/limituplab.sqlite uvicorn app.main:app --reload --
 - `GET /api/analysis/failed-rate` - failed limit-up rate by board height
 - `GET /api/analysis/post-performance` - next-day and short-window return stats
 - `GET /api/agents/first-board-ratings` - explainable first-board candidate ratings
+- `GET /api/agents/scoring-policies` - active Champion and recent scoring policy versions
+- `POST /api/agents/scoring-policies/optimize` - constrained walk-forward Challenger generation; shadow mode by default
 - `GET /api/agents/data-health` - Agent raw-data, feature and similar-case cache health
 - `GET /api/agents/system-health` - local runtime health for data freshness, LLM configuration and eval status
 - `GET /api/agents/rating-backtest` - entry-open return, drawdown and promotion metrics by rating bucket

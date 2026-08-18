@@ -32,12 +32,15 @@ from app.models import (
     FirstBoardRatingsResponse,
     RatingBacktestResponse,
     ReviewAgentReportResponse,
+    ScoringPolicyOptimizationResponse,
+    ScoringPolicyRegistryResponse,
     SimilarFirstBoardCasesResponse,
 )
 from app.repositories import (
     SQLiteAgentCacheRepository,
     SQLiteAgentRunRepository,
     SQLiteFirstBoardRepository,
+    SQLiteScoringPolicyRepository,
     get_limit_up_repository,
 )
 from app.services.similar_cases import find_similar_first_board_cases
@@ -46,6 +49,10 @@ from app.services.evaluation_agent import build_agent_evaluation
 from app.services.first_board_critic import build_first_board_critic
 from app.services.llm_provider import DisabledLLMProvider
 from app.services.rating_backtest import build_rating_backtest
+from app.services.scoring_policy_optimizer import (
+    build_scoring_policy_registry,
+    optimize_scoring_policy,
+)
 from app.services.sample_data import SAMPLE_EVENTS
 from app.services.system_health import build_agent_system_health
 
@@ -64,6 +71,10 @@ def get_first_board_ratings(
     events = get_limit_up_repository().list_events()
     resolved_trade_date = _resolve_trade_date(events, trade_date)
     first_board_repository = SQLiteFirstBoardRepository()
+    policy_repository = SQLiteScoringPolicyRepository(
+        first_board_repository.database_path
+    )
+    scoring_policy = policy_repository.ensure_default_policy()
     enrichment = (
         first_board_repository.list_enrichment_for_date(resolved_trade_date)
         if resolved_trade_date
@@ -78,14 +89,74 @@ def get_first_board_ratings(
                 (item.symbol, item.feature_version, item.created_at.isoformat())
                 for item in enrichment
             ],
+            "scoring_version": scoring_policy.version,
         },
         response_model=FirstBoardRatingsResponse,
         builder=lambda: build_first_board_ratings(
             events=events,
             trade_date=trade_date,
             first_board_repository=first_board_repository,
+            scoring_policy=scoring_policy,
         ),
     )
+
+
+@router.get(
+    "/scoring-policies",
+    response_model=ScoringPolicyRegistryResponse,
+)
+def get_scoring_policies(
+    limit: int = Query(default=20, ge=1, le=100),
+) -> ScoringPolicyRegistryResponse:
+    """Return the active Champion and recent policy versions."""
+
+    return build_scoring_policy_registry(limit=limit)
+
+
+@router.post(
+    "/scoring-policies/optimize",
+    response_model=ScoringPolicyOptimizationResponse,
+)
+def optimize_first_board_scoring_policy(
+    start_date: date | None = None,
+    end_date: date | None = None,
+    top_k: int = Query(default=10, ge=3, le=30),
+    activate_if_eligible: bool = False,
+) -> ScoringPolicyOptimizationResponse:
+    """Generate and validate a bounded Challenger without activating by default."""
+
+    events = get_limit_up_repository().list_events()
+    available_dates = sorted({event.trade_date for event in events})
+    if not available_dates:
+        raise HTTPException(status_code=404, detail="No local limit-up events available.")
+    resolved_end = end_date or available_dates[-1]
+    eligible_dates = [item for item in available_dates if item <= resolved_end]
+    if not eligible_dates:
+        raise HTTPException(
+            status_code=404,
+            detail="No local limit-up events are available on or before end_date.",
+        )
+    resolved_start = start_date or eligible_dates[max(0, len(eligible_dates) - 120)]
+    if resolved_start > resolved_end:
+        raise HTTPException(
+            status_code=422,
+            detail="start_date must be on or before end_date.",
+        )
+    first_board_repository = SQLiteFirstBoardRepository()
+    try:
+        return optimize_scoring_policy(
+            events=events,
+            start_date=resolved_start,
+            end_date=resolved_end,
+            first_board_repository=first_board_repository,
+            policy_repository=SQLiteScoringPolicyRepository(
+                first_board_repository.database_path
+            ),
+            top_k=top_k,
+            activate_if_eligible=activate_if_eligible,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @router.get("/data-health", response_model=AgentDataHealthResponse)

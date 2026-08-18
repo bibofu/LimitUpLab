@@ -293,6 +293,47 @@ def initialize_database(connection: sqlite3.Connection) -> None:
         ON agent_cache (scope, expires_at)
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS scoring_policies (
+            version TEXT PRIMARY KEY,
+            parent_version TEXT,
+            status TEXT NOT NULL,
+            factor_weights_json TEXT NOT NULL,
+            source TEXT NOT NULL,
+            rationale_json TEXT NOT NULL,
+            training_start_date TEXT,
+            training_end_date TEXT,
+            created_at TEXT NOT NULL,
+            activated_at TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_scoring_policies_status_created
+        ON scoring_policies (status, created_at DESC)
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS scoring_policy_runs (
+            run_id TEXT PRIMARY KEY,
+            champion_version TEXT NOT NULL,
+            challenger_version TEXT NOT NULL,
+            promotion_eligible INTEGER NOT NULL,
+            activated INTEGER NOT NULL,
+            report_json TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_scoring_policy_runs_created
+        ON scoring_policy_runs (created_at DESC)
+        """
+    )
     connection.commit()
 
 

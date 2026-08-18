@@ -12,7 +12,8 @@ from app.models import (
     FirstBoardRating,
     LimitUpEvent,
 )
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
+from app.services.scoring_policy import DEFAULT_SCORING_POLICY_VERSION
 
 
 EVALUATION_AGENT_VERSION = "first-board-evaluation-mvp-v1"
@@ -28,7 +29,10 @@ def build_agent_evaluation(
     """Evaluate existing immutable rating snapshots against ready outcomes."""
 
     repository = first_board_repository or SQLiteFirstBoardRepository()
-    scoring_version = _first_board_agent_version()
+    champion = SQLiteScoringPolicyRepository(repository.database_path).get_champion()
+    scoring_version = (
+        champion.version if champion else DEFAULT_SCORING_POLICY_VERSION
+    )
     predictions = _prefer_live_predictions(
         repository.list_predictions_between(
             start_date,
@@ -97,6 +101,7 @@ def persist_agent_predictions_for_dates(
                 created_at=now,
                 prediction_source=prediction_source,
                 data_as_of=data_as_of or item.facts.trade_date,
+                scoring_version=ratings.generated_by,
             )
             for item in candidates
         )
@@ -109,11 +114,11 @@ def _prediction_from_rating(
     created_at: datetime,
     prediction_source: Literal["live", "historical_backtest"],
     data_as_of: date,
+    scoring_version: str,
 ) -> AgentPrediction:
     """Create a persisted prediction snapshot from a current rating."""
 
     facts = rating.facts.model_dump(mode="json")
-    scoring_version = _first_board_agent_version()
     prediction_id = (
         f"{rating.facts.trade_date.isoformat()}-"
         f"{rating.facts.symbol}-{scoring_version}-{prediction_source}"
@@ -310,11 +315,3 @@ def _prefer_live_predictions(predictions: list[AgentPrediction]) -> list[AgentPr
         selected.values(),
         key=lambda item: (item.trade_date, -item.score, item.symbol),
     )
-
-
-def _first_board_agent_version() -> str:
-    """Read the scoring version lazily to avoid package import cycles."""
-
-    from app.agents.first_board import FIRST_BOARD_AGENT_VERSION
-
-    return FIRST_BOARD_AGENT_VERSION

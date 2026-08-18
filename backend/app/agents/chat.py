@@ -8,6 +8,19 @@ from time import perf_counter
 from typing import Any, Callable
 
 from app.agents.explanation import explain_first_board_rating
+from app.agents.tool_policy import (
+    AgentToolPolicyEngine,
+    ToolExecution,
+    extract_kline_days as _extract_kline_days,
+    extract_trade_date as _extract_trade_date,
+    looks_like_critic_question as _looks_like_critic_question,
+    looks_like_evaluation_question as _looks_like_evaluation_question,
+    looks_like_rating_backtest_question as _looks_like_rating_backtest_question,
+    looks_like_rating_explain_question as _looks_like_rating_explain_question,
+    looks_like_review_question as _looks_like_review_question,
+    looks_like_similar_question as _looks_like_similar_question,
+    looks_like_stock_kline_question as _looks_like_stock_kline_question,
+)
 from app.agents.tools import AgentToolRegistry, ToolResult
 from app.models import (
     AgentChatRequest,
@@ -26,7 +39,7 @@ from app.repositories import SQLiteFirstBoardRepository
 from app.services.llm_provider import LLMProvider, get_llm_provider
 
 
-CHAT_AGENT_VERSION = "first-board-chat-rule-v1"
+CHAT_AGENT_VERSION = "first-board-chat-policy-v2"
 SEMI = "\uff1b"
 IDEOGRAPHIC_COMMA = "\u3001"
 SUPPORTED_INTENTS = {
@@ -335,6 +348,7 @@ def _answer_with_llm_tool_agent(
 
     agent_started_at = perf_counter()
     active_provider = provider or get_llm_provider()
+    policy = AgentToolPolicyEngine(tools, compact_ratings=_compact_ratings_facts)
     if progress_callback:
         progress_callback("planning", "正在理解问题并选择所需工具")
     planner_system_prompt = _tool_planner_system_prompt(tools.schema_prompt())
@@ -374,38 +388,8 @@ def _answer_with_llm_tool_agent(
             }
         ]
         direct_answer = ""
-    if (
-        not tool_calls
-        and direct_answer
-        and _looks_like_first_board_data_question(request.message)
-    ):
-        tool_calls = [
-            {
-                "name": "first_board_ratings",
-                "arguments": {
-                    "trade_date": (
-                        request.trade_date.isoformat() if request.trade_date else None
-                    )
-                },
-            }
-        ]
+    if not tool_calls and direct_answer and policy.requires_grounding(request):
         direct_answer = ""
-    if not tool_calls and direct_answer and _looks_like_stock_kline_question(request.message):
-        target = _resolve_stock_kline_target(request, tools, context)
-        if target is not None:
-            tool_calls = [
-                {
-                    "name": "stock_kline",
-                    "arguments": {
-                        "symbol": target,
-                        "days": _extract_kline_days(request.message),
-                        "end_date": (
-                            request.trade_date.isoformat() if request.trade_date else None
-                        ),
-                    },
-                }
-            ]
-            direct_answer = ""
     if not tool_calls and direct_answer:
         requested_date = _extract_trade_date(request.message)
         if requested_date and not _has_events_for_date(tools.events, requested_date):
@@ -501,46 +485,10 @@ def _answer_with_llm_tool_agent(
             f"正在查询 {selected_tools}" if selected_tools else "正在查询本地事实数据",
         )
     execution = _execute_llm_tool_calls(tool_calls, tools)
-    _ensure_similar_case_tool_if_needed(
+    policy.reconcile(
         request=request,
-        tools=tools,
         execution=execution,
-    )
-    _ensure_stock_kline_tool_if_needed(
-        request=request,
-        tools=tools,
-        context=context,
-        execution=execution,
-    )
-    _ensure_rating_tool_if_needed(
-        request=request,
-        tools=tools,
-        execution=execution,
-    )
-    _ensure_data_availability_tool_if_needed(
-        request=request,
-        tools=tools,
-        execution=execution,
-    )
-    _ensure_rating_backtest_tool_if_needed(
-        request=request,
-        tools=tools,
-        execution=execution,
-    )
-    _ensure_critic_tool_if_needed(
-        request=request,
-        tools=tools,
-        execution=execution,
-    )
-    _ensure_evaluation_tool_if_needed(
-        request=request,
-        tools=tools,
-        execution=execution,
-    )
-    _ensure_review_tool_if_needed(
-        request=request,
-        tools=tools,
-        execution=execution,
+        context_symbol=context.symbol,
     )
     tool_duration_ms = round((perf_counter() - tools_started_at) * 1000)
     if not execution["tool_results"] and not direct_answer:
@@ -646,6 +594,7 @@ def _tool_planner_system_prompt(tool_schema_prompt: str) -> str:
         "For capability questions, answer_directly must mention LimitUpLab. "
         "For rating explanation questions, first call first_board_ratings before critic tools. "
         "For review questions about recent high-score picks, model performance, misses, or scoring taste, call review_high_score_picks. "
+        "For scoring weights, strategy versions, autonomous learning, Champion, or Challenger questions, call scoring_policy_status. "
         "For questions about one stock's K-line, price trend, moving averages, recent rise/fall, volume, or drawdown, call stock_kline. "
         "For unavailable date/data-availability questions, do not answer directly; let backend verify local dates. "
         "Do not provide direct trading instructions, position sizing, target prices, or return promises. "
@@ -751,6 +700,34 @@ def _template_answer_from_tool_facts(
             values = review.get(key) or []
             if values:
                 lines.append(f"{title}：{'; '.join(str(item) for item in values[:3])}")
+        lines.append(TEXT["safety"])
+        return "\n".join(lines)
+
+    if "scoring_policy_status" in facts:
+        payload = facts["scoring_policy_status"]
+        champion = payload.get("champion") or {}
+        latest = payload.get("latest_optimization") or {}
+        challenger = latest.get("challenger_policy") or {}
+        comparison = latest.get("comparison") or {}
+        gate_reasons = comparison.get("gate_reasons") or []
+        lines = [
+            f"当前线上评分策略是 Champion：{champion.get('version')}，"
+            f"来源为 {champion.get('source')}。"
+        ]
+        if challenger:
+            lines.append(
+                f"最近生成的 Challenger 是 {challenger.get('version')}；"
+                f"样本外晋级资格：{'通过' if comparison.get('promotion_eligible') else '未通过'}；"
+                f"实际启用：{'是' if latest.get('activated') else '否'}。"
+            )
+            if gate_reasons:
+                lines.append("门槛检查：" + "；".join(str(item) for item in gate_reasons[:5]))
+        else:
+            lines.append("目前还没有完成一次可用的 Challenger 样本外优化。")
+        lines.append(
+            "系统会自动生成候选权重并做时间顺序样本外评估，但默认只以影子模式注册，"
+            "未通过门槛且未经显式启用时不会替换线上 Champion。"
+        )
         lines.append(TEXT["safety"])
         return "\n".join(lines)
 
@@ -872,7 +849,7 @@ def _normalize_tool_calls(raw_calls: object) -> list[dict[str, Any]]:
 def _execute_llm_tool_calls(
     tool_calls: list[dict[str, Any]],
     tools: AgentToolRegistry,
-) -> dict[str, Any]:
+) -> ToolExecution:
     """Execute planner-selected tools and return compact facts and traces."""
 
     facts: dict[str, Any] = {}
@@ -1237,6 +1214,21 @@ def _execute_llm_tool_calls(
                     f"review_sample_size={response.sample_size}",
                 ]
             )
+        elif name == "scoring_policy_status":
+            result = tools.scoring_policy_status()
+            payload = result.output
+            facts["scoring_policy_status"] = payload
+            traces.append(result.trace())
+            call_names.append(name)
+            champion = payload.get("champion") or {}
+            latest = payload.get("latest_optimization") or {}
+            challenger = latest.get("challenger_policy") or {}
+            references.extend(
+                [
+                    f"scoring_version={champion.get('version')}",
+                    f"challenger_version={challenger.get('version')}",
+                ]
+            )
         else:
             facts[f"{name}_error"] = "Unsupported tool requested by LLM planner."
             traces.append(
@@ -1279,125 +1271,6 @@ def _deterministic_pre_llm_response(
     return None
 
 
-def _ensure_rating_tool_if_needed(
-    request: AgentChatRequest,
-    tools: AgentToolRegistry,
-    execution: dict[str, Any],
-) -> None:
-    """Repair planner omissions for rating explanation questions."""
-
-    if not _looks_like_rating_explain_question(request.message):
-        return
-    facts = execution["facts"]
-    if "first_board_ratings" in facts or "first_board_ratings_error" in facts:
-        return
-
-    trade_date = request.trade_date or _extract_trade_date(request.message)
-    if trade_date and not _has_events_for_date(tools.events, trade_date):
-        return
-    result = tools.first_board_ratings(trade_date=trade_date)
-    ratings = result.output
-    facts["first_board_ratings"] = _compact_ratings_facts(ratings)
-    execution["tool_results"].insert(0, result.trace())
-    execution["tool_call_names"].insert(0, "first_board_ratings")
-    execution["references"] = list(
-        dict.fromkeys([*execution["references"], f"trade_date={ratings.trade_date.isoformat()}"])
-    )
-
-
-def _ensure_data_availability_tool_if_needed(
-    request: AgentChatRequest,
-    tools: AgentToolRegistry,
-    execution: dict[str, Any],
-) -> None:
-    """Repair planner direct answers for missing requested dates."""
-
-    requested_date = _extract_trade_date(request.message)
-    if requested_date is None or _has_events_for_date(tools.events, requested_date):
-        return
-    facts = execution["facts"]
-    if "limit_up_event_dates" in facts:
-        return
-    available_dates = sorted({event.trade_date for event in tools.events}, reverse=True)
-    facts["limit_up_event_dates"] = {
-        "requested_trade_date": requested_date.isoformat(),
-        "latest_local_trade_date": available_dates[0].isoformat() if available_dates else None,
-        "available_trade_dates": [item.isoformat() for item in available_dates[:20]],
-    }
-    execution["tool_results"].append(
-        AgentToolTrace(
-            name="limit_up_event_dates",
-            input={"requested_trade_date": requested_date.isoformat()},
-            summary=f"本地没有 {requested_date.isoformat()}，已返回可用交易日列表。",
-            output=facts["limit_up_event_dates"],
-        )
-    )
-    execution["tool_call_names"].append("limit_up_event_dates")
-    execution["references"] = list(
-        dict.fromkeys([*execution["references"], f"missing_trade_date={requested_date.isoformat()}"])
-    )
-
-
-def _ensure_stock_kline_tool_if_needed(
-    request: AgentChatRequest,
-    tools: AgentToolRegistry,
-    context: "_SessionContext",
-    execution: dict[str, Any],
-) -> None:
-    """Repair planner omissions for explicit single-stock trend questions."""
-
-    if not _looks_like_stock_kline_question(request.message):
-        return
-    facts = execution["facts"]
-    if "stock_kline" in facts or "stock_kline_error" in facts:
-        return
-    target = _resolve_stock_kline_target(request, tools, context)
-    if target is None:
-        facts["stock_kline_error"] = "Cannot resolve the requested stock symbol."
-        execution["tool_results"].append(
-            _tool_error_trace(
-                name="stock_kline",
-                tool_input={"query": request.message},
-                summary="无法从问题或会话上下文解析股票代码。",
-                error="Cannot resolve the requested stock symbol.",
-            )
-        )
-        execution["tool_call_names"].append("stock_kline")
-        return
-    try:
-        result = tools.stock_kline(
-            symbol=target,
-            days=_extract_kline_days(request.message),
-            end_date=request.trade_date,
-        )
-    except Exception as error:  # noqa: BLE001
-        facts["stock_kline_error"] = str(error)
-        execution["tool_results"].append(
-            _tool_error_trace(
-                name="stock_kline",
-                tool_input={"symbol": target, "days": _extract_kline_days(request.message)},
-                summary="Planner 漏掉 K 线工具，后端补调用时失败。",
-                error=str(error),
-            )
-        )
-        execution["tool_call_names"].append("stock_kline")
-        return
-
-    response = result.output
-    facts["stock_kline"] = response.model_dump(mode="json")
-    execution["tool_results"].append(result.trace())
-    execution["tool_call_names"].append("stock_kline")
-    execution["references"] = list(
-        dict.fromkeys(
-            [
-                *execution["references"],
-                f"symbol={response.symbol}",
-                f"data_as_of={response.data_as_of.isoformat()}",
-            ]
-        )
-    )
-
-
 def _answer_stock_kline_without_llm(
     request: AgentChatRequest,
     tools: AgentToolRegistry,
@@ -1407,7 +1280,10 @@ def _answer_stock_kline_without_llm(
 
     if not _looks_like_stock_kline_question(request.message):
         return None
-    target = _resolve_stock_kline_target(request, tools, context)
+    target = AgentToolPolicyEngine(tools).resolve_stock_target(
+        request,
+        context_symbol=context.symbol,
+    )
     if target is None:
         return None
     try:
@@ -1436,351 +1312,6 @@ def _answer_stock_kline_without_llm(
         ],
         warnings=[_safety_warning()],
         generated_by=CHAT_AGENT_VERSION,
-    )
-
-
-def _looks_like_stock_kline_question(message: str) -> bool:
-    """Return whether a question asks about one stock's price/K-line trend."""
-
-    lowered = message.lower()
-    return any(
-        term in lowered
-        for term in (
-            "k线",
-            "k-line",
-            "走势",
-            "趋势",
-            "均线",
-            "量能",
-            "成交量",
-            "最近涨跌",
-            "近期涨跌",
-        )
-    ) and not ("高分" in message and "后续走势" in message)
-
-
-def _resolve_stock_kline_target(
-    request: AgentChatRequest,
-    tools: AgentToolRegistry,
-    context: "_SessionContext",
-) -> str | None:
-    """Resolve a K-line target from request, message, or recent context."""
-
-    candidates = [
-        request.symbol,
-        _extract_symbol_hint(request.message),
-        request.message,
-        context.symbol,
-    ]
-    for candidate in candidates:
-        if not candidate:
-            continue
-        try:
-            return tools.resolve_stock_symbol(candidate)
-        except ValueError:
-            continue
-    return None
-
-
-def _extract_kline_days(message: str) -> int:
-    """Extract a bounded trading-day window, defaulting to 20 days."""
-
-    match = re.search(r"(?:最近|近)?\s*(\d{1,2})\s*(?:个?交易日|天|日)", message)
-    if match is None:
-        return 20
-    return max(5, min(int(match.group(1)), 60))
-
-
-def _ensure_similar_case_tool_if_needed(
-    request: AgentChatRequest,
-    tools: AgentToolRegistry,
-    execution: dict[str, Any],
-) -> None:
-    """Repair planner omissions when the user explicitly asks for similar cases."""
-
-    if not _looks_like_similar_question(request.message):
-        return
-    facts = execution["facts"]
-    if "first_board_similar_cases" in facts or "first_board_similar_cases_error" in facts:
-        return
-
-    target = _resolve_target_from_tool_facts(request.message, facts)
-    if target is None:
-        return
-
-    symbol, trade_date = target
-    try:
-        result = tools.similar_cases(symbol=symbol, trade_date=trade_date, limit=5)
-    except ValueError as error:
-        facts["first_board_similar_cases_error"] = str(error)
-        execution["tool_results"].append(
-            _tool_error_trace(
-                name="first_board_similar_cases",
-                tool_input={
-                    "symbol": symbol,
-                    "trade_date": trade_date.isoformat(),
-                    "limit": 5,
-                },
-                summary="Planner 漏掉相似案例工具，后端补调用时失败。",
-                error=str(error),
-            )
-        )
-        execution["tool_call_names"].append("first_board_similar_cases")
-        return
-
-    facts["first_board_similar_cases"] = result.output.model_dump(mode="json")
-    execution["tool_results"].append(result.trace())
-    execution["tool_call_names"].append("first_board_similar_cases")
-    execution["references"] = list(
-        dict.fromkeys(
-            [
-                *execution["references"],
-                f"symbol={symbol}",
-                f"trade_date={trade_date.isoformat()}",
-            ]
-        )
-    )
-
-
-def _resolve_target_from_tool_facts(
-    message: str,
-    facts: dict[str, Any],
-) -> tuple[str, date] | None:
-    """Resolve a target symbol/date from executed rating or filter facts."""
-
-    explicit_symbol = _extract_symbol_hint(message)
-    rating_facts = facts.get("first_board_ratings")
-    filter_facts = facts.get("first_board_filter")
-    trade_date = _parse_optional_date(
-        (rating_facts or {}).get("trade_date")
-        if isinstance(rating_facts, dict)
-        else None
-    )
-    if trade_date is None:
-        return None
-
-    candidates: list[dict[str, Any]] = []
-    if isinstance(filter_facts, dict):
-        candidates.extend(
-            item
-            for item in filter_facts.get("matches", [])
-            if isinstance(item, dict)
-        )
-    if isinstance(rating_facts, dict):
-        candidates.extend(
-            item
-            for item in rating_facts.get("top_candidates", [])
-            if isinstance(item, dict)
-        )
-
-    if explicit_symbol:
-        return explicit_symbol, trade_date
-    for item in candidates:
-        symbol = str(item.get("symbol") or "")
-        name = str(item.get("name") or "")
-        if symbol and (symbol in message or (name and name in message)):
-            return symbol, trade_date
-    if len(candidates) == 1 and candidates[0].get("symbol"):
-        return str(candidates[0]["symbol"]), trade_date
-    return None
-
-
-def _ensure_rating_backtest_tool_if_needed(
-    request: AgentChatRequest,
-    tools: AgentToolRegistry,
-    execution: dict[str, Any],
-) -> None:
-    """Repair planner omissions for explicit rating self-evaluation questions."""
-
-    if not _looks_like_rating_backtest_question(request.message):
-        return
-    facts = execution["facts"]
-    if "rating_backtest" in facts or "rating_backtest_error" in facts:
-        return
-
-    available_dates = sorted({event.trade_date for event in tools.events})
-    if not available_dates:
-        facts["rating_backtest_error"] = "No local limit-up events available."
-        execution["tool_results"].append(
-            _tool_error_trace(
-                name="rating_backtest",
-                tool_input={},
-                summary="本地没有涨停数据，无法执行评分回测。",
-                error="No local limit-up events available.",
-            )
-        )
-        execution["tool_call_names"].append("rating_backtest")
-        return
-
-    result = tools.rating_backtest(
-        start_date=available_dates[max(0, len(available_dates) - 20)],
-        end_date=available_dates[-1],
-        failure_limit=8,
-    )
-    response = result.output
-    facts["rating_backtest"] = response.model_dump(mode="json")
-    execution["tool_results"].append(result.trace())
-    execution["tool_call_names"].append("rating_backtest")
-    execution["references"] = list(
-        dict.fromkeys(
-            [
-                *execution["references"],
-                f"start_date={response.start_date.isoformat()}",
-                f"end_date={response.end_date.isoformat()}",
-            ]
-        )
-    )
-
-
-def _ensure_critic_tool_if_needed(
-    request: AgentChatRequest,
-    tools: AgentToolRegistry,
-    execution: dict[str, Any],
-) -> None:
-    """Repair planner omissions for explicit critic or reliability questions."""
-
-    if not _looks_like_critic_question(request.message):
-        return
-    facts = execution["facts"]
-    if "first_board_critic" in facts or "first_board_critic_error" in facts:
-        return
-
-    target = _resolve_target_from_tool_facts(request.message, facts)
-    if target is None:
-        return
-
-    symbol, trade_date = target
-    try:
-        result = tools.first_board_critic(
-            symbol=symbol,
-            trade_date=trade_date,
-            similar_limit=5,
-        )
-    except ValueError as error:
-        facts["first_board_critic_error"] = str(error)
-        execution["tool_results"].append(
-            _tool_error_trace(
-                name="first_board_critic",
-                tool_input={
-                    "symbol": symbol,
-                    "trade_date": trade_date.isoformat(),
-                    "similar_limit": 5,
-                },
-                summary="Planner omitted critic tool; backend repair call failed.",
-                error=str(error),
-            )
-        )
-        execution["tool_call_names"].append("first_board_critic")
-        return
-
-    response = result.output
-    facts["first_board_critic"] = response.model_dump(mode="json")
-    execution["tool_results"].append(result.trace())
-    execution["tool_call_names"].append("first_board_critic")
-    execution["references"] = list(
-        dict.fromkeys(
-            [
-                *execution["references"],
-                f"symbol={response.symbol}",
-                f"trade_date={response.trade_date.isoformat()}",
-                f"critic_verdict={response.verdict}",
-            ]
-        )
-    )
-
-
-def _ensure_evaluation_tool_if_needed(
-    request: AgentChatRequest,
-    tools: AgentToolRegistry,
-    execution: dict[str, Any],
-) -> None:
-    """Repair planner omissions for prediction evaluation questions."""
-
-    if _looks_like_review_question(request.message) or not _looks_like_evaluation_question(request.message):
-        return
-    facts = execution["facts"]
-    if "rating_evaluation" in facts or "rating_evaluation_error" in facts:
-        return
-
-    available_dates = sorted({event.trade_date for event in tools.events})
-    if not available_dates:
-        facts["rating_evaluation_error"] = "No local limit-up events available."
-        execution["tool_results"].append(
-            _tool_error_trace(
-                name="rating_evaluation",
-                tool_input={},
-                summary="No local limit-up events; evaluation cannot run.",
-                error="No local limit-up events available.",
-            )
-        )
-        execution["tool_call_names"].append("rating_evaluation")
-        return
-
-    result = tools.rating_evaluation(
-        start_date=available_dates[max(0, len(available_dates) - 20)],
-        end_date=available_dates[-1],
-        limit=30,
-    )
-    response = result.output
-    facts["rating_evaluation"] = response.model_dump(mode="json")
-    execution["tool_results"].append(result.trace())
-    execution["tool_call_names"].append("rating_evaluation")
-    execution["references"] = list(
-        dict.fromkeys(
-            [
-                *execution["references"],
-                f"start_date={response.start_date.isoformat()}",
-                f"end_date={response.end_date.isoformat()}",
-            ]
-        )
-    )
-
-
-def _ensure_review_tool_if_needed(
-    request: AgentChatRequest,
-    tools: AgentToolRegistry,
-    execution: dict[str, Any],
-) -> None:
-    """Repair planner omissions for high-score pick review questions."""
-
-    if not _looks_like_review_question(request.message):
-        return
-    facts = execution["facts"]
-    if "review_high_score_picks" in facts or "review_high_score_picks_error" in facts:
-        return
-
-    available_dates = sorted({event.trade_date for event in tools.events})
-    if not available_dates:
-        facts["review_high_score_picks_error"] = "No local limit-up events available."
-        execution["tool_results"].append(
-            _tool_error_trace(
-                name="review_high_score_picks",
-                tool_input={},
-                summary="No local limit-up events; Review Agent cannot run.",
-                error="No local limit-up events available.",
-            )
-        )
-        execution["tool_call_names"].append("review_high_score_picks")
-        return
-
-    result = tools.review_high_score_picks(
-        start_date=available_dates[max(0, len(available_dates) - 20)],
-        end_date=available_dates[-1],
-        min_score=85,
-    )
-    response = result.output
-    facts["review_high_score_picks"] = response.model_dump(mode="json")
-    execution["tool_results"].append(result.trace())
-    execution["tool_call_names"].append("review_high_score_picks")
-    execution["references"] = list(
-        dict.fromkeys(
-            [
-                *execution["references"],
-                f"start_date={response.start_date.isoformat()}",
-                f"end_date={response.end_date.isoformat()}",
-                f"review_sample_size={response.sample_size}",
-            ]
-        )
     )
 
 
@@ -2314,23 +1845,6 @@ def _filter_query_from_context(label: str) -> _FirstBoardFilterQuery:
     )
 
 
-def _extract_trade_date(message: str) -> date | None:
-    """Extract a trade date from common Chinese shorthand date expressions."""
-
-    normalized = message.strip()
-    full_match = re.search(r"(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})", normalized)
-    if full_match:
-        year, month, day = (int(part) for part in full_match.groups())
-        return _safe_date(year, month, day)
-
-    short_match = re.search(r"(?<!\d)(\d{1,2})[./月](\d{1,2})(?:日|号)?", normalized)
-    if short_match:
-        month, day = (int(part) for part in short_match.groups())
-        return _safe_date(date.today().year, month, day)
-
-    return None
-
-
 def _looks_like_first_board_data_question(message: str) -> bool:
     """Return whether a dated question asks for first-board data availability."""
 
@@ -2349,95 +1863,6 @@ def _mentions_first_board_scope(message: str) -> bool:
     """Return whether the user explicitly asks about the first-board pool."""
 
     return "\u9996\u677f" in message or "\u5019\u9009" in message
-
-
-def _looks_like_similar_question(message: str) -> bool:
-    """Return whether a question asks for historical similar cases."""
-
-    return any(keyword in message for keyword in KEYWORDS["similar_cases"])
-
-
-def _looks_like_rating_backtest_question(message: str) -> bool:
-    """Return whether a question asks the Agent to evaluate rating quality."""
-
-    return any(
-        keyword in message
-        for keyword in (
-            "\u56de\u6d4b",
-            "\u51c6\u4e0d\u51c6",
-            "\u51c6\u5417",
-            "\u81ea\u6211\u8bc4\u4ef7",
-            "\u8bc4\u5206\u6548\u679c",
-            "\u8bc4\u7ea7\u8868\u73b0",
-            "\u8868\u73b0\u600e\u4e48\u6837",
-            "\u5931\u8d25\u6837\u672c",
-        )
-    )
-
-
-def _looks_like_evaluation_question(message: str) -> bool:
-    """Return whether a question asks for post-outcome prediction evaluation."""
-
-    return any(
-        keyword in message
-        for keyword in (
-            "\u590d\u76d8",
-            "\u9884\u6d4b",
-            "\u8868\u73b0\u600e\u4e48\u6837",
-            "\u8bc4\u5206\u6700\u9ad8\u7684\u7968\u8868\u73b0",
-            "\u6628\u5929\u8bc4\u5206\u6700\u9ad8",
-            "\u54ea\u4e9b\u8bc4\u5206\u9519\u4e86",
-            "\u8bef\u5224",
-            "\u6f0f\u5224",
-            "\u56e0\u5b50\u6709\u6548",
-            "\u56e0\u5b50\u5931\u6548",
-            "\u81ea\u6211\u6539\u8fdb",
-            "evaluation",
-        )
-    )
-
-
-def _looks_like_review_question(message: str) -> bool:
-    """Return whether a question asks the Review Agent to improve first-board taste."""
-
-    return any(
-        keyword in message
-        for keyword in (
-            "\u9ad8\u5206\u7968",
-            "\u9ad8\u8bc4\u5206",
-            "\u9996\u677f\u5ba1\u7f8e",
-            "\u5ba1\u7f8e",
-            "\u6700\u8fd1\u8bc4\u5206",
-            "\u540e\u7eed\u8d70\u52bf",
-            "\u8d70\u5f97\u600e\u4e48\u6837",
-            "\u89c4\u5219\u6539\u8fdb",
-            "\u6743\u91cd",
-            "\u504f\u5dee",
-            "\u590d\u76d8\u9ad8\u5206",
-            "\u590d\u76d8\u4e00\u4e0b\u9ad8\u5206",
-        )
-    )
-
-
-def _looks_like_critic_question(message: str) -> bool:
-    """Return whether a question asks for rating criticism or reliability."""
-
-    return any(
-        keyword in message
-        for keyword in (
-            "\u9760\u8c31",
-            "\u53ef\u4fe1",
-            "\u53ef\u9760",
-            "\u8d28\u7591",
-            "\u53cd\u9a73",
-            "\u6253\u8138",
-            "\u9ad8\u4f30",
-            "\u4f4e\u4f30",
-            "\u8fc7\u5ea6\u4e50\u89c2",
-            "critic",
-            "critique",
-        )
-    )
 
 
 def _looks_like_context_pool_question(message: str) -> bool:
@@ -2966,15 +2391,6 @@ def _build_first_board_filter_trace(
             f"\u547d\u4e2d {len(matches)} \u53ea\u3002"
         ),
     )
-
-
-def _safe_date(year: int, month: int, day: int) -> date | None:
-    """Build a date, returning None for invalid user text."""
-
-    try:
-        return date(year, month, day)
-    except ValueError:
-        return None
 
 
 def _has_events_for_date(events: list[LimitUpEvent], trade_date: date) -> bool:
@@ -3810,14 +3226,6 @@ def _looks_like_broken_limit_up_question(message: str) -> bool:
     """Return whether the user asks for intraday-broken limit-up events."""
 
     return "\u70b8\u677f" in message
-
-
-def _looks_like_rating_explain_question(message: str) -> bool:
-    """Return whether a question needs original rating facts."""
-
-    if _looks_like_rating_backtest_question(message) or _looks_like_evaluation_question(message):
-        return False
-    return any(keyword in message for keyword in KEYWORDS["rating_explain"])
 
 
 def _limit_up_query_arguments_from_message(request: AgentChatRequest) -> dict[str, Any]:

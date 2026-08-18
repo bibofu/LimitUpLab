@@ -17,19 +17,27 @@ from app.models import (
     LimitUpEvent,
     MarketSummary,
     ScoreBreakdownItem,
+    ScoringPolicy,
 )
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
 from app.services.analysis import events_for_date, latest_trade_date, summarize_market
+from app.services.scoring_policy import (
+    DEFAULT_SCORING_POLICY_VERSION,
+    FACTOR_KEYS_BY_NAME,
+    build_default_scoring_policy,
+    validate_policy_factor_keys,
+)
 
 
 MIN_AMOUNT = 100_000_000
-FIRST_BOARD_AGENT_VERSION = "first-board-rule-v2-enriched"
+FIRST_BOARD_AGENT_VERSION = DEFAULT_SCORING_POLICY_VERSION
 
 
 def build_first_board_ratings(
     events: list[LimitUpEvent],
     trade_date: Optional[date] = None,
     first_board_repository: SQLiteFirstBoardRepository | None = None,
+    scoring_policy: ScoringPolicy | None = None,
 ) -> FirstBoardRatingsResponse:
     """Build first-board ratings for a trade date from persisted events."""
 
@@ -37,6 +45,11 @@ def build_first_board_ratings(
     latest_events = events_for_date(events, target_date)
     summary = summarize_market(latest_events)
     repository = first_board_repository or SQLiteFirstBoardRepository()
+    active_policy = scoring_policy or (
+        SQLiteScoringPolicyRepository(repository.database_path).get_champion()
+        or build_default_scoring_policy()
+    )
+    validate_policy_factor_keys(active_policy)
     enrichments = {
         item.symbol: item
         for item in repository.list_enrichment_for_date(target_date)
@@ -67,12 +80,12 @@ def build_first_board_ratings(
     return FirstBoardRatingsResponse(
         trade_date=target_date,
         candidates=sorted(
-            [_rate_candidate(item) for item in facts],
+            [_rate_candidate(item, active_policy) for item in facts],
             key=lambda item: (-item.score, -item.confidence, item.facts.symbol),
         ),
         filtered_out=[result for result in filter_results if not result.included],
         universe_count=len(latest_events),
-        generated_by=FIRST_BOARD_AGENT_VERSION,
+        generated_by=active_policy.version,
     )
 
 
@@ -154,7 +167,10 @@ def _evaluate_candidate_filter(
     )
 
 
-def _rate_candidate(facts: FirstBoardCandidateFacts) -> FirstBoardRating:
+def _rate_candidate(
+    facts: FirstBoardCandidateFacts,
+    scoring_policy: ScoringPolicy,
+) -> FirstBoardRating:
     """Score one first-board candidate with transparent factor weights."""
 
     base_breakdown = [
@@ -166,16 +182,17 @@ def _rate_candidate(facts: FirstBoardCandidateFacts) -> FirstBoardRating:
         _score_industry_heat(facts.same_industry_limit_up_count),
         _score_market_context(facts.market_failed_limit_up_rate, facts.market_max_board_height),
     ]
-    breakdown = [
-        _scale_score_item(item, 0.65)
-        for item in base_breakdown
-    ] + [
+    enrichment_breakdown = [
         _score_pre_limit_structure(facts.enrichment),
         _score_sector_and_relay(facts.enrichment),
         _score_profile_and_history(facts.enrichment),
         _score_dragon_tiger(facts.enrichment),
         _score_popularity(facts.enrichment),
     ]
+    breakdown = _apply_scoring_policy(
+        [*base_breakdown, *enrichment_breakdown],
+        scoring_policy,
+    )
     raw_score = sum(item.score for item in breakdown)
     score = round(max(0, min(100, raw_score)), 1)
     confidence = _calculate_confidence(facts)
@@ -189,6 +206,23 @@ def _rate_candidate(facts: FirstBoardCandidateFacts) -> FirstBoardRating:
         reasons=_build_reasons(facts),
         risks=_build_risks(facts),
     )
+
+
+def _apply_scoring_policy(
+    items: list[ScoreBreakdownItem],
+    scoring_policy: ScoringPolicy,
+) -> list[ScoreBreakdownItem]:
+    """Scale raw factor scores to the active policy's 100-point weights."""
+
+    weighted: list[ScoreBreakdownItem] = []
+    for item in items:
+        factor_key = FACTOR_KEYS_BY_NAME.get(item.name)
+        if factor_key is None:
+            raise ValueError(f"No scoring policy key registered for factor: {item.name}")
+        target_weight = scoring_policy.factor_weights[factor_key]
+        ratio = target_weight / item.max_score if item.max_score else 0.0
+        weighted.append(_scale_score_item(item, ratio))
+    return weighted
 
 
 def _scale_score_item(item: ScoreBreakdownItem, ratio: float) -> ScoreBreakdownItem:

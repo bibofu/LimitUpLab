@@ -17,13 +17,14 @@ from app.models import (
     SimilarFirstBoardCasesResponse,
     StockKLineFacts,
 )
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
 from app.services.analysis import events_for_date, summarize_market
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.first_board_critic import build_first_board_critic
 from app.services.rating_backtest import build_rating_backtest
 from app.services.similar_cases import find_similar_first_board_cases
 from app.services.stock_kline import build_stock_kline_facts
+from app.services.scoring_policy_optimizer import build_scoring_policy_registry
 from app.agents.review_agent import build_review_agent_report
 
 
@@ -251,6 +252,12 @@ TOOL_SCHEMAS = [
             "required": [],
         },
         returns="Review Agent report with findings, successful patterns, failed patterns, scoring bias and adjustment suggestions.",
+    ),
+    AgentToolSchema(
+        name="scoring_policy_status",
+        description="读取当前评分 Champion、历史 Challenger、最近一次样本外优化结果和晋级门槛，不修改线上权重。",
+        args_schema={"type": "object", "properties": {}, "required": []},
+        returns="Current scoring policy, factor weights, latest Challenger comparison and promotion status.",
     ),
 ]
 
@@ -733,6 +740,48 @@ class AgentToolRegistry:
             summary=(
                 f"Review Agent checked {response.sample_size} high-score picks "
                 f"from {response.start_date.isoformat()} to {response.end_date.isoformat()}."
+            ),
+            trace_output=trace_output,
+        )
+
+    def scoring_policy_status(self) -> ToolResult:
+        """Return the current Champion and latest constrained optimization result."""
+
+        repository = SQLiteScoringPolicyRepository(
+            self.first_board_repository.database_path
+        )
+        registry = build_scoring_policy_registry(repository=repository, limit=10)
+        latest = repository.get_latest_optimization_run()
+        payload = {
+            "champion": registry.champion.model_dump(mode="json"),
+            "policy_count": len(registry.policies),
+            "challengers": [
+                item.model_dump(mode="json")
+                for item in registry.policies
+                if item.status == "challenger"
+            ][:5],
+            "latest_optimization": latest.model_dump(mode="json") if latest else None,
+        }
+        latest_comparison = latest.comparison if latest else None
+        trace_output = {
+            "champion_version": registry.champion.version,
+            "policy_count": len(registry.policies),
+            "challenger_count": len(payload["challengers"]),
+            "latest_challenger": (
+                latest.challenger_policy.version if latest else None
+            ),
+            "promotion_eligible": (
+                latest_comparison.promotion_eligible if latest_comparison else None
+            ),
+            "activated": latest.activated if latest else None,
+        }
+        return ToolResult(
+            name="scoring_policy_status",
+            input={},
+            output=payload,
+            summary=(
+                f"Champion {registry.champion.version}; "
+                f"{len(payload['challengers'])} recent challengers registered."
             ),
             trace_output=trace_output,
         )

@@ -14,6 +14,7 @@ from app.models import (
     RatingBacktestBucket,
     RatingBacktestFailureSample,
     RatingBacktestResponse,
+    ScoringPolicy,
 )
 from app.repositories import SQLiteFirstBoardRepository
 
@@ -34,6 +35,7 @@ def build_rating_backtest(
     end_date: date,
     first_board_repository: SQLiteFirstBoardRepository | None = None,
     failure_limit: int = 8,
+    scoring_policy: ScoringPolicy | None = None,
 ) -> RatingBacktestResponse:
     """Evaluate first-board rating buckets against persisted outcomes."""
 
@@ -59,6 +61,7 @@ def build_rating_backtest(
             events=events,
             trade_date=trade_date,
             first_board_repository=repository,
+            scoring_policy=scoring_policy,
         )
         samples.extend(
             _BacktestSample(

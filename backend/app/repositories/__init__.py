@@ -7,6 +7,7 @@ from app.repositories.limit_up_repository import (
     SQLiteLimitUpRepository,
     get_limit_up_repository,
 )
+from app.repositories.scoring_policy_repository import SQLiteScoringPolicyRepository
 
 __all__ = [
     "LimitUpRepository",
@@ -15,5 +16,6 @@ __all__ = [
     "SQLiteAgentRunRepository",
     "SQLiteFirstBoardRepository",
     "SQLiteLimitUpRepository",
+    "SQLiteScoringPolicyRepository",
     "get_limit_up_repository",
 ]
