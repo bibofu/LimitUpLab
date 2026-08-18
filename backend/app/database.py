@@ -152,16 +152,38 @@ def initialize_database(connection: sqlite3.Connection) -> None:
             next_open_pct REAL,
             next_high_pct REAL,
             next_close_pct REAL,
+            next_open_to_high_pct REAL,
+            next_open_to_low_pct REAL,
+            next_open_to_close_pct REAL,
             three_day_high_pct REAL,
             three_day_close_pct REAL,
             max_drawdown_3d REAL,
+            three_day_open_to_high_pct REAL,
+            three_day_open_to_close_pct REAL,
+            max_drawdown_from_next_open_3d REAL,
             promoted_to_second_board INTEGER NOT NULL,
+            next_day_ready INTEGER NOT NULL DEFAULT 0,
+            three_day_ready INTEGER NOT NULL DEFAULT 0,
             outcome_ready INTEGER NOT NULL,
             outcome_version TEXT NOT NULL,
             created_at TEXT NOT NULL,
             PRIMARY KEY (base_trade_date, symbol)
         )
         """
+    )
+    _ensure_columns(
+        connection,
+        "first_board_outcomes",
+        {
+            "next_open_to_high_pct": "REAL",
+            "next_open_to_low_pct": "REAL",
+            "next_open_to_close_pct": "REAL",
+            "three_day_open_to_high_pct": "REAL",
+            "three_day_open_to_close_pct": "REAL",
+            "max_drawdown_from_next_open_3d": "REAL",
+            "next_day_ready": "INTEGER NOT NULL DEFAULT 0",
+            "three_day_ready": "INTEGER NOT NULL DEFAULT 0",
+        },
     )
     connection.execute(
         """
@@ -241,25 +263,7 @@ def initialize_database(connection: sqlite3.Connection) -> None:
         ON agent_runs (session_id, started_at DESC)
         """
     )
-    connection.execute(
-        """
-        CREATE TABLE IF NOT EXISTS agent_predictions (
-            prediction_id TEXT PRIMARY KEY,
-            trade_date TEXT NOT NULL,
-            symbol TEXT NOT NULL,
-            name TEXT NOT NULL,
-            score REAL NOT NULL,
-            rating TEXT NOT NULL,
-            confidence REAL NOT NULL,
-            scoring_version TEXT NOT NULL,
-            facts_json TEXT NOT NULL,
-            reasons_json TEXT NOT NULL,
-            risks_json TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            UNIQUE(trade_date, symbol, scoring_version)
-        )
-        """
-    )
+    _ensure_agent_predictions_schema(connection)
     connection.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_agent_predictions_date
@@ -290,4 +294,96 @@ def initialize_database(connection: sqlite3.Connection) -> None:
         """
     )
     connection.commit()
+
+
+def _ensure_columns(
+    connection: sqlite3.Connection,
+    table_name: str,
+    definitions: dict[str, str],
+) -> None:
+    """Add backward-compatible columns missing from an existing SQLite table."""
+
+    columns = {
+        row["name"]
+        for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    }
+    for column_name, definition in definitions.items():
+        if column_name not in columns:
+            connection.execute(
+                f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}"
+            )
+
+
+def _ensure_agent_predictions_schema(connection: sqlite3.Connection) -> None:
+    """Migrate prediction snapshots to source-aware immutable uniqueness."""
+
+    table = connection.execute(
+        "SELECT sql FROM sqlite_master WHERE type = 'table' AND name = 'agent_predictions'"
+    ).fetchone()
+    if table is None:
+        _create_agent_predictions_table(connection)
+        return
+
+    table_sql = str(table["sql"] or "").lower().replace(" ", "")
+    source_aware_unique = (
+        "unique(trade_date,symbol,scoring_version,prediction_source)" in table_sql
+    )
+    if source_aware_unique:
+        return
+
+    columns = {
+        row["name"]
+        for row in connection.execute("PRAGMA table_info(agent_predictions)").fetchall()
+    }
+    source_expression = (
+        "COALESCE(prediction_source, 'historical_backtest')"
+        if "prediction_source" in columns
+        else "'historical_backtest'"
+    )
+    as_of_expression = (
+        "COALESCE(data_as_of, trade_date)" if "data_as_of" in columns else "trade_date"
+    )
+    connection.execute("ALTER TABLE agent_predictions RENAME TO agent_predictions_legacy")
+    _create_agent_predictions_table(connection)
+    connection.execute(
+        f"""
+        INSERT INTO agent_predictions (
+            prediction_id, trade_date, symbol, name, score, rating, confidence,
+            scoring_version, prediction_source, data_as_of, facts_json,
+            reasons_json, risks_json, created_at
+        )
+        SELECT
+            prediction_id, trade_date, symbol, name, score, rating, confidence,
+            scoring_version, {source_expression}, {as_of_expression}, facts_json,
+            reasons_json, risks_json, created_at
+        FROM agent_predictions_legacy
+        """
+    )
+    connection.execute("DROP TABLE agent_predictions_legacy")
+
+
+def _create_agent_predictions_table(connection: sqlite3.Connection) -> None:
+    """Create the source-aware immutable prediction snapshot table."""
+
+    connection.execute(
+        """
+        CREATE TABLE agent_predictions (
+            prediction_id TEXT PRIMARY KEY,
+            trade_date TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            name TEXT NOT NULL,
+            score REAL NOT NULL,
+            rating TEXT NOT NULL,
+            confidence REAL NOT NULL,
+            scoring_version TEXT NOT NULL,
+            prediction_source TEXT NOT NULL,
+            data_as_of TEXT NOT NULL,
+            facts_json TEXT NOT NULL,
+            reasons_json TEXT NOT NULL,
+            risks_json TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            UNIQUE(trade_date, symbol, scoring_version, prediction_source)
+        )
+        """
+    )
 

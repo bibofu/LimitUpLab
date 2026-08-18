@@ -1,9 +1,16 @@
 import json
 import unittest
 from datetime import date, datetime, time, timezone
+from unittest.mock import patch
 
 from app.agents.chat import answer_first_board_chat
-from app.models import AgentChatRequest, AgentRun, LimitUpEvent
+from app.models import (
+    AgentChatRequest,
+    AgentRun,
+    LimitUpEvent,
+    StockKLineBar,
+    StockKLineFacts,
+)
 from app.services.llm_provider import LLMProvider, LLMResult
 from app.services.sample_data import SAMPLE_EVENTS
 
@@ -320,6 +327,56 @@ class AgentChatTest(unittest.TestCase):
                 for trace in response.tool_results
             )
         )
+
+    @patch("app.agents.tools.build_stock_kline_facts")
+    def test_stock_trend_question_repairs_to_kline_tool(self, build_facts) -> None:
+        build_facts.return_value = StockKLineFacts(
+            symbol="002298",
+            requested_days=20,
+            requested_end_date=date(2026, 8, 7),
+            data_as_of=date(2026, 8, 7),
+            data_fresh=True,
+            trend="rising",
+            latest_close=12.3,
+            return_5d_pct=8.2,
+            ma5=11.8,
+            ma10=11.2,
+            ma20=10.5,
+            max_drawdown_pct=-4.1,
+            sources=["test"],
+            bars=[
+                StockKLineBar(
+                    trade_date=date(2026, 8, 7),
+                    open=11.5,
+                    high=12.5,
+                    low=11.4,
+                    close=12.3,
+                    volume=1_000_000,
+                )
+            ],
+        )
+        events = [
+            self._make_event(
+                symbol="002298",
+                name="中电鑫龙",
+                industry="软件开发",
+                concept="人工智能",
+            )
+        ]
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="s1",
+                message="中电鑫龙最近走势怎么样",
+            ),
+            events=events,
+            llm_provider=FakeToolPlanningProvider(),
+        )
+
+        self.assertIn("stock_kline", response.tool_calls)
+        self.assertTrue(any(trace.name == "stock_kline" for trace in response.tool_results))
+        self.assertIn("symbol=002298", response.references)
+        self.assertEqual(build_facts.call_args.kwargs["symbol"], "002298")
 
     def test_rating_backtest_question_repairs_missing_planner_tool_call(self) -> None:
         provider = FakeToolPlanningProvider()

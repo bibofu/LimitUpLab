@@ -129,6 +129,13 @@ data:
 .\.venv\Scripts\python.exe scripts\update_daily_data.py --date 20260810 --skip-import
 ```
 
+The pipeline writes immutable Top10 prediction snapshots. The latest available
+trading date is stored as `live`; older missing dates are stored as
+`historical_backtest`. Evaluation endpoints only read these snapshots and never
+create historical predictions as a side effect. Outcome evaluation uses the
+next trading day's open as the executable entry baseline; promotion and
+intraday highs remain separate facts.
+
 Before local demos, run the development health check. With `--ensure-data`, it
 checks the expected local data date based on China market hours and runs the
 daily update pipeline when the local database is stale:
@@ -163,9 +170,9 @@ LIMITUPLAB_DATABASE_PATH=/tmp/limituplab.sqlite uvicorn app.main:app --reload --
 - `GET /api/agents/first-board-ratings` - explainable first-board candidate ratings
 - `GET /api/agents/data-health` - Agent raw-data, feature and similar-case cache health
 - `GET /api/agents/system-health` - local runtime health for data freshness, LLM configuration and eval status
-- `GET /api/agents/rating-backtest` - rating bucket backtest and self-evaluation summary
+- `GET /api/agents/rating-backtest` - entry-open return, drawdown and promotion metrics by rating bucket
 - `GET /api/agents/first-board-critic` - critic review for one first-board rating
-- `GET /api/agents/rating-evaluation` - Evaluation Agent review for saved rating predictions
+- `GET /api/agents/rating-evaluation` - source-aware Evaluation Agent review for immutable predictions
 - `GET /api/agents/runs` - recent Agent run traces for observability
 - `GET /api/agents/first-board-similar-cases` - historical similar first-board cases
 - `POST /api/agents/chat` - tool-grounded Agent chat and LLM/template explanations

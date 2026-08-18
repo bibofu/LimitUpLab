@@ -6,7 +6,10 @@ from uuid import uuid4
 
 from app.models import FirstBoardOutcome, LimitUpEvent
 from app.repositories import SQLiteFirstBoardRepository
-from app.services.evaluation_agent import build_agent_evaluation
+from app.services.evaluation_agent import (
+    build_agent_evaluation,
+    persist_agent_predictions_for_dates,
+)
 
 
 TEST_TMP_ROOT = Path(os.getenv("LIMITUPLAB_TEST_TMP", Path(__file__).resolve().parents[1]))
@@ -74,16 +77,24 @@ class EvaluationAgentTest(unittest.TestCase):
             next_open_pct=1.0,
             next_high_pct=next_high_pct,
             next_close_pct=next_close_pct,
+            next_open_to_high_pct=next_high_pct - 1.0,
+            next_open_to_low_pct=-3.0,
+            next_open_to_close_pct=next_close_pct,
             three_day_high_pct=three_day_high_pct,
             three_day_close_pct=three_day_close_pct,
             max_drawdown_3d=-3.0,
+            three_day_open_to_high_pct=three_day_high_pct - 1.0,
+            three_day_open_to_close_pct=three_day_close_pct,
+            max_drawdown_from_next_open_3d=-4.0,
             promoted_to_second_board=promoted,
+            next_day_ready=True,
+            three_day_ready=True,
             outcome_ready=True,
             outcome_version="test",
             created_at=datetime.now(timezone.utc),
         )
 
-    def test_evaluation_agent_persists_predictions_and_labels_outcomes(self) -> None:
+    def test_evaluation_agent_reads_immutable_predictions_and_labels_entry_returns(self) -> None:
         database_path = self._database_path()
         try:
             repository = SQLiteFirstBoardRepository(database_path=database_path)
@@ -101,6 +112,21 @@ class EvaluationAgentTest(unittest.TestCase):
                 ]
             )
 
+            empty_response = build_agent_evaluation(
+                events=events,
+                start_date=trade_date,
+                end_date=trade_date,
+                first_board_repository=repository,
+            )
+            self.assertEqual(empty_response.prediction_count, 0)
+            persist_agent_predictions_for_dates(
+                events=events,
+                trade_dates=[trade_date],
+                repository=repository,
+                prediction_source="live",
+                data_as_of=trade_date,
+            )
+
             response = build_agent_evaluation(
                 events=events,
                 start_date=trade_date,
@@ -110,11 +136,13 @@ class EvaluationAgentTest(unittest.TestCase):
 
             self.assertEqual(response.prediction_count, 3)
             self.assertEqual(response.outcome_ready_count, 3)
+            self.assertEqual(response.source_counts, {"live": 3})
             labels = {item.symbol: item.evaluation_label for item in response.evaluations}
             self.assertEqual(labels["002001"], "success")
             self.assertEqual(labels["002002"], "miss")
             self.assertEqual(labels["002003"], "false_negative")
             self.assertTrue(response.summary)
+            self.assertTrue(all(item.prediction_source == "live" for item in response.evaluations))
             self.assertEqual(len(repository.list_predictions_between(trade_date, trade_date)), 3)
         finally:
             self._cleanup_database(database_path)

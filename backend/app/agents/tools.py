@@ -15,6 +15,7 @@ from app.models import (
     MarketSummary,
     RatingBacktestResponse,
     SimilarFirstBoardCasesResponse,
+    StockKLineFacts,
 )
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.analysis import events_for_date, summarize_market
@@ -22,6 +23,7 @@ from app.services.evaluation_agent import build_agent_evaluation
 from app.services.first_board_critic import build_first_board_critic
 from app.services.rating_backtest import build_rating_backtest
 from app.services.similar_cases import find_similar_first_board_cases
+from app.services.stock_kline import build_stock_kline_facts
 from app.agents.review_agent import build_review_agent_report
 
 
@@ -170,6 +172,26 @@ TOOL_SCHEMAS = [
             "required": ["symbol", "trade_date"],
         },
         returns="Similar first-board cases, similarity reasons and post-limit-up bars.",
+    ),
+    AgentToolSchema(
+        name="stock_kline",
+        description="读取指定股票最近一段时间的日 K 线、均线、区间涨跌、量能和最大回撤，用于回答个股走势问题。",
+        args_schema={
+            "type": "object",
+            "properties": {
+                "symbol": {
+                    "type": "string",
+                    "description": "Six-digit A-share symbol or an exact stock name present in local data.",
+                },
+                "days": {"type": "integer", "minimum": 5, "maximum": 60},
+                "end_date": {
+                    "type": ["string", "null"],
+                    "description": "YYYY-MM-DD; omit or null for latest local trade date.",
+                },
+            },
+            "required": ["symbol"],
+        },
+        returns="Daily OHLCV bars, data freshness, trend, returns, moving averages, volume ratio and drawdown.",
     ),
     AgentToolSchema(
         name="rating_backtest",
@@ -466,6 +488,81 @@ class AgentToolRegistry:
             trace_output=trace_output,
         )
 
+    def stock_kline(
+        self,
+        symbol: str,
+        days: int = 20,
+        end_date: date | None = None,
+    ) -> ToolResult:
+        """Return local-first K-line facts for a stock trend question."""
+
+        resolved_symbol = self.resolve_stock_symbol(symbol)
+        available_dates = sorted({event.trade_date for event in self.events})
+        resolved_end_date = end_date or (
+            available_dates[-1] if available_dates else date.today()
+        )
+        response: StockKLineFacts = build_stock_kline_facts(
+            symbol=resolved_symbol,
+            days=max(5, min(days, 60)),
+            end_date=resolved_end_date,
+            repository=self.first_board_repository,
+        )
+        trace_output = {
+            "symbol": response.symbol,
+            "requested_days": response.requested_days,
+            "requested_end_date": response.requested_end_date.isoformat(),
+            "data_as_of": response.data_as_of.isoformat(),
+            "data_fresh": response.data_fresh,
+            "trend": response.trend,
+            "latest_close": response.latest_close,
+            "return_5d_pct": response.return_5d_pct,
+            "return_10d_pct": response.return_10d_pct,
+            "return_20d_pct": response.return_20d_pct,
+            "bar_count": len(response.bars),
+        }
+        return ToolResult(
+            name="stock_kline",
+            input={
+                "symbol": resolved_symbol,
+                "days": response.requested_days,
+                "end_date": resolved_end_date.isoformat(),
+            },
+            output=response,
+            summary=(
+                f"{resolved_symbol} K-line through {response.data_as_of.isoformat()}: "
+                f"trend={response.trend}, close={response.latest_close}, "
+                f"5d={response.return_5d_pct}."
+            ),
+            trace_output=trace_output,
+        )
+
+    def resolve_stock_symbol(self, value: str) -> str:
+        """Resolve a six-digit symbol or local stock name to a symbol."""
+
+        normalized = value.strip()
+        lowered = normalized.lower()
+        if lowered.startswith(("sh", "sz")):
+            normalized = normalized[2:]
+        if len(normalized) == 6 and normalized.isdigit():
+            return normalized
+
+        compact = normalized.replace(" ", "")
+        exact = {
+            event.symbol
+            for event in self.events
+            if event.name.replace(" ", "") == compact
+        }
+        if len(exact) == 1:
+            return exact.pop()
+        contained = {
+            event.symbol
+            for event in self.events
+            if event.name.replace(" ", "") in compact
+        }
+        if len(contained) == 1:
+            return contained.pop()
+        raise ValueError(f"Cannot resolve stock symbol from: {value}")
+
     def rating_backtest(
         self,
         start_date: date,
@@ -500,7 +597,7 @@ class AgentToolRegistry:
             summary=(
                 f"{response.start_date.isoformat()} 至 {response.end_date.isoformat()} "
                 f"回测 {response.sample_size} 个首板评分样本，"
-                f"{response.outcome_ready_count} 个 outcome 可用。"
+                f"{response.outcome_ready_count} 个次日介入结果可用。"
             ),
             trace_output=trace_output,
         )
@@ -567,6 +664,7 @@ class AgentToolRegistry:
             "end_date": response.end_date.isoformat(),
             "prediction_count": response.prediction_count,
             "outcome_ready_count": response.outcome_ready_count,
+            "source_counts": response.source_counts,
             "label_counts": response.label_counts,
             "top_evaluations": [
                 {
@@ -575,7 +673,10 @@ class AgentToolRegistry:
                     "trade_date": item.trade_date.isoformat(),
                     "rating": item.rating,
                     "score": item.score,
+                    "prediction_source": item.prediction_source,
                     "evaluation_label": item.evaluation_label,
+                    "next_open_to_close_pct": item.next_open_to_close_pct,
+                    "next_open_to_low_pct": item.next_open_to_low_pct,
                 }
                 for item in response.evaluations[:5]
             ],

@@ -39,6 +39,7 @@ SUPPORTED_INTENTS = {
     "market_context",
     "general_llm",
     "tool_grounded_answer",
+    "stock_trend",
     "similar_cases",
     "risk_summary",
     "rating_explain",
@@ -151,6 +152,13 @@ def answer_first_board_chat(
     )
     if llm_response is not None:
         return llm_response
+    stock_kline_fallback = _answer_stock_kline_without_llm(
+        request=request,
+        tools=tools,
+        context=context,
+    )
+    if stock_kline_fallback is not None:
+        return stock_kline_fallback
 
     plan = _build_agent_plan(request=request, context=context)
     intent = plan.intent
@@ -382,6 +390,22 @@ def _answer_with_llm_tool_agent(
             }
         ]
         direct_answer = ""
+    if not tool_calls and direct_answer and _looks_like_stock_kline_question(request.message):
+        target = _resolve_stock_kline_target(request, tools, context)
+        if target is not None:
+            tool_calls = [
+                {
+                    "name": "stock_kline",
+                    "arguments": {
+                        "symbol": target,
+                        "days": _extract_kline_days(request.message),
+                        "end_date": (
+                            request.trade_date.isoformat() if request.trade_date else None
+                        ),
+                    },
+                }
+            ]
+            direct_answer = ""
     if not tool_calls and direct_answer:
         requested_date = _extract_trade_date(request.message)
         if requested_date and not _has_events_for_date(tools.events, requested_date):
@@ -480,6 +504,12 @@ def _answer_with_llm_tool_agent(
     _ensure_similar_case_tool_if_needed(
         request=request,
         tools=tools,
+        execution=execution,
+    )
+    _ensure_stock_kline_tool_if_needed(
+        request=request,
+        tools=tools,
+        context=context,
         execution=execution,
     )
     _ensure_rating_tool_if_needed(
@@ -616,6 +646,7 @@ def _tool_planner_system_prompt(tool_schema_prompt: str) -> str:
         "For capability questions, answer_directly must mention LimitUpLab. "
         "For rating explanation questions, first call first_board_ratings before critic tools. "
         "For review questions about recent high-score picks, model performance, misses, or scoring taste, call review_high_score_picks. "
+        "For questions about one stock's K-line, price trend, moving averages, recent rise/fall, volume, or drawdown, call stock_kline. "
         "For unavailable date/data-availability questions, do not answer directly; let backend verify local dates. "
         "Do not provide direct trading instructions, position sizing, target prices, or return promises. "
         "If the user asks for those, set safety to refuse_trade_instruction. "
@@ -723,12 +754,29 @@ def _template_answer_from_tool_facts(
         lines.append(TEXT["safety"])
         return "\n".join(lines)
 
+    if "stock_kline" in facts:
+        kline = facts["stock_kline"]
+        trend_label = {
+            "rising": "偏强上行",
+            "falling": "偏弱下行",
+            "oscillating": "震荡",
+            "insufficient": "样本不足",
+        }.get(kline.get("trend"), str(kline.get("trend")))
+        freshness = "已到指定交易日" if kline.get("data_fresh") else "数据尚未到指定交易日"
+        return (
+            f"{kline.get('symbol')} 最近 {kline.get('requested_days')} 个交易日走势为{trend_label}，"
+            f"截至 {kline.get('data_as_of')} 收盘 {kline.get('latest_close')}。"
+            f"5日涨跌 {kline.get('return_5d_pct')}%，10日涨跌 {kline.get('return_10d_pct')}%，"
+            f"20日涨跌 {kline.get('return_20d_pct')}%，区间最大回撤 {kline.get('max_drawdown_pct')}%。"
+            f"数据状态：{freshness}。\n{TEXT['safety']}"
+        )
+
     if "rating_evaluation" in facts:
         evaluation = facts["rating_evaluation"]
         lines = [
             f"{evaluation.get('start_date')} 至 {evaluation.get('end_date')} 评分复盘："
             f"共 {evaluation.get('prediction_count')} 条预测，"
-            f"{evaluation.get('outcome_ready_count')} 条已有后续走势。",
+            f"{evaluation.get('outcome_ready_count')} 条已有次日开盘介入结果。",
         ]
         for item in evaluation.get("summary", [])[:4]:
             lines.append(f"- {item}")
@@ -753,6 +801,9 @@ def _tool_answer_system_prompt() -> str:
     return (
         "You are LimitUpLab's A-share first-board research agent. "
         "Answer in Chinese using only the executed tool facts. "
+        "For prediction evaluation, prioritize next_open_to_close_pct and entry-open drawdown; "
+        "treat promotion and intraday highs as separate facts rather than success labels. "
+        "For stock trend questions, cite stock_kline.data_as_of and data_fresh, and base the description on returns, moving averages, volume and drawdown. "
         "When mentioning dates, include ISO format YYYY-MM-DD even if also using Chinese date wording. "
         "If the facts are insufficient, say exactly what is missing and what tool/data "
         "would be needed. Keep the answer concise, structured, and useful. "
@@ -898,6 +949,51 @@ def _execute_llm_tool_calls(
             traces.append(result.trace())
             call_names.append(name)
             references.append(f"trade_date={result.trace_output.get('trade_date')}")
+        elif name == "stock_kline":
+            raw_symbol = str(
+                arguments.get("symbol") or arguments.get("query") or ""
+            ).strip()
+            days = _parse_optional_int(arguments.get("days")) or 20
+            end_date = _parse_optional_date(arguments.get("end_date"))
+            if not raw_symbol:
+                facts["stock_kline_error"] = "symbol is required"
+                traces.append(
+                    _tool_error_trace(
+                        name=name,
+                        tool_input=arguments,
+                        summary="K线工具缺少股票代码或名称，未执行查询。",
+                        error="symbol is required",
+                    )
+                )
+                continue
+            try:
+                result = tools.stock_kline(
+                    symbol=raw_symbol,
+                    days=max(5, min(days, 60)),
+                    end_date=end_date,
+                )
+            except Exception as error:  # noqa: BLE001
+                facts["stock_kline_error"] = str(error)
+                traces.append(
+                    _tool_error_trace(
+                        name=name,
+                        tool_input=arguments,
+                        summary="K线工具查询失败，已将原因交给 LLM。",
+                        error=str(error),
+                    )
+                )
+                call_names.append(name)
+                continue
+            response = result.output
+            facts["stock_kline"] = response.model_dump(mode="json")
+            traces.append(result.trace())
+            call_names.append(name)
+            references.extend(
+                [
+                    f"symbol={response.symbol}",
+                    f"data_as_of={response.data_as_of.isoformat()}",
+                ]
+            )
         elif name == "first_board_ratings":
             trade_date = _parse_optional_date(arguments.get("trade_date"))
             if trade_date and not _has_events_for_date(tools.events, trade_date):
@@ -1240,6 +1336,159 @@ def _ensure_data_availability_tool_if_needed(
     execution["references"] = list(
         dict.fromkeys([*execution["references"], f"missing_trade_date={requested_date.isoformat()}"])
     )
+
+
+def _ensure_stock_kline_tool_if_needed(
+    request: AgentChatRequest,
+    tools: AgentToolRegistry,
+    context: "_SessionContext",
+    execution: dict[str, Any],
+) -> None:
+    """Repair planner omissions for explicit single-stock trend questions."""
+
+    if not _looks_like_stock_kline_question(request.message):
+        return
+    facts = execution["facts"]
+    if "stock_kline" in facts or "stock_kline_error" in facts:
+        return
+    target = _resolve_stock_kline_target(request, tools, context)
+    if target is None:
+        facts["stock_kline_error"] = "Cannot resolve the requested stock symbol."
+        execution["tool_results"].append(
+            _tool_error_trace(
+                name="stock_kline",
+                tool_input={"query": request.message},
+                summary="无法从问题或会话上下文解析股票代码。",
+                error="Cannot resolve the requested stock symbol.",
+            )
+        )
+        execution["tool_call_names"].append("stock_kline")
+        return
+    try:
+        result = tools.stock_kline(
+            symbol=target,
+            days=_extract_kline_days(request.message),
+            end_date=request.trade_date,
+        )
+    except Exception as error:  # noqa: BLE001
+        facts["stock_kline_error"] = str(error)
+        execution["tool_results"].append(
+            _tool_error_trace(
+                name="stock_kline",
+                tool_input={"symbol": target, "days": _extract_kline_days(request.message)},
+                summary="Planner 漏掉 K 线工具，后端补调用时失败。",
+                error=str(error),
+            )
+        )
+        execution["tool_call_names"].append("stock_kline")
+        return
+
+    response = result.output
+    facts["stock_kline"] = response.model_dump(mode="json")
+    execution["tool_results"].append(result.trace())
+    execution["tool_call_names"].append("stock_kline")
+    execution["references"] = list(
+        dict.fromkeys(
+            [
+                *execution["references"],
+                f"symbol={response.symbol}",
+                f"data_as_of={response.data_as_of.isoformat()}",
+            ]
+        )
+    )
+
+
+def _answer_stock_kline_without_llm(
+    request: AgentChatRequest,
+    tools: AgentToolRegistry,
+    context: "_SessionContext",
+) -> AgentChatResponse | None:
+    """Use the K-line tool as a deterministic fallback when the LLM is unavailable."""
+
+    if not _looks_like_stock_kline_question(request.message):
+        return None
+    target = _resolve_stock_kline_target(request, tools, context)
+    if target is None:
+        return None
+    try:
+        result = tools.stock_kline(
+            symbol=target,
+            days=_extract_kline_days(request.message),
+            end_date=request.trade_date,
+        )
+    except Exception:
+        return None
+    response = result.output
+    facts = {"stock_kline": response.model_dump(mode="json")}
+    return AgentChatResponse(
+        session_id=request.session_id,
+        intent="stock_trend",
+        answer=_template_answer_from_tool_facts(
+            request=request,
+            intent="stock_trend",
+            facts=facts,
+        ),
+        tool_calls=["stock_kline", "template_general_answer"],
+        tool_results=[result.trace()],
+        references=[
+            f"symbol={response.symbol}",
+            f"data_as_of={response.data_as_of.isoformat()}",
+        ],
+        warnings=[_safety_warning()],
+        generated_by=CHAT_AGENT_VERSION,
+    )
+
+
+def _looks_like_stock_kline_question(message: str) -> bool:
+    """Return whether a question asks about one stock's price/K-line trend."""
+
+    lowered = message.lower()
+    return any(
+        term in lowered
+        for term in (
+            "k线",
+            "k-line",
+            "走势",
+            "趋势",
+            "均线",
+            "量能",
+            "成交量",
+            "最近涨跌",
+            "近期涨跌",
+        )
+    ) and not ("高分" in message and "后续走势" in message)
+
+
+def _resolve_stock_kline_target(
+    request: AgentChatRequest,
+    tools: AgentToolRegistry,
+    context: "_SessionContext",
+) -> str | None:
+    """Resolve a K-line target from request, message, or recent context."""
+
+    candidates = [
+        request.symbol,
+        _extract_symbol_hint(request.message),
+        request.message,
+        context.symbol,
+    ]
+    for candidate in candidates:
+        if not candidate:
+            continue
+        try:
+            return tools.resolve_stock_symbol(candidate)
+        except ValueError:
+            continue
+    return None
+
+
+def _extract_kline_days(message: str) -> int:
+    """Extract a bounded trading-day window, defaulting to 20 days."""
+
+    match = re.search(r"(?:最近|近)?\s*(\d{1,2})\s*(?:个?交易日|天|日)", message)
+    if match is None:
+        return 20
+    return max(5, min(int(match.group(1)), 60))
 
 
 def _ensure_similar_case_tool_if_needed(

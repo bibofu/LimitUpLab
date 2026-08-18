@@ -259,6 +259,12 @@ Critic Agent
   - 支持追问“它有没有历史相似案例”，复用上一轮选出的股票继续调用相似案例工具。
   - 当股票已识别但相似案例特征缓存缺失时，明确说明缓存缺失，不误报为股票不存在。
 
+- `[x]` 新增个股 K 线 Agent 工具。
+  - 支持按股票代码或本地股票名称查询最近 5-60 个交易日。
+  - SQLite 缓存优先，历史 K 线补全，最新收盘快照兜底。
+  - 输出数据截止日、涨跌幅、均线、量比、最大回撤和原始 OHLCV。
+  - Planner 漏调时由后端补调用，LLM 不可脱离工具 facts 判断走势。
+
 - `[x]` 增加问答安全边界。
   - 回答必须基于工具返回的 facts。
   - 不输出买入 / 卖出建议。
@@ -342,14 +348,16 @@ Critic 输出能解释为什么降低或不降低置信度。
   - Evaluation 输出暂不落独立表，先由服务实时生成，后续可扩展为 `agent_evaluations`。
 
 - `[x]` 保存每日评级结果。
-  - 保存 score、rating、confidence、reasons、risks、scoring_version、facts snapshot。
-  - 新增 `app.services.evaluation_agent`，在评价前自动生成并 upsert 评分预测快照。
-  - 每日数据更新阶段固定保存最近 6 个交易日的每日 Top10，避免复盘时临时重算导致追踪对象漂移。
+  - 保存 score、rating、confidence、reasons、risks、scoring_version、facts snapshot、data_as_of 和 prediction_source。
+  - 预测快照按 `live / historical_backtest` 分开保存，同一评分版本允许同时保留两类不可变记录。
+  - Evaluation 接口只读取已保存预测，不再因查询复盘接口而自动制造历史预测。
+  - 每日数据更新阶段保存最新交易日 live Top10；缺失的历史 Top10 只能标记为 historical_backtest。
 
 - `[x]` 保证每日 Top10 后续走势缓存。
   - 每次数据更新优先校验最近 6 个交易日 Top10 的“首板日 + 后续 5 个交易日”K 线。
   - 对远端空结果和临时失败执行重试，并把未补齐样本保留到下一次更新继续处理。
   - 前端固定展示首板至 D+5 六个槽位，区分“待收盘”和“缺缓存”。
+  - 修正腾讯历史行情 `end_date` 排他边界，确保复盘截止日 K 线能够入库并补齐存量 Top10。
 
 - `[x]` 回填或计算次日结果。
   - 是否晋级二板。
@@ -357,10 +365,13 @@ Critic 输出能解释为什么降低或不降低置信度。
   - 次日最高涨跌幅。
   - 次日收盘涨跌幅。
   - 最大回撤。
+  - 新增以次日开盘为介入基准的开盘到最高、最低、收盘收益，以及三日收益和最大回撤。
+  - 分离 `next_day_ready` 与 `three_day_ready`，次日评价不再被三日缓存状态阻塞。
   - MVP 阶段复用每日数据流水线维护的 `first_board_outcomes`。
 
 - `[x]` 实现 Evaluation Agent。
   - 分类 `success`、`partial`、`miss`、`avoid_success`、`false_negative`。
+  - 成功标签只由“次日开盘到收盘收益”决定；晋级二板和盘中冲高作为独立事实，不再混入成功标签。
   - 生成经验教训和评分规则调整建议。
   - 只给建议，不自动修改评分规则。
   - 新增 `/api/agents/rating-evaluation`，输出预测数量、outcome 覆盖、标签分布、样本评价和复盘摘要。
@@ -371,6 +382,12 @@ Critic 输出能解释为什么降低或不降低置信度。
   - 首页新增“Evaluation Agent 预测复盘”面板。
   - 展示预测快照数、Outcome 覆盖率、误判/漏判数量、标签分布。
   - 展示重点复盘样本，包括 lesson 和 scoring suggestion。
+  - 前端明确展示实时预测/历史回测来源，并优先展示次日开盘介入后的收益和回撤。
+
+- `[ ]` 训练与验证评分 v3。
+  - 建立至少 60 个交易日的可用训练样本，按日期执行 walk-forward 验证。
+  - 分别建模次日晋级、次日开盘到收盘上涨和大跌风险。
+  - 对比 Top10 与全部候选、旧规则 baseline，只有样本外指标改善后才允许升级线上评分版本。
 
 验收标准：
 

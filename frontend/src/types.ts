@@ -208,8 +208,15 @@ export interface RatingBacktestBucket {
   avg_next_open_pct: number | null;
   avg_next_high_pct: number | null;
   avg_next_close_pct: number | null;
+  avg_next_open_to_high_pct: number | null;
+  avg_next_open_to_close_pct: number | null;
+  avg_next_open_to_low_pct: number | null;
   avg_three_day_high_pct: number | null;
   avg_three_day_close_pct: number | null;
+  avg_three_day_open_to_close_pct: number | null;
+  avg_max_drawdown_from_next_open_3d: number | null;
+  next_open_to_close_positive_rate: number | null;
+  next_open_to_close_large_loss_rate: number | null;
   promoted_to_second_board_rate: number | null;
 }
 
@@ -220,7 +227,10 @@ export interface RatingBacktestFailureSample {
   rating: string;
   score: number;
   next_close_pct: number | null;
+  next_open_to_close_pct: number | null;
+  next_open_to_low_pct: number | null;
   three_day_close_pct: number | null;
+  three_day_open_to_close_pct: number | null;
   promoted_to_second_board: boolean;
   reasons: string[];
   risks: string[];
@@ -267,6 +277,8 @@ export interface AgentEvaluationItem {
   score: number;
   rating: string;
   confidence: number;
+  prediction_source: "live" | "historical_backtest";
+  data_as_of: string;
   evaluation_label:
     | "success"
     | "partial"
@@ -278,8 +290,13 @@ export interface AgentEvaluationItem {
   promoted_to_second_board: boolean;
   next_high_pct: number | null;
   next_close_pct: number | null;
+  next_open_to_high_pct: number | null;
+  next_open_to_low_pct: number | null;
+  next_open_to_close_pct: number | null;
   three_day_high_pct: number | null;
   three_day_close_pct: number | null;
+  three_day_open_to_close_pct: number | null;
+  max_drawdown_from_next_open_3d: number | null;
   lesson: string;
   scoring_suggestion: string;
 }
@@ -289,6 +306,7 @@ export interface AgentEvaluationResponse {
   end_date: string;
   prediction_count: number;
   outcome_ready_count: number;
+  source_counts: Record<string, number>;
   label_counts: Record<string, number>;
   evaluations: AgentEvaluationItem[];
   summary: string[];
@@ -327,13 +345,20 @@ export interface ReviewAgentPick {
   score: number;
   rating: string;
   confidence: number;
+  prediction_source: "live" | "historical_backtest";
+  data_as_of: string;
   evaluation_label: string;
   outcome_ready: boolean;
   promoted_to_second_board: boolean;
   next_high_pct: number | null;
   next_close_pct: number | null;
+  next_open_to_high_pct: number | null;
+  next_open_to_low_pct: number | null;
+  next_open_to_close_pct: number | null;
   three_day_high_pct: number | null;
   three_day_close_pct: number | null;
+  three_day_open_to_close_pct: number | null;
+  max_drawdown_from_next_open_3d: number | null;
   reasons: string[];
   risks: string[];
   post_bars: ReviewAgentPostBar[];
@@ -375,10 +400,18 @@ export interface SimilarCaseOutcome {
   next_open_pct: number | null;
   next_high_pct: number | null;
   next_close_pct: number | null;
+  next_open_to_high_pct: number | null;
+  next_open_to_low_pct: number | null;
+  next_open_to_close_pct: number | null;
   three_day_high_pct: number | null;
   three_day_close_pct: number | null;
   max_drawdown_3d: number | null;
+  three_day_open_to_high_pct: number | null;
+  three_day_open_to_close_pct: number | null;
+  max_drawdown_from_next_open_3d: number | null;
   promoted_to_second_board: boolean;
+  next_day_ready: boolean;
+  three_day_ready: boolean;
   outcome_ready: boolean;
 }
 

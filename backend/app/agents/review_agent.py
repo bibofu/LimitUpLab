@@ -294,13 +294,20 @@ def _review_picks_from_toolbox(toolbox: ReviewAgentToolbox) -> list[ReviewAgentP
                 score=item.score,
                 rating=item.rating,
                 confidence=item.confidence,
+                prediction_source=item.prediction_source,
+                data_as_of=item.data_as_of,
                 evaluation_label=item.evaluation_label,
                 outcome_ready=item.outcome_ready,
                 promoted_to_second_board=item.promoted_to_second_board,
                 next_high_pct=item.next_high_pct,
                 next_close_pct=item.next_close_pct,
+                next_open_to_high_pct=item.next_open_to_high_pct,
+                next_open_to_low_pct=item.next_open_to_low_pct,
+                next_open_to_close_pct=item.next_open_to_close_pct,
                 three_day_high_pct=item.three_day_high_pct,
                 three_day_close_pct=item.three_day_close_pct,
+                three_day_open_to_close_pct=item.three_day_open_to_close_pct,
+                max_drawdown_from_next_open_3d=item.max_drawdown_from_next_open_3d,
                 reasons=[item.lesson],
                 risks=[item.scoring_suggestion],
                 post_bars=post_bars,
@@ -369,6 +376,13 @@ def _fallback_report(
     if incomplete_cache:
         report_warnings.append(
             f"Post-bar cache is incomplete for {len(incomplete_cache)} reviewed picks."
+        )
+    historical_count = sum(
+        item.prediction_source == "historical_backtest" for item in picks
+    )
+    if historical_count:
+        report_warnings.append(
+            f"{historical_count} 条记录来自历史回测快照，不计作真实前向预测。"
         )
     return ReviewAgentReportResponse(
         start_date=start_date,
@@ -470,6 +484,8 @@ def _pick_summary(item: AgentEvaluationItem) -> dict[str, Any]:
         "score": item.score,
         "rating": item.rating,
         "confidence": item.confidence,
+        "prediction_source": item.prediction_source,
+        "data_as_of": item.data_as_of.isoformat(),
         "label": item.evaluation_label,
     }
 
@@ -481,8 +497,13 @@ def _outcome_summary(item: AgentEvaluationItem) -> dict[str, Any]:
         "promoted_to_second_board": item.promoted_to_second_board,
         "next_high_pct": item.next_high_pct,
         "next_close_pct": item.next_close_pct,
+        "next_open_to_high_pct": item.next_open_to_high_pct,
+        "next_open_to_low_pct": item.next_open_to_low_pct,
+        "next_open_to_close_pct": item.next_open_to_close_pct,
         "three_day_high_pct": item.three_day_high_pct,
         "three_day_close_pct": item.three_day_close_pct,
+        "three_day_open_to_close_pct": item.three_day_open_to_close_pct,
+        "max_drawdown_from_next_open_3d": item.max_drawdown_from_next_open_3d,
     }
 
 

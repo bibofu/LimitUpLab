@@ -1273,7 +1273,7 @@ function ReviewPickTable({ picks }: { picks: ReviewAgentPick[] }) {
         <span>股票</span>
         <span>评分</span>
         <span>结论</span>
-        <span>次日收盘</span>
+        <span>次日开收</span>
         <span>走势追踪</span>
       </div>
       {visible.map((pick) => (
@@ -1284,11 +1284,13 @@ function ReviewPickTable({ picks }: { picks: ReviewAgentPick[] }) {
         >
           <strong>
             {pick.name}
-            <small>{pick.symbol}</small>
+            <small>
+              {pick.symbol} / {pick.prediction_source === "live" ? "实时预测" : "历史回测"}
+            </small>
           </strong>
           <span>{pick.score.toFixed(1)} / {pick.rating}</span>
           <span>{reviewLabelCopy(pick.evaluation_label)}</span>
-          <span>{formatOptionalPercent(pick.next_close_pct)}</span>
+          <span>{formatOptionalPercent(pick.next_open_to_close_pct)}</span>
           <ReviewPostBars
             bars={pick.post_bars}
             expectedCount={pick.expected_post_bar_count}
@@ -1612,23 +1614,27 @@ function RatingBacktestPanel({ backtest }: { backtest: RatingBacktestResponse })
               </header>
               <dl>
                 <div>
-                  <dt>次日最高</dt>
-                  <dd>{formatOptionalPercent(bucket.avg_next_high_pct)}</dd>
+                  <dt>开盘后最高</dt>
+                  <dd>{formatOptionalPercent(bucket.avg_next_open_to_high_pct)}</dd>
                 </div>
                 <div>
-                  <dt>次日收盘</dt>
-                  <dd>{formatOptionalPercent(bucket.avg_next_close_pct)}</dd>
+                  <dt>开盘后收盘</dt>
+                  <dd>{formatOptionalPercent(bucket.avg_next_open_to_close_pct)}</dd>
                 </div>
                 <div>
-                  <dt>三日最高</dt>
-                  <dd>{formatOptionalPercent(bucket.avg_three_day_high_pct)}</dd>
-                </div>
-                <div>
-                  <dt>晋级率</dt>
+                  <dt>次日上涨率</dt>
                   <dd>
-                    {bucket.promoted_to_second_board_rate === null
+                    {bucket.next_open_to_close_positive_rate === null
                       ? "暂无"
-                      : formatPercent(bucket.promoted_to_second_board_rate)}
+                      : formatPercent(bucket.next_open_to_close_positive_rate)}
+                  </dd>
+                </div>
+                <div>
+                  <dt>大跌率</dt>
+                  <dd>
+                    {bucket.next_open_to_close_large_loss_rate === null
+                      ? "暂无"
+                      : formatPercent(bucket.next_open_to_close_large_loss_rate)}
                   </dd>
                 </div>
               </dl>
@@ -1678,12 +1684,12 @@ function RatingBacktestPanel({ backtest }: { backtest: RatingBacktestResponse })
                         <dd>{sample.score.toFixed(1)}</dd>
                       </div>
                       <div>
-                        <dt>次日收盘</dt>
-                        <dd>{formatOptionalPercent(sample.next_close_pct)}</dd>
+                        <dt>次日开收</dt>
+                        <dd>{formatOptionalPercent(sample.next_open_to_close_pct)}</dd>
                       </div>
                       <div>
-                        <dt>三日收盘</dt>
-                        <dd>{formatOptionalPercent(sample.three_day_close_pct)}</dd>
+                        <dt>三日开收</dt>
+                        <dd>{formatOptionalPercent(sample.three_day_open_to_close_pct)}</dd>
                       </div>
                     </dl>
                     <p>{sample.risks[0] ?? sample.reasons[0] ?? "需要结合分时与题材强度复盘。"}</p>
@@ -1718,7 +1724,9 @@ function RatingEvaluationPanel({ evaluation }: { evaluation: AgentEvaluationResp
           </div>
           <div>
             <span>预测快照</span>
-            <strong>{evaluation.prediction_count} 条</strong>
+            <strong>
+              实时 {evaluation.source_counts.live ?? 0} / 回测 {evaluation.source_counts.historical_backtest ?? 0}
+            </strong>
           </div>
           <div>
             <span>Outcome 覆盖</span>
@@ -1774,7 +1782,9 @@ function RatingEvaluationPanel({ evaluation }: { evaluation: AgentEvaluationResp
                     <header>
                       <div>
                         <strong>{item.name}</strong>
-                        <span>{item.symbol} / {item.trade_date}</span>
+                        <span>
+                          {item.symbol} / {item.trade_date} / {item.prediction_source === "live" ? "实时预测" : "历史回测"}
+                        </span>
                       </div>
                       <b>{evaluationLabelCopy[item.evaluation_label]}</b>
                     </header>
@@ -1788,12 +1798,12 @@ function RatingEvaluationPanel({ evaluation }: { evaluation: AgentEvaluationResp
                         <dd>{item.promoted_to_second_board ? "是" : "否"}</dd>
                       </div>
                       <div>
-                        <dt>次日最高</dt>
-                        <dd>{formatOptionalPercent(item.next_high_pct)}</dd>
+                        <dt>次日开收</dt>
+                        <dd>{formatOptionalPercent(item.next_open_to_close_pct)}</dd>
                       </div>
                       <div>
-                        <dt>三日收盘</dt>
-                        <dd>{formatOptionalPercent(item.three_day_close_pct)}</dd>
+                        <dt>三日最大回撤</dt>
+                        <dd>{formatOptionalPercent(item.max_drawdown_from_next_open_3d)}</dd>
                       </div>
                     </dl>
                     <p>{item.lesson}</p>

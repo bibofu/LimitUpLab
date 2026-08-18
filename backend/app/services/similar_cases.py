@@ -228,10 +228,18 @@ def _case_from_feature(
             next_open_pct=outcome.next_open_pct,
             next_high_pct=outcome.next_high_pct,
             next_close_pct=outcome.next_close_pct,
+            next_open_to_high_pct=outcome.next_open_to_high_pct,
+            next_open_to_low_pct=outcome.next_open_to_low_pct,
+            next_open_to_close_pct=outcome.next_open_to_close_pct,
             three_day_high_pct=outcome.three_day_high_pct,
             three_day_close_pct=outcome.three_day_close_pct,
             max_drawdown_3d=outcome.max_drawdown_3d,
+            three_day_open_to_high_pct=outcome.three_day_open_to_high_pct,
+            three_day_open_to_close_pct=outcome.three_day_open_to_close_pct,
+            max_drawdown_from_next_open_3d=outcome.max_drawdown_from_next_open_3d,
             promoted_to_second_board=outcome.promoted_to_second_board,
+            next_day_ready=outcome.next_day_ready,
+            three_day_ready=outcome.three_day_ready,
             outcome_ready=outcome.outcome_ready,
         )
         if outcome

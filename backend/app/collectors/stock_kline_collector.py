@@ -7,6 +7,7 @@ from datetime import date, datetime, time, timedelta
 from typing import Any
 
 import akshare as ak
+import requests
 
 from app.models import StockCloseSnapshot, StockIntradayKLineBar, StockKLineBar
 
@@ -26,11 +27,16 @@ def collect_stock_kline(
         frame = ak.stock_zh_a_hist_tx(
             symbol=normalized_symbol,
             start_date=start_date.strftime("%Y%m%d"),
-            end_date=target_end_date.strftime("%Y%m%d"),
+            # Tencent treats end_date as an exclusive boundary.
+            end_date=(target_end_date + timedelta(days=1)).strftime("%Y%m%d"),
             adjust="",
         )
 
-    rows = frame.to_dict("records")[-days:]
+    rows = [
+        row
+        for row in frame.to_dict("records")
+        if _parse_date(row["date"]) <= target_end_date
+    ][-days:]
     return [
         StockKLineBar(
             trade_date=_parse_date(row["date"]),
@@ -42,6 +48,35 @@ def collect_stock_kline(
         )
         for row in rows
     ]
+
+
+def collect_stock_spot_klines(
+    symbols: list[str],
+    trade_date: date,
+) -> dict[str, StockKLineBar]:
+    """Collect one completed trading day's OHLC snapshot for several stocks."""
+
+    normalized = sorted({_normalize_stock_symbol(symbol) for symbol in symbols})
+    if not normalized:
+        return {}
+
+    with _without_proxy():
+        response = requests.get(
+            f"https://qt.gtimg.cn/q={','.join(normalized)}",
+            headers={"Referer": "https://gu.qq.com/"},
+            timeout=10,
+        )
+        response.raise_for_status()
+
+    result: dict[str, StockKLineBar] = {}
+    payload = response.content.decode("gbk", errors="replace")
+    for line in payload.splitlines():
+        parsed = _parse_tencent_spot_line(line, trade_date)
+        if parsed is None:
+            continue
+        symbol, bar = parsed
+        result[symbol] = bar
+    return result
 
 
 
@@ -208,6 +243,48 @@ def _normalize_stock_symbol(symbol: str) -> str:
         raise ValueError("stock symbol must be a 6-digit A-share code")
     market = "sh" if value.startswith(("5", "6", "9")) else "sz"
     return f"{market}{value}"
+
+
+def _parse_tencent_spot_line(
+    line: str,
+    expected_date: date,
+) -> tuple[str, StockKLineBar] | None:
+    """Parse one Tencent quote line when it belongs to the expected trade date."""
+
+    quote_start = line.find('"')
+    quote_end = line.rfind('"')
+    if quote_start < 0 or quote_end <= quote_start:
+        return None
+    fields = line[quote_start + 1:quote_end].split("~")
+    if len(fields) <= 34:
+        return None
+
+    symbol = fields[2].strip().zfill(6)
+    timestamp = fields[30].strip()
+    if len(symbol) != 6 or len(timestamp) < 8:
+        return None
+    try:
+        quote_date = datetime.strptime(timestamp[:8], "%Y%m%d").date()
+        close = float(fields[3])
+        open_price = float(fields[5])
+        high = float(fields[33])
+        low = float(fields[34])
+        volume = float(fields[6])
+    except (TypeError, ValueError):
+        return None
+    if quote_date != expected_date or min(open_price, high, low, close) <= 0:
+        return None
+    return (
+        symbol,
+        StockKLineBar(
+            trade_date=quote_date,
+            open=round(open_price, 2),
+            high=round(high, 2),
+            low=round(low, 2),
+            close=round(close, 2),
+            volume=volume,
+        ),
+    )
 
 
 def _parse_date(value: Any) -> date:

@@ -49,6 +49,28 @@ class StockKLineBar(BaseModel):
     volume: float
 
 
+class StockKLineFacts(BaseModel):
+    """Tool-ready K-line facts and derived trend indicators for one stock."""
+
+    symbol: str
+    requested_days: int
+    requested_end_date: date
+    data_as_of: date
+    data_fresh: bool
+    trend: Literal["rising", "falling", "oscillating", "insufficient"]
+    latest_close: float
+    return_5d_pct: float | None = None
+    return_10d_pct: float | None = None
+    return_20d_pct: float | None = None
+    ma5: float | None = None
+    ma10: float | None = None
+    ma20: float | None = None
+    volume_ratio_5d: float | None = None
+    max_drawdown_pct: float | None = None
+    sources: list[str] = Field(default_factory=list)
+    bars: list[StockKLineBar] = Field(default_factory=list)
+
+
 class StockIntradayKLineBar(BaseModel):
     """Intraday OHLCV bar for after-close trading-day review."""
 
@@ -183,10 +205,18 @@ class FirstBoardOutcome(BaseModel):
     next_open_pct: float | None = None
     next_high_pct: float | None = None
     next_close_pct: float | None = None
+    next_open_to_high_pct: float | None = None
+    next_open_to_low_pct: float | None = None
+    next_open_to_close_pct: float | None = None
     three_day_high_pct: float | None = None
     three_day_close_pct: float | None = None
     max_drawdown_3d: float | None = None
+    three_day_open_to_high_pct: float | None = None
+    three_day_open_to_close_pct: float | None = None
+    max_drawdown_from_next_open_3d: float | None = None
     promoted_to_second_board: bool
+    next_day_ready: bool = False
+    three_day_ready: bool = False
     outcome_ready: bool
     outcome_version: str
     created_at: datetime
@@ -199,10 +229,18 @@ class SimilarCaseOutcome(BaseModel):
     next_open_pct: float | None = None
     next_high_pct: float | None = None
     next_close_pct: float | None = None
+    next_open_to_high_pct: float | None = None
+    next_open_to_low_pct: float | None = None
+    next_open_to_close_pct: float | None = None
     three_day_high_pct: float | None = None
     three_day_close_pct: float | None = None
     max_drawdown_3d: float | None = None
+    three_day_open_to_high_pct: float | None = None
+    three_day_open_to_close_pct: float | None = None
+    max_drawdown_from_next_open_3d: float | None = None
     promoted_to_second_board: bool
+    next_day_ready: bool = False
+    three_day_ready: bool = False
     outcome_ready: bool
 
 
@@ -359,8 +397,15 @@ class RatingBacktestBucket(BaseModel):
     avg_next_open_pct: float | None = None
     avg_next_high_pct: float | None = None
     avg_next_close_pct: float | None = None
+    avg_next_open_to_high_pct: float | None = None
+    avg_next_open_to_close_pct: float | None = None
+    avg_next_open_to_low_pct: float | None = None
     avg_three_day_high_pct: float | None = None
     avg_three_day_close_pct: float | None = None
+    avg_three_day_open_to_close_pct: float | None = None
+    avg_max_drawdown_from_next_open_3d: float | None = None
+    next_open_to_close_positive_rate: float | None = None
+    next_open_to_close_large_loss_rate: float | None = None
     promoted_to_second_board_rate: float | None = None
 
 
@@ -373,7 +418,10 @@ class RatingBacktestFailureSample(BaseModel):
     rating: str
     score: float
     next_close_pct: float | None = None
+    next_open_to_close_pct: float | None = None
+    next_open_to_low_pct: float | None = None
     three_day_close_pct: float | None = None
+    three_day_open_to_close_pct: float | None = None
     promoted_to_second_board: bool
     reasons: list[str]
     risks: list[str]
@@ -427,6 +475,8 @@ class AgentPrediction(BaseModel):
     rating: str
     confidence: float
     scoring_version: str
+    prediction_source: Literal["live", "historical_backtest"]
+    data_as_of: date
     facts_json: dict[str, Any]
     reasons: list[str]
     risks: list[str]
@@ -443,6 +493,8 @@ class AgentEvaluationItem(BaseModel):
     score: float
     rating: str
     confidence: float
+    prediction_source: Literal["live", "historical_backtest"]
+    data_as_of: date
     evaluation_label: Literal[
         "success",
         "partial",
@@ -455,8 +507,13 @@ class AgentEvaluationItem(BaseModel):
     promoted_to_second_board: bool
     next_high_pct: float | None = None
     next_close_pct: float | None = None
+    next_open_to_high_pct: float | None = None
+    next_open_to_low_pct: float | None = None
+    next_open_to_close_pct: float | None = None
     three_day_high_pct: float | None = None
     three_day_close_pct: float | None = None
+    three_day_open_to_close_pct: float | None = None
+    max_drawdown_from_next_open_3d: float | None = None
     lesson: str
     scoring_suggestion: str
 
@@ -468,6 +525,7 @@ class AgentEvaluationResponse(BaseModel):
     end_date: date
     prediction_count: int
     outcome_ready_count: int
+    source_counts: dict[str, int]
     label_counts: dict[str, int]
     evaluations: list[AgentEvaluationItem]
     summary: list[str]
@@ -484,13 +542,20 @@ class ReviewAgentPick(BaseModel):
     score: float
     rating: str
     confidence: float
+    prediction_source: Literal["live", "historical_backtest"]
+    data_as_of: date
     evaluation_label: str
     outcome_ready: bool
     promoted_to_second_board: bool
     next_high_pct: float | None = None
     next_close_pct: float | None = None
+    next_open_to_high_pct: float | None = None
+    next_open_to_low_pct: float | None = None
+    next_open_to_close_pct: float | None = None
     three_day_high_pct: float | None = None
     three_day_close_pct: float | None = None
+    three_day_open_to_close_pct: float | None = None
+    max_drawdown_from_next_open_3d: float | None = None
     reasons: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
     post_bars: list["ReviewAgentPostBar"] = Field(default_factory=list)

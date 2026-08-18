@@ -15,6 +15,7 @@ from app.collectors.stock_kline_collector import (
     collect_stock_close_snapshot,
     collect_stock_intraday_kline,
     collect_stock_kline,
+    collect_stock_spot_klines,
 )
 
 __all__ = [
@@ -27,6 +28,7 @@ __all__ = [
     "collect_stock_close_snapshot",
     "collect_stock_intraday_kline",
     "collect_stock_kline",
+    "collect_stock_spot_klines",
     "parse_akshare_trade_date",
     "DragonTigerFact",
     "PopularityFact",

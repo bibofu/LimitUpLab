@@ -72,10 +72,18 @@ class RatingBacktestTest(unittest.TestCase):
             next_open_pct=1.0,
             next_high_pct=5.0,
             next_close_pct=next_close_pct,
+            next_open_to_high_pct=4.0,
+            next_open_to_low_pct=-2.0,
+            next_open_to_close_pct=next_close_pct,
             three_day_high_pct=8.0,
             three_day_close_pct=three_day_close_pct,
             max_drawdown_3d=-3.0,
+            three_day_open_to_high_pct=7.0,
+            three_day_open_to_close_pct=three_day_close_pct,
+            max_drawdown_from_next_open_3d=-4.0,
             promoted_to_second_board=promoted,
+            next_day_ready=True,
+            three_day_ready=True,
             outcome_ready=True,
             outcome_version="test",
             created_at=datetime.now(timezone.utc),
@@ -110,6 +118,9 @@ class RatingBacktestTest(unittest.TestCase):
             self.assertEqual(response.outcome_ready_count, 3)
             self.assertTrue(response.buckets)
             self.assertTrue(response.observations)
+            self.assertTrue(
+                any(bucket.avg_next_open_to_close_pct is not None for bucket in response.buckets)
+            )
             self.assertTrue(
                 any(item.symbol == "002002" for item in response.failure_samples)
             )

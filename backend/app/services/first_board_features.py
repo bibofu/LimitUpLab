@@ -17,7 +17,7 @@ from app.services.analysis import events_for_date, summarize_market
 
 
 FEATURE_VERSION = "first-board-feature-v1"
-OUTCOME_VERSION = "first-board-outcome-v1"
+OUTCOME_VERSION = "first-board-outcome-v2-entry-open"
 
 
 def build_first_board_features(
@@ -97,7 +97,9 @@ def build_first_board_outcome(
     base_bar = ordered_bars[0] if ordered_bars else None
     post_bars = [bar for bar in ordered_bars if bar.trade_date > event.trade_date][:3]
     next_bar = post_bars[0] if post_bars else None
-    outcome_ready = base_bar is not None and len(post_bars) >= 3
+    next_day_ready = base_bar is not None and next_bar is not None
+    three_day_ready = base_bar is not None and len(post_bars) >= 3
+    entry_open = next_bar.open if next_bar else None
     promoted = event.continued_next_day or any(
         item.symbol == event.symbol
         and item.trade_date > event.trade_date
@@ -113,17 +115,39 @@ def build_first_board_outcome(
         next_open_pct=_pct_change(next_bar.open, base_bar.close) if next_bar and base_bar else None,
         next_high_pct=_pct_change(next_bar.high, base_bar.close) if next_bar and base_bar else None,
         next_close_pct=_pct_change(next_bar.close, base_bar.close) if next_bar and base_bar else None,
+        next_open_to_high_pct=_pct_change(next_bar.high, entry_open)
+        if next_bar and entry_open
+        else None,
+        next_open_to_low_pct=_pct_change(next_bar.low, entry_open)
+        if next_bar and entry_open
+        else None,
+        next_open_to_close_pct=_pct_change(next_bar.close, entry_open)
+        if next_bar and entry_open
+        else None,
         three_day_high_pct=_pct_change(max(bar.high for bar in post_bars), base_bar.close)
-        if outcome_ready and base_bar
+        if three_day_ready and base_bar
         else None,
         three_day_close_pct=_pct_change(post_bars[-1].close, base_bar.close)
-        if outcome_ready and base_bar
+        if three_day_ready and base_bar
         else None,
         max_drawdown_3d=_pct_change(min(bar.low for bar in post_bars), base_bar.close)
-        if outcome_ready and base_bar
+        if three_day_ready and base_bar
+        else None,
+        three_day_open_to_high_pct=_pct_change(max(bar.high for bar in post_bars), entry_open)
+        if three_day_ready and entry_open
+        else None,
+        three_day_open_to_close_pct=_pct_change(post_bars[-1].close, entry_open)
+        if three_day_ready and entry_open
+        else None,
+        max_drawdown_from_next_open_3d=_pct_change(
+            min(bar.low for bar in post_bars), entry_open
+        )
+        if three_day_ready and entry_open
         else None,
         promoted_to_second_board=promoted,
-        outcome_ready=outcome_ready,
+        next_day_ready=next_day_ready,
+        three_day_ready=three_day_ready,
+        outcome_ready=three_day_ready,
         outcome_version=OUTCOME_VERSION,
         created_at=_now_utc(),
     )

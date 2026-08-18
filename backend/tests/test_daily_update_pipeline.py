@@ -2,11 +2,12 @@ import os
 import unittest
 from datetime import date, datetime, time, timezone
 from pathlib import Path
+from unittest.mock import patch
 from uuid import uuid4
 
-from app.models import LimitUpEvent, StockDailyBar
+from app.models import LimitUpEvent, StockDailyBar, StockKLineBar
 from app.repositories import SQLiteFirstBoardRepository, SQLiteLimitUpRepository
-from scripts.update_daily_data import run_daily_update
+from scripts.update_daily_data import collect_post_first_board_bars, run_daily_update
 
 
 TEST_TMP_ROOT = Path(
@@ -116,6 +117,27 @@ class DailyUpdatePipelineTest(unittest.TestCase):
         finally:
             self._cleanup_database(database_path)
 
+    @patch("scripts.update_daily_data.collect_stock_kline")
+    def test_post_bar_collection_includes_as_of_date(self, collect_kline) -> None:
+        base_date = date(2026, 8, 17)
+        as_of_date = date(2026, 8, 18)
+        collect_kline.return_value = [
+            StockKLineBar(
+                trade_date=item_date,
+                open=10,
+                high=11,
+                low=9.5,
+                close=10.5,
+                volume=1_000_000,
+            )
+            for item_date in (base_date, as_of_date, date(2026, 8, 19))
+        ]
+
+        bars = collect_post_first_board_bars("002165", base_date, as_of_date)
+
+        self.assertEqual([item.trade_date for item in bars], [base_date, as_of_date])
+        self.assertEqual(collect_kline.call_args.kwargs["end_date"], as_of_date)
+
     def test_recent_daily_top_picks_cache_all_available_follow_up_bars(self) -> None:
         database_path = self._database_path()
         try:
@@ -181,9 +203,17 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             self.assertEqual(report.tracked_cache_ready, 12)
             self.assertEqual(report.tracked_cache_complete, 2)
             self.assertEqual(report.tracked_cache_missing, 0)
+            predictions = first_board_repo.list_predictions_between(
+                trade_dates[0], trade_dates[-1]
+            )
+            self.assertEqual(len(predictions), 12)
             self.assertEqual(
-                len(first_board_repo.list_predictions_between(trade_dates[0], trade_dates[-1])),
-                12,
+                sum(item.prediction_source == "live" for item in predictions),
+                2,
+            )
+            self.assertEqual(
+                sum(item.prediction_source == "historical_backtest" for item in predictions),
+                10,
             )
             self.assertEqual(
                 len(first_board_repo.list_post_bars(events[0].symbol, trade_dates[0], limit=6)),

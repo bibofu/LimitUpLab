@@ -18,7 +18,7 @@ from app.models import (
 from app.repositories import SQLiteFirstBoardRepository
 
 
-RATING_BACKTEST_VERSION = "rating-backtest-mvp-v1"
+RATING_BACKTEST_VERSION = "rating-backtest-entry-open-v2"
 RATING_ORDER = ("A", "B", "C", "D")
 
 
@@ -107,11 +107,40 @@ def _build_buckets(samples: list[_BacktestSample]) -> list[RatingBacktestBucket]
                 avg_next_open_pct=_avg([item.next_open_pct for item in ready_outcomes]),
                 avg_next_high_pct=_avg([item.next_high_pct for item in ready_outcomes]),
                 avg_next_close_pct=_avg([item.next_close_pct for item in ready_outcomes]),
+                avg_next_open_to_high_pct=_avg(
+                    [item.next_open_to_high_pct for item in ready_outcomes]
+                ),
+                avg_next_open_to_close_pct=_avg(
+                    [item.next_open_to_close_pct for item in ready_outcomes]
+                ),
+                avg_next_open_to_low_pct=_avg(
+                    [item.next_open_to_low_pct for item in ready_outcomes]
+                ),
                 avg_three_day_high_pct=_avg(
                     [item.three_day_high_pct for item in ready_outcomes]
                 ),
                 avg_three_day_close_pct=_avg(
                     [item.three_day_close_pct for item in ready_outcomes]
+                ),
+                avg_three_day_open_to_close_pct=_avg(
+                    [item.three_day_open_to_close_pct for item in ready_outcomes]
+                ),
+                avg_max_drawdown_from_next_open_3d=_avg(
+                    [item.max_drawdown_from_next_open_3d for item in ready_outcomes]
+                ),
+                next_open_to_close_positive_rate=_rate(
+                    [
+                        item.next_open_to_close_pct > 0
+                        for item in ready_outcomes
+                        if item.next_open_to_close_pct is not None
+                    ]
+                ),
+                next_open_to_close_large_loss_rate=_rate(
+                    [
+                        item.next_open_to_close_pct <= -3
+                        for item in ready_outcomes
+                        if item.next_open_to_close_pct is not None
+                    ]
                 ),
                 promoted_to_second_board_rate=_rate(
                     [item.promoted_to_second_board for item in ready_outcomes]
@@ -132,20 +161,15 @@ def _build_failure_samples(
         for sample in samples
         if sample.rating.rating in {"A", "B"}
         and _ready(sample.outcome)
-        and (
-            (sample.outcome.next_close_pct is not None and sample.outcome.next_close_pct < 0)
-            or (
-                sample.outcome.three_day_close_pct is not None
-                and sample.outcome.three_day_close_pct < 0
-            )
-        )
+        and sample.outcome.next_open_to_close_pct is not None
+        and sample.outcome.next_open_to_close_pct < 0
     ]
     high_rated.sort(
         key=lambda sample: (
-            sample.outcome.three_day_close_pct
-            if sample.outcome and sample.outcome.three_day_close_pct is not None
-            else sample.outcome.next_close_pct
-            if sample.outcome and sample.outcome.next_close_pct is not None
+            sample.outcome.three_day_open_to_close_pct
+            if sample.outcome and sample.outcome.three_day_open_to_close_pct is not None
+            else sample.outcome.next_open_to_close_pct
+            if sample.outcome and sample.outcome.next_open_to_close_pct is not None
             else 0
         )
     )
@@ -157,7 +181,10 @@ def _build_failure_samples(
             rating=sample.rating.rating,
             score=sample.rating.score,
             next_close_pct=sample.outcome.next_close_pct,
+            next_open_to_close_pct=sample.outcome.next_open_to_close_pct,
+            next_open_to_low_pct=sample.outcome.next_open_to_low_pct,
             three_day_close_pct=sample.outcome.three_day_close_pct,
+            three_day_open_to_close_pct=sample.outcome.three_day_open_to_close_pct,
             promoted_to_second_board=sample.outcome.promoted_to_second_board,
             reasons=sample.rating.reasons,
             risks=sample.rating.risks,
@@ -180,15 +207,20 @@ def _build_observations(
 
     a_bucket = next((bucket for bucket in buckets if bucket.rating == "A"), None)
     b_bucket = next((bucket for bucket in buckets if bucket.rating == "B"), None)
-    if a_bucket and b_bucket and a_bucket.avg_next_high_pct is not None and b_bucket.avg_next_high_pct is not None:
-        if a_bucket.avg_next_high_pct >= b_bucket.avg_next_high_pct:
-            observations.append("A-rated candidates have higher or equal next-day high performance than B-rated candidates.")
+    if (
+        a_bucket
+        and b_bucket
+        and a_bucket.avg_next_open_to_close_pct is not None
+        and b_bucket.avg_next_open_to_close_pct is not None
+    ):
+        if a_bucket.avg_next_open_to_close_pct >= b_bucket.avg_next_open_to_close_pct:
+            observations.append("A 级样本的次日开盘到收盘收益不低于 B 级。")
         else:
-            observations.append("A-rated candidates did not outperform B-rated candidates on next-day high; scoring weights need review.")
+            observations.append("A 级样本的次日开盘到收盘收益低于 B 级，评分排序需要重审。")
 
     if a_bucket and a_bucket.promoted_to_second_board_rate is not None:
         observations.append(
-            f"A-rated second-board promotion rate is {a_bucket.promoted_to_second_board_rate:.0%}."
+            f"A 级样本次日晋级率为 {a_bucket.promoted_to_second_board_rate:.0%}。"
         )
     if not observations:
         observations.append("Not enough ready outcome data to form a reliable self-evaluation yet.")
@@ -198,7 +230,7 @@ def _build_observations(
 def _ready(outcome: FirstBoardOutcome | None) -> bool:
     """Return whether an outcome has enough data for backtest aggregation."""
 
-    return bool(outcome and outcome.outcome_ready)
+    return bool(outcome and outcome.next_day_ready)
 
 
 def _avg(values: list[float | None]) -> float | None:
