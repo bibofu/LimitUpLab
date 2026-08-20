@@ -30,6 +30,9 @@ class QuestionSignals:
     """Small set of deterministic signals used only as Agent guardrails."""
 
     requested_date: date | None
+    sector_performance: bool
+    web_search: bool
+    limit_up_events: bool
     first_board_facts: bool
     rating_explanation: bool
     similar_cases: bool
@@ -54,6 +57,9 @@ class QuestionSignals:
         )
         return cls(
             requested_date=extract_trade_date(message),
+            sector_performance=looks_like_sector_performance_question(message),
+            web_search=looks_like_web_search_question(message),
+            limit_up_events=looks_like_limit_up_event_question(message),
             first_board_facts=looks_like_first_board_facts_question(message),
             rating_explanation=looks_like_rating_explain_question(message),
             similar_cases=looks_like_similar_question(message),
@@ -71,10 +77,31 @@ class QuestionSignals:
 
         return any(
             (
+                self.sector_performance,
+                self.web_search,
+                self.limit_up_events,
                 self.first_board_facts,
                 self.rating_explanation,
                 self.similar_cases,
                 self.stock_kline,
+                self.rating_backtest,
+                self.critic,
+                self.evaluation,
+                self.review,
+                self.scoring_policy,
+            )
+        )
+
+    @property
+    def needs_local_event_date(self) -> bool:
+        """Return whether date availability depends on the local limit-up store."""
+
+        return any(
+            (
+                self.limit_up_events,
+                self.first_board_facts,
+                self.rating_explanation,
+                self.similar_cases,
                 self.rating_backtest,
                 self.critic,
                 self.evaluation,
@@ -184,6 +211,27 @@ class AgentToolPolicyEngine:
 
         return (
             ToolRepairRule(
+                name="sector-performance-grounding",
+                tool_name="sector_performance",
+                reason="A whole-sector performance claim requires live sector market facts.",
+                matches=lambda signals: signals.sector_performance,
+                repair=self._repair_sector_performance,
+            ),
+            ToolRepairRule(
+                name="web-search-grounding",
+                tool_name="web_search",
+                reason="The question asks for current external news or public-web evidence.",
+                matches=lambda signals: signals.web_search,
+                repair=self._repair_web_search,
+            ),
+            ToolRepairRule(
+                name="limit-up-events-required",
+                tool_name="limit_up_events",
+                reason="The question requires the complete raw limit-up event set.",
+                matches=lambda signals: signals.limit_up_events,
+                repair=self._repair_limit_up_events,
+            ),
+            ToolRepairRule(
                 name="rating-facts-required",
                 tool_name="first_board_ratings",
                 reason="The question requires candidate or rating facts.",
@@ -248,9 +296,11 @@ class AgentToolPolicyEngine:
 
     def _requested_date_is_missing(self, signals: QuestionSignals) -> bool:
         requested_date = signals.requested_date
-        return requested_date is not None and requested_date not in {
-            event.trade_date for event in self.tools.events
-        }
+        return (
+            signals.needs_local_event_date
+            and requested_date is not None
+            and requested_date not in {event.trade_date for event in self.tools.events}
+        )
 
     def _repair_data_availability(
         self,
@@ -311,6 +361,82 @@ class AgentToolPolicyEngine:
             fact_name="first_board_ratings",
             fact_value=self.compact_ratings(ratings),
             references=[f"trade_date={ratings.trade_date.isoformat()}"],
+        )
+
+    def _repair_sector_performance(
+        self,
+        request: AgentChatRequest,
+        signals: QuestionSignals,
+        execution: ToolExecution,
+        context_symbol: str | None,
+    ) -> None:
+        del context_symbol
+        result = self.tools.sector_performance(
+            sector=extract_sector_query(request.message),
+            trade_date=request.trade_date or signals.requested_date,
+        )
+        response = result.output
+        self._record_success(
+            execution,
+            result=result,
+            fact_name="sector_performance",
+            fact_value=response.model_dump(mode="json"),
+            references=[
+                f"sector={response.sector_name or 'industry-ranking'}",
+                f"data_as_of={response.data_as_of.isoformat()}",
+                *[f"source={source}" for source in response.sources],
+            ],
+        )
+
+    def _repair_web_search(
+        self,
+        request: AgentChatRequest,
+        signals: QuestionSignals,
+        execution: ToolExecution,
+        context_symbol: str | None,
+    ) -> None:
+        del signals, context_symbol
+        result = self.tools.web_search(query=request.message, limit=5)
+        response = result.output
+        self._record_success(
+            execution,
+            result=result,
+            fact_name="web_search",
+            fact_value=response.model_dump(mode="json"),
+            references=[item.url for item in response.results],
+        )
+
+    def _repair_limit_up_events(
+        self,
+        request: AgentChatRequest,
+        signals: QuestionSignals,
+        execution: ToolExecution,
+        context_symbol: str | None,
+    ) -> None:
+        del context_symbol
+        board_height, min_board_height = extract_board_filters(request.message)
+        broken_only = any(
+            term in request.message for term in ("炸板", "开板", "未封住")
+        )
+        result = self.tools.limit_up_events(
+            trade_date=request.trade_date or signals.requested_date,
+            board_height=board_height,
+            min_board_height=min_board_height,
+            broken_only=broken_only,
+            closed_only=None if broken_only else True,
+            limit=100,
+        )
+        payload = {
+            "trade_date": result.trace_output.get("trade_date"),
+            "matched_count": len(result.output),
+            "events": result.trace_output.get("events", []),
+        }
+        self._record_success(
+            execution,
+            result=result,
+            fact_name="limit_up_events",
+            fact_value=payload,
+            references=[f"trade_date={payload['trade_date']}"],
         )
 
     def _repair_stock_kline(
@@ -622,9 +748,149 @@ def extract_kline_days(message: str) -> int:
 
 
 def looks_like_first_board_facts_question(message: str) -> bool:
-    """Return whether the question explicitly needs first-board candidate facts."""
+    """Return whether the question needs the rated candidate pool, not a raw list."""
 
-    return any(term in message for term in ("首板", "候选", "评分靠前", "候选池"))
+    return any(
+        term in message
+        for term in (
+            "首板评分",
+            "首板评级",
+            "评分靠前",
+            "评分最高",
+            "高分候选",
+            "候选池",
+            "候选评分",
+        )
+    )
+
+
+def looks_like_limit_up_event_question(message: str) -> bool:
+    """Return whether the question needs raw limit-up events rather than ratings."""
+
+    if any(
+        term in message
+        for term in (
+            "评分",
+            "评级",
+            "候选",
+            "回测",
+            "复盘",
+            "相似",
+            "为什么",
+            "权重",
+            "策略",
+        )
+    ):
+        return False
+    return any(
+        term in message
+        for term in ("涨停", "首板", "连板", "二板", "三板", "炸板", "最高板")
+    )
+
+
+def extract_board_filters(message: str) -> tuple[int | None, int | None]:
+    """Extract exact or minimum board-height filters for policy repair."""
+
+    if "首板" in message:
+        return 1, None
+    numeric = re.search(r"(?<!\d)(\d{1,2})\s*(?:连)?板", message)
+    if numeric:
+        return int(numeric.group(1)), None
+    for label, height in (("二", 2), ("三", 3), ("四", 4), ("五", 5)):
+        if f"{label}板" in message or f"{label}连板" in message:
+            return height, None
+    if "连板" in message:
+        return None, 2
+    return None, None
+
+
+def extract_sector_query(message: str) -> str | None:
+    """Extract a named industry from common Chinese sector questions."""
+
+    compact = re.sub(r"\s+", "", message)
+    patterns = (
+        r"(?:今天|今日|最近|近期)?(.{1,16}?)(?:板块|行业)(?:今天|今日)?(?:表现|走势|行情|涨跌|强弱|资金|怎么样|如何|为何|为什么)",
+        r"(?:今天|今日|最近|近期)?(.{1,16}?)(?:板块|行业)",
+    )
+    generic = {
+        "哪些",
+        "什么",
+        "哪个",
+        "行业",
+        "板块",
+        "热门",
+        "强势",
+        "弱势",
+        "A股",
+        "a股",
+    }
+    for pattern in patterns:
+        matched = re.search(pattern, compact)
+        if not matched:
+            continue
+        candidate = matched.group(1)
+        candidate = re.sub(r"^(?:请问|看看|分析一下|分析|总结一下)", "", candidate)
+        if candidate and candidate not in generic and len(candidate) <= 12:
+            return candidate
+    return None
+
+
+def looks_like_sector_performance_question(message: str) -> bool:
+    """Return whether text asks about whole-sector market performance."""
+
+    if not any(term in message for term in ("板块", "行业")):
+        return False
+    asks_performance = any(
+        term in message
+        for term in (
+            "表现",
+            "走势",
+            "行情",
+            "涨跌",
+            "强弱",
+            "资金流",
+            "净流入",
+            "成交额",
+            "领涨",
+            "领跌",
+            "涨得",
+            "跌得",
+            "上涨",
+            "下跌",
+        )
+    )
+    if not asks_performance:
+        return False
+    if any(term in message for term in ("首板", "涨停", "评分", "高分票")):
+        return "板块表现" in message or "行业表现" in message
+    return True
+
+
+def looks_like_web_search_question(message: str) -> bool:
+    """Return whether an answer needs current public-web evidence."""
+
+    if any(
+        term in message
+        for term in (
+            "新闻",
+            "消息",
+            "资讯",
+            "公告",
+            "政策",
+            "研报",
+            "舆情",
+            "催化",
+            "异动原因",
+            "上涨原因",
+            "下跌原因",
+            "大涨原因",
+            "大跌原因",
+        )
+    ):
+        return True
+    return "为什么" in message and any(
+        term in message for term in ("上涨", "下跌", "大涨", "大跌", "异动")
+    )
 
 
 def looks_like_stock_kline_question(message: str) -> bool:
@@ -657,7 +923,7 @@ def looks_like_similar_question(message: str) -> bool:
 def looks_like_rating_backtest_question(message: str) -> bool:
     """Return whether a question asks for aggregate rating backtesting."""
 
-    return any(
+    explicit = any(
         term in message
         for term in (
             "回测",
@@ -666,21 +932,23 @@ def looks_like_rating_backtest_question(message: str) -> bool:
             "自我评价",
             "评分效果",
             "评级表现",
-            "表现怎么样",
             "失败样本",
         )
+    )
+    return explicit or (
+        "表现怎么样" in message
+        and any(term in message for term in ("评分", "评级", "预测", "高分票"))
     )
 
 
 def looks_like_evaluation_question(message: str) -> bool:
     """Return whether a question asks for persisted prediction evaluation."""
 
-    return any(
+    explicit = any(
         term in message.lower()
         for term in (
             "复盘",
             "预测",
-            "表现怎么样",
             "评分最高的票表现",
             "昨天评分最高",
             "哪些评分错了",
@@ -691,6 +959,10 @@ def looks_like_evaluation_question(message: str) -> bool:
             "自我改进",
             "evaluation",
         )
+    )
+    return explicit or (
+        "表现怎么样" in message
+        and any(term in message for term in ("评分", "高分票", "推荐票"))
     )
 
 
@@ -769,7 +1041,10 @@ def looks_like_rating_explain_question(message: str) -> bool:
         or looks_like_scoring_policy_question(message)
     ):
         return False
-    return any(term in message.lower() for term in ("为什么", "评分", "评级", "高分", "低分", "score"))
+    return any(
+        term in message.lower()
+        for term in ("评分", "评级", "高分", "低分", "分高", "分低", "score")
+    )
 
 
 def _has_tool_outcome(execution: ToolExecution, tool_name: str) -> bool:

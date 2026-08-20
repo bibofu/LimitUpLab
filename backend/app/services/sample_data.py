@@ -7,23 +7,29 @@ SAMPLE_INDICES: list[MarketIndexSnapshot] = [
     MarketIndexSnapshot(
         name="上证指数",
         symbol="000001.SH",
+        trade_date=date(2026, 5, 15),
         close=3678.42,
         change_pct=0.82,
         trend=[3638.2, 3645.8, 3651.4, 3664.9, 3678.42],
+        source="sample",
     ),
     MarketIndexSnapshot(
         name="深证成指",
         symbol="399001.SZ",
+        trade_date=date(2026, 5, 15),
         close=11246.31,
         change_pct=1.18,
         trend=[11102.6, 11138.5, 11180.2, 11204.8, 11246.31],
+        source="sample",
     ),
     MarketIndexSnapshot(
         name="创业板指",
         symbol="399006.SZ",
+        trade_date=date(2026, 5, 15),
         close=2389.76,
         change_pct=-0.24,
         trend=[2401.4, 2398.1, 2384.6, 2391.2, 2389.76],
+        source="sample",
     ),
 ]
 

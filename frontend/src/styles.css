@@ -2757,6 +2757,20 @@ a.entry-card {
   font-size: 22px;
 }
 
+.index-card time {
+  display: block;
+  margin-top: 4px;
+  color: #98a2b3;
+  font-size: 12px;
+}
+
+.index-empty {
+  grid-column: 1 / -1;
+  padding: 24px;
+  color: #667085;
+  text-align: center;
+}
+
 .sparkline {
   width: 100%;
   height: 46px;

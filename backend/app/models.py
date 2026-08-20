@@ -34,9 +34,76 @@ class MarketIndexSnapshot(BaseModel):
 
     name: str
     symbol: str
+    trade_date: date
     close: float
     change_pct: float
     trend: list[float]
+    source: str
+
+
+class SectorHistoryPoint(BaseModel):
+    """One completed daily point for an industry sector."""
+
+    trade_date: date
+    close: float
+    change_pct: float | None = None
+
+
+class SectorRankingItem(BaseModel):
+    """Compact sector ranking row from the latest market snapshot."""
+
+    sector_name: str
+    rank: int
+    change_pct: float
+    amount_yi: float | None = None
+    up_count: int | None = None
+    down_count: int | None = None
+    leader_name: str | None = None
+    leader_change_pct: float | None = None
+
+
+class SectorPerformanceFacts(BaseModel):
+    """Tool-ready industry performance, breadth, ranking and recent trend facts."""
+
+    requested_sector: str | None = None
+    sector_name: str | None = None
+    trade_date: date
+    data_as_of: date
+    data_fresh: bool
+    rank: int | None = None
+    sector_count: int
+    change_pct: float | None = None
+    amount_yi: float | None = None
+    net_inflow_yi: float | None = None
+    up_count: int | None = None
+    down_count: int | None = None
+    leader_name: str | None = None
+    leader_price: float | None = None
+    leader_change_pct: float | None = None
+    return_5d_pct: float | None = None
+    return_20d_pct: float | None = None
+    top_sectors: list[SectorRankingItem] = Field(default_factory=list)
+    bottom_sectors: list[SectorRankingItem] = Field(default_factory=list)
+    history: list[SectorHistoryPoint] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
+
+
+class WebSearchResult(BaseModel):
+    """One sanitized result returned by the generic web-search tool."""
+
+    title: str
+    url: str
+    domain: str
+    snippet: str
+
+
+class WebSearchFacts(BaseModel):
+    """Search query, retrieval timestamp and evidence snippets for the Agent."""
+
+    query: str
+    fetched_at: datetime
+    provider: str
+    results: list[WebSearchResult] = Field(default_factory=list)
 
 
 class StockKLineBar(BaseModel):
@@ -956,6 +1023,8 @@ def _evidence_title_kind(tool_name: str) -> tuple[str, str]:
         "agent_plan": ("问题理解与工具计划", "execution"),
         "llm_tool_planner": ("LLM 工具规划", "execution"),
         "market_summary": ("市场环境事实", "market"),
+        "sector_performance": ("行业板块行情", "market"),
+        "web_search": ("公开网络检索", "tool"),
         "first_board_ratings": ("首板候选池与评分", "candidate_pool"),
         "limit_up_events": ("涨停事件查询", "limit_up_events"),
         "first_board_filter": ("首板条件筛选", "candidate_pool"),
@@ -1005,6 +1074,8 @@ def _repair_reason(
         "first_board_similar_cases": "用户询问历史相似案例，后端补充 first_board_similar_cases。",
         "limit_up_event_dates": "用户询问本地是否有某日数据，后端补充 limit_up_event_dates。",
         "limit_up_events": "用户询问当天涨停/连板/炸板明细，后端补充 limit_up_events。",
+        "sector_performance": "用户询问整个行业板块表现，后端补充 sector_performance。",
+        "web_search": "用户询问最新外部信息，后端补充 web_search。",
         "rating_backtest": "用户询问评分效果或回测，后端补充 rating_backtest。",
         "rating_evaluation": "用户询问模型复盘或错判样本，后端补充 rating_evaluation。",
         "scoring_policy_status": "用户询问评分策略或权重迭代，后端补充 scoring_policy_status。",
@@ -1017,6 +1088,13 @@ def _evidence_metrics(output: dict[str, Any]) -> dict[str, Any]:
 
     allowed = (
         "trade_date",
+        "data_as_of",
+        "sector_name",
+        "sector_count",
+        "rank",
+        "change_pct",
+        "up_count",
+        "down_count",
         "candidate_count",
         "matched_count",
         "event_count",

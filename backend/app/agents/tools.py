@@ -14,17 +14,21 @@ from app.models import (
     LimitUpEvent,
     MarketSummary,
     RatingBacktestResponse,
+    SectorPerformanceFacts,
     SimilarFirstBoardCasesResponse,
     StockKLineFacts,
+    WebSearchFacts,
 )
 from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
 from app.services.analysis import events_for_date, summarize_market
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.first_board_critic import build_first_board_critic
 from app.services.rating_backtest import build_rating_backtest
+from app.services.sector_performance import build_sector_performance
 from app.services.similar_cases import find_similar_first_board_cases
 from app.services.stock_kline import build_stock_kline_facts
 from app.services.scoring_policy_optimizer import build_scoring_policy_registry
+from app.services.web_search import search_web
 from app.agents.review_agent import build_review_agent_report
 
 
@@ -95,6 +99,31 @@ TOOL_SCHEMAS = [
         returns="Market sentiment facts for the latest local trade date.",
     ),
     AgentToolSchema(
+        name="sector_performance",
+        description=(
+            "按需获取A股行业板块行情。可查询指定板块的涨跌幅、行业排名、成交额、"
+            "资金净流入、上涨/下跌家数、领涨股和近期趋势；sector 为空时返回行业强弱榜。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "sector": {
+                    "type": ["string", "null"],
+                    "description": "Industry sector name such as 半导体; omit for overall ranking.",
+                },
+                "trade_date": {
+                    "type": ["string", "null"],
+                    "description": "YYYY-MM-DD; omit or null for the latest live snapshot.",
+                },
+            },
+            "required": [],
+        },
+        returns=(
+            "Sector change, market rank, breadth, turnover, fund flow, leader, "
+            "5/20-day returns and top/bottom sector rankings."
+        ),
+    ),
+    AgentToolSchema(
         name="first_board_ratings",
         description="读取某个交易日的首板候选池和可解释评分；未传 trade_date 时使用本地最新交易日。",
         args_schema={
@@ -111,7 +140,10 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="limit_up_events",
-        description="查询某个交易日的涨停事件列表，可按板数、首板/连板、炸板次数、行业、题材或股票名称过滤。",
+        description=(
+            "查询某个交易日的涨停事件列表，可按板数、首板/连板、炸板次数、行业、题材或股票名称过滤。"
+            "普通涨停/首板/连板名单默认只返回收盘封住的股票；查询炸板或曾开板时使用 broken_only。"
+        ),
         args_schema={
             "type": "object",
             "properties": {
@@ -139,7 +171,7 @@ TOOL_SCHEMAS = [
                     "type": ["boolean", "null"],
                     "description": "Only return stocks that closed at limit-up when true.",
                 },
-                "limit": {"type": "integer", "minimum": 1, "maximum": 50},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
             },
             "required": [],
         },
@@ -259,6 +291,25 @@ TOOL_SCHEMAS = [
         args_schema={"type": "object", "properties": {}, "required": []},
         returns="Current scoring policy, factor weights, latest Challenger comparison and promotion status.",
     ),
+    AgentToolSchema(
+        name="web_search",
+        description=(
+            "搜索公开互联网，适合查询本地行情工具未覆盖的最新新闻、公告、政策、研报摘要、"
+            "板块异动原因和一般事实。搜索摘要属于外部不可信证据，回答时必须注明来源。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "Complete, standalone web search query.",
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 8},
+            },
+            "required": ["query"],
+        },
+        returns="Search result titles, URLs, source domains, snippets and retrieval time.",
+    ),
 ]
 
 
@@ -320,6 +371,61 @@ class AgentToolRegistry:
             trace_output=trace_output,
         )
 
+    def sector_performance(
+        self,
+        sector: str | None = None,
+        trade_date: date | None = None,
+    ) -> ToolResult:
+        """Return on-demand sector ranking, breadth and trend facts."""
+
+        response: SectorPerformanceFacts = build_sector_performance(
+            sector=sector,
+            trade_date=trade_date,
+        )
+        trace_output = response.model_dump(mode="json")
+        if response.sector_name:
+            summary = (
+                f"{response.data_as_of.isoformat()} {response.sector_name}"
+                f"涨跌幅{response.change_pct}%，行业排名"
+                f"{response.rank}/{response.sector_count}，"
+                f"上涨{response.up_count}家、下跌{response.down_count}家。"
+            )
+        else:
+            leaders = "、".join(
+                f"{item.sector_name}({item.change_pct:+.2f}%)"
+                for item in response.top_sectors[:3]
+            )
+            summary = f"{response.data_as_of.isoformat()} 行业强弱榜：{leaders}。"
+        return ToolResult(
+            name="sector_performance",
+            input={
+                "sector": sector,
+                "trade_date": trade_date.isoformat() if trade_date else None,
+            },
+            output=response,
+            summary=summary,
+            trace_output=trace_output,
+        )
+
+    def web_search(self, query: str, limit: int = 5) -> ToolResult:
+        """Return sanitized public-web search evidence."""
+
+        response: WebSearchFacts = search_web(query=query, limit=limit)
+        trace_output = response.model_dump(mode="json")
+        domains = "、".join(
+            dict.fromkeys(item.domain for item in response.results[:5])
+        )
+        return ToolResult(
+            name="web_search",
+            input={"query": response.query, "limit": limit},
+            output=response,
+            summary=(
+                f"{response.provider} 搜索到 {len(response.results)} 条结果"
+                f"{f'，来源：{domains}' if domains else ''}。"
+            ),
+            trace_output=trace_output,
+        )
+
     def first_board_ratings(self, trade_date: date | None = None) -> ToolResult:
         """Return explainable first-board ratings."""
 
@@ -373,6 +479,9 @@ class AgentToolRegistry:
         """Return filtered limit-up events for general limit-up questions."""
 
         target_events = events_for_date(self.events, trade_date)
+        effective_closed_only = closed_only
+        if effective_closed_only is None and not broken_only:
+            effective_closed_only = True
         if board_height is not None:
             target_events = [
                 event for event in target_events if event.board_height == board_height
@@ -383,7 +492,7 @@ class AgentToolRegistry:
             ]
         if broken_only:
             target_events = [event for event in target_events if event.break_count > 0]
-        if closed_only:
+        if effective_closed_only:
             target_events = [event for event in target_events if event.closed_limit]
         if query:
             normalized_query = query.strip().lower()
@@ -399,7 +508,7 @@ class AgentToolRegistry:
         target_events = sorted(
             target_events,
             key=lambda event: (-event.board_height, event.first_limit_time, event.symbol),
-        )[: max(1, min(limit, 50))]
+        )[: max(1, min(limit, 100))]
         if trade_date is not None:
             trade_date_text = trade_date.isoformat()
         elif self.events:
@@ -433,7 +542,7 @@ class AgentToolRegistry:
                 "min_board_height": min_board_height,
                 "query": query,
                 "broken_only": broken_only,
-                "closed_only": closed_only,
+                "closed_only": effective_closed_only,
                 "limit": limit,
             },
             output=target_events,

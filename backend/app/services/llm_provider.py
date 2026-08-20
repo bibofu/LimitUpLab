@@ -18,7 +18,6 @@ DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-5.1-mini"
 DEFAULT_TIMEOUT_SECONDS = 20.0
 DEFAULT_PLANNER_MAX_TOKENS = 320
-DEFAULT_ANSWER_MAX_TOKENS = 480
 _thread_local = threading.local()
 
 
@@ -79,7 +78,6 @@ class OpenAIChatCompletionsProvider(LLMProvider):
         base_url: str = DEFAULT_OPENAI_BASE_URL,
         timeout_seconds: float = 20,
         planner_max_tokens: int = DEFAULT_PLANNER_MAX_TOKENS,
-        answer_max_tokens: int = DEFAULT_ANSWER_MAX_TOKENS,
         thinking_enabled: bool = False,
         session: requests.Session | None = None,
     ):
@@ -90,7 +88,6 @@ class OpenAIChatCompletionsProvider(LLMProvider):
         self.base_url = base_url.rstrip("/")
         self.timeout_seconds = timeout_seconds
         self.planner_max_tokens = planner_max_tokens
-        self.answer_max_tokens = answer_max_tokens
         self.thinking_enabled = thinking_enabled
         self.session = session or _get_thread_session()
 
@@ -205,21 +202,15 @@ class OpenAIChatCompletionsProvider(LLMProvider):
                 {"role": "user", "content": user_prompt},
             ],
             "temperature": 0.2,
-            "max_tokens": self._max_tokens(system_prompt),
             "thinking": {
                 "type": "enabled" if self.thinking_enabled else "disabled",
             },
         }
+        if "Return only valid JSON" in system_prompt:
+            payload["max_tokens"] = self.planner_max_tokens
         if stream:
             payload["stream"] = True
         return payload
-
-    def _max_tokens(self, system_prompt: str) -> int:
-        """Use a small budget for JSON planning and a bounded answer budget."""
-
-        if "Return only valid JSON" in system_prompt:
-            return self.planner_max_tokens
-        return self.answer_max_tokens
 
 
 def get_llm_provider() -> LLMProvider:
@@ -249,10 +240,6 @@ def get_llm_provider() -> LLMProvider:
         planner_max_tokens=_read_positive_int(
             "LIMITUPLAB_LLM_PLANNER_MAX_TOKENS",
             DEFAULT_PLANNER_MAX_TOKENS,
-        ),
-        answer_max_tokens=_read_positive_int(
-            "LIMITUPLAB_LLM_ANSWER_MAX_TOKENS",
-            DEFAULT_ANSWER_MAX_TOKENS,
         ),
         thinking_enabled=env_bool("LIMITUPLAB_LLM_THINKING_ENABLED"),
     )

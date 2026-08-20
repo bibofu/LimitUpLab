@@ -3,9 +3,11 @@
 export interface MarketIndexSnapshot {
   name: string;
   symbol: string;
+  trade_date: string;
   close: number;
   change_pct: number;
   trend: number[];
+  source: string;
 }
 
 export interface ConceptHeat {

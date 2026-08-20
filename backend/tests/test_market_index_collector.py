@@ -1,0 +1,63 @@
+import unittest
+from datetime import date
+from unittest.mock import patch
+
+from app.collectors.market_index_collector import _collect_market_index
+
+
+class MarketIndexCollectorTest(unittest.TestCase):
+    @staticmethod
+    def _rows(*dates_and_closes: tuple[str, float]) -> list[dict[str, object]]:
+        return [
+            {"date": trade_date, "close": close}
+            for trade_date, close in dates_and_closes
+        ]
+
+    @patch("app.collectors.market_index_collector._tencent_rows")
+    def test_tencent_snapshot_matches_requested_trade_date(self, tencent_rows) -> None:
+        tencent_rows.return_value = self._rows(
+            ("2026-08-17", 3982.65),
+            ("2026-08-18", 3990.30),
+            ("2026-08-19", 3894.42),
+        )
+
+        snapshot = _collect_market_index(
+            name="上证指数",
+            display_symbol="000001.SH",
+            akshare_symbol="sh000001",
+            trade_date=date(2026, 8, 19),
+        )
+
+        self.assertEqual(snapshot.trade_date, date(2026, 8, 19))
+        self.assertEqual(snapshot.close, 3894.42)
+        self.assertEqual(snapshot.change_pct, -2.4)
+        self.assertEqual(snapshot.source, "tencent_index_daily_spot")
+
+    @patch("app.collectors.market_index_collector._sina_rows")
+    @patch("app.collectors.market_index_collector._eastmoney_rows")
+    @patch("app.collectors.market_index_collector._tencent_rows")
+    def test_stale_sources_are_rejected(
+        self,
+        tencent_rows,
+        eastmoney_rows,
+        sina_rows,
+    ) -> None:
+        stale = self._rows(
+            ("2026-08-17", 3982.65),
+            ("2026-08-18", 3990.30),
+        )
+        tencent_rows.return_value = stale
+        eastmoney_rows.return_value = stale
+        sina_rows.return_value = stale
+
+        with self.assertRaisesRegex(RuntimeError, "stale index data"):
+            _collect_market_index(
+                name="上证指数",
+                display_symbol="000001.SH",
+                akshare_symbol="sh000001",
+                trade_date=date(2026, 8, 19),
+            )
+
+
+if __name__ == "__main__":
+    unittest.main()

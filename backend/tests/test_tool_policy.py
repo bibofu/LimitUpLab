@@ -63,6 +63,28 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertFalse(signals.evaluation)
         self.assertFalse(signals.rating_explanation)
 
+    def test_exhaustive_first_board_list_is_not_a_rating_question(self) -> None:
+        signals = QuestionSignals.from_message("列出今天所有首板")
+
+        self.assertFalse(signals.first_board_facts)
+        self.assertFalse(signals.rating_explanation)
+
+    def test_sector_performance_does_not_trigger_rating_review(self) -> None:
+        signals = QuestionSignals.from_message("今天半导体板块表现怎么样")
+
+        self.assertTrue(signals.sector_performance)
+        self.assertFalse(signals.rating_backtest)
+        self.assertFalse(signals.evaluation)
+        self.assertFalse(signals.review)
+
+    def test_sector_move_reason_does_not_trigger_rating_explanation(self) -> None:
+        signals = QuestionSignals.from_message("今天半导体板块为什么下跌")
+
+        self.assertTrue(signals.sector_performance)
+        self.assertTrue(signals.web_search)
+        self.assertFalse(signals.rating_explanation)
+        self.assertFalse(signals.first_board_facts)
+
     def test_scoring_policy_repair_returns_champion_status(self) -> None:
         request = AgentChatRequest(
             session_id="policy-test",

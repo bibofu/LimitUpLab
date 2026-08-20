@@ -51,13 +51,31 @@ LIMITUPLAB_LLM_BASE_URL=https://api.deepseek.com
 LIMITUPLAB_LLM_MODEL=deepseek-v4-flash
 LIMITUPLAB_LLM_THINKING_ENABLED=false
 LIMITUPLAB_LLM_PLANNER_MAX_TOKENS=320
-LIMITUPLAB_LLM_ANSWER_MAX_TOKENS=480
 DEEPSEEK_API_KEY=<your-api-key>
 ```
 
 Chat uses non-thinking mode by default because tool selection and grounded
 summaries are latency-sensitive structured tasks. Planner, local-tool and
 answer latency plus prompt sizes are returned in `response.performance`.
+
+The chat Agent also has two on-demand external tools:
+
+- `sector_performance` fetches industry-sector ranking, change, breadth,
+  turnover, fund flow, leader and recent trend through AKShare providers.
+- `web_search` retrieves sanitized public search-result titles, URLs and
+  snippets. It uses no-key providers with fallback and treats every snippet as
+  untrusted external evidence.
+
+Optional search settings:
+
+```powershell
+LIMITUPLAB_WEB_SEARCH_PROVIDER=auto
+LIMITUPLAB_WEB_SEARCH_TIMEOUT_SECONDS=12
+```
+
+Search results can be stale or incomplete. Numerical market conclusions should
+come from structured market tools; search is used for news, catalysts and facts
+that are not present in local storage.
 
 If your network requires a local proxy, set `LIMITUPLAB_PROXY_URL` in `.env`.
 The backend will apply it to `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` when

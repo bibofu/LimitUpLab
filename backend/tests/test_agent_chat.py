@@ -70,6 +70,39 @@ class FakeDirectFirstBoardProvider(FakeToolPlanningProvider):
         )
 
 
+class FakeExhaustiveListProvider(FakeToolPlanningProvider):
+    """Fake planner whose final answer intentionally truncates a full list."""
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        self.calls.append((system_prompt, user_prompt))
+        if "first job is to decide which tools are needed" in system_prompt:
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": "list_first_boards",
+                        "safety": "normal",
+                        "tool_calls": [
+                            {
+                                "name": "limit_up_events",
+                                "arguments": {
+                                    "trade_date": "2026-08-07",
+                                    "limit": 100,
+                                },
+                            }
+                        ],
+                        "answer_directly": "",
+                    }
+                ),
+                model="fake-planner",
+                provider="fake",
+            )
+        return LLMResult(
+            content="只输出了第一只：测试股票1(002001)。",
+            model="fake-answer",
+            provider="fake",
+        )
+
+
 class AgentChatTest(unittest.TestCase):
     def _make_event(
         self,
@@ -179,6 +212,40 @@ class AgentChatTest(unittest.TestCase):
         self.assertEqual(response.intent, "market_context")
         self.assertIn("market_summary", response.tool_calls)
         self.assertIn("2026-05-15", response.answer)
+
+    def test_exhaustive_first_board_list_is_closed_only_and_complete(self) -> None:
+        events = [
+            self._make_event(
+                f"0020{index:02d}",
+                f"测试股票{index}",
+                "测试行业",
+                "测试题材",
+            )
+            for index in range(1, 11)
+        ]
+        failed = self._make_event("002099", "未封住样本", "测试行业", "测试题材")
+        events.append(failed.model_copy(update={"closed_limit": False, "break_count": 2}))
+        continued = self._make_event("002098", "二板样本", "测试行业", "测试题材")
+        events.append(continued.model_copy(update={"board_height": 2}))
+
+        response = answer_first_board_chat(
+            AgentChatRequest(session_id="all-first-boards", message="列出今天所有首板"),
+            events=events,
+            llm_provider=FakeExhaustiveListProvider(),
+        )
+
+        self.assertIn("limit_up_events", response.tool_calls)
+        self.assertNotIn("first_board_ratings", response.tool_calls)
+        for index in range(1, 11):
+            self.assertIn(f"0020{index:02d}", response.answer)
+        self.assertNotIn("002099", response.answer)
+        self.assertNotIn("002098", response.answer)
+        trace = next(
+            item for item in response.tool_results if item.name == "limit_up_events"
+        )
+        self.assertTrue(trace.input["closed_only"])
+        self.assertEqual(trace.input["board_height"], 1)
+        self.assertTrue(any("incomplete" in item for item in response.warnings))
 
     def test_today_summary_uses_first_board_tool(self) -> None:
         response = answer_first_board_chat(

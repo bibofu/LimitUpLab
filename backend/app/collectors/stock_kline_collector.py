@@ -1,8 +1,5 @@
 ﻿"""AKShare-backed stock K-line collectors for after-close review pages."""
 
-import os
-from collections.abc import Iterator
-from contextlib import contextmanager
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
@@ -10,6 +7,7 @@ import akshare as ak
 import requests
 
 from app.models import StockCloseSnapshot, StockIntradayKLineBar, StockKLineBar
+from app.collectors.network import without_proxy
 
 
 def collect_stock_kline(
@@ -23,7 +21,7 @@ def collect_stock_kline(
     target_end_date = end_date or date.today()
     start_date = target_end_date - timedelta(days=max(days * 3, 15))
 
-    with _without_proxy():
+    with without_proxy():
         frame = ak.stock_zh_a_hist_tx(
             symbol=normalized_symbol,
             start_date=start_date.strftime("%Y%m%d"),
@@ -60,7 +58,7 @@ def collect_stock_spot_klines(
     if not normalized:
         return {}
 
-    with _without_proxy():
+    with without_proxy():
         response = requests.get(
             f"https://qt.gtimg.cn/q={','.join(normalized)}",
             headers={"Referer": "https://gu.qq.com/"},
@@ -144,7 +142,7 @@ def collect_stock_intraday_kline(
         return rows
 
     eastmoney_symbol = normalized_symbol.removeprefix("sh").removeprefix("sz")
-    with _without_proxy():
+    with without_proxy():
         frame = ak.stock_zh_a_hist_pre_min_em(
             symbol=eastmoney_symbol,
             start_time="09:30:00",
@@ -166,7 +164,7 @@ def _collect_intraday_rows_from_sina(
 ) -> list[StockIntradayKLineBar]:
     """Read minute bars from Sina and keep only the requested trading date."""
 
-    with _without_proxy():
+    with without_proxy():
         frame = ak.stock_zh_a_minute(
             symbol=symbol,
             period=str(period),
@@ -301,31 +299,4 @@ def _parse_datetime(value: Any) -> datetime:
     if isinstance(value, datetime):
         return value
     return datetime.fromisoformat(str(value))
-
-
-@contextmanager
-def _without_proxy() -> Iterator[None]:
-    """Temporarily clear proxy env vars for data sources that reject the proxy."""
-
-    proxy_names = (
-        "HTTP_PROXY",
-        "HTTPS_PROXY",
-        "ALL_PROXY",
-        "http_proxy",
-        "https_proxy",
-        "all_proxy",
-    )
-    previous = {name: os.environ.get(name) for name in proxy_names}
-    try:
-        for name in proxy_names:
-            os.environ.pop(name, None)
-        yield
-    finally:
-        for name, value in previous.items():
-            if value is None:
-                os.environ.pop(name, None)
-            else:
-                os.environ[name] = value
-
-
 

@@ -54,7 +54,6 @@ class LLMProviderTest(unittest.TestCase):
             model="deepseek-v4-flash",
             base_url="https://api.deepseek.com",
             planner_max_tokens=320,
-            answer_max_tokens=700,
             session=session,  # type: ignore[arg-type]
         )
 
@@ -69,17 +68,27 @@ class LLMProviderTest(unittest.TestCase):
         self.assertEqual(result.content, '{"ok":true}')
         self.assertGreater(result.prompt_chars, 0)
 
-    def test_answer_uses_bounded_answer_budget(self) -> None:
+    def test_answer_does_not_send_a_token_limit(self) -> None:
         session = FakeSession()
         provider = OpenAIChatCompletionsProvider(
             api_key="test-key",
-            answer_max_tokens=700,
             session=session,  # type: ignore[arg-type]
         )
 
         provider.generate("Answer in Chinese.", "Facts")
 
-        self.assertEqual(session.calls[0]["json"]["max_tokens"], 700)
+        self.assertNotIn("max_tokens", session.calls[0]["json"])
+
+    def test_exhaustive_list_does_not_send_a_token_limit(self) -> None:
+        session = FakeSession()
+        provider = OpenAIChatCompletionsProvider(
+            api_key="test-key",
+            session=session,  # type: ignore[arg-type]
+        )
+
+        provider.generate("EXHAUSTIVE_LIST_OUTPUT", "Facts")
+
+        self.assertNotIn("max_tokens", session.calls[0]["json"])
 
     def test_stream_answer_emits_native_sse_deltas(self) -> None:
         session = FakeStreamingSession()

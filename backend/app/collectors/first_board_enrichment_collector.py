@@ -9,7 +9,7 @@ import akshare as ak
 import pandas as pd
 import requests
 
-from app.collectors.stock_kline_collector import _without_proxy
+from app.collectors.network import without_proxy
 
 
 @dataclass(frozen=True)
@@ -38,7 +38,7 @@ def collect_dragon_tiger_facts(trade_date: date) -> dict[str, DragonTigerFact]:
     """Collect representative Dragon-Tiger List rows for one trading day."""
 
     value = trade_date.strftime("%Y%m%d")
-    with _without_proxy():
+    with without_proxy():
         frame = ak.stock_lhb_detail_em(start_date=value, end_date=value)
     if frame.empty:
         return {}
@@ -70,7 +70,7 @@ def collect_eastmoney_popularity() -> dict[str, PopularityFact]:
         "pageNo": 1,
         "pageSize": 100,
     }
-    with _without_proxy():
+    with without_proxy():
         response = requests.post(
             "https://emappdata.eastmoney.com/stockrank/getAllCurrentList",
             json=payload,
@@ -98,7 +98,7 @@ def collect_eastmoney_popularity() -> dict[str, PopularityFact]:
 def collect_recent_listing_dates() -> dict[str, date]:
     """Collect listing dates available from Eastmoney's IPO history table."""
 
-    with _without_proxy():
+    with without_proxy():
         frame = ak.stock_xgsglb_em(symbol="全部股票")
     if frame.empty:
         return {}
@@ -116,7 +116,7 @@ def collect_recent_listing_dates() -> dict[str, date]:
 def collect_listing_date(symbol: str) -> date | None:
     """Collect one stock's authoritative listing date from CNInfo."""
 
-    with _without_proxy():
+    with without_proxy():
         frame = ak.stock_profile_cninfo(symbol=symbol)
     if frame.empty:
         return None

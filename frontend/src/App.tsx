@@ -912,6 +912,9 @@ function Overview({ data }: { data: DashboardData }) {
                 <div>
                   <span>{index.name}</span>
                   <strong>{index.close.toFixed(2)}</strong>
+                  <time dateTime={index.trade_date}>
+                    {index.trade_date.slice(5)} 收盘
+                  </time>
                 </div>
                 <Sparkline values={index.trend} />
                 <b className={index.change_pct >= 0 ? "positive" : "negative"}>
@@ -919,6 +922,9 @@ function Overview({ data }: { data: DashboardData }) {
                 </b>
               </article>
             ))}
+            {data.summary.indices.length === 0 ? (
+              <div className="index-empty">指数数据暂不可用</div>
+            ) : null}
           </div>
         </Panel>
 
