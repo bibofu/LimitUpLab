@@ -10,9 +10,9 @@ from typing import Callable
 from app.collectors import (
     DragonTigerFact,
     PopularityFact,
-    collect_dragon_tiger_facts,
-    collect_eastmoney_popularity,
     collect_listing_date,
+    collect_preferred_dragon_tiger_facts,
+    collect_preferred_popularity,
     collect_recent_listing_dates,
     collect_stock_kline,
 )
@@ -25,7 +25,7 @@ from app.models import (
 from app.repositories import SQLiteFirstBoardRepository
 
 
-ENRICHMENT_FEATURE_VERSION = "first-board-enrichment-v1"
+ENRICHMENT_FEATURE_VERSION = "first-board-enrichment-v2"
 MIN_AMOUNT = 100_000_000
 KLineCollector = Callable[[str, int, date | None], list[StockKLineBar]]
 
@@ -41,6 +41,8 @@ class EnrichmentRefreshReport:
     listing_date_count: int = 0
     dragon_tiger_count: int = 0
     popularity_count: int = 0
+    dragon_tiger_sources: list[str] = field(default_factory=list)
+    popularity_sources: list[str] = field(default_factory=list)
     warnings: list[str] = field(default_factory=list)
 
 
@@ -52,8 +54,8 @@ def refresh_first_board_enrichment_snapshots(
     kline_collector: KLineCollector = collect_stock_kline,
     listing_collector: Callable[[], dict[str, date]] = collect_recent_listing_dates,
     listing_detail_collector: Callable[[str], date | None] = collect_listing_date,
-    dragon_tiger_collector: Callable[[date], dict[str, DragonTigerFact]] = collect_dragon_tiger_facts,
-    popularity_collector: Callable[[], dict[str, PopularityFact]] = collect_eastmoney_popularity,
+    dragon_tiger_collector: Callable[[date], dict[str, DragonTigerFact]] = collect_preferred_dragon_tiger_facts,
+    popularity_collector: Callable[[], dict[str, PopularityFact]] = collect_preferred_popularity,
 ) -> EnrichmentRefreshReport:
     """Collect, derive and persist all enrichment inputs for one rating day."""
 
@@ -74,13 +76,13 @@ def refresh_first_board_enrichment_snapshots(
         lambda: dragon_tiger_collector(trade_date),
         {},
         report.warnings,
-        "Dragon-Tiger List",
+        "Dragon-Tiger List (Tonghuashun/AkShare fallback)",
     )
     popularity = _collect_optional(
         popularity_collector,
         {},
         report.warnings,
-        "Eastmoney popularity",
+        "popularity ranking (Tonghuashun/Eastmoney fallback)",
     )
 
     for event in candidates:
@@ -118,6 +120,12 @@ def refresh_first_board_enrichment_snapshots(
     report.listing_date_count = sum(item.listing_date is not None for item in snapshots)
     report.dragon_tiger_count = sum(item.dragon_tiger_on_list for item in snapshots)
     report.popularity_count = sum(item.popularity_rank is not None for item in snapshots)
+    report.dragon_tiger_sources = sorted(
+        {item.source for item in dragon_tiger.values() if item.source}
+    )
+    report.popularity_sources = sorted(
+        {item.source for item in popularity.values() if item.source}
+    )
     return report
 
 
@@ -147,7 +155,7 @@ def build_enrichment_snapshot(
         else estimated_float_market_cap
     )
     float_market_cap_source = (
-        "eastmoney_dragon_tiger"
+        f"{dragon_tiger.source}_dragon_tiger"
         if dragon_tiger and dragon_tiger.float_market_cap
         else "derived_from_amount_and_turnover" if float_market_cap else None
     )
@@ -161,7 +169,7 @@ def build_enrichment_snapshot(
     if technical["kline_bar_count"] < 61:
         missing.append("limit_up_history_60d")
     if not popularity_source_ready:
-        missing.append("eastmoney_popularity")
+        missing.append("popularity_snapshot")
 
     now = datetime.now(timezone.utc)
     return FirstBoardEnrichmentSnapshot(
@@ -180,9 +188,11 @@ def build_enrichment_snapshot(
         dragon_tiger_buy_amount=dragon_tiger.buy_amount if dragon_tiger else None,
         dragon_tiger_sell_amount=dragon_tiger.sell_amount if dragon_tiger else None,
         dragon_tiger_reason=dragon_tiger.reason if dragon_tiger else None,
+        dragon_tiger_source=dragon_tiger.source if dragon_tiger else None,
         popularity_rank=popularity.rank if popularity else None,
         popularity_rank_change=popularity.rank_change if popularity else None,
         popularity_snapshot_at=popularity.captured_at if popularity else None,
+        popularity_source=popularity.source if popularity else None,
         data_missing=missing,
         feature_version=ENRICHMENT_FEATURE_VERSION,
         created_at=now,

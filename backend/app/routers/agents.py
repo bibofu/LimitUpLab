@@ -30,6 +30,7 @@ from app.models import (
     AgentToolTrace,
     FirstBoardCriticResponse,
     FirstBoardRatingsResponse,
+    PredictionQualityAuditResponse,
     RatingBacktestResponse,
     ReviewAgentReportResponse,
     ScoringPolicyOptimizationResponse,
@@ -48,6 +49,7 @@ from app.services.data_health import build_agent_data_health
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.first_board_critic import build_first_board_critic
 from app.services.llm_provider import DisabledLLMProvider
+from app.services.prediction_quality_audit import build_prediction_quality_audit
 from app.services.rating_backtest import build_rating_backtest
 from app.services.scoring_policy_optimizer import (
     build_scoring_policy_registry,
@@ -226,6 +228,39 @@ def get_agent_eval_report() -> AgentEvalReportResponse:
         ],
         generated_by="agent-eval-panel-v1",
     )
+
+
+@router.get(
+    "/prediction-quality-audit",
+    response_model=PredictionQualityAuditResponse,
+)
+def get_prediction_quality_audit(
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    scoring_version: Optional[str] = None,
+    top_k: int = Query(default=10, ge=3, le=30),
+) -> PredictionQualityAuditResponse:
+    """Return source-aware prediction coverage and deterministic baselines."""
+
+    events = get_limit_up_repository().list_events()
+    if not events:
+        raise HTTPException(status_code=404, detail="No local limit-up events available.")
+    available_dates = sorted({event.trade_date for event in events})
+    resolved_start = start_date or available_dates[0]
+    resolved_end = end_date or available_dates[-1]
+    if resolved_start > resolved_end:
+        raise HTTPException(status_code=400, detail="start_date must be before end_date.")
+    try:
+        return build_prediction_quality_audit(
+            events=events,
+            start_date=resolved_start,
+            end_date=resolved_end,
+            first_board_repository=SQLiteFirstBoardRepository(),
+            scoring_version=scoring_version,
+            top_k=top_k,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
 
 
 @router.get("/rating-backtest", response_model=RatingBacktestResponse)

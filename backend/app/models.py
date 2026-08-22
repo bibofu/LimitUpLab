@@ -390,9 +390,11 @@ class FirstBoardEnrichmentSnapshot(BaseModel):
     dragon_tiger_buy_amount: float | None = None
     dragon_tiger_sell_amount: float | None = None
     dragon_tiger_reason: str | None = None
+    dragon_tiger_source: str | None = None
     popularity_rank: int | None = None
     popularity_rank_change: int | None = None
     popularity_snapshot_at: datetime | None = None
+    popularity_source: str | None = None
     data_missing: list[str] = Field(default_factory=list)
     feature_version: str
     created_at: datetime
@@ -498,6 +500,9 @@ class ScoringPolicyMetrics(BaseModel):
     positive_rate: float | None = None
     avg_three_day_open_to_close_pct: float | None = None
     avg_max_drawdown_from_next_open_3d: float | None = None
+    promoted_to_second_board_rate: float | None = None
+    large_loss_rate: float | None = None
+    avg_next_open_to_low_pct: float | None = None
     pool_avg_next_open_to_close_pct: float | None = None
     excess_next_open_to_close_pct: float | None = None
     objective_score: float | None = None
@@ -511,8 +516,22 @@ class ScoringPolicyComparison(BaseModel):
     objective_delta: float | None = None
     positive_rate_delta: float | None = None
     drawdown_delta: float | None = None
+    promotion_rate_delta: float | None = None
+    large_loss_rate_delta: float | None = None
     promotion_eligible: bool
     gate_reasons: list[str] = Field(default_factory=list)
+
+
+class ScoringWalkForwardFold(BaseModel):
+    """One expanding-window validation and out-of-sample test fold."""
+
+    fold_index: int
+    train_dates: list[date]
+    validation_dates: list[date]
+    test_dates: list[date]
+    selected_strength: float
+    champion_metrics: ScoringPolicyMetrics
+    challenger_metrics: ScoringPolicyMetrics
 
 
 class ScoringPolicyOptimizationResponse(BaseModel):
@@ -525,6 +544,9 @@ class ScoringPolicyOptimizationResponse(BaseModel):
     validation_dates: list[date]
     test_dates: list[date]
     factor_correlations: dict[str, float]
+    target_correlations: dict[str, dict[str, float]] = Field(default_factory=dict)
+    target_weights: dict[str, float] = Field(default_factory=dict)
+    walk_forward_folds: list[ScoringWalkForwardFold] = Field(default_factory=list)
     comparison: ScoringPolicyComparison
     activated: bool = False
     warnings: list[str] = Field(default_factory=list)
@@ -536,6 +558,90 @@ class ScoringPolicyRegistryResponse(BaseModel):
 
     champion: ScoringPolicy
     policies: list[ScoringPolicy]
+    generated_by: str
+
+
+class PredictionQualityCohort(BaseModel):
+    """Prediction coverage for one source or scoring-version cohort."""
+
+    dimension: Literal["prediction_source", "scoring_version"]
+    value: str
+    row_count: int
+    unique_stock_date_count: int
+    trade_date_count: int
+    next_day_ready_count: int
+    next_day_coverage_rate: float
+
+
+class PredictionDateCoverage(BaseModel):
+    """Outcome maturity and cache coverage for one prediction date."""
+
+    trade_date: date
+    candidate_count: int
+    top_count: int
+    next_day_ready_count: int
+    three_day_ready_count: int
+    next_day_coverage_rate: float
+    three_day_coverage_rate: float
+    next_day_mature: bool
+    three_day_mature: bool
+    status: Literal["complete", "partial", "pending", "not_mature"]
+
+
+class PredictionBenchmarkMetrics(BaseModel):
+    """Comparable performance metrics for one deterministic ranking baseline."""
+
+    benchmark: str
+    label: str
+    trade_date_count: int
+    sample_size: int
+    avg_next_open_to_close_pct: float | None = None
+    positive_rate: float | None = None
+    promoted_to_second_board_rate: float | None = None
+    large_loss_rate: float | None = None
+    avg_three_day_open_to_close_pct: float | None = None
+    avg_max_drawdown_from_next_open_3d: float | None = None
+    excess_vs_ready_pool_pct: float | None = None
+
+
+class PredictionQualityPolicyStatus(BaseModel):
+    """Current policy-governance readiness summarized for the audit panel."""
+
+    champion_version: str
+    latest_challenger_version: str | None = None
+    latest_optimizer_version: str | None = None
+    promotion_eligible: bool | None = None
+    outcome_ready_trade_dates: int
+    required_trade_dates: int
+    readiness_rate: float
+    gate_reasons: list[str] = Field(default_factory=list)
+
+
+class PredictionQualityAuditResponse(BaseModel):
+    """Auditable prediction coverage, benchmark and policy-readiness report."""
+
+    start_date: date
+    end_date: date
+    latest_trade_date: date
+    audited_scoring_version: str
+    top_k: int
+    raw_prediction_rows: int
+    audited_prediction_rows: int
+    canonical_prediction_count: int
+    cross_cohort_duplicate_rows: int
+    data_as_of_violation_count: int
+    prediction_trade_date_count: int
+    next_day_mature_trade_date_count: int
+    complete_next_day_trade_date_count: int
+    next_day_outcome_coverage_rate: float
+    three_day_outcome_coverage_rate: float
+    cohorts: list[PredictionQualityCohort]
+    date_coverage: list[PredictionDateCoverage]
+    benchmarks: list[PredictionBenchmarkMetrics]
+    policy_status: PredictionQualityPolicyStatus
+    findings: list[str]
+    recommendations: list[str]
+    warnings: list[str] = Field(default_factory=list)
     generated_by: str
 
 
@@ -1024,6 +1130,9 @@ def _evidence_title_kind(tool_name: str) -> tuple[str, str]:
         "llm_tool_planner": ("LLM 工具规划", "execution"),
         "market_summary": ("市场环境事实", "market"),
         "sector_performance": ("行业板块行情", "market"),
+        "hot_stock_ranking": ("同花顺热股榜", "market"),
+        "dragon_tiger_list": ("同花顺龙虎榜", "market"),
+        "remote_limit_up_pool": ("同花顺涨停池", "limit_up_events"),
         "web_search": ("公开网络检索", "tool"),
         "first_board_ratings": ("首板候选池与评分", "candidate_pool"),
         "limit_up_events": ("涨停事件查询", "limit_up_events"),
@@ -1089,6 +1198,9 @@ def _evidence_metrics(output: dict[str, Any]) -> dict[str, Any]:
     allowed = (
         "trade_date",
         "data_as_of",
+        "captured_at",
+        "period",
+        "source",
         "sector_name",
         "sector_count",
         "rank",
@@ -1097,6 +1209,8 @@ def _evidence_metrics(output: dict[str, Any]) -> dict[str, Any]:
         "down_count",
         "candidate_count",
         "matched_count",
+        "upstream_total",
+        "stock_count",
         "event_count",
         "first_board_count",
         "continued_board_count",
@@ -1133,6 +1247,7 @@ def _evidence_facts(trace: AgentToolTrace, output: dict[str, Any]) -> list[str]:
         "top_candidates",
         "matches",
         "events",
+        "items",
         "cases",
         "support_evidence",
         "counter_evidence",

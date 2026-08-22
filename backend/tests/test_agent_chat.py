@@ -1,7 +1,9 @@
 import json
 import unittest
 from datetime import date, datetime, time, timezone
+from pathlib import Path
 from unittest.mock import patch
+from uuid import uuid4
 
 from app.agents.chat import answer_first_board_chat
 from app.models import (
@@ -11,6 +13,8 @@ from app.models import (
     StockKLineBar,
     StockKLineFacts,
 )
+from app.repositories import SQLiteFirstBoardRepository
+from app.services.llm_provider import DisabledLLMProvider
 from app.services.llm_provider import LLMProvider, LLMResult
 from app.services.sample_data import SAMPLE_EVENTS
 
@@ -156,6 +160,28 @@ class AgentChatTest(unittest.TestCase):
         self.assertEqual(response.tool_calls, [])
         self.assertIn("\u9996\u677f", response.answer)
         self.assertIn("\u5386\u53f2\u76f8\u4f3c", response.answer)
+
+    def test_prediction_quality_uses_audit_tool_when_llm_is_disabled(self) -> None:
+        database_path = (
+            Path(__file__).resolve().parents[1]
+            / f"quality-chat-{uuid4().hex}.sqlite"
+        )
+        self.addCleanup(database_path.unlink, missing_ok=True)
+        repository = SQLiteFirstBoardRepository(database_path=database_path)
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="quality-chat",
+                message="目前预测质量怎么样，评分 v3 为什么还不能晋级？",
+            ),
+            events=SAMPLE_EVENTS,
+            repository=repository,
+            llm_provider=DisabledLLMProvider(),
+        )
+
+        self.assertEqual(response.intent, "prediction_quality_audit")
+        self.assertIn("prediction_quality_audit", response.tool_calls)
+        self.assertIn("60", response.answer)
+        self.assertNotIn("首板候选评分靠前", response.answer)
 
     def test_out_of_scope_question_does_not_force_stock_facts(self) -> None:
         response = answer_first_board_chat(

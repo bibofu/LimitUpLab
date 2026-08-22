@@ -27,6 +27,10 @@ import {
 import remarkGfm from "remark-gfm";
 
 import {
+  MarketKLineChart,
+  type MarketCandleBar,
+} from "./components/MarketKLineChart";
+import {
   fetchContinuedBoardEvents,
   fetchAgentDataHealth,
   fetchAgentEvalReport,
@@ -39,6 +43,7 @@ import {
   fetchFailedLimitUpEvents,
   fetchFirstBoardEvents,
   fetchMarketSummary,
+  fetchPredictionQualityAudit,
   fetchRatingBacktest,
   fetchRatingEvaluation,
   fetchRecentLimitUpEvents,
@@ -62,6 +67,7 @@ import type {
   FirstBoardRatingsResponse,
   LimitUpEvent,
   MarketSummary,
+  PredictionQualityAuditResponse,
   RatingBacktestResponse,
   ReviewAgentPick,
   ReviewAgentReportResponse,
@@ -82,16 +88,9 @@ interface DashboardData {
   firstBoardRatings: FirstBoardRatingsResponse;
   agentDataHealth: AgentDataHealthResponse;
   systemHealth: AgentSystemHealthResponse;
+  predictionQualityAudit: PredictionQualityAuditResponse;
   ratingBacktest: RatingBacktestResponse;
   ratingEvaluation: AgentEvaluationResponse;
-}
-
-interface CandleBar {
-  label: string;
-  open: number;
-  close: number;
-  high: number;
-  low: number;
 }
 
 interface ChatMessage {
@@ -753,6 +752,7 @@ export function App() {
         firstBoardRatings,
         agentDataHealth,
         systemHealth,
+        predictionQualityAudit,
         ratingBacktest,
         ratingEvaluation,
       ] = await Promise.all([
@@ -764,6 +764,7 @@ export function App() {
         fetchFirstBoardRatings(),
         fetchAgentDataHealth(),
         fetchAgentSystemHealth(false),
+        fetchPredictionQualityAudit(),
         fetchRatingBacktest(),
         fetchRatingEvaluation(),
       ]);
@@ -777,6 +778,7 @@ export function App() {
         firstBoardRatings,
         agentDataHealth,
         systemHealth,
+        predictionQualityAudit,
         ratingBacktest,
         ratingEvaluation,
       });
@@ -949,6 +951,8 @@ function Overview({ data }: { data: DashboardData }) {
         evaluation={data.ratingEvaluation}
         latestTradeDate={data.summary.trade_date}
       />
+
+      <PredictionQualityAuditPanel audit={data.predictionQualityAudit} />
 
       <AgentEvalPanel />
 
@@ -1364,6 +1368,166 @@ function reviewLabelCopy(label: string) {
   };
   return labels[label] ?? label;
 }
+
+function PredictionQualityAuditPanel({
+  audit,
+}: {
+  audit: PredictionQualityAuditResponse;
+}) {
+  const recentCoverage = audit.date_coverage.slice(-12);
+  const policyStatus = audit.policy_status;
+  const modelBenchmark = audit.benchmarks.find(
+    (item) => item.benchmark === "audited_policy_top_k",
+  );
+  const earlyBenchmark = audit.benchmarks.find(
+    (item) => item.benchmark === "early_seal_top_k",
+  );
+  const modelDelta = modelBenchmark?.avg_next_open_to_close_pct !== null
+    && modelBenchmark?.avg_next_open_to_close_pct !== undefined
+    && earlyBenchmark?.avg_next_open_to_close_pct !== null
+    && earlyBenchmark?.avg_next_open_to_close_pct !== undefined
+    ? modelBenchmark.avg_next_open_to_close_pct - earlyBenchmark.avg_next_open_to_close_pct
+    : null;
+
+  return (
+    <Panel title="预测质量审计与评分 v3" icon={<BarChart3 size={18} />}>
+      <div className="quality-audit-panel">
+        <div className="quality-audit-heading">
+          <div>
+            <span>Prediction Quality</span>
+            <strong>{audit.start_date} 至 {audit.end_date}</strong>
+            <p>
+              按评分版本、预测来源和交易日成熟度去重审计，只在 Outcome 可用样本上比较同口径基线。
+            </p>
+          </div>
+          <div className={policyStatus.promotion_eligible ? "quality-ready" : "quality-shadow"}>
+            <small>v3 状态</small>
+            <strong>{policyStatus.promotion_eligible ? "满足晋级门槛" : "影子验证中"}</strong>
+            <span>
+              {policyStatus.outcome_ready_trade_dates} / {policyStatus.required_trade_dates} 个结果日
+            </span>
+          </div>
+        </div>
+
+        <div className="quality-audit-metrics">
+          <span>
+            <small>原始预测行</small>
+            <strong>{audit.raw_prediction_rows}</strong>
+          </span>
+          <span>
+            <small>当前版本去重</small>
+            <strong>{audit.canonical_prediction_count}</strong>
+          </span>
+          <span>
+            <small>成熟预测日</small>
+            <strong>{audit.next_day_mature_trade_date_count}</strong>
+          </span>
+          <span>
+            <small>Top10 完整日</small>
+            <strong>{audit.complete_next_day_trade_date_count}</strong>
+          </span>
+          <span>
+            <small>次日覆盖</small>
+            <strong>{formatPercent(audit.next_day_outcome_coverage_rate)}</strong>
+          </span>
+          <span>
+            <small>相对早封基线</small>
+            <strong className={modelDelta !== null && modelDelta >= 0 ? "positive" : "negative"}>
+              {modelDelta === null ? "暂无" : `${formatSigned(modelDelta, 2)}%`}
+            </strong>
+          </span>
+        </div>
+
+        <div className="quality-readiness">
+          <div>
+            <span>v3 样本准备度</span>
+            <strong>{formatPercent(policyStatus.readiness_rate)}</strong>
+          </div>
+          <div className="quality-readiness-track" aria-label="v3 样本准备度">
+            <span style={{ width: `${Math.min(policyStatus.readiness_rate * 100, 100)}%` }} />
+          </div>
+          <p>{policyStatus.gate_reasons[0] ?? "等待下一次 walk-forward 评估。"}</p>
+        </div>
+
+        <div className="quality-benchmark-table">
+          <div className="quality-benchmark-head">
+            <span>比较口径</span>
+            <span>样本</span>
+            <span>次日开盘→收盘</span>
+            <span>正收益率</span>
+            <span>晋级率</span>
+            <span>大跌率</span>
+            <span>三日回撤</span>
+          </div>
+          {audit.benchmarks.map((item) => (
+            <div className="quality-benchmark-row" key={item.benchmark}>
+              <strong>{item.label}</strong>
+              <span>{item.trade_date_count} 日 / {item.sample_size}</span>
+              <span className={(item.avg_next_open_to_close_pct ?? 0) >= 0 ? "positive" : "negative"}>
+                {formatOptionalPercent(item.avg_next_open_to_close_pct)}
+              </span>
+              <span>{item.positive_rate === null ? "暂无" : formatPercent(item.positive_rate)}</span>
+              <span>
+                {item.promoted_to_second_board_rate === null
+                  ? "暂无"
+                  : formatPercent(item.promoted_to_second_board_rate)}
+              </span>
+              <span>
+                {item.large_loss_rate === null ? "暂无" : formatPercent(item.large_loss_rate)}
+              </span>
+              <span>{formatOptionalPercent(item.avg_max_drawdown_from_next_open_3d)}</span>
+            </div>
+          ))}
+        </div>
+
+        <div className="quality-date-coverage">
+          <div className="quality-section-title">
+            <strong>最近交易日 Outcome 覆盖</strong>
+            <span>完整、部分、待回填和未成熟分开计算</span>
+          </div>
+          <div className="quality-date-strip">
+            {recentCoverage.map((item) => (
+              <div className={`coverage-${item.status}`} key={item.trade_date}>
+                <span>{item.trade_date.slice(5)}</span>
+                <strong>{item.next_day_ready_count}/{item.top_count}</strong>
+                <small>{predictionCoverageCopy[item.status]}</small>
+              </div>
+            ))}
+          </div>
+        </div>
+
+        <div className="quality-audit-notes">
+          <section>
+            <h3>审计结论</h3>
+            {audit.findings.map((item) => <p key={item}>{item}</p>)}
+          </section>
+          <section>
+            <h3>下一步动作</h3>
+            {audit.recommendations.map((item) => <p key={item}>{item}</p>)}
+          </section>
+        </div>
+
+        <div className="quality-policy-line">
+          <span>Champion</span>
+          <strong>{policyStatus.champion_version}</strong>
+          <span>Latest Challenger</span>
+          <strong>{policyStatus.latest_challenger_version ?? "尚未生成"}</strong>
+        </div>
+
+        <div className="quality-audit-warnings">
+          {audit.warnings.map((warning) => <span key={warning}>{warning}</span>)}
+        </div>
+      </div>
+    </Panel>
+  );
+}
+
+const predictionCoverageCopy = {
+  complete: "完整",
+  partial: "部分",
+  pending: "待回填",
+  not_mature: "未成熟",
+};
 
 function AgentEvalPanel() {
   const [report, setReport] = useState<AgentEvalReportResponse | null>(null);
@@ -2038,6 +2202,7 @@ function StockDetail({ data }: { data: DashboardData }) {
   const { symbol = "" } = useParams();
   const [kline, setKline] = useState<StockKLineBar[]>([]);
   const [tradingDayKline, setTradingDayKline] = useState<StockIntradayKLineBar[]>([]);
+  const [chartMode, setChartMode] = useState<"daily" | "intraday">("daily");
   const [latestClose, setLatestClose] = useState<StockCloseSnapshot | null>(null);
   const [similarCases, setSimilarCases] = useState<SimilarFirstBoardCasesResponse | null>(null);
   const [critic, setCritic] = useState<FirstBoardCriticResponse | null>(null);
@@ -2091,16 +2256,16 @@ function StockDetail({ data }: { data: DashboardData }) {
 
     setKlineLoading(true);
     setKlineError(null);
-    fetchStockKLine(symbol, 5)
+    fetchStockKLine(symbol, 60)
       .then(setKline)
       .catch((caught) => {
-        setKlineError(caught instanceof Error ? caught.message : "加载五日 K 线失败");
+        setKlineError(caught instanceof Error ? caught.message : "加载 60 日 K 线失败");
       })
       .finally(() => setKlineLoading(false));
 
     setTradingDayLoading(true);
     setTradingDayError(null);
-    fetchStockTradingDayKLine(symbol, 5)
+    fetchStockTradingDayKLine(symbol, 1)
       .then(setTradingDayKline)
       .catch((caught) => {
         setTradingDayError(caught instanceof Error ? caught.message : "加载交易日走势失败");
@@ -2179,27 +2344,50 @@ function StockDetail({ data }: { data: DashboardData }) {
         </div>
       </Panel>
 
-      <section className="stock-kline-grid">
-        <Panel title="五日 K 线" icon={<LineChart size={18} />}>
-          {klineLoading ? (
-            <div className="chart-state">正在加载 K 线...</div>
-          ) : klineError ? (
-            <div className="chart-state">{klineError}</div>
-          ) : (
-            <CandlestickChart bars={toDailyCandleBars(kline)} emptyLabel="暂无五日 K 线数据" />
+      <section className="stock-market-chart">
+        <Panel
+          title="行情走势"
+          icon={<LineChart size={18} />}
+          actions={(
+            <div className="chart-mode-switch" aria-label="行情周期">
+              <button
+                type="button"
+                aria-pressed={chartMode === "daily"}
+                onClick={() => setChartMode("daily")}
+              >
+                日 K · 60日
+              </button>
+              <button
+                type="button"
+                aria-pressed={chartMode === "intraday"}
+                onClick={() => setChartMode("intraday")}
+              >
+                分时
+              </button>
+            </div>
           )}
-        </Panel>
-
-        <Panel title="交易日走势" icon={<LineChart size={18} />}>
-          {tradingDayLoading ? (
+        >
+          {chartMode === "daily" ? (
+            klineLoading ? (
+              <div className="chart-state">正在加载 60 日 K 线...</div>
+            ) : klineError ? (
+              <div className="chart-state">{klineError}</div>
+            ) : (
+              <MarketKLineChart
+                bars={toDailyCandleBars(kline)}
+                emptyLabel="暂无 60 日 K 线数据"
+                mode="daily"
+              />
+            )
+          ) : tradingDayLoading ? (
             <div className="chart-state">正在加载交易日走势...</div>
           ) : tradingDayError ? (
             <div className="chart-state">{tradingDayError}</div>
           ) : (
-            <CandlestickChart
+            <MarketKLineChart
               bars={toIntradayCandleBars(tradingDayKline)}
               emptyLabel="暂无交易日走势数据"
-              dense
+              mode="intraday"
             />
           )}
         </Panel>
@@ -2553,121 +2741,33 @@ function Fact({ label, value }: { label: string; value: string }) {
   );
 }
 
-function toDailyCandleBars(bars: StockKLineBar[]): CandleBar[] {
+function toDailyCandleBars(bars: StockKLineBar[]): MarketCandleBar[] {
   /** Convert API daily K-line bars into chart-friendly candle bars. */
 
   return bars.map((bar) => ({
-    label: bar.trade_date.slice(5),
+    time: bar.trade_date,
+    label: bar.trade_date,
     open: bar.open,
     close: bar.close,
     high: bar.high,
     low: bar.low,
+    volume: bar.volume,
   }));
 }
 
-function toIntradayCandleBars(bars: StockIntradayKLineBar[]): CandleBar[] {
+function toIntradayCandleBars(bars: StockIntradayKLineBar[]): MarketCandleBar[] {
   /** Convert API intraday bars into chart-friendly candle bars. */
 
   return bars.map((bar) => ({
+    time: Math.floor(new Date(bar.timestamp).getTime() / 1000),
     label: bar.timestamp.slice(11, 16),
     open: bar.open,
     close: bar.close,
     high: bar.high,
     low: bar.low,
+    volume: bar.volume,
+    amount: bar.amount,
   }));
-}
-
-function CandlestickChart({
-  bars,
-  emptyLabel,
-  dense = false,
-}: {
-  bars: CandleBar[];
-  emptyLabel: string;
-  dense?: boolean;
-}) {
-  /** Draw a lightweight SVG candlestick chart without external chart libraries. */
-
-  if (bars.length === 0) {
-    return <div className="chart-state">{emptyLabel}</div>;
-  }
-
-  const width = 640;
-  const height = 300;
-  const padding = { top: 24, right: 28, bottom: 42, left: 56 };
-  const chartWidth = width - padding.left - padding.right;
-  const chartHeight = height - padding.top - padding.bottom;
-  const prices = bars.flatMap((bar) => [bar.high, bar.low]);
-  const minPrice = Math.min(...prices);
-  const maxPrice = Math.max(...prices);
-  const priceRange = maxPrice - minPrice || 1;
-  const candleWidth = Math.max(
-    dense ? 3 : 12,
-    Math.min(dense ? 10 : 44, chartWidth / Math.max(bars.length, 1) * 0.45),
-  );
-
-  function xFor(index: number) {
-    return padding.left + (index + 0.5) * (chartWidth / bars.length);
-  }
-
-  function yFor(price: number) {
-    return padding.top + ((maxPrice - price) / priceRange) * chartHeight;
-  }
-
-  const gridPrices = [maxPrice, (maxPrice + minPrice) / 2, minPrice];
-
-  return (
-    <div className="kline-wrap">
-      <svg className="kline-chart" viewBox={`0 0 ${width} ${height}`} role="img" aria-label="K 线图">
-        {gridPrices.map((price) => {
-          const y = yFor(price);
-          return (
-            <g key={price}>
-              <line x1={padding.left} x2={width - padding.right} y1={y} y2={y} />
-              <text x={padding.left - 10} y={y + 4} textAnchor="end">
-                {price.toFixed(2)}
-              </text>
-            </g>
-          );
-        })}
-
-        {bars.map((bar, index) => {
-          const x = xFor(index);
-          const openY = yFor(bar.open);
-          const closeY = yFor(bar.close);
-          const highY = yFor(bar.high);
-          const lowY = yFor(bar.low);
-          const rising = bar.close >= bar.open;
-          const bodyY = Math.min(openY, closeY);
-          const bodyHeight = Math.max(Math.abs(closeY - openY), 3);
-
-          return (
-            <g className={rising ? "kline-up" : "kline-down"} key={`${bar.label}-${index}`}>
-              <line className="wick" x1={x} x2={x} y1={highY} y2={lowY} />
-              <rect
-                x={x - candleWidth / 2}
-                y={bodyY}
-                width={candleWidth}
-                height={bodyHeight}
-                rx={2}
-              />
-              {(!dense || index % 8 === 0 || index === bars.length - 1) ? (
-                <text x={x} y={height - 16} textAnchor="middle">
-                  {bar.label}
-                </text>
-              ) : null}
-            </g>
-          );
-        })}
-      </svg>
-      <div className="kline-caption">
-        <span>开</span>
-        <span>高</span>
-        <span>低</span>
-        <span>收</span>
-      </div>
-    </div>
-  );
 }
 
 function ShellState({
@@ -2732,10 +2832,12 @@ function EntryCard({
 function Panel({
   title,
   icon,
+  actions,
   children,
 }: {
   title: string;
   icon: ReactNode;
+  actions?: ReactNode;
   children: ReactNode;
 }) {
   return (
@@ -2745,6 +2847,7 @@ function Panel({
           {icon}
           <h2>{title}</h2>
         </div>
+        {actions}
       </header>
       {children}
     </section>

@@ -224,15 +224,25 @@ def initialize_database(connection: sqlite3.Connection) -> None:
             dragon_tiger_buy_amount REAL,
             dragon_tiger_sell_amount REAL,
             dragon_tiger_reason TEXT,
+            dragon_tiger_source TEXT,
             popularity_rank INTEGER,
             popularity_rank_change INTEGER,
             popularity_snapshot_at TEXT,
+            popularity_source TEXT,
             data_missing_json TEXT NOT NULL,
             feature_version TEXT NOT NULL,
             created_at TEXT NOT NULL,
             PRIMARY KEY (trade_date, symbol)
         )
         """
+    )
+    _ensure_columns(
+        connection,
+        "first_board_enrichment_snapshots",
+        {
+            "dragon_tiger_source": "TEXT",
+            "popularity_source": "TEXT",
+        },
     )
     connection.execute(
         """

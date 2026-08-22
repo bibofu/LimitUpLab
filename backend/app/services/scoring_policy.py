@@ -22,7 +22,7 @@ FACTOR_NAMES: dict[str, str] = {
     "sector_relay": "板块强度与接力",
     "profile_history": "流通盘与近期股性",
     "dragon_tiger": "龙虎榜资金",
-    "popularity": "东方财富人气",
+    "popularity": "市场人气",
 }
 
 FACTOR_KEYS_BY_NAME = {name: key for key, name in FACTOR_NAMES.items()}

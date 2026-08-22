@@ -63,6 +63,18 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertFalse(signals.evaluation)
         self.assertFalse(signals.rating_explanation)
 
+    def test_prediction_quality_has_one_policy_scope(self) -> None:
+        signals = QuestionSignals.from_message(
+            "做一次预测质量审计，评分 v3 准备好了吗"
+        )
+
+        self.assertTrue(signals.prediction_quality)
+        self.assertFalse(signals.rating_backtest)
+        self.assertFalse(signals.evaluation)
+        self.assertFalse(signals.review)
+        self.assertFalse(signals.scoring_policy)
+        self.assertFalse(signals.rating_explanation)
+
     def test_exhaustive_first_board_list_is_not_a_rating_question(self) -> None:
         signals = QuestionSignals.from_message("列出今天所有首板")
 
@@ -124,6 +136,20 @@ class AgentToolPolicyTest(unittest.TestCase):
         )
         self.assertEqual(audit.backend_repaired_tools, ["first_board_ratings"])
         self.assertEqual(audit.repair_reasons, [repair["reason"]])
+
+    def test_prediction_quality_repair_returns_coverage_facts(self) -> None:
+        request = AgentChatRequest(
+            session_id="policy-test",
+            message="评分 v3 准备好了吗，检查预测质量",
+        )
+        execution = self._empty_execution()
+
+        repaired = self.policy.reconcile(request=request, execution=execution)
+
+        self.assertEqual(repaired, ["prediction_quality_audit"])
+        payload = execution["facts"]["prediction_quality_audit"]
+        self.assertEqual(payload["audited_scoring_version"], "first-board-rule-v2-enriched")
+        self.assertEqual(payload["policy_status"]["required_trade_dates"], 60)
 
     def test_missing_date_short_circuits_domain_tools(self) -> None:
         request = AgentChatRequest(

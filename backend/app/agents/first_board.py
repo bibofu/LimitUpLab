@@ -421,9 +421,12 @@ def _score_popularity(
 ) -> ScoreBreakdownItem:
     """Score attention confirmation while limiting crowding bias."""
 
-    if enrichment is None or "eastmoney_popularity" in enrichment.data_missing:
+    if enrichment is None or any(
+        item in enrichment.data_missing
+        for item in ("popularity_snapshot", "eastmoney_popularity")
+    ):
         return ScoreBreakdownItem(
-            name="东方财富人气",
+            name="市场人气",
             score=2,
             max_score=4,
             evidence=["人气快照缺失，按中性分处理"],
@@ -431,10 +434,10 @@ def _score_popularity(
     rank = enrichment.popularity_rank
     if rank is None:
         return ScoreBreakdownItem(
-            name="东方财富人气",
+            name="市场人气",
             score=1.5,
             max_score=4,
-            evidence=["未进入东方财富人气 Top100"],
+            evidence=["未进入已接入的人气榜单"],
         )
     if rank <= 5:
         score = 2.5
@@ -452,7 +455,7 @@ def _score_popularity(
         score += 1
         label += "，排名快速上升"
     return ScoreBreakdownItem(
-        name="东方财富人气",
+        name="市场人气",
         score=min(4, score),
         max_score=4,
         evidence=[f"收盘后人气排名第 {rank}，{label}"],
@@ -619,7 +622,7 @@ def _calculate_confidence(facts: FirstBoardCandidateFacts) -> float:
         confidence -= 0.15
     if "kline_20d" in missing:
         confidence -= 0.12
-    if "eastmoney_popularity" in missing:
+    if "popularity_snapshot" in missing or "eastmoney_popularity" in missing:
         confidence -= 0.04
     if "listing_date" in missing:
         confidence -= 0.03

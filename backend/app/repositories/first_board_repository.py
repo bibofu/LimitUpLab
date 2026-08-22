@@ -211,13 +211,14 @@ class SQLiteFirstBoardRepository:
                     industry_first_limit_rank, previous_first_board_promotion_rate,
                     market_first_board_seal_rate, dragon_tiger_on_list,
                     dragon_tiger_net_buy_amount, dragon_tiger_buy_amount,
-                    dragon_tiger_sell_amount, dragon_tiger_reason, popularity_rank,
-                    popularity_rank_change, popularity_snapshot_at,
+                    dragon_tiger_sell_amount, dragon_tiger_reason,
+                    dragon_tiger_source, popularity_rank,
+                    popularity_rank_change, popularity_snapshot_at, popularity_source,
                     data_missing_json, feature_version, created_at
                 )
                 VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 ON CONFLICT(trade_date, symbol) DO UPDATE SET
                     kline_bar_count = excluded.kline_bar_count,
@@ -248,9 +249,11 @@ class SQLiteFirstBoardRepository:
                     dragon_tiger_buy_amount = excluded.dragon_tiger_buy_amount,
                     dragon_tiger_sell_amount = excluded.dragon_tiger_sell_amount,
                     dragon_tiger_reason = excluded.dragon_tiger_reason,
+                    dragon_tiger_source = excluded.dragon_tiger_source,
                     popularity_rank = excluded.popularity_rank,
                     popularity_rank_change = excluded.popularity_rank_change,
                     popularity_snapshot_at = excluded.popularity_snapshot_at,
+                    popularity_source = excluded.popularity_source,
                     data_missing_json = excluded.data_missing_json,
                     feature_version = excluded.feature_version,
                     created_at = excluded.created_at
@@ -701,9 +704,11 @@ class SQLiteFirstBoardRepository:
             item.dragon_tiger_buy_amount,
             item.dragon_tiger_sell_amount,
             item.dragon_tiger_reason,
+            item.dragon_tiger_source,
             item.popularity_rank,
             item.popularity_rank_change,
             item.popularity_snapshot_at.isoformat() if item.popularity_snapshot_at else None,
+            item.popularity_source,
             json.dumps(item.data_missing, ensure_ascii=False),
             item.feature_version,
             item.created_at.isoformat(),
@@ -846,11 +851,13 @@ class SQLiteFirstBoardRepository:
             dragon_tiger_buy_amount=row["dragon_tiger_buy_amount"],
             dragon_tiger_sell_amount=row["dragon_tiger_sell_amount"],
             dragon_tiger_reason=row["dragon_tiger_reason"],
+            dragon_tiger_source=row["dragon_tiger_source"],
             popularity_rank=row["popularity_rank"],
             popularity_rank_change=row["popularity_rank_change"],
             popularity_snapshot_at=datetime.fromisoformat(row["popularity_snapshot_at"])
             if row["popularity_snapshot_at"]
             else None,
+            popularity_source=row["popularity_source"],
             data_missing=json.loads(row["data_missing_json"]),
             feature_version=row["feature_version"],
             created_at=datetime.fromisoformat(row["created_at"]),

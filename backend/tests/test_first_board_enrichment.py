@@ -106,7 +106,9 @@ class FirstBoardEnrichmentTest(unittest.TestCase):
         self.assertEqual(enrichment.listing_date, date(2020, 1, 2))
         self.assertEqual(enrichment.float_market_cap, 4_200_000_000)
         self.assertEqual(enrichment.float_market_cap_source, "eastmoney_dragon_tiger")
+        self.assertEqual(enrichment.dragon_tiger_source, "eastmoney")
         self.assertEqual(enrichment.popularity_rank, 18)
+        self.assertEqual(enrichment.popularity_source, "eastmoney")
 
         rating = ratings.candidates[0]
         self.assertIsNotNone(rating.facts.enrichment)

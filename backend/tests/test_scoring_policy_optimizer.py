@@ -62,7 +62,7 @@ class ScoringPolicyOptimizerTest(unittest.TestCase):
         self.addCleanup(self._cleanup_database, database_path)
         first_board_repository = SQLiteFirstBoardRepository(database_path)
         policy_repository = SQLiteScoringPolicyRepository(database_path)
-        events, outcomes = self._history(days=10)
+        events, outcomes = self._history(days=14)
         first_board_repository.upsert_outcomes(outcomes)
 
         report = optimize_scoring_policy(
@@ -79,9 +79,30 @@ class ScoringPolicyOptimizerTest(unittest.TestCase):
 
         self.assertFalse(report.comparison.promotion_eligible)
         self.assertFalse(report.activated)
-        self.assertEqual(len(report.train_dates), 6)
+        self.assertEqual(len(report.train_dates), 9)
         self.assertEqual(len(report.validation_dates), 2)
         self.assertEqual(len(report.test_dates), 2)
+        self.assertTrue(report.challenger_policy.version.startswith("first-board-rule-v3-"))
+        self.assertEqual(
+            set(report.target_correlations),
+            {
+                "next_open_to_close",
+                "promotion",
+                "downside_protection",
+                "composite",
+            },
+        )
+        self.assertGreaterEqual(len(report.walk_forward_folds), 1)
+        tested_dates = [
+            trade_date
+            for fold in report.walk_forward_folds
+            for trade_date in fold.test_dates
+        ]
+        self.assertEqual(len(tested_dates), len(set(tested_dates)))
+        self.assertIn(
+            "结果完整交易日只有 14",
+            " ".join(report.comparison.gate_reasons),
+        )
         self.assertEqual(
             policy_repository.get_champion().version,
             build_default_scoring_policy().version,

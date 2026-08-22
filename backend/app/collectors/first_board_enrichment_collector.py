@@ -4,12 +4,16 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+from typing import TYPE_CHECKING
 
 import akshare as ak
 import pandas as pd
 import requests
 
 from app.collectors.network import without_proxy
+
+if TYPE_CHECKING:
+    from app.collectors.hithink_finance_collector import HithinkDragonTigerFact
 
 
 @dataclass(frozen=True)
@@ -22,6 +26,7 @@ class DragonTigerFact:
     net_buy_amount: float | None
     float_market_cap: float | None
     reason: str | None
+    source: str = "eastmoney"
 
 
 @dataclass(frozen=True)
@@ -32,6 +37,62 @@ class PopularityFact:
     rank: int
     rank_change: int | None
     captured_at: datetime
+    source: str = "eastmoney"
+
+
+def collect_preferred_dragon_tiger_facts(
+    trade_date: date,
+) -> dict[str, DragonTigerFact]:
+    """Use Tonghuashun first and fall back to the existing AkShare source."""
+
+    try:
+        from app.collectors.hithink_finance_collector import HithinkFinanceCollector
+
+        snapshot = HithinkFinanceCollector().collect_dragon_tiger(
+            trade_date=trade_date,
+            board_type="all",
+            limit=200,
+        )
+        preferred_rows = _representative_hithink_dragon_tiger_rows(snapshot.items)
+        if preferred_rows:
+            return {
+                item.symbol: DragonTigerFact(
+                    symbol=item.symbol,
+                    buy_amount=item.buy_amount,
+                    sell_amount=item.sell_amount,
+                    net_buy_amount=item.net_buy_amount,
+                    float_market_cap=None,
+                    reason=item.limit_reason,
+                    source=snapshot.source,
+                )
+                for item in preferred_rows
+            }
+    except Exception:  # noqa: BLE001
+        pass
+    return collect_dragon_tiger_facts(trade_date)
+
+
+def collect_preferred_popularity() -> dict[str, PopularityFact]:
+    """Use Tonghuashun popularity first and fall back to Eastmoney Top100."""
+
+    try:
+        from app.collectors.hithink_finance_collector import HithinkFinanceCollector
+
+        snapshot = HithinkFinanceCollector().collect_hot_stocks(period="day", limit=100)
+        if snapshot.items:
+            return {
+                item.symbol: PopularityFact(
+                    symbol=item.symbol,
+                    rank=item.rank,
+                    rank_change=item.rank_change,
+                    captured_at=snapshot.captured_at,
+                    source=snapshot.source,
+                )
+                for item in snapshot.items
+            }
+    except Exception:  # noqa: BLE001
+        pass
+    return collect_eastmoney_popularity()
 
 
 def collect_dragon_tiger_facts(trade_date: date) -> dict[str, DragonTigerFact]:
@@ -151,3 +212,21 @@ def _optional_text(value: object) -> str | None:
         return None
     text = str(value).strip()
     return text or None
+
+
+def _representative_hithink_dragon_tiger_rows(
+    rows: list[HithinkDragonTigerFact],
+) -> list[HithinkDragonTigerFact]:
+    """Deduplicate multi-day board rows, preferring the one-day record."""
+
+    selected: dict[str, HithinkDragonTigerFact] = {}
+    for item in rows:
+        current = selected.get(item.symbol)
+        if current is None or _dragon_tiger_priority(item) < _dragon_tiger_priority(current):
+            selected[item.symbol] = item
+    return [selected[symbol] for symbol in sorted(selected)]
+
+
+def _dragon_tiger_priority(item: HithinkDragonTigerFact) -> tuple[bool, float]:
+    turnover = (item.buy_amount or 0) + (item.sell_amount or 0)
+    return (item.range_days != 1, -turnover)

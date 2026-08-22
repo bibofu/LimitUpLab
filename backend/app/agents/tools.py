@@ -1,11 +1,12 @@
 """Tool registry and schemas for the first-board Agent."""
 
 import json
-from dataclasses import dataclass, field
+from dataclasses import asdict, dataclass, field
 from datetime import date
 from typing import Any
 
 from app.agents.first_board import build_first_board_ratings
+from app.collectors import HithinkFinanceCollector
 from app.models import (
     AgentEvaluationResponse,
     AgentToolTrace,
@@ -13,6 +14,7 @@ from app.models import (
     FirstBoardRatingsResponse,
     LimitUpEvent,
     MarketSummary,
+    PredictionQualityAuditResponse,
     RatingBacktestResponse,
     SectorPerformanceFacts,
     SimilarFirstBoardCasesResponse,
@@ -23,6 +25,7 @@ from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepo
 from app.services.analysis import events_for_date, summarize_market
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.first_board_critic import build_first_board_critic
+from app.services.prediction_quality_audit import build_prediction_quality_audit
 from app.services.rating_backtest import build_rating_backtest
 from app.services.sector_performance import build_sector_performance
 from app.services.similar_cases import find_similar_first_board_cases
@@ -122,6 +125,82 @@ TOOL_SCHEMAS = [
             "Sector change, market rank, breadth, turnover, fund flow, leader, "
             "5/20-day returns and top/bottom sector rankings."
         ),
+    ),
+    AgentToolSchema(
+        name="hot_stock_ranking",
+        description=(
+            "查询同花顺当前热股榜和热度排名变化。适合回答市场关注度、热门股票、"
+            "某只股票当前人气排名等问题；榜单热度不代表投资价值。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "period": {
+                    "type": "string",
+                    "enum": ["day", "hour"],
+                    "description": "Ranking period; defaults to day.",
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 30},
+            },
+            "required": [],
+        },
+        returns="Tonghuashun hot-stock rank, heat, rank change and capture time.",
+    ),
+    AgentToolSchema(
+        name="dragon_tiger_list",
+        description=(
+            "查询同花顺龙虎榜，可按交易日、机构/游资榜类型和股票名称或代码过滤，"
+            "返回买卖额、净买额、机构净买、游资净买、热度排名和相关题材。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "trade_date": {
+                    "type": ["string", "null"],
+                    "description": "YYYY-MM-DD; omit for the latest available list.",
+                },
+                "board_type": {
+                    "type": "string",
+                    "enum": ["all", "org", "hot_money"],
+                },
+                "query": {
+                    "type": ["string", "null"],
+                    "description": "Optional exact/partial stock name or six-digit symbol.",
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+            },
+            "required": [],
+        },
+        returns="Tonghuashun Dragon-Tiger List rows and capital-flow evidence.",
+    ),
+    AgentToolSchema(
+        name="remote_limit_up_pool",
+        description=(
+            "查询同花顺远端涨停池，包含首板/连板高度、封板时间、涨停原因、封单额、"
+            "ST和新股标记。适合当前或指定交易日的实时/权威涨停池核验。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "trade_date": {
+                    "type": ["string", "null"],
+                    "description": "YYYY-MM-DD; omit for current upstream snapshot.",
+                },
+                "board_height": {
+                    "type": ["integer", "null"],
+                    "description": "1 for first-board, 2 for second-board, etc.",
+                },
+                "query": {
+                    "type": ["string", "null"],
+                    "description": "Optional stock name, symbol or limit-up reason keyword.",
+                },
+                "exclude_st": {"type": "boolean"},
+                "exclude_new": {"type": "boolean"},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+            },
+            "required": [],
+        },
+        returns="Filtered Tonghuashun limit-up pool with board height and seal facts.",
     ),
     AgentToolSchema(
         name="first_board_ratings",
@@ -227,6 +306,30 @@ TOOL_SCHEMAS = [
         returns="Daily OHLCV bars, data freshness, trend, returns, moving averages, volume ratio and drawdown.",
     ),
     AgentToolSchema(
+        name="prediction_quality_audit",
+        description=(
+            "审计首板预测的数据覆盖、版本/来源重复、时间成熟度、Top10 表现和简单基线，"
+            "用于回答预测质量、准确率可信度和评分 v3 准备度问题。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "start_date": {"type": "string", "description": "YYYY-MM-DD inclusive start date."},
+                "end_date": {"type": "string", "description": "YYYY-MM-DD inclusive end date."},
+                "scoring_version": {
+                    "type": ["string", "null"],
+                    "description": "Scoring version; omit for current Champion.",
+                },
+                "top_k": {"type": "integer", "minimum": 3, "maximum": 30},
+            },
+            "required": [],
+        },
+        returns=(
+            "Source-aware prediction coverage, date maturity, deterministic "
+            "baselines, findings and v3 promotion readiness."
+        ),
+    ),
+    AgentToolSchema(
         name="rating_backtest",
         description="回测一段日期内首板评分 A/B/C/D 的后续表现，并输出评分自我评价。",
         args_schema={
@@ -320,11 +423,13 @@ class AgentToolRegistry:
         self,
         events: list[LimitUpEvent],
         first_board_repository: SQLiteFirstBoardRepository | None = None,
+        hithink_collector: HithinkFinanceCollector | None = None,
     ):
         """Create a registry bound to current request data dependencies."""
 
         self.events = events
         self.first_board_repository = first_board_repository or SQLiteFirstBoardRepository()
+        self.hithink_collector = hithink_collector or HithinkFinanceCollector()
 
     def schemas(self) -> list[AgentToolSchema]:
         """Return the LLM-facing tool schemas."""
@@ -405,6 +510,147 @@ class AgentToolRegistry:
             output=response,
             summary=summary,
             trace_output=trace_output,
+        )
+
+    def hot_stock_ranking(
+        self,
+        period: str = "day",
+        limit: int = 20,
+    ) -> ToolResult:
+        """Return a bounded Tonghuashun popularity ranking snapshot."""
+
+        snapshot = self.hithink_collector.collect_hot_stocks(
+            period=period,
+            limit=max(1, min(limit, 30)),
+        )
+        items = [asdict(item) for item in snapshot.items]
+        payload = {
+            "source": snapshot.source,
+            "captured_at": snapshot.captured_at.isoformat(),
+            "period": snapshot.period,
+            "count": len(items),
+            "items": items,
+        }
+        leaders = "、".join(
+            f"{item.name}({item.symbol})第{item.rank}名"
+            for item in snapshot.items[:5]
+        )
+        return ToolResult(
+            name="hot_stock_ranking",
+            input={"period": period, "limit": limit},
+            output=payload,
+            summary=f"同花顺热股榜返回 {len(items)} 只{f'：{leaders}' if leaders else '。'}",
+            trace_output=payload,
+        )
+
+    def dragon_tiger_list(
+        self,
+        *,
+        trade_date: date | None = None,
+        board_type: str = "all",
+        query: str | None = None,
+        limit: int = 30,
+    ) -> ToolResult:
+        """Return bounded Tonghuashun Dragon-Tiger capital-flow facts."""
+
+        snapshot = self.hithink_collector.collect_dragon_tiger(
+            trade_date=trade_date,
+            board_type=board_type,
+            query=query,
+            limit=max(1, min(limit, 100)),
+        )
+        items = [asdict(item) for item in snapshot.items]
+        payload = {
+            "source": snapshot.source,
+            "trade_date": snapshot.trade_date.isoformat() if snapshot.trade_date else None,
+            "board_type": snapshot.board_type,
+            "stock_count": snapshot.stock_count,
+            "matched_count": len(items),
+            "items": items,
+        }
+        names = "、".join(
+            f"{item.name}({item.symbol})"
+            for item in snapshot.items[:5]
+        )
+        return ToolResult(
+            name="dragon_tiger_list",
+            input={
+                "trade_date": trade_date.isoformat() if trade_date else None,
+                "board_type": board_type,
+                "query": query,
+                "limit": limit,
+            },
+            output=payload,
+            summary=(
+                f"{payload['trade_date'] or '最新'} 同花顺龙虎榜命中 {len(items)} 条"
+                f"{f'：{names}' if names else '。'}"
+            ),
+            trace_output=payload,
+        )
+
+    def remote_limit_up_pool(
+        self,
+        *,
+        trade_date: date | None = None,
+        board_height: int | None = None,
+        query: str | None = None,
+        exclude_st: bool = True,
+        exclude_new: bool = True,
+        limit: int = 100,
+    ) -> ToolResult:
+        """Return a filtered Tonghuashun remote limit-up pool."""
+
+        snapshot = self.hithink_collector.collect_limit_up_pool(
+            trade_date=trade_date,
+            page=1,
+            size=200,
+            sort_field="limit_up_time",
+            sort_direction="asc",
+        )
+        normalized_query = (query or "").strip().lower()
+        items = [
+            item
+            for item in snapshot.items
+            if (board_height is None or item.board_height == board_height)
+            and (not exclude_st or not item.is_st)
+            and (not exclude_new or not item.is_new)
+            and (
+                not normalized_query
+                or normalized_query in item.symbol.lower()
+                or normalized_query in item.name.lower()
+                or normalized_query in (item.limit_up_reason or "").lower()
+            )
+        ][: max(1, min(limit, 100))]
+        serialized = [asdict(item) for item in items]
+        payload = {
+            "source": snapshot.source,
+            "trade_date": snapshot.trade_date.isoformat() if snapshot.trade_date else None,
+            "upstream_total": snapshot.total,
+            "matched_count": len(serialized),
+            "board_height": board_height,
+            "items": serialized,
+        }
+        names = "、".join(
+            f"{item.name}({item.symbol})"
+            for item in items[:5]
+        )
+        board_text = f"{board_height}板" if board_height else "涨停"
+        return ToolResult(
+            name="remote_limit_up_pool",
+            input={
+                "trade_date": trade_date.isoformat() if trade_date else None,
+                "board_height": board_height,
+                "query": query,
+                "exclude_st": exclude_st,
+                "exclude_new": exclude_new,
+                "limit": limit,
+            },
+            output=payload,
+            summary=(
+                f"同花顺{board_text}池共 {snapshot.total} 只，筛选后 {len(items)} 只"
+                f"{f'：{names}' if names else '。'}"
+            ),
+            trace_output=payload,
         )
 
     def web_search(self, query: str, limit: int = 5) -> ToolResult:
@@ -718,6 +964,57 @@ class AgentToolRegistry:
             trace_output=trace_output,
         )
 
+    def prediction_quality_audit(
+        self,
+        start_date: date,
+        end_date: date,
+        scoring_version: str | None = None,
+        top_k: int = 10,
+    ) -> ToolResult:
+        """Return prediction coverage, baselines and v3 readiness facts."""
+
+        response: PredictionQualityAuditResponse = build_prediction_quality_audit(
+            events=self.events,
+            start_date=start_date,
+            end_date=end_date,
+            first_board_repository=self.first_board_repository,
+            scoring_version=scoring_version,
+            top_k=top_k,
+        )
+        trace_output = {
+            "start_date": response.start_date.isoformat(),
+            "end_date": response.end_date.isoformat(),
+            "audited_scoring_version": response.audited_scoring_version,
+            "raw_prediction_rows": response.raw_prediction_rows,
+            "canonical_prediction_count": response.canonical_prediction_count,
+            "complete_next_day_trade_date_count": (
+                response.complete_next_day_trade_date_count
+            ),
+            "next_day_outcome_coverage_rate": (
+                response.next_day_outcome_coverage_rate
+            ),
+            "benchmarks": [
+                item.model_dump(mode="json") for item in response.benchmarks
+            ],
+            "policy_status": response.policy_status.model_dump(mode="json"),
+        }
+        return ToolResult(
+            name="prediction_quality_audit",
+            input={
+                "start_date": start_date.isoformat(),
+                "end_date": end_date.isoformat(),
+                "scoring_version": scoring_version,
+                "top_k": top_k,
+            },
+            output=response,
+            summary=(
+                f"审计 {response.prediction_trade_date_count} 个预测日，"
+                f"{response.complete_next_day_trade_date_count} 日 Top{response.top_k} "
+                f"结果完整，次日覆盖率 {response.next_day_outcome_coverage_rate:.1%}。"
+            ),
+            trace_output=trace_output,
+        )
+
     def first_board_critic(
         self,
         symbol: str,
@@ -894,3 +1191,37 @@ class AgentToolRegistry:
             ),
             trace_output=trace_output,
         )
+
+
+def compact_prediction_quality_audit(
+    response: PredictionQualityAuditResponse,
+) -> dict[str, Any]:
+    """Trim per-date details before placing an audit report in an LLM prompt."""
+
+    return {
+        "start_date": response.start_date.isoformat(),
+        "end_date": response.end_date.isoformat(),
+        "audited_scoring_version": response.audited_scoring_version,
+        "top_k": response.top_k,
+        "raw_prediction_rows": response.raw_prediction_rows,
+        "canonical_prediction_count": response.canonical_prediction_count,
+        "cross_cohort_duplicate_rows": response.cross_cohort_duplicate_rows,
+        "data_as_of_violation_count": response.data_as_of_violation_count,
+        "prediction_trade_date_count": response.prediction_trade_date_count,
+        "next_day_mature_trade_date_count": (
+            response.next_day_mature_trade_date_count
+        ),
+        "complete_next_day_trade_date_count": (
+            response.complete_next_day_trade_date_count
+        ),
+        "next_day_outcome_coverage_rate": response.next_day_outcome_coverage_rate,
+        "three_day_outcome_coverage_rate": response.three_day_outcome_coverage_rate,
+        "cohorts": [item.model_dump(mode="json") for item in response.cohorts],
+        "benchmarks": [
+            item.model_dump(mode="json") for item in response.benchmarks
+        ],
+        "policy_status": response.policy_status.model_dump(mode="json"),
+        "findings": response.findings,
+        "recommendations": response.recommendations,
+        "warnings": response.warnings,
+    }

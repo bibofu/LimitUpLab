@@ -9,8 +9,21 @@ from app.collectors.first_board_enrichment_collector import (
     PopularityFact,
     collect_dragon_tiger_facts,
     collect_eastmoney_popularity,
+    collect_preferred_dragon_tiger_facts,
+    collect_preferred_popularity,
     collect_listing_date,
     collect_recent_listing_dates,
+)
+from app.collectors.hithink_finance_collector import (
+    HITHINK_SOURCE,
+    HithinkDragonTigerFact,
+    HithinkDragonTigerSnapshot,
+    HithinkFinanceCollector,
+    HithinkFinanceError,
+    HithinkHotStockFact,
+    HithinkHotStockSnapshot,
+    HithinkLimitUpFact,
+    HithinkLimitUpPoolSnapshot,
 )
 from app.collectors.stock_kline_collector import (
     collect_stock_close_snapshot,
@@ -23,6 +36,8 @@ __all__ = [
     "collect_limit_up_events",
     "collect_dragon_tiger_facts",
     "collect_eastmoney_popularity",
+    "collect_preferred_dragon_tiger_facts",
+    "collect_preferred_popularity",
     "collect_listing_date",
     "collect_market_indices",
     "collect_sector_history",
@@ -34,6 +49,15 @@ __all__ = [
     "collect_stock_spot_klines",
     "parse_akshare_trade_date",
     "DragonTigerFact",
+    "HITHINK_SOURCE",
+    "HithinkDragonTigerFact",
+    "HithinkDragonTigerSnapshot",
+    "HithinkFinanceCollector",
+    "HithinkFinanceError",
+    "HithinkHotStockFact",
+    "HithinkHotStockSnapshot",
+    "HithinkLimitUpFact",
+    "HithinkLimitUpPoolSnapshot",
     "PopularityFact",
 ]
 

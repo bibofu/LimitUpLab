@@ -191,6 +191,7 @@ LIMITUPLAB_DATABASE_PATH=/tmp/limituplab.sqlite uvicorn app.main:app --reload --
 - `GET /api/agents/data-health` - Agent raw-data, feature and similar-case cache health
 - `GET /api/agents/system-health` - local runtime health for data freshness, LLM configuration and eval status
 - `GET /api/agents/rating-backtest` - entry-open return, drawdown and promotion metrics by rating bucket
+- `GET /api/agents/prediction-quality-audit` - source/version-aware prediction coverage and deterministic baseline audit
 - `GET /api/agents/first-board-critic` - critic review for one first-board rating
 - `GET /api/agents/rating-evaluation` - source-aware Evaluation Agent review for immutable predictions
 - `GET /api/agents/runs` - recent Agent run traces for observability

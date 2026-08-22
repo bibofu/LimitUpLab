@@ -5,6 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
+from app.collectors import HithinkLimitUpPoolSnapshot
 from app.models import LimitUpEvent, StockDailyBar, StockKLineBar
 from app.repositories import SQLiteFirstBoardRepository, SQLiteLimitUpRepository
 from scripts.update_daily_data import collect_post_first_board_bars, run_daily_update
@@ -114,6 +115,46 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             self.assertFalse(report.health["raw_events_ready"])
             self.assertFalse(report.health["first_board_features_ready"])
             self.assertTrue(report.warnings)
+        finally:
+            self._cleanup_database(database_path)
+
+    @patch("scripts.update_daily_data.collect_limit_up_events")
+    def test_import_reports_tonghuashun_limit_up_count_difference(
+        self,
+        collect_events,
+    ) -> None:
+        database_path = self._database_path()
+        trade_date = date(2026, 8, 21)
+        collect_events.return_value = [
+            self._make_event("002491", "通鼎互联", trade_date),
+        ]
+        try:
+            report = run_daily_update(
+                trade_date=trade_date,
+                top_targets=0,
+                similar_limit=0,
+                max_kline_fetches=0,
+                max_tracked_kline_fetches=0,
+                refresh_enrichment=False,
+                limit_up_repository=SQLiteLimitUpRepository(database_path=database_path),
+                first_board_repository=SQLiteFirstBoardRepository(database_path=database_path),
+                post_bar_collector=lambda _symbol, _base_date, _as_of_date: [],
+                remote_limit_up_collector=lambda _date: HithinkLimitUpPoolSnapshot(
+                    trade_date=trade_date,
+                    page=1,
+                    page_size=200,
+                    total=2,
+                    items=[],
+                ),
+            )
+
+            self.assertEqual(report.closed_limit_events, 1)
+            self.assertEqual(report.hithink_limit_up_count, 2)
+            self.assertEqual(report.hithink_limit_up_source, "hithink-finance")
+            self.assertEqual(report.limit_up_count_difference, -1)
+            self.assertTrue(
+                any("source count mismatch" in item for item in report.warnings)
+            )
         finally:
             self._cleanup_database(database_path)
 

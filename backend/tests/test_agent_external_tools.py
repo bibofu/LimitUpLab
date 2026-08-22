@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 from unittest.mock import patch
 
 from app.agents.chat import answer_first_board_chat
+from app.collectors import HithinkHotStockFact, HithinkHotStockSnapshot
 from app.models import (
     AgentChatRequest,
     SectorPerformanceFacts,
@@ -36,6 +37,35 @@ class ExternalToolProvider(LLMProvider):
                 "半导体板块当日下跌7.44%，上涨4家、下跌181家；"
                 "公开报道中的原因需结合来源链接核对。"
             ),
+            model="fake-answer",
+            provider="fake",
+        )
+
+
+class HithinkToolProvider(LLMProvider):
+    """Planner selects the structured Tonghuashun popularity tool."""
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        if "first job is to decide which tools are needed" in system_prompt:
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": "hot_stock_ranking",
+                        "safety": "normal",
+                        "tool_calls": [
+                            {
+                                "name": "hot_stock_ranking",
+                                "arguments": {"period": "day", "limit": 5},
+                            }
+                        ],
+                        "answer_directly": "",
+                    }
+                ),
+                model="fake-planner",
+                provider="fake",
+            )
+        return LLMResult(
+            content="同花顺热股榜中，通鼎互联(002491)当前排名第3。",
             model="fake-answer",
             provider="fake",
         )
@@ -92,6 +122,40 @@ class AgentExternalToolsTest(unittest.TestCase):
         self.assertNotIn("rating_evaluation", response.tool_calls)
         self.assertIn("7.44%", response.answer)
         self.assertIn("https://example.com/report", response.references)
+
+    @patch("app.collectors.hithink_finance_collector.HithinkFinanceCollector.collect_hot_stocks")
+    def test_llm_can_call_tonghuashun_hot_stock_tool(self, collect_hot_stocks) -> None:
+        collect_hot_stocks.return_value = HithinkHotStockSnapshot(
+            captured_at=datetime(2026, 8, 21, 8, tzinfo=timezone.utc),
+            period="day",
+            items=[
+                HithinkHotStockFact(
+                    symbol="002491",
+                    thscode="002491.SZ",
+                    name="通鼎互联",
+                    rank=3,
+                    heat=4_382_035,
+                    rank_change=1,
+                    rank_trend="up",
+                )
+            ],
+        )
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="hithink-hot-stock",
+                message="同花顺当前热股榜里哪些股票靠前？",
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=HithinkToolProvider(),
+        )
+
+        self.assertIn("hot_stock_ranking", response.tool_calls)
+        self.assertTrue(
+            any(trace.name == "hot_stock_ranking" for trace in response.tool_results)
+        )
+        self.assertIn("002491", response.answer)
+        self.assertIn("source=hithink-finance", response.references)
 
 
 if __name__ == "__main__":

@@ -7,7 +7,11 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Callable, TypedDict
 
-from app.agents.tools import AgentToolRegistry, ToolResult
+from app.agents.tools import (
+    AgentToolRegistry,
+    ToolResult,
+    compact_prediction_quality_audit,
+)
 from app.models import (
     AgentChatRequest,
     AgentToolTrace,
@@ -37,6 +41,7 @@ class QuestionSignals:
     rating_explanation: bool
     similar_cases: bool
     stock_kline: bool
+    prediction_quality: bool
     rating_backtest: bool
     critic: bool
     evaluation: bool
@@ -47,13 +52,19 @@ class QuestionSignals:
     def from_message(cls, message: str) -> "QuestionSignals":
         """Parse guardrail signals once instead of across many repair functions."""
 
-        rating_backtest = looks_like_rating_backtest_question(message)
-        scoring_policy = looks_like_scoring_policy_question(message)
+        prediction_quality = looks_like_prediction_quality_question(message)
+        rating_backtest = (
+            looks_like_rating_backtest_question(message) and not prediction_quality
+        )
+        scoring_policy = (
+            looks_like_scoring_policy_question(message) and not prediction_quality
+        )
         review = looks_like_review_question(message) and not scoring_policy
         evaluation = (
             looks_like_evaluation_question(message)
             and not review
             and not scoring_policy
+            and not prediction_quality
         )
         return cls(
             requested_date=extract_trade_date(message),
@@ -64,6 +75,7 @@ class QuestionSignals:
             rating_explanation=looks_like_rating_explain_question(message),
             similar_cases=looks_like_similar_question(message),
             stock_kline=looks_like_stock_kline_question(message),
+            prediction_quality=prediction_quality,
             rating_backtest=rating_backtest,
             critic=looks_like_critic_question(message),
             evaluation=evaluation,
@@ -84,6 +96,7 @@ class QuestionSignals:
                 self.rating_explanation,
                 self.similar_cases,
                 self.stock_kline,
+                self.prediction_quality,
                 self.rating_backtest,
                 self.critic,
                 self.evaluation,
@@ -102,6 +115,7 @@ class QuestionSignals:
                 self.first_board_facts,
                 self.rating_explanation,
                 self.similar_cases,
+                self.prediction_quality,
                 self.rating_backtest,
                 self.critic,
                 self.evaluation,
@@ -253,6 +267,16 @@ class AgentToolPolicyEngine:
                 reason="A historical comparison requires retrieved similar cases.",
                 matches=lambda signals: signals.similar_cases,
                 repair=self._repair_similar_cases,
+            ),
+            ToolRepairRule(
+                name="prediction-quality-audit-grounding",
+                tool_name="prediction_quality_audit",
+                reason=(
+                    "A prediction-quality claim requires source-aware coverage, "
+                    "maturity and baseline facts."
+                ),
+                matches=lambda signals: signals.prediction_quality,
+                repair=self._repair_prediction_quality,
             ),
             ToolRepairRule(
                 name="rating-backtest-grounding",
@@ -515,6 +539,35 @@ class AgentToolPolicyEngine:
             references=[
                 f"start_date={response.start_date.isoformat()}",
                 f"end_date={response.end_date.isoformat()}",
+            ],
+        )
+
+    def _repair_prediction_quality(
+        self,
+        request: AgentChatRequest,
+        signals: QuestionSignals,
+        execution: ToolExecution,
+        context_symbol: str | None,
+    ) -> None:
+        del request, signals, context_symbol
+        available_dates = sorted({event.trade_date for event in self.tools.events})
+        if not available_dates:
+            raise ValueError("No local limit-up events available.")
+        result = self.tools.prediction_quality_audit(
+            start_date=available_dates[0],
+            end_date=available_dates[-1],
+            top_k=10,
+        )
+        response = result.output
+        self._record_success(
+            execution,
+            result=result,
+            fact_name="prediction_quality_audit",
+            fact_value=compact_prediction_quality_audit(response),
+            references=[
+                f"start_date={response.start_date.isoformat()}",
+                f"end_date={response.end_date.isoformat()}",
+                f"scoring_version={response.audited_scoring_version}",
             ],
         )
 
@@ -941,6 +994,30 @@ def looks_like_rating_backtest_question(message: str) -> bool:
     )
 
 
+def looks_like_prediction_quality_question(message: str) -> bool:
+    """Return whether a claim needs the source-aware prediction audit."""
+
+    lowered = message.lower()
+    return any(
+        term in lowered
+        for term in (
+            "预测质量审计",
+            "预测质量",
+            "结果覆盖率",
+            "outcome覆盖",
+            "样本完整",
+            "样本成熟",
+            "基线对比",
+            "随机基线",
+            "封板基线",
+            "v3准备",
+            "v3 准备",
+            "评分v3",
+            "评分 v3",
+        )
+    )
+
+
 def looks_like_evaluation_question(message: str) -> bool:
     """Return whether a question asks for persisted prediction evaluation."""
 
@@ -1036,6 +1113,7 @@ def looks_like_rating_explain_question(message: str) -> bool:
 
     if (
         looks_like_rating_backtest_question(message)
+        or looks_like_prediction_quality_question(message)
         or looks_like_evaluation_question(message)
         or looks_like_review_question(message)
         or looks_like_scoring_policy_question(message)

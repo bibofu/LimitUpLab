@@ -18,7 +18,7 @@ router = APIRouter()
 @router.get("/{symbol}/kline", response_model=list[StockKLineBar])
 def get_stock_kline(
     symbol: str,
-    days: int = Query(default=5, ge=1, le=60),
+    days: int = Query(default=60, ge=1, le=60),
 ) -> list[StockKLineBar]:
     """Return recent daily K-line bars ending at the latest persisted trade date."""
 

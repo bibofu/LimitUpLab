@@ -14,6 +14,7 @@ import type {
   LimitUpEvent,
   MarketSummary,
   PostPerformanceStat,
+  PredictionQualityAuditResponse,
   RatingBacktestResponse,
   ReviewAgentReportResponse,
   SimilarFirstBoardCasesResponse,
@@ -71,7 +72,7 @@ export function fetchPostPerformanceStats() {
   return request<PostPerformanceStat[]>("/api/analysis/post-performance");
 }
 
-export function fetchStockKLine(symbol: string, days = 5) {
+export function fetchStockKLine(symbol: string, days = 60) {
   return request<StockKLineBar[]>(`/api/stocks/${symbol}/kline?days=${days}`);
 }
 
@@ -138,6 +139,12 @@ export function fetchReviewAgentReport(params?: {
 
 export function fetchRatingBacktest() {
   return request<RatingBacktestResponse>("/api/agents/rating-backtest");
+}
+
+export function fetchPredictionQualityAudit() {
+  return request<PredictionQualityAuditResponse>(
+    "/api/agents/prediction-quality-audit?top_k=10",
+  );
 }
 
 export function fetchRatingEvaluation() {

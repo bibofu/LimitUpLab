@@ -20,6 +20,8 @@ sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.agents.first_board import build_first_board_ratings
 from app.collectors import (
+    HithinkFinanceCollector,
+    HithinkLimitUpPoolSnapshot,
     collect_limit_up_events,
     collect_stock_kline,
     collect_stock_spot_klines,
@@ -39,6 +41,7 @@ from app.services.similar_cases import find_similar_first_board_cases
 
 PostBarCollector = Callable[[str, date, date], list[StockDailyBar]]
 SpotBarCollector = Callable[[list[str], date], dict[str, StockKLineBar]]
+RemoteLimitUpCollector = Callable[[date], HithinkLimitUpPoolSnapshot]
 
 
 @dataclass
@@ -49,12 +52,17 @@ class DailyUpdateReport:
     imported_events: int = 0
     closed_limit_events: int = 0
     failed_limit_events: int = 0
+    hithink_limit_up_count: int | None = None
+    hithink_limit_up_source: str | None = None
+    limit_up_count_difference: int | None = None
     synced_feature_dates: int = 0
     synced_features: int = 0
     enrichment_snapshots: int = 0
     enrichment_technical_ready: int = 0
     enrichment_dragon_tiger: int = 0
     enrichment_popularity: int = 0
+    enrichment_dragon_tiger_sources: list[str] = field(default_factory=list)
+    enrichment_popularity_sources: list[str] = field(default_factory=list)
     persisted_top_predictions: int = 0
     target_candidates_checked: int = 0
     tracked_candidate_references: int = 0
@@ -162,6 +170,7 @@ def run_daily_update(
     first_board_repository: SQLiteFirstBoardRepository | None = None,
     post_bar_collector: PostBarCollector | None = None,
     spot_bar_collector: SpotBarCollector | None = None,
+    remote_limit_up_collector: RemoteLimitUpCollector | None = None,
 ) -> DailyUpdateReport:
     """Update raw events, derived features, similar bars and health checks."""
 
@@ -181,6 +190,25 @@ def run_daily_update(
         report.imported_events = len(imported_events)
         report.closed_limit_events = sum(1 for item in imported_events if item.closed_limit)
         report.failed_limit_events = sum(1 for item in imported_events if not item.closed_limit)
+        try:
+            remote_snapshot = (
+                remote_limit_up_collector(trade_date)
+                if remote_limit_up_collector is not None
+                else collect_hithink_limit_up_snapshot(trade_date)
+            )
+            report.hithink_limit_up_count = remote_snapshot.total
+            report.hithink_limit_up_source = remote_snapshot.source
+            report.limit_up_count_difference = (
+                report.closed_limit_events - remote_snapshot.total
+            )
+            if report.limit_up_count_difference:
+                report.warnings.append(
+                    "Limit-up source count mismatch: "
+                    f"AkShare closed={report.closed_limit_events}, "
+                    f"Tonghuashun={remote_snapshot.total}."
+                )
+        except Exception as error:  # noqa: BLE001
+            report.warnings.append(f"Tonghuashun limit-up verification: {error}")
 
     events = limit_repo.list_events()
     if not any(event.trade_date == trade_date for event in events):
@@ -224,6 +252,8 @@ def run_daily_update(
         report.enrichment_technical_ready = enrichment_report.technical_ready_count
         report.enrichment_dragon_tiger = enrichment_report.dragon_tiger_count
         report.enrichment_popularity = enrichment_report.popularity_count
+        report.enrichment_dragon_tiger_sources = enrichment_report.dragon_tiger_sources
+        report.enrichment_popularity_sources = enrichment_report.popularity_sources
         report.warnings.extend(enrichment_report.warnings)
     else:
         report.enrichment_snapshots = len(existing_enrichment)
@@ -235,6 +265,20 @@ def run_daily_update(
         )
         report.enrichment_popularity = sum(
             item.popularity_rank is not None for item in existing_enrichment
+        )
+        report.enrichment_dragon_tiger_sources = sorted(
+            {
+                item.dragon_tiger_source
+                for item in existing_enrichment
+                if item.dragon_tiger_source
+            }
+        )
+        report.enrichment_popularity_sources = sorted(
+            {
+                item.popularity_source
+                for item in existing_enrichment
+                if item.popularity_source
+            }
         )
     ratings = build_first_board_ratings(
         events=events,
@@ -320,6 +364,20 @@ def run_daily_update(
         similar_limit=similar_limit,
     ).model_dump(mode="json")
     return report
+
+
+def collect_hithink_limit_up_snapshot(
+    trade_date: date,
+) -> HithinkLimitUpPoolSnapshot:
+    """Fetch the complete bounded Tonghuashun limit-up pool for source audit."""
+
+    return HithinkFinanceCollector().collect_limit_up_pool(
+        trade_date=trade_date,
+        page=1,
+        size=200,
+        sort_field="limit_up_time",
+        sort_direction="asc",
+    )
 
 
 def backfill_recent_daily_top_candidate_bars(

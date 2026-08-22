@@ -251,6 +251,80 @@ export interface RatingBacktestResponse {
   generated_by: string;
 }
 
+export interface PredictionQualityCohort {
+  dimension: "prediction_source" | "scoring_version";
+  value: string;
+  row_count: number;
+  unique_stock_date_count: number;
+  trade_date_count: number;
+  next_day_ready_count: number;
+  next_day_coverage_rate: number;
+}
+
+export interface PredictionDateCoverage {
+  trade_date: string;
+  candidate_count: number;
+  top_count: number;
+  next_day_ready_count: number;
+  three_day_ready_count: number;
+  next_day_coverage_rate: number;
+  three_day_coverage_rate: number;
+  next_day_mature: boolean;
+  three_day_mature: boolean;
+  status: "complete" | "partial" | "pending" | "not_mature";
+}
+
+export interface PredictionBenchmarkMetrics {
+  benchmark: string;
+  label: string;
+  trade_date_count: number;
+  sample_size: number;
+  avg_next_open_to_close_pct: number | null;
+  positive_rate: number | null;
+  promoted_to_second_board_rate: number | null;
+  large_loss_rate: number | null;
+  avg_three_day_open_to_close_pct: number | null;
+  avg_max_drawdown_from_next_open_3d: number | null;
+  excess_vs_ready_pool_pct: number | null;
+}
+
+export interface PredictionQualityPolicyStatus {
+  champion_version: string;
+  latest_challenger_version: string | null;
+  latest_optimizer_version: string | null;
+  promotion_eligible: boolean | null;
+  outcome_ready_trade_dates: number;
+  required_trade_dates: number;
+  readiness_rate: number;
+  gate_reasons: string[];
+}
+
+export interface PredictionQualityAuditResponse {
+  start_date: string;
+  end_date: string;
+  latest_trade_date: string;
+  audited_scoring_version: string;
+  top_k: number;
+  raw_prediction_rows: number;
+  audited_prediction_rows: number;
+  canonical_prediction_count: number;
+  cross_cohort_duplicate_rows: number;
+  data_as_of_violation_count: number;
+  prediction_trade_date_count: number;
+  next_day_mature_trade_date_count: number;
+  complete_next_day_trade_date_count: number;
+  next_day_outcome_coverage_rate: number;
+  three_day_outcome_coverage_rate: number;
+  cohorts: PredictionQualityCohort[];
+  date_coverage: PredictionDateCoverage[];
+  benchmarks: PredictionBenchmarkMetrics[];
+  policy_status: PredictionQualityPolicyStatus;
+  findings: string[];
+  recommendations: string[];
+  warnings: string[];
+  generated_by: string;
+}
+
 export interface FirstBoardCriticResponse {
   symbol: string;
   name: string;
