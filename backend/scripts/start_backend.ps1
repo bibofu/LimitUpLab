@@ -34,10 +34,39 @@ if ($apiKey) {
     Set-EnvIfMissing "LIMITUPLAB_LLM_MODEL" "deepseek-v4-flash"
 }
 
-foreach ($proxyName in "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY") {
-    $proxyValue = [Environment]::GetEnvironmentVariable($proxyName, "Process")
-    if ($proxyValue -eq "http://127.0.0.1:9") {
-        [Environment]::SetEnvironmentVariable($proxyName, $null, "Process")
+function Test-LocalProxyPort {
+    param([int]$ProxyPort)
+    $client = [System.Net.Sockets.TcpClient]::new()
+    try {
+        $pending = $client.BeginConnect("127.0.0.1", $ProxyPort, $null, $null)
+        if (-not $pending.AsyncWaitHandle.WaitOne(200)) {
+            return $false
+        }
+        $client.EndConnect($pending)
+        return $true
+    } catch {
+        return $false
+    } finally {
+        $client.Dispose()
+    }
+}
+
+$proxyNames = "HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"
+$proxyUrl = [Environment]::GetEnvironmentVariable("LIMITUPLAB_PROXY_URL", "Process")
+foreach ($proxyName in $proxyNames) {
+    [Environment]::SetEnvironmentVariable($proxyName, $null, "Process")
+}
+if (-not $proxyUrl) {
+    foreach ($candidatePort in 17891, 7890, 10809, 1080) {
+        if (Test-LocalProxyPort $candidatePort) {
+            $proxyUrl = "http://127.0.0.1:$candidatePort"
+            break
+        }
+    }
+}
+if ($proxyUrl) {
+    foreach ($proxyName in $proxyNames) {
+        [Environment]::SetEnvironmentVariable($proxyName, $proxyUrl, "Process")
     }
 }
 

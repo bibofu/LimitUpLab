@@ -13,14 +13,19 @@ if not defined DEEPSEEK_API_KEY (
 if not defined LIMITUPLAB_LLM_ENABLED set LIMITUPLAB_LLM_ENABLED=true
 if not defined LIMITUPLAB_LLM_BASE_URL set LIMITUPLAB_LLM_BASE_URL=https://api.deepseek.com
 if not defined LIMITUPLAB_LLM_MODEL set LIMITUPLAB_LLM_MODEL=deepseek-v4-flash
+set HTTP_PROXY=
+set HTTPS_PROXY=
+set ALL_PROXY=
+set http_proxy=
+set https_proxy=
+set all_proxy=
 if defined LIMITUPLAB_PROXY_URL (
   set HTTP_PROXY=%LIMITUPLAB_PROXY_URL%
   set HTTPS_PROXY=%LIMITUPLAB_PROXY_URL%
   set ALL_PROXY=%LIMITUPLAB_PROXY_URL%
-) else (
-  if "%HTTP_PROXY%"=="http://127.0.0.1:9" set HTTP_PROXY=
-  if "%HTTPS_PROXY%"=="http://127.0.0.1:9" set HTTPS_PROXY=
-  if "%ALL_PROXY%"=="http://127.0.0.1:9" set ALL_PROXY=
+  set http_proxy=%LIMITUPLAB_PROXY_URL%
+  set https_proxy=%LIMITUPLAB_PROXY_URL%
+  set all_proxy=%LIMITUPLAB_PROXY_URL%
 )
 
 echo [1/3] Checking data freshness and local Agent health...

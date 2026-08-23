@@ -6,7 +6,7 @@ import os
 import json
 import threading
 from dataclasses import dataclass
-from time import perf_counter
+from time import perf_counter, sleep
 from typing import Callable
 
 import requests
@@ -18,6 +18,8 @@ DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
 DEFAULT_MODEL = "gpt-5.1-mini"
 DEFAULT_TIMEOUT_SECONDS = 20.0
 DEFAULT_PLANNER_MAX_TOKENS = 320
+DEFAULT_MAX_ATTEMPTS = 2
+DEFAULT_RETRY_DELAY_SECONDS = 0.5
 _thread_local = threading.local()
 
 
@@ -79,7 +81,10 @@ class OpenAIChatCompletionsProvider(LLMProvider):
         timeout_seconds: float = 20,
         planner_max_tokens: int = DEFAULT_PLANNER_MAX_TOKENS,
         thinking_enabled: bool = False,
+        max_attempts: int = DEFAULT_MAX_ATTEMPTS,
+        retry_delay_seconds: float = DEFAULT_RETRY_DELAY_SECONDS,
         session: requests.Session | None = None,
+        sleep_fn: Callable[[float], None] = sleep,
     ):
         """Create an OpenAI-compatible provider."""
 
@@ -89,27 +94,40 @@ class OpenAIChatCompletionsProvider(LLMProvider):
         self.timeout_seconds = timeout_seconds
         self.planner_max_tokens = planner_max_tokens
         self.thinking_enabled = thinking_enabled
+        self.max_attempts = max(1, max_attempts)
+        self.retry_delay_seconds = max(0.0, retry_delay_seconds)
         self.session = session or _get_thread_session()
+        self.sleep_fn = sleep_fn
 
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         """Call a Chat Completions compatible endpoint."""
 
         payload = self._build_payload(system_prompt, user_prompt)
         started_at = perf_counter()
-        try:
-            response = self.session.post(
-                f"{self.base_url}/chat/completions",
-                json=payload,
-                headers={
-                    "Authorization": f"Bearer {self.api_key}",
-                    "Content-Type": "application/json",
-                },
-                timeout=self.timeout_seconds,
-            )
-            response.raise_for_status()
-            data = response.json()
-        except (requests.RequestException, ValueError) as error:
-            raise RuntimeError(f"LLM request failed: {error}") from error
+        data = None
+        last_error: Exception | None = None
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                response = self.session.post(
+                    f"{self.base_url}/chat/completions",
+                    json=payload,
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    timeout=self.timeout_seconds,
+                )
+                response.raise_for_status()
+                data = response.json()
+                break
+            except (requests.RequestException, ValueError) as error:
+                last_error = error
+                if attempt >= self.max_attempts or not _is_retryable_error(error):
+                    raise RuntimeError(f"LLM request failed: {error}") from error
+                self.sleep_fn(self.retry_delay_seconds * (2 ** (attempt - 1)))
+
+        if data is None:
+            raise RuntimeError(f"LLM request failed: {last_error}")
 
         try:
             content = data["choices"][0]["message"]["content"]
@@ -201,7 +219,7 @@ class OpenAIChatCompletionsProvider(LLMProvider):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "temperature": 0.2,
+            "temperature": 0.0 if "Return only valid JSON" in system_prompt else 0.2,
             "thinking": {
                 "type": "enabled" if self.thinking_enabled else "disabled",
             },
@@ -242,6 +260,14 @@ def get_llm_provider() -> LLMProvider:
             DEFAULT_PLANNER_MAX_TOKENS,
         ),
         thinking_enabled=env_bool("LIMITUPLAB_LLM_THINKING_ENABLED"),
+        max_attempts=_read_positive_int(
+            "LIMITUPLAB_LLM_MAX_ATTEMPTS",
+            DEFAULT_MAX_ATTEMPTS,
+        ),
+        retry_delay_seconds=_read_non_negative_float(
+            "LIMITUPLAB_LLM_RETRY_DELAY_SECONDS",
+            DEFAULT_RETRY_DELAY_SECONDS,
+        ),
     )
 
 
@@ -269,6 +295,32 @@ def _read_positive_int(name: str, default: int) -> int:
     except ValueError:
         return default
     return value if value > 0 else default
+
+
+def _read_non_negative_float(name: str, default: float) -> float:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return default
+    try:
+        value = float(raw_value)
+    except ValueError:
+        return default
+    return value if value >= 0 else default
+
+
+def _is_retryable_error(error: Exception) -> bool:
+    """Return whether a failed non-streaming request is safe to retry."""
+
+    if isinstance(error, ValueError):
+        return True
+    if isinstance(error, (requests.Timeout, requests.ConnectionError)):
+        return True
+    if isinstance(error, requests.HTTPError):
+        status_code = getattr(error.response, "status_code", None)
+        return status_code in {408, 409, 425, 429} or (
+            isinstance(status_code, int) and status_code >= 500
+        )
+    return False
 
 
 def _get_thread_session() -> requests.Session:

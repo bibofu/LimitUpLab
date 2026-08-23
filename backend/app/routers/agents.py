@@ -28,6 +28,7 @@ from app.models import (
     AgentRunSummary,
     AgentSystemHealthResponse,
     AgentToolTrace,
+    DailyPipelineStatusResponse,
     FirstBoardCriticResponse,
     FirstBoardRatingsResponse,
     PredictionQualityAuditResponse,
@@ -40,6 +41,7 @@ from app.models import (
 from app.repositories import (
     SQLiteAgentCacheRepository,
     SQLiteAgentRunRepository,
+    SQLiteDailyPipelineRepository,
     SQLiteFirstBoardRepository,
     SQLiteScoringPolicyRepository,
     get_limit_up_repository,
@@ -186,6 +188,20 @@ def get_agent_system_health(
         events=get_limit_up_repository().list_events(),
         first_board_repository=SQLiteFirstBoardRepository(),
         run_offline_eval=run_offline_eval,
+    )
+
+
+@router.get("/daily-pipeline-status", response_model=DailyPipelineStatusResponse)
+def get_daily_pipeline_status(
+    limit: int = Query(default=5, ge=1, le=30),
+) -> DailyPipelineStatusResponse:
+    """Return the latest automated after-close pipeline executions."""
+
+    runs = SQLiteDailyPipelineRepository().list_recent(limit=limit)
+    return DailyPipelineStatusResponse(
+        latest=runs[0] if runs else None,
+        recent=runs,
+        generated_by="daily-close-loop-status-v1",
     )
 
 

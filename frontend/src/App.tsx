@@ -36,6 +36,7 @@ import {
   fetchAgentEvalReport,
   fetchAgentRuns,
   fetchAgentSystemHealth,
+  fetchDailyPipelineStatus,
   fetchReviewAgentReport,
   fetchFirstBoardCritic,
   fetchFirstBoardRatings,
@@ -62,6 +63,7 @@ import type {
   AgentEvaluationResponse,
   AgentRunSummary,
   AgentSystemHealthResponse,
+  DailyPipelineStatusResponse,
   FirstBoardCriticResponse,
   FirstBoardRating,
   FirstBoardRatingsResponse,
@@ -88,6 +90,7 @@ interface DashboardData {
   firstBoardRatings: FirstBoardRatingsResponse;
   agentDataHealth: AgentDataHealthResponse;
   systemHealth: AgentSystemHealthResponse;
+  dailyPipelineStatus: DailyPipelineStatusResponse;
   predictionQualityAudit: PredictionQualityAuditResponse;
   ratingBacktest: RatingBacktestResponse;
   ratingEvaluation: AgentEvaluationResponse;
@@ -159,11 +162,13 @@ function AgentChatDock({
   symbol,
   dataHealth,
   systemHealth,
+  dailyPipelineStatus,
 }: {
   tradeDate: string;
   symbol?: string;
   dataHealth: AgentDataHealthResponse;
   systemHealth: AgentSystemHealthResponse;
+  dailyPipelineStatus: DailyPipelineStatusResponse;
 }) {
   /** Provide a lightweight tool-grounded Agent chat entry point. */
 
@@ -323,7 +328,10 @@ function AgentChatDock({
           ) : null}
         </div>
 
-        <SystemHealthStrip systemHealth={systemHealth} />
+        <SystemHealthStrip
+          systemHealth={systemHealth}
+          dailyPipelineStatus={dailyPipelineStatus}
+        />
 
         <AgentRunObserver runs={runs} />
 
@@ -598,7 +606,21 @@ function buildAnswerConfidence(response: AgentChatResponse) {
   };
 }
 
-function SystemHealthStrip({ systemHealth }: { systemHealth: AgentSystemHealthResponse }) {
+function SystemHealthStrip({
+  systemHealth,
+  dailyPipelineStatus,
+}: {
+  systemHealth: AgentSystemHealthResponse;
+  dailyPipelineStatus: DailyPipelineStatusResponse;
+}) {
+  const pipelineRun = dailyPipelineStatus.latest;
+  const pipelineLabels = {
+    running: "运行中",
+    success: "成功",
+    partial: "部分完成",
+    error: "失败",
+    skipped: "已跳过",
+  };
   return (
     <section className={`system-health-strip system-${systemHealth.status}`}>
       <div>
@@ -610,10 +632,16 @@ function SystemHealthStrip({ systemHealth }: { systemHealth: AgentSystemHealthRe
         <span>{systemHealth.data_fresh ? "数据新鲜" : "数据待更新"}</span>
         <span>{systemHealth.llm_enabled && systemHealth.llm_provider_configured ? `LLM ${systemHealth.llm_model ?? "on"}` : "LLM 未就绪"}</span>
         <span>
+          闭环 {pipelineRun
+            ? `${pipelineRun.trade_date} ${pipelineLabels[pipelineRun.status]}`
+            : "尚未运行"}
+        </span>
+        <span>
           Eval {systemHealth.offline_eval_passed === null ? "未跑" : systemHealth.offline_eval_passed ? "通过" : `${systemHealth.offline_eval_failed ?? 0} 失败`}
         </span>
       </div>
       {systemHealth.warnings.length > 0 ? <p>{systemHealth.warnings[0]}</p> : null}
+      {pipelineRun?.error_message ? <p>{pipelineRun.error_message}</p> : null}
     </section>
   );
 }
@@ -752,6 +780,7 @@ export function App() {
         firstBoardRatings,
         agentDataHealth,
         systemHealth,
+        dailyPipelineStatus,
         predictionQualityAudit,
         ratingBacktest,
         ratingEvaluation,
@@ -764,6 +793,7 @@ export function App() {
         fetchFirstBoardRatings(),
         fetchAgentDataHealth(),
         fetchAgentSystemHealth(false),
+        fetchDailyPipelineStatus(5),
         fetchPredictionQualityAudit(),
         fetchRatingBacktest(),
         fetchRatingEvaluation(),
@@ -778,6 +808,7 @@ export function App() {
         firstBoardRatings,
         agentDataHealth,
         systemHealth,
+        dailyPipelineStatus,
         predictionQualityAudit,
         ratingBacktest,
         ratingEvaluation,
@@ -838,6 +869,7 @@ export function App() {
           tradeDate={data.summary.trade_date}
           dataHealth={data.agentDataHealth}
           systemHealth={data.systemHealth}
+          dailyPipelineStatus={data.dailyPipelineStatus}
         />
       ) : null}
 

@@ -13,6 +13,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
+from app.config import hydrate_windows_environment
 from app.repositories import SQLiteFirstBoardRepository, SQLiteLimitUpRepository
 from app.services.system_health import build_agent_system_health
 from scripts.update_daily_data import run_daily_update
@@ -102,9 +103,7 @@ def main() -> None:
 def _apply_user_api_key() -> None:
     """Mirror user/machine API keys into process env for local checks."""
 
-    if os.getenv("DEEPSEEK_API_KEY") or os.getenv("OPENAI_API_KEY"):
-        return
-    # Python cannot read Windows User/Machine env directly; start scripts set these.
+    hydrate_windows_environment(("DEEPSEEK_API_KEY", "OPENAI_API_KEY"))
 
 
 def _summary(report: dict) -> dict:

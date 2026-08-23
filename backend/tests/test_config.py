@@ -2,9 +2,15 @@ import os
 import shutil
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from uuid import uuid4
 
-from app.config import load_local_env
+from app.config import (
+    PROXY_ENV_NAMES,
+    hydrate_windows_environment,
+    load_local_env,
+    replace_proxy_environment,
+)
 
 
 TEST_TMP_ROOT = Path(os.getenv("LIMITUPLAB_TEST_TMP", Path(__file__).resolve().parents[1]))
@@ -55,6 +61,40 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(os.getenv("HTTP_PROXY"), "http://127.0.0.1:17891")
         self.assertEqual(os.getenv("HTTPS_PROXY"), "http://127.0.0.1:17891")
         self.assertEqual(os.getenv("ALL_PROXY"), "http://127.0.0.1:17891")
+
+    @patch("app.config._read_windows_environment_value", return_value="secret-value")
+    def test_hydrates_missing_windows_environment_without_overwriting_process(
+        self,
+        read_value,
+    ) -> None:
+        os.environ.pop("TEST_WINDOWS_SECRET", None)
+
+        loaded = hydrate_windows_environment(["TEST_WINDOWS_SECRET"])
+
+        self.assertEqual(loaded, ["TEST_WINDOWS_SECRET"])
+        self.assertEqual(os.getenv("TEST_WINDOWS_SECRET"), "secret-value")
+        read_value.assert_called_once_with("TEST_WINDOWS_SECRET")
+
+        os.environ["TEST_WINDOWS_SECRET"] = "process-value"
+        loaded_again = hydrate_windows_environment(["TEST_WINDOWS_SECRET"])
+        self.assertEqual(loaded_again, [])
+        self.assertEqual(os.getenv("TEST_WINDOWS_SECRET"), "process-value")
+
+    def test_replace_proxy_environment_removes_all_inherited_variants(self) -> None:
+        for name in PROXY_ENV_NAMES:
+            os.environ[name] = "http://localhost:65535"
+
+        replace_proxy_environment("http://127.0.0.1:17891")
+
+        self.assertTrue(
+            all(
+                os.getenv(name) == "http://127.0.0.1:17891"
+                for name in PROXY_ENV_NAMES
+            )
+        )
+
+        replace_proxy_environment()
+        self.assertTrue(all(name not in os.environ for name in PROXY_ENV_NAMES))
 
 
 if __name__ == "__main__":

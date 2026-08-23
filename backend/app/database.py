@@ -273,6 +273,33 @@ def initialize_database(connection: sqlite3.Connection) -> None:
         ON agent_runs (session_id, started_at DESC)
         """
     )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS daily_pipeline_runs (
+            run_id TEXT PRIMARY KEY,
+            trade_date TEXT NOT NULL,
+            trigger TEXT NOT NULL,
+            status TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL,
+            report_json TEXT,
+            error_message TEXT,
+            started_at TEXT NOT NULL,
+            finished_at TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_daily_pipeline_runs_started
+        ON daily_pipeline_runs (started_at DESC)
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_daily_pipeline_runs_date_status
+        ON daily_pipeline_runs (trade_date, status)
+        """
+    )
     _ensure_agent_predictions_schema(connection)
     connection.execute(
         """

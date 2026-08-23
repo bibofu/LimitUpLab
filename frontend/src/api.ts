@@ -7,6 +7,7 @@ import type {
   AgentEvaluationResponse,
   AgentRunsResponse,
   AgentSystemHealthResponse,
+  DailyPipelineStatusResponse,
   ContinuationStat,
   FailedRateStat,
   FirstBoardCriticResponse,
@@ -99,6 +100,12 @@ export function fetchAgentDataHealth(tradeDate?: string) {
 export function fetchAgentSystemHealth(runOfflineEval = false) {
   return request<AgentSystemHealthResponse>(
     `/api/agents/system-health?run_offline_eval=${runOfflineEval ? "true" : "false"}`,
+  );
+}
+
+export function fetchDailyPipelineStatus(limit = 5) {
+  return request<DailyPipelineStatusResponse>(
+    `/api/agents/daily-pipeline-status?limit=${limit}`,
   );
 }
 

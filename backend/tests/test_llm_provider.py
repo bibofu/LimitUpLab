@@ -1,5 +1,7 @@
 import unittest
 
+import requests
+
 from app.services.llm_provider import OpenAIChatCompletionsProvider
 
 
@@ -46,6 +48,14 @@ class FakeStreamingSession(FakeSession):
         return self.response
 
 
+class TransientFailureSession(FakeSession):
+    def post(self, url: str, **kwargs):
+        self.calls.append({"url": url, **kwargs})
+        if len(self.calls) == 1:
+            raise requests.Timeout("temporary timeout")
+        return FakeResponse()
+
+
 class LLMProviderTest(unittest.TestCase):
     def test_planner_uses_non_thinking_mode_and_small_token_budget(self) -> None:
         session = FakeSession()
@@ -65,6 +75,7 @@ class LLMProviderTest(unittest.TestCase):
         payload = session.calls[0]["json"]
         self.assertEqual(payload["thinking"], {"type": "disabled"})
         self.assertEqual(payload["max_tokens"], 320)
+        self.assertEqual(payload["temperature"], 0.0)
         self.assertEqual(result.content, '{"ok":true}')
         self.assertGreater(result.prompt_chars, 0)
 
@@ -110,6 +121,26 @@ class LLMProviderTest(unittest.TestCase):
         self.assertTrue(session.calls[0]["json"]["stream"])
         self.assertTrue(session.calls[0]["stream"])
         self.assertTrue(session.response.closed)
+
+    def test_non_streaming_request_retries_transient_timeout(self) -> None:
+        session = TransientFailureSession()
+        delays: list[float] = []
+        provider = OpenAIChatCompletionsProvider(
+            api_key="test-key",
+            max_attempts=2,
+            retry_delay_seconds=0.25,
+            session=session,  # type: ignore[arg-type]
+            sleep_fn=delays.append,
+        )
+
+        result = provider.generate(
+            "Return only valid JSON. No markdown.",
+            "Choose a tool.",
+        )
+
+        self.assertEqual(result.content, '{"ok":true}')
+        self.assertEqual(len(session.calls), 2)
+        self.assertEqual(delays, [0.25])
 
 
 if __name__ == "__main__":

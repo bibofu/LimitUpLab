@@ -139,14 +139,13 @@ def build_env() -> dict[str, str]:
     else:
         env.setdefault("LIMITUPLAB_LLM_ENABLED", "false")
 
-    for proxy_name in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy"):
-        if env.get(proxy_name) == "http://127.0.0.1:9":
-            env.pop(proxy_name, None)
+    proxy_names = ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY", "http_proxy", "https_proxy", "all_proxy")
+    for proxy_name in proxy_names:
+        env.pop(proxy_name, None)
     proxy = env.get("LIMITUPLAB_PROXY_URL") or auto_detect_local_proxy()
     if proxy:
-        env["HTTP_PROXY"] = proxy
-        env["HTTPS_PROXY"] = proxy
-        env["ALL_PROXY"] = proxy
+        for proxy_name in proxy_names:
+            env[proxy_name] = proxy
     return env
 
 

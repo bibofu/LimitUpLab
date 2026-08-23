@@ -31,6 +31,7 @@ from app.collectors.stock_kline_collector import (
     collect_stock_kline,
     collect_stock_spot_klines,
 )
+from app.collectors.trading_calendar_collector import collect_a_share_trade_dates
 
 __all__ = [
     "collect_limit_up_events",
@@ -47,6 +48,7 @@ __all__ = [
     "collect_stock_intraday_kline",
     "collect_stock_kline",
     "collect_stock_spot_klines",
+    "collect_a_share_trade_dates",
     "parse_akshare_trade_date",
     "DragonTigerFact",
     "HITHINK_SOURCE",

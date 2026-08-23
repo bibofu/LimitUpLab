@@ -1405,3 +1405,25 @@ class AgentRun(BaseModel):
     finished_at: datetime
 
 
+class DailyPipelineRun(BaseModel):
+    """Persisted execution record for one automated after-close pipeline run."""
+
+    run_id: str
+    trade_date: date
+    trigger: Literal["scheduled", "manual", "startup"]
+    status: Literal["running", "success", "partial", "error", "skipped"]
+    attempt_count: int = 0
+    report: dict[str, Any] | None = None
+    error_message: str | None = None
+    started_at: datetime
+    finished_at: datetime | None = None
+
+
+class DailyPipelineStatusResponse(BaseModel):
+    """Latest and recent automated daily pipeline execution records."""
+
+    latest: DailyPipelineRun | None = None
+    recent: list[DailyPipelineRun] = Field(default_factory=list)
+    generated_by: str
+
+

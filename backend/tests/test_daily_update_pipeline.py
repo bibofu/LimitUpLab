@@ -118,6 +118,41 @@ class DailyUpdatePipelineTest(unittest.TestCase):
         finally:
             self._cleanup_database(database_path)
 
+    def test_late_target_is_persisted_as_historical_backtest(self) -> None:
+        database_path = self._database_path()
+        try:
+            limit_repo = SQLiteLimitUpRepository(database_path=database_path)
+            first_board_repo = SQLiteFirstBoardRepository(database_path=database_path)
+            trade_date = date(2026, 8, 10)
+            limit_repo.upsert_events(
+                [self._make_event("002298", "\u4e2d\u7535\u946b\u9f99", trade_date)]
+            )
+
+            report = run_daily_update(
+                trade_date=trade_date,
+                top_targets=1,
+                similar_limit=0,
+                max_kline_fetches=0,
+                max_tracked_kline_fetches=0,
+                skip_import=True,
+                refresh_enrichment=False,
+                persist_live_prediction=False,
+                limit_up_repository=limit_repo,
+                first_board_repository=first_board_repo,
+                post_bar_collector=lambda _symbol, _base_date, _as_of_date: [],
+            )
+
+            predictions = first_board_repo.list_predictions_between(
+                trade_date,
+                trade_date,
+            )
+            self.assertEqual(report.persisted_live_predictions, 0)
+            self.assertEqual(report.persisted_historical_predictions, 1)
+            self.assertEqual(len(predictions), 1)
+            self.assertEqual(predictions[0].prediction_source, "historical_backtest")
+        finally:
+            self._cleanup_database(database_path)
+
     @patch("scripts.update_daily_data.collect_limit_up_events")
     def test_import_reports_tonghuashun_limit_up_count_difference(
         self,

@@ -525,47 +525,57 @@ def _answer_with_llm_tool_agent(
     final_result = None
     if progress_callback:
         progress_callback("answering", "正在基于工具事实生成回答")
-    try:
-        if answer_delta_callback:
-            final_result = active_provider.stream_generate(
-                answer_system_prompt,
-                answer_user_prompt,
-                answer_delta_callback,
-            )
-        else:
-            final_result = active_provider.generate(
-                answer_system_prompt,
-                answer_user_prompt,
-            )
-        answer = _ensure_safety_boundary(final_result.content)
-        source = "llm_tool_answer"
-        warnings = [_safety_warning()]
-        if exhaustive_event_answer and not _contains_every_event_symbol(
-            answer,
-            execution["facts"],
-        ):
-            answer = _ensure_safety_boundary(fallback)
-            source = "template_general_answer"
-            warnings = [
-                _safety_warning(),
-                "LLM exhaustive list was incomplete; deterministic full-list rendering used.",
-            ]
-        answer = _ensure_explicit_symbol_mentioned(request, answer)
-        if _contains_forbidden_terms(answer):
-            answer = _ensure_safety_boundary(fallback)
-            source = "template_general_answer"
-            warnings = [
-                _safety_warning(),
-                "LLM output failed safety validation; template fallback used.",
-            ]
-    except Exception as error:
+    force_template_answer = os.getenv(
+        "LIMITUPLAB_FORCE_TEMPLATE_ANSWER",
+        "",
+    ).lower() in {"1", "true", "yes"}
+    if force_template_answer:
         answer = _ensure_safety_boundary(fallback)
         answer = _ensure_explicit_symbol_mentioned(request, answer)
         source = "template_general_answer"
-        warnings = [
-            _safety_warning(),
-            f"LLM unavailable during final answer; template fallback used: {error}",
-        ]
+        warnings = [_safety_warning()]
+    else:
+        try:
+            if answer_delta_callback:
+                final_result = active_provider.stream_generate(
+                    answer_system_prompt,
+                    answer_user_prompt,
+                    answer_delta_callback,
+                )
+            else:
+                final_result = active_provider.generate(
+                    answer_system_prompt,
+                    answer_user_prompt,
+                )
+            answer = _ensure_safety_boundary(final_result.content)
+            source = "llm_tool_answer"
+            warnings = [_safety_warning()]
+            if exhaustive_event_answer and not _contains_every_event_symbol(
+                answer,
+                execution["facts"],
+            ):
+                answer = _ensure_safety_boundary(fallback)
+                source = "template_general_answer"
+                warnings = [
+                    _safety_warning(),
+                    "LLM exhaustive list was incomplete; deterministic full-list rendering used.",
+                ]
+            answer = _ensure_explicit_symbol_mentioned(request, answer)
+            if _contains_forbidden_terms(answer):
+                answer = _ensure_safety_boundary(fallback)
+                source = "template_general_answer"
+                warnings = [
+                    _safety_warning(),
+                    "LLM output failed safety validation; template fallback used.",
+                ]
+        except Exception as error:
+            answer = _ensure_safety_boundary(fallback)
+            answer = _ensure_explicit_symbol_mentioned(request, answer)
+            source = "template_general_answer"
+            warnings = [
+                _safety_warning(),
+                f"LLM unavailable during final answer; template fallback used: {error}",
+            ]
     answer_duration_ms = (
         final_result.duration_ms
         if final_result and final_result.duration_ms
@@ -830,10 +840,14 @@ def _template_answer_from_tool_facts(
 
     if "first_board_ratings" in facts:
         ratings = facts["first_board_ratings"]
-        candidates = ratings.get("candidates", []) if isinstance(ratings, dict) else []
+        candidates = (
+            ratings.get("candidates") or ratings.get("top_candidates") or []
+            if isinstance(ratings, dict)
+            else []
+        )
         lines = [f"{ratings.get('trade_date')} 首板候选评分靠前的股票如下："]
         for index, item in enumerate(candidates[:8], start=1):
-            fact = item.get("facts", {}) if isinstance(item, dict) else {}
+            fact = item.get("facts") or item if isinstance(item, dict) else {}
             lines.append(
                 f"{index}. {fact.get('name')}({fact.get('symbol')}) "
                 f"{item.get('score')}分/{item.get('rating')}，"

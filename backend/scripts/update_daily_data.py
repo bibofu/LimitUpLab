@@ -64,6 +64,8 @@ class DailyUpdateReport:
     enrichment_dragon_tiger_sources: list[str] = field(default_factory=list)
     enrichment_popularity_sources: list[str] = field(default_factory=list)
     persisted_top_predictions: int = 0
+    persisted_live_predictions: int = 0
+    persisted_historical_predictions: int = 0
     target_candidates_checked: int = 0
     tracked_candidate_references: int = 0
     tracked_cache_ready: int = 0
@@ -171,6 +173,7 @@ def run_daily_update(
     post_bar_collector: PostBarCollector | None = None,
     spot_bar_collector: SpotBarCollector | None = None,
     remote_limit_up_collector: RemoteLimitUpCollector | None = None,
+    persist_live_prediction: bool | None = None,
 ) -> DailyUpdateReport:
     """Update raw events, derived features, similar bars and health checks."""
 
@@ -301,10 +304,26 @@ def run_daily_update(
     )[:6]
     latest_available_date = max(event.trade_date for event in events)
     is_latest_available_date = trade_date == latest_available_date
+    should_persist_live = is_latest_available_date and (
+        persist_live_prediction is not False
+    )
+    existing_target_predictions = first_board_repo.list_predictions_between(
+        trade_date,
+        trade_date,
+    )
+    target_has_live_prediction = any(
+        item.prediction_source == "live"
+        for item in existing_target_predictions
+    )
     historical_dates = sorted(
         item
         for item in recent_trade_dates
-        if item < trade_date or (item == trade_date and not is_latest_available_date)
+        if item < trade_date
+        or (
+            item == trade_date
+            and not should_persist_live
+            and not target_has_live_prediction
+        )
     )
     historical_count = persist_agent_predictions_for_dates(
         events=events,
@@ -322,9 +341,11 @@ def run_daily_update(
             prediction_source="live",
             data_as_of=trade_date,
         )
-        if is_latest_available_date
+        if should_persist_live
         else 0
     )
+    report.persisted_live_predictions = live_count
+    report.persisted_historical_predictions = historical_count
     report.persisted_top_predictions = historical_count + live_count
     tracked_backfill = backfill_recent_daily_top_candidate_bars(
         events=events,

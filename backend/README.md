@@ -172,6 +172,31 @@ Set `LIMITUPLAB_DATABASE_PATH` to use a different SQLite file:
 LIMITUPLAB_DATABASE_PATH=/tmp/limituplab.sqlite uvicorn app.main:app --reload --port 8000
 ```
 
+## Automated Daily Close Loop
+
+Run one complete close-loop update manually:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe scripts\run_daily_close_loop.py --trigger manual
+```
+
+The runner resolves the latest closed A-share trading date, uses a process lock,
+retries transient failures, persists execution history, and writes the latest
+JSON report under `backend/data`. Only a same-day run after 15:30 Asia/Shanghai
+can persist `live` predictions. Late backfills are always labeled
+`historical_backtest`.
+
+Install the Windows Task Scheduler entry from the project root:
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mode Install
+```
+
+It runs at 16:10 on weekdays, starts after a missed trigger when possible, and
+prevents overlapping instances. Use `-Mode Status` or `-Mode Uninstall` to
+inspect or remove it.
+
 ## Endpoints
 
 - `GET /health` - service health check
@@ -190,6 +215,7 @@ LIMITUPLAB_DATABASE_PATH=/tmp/limituplab.sqlite uvicorn app.main:app --reload --
 - `POST /api/agents/scoring-policies/optimize` - constrained walk-forward Challenger generation; shadow mode by default
 - `GET /api/agents/data-health` - Agent raw-data, feature and similar-case cache health
 - `GET /api/agents/system-health` - local runtime health for data freshness, LLM configuration and eval status
+- `GET /api/agents/daily-pipeline-status` - recent automated daily close-loop runs
 - `GET /api/agents/rating-backtest` - entry-open return, drawdown and promotion metrics by rating bucket
 - `GET /api/agents/prediction-quality-audit` - source/version-aware prediction coverage and deterministic baseline audit
 - `GET /api/agents/first-board-critic` - critic review for one first-board rating
@@ -237,13 +263,20 @@ chooses weak tools or needs backend repair:
 
 ```powershell
 cd backend
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --mode live-llm
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py --mode live-llm --summary-only
 ```
 
-Live eval writes failed or backend-repaired samples to
+Live eval runs three Planner trials per case by default. A real
+`llm_tool_planner` trace is mandatory for LLM-eligible cases, so provider
+failures cannot silently pass through deterministic fallback. The report
+separates LLM coverage, required-tool accuracy, backend repair rate, pass rate,
+and cross-trial instability. Add `--live-answer --trials 1` for an end-to-end
+answer smoke test, or `--fail-on-failures --fail-on-unstable` for a strict gate.
+
+Live eval writes failed, unstable, or backend-repaired samples to
 `backend/data/agent_eval_failures.json` by default. This file is local output and
-is ignored by git. Use `--fail-on-failures` when you explicitly want live eval
-failures to return a non-zero exit code.
+is ignored by git. On Windows the CLI can hydrate a configured API key from the
+User/Machine environment scopes and remove the known dead proxy placeholder.
 
 The chat Agent also exposes a general `limit_up_events` internal tool for
 same-day limit-up questions such as continued-board lists, board-height filters,

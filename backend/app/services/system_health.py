@@ -3,8 +3,10 @@
 from __future__ import annotations
 
 import os
+import socket
 from datetime import date, datetime, time, timedelta
 from pathlib import Path
+from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from app.agents.eval_runner import load_eval_cases, run_agent_eval_suite
@@ -128,9 +130,16 @@ def _current_proxy() -> str:
 
 def _proxy_warning() -> str | None:
     proxy = _current_proxy()
-    if proxy == "http://127.0.0.1:9":
-        return "Proxy points to http://127.0.0.1:9, which is a known invalid local proxy."
-    return None
+    if not proxy:
+        return None
+    parsed = urlparse(proxy)
+    if parsed.hostname not in {"127.0.0.1", "localhost"} or parsed.port is None:
+        return None
+    try:
+        with socket.create_connection((parsed.hostname, parsed.port), timeout=0.2):
+            return None
+    except OSError:
+        return f"Configured local proxy {parsed.hostname}:{parsed.port} is unreachable."
 
 
 def _overall_status(

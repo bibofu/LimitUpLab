@@ -3,10 +3,20 @@
 from __future__ import annotations
 
 import os
+import socket
 from pathlib import Path
+from typing import Iterable
 
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
+PROXY_ENV_NAMES = (
+    "HTTP_PROXY",
+    "HTTPS_PROXY",
+    "ALL_PROXY",
+    "http_proxy",
+    "https_proxy",
+    "all_proxy",
+)
 
 
 def load_local_env(path: str | Path | None = None, *, override: bool = False) -> list[Path]:
@@ -34,6 +44,49 @@ def env_bool(name: str, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in TRUE_VALUES
+
+
+def hydrate_windows_environment(names: Iterable[str]) -> list[str]:
+    """Load missing values from Windows User/Machine environment scopes.
+
+    New terminals do not automatically inherit environment variables written
+    after the parent process started. This keeps CLI tools consistent with the
+    Windows startup scripts without logging secret values.
+    """
+
+    loaded: list[str] = []
+    for name in names:
+        if os.getenv(name, "").strip():
+            continue
+        value = _read_windows_environment_value(name)
+        if value:
+            os.environ[name] = value
+            loaded.append(name)
+    return loaded
+
+
+def replace_proxy_environment(proxy_url: str | None = None) -> None:
+    """Remove inherited proxy variables and optionally install one known proxy."""
+
+    for name in PROXY_ENV_NAMES:
+        os.environ.pop(name, None)
+    normalized = (proxy_url or "").strip()
+    if not normalized:
+        return
+    for name in PROXY_ENV_NAMES:
+        os.environ[name] = normalized
+
+
+def detect_local_proxy() -> str:
+    """Return the first supported local HTTP proxy that accepts connections."""
+
+    for port in (17891, 7890, 10809, 1080):
+        try:
+            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
+                return f"http://127.0.0.1:{port}"
+        except OSError:
+            continue
+    return ""
 
 
 def _candidate_env_paths(path: str | Path | None) -> list[Path]:
@@ -76,12 +129,31 @@ def _apply_proxy_alias() -> None:
     proxy_url = os.getenv("LIMITUPLAB_PROXY_URL", "").strip()
     if not proxy_url:
         return
-    for key in ("HTTP_PROXY", "HTTPS_PROXY", "ALL_PROXY"):
-        _set_proxy_if_missing_or_invalid(key, proxy_url)
-        _set_proxy_if_missing_or_invalid(key.lower(), proxy_url)
+    replace_proxy_environment(proxy_url)
 
 
-def _set_proxy_if_missing_or_invalid(key: str, proxy_url: str) -> None:
-    current = os.getenv(key, "").strip()
-    if not current or current == "http://127.0.0.1:9":
-        os.environ[key] = proxy_url
+def _read_windows_environment_value(name: str) -> str:
+    if os.name != "nt":
+        return ""
+    try:
+        import winreg
+    except ImportError:
+        return ""
+
+    locations = (
+        (winreg.HKEY_CURRENT_USER, "Environment"),
+        (
+            winreg.HKEY_LOCAL_MACHINE,
+            r"SYSTEM\CurrentControlSet\Control\Session Manager\Environment",
+        ),
+    )
+    for hive, subkey in locations:
+        try:
+            with winreg.OpenKey(hive, subkey) as key:
+                value, _value_type = winreg.QueryValueEx(key, name)
+        except OSError:
+            continue
+        normalized = str(value).strip()
+        if normalized:
+            return normalized
+    return ""

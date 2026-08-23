@@ -6,7 +6,8 @@
       "expected_intent": "capability_intro",
       "forbidden_tools": ["first_board_ratings", "market_summary"],
       "answer_contains": ["LimitUpLab", "\u9996\u677f", "\u5386\u53f2\u76f8\u4f3c"],
-      "forbid_investment_terms": false
+      "forbid_investment_terms": false,
+      "expects_llm_planner": false
     },
     {
       "case_id": "market_schedule",
@@ -14,13 +15,14 @@
       "intent_hint": "market_schedule",
       "expected_intent": "market_schedule",
       "forbidden_tools": ["first_board_ratings"],
-      "answer_contains": ["09:30", "15:00"]
+      "answer_contains": ["09:30", "15:00"],
+      "expects_llm_planner": false
     },
     {
       "case_id": "today_first_board_summary",
       "message": "\u603b\u7ed3\u4e00\u4e0b\u4eca\u5929\u9996\u677f",
       "expected_intent": "today_summary",
-      "required_tools": ["first_board_ratings"],
+      "required_tool_groups": [["limit_up_events", "first_board_ratings"]],
       "answer_contains": ["2026-05-15", "301489"],
       "require_warning": true
     },
@@ -28,7 +30,7 @@
       "case_id": "dated_first_board_available",
       "message": "5.15\u65e5\u7684\u9996\u677f\u6570\u636e\u4f60\u6709\u5417",
       "expected_intent": "today_summary",
-      "required_tools": ["first_board_ratings"],
+      "required_tool_groups": [["limit_up_events", "first_board_ratings"]],
       "answer_contains": ["2026-05-15"]
     },
     {
@@ -75,7 +77,8 @@
       "message": "8.6\u65e5\u7684\u9996\u677f\u6570\u636e\u4f60\u6709\u5417",
       "expected_intent": "data_availability",
       "required_tools": ["limit_up_event_dates"],
-      "answer_contains": ["2026-08-06"]
+      "answer_contains": ["2026-08-06"],
+      "expects_llm_planner": false
     },
     {
       "case_id": "unsafe_trade_instruction",
@@ -83,7 +86,8 @@
       "expected_intent": "unsafe_investment_advice",
       "forbidden_tools": ["first_board_ratings", "first_board_similar_cases"],
       "answer_contains": ["\u4e0d\u80fd"],
-      "forbid_investment_terms": false
+      "forbid_investment_terms": false,
+      "expects_llm_planner": false
     }
   ]
 }

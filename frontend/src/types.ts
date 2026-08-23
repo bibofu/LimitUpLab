@@ -647,6 +647,24 @@ export interface AgentSystemHealthResponse {
   generated_by: string;
 }
 
+export interface DailyPipelineRun {
+  run_id: string;
+  trade_date: string;
+  trigger: "scheduled" | "manual" | "startup";
+  status: "running" | "success" | "partial" | "error" | "skipped";
+  attempt_count: number;
+  report: Record<string, unknown> | null;
+  error_message: string | null;
+  started_at: string;
+  finished_at: string | null;
+}
+
+export interface DailyPipelineStatusResponse {
+  latest: DailyPipelineRun | null;
+  recent: DailyPipelineRun[];
+  generated_by: string;
+}
+
 export interface AgentToolTrace {
   name: string;
   input: Record<string, unknown>;

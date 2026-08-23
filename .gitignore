@@ -21,6 +21,9 @@ backend/data/*.db
 backend/data/*.sqlite
 backend/data/agent_eval_failures.json
 backend/data/dev_check_report.json
+backend/data/daily_close_loop_latest.json
+backend/data/daily_close_loop_alert.json
+backend/data/daily_close_loop.lock
 
 # Frontend
 node_modules/

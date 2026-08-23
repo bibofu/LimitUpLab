@@ -433,6 +433,30 @@ cd backend
 .\.venv\Scripts\python.exe scripts\dev_check.py --ensure-data
 ```
 
+### 每日预测闭环自动化
+
+Windows 本地环境可以安装收盘后的计划任务：
+
+```powershell
+powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mode Install
+```
+
+任务默认在每个工作日 `16:10` 执行，并启用错过后补跑、失败重试和禁止并发执行。一次执行会自动完成交易日判断、原始数据同步、首板特征与 enrichment、当日 Top10 预测快照、最近 Top10 的 D+1 至 D+5 K 线缓存、Outcome 回填和健康检查。
+
+预测来源有严格时间口径：只有交易日当天 `15:30` 后成功生成的预测会标记为 `live`；次日或更晚补算的数据只能标记为 `historical_backtest`，不能进入真实预测准确率统计。
+
+手动执行、查看任务状态和卸载任务：
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe scripts\run_daily_close_loop.py --trigger manual
+cd ..
+powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mode Status
+powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mode Uninstall
+```
+
+每次执行都会写入 SQLite 审计记录。最新报告保存在 `backend/data/daily_close_loop_latest.json`，部分完成或失败时额外生成 `backend/data/daily_close_loop_alert.json`；前端系统状态条和 `GET /api/agents/daily-pipeline-status` 可查看最近运行结果。
+
 ## 常用 API
 
 | 方法 | Endpoint | 说明 |
@@ -447,6 +471,7 @@ cd backend
 | `GET` | `/api/agents/scoring-policies` | Champion/Challenger 状态 |
 | `GET` | `/api/agents/data-health` | Agent 数据健康 |
 | `GET` | `/api/agents/system-health` | 本地系统健康 |
+| `GET` | `/api/agents/daily-pipeline-status` | 每日预测闭环最近运行状态 |
 | `GET` | `/api/agents/runs` | Agent 运行轨迹 |
 | `POST` | `/api/agents/chat` | 同步 Agent 问答 |
 | `POST` | `/api/agents/chat/stream` | SSE 流式 Agent 问答 |
@@ -473,8 +498,18 @@ cd backend
 运行真实 LLM Planner 抽样评测：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --mode live-llm
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py --mode live-llm --summary-only
 ```
+
+`live-llm` 默认对每个 case 运行 3 次，只让真实模型负责 Planner，并用确定性模板检查工具事实，从而把“工具选择波动”和“自然语言表达波动”分开。报告会单独给出 LLM 覆盖率、Planner 工具准确率、后端修复率、case 通过率和不稳定 case 数；真实 Planner 未被调用时会直接判失败，不能再由模板兜底形成假通过。
+
+需要抽查完整端到端回答时执行：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py --mode live-llm --trials 1 --live-answer
+```
+
+CI 或发布前可以组合 `--fail-on-failures --fail-on-unstable` 使用严格门禁。Windows CLI 会读取 User/Machine 环境中的 API Key，并自动排除已知失效代理；LLM 对超时、连接失败、限流和服务端错误进行有限指数退避重试。
 
 Eval 会检查：
 
@@ -484,6 +519,7 @@ Eval 会检查：
 - 回答是否包含关键事实
 - 投资建议安全边界
 - 工具调用失败和数据缺失时的表达
+- 多次采样下的 Planner 一致性和真实 LLM 覆盖率
 
 前端生产构建：
 
