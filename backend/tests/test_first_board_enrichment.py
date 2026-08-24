@@ -101,8 +101,10 @@ class FirstBoardEnrichmentTest(unittest.TestCase):
 
         enrichment = snapshots[0]
         self.assertEqual(enrichment.feature_version, ENRICHMENT_FEATURE_VERSION)
-        self.assertEqual(enrichment.kline_bar_count, 65)
+        self.assertEqual(enrichment.kline_bar_count, 125)
         self.assertIsNotNone(enrichment.return_60d_pct)
+        self.assertIsNotNone(enrichment.position)
+        self.assertNotEqual(enrichment.position.primary.regime, "unclassified")
         self.assertEqual(enrichment.listing_date, date(2020, 1, 2))
         self.assertEqual(enrichment.float_market_cap, 4_200_000_000)
         self.assertEqual(enrichment.float_market_cap_source, "eastmoney_dragon_tiger")
@@ -116,6 +118,7 @@ class FirstBoardEnrichmentTest(unittest.TestCase):
         self.assertEqual(sum(item.max_score for item in rating.score_breakdown), 100)
         self.assertNotIn("listing_date", rating.facts.data_missing)
         self.assertNotIn("limit_up_history_60d", rating.facts.data_missing)
+        self.assertNotIn("position_history_120d", rating.facts.data_missing)
 
 
 if __name__ == "__main__":

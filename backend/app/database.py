@@ -229,6 +229,7 @@ def initialize_database(connection: sqlite3.Connection) -> None:
             popularity_rank_change INTEGER,
             popularity_snapshot_at TEXT,
             popularity_source TEXT,
+            position_json TEXT,
             data_missing_json TEXT NOT NULL,
             feature_version TEXT NOT NULL,
             created_at TEXT NOT NULL,
@@ -242,6 +243,7 @@ def initialize_database(connection: sqlite3.Connection) -> None:
         {
             "dragon_tiger_source": "TEXT",
             "popularity_source": "TEXT",
+            "position_json": "TEXT",
         },
     )
     connection.execute(

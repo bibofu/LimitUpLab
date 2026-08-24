@@ -106,6 +106,28 @@ class WebSearchFacts(BaseModel):
     results: list[WebSearchResult] = Field(default_factory=list)
 
 
+class FinanceNewsItem(BaseModel):
+    """One timestamped item from a structured financial-news feed."""
+
+    title: str
+    summary: str
+    published_at: datetime
+    source: str
+    url: str
+    category: str
+    relevance_score: float
+
+
+class FinanceNewsFacts(BaseModel):
+    """Recent financial-news facts aggregated for an Agent answer."""
+
+    query: str | None = None
+    fetched_at: datetime
+    window_hours: int
+    sources: list[str] = Field(default_factory=list)
+    items: list[FinanceNewsItem] = Field(default_factory=list)
+
+
 class StockKLineBar(BaseModel):
     """Daily OHLCV bar for stock detail review."""
 
@@ -357,6 +379,40 @@ class FirstBoardFilterResult(BaseModel):
     data_missing: list[str]
 
 
+StockPositionRegime = Literal[
+    "oversold_rebound",
+    "v_reversal",
+    "low_base_breakout",
+    "mid_base_breakout",
+    "trend_acceleration",
+    "high_consolidation",
+    "high_breakout",
+    "second_wave",
+    "unclassified",
+]
+
+
+class StockPositionMatch(BaseModel):
+    """One candidate regime and its deterministic match score."""
+
+    regime: StockPositionRegime
+    label: str
+    score: float
+
+
+class StockPositionAssessment(BaseModel):
+    """Point-in-time position classification derived from pre-board K-lines."""
+
+    primary: StockPositionMatch
+    alternatives: list[StockPositionMatch] = Field(default_factory=list)
+    confidence: float
+    tags: list[str] = Field(default_factory=list)
+    evidence: list[str] = Field(default_factory=list)
+    metrics: dict[str, float | None] = Field(default_factory=dict)
+    bar_count: int
+    classifier_version: str
+
+
 class FirstBoardEnrichmentSnapshot(BaseModel):
     """Point-in-time enrichment facts available after the first-board close."""
 
@@ -395,6 +451,7 @@ class FirstBoardEnrichmentSnapshot(BaseModel):
     popularity_rank_change: int | None = None
     popularity_snapshot_at: datetime | None = None
     popularity_source: str | None = None
+    position: StockPositionAssessment | None = None
     data_missing: list[str] = Field(default_factory=list)
     feature_version: str
     created_at: datetime
@@ -1133,6 +1190,7 @@ def _evidence_title_kind(tool_name: str) -> tuple[str, str]:
         "hot_stock_ranking": ("同花顺热股榜", "market"),
         "dragon_tiger_list": ("同花顺龙虎榜", "market"),
         "remote_limit_up_pool": ("同花顺涨停池", "limit_up_events"),
+        "finance_news": ("财经快讯聚合", "tool"),
         "web_search": ("公开网络检索", "tool"),
         "first_board_ratings": ("首板候选池与评分", "candidate_pool"),
         "limit_up_events": ("涨停事件查询", "limit_up_events"),
@@ -1184,6 +1242,7 @@ def _repair_reason(
         "limit_up_event_dates": "用户询问本地是否有某日数据，后端补充 limit_up_event_dates。",
         "limit_up_events": "用户询问当天涨停/连板/炸板明细，后端补充 limit_up_events。",
         "sector_performance": "用户询问整个行业板块表现，后端补充 sector_performance。",
+        "finance_news": "用户询问最新财经快讯，后端补充 finance_news。",
         "web_search": "用户询问最新外部信息，后端补充 web_search。",
         "rating_backtest": "用户询问评分效果或回测，后端补充 rating_backtest。",
         "rating_evaluation": "用户询问模型复盘或错判样本，后端补充 rating_evaluation。",
@@ -1199,6 +1258,8 @@ def _evidence_metrics(output: dict[str, Any]) -> dict[str, Any]:
         "trade_date",
         "data_as_of",
         "captured_at",
+        "fetched_at",
+        "window_hours",
         "period",
         "source",
         "sector_name",

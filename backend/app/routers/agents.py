@@ -90,7 +90,13 @@ def get_first_board_ratings(
             "trade_date": resolved_trade_date.isoformat() if resolved_trade_date else None,
             "events": _events_signature(events, start_date=resolved_trade_date, end_date=resolved_trade_date),
             "enrichment": [
-                (item.symbol, item.feature_version, item.created_at.isoformat())
+                (
+                    item.symbol,
+                    item.feature_version,
+                    item.created_at.isoformat(),
+                    item.position.classifier_version if item.position else None,
+                    item.position.primary.regime if item.position else None,
+                )
                 for item in enrichment
             ],
             "scoring_version": scoring_policy.version,

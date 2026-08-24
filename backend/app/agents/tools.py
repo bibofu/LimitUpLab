@@ -10,7 +10,9 @@ from app.collectors import HithinkFinanceCollector
 from app.models import (
     AgentEvaluationResponse,
     AgentToolTrace,
+    FinanceNewsFacts,
     FirstBoardCriticResponse,
+    FirstBoardRating,
     FirstBoardRatingsResponse,
     LimitUpEvent,
     MarketSummary,
@@ -24,6 +26,7 @@ from app.models import (
 from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
 from app.services.analysis import events_for_date, summarize_market
 from app.services.evaluation_agent import build_agent_evaluation
+from app.services.finance_news import collect_finance_news
 from app.services.first_board_critic import build_first_board_critic
 from app.services.prediction_quality_audit import build_prediction_quality_audit
 from app.services.rating_backtest import build_rating_backtest
@@ -204,7 +207,11 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="first_board_ratings",
-        description="读取某个交易日的首板候选池和可解释评分；未传 trade_date 时使用本地最新交易日。",
+        description=(
+            "读取某个交易日的首板评级候选池、可解释评分、行业分布和基于首板前 K 线的"
+            "位置分类（如低位启动、超跌反弹、V形反转、高位突破、二波启动）；"
+            "未传 trade_date 时使用本地最新交易日。"
+        ),
         args_schema={
             "type": "object",
             "properties": {
@@ -215,7 +222,10 @@ TOOL_SCHEMAS = [
             },
             "required": [],
         },
-        returns="First-board candidate ratings, top candidates, filters and industry distribution.",
+        returns=(
+            "First-board candidate ratings, filters, industry distribution and complete "
+            "K-line position groups for the rated candidate pool."
+        ),
     ),
     AgentToolSchema(
         name="limit_up_events",
@@ -393,6 +403,26 @@ TOOL_SCHEMAS = [
         description="读取当前评分 Champion、历史 Challenger、最近一次样本外优化结果和晋级门槛，不修改线上权重。",
         args_schema={"type": "object", "properties": {}, "required": []},
         returns="Current scoring policy, factor weights, latest Challenger comparison and promotion status.",
+    ),
+    AgentToolSchema(
+        name="finance_news",
+        description=(
+            "聚合东方财富和同花顺的最新财经快讯，返回北京时间、正文摘要、类别和来源。"
+            "适合回答泛化的今日/最新财经新闻或市场快讯；具体公司公告、单一板块新闻和事件原因使用 web_search。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": ["string", "null"],
+                    "description": "Optional topic used only to boost related items; omit for a broad digest.",
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 12},
+                "hours": {"type": "integer", "minimum": 1, "maximum": 168},
+            },
+            "required": [],
+        },
+        returns="Recent deduplicated financial-news items with summaries, timestamps, categories and source URLs.",
     ),
     AgentToolSchema(
         name="web_search",
@@ -672,6 +702,32 @@ class AgentToolRegistry:
             trace_output=trace_output,
         )
 
+    def finance_news(
+        self,
+        query: str | None = None,
+        limit: int = 8,
+        hours: int = 48,
+    ) -> ToolResult:
+        """Return recent structured financial-news evidence."""
+
+        response: FinanceNewsFacts = collect_finance_news(
+            query=query,
+            limit=limit,
+            hours=hours,
+        )
+        trace_output = response.model_dump(mode="json")
+        sources = "、".join(response.sources)
+        return ToolResult(
+            name="finance_news",
+            input={"query": query, "limit": limit, "hours": hours},
+            output=response,
+            summary=(
+                f"{sources or '财经数据源'} 聚合到 {len(response.items)} 条"
+                f"近 {response.window_hours} 小时财经快讯。"
+            ),
+            trace_output=trace_output,
+        )
+
     def first_board_ratings(self, trade_date: date | None = None) -> ToolResult:
         """Return explainable first-board ratings."""
 
@@ -700,6 +756,9 @@ class AgentToolRegistry:
                 }
                 for item in ratings.candidates[:5]
             ],
+            "position_classification": compact_first_board_position_groups(
+                ratings.candidates
+            ),
         }
         return ToolResult(
             name="first_board_ratings",
@@ -1191,6 +1250,81 @@ class AgentToolRegistry:
             ),
             trace_output=trace_output,
         )
+
+
+def compact_first_board_position_groups(
+    candidates: list[FirstBoardRating],
+) -> dict[str, Any]:
+    """Group the complete rated candidate pool by pre-board K-line position."""
+
+    grouped: dict[tuple[str, str], list[tuple[FirstBoardRating, Any]]] = {}
+    missing: list[FirstBoardRating] = []
+    for candidate in candidates:
+        enrichment = candidate.facts.enrichment
+        position = enrichment.position if enrichment else None
+        if position is None:
+            missing.append(candidate)
+            continue
+        key = (position.primary.regime, position.primary.label)
+        grouped.setdefault(key, []).append((candidate, position))
+
+    groups: list[dict[str, Any]] = []
+    for (regime, label), entries in grouped.items():
+        ordered = sorted(
+            entries,
+            key=lambda entry: (-entry[0].score, entry[0].facts.symbol),
+        )
+        groups.append(
+            {
+                "regime": regime,
+                "label": label,
+                "count": len(ordered),
+                "avg_score": round(
+                    sum(candidate.score for candidate, _ in ordered) / len(ordered),
+                    1,
+                ),
+                "candidates": [
+                    {
+                        "symbol": candidate.facts.symbol,
+                        "name": candidate.facts.name,
+                        "industry": candidate.facts.industry,
+                        "rating": candidate.rating,
+                        "score": candidate.score,
+                        "position_match_score": position.primary.score,
+                        "position_confidence": position.confidence,
+                        "tags": position.tags[:3],
+                    }
+                    for candidate, position in ordered
+                ],
+            }
+        )
+
+    groups.sort(
+        key=lambda item: (-item["count"], -item["avg_score"], item["label"])
+    )
+    return {
+        "scope": "rated_first_board_candidate_pool",
+        "scope_note": (
+            "仅统计通过 ST、板块、新股/次新和最低成交额过滤的首板评级候选；"
+            "位置指首板前 K 线所处阶段，不是首封时间。"
+        ),
+        "candidate_count": len(candidates),
+        "classified_count": len(candidates) - len(missing),
+        "missing_count": len(missing),
+        "groups": groups,
+        "missing_candidates": [
+            {
+                "symbol": candidate.facts.symbol,
+                "name": candidate.facts.name,
+                "rating": candidate.rating,
+                "score": candidate.score,
+            }
+            for candidate in sorted(
+                missing,
+                key=lambda item: (-item.score, item.facts.symbol),
+            )
+        ],
+    }
 
 
 def compact_prediction_quality_audit(

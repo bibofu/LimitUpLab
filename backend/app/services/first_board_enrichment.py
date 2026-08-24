@@ -23,9 +23,10 @@ from app.models import (
     StockKLineBar,
 )
 from app.repositories import SQLiteFirstBoardRepository
+from app.services.stock_position import classify_stock_position
 
 
-ENRICHMENT_FEATURE_VERSION = "first-board-enrichment-v2"
+ENRICHMENT_FEATURE_VERSION = "first-board-enrichment-v3-position"
 MIN_AMOUNT = 100_000_000
 KLineCollector = Callable[[str, int, date | None], list[StockKLineBar]]
 
@@ -168,6 +169,8 @@ def build_enrichment_snapshot(
         missing.append("float_market_cap")
     if technical["kline_bar_count"] < 61:
         missing.append("limit_up_history_60d")
+    if technical["kline_bar_count"] < 121:
+        missing.append("position_history_120d")
     if not popularity_source_ready:
         missing.append("popularity_snapshot")
 
@@ -193,6 +196,7 @@ def build_enrichment_snapshot(
         popularity_rank_change=popularity.rank_change if popularity else None,
         popularity_snapshot_at=popularity.captured_at if popularity else None,
         popularity_source=popularity.source if popularity else None,
+        position=classify_stock_position(bars, event.trade_date),
         data_missing=missing,
         feature_version=ENRICHMENT_FEATURE_VERSION,
         created_at=now,
@@ -221,7 +225,7 @@ def _load_candidate_bars(
     warnings: list[str],
 ) -> list[StockDailyBar]:
     try:
-        raw_bars = collector(event.symbol, 65, event.trade_date)
+        raw_bars = collector(event.symbol, 125, event.trade_date)
         normalized = [
             StockDailyBar(
                 symbol=event.symbol,
@@ -242,12 +246,12 @@ def _load_candidate_bars(
         if normalized:
             repository.upsert_daily_bars(normalized)
     except Exception as error:  # noqa: BLE001
-        warnings.append(f"{event.symbol} 60-day K-line: {error}")
+        warnings.append(f"{event.symbol} 120-day K-line: {error}")
     return [
         bar
         for bar in repository.list_daily_bars(event.symbol)
         if bar.trade_date <= event.trade_date
-    ][-65:]
+    ][-125:]
 
 
 def _technical_features(bars: list[StockDailyBar], trade_date: date) -> dict[str, object]:

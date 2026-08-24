@@ -5,6 +5,7 @@
   Layers3,
   LineChart,
   LoaderCircle,
+  MapPin,
   MessageCircle,
   RefreshCcw,
   Send,
@@ -50,6 +51,7 @@ import {
   fetchRecentLimitUpEvents,
   fetchStockKLine,
   fetchStockLatestClose,
+  fetchStockPosition,
   fetchStockTradingDayKLine,
   streamAgentChatMessage,
 } from "./api";
@@ -77,6 +79,7 @@ import type {
   StockCloseSnapshot,
   StockIntradayKLineBar,
   StockKLineBar,
+  StockPositionAssessment,
 } from "./types";
 
 type ViewKey = "overview" | "first" | "continued" | "failed" | "recent";
@@ -752,6 +755,12 @@ const stockListPaths = new Set([
   "/stocks/recent-limit-up",
 ]);
 
+const agentWorkspaceHiddenPaths = new Set([
+  "/stocks/first-board",
+  "/stocks/continued-board",
+  "/stocks/failed",
+]);
+
 const sentimentCopy = {
   heating: { label: "升温", detail: "连板梯队在抬升，风险偏好更积极" },
   diverging: { label: "分歧", detail: "涨停数量仍在，但封板稳定性需要观察" },
@@ -840,6 +849,8 @@ export function App() {
 
   const isStockDetail = location.pathname.startsWith("/stocks/")
     && !stockListPaths.has(location.pathname);
+  const showAgentWorkspace = !isStockDetail
+    && !agentWorkspaceHiddenPaths.has(location.pathname);
   const activeMeta = isStockDetail
     ? { title: "个股详情", eyebrow: "Stock Detail" }
     : viewMeta[activeView];
@@ -864,7 +875,7 @@ export function App() {
         </div>
       </header>
 
-      {!isStockDetail ? (
+      {showAgentWorkspace ? (
         <AgentChatDock
           tradeDate={data.summary.trade_date}
           dataHealth={data.agentDataHealth}
@@ -1011,7 +1022,7 @@ function HighScoreReviewPanel({
   const [report, setReport] = useState<ReviewAgentReportResponse | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
-  const [activeReviewDate, setActiveReviewDate] = useState<string | null>(null);
+  const [activeReviewSelection, setActiveReviewSelection] = useState<string | null>(null);
 
   useEffect(() => {
     void loadReview();
@@ -1029,8 +1040,14 @@ function HighScoreReviewPanel({
       setReport(response);
       const grouped = groupReviewPicksByDate(response.reviewed_picks);
       const trackDates = buildReviewTrackDates(grouped, response.end_date);
-      setActiveReviewDate((current) => (
-        current && trackDates.includes(current) ? current : trackDates[0] ?? null
+      setActiveReviewSelection((current) => (
+        current && (
+          trackDates.includes(current)
+          || current === REVIEW_SUCCESS_SELECTION
+          || current === REVIEW_MISS_SELECTION
+        )
+          ? current
+          : trackDates[0] ?? REVIEW_SUCCESS_SELECTION
       ));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Review Agent 复盘失败");
@@ -1068,10 +1085,26 @@ function HighScoreReviewPanel({
     0,
   );
   const trackedSuccessRate = trackedReadyCount > 0 ? trackedSuccessCount / trackedReadyCount : null;
-  const selectedReviewDate = activeReviewDate && trackDates.includes(activeReviewDate)
-    ? activeReviewDate
-    : trackDates[0] ?? null;
-  const selectedPicks = selectedReviewDate ? reviewDates[selectedReviewDate] : [];
+  const successfulPicks = sortReviewPicksForSummary(
+    reviewedPicks.filter((item) => item.evaluation_label === "success"),
+    "desc",
+  );
+  const failedPicks = sortReviewPicksForSummary(
+    reviewedPicks.filter((item) => item.evaluation_label === "miss"),
+    "asc",
+  );
+  const selectedReviewSelection = activeReviewSelection && (
+    trackDates.includes(activeReviewSelection)
+    || activeReviewSelection === REVIEW_SUCCESS_SELECTION
+    || activeReviewSelection === REVIEW_MISS_SELECTION
+  )
+    ? activeReviewSelection
+    : trackDates[0] ?? REVIEW_SUCCESS_SELECTION;
+  const selectedPicks = selectedReviewSelection === REVIEW_SUCCESS_SELECTION
+    ? successfulPicks
+    : selectedReviewSelection === REVIEW_MISS_SELECTION
+      ? failedPicks
+      : reviewDates[selectedReviewSelection] ?? [];
 
   return (
     <Panel title="高分票追踪复盘" icon={<TrendingUp size={18} />}>
@@ -1129,11 +1162,16 @@ function HighScoreReviewPanel({
             </div>
 
             <DailyTopReview
-              activeDate={selectedReviewDate}
-              latestTradeDate={report.end_date}
+              activeSelection={selectedReviewSelection}
+              adjustmentSuggestions={report.adjustment_suggestions}
+              failedPatterns={report.failed_patterns}
+              failedPicks={failedPicks}
               groupedPicks={reviewDates}
-              onSelectDate={setActiveReviewDate}
+              latestTradeDate={report.end_date}
+              onSelect={setActiveReviewSelection}
               picks={selectedPicks}
+              successfulPatterns={report.successful_patterns}
+              successfulPicks={successfulPicks}
               trackDates={trackDates}
             />
 
@@ -1185,21 +1223,46 @@ function HighScoreReviewPanel({
   );
 }
 
+const REVIEW_SUCCESS_SELECTION = "review-success";
+const REVIEW_MISS_SELECTION = "review-miss";
+
 function DailyTopReview({
-  activeDate,
+  activeSelection,
+  adjustmentSuggestions,
+  failedPatterns,
+  failedPicks,
   latestTradeDate,
   groupedPicks,
-  onSelectDate,
+  onSelect,
   picks,
+  successfulPatterns,
+  successfulPicks,
   trackDates,
 }: {
-  activeDate: string | null;
+  activeSelection: string;
+  adjustmentSuggestions: string[];
+  failedPatterns: string[];
+  failedPicks: ReviewAgentPick[];
   latestTradeDate: string;
   groupedPicks: Record<string, ReviewAgentPick[]>;
-  onSelectDate: (tradeDate: string) => void;
+  onSelect: (selection: string) => void;
   picks: ReviewAgentPick[];
+  successfulPatterns: string[];
+  successfulPicks: ReviewAgentPick[];
   trackDates: string[];
 }) {
+  const isSuccessView = activeSelection === REVIEW_SUCCESS_SELECTION;
+  const isMissView = activeSelection === REVIEW_MISS_SELECTION;
+  const isPerformanceView = isSuccessView || isMissView;
+  const activePatterns = isSuccessView ? successfulPatterns : isMissView ? failedPatterns : [];
+  const title = isSuccessView ? "表现较好" : isMissView ? "表现较差" : activeSelection;
+  const description = isSuccessView
+    ? `共 ${successfulPicks.length} 只，按首板至最新收盘收益率从高到低展示前 10 只`
+    : isMissView
+      ? `共 ${failedPicks.length} 只，按首板至最新收盘收益率从低到高展示前 10 只`
+      : `当日预测 Top10，到 ${latestTradeDate} 收盘为止的走势`;
+  const visiblePicks = picks.slice(0, 10);
+
   return (
     <div className="daily-top-review">
       <div className="daily-top-cards">
@@ -1209,10 +1272,10 @@ function DailyTopReview({
           const bestPick = dailyPicks[0];
           return (
           <button
-            className={tradeDate === activeDate ? "active" : ""}
+            className={tradeDate === activeSelection ? "active" : ""}
             key={tradeDate}
             type="button"
-            onClick={() => onSelectDate(tradeDate)}
+            onClick={() => onSelect(tradeDate)}
           >
             <span>{tradeDate}</span>
             <strong>Top10 追踪</strong>
@@ -1221,20 +1284,57 @@ function DailyTopReview({
           </button>
           );
         })}
+        <button
+          className={`review-outcome-option outcome-success ${isSuccessView ? "active" : ""}`}
+          type="button"
+          onClick={() => onSelect(REVIEW_SUCCESS_SELECTION)}
+        >
+          <span>跨日期复盘</span>
+          <strong className="review-outcome-label"><TrendingUp size={16} />表现较好</strong>
+          <small>{successfulPicks.length} 只已兑现样本</small>
+          <b>收益最高 Top10</b>
+        </button>
+        <button
+          className={`review-outcome-option outcome-miss ${isMissView ? "active" : ""}`}
+          type="button"
+          onClick={() => onSelect(REVIEW_MISS_SELECTION)}
+        >
+          <span>跨日期复盘</span>
+          <strong className="review-outcome-label"><ShieldAlert size={16} />表现较差</strong>
+          <small>{failedPicks.length} 只误判样本</small>
+          <b>收益最低 Top10</b>
+        </button>
       </div>
 
       <section className="daily-top-body">
         <div className="daily-top-title">
           <div>
-            <strong>{activeDate ?? "暂无日期"}</strong>
-            <span>当日预测 Top10，到 {latestTradeDate} 收盘为止的走势</span>
+            <strong>{title}</strong>
+            <span>{description}</span>
           </div>
           <span>
-            {picks.filter((item) => item.post_bar_cache_complete).length} / {picks.length} 缓存已同步
+            {visiblePicks.filter((item) => item.post_bar_cache_complete).length} / {visiblePicks.length} 缓存已同步
           </span>
         </div>
 
-        <ReviewPickTable picks={picks} />
+        {isPerformanceView && activePatterns.length > 0 ? (
+          <div className={`review-pattern-summary ${isSuccessView ? "summary-success" : "summary-miss"}`}>
+            <strong>{isSuccessView ? "表现较好股票的共同特征" : "表现较差股票的共同特征"}</strong>
+            <ul>
+              {activePatterns.slice(0, 3).map((pattern) => <li key={pattern}>{pattern}</li>)}
+            </ul>
+            {isMissView && adjustmentSuggestions.length > 0 ? (
+              <p><b>评分改进：</b>{adjustmentSuggestions[0]}</p>
+            ) : null}
+          </div>
+        ) : null}
+
+        <ReviewPickTable
+          picks={visiblePicks}
+          limit={10}
+          showLatestReturn={isPerformanceView}
+          showTradeDate={isPerformanceView}
+        />
       </section>
     </div>
   );
@@ -1247,6 +1347,38 @@ function groupReviewPicksByDate(picks: ReviewAgentPick[]) {
     groups[pick.trade_date].sort((left, right) => right.score - left.score);
     return groups;
   }, {});
+}
+
+function latestTrackedReturn(pick: ReviewAgentPick) {
+  const latestBar = pick.post_bars.reduce<ReviewAgentPick["post_bars"][number] | null>(
+    (latest, bar) => (
+      bar.return_from_base_pct !== null && (!latest || bar.trade_date > latest.trade_date)
+        ? bar
+        : latest
+    ),
+    null,
+  );
+  return latestBar?.return_from_base_pct ?? null;
+}
+
+function sortReviewPicksForSummary(
+  picks: ReviewAgentPick[],
+  direction: "asc" | "desc",
+) {
+  return [...picks].sort((left, right) => {
+    const leftReturn = latestTrackedReturn(left);
+    const rightReturn = latestTrackedReturn(right);
+    if (leftReturn === null && rightReturn !== null) return 1;
+    if (leftReturn !== null && rightReturn === null) return -1;
+    if (leftReturn !== null && rightReturn !== null && leftReturn !== rightReturn) {
+      return direction === "desc" ? rightReturn - leftReturn : leftReturn - rightReturn;
+    }
+    return (
+      right.trade_date.localeCompare(left.trade_date)
+      || right.score - left.score
+      || left.symbol.localeCompare(right.symbol)
+    );
+  });
 }
 
 function buildReviewTrackDates(
@@ -1302,8 +1434,18 @@ function ReviewToolTraceCard({ traces }: { traces: ReviewAgentReportResponse["to
   );
 }
 
-function ReviewPickTable({ picks }: { picks: ReviewAgentPick[] }) {
-  const visible = picks.slice(0, 10);
+function ReviewPickTable({
+  picks,
+  limit = 10,
+  showLatestReturn = false,
+  showTradeDate = false,
+}: {
+  picks: ReviewAgentPick[];
+  limit?: number;
+  showLatestReturn?: boolean;
+  showTradeDate?: boolean;
+}) {
+  const visible = picks.slice(0, limit);
 
   if (visible.length === 0) {
     return <div className="review-agent-empty">暂无高分票追踪样本。</div>;
@@ -1315,7 +1457,7 @@ function ReviewPickTable({ picks }: { picks: ReviewAgentPick[] }) {
         <span>股票</span>
         <span>评分</span>
         <span>结论</span>
-        <span>次日开收</span>
+        <span>{showLatestReturn ? "首板至今" : "次日开收"}</span>
         <span>走势追踪</span>
       </div>
       {visible.map((pick) => (
@@ -1327,12 +1469,17 @@ function ReviewPickTable({ picks }: { picks: ReviewAgentPick[] }) {
           <strong>
             {pick.name}
             <small>
+              {showTradeDate ? `${pick.trade_date} / ` : ""}
               {pick.symbol} / {pick.prediction_source === "live" ? "实时预测" : "历史回测"}
             </small>
           </strong>
           <span>{pick.score.toFixed(1)} / {pick.rating}</span>
           <span>{reviewLabelCopy(pick.evaluation_label)}</span>
-          <span>{formatOptionalPercent(pick.next_open_to_close_pct)}</span>
+          <span>
+            {formatOptionalPercent(
+              showLatestReturn ? latestTrackedReturn(pick) : pick.next_open_to_close_pct,
+            )}
+          </span>
           <ReviewPostBars
             bars={pick.post_bars}
             expectedCount={pick.expected_post_bar_count}
@@ -1743,6 +1890,17 @@ function FirstBoardRatingPanel({ ratings }: { ratings: FirstBoardRatingsResponse
                   <Fact label="置信度" value={formatPercent(candidate.confidence)} />
                   <Fact label="市场情绪" value={sentimentCopy[candidate.facts.market_sentiment].label} />
                 </div>
+
+                {candidate.facts.enrichment?.position ? (
+                  <div className="rating-position-compact">
+                    <div>
+                      <MapPin size={15} />
+                      <strong>{candidate.facts.enrichment.position.primary.label}</strong>
+                    </div>
+                    <span>匹配 {candidate.facts.enrichment.position.primary.score.toFixed(0)}</span>
+                    <small>{candidate.facts.enrichment.position.tags.slice(0, 2).join(" / ")}</small>
+                  </div>
+                ) : null}
 
                 <section className="rating-top-reasons">
                   <strong>评分高的原因</strong>
@@ -2236,6 +2394,7 @@ function StockDetail({ data }: { data: DashboardData }) {
   const [tradingDayKline, setTradingDayKline] = useState<StockIntradayKLineBar[]>([]);
   const [chartMode, setChartMode] = useState<"daily" | "intraday">("daily");
   const [latestClose, setLatestClose] = useState<StockCloseSnapshot | null>(null);
+  const [position, setPosition] = useState<StockPositionAssessment | null>(null);
   const [similarCases, setSimilarCases] = useState<SimilarFirstBoardCasesResponse | null>(null);
   const [critic, setCritic] = useState<FirstBoardCriticResponse | null>(null);
   const [klineLoading, setKlineLoading] = useState(true);
@@ -2244,6 +2403,8 @@ function StockDetail({ data }: { data: DashboardData }) {
   const [tradingDayError, setTradingDayError] = useState<string | null>(null);
   const [latestCloseLoading, setLatestCloseLoading] = useState(true);
   const [latestCloseError, setLatestCloseError] = useState<string | null>(null);
+  const [positionLoading, setPositionLoading] = useState(true);
+  const [positionError, setPositionError] = useState<string | null>(null);
   const [similarCasesLoading, setSimilarCasesLoading] = useState(false);
   const [similarCasesError, setSimilarCasesError] = useState<string | null>(null);
   const [criticLoading, setCriticLoading] = useState(false);
@@ -2269,6 +2430,8 @@ function StockDetail({ data }: { data: DashboardData }) {
       setKlineLoading(false);
       setTradingDayLoading(false);
       setLatestCloseLoading(false);
+      setPositionLoading(false);
+      setPosition(null);
       setSimilarCasesLoading(false);
       setSimilarCases(null);
       setCriticLoading(false);
@@ -2294,6 +2457,16 @@ function StockDetail({ data }: { data: DashboardData }) {
         setKlineError(caught instanceof Error ? caught.message : "加载 60 日 K 线失败");
       })
       .finally(() => setKlineLoading(false));
+
+    setPositionLoading(true);
+    setPositionError(null);
+    fetchStockPosition(symbol, tradeDate)
+      .then(setPosition)
+      .catch((caught) => {
+        setPosition(null);
+        setPositionError(caught instanceof Error ? caught.message : "加载当前位置判断失败");
+      })
+      .finally(() => setPositionLoading(false));
 
     setTradingDayLoading(true);
     setTradingDayError(null);
@@ -2425,6 +2598,13 @@ function StockDetail({ data }: { data: DashboardData }) {
         </Panel>
       </section>
 
+      <StockPositionPanel
+        position={position}
+        tradeDate={stockEvent.trade_date}
+        loading={positionLoading}
+        error={positionError}
+      />
+
       <section className="stock-agent-grid">
         <FirstBoardRatingDetail rating={firstBoardRating} />
         <SimilarCasesPanel
@@ -2439,6 +2619,41 @@ function StockDetail({ data }: { data: DashboardData }) {
         />
       </section>
     </div>
+  );
+}
+
+
+function StockPositionPanel({
+  position,
+  tradeDate,
+  loading,
+  error,
+}: {
+  position: StockPositionAssessment | null;
+  tradeDate: string;
+  loading: boolean;
+  error: string | null;
+}) {
+  if (loading) {
+    return (
+      <Panel title="当前位置判断" icon={<MapPin size={18} />}>
+        <div className="rating-detail-empty">正在分析价格位置...</div>
+      </Panel>
+    );
+  }
+
+  if (error || !position) {
+    return (
+      <Panel title="当前位置判断" icon={<MapPin size={18} />}>
+        <div className="rating-detail-empty">{error ?? "暂无足够 K 线判断当前位置。"}</div>
+      </Panel>
+    );
+  }
+
+  return (
+    <Panel title="当前位置判断" icon={<MapPin size={18} />}>
+      <StockPositionDetail position={position} tradeDate={tradeDate} />
+    </Panel>
   );
 }
 
@@ -2700,6 +2915,37 @@ function FirstBoardRatingDetail({ rating }: { rating: FirstBoardRating | null })
   );
 }
 
+function StockPositionDetail({
+  position,
+  tradeDate,
+}: {
+  position: StockPositionAssessment;
+  tradeDate: string;
+}) {
+  return (
+    <section className="stock-position-detail">
+      <header>
+        <div>
+          <span>{tradeDate} 收盘 · {position.bar_count} 根日 K</span>
+        </div>
+        <strong>{position.primary.label}</strong>
+        <b>匹配度 {position.primary.score.toFixed(0)}</b>
+      </header>
+      <div className="stock-position-tags">
+        {position.tags.map((tag) => <span key={tag}>{tag}</span>)}
+      </div>
+      <ul>
+        {position.evidence.map((item) => <li key={item}>{item}</li>)}
+      </ul>
+      {position.alternatives.length > 0 ? (
+        <small>
+          次选：{position.alternatives.map((item) => `${item.label} ${item.score.toFixed(0)}`).join("；")}
+        </small>
+      ) : null}
+    </section>
+  );
+}
+
 function TagSection({
   title,
   items,
@@ -2935,8 +3181,6 @@ function formatOptionalPercent(value: number | null | undefined) {
 function formatSigned(value: number, decimals = 1) {
   return value > 0 ? `+${value.toFixed(decimals)}` : value.toFixed(decimals);
 }
-
-
 
 
 

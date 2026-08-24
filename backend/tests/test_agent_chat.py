@@ -9,9 +9,12 @@ from app.agents.chat import answer_first_board_chat
 from app.models import (
     AgentChatRequest,
     AgentRun,
+    FirstBoardEnrichmentSnapshot,
     LimitUpEvent,
     StockKLineBar,
     StockKLineFacts,
+    StockPositionAssessment,
+    StockPositionMatch,
 )
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.llm_provider import DisabledLLMProvider
@@ -102,6 +105,36 @@ class FakeExhaustiveListProvider(FakeToolPlanningProvider):
             )
         return LLMResult(
             content="只输出了第一只：测试股票1(002001)。",
+            model="fake-answer",
+            provider="fake",
+        )
+
+
+class FakeWrongPositionProvider(FakeToolPlanningProvider):
+    """Fake planner and writer that mistake K-line position for seal time."""
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        self.calls.append((system_prompt, user_prompt))
+        if "first job is to decide which tools are needed" in system_prompt:
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": "first_board_position_groups",
+                        "safety": "normal",
+                        "tool_calls": [
+                            {
+                                "name": "limit_up_events",
+                                "arguments": {"trade_date": "2026-05-15"},
+                            }
+                        ],
+                        "answer_directly": "",
+                    }
+                ),
+                model="fake-planner",
+                provider="fake",
+            )
+        return LLMResult(
+            content="按首封时间位置分类：思泉新材(301489)属于早盘板。",
             model="fake-answer",
             provider="fake",
         )
@@ -400,6 +433,76 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("llm_tool_answer", response.tool_calls)
         self.assertNotIn("llm_planner_direct_answer", response.tool_calls)
         self.assertIn("301489", "".join(deltas))
+
+    def test_first_board_position_question_uses_complete_kline_groups(self) -> None:
+        database_path = (
+            Path(__file__).resolve().parents[1]
+            / f"position-chat-{uuid4().hex}.sqlite"
+        )
+        for suffix in ("", "-shm", "-wal"):
+            self.addCleanup(Path(f"{database_path}{suffix}").unlink, missing_ok=True)
+        repository = SQLiteFirstBoardRepository(database_path=database_path)
+        repository.upsert_enrichment_snapshots(
+            [
+                FirstBoardEnrichmentSnapshot(
+                    trade_date=date(2026, 5, 15),
+                    symbol="301489",
+                    kline_bar_count=125,
+                    position=StockPositionAssessment(
+                        primary=StockPositionMatch(
+                            regime="low_base_breakout",
+                            label="低位启动首板",
+                            score=88,
+                        ),
+                        confidence=0.9,
+                        tags=["120日低位", "MA20向上"],
+                        evidence=["首板前位于 120 日价格区间的 22% 位置"],
+                        bar_count=125,
+                        classifier_version="position-test-v1",
+                    ),
+                    feature_version="enrichment-test-v1",
+                    created_at=datetime(2026, 5, 15, tzinfo=timezone.utc),
+                )
+            ]
+        )
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="position-groups",
+                message="今天首板按照位置分类一下",
+            ),
+            events=SAMPLE_EVENTS,
+            repository=repository,
+            llm_provider=FakeWrongPositionProvider(),
+        )
+
+        self.assertIn("first_board_ratings", response.tool_calls)
+        self.assertNotIn("limit_up_events", response.tool_calls)
+        self.assertIn("首板前 K 线位置", response.answer)
+        self.assertIn("低位启动首板", response.answer)
+        self.assertIn("301489", response.answer)
+        self.assertNotIn("早盘板", response.answer)
+        trace = next(
+            item for item in response.tool_results if item.name == "first_board_ratings"
+        )
+        groups = trace.output["position_classification"]["groups"]
+        self.assertEqual(groups[0]["label"], "低位启动首板")
+        self.assertTrue(
+            any("position classification" in item for item in response.warnings)
+        )
+
+        fallback_response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="position-groups-fallback",
+                message="今天首板按照位置分类一下",
+            ),
+            events=SAMPLE_EVENTS,
+            repository=repository,
+            llm_provider=DisabledLLMProvider(),
+        )
+        self.assertIn("首板前 K 线位置", fallback_response.answer)
+        self.assertIn("低位启动首板", fallback_response.answer)
+        self.assertIn("301489", fallback_response.answer)
 
     def test_similar_question_repairs_missing_planner_tool_call(self) -> None:
         provider = FakeToolPlanningProvider()

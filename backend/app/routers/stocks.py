@@ -1,5 +1,7 @@
 ﻿"""Stock detail API routes used by the review page."""
 
+from datetime import date
+
 from fastapi import APIRouter, HTTPException, Query
 from requests import RequestException
 
@@ -7,10 +9,18 @@ from app.collectors import (
     collect_stock_intraday_kline,
 )
 from app.collectors.stock_kline_collector import build_stock_close_snapshot
-from app.models import StockCloseSnapshot, StockIntradayKLineBar, StockKLineBar
+from app.models import (
+    StockCloseSnapshot,
+    StockIntradayKLineBar,
+    StockKLineBar,
+    StockPositionAssessment,
+)
 from app.repositories import SQLiteFirstBoardRepository, get_limit_up_repository
 from app.services.analysis import latest_trade_date
-from app.services.stock_kline import load_stock_kline_bars
+from app.services.stock_kline import (
+    load_stock_kline_bars,
+    load_stock_position_assessment,
+)
 
 router = APIRouter()
 
@@ -34,6 +44,30 @@ def get_stock_kline(
         raise HTTPException(status_code=400, detail=str(error)) from error
     except RequestException as error:
         raise HTTPException(status_code=502, detail="stock kline data source unavailable") from error
+
+
+@router.get("/{symbol}/position", response_model=StockPositionAssessment)
+def get_stock_position(
+    symbol: str,
+    trade_date: date | None = None,
+) -> StockPositionAssessment:
+    """Return a K-line-based position assessment as of the requested close."""
+
+    try:
+        events = get_limit_up_repository().list_events()
+        target_date = trade_date or latest_trade_date(events)
+        return load_stock_position_assessment(
+            symbol=symbol,
+            end_date=target_date,
+            repository=SQLiteFirstBoardRepository(),
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except RequestException as error:
+        raise HTTPException(
+            status_code=502,
+            detail="stock position data source unavailable",
+        ) from error
 
 
 

@@ -10,6 +10,7 @@ from typing import Any, Callable, TypedDict
 from app.agents.tools import (
     AgentToolRegistry,
     ToolResult,
+    compact_first_board_position_groups,
     compact_prediction_quality_audit,
 )
 from app.models import (
@@ -35,6 +36,7 @@ class QuestionSignals:
 
     requested_date: date | None
     sector_performance: bool
+    finance_news: bool
     web_search: bool
     limit_up_events: bool
     first_board_facts: bool
@@ -66,10 +68,12 @@ class QuestionSignals:
             and not scoring_policy
             and not prediction_quality
         )
+        finance_news = looks_like_finance_news_question(message)
         return cls(
             requested_date=extract_trade_date(message),
             sector_performance=looks_like_sector_performance_question(message),
-            web_search=looks_like_web_search_question(message),
+            finance_news=finance_news,
+            web_search=looks_like_web_search_question(message) and not finance_news,
             limit_up_events=looks_like_limit_up_event_question(message),
             first_board_facts=looks_like_first_board_facts_question(message),
             rating_explanation=looks_like_rating_explain_question(message),
@@ -90,6 +94,7 @@ class QuestionSignals:
         return any(
             (
                 self.sector_performance,
+                self.finance_news,
                 self.web_search,
                 self.limit_up_events,
                 self.first_board_facts,
@@ -224,6 +229,16 @@ class AgentToolPolicyEngine:
         """Return ordered rules; earlier tools may provide facts for later rules."""
 
         return (
+            ToolRepairRule(
+                name="finance-news-grounding",
+                tool_name="finance_news",
+                reason=(
+                    "A broad current financial-news digest requires timestamped "
+                    "structured finance feeds."
+                ),
+                matches=lambda signals: signals.finance_news,
+                repair=self._repair_finance_news,
+            ),
             ToolRepairRule(
                 name="sector-performance-grounding",
                 tool_name="sector_performance",
@@ -428,6 +443,24 @@ class AgentToolPolicyEngine:
             fact_name="web_search",
             fact_value=response.model_dump(mode="json"),
             references=[item.url for item in response.results],
+        )
+
+    def _repair_finance_news(
+        self,
+        request: AgentChatRequest,
+        signals: QuestionSignals,
+        execution: ToolExecution,
+        context_symbol: str | None,
+    ) -> None:
+        del request, signals, context_symbol
+        result = self.tools.finance_news(query=None, limit=8, hours=48)
+        response = result.output
+        self._record_success(
+            execution,
+            result=result,
+            fact_name="finance_news",
+            fact_value=response.model_dump(mode="json"),
+            references=[item.url for item in response.items],
         )
 
     def _repair_limit_up_events(
@@ -803,7 +836,7 @@ def extract_kline_days(message: str) -> int:
 def looks_like_first_board_facts_question(message: str) -> bool:
     """Return whether the question needs the rated candidate pool, not a raw list."""
 
-    return any(
+    return looks_like_first_board_position_question(message) or any(
         term in message
         for term in (
             "首板评分",
@@ -817,9 +850,22 @@ def looks_like_first_board_facts_question(message: str) -> bool:
     )
 
 
+def looks_like_first_board_position_question(message: str) -> bool:
+    """Return whether position means a pre-board K-line regime classification."""
+
+    if "首板" not in message or "位置" not in message:
+        return False
+    return not any(
+        term in message
+        for term in ("首封时间", "封板时间", "几点封板", "几点涨停")
+    )
+
+
 def looks_like_limit_up_event_question(message: str) -> bool:
     """Return whether the question needs raw limit-up events rather than ratings."""
 
+    if looks_like_first_board_position_question(message):
+        return False
     if any(
         term in message
         for term in (
@@ -944,6 +990,28 @@ def looks_like_web_search_question(message: str) -> bool:
     return "为什么" in message and any(
         term in message for term in ("上涨", "下跌", "大涨", "大跌", "异动")
     )
+
+
+def looks_like_finance_news_question(message: str) -> bool:
+    """Return whether the user asks for a broad current financial-news digest."""
+
+    compact = re.sub(r"[\s，。！？,.!?]", "", message).lower()
+    if "财经" in compact and any(term in compact for term in ("新闻", "快讯", "资讯", "消息")):
+        return True
+    if any(
+        phrase in compact
+        for phrase in (
+            "今天有什么新闻",
+            "今日有什么新闻",
+            "最近有什么新闻",
+            "有什么最新新闻",
+            "最新市场快讯",
+            "今日市场快讯",
+            "最新市场新闻",
+        )
+    ):
+        return not any(term in compact for term in ("个股", "公司", "板块", "关于"))
+    return False
 
 
 def looks_like_stock_kline_question(message: str) -> bool:
@@ -1181,6 +1249,9 @@ def _default_compact_ratings(ratings: FirstBoardRatingsResponse) -> dict[str, An
         "candidate_count": len(ratings.candidates),
         "filtered_out_count": len(ratings.filtered_out),
         "top_candidates": [_compact_rating(item) for item in ratings.candidates[:10]],
+        "position_classification": compact_first_board_position_groups(
+            ratings.candidates
+        ),
     }
 
 

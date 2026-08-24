@@ -81,6 +81,28 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertFalse(signals.first_board_facts)
         self.assertFalse(signals.rating_explanation)
 
+    def test_first_board_position_classification_uses_rating_facts(self) -> None:
+        signals = QuestionSignals.from_message("今天首板按照位置分类一下")
+
+        self.assertTrue(signals.first_board_facts)
+        self.assertFalse(signals.limit_up_events)
+
+        execution = self._empty_execution()
+        repaired = self.policy.reconcile(
+            request=AgentChatRequest(
+                session_id="policy-position",
+                message="今天首板按照位置分类一下",
+            ),
+            execution=execution,
+        )
+
+        self.assertEqual(repaired, ["first_board_ratings"])
+        classification = execution["facts"]["first_board_ratings"][
+            "position_classification"
+        ]
+        self.assertEqual(classification["candidate_count"], 1)
+        self.assertEqual(classification["missing_count"], 1)
+
     def test_sector_performance_does_not_trigger_rating_review(self) -> None:
         signals = QuestionSignals.from_message("今天半导体板块表现怎么样")
 
@@ -96,6 +118,18 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertTrue(signals.web_search)
         self.assertFalse(signals.rating_explanation)
         self.assertFalse(signals.first_board_facts)
+
+    def test_broad_finance_news_uses_specialized_feed(self) -> None:
+        signals = QuestionSignals.from_message("有什么最新财经新闻")
+
+        self.assertTrue(signals.finance_news)
+        self.assertFalse(signals.web_search)
+
+    def test_company_news_still_uses_generic_web_search(self) -> None:
+        signals = QuestionSignals.from_message("中电鑫龙有什么最新消息")
+
+        self.assertFalse(signals.finance_news)
+        self.assertTrue(signals.web_search)
 
     def test_scoring_policy_repair_returns_champion_status(self) -> None:
         request = AgentChatRequest(

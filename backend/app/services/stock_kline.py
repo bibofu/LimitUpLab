@@ -7,8 +7,14 @@ from datetime import date, datetime, timezone
 from statistics import mean
 
 from app.collectors import collect_stock_kline, collect_stock_spot_klines
-from app.models import StockDailyBar, StockKLineBar, StockKLineFacts
+from app.models import (
+    StockDailyBar,
+    StockKLineBar,
+    StockKLineFacts,
+    StockPositionAssessment,
+)
 from app.repositories import SQLiteFirstBoardRepository
+from app.services.stock_position import classify_stock_position
 
 
 HistoryCollector = Callable[[str, int, date | None], list[StockKLineBar]]
@@ -26,8 +32,8 @@ def load_stock_kline_bars(
 ) -> list[StockKLineBar]:
     """Return cached daily bars, refreshing missing history and the end date."""
 
-    if not (1 <= days <= 61):
-        raise ValueError("days must be between 1 and 61")
+    if not (1 <= days <= 125):
+        raise ValueError("days must be between 1 and 125")
     active_repository = repository or SQLiteFirstBoardRepository()
     cached = _cached_bars(active_repository, symbol, end_date)
     needs_history = len(cached) < days
@@ -61,6 +67,33 @@ def load_stock_kline_bars(
             raise collection_error
         raise ValueError(f"No K-line data available for {symbol} through {end_date.isoformat()}")
     return [_to_kline_bar(item) for item in refreshed[-days:]]
+
+
+def load_stock_position_assessment(
+    *,
+    symbol: str,
+    end_date: date,
+    repository: SQLiteFirstBoardRepository | None = None,
+    history_collector: HistoryCollector = collect_stock_kline,
+    spot_collector: SpotCollector = collect_stock_spot_klines,
+) -> StockPositionAssessment:
+    """Return a point-in-time position assessment for one stock detail page."""
+
+    active_repository = repository or SQLiteFirstBoardRepository()
+    enrichment = active_repository.get_enrichment(symbol, end_date)
+    if enrichment and enrichment.position:
+        return enrichment.position
+
+    bars = load_stock_kline_bars(
+        symbol=symbol,
+        days=125,
+        end_date=end_date,
+        repository=active_repository,
+        history_collector=history_collector,
+        spot_collector=spot_collector,
+    )
+    daily_bars = [_to_daily_bar(symbol, item) for item in bars]
+    return classify_stock_position(daily_bars, end_date)
 
 
 def build_stock_kline_facts(

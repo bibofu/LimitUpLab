@@ -214,11 +214,11 @@ class SQLiteFirstBoardRepository:
                     dragon_tiger_sell_amount, dragon_tiger_reason,
                     dragon_tiger_source, popularity_rank,
                     popularity_rank_change, popularity_snapshot_at, popularity_source,
-                    data_missing_json, feature_version, created_at
+                    position_json, data_missing_json, feature_version, created_at
                 )
                 VALUES (
                     ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?,
-                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
+                    ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?
                 )
                 ON CONFLICT(trade_date, symbol) DO UPDATE SET
                     kline_bar_count = excluded.kline_bar_count,
@@ -254,6 +254,7 @@ class SQLiteFirstBoardRepository:
                     popularity_rank_change = excluded.popularity_rank_change,
                     popularity_snapshot_at = excluded.popularity_snapshot_at,
                     popularity_source = excluded.popularity_source,
+                    position_json = excluded.position_json,
                     data_missing_json = excluded.data_missing_json,
                     feature_version = excluded.feature_version,
                     created_at = excluded.created_at
@@ -709,6 +710,9 @@ class SQLiteFirstBoardRepository:
             item.popularity_rank_change,
             item.popularity_snapshot_at.isoformat() if item.popularity_snapshot_at else None,
             item.popularity_source,
+            json.dumps(item.position.model_dump(mode="json"), ensure_ascii=False)
+            if item.position
+            else None,
             json.dumps(item.data_missing, ensure_ascii=False),
             item.feature_version,
             item.created_at.isoformat(),
@@ -858,6 +862,7 @@ class SQLiteFirstBoardRepository:
             if row["popularity_snapshot_at"]
             else None,
             popularity_source=row["popularity_source"],
+            position=json.loads(row["position_json"]) if row["position_json"] else None,
             data_missing=json.loads(row["data_missing_json"]),
             feature_version=row["feature_version"],
             created_at=datetime.fromisoformat(row["created_at"]),

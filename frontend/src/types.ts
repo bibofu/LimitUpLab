@@ -173,9 +173,38 @@ export interface FirstBoardEnrichmentSnapshot {
   popularity_rank: number | null;
   popularity_rank_change: number | null;
   popularity_snapshot_at: string | null;
+  position: StockPositionAssessment | null;
   data_missing: string[];
   feature_version: string;
   created_at: string;
+}
+
+export type StockPositionRegime =
+  | "oversold_rebound"
+  | "v_reversal"
+  | "low_base_breakout"
+  | "mid_base_breakout"
+  | "trend_acceleration"
+  | "high_consolidation"
+  | "high_breakout"
+  | "second_wave"
+  | "unclassified";
+
+export interface StockPositionMatch {
+  regime: StockPositionRegime;
+  label: string;
+  score: number;
+}
+
+export interface StockPositionAssessment {
+  primary: StockPositionMatch;
+  alternatives: StockPositionMatch[];
+  confidence: number;
+  tags: string[];
+  evidence: string[];
+  metrics: Record<string, number | null>;
+  bar_count: number;
+  classifier_version: string;
 }
 
 export interface ScoreBreakdownItem {

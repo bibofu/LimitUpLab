@@ -7,6 +7,8 @@ from app.agents.chat import answer_first_board_chat
 from app.collectors import HithinkHotStockFact, HithinkHotStockSnapshot
 from app.models import (
     AgentChatRequest,
+    FinanceNewsFacts,
+    FinanceNewsItem,
     SectorPerformanceFacts,
     WebSearchFacts,
     WebSearchResult,
@@ -66,6 +68,33 @@ class HithinkToolProvider(LLMProvider):
             )
         return LLMResult(
             content="同花顺热股榜中，通鼎互联(002491)当前排名第3。",
+            model="fake-answer",
+            provider="fake",
+        )
+
+
+class FinanceNewsProvider(LLMProvider):
+    """Planner skips the feed so the deterministic grounding policy repairs it."""
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        if "first job is to decide which tools are needed" in system_prompt:
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": "latest_finance_news",
+                        "safety": "normal",
+                        "tool_calls": [],
+                        "answer_directly": "",
+                    }
+                ),
+                model="fake-planner",
+                provider="fake",
+            )
+        return LLMResult(
+            content=(
+                "截至北京时间 2026-08-24 09:20，央行公布人民币中间价；"
+                "这可能影响外资流向和市场风险偏好，属于基于新闻事实的市场关联推断。"
+            ),
             model="fake-answer",
             provider="fake",
         )
@@ -156,6 +185,43 @@ class AgentExternalToolsTest(unittest.TestCase):
         )
         self.assertIn("002491", response.answer)
         self.assertIn("source=hithink-finance", response.references)
+
+    @patch("app.agents.tools.collect_finance_news")
+    def test_policy_repairs_broad_finance_news_with_structured_feed(
+        self,
+        news_builder,
+    ) -> None:
+        published_at = datetime(2026, 8, 24, 9, 15, tzinfo=timezone.utc)
+        news_builder.return_value = FinanceNewsFacts(
+            fetched_at=datetime(2026, 8, 24, 9, 20, tzinfo=timezone.utc),
+            window_hours=48,
+            sources=["东方财富", "同花顺"],
+            items=[
+                FinanceNewsItem(
+                    title="央行公布人民币中间价",
+                    summary="央行公布当日人民币汇率中间价。",
+                    published_at=published_at,
+                    source="东方财富",
+                    url="https://example.com/macro",
+                    category="宏观",
+                    relevance_score=8.5,
+                )
+            ],
+        )
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="finance-news",
+                message="有什么最新财经新闻",
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=FinanceNewsProvider(),
+        )
+
+        self.assertIn("finance_news", response.tool_calls)
+        self.assertNotIn("web_search", response.tool_calls)
+        self.assertIn("人民币中间价", response.answer)
+        self.assertIn("https://example.com/macro", response.references)
 
 
 if __name__ == "__main__":

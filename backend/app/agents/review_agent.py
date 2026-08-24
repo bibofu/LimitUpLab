@@ -3,12 +3,15 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import dataclass
 from datetime import date
+from statistics import median
 from typing import Any
 
 from app.models import (
     AgentEvaluationItem,
+    AgentPrediction,
     AgentToolTrace,
     LimitUpEvent,
     ReviewAgentPostBar,
@@ -20,7 +23,7 @@ from app.services.evaluation_agent import build_agent_evaluation
 from app.services.llm_provider import LLMProvider, get_llm_provider
 
 
-REVIEW_AGENT_VERSION = "review-agent-tool-use-v1"
+REVIEW_AGENT_VERSION = "review-agent-tool-use-v3"
 
 
 @dataclass(frozen=True)
@@ -69,6 +72,7 @@ class ReviewAgentToolbox:
         self.top_per_day = top_per_day
         self.follow_days = follow_days
         self._evaluations: list[AgentEvaluationItem] | None = None
+        self._predictions: dict[str, AgentPrediction] | None = None
 
     def daily_high_score_picks(self) -> ReviewToolResult:
         """Return daily top-scored prediction snapshots in the period."""
@@ -115,11 +119,10 @@ class ReviewAgentToolbox:
         )
 
     def compare_success_failure_features(self) -> ReviewToolResult:
-        """Compare lessons and suggestions between successful and failed picks."""
+        """Compare original prediction features between successes and failures."""
 
         picks = self._high_score_evaluations()
-        successes = [item for item in picks if item.evaluation_label == "success"]
-        failures = [item for item in picks if item.evaluation_label == "miss"]
+        comparison = _build_feature_comparison(picks, self._prediction_lookup())
         return ReviewToolResult(
             name="compare_success_failure_features",
             input={
@@ -128,15 +131,36 @@ class ReviewAgentToolbox:
                 "min_score": self.min_score,
                 "top_per_day": self.top_per_day,
             },
-            output={
-                "success_count": len(successes),
-                "failed_count": len(failures),
-                "success_reasons": _top_texts(reason for item in successes for reason in item.lesson.split("；")),
-                "failure_lessons": _top_texts(item.lesson for item in failures),
-                "failure_suggestions": _top_texts(item.scoring_suggestion for item in failures),
-            },
-            summary=f"Compared {len(successes)} successful and {len(failures)} failed high-score picks.",
+            output=comparison,
+            summary=(
+                f"Compared {comparison['success_count']} successful and "
+                f"{comparison['failed_count']} failed high-score picks."
+            ),
         )
+
+    def prediction_for(self, prediction_id: str) -> AgentPrediction | None:
+        """Return the immutable prediction snapshot used by one evaluation."""
+
+        return self._prediction_lookup().get(prediction_id)
+
+    def feature_comparison(self) -> dict[str, Any]:
+        """Return a deterministic success/failure feature comparison."""
+
+        return _build_feature_comparison(
+            self._high_score_evaluations(),
+            self._prediction_lookup(),
+        )
+
+    def _prediction_lookup(self) -> dict[str, AgentPrediction]:
+        if self._predictions is None:
+            self._predictions = {
+                item.prediction_id: item
+                for item in self.repository.list_predictions_between(
+                    self.start_date,
+                    self.end_date,
+                )
+            }
+        return self._predictions
 
     def _high_score_evaluations(self) -> list[AgentEvaluationItem]:
         if self._evaluations is None:
@@ -191,12 +215,14 @@ def build_review_agent_report(
     tool_results = [_run_review_tool(toolbox, name) for name in tool_names]
     facts = {result.name: result.output for result in tool_results if result.status == "success"}
     picks = _review_picks_from_toolbox(toolbox)
+    feature_comparison = toolbox.feature_comparison()
     fallback = _fallback_report(
         start_date=start_date,
         end_date=end_date,
         picks=picks,
         tool_results=[result.trace() for result in tool_results],
         warnings=["LLM review unavailable; deterministic fallback generated from tool facts."],
+        feature_comparison=feature_comparison,
     )
     try:
         content = active_provider.generate(
@@ -210,6 +236,7 @@ def build_review_agent_report(
             end_date=end_date,
             picks=picks,
             tool_results=[result.trace() for result in tool_results],
+            feature_comparison=feature_comparison,
         )
     except Exception as error:
         fallback.warnings.append(f"Review LLM unavailable: {error}")
@@ -284,6 +311,7 @@ def _run_review_tool(toolbox: ReviewAgentToolbox, name: str) -> ReviewToolResult
 def _review_picks_from_toolbox(toolbox: ReviewAgentToolbox) -> list[ReviewAgentPick]:
     picks: list[ReviewAgentPick] = []
     for item in toolbox._high_score_evaluations():
+        prediction = toolbox.prediction_for(item.prediction_id)
         post_bars = _post_bars_for_pick(toolbox, item)
         expected_count = _expected_post_bar_count(toolbox, item.trade_date)
         picks.append(
@@ -308,8 +336,8 @@ def _review_picks_from_toolbox(toolbox: ReviewAgentToolbox) -> list[ReviewAgentP
                 three_day_close_pct=item.three_day_close_pct,
                 three_day_open_to_close_pct=item.three_day_open_to_close_pct,
                 max_drawdown_from_next_open_3d=item.max_drawdown_from_next_open_3d,
-                reasons=[item.lesson],
-                risks=[item.scoring_suggestion],
+                reasons=list(prediction.reasons) if prediction else [item.lesson],
+                risks=list(prediction.risks) if prediction else [item.scoring_suggestion],
                 post_bars=post_bars,
                 expected_post_bar_count=expected_count,
                 post_bar_cache_complete=len(post_bars) >= expected_count,
@@ -366,6 +394,7 @@ def _fallback_report(
     picks: list[ReviewAgentPick],
     tool_results: list[AgentToolTrace],
     warnings: list[str],
+    feature_comparison: dict[str, Any] | None = None,
 ) -> ReviewAgentReportResponse:
     ready = [item for item in picks if item.outcome_ready]
     successes = [item for item in picks if item.evaluation_label == "success"]
@@ -384,6 +413,14 @@ def _fallback_report(
         report_warnings.append(
             f"{historical_count} 条记录来自历史回测快照，不计作真实前向预测。"
         )
+    comparison = feature_comparison or {}
+    successful_patterns = _string_list(comparison.get("successful_patterns"))
+    failed_patterns = _string_list(comparison.get("failed_patterns"))
+    scoring_bias = _string_list(comparison.get("scoring_bias"))
+    adjustment_suggestions = _string_list(
+        comparison.get("adjustment_suggestions")
+    )
+    comparison_findings = _string_list(comparison.get("main_findings"))
     return ReviewAgentReportResponse(
         start_date=start_date,
         end_date=end_date,
@@ -394,11 +431,16 @@ def _fallback_report(
         main_findings=[
             f"高分首板样本 {len(picks)} 只，其中 {len(ready)} 只有后续走势可复盘。",
             f"成功 {len(successes)} 只，失败 {len(failures)} 只，待观察 {len(pending)} 只。",
+            *comparison_findings,
         ],
-        successful_patterns=_top_texts(reason for item in successes for reason in item.reasons),
-        failed_patterns=_top_texts(reason for item in failures for reason in item.reasons),
-        scoring_bias=_top_texts(risk for item in failures for risk in item.risks),
-        adjustment_suggestions=_top_texts(risk for item in failures for risk in item.risks),
+        successful_patterns=successful_patterns
+        or _top_texts(reason for item in successes for reason in item.reasons),
+        failed_patterns=failed_patterns
+        or _top_texts(reason for item in failures for reason in item.reasons),
+        scoring_bias=scoring_bias
+        or _top_texts(risk for item in failures for risk in item.risks),
+        adjustment_suggestions=adjustment_suggestions
+        or _top_texts(risk for item in failures for risk in item.risks),
         confidence=0.45 if not ready else 0.68,
         reviewed_picks=picks[:100],
         tool_results=tool_results,
@@ -414,6 +456,7 @@ def _report_from_payload(
     end_date: date,
     picks: list[ReviewAgentPick],
     tool_results: list[AgentToolTrace],
+    feature_comparison: dict[str, Any] | None = None,
 ) -> ReviewAgentReportResponse:
     fallback = _fallback_report(
         start_date=start_date,
@@ -421,6 +464,7 @@ def _report_from_payload(
         picks=picks,
         tool_results=tool_results,
         warnings=[],
+        feature_comparison=feature_comparison,
     )
     return ReviewAgentReportResponse(
         start_date=start_date,
@@ -430,11 +474,22 @@ def _report_from_payload(
         failed_count=sum(1 for item in picks if item.evaluation_label == "miss"),
         pending_count=sum(1 for item in picks if item.evaluation_label == "pending"),
         main_findings=_string_list(payload.get("main_findings")) or fallback.main_findings,
-        successful_patterns=_string_list(payload.get("successful_patterns")) or fallback.successful_patterns,
-        failed_patterns=_string_list(payload.get("failed_patterns")) or fallback.failed_patterns,
-        scoring_bias=_string_list(payload.get("scoring_bias")) or fallback.scoring_bias,
-        adjustment_suggestions=_string_list(payload.get("adjustment_suggestions"))
-        or fallback.adjustment_suggestions,
+        successful_patterns=_merge_texts(
+            fallback.successful_patterns,
+            _string_list(payload.get("successful_patterns")),
+        ),
+        failed_patterns=_merge_texts(
+            fallback.failed_patterns,
+            _string_list(payload.get("failed_patterns")),
+        ),
+        scoring_bias=_merge_texts(
+            fallback.scoring_bias,
+            _string_list(payload.get("scoring_bias")),
+        ),
+        adjustment_suggestions=_merge_texts(
+            fallback.adjustment_suggestions,
+            _string_list(payload.get("adjustment_suggestions")),
+        ),
         confidence=float(payload.get("confidence") or fallback.confidence),
         reviewed_picks=picks[:100],
         tool_results=tool_results,
@@ -447,7 +502,10 @@ def _review_report_system_prompt() -> str:
     return (
         "You are LimitUpLab's Review Agent. Use only tool facts. "
         "Review high-score first-board picks, explain what worked and failed, "
-        "and suggest scoring taste adjustments. Return JSON only. "
+        "and suggest scoring taste adjustments. Lead each success/failure summary "
+        "with stock-selection traits such as dominant themes, industries and float "
+        "market-cap distribution before discussing seal structure or outcomes. "
+        "Return JSON only. "
         "Do not give buy/sell advice, target prices, positions, or return promises."
     )
 
@@ -507,6 +565,284 @@ def _outcome_summary(item: AgentEvaluationItem) -> dict[str, Any]:
     }
 
 
+def _build_feature_comparison(
+    evaluations: list[AgentEvaluationItem],
+    predictions: dict[str, AgentPrediction],
+) -> dict[str, Any]:
+    """Build descriptive success/failure statistics from immutable inputs."""
+
+    profiles = [
+        profile
+        for item in evaluations
+        if item.evaluation_label in {"success", "miss"}
+        and (profile := _review_feature_profile(item, predictions.get(item.prediction_id)))
+    ]
+    success = [item for item in profiles if item["label"] == "success"]
+    failed = [item for item in profiles if item["label"] == "miss"]
+    result: dict[str, Any] = {
+        "success_count": len(success),
+        "failed_count": len(failed),
+        "main_findings": [],
+        "successful_patterns": [],
+        "failed_patterns": [],
+        "scoring_bias": [],
+        "adjustment_suggestions": [],
+    }
+    if len(success) < 3 or len(failed) < 3:
+        result["main_findings"] = [
+            "成功组或失败组少于 3 只，暂不提炼数值特征，避免把个例误当规律。"
+        ]
+        return result
+
+    success_avg = _profile_averages(success)
+    failed_avg = _profile_averages(failed)
+    result["main_findings"] = [
+        f"以下对比基于成功组 {len(success)} 只、失败组 {len(failed)} 只，"
+        "属于近期样本的描述性统计，不代表稳定因果。"
+    ]
+
+    success_selection = _selection_profile_pattern(success)
+    failed_selection = _selection_profile_pattern(failed)
+    if success_selection:
+        result["successful_patterns"].append(f"选股画像：{success_selection}。")
+    if failed_selection:
+        result["failed_patterns"].append(f"选股画像：{failed_selection}。")
+
+    seal_success = _seal_pattern("成功组", success_avg)
+    seal_failed = _seal_pattern("失败组", failed_avg)
+    if seal_success and seal_failed:
+        result["successful_patterns"].append(f"封板结构：{seal_success}。")
+        result["failed_patterns"].append(f"封板结构：{seal_failed}。")
+
+    structure_success = _structure_pattern("成功组", success_avg)
+    structure_failed = _structure_pattern("失败组", failed_avg)
+    if structure_success and structure_failed:
+        result["successful_patterns"].append(
+            f"趋势与扩散：{structure_success}。"
+        )
+        result["failed_patterns"].append(f"趋势与扩散：{structure_failed}。")
+
+    outcome_success = _outcome_pattern("成功组", success_avg)
+    outcome_failed = _outcome_pattern("失败组", failed_avg)
+    if outcome_success and outcome_failed:
+        result["successful_patterns"].append(f"后续兑现：{outcome_success}。")
+        result["failed_patterns"].append(f"风险表现：{outcome_failed}。")
+
+    success_score = success_avg.get("score")
+    failed_score = failed_avg.get("score")
+    if success_score is not None and failed_score is not None:
+        result["scoring_bias"].append(
+            f"成功组平均评分 {success_score:.1f}，失败组 {failed_score:.1f}；"
+            "两组都进入每日 Top10，说明现有总分仍需增强对结构差异的区分。"
+        )
+    result["adjustment_suggestions"] = [
+        "优先检验早封、少炸板、行业扩散、近 20 日趋势和量比的交叉项，"
+        "通过滚动样本外评估后再调整权重。",
+        "对多项特征同时弱于近期成功组的候选降低置信度，避免用单一阈值直接下结论。",
+    ]
+    result["metrics"] = {"success": success_avg, "failed": failed_avg}
+    return result
+
+
+def _review_feature_profile(
+    evaluation: AgentEvaluationItem,
+    prediction: AgentPrediction | None,
+) -> dict[str, Any] | None:
+    if prediction is None:
+        return None
+    facts = prediction.facts_json
+    enrichment = facts.get("enrichment")
+    if not isinstance(enrichment, dict):
+        enrichment = {}
+    position = enrichment.get("position")
+    if not isinstance(position, dict):
+        position = {}
+    primary_position = position.get("primary")
+    if not isinstance(primary_position, dict):
+        primary_position = {}
+    return {
+        "label": evaluation.evaluation_label,
+        "score": prediction.score,
+        "confidence": prediction.confidence,
+        "first_limit_minutes": _time_to_minutes(facts.get("first_limit_time")),
+        "break_count": _number(facts.get("break_count")),
+        "turnover_rate": _number(facts.get("turnover_rate")),
+        "industry": _category(facts.get("industry")),
+        "concept": _category(facts.get("concept")),
+        "position_label": _category(primary_position.get("label")),
+        "industry_limit_up_count": _number(
+            facts.get("same_industry_limit_up_count")
+        ),
+        "float_market_cap": _number(enrichment.get("float_market_cap")),
+        "return_20d_pct": _number(enrichment.get("return_20d_pct")),
+        "volume_ratio_5d": _number(enrichment.get("volume_ratio_5d")),
+        "popularity_rank": _number(enrichment.get("popularity_rank")),
+        "promotion": 1.0 if evaluation.promoted_to_second_board else 0.0,
+        "next_open_to_close_pct": evaluation.next_open_to_close_pct,
+        "max_drawdown_from_next_open_3d": (
+            evaluation.max_drawdown_from_next_open_3d
+        ),
+    }
+
+
+def _profile_averages(profiles: list[dict[str, Any]]) -> dict[str, float]:
+    keys = {
+        key
+        for profile in profiles
+        for key, value in profile.items()
+        if key != "label" and isinstance(value, (int, float))
+    }
+    averages: dict[str, float] = {}
+    for key in keys:
+        values = [
+            float(item[key])
+            for item in profiles
+            if isinstance(item.get(key), (int, float))
+        ]
+        if len(values) >= 2:
+            averages[key] = sum(values) / len(values)
+    return averages
+
+
+def _selection_profile_pattern(profiles: list[dict[str, Any]]) -> str | None:
+    """Summarize what kinds of stocks were selected in one outcome group."""
+
+    if not profiles:
+        return None
+    themes = _top_categories(profiles, "concept")
+    industries = _top_categories(profiles, "industry")
+    positions = _top_categories(profiles, "position_label")
+    market_caps = sorted(
+        value / 100_000_000
+        for item in profiles
+        if (value := _number(item.get("float_market_cap"))) is not None and value > 0
+    )
+    parts: list[str] = []
+    if positions:
+        parts.append(f"位置类型 {positions}")
+    if themes:
+        parts.append(f"主要题材 {themes}")
+    if industries:
+        parts.append(
+            f"主要行业 {industries}"
+            if themes
+            else f"题材/行业集中在 {industries}"
+        )
+    if market_caps:
+        cap_text = f"流通市值中位数 {median(market_caps):.1f} 亿元"
+        if len(market_caps) >= 4:
+            lower = _percentile(market_caps, 0.25)
+            upper = _percentile(market_caps, 0.75)
+            cap_text += f"，中间 50% 位于 {lower:.1f}-{upper:.1f} 亿元"
+        else:
+            cap_text += f"，范围 {market_caps[0]:.1f}-{market_caps[-1]:.1f} 亿元"
+        if len(market_caps) < len(profiles):
+            cap_text += f"（{len(market_caps)}/{len(profiles)} 只有市值数据）"
+        parts.append(cap_text)
+    else:
+        parts.append("流通市值数据不足")
+    return "；".join(parts) if parts else None
+
+
+def _top_categories(
+    profiles: list[dict[str, Any]],
+    key: str,
+    limit: int = 3,
+) -> str:
+    values = [
+        value
+        for item in profiles
+        if (value := _category(item.get(key))) is not None
+    ]
+    if not values:
+        return ""
+    counts = Counter(values)
+    return "、".join(
+        f"{name} {count}只"
+        for name, count in sorted(
+            counts.items(),
+            key=lambda item: (-item[1], item[0]),
+        )[:limit]
+    )
+
+
+def _percentile(values: list[float], ratio: float) -> float:
+    """Return a linearly interpolated percentile from sorted values."""
+
+    position = (len(values) - 1) * ratio
+    lower_index = int(position)
+    upper_index = min(lower_index + 1, len(values) - 1)
+    fraction = position - lower_index
+    return values[lower_index] + (values[upper_index] - values[lower_index]) * fraction
+
+
+def _seal_pattern(label: str, averages: dict[str, float]) -> str | None:
+    first_limit = averages.get("first_limit_minutes")
+    break_count = averages.get("break_count")
+    if first_limit is None or break_count is None:
+        return None
+    return (
+        f"{label}平均首封约 {_format_minutes(first_limit)}，"
+        f"平均炸板 {break_count:.2f} 次"
+    )
+
+
+def _structure_pattern(label: str, averages: dict[str, float]) -> str | None:
+    industry_count = averages.get("industry_limit_up_count")
+    return_20d = averages.get("return_20d_pct")
+    volume_ratio = averages.get("volume_ratio_5d")
+    if industry_count is None or return_20d is None or volume_ratio is None:
+        return None
+    return (
+        f"{label}同行业涨停平均 {industry_count:.1f} 只、"
+        f"近 20 日涨幅 {return_20d:+.1f}%、5 日量比 {volume_ratio:.2f}"
+    )
+
+
+def _outcome_pattern(label: str, averages: dict[str, float]) -> str | None:
+    promotion = averages.get("promotion")
+    next_return = averages.get("next_open_to_close_pct")
+    drawdown = averages.get("max_drawdown_from_next_open_3d")
+    if promotion is None or next_return is None or drawdown is None:
+        return None
+    return (
+        f"{label}晋级率 {promotion:.1%}、次日开盘至收盘平均 "
+        f"{next_return:+.2f}%、三日最大回撤平均 {drawdown:+.2f}%"
+    )
+
+
+def _time_to_minutes(value: Any) -> float | None:
+    text = str(value or "")
+    try:
+        hours, minutes = text.split(":", maxsplit=2)[:2]
+        return float(int(hours) * 60 + int(minutes))
+    except (TypeError, ValueError):
+        return None
+
+
+def _format_minutes(value: float) -> str:
+    rounded = int(round(value))
+    return f"{rounded // 60:02d}:{rounded % 60:02d}"
+
+
+def _number(value: Any) -> float | None:
+    if value is None or isinstance(value, bool):
+        return None
+    try:
+        return float(value)
+    except (TypeError, ValueError):
+        return None
+
+
+def _category(value: Any) -> str | None:
+    text = str(value or "").strip()
+    if not text or text.lower() in {"none", "null", "unknown"}:
+        return None
+    if text in {"-", "--", "未知", "未分类", "其他"}:
+        return None
+    return text
+
+
 def _extract_json_object(content: str) -> dict[str, Any]:
     start = content.find("{")
     end = content.rfind("}")
@@ -522,6 +858,10 @@ def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()][:8]
+
+
+def _merge_texts(primary: list[str], secondary: list[str]) -> list[str]:
+    return _top_texts([*primary, *secondary])
 
 
 def _top_texts(values) -> list[str]:

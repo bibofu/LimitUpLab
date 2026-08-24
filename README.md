@@ -133,7 +133,8 @@ scoring_version
 | `review_high_score_picks` | 追踪近期每日高分 Top10 后续走势 |
 | `prediction_quality_audit` | 审计预测来源、Outcome 覆盖和基线表现 |
 | `scoring_policy_status` | 查询 Champion、Challenger 和晋级原因 |
-| `web_search` | 按需检索新闻、公告、政策和公开背景信息 |
+| `finance_news` | 聚合东方财富、同花顺最新财经快讯，提供时间、摘要、分类和来源 |
+| `web_search` | 检索具体公司/板块新闻、公告、政策和公开背景信息 |
 
 Tool Policy Engine 会修复 Planner 漏调工具的情况。例如，用户询问某只股票走势时必须调用 K 线工具，询问当天涨停时必须查询本地涨停事件，不能让模型直接凭记忆作答。
 

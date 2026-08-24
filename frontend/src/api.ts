@@ -22,6 +22,7 @@ import type {
   StockCloseSnapshot,
   StockIntradayKLineBar,
   StockKLineBar,
+  StockPositionAssessment,
 } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -75,6 +76,12 @@ export function fetchPostPerformanceStats() {
 
 export function fetchStockKLine(symbol: string, days = 60) {
   return request<StockKLineBar[]>(`/api/stocks/${symbol}/kline?days=${days}`);
+}
+
+export function fetchStockPosition(symbol: string, tradeDate: string) {
+  return request<StockPositionAssessment>(
+    `/api/stocks/${symbol}/position?trade_date=${encodeURIComponent(tradeDate)}`,
+  );
 }
 
 export function fetchStockLatestClose(symbol: string) {
