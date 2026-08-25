@@ -69,6 +69,10 @@ class AgentEvalCase:
     forbidden_tools: list[str] = field(default_factory=list)
     answer_contains: list[str] = field(default_factory=list)
     answer_not_contains: list[str] = field(default_factory=list)
+    expected_tool_inputs: dict[str, dict[str, object]] = field(default_factory=dict)
+    expected_tool_symbols: dict[str, list[str]] = field(default_factory=dict)
+    expected_tool_symbol_order: dict[str, list[str]] = field(default_factory=dict)
+    expected_tool_matched_counts: dict[str, int] = field(default_factory=dict)
     require_warning: bool = False
     forbid_investment_terms: bool = True
     expects_llm_planner: bool = True
@@ -427,6 +431,60 @@ def _check_response(
         if tool in response.tool_calls:
             failures.append(f"forbidden tool was called: {tool}")
 
+    traces_by_name = {trace.name: trace for trace in response.tool_results}
+    for tool, expected_input in case.expected_tool_inputs.items():
+        trace = traces_by_name.get(tool)
+        if trace is None:
+            failures.append(f"tool input unavailable because trace is missing: {tool}")
+            continue
+        failures.extend(
+            f"{tool} input {failure}"
+            for failure in _subset_failures(expected_input, trace.input)
+        )
+
+    for tool, expected_symbols in case.expected_tool_symbols.items():
+        trace = traces_by_name.get(tool)
+        if trace is None:
+            failures.append(f"tool symbols unavailable because trace is missing: {tool}")
+            continue
+        actual_symbols = sorted(
+            str(item.get("symbol"))
+            for item in trace.output.get("events", [])
+            if isinstance(item, dict) and item.get("symbol")
+        )
+        if actual_symbols != sorted(expected_symbols):
+            failures.append(
+                f"{tool} symbols expected {sorted(expected_symbols)!r}, "
+                f"got {actual_symbols!r}"
+            )
+
+    for tool, expected_symbols in case.expected_tool_symbol_order.items():
+        trace = traces_by_name.get(tool)
+        if trace is None:
+            failures.append(f"tool symbol order unavailable because trace is missing: {tool}")
+            continue
+        actual_symbols = [
+            str(item.get("symbol"))
+            for item in trace.output.get("events", [])
+            if isinstance(item, dict) and item.get("symbol")
+        ]
+        if actual_symbols != expected_symbols:
+            failures.append(
+                f"{tool} symbol order expected {expected_symbols!r}, "
+                f"got {actual_symbols!r}"
+            )
+
+    for tool, expected_count in case.expected_tool_matched_counts.items():
+        trace = traces_by_name.get(tool)
+        if trace is None:
+            failures.append(f"tool count unavailable because trace is missing: {tool}")
+            continue
+        actual_count = trace.output.get("matched_count")
+        if actual_count != expected_count:
+            failures.append(
+                f"{tool} matched_count expected {expected_count}, got {actual_count}"
+            )
+
     for text in case.answer_contains:
         if _normalize_answer_text(text) not in _normalize_answer_text(response.answer):
             failures.append(f"answer missing text: {text}")
@@ -444,6 +502,32 @@ def _check_response(
             if term in rendered:
                 failures.append(f"investment term leaked: {term}")
 
+    return failures
+
+
+def _subset_failures(
+    expected: dict[str, object],
+    actual: dict[str, object],
+    *,
+    path: str = "",
+) -> list[str]:
+    """Compare a nested expected subset without coupling evals to extra trace fields."""
+
+    failures: list[str] = []
+    for key, expected_value in expected.items():
+        current_path = f"{path}.{key}" if path else key
+        if key not in actual:
+            failures.append(f"missing {current_path}")
+            continue
+        actual_value = actual[key]
+        if isinstance(expected_value, dict) and isinstance(actual_value, dict):
+            failures.extend(
+                _subset_failures(expected_value, actual_value, path=current_path)
+            )
+        elif actual_value != expected_value:
+            failures.append(
+                f"{current_path} expected {expected_value!r}, got {actual_value!r}"
+            )
     return failures
 
 

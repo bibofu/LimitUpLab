@@ -3,6 +3,7 @@ import {
   ColorType,
   CrosshairMode,
   HistogramSeries,
+  LineStyle,
   LineSeries,
   createChart,
 } from "lightweight-charts";
@@ -45,10 +46,12 @@ export function MarketKLineChart({
   bars,
   emptyLabel,
   mode,
+  referencePrice,
 }: {
   bars: MarketCandleBar[];
   emptyLabel: string;
   mode: "daily" | "intraday";
+  referencePrice?: number | null;
 }) {
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
   const chartRef = useRef<IChartApi | null>(null);
@@ -62,8 +65,11 @@ export function MarketKLineChart({
   const displayedIndex = displayedBar
     ? orderedBars.findIndex((item) => chartTimeKey(item.time) === chartTimeKey(displayedBar.time))
     : -1;
+  const intradayReferencePrice = mode === "intraday" && referencePrice && referencePrice > 0
+    ? referencePrice
+    : null;
   const comparisonPrice = mode === "intraday"
-    ? orderedBars[0]?.open
+    ? intradayReferencePrice
     : displayedIndex > 0
       ? orderedBars[displayedIndex - 1].close
       : null;
@@ -195,12 +201,30 @@ export function MarketKLineChart({
         crosshairMarkerRadius: 4,
         crosshairMarkerBorderColor: "#ffffff",
         crosshairMarkerBackgroundColor: "#246bfd",
-        priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+        priceFormat: intradayReferencePrice
+          ? {
+              type: "custom",
+              minMove: 0.01,
+              formatter: (price: number) => formatPercent(
+                ((price / intradayReferencePrice) - 1) * 100,
+              ),
+            }
+          : { type: "price", precision: 2, minMove: 0.01 },
       });
       priceSeries.setData(orderedBars.map((bar) => ({
         time: toChartTime(bar.time),
         value: bar.close,
       })));
+      if (intradayReferencePrice) {
+        priceSeries.createPriceLine({
+          price: intradayReferencePrice,
+          color: "#98a2b3",
+          lineWidth: 1,
+          lineStyle: LineStyle.Dashed,
+          axisLabelVisible: true,
+          title: "0%",
+        });
+      }
 
       const averageSeries = chart.addSeries(LineSeries, {
         color: "#e5a000",
@@ -208,11 +232,19 @@ export function MarketKLineChart({
         priceLineVisible: false,
         lastValueVisible: false,
         crosshairMarkerVisible: false,
-        priceFormat: { type: "price", precision: 2, minMove: 0.01 },
+        priceFormat: intradayReferencePrice
+          ? {
+              type: "custom",
+              minMove: 0.01,
+              formatter: (price: number) => formatPercent(
+                ((price / intradayReferencePrice) - 1) * 100,
+              ),
+            }
+          : { type: "price", precision: 2, minMove: 0.01 },
       });
       averageSeries.setData(intradayAverageLine(orderedBars));
 
-      const bounds = intradayPriceBounds(orderedBars);
+      const bounds = intradayPriceBounds(orderedBars, intradayReferencePrice);
       const scaleGuardSeries = chart.addSeries(LineSeries, {
         color: "rgba(0, 0, 0, 0)",
         lineWidth: 1,
@@ -260,7 +292,7 @@ export function MarketKLineChart({
       chartRef.current = null;
       chart.remove();
     };
-  }, [mode, orderedBars]);
+  }, [intradayReferencePrice, mode, orderedBars]);
 
   if (orderedBars.length === 0) {
     return <div className="chart-state">{emptyLabel}</div>;
@@ -284,7 +316,7 @@ export function MarketKLineChart({
           ) : (
             <>
               <span>价格 <b className={directionClass}>{formatPrice(displayedBar?.close)}</b></span>
-              <span>较开盘 <b className={directionClass}>{formatPercent(changePct)}</b></span>
+              <span>涨幅 <b className={directionClass}>{formatPercent(changePct)}</b></span>
               <span>均价 <b>{formatPrice(intradayAverage ?? undefined)}</b></span>
               <span>成交量 <b>{formatVolume(displayedBar?.volume)}</b></span>
               <span>成交额 <b>{formatAmount(displayedBar?.amount)}</b></span>
@@ -303,6 +335,11 @@ export function MarketKLineChart({
           <div className="market-kline-ma" aria-label="分时图例">
             <span style={{ color: "#246bfd" }}>价格线</span>
             <span style={{ color: "#e5a000" }}>均价线</span>
+            {intradayReferencePrice ? (
+              <span style={{ color: "#667085" }}>
+                0% 昨收 {formatPrice(intradayReferencePrice)}
+              </span>
+            ) : null}
             <span>VOL {formatVolume(displayedBar?.volume)}</span>
           </div>
         )}
@@ -349,14 +386,20 @@ function cumulativeAverageAt(bars: MarketCandleBar[], selectedIndex: number): nu
   return totalAmount > 0 && totalVolume > 0 ? totalAmount / totalVolume : null;
 }
 
-function intradayPriceBounds(bars: MarketCandleBar[]): { low: number; high: number } {
+function intradayPriceBounds(
+  bars: MarketCandleBar[],
+  referencePrice: number | null,
+): { low: number; high: number } {
   const averageValues = intradayAverageLine(bars).map((item) => item.value);
   const prices = [...bars.map((bar) => bar.close), ...averageValues];
-  const reference = bars[0]?.open || prices[0] || 1;
-  const minimumHalfRange = reference * 0.015;
+  const reference = referencePrice ?? bars[0]?.open ?? prices[0] ?? 1;
+  const halfRange = Math.max(
+    reference * 0.015,
+    ...prices.map((price) => Math.abs(price - reference)),
+  );
   return {
-    low: Math.min(...prices, reference - minimumHalfRange),
-    high: Math.max(...prices, reference + minimumHalfRange),
+    low: reference - halfRange,
+    high: reference + halfRange,
   };
 }
 

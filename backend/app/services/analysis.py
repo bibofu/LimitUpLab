@@ -40,6 +40,23 @@ def events_for_date(
     return [event for event in events if event.trade_date == target_date]
 
 
+def find_stock_event(
+    events: list[LimitUpEvent],
+    symbol: str,
+    trade_date: date | None = None,
+) -> LimitUpEvent | None:
+    """Return one stock's requested event, defaulting to its latest local event."""
+
+    normalized_symbol = symbol.strip().lower()
+    matches = [
+        event
+        for event in events
+        if event.symbol.lower() == normalized_symbol
+        and (trade_date is None or event.trade_date == trade_date)
+    ]
+    return max(matches, key=lambda event: event.trade_date, default=None)
+
+
 def summarize_market(
     events: list[LimitUpEvent],
     indices: Optional[list[MarketIndexSnapshot]] = None,
@@ -53,17 +70,18 @@ def summarize_market(
 
     latest_date = latest_trade_date(events)
     latest_events = events_for_date(events, latest_date)
+    closed_events = [event for event in latest_events if event.closed_limit]
     failed_count = sum(1 for event in latest_events if event.break_count > 0)
-    industry_counts = Counter(event.industry for event in latest_events)
-    concept_counts = Counter(event.concept for event in latest_events)
+    industry_counts = Counter(event.industry for event in closed_events)
+    concept_counts = Counter(event.concept for event in closed_events)
     concept_failed_counts = Counter(
         event.concept for event in latest_events if event.break_count > 0
     )
-    max_board_height = max(event.board_height for event in latest_events)
+    max_board_height = max((event.board_height for event in closed_events), default=0)
     failed_rate = round(failed_count / len(latest_events), 4)
-    first_board_count = sum(1 for event in latest_events if event.board_height == 1)
-    continued_board_count = sum(1 for event in latest_events if event.board_height > 1)
-    total_amount = sum(event.amount for event in latest_events)
+    first_board_count = sum(1 for event in closed_events if event.board_height == 1)
+    continued_board_count = sum(1 for event in closed_events if event.board_height > 1)
+    total_amount = sum(event.amount for event in closed_events)
 
     if continued_board_count >= 3 and failed_rate < 0.35:
         sentiment = "heating"
@@ -74,7 +92,7 @@ def summarize_market(
 
     return MarketSummary(
         trade_date=latest_date,
-        limit_up_count=len(latest_events),
+        limit_up_count=len(closed_events),
         first_board_count=first_board_count,
         continued_board_count=continued_board_count,
         failed_count=failed_count,
@@ -100,7 +118,11 @@ def list_first_board(events: list[LimitUpEvent]) -> list[LimitUpEvent]:
     """Return latest-day first-board events sorted by first seal time."""
 
     return sorted(
-        [event for event in events_for_date(events) if event.board_height == 1],
+        [
+            event
+            for event in events_for_date(events)
+            if event.closed_limit and event.board_height == 1
+        ],
         key=lambda event: event.first_limit_time,
     )
 
@@ -109,7 +131,11 @@ def list_continued_board(events: list[LimitUpEvent]) -> list[LimitUpEvent]:
     """Return latest-day continued-board events, highest board first."""
 
     return sorted(
-        [event for event in events_for_date(events) if event.board_height > 1],
+        [
+            event
+            for event in events_for_date(events)
+            if event.closed_limit and event.board_height > 1
+        ],
         key=lambda event: (-event.board_height, event.first_limit_time),
     )
 
@@ -128,7 +154,11 @@ def list_recent_limit_up(events: list[LimitUpEvent], days: int = 3) -> list[Limi
 
     trade_dates = sorted({event.trade_date for event in events}, reverse=True)[:days]
     return sorted(
-        [event for event in events if event.trade_date in trade_dates],
+        [
+            event
+            for event in events
+            if event.trade_date in trade_dates and event.closed_limit
+        ],
         key=lambda event: (event.trade_date, event.board_height, event.first_limit_time),
         reverse=True,
     )

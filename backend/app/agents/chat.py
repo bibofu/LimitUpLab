@@ -8,11 +8,16 @@ from time import perf_counter
 from typing import Any, Callable
 
 from app.agents.explanation import explain_first_board_rating
+from app.agents.query_contract import (
+    MARKET_SEGMENT_LABELS,
+    build_limit_up_query_contract,
+    extract_board_filters as contract_board_filters,
+    looks_like_exhaustive_request,
+)
 from app.agents.tool_policy import (
     AgentToolPolicyEngine,
     QuestionSignals as _QuestionSignals,
     ToolExecution,
-    extract_board_filters as _extract_board_filters,
     extract_kline_days as _extract_kline_days,
     extract_promotion_days as _extract_promotion_days,
     extract_sector_query as _extract_sector_query,
@@ -683,7 +688,7 @@ def _tool_planner_system_prompt(tool_schema_prompt: str) -> str:
         "For scoring weights, strategy versions, autonomous learning, Champion, or Challenger questions, call scoring_policy_status. "
         "For daily limit-up promotion rates, first-board-to-second-board rates, or continued-board ladder success, call daily_board_promotion; do not infer rates from same-day counts. "
         "For first-board position/location classification, position means the pre-board K-line regime such as low-base breakout, oversold rebound, V reversal, high breakout or second wave; call first_board_ratings and never classify by first seal time. "
-        "For ordinary limit-up, first-board, or continued-board lists, call limit_up_events with closed_only=true; use first_board_ratings only when the user asks for ratings, scores, ranking, or candidate filtering. "
+        "For ordinary limit-up, first-board, or continued-board lists, call limit_up_events. Follow the backend_query_contract supplied with the user message for date, board height, market, event status, result mode, sorting and limit; do not weaken explicit user filters. Use first_board_ratings only when the user asks for ratings, scores, ranking, or candidate filtering. "
         "For explicit Tonghuashun, real-time/current limit-up-pool verification, call remote_limit_up_pool; it can filter first-board or continued-board height, ST/new stocks and limit-up reasons. "
         "For market popularity, hot-stock ranking, heat or crowding questions, call hot_stock_ranking. "
         "For Dragon-Tiger List, institution flow or hot-money flow questions, call dragon_tiger_list. "
@@ -728,6 +733,14 @@ def _tool_planner_user_prompt(
             "rating tool for that date and explain data is missing."
         ),
         "message": request.message,
+        "backend_query_contract": (
+            build_limit_up_query_contract(
+                request.message,
+                request_trade_date=request.trade_date,
+            ).to_dict()
+            if _looks_like_limit_up_event_question(request.message)
+            else None
+        ),
         "request_trade_date": (
             request.trade_date.isoformat() if request.trade_date else None
         ),
@@ -892,7 +905,7 @@ def _template_answer_from_tool_facts(
     if "daily_board_promotion" in facts:
         return _template_daily_board_promotion_answer(facts["daily_board_promotion"])
 
-    if "first_board_ratings" in facts:
+    if "first_board_ratings" in facts and "limit_up_events" not in facts:
         ratings = facts["first_board_ratings"]
         if _looks_like_first_board_position_question(request.message):
             return _template_first_board_position_answer(ratings)
@@ -926,7 +939,8 @@ def _template_answer_from_tool_facts(
         )
         for item in display_events:
             lines.append(
-                f"- {item.get('name')}({item.get('symbol')}) {item.get('board_height')}板，"
+                f"- {item.get('name')}({item.get('symbol')}) "
+                f"{item.get('board_height_text') or str(item.get('board_height')) + '板'}，"
                 f"行业 {item.get('industry')}，炸板 {item.get('break_count')} 次。"
             )
         lines.append(TEXT["safety"])
@@ -1161,10 +1175,7 @@ def _tool_answer_user_prompt(
 def _looks_like_exhaustive_list_request(message: str) -> bool:
     """Return whether the user explicitly asks for the complete result set."""
 
-    return any(
-        term in message
-        for term in ("所有", "全部", "完整名单", "全名单", "都列出", "列出")
-    )
+    return looks_like_exhaustive_request(message)
 
 
 def _requires_exhaustive_event_answer(
@@ -1709,7 +1720,7 @@ def _execute_llm_tool_calls(
             references.extend(item.url for item in response.results)
         elif name == "limit_up_events":
             arguments = _normalize_limit_up_event_arguments(
-                request.message,
+                request,
                 arguments,
             )
             trade_date = _parse_optional_date(arguments.get("trade_date"))
@@ -1739,21 +1750,32 @@ def _execute_llm_tool_calls(
                     )
                 )
                 continue
-            board_height = _parse_optional_int(arguments.get("board_height"))
-            min_board_height = _parse_optional_int(arguments.get("min_board_height"))
-            limit = _parse_optional_int(arguments.get("limit")) or 30
-            result = tools.limit_up_events(
-                trade_date=trade_date,
-                board_height=board_height,
-                min_board_height=min_board_height,
-                query=_optional_str(arguments.get("query")),
-                broken_only=_parse_optional_bool(arguments.get("broken_only")),
-                closed_only=_parse_optional_bool(arguments.get("closed_only")),
-                limit=limit,
+            contract = build_limit_up_query_contract(
+                request.message,
+                request_trade_date=request.trade_date,
+                planner_arguments=arguments,
             )
+            result = tools.limit_up_events(
+                trade_date=contract.trade_date,
+                board_height=contract.board_height,
+                min_board_height=contract.min_board_height,
+                highest_only=contract.highest_only,
+                market=contract.market,
+                query=contract.query,
+                event_status=contract.event_status,
+                sort_by=contract.sort_by,
+                sort_order=contract.sort_order,
+                limit=contract.limit,
+            )
+            result.input["query_contract"] = contract.to_dict()
+            result.trace_output["query_contract"] = contract.to_dict()
             facts["limit_up_events"] = {
                 "trade_date": result.trace_output.get("trade_date"),
-                "matched_count": len(result.output),
+                "market": result.trace_output.get("market"),
+                "market_label": result.trace_output.get("market_label"),
+                "matched_count": result.trace_output.get("matched_count"),
+                "returned_count": result.trace_output.get("returned_count"),
+                "query_contract": contract.to_dict(),
                 "events": [_event_fact(event) for event in result.output],
             }
             traces.append(result.trace())
@@ -2093,28 +2115,19 @@ def _execute_llm_tool_calls(
 
 
 def _normalize_limit_up_event_arguments(
-    message: str,
+    request: AgentChatRequest,
     arguments: dict[str, Any],
 ) -> dict[str, Any]:
-    """Enforce domain semantics while preserving planner date and text filters."""
+    """Apply Query Contract v2 to planner-proposed event arguments."""
 
-    if not _looks_like_limit_up_event_question(message):
+    if not _looks_like_limit_up_event_question(request.message):
         return arguments
-    normalized = dict(arguments)
-    board_height, min_board_height = _extract_board_filters(message)
-    if board_height is not None:
-        normalized["board_height"] = board_height
-        normalized["min_board_height"] = None
-    elif min_board_height is not None:
-        normalized["board_height"] = None
-        normalized["min_board_height"] = min_board_height
-
-    broken_only = any(term in message for term in ("炸板", "开板", "未封住"))
-    normalized["broken_only"] = broken_only
-    normalized["closed_only"] = None if broken_only else True
-    if _looks_like_exhaustive_list_request(message):
-        normalized["limit"] = 100
-    return normalized
+    contract = build_limit_up_query_contract(
+        request.message,
+        request_trade_date=request.trade_date,
+        planner_arguments=arguments,
+    )
+    return contract.to_tool_arguments()
 
 
 def _deterministic_pre_llm_response(
@@ -2477,12 +2490,14 @@ def _build_agent_plan(
         and _mentions_first_board_scope(request.message)
         and filter_query is None
         and intent != "first_board_sector_summary"
+        and not _looks_like_general_limit_up_question(request.message)
     ):
         intent = "today_summary"
     if (
         filter_query
         and _looks_like_first_board_data_question(request.message)
         and _mentions_first_board_scope(request.message)
+        and not _looks_like_general_limit_up_question(request.message)
     ):
         intent = "first_board_filter"
     symbol = request.symbol or _extract_symbol_hint(request.message)
@@ -2543,15 +2558,14 @@ def _plan_tool_steps(
     if intent == "market_context":
         return [{"name": "market_summary", "input": {}}]
     if intent == "limit_up_query":
+        contract = build_limit_up_query_contract(
+            message,
+            request_trade_date=trade_date,
+        )
         return [
             {
                 "name": "limit_up_events",
-                "input": {
-                    "trade_date": trade_date.isoformat() if trade_date else None,
-                    "board_height": _extract_board_height(message),
-                    "min_board_height": 2 if _looks_like_all_continued_board_question(message) else None,
-                    "broken_only": _looks_like_broken_limit_up_question(message),
-                },
+                "input": contract.to_tool_arguments(),
             }
         ]
     if intent == "first_board_filter":
@@ -2814,6 +2828,22 @@ def _merge_context_from_run(context: _SessionContext, run: AgentRun) -> None:
                 )
             if not context.matched_symbols:
                 context.matched_symbols = list(tool_input.get("matched_symbols") or [])
+        if tool_result.get("name") == "limit_up_events":
+            query_contract = tool_input.get("query_contract") or {}
+            if context.trade_date is None:
+                context.trade_date = _parse_optional_date(
+                    query_contract.get("trade_date") or tool_input.get("trade_date")
+                )
+            if context.filter_query is None and query_contract.get("query"):
+                context.filter_query = _filter_query_from_context(
+                    str(query_contract["query"])
+                )
+            if not context.matched_symbols:
+                context.matched_symbols = [
+                    str(item.get("symbol"))
+                    for item in (tool_result.get("output", {}).get("events", []) or [])
+                    if isinstance(item, dict) and item.get("symbol")
+                ]
 
 
 def _parse_optional_date(value: object) -> date | None:
@@ -3157,44 +3187,37 @@ def _answer_limit_up_query(
 ) -> AgentChatResponse:
     """Answer general same-day limit-up event questions."""
 
-    board_height = _extract_board_height(request.message)
-    min_board_height = 2 if _looks_like_all_continued_board_question(request.message) else None
-    broken_only = _looks_like_broken_limit_up_question(request.message)
-    query = filter_query.label if filter_query else None
-    result = tools.limit_up_events(
-        trade_date=trade_date,
-        board_height=board_height,
-        min_board_height=min_board_height,
-        query=query,
-        broken_only=broken_only,
-        closed_only=None if broken_only else True,
-        limit=100,
+    planner_arguments = {"query": filter_query.label} if filter_query else None
+    contract = build_limit_up_query_contract(
+        request.message,
+        request_trade_date=trade_date,
+        planner_arguments=planner_arguments,
     )
+    result = tools.limit_up_events(
+        trade_date=contract.trade_date,
+        board_height=contract.board_height,
+        min_board_height=contract.min_board_height,
+        highest_only=contract.highest_only,
+        market=contract.market,
+        query=contract.query,
+        event_status=contract.event_status,
+        sort_by=contract.sort_by,
+        sort_order=contract.sort_order,
+        limit=contract.limit,
+    )
+    result.input["query_contract"] = contract.to_dict()
+    result.trace_output["query_contract"] = contract.to_dict()
     events: list[LimitUpEvent] = result.output
-    if "\u6700\u9ad8\u677f" in request.message and events:
-        max_height = max(event.board_height for event in events)
-        events = [event for event in events if event.board_height == max_height]
-        result = result.__class__(
-            name=result.name,
-            input={**result.input, "derived_max_board_height": max_height},
-            output=events,
-            summary=f"{result.trace_output.get('trade_date')} 最高板为 {max_height} 板，命中 {len(events)} 只。",
-            trace_output={
-                **result.trace_output,
-                "matched_count": len(events),
-                "derived_max_board_height": max_height,
-                "events": [_event_fact(event) for event in events],
-            },
-        )
 
     answer = _template_limit_up_events_answer(
         request=request,
         trade_date=str(result.trace_output.get("trade_date")),
         events=events,
-        board_height=board_height,
-        min_board_height=min_board_height,
-        query=query,
-        broken_only=broken_only,
+        board_height=contract.board_height,
+        min_board_height=contract.min_board_height,
+        query=contract.query,
+        broken_only=contract.event_status in {"failed", "broken_intraday"},
+        market=contract.market,
     )
     return AgentChatResponse(
         session_id=request.session_id,
@@ -3217,6 +3240,7 @@ def _template_limit_up_events_answer(
     min_board_height: int | None,
     query: str | None,
     broken_only: bool,
+    market: str | None,
 ) -> str:
     """Build a deterministic answer for general limit-up event queries."""
 
@@ -3227,6 +3251,8 @@ def _template_limit_up_events_answer(
         scope = "\u8fde\u677f\u80a1"
     if broken_only:
         scope = "\u70b8\u677f\u80a1"
+    if market:
+        scope = f"{MARKET_SEGMENT_LABELS.get(market, market)}{scope}"
     if query:
         scope = f"{query}\u76f8\u5173{scope}"
     if "\u6700\u9ad8\u677f" in request.message and events:
@@ -4041,7 +4067,10 @@ def _looks_like_general_limit_up_question(message: str) -> bool:
     if _looks_like_daily_board_promotion_question(message):
         return False
     if "\u9996\u677f" in normalized:
-        return False
+        return any(
+            term in normalized
+            for term in ("所有", "全部", "列出", "名单", "有哪些", "多少只", "有几只")
+        )
     return any(
         keyword in normalized
         for keyword in (
@@ -4064,62 +4093,19 @@ def _looks_like_general_limit_up_question(message: str) -> bool:
 def _extract_board_height(message: str) -> int | None:
     """Extract requested board height from Chinese limit-up phrases."""
 
-    normalized = message.lower()
-    digit_match = re.search(r"(?<!\d)(\d{1,2})(?:\u8fde\u677f|\u677f)", normalized)
-    if digit_match:
-        return int(digit_match.group(1))
-    board_map = {
-        "\u4e00": 1,
-        "\u9996": 1,
-        "\u4e8c": 2,
-        "\u4e24": 2,
-        "\u4e09": 3,
-        "\u56db": 4,
-        "\u4e94": 5,
-        "\u516d": 6,
-        "\u4e03": 7,
-        "\u516b": 8,
-        "\u4e5d": 9,
-        "\u5341": 10,
-    }
-    for text, height in board_map.items():
-        if f"{text}\u8fde\u677f" in normalized or f"{text}\u677f" in normalized:
-            return height
-    return None
-
-
-def _looks_like_all_continued_board_question(message: str) -> bool:
-    """Return whether the user asks for all continued-board events."""
-
-    return "\u8fde\u677f" in message and _extract_board_height(message) is None
-
-
-def _looks_like_broken_limit_up_question(message: str) -> bool:
-    """Return whether the user asks for intraday-broken limit-up events."""
-
-    return "\u70b8\u677f" in message
+    board_height, _min_board_height = contract_board_filters(message)
+    return board_height
 
 
 def _limit_up_query_arguments_from_message(request: AgentChatRequest) -> dict[str, Any]:
     """Build limit-up event tool arguments from a user question."""
 
-    message = request.message
-    return {
-        "trade_date": (
-            request.trade_date.isoformat()
-            if request.trade_date
-            else (_extract_trade_date(message).isoformat() if _extract_trade_date(message) else None)
-        ),
-        "board_height": _extract_board_height(message),
-        "min_board_height": 2 if _looks_like_all_continued_board_question(message) else None,
-        "query": (
-            _extract_first_board_filter(message).label
-            if _extract_first_board_filter(message)
-            else None
-        ),
-        "broken_only": _looks_like_broken_limit_up_question(message),
-        "limit": 50,
-    }
+    filter_query = _extract_first_board_filter(request.message)
+    return build_limit_up_query_contract(
+        request.message,
+        request_trade_date=request.trade_date,
+        planner_arguments={"query": filter_query.label} if filter_query else None,
+    ).to_tool_arguments()
 
 
 def _generate_llm_answer(

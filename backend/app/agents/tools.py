@@ -6,6 +6,14 @@ from datetime import date
 from typing import Any
 
 from app.agents.first_board import build_first_board_ratings
+from app.agents.query_contract import (
+    MARKET_SEGMENT_LABELS,
+    MARKET_SEGMENT_PREFIXES,
+    normalize_event_status,
+    normalize_market_segment,
+    normalize_sort_field,
+    normalize_sort_order,
+)
 from app.collectors import HithinkFinanceCollector
 from app.models import (
     AgentEvaluationResponse,
@@ -257,7 +265,9 @@ TOOL_SCHEMAS = [
     AgentToolSchema(
         name="limit_up_events",
         description=(
-            "查询某个交易日的涨停事件列表，可按板数、首板/连板、炸板次数、行业、题材或股票名称过滤。"
+            "查询某个交易日的涨停事件列表，可按市场板块、板数、首板/连板、炸板次数、"
+            "行业、题材或股票名称过滤。用户提到主板、创业板、科创板、北交所时，"
+            "分别设置 market=main_board、chinext、star_market、beijing。"
             "普通涨停/首板/连板名单默认只返回收盘封住的股票；查询炸板或曾开板时使用 broken_only。"
         ),
         args_schema={
@@ -275,6 +285,21 @@ TOOL_SCHEMAS = [
                     "type": ["integer", "null"],
                     "description": "Minimum board height; use 2 for all continued-board stocks.",
                 },
+                "highest_only": {
+                    "type": ["boolean", "null"],
+                    "description": "Return every stock tied at the highest board height.",
+                },
+                "market": {
+                    "type": ["string", "null"],
+                    "enum": [
+                        "main_board",
+                        "chinext",
+                        "star_market",
+                        "beijing",
+                        None,
+                    ],
+                    "description": "Exchange board segment; omit for all markets.",
+                },
                 "query": {
                     "type": ["string", "null"],
                     "description": "Optional industry, concept, stock name or symbol keyword.",
@@ -286,6 +311,33 @@ TOOL_SCHEMAS = [
                 "closed_only": {
                     "type": ["boolean", "null"],
                     "description": "Only return stocks that closed at limit-up when true.",
+                },
+                "event_status": {
+                    "type": ["string", "null"],
+                    "enum": ["closed", "failed", "broken_intraday", "all", None],
+                    "description": (
+                        "closed=closed limit-up, failed=did not close at limit-up, "
+                        "broken_intraday=opened at least once, all=no status filter."
+                    ),
+                },
+                "result_mode": {
+                    "type": ["string", "null"],
+                    "enum": ["list", "count", "summary", "ranking", None],
+                },
+                "sort_by": {
+                    "type": ["string", "null"],
+                    "enum": [
+                        "board_height",
+                        "first_limit_time",
+                        "amount",
+                        "turnover_rate",
+                        "break_count",
+                        None,
+                    ],
+                },
+                "sort_order": {
+                    "type": ["string", "null"],
+                    "enum": ["asc", "desc", None],
                 },
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100},
             },
@@ -464,6 +516,26 @@ TOOL_SCHEMAS = [
         returns="Search result titles, URLs, source domains, snippets and retrieval time.",
     ),
 ]
+
+
+def _sort_limit_up_events(
+    events: list[LimitUpEvent],
+    *,
+    sort_by: str,
+    sort_order: str,
+) -> list[LimitUpEvent]:
+    """Sort event rows deterministically while preserving a symbol tie-breaker."""
+
+    key_getters = {
+        "board_height": lambda event: event.board_height,
+        "first_limit_time": lambda event: event.first_limit_time,
+        "amount": lambda event: event.amount,
+        "turnover_rate": lambda event: event.turnover_rate,
+        "break_count": lambda event: event.break_count,
+    }
+    key_getter = key_getters.get(sort_by, key_getters["board_height"])
+    ordered = sorted(events, key=lambda event: event.symbol)
+    return sorted(ordered, key=key_getter, reverse=sort_order == "desc")
 
 
 class AgentToolRegistry:
@@ -833,17 +905,29 @@ class AgentToolRegistry:
         trade_date: date | None = None,
         board_height: int | None = None,
         min_board_height: int | None = None,
+        highest_only: bool = False,
+        market: str | None = None,
         query: str | None = None,
         broken_only: bool | None = None,
         closed_only: bool | None = None,
+        event_status: str | None = None,
+        sort_by: str | None = None,
+        sort_order: str | None = None,
         limit: int = 30,
     ) -> ToolResult:
         """Return filtered limit-up events for general limit-up questions."""
 
         target_events = events_for_date(self.events, trade_date)
-        effective_closed_only = closed_only
-        if effective_closed_only is None and not broken_only:
-            effective_closed_only = True
+        effective_market = normalize_market_segment(market)
+        effective_status = normalize_event_status(event_status)
+        if effective_status is None:
+            if broken_only:
+                effective_status = "broken_intraday"
+            elif closed_only is False:
+                effective_status = "all"
+            else:
+                effective_status = "closed"
+        effective_closed_only = effective_status == "closed"
         if board_height is not None:
             target_events = [
                 event for event in target_events if event.board_height == board_height
@@ -852,9 +936,16 @@ class AgentToolRegistry:
             target_events = [
                 event for event in target_events if event.board_height >= min_board_height
             ]
-        if broken_only:
+        if effective_market is not None:
+            prefixes = MARKET_SEGMENT_PREFIXES[effective_market]
+            target_events = [
+                event for event in target_events if event.symbol.startswith(prefixes)
+            ]
+        if effective_status == "failed":
+            target_events = [event for event in target_events if not event.closed_limit]
+        elif effective_status == "broken_intraday":
             target_events = [event for event in target_events if event.break_count > 0]
-        if effective_closed_only:
+        elif effective_status == "closed":
             target_events = [event for event in target_events if event.closed_limit]
         if query:
             normalized_query = query.strip().lower()
@@ -867,10 +958,23 @@ class AgentToolRegistry:
                 or normalized_query in event.concept.lower()
             ]
 
-        target_events = sorted(
+        if highest_only and target_events:
+            max_height = max(event.board_height for event in target_events)
+            target_events = [
+                event for event in target_events if event.board_height == max_height
+            ]
+
+        effective_sort_by = normalize_sort_field(sort_by) or "board_height"
+        effective_sort_order = normalize_sort_order(sort_order) or (
+            "asc" if effective_sort_by == "first_limit_time" else "desc"
+        )
+        target_events = _sort_limit_up_events(
             target_events,
-            key=lambda event: (-event.board_height, event.first_limit_time, event.symbol),
-        )[: max(1, min(limit, 100))]
+            sort_by=effective_sort_by,
+            sort_order=effective_sort_order,
+        )
+        matched_count = len(target_events)
+        target_events = target_events[: max(1, min(limit, 100))]
         if trade_date is not None:
             trade_date_text = trade_date.isoformat()
         elif self.events:
@@ -878,15 +982,26 @@ class AgentToolRegistry:
         else:
             trade_date_text = ""
         board_text = f"{board_height}板" if board_height is not None else "涨停"
+        market_text = MARKET_SEGMENT_LABELS.get(effective_market or "", "")
         names = "、".join(f"{event.name}({event.symbol})" for event in target_events[:5])
         trace_output = {
             "trade_date": trade_date_text,
-            "matched_count": len(target_events),
+            "market": effective_market,
+            "market_label": market_text or None,
+            "event_status": effective_status,
+            "highest_only": highest_only,
+            "sort_by": effective_sort_by,
+            "sort_order": effective_sort_order,
+            "matched_count": matched_count,
+            "returned_count": len(target_events),
             "events": [
                 {
                     "symbol": event.symbol,
                     "name": event.name,
                     "board_height": event.board_height,
+                    "board_height_text": (
+                        f"{event.board_height}板" if event.closed_limit else "炸板未回封"
+                    ),
                     "industry": event.industry,
                     "concept": event.concept,
                     "first_limit_time": event.first_limit_time.strftime("%H:%M"),
@@ -902,14 +1017,19 @@ class AgentToolRegistry:
                 "trade_date": trade_date.isoformat() if trade_date else None,
                 "board_height": board_height,
                 "min_board_height": min_board_height,
+                "highest_only": highest_only,
+                "market": effective_market,
                 "query": query,
                 "broken_only": broken_only,
                 "closed_only": effective_closed_only,
+                "event_status": effective_status,
+                "sort_by": effective_sort_by,
+                "sort_order": effective_sort_order,
                 "limit": limit,
             },
             output=target_events,
             summary=(
-                f"{trade_date_text} {board_text}查询命中 {len(target_events)} 只"
+                f"{trade_date_text} {market_text}{board_text}查询命中 {matched_count} 只"
                 f"{f'：{names}' if names else '。'}"
             ),
             trace_output=trace_output,

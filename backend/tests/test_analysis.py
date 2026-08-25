@@ -6,6 +6,7 @@ from app.services.analysis import (
     calculate_daily_board_promotion,
     calculate_failed_rates,
     events_for_date,
+    find_stock_event,
     latest_trade_date,
     list_continued_board,
     list_failed_events,
@@ -26,12 +27,29 @@ class AnalysisTest(unittest.TestCase):
         self.assertEqual(len(events), 5)
         self.assertTrue(all(event.trade_date == date(2026, 5, 15) for event in events))
 
+    def test_find_stock_event_supports_latest_and_exact_date(self) -> None:
+        repeated = SAMPLE_EVENTS[0].model_copy(
+            update={"trade_date": date(2026, 5, 14), "board_height": 2}
+        )
+        events = [*SAMPLE_EVENTS, repeated]
+
+        latest = find_stock_event(events, SAMPLE_EVENTS[0].symbol)
+        historical = find_stock_event(
+            events,
+            SAMPLE_EVENTS[0].symbol,
+            trade_date=date(2026, 5, 14),
+        )
+
+        self.assertEqual(latest, SAMPLE_EVENTS[0])
+        self.assertEqual(historical, repeated)
+        self.assertIsNone(find_stock_event(events, "999999"))
+
     def test_summarize_market(self) -> None:
         summary = summarize_market(SAMPLE_EVENTS)
 
         self.assertEqual(summary.trade_date, date(2026, 5, 15))
-        self.assertEqual(summary.limit_up_count, 5)
-        self.assertEqual(summary.first_board_count, 3)
+        self.assertEqual(summary.limit_up_count, 3)
+        self.assertEqual(summary.first_board_count, 1)
         self.assertEqual(summary.continued_board_count, 2)
         self.assertEqual(summary.failed_count, 4)
         self.assertEqual(summary.failed_limit_up_rate, 0.8)
@@ -41,7 +59,7 @@ class AnalysisTest(unittest.TestCase):
     def test_first_board_list(self) -> None:
         symbols = [event.symbol for event in list_first_board(SAMPLE_EVENTS)]
 
-        self.assertEqual(symbols, ["301489", "603083", "002050"])
+        self.assertEqual(symbols, ["301489"])
 
     def test_continued_board_list(self) -> None:
         symbols = [event.symbol for event in list_continued_board(SAMPLE_EVENTS)]
@@ -58,7 +76,7 @@ class AnalysisTest(unittest.TestCase):
         trade_dates = {event.trade_date for event in events}
 
         self.assertEqual(trade_dates, {date(2026, 5, 15), date(2026, 5, 14)})
-        self.assertEqual(len(events), 8)
+        self.assertEqual(len(events), 5)
 
     def test_continuation_stats(self) -> None:
         stats = {item.board_height: item for item in calculate_continuation(SAMPLE_EVENTS)}

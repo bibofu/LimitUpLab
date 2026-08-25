@@ -73,13 +73,13 @@ class AgentEvalRunnerTest(unittest.TestCase):
             if not result.passed
         }
         self.assertTrue(suite.ok, failure_report)
-        self.assertEqual(suite.total, 10)
+        self.assertEqual(suite.total, 18)
 
     def test_eval_report_route_returns_quality_summary(self) -> None:
         report = get_agent_eval_report()
 
         self.assertEqual(report.mode, "offline")
-        self.assertEqual(report.total, 10)
+        self.assertEqual(report.total, 18)
         self.assertEqual(report.failed, 0)
         self.assertEqual(report.pass_rate, 1.0)
         self.assertTrue(report.results)

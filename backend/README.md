@@ -250,8 +250,9 @@ python -m unittest discover -s tests
 
 ## Agent Evals
 
-The chat Agent has a deterministic regression suite for common questions and
-safety boundaries. It checks intent routing, required/forbidden tool calls,
+The chat Agent has deterministic regression suites for common questions,
+safety boundaries, and Query Contract v2. They check intent routing,
+required/forbidden tool calls, canonical limit-up filters, exact result sets,
 answer facts, warnings, and investment-advice guardrails without depending on a
 live LLM provider:
 
@@ -260,7 +261,9 @@ cd backend
 .\.venv\Scripts\python.exe scripts\run_agent_eval.py
 ```
 
-Eval cases live in `tests/fixtures/agent_eval_cases.json`.
+Chat cases live in `tests/fixtures/agent_eval_cases.json`; the 36 paraphrase and
+parameter-precedence cases for Query Contract v2 live in
+`tests/fixtures/query_contract_v2_cases.json`.
 
 To sample the configured live LLM planner and capture cases where the model
 chooses weak tools or needs backend repair:

@@ -212,6 +212,38 @@ class MarketSummary(BaseModel):
     sentiment: Literal["heating", "diverging", "cooling"]
 
 
+class DragonTigerReviewItem(BaseModel):
+    """One deduplicated stock row for the post-close Dragon-Tiger review."""
+
+    symbol: str
+    name: str
+    change_pct: float | None = None
+    buy_amount: float | None = None
+    sell_amount: float | None = None
+    net_buy_amount: float | None = None
+    net_rate: float | None = None
+    organization_net_buy_amount: float | None = None
+    hot_money_net_buy_amount: float | None = None
+    hot_rank: int | None = None
+    range_days: int | None = None
+    limit_reason: str | None = None
+    concepts: list[str] = Field(default_factory=list)
+    detail_trade_date: date | None = None
+
+
+class DragonTigerReviewResponse(BaseModel):
+    """Post-close Dragon-Tiger list summary shown in the review workspace."""
+
+    trade_date: date
+    source: str
+    stock_count: int
+    net_inflow_count: int
+    net_outflow_count: int
+    organization_count: int
+    hot_money_count: int
+    items: list[DragonTigerReviewItem] = Field(default_factory=list)
+
+
 class ContinuationStat(BaseModel):
     """Continuation probability bucket grouped by board height."""
 

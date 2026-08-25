@@ -7,6 +7,8 @@ from uuid import uuid4
 
 from app.config import (
     PROXY_ENV_NAMES,
+    clear_unreachable_local_proxy,
+    configure_runtime_environment,
     hydrate_windows_environment,
     load_local_env,
     replace_proxy_environment,
@@ -29,6 +31,12 @@ class ConfigTest(unittest.TestCase):
         shutil.rmtree(self._test_dir, ignore_errors=True)
 
     def test_loads_env_file_without_overriding_existing_values(self) -> None:
+        for name in (
+            "LIMITUPLAB_LLM_ENABLED",
+            "LIMITUPLAB_LLM_MODEL",
+            "LIMITUPLAB_LLM_BASE_URL",
+        ):
+            os.environ.pop(name, None)
         env_path = self._test_dir / ".env"
         env_path.write_text(
             "\n".join(
@@ -95,6 +103,36 @@ class ConfigTest(unittest.TestCase):
 
         replace_proxy_environment()
         self.assertTrue(all(name not in os.environ for name in PROXY_ENV_NAMES))
+
+    @patch("app.config._proxy_endpoint_reachable", return_value=False)
+    def test_runtime_configuration_enables_llm_and_clears_dead_proxy(
+        self,
+        _reachable,
+    ) -> None:
+        os.environ["DEEPSEEK_API_KEY"] = "test-secret"
+        os.environ["HTTP_PROXY"] = "http://127.0.0.1:65534"
+        os.environ["HTTPS_PROXY"] = "http://127.0.0.1:65534"
+
+        configure_runtime_environment(self._test_dir / "missing.env")
+
+        self.assertEqual(os.getenv("LIMITUPLAB_LLM_ENABLED"), "true")
+        self.assertEqual(os.getenv("LIMITUPLAB_LLM_BASE_URL"), "https://api.deepseek.com")
+        self.assertEqual(os.getenv("LIMITUPLAB_LLM_MODEL"), "deepseek-v4-flash")
+        self.assertTrue(all(name not in os.environ for name in PROXY_ENV_NAMES))
+
+    @patch("app.config._proxy_endpoint_reachable", return_value=True)
+    def test_dead_proxy_cleanup_leaves_valid_proxy_untouched(
+        self,
+        _reachable,
+    ) -> None:
+        for name in PROXY_ENV_NAMES:
+            os.environ.pop(name, None)
+        os.environ["HTTP_PROXY"] = "http://127.0.0.1:7890"
+
+        removed = clear_unreachable_local_proxy()
+
+        self.assertFalse(removed)
+        self.assertEqual(os.getenv("HTTP_PROXY"), "http://127.0.0.1:7890")
 
 
 if __name__ == "__main__":

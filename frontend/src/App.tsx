@@ -1,11 +1,11 @@
 ﻿import {
   Trash2,
-  ArrowLeft,
   BarChart3,
   Check,
   ChevronRight,
   Flame,
   GitBranch,
+  Landmark,
   Layers3,
   LineChart,
   LoaderCircle,
@@ -32,6 +32,7 @@ import {
   useLocation,
   useNavigate,
   useParams,
+  useSearchParams,
 } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 
@@ -49,6 +50,7 @@ import {
   fetchChatSessions,
   fetchDailyPipelineStatus,
   fetchDailyBoardPromotion,
+  fetchDragonTigerReview,
   fetchReviewAgentReport,
   fetchFirstBoardCritic,
   fetchFirstBoardRatings,
@@ -59,6 +61,7 @@ import {
   fetchRatingEvaluation,
   fetchRecentLimitUpEvents,
   fetchStockKLine,
+  fetchStockEvent,
   fetchStockLatestClose,
   fetchStockPosition,
   fetchStockTradingDayKLine,
@@ -75,6 +78,7 @@ import type {
   ChatSessionSummary,
   DailyPipelineStatusResponse,
   DailyBoardPromotionStat,
+  DragonTigerReviewResponse,
   FirstBoardCriticResponse,
   FirstBoardRating,
   FirstBoardRatingsResponse,
@@ -141,7 +145,7 @@ function sessionTimeLabel(value: string) {
 const viewMeta: Record<ViewKey, { title: string; eyebrow: string }> = {
   overview: { title: "短线市场概况", eyebrow: "Overview" },
   recommendation: { title: "盘前推荐", eyebrow: "Pre-market Picks" },
-  review: { title: "预测与市场复盘", eyebrow: "Review" },
+  review: { title: "市场复盘", eyebrow: "Review" },
   pool: { title: "涨停池", eyebrow: "Limit-Up Pool" },
   first: { title: "首板票", eyebrow: "First Board" },
   continued: { title: "连板票", eyebrow: "Continued Board" },
@@ -842,14 +846,6 @@ export function App() {
             <p className="eyebrow">{activeMeta.eyebrow}</p>
             <h1>{activeMeta.title}</h1>
           </div>
-          {!isStockDetail ? (
-            <div className="topbar-actions">
-              <Link className="text-button" to="/">
-                <ArrowLeft size={17} />
-                返回概况
-              </Link>
-            </div>
-          ) : null}
         </section>
       ) : null}
 
@@ -943,12 +939,189 @@ function ReviewDashboard({ data }: { data: DashboardData }) {
   return (
     <>
       <DailyBoardPromotionPanel stats={data.dailyBoardPromotion} />
+      <DragonTigerReviewPanel tradeDate={data.summary.trade_date} />
       <HighScoreReviewPanel
         backtest={data.ratingBacktest}
         evaluation={data.ratingEvaluation}
         latestTradeDate={data.summary.trade_date}
       />
     </>
+  );
+}
+
+type DragonTigerFilter = "all" | "organization" | "hot_money";
+
+function DragonTigerReviewPanel({ tradeDate }: { tradeDate: string }) {
+  /** Load post-close Dragon-Tiger facts without delaying the rest of the dashboard. */
+
+  const [data, setData] = useState<DragonTigerReviewResponse | null>(null);
+  const [filter, setFilter] = useState<DragonTigerFilter>("all");
+  const [expanded, setExpanded] = useState(false);
+  const [reloadToken, setReloadToken] = useState(0);
+  const [error, setError] = useState<string | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    setData(null);
+    setError(null);
+    void fetchDragonTigerReview(tradeDate)
+      .then((response) => {
+        if (active) {
+          setData(response);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setError("龙虎榜数据暂时没有加载成功");
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [reloadToken, tradeDate]);
+
+  const filteredItems = useMemo(() => {
+    const items = data?.items ?? [];
+    if (filter === "organization") {
+      return items.filter((item) => item.organization_net_buy_amount !== null);
+    }
+    if (filter === "hot_money") {
+      return items.filter((item) => item.hot_money_net_buy_amount !== null);
+    }
+    return items;
+  }, [data, filter]);
+  const visibleItems = expanded ? filteredItems : filteredItems.slice(0, 20);
+
+  function selectFilter(nextFilter: DragonTigerFilter) {
+    setFilter(nextFilter);
+    setExpanded(false);
+  }
+
+  return (
+    <section className="dragon-tiger-section">
+      <Panel
+        title="龙虎榜"
+        icon={<Landmark size={18} />}
+        actions={(
+          <div className="dragon-tiger-filters" role="tablist" aria-label="龙虎榜类型">
+            {([
+              ["all", "全部"],
+              ["organization", "机构"],
+              ["hot_money", "游资"],
+            ] as const).map(([value, label]) => (
+              <button
+                type="button"
+                role="tab"
+                aria-selected={filter === value}
+                className={filter === value ? "active" : ""}
+                key={value}
+                onClick={() => selectFilter(value)}
+              >
+                {label}
+              </button>
+            ))}
+          </div>
+        )}
+      >
+        {!data && !error ? (
+          <div className="dragon-tiger-state">
+            <LoaderCircle className="state-spinner" size={22} />
+            <span>正在获取 {tradeDate} 龙虎榜...</span>
+          </div>
+        ) : null}
+        {error ? (
+          <div className="dragon-tiger-state">
+            <span>{error}</span>
+            <button type="button" onClick={() => setReloadToken((value) => value + 1)}>
+              <RefreshCcw size={15} />
+              重试
+            </button>
+          </div>
+        ) : null}
+        {data ? (
+          <div className="dragon-tiger-content">
+            <div className="dragon-tiger-metrics">
+              <span><small>交易日</small><strong>{data.trade_date}</strong></span>
+              <span><small>上榜股票</small><strong>{data.stock_count}<em>只</em></strong></span>
+              <span><small>净流入股票</small><strong className="positive">{data.net_inflow_count}<em>只</em></strong></span>
+              <span><small>机构席位</small><strong>{data.organization_count}<em>只</em></strong></span>
+              <span><small>游资席位</small><strong>{data.hot_money_count}<em>只</em></strong></span>
+            </div>
+
+            {filteredItems.length > 0 ? (
+              <>
+                <div className="table-wrap dragon-tiger-table-wrap">
+                  <table className="dragon-tiger-table">
+                    <thead>
+                      <tr>
+                        <th>股票</th>
+                        <th>涨跌幅</th>
+                        <th>净买额</th>
+                        <th>机构净额</th>
+                        <th>游资净额</th>
+                        <th>上榜信息</th>
+                      </tr>
+                    </thead>
+                    <tbody>
+                      {visibleItems.map((item) => {
+                        const stockIdentity = (
+                          <>
+                            <strong>{item.name}</strong>
+                            <small>{item.symbol}{item.hot_rank ? ` · 人气 ${item.hot_rank}` : ""}</small>
+                          </>
+                        );
+                        return (
+                          <tr key={item.symbol}>
+                            <td className="dragon-tiger-stock">
+                              {item.detail_trade_date ? (
+                                <Link to={stockDetailPath(item.symbol, item.detail_trade_date)}>
+                                  {stockIdentity}
+                                  <ChevronRight size={15} aria-hidden="true" />
+                                </Link>
+                              ) : (
+                                <div>{stockIdentity}</div>
+                              )}
+                            </td>
+                            <td className={numberTone(item.change_pct)}>
+                              {formatOptionalPercent(item.change_pct)}
+                            </td>
+                            <td className={numberTone(item.net_buy_amount)}>
+                              {formatNetAmount(item.net_buy_amount)}
+                            </td>
+                            <td className={numberTone(item.organization_net_buy_amount)}>
+                              {formatNetAmount(item.organization_net_buy_amount)}
+                            </td>
+                            <td className={numberTone(item.hot_money_net_buy_amount)}>
+                              {formatNetAmount(item.hot_money_net_buy_amount)}
+                            </td>
+                            <td className="dragon-tiger-reason">
+                              <strong>{item.limit_reason || "上榜原因待补充"}</strong>
+                              <small>
+                                {item.concepts.slice(0, 3).join(" · ") || "题材待补充"}
+                                {item.range_days && item.range_days > 1 ? ` · ${item.range_days}日统计` : ""}
+                              </small>
+                            </td>
+                          </tr>
+                        );
+                      })}
+                    </tbody>
+                  </table>
+                </div>
+                {filteredItems.length > 20 ? (
+                  <div className="dragon-tiger-expand">
+                    <button type="button" onClick={() => setExpanded((value) => !value)}>
+                      {expanded ? "收起榜单" : `查看全部 ${filteredItems.length} 只`}
+                    </button>
+                  </div>
+                ) : null}
+              </>
+            ) : (
+              <div className="dragon-tiger-state">当前分类暂无龙虎榜股票。</div>
+            )}
+          </div>
+        ) : null}
+      </Panel>
+    </section>
   );
 }
 
@@ -1041,14 +1214,18 @@ function DailyBoardPromotionPanel({ stats }: { stats: DailyBoardPromotionStat[] 
             <div className="promotion-success-heading">
               <div>
                 <strong>{selected.trade_date} 晋级成功</strong>
-                <small>点击股票查看 K 线、封板信息和当前位置判断</small>
+                <small>点击股票查看 K 线、封板信息和首板位置判断</small>
               </div>
               <b>{selected.promoted_stocks.length} 只</b>
             </div>
             {selected.promoted_stocks.length > 0 ? (
               <div className="promotion-stock-list">
                 {selected.promoted_stocks.map((stock) => (
-                  <Link className="promotion-stock-row" to={`/stocks/${stock.symbol}`} key={stock.symbol}>
+                  <Link
+                    className="promotion-stock-row"
+                    to={stockDetailPath(stock.symbol, selected.trade_date)}
+                    key={stock.symbol}
+                  >
                     <div>
                       <strong>{stock.name}</strong>
                       <small>{stock.symbol} · {stock.industry || "行业待补充"}</small>
@@ -1559,7 +1736,7 @@ function ReviewPickTable({
         <Link
           className={`review-pick-row pick-${pick.evaluation_label}`}
           key={`${pick.trade_date}-${pick.symbol}`}
-          to={`/stocks/${pick.symbol}`}
+          to={stockDetailPath(pick.symbol, pick.trade_date)}
         >
           <strong>
             {pick.name}
@@ -1655,7 +1832,7 @@ function reviewLabelCopy(label: string) {
 function FirstBoardRatingPanel({ ratings }: { ratings: FirstBoardRatingsResponse }) {
   /** Render the first-board rating summary generated from deterministic facts. */
 
-  const topCandidates = ratings.candidates.slice(0, 5);
+  const topCandidates = ratings.candidates.slice(0, 10);
   const topCandidate = topCandidates[0];
 
   return (
@@ -1673,7 +1850,7 @@ function FirstBoardRatingPanel({ ratings }: { ratings: FirstBoardRatingsResponse
               <Link
                 className="rating-top-card"
                 key={`${candidate.facts.trade_date}-${candidate.facts.symbol}`}
-                to={`/stocks/${candidate.facts.symbol}`}
+                to={stockDetailPath(candidate.facts.symbol, candidate.facts.trade_date)}
               >
                 <header>
                   <div>
@@ -2131,11 +2308,17 @@ function FirstBoardRatingTable({ ratings }: { ratings: FirstBoardRating[] }) {
             <tr
               className="stock-row"
               key={`${rating.facts.trade_date}-${rating.facts.symbol}`}
-              onClick={() => navigate(`/stocks/${rating.facts.symbol}`)}
+              onClick={() => navigate(stockDetailPath(
+                rating.facts.symbol,
+                rating.facts.trade_date,
+              ))}
               onKeyDown={(keyboardEvent) => {
                 if (keyboardEvent.key === "Enter" || keyboardEvent.key === " ") {
                   keyboardEvent.preventDefault();
-                  navigate(`/stocks/${rating.facts.symbol}`);
+                  navigate(stockDetailPath(
+                    rating.facts.symbol,
+                    rating.facts.trade_date,
+                  ));
                 }
               }}
               tabIndex={0}
@@ -2180,8 +2363,8 @@ function StockTable({
 
   const navigate = useNavigate();
 
-  function openStock(symbol: string) {
-    navigate(`/stocks/${symbol}`);
+  function openStock(symbol: string, tradeDate: string) {
+    navigate(stockDetailPath(symbol, tradeDate));
   }
 
   return (
@@ -2206,11 +2389,11 @@ function StockTable({
             <tr
               className="stock-row"
               key={`${event.trade_date}-${event.symbol}`}
-              onClick={() => openStock(event.symbol)}
+              onClick={() => openStock(event.symbol, event.trade_date)}
               onKeyDown={(keyboardEvent) => {
                 if (keyboardEvent.key === "Enter" || keyboardEvent.key === " ") {
                   keyboardEvent.preventDefault();
-                  openStock(event.symbol);
+                  openStock(event.symbol, event.trade_date);
                 }
               }}
               tabIndex={0}
@@ -2220,7 +2403,7 @@ function StockTable({
                 <span>{event.symbol}</span>
               </td>
               <td>{event.trade_date}</td>
-              <td>{event.board_height} 板</td>
+              <td>{event.closed_limit ? `${event.board_height} 板` : "未封板"}</td>
               <td>{event.first_limit_time.slice(0, 5)}</td>
               <td>{event.last_limit_time.slice(0, 5)}</td>
               <td>{variant === "failed" ? (event.closed_limit ? "回封" : "未回封") : event.seal_count}</td>
@@ -2243,6 +2426,12 @@ function StockDetail({ data }: { data: DashboardData }) {
   /** Render one stock's event facts together with daily and intraday K-lines. */
 
   const { symbol = "" } = useParams();
+  const [searchParams] = useSearchParams();
+  const requestedTradeDate = searchParams.get("trade_date") ?? undefined;
+  const [stockEvent, setStockEvent] = useState<LimitUpEvent | null>(null);
+  const [stockEventLoading, setStockEventLoading] = useState(true);
+  const [stockEventError, setStockEventError] = useState<string | null>(null);
+  const [firstBoardRating, setFirstBoardRating] = useState<FirstBoardRating | null>(null);
   const [kline, setKline] = useState<StockKLineBar[]>([]);
   const [tradingDayKline, setTradingDayKline] = useState<StockIntradayKLineBar[]>([]);
   const [chartMode, setChartMode] = useState<"daily" | "intraday">("daily");
@@ -2258,35 +2447,42 @@ function StockDetail({ data }: { data: DashboardData }) {
   const [positionLoading, setPositionLoading] = useState(true);
   const [positionError, setPositionError] = useState<string | null>(null);
   const [criticLoading, setCriticLoading] = useState(false);
-  const [criticError, setCriticError] = useState<string | null>(null);
-  const events = useMemo(
-    () => [...data.firstBoard, ...data.continuedBoard, ...data.failed, ...data.recent],
-    [data],
-  );
-  const stockEvent = useMemo(() => {
-    return events
-      .filter((event) => event.symbol === symbol)
-      .sort((left, right) => right.trade_date.localeCompare(left.trade_date))[0];
-  }, [events, symbol]);
-  const firstBoardRating = useMemo(() => {
-    return data.firstBoardRatings.candidates.find(
-      (rating) => rating.facts.symbol === symbol,
-    ) ?? null;
-  }, [data.firstBoardRatings.candidates, symbol]);
+
+  useEffect(() => {
+    let active = true;
+    setStockEvent(null);
+    setStockEventLoading(true);
+    setStockEventError(null);
+    fetchStockEvent(symbol, requestedTradeDate)
+      .then((event) => {
+        if (active) {
+          setStockEvent(event);
+        }
+      })
+      .catch((caught) => {
+        if (active) {
+          setStockEventError(caught instanceof Error ? caught.message : "加载涨停事件失败");
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setStockEventLoading(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [requestedTradeDate, symbol]);
 
   useEffect(() => {
     const tradeDate = stockEvent?.trade_date;
     if (!tradeDate) {
-      setKlineLoading(false);
-      setTradingDayLoading(false);
-      setLatestCloseLoading(false);
-      setPositionLoading(false);
-      setPosition(null);
-      setCriticLoading(false);
-      setCritic(null);
       return;
     }
 
+    setKline([]);
+    setTradingDayKline([]);
+    setPosition(null);
     setLatestCloseLoading(true);
     setLatestCloseError(null);
     fetchStockLatestClose(symbol)
@@ -2312,41 +2508,72 @@ function StockDetail({ data }: { data: DashboardData }) {
       .then(setPosition)
       .catch((caught) => {
         setPosition(null);
-        setPositionError(caught instanceof Error ? caught.message : "加载当前位置判断失败");
+        setPositionError(caught instanceof Error ? caught.message : "加载首板位置判断失败");
       })
       .finally(() => setPositionLoading(false));
 
     setTradingDayLoading(true);
     setTradingDayError(null);
-    fetchStockTradingDayKLine(symbol, 1)
+    fetchStockTradingDayKLine(symbol, 1, tradeDate)
       .then(setTradingDayKline)
       .catch((caught) => {
         setTradingDayError(caught instanceof Error ? caught.message : "加载交易日走势失败");
       })
       .finally(() => setTradingDayLoading(false));
 
-    if (firstBoardRating) {
-      setCriticLoading(true);
-      setCriticError(null);
-      fetchFirstBoardCritic(symbol, firstBoardRating.facts.trade_date)
-        .then(setCritic)
-        .catch((caught) => {
-          setCritic(null);
-          setCriticError(caught instanceof Error ? caught.message : "加载 Critic 复核失败");
-        })
-        .finally(() => setCriticLoading(false));
-    } else {
+    const cachedRating = data.firstBoardRatings.trade_date === tradeDate
+      ? data.firstBoardRatings.candidates.find(
+          (rating) => rating.facts.symbol === symbol,
+        ) ?? null
+      : null;
+    setFirstBoardRating(cachedRating);
+    fetchFirstBoardRatings(tradeDate)
+      .then((ratings) => {
+        setFirstBoardRating(
+          ratings.candidates.find((rating) => rating.facts.symbol === symbol) ?? null,
+        );
+      })
+      .catch(() => {
+        if (!cachedRating) {
+          setFirstBoardRating(null);
+        }
+      });
+  }, [data.firstBoardRatings, stockEvent?.trade_date, symbol]);
+
+  useEffect(() => {
+    if (!firstBoardRating) {
       setCritic(null);
       setCriticLoading(false);
-      setCriticError(null);
+      return;
     }
-  }, [firstBoardRating, stockEvent?.trade_date, symbol]);
 
-  if (!stockEvent) {
+    setCritic(null);
+    setCriticLoading(true);
+    fetchFirstBoardCritic(symbol, firstBoardRating.facts.trade_date)
+      .then(setCritic)
+      .catch(() => setCritic(null))
+      .finally(() => setCriticLoading(false));
+  }, [firstBoardRating, symbol]);
+
+  const intradayReferencePrice = useMemo(() => {
+    if (!stockEvent) {
+      return null;
+    }
+    const eventIndex = kline.findIndex(
+      (bar) => bar.trade_date === stockEvent.trade_date,
+    );
+    return eventIndex > 0 ? kline[eventIndex - 1].close : null;
+  }, [kline, stockEvent]);
+
+  if (stockEventLoading) {
+    return <ShellState label="正在加载个股详情..." />;
+  }
+
+  if (stockEventError || !stockEvent) {
     return (
       <ShellState
         label="未找到这只股票"
-        detail="请从涨停列表中选择一只股票进入详情"
+        detail={stockEventError ?? "本地涨停事件库中暂无这只股票"}
       />
     );
   }
@@ -2360,8 +2587,8 @@ function StockDetail({ data }: { data: DashboardData }) {
           <span>{stockEvent.symbol}</span>
         </div>
         <div className="stock-status">
-          <strong>{stockEvent.board_height} 板</strong>
-          <span>{stockEvent.closed_limit ? "已封板" : "未回封"}</span>
+          <strong>{stockEvent.closed_limit ? `${stockEvent.board_height} 板` : "炸板"}</strong>
+          <span>{stockEvent.closed_limit ? "已封板" : "盘中触板未回封"}</span>
         </div>
       </section>
 
@@ -2428,6 +2655,7 @@ function StockDetail({ data }: { data: DashboardData }) {
               bars={toIntradayCandleBars(tradingDayKline)}
               emptyLabel="暂无交易日走势数据"
               mode="intraday"
+              referencePrice={intradayReferencePrice}
             />
           )}
         </Panel>
@@ -2440,14 +2668,17 @@ function StockDetail({ data }: { data: DashboardData }) {
         error={positionError}
       />
 
-      <section className="stock-agent-grid">
-        <FirstBoardRatingDetail rating={firstBoardRating} />
-        <FirstBoardCriticPanel
-          data={critic}
-          loading={criticLoading}
-          error={criticError}
-        />
-      </section>
+      {firstBoardRating || criticLoading || critic ? (
+        <section className="stock-agent-grid">
+          {firstBoardRating ? <FirstBoardRatingDetail rating={firstBoardRating} /> : null}
+          {criticLoading || critic ? (
+            <FirstBoardCriticPanel
+              data={critic}
+              loading={criticLoading}
+            />
+          ) : null}
+        </section>
+      ) : null}
     </div>
   );
 }
@@ -2466,7 +2697,7 @@ function StockPositionPanel({
 }) {
   if (loading) {
     return (
-      <Panel title="当前位置判断" icon={<MapPin size={18} />}>
+      <Panel title="首板位置判断" icon={<MapPin size={18} />}>
         <div className="rating-detail-empty">正在分析价格位置...</div>
       </Panel>
     );
@@ -2474,14 +2705,14 @@ function StockPositionPanel({
 
   if (error || !position) {
     return (
-      <Panel title="当前位置判断" icon={<MapPin size={18} />}>
+      <Panel title="首板位置判断" icon={<MapPin size={18} />}>
         <div className="rating-detail-empty">{error ?? "暂无足够 K 线判断当前位置。"}</div>
       </Panel>
     );
   }
 
   return (
-    <Panel title="当前位置判断" icon={<MapPin size={18} />}>
+    <Panel title="首板位置判断" icon={<MapPin size={18} />}>
       <StockPositionDetail position={position} tradeDate={tradeDate} />
     </Panel>
   );
@@ -2491,11 +2722,9 @@ function StockPositionPanel({
 function FirstBoardCriticPanel({
   data,
   loading,
-  error,
 }: {
   data: FirstBoardCriticResponse | null;
   loading: boolean;
-  error: string | null;
 }) {
   /** Render critic-side review that challenges the original rating. */
 
@@ -2513,20 +2742,8 @@ function FirstBoardCriticPanel({
     );
   }
 
-  if (error) {
-    return (
-      <Panel title="Critic 复核" icon={<ShieldAlert size={18} />}>
-        <div className="rating-detail-empty">{error}</div>
-      </Panel>
-    );
-  }
-
   if (!data) {
-    return (
-      <Panel title="Critic 复核" icon={<ShieldAlert size={18} />}>
-        <div className="rating-detail-empty">当前股票暂无 Critic 复核结果。</div>
-      </Panel>
-    );
+    return null;
   }
 
   return (
@@ -2564,18 +2781,8 @@ function FirstBoardCriticPanel({
   );
 }
 
-function FirstBoardRatingDetail({ rating }: { rating: FirstBoardRating | null }) {
+function FirstBoardRatingDetail({ rating }: { rating: FirstBoardRating }) {
   /** Render explainable first-board score details for the selected stock. */
-
-  if (!rating) {
-    return (
-      <Panel title="Agent 评分拆解" icon={<BarChart3 size={18} />}>
-        <div className="rating-detail-empty">
-          当前股票不在首板评级候选池中。
-        </div>
-      </Panel>
-    );
-  }
 
   return (
     <Panel title="Agent 评分拆解" icon={<BarChart3 size={18} />}>
@@ -2854,12 +3061,37 @@ function formatPercent(value: number) {
   return `${Math.round(value * 100)}%`;
 }
 
+function stockDetailPath(symbol: string, tradeDate?: string) {
+  const path = `/stocks/${encodeURIComponent(symbol)}`;
+  return tradeDate
+    ? `${path}?trade_date=${encodeURIComponent(tradeDate)}`
+    : path;
+}
+
 function formatEmpiricalRate(value: number | null | undefined) {
   return value === null || value === undefined ? "暂无" : `${(value * 100).toFixed(1)}%`;
 }
 
 function formatAmount(value: number) {
   return `${(value / 100_000_000).toFixed(1)} 亿`;
+}
+
+function formatNetAmount(value: number | null | undefined) {
+  if (value === null || value === undefined) {
+    return "暂无";
+  }
+  const absolute = Math.abs(value);
+  if (absolute >= 100_000_000) {
+    return `${formatSigned(value / 100_000_000, 2)} 亿`;
+  }
+  return `${formatSigned(value / 10_000, 0)} 万`;
+}
+
+function numberTone(value: number | null | undefined) {
+  if (value === null || value === undefined || value === 0) {
+    return "";
+  }
+  return value > 0 ? "positive" : "negative";
 }
 
 function formatOptionalPercent(value: number | null | undefined) {

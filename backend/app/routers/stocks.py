@@ -10,19 +10,37 @@ from app.collectors import (
 )
 from app.collectors.stock_kline_collector import build_stock_close_snapshot
 from app.models import (
+    LimitUpEvent,
     StockCloseSnapshot,
     StockIntradayKLineBar,
     StockKLineBar,
     StockPositionAssessment,
 )
 from app.repositories import SQLiteFirstBoardRepository, get_limit_up_repository
-from app.services.analysis import latest_trade_date
+from app.services.analysis import find_stock_event, latest_trade_date
 from app.services.stock_kline import (
     load_stock_kline_bars,
     load_stock_position_assessment,
 )
 
 router = APIRouter()
+
+
+@router.get("/{symbol}/event", response_model=LimitUpEvent)
+def get_stock_event(
+    symbol: str,
+    trade_date: date | None = None,
+) -> LimitUpEvent:
+    """Return a stock's requested limit-up event or its latest local event."""
+
+    event = find_stock_event(
+        get_limit_up_repository().list_events(),
+        symbol=symbol,
+        trade_date=trade_date,
+    )
+    if event is None:
+        raise HTTPException(status_code=404, detail="stock limit-up event not found")
+    return event
 
 
 @router.get("/{symbol}/kline", response_model=list[StockKLineBar])
@@ -99,14 +117,15 @@ def get_stock_latest_close(symbol: str) -> StockCloseSnapshot:
 def get_stock_trading_day_kline(
     symbol: str,
     period: int = Query(default=5, ge=1, le=60),
+    trade_date: date | None = None,
 ) -> list[StockIntradayKLineBar]:
-    """Return after-close intraday K-line bars for the latest persisted trade date."""
+    """Return intraday K-line bars for a requested or latest persisted trade date."""
 
     try:
         events = get_limit_up_repository().list_events()
         return collect_stock_intraday_kline(
             symbol,
-            trade_date=latest_trade_date(events),
+            trade_date=trade_date or latest_trade_date(events),
             period=period,
         )
     except ValueError as error:

@@ -1,0 +1,192 @@
+{
+  "cases": [
+    {
+      "case_id": "default_closed_limit_up",
+      "message": "今天有哪些涨停票",
+      "expected": {"event_status": "closed", "result_mode": "list", "limit": 30}
+    },
+    {
+      "case_id": "first_board_exact",
+      "message": "今天首板有哪些",
+      "expected": {"board_height": 1, "min_board_height": null}
+    },
+    {
+      "case_id": "second_board_chinese",
+      "message": "今天二连板的票有哪些",
+      "expected": {"board_height": 2, "min_board_height": null}
+    },
+    {
+      "case_id": "third_board_numeric",
+      "message": "列出今天3板股票",
+      "expected": {"board_height": 3, "exhaustive": true, "limit": 100}
+    },
+    {
+      "case_id": "all_continued_boards",
+      "message": "今天连板梯队有哪些",
+      "expected": {"board_height": null, "min_board_height": 2}
+    },
+    {
+      "case_id": "highest_board_ties",
+      "message": "今天最高板有哪些",
+      "expected": {"highest_only": true, "result_mode": "ranking", "sort_by": "board_height"}
+    },
+    {
+      "case_id": "chinext_market",
+      "message": "今天创业板有哪些股票涨停",
+      "expected": {"market": "chinext"}
+    },
+    {
+      "case_id": "star_market",
+      "message": "科创板今天涨停股名单",
+      "expected": {"market": "star_market"}
+    },
+    {
+      "case_id": "beijing_market",
+      "message": "北交所有哪些涨停",
+      "expected": {"market": "beijing"}
+    },
+    {
+      "case_id": "main_board_market",
+      "message": "沪深主板涨停名单",
+      "expected": {"market": "main_board"}
+    },
+    {
+      "case_id": "failed_limit_up",
+      "message": "今天炸板票有哪些",
+      "expected": {"event_status": "failed"}
+    },
+    {
+      "case_id": "intraday_opened",
+      "message": "今天有哪些涨停股曾开板",
+      "expected": {"event_status": "broken_intraday"}
+    },
+    {
+      "case_id": "all_event_statuses",
+      "message": "列出今天全部涨停事件",
+      "expected": {"event_status": "all", "exhaustive": true}
+    },
+    {
+      "case_id": "count_mode",
+      "message": "今天一共有多少只首板",
+      "expected": {"board_height": 1, "result_mode": "count", "limit": 100}
+    },
+    {
+      "case_id": "summary_mode",
+      "message": "总结今天首板概况",
+      "expected": {"board_height": 1, "result_mode": "summary"}
+    },
+    {
+      "case_id": "top_ten_ranking",
+      "message": "今天涨停股成交额 Top10",
+      "expected": {"result_mode": "ranking", "sort_by": "amount", "sort_order": "desc", "limit": 10}
+    },
+    {
+      "case_id": "exhaustive_list",
+      "message": "列出今天所有首板",
+      "expected": {"board_height": 1, "exhaustive": true, "limit": 100}
+    },
+    {
+      "case_id": "earliest_seal",
+      "message": "今天最早封板的前5只涨停股",
+      "expected": {"sort_by": "first_limit_time", "sort_order": "asc", "limit": 5}
+    },
+    {
+      "case_id": "latest_seal",
+      "message": "今天封板最晚的涨停票",
+      "expected": {"sort_by": "first_limit_time", "sort_order": "desc"}
+    },
+    {
+      "case_id": "amount_desc",
+      "message": "今天首板按成交额降序排列",
+      "expected": {"board_height": 1, "sort_by": "amount", "sort_order": "desc"}
+    },
+    {
+      "case_id": "amount_asc",
+      "message": "今天涨停股按成交额升序",
+      "expected": {"sort_by": "amount", "sort_order": "asc"}
+    },
+    {
+      "case_id": "turnover_desc",
+      "message": "换手率最高的首板前3只",
+      "expected": {"board_height": 1, "sort_by": "turnover_rate", "sort_order": "desc", "limit": 3}
+    },
+    {
+      "case_id": "break_count_desc",
+      "message": "今天涨停股按炸板次数最多排序",
+      "expected": {"event_status": "closed", "sort_by": "break_count", "sort_order": "desc"}
+    },
+    {
+      "case_id": "explicit_full_date",
+      "message": "2026-08-07 的首板有哪些",
+      "expected": {"trade_date": "2026-08-07", "board_height": 1}
+    },
+    {
+      "case_id": "page_context_date",
+      "message": "这天有哪些二板",
+      "request_trade_date": "2026-08-11",
+      "expected": {"trade_date": "2026-08-11", "board_height": 2}
+    },
+    {
+      "case_id": "message_date_overrides_context",
+      "message": "2026-08-12 有哪些三板",
+      "request_trade_date": "2026-08-11",
+      "expected": {"trade_date": "2026-08-12", "board_height": 3}
+    },
+    {
+      "case_id": "planner_market_alias",
+      "message": "今天有哪些涨停股",
+      "planner_arguments": {"market": "创业板"},
+      "expected": {"market": "chinext"}
+    },
+    {
+      "case_id": "user_market_overrides_planner",
+      "message": "今天科创板有哪些涨停股",
+      "planner_arguments": {"market": "main_board"},
+      "expected": {"market": "star_market"}
+    },
+    {
+      "case_id": "planner_topic_filter",
+      "message": "今天这个题材有哪些涨停股",
+      "planner_arguments": {"query": "机器人"},
+      "expected": {"query": "机器人"}
+    },
+    {
+      "case_id": "message_topic_filter",
+      "message": "今天涨停股票里半导体相关的有哪些",
+      "planner_arguments": {"query": "银行"},
+      "expected": {"query": "半导体"}
+    },
+    {
+      "case_id": "planner_broken_status",
+      "message": "今天这些票怎么样",
+      "planner_arguments": {"event_status": "broken_intraday"},
+      "expected": {"event_status": "broken_intraday"}
+    },
+    {
+      "case_id": "legacy_closed_false",
+      "message": "今天全部事件",
+      "planner_arguments": {"closed_only": false},
+      "expected": {"event_status": "all"}
+    },
+    {
+      "case_id": "chinext_first_board_count",
+      "message": "今天创业板首板有多少只",
+      "expected": {"market": "chinext", "board_height": 1, "result_mode": "count"}
+    },
+    {
+      "case_id": "main_continued_exhaustive",
+      "message": "列出沪深主板全部连板票",
+      "expected": {"market": "main_board", "min_board_height": 2, "exhaustive": true}
+    },
+    {
+      "case_id": "top_five_second_board",
+      "message": "二板股成交额前5名",
+      "expected": {"board_height": 2, "sort_by": "amount", "limit": 5}
+    },
+    {
+      "case_id": "star_highest_board",
+      "message": "科创板最高板是谁",
+      "expected": {"market": "star_market", "highest_only": true}
+    }
+  ]
+}

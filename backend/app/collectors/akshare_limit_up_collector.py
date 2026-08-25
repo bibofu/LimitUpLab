@@ -107,7 +107,9 @@ def _collect_failed_limit_up_events(parsed_date: date, trade_date: str) -> list[
                 seal_count=max(break_count, 1),
                 break_count=break_count,
                 closed_limit=False,
-                board_height=_parse_board_height(row["涨停统计"]),
+                # `涨停统计` such as `10/6` is a rolling-day statistic, not a
+                # consecutive board height. An unclosed event has no completed board.
+                board_height=1,
                 amount=_safe_float(row["成交额"]),
                 turnover_rate=_safe_float(row["换手率"]),
                 industry=str(row["所属行业"]),
@@ -131,16 +133,6 @@ def _parse_hhmmss(value: Any) -> time:
     if len(text) != 6 or not text.isdigit():
         return time(0, 0)
     return time(int(text[:2]), int(text[2:4]), int(text[4:6]))
-
-
-def _parse_board_height(value: Any) -> int:
-    """Parse Eastmoney limit-up statistic text such as `5/3` into board height."""
-
-    text = str(value).strip()
-    if "/" in text:
-        _, height = text.split("/", maxsplit=1)
-        return max(_safe_int(height), 1)
-    return max(_safe_int(text), 1)
 
 
 def _safe_int(value: Any) -> int:

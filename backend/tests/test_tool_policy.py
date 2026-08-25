@@ -6,6 +6,7 @@ from app.agents.tool_policy import (
     AgentToolPolicyEngine,
     QuestionSignals,
     ToolExecution,
+    extract_market_segment,
 )
 from app.agents.tools import AgentToolRegistry
 from app.models import (
@@ -87,6 +88,12 @@ class AgentToolPolicyTest(unittest.TestCase):
 
         self.assertFalse(signals.first_board_facts)
         self.assertFalse(signals.rating_explanation)
+
+    def test_market_segment_extraction_uses_explicit_board_names(self) -> None:
+        self.assertEqual(extract_market_segment("今天创业板有哪些股票涨停"), "chinext")
+        self.assertEqual(extract_market_segment("科创板今天涨停股"), "star_market")
+        self.assertEqual(extract_market_segment("北交所有哪些涨停"), "beijing")
+        self.assertEqual(extract_market_segment("沪深主板涨停名单"), "main_board")
 
     def test_first_board_position_classification_uses_rating_facts(self) -> None:
         signals = QuestionSignals.from_message("今天首板按照位置分类一下")

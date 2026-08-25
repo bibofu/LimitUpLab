@@ -78,6 +78,19 @@ class SQLiteLimitUpRepositoryTest(unittest.TestCase):
 
         self.assertTrue(all(event.trade_date.isoformat() != "2026-05-15" for event in events))
 
+    def test_legacy_unclosed_event_does_not_keep_rolling_board_count(self) -> None:
+        with temporary_database_path() as database_path:
+            repository = SQLiteLimitUpRepository(database_path=database_path)
+            failed_event = SAMPLE_EVENTS[3].model_copy(
+                update={"closed_limit": False, "board_height": 6}
+            )
+
+            repository.upsert_events([failed_event])
+            events = repository.list_events()
+
+        self.assertEqual(events[0].board_height, 1)
+        self.assertFalse(events[0].closed_limit)
+
 
 if __name__ == "__main__":
     unittest.main()

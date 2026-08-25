@@ -6,6 +6,7 @@ import os
 import socket
 from pathlib import Path
 from typing import Iterable
+from urllib.parse import urlparse
 
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
@@ -34,6 +35,23 @@ def load_local_env(path: str | Path | None = None, *, override: bool = False) ->
         loaded_paths.append(env_path)
 
     _apply_proxy_alias()
+    return loaded_paths
+
+
+def configure_runtime_environment(path: str | Path | None = None) -> list[Path]:
+    """Load local settings and make direct backend launches LLM-ready."""
+
+    loaded_paths = load_local_env(path)
+    hydrate_windows_environment(("DEEPSEEK_API_KEY", "OPENAI_API_KEY"))
+    api_key = (
+        os.getenv("DEEPSEEK_API_KEY", "").strip()
+        or os.getenv("OPENAI_API_KEY", "").strip()
+    )
+    if api_key:
+        _set_default_if_blank("LIMITUPLAB_LLM_ENABLED", "true")
+        _set_default_if_blank("LIMITUPLAB_LLM_BASE_URL", "https://api.deepseek.com")
+        _set_default_if_blank("LIMITUPLAB_LLM_MODEL", "deepseek-v4-flash")
+    clear_unreachable_local_proxy()
     return loaded_paths
 
 
@@ -77,15 +95,29 @@ def replace_proxy_environment(proxy_url: str | None = None) -> None:
         os.environ[name] = normalized
 
 
+def clear_unreachable_local_proxy() -> bool:
+    """Remove inherited localhost proxies that are not accepting connections."""
+
+    proxy_values = [
+        os.getenv("LIMITUPLAB_PROXY_URL", ""),
+        *(os.getenv(name, "") for name in PROXY_ENV_NAMES),
+    ]
+    for value in proxy_values:
+        endpoint = _local_proxy_endpoint(value)
+        if endpoint is None or _proxy_endpoint_reachable(*endpoint):
+            continue
+        os.environ.pop("LIMITUPLAB_PROXY_URL", None)
+        replace_proxy_environment()
+        return True
+    return False
+
+
 def detect_local_proxy() -> str:
     """Return the first supported local HTTP proxy that accepts connections."""
 
     for port in (17891, 7890, 10809, 1080):
-        try:
-            with socket.create_connection(("127.0.0.1", port), timeout=0.2):
-                return f"http://127.0.0.1:{port}"
-        except OSError:
-            continue
+        if _proxy_endpoint_reachable("127.0.0.1", port):
+            return f"http://127.0.0.1:{port}"
     return ""
 
 
@@ -130,6 +162,34 @@ def _apply_proxy_alias() -> None:
     if not proxy_url:
         return
     replace_proxy_environment(proxy_url)
+
+
+def _set_default_if_blank(name: str, value: str) -> None:
+    if not os.getenv(name, "").strip():
+        os.environ[name] = value
+
+
+def _local_proxy_endpoint(value: str) -> tuple[str, int] | None:
+    normalized = value.strip()
+    if not normalized:
+        return None
+    try:
+        parsed = urlparse(
+            normalized if "://" in normalized else f"http://{normalized}"
+        )
+        if parsed.hostname not in {"127.0.0.1", "localhost"} or parsed.port is None:
+            return None
+        return parsed.hostname, parsed.port
+    except ValueError:
+        return None
+
+
+def _proxy_endpoint_reachable(host: str, port: int) -> bool:
+    try:
+        with socket.create_connection((host, port), timeout=0.2):
+            return True
+    except OSError:
+        return False
 
 
 def _read_windows_environment_value(name: str) -> str:

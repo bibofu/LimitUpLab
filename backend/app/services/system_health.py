@@ -10,6 +10,10 @@ from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
 from app.agents.eval_runner import load_eval_cases, run_agent_eval_suite
+from app.agents.query_contract_eval import (
+    load_query_contract_eval_cases,
+    run_query_contract_eval_suite,
+)
 from app.config import env_bool
 from app.models import AgentSystemHealthResponse, LimitUpEvent
 from app.repositories import SQLiteFirstBoardRepository
@@ -50,9 +54,18 @@ def build_agent_system_health(
             cases=load_eval_cases(fixture_path),
             events=SAMPLE_EVENTS,
         )
-        eval_total = suite.total
-        eval_failed = suite.failed
-        eval_passed = suite.ok
+        contract_fixture_path = (
+            Path(__file__).resolve().parents[2]
+            / "tests"
+            / "fixtures"
+            / "query_contract_v2_cases.json"
+        )
+        contract_suite = run_query_contract_eval_suite(
+            load_query_contract_eval_cases(contract_fixture_path)
+        )
+        eval_total = suite.total + contract_suite.total
+        eval_failed = suite.failed + contract_suite.failed
+        eval_passed = suite.ok and contract_suite.ok
 
     llm_enabled = env_bool("LIMITUPLAB_LLM_ENABLED")
     llm_provider_configured = bool(

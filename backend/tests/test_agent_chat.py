@@ -793,10 +793,10 @@ class AgentChatTest(unittest.TestCase):
             events=events,
         )
 
-        self.assertEqual(response.intent, "first_board_filter")
-        self.assertEqual(response.tool_calls, ["first_board_ratings", "first_board_filter"])
+        self.assertEqual(response.intent, "limit_up_query")
+        self.assertEqual(response.tool_calls, ["limit_up_events"])
         self.assertEqual(response.tool_results[0].name, "agent_plan")
-        self.assertEqual(response.tool_results[0].input["intent"], "first_board_filter")
+        self.assertEqual(response.tool_results[0].input["intent"], "limit_up_query")
         self.assertIn("002001", response.answer)
         self.assertNotIn("002002", response.answer)
 
@@ -830,6 +830,34 @@ class AgentChatTest(unittest.TestCase):
         self.assertNotIn("002102", response.answer)
         tool_trace = next(trace for trace in response.tool_results if trace.name == "limit_up_events")
         self.assertEqual(tool_trace.input["board_height"], 2)
+
+    def test_chinext_limit_up_question_filters_market_before_llm_answer(self) -> None:
+        events = [
+            self._make_event("002101", "主板样本", "软件开发", "AI"),
+            self._make_event("300642", "创业板样本一", "医疗器械", "医疗"),
+            self._make_event("301001", "创业板样本二", "专用设备", "机器人"),
+            self._make_event("688169", "科创板样本", "小家电", "消费"),
+            self._make_event("830001", "北交所样本", "机械", "设备"),
+        ]
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="chinext-limit-up",
+                message="今天创业板有哪些股票涨停",
+            ),
+            events=events,
+            llm_provider=FakeExhaustiveListProvider(),
+        )
+
+        trace = next(
+            item for item in response.tool_results if item.name == "limit_up_events"
+        )
+        symbols = {item["symbol"] for item in trace.output["events"]}
+        self.assertEqual(trace.input["market"], "chinext")
+        self.assertEqual(trace.output["market_label"], "创业板")
+        self.assertEqual(symbols, {"300642", "301001"})
+        self.assertNotIn("002101", response.answer)
+        self.assertNotIn("688169", response.answer)
 
     def test_limit_up_topic_question_does_not_route_to_first_board_filter(self) -> None:
         events = [

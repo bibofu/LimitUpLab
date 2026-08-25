@@ -18,6 +18,11 @@ from app.agents.eval_runner import (
     load_eval_cases,
     run_agent_eval_suite,
 )
+from app.agents.query_contract_eval import (
+    load_query_contract_eval_cases,
+    query_contract_eval_report,
+    run_query_contract_eval_suite,
+)
 from app.config import (
     detect_local_proxy,
     hydrate_windows_environment,
@@ -74,6 +79,9 @@ def main() -> None:
     args = parser.parse_args()
 
     fixture_path = BACKEND_ROOT / "tests" / "fixtures" / "agent_eval_cases.json"
+    contract_fixture_path = (
+        BACKEND_ROOT / "tests" / "fixtures" / "query_contract_v2_cases.json"
+    )
     trials = args.trials if args.trials is not None else (3 if args.mode == "live-llm" else 1)
     if trials <= 0:
         parser.error("--trials must be greater than zero")
@@ -110,16 +118,25 @@ def main() -> None:
         require_llm_planner=args.mode == "live-llm",
         force_template_answer=not args.live_answer,
     )
+    contract_suite = run_query_contract_eval_suite(
+        load_query_contract_eval_cases(contract_fixture_path)
+    )
+    contract_report = query_contract_eval_report(contract_suite)
     report = {
         "mode": args.mode,
         "answer_mode": "live-llm" if args.live_answer else "deterministic-template",
         **eval_suite_report(suite),
+        "query_contract": contract_report,
     }
-    printed_report = (
-        {key: value for key, value in report.items() if key != "results"}
-        if args.summary_only
-        else report
-    )
+    if args.summary_only:
+        printed_report = {key: value for key, value in report.items() if key != "results"}
+        printed_report["query_contract"] = {
+            key: value
+            for key, value in contract_report.items()
+            if key != "results"
+        }
+    else:
+        printed_report = report
     print(json.dumps(printed_report, ensure_ascii=False, indent=2))
 
     if args.mode == "live-llm":
@@ -133,6 +150,7 @@ def main() -> None:
                         "live-llm" if args.live_answer else "deterministic-template"
                     ),
                     **eval_failure_report(suite),
+                    "query_contract": contract_report,
                 },
                 ensure_ascii=False,
                 indent=2,
@@ -140,7 +158,7 @@ def main() -> None:
             encoding="utf-8",
         )
 
-    if args.mode == "offline" and not suite.ok:
+    if args.mode == "offline" and (not suite.ok or not contract_suite.ok):
         raise SystemExit(1)
     if args.mode == "live-llm" and args.fail_on_failures and not suite.ok:
         raise SystemExit(1)

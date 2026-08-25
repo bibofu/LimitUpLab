@@ -7,6 +7,12 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Callable, TypedDict
 
+from app.agents.query_contract import (
+    build_limit_up_query_contract,
+    extract_board_filters as contract_board_filters,
+    extract_market_segment as contract_market_segment,
+    extract_trade_date as contract_trade_date,
+)
 from app.agents.tools import (
     AgentToolRegistry,
     ToolResult,
@@ -501,21 +507,31 @@ class AgentToolPolicyEngine:
         context_symbol: str | None,
     ) -> None:
         del context_symbol
-        board_height, min_board_height = extract_board_filters(request.message)
-        broken_only = any(
-            term in request.message for term in ("炸板", "开板", "未封住")
+        contract = build_limit_up_query_contract(
+            request.message,
+            request_trade_date=request.trade_date or signals.requested_date,
         )
         result = self.tools.limit_up_events(
-            trade_date=request.trade_date or signals.requested_date,
-            board_height=board_height,
-            min_board_height=min_board_height,
-            broken_only=broken_only,
-            closed_only=None if broken_only else True,
-            limit=100,
+            trade_date=contract.trade_date,
+            board_height=contract.board_height,
+            min_board_height=contract.min_board_height,
+            highest_only=contract.highest_only,
+            market=contract.market,
+            query=contract.query,
+            event_status=contract.event_status,
+            sort_by=contract.sort_by,
+            sort_order=contract.sort_order,
+            limit=contract.limit,
         )
+        result.input["query_contract"] = contract.to_dict()
+        result.trace_output["query_contract"] = contract.to_dict()
         payload = {
             "trade_date": result.trace_output.get("trade_date"),
-            "matched_count": len(result.output),
+            "market": result.trace_output.get("market"),
+            "market_label": result.trace_output.get("market_label"),
+            "matched_count": result.trace_output.get("matched_count"),
+            "returned_count": result.trace_output.get("returned_count"),
+            "query_contract": contract.to_dict(),
             "events": result.trace_output.get("events", []),
         }
         self._record_success(
@@ -822,15 +838,7 @@ class AgentToolPolicyEngine:
 def extract_trade_date(message: str) -> date | None:
     """Extract a date from common Chinese and numeric expressions."""
 
-    normalized = message.strip()
-    full_match = re.search(r"(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})", normalized)
-    if full_match:
-        return _safe_date(*(int(part) for part in full_match.groups()))
-    short_match = re.search(r"(?<!\d)(\d{1,2})[./月](\d{1,2})(?:日|号)?", normalized)
-    if short_match:
-        month, day = (int(part) for part in short_match.groups())
-        return _safe_date(date.today().year, month, day)
-    return None
+    return contract_trade_date(message)
 
 
 def extract_kline_days(message: str) -> int:
@@ -926,17 +934,13 @@ def extract_promotion_days(message: str) -> int:
 def extract_board_filters(message: str) -> tuple[int | None, int | None]:
     """Extract exact or minimum board-height filters for policy repair."""
 
-    if "首板" in message:
-        return 1, None
-    numeric = re.search(r"(?<!\d)(\d{1,2})\s*(?:连)?板", message)
-    if numeric:
-        return int(numeric.group(1)), None
-    for label, height in (("二", 2), ("三", 3), ("四", 4), ("五", 5)):
-        if f"{label}板" in message or f"{label}连板" in message:
-            return height, None
-    if "连板" in message:
-        return None, 2
-    return None, None
+    return contract_board_filters(message)
+
+
+def extract_market_segment(message: str) -> str | None:
+    """Extract an explicit A-share board segment from the user question."""
+
+    return contract_market_segment(message)
 
 
 def extract_sector_query(message: str) -> str | None:

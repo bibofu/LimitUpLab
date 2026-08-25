@@ -412,7 +412,20 @@ def initialize_database(connection: sqlite3.Connection) -> None:
         ON scoring_policy_runs (created_at DESC)
         """
     )
+    _repair_legacy_failed_pool_board_heights(connection)
     connection.commit()
+
+
+def _repair_legacy_failed_pool_board_heights(connection: sqlite3.Connection) -> None:
+    """Remove rolling limit-up counts previously stored as consecutive boards."""
+
+    connection.execute(
+        """
+        UPDATE limit_up_events
+        SET board_height = 1
+        WHERE closed_limit = 0 AND board_height > 1
+        """
+    )
 
 
 def _ensure_columns(

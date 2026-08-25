@@ -81,6 +81,99 @@
       "answer_contains": ["\u4e0d\u80fd"],
       "forbid_investment_terms": false,
       "expects_llm_planner": false
+    },
+    {
+      "case_id": "chinext_limit_up_exact_set",
+      "message": "2026-05-15 创业板有哪些股票涨停",
+      "expected_intent": "limit_up_query",
+      "required_tools": ["limit_up_events"],
+      "expected_tool_inputs": {
+        "limit_up_events": {"query_contract": {"market": "chinext", "event_status": "closed"}}
+      },
+      "expected_tool_symbols": {"limit_up_events": ["301489"]},
+      "expected_tool_matched_counts": {"limit_up_events": 1},
+      "answer_contains": ["301489"]
+    },
+    {
+      "case_id": "star_market_limit_up_exact_set",
+      "message": "2026-05-13 科创板涨停股名单",
+      "expected_intent": "limit_up_query",
+      "required_tools": ["limit_up_events"],
+      "expected_tool_inputs": {
+        "limit_up_events": {"query_contract": {"market": "star_market", "trade_date": "2026-05-13"}}
+      },
+      "expected_tool_symbols": {"limit_up_events": ["688256"]},
+      "answer_contains": ["688256"]
+    },
+    {
+      "case_id": "main_board_limit_up_exact_set",
+      "message": "2026-05-15 沪深主板涨停名单",
+      "expected_intent": "limit_up_query",
+      "required_tools": ["limit_up_events"],
+      "expected_tool_inputs": {
+        "limit_up_events": {"query_contract": {"market": "main_board"}}
+      },
+      "expected_tool_symbols": {"limit_up_events": ["002230", "600519"]},
+      "expected_tool_matched_counts": {"limit_up_events": 2}
+    },
+    {
+      "case_id": "failed_limit_up_exact_set",
+      "message": "2026-05-15 炸板票有哪些",
+      "expected_intent": "limit_up_query",
+      "required_tools": ["limit_up_events"],
+      "expected_tool_inputs": {
+        "limit_up_events": {"query_contract": {"event_status": "failed"}}
+      },
+      "expected_tool_symbols": {"limit_up_events": ["002050", "603083"]},
+      "expected_tool_matched_counts": {"limit_up_events": 2}
+    },
+    {
+      "case_id": "intraday_opened_exact_set",
+      "message": "2026-05-15 有哪些涨停股曾开板",
+      "expected_intent": "limit_up_query",
+      "required_tools": ["limit_up_events"],
+      "expected_tool_inputs": {
+        "limit_up_events": {"query_contract": {"event_status": "broken_intraday"}}
+      },
+      "expected_tool_symbols": {"limit_up_events": ["002050", "002230", "301489", "603083"]},
+      "expected_tool_matched_counts": {"limit_up_events": 4}
+    },
+    {
+      "case_id": "highest_board_exact_set",
+      "message": "2026-05-15 最高板有哪些",
+      "expected_intent": "limit_up_query",
+      "required_tools": ["limit_up_events"],
+      "expected_tool_inputs": {
+        "limit_up_events": {"query_contract": {"highest_only": true}}
+      },
+      "expected_tool_symbols": {"limit_up_events": ["600519"]},
+      "answer_contains": ["600519", "4板"]
+    },
+    {
+      "case_id": "amount_top_two_ordered",
+      "message": "2026-05-15 涨停股成交额前2名",
+      "expected_intent": "limit_up_query",
+      "required_tools": ["limit_up_events"],
+      "expected_tool_inputs": {
+        "limit_up_events": {"query_contract": {"sort_by": "amount", "sort_order": "desc", "limit": 2}}
+      },
+      "expected_tool_symbols": {"limit_up_events": ["002230", "600519"]},
+      "expected_tool_symbol_order": {"limit_up_events": ["600519", "002230"]},
+      "expected_tool_matched_counts": {"limit_up_events": 3}
+    },
+    {
+      "case_id": "all_first_board_exact_set",
+      "message": "列出 2026-05-15 所有首板",
+      "intent_hint": "limit_up_query",
+      "expected_intent": "limit_up_query",
+      "required_tools": ["limit_up_events"],
+      "expected_tool_inputs": {
+        "limit_up_events": {"query_contract": {"board_height": 1, "exhaustive": true, "limit": 100}}
+      },
+      "expected_tool_symbols": {"limit_up_events": ["301489"]},
+      "expected_tool_matched_counts": {"limit_up_events": 1},
+      "answer_contains": ["301489"],
+      "answer_not_contains": ["603083", "002050"]
     }
   ]
 }

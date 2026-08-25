@@ -32,6 +32,34 @@ export interface MarketSummary {
   sentiment: Sentiment;
 }
 
+export interface DragonTigerReviewItem {
+  symbol: string;
+  name: string;
+  change_pct: number | null;
+  buy_amount: number | null;
+  sell_amount: number | null;
+  net_buy_amount: number | null;
+  net_rate: number | null;
+  organization_net_buy_amount: number | null;
+  hot_money_net_buy_amount: number | null;
+  hot_rank: number | null;
+  range_days: number | null;
+  limit_reason: string | null;
+  concepts: string[];
+  detail_trade_date: string | null;
+}
+
+export interface DragonTigerReviewResponse {
+  trade_date: string;
+  source: string;
+  stock_count: number;
+  net_inflow_count: number;
+  net_outflow_count: number;
+  organization_count: number;
+  hot_money_count: number;
+  items: DragonTigerReviewItem[];
+}
+
 export interface LimitUpEvent {
   symbol: string;
   name: string;

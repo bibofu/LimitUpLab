@@ -91,6 +91,7 @@ scoring_version
 ```text
 用户问题
   -> LLM Planner 生成 JSON 工具计划
+  -> Agent Query Contract v2 统一日期、市场、板高、状态、排序和数量
   -> Tool Policy Engine 检查事实接地要求
   -> 后端执行结构化工具
   -> LLM 只基于工具 Facts 生成回答
@@ -120,7 +121,7 @@ scoring_version
 | `finance_news` | 聚合东方财富、同花顺最新财经快讯，提供时间、摘要、分类和来源 |
 | `web_search` | 检索具体公司/板块新闻、公告、政策和公开背景信息 |
 
-Tool Policy Engine 会修复 Planner 漏调工具的情况。例如，用户询问某只股票走势时必须调用 K 线工具，询问当天涨停时必须查询本地涨停事件，不能让模型直接凭记忆作答。
+Agent Query Contract v2 会把涨停问题统一成可审计的结构化查询，用户明确表达的日期、首板/连板、主板/创业板/科创板/北交所、封板/炸板、题材、排序、Top-N 和完整名单要求优先于 Planner 猜测。Tool Policy Engine 则负责修复 Planner 漏调工具的情况。例如，用户询问某只股票走势时必须调用 K 线工具，询问当天涨停时必须查询本地涨停事件，不能让模型直接凭记忆作答。
 
 ### 3. 轻量 Multi-Agent 角色
 
@@ -480,7 +481,7 @@ cd backend
 .\.venv\Scripts\python.exe -m pytest tests -q -p no:cacheprovider
 ```
 
-运行确定性 Agent 回归：
+运行确定性 Agent 回归和 Query Contract v2 回归：
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_agent_eval.py
@@ -505,7 +506,9 @@ CI 或发布前可以组合 `--fail-on-failures --fail-on-unstable` 使用严格
 Eval 会检查：
 
 - 意图和日期解析
+- Query Contract 的市场、板高、事件状态、题材、排序、数量和参数优先级
 - 必需与禁止调用的工具
+- 最终工具参数、命中数量和股票集合
 - Tool Policy 是否发生后端修复
 - 回答是否包含关键事实
 - 投资建议安全边界
@@ -544,7 +547,7 @@ npm.cmd run build
 - 评分 v3 工程闭环已完成，但仍缺至少 60 个结果完整交易日的可靠样本外验证。
 - 当前审计只有 8 个 Top10 次日 Outcome 完整日，覆盖率仍需要持续补齐。
 - 当前预测准确性不高，不能宣称系统已经实现稳定选股。
-- 真实 LLM 的自由问法和工具选择还需要更大规模 Eval。
+- Query Contract v2 已覆盖涨停事件主链路，但其他工具仍需要逐步补齐同等级的结构化契约和更大规模真实 LLM Eval。
 - 公告检索目前主要依赖通用搜索，尚未接入完整的结构化公告数据源。
 - 异步 Worker、用户级并发限制、成本配额和取消机制尚未完成。
 - 用户系统、PostgreSQL、Docker、CI/CD 和正式部署配置尚未完成。
@@ -555,7 +558,7 @@ npm.cmd run build
 
 1. 滚动补齐 Top10 Outcome，将结果完整交易日从 14 个积累到至少 60 个。
 2. 持续观察 v3 Challenger 对现行评分、最早封板和固定随机基线的样本外优势。
-3. 扩展真实 LLM Eval，覆盖更多自由问法、工具失败和多轮指代。
+3. 将 Query Contract 扩展到板块、新闻和复盘工具，并覆盖工具失败与多轮指代。
 4. 接入结构化公告源并增强引用质量。
 5. 完成并发、异步 Worker、限流和生产部署能力。
 

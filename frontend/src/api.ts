@@ -11,6 +11,7 @@ import type {
   ChatSessionsResponse,
   DailyPipelineStatusResponse,
   DailyBoardPromotionStat,
+  DragonTigerReviewResponse,
   ContinuationStat,
   FailedRateStat,
   FirstBoardCriticResponse,
@@ -42,6 +43,11 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
 
 export function fetchMarketSummary() {
   return request<MarketSummary>("/api/market/overview");
+}
+
+export function fetchDragonTigerReview(tradeDate?: string) {
+  const query = tradeDate ? `?trade_date=${encodeURIComponent(tradeDate)}` : "";
+  return request<DragonTigerReviewResponse>(`/api/market/dragon-tiger${query}`);
 }
 
 export function fetchLimitUpEvents() {
@@ -82,6 +88,11 @@ export function fetchPostPerformanceStats() {
   return request<PostPerformanceStat[]>("/api/analysis/post-performance");
 }
 
+export function fetchStockEvent(symbol: string, tradeDate?: string) {
+  const query = tradeDate ? `?trade_date=${encodeURIComponent(tradeDate)}` : "";
+  return request<LimitUpEvent>(`/api/stocks/${symbol}/event${query}`);
+}
+
 export function fetchStockKLine(symbol: string, days = 60) {
   return request<StockKLineBar[]>(`/api/stocks/${symbol}/kline?days=${days}`);
 }
@@ -96,9 +107,17 @@ export function fetchStockLatestClose(symbol: string) {
   return request<StockCloseSnapshot>(`/api/stocks/${symbol}/latest-close`);
 }
 
-export function fetchStockTradingDayKLine(symbol: string, period = 5) {
+export function fetchStockTradingDayKLine(
+  symbol: string,
+  period = 5,
+  tradeDate?: string,
+) {
+  const params = new URLSearchParams({ period: String(period) });
+  if (tradeDate) {
+    params.set("trade_date", tradeDate);
+  }
   return request<StockIntradayKLineBar[]>(
-    `/api/stocks/${symbol}/trading-day-kline?period=${period}`,
+    `/api/stocks/${symbol}/trading-day-kline?${params.toString()}`,
   );
 }
 
