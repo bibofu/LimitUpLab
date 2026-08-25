@@ -28,6 +28,11 @@ from app.models import (
     AgentRunSummary,
     AgentSystemHealthResponse,
     AgentToolTrace,
+    ChatSessionCreateRequest,
+    ChatSessionDetail,
+    ChatSessionMessage,
+    ChatSessionsResponse,
+    ChatSessionUpdateRequest,
     DailyPipelineStatusResponse,
     FirstBoardCriticResponse,
     FirstBoardRatingsResponse,
@@ -36,17 +41,16 @@ from app.models import (
     ReviewAgentReportResponse,
     ScoringPolicyOptimizationResponse,
     ScoringPolicyRegistryResponse,
-    SimilarFirstBoardCasesResponse,
 )
 from app.repositories import (
     SQLiteAgentCacheRepository,
     SQLiteAgentRunRepository,
+    SQLiteChatSessionRepository,
     SQLiteDailyPipelineRepository,
     SQLiteFirstBoardRepository,
     SQLiteScoringPolicyRepository,
     get_limit_up_repository,
 )
-from app.services.similar_cases import find_similar_first_board_cases
 from app.services.data_health import build_agent_data_health
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.first_board_critic import build_first_board_critic
@@ -64,6 +68,7 @@ router = APIRouter()
 ResponseModel = TypeVar("ResponseModel")
 STRUCTURED_CACHE_TTL_MINUTES = 10
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
+CHAT_SESSIONS_VERSION = "chat-sessions-v1"
 
 
 @router.get("/first-board-ratings", response_model=FirstBoardRatingsResponse)
@@ -406,32 +411,64 @@ def list_agent_runs(
     )
 
 
-@router.get("/first-board-similar-cases", response_model=SimilarFirstBoardCasesResponse)
-def get_first_board_similar_cases(
-    symbol: str,
-    trade_date: date,
-    limit: int = Query(default=5, ge=1, le=20),
-    window_days: Optional[int] = Query(default=None, ge=30, le=360),
-) -> SimilarFirstBoardCasesResponse:
-    """Return historical first-board cases similar to the target candidate."""
+@router.post("/chat/sessions", response_model=ChatSessionDetail)
+def create_chat_session(
+    request: ChatSessionCreateRequest,
+) -> ChatSessionDetail:
+    """Create an empty resumable Agent conversation."""
 
-    try:
-        return find_similar_first_board_cases(
-            symbol=symbol,
-            trade_date=trade_date,
-            repository=SQLiteFirstBoardRepository(),
-            limit=limit,
-            window_days=window_days,
-        )
-    except ValueError as error:
-        raise HTTPException(status_code=404, detail=str(error)) from error
+    return SQLiteChatSessionRepository().create_session(title=request.title)
+
+
+@router.get("/chat/sessions", response_model=ChatSessionsResponse)
+def list_chat_sessions(
+    limit: int = Query(default=30, ge=1, le=100),
+) -> ChatSessionsResponse:
+    """Return active conversations ordered by latest activity."""
+
+    return ChatSessionsResponse(
+        sessions=SQLiteChatSessionRepository().list_sessions(limit=limit),
+        generated_by=CHAT_SESSIONS_VERSION,
+    )
+
+
+@router.get("/chat/sessions/{session_id}", response_model=ChatSessionDetail)
+def get_chat_session(session_id: str) -> ChatSessionDetail:
+    """Return one conversation with its persisted messages."""
+
+    session = SQLiteChatSessionRepository().get_session(session_id)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Chat session not found.")
+    return session
+
+
+@router.patch("/chat/sessions/{session_id}", response_model=ChatSessionDetail)
+def update_chat_session(
+    session_id: str,
+    request: ChatSessionUpdateRequest,
+) -> ChatSessionDetail:
+    """Rename one active conversation."""
+
+    session = SQLiteChatSessionRepository().rename_session(session_id, request.title)
+    if session is None:
+        raise HTTPException(status_code=404, detail="Chat session not found.")
+    return session
+
+
+@router.delete("/chat/sessions/{session_id}")
+def delete_chat_session(session_id: str) -> dict[str, bool]:
+    """Permanently delete one local conversation and its stored data."""
+
+    deleted = SQLiteChatSessionRepository().delete_session(session_id)
+    if not deleted:
+        raise HTTPException(status_code=404, detail="Chat session not found.")
+    return {"deleted": True}
 
 
 @router.get("/first-board-critic", response_model=FirstBoardCriticResponse)
 def get_first_board_critic(
     symbol: str,
     trade_date: Optional[date] = None,
-    similar_limit: int = Query(default=5, ge=0, le=10),
 ) -> FirstBoardCriticResponse:
     """Return a critic review for one first-board candidate rating."""
 
@@ -441,7 +478,6 @@ def get_first_board_critic(
             symbol=symbol,
             trade_date=trade_date,
             first_board_repository=SQLiteFirstBoardRepository(),
-            similar_limit=similar_limit,
         )
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
@@ -454,6 +490,21 @@ def chat_with_first_board_agent(request: AgentChatRequest) -> AgentChatResponse:
     run_id = f"run_{uuid4().hex}"
     started_at = datetime.now(timezone.utc)
     run_repository = SQLiteAgentRunRepository()
+    chat_repository = SQLiteChatSessionRepository()
+    session = chat_repository.ensure_session(
+        request.session_id,
+        first_message=request.message,
+    )
+    conversation_messages = session.messages[-8:]
+    chat_repository.append_message(
+        ChatSessionMessage(
+            message_id=request.message_id or f"msg_{uuid4().hex}",
+            session_id=request.session_id,
+            role="user",
+            content=request.message,
+            created_at=started_at,
+        )
+    )
 
     try:
         response = answer_first_board_chat(
@@ -461,6 +512,7 @@ def chat_with_first_board_agent(request: AgentChatRequest) -> AgentChatResponse:
             events=get_limit_up_repository().list_events(),
             repository=SQLiteFirstBoardRepository(),
             recent_runs=run_repository.list_recent_runs(request.session_id, limit=10),
+            conversation_messages=conversation_messages,
         )
         response.run_id = run_id
         run_repository.save_run(
@@ -477,6 +529,17 @@ def chat_with_first_board_agent(request: AgentChatRequest) -> AgentChatResponse:
                 finished_at=datetime.now(timezone.utc),
             )
         )
+        chat_repository.append_message(
+            ChatSessionMessage(
+                message_id=f"msg_{uuid4().hex}",
+                session_id=request.session_id,
+                role="assistant",
+                content=response.answer,
+                run_id=run_id,
+                metadata=response.model_dump(mode="json"),
+                created_at=datetime.now(timezone.utc),
+            )
+        )
         return response
     except Exception as error:
         run_repository.save_run(
@@ -491,6 +554,18 @@ def chat_with_first_board_agent(request: AgentChatRequest) -> AgentChatResponse:
                 finished_at=datetime.now(timezone.utc),
             )
         )
+        chat_repository.append_message(
+            ChatSessionMessage(
+                message_id=f"msg_{uuid4().hex}",
+                session_id=request.session_id,
+                role="assistant",
+                content="Agent 回答失败，请稍后重试。",
+                status="error",
+                run_id=run_id,
+                metadata={"error": str(error)},
+                created_at=datetime.now(timezone.utc),
+            )
+        )
         raise
 
 
@@ -501,6 +576,21 @@ def stream_first_board_agent_chat(request: AgentChatRequest) -> StreamingRespons
     run_id = f"run_{uuid4().hex}"
     started_at = datetime.now(timezone.utc)
     run_repository = SQLiteAgentRunRepository()
+    chat_repository = SQLiteChatSessionRepository()
+    session = chat_repository.ensure_session(
+        request.session_id,
+        first_message=request.message,
+    )
+    conversation_messages = session.messages[-8:]
+    chat_repository.append_message(
+        ChatSessionMessage(
+            message_id=request.message_id or f"msg_{uuid4().hex}",
+            session_id=request.session_id,
+            role="user",
+            content=request.message,
+            created_at=started_at,
+        )
+    )
     event_queue: queue.Queue[tuple[str, dict[str, Any]] | None] = queue.Queue()
 
     def emit(event: str, data: dict[str, Any]) -> None:
@@ -523,6 +613,7 @@ def stream_first_board_agent_chat(request: AgentChatRequest) -> StreamingRespons
                 events=get_limit_up_repository().list_events(),
                 repository=SQLiteFirstBoardRepository(),
                 recent_runs=run_repository.list_recent_runs(request.session_id, limit=10),
+                conversation_messages=conversation_messages,
                 progress_callback=emit_progress,
                 answer_delta_callback=emit_answer_delta,
             )
@@ -544,6 +635,17 @@ def stream_first_board_agent_chat(request: AgentChatRequest) -> StreamingRespons
                     finished_at=datetime.now(timezone.utc),
                 )
             )
+            chat_repository.append_message(
+                ChatSessionMessage(
+                    message_id=f"msg_{uuid4().hex}",
+                    session_id=request.session_id,
+                    role="assistant",
+                    content=response.answer,
+                    run_id=run_id,
+                    metadata=response.model_dump(mode="json"),
+                    created_at=datetime.now(timezone.utc),
+                )
+            )
             emit("completed", response.model_dump(mode="json"))
         except Exception as error:
             run_repository.save_run(
@@ -556,6 +658,18 @@ def stream_first_board_agent_chat(request: AgentChatRequest) -> StreamingRespons
                     error_message=str(error),
                     started_at=started_at,
                     finished_at=datetime.now(timezone.utc),
+                )
+            )
+            chat_repository.append_message(
+                ChatSessionMessage(
+                    message_id=f"msg_{uuid4().hex}",
+                    session_id=request.session_id,
+                    role="assistant",
+                    content="Agent 回答失败，请稍后重试。",
+                    status="error",
+                    run_id=run_id,
+                    metadata={"error": str(error)},
+                    created_at=datetime.now(timezone.utc),
                 )
             )
             emit(

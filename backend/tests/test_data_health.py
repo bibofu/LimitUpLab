@@ -60,7 +60,7 @@ class AgentDataHealthTest(unittest.TestCase):
         self.assertFalse(health.raw_events_ready)
         self.assertTrue(health.warnings)
 
-    def test_features_without_similar_cases_returns_partial_status(self) -> None:
+    def test_features_without_enrichment_returns_partial_status(self) -> None:
         database_path = self._database_path()
         try:
             repository = SQLiteFirstBoardRepository(database_path=database_path)
@@ -80,7 +80,8 @@ class AgentDataHealthTest(unittest.TestCase):
             self.assertTrue(health.first_board_features_ready)
             self.assertEqual(health.first_board_feature_count, 1)
             self.assertEqual(health.top_candidates[0].symbol, "002298")
-            self.assertEqual(health.top_candidates[0].similar_case_count, 0)
+            self.assertTrue(health.top_candidates[0].feature_ready)
+            self.assertFalse(health.top_candidates[0].enrichment_ready)
         finally:
             self._cleanup_database(database_path)
 

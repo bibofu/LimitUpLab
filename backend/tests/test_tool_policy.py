@@ -55,6 +55,13 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertFalse(signals.evaluation)
         self.assertFalse(signals.scoring_policy)
 
+        promotion_signals = QuestionSignals.from_message(
+            "那你选出的高分票1进2的成功率呢"
+        )
+        self.assertTrue(promotion_signals.review)
+        self.assertFalse(promotion_signals.daily_board_promotion)
+        self.assertFalse(promotion_signals.rating_explanation)
+
     def test_scoring_policy_question_has_one_policy_scope(self) -> None:
         signals = QuestionSignals.from_message("评分权重有没有自动优化")
 
@@ -102,6 +109,31 @@ class AgentToolPolicyTest(unittest.TestCase):
         ]
         self.assertEqual(classification["candidate_count"], 1)
         self.assertEqual(classification["missing_count"], 1)
+
+    def test_daily_board_promotion_uses_adjacent_close_facts(self) -> None:
+        signals = QuestionSignals.from_message("最近5个交易日连板晋级概率怎么样")
+
+        self.assertTrue(signals.daily_board_promotion)
+        self.assertFalse(signals.limit_up_events)
+        self.assertFalse(signals.scoring_policy)
+
+        execution = self._empty_execution()
+        repaired = self.policy.reconcile(
+            request=AgentChatRequest(
+                session_id="policy-promotion",
+                message="最近5个交易日连板晋级概率怎么样",
+            ),
+            execution=execution,
+        )
+
+        self.assertEqual(repaired, ["daily_board_promotion"])
+        payload = execution["facts"]["daily_board_promotion"]
+        self.assertEqual(payload["observed_days"], 2)
+        self.assertEqual(len(payload["items"]), 2)
+
+        detail_signals = QuestionSignals.from_message("今天哪些票晋级成功")
+        self.assertTrue(detail_signals.daily_board_promotion)
+        self.assertFalse(detail_signals.limit_up_events)
 
     def test_sector_performance_does_not_trigger_rating_review(self) -> None:
         signals = QuestionSignals.from_message("今天半导体板块表现怎么样")

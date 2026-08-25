@@ -1,4 +1,4 @@
-﻿"""Feature builders for local first-board similar-case retrieval."""
+﻿"""Feature builders for first-board scoring, auditing and backtesting."""
 
 from __future__ import annotations
 
@@ -168,7 +168,7 @@ def first_limit_bucket(minutes: int) -> str:
 
 
 def turnover_bucket(turnover_rate: float) -> str:
-    """Bucket turnover rate into coarse similarity bands."""
+    """Bucket turnover rate for stable persisted feature representation."""
 
     if turnover_rate < 3:
         return "low"

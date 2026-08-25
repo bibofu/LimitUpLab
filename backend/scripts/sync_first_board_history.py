@@ -1,4 +1,4 @@
-﻿"""Build local first-board history tables for similar-case retrieval.
+﻿"""Build local first-board history tables for scoring and backtesting.
 
 The script can either derive features from already-local limit-up events or
 fetch recent Eastmoney/AKShare limit-up pools before deriving features.

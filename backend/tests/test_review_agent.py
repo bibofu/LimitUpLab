@@ -3,9 +3,10 @@ from datetime import date, datetime, timezone
 
 from app.agents.review_agent import (
     _build_feature_comparison,
+    _build_promotion_comparisons,
     build_review_agent_report,
 )
-from app.models import AgentEvaluationItem, AgentPrediction
+from app.models import AgentEvaluationItem, AgentPrediction, ReviewAgentPick
 from app.services.llm_provider import LLMProvider, LLMResult
 from app.services.sample_data import SAMPLE_EVENTS
 
@@ -55,7 +56,7 @@ class ReviewAgentTest(unittest.TestCase):
         )
 
         self.assertEqual(len(provider.calls), 2)
-        self.assertEqual(report.generated_by, "review-agent-tool-use-v3")
+        self.assertEqual(report.generated_by, "review-agent-tool-use-v4")
         self.assertEqual(report.confidence, 0.77)
         self.assertTrue(report.main_findings)
         self.assertEqual(
@@ -152,6 +153,64 @@ class ReviewAgentTest(unittest.TestCase):
         self.assertIn("位置类型 高位震荡首板 3只", failed_text)
         self.assertIn("流通市值中位数 140.0 亿元", failed_text)
         self.assertIn("三日最大回撤平均 -10.00%", failed_text)
+
+    def test_top10_promotion_is_compared_with_same_day_market_cohort(self) -> None:
+        template = SAMPLE_EVENTS[2]
+
+        def event(symbol: str, trade_date: date, height: int):
+            return template.model_copy(
+                update={
+                    "symbol": symbol,
+                    "name": f"股票{symbol}",
+                    "trade_date": trade_date,
+                    "board_height": height,
+                    "closed_limit": True,
+                }
+            )
+
+        base_date = date(2026, 8, 20)
+        next_date = date(2026, 8, 21)
+        events = [
+            event("000001", base_date, 1),
+            event("000002", base_date, 1),
+            event("000003", base_date, 1),
+            event("000001", next_date, 2),
+            event("000002", next_date, 2),
+        ]
+        picks = [
+            ReviewAgentPick(
+                trade_date=base_date,
+                symbol=symbol,
+                name=f"股票{symbol}",
+                score=90 - index,
+                rating="A",
+                confidence=0.8,
+                prediction_source="live",
+                data_as_of=base_date,
+                evaluation_label="success" if symbol == "000001" else "miss",
+                outcome_ready=True,
+                promoted_to_second_board=symbol == "000001",
+            )
+            for index, symbol in enumerate(("000001", "000003"))
+        ]
+
+        comparisons = _build_promotion_comparisons(
+            events=events,
+            picks=picks,
+            end_date=next_date,
+        )
+
+        self.assertEqual(len(comparisons), 1)
+        comparison = comparisons[0]
+        self.assertTrue(comparison.outcome_ready)
+        self.assertEqual(comparison.next_trade_date, next_date)
+        self.assertEqual(comparison.top_pick_promoted_count, 1)
+        self.assertEqual(comparison.top_pick_sample_size, 2)
+        self.assertEqual(comparison.top_pick_promotion_rate, 0.5)
+        self.assertEqual(comparison.market_promoted_count, 2)
+        self.assertEqual(comparison.market_first_board_sample_size, 3)
+        self.assertEqual(comparison.market_promotion_rate, 0.6667)
+        self.assertEqual(comparison.promotion_rate_delta, -0.1667)
 
 
 if __name__ == "__main__":

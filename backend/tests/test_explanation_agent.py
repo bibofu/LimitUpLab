@@ -29,13 +29,13 @@ class ExplanationAgentTest(unittest.TestCase):
 
         result = explain_first_board_rating(
             rating=rating,
-            similar_cases=[],
             provider=BrokenLLMProvider(),
         )
 
         self.assertEqual(result.source, "template")
         self.assertIn("template_explanation", result.tool_calls)
         self.assertIn(rating.facts.symbol, result.answer)
+        self.assertNotIn("历史相似", result.answer)
         self.assertTrue(result.warnings)
 
     def test_accepts_safe_llm_output_and_adds_boundary(self) -> None:
@@ -43,7 +43,6 @@ class ExplanationAgentTest(unittest.TestCase):
 
         result = explain_first_board_rating(
             rating=rating,
-            similar_cases=[],
             provider=FakeLLMProvider("这是基于结构化事实的解释。"),
         )
 
@@ -56,7 +55,6 @@ class ExplanationAgentTest(unittest.TestCase):
 
         result = explain_first_board_rating(
             rating=rating,
-            similar_cases=[],
             provider=FakeLLMProvider("建议买入并设置目标价。"),
         )
 

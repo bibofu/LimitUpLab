@@ -1,8 +1,7 @@
 """Run the daily data update pipeline for the first-board Agent.
 
 The pipeline keeps raw limit-up events, derived first-board features and
-similar-case post-board bars in sync so Agent tools do not fail after a new
-trading day is imported.
+tracked Top10 post-board bars in sync after a new trading day is imported.
 """
 
 from __future__ import annotations
@@ -36,7 +35,6 @@ from app.services.first_board_features import (
 from app.services.data_health import build_agent_data_health
 from app.services.evaluation_agent import persist_agent_predictions_for_dates
 from app.services.first_board_enrichment import refresh_first_board_enrichment_snapshots
-from app.services.similar_cases import find_similar_first_board_cases
 
 
 PostBarCollector = Callable[[str, date, date], list[StockDailyBar]]
@@ -71,7 +69,6 @@ class DailyUpdateReport:
     tracked_cache_ready: int = 0
     tracked_cache_complete: int = 0
     tracked_cache_missing: int = 0
-    similar_case_references: int = 0
     backfilled_bars: int = 0
     backfilled_outcomes: int = 0
     top_candidate: dict[str, object] | None = None
@@ -100,19 +97,7 @@ def main() -> None:
         "--top-targets",
         type=int,
         default=10,
-        help="Number of latest-day top-rated candidates to backfill similar-case bars for.",
-    )
-    parser.add_argument(
-        "--similar-limit",
-        type=int,
-        default=10,
-        help="Number of similar cases to inspect per target candidate.",
-    )
-    parser.add_argument(
-        "--max-kline-fetches",
-        type=int,
-        default=30,
-        help="Maximum remote K-line fetches for similar cases. 0 means unlimited.",
+        help="Number of daily top-rated candidates to persist and track.",
     )
     parser.add_argument(
         "--max-tracked-kline-fetches",
@@ -146,8 +131,6 @@ def main() -> None:
         trade_date=parse_akshare_trade_date(args.date),
         history_days=args.history_days,
         top_targets=args.top_targets,
-        similar_limit=args.similar_limit,
-        max_kline_fetches=args.max_kline_fetches,
         max_tracked_kline_fetches=args.max_tracked_kline_fetches,
         skip_import=args.skip_import,
         refresh_enrichment=not args.skip_enrichment,
@@ -161,8 +144,6 @@ def run_daily_update(
     trade_date: date,
     history_days: int = 60,
     top_targets: int = 10,
-    similar_limit: int = 10,
-    max_kline_fetches: int = 30,
     max_tracked_kline_fetches: int = 60,
     skip_import: bool = False,
     refresh_enrichment: bool = True,
@@ -175,7 +156,7 @@ def run_daily_update(
     remote_limit_up_collector: RemoteLimitUpCollector | None = None,
     persist_live_prediction: bool | None = None,
 ) -> DailyUpdateReport:
-    """Update raw events, derived features, similar bars and health checks."""
+    """Update raw events, scoring features, tracked bars and health checks."""
 
     limit_repo = limit_up_repository or SQLiteLimitUpRepository()
     first_board_repo = first_board_repository or SQLiteFirstBoardRepository()
@@ -357,32 +338,19 @@ def run_daily_update(
         bar_collector=active_bar_collector,
         spot_bar_collector=active_spot_collector,
     )
-    backfill = backfill_top_candidate_similar_bars(
-        trade_date=trade_date,
-        target_symbols=[item.facts.symbol for item in top_ratings],
-        events=events,
-        first_board_repository=first_board_repo,
-        similar_limit=similar_limit,
-        max_kline_fetches=max_kline_fetches,
-        as_of_date=trade_date,
-        bar_collector=active_bar_collector,
-    )
     report.target_candidates_checked = len(top_ratings)
     report.tracked_candidate_references = int(tracked_backfill["case_count"])
     report.tracked_cache_ready = int(tracked_backfill["ready_count"])
     report.tracked_cache_complete = int(tracked_backfill["complete_count"])
     report.tracked_cache_missing = int(tracked_backfill["missing_count"])
-    report.similar_case_references = backfill["case_count"]
-    report.backfilled_bars = int(backfill["bar_count"]) + int(tracked_backfill["bar_count"])
-    report.backfilled_outcomes = int(backfill["outcome_count"]) + int(tracked_backfill["outcome_count"])
-    report.warnings.extend(backfill["warnings"])
+    report.backfilled_bars = int(tracked_backfill["bar_count"])
+    report.backfilled_outcomes = int(tracked_backfill["outcome_count"])
     report.warnings.extend(tracked_backfill["warnings"])
     report.health = build_agent_data_health(
         events=events,
         first_board_repository=first_board_repo,
         trade_date=trade_date,
         top_limit=top_targets,
-        similar_limit=similar_limit,
     ).model_dump(mode="json")
     return report
 
@@ -611,113 +579,6 @@ def sync_recent_features(
         first_board_repository.upsert_features(features)
         feature_count += len(features)
     return len(trade_dates), feature_count
-
-
-def backfill_top_candidate_similar_bars(
-    trade_date: date,
-    target_symbols: list[str],
-    events: list[LimitUpEvent],
-    first_board_repository: SQLiteFirstBoardRepository,
-    similar_limit: int,
-    max_kline_fetches: int,
-    as_of_date: date | None = None,
-    bar_collector: PostBarCollector | None = None,
-) -> dict[str, object]:
-    """Backfill post-board bars for similar cases of selected target symbols."""
-
-    active_collector = bar_collector or collect_post_first_board_bars
-    resolved_as_of = as_of_date or trade_date
-    fetch_count = 0
-    bar_count = 0
-    outcome_count = 0
-    case_count = 0
-    warnings: list[str] = []
-
-    for symbol in target_symbols:
-        try:
-            response = find_similar_first_board_cases(
-                symbol=symbol,
-                trade_date=trade_date,
-                repository=first_board_repository,
-                limit=similar_limit,
-            )
-        except ValueError as error:
-            warnings.append(f"{symbol}@{trade_date.isoformat()}: {error}")
-            continue
-
-        for item in response.cases:
-            case_count += 1
-            if first_board_repository.has_post_bars(item.symbol, item.trade_date):
-                cached_bars = first_board_repository.list_post_bars(
-                    item.symbol,
-                    item.trade_date,
-                    limit=6,
-                )
-                event = next(
-                    (
-                        candidate
-                        for candidate in events
-                        if candidate.symbol == item.symbol
-                        and candidate.trade_date == item.trade_date
-                    ),
-                    None,
-                )
-                if event is not None:
-                    first_board_repository.upsert_outcomes(
-                        [
-                            build_first_board_outcome(
-                                event=event,
-                                bars=cached_bars,
-                                future_events=events,
-                            )
-                        ]
-                    )
-                    outcome_count += 1
-                continue
-            if max_kline_fetches > 0 and fetch_count >= max_kline_fetches:
-                warnings.append(
-                    f"Reached max_kline_fetches={max_kline_fetches}; remaining cases skipped."
-                )
-                return {
-                    "case_count": case_count,
-                    "bar_count": bar_count,
-                    "outcome_count": outcome_count,
-                    "warnings": warnings,
-                }
-
-            try:
-                bars = active_collector(item.symbol, item.trade_date, resolved_as_of)
-            except Exception as error:  # noqa: BLE001
-                warnings.append(f"{item.symbol}@{item.trade_date.isoformat()}: {error}")
-                continue
-
-            fetch_count += 1
-            first_board_repository.upsert_daily_bars(bars)
-            event = next(
-                (
-                    candidate
-                    for candidate in events
-                    if candidate.symbol == item.symbol
-                    and candidate.trade_date == item.trade_date
-                ),
-                None,
-            )
-            if event is not None:
-                outcome = build_first_board_outcome(
-                    event=event,
-                    bars=bars,
-                    future_events=events,
-                )
-                first_board_repository.upsert_outcomes([outcome])
-                outcome_count += 1
-            bar_count += len(bars)
-
-    return {
-        "case_count": case_count,
-        "bar_count": bar_count,
-        "outcome_count": outcome_count,
-        "warnings": warnings,
-    }
 
 
 def collect_post_first_board_bars(

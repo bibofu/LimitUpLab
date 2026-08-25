@@ -91,6 +91,41 @@ export interface ContinuationStat {
   probability: number;
 }
 
+export interface BoardPromotionBucket {
+  from_board_height: number;
+  to_board_height: number;
+  sample_size: number;
+  promoted_count: number;
+  probability: number;
+}
+
+export interface BoardPromotionStock {
+  symbol: string;
+  name: string;
+  industry: string;
+  concept: string;
+  from_board_height: number;
+  to_board_height: number;
+  first_limit_time: string;
+  break_count: number;
+}
+
+export interface DailyBoardPromotionStat {
+  trade_date: string;
+  previous_trade_date: string;
+  sample_size: number;
+  promoted_count: number;
+  probability: number;
+  first_board_sample_size: number;
+  first_board_promoted_count: number;
+  first_board_probability: number | null;
+  continued_board_sample_size: number;
+  continued_board_promoted_count: number;
+  continued_board_probability: number | null;
+  buckets: BoardPromotionBucket[];
+  promoted_stocks: BoardPromotionStock[];
+}
+
 export interface FailedRateStat {
   board_height: number;
   sample_size: number;
@@ -369,8 +404,6 @@ export interface FirstBoardCriticResponse {
   missing_data: string[];
   critic_warnings: string[];
   review_questions: string[];
-  similar_case_count: number;
-  similar_case_outcome_ready_count: number;
   generated_by: string;
 }
 
@@ -481,6 +514,19 @@ export interface ReviewAgentPostBar {
   return_from_base_pct: number | null;
 }
 
+export interface ReviewPromotionComparison {
+  trade_date: string;
+  next_trade_date: string | null;
+  outcome_ready: boolean;
+  top_pick_sample_size: number;
+  top_pick_promoted_count: number;
+  top_pick_promotion_rate: number | null;
+  market_first_board_sample_size: number;
+  market_promoted_count: number;
+  market_promotion_rate: number | null;
+  promotion_rate_delta: number | null;
+}
+
 export interface ReviewAgentReportResponse {
   start_date: string;
   end_date: string;
@@ -488,6 +534,15 @@ export interface ReviewAgentReportResponse {
   success_count: number;
   failed_count: number;
   pending_count: number;
+  promotion_ready_date_count: number;
+  top_pick_promotion_sample_size: number;
+  top_pick_promoted_count: number;
+  top_pick_promotion_rate: number | null;
+  market_promotion_sample_size: number;
+  market_promoted_count: number;
+  market_promotion_rate: number | null;
+  promotion_rate_delta: number | null;
+  promotion_comparisons: ReviewPromotionComparison[];
   main_findings: string[];
   successful_patterns: string[];
   failed_patterns: string[];
@@ -500,66 +555,44 @@ export interface ReviewAgentReportResponse {
   generated_by: string;
 }
 
-export interface SimilarCaseOutcome {
-  next_trade_date: string | null;
-  next_open_pct: number | null;
-  next_high_pct: number | null;
-  next_close_pct: number | null;
-  next_open_to_high_pct: number | null;
-  next_open_to_low_pct: number | null;
-  next_open_to_close_pct: number | null;
-  three_day_high_pct: number | null;
-  three_day_close_pct: number | null;
-  max_drawdown_3d: number | null;
-  three_day_open_to_high_pct: number | null;
-  three_day_open_to_close_pct: number | null;
-  max_drawdown_from_next_open_3d: number | null;
-  promoted_to_second_board: boolean;
-  next_day_ready: boolean;
-  three_day_ready: boolean;
-  outcome_ready: boolean;
-}
-
-export interface SimilarCaseDailyBar {
-  trade_date: string;
-  open: number;
-  high: number;
-  low: number;
-  close: number;
-  volume: number;
-  amount: number;
-}
-
-export interface SimilarFirstBoardCase {
-  symbol: string;
-  name: string;
-  trade_date: string;
-  similarity: number;
-  reasons: string[];
-  differences: string[];
-  outcome: SimilarCaseOutcome | null;
-  post_bars: SimilarCaseDailyBar[];
-}
-
-export interface SimilarFirstBoardCasesResponse {
-  target: {
-    trade_date: string;
-    symbol: string;
-    name: string;
-  };
-  cases: SimilarFirstBoardCase[];
-  window_days: number;
-  recall_count: number;
-  generated_by: string;
-}
-
 export interface AgentChatRequest {
   session_id: string;
+  message_id?: string;
   message: string;
   intent_hint?: string;
   trade_date?: string;
   symbol?: string;
   page_context?: Record<string, string>;
+}
+
+export interface ChatSessionMessage {
+  message_id: string;
+  session_id: string;
+  role: "user" | "assistant";
+  content: string;
+  status: "success" | "error";
+  run_id: string | null;
+  metadata: Record<string, unknown>;
+  created_at: string;
+}
+
+export interface ChatSessionSummary {
+  session_id: string;
+  owner_id: string;
+  title: string;
+  message_count: number;
+  last_message_preview: string | null;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface ChatSessionDetail extends ChatSessionSummary {
+  messages: ChatSessionMessage[];
+}
+
+export interface ChatSessionsResponse {
+  sessions: ChatSessionSummary[];
+  generated_by: string;
 }
 
 export interface AgentChatResponse {
@@ -634,8 +667,6 @@ export interface AgentDataHealthTopCandidate {
   rating: string;
   feature_ready: boolean;
   enrichment_ready: boolean;
-  similar_case_count: number;
-  similar_cases_with_post_bars: number;
 }
 
 export interface AgentDataHealthResponse {
@@ -648,8 +679,6 @@ export interface AgentDataHealthResponse {
   enrichment_ready: boolean;
   enrichment_count: number;
   top_candidates_checked: number;
-  similar_cases_ready: boolean;
-  post_bars_ready: boolean;
   top_candidates: AgentDataHealthTopCandidate[];
   warnings: string[];
 }
@@ -721,7 +750,6 @@ export interface AgentEvidenceCard {
     | "limit_up_events"
     | "rating"
     | "critic"
-    | "similar_cases"
     | "evaluation"
     | "data_availability"
     | "tool";

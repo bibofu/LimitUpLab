@@ -133,8 +133,6 @@ def main() -> None:
     parser.add_argument("--retry-delay-seconds", type=float, default=20)
     parser.add_argument("--history-days", type=int, default=60)
     parser.add_argument("--top-targets", type=int, default=10)
-    parser.add_argument("--similar-limit", type=int, default=10)
-    parser.add_argument("--max-kline-fetches", type=int, default=30)
     parser.add_argument("--max-tracked-kline-fetches", type=int, default=80)
     parser.add_argument("--lock-path", type=Path, default=DEFAULT_LOCK_PATH)
     parser.add_argument("--report-path", type=Path, default=DEFAULT_REPORT_PATH)
@@ -151,8 +149,6 @@ def main() -> None:
         retry_delay_seconds=args.retry_delay_seconds,
         history_days=args.history_days,
         top_targets=args.top_targets,
-        similar_limit=args.similar_limit,
-        max_kline_fetches=args.max_kline_fetches,
         max_tracked_kline_fetches=args.max_tracked_kline_fetches,
         lock_path=args.lock_path,
         report_path=args.report_path,
@@ -183,8 +179,6 @@ def execute_daily_close_loop(
     retry_delay_seconds: float = 20,
     history_days: int = 60,
     top_targets: int = 10,
-    similar_limit: int = 10,
-    max_kline_fetches: int = 30,
     max_tracked_kline_fetches: int = 80,
     now: datetime | None = None,
     lock_path: Path = DEFAULT_LOCK_PATH,
@@ -273,8 +267,6 @@ def execute_daily_close_loop(
                         trade_date=target.trade_date,
                         history_days=history_days,
                         top_targets=top_targets,
-                        similar_limit=similar_limit,
-                        max_kline_fetches=max_kline_fetches,
                         max_tracked_kline_fetches=max_tracked_kline_fetches,
                         skip_import=skip_import,
                         refresh_enrichment=refresh_enrichment,

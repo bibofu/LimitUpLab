@@ -221,6 +221,47 @@ class ContinuationStat(BaseModel):
     probability: float
 
 
+class BoardPromotionBucket(BaseModel):
+    """One board-height cohort observed across two adjacent trading dates."""
+
+    from_board_height: int
+    to_board_height: int
+    sample_size: int
+    promoted_count: int
+    probability: float
+
+
+class BoardPromotionStock(BaseModel):
+    """One stock that closed at limit-up on two dates and advanced one board."""
+
+    symbol: str
+    name: str
+    industry: str
+    concept: str
+    from_board_height: int
+    to_board_height: int
+    first_limit_time: time
+    break_count: int
+
+
+class DailyBoardPromotionStat(BaseModel):
+    """Daily empirical promotion rates based on two adjacent trading dates."""
+
+    trade_date: date
+    previous_trade_date: date
+    sample_size: int
+    promoted_count: int
+    probability: float
+    first_board_sample_size: int
+    first_board_promoted_count: int
+    first_board_probability: float | None = None
+    continued_board_sample_size: int
+    continued_board_promoted_count: int
+    continued_board_probability: float | None = None
+    buckets: list[BoardPromotionBucket]
+    promoted_stocks: list[BoardPromotionStock]
+
+
 class FailedRateStat(BaseModel):
     """Intraday break-rate bucket grouped by board height."""
 
@@ -241,7 +282,7 @@ class PostPerformanceStat(BaseModel):
     avg_five_day_return_pct: float
 
 class FirstBoardFeature(BaseModel):
-    """Persisted first-board feature row used for similar-case recall."""
+    """Persisted first-board feature row used by scoring and backtesting."""
 
     trade_date: date
     symbol: str
@@ -310,63 +351,6 @@ class FirstBoardOutcome(BaseModel):
     outcome_ready: bool
     outcome_version: str
     created_at: datetime
-
-
-class SimilarCaseOutcome(BaseModel):
-    """Compact post-first-board outcome shown for one similar case."""
-
-    next_trade_date: date | None = None
-    next_open_pct: float | None = None
-    next_high_pct: float | None = None
-    next_close_pct: float | None = None
-    next_open_to_high_pct: float | None = None
-    next_open_to_low_pct: float | None = None
-    next_open_to_close_pct: float | None = None
-    three_day_high_pct: float | None = None
-    three_day_close_pct: float | None = None
-    max_drawdown_3d: float | None = None
-    three_day_open_to_high_pct: float | None = None
-    three_day_open_to_close_pct: float | None = None
-    max_drawdown_from_next_open_3d: float | None = None
-    promoted_to_second_board: bool
-    next_day_ready: bool = False
-    three_day_ready: bool = False
-    outcome_ready: bool
-
-
-class SimilarCaseDailyBar(BaseModel):
-    """Daily bar displayed after a similar case's first-board date."""
-
-    trade_date: date
-    open: float
-    high: float
-    low: float
-    close: float
-    volume: float
-    amount: float
-
-
-class SimilarFirstBoardCase(BaseModel):
-    """One historical first-board case similar to the target stock."""
-
-    symbol: str
-    name: str
-    trade_date: date
-    similarity: float
-    reasons: list[str]
-    differences: list[str]
-    outcome: SimilarCaseOutcome | None = None
-    post_bars: list[SimilarCaseDailyBar] = Field(default_factory=list)
-
-
-class SimilarFirstBoardCasesResponse(BaseModel):
-    """Similar-case response for one target first-board stock."""
-
-    target: FirstBoardFeature
-    cases: list[SimilarFirstBoardCase]
-    window_days: int
-    recall_count: int
-    generated_by: str
 
 
 class FirstBoardFilterResult(BaseModel):
@@ -773,8 +757,6 @@ class FirstBoardCriticResponse(BaseModel):
     missing_data: list[str]
     critic_warnings: list[str]
     review_questions: list[str]
-    similar_case_count: int
-    similar_case_outcome_ready_count: int
     generated_by: str
 
 
@@ -889,6 +871,21 @@ class ReviewAgentPostBar(BaseModel):
     return_from_base_pct: float | None = None
 
 
+class ReviewPromotionComparison(BaseModel):
+    """One prediction day's Top10 first-to-second promotion benchmark."""
+
+    trade_date: date
+    next_trade_date: date | None = None
+    outcome_ready: bool
+    top_pick_sample_size: int
+    top_pick_promoted_count: int
+    top_pick_promotion_rate: float | None = None
+    market_first_board_sample_size: int
+    market_promoted_count: int
+    market_promotion_rate: float | None = None
+    promotion_rate_delta: float | None = None
+
+
 class ReviewAgentReportResponse(BaseModel):
     """LLM tool-driven review report for high-score first-board picks."""
 
@@ -898,6 +895,15 @@ class ReviewAgentReportResponse(BaseModel):
     success_count: int
     failed_count: int
     pending_count: int
+    promotion_ready_date_count: int = 0
+    top_pick_promotion_sample_size: int = 0
+    top_pick_promoted_count: int = 0
+    top_pick_promotion_rate: float | None = None
+    market_promotion_sample_size: int = 0
+    market_promoted_count: int = 0
+    market_promotion_rate: float | None = None
+    promotion_rate_delta: float | None = None
+    promotion_comparisons: list[ReviewPromotionComparison] = Field(default_factory=list)
     main_findings: list[str] = Field(default_factory=list)
     successful_patterns: list[str] = Field(default_factory=list)
     failed_patterns: list[str] = Field(default_factory=list)
@@ -938,10 +944,61 @@ class AgentEvalReportResponse(BaseModel):
     generated_by: str
 
 
+class ChatSessionMessage(BaseModel):
+    """Persisted user or assistant message inside one chat session."""
+
+    message_id: str
+    session_id: str
+    role: Literal["user", "assistant"]
+    content: str
+    status: Literal["success", "error"] = "success"
+    run_id: str | None = None
+    metadata: dict[str, Any] = Field(default_factory=dict)
+    created_at: datetime
+
+
+class ChatSessionSummary(BaseModel):
+    """List-friendly metadata for one resumable Agent conversation."""
+
+    session_id: str
+    owner_id: str
+    title: str
+    message_count: int = 0
+    last_message_preview: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
+class ChatSessionDetail(ChatSessionSummary):
+    """One chat session with messages ordered from oldest to newest."""
+
+    messages: list[ChatSessionMessage] = Field(default_factory=list)
+
+
+class ChatSessionsResponse(BaseModel):
+    """Active chat sessions for the current local user."""
+
+    sessions: list[ChatSessionSummary]
+    generated_by: str
+
+
+class ChatSessionCreateRequest(BaseModel):
+    """Optional title supplied when creating a conversation."""
+
+    title: str | None = Field(default=None, max_length=80)
+
+
+class ChatSessionUpdateRequest(BaseModel):
+    """Editable conversation metadata."""
+
+    title: str = Field(min_length=1, max_length=80)
+
+
 class AgentChatRequest(BaseModel):
     """User chat request with optional page context."""
 
     session_id: str
+    message_id: str | None = None
     message: str
     intent_hint: str | None = None
     trade_date: date | None = None
@@ -971,7 +1028,6 @@ class AgentEvidenceCard(BaseModel):
         "limit_up_events",
         "rating",
         "critic",
-        "similar_cases",
         "evaluation",
         "data_availability",
         "tool",
@@ -1196,7 +1252,6 @@ def _evidence_title_kind(tool_name: str) -> tuple[str, str]:
         "limit_up_events": ("涨停事件查询", "limit_up_events"),
         "first_board_filter": ("首板条件筛选", "candidate_pool"),
         "first_board_critic": ("评分反证与风险", "critic"),
-        "first_board_similar_cases": ("历史相似案例", "similar_cases"),
         "rating_backtest": ("评分历史回测", "evaluation"),
         "rating_evaluation": ("Agent 自我评价", "evaluation"),
         "scoring_policy_status": ("评分策略迭代", "evaluation"),
@@ -1238,7 +1293,6 @@ def _repair_reason(
     reasons = {
         "first_board_ratings": "用户问题需要评分或候选池事实，planner 未覆盖，后端补充 first_board_ratings。",
         "first_board_critic": "用户要求反证、风险或可靠性检查，后端补充 first_board_critic。",
-        "first_board_similar_cases": "用户询问历史相似案例，后端补充 first_board_similar_cases。",
         "limit_up_event_dates": "用户询问本地是否有某日数据，后端补充 limit_up_event_dates。",
         "limit_up_events": "用户询问当天涨停/连板/炸板明细，后端补充 limit_up_events。",
         "sector_performance": "用户询问整个行业板块表现，后端补充 sector_performance。",
@@ -1404,8 +1458,6 @@ class AgentDataHealthTopCandidate(BaseModel):
     rating: str
     feature_ready: bool
     enrichment_ready: bool = False
-    similar_case_count: int
-    similar_cases_with_post_bars: int
 
 
 class AgentDataHealthResponse(BaseModel):
@@ -1420,8 +1472,6 @@ class AgentDataHealthResponse(BaseModel):
     enrichment_ready: bool = False
     enrichment_count: int = 0
     top_candidates_checked: int
-    similar_cases_ready: bool
-    post_bars_ready: bool
     top_candidates: list[AgentDataHealthTopCandidate] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
 
@@ -1486,5 +1536,3 @@ class DailyPipelineStatusResponse(BaseModel):
     latest: DailyPipelineRun | None = None
     recent: list[DailyPipelineRun] = Field(default_factory=list)
     generated_by: str
-
-

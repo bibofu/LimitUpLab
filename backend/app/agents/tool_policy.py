@@ -38,10 +38,10 @@ class QuestionSignals:
     sector_performance: bool
     finance_news: bool
     web_search: bool
+    daily_board_promotion: bool
     limit_up_events: bool
     first_board_facts: bool
     rating_explanation: bool
-    similar_cases: bool
     stock_kline: bool
     prediction_quality: bool
     rating_backtest: bool
@@ -69,15 +69,16 @@ class QuestionSignals:
             and not prediction_quality
         )
         finance_news = looks_like_finance_news_question(message)
+        daily_board_promotion = looks_like_daily_board_promotion_question(message)
         return cls(
             requested_date=extract_trade_date(message),
             sector_performance=looks_like_sector_performance_question(message),
             finance_news=finance_news,
             web_search=looks_like_web_search_question(message) and not finance_news,
+            daily_board_promotion=daily_board_promotion,
             limit_up_events=looks_like_limit_up_event_question(message),
             first_board_facts=looks_like_first_board_facts_question(message),
             rating_explanation=looks_like_rating_explain_question(message),
-            similar_cases=looks_like_similar_question(message),
             stock_kline=looks_like_stock_kline_question(message),
             prediction_quality=prediction_quality,
             rating_backtest=rating_backtest,
@@ -96,10 +97,10 @@ class QuestionSignals:
                 self.sector_performance,
                 self.finance_news,
                 self.web_search,
+                self.daily_board_promotion,
                 self.limit_up_events,
                 self.first_board_facts,
                 self.rating_explanation,
-                self.similar_cases,
                 self.stock_kline,
                 self.prediction_quality,
                 self.rating_backtest,
@@ -117,9 +118,9 @@ class QuestionSignals:
         return any(
             (
                 self.limit_up_events,
+                self.daily_board_promotion,
                 self.first_board_facts,
                 self.rating_explanation,
-                self.similar_cases,
                 self.prediction_quality,
                 self.rating_backtest,
                 self.critic,
@@ -254,6 +255,15 @@ class AgentToolPolicyEngine:
                 repair=self._repair_web_search,
             ),
             ToolRepairRule(
+                name="daily-board-promotion-grounding",
+                tool_name="daily_board_promotion",
+                reason=(
+                    "A daily promotion-rate claim requires adjacent local close cohorts."
+                ),
+                matches=lambda signals: signals.daily_board_promotion,
+                repair=self._repair_daily_board_promotion,
+            ),
+            ToolRepairRule(
                 name="limit-up-events-required",
                 tool_name="limit_up_events",
                 reason="The question requires the complete raw limit-up event set.",
@@ -275,13 +285,6 @@ class AgentToolPolicyEngine:
                 reason="A single-stock trend answer requires fresh K-line facts.",
                 matches=lambda signals: signals.stock_kline,
                 repair=self._repair_stock_kline,
-            ),
-            ToolRepairRule(
-                name="similar-case-grounding",
-                tool_name="first_board_similar_cases",
-                reason="A historical comparison requires retrieved similar cases.",
-                matches=lambda signals: signals.similar_cases,
-                repair=self._repair_similar_cases,
             ),
             ToolRepairRule(
                 name="prediction-quality-audit-grounding",
@@ -400,6 +403,33 @@ class AgentToolPolicyEngine:
             fact_name="first_board_ratings",
             fact_value=self.compact_ratings(ratings),
             references=[f"trade_date={ratings.trade_date.isoformat()}"],
+        )
+
+    def _repair_daily_board_promotion(
+        self,
+        request: AgentChatRequest,
+        signals: QuestionSignals,
+        execution: ToolExecution,
+        context_symbol: str | None,
+    ) -> None:
+        del context_symbol
+        result = self.tools.daily_board_promotion(
+            days=extract_promotion_days(request.message),
+            end_date=request.trade_date or signals.requested_date,
+        )
+        items = result.output
+        self._record_success(
+            execution,
+            result=result,
+            fact_name="daily_board_promotion",
+            fact_value={
+                "observed_days": len(items),
+                "items": [item.model_dump(mode="json") for item in items],
+            },
+            references=[
+                f"promotion_trade_date={item.trade_date.isoformat()}"
+                for item in items
+            ],
         )
 
     def _repair_sector_performance(
@@ -524,31 +554,6 @@ class AgentToolPolicyEngine:
             ],
         )
 
-    def _repair_similar_cases(
-        self,
-        request: AgentChatRequest,
-        signals: QuestionSignals,
-        execution: ToolExecution,
-        context_symbol: str | None,
-    ) -> None:
-        target = self._resolve_first_board_target(
-            request,
-            signals,
-            execution,
-            context_symbol,
-        )
-        if target is None:
-            raise ValueError("Cannot resolve a stock and first-board date for similar cases.")
-        symbol, trade_date = target
-        result = self.tools.similar_cases(symbol=symbol, trade_date=trade_date, limit=5)
-        self._record_success(
-            execution,
-            result=result,
-            fact_name="first_board_similar_cases",
-            fact_value=result.output.model_dump(mode="json"),
-            references=[f"symbol={symbol}", f"trade_date={trade_date.isoformat()}"],
-        )
-
     def _repair_rating_backtest(
         self,
         request: AgentChatRequest,
@@ -623,7 +628,6 @@ class AgentToolPolicyEngine:
         result = self.tools.first_board_critic(
             symbol=symbol,
             trade_date=trade_date,
-            similar_limit=5,
         )
         response = result.output
         self._record_success(
@@ -672,11 +676,16 @@ class AgentToolPolicyEngine:
         context_symbol: str | None,
     ) -> None:
         del request, signals, context_symbol
-        start_date, end_date = self._default_date_range()
+        available_dates = sorted({event.trade_date for event in self.tools.events})
+        if not available_dates:
+            raise ValueError("No local limit-up events available.")
+        end_date = available_dates[-1]
+        start_date = available_dates[max(0, len(available_dates) - 6)]
         result = self.tools.review_high_score_picks(
             start_date=start_date,
             end_date=end_date,
-            min_score=85,
+            min_score=0,
+            top_per_day=10,
         )
         response = result.output
         self._record_success(
@@ -864,6 +873,8 @@ def looks_like_first_board_position_question(message: str) -> bool:
 def looks_like_limit_up_event_question(message: str) -> bool:
     """Return whether the question needs raw limit-up events rather than ratings."""
 
+    if looks_like_daily_board_promotion_question(message):
+        return False
     if looks_like_first_board_position_question(message):
         return False
     if any(
@@ -885,6 +896,31 @@ def looks_like_limit_up_event_question(message: str) -> bool:
         term in message
         for term in ("涨停", "首板", "连板", "二板", "三板", "炸板", "最高板")
     )
+
+
+def looks_like_daily_board_promotion_question(message: str) -> bool:
+    """Return whether the question asks for empirical board-promotion rates."""
+
+    promotion_terms = ("晋级率", "晋级概率", "晋级情况", "晋级成功率")
+    board_terms = ("涨停", "首板", "连板", "二板", "三板", "接力")
+    scoring_policy_terms = ("Champion", "Challenger", "冠军", "挑战者", "评分策略")
+    if any(term.lower() in message.lower() for term in scoring_policy_terms):
+        return False
+    stock_detail_question = "晋级" in message and any(
+        term in message
+        for term in ("哪些票", "哪些股票", "哪些个股", "股票有哪些", "票有哪些")
+    )
+    return (
+        any(term in message for term in promotion_terms)
+        and any(term in message for term in board_terms)
+    ) or stock_detail_question
+
+
+def extract_promotion_days(message: str) -> int:
+    """Extract a bounded number of recent promotion observations."""
+
+    match = re.search(r"(?:最近|近|过去)?\s*(\d{1,2})\s*(?:个?交易日|天|日)", message)
+    return max(1, min(int(match.group(1)), 60)) if match else 5
 
 
 def extract_board_filters(message: str) -> tuple[int | None, int | None]:
@@ -1033,12 +1069,6 @@ def looks_like_stock_kline_question(message: str) -> bool:
         )
     )
     return asks_trend and not ("高分" in message and "后续走势" in message)
-
-
-def looks_like_similar_question(message: str) -> bool:
-    """Return whether a question asks for historical similar cases."""
-
-    return any(term in message.lower() for term in ("相似", "历史", "案例", "similar"))
 
 
 def looks_like_rating_backtest_question(message: str) -> bool:

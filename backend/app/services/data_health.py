@@ -10,7 +10,6 @@ from app.models import (
 )
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.analysis import latest_trade_date
-from app.services.similar_cases import find_similar_first_board_cases
 
 
 def build_agent_data_health(
@@ -18,9 +17,8 @@ def build_agent_data_health(
     first_board_repository: SQLiteFirstBoardRepository | None = None,
     trade_date: date | None = None,
     top_limit: int = 5,
-    similar_limit: int = 5,
 ) -> AgentDataHealthResponse:
-    """Build health status for raw events, features and similar-case caches."""
+    """Build health status for raw events and first-board scoring inputs."""
 
     repository = first_board_repository or SQLiteFirstBoardRepository()
     warnings: list[str] = []
@@ -33,8 +31,6 @@ def build_agent_data_health(
             first_board_features_ready=False,
             first_board_feature_count=0,
             top_candidates_checked=0,
-            similar_cases_ready=False,
-            post_bars_ready=False,
             warnings=["No local limit-up events are available."],
         )
 
@@ -49,8 +45,6 @@ def build_agent_data_health(
             first_board_features_ready=False,
             first_board_feature_count=0,
             top_candidates_checked=0,
-            similar_cases_ready=False,
-            post_bars_ready=False,
             warnings=[f"No local limit-up events found for {target_date.isoformat()}."],
         )
 
@@ -69,20 +63,6 @@ def build_agent_data_health(
         symbol = item.facts.symbol
         feature = repository.get_feature(symbol, target_date)
         enrichment = enrichment_by_symbol.get(symbol)
-        similar_case_count = 0
-        post_bar_cases = 0
-        if feature is not None:
-            try:
-                response = find_similar_first_board_cases(
-                    symbol=symbol,
-                    trade_date=target_date,
-                    repository=repository,
-                    limit=similar_limit,
-                )
-                similar_case_count = len(response.cases)
-                post_bar_cases = sum(1 for case in response.cases if case.post_bars)
-            except ValueError as error:
-                warnings.append(f"{symbol}: {error}")
         candidate_health.append(
             AgentDataHealthTopCandidate(
                 symbol=symbol,
@@ -95,8 +75,6 @@ def build_agent_data_health(
                     and enrichment.kline_bar_count >= 20
                     and enrichment.float_market_cap is not None
                 ),
-                similar_case_count=similar_case_count,
-                similar_cases_with_post_bars=post_bar_cases,
             )
         )
 
@@ -104,27 +82,15 @@ def build_agent_data_health(
     enrichment_ready = bool(candidate_health) and all(
         item.enrichment_ready for item in candidate_health
     )
-    similar_cases_ready = bool(candidate_health) and all(
-        item.similar_case_count > 0 for item in candidate_health
-    )
-    post_bars_ready = bool(candidate_health) and all(
-        item.similar_cases_with_post_bars > 0 for item in candidate_health
-    )
     if not first_board_features_ready:
         warnings.append("First-board features are missing for the latest local trade date.")
     if candidate_health and not enrichment_ready:
         warnings.append("Some top candidates are missing extended rating inputs.")
-    if candidate_health and not similar_cases_ready:
-        warnings.append("Some top candidates cannot retrieve historical similar cases.")
-    if candidate_health and not post_bars_ready:
-        warnings.append("Some top candidates have similar cases without post-board bars.")
 
     status = _overall_status(
         raw_events_ready=True,
         first_board_features_ready=first_board_features_ready,
         enrichment_ready=enrichment_ready,
-        similar_cases_ready=similar_cases_ready,
-        post_bars_ready=post_bars_ready,
     )
     return AgentDataHealthResponse(
         trade_date=target_date,
@@ -136,8 +102,6 @@ def build_agent_data_health(
         enrichment_ready=enrichment_ready,
         enrichment_count=len(enrichments),
         top_candidates_checked=len(candidate_health),
-        similar_cases_ready=similar_cases_ready,
-        post_bars_ready=post_bars_ready,
         top_candidates=candidate_health,
         warnings=warnings,
     )
@@ -147,13 +111,11 @@ def _overall_status(
     raw_events_ready: bool,
     first_board_features_ready: bool,
     enrichment_ready: bool,
-    similar_cases_ready: bool,
-    post_bars_ready: bool,
 ) -> str:
     """Return the aggregate health label."""
 
     if not raw_events_ready or not first_board_features_ready:
         return "missing"
-    if enrichment_ready and similar_cases_ready and post_bars_ready:
+    if enrichment_ready:
         return "healthy"
     return "partial"

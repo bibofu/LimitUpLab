@@ -12,10 +12,6 @@ from app.services.first_board_features import (
     build_first_board_features,
     build_first_board_outcome,
 )
-from app.services.similar_cases import (
-    calculate_similarity,
-    find_similar_first_board_cases,
-)
 from app.services.sample_data import SAMPLE_EVENTS
 
 
@@ -129,56 +125,6 @@ class FirstBoardFeaturesTest(unittest.TestCase):
         self.assertEqual(len(persisted), 1)
         self.assertEqual(persisted[0].symbol, "301489")
         self.assertEqual(persisted[0].market_sentiment, "cooling")
-
-    def test_repository_recalls_similar_features(self) -> None:
-        all_features = []
-        for trade_date in (date(2026, 5, 13), date(2026, 5, 14), date(2026, 5, 15)):
-            all_features.extend(build_first_board_features(SAMPLE_EVENTS, trade_date=trade_date))
-
-        with temporary_database_path() as database_path:
-            repository = SQLiteFirstBoardRepository(database_path=database_path)
-            repository.upsert_features(all_features)
-            target = repository.get_feature("301489", date(2026, 5, 15))
-            self.assertIsNotNone(target)
-            recalled = repository.recall_similar_features(
-                target=target,
-                earliest_trade_date=date(2026, 5, 13),
-                limit=10,
-            )
-
-        self.assertTrue(any(feature.symbol == "300124" for feature in recalled))
-
-    def test_calculate_similarity_is_explainable(self) -> None:
-        features = []
-        for trade_date in (date(2026, 5, 13), date(2026, 5, 15)):
-            features.extend(build_first_board_features(SAMPLE_EVENTS, trade_date=trade_date))
-        target = next(feature for feature in features if feature.symbol == "301489")
-        candidate = next(feature for feature in features if feature.symbol == "300124")
-
-        result = calculate_similarity(target, candidate)
-
-        self.assertGreater(result.score, 0)
-        self.assertTrue(result.reasons or result.differences)
-
-    def test_find_similar_first_board_cases(self) -> None:
-        all_features = []
-        for trade_date in (date(2026, 5, 13), date(2026, 5, 14), date(2026, 5, 15)):
-            all_features.extend(build_first_board_features(SAMPLE_EVENTS, trade_date=trade_date))
-
-        with temporary_database_path() as database_path:
-            repository = SQLiteFirstBoardRepository(database_path=database_path)
-            repository.upsert_features(all_features)
-            response = find_similar_first_board_cases(
-                symbol="301489",
-                trade_date=date(2026, 5, 15),
-                repository=repository,
-                limit=2,
-                window_days=60,
-            )
-
-        self.assertEqual(response.target.symbol, "301489")
-        self.assertLessEqual(len(response.cases), 2)
-        self.assertGreater(response.recall_count, 0)
 
     def test_build_first_board_outcome_from_event_performance(self) -> None:
         event = next(item for item in SAMPLE_EVENTS if item.symbol == "301489")

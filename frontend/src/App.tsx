@@ -1,23 +1,31 @@
 ﻿import {
+  Trash2,
   ArrowLeft,
   BarChart3,
+  Check,
+  ChevronRight,
   Flame,
+  GitBranch,
   Layers3,
   LineChart,
   LoaderCircle,
   MapPin,
   MessageCircle,
+  PanelLeft,
+  Pencil,
+  Plus,
   RefreshCcw,
   Send,
   ShieldAlert,
   TrendingUp,
-  WalletCards,
+  X,
 } from "lucide-react";
 import type { ReactNode } from "react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useRef, useState } from "react";
 import ReactMarkdown from "react-markdown";
 import {
   Link,
+  NavLink,
   Navigate,
   Route,
   Routes,
@@ -32,20 +40,21 @@ import {
   type MarketCandleBar,
 } from "./components/MarketKLineChart";
 import {
+  deleteChatSession,
+  createChatSession,
   fetchContinuedBoardEvents,
   fetchAgentDataHealth,
-  fetchAgentEvalReport,
-  fetchAgentRuns,
   fetchAgentSystemHealth,
+  fetchChatSession,
+  fetchChatSessions,
   fetchDailyPipelineStatus,
+  fetchDailyBoardPromotion,
   fetchReviewAgentReport,
   fetchFirstBoardCritic,
   fetchFirstBoardRatings,
-  fetchFirstBoardSimilarCases,
   fetchFailedLimitUpEvents,
   fetchFirstBoardEvents,
   fetchMarketSummary,
-  fetchPredictionQualityAudit,
   fetchRatingBacktest,
   fetchRatingEvaluation,
   fetchRecentLimitUpEvents,
@@ -53,36 +62,36 @@ import {
   fetchStockLatestClose,
   fetchStockPosition,
   fetchStockTradingDayKLine,
+  renameChatSession,
   streamAgentChatMessage,
 } from "./api";
 import type {
-  AgentChatResponse,
   AgentChatStreamStage,
   AgentDataHealthResponse,
-  AgentEvalCaseReport,
-  AgentEvalReportResponse,
-  AgentEvidenceCard,
   AgentEvaluationResponse,
-  AgentRunSummary,
   AgentSystemHealthResponse,
+  ChatSessionDetail,
+  ChatSessionMessage,
+  ChatSessionSummary,
   DailyPipelineStatusResponse,
+  DailyBoardPromotionStat,
   FirstBoardCriticResponse,
   FirstBoardRating,
   FirstBoardRatingsResponse,
   LimitUpEvent,
   MarketSummary,
-  PredictionQualityAuditResponse,
   RatingBacktestResponse,
   ReviewAgentPick,
   ReviewAgentReportResponse,
-  SimilarFirstBoardCasesResponse,
+  ReviewPromotionComparison,
   StockCloseSnapshot,
   StockIntradayKLineBar,
   StockKLineBar,
   StockPositionAssessment,
 } from "./types";
 
-type ViewKey = "overview" | "first" | "continued" | "failed" | "recent";
+type ViewKey = "overview" | "recommendation" | "review" | "pool" | "first" | "continued" | "failed" | "recent";
+type StockListViewKey = "first" | "continued" | "failed";
 
 interface DashboardData {
   summary: MarketSummary;
@@ -94,7 +103,7 @@ interface DashboardData {
   agentDataHealth: AgentDataHealthResponse;
   systemHealth: AgentSystemHealthResponse;
   dailyPipelineStatus: DailyPipelineStatusResponse;
-  predictionQualityAudit: PredictionQualityAuditResponse;
+  dailyBoardPromotion: DailyBoardPromotionStat[];
   ratingBacktest: RatingBacktestResponse;
   ratingEvaluation: AgentEvaluationResponse;
 }
@@ -103,57 +112,37 @@ interface ChatMessage {
   id: string;
   role: "user" | "agent";
   content: string;
-  meta?: AgentChatResponse;
+  status?: "success" | "error";
 }
 
-function formatTracePayload(payload: Record<string, unknown>) {
-  return JSON.stringify(payload, null, 2);
-}
+const ACTIVE_CHAT_SESSION_STORAGE_KEY = "limituplab.activeChatSession";
 
-function formatMetricLabel(key: string) {
-  const labels: Record<string, string> = {
-    trade_date: "交易日",
-    candidate_count: "候选数",
-    matched_count: "匹配数",
-    event_count: "事件数",
-    first_board_count: "首板",
-    continued_board_count: "连板",
-    failed_count: "炸板",
-    limit_up_count: "涨停",
-    recall_count: "召回",
-    case_count: "案例",
-    outcome_ready_count: "有走势",
-    universe_count: "样本池",
-    score: "评分",
-    rating: "评级",
-    confidence: "置信度",
-    verdict: "结论",
-    status: "状态",
+function restoredChatMessage(message: ChatSessionMessage): ChatMessage {
+  return {
+    id: message.message_id,
+    role: message.role === "assistant" ? "agent" : "user",
+    content: message.content,
+    status: message.status,
   };
-  return labels[key] ?? key;
 }
 
-function formatMetricValue(value: string | number | boolean | null) {
-  if (value === null) {
-    return "无";
+function sessionTimeLabel(value: string) {
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) {
+    return "";
   }
-  if (typeof value === "boolean") {
-    return value ? "是" : "否";
+  const now = new Date();
+  if (timestamp.toDateString() === now.toDateString()) {
+    return timestamp.toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" });
   }
-  if (typeof value === "number") {
-    return Number.isInteger(value) ? String(value) : value.toFixed(2);
-  }
-  return value;
+  return timestamp.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
 }
-
-const healthCopy = {
-  healthy: { label: "数据健康", detail: "工具数据链完整" },
-  partial: { label: "部分可用", detail: "部分相似案例或走势缓存缺失" },
-  missing: { label: "数据缺失", detail: "需要运行每日更新流水线" },
-};
 
 const viewMeta: Record<ViewKey, { title: string; eyebrow: string }> = {
   overview: { title: "短线市场概况", eyebrow: "Overview" },
+  recommendation: { title: "盘前推荐", eyebrow: "Pre-market Picks" },
+  review: { title: "预测与市场复盘", eyebrow: "Review" },
+  pool: { title: "涨停池", eyebrow: "Limit-Up Pool" },
   first: { title: "首板票", eyebrow: "First Board" },
   continued: { title: "连板票", eyebrow: "Continued Board" },
   failed: { title: "炸板票", eyebrow: "Failed Limit-Up" },
@@ -163,15 +152,9 @@ const viewMeta: Record<ViewKey, { title: string; eyebrow: string }> = {
 function AgentChatDock({
   tradeDate,
   symbol,
-  dataHealth,
-  systemHealth,
-  dailyPipelineStatus,
 }: {
   tradeDate: string;
   symbol?: string;
-  dataHealth: AgentDataHealthResponse;
-  systemHealth: AgentSystemHealthResponse;
-  dailyPipelineStatus: DailyPipelineStatusResponse;
 }) {
   /** Provide a lightweight tool-grounded Agent chat entry point. */
 
@@ -181,19 +164,24 @@ function AgentChatDock({
   const [streamStage, setStreamStage] = useState<AgentChatStreamStage>("planning");
   const [streamStatus, setStreamStatus] = useState("正在理解问题并规划工具");
   const [error, setError] = useState<string | null>(null);
-  const [runs, setRuns] = useState<AgentRunSummary[]>([]);
-  const [messages, setMessages] = useState<ChatMessage[]>([
-    {
-      id: "welcome",
-      role: "agent",
-      content: "可以问我：总结今天首板、为什么当前股票评分高、主要风险是什么、有没有历史相似案例。",
-    },
-  ]);
-  const [sessionId] = useState(() => `chat-${Date.now()}-${Math.random().toString(16).slice(2)}`);
+  const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
+  const [sessionId, setSessionId] = useState<string | null>(null);
+  const [sessionLoading, setSessionLoading] = useState(true);
+  const [sessionPanelOpen, setSessionPanelOpen] = useState(false);
+  const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
+  const [editingTitle, setEditingTitle] = useState("");
+  const initializedSessions = useRef(false);
+  const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const isConversationActive = sending || messages.length > 0;
 
   useEffect(() => {
-    void refreshAgentRuns();
-  }, [sessionId]);
+    if (initializedSessions.current) {
+      return;
+    }
+    initializedSessions.current = true;
+    void initializeChatSessions();
+  }, []);
 
   useEffect(() => {
     if (!sending) {
@@ -207,27 +195,155 @@ function AgentChatDock({
     return () => window.clearInterval(timer);
   }, [sending]);
 
-  async function refreshAgentRuns() {
+  useEffect(() => {
+    const container = messagesContainerRef.current;
+    if (!container) {
+      return;
+    }
+    const frame = window.requestAnimationFrame(() => {
+      container.scrollTop = container.scrollHeight;
+    });
+    return () => window.cancelAnimationFrame(frame);
+  }, [messages, sending]);
+
+  function applyChatSession(detail: ChatSessionDetail) {
+    setSessionId(detail.session_id);
+    window.localStorage.setItem(ACTIVE_CHAT_SESSION_STORAGE_KEY, detail.session_id);
+    setMessages(detail.messages.map(restoredChatMessage));
+    setError(null);
+  }
+
+  async function initializeChatSessions() {
+    setSessionLoading(true);
     try {
-      const response = await fetchAgentRuns(sessionId, 6);
-      setRuns(response.runs);
-    } catch {
-      setRuns([]);
+      const response = await fetchChatSessions();
+      if (response.sessions.length > 0) {
+        const savedSessionId = window.localStorage.getItem(ACTIVE_CHAT_SESSION_STORAGE_KEY);
+        const targetSession = response.sessions.find(
+          (item) => item.session_id === savedSessionId,
+        ) ?? response.sessions[0];
+        const detail = await fetchChatSession(targetSession.session_id);
+        setSessions(response.sessions);
+        applyChatSession(detail);
+      } else {
+        const created = await createChatSession();
+        setSessions([created]);
+        applyChatSession(created);
+      }
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "会话加载失败");
+    } finally {
+      setSessionLoading(false);
     }
   }
 
-  async function sendMessage() {
-    const trimmed = message.trim();
-    if (!trimmed || sending) {
+  async function refreshChatSessions() {
+    const response = await fetchChatSessions();
+    setSessions(response.sessions);
+    return response.sessions;
+  }
+
+  async function openChatSession(targetSessionId: string) {
+    if (sending || targetSessionId === sessionId) {
+      setSessionPanelOpen(false);
+      return;
+    }
+    setSessionLoading(true);
+    try {
+      const detail = await fetchChatSession(targetSessionId);
+      applyChatSession(detail);
+      setSessionPanelOpen(false);
+      setEditingSessionId(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "会话恢复失败");
+    } finally {
+      setSessionLoading(false);
+    }
+  }
+
+  async function startNewChatSession() {
+    if (sending) {
+      return;
+    }
+    setSessionLoading(true);
+    try {
+      const created = await createChatSession();
+      setSessions((current) => [created, ...current]);
+      applyChatSession(created);
+      setSessionPanelOpen(false);
+      setEditingSessionId(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "新建会话失败");
+    } finally {
+      setSessionLoading(false);
+    }
+  }
+
+  async function saveSessionTitle(targetSessionId: string) {
+    const title = editingTitle.trim();
+    if (!title) {
+      return;
+    }
+    try {
+      const updated = await renameChatSession(targetSessionId, title);
+      setSessions((current) => current.map((item) => (
+        item.session_id === targetSessionId ? updated : item
+      )));
+      setEditingSessionId(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "会话重命名失败");
+    }
+  }
+
+  async function deleteSession(targetSessionId: string) {
+    if (sending) {
+      return;
+    }
+    const targetSession = sessions.find((item) => item.session_id === targetSessionId);
+    const confirmed = window.confirm(
+      `确定删除会话“${targetSession?.title ?? "未命名会话"}”吗？删除后无法恢复。`,
+    );
+    if (!confirmed) {
+      return;
+    }
+    setSessionLoading(true);
+    try {
+      await deleteChatSession(targetSessionId);
+      const remaining = await refreshChatSessions();
+      if (targetSessionId === sessionId) {
+        if (remaining.length > 0) {
+          const detail = await fetchChatSession(remaining[0].session_id);
+          applyChatSession(detail);
+        } else {
+          const created = await createChatSession();
+          setSessions([created]);
+          applyChatSession(created);
+        }
+      }
+      setEditingSessionId(null);
+    } catch (caught) {
+      setError(caught instanceof Error ? caught.message : "会话删除失败");
+    } finally {
+      setSessionLoading(false);
+    }
+  }
+
+  async function sendMessage(prompt?: string) {
+    const trimmed = (prompt ?? message).trim();
+    if (!trimmed || sending || sessionLoading || !sessionId) {
       return;
     }
 
+    const userMessageId = `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     const userMessage: ChatMessage = {
-      id: `user-${Date.now()}`,
+      id: userMessageId,
       role: "user",
       content: trimmed,
     };
-    setMessages((current) => [...current, userMessage]);
+    setMessages((current) => [
+      ...current,
+      userMessage,
+    ]);
     setMessage("");
     setSending(true);
     setStreamStage("planning");
@@ -239,6 +355,7 @@ function AgentChatDock({
       let receivedAnswer = false;
       const response = await streamAgentChatMessage({
         session_id: sessionId,
+        message_id: userMessageId,
         message: trimmed,
         intent_hint: inferChatIntent(trimmed),
         trade_date: tradeDate,
@@ -278,7 +395,7 @@ function AgentChatDock({
         if (existing || receivedAnswer) {
           return current.map((item) => (
             item.id === agentMessageId
-              ? { ...item, content: response.answer, meta: response }
+              ? { ...item, content: response.answer }
               : item
           ));
         }
@@ -288,11 +405,10 @@ function AgentChatDock({
             id: agentMessageId,
             role: "agent",
             content: response.answer,
-            meta: response,
           },
         ];
       });
-      void refreshAgentRuns();
+      void refreshChatSessions();
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Agent 回答失败");
     } finally {
@@ -300,47 +416,146 @@ function AgentChatDock({
     }
   }
 
+  const activeSession = sessions.find((item) => item.session_id === sessionId);
+
   return (
     <div className="agent-chat-dock">
-      <section className="agent-chat-panel">
+      <div className={`agent-chat-workspace ${sessionPanelOpen ? "session-panel-open" : ""}`}>
+        <aside aria-label="历史会话" className="chat-session-sidebar">
+          <header>
+            <div>
+              <strong>历史会话</strong>
+              <small>{sessions.length}</small>
+            </div>
+            <button
+              aria-label="新建会话"
+              className="icon-button compact"
+              disabled={sending || sessionLoading}
+              onClick={() => void startNewChatSession()}
+              title="新建会话"
+              type="button"
+            >
+              <Plus size={16} />
+            </button>
+          </header>
+
+          <div className="chat-session-list">
+            {sessionLoading && sessions.length === 0 ? (
+              <div className="chat-session-loading">
+                <LoaderCircle aria-hidden="true" size={16} />
+                <span>正在加载会话</span>
+              </div>
+            ) : null}
+            {sessions.map((session) => (
+              <div
+                className={`chat-session-item ${session.session_id === sessionId ? "active" : ""}`}
+                key={session.session_id}
+              >
+                {editingSessionId === session.session_id ? (
+                  <form
+                    className="chat-session-rename"
+                    onSubmit={(event) => {
+                      event.preventDefault();
+                      void saveSessionTitle(session.session_id);
+                    }}
+                  >
+                    <input
+                      aria-label="会话标题"
+                      autoFocus
+                      maxLength={80}
+                      onChange={(event) => setEditingTitle(event.target.value)}
+                      value={editingTitle}
+                    />
+                    <button aria-label="保存标题" title="保存" type="submit">
+                      <Check size={14} />
+                    </button>
+                    <button
+                      aria-label="取消重命名"
+                      onClick={() => setEditingSessionId(null)}
+                      title="取消"
+                      type="button"
+                    >
+                      <X size={14} />
+                    </button>
+                  </form>
+                ) : (
+                  <>
+                    <button
+                      className="chat-session-select"
+                      disabled={sending}
+                      onClick={() => void openChatSession(session.session_id)}
+                      type="button"
+                    >
+                      <span>
+                        <strong>{session.title}</strong>
+                        <time dateTime={session.updated_at}>{sessionTimeLabel(session.updated_at)}</time>
+                      </span>
+                      <small>{session.last_message_preview ?? "暂无消息"}</small>
+                    </button>
+                    <div className="chat-session-actions">
+                      {session.session_id === sessionId ? (
+                        <button
+                          aria-label="重命名当前会话"
+                          onClick={() => {
+                            setEditingSessionId(session.session_id);
+                            setEditingTitle(session.title);
+                          }}
+                          title="重命名"
+                          type="button"
+                        >
+                          <Pencil size={13} />
+                        </button>
+                      ) : null}
+                      <button
+                        aria-label={`删除会话 ${session.title}`}
+                        disabled={sending || sessionLoading}
+                        onClick={() => void deleteSession(session.session_id)}
+                        title="删除会话"
+                        type="button"
+                      >
+                        <Trash2 size={13} />
+                      </button>
+                    </div>
+                  </>
+                )}
+              </div>
+            ))}
+          </div>
+        </aside>
+
+        <section className={`agent-chat-panel ${isConversationActive ? "is-active" : "is-idle"}`}>
         <header>
           <div>
             <MessageCircle size={18} />
-            <strong>首板 Agent 工作台</strong>
+            <strong>{activeSession?.title || "首板 Agent 工作台"}</strong>
           </div>
-          <div className="agent-chat-context">
-            <span>{tradeDate}</span>
-            {symbol ? <span>{symbol}</span> : <span>全市场首板</span>}
+          <div className="agent-chat-header-actions">
+            <button
+              aria-label={sessionPanelOpen ? "关闭历史会话" : "打开历史会话"}
+              className="icon-button compact session-history-toggle"
+              onClick={() => setSessionPanelOpen((current) => !current)}
+              title={sessionPanelOpen ? "关闭历史会话" : "历史会话"}
+              type="button"
+            >
+              <PanelLeft size={16} />
+            </button>
+            <div className="agent-chat-context">
+              <span>{tradeDate}</span>
+              {symbol ? <span>{symbol}</span> : <span>全市场首板</span>}
+            </div>
           </div>
         </header>
 
-        <div className={`agent-data-health health-${dataHealth.status}`}>
-          <div>
-            <strong>{healthCopy[dataHealth.status].label}</strong>
-            <span>{healthCopy[dataHealth.status].detail}</span>
-          </div>
-          <div className="agent-health-metrics">
-            <span>原始 {dataHealth.raw_event_count}</span>
-            <span>特征 {dataHealth.first_board_feature_count}</span>
-            <span>扩展 {dataHealth.enrichment_count}</span>
-            <span>Top {dataHealth.top_candidates_checked}</span>
-            <span>{dataHealth.post_bars_ready ? "走势已缓存" : "走势待补齐"}</span>
-          </div>
-          {dataHealth.warnings.length > 0 ? (
-            <p>{dataHealth.warnings[0]}</p>
-          ) : null}
-        </div>
-
-        <SystemHealthStrip
-          systemHealth={systemHealth}
-          dailyPipelineStatus={dailyPipelineStatus}
-        />
-
-        <AgentRunObserver runs={runs} />
-
-        <div className="agent-chat-messages">
+        <div
+          aria-live="polite"
+          className="agent-chat-messages"
+          ref={messagesContainerRef}
+        >
           {messages.map((item) => (
-            <article className={`chat-message chat-${item.role}`} key={item.id}>
+            <article
+              className={`chat-message chat-${item.role} ${item.status === "error" ? "chat-error" : ""}`}
+              key={item.id}
+            >
               {item.role === "agent" ? (
                 <div className="chat-markdown">
                   <ReactMarkdown remarkPlugins={[remarkGfm]}>
@@ -350,25 +565,6 @@ function AgentChatDock({
               ) : (
                 <p>{item.content}</p>
               )}
-              {item.meta ? (
-                <>
-                  <div className="chat-message-meta">
-                    {item.meta.run_id ? <span>{item.meta.run_id.slice(0, 12)}</span> : null}
-                    <span>{item.meta.intent}</span>
-                    {item.meta.tool_calls.map((tool) => (
-                      <span key={tool}>{tool}</span>
-                    ))}
-                    {item.meta.performance.total_duration_ms > 0 ? (
-                      <span>
-                        总耗时 {(item.meta.performance.total_duration_ms / 1000).toFixed(1)}s
-                        {" · "}Planner {(item.meta.performance.planner_duration_ms / 1000).toFixed(1)}s
-                        {" · "}Answer {(item.meta.performance.answer_duration_ms / 1000).toFixed(1)}s
-                      </span>
-                    ) : null}
-                  </div>
-                  <AgentEvidencePanel response={item.meta} />
-                </>
-              ) : null}
             </article>
           ))}
           {sending ? (
@@ -391,13 +587,14 @@ function AgentChatDock({
               symbol ? "详细解释一下" : "总结一下今天首板",
               symbol ? "为什么评分高" : "哪些候选评分靠前",
               symbol ? "主要风险是什么" : "总结今天首板候选",
-              symbol ? "有没有历史相似案例" : "今天市场环境如何",
+              symbol ? "当前位置怎么看" : "今天市场环境如何",
               "A股几点开盘",
             ].map((prompt) => (
             <button
+              disabled={sending || sessionLoading || !sessionId}
               key={prompt}
               type="button"
-              onClick={() => setMessage(prompt)}
+              onClick={() => void sendMessage(prompt)}
             >
               {prompt}
             </button>
@@ -412,310 +609,30 @@ function AgentChatDock({
           }}
         >
           <input
+            disabled={sessionLoading || !sessionId}
             value={message}
             onChange={(event) => setMessage(event.target.value)}
-            placeholder={symbol ? "问当前股票评分、风险或相似案例" : "问今天首板总结"}
+            placeholder={symbol ? "问当前股票评分、风险或走势" : "问今日涨停、评分或风险"}
           />
-          <button className="icon-button" disabled={sending || !message.trim()} title="发送">
+          <button
+            aria-label="发送问题"
+            className="icon-button"
+            disabled={sending || sessionLoading || !sessionId || !message.trim()}
+            title="发送"
+            type="submit"
+          >
             <Send size={17} />
           </button>
         </form>
       </section>
+      </div>
     </div>
-  );
-}
-
-function AgentEvidencePanel({ response }: { response: AgentChatResponse }) {
-  const cards = response.evidence_cards ?? [];
-  const confidence = buildAnswerConfidence(response);
-
-  if (cards.length === 0 && response.tool_results.length === 0) {
-    return null;
-  }
-
-  return (
-    <section className="agent-evidence-panel">
-      <div className="agent-evidence-header">
-        <div>
-          <strong>回答证据链</strong>
-          <span>{confidence.label}</span>
-        </div>
-        <div className="agent-evidence-score">
-          <span>{confidence.score}</span>
-          <small>可信度</small>
-        </div>
-      </div>
-
-      {confidence.notes.length > 0 ? (
-        <div className="agent-evidence-notes">
-          {confidence.notes.map((note) => (
-            <span key={note}>{note}</span>
-          ))}
-        </div>
-      ) : null}
-
-      <PlannerPolicyView response={response} />
-
-      <div className="agent-evidence-cards">
-        {cards.map((card, index) => (
-          <AgentEvidenceCardView card={card} key={`${card.title}-${index}`} />
-        ))}
-      </div>
-
-      {response.tool_results.length > 0 ? (
-        <details className="chat-tool-raw">
-          <summary>开发 trace</summary>
-          <div className="chat-tool-traces">
-            {response.tool_results.map((tool) => (
-              <details
-                className={`chat-tool-trace trace-${tool.status}`}
-                key={`${tool.name}-${tool.summary}`}
-              >
-                <summary>
-                  <strong>{tool.name}</strong>
-                  <span>{tool.status}</span>
-                </summary>
-                <p>{tool.summary}</p>
-                {tool.error ? <p className="trace-error">{tool.error}</p> : null}
-                <div className="trace-grid">
-                  <section>
-                    <span>输入</span>
-                    <pre>{formatTracePayload(tool.input)}</pre>
-                  </section>
-                  {Object.keys(tool.output).length > 0 ? (
-                    <section>
-                      <span>输出摘要</span>
-                      <pre>{formatTracePayload(tool.output)}</pre>
-                    </section>
-                  ) : null}
-                </div>
-              </details>
-            ))}
-          </div>
-        </details>
-      ) : null}
-    </section>
-  );
-}
-
-function PlannerPolicyView({ response }: { response: AgentChatResponse }) {
-  const policy = response.tool_policy;
-  const planner = policy?.planner_tool_calls ?? [];
-  const final = policy?.final_tool_calls ?? [];
-  const repaired = policy?.backend_repaired_tools ?? [];
-  const shouldShow = planner.length > 0 || final.length > 0 || repaired.length > 0;
-
-  if (!shouldShow) {
-    return null;
-  }
-
-  return (
-    <section className="planner-policy">
-      <div>
-        <span>Planner</span>
-        <strong>{planner.length > 0 ? planner.join(" -> ") : "direct"}</strong>
-      </div>
-      <div>
-        <span>Final</span>
-        <strong>{final.length > 0 ? final.join(" -> ") : "direct"}</strong>
-      </div>
-      <div className={repaired.length > 0 ? "policy-repaired" : "policy-clean"}>
-        <span>Repair</span>
-        <strong>{repaired.length > 0 ? repaired.join(", ") : "none"}</strong>
-      </div>
-      {policy.safety_fallback_used ? <p>已触发模板/安全兜底。</p> : null}
-      {policy.repair_reasons.length > 0 ? (
-        <ul>
-          {policy.repair_reasons.map((reason) => (
-            <li key={reason}>{reason}</li>
-          ))}
-        </ul>
-      ) : null}
-    </section>
-  );
-}
-
-function AgentEvidenceCardView({ card }: { card: AgentEvidenceCard }) {
-  const metrics = Object.entries(card.metrics ?? {});
-
-  return (
-    <article className={`agent-evidence-card evidence-${card.kind} evidence-${card.status}`}>
-      <header>
-        <strong>{card.title}</strong>
-        <span>{card.status}</span>
-      </header>
-      <p>{card.summary}</p>
-      {metrics.length > 0 ? (
-        <div className="agent-evidence-metrics">
-          {metrics.slice(0, 6).map(([key, value]) => (
-            <span key={key}>
-              <small>{formatMetricLabel(key)}</small>
-              <strong>{formatMetricValue(value)}</strong>
-            </span>
-          ))}
-        </div>
-      ) : null}
-      {card.facts.length > 0 ? (
-        <ul>
-          {card.facts.map((fact) => (
-            <li key={fact}>{fact}</li>
-          ))}
-        </ul>
-      ) : null}
-      {card.source_tools.length > 0 ? (
-        <div className="agent-evidence-sources">
-          {card.source_tools.map((tool) => (
-            <span key={tool}>{tool}</span>
-          ))}
-        </div>
-      ) : null}
-    </article>
-  );
-}
-
-function buildAnswerConfidence(response: AgentChatResponse) {
-  const cards = response.evidence_cards ?? [];
-  const toolCount = response.tool_results.length;
-  const errorCount = response.tool_results.filter((tool) => tool.status === "error").length;
-  const skippedCount = response.tool_results.filter((tool) => tool.status === "skipped").length;
-  const hasWarnings = response.warnings.length > 0;
-  const hasStructuredEvidence = cards.some(
-    (card) => card.kind !== "execution" && card.status === "success",
-  );
-
-  let score = 50;
-  score += Math.min(toolCount, 4) * 10;
-  if (hasStructuredEvidence) {
-    score += 15;
-  }
-  score -= errorCount * 20;
-  score -= skippedCount * 8;
-  if (hasWarnings) {
-    score -= 10;
-  }
-  score = Math.max(20, Math.min(95, score));
-
-  const notes = [
-    `${toolCount} 个工具`,
-    hasStructuredEvidence ? "有结构化事实" : "证据较少",
-    errorCount > 0 ? `${errorCount} 个工具失败` : "工具成功",
-    hasWarnings ? "存在数据限制" : "无显著数据告警",
-  ];
-
-  return {
-    score,
-    label: score >= 80 ? "证据充分" : score >= 60 ? "可参考" : "需要谨慎",
-    notes,
-  };
-}
-
-function SystemHealthStrip({
-  systemHealth,
-  dailyPipelineStatus,
-}: {
-  systemHealth: AgentSystemHealthResponse;
-  dailyPipelineStatus: DailyPipelineStatusResponse;
-}) {
-  const pipelineRun = dailyPipelineStatus.latest;
-  const pipelineLabels = {
-    running: "运行中",
-    success: "成功",
-    partial: "部分完成",
-    error: "失败",
-    skipped: "已跳过",
-  };
-  return (
-    <section className={`system-health-strip system-${systemHealth.status}`}>
-      <div>
-        <strong>系统状态</strong>
-        <span>{systemHealth.status === "healthy" ? "就绪" : systemHealth.status === "partial" ? "部分可用" : "缺失"}</span>
-      </div>
-      <div className="system-health-items">
-        <span>数据 {systemHealth.latest_local_trade_date ?? "无"}</span>
-        <span>{systemHealth.data_fresh ? "数据新鲜" : "数据待更新"}</span>
-        <span>{systemHealth.llm_enabled && systemHealth.llm_provider_configured ? `LLM ${systemHealth.llm_model ?? "on"}` : "LLM 未就绪"}</span>
-        <span>
-          闭环 {pipelineRun
-            ? `${pipelineRun.trade_date} ${pipelineLabels[pipelineRun.status]}`
-            : "尚未运行"}
-        </span>
-        <span>
-          Eval {systemHealth.offline_eval_passed === null ? "未跑" : systemHealth.offline_eval_passed ? "通过" : `${systemHealth.offline_eval_failed ?? 0} 失败`}
-        </span>
-      </div>
-      {systemHealth.warnings.length > 0 ? <p>{systemHealth.warnings[0]}</p> : null}
-      {pipelineRun?.error_message ? <p>{pipelineRun.error_message}</p> : null}
-    </section>
-  );
-}
-
-function AgentRunObserver({ runs }: { runs: AgentRunSummary[] }) {
-  const latestRun = runs[0];
-  const traceChain = latestRun?.tool_results.map((tool) => tool.name) ?? [];
-  const hasWarnings = Boolean(latestRun?.warnings.length || latestRun?.error_message);
-
-  return (
-    <section className="agent-run-observer">
-      <div className="agent-run-observer-header">
-        <div>
-          <strong>Agent 运行观察</strong>
-          <span>
-            {latestRun
-              ? `${latestRun.status === "success" ? "成功" : "失败"} · ${latestRun.duration_ms}ms`
-              : "等待首次对话"}
-          </span>
-        </div>
-        {latestRun ? (
-          <span className={`run-status run-${latestRun.status}`}>
-            {latestRun.intent ?? "unknown"}
-          </span>
-        ) : null}
-      </div>
-
-      {latestRun ? (
-        <>
-          <div className="agent-run-chain">
-            {(traceChain.length > 0 ? traceChain : latestRun.tool_calls).map((tool, index) => (
-              <span key={`${latestRun.run_id}-${tool}-${index}`}>{tool}</span>
-            ))}
-            {traceChain.length === 0 && latestRun.tool_calls.length === 0 ? (
-              <span>direct_answer</span>
-            ) : null}
-          </div>
-          {hasWarnings ? (
-            <p className="agent-run-warning">
-              {latestRun.error_message ?? latestRun.warnings[0]}
-            </p>
-          ) : null}
-        </>
-      ) : null}
-
-      {runs.length > 1 ? (
-        <div className="agent-run-history">
-          {runs.slice(1, 4).map((run) => (
-            <span key={run.run_id}>
-              {run.intent ?? "unknown"} · {run.tool_calls.length || run.tool_results.length} tools
-            </span>
-          ))}
-        </div>
-      ) : null}
-    </section>
   );
 }
 
 function inferChatIntent(message: string) {
   /** Infer a deterministic tool hint before the backend performs final routing. */
 
-  if (
-    /相似|历史|案例/.test(message)
-    && /首板/.test(message)
-    && /医药|医疗|制药|药业|生物|中药|相关|行业|题材/.test(message)
-  ) {
-    return "first_board_filter_similar";
-  }
-  if (/相似|历史|案例/.test(message)) {
-    return "similar_cases";
-  }
   if (/开盘|收盘|集合竞价|交易时间/.test(message)) {
     return "market_schedule";
   }
@@ -742,6 +659,9 @@ function inferChatIntent(message: string) {
 
 const routeToView: Record<string, ViewKey> = {
   "/": "overview",
+  "/recommendations": "recommendation",
+  "/review": "review",
+  "/stocks/limit-up-pool": "pool",
   "/stocks/first-board": "first",
   "/stocks/continued-board": "continued",
   "/stocks/failed": "failed",
@@ -749,16 +669,28 @@ const routeToView: Record<string, ViewKey> = {
 };
 
 const stockListPaths = new Set([
+  "/stocks/limit-up-pool",
   "/stocks/first-board",
   "/stocks/continued-board",
   "/stocks/failed",
   "/stocks/recent-limit-up",
 ]);
 
+const primaryNavigation = [
+  { to: "/", label: "首页", end: true },
+  { to: "/recommendations", label: "盘前推荐", end: true },
+  { to: "/review", label: "复盘", end: true },
+  { to: "/stocks/limit-up-pool", label: "涨停池", end: true },
+];
+
 const agentWorkspaceHiddenPaths = new Set([
   "/stocks/first-board",
   "/stocks/continued-board",
   "/stocks/failed",
+  "/stocks/recent-limit-up",
+  "/stocks/limit-up-pool",
+  "/recommendations",
+  "/review",
 ]);
 
 const sentimentCopy = {
@@ -790,7 +722,7 @@ export function App() {
         agentDataHealth,
         systemHealth,
         dailyPipelineStatus,
-        predictionQualityAudit,
+        dailyBoardPromotion,
         ratingBacktest,
         ratingEvaluation,
       ] = await Promise.all([
@@ -803,7 +735,7 @@ export function App() {
         fetchAgentDataHealth(),
         fetchAgentSystemHealth(false),
         fetchDailyPipelineStatus(5),
-        fetchPredictionQualityAudit(),
+        fetchDailyBoardPromotion(5),
         fetchRatingBacktest(),
         fetchRatingEvaluation(),
       ]);
@@ -818,7 +750,7 @@ export function App() {
         agentDataHealth,
         systemHealth,
         dailyPipelineStatus,
-        predictionQualityAudit,
+        dailyBoardPromotion,
         ratingBacktest,
         ratingEvaluation,
       });
@@ -857,35 +789,88 @@ export function App() {
 
   return (
     <main className="app-shell">
-      <header className="topbar">
-        <div>
-          <p className="eyebrow">{activeMeta.eyebrow}</p>
-          <h1>{activeMeta.title}</h1>
-        </div>
-        <div className="topbar-actions">
-          {activeView !== "overview" || isStockDetail ? (
-            <Link className="text-button" to="/">
-              <ArrowLeft size={17} />
-              返回概况
-            </Link>
-          ) : null}
-          <button className="icon-button" onClick={loadDashboard} title="刷新数据">
+      <header className="app-header">
+        <Link aria-label="返回市场概况" className="app-brand" to="/">
+          <span className="app-brand-mark"><Flame aria-hidden="true" size={19} /></span>
+          <span>
+            <strong>LimitUpLab</strong>
+            <small>首板研究 Agent</small>
+          </span>
+        </Link>
+
+        <nav aria-label="主导航" className="primary-navigation">
+          {primaryNavigation.map((item) => (
+            <NavLink
+              className={({ isActive }) => (
+                isActive
+                || (item.to === "/stocks/limit-up-pool" && stockListPaths.has(location.pathname))
+                  ? "active"
+                  : undefined
+              )}
+              end={item.end}
+              key={item.to}
+              to={item.to}
+            >
+              {item.label}
+            </NavLink>
+          ))}
+        </nav>
+
+        <div className="app-header-actions">
+          <div className="data-as-of">
+            <i aria-hidden="true" />
+            <span>
+              <small>数据日期</small>
+              <strong>{data.summary.trade_date}</strong>
+            </span>
+          </div>
+          <button
+            aria-label="刷新全部数据"
+            className="icon-button"
+            onClick={loadDashboard}
+            title="刷新数据"
+            type="button"
+          >
             <RefreshCcw size={18} />
           </button>
         </div>
       </header>
 
+      {activeView !== "overview" || isStockDetail ? (
+        <section className="topbar">
+          <div>
+            <p className="eyebrow">{activeMeta.eyebrow}</p>
+            <h1>{activeMeta.title}</h1>
+          </div>
+          {!isStockDetail ? (
+            <div className="topbar-actions">
+              <Link className="text-button" to="/">
+                <ArrowLeft size={17} />
+                返回概况
+              </Link>
+            </div>
+          ) : null}
+        </section>
+      ) : null}
+
+      {activeView === "overview" && !isStockDetail ? (
+        <MarketSnapshot summary={data.summary} />
+      ) : null}
+
       {showAgentWorkspace ? (
         <AgentChatDock
           tradeDate={data.summary.trade_date}
-          dataHealth={data.agentDataHealth}
-          systemHealth={data.systemHealth}
-          dailyPipelineStatus={data.dailyPipelineStatus}
         />
       ) : null}
 
       <Routes>
-        <Route path="/" element={<Overview data={data} />} />
+        <Route path="/" element={null} />
+        <Route
+          path="/recommendations"
+          element={<PremarketRecommendations ratings={data.firstBoardRatings} />}
+        />
+        <Route path="/review" element={<ReviewDashboard data={data} />} />
+        <Route path="/stocks/limit-up-pool" element={<LimitUpPool data={data} />} />
         <Route path="/stocks/first-board" element={<DetailView view="first" data={data} />} />
         <Route
           path="/stocks/continued-board"
@@ -900,113 +885,188 @@ export function App() {
   );
 }
 
-function Overview({ data }: { data: DashboardData }) {
-  /** Render the top-level after-close market review dashboard. */
+function MarketSnapshot({ summary }: { summary: MarketSummary }) {
+  const sentiment = sentimentCopy[summary.sentiment];
 
-  const sentiment = sentimentCopy[data.summary.sentiment];
+  return (
+    <section className="market-snapshot">
+      <div className="market-snapshot-sentiment">
+        <div>
+          <span>市场情绪</span>
+          <time dateTime={summary.trade_date}>{summary.trade_date}</time>
+        </div>
+        <strong><i aria-hidden="true" />{sentiment.label}</strong>
+      </div>
+
+      <div className="market-snapshot-indices">
+        {summary.indices.map((index) => (
+          <article key={index.symbol}>
+            <span>{index.name}</span>
+            <div>
+              <strong>{index.close.toFixed(2)}</strong>
+              <b className={index.change_pct >= 0 ? "positive" : "negative"}>
+                {formatSigned(index.change_pct, 2)}%
+              </b>
+            </div>
+          </article>
+        ))}
+        {summary.indices.length === 0 ? <span>指数数据暂不可用</span> : null}
+      </div>
+
+      <nav aria-label="今日涨停概览" className="market-snapshot-entries">
+        <div className="market-snapshot-ceiling">
+          <span>最高连板</span>
+          <strong>{summary.max_board_height}<small>板</small></strong>
+        </div>
+        <Link to="/stocks/first-board">
+          <span><Flame size={15} />首板</span>
+          <strong>{summary.first_board_count}<small>只</small></strong>
+        </Link>
+        <Link to="/stocks/continued-board">
+          <span><Layers3 size={15} />连板</span>
+          <strong>{summary.continued_board_count}<small>只</small></strong>
+        </Link>
+      </nav>
+    </section>
+  );
+}
+
+function PremarketRecommendations({ ratings }: { ratings: FirstBoardRatingsResponse }) {
+  /** Present the latest first-board Agent recommendations in a dedicated view. */
+
+  return <FirstBoardRatingPanel ratings={ratings} />;
+}
+
+function ReviewDashboard({ data }: { data: DashboardData }) {
+  /** Keep market-promotion and prediction follow-up in one review workspace. */
 
   return (
     <>
-      <section className="hero-summary">
-        <div>
-          <p className="eyebrow">{data.summary.trade_date}</p>
-          <h2>{sentiment.label}</h2>
-          <p>{sentiment.detail}</p>
-        </div>
-        <div className="hero-numbers">
-          <span>最高连板</span>
-          <strong>{data.summary.max_board_height} 板</strong>
-        </div>
-      </section>
-
-      <section className="overview-grid">
-        <EntryCard
-          icon={<Flame size={20} />}
-          label="首板票"
-          value={`${data.summary.first_board_count} 只`}
-          caption="查看今日首板个股和封板质量"
-          to="/stocks/first-board"
-        />
-        <EntryCard
-          icon={<Layers3 size={20} />}
-          label="连板票"
-          value={`${data.summary.continued_board_count} 只`}
-          caption={`最高 ${data.summary.max_board_height} 板`}
-          to="/stocks/continued-board"
-        />
-        <EntryCard
-          icon={<ShieldAlert size={20} />}
-          label="炸板票"
-          value={`${data.summary.failed_count} 只`}
-          caption={`炸板率 ${formatPercent(data.summary.failed_limit_up_rate)}`}
-          to="/stocks/failed"
-        />
-        <EntryCard
-          icon={<WalletCards size={20} />}
-          label="涨停成交额"
-          value={formatAmount(data.summary.total_amount)}
-          caption="今日涨停池合计成交额"
-        />
-      </section>
-
-      <section className="overview-content">
-        <Panel title="大盘走势" icon={<LineChart size={18} />}>
-          <div className="index-grid">
-            {data.summary.indices.map((index) => (
-              <article className="index-card" key={index.symbol}>
-                <div>
-                  <span>{index.name}</span>
-                  <strong>{index.close.toFixed(2)}</strong>
-                  <time dateTime={index.trade_date}>
-                    {index.trade_date.slice(5)} 收盘
-                  </time>
-                </div>
-                <Sparkline values={index.trend} />
-                <b className={index.change_pct >= 0 ? "positive" : "negative"}>
-                  {formatSigned(index.change_pct, 2)}%
-                </b>
-              </article>
-            ))}
-            {data.summary.indices.length === 0 ? (
-              <div className="index-empty">指数数据暂不可用</div>
-            ) : null}
-          </div>
-        </Panel>
-
-        <Panel title="题材热度" icon={<BarChart3 size={18} />}>
-          <div className="topic-list">
-            {data.summary.hot_concepts.map((concept) => (
-              <div className="topic-row" key={concept.name}>
-                <strong>{concept.name}</strong>
-                <span>
-                  {concept.limit_up_count} 涨停 / {concept.failed_count} 炸板
-                </span>
-              </div>
-            ))}
-          </div>
-        </Panel>
-      </section>
-
-      <FirstBoardRatingPanel ratings={data.firstBoardRatings} />
-
+      <DailyBoardPromotionPanel stats={data.dailyBoardPromotion} />
       <HighScoreReviewPanel
         backtest={data.ratingBacktest}
         evaluation={data.ratingEvaluation}
         latestTradeDate={data.summary.trade_date}
       />
-
-      <PredictionQualityAuditPanel audit={data.predictionQualityAudit} />
-
-      <AgentEvalPanel />
-
-      <Link className="recent-entry" to="/stocks/recent-limit-up">
-        <div>
-          <TrendingUp size={22} />
-          <strong>查看最近三个交易日涨停过的股票</strong>
-        </div>
-        <span>{data.recent.length} 个涨停事件</span>
-      </Link>
     </>
+  );
+}
+
+function DailyBoardPromotionPanel({ stats }: { stats: DailyBoardPromotionStat[] }) {
+  /** Let users inspect five daily promotion cohorts and their successful stocks. */
+
+  const recentStats = useMemo(() => stats.slice(-5), [stats]);
+  const displayStats = useMemo(() => [...recentStats].reverse(), [recentStats]);
+  const latestDate = recentStats[recentStats.length - 1]?.trade_date ?? "";
+  const [selectedDate, setSelectedDate] = useState(latestDate);
+
+  useEffect(() => {
+    if (!recentStats.some((item) => item.trade_date === selectedDate)) {
+      setSelectedDate(latestDate);
+    }
+  }, [latestDate, recentStats, selectedDate]);
+
+  const selectedIndex = recentStats.findIndex((item) => item.trade_date === selectedDate);
+  const selected = recentStats[selectedIndex] ?? recentStats[recentStats.length - 1];
+  const previous = selectedIndex > 0 ? recentStats[selectedIndex - 1] : undefined;
+  if (!selected) {
+    return (
+      <section className="promotion-section">
+        <Panel title="每日连板晋级率" icon={<GitBranch size={18} />}>
+          <div className="empty-state">相邻交易日收盘数据不足，暂时无法计算晋级率。</div>
+        </Panel>
+      </section>
+    );
+  }
+  const change = previous ? selected.probability - previous.probability : null;
+
+  return (
+    <section className="promotion-section">
+      <Panel title="每日连板晋级率" icon={<GitBranch size={18} />}>
+        <div className="promotion-panel">
+          <div className="promotion-latest">
+            <div>
+              <span>{selected.trade_date} 晋级观察</span>
+              <strong>{formatEmpiricalRate(selected.probability)}</strong>
+              <small>
+                {selected.previous_trade_date} 封板 {selected.sample_size} 只，
+                当日收盘晋级 {selected.promoted_count} 只
+              </small>
+            </div>
+            <div className="promotion-cohort-summary">
+              <span>
+                <small>首板→二板</small>
+                <b>{formatEmpiricalRate(selected.first_board_probability)}</b>
+                <em>{selected.first_board_promoted_count}/{selected.first_board_sample_size}</em>
+              </span>
+              <span>
+                <small>连板梯队晋级</small>
+                <b>{formatEmpiricalRate(selected.continued_board_probability)}</b>
+                <em>{selected.continued_board_promoted_count}/{selected.continued_board_sample_size}</em>
+              </span>
+              <span>
+                <small>较前一日</small>
+                <b className={(change ?? 0) >= 0 ? "positive" : "negative"}>
+                  {change === null ? "暂无" : `${formatSigned(change * 100, 1)} 个百分点`}
+                </b>
+                <em>总晋级率变化</em>
+              </span>
+            </div>
+          </div>
+
+          <div className="promotion-history" aria-label="近5个交易日晋级率">
+            {displayStats.map((item) => (
+              <button
+                type="button"
+                className={`promotion-day ${item.trade_date === selected.trade_date ? "active" : ""}`}
+                key={item.trade_date}
+                aria-pressed={item.trade_date === selected.trade_date}
+                onClick={() => setSelectedDate(item.trade_date)}
+              >
+                <div>
+                  <time dateTime={item.trade_date}>{item.trade_date.slice(5)}</time>
+                  <strong>{formatEmpiricalRate(item.probability)}</strong>
+                </div>
+                <div className="promotion-rate-track" aria-hidden="true">
+                  <span style={{ width: `${Math.max(item.probability * 100, 2)}%` }} />
+                </div>
+                <small>
+                  晋级 {item.promoted_count}/{item.sample_size} · 首→二 {item.first_board_promoted_count}/{item.first_board_sample_size}
+                </small>
+              </button>
+            ))}
+          </div>
+
+          <div className="promotion-success-section">
+            <div className="promotion-success-heading">
+              <div>
+                <strong>{selected.trade_date} 晋级成功</strong>
+                <small>点击股票查看 K 线、封板信息和当前位置判断</small>
+              </div>
+              <b>{selected.promoted_stocks.length} 只</b>
+            </div>
+            {selected.promoted_stocks.length > 0 ? (
+              <div className="promotion-stock-list">
+                {selected.promoted_stocks.map((stock) => (
+                  <Link className="promotion-stock-row" to={`/stocks/${stock.symbol}`} key={stock.symbol}>
+                    <div>
+                      <strong>{stock.name}</strong>
+                      <small>{stock.symbol} · {stock.industry || "行业待补充"}</small>
+                    </div>
+                    <span>{stock.from_board_height}→{stock.to_board_height}板</span>
+                    <small>{stock.concept || "题材待补充"}</small>
+                    <em>首封 {stock.first_limit_time.slice(0, 5)} · 炸板 {stock.break_count}</em>
+                    <ChevronRight size={17} aria-hidden="true" />
+                  </Link>
+                ))}
+              </div>
+            ) : (
+              <div className="promotion-success-empty">当日没有识别到收盘晋级成功的股票。</div>
+            )}
+          </div>
+        </div>
+      </Panel>
+    </section>
   );
 }
 
@@ -1085,6 +1145,12 @@ function HighScoreReviewPanel({
     0,
   );
   const trackedSuccessRate = trackedReadyCount > 0 ? trackedSuccessCount / trackedReadyCount : null;
+  const promotionComparisons = (report?.promotion_comparisons ?? []).reduce<
+    Record<string, ReviewPromotionComparison>
+  >((items, item) => {
+    items[item.trade_date] = item;
+    return items;
+  }, {});
   const successfulPicks = sortReviewPicksForSummary(
     reviewedPicks.filter((item) => item.evaluation_label === "success"),
     "desc",
@@ -1144,20 +1210,26 @@ function HighScoreReviewPanel({
                 <strong>{trackDates.length}</strong>
               </span>
               <span>
-                <small>每日数量</small>
-                <strong>Top10</strong>
+                <small>Top10 1进2</small>
+                <strong>{formatEmpiricalRate(report.top_pick_promotion_rate)}</strong>
+                <em>{report.top_pick_promoted_count}/{report.top_pick_promotion_sample_size}</em>
               </span>
               <span>
-                <small>待观察</small>
-                <strong>{trackedPendingCount}</strong>
+                <small>同期全部首板</small>
+                <strong>{formatEmpiricalRate(report.market_promotion_rate)}</strong>
+                <em>{report.market_promoted_count}/{report.market_promotion_sample_size}</em>
               </span>
               <span>
-                <small>兑现率</small>
+                <small>相对全市场</small>
+                <strong className={(report.promotion_rate_delta ?? 0) >= 0 ? "positive" : "negative"}>
+                  {report.promotion_rate_delta === null
+                    ? "暂无"
+                    : `${formatSigned(report.promotion_rate_delta * 100, 1)} 个百分点`}
+                </strong>
+              </span>
+              <span>
+                <small>收益兑现率</small>
                 <strong>{trackedSuccessRate === null ? "暂无" : formatPercent(trackedSuccessRate)}</strong>
-              </span>
-              <span>
-                <small>置信度</small>
-                <strong>{formatPercent(report.confidence)}</strong>
               </span>
             </div>
 
@@ -1167,21 +1239,13 @@ function HighScoreReviewPanel({
               failedPatterns={report.failed_patterns}
               failedPicks={failedPicks}
               groupedPicks={reviewDates}
-              latestTradeDate={report.end_date}
               onSelect={setActiveReviewSelection}
               picks={selectedPicks}
+              promotionComparisons={promotionComparisons}
               successfulPatterns={report.successful_patterns}
               successfulPicks={successfulPicks}
               trackDates={trackDates}
             />
-
-            {report.warnings.length > 0 ? (
-              <div className="review-agent-warnings">
-                {report.warnings.map((warning) => (
-                  <span key={warning}>{warning}</span>
-                ))}
-              </div>
-            ) : null}
           </>
         ) : (
           <>
@@ -1231,10 +1295,10 @@ function DailyTopReview({
   adjustmentSuggestions,
   failedPatterns,
   failedPicks,
-  latestTradeDate,
   groupedPicks,
   onSelect,
   picks,
+  promotionComparisons,
   successfulPatterns,
   successfulPicks,
   trackDates,
@@ -1243,10 +1307,10 @@ function DailyTopReview({
   adjustmentSuggestions: string[];
   failedPatterns: string[];
   failedPicks: ReviewAgentPick[];
-  latestTradeDate: string;
   groupedPicks: Record<string, ReviewAgentPick[]>;
   onSelect: (selection: string) => void;
   picks: ReviewAgentPick[];
+  promotionComparisons: Record<string, ReviewPromotionComparison>;
   successfulPatterns: string[];
   successfulPicks: ReviewAgentPick[];
   trackDates: string[];
@@ -1258,10 +1322,11 @@ function DailyTopReview({
   const title = isSuccessView ? "表现较好" : isMissView ? "表现较差" : activeSelection;
   const description = isSuccessView
     ? `共 ${successfulPicks.length} 只，按首板至最新收盘收益率从高到低展示前 10 只`
-    : isMissView
-      ? `共 ${failedPicks.length} 只，按首板至最新收盘收益率从低到高展示前 10 只`
-      : `当日预测 Top10，到 ${latestTradeDate} 收盘为止的走势`;
+    : `共 ${failedPicks.length} 只，按首板至最新收盘收益率从低到高展示前 10 只`;
   const visiblePicks = picks.slice(0, 10);
+  const promotionComparison = isPerformanceView
+    ? undefined
+    : promotionComparisons[activeSelection];
 
   return (
     <div className="daily-top-review">
@@ -1269,7 +1334,7 @@ function DailyTopReview({
         {trackDates.map((tradeDate) => {
           const dailyPicks = groupedPicks[tradeDate] ?? [];
           const readyCount = dailyPicks.filter((item) => item.post_bar_cache_complete).length;
-          const bestPick = dailyPicks[0];
+          const promotion = promotionComparisons[tradeDate];
           return (
           <button
             className={tradeDate === activeSelection ? "active" : ""}
@@ -1280,7 +1345,11 @@ function DailyTopReview({
             <span>{tradeDate}</span>
             <strong>Top10 追踪</strong>
             <small>{readyCount} / {dailyPicks.length} 缓存已同步</small>
-            {bestPick ? <b>{bestPick.name} {bestPick.score.toFixed(1)}</b> : null}
+            <b>
+              {promotion?.outcome_ready
+                ? `1进2 ${promotion.top_pick_promoted_count}/${promotion.top_pick_sample_size} · 全部 ${promotion.market_promoted_count}/${promotion.market_first_board_sample_size}`
+                : "1进2等待下一交易日"}
+            </b>
           </button>
           );
         })}
@@ -1307,15 +1376,41 @@ function DailyTopReview({
       </div>
 
       <section className="daily-top-body">
-        <div className="daily-top-title">
-          <div>
-            <strong>{title}</strong>
-            <span>{description}</span>
+        {isPerformanceView ? (
+          <div className="daily-top-title">
+            <div>
+              <strong>{title}</strong>
+              <span>{description}</span>
+            </div>
+            <span>
+              {visiblePicks.filter((item) => item.post_bar_cache_complete).length} / {visiblePicks.length} 缓存已同步
+            </span>
           </div>
-          <span>
-            {visiblePicks.filter((item) => item.post_bar_cache_complete).length} / {visiblePicks.length} 缓存已同步
-          </span>
-        </div>
+        ) : null}
+
+        {promotionComparison ? (
+          <div className="review-promotion-comparison">
+            <span>
+              <small>预测 Top10 1进2</small>
+              <strong>{formatEmpiricalRate(promotionComparison.top_pick_promotion_rate)}</strong>
+              <em>{promotionComparison.top_pick_promoted_count}/{promotionComparison.top_pick_sample_size}</em>
+            </span>
+            <span>
+              <small>当天全部首板 1进2</small>
+              <strong>{formatEmpiricalRate(promotionComparison.market_promotion_rate)}</strong>
+              <em>{promotionComparison.market_promoted_count}/{promotionComparison.market_first_board_sample_size}</em>
+            </span>
+            <span>
+              <small>Top10 相对全市场</small>
+              <strong className={(promotionComparison.promotion_rate_delta ?? 0) >= 0 ? "positive" : "negative"}>
+                {promotionComparison.promotion_rate_delta === null
+                  ? "等待次日收盘"
+                  : `${formatSigned(promotionComparison.promotion_rate_delta * 100, 1)} 个百分点`}
+              </strong>
+              <em>{promotionComparison.next_trade_date ?? "下一交易日待确认"}</em>
+            </span>
+          </div>
+        ) : null}
 
         {isPerformanceView && activePatterns.length > 0 ? (
           <div className={`review-pattern-summary ${isSuccessView ? "summary-success" : "summary-miss"}`}>
@@ -1474,7 +1569,16 @@ function ReviewPickTable({
             </small>
           </strong>
           <span>{pick.score.toFixed(1)} / {pick.rating}</span>
-          <span>{reviewLabelCopy(pick.evaluation_label)}</span>
+          <span className="review-pick-verdict">
+            {reviewLabelCopy(pick.evaluation_label)}
+            <small className={pick.promoted_to_second_board ? "promoted" : ""}>
+              {!pick.outcome_ready
+                ? "1进2待确认"
+                : pick.promoted_to_second_board
+                  ? "已晋级二板"
+                  : "未晋级二板"}
+            </small>
+          </span>
           <span>
             {formatOptionalPercent(
               showLatestReturn ? latestTrackedReturn(pick) : pick.next_open_to_close_pct,
@@ -1546,303 +1650,6 @@ function reviewLabelCopy(label: string) {
     pending: "待观察",
   };
   return labels[label] ?? label;
-}
-
-function PredictionQualityAuditPanel({
-  audit,
-}: {
-  audit: PredictionQualityAuditResponse;
-}) {
-  const recentCoverage = audit.date_coverage.slice(-12);
-  const policyStatus = audit.policy_status;
-  const modelBenchmark = audit.benchmarks.find(
-    (item) => item.benchmark === "audited_policy_top_k",
-  );
-  const earlyBenchmark = audit.benchmarks.find(
-    (item) => item.benchmark === "early_seal_top_k",
-  );
-  const modelDelta = modelBenchmark?.avg_next_open_to_close_pct !== null
-    && modelBenchmark?.avg_next_open_to_close_pct !== undefined
-    && earlyBenchmark?.avg_next_open_to_close_pct !== null
-    && earlyBenchmark?.avg_next_open_to_close_pct !== undefined
-    ? modelBenchmark.avg_next_open_to_close_pct - earlyBenchmark.avg_next_open_to_close_pct
-    : null;
-
-  return (
-    <Panel title="预测质量审计与评分 v3" icon={<BarChart3 size={18} />}>
-      <div className="quality-audit-panel">
-        <div className="quality-audit-heading">
-          <div>
-            <span>Prediction Quality</span>
-            <strong>{audit.start_date} 至 {audit.end_date}</strong>
-            <p>
-              按评分版本、预测来源和交易日成熟度去重审计，只在 Outcome 可用样本上比较同口径基线。
-            </p>
-          </div>
-          <div className={policyStatus.promotion_eligible ? "quality-ready" : "quality-shadow"}>
-            <small>v3 状态</small>
-            <strong>{policyStatus.promotion_eligible ? "满足晋级门槛" : "影子验证中"}</strong>
-            <span>
-              {policyStatus.outcome_ready_trade_dates} / {policyStatus.required_trade_dates} 个结果日
-            </span>
-          </div>
-        </div>
-
-        <div className="quality-audit-metrics">
-          <span>
-            <small>原始预测行</small>
-            <strong>{audit.raw_prediction_rows}</strong>
-          </span>
-          <span>
-            <small>当前版本去重</small>
-            <strong>{audit.canonical_prediction_count}</strong>
-          </span>
-          <span>
-            <small>成熟预测日</small>
-            <strong>{audit.next_day_mature_trade_date_count}</strong>
-          </span>
-          <span>
-            <small>Top10 完整日</small>
-            <strong>{audit.complete_next_day_trade_date_count}</strong>
-          </span>
-          <span>
-            <small>次日覆盖</small>
-            <strong>{formatPercent(audit.next_day_outcome_coverage_rate)}</strong>
-          </span>
-          <span>
-            <small>相对早封基线</small>
-            <strong className={modelDelta !== null && modelDelta >= 0 ? "positive" : "negative"}>
-              {modelDelta === null ? "暂无" : `${formatSigned(modelDelta, 2)}%`}
-            </strong>
-          </span>
-        </div>
-
-        <div className="quality-readiness">
-          <div>
-            <span>v3 样本准备度</span>
-            <strong>{formatPercent(policyStatus.readiness_rate)}</strong>
-          </div>
-          <div className="quality-readiness-track" aria-label="v3 样本准备度">
-            <span style={{ width: `${Math.min(policyStatus.readiness_rate * 100, 100)}%` }} />
-          </div>
-          <p>{policyStatus.gate_reasons[0] ?? "等待下一次 walk-forward 评估。"}</p>
-        </div>
-
-        <div className="quality-benchmark-table">
-          <div className="quality-benchmark-head">
-            <span>比较口径</span>
-            <span>样本</span>
-            <span>次日开盘→收盘</span>
-            <span>正收益率</span>
-            <span>晋级率</span>
-            <span>大跌率</span>
-            <span>三日回撤</span>
-          </div>
-          {audit.benchmarks.map((item) => (
-            <div className="quality-benchmark-row" key={item.benchmark}>
-              <strong>{item.label}</strong>
-              <span>{item.trade_date_count} 日 / {item.sample_size}</span>
-              <span className={(item.avg_next_open_to_close_pct ?? 0) >= 0 ? "positive" : "negative"}>
-                {formatOptionalPercent(item.avg_next_open_to_close_pct)}
-              </span>
-              <span>{item.positive_rate === null ? "暂无" : formatPercent(item.positive_rate)}</span>
-              <span>
-                {item.promoted_to_second_board_rate === null
-                  ? "暂无"
-                  : formatPercent(item.promoted_to_second_board_rate)}
-              </span>
-              <span>
-                {item.large_loss_rate === null ? "暂无" : formatPercent(item.large_loss_rate)}
-              </span>
-              <span>{formatOptionalPercent(item.avg_max_drawdown_from_next_open_3d)}</span>
-            </div>
-          ))}
-        </div>
-
-        <div className="quality-date-coverage">
-          <div className="quality-section-title">
-            <strong>最近交易日 Outcome 覆盖</strong>
-            <span>完整、部分、待回填和未成熟分开计算</span>
-          </div>
-          <div className="quality-date-strip">
-            {recentCoverage.map((item) => (
-              <div className={`coverage-${item.status}`} key={item.trade_date}>
-                <span>{item.trade_date.slice(5)}</span>
-                <strong>{item.next_day_ready_count}/{item.top_count}</strong>
-                <small>{predictionCoverageCopy[item.status]}</small>
-              </div>
-            ))}
-          </div>
-        </div>
-
-        <div className="quality-audit-notes">
-          <section>
-            <h3>审计结论</h3>
-            {audit.findings.map((item) => <p key={item}>{item}</p>)}
-          </section>
-          <section>
-            <h3>下一步动作</h3>
-            {audit.recommendations.map((item) => <p key={item}>{item}</p>)}
-          </section>
-        </div>
-
-        <div className="quality-policy-line">
-          <span>Champion</span>
-          <strong>{policyStatus.champion_version}</strong>
-          <span>Latest Challenger</span>
-          <strong>{policyStatus.latest_challenger_version ?? "尚未生成"}</strong>
-        </div>
-
-        <div className="quality-audit-warnings">
-          {audit.warnings.map((warning) => <span key={warning}>{warning}</span>)}
-        </div>
-      </div>
-    </Panel>
-  );
-}
-
-const predictionCoverageCopy = {
-  complete: "完整",
-  partial: "部分",
-  pending: "待回填",
-  not_mature: "未成熟",
-};
-
-function AgentEvalPanel() {
-  const [report, setReport] = useState<AgentEvalReportResponse | null>(null);
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
-
-  async function runEval() {
-    setRunning(true);
-    setError(null);
-    try {
-      const response = await fetchAgentEvalReport();
-      setReport(response);
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Agent 评测失败");
-    } finally {
-      setRunning(false);
-    }
-  }
-
-  const failedCases = report?.results.filter((item) => !item.passed) ?? [];
-  const repairedCases = report?.results.filter((item) => item.backend_repaired_tools.length > 0) ?? [];
-
-  return (
-    <Panel title="Agent 质量评测" icon={<ShieldAlert size={18} />}>
-      <div className="agent-eval-panel">
-        <div className="agent-eval-summary">
-          <div>
-            <span>离线回归套件</span>
-            <strong>
-              {report ? `${Math.round(report.pass_rate * 100)}%` : "未运行"}
-            </strong>
-            <p>
-              {report
-                ? `${report.passed}/${report.total} 通过，${report.failed} 个失败`
-                : "运行内置问题集，检查意图、工具调用、回答事实和安全边界。"}
-            </p>
-          </div>
-          <button type="button" onClick={runEval} disabled={running}>
-            {running ? "评测中..." : "运行评测"}
-          </button>
-        </div>
-
-        {error ? <p className="agent-eval-error">{error}</p> : null}
-
-        {report ? (
-          <>
-            <div className="agent-eval-metrics">
-              <span>
-                <small>用例数</small>
-                <strong>{report.total}</strong>
-              </span>
-              <span>
-                <small>通过</small>
-                <strong>{report.passed}</strong>
-              </span>
-              <span>
-                <small>失败</small>
-                <strong>{report.failed}</strong>
-              </span>
-              <span>
-                <small>后端修复</small>
-                <strong>{repairedCases.length}</strong>
-              </span>
-            </div>
-
-            {failedCases.length > 0 ? (
-              <div className="agent-eval-section">
-                <strong>失败用例</strong>
-                {failedCases.map((item) => (
-                  <AgentEvalCaseRow item={item} key={item.case_id} />
-                ))}
-              </div>
-            ) : (
-              <p className="agent-eval-pass">当前离线评测全部通过。</p>
-            )}
-
-            <div className="agent-eval-section">
-              <strong>评测明细</strong>
-              <div className="agent-eval-case-grid">
-                {report.results.map((item) => (
-                  <AgentEvalCaseRow compact item={item} key={item.case_id} />
-                ))}
-              </div>
-            </div>
-          </>
-        ) : null}
-      </div>
-    </Panel>
-  );
-}
-
-function AgentEvalCaseRow({
-  item,
-  compact = false,
-}: {
-  item: AgentEvalCaseReport;
-  compact?: boolean;
-}) {
-  const tools = item.final_tool_calls.length > 0 ? item.final_tool_calls : item.trace_names;
-
-  return (
-    <article className={`agent-eval-case ${item.passed ? "case-pass" : "case-fail"}`}>
-      <header>
-        <strong>{item.case_id}</strong>
-        <span>{item.passed ? "pass" : "fail"}</span>
-      </header>
-      <div className="agent-eval-case-tags">
-        <span>{item.intent}</span>
-        {tools.slice(0, compact ? 2 : 5).map((tool) => (
-          <span key={`${item.case_id}-${tool}`}>{tool}</span>
-        ))}
-      {item.backend_repaired_tools.length > 0 ? (
-        <span>repair {item.backend_repaired_tools.join(", ")}</span>
-      ) : null}
-      </div>
-      {!compact || !item.passed ? (
-        <>
-          {item.failures.length > 0 ? (
-            <ul>
-              {item.failures.map((failure) => (
-                <li key={failure}>{failure}</li>
-              ))}
-            </ul>
-          ) : null}
-          {item.repair_reasons.length > 0 ? (
-            <ul className="agent-eval-repair-reasons">
-              {item.repair_reasons.map((reason) => (
-                <li key={reason}>{reason}</li>
-              ))}
-            </ul>
-          ) : null}
-          <p>{item.answer_preview}</p>
-        </>
-      ) : null}
-    </article>
-  );
 }
 
 function FirstBoardRatingPanel({ ratings }: { ratings: FirstBoardRatingsResponse }) {
@@ -2199,15 +2006,13 @@ const evaluationLabelCopy: Record<(typeof evaluationLabelOrder)[number], string>
   pending: "待验证",
 };
 
-function DetailView({ view, data }: { view: ViewKey; data: DashboardData }) {
+function DetailView({ view, data }: { view: StockListViewKey; data: DashboardData }) {
   /** Render one of the latest-day stock list views. */
 
-  const eventsByView = {
+  const eventsByView: Record<StockListViewKey, LimitUpEvent[]> = {
     first: data.firstBoard,
     continued: data.continuedBoard,
     failed: data.failed,
-    overview: [],
-    recent: [],
   };
 
   if (view === "first") {
@@ -2244,6 +2049,54 @@ function RecentLimitUp({ events }: { events: LimitUpEvent[] }) {
         </Panel>
       ))}
     </div>
+  );
+}
+
+function LimitUpPool({ data }: { data: DashboardData }) {
+  /** Group the four limit-up datasets behind one focused navigation page. */
+
+  const entries = [
+    {
+      to: "/stocks/first-board",
+      label: "首板",
+      count: `${data.firstBoard.length} 只`,
+      description: "查看当日首次涨停股票与 Agent 评分",
+      icon: <Flame size={18} />,
+    },
+    {
+      to: "/stocks/continued-board",
+      label: "连板",
+      count: `${data.continuedBoard.length} 只`,
+      description: "查看当日二板及以上连板梯队",
+      icon: <Layers3 size={18} />,
+    },
+    {
+      to: "/stocks/failed",
+      label: "炸板",
+      count: `${data.failed.length} 只`,
+      description: "查看盘中触板但未能封住的股票",
+      icon: <ShieldAlert size={18} />,
+    },
+    {
+      to: "/stocks/recent-limit-up",
+      label: "近三日涨停票",
+      count: `${data.recent.length} 条`,
+      description: "按交易日回看最近三日涨停记录",
+      icon: <TrendingUp size={18} />,
+    },
+  ];
+
+  return (
+    <nav className="overview-grid" aria-label="涨停池分类">
+      {entries.map((entry) => (
+        <Link className="entry-card" key={entry.to} to={entry.to}>
+          <div className="metric-icon" aria-hidden="true">{entry.icon}</div>
+          <span>{entry.label}</span>
+          <strong>{entry.count}</strong>
+          <p>{entry.description}</p>
+        </Link>
+      ))}
+    </nav>
   );
 }
 
@@ -2395,7 +2248,6 @@ function StockDetail({ data }: { data: DashboardData }) {
   const [chartMode, setChartMode] = useState<"daily" | "intraday">("daily");
   const [latestClose, setLatestClose] = useState<StockCloseSnapshot | null>(null);
   const [position, setPosition] = useState<StockPositionAssessment | null>(null);
-  const [similarCases, setSimilarCases] = useState<SimilarFirstBoardCasesResponse | null>(null);
   const [critic, setCritic] = useState<FirstBoardCriticResponse | null>(null);
   const [klineLoading, setKlineLoading] = useState(true);
   const [klineError, setKlineError] = useState<string | null>(null);
@@ -2405,8 +2257,6 @@ function StockDetail({ data }: { data: DashboardData }) {
   const [latestCloseError, setLatestCloseError] = useState<string | null>(null);
   const [positionLoading, setPositionLoading] = useState(true);
   const [positionError, setPositionError] = useState<string | null>(null);
-  const [similarCasesLoading, setSimilarCasesLoading] = useState(false);
-  const [similarCasesError, setSimilarCasesError] = useState<string | null>(null);
   const [criticLoading, setCriticLoading] = useState(false);
   const [criticError, setCriticError] = useState<string | null>(null);
   const events = useMemo(
@@ -2432,8 +2282,6 @@ function StockDetail({ data }: { data: DashboardData }) {
       setLatestCloseLoading(false);
       setPositionLoading(false);
       setPosition(null);
-      setSimilarCasesLoading(false);
-      setSimilarCases(null);
       setCriticLoading(false);
       setCritic(null);
       return;
@@ -2478,16 +2326,6 @@ function StockDetail({ data }: { data: DashboardData }) {
       .finally(() => setTradingDayLoading(false));
 
     if (firstBoardRating) {
-      setSimilarCasesLoading(true);
-      setSimilarCasesError(null);
-      fetchFirstBoardSimilarCases(symbol, firstBoardRating.facts.trade_date, 3)
-        .then(setSimilarCases)
-        .catch((caught) => {
-          setSimilarCases(null);
-          setSimilarCasesError(caught instanceof Error ? caught.message : "加载历史相似案例失败");
-        })
-        .finally(() => setSimilarCasesLoading(false));
-
       setCriticLoading(true);
       setCriticError(null);
       fetchFirstBoardCritic(symbol, firstBoardRating.facts.trade_date)
@@ -2498,9 +2336,6 @@ function StockDetail({ data }: { data: DashboardData }) {
         })
         .finally(() => setCriticLoading(false));
     } else {
-      setSimilarCases(null);
-      setSimilarCasesLoading(false);
-      setSimilarCasesError(null);
       setCritic(null);
       setCriticLoading(false);
       setCriticError(null);
@@ -2607,11 +2442,6 @@ function StockDetail({ data }: { data: DashboardData }) {
 
       <section className="stock-agent-grid">
         <FirstBoardRatingDetail rating={firstBoardRating} />
-        <SimilarCasesPanel
-          data={similarCases}
-          loading={similarCasesLoading}
-          error={similarCasesError}
-        />
         <FirstBoardCriticPanel
           data={critic}
           loading={criticLoading}
@@ -2657,93 +2487,6 @@ function StockPositionPanel({
   );
 }
 
-
-function SimilarCasesPanel({
-  data,
-  loading,
-  error,
-}: {
-  data: SimilarFirstBoardCasesResponse | null;
-  loading: boolean;
-  error: string | null;
-}) {
-  /** Render historical first-board similar cases for the selected target. */
-
-  if (loading) {
-    return (
-      <Panel title="历史相似案例" icon={<Layers3 size={18} />}>
-        <div className="rating-detail-empty">正在检索历史相似首板案例...</div>
-      </Panel>
-    );
-  }
-
-  if (error) {
-    return (
-      <Panel title="历史相似案例" icon={<Layers3 size={18} />}>
-        <div className="rating-detail-empty">{error}</div>
-      </Panel>
-    );
-  }
-
-  if (!data) {
-    return (
-      <Panel title="历史相似案例" icon={<Layers3 size={18} />}>
-        <div className="rating-detail-empty">当前股票暂无首板相似案例。</div>
-      </Panel>
-    );
-  }
-
-  return (
-    <Panel title="历史相似案例" icon={<Layers3 size={18} />}>
-      <div className="similar-cases">
-        <div className="similar-cases-meta">
-          <span>窗口 {data.window_days} 个交易日</span>
-          <span>召回 {data.recall_count} 条</span>
-        </div>
-        {data.cases.length === 0 ? (
-          <div className="rating-detail-empty">未找到足够相似的历史首板样本。</div>
-        ) : (
-          data.cases.slice(0, 3).map((item) => (
-            <article className="similar-case-card" key={`${item.trade_date}-${item.symbol}`}>
-              <header>
-                <div>
-                  <strong>{item.name}</strong>
-                  <span>{item.symbol} / {item.trade_date}</span>
-                </div>
-                <b>{formatPercent(item.similarity)}</b>
-              </header>
-
-              <TagSection title="相似原因" items={item.reasons.length ? item.reasons : ["结构特征接近"]} tone="good" />
-              {item.differences.length > 0 ? (
-                <TagSection title="差异点" items={item.differences} tone="muted" />
-              ) : null}
-
-              <div className="case-outcome-grid">
-                <Fact label="晋级二板" value={item.outcome?.promoted_to_second_board ? "是" : "否"} />
-                <Fact label="次日最高" value={formatOptionalPercent(item.outcome?.next_high_pct)} />
-                <Fact label="三日最高" value={formatOptionalPercent(item.outcome?.three_day_high_pct)} />
-                <Fact label="三日回撤" value={formatOptionalPercent(item.outcome?.max_drawdown_3d)} />
-              </div>
-
-              {item.post_bars.length > 0 ? (
-                <div className="post-bars-mini">
-                  {item.post_bars.map((bar) => (
-                    <div key={bar.trade_date}>
-                      <span>{bar.trade_date.slice(5)}</span>
-                      <strong>{bar.close.toFixed(2)}</strong>
-                    </div>
-                  ))}
-                </div>
-              ) : (
-                <p className="case-note">暂无首板后走势缓存。</p>
-              )}
-            </article>
-          ))
-        )}
-      </div>
-    </Panel>
-  );
-}
 
 function FirstBoardCriticPanel({
   data,
@@ -2798,12 +2541,6 @@ function FirstBoardCriticPanel({
             <span>置信度建议</span>
             <strong>
               {formatPercent(data.original_confidence)} {"->"} {formatPercent(data.suggested_confidence)}
-            </strong>
-          </div>
-          <div>
-            <span>相似案例覆盖</span>
-            <strong>
-              {data.similar_case_outcome_ready_count} / {data.similar_case_count}
             </strong>
           </div>
         </div>
@@ -3058,9 +2795,10 @@ function ShellState({
   onRetry?: () => void;
 }) {
   return (
-    <main className="state-shell">
+    <main aria-live="polite" className="state-shell">
       <div>
         <p className="eyebrow">LimitUpLab</p>
+        {!onRetry ? <LoaderCircle aria-hidden="true" className="state-spinner" size={24} /> : null}
         <h1>{label}</h1>
         {detail ? <p>{detail}</p> : null}
         {onRetry ? (
@@ -3072,39 +2810,6 @@ function ShellState({
       </div>
     </main>
   );
-}
-
-function EntryCard({
-  icon,
-  label,
-  value,
-  caption,
-  to,
-}: {
-  icon: ReactNode;
-  label: string;
-  value: string;
-  caption: string;
-  to?: string;
-}) {
-  const content = (
-    <>
-      <div className="metric-icon">{icon}</div>
-      <span>{label}</span>
-      <strong>{value}</strong>
-      <p>{caption}</p>
-    </>
-  );
-
-  if (to) {
-    return (
-      <Link className="entry-card" to={to}>
-        {content}
-      </Link>
-    );
-  }
-
-  return <article className="entry-card">{content}</article>;
 }
 
 function Panel({
@@ -3132,27 +2837,6 @@ function Panel({
   );
 }
 
-function Sparkline({ values }: { values: number[] }) {
-  /** Draw the compact index trend sparkline shown on overview cards. */
-
-  const min = Math.min(...values);
-  const max = Math.max(...values);
-  const range = max - min || 1;
-  const points = values
-    .map((value, index) => {
-      const x = (index / Math.max(values.length - 1, 1)) * 100;
-      const y = 36 - ((value - min) / range) * 30;
-      return `${x},${y}`;
-    })
-    .join(" ");
-
-  return (
-    <svg className="sparkline" viewBox="0 0 100 40" role="img" aria-label="指数走势">
-      <polyline points={points} fill="none" stroke="currentColor" strokeWidth="3" />
-    </svg>
-  );
-}
-
 function detailIcon(view: ViewKey) {
   if (view === "first") {
     return <Flame size={18} />;
@@ -3170,6 +2854,10 @@ function formatPercent(value: number) {
   return `${Math.round(value * 100)}%`;
 }
 
+function formatEmpiricalRate(value: number | null | undefined) {
+  return value === null || value === undefined ? "暂无" : `${(value * 100).toFixed(1)}%`;
+}
+
 function formatAmount(value: number) {
   return `${(value / 100_000_000).toFixed(1)} 亿`;
 }
@@ -3181,12 +2869,3 @@ function formatOptionalPercent(value: number | null | undefined) {
 function formatSigned(value: number, decimals = 1) {
   return value > 0 ? `+${value.toFixed(decimals)}` : value.toFixed(decimals);
 }
-
-
-
-
-
-
-
-
-

@@ -10,6 +10,7 @@ from app.collectors import HithinkFinanceCollector
 from app.models import (
     AgentEvaluationResponse,
     AgentToolTrace,
+    DailyBoardPromotionStat,
     FinanceNewsFacts,
     FirstBoardCriticResponse,
     FirstBoardRating,
@@ -19,19 +20,21 @@ from app.models import (
     PredictionQualityAuditResponse,
     RatingBacktestResponse,
     SectorPerformanceFacts,
-    SimilarFirstBoardCasesResponse,
     StockKLineFacts,
     WebSearchFacts,
 )
 from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
-from app.services.analysis import events_for_date, summarize_market
+from app.services.analysis import (
+    calculate_daily_board_promotion,
+    events_for_date,
+    summarize_market,
+)
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.finance_news import collect_finance_news
 from app.services.first_board_critic import build_first_board_critic
 from app.services.prediction_quality_audit import build_prediction_quality_audit
 from app.services.rating_backtest import build_rating_backtest
 from app.services.sector_performance import build_sector_performance
-from app.services.similar_cases import find_similar_first_board_cases
 from app.services.stock_kline import build_stock_kline_facts
 from app.services.scoring_policy_optimizer import build_scoring_policy_registry
 from app.services.web_search import search_web
@@ -103,6 +106,30 @@ TOOL_SCHEMAS = [
         description="读取本地最新市场情绪、涨停数量、首板数量、炸板率、最高连板和热门行业。",
         args_schema={"type": "object", "properties": {}, "required": []},
         returns="Market sentiment facts for the latest local trade date.",
+    ),
+    AgentToolSchema(
+        name="daily_board_promotion",
+        description=(
+            "统计最近若干交易日的涨停晋级率。以前一交易日收盘封住的股票为分母，"
+            "按下一交易日是否收盘晋级一板计算总晋级率、首板到二板和连板梯队晋级率，"
+            "并返回每个交易日晋级成功的具体股票。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "days": {"type": "integer", "minimum": 1, "maximum": 60},
+                "end_date": {
+                    "type": ["string", "null"],
+                    "description": "YYYY-MM-DD; omit for the latest local trade date.",
+                },
+            },
+            "required": [],
+        },
+        returns=(
+            "Daily promotion observation date, previous trade date, total rate, "
+            "first-to-second rate, continued-board rate, board-height buckets and "
+            "the promoted stock list."
+        ),
     ),
     AgentToolSchema(
         name="sector_performance",
@@ -282,20 +309,6 @@ TOOL_SCHEMAS = [
         returns="Matched first-board candidates for the query.",
     ),
     AgentToolSchema(
-        name="first_board_similar_cases",
-        description="检索某只首板股票的历史相似首板案例和首板后走势缓存。",
-        args_schema={
-            "type": "object",
-            "properties": {
-                "symbol": {"type": "string", "description": "Six-digit A-share symbol."},
-                "trade_date": {"type": "string", "description": "YYYY-MM-DD base first-board date."},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 10},
-            },
-            "required": ["symbol", "trade_date"],
-        },
-        returns="Similar first-board cases, similarity reasons and post-limit-up bars.",
-    ),
-    AgentToolSchema(
         name="stock_kline",
         description="读取指定股票最近一段时间的日 K 线、均线、区间涨跌、量能和最大回撤，用于回答个股走势问题。",
         args_schema={
@@ -364,7 +377,6 @@ TOOL_SCHEMAS = [
                     "type": ["string", "null"],
                     "description": "YYYY-MM-DD first-board date; omit or null for latest local date.",
                 },
-                "similar_limit": {"type": "integer", "minimum": 0, "maximum": 10},
             },
             "required": ["symbol"],
         },
@@ -386,17 +398,25 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="review_high_score_picks",
-        description="Run the Review Agent to review high-score first-board picks, later outcomes, successful/failed patterns and scoring taste adjustments.",
+        description=(
+            "Run the Review Agent over each day's score-ranked Top10 first-board picks. "
+            "Returns later outcomes, daily first-to-second-board success rates, the same-day "
+            "full-market first-board baseline, successful/failed patterns and scoring adjustments."
+        ),
         args_schema={
             "type": "object",
             "properties": {
                 "start_date": {"type": "string", "description": "YYYY-MM-DD inclusive start date."},
                 "end_date": {"type": "string", "description": "YYYY-MM-DD inclusive end date."},
                 "min_score": {"type": "number", "minimum": 0, "maximum": 100},
+                "top_per_day": {"type": "integer", "minimum": 1, "maximum": 20},
             },
             "required": [],
         },
-        returns="Review Agent report with findings, successful patterns, failed patterns, scoring bias and adjustment suggestions.",
+        returns=(
+            "Review report with daily Top-pick versus full-market promotion comparisons, "
+            "tracked picks, findings, patterns, scoring bias and adjustment suggestions."
+        ),
     ),
     AgentToolSchema(
         name="scoring_policy_status",
@@ -503,6 +523,43 @@ class AgentToolRegistry:
                 f"首板{summary.first_board_count}只，连板{summary.continued_board_count}只，"
                 f"炸板率{summary.failed_limit_up_rate:.0%}。"
             ),
+            trace_output=trace_output,
+        )
+
+    def daily_board_promotion(
+        self,
+        days: int = 5,
+        end_date: date | None = None,
+    ) -> ToolResult:
+        """Return empirical daily board-promotion rates from local close data."""
+
+        stats: list[DailyBoardPromotionStat] = calculate_daily_board_promotion(
+            self.events,
+            days=max(1, min(days, 60)),
+            end_date=end_date,
+        )
+        trace_output = {
+            "requested_days": days,
+            "end_date": end_date.isoformat() if end_date else None,
+            "observed_days": len(stats),
+            "items": [item.model_dump(mode="json") for item in stats],
+        }
+        latest = stats[-1] if stats else None
+        summary = (
+            f"最近 {len(stats)} 个可计算交易日；"
+            f"{latest.trade_date.isoformat()} 总晋级 "
+            f"{latest.promoted_count}/{latest.sample_size}（{latest.probability:.1%}）。"
+            if latest
+            else "本地相邻交易日数据不足，暂时无法计算每日晋级率。"
+        )
+        return ToolResult(
+            name="daily_board_promotion",
+            input={
+                "days": days,
+                "end_date": end_date.isoformat() if end_date else None,
+            },
+            output=stats,
+            summary=summary,
             trace_output=trace_output,
         )
 
@@ -858,57 +915,6 @@ class AgentToolRegistry:
             trace_output=trace_output,
         )
 
-    def similar_cases(
-        self,
-        symbol: str,
-        trade_date: date,
-        limit: int = 5,
-    ) -> ToolResult:
-        """Return historical first-board similar cases."""
-
-        response = find_similar_first_board_cases(
-            symbol=symbol,
-            trade_date=trade_date,
-            repository=self.first_board_repository,
-            limit=limit,
-        )
-        names = "、".join(
-            f"{item.name}({item.symbol})" for item in response.cases[:3]
-        ) or "暂无"
-        trace_output = {
-            "target": {
-                "symbol": response.target.symbol,
-                "name": response.target.name,
-                "trade_date": response.target.trade_date.isoformat(),
-            },
-            "recall_count": response.recall_count,
-            "window_days": response.window_days,
-            "top_cases": [
-                {
-                    "symbol": item.symbol,
-                    "name": item.name,
-                    "trade_date": item.trade_date.isoformat(),
-                    "similarity": item.similarity,
-                    "post_bar_count": len(item.post_bars),
-                }
-                for item in response.cases[:5]
-            ],
-        }
-        return ToolResult(
-            name="first_board_similar_cases",
-            input={
-                "symbol": symbol,
-                "trade_date": trade_date.isoformat(),
-                "limit": limit,
-            },
-            output=response,
-            summary=(
-                f"召回{response.recall_count}条，窗口{response.window_days}日，"
-                f"Top案例：{names}。"
-            ),
-            trace_output=trace_output,
-        )
-
     def stock_kline(
         self,
         symbol: str,
@@ -1078,7 +1084,6 @@ class AgentToolRegistry:
         self,
         symbol: str,
         trade_date: date | None = None,
-        similar_limit: int = 5,
     ) -> ToolResult:
         """Return critic review facts for one first-board rating."""
 
@@ -1087,7 +1092,6 @@ class AgentToolRegistry:
             symbol=symbol,
             trade_date=trade_date,
             first_board_repository=self.first_board_repository,
-            similar_limit=similar_limit,
         )
         trace_output = {
             "symbol": response.symbol,
@@ -1106,7 +1110,6 @@ class AgentToolRegistry:
             input={
                 "symbol": symbol,
                 "trade_date": trade_date.isoformat() if trade_date else None,
-                "similar_limit": similar_limit,
             },
             output=response,
             summary=(
@@ -1173,7 +1176,8 @@ class AgentToolRegistry:
         self,
         start_date: date,
         end_date: date,
-        min_score: float = 85,
+        min_score: float = 0,
+        top_per_day: int = 10,
     ) -> ToolResult:
         """Run Review Agent over high-score picks and post-board outcomes."""
 
@@ -1183,6 +1187,7 @@ class AgentToolRegistry:
             end_date=end_date,
             repository=self.first_board_repository,
             min_score=min_score,
+            top_per_day=max(1, min(top_per_day, 20)),
         )
         trace_output = {
             "start_date": response.start_date.isoformat(),
@@ -1191,6 +1196,18 @@ class AgentToolRegistry:
             "success_count": response.success_count,
             "failed_count": response.failed_count,
             "pending_count": response.pending_count,
+            "promotion_ready_date_count": response.promotion_ready_date_count,
+            "top_pick_promotion_sample_size": response.top_pick_promotion_sample_size,
+            "top_pick_promoted_count": response.top_pick_promoted_count,
+            "top_pick_promotion_rate": response.top_pick_promotion_rate,
+            "market_promotion_sample_size": response.market_promotion_sample_size,
+            "market_promoted_count": response.market_promoted_count,
+            "market_promotion_rate": response.market_promotion_rate,
+            "promotion_rate_delta": response.promotion_rate_delta,
+            "promotion_comparisons": [
+                item.model_dump(mode="json")
+                for item in response.promotion_comparisons
+            ],
             "main_findings": response.main_findings[:3],
             "adjustment_suggestions": response.adjustment_suggestions[:3],
         }
@@ -1200,6 +1217,7 @@ class AgentToolRegistry:
                 "start_date": start_date.isoformat(),
                 "end_date": end_date.isoformat(),
                 "min_score": min_score,
+                "top_per_day": top_per_day,
             },
             output=response,
             summary=(

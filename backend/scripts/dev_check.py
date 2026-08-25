@@ -64,8 +64,6 @@ def main() -> None:
                     trade_date=update_date,
                     skip_import=not should_import,
                     replace_date=should_import,
-                    similar_limit=10 if should_import else 0,
-                    max_kline_fetches=30 if should_import else 1,
                     max_tracked_kline_fetches=60,
                     limit_up_repository=limit_repo,
                     first_board_repository=first_board_repo,

@@ -11,8 +11,11 @@ from statistics import mean
 from typing import Optional
 
 from app.models import (
+    BoardPromotionBucket,
+    BoardPromotionStock,
     ContinuationStat,
     ConceptHeat,
+    DailyBoardPromotionStat,
     FailedRateStat,
     LimitUpEvent,
     MarketIndexSnapshot,
@@ -150,6 +153,132 @@ def calculate_continuation(events: list[LimitUpEvent]) -> list[ContinuationStat]
         )
         for height, items in sorted(grouped.items())
     ]
+
+
+def calculate_daily_board_promotion(
+    events: list[LimitUpEvent],
+    days: int = 5,
+    end_date: date | None = None,
+) -> list[DailyBoardPromotionStat]:
+    """Calculate promotion rates for each adjacent pair of local trading dates.
+
+    The previous date's stocks that closed at limit-up form the denominator. A
+    stock is promoted only when it also closes at limit-up on the next observed
+    trading date with its board height increased by exactly one. Pairs separated
+    by more than four calendar days are skipped because local history may have a
+    data gap that cannot be distinguished from a long exchange holiday.
+    """
+
+    if days <= 0:
+        return []
+    grouped: dict[date, dict[str, LimitUpEvent]] = defaultdict(dict)
+    for event in events:
+        if event.closed_limit:
+            grouped[event.trade_date][event.symbol] = event
+
+    trade_dates = sorted(grouped)
+    daily_stats: list[DailyBoardPromotionStat] = []
+    for previous_date, trade_date in zip(trade_dates, trade_dates[1:]):
+        calendar_gap = (trade_date - previous_date).days
+        if calendar_gap < 1 or calendar_gap > 4:
+            continue
+        previous_events = list(grouped[previous_date].values())
+        current_events = grouped[trade_date]
+        if not previous_events:
+            continue
+
+        promoted_symbols = {
+            event.symbol
+            for event in previous_events
+            if (
+                event.symbol in current_events
+                and current_events[event.symbol].board_height
+                == event.board_height + 1
+            )
+        }
+        first_board_events = [
+            event for event in previous_events if event.board_height == 1
+        ]
+        continued_board_events = [
+            event for event in previous_events if event.board_height >= 2
+        ]
+        buckets = []
+        for height in sorted({event.board_height for event in previous_events}):
+            cohort = [
+                event for event in previous_events if event.board_height == height
+            ]
+            promoted_count = sum(
+                1 for event in cohort if event.symbol in promoted_symbols
+            )
+            buckets.append(
+                BoardPromotionBucket(
+                    from_board_height=height,
+                    to_board_height=height + 1,
+                    sample_size=len(cohort),
+                    promoted_count=promoted_count,
+                    probability=round(promoted_count / len(cohort), 4),
+                )
+            )
+
+        first_promoted_count = sum(
+            1 for event in first_board_events if event.symbol in promoted_symbols
+        )
+        continued_promoted_count = sum(
+            1 for event in continued_board_events if event.symbol in promoted_symbols
+        )
+        promoted_stocks = sorted(
+            (
+                BoardPromotionStock(
+                    symbol=event.symbol,
+                    name=current_events[event.symbol].name,
+                    industry=current_events[event.symbol].industry,
+                    concept=current_events[event.symbol].concept,
+                    from_board_height=event.board_height,
+                    to_board_height=current_events[event.symbol].board_height,
+                    first_limit_time=current_events[event.symbol].first_limit_time,
+                    break_count=current_events[event.symbol].break_count,
+                )
+                for event in previous_events
+                if event.symbol in promoted_symbols
+            ),
+            key=lambda item: (
+                -item.to_board_height,
+                item.first_limit_time,
+                item.symbol,
+            ),
+        )
+        daily_stats.append(
+            DailyBoardPromotionStat(
+                trade_date=trade_date,
+                previous_trade_date=previous_date,
+                sample_size=len(previous_events),
+                promoted_count=len(promoted_symbols),
+                probability=round(len(promoted_symbols) / len(previous_events), 4),
+                first_board_sample_size=len(first_board_events),
+                first_board_promoted_count=first_promoted_count,
+                first_board_probability=_optional_rate(
+                    first_promoted_count,
+                    len(first_board_events),
+                ),
+                continued_board_sample_size=len(continued_board_events),
+                continued_board_promoted_count=continued_promoted_count,
+                continued_board_probability=_optional_rate(
+                    continued_promoted_count,
+                    len(continued_board_events),
+                ),
+                buckets=buckets,
+                promoted_stocks=promoted_stocks,
+            )
+        )
+    if end_date is not None:
+        daily_stats = [item for item in daily_stats if item.trade_date <= end_date]
+    return daily_stats[-days:]
+
+
+def _optional_rate(count: int, sample_size: int) -> float | None:
+    """Return a rounded empirical rate when the cohort is non-empty."""
+
+    return round(count / sample_size, 4) if sample_size else None
 
 
 def calculate_failed_rates(events: list[LimitUpEvent]) -> list[FailedRateStat]:

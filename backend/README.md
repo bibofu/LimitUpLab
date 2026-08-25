@@ -132,8 +132,8 @@ python scripts/import_limit_up_from_akshare.py --date 20260520 --replace-date
 ```
 
 For normal daily use, run the full Agent data pipeline instead. It imports raw
-limit-up events, rebuilds first-board features, backfills similar-case post bars
-for top candidates, and prints a JSON health report:
+limit-up events, rebuilds first-board features, backfills tracked Top10 post bars,
+and prints a JSON health report:
 
 ```powershell
 cd backend
@@ -213,7 +213,7 @@ inspect or remove it.
 - `GET /api/agents/first-board-ratings` - explainable first-board candidate ratings
 - `GET /api/agents/scoring-policies` - active Champion and recent scoring policy versions
 - `POST /api/agents/scoring-policies/optimize` - constrained walk-forward Challenger generation; shadow mode by default
-- `GET /api/agents/data-health` - Agent raw-data, feature and similar-case cache health
+- `GET /api/agents/data-health` - Agent raw-data, feature and enrichment health
 - `GET /api/agents/system-health` - local runtime health for data freshness, LLM configuration and eval status
 - `GET /api/agents/daily-pipeline-status` - recent automated daily close-loop runs
 - `GET /api/agents/rating-backtest` - entry-open return, drawdown and promotion metrics by rating bucket
@@ -221,7 +221,11 @@ inspect or remove it.
 - `GET /api/agents/first-board-critic` - critic review for one first-board rating
 - `GET /api/agents/rating-evaluation` - source-aware Evaluation Agent review for immutable predictions
 - `GET /api/agents/runs` - recent Agent run traces for observability
-- `GET /api/agents/first-board-similar-cases` - historical similar first-board cases
+- `POST /api/agents/chat/sessions` - create a persistent chat session
+- `GET /api/agents/chat/sessions` - list resumable chat sessions
+- `GET /api/agents/chat/sessions/{session_id}` - restore messages and Agent response metadata
+- `PATCH /api/agents/chat/sessions/{session_id}` - rename a chat session
+- `DELETE /api/agents/chat/sessions/{session_id}` - permanently delete a chat session, messages, and run traces
 - `POST /api/agents/chat` - tool-grounded Agent chat and LLM/template explanations
 - `GET /api/stocks/{symbol}/kline?days=5` - recent daily K-line bars
 - `GET /api/stocks/{symbol}/trading-day-kline?period=5` - after-close trading-day intraday K-line review

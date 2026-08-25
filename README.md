@@ -2,7 +2,7 @@
 
 基于真实 A 股涨停数据的可解释首板评级与复盘 Agent。
 
-LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中筛选合格首板，构建结构化事实，生成可解释评分，检索历史相似案例，并通过 LLM Agent 回答用户对市场、板块、个股和历史表现的追问。
+LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中筛选合格首板，构建结构化事实，生成可解释评分，并通过 LLM Agent 回答用户对市场、板块、个股和历史表现的追问。
 
 > 本项目用于数据研究、Agent 工程实践和求职展示，不构成任何投资建议。系统不提供买入、卖出、仓位、目标价或收益承诺。
 
@@ -12,19 +12,21 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 - 真实涨停、炸板、K 线、板块、人气和龙虎榜数据流水线
 - 首板候选池过滤、结构化 Facts、规则评分和置信度
-- 历史相似首板案例检索及后续走势缓存
+- 每日 Top10 推荐快照及 D+1 至 D+5 走势追踪
 - LLM Planner、工具调用、Tool Policy 修复和 SSE 流式回答
+- 可恢复的多会话对话、历史消息持久化和受控上下文
 - Explanation、Critic、Review、Evaluation 等轻量 Agent 角色
-- 每日 Top10 预测快照、D+1 至 D+5 走势追踪和评分复盘
+- 每日 Top10 预测快照、D+1 至 D+5 走势追踪、1进2全市场对照和评分复盘
 - Champion/Challenger 评分策略注册与受约束影子优化
 - 来源感知的预测质量审计、确定性基线和多目标评分 v3
+- 每日连板晋级率、首板到二板率和各板高梯队统计
 - 数据健康、Agent 运行轨迹、缓存和离线回归评测
 
 当前代码基线：
 
 | 项目 | 状态 |
 | --- | --- |
-| 后端自动化测试 | 129 项通过 |
+| 后端自动化测试 | 163 项通过 |
 | 离线 Agent Eval | 11/11 通过 |
 | 本地数据健康检查 | 已实现 |
 | LLM 流式问答 | 已实现 |
@@ -82,25 +84,7 @@ scoring_version
 
 其中 `score` 表示候选强度，`confidence` 表示当前数据对该评分的支持程度，两者不会混为一谈。
 
-### 2. 结构化历史案例 RAG
-
-本项目最主要的 RAG 数据不是新闻文本，而是自己的历史首板案例库。
-
-检索采用两阶段流程：
-
-1. SQLite 根据日期、首板状态、封板时间区间和封板质量召回约 300 至 500 条候选。
-2. Python 根据封板时间、稳定性、换手、成交额、市场环境、行业热度和 K 线结构做加权精排。
-
-最终返回 Top-K 案例，并说明：
-
-- 为什么相似
-- 哪些地方不同
-- 案例首板后的 D+1 至 D+5 走势
-- 数据是否完整
-
-这种设计比直接使用向量数据库更适合结构化行情数据，也更容易解释相似度来源。
-
-### 3. Tool-Using Chat Agent
+### 2. Tool-Using Chat Agent
 
 正常问答主链路是：
 
@@ -125,12 +109,12 @@ scoring_version
 | `first_board_ratings` | 查询首板评级、拆解和风险 |
 | `first_board_filter` | 按行业、题材、评级和置信度筛选 |
 | `limit_up_events` | 查询首板、连板、炸板及题材相关涨停事件 |
-| `first_board_similar_cases` | 检索历史相似首板案例 |
+| `daily_board_promotion` | 统计近 5 日总晋级率、首板到二板率、连板梯队及成功股票明细 |
 | `stock_kline` | 查询个股近期 K 线和衍生指标 |
 | `first_board_critic` | 复核评分是否过度乐观或证据不足 |
 | `rating_backtest` | 查看评分分桶历史表现 |
 | `rating_evaluation` | 评价历史预测结果和错误样本 |
-| `review_high_score_picks` | 追踪近期每日高分 Top10 后续走势 |
+| `review_high_score_picks` | 追踪每日评分 Top10 后续走势，并对比同期全部首板的1进2成功率 |
 | `prediction_quality_audit` | 审计预测来源、Outcome 覆盖和基线表现 |
 | `scoring_policy_status` | 查询 Champion、Challenger 和晋级原因 |
 | `finance_news` | 聚合东方财富、同花顺最新财经快讯，提供时间、摘要、分类和来源 |
@@ -138,7 +122,7 @@ scoring_version
 
 Tool Policy Engine 会修复 Planner 漏调工具的情况。例如，用户询问某只股票走势时必须调用 K 线工具，询问当天涨停时必须查询本地涨停事件，不能让模型直接凭记忆作答。
 
-### 4. 轻量 Multi-Agent 角色
+### 3. 轻量 Multi-Agent 角色
 
 项目采用有边界的角色编排，不让多个 LLM 无约束地互相讨论。
 
@@ -147,15 +131,14 @@ Tool Policy Engine 会修复 Planner 漏调工具的情况。例如，用户询�
 | Coordinator / Chat Agent | 理解问题、规划工具、组织回答 | 是 |
 | Facts Builder | 从数据库构建结构化事实 | 否 |
 | Rating Engine | 计算评分、评级和置信度 | 否 |
-| Retrieval Agent | 检索并解释相似历史案例 | 主要为确定性逻辑 |
 | Explanation Agent | 基于 Facts 解释评分与风险 | 是，可降级 |
 | Critic Agent | 查找反向证据和数据缺口 | 结构化规则为主 |
-| Review Agent | 追踪每日 Top10 后续走势 | 可选 LLM 总结 |
+| Review Agent | 追踪每日 Top10 后续走势及1进2全市场对照 | 可选 LLM 总结 |
 | Evaluation Agent | 对历史预测分类并生成经验教训 | 结构化结果为主 |
 
 每个角色都有结构化输入输出，可以独立测试、缓存、追踪和回放。
 
-### 5. 自我评价与受控改进
+### 4. 自我评价与受控改进
 
 系统每天保存不可变的评分预测快照，并在后续交易日回填：
 
@@ -183,9 +166,11 @@ Evaluation Agent 将历史预测标记为 `success`、`partial`、`miss`、`avoi
 
 截至 2026-08-22 的本地审计中，v3 已生成 3 个测试日不重叠的样本外折，但只有 14 个 Outcome 结果日，因此仍保持影子状态。当前评分 Top10 尚未优于最早封板基线，页面会如实展示这一结论和数据覆盖缺口。
 
-### 6. 可观测与可降级
+### 5. 可观测与可降级
 
 - `agent_runs` 保存每次 Agent 执行状态、输入、输出、错误和耗时
+- `chat_sessions` 和 `chat_messages` 独立保存会话与消息，支持新建、恢复、重命名和永久删除
+- 页面刷新后恢复完整消息和证据卡；传给 LLM 的上下文只取最近 8 条成功消息，并限制单条长度
 - Tool trace 展示 Planner 原始计划、后端修复原因、工具参数和结果摘要
 - SQLite Agent Cache 缓存低风险结构化结果
 - `/api/agents/data-health` 检查评分和历史案例所需数据
@@ -202,12 +187,12 @@ flowchart LR
 
     C --> D[Facts Builder]
     D --> E[Rating Engine]
-    D --> F[Structured Case Retrieval]
     E --> G[Prediction Snapshots]
-    F --> H[Similar Cases + Post Bars]
+    G --> H[Top10 Outcome Tracking]
 
     U[User] --> I[React Agent Workspace]
     I --> J[FastAPI Chat / SSE]
+    J --> S[(Chat Sessions + Messages)]
     J --> K[LLM Planner]
     K --> L[Tool Policy Engine]
     L --> M[Tool Registry]
@@ -276,6 +261,7 @@ sequenceDiagram
 - Facts Grounding
 - SSE Streaming
 - Controlled Conversation Context
+- Persistent Chat Sessions
 - Agent Run Observability
 - Deterministic + Live LLM Eval
 - Champion/Challenger Policy Governance
@@ -424,8 +410,7 @@ cd backend
 3. 获取 K 线、上市日期、流通市值、龙虎榜和人气快照；同花顺优先，原有来源回退。
 4. 保存当日 Top10 不可变预测快照。
 5. 回填近期 Top10 的 D+1 至 D+5 走势。
-6. 回填相似案例后续 K 线和历史结果。
-7. 输出 JSON 数据健康报告。
+6. 输出 JSON 数据健康报告。
 
 启动演示前也可以让系统自动判断预期交易日：
 
@@ -463,7 +448,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mo
 | 方法 | Endpoint | 说明 |
 | --- | --- | --- |
 | `GET` | `/api/agents/first-board-ratings` | 首板评级列表 |
-| `GET` | `/api/agents/first-board-similar-cases` | 历史相似案例 |
 | `GET` | `/api/agents/first-board-critic` | 单股 Critic 复核 |
 | `GET` | `/api/agents/rating-backtest` | 评分分桶回测 |
 | `GET` | `/api/agents/rating-evaluation` | Evaluation Agent 复盘 |
@@ -474,9 +458,15 @@ powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mo
 | `GET` | `/api/agents/system-health` | 本地系统健康 |
 | `GET` | `/api/agents/daily-pipeline-status` | 每日预测闭环最近运行状态 |
 | `GET` | `/api/agents/runs` | Agent 运行轨迹 |
+| `POST` | `/api/agents/chat/sessions` | 创建新会话 |
+| `GET` | `/api/agents/chat/sessions` | 查询可继续的会话列表 |
+| `GET` | `/api/agents/chat/sessions/{session_id}` | 恢复会话消息和回答元数据 |
+| `PATCH` | `/api/agents/chat/sessions/{session_id}` | 重命名会话 |
+| `DELETE` | `/api/agents/chat/sessions/{session_id}` | 永久删除会话、消息和关联运行记录 |
 | `POST` | `/api/agents/chat` | 同步 Agent 问答 |
 | `POST` | `/api/agents/chat/stream` | SSE 流式 Agent 问答 |
 | `GET` | `/api/limit-up/events` | 涨停事件查询 |
+| `GET` | `/api/analysis/daily-promotion` | 每日连板晋级率与板高分层统计 |
 | `GET` | `/api/stocks/{symbol}/kline` | 个股日 K 线 |
 
 完整接口定义以 Swagger 为准。
@@ -577,7 +567,7 @@ npm.cmd run build
 
 1. 展示系统健康状态和最新交易日。
 2. 查看当日首板评级 Top10 和评分拆解。
-3. 打开一个候选，查看封板事实、K 线和历史相似案例。
+3. 打开一个候选，查看封板事实、K 线、当前位置和 Critic 复核。
 4. 在 Agent 中询问“为什么这只股票评分高，有哪些反向风险”。
 5. 展开工具轨迹，说明 LLM Planner、Tool Policy 和 Facts Grounding。
 6. 查看过去五个交易日 Top10 的后续走势与 Evaluation 结果。

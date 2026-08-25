@@ -16,7 +16,7 @@ from app.models import (
 
 
 class SQLiteFirstBoardRepository:
-    """Repository for local similar-case retrieval data tables."""
+    """Repository for first-board features, outcomes and daily bars."""
 
     def __init__(self, database_path: Path | None = None):
         """Create a repository bound to a SQLite database path."""
@@ -382,54 +382,6 @@ class SQLiteFirstBoardRepository:
             connection.close()
 
         return self._feature_from_row(row) if row else None
-
-    def recall_similar_features(
-        self,
-        target: FirstBoardFeature,
-        earliest_trade_date: date,
-        limit: int = 500,
-    ) -> list[FirstBoardFeature]:
-        """Coarsely recall historical candidates using indexed feature buckets."""
-
-        connection = connect(self.database_path)
-        try:
-            initialize_database(connection)
-            rows = connection.execute(
-                """
-                SELECT *
-                FROM first_board_features
-                WHERE trade_date < ?
-                  AND trade_date >= ?
-                  AND closed_limit = 1
-                  AND ABS(break_count - ?) <= 1
-                  AND (
-                    first_limit_bucket = ?
-                    OR turnover_bucket = ?
-                    OR amount_bucket = ?
-                    OR market_failed_rate_bucket = ?
-                    OR industry = ?
-                    OR concept = ?
-                  )
-                ORDER BY trade_date DESC, first_limit_minutes ASC
-                LIMIT ?
-                """,
-                (
-                    target.trade_date.isoformat(),
-                    earliest_trade_date.isoformat(),
-                    target.break_count,
-                    target.first_limit_bucket,
-                    target.turnover_bucket,
-                    target.amount_bucket,
-                    target.market_failed_rate_bucket,
-                    target.industry,
-                    target.concept,
-                    limit,
-                ),
-            ).fetchall()
-        finally:
-            connection.close()
-
-        return [self._feature_from_row(row) for row in rows]
 
     def list_feature_trade_dates_before(self, trade_date: date) -> list[date]:
         """Return persisted feature dates before target date, newest first."""

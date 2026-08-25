@@ -9,6 +9,7 @@ from app.agents.chat import answer_first_board_chat
 from app.models import (
     AgentChatRequest,
     AgentRun,
+    ChatSessionMessage,
     FirstBoardEnrichmentSnapshot,
     LimitUpEvent,
     StockKLineBar,
@@ -140,6 +141,36 @@ class FakeWrongPositionProvider(FakeToolPlanningProvider):
         )
 
 
+class FakeWrongPromotionProvider(FakeToolPlanningProvider):
+    """Fake LLM that guesses a promotion rate without adjacent-day facts."""
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        self.calls.append((system_prompt, user_prompt))
+        if "first job is to decide which tools are needed" in system_prompt:
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": "daily_board_promotion",
+                        "safety": "normal",
+                        "tool_calls": [
+                            {
+                                "name": "limit_up_events",
+                                "arguments": {"trade_date": "2026-05-15"},
+                            }
+                        ],
+                        "answer_directly": "",
+                    }
+                ),
+                model="fake-planner",
+                provider="fake",
+            )
+        return LLMResult(
+            content="今天连板晋级率很高。",
+            model="fake-answer",
+            provider="fake",
+        )
+
+
 class AgentChatTest(unittest.TestCase):
     def _make_event(
         self,
@@ -192,7 +223,21 @@ class AgentChatTest(unittest.TestCase):
         self.assertEqual(response.intent, "capability_intro")
         self.assertEqual(response.tool_calls, [])
         self.assertIn("\u9996\u677f", response.answer)
-        self.assertIn("\u5386\u53f2\u76f8\u4f3c", response.answer)
+        self.assertIn("K \u7ebf", response.answer)
+
+    def test_retired_similar_case_question_does_not_call_tools(self) -> None:
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="s1",
+                message="301489 有历史相似案例吗",
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=DisabledLLMProvider(),
+        )
+
+        self.assertEqual(response.intent, "out_of_scope")
+        self.assertEqual(response.tool_calls, [])
+        self.assertIn("已经下线", response.answer)
 
     def test_prediction_quality_uses_audit_tool_when_llm_is_disabled(self) -> None:
         database_path = (
@@ -390,6 +435,48 @@ class AgentChatTest(unittest.TestCase):
             any(card.title == "首板候选池与评分" for card in response.evidence_cards)
         )
 
+    def test_llm_prompts_receive_bounded_persisted_conversation_history(self) -> None:
+        provider = FakeToolPlanningProvider()
+        history = [
+            ChatSessionMessage(
+                message_id="history-user",
+                session_id="history-session",
+                role="user",
+                content="先看一下中电鑫龙",
+                created_at=datetime.now(timezone.utc),
+            ),
+            ChatSessionMessage(
+                message_id="history-agent",
+                session_id="history-session",
+                role="assistant",
+                content="已经读取该股票的首板评分。",
+                created_at=datetime.now(timezone.utc),
+            ),
+        ]
+
+        answer_first_board_chat(
+            AgentChatRequest(
+                session_id="history-session",
+                message="那它的评分为什么高",
+                trade_date=date(2026, 5, 15),
+            ),
+            events=SAMPLE_EVENTS,
+            conversation_messages=history,
+            llm_provider=provider,
+        )
+
+        planner_payload = json.loads(provider.calls[0][1])
+        answer_payload = json.loads(provider.calls[1][1])
+        self.assertEqual(len(planner_payload["conversation_history"]), 2)
+        self.assertEqual(
+            planner_payload["conversation_history"][0]["content"],
+            "先看一下中电鑫龙",
+        )
+        self.assertEqual(
+            answer_payload["conversation_history"],
+            planner_payload["conversation_history"],
+        )
+
     def test_llm_answer_reports_progress_and_streams_deltas(self) -> None:
         provider = FakeToolPlanningProvider()
         progress: list[tuple[str, str]] = []
@@ -504,25 +591,36 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("低位启动首板", fallback_response.answer)
         self.assertIn("301489", fallback_response.answer)
 
-    def test_similar_question_repairs_missing_planner_tool_call(self) -> None:
-        provider = FakeToolPlanningProvider()
-
+    def test_daily_promotion_question_uses_adjacent_close_statistics(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(
-                session_id="s1",
-                message="301489 \u6709\u5386\u53f2\u76f8\u4f3c\u6848\u4f8b\u5417",
+                session_id="daily-promotion",
+                message="最近5个交易日连板晋级概率怎么样",
             ),
             events=SAMPLE_EVENTS,
-            llm_provider=provider,
+            llm_provider=FakeWrongPromotionProvider(),
         )
 
-        self.assertIn("first_board_similar_cases", response.tool_calls)
+        self.assertIn("daily_board_promotion", response.tool_calls)
+        self.assertNotIn("limit_up_events", response.tool_calls)
+        self.assertIn("2026-05-15", response.answer)
+        self.assertIn("0/1", response.answer)
+        self.assertIn("首板→二板", response.answer)
         self.assertTrue(
-            any(
-                trace.name == "first_board_similar_cases"
-                for trace in response.tool_results
-            )
+            any("daily promotion" in item for item in response.warnings)
         )
+
+        fallback_response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="daily-promotion-fallback",
+                message="每天连板晋级率如何",
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=DisabledLLMProvider(),
+        )
+        self.assertEqual(fallback_response.intent, "daily_board_promotion")
+        self.assertIn("daily_board_promotion", fallback_response.tool_calls)
+        self.assertIn("0/1", fallback_response.answer)
 
     @patch("app.agents.tools.build_stock_kline_facts")
     def test_stock_trend_question_repairs_to_kline_tool(self, build_facts) -> None:
@@ -633,6 +731,17 @@ class AgentChatTest(unittest.TestCase):
 
         self.assertIn("review_high_score_picks", response.tool_calls)
         self.assertTrue(any(trace.name == "review_high_score_picks" for trace in response.tool_results))
+
+        promotion_response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="s1-promotion",
+                message="那你选出的高分票1进2的成功率呢",
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=provider,
+        )
+        self.assertIn("review_high_score_picks", promotion_response.tool_calls)
+        self.assertNotIn("daily_board_promotion", promotion_response.tool_calls)
 
     def test_broad_top_candidate_question_does_not_inherit_previous_symbol(self) -> None:
         previous = AgentRun(
@@ -805,7 +914,7 @@ class AgentChatTest(unittest.TestCase):
             "first_board_ratings",
         )
 
-    def test_filter_and_similar_question_is_planned_as_multi_tool_flow(self) -> None:
+    def test_filter_and_top_question_is_planned_as_multi_tool_flow(self) -> None:
         events = [
             self._make_event(
                 symbol="002001",
@@ -825,25 +934,23 @@ class AgentChatTest(unittest.TestCase):
                 session_id="s1",
                 message=(
                     "8.7\u65e5\u9996\u677f\u91cc\u533b\u836f\u76f8\u5173"
-                    "\u8bc4\u5206\u6700\u9ad8\u7684\u662f\u8c01\uff0c"
-                    "\u6709\u6ca1\u6709\u5386\u53f2\u76f8\u4f3c\u6848\u4f8b"
+                    "\u8bc4\u5206\u6700\u9ad8\u7684\u662f\u8c01"
                 ),
             ),
             events=events,
         )
 
-        self.assertEqual(response.intent, "first_board_filter_similar")
+        self.assertEqual(response.intent, "first_board_filter")
         self.assertEqual(
             response.tool_calls,
-            ["first_board_ratings", "first_board_filter", "first_board_similar_cases"],
+            ["first_board_ratings", "first_board_filter"],
         )
         self.assertEqual(response.tool_results[0].name, "agent_plan")
         self.assertEqual(
             [step["name"] for step in response.tool_results[0].input["tool_steps"]],
-            ["first_board_ratings", "first_board_filter", "first_board_similar_cases"],
+            ["first_board_ratings", "first_board_filter"],
         )
         self.assertIn("002001", response.answer)
-        self.assertIn("\u7279\u5f81\u7f13\u5b58", response.answer)
 
     def test_follow_up_can_ask_top_stock_in_previous_filtered_pool(self) -> None:
         events = [
@@ -894,7 +1001,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("symbol=002001", response.references)
         self.assertEqual(response.tool_results[0].input["filter"], "\u533b\u836f")
 
-    def test_follow_up_pronoun_can_use_previous_selected_symbol(self) -> None:
+    def test_follow_up_risk_question_can_use_previous_selected_symbol(self) -> None:
         previous_run = AgentRun(
             run_id="run_top",
             session_id="s1",
@@ -918,15 +1025,15 @@ class AgentChatTest(unittest.TestCase):
         response = answer_first_board_chat(
             AgentChatRequest(
                 session_id="s1",
-                message="\u5b83\u6709\u6ca1\u6709\u5386\u53f2\u76f8\u4f3c\u6848\u4f8b",
+                message="\u5b83\u7684\u4e3b\u8981\u98ce\u9669\u662f\u4ec0\u4e48",
             ),
             events=SAMPLE_EVENTS,
             recent_runs=[previous_run],
         )
 
-        self.assertEqual(response.intent, "similar_cases")
+        self.assertEqual(response.intent, "risk_summary")
         self.assertTrue(any("301489" in item for item in response.references))
-        self.assertIn("first_board_similar_cases", response.tool_calls)
+        self.assertIn("first_board_ratings", response.tool_calls)
 
     def test_missing_shorthand_date_reports_data_availability(self) -> None:
         response = answer_first_board_chat(

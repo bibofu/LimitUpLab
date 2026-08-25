@@ -17,13 +17,14 @@ from app.models import (
     ReviewAgentPostBar,
     ReviewAgentPick,
     ReviewAgentReportResponse,
+    ReviewPromotionComparison,
 )
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.llm_provider import LLMProvider, get_llm_provider
 
 
-REVIEW_AGENT_VERSION = "review-agent-tool-use-v3"
+REVIEW_AGENT_VERSION = "review-agent-tool-use-v4"
 
 
 @dataclass(frozen=True)
@@ -138,6 +139,34 @@ class ReviewAgentToolbox:
             ),
         )
 
+    def compare_top10_market_promotion(self) -> ReviewToolResult:
+        """Compare daily Top10 promotion with the full first-board cohort."""
+
+        comparisons = _build_promotion_comparisons(
+            events=self.events,
+            picks=self._high_score_evaluations(),
+            end_date=self.end_date,
+        )
+        aggregate = _aggregate_promotion_comparisons(comparisons)
+        return ReviewToolResult(
+            name="compare_top10_market_promotion",
+            input={
+                "start_date": self.start_date.isoformat(),
+                "end_date": self.end_date.isoformat(),
+                "top_per_day": self.top_per_day,
+            },
+            output={
+                **aggregate,
+                "daily_comparisons": [
+                    item.model_dump(mode="json") for item in comparisons
+                ],
+            },
+            summary=(
+                "Compared daily Top10 first-to-second promotion with all "
+                f"market first boards across {aggregate['promotion_ready_date_count']} ready dates."
+            ),
+        )
+
     def prediction_for(self, prediction_id: str) -> AgentPrediction | None:
         """Return the immutable prediction snapshot used by one evaluation."""
 
@@ -215,6 +244,11 @@ def build_review_agent_report(
     tool_results = [_run_review_tool(toolbox, name) for name in tool_names]
     facts = {result.name: result.output for result in tool_results if result.status == "success"}
     picks = _review_picks_from_toolbox(toolbox)
+    promotion_comparisons = _build_promotion_comparisons(
+        events=events,
+        picks=picks,
+        end_date=end_date,
+    )
     feature_comparison = toolbox.feature_comparison()
     fallback = _fallback_report(
         start_date=start_date,
@@ -223,6 +257,7 @@ def build_review_agent_report(
         tool_results=[result.trace() for result in tool_results],
         warnings=["LLM review unavailable; deterministic fallback generated from tool facts."],
         feature_comparison=feature_comparison,
+        promotion_comparisons=promotion_comparisons,
     )
     try:
         content = active_provider.generate(
@@ -237,6 +272,7 @@ def build_review_agent_report(
             picks=picks,
             tool_results=[result.trace() for result in tool_results],
             feature_comparison=feature_comparison,
+            promotion_comparisons=promotion_comparisons,
         )
     except Exception as error:
         fallback.warnings.append(f"Review LLM unavailable: {error}")
@@ -254,6 +290,7 @@ def _plan_review_tools(
     available = [
         "daily_high_score_picks",
         "pick_outcomes",
+        "compare_top10_market_promotion",
         "compare_success_failure_features",
     ]
     try:
@@ -287,6 +324,8 @@ def _run_review_tool(toolbox: ReviewAgentToolbox, name: str) -> ReviewToolResult
             return toolbox.daily_high_score_picks()
         if name == "pick_outcomes":
             return toolbox.pick_outcomes()
+        if name == "compare_top10_market_promotion":
+            return toolbox.compare_top10_market_promotion()
         if name == "compare_success_failure_features":
             return toolbox.compare_success_failure_features()
         return ReviewToolResult(
@@ -387,6 +426,123 @@ def _post_bars_for_pick(
     ]
 
 
+def _build_promotion_comparisons(
+    *,
+    events: list[LimitUpEvent],
+    picks: list[AgentEvaluationItem] | list[ReviewAgentPick],
+    end_date: date,
+) -> list[ReviewPromotionComparison]:
+    """Build daily Top-pick and full-market first-to-second comparisons."""
+
+    events_by_date: dict[date, dict[str, LimitUpEvent]] = {}
+    for event in events:
+        if event.trade_date <= end_date:
+            events_by_date.setdefault(event.trade_date, {})[event.symbol] = event
+    available_dates = sorted(events_by_date)
+    next_dates = {
+        trade_date: available_dates[index + 1]
+        for index, trade_date in enumerate(available_dates[:-1])
+    }
+    picks_by_date: dict[date, list[AgentEvaluationItem | ReviewAgentPick]] = {}
+    for pick in picks:
+        picks_by_date.setdefault(pick.trade_date, []).append(pick)
+
+    comparisons: list[ReviewPromotionComparison] = []
+    for trade_date in sorted(picks_by_date):
+        daily_picks = picks_by_date[trade_date]
+        base_events = events_by_date.get(trade_date, {})
+        first_boards = [
+            event
+            for event in base_events.values()
+            if event.closed_limit and event.board_height == 1
+        ]
+        next_trade_date = next_dates.get(trade_date)
+        outcome_ready = bool(
+            next_trade_date
+            and 1 <= (next_trade_date - trade_date).days <= 4
+        )
+        if not outcome_ready or next_trade_date is None:
+            comparisons.append(
+                ReviewPromotionComparison(
+                    trade_date=trade_date,
+                    next_trade_date=next_trade_date,
+                    outcome_ready=False,
+                    top_pick_sample_size=len(daily_picks),
+                    top_pick_promoted_count=0,
+                    market_first_board_sample_size=len(first_boards),
+                    market_promoted_count=0,
+                )
+            )
+            continue
+
+        next_events = events_by_date[next_trade_date]
+
+        def promoted(symbol: str) -> bool:
+            event = next_events.get(symbol)
+            return bool(event and event.closed_limit and event.board_height == 2)
+
+        top_promoted_count = sum(promoted(pick.symbol) for pick in daily_picks)
+        market_promoted_count = sum(promoted(event.symbol) for event in first_boards)
+        top_rate = _optional_review_rate(top_promoted_count, len(daily_picks))
+        market_rate = _optional_review_rate(
+            market_promoted_count,
+            len(first_boards),
+        )
+        comparisons.append(
+            ReviewPromotionComparison(
+                trade_date=trade_date,
+                next_trade_date=next_trade_date,
+                outcome_ready=True,
+                top_pick_sample_size=len(daily_picks),
+                top_pick_promoted_count=top_promoted_count,
+                top_pick_promotion_rate=top_rate,
+                market_first_board_sample_size=len(first_boards),
+                market_promoted_count=market_promoted_count,
+                market_promotion_rate=market_rate,
+                promotion_rate_delta=(
+                    round(top_rate - market_rate, 4)
+                    if top_rate is not None and market_rate is not None
+                    else None
+                ),
+            )
+        )
+    return comparisons
+
+
+def _aggregate_promotion_comparisons(
+    comparisons: list[ReviewPromotionComparison],
+) -> dict[str, Any]:
+    """Aggregate only date cohorts whose following trading day is available."""
+
+    ready = [item for item in comparisons if item.outcome_ready]
+    top_sample_size = sum(item.top_pick_sample_size for item in ready)
+    top_promoted_count = sum(item.top_pick_promoted_count for item in ready)
+    market_sample_size = sum(item.market_first_board_sample_size for item in ready)
+    market_promoted_count = sum(item.market_promoted_count for item in ready)
+    top_rate = _optional_review_rate(top_promoted_count, top_sample_size)
+    market_rate = _optional_review_rate(market_promoted_count, market_sample_size)
+    return {
+        "promotion_ready_date_count": len(ready),
+        "top_pick_promotion_sample_size": top_sample_size,
+        "top_pick_promoted_count": top_promoted_count,
+        "top_pick_promotion_rate": top_rate,
+        "market_promotion_sample_size": market_sample_size,
+        "market_promoted_count": market_promoted_count,
+        "market_promotion_rate": market_rate,
+        "promotion_rate_delta": (
+            round(top_rate - market_rate, 4)
+            if top_rate is not None and market_rate is not None
+            else None
+        ),
+    }
+
+
+def _optional_review_rate(count: int, sample_size: int) -> float | None:
+    """Return a rounded rate for a non-empty review cohort."""
+
+    return round(count / sample_size, 4) if sample_size else None
+
+
 def _fallback_report(
     *,
     start_date: date,
@@ -395,6 +551,7 @@ def _fallback_report(
     tool_results: list[AgentToolTrace],
     warnings: list[str],
     feature_comparison: dict[str, Any] | None = None,
+    promotion_comparisons: list[ReviewPromotionComparison] | None = None,
 ) -> ReviewAgentReportResponse:
     ready = [item for item in picks if item.outcome_ready]
     successes = [item for item in picks if item.evaluation_label == "success"]
@@ -421,6 +578,22 @@ def _fallback_report(
         comparison.get("adjustment_suggestions")
     )
     comparison_findings = _string_list(comparison.get("main_findings"))
+    promotion_items = promotion_comparisons or []
+    promotion_summary = _aggregate_promotion_comparisons(promotion_items)
+    promotion_finding: list[str] = []
+    if (
+        promotion_summary["top_pick_promotion_rate"] is not None
+        and promotion_summary["market_promotion_rate"] is not None
+    ):
+        promotion_finding.append(
+            f"每日评分 Top10 的1进2为 "
+            f"{promotion_summary['top_pick_promoted_count']}/"
+            f"{promotion_summary['top_pick_promotion_sample_size']}"
+            f"（{promotion_summary['top_pick_promotion_rate']:.1%}），同期全部首板为 "
+            f"{promotion_summary['market_promoted_count']}/"
+            f"{promotion_summary['market_promotion_sample_size']}"
+            f"（{promotion_summary['market_promotion_rate']:.1%}）。"
+        )
     return ReviewAgentReportResponse(
         start_date=start_date,
         end_date=end_date,
@@ -428,9 +601,12 @@ def _fallback_report(
         success_count=len(successes),
         failed_count=len(failures),
         pending_count=len(pending),
+        **promotion_summary,
+        promotion_comparisons=promotion_items,
         main_findings=[
             f"高分首板样本 {len(picks)} 只，其中 {len(ready)} 只有后续走势可复盘。",
             f"成功 {len(successes)} 只，失败 {len(failures)} 只，待观察 {len(pending)} 只。",
+            *promotion_finding,
             *comparison_findings,
         ],
         successful_patterns=successful_patterns
@@ -457,6 +633,7 @@ def _report_from_payload(
     picks: list[ReviewAgentPick],
     tool_results: list[AgentToolTrace],
     feature_comparison: dict[str, Any] | None = None,
+    promotion_comparisons: list[ReviewPromotionComparison] | None = None,
 ) -> ReviewAgentReportResponse:
     fallback = _fallback_report(
         start_date=start_date,
@@ -465,6 +642,7 @@ def _report_from_payload(
         tool_results=tool_results,
         warnings=[],
         feature_comparison=feature_comparison,
+        promotion_comparisons=promotion_comparisons,
     )
     return ReviewAgentReportResponse(
         start_date=start_date,
@@ -473,6 +651,15 @@ def _report_from_payload(
         success_count=sum(1 for item in picks if item.evaluation_label == "success"),
         failed_count=sum(1 for item in picks if item.evaluation_label == "miss"),
         pending_count=sum(1 for item in picks if item.evaluation_label == "pending"),
+        promotion_ready_date_count=fallback.promotion_ready_date_count,
+        top_pick_promotion_sample_size=fallback.top_pick_promotion_sample_size,
+        top_pick_promoted_count=fallback.top_pick_promoted_count,
+        top_pick_promotion_rate=fallback.top_pick_promotion_rate,
+        market_promotion_sample_size=fallback.market_promotion_sample_size,
+        market_promoted_count=fallback.market_promoted_count,
+        market_promotion_rate=fallback.market_promotion_rate,
+        promotion_rate_delta=fallback.promotion_rate_delta,
+        promotion_comparisons=fallback.promotion_comparisons,
         main_findings=_string_list(payload.get("main_findings")) or fallback.main_findings,
         successful_patterns=_merge_texts(
             fallback.successful_patterns,

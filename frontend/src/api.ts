@@ -7,7 +7,10 @@ import type {
   AgentEvaluationResponse,
   AgentRunsResponse,
   AgentSystemHealthResponse,
+  ChatSessionDetail,
+  ChatSessionsResponse,
   DailyPipelineStatusResponse,
+  DailyBoardPromotionStat,
   ContinuationStat,
   FailedRateStat,
   FirstBoardCriticResponse,
@@ -18,7 +21,6 @@ import type {
   PredictionQualityAuditResponse,
   RatingBacktestResponse,
   ReviewAgentReportResponse,
-  SimilarFirstBoardCasesResponse,
   StockCloseSnapshot,
   StockIntradayKLineBar,
   StockKLineBar,
@@ -64,6 +66,12 @@ export function fetchRecentLimitUpEvents(days = 3) {
 
 export function fetchContinuationStats() {
   return request<ContinuationStat[]>("/api/analysis/continuation");
+}
+
+export function fetchDailyBoardPromotion(days = 5) {
+  return request<DailyBoardPromotionStat[]>(
+    `/api/analysis/daily-promotion?days=${days}`,
+  );
 }
 
 export function fetchFailedRateStats() {
@@ -173,6 +181,36 @@ export function fetchAgentRuns(sessionId?: string, limit = 8) {
   return request<AgentRunsResponse>(`/api/agents/runs?${params.toString()}`);
 }
 
+export function fetchChatSessions(limit = 30) {
+  return request<ChatSessionsResponse>(`/api/agents/chat/sessions?limit=${limit}`);
+}
+
+export function fetchChatSession(sessionId: string) {
+  return request<ChatSessionDetail>(`/api/agents/chat/sessions/${sessionId}`);
+}
+
+export function createChatSession(title?: string) {
+  return request<ChatSessionDetail>("/api/agents/chat/sessions", {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title: title || null }),
+  });
+}
+
+export function renameChatSession(sessionId: string, title: string) {
+  return request<ChatSessionDetail>(`/api/agents/chat/sessions/${sessionId}`, {
+    method: "PATCH",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify({ title }),
+  });
+}
+
+export function deleteChatSession(sessionId: string) {
+  return request<{ deleted: boolean }>(`/api/agents/chat/sessions/${sessionId}`, {
+    method: "DELETE",
+  });
+}
+
 export function fetchFirstBoardCritic(symbol: string, tradeDate?: string) {
   const params = new URLSearchParams({ symbol });
   if (tradeDate) {
@@ -180,17 +218,6 @@ export function fetchFirstBoardCritic(symbol: string, tradeDate?: string) {
   }
   return request<FirstBoardCriticResponse>(
     `/api/agents/first-board-critic?${params.toString()}`,
-  );
-}
-
-export function fetchFirstBoardSimilarCases(symbol: string, tradeDate: string, limit = 5) {
-  const params = new URLSearchParams({
-    symbol,
-    trade_date: tradeDate,
-    limit: String(limit),
-  });
-  return request<SimilarFirstBoardCasesResponse>(
-    `/api/agents/first-board-similar-cases?${params.toString()}`,
   );
 }
 

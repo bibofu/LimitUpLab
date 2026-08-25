@@ -103,7 +103,6 @@ class FirstBoardAgentTest(unittest.TestCase):
             events=SAMPLE_EVENTS,
             symbol=rating.facts.symbol,
             trade_date=rating.facts.trade_date,
-            similar_limit=0,
         )
 
         self.assertEqual(critic.symbol, rating.facts.symbol)
