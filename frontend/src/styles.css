@@ -2474,6 +2474,39 @@ td span {
   color: #667085;
 }
 
+.rating-rule-signals {
+  display: grid;
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+  gap: 8px;
+}
+
+.rating-rule-signals > span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 10px 12px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.rating-rule-signals small {
+  color: #667085;
+  font-size: 11px;
+}
+
+.rating-rule-signals strong {
+  color: #344054;
+  font-size: 13px;
+  line-height: 1.4;
+}
+
+.rating-rule-signals em {
+  color: #98a2b3;
+  font-size: 11px;
+  font-style: normal;
+}
+
 .stock-position-detail {
   display: grid;
   gap: 10px;
@@ -4442,6 +4475,10 @@ td span {
 
   .rating-enrichment-facts {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .rating-rule-signals {
+    grid-template-columns: 1fr;
   }
 
   .quality-ready,

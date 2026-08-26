@@ -1,8 +1,9 @@
 import unittest
-from datetime import date, time
+from datetime import date, datetime, time, timezone
 
 from app.agents import build_first_board_ratings
-from app.models import LimitUpEvent
+from app.agents.first_board import _score_profile_and_history
+from app.models import FirstBoardEnrichmentSnapshot, LimitUpEvent
 from app.services.first_board_critic import build_first_board_critic
 from app.services.sample_data import SAMPLE_EVENTS
 
@@ -94,6 +95,57 @@ class FirstBoardAgentTest(unittest.TestCase):
         forbidden_terms = ["买入", "卖出", "仓位", "目标价", "收益承诺"]
         for term in forbidden_terms:
             self.assertNotIn(term, rendered)
+
+    def test_one_word_board_scores_below_intraday_limit_up(self) -> None:
+        one_word = make_event("002010", "一字板样本").model_copy(
+            update={
+                "first_limit_time": time(9, 25),
+                "last_limit_time": time(9, 25),
+            }
+        )
+        intraday = make_event("002011", "盘中上板样本")
+
+        response = build_first_board_ratings([one_word, intraday])
+        ratings = {item.facts.symbol: item for item in response.candidates}
+        one_word_rating = ratings["002010"]
+        intraday_rating = ratings["002011"]
+
+        self.assertTrue(one_word_rating.facts.is_one_word_board)
+        self.assertFalse(intraday_rating.facts.is_one_word_board)
+        self.assertLess(one_word_rating.score, intraday_rating.score)
+        self.assertIn(
+            "一字板缺少盘中换手与承接验证",
+            one_word_rating.risks,
+        )
+        timing = next(
+            item for item in one_word_rating.score_breakdown if item.name == "首封时间"
+        )
+        self.assertIn("一字板", "".join(timing.evidence))
+
+    def test_low_float_market_cap_scores_above_high_float_market_cap(self) -> None:
+        common = {
+            "trade_date": date(2026, 5, 16),
+            "feature_version": "test",
+            "created_at": datetime(2026, 5, 16, tzinfo=timezone.utc),
+            "recent_limit_up_count_20d": 1,
+        }
+        low_cap = FirstBoardEnrichmentSnapshot(
+            symbol="002010",
+            float_market_cap=3_000_000_000,
+            **common,
+        )
+        high_cap = FirstBoardEnrichmentSnapshot(
+            symbol="002011",
+            float_market_cap=80_000_000_000,
+            **common,
+        )
+
+        low_score = _score_profile_and_history(low_cap)
+        high_score = _score_profile_and_history(high_cap)
+
+        self.assertGreater(low_score.score, high_score.score)
+        self.assertIn("低市值", "".join(low_score.evidence))
+        self.assertIn("高市值", "".join(high_score.evidence))
 
     def test_first_board_critic_challenges_rating_without_changing_score(self) -> None:
         ratings = build_first_board_ratings(SAMPLE_EVENTS)

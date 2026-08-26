@@ -4,6 +4,8 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, Field, model_validator
 
+from app.agent_output_sanitizer import sanitize_agent_answer
+
 
 class LimitUpEvent(BaseModel):
     """One stock's daily limit-up or failed limit-up event."""
@@ -484,6 +486,7 @@ class FirstBoardCandidateFacts(BaseModel):
     seal_count: int
     break_count: int
     closed_limit: bool
+    is_one_word_board: bool = False
     board_height: int
     amount: float
     turnover_rate: float
@@ -1101,6 +1104,7 @@ class AgentChatResponse(BaseModel):
     def populate_agent_ui_fields(self) -> "AgentChatResponse":
         """Build UI evidence and planner audit fields when callers omit them."""
 
+        self.answer = sanitize_agent_answer(self.answer)
         if not self.evidence_cards:
             self.evidence_cards = build_agent_evidence_cards(self.tool_results, self.warnings)
         if not self.tool_policy.final_tool_calls:

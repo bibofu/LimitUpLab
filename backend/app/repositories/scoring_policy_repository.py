@@ -8,7 +8,10 @@ from pathlib import Path
 
 from app.database import connect, initialize_database
 from app.models import ScoringPolicy, ScoringPolicyOptimizationResponse
-from app.services.scoring_policy import build_default_scoring_policy
+from app.services.scoring_policy import (
+    LEGACY_DEFAULT_POLICY_VERSIONS,
+    build_default_scoring_policy,
+)
 
 
 class SQLiteScoringPolicyRepository:
@@ -21,11 +24,19 @@ class SQLiteScoringPolicyRepository:
         """Register the code-compatible baseline when the registry is empty."""
 
         champion = self.get_champion()
-        if champion is not None:
+        if champion is not None and not (
+            champion.source == "default"
+            and champion.version in LEGACY_DEFAULT_POLICY_VERSIONS
+        ):
             return champion
         policy = build_default_scoring_policy()
         self.upsert_policy(policy)
-        return policy
+        if champion is None:
+            return policy
+        return self.promote_policy(
+            policy.version,
+            activated_at=policy.activated_at,
+        )
 
     def upsert_policy(self, policy: ScoringPolicy) -> None:
         """Insert or update one immutable-version policy record."""

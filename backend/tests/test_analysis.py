@@ -67,9 +67,11 @@ class AnalysisTest(unittest.TestCase):
         self.assertEqual(symbols, ["600519", "002230"])
 
     def test_failed_events_list(self) -> None:
-        symbols = [event.symbol for event in list_failed_events(SAMPLE_EVENTS)]
+        events = list_failed_events(SAMPLE_EVENTS)
+        symbols = [event.symbol for event in events]
 
-        self.assertEqual(symbols, ["603083", "002050", "301489", "002230"])
+        self.assertEqual(symbols, ["603083", "002050"])
+        self.assertTrue(all(not event.closed_limit for event in events))
 
     def test_recent_limit_up_uses_trading_days(self) -> None:
         events = list_recent_limit_up(SAMPLE_EVENTS, days=2)

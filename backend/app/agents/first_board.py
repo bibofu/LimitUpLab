@@ -111,6 +111,7 @@ def build_first_board_candidate_facts(
         seal_count=event.seal_count,
         break_count=event.break_count,
         closed_limit=event.closed_limit,
+        is_one_word_board=_is_one_word_board(event),
         board_height=event.board_height,
         amount=event.amount,
         turnover_rate=event.turnover_rate,
@@ -174,7 +175,10 @@ def _rate_candidate(
     """Score one first-board candidate with transparent factor weights."""
 
     base_breakdown = [
-        _score_first_limit_time(facts.first_limit_time),
+        _score_first_limit_time(
+            facts.first_limit_time,
+            is_one_word_board=facts.is_one_word_board,
+        ),
         _score_seal_stability(facts.break_count, facts.closed_limit),
         _score_seal_pressure(facts.seal_count),
         _score_turnover(facts.turnover_rate),
@@ -359,13 +363,22 @@ def _score_profile_and_history(
     market_cap = enrichment.float_market_cap
     if market_cap is not None:
         cap_yi = market_cap / 100_000_000
-        if 20 <= cap_yi <= 200:
+        if cap_yi <= 50:
             score += 3
-        elif 10 <= cap_yi < 20 or 200 < cap_yi <= 500:
+            cap_label = "低市值，短线弹性相对较高"
+        elif cap_yi <= 100:
+            score += 2.5
+            cap_label = "中小市值"
+        elif cap_yi <= 200:
             score += 2
-        else:
+            cap_label = "中等市值"
+        elif cap_yi <= 500:
             score += 1
-        evidence.append(f"估算流通市值 {cap_yi:.1f} 亿元")
+            cap_label = "市值偏高"
+        else:
+            score += 0.5
+            cap_label = "高市值，短线弹性相对受限"
+        evidence.append(f"估算流通市值 {cap_yi:.1f} 亿元，{cap_label}")
     count_20d = enrichment.recent_limit_up_count_20d
     if 2 <= count_20d <= 4:
         score += 2
@@ -462,11 +475,17 @@ def _score_popularity(
     )
 
 
-def _score_first_limit_time(value: time) -> ScoreBreakdownItem:
-    """Score earlier first seals higher than late-day seals."""
+def _score_first_limit_time(
+    value: time,
+    *,
+    is_one_word_board: bool = False,
+) -> ScoreBreakdownItem:
+    """Score intraday seals above inaccessible one-word limit-up boards."""
 
     minutes = value.hour * 60 + value.minute
-    if minutes <= 9 * 60 + 45:
+    if is_one_word_board:
+        score, label = 10, "竞价封死的一字板，缺少盘中换手与承接验证"
+    elif minutes <= 9 * 60 + 45:
         score, label = 25, "首次封板处于早盘强势区间"
     elif minutes <= 10 * 60 + 30:
         score, label = 20, "首次封板处于早盘偏强区间"
@@ -660,7 +679,7 @@ def _build_reasons(facts: FirstBoardCandidateFacts) -> list[str]:
     """Build concise positive observations from candidate facts."""
 
     reasons: list[str] = []
-    if facts.first_limit_time <= time(9, 45):
+    if facts.first_limit_time <= time(9, 45) and not facts.is_one_word_board:
         reasons.append("首封时间较早")
     if facts.break_count == 0:
         reasons.append("炸板次数为 0")
@@ -679,6 +698,12 @@ def _build_reasons(facts: FirstBoardCandidateFacts) -> list[str]:
         reasons.append("龙虎榜呈净买入")
     if enrichment and enrichment.popularity_rank is not None and enrichment.popularity_rank <= 20:
         reasons.append("东方财富人气排名靠前")
+    if (
+        enrichment
+        and enrichment.float_market_cap is not None
+        and enrichment.float_market_cap <= 5_000_000_000
+    ):
+        reasons.append("流通市值较低，短线弹性相对较高")
 
     return (reasons or ["首板基础条件满足，但优势信号不突出"])[:7]
 
@@ -689,6 +714,8 @@ def _build_risks(facts: FirstBoardCandidateFacts) -> list[str]:
     risks: list[str] = []
     if facts.data_missing:
         risks.append(f"缺失字段：{', '.join(facts.data_missing)}")
+    if facts.is_one_word_board:
+        risks.append("一字板缺少盘中换手与承接验证")
     if facts.break_count > 0:
         risks.append(f"盘中炸板 {facts.break_count} 次")
     if facts.seal_count >= 4:
@@ -706,6 +733,10 @@ def _build_risks(facts: FirstBoardCandidateFacts) -> list[str]:
         risks.append("近 20 日累计涨幅较高，存在过热风险")
     if enrichment and enrichment.recent_limit_up_count_20d >= 5:
         risks.append("近期涨停频繁，情绪拥挤度偏高")
+    if enrichment and enrichment.float_market_cap is not None:
+        cap_yi = enrichment.float_market_cap / 100_000_000
+        if cap_yi > 500:
+            risks.append("流通市值较高，短线弹性可能受限")
     if enrichment and enrichment.dragon_tiger_net_buy_amount is not None and enrichment.dragon_tiger_net_buy_amount < 0:
         risks.append("龙虎榜呈净卖出")
     if enrichment and enrichment.popularity_rank is not None and enrichment.popularity_rank <= 5:
@@ -718,6 +749,19 @@ def _build_risks(facts: FirstBoardCandidateFacts) -> list[str]:
         risks.append("昨日首板晋级率偏低")
 
     return (risks or ["未触发明显风险标签"])[:7]
+
+
+def _is_one_word_board(event: LimitUpEvent) -> bool:
+    """Infer an unbroken one-word board from auction seal facts."""
+
+    auction_time = time(9, 25)
+    return (
+        event.closed_limit
+        and event.break_count == 0
+        and event.seal_count == 1
+        and event.first_limit_time == auction_time
+        and event.last_limit_time == auction_time
+    )
 
 
 def _is_risk_warning_name(name: str) -> bool:

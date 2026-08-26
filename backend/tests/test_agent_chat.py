@@ -497,7 +497,7 @@ class AgentChatTest(unittest.TestCase):
             [stage for stage, _ in progress],
             ["planning", "tools", "answering"],
         )
-        self.assertEqual(len(deltas), 1)
+        self.assertTrue(deltas)
         self.assertIn("301489", "".join(deltas))
         self.assertIn("".join(deltas), response.answer)
 

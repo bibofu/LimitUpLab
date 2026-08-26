@@ -2784,6 +2784,17 @@ function FirstBoardCriticPanel({
 function FirstBoardRatingDetail({ rating }: { rating: FirstBoardRating }) {
   /** Render explainable first-board score details for the selected stock. */
 
+  const timingScore = rating.score_breakdown.find((item) => item.name === "首封时间");
+  const profileScore = rating.score_breakdown.find((item) => item.name === "流通盘与近期股性");
+  const floatMarketCap = rating.facts.enrichment?.float_market_cap;
+  const capRule = floatMarketCap === null || floatMarketCap === undefined
+    ? "流通市值数据缺失"
+    : floatMarketCap <= 5_000_000_000
+      ? "低市值档，因子加分"
+      : floatMarketCap > 50_000_000_000
+        ? "高市值档，因子降分"
+        : "中间市值档，按区间评分";
+
   return (
     <Panel title="Agent 评分拆解" icon={<BarChart3 size={18} />}>
       <div className="rating-detail">
@@ -2795,6 +2806,27 @@ function FirstBoardRatingDetail({ rating }: { rating: FirstBoardRating }) {
             <strong>{rating.score.toFixed(1)}</strong>
             <span>置信度 {formatPercent(rating.confidence)}</span>
           </div>
+        </div>
+
+        <div className="rating-rule-signals" aria-label="评分规则信号">
+          <span>
+            <small>上板形态规则</small>
+            <strong>
+              {rating.facts.is_one_word_board
+                ? "一字板，首封评分降档"
+                : "盘中上板，按首封时间评分"}
+            </strong>
+            {timingScore ? (
+              <em>{timingScore.score.toFixed(1)} / {timingScore.max_score.toFixed(1)}</em>
+            ) : null}
+          </span>
+          <span>
+            <small>市值偏好规则</small>
+            <strong>{capRule}</strong>
+            {profileScore ? (
+              <em>流通盘因子 {profileScore.score.toFixed(1)} / {profileScore.max_score.toFixed(1)}</em>
+            ) : null}
+          </span>
         </div>
 
         {rating.facts.enrichment ? (

@@ -7,7 +7,8 @@ from datetime import datetime, timezone
 from app.models import ScoringPolicy
 
 
-DEFAULT_SCORING_POLICY_VERSION = "first-board-rule-v2-enriched"
+DEFAULT_SCORING_POLICY_VERSION = "first-board-rule-v3-board-shape-small-cap"
+LEGACY_DEFAULT_POLICY_VERSIONS = frozenset({"first-board-rule-v2-enriched"})
 SCORING_POLICY_REGISTRY_VERSION = "scoring-policy-registry-v1"
 
 FACTOR_NAMES: dict[str, str] = {
@@ -49,13 +50,16 @@ def build_default_scoring_policy() -> ScoringPolicy:
 
     return ScoringPolicy(
         version=DEFAULT_SCORING_POLICY_VERSION,
-        parent_version=None,
+        parent_version="first-board-rule-v2-enriched",
         status="champion",
         factor_weights=dict(DEFAULT_FACTOR_WEIGHTS),
         source="default",
-        rationale=["Reproduces the original enriched 65/35 scoring formula."],
-        created_at=datetime(2026, 8, 19, tzinfo=timezone.utc),
-        activated_at=datetime(2026, 8, 19, tzinfo=timezone.utc),
+        rationale=[
+            "Penalizes unbroken one-word boards versus intraday limit-up moves.",
+            "Scores smaller float market caps above larger float market caps.",
+        ],
+        created_at=datetime(2026, 8, 26, tzinfo=timezone.utc),
+        activated_at=datetime(2026, 8, 26, tzinfo=timezone.utc),
     )
 
 

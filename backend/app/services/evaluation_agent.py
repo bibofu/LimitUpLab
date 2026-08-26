@@ -34,11 +34,8 @@ def build_agent_evaluation(
         champion.version if champion else DEFAULT_SCORING_POLICY_VERSION
     )
     predictions = _prefer_live_predictions(
-        repository.list_predictions_between(
-            start_date,
-            end_date,
-            scoring_version=scoring_version,
-        )
+        repository.list_predictions_between(start_date, end_date),
+        preferred_scoring_version=scoring_version,
     )
     outcomes = {
         (outcome.base_trade_date, outcome.symbol): outcome
@@ -300,18 +297,46 @@ def _build_warnings(
     return warnings
 
 
-def _prefer_live_predictions(predictions: list[AgentPrediction]) -> list[AgentPrediction]:
-    """Deduplicate snapshots while preferring genuine live predictions."""
+def _prefer_live_predictions(
+    predictions: list[AgentPrediction],
+    *,
+    preferred_scoring_version: str | None = None,
+) -> list[AgentPrediction]:
+    """Select one auditable snapshot per stock and date across policy versions.
 
-    selected: dict[tuple[date, str, str], AgentPrediction] = {}
+    A policy upgrade must not make earlier live predictions disappear from the
+    review. Genuine forward predictions therefore outrank historical backtests;
+    the preferred policy version is only used to break ties within one source.
+    """
+
+    selected: dict[tuple[date, str], AgentPrediction] = {}
     for prediction in predictions:
-        key = (prediction.trade_date, prediction.symbol, prediction.scoring_version)
+        key = (prediction.trade_date, prediction.symbol)
         current = selected.get(key)
-        if current is None or (
-            current.prediction_source != "live" and prediction.prediction_source == "live"
+        if current is None or _prediction_preference(
+            prediction,
+            preferred_scoring_version=preferred_scoring_version,
+        ) > _prediction_preference(
+            current,
+            preferred_scoring_version=preferred_scoring_version,
         ):
             selected[key] = prediction
     return sorted(
         selected.values(),
         key=lambda item: (item.trade_date, -item.score, item.symbol),
+    )
+
+
+def _prediction_preference(
+    prediction: AgentPrediction,
+    *,
+    preferred_scoring_version: str | None,
+) -> tuple[int, int, datetime, str]:
+    """Return deterministic precedence without confusing backtests with live picks."""
+
+    return (
+        int(prediction.prediction_source == "live"),
+        int(prediction.scoring_version == preferred_scoring_version),
+        prediction.created_at,
+        prediction.scoring_version,
     )

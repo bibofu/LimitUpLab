@@ -221,7 +221,10 @@ class AgentToolPolicyTest(unittest.TestCase):
 
         self.assertEqual(repaired, ["prediction_quality_audit"])
         payload = execution["facts"]["prediction_quality_audit"]
-        self.assertEqual(payload["audited_scoring_version"], "first-board-rule-v2-enriched")
+        self.assertEqual(
+            payload["audited_scoring_version"],
+            "first-board-rule-v3-board-shape-small-cap",
+        )
         self.assertEqual(payload["policy_status"]["required_trade_dates"], 60)
 
     def test_missing_date_short_circuits_domain_tools(self) -> None:

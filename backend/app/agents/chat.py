@@ -8,6 +8,10 @@ from time import perf_counter
 from typing import Any, Callable
 
 from app.agents.explanation import explain_first_board_rating
+from app.agent_output_sanitizer import (
+    AgentAnswerStreamSanitizer,
+    friendly_tool_label,
+)
 from app.agents.query_contract import (
     MARKET_SEGMENT_LABELS,
     build_limit_up_query_contract,
@@ -494,7 +498,9 @@ def _answer_with_llm_tool_agent(
     tools_started_at = perf_counter()
     if progress_callback:
         selected_tools = "、".join(
-            str(call.get("name")) for call in tool_calls if call.get("name")
+            friendly_tool_label(str(call.get("name")))
+            for call in tool_calls
+            if call.get("name")
         )
         progress_callback(
             "tools",
@@ -557,11 +563,13 @@ def _answer_with_llm_tool_agent(
     else:
         try:
             if answer_delta_callback:
+                stream_sanitizer = AgentAnswerStreamSanitizer(answer_delta_callback)
                 final_result = active_provider.stream_generate(
                     answer_system_prompt,
                     answer_user_prompt,
-                    answer_delta_callback,
+                    stream_sanitizer.feed,
                 )
+                stream_sanitizer.flush()
             else:
                 final_result = active_provider.generate(
                     answer_system_prompt,
@@ -1143,7 +1151,11 @@ def _tool_answer_system_prompt(
         "Historical similar-case retrieval is retired; never invent or infer a similar stock or case from the available facts. "
         "When mentioning dates, include ISO format YYYY-MM-DD even if also using Chinese date wording. "
         "If the facts are insufficient, say exactly what is missing and what tool/data "
-        "would be needed. Keep the answer concise, structured, and useful. "
+        "would be needed. Never expose internal tool names, function names, fact keys, "
+        "planner details, schemas, or implementation identifiers to the user. Describe "
+        "evidence in business language such as local market data, promotion statistics, "
+        "K-line data, or public information, without saying which internal tool produced it. "
+        "Keep the answer concise, structured, and useful. "
         "Do not provide direct trading instructions, position sizing, target prices, "
         "or return promises."
         f"{exhaustive_instruction}{position_instruction}"
@@ -1162,11 +1174,6 @@ def _tool_answer_user_prompt(
         "user_question": request.message,
         "conversation_history": context.conversation_history,
         "intent": tool_plan.get("intent_label"),
-        "tools_used": [
-            call.get("name")
-            for call in tool_plan.get("tool_calls", [])
-            if isinstance(call, dict)
-        ],
         "executed_tool_facts": facts,
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))

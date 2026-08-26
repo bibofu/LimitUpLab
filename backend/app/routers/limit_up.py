@@ -42,7 +42,7 @@ def list_continued_board_events() -> list[LimitUpEvent]:
 
 @router.get("/failed", response_model=list[LimitUpEvent])
 def list_failed_limit_up_events() -> list[LimitUpEvent]:
-    """Return latest-day events that had at least one intraday break."""
+    """Return latest-day stocks that failed to close at limit-up."""
 
     return list_failed_events(get_limit_up_repository().list_events())
 

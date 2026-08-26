@@ -186,6 +186,7 @@ export interface FirstBoardCandidateFacts {
   seal_count: number;
   break_count: number;
   closed_limit: boolean;
+  is_one_word_board: boolean;
   board_height: number;
   amount: number;
   turnover_rate: number;

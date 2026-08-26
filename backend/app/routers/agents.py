@@ -16,6 +16,7 @@ from fastapi.responses import StreamingResponse
 
 from app.agents import answer_first_board_chat, build_first_board_ratings, build_review_agent_report
 from app.agents.eval_runner import eval_suite_report, load_eval_cases, run_agent_eval_suite
+from app.collectors import HithinkFinanceError
 from app.models import (
     AgentChatRequest,
     AgentChatResponse,
@@ -54,6 +55,7 @@ from app.repositories import (
 from app.services.data_health import build_agent_data_health
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.first_board_critic import build_first_board_critic
+from app.services.dragon_tiger_review import load_dragon_tiger_review
 from app.services.llm_provider import DisabledLLMProvider
 from app.services.prediction_quality_audit import build_prediction_quality_audit
 from app.services.rating_backtest import build_rating_backtest
@@ -80,6 +82,15 @@ def get_first_board_ratings(
     events = get_limit_up_repository().list_events()
     resolved_trade_date = _resolve_trade_date(events, trade_date)
     first_board_repository = SQLiteFirstBoardRepository()
+    if resolved_trade_date is not None:
+        try:
+            load_dragon_tiger_review(
+                events,
+                trade_date=resolved_trade_date,
+                repository=first_board_repository,
+            )
+        except HithinkFinanceError:
+            pass
     policy_repository = SQLiteScoringPolicyRepository(
         first_board_repository.database_path
     )

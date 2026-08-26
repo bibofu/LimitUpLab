@@ -141,10 +141,10 @@ def list_continued_board(events: list[LimitUpEvent]) -> list[LimitUpEvent]:
 
 
 def list_failed_events(events: list[LimitUpEvent]) -> list[LimitUpEvent]:
-    """Return latest-day events with intraday breaks, sorted by break pressure."""
+    """Return latest-day stocks that touched limit-up but did not close there."""
 
     return sorted(
-        [event for event in events_for_date(events) if event.break_count > 0],
+        [event for event in events_for_date(events) if not event.closed_limit],
         key=lambda event: (-event.break_count, event.first_limit_time),
     )
 

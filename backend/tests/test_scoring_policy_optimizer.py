@@ -54,6 +54,34 @@ class ScoringPolicyOptimizerTest(unittest.TestCase):
         self.assertEqual(challenger_response.generated_by, "test-challenger")
         self.assertNotEqual(challenger_response.candidates[0].score, baseline_score)
 
+    def test_legacy_default_champion_migrates_to_current_default(self) -> None:
+        database_path = (
+            Path(__file__).resolve().parents[1]
+            / f"scoring-policy-migration-{uuid4().hex}.sqlite"
+        )
+        self.addCleanup(self._cleanup_database, database_path)
+        repository = SQLiteScoringPolicyRepository(database_path)
+        current = build_default_scoring_policy()
+        legacy = current.model_copy(
+            update={
+                "version": "first-board-rule-v2-enriched",
+                "parent_version": None,
+                "source": "default",
+                "created_at": datetime(2026, 8, 19, tzinfo=timezone.utc),
+                "activated_at": datetime(2026, 8, 19, tzinfo=timezone.utc),
+            }
+        )
+        repository.upsert_policy(legacy)
+
+        migrated = repository.ensure_default_policy()
+
+        self.assertEqual(migrated.version, current.version)
+        self.assertEqual(repository.get_champion().version, current.version)
+        self.assertEqual(
+            repository.get_policy(legacy.version).status,
+            "archived",
+        )
+
     def test_walk_forward_registers_but_does_not_promote_thin_sample(self) -> None:
         database_path = (
             Path(__file__).resolve().parents[1]

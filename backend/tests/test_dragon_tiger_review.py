@@ -1,11 +1,14 @@
-from datetime import date, time
+from datetime import date, datetime, time, timezone
 
 from app.collectors.hithink_finance_collector import (
     HithinkDragonTigerFact,
     HithinkDragonTigerSnapshot,
 )
-from app.models import LimitUpEvent
-from app.services.dragon_tiger_review import build_dragon_tiger_review
+from app.models import FirstBoardEnrichmentSnapshot, LimitUpEvent
+from app.services.dragon_tiger_review import (
+    build_dragon_tiger_review,
+    merge_dragon_tiger_review_enrichments,
+)
 
 
 def _fact(
@@ -13,13 +16,14 @@ def _fact(
     *,
     net_buy_amount: float,
     range_days: int,
+    name: str | None = None,
     organization_net_buy_amount: float | None = None,
     hot_money_net_buy_amount: float | None = None,
 ) -> HithinkDragonTigerFact:
     return HithinkDragonTigerFact(
         symbol=symbol,
         thscode=f"{symbol}.SZ",
-        name=f"股票{symbol}",
+        name=f"股票{symbol}" if name is None else name,
         change_pct=10.0,
         buy_amount=200.0,
         sell_amount=100.0,
@@ -102,3 +106,71 @@ def test_build_dragon_tiger_review_deduplicates_and_links_local_event() -> None:
     assert {item.symbol for item in response.items}.isdisjoint(
         {"111026", "688169", "830001"}
     )
+
+
+def test_build_dragon_tiger_review_excludes_st_names() -> None:
+    snapshot = HithinkDragonTigerSnapshot(
+        trade_date=date(2026, 8, 25),
+        board_type="all",
+        stock_count=4,
+        items=[
+            _fact("000001", name="正常股份", net_buy_amount=100.0, range_days=1),
+            _fact("000002", name="ST风险", net_buy_amount=90.0, range_days=1),
+            _fact("000003", name="*ST退市", net_buy_amount=80.0, range_days=1),
+            _fact("000004", name="", net_buy_amount=70.0, range_days=1),
+        ],
+    )
+    local_st_event = _event("000004").model_copy(update={"name": "ST本地样本"})
+
+    response = build_dragon_tiger_review(
+        snapshot,
+        [local_st_event],
+        trade_date=date(2026, 8, 25),
+    )
+
+    assert response.stock_count == 1
+    assert [item.symbol for item in response.items] == ["000001"]
+
+
+def test_merge_dragon_tiger_review_enrichments_updates_matching_snapshot() -> None:
+    response = build_dragon_tiger_review(
+        HithinkDragonTigerSnapshot(
+            trade_date=date(2026, 8, 25),
+            board_type="all",
+            stock_count=1,
+            items=[
+                _fact(
+                    "000001",
+                    name="正常股份",
+                    net_buy_amount=120.0,
+                    range_days=1,
+                )
+            ],
+        ),
+        [_event("000001")],
+        trade_date=date(2026, 8, 25),
+    )
+    original_time = datetime(2026, 8, 25, 8, tzinfo=timezone.utc)
+    refreshed_time = datetime(2026, 8, 25, 10, tzinfo=timezone.utc)
+    enrichment = FirstBoardEnrichmentSnapshot(
+        trade_date=date(2026, 8, 25),
+        symbol="000001",
+        feature_version="test",
+        created_at=original_time,
+    )
+
+    updates = merge_dragon_tiger_review_enrichments(
+        response,
+        [enrichment],
+        refreshed_at=refreshed_time,
+    )
+
+    assert len(updates) == 1
+    assert updates[0].dragon_tiger_on_list is True
+    assert updates[0].dragon_tiger_net_buy_amount == 120.0
+    assert updates[0].dragon_tiger_buy_amount == 200.0
+    assert updates[0].dragon_tiger_sell_amount == 100.0
+    assert updates[0].dragon_tiger_reason == "日涨幅偏离值达7%"
+    assert updates[0].dragon_tiger_source == "hithink-finance"
+    assert updates[0].created_at == refreshed_time
+    assert enrichment.dragon_tiger_on_list is False
