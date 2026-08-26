@@ -7,7 +7,13 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.database import connect, initialize_database
-from app.models import ChatSessionDetail, ChatSessionMessage, ChatSessionSummary
+from app.models import (
+    AgentToolTrace,
+    ChatSessionDetail,
+    ChatSessionMessage,
+    ChatSessionSummary,
+    extract_agent_stock_mentions,
+)
 
 
 LOCAL_OWNER_ID = "local-user"
@@ -326,6 +332,23 @@ def _session_summary_from_row(row: sqlite3.Row) -> ChatSessionSummary:
 
 
 def _message_from_row(row: sqlite3.Row) -> ChatSessionMessage:
+    metadata = json.loads(row["metadata_json"] or "{}")
+    if (
+        row["role"] == "assistant"
+        and not metadata.get("stock_mentions")
+        and isinstance(metadata.get("tool_results"), list)
+    ):
+        try:
+            traces = [
+                AgentToolTrace.model_validate(item)
+                for item in metadata["tool_results"]
+            ]
+            metadata["stock_mentions"] = [
+                item.model_dump(mode="json")
+                for item in extract_agent_stock_mentions(row["content"], traces)
+            ]
+        except (TypeError, ValueError):
+            metadata["stock_mentions"] = []
     return ChatSessionMessage(
         message_id=row["message_id"],
         session_id=row["session_id"],
@@ -333,6 +356,6 @@ def _message_from_row(row: sqlite3.Row) -> ChatSessionMessage:
         content=row["content"],
         status=row["status"],
         run_id=row["run_id"],
-        metadata=json.loads(row["metadata_json"] or "{}"),
+        metadata=metadata,
         created_at=datetime.fromisoformat(row["created_at"]),
     )

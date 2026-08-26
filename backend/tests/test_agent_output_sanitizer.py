@@ -7,7 +7,7 @@ from app.agent_output_sanitizer import (
     sanitize_agent_answer,
 )
 from app.agents.tools import TOOL_SCHEMAS
-from app.models import AgentChatResponse
+from app.models import AgentChatResponse, AgentToolTrace
 
 
 class AgentOutputSanitizerTest(unittest.TestCase):
@@ -54,6 +54,47 @@ class AgentOutputSanitizerTest(unittest.TestCase):
         registered_names = {schema.name for schema in TOOL_SCHEMAS}
 
         self.assertEqual(registered_names - INTERNAL_TOOL_LABELS.keys(), set())
+
+    def test_agent_response_extracts_grounded_stock_mentions(self) -> None:
+        response = AgentChatResponse(
+            session_id="stock-links",
+            intent="limit_up_events",
+            answer="今天中电鑫龙(002298)和贵州茅台(600519)值得关注。",
+            tool_results=[
+                AgentToolTrace(
+                    name="limit_up_events",
+                    summary="返回两只股票",
+                    output={
+                        "trade_date": "2026-08-27",
+                        "events": [
+                            {"name": "中电鑫龙", "symbol": "002298"},
+                            {"name": "贵州茅台", "symbol": "600519"},
+                            {"name": "未被回答提及", "symbol": "000001"},
+                        ],
+                    },
+                )
+            ],
+            generated_by="test",
+        )
+
+        self.assertEqual(
+            [item.model_dump(mode="json") for item in response.stock_mentions],
+            [
+                {"name": "中电鑫龙", "symbol": "002298", "trade_date": "2026-08-27"},
+                {"name": "贵州茅台", "symbol": "600519", "trade_date": "2026-08-27"},
+            ],
+        )
+
+    def test_agent_response_does_not_link_unverified_llm_stock(self) -> None:
+        response = AgentChatResponse(
+            session_id="stock-links",
+            intent="general",
+            answer="模型单独提到了虚构股票(123456)。",
+            tool_results=[],
+            generated_by="test",
+        )
+
+        self.assertEqual(response.stock_mentions, [])
 
 
 if __name__ == "__main__":

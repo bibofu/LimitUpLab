@@ -594,6 +594,12 @@ export interface AgentChatRequest {
   page_context?: Record<string, string>;
 }
 
+export interface AgentStockMention {
+  name: string;
+  symbol: string;
+  trade_date: string | null;
+}
+
 export interface ChatSessionMessage {
   message_id: string;
   session_id: string;
@@ -629,6 +635,7 @@ export interface AgentChatResponse {
   run_id: string | null;
   intent: string;
   answer: string;
+  stock_mentions: AgentStockMention[];
   tool_calls: string[];
   tool_results: AgentToolTrace[];
   evidence_cards: AgentEvidenceCard[];

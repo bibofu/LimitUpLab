@@ -1084,6 +1084,14 @@ class AgentToolPolicyAudit(BaseModel):
     safety_fallback_used: bool = False
 
 
+class AgentStockMention(BaseModel):
+    """A stock entity in an Agent answer, grounded by executed tool facts."""
+
+    name: str
+    symbol: str
+    trade_date: date | None = None
+
+
 class AgentChatResponse(BaseModel):
     """Tool-grounded chat response from the first-board Agent."""
 
@@ -1091,6 +1099,7 @@ class AgentChatResponse(BaseModel):
     run_id: str | None = None
     intent: str
     answer: str
+    stock_mentions: list[AgentStockMention] = Field(default_factory=list)
     tool_calls: list[str] = Field(default_factory=list)
     tool_results: list["AgentToolTrace"] = Field(default_factory=list)
     evidence_cards: list[AgentEvidenceCard] = Field(default_factory=list)
@@ -1105,6 +1114,11 @@ class AgentChatResponse(BaseModel):
         """Build UI evidence and planner audit fields when callers omit them."""
 
         self.answer = sanitize_agent_answer(self.answer)
+        if not self.stock_mentions:
+            self.stock_mentions = extract_agent_stock_mentions(
+                self.answer,
+                self.tool_results,
+            )
         if not self.evidence_cards:
             self.evidence_cards = build_agent_evidence_cards(self.tool_results, self.warnings)
         if not self.tool_policy.final_tool_calls:
@@ -1126,6 +1140,71 @@ class AgentToolTrace(BaseModel):
     output: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
     duration_ms: int | None = None
+
+
+def extract_agent_stock_mentions(
+    answer: str,
+    tool_results: list[AgentToolTrace],
+) -> list[AgentStockMention]:
+    """Find answer stocks from structured tool outputs without trusting LLM URLs."""
+
+    mentions: dict[tuple[str, str], AgentStockMention] = {}
+
+    def visit(value: Any, inherited_trade_date: date | None = None) -> None:
+        if isinstance(value, list):
+            for item in value:
+                visit(item, inherited_trade_date)
+            return
+        if not isinstance(value, dict):
+            return
+
+        trade_date = _agent_mention_trade_date(value, inherited_trade_date)
+        raw_symbol = str(value.get("symbol") or "").strip()
+        symbol = raw_symbol.zfill(6) if raw_symbol.isdigit() else ""
+        name = str(value.get("name") or "").strip()
+        if (
+            len(symbol) == 6
+            and 1 < len(name) <= 20
+            and name != symbol
+            and name in answer
+        ):
+            key = (symbol, name)
+            existing = mentions.get(key)
+            if existing is None or (existing.trade_date is None and trade_date is not None):
+                mentions[key] = AgentStockMention(
+                    name=name,
+                    symbol=symbol,
+                    trade_date=trade_date,
+                )
+
+        for child in value.values():
+            visit(child, trade_date)
+
+    for trace in tool_results:
+        visit(trace.output)
+
+    return sorted(
+        mentions.values(),
+        key=lambda item: (-len(item.name), item.symbol),
+    )
+
+
+def _agent_mention_trade_date(
+    value: dict[str, Any],
+    fallback: date | None,
+) -> date | None:
+    """Resolve the nearest business date attached to a stock-shaped tool fact."""
+
+    for key in ("trade_date", "base_trade_date", "detail_trade_date", "data_as_of"):
+        raw = value.get(key)
+        if isinstance(raw, date):
+            return raw
+        if isinstance(raw, str):
+            try:
+                return date.fromisoformat(raw[:10])
+            except ValueError:
+                continue
+    return fallback
 
 
 def build_agent_tool_policy_audit(

@@ -93,6 +93,50 @@ class ChatSessionRepositoryTest(unittest.TestCase):
         self.assertEqual(remaining_runs, [])
         self.assertEqual(remaining_message_count, 0)
 
+    def test_old_agent_message_backfills_grounded_stock_mentions(self) -> None:
+        database_path = Path(__file__).resolve().parents[1] / ".test_chat_stock_links.sqlite"
+        if database_path.exists():
+            database_path.unlink()
+        repository = SQLiteChatSessionRepository(database_path)
+        created_at = datetime(2026, 8, 27, 8, 0, tzinfo=timezone.utc)
+        try:
+            repository.create_session(session_id="legacy-stock-links")
+            repository.append_message(
+                ChatSessionMessage(
+                    message_id="legacy-answer",
+                    session_id="legacy-stock-links",
+                    role="assistant",
+                    content="新中港(605162)评分靠前。",
+                    metadata={
+                        "tool_results": [
+                            {
+                                "name": "first_board_ratings",
+                                "summary": "首板评分",
+                                "output": {
+                                    "trade_date": "2026-08-26",
+                                    "top_candidates": [
+                                        {"name": "新中港", "symbol": "605162"}
+                                    ],
+                                },
+                            }
+                        ]
+                    },
+                    created_at=created_at,
+                )
+            )
+
+            detail = repository.get_session("legacy-stock-links")
+        finally:
+            if database_path.exists():
+                database_path.unlink()
+
+        self.assertIsNotNone(detail)
+        mentions = detail.messages[0].metadata["stock_mentions"]
+        self.assertEqual(
+            mentions,
+            [{"name": "新中港", "symbol": "605162", "trade_date": "2026-08-26"}],
+        )
+
 
 if __name__ == "__main__":
     unittest.main()

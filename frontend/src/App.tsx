@@ -22,7 +22,6 @@
 } from "lucide-react";
 import type { ReactNode } from "react";
 import { useEffect, useMemo, useRef, useState } from "react";
-import ReactMarkdown from "react-markdown";
 import {
   Link,
   NavLink,
@@ -34,8 +33,8 @@ import {
   useParams,
   useSearchParams,
 } from "react-router-dom";
-import remarkGfm from "remark-gfm";
 
+import { AgentAnswerMarkdown } from "./components/AgentAnswerMarkdown";
 import {
   MarketKLineChart,
   type MarketCandleBar,
@@ -70,6 +69,7 @@ import {
 } from "./api";
 import type {
   AgentChatStreamStage,
+  AgentStockMention,
   AgentDataHealthResponse,
   AgentEvaluationResponse,
   AgentSystemHealthResponse,
@@ -116,6 +116,7 @@ interface ChatMessage {
   id: string;
   role: "user" | "agent";
   content: string;
+  stockMentions: AgentStockMention[];
   status?: "success" | "error";
 }
 
@@ -126,8 +127,27 @@ function restoredChatMessage(message: ChatSessionMessage): ChatMessage {
     id: message.message_id,
     role: message.role === "assistant" ? "agent" : "user",
     content: message.content,
+    stockMentions: stockMentionsFromMetadata(message.metadata),
     status: message.status,
   };
+}
+
+function stockMentionsFromMetadata(metadata: Record<string, unknown>): AgentStockMention[] {
+  const value = metadata.stock_mentions;
+  if (!Array.isArray(value)) {
+    return [];
+  }
+  return value.filter((item): item is AgentStockMention => {
+    if (!item || typeof item !== "object") {
+      return false;
+    }
+    const candidate = item as Record<string, unknown>;
+    return (
+      typeof candidate.name === "string"
+      && typeof candidate.symbol === "string"
+      && (candidate.trade_date === null || typeof candidate.trade_date === "string")
+    );
+  });
 }
 
 function sessionTimeLabel(value: string) {
@@ -343,6 +363,7 @@ function AgentChatDock({
       id: userMessageId,
       role: "user",
       content: trimmed,
+      stockMentions: [],
     };
     setMessages((current) => [
       ...current,
@@ -389,7 +410,7 @@ function AgentChatDock({
             receivedAnswer = true;
             return [
               ...current,
-              { id: agentMessageId, role: "agent", content: delta },
+              { id: agentMessageId, role: "agent", content: delta, stockMentions: [] },
             ];
           });
         }
@@ -399,7 +420,11 @@ function AgentChatDock({
         if (existing || receivedAnswer) {
           return current.map((item) => (
             item.id === agentMessageId
-              ? { ...item, content: response.answer }
+              ? {
+                  ...item,
+                  content: response.answer,
+                  stockMentions: response.stock_mentions,
+                }
               : item
           ));
         }
@@ -409,6 +434,7 @@ function AgentChatDock({
             id: agentMessageId,
             role: "agent",
             content: response.answer,
+            stockMentions: response.stock_mentions,
           },
         ];
       });
@@ -562,9 +588,10 @@ function AgentChatDock({
             >
               {item.role === "agent" ? (
                 <div className="chat-markdown">
-                  <ReactMarkdown remarkPlugins={[remarkGfm]}>
-                    {item.content}
-                  </ReactMarkdown>
+                  <AgentAnswerMarkdown
+                    content={item.content}
+                    stockMentions={item.stockMentions}
+                  />
                 </div>
               ) : (
                 <p>{item.content}</p>
@@ -2428,6 +2455,7 @@ function StockDetail({ data }: { data: DashboardData }) {
   const { symbol = "" } = useParams();
   const [searchParams] = useSearchParams();
   const requestedTradeDate = searchParams.get("trade_date") ?? undefined;
+  const linkedStockName = searchParams.get("name")?.trim() ?? "";
   const [stockEvent, setStockEvent] = useState<LimitUpEvent | null>(null);
   const [stockEventLoading, setStockEventLoading] = useState(true);
   const [stockEventError, setStockEventError] = useState<string | null>(null);
@@ -2447,6 +2475,9 @@ function StockDetail({ data }: { data: DashboardData }) {
   const [positionLoading, setPositionLoading] = useState(true);
   const [positionError, setPositionError] = useState<string | null>(null);
   const [criticLoading, setCriticLoading] = useState(false);
+  const resolvedTradeDate = stockEvent?.trade_date
+    ?? requestedTradeDate
+    ?? data.summary.trade_date;
 
   useEffect(() => {
     let active = true;
@@ -2475,70 +2506,131 @@ function StockDetail({ data }: { data: DashboardData }) {
   }, [requestedTradeDate, symbol]);
 
   useEffect(() => {
-    const tradeDate = stockEvent?.trade_date;
-    if (!tradeDate) {
+    if (stockEventLoading) {
       return;
     }
+    const tradeDate = resolvedTradeDate;
+    let active = true;
 
     setKline([]);
     setTradingDayKline([]);
     setPosition(null);
+    setLatestClose(null);
     setLatestCloseLoading(true);
     setLatestCloseError(null);
     fetchStockLatestClose(symbol)
-      .then(setLatestClose)
-      .catch((caught) => {
-        setLatestClose(null);
-        setLatestCloseError(caught instanceof Error ? caught.message : "加载最新收盘数据失败");
+      .then((snapshot) => {
+        if (active) {
+          setLatestClose(snapshot);
+        }
       })
-      .finally(() => setLatestCloseLoading(false));
+      .catch((caught) => {
+        if (active) {
+          setLatestClose(null);
+          setLatestCloseError(caught instanceof Error ? caught.message : "加载最新收盘数据失败");
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setLatestCloseLoading(false);
+        }
+      });
 
     setKlineLoading(true);
     setKlineError(null);
     fetchStockKLine(symbol, 60)
-      .then(setKline)
-      .catch((caught) => {
-        setKlineError(caught instanceof Error ? caught.message : "加载 60 日 K 线失败");
+      .then((bars) => {
+        if (active) {
+          setKline(bars);
+        }
       })
-      .finally(() => setKlineLoading(false));
+      .catch((caught) => {
+        if (active) {
+          setKlineError(caught instanceof Error ? caught.message : "加载 60 日 K 线失败");
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setKlineLoading(false);
+        }
+      });
 
-    setPositionLoading(true);
-    setPositionError(null);
-    fetchStockPosition(symbol, tradeDate)
-      .then(setPosition)
-      .catch((caught) => {
-        setPosition(null);
-        setPositionError(caught instanceof Error ? caught.message : "加载首板位置判断失败");
-      })
-      .finally(() => setPositionLoading(false));
+    if (stockEvent) {
+      setPositionLoading(true);
+      setPositionError(null);
+      fetchStockPosition(symbol, tradeDate)
+        .then((assessment) => {
+          if (active) {
+            setPosition(assessment);
+          }
+        })
+        .catch((caught) => {
+          if (active) {
+            setPosition(null);
+            setPositionError(caught instanceof Error ? caught.message : "加载首板位置判断失败");
+          }
+        })
+        .finally(() => {
+          if (active) {
+            setPositionLoading(false);
+          }
+        });
+    } else {
+      setPositionLoading(false);
+      setPositionError(null);
+    }
 
     setTradingDayLoading(true);
     setTradingDayError(null);
     fetchStockTradingDayKLine(symbol, 1, tradeDate)
-      .then(setTradingDayKline)
-      .catch((caught) => {
-        setTradingDayError(caught instanceof Error ? caught.message : "加载交易日走势失败");
+      .then((bars) => {
+        if (active) {
+          setTradingDayKline(bars);
+        }
       })
-      .finally(() => setTradingDayLoading(false));
+      .catch((caught) => {
+        if (active) {
+          setTradingDayError(caught instanceof Error ? caught.message : "加载交易日走势失败");
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setTradingDayLoading(false);
+        }
+      });
 
-    const cachedRating = data.firstBoardRatings.trade_date === tradeDate
+    const cachedRating = stockEvent && data.firstBoardRatings.trade_date === tradeDate
       ? data.firstBoardRatings.candidates.find(
           (rating) => rating.facts.symbol === symbol,
         ) ?? null
       : null;
     setFirstBoardRating(cachedRating);
-    fetchFirstBoardRatings(tradeDate)
-      .then((ratings) => {
-        setFirstBoardRating(
-          ratings.candidates.find((rating) => rating.facts.symbol === symbol) ?? null,
-        );
-      })
-      .catch(() => {
-        if (!cachedRating) {
-          setFirstBoardRating(null);
-        }
-      });
-  }, [data.firstBoardRatings, stockEvent?.trade_date, symbol]);
+    if (stockEvent) {
+      fetchFirstBoardRatings(tradeDate)
+        .then((ratings) => {
+          if (active) {
+            setFirstBoardRating(
+              ratings.candidates.find((rating) => rating.facts.symbol === symbol) ?? null,
+            );
+          }
+        })
+        .catch(() => {
+          if (active && !cachedRating) {
+            setFirstBoardRating(null);
+          }
+        });
+    }
+
+    return () => {
+      active = false;
+    };
+  }, [
+    data.firstBoardRatings,
+    resolvedTradeDate,
+    stockEvent,
+    stockEventLoading,
+    symbol,
+  ]);
 
   useEffect(() => {
     if (!firstBoardRating) {
@@ -2556,39 +2648,35 @@ function StockDetail({ data }: { data: DashboardData }) {
   }, [firstBoardRating, symbol]);
 
   const intradayReferencePrice = useMemo(() => {
-    if (!stockEvent) {
-      return null;
-    }
     const eventIndex = kline.findIndex(
-      (bar) => bar.trade_date === stockEvent.trade_date,
+      (bar) => bar.trade_date === resolvedTradeDate,
     );
     return eventIndex > 0 ? kline[eventIndex - 1].close : null;
-  }, [kline, stockEvent]);
+  }, [kline, resolvedTradeDate]);
 
   if (stockEventLoading) {
     return <ShellState label="正在加载个股详情..." />;
-  }
-
-  if (stockEventError || !stockEvent) {
-    return (
-      <ShellState
-        label="未找到这只股票"
-        detail={stockEventError ?? "本地涨停事件库中暂无这只股票"}
-      />
-    );
   }
 
   return (
     <div className="stock-detail">
       <section className="stock-hero">
         <div>
-          <p className="eyebrow">{stockEvent.trade_date}</p>
-          <h2>{stockEvent.name}</h2>
-          <span>{stockEvent.symbol}</span>
+          <p className="eyebrow">{resolvedTradeDate}</p>
+          <h2>{stockEvent?.name || linkedStockName || symbol}</h2>
+          <span>{symbol}</span>
         </div>
         <div className="stock-status">
-          <strong>{stockEvent.closed_limit ? `${stockEvent.board_height} 板` : "炸板"}</strong>
-          <span>{stockEvent.closed_limit ? "已封板" : "盘中触板未回封"}</span>
+          <strong>
+            {stockEvent
+              ? stockEvent.closed_limit ? `${stockEvent.board_height} 板` : "炸板"
+              : "行情详情"}
+          </strong>
+          <span>
+            {stockEvent
+              ? stockEvent.closed_limit ? "已封板" : "盘中触板未回封"
+              : stockEventError ? "当前不在本地涨停事件库" : "基础行情"}
+          </span>
         </div>
       </section>
 
@@ -2598,18 +2686,20 @@ function StockDetail({ data }: { data: DashboardData }) {
         error={latestCloseError}
       />
 
-      <Panel title="封板信息" icon={<Flame size={18} />}>
-        <div className="stock-facts">
-          <Fact label="首次封板" value={stockEvent.first_limit_time.slice(0, 5)} />
-          <Fact label="最后封板" value={stockEvent.last_limit_time.slice(0, 5)} />
-          <Fact label="封板次数" value={`${stockEvent.seal_count}`} />
-          <Fact label="炸板次数" value={`${stockEvent.break_count}`} />
-          <Fact label="成交额" value={formatAmount(stockEvent.amount)} />
-          <Fact label="换手率" value={`${stockEvent.turnover_rate.toFixed(1)}%`} />
-          <Fact label="行业" value={stockEvent.industry} />
-          <Fact label="题材" value={stockEvent.concept || "暂无"} />
-        </div>
-      </Panel>
+      {stockEvent ? (
+        <Panel title="封板信息" icon={<Flame size={18} />}>
+          <div className="stock-facts">
+            <Fact label="首次封板" value={stockEvent.first_limit_time.slice(0, 5)} />
+            <Fact label="最后封板" value={stockEvent.last_limit_time.slice(0, 5)} />
+            <Fact label="封板次数" value={`${stockEvent.seal_count}`} />
+            <Fact label="炸板次数" value={`${stockEvent.break_count}`} />
+            <Fact label="成交额" value={formatAmount(stockEvent.amount)} />
+            <Fact label="换手率" value={`${stockEvent.turnover_rate.toFixed(1)}%`} />
+            <Fact label="行业" value={stockEvent.industry} />
+            <Fact label="题材" value={stockEvent.concept || "暂无"} />
+          </div>
+        </Panel>
+      ) : null}
 
       <section className="stock-market-chart">
         <Panel
@@ -2661,12 +2751,14 @@ function StockDetail({ data }: { data: DashboardData }) {
         </Panel>
       </section>
 
-      <StockPositionPanel
-        position={position}
-        tradeDate={stockEvent.trade_date}
-        loading={positionLoading}
-        error={positionError}
-      />
+      {stockEvent ? (
+        <StockPositionPanel
+          position={position}
+          tradeDate={stockEvent.trade_date}
+          loading={positionLoading}
+          error={positionError}
+        />
+      ) : null}
 
       {firstBoardRating || criticLoading || critic ? (
         <section className="stock-agent-grid">
