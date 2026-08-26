@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
-from typing import TYPE_CHECKING
+from typing import TYPE_CHECKING, Callable
 
 import akshare as ak
 import pandas as pd
@@ -37,6 +37,28 @@ class PopularityFact:
     rank: int
     rank_change: int | None
     captured_at: datetime
+    source: str = "eastmoney"
+
+
+@dataclass(frozen=True)
+class PopularityRankingItem:
+    """One named stock in a current popularity ranking."""
+
+    symbol: str
+    thscode: str
+    name: str
+    rank: int
+    heat: int | None
+    rank_change: int | None
+    rank_trend: str | None
+
+
+@dataclass(frozen=True)
+class PopularityRankingSnapshot:
+    """One complete current popularity ranking from a named provider."""
+
+    captured_at: datetime
+    items: list[PopularityRankingItem]
     source: str = "eastmoney"
 
 
@@ -123,6 +145,69 @@ def collect_dragon_tiger_facts(trade_date: date) -> dict[str, DragonTigerFact]:
 def collect_eastmoney_popularity() -> dict[str, PopularityFact]:
     """Collect the current Eastmoney A-share popularity Top100 snapshot."""
 
+    captured_at, rows = _fetch_eastmoney_popularity_rows()
+    facts: dict[str, PopularityFact] = {}
+    for row in rows:
+        raw_symbol = str(row.get("sc") or "")
+        symbol = raw_symbol[-6:]
+        rank = _optional_int(row.get("rk"))
+        if len(symbol) != 6 or rank is None:
+            continue
+        previous_rank = _optional_int(row.get("hisRc"))
+        facts[symbol] = PopularityFact(
+            symbol=symbol,
+            rank=rank,
+            rank_change=(previous_rank - rank) if previous_rank else None,
+            captured_at=captured_at,
+        )
+    return facts
+
+
+def collect_eastmoney_hot_stock_ranking(
+    *,
+    limit: int = 100,
+    name_resolver: Callable[[], dict[str, str]],
+) -> PopularityRankingSnapshot:
+    """Collect a named, current Eastmoney popularity ranking up to Top100."""
+
+    captured_at, rows = _fetch_eastmoney_popularity_rows()
+    names = name_resolver()
+    items: list[PopularityRankingItem] = []
+    for row in rows:
+        raw_symbol = str(row.get("sc") or "")
+        symbol = raw_symbol[-6:]
+        rank = _optional_int(row.get("rk"))
+        if len(symbol) != 6 or rank is None:
+            continue
+        previous_rank = _optional_int(row.get("hisRc"))
+        rank_change = (previous_rank - rank) if previous_rank else None
+        exchange = raw_symbol[:2].upper()
+        suffix = "SH" if exchange == "SH" else "SZ"
+        items.append(
+            PopularityRankingItem(
+                symbol=symbol,
+                thscode=f"{symbol}.{suffix}",
+                name=names.get(symbol, symbol),
+                rank=rank,
+                heat=None,
+                rank_change=rank_change,
+                rank_trend=(
+                    "up" if rank_change and rank_change > 0
+                    else "down" if rank_change and rank_change < 0
+                    else "flat"
+                ),
+            )
+        )
+    items.sort(key=lambda item: (item.rank, item.symbol))
+    return PopularityRankingSnapshot(
+        captured_at=captured_at,
+        items=items[: max(1, min(limit, 100))],
+    )
+
+
+def _fetch_eastmoney_popularity_rows() -> tuple[datetime, list[dict[str, object]]]:
+    """Fetch one uncached Eastmoney popularity response with a local timestamp."""
+
     captured_at = datetime.now(timezone.utc)
     payload = {
         "appId": "appId01",
@@ -139,21 +224,7 @@ def collect_eastmoney_popularity() -> dict[str, PopularityFact]:
         )
         response.raise_for_status()
     rows = response.json().get("data") or []
-    facts: dict[str, PopularityFact] = {}
-    for row in rows:
-        raw_symbol = str(row.get("sc") or "")
-        symbol = raw_symbol[-6:]
-        rank = _optional_int(row.get("rk"))
-        if len(symbol) != 6 or rank is None:
-            continue
-        previous_rank = _optional_int(row.get("hisRc"))
-        facts[symbol] = PopularityFact(
-            symbol=symbol,
-            rank=rank,
-            rank_change=(previous_rank - rank) if previous_rank else None,
-            captured_at=captured_at,
-        )
-    return facts
+    return captured_at, [row for row in rows if isinstance(row, dict)]
 
 
 def collect_recent_listing_dates() -> dict[str, date]:

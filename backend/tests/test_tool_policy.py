@@ -1,5 +1,6 @@
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 from uuid import uuid4
 
 from app.agents.tool_policy import (
@@ -8,7 +9,7 @@ from app.agents.tool_policy import (
     ToolExecution,
     extract_market_segment,
 )
-from app.agents.tools import AgentToolRegistry
+from app.agents.tools import AgentToolRegistry, ToolResult
 from app.models import (
     AgentChatRequest,
     AgentToolTrace,
@@ -88,6 +89,43 @@ class AgentToolPolicyTest(unittest.TestCase):
 
         self.assertFalse(signals.first_board_facts)
         self.assertFalse(signals.rating_explanation)
+
+    def test_hot_stock_top100_repair_preserves_explicit_limit(self) -> None:
+        signals = QuestionSignals.from_message("热股榜前100名")
+        self.assertTrue(signals.hot_stock_ranking)
+
+        payload = {
+            "source": "eastmoney",
+            "captured_at": "2026-08-26T14:00:00+00:00",
+            "data_fresh": True,
+            "requested_count": 100,
+            "count": 100,
+            "complete": True,
+            "items": [],
+        }
+        execution = self._empty_execution()
+        with patch.object(
+            self.tools,
+            "hot_stock_ranking",
+            return_value=ToolResult(
+                name="hot_stock_ranking",
+                input={"period": "day", "limit": 100, "source": "auto"},
+                output=payload,
+                summary="东方财富热股榜返回 100/100 只。",
+                trace_output=payload,
+            ),
+        ) as ranking:
+            repaired = self.policy.reconcile(
+                request=AgentChatRequest(
+                    session_id="policy-hot-stock-top100",
+                    message="热股榜前100名",
+                ),
+                execution=execution,
+            )
+
+        self.assertEqual(repaired, ["hot_stock_ranking"])
+        ranking.assert_called_once_with(period="day", limit=100, source="auto")
+        self.assertEqual(execution["facts"]["hot_stock_ranking"]["count"], 100)
 
     def test_market_segment_extraction_uses_explicit_board_names(self) -> None:
         self.assertEqual(extract_market_segment("今天创业板有哪些股票涨停"), "chinext")

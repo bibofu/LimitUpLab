@@ -59,6 +59,32 @@ class HithinkFinanceCollectorTest(unittest.TestCase):
         self.assertIn("hot-stock", runner.commands[0])
         self.assertEqual(runner.commands[0][-2:], ["--format", "json"])
 
+    def test_a_share_symbol_directory_returns_name_mapping(self) -> None:
+        runner = FakeRunner(
+            {
+                "ok": True,
+                "data": {
+                    "item": [
+                        {
+                            "thscode": "603618.SH",
+                            "ticker": "603618",
+                            "name": "杭电股份",
+                        }
+                    ]
+                },
+            }
+        )
+        collector = HithinkFinanceCollector(
+            executable="hithink-finance",
+            runner=runner,
+        )
+
+        names = collector.collect_a_share_symbol_names()
+
+        self.assertEqual(names, {"603618": "杭电股份"})
+        self.assertIn("symbol", runner.commands[0])
+        self.assertIn("10000", runner.commands[0])
+
     def test_dragon_tiger_snapshot_preserves_capital_flow(self) -> None:
         runner = FakeRunner(
             {

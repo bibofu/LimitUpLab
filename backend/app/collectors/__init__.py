@@ -7,7 +7,10 @@ from app.collectors.sector_collector import collect_sector_history, collect_sect
 from app.collectors.first_board_enrichment_collector import (
     DragonTigerFact,
     PopularityFact,
+    PopularityRankingItem,
+    PopularityRankingSnapshot,
     collect_dragon_tiger_facts,
+    collect_eastmoney_hot_stock_ranking,
     collect_eastmoney_popularity,
     collect_preferred_dragon_tiger_facts,
     collect_preferred_popularity,
@@ -37,6 +40,7 @@ __all__ = [
     "collect_limit_up_events",
     "collect_dragon_tiger_facts",
     "collect_eastmoney_popularity",
+    "collect_eastmoney_hot_stock_ranking",
     "collect_preferred_dragon_tiger_facts",
     "collect_preferred_popularity",
     "collect_listing_date",
@@ -61,5 +65,7 @@ __all__ = [
     "HithinkLimitUpFact",
     "HithinkLimitUpPoolSnapshot",
     "PopularityFact",
+    "PopularityRankingItem",
+    "PopularityRankingSnapshot",
 ]
 

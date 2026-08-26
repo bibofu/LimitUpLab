@@ -4,7 +4,12 @@ from datetime import date, datetime, timezone
 from unittest.mock import patch
 
 from app.agents.chat import answer_first_board_chat
-from app.collectors import HithinkHotStockFact, HithinkHotStockSnapshot
+from app.collectors import (
+    HithinkHotStockFact,
+    HithinkHotStockSnapshot,
+    PopularityRankingItem,
+    PopularityRankingSnapshot,
+)
 from app.models import (
     AgentChatRequest,
     FinanceNewsFacts,
@@ -68,6 +73,39 @@ class HithinkToolProvider(LLMProvider):
             )
         return LLMResult(
             content="同花顺热股榜中，通鼎互联(002491)当前排名第3。",
+            model="fake-answer",
+            provider="fake",
+        )
+
+
+class Top100HotStockProvider(LLMProvider):
+    """Planner under-requests rows and final answer intentionally truncates them."""
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        if "first job is to decide which tools are needed" in system_prompt:
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": "hot_stock_ranking",
+                        "safety": "normal",
+                        "tool_calls": [
+                            {
+                                "name": "hot_stock_ranking",
+                                "arguments": {
+                                    "period": "day",
+                                    "limit": 30,
+                                    "source": "auto",
+                                },
+                            }
+                        ],
+                        "answer_directly": "",
+                    }
+                ),
+                model="fake-planner",
+                provider="fake",
+            )
+        return LLMResult(
+            content="东方财富热股榜第1名是测试股票1(600001)。",
             model="fake-answer",
             provider="fake",
         )
@@ -185,6 +223,48 @@ class AgentExternalToolsTest(unittest.TestCase):
         )
         self.assertIn("002491", response.answer)
         self.assertIn("source=hithink-finance", response.references)
+
+    @patch("app.agents.tools.collect_eastmoney_hot_stock_ranking")
+    def test_explicit_top100_overrides_planner_limit_and_renders_every_stock(
+        self,
+        collect_ranking,
+    ) -> None:
+        collect_ranking.return_value = PopularityRankingSnapshot(
+            captured_at=datetime.now(timezone.utc),
+            items=[
+                PopularityRankingItem(
+                    symbol=f"{600000 + index:06d}",
+                    thscode=f"{600000 + index:06d}.SH",
+                    name=f"测试股票{index}",
+                    rank=index,
+                    heat=None,
+                    rank_change=0,
+                    rank_trend="flat",
+                )
+                for index in range(1, 101)
+            ],
+        )
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="eastmoney-hot-stock-top100",
+                message="热股榜前100名",
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=Top100HotStockProvider(),
+        )
+
+        trace = next(
+            item for item in response.tool_results if item.name == "hot_stock_ranking"
+        )
+        self.assertEqual(trace.output["requested_count"], 100)
+        self.assertEqual(trace.output["count"], 100)
+        self.assertTrue(trace.output["complete"])
+        self.assertIn("600001", response.answer)
+        self.assertIn("600100", response.answer)
+        self.assertTrue(all(f"{600000 + index:06d}" in response.answer for index in range(1, 101)))
+        self.assertTrue(any("incomplete" in warning for warning in response.warnings))
+        self.assertIn("source=eastmoney", response.references)
 
     @patch("app.agents.tools.collect_finance_news")
     def test_policy_repairs_broad_finance_news_with_structured_feed(

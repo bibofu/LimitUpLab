@@ -2,7 +2,7 @@
 
 import json
 from dataclasses import asdict, dataclass, field
-from datetime import date
+from datetime import date, datetime, timedelta, timezone
 from typing import Any
 
 from app.agents.first_board import build_first_board_ratings
@@ -14,7 +14,10 @@ from app.agents.query_contract import (
     normalize_sort_field,
     normalize_sort_order,
 )
-from app.collectors import HithinkFinanceCollector
+from app.collectors import (
+    HithinkFinanceCollector,
+    collect_eastmoney_hot_stock_ranking,
+)
 from app.models import (
     AgentEvaluationResponse,
     AgentToolTrace,
@@ -178,7 +181,14 @@ TOOL_SCHEMAS = [
                     "enum": ["day", "hour"],
                     "description": "Ranking period; defaults to day.",
                 },
-                "limit": {"type": "integer", "minimum": 1, "maximum": 30},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                "source": {
+                    "type": "string",
+                    "enum": ["auto", "tonghuashun", "eastmoney"],
+                    "description": (
+                        "auto uses Tonghuashun up to Top30 and Eastmoney for Top31-100."
+                    ),
+                },
             },
             "required": [],
         },
@@ -675,19 +685,43 @@ class AgentToolRegistry:
         self,
         period: str = "day",
         limit: int = 20,
+        source: str = "auto",
     ) -> ToolResult:
-        """Return a bounded Tonghuashun popularity ranking snapshot."""
+        """Return a fresh popularity ranking with explicit provider semantics."""
 
-        snapshot = self.hithink_collector.collect_hot_stocks(
-            period=period,
-            limit=max(1, min(limit, 30)),
+        requested_limit = max(1, min(limit, 100))
+        normalized_source = source if source in {"auto", "tonghuashun", "eastmoney"} else "auto"
+        use_eastmoney = normalized_source == "eastmoney" or (
+            normalized_source == "auto" and requested_limit > 30
         )
+        if use_eastmoney:
+            snapshot = collect_eastmoney_hot_stock_ranking(
+                limit=requested_limit,
+                name_resolver=self.hithink_collector.collect_a_share_symbol_names,
+            )
+        else:
+            snapshot = self.hithink_collector.collect_hot_stocks(
+                period=period,
+                limit=min(requested_limit, 30),
+            )
         items = [asdict(item) for item in snapshot.items]
+        captured_at = snapshot.captured_at.astimezone(timezone.utc)
+        captured_at_beijing = captured_at.astimezone(timezone(timedelta(hours=8)))
+        age_seconds = max(
+            0,
+            round((datetime.now(timezone.utc) - captured_at).total_seconds()),
+        )
         payload = {
             "source": snapshot.source,
-            "captured_at": snapshot.captured_at.isoformat(),
-            "period": snapshot.period,
+            "source_label": "东方财富" if snapshot.source == "eastmoney" else "同花顺",
+            "captured_at": captured_at.isoformat(),
+            "captured_at_beijing": captured_at_beijing.isoformat(),
+            "data_fresh": age_seconds <= 900,
+            "age_seconds": age_seconds,
+            "period": getattr(snapshot, "period", "current"),
+            "requested_count": requested_limit,
             "count": len(items),
+            "complete": len(items) >= requested_limit,
             "items": items,
         }
         leaders = "、".join(
@@ -696,9 +730,12 @@ class AgentToolRegistry:
         )
         return ToolResult(
             name="hot_stock_ranking",
-            input={"period": period, "limit": limit},
+            input={"period": period, "limit": requested_limit, "source": normalized_source},
             output=payload,
-            summary=f"同花顺热股榜返回 {len(items)} 只{f'：{leaders}' if leaders else '。'}",
+            summary=(
+                f"{payload['source_label']}热股榜返回 {len(items)}/{requested_limit} 只"
+                f"{f'：{leaders}' if leaders else '。'}"
+            ),
             trace_output=payload,
         )
 

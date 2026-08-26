@@ -169,6 +169,28 @@ class HithinkFinanceCollector:
             items=items[: max(1, min(limit, 100))],
         )
 
+    def collect_a_share_symbol_names(self) -> dict[str, str]:
+        """Return the current Shanghai/Shenzhen A-share symbol-name directory."""
+
+        envelope = self._invoke(
+            "symbol",
+            "list",
+            "--exchange",
+            "SH,SZ",
+            "--asset-type",
+            "a-share",
+            "--limit",
+            "10000",
+            "--offset",
+            "0",
+        )
+        rows = _list(_dict(envelope.get("data")).get("item"))
+        return {
+            _symbol(row): str(row.get("name") or _symbol(row))
+            for row in rows
+            if _symbol(row)
+        }
+
     def collect_dragon_tiger(
         self,
         *,

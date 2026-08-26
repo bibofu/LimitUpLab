@@ -10,6 +10,7 @@ from typing import Any, Callable, TypedDict
 from app.agents.query_contract import (
     build_limit_up_query_contract,
     extract_board_filters as contract_board_filters,
+    extract_result_limit,
     extract_market_segment as contract_market_segment,
     extract_trade_date as contract_trade_date,
 )
@@ -42,6 +43,7 @@ class QuestionSignals:
 
     requested_date: date | None
     sector_performance: bool
+    hot_stock_ranking: bool
     finance_news: bool
     web_search: bool
     daily_board_promotion: bool
@@ -79,6 +81,7 @@ class QuestionSignals:
         return cls(
             requested_date=extract_trade_date(message),
             sector_performance=looks_like_sector_performance_question(message),
+            hot_stock_ranking=looks_like_hot_stock_question(message),
             finance_news=finance_news,
             web_search=looks_like_web_search_question(message) and not finance_news,
             daily_board_promotion=daily_board_promotion,
@@ -101,6 +104,7 @@ class QuestionSignals:
         return any(
             (
                 self.sector_performance,
+                self.hot_stock_ranking,
                 self.finance_news,
                 self.web_search,
                 self.daily_board_promotion,
@@ -236,6 +240,13 @@ class AgentToolPolicyEngine:
         """Return ordered rules; earlier tools may provide facts for later rules."""
 
         return (
+            ToolRepairRule(
+                name="hot-stock-ranking-grounding",
+                tool_name="hot_stock_ranking",
+                reason="A current popularity ranking requires a fresh provider snapshot.",
+                matches=lambda signals: signals.hot_stock_ranking,
+                repair=self._repair_hot_stock_ranking,
+            ),
             ToolRepairRule(
                 name="finance-news-grounding",
                 tool_name="finance_news",
@@ -497,6 +508,37 @@ class AgentToolPolicyEngine:
             fact_name="finance_news",
             fact_value=response.model_dump(mode="json"),
             references=[item.url for item in response.items],
+        )
+
+    def _repair_hot_stock_ranking(
+        self,
+        request: AgentChatRequest,
+        signals: QuestionSignals,
+        execution: ToolExecution,
+        context_symbol: str | None,
+    ) -> None:
+        del signals, context_symbol
+        source = "auto"
+        if "同花顺" in request.message:
+            source = "tonghuashun"
+        elif "东方财富" in request.message:
+            source = "eastmoney"
+        result = self.tools.hot_stock_ranking(
+            period="day",
+            limit=extract_result_limit(request.message) or 20,
+            source=source,
+        )
+        payload = result.output
+        self._record_success(
+            execution,
+            result=result,
+            fact_name="hot_stock_ranking",
+            fact_value=payload,
+            references=[
+                f"source={payload.get('source')}",
+                f"captured_at={payload.get('captured_at')}",
+                f"data_fresh={payload.get('data_fresh')}",
+            ],
         )
 
     def _repair_limit_up_events(
@@ -1003,6 +1045,24 @@ def looks_like_sector_performance_question(message: str) -> bool:
     if any(term in message for term in ("首板", "涨停", "评分", "高分票")):
         return "板块表现" in message or "行业表现" in message
     return True
+
+
+def looks_like_hot_stock_question(message: str) -> bool:
+    """Return whether the user asks for a current stock-popularity ranking."""
+
+    compact = re.sub(r"\s+", "", message).lower()
+    return any(
+        term in compact
+        for term in (
+            "热股榜",
+            "热门股票",
+            "热门股",
+            "人气榜",
+            "人气排名",
+            "热度排名",
+            "哪些股票热门",
+        )
+    )
 
 
 def looks_like_web_search_question(message: str) -> bool:
