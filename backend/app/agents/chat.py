@@ -513,6 +513,7 @@ def _answer_with_llm_tool_agent(
         execution=execution,
         context_symbol=context.symbol,
     )
+    _add_composed_tool_facts(request.message, execution["facts"])
     tool_duration_ms = round((perf_counter() - tools_started_at) * 1000)
     if not execution["tool_results"] and not direct_answer:
         return None
@@ -534,6 +535,9 @@ def _answer_with_llm_tool_agent(
         request.message,
         execution["facts"],
     )
+    hot_stock_event_intersection_answer = (
+        _requires_hot_stock_event_intersection_answer(execution["facts"])
+    )
     daily_promotion_answer = _requires_daily_promotion_answer(
         request.message,
         execution["facts"],
@@ -546,6 +550,7 @@ def _answer_with_llm_tool_agent(
         exhaustive_event_answer=exhaustive_event_answer,
         complete_position_answer=complete_position_answer,
         complete_hot_stock_answer=complete_hot_stock_answer,
+        hot_stock_event_intersection_answer=hot_stock_event_intersection_answer,
     )
     answer_user_prompt = _tool_answer_user_prompt(
         request,
@@ -613,6 +618,19 @@ def _answer_with_llm_tool_agent(
                 warnings = [
                     _safety_warning(),
                     "LLM hot-stock ranking was incomplete; deterministic full-list rendering used.",
+                ]
+            if (
+                hot_stock_event_intersection_answer
+                and not _contains_exact_hot_stock_event_intersection(
+                    answer,
+                    execution["facts"],
+                )
+            ):
+                answer = _ensure_safety_boundary(fallback)
+                source = "template_general_answer"
+                warnings = [
+                    _safety_warning(),
+                    "LLM cross-list filtering was incorrect; deterministic intersection rendering used.",
                 ]
             if daily_promotion_answer and not _contains_daily_promotion_facts(
                 answer,
@@ -781,6 +799,105 @@ def _tool_planner_user_prompt(
     return json.dumps(context_payload, ensure_ascii=False, separators=(",", ":"))
 
 
+def _add_composed_tool_facts(message: str, facts: dict[str, Any]) -> None:
+    """Add deterministic joins needed by questions that combine multiple tools."""
+
+    intersection = _build_hot_stock_event_intersection(message, facts)
+    if intersection is not None:
+        facts["hot_stock_limit_up_intersection"] = intersection
+
+
+def _build_hot_stock_event_intersection(
+    message: str,
+    facts: dict[str, Any],
+) -> dict[str, Any] | None:
+    """Join a popularity ranking with a filtered limit-up pool by stock symbol."""
+
+    if not _looks_like_hot_stock_event_intersection_question(message):
+        return None
+    hot_stocks = facts.get("hot_stock_ranking")
+    limit_up_events = facts.get("limit_up_events")
+    if not isinstance(hot_stocks, dict) or not isinstance(limit_up_events, dict):
+        return None
+
+    events = {
+        str(item.get("symbol")): item
+        for item in limit_up_events.get("events", [])
+        if isinstance(item, dict) and item.get("symbol")
+    }
+    joined: list[dict[str, Any]] = []
+    for hot_stock in hot_stocks.get("items", []):
+        if not isinstance(hot_stock, dict):
+            continue
+        symbol = str(hot_stock.get("symbol") or "")
+        event = events.get(symbol)
+        if event is None:
+            continue
+        joined.append(
+            {
+                "rank": hot_stock.get("rank"),
+                "symbol": symbol,
+                "name": hot_stock.get("name") or event.get("name"),
+                "industry": event.get("industry"),
+                "board_height": event.get("board_height"),
+                "board_height_text": event.get("board_height_text"),
+                "first_limit_time": event.get("first_limit_time"),
+                "break_count": event.get("break_count"),
+                "closed_limit": event.get("closed_limit"),
+            }
+        )
+    joined.sort(
+        key=lambda item: (
+            item.get("rank") if isinstance(item.get("rank"), int) else 10_000,
+            item.get("symbol") or "",
+        )
+    )
+    return {
+        "source": hot_stocks.get("source"),
+        "source_label": hot_stocks.get("source_label"),
+        "captured_at_beijing": hot_stocks.get("captured_at_beijing"),
+        "data_fresh": hot_stocks.get("data_fresh"),
+        "requested_count": hot_stocks.get("requested_count"),
+        "hot_stock_count": len(hot_stocks.get("items", [])),
+        "trade_date": limit_up_events.get("trade_date"),
+        "event_label": _hot_stock_event_label(message),
+        "event_count": len(events),
+        "matched_count": len(joined),
+        "items": joined,
+    }
+
+
+def _looks_like_hot_stock_event_intersection_question(message: str) -> bool:
+    """Recognize questions that filter a popularity ranking by a limit-up cohort."""
+
+    compact = re.sub(r"\s+", "", message).lower()
+    has_hot_stock_scope = any(
+        term in compact
+        for term in ("热股榜", "热股排行", "热门股", "人气榜", "人气排名")
+    )
+    has_event_filter = any(
+        term in compact
+        for term in ("首板", "连板", "涨停", "炸板")
+    )
+    asks_for_subset = any(
+        term in compact
+        for term in ("哪些", "有谁", "有哪", "筛出", "找出", "属于", "同时", "交集")
+    )
+    return has_hot_stock_scope and has_event_filter and asks_for_subset
+
+
+def _hot_stock_event_label(message: str) -> str:
+    """Return a user-facing label for the event-side filter."""
+
+    if "首板" in message:
+        return "首板票"
+    if "连板" in message:
+        return "连板票"
+    if "炸板" in message:
+        return "炸板票"
+    return "涨停票"
+
+
 def _template_answer_from_tool_facts(
     *,
     request: AgentChatRequest,
@@ -788,6 +905,35 @@ def _template_answer_from_tool_facts(
     facts: dict[str, Any],
 ) -> str:
     """Build a useful fallback answer from tool facts when final LLM times out."""
+
+    if "hot_stock_limit_up_intersection" in facts:
+        payload = facts["hot_stock_limit_up_intersection"]
+        items = payload.get("items", []) if isinstance(payload, dict) else []
+        source_label = payload.get("source_label") or "热股"
+        event_label = payload.get("event_label") or "涨停票"
+        requested_count = payload.get("requested_count") or payload.get("hot_stock_count")
+        lines = [
+            f"{payload.get('trade_date')} {source_label}热股榜前 {requested_count} 中，"
+            f"共有 {len(items)} 只{event_label}。"
+        ]
+        if items:
+            for item in items:
+                lines.append(
+                    f"- 热股第 {item.get('rank')} 名 "
+                    f"{item.get('name')}({item.get('symbol')})，"
+                    f"行业 {item.get('industry') or '暂无'}，"
+                    f"首封 {item.get('first_limit_time') or '未知'}，"
+                    f"炸板 {item.get('break_count')} 次。"
+                )
+        else:
+            lines.append(f"当前榜单与当日{event_label}名单没有交集。")
+        lines.append(
+            f"口径：热股榜返回 {payload.get('hot_stock_count')} 只，"
+            f"当日{event_label}池 {payload.get('event_count')} 只，按股票代码求交集。"
+        )
+        lines.append("热度只反映市场关注度，不代表后续上涨概率。")
+        lines.append(TEXT["safety"])
+        return "\n".join(lines)
 
     if "remote_limit_up_pool" in facts:
         payload = facts["remote_limit_up_pool"]
@@ -1144,6 +1290,7 @@ def _tool_answer_system_prompt(
     exhaustive_event_answer: bool = False,
     complete_position_answer: bool = False,
     complete_hot_stock_answer: bool = False,
+    hot_stock_event_intersection_answer: bool = False,
 ) -> str:
     """Instruct the LLM to answer only from executed tool facts."""
 
@@ -1169,6 +1316,14 @@ def _tool_answer_system_prompt(
         if complete_hot_stock_answer
         else ""
     )
+    intersection_instruction = (
+        " SET_INTERSECTION_OUTPUT: The question asks which popularity-ranked stocks also "
+        "match a limit-up event filter. Use hot_stock_limit_up_intersection as the joined "
+        "result, list every intersection item exactly once in popularity-rank order, and "
+        "do not output non-matching popularity rows or the two source lists separately."
+        if hot_stock_event_intersection_answer
+        else ""
+    )
     return (
         "You are LimitUpLab's A-share first-board research agent. "
         "Answer in Chinese using only the executed tool facts. "
@@ -1192,6 +1347,7 @@ def _tool_answer_system_prompt(
         "Do not provide direct trading instructions, position sizing, target prices, "
         "or return promises."
         f"{exhaustive_instruction}{position_instruction}{hot_stock_instruction}"
+        f"{intersection_instruction}"
     )
 
 
@@ -1224,6 +1380,8 @@ def _requires_exhaustive_event_answer(
 ) -> bool:
     """Enable full-list output only for a multi-item limit-up event result."""
 
+    if "hot_stock_limit_up_intersection" in facts:
+        return False
     events = _limit_up_items_from_facts(facts)
     return (
         _looks_like_exhaustive_list_request(message)
@@ -1252,7 +1410,8 @@ def _requires_complete_hot_stock_answer(
     requested = extract_result_limit(message)
     payload = facts.get("hot_stock_ranking")
     return (
-        requested is not None
+        "hot_stock_limit_up_intersection" not in facts
+        and requested is not None
         and requested > 20
         and isinstance(payload, dict)
         and bool(payload.get("complete"))
@@ -1273,6 +1432,42 @@ def _contains_every_hot_stock_symbol(answer: str, facts: dict[str, Any]) -> bool
         if isinstance(item, dict) and item.get("symbol")
     ]
     return bool(symbols) and all(symbol in answer for symbol in symbols)
+
+
+def _requires_hot_stock_event_intersection_answer(facts: dict[str, Any]) -> bool:
+    """Return whether two executed stock lists were composed as a set intersection."""
+
+    return isinstance(facts.get("hot_stock_limit_up_intersection"), dict)
+
+
+def _contains_exact_hot_stock_event_intersection(
+    answer: str,
+    facts: dict[str, Any],
+) -> bool:
+    """Reject answers that omit joined rows or leak non-matching popularity rows."""
+
+    intersection = facts.get("hot_stock_limit_up_intersection")
+    hot_stocks = facts.get("hot_stock_ranking")
+    if not isinstance(intersection, dict) or not isinstance(hot_stocks, dict):
+        return False
+    matched_symbols = {
+        str(item.get("symbol"))
+        for item in intersection.get("items", [])
+        if isinstance(item, dict) and item.get("symbol")
+    }
+    if not matched_symbols:
+        return any(term in answer for term in ("没有交集", "暂无", "0只", "0 只"))
+    non_matching_symbols = {
+        str(item.get("symbol"))
+        for item in hot_stocks.get("items", [])
+        if isinstance(item, dict)
+        and item.get("symbol")
+        and str(item.get("symbol")) not in matched_symbols
+    }
+    return (
+        all(symbol in answer for symbol in matched_symbols)
+        and not any(symbol in answer for symbol in non_matching_symbols)
+    )
 
 
 def _requires_complete_position_answer(

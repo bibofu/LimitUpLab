@@ -111,6 +111,39 @@ class Top100HotStockProvider(LLMProvider):
         )
 
 
+class HotStockFirstBoardIntersectionProvider(LLMProvider):
+    """Planner omits the event pool while the final answer returns the wrong set."""
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        if "first job is to decide which tools are needed" in system_prompt:
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": "query_first_board_in_hot_ranking",
+                        "safety": "normal",
+                        "tool_calls": [
+                            {
+                                "name": "hot_stock_ranking",
+                                "arguments": {
+                                    "period": "day",
+                                    "limit": 100,
+                                    "source": "eastmoney",
+                                },
+                            },
+                        ],
+                        "answer_directly": "",
+                    }
+                ),
+                model="fake-planner",
+                provider="fake",
+            )
+        return LLMResult(
+            content="热股榜中贵州茅台(600519)是首板票。",
+            model="fake-answer",
+            provider="fake",
+        )
+
+
 class FinanceNewsProvider(LLMProvider):
     """Planner skips the feed so the deterministic grounding policy repairs it."""
 
@@ -265,6 +298,62 @@ class AgentExternalToolsTest(unittest.TestCase):
         self.assertTrue(all(f"{600000 + index:06d}" in response.answer for index in range(1, 101)))
         self.assertTrue(any("incomplete" in warning for warning in response.warnings))
         self.assertIn("source=eastmoney", response.references)
+
+    @patch("app.agents.tools.collect_eastmoney_hot_stock_ranking")
+    def test_hot_stock_top100_first_board_question_returns_only_intersection(
+        self,
+        collect_ranking,
+    ) -> None:
+        collect_ranking.return_value = PopularityRankingSnapshot(
+            captured_at=datetime.now(timezone.utc),
+            items=[
+                PopularityRankingItem(
+                    symbol="600519",
+                    thscode="600519.SH",
+                    name="贵州茅台",
+                    rank=1,
+                    heat=None,
+                    rank_change=0,
+                    rank_trend="flat",
+                ),
+                PopularityRankingItem(
+                    symbol="301489",
+                    thscode="301489.SZ",
+                    name="思泉新材",
+                    rank=2,
+                    heat=None,
+                    rank_change=0,
+                    rank_trend="flat",
+                ),
+                PopularityRankingItem(
+                    symbol="002230",
+                    thscode="002230.SZ",
+                    name="科大讯飞",
+                    rank=3,
+                    heat=None,
+                    rank_change=0,
+                    rank_trend="flat",
+                ),
+            ],
+        )
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="hot-stock-first-board-intersection",
+                message="热股榜前100中，首板票有哪些",
+                trade_date=date(2026, 5, 15),
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=HotStockFirstBoardIntersectionProvider(),
+        )
+
+        self.assertIn("hot_stock_ranking", response.tool_calls)
+        self.assertIn("limit_up_events", response.tool_calls)
+        self.assertIn("思泉新材(301489)", response.answer)
+        self.assertNotIn("600519", response.answer)
+        self.assertNotIn("002230", response.answer)
+        self.assertIn("共有 1 只首板票", response.answer)
+        self.assertTrue(any("cross-list" in warning for warning in response.warnings))
 
     @patch("app.agents.tools.collect_finance_news")
     def test_policy_repairs_broad_finance_news_with_structured_feed(
