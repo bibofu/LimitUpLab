@@ -223,7 +223,7 @@ class AgentToolPolicyTest(unittest.TestCase):
         payload = execution["facts"]["prediction_quality_audit"]
         self.assertEqual(
             payload["audited_scoring_version"],
-            "first-board-rule-v3-board-shape-small-cap",
+            "first-board-rule-v4-opening-one-word-board",
         )
         self.assertEqual(payload["policy_status"]["required_trade_dates"], 60)
 

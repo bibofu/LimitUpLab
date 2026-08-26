@@ -7,8 +7,13 @@ from datetime import datetime, timezone
 from app.models import ScoringPolicy
 
 
-DEFAULT_SCORING_POLICY_VERSION = "first-board-rule-v3-board-shape-small-cap"
-LEGACY_DEFAULT_POLICY_VERSIONS = frozenset({"first-board-rule-v2-enriched"})
+DEFAULT_SCORING_POLICY_VERSION = "first-board-rule-v4-opening-one-word-board"
+LEGACY_DEFAULT_POLICY_VERSIONS = frozenset(
+    {
+        "first-board-rule-v2-enriched",
+        "first-board-rule-v3-board-shape-small-cap",
+    }
+)
 SCORING_POLICY_REGISTRY_VERSION = "scoring-policy-registry-v1"
 
 FACTOR_NAMES: dict[str, str] = {
@@ -50,12 +55,13 @@ def build_default_scoring_policy() -> ScoringPolicy:
 
     return ScoringPolicy(
         version=DEFAULT_SCORING_POLICY_VERSION,
-        parent_version="first-board-rule-v2-enriched",
+        parent_version="first-board-rule-v3-board-shape-small-cap",
         status="champion",
         factor_weights=dict(DEFAULT_FACTOR_WEIGHTS),
         source="default",
         rationale=[
             "Penalizes unbroken one-word boards versus intraday limit-up moves.",
+            "Treats data-source-normalized 09:30 opening seals as one-word boards.",
             "Scores smaller float market caps above larger float market caps.",
         ],
         created_at=datetime(2026, 8, 26, tzinfo=timezone.utc),

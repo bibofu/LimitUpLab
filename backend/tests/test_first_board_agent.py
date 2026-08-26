@@ -122,6 +122,31 @@ class FirstBoardAgentTest(unittest.TestCase):
         )
         self.assertIn("一字板", "".join(timing.evidence))
 
+    def test_opening_time_normalized_to_0930_is_one_word_board(self) -> None:
+        opening_board = make_event("605277", "新亚电子").model_copy(
+            update={
+                "first_limit_time": time(9, 30),
+                "last_limit_time": time(9, 30),
+                "seal_count": 1,
+                "break_count": 0,
+            }
+        )
+        reopened_board = opening_board.model_copy(
+            update={
+                "symbol": "605278",
+                "name": "开板样本",
+                "seal_count": 2,
+                "break_count": 1,
+            }
+        )
+
+        response = build_first_board_ratings([opening_board, reopened_board])
+        ratings = {item.facts.symbol: item for item in response.candidates}
+
+        self.assertTrue(ratings["605277"].facts.is_one_word_board)
+        self.assertFalse(ratings["605278"].facts.is_one_word_board)
+        self.assertIn("一字板缺少盘中换手与承接验证", ratings["605277"].risks)
+
     def test_low_float_market_cap_scores_above_high_float_market_cap(self) -> None:
         common = {
             "trade_date": date(2026, 5, 16),

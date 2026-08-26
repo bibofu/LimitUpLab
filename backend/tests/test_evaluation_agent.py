@@ -179,7 +179,7 @@ class EvaluationAgentTest(unittest.TestCase):
                         score=90,
                         rating="A",
                         confidence=0.9,
-                        scoring_version="first-board-rule-v3-board-shape-small-cap",
+                        scoring_version="first-board-rule-v4-opening-one-word-board",
                         prediction_source="historical_backtest",
                         data_as_of=trade_date,
                         facts_json={},

@@ -752,15 +752,19 @@ def _build_risks(facts: FirstBoardCandidateFacts) -> list[str]:
 
 
 def _is_one_word_board(event: LimitUpEvent) -> bool:
-    """Infer an unbroken one-word board from auction seal facts."""
+    """Infer an unbroken one-word board from auction/opening seal facts.
 
-    auction_time = time(9, 25)
+    AKShare and Tonghuashun may normalize an auction-sealed stock to 09:30
+    instead of 09:25, so both timestamps represent the same opening state.
+    """
+
+    opening_seal_times = {time(9, 25), time(9, 30)}
     return (
         event.closed_limit
         and event.break_count == 0
         and event.seal_count == 1
-        and event.first_limit_time == auction_time
-        and event.last_limit_time == auction_time
+        and event.first_limit_time in opening_seal_times
+        and event.last_limit_time == event.first_limit_time
     )
 
 
