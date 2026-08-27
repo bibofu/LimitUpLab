@@ -165,6 +165,8 @@ Evaluation Agent 将历史预测标记为 `success`、`partial`、`miss`、`avoi
 
 `/api/agents/prediction-quality-audit` 会先按 `live / historical_backtest` 和评分版本拆分预测，再对同一股票同一交易日去重；未成熟、Outcome 待回填和完整样本分开统计，避免把未来尚不存在的结果算成失败，也避免把历史重算样本伪装成真实当日预测。
 
+`/api/agents/factor-signal-diagnostic` 提供独立的快速证伪诊断：单因子按交易日计算横截面 IC，并使用日期级符号翻转检验和 Bonferroni 校正；分位比较保留同分样本；联合 Lasso 使用按交易日留一的样本外预测和日期块 bootstrap。该报告只输出“当前未发现可复现信号”或“信号需要继续验证”，不会把小样本下的未显著误写成“因子已被证明为噪声”。
+
 截至 2026-08-22 的本地审计中，v3 已生成 3 个测试日不重叠的样本外折，但只有 14 个 Outcome 结果日，因此仍保持影子状态。当前评分 Top10 尚未优于最早封板基线，页面会如实展示这一结论和数据覆盖缺口。
 
 ### 5. 可观测与可降级
@@ -475,6 +477,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mo
 | `GET` | `/api/agents/rating-evaluation` | Evaluation Agent 复盘 |
 | `GET` | `/api/agents/review-report` | 近期 Top10 追踪报告 |
 | `GET` | `/api/agents/prediction-quality-audit` | 预测来源、覆盖率和基线审计 |
+| `GET` | `/api/agents/factor-signal-diagnostic` | 日期阻断的因子快速证伪诊断 |
 | `GET` | `/api/agents/scoring-policies` | Champion/Challenger 状态 |
 | `GET` | `/api/agents/data-health` | Agent 数据健康 |
 | `GET` | `/api/agents/system-health` | 本地系统健康 |

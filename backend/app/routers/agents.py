@@ -312,7 +312,7 @@ def get_factor_signal_diagnostic(
     end_date: Optional[date] = None,
     outcome_measure: str = "next_open_to_close_pct",
 ) -> FactorSignalDiagnosticResponse:
-    """Return an independent in-sample falsification of the 14 scoring factors."""
+    """Return a date-aware falsification diagnostic for the scoring factors."""
 
     events = get_limit_up_repository().list_events()
     if not events:

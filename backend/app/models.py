@@ -773,14 +773,18 @@ class RatingBacktestResponse(BaseModel):
 
 
 class FactorSignalDiagnosticRow(BaseModel):
-    """One scoring factor's single-signal strength against a post-board outcome."""
+    """One factor's date-aware cross-sectional signal diagnostic."""
 
     factor_key: str
     factor_name: str
     sample_size: int
-    spearman_rho: float | None = None
+    trade_date_count: int
+    mean_daily_ic: float | None = None
+    median_daily_ic: float | None = None
+    daily_ic_positive_rate: float | None = None
     p_value: float | None = None
     significant_after_bonferroni: bool
+    tercile_trade_date_count: int
     top_tercile_count: int
     bottom_tercile_count: int
     top_tercile_mean_outcome: float | None = None
@@ -790,7 +794,7 @@ class FactorSignalDiagnosticRow(BaseModel):
 
 
 class FactorSignalLassoSummary(BaseModel):
-    """Joint multivariate signal summary across the 14 scoring factors."""
+    """Date-blocked joint signal summary across the scoring factors."""
 
     sample_size: int
     lasso_alpha: float
@@ -799,6 +803,11 @@ class FactorSignalLassoSummary(BaseModel):
     retained_factor_keys: list[str]
     ols_r2: float | None = None
     ols_adjusted_r2: float | None = None
+    blocked_oos_r2: float | None = None
+    blocked_oos_trade_date_count: int = 0
+    blocked_oos_mean_daily_ic: float | None = None
+    blocked_oos_ic_p_value: float | None = None
+    joint_signal_detected: bool = False
     bootstrap_iterations: int
     bootstrap_max_retention_rate: float | None = None
     coefficients: dict[str, float] = Field(default_factory=dict)
@@ -807,7 +816,7 @@ class FactorSignalLassoSummary(BaseModel):
 
 
 class FactorSignalDiagnosticResponse(BaseModel):
-    """Independent in-sample falsification diagnostic for the 14 scoring factors."""
+    """Date-aware falsification diagnostic for the 14 scoring factors."""
 
     start_date: date
     end_date: date
@@ -819,6 +828,11 @@ class FactorSignalDiagnosticResponse(BaseModel):
     factors: list[FactorSignalDiagnosticRow]
     lasso: FactorSignalLassoSummary
     strongest_factor_key: str | None = None
+    verdict_status: Literal[
+        "insufficient_sample",
+        "no_robust_signal",
+        "signal_requires_validation",
+    ]
     verdict: str
     caveats: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

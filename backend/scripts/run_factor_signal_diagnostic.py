@@ -121,12 +121,14 @@ def _print_summary(response, output_path: Path) -> None:
     print(f"  bonferroni alpha = {response.bonferroni_alpha}")
     print()
     print(
-        f"  {'factor':<22} {'n':>4} {'rho':>7} {'p':>8} {'sig':>3} "
+        f"  {'factor':<22} {'n':>4} {'days':>4} {'meanIC':>7} {'p':>8} {'sig':>3} "
         f"{'spread':>8} {'dir':>11}"
     )
     print("  " + "-" * 70)
     for row in response.factors:
-        rho = "  N/A" if row.spearman_rho is None else f"{row.spearman_rho:+.3f}"
+        mean_ic = (
+            "  N/A" if row.mean_daily_ic is None else f"{row.mean_daily_ic:+.3f}"
+        )
         p = "  N/A" if row.p_value is None else f"{row.p_value:.4f}"
         spread = (
             "  N/A"
@@ -134,18 +136,25 @@ def _print_summary(response, output_path: Path) -> None:
             else f"{row.tercile_spread_pct:+.2f}"
         )
         print(
-            f"  {row.factor_name:<20} {row.sample_size:>4} {rho:>7} {p:>8} "
+            f"  {row.factor_name:<20} {row.sample_size:>4} "
+            f"{row.trade_date_count:>4} {mean_ic:>7} {p:>8} "
             f"{'yes' if row.significant_after_bonferroni else '':>3} {spread:>8} "
             f"{row.direction:>11}"
         )
     lasso = response.lasso
     print()
     print(
-        f"  Lasso: retained {lasso.retained_factor_count}/14 at alpha={lasso.lasso_alpha:.4g}"
+        f"  Lasso: retained {lasso.retained_factor_count}/14 "
+        f"at alpha={lasso.lasso_alpha:.4g}"
         f" (alpha_max={lasso.alpha_max:.4g})"
     )
     print(
         f"  OLS R2={lasso.ols_r2}  adjusted R2={lasso.ols_adjusted_r2}"
+        f"  blocked OOS R2={lasso.blocked_oos_r2}"
+    )
+    print(
+        f"  blocked mean daily IC={lasso.blocked_oos_mean_daily_ic}"
+        f"  IC p={lasso.blocked_oos_ic_p_value}"
         f"  bootstrap_max_retention={lasso.bootstrap_max_retention_rate}"
     )
     if lasso.retained_factor_keys:
@@ -153,7 +162,7 @@ def _print_summary(response, output_path: Path) -> None:
     print()
     print(f"  strongest factor: {response.strongest_factor_key}")
     print()
-    print("VERDICT")
+    print(f"VERDICT [{response.verdict_status}]")
     print("  " + response.verdict)
     print()
     if response.warnings:
