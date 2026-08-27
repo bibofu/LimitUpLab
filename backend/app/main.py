@@ -10,7 +10,7 @@ configure_runtime_environment()
 
 app = FastAPI(
     title="LimitUpLab API",
-    description="Research APIs for A-share limit-up events and short-term sentiment.",
+    description="Research APIs for A-share limit-up events and first-board evaluation.",
     version="0.1.0",
 )
 

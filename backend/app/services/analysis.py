@@ -83,13 +83,6 @@ def summarize_market(
     continued_board_count = sum(1 for event in closed_events if event.board_height > 1)
     total_amount = sum(event.amount for event in closed_events)
 
-    if continued_board_count >= 3 and failed_rate < 0.35:
-        sentiment = "heating"
-    elif failed_rate > 0.55:
-        sentiment = "cooling"
-    else:
-        sentiment = "diverging"
-
     return MarketSummary(
         trade_date=latest_date,
         limit_up_count=len(closed_events),
@@ -110,7 +103,6 @@ def summarize_market(
             for name, count in concept_counts.most_common(5)
         ],
         indices=indices or [],
-        sentiment=sentiment,
     )
 
 

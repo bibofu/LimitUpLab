@@ -121,7 +121,6 @@ def build_first_board_candidate_facts(
         market_first_board_count=summary.first_board_count,
         market_failed_limit_up_rate=summary.failed_limit_up_rate,
         market_max_board_height=summary.max_board_height,
-        market_sentiment=summary.sentiment,
         enrichment=enrichment,
         data_missing=data_missing or [],
     )

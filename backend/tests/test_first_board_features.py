@@ -112,7 +112,38 @@ class FirstBoardFeaturesTest(unittest.TestCase):
         self.assertEqual(feature.turnover_bucket, "extreme")
         self.assertEqual(feature.amount_bucket, "medium")
         self.assertEqual(feature.market_failed_rate_bucket, "fragile")
-        self.assertEqual(feature.feature_version, "first-board-feature-v1")
+        self.assertEqual(feature.feature_version, "first-board-feature-v2-no-sentiment")
+
+    def test_initialize_database_removes_legacy_market_sentiment_column(self) -> None:
+        features = build_first_board_features(SAMPLE_EVENTS, trade_date=date(2026, 5, 15))
+
+        with temporary_database_path() as database_path:
+            connection = connect(database_path)
+            try:
+                initialize_database(connection)
+                SQLiteFirstBoardRepository(database_path=database_path).upsert_features(features)
+                connection.execute(
+                    "ALTER TABLE first_board_features "
+                    "ADD COLUMN market_sentiment TEXT NOT NULL DEFAULT 'cooling'"
+                )
+                connection.commit()
+
+                initialize_database(connection)
+
+                columns = {
+                    row["name"]
+                    for row in connection.execute(
+                        "PRAGMA table_info(first_board_features)"
+                    ).fetchall()
+                }
+                row_count = connection.execute(
+                    "SELECT COUNT(*) FROM first_board_features"
+                ).fetchone()[0]
+            finally:
+                connection.close()
+
+        self.assertNotIn("market_sentiment", columns)
+        self.assertEqual(row_count, 1)
 
     def test_repository_upserts_and_lists_features(self) -> None:
         features = build_first_board_features(SAMPLE_EVENTS, trade_date=date(2026, 5, 15))
@@ -124,7 +155,6 @@ class FirstBoardFeaturesTest(unittest.TestCase):
 
         self.assertEqual(len(persisted), 1)
         self.assertEqual(persisted[0].symbol, "301489")
-        self.assertEqual(persisted[0].market_sentiment, "cooling")
 
     def test_build_first_board_outcome_from_event_performance(self) -> None:
         event = next(item for item in SAMPLE_EVENTS if item.symbol == "301489")

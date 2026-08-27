@@ -197,7 +197,7 @@ class ConceptHeat(BaseModel):
 
 
 class MarketSummary(BaseModel):
-    """Dashboard summary for the latest persisted trading day."""
+    """Objective dashboard facts for the latest persisted trading day."""
 
     trade_date: date
     limit_up_count: int
@@ -211,7 +211,6 @@ class MarketSummary(BaseModel):
     hot_industries: list[str]
     hot_concepts: list[ConceptHeat]
     indices: list[MarketIndexSnapshot]
-    sentiment: Literal["heating", "diverging", "cooling"]
 
 
 class DragonTigerReviewItem(BaseModel):
@@ -339,7 +338,6 @@ class FirstBoardFeature(BaseModel):
     market_failed_limit_up_rate: float
     market_failed_rate_bucket: str
     market_max_board_height: int
-    market_sentiment: Literal["heating", "diverging", "cooling"]
     closed_limit: bool
     feature_version: str
     created_at: datetime
@@ -498,7 +496,6 @@ class FirstBoardCandidateFacts(BaseModel):
     market_first_board_count: int
     market_failed_limit_up_rate: float
     market_max_board_height: int
-    market_sentiment: Literal["heating", "diverging", "cooling"]
     enrichment: FirstBoardEnrichmentSnapshot | None = None
     data_missing: list[str] = Field(default_factory=list)
 

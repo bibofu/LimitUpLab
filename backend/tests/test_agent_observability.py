@@ -13,11 +13,11 @@ class AgentObservabilityTest(unittest.TestCase):
             session_id="session-observe",
             run_type="agent_chat",
             status="success",
-            intent="market_sentiment_query",
+            intent="market_overview_query",
             tool_calls=["llm_tool_planner", "market_summary", "llm_tool_answer"],
             input_json={"message": "market mood"},
             output_json={
-                "answer": "A-share sentiment is diverging.",
+                "answer": "A-share limit-up count is 105.",
                 "warnings": ["not investment advice"],
                 "tool_results": [
                     {
@@ -41,7 +41,7 @@ class AgentObservabilityTest(unittest.TestCase):
         self.assertEqual(summary.duration_ms, 123)
         self.assertEqual(summary.warnings, ["not investment advice"])
         self.assertEqual(summary.tool_results[0].name, "market_summary")
-        self.assertIn("A-share sentiment", summary.answer_preview or "")
+        self.assertIn("limit-up count", summary.answer_preview or "")
 
 
 if __name__ == "__main__":

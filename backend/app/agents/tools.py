@@ -114,9 +114,9 @@ class ToolResult:
 TOOL_SCHEMAS = [
     AgentToolSchema(
         name="market_summary",
-        description="读取本地最新市场情绪、涨停数量、首板数量、炸板率、最高连板和热门行业。",
+        description="读取本地最新涨停数量、首板数量、炸板率、最高连板和热门行业等客观市场数据。",
         args_schema={"type": "object", "properties": {}, "required": []},
-        returns="Market sentiment facts for the latest local trade date.",
+        returns="Objective market facts for the latest local trade date.",
     ),
     AgentToolSchema(
         name="daily_board_promotion",
@@ -578,17 +578,11 @@ class AgentToolRegistry:
         )
 
     def market_summary(self) -> ToolResult:
-        """Return latest local market sentiment facts."""
+        """Return the latest objective local market facts."""
 
         summary = summarize_market(self.events)
-        label = {
-            "heating": "升温",
-            "diverging": "分歧",
-            "cooling": "退潮",
-        }.get(summary.sentiment, summary.sentiment)
         trace_output = {
             "trade_date": summary.trade_date.isoformat(),
-            "sentiment": summary.sentiment,
             "limit_up_count": summary.limit_up_count,
             "first_board_count": summary.first_board_count,
             "continued_board_count": summary.continued_board_count,
@@ -601,7 +595,7 @@ class AgentToolRegistry:
             input={},
             output=summary,
             summary=(
-                f"{summary.trade_date.isoformat()} 情绪{label}，涨停{summary.limit_up_count}只，"
+                f"{summary.trade_date.isoformat()} 涨停{summary.limit_up_count}只，"
                 f"首板{summary.first_board_count}只，连板{summary.continued_board_count}只，"
                 f"炸板率{summary.failed_limit_up_rate:.0%}。"
             ),

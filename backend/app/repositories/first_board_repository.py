@@ -53,12 +53,11 @@ class SQLiteFirstBoardRepository:
                     market_failed_limit_up_rate,
                     market_failed_rate_bucket,
                     market_max_board_height,
-                    market_sentiment,
                     closed_limit,
                     feature_version,
                     created_at
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(trade_date, symbol) DO UPDATE SET
                     name = excluded.name,
                     first_limit_minutes = excluded.first_limit_minutes,
@@ -79,7 +78,6 @@ class SQLiteFirstBoardRepository:
                     market_failed_limit_up_rate = excluded.market_failed_limit_up_rate,
                     market_failed_rate_bucket = excluded.market_failed_rate_bucket,
                     market_max_board_height = excluded.market_max_board_height,
-                    market_sentiment = excluded.market_sentiment,
                     closed_limit = excluded.closed_limit,
                     feature_version = excluded.feature_version,
                     created_at = excluded.created_at
@@ -570,7 +568,6 @@ class SQLiteFirstBoardRepository:
             feature.market_failed_limit_up_rate,
             feature.market_failed_rate_bucket,
             feature.market_max_board_height,
-            feature.market_sentiment,
             int(feature.closed_limit),
             feature.feature_version,
             feature.created_at.isoformat(),
@@ -715,7 +712,6 @@ class SQLiteFirstBoardRepository:
             market_failed_limit_up_rate=row["market_failed_limit_up_rate"],
             market_failed_rate_bucket=row["market_failed_rate_bucket"],
             market_max_board_height=row["market_max_board_height"],
-            market_sentiment=row["market_sentiment"],
             closed_limit=bool(row["closed_limit"]),
             feature_version=row["feature_version"],
             created_at=datetime.fromisoformat(row["created_at"]),

@@ -735,6 +735,7 @@ def _tool_planner_system_prompt(tool_schema_prompt: str) -> str:
         "For market popularity, hot-stock ranking, heat or crowding questions, call hot_stock_ranking. "
         "For Dragon-Tiger List, institution flow or hot-money flow questions, call dragon_tiger_list. "
         "For industry-sector performance, strength, ranking, breadth, turnover or fund-flow questions, call sector_performance; never infer a whole sector's performance only from limit-up events. "
+        "For market-overview or sentiment questions, call market_summary but report only objective counts and rates; never assign categorical labels such as heating, divergence, cooling, risk-on or risk-off. "
         "For a broad latest/Today financial-news or market-news digest, call finance_news and omit query unless the user names a topic. "
         "For company-specific news, announcements, policies, research summaries, event catalysts, or other facts not covered by structured tools, call web_search. For why a sector moved, call sector_performance and web_search together. "
         "For questions about one stock's K-line, price trend, moving averages, recent rise/fall, volume, or drawdown, call stock_kline. "
@@ -1331,6 +1332,7 @@ def _tool_answer_system_prompt(
         "treat promotion and intraday highs as separate facts rather than success labels. "
         "For stock trend questions, cite stock_kline.data_as_of and data_fresh, and base the description on returns, moving averages, volume and drawdown. "
         "For sector questions, use sector_performance for the whole-sector conclusion and clearly separate sector breadth from limit-up-stock evidence. "
+        "Do not assign categorical market-sentiment labels such as heating, divergence, cooling, risk-on or risk-off; report objective market counts, rates and index changes instead. "
         "For daily_board_promotion, treat each trade_date as the day promotion was observed from previous_trade_date; report empirical sample counts with every rate and distinguish all limit-up stocks, first-board-to-second-board, and existing continued-board cohorts. "
         "For review_high_score_picks promotion comparisons, report Top10 and full-market first-board sample counts together, separate pending dates, and express promotion_rate_delta as percentage points. "
         "For hot_stock_ranking, use source_label exactly, state captured_at_beijing and data_fresh, and never claim Eastmoney rows are Tonghuashun rows. Treat dragon_tiger_list and remote_limit_up_pool as Tonghuashun structured evidence; never equate popularity or list inclusion with investment value. "
@@ -1748,7 +1750,6 @@ def _execute_llm_tool_calls(
             summary: MarketSummary = result.output
             facts["market_summary"] = {
                 "trade_date": summary.trade_date.isoformat(),
-                "sentiment": summary.sentiment,
                 "limit_up_count": summary.limit_up_count,
                 "first_board_count": summary.first_board_count,
                 "continued_board_count": summary.continued_board_count,
@@ -3010,13 +3011,12 @@ def _answer_market_context(
     request: AgentChatRequest,
     tools: AgentToolRegistry,
 ) -> AgentChatResponse:
-    """Answer market sentiment questions with market-summary facts plus LLM."""
+    """Answer market-overview questions with objective facts plus the LLM."""
 
     market_tool = tools.market_summary()
     summary = market_tool.output
     facts = {
         "trade_date": summary.trade_date.isoformat(),
-        "sentiment": summary.sentiment,
         "limit_up_count": summary.limit_up_count,
         "first_board_count": summary.first_board_count,
         "continued_board_count": summary.continued_board_count,
@@ -3030,7 +3030,7 @@ def _answer_market_context(
         request=request,
         intent="market_context",
         facts=facts,
-        fallback=_template_market_context_answer(summary),
+        fallback=_template_market_overview_answer(summary),
     )
     return AgentChatResponse(
         session_id=request.session_id,
@@ -3890,7 +3890,6 @@ def _answer_general_llm(
     facts = {
         "trade_date": summary.trade_date.isoformat(),
         "market_summary": {
-            "sentiment": summary.sentiment,
             "limit_up_count": summary.limit_up_count,
             "first_board_count": summary.first_board_count,
             "continued_board_count": summary.continued_board_count,
@@ -4017,7 +4016,6 @@ def _build_tool_grounded_facts(
         ),
         "trade_date": ratings.trade_date.isoformat(),
         "market_summary": {
-            "sentiment": summary.sentiment,
             "limit_up_count": summary.limit_up_count,
             "first_board_count": summary.first_board_count,
             "continued_board_count": summary.continued_board_count,
@@ -4404,6 +4402,7 @@ def _generate_llm_answer(
     system_prompt = (
         "You are LimitUpLab's A-share first-board research agent. "
         "Answer in Chinese. Use only the provided tool facts. "
+        "Do not assign categorical market-sentiment labels; use objective counts, rates and index changes. "
         "If facts are insufficient, say what is missing. "
         "Do not provide buy/sell instructions, target prices, positions, or return promises. "
         "Keep the answer concise and practical."
@@ -4428,18 +4427,11 @@ def _generate_llm_answer(
         ]
 
 
-def _template_market_context_answer(summary) -> str:
-    """Build a deterministic market-sentiment answer."""
+def _template_market_overview_answer(summary) -> str:
+    """Build a deterministic answer from objective market facts."""
 
-    sentiment_labels = {
-        "heating": "\u5347\u6e29",
-        "diverging": "\u5206\u6b67",
-        "cooling": "\u9000\u6f6e",
-    }
     return (
         f"{summary.trade_date.isoformat()} \u672c\u5730\u6570\u636e\u663e\u793a\uff0c"
-        f"A \u80a1\u77ed\u7ebf\u60c5\u7eea\u5904\u4e8e"
-        f"{sentiment_labels.get(summary.sentiment, summary.sentiment)}\u72b6\u6001\u3002"
         f"\u5f53\u65e5\u6da8\u505c {summary.limit_up_count} \u53ea\uff0c"
         f"\u9996\u677f {summary.first_board_count} \u53ea\uff0c"
         f"\u8fde\u677f {summary.continued_board_count} \u53ea\uff0c"

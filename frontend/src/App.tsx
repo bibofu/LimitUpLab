@@ -724,12 +724,6 @@ const agentWorkspaceHiddenPaths = new Set([
   "/review",
 ]);
 
-const sentimentCopy = {
-  heating: { label: "升温", detail: "连板梯队在抬升，风险偏好更积极" },
-  diverging: { label: "分歧", detail: "涨停数量仍在，但封板稳定性需要观察" },
-  cooling: { label: "退潮", detail: "炸板压力偏高，短线接力需要降速" },
-};
-
 export function App() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -909,19 +903,12 @@ export function App() {
 }
 
 function MarketSnapshot({ summary }: { summary: MarketSummary }) {
-  const sentiment = sentimentCopy[summary.sentiment];
-
   return (
     <section className="market-snapshot">
-      <div className="market-snapshot-sentiment">
-        <div>
-          <span>市场情绪</span>
-          <time dateTime={summary.trade_date}>{summary.trade_date}</time>
-        </div>
-        <strong><i aria-hidden="true" />{sentiment.label}</strong>
-      </div>
-
       <div className="market-snapshot-indices">
+        <time className="market-snapshot-date" dateTime={summary.trade_date}>
+          {summary.trade_date}
+        </time>
         {summary.indices.map((index) => (
           <article key={index.symbol}>
             <span>{index.name}</span>
@@ -1899,7 +1886,6 @@ function FirstBoardRatingPanel({ ratings }: { ratings: FirstBoardRatingsResponse
                   <Fact label="换手" value={`${candidate.facts.turnover_rate.toFixed(1)}%`} />
                   <Fact label="成交额" value={formatAmount(candidate.facts.amount)} />
                   <Fact label="置信度" value={formatPercent(candidate.confidence)} />
-                  <Fact label="市场情绪" value={sentimentCopy[candidate.facts.market_sentiment].label} />
                 </div>
 
                 {candidate.facts.enrichment?.position ? (

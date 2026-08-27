@@ -1,5 +1,3 @@
-﻿export type Sentiment = "heating" | "diverging" | "cooling";
-
 export interface MarketIndexSnapshot {
   name: string;
   symbol: string;
@@ -29,7 +27,6 @@ export interface MarketSummary {
   hot_industries: string[];
   hot_concepts: ConceptHeat[];
   indices: MarketIndexSnapshot[];
-  sentiment: Sentiment;
 }
 
 export interface DragonTigerReviewItem {
@@ -198,7 +195,6 @@ export interface FirstBoardCandidateFacts {
   market_first_board_count: number;
   market_failed_limit_up_rate: number;
   market_max_board_height: number;
-  market_sentiment: Sentiment;
   enrichment: FirstBoardEnrichmentSnapshot | null;
   data_missing: string[];
 }

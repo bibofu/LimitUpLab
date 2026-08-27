@@ -200,7 +200,7 @@ inspect or remove it.
 ## Endpoints
 
 - `GET /health` - service health check
-- `GET /api/market/summary` - market sentiment summary with real index snapshots
+- `GET /api/market/summary` - objective limit-up summary with real index snapshots
 - `GET /api/market/overview` - dashboard overview
 - `GET /api/limit-up/events` - latest limit-up events
 - `GET /api/limit-up/first-board` - first-board stocks for the latest trading day

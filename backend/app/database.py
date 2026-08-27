@@ -87,7 +87,6 @@ def initialize_database(connection: sqlite3.Connection) -> None:
             market_failed_limit_up_rate REAL NOT NULL,
             market_failed_rate_bucket TEXT NOT NULL,
             market_max_board_height INTEGER NOT NULL,
-            market_sentiment TEXT NOT NULL,
             closed_limit INTEGER NOT NULL,
             feature_version TEXT NOT NULL,
             created_at TEXT NOT NULL,
@@ -95,6 +94,7 @@ def initialize_database(connection: sqlite3.Connection) -> None:
         )
         """
     )
+    _drop_column_if_exists(connection, "first_board_features", "market_sentiment")
     connection.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_first_board_features_date
@@ -444,6 +444,21 @@ def _ensure_columns(
             connection.execute(
                 f"ALTER TABLE {table_name} ADD COLUMN {column_name} {definition}"
             )
+
+
+def _drop_column_if_exists(
+    connection: sqlite3.Connection,
+    table_name: str,
+    column_name: str,
+) -> None:
+    """Drop an obsolete SQLite column while preserving existing table data."""
+
+    columns = {
+        row["name"]
+        for row in connection.execute(f"PRAGMA table_info({table_name})").fetchall()
+    }
+    if column_name in columns:
+        connection.execute(f"ALTER TABLE {table_name} DROP COLUMN {column_name}")
 
 
 def _ensure_agent_predictions_schema(connection: sqlite3.Connection) -> None:

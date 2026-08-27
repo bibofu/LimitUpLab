@@ -50,8 +50,8 @@
       "answer_contains": ["301489"]
     },
     {
-      "case_id": "market_sentiment",
-      "message": "\u6700\u8fd1A\u80a1\u5e02\u573a\u7684\u60c5\u7eea\u600e\u4e48\u6837",
+      "case_id": "market_overview",
+      "message": "\u4eca\u5929A\u80a1\u6da8\u505c\u6570\u636e\u600e\u4e48\u6837",
       "intent_hint": "market_context",
       "expected_intent": "market_context",
       "required_tools": ["market_summary"],

@@ -18,7 +18,7 @@ router = APIRouter()
 
 @router.get("/summary", response_model=MarketSummary)
 def get_market_summary() -> MarketSummary:
-    """Return the latest market sentiment summary with index snapshots."""
+    """Return the latest objective market summary with index snapshots."""
 
     events = get_limit_up_repository().list_events()
     trade_date = latest_trade_date(events)

@@ -517,7 +517,7 @@ Critic 输出能解释为什么降低或不降低置信度。
 
 - `[x]` 新增 Agent 问答评测集 MVP。
   - 新增 `tests/fixtures/agent_eval_cases.json`。
-  - 覆盖能力说明、开盘时间、今日首板、指定日期、评分靠前、单股解释、个股走势、市场情绪、连板查询、缺失日期、越界交易问题。
+  - 覆盖能力说明、开盘时间、今日首板、指定日期、评分靠前、单股解释、个股走势、市场概览、连板查询、缺失日期、越界交易问题。
 
 - `[x]` 新增 deterministic eval runner。
   - 新增 `app.agents.eval_runner`，使用离线 LLM provider 强制走稳定兜底链路。

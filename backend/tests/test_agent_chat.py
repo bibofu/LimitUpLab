@@ -303,11 +303,11 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("09:30", response.answer)
         self.assertIn("15:00", response.answer)
 
-    def test_market_sentiment_question_uses_market_context_tool(self) -> None:
+    def test_market_overview_question_uses_objective_market_facts(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(
                 session_id="s1",
-                message="\u6700\u8fd1A\u80a1\u5e02\u573a\u7684\u60c5\u7eea\u600e\u4e48\u6837",
+                message="\u4eca\u5929A\u80a1\u6da8\u505c\u6570\u636e\u600e\u4e48\u6837",
                 intent_hint="market_context",
             ),
             events=SAMPLE_EVENTS,
@@ -316,6 +316,9 @@ class AgentChatTest(unittest.TestCase):
         self.assertEqual(response.intent, "market_context")
         self.assertIn("market_summary", response.tool_calls)
         self.assertIn("2026-05-15", response.answer)
+        self.assertNotIn("\u5347\u6e29", response.answer)
+        self.assertNotIn("\u5206\u6b67", response.answer)
+        self.assertNotIn("\u9000\u6f6e", response.answer)
 
     def test_exhaustive_first_board_list_is_closed_only_and_complete(self) -> None:
         events = [

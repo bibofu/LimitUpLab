@@ -54,7 +54,6 @@ class AnalysisTest(unittest.TestCase):
         self.assertEqual(summary.failed_count, 4)
         self.assertEqual(summary.failed_limit_up_rate, 0.8)
         self.assertEqual(summary.max_board_height, 4)
-        self.assertEqual(summary.sentiment, "cooling")
 
     def test_first_board_list(self) -> None:
         symbols = [event.symbol for event in list_first_board(SAMPLE_EVENTS)]

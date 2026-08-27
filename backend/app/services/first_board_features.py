@@ -16,7 +16,7 @@ from app.models import (
 from app.services.analysis import events_for_date, summarize_market
 
 
-FEATURE_VERSION = "first-board-feature-v1"
+FEATURE_VERSION = "first-board-feature-v2-no-sentiment"
 OUTCOME_VERSION = "first-board-outcome-v2-entry-open"
 
 
@@ -76,7 +76,6 @@ def build_first_board_feature(
         market_failed_limit_up_rate=summary.failed_limit_up_rate,
         market_failed_rate_bucket=failed_rate_bucket(summary.failed_limit_up_rate),
         market_max_board_height=summary.max_board_height,
-        market_sentiment=summary.sentiment,
         closed_limit=event.closed_limit,
         feature_version=FEATURE_VERSION,
         created_at=_now_utc(),
