@@ -11,6 +11,7 @@ from app.models import ScoringPolicy, ScoringPolicyOptimizationResponse
 from app.services.scoring_policy import (
     LEGACY_DEFAULT_POLICY_VERSIONS,
     build_default_scoring_policy,
+    validate_policy_factor_keys,
 )
 
 
@@ -21,14 +22,22 @@ class SQLiteScoringPolicyRepository:
         self.database_path = database_path
 
     def ensure_default_policy(self) -> ScoringPolicy:
-        """Register the code-compatible baseline when the registry is empty."""
+        """Return a code-compatible Champion, migrating obsolete factor schemas."""
 
         champion = self.get_champion()
-        if champion is not None and not (
-            champion.source == "default"
-            and champion.version in LEGACY_DEFAULT_POLICY_VERSIONS
-        ):
-            return champion
+        if champion is not None:
+            try:
+                validate_policy_factor_keys(champion)
+            except ValueError:
+                champion_is_compatible = False
+            else:
+                champion_is_compatible = True
+            is_legacy_default = (
+                champion.source == "default"
+                and champion.version in LEGACY_DEFAULT_POLICY_VERSIONS
+            )
+            if champion_is_compatible and not is_legacy_default:
+                return champion
         policy = build_default_scoring_policy()
         self.upsert_policy(policy)
         if champion is None:

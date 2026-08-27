@@ -2,7 +2,7 @@ import unittest
 from datetime import date, datetime, time, timezone
 
 from app.agents import build_first_board_ratings
-from app.agents.first_board import _score_profile_and_history
+from app.agents.first_board import _score_market_cap_preference
 from app.models import FirstBoardEnrichmentSnapshot, LimitUpEvent
 from app.services.first_board_critic import build_first_board_critic
 from app.services.sample_data import SAMPLE_EVENTS
@@ -117,10 +117,15 @@ class FirstBoardAgentTest(unittest.TestCase):
             "一字板缺少盘中换手与承接验证",
             one_word_rating.risks,
         )
-        timing = next(
-            item for item in one_word_rating.score_breakdown if item.name == "首封时间"
+        board_pattern = next(
+            item for item in one_word_rating.score_breakdown if item.name == "上板形态"
         )
-        self.assertIn("一字板", "".join(timing.evidence))
+        intraday_pattern = next(
+            item for item in intraday_rating.score_breakdown if item.name == "上板形态"
+        )
+        self.assertEqual(board_pattern.max_score, 10)
+        self.assertLess(board_pattern.score, intraday_pattern.score)
+        self.assertIn("一字板", "".join(board_pattern.evidence))
 
     def test_opening_time_normalized_to_0930_is_one_word_board(self) -> None:
         opening_board = make_event("605277", "新亚电子").model_copy(
@@ -165,9 +170,10 @@ class FirstBoardAgentTest(unittest.TestCase):
             **common,
         )
 
-        low_score = _score_profile_and_history(low_cap)
-        high_score = _score_profile_and_history(high_cap)
+        low_score = _score_market_cap_preference(low_cap)
+        high_score = _score_market_cap_preference(high_cap)
 
+        self.assertEqual(low_score.max_score, 10)
         self.assertGreater(low_score.score, high_score.score)
         self.assertIn("低市值", "".join(low_score.evidence))
         self.assertIn("高市值", "".join(high_score.evidence))

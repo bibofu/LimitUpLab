@@ -16,6 +16,7 @@ from app.models import (
     build_agent_tool_policy_audit,
 )
 from app.services.sample_data import SAMPLE_EVENTS
+from app.services.scoring_policy import DEFAULT_SCORING_POLICY_VERSION
 from app.repositories import SQLiteFirstBoardRepository
 
 
@@ -261,7 +262,7 @@ class AgentToolPolicyTest(unittest.TestCase):
         payload = execution["facts"]["prediction_quality_audit"]
         self.assertEqual(
             payload["audited_scoring_version"],
-            "first-board-rule-v4-opening-one-word-board",
+            DEFAULT_SCORING_POLICY_VERSION,
         )
         self.assertEqual(payload["policy_status"]["required_trade_dates"], 60)
 

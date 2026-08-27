@@ -12,7 +12,7 @@ from app.services.scoring_policy_optimizer import optimize_scoring_policy
 
 
 class ScoringPolicyOptimizerTest(unittest.TestCase):
-    def test_default_policy_reproduces_original_score(self) -> None:
+    def test_default_policy_exposes_explicit_board_shape_and_market_cap_weights(self) -> None:
         policy = build_default_scoring_policy()
 
         response = build_first_board_ratings(
@@ -22,7 +22,9 @@ class ScoringPolicyOptimizerTest(unittest.TestCase):
         rating = response.candidates[0]
 
         self.assertEqual(response.generated_by, policy.version)
-        self.assertEqual(rating.score, 54.5)
+        self.assertEqual(policy.factor_weights["board_pattern"], 10)
+        self.assertEqual(policy.factor_weights["market_cap_preference"], 10)
+        self.assertEqual(sum(policy.factor_weights.values()), 100)
         self.assertEqual(
             [item.max_score for item in rating.score_breakdown],
             list(policy.factor_weights.values()),

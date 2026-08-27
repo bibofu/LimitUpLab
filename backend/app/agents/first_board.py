@@ -24,7 +24,6 @@ from app.services.analysis import events_for_date, latest_trade_date, summarize_
 from app.services.scoring_policy import (
     DEFAULT_SCORING_POLICY_VERSION,
     FACTOR_KEYS_BY_NAME,
-    build_default_scoring_policy,
     validate_policy_factor_keys,
 )
 
@@ -45,10 +44,9 @@ def build_first_board_ratings(
     latest_events = events_for_date(events, target_date)
     summary = summarize_market(latest_events)
     repository = first_board_repository or SQLiteFirstBoardRepository()
-    active_policy = scoring_policy or (
-        SQLiteScoringPolicyRepository(repository.database_path).get_champion()
-        or build_default_scoring_policy()
-    )
+    active_policy = scoring_policy or SQLiteScoringPolicyRepository(
+        repository.database_path
+    ).ensure_default_policy()
     validate_policy_factor_keys(active_policy)
     enrichments = {
         item.symbol: item
@@ -175,10 +173,8 @@ def _rate_candidate(
     """Score one first-board candidate with transparent factor weights."""
 
     base_breakdown = [
-        _score_first_limit_time(
-            facts.first_limit_time,
-            is_one_word_board=facts.is_one_word_board,
-        ),
+        _score_first_limit_time(facts.first_limit_time),
+        _score_board_pattern(facts.is_one_word_board),
         _score_seal_stability(facts.break_count, facts.closed_limit),
         _score_seal_pressure(facts.seal_count),
         _score_turnover(facts.turnover_rate),
@@ -189,7 +185,8 @@ def _rate_candidate(
     enrichment_breakdown = [
         _score_pre_limit_structure(facts.enrichment),
         _score_sector_and_relay(facts.enrichment),
-        _score_profile_and_history(facts.enrichment),
+        _score_market_cap_preference(facts.enrichment),
+        _score_recent_limit_up_history(facts.enrichment),
         _score_dragon_tiger(facts.enrichment),
         _score_popularity(facts.enrichment),
     ]
@@ -346,50 +343,62 @@ def _score_sector_and_relay(
     )
 
 
-def _score_profile_and_history(
+def _score_market_cap_preference(
     enrichment: FirstBoardEnrichmentSnapshot | None,
 ) -> ScoreBreakdownItem:
-    """Score tradable float size and recent limit-up frequency."""
+    """Score the explicit 10-point preference for smaller tradable floats."""
+
+    if enrichment is None or enrichment.float_market_cap is None:
+        return ScoreBreakdownItem(
+            name="市值偏好",
+            score=5,
+            max_score=10,
+            evidence=["流通市值数据缺失，按中性分处理"],
+        )
+    cap_yi = enrichment.float_market_cap / 100_000_000
+    if cap_yi <= 50:
+        score, cap_label = 10, "低市值，短线弹性相对较高"
+    elif cap_yi <= 100:
+        score, cap_label = 8, "中小市值"
+    elif cap_yi <= 200:
+        score, cap_label = 6, "中等市值"
+    elif cap_yi <= 500:
+        score, cap_label = 3, "市值偏高"
+    else:
+        score, cap_label = 1, "高市值，短线弹性相对受限"
+    return ScoreBreakdownItem(
+        name="市值偏好",
+        score=score,
+        max_score=10,
+        evidence=[f"估算流通市值 {cap_yi:.1f} 亿元，{cap_label}"],
+    )
+
+
+def _score_recent_limit_up_history(
+    enrichment: FirstBoardEnrichmentSnapshot | None,
+) -> ScoreBreakdownItem:
+    """Score recent limit-up activity independently from market-cap preference."""
 
     if enrichment is None:
         return ScoreBreakdownItem(
-            name="流通盘与近期股性",
+            name="近期股性",
             score=2.5,
             max_score=5,
-            evidence=["流通盘与近期涨停数据缺失，按中性分处理"],
+            evidence=["近期涨停数据缺失，按中性分处理"],
         )
-    score = 0.0
-    evidence: list[str] = []
-    market_cap = enrichment.float_market_cap
-    if market_cap is not None:
-        cap_yi = market_cap / 100_000_000
-        if cap_yi <= 50:
-            score += 3
-            cap_label = "低市值，短线弹性相对较高"
-        elif cap_yi <= 100:
-            score += 2.5
-            cap_label = "中小市值"
-        elif cap_yi <= 200:
-            score += 2
-            cap_label = "中等市值"
-        elif cap_yi <= 500:
-            score += 1
-            cap_label = "市值偏高"
-        else:
-            score += 0.5
-            cap_label = "高市值，短线弹性相对受限"
-        evidence.append(f"估算流通市值 {cap_yi:.1f} 亿元，{cap_label}")
+    score = 1.0
     count_20d = enrichment.recent_limit_up_count_20d
     if 2 <= count_20d <= 4:
-        score += 2
+        score = 5
     elif count_20d == 1 or count_20d == 5:
-        score += 1
-    evidence.append(f"近 20 个交易日 K 线识别涨停 {count_20d} 次")
+        score = 3
+    elif count_20d > 5:
+        score = 2
     return ScoreBreakdownItem(
-        name="流通盘与近期股性",
-        score=min(5, score),
+        name="近期股性",
+        score=score,
         max_score=5,
-        evidence=evidence,
+        evidence=[f"近 20 个交易日 K 线识别涨停 {count_20d} 次"],
     )
 
 
@@ -475,17 +484,11 @@ def _score_popularity(
     )
 
 
-def _score_first_limit_time(
-    value: time,
-    *,
-    is_one_word_board: bool = False,
-) -> ScoreBreakdownItem:
-    """Score intraday seals above inaccessible one-word limit-up boards."""
+def _score_first_limit_time(value: time) -> ScoreBreakdownItem:
+    """Score the first seal time without mixing in board-pattern preference."""
 
     minutes = value.hour * 60 + value.minute
-    if is_one_word_board:
-        score, label = 10, "竞价封死的一字板，缺少盘中换手与承接验证"
-    elif minutes <= 9 * 60 + 45:
+    if minutes <= 9 * 60 + 45:
         score, label = 25, "首次封板处于早盘强势区间"
     elif minutes <= 10 * 60 + 30:
         score, label = 20, "首次封板处于早盘偏强区间"
@@ -501,6 +504,23 @@ def _score_first_limit_time(
         score=score,
         max_score=25,
         evidence=[f"首次封板时间 {value.strftime('%H:%M')}，{label}"],
+    )
+
+
+def _score_board_pattern(is_one_word_board: bool) -> ScoreBreakdownItem:
+    """Score board accessibility and intraday price-discovery quality."""
+
+    if is_one_word_board:
+        score = 2
+        evidence = "一字板缺少盘中换手与承接验证，上板形态降分"
+    else:
+        score = 10
+        evidence = "盘中上板，经历盘中换手与承接验证"
+    return ScoreBreakdownItem(
+        name="上板形态",
+        score=score,
+        max_score=10,
+        evidence=[evidence],
     )
 
 

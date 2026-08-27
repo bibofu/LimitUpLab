@@ -114,8 +114,16 @@ class FirstBoardEnrichmentTest(unittest.TestCase):
 
         rating = ratings.candidates[0]
         self.assertIsNotNone(rating.facts.enrichment)
-        self.assertEqual(len(rating.score_breakdown), 12)
+        self.assertEqual(len(rating.score_breakdown), 14)
         self.assertEqual(sum(item.max_score for item in rating.score_breakdown), 100)
+        self.assertEqual(
+            next(item.max_score for item in rating.score_breakdown if item.name == "上板形态"),
+            10,
+        )
+        self.assertEqual(
+            next(item.max_score for item in rating.score_breakdown if item.name == "市值偏好"),
+            10,
+        )
         self.assertNotIn("listing_date", rating.facts.data_missing)
         self.assertNotIn("limit_up_history_60d", rating.facts.data_missing)
         self.assertNotIn("position_history_120d", rating.facts.data_missing)
