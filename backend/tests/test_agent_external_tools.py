@@ -207,7 +207,66 @@ class FailedMarketTrendProvider(LLMProvider):
         )
 
 
+class HotStockDirectGuessProvider(LLMProvider):
+    """Fake planner that tries to guess an undated popularity answer."""
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        if "first job is to decide which tools are needed" in system_prompt:
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": "hot_stock_ranking",
+                        "safety": "normal",
+                        "tool_calls": [],
+                        "answer_directly": "我猜贵州茅台最热门。",
+                    }
+                ),
+                model="fake-planner",
+                provider="fake",
+            )
+        return LLMResult(
+            content="最新获取的人气榜中，通鼎互联(002491)排名第3。",
+            model="fake-answer",
+            provider="fake",
+        )
+
+
 class AgentExternalToolsTest(unittest.TestCase):
+    @patch("app.collectors.hithink_finance_collector.HithinkFinanceCollector.collect_hot_stocks")
+    def test_natural_undated_popularity_question_uses_latest_snapshot(
+        self,
+        collect_hot_stocks,
+    ) -> None:
+        collect_hot_stocks.return_value = HithinkHotStockSnapshot(
+            captured_at=datetime.now(timezone.utc),
+            period="day",
+            items=[
+                HithinkHotStockFact(
+                    symbol="002491",
+                    thscode="002491.SZ",
+                    name="通鼎互联",
+                    rank=3,
+                    heat=4_382_035,
+                    rank_change=1,
+                    rank_trend="up",
+                )
+            ],
+        )
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="latest-hot-stock",
+                message="有哪些票比较热门",
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=HotStockDirectGuessProvider(),
+        )
+
+        self.assertIn("hot_stock_ranking", response.tool_calls)
+        self.assertIn("002491", response.answer)
+        self.assertNotIn("我猜", response.answer)
+        collect_hot_stocks.assert_called_once_with(period="day", limit=20)
+
     @patch("app.agents.tools.collect_market_index_trends")
     def test_failed_required_tool_returns_fixed_unanswerable_text(
         self,

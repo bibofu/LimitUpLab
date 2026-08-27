@@ -99,6 +99,36 @@ class FakeUnsupportedDirectProvider(FakeToolPlanningProvider):
         raise AssertionError("Unsupported questions must not reach final generation.")
 
 
+class FakeStaleDateFirstBoardProvider(FakeToolPlanningProvider):
+    """Fake planner that incorrectly injects a historical date into an undated query."""
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        self.calls.append((system_prompt, user_prompt))
+        if "first job is to decide which tools are needed" in system_prompt:
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": "list_first_boards",
+                        "safety": "normal",
+                        "tool_calls": [
+                            {
+                                "name": "limit_up_events",
+                                "arguments": {"trade_date": "2026-08-07"},
+                            }
+                        ],
+                        "answer_directly": "",
+                    }
+                ),
+                model="fake-planner",
+                provider="fake",
+            )
+        return LLMResult(
+            content="最新收盘首板包括最新样本(002002)。",
+            model="fake-answer",
+            provider="fake",
+        )
+
+
 class FakeExhaustiveListProvider(FakeToolPlanningProvider):
     """Fake planner whose final answer intentionally truncates a full list."""
 
@@ -390,6 +420,32 @@ class AgentChatTest(unittest.TestCase):
         self.assertTrue(trace.input["closed_only"])
         self.assertEqual(trace.input["board_height"], 1)
         self.assertTrue(any("incomplete" in item for item in response.warnings))
+
+    def test_undated_first_board_query_uses_latest_local_close(self) -> None:
+        old_event = self._make_event("002001", "历史样本", "测试行业", "测试题材")
+        latest_event = self._make_event(
+            "002002",
+            "最新样本",
+            "测试行业",
+            "测试题材",
+        ).model_copy(update={"trade_date": date(2026, 8, 8)})
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="latest-first-board",
+                message="首板票有哪些",
+            ),
+            events=[old_event, latest_event],
+            llm_provider=FakeStaleDateFirstBoardProvider(),
+        )
+
+        trace = next(
+            item for item in response.tool_results if item.name == "limit_up_events"
+        )
+        self.assertEqual(trace.output["trade_date"], "2026-08-08")
+        self.assertIsNone(trace.input["trade_date"])
+        self.assertIn("002002", response.answer)
+        self.assertNotIn("002001", response.answer)
 
     def test_today_summary_uses_first_board_tool(self) -> None:
         response = answer_first_board_chat(

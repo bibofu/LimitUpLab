@@ -135,11 +135,9 @@ def build_limit_up_query_contract(
 
     planner = planner_arguments or {}
     explicit_trade_date = extract_trade_date(message)
-    trade_date = (
-        explicit_trade_date
-        or request_trade_date
-        or _parse_date(planner.get("trade_date"))
-    )
+    # Date selection is user-controlled. A planner must not turn an undated
+    # question into a stale historical query; None lets the tool use its latest data.
+    trade_date = explicit_trade_date or request_trade_date
 
     explicit_board_height, explicit_min_board_height = extract_board_filters(message)
     board_height = (

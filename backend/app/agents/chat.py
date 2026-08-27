@@ -834,8 +834,9 @@ def _tool_planner_user_prompt(
             item.isoformat() for item in available_dates[:20]
         ],
         "date_instruction": (
-            "If the user says today/latest/current without an explicit date, "
-            "use latest_local_trade_date, not calendar_today. "
+            "If the user provides no explicit date, or says today/latest/current, "
+            "omit date arguments so backend tools use their latest available data. "
+            "Never infer a historical date from conversation history. "
             "If the user asks for a date outside available_trade_dates, call no "
             "rating tool for that date and explain data is missing."
         ),
@@ -1853,11 +1854,7 @@ def _execute_llm_tool_calls(
             days = _parse_optional_int(arguments.get("days")) or (
                 _extract_market_index_days(request.message)
             )
-            end_date = (
-                _parse_optional_date(arguments.get("end_date"))
-                or request.trade_date
-                or _extract_trade_date(request.message)
-            )
+            end_date = _explicit_request_trade_date(request)
             try:
                 result = tools.market_index_trend(
                     days=max(2, min(days, 20)),
@@ -1893,11 +1890,7 @@ def _execute_llm_tool_calls(
             )
         elif name == "daily_board_promotion":
             days = _parse_optional_int(arguments.get("days")) or 5
-            end_date = (
-                _parse_optional_date(arguments.get("end_date"))
-                or request.trade_date
-                or _extract_trade_date(request.message)
-            )
+            end_date = _explicit_request_trade_date(request)
             result = tools.daily_board_promotion(
                 days=max(1, min(days, 60)),
                 end_date=end_date,
@@ -1913,11 +1906,7 @@ def _execute_llm_tool_calls(
             sector = _optional_str(arguments.get("sector"))
             if sector is None:
                 sector = _extract_sector_query(request.message)
-            trade_date = (
-                _parse_optional_date(arguments.get("trade_date"))
-                or request.trade_date
-                or _extract_trade_date(request.message)
-            )
+            trade_date = _explicit_request_trade_date(request)
             try:
                 result = tools.sector_performance(
                     sector=sector,
@@ -1994,11 +1983,7 @@ def _execute_llm_tool_calls(
                 ]
             )
         elif name == "dragon_tiger_list":
-            trade_date = (
-                _parse_optional_date(arguments.get("trade_date"))
-                or request.trade_date
-                or _extract_trade_date(request.message)
-            )
+            trade_date = _explicit_request_trade_date(request)
             board_type = _optional_str(arguments.get("board_type")) or "all"
             query = _optional_str(arguments.get("query"))
             limit = _parse_optional_int(arguments.get("limit")) or 30
@@ -2036,11 +2021,7 @@ def _execute_llm_tool_calls(
                 ]
             )
         elif name == "remote_limit_up_pool":
-            trade_date = (
-                _parse_optional_date(arguments.get("trade_date"))
-                or request.trade_date
-                or _extract_trade_date(request.message)
-            )
+            trade_date = _explicit_request_trade_date(request)
             board_height = (
                 _parse_optional_int(arguments.get("board_height"))
                 or _extract_board_height(request.message)
@@ -2200,7 +2181,7 @@ def _execute_llm_tool_calls(
                 arguments.get("symbol") or arguments.get("query") or ""
             ).strip()
             days = _parse_optional_int(arguments.get("days")) or 20
-            end_date = _parse_optional_date(arguments.get("end_date"))
+            end_date = _explicit_request_trade_date(request)
             if not raw_symbol:
                 facts["stock_kline_error"] = "symbol is required"
                 traces.append(
@@ -2241,7 +2222,7 @@ def _execute_llm_tool_calls(
                 ]
             )
         elif name == "first_board_ratings":
-            trade_date = _parse_optional_date(arguments.get("trade_date"))
+            trade_date = _explicit_request_trade_date(request)
             if trade_date and not _has_events_for_date(tools.events, trade_date):
                 available_dates = sorted(
                     {event.trade_date for event in tools.events},
@@ -2378,7 +2359,7 @@ def _execute_llm_tool_calls(
             )
         elif name == "first_board_critic":
             symbol = str(arguments.get("symbol") or "").strip()
-            trade_date = _parse_optional_date(arguments.get("trade_date"))
+            trade_date = _explicit_request_trade_date(request)
             if not symbol:
                 facts["first_board_critic_error"] = "symbol is required"
                 traces.append(
@@ -2922,7 +2903,9 @@ def _build_agent_plan(
     """Plan intent and tool steps from the user's natural-language question."""
 
     parsed_trade_date = _extract_trade_date(request.message)
-    trade_date = request.trade_date or parsed_trade_date or context.trade_date
+    trade_date = parsed_trade_date or request.trade_date
+    if trade_date is None and _looks_like_context_date_question(request.message):
+        trade_date = context.trade_date
     filter_query = _extract_first_board_filter(request.message)
     if filter_query is None and _looks_like_context_pool_question(request.message):
         filter_query = context.filter_query
@@ -3342,6 +3325,12 @@ def _parse_optional_date(value: object) -> date | None:
         return None
 
 
+def _explicit_request_trade_date(request: AgentChatRequest) -> date | None:
+    """Use only a user/API date; undated questions must reach tools as latest."""
+
+    return _extract_trade_date(request.message) or request.trade_date
+
+
 def _parse_optional_int(value: object) -> int | None:
     """Parse an optional integer from LLM tool arguments."""
 
@@ -3420,6 +3409,15 @@ def _looks_like_context_pool_question(message: str) -> bool:
             "\u8fd9\u4e2a\u6c60\u5b50",
             "\u5019\u9009\u91cc",
         )
+    )
+
+
+def _looks_like_context_date_question(message: str) -> bool:
+    """Return whether an undated follow-up explicitly refers to the prior date."""
+
+    return any(
+        keyword in message
+        for keyword in ("那天", "当天", "该日", "那个交易日", "这个交易日")
     )
 
 

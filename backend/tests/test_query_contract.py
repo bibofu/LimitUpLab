@@ -57,6 +57,15 @@ class QueryContractV2Test(unittest.TestCase):
 
         self.assertEqual(contract.event_status, "closed")
 
+    def test_undated_query_ignores_planner_historical_date(self) -> None:
+        contract = build_limit_up_query_contract(
+            "首板票有哪些",
+            planner_arguments={"trade_date": "2026-08-07"},
+        )
+
+        self.assertIsNone(contract.trade_date)
+        self.assertEqual(contract.board_height, 1)
+
 
 if __name__ == "__main__":
     unittest.main()

@@ -383,7 +383,6 @@ function AgentChatDock({
         message_id: userMessageId,
         message: trimmed,
         intent_hint: inferChatIntent(trimmed),
-        trade_date: tradeDate,
         symbol,
         page_context: {
           page: symbol ? "stock_detail" : "dashboard",

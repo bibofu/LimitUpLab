@@ -1137,7 +1137,7 @@ def looks_like_hot_stock_question(message: str) -> bool:
     """Return whether the user asks for a current stock-popularity ranking."""
 
     compact = re.sub(r"\s+", "", message).lower()
-    return any(
+    explicit_ranking = any(
         term in compact
         for term in (
             "热股榜",
@@ -1148,6 +1148,12 @@ def looks_like_hot_stock_question(message: str) -> bool:
             "热度排名",
             "哪些股票热门",
         )
+    )
+    stock_terms = ("股票", "个股", "哪些票", "什么票", "票比较")
+    popularity_terms = ("热门", "人气高", "热度高", "关注度高")
+    return explicit_ranking or (
+        any(term in compact for term in stock_terms)
+        and any(term in compact for term in popularity_terms)
     )
 
 
