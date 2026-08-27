@@ -26,12 +26,12 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 | 项目 | 状态 |
 | --- | --- |
-| 后端自动化测试 | 163 项通过 |
+| 后端自动化测试 | 186 项通过 |
 | 离线 Agent Eval | 11/11 通过 |
 | 本地数据健康检查 | 已实现 |
 | LLM 流式问答 | 已实现 |
 | 评分 v3 工程实现 | 已完成，影子验证中 |
-| 正式生产部署 | 尚未完成 |
+| 单机生产部署基线 | Docker、Nginx、持久化卷和日更任务配置已完成，待服务器验收 |
 
 评分结果目前仍处于研究和验证阶段。项目已经形成完整的数据与评价闭环，但尚未证明可以稳定预测次日表现。
 
@@ -67,7 +67,7 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 - 排除成交额过小样本
 - 缺失字段显式写入 `data_missing` 并降低置信度
 
-当前评分策略包含 12 类输入：首封时间、封板稳定性、换手率、成交额、封单压力、市场环境、板块接力、涨停前 K 线结构、个股历史、流通市值、龙虎榜和人气快照。
+当前评分策略包含 14 类输入：首封时间、上板形态、封板稳定性、封板次数、换手率、成交额、行业热度、市场环境、涨停前 K 线结构、板块接力、市值偏好、近期股性、龙虎榜和人气快照。
 
 每只候选都会返回：
 
@@ -395,6 +395,27 @@ npm.cmd run dev -- --host 127.0.0.1 --port 5173
 
 macOS / Linux 将 Python 和 npm 命令替换为对应虚拟环境命令即可。
 
+### 7. 香港服务器 Docker 部署
+
+仓库已提供面向单机公开 Demo 的生产部署基线：
+
+- `backend/Dockerfile`：FastAPI、Python 数据依赖和可选同花顺 CLI
+- `frontend/Dockerfile`：React 生产构建与容器内 Nginx
+- `docker-compose.yml`：健康检查、自动重启、SQLite 命名卷和日更 Job
+- `deploy/nginx/`：同域 API 反代、SPA 路由和 SSE 流式配置
+- `.env.production.example`：不含真实密钥的生产环境模板
+
+服务器上执行：
+
+```bash
+cp .env.production.example .env.production
+docker compose --env-file .env.production build
+docker compose --env-file .env.production up -d
+curl --fail http://127.0.0.1:8080/health
+```
+
+完整的域名、HTTPS、定时任务、数据迁移、备份和回滚步骤见 [`deploy/README.md`](./deploy/README.md)。当前配置有意保持单个 Uvicorn worker，以匹配 SQLite 单机阶段；正式多实例并发前应迁移 PostgreSQL 和 Redis。
+
 ## 每日数据更新
 
 正常使用应执行完整流水线，而不是只导入一张涨停表：
@@ -550,7 +571,7 @@ npm.cmd run build
 - Query Contract v2 已覆盖涨停事件主链路，但其他工具仍需要逐步补齐同等级的结构化契约和更大规模真实 LLM Eval。
 - 公告检索目前主要依赖通用搜索，尚未接入完整的结构化公告数据源。
 - 异步 Worker、用户级并发限制、成本配额和取消机制尚未完成。
-- 用户系统、PostgreSQL、Docker、CI/CD 和正式部署配置尚未完成。
+- 用户系统、PostgreSQL、Redis、CI/CD 和多实例部署尚未完成；当前 Docker 配置适用于单机公开 Demo。
 
 ## Roadmap
 
@@ -560,7 +581,7 @@ npm.cmd run build
 2. 持续观察 v3 Challenger 对现行评分、最早封板和固定随机基线的样本外优势。
 3. 将 Query Contract 扩展到板块、新闻和复盘工具，并覆盖工具失败与多轮指代。
 4. 接入结构化公告源并增强引用质量。
-5. 完成并发、异步 Worker、限流和生产部署能力。
+5. 在单机部署基线上继续完成用户系统、并发限流、异步 Worker、PostgreSQL、Redis 和 CI/CD。
 
 详细进度见 [Tasks.md](./Tasks.md)，完整需求见 [需求.md](./%E9%9C%80%E6%B1%82.md)。
 

@@ -10,6 +10,10 @@ from urllib.parse import urlparse
 
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
+DEFAULT_CORS_ORIGINS = (
+    "http://localhost:5173",
+    "http://127.0.0.1:5173",
+)
 PROXY_ENV_NAMES = (
     "HTTP_PROXY",
     "HTTPS_PROXY",
@@ -62,6 +66,20 @@ def env_bool(name: str, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in TRUE_VALUES
+
+
+def configured_cors_origins() -> list[str]:
+    """Return explicit browser origins allowed to call the API."""
+
+    raw_value = os.getenv("LIMITUPLAB_CORS_ORIGINS", "").strip()
+    if not raw_value:
+        return list(DEFAULT_CORS_ORIGINS)
+    origins = list(dict.fromkeys(_split_env_list(raw_value)))
+    if "*" in origins:
+        raise ValueError(
+            "LIMITUPLAB_CORS_ORIGINS must list explicit origins when credentials are enabled"
+        )
+    return origins
 
 
 def hydrate_windows_environment(names: Iterable[str]) -> list[str]:
@@ -167,6 +185,10 @@ def _apply_proxy_alias() -> None:
 def _set_default_if_blank(name: str, value: str) -> None:
     if not os.getenv(name, "").strip():
         os.environ[name] = value
+
+
+def _split_env_list(value: str) -> list[str]:
+    return [item.strip().rstrip("/") for item in value.split(",") if item.strip()]
 
 
 def _local_proxy_endpoint(value: str) -> tuple[str, int] | None:

@@ -6,8 +6,10 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from app.config import (
+    DEFAULT_CORS_ORIGINS,
     PROXY_ENV_NAMES,
     clear_unreachable_local_proxy,
+    configured_cors_origins,
     configure_runtime_environment,
     hydrate_windows_environment,
     load_local_env,
@@ -103,6 +105,27 @@ class ConfigTest(unittest.TestCase):
 
         replace_proxy_environment()
         self.assertTrue(all(name not in os.environ for name in PROXY_ENV_NAMES))
+
+    def test_cors_origins_default_to_local_development(self) -> None:
+        os.environ.pop("LIMITUPLAB_CORS_ORIGINS", None)
+
+        self.assertEqual(configured_cors_origins(), list(DEFAULT_CORS_ORIGINS))
+
+    def test_cors_origins_are_trimmed_deduplicated_and_normalized(self) -> None:
+        os.environ["LIMITUPLAB_CORS_ORIGINS"] = (
+            "https://example.com/, https://www.example.com, https://example.com"
+        )
+
+        self.assertEqual(
+            configured_cors_origins(),
+            ["https://example.com", "https://www.example.com"],
+        )
+
+    def test_cors_origins_reject_wildcard_with_credentials(self) -> None:
+        os.environ["LIMITUPLAB_CORS_ORIGINS"] = "*"
+
+        with self.assertRaisesRegex(ValueError, "explicit origins"):
+            configured_cors_origins()
 
     @patch("app.config._proxy_endpoint_reachable", return_value=False)
     def test_runtime_configuration_enables_llm_and_clears_dead_proxy(

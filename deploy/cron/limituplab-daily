@@ -1,0 +1,6 @@
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# The host timezone should be Asia/Shanghai. The pipeline itself verifies the
+# exchange calendar and will skip non-trading days.
+10 16 * * 1-5 root cd /opt/LimitUpLab && /usr/bin/docker compose --env-file .env.production --profile jobs run --rm daily-update >> /var/log/limituplab/daily-update.log 2>&1

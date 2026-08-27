@@ -489,6 +489,12 @@ Critic 输出能解释为什么降低或不降低置信度。
   - 检查本地最新数据日期、预期数据日期、数据是否新鲜、Agent data health、LLM 配置、代理异常、离线 eval 状态。
   - 新增 `backend/scripts/dev_check.py --ensure-data`，启动前可自动尝试更新最新收盘数据。
   - 新增 `scripts/start_local.cmd`，Windows 一键执行数据新鲜度检查后启动后端和前端。
+  - `[x]` 新增香港服务器单机生产部署基线。
+    - 前后端 Dockerfile、Docker Compose、容器健康检查和自动重启。
+    - React 静态构建、Nginx 同域 API 反代、SPA 回退和 Agent SSE 禁止缓冲。
+    - SQLite 使用独立命名卷，提供数据迁移、在线备份和安全回滚说明。
+    - CORS 改为生产环境变量配置，默认继续兼容本地开发。
+    - 提供宿主机 Nginx、Certbot HTTPS 和工作日 16:10 日更 cron 模板。
   - 前端 Agent 工作台新增系统状态条，展示数据日期、数据新鲜度、LLM 状态和 eval 状态。
 
 - `[x]` 完成上线向前端体验优化第一版。
