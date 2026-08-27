@@ -37,6 +37,7 @@ from app.models import (
     DailyPipelineStatusResponse,
     FirstBoardCriticResponse,
     FirstBoardRatingsResponse,
+    FactorSignalDiagnosticResponse,
     PredictionQualityAuditResponse,
     RatingBacktestResponse,
     ReviewAgentReportResponse,
@@ -53,6 +54,7 @@ from app.repositories import (
     get_limit_up_repository,
 )
 from app.services.data_health import build_agent_data_health
+from app.services.factor_signal_diagnostic import build_factor_signal_diagnostic
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.first_board_critic import build_first_board_critic
 from app.services.dragon_tiger_review import load_dragon_tiger_review
@@ -296,6 +298,37 @@ def get_prediction_quality_audit(
             first_board_repository=SQLiteFirstBoardRepository(),
             scoring_version=scoring_version,
             top_k=top_k,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.get(
+    "/factor-signal-diagnostic",
+    response_model=FactorSignalDiagnosticResponse,
+)
+def get_factor_signal_diagnostic(
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    outcome_measure: str = "next_open_to_close_pct",
+) -> FactorSignalDiagnosticResponse:
+    """Return an independent in-sample falsification of the 14 scoring factors."""
+
+    events = get_limit_up_repository().list_events()
+    if not events:
+        raise HTTPException(status_code=404, detail="No local limit-up events available.")
+    available_dates = sorted({event.trade_date for event in events})
+    resolved_start = start_date or available_dates[0]
+    resolved_end = end_date or available_dates[-1]
+    if resolved_start > resolved_end:
+        raise HTTPException(status_code=400, detail="start_date must be before end_date.")
+    try:
+        return build_factor_signal_diagnostic(
+            events=events,
+            start_date=resolved_start,
+            end_date=resolved_end,
+            first_board_repository=SQLiteFirstBoardRepository(),
+            outcome_measure=outcome_measure,
         )
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error

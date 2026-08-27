@@ -772,6 +772,59 @@ class RatingBacktestResponse(BaseModel):
     generated_by: str
 
 
+class FactorSignalDiagnosticRow(BaseModel):
+    """One scoring factor's single-signal strength against a post-board outcome."""
+
+    factor_key: str
+    factor_name: str
+    sample_size: int
+    spearman_rho: float | None = None
+    p_value: float | None = None
+    significant_after_bonferroni: bool
+    top_tercile_count: int
+    bottom_tercile_count: int
+    top_tercile_mean_outcome: float | None = None
+    bottom_tercile_mean_outcome: float | None = None
+    tercile_spread_pct: float | None = None
+    direction: str
+
+
+class FactorSignalLassoSummary(BaseModel):
+    """Joint multivariate signal summary across the 14 scoring factors."""
+
+    sample_size: int
+    lasso_alpha: float
+    alpha_max: float
+    retained_factor_count: int
+    retained_factor_keys: list[str]
+    ols_r2: float | None = None
+    ols_adjusted_r2: float | None = None
+    bootstrap_iterations: int
+    bootstrap_max_retention_rate: float | None = None
+    coefficients: dict[str, float] = Field(default_factory=dict)
+    bootstrap_retention_rates: dict[str, float] = Field(default_factory=dict)
+    note: str
+
+
+class FactorSignalDiagnosticResponse(BaseModel):
+    """Independent in-sample falsification diagnostic for the 14 scoring factors."""
+
+    start_date: date
+    end_date: date
+    scoring_version: str
+    outcome_measure: str
+    trade_date_count: int
+    sample_size: int
+    bonferroni_alpha: float
+    factors: list[FactorSignalDiagnosticRow]
+    lasso: FactorSignalLassoSummary
+    strongest_factor_key: str | None = None
+    verdict: str
+    caveats: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    generated_by: str
+
+
 class FirstBoardCriticResponse(BaseModel):
     """Critic review for one first-board rating without changing the score."""
 
