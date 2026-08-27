@@ -78,6 +78,27 @@ class FakeDirectFirstBoardProvider(FakeToolPlanningProvider):
         )
 
 
+class FakeUnsupportedDirectProvider(FakeToolPlanningProvider):
+    """Fake planner that fabricates an unsupported answer without evidence."""
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        self.calls.append((system_prompt, user_prompt))
+        if "first job is to decide which tools are needed" in system_prompt:
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": "unsupported_fact",
+                        "safety": "normal",
+                        "tool_calls": [],
+                        "answer_directly": "火星证券交易所今天晴天，指数上涨 8%。",
+                    }
+                ),
+                model="fake-planner",
+                provider="fake",
+            )
+        raise AssertionError("Unsupported questions must not reach final generation.")
+
+
 class FakeExhaustiveListProvider(FakeToolPlanningProvider):
     """Fake planner whose final answer intentionally truncates a full list."""
 
@@ -272,7 +293,23 @@ class AgentChatTest(unittest.TestCase):
 
         self.assertEqual(response.intent, "out_of_scope")
         self.assertEqual(response.tool_calls, [])
-        self.assertIn("\u8d85\u51fa", response.answer)
+        self.assertEqual(response.answer, "抱歉，该问题无法回答")
+
+    def test_unsupported_planner_direct_answer_is_rejected(self) -> None:
+        provider = FakeUnsupportedDirectProvider()
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="unsupported-direct",
+                message="火星证券交易所今天的天气和指数怎么样",
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=provider,
+        )
+
+        self.assertEqual(response.answer, "抱歉，该问题无法回答")
+        self.assertNotIn("llm_planner_direct_answer", response.tool_calls)
+        self.assertEqual(len(provider.calls), 1)
 
     def test_unsafe_investment_question_is_not_routed_to_recommendation(self) -> None:
         response = answer_first_board_chat(

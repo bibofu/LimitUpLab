@@ -174,7 +174,61 @@ class FinanceNewsProvider(LLMProvider):
         )
 
 
+class FailedMarketTrendProvider(LLMProvider):
+    """Fake planner whose required market-data tool fails."""
+
+    def __init__(self) -> None:
+        self.calls = 0
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        self.calls += 1
+        if "first job is to decide which tools are needed" in system_prompt:
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": "market_index_trend",
+                        "safety": "normal",
+                        "tool_calls": [
+                            {
+                                "name": "market_index_trend",
+                                "arguments": {"days": 5},
+                            }
+                        ],
+                        "answer_directly": "",
+                    }
+                ),
+                model="fake-planner",
+                provider="fake",
+            )
+        return LLMResult(
+            content="工具虽然失败，但我猜上证指数近一周上涨。",
+            model="fake-answer",
+            provider="fake",
+        )
+
+
 class AgentExternalToolsTest(unittest.TestCase):
+    @patch("app.agents.tools.collect_market_index_trends")
+    def test_failed_required_tool_returns_fixed_unanswerable_text(
+        self,
+        collect_trends,
+    ) -> None:
+        collect_trends.side_effect = RuntimeError("upstream unavailable")
+        provider = FailedMarketTrendProvider()
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="failed-market-index",
+                message="近一周大盘走势怎么样",
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=provider,
+        )
+
+        self.assertEqual(response.answer, "抱歉，该问题无法回答")
+        self.assertIn("market_index_trend", response.tool_calls)
+        self.assertEqual(provider.calls, 1)
+
     @patch("app.agents.tools.collect_market_index_trends")
     def test_weekly_market_trend_uses_major_index_history(self, collect_trends) -> None:
         def index_item(
