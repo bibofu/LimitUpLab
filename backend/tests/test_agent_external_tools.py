@@ -14,11 +14,14 @@ from app.models import (
     AgentChatRequest,
     FinanceNewsFacts,
     FinanceNewsItem,
+    MarketIndexTrendFacts,
+    MarketIndexTrendItem,
+    MarketIndexTrendPoint,
     SectorPerformanceFacts,
     WebSearchFacts,
     WebSearchResult,
 )
-from app.services.llm_provider import LLMProvider, LLMResult
+from app.services.llm_provider import DisabledLLMProvider, LLMProvider, LLMResult
 from app.services.sample_data import SAMPLE_EVENTS
 
 
@@ -172,6 +175,70 @@ class FinanceNewsProvider(LLMProvider):
 
 
 class AgentExternalToolsTest(unittest.TestCase):
+    @patch("app.agents.tools.collect_market_index_trends")
+    def test_weekly_market_trend_uses_major_index_history(self, collect_trends) -> None:
+        def index_item(
+            name: str,
+            symbol: str,
+            start_close: float,
+            end_close: float,
+            return_pct: float,
+        ) -> MarketIndexTrendItem:
+            return MarketIndexTrendItem(
+                name=name,
+                symbol=symbol,
+                start_date=date(2026, 5, 11),
+                end_date=date(2026, 5, 15),
+                start_close=start_close,
+                end_close=end_close,
+                return_pct=return_pct,
+                max_drawdown_pct=-1.2,
+                positive_days=2,
+                negative_days=2,
+                points=[
+                    MarketIndexTrendPoint(
+                        trade_date=date(2026, 5, 15),
+                        close=end_close,
+                        change_pct=0.5,
+                    )
+                ],
+                source="test-index",
+            )
+
+        collect_trends.return_value = MarketIndexTrendFacts(
+            requested_days=5,
+            requested_end_date=date(2026, 5, 15),
+            data_as_of=date(2026, 5, 15),
+            data_fresh=True,
+            indices=[
+                index_item("上证指数", "000001.SH", 3600, 3672, 2.0),
+                index_item("深证成指", "399001.SZ", 11000, 11110, 1.0),
+                index_item("创业板指", "399006.SZ", 2300, 2277, -1.0),
+            ],
+        )
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="weekly-market-index",
+                message="近一周大盘走势怎么样",
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=DisabledLLMProvider(),
+        )
+
+        self.assertEqual(response.intent, "market_index_trend")
+        self.assertIn("market_index_trend", response.tool_calls)
+        self.assertNotIn("first_board_ratings", response.tool_calls)
+        self.assertIn("上证指数", response.answer)
+        self.assertIn("深证成指", response.answer)
+        self.assertIn("创业板指", response.answer)
+        self.assertIn("+2.00%", response.answer)
+        self.assertIn("-1.00%", response.answer)
+        collect_trends.assert_called_once_with(
+            days=5,
+            end_date=date(2026, 5, 15),
+        )
+
     @patch("app.agents.tools.search_web")
     @patch("app.agents.tools.build_sector_performance")
     def test_policy_repairs_sector_and_search_tools(

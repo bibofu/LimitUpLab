@@ -1,4 +1,5 @@
 import unittest
+from datetime import date
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
@@ -13,6 +14,9 @@ from app.agents.tools import AgentToolRegistry, ToolResult
 from app.models import (
     AgentChatRequest,
     AgentToolTrace,
+    MarketIndexTrendFacts,
+    MarketIndexTrendItem,
+    MarketIndexTrendPoint,
     build_agent_tool_policy_audit,
 )
 from app.services.sample_data import SAMPLE_EVENTS
@@ -188,6 +192,63 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertFalse(signals.rating_backtest)
         self.assertFalse(signals.evaluation)
         self.assertFalse(signals.review)
+
+    def test_market_index_trend_uses_dedicated_grounding(self) -> None:
+        signals = QuestionSignals.from_message("近一周大盘走势怎么样")
+
+        self.assertTrue(signals.market_index_trend)
+        self.assertFalse(signals.stock_kline)
+        execution = self._empty_execution()
+        facts = MarketIndexTrendFacts(
+            requested_days=5,
+            requested_end_date=date(2026, 5, 15),
+            data_as_of=date(2026, 5, 15),
+            data_fresh=True,
+            indices=[
+                MarketIndexTrendItem(
+                    name="上证指数",
+                    symbol="000001.SH",
+                    start_date=date(2026, 5, 11),
+                    end_date=date(2026, 5, 15),
+                    start_close=3600,
+                    end_close=3672,
+                    return_pct=2.0,
+                    max_drawdown_pct=-0.5,
+                    positive_days=3,
+                    negative_days=1,
+                    points=[
+                        MarketIndexTrendPoint(
+                            trade_date=date(2026, 5, 15),
+                            close=3672,
+                            change_pct=0.8,
+                        )
+                    ],
+                    source="test-index",
+                )
+            ],
+        )
+        with patch.object(
+            self.tools,
+            "market_index_trend",
+            return_value=ToolResult(
+                name="market_index_trend",
+                input={"days": 5, "end_date": "2026-05-15"},
+                output=facts,
+                summary="近5日指数走势。",
+                trace_output=facts.model_dump(mode="json"),
+            ),
+        ) as index_trend:
+            repaired = self.policy.reconcile(
+                request=AgentChatRequest(
+                    session_id="policy-index-trend",
+                    message="近一周大盘走势怎么样",
+                ),
+                execution=execution,
+            )
+
+        self.assertEqual(repaired, ["market_index_trend"])
+        index_trend.assert_called_once_with(days=5, end_date=None)
+        self.assertIn("market_index_trend", execution["facts"])
 
     def test_sector_move_reason_does_not_trigger_rating_explanation(self) -> None:
         signals = QuestionSignals.from_message("今天半导体板块为什么下跌")

@@ -42,6 +42,7 @@ class QuestionSignals:
     """Small set of deterministic signals used only as Agent guardrails."""
 
     requested_date: date | None
+    market_index_trend: bool
     sector_performance: bool
     hot_stock_ranking: bool
     finance_news: bool
@@ -78,8 +79,10 @@ class QuestionSignals:
         )
         finance_news = looks_like_finance_news_question(message)
         daily_board_promotion = looks_like_daily_board_promotion_question(message)
+        market_index_trend = looks_like_market_index_trend_question(message)
         return cls(
             requested_date=extract_trade_date(message),
+            market_index_trend=market_index_trend,
             sector_performance=looks_like_sector_performance_question(message),
             hot_stock_ranking=looks_like_hot_stock_question(message),
             finance_news=finance_news,
@@ -88,7 +91,9 @@ class QuestionSignals:
             limit_up_events=looks_like_limit_up_event_question(message),
             first_board_facts=looks_like_first_board_facts_question(message),
             rating_explanation=looks_like_rating_explain_question(message),
-            stock_kline=looks_like_stock_kline_question(message),
+            stock_kline=(
+                looks_like_stock_kline_question(message) and not market_index_trend
+            ),
             prediction_quality=prediction_quality,
             rating_backtest=rating_backtest,
             critic=looks_like_critic_question(message),
@@ -104,6 +109,7 @@ class QuestionSignals:
         return any(
             (
                 self.sector_performance,
+                self.market_index_trend,
                 self.hot_stock_ranking,
                 self.finance_news,
                 self.web_search,
@@ -240,6 +246,16 @@ class AgentToolPolicyEngine:
         """Return ordered rules; earlier tools may provide facts for later rules."""
 
         return (
+            ToolRepairRule(
+                name="market-index-trend-grounding",
+                tool_name="market_index_trend",
+                reason=(
+                    "A multi-day broad-market trend claim requires date-aligned "
+                    "major-index history."
+                ),
+                matches=lambda signals: signals.market_index_trend,
+                repair=self._repair_market_index_trend,
+            ),
             ToolRepairRule(
                 name="hot-stock-ranking-grounding",
                 tool_name="hot_stock_ranking",
@@ -471,6 +487,30 @@ class AgentToolPolicyEngine:
                 f"sector={response.sector_name or 'industry-ranking'}",
                 f"data_as_of={response.data_as_of.isoformat()}",
                 *[f"source={source}" for source in response.sources],
+            ],
+        )
+
+    def _repair_market_index_trend(
+        self,
+        request: AgentChatRequest,
+        signals: QuestionSignals,
+        execution: ToolExecution,
+        context_symbol: str | None,
+    ) -> None:
+        del context_symbol
+        result = self.tools.market_index_trend(
+            days=extract_market_index_days(request.message),
+            end_date=request.trade_date or signals.requested_date,
+        )
+        response = result.output
+        self._record_success(
+            execution,
+            result=result,
+            fact_name="market_index_trend",
+            fact_value=response.model_dump(mode="json"),
+            references=[
+                f"index_data_as_of={response.data_as_of.isoformat()}",
+                *[f"index_source={item.source}" for item in response.indices],
             ],
         )
 
@@ -890,6 +930,52 @@ def extract_kline_days(message: str) -> int:
     if match is None:
         return 20
     return max(5, min(int(match.group(1)), 60))
+
+
+def extract_market_index_days(message: str) -> int:
+    """Extract a bounded broad-index window in trading days."""
+
+    compact = re.sub(r"\s+", "", message)
+    if any(term in compact for term in ("近一周", "最近一周", "过去一周", "本周")):
+        return 5
+    if any(term in compact for term in ("近两周", "最近两周", "过去两周")):
+        return 10
+    if any(term in compact for term in ("近一个月", "最近一个月", "过去一个月", "近一月")):
+        return 20
+    match = re.search(r"(?:最近|近|过去)?(\d{1,2})(?:个)?(?:交易日|天|日)", compact)
+    if match:
+        return max(2, min(int(match.group(1)), 20))
+    return 5
+
+
+def looks_like_market_index_trend_question(message: str) -> bool:
+    """Return whether a question asks for broad-index multi-day performance."""
+
+    compact = re.sub(r"\s+", "", message).lower()
+    index_terms = (
+        "大盘",
+        "指数",
+        "沪指",
+        "上证",
+        "深证成指",
+        "创业板指",
+        "a股走势",
+        "a股大盘",
+    )
+    trend_terms = (
+        "走势",
+        "趋势",
+        "表现",
+        "涨跌",
+        "行情",
+        "近一周",
+        "最近一周",
+        "本周",
+        "近一个月",
+    )
+    return any(term in compact for term in index_terms) and any(
+        term in compact for term in trend_terms
+    )
 
 
 def looks_like_first_board_facts_question(message: str) -> bool:

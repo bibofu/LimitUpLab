@@ -23,6 +23,7 @@ from app.agents.tool_policy import (
     AgentToolPolicyEngine,
     QuestionSignals as _QuestionSignals,
     ToolExecution,
+    extract_market_index_days as _extract_market_index_days,
     extract_kline_days as _extract_kline_days,
     extract_promotion_days as _extract_promotion_days,
     extract_sector_query as _extract_sector_query,
@@ -55,6 +56,7 @@ from app.models import (
     FirstBoardRating,
     FirstBoardRatingsResponse,
     LimitUpEvent,
+    MarketIndexTrendFacts,
     MarketSummary,
 )
 from app.repositories import SQLiteFirstBoardRepository
@@ -87,7 +89,7 @@ SUPPORTED_INTENTS = {
 
 TEXT = {
     "greeting": "你好，我是 LimitUpLab 的首板 Agent。我可以总结今日首板、解释个股评分、分析风险，也可以查询个股走势和市场环境。",
-    "capability": "我是 LimitUpLab 的首板研究 Agent。我可以总结交易日首板候选、列出高分股票、分析板块分布、按题材筛选候选、解释评分与风险，并查询个股 K 线和市场数据。我只提供基于事实的研究分析，不提供买卖指令、仓位、目标价或收益承诺。",
+    "capability": "我是 LimitUpLab 的首板研究 Agent。我可以总结交易日首板候选、列出高分股票、分析板块分布、按题材筛选候选、解释评分与风险，并查询个股 K 线、板块行情和大盘指数区间走势。我只提供基于事实的研究分析，不提供买卖指令、仓位、目标价或收益承诺。",
     "smalltalk": "我在。你可以直接问首板候选、板块分布、评分理由、风险或个股走势。",
     "out_of_scope": "这个问题超出我当前工具能力边界。我主要回答 A 股涨停数据、首板候选、评分、板块表现、风险和个股走势问题。",
     "unsafe": "我不能给出直接交易指令、资金配比、价格预测或回报承诺。我可以基于结构化数据分析评分理由、风险、板块热度和市场环境。",
@@ -206,6 +208,12 @@ def answer_first_board_chat(
     )
     if prediction_quality_fallback is not None:
         return prediction_quality_fallback
+    market_index_fallback = _answer_market_index_trend_without_llm(
+        request=request,
+        tools=tools,
+    )
+    if market_index_fallback is not None:
+        return market_index_fallback
     stock_kline_fallback = _answer_stock_kline_without_llm(
         request=request,
         tools=tools,
@@ -735,6 +743,7 @@ def _tool_planner_system_prompt(tool_schema_prompt: str) -> str:
         "For market popularity, hot-stock ranking, heat or crowding questions, call hot_stock_ranking. "
         "For Dragon-Tiger List, institution flow or hot-money flow questions, call dragon_tiger_list. "
         "For industry-sector performance, strength, ranking, breadth, turnover or fund-flow questions, call sector_performance; never infer a whole sector's performance only from limit-up events. "
+        "For broad-market, major-index, Shanghai Composite, Shenzhen Component or ChiNext Index performance over multiple days, call market_index_trend with the requested trading-day window; never infer index performance from limit-up counts. "
         "For market-overview or sentiment questions, call market_summary but report only objective counts and rates; never assign categorical labels such as heating, divergence, cooling, risk-on or risk-off. "
         "For a broad latest/Today financial-news or market-news digest, call finance_news and omit query unless the user names a topic. "
         "For company-specific news, announcements, policies, research summaries, event catalysts, or other facts not covered by structured tools, call web_search. For why a sector moved, call sector_performance and web_search together. "
@@ -1052,6 +1061,30 @@ def _template_answer_from_tool_facts(
         lines.append(TEXT["safety"])
         return "\n".join(lines)
 
+    if "market_index_trend" in facts:
+        trend = facts["market_index_trend"]
+        lines = [
+            f"截至 {trend.get('data_as_of')}，近 {trend.get('requested_days')} 个交易日"
+            "主要指数表现如下："
+        ]
+        for item in trend.get("indices", []):
+            lines.append(
+                f"- {item.get('name')}：{item.get('start_close')} → "
+                f"{item.get('end_close')}，区间涨跌 "
+                f"{float(item.get('return_pct') or 0):+.2f}%；"
+                f"上涨 {item.get('positive_days')} 日、下跌 "
+                f"{item.get('negative_days')} 日，最大收盘回撤 "
+                f"{float(item.get('max_drawdown_pct') or 0):.2f}%。"
+            )
+        if not trend.get("data_fresh"):
+            lines.append(
+                f"请求截止日为 {trend.get('requested_end_date')}，"
+                "以上按最近可用交易日展示。"
+            )
+        lines.append("以上只描述指数已经发生的区间走势，不代表后续方向。")
+        lines.append(TEXT["safety"])
+        return "\n".join(lines)
+
     if "sector_performance" in facts:
         sector = facts["sector_performance"]
         if sector.get("sector_name"):
@@ -1332,6 +1365,7 @@ def _tool_answer_system_prompt(
         "treat promotion and intraday highs as separate facts rather than success labels. "
         "For stock trend questions, cite stock_kline.data_as_of and data_fresh, and base the description on returns, moving averages, volume and drawdown. "
         "For sector questions, use sector_performance for the whole-sector conclusion and clearly separate sector breadth from limit-up-stock evidence. "
+        "For broad-index trend questions, cite the requested window and data_as_of, compare all returned major indices using period returns, up/down days and drawdown, and do not substitute limit-up counts for index performance. "
         "Do not assign categorical market-sentiment labels such as heating, divergence, cooling, risk-on or risk-off; report objective market counts, rates and index changes instead. "
         "For daily_board_promotion, treat each trade_date as the day promotion was observed from previous_trade_date; report empirical sample counts with every rate and distinguish all limit-up stocks, first-board-to-second-board, and existing continued-board cohorts. "
         "For review_high_score_picks promotion comparisons, report Top10 and full-market first-board sample counts together, separate pending dates, and express promotion_rate_delta as percentage points. "
@@ -1760,6 +1794,48 @@ def _execute_llm_tool_calls(
             traces.append(result.trace())
             call_names.append(name)
             references.append(f"trade_date={summary.trade_date.isoformat()}")
+        elif name == "market_index_trend":
+            days = _parse_optional_int(arguments.get("days")) or (
+                _extract_market_index_days(request.message)
+            )
+            end_date = (
+                _parse_optional_date(arguments.get("end_date"))
+                or request.trade_date
+                or _extract_trade_date(request.message)
+            )
+            try:
+                result = tools.market_index_trend(
+                    days=max(2, min(days, 20)),
+                    end_date=end_date,
+                )
+            except Exception as error:  # noqa: BLE001
+                facts["market_index_trend_error"] = str(error)
+                traces.append(
+                    _tool_error_trace(
+                        name=name,
+                        tool_input={
+                            "days": days,
+                            "end_date": end_date.isoformat() if end_date else None,
+                        },
+                        summary="大盘指数区间走势查询失败，已将失败原因交给 LLM。",
+                        error=str(error),
+                    )
+                )
+                call_names.append(name)
+                continue
+            response: MarketIndexTrendFacts = result.output
+            facts["market_index_trend"] = response.model_dump(mode="json")
+            traces.append(result.trace())
+            call_names.append(name)
+            references.extend(
+                [
+                    f"index_data_as_of={response.data_as_of.isoformat()}",
+                    *[
+                        f"index_source={item.source}"
+                        for item in response.indices
+                    ],
+                ]
+            )
         elif name == "daily_board_promotion":
             days = _parse_optional_int(arguments.get("days")) or 5
             end_date = (
@@ -2480,6 +2556,45 @@ def _answer_stock_kline_without_llm(
             f"data_as_of={response.data_as_of.isoformat()}",
         ],
         warnings=[_safety_warning()],
+        generated_by=CHAT_AGENT_VERSION,
+    )
+
+
+def _answer_market_index_trend_without_llm(
+    request: AgentChatRequest,
+    tools: AgentToolRegistry,
+) -> AgentChatResponse | None:
+    """Answer broad-index trend questions when the LLM is unavailable."""
+
+    if not _QuestionSignals.from_message(request.message).market_index_trend:
+        return None
+    try:
+        result = tools.market_index_trend(
+            days=_extract_market_index_days(request.message),
+            end_date=request.trade_date or _extract_trade_date(request.message),
+        )
+    except Exception:
+        return None
+    response: MarketIndexTrendFacts = result.output
+    facts = {"market_index_trend": response.model_dump(mode="json")}
+    return AgentChatResponse(
+        session_id=request.session_id,
+        intent="market_index_trend",
+        answer=_template_answer_from_tool_facts(
+            request=request,
+            intent="market_index_trend",
+            facts=facts,
+        ),
+        tool_calls=["market_index_trend", "template_general_answer"],
+        tool_results=[result.trace()],
+        references=[
+            f"index_data_as_of={response.data_as_of.isoformat()}",
+            *[f"index_source={item.source}" for item in response.indices],
+        ],
+        warnings=[
+            _safety_warning(),
+            "LLM unavailable; deterministic major-index trend summary used.",
+        ],
         generated_by=CHAT_AGENT_VERSION,
     )
 

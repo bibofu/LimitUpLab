@@ -7,7 +7,12 @@ import akshare as ak
 import requests
 
 from app.collectors.network import without_proxy
-from app.models import MarketIndexSnapshot
+from app.models import (
+    MarketIndexSnapshot,
+    MarketIndexTrendFacts,
+    MarketIndexTrendItem,
+    MarketIndexTrendPoint,
+)
 
 
 INDEX_SPECS = (
@@ -18,6 +23,7 @@ INDEX_SPECS = (
 
 _CACHE_TTL = timedelta(minutes=15)
 _cache: dict[date | None, tuple[datetime, list[MarketIndexSnapshot]]] = {}
+_trend_cache: dict[tuple[int, date], tuple[datetime, MarketIndexTrendFacts]] = {}
 
 
 def collect_market_indices(trade_date: date | None = None) -> list[MarketIndexSnapshot]:
@@ -39,6 +45,75 @@ def collect_market_indices(trade_date: date | None = None) -> list[MarketIndexSn
     ]
     _cache[trade_date] = (now, indices)
     return indices
+
+
+def collect_market_index_trends(
+    *,
+    days: int = 5,
+    end_date: date | None = None,
+) -> MarketIndexTrendFacts:
+    """Collect date-aligned trend facts for the three main A-share indices."""
+
+    requested_days = max(2, min(days, 20))
+    requested_end_date = end_date or date.today()
+    cache_key = (requested_days, requested_end_date)
+    cached = _trend_cache.get(cache_key)
+    now = datetime.now()
+    if cached and now - cached[0] < _CACHE_TTL:
+        return cached[1]
+
+    indices = [
+        _collect_market_index_trend(
+            name=name,
+            display_symbol=display_symbol,
+            akshare_symbol=akshare_symbol,
+            days=requested_days,
+            end_date=requested_end_date,
+        )
+        for name, display_symbol, akshare_symbol in INDEX_SPECS
+    ]
+    response = MarketIndexTrendFacts(
+        requested_days=requested_days,
+        requested_end_date=requested_end_date,
+        data_as_of=min(item.end_date for item in indices),
+        data_fresh=all(item.end_date == requested_end_date for item in indices),
+        indices=indices,
+    )
+    _trend_cache[cache_key] = (now, response)
+    return response
+
+
+def _collect_market_index_trend(
+    *,
+    name: str,
+    display_symbol: str,
+    akshare_symbol: str,
+    days: int,
+    end_date: date,
+) -> MarketIndexTrendItem:
+    """Collect one index trend with the same provider fallback as snapshots."""
+
+    errors: list[str] = []
+    providers = (
+        ("tencent_index_daily_spot", _tencent_rows),
+        ("eastmoney_index_daily", _eastmoney_rows),
+        ("sina_index_daily", _sina_rows),
+    )
+    for source, loader in providers:
+        try:
+            return _trend_from_rows(
+                name=name,
+                display_symbol=display_symbol,
+                rows=loader(akshare_symbol, end_date),
+                requested_end_date=end_date,
+                days=days,
+                source=source,
+            )
+        except Exception as error:
+            errors.append(f"{source}: {error}")
+    raise RuntimeError(
+        f"unable to collect index trend for {display_symbol}: " + "; ".join(errors)
+    )
 
 
 def _collect_market_index(
@@ -80,7 +155,7 @@ def _eastmoney_rows(
     """Fetch a compact recent window from Eastmoney's index daily endpoint."""
 
     end_date = trade_date or date.today()
-    start_date = end_date - timedelta(days=30)
+    start_date = end_date - timedelta(days=60)
     with without_proxy():
         frame = ak.stock_zh_index_daily_em(
             symbol=akshare_symbol,
@@ -109,7 +184,7 @@ def _tencent_rows(
     """Combine Tencent history with its completed-day spot snapshot."""
 
     end_date = trade_date or date.today()
-    start_date = end_date - timedelta(days=30)
+    start_date = end_date - timedelta(days=60)
     with without_proxy():
         frame = ak.stock_zh_a_hist_tx(
             symbol=akshare_symbol,
@@ -201,6 +276,87 @@ def _snapshot_from_rows(
         trend=[round(float(row["close"]), 2) for row in normalized[-5:]],
         source=source,
     )
+
+
+def _trend_from_rows(
+    *,
+    name: str,
+    display_symbol: str,
+    rows: list[dict[str, Any]],
+    requested_end_date: date,
+    days: int,
+    source: str,
+) -> MarketIndexTrendItem:
+    """Normalize a provider history into an objective index trend window."""
+
+    rows_by_date = {
+        normalized["date"]: normalized
+        for normalized in (_normalize_row(row) for row in rows)
+        if normalized["date"] <= requested_end_date
+    }
+    normalized = [rows_by_date[item] for item in sorted(rows_by_date)]
+    if not normalized or normalized[-1]["date"] != requested_end_date:
+        latest = normalized[-1]["date"] if normalized else None
+        raise ValueError(
+            f"stale index data for {display_symbol}: latest={latest}, "
+            f"requested={requested_end_date}"
+        )
+    if len(normalized) < days:
+        raise ValueError(
+            f"not enough index history for {display_symbol}: "
+            f"required={days}, available={len(normalized)}"
+        )
+
+    selected = normalized[-days:]
+    points: list[MarketIndexTrendPoint] = []
+    for index, row in enumerate(selected):
+        close = float(row["close"])
+        change_pct = None
+        if index > 0:
+            previous_close = float(selected[index - 1]["close"])
+            if previous_close > 0:
+                change_pct = round((close - previous_close) / previous_close * 100, 2)
+        points.append(
+            MarketIndexTrendPoint(
+                trade_date=row["date"],
+                close=round(close, 2),
+                change_pct=change_pct,
+            )
+        )
+
+    closes = [point.close for point in points]
+    start_close = closes[0]
+    end_close = closes[-1]
+    return_pct = round((end_close - start_close) / start_close * 100, 2)
+    daily_changes = [
+        point.change_pct for point in points if point.change_pct is not None
+    ]
+    return MarketIndexTrendItem(
+        name=name,
+        symbol=display_symbol,
+        start_date=points[0].trade_date,
+        end_date=points[-1].trade_date,
+        start_close=start_close,
+        end_close=end_close,
+        return_pct=return_pct,
+        max_drawdown_pct=_close_max_drawdown_pct(closes),
+        positive_days=sum(value > 0 for value in daily_changes),
+        negative_days=sum(value < 0 for value in daily_changes),
+        points=points,
+        source=source,
+    )
+
+
+def _close_max_drawdown_pct(closes: list[float]) -> float:
+    """Return the maximum close-to-close drawdown inside a trend window."""
+
+    peak = closes[0]
+    max_drawdown = 0.0
+    for close in closes:
+        peak = max(peak, close)
+        if peak > 0:
+            max_drawdown = min(max_drawdown, (close - peak) / peak * 100)
+    return round(max_drawdown, 2)
 
 
 def _normalize_row(row: dict[str, Any]) -> dict[str, Any]:

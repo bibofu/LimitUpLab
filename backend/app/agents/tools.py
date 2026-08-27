@@ -17,6 +17,7 @@ from app.agents.query_contract import (
 from app.collectors import (
     HithinkFinanceCollector,
     collect_eastmoney_hot_stock_ranking,
+    collect_market_index_trends,
 )
 from app.models import (
     AgentEvaluationResponse,
@@ -27,6 +28,7 @@ from app.models import (
     FirstBoardRating,
     FirstBoardRatingsResponse,
     LimitUpEvent,
+    MarketIndexTrendFacts,
     MarketSummary,
     PredictionQualityAuditResponse,
     RatingBacktestResponse,
@@ -117,6 +119,29 @@ TOOL_SCHEMAS = [
         description="读取本地最新涨停数量、首板数量、炸板率、最高连板和热门行业等客观市场数据。",
         args_schema={"type": "object", "properties": {}, "required": []},
         returns="Objective market facts for the latest local trade date.",
+    ),
+    AgentToolSchema(
+        name="market_index_trend",
+        description=(
+            "查询上证指数、深证成指和创业板指最近一段交易日的客观走势。"
+            "返回区间涨跌、每日收盘点位、上涨/下跌天数和最大回撤；"
+            "适合回答大盘、指数、沪指近一周或近期走势问题。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "days": {"type": "integer", "minimum": 2, "maximum": 20},
+                "end_date": {
+                    "type": ["string", "null"],
+                    "description": "YYYY-MM-DD; omit for the latest local trade date.",
+                },
+            },
+            "required": [],
+        },
+        returns=(
+            "Major-index closes, period returns, up/down day counts and maximum "
+            "drawdowns for a 2-20 trading-day window."
+        ),
     ),
     AgentToolSchema(
         name="daily_board_promotion",
@@ -598,6 +623,41 @@ class AgentToolRegistry:
                 f"{summary.trade_date.isoformat()} 涨停{summary.limit_up_count}只，"
                 f"首板{summary.first_board_count}只，连板{summary.continued_board_count}只，"
                 f"炸板率{summary.failed_limit_up_rate:.0%}。"
+            ),
+            trace_output=trace_output,
+        )
+
+    def market_index_trend(
+        self,
+        *,
+        days: int = 5,
+        end_date: date | None = None,
+    ) -> ToolResult:
+        """Return a date-aligned multi-index trend window."""
+
+        available_dates = sorted({event.trade_date for event in self.events})
+        resolved_end_date = end_date or (
+            available_dates[-1] if available_dates else date.today()
+        )
+        response: MarketIndexTrendFacts = collect_market_index_trends(
+            days=max(2, min(days, 20)),
+            end_date=resolved_end_date,
+        )
+        trace_output = response.model_dump(mode="json")
+        return ToolResult(
+            name="market_index_trend",
+            input={
+                "days": response.requested_days,
+                "end_date": resolved_end_date.isoformat(),
+            },
+            output=response,
+            summary=(
+                f"截至 {response.data_as_of.isoformat()} 的近 "
+                f"{response.requested_days} 个交易日指数走势："
+                + "，".join(
+                    f"{item.name}{item.return_pct:+.2f}%" for item in response.indices
+                )
+                + "。"
             ),
             trace_output=trace_output,
         )

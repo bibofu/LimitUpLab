@@ -103,6 +103,7 @@ scoring_version
 | 工具 | 用途 |
 | --- | --- |
 | `market_summary` | 查询指定交易日市场环境 |
+| `market_index_trend` | 查询上证、深成指和创业板指近 2–20 个交易日走势 |
 | `sector_performance` | 查询行业板块表现、排名、资金和趋势 |
 | `hot_stock_ranking` | 查询同花顺热股榜、热度和排名变化 |
 | `dragon_tiger_list` | 查询同花顺龙虎榜、机构与游资净买额 |

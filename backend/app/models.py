@@ -43,6 +43,41 @@ class MarketIndexSnapshot(BaseModel):
     source: str
 
 
+class MarketIndexTrendPoint(BaseModel):
+    """One completed close in a major-index trend window."""
+
+    trade_date: date
+    close: float
+    change_pct: float | None = None
+
+
+class MarketIndexTrendItem(BaseModel):
+    """One major index's objective performance over a requested window."""
+
+    name: str
+    symbol: str
+    start_date: date
+    end_date: date
+    start_close: float
+    end_close: float
+    return_pct: float
+    max_drawdown_pct: float
+    positive_days: int
+    negative_days: int
+    points: list[MarketIndexTrendPoint]
+    source: str
+
+
+class MarketIndexTrendFacts(BaseModel):
+    """Tool-ready trend facts for the main A-share indices."""
+
+    requested_days: int
+    requested_end_date: date
+    data_as_of: date
+    data_fresh: bool
+    indices: list[MarketIndexTrendItem]
+
+
 class SectorHistoryPoint(BaseModel):
     """One completed daily point for an industry sector."""
 

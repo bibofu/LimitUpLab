@@ -2,7 +2,10 @@
     collect_limit_up_events,
     parse_akshare_trade_date,
 )
-from app.collectors.market_index_collector import collect_market_indices
+from app.collectors.market_index_collector import (
+    collect_market_indices,
+    collect_market_index_trends,
+)
 from app.collectors.sector_collector import collect_sector_history, collect_sector_spot
 from app.collectors.first_board_enrichment_collector import (
     DragonTigerFact,
@@ -45,6 +48,7 @@ __all__ = [
     "collect_preferred_popularity",
     "collect_listing_date",
     "collect_market_indices",
+    "collect_market_index_trends",
     "collect_sector_history",
     "collect_sector_spot",
     "collect_recent_listing_dates",

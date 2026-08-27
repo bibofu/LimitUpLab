@@ -58,8 +58,10 @@ Chat uses non-thinking mode by default because tool selection and grounded
 summaries are latency-sensitive structured tasks. Planner, local-tool and
 answer latency plus prompt sizes are returned in `response.performance`.
 
-The chat Agent also has two on-demand external tools:
+The chat Agent also has on-demand external market tools:
 
+- `market_index_trend` fetches date-aligned 2-20 trading-day performance for
+  the Shanghai Composite, Shenzhen Component and ChiNext Index.
 - `sector_performance` fetches industry-sector ranking, change, breadth,
   turnover, fund flow, leader and recent trend through AKShare providers.
 - `web_search` retrieves sanitized public search-result titles, URLs and
