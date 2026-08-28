@@ -183,6 +183,10 @@ class AnonymousSessionSecurityTest(unittest.TestCase):
 
             self.assertIn("HttpOnly", set_cookie)
             self.assertIn("SameSite=Lax", set_cookie)
+            self.assertEqual(
+                cookies[SESSION_COOKIE_NAME]["path"],
+                "/api/agents/chat",
+            )
             self.assertEqual(verify_visitor_token(token), captured_owner_ids[0])
 
             second_messages = asyncio.run(

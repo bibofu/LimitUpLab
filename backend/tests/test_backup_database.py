@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import os
 import sqlite3
 from datetime import datetime
 from pathlib import Path
@@ -24,7 +25,8 @@ def test_create_backup_copies_database_and_restricts_permissions(tmp_path: Path)
     with sqlite3.connect(backup_path) as connection:
         assert connection.execute("SELECT value FROM samples").fetchone() == ("kept",)
         assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
-    assert backup_path.stat().st_mode & 0o777 == 0o600
+    if os.name == "posix":
+        assert backup_path.stat().st_mode & 0o777 == 0o600
 
 
 def test_prune_backups_only_removes_older_managed_snapshots(tmp_path: Path) -> None:

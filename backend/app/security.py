@@ -221,7 +221,7 @@ def _session_cookie_header(token: str, *, secure: bool) -> str:
     cookie = SimpleCookie()
     cookie[SESSION_COOKIE_NAME] = token
     morsel = cookie[SESSION_COOKIE_NAME]
-    morsel["path"] = "/"
+    morsel["path"] = _VISITOR_COOKIE_PATH_PREFIX
     morsel["max-age"] = str(SESSION_COOKIE_MAX_AGE)
     morsel["httponly"] = True
     morsel["samesite"] = "Lax"
