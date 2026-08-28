@@ -286,8 +286,9 @@ LimitUpLab/
 ├── frontend/
 │   └── src/                 # React 工作台、API 类型和样式
 ├── scripts/                 # 项目级本地启动脚本
-├── Tasks.md                 # 开发路线图和进度
-└── 需求.md                  # 完整产品与 Agent 需求
+└── 文档/
+    ├── Tasks.md             # 开发路线图和进度
+    └── 需求.md              # 完整产品与 Agent 需求
 ```
 
 ## 快速开始
@@ -587,7 +588,7 @@ npm.cmd run build
 4. 接入结构化公告源并增强引用质量。
 5. 在单机部署基线上继续完成用户系统、并发限流、异步 Worker、PostgreSQL、Redis 和 CI/CD。
 
-详细进度见 [Tasks.md](./Tasks.md)，完整需求见 [需求.md](./%E9%9C%80%E6%B1%82.md)。
+详细进度见 [Tasks.md](./%E6%96%87%E6%A1%A3/Tasks.md)，完整需求见 [需求.md](./%E6%96%87%E6%A1%A3/%E9%9C%80%E6%B1%82.md)。
 
 ## 面试演示建议
 
