@@ -233,6 +233,7 @@ Critic Agent
   - 通过官方 `hithink-finance` CLI 接入热股榜、龙虎榜和远端涨停池，统一解析 JSON 成功/错误信封。
   - 每日 enrichment 优先使用同花顺龙虎榜与人气排名，失败时回退 AkShare/东方财富，并在快照中保存真实来源。
   - 修复同花顺 CLI 无日期查询可能返回前一日龙虎榜的问题：Agent 未收到明确日期时强制查询本地最新完整交易日，旧页面上下文和 Planner 日期不能降级数据日期。
+  - 龙虎榜回答中的资金金额统一使用亿元或万元，缺失字段直接省略，不向用户暴露 `None`、`null` 或原始元值。
   - 每日更新使用同花顺涨停池校验 AkShare 收盘涨停数量，差异写入更新报告，不用字段较少的榜单覆盖本地完整事件。
   - Agent 新增 `hot_stock_ranking`、`dragon_tiger_list`、`remote_limit_up_pool` 三个工具，由 LLM 根据问题按需调用。
   - API Key 保存在 CLI 系统凭据库，不写入 `.env`、项目文件或 Git。

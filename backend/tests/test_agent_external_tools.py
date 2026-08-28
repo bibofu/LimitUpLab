@@ -3,7 +3,11 @@ import unittest
 from datetime import date, datetime, timezone
 from unittest.mock import patch
 
-from app.agents.chat import answer_first_board_chat
+from app.agents.chat import (
+    _format_capital_flow_amount,
+    _template_answer_from_tool_facts,
+    answer_first_board_chat,
+)
 from app.collectors import (
     HithinkDragonTigerFact,
     HithinkDragonTigerSnapshot,
@@ -286,6 +290,51 @@ class HotStockDirectGuessProvider(LLMProvider):
 
 
 class AgentExternalToolsTest(unittest.TestCase):
+    def test_dragon_tiger_fallback_formats_money_and_omits_missing_fields(
+        self,
+    ) -> None:
+        answer = _template_answer_from_tool_facts(
+            request=AgentChatRequest(
+                session_id="dragon-tiger-money-format",
+                message="龙虎榜的情况",
+            ),
+            intent="dragon_tiger_list_query",
+            facts={
+                "dragon_tiger_list": {
+                    "trade_date": "2026-08-28",
+                    "matched_count": 2,
+                    "items": [
+                        {
+                            "symbol": "600613",
+                            "name": "神奇制药",
+                            "net_buy_amount": 41_000_000,
+                            "organization_net_buy_amount": None,
+                            "hot_money_net_buy_amount": 52_746_072.0,
+                        },
+                        {
+                            "symbol": "000001",
+                            "name": "平安银行",
+                            "net_buy_amount": -125_000_000,
+                            "organization_net_buy_amount": float("nan"),
+                            "hot_money_net_buy_amount": None,
+                        },
+                    ],
+                }
+            },
+        )
+
+        self.assertIn("净买额 +4100.00 万元", answer)
+        self.assertIn("游资净买 +5274.61 万元", answer)
+        self.assertIn("净买额 -1.25 亿元", answer)
+        self.assertNotIn("机构净买", answer)
+        self.assertNotIn("None", answer)
+        self.assertNotIn("52746072.0", answer)
+
+    def test_capital_flow_formatter_rejects_non_numeric_values(self) -> None:
+        self.assertIsNone(_format_capital_flow_amount(None))
+        self.assertIsNone(_format_capital_flow_amount("41000000"))
+        self.assertIsNone(_format_capital_flow_amount(float("inf")))
+
     @patch(
         "app.collectors.hithink_finance_collector."
         "HithinkFinanceCollector.collect_dragon_tiger"
