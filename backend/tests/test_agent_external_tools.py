@@ -5,6 +5,8 @@ from unittest.mock import patch
 
 from app.agents.chat import answer_first_board_chat
 from app.collectors import (
+    HithinkDragonTigerFact,
+    HithinkDragonTigerSnapshot,
     HithinkHotStockFact,
     HithinkHotStockSnapshot,
     PopularityRankingItem,
@@ -23,6 +25,25 @@ from app.models import (
 )
 from app.services.llm_provider import DisabledLLMProvider, LLMProvider, LLMResult
 from app.services.sample_data import SAMPLE_EVENTS
+
+
+def _dragon_tiger_fact() -> HithinkDragonTigerFact:
+    return HithinkDragonTigerFact(
+        symbol="000001",
+        thscode="000001.SZ",
+        name="平安银行",
+        change_pct=1.2,
+        buy_amount=200_000_000,
+        sell_amount=100_000_000,
+        net_buy_amount=100_000_000,
+        net_rate=10.0,
+        organization_net_buy_amount=50_000_000,
+        hot_money_net_buy_amount=20_000_000,
+        hot_rank=10,
+        range_days=1,
+        limit_reason="日涨幅偏离值达7%",
+        concepts=["银行"],
+    )
 
 
 class ExternalToolProvider(LLMProvider):
@@ -76,6 +97,39 @@ class HithinkToolProvider(LLMProvider):
             )
         return LLMResult(
             content="同花顺热股榜中，通鼎互联(002491)当前排名第3。",
+            model="fake-answer",
+            provider="fake",
+        )
+
+
+class DragonTigerToolProvider(LLMProvider):
+    """Planner selects the Dragon-Tiger tool with an intentionally stale date."""
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        if "first job is to decide which tools are needed" in system_prompt:
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": "dragon_tiger_list_query",
+                        "safety": "normal",
+                        "tool_calls": [
+                            {
+                                "name": "dragon_tiger_list",
+                                "arguments": {
+                                    "trade_date": "2026-05-14",
+                                    "board_type": "all",
+                                    "limit": 30,
+                                },
+                            }
+                        ],
+                        "answer_directly": "",
+                    }
+                ),
+                model="fake-planner",
+                provider="fake",
+            )
+        return LLMResult(
+            content="已按最新完整交易日汇总龙虎榜。",
             model="fake-answer",
             provider="fake",
         )
@@ -232,6 +286,74 @@ class HotStockDirectGuessProvider(LLMProvider):
 
 
 class AgentExternalToolsTest(unittest.TestCase):
+    @patch(
+        "app.collectors.hithink_finance_collector."
+        "HithinkFinanceCollector.collect_dragon_tiger"
+    )
+    def test_undated_dragon_tiger_question_uses_latest_local_trade_date(
+        self,
+        collect_dragon_tiger,
+    ) -> None:
+        latest_date = max(event.trade_date for event in SAMPLE_EVENTS)
+        collect_dragon_tiger.return_value = HithinkDragonTigerSnapshot(
+            trade_date=latest_date,
+            board_type="all",
+            stock_count=1,
+            items=[_dragon_tiger_fact()],
+        )
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="latest-dragon-tiger",
+                message="龙虎榜的情况",
+                trade_date=date(2026, 5, 14),
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=DragonTigerToolProvider(),
+        )
+
+        collect_dragon_tiger.assert_called_once_with(
+            trade_date=latest_date,
+            board_type="all",
+            query=None,
+            limit=30,
+        )
+        trace = next(
+            item for item in response.tool_results if item.name == "dragon_tiger_list"
+        )
+        self.assertEqual(trace.input["trade_date"], latest_date.isoformat())
+        self.assertEqual(trace.output["trade_date"], latest_date.isoformat())
+
+    @patch(
+        "app.collectors.hithink_finance_collector."
+        "HithinkFinanceCollector.collect_dragon_tiger"
+    )
+    def test_explicit_dragon_tiger_date_overrides_latest_default(
+        self,
+        collect_dragon_tiger,
+    ) -> None:
+        requested_date = date(2026, 5, 14)
+        collect_dragon_tiger.return_value = HithinkDragonTigerSnapshot(
+            trade_date=requested_date,
+            board_type="all",
+            stock_count=1,
+            items=[_dragon_tiger_fact()],
+        )
+
+        answer_first_board_chat(
+            AgentChatRequest(
+                session_id="dated-dragon-tiger",
+                message="2026-05-14的龙虎榜情况",
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=DragonTigerToolProvider(),
+        )
+
+        self.assertEqual(
+            collect_dragon_tiger.call_args.kwargs["trade_date"],
+            requested_date,
+        )
+
     @patch("app.collectors.hithink_finance_collector.HithinkFinanceCollector.collect_hot_stocks")
     def test_natural_undated_popularity_question_uses_latest_snapshot(
         self,

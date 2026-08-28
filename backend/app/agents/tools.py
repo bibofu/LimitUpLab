@@ -230,7 +230,10 @@ TOOL_SCHEMAS = [
             "properties": {
                 "trade_date": {
                     "type": ["string", "null"],
-                    "description": "YYYY-MM-DD; omit for the latest available list.",
+                    "description": (
+                        "YYYY-MM-DD; omit when the user gives no date. The backend "
+                        "pins the request to its latest complete local trading day."
+                    ),
                 },
                 "board_type": {
                     "type": "string",

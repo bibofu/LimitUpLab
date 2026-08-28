@@ -2015,7 +2015,7 @@ def _execute_llm_tool_calls(
                 ]
             )
         elif name == "dragon_tiger_list":
-            trade_date = _explicit_request_trade_date(request)
+            trade_date = _latest_external_trade_date(request, tools.events)
             board_type = _optional_str(arguments.get("board_type")) or "all"
             query = _optional_str(arguments.get("query"))
             limit = _parse_optional_int(arguments.get("limit")) or 30
@@ -3362,6 +3362,23 @@ def _explicit_request_trade_date(request: AgentChatRequest) -> date | None:
     """Use only a user/API date; undated questions must reach tools as latest."""
 
     return _extract_trade_date(request.message) or request.trade_date
+
+
+def _latest_external_trade_date(
+    request: AgentChatRequest,
+    events: list[LimitUpEvent],
+) -> date | None:
+    """Pin undated external snapshots to the latest complete local trade date.
+
+    Some providers interpret an omitted date as their previous cached snapshot.
+    The user's explicit text date still wins, while stale page context must not
+    turn an undated question into a historical query.
+    """
+
+    explicit_date = _extract_trade_date(request.message)
+    if explicit_date is not None:
+        return explicit_date
+    return max((event.trade_date for event in events), default=None)
 
 
 def _parse_optional_int(value: object) -> int | None:
