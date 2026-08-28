@@ -135,7 +135,12 @@ class AnonymousSessionSecurityTest(unittest.TestCase):
             await send({"type": "http.response.start", "status": 200, "headers": []})
             await send({"type": "http.response.body", "body": b"ok"})
 
-        async def request(cookie_header: str = "") -> list[dict]:
+        async def request(
+            cookie_header: str = "",
+            *,
+            path: str = "/api/agents/chat/sessions",
+            scheme: str = "http",
+        ) -> list[dict]:
             sent: list[dict] = []
 
             async def receive() -> dict:
@@ -151,7 +156,8 @@ class AnonymousSessionSecurityTest(unittest.TestCase):
                 {
                     "type": "http",
                     "method": "GET",
-                    "path": "/api/agents/chat/sessions",
+                    "path": path,
+                    "scheme": scheme,
                     "headers": headers,
                     "state": {},
                 },
@@ -184,6 +190,31 @@ class AnonymousSessionSecurityTest(unittest.TestCase):
             )
             self.assertEqual(captured_owner_ids[1], captured_owner_ids[0])
             self.assertNotIn(b"set-cookie", dict(second_messages[0]["headers"]))
+
+        with patch.dict(
+            os.environ,
+            {
+                "LIMITUPLAB_ENVIRONMENT": "production",
+                "LIMITUPLAB_SESSION_SECRET": "production-session-secret-that-is-long-enough",
+            },
+            clear=False,
+        ):
+            http_messages = asyncio.run(request(scheme="http"))
+            http_cookie = dict(http_messages[0]["headers"])[b"set-cookie"].decode(
+                "latin-1"
+            )
+            self.assertNotIn("Secure", http_cookie)
+
+            https_messages = asyncio.run(request(scheme="https"))
+            https_cookie = dict(https_messages[0]["headers"])[b"set-cookie"].decode(
+                "latin-1"
+            )
+            self.assertIn("Secure", https_cookie)
+
+            market_messages = asyncio.run(
+                request(path="/api/market/overview", scheme="https")
+            )
+            self.assertNotIn(b"set-cookie", dict(market_messages[0]["headers"]))
 
 
 if __name__ == "__main__":

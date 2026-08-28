@@ -22,6 +22,7 @@ MINIMUM_PRODUCTION_SECRET_LENGTH = 32
 ADMIN_API_KEY_HEADER = "X-LimitUpLab-Admin-Key"
 _LOCAL_DEVELOPMENT_SECRET = "limituplab-local-development-secret-only"
 _OWNER_ID_PATTERN = re.compile(r"^visitor_[0-9a-f]{32}$")
+_VISITOR_COOKIE_PATH_PREFIX = "/api/agents/chat"
 
 
 @dataclass(frozen=True)
@@ -165,11 +166,18 @@ class AnonymousVisitorMiddleware:
         scope.setdefault("state", {})["owner_id"] = identity.owner_id
 
         async def send_with_identity(message: dict[str, Any]) -> None:
-            if identity.is_new and message.get("type") == "http.response.start":
+            if (
+                identity.is_new
+                and message.get("type") == "http.response.start"
+                and _should_issue_visitor_cookie(scope)
+            ):
                 response_headers = MutableHeaders(scope=message)
                 response_headers.append(
                     "set-cookie",
-                    _session_cookie_header(identity.token),
+                    _session_cookie_header(
+                        identity.token,
+                        secure=_request_uses_https(scope),
+                    ),
                 )
             await send(message)
 
@@ -197,7 +205,19 @@ def _cookie_value(raw_cookie: str, name: str) -> str | None:
     return morsel.value if morsel is not None else None
 
 
-def _session_cookie_header(token: str) -> str:
+def _should_issue_visitor_cookie(scope: dict[str, Any]) -> bool:
+    """Limit identity initialization to requests that actually use ownership."""
+
+    return str(scope.get("path", "")).startswith(_VISITOR_COOKIE_PATH_PREFIX)
+
+
+def _request_uses_https(scope: dict[str, Any]) -> bool:
+    """Read the external request scheme normalized by trusted proxy headers."""
+
+    return str(scope.get("scheme", "")).lower() in {"https", "wss"}
+
+
+def _session_cookie_header(token: str, *, secure: bool) -> str:
     cookie = SimpleCookie()
     cookie[SESSION_COOKIE_NAME] = token
     morsel = cookie[SESSION_COOKIE_NAME]
@@ -205,6 +225,6 @@ def _session_cookie_header(token: str) -> str:
     morsel["max-age"] = str(SESSION_COOKIE_MAX_AGE)
     morsel["httponly"] = True
     morsel["samesite"] = "Lax"
-    if is_production_environment():
+    if secure:
         morsel["secure"] = True
     return cookie.output(header="").strip()
