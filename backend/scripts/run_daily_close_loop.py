@@ -411,6 +411,30 @@ def _incomplete_reasons(
         reasons.append(
             f"{report.tracked_cache_missing} tracked Top10 candidates still lack available bars"
         )
+    if (
+        report.tracked_next_day_outcomes_ready
+        < report.tracked_next_day_outcomes_expected
+    ):
+        reasons.append(
+            "tracked Top10 D+1 outcomes are incomplete "
+            f"({report.tracked_next_day_outcomes_ready}/"
+            f"{report.tracked_next_day_outcomes_expected})"
+        )
+    if (
+        report.tracked_three_day_outcomes_ready
+        < report.tracked_three_day_outcomes_expected
+    ):
+        reasons.append(
+            "tracked Top10 D+3 outcomes are incomplete "
+            f"({report.tracked_three_day_outcomes_ready}/"
+            f"{report.tracked_three_day_outcomes_expected})"
+        )
+    if report.tracked_five_day_paths_ready < report.tracked_five_day_paths_expected:
+        reasons.append(
+            "tracked Top10 D+5 paths are incomplete "
+            f"({report.tracked_five_day_paths_ready}/"
+            f"{report.tracked_five_day_paths_expected})"
+        )
     if health.get("status") == "missing" and not reasons:
         reasons.append("agent data health is missing")
     return reasons

@@ -93,7 +93,10 @@ def build_first_board_outcome(
         [bar for bar in bars if bar.symbol == event.symbol and bar.trade_date >= event.trade_date],
         key=lambda bar: bar.trade_date,
     )
-    base_bar = ordered_bars[0] if ordered_bars else None
+    base_bar = next(
+        (bar for bar in ordered_bars if bar.trade_date == event.trade_date),
+        None,
+    )
     post_bars = [bar for bar in ordered_bars if bar.trade_date > event.trade_date][:3]
     next_bar = post_bars[0] if post_bars else None
     next_day_ready = base_bar is not None and next_bar is not None
@@ -115,13 +118,13 @@ def build_first_board_outcome(
         next_high_pct=_pct_change(next_bar.high, base_bar.close) if next_bar and base_bar else None,
         next_close_pct=_pct_change(next_bar.close, base_bar.close) if next_bar and base_bar else None,
         next_open_to_high_pct=_pct_change(next_bar.high, entry_open)
-        if next_bar and entry_open
+        if next_day_ready and next_bar and entry_open
         else None,
         next_open_to_low_pct=_pct_change(next_bar.low, entry_open)
-        if next_bar and entry_open
+        if next_day_ready and next_bar and entry_open
         else None,
         next_open_to_close_pct=_pct_change(next_bar.close, entry_open)
-        if next_bar and entry_open
+        if next_day_ready and next_bar and entry_open
         else None,
         three_day_high_pct=_pct_change(max(bar.high for bar in post_bars), base_bar.close)
         if three_day_ready and base_bar

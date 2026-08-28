@@ -196,6 +196,35 @@ class FirstBoardFeaturesTest(unittest.TestCase):
         self.assertTrue(outcome.promoted_to_second_board)
         self.assertEqual(outcome.outcome_version, "first-board-outcome-v2-entry-open")
 
+    def test_outcome_does_not_shift_forward_when_base_bar_is_missing(self) -> None:
+        event = next(item for item in SAMPLE_EVENTS if item.symbol == "301489")
+        bars = [
+            StockDailyBar(
+                symbol=event.symbol,
+                trade_date=event.trade_date + timedelta(days=index),
+                open=10 + index,
+                high=11 + index,
+                low=9 + index,
+                close=10.5 + index,
+                volume=1_000_000,
+                amount=10_000_000,
+                source="test",
+                created_at=datetime.now(timezone.utc),
+            )
+            for index in range(1, 4)
+        ]
+
+        outcome = build_first_board_outcome(
+            event=event,
+            bars=bars,
+            future_events=SAMPLE_EVENTS,
+        )
+
+        self.assertFalse(outcome.next_day_ready)
+        self.assertFalse(outcome.three_day_ready)
+        self.assertFalse(outcome.outcome_ready)
+        self.assertIsNone(outcome.next_open_to_close_pct)
+
 
 if __name__ == "__main__":
     unittest.main()

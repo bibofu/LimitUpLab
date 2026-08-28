@@ -272,6 +272,12 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             self.assertEqual(report.tracked_cache_ready, 12)
             self.assertEqual(report.tracked_cache_complete, 2)
             self.assertEqual(report.tracked_cache_missing, 0)
+            self.assertEqual(report.tracked_next_day_outcomes_expected, 10)
+            self.assertEqual(report.tracked_next_day_outcomes_ready, 10)
+            self.assertEqual(report.tracked_three_day_outcomes_expected, 6)
+            self.assertEqual(report.tracked_three_day_outcomes_ready, 6)
+            self.assertEqual(report.tracked_five_day_paths_expected, 2)
+            self.assertEqual(report.tracked_five_day_paths_ready, 2)
             predictions = first_board_repo.list_predictions_between(
                 trade_dates[0], trade_dates[-1]
             )

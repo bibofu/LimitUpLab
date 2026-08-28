@@ -187,6 +187,26 @@ class DailyCloseLoopTest(unittest.TestCase):
         self.assertTrue(self.alert_path.exists())
         self.assertIn("lack available bars", execution.run.error_message)
 
+    def test_incomplete_outcome_maturity_writes_partial_alert(self) -> None:
+        target_date = date(2026, 8, 21)
+
+        def incomplete_update(**_kwargs) -> DailyUpdateReport:
+            report = self._complete_report(target_date, live_count=10)
+            report.tracked_next_day_outcomes_expected = 10
+            report.tracked_next_day_outcomes_ready = 9
+            return report
+
+        execution = self._execute(
+            requested_date=target_date,
+            now=datetime(2026, 8, 21, 16, 10, tzinfo=CN_TZ),
+            update_runner=incomplete_update,
+        )
+
+        self.assertEqual(execution.status, "partial")
+        self.assertEqual(execution.exit_code, 2)
+        self.assertTrue(self.alert_path.exists())
+        self.assertIn("D+1 outcomes are incomplete", execution.run.error_message)
+
     def test_successful_date_is_idempotently_skipped(self) -> None:
         target_date = date(2026, 8, 21)
         completed = DailyPipelineRun(
