@@ -4,9 +4,11 @@ import json
 import math
 import os
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from datetime import date
 from time import perf_counter
-from typing import Any, Callable
+from typing import Any, Callable, Iterator
 
 from app.agents.explanation import explain_first_board_rating
 from app.agent_output_sanitizer import (
@@ -66,6 +68,10 @@ from app.services.llm_provider import LLMProvider, get_llm_provider
 
 
 CHAT_AGENT_VERSION = "first-board-chat-policy-v5-skills"
+_FORCE_TEMPLATE_ANSWER_OVERRIDE: ContextVar[bool | None] = ContextVar(
+    "force_template_answer_override",
+    default=None,
+)
 SEMI = "\uff1b"
 IDEOGRAPHIC_COMMA = "\u3001"
 UNANSWERABLE_TEXT = "抱歉，该问题无法回答"
@@ -90,6 +96,30 @@ SUPPORTED_INTENTS = {
     "today_summary",
     "llm_explanation",
 }
+
+
+@contextmanager
+def template_answer_override(enabled: bool) -> Iterator[None]:
+    """Override template-answer mode inside the current request or eval context."""
+
+    token = _FORCE_TEMPLATE_ANSWER_OVERRIDE.set(enabled)
+    try:
+        yield
+    finally:
+        _FORCE_TEMPLATE_ANSWER_OVERRIDE.reset(token)
+
+
+def _template_answer_forced() -> bool:
+    """Resolve the context-local override before the process startup setting."""
+
+    override = _FORCE_TEMPLATE_ANSWER_OVERRIDE.get()
+    if override is not None:
+        return override
+    return os.getenv("LIMITUPLAB_FORCE_TEMPLATE_ANSWER", "").lower() in {
+        "1",
+        "true",
+        "yes",
+    }
 
 TEXT = {
     "greeting": "你好，我是 LimitUpLab 的首板 Agent。我可以总结今日首板、解释个股评分、分析风险，也可以查询个股走势和市场环境。",
@@ -647,11 +677,7 @@ def _answer_with_llm_tool_agent(
     final_result = None
     if progress_callback:
         progress_callback("answering", "正在基于工具事实生成回答")
-    force_template_answer = os.getenv(
-        "LIMITUPLAB_FORCE_TEMPLATE_ANSWER",
-        "",
-    ).lower() in {"1", "true", "yes"}
-    if force_template_answer:
+    if _template_answer_forced():
         answer = _ensure_safety_boundary(fallback)
         answer = _ensure_explicit_symbol_mentioned(request, answer)
         source = "template_general_answer"
@@ -4666,7 +4692,7 @@ def _generate_llm_answer(
 ) -> tuple[str, str, list[str]]:
     """Ask the configured LLM to answer from tool facts, with fallback."""
 
-    if os.getenv("LIMITUPLAB_FORCE_TEMPLATE_ANSWER", "").lower() in {"1", "true", "yes"}:
+    if _template_answer_forced():
         return fallback, "template_general_answer", [_safety_warning()]
 
     system_prompt = (

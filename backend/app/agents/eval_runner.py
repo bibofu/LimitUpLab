@@ -3,11 +3,10 @@
 from __future__ import annotations
 
 import json
-import os
 from dataclasses import dataclass, field
 from pathlib import Path
 
-from app.agents.chat import answer_first_board_chat
+from app.agents.chat import answer_first_board_chat, template_answer_override
 from app.models import AgentChatRequest, AgentChatResponse, LimitUpEvent
 from app.services.llm_provider import LLMProvider, LLMResult
 
@@ -236,22 +235,12 @@ def run_agent_eval_case(
         symbol=case.symbol,
     )
     observed_provider = EvalObservedLLMProvider(llm_provider)
-    previous_force_template = os.environ.get("LIMITUPLAB_FORCE_TEMPLATE_ANSWER")
-    if force_template_answer:
-        os.environ["LIMITUPLAB_FORCE_TEMPLATE_ANSWER"] = "true"
-    else:
-        os.environ.pop("LIMITUPLAB_FORCE_TEMPLATE_ANSWER", None)
-    try:
+    with template_answer_override(force_template_answer):
         response = answer_first_board_chat(
             request=request,
             events=events,
             llm_provider=observed_provider,
         )
-    finally:
-        if previous_force_template is None:
-            os.environ.pop("LIMITUPLAB_FORCE_TEMPLATE_ANSWER", None)
-        else:
-            os.environ["LIMITUPLAB_FORCE_TEMPLATE_ANSWER"] = previous_force_template
     planner_tool_calls = _planner_tool_calls(response)
     trace_names = [trace.name for trace in response.tool_results]
     llm_planner_observed = "llm_tool_planner" in trace_names

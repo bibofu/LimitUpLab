@@ -1,7 +1,10 @@
 import json
+import os
 import unittest
 from pathlib import Path
+from unittest.mock import patch
 
+from app.agents.chat import answer_first_board_chat
 from app.agents.eval_runner import (
     AgentEvalCase,
     load_eval_cases,
@@ -60,6 +63,42 @@ class EmptyPlannerProvider(LLMProvider):
 
 
 class AgentEvalRunnerTest(unittest.TestCase):
+    def test_eval_template_override_does_not_mutate_process_environment(self) -> None:
+        case = AgentEvalCase(
+            case_id="template_isolation",
+            message="哪些候选评分靠前",
+            required_tools=["first_board_ratings"],
+        )
+        observed_values: list[str | None] = []
+
+        def observe_environment(**kwargs):
+            observed_values.append(
+                os.environ.get("LIMITUPLAB_FORCE_TEMPLATE_ANSWER")
+            )
+            return answer_first_board_chat(**kwargs)
+
+        with patch.dict(
+            os.environ,
+            {"LIMITUPLAB_FORCE_TEMPLATE_ANSWER": "preserved"},
+            clear=False,
+        ):
+            with patch(
+                "app.agents.eval_runner.answer_first_board_chat",
+                side_effect=observe_environment,
+            ):
+                suite = run_agent_eval_suite(
+                    cases=[case],
+                    events=SAMPLE_EVENTS,
+                    force_template_answer=True,
+                )
+            self.assertEqual(
+                os.environ.get("LIMITUPLAB_FORCE_TEMPLATE_ANSWER"),
+                "preserved",
+            )
+
+        self.assertTrue(suite.ok)
+        self.assertEqual(observed_values, ["preserved"])
+
     def test_fixture_eval_suite_passes_against_deterministic_agent(self) -> None:
         fixture_path = Path(__file__).parent / "fixtures" / "agent_eval_cases.json"
         suite = run_agent_eval_suite(
