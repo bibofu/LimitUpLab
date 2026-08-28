@@ -95,16 +95,23 @@ sudo certbot renew --dry-run
 
 ```bash
 sudo cp deploy/cron/limituplab-daily /etc/cron.d/limituplab-daily
-sudo chmod 644 /etc/cron.d/limituplab-daily
+sudo cp deploy/cron/limituplab-backup /etc/cron.d/limituplab-backup
+sudo cp deploy/logrotate/limituplab /etc/logrotate.d/limituplab
+sudo install -d -m 700 -o 10001 -g 10001 /var/backups/limituplab
+sudo chmod 644 /etc/cron.d/limituplab-daily /etc/cron.d/limituplab-backup
 sudo systemctl restart cron
 ```
 
-任务在工作日北京时间 `16:10` 运行。流水线会再次检查交易日历，因此节假日会跳过。日志位于 `/var/log/limituplab/daily-update.log`。
+收盘流水线在工作日北京时间 `16:10` 运行，并再次检查交易日历，因此节假日会跳过。备份任务每天 `03:25` 使用 SQLite 在线备份 API 生成一致性快照，保留最近 14 份。日志位于 `/var/log/limituplab/`，备份位于仅服务用户可读的 `/var/backups/limituplab/`。
 
 手动验证：
 
 ```bash
 docker compose --env-file .env.production --profile jobs run --rm daily-update
+sudo /usr/bin/docker run --rm -v limituplab-data:/app/data \
+  -v /var/backups/limituplab:/backups limituplab-backend:local \
+  python scripts/backup_database.py --database /app/data/limituplab.sqlite \
+  --output-dir /backups --retain-count 14
 docker compose --env-file .env.production logs --tail=100 backend frontend
 ```
 
@@ -120,17 +127,19 @@ docker compose --env-file .env.production up -d --remove-orphans
 curl --fail http://127.0.0.1:8080/health
 ```
 
-使用 SQLite 在线备份 API生成一致性备份：
+手动生成与定时任务相同的一致性备份：
 
 ```bash
-docker compose --env-file .env.production exec -T backend python -c \
-  "import sqlite3,time; s=sqlite3.connect('/app/data/limituplab.sqlite'); d=sqlite3.connect('/app/data/backup-'+time.strftime('%Y%m%d-%H%M%S')+'.sqlite'); s.backup(d); d.close(); s.close()"
+sudo /usr/bin/docker run --rm -v limituplab-data:/app/data \
+  -v /var/backups/limituplab:/backups limituplab-backend:local \
+  python scripts/backup_database.py --database /app/data/limituplab.sqlite \
+  --output-dir /backups --retain-count 14
 ```
 
 列出卷内备份：
 
 ```bash
-docker compose --env-file .env.production exec backend ls -lh /app/data
+sudo ls -lh /var/backups/limituplab
 ```
 
 回滚应用代码时只回滚 Git 提交并重建镜像，不删除 `limituplab-data` 卷。任何包含 `docker compose down -v` 或 `docker volume rm limituplab-data` 的命令都会删除生产数据库，不应在正常升级中使用。

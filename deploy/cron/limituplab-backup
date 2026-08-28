@@ -1,0 +1,5 @@
+SHELL=/bin/bash
+PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
+
+# Create a consistent SQLite snapshot every day and retain the newest 14 files.
+25 3 * * * root /usr/bin/docker run --rm -v limituplab-data:/app/data -v /var/backups/limituplab:/backups limituplab-backend:local python scripts/backup_database.py --database /app/data/limituplab.sqlite --output-dir /backups --retain-count 14 >> /var/log/limituplab/backup.log 2>&1
