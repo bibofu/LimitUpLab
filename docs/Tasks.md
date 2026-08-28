@@ -204,6 +204,13 @@ Critic Agent
   - LLM 不可用、未配置 key 或计划 JSON 解析失败时，自动回落到原有确定性规则链路，保证本地演示不崩。
   - 增加 Fake LLM 单测，验证 Agent 会先规划工具，再执行工具并生成回答。
 
+- `[x]` 完成 Agent Skill Contract v1。
+  - 新增运行时 Skill 注册表，由 LLM 在 Planner 阶段从业务工作流目录中选择 Skill，而不是继续增加固定问法 intent。
+  - 首批实现 `limit_up_pool`、`popularity`、`first_board_rating` 三个高频 Skill，分别覆盖涨停池、热门股票和首板评级问题。
+  - 每个 Skill 独立声明典型问题、必需工具、默认参数和回答契约；后端自动补齐 Planner 漏掉的必需工具。
+  - 最终生成阶段只注入当前 Skill 的回答规范，统一日期、来源、数量、排序、风险提示和禁止推断口径。
+  - 新增 Skill 注册、工具去重、三类工作流执行和回答契约注入测试。
+
 - `[x]` 标准化 Agent 工具 schema 和执行轨迹。
   - 每个 Agent 工具统一声明 `name`、`description`、`args_schema`、`returns`。
   - Planner prompt 从工具 schema 自动生成，减少手写工具描述漂移。

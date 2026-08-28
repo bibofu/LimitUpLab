@@ -19,6 +19,7 @@ from app.agents.query_contract import (
     extract_result_limit,
     looks_like_exhaustive_request,
 )
+from app.agents.skills import AGENT_SKILL_REGISTRY
 from app.agents.tool_policy import (
     AgentToolPolicyEngine,
     QuestionSignals as _QuestionSignals,
@@ -63,7 +64,7 @@ from app.repositories import SQLiteFirstBoardRepository
 from app.services.llm_provider import LLMProvider, get_llm_provider
 
 
-CHAT_AGENT_VERSION = "first-board-chat-policy-v4-sessions"
+CHAT_AGENT_VERSION = "first-board-chat-policy-v5-skills"
 SEMI = "\uff1b"
 IDEOGRAPHIC_COMMA = "\u3001"
 UNANSWERABLE_TEXT = "抱歉，该问题无法回答"
@@ -385,7 +386,10 @@ def _answer_with_llm_tool_agent(
     policy = AgentToolPolicyEngine(tools, compact_ratings=_compact_ratings_facts)
     if progress_callback:
         progress_callback("planning", "正在理解问题并选择所需工具")
-    planner_system_prompt = _tool_planner_system_prompt(tools.schema_prompt())
+    planner_system_prompt = _tool_planner_system_prompt(
+        tools.schema_prompt(),
+        AGENT_SKILL_REGISTRY.schema_prompt(),
+    )
     planner_user_prompt = _tool_planner_user_prompt(request, context, tools.events)
     planner_started_at = perf_counter()
     try:
@@ -416,6 +420,17 @@ def _answer_with_llm_tool_agent(
     tool_calls = _normalize_first_board_position_tool_calls(request, tool_calls)
     tool_calls = _normalize_daily_board_promotion_tool_calls(request, tool_calls)
     direct_answer = str(tool_plan.get("answer_directly") or "").strip()
+    active_skill = AGENT_SKILL_REGISTRY.resolve(
+        tool_plan.get("skill_name"),
+        tool_calls,
+    )
+    if active_skill is not None:
+        tool_plan["skill_name"] = active_skill.name
+        tool_calls = AGENT_SKILL_REGISTRY.ensure_required_tool_calls(
+            active_skill,
+            tool_calls,
+        )
+        direct_answer = ""
     if intent == "out_of_scope":
         return _unanswerable_response(
             request=request,
@@ -552,6 +567,11 @@ def _answer_with_llm_tool_agent(
         context_symbol=context.symbol,
     )
     _add_composed_tool_facts(request.message, execution["facts"])
+    active_skill = active_skill or AGENT_SKILL_REGISTRY.resolve_from_facts(
+        execution["facts"]
+    )
+    if active_skill is not None:
+        tool_plan["skill_name"] = active_skill.name
     tool_duration_ms = round((perf_counter() - tools_started_at) * 1000)
     if not _has_usable_tool_facts(execution["facts"]):
         return _unanswerable_response(
@@ -612,6 +632,9 @@ def _answer_with_llm_tool_agent(
         complete_position_answer=complete_position_answer,
         complete_hot_stock_answer=complete_hot_stock_answer,
         hot_stock_event_intersection_answer=hot_stock_event_intersection_answer,
+        skill_instruction=(
+            active_skill.answer_instruction() if active_skill is not None else ""
+        ),
     )
     answer_user_prompt = _tool_answer_user_prompt(
         request,
@@ -775,7 +798,10 @@ def _answer_with_llm_tool_agent(
     )
 
 
-def _tool_planner_system_prompt(tool_schema_prompt: str) -> str:
+def _tool_planner_system_prompt(
+    tool_schema_prompt: str,
+    skill_schema_prompt: str,
+) -> str:
     """Describe the Agent tools and require a strict JSON tool plan."""
 
     return (
@@ -784,7 +810,11 @@ def _tool_planner_system_prompt(tool_schema_prompt: str) -> str:
         "unless the question is a greeting, capability question, or small talk. "
         "For an out-of-scope or unsupported question, set intent_label to out_of_scope "
         "and answer_directly to exactly '抱歉，该问题无法回答'. "
+        "Choose one skill_name from the supplied skill catalog when a skill covers the "
+        "question; otherwise use null. A skill is a business workflow, while tools provide facts. "
+        "When a skill is selected, include its required tools unless the backend can safely fill defaults. "
         "Return only valid JSON. No markdown. "
+        f"Available skills: {skill_schema_prompt}. "
         f"Available tools are described as JSON schemas: {tool_schema_prompt}. "
         "Use YYYY-MM-DD for all dates. "
         "For capability questions, answer_directly must mention LimitUpLab. "
@@ -809,6 +839,7 @@ def _tool_planner_system_prompt(tool_schema_prompt: str) -> str:
         "If the user asks for those, set safety to refuse_trade_instruction. "
         "JSON schema: {"
         "\"intent_label\": string, "
+        "\"skill_name\": string|null, "
         "\"safety\": \"normal\"|\"refuse_trade_instruction\", "
         "\"tool_calls\": [{\"name\": string, \"arguments\": object}], "
         "\"answer_directly\": string"
@@ -1381,6 +1412,7 @@ def _tool_answer_system_prompt(
     complete_position_answer: bool = False,
     complete_hot_stock_answer: bool = False,
     hot_stock_event_intersection_answer: bool = False,
+    skill_instruction: str = "",
 ) -> str:
     """Instruct the LLM to answer only from executed tool facts."""
 
@@ -1439,7 +1471,7 @@ def _tool_answer_system_prompt(
         "Do not provide direct trading instructions, position sizing, target prices, "
         "or return promises."
         f"{exhaustive_instruction}{position_instruction}{hot_stock_instruction}"
-        f"{intersection_instruction}"
+        f"{intersection_instruction}{skill_instruction}"
     )
 
 
@@ -2866,6 +2898,7 @@ def _llm_plan_trace(
             "model": model,
             "provider": provider,
             "intent_label": tool_plan.get("intent_label"),
+            "skill_name": tool_plan.get("skill_name"),
             "safety": tool_plan.get("safety"),
             "tool_calls": tool_plan.get("tool_calls") or [],
         },
