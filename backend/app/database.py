@@ -2,11 +2,55 @@
 
 import os
 import sqlite3
+import threading
+import time
 from pathlib import Path
+from typing import Callable, TypeVar
+
+from app.config import env_bool
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_PATH = BACKEND_ROOT / "data" / "limituplab.sqlite"
+CURRENT_SCHEMA_VERSION = 1
+DEFAULT_BUSY_TIMEOUT_MS = 5_000
+DEFAULT_LOCK_RETRY_ATTEMPTS = 3
+DEFAULT_LOCK_RETRY_BASE_DELAY_SECONDS = 0.05
+DEFAULT_WAL_AUTOCHECKPOINT_PAGES = 1_000
+_connection_setup_lock = threading.Lock()
+_schema_initialization_lock = threading.Lock()
+Result = TypeVar("Result")
+
+
+class ResilientSQLiteConnection(sqlite3.Connection):
+    """SQLite connection that retries transient lock conflicts safely."""
+
+    lock_retry_attempts: int = DEFAULT_LOCK_RETRY_ATTEMPTS
+    lock_retry_base_delay_seconds: float = DEFAULT_LOCK_RETRY_BASE_DELAY_SECONDS
+
+    def execute(self, sql: str, parameters=(), /) -> sqlite3.Cursor:
+        return self._retry_locked(super().execute, sql, parameters)
+
+    def executemany(self, sql: str, seq_of_parameters, /) -> sqlite3.Cursor:
+        return self._retry_locked(super().executemany, sql, seq_of_parameters)
+
+    def commit(self) -> None:
+        self._retry_locked(super().commit)
+
+    def _retry_locked(self, operation: Callable[..., Result], *args) -> Result:
+        """Retry only SQLite busy/locked failures with bounded backoff."""
+
+        attempts = max(1, self.lock_retry_attempts)
+        for attempt in range(attempts):
+            try:
+                return operation(*args)
+            except sqlite3.OperationalError as error:
+                if not _is_lock_conflict(error) or attempt + 1 >= attempts:
+                    raise
+                time.sleep(
+                    self.lock_retry_base_delay_seconds * (2**attempt)
+                )
+        raise RuntimeError("unreachable SQLite retry state")
 
 
 def get_database_path() -> Path:
@@ -19,17 +63,91 @@ def get_database_path() -> Path:
 
 
 def connect(database_path: Path | None = None) -> sqlite3.Connection:
-    """Open a SQLite connection and create the parent directory when needed."""
+    """Open one consistently configured, concurrent-safe SQLite connection."""
 
     path = database_path or get_database_path()
     path.parent.mkdir(parents=True, exist_ok=True)
-    connection = sqlite3.connect(path)
+    busy_timeout_ms = _bounded_int(
+        "LIMITUPLAB_SQLITE_BUSY_TIMEOUT_MS",
+        DEFAULT_BUSY_TIMEOUT_MS,
+        minimum=100,
+        maximum=60_000,
+    )
+    connection = sqlite3.connect(
+        path,
+        timeout=busy_timeout_ms / 1_000,
+        factory=ResilientSQLiteConnection,
+    )
+    connection.lock_retry_attempts = _bounded_int(
+        "LIMITUPLAB_SQLITE_LOCK_RETRY_ATTEMPTS",
+        DEFAULT_LOCK_RETRY_ATTEMPTS,
+        minimum=1,
+        maximum=10,
+    )
+    connection.lock_retry_base_delay_seconds = _bounded_float(
+        "LIMITUPLAB_SQLITE_LOCK_RETRY_BASE_DELAY_SECONDS",
+        DEFAULT_LOCK_RETRY_BASE_DELAY_SECONDS,
+        minimum=0.0,
+        maximum=2.0,
+    )
     connection.row_factory = sqlite3.Row
+    try:
+        connection.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
+        connection.execute("PRAGMA foreign_keys = ON")
+        if env_bool("LIMITUPLAB_SQLITE_WAL_ENABLED", True):
+            current_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+            if str(current_mode).lower() != "wal":
+                # Changing journal mode is persistent and must not race between
+                # first connections to a newly created database.
+                with _connection_setup_lock:
+                    current_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
+                    if str(current_mode).lower() != "wal":
+                        connection.execute("PRAGMA journal_mode = WAL").fetchone()
+        connection.execute("PRAGMA synchronous = NORMAL")
+        wal_checkpoint_pages = _bounded_int(
+            "LIMITUPLAB_SQLITE_WAL_AUTOCHECKPOINT_PAGES",
+            DEFAULT_WAL_AUTOCHECKPOINT_PAGES,
+            minimum=100,
+            maximum=100_000,
+        )
+        connection.execute(f"PRAGMA wal_autocheckpoint = {wal_checkpoint_pages}")
+    except Exception:
+        connection.close()
+        raise
     return connection
 
 
 def initialize_database(connection: sqlite3.Connection) -> None:
-    """Create database tables and indexes required by the current application."""
+    """Apply the schema once using a serialized, cross-process write transaction."""
+
+    if _database_schema_version(connection) >= CURRENT_SCHEMA_VERSION:
+        return
+
+    with _schema_initialization_lock:
+        if _database_schema_version(connection) >= CURRENT_SCHEMA_VERSION:
+            return
+        # Legacy callers may have created pre-versioned tables on this
+        # connection before asking the initializer to migrate them. The old
+        # initializer committed those writes as well, so preserve that contract.
+        if connection.in_transaction:
+            connection.commit()
+        connection.execute("BEGIN IMMEDIATE")
+        try:
+            # Another process may have completed the migration while this
+            # connection waited for the write lock.
+            if _database_schema_version(connection) < CURRENT_SCHEMA_VERSION:
+                _apply_schema(connection)
+                connection.execute(
+                    f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}"
+                )
+            connection.commit()
+        except Exception:
+            connection.rollback()
+            raise
+
+
+def _apply_schema(connection: sqlite3.Connection) -> None:
+    """Create and migrate all tables inside the caller's schema transaction."""
 
     connection.execute(
         """
@@ -452,7 +570,44 @@ def initialize_database(connection: sqlite3.Connection) -> None:
         """
     )
     _repair_legacy_failed_pool_board_heights(connection)
-    connection.commit()
+
+
+def _database_schema_version(connection: sqlite3.Connection) -> int:
+    row = connection.execute("PRAGMA user_version").fetchone()
+    return int(row[0]) if row is not None else 0
+
+
+def _is_lock_conflict(error: sqlite3.OperationalError) -> bool:
+    message = str(error).lower()
+    return "locked" in message or "busy" in message
+
+
+def _bounded_int(
+    name: str,
+    default: int,
+    *,
+    minimum: int,
+    maximum: int,
+) -> int:
+    try:
+        value = int(os.getenv(name, "").strip())
+    except ValueError:
+        return default
+    return min(maximum, max(minimum, value))
+
+
+def _bounded_float(
+    name: str,
+    default: float,
+    *,
+    minimum: float,
+    maximum: float,
+) -> float:
+    try:
+        value = float(os.getenv(name, "").strip())
+    except ValueError:
+        return default
+    return min(maximum, max(minimum, value))
 
 
 def _repair_legacy_failed_pool_board_heights(connection: sqlite3.Connection) -> None:

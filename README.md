@@ -26,7 +26,7 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 | 项目 | 状态 |
 | --- | --- |
-| 后端自动化测试 | 238 项通过 |
+| 后端自动化测试 | 242 项通过 |
 | 离线 Agent Eval | 11/11 通过 |
 | 本地数据健康检查 | 已实现 |
 | LLM 流式问答 | 已实现 |
@@ -351,13 +351,27 @@ LIMITUPLAB_AGENT_MAX_CONCURRENT_GLOBAL=4
 
 如需记录估算金额并启用每日成本上限，再按当前模型官方价格填写每百万 token 单价。价格未配置时仍记录供应商返回的真实 token，但成本保持为 0，不会使用不可靠的字符数估算。
 
+### 3. SQLite 单机并发配置
+
+所有仓储统一通过数据库连接层启用 WAL、外键约束、5 秒忙等待、NORMAL 同步级别和有界锁冲突重试。Schema 使用 `PRAGMA user_version` 管理，并在 `BEGIN IMMEDIATE` 事务中只初始化一次，普通读请求不再重复执行整套 DDL 和修复写入。
+
+```dotenv
+LIMITUPLAB_SQLITE_WAL_ENABLED=true
+LIMITUPLAB_SQLITE_BUSY_TIMEOUT_MS=5000
+LIMITUPLAB_SQLITE_LOCK_RETRY_ATTEMPTS=3
+LIMITUPLAB_SQLITE_LOCK_RETRY_BASE_DELAY_SECONDS=0.05
+LIMITUPLAB_SQLITE_WAL_AUTOCHECKPOINT_PAGES=1000
+```
+
+该配置适合单机 Docker Volume。数据库繁忙超过等待与重试上限后仍会明确失败，不会无限阻塞请求；需要多实例写入时应迁移 PostgreSQL，不能通过共享 SQLite 文件替代。
+
 如需本地代理：
 
 ```dotenv
 LIMITUPLAB_PROXY_URL=http://127.0.0.1:17891
 ```
 
-### 3. 配置同花顺结构化数据
+### 4. 配置同花顺结构化数据
 
 项目通过官方 `hithink-finance` CLI 获取热股榜、龙虎榜和远端涨停池。凭据保存在 CLI 系统凭据库，不写入项目 `.env`：
 
@@ -369,7 +383,7 @@ hithink-finance symbol search --q 600519 --limit 1 --format json
 
 CLI 不可用或请求失败时，每日 enrichment 会回退到原有 AkShare/东方财富来源；Agent 的同花顺实时工具会明确返回失败，不会伪造结果。
 
-### 4. 安装前端
+### 5. 安装前端
 
 ```powershell
 cd frontend
@@ -383,7 +397,7 @@ cd frontend
 npm install
 ```
 
-### 5. Windows 一键启动
+### 6. Windows 一键启动
 
 在项目根目录执行：
 
@@ -397,7 +411,7 @@ npm install
 - 后端 API：<http://127.0.0.1:8001>
 - Swagger：<http://127.0.0.1:8001/docs>
 
-### 6. 手动启动
+### 7. 手动启动
 
 后端：
 
@@ -415,7 +429,7 @@ npm.cmd run dev -- --host 127.0.0.1 --port 5173
 
 macOS / Linux 将 Python 和 npm 命令替换为对应虚拟环境命令即可。
 
-### 7. 香港服务器 Docker 部署
+### 8. 香港服务器 Docker 部署
 
 仓库已提供面向单机公开 Demo 的生产部署基线：
 

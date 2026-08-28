@@ -193,7 +193,7 @@ class SQLiteLimitUpRepository:
             event.seal_count,
             event.break_count,
             int(event.closed_limit),
-            event.board_height,
+            event.board_height if event.closed_limit else 1,
             event.amount,
             event.turnover_rate,
             event.industry,

@@ -126,6 +126,7 @@ class FirstBoardFeaturesTest(unittest.TestCase):
                     "ALTER TABLE first_board_features "
                     "ADD COLUMN market_sentiment TEXT NOT NULL DEFAULT 'cooling'"
                 )
+                connection.execute("PRAGMA user_version = 0")
                 connection.commit()
 
                 initialize_database(connection)

@@ -534,6 +534,13 @@ Critic 输出能解释为什么降低或不降低置信度。
   - 生产环境强制配置与 Session Secret 不同的管理员密钥，缺失或过短时拒绝启动。
   - 生产环境关闭 FastAPI 文档和 OpenAPI schema；前端停止全局请求内部诊断接口。
 
+- `[x]` 完成 SQLite 单机并发加固。
+  - 统一连接层启用 WAL、外键、NORMAL 同步级别、`busy_timeout` 和 WAL 自动 checkpoint。
+  - 对 `locked / busy` 冲突执行有界指数退避，所有现有 Repository 自动继承，不保留旁路连接。
+  - Schema 迁移改为 `PRAGMA user_version + BEGIN IMMEDIATE`，并发进程获取写锁后再次检查版本。
+  - 普通仓储调用不再重复执行整套 DDL、全表修复和提交，炸板板高修正在写入边界完成。
+  - 并发回归覆盖 8 线程初始化、WAL 读写并行和竞争写入重试；多实例阶段仍规划迁移 PostgreSQL。
+
 - `[x]` 完成每日预测闭环自动化。
   - 新增 `run_daily_close_loop.py`，收盘后串联数据同步、特征与 enrichment、Top10 预测、D+1 至 D+5 缓存、Outcome 回填和数据健康检查。
   - 使用真实 A 股交易日历与 `15:30` 时间门禁；仅当天收盘后预测可标记为 `live`，迟到补算统一标记为 `historical_backtest`。
