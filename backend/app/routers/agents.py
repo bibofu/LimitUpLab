@@ -7,11 +7,11 @@ import threading
 from datetime import date, datetime, timezone
 from datetime import timedelta
 from pathlib import Path
-from typing import Any, Callable, TypeVar
+from typing import Annotated, Any, Callable, TypeVar
 from typing import Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app.agents import answer_first_board_chat, build_first_board_ratings, build_review_agent_report
@@ -51,6 +51,7 @@ from app.repositories import (
     SQLiteDailyPipelineRepository,
     SQLiteFirstBoardRepository,
     SQLiteScoringPolicyRepository,
+    SessionOwnershipError,
     get_limit_up_repository,
 )
 from app.services.data_health import build_agent_data_health
@@ -67,6 +68,7 @@ from app.services.scoring_policy_optimizer import (
 )
 from app.services.sample_data import SAMPLE_EVENTS
 from app.services.system_health import build_agent_system_health
+from app.security import current_owner_id
 
 router = APIRouter()
 ResponseModel = TypeVar("ResponseModel")
@@ -443,12 +445,17 @@ def get_review_agent_report(
 
 @router.get("/runs", response_model=AgentRunsResponse)
 def list_agent_runs(
+    owner_id: Annotated[str, Depends(current_owner_id)],
     session_id: Optional[str] = None,
     limit: int = Query(default=10, ge=1, le=50),
 ) -> AgentRunsResponse:
     """Return recent Agent runs for the observability panel."""
 
-    runs = SQLiteAgentRunRepository().list_runs(session_id=session_id, limit=limit)
+    runs = SQLiteAgentRunRepository().list_runs(
+        session_id=session_id,
+        limit=limit,
+        owner_id=owner_id,
+    )
     return AgentRunsResponse(
         runs=[_summarize_agent_run(run) for run in runs],
         generated_by="agent-run-observability-v1",
@@ -458,29 +465,43 @@ def list_agent_runs(
 @router.post("/chat/sessions", response_model=ChatSessionDetail)
 def create_chat_session(
     request: ChatSessionCreateRequest,
+    owner_id: Annotated[str, Depends(current_owner_id)],
 ) -> ChatSessionDetail:
     """Create an empty resumable Agent conversation."""
 
-    return SQLiteChatSessionRepository().create_session(title=request.title)
+    return SQLiteChatSessionRepository().create_session(
+        title=request.title,
+        owner_id=owner_id,
+    )
 
 
 @router.get("/chat/sessions", response_model=ChatSessionsResponse)
 def list_chat_sessions(
+    owner_id: Annotated[str, Depends(current_owner_id)],
     limit: int = Query(default=30, ge=1, le=100),
 ) -> ChatSessionsResponse:
     """Return active conversations ordered by latest activity."""
 
     return ChatSessionsResponse(
-        sessions=SQLiteChatSessionRepository().list_sessions(limit=limit),
+        sessions=SQLiteChatSessionRepository().list_sessions(
+            limit=limit,
+            owner_id=owner_id,
+        ),
         generated_by=CHAT_SESSIONS_VERSION,
     )
 
 
 @router.get("/chat/sessions/{session_id}", response_model=ChatSessionDetail)
-def get_chat_session(session_id: str) -> ChatSessionDetail:
+def get_chat_session(
+    session_id: str,
+    owner_id: Annotated[str, Depends(current_owner_id)],
+) -> ChatSessionDetail:
     """Return one conversation with its persisted messages."""
 
-    session = SQLiteChatSessionRepository().get_session(session_id)
+    session = SQLiteChatSessionRepository().get_session(
+        session_id,
+        owner_id=owner_id,
+    )
     if session is None:
         raise HTTPException(status_code=404, detail="Chat session not found.")
     return session
@@ -490,20 +511,31 @@ def get_chat_session(session_id: str) -> ChatSessionDetail:
 def update_chat_session(
     session_id: str,
     request: ChatSessionUpdateRequest,
+    owner_id: Annotated[str, Depends(current_owner_id)],
 ) -> ChatSessionDetail:
     """Rename one active conversation."""
 
-    session = SQLiteChatSessionRepository().rename_session(session_id, request.title)
+    session = SQLiteChatSessionRepository().rename_session(
+        session_id,
+        request.title,
+        owner_id=owner_id,
+    )
     if session is None:
         raise HTTPException(status_code=404, detail="Chat session not found.")
     return session
 
 
 @router.delete("/chat/sessions/{session_id}")
-def delete_chat_session(session_id: str) -> dict[str, bool]:
+def delete_chat_session(
+    session_id: str,
+    owner_id: Annotated[str, Depends(current_owner_id)],
+) -> dict[str, bool]:
     """Permanently delete one local conversation and its stored data."""
 
-    deleted = SQLiteChatSessionRepository().delete_session(session_id)
+    deleted = SQLiteChatSessionRepository().delete_session(
+        session_id,
+        owner_id=owner_id,
+    )
     if not deleted:
         raise HTTPException(status_code=404, detail="Chat session not found.")
     return {"deleted": True}
@@ -528,17 +560,24 @@ def get_first_board_critic(
 
 
 @router.post("/chat", response_model=AgentChatResponse)
-def chat_with_first_board_agent(request: AgentChatRequest) -> AgentChatResponse:
+def chat_with_first_board_agent(
+    request: AgentChatRequest,
+    owner_id: Annotated[str, Depends(current_owner_id)],
+) -> AgentChatResponse:
     """Answer first-board questions and persist an Agent run trace."""
 
     run_id = f"run_{uuid4().hex}"
     started_at = datetime.now(timezone.utc)
     run_repository = SQLiteAgentRunRepository()
     chat_repository = SQLiteChatSessionRepository()
-    session = chat_repository.ensure_session(
-        request.session_id,
-        first_message=request.message,
-    )
+    try:
+        session = chat_repository.ensure_session(
+            request.session_id,
+            first_message=request.message,
+            owner_id=owner_id,
+        )
+    except SessionOwnershipError as error:
+        raise HTTPException(status_code=404, detail="Chat session not found.") from error
     conversation_messages = session.messages[-8:]
     chat_repository.append_message(
         ChatSessionMessage(
@@ -547,7 +586,8 @@ def chat_with_first_board_agent(request: AgentChatRequest) -> AgentChatResponse:
             role="user",
             content=request.message,
             created_at=started_at,
-        )
+        ),
+        owner_id=owner_id,
     )
 
     try:
@@ -555,7 +595,11 @@ def chat_with_first_board_agent(request: AgentChatRequest) -> AgentChatResponse:
             request=request,
             events=get_limit_up_repository().list_events(),
             repository=SQLiteFirstBoardRepository(),
-            recent_runs=run_repository.list_recent_runs(request.session_id, limit=10),
+            recent_runs=run_repository.list_recent_runs(
+                request.session_id,
+                limit=10,
+                owner_id=owner_id,
+            ),
             conversation_messages=conversation_messages,
         )
         response.run_id = run_id
@@ -582,7 +626,8 @@ def chat_with_first_board_agent(request: AgentChatRequest) -> AgentChatResponse:
                 run_id=run_id,
                 metadata=response.model_dump(mode="json"),
                 created_at=datetime.now(timezone.utc),
-            )
+            ),
+            owner_id=owner_id,
         )
         return response
     except Exception as error:
@@ -608,23 +653,31 @@ def chat_with_first_board_agent(request: AgentChatRequest) -> AgentChatResponse:
                 run_id=run_id,
                 metadata={"error": str(error)},
                 created_at=datetime.now(timezone.utc),
-            )
+            ),
+            owner_id=owner_id,
         )
         raise
 
 
 @router.post("/chat/stream")
-def stream_first_board_agent_chat(request: AgentChatRequest) -> StreamingResponse:
+def stream_first_board_agent_chat(
+    request: AgentChatRequest,
+    owner_id: Annotated[str, Depends(current_owner_id)],
+) -> StreamingResponse:
     """Stream Agent progress, answer deltas and the complete persisted response."""
 
     run_id = f"run_{uuid4().hex}"
     started_at = datetime.now(timezone.utc)
     run_repository = SQLiteAgentRunRepository()
     chat_repository = SQLiteChatSessionRepository()
-    session = chat_repository.ensure_session(
-        request.session_id,
-        first_message=request.message,
-    )
+    try:
+        session = chat_repository.ensure_session(
+            request.session_id,
+            first_message=request.message,
+            owner_id=owner_id,
+        )
+    except SessionOwnershipError as error:
+        raise HTTPException(status_code=404, detail="Chat session not found.") from error
     conversation_messages = session.messages[-8:]
     chat_repository.append_message(
         ChatSessionMessage(
@@ -633,7 +686,8 @@ def stream_first_board_agent_chat(request: AgentChatRequest) -> StreamingRespons
             role="user",
             content=request.message,
             created_at=started_at,
-        )
+        ),
+        owner_id=owner_id,
     )
     event_queue: queue.Queue[tuple[str, dict[str, Any]] | None] = queue.Queue()
 
@@ -656,7 +710,11 @@ def stream_first_board_agent_chat(request: AgentChatRequest) -> StreamingRespons
                 request=request,
                 events=get_limit_up_repository().list_events(),
                 repository=SQLiteFirstBoardRepository(),
-                recent_runs=run_repository.list_recent_runs(request.session_id, limit=10),
+                recent_runs=run_repository.list_recent_runs(
+                    request.session_id,
+                    limit=10,
+                    owner_id=owner_id,
+                ),
                 conversation_messages=conversation_messages,
                 progress_callback=emit_progress,
                 answer_delta_callback=emit_answer_delta,
@@ -688,7 +746,8 @@ def stream_first_board_agent_chat(request: AgentChatRequest) -> StreamingRespons
                     run_id=run_id,
                     metadata=response.model_dump(mode="json"),
                     created_at=datetime.now(timezone.utc),
-                )
+                ),
+                owner_id=owner_id,
             )
             emit("completed", response.model_dump(mode="json"))
         except Exception as error:
@@ -714,7 +773,8 @@ def stream_first_board_agent_chat(request: AgentChatRequest) -> StreamingRespons
                     run_id=run_id,
                     metadata={"error": str(error)},
                     created_at=datetime.now(timezone.utc),
-                )
+                ),
+                owner_id=owner_id,
             )
             emit(
                 "error",

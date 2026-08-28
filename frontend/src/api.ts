@@ -32,7 +32,10 @@ const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 
 /** Fetch JSON from the backend and surface non-2xx responses as errors. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, init);
+  const response = await fetch(`${API_BASE_URL}${path}`, {
+    credentials: "include",
+    ...init,
+  });
 
   if (!response.ok) {
     throw new Error(`Request failed: ${response.status} ${response.statusText}`);
@@ -256,6 +259,7 @@ export async function streamAgentChatMessage(
 ): Promise<AgentChatResponse> {
   const response = await fetch(`${API_BASE_URL}/api/agents/chat/stream`, {
     method: "POST",
+    credentials: "include",
     headers: {
       Accept: "text/event-stream",
       "Content-Type": "application/json",

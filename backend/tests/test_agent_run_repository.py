@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from pathlib import Path
 
 from app.models import AgentRun
-from app.repositories import SQLiteAgentRunRepository
+from app.repositories import SQLiteAgentRunRepository, SQLiteChatSessionRepository
 
 
 class AgentRunRepositoryTest(unittest.TestCase):
@@ -13,6 +13,10 @@ class AgentRunRepositoryTest(unittest.TestCase):
             database_path.unlink()
         try:
             repository = SQLiteAgentRunRepository(database_path)
+            SQLiteChatSessionRepository(database_path).create_session(
+                session_id="session-a",
+                owner_id="visitor_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )
             run = AgentRun(
                 run_id="run_test",
                 session_id="session-a",
@@ -29,6 +33,14 @@ class AgentRunRepositoryTest(unittest.TestCase):
             repository.save_run(run)
             rows = repository.list_recent_runs("session-a")
             all_rows = repository.list_runs(limit=5)
+            owned_rows = repository.list_runs(
+                limit=5,
+                owner_id="visitor_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
+            )
+            other_rows = repository.list_runs(
+                limit=5,
+                owner_id="visitor_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
+            )
         finally:
             if database_path.exists():
                 database_path.unlink()
@@ -39,6 +51,8 @@ class AgentRunRepositoryTest(unittest.TestCase):
         self.assertEqual(rows[0].input_json["symbol"], "301489")
         self.assertEqual(len(all_rows), 1)
         self.assertEqual(all_rows[0].session_id, "session-a")
+        self.assertEqual(len(owned_rows), 1)
+        self.assertEqual(other_rows, [])
 
 
 if __name__ == "__main__":

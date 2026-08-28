@@ -3,9 +3,11 @@ from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import configure_runtime_environment, configured_cors_origins
 from app.routers import agents, analysis, limit_up, market, stocks
+from app.security import AnonymousVisitorMiddleware, validate_session_security
 
 
 configure_runtime_environment()
+validate_session_security()
 
 
 app = FastAPI(
@@ -21,6 +23,7 @@ app.add_middleware(
     allow_methods=["*"],
     allow_headers=["*"],
 )
+app.add_middleware(AnonymousVisitorMiddleware)
 
 
 @app.get("/health")

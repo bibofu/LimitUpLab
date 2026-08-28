@@ -5,9 +5,38 @@ from pathlib import Path
 from app.database import connect
 from app.models import AgentRun, ChatSessionMessage
 from app.repositories import SQLiteAgentRunRepository, SQLiteChatSessionRepository
+from app.repositories.chat_session_repository import SessionOwnershipError
 
 
 class ChatSessionRepositoryTest(unittest.TestCase):
+    def test_sessions_are_scoped_to_their_owner(self) -> None:
+        database_path = Path(__file__).resolve().parents[1] / ".test_owner_sessions.sqlite"
+        database_path.unlink(missing_ok=True)
+        repository = SQLiteChatSessionRepository(database_path)
+        owner_a = "visitor_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
+        owner_b = "visitor_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
+        try:
+            session = repository.create_session(
+                session_id="owned-session",
+                owner_id=owner_a,
+            )
+
+            self.assertEqual(
+                repository.get_session(session.session_id, owner_id=owner_a).owner_id,
+                owner_a,
+            )
+            self.assertEqual(repository.list_sessions(owner_id=owner_b), [])
+            self.assertIsNone(
+                repository.get_session(session.session_id, owner_id=owner_b)
+            )
+            self.assertFalse(
+                repository.delete_session(session.session_id, owner_id=owner_b)
+            )
+            with self.assertRaises(SessionOwnershipError):
+                repository.ensure_session(session.session_id, owner_id=owner_b)
+        finally:
+            database_path.unlink(missing_ok=True)
+
     def test_create_resume_rename_and_delete_session(self) -> None:
         database_path = Path(__file__).resolve().parents[1] / ".test_chat_sessions.sqlite"
         if database_path.exists():

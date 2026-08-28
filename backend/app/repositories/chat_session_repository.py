@@ -20,6 +20,10 @@ LOCAL_OWNER_ID = "local-user"
 DEFAULT_SESSION_TITLE = "新对话"
 
 
+class SessionOwnershipError(PermissionError):
+    """Raised when a session id already belongs to another owner."""
+
+
 class SQLiteChatSessionRepository:
     """Store user-facing conversations separately from Agent execution traces."""
 
@@ -40,6 +44,12 @@ class SQLiteChatSessionRepository:
         connection = connect(self.database_path)
         try:
             initialize_database(connection)
+            existing = connection.execute(
+                "SELECT owner_id FROM chat_sessions WHERE session_id = ?",
+                (resolved_session_id,),
+            ).fetchone()
+            if existing is not None and existing["owner_id"] != owner_id:
+                raise SessionOwnershipError("Chat session belongs to another visitor.")
             connection.execute(
                 """
                 INSERT OR IGNORE INTO chat_sessions (
@@ -177,12 +187,18 @@ class SQLiteChatSessionRepository:
             messages=[_message_from_row(item) for item in message_rows],
         )
 
-    def append_message(self, message: ChatSessionMessage) -> ChatSessionMessage:
+    def append_message(
+        self,
+        message: ChatSessionMessage,
+        *,
+        owner_id: str = LOCAL_OWNER_ID,
+    ) -> ChatSessionMessage:
         """Persist one idempotent message and advance session activity time."""
 
         self.ensure_session(
             message.session_id,
             first_message=message.content if message.role == "user" else None,
+            owner_id=owner_id,
         )
         connection = connect(self.database_path)
         try:
@@ -216,7 +232,7 @@ class SQLiteChatSessionRepository:
                         ELSE title
                     END,
                     updated_at = ?
-                WHERE session_id = ?
+                WHERE session_id = ? AND owner_id = ?
                 """,
                 (
                     DEFAULT_SESSION_TITLE,
@@ -224,6 +240,7 @@ class SQLiteChatSessionRepository:
                     title,
                     message.created_at.isoformat(),
                     message.session_id,
+                    owner_id,
                 ),
             )
             connection.commit()

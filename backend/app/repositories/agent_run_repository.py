@@ -57,28 +57,60 @@ class SQLiteAgentRunRepository:
         finally:
             connection.close()
 
-    def list_recent_runs(self, session_id: str, limit: int = 10) -> list[AgentRun]:
+    def list_recent_runs(
+        self,
+        session_id: str,
+        limit: int = 10,
+        *,
+        owner_id: str | None = None,
+    ) -> list[AgentRun]:
         """Return recent runs for a chat session, newest first."""
 
-        return self.list_runs(session_id=session_id, limit=limit)
+        return self.list_runs(
+            session_id=session_id,
+            limit=limit,
+            owner_id=owner_id,
+        )
 
-    def list_runs(self, session_id: str | None = None, limit: int = 10) -> list[AgentRun]:
+    def list_runs(
+        self,
+        session_id: str | None = None,
+        limit: int = 10,
+        *,
+        owner_id: str | None = None,
+    ) -> list[AgentRun]:
         """Return recent runs, optionally scoped to one session."""
 
         connection = connect(self.database_path)
         try:
             initialize_database(connection)
-            where_clause = "WHERE session_id = ?" if session_id else ""
-            params: tuple[object, ...] = (session_id, limit) if session_id else (limit,)
+            conditions: list[str] = []
+            params: list[object] = []
+            join_clause = ""
+            if owner_id is not None:
+                join_clause = (
+                    "INNER JOIN chat_sessions AS session "
+                    "ON session.session_id = run.session_id"
+                )
+                conditions.append("session.owner_id = ?")
+                params.append(owner_id)
+            if session_id:
+                conditions.append("run.session_id = ?")
+                params.append(session_id)
+            where_clause = (
+                f"WHERE {' AND '.join(conditions)}" if conditions else ""
+            )
+            params.append(limit)
             rows = connection.execute(
                 f"""
-                SELECT *
-                FROM agent_runs
+                SELECT run.*
+                FROM agent_runs AS run
+                {join_clause}
                 {where_clause}
-                ORDER BY started_at DESC
+                ORDER BY run.started_at DESC
                 LIMIT ?
                 """,
-                params,
+                tuple(params),
             ).fetchall()
         finally:
             connection.close()
