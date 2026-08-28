@@ -8,6 +8,33 @@ export interface MarketIndexSnapshot {
   source: string;
 }
 
+export interface AuthUser {
+  user_id: string;
+  display_name: string;
+  avatar_url: string | null;
+  email: string | null;
+  providers: Array<"email" | "github">;
+  created_at: string;
+}
+
+export interface AuthStatusResponse {
+  authenticated: boolean;
+  user: AuthUser | null;
+  email_login_enabled: boolean;
+  github_login_enabled: boolean;
+}
+
+export interface EmailLoginChallengeResponse {
+  challenge_id: string;
+  expires_in_seconds: number;
+  debug_code: string | null;
+}
+
+export interface AuthLoginResponse {
+  user: AuthUser;
+  migrated_chat_sessions: number;
+}
+
 export interface ConceptHeat {
   name: string;
   limit_up_count: number;

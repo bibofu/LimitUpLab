@@ -68,7 +68,7 @@ from app.services.scoring_policy_optimizer import (
 )
 from app.services.sample_data import SAMPLE_EVENTS
 from app.services.system_health import build_agent_system_health
-from app.security import current_owner_id, require_admin_access
+from app.security import current_agent_owner_id, require_admin_access
 
 router = APIRouter()
 ResponseModel = TypeVar("ResponseModel")
@@ -475,7 +475,7 @@ def list_agent_runs(
 @router.post("/chat/sessions", response_model=ChatSessionDetail)
 def create_chat_session(
     request: ChatSessionCreateRequest,
-    owner_id: Annotated[str, Depends(current_owner_id)],
+    owner_id: Annotated[str, Depends(current_agent_owner_id)],
 ) -> ChatSessionDetail:
     """Create an empty resumable Agent conversation."""
 
@@ -487,7 +487,7 @@ def create_chat_session(
 
 @router.get("/chat/sessions", response_model=ChatSessionsResponse)
 def list_chat_sessions(
-    owner_id: Annotated[str, Depends(current_owner_id)],
+    owner_id: Annotated[str, Depends(current_agent_owner_id)],
     limit: int = Query(default=30, ge=1, le=100),
 ) -> ChatSessionsResponse:
     """Return active conversations ordered by latest activity."""
@@ -504,7 +504,7 @@ def list_chat_sessions(
 @router.get("/chat/sessions/{session_id}", response_model=ChatSessionDetail)
 def get_chat_session(
     session_id: str,
-    owner_id: Annotated[str, Depends(current_owner_id)],
+    owner_id: Annotated[str, Depends(current_agent_owner_id)],
 ) -> ChatSessionDetail:
     """Return one conversation with its persisted messages."""
 
@@ -521,7 +521,7 @@ def get_chat_session(
 def update_chat_session(
     session_id: str,
     request: ChatSessionUpdateRequest,
-    owner_id: Annotated[str, Depends(current_owner_id)],
+    owner_id: Annotated[str, Depends(current_agent_owner_id)],
 ) -> ChatSessionDetail:
     """Rename one active conversation."""
 
@@ -538,7 +538,7 @@ def update_chat_session(
 @router.delete("/chat/sessions/{session_id}")
 def delete_chat_session(
     session_id: str,
-    owner_id: Annotated[str, Depends(current_owner_id)],
+    owner_id: Annotated[str, Depends(current_agent_owner_id)],
 ) -> dict[str, bool]:
     """Permanently delete one local conversation and its stored data."""
 
@@ -572,7 +572,7 @@ def get_first_board_critic(
 @router.post("/chat", response_model=AgentChatResponse)
 def chat_with_first_board_agent(
     request: AgentChatRequest,
-    owner_id: Annotated[str, Depends(current_owner_id)],
+    owner_id: Annotated[str, Depends(current_agent_owner_id)],
 ) -> AgentChatResponse:
     """Answer first-board questions and persist an Agent run trace."""
 
@@ -672,7 +672,7 @@ def chat_with_first_board_agent(
 @router.post("/chat/stream")
 def stream_first_board_agent_chat(
     request: AgentChatRequest,
-    owner_id: Annotated[str, Depends(current_owner_id)],
+    owner_id: Annotated[str, Depends(current_agent_owner_id)],
 ) -> StreamingResponse:
     """Stream Agent progress, answer deltas and the complete persisted response."""
 

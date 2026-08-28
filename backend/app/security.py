@@ -12,16 +12,21 @@ from http.cookies import SimpleCookie
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
-from fastapi import Header, HTTPException, Request, status
+from fastapi import Header, HTTPException, Request, Response, status
 from starlette.datastructures import Headers, MutableHeaders
+
+from app.models import AuthUser
 
 
 SESSION_COOKIE_NAME = "limituplab_visitor"
 SESSION_COOKIE_MAX_AGE = 60 * 60 * 24 * 365
+AUTH_SESSION_COOKIE_NAME = "limituplab_session"
+AUTH_SESSION_MAX_AGE = 60 * 60 * 24 * 30
 MINIMUM_PRODUCTION_SECRET_LENGTH = 32
 ADMIN_API_KEY_HEADER = "X-LimitUpLab-Admin-Key"
 _LOCAL_DEVELOPMENT_SECRET = "limituplab-local-development-secret-only"
 _OWNER_ID_PATTERN = re.compile(r"^visitor_[0-9a-f]{32}$")
+_USER_ID_PATTERN = re.compile(r"^user_[0-9a-f]{32}$")
 
 
 @dataclass(frozen=True)
@@ -134,12 +139,89 @@ def verify_visitor_token(token: str | None) -> str | None:
 
 
 def current_owner_id(request: Request) -> str:
-    """Read the verified visitor identity installed by the ASGI middleware."""
+    """Return the signed-in user id or the verified anonymous owner id."""
 
-    owner_id = getattr(request.state, "owner_id", None)
+    user = current_user(request)
+    if user is not None:
+        return user.user_id
+    return current_visitor_owner_id(request)
+
+
+def current_visitor_owner_id(request: Request) -> str:
+    """Read the verified anonymous identity installed by the ASGI middleware."""
+
+    owner_id = getattr(request.state, "visitor_owner_id", None)
+    if owner_id is None:
+        owner_id = getattr(request.state, "owner_id", None)
     if not isinstance(owner_id, str) or not _OWNER_ID_PATTERN.fullmatch(owner_id):
         raise HTTPException(status_code=500, detail="Visitor identity is unavailable.")
     return owner_id
+
+
+def current_user(request: Request) -> AuthUser | None:
+    """Resolve the current server-side login session, if one is present."""
+
+    from app.repositories import SQLiteAuthRepository
+
+    return SQLiteAuthRepository().resolve_session(
+        request.cookies.get(AUTH_SESSION_COOKIE_NAME)
+    )
+
+
+def require_authenticated_user(request: Request) -> AuthUser:
+    """Require one active account session."""
+
+    user = current_user(request)
+    if user is None:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="请先登录后再使用 Agent 对话",
+        )
+    return user
+
+
+def current_agent_owner_id(request: Request) -> str:
+    """Require login for Agent conversations when production policy enables it."""
+
+    user = current_user(request)
+    if user is not None:
+        return user.user_id
+    login_required = os.getenv(
+        "LIMITUPLAB_AGENT_LOGIN_REQUIRED",
+        "true" if is_production_environment() else "false",
+    ).strip().lower() in {"1", "true", "yes", "on"}
+    if login_required:
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="请先登录后再使用 Agent 对话",
+        )
+    return current_visitor_owner_id(request)
+
+
+def install_auth_session_cookie(response: Response, token: str) -> None:
+    """Install an opaque HttpOnly login session cookie."""
+
+    response.set_cookie(
+        AUTH_SESSION_COOKIE_NAME,
+        token,
+        max_age=AUTH_SESSION_MAX_AGE,
+        path="/",
+        httponly=True,
+        secure=is_production_environment(),
+        samesite="lax",
+    )
+
+
+def clear_auth_session_cookie(response: Response) -> None:
+    """Remove the browser login cookie."""
+
+    response.delete_cookie(
+        AUTH_SESSION_COOKIE_NAME,
+        path="/",
+        httponly=True,
+        secure=is_production_environment(),
+        samesite="lax",
+    )
 
 
 class AnonymousVisitorMiddleware:
@@ -163,6 +245,7 @@ class AnonymousVisitorMiddleware:
             _cookie_value(request_headers.get("cookie", ""), SESSION_COOKIE_NAME)
         )
         scope.setdefault("state", {})["owner_id"] = identity.owner_id
+        scope.setdefault("state", {})["visitor_owner_id"] = identity.owner_id
 
         async def send_with_identity(message: dict[str, Any]) -> None:
             if identity.is_new and message.get("type") == "http.response.start":

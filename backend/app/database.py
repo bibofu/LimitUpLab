@@ -293,6 +293,84 @@ def initialize_database(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         """
+        CREATE TABLE IF NOT EXISTS users (
+            user_id TEXT PRIMARY KEY,
+            display_name TEXT NOT NULL,
+            avatar_url TEXT,
+            primary_email TEXT,
+            status TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            last_login_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS user_identities (
+            provider TEXT NOT NULL,
+            provider_user_id TEXT NOT NULL,
+            user_id TEXT NOT NULL,
+            username TEXT,
+            email TEXT,
+            email_verified INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (provider, provider_user_id),
+            FOREIGN KEY (user_id) REFERENCES users(user_id)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_user_identities_user
+        ON user_identities (user_id, provider)
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS auth_sessions (
+            session_id TEXT PRIMARY KEY,
+            user_id TEXT NOT NULL,
+            token_hash TEXT NOT NULL UNIQUE,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            revoked_at TEXT,
+            FOREIGN KEY (user_id) REFERENCES users(user_id)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_auth_sessions_user_expires
+        ON auth_sessions (user_id, expires_at DESC)
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS auth_challenges (
+            challenge_id TEXT PRIMARY KEY,
+            challenge_type TEXT NOT NULL,
+            subject TEXT NOT NULL,
+            secret_hash TEXT NOT NULL,
+            visitor_owner_id TEXT NOT NULL,
+            link_user_id TEXT,
+            metadata_json TEXT NOT NULL,
+            attempt_count INTEGER NOT NULL DEFAULT 0,
+            created_at TEXT NOT NULL,
+            expires_at TEXT NOT NULL,
+            consumed_at TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_auth_challenges_subject_created
+        ON auth_challenges (challenge_type, subject, created_at DESC)
+        """
+    )
+    connection.execute(
+        """
         CREATE TABLE IF NOT EXISTS agent_runs (
             run_id TEXT PRIMARY KEY,
             session_id TEXT NOT NULL,

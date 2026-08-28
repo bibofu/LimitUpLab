@@ -1,5 +1,10 @@
 from app.repositories.agent_cache_repository import SQLiteAgentCacheRepository
 from app.repositories.agent_run_repository import SQLiteAgentRunRepository
+from app.repositories.auth_repository import (
+    AuthChallengeError,
+    IdentityConflictError,
+    SQLiteAuthRepository,
+)
 from app.repositories.chat_session_repository import (
     SQLiteChatSessionRepository,
     SessionOwnershipError,
@@ -19,6 +24,9 @@ __all__ = [
     "SampleLimitUpRepository",
     "SQLiteAgentCacheRepository",
     "SQLiteAgentRunRepository",
+    "AuthChallengeError",
+    "IdentityConflictError",
+    "SQLiteAuthRepository",
     "SQLiteChatSessionRepository",
     "SessionOwnershipError",
     "SQLiteDailyPipelineRepository",

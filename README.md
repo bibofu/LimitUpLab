@@ -15,6 +15,7 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 - 每日 Top10 推荐快照及 D+1 至 D+5 走势追踪
 - LLM Planner、工具调用、Tool Policy 修复和 SSE 流式回答
 - 可恢复的多会话对话、历史消息持久化和受控上下文
+- GitHub OAuth、邮箱验证码登录、匿名会话迁移和服务端 HttpOnly Session
 - Explanation、Critic、Review、Evaluation 等轻量 Agent 角色
 - 每日 Top10 预测快照、D+1 至 D+5 走势追踪、1进2全市场对照和评分复盘
 - Champion/Challenger 评分策略注册与受约束影子优化
@@ -26,10 +27,11 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 | 项目 | 状态 |
 | --- | --- |
-| 后端自动化测试 | 186 项通过 |
+| 后端自动化测试 | 231 项通过 |
 | 离线 Agent Eval | 11/11 通过 |
 | 本地数据健康检查 | 已实现 |
 | LLM 流式问答 | 已实现 |
+| 用户登录与会话隔离 | GitHub OAuth、邮箱验证码和匿名会话迁移已实现 |
 | 评分 v3 工程实现 | 已完成，影子验证中 |
 | 单机生产部署基线 | Docker、Nginx、持久化卷和日更任务配置已完成，待服务器验收 |
 
@@ -408,6 +410,8 @@ macOS / Linux 将 Python 和 npm 命令替换为对应虚拟环境命令即可�
 - `docker-compose.yml`：健康检查、自动重启、SQLite 命名卷和日更 Job
 - `deploy/nginx/`：同域 API 反代、SPA 路由和 SSE 流式配置
 - `.env.production.example`：不含真实密钥的生产环境模板
+
+生产环境公开行情页面允许匿名访问，Agent 对话默认要求登录。登录支持 GitHub OAuth Web Flow 和邮箱验证码；服务端只保存登录 Session 与验证码摘要，不持久化 GitHub Access Token。首次登录会把当前匿名聊天会话迁移到账号下。
 
 服务器上执行：
 
