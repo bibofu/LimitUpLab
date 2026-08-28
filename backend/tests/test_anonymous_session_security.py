@@ -4,17 +4,100 @@ import unittest
 from http.cookies import SimpleCookie
 from unittest.mock import patch
 
+from fastapi import HTTPException
+
+from app.routers.agents import router as agents_router
 from app.security import (
+    ADMIN_API_KEY_HEADER,
     AnonymousVisitorMiddleware,
     SESSION_COOKIE_NAME,
+    require_admin_access,
     resolve_visitor_identity,
     sign_visitor_owner_id,
+    validate_admin_security,
     validate_session_security,
     verify_visitor_token,
 )
 
 
 class AnonymousSessionSecurityTest(unittest.TestCase):
+    def test_admin_access_rejects_missing_and_invalid_keys(self) -> None:
+        with patch.dict(
+            os.environ,
+            {"LIMITUPLAB_ADMIN_KEY": ""},
+            clear=False,
+        ):
+            with self.assertRaises(HTTPException) as unconfigured:
+                require_admin_access(None)
+        self.assertEqual(unconfigured.exception.status_code, 503)
+
+        with patch.dict(
+            os.environ,
+            {"LIMITUPLAB_ADMIN_KEY": "admin-key-that-is-long-enough-for-tests"},
+            clear=False,
+        ):
+            with self.assertRaises(HTTPException) as unauthorized:
+                require_admin_access("wrong-key")
+            self.assertIsNone(
+                require_admin_access("admin-key-that-is-long-enough-for-tests")
+            )
+        self.assertEqual(unauthorized.exception.status_code, 401)
+        self.assertEqual(
+            unauthorized.exception.headers["WWW-Authenticate"],
+            "ApiKey",
+        )
+
+    def test_production_admin_key_must_be_strong_and_independent(self) -> None:
+        with patch.dict(
+            os.environ,
+            {
+                "LIMITUPLAB_ENVIRONMENT": "production",
+                "LIMITUPLAB_SESSION_SECRET": "same-secret-value-that-is-long-enough",
+                "LIMITUPLAB_ADMIN_KEY": "same-secret-value-that-is-long-enough",
+            },
+            clear=False,
+        ):
+            with self.assertRaises(RuntimeError):
+                validate_admin_security()
+
+    def test_sensitive_routes_require_the_admin_dependency(self) -> None:
+        protected_paths = {
+            "/scoring-policies",
+            "/scoring-policies/optimize",
+            "/data-health",
+            "/system-health",
+            "/daily-pipeline-status",
+            "/eval",
+            "/prediction-quality-audit",
+            "/factor-signal-diagnostic",
+            "/runs",
+        }
+        routes = {
+            getattr(route, "path", ""): route for route in agents_router.routes
+        }
+
+        for path in protected_paths:
+            route = routes[path]
+            dependency_calls = {
+                dependency.call for dependency in route.dependant.dependencies
+            }
+            self.assertIn(require_admin_access, dependency_calls, path)
+
+        for public_path in {
+            "/first-board-ratings",
+            "/rating-backtest",
+            "/rating-evaluation",
+            "/review-report",
+            "/chat/stream",
+        }:
+            route = routes[public_path]
+            dependency_calls = {
+                dependency.call for dependency in route.dependant.dependencies
+            }
+            self.assertNotIn(require_admin_access, dependency_calls, public_path)
+
+        self.assertEqual(ADMIN_API_KEY_HEADER, "X-LimitUpLab-Admin-Key")
+
     def test_signed_owner_token_rejects_tampering(self) -> None:
         owner_id = "visitor_0123456789abcdef0123456789abcdef"
         with patch.dict(
@@ -104,3 +187,4 @@ class AnonymousSessionSecurityTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+    validate_admin_security,

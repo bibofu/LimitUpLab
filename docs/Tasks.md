@@ -527,6 +527,11 @@ Critic 输出能解释为什么降低或不降低置信度。
   - 会话创建、列表、详情、重命名、删除、消息写入和 Agent 运行记录全部按 `owner_id` 隔离。
   - 前端普通请求与 SSE 请求统一携带 Cookie；伪造或损坏的 Cookie 自动轮换为新身份。
 
+- `[x]` 完成内部与管理接口保护。
+  - 使用独立 `X-LimitUpLab-Admin-Key` 保护评分策略、数据/系统健康、日更状态、离线评测、预测审计、因子诊断和 Agent 运行轨迹。
+  - 生产环境强制配置与 Session Secret 不同的管理员密钥，缺失或过短时拒绝启动。
+  - 生产环境关闭 FastAPI 文档和 OpenAPI schema；前端停止全局请求内部诊断接口。
+
 - `[x]` 完成每日预测闭环自动化。
   - 新增 `run_daily_close_loop.py`，收盘后串联数据同步、特征与 enrichment、Top10 预测、D+1 至 D+5 缓存、Outcome 回填和数据健康检查。
   - 使用真实 A 股交易日历与 `15:30` 时间门禁；仅当天收盘后预测可标记为 `live`，迟到补算统一标记为 `historical_backtest`。

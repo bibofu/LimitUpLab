@@ -68,7 +68,7 @@ from app.services.scoring_policy_optimizer import (
 )
 from app.services.sample_data import SAMPLE_EVENTS
 from app.services.system_health import build_agent_system_health
-from app.security import current_owner_id
+from app.security import current_owner_id, require_admin_access
 
 router = APIRouter()
 ResponseModel = TypeVar("ResponseModel")
@@ -136,6 +136,7 @@ def get_first_board_ratings(
     response_model=ScoringPolicyRegistryResponse,
 )
 def get_scoring_policies(
+    _admin: Annotated[None, Depends(require_admin_access)],
     limit: int = Query(default=20, ge=1, le=100),
 ) -> ScoringPolicyRegistryResponse:
     """Return the active Champion and recent policy versions."""
@@ -148,6 +149,7 @@ def get_scoring_policies(
     response_model=ScoringPolicyOptimizationResponse,
 )
 def optimize_first_board_scoring_policy(
+    _admin: Annotated[None, Depends(require_admin_access)],
     start_date: date | None = None,
     end_date: date | None = None,
     top_k: int = Query(default=10, ge=3, le=30),
@@ -191,6 +193,7 @@ def optimize_first_board_scoring_policy(
 
 @router.get("/data-health", response_model=AgentDataHealthResponse)
 def get_agent_data_health(
+    _admin: Annotated[None, Depends(require_admin_access)],
     trade_date: Optional[date] = None,
     top_limit: int = Query(default=5, ge=1, le=20),
 ) -> AgentDataHealthResponse:
@@ -206,6 +209,7 @@ def get_agent_data_health(
 
 @router.get("/system-health", response_model=AgentSystemHealthResponse)
 def get_agent_system_health(
+    _admin: Annotated[None, Depends(require_admin_access)],
     run_offline_eval: bool = False,
 ) -> AgentSystemHealthResponse:
     """Return local runtime health for data, LLM and Agent eval status."""
@@ -219,6 +223,7 @@ def get_agent_system_health(
 
 @router.get("/daily-pipeline-status", response_model=DailyPipelineStatusResponse)
 def get_daily_pipeline_status(
+    _admin: Annotated[None, Depends(require_admin_access)],
     limit: int = Query(default=5, ge=1, le=30),
 ) -> DailyPipelineStatusResponse:
     """Return the latest automated after-close pipeline executions."""
@@ -232,7 +237,9 @@ def get_daily_pipeline_status(
 
 
 @router.get("/eval", response_model=AgentEvalReportResponse)
-def get_agent_eval_report() -> AgentEvalReportResponse:
+def get_agent_eval_report(
+    _admin: Annotated[None, Depends(require_admin_access)],
+) -> AgentEvalReportResponse:
     """Run deterministic chat Agent eval cases for the quality panel."""
 
     fixture_path = BACKEND_ROOT / "tests" / "fixtures" / "agent_eval_cases.json"
@@ -277,6 +284,7 @@ def get_agent_eval_report() -> AgentEvalReportResponse:
     response_model=PredictionQualityAuditResponse,
 )
 def get_prediction_quality_audit(
+    _admin: Annotated[None, Depends(require_admin_access)],
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     scoring_version: Optional[str] = None,
@@ -310,6 +318,7 @@ def get_prediction_quality_audit(
     response_model=FactorSignalDiagnosticResponse,
 )
 def get_factor_signal_diagnostic(
+    _admin: Annotated[None, Depends(require_admin_access)],
     start_date: Optional[date] = None,
     end_date: Optional[date] = None,
     outcome_measure: str = "next_open_to_close_pct",
@@ -445,8 +454,9 @@ def get_review_agent_report(
 
 @router.get("/runs", response_model=AgentRunsResponse)
 def list_agent_runs(
-    owner_id: Annotated[str, Depends(current_owner_id)],
+    _admin: Annotated[None, Depends(require_admin_access)],
     session_id: Optional[str] = None,
+    owner_id: Optional[str] = None,
     limit: int = Query(default=10, ge=1, le=50),
 ) -> AgentRunsResponse:
     """Return recent Agent runs for the observability panel."""

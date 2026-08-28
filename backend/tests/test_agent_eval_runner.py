@@ -76,7 +76,7 @@ class AgentEvalRunnerTest(unittest.TestCase):
         self.assertEqual(suite.total, 18)
 
     def test_eval_report_route_returns_quality_summary(self) -> None:
-        report = get_agent_eval_report()
+        report = get_agent_eval_report(_admin=None)
 
         self.assertEqual(report.mode, "offline")
         self.assertEqual(report.total, 18)

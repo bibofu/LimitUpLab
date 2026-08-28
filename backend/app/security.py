@@ -12,13 +12,14 @@ from http.cookies import SimpleCookie
 from typing import Any, Awaitable, Callable
 from uuid import uuid4
 
-from fastapi import HTTPException, Request
+from fastapi import Header, HTTPException, Request, status
 from starlette.datastructures import Headers, MutableHeaders
 
 
 SESSION_COOKIE_NAME = "limituplab_visitor"
 SESSION_COOKIE_MAX_AGE = 60 * 60 * 24 * 365
 MINIMUM_PRODUCTION_SECRET_LENGTH = 32
+ADMIN_API_KEY_HEADER = "X-LimitUpLab-Admin-Key"
 _LOCAL_DEVELOPMENT_SECRET = "limituplab-local-development-secret-only"
 _OWNER_ID_PATTERN = re.compile(r"^visitor_[0-9a-f]{32}$")
 
@@ -50,6 +51,42 @@ def validate_session_security() -> None:
     if len(secret.encode("utf-8")) < MINIMUM_PRODUCTION_SECRET_LENGTH:
         raise RuntimeError(
             "LIMITUPLAB_SESSION_SECRET must contain at least 32 bytes in production"
+        )
+
+
+def validate_admin_security() -> None:
+    """Fail fast when production has no independent strong administrator key."""
+
+    if not is_production_environment():
+        return
+    admin_key = os.getenv("LIMITUPLAB_ADMIN_KEY", "")
+    if len(admin_key.encode("utf-8")) < MINIMUM_PRODUCTION_SECRET_LENGTH:
+        raise RuntimeError(
+            "LIMITUPLAB_ADMIN_KEY must contain at least 32 bytes in production"
+        )
+    session_secret = os.getenv("LIMITUPLAB_SESSION_SECRET", "")
+    if session_secret and hmac.compare_digest(admin_key, session_secret):
+        raise RuntimeError(
+            "LIMITUPLAB_ADMIN_KEY must differ from LIMITUPLAB_SESSION_SECRET"
+        )
+
+
+def require_admin_access(
+    provided_key: str | None = Header(default=None, alias=ADMIN_API_KEY_HEADER),
+) -> None:
+    """Authorize an internal endpoint without exposing the configured key."""
+
+    configured_key = os.getenv("LIMITUPLAB_ADMIN_KEY", "")
+    if not configured_key:
+        raise HTTPException(
+            status_code=status.HTTP_503_SERVICE_UNAVAILABLE,
+            detail="Administrator API is not configured.",
+        )
+    if provided_key is None or not hmac.compare_digest(provided_key, configured_key):
+        raise HTTPException(
+            status_code=status.HTTP_401_UNAUTHORIZED,
+            detail="Administrator authentication required.",
+            headers={"WWW-Authenticate": "ApiKey"},
         )
 
 

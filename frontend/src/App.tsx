@@ -43,11 +43,8 @@ import {
   deleteChatSession,
   createChatSession,
   fetchContinuedBoardEvents,
-  fetchAgentDataHealth,
-  fetchAgentSystemHealth,
   fetchChatSession,
   fetchChatSessions,
-  fetchDailyPipelineStatus,
   fetchDailyBoardPromotion,
   fetchDragonTigerReview,
   fetchReviewAgentReport,
@@ -70,13 +67,10 @@ import {
 import type {
   AgentChatStreamStage,
   AgentStockMention,
-  AgentDataHealthResponse,
   AgentEvaluationResponse,
-  AgentSystemHealthResponse,
   ChatSessionDetail,
   ChatSessionMessage,
   ChatSessionSummary,
-  DailyPipelineStatusResponse,
   DailyBoardPromotionStat,
   DragonTigerReviewResponse,
   FirstBoardCriticResponse,
@@ -104,9 +98,6 @@ interface DashboardData {
   failed: LimitUpEvent[];
   recent: LimitUpEvent[];
   firstBoardRatings: FirstBoardRatingsResponse;
-  agentDataHealth: AgentDataHealthResponse;
-  systemHealth: AgentSystemHealthResponse;
-  dailyPipelineStatus: DailyPipelineStatusResponse;
   dailyBoardPromotion: DailyBoardPromotionStat[];
   ratingBacktest: RatingBacktestResponse;
   ratingEvaluation: AgentEvaluationResponse;
@@ -743,9 +734,6 @@ export function App() {
         failed,
         recent,
         firstBoardRatings,
-        agentDataHealth,
-        systemHealth,
-        dailyPipelineStatus,
         dailyBoardPromotion,
         ratingBacktest,
         ratingEvaluation,
@@ -756,9 +744,6 @@ export function App() {
         fetchFailedLimitUpEvents(),
         fetchRecentLimitUpEvents(3),
         fetchFirstBoardRatings(),
-        fetchAgentDataHealth(),
-        fetchAgentSystemHealth(false),
-        fetchDailyPipelineStatus(5),
         fetchDailyBoardPromotion(5),
         fetchRatingBacktest(),
         fetchRatingEvaluation(),
@@ -771,9 +756,6 @@ export function App() {
         failed,
         recent,
         firstBoardRatings,
-        agentDataHealth,
-        systemHealth,
-        dailyPipelineStatus,
         dailyBoardPromotion,
         ratingBacktest,
         ratingEvaluation,

@@ -2,14 +2,9 @@ import type {
   AgentChatRequest,
   AgentChatResponse,
   AgentChatStreamEvent,
-  AgentDataHealthResponse,
-  AgentEvalReportResponse,
   AgentEvaluationResponse,
-  AgentRunsResponse,
-  AgentSystemHealthResponse,
   ChatSessionDetail,
   ChatSessionsResponse,
-  DailyPipelineStatusResponse,
   DailyBoardPromotionStat,
   DragonTigerReviewResponse,
   ContinuationStat,
@@ -19,7 +14,6 @@ import type {
   LimitUpEvent,
   MarketSummary,
   PostPerformanceStat,
-  PredictionQualityAuditResponse,
   RatingBacktestResponse,
   ReviewAgentReportResponse,
   StockCloseSnapshot,
@@ -129,27 +123,6 @@ export function fetchFirstBoardRatings(tradeDate?: string) {
   return request<FirstBoardRatingsResponse>(`/api/agents/first-board-ratings${query}`);
 }
 
-export function fetchAgentDataHealth(tradeDate?: string) {
-  const query = tradeDate ? `?trade_date=${tradeDate}` : "";
-  return request<AgentDataHealthResponse>(`/api/agents/data-health${query}`);
-}
-
-export function fetchAgentSystemHealth(runOfflineEval = false) {
-  return request<AgentSystemHealthResponse>(
-    `/api/agents/system-health?run_offline_eval=${runOfflineEval ? "true" : "false"}`,
-  );
-}
-
-export function fetchDailyPipelineStatus(limit = 5) {
-  return request<DailyPipelineStatusResponse>(
-    `/api/agents/daily-pipeline-status?limit=${limit}`,
-  );
-}
-
-export function fetchAgentEvalReport() {
-  return request<AgentEvalReportResponse>("/api/agents/eval");
-}
-
 export function fetchReviewAgentReport(params?: {
   start_date?: string;
   end_date?: string;
@@ -185,22 +158,8 @@ export function fetchRatingBacktest() {
   return request<RatingBacktestResponse>("/api/agents/rating-backtest");
 }
 
-export function fetchPredictionQualityAudit() {
-  return request<PredictionQualityAuditResponse>(
-    "/api/agents/prediction-quality-audit?top_k=10",
-  );
-}
-
 export function fetchRatingEvaluation() {
   return request<AgentEvaluationResponse>("/api/agents/rating-evaluation");
-}
-
-export function fetchAgentRuns(sessionId?: string, limit = 8) {
-  const params = new URLSearchParams({ limit: String(limit) });
-  if (sessionId) {
-    params.set("session_id", sessionId);
-  }
-  return request<AgentRunsResponse>(`/api/agents/runs?${params.toString()}`);
 }
 
 export function fetchChatSessions(limit = 30) {

@@ -81,11 +81,15 @@ class ChatSessionApiTest(unittest.TestCase):
                 )
             )
             self.assertEqual(
-                len(list_agent_runs(owner_id=owner_id, limit=10).runs),
+                len(list_agent_runs(_admin=None, owner_id=owner_id, limit=10).runs),
                 1,
             )
             self.assertEqual(
-                list_agent_runs(owner_id=other_owner_id, limit=10).runs,
+                list_agent_runs(
+                    _admin=None,
+                    owner_id=other_owner_id,
+                    limit=10,
+                ).runs,
                 [],
             )
             renamed = update_chat_session(
