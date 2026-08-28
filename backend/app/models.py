@@ -1128,55 +1128,6 @@ class ChatSessionUpdateRequest(BaseModel):
     title: str = Field(min_length=1, max_length=80)
 
 
-class AuthUser(BaseModel):
-    """Public account details for the currently authenticated user."""
-
-    user_id: str
-    display_name: str
-    avatar_url: str | None = None
-    email: str | None = None
-    providers: list[Literal["email", "github"]] = Field(default_factory=list)
-    created_at: datetime
-
-
-class AuthStatusResponse(BaseModel):
-    """Current login state and enabled authentication methods."""
-
-    authenticated: bool
-    user: AuthUser | None = None
-    email_login_enabled: bool
-    github_login_enabled: bool
-
-
-class EmailLoginRequest(BaseModel):
-    """Email address requesting a short-lived sign-in code."""
-
-    email: str = Field(min_length=3, max_length=254)
-
-
-class EmailLoginChallengeResponse(BaseModel):
-    """Created email challenge metadata without its persisted secret."""
-
-    challenge_id: str
-    expires_in_seconds: int
-    debug_code: str | None = None
-
-
-class EmailLoginVerifyRequest(BaseModel):
-    """One submitted email verification challenge."""
-
-    challenge_id: str = Field(min_length=10, max_length=100)
-    email: str = Field(min_length=3, max_length=254)
-    code: str = Field(pattern=r"^\d{6}$")
-
-
-class AuthLoginResponse(BaseModel):
-    """Successful login result returned after installing a server session."""
-
-    user: AuthUser
-    migrated_chat_sessions: int = 0
-
-
 class AgentChatRequest(BaseModel):
     """User chat request with optional page context."""
 

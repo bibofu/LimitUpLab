@@ -4,14 +4,10 @@
   Check,
   ChevronRight,
   Flame,
-  Github,
   GitBranch,
   Landmark,
   Layers3,
   LineChart,
-  LogIn,
-  LogOut,
-  Mail,
   LoaderCircle,
   MapPin,
   MessageCircle,
@@ -22,7 +18,6 @@
   Send,
   ShieldAlert,
   TrendingUp,
-  UserRound,
   X,
 } from "lucide-react";
 import type { ReactNode } from "react";
@@ -48,7 +43,6 @@ import {
   deleteChatSession,
   createChatSession,
   fetchContinuedBoardEvents,
-  fetchAuthStatus,
   fetchChatSession,
   fetchChatSessions,
   fetchDailyBoardPromotion,
@@ -67,18 +61,13 @@ import {
   fetchStockLatestClose,
   fetchStockPosition,
   fetchStockTradingDayKLine,
-  githubLoginUrl,
-  logoutCurrentUser,
   renameChatSession,
-  requestEmailLoginCode,
   streamAgentChatMessage,
-  verifyEmailLoginCode,
 } from "./api";
 import type {
   AgentChatStreamStage,
   AgentStockMention,
   AgentEvaluationResponse,
-  AuthStatusResponse,
   ChatSessionDetail,
   ChatSessionMessage,
   ChatSessionSummary,
@@ -725,258 +714,10 @@ const agentWorkspaceHiddenPaths = new Set([
   "/review",
 ]);
 
-function AccountControl({
-  auth,
-  open,
-  onOpenChange,
-  onAuthenticated,
-}: {
-  auth: AuthStatusResponse | null;
-  open: boolean;
-  onOpenChange: (open: boolean) => void;
-  onAuthenticated: (auth: AuthStatusResponse) => void;
-}) {
-  const location = useLocation();
-  const [email, setEmail] = useState("");
-  const [code, setCode] = useState("");
-  const [challengeId, setChallengeId] = useState<string | null>(null);
-  const [debugCode, setDebugCode] = useState<string | null>(null);
-  const [resendIn, setResendIn] = useState(0);
-  const [submitting, setSubmitting] = useState(false);
-  const [authError, setAuthError] = useState<string | null>(null);
-
-  useEffect(() => {
-    if (resendIn <= 0) {
-      return undefined;
-    }
-    const timer = window.setInterval(() => {
-      setResendIn((current) => Math.max(0, current - 1));
-    }, 1000);
-    return () => window.clearInterval(timer);
-  }, [resendIn]);
-
-  useEffect(() => {
-    const params = new URLSearchParams(location.search);
-    if (params.get("auth_error")) {
-      setAuthError("GitHub 登录未完成，请重试或使用邮箱验证码登录。");
-      onOpenChange(true);
-      window.history.replaceState({}, "", location.pathname);
-    } else if (params.get("auth") === "success") {
-      window.history.replaceState({}, "", location.pathname);
-    }
-  }, [location.pathname, location.search, onOpenChange]);
-
-  async function sendEmailCode() {
-    if (!email.trim() || submitting) {
-      return;
-    }
-    setSubmitting(true);
-    setAuthError(null);
-    try {
-      const result = await requestEmailLoginCode(email.trim());
-      setChallengeId(result.challenge_id);
-      setDebugCode(result.debug_code);
-      setResendIn(60);
-      if (result.debug_code) {
-        setCode(result.debug_code);
-      }
-    } catch (caught) {
-      setAuthError(caught instanceof Error ? caught.message : "验证码发送失败");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function verifyEmailCode() {
-    if (!challengeId || code.length !== 6 || submitting) {
-      return;
-    }
-    setSubmitting(true);
-    setAuthError(null);
-    try {
-      await verifyEmailLoginCode({
-        challenge_id: challengeId,
-        email: email.trim(),
-        code,
-      });
-      const nextAuth = await fetchAuthStatus();
-      onAuthenticated(nextAuth);
-      onOpenChange(false);
-      window.localStorage.removeItem(ACTIVE_CHAT_SESSION_STORAGE_KEY);
-      window.location.reload();
-    } catch (caught) {
-      setAuthError(caught instanceof Error ? caught.message : "验证码校验失败");
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  async function logout() {
-    setSubmitting(true);
-    try {
-      await logoutCurrentUser();
-      window.localStorage.removeItem(ACTIVE_CHAT_SESSION_STORAGE_KEY);
-      window.location.reload();
-    } finally {
-      setSubmitting(false);
-    }
-  }
-
-  if (auth?.authenticated && auth.user) {
-    return (
-      <div className="account-summary">
-        <button
-          className="account-button"
-          onClick={() => onOpenChange(!open)}
-          type="button"
-        >
-          {auth.user.avatar_url ? (
-            <img alt="" src={auth.user.avatar_url} />
-          ) : (
-            <UserRound aria-hidden="true" size={17} />
-          )}
-          <span>{auth.user.display_name}</span>
-        </button>
-        {open ? (
-          <div className="account-menu">
-            <div>
-              <strong>{auth.user.display_name}</strong>
-              <small>{auth.user.email || auth.user.providers.join(" + ")}</small>
-            </div>
-            <button disabled={submitting} onClick={() => void logout()} type="button">
-              <LogOut aria-hidden="true" size={16} />
-              退出登录
-            </button>
-          </div>
-        ) : null}
-      </div>
-    );
-  }
-
-  return (
-    <>
-      <button className="login-button" onClick={() => onOpenChange(true)} type="button">
-        <LogIn aria-hidden="true" size={17} />
-        <span>登录</span>
-      </button>
-      {open ? (
-        <div className="auth-modal-backdrop" role="presentation">
-          <section
-            aria-labelledby="auth-dialog-title"
-            aria-modal="true"
-            className="auth-dialog"
-            role="dialog"
-          >
-            <header>
-              <div>
-                <p className="eyebrow">Account</p>
-                <h2 id="auth-dialog-title">登录 LimitUpLab</h2>
-              </div>
-              <button
-                aria-label="关闭登录窗口"
-                className="icon-button compact"
-                onClick={() => onOpenChange(false)}
-                type="button"
-              >
-                <X size={17} />
-              </button>
-            </header>
-
-            <p className="auth-dialog-intro">登录后可保存并继续历史 Agent 会话。</p>
-
-            {auth?.github_login_enabled ? (
-              <button
-                className="github-login-button"
-                onClick={() => window.location.assign(githubLoginUrl(location.pathname))}
-                type="button"
-              >
-                <Github aria-hidden="true" size={18} />
-                使用 GitHub 登录
-              </button>
-            ) : null}
-
-            {auth?.github_login_enabled && auth.email_login_enabled ? (
-              <div className="auth-divider"><span>或</span></div>
-            ) : null}
-
-            {auth?.email_login_enabled ? (
-              <div className="email-login-form">
-                <label htmlFor="login-email">邮箱</label>
-                <div className="email-login-row">
-                  <span><Mail aria-hidden="true" size={17} /></span>
-                  <input
-                    autoComplete="email"
-                    disabled={Boolean(challengeId)}
-                    id="login-email"
-                    onChange={(event) => setEmail(event.target.value)}
-                    placeholder="name@example.com"
-                    type="email"
-                    value={email}
-                  />
-                  <button disabled={submitting || !email.trim() || resendIn > 0} onClick={() => void sendEmailCode()} type="button">
-                    {challengeId
-                      ? (resendIn > 0 ? `${resendIn}s` : "重新发送")
-                      : "发送验证码"}
-                  </button>
-                </div>
-                {challengeId ? (
-                  <>
-                    <label htmlFor="login-code">验证码</label>
-                    <div className="email-login-row code-row">
-                      <input
-                        autoComplete="one-time-code"
-                        id="login-code"
-                        inputMode="numeric"
-                        maxLength={6}
-                        onChange={(event) => setCode(event.target.value.replace(/\D/g, ""))}
-                        placeholder="6 位验证码"
-                        value={code}
-                      />
-                      <button disabled={submitting || code.length !== 6} onClick={() => void verifyEmailCode()} type="button">
-                        验证并登录
-                      </button>
-                    </div>
-                    {debugCode ? <small className="debug-code">本地调试验证码：{debugCode}</small> : null}
-                  </>
-                ) : null}
-              </div>
-            ) : null}
-
-            {!auth?.github_login_enabled && !auth?.email_login_enabled ? (
-              <p className="auth-unavailable">登录服务尚未配置，请联系管理员。</p>
-            ) : null}
-            {authError ? <p className="auth-error">{authError}</p> : null}
-          </section>
-        </div>
-      ) : null}
-    </>
-  );
-}
-
-function AgentLoginGate({ onLogin }: { onLogin: () => void }) {
-  return (
-    <section className="agent-login-gate">
-      <div>
-        <MessageCircle aria-hidden="true" size={20} />
-        <span>
-          <strong>首板研究 Agent</strong>
-          <small>登录后提问并保存历史会话</small>
-        </span>
-      </div>
-      <button className="primary-button" onClick={onLogin} type="button">
-        <LogIn aria-hidden="true" size={17} />
-        登录后使用
-      </button>
-    </section>
-  );
-}
-
 export function App() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
   const [loading, setLoading] = useState(true);
-  const [auth, setAuth] = useState<AuthStatusResponse | null>(null);
-  const [authOpen, setAuthOpen] = useState(false);
   const location = useLocation();
   const activeView = routeToView[location.pathname] ?? "overview";
 
@@ -1028,7 +769,6 @@ export function App() {
 
   useEffect(() => {
     void loadDashboard();
-    void fetchAuthStatus().then(setAuth).catch(() => setAuth(null));
   }, []);
 
   if (loading) {
@@ -1090,12 +830,6 @@ export function App() {
               <strong>{data.summary.trade_date}</strong>
             </span>
           </div>
-          <AccountControl
-            auth={auth}
-            onAuthenticated={setAuth}
-            onOpenChange={setAuthOpen}
-            open={authOpen}
-          />
           <button
             aria-label="刷新全部数据"
             className="icon-button"
@@ -1121,12 +855,10 @@ export function App() {
         <MarketSnapshot summary={data.summary} />
       ) : null}
 
-      {showAgentWorkspace && auth?.authenticated ? (
+      {showAgentWorkspace ? (
         <AgentChatDock
           tradeDate={data.summary.trade_date}
         />
-      ) : showAgentWorkspace ? (
-        <AgentLoginGate onLogin={() => setAuthOpen(true)} />
       ) : null}
 
       <Routes>

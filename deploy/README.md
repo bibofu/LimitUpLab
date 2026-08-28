@@ -31,13 +31,9 @@ chmod 600 .env.production
 - 填入 `HITHINK_FINANCE_API_KEY`；不把凭据写入镜像或 Git。
 - 使用 `openssl rand -hex 32` 生成 `LIMITUPLAB_SESSION_SECRET`。生产环境缺少足够长度的密钥时，后端会拒绝启动。
 - 再生成一个不同的 `LIMITUPLAB_ADMIN_KEY`，用于内部诊断、评测、运行轨迹和评分策略管理接口。
-- 在 GitHub 创建 OAuth App，回调地址填写 `https://你的域名/api/auth/github/callback`，然后配置 `LIMITUPLAB_GITHUB_CLIENT_ID` 和 `LIMITUPLAB_GITHUB_CLIENT_SECRET`。授权流程使用 `state` 和 PKCE，GitHub Access Token 不会持久化。
-- 配置 SMTP 发件服务并设置 `LIMITUPLAB_EMAIL_LOGIN_ENABLED=true`。生产环境只允许 `smtp` 投递模式，验证码与登录 Session 在数据库中都只保存摘要。
 - 没有同花顺凭据时可设置 `INSTALL_HITHINK_FINANCE=false`，相关工具会按现有逻辑降级或明确报错。
 
-浏览器首次访问时会得到签名的 HttpOnly 匿名访客 Cookie。公开行情页面可以匿名浏览，生产环境的 Agent 对话要求使用 GitHub 或邮箱验证码登录。首次登录会把当前匿名会话迁移到用户账号，之后使用独立的 HttpOnly 登录 Session 恢复历史会话。
-
-GitHub OAuth App 可参考 [GitHub OAuth Web Flow 官方文档](https://docs.github.com/en/apps/oauth-apps/building-oauth-apps/authorizing-oauth-apps) 创建。只申请基础用户资料权限，不申请仓库权限。
+浏览器首次访问时会得到签名的 HttpOnly 匿名访客 Cookie。会话、消息和 Agent 运行记录均按该匿名身份隔离；清除浏览器 Cookie 后会成为新的匿名用户，无法继续访问原会话。
 
 内部接口必须携带 `X-LimitUpLab-Admin-Key`，例如：
 
@@ -144,8 +140,6 @@ docker compose --env-file .env.production exec backend ls -lh /app/data
 - `https://域名/health` 返回 `{"status":"ok"}`。
 - 首页、盘前推荐、复盘、涨停池和个股详情可访问。
 - Agent 可以流式输出，浏览器刷新后会话仍存在。
-- GitHub 和邮箱验证码均可登录；退出后无法访问账号下的历史会话，重新登录后可以恢复。
-- 数据库中不存在明文邮箱验证码、登录 Session Token 或 GitHub Access Token。
 - 携带管理员密钥访问 `/api/agents/system-health`，显示最新交易日和 LLM 配置正常。
 - 容器重启后 SQLite 数据与会话仍存在。
 - 服务器防火墙只开放 SSH、HTTP 和 HTTPS。

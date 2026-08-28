@@ -2,20 +2,18 @@ from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import configure_runtime_environment, configured_cors_origins
-from app.routers import agents, analysis, auth, limit_up, market, stocks
+from app.routers import agents, analysis, limit_up, market, stocks
 from app.security import (
     AnonymousVisitorMiddleware,
     is_production_environment,
     validate_admin_security,
     validate_session_security,
 )
-from app.services.auth_service import validate_auth_configuration
 
 
 configure_runtime_environment()
 validate_session_security()
 validate_admin_security()
-validate_auth_configuration()
 
 
 app = FastAPI(
@@ -47,4 +45,3 @@ app.include_router(limit_up.router, prefix="/api/limit-up", tags=["limit-up"])
 app.include_router(analysis.router, prefix="/api/analysis", tags=["analysis"])
 app.include_router(stocks.router, prefix="/api/stocks", tags=["stocks"])
 app.include_router(agents.router, prefix="/api/agents", tags=["agents"])
-app.include_router(auth.router, prefix="/api/auth", tags=["auth"])

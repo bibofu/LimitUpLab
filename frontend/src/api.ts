@@ -3,8 +3,6 @@ import type {
   AgentChatResponse,
   AgentChatStreamEvent,
   AgentEvaluationResponse,
-  AuthLoginResponse,
-  AuthStatusResponse,
   ChatSessionDetail,
   ChatSessionsResponse,
   DailyBoardPromotionStat,
@@ -15,7 +13,6 @@ import type {
   FirstBoardRatingsResponse,
   LimitUpEvent,
   MarketSummary,
-  EmailLoginChallengeResponse,
   PostPerformanceStat,
   RatingBacktestResponse,
   ReviewAgentReportResponse,
@@ -35,51 +32,10 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    let detail = "";
-    try {
-      const payload = await response.json() as { detail?: unknown };
-      detail = typeof payload.detail === "string" ? payload.detail : "";
-    } catch {
-      detail = "";
-    }
-    throw new Error(detail || `请求失败：${response.status} ${response.statusText}`);
+    throw new Error(`Request failed: ${response.status} ${response.statusText}`);
   }
 
   return response.json() as Promise<T>;
-}
-
-export function fetchAuthStatus() {
-  return request<AuthStatusResponse>("/api/auth/status");
-}
-
-export function requestEmailLoginCode(email: string) {
-  return request<EmailLoginChallengeResponse>("/api/auth/email/request", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify({ email }),
-  });
-}
-
-export function verifyEmailLoginCode(payload: {
-  challenge_id: string;
-  email: string;
-  code: string;
-}) {
-  return request<AuthLoginResponse>("/api/auth/email/verify", {
-    method: "POST",
-    headers: { "Content-Type": "application/json" },
-    body: JSON.stringify(payload),
-  });
-}
-
-export function logoutCurrentUser() {
-  return request<{ logged_out: boolean }>("/api/auth/logout", {
-    method: "POST",
-  });
-}
-
-export function githubLoginUrl(returnTo: string) {
-  return `${API_BASE_URL}/api/auth/github/start?return_to=${encodeURIComponent(returnTo)}`;
 }
 
 export function fetchMarketSummary() {
