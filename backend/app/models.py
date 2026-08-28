@@ -1730,6 +1730,62 @@ class AgentRun(BaseModel):
     finished_at: datetime
 
 
+class AgentUsageRecord(BaseModel):
+    """Cost and capacity accounting for one accepted Agent request."""
+
+    usage_id: str
+    run_id: str | None = None
+    session_id: str
+    owner_id: str
+    ip_hash: str
+    status: Literal["running", "success", "error", "rejected"] = "running"
+    model: str | None = None
+    llm_call_count: int = 0
+    failed_llm_call_count: int = 0
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    token_usage_complete: bool = False
+    planner_prompt_chars: int = 0
+    answer_prompt_chars: int = 0
+    answer_chars: int = 0
+    estimated_cost_usd: float = 0.0
+    started_at: datetime
+    finished_at: datetime | None = None
+    duration_ms: int | None = None
+    error_message: str | None = None
+
+
+class AgentUsageSummary(BaseModel):
+    """Aggregate request and LLM usage for one accounting period."""
+
+    period_started_at: datetime
+    request_count: int = 0
+    success_count: int = 0
+    error_count: int = 0
+    running_count: int = 0
+    rejected_count: int = 0
+    llm_call_count: int = 0
+    failed_llm_call_count: int = 0
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+    token_measured_request_count: int = 0
+    planner_prompt_chars: int = 0
+    answer_prompt_chars: int = 0
+    answer_chars: int = 0
+    estimated_cost_usd: float = 0.0
+
+
+class AgentUsageAdminResponse(BaseModel):
+    """Administrator-facing usage totals and live concurrency state."""
+
+    usage: AgentUsageSummary
+    limits: dict[str, int | float | bool]
+    concurrency: dict[str, int]
+    generated_by: str
+
+
 class DailyPipelineRun(BaseModel):
     """Persisted execution record for one automated after-close pipeline run."""
 

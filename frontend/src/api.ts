@@ -32,7 +32,7 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   });
 
   if (!response.ok) {
-    throw new Error(`Request failed: ${response.status} ${response.statusText}`);
+    throw new Error(await responseErrorMessage(response, "请求失败"));
   }
 
   return response.json() as Promise<T>;
@@ -227,7 +227,7 @@ export async function streamAgentChatMessage(
   });
 
   if (!response.ok || !response.body) {
-    throw new Error(`Stream failed: ${response.status} ${response.statusText}`);
+    throw new Error(await responseErrorMessage(response, "Agent 请求失败"));
   }
 
   const reader = response.body.getReader();
@@ -282,4 +282,20 @@ export async function streamAgentChatMessage(
     throw new Error("Agent stream ended before completion");
   }
   return completed;
+}
+
+/** Prefer a safe backend detail such as the user-facing 429 explanation. */
+async function responseErrorMessage(
+  response: Response,
+  fallback: string,
+): Promise<string> {
+  try {
+    const payload = (await response.json()) as { detail?: unknown };
+    if (typeof payload.detail === "string" && payload.detail.trim()) {
+      return payload.detail.trim();
+    }
+  } catch {
+    // Non-JSON gateway errors fall through to the status-based message.
+  }
+  return `${fallback}（${response.status} ${response.statusText}）`;
 }

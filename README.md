@@ -26,10 +26,11 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 | 项目 | 状态 |
 | --- | --- |
-| 后端自动化测试 | 186 项通过 |
+| 后端自动化测试 | 238 项通过 |
 | 离线 Agent Eval | 11/11 通过 |
 | 本地数据健康检查 | 已实现 |
 | LLM 流式问答 | 已实现 |
+| Agent 限流与成本审计 | 单访客/IP/全局限制、真实 token 账本已实现 |
 | 评分 v3 工程实现 | 已完成，影子验证中 |
 | 单机生产部署基线 | Docker、Nginx、持久化卷和日更任务配置已完成，待服务器验收 |
 
@@ -173,6 +174,7 @@ Evaluation Agent 将历史预测标记为 `success`、`partial`、`miss`、`avoi
 ### 5. 可观测与可降级
 
 - `agent_runs` 保存每次 Agent 执行状态、输入、输出、错误和耗时
+- `agent_usage_events` 保存已接受和被拒绝的请求、真实 token、显式价格下的估算成本及耗时
 - `chat_sessions` 和 `chat_messages` 独立保存会话与消息，支持新建、恢复、重命名和永久删除
 - 页面刷新后恢复完整消息和证据卡；传给 LLM 的上下文只取最近 8 条成功消息，并限制单条长度
 - Tool trace 展示 Planner 原始计划、后端修复原因、工具参数和结果摘要
@@ -181,6 +183,7 @@ Evaluation Agent 将历史预测标记为 `success`、`partial`、`miss`、`avoi
 - `/api/agents/system-health` 检查数据新鲜度、LLM、代理和 Eval 状态
 - LLM 不可用时回退到基于相同 Facts 的模板答案
 - 工具失败时返回明确错误，不允许模型补造数字
+- 匿名访客按分钟、按日限额，同一访客单并发，并设置单进程全局并发上限；超限统一返回 `429` 和 `Retry-After`
 
 ## 系统架构
 
@@ -334,6 +337,19 @@ DEEPSEEK_API_KEY=<your-api-key>
 ```
 
 真实 API Key 不应提交到 Git。未配置 LLM 时，结构化评分、检索和模板回答仍然可以运行。
+
+公开运行时建议同时配置 Agent 容量。默认每访客 8 次/分钟、60 次/天、同访客 1 个并发、全站 4 个并发。管理接口 `GET /api/agents/usage?days=7` 可查看请求、拒绝、LLM 调用和 token 汇总，需要 `X-LimitUpLab-Admin-Key`。
+
+```dotenv
+LIMITUPLAB_AGENT_RATE_LIMIT_ENABLED=true
+LIMITUPLAB_AGENT_REQUESTS_PER_MINUTE=8
+LIMITUPLAB_AGENT_REQUESTS_PER_DAY=60
+LIMITUPLAB_AGENT_IP_REQUESTS_PER_MINUTE=20
+LIMITUPLAB_AGENT_MAX_CONCURRENT_PER_USER=1
+LIMITUPLAB_AGENT_MAX_CONCURRENT_GLOBAL=4
+```
+
+如需记录估算金额并启用每日成本上限，再按当前模型官方价格填写每百万 token 单价。价格未配置时仍记录供应商返回的真实 token，但成本保持为 0，不会使用不可靠的字符数估算。
 
 如需本地代理：
 
@@ -575,7 +591,7 @@ npm.cmd run build
 - 当前预测准确性不高，不能宣称系统已经实现稳定选股。
 - Query Contract v2 已覆盖涨停事件主链路，但其他工具仍需要逐步补齐同等级的结构化契约和更大规模真实 LLM Eval。
 - 公告检索目前主要依赖通用搜索，尚未接入完整的结构化公告数据源。
-- 异步 Worker、用户级并发限制、成本配额和取消机制尚未完成。
+- 当前限流适用于单 Uvicorn 进程；异步 Worker、跨实例 Redis 限流和上游 LLM 主动取消尚未完成。
 - 用户系统、PostgreSQL、Redis、CI/CD 和多实例部署尚未完成；当前 Docker 配置适用于单机公开 Demo。
 
 ## Roadmap
@@ -586,7 +602,7 @@ npm.cmd run build
 2. 持续观察 v3 Challenger 对现行评分、最早封板和固定随机基线的样本外优势。
 3. 将 Query Contract 扩展到板块、新闻和复盘工具，并覆盖工具失败与多轮指代。
 4. 接入结构化公告源并增强引用质量。
-5. 在单机部署基线上继续完成用户系统、并发限流、异步 Worker、PostgreSQL、Redis 和 CI/CD。
+5. 完成服务器验收和 CI/CD；需要横向扩容时再迁移 PostgreSQL、Redis 限流和异步 Worker。
 
 详细进度见 [Tasks.md](./docs/Tasks.md)，完整需求见 [需求.md](./docs/%E9%9C%80%E6%B1%82.md)。
 

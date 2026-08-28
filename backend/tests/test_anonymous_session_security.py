@@ -71,6 +71,7 @@ class AnonymousSessionSecurityTest(unittest.TestCase):
             "/prediction-quality-audit",
             "/factor-signal-diagnostic",
             "/runs",
+            "/usage",
         }
         routes = {
             getattr(route, "path", ""): route for route in agents_router.routes

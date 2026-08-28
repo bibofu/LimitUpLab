@@ -5,6 +5,8 @@ from __future__ import annotations
 import os
 import json
 import threading
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass
 from time import perf_counter, sleep
 from typing import Callable
@@ -33,6 +35,63 @@ class LLMResult:
     duration_ms: int = 0
     prompt_chars: int = 0
     completion_chars: int = 0
+    prompt_tokens: int | None = None
+    completion_tokens: int | None = None
+    total_tokens: int | None = None
+
+
+@dataclass
+class LLMUsageTracker:
+    """Request-local aggregate of provider calls and exact token usage."""
+
+    call_count: int = 0
+    failed_call_count: int = 0
+    measured_call_count: int = 0
+    prompt_tokens: int = 0
+    completion_tokens: int = 0
+    total_tokens: int = 0
+    model: str | None = None
+
+    def begin_call(self, model: str) -> None:
+        self.call_count += 1
+        self.model = model
+
+    def complete_call(self, result: LLMResult) -> None:
+        if (
+            result.prompt_tokens is None
+            or result.completion_tokens is None
+            or result.total_tokens is None
+        ):
+            return
+        self.measured_call_count += 1
+        self.prompt_tokens += result.prompt_tokens
+        self.completion_tokens += result.completion_tokens
+        self.total_tokens += result.total_tokens
+
+    def fail_call(self) -> None:
+        self.failed_call_count += 1
+
+    @property
+    def token_usage_complete(self) -> bool:
+        return self.call_count > 0 and self.measured_call_count == self.call_count
+
+
+_usage_tracker: ContextVar[LLMUsageTracker | None] = ContextVar(
+    "llm_usage_tracker",
+    default=None,
+)
+
+
+@contextmanager
+def capture_llm_usage():
+    """Collect provider usage for all calls made in the current execution context."""
+
+    tracker = LLMUsageTracker()
+    token = _usage_tracker.set(tracker)
+    try:
+        yield tracker
+    finally:
+        _usage_tracker.reset(token)
 
 
 class LLMProvider:
@@ -104,6 +163,9 @@ class OpenAIChatCompletionsProvider(LLMProvider):
 
         payload = self._build_payload(system_prompt, user_prompt)
         started_at = perf_counter()
+        tracker = _usage_tracker.get()
+        if tracker is not None:
+            tracker.begin_call(self.model)
         data = None
         last_error: Exception | None = None
         for attempt in range(1, self.max_attempts + 1):
@@ -123,25 +185,38 @@ class OpenAIChatCompletionsProvider(LLMProvider):
             except (requests.RequestException, ValueError) as error:
                 last_error = error
                 if attempt >= self.max_attempts or not _is_retryable_error(error):
+                    if tracker is not None:
+                        tracker.fail_call()
                     raise RuntimeError(f"LLM request failed: {error}") from error
                 self.sleep_fn(self.retry_delay_seconds * (2 ** (attempt - 1)))
 
         if data is None:
+            if tracker is not None:
+                tracker.fail_call()
             raise RuntimeError(f"LLM request failed: {last_error}")
 
         try:
             content = data["choices"][0]["message"]["content"]
         except (KeyError, IndexError, TypeError) as error:
+            if tracker is not None:
+                tracker.fail_call()
             raise RuntimeError("LLM response shape is invalid") from error
 
-        return LLMResult(
+        usage = _parse_token_usage(data.get("usage"))
+        result = LLMResult(
             content=content,
             model=self.model,
             provider="openai-chat-completions",
             duration_ms=round((perf_counter() - started_at) * 1000),
             prompt_chars=len(system_prompt) + len(user_prompt),
             completion_chars=len(content),
+            prompt_tokens=usage[0],
+            completion_tokens=usage[1],
+            total_tokens=usage[2],
         )
+        if tracker is not None:
+            tracker.complete_call(result)
+        return result
 
     def stream_generate(
         self,
@@ -153,8 +228,12 @@ class OpenAIChatCompletionsProvider(LLMProvider):
 
         payload = self._build_payload(system_prompt, user_prompt, stream=True)
         started_at = perf_counter()
+        tracker = _usage_tracker.get()
+        if tracker is not None:
+            tracker.begin_call(self.model)
         response = None
         chunks: list[str] = []
+        usage: tuple[int | None, int | None, int | None] = (None, None, None)
         try:
             response = self.session.post(
                 f"{self.base_url}/chat/completions",
@@ -181,12 +260,19 @@ class OpenAIChatCompletionsProvider(LLMProvider):
                 if data == "[DONE]":
                     break
                 event = json.loads(data)
-                delta = event.get("choices", [{}])[0].get("delta", {}).get("content")
+                if event.get("usage") is not None:
+                    usage = _parse_token_usage(event.get("usage"))
+                choices = event.get("choices") or []
+                if not choices:
+                    continue
+                delta = choices[0].get("delta", {}).get("content")
                 if not delta:
                     continue
                 chunks.append(str(delta))
                 on_delta(str(delta))
         except (requests.RequestException, ValueError, UnicodeError, KeyError, IndexError, TypeError) as error:
+            if tracker is not None:
+                tracker.fail_call()
             raise RuntimeError(f"LLM streaming request failed: {error}") from error
         finally:
             if response is not None:
@@ -194,15 +280,23 @@ class OpenAIChatCompletionsProvider(LLMProvider):
 
         content = "".join(chunks)
         if not content:
+            if tracker is not None:
+                tracker.fail_call()
             raise RuntimeError("LLM streaming response did not contain text")
-        return LLMResult(
+        result = LLMResult(
             content=content,
             model=self.model,
             provider="openai-chat-completions",
             duration_ms=round((perf_counter() - started_at) * 1000),
             prompt_chars=len(system_prompt) + len(user_prompt),
             completion_chars=len(content),
+            prompt_tokens=usage[0],
+            completion_tokens=usage[1],
+            total_tokens=usage[2],
         )
+        if tracker is not None:
+            tracker.complete_call(result)
+        return result
 
     def _build_payload(
         self,
@@ -228,6 +322,7 @@ class OpenAIChatCompletionsProvider(LLMProvider):
             payload["max_tokens"] = self.planner_max_tokens
         if stream:
             payload["stream"] = True
+            payload["stream_options"] = {"include_usage": True}
         return payload
 
 
@@ -331,3 +426,19 @@ def _get_thread_session() -> requests.Session:
         session = requests.Session()
         _thread_local.llm_session = session
     return session
+
+
+def _parse_token_usage(
+    usage: object,
+) -> tuple[int | None, int | None, int | None]:
+    """Parse standard Chat Completions usage without inventing missing values."""
+
+    if not isinstance(usage, dict):
+        return None, None, None
+    try:
+        prompt_tokens = int(usage["prompt_tokens"])
+        completion_tokens = int(usage["completion_tokens"])
+        total_tokens = int(usage["total_tokens"])
+    except (KeyError, TypeError, ValueError):
+        return None, None, None
+    return prompt_tokens, completion_tokens, total_tokens

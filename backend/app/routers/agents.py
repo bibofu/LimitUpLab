@@ -2,6 +2,7 @@
 
 import hashlib
 import json
+import os
 import queue
 import threading
 from datetime import date, datetime, timezone
@@ -11,7 +12,7 @@ from typing import Annotated, Any, Callable, TypeVar
 from typing import Optional
 from uuid import uuid4
 
-from fastapi import APIRouter, Depends, HTTPException, Query
+from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response, status
 from fastapi.responses import StreamingResponse
 
 from app.agents import answer_first_board_chat, build_first_board_ratings, build_review_agent_report
@@ -28,6 +29,8 @@ from app.models import (
     AgentRunsResponse,
     AgentRunSummary,
     AgentSystemHealthResponse,
+    AgentUsageAdminResponse,
+    AgentUsageRecord,
     AgentToolTrace,
     ChatSessionCreateRequest,
     ChatSessionDetail,
@@ -47,6 +50,7 @@ from app.models import (
 from app.repositories import (
     SQLiteAgentCacheRepository,
     SQLiteAgentRunRepository,
+    SQLiteAgentUsageRepository,
     SQLiteChatSessionRepository,
     SQLiteDailyPipelineRepository,
     SQLiteFirstBoardRepository,
@@ -59,7 +63,18 @@ from app.services.factor_signal_diagnostic import build_factor_signal_diagnostic
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.first_board_critic import build_first_board_critic
 from app.services.dragon_tiger_review import load_dragon_tiger_review
-from app.services.llm_provider import DisabledLLMProvider
+from app.services.agent_rate_limit import (
+    AgentRateLimitError,
+    AgentRequestLease,
+    agent_rate_limiter,
+    load_agent_rate_limit_config,
+)
+from app.services.llm_provider import (
+    DisabledLLMProvider,
+    LLMUsageTracker,
+    capture_llm_usage,
+)
+from app.config import env_bool
 from app.services.prediction_quality_audit import build_prediction_quality_audit
 from app.services.rating_backtest import build_rating_backtest
 from app.services.scoring_policy_optimizer import (
@@ -75,6 +90,161 @@ ResponseModel = TypeVar("ResponseModel")
 STRUCTURED_CACHE_TTL_MINUTES = 10
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 CHAT_SESSIONS_VERSION = "chat-sessions-v1"
+
+
+def _begin_agent_request(
+    http_request: Request,
+    *,
+    owner_id: str,
+    session_id: str,
+    run_id: str,
+    started_at: datetime,
+) -> tuple[AgentRequestLease, SQLiteAgentUsageRepository, AgentUsageRecord]:
+    """Apply request limits and persist an accepted usage record."""
+
+    usage_repository = SQLiteAgentUsageRepository()
+    today = usage_repository.owner_today(owner_id)
+    ip_hash = _agent_client_ip_hash(http_request)
+    try:
+        lease = agent_rate_limiter.acquire(
+            owner_id,
+            ip_hash,
+            daily_request_count=today.request_count,
+            daily_cost_usd=today.estimated_cost_usd,
+        )
+    except AgentRateLimitError as error:
+        rejected_at = datetime.now(timezone.utc)
+        try:
+            usage_repository.record_rejection(
+                AgentUsageRecord(
+                    usage_id=f"usage_{uuid4().hex}",
+                    run_id=run_id,
+                    session_id=session_id,
+                    owner_id=owner_id,
+                    ip_hash=ip_hash,
+                    status="rejected",
+                    started_at=started_at,
+                    finished_at=rejected_at,
+                    duration_ms=max(
+                        0,
+                        round((rejected_at - started_at).total_seconds() * 1000),
+                    ),
+                    error_message=error.code,
+                )
+            )
+        except Exception:
+            pass
+        raise HTTPException(
+            status_code=status.HTTP_429_TOO_MANY_REQUESTS,
+            detail=error.message,
+            headers={
+                "Retry-After": str(error.retry_after_seconds),
+                "X-Agent-Limit-Reason": error.code,
+            },
+        ) from error
+
+    record = AgentUsageRecord(
+        usage_id=f"usage_{uuid4().hex}",
+        run_id=run_id,
+        session_id=session_id,
+        owner_id=owner_id,
+        ip_hash=ip_hash,
+        started_at=started_at,
+    )
+    try:
+        usage_repository.start(record)
+    except Exception:
+        lease.release()
+        raise
+    return lease, usage_repository, record
+
+
+def _finish_agent_request(
+    usage_repository: SQLiteAgentUsageRepository,
+    record: AgentUsageRecord,
+    tracker: LLMUsageTracker | None,
+    *,
+    response: AgentChatResponse | None = None,
+    error: Exception | None = None,
+) -> None:
+    """Finalize measured usage without turning accounting failures into chat failures."""
+
+    finished_at = datetime.now(timezone.utc)
+    token_usage_complete = bool(tracker and tracker.token_usage_complete)
+    prompt_tokens = tracker.prompt_tokens if token_usage_complete and tracker else None
+    completion_tokens = (
+        tracker.completion_tokens if token_usage_complete and tracker else None
+    )
+    total_tokens = tracker.total_tokens if token_usage_complete and tracker else None
+    performance = response.performance if response is not None else None
+    finalized = record.model_copy(
+        update={
+            "status": "error" if error is not None else "success",
+            "model": tracker.model if tracker else None,
+            "llm_call_count": tracker.call_count if tracker else 0,
+            "failed_llm_call_count": tracker.failed_call_count if tracker else 0,
+            "prompt_tokens": prompt_tokens,
+            "completion_tokens": completion_tokens,
+            "total_tokens": total_tokens,
+            "token_usage_complete": token_usage_complete,
+            "planner_prompt_chars": performance.planner_prompt_chars if performance else 0,
+            "answer_prompt_chars": performance.answer_prompt_chars if performance else 0,
+            "answer_chars": len(response.answer) if response else 0,
+            "estimated_cost_usd": _estimate_llm_cost_usd(
+                prompt_tokens,
+                completion_tokens,
+            ),
+            "finished_at": finished_at,
+            "duration_ms": max(
+                0,
+                round((finished_at - record.started_at).total_seconds() * 1000),
+            ),
+            "error_message": str(error)[:500] if error is not None else None,
+        }
+    )
+    try:
+        usage_repository.finish(finalized)
+    except Exception:
+        # The Agent response is more important than optional accounting. A stale
+        # `running` row still consumes the daily quota and is visible to admins.
+        return
+
+
+def _agent_client_ip_hash(request: Request) -> str:
+    """Hash the client address, trusting proxy headers only when configured."""
+
+    client_ip = request.client.host if request.client is not None else "unknown"
+    if env_bool("LIMITUPLAB_TRUST_PROXY_HEADERS"):
+        forwarded = request.headers.get("x-forwarded-for", "")
+        if forwarded:
+            client_ip = forwarded.split(",", 1)[0].strip() or client_ip
+    return hashlib.sha256(client_ip.encode("utf-8")).hexdigest()
+
+
+def _estimate_llm_cost_usd(
+    prompt_tokens: int | None,
+    completion_tokens: int | None,
+) -> float:
+    """Estimate cost only when exact usage and explicit model prices exist."""
+
+    if prompt_tokens is None or completion_tokens is None:
+        return 0.0
+    input_rate = _non_negative_env_float("LIMITUPLAB_LLM_INPUT_COST_PER_MILLION")
+    output_rate = _non_negative_env_float("LIMITUPLAB_LLM_OUTPUT_COST_PER_MILLION")
+    if input_rate == 0 and output_rate == 0:
+        return 0.0
+    return round(
+        (prompt_tokens * input_rate + completion_tokens * output_rate) / 1_000_000,
+        8,
+    )
+
+
+def _non_negative_env_float(name: str) -> float:
+    try:
+        value = float(os.getenv(name, "").strip())
+    except ValueError:
+        return 0.0
+    return value if value >= 0 else 0.0
 
 
 @router.get("/first-board-ratings", response_model=FirstBoardRatingsResponse)
@@ -218,6 +388,30 @@ def get_agent_system_health(
         events=get_limit_up_repository().list_events(),
         first_board_repository=SQLiteFirstBoardRepository(),
         run_offline_eval=run_offline_eval,
+    )
+
+
+@router.get("/usage", response_model=AgentUsageAdminResponse)
+def get_agent_usage(
+    _admin: Annotated[None, Depends(require_admin_access)],
+    days: int = Query(default=1, ge=1, le=90),
+) -> AgentUsageAdminResponse:
+    """Return protected Agent request, token and cost accounting totals."""
+
+    config = load_agent_rate_limit_config()
+    return AgentUsageAdminResponse(
+        usage=SQLiteAgentUsageRepository().summary(days=days),
+        limits={
+            "enabled": config.enabled,
+            "requests_per_minute": config.requests_per_minute,
+            "requests_per_day": config.requests_per_day,
+            "ip_requests_per_minute": config.ip_requests_per_minute,
+            "max_concurrent_per_user": config.max_concurrent_per_owner,
+            "max_concurrent_global": config.max_concurrent_global,
+            "daily_cost_budget_usd": config.daily_cost_budget_usd,
+        },
+        concurrency=agent_rate_limiter.snapshot(),
+        generated_by="agent-usage-accounting-v1",
     )
 
 
@@ -572,6 +766,8 @@ def get_first_board_critic(
 @router.post("/chat", response_model=AgentChatResponse)
 def chat_with_first_board_agent(
     request: AgentChatRequest,
+    http_request: Request,
+    http_response: Response,
     owner_id: Annotated[str, Depends(current_owner_id)],
 ) -> AgentChatResponse:
     """Answer first-board questions and persist an Agent run trace."""
@@ -589,29 +785,40 @@ def chat_with_first_board_agent(
     except SessionOwnershipError as error:
         raise HTTPException(status_code=404, detail="Chat session not found.") from error
     conversation_messages = session.messages[-8:]
-    chat_repository.append_message(
-        ChatSessionMessage(
-            message_id=request.message_id or f"msg_{uuid4().hex}",
-            session_id=request.session_id,
-            role="user",
-            content=request.message,
-            created_at=started_at,
-        ),
+    lease, usage_repository, usage_record = _begin_agent_request(
+        http_request,
         owner_id=owner_id,
+        session_id=request.session_id,
+        run_id=run_id,
+        started_at=started_at,
     )
+    http_response.headers["X-Agent-Daily-Remaining"] = str(lease.daily_remaining)
+    tracker: LLMUsageTracker | None = None
+    response: AgentChatResponse | None = None
 
     try:
-        response = answer_first_board_chat(
-            request=request,
-            events=get_limit_up_repository().list_events(),
-            repository=SQLiteFirstBoardRepository(),
-            recent_runs=run_repository.list_recent_runs(
-                request.session_id,
-                limit=10,
-                owner_id=owner_id,
+        chat_repository.append_message(
+            ChatSessionMessage(
+                message_id=request.message_id or f"msg_{uuid4().hex}",
+                session_id=request.session_id,
+                role="user",
+                content=request.message,
+                created_at=started_at,
             ),
-            conversation_messages=conversation_messages,
+            owner_id=owner_id,
         )
+        with capture_llm_usage() as tracker:
+            response = answer_first_board_chat(
+                request=request,
+                events=get_limit_up_repository().list_events(),
+                repository=SQLiteFirstBoardRepository(),
+                recent_runs=run_repository.list_recent_runs(
+                    request.session_id,
+                    limit=10,
+                    owner_id=owner_id,
+                ),
+                conversation_messages=conversation_messages,
+            )
         response.run_id = run_id
         run_repository.save_run(
             AgentRun(
@@ -639,39 +846,57 @@ def chat_with_first_board_agent(
             ),
             owner_id=owner_id,
         )
+        _finish_agent_request(
+            usage_repository,
+            usage_record,
+            tracker,
+            response=response,
+        )
         return response
     except Exception as error:
-        run_repository.save_run(
-            AgentRun(
-                run_id=run_id,
-                session_id=request.session_id,
-                run_type="agent_chat",
-                status="error",
-                input_json=request.model_dump(mode="json"),
-                error_message=str(error),
-                started_at=started_at,
-                finished_at=datetime.now(timezone.utc),
+        try:
+            run_repository.save_run(
+                AgentRun(
+                    run_id=run_id,
+                    session_id=request.session_id,
+                    run_type="agent_chat",
+                    status="error",
+                    input_json=request.model_dump(mode="json"),
+                    error_message=str(error),
+                    started_at=started_at,
+                    finished_at=datetime.now(timezone.utc),
+                )
             )
-        )
-        chat_repository.append_message(
-            ChatSessionMessage(
-                message_id=f"msg_{uuid4().hex}",
-                session_id=request.session_id,
-                role="assistant",
-                content="Agent 回答失败，请稍后重试。",
-                status="error",
-                run_id=run_id,
-                metadata={"error": str(error)},
-                created_at=datetime.now(timezone.utc),
-            ),
-            owner_id=owner_id,
-        )
+            chat_repository.append_message(
+                ChatSessionMessage(
+                    message_id=f"msg_{uuid4().hex}",
+                    session_id=request.session_id,
+                    role="assistant",
+                    content="Agent 回答失败，请稍后重试。",
+                    status="error",
+                    run_id=run_id,
+                    metadata={"error": str(error)},
+                    created_at=datetime.now(timezone.utc),
+                ),
+                owner_id=owner_id,
+            )
+        finally:
+            _finish_agent_request(
+                usage_repository,
+                usage_record,
+                tracker,
+                response=response,
+                error=error,
+            )
         raise
+    finally:
+        lease.release()
 
 
 @router.post("/chat/stream")
 def stream_first_board_agent_chat(
     request: AgentChatRequest,
+    http_request: Request,
     owner_id: Annotated[str, Depends(current_owner_id)],
 ) -> StreamingResponse:
     """Stream Agent progress, answer deltas and the complete persisted response."""
@@ -689,16 +914,33 @@ def stream_first_board_agent_chat(
     except SessionOwnershipError as error:
         raise HTTPException(status_code=404, detail="Chat session not found.") from error
     conversation_messages = session.messages[-8:]
-    chat_repository.append_message(
-        ChatSessionMessage(
-            message_id=request.message_id or f"msg_{uuid4().hex}",
-            session_id=request.session_id,
-            role="user",
-            content=request.message,
-            created_at=started_at,
-        ),
+    lease, usage_repository, usage_record = _begin_agent_request(
+        http_request,
         owner_id=owner_id,
+        session_id=request.session_id,
+        run_id=run_id,
+        started_at=started_at,
     )
+    try:
+        chat_repository.append_message(
+            ChatSessionMessage(
+                message_id=request.message_id or f"msg_{uuid4().hex}",
+                session_id=request.session_id,
+                role="user",
+                content=request.message,
+                created_at=started_at,
+            ),
+            owner_id=owner_id,
+        )
+    except Exception as error:
+        _finish_agent_request(
+            usage_repository,
+            usage_record,
+            None,
+            error=error,
+        )
+        lease.release()
+        raise
     event_queue: queue.Queue[tuple[str, dict[str, Any]] | None] = queue.Queue()
 
     def emit(event: str, data: dict[str, Any]) -> None:
@@ -706,6 +948,9 @@ def stream_first_board_agent_chat(
 
     def run_agent() -> None:
         answer_started = False
+        tracker: LLMUsageTracker | None = None
+        response: AgentChatResponse | None = None
+        execution_error: Exception | None = None
 
         def emit_progress(stage: str, message: str) -> None:
             emit("progress", {"stage": stage, "message": message})
@@ -716,19 +961,20 @@ def stream_first_board_agent_chat(
             emit("answer_delta", {"delta": delta})
 
         try:
-            response = answer_first_board_chat(
-                request=request,
-                events=get_limit_up_repository().list_events(),
-                repository=SQLiteFirstBoardRepository(),
-                recent_runs=run_repository.list_recent_runs(
-                    request.session_id,
-                    limit=10,
-                    owner_id=owner_id,
-                ),
-                conversation_messages=conversation_messages,
-                progress_callback=emit_progress,
-                answer_delta_callback=emit_answer_delta,
-            )
+            with capture_llm_usage() as tracker:
+                response = answer_first_board_chat(
+                    request=request,
+                    events=get_limit_up_repository().list_events(),
+                    repository=SQLiteFirstBoardRepository(),
+                    recent_runs=run_repository.list_recent_runs(
+                        request.session_id,
+                        limit=10,
+                        owner_id=owner_id,
+                    ),
+                    conversation_messages=conversation_messages,
+                    progress_callback=emit_progress,
+                    answer_delta_callback=emit_answer_delta,
+                )
             response.run_id = run_id
             if not answer_started:
                 emit_progress("answering", "正在整理最终回答")
@@ -761,6 +1007,7 @@ def stream_first_board_agent_chat(
             )
             emit("completed", response.model_dump(mode="json"))
         except Exception as error:
+            execution_error = error
             run_repository.save_run(
                 AgentRun(
                     run_id=run_id,
@@ -794,11 +1041,17 @@ def stream_first_board_agent_chat(
                 },
             )
         finally:
+            _finish_agent_request(
+                usage_repository,
+                usage_record,
+                tracker,
+                response=response,
+                error=execution_error,
+            )
+            lease.release()
             event_queue.put(None)
 
     def event_stream():
-        worker = threading.Thread(target=run_agent, daemon=True)
-        worker.start()
         while True:
             item = event_queue.get()
             if item is None:
@@ -807,12 +1060,16 @@ def stream_first_board_agent_chat(
             payload = json.dumps(data, ensure_ascii=False, separators=(",", ":"))
             yield f"event: {event}\ndata: {payload}\n\n"
 
+    worker = threading.Thread(target=run_agent, daemon=True)
+    worker.start()
+
     return StreamingResponse(
         event_stream(),
         media_type="text/event-stream",
         headers={
             "Cache-Control": "no-cache",
             "X-Accel-Buffering": "no",
+            "X-Agent-Daily-Remaining": str(lease.daily_remaining),
         },
     )
 

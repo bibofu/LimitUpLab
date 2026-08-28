@@ -316,6 +316,45 @@ def initialize_database(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         """
+        CREATE TABLE IF NOT EXISTS agent_usage_events (
+            usage_id TEXT PRIMARY KEY,
+            run_id TEXT,
+            session_id TEXT NOT NULL,
+            owner_id TEXT NOT NULL,
+            ip_hash TEXT NOT NULL,
+            status TEXT NOT NULL,
+            model TEXT,
+            llm_call_count INTEGER NOT NULL DEFAULT 0,
+            failed_llm_call_count INTEGER NOT NULL DEFAULT 0,
+            prompt_tokens INTEGER,
+            completion_tokens INTEGER,
+            total_tokens INTEGER,
+            token_usage_complete INTEGER NOT NULL DEFAULT 0,
+            planner_prompt_chars INTEGER NOT NULL DEFAULT 0,
+            answer_prompt_chars INTEGER NOT NULL DEFAULT 0,
+            answer_chars INTEGER NOT NULL DEFAULT 0,
+            estimated_cost_usd REAL NOT NULL DEFAULT 0,
+            started_at TEXT NOT NULL,
+            finished_at TEXT,
+            duration_ms INTEGER,
+            error_message TEXT
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_agent_usage_owner_started
+        ON agent_usage_events (owner_id, started_at DESC)
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_agent_usage_started
+        ON agent_usage_events (started_at DESC)
+        """
+    )
+    connection.execute(
+        """
         CREATE TABLE IF NOT EXISTS daily_pipeline_runs (
             run_id TEXT PRIMARY KEY,
             trade_date TEXT NOT NULL,
@@ -533,4 +572,3 @@ def _create_agent_predictions_table(connection: sqlite3.Connection) -> None:
         )
         """
     )
-

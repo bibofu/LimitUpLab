@@ -10,7 +10,14 @@ class FakeResponse:
         pass
 
     def json(self) -> dict:
-        return {"choices": [{"message": {"content": "{\"ok\":true}"}}]}
+        return {
+            "choices": [{"message": {"content": "{\"ok\":true}"}}],
+            "usage": {
+                "prompt_tokens": 12,
+                "completion_tokens": 4,
+                "total_tokens": 16,
+            },
+        }
 
 
 class FakeSession:
@@ -32,6 +39,7 @@ class FakeStreamingResponse:
     def iter_lines(self):
         yield b'data: {"choices":[{"delta":{"content":"\\u6839\\u636e"}}]}'
         yield b'data: {"choices":[{"delta":{"content":" facts"}}]}'
+        yield b'data: {"choices":[],"usage":{"prompt_tokens":8,"completion_tokens":3,"total_tokens":11}}'
         yield b"data: [DONE]"
 
     def close(self) -> None:
@@ -78,6 +86,7 @@ class LLMProviderTest(unittest.TestCase):
         self.assertEqual(payload["temperature"], 0.0)
         self.assertEqual(result.content, '{"ok":true}')
         self.assertGreater(result.prompt_chars, 0)
+        self.assertEqual(result.total_tokens, 16)
 
     def test_answer_does_not_send_a_token_limit(self) -> None:
         session = FakeSession()
@@ -119,8 +128,15 @@ class LLMProviderTest(unittest.TestCase):
         self.assertEqual(deltas, ["\u6839\u636e", " facts"])
         self.assertEqual(result.content, "\u6839\u636e facts")
         self.assertTrue(session.calls[0]["json"]["stream"])
+        self.assertEqual(
+            session.calls[0]["json"]["stream_options"],
+            {"include_usage": True},
+        )
         self.assertTrue(session.calls[0]["stream"])
         self.assertTrue(session.response.closed)
+        self.assertEqual(result.prompt_tokens, 8)
+        self.assertEqual(result.completion_tokens, 3)
+        self.assertEqual(result.total_tokens, 11)
 
     def test_non_streaming_request_retries_transient_timeout(self) -> None:
         session = TransientFailureSession()
