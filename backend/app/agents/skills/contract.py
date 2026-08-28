@@ -21,13 +21,14 @@ class AgentSkillTool:
 
 @dataclass(frozen=True)
 class AgentSkill:
-    """Declarative workflow and response contract for a question family."""
+    """One runtime skill loaded from a directory-based ``SKILL.md`` file."""
 
     name: str
     description: str
     examples: tuple[str, ...]
     required_tools: tuple[AgentSkillTool, ...]
-    answer_rules: tuple[str, ...]
+    instructions: str
+    source_path: str
 
     def planner_payload(self) -> dict[str, Any]:
         """Serialize the compact information needed during skill selection."""
@@ -40,9 +41,11 @@ class AgentSkill:
         }
 
     def answer_instruction(self) -> str:
-        """Build the active-skill instruction injected into answer generation."""
+        """Return the selected skill body for progressive prompt disclosure."""
 
-        rules = " ".join(
-            f"{index}. {rule}" for index, rule in enumerate(self.answer_rules, start=1)
+        return (
+            f"\nACTIVE_SKILL: {self.name}\n"
+            "The following instructions were loaded from the active SKILL.md. "
+            "Follow them when composing the user-facing answer.\n"
+            f"{self.instructions}\n"
         )
-        return f" ACTIVE_SKILL: {self.name}. RESPONSE_CONTRACT: {rules}"

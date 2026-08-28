@@ -206,9 +206,10 @@ Critic Agent
 
 - `[x]` 完成 Agent Skill Contract v1。
   - 新增运行时 Skill 注册表，由 LLM 在 Planner 阶段从业务工作流目录中选择 Skill，而不是继续增加固定问法 intent。
-  - 首批实现 `limit_up_pool`、`popularity`、`first_board_rating` 三个高频 Skill，分别覆盖涨停池、热门股票和首板评级问题。
-  - 每个 Skill 独立声明典型问题、必需工具、默认参数和回答契约；后端自动补齐 Planner 漏掉的必需工具。
-  - 最终生成阶段只注入当前 Skill 的回答规范，统一日期、来源、数量、排序、风险提示和禁止推断口径。
+  - 首批实现 `limit-up-pool`、`popularity`、`first-board-rating` 三个高频 Skill，分别覆盖涨停池、热门股票和首板评级问题。
+  - 已重构为标准“独立目录 + `SKILL.md`”结构，通过 YAML front matter 声明发现信息和运行时元数据，正文承载工作流与回答约束。
+  - Python 侧只保留通用 Loader、Registry 和必需工具校验；启动时校验 Skill 名称、目录、元数据与正文，兼容旧下划线名称。
+  - 最终生成阶段按需加载当前 Skill 正文，统一日期、来源、数量、排序、风险提示和禁止推断口径。
   - 新增 Skill 注册、工具去重、三类工作流执行和回答契约注入测试。
 
 - `[x]` 标准化 Agent 工具 schema 和执行轨迹。

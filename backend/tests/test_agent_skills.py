@@ -44,12 +44,21 @@ class AgentSkillRegistryTest(unittest.TestCase):
     def test_registry_exposes_three_initial_skills(self) -> None:
         self.assertEqual(
             [skill.name for skill in AGENT_SKILL_REGISTRY.skills],
-            ["limit_up_pool", "popularity", "first_board_rating"],
+            ["first-board-rating", "limit-up-pool", "popularity"],
         )
         catalog = AGENT_SKILL_REGISTRY.schema_prompt()
         self.assertIn("首板票有哪些", catalog)
         self.assertIn("有哪些票比较热门", catalog)
         self.assertIn("为什么这只股票评分高", catalog)
+        for skill in AGENT_SKILL_REGISTRY.skills:
+            self.assertTrue(skill.source_path.endswith("SKILL.md"))
+            self.assertIn("## 工作流", skill.instructions)
+
+    def test_legacy_underscore_names_remain_compatible(self) -> None:
+        resolved = AGENT_SKILL_REGISTRY.get("first_board_rating")
+
+        assert resolved is not None
+        self.assertEqual(resolved.name, "first-board-rating")
 
     def test_required_tools_are_added_without_duplicates(self) -> None:
         popularity = AGENT_SKILL_REGISTRY.get("popularity")
@@ -83,7 +92,7 @@ class AgentSkillIntegrationTest(unittest.TestCase):
         self.assertEqual(planner_trace.input["skill_name"], skill_name)
 
     def test_limit_up_pool_skill_fills_required_tool(self) -> None:
-        provider = SkillSelectingProvider("limit_up_pool")
+        provider = SkillSelectingProvider("limit-up-pool")
 
         response = answer_first_board_chat(
             AgentChatRequest(session_id="skill-limit-up", message="首板票有哪些"),
@@ -94,7 +103,7 @@ class AgentSkillIntegrationTest(unittest.TestCase):
         self._assert_active_skill(
             response,
             provider,
-            "limit_up_pool",
+            "limit-up-pool",
             "limit_up_events",
         )
 
@@ -144,7 +153,7 @@ class AgentSkillIntegrationTest(unittest.TestCase):
         )
 
     def test_first_board_rating_skill_fills_required_tool(self) -> None:
-        provider = SkillSelectingProvider("first_board_rating")
+        provider = SkillSelectingProvider("first-board-rating")
 
         response = answer_first_board_chat(
             AgentChatRequest(
@@ -158,7 +167,7 @@ class AgentSkillIntegrationTest(unittest.TestCase):
         self._assert_active_skill(
             response,
             provider,
-            "first_board_rating",
+            "first-board-rating",
             "first_board_ratings",
         )
 

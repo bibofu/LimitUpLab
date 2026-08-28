@@ -3,19 +3,22 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 from typing import Any, Iterable
 
 from app.agents.skills.contract import AgentSkill
-from app.agents.skills.first_board_rating import FIRST_BOARD_RATING_SKILL
-from app.agents.skills.limit_up_pool import LIMIT_UP_POOL_SKILL
-from app.agents.skills.popularity import POPULARITY_SKILL
+from app.agents.skills.loader import load_agent_skills
 
 
 class AgentSkillRegistry:
     """Resolve selected skills and enforce their minimum tool workflows."""
 
     def __init__(self, skills: Iterable[AgentSkill]):
-        self._skills = {skill.name: skill for skill in skills}
+        self._skills: dict[str, AgentSkill] = {}
+        for skill in skills:
+            if skill.name in self._skills:
+                raise ValueError(f"duplicate Agent skill name: {skill.name}")
+            self._skills[skill.name] = skill
 
     @property
     def skills(self) -> tuple[AgentSkill, ...]:
@@ -28,7 +31,8 @@ class AgentSkillRegistry:
 
         if not isinstance(name, str):
             return None
-        return self._skills.get(name.strip())
+        normalized = name.strip().lower().replace("_", "-")
+        return self._skills.get(normalized)
 
     def resolve(
         self,
@@ -82,9 +86,5 @@ class AgentSkillRegistry:
 
 
 AGENT_SKILL_REGISTRY = AgentSkillRegistry(
-    (
-        LIMIT_UP_POOL_SKILL,
-        POPULARITY_SKILL,
-        FIRST_BOARD_RATING_SKILL,
-    )
+    load_agent_skills(Path(__file__).resolve().parent)
 )
