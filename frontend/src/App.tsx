@@ -1835,6 +1835,8 @@ function FirstBoardRatingPanel({ ratings }: { ratings: FirstBoardRatingsResponse
       <div className="rating-summary-panel">
         <div className="rating-summary-facts">
           <span>{ratings.trade_date}</span>
+          <span>{ratings.snapshot_source === "live" ? "已固化预测" : "动态研究结果"}</span>
+          {ratings.data_as_of ? <span>数据截止 {ratings.data_as_of}</span> : null}
           <strong>{ratings.candidates.length} 只入池</strong>
           <strong>{ratings.filtered_out.length} 只过滤</strong>
           <strong>{topCandidate ? `${topCandidate.rating} / ${topCandidate.score.toFixed(1)}` : "暂无候选"}</strong>

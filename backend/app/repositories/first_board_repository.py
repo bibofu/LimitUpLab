@@ -1,5 +1,6 @@
 ﻿"""SQLite persistence for first-board feature and outcome data."""
 
+import hashlib
 import json
 import sqlite3
 from datetime import date, datetime
@@ -11,6 +12,7 @@ from app.models import (
     FirstBoardEnrichmentSnapshot,
     FirstBoardFeature,
     FirstBoardOutcome,
+    FirstBoardRatingsResponse,
     StockDailyBar,
 )
 
@@ -307,36 +309,248 @@ class SQLiteFirstBoardRepository:
             connection.close()
         return self._enrichment_from_row(row) if row else None
 
-    def upsert_predictions(self, predictions: list[AgentPrediction]) -> None:
-        """Insert or update persisted Agent rating predictions."""
+    def upsert_predictions(self, predictions: list[AgentPrediction]) -> int:
+        """Persist predictions and return the number of newly inserted rows.
+
+        Historical rows remain version-aware. Live rows are grouped into one
+        immutable batch per trade date so a later policy cannot rewrite the
+        picks that users actually saw after that close.
+        """
+
+        historical = [
+            item for item in predictions if item.prediction_source == "historical_backtest"
+        ]
+        live_by_date: dict[date, list[AgentPrediction]] = {}
+        for item in predictions:
+            if item.prediction_source == "live":
+                live_by_date.setdefault(item.trade_date, []).append(item)
+
+        for trade_date, items in live_by_date.items():
+            versions = {item.scoring_version for item in items}
+            created_times = {item.created_at for item in items}
+            data_dates = {item.data_as_of for item in items}
+            if (
+                len(versions) != 1
+                or len(created_times) != 1
+                or data_dates != {trade_date}
+            ):
+                raise ValueError(
+                    f"Live prediction batch for {trade_date.isoformat()} is inconsistent."
+                )
+
+        inserted = self._upsert_historical_predictions(historical)
+        for trade_date, items in live_by_date.items():
+            first = items[0]
+            payload = {
+                "trade_date": trade_date.isoformat(),
+                "candidates": [
+                    {
+                        "facts": item.facts_json,
+                        "score": item.score,
+                        "rating": item.rating,
+                        "confidence": item.confidence,
+                        "score_breakdown": [],
+                        "reasons": item.reasons,
+                        "risks": item.risks,
+                    }
+                    for item in sorted(
+                        items,
+                        key=lambda item: (-item.score, item.symbol),
+                    )
+                ],
+                "filtered_out": [],
+                "universe_count": len(items),
+                "generated_by": first.scoring_version,
+                "snapshot_source": "live",
+                "data_as_of": first.data_as_of.isoformat(),
+                "snapshot_created_at": first.created_at.isoformat(),
+            }
+            inserted += self._insert_live_prediction_batch(
+                predictions=items,
+                snapshot_json=json.dumps(payload, ensure_ascii=False, sort_keys=True),
+                top_limit=len(items),
+            )
+        return inserted
+
+    def persist_live_prediction_snapshot(
+        self,
+        *,
+        ratings: FirstBoardRatingsResponse,
+        predictions: list[AgentPrediction],
+        top_limit: int,
+        data_as_of: date,
+        created_at: datetime,
+    ) -> int:
+        """Atomically insert one immutable live Top-N response and its rows."""
+
+        if data_as_of != ratings.trade_date:
+            raise ValueError("Live prediction data_as_of must equal its trade date.")
+        if any(
+            item.prediction_source != "live"
+            or item.trade_date != ratings.trade_date
+            or item.scoring_version != ratings.generated_by
+            or item.data_as_of != data_as_of
+            or item.created_at != created_at
+            for item in predictions
+        ):
+            raise ValueError("Live prediction rows do not match the snapshot metadata.")
+        snapshot_symbols = [item.facts.symbol for item in ratings.candidates]
+        prediction_symbols = [item.symbol for item in predictions]
+        if snapshot_symbols != prediction_symbols:
+            raise ValueError(
+                "Live prediction rows do not match the snapshot candidate order."
+            )
+
+        snapshot = ratings.model_copy(
+            update={
+                "snapshot_source": "live",
+                "data_as_of": data_as_of,
+                "snapshot_created_at": created_at,
+            }
+        )
+        return self._insert_live_prediction_batch(
+            predictions=predictions,
+            snapshot_json=json.dumps(
+                snapshot.model_dump(mode="json"),
+                ensure_ascii=False,
+                sort_keys=True,
+            ),
+            top_limit=max(top_limit, 0),
+            empty_batch_metadata=(
+                ratings.trade_date,
+                ratings.generated_by,
+                data_as_of,
+                created_at,
+            ),
+        )
+
+    def get_live_prediction_snapshot(
+        self,
+        trade_date: date,
+    ) -> FirstBoardRatingsResponse | None:
+        """Return the exact live rating response first persisted for one date."""
 
         connection = connect(self.database_path)
         try:
             initialize_database(connection)
+            row = connection.execute(
+                """
+                SELECT snapshot_json
+                FROM agent_live_prediction_snapshots
+                WHERE trade_date = ?
+                """,
+                (trade_date.isoformat(),),
+            ).fetchone()
+        finally:
+            connection.close()
+        if row is None:
+            return None
+        return FirstBoardRatingsResponse.model_validate_json(row["snapshot_json"])
+
+    def _upsert_historical_predictions(
+        self,
+        predictions: list[AgentPrediction],
+    ) -> int:
+        """Insert versioned historical snapshots without rewriting existing rows."""
+
+        if not predictions:
+            return 0
+        connection = connect(self.database_path)
+        try:
+            initialize_database(connection)
+            before = connection.total_changes
             connection.executemany(
                 """
                 INSERT INTO agent_predictions (
-                    prediction_id,
-                    trade_date,
-                    symbol,
-                    name,
-                    score,
-                    rating,
-                    confidence,
-                    scoring_version,
-                    prediction_source,
-                    data_as_of,
-                    facts_json,
-                    reasons_json,
-                    risks_json,
-                    created_at
+                    prediction_id, trade_date, symbol, name, score, rating,
+                    confidence, scoring_version, prediction_source, data_as_of,
+                    facts_json, reasons_json, risks_json, created_at
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(trade_date, symbol, scoring_version, prediction_source) DO NOTHING
                 """,
-                [self._prediction_to_record(prediction) for prediction in predictions],
+                [self._prediction_to_record(item) for item in predictions],
             )
+            inserted = connection.total_changes - before
             connection.commit()
+            return inserted
+        finally:
+            connection.close()
+
+    def _insert_live_prediction_batch(
+        self,
+        *,
+        predictions: list[AgentPrediction],
+        snapshot_json: str,
+        top_limit: int,
+        empty_batch_metadata: tuple[date, str, date, datetime] | None = None,
+    ) -> int:
+        """Insert one live batch under a per-date transaction lock."""
+
+        if predictions:
+            first = predictions[0]
+            trade_date = first.trade_date
+            scoring_version = first.scoring_version
+            data_as_of = first.data_as_of
+            created_at = first.created_at
+        elif empty_batch_metadata is not None:
+            trade_date, scoring_version, data_as_of, created_at = empty_batch_metadata
+        else:
+            raise ValueError("Empty live batches require explicit metadata.")
+        content_hash = hashlib.sha256(snapshot_json.encode("utf-8")).hexdigest()
+
+        connection = connect(self.database_path)
+        try:
+            initialize_database(connection)
+            connection.execute("BEGIN IMMEDIATE")
+            existing = connection.execute(
+                """
+                SELECT prediction_count
+                FROM agent_live_prediction_snapshots
+                WHERE trade_date = ?
+                """,
+                (trade_date.isoformat(),),
+            ).fetchone()
+            if existing is not None:
+                connection.rollback()
+                return 0
+            connection.execute(
+                """
+                INSERT INTO agent_live_prediction_snapshots (
+                    trade_date, snapshot_id, scoring_version, data_as_of,
+                    top_limit, prediction_count, snapshot_json, content_hash, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                (
+                    trade_date.isoformat(),
+                    f"live-{trade_date.isoformat()}-{content_hash[:12]}",
+                    scoring_version,
+                    data_as_of.isoformat(),
+                    max(top_limit, 0),
+                    len(predictions),
+                    snapshot_json,
+                    content_hash,
+                    created_at.isoformat(),
+                ),
+            )
+            if predictions:
+                connection.executemany(
+                    """
+                    INSERT INTO agent_predictions (
+                        prediction_id, trade_date, symbol, name, score, rating,
+                        confidence, scoring_version, prediction_source, data_as_of,
+                        facts_json, reasons_json, risks_json, created_at
+                    )
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    """,
+                    [self._prediction_to_record(item) for item in predictions],
+                )
+            connection.commit()
+            return len(predictions)
+        except Exception:
+            connection.rollback()
+            raise
         finally:
             connection.close()
 

@@ -149,6 +149,43 @@ class DailyUpdatePipelineTest(unittest.TestCase):
         finally:
             self._cleanup_database(database_path)
 
+    def test_repeated_latest_update_does_not_rewrite_live_predictions(self) -> None:
+        database_path = self._database_path()
+        try:
+            limit_repo = SQLiteLimitUpRepository(database_path=database_path)
+            first_board_repo = SQLiteFirstBoardRepository(database_path=database_path)
+            trade_date = date(2026, 8, 10)
+            limit_repo.upsert_events(
+                [self._make_event("002298", "candidate", trade_date)]
+            )
+            kwargs = {
+                "trade_date": trade_date,
+                "top_targets": 1,
+                "max_tracked_kline_fetches": 0,
+                "skip_import": True,
+                "refresh_enrichment": False,
+                "limit_up_repository": limit_repo,
+                "first_board_repository": first_board_repo,
+                "post_bar_collector": lambda _symbol, _base_date, _as_of_date: [],
+            }
+
+            first = run_daily_update(**kwargs)
+            first_snapshot = first_board_repo.get_live_prediction_snapshot(trade_date)
+            second = run_daily_update(**kwargs)
+
+            self.assertEqual(first.persisted_live_predictions, 1)
+            self.assertEqual(second.persisted_live_predictions, 0)
+            self.assertEqual(
+                len(first_board_repo.list_predictions_between(trade_date, trade_date)),
+                1,
+            )
+            self.assertEqual(
+                first_snapshot,
+                first_board_repo.get_live_prediction_snapshot(trade_date),
+            )
+        finally:
+            self._cleanup_database(database_path)
+
     @patch("scripts.update_daily_data.collect_limit_up_events")
     def test_import_reports_tonghuashun_limit_up_count_difference(
         self,

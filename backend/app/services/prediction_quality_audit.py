@@ -18,6 +18,7 @@ from app.models import (
     PredictionQualityPolicyStatus,
 )
 from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
+from app.services.evaluation_agent import select_canonical_prediction_snapshots
 
 
 PREDICTION_QUALITY_AUDIT_VERSION = "prediction-quality-audit-v1"
@@ -177,23 +178,9 @@ def build_prediction_quality_audit(
 def _canonical_predictions(
     predictions: list[AgentPrediction],
 ) -> list[AgentPrediction]:
-    """Prefer immutable live snapshots when one stock/date has two sources."""
+    """Use the same coherent daily snapshot as Evaluation and Review."""
 
-    grouped: dict[tuple[date, str], list[AgentPrediction]] = defaultdict(list)
-    for item in predictions:
-        grouped[(item.trade_date, item.symbol)].append(item)
-    selected = [
-        max(
-            items,
-            key=lambda item: (
-                item.prediction_source == "live",
-                item.created_at,
-                item.prediction_id,
-            ),
-        )
-        for items in grouped.values()
-    ]
-    return sorted(selected, key=lambda item: (item.trade_date, -item.score, item.symbol))
+    return select_canonical_prediction_snapshots(predictions)
 
 
 def _build_date_coverage(

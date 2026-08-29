@@ -63,7 +63,7 @@ class PredictionQualityAuditTest(unittest.TestCase):
 
         self.assertEqual(report.raw_prediction_rows, 14)
         self.assertEqual(report.audited_prediction_rows, 13)
-        self.assertEqual(report.canonical_prediction_count, 12)
+        self.assertEqual(report.canonical_prediction_count, 10)
         self.assertEqual(report.cross_cohort_duplicate_rows, 2)
         self.assertEqual(report.data_as_of_violation_count, 1)
         self.assertEqual(report.next_day_mature_trade_date_count, 3)
@@ -73,7 +73,7 @@ class PredictionQualityAuditTest(unittest.TestCase):
             ["complete", "partial", "pending", "not_mature"],
         )
         self.assertEqual(report.benchmarks[0].benchmark, "audited_policy_top_k")
-        self.assertEqual(report.benchmarks[0].sample_size, 3)
+        self.assertEqual(report.benchmarks[0].sample_size, 1)
         self.assertEqual(report.policy_status.outcome_ready_trade_dates, 2)
         self.assertFalse(report.policy_status.readiness_rate >= 1)
 

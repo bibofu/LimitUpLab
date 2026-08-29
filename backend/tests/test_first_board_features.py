@@ -47,6 +47,7 @@ class FirstBoardFeaturesTest(unittest.TestCase):
         self.assertIn("first_board_outcomes", table_names)
         self.assertIn("first_board_enrichment_snapshots", table_names)
         self.assertIn("agent_predictions", table_names)
+        self.assertIn("agent_live_prediction_snapshots", table_names)
 
     def test_initialize_database_migrates_legacy_prediction_snapshots(self) -> None:
         with temporary_database_path() as database_path:
@@ -100,6 +101,82 @@ class FirstBoardFeaturesTest(unittest.TestCase):
                     connection.execute("SELECT COUNT(*) FROM agent_predictions").fetchone()[0],
                     2,
                 )
+            finally:
+                connection.close()
+
+    def test_schema_v2_keeps_earliest_live_batch_per_date(self) -> None:
+        with temporary_database_path() as database_path:
+            connection = connect(database_path)
+            try:
+                connection.execute(
+                    """
+                    CREATE TABLE agent_predictions (
+                        prediction_id TEXT PRIMARY KEY,
+                        trade_date TEXT NOT NULL,
+                        symbol TEXT NOT NULL,
+                        name TEXT NOT NULL,
+                        score REAL NOT NULL,
+                        rating TEXT NOT NULL,
+                        confidence REAL NOT NULL,
+                        scoring_version TEXT NOT NULL,
+                        prediction_source TEXT NOT NULL,
+                        data_as_of TEXT NOT NULL,
+                        facts_json TEXT NOT NULL,
+                        reasons_json TEXT NOT NULL,
+                        risks_json TEXT NOT NULL,
+                        created_at TEXT NOT NULL,
+                        UNIQUE(trade_date, symbol, scoring_version, prediction_source)
+                    )
+                    """
+                )
+                connection.executemany(
+                    """
+                    INSERT INTO agent_predictions VALUES (
+                        ?, '2026-08-10', ?, ?, ?, 'A', 0.8, ?, 'live',
+                        '2026-08-10', '{}', '[]', '[]', ?
+                    )
+                    """,
+                    [
+                        (
+                            "original-live",
+                            "002001",
+                            "original",
+                            80,
+                            "policy-v1",
+                            "2026-08-10T10:00:00+00:00",
+                        ),
+                        (
+                            "rewritten-live",
+                            "002002",
+                            "rewritten",
+                            90,
+                            "policy-v2",
+                            "2026-08-11T10:00:00+00:00",
+                        ),
+                    ],
+                )
+                connection.execute("PRAGMA user_version = 1")
+                connection.commit()
+
+                initialize_database(connection)
+
+                live_rows = connection.execute(
+                    """
+                    SELECT prediction_id
+                    FROM agent_predictions
+                    WHERE prediction_source = 'live'
+                    """
+                ).fetchall()
+                batch = connection.execute(
+                    """
+                    SELECT scoring_version, prediction_count
+                    FROM agent_live_prediction_snapshots
+                    WHERE trade_date = '2026-08-10'
+                    """
+                ).fetchone()
+                self.assertEqual([row["prediction_id"] for row in live_rows], ["original-live"])
+                self.assertEqual(batch["scoring_version"], "policy-v1")
+                self.assertEqual(batch["prediction_count"], 1)
             finally:
                 connection.close()
 

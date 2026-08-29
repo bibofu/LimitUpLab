@@ -33,7 +33,7 @@ def build_agent_evaluation(
     scoring_version = (
         champion.version if champion else DEFAULT_SCORING_POLICY_VERSION
     )
-    predictions = _prefer_live_predictions(
+    predictions = select_canonical_prediction_snapshots(
         repository.list_predictions_between(start_date, end_date),
         preferred_scoring_version=scoring_version,
     )
@@ -77,7 +77,8 @@ def persist_agent_predictions_for_dates(
 ) -> int:
     """Persist immutable rating snapshots with an explicit provenance label."""
 
-    predictions: list[AgentPrediction] = []
+    historical_predictions: list[AgentPrediction] = []
+    inserted = 0
     now = datetime.now(timezone.utc)
     from app.agents.first_board import build_first_board_ratings
 
@@ -92,7 +93,7 @@ def persist_agent_predictions_for_dates(
             if top_per_day is None
             else ratings.candidates[: max(top_per_day, 0)]
         )
-        predictions.extend(
+        predictions = [
             _prediction_from_rating(
                 rating=item,
                 created_at=now,
@@ -101,9 +102,23 @@ def persist_agent_predictions_for_dates(
                 scoring_version=ratings.generated_by,
             )
             for item in candidates
-        )
-    repository.upsert_predictions(predictions)
-    return len(predictions)
+        ]
+        if prediction_source == "live":
+            inserted += repository.persist_live_prediction_snapshot(
+                ratings=ratings.model_copy(update={"candidates": candidates}),
+                predictions=predictions,
+                top_limit=(
+                    len(candidates)
+                    if top_per_day is None
+                    else max(top_per_day, 0)
+                ),
+                data_as_of=data_as_of or trade_date,
+                created_at=now,
+            )
+        else:
+            historical_predictions.extend(predictions)
+    inserted += repository.upsert_predictions(historical_predictions)
+    return inserted
 
 
 def _prediction_from_rating(
@@ -297,46 +312,66 @@ def _build_warnings(
     return warnings
 
 
-def _prefer_live_predictions(
+def select_canonical_prediction_snapshots(
     predictions: list[AgentPrediction],
     *,
     preferred_scoring_version: str | None = None,
 ) -> list[AgentPrediction]:
-    """Select one auditable snapshot per stock and date across policy versions.
+    """Select one complete prediction batch per date.
 
-    A policy upgrade must not make earlier live predictions disappear from the
-    review. Genuine forward predictions therefore outrank historical backtests;
-    the preferred policy version is only used to break ties within one source.
+    If a live batch exists, no historical row from that date may leak into the
+    displayed Top10. For dates without live picks, one historical scoring
+    version is selected as a coherent batch.
     """
 
-    selected: dict[tuple[date, str], AgentPrediction] = {}
+    by_date: dict[date, list[AgentPrediction]] = {}
     for prediction in predictions:
-        key = (prediction.trade_date, prediction.symbol)
-        current = selected.get(key)
-        if current is None or _prediction_preference(
-            prediction,
-            preferred_scoring_version=preferred_scoring_version,
-        ) > _prediction_preference(
-            current,
-            preferred_scoring_version=preferred_scoring_version,
-        ):
-            selected[key] = prediction
-    return sorted(
-        selected.values(),
-        key=lambda item: (item.trade_date, -item.score, item.symbol),
-    )
+        by_date.setdefault(prediction.trade_date, []).append(prediction)
 
+    selected: list[AgentPrediction] = []
+    for trade_date in sorted(by_date):
+        daily = by_date[trade_date]
+        live = [item for item in daily if item.prediction_source == "live"]
+        if live:
+            batch_key = min(
+                (
+                    item.created_at.isoformat(),
+                    item.scoring_version,
+                    item.data_as_of.isoformat(),
+                )
+                for item in live
+            )
+            selected.extend(
+                item
+                for item in live
+                if (
+                    item.created_at.isoformat(),
+                    item.scoring_version,
+                    item.data_as_of.isoformat(),
+                )
+                == batch_key
+            )
+            continue
 
-def _prediction_preference(
-    prediction: AgentPrediction,
-    *,
-    preferred_scoring_version: str | None,
-) -> tuple[int, int, datetime, str]:
-    """Return deterministic precedence without confusing backtests with live picks."""
+        historical = [
+            item for item in daily if item.prediction_source == "historical_backtest"
+        ]
+        if not historical:
+            continue
+        versions = {item.scoring_version for item in historical}
+        if preferred_scoring_version in versions:
+            selected_version = preferred_scoring_version
+        else:
+            selected_version = max(
+                versions,
+                key=lambda version: max(
+                    item.created_at.isoformat()
+                    for item in historical
+                    if item.scoring_version == version
+                ),
+            )
+        selected.extend(
+            item for item in historical if item.scoring_version == selected_version
+        )
 
-    return (
-        int(prediction.prediction_source == "live"),
-        int(prediction.scoring_version == preferred_scoring_version),
-        prediction.created_at,
-        prediction.scoring_version,
-    )
+    return sorted(selected, key=lambda item: (item.trade_date, -item.score, item.symbol))

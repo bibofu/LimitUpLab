@@ -1,5 +1,7 @@
 ﻿"""SQLite connection and schema initialization helpers."""
 
+import hashlib
+import json
 import os
 import sqlite3
 import threading
@@ -12,7 +14,7 @@ from app.config import env_bool
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_PATH = BACKEND_ROOT / "data" / "limituplab.sqlite"
-CURRENT_SCHEMA_VERSION = 1
+CURRENT_SCHEMA_VERSION = 2
 DEFAULT_BUSY_TIMEOUT_MS = 5_000
 DEFAULT_LOCK_RETRY_ATTEMPTS = 3
 DEFAULT_LOCK_RETRY_BASE_DELAY_SECONDS = 0.05
@@ -499,6 +501,7 @@ def _apply_schema(connection: sqlite3.Connection) -> None:
         """
     )
     _ensure_agent_predictions_schema(connection)
+    _ensure_agent_live_prediction_snapshots_schema(connection)
     connection.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_agent_predictions_date
@@ -727,3 +730,127 @@ def _create_agent_predictions_table(connection: sqlite3.Connection) -> None:
         )
         """
     )
+
+
+def _ensure_agent_live_prediction_snapshots_schema(
+    connection: sqlite3.Connection,
+) -> None:
+    """Create daily live batches and adopt the earliest legacy live snapshot."""
+
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS agent_live_prediction_snapshots (
+            trade_date TEXT PRIMARY KEY,
+            snapshot_id TEXT NOT NULL UNIQUE,
+            scoring_version TEXT NOT NULL,
+            data_as_of TEXT NOT NULL,
+            top_limit INTEGER NOT NULL,
+            prediction_count INTEGER NOT NULL,
+            snapshot_json TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            created_at TEXT NOT NULL
+        )
+        """
+    )
+    existing_dates = {
+        row["trade_date"]
+        for row in connection.execute(
+            "SELECT trade_date FROM agent_live_prediction_snapshots"
+        ).fetchall()
+    }
+    live_rows = connection.execute(
+        """
+        SELECT *
+        FROM agent_predictions
+        WHERE prediction_source = 'live'
+        ORDER BY trade_date ASC, created_at ASC, scoring_version ASC, score DESC, symbol ASC
+        """
+    ).fetchall()
+    rows_by_date: dict[str, list[sqlite3.Row]] = {}
+    for row in live_rows:
+        rows_by_date.setdefault(row["trade_date"], []).append(row)
+
+    for trade_date, rows in rows_by_date.items():
+        if trade_date in existing_dates:
+            continue
+        first = rows[0]
+        scoring_version = first["scoring_version"]
+        created_at = first["created_at"]
+        selected = [
+            row
+            for row in rows
+            if row["scoring_version"] == scoring_version
+            and row["created_at"] == created_at
+        ]
+        payload = {
+            "trade_date": trade_date,
+            "candidates": [
+                {
+                    "facts": _json_object(row["facts_json"]),
+                    "score": row["score"],
+                    "rating": row["rating"],
+                    "confidence": row["confidence"],
+                    "score_breakdown": [],
+                    "reasons": _json_list(row["reasons_json"]),
+                    "risks": _json_list(row["risks_json"]),
+                }
+                for row in selected
+            ],
+            "filtered_out": [],
+            "universe_count": len(selected),
+            "generated_by": scoring_version,
+            "snapshot_source": "live",
+            "data_as_of": first["data_as_of"],
+            "snapshot_created_at": created_at,
+        }
+        snapshot_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
+        content_hash = hashlib.sha256(snapshot_json.encode("utf-8")).hexdigest()
+        connection.execute(
+            """
+            INSERT INTO agent_live_prediction_snapshots (
+                trade_date, snapshot_id, scoring_version, data_as_of,
+                top_limit, prediction_count, snapshot_json, content_hash, created_at
+            )
+            VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?)
+            """,
+            (
+                trade_date,
+                f"live-{trade_date}-{content_hash[:12]}",
+                scoring_version,
+                first["data_as_of"],
+                len(selected),
+                len(selected),
+                snapshot_json,
+                content_hash,
+                created_at,
+            ),
+        )
+        connection.execute(
+            """
+            DELETE FROM agent_predictions
+            WHERE trade_date = ?
+              AND prediction_source = 'live'
+              AND NOT (scoring_version = ? AND created_at = ?)
+            """,
+            (trade_date, scoring_version, created_at),
+        )
+
+
+def _json_object(value: str) -> dict[str, object]:
+    """Decode a legacy JSON object without aborting the schema migration."""
+
+    try:
+        decoded = json.loads(value)
+    except (TypeError, ValueError):
+        return {}
+    return decoded if isinstance(decoded, dict) else {}
+
+
+def _json_list(value: str) -> list[object]:
+    """Decode a legacy JSON list without aborting the schema migration."""
+
+    try:
+        decoded = json.loads(value)
+    except (TypeError, ValueError):
+        return []
+    return decoded if isinstance(decoded, list) else []

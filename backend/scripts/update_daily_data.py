@@ -294,13 +294,8 @@ def run_daily_update(
     should_persist_live = is_latest_available_date and (
         persist_live_prediction is not False
     )
-    existing_target_predictions = first_board_repo.list_predictions_between(
-        trade_date,
-        trade_date,
-    )
-    target_has_live_prediction = any(
-        item.prediction_source == "live"
-        for item in existing_target_predictions
+    target_has_live_prediction = (
+        first_board_repo.get_live_prediction_snapshot(trade_date) is not None
     )
     historical_dates = sorted(
         item
@@ -418,11 +413,13 @@ def backfill_recent_daily_top_candidate_bars(
     }
     targets = []
     for item_date in trade_dates:
-        ratings = build_first_board_ratings(
-            events=events,
-            trade_date=item_date,
-            first_board_repository=first_board_repository,
-        )
+        ratings = first_board_repository.get_live_prediction_snapshot(item_date)
+        if ratings is None:
+            ratings = build_first_board_ratings(
+                events=events,
+                trade_date=item_date,
+                first_board_repository=first_board_repository,
+            )
         targets.extend(
             (item_date, rating)
             for rating in ratings.candidates[: max(top_per_day, 0)]

@@ -257,6 +257,12 @@ def get_first_board_ratings(
     resolved_trade_date = _resolve_trade_date(events, trade_date)
     first_board_repository = SQLiteFirstBoardRepository()
     if resolved_trade_date is not None:
+        live_snapshot = first_board_repository.get_live_prediction_snapshot(
+            resolved_trade_date
+        )
+        if live_snapshot is not None:
+            return live_snapshot
+    if resolved_trade_date is not None:
         try:
             load_dragon_tiger_review(
                 events,
@@ -297,6 +303,11 @@ def get_first_board_ratings(
             trade_date=trade_date,
             first_board_repository=first_board_repository,
             scoring_policy=scoring_policy,
+        ).model_copy(
+            update={
+                "snapshot_source": "calculated",
+                "data_as_of": resolved_trade_date,
+            }
         ),
     )
 

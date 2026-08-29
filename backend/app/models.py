@@ -564,6 +564,9 @@ class FirstBoardRatingsResponse(BaseModel):
     filtered_out: list[FirstBoardFilterResult]
     universe_count: int
     generated_by: str
+    snapshot_source: Literal["live", "historical_backtest", "calculated"] = "calculated"
+    data_as_of: date | None = None
+    snapshot_created_at: datetime | None = None
 
 
 class ScoringPolicy(BaseModel):

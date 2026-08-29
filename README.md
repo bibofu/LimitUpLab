@@ -28,7 +28,7 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 | 项目 | 状态 |
 | --- | --- |
-| 后端自动化测试 | 254 项通过，另有 6 个 V1 范围评测子用例 |
+| 后端自动化测试 | 260 项通过，另有 6 个 V1 范围评测子用例 |
 | 离线 Agent Eval | 11/11 通过 |
 | 本地数据健康检查 | 已实现 |
 | LLM 流式问答 | 已实现 |
@@ -151,6 +151,8 @@ Agent Query Contract v2 会把涨停问题统一成可审计的结构化查询�
 
 Evaluation Agent 将历史预测标记为 `success`、`partial`、`miss`、`avoid_success` 或 `false_negative`，并生成评分因子改进建议。
 
+每日 live Top10 以整批快照写入 `agent_live_prediction_snapshots`。同一交易日首次写入后不可被重复日更或新评分版本覆盖；推荐页面、Agent、Review、Evaluation 和质量审计读取同一批候选，历史重算结果不能混入真实前向预测。
+
 评分策略采用 Champion/Challenger 管理：
 
 - 因子权重具有明确版本
@@ -164,7 +166,7 @@ Evaluation Agent 将历史预测标记为 `success`、`partial`、`miss`、`avoi
 
 这不是无约束的“模型自动学习”。当前系统只生成和验证候选策略，不会因为一次复盘就自动修改线上规则。
 
-`/api/agents/prediction-quality-audit` 会先按 `live / historical_backtest` 和评分版本拆分预测，再对同一股票同一交易日去重；未成熟、Outcome 待回填和完整样本分开统计，避免把未来尚不存在的结果算成失败，也避免把历史重算样本伪装成真实当日预测。
+`/api/agents/prediction-quality-audit` 会先按 `live / historical_backtest` 和评分版本拆分预测，再按交易日选择完整批次；未成熟、Outcome 待回填和完整样本分开统计，避免把未来尚不存在的结果算成失败，也避免把历史重算样本混入真实当日 Top10。
 
 `/api/agents/factor-signal-diagnostic` 提供独立的快速证伪诊断：单因子按交易日计算横截面 IC，并使用日期级符号翻转检验和 Bonferroni 校正；分位比较保留同分样本；联合 Lasso 使用按交易日留一的样本外预测和日期块 bootstrap。该报告只输出“当前未发现可复现信号”或“信号需要继续验证”，不会把小样本下的未显著误写成“因子已被证明为噪声”。
 

@@ -290,6 +290,9 @@ export interface FirstBoardRatingsResponse {
   filtered_out: FirstBoardFilterResult[];
   universe_count: number;
   generated_by: string;
+  snapshot_source: "live" | "historical_backtest" | "calculated";
+  data_as_of: string | null;
+  snapshot_created_at: string | null;
 }
 
 export interface RatingBacktestBucket {

@@ -1021,11 +1021,26 @@ class AgentToolRegistry:
     def first_board_ratings(self, trade_date: date | None = None) -> ToolResult:
         """Return explainable first-board ratings."""
 
-        ratings = build_first_board_ratings(
-            events=self.events,
-            trade_date=trade_date,
-            first_board_repository=self.first_board_repository,
+        target_date = trade_date or max(
+            (item.trade_date for item in self.events),
+            default=None,
         )
+        ratings = (
+            self.first_board_repository.get_live_prediction_snapshot(target_date)
+            if target_date is not None
+            else None
+        )
+        if ratings is None:
+            ratings = build_first_board_ratings(
+                events=self.events,
+                trade_date=trade_date,
+                first_board_repository=self.first_board_repository,
+            ).model_copy(
+                update={
+                    "snapshot_source": "calculated",
+                    "data_as_of": target_date,
+                }
+            )
         top = ratings.candidates[0] if ratings.candidates else None
         top_summary = (
             f"最高分 {top.facts.name}({top.facts.symbol}) {top.rating}/{top.score:.1f}"
@@ -1034,6 +1049,8 @@ class AgentToolRegistry:
         )
         trace_output = {
             "trade_date": ratings.trade_date.isoformat(),
+            "snapshot_source": ratings.snapshot_source,
+            "data_as_of": ratings.data_as_of.isoformat() if ratings.data_as_of else None,
             "candidate_count": len(ratings.candidates),
             "filtered_out_count": len(ratings.filtered_out),
             "top_candidates": [
