@@ -10,6 +10,7 @@ from app.models import (
 )
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.analysis import latest_trade_date
+from app.services.outcome_completeness import build_top10_outcome_completeness
 
 
 def build_agent_data_health(
@@ -51,11 +52,13 @@ def build_agent_data_health(
     features = repository.list_features_for_date(target_date)
     enrichments = repository.list_enrichment_for_date(target_date)
     enrichment_by_symbol = {item.symbol: item for item in enrichments}
-    ratings = build_first_board_ratings(
-        events=events,
-        trade_date=target_date,
-        first_board_repository=repository,
-    )
+    ratings = repository.get_live_prediction_snapshot(target_date)
+    if ratings is None:
+        ratings = build_first_board_ratings(
+            events=events,
+            trade_date=target_date,
+            first_board_repository=repository,
+        )
     top_ratings = ratings.candidates[: max(top_limit, 0)]
     candidate_health: list[AgentDataHealthTopCandidate] = []
 
@@ -86,11 +89,21 @@ def build_agent_data_health(
         warnings.append("First-board features are missing for the latest local trade date.")
     if candidate_health and not enrichment_ready:
         warnings.append("Some top candidates are missing extended rating inputs.")
+    outcome_completeness = build_top10_outcome_completeness(
+        events=events,
+        repository=repository,
+        as_of_date=target_date,
+        tracking_days=6,
+        top_per_day=max(top_limit, 0),
+    )
+    if outcome_completeness.status in {"partial", "missing"}:
+        warnings.extend(outcome_completeness.warnings)
 
     status = _overall_status(
         raw_events_ready=True,
         first_board_features_ready=first_board_features_ready,
         enrichment_ready=enrichment_ready,
+        outcome_status=outcome_completeness.status,
     )
     return AgentDataHealthResponse(
         trade_date=target_date,
@@ -103,6 +116,7 @@ def build_agent_data_health(
         enrichment_count=len(enrichments),
         top_candidates_checked=len(candidate_health),
         top_candidates=candidate_health,
+        outcome_completeness=outcome_completeness,
         warnings=warnings,
     )
 
@@ -111,11 +125,12 @@ def _overall_status(
     raw_events_ready: bool,
     first_board_features_ready: bool,
     enrichment_ready: bool,
+    outcome_status: str,
 ) -> str:
     """Return the aggregate health label."""
 
     if not raw_events_ready or not first_board_features_ready:
         return "missing"
-    if enrichment_ready:
+    if enrichment_ready and outcome_status in {"healthy", "pending"}:
         return "healthy"
     return "partial"

@@ -22,6 +22,7 @@ from app.models import (
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.llm_provider import LLMProvider, get_llm_provider
+from app.services.outcome_completeness import build_top10_outcome_completeness
 
 
 REVIEW_AGENT_VERSION = "review-agent-tool-use-v4"
@@ -250,12 +251,22 @@ def build_review_agent_report(
         end_date=end_date,
     )
     feature_comparison = toolbox.feature_comparison()
+    completeness = build_top10_outcome_completeness(
+        events=events,
+        repository=active_repository,
+        as_of_date=end_date,
+        tracking_days=max(follow_days, 0) + 1,
+        top_per_day=top_per_day,
+    )
     fallback = _fallback_report(
         start_date=start_date,
         end_date=end_date,
         picks=picks,
         tool_results=[result.trace() for result in tool_results],
-        warnings=["LLM review unavailable; deterministic fallback generated from tool facts."],
+        warnings=[
+            "LLM review unavailable; deterministic fallback generated from tool facts.",
+            *completeness.warnings,
+        ],
         feature_comparison=feature_comparison,
         promotion_comparisons=promotion_comparisons,
     )
@@ -265,7 +276,7 @@ def build_review_agent_report(
             _review_report_user_prompt(start_date, end_date, min_score, facts),
         ).content
         payload = _extract_json_object(content)
-        return _report_from_payload(
+        report = _report_from_payload(
             payload=payload,
             start_date=start_date,
             end_date=end_date,
@@ -274,6 +285,8 @@ def build_review_agent_report(
             feature_comparison=feature_comparison,
             promotion_comparisons=promotion_comparisons,
         )
+        report.warnings.extend(completeness.warnings)
+        return report
     except Exception as error:
         fallback.warnings.append(f"Review LLM unavailable: {error}")
         return fallback

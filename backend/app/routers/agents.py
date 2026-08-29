@@ -41,6 +41,7 @@ from app.models import (
     FirstBoardCriticResponse,
     FirstBoardRatingsResponse,
     FactorSignalDiagnosticResponse,
+    OutcomeCompletenessReport,
     PredictionQualityAuditResponse,
     RatingBacktestResponse,
     ReviewAgentReportResponse,
@@ -76,6 +77,7 @@ from app.services.llm_provider import (
 )
 from app.config import env_bool
 from app.services.prediction_quality_audit import build_prediction_quality_audit
+from app.services.outcome_completeness import build_top10_outcome_completeness
 from app.services.rating_backtest import build_rating_backtest
 from app.services.scoring_policy_optimizer import (
     build_scoring_policy_registry,
@@ -399,6 +401,27 @@ def get_agent_system_health(
         events=get_limit_up_repository().list_events(),
         first_board_repository=SQLiteFirstBoardRepository(),
         run_offline_eval=run_offline_eval,
+    )
+
+
+@router.get(
+    "/outcome-completeness",
+    response_model=OutcomeCompletenessReport,
+)
+def get_outcome_completeness(
+    _admin: Annotated[None, Depends(require_admin_access)],
+    as_of_date: Optional[date] = None,
+    tracking_days: int = Query(default=6, ge=1, le=60),
+    top_per_day: int = Query(default=10, ge=1, le=20),
+) -> OutcomeCompletenessReport:
+    """Return exact D+1, D+3 and D+5 coverage for recent predictions."""
+
+    return build_top10_outcome_completeness(
+        events=get_limit_up_repository().list_events(),
+        repository=SQLiteFirstBoardRepository(),
+        as_of_date=as_of_date,
+        tracking_days=tracking_days,
+        top_per_day=top_per_day,
     )
 
 

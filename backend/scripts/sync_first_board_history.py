@@ -118,6 +118,7 @@ def main() -> None:
                 event=event,
                 bars=bars,
                 future_events=events,
+                trading_dates=sorted({item.trade_date for item in events}),
             )
             first_board_repository.upsert_outcomes([outcome])
             bar_count += len(bars)

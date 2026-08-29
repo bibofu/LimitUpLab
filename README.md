@@ -28,7 +28,7 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 | 项目 | 状态 |
 | --- | --- |
-| 后端自动化测试 | 260 项通过，另有 6 个 V1 范围评测子用例 |
+| 后端自动化测试 | 264 项通过，另有 6 个 V1 范围评测子用例 |
 | 离线 Agent Eval | 11/11 通过 |
 | 本地数据健康检查 | 已实现 |
 | LLM 流式问答 | 已实现 |
@@ -152,6 +152,8 @@ Agent Query Contract v2 会把涨停问题统一成可审计的结构化查询�
 Evaluation Agent 将历史预测标记为 `success`、`partial`、`miss`、`avoid_success` 或 `false_negative`，并生成评分因子改进建议。
 
 每日 live Top10 以整批快照写入 `agent_live_prediction_snapshots`。同一交易日首次写入后不可被重复日更或新评分版本覆盖；推荐页面、Agent、Review、Evaluation 和质量审计读取同一批候选，历史重算结果不能混入真实前向预测。
+
+Outcome 完整性检查严格按本地市场交易日对齐 D+1、D+3 和 D+5。缺少某一交易日 K 线时不会使用下一根可用 K 线替代；缺失股票会进入日更报告、数据健康和 Review 告警，并在 20 个交易日重试窗口内继续追补。
 
 评分策略采用 Champion/Challenger 管理：
 
@@ -513,6 +515,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mo
 | `GET` | `/api/agents/factor-signal-diagnostic` | 日期阻断的因子快速证伪诊断 |
 | `GET` | `/api/agents/scoring-policies` | Champion/Challenger 状态 |
 | `GET` | `/api/agents/data-health` | Agent 数据健康 |
+| `GET` | `/api/agents/outcome-completeness` | Top10 D+1、D+3、D+5 完整性验收 |
 | `GET` | `/api/agents/system-health` | 本地系统健康 |
 | `GET` | `/api/agents/daily-pipeline-status` | 每日预测闭环最近运行状态 |
 | `GET` | `/api/agents/runs` | Agent 运行轨迹 |

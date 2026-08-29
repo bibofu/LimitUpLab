@@ -405,7 +405,11 @@ def _incomplete_reasons(
         reasons.append("raw limit-up events are missing")
     if health.get("raw_events_ready") and not health.get("first_board_features_ready"):
         reasons.append("first-board features are missing")
-    if live_eligible and report.target_candidates_checked > 0 and report.persisted_live_predictions <= 0:
+    live_snapshot_ready = (
+        report.live_prediction_snapshot_ready
+        or report.persisted_live_predictions > 0
+    )
+    if live_eligible and report.target_candidates_checked > 0 and not live_snapshot_ready:
         reasons.append("live Top10 prediction snapshot was not persisted")
     if report.tracked_cache_missing > 0:
         reasons.append(

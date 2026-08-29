@@ -704,6 +704,43 @@ export interface AgentDataHealthTopCandidate {
   enrichment_ready: boolean;
 }
 
+export interface OutcomeCompletenessDate {
+  trade_date: string;
+  prediction_source: "live" | "historical_backtest";
+  candidate_count: number;
+  elapsed_post_trade_days: number;
+  d1_mature: boolean;
+  d1_expected_count: number;
+  d1_ready_count: number;
+  d1_missing_symbols: string[];
+  d3_mature: boolean;
+  d3_expected_count: number;
+  d3_ready_count: number;
+  d3_missing_symbols: string[];
+  d5_mature: boolean;
+  d5_expected_count: number;
+  d5_ready_count: number;
+  d5_missing_symbols: string[];
+  status: "complete" | "partial" | "pending";
+}
+
+export interface OutcomeCompletenessReport {
+  as_of_date: string | null;
+  status: "healthy" | "partial" | "missing" | "pending";
+  prediction_trade_date_count: number;
+  tracked_prediction_count: number;
+  d1_expected_count: number;
+  d1_ready_count: number;
+  d3_expected_count: number;
+  d3_ready_count: number;
+  d5_expected_count: number;
+  d5_ready_count: number;
+  missing_case_count: number;
+  dates: OutcomeCompletenessDate[];
+  warnings: string[];
+  generated_by: string;
+}
+
 export interface AgentDataHealthResponse {
   trade_date: string | null;
   status: "healthy" | "partial" | "missing";
@@ -715,6 +752,7 @@ export interface AgentDataHealthResponse {
   enrichment_count: number;
   top_candidates_checked: number;
   top_candidates: AgentDataHealthTopCandidate[];
+  outcome_completeness: OutcomeCompletenessReport | null;
   warnings: string[];
 }
 

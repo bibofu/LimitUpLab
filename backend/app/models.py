@@ -420,6 +420,47 @@ class FirstBoardOutcome(BaseModel):
     created_at: datetime
 
 
+class OutcomeCompletenessDate(BaseModel):
+    """Maturity and exact-date cache coverage for one prediction batch."""
+
+    trade_date: date
+    prediction_source: Literal["live", "historical_backtest"]
+    candidate_count: int
+    elapsed_post_trade_days: int
+    d1_mature: bool
+    d1_expected_count: int
+    d1_ready_count: int
+    d1_missing_symbols: list[str] = Field(default_factory=list)
+    d3_mature: bool
+    d3_expected_count: int
+    d3_ready_count: int
+    d3_missing_symbols: list[str] = Field(default_factory=list)
+    d5_mature: bool
+    d5_expected_count: int
+    d5_ready_count: int
+    d5_missing_symbols: list[str] = Field(default_factory=list)
+    status: Literal["complete", "partial", "pending"]
+
+
+class OutcomeCompletenessReport(BaseModel):
+    """Unified acceptance report for recent immutable Top10 outcomes."""
+
+    as_of_date: date | None
+    status: Literal["healthy", "partial", "missing", "pending"]
+    prediction_trade_date_count: int
+    tracked_prediction_count: int
+    d1_expected_count: int
+    d1_ready_count: int
+    d3_expected_count: int
+    d3_ready_count: int
+    d5_expected_count: int
+    d5_ready_count: int
+    missing_case_count: int
+    dates: list[OutcomeCompletenessDate] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    generated_by: str
+
+
 class FirstBoardFilterResult(BaseModel):
     """Candidate-pool filter audit for one latest-day first-board event."""
 
@@ -1690,6 +1731,7 @@ class AgentDataHealthResponse(BaseModel):
     enrichment_count: int = 0
     top_candidates_checked: int
     top_candidates: list[AgentDataHealthTopCandidate] = Field(default_factory=list)
+    outcome_completeness: OutcomeCompletenessReport | None = None
     warnings: list[str] = Field(default_factory=list)
 
 

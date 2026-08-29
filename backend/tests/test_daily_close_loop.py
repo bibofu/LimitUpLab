@@ -207,6 +207,23 @@ class DailyCloseLoopTest(unittest.TestCase):
         self.assertTrue(self.alert_path.exists())
         self.assertIn("D+1 outcomes are incomplete", execution.run.error_message)
 
+    def test_existing_live_snapshot_is_valid_during_outcome_retry(self) -> None:
+        target_date = date(2026, 8, 21)
+
+        def retry_update(**_kwargs) -> DailyUpdateReport:
+            report = self._complete_report(target_date, live_count=0)
+            report.live_prediction_snapshot_ready = True
+            return report
+
+        execution = self._execute(
+            requested_date=target_date,
+            now=datetime(2026, 8, 21, 16, 10, tzinfo=CN_TZ),
+            update_runner=retry_update,
+        )
+
+        self.assertEqual(execution.status, "success")
+        self.assertEqual(execution.exit_code, 0)
+
     def test_successful_date_is_idempotently_skipped(self) -> None:
         target_date = date(2026, 8, 21)
         completed = DailyPipelineRun(

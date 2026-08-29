@@ -82,6 +82,8 @@ class AgentDataHealthTest(unittest.TestCase):
             self.assertEqual(health.top_candidates[0].symbol, "002298")
             self.assertTrue(health.top_candidates[0].feature_ready)
             self.assertFalse(health.top_candidates[0].enrichment_ready)
+            self.assertIsNotNone(health.outcome_completeness)
+            self.assertEqual(health.outcome_completeness.status, "missing")
         finally:
             self._cleanup_database(database_path)
 

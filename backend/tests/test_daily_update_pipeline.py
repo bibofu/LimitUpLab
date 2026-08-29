@@ -175,6 +175,8 @@ class DailyUpdatePipelineTest(unittest.TestCase):
 
             self.assertEqual(first.persisted_live_predictions, 1)
             self.assertEqual(second.persisted_live_predictions, 0)
+            self.assertTrue(first.live_prediction_snapshot_ready)
+            self.assertTrue(second.live_prediction_snapshot_ready)
             self.assertEqual(
                 len(first_board_repo.list_predictions_between(trade_date, trade_date)),
                 1,
@@ -315,6 +317,8 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             self.assertEqual(report.tracked_three_day_outcomes_ready, 6)
             self.assertEqual(report.tracked_five_day_paths_expected, 2)
             self.assertEqual(report.tracked_five_day_paths_ready, 2)
+            self.assertEqual(report.outcome_completeness["status"], "healthy")
+            self.assertEqual(report.outcome_completeness["missing_case_count"], 0)
             predictions = first_board_repo.list_predictions_between(
                 trade_dates[0], trade_dates[-1]
             )

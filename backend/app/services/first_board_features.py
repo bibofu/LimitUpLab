@@ -86,8 +86,9 @@ def build_first_board_outcome(
     event: LimitUpEvent,
     bars: list[StockDailyBar],
     future_events: list[LimitUpEvent],
+    trading_dates: list[date] | None = None,
 ) -> FirstBoardOutcome:
-    """Build a post-first-board outcome from local daily bars and future events."""
+    """Build an outcome using exact market trading-date alignment."""
 
     ordered_bars = sorted(
         [bar for bar in bars if bar.symbol == event.symbol and bar.trade_date >= event.trade_date],
@@ -97,14 +98,38 @@ def build_first_board_outcome(
         (bar for bar in ordered_bars if bar.trade_date == event.trade_date),
         None,
     )
-    post_bars = [bar for bar in ordered_bars if bar.trade_date > event.trade_date][:3]
-    next_bar = post_bars[0] if post_bars else None
+    market_dates = sorted(
+        {
+            item
+            for item in (
+                trading_dates
+                or [bar.trade_date for bar in ordered_bars]
+                + [future.trade_date for future in future_events]
+            )
+            if item >= event.trade_date
+        }
+    )
+    expected_post_dates = [
+        item for item in market_dates if item > event.trade_date
+    ][:3]
+    bars_by_date = {bar.trade_date: bar for bar in ordered_bars}
+    next_expected_date = expected_post_dates[0] if expected_post_dates else None
+    next_bar = bars_by_date.get(next_expected_date) if next_expected_date else None
+    three_day_bars = [
+        bars_by_date[item]
+        for item in expected_post_dates
+        if item in bars_by_date
+    ]
     next_day_ready = base_bar is not None and next_bar is not None
-    three_day_ready = base_bar is not None and len(post_bars) >= 3
+    three_day_ready = (
+        base_bar is not None
+        and len(expected_post_dates) >= 3
+        and len(three_day_bars) == 3
+    )
     entry_open = next_bar.open if next_bar else None
     promoted = event.continued_next_day or any(
         item.symbol == event.symbol
-        and item.trade_date > event.trade_date
+        and item.trade_date == next_expected_date
         and item.board_height >= 2
         and item.closed_limit
         for item in future_events
@@ -126,23 +151,29 @@ def build_first_board_outcome(
         next_open_to_close_pct=_pct_change(next_bar.close, entry_open)
         if next_day_ready and next_bar and entry_open
         else None,
-        three_day_high_pct=_pct_change(max(bar.high for bar in post_bars), base_bar.close)
+        three_day_high_pct=_pct_change(
+            max(bar.high for bar in three_day_bars), base_bar.close
+        )
         if three_day_ready and base_bar
         else None,
-        three_day_close_pct=_pct_change(post_bars[-1].close, base_bar.close)
+        three_day_close_pct=_pct_change(three_day_bars[-1].close, base_bar.close)
         if three_day_ready and base_bar
         else None,
-        max_drawdown_3d=_pct_change(min(bar.low for bar in post_bars), base_bar.close)
+        max_drawdown_3d=_pct_change(
+            min(bar.low for bar in three_day_bars), base_bar.close
+        )
         if three_day_ready and base_bar
         else None,
-        three_day_open_to_high_pct=_pct_change(max(bar.high for bar in post_bars), entry_open)
+        three_day_open_to_high_pct=_pct_change(
+            max(bar.high for bar in three_day_bars), entry_open
+        )
         if three_day_ready and entry_open
         else None,
-        three_day_open_to_close_pct=_pct_change(post_bars[-1].close, entry_open)
+        three_day_open_to_close_pct=_pct_change(three_day_bars[-1].close, entry_open)
         if three_day_ready and entry_open
         else None,
         max_drawdown_from_next_open_3d=_pct_change(
-            min(bar.low for bar in post_bars), entry_open
+            min(bar.low for bar in three_day_bars), entry_open
         )
         if three_day_ready and entry_open
         else None,

@@ -26,15 +26,19 @@ from app.collectors import (
     collect_stock_spot_klines,
     parse_akshare_trade_date,
 )
-from app.models import LimitUpEvent, StockDailyBar, StockKLineBar
+from app.models import AgentPrediction, LimitUpEvent, StockDailyBar, StockKLineBar
 from app.repositories import SQLiteFirstBoardRepository, SQLiteLimitUpRepository
 from app.services.first_board_features import (
     build_first_board_features,
     build_first_board_outcome,
 )
 from app.services.data_health import build_agent_data_health
-from app.services.evaluation_agent import persist_agent_predictions_for_dates
+from app.services.evaluation_agent import (
+    persist_agent_predictions_for_dates,
+    select_canonical_prediction_snapshots,
+)
 from app.services.first_board_enrichment import refresh_first_board_enrichment_snapshots
+from app.services.outcome_completeness import build_top10_outcome_completeness
 
 
 PostBarCollector = Callable[[str, date, date], list[StockDailyBar]]
@@ -64,6 +68,7 @@ class DailyUpdateReport:
     persisted_top_predictions: int = 0
     persisted_live_predictions: int = 0
     persisted_historical_predictions: int = 0
+    live_prediction_snapshot_ready: bool = False
     target_candidates_checked: int = 0
     tracked_candidate_references: int = 0
     tracked_cache_ready: int = 0
@@ -77,6 +82,7 @@ class DailyUpdateReport:
     tracked_five_day_paths_ready: int = 0
     backfilled_bars: int = 0
     backfilled_outcomes: int = 0
+    outcome_completeness: dict[str, object] = field(default_factory=dict)
     top_candidate: dict[str, object] | None = None
     health: dict[str, object] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
@@ -329,6 +335,9 @@ def run_daily_update(
     report.persisted_live_predictions = live_count
     report.persisted_historical_predictions = historical_count
     report.persisted_top_predictions = historical_count + live_count
+    report.live_prediction_snapshot_ready = (
+        first_board_repo.get_live_prediction_snapshot(trade_date) is not None
+    )
     tracked_backfill = backfill_recent_daily_top_candidate_bars(
         events=events,
         first_board_repository=first_board_repo,
@@ -364,6 +373,7 @@ def run_daily_update(
     )
     report.backfilled_bars = int(tracked_backfill["bar_count"])
     report.backfilled_outcomes = int(tracked_backfill["outcome_count"])
+    report.outcome_completeness = dict(tracked_backfill["outcome_completeness"])
     report.warnings.extend(tracked_backfill["warnings"])
     report.health = build_agent_data_health(
         events=events,
@@ -405,25 +415,44 @@ def backfill_recent_daily_top_candidate_bars(
     resolved_as_of = as_of_date or (available_dates[-1] if available_dates else date.today())
     recent_count = max(trading_days, 0)
     eligible_dates = [item for item in available_dates if item <= resolved_as_of]
-    trade_dates = eligible_dates[-recent_count:] if recent_count else []
+    recent_dates = eligible_dates[-recent_count:] if recent_count else []
+    retry_window_days = max(recent_count, 20)
+    preflight = build_top10_outcome_completeness(
+        events=events,
+        repository=first_board_repository,
+        as_of_date=resolved_as_of,
+        tracking_days=retry_window_days,
+        top_per_day=top_per_day,
+    )
+    unresolved_dates = {
+        item.trade_date for item in preflight.dates if item.status == "partial"
+    }
+    trade_dates = sorted({*recent_dates, *unresolved_dates})
     active_collector = bar_collector or collect_post_first_board_bars
     events_by_case = {
         (event.trade_date, event.symbol): event
         for event in events
     }
-    targets = []
-    for item_date in trade_dates:
-        ratings = first_board_repository.get_live_prediction_snapshot(item_date)
-        if ratings is None:
-            ratings = build_first_board_ratings(
-                events=events,
-                trade_date=item_date,
-                first_board_repository=first_board_repository,
+    persisted_predictions = (
+        select_canonical_prediction_snapshots(
+            first_board_repository.list_predictions_between(
+                trade_dates[0],
+                trade_dates[-1],
             )
-        targets.extend(
-            (item_date, rating)
-            for rating in ratings.candidates[: max(top_per_day, 0)]
         )
+        if trade_dates
+        else []
+    )
+    predictions_by_date: dict[date, list[AgentPrediction]] = {}
+    for prediction in persisted_predictions:
+        predictions_by_date.setdefault(prediction.trade_date, []).append(prediction)
+    targets: list[tuple[date, str]] = []
+    for item_date in trade_dates:
+        daily_predictions = sorted(
+            predictions_by_date.get(item_date, []),
+            key=lambda item: (-item.score, item.symbol),
+        )[: max(top_per_day, 0)]
+        targets.extend((item_date, item.symbol) for item in daily_predictions)
 
     fetch_count = 0
     bar_count = 0
@@ -435,7 +464,7 @@ def backfill_recent_daily_top_candidate_bars(
     warnings: list[str] = []
 
     tracked_symbols = sorted(
-        {rating.facts.symbol for _item_date, rating in targets}
+        {symbol for _item_date, symbol in targets}
     )
     if spot_bar_collector is not None and tracked_symbols:
         try:
@@ -462,7 +491,7 @@ def backfill_recent_daily_top_candidate_bars(
         except Exception as error:  # noqa: BLE001
             warnings.append(f"Latest-day spot K-line batch: {error}")
 
-    for item_date, rating in targets:
+    for item_date, symbol in targets:
         expected_dates = [
             candidate_date
             for candidate_date in available_dates
@@ -471,7 +500,7 @@ def backfill_recent_daily_top_candidate_bars(
         cached_bars = [
             bar
             for bar in first_board_repository.list_post_bars(
-                rating.facts.symbol,
+                symbol,
                 item_date,
                 limit=6,
             )
@@ -479,7 +508,7 @@ def backfill_recent_daily_top_candidate_bars(
         ]
         cached_dates = {bar.trade_date for bar in cached_bars}
         if all(expected_date in cached_dates for expected_date in expected_dates):
-            event = events_by_case.get((item_date, rating.facts.symbol))
+            event = events_by_case.get((item_date, symbol))
             if event is not None:
                 first_board_repository.upsert_outcomes(
                     [
@@ -487,6 +516,7 @@ def backfill_recent_daily_top_candidate_bars(
                             event=event,
                             bars=cached_bars,
                             future_events=events,
+                            trading_dates=available_dates,
                         )
                     ]
                 )
@@ -506,7 +536,7 @@ def backfill_recent_daily_top_candidate_bars(
         for _attempt in range(2):
             try:
                 bars = active_collector(
-                    rating.facts.symbol,
+                    symbol,
                     item_date,
                     resolved_as_of,
                 )
@@ -517,19 +547,20 @@ def backfill_recent_daily_top_candidate_bars(
                 last_error = error
 
         if last_error is not None:
-            warnings.append(f"{rating.facts.symbol}@{item_date.isoformat()}: {last_error}")
+            warnings.append(f"{symbol}@{item_date.isoformat()}: {last_error}")
         elif not bars:
             warnings.append(
-                f"{rating.facts.symbol}@{item_date.isoformat()}: remote K-line result was empty."
+                f"{symbol}@{item_date.isoformat()}: remote K-line result was empty."
             )
         else:
             first_board_repository.upsert_daily_bars(bars)
-            event = events_by_case.get((item_date, rating.facts.symbol))
+            event = events_by_case.get((item_date, symbol))
             if event is not None:
                 outcome = build_first_board_outcome(
                     event=event,
                     bars=bars,
                     future_events=events,
+                    trading_dates=available_dates,
                 )
                 first_board_repository.upsert_outcomes([outcome])
                 outcome_count += 1
@@ -538,7 +569,7 @@ def backfill_recent_daily_top_candidate_bars(
         refreshed_bars = [
             bar
             for bar in first_board_repository.list_post_bars(
-                rating.facts.symbol,
+                symbol,
                 item_date,
                 limit=6,
             )
@@ -563,59 +594,14 @@ def backfill_recent_daily_top_candidate_bars(
             f"Tracked Top10 cache is incomplete for {missing_count}/{len(targets)} candidates."
         )
 
-    next_day_expected = 0
-    next_day_ready = 0
-    three_day_expected = 0
-    three_day_ready = 0
-    five_day_expected = 0
-    five_day_ready = 0
-    for item_date, rating in targets:
-        elapsed_trade_dates = sum(
-            item_date <= candidate_date <= resolved_as_of
-            for candidate_date in available_dates
-        )
-        outcome = first_board_repository.get_outcome(
-            rating.facts.symbol,
-            item_date,
-        )
-        if elapsed_trade_dates >= 2:
-            next_day_expected += 1
-            next_day_ready += int(bool(outcome and outcome.next_day_ready))
-        if elapsed_trade_dates >= 4:
-            three_day_expected += 1
-            three_day_ready += int(bool(outcome and outcome.three_day_ready))
-        if elapsed_trade_dates >= 6:
-            five_day_expected += 1
-            bars = first_board_repository.list_post_bars(
-                rating.facts.symbol,
-                item_date,
-                limit=6,
-            )
-            expected_dates = [
-                candidate_date
-                for candidate_date in available_dates
-                if item_date <= candidate_date <= resolved_as_of
-            ][:6]
-            bar_dates = {bar.trade_date for bar in bars}
-            five_day_ready += int(
-                all(expected_date in bar_dates for expected_date in expected_dates)
-            )
-
-    if next_day_ready < next_day_expected:
-        warnings.append(
-            "Tracked Top10 D+1 outcomes are incomplete: "
-            f"{next_day_ready}/{next_day_expected} ready."
-        )
-    if three_day_ready < three_day_expected:
-        warnings.append(
-            "Tracked Top10 D+3 outcomes are incomplete: "
-            f"{three_day_ready}/{three_day_expected} ready."
-        )
-    if five_day_ready < five_day_expected:
-        warnings.append(
-            "Tracked Top10 D+5 paths are incomplete: "
-            f"{five_day_ready}/{five_day_expected} ready."
-        )
+    completeness = build_top10_outcome_completeness(
+        events=events,
+        repository=first_board_repository,
+        as_of_date=resolved_as_of,
+        tracking_days=retry_window_days,
+        top_per_day=top_per_day,
+    )
+    warnings.extend(completeness.warnings)
 
     return {
         "case_count": len(targets),
@@ -625,12 +611,13 @@ def backfill_recent_daily_top_candidate_bars(
         "fetch_count": fetch_count,
         "bar_count": bar_count,
         "outcome_count": outcome_count,
-        "next_day_outcomes_expected": next_day_expected,
-        "next_day_outcomes_ready": next_day_ready,
-        "three_day_outcomes_expected": three_day_expected,
-        "three_day_outcomes_ready": three_day_ready,
-        "five_day_paths_expected": five_day_expected,
-        "five_day_paths_ready": five_day_ready,
+        "next_day_outcomes_expected": completeness.d1_expected_count,
+        "next_day_outcomes_ready": completeness.d1_ready_count,
+        "three_day_outcomes_expected": completeness.d3_expected_count,
+        "three_day_outcomes_ready": completeness.d3_ready_count,
+        "five_day_paths_expected": completeness.d5_expected_count,
+        "five_day_paths_ready": completeness.d5_ready_count,
+        "outcome_completeness": completeness.model_dump(mode="json"),
         "warnings": warnings,
     }
 
