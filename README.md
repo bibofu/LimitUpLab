@@ -8,7 +8,9 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 ## 项目状态
 
-当前版本已经具备可本地运行的完整 MVP：
+`v1.0.0` 是首个可用基线，当前继续完成 V1 收尾。V1 明确定义为基于完整收盘数据的首板复盘与次日一进二候选研究工具，不提供盘中、集合竞价、实时热榜、实时板块或实时新闻能力。相关扩展代码保留给 V2，但不会进入 V1 默认 Agent 工具集。
+
+当前版本已经具备可本地运行和单机部署的完整 MVP：
 
 - 真实涨停、炸板、K 线、板块、人气和龙虎榜数据流水线
 - 首板候选池过滤、结构化 Facts、规则评分和置信度
@@ -26,13 +28,13 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 | 项目 | 状态 |
 | --- | --- |
-| 后端自动化测试 | 242 项通过 |
+| 后端自动化测试 | 254 项通过，另有 6 个 V1 范围评测子用例 |
 | 离线 Agent Eval | 11/11 通过 |
 | 本地数据健康检查 | 已实现 |
 | LLM 流式问答 | 已实现 |
 | Agent 限流与成本审计 | 单访客/IP/全局限制、真实 token 账本已实现 |
 | 评分 v3 工程实现 | 已完成，影子验证中 |
-| 单机生产部署基线 | Docker、Nginx、持久化卷和日更任务配置已完成，待服务器验收 |
+| 单机生产部署基线 | Docker、Nginx、HTTPS、持久化卷、备份和日更任务已部署 |
 
 评分结果目前仍处于研究和验证阶段。项目已经形成完整的数据与评价闭环，但尚未证明可以稳定预测次日表现。
 
@@ -44,7 +46,7 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 真实数据
   -> 首板候选过滤
   -> 可解释评分
-  -> 历史案例检索
+  -> 不可变 Top10 预测快照
   -> LLM 工具调用问答
   -> Critic 质疑
   -> 结果回填
@@ -105,10 +107,7 @@ scoring_version
 | --- | --- |
 | `market_summary` | 查询指定交易日市场环境 |
 | `market_index_trend` | 查询上证、深成指和创业板指近 2–20 个交易日走势 |
-| `sector_performance` | 查询行业板块表现、排名、资金和趋势 |
-| `hot_stock_ranking` | 查询同花顺热股榜、热度和排名变化 |
 | `dragon_tiger_list` | 查询同花顺龙虎榜、机构与游资净买额 |
-| `remote_limit_up_pool` | 查询并筛选同花顺远端涨停池 |
 | `first_board_ratings` | 查询首板评级、拆解和风险 |
 | `first_board_filter` | 按行业、题材、评级和置信度筛选 |
 | `limit_up_events` | 查询首板、连板、炸板及题材相关涨停事件 |
@@ -120,8 +119,8 @@ scoring_version
 | `review_high_score_picks` | 追踪每日评分 Top10 后续走势，并对比同期全部首板的1进2成功率 |
 | `prediction_quality_audit` | 审计预测来源、Outcome 覆盖和基线表现 |
 | `scoring_policy_status` | 查询 Champion、Challenger 和晋级原因 |
-| `finance_news` | 聚合东方财富、同花顺最新财经快讯，提供时间、摘要、分类和来源 |
-| `web_search` | 检索具体公司/板块新闻、公告、政策和公开背景信息 |
+
+默认配置 `LIMITUPLAB_AGENT_PROFILE=v1_close_review` 会在 Schema、Skill、Tool Policy 和执行器四层统一限制工具。`sector_performance`、`hot_stock_ranking`、`remote_limit_up_pool`、`finance_news` 和 `web_search` 仅保留在 `extended` 研发配置中，供 V2 实时能力开发使用。即使 LLM 伪造这些工具调用，V1 执行器也会拒绝执行。
 
 Agent Query Contract v2 会把涨停问题统一成可审计的结构化查询，用户明确表达的日期、首板/连板、主板/创业板/科创板/北交所、封板/炸板、题材、排序、Top-N 和完整名单要求优先于 Planner 猜测。Tool Policy Engine 则负责修复 Planner 漏调工具的情况。例如，用户询问某只股票走势时必须调用 K 线工具，询问当天涨停时必须查询本地涨停事件，不能让模型直接凭记忆作答。
 
@@ -179,7 +178,7 @@ Evaluation Agent 将历史预测标记为 `success`、`partial`、`miss`、`avoi
 - 页面刷新后恢复完整消息和证据卡；传给 LLM 的上下文只取最近 8 条成功消息，并限制单条长度
 - Tool trace 展示 Planner 原始计划、后端修复原因、工具参数和结果摘要
 - SQLite Agent Cache 缓存低风险结构化结果
-- `/api/agents/data-health` 检查评分和历史案例所需数据
+- `/api/agents/data-health` 检查评分、预测追踪和 Outcome 所需数据
 - `/api/agents/system-health` 检查数据新鲜度、LLM、代理和 Eval 状态
 - LLM 不可用时回退到基于相同 Facts 的模板答案
 - 工具失败时返回明确错误，不允许模型补造数字
@@ -381,7 +380,7 @@ hithink-finance auth login
 hithink-finance symbol search --q 600519 --limit 1 --format json
 ```
 
-CLI 不可用或请求失败时，每日 enrichment 会回退到原有 AkShare/东方财富来源；Agent 的同花顺实时工具会明确返回失败，不会伪造结果。
+CLI 不可用或请求失败时，每日 enrichment 会回退到原有 AkShare/东方财富来源。V1 Agent 不暴露同花顺实时工具；这些工具仅在 `extended` 研发配置中用于 V2 开发，请求失败时会明确返回错误，不会伪造结果。
 
 ### 5. 安装前端
 
@@ -614,9 +613,9 @@ npm.cmd run build
 
 1. 滚动补齐 Top10 Outcome，将结果完整交易日从 14 个积累到至少 60 个。
 2. 持续观察 v3 Challenger 对现行评分、最早封板和固定随机基线的样本外优势。
-3. 将 Query Contract 扩展到板块、新闻和复盘工具，并覆盖工具失败与多轮指代。
-4. 接入结构化公告源并增强引用质量。
-5. 完成服务器验收和 CI/CD；需要横向扩容时再迁移 PostgreSQL、Redis 限流和异步 Worker。
+3. 完成 V1 Top10 不可变预测、D+1 晋级和 D+1 至 D+5 Outcome 的端到端验收。
+4. 持续扩充 V1 收盘数据问答评测，覆盖工具失败、日期截止点和多轮指代。
+5. V2 再为实时板块、新闻和更多策略建立独立数据契约与 Eval；需要横向扩容时迁移 PostgreSQL、Redis 限流和异步 Worker。
 
 详细进度见 [Tasks.md](./docs/Tasks.md)，完整需求见 [需求.md](./docs/%E9%9C%80%E6%B1%82.md)。
 
