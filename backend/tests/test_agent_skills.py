@@ -1,4 +1,5 @@
 import json
+import os
 import unittest
 from unittest.mock import patch
 
@@ -107,6 +108,11 @@ class AgentSkillIntegrationTest(unittest.TestCase):
             "limit_up_events",
         )
 
+    @patch.dict(
+        os.environ,
+        {"LIMITUPLAB_AGENT_PROFILE": "extended"},
+        clear=False,
+    )
     @patch("app.agents.tools.AgentToolRegistry.hot_stock_ranking")
     def test_popularity_skill_fills_required_tool(self, hot_stock_ranking) -> None:
         payload = {

@@ -1,4 +1,5 @@
 import json
+import os
 import unittest
 from datetime import date, datetime, timezone
 from unittest.mock import patch
@@ -289,6 +290,11 @@ class HotStockDirectGuessProvider(LLMProvider):
         )
 
 
+@patch.dict(
+    os.environ,
+    {"LIMITUPLAB_AGENT_PROFILE": "extended"},
+    clear=False,
+)
 class AgentExternalToolsTest(unittest.TestCase):
     def test_dragon_tiger_fallback_formats_money_and_omits_missing_fields(
         self,

@@ -222,6 +222,8 @@ class AgentToolPolicyEngine:
 
         repaired: list[str] = []
         for rule in self._rules():
+            if not self.tools.is_enabled(rule.tool_name):
+                continue
             if not rule.matches(signals) or _has_tool_outcome(execution, rule.tool_name):
                 continue
             try:

@@ -35,6 +35,7 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.tools = AgentToolRegistry(
             events=SAMPLE_EVENTS,
             first_board_repository=repository,
+            profile="extended",
         )
         self.policy = AgentToolPolicyEngine(self.tools)
 

@@ -1,6 +1,7 @@
 """Tool registry and schemas for the first-board Agent."""
 
 import json
+import os
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from typing import Any
@@ -576,6 +577,55 @@ def _sort_limit_up_events(
     return sorted(ordered, key=key_getter, reverse=sort_order == "desc")
 
 
+V1_AGENT_PROFILE = "v1_close_review"
+EXTENDED_AGENT_PROFILE = "extended"
+V1_CLOSED_MARKET_TOOL_NAMES = frozenset(
+    {
+        "market_summary",
+        "market_index_trend",
+        "daily_board_promotion",
+        "dragon_tiger_list",
+        "first_board_ratings",
+        "limit_up_events",
+        "first_board_filter",
+        "stock_kline",
+        "prediction_quality_audit",
+        "rating_backtest",
+        "first_board_critic",
+        "rating_evaluation",
+        "review_high_score_picks",
+        "scoring_policy_status",
+    }
+)
+V1_DEFERRED_REALTIME_TOOL_NAMES = frozenset(
+    {
+        "sector_performance",
+        "hot_stock_ranking",
+        "remote_limit_up_pool",
+        "finance_news",
+        "web_search",
+    }
+)
+
+
+def resolve_agent_profile(profile: str | None = None) -> str:
+    """Resolve the active Agent product profile from an explicit value or env."""
+
+    resolved = (profile or os.getenv("LIMITUPLAB_AGENT_PROFILE") or V1_AGENT_PROFILE)
+    normalized = resolved.strip().lower().replace("-", "_")
+    aliases = {
+        "v1": V1_AGENT_PROFILE,
+        "v1_close_review": V1_AGENT_PROFILE,
+        "extended": EXTENDED_AGENT_PROFILE,
+        "v2_preview": EXTENDED_AGENT_PROFILE,
+    }
+    if normalized not in aliases:
+        raise ValueError(
+            "LIMITUPLAB_AGENT_PROFILE must be v1_close_review or extended"
+        )
+    return aliases[normalized]
+
+
 class AgentToolRegistry:
     """Typed registry of tools available to the chat Agent."""
 
@@ -584,17 +634,34 @@ class AgentToolRegistry:
         events: list[LimitUpEvent],
         first_board_repository: SQLiteFirstBoardRepository | None = None,
         hithink_collector: HithinkFinanceCollector | None = None,
+        profile: str | None = None,
     ):
         """Create a registry bound to current request data dependencies."""
 
         self.events = events
         self.first_board_repository = first_board_repository or SQLiteFirstBoardRepository()
         self.hithink_collector = hithink_collector or HithinkFinanceCollector()
+        self.profile = resolve_agent_profile(profile)
+
+    @property
+    def enabled_tool_names(self) -> frozenset[str]:
+        """Return tool names available to Planner, policy and execution."""
+
+        if self.profile == EXTENDED_AGENT_PROFILE:
+            return frozenset(schema.name for schema in TOOL_SCHEMAS)
+        return V1_CLOSED_MARKET_TOOL_NAMES
+
+    def is_enabled(self, tool_name: str) -> bool:
+        """Return whether one tool is callable in the active product profile."""
+
+        return tool_name in self.enabled_tool_names
 
     def schemas(self) -> list[AgentToolSchema]:
         """Return the LLM-facing tool schemas."""
 
-        return TOOL_SCHEMAS
+        return [
+            schema for schema in TOOL_SCHEMAS if self.is_enabled(schema.name)
+        ]
 
     def schema_prompt(self) -> str:
         """Return a JSON tool description block for the planner prompt."""

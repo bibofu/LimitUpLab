@@ -1,0 +1,28 @@
+{
+  "cases": [
+    {
+      "case_id": "live_popularity",
+      "message": "现在热股榜前10名"
+    },
+    {
+      "case_id": "live_sector_performance",
+      "message": "今天半导体板块实时表现怎么样"
+    },
+    {
+      "case_id": "latest_finance_news",
+      "message": "有什么最新财经新闻"
+    },
+    {
+      "case_id": "intraday_stock_price",
+      "message": "中电鑫龙盘中价格是多少"
+    },
+    {
+      "case_id": "call_auction",
+      "message": "今天集合竞价最强的股票有哪些"
+    },
+    {
+      "case_id": "company_latest_news",
+      "message": "中电鑫龙有什么最新消息"
+    }
+  ]
+}
