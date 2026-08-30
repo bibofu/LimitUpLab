@@ -2,6 +2,7 @@
   Trash2,
   BarChart3,
   Check,
+  ChevronDown,
   ChevronRight,
   Flame,
   GitBranch,
@@ -11,6 +12,7 @@
   LoaderCircle,
   MapPin,
   MessageCircle,
+  Minus,
   PanelLeft,
   Pencil,
   Plus,
@@ -2217,21 +2219,87 @@ function DetailView({ view, data }: { view: StockListViewKey; data: DashboardDat
 function RecentLimitUp({ events }: { events: LimitUpEvent[] }) {
   /** Group recent events by persisted trading date for review. */
 
-  const grouped = useMemo(() => {
-    return events.reduce<Record<string, LimitUpEvent[]>>((groups, event) => {
+  const dateGroups = useMemo(() => {
+    const grouped = events.reduce<Record<string, LimitUpEvent[]>>((groups, event) => {
       groups[event.trade_date] = groups[event.trade_date] ?? [];
       groups[event.trade_date].push(event);
       return groups;
     }, {});
+    return Object.entries(grouped).sort(([left], [right]) => right.localeCompare(left));
   }, [events]);
+  const [expandedDates, setExpandedDates] = useState<string[]>(() => (
+    dateGroups[0] ? [dateGroups[0][0]] : []
+  ));
+  const allExpanded = expandedDates.length === dateGroups.length;
+
+  function toggleDate(tradeDate: string) {
+    setExpandedDates((current) => (
+      current.includes(tradeDate)
+        ? current.filter((item) => item !== tradeDate)
+        : [...current, tradeDate]
+    ));
+  }
 
   return (
     <div className="recent-groups">
-      {Object.entries(grouped).map(([tradeDate, items]) => (
-        <Panel key={tradeDate} title={tradeDate} icon={<TrendingUp size={18} />}>
-          <StockTable events={items} variant="recent" />
-        </Panel>
-      ))}
+      <div className="recent-groups-toolbar">
+        <div>
+          <strong>最近 {dateGroups.length} 个交易日</strong>
+          <span>共 {events.length} 条封板记录，默认展开最新交易日</span>
+        </div>
+        <div className="recent-groups-actions">
+          <button
+            type="button"
+            onClick={() => setExpandedDates(dateGroups.map(([date]) => date))}
+            disabled={allExpanded}
+          >
+            <ChevronDown size={16} aria-hidden="true" />
+            全部展开
+          </button>
+          <button type="button" onClick={() => setExpandedDates([])} disabled={expandedDates.length === 0}>
+            <Minus size={16} aria-hidden="true" />
+            全部收起
+          </button>
+        </div>
+      </div>
+
+      {dateGroups.map(([tradeDate, items], index) => {
+        const expanded = expandedDates.includes(tradeDate);
+        const firstBoardCount = items.filter((item) => item.board_height === 1).length;
+        const continuedBoardCount = items.length - firstBoardCount;
+        const maxBoardHeight = Math.max(...items.map((item) => item.board_height));
+        const contentId = `recent-limit-up-${tradeDate}`;
+        return (
+          <section className={`recent-date-group ${expanded ? "expanded" : ""}`} key={tradeDate}>
+            <button
+              aria-controls={contentId}
+              aria-expanded={expanded}
+              className="recent-date-toggle"
+              type="button"
+              onClick={() => toggleDate(tradeDate)}
+            >
+              <span className="recent-date-primary">
+                {expanded
+                  ? <ChevronDown size={19} aria-hidden="true" />
+                  : <ChevronRight size={19} aria-hidden="true" />}
+                <strong>{tradeDate}</strong>
+                {index === 0 ? <em>最新</em> : null}
+              </span>
+              <span className="recent-date-summary">
+                <b>{items.length} 只</b>
+                <small>首板 {firstBoardCount}</small>
+                <small>连板 {continuedBoardCount}</small>
+                <small>最高 {maxBoardHeight} 板</small>
+              </span>
+            </button>
+            {expanded ? (
+              <div className="recent-date-content" id={contentId}>
+                <StockTable events={items} variant="recent" />
+              </div>
+            ) : null}
+          </section>
+        );
+      })}
     </div>
   );
 }
