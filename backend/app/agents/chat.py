@@ -11,6 +11,11 @@ from time import perf_counter
 from typing import Any, Callable, Iterator
 
 from app.agents.explanation import explain_first_board_rating
+from app.agents.capability_contract import (
+    capability_schema_prompt,
+    ensure_capability_tool_calls,
+    normalize_capabilities,
+)
 from app.agent_output_sanitizer import (
     AgentAnswerStreamSanitizer,
     friendly_tool_label,
@@ -454,6 +459,7 @@ def _answer_with_llm_tool_agent(
     planner_system_prompt = _tool_planner_system_prompt(
         tools.schema_prompt(),
         AGENT_SKILL_REGISTRY.schema_prompt(tools.enabled_tool_names),
+        capability_schema_prompt(tools.enabled_tool_names),
         tools.profile,
     )
     planner_user_prompt = _tool_planner_user_prompt(request, context, tools.events)
@@ -498,6 +504,17 @@ def _answer_with_llm_tool_agent(
             tool_calls,
         )
         direct_answer = ""
+    capabilities = normalize_capabilities(
+        tool_plan.get("capabilities"),
+        skill_name=tool_plan.get("skill_name"),
+        tool_calls=tool_calls,
+    )
+    tool_plan["capabilities"] = list(capabilities)
+    tool_calls = ensure_capability_tool_calls(
+        capabilities,
+        tool_calls,
+        allowed_tool_names=tools.enabled_tool_names,
+    )
     if intent == "out_of_scope":
         return _unanswerable_response(
             request=request,
@@ -527,7 +544,10 @@ def _answer_with_llm_tool_agent(
             }
         ]
         direct_answer = ""
-    if not tool_calls and direct_answer and policy.requires_grounding(request):
+    if not tool_calls and direct_answer and policy.requires_grounding(
+        request,
+        capabilities,
+    ):
         direct_answer = ""
     if not tool_calls and direct_answer and intent not in PLANNER_DIRECT_ANSWER_INTENTS:
         direct_answer = ""
@@ -632,6 +652,7 @@ def _answer_with_llm_tool_agent(
         request=request,
         execution=execution,
         context_symbol=context.symbol,
+        capabilities=capabilities,
     )
     _add_composed_tool_facts(request.message, execution["facts"])
     active_skill = active_skill or AGENT_SKILL_REGISTRY.resolve_from_facts(
@@ -695,9 +716,10 @@ def _answer_with_llm_tool_agent(
         request.message,
         execution["facts"],
     )
-    market_environment_answer = _QuestionSignals.from_message(
-        request.message
-    ).market_environment
+    market_environment_answer = (
+        "market_environment" in capabilities
+        or _QuestionSignals.from_message(request.message).market_environment
+    )
     answer_system_prompt = _tool_answer_system_prompt(
         agent_profile=tools.profile,
         exhaustive_event_answer=exhaustive_event_answer,
@@ -870,6 +892,7 @@ def _answer_with_llm_tool_agent(
 def _tool_planner_system_prompt(
     tool_schema_prompt: str,
     skill_schema_prompt: str,
+    capability_contract_prompt: str,
     agent_profile: str,
 ) -> str:
     """Describe the Agent tools and require a strict JSON tool plan."""
@@ -900,9 +923,13 @@ def _tool_planner_system_prompt(
         "and answer_directly to exactly '抱歉，该问题无法回答'. "
         "Choose one skill_name from the supplied skill catalog when a skill covers the "
         "question; otherwise use null. A skill is a business workflow, while tools provide facts. "
+        "Translate every supported domain request into one or more normalized capabilities "
+        "from the supplied capability catalog. Use multiple capabilities for compound questions, "
+        "regardless of synonyms, colloquial wording, clause order, or omitted dates. "
         "When a skill is selected, include its required tools unless the backend can safely fill defaults. "
         "Return only valid JSON. No markdown. "
         f"Available skills: {skill_schema_prompt}. "
+        f"Capability catalog: {capability_contract_prompt}. "
         f"Available tools are described as JSON schemas: {tool_schema_prompt}. "
         "Use YYYY-MM-DD for all dates. "
         "For capability questions, answer_directly must mention LimitUpLab. "
@@ -927,6 +954,7 @@ def _tool_planner_system_prompt(
         "JSON schema: {"
         "\"intent_label\": string, "
         "\"skill_name\": string|null, "
+        "\"capabilities\": [string], "
         "\"safety\": \"normal\"|\"refuse_trade_instruction\", "
         "\"tool_calls\": [{\"name\": string, \"arguments\": object}], "
         "\"answer_directly\": string"
@@ -3168,6 +3196,7 @@ def _llm_plan_trace(
             "provider": provider,
             "intent_label": tool_plan.get("intent_label"),
             "skill_name": tool_plan.get("skill_name"),
+            "capabilities": tool_plan.get("capabilities") or [],
             "safety": tool_plan.get("safety"),
             "tool_calls": tool_plan.get("tool_calls") or [],
         },

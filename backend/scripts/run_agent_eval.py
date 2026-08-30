@@ -35,6 +35,12 @@ from app.services.sample_data import SAMPLE_EVENTS
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run Agent chat eval cases.")
     parser.add_argument(
+        "--suite",
+        choices=("core", "paraphrase"),
+        default="core",
+        help="core runs stable regressions; paraphrase measures live semantic routing.",
+    )
+    parser.add_argument(
         "--mode",
         choices=("offline", "live-llm"),
         default="offline",
@@ -78,7 +84,14 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    fixture_path = BACKEND_ROOT / "tests" / "fixtures" / "agent_eval_cases.json"
+    if args.suite == "paraphrase" and args.mode != "live-llm":
+        parser.error("--suite paraphrase requires --mode live-llm")
+    fixture_name = (
+        "agent_paraphrase_eval_cases.json"
+        if args.suite == "paraphrase"
+        else "agent_eval_cases.json"
+    )
+    fixture_path = BACKEND_ROOT / "tests" / "fixtures" / fixture_name
     contract_fixture_path = (
         BACKEND_ROOT / "tests" / "fixtures" / "query_contract_v2_cases.json"
     )
@@ -124,6 +137,7 @@ def main() -> None:
     contract_report = query_contract_eval_report(contract_suite)
     report = {
         "mode": args.mode,
+        "suite": args.suite,
         "answer_mode": "live-llm" if args.live_answer else "deterministic-template",
         **eval_suite_report(suite),
         "query_contract": contract_report,

@@ -61,8 +61,14 @@ class QuestionSignals:
     scoring_policy: bool
 
     @classmethod
-    def from_message(cls, message: str) -> "QuestionSignals":
+    def from_message(
+        cls,
+        message: str,
+        capabilities: tuple[str, ...] = (),
+    ) -> "QuestionSignals":
         """Parse guardrail signals once instead of across many repair functions."""
+
+        capability_set = set(capabilities)
 
         prediction_quality = looks_like_prediction_quality_question(message)
         rating_backtest = (
@@ -78,37 +84,73 @@ class QuestionSignals:
             and not scoring_policy
             and not prediction_quality
         )
-        finance_news = looks_like_finance_news_question(message)
-        daily_board_promotion = looks_like_daily_board_promotion_question(message)
-        market_environment = looks_like_market_environment_question(message)
+        finance_news = (
+            "finance_news" in capability_set
+            or looks_like_finance_news_question(message)
+        )
+        daily_board_promotion = (
+            "board_promotion" in capability_set
+            or looks_like_daily_board_promotion_question(message)
+        )
+        market_environment = (
+            "market_environment" in capability_set
+            or looks_like_market_environment_question(message)
+        )
         market_index_trend = (
-            looks_like_market_index_trend_question(message) or market_environment
+            "market_index_trend" in capability_set
+            or looks_like_market_index_trend_question(message)
+            or market_environment
         )
         return cls(
             requested_date=extract_trade_date(message),
             market_environment=market_environment,
             market_index_trend=market_index_trend,
             sector_performance=(
-                looks_like_sector_performance_question(message) or market_environment
+                "sector_performance" in capability_set
+                or looks_like_sector_performance_question(message)
+                or market_environment
             ),
             hot_stock_ranking=(
-                looks_like_hot_stock_question(message) or market_environment
+                "popularity" in capability_set
+                or looks_like_hot_stock_question(message)
+                or market_environment
             ),
             finance_news=finance_news,
-            web_search=looks_like_web_search_question(message) and not finance_news,
+            web_search=(
+                "web_research" in capability_set
+                or looks_like_web_search_question(message)
+            ) and not finance_news,
             daily_board_promotion=daily_board_promotion,
-            limit_up_events=looks_like_limit_up_event_question(message),
-            first_board_facts=looks_like_first_board_facts_question(message),
-            rating_explanation=looks_like_rating_explain_question(message),
-            stock_kline=(
-                looks_like_stock_kline_question(message) and not market_index_trend
+            limit_up_events=(
+                "limit_up_pool" in capability_set
+                or looks_like_limit_up_event_question(message)
             ),
-            prediction_quality=prediction_quality,
-            rating_backtest=rating_backtest,
-            critic=looks_like_critic_question(message),
-            evaluation=evaluation,
-            review=review,
-            scoring_policy=scoring_policy,
+            first_board_facts=(
+                "first_board_rating" in capability_set
+                or looks_like_first_board_facts_question(message)
+            ),
+            rating_explanation=(
+                "first_board_rating" in capability_set
+                or looks_like_rating_explain_question(message)
+            ),
+            stock_kline=(
+                (
+                    "stock_trend" in capability_set
+                    or looks_like_stock_kline_question(message)
+                )
+                and not market_index_trend
+            ),
+            prediction_quality=(
+                "prediction_quality" in capability_set or prediction_quality
+            ),
+            rating_backtest=("rating_backtest" in capability_set or rating_backtest),
+            critic=(
+                "rating_critic" in capability_set
+                or looks_like_critic_question(message)
+            ),
+            evaluation=("rating_evaluation" in capability_set or evaluation),
+            review=("prediction_review" in capability_set or review),
+            scoring_policy=("scoring_policy" in capability_set or scoring_policy),
         )
 
     @property
@@ -184,10 +226,17 @@ class AgentToolPolicyEngine:
         self.tools = tools
         self.compact_ratings = compact_ratings or _default_compact_ratings
 
-    def requires_grounding(self, request: AgentChatRequest) -> bool:
+    def requires_grounding(
+        self,
+        request: AgentChatRequest,
+        capabilities: tuple[str, ...] = (),
+    ) -> bool:
         """Return whether planner direct-answer mode must be rejected."""
 
-        return QuestionSignals.from_message(request.message).needs_domain_facts
+        return QuestionSignals.from_message(
+            request.message,
+            capabilities,
+        ).needs_domain_facts
 
     def resolve_stock_target(
         self,
@@ -218,10 +267,11 @@ class AgentToolPolicyEngine:
         request: AgentChatRequest,
         execution: ToolExecution,
         context_symbol: str | None = None,
+        capabilities: tuple[str, ...] = (),
     ) -> list[str]:
         """Apply all matching rules and return names of repaired tools."""
 
-        signals = QuestionSignals.from_message(request.message)
+        signals = QuestionSignals.from_message(request.message, capabilities)
         if not signals.needs_domain_facts:
             return []
 

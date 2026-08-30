@@ -75,6 +75,7 @@ class AgentEvalCase:
     require_warning: bool = False
     forbid_investment_terms: bool = True
     expects_llm_planner: bool = True
+    expected_capabilities: list[str] = field(default_factory=list)
 
 
 @dataclass(frozen=True)
@@ -93,6 +94,8 @@ class AgentEvalCaseResult:
     repair_reasons: list[str]
     answer_preview: str
     planner_required_tools_missing: list[str] = field(default_factory=list)
+    planner_capabilities: list[str] = field(default_factory=list)
+    planner_capabilities_missing: list[str] = field(default_factory=list)
     llm_planner_observed: bool = False
     llm_expected: bool = False
     trial_count: int = 1
@@ -242,6 +245,7 @@ def run_agent_eval_case(
             llm_provider=observed_provider,
         )
     planner_tool_calls = _planner_tool_calls(response)
+    planner_capabilities = _planner_capabilities(response)
     trace_names = [trace.name for trace in response.tool_results]
     llm_planner_observed = "llm_tool_planner" in trace_names
     llm_expected = require_llm_planner and case.expects_llm_planner
@@ -253,6 +257,11 @@ def run_agent_eval_case(
         for group in case.required_tool_groups
         if not any(tool in planner_tool_calls for tool in group)
     )
+    planner_capabilities_missing = [
+        capability
+        for capability in case.expected_capabilities
+        if capability not in planner_capabilities
+    ]
     failures = _check_response(
         case,
         response,
@@ -273,6 +282,8 @@ def run_agent_eval_case(
         repair_reasons=response.tool_policy.repair_reasons,
         answer_preview=response.answer[:180],
         planner_required_tools_missing=planner_required_tools_missing,
+        planner_capabilities=planner_capabilities,
+        planner_capabilities_missing=planner_capabilities_missing,
         llm_planner_observed=llm_planner_observed,
         llm_expected=llm_expected,
         passed_trials=int(passed),
@@ -318,6 +329,8 @@ def eval_suite_report(suite: AgentEvalSuiteResult) -> dict:
                 "backend_repaired_tools": result.backend_repaired_tools,
                 "repair_reasons": result.repair_reasons,
                 "planner_required_tools_missing": result.planner_required_tools_missing,
+                "planner_capabilities": result.planner_capabilities,
+                "planner_capabilities_missing": result.planner_capabilities_missing,
                 "trace_names": result.trace_names,
                 "warnings": result.warnings,
                 "answer_preview": result.answer_preview,
@@ -367,6 +380,8 @@ def eval_failure_report(suite: AgentEvalSuiteResult) -> dict:
                 "backend_repaired_tools": result.backend_repaired_tools,
                 "repair_reasons": result.repair_reasons,
                 "planner_required_tools_missing": result.planner_required_tools_missing,
+                "planner_capabilities": result.planner_capabilities,
+                "planner_capabilities_missing": result.planner_capabilities_missing,
                 "trace_names": result.trace_names,
                 "warnings": result.warnings,
                 "answer_preview": result.answer_preview,
@@ -407,6 +422,11 @@ def _check_response(
         failures.append(
             f"intent expected {case.expected_intent}, got {response.intent}"
         )
+
+    planner_capabilities = _planner_capabilities(response)
+    for capability in case.expected_capabilities:
+        if capability not in planner_capabilities:
+            failures.append(f"planner capability missing: {capability}")
 
     for tool in case.required_tools:
         if tool not in response.tool_calls and tool not in trace_names:
@@ -535,7 +555,7 @@ def _aggregate_case_trials(
     passed = pass_rate >= minimum_pass_rate
     llm_expected = require_llm_planner and case.expects_llm_planner
     planner_signatures = {
-        tuple(trial.planner_tool_calls)
+        (tuple(trial.planner_capabilities), tuple(trial.planner_tool_calls))
         for trial in trials
         if trial.llm_planner_observed
     }
@@ -569,6 +589,8 @@ def _aggregate_case_trials(
             "final_tool_calls": trial.tool_calls,
             "backend_repaired_tools": trial.backend_repaired_tools,
             "planner_required_tools_missing": trial.planner_required_tools_missing,
+            "planner_capabilities": trial.planner_capabilities,
+            "planner_capabilities_missing": trial.planner_capabilities_missing,
             "llm_planner_observed": trial.llm_planner_observed,
             "provider_call_count": trial.provider_call_count,
             "provider_success_count": trial.provider_success_count,
@@ -589,6 +611,8 @@ def _aggregate_case_trials(
         repair_reasons=representative.repair_reasons,
         answer_preview=representative.answer_preview,
         planner_required_tools_missing=representative.planner_required_tools_missing,
+        planner_capabilities=representative.planner_capabilities,
+        planner_capabilities_missing=representative.planner_capabilities_missing,
         llm_planner_observed=representative.llm_planner_observed,
         llm_expected=llm_expected,
         trial_count=len(trials),
@@ -639,6 +663,19 @@ def _planner_tool_calls(response: AgentChatResponse) -> list[str]:
             if isinstance(raw_call, dict) and raw_call.get("name"):
                 names.append(str(raw_call["name"]))
         return names
+    return []
+
+
+def _planner_capabilities(response: AgentChatResponse) -> list[str]:
+    """Read normalized semantic capabilities from the planner trace."""
+
+    for trace in response.tool_results:
+        if trace.name != "llm_tool_planner":
+            continue
+        raw_capabilities = trace.input.get("capabilities") or []
+        if not isinstance(raw_capabilities, list):
+            return []
+        return [str(item) for item in raw_capabilities if isinstance(item, str)]
     return []
 
 

@@ -1,0 +1,76 @@
+{
+  "cases": [
+    {
+      "case_id": "market_environment_colloquial",
+      "message": "今天盘面到底行不行，指数、板块和热股一起讲讲",
+      "expected_capabilities": ["market_environment"],
+      "required_tools": ["market_summary", "market_index_trend", "sector_performance", "hot_stock_ranking"]
+    },
+    {
+      "case_id": "market_environment_reordered",
+      "message": "先说强弱行业和大家都在看的票，再概括一下大盘今天的表现",
+      "expected_capabilities": ["market_environment"],
+      "required_tools": ["market_summary", "market_index_trend", "sector_performance", "hot_stock_ranking"]
+    },
+    {
+      "case_id": "popularity_colloquial",
+      "message": "眼下市场关注度都集中在哪些个股",
+      "expected_capabilities": ["popularity"],
+      "required_tools": ["hot_stock_ranking"]
+    },
+    {
+      "case_id": "finance_news_colloquial",
+      "message": "这两天财经圈发生了哪些值得关注的事",
+      "expected_capabilities": ["finance_news"],
+      "required_tools": ["finance_news"]
+    },
+    {
+      "case_id": "limit_up_pool_colloquial",
+      "message": "把最近封死的票池给我扫一遍",
+      "expected_capabilities": ["limit_up_pool"],
+      "required_tools": ["limit_up_events"]
+    },
+    {
+      "case_id": "first_board_rating_colloquial",
+      "message": "今天模型最看好的十个首板样本是谁",
+      "expected_capabilities": ["first_board_rating"],
+      "required_tools": ["first_board_ratings"]
+    },
+    {
+      "case_id": "board_promotion_colloquial",
+      "message": "最近首板第二天还能封住的比例如何",
+      "expected_capabilities": ["board_promotion"],
+      "required_tools": ["daily_board_promotion"]
+    },
+    {
+      "case_id": "market_index_trend_colloquial",
+      "message": "过去一周几个主要指数走得怎么样",
+      "expected_capabilities": ["market_index_trend"],
+      "required_tools": ["market_index_trend"]
+    },
+    {
+      "case_id": "sector_performance_colloquial",
+      "message": "今天哪些行业在领涨，哪些拖后腿",
+      "expected_capabilities": ["sector_performance"],
+      "required_tools": ["sector_performance"]
+    },
+    {
+      "case_id": "prediction_review_colloquial",
+      "message": "前几天挑出来的高分样本后来兑现得如何",
+      "expected_capabilities": ["prediction_review"],
+      "required_tools": ["review_high_score_picks"]
+    },
+    {
+      "case_id": "compound_popularity_limit_up",
+      "message": "关注度靠前的票里，哪些也出现在最新涨停池",
+      "expected_capabilities": ["popularity", "limit_up_pool"],
+      "required_tools": ["hot_stock_ranking", "limit_up_events"]
+    },
+    {
+      "case_id": "compound_rating_sector",
+      "message": "评分靠前的首板都来自什么行业，顺便说说今天行业强弱",
+      "expected_capabilities": ["first_board_rating", "sector_performance"],
+      "required_tools": ["first_board_ratings", "sector_performance"]
+    }
+  ]
+}
