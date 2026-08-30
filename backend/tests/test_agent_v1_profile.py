@@ -1,6 +1,7 @@
 import json
 import os
 import unittest
+from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
@@ -16,7 +17,7 @@ from app.agents.tools import (
     AgentToolRegistry,
     ToolResult,
 )
-from app.models import AgentChatRequest
+from app.models import AgentChatRequest, FinanceNewsFacts, FinanceNewsItem
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.llm_provider import LLMProvider, LLMResult
 from app.services.sample_data import SAMPLE_EVENTS
@@ -88,6 +89,35 @@ class PopularityPolicyRepairProvider(LLMProvider):
         )
 
 
+class FinanceNewsPolicyRepairProvider(LLMProvider):
+    """Skip planning the news tool so the policy contract must repair it."""
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        del user_prompt
+        if "first job is to decide which tools are needed" in system_prompt:
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": "latest_finance_news",
+                        "skill_name": "finance-news",
+                        "safety": "normal",
+                        "tool_calls": [],
+                        "answer_directly": "",
+                    }
+                ),
+                model="fake-v1-planner",
+                provider="fake",
+            )
+        return LLMResult(
+            content=(
+                "截至北京时间 2026-08-30 16:00，东方财富报道央行发布"
+                "公开市场操作公告。原文：https://example.com/macro"
+            ),
+            model="fake-v1-answer",
+            provider="fake",
+        )
+
+
 class UnexpectedLLMProvider(LLMProvider):
     """Fail if a V1 scope rejection reaches the LLM."""
 
@@ -118,7 +148,7 @@ class AgentV1ProfileTest(unittest.TestCase):
             "references": [],
         }
 
-    def test_default_profile_exposes_close_tools_and_popularity_snapshot(self) -> None:
+    def test_default_profile_exposes_close_tools_and_read_only_external_facts(self) -> None:
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("LIMITUPLAB_AGENT_PROFILE", None)
             registry = AgentToolRegistry(
@@ -131,8 +161,9 @@ class AgentV1ProfileTest(unittest.TestCase):
         self.assertEqual(schema_names, set(V1_CLOSED_MARKET_TOOL_NAMES))
         self.assertTrue(schema_names.isdisjoint(V1_DEFERRED_REALTIME_TOOL_NAMES))
         self.assertIn("hot_stock_ranking", registry.schema_prompt())
+        self.assertIn("finance_news", registry.schema_prompt())
         self.assertNotIn("sector_performance", registry.schema_prompt())
-        self.assertNotIn("web_search", registry.schema_prompt())
+        self.assertNotIn("web_search", schema_names)
 
     def test_extended_profile_preserves_deferred_v2_tools(self) -> None:
         registry = AgentToolRegistry(
@@ -145,15 +176,23 @@ class AgentV1ProfileTest(unittest.TestCase):
         self.assertTrue(V1_DEFERRED_REALTIME_TOOL_NAMES.issubset(schema_names))
         self.assertIn("hot_stock_ranking", registry.schema_prompt())
 
-    def test_v1_skill_catalog_includes_popularity_workflow(self) -> None:
+    def test_v1_skill_catalog_includes_read_only_external_workflows(self) -> None:
         catalog = AGENT_SKILL_REGISTRY.schema_prompt(V1_CLOSED_MARKET_TOOL_NAMES)
 
         self.assertIn("first-board-rating", catalog)
         self.assertIn("limit-up-pool", catalog)
         self.assertIn("popularity", catalog)
+        self.assertIn("finance-news", catalog)
         self.assertIsNotNone(
             AGENT_SKILL_REGISTRY.resolve(
                 "popularity",
+                [],
+                V1_CLOSED_MARKET_TOOL_NAMES,
+            )
+        )
+        self.assertIsNotNone(
+            AGENT_SKILL_REGISTRY.resolve(
+                "finance-news",
                 [],
                 V1_CLOSED_MARKET_TOOL_NAMES,
             )
@@ -262,6 +301,48 @@ class AgentV1ProfileTest(unittest.TestCase):
             limit=20,
             source="auto",
         )
+
+    @patch("app.agents.tools.AgentToolRegistry.finance_news")
+    def test_latest_finance_news_question_is_grounded_in_v1(self, finance_news) -> None:
+        facts = FinanceNewsFacts(
+            fetched_at=datetime(2026, 8, 30, 8, 0, tzinfo=timezone.utc),
+            window_hours=48,
+            sources=["东方财富", "同花顺"],
+            items=[
+                FinanceNewsItem(
+                    title="央行发布公开市场操作公告",
+                    summary="央行公布当日公开市场操作情况。",
+                    published_at=datetime(2026, 8, 30, 7, 50, tzinfo=timezone.utc),
+                    source="东方财富",
+                    url="https://example.com/macro",
+                    category="宏观",
+                    relevance_score=8.0,
+                )
+            ],
+        )
+        finance_news.return_value = ToolResult(
+            name="finance_news",
+            input={"query": None, "limit": 8, "hours": 48},
+            output=facts,
+            summary="东方财富、同花顺聚合到 1 条近 48 小时财经快讯。",
+            trace_output=facts.model_dump(mode="json"),
+        )
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="v1-latest-finance-news",
+                message="最新的财经新闻",
+            ),
+            events=SAMPLE_EVENTS,
+            repository=self.repository,
+            llm_provider=FinanceNewsPolicyRepairProvider(),
+        )
+
+        self.assertIn("finance_news", response.tool_calls)
+        self.assertNotIn("web_search", response.tool_calls)
+        self.assertIn("央行", response.answer)
+        self.assertIn("https://example.com/macro", response.references)
+        finance_news.assert_called_once_with(query=None, limit=8, hours=48)
 
     def test_v1_scope_eval_cases_are_rejected_before_llm(self) -> None:
         fixture_path = (

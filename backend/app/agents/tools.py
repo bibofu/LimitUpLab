@@ -584,6 +584,7 @@ V1_CLOSED_MARKET_TOOL_NAMES = frozenset(
         "market_summary",
         "market_index_trend",
         "hot_stock_ranking",
+        "finance_news",
         "daily_board_promotion",
         "dragon_tiger_list",
         "first_board_ratings",
@@ -602,7 +603,6 @@ V1_DEFERRED_REALTIME_TOOL_NAMES = frozenset(
     {
         "sector_performance",
         "remote_limit_up_pool",
-        "finance_news",
         "web_search",
     }
 )

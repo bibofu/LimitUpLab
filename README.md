@@ -120,7 +120,7 @@ scoring_version
 | `prediction_quality_audit` | 审计预测来源、Outcome 覆盖和基线表现 |
 | `scoring_policy_status` | 查询 Champion、Challenger 和晋级原因 |
 
-默认配置 `LIMITUPLAB_AGENT_PROFILE=v1_close_review` 会在 Schema、Skill、Tool Policy 和执行器四层统一限制工具。V1 允许按需读取带来源和采集时间的 `hot_stock_ranking` 热度快照，但热度不参与首板评分，也不被解释为推荐；`sector_performance`、`remote_limit_up_pool`、`finance_news` 和 `web_search` 仅保留在 `extended` 研发配置中，供 V2 实时能力开发使用。即使 LLM 伪造这些未开放工具调用，V1 执行器也会拒绝执行。
+默认配置 `LIMITUPLAB_AGENT_PROFILE=v1_close_review` 会在 Schema、Skill、Tool Policy 和执行器四层统一限制工具。V1 允许按需读取带来源和采集时间的 `hot_stock_ranking` 热度快照，以及东方财富、同花顺的 `finance_news` 财经快讯；这些外部事实不参与首板评分，也不被解释为推荐。`sector_performance`、`remote_limit_up_pool` 和 `web_search` 仅保留在 `extended` 研发配置中，供 V2 实时能力开发使用。即使 LLM 伪造这些未开放工具调用，V1 执行器也会拒绝执行。
 
 Agent Query Contract v2 会把涨停问题统一成可审计的结构化查询，用户明确表达的日期、首板/连板、主板/创业板/科创板/北交所、封板/炸板、题材、排序、Top-N 和完整名单要求优先于 Planner 猜测。Tool Policy Engine 则负责修复 Planner 漏调工具的情况。例如，用户询问某只股票走势时必须调用 K 线工具，询问当天涨停时必须查询本地涨停事件，不能让模型直接凭记忆作答。
 
