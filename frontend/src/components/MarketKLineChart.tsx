@@ -84,6 +84,12 @@ export function MarketKLineChart({
     () => movingAverageReadout(orderedBars, displayedIndex),
     [displayedIndex, orderedBars],
   );
+  const volumeRatios = useMemo(
+    () => rollingVolumeRatios(orderedBars, 5),
+    [orderedBars],
+  );
+  const displayedVolumeRatio =
+    displayedIndex >= 0 ? volumeRatios[displayedIndex] : null;
 
   useEffect(() => {
     setActiveBar(null);
@@ -258,21 +264,49 @@ export function MarketKLineChart({
       ]);
     }
 
-    const volumeSeries = chart.addSeries(
+    const secondarySeries = chart.addSeries(
       HistogramSeries,
       {
-        priceFormat: { type: "volume" },
+        priceFormat: mode === "daily"
+          ? {
+              type: "custom",
+              minMove: 0.01,
+              formatter: (value: number) => `${value.toFixed(2)}x`,
+            }
+          : { type: "volume" },
         priceLineVisible: false,
         lastValueVisible: false,
       },
       1,
     );
-    const volumeData: HistogramData<Time>[] = orderedBars.map((bar) => ({
-      time: toChartTime(bar.time),
-      value: bar.volume,
-      color: bar.close >= bar.open ? `${UP_COLOR}b3` : `${DOWN_COLOR}b3`,
-    }));
-    volumeSeries.setData(volumeData);
+    const secondaryData: HistogramData<Time>[] = mode === "daily"
+      ? orderedBars.flatMap((bar, index) => {
+          const ratio = volumeRatios[index];
+          if (ratio === null) {
+            return [];
+          }
+          return [{
+            time: toChartTime(bar.time),
+            value: ratio,
+            color: ratio >= 1 ? `${UP_COLOR}b3` : `${DOWN_COLOR}b3`,
+          }];
+        })
+      : orderedBars.map((bar) => ({
+          time: toChartTime(bar.time),
+          value: bar.volume,
+          color: bar.close >= bar.open ? `${UP_COLOR}b3` : `${DOWN_COLOR}b3`,
+        }));
+    secondarySeries.setData(secondaryData);
+    if (mode === "daily") {
+      secondarySeries.createPriceLine({
+        price: 1,
+        color: "#98a2b3",
+        lineWidth: 1,
+        lineStyle: LineStyle.Dashed,
+        axisLabelVisible: true,
+        title: "1.0",
+      });
+    }
 
     const panes = chart.panes();
     panes[0]?.setStretchFactor(4);
@@ -292,7 +326,7 @@ export function MarketKLineChart({
       chartRef.current = null;
       chart.remove();
     };
-  }, [intradayReferencePrice, mode, orderedBars]);
+  }, [intradayReferencePrice, mode, orderedBars, volumeRatios]);
 
   if (orderedBars.length === 0) {
     return <div className="chart-state">{emptyLabel}</div>;
@@ -311,7 +345,7 @@ export function MarketKLineChart({
               <span>低 <b className="down">{formatPrice(displayedBar?.low)}</b></span>
               <span>收 <b className={directionClass}>{formatPrice(displayedBar?.close)}</b></span>
               <span>涨幅 <b className={directionClass}>{formatPercent(changePct)}</b></span>
-              <span>成交量 <b>{formatVolume(displayedBar?.volume)}</b></span>
+              <span>5日量比 <b>{formatVolumeRatio(displayedVolumeRatio)}</b></span>
             </>
           ) : (
             <>
@@ -417,6 +451,24 @@ function movingAverageReadout(
   });
 }
 
+function rollingVolumeRatios(
+  bars: MarketCandleBar[],
+  window: number,
+): Array<number | null> {
+  return bars.map((bar, index) => {
+    if (index < window) {
+      return null;
+    }
+    const baseline = bars
+      .slice(index - window, index)
+      .reduce((total, item) => total + item.volume, 0) / window;
+    if (baseline <= 0) {
+      return null;
+    }
+    return Number((bar.volume / baseline).toFixed(3));
+  });
+}
+
 function toChartTime(value: string | number): Time {
   return typeof value === "number" ? (value as UTCTimestamp) : value;
 }
@@ -464,6 +516,10 @@ function formatPrice(value: number | undefined): string {
 
 function formatPercent(value: number | null): string {
   return value === null ? "--" : `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
+}
+
+function formatVolumeRatio(value: number | null): string {
+  return value === null ? "--" : `${value.toFixed(2)}x`;
 }
 
 function formatVolume(value: number | undefined): string {
