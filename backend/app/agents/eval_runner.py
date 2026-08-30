@@ -4,10 +4,20 @@ from __future__ import annotations
 
 import json
 from dataclasses import dataclass, field
+from datetime import datetime, timezone
 from pathlib import Path
 
-from app.agents.chat import answer_first_board_chat, template_answer_override
-from app.models import AgentChatRequest, AgentChatResponse, LimitUpEvent
+from app.agents.chat import (
+    answer_first_board_chat,
+    plan_agent_query,
+    template_answer_override,
+)
+from app.models import (
+    AgentChatRequest,
+    AgentChatResponse,
+    ChatSessionMessage,
+    LimitUpEvent,
+)
 from app.services.llm_provider import LLMProvider, LLMResult
 
 
@@ -137,11 +147,555 @@ class AgentEvalSuiteResult:
         return self.failed == 0
 
 
+@dataclass(frozen=True)
+class AgentPlannerEvalCaseResult:
+    """Repeated semantic-planning result for one paraphrased question."""
+
+    case_id: str
+    message: str
+    passed: bool
+    stable: bool
+    trial_count: int
+    passed_trials: int
+    pass_rate: float
+    expected_capabilities: list[str]
+    expected_tools: list[str]
+    observed_capabilities: list[str]
+    observed_tools: list[str]
+    raw_planner_tools: list[str]
+    failures: list[str] = field(default_factory=list)
+    trials: list[dict[str, object]] = field(default_factory=list)
+
+
+@dataclass(frozen=True)
+class AgentPlannerEvalSuiteResult:
+    """Aggregate semantic-routing quality without executing evidence tools."""
+
+    total: int
+    passed: int
+    failed: int
+    stable_cases: int
+    unstable_cases: int
+    trials_per_case: int
+    minimum_pass_rate: float
+    capability_success_rate: float
+    effective_tool_success_rate: float
+    raw_planner_tool_success_rate: float
+    results: list[AgentPlannerEvalCaseResult]
+
+    @property
+    def ok(self) -> bool:
+        return self.failed == 0
+
+
+@dataclass(frozen=True)
+class AgentConversationEvalTurn:
+    """One context-dependent user turn inside a semantic eval scenario."""
+
+    message: str
+    expected_capabilities: list[str]
+    required_tools: list[str]
+    assistant_context: str
+
+
+@dataclass(frozen=True)
+class AgentConversationEvalScenario:
+    """A seeded conversation followed by context-dependent turns."""
+
+    scenario_id: str
+    history: list[dict[str, object]]
+    turns: list[AgentConversationEvalTurn]
+
+
+@dataclass(frozen=True)
+class AgentConversationEvalSuiteResult:
+    """Aggregate multi-turn semantic routing stability."""
+
+    total_scenarios: int
+    total_turns: int
+    passed_scenarios: int
+    failed_scenarios: int
+    stable_scenarios: int
+    unstable_scenarios: int
+    trials_per_scenario: int
+    turn_pass_rate: float
+    results: list[dict[str, object]]
+
+    @property
+    def ok(self) -> bool:
+        return self.failed_scenarios == 0
+
+
 def load_eval_cases(path: Path) -> list[AgentEvalCase]:
     """Load Agent eval cases from a JSON fixture file."""
 
     data = json.loads(path.read_text(encoding="utf-8"))
-    return [AgentEvalCase(**item) for item in data["cases"]]
+    cases = [AgentEvalCase(**item) for item in data.get("cases", [])]
+    for family in data.get("families", []):
+        family_id = str(family["family_id"])
+        messages = family.get("messages") or []
+        shared = {
+            key: value
+            for key, value in family.items()
+            if key not in {"family_id", "messages"}
+        }
+        cases.extend(
+            AgentEvalCase(
+                case_id=f"{family_id}_{index:02d}",
+                message=str(message),
+                **shared,
+            )
+            for index, message in enumerate(messages, start=1)
+        )
+    return cases
+
+
+def load_conversation_eval_scenarios(
+    path: Path,
+) -> list[AgentConversationEvalScenario]:
+    """Load explicit multi-turn context scenarios from JSON."""
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return [
+        AgentConversationEvalScenario(
+            scenario_id=str(item["scenario_id"]),
+            history=list(item.get("history") or []),
+            turns=[
+                AgentConversationEvalTurn(**turn)
+                for turn in (item.get("turns") or [])
+            ],
+        )
+        for item in data.get("scenarios", [])
+    ]
+
+
+def run_agent_planner_eval_suite(
+    *,
+    cases: list[AgentEvalCase],
+    events: list[LimitUpEvent],
+    llm_provider: LLMProvider,
+    trials_per_case: int = 3,
+    minimum_pass_rate: float = 2 / 3,
+) -> AgentPlannerEvalSuiteResult:
+    """Evaluate semantic capabilities repeatedly without calling evidence tools."""
+
+    if not cases:
+        raise ValueError("planner eval requires at least one case")
+    resolved_trials = max(1, trials_per_case)
+    resolved_minimum = max(0.0, min(1.0, minimum_pass_rate))
+    results = [
+        _run_agent_planner_eval_case(
+            case=case,
+            events=events,
+            llm_provider=llm_provider,
+            trials_per_case=resolved_trials,
+            minimum_pass_rate=resolved_minimum,
+        )
+        for case in cases
+    ]
+    total_trials = len(cases) * resolved_trials
+    capability_successes = sum(
+        1
+        for result in results
+        for trial in result.trials
+        if not trial.get("missing_capabilities")
+    )
+    effective_tool_successes = sum(
+        1
+        for result in results
+        for trial in result.trials
+        if not trial.get("missing_tools")
+    )
+    raw_tool_successes = sum(
+        1
+        for result in results
+        for trial in result.trials
+        if not trial.get("missing_raw_tools")
+    )
+    passed = sum(1 for result in results if result.passed)
+    return AgentPlannerEvalSuiteResult(
+        total=len(results),
+        passed=passed,
+        failed=len(results) - passed,
+        stable_cases=sum(1 for result in results if result.stable),
+        unstable_cases=sum(1 for result in results if not result.stable),
+        trials_per_case=resolved_trials,
+        minimum_pass_rate=resolved_minimum,
+        capability_success_rate=round(capability_successes / total_trials, 4),
+        effective_tool_success_rate=round(
+            effective_tool_successes / total_trials,
+            4,
+        ),
+        raw_planner_tool_success_rate=round(raw_tool_successes / total_trials, 4),
+        results=results,
+    )
+
+
+def run_agent_conversation_planner_eval_suite(
+    *,
+    scenarios: list[AgentConversationEvalScenario],
+    events: list[LimitUpEvent],
+    llm_provider: LLMProvider,
+    trials_per_scenario: int = 3,
+    minimum_pass_rate: float = 2 / 3,
+) -> AgentConversationEvalSuiteResult:
+    """Evaluate context-dependent planning across repeated multi-turn scenarios."""
+
+    if not scenarios or not any(scenario.turns for scenario in scenarios):
+        raise ValueError("conversation eval requires at least one turn")
+    resolved_trials = max(1, trials_per_scenario)
+    resolved_minimum = max(0.0, min(1.0, minimum_pass_rate))
+    results: list[dict[str, object]] = []
+    passed_turns = 0
+    total_turn_trials = 0
+    for scenario in scenarios:
+        scenario_trials: list[dict[str, object]] = []
+        for trial_index in range(1, resolved_trials + 1):
+            history = _conversation_messages_from_seed(
+                scenario.scenario_id,
+                scenario.history,
+            )
+            turn_results: list[dict[str, object]] = []
+            for turn_index, turn in enumerate(scenario.turns, start=1):
+                total_turn_trials += 1
+                try:
+                    plan = plan_agent_query(
+                        AgentChatRequest(
+                            session_id=f"conversation-eval-{scenario.scenario_id}",
+                            message=turn.message,
+                        ),
+                        events,
+                        llm_provider,
+                        conversation_messages=history,
+                    )
+                    capabilities = list(plan.capabilities)
+                    tools = [
+                        str(call.get("name"))
+                        for call in plan.tool_calls
+                        if call.get("name")
+                    ]
+                    missing_capabilities = [
+                        item
+                        for item in turn.expected_capabilities
+                        if item not in capabilities
+                    ]
+                    missing_tools = [
+                        item for item in turn.required_tools if item not in tools
+                    ]
+                    turn_passed = not missing_capabilities and not missing_tools
+                    error = None
+                    context_mode = plan.context_mode
+                except Exception as planning_error:  # noqa: BLE001
+                    capabilities = []
+                    tools = []
+                    missing_capabilities = list(turn.expected_capabilities)
+                    missing_tools = list(turn.required_tools)
+                    turn_passed = False
+                    error = str(planning_error)
+                    context_mode = None
+                passed_turns += int(turn_passed)
+                turn_results.append(
+                    {
+                        "turn": turn_index,
+                        "message": turn.message,
+                        "passed": turn_passed,
+                        "expected_capabilities": turn.expected_capabilities,
+                        "capabilities": capabilities,
+                        "context_mode": context_mode,
+                        "required_tools": turn.required_tools,
+                        "tools": tools,
+                        "missing_capabilities": missing_capabilities,
+                        "missing_tools": missing_tools,
+                        "error": error,
+                    }
+                )
+                history.extend(
+                    _conversation_turn_messages(
+                        scenario.scenario_id,
+                        trial_index,
+                        turn_index,
+                        turn.message,
+                        turn.assistant_context,
+                        capabilities,
+                    )
+                )
+            scenario_trials.append(
+                {
+                    "trial": trial_index,
+                    "passed": all(item["passed"] for item in turn_results),
+                    "turns": turn_results,
+                }
+            )
+        passed_trials = sum(1 for trial in scenario_trials if trial["passed"])
+        pass_rate = passed_trials / resolved_trials
+        signatures = {
+            tuple(
+                (
+                    tuple(turn["capabilities"]),
+                    tuple(turn["tools"]),
+                )
+                for turn in trial["turns"]
+            )
+            for trial in scenario_trials
+        }
+        scenario_passed = pass_rate >= resolved_minimum
+        stable = passed_trials == resolved_trials and len(signatures) == 1
+        results.append(
+            {
+                "scenario_id": scenario.scenario_id,
+                "passed": scenario_passed,
+                "stable": stable,
+                "pass_rate": round(pass_rate, 4),
+                "trials": scenario_trials,
+            }
+        )
+
+    passed_scenarios = sum(1 for result in results if result["passed"])
+    return AgentConversationEvalSuiteResult(
+        total_scenarios=len(results),
+        total_turns=sum(len(item.turns) for item in scenarios),
+        passed_scenarios=passed_scenarios,
+        failed_scenarios=len(results) - passed_scenarios,
+        stable_scenarios=sum(1 for result in results if result["stable"]),
+        unstable_scenarios=sum(1 for result in results if not result["stable"]),
+        trials_per_scenario=resolved_trials,
+        turn_pass_rate=round(passed_turns / total_turn_trials, 4),
+        results=results,
+    )
+
+
+def planner_eval_suite_report(suite: AgentPlannerEvalSuiteResult) -> dict:
+    """Serialize semantic-routing metrics and per-question failures."""
+
+    return {
+        "total": suite.total,
+        "passed": suite.passed,
+        "failed": suite.failed,
+        "stable_cases": suite.stable_cases,
+        "unstable_cases": suite.unstable_cases,
+        "trials_per_case": suite.trials_per_case,
+        "minimum_pass_rate": suite.minimum_pass_rate,
+        "capability_success_rate": suite.capability_success_rate,
+        "effective_tool_success_rate": suite.effective_tool_success_rate,
+        "raw_planner_tool_success_rate": suite.raw_planner_tool_success_rate,
+        "results": [
+            {
+                "case_id": result.case_id,
+                "message": result.message,
+                "passed": result.passed,
+                "stable": result.stable,
+                "pass_rate": result.pass_rate,
+                "expected_capabilities": result.expected_capabilities,
+                "observed_capabilities": result.observed_capabilities,
+                "expected_tools": result.expected_tools,
+                "observed_tools": result.observed_tools,
+                "raw_planner_tools": result.raw_planner_tools,
+                "failures": result.failures,
+                "trials": result.trials,
+            }
+            for result in suite.results
+        ],
+    }
+
+
+def conversation_eval_suite_report(
+    suite: AgentConversationEvalSuiteResult,
+) -> dict:
+    """Serialize multi-turn routing stability metrics."""
+
+    return {
+        "total_scenarios": suite.total_scenarios,
+        "total_turns": suite.total_turns,
+        "passed_scenarios": suite.passed_scenarios,
+        "failed_scenarios": suite.failed_scenarios,
+        "stable_scenarios": suite.stable_scenarios,
+        "unstable_scenarios": suite.unstable_scenarios,
+        "trials_per_scenario": suite.trials_per_scenario,
+        "turn_pass_rate": suite.turn_pass_rate,
+        "results": suite.results,
+    }
+
+
+def _conversation_messages_from_seed(
+    scenario_id: str,
+    seed: list[dict[str, object]],
+) -> list[ChatSessionMessage]:
+    """Convert fixture history into the persisted message shape used in production."""
+
+    created_at = datetime.now(timezone.utc)
+    return [
+        ChatSessionMessage(
+            message_id=f"{scenario_id}-seed-{index}",
+            session_id=f"conversation-eval-{scenario_id}",
+            role=item["role"],
+            content=str(item["content"]),
+            metadata={"capabilities": list(item.get("capabilities") or [])},
+            created_at=created_at,
+        )
+        for index, item in enumerate(seed, start=1)
+    ]
+
+
+def _conversation_turn_messages(
+    scenario_id: str,
+    trial_index: int,
+    turn_index: int,
+    user_content: str,
+    assistant_content: str,
+    assistant_capabilities: list[str],
+) -> list[ChatSessionMessage]:
+    """Append one completed eval turn for the next context-dependent question."""
+
+    created_at = datetime.now(timezone.utc)
+    prefix = f"{scenario_id}-{trial_index}-{turn_index}"
+    session_id = f"conversation-eval-{scenario_id}"
+    return [
+        ChatSessionMessage(
+            message_id=f"{prefix}-user",
+            session_id=session_id,
+            role="user",
+            content=user_content,
+            created_at=created_at,
+        ),
+        ChatSessionMessage(
+            message_id=f"{prefix}-assistant",
+            session_id=session_id,
+            role="assistant",
+            content=assistant_content,
+            metadata={"capabilities": list(assistant_capabilities)},
+            created_at=created_at,
+        ),
+    ]
+
+
+def _run_agent_planner_eval_case(
+    *,
+    case: AgentEvalCase,
+    events: list[LimitUpEvent],
+    llm_provider: LLMProvider,
+    trials_per_case: int,
+    minimum_pass_rate: float,
+) -> AgentPlannerEvalCaseResult:
+    """Run repeated production Planner calls for one semantic eval case."""
+
+    trials: list[dict[str, object]] = []
+    for trial_index in range(1, trials_per_case + 1):
+        try:
+            plan = plan_agent_query(
+                AgentChatRequest(
+                    session_id=f"planner-eval-{case.case_id}-{trial_index}",
+                    message=case.message,
+                    intent_hint=case.intent_hint,
+                    trade_date=case.trade_date,
+                    symbol=case.symbol,
+                ),
+                events,
+                llm_provider,
+            )
+            capabilities = list(plan.capabilities)
+            effective_tools = [
+                str(call.get("name")) for call in plan.tool_calls if call.get("name")
+            ]
+            raw_tools = [
+                str(call.get("name"))
+                for call in (plan.payload.get("tool_calls") or [])
+                if isinstance(call, dict) and call.get("name")
+            ]
+            missing_capabilities = [
+                item
+                for item in case.expected_capabilities
+                if item not in capabilities
+            ]
+            missing_tools = [
+                item for item in case.required_tools if item not in effective_tools
+            ]
+            missing_raw_tools = [
+                item for item in case.required_tools if item not in raw_tools
+            ]
+            passed = not missing_capabilities and not missing_tools
+            trials.append(
+                {
+                    "trial": trial_index,
+                    "passed": passed,
+                    "capabilities": capabilities,
+                    "effective_tools": effective_tools,
+                    "raw_planner_tools": raw_tools,
+                    "context_mode": plan.context_mode,
+                    "missing_capabilities": missing_capabilities,
+                    "missing_tools": missing_tools,
+                    "missing_raw_tools": missing_raw_tools,
+                    "duration_ms": plan.duration_ms,
+                    "error": None,
+                }
+            )
+        except Exception as error:  # noqa: BLE001
+            trials.append(
+                {
+                    "trial": trial_index,
+                    "passed": False,
+                    "capabilities": [],
+                    "effective_tools": [],
+                    "raw_planner_tools": [],
+                    "context_mode": None,
+                    "missing_capabilities": list(case.expected_capabilities),
+                    "missing_tools": list(case.required_tools),
+                    "missing_raw_tools": list(case.required_tools),
+                    "duration_ms": None,
+                    "error": str(error),
+                }
+            )
+
+    passed_trials = sum(1 for trial in trials if trial["passed"])
+    pass_rate = passed_trials / trials_per_case
+    passed = pass_rate >= minimum_pass_rate
+    signatures = {
+        (
+            tuple(trial["capabilities"]),
+            tuple(trial["effective_tools"]),
+        )
+        for trial in trials
+        if trial["error"] is None
+    }
+    stable = passed_trials == trials_per_case and len(signatures) == 1
+    representative = next(
+        (trial for trial in trials if trial["passed"]),
+        trials[-1],
+    )
+    failures = list(
+        dict.fromkeys(
+            [
+                f"capability missing: {item}"
+                for trial in trials
+                for item in trial["missing_capabilities"]
+            ]
+            + [
+                f"effective tool missing: {item}"
+                for trial in trials
+                for item in trial["missing_tools"]
+            ]
+            + [
+                f"provider error: {trial['error']}"
+                for trial in trials
+                if trial["error"]
+            ]
+        )
+    )
+    return AgentPlannerEvalCaseResult(
+        case_id=case.case_id,
+        message=case.message,
+        passed=passed,
+        stable=stable,
+        trial_count=trials_per_case,
+        passed_trials=passed_trials,
+        pass_rate=round(pass_rate, 4),
+        expected_capabilities=list(case.expected_capabilities),
+        expected_tools=list(case.required_tools),
+        observed_capabilities=list(representative["capabilities"]),
+        observed_tools=list(representative["effective_tools"]),
+        raw_planner_tools=list(representative["raw_planner_tools"]),
+        failures=failures if not passed else [],
+        trials=trials,
+    )
 
 
 def run_agent_eval_suite(

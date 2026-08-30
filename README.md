@@ -28,7 +28,7 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 | 项目 | 状态 |
 | --- | --- |
-| 后端自动化测试 | 264 项通过，另有 6 个 V1 范围评测子用例 |
+| 后端自动化测试 | 279 项通过，另有 4 个参数化子测试 |
 | 离线 Agent Eval | 11/11 通过 |
 | 本地数据健康检查 | 已实现 |
 | LLM 流式问答 | 已实现 |
@@ -94,8 +94,9 @@ scoring_version
 ```text
 用户问题
   -> LLM Planner 生成 JSON 工具计划
-  -> Agent Query Contract v2 统一日期、市场、板高、状态、排序和数量
-  -> Tool Policy Engine 检查事实接地要求
+  -> Agent Query Contract v3 归一化业务能力和多轮上下文关系
+  -> Query Contract v2 统一日期、市场、板高、状态、排序和数量
+  -> Tool Policy Engine 按能力契约检查事实接地要求
   -> 后端执行结构化工具
   -> LLM 只基于工具 Facts 生成回答
   -> SSE 流式返回文本和执行轨迹
@@ -122,7 +123,9 @@ scoring_version
 
 默认配置 `LIMITUPLAB_AGENT_PROFILE=v1_close_review` 会在 Schema、Skill、Tool Policy 和执行器四层统一限制工具。V1 允许按需读取带来源和采集时间的 `hot_stock_ranking` 热度快照、`sector_performance` 行业强弱榜，以及东方财富、同花顺的 `finance_news` 财经快讯；这些外部事实不参与首板评分，也不被解释为推荐。`remote_limit_up_pool` 和 `web_search` 仅保留在 `extended` 研发配置中，供 V2 能力开发使用。即使 LLM 伪造这些未开放工具调用，V1 执行器也会拒绝执行。
 
-Agent Query Contract v2 会把涨停问题统一成可审计的结构化查询，用户明确表达的日期、首板/连板、主板/创业板/科创板/北交所、封板/炸板、题材、排序、Top-N 和完整名单要求优先于 Planner 猜测。Tool Policy Engine 则负责修复 Planner 漏调工具的情况。例如，用户询问某只股票走势时必须调用 K 线工具，询问当天涨停时必须查询本地涨停事件，不能让模型直接凭记忆作答。
+Agent Query Contract v3 先把不同说法归一为稳定能力 ID，例如 `market_environment`、`limit_up_pool`、`first_board_rating` 和 `prediction_review`。组合问题可以选择多个能力；多轮追问通过 `standalone`、`entity_followup`、`source_refinement` 区分独立问题、实体继承和上一轮结果集交叉查询，并只继承 Planner 明确选择的 `context_capabilities`。有显式能力契约时，旧关键词判断不再参与语义路由，只在旧 Provider 或 Planner 未输出能力时兜底。
+
+Query Contract v2 继续负责涨停查询中的确定性参数：用户明确表达的日期、首板/连板、主板/创业板/科创板/北交所、封板/炸板、题材、排序、Top-N 和完整名单要求优先于 Planner 猜测。Tool Policy Engine 根据 v3 能力补齐所需证据工具，不能让模型直接凭记忆回答市场事实。
 
 ### 3. 轻量 Multi-Agent 角色
 
@@ -547,18 +550,26 @@ cd backend
 .\.venv\Scripts\python.exe scripts\run_agent_eval.py
 ```
 
-运行真实 LLM Planner 抽样评测：
+运行 121 条自然语言改写的真实 Planner 三轮评测：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --mode live-llm --summary-only
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py --suite paraphrase --mode live-llm --summary-only
 ```
 
-`live-llm` 默认对每个 case 运行 3 次，只让真实模型负责 Planner，并用确定性模板检查工具事实，从而把“工具选择波动”和“自然语言表达波动”分开。报告会单独给出 LLM 覆盖率、Planner 工具准确率、后端修复率、case 通过率和不稳定 case 数；真实 Planner 未被调用时会直接判失败，不能再由模板兜底形成假通过。
+运行携带生产消息结构和上一轮能力焦点的多轮评测：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py --suite conversation --mode live-llm --summary-only
+```
+
+`paraphrase` 和 `conversation` 都只执行生产 Planner，不重复调用行情、新闻和 K 线工具；默认每条运行 3 次，从而把语义路由波动与外部数据源波动分开。可用 `--case-filter first_board_rating_05` 定向复测失败 case。报告分别输出能力命中率、有效工具命中率、case 通过率和三轮不稳定数量。
+
+2026-08-30 的真实 DeepSeek 全量结果：121/121 单轮 case 达到最低通过门槛，363 次 Planner 调用的能力与工具命中率均为 99.72%，119 个 case 三轮完全一致；多轮场景 10/10 通过、60/60 turn 命中，9 个场景三轮完全一致。剩余波动会继续保留为模型稳定性治理对象，不用后端关键词规则掩盖。
 
 需要抽查完整端到端回答时执行：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --mode live-llm --trials 1 --live-answer
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py --suite core --mode live-llm --trials 1 --live-answer
 ```
 
 CI 或发布前可以组合 `--fail-on-failures --fail-on-unstable` 使用严格门禁。Windows CLI 会读取 User/Machine 环境中的 API Key，并自动排除已知失效代理；LLM 对超时、连接失败、限流和服务端错误进行有限指数退避重试。

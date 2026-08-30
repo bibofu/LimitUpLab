@@ -1,0 +1,214 @@
+{
+  "scenarios": [
+    {
+      "scenario_id": "stock_pronoun_followup",
+      "history": [
+        {"role": "user", "content": "先看一下 301489"},
+        {"role": "assistant", "content": "已经定位到 301489，并读取了它的基础资料。", "capabilities": ["first_board_rating"]}
+      ],
+      "turns": [
+        {
+          "message": "那它最近走得怎么样",
+          "expected_capabilities": ["stock_trend"],
+          "required_tools": ["stock_kline"],
+          "assistant_context": "301489 近期 K 线事实已经整理完成。"
+        },
+        {
+          "message": "它的首板研究分又是怎么来的",
+          "expected_capabilities": ["first_board_rating"],
+          "required_tools": ["first_board_ratings"],
+          "assistant_context": "301489 的首板评级依据已经说明。"
+        }
+      ]
+    },
+    {
+      "scenario_id": "rating_top_candidate_followup",
+      "history": [
+        {"role": "user", "content": "给我最新首板评分前十"},
+        {"role": "assistant", "content": "最新榜单第一名是 301489，其余候选也已列出。", "capabilities": ["first_board_rating"]}
+      ],
+      "turns": [
+        {
+          "message": "第一名为什么排这么高",
+          "expected_capabilities": ["first_board_rating"],
+          "required_tools": ["first_board_ratings"],
+          "assistant_context": "第一名 301489 的支持证据和风险已经说明。"
+        },
+        {
+          "message": "再看看它近一个月的走势",
+          "expected_capabilities": ["stock_trend"],
+          "required_tools": ["stock_kline"],
+          "assistant_context": "301489 近一个月的 K 线走势已经整理。"
+        }
+      ]
+    },
+    {
+      "scenario_id": "market_section_followup",
+      "history": [
+        {"role": "user", "content": "今天市场整体怎么样"},
+        {"role": "assistant", "content": "已从指数、涨跌停、行业和热股四部分概括市场。", "capabilities": ["market_environment"]}
+      ],
+      "turns": [
+        {
+          "message": "刚才说的强势行业再展开一下",
+          "expected_capabilities": ["sector_performance"],
+          "required_tools": ["sector_performance"],
+          "assistant_context": "行业强弱和领涨方向已经展开。"
+        },
+        {
+          "message": "那大家现在最关注哪些票",
+          "expected_capabilities": ["popularity"],
+          "required_tools": ["hot_stock_ranking"],
+          "assistant_context": "最新热门个股榜已经列出。"
+        }
+      ]
+    },
+    {
+      "scenario_id": "hot_list_intersection_followup",
+      "history": [
+        {"role": "user", "content": "现在大家都在看哪些股票"},
+        {"role": "assistant", "content": "已经列出最新人气榜前二十。", "capabilities": ["popularity"]}
+      ],
+      "turns": [
+        {
+          "message": "这些里面今天封板的有哪些",
+          "expected_capabilities": ["popularity", "limit_up_pool"],
+          "required_tools": ["hot_stock_ranking", "limit_up_events"],
+          "assistant_context": "已交叉筛出人气榜中的最新涨停股票。"
+        },
+        {
+          "message": "再按行业归纳一下这些票",
+          "expected_capabilities": ["popularity", "limit_up_pool"],
+          "required_tools": ["hot_stock_ranking", "limit_up_events"],
+          "assistant_context": "交集股票已经按本地涨停池行业归纳。"
+        }
+      ]
+    },
+    {
+      "scenario_id": "limit_pool_refinement_followup",
+      "history": [
+        {"role": "user", "content": "列出最新交易日封住的股票"},
+        {"role": "assistant", "content": "最新收盘涨停池名单已经列出。", "capabilities": ["limit_up_pool"]}
+      ],
+      "turns": [
+        {
+          "message": "其中创业板的单独列出来",
+          "expected_capabilities": ["limit_up_pool"],
+          "required_tools": ["limit_up_events"],
+          "assistant_context": "已筛选出其中的创业板涨停股票。"
+        },
+        {
+          "message": "这些票里一板的又有哪些",
+          "expected_capabilities": ["limit_up_pool"],
+          "required_tools": ["limit_up_events"],
+          "assistant_context": "已继续筛选创业板范围内的一板股票。"
+        }
+      ]
+    },
+    {
+      "scenario_id": "news_to_market_followup",
+      "history": [
+        {"role": "user", "content": "最近有哪些财经大事"},
+        {"role": "assistant", "content": "已经整理最近 48 小时的综合财经快讯。", "capabilities": ["finance_news"]}
+      ],
+      "turns": [
+        {
+          "message": "再结合今天盘面一起讲讲",
+          "expected_capabilities": ["finance_news", "market_environment"],
+          "required_tools": ["finance_news", "market_summary", "market_index_trend", "sector_performance", "hot_stock_ranking"],
+          "assistant_context": "新闻和最新收盘市场环境已经分开说明并综合整理。"
+        },
+        {
+          "message": "只看行业强弱呢",
+          "expected_capabilities": ["sector_performance"],
+          "required_tools": ["sector_performance"],
+          "assistant_context": "已切换为最新行业强弱榜。"
+        }
+      ]
+    },
+    {
+      "scenario_id": "dragon_tiger_popularity_followup",
+      "history": [
+        {"role": "user", "content": "最新龙虎榜情况"},
+        {"role": "assistant", "content": "最新交易日龙虎榜股票和席位资金已经列出。", "capabilities": ["dragon_tiger"]}
+      ],
+      "turns": [
+        {
+          "message": "这些上榜票现在的人气如何",
+          "expected_capabilities": ["dragon_tiger", "popularity"],
+          "required_tools": ["dragon_tiger_list", "hot_stock_ranking"],
+          "assistant_context": "已把龙虎榜股票与当前人气榜交叉查看。"
+        },
+        {
+          "message": "其中今天也涨停的呢",
+          "expected_capabilities": ["dragon_tiger", "popularity", "limit_up_pool"],
+          "required_tools": ["dragon_tiger_list", "hot_stock_ranking", "limit_up_events"],
+          "assistant_context": "已继续筛选龙虎榜中的最新涨停股票。"
+        }
+      ]
+    },
+    {
+      "scenario_id": "promotion_review_followup",
+      "history": [
+        {"role": "user", "content": "最近一进二比例怎么样"},
+        {"role": "assistant", "content": "最近五个可计算交易日的一进二和连板晋级率已经列出。", "capabilities": ["board_promotion"]}
+      ],
+      "turns": [
+        {
+          "message": "那我们高分票的这个指标呢",
+          "expected_capabilities": ["prediction_review"],
+          "required_tools": ["review_high_score_picks"],
+          "assistant_context": "高分 Top10 的一进二表现和全市场基线已经对比。"
+        },
+        {
+          "message": "表现好和差的样本分别有什么特点",
+          "expected_capabilities": ["prediction_review"],
+          "required_tools": ["review_high_score_picks"],
+          "assistant_context": "近期高分票中表现较好和较差样本的特征已经归纳。"
+        }
+      ]
+    },
+    {
+      "scenario_id": "index_to_sector_followup",
+      "history": [
+        {"role": "user", "content": "过去一周大盘怎么走"},
+        {"role": "assistant", "content": "沪指、深成指和创业板指近五日走势已经说明。", "capabilities": ["market_index_trend"]}
+      ],
+      "turns": [
+        {
+          "message": "那今天行业层面谁最强",
+          "expected_capabilities": ["sector_performance"],
+          "required_tools": ["sector_performance"],
+          "assistant_context": "最新行业涨跌幅排名已经列出。"
+        },
+        {
+          "message": "把指数和行业合起来总结一次",
+          "expected_capabilities": ["market_index_trend", "sector_performance"],
+          "required_tools": ["market_index_trend", "sector_performance"],
+          "assistant_context": "指数区间表现和行业强弱已经合并总结。"
+        }
+      ]
+    },
+    {
+      "scenario_id": "review_policy_followup",
+      "history": [
+        {"role": "user", "content": "复盘最近高分票"},
+        {"role": "assistant", "content": "近期高分 Top10 的后续走势和晋级表现已经复盘。", "capabilities": ["prediction_review"]}
+      ],
+      "turns": [
+        {
+          "message": "根据这些结果评分方法改了吗",
+          "expected_capabilities": ["scoring_policy"],
+          "required_tools": ["scoring_policy_status"],
+          "assistant_context": "当前 Champion、Challenger 和权重治理状态已经说明。"
+        },
+        {
+          "message": "只回头看最近实际表现",
+          "expected_capabilities": ["prediction_review"],
+          "required_tools": ["review_high_score_picks"],
+          "assistant_context": "已重新读取近期持久化预测结果进行复盘。"
+        }
+      ]
+    }
+  ]
+}

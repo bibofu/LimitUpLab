@@ -69,36 +69,60 @@ class QuestionSignals:
         """Parse guardrail signals once instead of across many repair functions."""
 
         capability_set = set(capabilities)
+        use_lexical_fallback = not capability_set
 
-        prediction_quality = looks_like_prediction_quality_question(message)
+        prediction_quality = use_lexical_fallback and looks_like_prediction_quality_question(
+            message
+        )
         rating_backtest = (
-            looks_like_rating_backtest_question(message) and not prediction_quality
+            use_lexical_fallback
+            and looks_like_rating_backtest_question(message)
+            and not prediction_quality
         )
         scoring_policy = (
-            looks_like_scoring_policy_question(message) and not prediction_quality
+            use_lexical_fallback
+            and looks_like_scoring_policy_question(message)
+            and not prediction_quality
         )
-        review = looks_like_review_question(message) and not scoring_policy
+        review = (
+            use_lexical_fallback
+            and looks_like_review_question(message)
+            and not scoring_policy
+        )
         evaluation = (
-            looks_like_evaluation_question(message)
+            use_lexical_fallback
+            and looks_like_evaluation_question(message)
             and not review
             and not scoring_policy
             and not prediction_quality
         )
         finance_news = (
             "finance_news" in capability_set
-            or looks_like_finance_news_question(message)
+            or (
+                use_lexical_fallback
+                and looks_like_finance_news_question(message)
+            )
         )
         daily_board_promotion = (
             "board_promotion" in capability_set
-            or looks_like_daily_board_promotion_question(message)
+            or (
+                use_lexical_fallback
+                and looks_like_daily_board_promotion_question(message)
+            )
         )
         market_environment = (
             "market_environment" in capability_set
-            or looks_like_market_environment_question(message)
+            or (
+                use_lexical_fallback
+                and looks_like_market_environment_question(message)
+            )
         )
         market_index_trend = (
             "market_index_trend" in capability_set
-            or looks_like_market_index_trend_question(message)
+            or (
+                use_lexical_fallback
+                and looks_like_market_index_trend_question(message)
+            )
             or market_environment
         )
         return cls(
@@ -107,36 +131,57 @@ class QuestionSignals:
             market_index_trend=market_index_trend,
             sector_performance=(
                 "sector_performance" in capability_set
-                or looks_like_sector_performance_question(message)
+                or (
+                    use_lexical_fallback
+                    and looks_like_sector_performance_question(message)
+                )
                 or market_environment
             ),
             hot_stock_ranking=(
                 "popularity" in capability_set
-                or looks_like_hot_stock_question(message)
+                or (
+                    use_lexical_fallback
+                    and looks_like_hot_stock_question(message)
+                )
                 or market_environment
             ),
             finance_news=finance_news,
             web_search=(
                 "web_research" in capability_set
-                or looks_like_web_search_question(message)
+                or (
+                    use_lexical_fallback
+                    and looks_like_web_search_question(message)
+                )
             ) and not finance_news,
             daily_board_promotion=daily_board_promotion,
             limit_up_events=(
                 "limit_up_pool" in capability_set
-                or looks_like_limit_up_event_question(message)
+                or (
+                    use_lexical_fallback
+                    and looks_like_limit_up_event_question(message)
+                )
             ),
             first_board_facts=(
                 "first_board_rating" in capability_set
-                or looks_like_first_board_facts_question(message)
+                or (
+                    use_lexical_fallback
+                    and looks_like_first_board_facts_question(message)
+                )
             ),
             rating_explanation=(
                 "first_board_rating" in capability_set
-                or looks_like_rating_explain_question(message)
+                or (
+                    use_lexical_fallback
+                    and looks_like_rating_explain_question(message)
+                )
             ),
             stock_kline=(
                 (
                     "stock_trend" in capability_set
-                    or looks_like_stock_kline_question(message)
+                    or (
+                        use_lexical_fallback
+                        and looks_like_stock_kline_question(message)
+                    )
                 )
                 and not market_index_trend
             ),
@@ -146,7 +191,10 @@ class QuestionSignals:
             rating_backtest=("rating_backtest" in capability_set or rating_backtest),
             critic=(
                 "rating_critic" in capability_set
-                or looks_like_critic_question(message)
+                or (
+                    use_lexical_fallback
+                    and looks_like_critic_question(message)
+                )
             ),
             evaluation=("rating_evaluation" in capability_set or evaluation),
             review=("prediction_review" in capability_set or review),

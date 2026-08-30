@@ -13,10 +13,15 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.agents.eval_runner import (
+    conversation_eval_suite_report,
     eval_failure_report,
     eval_suite_report,
+    load_conversation_eval_scenarios,
     load_eval_cases,
+    planner_eval_suite_report,
+    run_agent_conversation_planner_eval_suite,
     run_agent_eval_suite,
+    run_agent_planner_eval_suite,
 )
 from app.agents.query_contract_eval import (
     load_query_contract_eval_cases,
@@ -36,7 +41,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run Agent chat eval cases.")
     parser.add_argument(
         "--suite",
-        choices=("core", "paraphrase"),
+        choices=("core", "paraphrase", "conversation"),
         default="core",
         help="core runs stable regressions; paraphrase measures live semantic routing.",
     )
@@ -45,6 +50,10 @@ def main() -> None:
         choices=("offline", "live-llm"),
         default="offline",
         help="offline uses deterministic fallback; live-llm calls the configured LLM provider.",
+    )
+    parser.add_argument(
+        "--case-filter",
+        help="Run only case or scenario IDs containing this text.",
     )
     parser.add_argument(
         "--failure-output",
@@ -84,13 +93,14 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    if args.suite == "paraphrase" and args.mode != "live-llm":
-        parser.error("--suite paraphrase requires --mode live-llm")
-    fixture_name = (
-        "agent_paraphrase_eval_cases.json"
-        if args.suite == "paraphrase"
-        else "agent_eval_cases.json"
-    )
+    if args.suite in {"paraphrase", "conversation"} and args.mode != "live-llm":
+        parser.error(f"--suite {args.suite} requires --mode live-llm")
+    fixture_names = {
+        "core": "agent_eval_cases.json",
+        "paraphrase": "agent_paraphrase_eval_cases.json",
+        "conversation": "agent_conversation_eval_scenarios.json",
+    }
+    fixture_name = fixture_names[args.suite]
     fixture_path = BACKEND_ROOT / "tests" / "fixtures" / fixture_name
     contract_fixture_path = (
         BACKEND_ROOT / "tests" / "fixtures" / "query_contract_v2_cases.json"
@@ -121,27 +131,93 @@ def main() -> None:
                 )
             )
             raise SystemExit(2)
-    suite = run_agent_eval_suite(
-        cases=load_eval_cases(fixture_path),
-        events=SAMPLE_EVENTS,
-        llm_provider=provider,
-        check_intent=args.mode == "offline",
-        trials_per_case=trials,
-        minimum_pass_rate=args.min_pass_rate if args.mode == "live-llm" else 1.0,
-        require_llm_planner=args.mode == "live-llm",
-        force_template_answer=not args.live_answer,
-    )
     contract_suite = run_query_contract_eval_suite(
         load_query_contract_eval_cases(contract_fixture_path)
     )
     contract_report = query_contract_eval_report(contract_suite)
-    report = {
-        "mode": args.mode,
-        "suite": args.suite,
-        "answer_mode": "live-llm" if args.live_answer else "deterministic-template",
-        **eval_suite_report(suite),
-        "query_contract": contract_report,
-    }
+    if args.suite == "paraphrase":
+        assert provider is not None
+        planner_cases = load_eval_cases(fixture_path)
+        if args.case_filter:
+            planner_cases = [
+                item for item in planner_cases if args.case_filter in item.case_id
+            ]
+        if not planner_cases:
+            parser.error("--case-filter matched no paraphrase cases")
+        planner_suite = run_agent_planner_eval_suite(
+            cases=planner_cases,
+            events=SAMPLE_EVENTS,
+            llm_provider=provider,
+            trials_per_case=trials,
+            minimum_pass_rate=args.min_pass_rate,
+        )
+        report = {
+            "mode": args.mode,
+            "suite": args.suite,
+            "answer_mode": "planner-only",
+            **planner_eval_suite_report(planner_suite),
+            "query_contract": contract_report,
+        }
+        suite_ok = planner_suite.ok
+        unstable_cases = planner_suite.unstable_cases
+    elif args.suite == "conversation":
+        assert provider is not None
+        conversation_scenarios = load_conversation_eval_scenarios(fixture_path)
+        if args.case_filter:
+            conversation_scenarios = [
+                item
+                for item in conversation_scenarios
+                if args.case_filter in item.scenario_id
+            ]
+        if not conversation_scenarios:
+            parser.error("--case-filter matched no conversation scenarios")
+        conversation_suite = run_agent_conversation_planner_eval_suite(
+            scenarios=conversation_scenarios,
+            events=SAMPLE_EVENTS,
+            llm_provider=provider,
+            trials_per_scenario=trials,
+            minimum_pass_rate=args.min_pass_rate,
+        )
+        report = {
+            "mode": args.mode,
+            "suite": args.suite,
+            "answer_mode": "planner-only-with-history",
+            **conversation_eval_suite_report(conversation_suite),
+            "query_contract": contract_report,
+        }
+        suite_ok = conversation_suite.ok
+        unstable_cases = conversation_suite.unstable_scenarios
+    else:
+        core_cases = load_eval_cases(fixture_path)
+        if args.case_filter:
+            core_cases = [
+                item for item in core_cases if args.case_filter in item.case_id
+            ]
+        if not core_cases:
+            parser.error("--case-filter matched no core cases")
+        suite = run_agent_eval_suite(
+            cases=core_cases,
+            events=SAMPLE_EVENTS,
+            llm_provider=provider,
+            check_intent=args.mode == "offline",
+            trials_per_case=trials,
+            minimum_pass_rate=(
+                args.min_pass_rate if args.mode == "live-llm" else 1.0
+            ),
+            require_llm_planner=args.mode == "live-llm",
+            force_template_answer=not args.live_answer,
+        )
+        report = {
+            "mode": args.mode,
+            "suite": args.suite,
+            "answer_mode": (
+                "live-llm" if args.live_answer else "deterministic-template"
+            ),
+            **eval_suite_report(suite),
+            "query_contract": contract_report,
+        }
+        suite_ok = suite.ok
+        unstable_cases = suite.unstable_cases
     if args.summary_only:
         printed_report = {key: value for key, value in report.items() if key != "results"}
         printed_report["query_contract"] = {
@@ -156,27 +232,28 @@ def main() -> None:
     if args.mode == "live-llm":
         failure_path = Path(args.failure_output)
         failure_path.parent.mkdir(parents=True, exist_ok=True)
+        failure_payload = (
+            report
+            if args.suite in {"paraphrase", "conversation"}
+            else {
+                "mode": args.mode,
+                "answer_mode": (
+                    "live-llm" if args.live_answer else "deterministic-template"
+                ),
+                **eval_failure_report(suite),
+                "query_contract": contract_report,
+            }
+        )
         failure_path.write_text(
-            json.dumps(
-                {
-                    "mode": args.mode,
-                    "answer_mode": (
-                        "live-llm" if args.live_answer else "deterministic-template"
-                    ),
-                    **eval_failure_report(suite),
-                    "query_contract": contract_report,
-                },
-                ensure_ascii=False,
-                indent=2,
-            ),
+            json.dumps(failure_payload, ensure_ascii=False, indent=2),
             encoding="utf-8",
         )
 
-    if args.mode == "offline" and (not suite.ok or not contract_suite.ok):
+    if args.mode == "offline" and (not suite_ok or not contract_suite.ok):
         raise SystemExit(1)
-    if args.mode == "live-llm" and args.fail_on_failures and not suite.ok:
+    if args.mode == "live-llm" and args.fail_on_failures and not suite_ok:
         raise SystemExit(1)
-    if args.mode == "live-llm" and args.fail_on_unstable and suite.unstable_cases:
+    if args.mode == "live-llm" and args.fail_on_unstable and unstable_cases:
         raise SystemExit(1)
 
 

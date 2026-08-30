@@ -638,6 +638,15 @@ Critic 输出能解释为什么降低或不降低置信度。
   - Chat Agent 评测扩展到 18 条，其中 8 条直接断言最终工具参数、命中数量和股票集合。
   - `run_agent_eval.py` 和启动健康检查同时执行聊天评测与 Query Contract 评测。
 
+- `[x]` 完成 Agent Query Contract v3 语义能力和多轮稳定性评测。
+  - 新增 17 类标准业务能力；Planner 可为组合问题输出多个 capability，能力契约自动补齐最低证据工具。
+  - 显式 Planner/Skill 能力接管 Tool Policy 语义路由；旧 `looks_like_*` 仅在能力缺失或旧 Provider 兼容场景下兜底。
+  - 新增 `standalone`、`entity_followup`、`source_refinement` 上下文模式，以及选择性 `context_capabilities` 继承，避免“这些票”“其中”“再结合”等追问丢失上一轮数据源。
+  - `agent_paraphrase_eval_cases.json` 扩展为 121 条静态改写和组合问题，按 11 个能力族组织并保留独立 case id。
+  - 新增 10 个双追问会话场景，共 20 个 context-dependent turn；评测使用与生产一致的消息 metadata 和最近能力焦点。
+  - `run_agent_eval.py` 新增 `paraphrase`、`conversation` suite 和 `--case-filter` 定向复测；两类 suite 使用生产 Planner-only 路径，默认三轮执行且不重复调用行情工具。
+  - 2026-08-30 DeepSeek 全量实测：单轮 121/121 case 通过，363 次调用能力与工具命中率 99.72%，119/121 三轮完全稳定；多轮 10/10 场景和 60/60 turn 通过，9/10 场景三轮完全稳定。
+
 - `[x]` 完善实时热股榜 Top-N 查询契约。
   - 用户原话中的 `Top N` 优先于 LLM Planner 参数，支持完整返回前 100 名。
   - Top30 默认使用同花顺实时榜，Top31-100 自动切换为东方财富实时 Top100；用户明确指定数据源时不混用榜单口径。

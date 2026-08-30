@@ -36,7 +36,7 @@ class AgentCapability:
 CAPABILITIES: tuple[AgentCapability, ...] = (
     AgentCapability(
         "market_environment",
-        "综合说明最新市场环境，覆盖指数、涨跌停结构、行业强弱和热门个股。",
+        "综合说明最新市场环境；仅用于同时要求指数、涨跌停、行业、热股等多个维度的全景综述。",
         (
             CapabilityToolRequirement("market_summary", {"include_limit_down": True}),
             CapabilityToolRequirement("market_index_trend", {"days": 5}),
@@ -54,7 +54,7 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
     ),
     AgentCapability(
         "market_index_trend",
-        "查询大盘或主要指数在指定交易日窗口内的走势。",
+        "只查询大盘曲线或主要指数在指定交易日窗口内的走势，不扩展到全景市场综述。",
         (CapabilityToolRequirement("market_index_trend", {"days": 5}),),
     ),
     AgentCapability(
@@ -83,17 +83,17 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
     ),
     AgentCapability(
         "limit_up_pool",
-        "按日期、板数、市场、状态、题材、排序或数量查询涨停事件池。",
+        "查询某个交易日的涨停、首板、连板或炸板名单；不用于跨日晋级数量和比例。",
         (CapabilityToolRequirement("limit_up_events"),),
     ),
     AgentCapability(
         "first_board_rating",
-        "查询首板候选评级、排名、评分解释、位置和风险。",
+        "查询首板一进二观察候选、Top10 评级、排名、评分解释、位置和风险。",
         (CapabilityToolRequirement("first_board_ratings"),),
     ),
     AgentCapability(
         "board_promotion",
-        "查询每日连板晋级率或首板到二板的历史实现情况。",
+        "查询前一交易日封板股票在次日继续连板的数量、比例，或首板到二板的跨日实现情况。",
         (CapabilityToolRequirement("daily_board_promotion", {"days": 5}),),
     ),
     AgentCapability(
@@ -103,17 +103,17 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
     ),
     AgentCapability(
         "dragon_tiger",
-        "查询最新或指定交易日龙虎榜、机构和游资资金事实。",
+        "查询最新或指定交易日龙虎榜上榜股票、机构席位和游资资金事实。",
         (CapabilityToolRequirement("dragon_tiger_list", {"limit": 30}),),
     ),
     AgentCapability(
         "prediction_review",
-        "复盘近期高分 Top10、后续走势及相对一进二成功率。",
+        "复盘近期高分 Top10、后续走势、好坏样本特征及相对一进二成功率。",
         (CapabilityToolRequirement("review_high_score_picks"),),
     ),
     AgentCapability(
         "prediction_quality",
-        "审计预测样本完整性、基线表现和评分质量。",
+        "审计整体预测质量、样本完整性、统计基线和评分信号有效性；不列近期 Top10 个股结果。",
         (CapabilityToolRequirement("prediction_quality_audit"),),
     ),
     AgentCapability(

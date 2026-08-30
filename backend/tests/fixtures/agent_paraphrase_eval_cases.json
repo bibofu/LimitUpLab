@@ -1,64 +1,199 @@
 {
+  "families": [
+    {
+      "family_id": "market_environment",
+      "expected_capabilities": ["market_environment"],
+      "required_tools": ["market_summary", "market_index_trend", "sector_performance", "hot_stock_ranking"],
+      "messages": [
+        "今天盘面到底行不行，指数、板块和热股一起讲讲",
+        "大盘今天走得咋样，市场里谁强谁弱",
+        "给我一份最新的全市场收盘综述",
+        "今天 A 股整体表现如何，别只说涨停数量",
+        "把指数、涨跌停、行业和热门个股串起来分析",
+        "现在市场环境是什么状态，用客观数据说明",
+        "收盘后帮我快速过一遍今天的全局行情",
+        "今天盘面的主要特征有哪些",
+        "先说强弱行业和热股，再概括大盘表现",
+        "我想知道今天整个 A 股市场发生了什么"
+      ]
+    },
+    {
+      "family_id": "popularity",
+      "expected_capabilities": ["popularity"],
+      "required_tools": ["hot_stock_ranking"],
+      "messages": [
+        "眼下市场关注度都集中在哪些个股",
+        "现在大家都在看什么票",
+        "列一下最新人气靠前的股票",
+        "当前最受关注的二十只个股是谁",
+        "今天讨论度最高的股票有哪些",
+        "资金圈现在热议哪些公司",
+        "给我看看最新热度榜",
+        "哪些个股目前比较火",
+        "市场注意力排名前十的票",
+        "同花顺和东方财富上大家都关注谁"
+      ]
+    },
+    {
+      "family_id": "finance_news",
+      "expected_capabilities": ["finance_news"],
+      "required_tools": ["finance_news"],
+      "messages": [
+        "这两天财经圈发生了哪些值得关注的事",
+        "给我补一下最新市场快讯",
+        "最近有什么重要的财经消息",
+        "今天金融市场都出了哪些新闻",
+        "过去 48 小时有哪些财经大事",
+        "帮我做一份近期财经资讯摘要",
+        "刚发生的市场新闻能整理一下吗",
+        "我错过了今天的消息面，帮我补课",
+        "最近的宏观和资本市场资讯有哪些",
+        "最新消息面有什么值得知道的"
+      ]
+    },
+    {
+      "family_id": "limit_up_pool",
+      "expected_capabilities": ["limit_up_pool"],
+      "required_tools": ["limit_up_events"],
+      "messages": [
+        "把最近封死的票池给我扫一遍",
+        "今天收盘封住的股票都有哪些",
+        "最新一个交易日有哪些票封板",
+        "列一下今天一板的全部名单",
+        "今天高度达到两板的公司有哪些",
+        "创业板今天封住了哪些股票",
+        "没能回封的票有哪些",
+        "今天最高的连板是谁",
+        "按封板时间看看今天的强势票池",
+        "最近收盘的涨停梯队给我一份"
+      ]
+    },
+    {
+      "family_id": "first_board_rating",
+      "expected_capabilities": ["first_board_rating"],
+      "required_tools": ["first_board_ratings"],
+      "messages": [
+        "今天模型最看好的十个首板样本是谁",
+        "把一板候选按研究分数排个序",
+        "最新首板评级靠前的是哪些",
+        "今天的一进二观察名单给我看看",
+        "哪些首次封板样本的综合质量更好",
+        "首板候选 Top10 以及高分原因",
+        "模型对今天一板票怎么打分",
+        "今天评级最高的首板是哪几只",
+        "从首板池里筛十个值得复盘的样本",
+        "给我解释一下最新首板排名"
+      ]
+    },
+    {
+      "family_id": "board_promotion",
+      "expected_capabilities": ["board_promotion"],
+      "required_tools": ["daily_board_promotion"],
+      "messages": [
+        "最近首板第二天还能封住的比例如何",
+        "这几天一板晋级二板的成功情况",
+        "近五日连板晋级数据给我看看",
+        "昨天封板的票今天有多少继续连板",
+        "近期接力晋级率是多少",
+        "首板次日晋级表现最近怎么样",
+        "统计一下最近每天的连板成功比例",
+        "一进二这几天兑现了多少",
+        "前一日涨停股次日继续封板的比率",
+        "最近五个交易日板块梯队晋级情况"
+      ]
+    },
+    {
+      "family_id": "market_index_trend",
+      "expected_capabilities": ["market_index_trend"],
+      "required_tools": ["market_index_trend"],
+      "messages": [
+        "过去一周几个主要指数走得怎么样",
+        "最近五天沪深创表现如何",
+        "上证这周是涨还是跌",
+        "给我看看主要指数近期走势",
+        "近十个交易日大盘累计涨跌多少",
+        "创业板指最近走得强不强",
+        "这几天指数层面是什么方向",
+        "比较一下沪指、深成指和创业板近期表现",
+        "最近一周大盘曲线怎么走",
+        "主要宽基指数过去五日回报"
+      ]
+    },
+    {
+      "family_id": "sector_performance",
+      "expected_capabilities": ["sector_performance"],
+      "required_tools": ["sector_performance"],
+      "messages": [
+        "今天哪些行业在领涨，哪些拖后腿",
+        "最新行业强弱榜是什么样",
+        "半导体板块今天表现如何",
+        "收盘后哪些方向最强",
+        "行业涨幅前五和后五分别是谁",
+        "今天市场主线集中在哪些板块",
+        "医药行业今天整体涨跌怎么样",
+        "板块之间的强弱分化如何",
+        "列一下今天表现最好的行业",
+        "哪些行业今天跌得比较多"
+      ]
+    },
+    {
+      "family_id": "prediction_review",
+      "expected_capabilities": ["prediction_review"],
+      "required_tools": ["review_high_score_picks"],
+      "messages": [
+        "前几天挑出来的高分样本后来兑现得如何",
+        "复盘一下最近 Top10 的后续走势",
+        "模型前几日选的票表现怎么样",
+        "最近高分股一进二的命中情况",
+        "回头看看过去推荐名单哪些好哪些差",
+        "近期高分 Top10 有哪些值得总结的特征",
+        "最近五天评分靠前的样本走出来了吗",
+        "高分票相对全市场晋级率有没有优势",
+        "把前几天观察名单的结果复盘一下",
+        "模型最近的选股审美表现如何"
+      ]
+    },
+    {
+      "family_id": "dragon_tiger",
+      "expected_capabilities": ["dragon_tiger"],
+      "required_tools": ["dragon_tiger_list"],
+      "messages": [
+        "最新交易日龙虎榜有什么情况",
+        "今天哪些票登上了龙虎榜",
+        "机构席位最近买了哪些股票",
+        "游资席位今天主要参与了谁",
+        "给我看看最新榜单资金动向",
+        "最近一次龙虎榜净买入靠前的是谁",
+        "哪些股票出现机构和游资博弈",
+        "今天上榜个股名单和资金情况",
+        "最新公开席位数据总结一下",
+        "主板和创业板最近有哪些龙虎榜股票"
+      ]
+    },
+    {
+      "family_id": "stock_trend",
+      "expected_capabilities": ["stock_trend"],
+      "required_tools": ["stock_kline"],
+      "messages": [
+        "301489 最近走势怎么样",
+        "看看 301489 近二十日 K 线",
+        "301489 这几天涨跌幅多少",
+        "分析一下 301489 的均线和量价",
+        "301489 最近有没有明显回撤",
+        "给我 301489 近一个月价格表现",
+        "301489 当前处于上涨还是下跌趋势",
+        "301489 最近五日和十日收益分别多少",
+        "把 301489 的近期日线数据调出来",
+        "301489 最近的收盘走势帮我概括一下"
+      ]
+    }
+  ],
   "cases": [
     {
-      "case_id": "market_environment_colloquial",
-      "message": "今天盘面到底行不行，指数、板块和热股一起讲讲",
-      "expected_capabilities": ["market_environment"],
-      "required_tools": ["market_summary", "market_index_trend", "sector_performance", "hot_stock_ranking"]
-    },
-    {
-      "case_id": "market_environment_reordered",
-      "message": "先说强弱行业和大家都在看的票，再概括一下大盘今天的表现",
-      "expected_capabilities": ["market_environment"],
-      "required_tools": ["market_summary", "market_index_trend", "sector_performance", "hot_stock_ranking"]
-    },
-    {
-      "case_id": "popularity_colloquial",
-      "message": "眼下市场关注度都集中在哪些个股",
-      "expected_capabilities": ["popularity"],
-      "required_tools": ["hot_stock_ranking"]
-    },
-    {
-      "case_id": "finance_news_colloquial",
-      "message": "这两天财经圈发生了哪些值得关注的事",
-      "expected_capabilities": ["finance_news"],
-      "required_tools": ["finance_news"]
-    },
-    {
-      "case_id": "limit_up_pool_colloquial",
-      "message": "把最近封死的票池给我扫一遍",
-      "expected_capabilities": ["limit_up_pool"],
-      "required_tools": ["limit_up_events"]
-    },
-    {
-      "case_id": "first_board_rating_colloquial",
-      "message": "今天模型最看好的十个首板样本是谁",
-      "expected_capabilities": ["first_board_rating"],
-      "required_tools": ["first_board_ratings"]
-    },
-    {
-      "case_id": "board_promotion_colloquial",
-      "message": "最近首板第二天还能封住的比例如何",
-      "expected_capabilities": ["board_promotion"],
-      "required_tools": ["daily_board_promotion"]
-    },
-    {
-      "case_id": "market_index_trend_colloquial",
-      "message": "过去一周几个主要指数走得怎么样",
-      "expected_capabilities": ["market_index_trend"],
-      "required_tools": ["market_index_trend"]
-    },
-    {
-      "case_id": "sector_performance_colloquial",
-      "message": "今天哪些行业在领涨，哪些拖后腿",
-      "expected_capabilities": ["sector_performance"],
-      "required_tools": ["sector_performance"]
-    },
-    {
-      "case_id": "prediction_review_colloquial",
-      "message": "前几天挑出来的高分样本后来兑现得如何",
-      "expected_capabilities": ["prediction_review"],
-      "required_tools": ["review_high_score_picks"]
+      "case_id": "prediction_quality_audit",
+      "message": "近期预测质量有哪些值得总结的特征",
+      "expected_capabilities": ["prediction_quality"],
+      "required_tools": ["prediction_quality_audit"]
     },
     {
       "case_id": "compound_popularity_limit_up",
@@ -71,6 +206,54 @@
       "message": "评分靠前的首板都来自什么行业，顺便说说今天行业强弱",
       "expected_capabilities": ["first_board_rating", "sector_performance"],
       "required_tools": ["first_board_ratings", "sector_performance"]
+    },
+    {
+      "case_id": "compound_market_news",
+      "message": "结合今天盘面和最新财经消息做个收盘综述",
+      "expected_capabilities": ["market_environment", "finance_news"],
+      "required_tools": ["market_summary", "market_index_trend", "sector_performance", "hot_stock_ranking", "finance_news"]
+    },
+    {
+      "case_id": "compound_index_sector",
+      "message": "最近指数怎么走，今天又是哪些行业领涨",
+      "expected_capabilities": ["market_index_trend", "sector_performance"],
+      "required_tools": ["market_index_trend", "sector_performance"]
+    },
+    {
+      "case_id": "compound_rating_promotion",
+      "message": "先给最新首板 Top10，再比较近期一进二成功率",
+      "expected_capabilities": ["first_board_rating", "board_promotion"],
+      "required_tools": ["first_board_ratings", "daily_board_promotion"]
+    },
+    {
+      "case_id": "compound_dragon_popularity",
+      "message": "最新龙虎榜股票里哪些当前人气也靠前",
+      "expected_capabilities": ["dragon_tiger", "popularity"],
+      "required_tools": ["dragon_tiger_list", "hot_stock_ranking"]
+    },
+    {
+      "case_id": "compound_review_policy",
+      "message": "复盘最近高分票表现，并说明当前评分策略有没有调整",
+      "expected_capabilities": ["prediction_review", "scoring_policy"],
+      "required_tools": ["review_high_score_picks", "scoring_policy_status"]
+    },
+    {
+      "case_id": "compound_stock_rating",
+      "message": "301489 最近走势如何，它的首板评分依据又是什么",
+      "expected_capabilities": ["stock_trend", "first_board_rating"],
+      "required_tools": ["stock_kline", "first_board_ratings"]
+    },
+    {
+      "case_id": "compound_pool_sector",
+      "message": "今天封板名单按行业归纳，再对照全市场行业强弱",
+      "expected_capabilities": ["limit_up_pool", "sector_performance"],
+      "required_tools": ["limit_up_events", "sector_performance"]
+    },
+    {
+      "case_id": "compound_environment_promotion",
+      "message": "今天整体市场表现如何，最近接力晋级数据又怎么样",
+      "expected_capabilities": ["market_environment", "board_promotion"],
+      "required_tools": ["market_summary", "market_index_trend", "sector_performance", "hot_stock_ranking", "daily_board_promotion"]
     }
   ]
 }

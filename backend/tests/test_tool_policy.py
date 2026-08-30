@@ -73,6 +73,16 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertFalse(promotion_signals.daily_board_promotion)
         self.assertFalse(promotion_signals.rating_explanation)
 
+    def test_explicit_capability_disables_conflicting_keyword_routing(self) -> None:
+        signals = QuestionSignals.from_message(
+            "最近首板评分准吗，顺便做个回测",
+            ("first_board_rating",),
+        )
+
+        self.assertTrue(signals.first_board_facts)
+        self.assertTrue(signals.rating_explanation)
+        self.assertFalse(signals.rating_backtest)
+
     def test_scoring_policy_question_has_one_policy_scope(self) -> None:
         signals = QuestionSignals.from_message("评分权重有没有自动优化")
 
