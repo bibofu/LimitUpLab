@@ -606,13 +606,11 @@ function AgentChatDock({
         </div>
 
         <div className="agent-chat-prompts">
-            {[
-              symbol ? "详细解释一下" : "总结一下今天首板",
-              symbol ? "为什么评分高" : "哪些候选评分靠前",
-              symbol ? "主要风险是什么" : "总结今天首板候选",
-              symbol ? "当前位置怎么看" : "今天市场环境如何",
-              "A股几点开盘",
-            ].map((prompt) => (
+          {[
+            "总结一下今天首板",
+            "今天市场环境如何",
+            "有哪些一进二候选推荐",
+          ].map((prompt) => (
             <button
               disabled={sending || sessionLoading || !sessionId}
               key={prompt}
