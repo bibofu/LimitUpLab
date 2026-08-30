@@ -141,7 +141,7 @@ def list_failed_events(events: list[LimitUpEvent]) -> list[LimitUpEvent]:
     )
 
 
-def list_recent_limit_up(events: list[LimitUpEvent], days: int = 3) -> list[LimitUpEvent]:
+def list_recent_limit_up(events: list[LimitUpEvent], days: int = 5) -> list[LimitUpEvent]:
     """Return events from the most recent N trading dates in reverse order."""
 
     trade_dates = sorted({event.trade_date for event in events}, reverse=True)[:days]

@@ -48,7 +48,7 @@ def list_failed_limit_up_events() -> list[LimitUpEvent]:
 
 
 @router.get("/recent", response_model=list[LimitUpEvent])
-def list_recent_limit_up_events(days: int = 3) -> list[LimitUpEvent]:
+def list_recent_limit_up_events(days: int = 5) -> list[LimitUpEvent]:
     """Return events from the most recent N persisted trading days."""
 
     return list_recent_limit_up(get_limit_up_repository().list_events(), days=days)

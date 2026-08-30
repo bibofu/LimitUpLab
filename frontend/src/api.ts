@@ -63,7 +63,7 @@ export function fetchFailedLimitUpEvents() {
   return request<LimitUpEvent[]>("/api/limit-up/failed");
 }
 
-export function fetchRecentLimitUpEvents(days = 3) {
+export function fetchRecentLimitUpEvents(days = 5) {
   return request<LimitUpEvent[]>(`/api/limit-up/recent?days=${days}`);
 }
 
