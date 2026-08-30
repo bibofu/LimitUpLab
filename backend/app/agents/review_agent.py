@@ -124,7 +124,7 @@ class ReviewAgentToolbox:
         """Compare original prediction features between successes and failures."""
 
         picks = self._high_score_evaluations()
-        comparison = _build_feature_comparison(picks, self._prediction_lookup())
+        comparison = self.feature_comparison()
         return ReviewToolResult(
             name="compare_success_failure_features",
             input={
@@ -174,11 +174,27 @@ class ReviewAgentToolbox:
         return self._prediction_lookup().get(prediction_id)
 
     def feature_comparison(self) -> dict[str, Any]:
-        """Return a deterministic success/failure feature comparison."""
+        """Compare features using first-board-to-latest-close performance groups."""
 
+        evaluations = self._high_score_evaluations()
+        performance_groups: dict[str, str] = {}
+        tracked_returns: dict[str, float] = {}
+        for item in evaluations:
+            post_bars = _post_bars_for_pick(self, item)
+            if len(post_bars) < 2:
+                continue
+            latest_return = post_bars[-1].return_from_base_pct
+            if latest_return is None or latest_return == 0:
+                continue
+            performance_groups[item.prediction_id] = (
+                "success" if latest_return > 0 else "miss"
+            )
+            tracked_returns[item.prediction_id] = latest_return
         return _build_feature_comparison(
-            self._high_score_evaluations(),
+            evaluations,
             self._prediction_lookup(),
+            group_labels=performance_groups,
+            tracked_returns=tracked_returns,
         )
 
     def _prediction_lookup(self) -> dict[str, AgentPrediction]:
@@ -768,14 +784,30 @@ def _outcome_summary(item: AgentEvaluationItem) -> dict[str, Any]:
 def _build_feature_comparison(
     evaluations: list[AgentEvaluationItem],
     predictions: dict[str, AgentPrediction],
+    *,
+    group_labels: dict[str, str] | None = None,
+    tracked_returns: dict[str, float] | None = None,
 ) -> dict[str, Any]:
-    """Build descriptive success/failure statistics from immutable inputs."""
+    """Build descriptive statistics for the selected performance grouping."""
 
+    resolved_labels = (
+        group_labels
+        if group_labels is not None
+        else {item.prediction_id: item.evaluation_label for item in evaluations}
+    )
+    resolved_returns = tracked_returns if tracked_returns is not None else {}
     profiles = [
         profile
         for item in evaluations
-        if item.evaluation_label in {"success", "miss"}
-        and (profile := _review_feature_profile(item, predictions.get(item.prediction_id)))
+        if resolved_labels.get(item.prediction_id) in {"success", "miss"}
+        and (
+            profile := _review_feature_profile(
+                item,
+                predictions.get(item.prediction_id),
+                group_label=resolved_labels[item.prediction_id],
+                tracked_return=resolved_returns.get(item.prediction_id),
+            )
+        )
     ]
     success = [item for item in profiles if item["label"] == "success"]
     failed = [item for item in profiles if item["label"] == "miss"]
@@ -847,6 +879,9 @@ def _build_feature_comparison(
 def _review_feature_profile(
     evaluation: AgentEvaluationItem,
     prediction: AgentPrediction | None,
+    *,
+    group_label: str,
+    tracked_return: float | None,
 ) -> dict[str, Any] | None:
     if prediction is None:
         return None
@@ -861,7 +896,7 @@ def _review_feature_profile(
     if not isinstance(primary_position, dict):
         primary_position = {}
     return {
-        "label": evaluation.evaluation_label,
+        "label": group_label,
         "score": prediction.score,
         "confidence": prediction.confidence,
         "first_limit_minutes": _time_to_minutes(facts.get("first_limit_time")),
@@ -879,6 +914,7 @@ def _review_feature_profile(
         "popularity_rank": _number(enrichment.get("popularity_rank")),
         "promotion": 1.0 if evaluation.promoted_to_second_board else 0.0,
         "next_open_to_close_pct": evaluation.next_open_to_close_pct,
+        "tracked_return_pct": tracked_return,
         "max_drawdown_from_next_open_3d": (
             evaluation.max_drawdown_from_next_open_3d
         ),
@@ -1002,11 +1038,17 @@ def _structure_pattern(label: str, averages: dict[str, float]) -> str | None:
 def _outcome_pattern(label: str, averages: dict[str, float]) -> str | None:
     promotion = averages.get("promotion")
     next_return = averages.get("next_open_to_close_pct")
+    tracked_return = averages.get("tracked_return_pct")
     drawdown = averages.get("max_drawdown_from_next_open_3d")
     if promotion is None or next_return is None or drawdown is None:
         return None
+    tracked_text = (
+        f"首板至最新收盘平均 {tracked_return:+.2f}%、"
+        if tracked_return is not None
+        else ""
+    )
     return (
-        f"{label}晋级率 {promotion:.1%}、次日开盘至收盘平均 "
+        f"{label}{tracked_text}晋级率 {promotion:.1%}、次日开盘至收盘平均 "
         f"{next_return:+.2f}%、三日最大回撤平均 {drawdown:+.2f}%"
     )
 

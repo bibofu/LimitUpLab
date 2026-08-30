@@ -74,7 +74,9 @@ class ReviewAgentTest(unittest.TestCase):
         for index in range(6):
             is_success = index < 3
             prediction_id = f"prediction-{index}"
-            label = "success" if is_success else "miss"
+            label = (
+                "partial" if index == 0 else ("success" if is_success else "miss")
+            )
             evaluations.append(
                 AgentEvaluationItem(
                     prediction_id=prediction_id,
@@ -133,7 +135,22 @@ class ReviewAgentTest(unittest.TestCase):
                 created_at=datetime.now(timezone.utc),
             )
 
-        comparison = _build_feature_comparison(evaluations, predictions)
+        group_labels = {
+            item.prediction_id: "success" if index < 3 else "miss"
+            for index, item in enumerate(evaluations)
+        }
+        tracked_returns = {
+            item.prediction_id: float(
+                (index + 1) * 10 if index < 3 else -(index - 2) * 5
+            )
+            for index, item in enumerate(evaluations)
+        }
+        comparison = _build_feature_comparison(
+            evaluations,
+            predictions,
+            group_labels=group_labels,
+            tracked_returns=tracked_returns,
+        )
 
         self.assertEqual(comparison["success_count"], 3)
         self.assertEqual(comparison["failed_count"], 3)
@@ -148,6 +165,7 @@ class ReviewAgentTest(unittest.TestCase):
         self.assertIn("行业涨停平均 6.0 只", successful_text)
         self.assertIn("5 日量比 1.80", successful_text)
         self.assertIn("晋级率 100.0%", successful_text)
+        self.assertIn("首板至最新收盘平均 +20.00%", successful_text)
         self.assertIn("10:00", failed_text)
         self.assertIn("主要题材 创新药 3只", failed_text)
         self.assertIn("位置类型 高位震荡首板 3只", failed_text)

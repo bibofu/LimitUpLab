@@ -1313,7 +1313,9 @@ function HighScoreReviewPanel({
   );
   const trackedReadyCount = trackedSampleSize - trackedPendingCount;
   const trackedSuccessCount = trackDates.reduce(
-    (total, tradeDate) => total + (reviewDates[tradeDate] ?? []).filter((item) => item.evaluation_label === "success").length,
+    (total, tradeDate) => total + (reviewDates[tradeDate] ?? []).filter(
+      (item) => (latestTrackedReturn(item) ?? 0) > 0,
+    ).length,
     0,
   );
   const trackedSuccessRate = trackedReadyCount > 0 ? trackedSuccessCount / trackedReadyCount : null;
@@ -1324,11 +1326,11 @@ function HighScoreReviewPanel({
     return items;
   }, {});
   const successfulPicks = sortReviewPicksForSummary(
-    reviewedPicks.filter((item) => item.evaluation_label === "success"),
+    reviewedPicks.filter((item) => (latestTrackedReturn(item) ?? 0) > 0),
     "desc",
   );
   const failedPicks = sortReviewPicksForSummary(
-    reviewedPicks.filter((item) => item.evaluation_label === "miss"),
+    reviewedPicks.filter((item) => (latestTrackedReturn(item) ?? 0) < 0),
     "asc",
   );
   const selectedReviewSelection = activeReviewSelection && (
@@ -1742,7 +1744,9 @@ function ReviewPickTable({
           </strong>
           <span>{pick.score.toFixed(1)} / {pick.rating}</span>
           <span className="review-pick-verdict">
-            {reviewLabelCopy(pick.evaluation_label)}
+            {showLatestReturn
+              ? trackedReturnLabel(latestTrackedReturn(pick))
+              : reviewLabelCopy(pick.evaluation_label)}
             <small className={pick.promoted_to_second_board ? "promoted" : ""}>
               {!pick.outcome_ready
                 ? "1进2待确认"
@@ -1822,6 +1826,13 @@ function reviewLabelCopy(label: string) {
     pending: "待观察",
   };
   return labels[label] ?? label;
+}
+
+function trackedReturnLabel(value: number | null) {
+  if (value === null) return "待观察";
+  if (value > 0) return "累计上涨";
+  if (value < 0) return "累计下跌";
+  return "累计持平";
 }
 
 function FirstBoardRatingPanel({ ratings }: { ratings: FirstBoardRatingsResponse }) {
