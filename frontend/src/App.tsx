@@ -48,6 +48,7 @@ import {
   fetchChatSession,
   fetchChatSessions,
   fetchDailyBoardPromotion,
+  fetchDailyReviewSnapshots,
   fetchDragonTigerReview,
   fetchReviewAgentReport,
   fetchFirstBoardCritic,
@@ -74,6 +75,7 @@ import type {
   ChatSessionMessage,
   ChatSessionSummary,
   DailyBoardPromotionStat,
+  DailyReviewSnapshotSummary,
   DragonTigerReviewResponse,
   FirstBoardCriticResponse,
   FirstBoardRating,
@@ -933,13 +935,13 @@ function ReviewDashboard({ data }: { data: DashboardData }) {
 
   return (
     <>
-      <DailyBoardPromotionPanel stats={data.dailyBoardPromotion} />
-      <DragonTigerReviewPanel tradeDate={data.summary.trade_date} />
       <HighScoreReviewPanel
         backtest={data.ratingBacktest}
         evaluation={data.ratingEvaluation}
         latestTradeDate={data.summary.trade_date}
       />
+      <DailyBoardPromotionPanel stats={data.dailyBoardPromotion} />
+      <DragonTigerReviewPanel tradeDate={data.summary.trade_date} />
     </>
   );
 }
@@ -1255,16 +1257,39 @@ function HighScoreReviewPanel({
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeReviewSelection, setActiveReviewSelection] = useState<string | null>(null);
+  const [snapshotDates, setSnapshotDates] = useState<DailyReviewSnapshotSummary[]>([]);
+  const [selectedAsOfDate, setSelectedAsOfDate] = useState(latestTradeDate);
 
   useEffect(() => {
-    void loadReview();
+    let active = true;
+    void fetchDailyReviewSnapshots()
+      .then((response) => {
+        if (!active) return;
+        setSnapshotDates(response.snapshots);
+        setSelectedAsOfDate((current) => (
+          response.snapshots.some((item) => item.as_of_date === current)
+            ? current
+            : response.snapshots[0]?.as_of_date ?? latestTradeDate
+        ));
+      })
+      .catch(() => {
+        if (active) setSnapshotDates([]);
+      });
+    return () => {
+      active = false;
+    };
   }, [latestTradeDate]);
 
-  async function loadReview() {
+  useEffect(() => {
+    void loadReview(selectedAsOfDate);
+  }, [selectedAsOfDate]);
+
+  async function loadReview(endDate: string) {
     setRunning(true);
     setError(null);
     try {
       const response = await fetchReviewAgentReport({
+        end_date: endDate,
         top_per_day: 10,
         follow_days: 5,
         use_llm: false,
@@ -1367,6 +1392,25 @@ function HighScoreReviewPanel({
 
         {error ? <p className="review-agent-error">{error}</p> : null}
 
+        <div className="review-date-selector">
+          <label htmlFor="review-as-of-date">复盘截止日</label>
+          <select
+            id="review-as-of-date"
+            onChange={(event) => setSelectedAsOfDate(event.target.value)}
+            value={selectedAsOfDate}
+          >
+            {(snapshotDates.length > 0
+              ? snapshotDates
+              : [{ as_of_date: latestTradeDate } as DailyReviewSnapshotSummary]
+            ).map((item) => (
+              <option key={item.as_of_date} value={item.as_of_date}>
+                {item.as_of_date}
+              </option>
+            ))}
+          </select>
+          <span>{snapshotDates.length > 0 ? "已固化复盘" : "当前动态复盘"}</span>
+        </div>
+
         {running && !report ? (
           <div className="review-agent-empty">
             <strong>正在加载过去 5 个交易日 Top10 追踪</strong>
@@ -1374,6 +1418,7 @@ function HighScoreReviewPanel({
           </div>
         ) : report ? (
           <>
+            <ReviewConclusion report={report} trackDates={trackDates} />
             <div className="review-agent-metrics">
               <span>
                 <small>样本</small>
@@ -1458,6 +1503,96 @@ function HighScoreReviewPanel({
         )}
       </div>
     </Panel>
+  );
+}
+
+function ReviewConclusion({
+  report,
+  trackDates,
+}: {
+  report: ReviewAgentReportResponse;
+  trackDates: string[];
+}) {
+  /** Turn the persisted review facts into one scannable daily conclusion. */
+
+  const trackedPicks = report.reviewed_picks.filter((item) => (
+    trackDates.includes(item.trade_date)
+  ));
+  const trackedReturns = trackedPicks
+    .map(latestTrackedReturn)
+    .filter((value): value is number => value !== null);
+  const averageReturn = trackedReturns.length > 0
+    ? trackedReturns.reduce((total, value) => total + value, 0) / trackedReturns.length
+    : null;
+  const positiveRate = trackedReturns.length > 0
+    ? trackedReturns.filter((value) => value > 0).length / trackedReturns.length
+    : null;
+  const drawdowns = trackedPicks
+    .map((item) => item.max_drawdown_from_next_open_3d)
+    .filter((value): value is number => value !== null);
+  const averageDrawdown = drawdowns.length > 0
+    ? drawdowns.reduce((total, value) => total + value, 0) / drawdowns.length
+    : null;
+  const cacheReadyCount = trackedPicks.filter((item) => item.post_bar_cache_complete).length;
+  const promotionDelta = report.promotion_rate_delta;
+  const verdict = promotionDelta === null
+    ? { tone: "neutral", text: "1进2对照仍在等待成熟样本" }
+    : promotionDelta >= 0.03
+      ? { tone: "positive", text: "Top10 的1进2表现优于同期全部首板" }
+      : promotionDelta <= -0.03
+        ? { tone: "negative", text: "Top10 的1进2表现弱于同期全部首板" }
+        : { tone: "neutral", text: "Top10 与同期全部首板接近，暂未形成明显优势" };
+
+  return (
+    <section className="review-conclusion" aria-label="本次复盘结论">
+      <header>
+        <div>
+          <span>本次复盘结论</span>
+          <strong>{verdict.text}</strong>
+        </div>
+        <b className={verdict.tone}>{report.end_date}</b>
+      </header>
+      <div className="review-conclusion-metrics">
+        <span>
+          <small>各自最新收盘收益均值</small>
+          <strong className={numberTone(averageReturn)}>{formatOptionalPercent(averageReturn)}</strong>
+        </span>
+        <span>
+          <small>上涨样本占比</small>
+          <strong>{positiveRate === null ? "暂无" : formatPercent(positiveRate)}</strong>
+        </span>
+        <span>
+          <small>Top10 相对全市场</small>
+          <strong className={numberTone(promotionDelta)}>
+            {promotionDelta === null
+              ? "待确认"
+              : `${formatSigned(promotionDelta * 100, 1)} 个百分点`}
+          </strong>
+        </span>
+        <span>
+          <small>三日平均最大回撤</small>
+          <strong className={numberTone(averageDrawdown)}>{formatOptionalPercent(averageDrawdown)}</strong>
+        </span>
+        <span>
+          <small>五日走势缓存</small>
+          <strong>{cacheReadyCount}/{trackedPicks.length}</strong>
+        </span>
+      </div>
+      <div className="review-conclusion-evidence">
+        <article>
+          <small>表现较好特征</small>
+          <p>{report.successful_patterns[0] ?? "成熟样本不足，暂不归纳共同特征。"}</p>
+        </article>
+        <article>
+          <small>表现较差特征</small>
+          <p>{report.failed_patterns[0] ?? "成熟样本不足，暂不归纳风险特征。"}</p>
+        </article>
+        <article>
+          <small>下一轮观察</small>
+          <p>{report.adjustment_suggestions[0] ?? report.main_findings[0] ?? "继续积累样本并保持当前评分口径。"}</p>
+        </article>
+      </div>
+    </section>
   );
 }
 

@@ -2,6 +2,7 @@ import os
 import unittest
 from datetime import date, datetime, timezone
 from pathlib import Path
+from types import SimpleNamespace
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -94,6 +95,11 @@ class DailyCloseLoopTest(unittest.TestCase):
             "first_board_repository": self.first_board_repository,
             "run_repository": self.run_repository,
             "calendar_collector": self._calendar,
+            "review_snapshot_builder": lambda **kwargs: SimpleNamespace(
+                as_of_date=kwargs["as_of_date"],
+                start_date=kwargs["as_of_date"],
+                generated_by="test-review-snapshot",
+            ),
         }
         arguments.update(overrides)
         return execute_daily_close_loop(**arguments)
@@ -120,6 +126,10 @@ class DailyCloseLoopTest(unittest.TestCase):
         self.assertIsNotNone(persisted)
         self.assertEqual(persisted.status, "success")
         self.assertTrue(persisted.report["live_prediction_eligible"])
+        self.assertEqual(
+            persisted.report["review_snapshot"]["as_of_date"],
+            target_date.isoformat(),
+        )
 
     def test_late_backfill_cannot_be_labeled_live(self) -> None:
         target_date = date(2026, 8, 20)
@@ -164,6 +174,24 @@ class DailyCloseLoopTest(unittest.TestCase):
         self.assertEqual(calls, 2)
         self.assertEqual(delays, [2])
         self.assertEqual(execution.run.attempt_count, 2)
+
+    def test_review_snapshot_failure_marks_pipeline_partial(self) -> None:
+        target_date = date(2026, 8, 21)
+
+        execution = self._execute(
+            requested_date=target_date,
+            now=datetime(2026, 8, 21, 16, 10, tzinfo=CN_TZ),
+            update_runner=lambda **_kwargs: self._complete_report(
+                target_date,
+                live_count=10,
+            ),
+            review_snapshot_builder=lambda **_kwargs: (_ for _ in ()).throw(
+                RuntimeError("review storage unavailable")
+            ),
+        )
+
+        self.assertEqual(execution.status, "partial")
+        self.assertIn("daily review snapshot failed", execution.run.error_message)
 
     def test_incomplete_cache_writes_partial_alert(self) -> None:
         target_date = date(2026, 8, 21)

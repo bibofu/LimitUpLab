@@ -583,6 +583,22 @@ export interface ReviewAgentReportResponse {
   generated_by: string;
 }
 
+export interface DailyReviewSnapshotSummary {
+  as_of_date: string;
+  start_date: string;
+  sample_size: number;
+  outcome_ready_count: number;
+  top_pick_promotion_rate: number | null;
+  market_promotion_rate: number | null;
+  generated_by: string;
+  generated_at: string;
+}
+
+export interface DailyReviewSnapshotsResponse {
+  snapshots: DailyReviewSnapshotSummary[];
+  generated_by: string;
+}
+
 export interface AgentChatRequest {
   session_id: string;
   message_id?: string;

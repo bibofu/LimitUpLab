@@ -6,6 +6,7 @@ import type {
   ChatSessionDetail,
   ChatSessionsResponse,
   DailyBoardPromotionStat,
+  DailyReviewSnapshotsResponse,
   DragonTigerReviewResponse,
   ContinuationStat,
   FailedRateStat,
@@ -152,6 +153,12 @@ export function fetchReviewAgentReport(params?: {
   }
   const suffix = query.toString() ? `?${query.toString()}` : "";
   return request<ReviewAgentReportResponse>(`/api/agents/review-report${suffix}`);
+}
+
+export function fetchDailyReviewSnapshots(limit = 20) {
+  return request<DailyReviewSnapshotsResponse>(
+    `/api/agents/review-snapshots?limit=${limit}`,
+  );
 }
 
 export function fetchRatingBacktest() {

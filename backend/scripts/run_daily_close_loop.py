@@ -19,13 +19,19 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.collectors import collect_a_share_trade_dates, parse_akshare_trade_date
-from app.config import detect_local_proxy, replace_proxy_environment
-from app.models import DailyPipelineRun
+from app.config import (
+    configure_runtime_environment,
+    detect_local_proxy,
+    replace_proxy_environment,
+)
+from app.models import DailyPipelineRun, DailyReviewSnapshot
 from app.repositories import (
     SQLiteDailyPipelineRepository,
     SQLiteFirstBoardRepository,
     SQLiteLimitUpRepository,
+    SQLiteReviewSnapshotRepository,
 )
+from app.services.daily_review import build_daily_review_snapshot
 from app.services.system_health import expected_local_data_date
 from scripts.update_daily_data import DailyUpdateReport, run_daily_update
 
@@ -39,6 +45,7 @@ DEFAULT_ALERT_PATH = BACKEND_ROOT / "data" / "daily_close_loop_alert.json"
 CalendarCollector = Callable[[date, date], list[date]]
 UpdateRunner = Callable[..., DailyUpdateReport]
 SleepFunction = Callable[[float], None]
+ReviewSnapshotBuilder = Callable[..., DailyReviewSnapshot]
 
 
 class DailyCloseLoopAlreadyRunning(RuntimeError):
@@ -189,6 +196,7 @@ def execute_daily_close_loop(
     run_repository: SQLiteDailyPipelineRepository | None = None,
     calendar_collector: CalendarCollector = collect_a_share_trade_dates,
     update_runner: UpdateRunner = run_daily_update,
+    review_snapshot_builder: ReviewSnapshotBuilder = build_daily_review_snapshot,
     sleep_fn: SleepFunction = time_module.sleep,
 ) -> DailyCloseLoopExecution:
     """Resolve, lock, retry and audit one complete after-close pipeline run."""
@@ -292,6 +300,26 @@ def execute_daily_close_loop(
                     sleep_fn(max(0, retry_delay_seconds) * (2 ** (attempt - 1)))
 
             report_payload = asdict(last_report) if last_report else None
+            review_snapshot_payload: dict[str, str] | None = None
+            if last_report is not None and last_error is None:
+                try:
+                    review_snapshot = review_snapshot_builder(
+                        events=limit_repo.list_events(),
+                        as_of_date=target.trade_date,
+                        first_board_repository=first_repo,
+                        snapshot_repository=SQLiteReviewSnapshotRepository(
+                            first_repo.database_path
+                        ),
+                    )
+                    review_snapshot_payload = {
+                        "as_of_date": review_snapshot.as_of_date.isoformat(),
+                        "start_date": review_snapshot.start_date.isoformat(),
+                        "generated_by": review_snapshot.generated_by,
+                    }
+                except Exception as error:  # noqa: BLE001
+                    incomplete_reasons.append(
+                        f"daily review snapshot failed: {error}"
+                    )
             if last_error:
                 status = "error"
                 message = f"Daily close loop failed after {run.attempt_count} attempts: {last_error}"
@@ -313,6 +341,7 @@ def execute_daily_close_loop(
                 "calendar_source": target.calendar_source,
                 "live_prediction_eligible": live_eligible,
                 "pipeline": report_payload,
+                "review_snapshot": review_snapshot_payload,
                 "incomplete_reasons": incomplete_reasons,
             }
             finished_run = run.model_copy(
@@ -506,6 +535,7 @@ def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
 def _prepare_network_environment() -> None:
     """Replace inherited proxy state with an explicit or reachable proxy."""
 
+    configure_runtime_environment()
     proxy = os.getenv("LIMITUPLAB_PROXY_URL", "").strip() or detect_local_proxy()
     replace_proxy_environment(proxy)
 

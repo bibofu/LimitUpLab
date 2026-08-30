@@ -1357,6 +1357,131 @@ td span {
   color: #b42318;
 }
 
+.review-date-selector {
+  display: flex;
+  align-items: center;
+  justify-content: flex-end;
+  gap: 9px;
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.review-date-selector select {
+  height: 34px;
+  padding: 0 30px 0 10px;
+  border: 1px solid #d0d5dd;
+  border-radius: 6px;
+  background: #ffffff;
+  color: #101828;
+  font: inherit;
+}
+
+.review-date-selector span {
+  color: #98a2b3;
+  font-weight: 600;
+}
+
+.review-conclusion {
+  overflow: hidden;
+  border-top: 2px solid #d92d20;
+  border-bottom: 1px solid #eaecf0;
+  background: #ffffff;
+}
+
+.review-conclusion > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 16px 4px 14px;
+}
+
+.review-conclusion > header div {
+  display: grid;
+  gap: 4px;
+}
+
+.review-conclusion > header span,
+.review-conclusion-metrics small,
+.review-conclusion-evidence small {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.review-conclusion > header strong {
+  color: #101828;
+  font-size: 18px;
+}
+
+.review-conclusion > header > b {
+  padding: 5px 9px;
+  border-radius: 5px;
+  background: #f2f4f7;
+  color: #475467;
+  font-size: 12px;
+}
+
+.review-conclusion > header > b.positive {
+  background: #ecfdf3;
+  color: #027a48;
+}
+
+.review-conclusion > header > b.negative {
+  background: #fef3f2;
+  color: #b42318;
+}
+
+.review-conclusion-metrics {
+  display: grid;
+  grid-template-columns: repeat(5, minmax(0, 1fr));
+  border-top: 1px solid #eaecf0;
+  border-bottom: 1px solid #eaecf0;
+}
+
+.review-conclusion-metrics > span {
+  display: grid;
+  gap: 5px;
+  padding: 13px 14px;
+  border-right: 1px solid #eaecf0;
+}
+
+.review-conclusion-metrics > span:last-child {
+  border-right: 0;
+}
+
+.review-conclusion-metrics strong {
+  color: #101828;
+  font-size: 18px;
+}
+
+.review-conclusion-evidence {
+  display: grid;
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.review-conclusion-evidence article {
+  min-width: 0;
+  padding: 14px;
+  border-right: 1px solid #eaecf0;
+}
+
+.review-conclusion-evidence article:last-child {
+  border-right: 0;
+}
+
+.review-conclusion-evidence p {
+  display: -webkit-box;
+  margin: 6px 0 0;
+  overflow: hidden;
+  color: #344054;
+  font-size: 13px;
+  line-height: 1.55;
+  -webkit-box-orient: vertical;
+  -webkit-line-clamp: 4;
+}
+
 .review-agent-metrics {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -4573,6 +4698,32 @@ td span {
 
   .review-agent-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .review-date-selector {
+    align-items: flex-start;
+    justify-content: flex-start;
+    flex-wrap: wrap;
+  }
+
+  .review-conclusion > header {
+    align-items: flex-start;
+  }
+
+  .review-conclusion-metrics,
+  .review-conclusion-evidence {
+    grid-template-columns: 1fr;
+  }
+
+  .review-conclusion-metrics > span,
+  .review-conclusion-evidence article {
+    border-right: 0;
+    border-bottom: 1px solid #eaecf0;
+  }
+
+  .review-conclusion-metrics > span:last-child,
+  .review-conclusion-evidence article:last-child {
+    border-bottom: 0;
   }
 
   .daily-top-cards button,

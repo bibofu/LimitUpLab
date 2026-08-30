@@ -14,7 +14,7 @@ from app.config import env_bool
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_PATH = BACKEND_ROOT / "data" / "limituplab.sqlite"
-CURRENT_SCHEMA_VERSION = 2
+CURRENT_SCHEMA_VERSION = 3
 DEFAULT_BUSY_TIMEOUT_MS = 5_000
 DEFAULT_LOCK_RETRY_ATTEMPTS = 3
 DEFAULT_LOCK_RETRY_BASE_DELAY_SECONDS = 0.05
@@ -498,6 +498,23 @@ def _apply_schema(connection: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_daily_pipeline_runs_date_status
         ON daily_pipeline_runs (trade_date, status)
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS daily_review_snapshots (
+            as_of_date TEXT PRIMARY KEY,
+            start_date TEXT NOT NULL,
+            report_json TEXT NOT NULL,
+            generated_by TEXT NOT NULL,
+            generated_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_daily_review_snapshots_generated
+        ON daily_review_snapshots (generated_at DESC)
         """
     )
     _ensure_agent_predictions_schema(connection)

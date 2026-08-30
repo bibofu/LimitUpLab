@@ -18,7 +18,7 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 - LLM Planner、工具调用、Tool Policy 修复和 SSE 流式回答
 - 可恢复的多会话对话、历史消息持久化和受控上下文
 - Explanation、Critic、Review、Evaluation 等轻量 Agent 角色
-- 每日 Top10 预测快照、D+1 至 D+5 走势追踪、1进2全市场对照和评分复盘
+- 每日 Top10 预测快照、D+1 至 D+5 走势追踪、1进2全市场对照和不可变每日复盘快照
 - Champion/Challenger 评分策略注册与受约束影子优化
 - 来源感知的预测质量审计、确定性基线和多目标评分 v3
 - 每日连板晋级率、首板到二板率和各板高梯队统计
@@ -489,7 +489,7 @@ Windows 本地环境可以安装收盘后的计划任务：
 powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mode Install
 ```
 
-任务默认在每个工作日 `16:10` 执行，并启用错过后补跑、失败重试和禁止并发执行。一次执行会自动完成交易日判断、原始数据同步、首板特征与 enrichment、当日 Top10 预测快照、最近 Top10 的 D+1 至 D+5 K 线缓存、Outcome 回填和健康检查。
+任务默认在每个工作日 `16:10` 执行，并启用错过后补跑、失败重试和禁止并发执行。一次执行会自动完成交易日判断、原始数据同步、首板特征与 enrichment、当日 Top10 预测快照、最近 Top10 的 D+1 至 D+5 K 线缓存、Outcome 回填、每日复盘快照和健康检查。复盘快照按数据截止交易日固化，真实 LLM 不可用时会保存结构化事实生成的确定性结论。
 
 预测来源有严格时间口径：只有交易日当天 `15:30` 后成功生成的预测会标记为 `live`；次日或更晚补算的数据只能标记为 `historical_backtest`，不能进入真实预测准确率统计。
 
@@ -514,6 +514,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mo
 | `GET` | `/api/agents/rating-backtest` | 评分分桶回测 |
 | `GET` | `/api/agents/rating-evaluation` | Evaluation Agent 复盘 |
 | `GET` | `/api/agents/review-report` | 近期 Top10 追踪报告 |
+| `GET` | `/api/agents/review-snapshots` | 已固化每日复盘日期与摘要 |
 | `GET` | `/api/agents/prediction-quality-audit` | 预测来源、覆盖率和基线审计 |
 | `GET` | `/api/agents/factor-signal-diagnostic` | 日期阻断的因子快速证伪诊断 |
 | `GET` | `/api/agents/scoring-policies` | Champion/Challenger 状态 |

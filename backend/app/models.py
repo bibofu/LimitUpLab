@@ -1097,6 +1097,36 @@ class ReviewAgentReportResponse(BaseModel):
     generated_by: str
 
 
+class DailyReviewSnapshot(BaseModel):
+    """Immutable after-close review artifact for one market data date."""
+
+    as_of_date: date
+    start_date: date
+    report: ReviewAgentReportResponse
+    generated_by: str
+    generated_at: datetime
+
+
+class DailyReviewSnapshotSummary(BaseModel):
+    """Compact history entry used by the review date selector."""
+
+    as_of_date: date
+    start_date: date
+    sample_size: int
+    outcome_ready_count: int
+    top_pick_promotion_rate: float | None = None
+    market_promotion_rate: float | None = None
+    generated_by: str
+    generated_at: datetime
+
+
+class DailyReviewSnapshotsResponse(BaseModel):
+    """Available persisted review dates ordered from newest to oldest."""
+
+    snapshots: list[DailyReviewSnapshotSummary] = Field(default_factory=list)
+    generated_by: str
+
+
 class AgentEvalCaseReport(BaseModel):
     """One deterministic chat eval case shown in the frontend quality panel."""
 
