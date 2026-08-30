@@ -68,7 +68,7 @@ from app.repositories import SQLiteFirstBoardRepository
 from app.services.llm_provider import LLMProvider, get_llm_provider
 
 
-CHAT_AGENT_VERSION = "first-board-chat-policy-v7-external-facts"
+CHAT_AGENT_VERSION = "first-board-chat-policy-v8-market-environment"
 _FORCE_TEMPLATE_ANSWER_OVERRIDE: ContextVar[bool | None] = ContextVar(
     "force_template_answer_override",
     default=None,
@@ -414,7 +414,6 @@ def _requires_deferred_v1_capability(message: str) -> bool:
     signals = _QuestionSignals.from_message(message)
     if any(
         (
-            signals.sector_performance,
             signals.web_search,
         )
     ):
@@ -696,12 +695,16 @@ def _answer_with_llm_tool_agent(
         request.message,
         execution["facts"],
     )
+    market_environment_answer = _QuestionSignals.from_message(
+        request.message
+    ).market_environment
     answer_system_prompt = _tool_answer_system_prompt(
         agent_profile=tools.profile,
         exhaustive_event_answer=exhaustive_event_answer,
         complete_position_answer=complete_position_answer,
         complete_hot_stock_answer=complete_hot_stock_answer,
         hot_stock_event_intersection_answer=hot_stock_event_intersection_answer,
+        market_environment_answer=market_environment_answer,
         skill_instruction=(
             active_skill.answer_instruction() if active_skill is not None else ""
         ),
@@ -880,8 +883,9 @@ def _tool_planner_system_prompt(
             "research product. Use only the latest complete close or stored historical "
             "facts exposed by the available tools, except that current stock-popularity "
             "questions may use the timestamped hot_stock_ranking snapshot and broad "
-            "financial-news digests may use timestamped finance_news feeds. Never claim "
-            "to have intraday prices, auction data, live sector performance, or arbitrary "
+            "financial-news digests may use timestamped finance_news feeds. Broad market "
+            "reviews may also use the latest timestamped sector ranking. Never claim "
+            "to have intraday prices, auction data, or arbitrary "
             "public-web evidence. Questions that require those deferred V2 capabilities "
             "are unsupported and must receive exactly '抱歉，该问题无法回答'. "
         )
@@ -909,7 +913,8 @@ def _tool_planner_system_prompt(
         "For first-board position/location classification, position means the pre-board K-line regime such as low-base breakout, oversold rebound, V reversal, high breakout or second wave; call first_board_ratings and never classify by first seal time. "
         "For ordinary limit-up, first-board, or continued-board lists, call limit_up_events. Follow the backend_query_contract supplied with the user message for date, board height, market, event status, result mode, sorting and limit; do not weaken explicit user filters. Use first_board_ratings only when the user asks for ratings, scores, ranking, or candidate filtering. "
         "For Dragon-Tiger List, institution flow or hot-money flow questions, call dragon_tiger_list only for a completed trade date. "
-        "For a theme or industry inside the local limit-up pool, call limit_up_events; whole-market live sector performance is outside V1. "
+        "For a theme or industry inside the local limit-up pool, call limit_up_events. For whole-market industry performance or ranking, call sector_performance and state its source, data_as_of and freshness. "
+        "For broad market-environment questions, select the market-environment skill and call market_summary with include_limit_down=true, market_index_trend for 5 trading days, sector_performance without a sector filter, and hot_stock_ranking with enrich_performance=true. Do not answer from only one of these evidence groups. "
         "For broad-market, major-index, Shanghai Composite, Shenzhen Component or ChiNext Index performance over multiple days, call market_index_trend with the requested trading-day window; never infer index performance from limit-up counts. "
         "For current hot, popular, popularity-ranked, or attention-ranked stocks, call hot_stock_ranking; default to 20 rows when the user gives no count, state the source and Beijing capture time, and say that popularity reflects attention and does not constitute a trading signal. In this answer, never use the exact Chinese tokens 买入, 卖出, 仓位, 目标价, or 收益承诺, even inside a disclaimer. "
         "For broad latest, today, or recent financial-news and market-flash questions, call finance_news with a 48-hour window and up to 8 items; state the Beijing retrieval time and each item's publication time, source, title, concise summary and URL. Preserve the tool's item order and do not claim chronological ordering unless the timestamps actually descend. Distinguish reported facts from any market-impact inference, and never fill missing news from memory. For a named company, one sector, an announcement, or a specific event, finance_news is insufficient and public web search remains outside V1. "
@@ -1098,6 +1103,9 @@ def _template_answer_from_tool_facts(
     facts: dict[str, Any],
 ) -> str:
     """Build a useful fallback answer from tool facts when final LLM times out."""
+
+    if _QuestionSignals.from_message(request.message).market_environment:
+        return _template_market_environment_answer(facts)
 
     if "hot_stock_limit_up_intersection" in facts:
         payload = facts["hot_stock_limit_up_intersection"]
@@ -1508,6 +1516,109 @@ def _template_answer_from_tool_facts(
     return UNANSWERABLE_TEXT
 
 
+def _template_market_environment_answer(facts: dict[str, Any]) -> str:
+    """Render a complete four-part market review when the final LLM is unavailable."""
+
+    summary = facts.get("market_summary")
+    trend = facts.get("market_index_trend")
+    sectors = facts.get("sector_performance")
+    popularity = facts.get("hot_stock_ranking")
+    summary = summary if isinstance(summary, dict) else {}
+    trend = trend if isinstance(trend, dict) else {}
+    sectors = sectors if isinstance(sectors, dict) else {}
+    popularity = popularity if isinstance(popularity, dict) else {}
+
+    lines = [f"截至 {summary.get('trade_date') or trend.get('data_as_of') or '最新可用交易日'} 的市场环境综述："]
+    lines.append("\n### 大盘指数")
+    indices = trend.get("indices") or []
+    if indices:
+        for item in indices:
+            points = item.get("points") or []
+            latest_change = points[-1].get("change_pct") if points else None
+            latest_text = (
+                f"最新交易日 {float(latest_change):+.2f}%"
+                if isinstance(latest_change, (int, float))
+                else "最新交易日涨跌暂缺"
+            )
+            lines.append(
+                f"- {item.get('name')}：{latest_text}，近 "
+                f"{trend.get('requested_days')} 个交易日 "
+                f"{float(item.get('return_pct') or 0):+.2f}%，最大回撤 "
+                f"{float(item.get('max_drawdown_pct') or 0):.2f}%。"
+            )
+    else:
+        lines.append("- 指数走势数据暂时无法获取。")
+
+    lines.append("\n### 涨跌停结构")
+    if summary:
+        down_text = (
+            f"跌停 {summary.get('limit_down_count')} 只"
+            if summary.get("limit_down_count") is not None
+            else "跌停数量暂缺"
+        )
+        lines.append(
+            f"- 涨停 {summary.get('limit_up_count')} 只，其中首板 "
+            f"{summary.get('first_board_count')} 只、连板 "
+            f"{summary.get('continued_board_count')} 只；未回封 "
+            f"{summary.get('unsealed_count')} 只，{down_text}，最高 "
+            f"{summary.get('max_board_height')} 板。"
+        )
+    else:
+        lines.append("- 涨跌停结构数据暂时无法获取。")
+
+    lines.append("\n### 板块强弱")
+    top_sectors = sectors.get("top_sectors") or []
+    bottom_sectors = sectors.get("bottom_sectors") or []
+    if top_sectors:
+        lines.append("- 涨幅靠前：" + "；".join(_format_sector_row(item) for item in top_sectors[:5]) + "。")
+        lines.append("- 跌幅靠前：" + "；".join(_format_sector_row(item) for item in bottom_sectors[:5]) + "。")
+    else:
+        lines.append("- 行业强弱榜暂时无法获取。")
+
+    lines.append("\n### 热门个股")
+    hot_items = popularity.get("items") or []
+    if hot_items:
+        for item in hot_items[:5]:
+            performance = (
+                f"，最新涨跌 {float(item.get('change_pct')):+.2f}%"
+                if isinstance(item.get("change_pct"), (int, float))
+                else "，最新涨跌暂缺"
+            )
+            lines.append(
+                f"- 人气第 {item.get('rank')} 名 "
+                f"{item.get('name')}({item.get('symbol')}){performance}。"
+            )
+    else:
+        lines.append("- 热门个股数据暂时无法获取。")
+
+    cutoff_parts = []
+    if trend.get("data_as_of"):
+        cutoff_parts.append(f"指数截至 {trend.get('data_as_of')}")
+    if sectors.get("data_as_of"):
+        cutoff_parts.append(f"板块截至 {sectors.get('data_as_of')}")
+    if popularity.get("captured_at_beijing"):
+        cutoff_parts.append(f"人气榜抓取于 {popularity.get('captured_at_beijing')}（北京时间）")
+    if cutoff_parts:
+        lines.append("\n数据口径：" + "；".join(cutoff_parts) + "。")
+    lines.append("以上按客观数据拆分展示，不使用单一情绪标签代替事实。")
+    lines.append(TEXT["safety"])
+    return "\n".join(lines)
+
+
+def _format_sector_row(item: dict[str, Any]) -> str:
+    """Format one sector ranking row without exposing missing placeholders."""
+
+    leader = (
+        f"，领涨 {item.get('leader_name')}"
+        if item.get("leader_name")
+        else ""
+    )
+    return (
+        f"{item.get('sector_name')} "
+        f"{float(item.get('change_pct') or 0):+.2f}%{leader}"
+    )
+
+
 def _tool_answer_system_prompt(
     *,
     agent_profile: str,
@@ -1515,6 +1626,7 @@ def _tool_answer_system_prompt(
     complete_position_answer: bool = False,
     complete_hot_stock_answer: bool = False,
     hot_stock_event_intersection_answer: bool = False,
+    market_environment_answer: bool = False,
     skill_instruction: str = "",
 ) -> str:
     """Instruct the LLM to answer only from executed tool facts."""
@@ -1530,9 +1642,10 @@ def _tool_answer_system_prompt(
             "popularity is attention rather than a recommendation. For finance_news, "
             "state the Beijing retrieval time plus every item's publication time, source "
             "and URL, and never invent an item or omit that external-news cutoff. For "
-            "other factual answers, begin with the relevant YYYY-MM-DD close-data cutoff. "
-            "Never imply that a result contains intraday prices or auction data. If the "
-            "question requires live sector performance, live limit-up verification, "
+            "For sector_performance, state its source, data_as_of and freshness. For other "
+            "factual answers, begin with the relevant YYYY-MM-DD close-data cutoff. Never "
+            "imply that a result contains intraday prices or auction data. If the question "
+            "requires live limit-up verification, "
             "company-specific current news or arbitrary public-web evidence, output "
             "exactly '抱歉，该问题无法回答'."
         )
@@ -1567,6 +1680,20 @@ def _tool_answer_system_prompt(
         if hot_stock_event_intersection_answer
         else ""
     )
+    market_environment_instruction = (
+        " MARKET_ENVIRONMENT_OUTPUT: Produce a substantive four-section review, not a "
+        "brief sentiment label. Section 1 covers all major indices with latest-day change "
+        "and 5-day return. Section 2 covers limit-up, first-board, continued-board, "
+        "unsealed, limit-down and maximum-board facts, explicitly stating unavailable "
+        "fields. Section 3 lists both the five strongest and five weakest industries with "
+        "change percentages and leaders when available. Section 4 lists the five most "
+        "popular stocks with popularity rank and latest quote change when available. End "
+        "with a short objective synthesis based only on those facts, without a categorical "
+        "market-sentiment label. State every distinct data cutoff because close, sector and "
+        "popularity snapshots may differ."
+        if market_environment_answer
+        else ""
+    )
     return (
         "You are LimitUpLab's A-share first-board research agent. "
         "Answer in Chinese using only the executed tool facts. "
@@ -1590,7 +1717,7 @@ def _tool_answer_system_prompt(
         "Do not provide direct trading instructions, position sizing, target prices, "
         "or return promises."
         f"{exhaustive_instruction}{position_instruction}{hot_stock_instruction}"
-        f"{intersection_instruction}{skill_instruction}"
+        f"{intersection_instruction}{market_environment_instruction}{skill_instruction}"
     )
 
 
@@ -2003,20 +2130,21 @@ def _execute_llm_tool_calls(
             call_names.append(name)
             continue
         if name == "market_summary":
-            result = tools.market_summary()
+            include_limit_down = bool(arguments.get("include_limit_down")) or (
+                _QuestionSignals.from_message(request.message).market_environment
+            )
+            result = (
+                tools.market_summary(include_limit_down=True)
+                if include_limit_down
+                else tools.market_summary()
+            )
             summary: MarketSummary = result.output
-            facts["market_summary"] = {
-                "trade_date": summary.trade_date.isoformat(),
-                "limit_up_count": summary.limit_up_count,
-                "first_board_count": summary.first_board_count,
-                "continued_board_count": summary.continued_board_count,
-                "failed_limit_up_rate": summary.failed_limit_up_rate,
-                "max_board_height": summary.max_board_height,
-                "hot_industries": summary.hot_industries,
-            }
+            facts["market_summary"] = result.trace_output
             traces.append(result.trace())
             call_names.append(name)
             references.append(f"trade_date={summary.trade_date.isoformat()}")
+            if summary.limit_down_source:
+                references.append(f"limit_down_source={summary.limit_down_source}")
         elif name == "market_index_trend":
             days = _parse_optional_int(arguments.get("days")) or (
                 _extract_market_index_days(request.message)
@@ -2113,16 +2241,22 @@ def _execute_llm_tool_calls(
                 or 20
             )
             requested_source = _optional_str(arguments.get("source")) or "auto"
+            enrich_performance = bool(arguments.get("enrich_performance")) or (
+                _QuestionSignals.from_message(request.message).market_environment
+            )
             if "同花顺" in request.message:
                 requested_source = "tonghuashun"
             elif "东方财富" in request.message:
                 requested_source = "eastmoney"
             try:
-                result = tools.hot_stock_ranking(
-                    period=period,
-                    limit=max(1, min(limit, 100)),
-                    source=requested_source,
-                )
+                hot_stock_arguments: dict[str, Any] = {
+                    "period": period,
+                    "limit": max(1, min(limit, 100)),
+                    "source": requested_source,
+                }
+                if enrich_performance:
+                    hot_stock_arguments["enrich_performance"] = True
+                result = tools.hot_stock_ranking(**hot_stock_arguments)
             except Exception as error:  # noqa: BLE001
                 facts["hot_stock_ranking_error"] = str(error)
                 traces.append(

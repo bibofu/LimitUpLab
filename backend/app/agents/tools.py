@@ -18,6 +18,7 @@ from app.agents.query_contract import (
 from app.collectors import (
     HithinkFinanceCollector,
     collect_eastmoney_hot_stock_ranking,
+    collect_limit_down_pool,
     collect_market_index_trends,
 )
 from app.models import (
@@ -117,8 +118,20 @@ class ToolResult:
 TOOL_SCHEMAS = [
     AgentToolSchema(
         name="market_summary",
-        description="读取本地最新涨停数量、首板数量、炸板率、最高连板和热门行业等客观市场数据。",
-        args_schema={"type": "object", "properties": {}, "required": []},
+        description=(
+            "读取本地最新涨停数量、首板数量、未回封数量、最高连板和热门行业等客观市场数据；"
+            "市场环境综述可按需补充真实跌停池数量。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "include_limit_down": {
+                    "type": "boolean",
+                    "description": "Fetch the completed limit-down pool for a broad market review.",
+                }
+            },
+            "required": [],
+        },
         returns="Objective market facts for the latest local trade date.",
     ),
     AgentToolSchema(
@@ -214,6 +227,10 @@ TOOL_SCHEMAS = [
                     "description": (
                         "auto uses Tonghuashun up to Top30 and Eastmoney for Top31-100."
                     ),
+                },
+                "enrich_performance": {
+                    "type": "boolean",
+                    "description": "Attach latest quote change for a broad market-environment review.",
                 },
             },
             "required": [],
@@ -583,6 +600,7 @@ V1_CLOSED_MARKET_TOOL_NAMES = frozenset(
     {
         "market_summary",
         "market_index_trend",
+        "sector_performance",
         "hot_stock_ranking",
         "finance_news",
         "daily_board_promotion",
@@ -601,7 +619,6 @@ V1_CLOSED_MARKET_TOOL_NAMES = frozenset(
 )
 V1_DEFERRED_REALTIME_TOOL_NAMES = frozenset(
     {
-        "sector_performance",
         "remote_limit_up_pool",
         "web_search",
     }
@@ -672,27 +689,49 @@ class AgentToolRegistry:
             separators=(",", ":"),
         )
 
-    def market_summary(self) -> ToolResult:
+    def market_summary(self, *, include_limit_down: bool = False) -> ToolResult:
         """Return the latest objective local market facts."""
 
         summary = summarize_market(self.events)
+        if include_limit_down:
+            try:
+                limit_down = collect_limit_down_pool(summary.trade_date)
+                summary = summary.model_copy(
+                    update={
+                        "limit_down_count": len(limit_down.items),
+                        "limit_down_source": limit_down.source,
+                    }
+                )
+            except Exception:  # noqa: BLE001
+                pass
         trace_output = {
             "trade_date": summary.trade_date.isoformat(),
             "limit_up_count": summary.limit_up_count,
             "first_board_count": summary.first_board_count,
             "continued_board_count": summary.continued_board_count,
-            "failed_limit_up_rate": summary.failed_limit_up_rate,
+            "unsealed_count": summary.unsealed_count,
+            "unsealed_rate": summary.unsealed_rate,
+            "limit_down_count": summary.limit_down_count,
+            "limit_down_source": summary.limit_down_source,
             "max_board_height": summary.max_board_height,
             "hot_industries": summary.hot_industries[:5],
+            "hot_concepts": [
+                item.model_dump(mode="json") for item in summary.hot_concepts[:5]
+            ],
         }
+        down_text = (
+            f"，跌停{summary.limit_down_count}只"
+            if summary.limit_down_count is not None
+            else "，跌停数据暂缺"
+        )
         return ToolResult(
             name="market_summary",
-            input={},
+            input={"include_limit_down": include_limit_down},
             output=summary,
             summary=(
                 f"{summary.trade_date.isoformat()} 涨停{summary.limit_up_count}只，"
                 f"首板{summary.first_board_count}只，连板{summary.continued_board_count}只，"
-                f"炸板率{summary.failed_limit_up_rate:.0%}。"
+                f"未回封{summary.unsealed_count}只{down_text}。"
             ),
             trace_output=trace_output,
         )
@@ -780,6 +819,18 @@ class AgentToolRegistry:
             sector=sector,
             trade_date=trade_date,
         )
+        latest_local_date = max(
+            (item.trade_date for item in self.events),
+            default=None,
+        )
+        if trade_date is None and latest_local_date and response.data_as_of > latest_local_date:
+            response = response.model_copy(
+                update={
+                    "trade_date": latest_local_date,
+                    "data_as_of": latest_local_date,
+                    "data_fresh": True,
+                }
+            )
         trace_output = response.model_dump(mode="json")
         if response.sector_name:
             summary = (
@@ -810,6 +861,7 @@ class AgentToolRegistry:
         period: str = "day",
         limit: int = 20,
         source: str = "auto",
+        enrich_performance: bool = False,
     ) -> ToolResult:
         """Return a fresh popularity ranking with explicit provider semantics."""
 
@@ -828,7 +880,35 @@ class AgentToolRegistry:
                 period=period,
                 limit=min(requested_limit, 30),
             )
-        items = [asdict(item) for item in snapshot.items]
+        quote_facts: dict[str, Any] = {}
+        quote_captured_at: datetime | None = None
+        if enrich_performance:
+            try:
+                quote_snapshot = self.hithink_collector.collect_market_snapshots(
+                    [item.thscode for item in snapshot.items[:20] if item.thscode]
+                )
+                quote_facts = {
+                    item.symbol: item for item in quote_snapshot.items
+                }
+                quote_captured_at = quote_snapshot.captured_at.astimezone(timezone.utc)
+            except Exception:  # noqa: BLE001
+                pass
+        items = []
+        for item in snapshot.items:
+            serialized = asdict(item)
+            quote = quote_facts.get(item.symbol)
+            serialized.update(
+                {
+                    "last_price": quote.last_price if quote else None,
+                    "change_pct": quote.change_pct if quote else None,
+                    "turnover_yi": (
+                        round(quote.turnover / 100_000_000, 2)
+                        if quote and quote.turnover is not None
+                        else None
+                    ),
+                }
+            )
+            items.append(serialized)
         captured_at = snapshot.captured_at.astimezone(timezone.utc)
         captured_at_beijing = captured_at.astimezone(timezone(timedelta(hours=8)))
         age_seconds = max(
@@ -840,6 +920,9 @@ class AgentToolRegistry:
             "source_label": "东方财富" if snapshot.source == "eastmoney" else "同花顺",
             "captured_at": captured_at.isoformat(),
             "captured_at_beijing": captured_at_beijing.isoformat(),
+            "quote_captured_at": (
+                quote_captured_at.isoformat() if quote_captured_at else None
+            ),
             "data_fresh": age_seconds <= 900,
             "age_seconds": age_seconds,
             "period": getattr(snapshot, "period", "current"),
@@ -854,7 +937,12 @@ class AgentToolRegistry:
         )
         return ToolResult(
             name="hot_stock_ranking",
-            input={"period": period, "limit": requested_limit, "source": normalized_source},
+            input={
+                "period": period,
+                "limit": requested_limit,
+                "source": normalized_source,
+                "enrich_performance": enrich_performance,
+            },
             output=payload,
             summary=(
                 f"{payload['source_label']}热股榜返回 {len(items)}/{requested_limit} 只"

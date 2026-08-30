@@ -85,6 +85,37 @@ class HithinkFinanceCollectorTest(unittest.TestCase):
         self.assertIn("symbol", runner.commands[0])
         self.assertIn("10000", runner.commands[0])
 
+    def test_market_snapshot_preserves_quote_performance(self) -> None:
+        runner = FakeRunner(
+            {
+                "ok": True,
+                "data": {
+                    "timestamp": 1_787_356_800_000,
+                    "item": [
+                        {
+                            "thscode": "002491.SZ",
+                            "ticker": "002491",
+                            "last_price": 12.34,
+                            "price_change_ratio_pct": 6.78,
+                            "turnover": 345_000_000,
+                        }
+                    ],
+                },
+            }
+        )
+        collector = HithinkFinanceCollector(
+            executable="hithink-finance",
+            runner=runner,
+        )
+
+        snapshot = collector.collect_market_snapshots(["002491.SZ"])
+
+        self.assertEqual(snapshot.items[0].symbol, "002491")
+        self.assertEqual(snapshot.items[0].change_pct, 6.78)
+        self.assertEqual(snapshot.items[0].turnover, 345_000_000)
+        self.assertIn("snapshot", runner.commands[0])
+        self.assertIn("002491.SZ", runner.commands[0])
+
     def test_dragon_tiger_snapshot_preserves_capital_flow(self) -> None:
         runner = FakeRunner(
             {

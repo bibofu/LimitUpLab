@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
-from app.agents.chat import answer_first_board_chat
+from app.agents.chat import _template_answer_from_tool_facts, answer_first_board_chat
 from app.models import (
     AgentChatRequest,
     AgentRun,
@@ -386,6 +386,72 @@ class AgentChatTest(unittest.TestCase):
         self.assertNotIn("\u5347\u6e29", response.answer)
         self.assertNotIn("\u5206\u6b67", response.answer)
         self.assertNotIn("\u9000\u6f6e", response.answer)
+
+    def test_market_environment_fallback_keeps_all_four_sections(self) -> None:
+        answer = _template_answer_from_tool_facts(
+            request=AgentChatRequest(
+                session_id="market-environment-template",
+                message="今天市场环境如何",
+            ),
+            intent="market_context",
+            facts={
+                "market_summary": {
+                    "trade_date": "2026-05-15",
+                    "limit_up_count": 42,
+                    "first_board_count": 30,
+                    "continued_board_count": 12,
+                    "unsealed_count": 5,
+                    "limit_down_count": 2,
+                    "max_board_height": 5,
+                },
+                "market_index_trend": {
+                    "requested_days": 5,
+                    "data_as_of": "2026-05-15",
+                    "indices": [
+                        {
+                            "name": "上证指数",
+                            "return_pct": 1.2,
+                            "max_drawdown_pct": -0.8,
+                            "points": [{"change_pct": 0.6}],
+                        }
+                    ],
+                },
+                "sector_performance": {
+                    "data_as_of": "2026-05-15",
+                    "top_sectors": [
+                        {
+                            "sector_name": "半导体",
+                            "change_pct": 3.2,
+                            "leader_name": "测试芯片",
+                        }
+                    ],
+                    "bottom_sectors": [
+                        {
+                            "sector_name": "煤炭",
+                            "change_pct": -1.8,
+                            "leader_name": "测试煤炭",
+                        }
+                    ],
+                },
+                "hot_stock_ranking": {
+                    "captured_at_beijing": "2026-05-15T15:10:00+08:00",
+                    "items": [
+                        {
+                            "rank": 1,
+                            "name": "测试热门股",
+                            "symbol": "000001",
+                            "change_pct": 6.5,
+                        }
+                    ],
+                },
+            },
+        )
+
+        for heading in ("大盘指数", "涨跌停结构", "板块强弱", "热门个股"):
+            self.assertIn(heading, answer)
+        self.assertIn("跌停 2 只", answer)
+        self.assertIn("半导体", answer)
+        self.assertIn("测试热门股(000001)", answer)
 
     def test_exhaustive_first_board_list_is_closed_only_and_complete(self) -> None:
         events = [

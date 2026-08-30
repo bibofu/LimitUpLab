@@ -45,7 +45,13 @@ class AgentSkillRegistryTest(unittest.TestCase):
     def test_registry_exposes_supported_workflow_skills(self) -> None:
         self.assertEqual(
             [skill.name for skill in AGENT_SKILL_REGISTRY.skills],
-            ["finance-news", "first-board-rating", "limit-up-pool", "popularity"],
+            [
+                "finance-news",
+                "first-board-rating",
+                "limit-up-pool",
+                "market-environment",
+                "popularity",
+            ],
         )
         catalog = AGENT_SKILL_REGISTRY.schema_prompt()
         self.assertIn("首板票有哪些", catalog)

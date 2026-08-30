@@ -239,7 +239,10 @@ class MarketSummary(BaseModel):
     first_board_count: int
     continued_board_count: int
     failed_count: int
-    limit_down_count: int
+    unsealed_count: int = 0
+    unsealed_rate: float = 0.0
+    limit_down_count: int | None = None
+    limit_down_source: str | None = None
     failed_limit_up_rate: float
     max_board_height: int
     total_amount: float

@@ -17,6 +17,9 @@ from app.models import (
     MarketIndexTrendFacts,
     MarketIndexTrendItem,
     MarketIndexTrendPoint,
+    MarketSummary,
+    SectorPerformanceFacts,
+    SectorRankingItem,
     build_agent_tool_policy_audit,
 )
 from app.services.sample_data import SAMPLE_EVENTS
@@ -264,6 +267,158 @@ class AgentToolPolicyTest(unittest.TestCase):
 
         self.assertTrue(signals.finance_news)
         self.assertFalse(signals.web_search)
+
+    def test_market_environment_repairs_all_required_evidence_groups(self) -> None:
+        request = AgentChatRequest(
+            session_id="policy-market-environment",
+            message="今天市场环境如何",
+        )
+        signals = QuestionSignals.from_message(request.message)
+        self.assertTrue(signals.market_environment)
+        self.assertTrue(signals.market_index_trend)
+        self.assertTrue(signals.sector_performance)
+        self.assertTrue(signals.hot_stock_ranking)
+
+        market_summary = MarketSummary(
+            trade_date=date(2026, 5, 15),
+            limit_up_count=42,
+            first_board_count=30,
+            continued_board_count=12,
+            failed_count=8,
+            unsealed_count=5,
+            unsealed_rate=0.1064,
+            limit_down_count=2,
+            limit_down_source="akshare-eastmoney-limit-down-pool",
+            failed_limit_up_rate=0.17,
+            max_board_height=5,
+            total_amount=20_000_000_000,
+            hot_industries=["半导体"],
+            hot_concepts=[],
+            indices=[],
+        )
+        index_facts = MarketIndexTrendFacts(
+            requested_days=5,
+            requested_end_date=date(2026, 5, 15),
+            data_as_of=date(2026, 5, 15),
+            data_fresh=True,
+            indices=[],
+        )
+        sector_facts = SectorPerformanceFacts(
+            trade_date=date(2026, 5, 15),
+            data_as_of=date(2026, 5, 15),
+            data_fresh=True,
+            sector_count=2,
+            top_sectors=[
+                SectorRankingItem(
+                    sector_name="半导体",
+                    rank=1,
+                    change_pct=3.2,
+                    leader_name="测试芯片",
+                )
+            ],
+            bottom_sectors=[
+                SectorRankingItem(
+                    sector_name="煤炭",
+                    rank=2,
+                    change_pct=-1.8,
+                    leader_name="测试煤炭",
+                )
+            ],
+            sources=["test-sector-source"],
+        )
+        hot_payload = {
+            "source": "hithink-finance",
+            "captured_at": "2026-05-15T07:10:00+00:00",
+            "items": [
+                {
+                    "rank": 1,
+                    "name": "测试热门股",
+                    "symbol": "000001",
+                    "change_pct": 6.5,
+                }
+            ],
+        }
+        execution = self._empty_execution()
+        with (
+            patch.object(
+                self.tools,
+                "market_summary",
+                return_value=ToolResult(
+                    name="market_summary",
+                    input={"include_limit_down": True},
+                    output=market_summary,
+                    summary="市场概况",
+                    trace_output=market_summary.model_dump(mode="json"),
+                ),
+            ) as summary_tool,
+            patch.object(
+                self.tools,
+                "market_index_trend",
+                return_value=ToolResult(
+                    name="market_index_trend",
+                    input={"days": 5, "end_date": None},
+                    output=index_facts,
+                    summary="指数走势",
+                    trace_output=index_facts.model_dump(mode="json"),
+                ),
+            ) as index_tool,
+            patch.object(
+                self.tools,
+                "sector_performance",
+                return_value=ToolResult(
+                    name="sector_performance",
+                    input={"sector": None, "trade_date": None},
+                    output=sector_facts,
+                    summary="板块强弱",
+                    trace_output=sector_facts.model_dump(mode="json"),
+                ),
+            ) as sector_tool,
+            patch.object(
+                self.tools,
+                "hot_stock_ranking",
+                return_value=ToolResult(
+                    name="hot_stock_ranking",
+                    input={
+                        "period": "day",
+                        "limit": 20,
+                        "source": "auto",
+                        "enrich_performance": True,
+                    },
+                    output=hot_payload,
+                    summary="热门个股",
+                    trace_output=hot_payload,
+                ),
+            ) as hot_tool,
+        ):
+            repaired = self.policy.reconcile(request=request, execution=execution)
+
+        self.assertEqual(
+            repaired,
+            [
+                "market_summary",
+                "market_index_trend",
+                "hot_stock_ranking",
+                "sector_performance",
+            ],
+        )
+        self.assertEqual(
+            set(execution["facts"]),
+            {
+                "market_summary",
+                "market_index_trend",
+                "hot_stock_ranking",
+                "sector_performance",
+            },
+        )
+        summary_tool.assert_called_once_with(include_limit_down=True)
+        index_tool.assert_called_once_with(days=5, end_date=None)
+        sector_tool.assert_called_once_with(sector=None, trade_date=None)
+        hot_tool.assert_called_once_with(
+            period="day",
+            limit=20,
+            source="auto",
+            enrich_performance=True,
+        )
 
     def test_company_news_still_uses_generic_web_search(self) -> None:
         signals = QuestionSignals.from_message("中电鑫龙有什么最新消息")

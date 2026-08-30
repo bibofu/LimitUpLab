@@ -66,7 +66,7 @@ class AgentSkillRegistry:
             str(call.get("name") or "") for call in tool_calls if isinstance(call, dict)
         }
         for skill in available:
-            if any(tool.name in selected_tools for tool in skill.required_tools):
+            if all(tool.name in selected_tools for tool in skill.required_tools):
                 return skill
         return None
 
@@ -78,7 +78,7 @@ class AgentSkillRegistry:
         """Infer the active skill after policy-repaired tools have produced facts."""
 
         for skill in self.available_skills(allowed_tool_names):
-            if any(tool.name in facts for tool in skill.required_tools):
+            if all(tool.name in facts for tool in skill.required_tools):
                 return skill
         return None
 

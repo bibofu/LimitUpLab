@@ -42,6 +42,7 @@ class QuestionSignals:
     """Small set of deterministic signals used only as Agent guardrails."""
 
     requested_date: date | None
+    market_environment: bool
     market_index_trend: bool
     sector_performance: bool
     hot_stock_ranking: bool
@@ -79,12 +80,20 @@ class QuestionSignals:
         )
         finance_news = looks_like_finance_news_question(message)
         daily_board_promotion = looks_like_daily_board_promotion_question(message)
-        market_index_trend = looks_like_market_index_trend_question(message)
+        market_environment = looks_like_market_environment_question(message)
+        market_index_trend = (
+            looks_like_market_index_trend_question(message) or market_environment
+        )
         return cls(
             requested_date=extract_trade_date(message),
+            market_environment=market_environment,
             market_index_trend=market_index_trend,
-            sector_performance=looks_like_sector_performance_question(message),
-            hot_stock_ranking=looks_like_hot_stock_question(message),
+            sector_performance=(
+                looks_like_sector_performance_question(message) or market_environment
+            ),
+            hot_stock_ranking=(
+                looks_like_hot_stock_question(message) or market_environment
+            ),
             finance_news=finance_news,
             web_search=looks_like_web_search_question(message) and not finance_news,
             daily_board_promotion=daily_board_promotion,
@@ -109,6 +118,7 @@ class QuestionSignals:
         return any(
             (
                 self.sector_performance,
+                self.market_environment,
                 self.market_index_trend,
                 self.hot_stock_ranking,
                 self.finance_news,
@@ -133,6 +143,7 @@ class QuestionSignals:
 
         return any(
             (
+                self.market_environment,
                 self.limit_up_events,
                 self.daily_board_promotion,
                 self.first_board_facts,
@@ -248,6 +259,16 @@ class AgentToolPolicyEngine:
         """Return ordered rules; earlier tools may provide facts for later rules."""
 
         return (
+            ToolRepairRule(
+                name="market-summary-grounding",
+                tool_name="market_summary",
+                reason=(
+                    "A broad market-environment answer requires completed limit-up, "
+                    "unsealed and limit-down facts."
+                ),
+                matches=lambda signals: signals.market_environment,
+                repair=self._repair_market_summary,
+            ),
             ToolRepairRule(
                 name="market-index-trend-grounding",
                 tool_name="market_index_trend",
@@ -492,6 +513,31 @@ class AgentToolPolicyEngine:
             ],
         )
 
+    def _repair_market_summary(
+        self,
+        request: AgentChatRequest,
+        signals: QuestionSignals,
+        execution: ToolExecution,
+        context_symbol: str | None,
+    ) -> None:
+        del request, signals, context_symbol
+        result = self.tools.market_summary(include_limit_down=True)
+        response = result.output
+        self._record_success(
+            execution,
+            result=result,
+            fact_name="market_summary",
+            fact_value=result.trace_output,
+            references=[
+                f"trade_date={response.trade_date.isoformat()}",
+                *(
+                    [f"limit_down_source={response.limit_down_source}"]
+                    if response.limit_down_source
+                    else []
+                ),
+            ],
+        )
+
     def _repair_market_index_trend(
         self,
         request: AgentChatRequest,
@@ -559,16 +605,21 @@ class AgentToolPolicyEngine:
         execution: ToolExecution,
         context_symbol: str | None,
     ) -> None:
-        del signals, context_symbol
+        del context_symbol
         source = "auto"
         if "同花顺" in request.message:
             source = "tonghuashun"
         elif "东方财富" in request.message:
             source = "eastmoney"
+        arguments: dict[str, Any] = {
+            "period": "day",
+            "limit": extract_result_limit(request.message) or 20,
+            "source": source,
+        }
+        if signals.market_environment:
+            arguments["enrich_performance"] = True
         result = self.tools.hot_stock_ranking(
-            period="day",
-            limit=extract_result_limit(request.message) or 20,
-            source=source,
+            **arguments,
         )
         payload = result.output
         self._record_success(
@@ -1102,6 +1153,33 @@ def extract_sector_query(message: str) -> str | None:
         if candidate and candidate not in generic and len(candidate) <= 12:
             return candidate
     return None
+
+
+def looks_like_market_environment_question(message: str) -> bool:
+    """Return whether a question requests a broad current market review."""
+
+    compact = re.sub(r"[\s，。！？,.!?]", "", message).lower()
+    explicit_terms = (
+        "市场环境",
+        "市场情况",
+        "盘面环境",
+        "盘面情况",
+        "市场全貌",
+        "市场概况",
+        "市场综述",
+    )
+    if any(term in compact for term in explicit_terms):
+        return True
+    return any(
+        phrase in compact
+        for phrase in (
+            "今天市场怎么样",
+            "今日市场怎么样",
+            "今天a股怎么样",
+            "今日a股怎么样",
+            "现在市场怎么样",
+        )
+    )
 
 
 def looks_like_sector_performance_question(message: str) -> bool:

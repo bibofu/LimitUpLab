@@ -56,6 +56,26 @@ class HithinkHotStockSnapshot:
 
 
 @dataclass(frozen=True)
+class HithinkMarketSnapshotFact:
+    """One current quote used to explain a popularity-ranked stock's performance."""
+
+    symbol: str
+    thscode: str
+    last_price: float | None
+    change_pct: float | None
+    turnover: float | None
+
+
+@dataclass(frozen=True)
+class HithinkMarketSnapshot:
+    """Timestamped quote snapshot for an explicit stock list."""
+
+    captured_at: datetime
+    items: list[HithinkMarketSnapshotFact]
+    source: str = HITHINK_SOURCE
+
+
+@dataclass(frozen=True)
 class HithinkDragonTigerFact:
     """One normalized Dragon-Tiger List row."""
 
@@ -190,6 +210,48 @@ class HithinkFinanceCollector:
             for row in rows
             if _symbol(row)
         }
+
+    def collect_market_snapshots(
+        self,
+        thscodes: Sequence[str],
+    ) -> HithinkMarketSnapshot:
+        """Return current quote facts for an explicit bounded stock list."""
+
+        normalized_codes = list(
+            dict.fromkeys(code.strip() for code in thscodes if code.strip())
+        )[:100]
+        if not normalized_codes:
+            return HithinkMarketSnapshot(
+                captured_at=datetime.now(timezone.utc),
+                items=[],
+            )
+        envelope = self._invoke(
+            "market",
+            "snapshot",
+            "--thscodes",
+            ",".join(normalized_codes),
+            "--limit",
+            str(len(normalized_codes)),
+        )
+        data = _dict(envelope.get("data"))
+        items = [
+            HithinkMarketSnapshotFact(
+                symbol=_symbol(row),
+                thscode=str(row.get("thscode") or ""),
+                last_price=_number(row.get("last_price")),
+                change_pct=_number(row.get("price_change_ratio_pct")),
+                turnover=_number(row.get("turnover")),
+            )
+            for row in _list(data.get("item"))
+            if _symbol(row)
+        ]
+        timestamp = _integer(data.get("timestamp"))
+        captured_at = (
+            datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
+            if timestamp is not None
+            else datetime.now(timezone.utc)
+        )
+        return HithinkMarketSnapshot(captured_at=captured_at, items=items)
 
     def collect_dragon_tiger(
         self,

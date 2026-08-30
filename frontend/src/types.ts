@@ -20,7 +20,7 @@ export interface MarketSummary {
   first_board_count: number;
   continued_board_count: number;
   failed_count: number;
-  limit_down_count: number;
+  limit_down_count: number | null;
   failed_limit_up_rate: number;
   max_board_height: number;
   total_amount: number;

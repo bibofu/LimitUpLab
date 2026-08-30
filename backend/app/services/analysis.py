@@ -72,6 +72,7 @@ def summarize_market(
     latest_events = events_for_date(events, latest_date)
     closed_events = [event for event in latest_events if event.closed_limit]
     failed_count = sum(1 for event in latest_events if event.break_count > 0)
+    unsealed_count = sum(1 for event in latest_events if not event.closed_limit)
     industry_counts = Counter(event.industry for event in closed_events)
     concept_counts = Counter(event.concept for event in closed_events)
     concept_failed_counts = Counter(
@@ -89,7 +90,9 @@ def summarize_market(
         first_board_count=first_board_count,
         continued_board_count=continued_board_count,
         failed_count=failed_count,
-        limit_down_count=7,
+        unsealed_count=unsealed_count,
+        unsealed_rate=round(unsealed_count / len(latest_events), 4),
+        limit_down_count=None,
         failed_limit_up_rate=failed_rate,
         max_board_height=max_board_height,
         total_amount=total_amount,

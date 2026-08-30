@@ -8,7 +8,7 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 ## 项目状态
 
-`v1.0.0` 是首个可用基线，当前继续完成 V1 收尾。V1 明确定义为基于完整收盘数据的首板复盘与次日一进二候选研究工具，不提供盘中、集合竞价、实时热榜、实时板块或实时新闻能力。相关扩展代码保留给 V2，但不会进入 V1 默认 Agent 工具集。
+`v1.0.0` 是首个可用基线，当前继续完成 V1 收尾。V1 明确定义为基于完整收盘数据的首板复盘与次日一进二候选研究工具，不提供盘中行情或集合竞价能力；Agent 可按需读取带来源和时间戳的热股榜、行业强弱榜与财经快讯，但这些外部事实不进入首板评分。
 
 当前版本已经具备可本地运行和单机部署的完整 MVP：
 
@@ -120,7 +120,7 @@ scoring_version
 | `prediction_quality_audit` | 审计预测来源、Outcome 覆盖和基线表现 |
 | `scoring_policy_status` | 查询 Champion、Challenger 和晋级原因 |
 
-默认配置 `LIMITUPLAB_AGENT_PROFILE=v1_close_review` 会在 Schema、Skill、Tool Policy 和执行器四层统一限制工具。V1 允许按需读取带来源和采集时间的 `hot_stock_ranking` 热度快照，以及东方财富、同花顺的 `finance_news` 财经快讯；这些外部事实不参与首板评分，也不被解释为推荐。`sector_performance`、`remote_limit_up_pool` 和 `web_search` 仅保留在 `extended` 研发配置中，供 V2 实时能力开发使用。即使 LLM 伪造这些未开放工具调用，V1 执行器也会拒绝执行。
+默认配置 `LIMITUPLAB_AGENT_PROFILE=v1_close_review` 会在 Schema、Skill、Tool Policy 和执行器四层统一限制工具。V1 允许按需读取带来源和采集时间的 `hot_stock_ranking` 热度快照、`sector_performance` 行业强弱榜，以及东方财富、同花顺的 `finance_news` 财经快讯；这些外部事实不参与首板评分，也不被解释为推荐。`remote_limit_up_pool` 和 `web_search` 仅保留在 `extended` 研发配置中，供 V2 能力开发使用。即使 LLM 伪造这些未开放工具调用，V1 执行器也会拒绝执行。
 
 Agent Query Contract v2 会把涨停问题统一成可审计的结构化查询，用户明确表达的日期、首板/连板、主板/创业板/科创板/北交所、封板/炸板、题材、排序、Top-N 和完整名单要求优先于 Planner 猜测。Tool Policy Engine 则负责修复 Planner 漏调工具的情况。例如，用户询问某只股票走势时必须调用 K 线工具，询问当天涨停时必须查询本地涨停事件，不能让模型直接凭记忆作答。
 
@@ -620,7 +620,7 @@ npm.cmd run build
 2. 持续观察 v3 Challenger 对现行评分、最早封板和固定随机基线的样本外优势。
 3. 完成 V1 Top10 不可变预测、D+1 晋级和 D+1 至 D+5 Outcome 的端到端验收。
 4. 持续扩充 V1 收盘数据问答评测，覆盖工具失败、日期截止点和多轮指代。
-5. V2 再为实时板块、新闻和更多策略建立独立数据契约与 Eval；需要横向扩容时迁移 PostgreSQL、Redis 限流和异步 Worker。
+5. V2 再为盘中板块、个股新闻搜索和更多策略建立独立数据契约与 Eval；需要横向扩容时迁移 PostgreSQL、Redis 限流和异步 Worker。
 
 详细进度见 [Tasks.md](./docs/Tasks.md)，完整需求见 [需求.md](./docs/%E9%9C%80%E6%B1%82.md)。
 

@@ -38,13 +38,13 @@ class DeferredToolInjectionProvider(LLMProvider):
             return LLMResult(
                 content=json.dumps(
                     {
-                        "intent_label": "sector_performance",
+                        "intent_label": "remote_limit_up_pool",
                         "skill_name": None,
                         "safety": "normal",
                         "tool_calls": [
                             {
-                                "name": "sector_performance",
-                                "arguments": {"sector": "半导体"},
+                                "name": "remote_limit_up_pool",
+                                "arguments": {},
                             }
                         ],
                         "answer_directly": "我猜测这是当前热门股票。",
@@ -162,7 +162,7 @@ class AgentV1ProfileTest(unittest.TestCase):
         self.assertTrue(schema_names.isdisjoint(V1_DEFERRED_REALTIME_TOOL_NAMES))
         self.assertIn("hot_stock_ranking", registry.schema_prompt())
         self.assertIn("finance_news", registry.schema_prompt())
-        self.assertNotIn("sector_performance", registry.schema_prompt())
+        self.assertIn("sector_performance", registry.schema_prompt())
         self.assertNotIn("web_search", schema_names)
 
     def test_extended_profile_preserves_deferred_v2_tools(self) -> None:
@@ -237,8 +237,8 @@ class AgentV1ProfileTest(unittest.TestCase):
         self.assertEqual(execution["tool_call_names"], ["hot_stock_ranking"])
         ranking.assert_called_once_with(period="day", limit=20, source="auto")
 
-    @patch("app.agents.tools.AgentToolRegistry.sector_performance")
-    def test_injected_deferred_tool_call_is_blocked(self, sector_performance) -> None:
+    @patch("app.agents.tools.AgentToolRegistry.remote_limit_up_pool")
+    def test_injected_deferred_tool_call_is_blocked(self, remote_limit_up_pool) -> None:
         provider = DeferredToolInjectionProvider()
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("LIMITUPLAB_AGENT_PROFILE", None)
@@ -252,13 +252,13 @@ class AgentV1ProfileTest(unittest.TestCase):
                 llm_provider=provider,
             )
 
-        sector_performance.assert_not_called()
+        remote_limit_up_pool.assert_not_called()
         self.assertEqual(response.answer, UNANSWERABLE_TEXT)
         self.assertEqual(provider.calls, 1)
         self.assertIn("v1_close_review", provider.planner_system_prompt)
-        self.assertNotIn('"name":"sector_performance"', provider.planner_system_prompt)
+        self.assertNotIn('"name":"remote_limit_up_pool"', provider.planner_system_prompt)
         blocked_trace = next(
-            trace for trace in response.tool_results if trace.name == "sector_performance"
+            trace for trace in response.tool_results if trace.name == "remote_limit_up_pool"
         )
         self.assertEqual(blocked_trace.status, "error")
 
