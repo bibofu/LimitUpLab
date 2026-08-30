@@ -68,7 +68,7 @@ from app.repositories import SQLiteFirstBoardRepository
 from app.services.llm_provider import LLMProvider, get_llm_provider
 
 
-CHAT_AGENT_VERSION = "first-board-chat-policy-v5-skills"
+CHAT_AGENT_VERSION = "first-board-chat-policy-v6-popularity"
 _FORCE_TEMPLATE_ANSWER_OVERRIDE: ContextVar[bool | None] = ContextVar(
     "force_template_answer_override",
     default=None,
@@ -123,8 +123,8 @@ def _template_answer_forced() -> bool:
     }
 
 TEXT = {
-    "greeting": "你好，我是 LimitUpLab 的首板 Agent。我可以总结今日首板、解释个股评分、分析风险，也可以查询个股走势和市场环境。",
-    "capability": "我是 LimitUpLab V1 首板复盘 Agent。我使用最新完整收盘数据和个股日 K 线筛选、解释首板候选，生成次日一进二 Top10 观察名单，并复盘 D+1 至 D+5 走势、晋级率和评分表现。我不提供盘中实时行情、买卖指令、仓位、目标价或收益承诺。",
+    "greeting": "你好，我是 LimitUpLab 的首板 Agent。我可以总结今日首板、解释个股评分、分析风险，也可以查询热门股票、个股走势和市场环境。",
+    "capability": "我是 LimitUpLab V1 首板复盘 Agent。我使用最新完整收盘数据和个股日 K 线筛选、解释首板候选，生成次日一进二 Top10 观察名单，并复盘 D+1 至 D+5 走势、晋级率和评分表现；也可以按需查询带来源和时间的热门股票榜单。我不提供盘中实时行情、买卖指令、仓位、目标价或收益承诺。",
     "smalltalk": "我在。你可以直接问首板候选、板块分布、评分理由、风险或个股走势。",
     "out_of_scope": UNANSWERABLE_TEXT,
     "unsafe": "我不能给出直接交易指令、资金配比、价格预测或回报承诺。我可以基于结构化数据分析评分理由、风险、板块热度和市场环境。",
@@ -415,7 +415,6 @@ def _requires_deferred_v1_capability(message: str) -> bool:
     if any(
         (
             signals.sector_performance,
-            signals.hot_stock_ranking,
             signals.finance_news,
             signals.web_search,
         )
@@ -880,10 +879,11 @@ def _tool_planner_system_prompt(
         else (
             "V1 is an after-close review and next-day first-to-second-board candidate "
             "research product. Use only the latest complete close or stored historical "
-            "facts exposed by the available tools. Never claim to have intraday, auction, "
-            "live popularity, live sector, or real-time news data. Questions that require "
-            "those deferred V2 capabilities are unsupported and must receive exactly "
-            "'抱歉，该问题无法回答'. "
+            "facts exposed by the available tools, except that current stock-popularity "
+            "questions may use the timestamped hot_stock_ranking snapshot. Never claim "
+            "to have intraday prices, auction data, live sector performance, or real-time "
+            "news. Questions that require those deferred V2 capabilities are unsupported "
+            "and must receive exactly '抱歉，该问题无法回答'. "
         )
     )
     return (
@@ -911,6 +911,7 @@ def _tool_planner_system_prompt(
         "For Dragon-Tiger List, institution flow or hot-money flow questions, call dragon_tiger_list only for a completed trade date. "
         "For a theme or industry inside the local limit-up pool, call limit_up_events; whole-market live sector performance is outside V1. "
         "For broad-market, major-index, Shanghai Composite, Shenzhen Component or ChiNext Index performance over multiple days, call market_index_trend with the requested trading-day window; never infer index performance from limit-up counts. "
+        "For current hot, popular, popularity-ranked, or attention-ranked stocks, call hot_stock_ranking; default to 20 rows when the user gives no count, state the source and Beijing capture time, and say that popularity reflects attention and does not constitute a trading signal. In this answer, never use the exact Chinese tokens 买入, 卖出, 仓位, 目标价, or 收益承诺, even inside a disclaimer. "
         "For market-overview or sentiment questions, call market_summary but report only objective counts and rates; never assign categorical labels such as heating, divergence, cooling, risk-on or risk-off. "
         "For questions about one stock's K-line, price trend, moving averages, recent rise/fall, volume, or drawdown, call stock_kline. "
         "Historical similar-case retrieval is retired. If the user asks for similar stocks or cases, do not invent or infer matches; answer directly that this capability is unavailable and suggest score evidence, stock_kline, or tracked prediction review instead. "
@@ -1522,11 +1523,14 @@ def _tool_answer_system_prompt(
         "source and capture time without treating popularity or news as prediction."
         if agent_profile == EXTENDED_AGENT_PROFILE
         else (
-            " V1 uses completed close and stored historical facts only. Begin factual "
-            "answers by stating the relevant YYYY-MM-DD close-data cutoff. Never imply "
-            "that a result is intraday, auction-time, or real-time. If the question "
-            "requires live popularity, live sector, live limit-up verification, or "
-            "current news, output exactly '抱歉，该问题无法回答'."
+            " V1 primarily uses completed close and stored historical facts. For a "
+            "hot_stock_ranking result, state its source, Beijing capture time and "
+            "data_fresh status instead of a close-data cutoff, and explain that "
+            "popularity is attention rather than a recommendation. For other factual "
+            "answers, begin with the relevant YYYY-MM-DD close-data cutoff. Never imply "
+            "that a result contains intraday prices or auction data. If the question "
+            "requires live sector performance, live limit-up verification, or current "
+            "news, output exactly '抱歉，该问题无法回答'."
         )
     )
     exhaustive_instruction = (

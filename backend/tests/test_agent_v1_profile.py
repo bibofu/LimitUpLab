@@ -14,6 +14,7 @@ from app.agents.tools import (
     V1_CLOSED_MARKET_TOOL_NAMES,
     V1_DEFERRED_REALTIME_TOOL_NAMES,
     AgentToolRegistry,
+    ToolResult,
 )
 from app.models import AgentChatRequest
 from app.repositories import SQLiteFirstBoardRepository
@@ -21,8 +22,8 @@ from app.services.llm_provider import LLMProvider, LLMResult
 from app.services.sample_data import SAMPLE_EVENTS
 
 
-class RealtimeToolInjectionProvider(LLMProvider):
-    """Request a hidden real-time tool to verify server-side enforcement."""
+class DeferredToolInjectionProvider(LLMProvider):
+    """Request a hidden V2 tool to verify server-side enforcement."""
 
     def __init__(self) -> None:
         self.planner_system_prompt = ""
@@ -36,13 +37,13 @@ class RealtimeToolInjectionProvider(LLMProvider):
             return LLMResult(
                 content=json.dumps(
                     {
-                        "intent_label": "hot_stock_ranking",
-                        "skill_name": "popularity",
+                        "intent_label": "sector_performance",
+                        "skill_name": None,
                         "safety": "normal",
                         "tool_calls": [
                             {
-                                "name": "hot_stock_ranking",
-                                "arguments": {"limit": 100},
+                                "name": "sector_performance",
+                                "arguments": {"sector": "半导体"},
                             }
                         ],
                         "answer_directly": "我猜测这是当前热门股票。",
@@ -53,6 +54,35 @@ class RealtimeToolInjectionProvider(LLMProvider):
             )
         return LLMResult(
             content="这段实时猜测不应被执行。",
+            model="fake-v1-answer",
+            provider="fake",
+        )
+
+
+class PopularityPolicyRepairProvider(LLMProvider):
+    """Skip planning the popularity tool so the policy contract must repair it."""
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        del user_prompt
+        if "first job is to decide which tools are needed" in system_prompt:
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": "hot_stock_ranking",
+                        "skill_name": "popularity",
+                        "safety": "normal",
+                        "tool_calls": [],
+                        "answer_directly": "",
+                    }
+                ),
+                model="fake-v1-planner",
+                provider="fake",
+            )
+        return LLMResult(
+            content=(
+                "截至 2026-08-30 16:00（北京时间），同花顺热股榜第 1 名为"
+                "测试热门股(000001)。热度反映关注度，不代表推荐。"
+            ),
             model="fake-v1-answer",
             provider="fake",
         )
@@ -88,7 +118,7 @@ class AgentV1ProfileTest(unittest.TestCase):
             "references": [],
         }
 
-    def test_default_profile_exposes_only_completed_close_tools(self) -> None:
+    def test_default_profile_exposes_close_tools_and_popularity_snapshot(self) -> None:
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("LIMITUPLAB_AGENT_PROFILE", None)
             registry = AgentToolRegistry(
@@ -100,7 +130,7 @@ class AgentV1ProfileTest(unittest.TestCase):
         self.assertEqual(registry.profile, V1_AGENT_PROFILE)
         self.assertEqual(schema_names, set(V1_CLOSED_MARKET_TOOL_NAMES))
         self.assertTrue(schema_names.isdisjoint(V1_DEFERRED_REALTIME_TOOL_NAMES))
-        self.assertNotIn("hot_stock_ranking", registry.schema_prompt())
+        self.assertIn("hot_stock_ranking", registry.schema_prompt())
         self.assertNotIn("sector_performance", registry.schema_prompt())
         self.assertNotIn("web_search", registry.schema_prompt())
 
@@ -115,13 +145,13 @@ class AgentV1ProfileTest(unittest.TestCase):
         self.assertTrue(V1_DEFERRED_REALTIME_TOOL_NAMES.issubset(schema_names))
         self.assertIn("hot_stock_ranking", registry.schema_prompt())
 
-    def test_v1_skill_catalog_excludes_popularity_workflow(self) -> None:
+    def test_v1_skill_catalog_includes_popularity_workflow(self) -> None:
         catalog = AGENT_SKILL_REGISTRY.schema_prompt(V1_CLOSED_MARKET_TOOL_NAMES)
 
         self.assertIn("first-board-rating", catalog)
         self.assertIn("limit-up-pool", catalog)
-        self.assertNotIn("popularity", catalog)
-        self.assertIsNone(
+        self.assertIn("popularity", catalog)
+        self.assertIsNotNone(
             AGENT_SKILL_REGISTRY.resolve(
                 "popularity",
                 [],
@@ -129,28 +159,48 @@ class AgentV1ProfileTest(unittest.TestCase):
             )
         )
 
-    def test_v1_policy_does_not_repair_a_deferred_realtime_tool(self) -> None:
+    def test_v1_policy_repairs_current_popularity_query(self) -> None:
         registry = AgentToolRegistry(
             events=SAMPLE_EVENTS,
             first_board_repository=self.repository,
             profile=V1_AGENT_PROFILE,
         )
         policy = AgentToolPolicyEngine(registry)
-        request = AgentChatRequest(
-            session_id="v1-realtime-policy",
-            message="热股榜前100名",
-        )
+        request = AgentChatRequest(session_id="v1-popularity-policy", message="现在的热门股票有哪些")
 
         execution = self._empty_execution()
-        repaired = policy.reconcile(request=request, execution=execution)
+        payload = {
+            "source": "hithink-finance",
+            "source_label": "同花顺",
+            "captured_at": "2026-08-30T08:00:00+00:00",
+            "captured_at_beijing": "2026-08-30T16:00:00+08:00",
+            "data_fresh": True,
+            "requested_count": 20,
+            "count": 1,
+            "complete": False,
+            "items": [{"rank": 1, "name": "测试热门股", "symbol": "000001"}],
+        }
+        with patch.object(
+            registry,
+            "hot_stock_ranking",
+            return_value=ToolResult(
+                name="hot_stock_ranking",
+                input={"period": "day", "limit": 20, "source": "auto"},
+                output=payload,
+                summary="同花顺热股榜返回 1/20 只。",
+                trace_output=payload,
+            ),
+        ) as ranking:
+            repaired = policy.reconcile(request=request, execution=execution)
 
         self.assertTrue(policy.requires_grounding(request))
-        self.assertEqual(repaired, [])
-        self.assertEqual(execution["tool_call_names"], [])
+        self.assertEqual(repaired, ["hot_stock_ranking"])
+        self.assertEqual(execution["tool_call_names"], ["hot_stock_ranking"])
+        ranking.assert_called_once_with(period="day", limit=20, source="auto")
 
-    @patch("app.agents.tools.AgentToolRegistry.hot_stock_ranking")
-    def test_injected_realtime_tool_call_is_blocked(self, hot_stock_ranking) -> None:
-        provider = RealtimeToolInjectionProvider()
+    @patch("app.agents.tools.AgentToolRegistry.sector_performance")
+    def test_injected_deferred_tool_call_is_blocked(self, sector_performance) -> None:
+        provider = DeferredToolInjectionProvider()
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("LIMITUPLAB_AGENT_PROFILE", None)
             response = answer_first_board_chat(
@@ -163,15 +213,55 @@ class AgentV1ProfileTest(unittest.TestCase):
                 llm_provider=provider,
             )
 
-        hot_stock_ranking.assert_not_called()
+        sector_performance.assert_not_called()
         self.assertEqual(response.answer, UNANSWERABLE_TEXT)
         self.assertEqual(provider.calls, 1)
         self.assertIn("v1_close_review", provider.planner_system_prompt)
-        self.assertNotIn('"name":"hot_stock_ranking"', provider.planner_system_prompt)
+        self.assertNotIn('"name":"sector_performance"', provider.planner_system_prompt)
         blocked_trace = next(
-            trace for trace in response.tool_results if trace.name == "hot_stock_ranking"
+            trace for trace in response.tool_results if trace.name == "sector_performance"
         )
         self.assertEqual(blocked_trace.status, "error")
+
+    @patch("app.agents.tools.AgentToolRegistry.hot_stock_ranking")
+    def test_current_popularity_question_is_grounded_in_v1(self, hot_stock_ranking) -> None:
+        payload = {
+            "source": "hithink-finance",
+            "source_label": "同花顺",
+            "captured_at": "2026-08-30T08:00:00+00:00",
+            "captured_at_beijing": "2026-08-30T16:00:00+08:00",
+            "data_fresh": True,
+            "requested_count": 20,
+            "count": 1,
+            "complete": False,
+            "items": [{"rank": 1, "name": "测试热门股", "symbol": "000001"}],
+        }
+        hot_stock_ranking.return_value = ToolResult(
+            name="hot_stock_ranking",
+            input={"period": "day", "limit": 20, "source": "auto"},
+            output=payload,
+            summary="同花顺热股榜返回 1/20 只。",
+            trace_output=payload,
+        )
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="v1-current-popularity",
+                message="现在的热门股票有哪些",
+            ),
+            events=SAMPLE_EVENTS,
+            repository=self.repository,
+            llm_provider=PopularityPolicyRepairProvider(),
+        )
+
+        self.assertIn("hot_stock_ranking", response.tool_calls)
+        self.assertIn("测试热门股", response.answer)
+        self.assertIn("北京时间", response.answer)
+        hot_stock_ranking.assert_called_once_with(
+            period="day",
+            limit=20,
+            source="auto",
+        )
 
     def test_v1_scope_eval_cases_are_rejected_before_llm(self) -> None:
         fixture_path = (

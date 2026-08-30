@@ -1,10 +1,6 @@
 {
   "cases": [
     {
-      "case_id": "live_popularity",
-      "message": "现在热股榜前10名"
-    },
-    {
       "case_id": "live_sector_performance",
       "message": "今天半导体板块实时表现怎么样"
     },
