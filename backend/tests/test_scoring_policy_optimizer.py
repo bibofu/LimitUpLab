@@ -8,7 +8,11 @@ from app.models import FirstBoardOutcome, LimitUpEvent, ScoringPolicy
 from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
 from app.services.sample_data import SAMPLE_EVENTS
 from app.services.scoring_policy import build_default_scoring_policy
-from app.services.scoring_policy_optimizer import optimize_scoring_policy
+from app.services.scoring_policy_optimizer import (
+    TARGET_WEIGHTS,
+    evaluate_scoring_policy,
+    optimize_scoring_policy,
+)
 
 
 class ScoringPolicyOptimizerTest(unittest.TestCase):
@@ -144,6 +148,34 @@ class ScoringPolicyOptimizerTest(unittest.TestCase):
             policy_repository.get_latest_optimization_run().run_id,
             report.run_id,
         )
+
+    def test_policy_metrics_make_promotion_lift_explicit(self) -> None:
+        database_path = (
+            Path(__file__).resolve().parents[1]
+            / f"scoring-policy-metrics-{uuid4().hex}.sqlite"
+        )
+        self.addCleanup(self._cleanup_database, database_path)
+        repository = SQLiteFirstBoardRepository(database_path)
+        events, outcomes = self._history(days=3)
+        repository.upsert_outcomes(outcomes)
+        outcome_map = {
+            (item.base_trade_date, item.symbol): item for item in outcomes
+        }
+
+        metrics = evaluate_scoring_policy(
+            events=events,
+            dates=sorted({item.trade_date for item in events}),
+            outcomes=outcome_map,
+            policy=build_default_scoring_policy(),
+            repository=repository,
+            top_k=1,
+        )
+
+        self.assertEqual(TARGET_WEIGHTS["promotion"], 0.60)
+        self.assertEqual(metrics.promoted_to_second_board_rate, 1.0)
+        self.assertEqual(metrics.pool_promoted_to_second_board_rate, 0.25)
+        self.assertEqual(metrics.promotion_rate_lift, 0.75)
+        self.assertIsNotNone(metrics.objective_score)
 
     @staticmethod
     def _cleanup_database(database_path: Path) -> None:

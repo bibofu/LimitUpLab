@@ -58,6 +58,7 @@ import {
   fetchMarketSummary,
   fetchRatingBacktest,
   fetchRatingEvaluation,
+  fetchScoringErrorDiagnostic,
   fetchRecentLimitUpEvents,
   fetchStockKLine,
   fetchStockEvent,
@@ -86,6 +87,7 @@ import type {
   ReviewAgentPick,
   ReviewAgentReportResponse,
   ReviewPromotionComparison,
+  ScoringErrorDiagnosticResponse,
   StockCloseSnapshot,
   StockIntradayKLineBar,
   StockKLineBar,
@@ -1259,6 +1261,7 @@ function HighScoreReviewPanel({
   const [activeReviewSelection, setActiveReviewSelection] = useState<string | null>(null);
   const [snapshotDates, setSnapshotDates] = useState<DailyReviewSnapshotSummary[]>([]);
   const [selectedAsOfDate, setSelectedAsOfDate] = useState(latestTradeDate);
+  const [scoringDiagnostic, setScoringDiagnostic] = useState<ScoringErrorDiagnosticResponse | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -1287,14 +1290,19 @@ function HighScoreReviewPanel({
   async function loadReview(endDate: string) {
     setRunning(true);
     setError(null);
+    setScoringDiagnostic(null);
     try {
-      const response = await fetchReviewAgentReport({
-        end_date: endDate,
-        top_per_day: 10,
-        follow_days: 5,
-        use_llm: false,
-      });
+      const [response, diagnostic] = await Promise.all([
+        fetchReviewAgentReport({
+          end_date: endDate,
+          top_per_day: 10,
+          follow_days: 5,
+          use_llm: false,
+        }),
+        fetchScoringErrorDiagnostic(endDate).catch(() => null),
+      ]);
       setReport(response);
+      setScoringDiagnostic(diagnostic);
       const grouped = groupReviewPicksByDate(response.reviewed_picks);
       const trackDates = buildReviewTrackDates(grouped, response.end_date);
       setActiveReviewSelection((current) => (
@@ -1419,6 +1427,9 @@ function HighScoreReviewPanel({
         ) : report ? (
           <>
             <ReviewConclusion report={report} trackDates={trackDates} />
+            {scoringDiagnostic ? (
+              <ScoringErrorDiagnosticPanel diagnostic={scoringDiagnostic} />
+            ) : null}
             <div className="review-agent-metrics">
               <span>
                 <small>样本</small>
@@ -1592,6 +1603,121 @@ function ReviewConclusion({
           <p>{report.adjustment_suggestions[0] ?? report.main_findings[0] ?? "继续积累样本并保持当前评分口径。"}</p>
         </article>
       </div>
+    </section>
+  );
+}
+
+function ScoringErrorDiagnosticPanel({
+  diagnostic,
+}: {
+  diagnostic: ScoringErrorDiagnosticResponse;
+}) {
+  /** Expose promotion errors and ablation evidence without changing Champion. */
+
+  const actionableFactors = diagnostic.factors
+    .filter((item) => item.recommendation !== "neutral")
+    .slice(0, 4);
+  const factors = actionableFactors.length > 0
+    ? actionableFactors
+    : diagnostic.factors.slice(0, 4);
+  const sampleWarning = diagnostic.trade_date_count < 20
+    ? `当前只有 ${diagnostic.trade_date_count} 个结果完整交易日，所有方向仅进入影子验证。`
+    : "调整方向仍需通过后续交易日的样本外验证。";
+
+  return (
+    <section className="scoring-error-diagnostic" aria-label="评分改进诊断">
+      <header>
+        <div>
+          <span>评分改进诊断</span>
+          <strong>{diagnostic.findings[0] ?? "等待结果完整样本"}</strong>
+        </div>
+        <b>Champion 保持不变</b>
+      </header>
+
+      <div className="scoring-error-summary">
+        <span>
+          <small>高分误选</small>
+          <strong>{diagnostic.false_positive_count}</strong>
+          <em>Top10 未晋级</em>
+        </span>
+        <span>
+          <small>晋级漏选</small>
+          <strong>{diagnostic.false_negative_count}</strong>
+          <em>Top10 之外晋级</em>
+        </span>
+        <span>
+          <small>有效交易日</small>
+          <strong>{diagnostic.trade_date_count}</strong>
+          <em>{diagnostic.pool_sample_size} 个首板样本</em>
+        </span>
+        <span>
+          <small>相对全市场</small>
+          <strong className={numberTone(diagnostic.promotion_rate_delta)}>
+            {diagnostic.promotion_rate_delta === null
+              ? "暂无"
+              : `${formatSigned(diagnostic.promotion_rate_delta * 100, 1)} 个百分点`}
+          </strong>
+          <em>Top10 减全市场</em>
+        </span>
+      </div>
+
+      <div className="scoring-error-body">
+        <div className="scoring-factor-diagnosis">
+          <strong>值得继续验证的因子方向</strong>
+          {factors.map((item) => (
+            <article key={item.factor_key}>
+              <div>
+                <span>{item.factor_name}</span>
+                <b className={`factor-action ${item.recommendation}`}>
+                  {item.recommendation === "increase"
+                    ? "观察上调"
+                    : item.recommendation === "decrease"
+                      ? "观察下调"
+                      : "暂不调整"}
+                </b>
+              </div>
+              <p>{item.evidence}</p>
+            </article>
+          ))}
+        </div>
+
+        <div className="scoring-error-cases">
+          <ErrorCaseList
+            title="典型高分误选"
+            items={diagnostic.false_positive_samples.slice(0, 3)}
+          />
+          <ErrorCaseList
+            title="典型晋级漏选"
+            items={diagnostic.false_negative_samples.slice(0, 3)}
+          />
+        </div>
+      </div>
+
+      <p className="scoring-shadow-note">{sampleWarning}</p>
+    </section>
+  );
+}
+
+function ErrorCaseList({
+  title,
+  items,
+}: {
+  title: string;
+  items: ScoringErrorDiagnosticResponse["false_positive_samples"];
+}) {
+  return (
+    <section>
+      <strong>{title}</strong>
+      {items.length > 0 ? items.map((item) => (
+        <Link
+          key={`${item.trade_date}-${item.symbol}`}
+          to={stockDetailPath(item.symbol, item.trade_date)}
+        >
+          <span>{item.name}<small>{item.symbol}</small></span>
+          <b>第 {item.rank} 名</b>
+          <em>{item.leading_factors.slice(0, 2).join(" · ")}</em>
+        </Link>
+      )) : <p>当前没有可展示的成熟样本。</p>}
     </section>
   );
 }

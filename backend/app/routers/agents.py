@@ -46,6 +46,7 @@ from app.models import (
     PredictionQualityAuditResponse,
     RatingBacktestResponse,
     ReviewAgentReportResponse,
+    ScoringErrorDiagnosticResponse,
     ScoringPolicyOptimizationResponse,
     ScoringPolicyRegistryResponse,
 )
@@ -81,6 +82,7 @@ from app.config import env_bool
 from app.services.prediction_quality_audit import build_prediction_quality_audit
 from app.services.outcome_completeness import build_top10_outcome_completeness
 from app.services.rating_backtest import build_rating_backtest
+from app.services.scoring_error_diagnostic import build_scoring_error_diagnostic
 from app.services.scoring_policy_optimizer import (
     build_scoring_policy_registry,
     optimize_scoring_policy,
@@ -570,6 +572,40 @@ def get_factor_signal_diagnostic(
             end_date=resolved_end,
             first_board_repository=SQLiteFirstBoardRepository(),
             outcome_measure=outcome_measure,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.get(
+    "/scoring-error-diagnostic",
+    response_model=ScoringErrorDiagnosticResponse,
+)
+def get_scoring_error_diagnostic(
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    top_k: int = Query(default=10, ge=3, le=30),
+) -> ScoringErrorDiagnosticResponse:
+    """Return promotion-first Top-K mistake and factor-ablation evidence."""
+
+    events = get_limit_up_repository().list_events()
+    if not events:
+        raise HTTPException(status_code=404, detail="No local limit-up events available.")
+    available_dates = sorted({event.trade_date for event in events})
+    resolved_end = end_date or available_dates[-1]
+    eligible_dates = [item for item in available_dates if item <= resolved_end]
+    if not eligible_dates:
+        raise HTTPException(status_code=404, detail="No events available before end_date.")
+    resolved_start = start_date or eligible_dates[max(0, len(eligible_dates) - 60)]
+    if resolved_start > resolved_end:
+        raise HTTPException(status_code=400, detail="start_date must be before end_date.")
+    try:
+        return build_scoring_error_diagnostic(
+            events=events,
+            start_date=resolved_start,
+            end_date=resolved_end,
+            first_board_repository=SQLiteFirstBoardRepository(),
+            top_k=top_k,
         )
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error

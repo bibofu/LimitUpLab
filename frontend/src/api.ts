@@ -17,6 +17,7 @@ import type {
   PostPerformanceStat,
   RatingBacktestResponse,
   ReviewAgentReportResponse,
+  ScoringErrorDiagnosticResponse,
   StockCloseSnapshot,
   StockIntradayKLineBar,
   StockKLineBar,
@@ -158,6 +159,16 @@ export function fetchReviewAgentReport(params?: {
 export function fetchDailyReviewSnapshots(limit = 20) {
   return request<DailyReviewSnapshotsResponse>(
     `/api/agents/review-snapshots?limit=${limit}`,
+  );
+}
+
+export function fetchScoringErrorDiagnostic(endDate?: string, topK = 10) {
+  const query = new URLSearchParams({ top_k: String(topK) });
+  if (endDate) {
+    query.set("end_date", endDate);
+  }
+  return request<ScoringErrorDiagnosticResponse>(
+    `/api/agents/scoring-error-diagnostic?${query.toString()}`,
   );
 }
 

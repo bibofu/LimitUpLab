@@ -1482,6 +1482,211 @@ td span {
   -webkit-line-clamp: 4;
 }
 
+.scoring-error-diagnostic {
+  display: grid;
+  gap: 0;
+  overflow: hidden;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #ffffff;
+}
+
+.scoring-error-diagnostic > header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 16px;
+  padding: 14px 16px;
+  border-bottom: 1px solid #eaecf0;
+  background: #f9fafb;
+}
+
+.scoring-error-diagnostic > header div {
+  display: grid;
+  gap: 3px;
+}
+
+.scoring-error-diagnostic > header span,
+.scoring-error-summary small {
+  color: #667085;
+  font-size: 12px;
+  font-weight: 700;
+}
+
+.scoring-error-diagnostic > header strong {
+  color: #101828;
+  font-size: 15px;
+}
+
+.scoring-error-diagnostic > header > b {
+  flex: 0 0 auto;
+  padding: 5px 8px;
+  border: 1px solid #d0d5dd;
+  border-radius: 5px;
+  color: #475467;
+  font-size: 11px;
+}
+
+.scoring-error-summary {
+  display: grid;
+  grid-template-columns: repeat(4, minmax(0, 1fr));
+  border-bottom: 1px solid #eaecf0;
+}
+
+.scoring-error-summary > span {
+  display: grid;
+  gap: 4px;
+  min-width: 0;
+  padding: 12px 16px;
+  border-right: 1px solid #eaecf0;
+}
+
+.scoring-error-summary > span:last-child {
+  border-right: 0;
+}
+
+.scoring-error-summary strong {
+  color: #101828;
+  font-size: 19px;
+}
+
+.scoring-error-summary em {
+  color: #98a2b3;
+  font-size: 11px;
+  font-style: normal;
+}
+
+.scoring-error-body {
+  display: grid;
+  grid-template-columns: minmax(0, 1.25fr) minmax(320px, 0.75fr);
+}
+
+.scoring-factor-diagnosis,
+.scoring-error-cases {
+  display: grid;
+  align-content: start;
+  gap: 8px;
+  min-width: 0;
+  padding: 14px 16px;
+}
+
+.scoring-factor-diagnosis {
+  border-right: 1px solid #eaecf0;
+}
+
+.scoring-factor-diagnosis > strong,
+.scoring-error-cases section > strong {
+  color: #101828;
+  font-size: 13px;
+}
+
+.scoring-factor-diagnosis article {
+  display: grid;
+  gap: 4px;
+  padding: 9px 0;
+  border-top: 1px solid #f2f4f7;
+}
+
+.scoring-factor-diagnosis article > div {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 10px;
+}
+
+.scoring-factor-diagnosis article span {
+  color: #344054;
+  font-size: 13px;
+  font-weight: 800;
+}
+
+.factor-action {
+  font-size: 11px;
+}
+
+.factor-action.increase {
+  color: #027a48;
+}
+
+.factor-action.decrease {
+  color: #b42318;
+}
+
+.factor-action.neutral {
+  color: #667085;
+}
+
+.scoring-factor-diagnosis p,
+.scoring-error-cases p,
+.scoring-shadow-note {
+  margin: 0;
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.5;
+}
+
+.scoring-error-cases {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.scoring-error-cases section {
+  display: grid;
+  align-content: start;
+  gap: 7px;
+  min-width: 0;
+}
+
+.scoring-error-cases a {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
+  gap: 2px 8px;
+  padding: 7px 0;
+  border-top: 1px solid #f2f4f7;
+  color: inherit;
+  text-decoration: none;
+}
+
+.scoring-error-cases a:hover span {
+  color: #b42318;
+}
+
+.scoring-error-cases a span {
+  min-width: 0;
+  overflow: hidden;
+  color: #101828;
+  font-size: 12px;
+  font-weight: 800;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scoring-error-cases a small {
+  margin-left: 5px;
+  color: #98a2b3;
+  font-weight: 500;
+}
+
+.scoring-error-cases a b {
+  color: #475467;
+  font-size: 11px;
+}
+
+.scoring-error-cases a em {
+  grid-column: 1 / -1;
+  overflow: hidden;
+  color: #98a2b3;
+  font-size: 10px;
+  font-style: normal;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.scoring-shadow-note {
+  padding: 10px 16px;
+  border-top: 1px solid #eaecf0;
+  background: #f9fafb;
+}
+
 .review-agent-metrics {
   display: grid;
   grid-template-columns: repeat(6, minmax(0, 1fr));
@@ -4723,6 +4928,26 @@ td span {
 
   .review-conclusion-metrics > span:last-child,
   .review-conclusion-evidence article:last-child {
+    border-bottom: 0;
+  }
+
+  .scoring-error-diagnostic > header {
+    align-items: flex-start;
+  }
+
+  .scoring-error-summary,
+  .scoring-error-body,
+  .scoring-error-cases {
+    grid-template-columns: 1fr;
+  }
+
+  .scoring-error-summary > span,
+  .scoring-factor-diagnosis {
+    border-right: 0;
+    border-bottom: 1px solid #eaecf0;
+  }
+
+  .scoring-error-summary > span:last-child {
     border-bottom: 0;
   }
 

@@ -599,6 +599,52 @@ export interface DailyReviewSnapshotsResponse {
   generated_by: string;
 }
 
+export interface ScoringErrorCase {
+  trade_date: string;
+  symbol: string;
+  name: string;
+  rank: number;
+  score: number;
+  promoted_to_second_board: boolean;
+  next_open_to_close_pct: number | null;
+  leading_factors: string[];
+}
+
+export interface ScoringFactorErrorDiagnostic {
+  factor_key: string;
+  factor_name: string;
+  false_positive_mean_score: number | null;
+  false_negative_mean_score: number | null;
+  false_negative_minus_false_positive: number | null;
+  ablation_top_promotion_rate: number | null;
+  ablation_delta: number | null;
+  recommendation: "increase" | "decrease" | "neutral";
+  evidence: string;
+}
+
+export interface ScoringErrorDiagnosticResponse {
+  start_date: string;
+  end_date: string;
+  scoring_version: string;
+  top_k: number;
+  trade_date_count: number;
+  pool_sample_size: number;
+  top_sample_size: number;
+  top_promoted_count: number;
+  top_promotion_rate: number | null;
+  market_promoted_count: number;
+  market_promotion_rate: number | null;
+  promotion_rate_delta: number | null;
+  false_positive_count: number;
+  false_negative_count: number;
+  false_positive_samples: ScoringErrorCase[];
+  false_negative_samples: ScoringErrorCase[];
+  factors: ScoringFactorErrorDiagnostic[];
+  findings: string[];
+  warnings: string[];
+  generated_by: string;
+}
+
 export interface AgentChatRequest {
   session_id: string;
   message_id?: string;

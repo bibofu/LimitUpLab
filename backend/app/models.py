@@ -656,6 +656,8 @@ class ScoringPolicyMetrics(BaseModel):
     avg_three_day_open_to_close_pct: float | None = None
     avg_max_drawdown_from_next_open_3d: float | None = None
     promoted_to_second_board_rate: float | None = None
+    pool_promoted_to_second_board_rate: float | None = None
+    promotion_rate_lift: float | None = None
     large_loss_rate: float | None = None
     avg_next_open_to_low_pct: float | None = None
     pool_avg_next_open_to_close_pct: float | None = None
@@ -672,6 +674,7 @@ class ScoringPolicyComparison(BaseModel):
     positive_rate_delta: float | None = None
     drawdown_delta: float | None = None
     promotion_rate_delta: float | None = None
+    promotion_lift_delta: float | None = None
     large_loss_rate_delta: float | None = None
     promotion_eligible: bool
     gate_reasons: list[str] = Field(default_factory=list)
@@ -917,6 +920,58 @@ class FactorSignalDiagnosticResponse(BaseModel):
     ]
     verdict: str
     caveats: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    generated_by: str
+
+
+class ScoringErrorCase(BaseModel):
+    """One promoted miss or non-promoted Top-K selection used for diagnosis."""
+
+    trade_date: date
+    symbol: str
+    name: str
+    rank: int
+    score: float
+    promoted_to_second_board: bool
+    next_open_to_close_pct: float | None = None
+    leading_factors: list[str] = Field(default_factory=list)
+
+
+class ScoringFactorErrorDiagnostic(BaseModel):
+    """Error-slice and ablation evidence for one scoring factor."""
+
+    factor_key: str
+    factor_name: str
+    false_positive_mean_score: float | None = None
+    false_negative_mean_score: float | None = None
+    false_negative_minus_false_positive: float | None = None
+    ablation_top_promotion_rate: float | None = None
+    ablation_delta: float | None = None
+    recommendation: Literal["increase", "decrease", "neutral"]
+    evidence: str
+
+
+class ScoringErrorDiagnosticResponse(BaseModel):
+    """Promotion-first diagnosis of Top-K mistakes and factor ablations."""
+
+    start_date: date
+    end_date: date
+    scoring_version: str
+    top_k: int
+    trade_date_count: int
+    pool_sample_size: int
+    top_sample_size: int
+    top_promoted_count: int
+    top_promotion_rate: float | None = None
+    market_promoted_count: int
+    market_promotion_rate: float | None = None
+    promotion_rate_delta: float | None = None
+    false_positive_count: int
+    false_negative_count: int
+    false_positive_samples: list[ScoringErrorCase] = Field(default_factory=list)
+    false_negative_samples: list[ScoringErrorCase] = Field(default_factory=list)
+    factors: list[ScoringFactorErrorDiagnostic] = Field(default_factory=list)
+    findings: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     generated_by: str
 

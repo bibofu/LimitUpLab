@@ -31,15 +31,15 @@ from app.services.scoring_policy import (
 )
 
 
-SCORING_POLICY_OPTIMIZER_VERSION = "scoring-policy-optimizer-v3-multi-objective"
+SCORING_POLICY_OPTIMIZER_VERSION = "scoring-policy-optimizer-v4-promotion-first"
 MIN_TRADE_DATES = 10
 MIN_PROMOTION_TRADE_DATES = 60
 MAX_RELATIVE_WEIGHT_CHANGE = 0.12
 SEARCH_STRENGTHS = (0.35, 0.7, 1.0)
 TARGET_WEIGHTS = {
-    "next_open_to_close": 0.45,
-    "promotion": 0.30,
-    "downside_protection": 0.25,
+    "next_open_to_close": 0.20,
+    "promotion": 0.60,
+    "downside_protection": 0.20,
 }
 LARGE_LOSS_THRESHOLD_PCT = -3.0
 
@@ -136,11 +136,7 @@ def optimize_scoring_policy(
 
         selected_strength, selected, _ = max(
             validation_candidates,
-            key=lambda item: (
-                item[2].objective_score
-                if item[2].objective_score is not None
-                else float("-inf")
-            ),
+            key=lambda item: _policy_selection_key(item[2]),
         )
         champion_test = evaluate_scoring_policy(
             events=events,
@@ -269,6 +265,10 @@ def evaluate_scoring_policy(
     promotion_rate = _boolean_rate(
         [sample.outcome.promoted_to_second_board for sample in top_samples]
     )
+    pool_promotion_rate = _boolean_rate(
+        [sample.outcome.promoted_to_second_board for sample in pool_samples]
+    )
+    promotion_lift = _difference(promotion_rate, pool_promotion_rate)
     large_loss_rate = _threshold_rate(
         top_next,
         threshold=LARGE_LOSS_THRESHOLD_PCT,
@@ -289,7 +289,7 @@ def evaluate_scoring_policy(
         positive_rate=positive_rate,
         avg_three=avg_three,
         avg_drawdown=avg_drawdown,
-        promotion_rate=promotion_rate,
+        promotion_lift=promotion_lift,
         large_loss_rate=large_loss_rate,
         excess=excess,
     )
@@ -304,6 +304,8 @@ def evaluate_scoring_policy(
         avg_three_day_open_to_close_pct=avg_three,
         avg_max_drawdown_from_next_open_3d=avg_drawdown,
         promoted_to_second_board_rate=promotion_rate,
+        pool_promoted_to_second_board_rate=pool_promotion_rate,
+        promotion_rate_lift=promotion_lift,
         large_loss_rate=large_loss_rate,
         avg_next_open_to_low_pct=_average(top_next_low),
         pool_avg_next_open_to_close_pct=pool_avg,
@@ -550,6 +552,12 @@ def _aggregate_metrics(
     avg_three = top_weighted("avg_three_day_open_to_close_pct")
     avg_drawdown = top_weighted("avg_max_drawdown_from_next_open_3d")
     promotion_rate = top_weighted("promoted_to_second_board_rate")
+    pool_promotion_rate = _weighted_metric(
+        metrics,
+        "pool_promoted_to_second_board_rate",
+        "pool_sample_size",
+    )
+    promotion_lift = _difference(promotion_rate, pool_promotion_rate)
     large_loss_rate = top_weighted("large_loss_rate")
     pool_avg = _weighted_metric(
         metrics,
@@ -572,6 +580,8 @@ def _aggregate_metrics(
         avg_three_day_open_to_close_pct=avg_three,
         avg_max_drawdown_from_next_open_3d=avg_drawdown,
         promoted_to_second_board_rate=promotion_rate,
+        pool_promoted_to_second_board_rate=pool_promotion_rate,
+        promotion_rate_lift=promotion_lift,
         large_loss_rate=large_loss_rate,
         avg_next_open_to_low_pct=top_weighted("avg_next_open_to_low_pct"),
         pool_avg_next_open_to_close_pct=pool_avg,
@@ -581,7 +591,7 @@ def _aggregate_metrics(
             positive_rate=positive_rate,
             avg_three=avg_three,
             avg_drawdown=avg_drawdown,
-            promotion_rate=promotion_rate,
+            promotion_lift=promotion_lift,
             large_loss_rate=large_loss_rate,
             excess=excess,
         ),
@@ -625,6 +635,10 @@ def _compare_policies(
         challenger.promoted_to_second_board_rate,
         champion.promoted_to_second_board_rate,
     )
+    promotion_lift_delta = _difference(
+        challenger.promotion_rate_lift,
+        champion.promotion_rate_lift,
+    )
     large_loss_delta = _difference(
         challenger.large_loss_rate,
         champion.large_loss_rate,
@@ -641,8 +655,10 @@ def _compare_policies(
         reasons.append("累计样本外测试少于 8 个独立交易日，禁止晋级。")
     if challenger.top_sample_size < 50:
         reasons.append("累计样本外 Top 样本少于 50，禁止晋级。")
-    if objective_delta is None or objective_delta < 0.05:
-        reasons.append("walk-forward 综合目标提升不足 0.05。")
+    if promotion_lift_delta is None or promotion_lift_delta < 0.02:
+        reasons.append("Top10 相对全市场的一进二优势提升不足 2 个百分点。")
+    if objective_delta is None or objective_delta <= 0:
+        reasons.append("晋级优先综合目标没有改善。")
     if positive_delta is None or positive_delta < -0.02:
         reasons.append("Top 样本正收益率下降超过允许范围。")
     if drawdown_delta is not None and drawdown_delta < -0.3:
@@ -658,6 +674,7 @@ def _compare_policies(
         positive_rate_delta=positive_delta,
         drawdown_delta=drawdown_delta,
         promotion_rate_delta=promotion_delta,
+        promotion_lift_delta=promotion_lift_delta,
         large_loss_rate_delta=large_loss_delta,
         promotion_eligible=not reasons,
         gate_reasons=reasons or ["全部样本外晋级门槛通过。"],
@@ -670,22 +687,44 @@ def _objective_score(
     positive_rate: float | None,
     avg_three: float | None,
     avg_drawdown: float | None,
-    promotion_rate: float | None,
+    promotion_lift: float | None,
     large_loss_rate: float | None,
     excess: float | None,
 ) -> float | None:
-    if avg_next is None or positive_rate is None:
+    if avg_next is None or positive_rate is None or promotion_lift is None:
         return None
+    # Express probabilities as percentage points before combining them with
+    # percentage returns. Promotion lift remains the dominant objective.
     value = (
-        avg_next
-        + 0.25 * (avg_three or 0.0)
-        + 1.5 * (positive_rate - 0.5)
-        + 1.0 * (promotion_rate or 0.0)
-        + 0.35 * (avg_drawdown or 0.0)
-        - 1.5 * (large_loss_rate or 0.0)
-        + 0.5 * (excess or 0.0)
+        promotion_lift * 100
+        + 0.25 * (excess or 0.0)
+        + 0.10 * avg_next
+        + 0.05 * (avg_three or 0.0)
+        + 0.05 * (avg_drawdown or 0.0)
+        - 0.10 * (large_loss_rate or 0.0) * 100
+        + 0.02 * (positive_rate - 0.5) * 100
     )
     return round(value, 4)
+
+
+def _policy_selection_key(metrics: ScoringPolicyMetrics) -> tuple[float, ...]:
+    """Select validation candidates by promotion lift before risk and return."""
+
+    return (
+        metrics.promotion_rate_lift
+        if metrics.promotion_rate_lift is not None
+        else float("-inf"),
+        metrics.promoted_to_second_board_rate
+        if metrics.promoted_to_second_board_rate is not None
+        else float("-inf"),
+        -(metrics.large_loss_rate or 0.0),
+        metrics.excess_next_open_to_close_pct
+        if metrics.excess_next_open_to_close_pct is not None
+        else float("-inf"),
+        metrics.avg_max_drawdown_from_next_open_3d
+        if metrics.avg_max_drawdown_from_next_open_3d is not None
+        else float("-inf"),
+    )
 
 
 def _pearson(pairs: list[tuple[float, float]]) -> float:

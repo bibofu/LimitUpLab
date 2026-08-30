@@ -162,7 +162,7 @@ Outcome 完整性检查严格按本地市场交易日对齐 D+1、D+3 和 D+5。
 
 - 因子权重具有明确版本
 - 训练、验证和测试按交易日期顺序执行扩展窗口 walk-forward，测试日不重叠
-- 同时优化次日开盘到收盘收益、晋级二板概率和大跌风险保护
+- 以 Top10 相对同期全部首板的一进二提升为主目标，次日收益、大跌率和三日回撤作为保护约束
 - 因子相关性按交易日去中心化后计算，减少不同市场环境造成的截面偏差
 - 单次权重变化受到限制
 - Challenger 默认只在影子模式运行
@@ -174,6 +174,8 @@ Outcome 完整性检查严格按本地市场交易日对齐 D+1、D+3 和 D+5。
 `/api/agents/prediction-quality-audit` 会先按 `live / historical_backtest` 和评分版本拆分预测，再按交易日选择完整批次；未成熟、Outcome 待回填和完整样本分开统计，避免把未来尚不存在的结果算成失败，也避免把历史重算样本混入真实当日 Top10。
 
 `/api/agents/factor-signal-diagnostic` 提供独立的快速证伪诊断：单因子按交易日计算横截面 IC，并使用日期级符号翻转检验和 Bonferroni 校正；分位比较保留同分样本；联合 Lasso 使用按交易日留一的样本外预测和日期块 bootstrap。该报告只输出“当前未发现可复现信号”或“信号需要继续验证”，不会把小样本下的未显著误写成“因子已被证明为噪声”。
+
+`/api/agents/scoring-error-diagnostic` 从结果完整日期中识别 Top10 高分误选和 Top10 之外的晋级漏选，并对 14 个评分因子逐一做排序消融。诊断只提出“观察上调、观察下调或暂不调整”的影子假设；样本不足、Outcome 不完整或未通过 walk-forward 门槛时不会改写 Champion。
 
 截至 2026-08-22 的本地审计中，v3 已生成 3 个测试日不重叠的样本外折，但只有 14 个 Outcome 结果日，因此仍保持影子状态。当前评分 Top10 尚未优于最早封板基线，页面会如实展示这一结论和数据覆盖缺口。
 
@@ -517,6 +519,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mo
 | `GET` | `/api/agents/review-snapshots` | 已固化每日复盘日期与摘要 |
 | `GET` | `/api/agents/prediction-quality-audit` | 预测来源、覆盖率和基线审计 |
 | `GET` | `/api/agents/factor-signal-diagnostic` | 日期阻断的因子快速证伪诊断 |
+| `GET` | `/api/agents/scoring-error-diagnostic` | 高分误选、晋级漏选与逐因子消融 |
 | `GET` | `/api/agents/scoring-policies` | Champion/Challenger 状态 |
 | `GET` | `/api/agents/data-health` | Agent 数据健康 |
 | `GET` | `/api/agents/outcome-completeness` | Top10 D+1、D+3、D+5 完整性验收 |
