@@ -1030,7 +1030,17 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
   const draftCandidates = intelligence?.items
     .filter((item) => item.strategy === mode && item.base_trade_date === draftBaseDate)
     .sort((left, right) => left.rank - right.rank)
-    .slice(0, 10) ?? [];
+    .slice(0, 10)
+    .map((item) => ({
+      ...item,
+      sector: item.sector ?? "",
+      position_label: item.position_label ?? null,
+      base_rank: item.base_rank ?? item.rank,
+      draft_score: item.draft_score ?? item.base_score,
+      news_adjustment: item.news_adjustment ?? 0,
+      financial_adjustment: item.financial_adjustment ?? 0,
+      update_reasons: item.update_reasons ?? [],
+    })) ?? [];
 
   return (
     <section className="premarket-workspace">
