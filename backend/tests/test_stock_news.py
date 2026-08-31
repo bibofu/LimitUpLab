@@ -8,6 +8,7 @@ from zoneinfo import ZoneInfo
 from app.agents.tools import AgentToolRegistry, ToolResult
 from app.models import StockKLineFacts, StockNewsFacts, StockNewsItem
 from app.repositories import SQLiteFirstBoardRepository, SQLiteStockNewsRepository
+from app.routers.stocks import get_stock_news
 from app.services.stock_news import collect_stock_news
 from app.services.sample_data import SAMPLE_EVENTS
 
@@ -94,6 +95,38 @@ class StockNewsTest(unittest.TestCase):
         self.assertEqual(response.cache_status, "stale")
         self.assertEqual(response.items[0].title, "缓存消息")
         self.assertTrue(any("upstream unavailable" in item for item in response.data_missing))
+
+    @patch("app.routers.stocks.collect_stock_news")
+    @patch("app.routers.stocks.get_limit_up_repository")
+    def test_stock_news_route_resolves_name_and_bounds_detail_items(
+        self,
+        get_repository,
+        collect_news,
+    ) -> None:
+        get_repository.return_value.list_events.return_value = SAMPLE_EVENTS
+        expected = StockNewsFacts(
+            symbol="301489",
+            name="思泉新材",
+            fetched_at=self.now,
+            window_days=7,
+            cache_status="live",
+            sources=["测试资讯源"],
+            items=[self._item("详情页新闻", hours_ago=1, url_suffix="detail")],
+        )
+        collect_news.return_value = expected
+
+        response = get_stock_news(
+            symbol="301489",
+            name=None,
+            days=7,
+            limit=3,
+        )
+
+        self.assertEqual(response, expected)
+        call = collect_news.call_args.kwargs
+        self.assertEqual(call["name"], "思泉新材")
+        self.assertEqual(call["limit"], 3)
+        self.assertIsInstance(call["repository"], SQLiteStockNewsRepository)
 
     def test_stock_activity_combines_close_facts_events_and_news(self) -> None:
         news = StockNewsFacts(

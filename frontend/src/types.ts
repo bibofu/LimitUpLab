@@ -109,6 +109,30 @@ export interface StockCloseSnapshot {
   source: string;
 }
 
+export interface StockNewsItem {
+  symbol: string;
+  name: string;
+  title: string;
+  summary: string;
+  published_at: string;
+  source: string;
+  url: string;
+  item_type: string;
+  relevance_score: number;
+  fetched_at: string;
+}
+
+export interface StockNewsFacts {
+  symbol: string;
+  name: string;
+  fetched_at: string;
+  window_days: number;
+  cache_status: string;
+  sources: string[];
+  items: StockNewsItem[];
+  data_missing: string[];
+}
+
 export interface ContinuationStat {
   board_height: number;
   sample_size: number;

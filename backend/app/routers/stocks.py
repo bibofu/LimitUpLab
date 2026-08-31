@@ -14,14 +14,20 @@ from app.models import (
     StockCloseSnapshot,
     StockIntradayKLineBar,
     StockKLineBar,
+    StockNewsFacts,
     StockPositionAssessment,
 )
-from app.repositories import SQLiteFirstBoardRepository, get_limit_up_repository
+from app.repositories import (
+    SQLiteFirstBoardRepository,
+    SQLiteStockNewsRepository,
+    get_limit_up_repository,
+)
 from app.services.analysis import find_stock_event, latest_trade_date
 from app.services.stock_kline import (
     load_stock_kline_bars,
     load_stock_position_assessment,
 )
+from app.services.stock_news import collect_stock_news
 
 router = APIRouter()
 
@@ -41,6 +47,30 @@ def get_stock_event(
     if event is None:
         raise HTTPException(status_code=404, detail="stock limit-up event not found")
     return event
+
+
+@router.get("/{symbol}/news", response_model=StockNewsFacts)
+def get_stock_news(
+    symbol: str,
+    name: str | None = Query(default=None, max_length=40),
+    days: int = Query(default=7, ge=1, le=30),
+    limit: int = Query(default=3, ge=1, le=10),
+) -> StockNewsFacts:
+    """Return a bounded recent-news list without blocking other detail facts."""
+
+    events = get_limit_up_repository().list_events()
+    event = find_stock_event(events, symbol=symbol)
+    resolved_name = (name or (event.name if event else None) or symbol).strip()
+    try:
+        return collect_stock_news(
+            symbol=symbol,
+            name=resolved_name,
+            days=days,
+            limit=limit,
+            repository=SQLiteStockNewsRepository(),
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
 
 
 @router.get("/{symbol}/kline", response_model=list[StockKLineBar])

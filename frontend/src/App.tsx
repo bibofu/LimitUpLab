@@ -4,6 +4,7 @@
   Check,
   ChevronDown,
   ChevronRight,
+  ExternalLink,
   Flame,
   GitBranch,
   Landmark,
@@ -13,6 +14,7 @@
   MapPin,
   MessageCircle,
   Minus,
+  Newspaper,
   PanelLeft,
   Pencil,
   Plus,
@@ -63,6 +65,7 @@ import {
   fetchStockKLine,
   fetchStockEvent,
   fetchStockLatestClose,
+  fetchStockNews,
   fetchStockPosition,
   fetchStockTradingDayKLine,
   renameChatSession,
@@ -91,6 +94,7 @@ import type {
   StockCloseSnapshot,
   StockIntradayKLineBar,
   StockKLineBar,
+  StockNewsFacts,
   StockPositionAssessment,
 } from "./types";
 
@@ -2771,6 +2775,7 @@ function StockDetail({ data }: { data: DashboardData }) {
   const [tradingDayKline, setTradingDayKline] = useState<StockIntradayKLineBar[]>([]);
   const [chartMode, setChartMode] = useState<"daily" | "intraday">("daily");
   const [latestClose, setLatestClose] = useState<StockCloseSnapshot | null>(null);
+  const [stockNews, setStockNews] = useState<StockNewsFacts | null>(null);
   const [position, setPosition] = useState<StockPositionAssessment | null>(null);
   const [critic, setCritic] = useState<FirstBoardCriticResponse | null>(null);
   const [klineLoading, setKlineLoading] = useState(true);
@@ -2779,6 +2784,7 @@ function StockDetail({ data }: { data: DashboardData }) {
   const [tradingDayError, setTradingDayError] = useState<string | null>(null);
   const [latestCloseLoading, setLatestCloseLoading] = useState(true);
   const [latestCloseError, setLatestCloseError] = useState<string | null>(null);
+  const [stockNewsLoading, setStockNewsLoading] = useState(true);
   const [positionLoading, setPositionLoading] = useState(true);
   const [positionError, setPositionError] = useState<string | null>(null);
   const [criticLoading, setCriticLoading] = useState(false);
@@ -2811,6 +2817,34 @@ function StockDetail({ data }: { data: DashboardData }) {
       active = false;
     };
   }, [requestedTradeDate, symbol]);
+
+  useEffect(() => {
+    if (stockEventLoading) {
+      return;
+    }
+    let active = true;
+    setStockNews(null);
+    setStockNewsLoading(true);
+    fetchStockNews(symbol, stockEvent?.name || linkedStockName || undefined, 3)
+      .then((news) => {
+        if (active) {
+          setStockNews(news);
+        }
+      })
+      .catch(() => {
+        if (active) {
+          setStockNews(null);
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setStockNewsLoading(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [linkedStockName, stockEvent?.name, stockEventLoading, symbol]);
 
   useEffect(() => {
     if (stockEventLoading) {
@@ -3058,6 +3092,8 @@ function StockDetail({ data }: { data: DashboardData }) {
         </Panel>
       </section>
 
+      <StockNewsPanel news={stockNews} loading={stockNewsLoading} />
+
       {stockEvent ? (
         <StockPositionPanel
           position={position}
@@ -3080,6 +3116,63 @@ function StockDetail({ data }: { data: DashboardData }) {
       ) : null}
     </div>
   );
+}
+
+function StockNewsPanel({
+  news,
+  loading,
+}: {
+  news: StockNewsFacts | null;
+  loading: boolean;
+}) {
+  if (!loading && (!news || news.items.length === 0)) {
+    return null;
+  }
+
+  return (
+    <Panel
+      title="个股资讯"
+      icon={<Newspaper size={18} />}
+      actions={<span className="stock-news-window">近 7 日</span>}
+    >
+      {loading ? (
+        <div className="stock-news-loading">正在获取个股资讯...</div>
+      ) : (
+        <div className="stock-news-list">
+          {news?.items.slice(0, 3).map((item) => (
+            <a
+              className="stock-news-item"
+              href={item.url}
+              key={`${item.published_at}-${item.title}`}
+              rel="noreferrer"
+              target="_blank"
+            >
+              <time dateTime={item.published_at}>{formatStockNewsTime(item.published_at)}</time>
+              <div>
+                <strong>{item.title}</strong>
+                <span>{item.source}</span>
+              </div>
+              <ExternalLink aria-hidden="true" size={16} />
+            </a>
+          ))}
+        </div>
+      )}
+    </Panel>
+  );
+}
+
+function formatStockNewsTime(value: string) {
+  const timestamp = new Date(value);
+  if (Number.isNaN(timestamp.getTime())) {
+    return "时间未知";
+  }
+  return timestamp.toLocaleString("zh-CN", {
+    month: "2-digit",
+    day: "2-digit",
+    hour: "2-digit",
+    minute: "2-digit",
+    hour12: false,
+  });
 }
 
 

@@ -21,6 +21,7 @@ import type {
   StockCloseSnapshot,
   StockIntradayKLineBar,
   StockKLineBar,
+  StockNewsFacts,
   StockPositionAssessment,
 } from "./types";
 
@@ -94,6 +95,14 @@ export function fetchStockEvent(symbol: string, tradeDate?: string) {
 
 export function fetchStockKLine(symbol: string, days = 60) {
   return request<StockKLineBar[]>(`/api/stocks/${symbol}/kline?days=${days}`);
+}
+
+export function fetchStockNews(symbol: string, name?: string, limit = 3) {
+  const params = new URLSearchParams({ days: "7", limit: String(limit) });
+  if (name) {
+    params.set("name", name);
+  }
+  return request<StockNewsFacts>(`/api/stocks/${symbol}/news?${params.toString()}`);
 }
 
 export function fetchStockPosition(symbol: string, tradeDate: string) {
