@@ -883,7 +883,7 @@ export function App() {
         <Route path="/" element={null} />
         <Route
           path="/recommendations"
-          element={<PremarketRecommendations ratings={data.firstBoardRatings} />}
+          element={<PremarketPage ratings={data.firstBoardRatings} />}
         />
         <Route path="/review" element={<ReviewDashboard data={data} />} />
         <Route path="/stocks/limit-up-pool" element={<LimitUpPool data={data} />} />
@@ -940,7 +940,16 @@ function MarketSnapshot({ summary }: { summary: MarketSummary }) {
   );
 }
 
-function PremarketRecommendations({ ratings }: { ratings: FirstBoardRatingsResponse }) {
+function PremarketPage({ ratings }: { ratings: FirstBoardRatingsResponse }) {
+  return (
+    <div className="premarket-page">
+      <RecommendationNewsBoard />
+      <PremarketStrategyWorkspace ratings={ratings} />
+    </div>
+  );
+}
+
+function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsResponse }) {
   /** Keep the two pre-market strategies distinct while sharing one workspace. */
 
   const [mode, setMode] = useState<"discovery" | "relay">("discovery");
@@ -1019,7 +1028,6 @@ function PremarketRecommendations({ ratings }: { ratings: FirstBoardRatingsRespo
           <span>每 {intelligence.interval_minutes} 分钟刷新</span>
         </div>
       ) : null}
-      <RecommendationNewsBoard />
       {mode === "discovery" ? (
         <FirstBoardDiscoveryPanel
           data={discovery}

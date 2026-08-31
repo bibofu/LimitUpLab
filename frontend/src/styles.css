@@ -3774,6 +3774,11 @@ a.entry-card {
   padding: 20px;
 }
 
+.premarket-page {
+  display: grid;
+  gap: 18px;
+}
+
 .premarket-workspace {
   display: grid;
   gap: 14px;
