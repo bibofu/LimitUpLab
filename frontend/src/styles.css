@@ -3874,32 +3874,10 @@ a.entry-card {
   font-size: 11px;
 }
 
-.recommendation-news-tabs {
-  display: inline-flex;
+.recommendation-news-refresh {
   flex: 0 0 auto;
-  gap: 2px;
-  padding: 2px;
-  border: 1px solid #d0d5dd;
-  border-radius: 6px;
-  background: #ffffff;
-}
-
-.recommendation-news-tabs button {
-  min-height: 28px;
-  padding: 0 9px;
-  border: 0;
-  border-radius: 4px;
-  background: transparent;
   color: #667085;
-  font: inherit;
-  font-size: 12px;
-  cursor: pointer;
-}
-
-.recommendation-news-tabs button.active {
-  background: #fff1f0;
-  color: #b42318;
-  font-weight: 700;
+  font-size: 11px;
 }
 
 .recommendation-news-list {
@@ -3909,7 +3887,7 @@ a.entry-card {
 
 .recommendation-news-item {
   display: grid;
-  grid-template-columns: 54px minmax(0, 1fr) auto;
+  grid-template-columns: 54px minmax(0, 1fr);
   align-items: center;
   gap: 10px;
   min-width: 0;
@@ -3967,24 +3945,6 @@ a.entry-card {
   font-size: 11px;
 }
 
-.recommendation-news-stock {
-  max-width: 86px;
-  overflow: hidden;
-  padding: 4px 7px;
-  border-radius: 5px;
-  background: #f2f4f7;
-  color: #475467;
-  font-size: 11px;
-  text-decoration: none;
-  text-overflow: ellipsis;
-  white-space: nowrap;
-}
-
-.recommendation-news-stock:hover {
-  background: #fff1f0;
-  color: #b42318;
-}
-
 .recommendation-news-state {
   display: flex;
   align-items: center;
@@ -3993,6 +3953,51 @@ a.entry-card {
   padding: 16px;
   color: #667085;
   font-size: 13px;
+}
+
+.recommendation-news-pagination {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 12px;
+  min-height: 48px;
+  padding: 8px 14px;
+  border-top: 1px solid #eaecf0;
+  color: #667085;
+  font-size: 11px;
+}
+
+.recommendation-news-pagination > div {
+  display: flex;
+  gap: 4px;
+}
+
+.recommendation-news-pagination button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 30px;
+  height: 30px;
+  padding: 0;
+  border: 1px solid #d0d5dd;
+  border-radius: 5px;
+  background: #ffffff;
+  color: #475467;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
+}
+
+.recommendation-news-pagination button.active {
+  border-color: #f04438;
+  background: #fff1f0;
+  color: #b42318;
+  font-weight: 700;
+}
+
+.recommendation-news-pagination button:disabled {
+  color: #d0d5dd;
+  cursor: default;
 }
 
 .discovery-state {
@@ -5210,21 +5215,14 @@ td span {
     gap: 8px;
   }
 
-  .recommendation-news-tabs {
-    align-self: stretch;
-  }
-
-  .recommendation-news-tabs button {
-    flex: 1;
-  }
-
   .recommendation-news-item {
     grid-template-columns: 46px minmax(0, 1fr);
     padding-inline: 12px;
   }
 
-  .recommendation-news-stock {
-    display: none;
+  .recommendation-news-pagination {
+    align-items: flex-start;
+    flex-direction: column;
   }
 
   .market-snapshot > * {

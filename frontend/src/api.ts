@@ -10,7 +10,7 @@ import type {
   DragonTigerReviewResponse,
   ContinuationStat,
   FailedRateStat,
-  FinanceNewsFacts,
+  FinanceNewsPage,
   FirstBoardCriticResponse,
   FirstBoardDiscoveryResponse,
   FirstBoardRatingsResponse,
@@ -150,12 +150,12 @@ export function fetchRecommendationIntelligence() {
   );
 }
 
-export function fetchFinanceNews(limit = 12, hours = 24) {
+export function fetchFinanceNews(page = 1, pageSize = 10) {
   const params = new URLSearchParams({
-    limit: String(limit),
-    hours: String(hours),
+    page: String(page),
+    page_size: String(pageSize),
   });
-  return request<FinanceNewsFacts>(`/api/market/news?${params.toString()}`);
+  return request<FinanceNewsPage>(`/api/market/news?${params.toString()}`);
 }
 
 export function fetchReviewAgentReport(params?: {

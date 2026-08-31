@@ -8,7 +8,7 @@ from app.collectors import (
     HithinkFinanceError,
     collect_market_indices,
 )
-from app.models import DragonTigerReviewResponse, FinanceNewsFacts, MarketSummary
+from app.models import DragonTigerReviewResponse, FinanceNewsPage, MarketSummary
 from app.repositories import get_limit_up_repository
 from app.services.analysis import latest_trade_date, summarize_market
 from app.services.dragon_tiger_review import load_dragon_tiger_review
@@ -17,20 +17,34 @@ from app.services.finance_news import collect_finance_news
 router = APIRouter()
 
 
-@router.get("/news", response_model=FinanceNewsFacts)
+@router.get("/news", response_model=FinanceNewsPage)
 def get_finance_news(
-    limit: int = Query(default=12, ge=1, le=12),
-    hours: int = Query(default=24, ge=1, le=168),
-) -> FinanceNewsFacts:
-    """Return recent structured market news for the public workspace."""
+    page: int = Query(default=1, ge=1),
+    page_size: int = Query(default=10, ge=5, le=20),
+) -> FinanceNewsPage:
+    """Return one page of the latest 24-hour structured market-news feed."""
 
     try:
-        return collect_finance_news(limit=limit, hours=hours)
+        facts = collect_finance_news(limit=2000, hours=24)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=502,
             detail="财经快讯数据源暂不可用，请稍后重试。",
         ) from exc
+    ordered = sorted(facts.items, key=lambda item: item.published_at, reverse=True)
+    total = len(ordered)
+    total_pages = max(1, (total + page_size - 1) // page_size)
+    bounded_page = min(page, total_pages)
+    start = (bounded_page - 1) * page_size
+    return FinanceNewsPage(
+        fetched_at=facts.fetched_at,
+        sources=facts.sources,
+        page=bounded_page,
+        page_size=page_size,
+        total=total,
+        total_pages=total_pages,
+        items=ordered[start : start + page_size],
+    )
 
 
 @router.get("/summary", response_model=MarketSummary)

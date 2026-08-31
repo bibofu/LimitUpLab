@@ -165,6 +165,19 @@ class FinanceNewsFacts(BaseModel):
     items: list[FinanceNewsItem] = Field(default_factory=list)
 
 
+class FinanceNewsPage(BaseModel):
+    """One page from the latest 24-hour structured financial-news feed."""
+
+    fetched_at: datetime
+    window_hours: int = 24
+    sources: list[str] = Field(default_factory=list)
+    page: int
+    page_size: int
+    total: int
+    total_pages: int
+    items: list[FinanceNewsItem] = Field(default_factory=list)
+
+
 class StockNewsItem(BaseModel):
     """One stock-specific article normalized from a structured provider."""
 

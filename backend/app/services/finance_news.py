@@ -105,7 +105,7 @@ def collect_finance_news(
     """Collect, deduplicate and rank recent market-relevant financial news."""
 
     normalized_query = " ".join((query or "").split())[:100] or None
-    bounded_limit = max(1, min(int(limit), 12))
+    bounded_limit = max(1, min(int(limit), 2000))
     bounded_hours = max(1, min(int(hours), 168))
     current_time = _as_shanghai_time(now or datetime.now(_SHANGHAI))
     cache_key = (normalized_query or "", bounded_limit, bounded_hours)
@@ -115,9 +115,17 @@ def collect_finance_news(
             if cached and current_time - cached[0] < _CACHE_TTL:
                 return cached[1]
 
+    earliest = current_time - timedelta(hours=bounded_hours)
+    deep_scan = bounded_limit > 200
     available = loaders or {
-        "东方财富": _load_eastmoney,
-        "同花顺": _load_tonghuashun,
+        "东方财富": lambda: _load_eastmoney(
+            earliest=earliest,
+            max_pages=24 if deep_scan else 1,
+        ),
+        "同花顺": lambda: _load_tonghuashun(
+            earliest=earliest,
+            max_pages=72 if deep_scan else 1,
+        ),
     }
     collected: list[FinanceNewsItem] = []
     successful_sources: list[str] = []
@@ -141,7 +149,6 @@ def collect_finance_news(
     if not collected:
         raise RuntimeError("finance news collection failed: " + "; ".join(errors))
 
-    earliest = current_time - timedelta(hours=bounded_hours)
     recent = [
         item
         for item in collected
@@ -165,71 +172,124 @@ def collect_finance_news(
     return facts
 
 
-def _load_eastmoney() -> list[FinanceNewsItem]:
-    with _direct_session() as session:
-        response = session.get(
-            "https://np-weblist.eastmoney.com/comm/web/getFastNewsList",
-            params={
-                "client": "web",
-                "biz": "web_724",
-                "fastColumn": "102",
-                "sortEnd": "",
-                "pageSize": "200",
-                "req_trace": str(int(datetime.now().timestamp() * 1000)),
-            },
-            headers={
-                "User-Agent": _USER_AGENT,
-                "Referer": "https://kuaixun.eastmoney.com/",
-            },
-            timeout=_timeout_seconds(),
-        )
-    response.raise_for_status()
-    rows = response.json().get("data", {}).get("fastNewsList", [])
+def _load_eastmoney(
+    *,
+    earliest: datetime,
+    max_pages: int,
+) -> list[FinanceNewsItem]:
+    """Follow Eastmoney's cursor until the requested time boundary is covered."""
+
     items: list[FinanceNewsItem] = []
-    for row in rows:
-        code = str(row.get("code") or "").strip()
-        url = (
-            code
-            if urlparse(code).scheme in {"http", "https"}
-            else f"https://finance.eastmoney.com/a/{code}.html"
-        )
-        item = _news_item(
-            title=row.get("title"),
-            summary=row.get("summary"),
-            published_at=row.get("showTime"),
-            source="东方财富",
-            url=url,
-        )
-        if item is not None:
-            items.append(item)
+    sort_end = ""
+    with _direct_session() as session:
+        for page_index in range(max_pages):
+            try:
+                response = session.get(
+                    "https://np-weblist.eastmoney.com/comm/web/getFastNewsList",
+                    params={
+                        "client": "web",
+                        "biz": "web_724",
+                        "fastColumn": "102",
+                        "sortEnd": sort_end,
+                        "pageSize": "200",
+                        "req_trace": str(int(datetime.now().timestamp() * 1000)),
+                    },
+                    headers={
+                        "User-Agent": _USER_AGENT,
+                        "Referer": "https://kuaixun.eastmoney.com/",
+                    },
+                    timeout=_timeout_seconds(),
+                )
+                response.raise_for_status()
+                data = response.json().get("data") or {}
+                rows = data.get("fastNewsList") or []
+            except Exception:  # noqa: BLE001
+                if items:
+                    break
+                raise
+            if not rows:
+                break
+            for row in rows:
+                code = str(row.get("code") or "").strip()
+                url = (
+                    code
+                    if urlparse(code).scheme in {"http", "https"}
+                    else f"https://finance.eastmoney.com/a/{code}.html"
+                )
+                item = _news_item(
+                    title=row.get("title"),
+                    summary=row.get("summary"),
+                    published_at=row.get("showTime"),
+                    source="东方财富",
+                    url=url,
+                )
+                if item is not None:
+                    items.append(item)
+            if _rows_cover_boundary(rows, "showTime", earliest):
+                break
+            next_sort_end = str(data.get("sortEnd") or "").strip()
+            if len(rows) < 200 or not next_sort_end or next_sort_end == sort_end:
+                break
+            sort_end = next_sort_end
     return items
 
 
-def _load_tonghuashun() -> list[FinanceNewsItem]:
-    with _direct_session() as session:
-        response = session.get(
-            "https://news.10jqka.com.cn/tapp/news/push/stock",
-            params={"page": "1", "tag": "", "track": "website"},
-            headers={
-                "User-Agent": _USER_AGENT,
-                "Referer": "https://news.10jqka.com.cn/realtimenews.html",
-            },
-            timeout=_timeout_seconds(),
-        )
-    response.raise_for_status()
-    rows = response.json().get("data", {}).get("list", [])
+def _load_tonghuashun(
+    *,
+    earliest: datetime,
+    max_pages: int,
+) -> list[FinanceNewsItem]:
+    """Follow Tonghuashun pages until the requested time boundary is covered."""
+
     items: list[FinanceNewsItem] = []
-    for row in rows:
-        item = _news_item(
-            title=row.get("title"),
-            summary=row.get("digest"),
-            published_at=row.get("rtime"),
-            source="同花顺",
-            url=urljoin("https://news.10jqka.com.cn/", str(row.get("url") or "")),
-        )
-        if item is not None:
-            items.append(item)
+    with _direct_session() as session:
+        for page_number in range(1, max_pages + 1):
+            try:
+                response = session.get(
+                    "https://news.10jqka.com.cn/tapp/news/push/stock",
+                    params={"page": str(page_number), "tag": "", "track": "website"},
+                    headers={
+                        "User-Agent": _USER_AGENT,
+                        "Referer": "https://news.10jqka.com.cn/realtimenews.html",
+                    },
+                    timeout=_timeout_seconds(),
+                )
+                response.raise_for_status()
+                rows = response.json().get("data", {}).get("list", [])
+            except Exception:  # noqa: BLE001
+                if items:
+                    break
+                raise
+            if not rows:
+                break
+            for row in rows:
+                item = _news_item(
+                    title=row.get("title"),
+                    summary=row.get("digest"),
+                    published_at=row.get("rtime"),
+                    source="同花顺",
+                    url=urljoin(
+                        "https://news.10jqka.com.cn/",
+                        str(row.get("url") or ""),
+                    ),
+                )
+                if item is not None:
+                    items.append(item)
+            if _rows_cover_boundary(rows, "rtime", earliest) or len(rows) < 20:
+                break
     return items
+
+
+def _rows_cover_boundary(
+    rows: list[Mapping[str, object]],
+    time_key: str,
+    earliest: datetime,
+) -> bool:
+    """Return true once a provider page reaches the requested oldest time."""
+
+    parsed = [_parse_published_at(row.get(time_key)) for row in rows]
+    valid = [value for value in parsed if value is not None]
+    return bool(valid) and min(valid) <= earliest
 
 
 def _news_item(

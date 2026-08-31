@@ -143,11 +143,14 @@ export interface FinanceNewsItem {
   relevance_score: number;
 }
 
-export interface FinanceNewsFacts {
-  query: string | null;
+export interface FinanceNewsPage {
   fetched_at: string;
   window_hours: number;
   sources: string[];
+  page: number;
+  page_size: number;
+  total: number;
+  total_pages: number;
   items: FinanceNewsItem[];
 }
 

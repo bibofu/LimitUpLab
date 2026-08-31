@@ -115,25 +115,32 @@ class FinanceNewsTest(unittest.TestCase):
 
     def test_market_news_route_returns_structured_feed(self) -> None:
         expected = collect_finance_news(
+            limit=200,
             loaders={
                 "东方财富": lambda: [
                     self._item(
-                        "A股盘前政策快讯",
+                        f"A股盘前政策快讯 {index}",
                         "盘前发布最新政策信息。",
                         source="东方财富",
-                        minutes_ago=5,
+                        minutes_ago=index,
                         category="A股",
                         relevance=4,
                     )
+                    for index in range(12)
                 ]
             },
             now=self.now,
         )
         with patch("app.routers.market.collect_finance_news", return_value=expected) as loader:
-            response = get_finance_news(limit=12, hours=24)
+            response = get_finance_news(page=2, page_size=5)
 
-        self.assertEqual(response, expected)
-        loader.assert_called_once_with(limit=12, hours=24)
+        self.assertEqual(response.page, 2)
+        self.assertEqual(response.page_size, 5)
+        self.assertEqual(response.total, 12)
+        self.assertEqual(response.total_pages, 3)
+        self.assertEqual(len(response.items), 5)
+        self.assertGreater(response.items[0].published_at, response.items[-1].published_at)
+        loader.assert_called_once_with(limit=2000, hours=24)
 
     def test_market_news_route_hides_upstream_error(self) -> None:
         with patch(
@@ -141,7 +148,7 @@ class FinanceNewsTest(unittest.TestCase):
             side_effect=RuntimeError("provider detail"),
         ):
             with self.assertRaises(HTTPException) as raised:
-                get_finance_news(limit=12, hours=24)
+                get_finance_news(page=1, page_size=10)
 
         self.assertEqual(raised.exception.status_code, 502)
         self.assertNotIn("provider detail", str(raised.exception.detail))

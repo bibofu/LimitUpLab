@@ -3,6 +3,7 @@
   BarChart3,
   Check,
   ChevronDown,
+  ChevronLeft,
   ChevronRight,
   ExternalLink,
   Flame,
@@ -89,7 +90,7 @@ import type {
   FirstBoardDiscoveryResponse,
   FirstBoardRating,
   FirstBoardRatingsResponse,
-  FinanceNewsFacts,
+  FinanceNewsPage,
   FinanceNewsItem,
   LimitUpEvent,
   MarketSummary,
@@ -947,8 +948,6 @@ function PremarketRecommendations({ ratings }: { ratings: FirstBoardRatingsRespo
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const [discoveryLoading, setDiscoveryLoading] = useState(true);
   const [intelligence, setIntelligence] = useState<RecommendationIntelligenceResponse | null>(null);
-  const [financeNews, setFinanceNews] = useState<FinanceNewsFacts | null>(null);
-  const [financeNewsError, setFinanceNewsError] = useState(false);
 
   useEffect(() => {
     let active = true;
@@ -966,28 +965,6 @@ function PremarketRecommendations({ ratings }: { ratings: FirstBoardRatingsRespo
       });
     return () => {
       active = false;
-    };
-  }, []);
-
-  useEffect(() => {
-    let active = true;
-    const refresh = () => {
-      void fetchFinanceNews()
-        .then((response) => {
-          if (active) {
-            setFinanceNews(response);
-            setFinanceNewsError(false);
-          }
-        })
-        .catch(() => {
-          if (active) setFinanceNewsError(true);
-        });
-    };
-    refresh();
-    const timer = window.setInterval(refresh, 5 * 60 * 1000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
     };
   }, []);
 
@@ -1042,12 +1019,7 @@ function PremarketRecommendations({ ratings }: { ratings: FirstBoardRatingsRespo
           <span>每 {intelligence.interval_minutes} 分钟刷新</span>
         </div>
       ) : null}
-      <RecommendationNewsBoard
-        financeNews={financeNews}
-        financeNewsError={financeNewsError}
-        intelligence={intelligence}
-        mode={mode}
-      />
+      <RecommendationNewsBoard />
       {mode === "discovery" ? (
         <FirstBoardDiscoveryPanel
           data={discovery}
@@ -1062,8 +1034,6 @@ function PremarketRecommendations({ ratings }: { ratings: FirstBoardRatingsRespo
   );
 }
 
-type RecommendationNewsMode = "related" | "market";
-
 interface RecommendationNewsViewItem {
   key: string;
   title: string;
@@ -1072,53 +1042,47 @@ interface RecommendationNewsViewItem {
   source: string;
   url: string;
   category: string;
-  relatedName: string | null;
-  relatedSymbol: string | null;
-  relatedTradeDate: string | null;
 }
 
-function RecommendationNewsBoard({
-  financeNews,
-  financeNewsError,
-  intelligence,
-  mode,
-}: {
-  financeNews: FinanceNewsFacts | null;
-  financeNewsError: boolean;
-  intelligence: RecommendationIntelligenceResponse | null;
-  mode: "discovery" | "relay";
-}) {
-  /** Keep the feed factual while prioritizing news tied to the active strategy. */
+function RecommendationNewsBoard() {
+  /** Paginate the factual 24-hour market feed without involving the LLM. */
 
-  const [newsMode, setNewsMode] = useState<RecommendationNewsMode>("related");
-  const candidates = useMemo(
-    () => (intelligence?.items ?? []).filter((item) => item.strategy === mode),
-    [intelligence, mode],
+  const [page, setPage] = useState(1);
+  const [news, setNews] = useState<FinanceNewsPage | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [failed, setFailed] = useState(false);
+
+  useEffect(() => {
+    let active = true;
+    const refresh = (showLoading: boolean) => {
+      if (showLoading) setLoading(true);
+      void fetchFinanceNews(page)
+        .then((response) => {
+          if (!active) return;
+          setNews(response);
+          setFailed(false);
+          setPage(response.page);
+        })
+        .catch(() => {
+          if (active) setFailed(true);
+        })
+        .finally(() => {
+          if (active) setLoading(false);
+        });
+    };
+    refresh(true);
+    const timer = window.setInterval(() => refresh(false), 5 * 60 * 1000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, [page]);
+
+  const visibleNews = useMemo(
+    () => (news?.items ?? []).map(marketNewsViewItem),
+    [news],
   );
-  const relatedNews = useMemo(() => {
-    const items = candidates.flatMap((candidate) => candidate.latest_news.map((item) => ({
-      key: `${candidate.symbol}-${item.url}-${item.published_at}`,
-      title: item.title,
-      summary: item.summary,
-      publishedAt: item.published_at,
-      source: item.source,
-      url: item.url,
-      category: stockNewsTypeLabel(item.item_type),
-      relatedName: candidate.name,
-      relatedSymbol: candidate.symbol,
-      relatedTradeDate: candidate.base_trade_date,
-    })));
-    return deduplicateRecommendationNews(items).slice(0, 8);
-  }, [candidates]);
-  const marketNews = useMemo(
-    () => (financeNews?.items ?? [])
-      .map((item) => marketNewsViewItem(item, candidates))
-      .sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt)),
-    [candidates, financeNews],
-  );
-  const visibleNews = newsMode === "related" ? relatedNews : marketNews;
-  const isLoading = newsMode === "related" ? !intelligence : !financeNews && !financeNewsError;
-  const failed = newsMode === "market" && financeNewsError && !financeNews;
+  const pageNumbers = news ? paginationWindow(news.page, news.total_pages) : [];
 
   return (
     <section className="recommendation-news-board" aria-label="盘前实时新闻">
@@ -1128,36 +1092,15 @@ function RecommendationNewsBoard({
           <span>
             <strong>实时新闻</strong>
             <small>
-              {newsMode === "related"
-                ? `${mode === "discovery" ? "首板挖掘" : "一进二接力"}候选相关`
-                : financeNews
-                  ? `${financeNews.sources.join(" · ")} · 5 分钟自动更新`
-                  : "5 分钟自动更新"}
+              {news
+                ? `近 24 小时 · ${news.sources.join(" · ")} · 共 ${news.total} 条`
+                : "近 24 小时 · 5 分钟自动更新"}
             </small>
           </span>
         </div>
-        <div className="recommendation-news-tabs" role="tablist" aria-label="新闻范围">
-          <button
-            className={newsMode === "related" ? "active" : undefined}
-            onClick={() => setNewsMode("related")}
-            role="tab"
-            aria-selected={newsMode === "related"}
-            type="button"
-          >
-            候选动态
-          </button>
-          <button
-            className={newsMode === "market" ? "active" : undefined}
-            onClick={() => setNewsMode("market")}
-            role="tab"
-            aria-selected={newsMode === "market"}
-            type="button"
-          >
-            市场快讯
-          </button>
-        </div>
+        <span className="recommendation-news-refresh">5 分钟自动更新</span>
       </header>
-      {isLoading ? (
+      {loading && !news ? (
         <div className="recommendation-news-state">
           <LoaderCircle className="state-spinner" size={18} />
           正在获取最新新闻...
@@ -1166,9 +1109,9 @@ function RecommendationNewsBoard({
       {failed ? (
         <div className="recommendation-news-state">财经快讯暂时没有加载成功。</div>
       ) : null}
-      {!isLoading && !failed && visibleNews.length === 0 ? (
+      {!loading && !failed && visibleNews.length === 0 ? (
         <div className="recommendation-news-state">
-          当前没有获取到与候选股票直接相关的近期新闻。
+          近 24 小时没有获取到市场快讯。
         </div>
       ) : null}
       {visibleNews.length > 0 ? (
@@ -1183,30 +1126,51 @@ function RecommendationNewsBoard({
                 </a>
                 <span>{item.source} · {item.category}</span>
               </div>
-              {item.relatedName && item.relatedSymbol ? (
-                <Link
-                  className="recommendation-news-stock"
-                  to={stockDetailPath(item.relatedSymbol, item.relatedTradeDate ?? undefined)}
-                >
-                  {item.relatedName}
-                </Link>
-              ) : null}
             </article>
           ))}
         </div>
+      ) : null}
+      {news && news.total_pages > 1 ? (
+        <footer className="recommendation-news-pagination" aria-label="市场快讯分页">
+          <span>第 {news.page} / {news.total_pages} 页</span>
+          <div>
+            <button
+              aria-label="上一页"
+              disabled={news.page <= 1}
+              onClick={() => setPage((value) => Math.max(1, value - 1))}
+              title="上一页"
+              type="button"
+            >
+              <ChevronLeft size={15} />
+            </button>
+            {pageNumbers.map((pageNumber) => (
+              <button
+                aria-current={pageNumber === news.page ? "page" : undefined}
+                className={pageNumber === news.page ? "active" : undefined}
+                key={pageNumber}
+                onClick={() => setPage(pageNumber)}
+                type="button"
+              >
+                {pageNumber}
+              </button>
+            ))}
+            <button
+              aria-label="下一页"
+              disabled={news.page >= news.total_pages}
+              onClick={() => setPage((value) => Math.min(news.total_pages, value + 1))}
+              title="下一页"
+              type="button"
+            >
+              <ChevronRight size={15} />
+            </button>
+          </div>
+        </footer>
       ) : null}
     </section>
   );
 }
 
-function marketNewsViewItem(
-  item: FinanceNewsItem,
-  candidates: RecommendationIntelligenceItem[],
-): RecommendationNewsViewItem {
-  const content = `${item.title} ${item.summary}`;
-  const related = candidates.find(
-    (candidate) => content.includes(candidate.name) || content.includes(candidate.symbol),
-  );
+function marketNewsViewItem(item: FinanceNewsItem): RecommendationNewsViewItem {
   return {
     key: `${item.source}-${item.url}-${item.published_at}`,
     title: item.title,
@@ -1215,34 +1179,13 @@ function marketNewsViewItem(
     source: item.source,
     url: item.url,
     category: item.category,
-    relatedName: related?.name ?? null,
-    relatedSymbol: related?.symbol ?? null,
-    relatedTradeDate: related?.base_trade_date ?? null,
   };
 }
 
-function deduplicateRecommendationNews(
-  items: RecommendationNewsViewItem[],
-): RecommendationNewsViewItem[] {
-  const seen = new Set<string>();
-  return [...items]
-    .sort((left, right) => Date.parse(right.publishedAt) - Date.parse(left.publishedAt))
-    .filter((item) => {
-      const key = item.title.replace(/[^0-9A-Za-z\u4e00-\u9fff]/g, "").toLowerCase();
-      if (!key || seen.has(key)) return false;
-      seen.add(key);
-      return true;
-    });
-}
-
-function stockNewsTypeLabel(itemType: string): string {
-  const labels: Record<string, string> = {
-    announcement_report: "公告",
-    research: "研报",
-    regulatory: "监管",
-    news: "资讯",
-  };
-  return labels[itemType] ?? "资讯";
+function paginationWindow(current: number, total: number): number[] {
+  const visible = Math.min(5, total);
+  const start = Math.max(1, Math.min(current - 2, total - visible + 1));
+  return Array.from({ length: visible }, (_, index) => start + index);
 }
 
 function formatRecommendationNewsTime(value: string): string {
