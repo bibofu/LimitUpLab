@@ -1135,12 +1135,6 @@ function RecommendationDraftPanel({
                   <span className="auction-score-delta">收盘 {candidate.base_score.toFixed(1)}</span>
                 </div>
               </header>
-              <div className="rating-top-facts">
-                <Fact label="新闻修正" value={formatSigned(candidate.news_adjustment, 1)} />
-                <Fact label="财报修正" value={formatSigned(candidate.financial_adjustment, 1)} />
-                <Fact label="最新涨幅" value={candidate.change_pct !== null ? `${formatSigned(candidate.change_pct, 2)}%` : "暂无"} />
-                <Fact label="最新价格" value={candidate.current_price?.toFixed(2) ?? "暂无"} />
-              </div>
               {candidate.update_reasons.length > 0 ? (
                 <section className="rating-top-reasons">
                   <strong>动态调整依据</strong>
