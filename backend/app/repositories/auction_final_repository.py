@@ -92,3 +92,31 @@ class SQLiteAuctionFinalRepository:
             if row
             else None
         )
+
+    def list_between(
+        self,
+        start_date: date,
+        end_date: date,
+    ) -> list[AuctionFinalRecommendationsResponse]:
+        """Return canonical final snapshots in ascending session order."""
+
+        connection = connect(self.database_path)
+        try:
+            initialize_database(connection)
+            rows = connection.execute(
+                """
+                SELECT response_json
+                FROM auction_final_recommendation_snapshots
+                WHERE trade_date BETWEEN ? AND ?
+                ORDER BY trade_date, finalized_at
+                """,
+                (start_date.isoformat(), end_date.isoformat()),
+            ).fetchall()
+        finally:
+            connection.close()
+        return [
+            AuctionFinalRecommendationsResponse.model_validate_json(
+                row["response_json"]
+            )
+            for row in rows
+        ]

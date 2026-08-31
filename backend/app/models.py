@@ -1198,6 +1198,82 @@ class FactorSignalDiagnosticResponse(BaseModel):
     generated_by: str
 
 
+class FirstBoardDiscoveryOutcomeDate(BaseModel):
+    """One completed target date in the first-board discovery evaluation."""
+
+    data_as_of: date
+    target_trade_date: date
+    candidate_count: int
+    top_k: int
+    base_top_count: int
+    base_top_hit_count: int
+    base_top_hit_rate: float | None = None
+    pool_hit_count: int
+    pool_hit_rate: float | None = None
+    base_top_lift: float | None = None
+    official_top_count: int = 0
+    official_top_hit_count: int = 0
+    official_top_hit_rate: float | None = None
+    official_top_lift: float | None = None
+    official_snapshot_available: bool = False
+    successful_symbols: list[str] = Field(default_factory=list)
+
+
+class FirstBoardDiscoveryFactorDiagnosticRow(BaseModel):
+    """Date-aware signal check for one discovery score component."""
+
+    factor_key: str
+    factor_name: str
+    sample_size: int
+    trade_date_count: int
+    mean_daily_ic: float | None = None
+    median_daily_ic: float | None = None
+    daily_ic_positive_rate: float | None = None
+    p_value: float | None = None
+    significant_after_bonferroni: bool = False
+    direction: Literal["positive", "negative", "inconclusive"] = "inconclusive"
+
+
+class FirstBoardDiscoveryDiagnosticResponse(BaseModel):
+    """Forward-only falsification report for persisted discovery snapshots."""
+
+    start_date: date
+    end_date: date
+    strategy_version: str
+    outcome_measure: Literal["target_day_first_board"] = "target_day_first_board"
+    snapshot_count: int
+    outcome_ready_trade_date_count: int
+    sample_size: int
+    top_k: int
+    base_top_sample_size: int
+    base_top_hit_count: int
+    base_top_hit_rate: float | None = None
+    pool_hit_count: int
+    pool_hit_rate: float | None = None
+    base_top_lift: float | None = None
+    official_top_sample_size: int
+    official_top_hit_count: int
+    official_top_hit_rate: float | None = None
+    official_top_lift: float | None = None
+    mean_daily_base_top_lift: float | None = None
+    mean_daily_official_top_lift: float | None = None
+    bonferroni_alpha: float
+    factors: list[FirstBoardDiscoveryFactorDiagnosticRow] = Field(default_factory=list)
+    lasso: FactorSignalLassoSummary
+    strongest_factor_key: str | None = None
+    verdict_status: Literal[
+        "insufficient_sample",
+        "no_robust_signal",
+        "signal_requires_validation",
+    ]
+    verdict: str
+    dates: list[FirstBoardDiscoveryOutcomeDate] = Field(default_factory=list)
+    caveats: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+    generated_by: str
+    disclaimer: str = RESEARCH_DISCLAIMER
+
+
 class ScoringErrorCase(BaseModel):
     """One promoted miss or non-promoted Top-K selection used for diagnosis."""
 

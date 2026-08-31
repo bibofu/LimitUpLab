@@ -17,11 +17,11 @@ from app.services.factor_signal_diagnostic import (
     _average_ranks,
     _build_verdict,
     _fit_lasso,
-    _sign_flip_p_value,
-    _spearman_rho,
     _standardize,
     _tercile_spread,
     build_factor_signal_diagnostic,
+    sign_flip_p_value,
+    spearman_rho,
 )
 
 
@@ -34,12 +34,12 @@ class FactorSignalStatsTest(unittest.TestCase):
     def test_spearman_recovers_perfect_monotone(self) -> None:
         x = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
         y = np.array([3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0, 17.0])
-        rho = _spearman_rho(x, y)
+        rho = spearman_rho(x, y)
         self.assertIsNotNone(rho)
         self.assertAlmostEqual(rho, 1.0, places=6)
 
     def test_sign_flip_detects_consistent_daily_ic(self) -> None:
-        p = _sign_flip_p_value(
+        p = sign_flip_p_value(
             np.array([0.8] * 12),
             iterations=4096,
             random_seed=7,
@@ -50,13 +50,13 @@ class FactorSignalStatsTest(unittest.TestCase):
     def test_spearman_inverse_is_negative(self) -> None:
         x = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
         y = np.array([6.0, 5.0, 4.0, 3.0, 2.0, 1.0])
-        rho = _spearman_rho(x, y)
+        rho = spearman_rho(x, y)
         self.assertAlmostEqual(rho, -1.0, places=6)
 
     def test_spearman_constant_column_is_none(self) -> None:
         x = np.array([2.0, 2.0, 2.0, 2.0])
         y = np.array([1.0, 2.0, 3.0, 4.0])
-        self.assertIsNone(_spearman_rho(x, y))
+        self.assertIsNone(spearman_rho(x, y))
 
     def test_average_ranks_handles_ties(self) -> None:
         ranks = _average_ranks(np.array([10.0, 10.0, 20.0, 10.0, 30.0]))

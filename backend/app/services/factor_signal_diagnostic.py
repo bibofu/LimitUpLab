@@ -52,8 +52,8 @@ _OUTCOME_MEASURES: dict[str, tuple[str, str]] = {
 
 
 @dataclass(frozen=True)
-class _CandidateSample:
-    """One rated first-board candidate joined with a ready post-board outcome."""
+class DateBlockedFactorSample:
+    """One point-in-time candidate joined with an outcome on its own date."""
 
     trade_date: date
     symbol: str
@@ -114,7 +114,7 @@ def build_factor_signal_diagnostic(
         permutation_iterations=PERMUTATION_DEFAULT_ITERATIONS,
         random_seed=random_seed,
     )
-    lasso_summary = _build_lasso_summary(
+    lasso_summary = build_date_blocked_lasso_summary(
         samples=samples,
         factor_keys=list(FACTOR_NAMES.keys()),
         lasso_alpha_fraction=lasso_alpha_fraction,
@@ -159,7 +159,7 @@ def _collect_samples(
     scoring_policy: ScoringPolicy,
     outcome_field: str,
     readiness_flag: str,
-) -> tuple[list[_CandidateSample], list[date]]:
+) -> tuple[list[DateBlockedFactorSample], list[date]]:
     """Re-rate candidates per date and join ready post-board outcomes."""
 
     from app.agents.first_board import build_first_board_ratings
@@ -175,7 +175,7 @@ def _collect_samples(
         (outcome.base_trade_date, outcome.symbol): outcome
         for outcome in repository.list_outcomes_between(start_date, end_date)
     }
-    samples: list[_CandidateSample] = []
+    samples: list[DateBlockedFactorSample] = []
     for trade_date in trade_dates:
         ratings = build_first_board_ratings(
             events=events,
@@ -196,7 +196,7 @@ def _collect_samples(
                 if item.name in FACTOR_KEYS_BY_NAME
             }
             samples.append(
-                _CandidateSample(
+                DateBlockedFactorSample(
                     trade_date=trade_date,
                     symbol=candidate.facts.symbol,
                     factor_scores=factor_scores,
@@ -208,7 +208,7 @@ def _collect_samples(
 
 
 def _build_factor_rows(
-    samples: list[_CandidateSample],
+    samples: list[DateBlockedFactorSample],
     *,
     permutation_iterations: int,
     random_seed: int,
@@ -244,7 +244,7 @@ def _build_factor_rows(
             else None
         )
         p_value = (
-            _sign_flip_p_value(
+            sign_flip_p_value(
                 np.array([value for _trade_date, value in daily_ics], dtype=float),
                 iterations=permutation_iterations,
                 random_seed=random_seed + factor_index,
@@ -302,18 +302,18 @@ def _build_factor_rows(
 
 
 def _samples_by_date(
-    samples: list[_CandidateSample],
-) -> dict[date, list[_CandidateSample]]:
+    samples: list[DateBlockedFactorSample],
+) -> dict[date, list[DateBlockedFactorSample]]:
     """Group samples without treating same-day candidates as independent dates."""
 
-    grouped: dict[date, list[_CandidateSample]] = defaultdict(list)
+    grouped: dict[date, list[DateBlockedFactorSample]] = defaultdict(list)
     for sample in samples:
         grouped[sample.trade_date].append(sample)
     return dict(sorted(grouped.items()))
 
 
 def _daily_factor_ics(
-    samples: list[_CandidateSample],
+    samples: list[DateBlockedFactorSample],
     factor_key: str,
 ) -> list[tuple[date, float]]:
     """Return one cross-sectional Spearman IC per eligible trade date."""
@@ -329,13 +329,13 @@ def _daily_factor_ics(
             continue
         factor_values = np.array([pair[0] for pair in pairs], dtype=float)
         outcomes = np.array([pair[1] for pair in pairs], dtype=float)
-        rho = _spearman_rho(factor_values, outcomes)
+        rho = spearman_rho(factor_values, outcomes)
         if rho is not None:
             daily_ics.append((trade_date, rho))
     return daily_ics
 
 
-def _sign_flip_p_value(
+def sign_flip_p_value(
     values: np.ndarray,
     *,
     iterations: int,
@@ -355,9 +355,9 @@ def _sign_flip_p_value(
     return (exceedances + 1) / (iterations + 1)
 
 
-def _build_lasso_summary(
+def build_date_blocked_lasso_summary(
     *,
-    samples: list[_CandidateSample],
+    samples: list[DateBlockedFactorSample],
     factor_keys: list[str],
     lasso_alpha_fraction: float,
     bootstrap_iterations: int,
@@ -486,7 +486,7 @@ def _build_lasso_summary(
 
 
 def _date_centered_design_matrix(
-    samples: list[_CandidateSample],
+    samples: list[DateBlockedFactorSample],
     factor_keys: list[str],
 ) -> tuple[np.ndarray, np.ndarray, np.ndarray]:
     """Normalize features and outcomes within each trade date."""
@@ -509,7 +509,7 @@ def _date_centered_design_matrix(
 
 
 def _design_matrix(
-    samples: list[_CandidateSample], factor_keys: list[str]
+    samples: list[DateBlockedFactorSample], factor_keys: list[str]
 ) -> tuple[np.ndarray, np.ndarray]:
     """Assemble the (n, p) factor matrix and (n,) outcome vector."""
 
@@ -638,7 +638,7 @@ def _blocked_lodo_lasso(
             )
             predictions[test_mask] = X_test @ beta
         covered_dates += 1
-        rho = _spearman_rho(predictions[test_mask], y[test_mask])
+        rho = spearman_rho(predictions[test_mask], y[test_mask])
         if rho is not None:
             daily_ics.append(rho)
 
@@ -653,7 +653,7 @@ def _blocked_lodo_lasso(
         oos_r2 = 1.0 - float(np.sum(residual ** 2)) / denominator
     mean_daily_ic = float(np.mean(daily_ics)) if daily_ics else None
     ic_p_value = (
-        _sign_flip_p_value(
+        sign_flip_p_value(
             np.array(daily_ics, dtype=float),
             iterations=permutation_iterations,
             random_seed=random_seed,
@@ -724,7 +724,7 @@ def _bootstrap_retention(
     return {j: count / denominator for j, count in retention_counts.items()}
 
 
-def _spearman_rho(x: np.ndarray, y: np.ndarray) -> float | None:
+def spearman_rho(x: np.ndarray, y: np.ndarray) -> float | None:
     """Pearson correlation of average ranks; None if degenerate or too small."""
 
     if x.size < SINGLE_FACTOR_MIN_SAMPLE or y.size < SINGLE_FACTOR_MIN_SAMPLE:
@@ -785,7 +785,7 @@ def _tercile_spread(
 
 
 def _date_aware_tercile_spread(
-    samples: list[_CandidateSample],
+    samples: list[DateBlockedFactorSample],
     factor_key: str,
 ) -> tuple[int, int, int, float | None, float | None, float | None]:
     """Average tie-safe extreme-group spreads with equal weight per date."""

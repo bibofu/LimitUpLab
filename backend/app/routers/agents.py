@@ -41,6 +41,7 @@ from app.models import (
     DailyPipelineStatusResponse,
     DailyReviewSnapshotsResponse,
     FirstBoardCriticResponse,
+    FirstBoardDiscoveryDiagnosticResponse,
     FirstBoardDiscoveryResponse,
     FirstBoardRatingsResponse,
     FactorSignalDiagnosticResponse,
@@ -73,6 +74,9 @@ from app.services.factor_signal_diagnostic import build_factor_signal_diagnostic
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.first_board_critic import build_first_board_critic
 from app.services.first_board_discovery import FIRST_BOARD_DISCOVERY_VERSION
+from app.services.first_board_discovery_diagnostic import (
+    build_first_board_discovery_diagnostic,
+)
 from app.services.dragon_tiger_review import load_dragon_tiger_review
 from app.services.agent_rate_limit import (
     AgentRateLimitError,
@@ -596,12 +600,18 @@ def get_prediction_quality_audit(
 
     events = get_limit_up_repository().list_events()
     if not events:
-        raise HTTPException(status_code=404, detail="No local limit-up events available.")
+        raise HTTPException(
+            status_code=404,
+            detail="No local limit-up events available.",
+        )
     available_dates = sorted({event.trade_date for event in events})
     resolved_start = start_date or available_dates[0]
     resolved_end = end_date or available_dates[-1]
     if resolved_start > resolved_end:
-        raise HTTPException(status_code=400, detail="start_date must be before end_date.")
+        raise HTTPException(
+            status_code=400,
+            detail="start_date must be before end_date.",
+        )
     try:
         return build_prediction_quality_audit(
             events=events,
@@ -613,6 +623,36 @@ def get_prediction_quality_audit(
         )
     except ValueError as error:
         raise HTTPException(status_code=409, detail=str(error)) from error
+
+
+@router.get(
+    "/first-board-discovery-diagnostic",
+    response_model=FirstBoardDiscoveryDiagnosticResponse,
+)
+def get_first_board_discovery_diagnostic(
+    _admin: Annotated[None, Depends(require_admin_access)],
+    start_date: Optional[date] = None,
+    end_date: Optional[date] = None,
+    top_k: int = Query(default=10, ge=3, le=30),
+) -> FirstBoardDiscoveryDiagnosticResponse:
+    """Return forward-only outcome evidence for persisted discovery snapshots."""
+
+    events = get_limit_up_repository().list_events()
+    if not events:
+        raise HTTPException(status_code=404, detail="No local limit-up events available.")
+    available_dates = sorted({event.trade_date for event in events})
+    resolved_start = start_date or available_dates[0]
+    resolved_end = end_date or available_dates[-1]
+    if resolved_start > resolved_end:
+        raise HTTPException(status_code=400, detail="start_date must be before end_date.")
+    return build_first_board_discovery_diagnostic(
+        events=events,
+        start_date=resolved_start,
+        end_date=resolved_end,
+        discovery_repository=SQLiteFirstBoardDiscoveryRepository(),
+        auction_repository=SQLiteAuctionFinalRepository(),
+        top_k=top_k,
+    )
 
 
 @router.get(

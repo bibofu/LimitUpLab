@@ -110,3 +110,29 @@ class SQLiteFirstBoardDiscoveryRepository:
             if row
             else None
         )
+
+    def list_by_target_date(
+        self,
+        start_date: date,
+        end_date: date,
+    ) -> list[FirstBoardDiscoveryResponse]:
+        """Return immutable snapshots whose intended session is in the range."""
+
+        connection = connect(self.database_path)
+        try:
+            initialize_database(connection)
+            rows = connection.execute(
+                """
+                SELECT response_json
+                FROM first_board_discovery_snapshots
+                WHERE target_trade_date BETWEEN ? AND ?
+                ORDER BY target_trade_date, created_at
+                """,
+                (start_date.isoformat(), end_date.isoformat()),
+            ).fetchall()
+        finally:
+            connection.close()
+        return [
+            FirstBoardDiscoveryResponse.model_validate_json(row["response_json"])
+            for row in rows
+        ]

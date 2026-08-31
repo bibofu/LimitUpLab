@@ -19,6 +19,7 @@ from app.routers.agents import get_first_board_discovery
 from app.services.first_board_discovery import (
     FIRST_BOARD_DISCOVERY_VERSION,
     FirstBoardDiscoveryContext,
+    _theme_matches_news,
     refresh_first_board_discovery,
 )
 
@@ -128,6 +129,13 @@ class FirstBoardDiscoveryTest(unittest.TestCase):
         ):
             api_response = get_first_board_discovery(data_as_of=data_as_of)
         self.assertEqual(api_response.candidates[0].facts.name, "强势样本")
+
+    def test_ai_alias_requires_a_real_token_or_chinese_term(self) -> None:
+        self.assertFalse(
+            _theme_matches_news("AI视频", "The chairman discussed quarterly results")
+        )
+        self.assertTrue(_theme_matches_news("AI视频", "AI 视频生成模型发布"))
+        self.assertTrue(_theme_matches_news("AI视频", "人工智能视频应用取得进展"))
 
     @staticmethod
     def _quote(

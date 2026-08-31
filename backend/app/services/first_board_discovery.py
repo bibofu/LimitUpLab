@@ -6,6 +6,7 @@ from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from math import log10
+import re
 from statistics import mean, pstdev
 from typing import Callable
 
@@ -183,8 +184,9 @@ def _select_hot_theme_snapshots(
 
 def _theme_matches_news(theme_name: str, news_text: str) -> bool:
     normalized_name = theme_name.lower().replace("概念", "").replace("行业", "")
-    normalized_text = news_text.lower().replace(" ", "")
-    if len(normalized_name) >= 2 and normalized_name in normalized_text:
+    normalized_text = " ".join(news_text.lower().split())
+    compact_text = normalized_text.replace(" ", "")
+    if len(normalized_name) >= 2 and normalized_name in compact_text:
         return True
     aliases = (
         (("ai", "人工智能"), ("ai", "人工智能")),
@@ -198,9 +200,34 @@ def _theme_matches_news(theme_name: str, news_text: str) -> bool:
     )
     return any(
         any(term in normalized_name for term in theme_terms)
-        and any(term in normalized_text for term in news_terms)
+        and any(
+            _news_term_matches(
+                normalized_text=normalized_text,
+                compact_text=compact_text,
+                term=term,
+            )
+            for term in news_terms
+        )
         for theme_terms, news_terms in aliases
     )
+
+
+def _news_term_matches(
+    *,
+    normalized_text: str,
+    compact_text: str,
+    term: str,
+) -> bool:
+    """Match ASCII aliases as tokens so words such as chairman do not imply AI."""
+
+    if term.isascii() and term.isalnum():
+        return bool(
+            re.search(
+                rf"(?<![a-z0-9]){re.escape(term)}(?![a-z0-9])",
+                normalized_text,
+            )
+        )
+    return term in compact_text
 
 
 def refresh_first_board_discovery(
