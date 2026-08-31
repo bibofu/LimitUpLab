@@ -406,6 +406,7 @@ export interface FirstBoardDiscoveryResponse {
   source: string;
   snapshot_created_at: string;
   warnings: string[];
+  disclaimer: string;
 }
 
 export interface RecommendationFinancialReport {
@@ -504,6 +505,7 @@ export interface AuctionFinalRecommendationsResponse {
   relay_base_date: string | null;
   candidates: AuctionFinalCandidate[];
   warnings: string[];
+  disclaimer: string;
 }
 
 export interface RatingBacktestBucket {

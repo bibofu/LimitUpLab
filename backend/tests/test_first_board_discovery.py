@@ -100,6 +100,7 @@ class FirstBoardDiscoveryTest(unittest.TestCase):
         self.assertEqual(response.themes[0].name, "AI视频")
         self.assertLess(response.candidates[0].facts.volume_ratio_5d or 0, 5)
         self.assertEqual(response.generated_by, FIRST_BOARD_DISCOVERY_VERSION)
+        self.assertIn("不构成投资建议", response.disclaimer)
         self.assertAlmostEqual(
             sum(item.max_score for item in response.candidates[0].score_breakdown),
             100,

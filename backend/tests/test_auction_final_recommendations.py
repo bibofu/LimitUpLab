@@ -86,6 +86,7 @@ class AuctionFinalRecommendationsTest(unittest.TestCase):
         self.assertEqual(discovery[0].final_rank, 1)
         self.assertEqual(first.model_dump(), second.model_dump())
         self.assertEqual(collector.call_count, 1)
+        self.assertIn("不构成投资建议", first.disclaimer)
         with patch.dict(
             os.environ,
             {"LIMITUPLAB_DATABASE_PATH": str(self.database_path)},
@@ -93,6 +94,42 @@ class AuctionFinalRecommendationsTest(unittest.TestCase):
         ):
             api_response = get_auction_final_recommendations(trade_date)
         self.assertEqual(api_response.trade_date, trade_date)
+
+    def test_existing_snapshot_replays_canonical_prediction_recovery(self) -> None:
+        trade_date = date(2026, 9, 1)
+        existing = self._existing_response(trade_date)
+        self.final_repo.save(existing)
+
+        with patch(
+            "app.services.auction_final_recommendations._ensure_relay_final_prediction"
+        ) as ensure_prediction:
+            response = finalize_auction_recommendations(
+                trade_date=trade_date,
+                limit_up_repository=self.limit_repo,
+                first_board_repository=self.first_repo,
+                discovery_repository=self.discovery_repo,
+                snapshot_repository=self.final_repo,
+                auction_collector=Mock(side_effect=AssertionError("must not collect")),
+                refresh_draft=False,
+            )
+
+        self.assertEqual(response.model_dump(), existing.model_dump())
+        ensure_prediction.assert_called_once()
+
+    def _existing_response(self, trade_date: date):
+        from app.models import AuctionFinalRecommendationsResponse
+
+        return AuctionFinalRecommendationsResponse(
+            trade_date=trade_date,
+            finalized_at=datetime(2026, 9, 1, 1, 25, 12, tzinfo=timezone.utc),
+            auction_captured_at=datetime(2026, 9, 1, 1, 25, 11, tzinfo=timezone.utc),
+            status="complete",
+            auction_phase="closed",
+            data_status="final",
+            scoring_version="test-v1",
+            source="test",
+            candidates=[],
+        )
 
     def test_score_penalizes_near_one_word_auction(self) -> None:
         normal = self._fact("600001", pct=3.2, volume_ratio=1.3, turnover=0.06)

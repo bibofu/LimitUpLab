@@ -82,7 +82,7 @@ def finalize_auction_recommendations(
     )
     existing = final_repo.get(target_date)
     if existing is not None:
-        _persist_relay_final_prediction(
+        _ensure_relay_final_prediction(
             existing,
             limit_up_repository=limit_repo,
             first_board_repository=first_repo,
@@ -233,7 +233,7 @@ def finalize_auction_recommendations(
     )
     final_repo.save(response)
     persisted = final_repo.get(target_date) or response
-    _persist_relay_final_prediction(
+    _ensure_relay_final_prediction(
         persisted,
         limit_up_repository=limit_repo,
         first_board_repository=first_repo,
@@ -405,13 +405,18 @@ def _strategy_label(strategy: str) -> str:
     return "首板挖掘" if strategy == "discovery" else "一进二接力"
 
 
-def _persist_relay_final_prediction(
+def _ensure_relay_final_prediction(
     response: AuctionFinalRecommendationsResponse,
     *,
     limit_up_repository: SQLiteLimitUpRepository,
     first_board_repository: SQLiteFirstBoardRepository,
 ) -> None:
-    """Replace the provisional close Top10 with the sole 09:25 review batch."""
+    """Idempotently restore the canonical relay prediction from an auction snapshot.
+
+    The immutable auction snapshot is the source of truth. Replaying an existing
+    finalization intentionally rewrites the derived live batch so a partial prior
+    failure cannot leave the review pipeline without its canonical prediction.
+    """
 
     relay_candidates = sorted(
         [item for item in response.candidates if item.strategy == "relay"],
