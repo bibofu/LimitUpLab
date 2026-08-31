@@ -67,6 +67,7 @@ class AuctionFinalRecommendationsTest(unittest.TestCase):
                 discovery_repository=self.discovery_repo,
                 snapshot_repository=self.final_repo,
                 auction_collector=collector,
+                refresh_draft=False,
             )
             second = finalize_auction_recommendations(
                 trade_date=trade_date,
@@ -76,6 +77,7 @@ class AuctionFinalRecommendationsTest(unittest.TestCase):
                 discovery_repository=self.discovery_repo,
                 snapshot_repository=self.final_repo,
                 auction_collector=collector,
+                refresh_draft=False,
             )
 
         self.assertEqual({item.strategy for item in first.candidates}, {"discovery", "relay"})

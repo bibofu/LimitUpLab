@@ -98,6 +98,84 @@ class PredictionSnapshotContractTest(unittest.TestCase):
             1,
         )
 
+    def test_auction_final_can_replace_provisional_live_snapshot(self) -> None:
+        self._persist_live()
+        original = self.repository.get_live_prediction_snapshot(self.trade_date)
+        stored = self.repository.list_predictions_between(
+            self.trade_date,
+            self.trade_date,
+        )[0]
+        assert original is not None
+        final_rating = original.candidates[0].model_copy(
+            update={"score": original.candidates[0].score + 3}
+        )
+        final_created_at = stored.created_at + timedelta(days=1)
+        final_data_as_of = self.trade_date + timedelta(days=1)
+        final_version = "auction-final-v1"
+        final_snapshot = original.model_copy(
+            update={
+                "candidates": [final_rating],
+                "generated_by": final_version,
+            }
+        )
+        final_prediction = stored.model_copy(
+            update={
+                "prediction_id": "auction-final-prediction",
+                "score": final_rating.score,
+                "scoring_version": final_version,
+                "data_as_of": final_data_as_of,
+                "created_at": final_created_at,
+            }
+        )
+
+        inserted = self.repository.persist_live_prediction_snapshot(
+            ratings=final_snapshot,
+            predictions=[final_prediction],
+            top_limit=10,
+            data_as_of=final_data_as_of,
+            created_at=final_created_at,
+            replace=True,
+        )
+        after = self.repository.get_live_prediction_snapshot(self.trade_date)
+        rows = self.repository.list_predictions_between(
+            self.trade_date,
+            self.trade_date,
+        )
+
+        self.assertEqual(inserted, 1)
+        self.assertIsNotNone(after)
+        assert after is not None
+        self.assertEqual(after.generated_by, final_version)
+        self.assertEqual(after.data_as_of, final_data_as_of)
+        self.assertEqual([item.prediction_id for item in rows], ["auction-final-prediction"])
+
+    def test_post_rollout_draft_is_excluded_from_review(self) -> None:
+        trade_date = date(2026, 8, 31)
+        created_at = datetime(2026, 8, 31, 8, tzinfo=timezone.utc)
+        draft = self._prediction(
+            "draft-live",
+            "000001",
+            "close-draft-v1",
+            "live",
+            created_at,
+        ).model_copy(update={"trade_date": trade_date, "data_as_of": trade_date})
+        official = self._prediction(
+            "auction-final",
+            "000002",
+            "auction-final-v1",
+            "live",
+            created_at + timedelta(days=1),
+        ).model_copy(
+            update={
+                "trade_date": trade_date,
+                "data_as_of": trade_date + timedelta(days=1),
+            }
+        )
+
+        self.assertEqual(select_canonical_prediction_snapshots([draft]), [])
+        selected = select_canonical_prediction_snapshots([draft, official])
+        self.assertEqual([item.prediction_id for item in selected], ["auction-final"])
+
     def test_live_batch_excludes_same_day_historical_extras(self) -> None:
         created_at = datetime(2026, 8, 29, tzinfo=timezone.utc)
         live = [

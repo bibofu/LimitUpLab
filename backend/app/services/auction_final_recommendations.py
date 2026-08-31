@@ -14,6 +14,7 @@ from app.collectors.hithink_finance_collector import (
     HithinkFinanceCollector,
 )
 from app.models import (
+    AgentPrediction,
     AuctionFinalCandidate,
     AuctionFinalRecommendationsResponse,
 )
@@ -22,8 +23,10 @@ from app.repositories import (
     SQLiteFirstBoardDiscoveryRepository,
     SQLiteFirstBoardRepository,
     SQLiteLimitUpRepository,
+    SQLiteRecommendationIntelligenceRepository,
     SQLiteScoringPolicyRepository,
 )
+from app.services.recommendation_intelligence import refresh_recommendation_intelligence
 
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
@@ -63,8 +66,9 @@ def finalize_auction_recommendations(
     discovery_repository: SQLiteFirstBoardDiscoveryRepository | None = None,
     snapshot_repository: SQLiteAuctionFinalRepository | None = None,
     auction_collector: AuctionCollector | None = None,
+    refresh_draft: bool = True,
 ) -> AuctionFinalRecommendationsResponse:
-    """Build and persist an immutable final Top10 for each strategy."""
+    """Build the session's sole official Top10 from the latest draft and auction."""
 
     finalized_at = _as_shanghai(now or datetime.now(SHANGHAI_TZ))
     target_date = trade_date or finalized_at.date()
@@ -78,7 +82,28 @@ def finalize_auction_recommendations(
     )
     existing = final_repo.get(target_date)
     if existing is not None:
+        _persist_relay_final_prediction(
+            existing,
+            limit_up_repository=limit_repo,
+            first_board_repository=first_repo,
+        )
         return existing
+
+    intelligence_repo = SQLiteRecommendationIntelligenceRepository(
+        first_repo.database_path
+    )
+    refresh_warnings: list[str] = []
+    if refresh_draft:
+        try:
+            refresh_recommendation_intelligence(
+                now=finalized_at,
+                limit_up_repository=limit_repo,
+                first_board_repository=first_repo,
+                discovery_repository=discovery_repo,
+                snapshot_repository=intelligence_repo,
+            )
+        except Exception as error:  # noqa: BLE001
+            refresh_warnings.append(f"09:25前新闻与财报刷新失败，使用最近草稿：{error}")
 
     base_candidates, discovery_date, relay_date, warnings = _load_base_candidates(
         target_date=target_date,
@@ -92,6 +117,12 @@ def finalize_auction_recommendations(
         )
     if not base_candidates:
         raise AuctionFinalizationError("No eligible pre-market candidate pool is available.")
+    warnings.extend(refresh_warnings)
+    latest_draft = intelligence_repo.get_latest()
+    draft_by_candidate = {
+        (item.strategy, item.symbol): item
+        for item in latest_draft.items
+    } if latest_draft else {}
 
     active_collector = auction_collector or (
         lambda thscodes: HithinkFinanceCollector().collect_auction_snapshots(
@@ -118,6 +149,15 @@ def finalize_auction_recommendations(
             warnings.append(f"{candidate.name}竞价终值缺失，未进入终选。")
             continue
         auction_score, reasons, risks = score_auction_fact(fact)
+        draft = draft_by_candidate.get((candidate.strategy, candidate.symbol))
+        draft_matches = (
+            draft is not None
+            and draft.base_trade_date == candidate.base_trade_date
+        )
+        preauction_score = draft.draft_score if draft_matches else candidate.score
+        preauction_rank = draft.rank if draft_matches else candidate.rank
+        news_adjustment = draft.news_adjustment if draft_matches else 0.0
+        financial_adjustment = draft.financial_adjustment if draft_matches else 0.0
         ranked.append(
             AuctionFinalCandidate(
                 strategy=candidate.strategy,
@@ -130,9 +170,13 @@ def finalize_auction_recommendations(
                 base_rank=candidate.rank,
                 base_score=candidate.score,
                 base_scoring_version=candidate.scoring_version,
+                preauction_rank=preauction_rank,
+                preauction_score=preauction_score,
+                news_adjustment=news_adjustment,
+                financial_adjustment=financial_adjustment,
                 final_rank=0,
                 final_score=round(
-                    candidate.score * AUCTION_BASE_WEIGHT + auction_score,
+                    preauction_score * AUCTION_BASE_WEIGHT + auction_score,
                     1,
                 ),
                 auction_score=auction_score,
@@ -146,7 +190,10 @@ def finalize_auction_recommendations(
                 auction_volume_ratio=fact.auction_volume_ratio,
                 previous_close=fact.previous_close,
                 float_market_cap=fact.float_market_cap,
-                reasons=reasons,
+                reasons=[
+                    *(draft.update_reasons if draft_matches else []),
+                    *reasons,
+                ],
                 risks=risks,
             )
         )
@@ -185,7 +232,13 @@ def finalize_auction_recommendations(
         warnings=list(dict.fromkeys(warnings)),
     )
     final_repo.save(response)
-    return final_repo.get(target_date) or response
+    persisted = final_repo.get(target_date) or response
+    _persist_relay_final_prediction(
+        persisted,
+        limit_up_repository=limit_repo,
+        first_board_repository=first_repo,
+    )
+    return persisted
 
 
 def score_auction_fact(
@@ -350,6 +403,99 @@ def _to_thscode(symbol: str) -> str:
 
 def _strategy_label(strategy: str) -> str:
     return "首板挖掘" if strategy == "discovery" else "一进二接力"
+
+
+def _persist_relay_final_prediction(
+    response: AuctionFinalRecommendationsResponse,
+    *,
+    limit_up_repository: SQLiteLimitUpRepository,
+    first_board_repository: SQLiteFirstBoardRepository,
+) -> None:
+    """Replace the provisional close Top10 with the sole 09:25 review batch."""
+
+    relay_candidates = sorted(
+        [item for item in response.candidates if item.strategy == "relay"],
+        key=lambda item: item.final_rank,
+    )
+    if not relay_candidates or response.relay_base_date is None:
+        return
+    events = limit_up_repository.list_events()
+    if not any(item.trade_date == response.relay_base_date for item in events):
+        return
+    base_version = relay_candidates[0].base_scoring_version
+    scoring_policy = SQLiteScoringPolicyRepository(
+        first_board_repository.database_path
+    ).get_policy(base_version)
+    ratings = build_first_board_ratings(
+        events=events,
+        trade_date=response.relay_base_date,
+        first_board_repository=first_board_repository,
+        scoring_policy=scoring_policy,
+    )
+    ratings_by_symbol = {item.facts.symbol: item for item in ratings.candidates}
+    final_ratings = []
+    predictions = []
+    scoring_version = f"{ratings.generated_by}+{response.scoring_version}"
+    for item in relay_candidates:
+        base_rating = ratings_by_symbol.get(item.symbol)
+        if base_rating is None:
+            continue
+        final_rating = base_rating.model_copy(
+            update={
+                "score": item.final_score,
+                "rating": _rating_for_score(item.final_score),
+                "score_breakdown": [],
+                "reasons": item.reasons or base_rating.reasons,
+                "risks": list(dict.fromkeys([*item.risks, *base_rating.risks])),
+            }
+        )
+        final_ratings.append(final_rating)
+        predictions.append(
+            AgentPrediction(
+                prediction_id=(
+                    f"{response.relay_base_date.isoformat()}-{item.symbol}-"
+                    f"{scoring_version}-live"
+                ),
+                trade_date=response.relay_base_date,
+                symbol=item.symbol,
+                name=item.name,
+                score=item.final_score,
+                rating=_rating_for_score(item.final_score),
+                confidence=base_rating.confidence,
+                scoring_version=scoring_version,
+                prediction_source="live",
+                data_as_of=response.trade_date,
+                facts_json=base_rating.facts.model_dump(mode="json"),
+                reasons=item.reasons or base_rating.reasons,
+                risks=list(dict.fromkeys([*item.risks, *base_rating.risks])),
+                created_at=response.finalized_at,
+            )
+        )
+    final_response = ratings.model_copy(
+        update={
+            "candidates": final_ratings,
+            "generated_by": scoring_version,
+            "data_as_of": response.trade_date,
+        }
+    )
+    first_board_repository.persist_live_prediction_snapshot(
+        ratings=final_response,
+        predictions=predictions,
+        top_limit=FINAL_TOP_K,
+        data_as_of=response.trade_date,
+        created_at=response.finalized_at,
+        replace=True,
+    )
+
+
+def _rating_for_score(score: float) -> str:
+    if score >= 85:
+        return "A"
+    if score >= 75:
+        return "B"
+    if score >= 65:
+        return "C"
+    return "D"
 
 
 def _as_shanghai(value: datetime) -> datetime:

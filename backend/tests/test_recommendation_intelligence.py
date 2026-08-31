@@ -53,8 +53,14 @@ class RecommendationIntelligenceTest(unittest.TestCase):
     def test_refreshes_both_strategies_and_reuses_daily_financial_cache(self) -> None:
         now = datetime(2026, 8, 31, 16, tzinfo=timezone.utc)
         candidates = [
-            _BaseCandidate("discovery", date(2026, 8, 31), "600640", "国脉文化", 1, 85.3),
-            _BaseCandidate("relay", date(2026, 8, 31), "002712", "思美传媒", 1, 81.2),
+            _BaseCandidate(
+                "discovery", date(2026, 8, 31), "600640", "国脉文化",
+                "文化传媒", "区间突破", 1, 85.3,
+            ),
+            _BaseCandidate(
+                "relay", date(2026, 8, 31), "002712", "思美传媒",
+                "文化传媒", "低位启动", 1, 81.2,
+            ),
         ]
         quote_collector = Mock(return_value=self._quotes(now))
         news_collector = Mock(side_effect=self._news)
@@ -93,6 +99,8 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         self.assertIsNotNone(report)
         self.assertEqual(report.operating_income_yoy_pct, 25.0)
         self.assertEqual(report.net_profit_yoy_pct, 100.0)
+        self.assertEqual(first.items[0].financial_adjustment, 3.0)
+        self.assertEqual(first.items[0].draft_score, 88.3)
         self.assertEqual(financial_collector.call_count, 2)
         self.assertEqual(news_collector.call_count, 4)
         self.assertEqual(second.interval_minutes, 30)
@@ -107,6 +115,67 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         ):
             api_response = get_recommendation_intelligence()
         self.assertEqual(api_response.refresh_id, second.refresh_id)
+
+    def test_recent_news_can_move_candidate_across_close_rank(self) -> None:
+        now = datetime(2026, 8, 31, 16, tzinfo=timezone.utc)
+        candidates = [
+            _BaseCandidate(
+                "relay", date(2026, 8, 31), "600640", "国脉文化",
+                "文化传媒", "区间突破", 2, 80.0,
+            ),
+            _BaseCandidate(
+                "relay", date(2026, 8, 31), "002712", "思美传媒",
+                "文化传媒", "低位启动", 1, 82.0,
+            ),
+        ]
+
+        def news(symbol: str, name: str) -> StockNewsFacts:
+            title = "公司签署重大订单" if symbol == "600640" else "股东拟减持股份"
+            return StockNewsFacts(
+                symbol=symbol,
+                name=name,
+                fetched_at=now,
+                window_days=7,
+                cache_status="live",
+                sources=["测试资讯"],
+                items=[
+                    StockNewsItem(
+                        symbol=symbol,
+                        name=name,
+                        title=title,
+                        summary=title,
+                        published_at=now,
+                        source="测试资讯",
+                        url=f"https://example.com/{symbol}",
+                        item_type="news",
+                        relevance_score=1,
+                        fetched_at=now,
+                    )
+                ],
+            )
+
+        with patch(
+            "app.services.recommendation_intelligence._load_base_candidates",
+            return_value=(candidates, None, date(2026, 8, 31), []),
+        ):
+            response = refresh_recommendation_intelligence(
+                now=now,
+                max_workers=1,
+                limit_up_repository=self.limit_repo,
+                first_board_repository=self.first_repo,
+                discovery_repository=self.discovery_repo,
+                snapshot_repository=self.snapshot_repo,
+                quote_collector=Mock(return_value=self._quotes(now)),
+                news_collector=news,
+                financial_collector=Mock(return_value=[]),
+            )
+
+        relay = [item for item in response.items if item.strategy == "relay"]
+        self.assertEqual([item.symbol for item in relay], ["600640", "002712"])
+        self.assertEqual(relay[0].base_rank, 2)
+        self.assertEqual(relay[0].rank, 1)
+        self.assertEqual(relay[0].news_adjustment, 3.0)
+        self.assertEqual(relay[1].news_adjustment, -4.0)
 
     @staticmethod
     def _quotes(now: datetime) -> HithinkMarketSnapshot:

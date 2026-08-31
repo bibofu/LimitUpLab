@@ -3812,6 +3812,12 @@ a.entry-card {
   white-space: nowrap;
 }
 
+.recommendation-draft-time {
+  flex: 0 0 auto;
+  color: #475467 !important;
+  font-weight: 700;
+}
+
 .premarket-page {
   display: grid;
   gap: 18px;

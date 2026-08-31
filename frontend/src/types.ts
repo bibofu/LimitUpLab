@@ -428,8 +428,15 @@ export interface RecommendationIntelligenceItem {
   base_trade_date: string;
   symbol: string;
   name: string;
+  sector: string;
+  position_label: string | null;
+  base_rank: number;
   rank: number;
   base_score: number;
+  draft_score: number;
+  news_adjustment: number;
+  financial_adjustment: number;
+  update_reasons: string[];
   current_price: number | null;
   change_pct: number | null;
   turnover: number | null;
@@ -444,6 +451,7 @@ export interface RecommendationIntelligenceResponse {
   refresh_id: string;
   refreshed_at: string;
   interval_minutes: number;
+  stage: "draft";
   status: "complete" | "partial";
   discovery_base_date: string | null;
   relay_base_date: string | null;
@@ -462,6 +470,10 @@ export interface AuctionFinalCandidate {
   base_rank: number;
   base_score: number;
   base_scoring_version: string;
+  preauction_rank: number;
+  preauction_score: number;
+  news_adjustment: number;
+  financial_adjustment: number;
   final_rank: number;
   final_score: number;
   auction_score: number;

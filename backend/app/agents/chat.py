@@ -1500,6 +1500,23 @@ def _template_answer_from_tool_facts(
             lines.append("该名单为竞价终值确认后的研究排序，不代表涨停概率。")
             lines.append(TEXT["safety"])
             return "\n".join(lines)
+        draft = discovery.get("recommendation_draft") or {}
+        draft_candidates = draft.get("candidates") or []
+        if draft_candidates:
+            lines = [
+                f"基于 {draft.get('base_date')} 收盘情况，并更新至 "
+                f"{str(draft.get('refreshed_at', ''))[:16]} 的首板挖掘盘前草稿如下："
+            ]
+            lines.extend(
+                f"{index}. {item.get('name')}({item.get('symbol')}) "
+                f"动态 {item.get('draft_score')} 分，收盘基础 {item.get('base_score')} 分，"
+                f"新闻修正 {item.get('news_adjustment', 0):+g}，"
+                f"财报修正 {item.get('financial_adjustment', 0):+g}。"
+                for index, item in enumerate(draft_candidates, start=1)
+            )
+            lines.append("该名单仍会更新，09:25:10 集合竞价结束后的终选 Top10 才是正式预测。")
+            lines.append(TEXT["safety"])
+            return "\n".join(lines)
         candidates = discovery.get("candidates", [])
         target = discovery.get("target_trade_date") or "下一交易日"
         lines = [
@@ -1544,6 +1561,23 @@ def _template_answer_from_tool_facts(
                 f"{item.get('auction_pct')}%，竞价量比 {item.get('auction_volume_ratio')}。"
                 for index, item in enumerate(final_candidates[:10], start=1)
             )
+            lines.append(TEXT["safety"])
+            return "\n".join(lines)
+        draft = ratings.get("recommendation_draft") or {}
+        draft_candidates = draft.get("candidates") or []
+        if draft_candidates:
+            lines = [
+                f"基于 {draft.get('base_date')} 首板收盘情况，并更新至 "
+                f"{str(draft.get('refreshed_at', ''))[:16]} 的一进二盘前草稿如下："
+            ]
+            lines.extend(
+                f"{index}. {item.get('name')}({item.get('symbol')}) "
+                f"动态 {item.get('draft_score')} 分，收盘基础 {item.get('base_score')} 分，"
+                f"新闻修正 {item.get('news_adjustment', 0):+g}，"
+                f"财报修正 {item.get('financial_adjustment', 0):+g}。"
+                for index, item in enumerate(draft_candidates, start=1)
+            )
+            lines.append("该名单仍会更新，09:25:10 集合竞价结束后的终选 Top10 才是正式预测。")
             lines.append(TEXT["safety"])
             return "\n".join(lines)
         if _looks_like_first_board_position_question(request.message):
@@ -2019,7 +2053,7 @@ def _tool_answer_system_prompt(
         "For broad-index trend questions, cite the requested window and data_as_of, compare all returned major indices using period returns, up/down days and drawdown, and do not substitute limit-up counts for index performance. "
         "Do not assign categorical market-sentiment labels such as heating, divergence, cooling, risk-on or risk-off; report objective market counts, rates and index changes instead. "
         "For daily_board_promotion, treat each trade_date as the day promotion was observed from previous_trade_date; report empirical sample counts with every rate and distinguish all limit-up stocks, first-board-to-second-board, and existing continued-board cohorts. "
-        "For first_board_discovery and first_board_ratings, use auction_final when it is present because it is the current session's immutable 09:25 final ranking; otherwise use the close-data initial ranking. State which stage and date are being reported, and never convert either score into a claimed limit-up probability. For a close-data first_board_discovery result, explain that candidates had not reached limit-up on the cutoff date. "
+        "For first_board_discovery and first_board_ratings, use auction_final when present because it is the sole official 09:25 prediction for the session. Otherwise prefer recommendation_draft, which is a replaceable pre-auction ranking based on the previous close plus the latest news and financial facts; it must not be described as an official prediction or review sample. Fall back to the close-data base pool only when neither exists. State the stage and date, never convert a score into a claimed limit-up probability, and explain that first_board_discovery candidates had not reached limit-up on the close-data cutoff date. "
         "For review_high_score_picks promotion comparisons, report Top10 and full-market first-board sample counts together, separate pending dates, and express promotion_rate_delta as percentage points. "
         "For dragon_tiger_list, omit every missing capital-flow field and format each valid CNY amount as signed 亿元 or 万元; never expose raw yuan values, None, null, NaN, or a missing-data placeholder. "
         "Historical similar-case retrieval is retired; never invent or infer a similar stock or case from the available facts. "
@@ -2949,6 +2983,10 @@ def _execute_llm_tool_calls(
             if result.trace_output.get("auction_final"):
                 facts["first_board_ratings"]["auction_final"] = (
                     result.trace_output["auction_final"]
+                )
+            if result.trace_output.get("recommendation_draft"):
+                facts["first_board_ratings"]["recommendation_draft"] = (
+                    result.trace_output["recommendation_draft"]
                 )
             traces.append(result.trace())
             call_names.append(name)

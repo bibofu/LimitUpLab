@@ -380,11 +380,12 @@ class SQLiteFirstBoardRepository:
         top_limit: int,
         data_as_of: date,
         created_at: datetime,
+        replace: bool = False,
     ) -> int:
-        """Atomically insert one immutable live Top-N response and its rows."""
+        """Insert a live batch, optionally replacing its provisional same-day draft."""
 
-        if data_as_of != ratings.trade_date:
-            raise ValueError("Live prediction data_as_of must equal its trade date.")
+        if data_as_of < ratings.trade_date:
+            raise ValueError("Live prediction data_as_of cannot precede its base date.")
         if any(
             item.prediction_source != "live"
             or item.trade_date != ratings.trade_date
@@ -422,6 +423,7 @@ class SQLiteFirstBoardRepository:
                 data_as_of,
                 created_at,
             ),
+            replace_existing=replace,
         )
 
     def get_live_prediction_snapshot(
@@ -484,6 +486,7 @@ class SQLiteFirstBoardRepository:
         snapshot_json: str,
         top_limit: int,
         empty_batch_metadata: tuple[date, str, date, datetime] | None = None,
+        replace_existing: bool = False,
     ) -> int:
         """Insert one live batch under a per-date transaction lock."""
 
@@ -512,8 +515,23 @@ class SQLiteFirstBoardRepository:
                 (trade_date.isoformat(),),
             ).fetchone()
             if existing is not None:
-                connection.rollback()
-                return 0
+                if not replace_existing:
+                    connection.rollback()
+                    return 0
+                connection.execute(
+                    """
+                    DELETE FROM agent_predictions
+                    WHERE trade_date = ? AND prediction_source = 'live'
+                    """,
+                    (trade_date.isoformat(),),
+                )
+                connection.execute(
+                    """
+                    DELETE FROM agent_live_prediction_snapshots
+                    WHERE trade_date = ?
+                    """,
+                    (trade_date.isoformat(),),
+                )
             connection.execute(
                 """
                 INSERT INTO agent_live_prediction_snapshots (

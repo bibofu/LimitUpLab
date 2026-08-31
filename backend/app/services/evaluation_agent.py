@@ -17,6 +17,7 @@ from app.services.scoring_policy import DEFAULT_SCORING_POLICY_VERSION
 
 
 EVALUATION_AGENT_VERSION = "first-board-evaluation-mvp-v1"
+AUCTION_FINAL_REVIEW_START_BASE_DATE = date(2026, 8, 31)
 
 
 def build_agent_evaluation(
@@ -332,6 +333,12 @@ def select_canonical_prediction_snapshots(
     for trade_date in sorted(by_date):
         daily = by_date[trade_date]
         live = [item for item in daily if item.prediction_source == "live"]
+        if trade_date >= AUCTION_FINAL_REVIEW_START_BASE_DATE:
+            live = [item for item in live if item.data_as_of > item.trade_date]
+            if not live:
+                # From the auction rollout onward, an evening draft is not a
+                # prediction sample and historical backtests must not replace it.
+                continue
         if live:
             batch_key = min(
                 (

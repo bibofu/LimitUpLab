@@ -989,8 +989,8 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
           if (active) setIntelligence(response);
         })
         .catch(() => {
-          // The immutable recommendation snapshots remain usable while the
-          // background intelligence worker is warming up or temporarily stale.
+          // The close-data base pool remains usable while the dynamic draft
+          // worker is warming up or temporarily stale.
         });
     };
     refresh();
@@ -1026,6 +1026,11 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
   const finalCandidates = currentAuctionFinal?.candidates.filter(
     (item) => item.strategy === mode,
   ) ?? [];
+  const draftBaseDate = mode === "discovery" ? discovery?.data_as_of : ratings.trade_date;
+  const draftCandidates = intelligence?.items
+    .filter((item) => item.strategy === mode && item.base_trade_date === draftBaseDate)
+    .sort((left, right) => left.rank - right.rank)
+    .slice(0, 10) ?? [];
 
   return (
     <section className="premarket-workspace">
@@ -1057,6 +1062,12 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
           response={currentAuctionFinal}
           strategy={mode}
         />
+      ) : draftCandidates.length > 0 && intelligence ? (
+        <RecommendationDraftPanel
+          candidates={draftCandidates}
+          refreshedAt={intelligence.refreshed_at}
+          strategy={mode}
+        />
       ) : mode === "discovery" ? (
         <FirstBoardDiscoveryPanel
           data={discovery}
@@ -1068,6 +1079,76 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
         <FirstBoardRatingPanel intelligence={intelligence} ratings={ratings} />
       )}
     </section>
+  );
+}
+
+function RecommendationDraftPanel({
+  candidates,
+  refreshedAt,
+  strategy,
+}: {
+  candidates: RecommendationIntelligenceItem[];
+  refreshedAt: string;
+  strategy: "discovery" | "relay";
+}) {
+  const title = strategy === "discovery" ? "首板挖掘" : "一进二接力";
+  return (
+    <Panel
+      title={title}
+      icon={strategy === "discovery" ? <TrendingUp size={18} /> : <BarChart3 size={18} />}
+    >
+      <div className="rating-summary-panel auction-final-panel">
+        <div className="auction-final-header">
+          <div>
+            <strong>盘前动态候选 Top{candidates.length}</strong>
+            <span>上一交易日收盘评分结合最新新闻与财报持续重排，09:25 后以竞价终选为准</span>
+          </div>
+          <span className="recommendation-draft-time">
+            {new Date(refreshedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
+          </span>
+        </div>
+        <div className="rating-top-list">
+          {candidates.map((candidate) => (
+            <Link
+              className="rating-top-card"
+              key={`${candidate.strategy}-${candidate.base_trade_date}-${candidate.symbol}`}
+              to={stockDetailPath(candidate.symbol, candidate.base_trade_date, candidate.name)}
+            >
+              <header>
+                <div>
+                  <span>Top {candidate.rank} · 收盘第 {candidate.base_rank}</span>
+                  <strong>{candidate.name}</strong>
+                  <small>{candidate.symbol}{candidate.sector ? ` / ${candidate.sector}` : ""}</small>
+                </div>
+                <div className="rating-top-score">
+                  <b>{candidate.draft_score.toFixed(1)}</b>
+                  <span className="auction-score-delta">收盘 {candidate.base_score.toFixed(1)}</span>
+                </div>
+              </header>
+              <div className="rating-top-facts">
+                <Fact label="新闻修正" value={formatSigned(candidate.news_adjustment, 1)} />
+                <Fact label="财报修正" value={formatSigned(candidate.financial_adjustment, 1)} />
+                <Fact label="最新涨幅" value={candidate.change_pct !== null ? `${formatSigned(candidate.change_pct, 2)}%` : "暂无"} />
+                <Fact label="最新价格" value={candidate.current_price?.toFixed(2) ?? "暂无"} />
+              </div>
+              {candidate.update_reasons.length > 0 ? (
+                <section className="rating-top-reasons">
+                  <strong>动态调整依据</strong>
+                  <ul>{candidate.update_reasons.slice(0, 3).map((reason) => <li key={reason}>{reason}</li>)}</ul>
+                </section>
+              ) : null}
+              {candidate.latest_news[0] ? (
+                <section className="discovery-catalyst">
+                  <strong>最新动态</strong>
+                  <p>{candidate.latest_news[0].title}</p>
+                </section>
+              ) : null}
+            </Link>
+          ))}
+        </div>
+        <p className="discovery-disclaimer">当前为可覆盖的盘前草稿，不进入预测复盘。</p>
+      </div>
+    </Panel>
   );
 }
 
@@ -1090,7 +1171,7 @@ function AuctionFinalPanel({
         <div className="auction-final-header">
           <div>
             <strong>{response.trade_date} 竞价终选 Top{candidates.length}</strong>
-            <span>09:25 集合竞价终值已固化，原评分占 80%，竞价确认占 20%</span>
+            <span>09:25 集合竞价终值已生成，竞价前动态分占 80%，竞价确认占 20%</span>
           </div>
           <span className="auction-final-badge">09:25 终选</span>
         </div>
@@ -1103,7 +1184,7 @@ function AuctionFinalPanel({
             >
               <header>
                 <div>
-                  <span>Top {candidate.final_rank} · 初选第 {candidate.base_rank}</span>
+                  <span>Top {candidate.final_rank} · 竞价前第 {candidate.preauction_rank}</span>
                   <strong>{candidate.name}</strong>
                   <small>{candidate.symbol}{candidate.sector ? ` / ${candidate.sector}` : ""}</small>
                 </div>
@@ -1118,7 +1199,7 @@ function AuctionFinalPanel({
                 <Fact label="竞价量比" value={candidate.auction_volume_ratio?.toFixed(2) ?? "暂无"} />
                 <Fact label="竞价换手" value={candidate.auction_turnover_pct !== null ? `${candidate.auction_turnover_pct.toFixed(3)}%` : "暂无"} />
                 <Fact label="竞价额" value={candidate.auction_amount !== null ? formatAmount(candidate.auction_amount) : "暂无"} />
-                <Fact label="原评分" value={candidate.base_score.toFixed(1)} />
+                <Fact label="竞价前分" value={candidate.preauction_score.toFixed(1)} />
               </div>
               {candidate.reasons.length > 0 ? (
                 <section className="rating-top-reasons">

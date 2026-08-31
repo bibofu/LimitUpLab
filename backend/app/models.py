@@ -224,14 +224,21 @@ class RecommendationFinancialReport(BaseModel):
 
 
 class RecommendationIntelligenceItem(BaseModel):
-    """Mutable quote, news and financial evidence for one immutable pick."""
+    """Latest mutable pre-auction ranking evidence for one candidate."""
 
     strategy: Literal["discovery", "relay"]
     base_trade_date: date
     symbol: str
     name: str
+    sector: str = ""
+    position_label: str | None = None
+    base_rank: int = 0
     rank: int
     base_score: float
+    draft_score: float = 0
+    news_adjustment: float = 0
+    financial_adjustment: float = 0
+    update_reasons: list[str] = Field(default_factory=list)
     current_price: float | None = None
     change_pct: float | None = None
     turnover: float | None = None
@@ -241,13 +248,26 @@ class RecommendationIntelligenceItem(BaseModel):
     refreshed_at: datetime
     data_missing: list[str] = Field(default_factory=list)
 
+    @model_validator(mode="before")
+    @classmethod
+    def populate_legacy_draft_fields(cls, value: Any) -> Any:
+        """Map pre-draft snapshots onto the current ranking contract."""
+
+        if isinstance(value, dict):
+            payload = dict(value)
+            payload.setdefault("base_rank", payload.get("rank", 0))
+            payload.setdefault("draft_score", payload.get("base_score", 0))
+            return payload
+        return value
+
 
 class RecommendationIntelligenceResponse(BaseModel):
-    """Latest half-hour evidence snapshot for both recommendation strategies."""
+    """Latest replaceable pre-auction draft for both strategies."""
 
     refresh_id: str
     refreshed_at: datetime
     interval_minutes: int
+    stage: Literal["draft"] = "draft"
     status: Literal["complete", "partial"]
     discovery_base_date: date | None = None
     relay_base_date: date | None = None
@@ -268,6 +288,10 @@ class AuctionFinalCandidate(BaseModel):
     base_rank: int
     base_score: float
     base_scoring_version: str
+    preauction_rank: int
+    preauction_score: float
+    news_adjustment: float = 0
+    financial_adjustment: float = 0
     final_rank: int
     final_score: float
     auction_score: float
@@ -283,6 +307,18 @@ class AuctionFinalCandidate(BaseModel):
     float_market_cap: float | None = None
     reasons: list[str] = Field(default_factory=list)
     risks: list[str] = Field(default_factory=list)
+
+    @model_validator(mode="before")
+    @classmethod
+    def populate_legacy_preauction_fields(cls, value: Any) -> Any:
+        """Keep the first auction snapshot format readable after draft reranking."""
+
+        if isinstance(value, dict):
+            payload = dict(value)
+            payload.setdefault("preauction_rank", payload.get("base_rank", 0))
+            payload.setdefault("preauction_score", payload.get("base_score", 0))
+            return payload
+        return value
 
 
 class AuctionFinalRecommendationsResponse(BaseModel):

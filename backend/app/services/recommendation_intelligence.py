@@ -26,6 +26,7 @@ from app.repositories import (
     SQLiteFirstBoardRepository,
     SQLiteLimitUpRepository,
     SQLiteRecommendationIntelligenceRepository,
+    SQLiteScoringPolicyRepository,
 )
 from app.services.stock_news import collect_stock_news
 
@@ -45,6 +46,8 @@ class _BaseCandidate:
     base_trade_date: date
     symbol: str
     name: str
+    sector: str
+    position_label: str | None
     rank: int
     base_score: float
 
@@ -69,7 +72,7 @@ def refresh_recommendation_intelligence(
     news_collector: NewsCollector | None = None,
     financial_collector: FinancialCollector | None = None,
 ) -> RecommendationIntelligenceResponse:
-    """Refresh both Top10 lists while preserving their immutable base scores."""
+    """Rebuild the latest mutable draft from close, news and financial facts."""
 
     refreshed_at = _as_shanghai(now or datetime.now(SHANGHAI_TZ))
     first_repo = first_board_repository or SQLiteFirstBoardRepository()
@@ -147,14 +150,39 @@ def refresh_recommendation_intelligence(
             missing.append("最新季度财报不可用")
         if evidence.errors:
             provider_error_count += 1
+        news_adjustment, news_reasons = _news_adjustment(
+            evidence.news,
+            refreshed_at=refreshed_at,
+        )
+        financial_adjustment, financial_reasons = _financial_adjustment(
+            evidence.financial_report
+        )
         items.append(
             RecommendationIntelligenceItem(
                 strategy=candidate.strategy,
                 base_trade_date=candidate.base_trade_date,
                 symbol=candidate.symbol,
                 name=candidate.name,
+                sector=candidate.sector,
+                position_label=candidate.position_label,
+                base_rank=candidate.rank,
                 rank=candidate.rank,
                 base_score=candidate.base_score,
+                draft_score=round(
+                    max(
+                        0,
+                        min(
+                            100,
+                            candidate.base_score
+                            + news_adjustment
+                            + financial_adjustment,
+                        ),
+                    ),
+                    1,
+                ),
+                news_adjustment=news_adjustment,
+                financial_adjustment=financial_adjustment,
+                update_reasons=[*news_reasons, *financial_reasons],
                 current_price=quote.last_price if quote else None,
                 change_pct=quote.change_pct if quote else None,
                 turnover=quote.turnover if quote else None,
@@ -164,6 +192,16 @@ def refresh_recommendation_intelligence(
                 refreshed_at=refreshed_at,
                 data_missing=list(dict.fromkeys(missing)),
             )
+        )
+    ranked_items: list[RecommendationIntelligenceItem] = []
+    for strategy in ("discovery", "relay"):
+        strategy_items = sorted(
+            [item for item in items if item.strategy == strategy],
+            key=lambda item: (-item.draft_score, item.base_rank, item.symbol),
+        )
+        ranked_items.extend(
+            item.model_copy(update={"rank": index})
+            for index, item in enumerate(strategy_items, start=1)
         )
     if provider_error_count:
         warnings.append(
@@ -176,7 +214,7 @@ def refresh_recommendation_intelligence(
         status="partial" if warnings else "complete",
         discovery_base_date=discovery_date,
         relay_base_date=relay_date,
-        items=items,
+        items=ranked_items,
         warnings=warnings,
     )
     intelligence_repo.save(response)
@@ -202,24 +240,35 @@ def _load_base_candidates(
                 base_trade_date=discovery.data_as_of,
                 symbol=item.facts.symbol,
                 name=item.facts.name,
+                sector=item.facts.themes[0].name if item.facts.themes else "",
+                position_label=item.facts.pattern,
                 rank=index,
                 base_score=item.score,
             )
-            for index, item in enumerate(discovery.candidates[:10], start=1)
+            for index, item in enumerate(discovery.candidates[:30], start=1)
         )
 
     events = limit_up_repository.list_events()
     relay_date = max((item.trade_date for item in events), default=None)
-    relay = (
+    live_relay = (
         first_board_repository.get_live_prediction_snapshot(relay_date)
         if relay_date
         else None
     )
-    if relay is None and relay_date is not None:
+    relay = None
+    if relay_date is not None:
+        scoring_policy = (
+            SQLiteScoringPolicyRepository(
+                first_board_repository.database_path
+            ).get_policy(live_relay.generated_by)
+            if live_relay is not None
+            else None
+        )
         relay = build_first_board_ratings(
             events=events,
             trade_date=relay_date,
             first_board_repository=first_board_repository,
+            scoring_policy=scoring_policy,
         )
     if relay is None:
         warnings.append("一进二接力快照不可用")
@@ -230,12 +279,94 @@ def _load_base_candidates(
                 base_trade_date=relay.trade_date,
                 symbol=item.facts.symbol,
                 name=item.facts.name,
+                sector=item.facts.concept or item.facts.industry,
+                position_label=(
+                    item.facts.enrichment.position.primary.label
+                    if item.facts.enrichment and item.facts.enrichment.position
+                    else None
+                ),
                 rank=index,
                 base_score=item.score,
             )
-            for index, item in enumerate(relay.candidates[:10], start=1)
+            for index, item in enumerate(relay.candidates[:30], start=1)
         )
     return candidates, discovery_date, relay_date, warnings
+
+
+POSITIVE_NEWS_TERMS = (
+    "中标",
+    "签署合同",
+    "订单",
+    "获批",
+    "回购",
+    "增持",
+    "预增",
+    "扭亏",
+    "战略合作",
+    "突破",
+)
+NEGATIVE_NEWS_TERMS = (
+    "减持",
+    "亏损",
+    "立案",
+    "处罚",
+    "风险提示",
+    "终止",
+    "问询",
+    "诉讼",
+    "下调",
+    "退市",
+)
+
+
+def _news_adjustment(
+    news: StockNewsFacts | None,
+    *,
+    refreshed_at: datetime,
+) -> tuple[float, list[str]]:
+    """Convert recent explicit company events into a bounded score adjustment."""
+
+    if news is None or not news.items:
+        return 0.0, []
+    positive: list[str] = []
+    negative: list[str] = []
+    for item in news.items:
+        text = f"{item.title} {item.summary}"
+        age = refreshed_at - _as_shanghai(item.published_at)
+        if age > timedelta(hours=48):
+            continue
+        if any(term in text for term in POSITIVE_NEWS_TERMS):
+            positive.append(item.title)
+        if any(term in text for term in NEGATIVE_NEWS_TERMS):
+            negative.append(item.title)
+    adjustment = min(6.0, len(positive) * 3.0) - min(8.0, len(negative) * 4.0)
+    reasons = []
+    if positive:
+        reasons.append(f"近48小时积极事件：{positive[0]}")
+    if negative:
+        reasons.append(f"近48小时风险事件：{negative[0]}")
+    return round(adjustment, 1), reasons
+
+
+def _financial_adjustment(
+    report: RecommendationFinancialReport | None,
+) -> tuple[float, list[str]]:
+    """Apply a small bounded adjustment from the latest comparable report."""
+
+    if report is None or report.net_profit_yoy_pct is None:
+        return 0.0, []
+    growth = report.net_profit_yoy_pct
+    if growth >= 50:
+        return 3.0, [f"归母净利润同比增长 {growth:.1f}%"]
+    if growth >= 20:
+        return 2.0, [f"归母净利润同比增长 {growth:.1f}%"]
+    if growth > 0:
+        return 1.0, [f"归母净利润同比增长 {growth:.1f}%"]
+    if growth <= -50:
+        return -4.0, [f"归母净利润同比下降 {abs(growth):.1f}%"]
+    if growth < 0:
+        return -2.0, [f"归母净利润同比下降 {abs(growth):.1f}%"]
+    return 0.0, []
 
 
 def _collect_candidate_evidence(

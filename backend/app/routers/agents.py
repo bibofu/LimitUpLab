@@ -374,7 +374,7 @@ def get_recommendation_intelligence() -> RecommendationIntelligenceResponse:
 def get_auction_final_recommendations(
     trade_date: date | None = None,
 ) -> AuctionFinalRecommendationsResponse:
-    """Return the latest immutable 09:25 auction-final recommendation batch."""
+    """Return the session's official 09:25 auction-final recommendation batch."""
 
     repository = SQLiteAuctionFinalRepository()
     response = repository.get(trade_date) if trade_date else repository.get_latest()

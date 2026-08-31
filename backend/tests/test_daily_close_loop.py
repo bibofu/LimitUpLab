@@ -149,6 +149,24 @@ class DailyCloseLoopTest(unittest.TestCase):
         self.assertFalse(received[0]["persist_live_prediction"])
         self.assertFalse(execution.run.report["live_prediction_eligible"])
 
+    def test_post_rollout_close_run_waits_for_auction_final(self) -> None:
+        target_date = date(2026, 8, 31)
+        received: list[dict[str, object]] = []
+
+        def fake_update(**kwargs) -> DailyUpdateReport:
+            received.append(kwargs)
+            return self._complete_report(target_date, live_count=0)
+
+        execution = self._execute(
+            requested_date=target_date,
+            now=datetime(2026, 8, 31, 16, 10, tzinfo=CN_TZ),
+            update_runner=fake_update,
+        )
+
+        self.assertEqual(execution.status, "success")
+        self.assertFalse(received[0]["persist_live_prediction"])
+        self.assertFalse(execution.run.report["live_prediction_eligible"])
+
     def test_transient_failure_is_retried_and_audited(self) -> None:
         target_date = date(2026, 8, 21)
         calls = 0
