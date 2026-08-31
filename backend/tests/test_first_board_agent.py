@@ -4,6 +4,7 @@ from datetime import date, datetime, time, timezone
 from app.agents import build_first_board_ratings
 from app.agents.first_board import _score_market_cap_preference
 from app.models import FirstBoardEnrichmentSnapshot, LimitUpEvent
+from app.services.scoring_policy import build_reason_aware_challenger_policy
 from app.services.first_board_critic import build_first_board_critic
 from app.services.sample_data import SAMPLE_EVENTS
 
@@ -73,12 +74,16 @@ class FirstBoardAgentTest(unittest.TestCase):
             make_event("688001", "科创样本"),
             make_event("430001", "北交样本"),
             make_event("002002", "*ST样本"),
-            make_event("002003", "小额样本", amount=50_000_000),
+            make_event("002003", "小额样本", amount=30_000_000),
+            make_event("002004", "临界流动性样本", amount=90_000_000),
         ]
 
         response = build_first_board_ratings(events)
 
-        self.assertEqual([item.facts.symbol for item in response.candidates], ["002001"])
+        self.assertEqual(
+            [item.facts.symbol for item in response.candidates],
+            ["002001", "002004"],
+        )
         reasons = {
             result.symbol: result.excluded_reasons
             for result in response.filtered_out
@@ -87,6 +92,47 @@ class FirstBoardAgentTest(unittest.TestCase):
         self.assertIn("北交所股票", reasons["430001"])
         self.assertIn("ST 或退市风险警示", reasons["002002"])
         self.assertIn("成交额过小", reasons["002003"])
+
+    def test_empty_concept_is_not_counted_as_market_wide_topic(self) -> None:
+        events = [
+            make_event("002001", "空题材一").model_copy(update={"concept": ""}),
+            make_event("002002", "空题材二").model_copy(update={"concept": ""}),
+        ]
+
+        response = build_first_board_ratings(events)
+
+        self.assertTrue(
+            all(item.facts.same_concept_limit_up_count == 0 for item in response.candidates)
+        )
+
+    def test_reason_aware_challenger_rewards_shared_reason_labels(self) -> None:
+        events = [
+            make_event("002001", "房地产一").model_copy(
+                update={"industry": "房地产服务", "concept": "房地产开发+物业管理"}
+            ),
+            make_event("002002", "房地产二").model_copy(
+                update={"industry": "房地产开发", "concept": "房地产开发+深圳国资"}
+            ),
+            make_event("002003", "独立题材").model_copy(
+                update={"industry": "食品", "concept": "健康食品"}
+            ),
+        ]
+
+        response = build_first_board_ratings(
+            events,
+            scoring_policy=build_reason_aware_challenger_policy(),
+        )
+        ratings = {item.facts.symbol: item for item in response.candidates}
+
+        self.assertEqual(ratings["002001"].facts.same_concept_limit_up_count, 2)
+        shared_heat = next(
+            item for item in ratings["002001"].score_breakdown if item.name == "行业热度"
+        )
+        isolated_heat = next(
+            item for item in ratings["002003"].score_breakdown if item.name == "行业热度"
+        )
+        self.assertGreater(shared_heat.score, isolated_heat.score)
+        self.assertIn("共享涨停原因标签 2 只", shared_heat.evidence)
 
     def test_output_avoids_investment_advice_terms(self) -> None:
         response = build_first_board_ratings(SAMPLE_EVENTS)

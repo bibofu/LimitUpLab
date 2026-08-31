@@ -692,6 +692,8 @@ class ScoringPolicyMetrics(BaseModel):
     trade_date_count: int
     pool_sample_size: int
     top_sample_size: int
+    pool_return_sample_size: int = 0
+    top_return_sample_size: int = 0
     top_k: int
     avg_next_open_to_close_pct: float | None = None
     positive_rate: float | None = None

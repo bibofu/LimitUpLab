@@ -8,6 +8,8 @@ from app.models import ScoringPolicy
 
 
 DEFAULT_SCORING_POLICY_VERSION = "first-board-rule-v5-board-shape-market-cap"
+REASON_AWARE_POLICY_PREFIX = "first-board-rule-v6-reason-aware"
+REASON_AWARE_POLICY_VERSION = f"{REASON_AWARE_POLICY_PREFIX}-shadow-1"
 LEGACY_DEFAULT_POLICY_VERSIONS = frozenset(
     {
         "first-board-rule-v2-enriched",
@@ -54,6 +56,14 @@ DEFAULT_FACTOR_WEIGHTS: dict[str, float] = {
     "popularity": 4.0,
 }
 
+REASON_AWARE_FACTOR_WEIGHTS: dict[str, float] = {
+    **DEFAULT_FACTOR_WEIGHTS,
+    "board_pattern": 8.0,
+    "seal_pressure": 5.0,
+    "industry_heat": 8.0,
+    "recent_limit_up_history": 2.0,
+}
+
 
 def build_default_scoring_policy() -> ScoringPolicy:
     """Return the immutable baseline policy represented as a fresh model."""
@@ -71,6 +81,27 @@ def build_default_scoring_policy() -> ScoringPolicy:
         ],
         created_at=datetime(2026, 8, 27, tzinfo=timezone.utc),
         activated_at=datetime(2026, 8, 27, tzinfo=timezone.utc),
+    )
+
+
+def build_reason_aware_challenger_policy(
+    *,
+    created_at: datetime | None = None,
+) -> ScoringPolicy:
+    """Return a shadow policy that can use normalized limit-up-reason peers."""
+
+    return ScoringPolicy(
+        version=REASON_AWARE_POLICY_VERSION,
+        parent_version=DEFAULT_SCORING_POLICY_VERSION,
+        status="challenger",
+        factor_weights=dict(REASON_AWARE_FACTOR_WEIGHTS),
+        source="manual",
+        rationale=[
+            "Use explicit Tonghuashun limit-up-reason overlap alongside industry breadth.",
+            "Reduce duplicated clean-board preference and recent-limit-up weight.",
+            "Keep the policy in shadow validation until promotion lift clears governance gates.",
+        ],
+        created_at=created_at or datetime.now(timezone.utc),
     )
 
 

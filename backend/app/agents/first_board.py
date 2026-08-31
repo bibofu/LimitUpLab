@@ -21,14 +21,16 @@ from app.models import (
 )
 from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
 from app.services.analysis import events_for_date, latest_trade_date, summarize_market
+from app.services.limit_up_reason import count_reason_peers
 from app.services.scoring_policy import (
     DEFAULT_SCORING_POLICY_VERSION,
     FACTOR_KEYS_BY_NAME,
+    REASON_AWARE_POLICY_PREFIX,
     validate_policy_factor_keys,
 )
 
 
-MIN_AMOUNT = 100_000_000
+MIN_AMOUNT = 50_000_000
 FIRST_BOARD_AGENT_VERSION = DEFAULT_SCORING_POLICY_VERSION
 
 
@@ -98,7 +100,6 @@ def build_first_board_candidate_facts(
 
     closed_limit_events = [item for item in same_day_events if item.closed_limit]
     industry_counts = Counter(item.industry for item in closed_limit_events)
-    concept_counts = Counter(item.concept for item in closed_limit_events)
 
     return FirstBoardCandidateFacts(
         symbol=event.symbol,
@@ -116,7 +117,7 @@ def build_first_board_candidate_facts(
         industry=event.industry,
         concept=event.concept,
         same_industry_limit_up_count=industry_counts[event.industry],
-        same_concept_limit_up_count=concept_counts[event.concept],
+        same_concept_limit_up_count=count_reason_peers(event, closed_limit_events),
         market_limit_up_count=summary.limit_up_count,
         market_first_board_count=summary.first_board_count,
         market_failed_limit_up_rate=summary.failed_limit_up_rate,
@@ -178,7 +179,11 @@ def _rate_candidate(
         _score_seal_pressure(facts.seal_count),
         _score_turnover(facts.turnover_rate),
         _score_amount(facts.amount),
-        _score_industry_heat(facts.same_industry_limit_up_count),
+        _score_industry_heat(
+            facts.same_industry_limit_up_count,
+            facts.same_concept_limit_up_count,
+            reason_aware=scoring_policy.version.startswith(REASON_AWARE_POLICY_PREFIX),
+        ),
         _score_market_context(facts.market_failed_limit_up_rate, facts.market_max_board_height),
     ]
     enrichment_breakdown = [
@@ -601,9 +606,15 @@ def _score_amount(amount: float) -> ScoreBreakdownItem:
     )
 
 
-def _score_industry_heat(count: int) -> ScoreBreakdownItem:
-    """Score same-industry limit-up concentration as topic diffusion."""
+def _score_industry_heat(
+    industry_count: int,
+    concept_count: int = 0,
+    *,
+    reason_aware: bool = False,
+) -> ScoreBreakdownItem:
+    """Score industry breadth, optionally using explicit reason-label peers."""
 
+    count = max(industry_count, concept_count) if reason_aware else industry_count
     if count >= 5:
         score, label = 8, "同行业涨停较多，板块扩散较强"
     elif count >= 3:
@@ -613,11 +624,15 @@ def _score_industry_heat(count: int) -> ScoreBreakdownItem:
     else:
         score, label = 2, "同行业涨停较少，板块扩散不足"
 
+    evidence = [f"同行业涨停 {industry_count} 只"]
+    if reason_aware:
+        evidence.append(f"共享涨停原因标签 {concept_count} 只")
+    evidence.append(label)
     return ScoreBreakdownItem(
         name="行业热度",
         score=score,
         max_score=8,
-        evidence=[f"同行业涨停 {count} 只，{label}"],
+        evidence=evidence,
     )
 
 

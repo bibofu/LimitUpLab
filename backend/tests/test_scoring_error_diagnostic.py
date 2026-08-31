@@ -55,7 +55,7 @@ class ScoringErrorDiagnosticTest(unittest.TestCase):
         created_at = datetime(2026, 8, 30, tzinfo=timezone.utc)
         first_limit_times = (time(9, 35), time(9, 55), time(10, 15), time(10, 35))
         for day_index in range(days):
-            trade_date = started + timedelta(days=day_index)
+            trade_date = started + timedelta(days=day_index * 7)
             for stock_index in range(4):
                 symbol = f"00{day_index:02d}{stock_index:02d}"
                 events.append(

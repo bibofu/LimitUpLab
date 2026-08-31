@@ -23,6 +23,7 @@ from app.models import (
     ScoringWalkForwardFold,
 )
 from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
+from app.services.promotion_labels import resolve_first_board_promotion_labels
 from app.services.scoring_policy import (
     FACTOR_KEYS_BY_NAME,
     FACTOR_NAMES,
@@ -31,7 +32,7 @@ from app.services.scoring_policy import (
 )
 
 
-SCORING_POLICY_OPTIMIZER_VERSION = "scoring-policy-optimizer-v4-promotion-first"
+SCORING_POLICY_OPTIMIZER_VERSION = "scoring-policy-optimizer-v5-event-labels"
 MIN_TRADE_DATES = 10
 MIN_PROMOTION_TRADE_DATES = 60
 MAX_RELATIVE_WEIGHT_CHANGE = 0.12
@@ -47,7 +48,8 @@ LARGE_LOSS_THRESHOLD_PCT = -3.0
 @dataclass(frozen=True)
 class _PolicySample:
     rating: FirstBoardRating
-    outcome: FirstBoardOutcome
+    promoted_to_second_board: bool
+    outcome: FirstBoardOutcome | None = None
 
 
 def optimize_scoring_policy(
@@ -72,20 +74,20 @@ def optimize_scoring_policy(
     outcomes = {
         (item.base_trade_date, item.symbol): item
         for item in repository.list_outcomes_between(start_date, end_date)
-        if item.next_day_ready and item.next_open_to_close_pct is not None
     }
-    outcome_dates = {trade_date for trade_date, _ in outcomes}
+    promotion_labels = resolve_first_board_promotion_labels(events, outcomes)
+    promotion_dates = {trade_date for trade_date, _ in promotion_labels}
     trade_dates = sorted(
         {
             event.trade_date
             for event in events
             if start_date <= event.trade_date <= end_date
-            and event.trade_date in outcome_dates
+            and event.trade_date in promotion_dates
         }
     )
     if len(trade_dates) < max(minimum_trade_dates, 8):
         raise ValueError(
-            "Not enough outcome-ready trade dates for policy optimization: "
+            "Not enough promotion-ready trade dates for policy optimization: "
             f"{len(trade_dates)} available, {max(minimum_trade_dates, 8)} required."
         )
 
@@ -103,6 +105,7 @@ def optimize_scoring_policy(
             events=events,
             dates=train_dates,
             outcomes=outcomes,
+            promotion_labels=promotion_labels,
             policy=champion,
             repository=repository,
         )
@@ -128,6 +131,7 @@ def optimize_scoring_policy(
                 events=events,
                 dates=validation_dates,
                 outcomes=outcomes,
+                promotion_labels=promotion_labels,
                 policy=candidate,
                 repository=repository,
                 top_k=top_k,
@@ -142,6 +146,7 @@ def optimize_scoring_policy(
             events=events,
             dates=test_dates,
             outcomes=outcomes,
+            promotion_labels=promotion_labels,
             policy=champion,
             repository=repository,
             top_k=top_k,
@@ -150,6 +155,7 @@ def optimize_scoring_policy(
             events=events,
             dates=test_dates,
             outcomes=outcomes,
+            promotion_labels=promotion_labels,
             policy=selected,
             repository=repository,
             top_k=top_k,
@@ -223,6 +229,7 @@ def evaluate_scoring_policy(
     events: list[LimitUpEvent],
     dates: list[date],
     outcomes: dict[tuple[date, str], FirstBoardOutcome],
+    promotion_labels: dict[tuple[date, str], bool] | None = None,
     policy: ScoringPolicy,
     repository: SQLiteFirstBoardRepository,
     top_k: int = 10,
@@ -230,8 +237,10 @@ def evaluate_scoring_policy(
     """Evaluate Top-K ranking quality without using future dates for fitting."""
 
     validate_policy_factor_keys(policy)
+    labels = promotion_labels or resolve_first_board_promotion_labels(events, outcomes)
     top_samples: list[_PolicySample] = []
     pool_samples: list[_PolicySample] = []
+    evaluated_dates: set[date] = set()
     bounded_top_k = max(1, min(top_k, 30))
 
     from app.agents.first_board import build_first_board_ratings
@@ -243,11 +252,20 @@ def evaluate_scoring_policy(
             first_board_repository=repository,
             scoring_policy=policy,
         )
-        daily_pool = [
-            _PolicySample(item, outcomes[(trade_date, item.facts.symbol)])
-            for item in ratings.candidates
-            if (trade_date, item.facts.symbol) in outcomes
-        ]
+        daily_pool = []
+        for item in ratings.candidates:
+            key = (trade_date, item.facts.symbol)
+            if key not in labels:
+                continue
+            daily_pool.append(
+                _PolicySample(
+                    rating=item,
+                    promoted_to_second_board=labels[key],
+                    outcome=outcomes.get(key),
+                )
+            )
+        if daily_pool:
+            evaluated_dates.add(trade_date)
         pool_samples.extend(daily_pool)
         top_symbols = {
             item.facts.symbol for item in ratings.candidates[:bounded_top_k]
@@ -256,24 +274,26 @@ def evaluate_scoring_policy(
             sample for sample in daily_pool if sample.rating.facts.symbol in top_symbols
         )
 
-    top_next = [sample.outcome.next_open_to_close_pct for sample in top_samples]
-    top_three = [sample.outcome.three_day_open_to_close_pct for sample in top_samples]
+    top_outcomes = [sample.outcome for sample in top_samples if sample.outcome]
+    pool_outcomes = [sample.outcome for sample in pool_samples if sample.outcome]
+    top_next = [outcome.next_open_to_close_pct for outcome in top_outcomes]
+    top_three = [outcome.three_day_open_to_close_pct for outcome in top_outcomes]
     top_drawdown = [
-        sample.outcome.max_drawdown_from_next_open_3d for sample in top_samples
+        outcome.max_drawdown_from_next_open_3d for outcome in top_outcomes
     ]
-    top_next_low = [sample.outcome.next_open_to_low_pct for sample in top_samples]
+    top_next_low = [outcome.next_open_to_low_pct for outcome in top_outcomes]
     promotion_rate = _boolean_rate(
-        [sample.outcome.promoted_to_second_board for sample in top_samples]
+        [sample.promoted_to_second_board for sample in top_samples]
     )
     pool_promotion_rate = _boolean_rate(
-        [sample.outcome.promoted_to_second_board for sample in pool_samples]
+        [sample.promoted_to_second_board for sample in pool_samples]
     )
     promotion_lift = _difference(promotion_rate, pool_promotion_rate)
     large_loss_rate = _threshold_rate(
         top_next,
         threshold=LARGE_LOSS_THRESHOLD_PCT,
     )
-    pool_next = [sample.outcome.next_open_to_close_pct for sample in pool_samples]
+    pool_next = [outcome.next_open_to_close_pct for outcome in pool_outcomes]
     avg_next = _average(top_next)
     positive_rate = _positive_rate(top_next)
     avg_three = _average(top_three)
@@ -295,9 +315,11 @@ def evaluate_scoring_policy(
     )
     return ScoringPolicyMetrics(
         policy_version=policy.version,
-        trade_date_count=len(dates),
+        trade_date_count=len(evaluated_dates),
         pool_sample_size=len(pool_samples),
         top_sample_size=len(top_samples),
+        pool_return_sample_size=len([value for value in pool_next if value is not None]),
+        top_return_sample_size=len([value for value in top_next if value is not None]),
         top_k=bounded_top_k,
         avg_next_open_to_close_pct=avg_next,
         positive_rate=positive_rate,
@@ -335,6 +357,7 @@ def _factor_target_correlations(
     events: list[LimitUpEvent],
     dates: list[date],
     outcomes: dict[tuple[date, str], FirstBoardOutcome],
+    promotion_labels: dict[tuple[date, str], bool],
     policy: ScoringPolicy,
     repository: SQLiteFirstBoardRepository,
 ) -> dict[str, dict[str, float]]:
@@ -353,36 +376,41 @@ def _factor_target_correlations(
             scoring_policy=policy,
         )
         ready = [
-            (item, outcomes[(trade_date, item.facts.symbol)])
+            (
+                item,
+                promotion_labels[(trade_date, item.facts.symbol)],
+                outcomes.get((trade_date, item.facts.symbol)),
+            )
             for item in ratings.candidates
-            if (trade_date, item.facts.symbol) in outcomes
+            if (trade_date, item.facts.symbol) in promotion_labels
         ]
         target_rows = {
             "next_open_to_close": [
                 float(outcome.next_open_to_close_pct)
-                for _, outcome in ready
-                if outcome.next_open_to_close_pct is not None
+                for _, _, outcome in ready
+                if outcome is not None and outcome.next_open_to_close_pct is not None
             ],
             "promotion": [
-                1.0 if outcome.promoted_to_second_board else 0.0
-                for _, outcome in ready
+                1.0 if promoted else 0.0 for _, promoted, _ in ready
             ],
             "downside_protection": [
                 float(outcome.next_open_to_low_pct)
-                for _, outcome in ready
-                if outcome.next_open_to_low_pct is not None
+                for _, _, outcome in ready
+                if outcome is not None and outcome.next_open_to_low_pct is not None
             ],
         }
         target_means = {
             key: _average(values) for key, values in target_rows.items()
         }
-        if target_means["next_open_to_close"] is None:
-            continue
-        for rating, outcome in ready:
+        for rating, promoted, outcome in ready:
             target_values = {
-                "next_open_to_close": outcome.next_open_to_close_pct,
-                "promotion": 1.0 if outcome.promoted_to_second_board else 0.0,
-                "downside_protection": outcome.next_open_to_low_pct,
+                "next_open_to_close": (
+                    outcome.next_open_to_close_pct if outcome is not None else None
+                ),
+                "promotion": 1.0 if promoted else 0.0,
+                "downside_protection": (
+                    outcome.next_open_to_low_pct if outcome is not None else None
+                ),
             }
             for item in rating.score_breakdown:
                 key = FACTOR_KEYS_BY_NAME.get(item.name)
@@ -543,26 +571,32 @@ def _aggregate_metrics(
 
     top_size = sum(item.top_sample_size for item in metrics)
     pool_size = sum(item.pool_sample_size for item in metrics)
+    top_return_size = sum(item.top_return_sample_size for item in metrics)
+    pool_return_size = sum(item.pool_return_sample_size for item in metrics)
 
-    def top_weighted(field: str) -> float | None:
-        return _weighted_metric(metrics, field, "top_sample_size")
+    def return_weighted(field: str) -> float | None:
+        return _weighted_metric(metrics, field, "top_return_sample_size")
 
-    avg_next = top_weighted("avg_next_open_to_close_pct")
-    positive_rate = top_weighted("positive_rate")
-    avg_three = top_weighted("avg_three_day_open_to_close_pct")
-    avg_drawdown = top_weighted("avg_max_drawdown_from_next_open_3d")
-    promotion_rate = top_weighted("promoted_to_second_board_rate")
+    avg_next = return_weighted("avg_next_open_to_close_pct")
+    positive_rate = return_weighted("positive_rate")
+    avg_three = return_weighted("avg_three_day_open_to_close_pct")
+    avg_drawdown = return_weighted("avg_max_drawdown_from_next_open_3d")
+    promotion_rate = _weighted_metric(
+        metrics,
+        "promoted_to_second_board_rate",
+        "top_sample_size",
+    )
     pool_promotion_rate = _weighted_metric(
         metrics,
         "pool_promoted_to_second_board_rate",
         "pool_sample_size",
     )
     promotion_lift = _difference(promotion_rate, pool_promotion_rate)
-    large_loss_rate = top_weighted("large_loss_rate")
+    large_loss_rate = return_weighted("large_loss_rate")
     pool_avg = _weighted_metric(
         metrics,
         "pool_avg_next_open_to_close_pct",
-        "pool_sample_size",
+        "pool_return_sample_size",
     )
     excess = (
         round(avg_next - pool_avg, 4)
@@ -574,6 +608,8 @@ def _aggregate_metrics(
         trade_date_count=sum(item.trade_date_count for item in metrics),
         pool_sample_size=pool_size,
         top_sample_size=top_size,
+        pool_return_sample_size=pool_return_size,
+        top_return_sample_size=top_return_size,
         top_k=metrics[0].top_k if metrics else 10,
         avg_next_open_to_close_pct=avg_next,
         positive_rate=positive_rate,
@@ -583,7 +619,7 @@ def _aggregate_metrics(
         pool_promoted_to_second_board_rate=pool_promotion_rate,
         promotion_rate_lift=promotion_lift,
         large_loss_rate=large_loss_rate,
-        avg_next_open_to_low_pct=top_weighted("avg_next_open_to_low_pct"),
+        avg_next_open_to_low_pct=return_weighted("avg_next_open_to_low_pct"),
         pool_avg_next_open_to_close_pct=pool_avg,
         excess_next_open_to_close_pct=excess,
         objective_score=_objective_score(
@@ -646,7 +682,7 @@ def _compare_policies(
     reasons: list[str] = []
     if eligible_trade_date_count < MIN_PROMOTION_TRADE_DATES:
         reasons.append(
-            f"结果完整交易日只有 {eligible_trade_date_count}，"
+            f"晋级标签完整交易日只有 {eligible_trade_date_count}，"
             f"少于 v3 晋级门槛 {MIN_PROMOTION_TRADE_DATES}。"
         )
     if fold_count < 3:
@@ -691,18 +727,18 @@ def _objective_score(
     large_loss_rate: float | None,
     excess: float | None,
 ) -> float | None:
-    if avg_next is None or positive_rate is None or promotion_lift is None:
+    if promotion_lift is None:
         return None
     # Express probabilities as percentage points before combining them with
     # percentage returns. Promotion lift remains the dominant objective.
     value = (
         promotion_lift * 100
         + 0.25 * (excess or 0.0)
-        + 0.10 * avg_next
+        + 0.10 * (avg_next or 0.0)
         + 0.05 * (avg_three or 0.0)
         + 0.05 * (avg_drawdown or 0.0)
         - 0.10 * (large_loss_rate or 0.0) * 100
-        + 0.02 * (positive_rate - 0.5) * 100
+        + 0.02 * ((positive_rate - 0.5) * 100 if positive_rate is not None else 0.0)
     )
     return round(value, 4)
 
@@ -810,7 +846,7 @@ def _optimization_warnings(
     ]
     if len(trade_dates) < 60:
         warnings.append(
-            f"当前仅有 {len(trade_dates)} 个结果完整交易日，市场环境覆盖仍然偏少。"
+            f"当前仅有 {len(trade_dates)} 个晋级标签完整交易日，市场环境覆盖仍然偏少。"
         )
     if comparison.promotion_eligible and not activated:
         warnings.append("Challenger 已通过门槛，但保持影子状态，尚未替换 Champion。")

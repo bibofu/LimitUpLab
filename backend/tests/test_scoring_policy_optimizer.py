@@ -134,7 +134,7 @@ class ScoringPolicyOptimizerTest(unittest.TestCase):
         ]
         self.assertEqual(len(tested_dates), len(set(tested_dates)))
         self.assertIn(
-            "结果完整交易日只有 14",
+            "晋级标签完整交易日只有 14",
             " ".join(report.comparison.gate_reasons),
         )
         self.assertEqual(
@@ -156,7 +156,7 @@ class ScoringPolicyOptimizerTest(unittest.TestCase):
         )
         self.addCleanup(self._cleanup_database, database_path)
         repository = SQLiteFirstBoardRepository(database_path)
-        events, outcomes = self._history(days=3)
+        events, outcomes = self._history(days=1)
         repository.upsert_outcomes(outcomes)
         outcome_map = {
             (item.base_trade_date, item.symbol): item for item in outcomes
@@ -177,6 +177,42 @@ class ScoringPolicyOptimizerTest(unittest.TestCase):
         self.assertEqual(metrics.promotion_rate_lift, 0.75)
         self.assertIsNotNone(metrics.objective_score)
 
+    def test_promotion_metrics_do_not_depend_on_return_cache_coverage(self) -> None:
+        database_path = (
+            Path(__file__).resolve().parents[1]
+            / f"scoring-policy-event-labels-{uuid4().hex}.sqlite"
+        )
+        self.addCleanup(self._cleanup_database, database_path)
+        repository = SQLiteFirstBoardRepository(database_path)
+        events, outcomes = self._history(days=1)
+        base_date = events[0].trade_date
+        events.append(
+            events[0].model_copy(
+                update={
+                    "trade_date": base_date + timedelta(days=1),
+                    "board_height": 2,
+                }
+            )
+        )
+        only_cached_outcome = outcomes[0]
+
+        metrics = evaluate_scoring_policy(
+            events=events,
+            dates=[base_date],
+            outcomes={(base_date, only_cached_outcome.symbol): only_cached_outcome},
+            policy=build_default_scoring_policy(),
+            repository=repository,
+            top_k=1,
+        )
+
+        self.assertEqual(metrics.trade_date_count, 1)
+        self.assertEqual(metrics.pool_sample_size, 4)
+        self.assertEqual(metrics.top_sample_size, 1)
+        self.assertEqual(metrics.pool_return_sample_size, 1)
+        self.assertEqual(metrics.top_return_sample_size, 1)
+        self.assertEqual(metrics.promoted_to_second_board_rate, 1.0)
+        self.assertEqual(metrics.pool_promoted_to_second_board_rate, 0.25)
+
     @staticmethod
     def _cleanup_database(database_path: Path) -> None:
         for path in (
@@ -194,7 +230,7 @@ class ScoringPolicyOptimizerTest(unittest.TestCase):
         now = datetime(2026, 8, 19, tzinfo=timezone.utc)
         first_limit_times = (time(9, 35), time(9, 55), time(10, 15), time(10, 35))
         for day_index in range(days):
-            trade_date = started + timedelta(days=day_index)
+            trade_date = started + timedelta(days=day_index * 7)
             for stock_index in range(4):
                 symbol = f"00{day_index:02d}{stock_index:02d}"
                 events.append(

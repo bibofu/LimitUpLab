@@ -17,7 +17,7 @@ from typing import Callable
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.agents.first_board import build_first_board_ratings
+from app.agents.first_board import MIN_AMOUNT, build_first_board_ratings
 from app.collectors import (
     HithinkFinanceCollector,
     HithinkLimitUpPoolSnapshot,
@@ -39,6 +39,7 @@ from app.services.evaluation_agent import (
 )
 from app.services.first_board_enrichment import refresh_first_board_enrichment_snapshots
 from app.services.outcome_completeness import build_top10_outcome_completeness
+from app.services.limit_up_reason import merge_limit_up_reasons
 
 
 PostBarCollector = Callable[[str, date, date], list[StockDailyBar]]
@@ -56,6 +57,7 @@ class DailyUpdateReport:
     failed_limit_events: int = 0
     hithink_limit_up_count: int | None = None
     hithink_limit_up_source: str | None = None
+    hithink_reason_enriched_count: int = 0
     limit_up_count_difference: int | None = None
     synced_feature_dates: int = 0
     synced_features: int = 0
@@ -180,12 +182,6 @@ def run_daily_update(
 
     if not skip_import:
         imported_events = collect_limit_up_events(trade_date.strftime("%Y%m%d"))
-        if replace_date:
-            limit_repo.delete_events_for_date(trade_date)
-        limit_repo.upsert_events(imported_events)
-        report.imported_events = len(imported_events)
-        report.closed_limit_events = sum(1 for item in imported_events if item.closed_limit)
-        report.failed_limit_events = sum(1 for item in imported_events if not item.closed_limit)
         try:
             remote_snapshot = (
                 remote_limit_up_collector(trade_date)
@@ -194,8 +190,20 @@ def run_daily_update(
             )
             report.hithink_limit_up_count = remote_snapshot.total
             report.hithink_limit_up_source = remote_snapshot.source
+            imported_events, report.hithink_reason_enriched_count = (
+                merge_limit_up_reasons(imported_events, remote_snapshot)
+            )
+        except Exception as error:  # noqa: BLE001
+            report.warnings.append(f"Tonghuashun limit-up verification: {error}")
+        if replace_date:
+            limit_repo.delete_events_for_date(trade_date)
+        limit_repo.upsert_events(imported_events)
+        report.imported_events = len(imported_events)
+        report.closed_limit_events = sum(1 for item in imported_events if item.closed_limit)
+        report.failed_limit_events = sum(1 for item in imported_events if not item.closed_limit)
+        if report.hithink_limit_up_count is not None:
             report.limit_up_count_difference = (
-                report.closed_limit_events - remote_snapshot.total
+                report.closed_limit_events - report.hithink_limit_up_count
             )
             if report.limit_up_count_difference:
                 report.warnings.append(
@@ -203,8 +211,6 @@ def run_daily_update(
                     f"AkShare closed={report.closed_limit_events}, "
                     f"Tonghuashun={remote_snapshot.total}."
                 )
-        except Exception as error:  # noqa: BLE001
-            report.warnings.append(f"Tonghuashun limit-up verification: {error}")
 
     events = limit_repo.list_events()
     if not any(event.trade_date == trade_date for event in events):
@@ -228,7 +234,7 @@ def run_daily_update(
         if item.trade_date == trade_date
         and item.board_height == 1
         and item.closed_limit
-        and item.amount >= 100_000_000
+        and item.amount >= MIN_AMOUNT
         and "ST" not in item.name.upper()
         and not item.name.startswith(("N", "C"))
         and not item.symbol.startswith(("4", "8", "920", "688", "689"))

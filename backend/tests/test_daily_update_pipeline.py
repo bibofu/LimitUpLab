@@ -5,7 +5,7 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
-from app.collectors import HithinkLimitUpPoolSnapshot
+from app.collectors import HithinkLimitUpFact, HithinkLimitUpPoolSnapshot
 from app.models import LimitUpEvent, StockDailyBar, StockKLineBar
 from app.repositories import SQLiteFirstBoardRepository, SQLiteLimitUpRepository
 from scripts.update_daily_data import collect_post_first_board_bars, run_daily_update
@@ -212,14 +212,33 @@ class DailyUpdatePipelineTest(unittest.TestCase):
                     page=1,
                     page_size=200,
                     total=2,
-                    items=[],
+                    items=[
+                        HithinkLimitUpFact(
+                            symbol="002491",
+                            thscode="002491.SZ",
+                            name="通鼎互联",
+                            is_st=False,
+                            is_new=False,
+                            last_price=5.0,
+                            change_pct=10.0,
+                            limit_up_time="09:35:00",
+                            limit_up_reason="通信设备+算力",
+                            board_height=1,
+                            board_height_text="首板",
+                            seal_amount=50_000_000,
+                            max_seal_amount=60_000_000,
+                        )
+                    ],
                 ),
             )
 
             self.assertEqual(report.closed_limit_events, 1)
             self.assertEqual(report.hithink_limit_up_count, 2)
             self.assertEqual(report.hithink_limit_up_source, "hithink-finance")
+            self.assertEqual(report.hithink_reason_enriched_count, 1)
             self.assertEqual(report.limit_up_count_difference, -1)
+            stored = SQLiteLimitUpRepository(database_path=database_path).list_events()
+            self.assertEqual(stored[0].concept, "通信设备+算力")
             self.assertTrue(
                 any("source count mismatch" in item for item in report.warnings)
             )

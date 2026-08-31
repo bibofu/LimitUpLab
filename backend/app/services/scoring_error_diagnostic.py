@@ -18,10 +18,11 @@ from app.models import (
     ScoringPolicy,
 )
 from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
+from app.services.promotion_labels import resolve_first_board_promotion_labels
 from app.services.scoring_policy import FACTOR_KEYS_BY_NAME, FACTOR_NAMES
 
 
-SCORING_ERROR_DIAGNOSTIC_VERSION = "scoring-error-diagnostic-v1-promotion-first"
+SCORING_ERROR_DIAGNOSTIC_VERSION = "scoring-error-diagnostic-v2-event-labels"
 MIN_RELIABLE_TRADE_DATES = 20
 ABLATION_ACTION_THRESHOLD = 0.015
 ERROR_SLICE_ACTION_THRESHOLD = 0.12
@@ -30,7 +31,8 @@ ERROR_SLICE_ACTION_THRESHOLD = 0.12
 @dataclass(frozen=True)
 class _ReadyCandidate:
     rating: FirstBoardRating
-    outcome: FirstBoardOutcome
+    promoted_to_second_board: bool
+    outcome: FirstBoardOutcome | None
     rank: int
 
 
@@ -59,11 +61,10 @@ def build_scoring_error_diagnostic(
     outcomes = {
         (item.base_trade_date, item.symbol): item
         for item in repository.list_outcomes_between(start_date, end_date)
-        if item.next_day_ready
     }
+    promotion_labels = resolve_first_board_promotion_labels(events, outcomes)
 
     daily_samples: dict[date, list[_ReadyCandidate]] = {}
-    partial_top_dates = 0
     candidate_dates = sorted(
         {
             item.trade_date
@@ -81,38 +82,34 @@ def build_scoring_error_diagnostic(
         ranked = [
             _ReadyCandidate(
                 rating=rating,
-                outcome=outcome,
+                promoted_to_second_board=promotion_labels[
+                    (trade_date, rating.facts.symbol)
+                ],
+                outcome=outcomes.get((trade_date, rating.facts.symbol)),
                 rank=rank,
             )
             for rank, rating in enumerate(ratings.candidates, start=1)
-            if (
-                outcome := outcomes.get((trade_date, rating.facts.symbol))
-            ) is not None
+            if (trade_date, rating.facts.symbol) in promotion_labels
         ]
         if not ranked:
-            continue
-        expected_top_count = min(bounded_top_k, len(ratings.candidates))
-        ready_top_count = sum(item.rank <= bounded_top_k for item in ranked)
-        if ready_top_count < expected_top_count:
-            partial_top_dates += 1
             continue
         daily_samples[trade_date] = ranked
 
     pool_samples = [item for rows in daily_samples.values() for item in rows]
     top_samples = [item for item in pool_samples if item.rank <= bounded_top_k]
     false_positives = [
-        item for item in top_samples if not item.outcome.promoted_to_second_board
+        item for item in top_samples if not item.promoted_to_second_board
     ]
     false_negatives = [
         item
         for item in pool_samples
-        if item.rank > bounded_top_k and item.outcome.promoted_to_second_board
+        if item.rank > bounded_top_k and item.promoted_to_second_board
     ]
     top_promoted_count = sum(
-        item.outcome.promoted_to_second_board for item in top_samples
+        item.promoted_to_second_board for item in top_samples
     )
     market_promoted_count = sum(
-        item.outcome.promoted_to_second_board for item in pool_samples
+        item.promoted_to_second_board for item in pool_samples
     )
     top_rate = _rate(top_promoted_count, len(top_samples))
     market_rate = _rate(market_promoted_count, len(pool_samples))
@@ -128,14 +125,10 @@ def build_scoring_error_diagnostic(
     warnings: list[str] = []
     if len(daily_samples) < MIN_RELIABLE_TRADE_DATES:
         warnings.append(
-            f"只有 {len(daily_samples)} 个结果完整交易日，因子调整仅作为影子假设。"
-        )
-    if partial_top_dates:
-        warnings.append(
-            f"有 {partial_top_dates} 个交易日的 Top{bounded_top_k} Outcome 不完整，已排除。"
+            f"只有 {len(daily_samples)} 个晋级标签完整交易日，因子调整仅作为影子假设。"
         )
     if not pool_samples:
-        warnings.append("当前区间没有可用于误差诊断的次日 Outcome。")
+        warnings.append("当前区间没有可用于误差诊断的次日晋级标签。")
 
     return ScoringErrorDiagnosticResponse(
         start_date=start_date,
@@ -158,7 +151,8 @@ def build_scoring_error_diagnostic(
                 false_positives,
                 key=lambda value: (
                     value.outcome.next_open_to_close_pct
-                    if value.outcome.next_open_to_close_pct is not None
+                    if value.outcome is not None
+                    and value.outcome.next_open_to_close_pct is not None
                     else 0.0,
                     -value.rating.score,
                 ),
@@ -216,7 +210,7 @@ def _build_factor_rows(
             )[: min(top_k, len(samples))]
             ablation_count += len(reranked)
             ablation_promoted += sum(
-                item.outcome.promoted_to_second_board for item in reranked
+                item.promoted_to_second_board for item in reranked
             )
         ablation_rate = _rate(ablation_promoted, ablation_count)
         ablation_delta = _difference(ablation_rate, baseline_rate)
@@ -324,8 +318,12 @@ def _error_case(sample: _ReadyCandidate) -> ScoringErrorCase:
         name=sample.rating.facts.name,
         rank=sample.rank,
         score=sample.rating.score,
-        promoted_to_second_board=sample.outcome.promoted_to_second_board,
-        next_open_to_close_pct=sample.outcome.next_open_to_close_pct,
+        promoted_to_second_board=sample.promoted_to_second_board,
+        next_open_to_close_pct=(
+            sample.outcome.next_open_to_close_pct
+            if sample.outcome is not None
+            else None
+        ),
         leading_factors=leading_factors,
     )
 
@@ -340,7 +338,7 @@ def _build_findings(
     factors: list[ScoringFactorErrorDiagnostic],
 ) -> list[str]:
     if top_rate is None or market_rate is None or promotion_delta is None:
-        return ["结果完整样本不足，暂时无法判断 Top10 是否优于同期首板池。"]
+        return ["晋级标签样本不足，暂时无法判断 Top10 是否优于同期首板池。"]
     findings = [
         (
             f"Top10 一进二为 {top_rate:.1%}，同期全部首板为 {market_rate:.1%}，"
