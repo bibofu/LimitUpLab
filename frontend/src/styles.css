@@ -3817,23 +3817,6 @@ a.entry-card {
   box-shadow: 0 1px 3px rgba(16, 24, 40, 0.12);
 }
 
-.recommendation-refresh-status {
-  display: flex;
-  align-items: center;
-  flex-wrap: wrap;
-  gap: 7px;
-  color: #475467;
-  font-size: 12px;
-}
-
-.recommendation-refresh-status svg {
-  color: #b42318;
-}
-
-.recommendation-refresh-status span {
-  color: #98a2b3;
-}
-
 .recommendation-news-board {
   overflow: hidden;
   border: 1px solid #d0d5dd;

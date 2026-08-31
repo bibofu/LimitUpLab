@@ -1021,13 +1021,6 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
           一进二接力
         </button>
       </div>
-      {intelligence ? (
-        <div className="recommendation-refresh-status">
-          <RefreshCcw size={14} />
-          行情、新闻及财报更新于 {formatStockNewsTime(intelligence.refreshed_at)}
-          <span>每 {intelligence.interval_minutes} 分钟刷新</span>
-        </div>
-      ) : null}
       {mode === "discovery" ? (
         <FirstBoardDiscoveryPanel
           data={discovery}
