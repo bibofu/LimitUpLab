@@ -27,6 +27,8 @@ from app.collectors.first_board_enrichment_collector import (
 )
 from app.collectors.hithink_finance_collector import (
     HITHINK_SOURCE,
+    HithinkAuctionFact,
+    HithinkAuctionSnapshot,
     HithinkDragonTigerFact,
     HithinkDragonTigerSnapshot,
     HithinkFinanceCollector,
@@ -68,6 +70,8 @@ __all__ = [
     "parse_akshare_trade_date",
     "DragonTigerFact",
     "HITHINK_SOURCE",
+    "HithinkAuctionFact",
+    "HithinkAuctionSnapshot",
     "HithinkDragonTigerFact",
     "HithinkDragonTigerSnapshot",
     "HithinkFinanceCollector",

@@ -24,6 +24,9 @@ FRONTEND_ERR = FRONTEND / "dev_frontend.err.log"
 REFRESH_LOG = BACKEND / "recommendation_refresh.log"
 REFRESH_ERR = BACKEND / "recommendation_refresh.err.log"
 REFRESH_LOCK = BACKEND / "data" / "recommendation_refresh.lock"
+AUCTION_FINAL_LOG = BACKEND / "auction_final.log"
+AUCTION_FINAL_ERR = BACKEND / "auction_final.err.log"
+AUCTION_FINAL_LOCK = BACKEND / "data" / "auction_final.lock"
 
 
 def main() -> int:
@@ -101,6 +104,18 @@ def main() -> int:
             env=env,
         )
 
+    if not worker_lock_active(AUCTION_FINAL_LOCK, stale_after_seconds=3 * 60):
+        spawn_detached(
+            [
+                str(backend_python),
+                "scripts/run_auction_final_loop.py",
+            ],
+            cwd=BACKEND,
+            stdout_path=AUCTION_FINAL_LOG,
+            stderr_path=AUCTION_FINAL_ERR,
+            env=env,
+        )
+
     backend_ok = wait_for("http://127.0.0.1:8001/health", seconds=12)
     frontend_ok = wait_for("http://127.0.0.1:5173/", seconds=12)
 
@@ -109,6 +124,7 @@ def main() -> int:
     print(f"Backend log:  {BACKEND_LOG}")
     print(f"Frontend log: {FRONTEND_LOG}")
     print(f"Recommendation refresh log: {REFRESH_LOG}")
+    print(f"Auction final log: {AUCTION_FINAL_LOG}")
     return 0 if backend_ok and frontend_ok else 1
 
 
@@ -136,13 +152,19 @@ def run_data_check(backend_python: Path, env: dict[str, str]) -> int:
 def refresh_worker_running() -> bool:
     """Treat a recently touched lock as an active half-hour worker."""
 
-    if not REFRESH_LOCK.exists():
+    return worker_lock_active(REFRESH_LOCK, stale_after_seconds=90 * 60)
+
+
+def worker_lock_active(lock_path: Path, *, stale_after_seconds: int) -> bool:
+    """Return whether a worker lock still looks active."""
+
+    if not lock_path.exists():
         return False
     try:
-        age_seconds = time.time() - REFRESH_LOCK.stat().st_mtime
+        age_seconds = time.time() - lock_path.stat().st_mtime
     except OSError:
         return False
-    return age_seconds <= 90 * 60
+    return age_seconds <= stale_after_seconds
 
 
 def build_env() -> dict[str, str]:

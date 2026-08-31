@@ -74,6 +74,30 @@ services:
       - --report-path
       - /app/data/recommendation_refresh_latest.json
 
+  auction-final:
+    image: limituplab-backend:local
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        INSTALL_HITHINK_FINANCE: ${INSTALL_HITHINK_FINANCE:-true}
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env.production
+    environment:
+      LIMITUPLAB_DATABASE_PATH: /app/data/limituplab.sqlite
+      TZ: Asia/Shanghai
+    volumes:
+      - limituplab-data:/app/data
+    command:
+      - python
+      - scripts/run_auction_final_loop.py
+      - --lock-path
+      - /tmp/auction_final.lock
+      - --report-path
+      - /app/data/auction_final_latest.json
+
   daily-update:
     image: limituplab-backend:local
     build:

@@ -412,7 +412,7 @@ def run_daily_update(
                 snapshot_repository=SQLiteFirstBoardDiscoveryRepository(
                     first_board_repo.database_path
                 ),
-                top_k=10,
+                top_k=30,
                 force=force_discovery,
             )
             report.discovery_snapshot_ready = True

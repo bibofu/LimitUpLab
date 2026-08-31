@@ -3,6 +3,7 @@ import type {
   AgentChatResponse,
   AgentChatStreamEvent,
   AgentEvaluationResponse,
+  AuctionFinalRecommendationsResponse,
   ChatSessionDetail,
   ChatSessionsResponse,
   DailyBoardPromotionStat,
@@ -147,6 +148,12 @@ export function fetchFirstBoardDiscovery(dataAsOf?: string) {
 export function fetchRecommendationIntelligence() {
   return request<RecommendationIntelligenceResponse>(
     "/api/agents/recommendation-intelligence",
+  );
+}
+
+export function fetchAuctionFinalRecommendations() {
+  return request<AuctionFinalRecommendationsResponse>(
+    "/api/agents/auction-final-recommendations",
   );
 }
 

@@ -57,6 +57,7 @@ import {
   fetchFirstBoardCritic,
   fetchFirstBoardDiscovery,
   fetchFirstBoardRatings,
+  fetchAuctionFinalRecommendations,
   fetchFinanceNews,
   fetchRecommendationIntelligence,
   fetchFailedLimitUpEvents,
@@ -79,6 +80,8 @@ import type {
   AgentChatStreamStage,
   AgentStockMention,
   AgentEvaluationResponse,
+  AuctionFinalCandidate,
+  AuctionFinalRecommendationsResponse,
   ChatSessionDetail,
   ChatSessionMessage,
   ChatSessionSummary,
@@ -957,6 +960,7 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const [discoveryLoading, setDiscoveryLoading] = useState(true);
   const [intelligence, setIntelligence] = useState<RecommendationIntelligenceResponse | null>(null);
+  const [auctionFinal, setAuctionFinal] = useState<AuctionFinalRecommendationsResponse | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -997,6 +1001,32 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
     };
   }, []);
 
+  useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      void fetchAuctionFinalRecommendations()
+        .then((response) => {
+          if (active) setAuctionFinal(response);
+        })
+        .catch(() => {
+          // A final snapshot is expected to be absent before 09:25:10.
+        });
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 60 * 1000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  const currentAuctionFinal = auctionFinal && isAuctionFinalActive(auctionFinal)
+    ? auctionFinal
+    : null;
+  const finalCandidates = currentAuctionFinal?.candidates.filter(
+    (item) => item.strategy === mode,
+  ) ?? [];
+
   return (
     <section className="premarket-workspace">
       <div aria-label="盘前策略" className="strategy-switch" role="tablist">
@@ -1021,7 +1051,13 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
           一进二接力
         </button>
       </div>
-      {mode === "discovery" ? (
+      {finalCandidates.length > 0 && currentAuctionFinal ? (
+        <AuctionFinalPanel
+          candidates={finalCandidates}
+          response={currentAuctionFinal}
+          strategy={mode}
+        />
+      ) : mode === "discovery" ? (
         <FirstBoardDiscoveryPanel
           data={discovery}
           error={discoveryError}
@@ -1033,6 +1069,91 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
       )}
     </section>
   );
+}
+
+function AuctionFinalPanel({
+  candidates,
+  response,
+  strategy,
+}: {
+  candidates: AuctionFinalCandidate[];
+  response: AuctionFinalRecommendationsResponse;
+  strategy: "discovery" | "relay";
+}) {
+  const title = strategy === "discovery" ? "首板挖掘" : "一进二接力";
+  return (
+    <Panel
+      title={title}
+      icon={strategy === "discovery" ? <TrendingUp size={18} /> : <BarChart3 size={18} />}
+    >
+      <div className="rating-summary-panel auction-final-panel">
+        <div className="auction-final-header">
+          <div>
+            <strong>{response.trade_date} 竞价终选 Top{candidates.length}</strong>
+            <span>09:25 集合竞价终值已固化，原评分占 80%，竞价确认占 20%</span>
+          </div>
+          <span className="auction-final-badge">09:25 终选</span>
+        </div>
+        <div className="rating-top-list">
+          {candidates.map((candidate) => (
+            <Link
+              className="rating-top-card auction-final-card"
+              key={`${candidate.strategy}-${candidate.target_trade_date}-${candidate.symbol}`}
+              to={stockDetailPath(candidate.symbol, candidate.base_trade_date, candidate.name)}
+            >
+              <header>
+                <div>
+                  <span>Top {candidate.final_rank} · 初选第 {candidate.base_rank}</span>
+                  <strong>{candidate.name}</strong>
+                  <small>{candidate.symbol}{candidate.sector ? ` / ${candidate.sector}` : ""}</small>
+                </div>
+                <div className="rating-top-score">
+                  <b>{candidate.final_score.toFixed(1)}</b>
+                  <span className="auction-score-delta">竞价 {candidate.auction_score.toFixed(1)}/20</span>
+                </div>
+              </header>
+              <div className="rating-top-facts">
+                <Fact label="竞价价" value={candidate.auction_price.toFixed(2)} />
+                <Fact label="竞价涨幅" value={`${formatSigned(candidate.auction_pct, 2)}%`} />
+                <Fact label="竞价量比" value={candidate.auction_volume_ratio?.toFixed(2) ?? "暂无"} />
+                <Fact label="竞价换手" value={candidate.auction_turnover_pct !== null ? `${candidate.auction_turnover_pct.toFixed(3)}%` : "暂无"} />
+                <Fact label="竞价额" value={candidate.auction_amount !== null ? formatAmount(candidate.auction_amount) : "暂无"} />
+                <Fact label="原评分" value={candidate.base_score.toFixed(1)} />
+              </div>
+              {candidate.reasons.length > 0 ? (
+                <section className="rating-top-reasons">
+                  <strong>竞价确认</strong>
+                  <ul>{candidate.reasons.slice(0, 3).map((reason) => <li key={reason}>{reason}</li>)}</ul>
+                </section>
+              ) : null}
+              {candidate.risks.length > 0 ? (
+                <p className="rating-top-risk">风险观察：{candidate.risks.slice(0, 2).join("；")}</p>
+              ) : null}
+            </Link>
+          ))}
+        </div>
+        <p className="discovery-disclaimer">竞价终选是研究排序，不构成交易建议。</p>
+      </div>
+    </Panel>
+  );
+}
+
+function localIsoDate() {
+  return new Intl.DateTimeFormat("en-CA", {
+    timeZone: "Asia/Shanghai",
+    year: "numeric",
+    month: "2-digit",
+    day: "2-digit",
+  }).format(new Date());
+}
+
+function isAuctionFinalActive(response: AuctionFinalRecommendationsResponse) {
+  const chinaHour = Number(new Intl.DateTimeFormat("en-GB", {
+    timeZone: "Asia/Shanghai",
+    hour: "2-digit",
+    hourCycle: "h23",
+  }).format(new Date()));
+  return response.trade_date === localIsoDate() && chinaHour < 15;
 }
 
 interface RecommendationNewsViewItem {
@@ -2510,7 +2631,7 @@ function FirstBoardDiscoveryPanel({
             <span>全市场 {data.universe_count}</span>
             <span>硬过滤后 {data.eligible_count}</span>
             <span>精排 {data.recalled_count}</span>
-            <strong>Top {data.candidates.length}</strong>
+            <strong>候选池 {data.candidates.length} / 展示 Top {Math.min(10, data.candidates.length)}</strong>
           </div>
         </div>
         {data.themes.length > 0 ? (
@@ -2529,7 +2650,7 @@ function FirstBoardDiscoveryPanel({
 
         {data.candidates.length > 0 ? (
           <div className="rating-top-list discovery-list">
-            {data.candidates.map((candidate, index) => {
+            {data.candidates.slice(0, 10).map((candidate, index) => {
               const live = recommendationIntelligenceFor(
                 intelligence,
                 "discovery",

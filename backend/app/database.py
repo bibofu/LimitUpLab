@@ -14,7 +14,7 @@ from app.config import env_bool
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_PATH = BACKEND_ROOT / "data" / "limituplab.sqlite"
-CURRENT_SCHEMA_VERSION = 6
+CURRENT_SCHEMA_VERSION = 7
 DEFAULT_BUSY_TIMEOUT_MS = 5_000
 DEFAULT_LOCK_RETRY_ATTEMPTS = 3
 DEFAULT_LOCK_RETRY_BASE_DELAY_SECONDS = 0.05
@@ -597,6 +597,24 @@ def _apply_schema(connection: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_recommendation_intelligence_refreshed
         ON recommendation_intelligence_snapshots (refreshed_at DESC)
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS auction_final_recommendation_snapshots (
+            trade_date TEXT NOT NULL,
+            scoring_version TEXT NOT NULL,
+            finalized_at TEXT NOT NULL,
+            status TEXT NOT NULL,
+            response_json TEXT NOT NULL,
+            PRIMARY KEY (trade_date, scoring_version)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_auction_final_recommendation_latest
+        ON auction_final_recommendation_snapshots (trade_date DESC, finalized_at DESC)
         """
     )
     connection.execute(

@@ -32,6 +32,7 @@ from app.models import (
     AgentUsageAdminResponse,
     AgentUsageRecord,
     AgentToolTrace,
+    AuctionFinalRecommendationsResponse,
     ChatSessionCreateRequest,
     ChatSessionDetail,
     ChatSessionMessage,
@@ -56,6 +57,7 @@ from app.repositories import (
     SQLiteAgentCacheRepository,
     SQLiteAgentRunRepository,
     SQLiteAgentUsageRepository,
+    SQLiteAuctionFinalRepository,
     SQLiteChatSessionRepository,
     SQLiteDailyPipelineRepository,
     SQLiteFirstBoardRepository,
@@ -361,6 +363,25 @@ def get_recommendation_intelligence() -> RecommendationIntelligenceResponse:
         raise HTTPException(
             status_code=404,
             detail="No recommendation intelligence snapshot is available.",
+        )
+    return response
+
+
+@router.get(
+    "/auction-final-recommendations",
+    response_model=AuctionFinalRecommendationsResponse,
+)
+def get_auction_final_recommendations(
+    trade_date: date | None = None,
+) -> AuctionFinalRecommendationsResponse:
+    """Return the latest immutable 09:25 auction-final recommendation batch."""
+
+    repository = SQLiteAuctionFinalRepository()
+    response = repository.get(trade_date) if trade_date else repository.get_latest()
+    if response is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No 09:25 auction-final recommendation snapshot is available.",
         )
     return response
 

@@ -255,6 +255,53 @@ class RecommendationIntelligenceResponse(BaseModel):
     warnings: list[str] = Field(default_factory=list)
 
 
+class AuctionFinalCandidate(BaseModel):
+    """One auditable 09:25 auction-adjusted pre-market candidate."""
+
+    strategy: Literal["discovery", "relay"]
+    base_trade_date: date
+    target_trade_date: date
+    symbol: str
+    name: str
+    sector: str = ""
+    position_label: str | None = None
+    base_rank: int
+    base_score: float
+    base_scoring_version: str
+    final_rank: int
+    final_score: float
+    auction_score: float
+    auction_price: float
+    auction_pct: float
+    auction_volume: float | None = None
+    auction_amount: float | None = None
+    auction_unmatched: float | None = None
+    auction_turnover_pct: float | None = None
+    auction_yesterday_ratio_pct: float | None = None
+    auction_volume_ratio: float | None = None
+    previous_close: float | None = None
+    float_market_cap: float | None = None
+    reasons: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+
+
+class AuctionFinalRecommendationsResponse(BaseModel):
+    """Immutable final recommendation snapshot captured after auction closes."""
+
+    trade_date: date
+    finalized_at: datetime
+    auction_captured_at: datetime
+    status: Literal["complete", "partial"]
+    auction_phase: str
+    data_status: str
+    scoring_version: str
+    source: str
+    discovery_base_date: date | None = None
+    relay_base_date: date | None = None
+    candidates: list[AuctionFinalCandidate] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class StockKLineBar(BaseModel):
     """Daily OHLCV bar for stock detail review."""
 

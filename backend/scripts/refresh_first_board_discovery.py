@@ -15,10 +15,10 @@ from app.services.first_board_discovery import refresh_first_board_discovery
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Refresh the latest first-board discovery Top10 snapshot.",
+        description="Refresh the latest first-board discovery Top30 candidate pool.",
     )
     parser.add_argument("--recall-limit", type=int, default=60)
-    parser.add_argument("--top-k", type=int, default=10)
+    parser.add_argument("--top-k", type=int, default=30)
     parser.add_argument("--max-workers", type=int, default=8)
     parser.add_argument("--force", action="store_true")
     args = parser.parse_args()
