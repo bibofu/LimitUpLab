@@ -3140,8 +3140,8 @@ function DetailView({ view, data }: { view: StockListViewKey; data: DashboardDat
 
   if (view === "first") {
     return (
-      <Panel title="首板智能评级" icon={detailIcon(view)}>
-        <FirstBoardRatingTable ratings={data.firstBoardRatings.candidates} />
+      <Panel title="首板票" icon={detailIcon(view)}>
+        <StockTable events={data.firstBoard} variant="first" />
       </Panel>
     );
   }
@@ -3289,81 +3289,6 @@ function LimitUpPool({ data }: { data: DashboardData }) {
   );
 }
 
-function FirstBoardRatingTable({ ratings }: { ratings: FirstBoardRating[] }) {
-  /** Render first-board candidates sorted by agent score. */
-
-  const navigate = useNavigate();
-
-  if (ratings.length === 0) {
-    return <div className="empty-state">当前交易日没有满足过滤条件的首板候选。</div>;
-  }
-
-  return (
-    <div className="table-wrap">
-      <table>
-        <thead>
-          <tr>
-            <th>股票</th>
-            <th>评分</th>
-            <th>评级</th>
-            <th>置信度</th>
-            <th>首封</th>
-            <th>炸板</th>
-            <th>成交额</th>
-            <th>换手</th>
-            <th>行业热度</th>
-            <th>理由 / 风险</th>
-          </tr>
-        </thead>
-        <tbody>
-          {ratings.map((rating) => (
-            <tr
-              className="stock-row"
-              key={`${rating.facts.trade_date}-${rating.facts.symbol}`}
-              onClick={() => navigate(stockDetailPath(
-                rating.facts.symbol,
-                rating.facts.trade_date,
-              ))}
-              onKeyDown={(keyboardEvent) => {
-                if (keyboardEvent.key === "Enter" || keyboardEvent.key === " ") {
-                  keyboardEvent.preventDefault();
-                  navigate(stockDetailPath(
-                    rating.facts.symbol,
-                    rating.facts.trade_date,
-                  ));
-                }
-              }}
-              tabIndex={0}
-            >
-              <td>
-                <strong>{rating.facts.name}</strong>
-                <span>{rating.facts.symbol}</span>
-              </td>
-              <td>
-                <strong>{rating.score.toFixed(1)}</strong>
-              </td>
-              <td>
-                <span className={`rating-badge rating-${rating.rating.toLowerCase()}`}>
-                  {rating.rating}
-                </span>
-              </td>
-              <td>{formatPercent(rating.confidence)}</td>
-              <td>{rating.facts.first_limit_time.slice(0, 5)}</td>
-              <td>{rating.facts.break_count}</td>
-              <td>{formatAmount(rating.facts.amount)}</td>
-              <td>{rating.facts.turnover_rate.toFixed(1)}%</td>
-              <td>{rating.facts.same_industry_limit_up_count} 只</td>
-              <td>
-                <strong>{rating.reasons.slice(0, 2).join("；")}</strong>
-                <span>{rating.risks.slice(0, 2).join("；")}</span>
-              </td>
-            </tr>
-          ))}
-        </tbody>
-      </table>
-    </div>
-  );
-}
 function StockTable({
   events,
   variant,
