@@ -54,6 +54,7 @@ import {
   fetchDragonTigerReview,
   fetchReviewAgentReport,
   fetchFirstBoardCritic,
+  fetchFirstBoardDiscovery,
   fetchFirstBoardRatings,
   fetchFailedLimitUpEvents,
   fetchFirstBoardEvents,
@@ -82,6 +83,8 @@ import type {
   DailyReviewSnapshotSummary,
   DragonTigerReviewResponse,
   FirstBoardCriticResponse,
+  FirstBoardDiscoveryPattern,
+  FirstBoardDiscoveryResponse,
   FirstBoardRating,
   FirstBoardRatingsResponse,
   LimitUpEvent,
@@ -931,9 +934,67 @@ function MarketSnapshot({ summary }: { summary: MarketSummary }) {
 }
 
 function PremarketRecommendations({ ratings }: { ratings: FirstBoardRatingsResponse }) {
-  /** Present the latest first-board Agent recommendations in a dedicated view. */
+  /** Keep the two pre-market strategies distinct while sharing one workspace. */
 
-  return <FirstBoardRatingPanel ratings={ratings} />;
+  const [mode, setMode] = useState<"discovery" | "relay">("discovery");
+  const [discovery, setDiscovery] = useState<FirstBoardDiscoveryResponse | null>(null);
+  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
+  const [discoveryLoading, setDiscoveryLoading] = useState(true);
+
+  useEffect(() => {
+    let active = true;
+    void fetchFirstBoardDiscovery()
+      .then((response) => {
+        if (active) setDiscovery(response);
+      })
+      .catch((caught: unknown) => {
+        if (active) {
+          setDiscoveryError(caught instanceof Error ? caught.message : "首板挖掘数据加载失败");
+        }
+      })
+      .finally(() => {
+        if (active) setDiscoveryLoading(false);
+      });
+    return () => {
+      active = false;
+    };
+  }, []);
+
+  return (
+    <section className="premarket-workspace">
+      <div aria-label="盘前策略" className="strategy-switch" role="tablist">
+        <button
+          aria-selected={mode === "discovery"}
+          className={mode === "discovery" ? "active" : undefined}
+          onClick={() => setMode("discovery")}
+          role="tab"
+          type="button"
+        >
+          <TrendingUp size={16} />
+          首板挖掘
+        </button>
+        <button
+          aria-selected={mode === "relay"}
+          className={mode === "relay" ? "active" : undefined}
+          onClick={() => setMode("relay")}
+          role="tab"
+          type="button"
+        >
+          <Layers3 size={16} />
+          一进二接力
+        </button>
+      </div>
+      {mode === "discovery" ? (
+        <FirstBoardDiscoveryPanel
+          data={discovery}
+          error={discoveryError}
+          loading={discoveryLoading}
+        />
+      ) : (
+        <FirstBoardRatingPanel ratings={ratings} />
+      )}
+    </section>
+  );
 }
 
 function ReviewDashboard({ data }: { data: DashboardData }) {
@@ -2107,7 +2168,7 @@ function FirstBoardRatingPanel({ ratings }: { ratings: FirstBoardRatingsResponse
   const topCandidate = topCandidates[0];
 
   return (
-    <Panel title="首板评级 Agent" icon={<BarChart3 size={18} />}>
+    <Panel title="一进二接力" icon={<BarChart3 size={18} />}>
       <div className="rating-summary-panel">
         <div className="rating-summary-facts">
           <span>{ratings.trade_date}</span>
@@ -2123,7 +2184,11 @@ function FirstBoardRatingPanel({ ratings }: { ratings: FirstBoardRatingsResponse
               <Link
                 className="rating-top-card"
                 key={`${candidate.facts.trade_date}-${candidate.facts.symbol}`}
-                to={stockDetailPath(candidate.facts.symbol, candidate.facts.trade_date)}
+                to={stockDetailPath(
+                  candidate.facts.symbol,
+                  candidate.facts.trade_date,
+                  candidate.facts.name,
+                )}
               >
                 <header>
                   <div>
@@ -2183,6 +2248,117 @@ function FirstBoardRatingPanel({ ratings }: { ratings: FirstBoardRatingsResponse
       </div>
     </Panel>
   );
+}
+
+function FirstBoardDiscoveryPanel({
+  data,
+  error,
+  loading,
+}: {
+  data: FirstBoardDiscoveryResponse | null;
+  error: string | null;
+  loading: boolean;
+}) {
+  if (loading) {
+    return (
+      <Panel title="首板挖掘" icon={<TrendingUp size={18} />}>
+        <div className="discovery-state"><LoaderCircle className="spin" size={20} />正在读取最新挖掘快照</div>
+      </Panel>
+    );
+  }
+  if (error || !data) {
+    return (
+      <Panel title="首板挖掘" icon={<TrendingUp size={18} />}>
+        <div className="discovery-state discovery-state-error">
+          <ShieldAlert size={20} />
+          <div><strong>暂时没有可用的首板挖掘结果</strong><span>{error ?? "请先执行每日数据更新"}</span></div>
+        </div>
+      </Panel>
+    );
+  }
+
+  return (
+    <Panel title="首板挖掘" icon={<TrendingUp size={18} />}>
+      <div className="rating-summary-panel discovery-panel">
+        <div className="discovery-header">
+          <div>
+            <strong>{data.target_trade_date ? `${data.target_trade_date} 观察池` : "下一交易日观察池"}</strong>
+            <span>基于 {data.data_as_of} 收盘后的全市场量价结构筛选</span>
+          </div>
+          <div className="rating-summary-facts">
+            <span>全市场 {data.universe_count}</span>
+            <span>硬过滤后 {data.eligible_count}</span>
+            <span>精排 {data.recalled_count}</span>
+            <strong>Top {data.candidates.length}</strong>
+          </div>
+        </div>
+
+        {data.candidates.length > 0 ? (
+          <div className="rating-top-list discovery-list">
+            {data.candidates.map((candidate, index) => (
+              <Link
+                className="rating-top-card discovery-card"
+                key={`${data.data_as_of}-${candidate.facts.symbol}`}
+                to={stockDetailPath(candidate.facts.symbol, data.data_as_of, candidate.facts.name)}
+              >
+                <header>
+                  <div>
+                    <span>Top {index + 1} · {discoveryPatternLabel(candidate.facts.pattern)}</span>
+                    <strong>{candidate.facts.name}</strong>
+                    <small>{candidate.facts.symbol} / 收盘 {candidate.facts.close.toFixed(2)}</small>
+                  </div>
+                  <div className="rating-top-score">
+                    <b>{candidate.score.toFixed(1)}</b>
+                    <span className={`rating-badge rating-${candidate.rating.toLowerCase()}`}>
+                      {candidate.rating}
+                    </span>
+                  </div>
+                </header>
+                <div className="rating-top-facts">
+                  <Fact label="当日涨幅" value={`${formatSigned(candidate.facts.change_pct, 1)}%`} />
+                  <Fact label="近5日" value={formatNullableSigned(candidate.facts.return_5d_pct)} />
+                  <Fact label="量比" value={candidate.facts.volume_ratio_5d?.toFixed(2) ?? "暂无"} />
+                  <Fact label="距20日高" value={formatNullableSigned(candidate.facts.distance_20d_high_pct)} />
+                  <Fact label="成交额" value={formatAmount(candidate.facts.amount)} />
+                  <Fact label="置信度" value={formatPercent(candidate.confidence)} />
+                </div>
+                <section className="rating-top-reasons">
+                  <strong>入选依据</strong>
+                  <ul>
+                    {candidate.reasons.slice(0, 3).map((reason) => <li key={reason}>{reason}</li>)}
+                  </ul>
+                </section>
+                {candidate.risks.length > 0 ? (
+                  <p className="rating-top-risk">待验证：{candidate.risks.slice(0, 2).join("；")}</p>
+                ) : null}
+              </Link>
+            ))}
+          </div>
+        ) : (
+          <div className="empty-state">本期没有满足数据和流动性要求的观察标的。</div>
+        )}
+        <p className="discovery-disclaimer">
+          这是量价结构研究排序，不代表次日涨停概率；板块强度与事件催化将在后续版本接入。
+        </p>
+      </div>
+    </Panel>
+  );
+}
+
+function discoveryPatternLabel(pattern: FirstBoardDiscoveryPattern) {
+  const labels: Record<FirstBoardDiscoveryPattern, string> = {
+    low_base_breakout: "低位突破",
+    trend_acceleration: "趋势加速",
+    oversold_rebound: "超跌反弹",
+    second_wave: "二波观察",
+    range_breakout: "区间突破",
+    unclassified: "结构观察",
+  };
+  return labels[pattern];
+}
+
+function formatNullableSigned(value: number | null) {
+  return value === null ? "暂无" : `${formatSigned(value, 1)}%`;
 }
 
 function RatingBacktestPanel({ backtest }: { backtest: RatingBacktestResponse }) {
@@ -3585,11 +3761,13 @@ function formatPercent(value: number) {
   return `${Math.round(value * 100)}%`;
 }
 
-function stockDetailPath(symbol: string, tradeDate?: string) {
+function stockDetailPath(symbol: string, tradeDate?: string, name?: string) {
   const path = `/stocks/${encodeURIComponent(symbol)}`;
-  return tradeDate
-    ? `${path}?trade_date=${encodeURIComponent(tradeDate)}`
-    : path;
+  const params = new URLSearchParams();
+  if (tradeDate) params.set("trade_date", tradeDate);
+  if (name) params.set("name", name);
+  const query = params.toString();
+  return query ? `${path}?${query}` : path;
 }
 
 function formatEmpiricalRate(value: number | null | undefined) {

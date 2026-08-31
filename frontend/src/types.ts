@@ -319,6 +319,60 @@ export interface FirstBoardRatingsResponse {
   snapshot_created_at: string | null;
 }
 
+export type FirstBoardDiscoveryPattern =
+  | "low_base_breakout"
+  | "trend_acceleration"
+  | "oversold_rebound"
+  | "second_wave"
+  | "range_breakout"
+  | "unclassified";
+
+export interface FirstBoardDiscoveryFacts {
+  symbol: string;
+  name: string;
+  data_as_of: string;
+  target_trade_date: string | null;
+  close: number;
+  change_pct: number;
+  amount: number;
+  volume: number;
+  intraday_range_pct: number;
+  close_location: number;
+  open_to_close_pct: number;
+  kline_bar_count: number;
+  return_5d_pct: number | null;
+  return_20d_pct: number | null;
+  distance_20d_high_pct: number | null;
+  volume_ratio_5d: number | null;
+  volatility_20d: number | null;
+  ma_alignment: string;
+  pattern: FirstBoardDiscoveryPattern;
+  data_missing: string[];
+}
+
+export interface FirstBoardDiscoveryCandidate {
+  facts: FirstBoardDiscoveryFacts;
+  score: number;
+  rating: "A" | "B" | "C" | "D";
+  confidence: number;
+  score_breakdown: ScoreBreakdownItem[];
+  reasons: string[];
+  risks: string[];
+}
+
+export interface FirstBoardDiscoveryResponse {
+  data_as_of: string;
+  target_trade_date: string | null;
+  universe_count: number;
+  eligible_count: number;
+  recalled_count: number;
+  candidates: FirstBoardDiscoveryCandidate[];
+  generated_by: string;
+  source: string;
+  snapshot_created_at: string;
+  warnings: string[];
+}
+
 export interface RatingBacktestBucket {
   rating: string;
   sample_size: number;

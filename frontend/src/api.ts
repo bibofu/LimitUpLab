@@ -11,6 +11,7 @@ import type {
   ContinuationStat,
   FailedRateStat,
   FirstBoardCriticResponse,
+  FirstBoardDiscoveryResponse,
   FirstBoardRatingsResponse,
   LimitUpEvent,
   MarketSummary,
@@ -132,6 +133,13 @@ export function fetchStockTradingDayKLine(
 export function fetchFirstBoardRatings(tradeDate?: string) {
   const query = tradeDate ? `?trade_date=${tradeDate}` : "";
   return request<FirstBoardRatingsResponse>(`/api/agents/first-board-ratings${query}`);
+}
+
+export function fetchFirstBoardDiscovery(dataAsOf?: string) {
+  const query = dataAsOf ? `?data_as_of=${encodeURIComponent(dataAsOf)}` : "";
+  return request<FirstBoardDiscoveryResponse>(
+    `/api/agents/first-board-discovery${query}`,
+  );
 }
 
 export function fetchReviewAgentReport(params?: {

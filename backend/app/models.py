@@ -439,6 +439,68 @@ class StockDailyBar(BaseModel):
     created_at: datetime
 
 
+FirstBoardDiscoveryPattern = Literal[
+    "low_base_breakout",
+    "trend_acceleration",
+    "oversold_rebound",
+    "second_wave",
+    "range_breakout",
+    "unclassified",
+]
+
+
+class FirstBoardDiscoveryFacts(BaseModel):
+    """Point-in-time market and K-line facts for one pre-limit-up candidate."""
+
+    symbol: str
+    name: str
+    data_as_of: date
+    target_trade_date: date | None = None
+    close: float
+    change_pct: float
+    amount: float
+    volume: float
+    intraday_range_pct: float
+    close_location: float
+    open_to_close_pct: float
+    kline_bar_count: int
+    return_5d_pct: float | None = None
+    return_20d_pct: float | None = None
+    distance_20d_high_pct: float | None = None
+    volume_ratio_5d: float | None = None
+    volatility_20d: float | None = None
+    ma_alignment: str
+    pattern: FirstBoardDiscoveryPattern
+    data_missing: list[str] = Field(default_factory=list)
+
+
+class FirstBoardDiscoveryCandidate(BaseModel):
+    """Explainable candidate produced by the first-board discovery baseline."""
+
+    facts: FirstBoardDiscoveryFacts
+    score: float
+    rating: Literal["A", "B", "C", "D"]
+    confidence: float
+    score_breakdown: list["ScoreBreakdownItem"]
+    reasons: list[str] = Field(default_factory=list)
+    risks: list[str] = Field(default_factory=list)
+
+
+class FirstBoardDiscoveryResponse(BaseModel):
+    """Immutable Top-K snapshot for the next-session first-board watchlist."""
+
+    data_as_of: date
+    target_trade_date: date | None = None
+    universe_count: int
+    eligible_count: int
+    recalled_count: int
+    candidates: list[FirstBoardDiscoveryCandidate]
+    generated_by: str
+    source: str
+    snapshot_created_at: datetime
+    warnings: list[str] = Field(default_factory=list)
+
+
 class FirstBoardOutcome(BaseModel):
     """Derived post-first-board outcome summary for one historical case."""
 

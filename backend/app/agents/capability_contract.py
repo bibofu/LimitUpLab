@@ -107,6 +107,11 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
         (CapabilityToolRequirement("first_board_ratings"),),
     ),
     AgentCapability(
+        "first_board_discovery",
+        "查询收盘后筛选的下一交易日首板挖掘 Top10；候选当前尚未涨停，依据量价结构排序。",
+        (CapabilityToolRequirement("first_board_discovery"),),
+    ),
+    AgentCapability(
         "board_promotion",
         "查询前一交易日封板股票在次日继续连板的数量、比例，或首板到二板的跨日实现情况。",
         (CapabilityToolRequirement("daily_board_promotion", {"days": 5}),),

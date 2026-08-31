@@ -3774,6 +3774,112 @@ a.entry-card {
   padding: 20px;
 }
 
+.premarket-workspace {
+  display: grid;
+  gap: 14px;
+}
+
+.strategy-switch {
+  display: inline-grid;
+  grid-template-columns: repeat(2, minmax(132px, 1fr));
+  justify-self: start;
+  padding: 4px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #f2f4f7;
+}
+
+.strategy-switch button {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  gap: 7px;
+  min-height: 36px;
+  padding: 0 14px;
+  border: 0;
+  border-radius: 6px;
+  background: transparent;
+  color: #475467;
+  font: inherit;
+  font-size: 13px;
+  font-weight: 700;
+  cursor: pointer;
+}
+
+.strategy-switch button.active {
+  background: #ffffff;
+  color: #b42318;
+  box-shadow: 0 1px 3px rgba(16, 24, 40, 0.12);
+}
+
+.discovery-state {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  min-height: 120px;
+  padding: 24px;
+  color: #475467;
+}
+
+.discovery-state-error {
+  color: #b42318;
+}
+
+.discovery-state-error div {
+  display: grid;
+  gap: 4px;
+}
+
+.discovery-state-error span {
+  color: #667085;
+  font-size: 13px;
+}
+
+.discovery-panel {
+  padding-top: 16px;
+}
+
+.discovery-header {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  gap: 18px;
+}
+
+.discovery-header > div:first-child {
+  display: grid;
+  gap: 4px;
+}
+
+.discovery-header > div:first-child strong {
+  color: #101828;
+  font-size: 17px;
+}
+
+.discovery-header > div:first-child span,
+.discovery-disclaimer {
+  color: #667085;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.rating-top-list.discovery-list {
+  grid-template-columns: repeat(3, minmax(0, 1fr));
+}
+
+.discovery-card .rating-top-facts {
+  grid-template-columns: repeat(2, minmax(0, 1fr));
+}
+
+.discovery-card .fact-row span {
+  white-space: nowrap;
+}
+
+.discovery-disclaimer {
+  margin: 0;
+  padding-top: 2px;
+}
+
 .rating-summary-facts {
   display: flex;
   flex-wrap: wrap;
@@ -4706,6 +4812,10 @@ td span {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
+  .rating-top-list.discovery-list {
+    grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
   .overview-content,
   .promotion-latest,
   .stock-agent-grid,
@@ -4913,6 +5023,10 @@ td span {
   .evaluation-summary,
   .evaluation-labels,
   .evaluation-card-list {
+    grid-template-columns: 1fr;
+  }
+
+  .rating-top-list.discovery-list {
     grid-template-columns: 1fr;
   }
 

@@ -14,7 +14,7 @@ from app.config import env_bool
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_PATH = BACKEND_ROOT / "data" / "limituplab.sqlite"
-CURRENT_SCHEMA_VERSION = 4
+CURRENT_SCHEMA_VERSION = 5
 DEFAULT_BUSY_TIMEOUT_MS = 5_000
 DEFAULT_LOCK_RETRY_ATTEMPTS = 3
 DEFAULT_LOCK_RETRY_BASE_DELAY_SECONDS = 0.05
@@ -622,6 +622,25 @@ def _apply_schema(connection: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_scoring_policy_runs_created
         ON scoring_policy_runs (created_at DESC)
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS first_board_discovery_snapshots (
+            data_as_of TEXT NOT NULL,
+            strategy_version TEXT NOT NULL,
+            target_trade_date TEXT,
+            response_json TEXT NOT NULL,
+            source TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (data_as_of, strategy_version)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_first_board_discovery_created
+        ON first_board_discovery_snapshots (created_at DESC)
         """
     )
     _repair_legacy_failed_pool_board_heights(connection)

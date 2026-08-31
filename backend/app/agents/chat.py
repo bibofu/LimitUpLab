@@ -64,6 +64,7 @@ from app.models import (
     ChatSessionMessage,
     build_agent_evidence_cards,
     build_agent_tool_policy_audit,
+    FirstBoardDiscoveryResponse,
     FirstBoardRating,
     FirstBoardRatingsResponse,
     LimitUpEvent,
@@ -130,7 +131,7 @@ def _template_answer_forced() -> bool:
 
 TEXT = {
     "greeting": "你好，我是 LimitUpLab 的首板 Agent。我可以总结今日首板、解释个股评分、分析风险，也可以查询热门股票、财经快讯、个股新闻、个股走势和市场环境。",
-    "capability": "我是 LimitUpLab V1 首板复盘 Agent。我使用最新完整收盘数据和个股日 K 线筛选、解释首板候选，生成次日一进二 Top10 观察名单，并复盘 D+1 至 D+5 走势、晋级率和评分表现；也可以按需查询带来源和时间的热门股票榜单、财经快讯、个股新闻及近期动态。我不提供盘中实时行情、买卖指令、仓位、目标价或收益承诺。",
+    "capability": "我是 LimitUpLab V1 首板复盘 Agent。我使用最新完整收盘数据和个股日 K 线生成首板挖掘与一进二接力两类 Top10 观察名单，并复盘 D+1 至 D+5 走势、晋级率和评分表现；也可以按需查询带来源和时间的热门股票榜单、财经快讯、个股新闻及近期动态。我不提供盘中实时行情、买卖指令、仓位、目标价或收益承诺。",
     "smalltalk": "我在。你可以直接问首板候选、板块分布、评分理由、风险或个股走势。",
     "out_of_scope": UNANSWERABLE_TEXT,
     "unsafe": "我不能给出直接交易指令、资金配比、价格预测或回报承诺。我可以基于结构化数据分析评分理由、风险、板块热度和市场环境。",
@@ -1062,6 +1063,7 @@ def _tool_planner_system_prompt(
         "Use YYYY-MM-DD for all dates. "
         "For capability questions, answer_directly must mention LimitUpLab. "
         "For rating explanation questions, first call first_board_ratings before critic tools. "
+        "For next-session first-board discovery, call first_board_discovery; this is a pre-limit-up watchlist and is separate from first_board_ratings, which ranks stocks that already closed at first board for one-to-two continuation. "
         "For review questions about recent high-score picks, model performance, misses, scoring taste, or Top10 first-to-second-board success versus the market, call review_high_score_picks. "
         "Historical high-score performance and good/bad sample traits are prediction_review only; do not add first_board_rating unless the user separately asks for today's rating facts. "
         "A comparison of which current candidates or first-board samples have better quality is first_board_rating. prediction_review requires explicit realized-outcome language such as 后续表现, 走出来, 兑现, 命中 or 复盘过去结果. "
@@ -1480,6 +1482,26 @@ def _template_answer_from_tool_facts(
 
     if "daily_board_promotion" in facts:
         return _template_daily_board_promotion_answer(facts["daily_board_promotion"])
+
+    if "first_board_discovery" in facts:
+        discovery = facts["first_board_discovery"]
+        candidates = discovery.get("candidates", [])
+        target = discovery.get("target_trade_date") or "下一交易日"
+        lines = [
+            f"基于 {discovery.get('data_as_of')} 收盘数据，{target} 首板挖掘观察池如下："
+        ]
+        for index, item in enumerate(candidates[:10], start=1):
+            lines.append(
+                f"{index}. {item.get('name')}({item.get('symbol')}) "
+                f"{item.get('score')}分/{item.get('rating')}，"
+                f"{item.get('pattern_label')}，当日涨幅 {item.get('change_pct')}%，"
+                f"量比 {item.get('volume_ratio_5d')}。"
+            )
+        if not candidates:
+            lines.append("当前没有满足数据与流动性要求的候选。")
+        lines.append("该名单是量价结构研究排序，不代表涨停概率。")
+        lines.append(TEXT["safety"])
+        return "\n".join(lines)
 
     if "first_board_ratings" in facts and "limit_up_events" not in facts:
         ratings = facts["first_board_ratings"]
@@ -1950,6 +1972,7 @@ def _tool_answer_system_prompt(
         "For broad-index trend questions, cite the requested window and data_as_of, compare all returned major indices using period returns, up/down days and drawdown, and do not substitute limit-up counts for index performance. "
         "Do not assign categorical market-sentiment labels such as heating, divergence, cooling, risk-on or risk-off; report objective market counts, rates and index changes instead. "
         "For daily_board_promotion, treat each trade_date as the day promotion was observed from previous_trade_date; report empirical sample counts with every rate and distinguish all limit-up stocks, first-board-to-second-board, and existing continued-board cohorts. "
+        "For first_board_discovery, state the close-data cutoff and target session, preserve the persisted Top10 order, explain that candidates had not reached limit-up on the cutoff date, and never convert the score into a claimed limit-up probability. "
         "For review_high_score_picks promotion comparisons, report Top10 and full-market first-board sample counts together, separate pending dates, and express promotion_rate_delta as percentage points. "
         "For dragon_tiger_list, omit every missing capital-flow field and format each valid CNY amount as signed 亿元 or 万元; never expose raw yuan values, None, null, NaN, or a missing-data placeholder. "
         "Historical similar-case retrieval is retired; never invent or infer a similar stock or case from the available facts. "
@@ -2879,6 +2902,32 @@ def _execute_llm_tool_calls(
             traces.append(result.trace())
             call_names.append(name)
             references.append(f"trade_date={latest_ratings.trade_date.isoformat()}")
+        elif name == "first_board_discovery":
+            raw_data_as_of = arguments.get("data_as_of")
+            try:
+                data_as_of = (
+                    date.fromisoformat(str(raw_data_as_of))
+                    if raw_data_as_of
+                    else None
+                )
+                result = tools.first_board_discovery(data_as_of=data_as_of)
+            except Exception as error:  # noqa: BLE001
+                facts["first_board_discovery_error"] = str(error)
+                traces.append(
+                    _tool_error_trace(
+                        name=name,
+                        tool_input=arguments,
+                        summary="首板挖掘快照不可用，已将缺失原因交给 LLM。",
+                        error=str(error),
+                    )
+                )
+                call_names.append(name)
+                continue
+            response: FirstBoardDiscoveryResponse = result.output
+            facts["first_board_discovery"] = result.trace_output
+            traces.append(result.trace())
+            call_names.append(name)
+            references.append(f"data_as_of={response.data_as_of.isoformat()}")
         elif name == "first_board_filter":
             if latest_ratings is None:
                 result = tools.first_board_ratings(trade_date=None)

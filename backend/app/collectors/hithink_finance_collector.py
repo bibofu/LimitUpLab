@@ -6,7 +6,7 @@ import json
 import os
 import shutil
 import subprocess
-from dataclasses import dataclass
+from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -64,6 +64,12 @@ class HithinkMarketSnapshotFact:
     last_price: float | None
     change_pct: float | None
     turnover: float | None
+    name: str = ""
+    volume: float | None = None
+    open_price: float | None = None
+    high_price: float | None = None
+    low_price: float | None = None
+    previous_close: float | None = None
 
 
 @dataclass(frozen=True)
@@ -72,6 +78,7 @@ class HithinkMarketSnapshot:
 
     captured_at: datetime
     items: list[HithinkMarketSnapshotFact]
+    total: int = 0
     source: str = HITHINK_SOURCE
 
 
@@ -233,25 +240,52 @@ class HithinkFinanceCollector:
             "--limit",
             str(len(normalized_codes)),
         )
-        data = _dict(envelope.get("data"))
-        items = [
-            HithinkMarketSnapshotFact(
-                symbol=_symbol(row),
-                thscode=str(row.get("thscode") or ""),
-                last_price=_number(row.get("last_price")),
-                change_pct=_number(row.get("price_change_ratio_pct")),
-                turnover=_number(row.get("turnover")),
+        return _market_snapshot_from_data(_dict(envelope.get("data")))
+
+    def collect_full_market_snapshot(
+        self,
+        *,
+        page_size: int = 1000,
+        max_items: int = 10_000,
+    ) -> HithinkMarketSnapshot:
+        """Return a paginated Shanghai/Shenzhen quote snapshot with stock names."""
+
+        page_size = max(100, min(page_size, 1000))
+        max_items = max(1, min(max_items, 10_000))
+        items: dict[str, HithinkMarketSnapshotFact] = {}
+        captured_at = datetime.now(timezone.utc)
+        total = 0
+        offset = 0
+        while offset < max_items:
+            envelope = self._invoke(
+                "market",
+                "snapshot",
+                "--limit",
+                str(min(page_size, max_items - offset)),
+                "--offset",
+                str(offset),
             )
-            for row in _list(data.get("item"))
-            if _symbol(row)
+            page = _market_snapshot_from_data(_dict(envelope.get("data")))
+            captured_at = page.captured_at
+            total = page.total
+            if not page.items:
+                break
+            for item in page.items:
+                items[item.symbol] = item
+            offset += len(page.items)
+            if offset >= total:
+                break
+
+        names = self.collect_a_share_symbol_names()
+        named_items = [
+            replace(item, name=names.get(item.symbol, item.symbol))
+            for item in items.values()
         ]
-        timestamp = _integer(data.get("timestamp"))
-        captured_at = (
-            datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
-            if timestamp is not None
-            else datetime.now(timezone.utc)
+        return HithinkMarketSnapshot(
+            captured_at=captured_at,
+            items=named_items,
+            total=total or len(named_items),
         )
-        return HithinkMarketSnapshot(captured_at=captured_at, items=items)
 
     def collect_dragon_tiger(
         self,
@@ -407,6 +441,38 @@ class HithinkFinanceCollector:
                 retryable=bool(error_payload.get("retryable")),
             )
         return envelope
+
+
+def _market_snapshot_from_data(data: dict[str, Any]) -> HithinkMarketSnapshot:
+    """Normalize one market snapshot page without assuming a fixed page size."""
+
+    items = [
+        HithinkMarketSnapshotFact(
+            symbol=_symbol(row),
+            thscode=str(row.get("thscode") or ""),
+            last_price=_number(row.get("last_price")),
+            change_pct=_number(row.get("price_change_ratio_pct")),
+            turnover=_number(row.get("turnover")),
+            volume=_number(row.get("volume")),
+            open_price=_number(row.get("open_price")),
+            high_price=_number(row.get("high_price")),
+            low_price=_number(row.get("low_price")),
+            previous_close=_number(row.get("prev_price")),
+        )
+        for row in _list(data.get("item"))
+        if _symbol(row)
+    ]
+    timestamp = _integer(data.get("timestamp"))
+    captured_at = (
+        datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
+        if timestamp is not None
+        else datetime.now(timezone.utc)
+    )
+    return HithinkMarketSnapshot(
+        captured_at=captured_at,
+        items=items,
+        total=_integer(data.get("total")) or len(items),
+    )
 
 
 def _find_executable() -> str:

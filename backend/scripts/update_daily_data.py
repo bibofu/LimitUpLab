@@ -27,7 +27,11 @@ from app.collectors import (
     parse_akshare_trade_date,
 )
 from app.models import AgentPrediction, LimitUpEvent, StockDailyBar, StockKLineBar
-from app.repositories import SQLiteFirstBoardRepository, SQLiteLimitUpRepository
+from app.repositories import (
+    SQLiteFirstBoardDiscoveryRepository,
+    SQLiteFirstBoardRepository,
+    SQLiteLimitUpRepository,
+)
 from app.services.first_board_features import (
     build_first_board_features,
     build_first_board_outcome,
@@ -40,6 +44,7 @@ from app.services.evaluation_agent import (
 from app.services.first_board_enrichment import refresh_first_board_enrichment_snapshots
 from app.services.outcome_completeness import build_top10_outcome_completeness
 from app.services.limit_up_reason import merge_limit_up_reasons
+from app.services.first_board_discovery import refresh_first_board_discovery
 
 
 PostBarCollector = Callable[[str, date, date], list[StockDailyBar]]
@@ -86,6 +91,11 @@ class DailyUpdateReport:
     backfilled_outcomes: int = 0
     outcome_completeness: dict[str, object] = field(default_factory=dict)
     top_candidate: dict[str, object] | None = None
+    discovery_snapshot_ready: bool = False
+    discovery_data_as_of: str | None = None
+    discovery_target_trade_date: str | None = None
+    discovery_candidate_count: int = 0
+    discovery_generated_by: str | None = None
     health: dict[str, object] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
@@ -139,6 +149,16 @@ def main() -> None:
         action="store_true",
         help="Delete existing raw events for --date before importing.",
     )
+    parser.add_argument(
+        "--skip-discovery",
+        action="store_true",
+        help="Skip the full-market next-session first-board discovery scan.",
+    )
+    parser.add_argument(
+        "--force-discovery",
+        action="store_true",
+        help="Replace the same-date discovery snapshot for the current strategy.",
+    )
     args = parser.parse_args()
 
     report = run_daily_update(
@@ -150,6 +170,8 @@ def main() -> None:
         refresh_enrichment=not args.skip_enrichment,
         force_enrichment=args.force_enrichment,
         replace_date=args.replace_date,
+        refresh_discovery=not args.skip_discovery,
+        force_discovery=args.force_discovery,
     )
     print(json.dumps(asdict(report), ensure_ascii=False, indent=2))
 
@@ -169,6 +191,8 @@ def run_daily_update(
     spot_bar_collector: SpotBarCollector | None = None,
     remote_limit_up_collector: RemoteLimitUpCollector | None = None,
     persist_live_prediction: bool | None = None,
+    refresh_discovery: bool = False,
+    force_discovery: bool = False,
 ) -> DailyUpdateReport:
     """Update raw events, scoring features, tracked bars and health checks."""
 
@@ -381,6 +405,33 @@ def run_daily_update(
     report.backfilled_outcomes = int(tracked_backfill["outcome_count"])
     report.outcome_completeness = dict(tracked_backfill["outcome_completeness"])
     report.warnings.extend(tracked_backfill["warnings"])
+    if refresh_discovery and is_latest_available_date:
+        try:
+            discovery = refresh_first_board_discovery(
+                first_board_repository=first_board_repo,
+                snapshot_repository=SQLiteFirstBoardDiscoveryRepository(
+                    first_board_repo.database_path
+                ),
+                top_k=10,
+                force=force_discovery,
+            )
+            report.discovery_snapshot_ready = True
+            report.discovery_data_as_of = discovery.data_as_of.isoformat()
+            report.discovery_target_trade_date = (
+                discovery.target_trade_date.isoformat()
+                if discovery.target_trade_date
+                else None
+            )
+            report.discovery_candidate_count = len(discovery.candidates)
+            report.discovery_generated_by = discovery.generated_by
+            if discovery.data_as_of != trade_date:
+                report.warnings.append(
+                    "First-board discovery market date differs from update date: "
+                    f"market={discovery.data_as_of}, update={trade_date}."
+                )
+            report.warnings.extend(discovery.warnings)
+        except Exception as error:  # noqa: BLE001
+            report.warnings.append(f"First-board discovery: {error}")
     report.health = build_agent_data_health(
         events=events,
         first_board_repository=first_board_repo,

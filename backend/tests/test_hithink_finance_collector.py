@@ -25,6 +25,22 @@ class FakeRunner:
         )
 
 
+class SequenceRunner:
+    def __init__(self, payloads: list[dict]) -> None:
+        self.payloads = list(payloads)
+        self.commands: list[list[str]] = []
+
+    def __call__(self, command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
+        self.commands.append(command)
+        payload = self.payloads.pop(0)
+        return subprocess.CompletedProcess(
+            args=command,
+            returncode=0,
+            stdout=json.dumps(payload),
+            stderr="",
+        )
+
+
 class HithinkFinanceCollectorTest(unittest.TestCase):
     def test_hot_stock_snapshot_is_normalized(self) -> None:
         runner = FakeRunner(
@@ -98,6 +114,11 @@ class HithinkFinanceCollectorTest(unittest.TestCase):
                             "last_price": 12.34,
                             "price_change_ratio_pct": 6.78,
                             "turnover": 345_000_000,
+                            "volume": 12_000_000,
+                            "open_price": 11.8,
+                            "high_price": 12.5,
+                            "low_price": 11.7,
+                            "prev_price": 11.56,
                         }
                     ],
                 },
@@ -113,8 +134,60 @@ class HithinkFinanceCollectorTest(unittest.TestCase):
         self.assertEqual(snapshot.items[0].symbol, "002491")
         self.assertEqual(snapshot.items[0].change_pct, 6.78)
         self.assertEqual(snapshot.items[0].turnover, 345_000_000)
+        self.assertEqual(snapshot.items[0].volume, 12_000_000)
+        self.assertEqual(snapshot.items[0].previous_close, 11.56)
         self.assertIn("snapshot", runner.commands[0])
         self.assertIn("002491.SZ", runner.commands[0])
+
+    def test_full_market_snapshot_pages_and_resolves_names(self) -> None:
+        runner = SequenceRunner(
+            [
+                {
+                    "ok": True,
+                    "data": {
+                        "timestamp": 1_788_105_600_000,
+                        "total": 1,
+                        "item": [
+                            {
+                                "thscode": "002491.SZ",
+                                "ticker": "002491",
+                                "last_price": 12.34,
+                                "price_change_ratio_pct": 6.78,
+                                "turnover": 345_000_000,
+                                "volume": 12_000_000,
+                                "open_price": 11.8,
+                                "high_price": 12.5,
+                                "low_price": 11.7,
+                                "prev_price": 11.56,
+                            }
+                        ],
+                    },
+                },
+                {
+                    "ok": True,
+                    "data": {
+                        "item": [
+                            {
+                                "thscode": "002491.SZ",
+                                "ticker": "002491",
+                                "name": "通鼎互联",
+                            }
+                        ]
+                    },
+                },
+            ]
+        )
+        collector = HithinkFinanceCollector(
+            executable="hithink-finance",
+            runner=runner,
+        )
+
+        snapshot = collector.collect_full_market_snapshot()
+
+        self.assertEqual(snapshot.total, 1)
+        self.assertEqual(snapshot.items[0].name, "通鼎互联")
+        self.assertIn("--offset", runner.commands[0])
+        self.assertIn("symbol", runner.commands[1])
 
     def test_dragon_tiger_snapshot_preserves_capital_flow(self) -> None:
         runner = FakeRunner(

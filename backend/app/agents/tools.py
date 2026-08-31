@@ -27,6 +27,7 @@ from app.models import (
     DailyBoardPromotionStat,
     FinanceNewsFacts,
     FirstBoardCriticResponse,
+    FirstBoardDiscoveryResponse,
     FirstBoardRating,
     FirstBoardRatingsResponse,
     LimitUpEvent,
@@ -41,6 +42,7 @@ from app.models import (
     WebSearchFacts,
 )
 from app.repositories import (
+    SQLiteFirstBoardDiscoveryRepository,
     SQLiteFirstBoardRepository,
     SQLiteScoringPolicyRepository,
     SQLiteStockNewsRepository,
@@ -323,6 +325,28 @@ TOOL_SCHEMAS = [
         returns=(
             "First-board candidate ratings, filters, industry distribution and complete "
             "K-line position groups for the rated candidate pool."
+        ),
+    ),
+    AgentToolSchema(
+        name="first_board_discovery",
+        description=(
+            "读取收盘后生成的下一交易日首板挖掘 Top10。候选在数据截止日尚未涨停，"
+            "按全市场日行情召回并结合近 60 日 K 线量价结构精排；"
+            "适合回答首板挖掘、下一交易日可能首次涨停的观察池，不用于一进二接力。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "data_as_of": {
+                    "type": ["string", "null"],
+                    "description": "YYYY-MM-DD close-data cutoff; omit for latest snapshot.",
+                }
+            },
+            "required": [],
+        },
+        returns=(
+            "Persisted next-session candidates with score, confidence, price-volume facts, "
+            "pattern, reasons, risks and explicit missing inputs."
         ),
     ),
     AgentToolSchema(
@@ -655,6 +679,7 @@ V1_CLOSED_MARKET_TOOL_NAMES = frozenset(
         "daily_board_promotion",
         "dragon_tiger_list",
         "first_board_ratings",
+        "first_board_discovery",
         "limit_up_events",
         "first_board_filter",
         "stock_kline",
@@ -1361,6 +1386,49 @@ class AgentToolRegistry:
             trace_output=trace_output,
         )
 
+    def first_board_discovery(self, data_as_of: date | None = None) -> ToolResult:
+        """Return a persisted next-session first-board discovery snapshot."""
+
+        repository = SQLiteFirstBoardDiscoveryRepository(
+            self.first_board_repository.database_path
+        )
+        response: FirstBoardDiscoveryResponse | None = (
+            repository.get(data_as_of) if data_as_of else repository.get_latest()
+        )
+        if response is None:
+            raise LookupError("No persisted first-board discovery snapshot is available.")
+        trace_output = response.model_dump(mode="json")
+        trace_output["candidates"] = [
+            {
+                "symbol": item.facts.symbol,
+                "name": item.facts.name,
+                "score": item.score,
+                "rating": item.rating,
+                "confidence": item.confidence,
+                "change_pct": item.facts.change_pct,
+                "return_5d_pct": item.facts.return_5d_pct,
+                "volume_ratio_5d": item.facts.volume_ratio_5d,
+                "distance_20d_high_pct": item.facts.distance_20d_high_pct,
+                "amount": item.facts.amount,
+                "pattern": item.facts.pattern,
+                "pattern_label": _discovery_pattern_label(item.facts.pattern),
+                "reasons": item.reasons,
+                "risks": item.risks,
+                "data_missing": item.facts.data_missing,
+            }
+            for item in response.candidates
+        ]
+        return ToolResult(
+            name="first_board_discovery",
+            input={"data_as_of": data_as_of.isoformat() if data_as_of else None},
+            output=response,
+            summary=(
+                f"{response.data_as_of.isoformat()} 收盘后首板挖掘观察池"
+                f"共 {len(response.candidates)} 只。"
+            ),
+            trace_output=trace_output,
+        )
+
     def limit_up_events(
         self,
         trade_date: date | None = None,
@@ -1905,6 +1973,19 @@ class AgentToolRegistry:
             ),
             trace_output=trace_output,
         )
+
+
+def _discovery_pattern_label(pattern: str) -> str:
+    """Translate the discovery classifier value for user-facing evidence."""
+
+    return {
+        "low_base_breakout": "低位突破",
+        "trend_acceleration": "趋势加速",
+        "oversold_rebound": "超跌反弹",
+        "second_wave": "二波观察",
+        "range_breakout": "区间突破",
+        "unclassified": "结构观察",
+    }.get(pattern, "结构观察")
 
 
 def compact_first_board_position_groups(
