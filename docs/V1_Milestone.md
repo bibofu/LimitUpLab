@@ -255,7 +255,7 @@ V1 已形成覆盖核心问答的工具层，包括：
 - Top10 追踪复盘、评分回测和 Evaluation。
 - 预测质量审计、评分策略状态和数据健康。
 
-默认 `v1_close_review` 配置会在 Planner Schema、Skill Registry、Tool Policy 和工具执行器四层使用同一白名单。V1 可按需调用 `hot_stock_ranking`、`sector_performance` 和 `finance_news` 回答热门股票、行业强弱与综合财经快讯；结果必须展示来源和时间，且不得进入评分或被解释为推荐。`remote_limit_up_pool` 和 `web_search` 仅在 `extended` 研发配置中启用；即使 Planner 错误生成这些未开放调用，V1 执行器也会拒绝执行。
+默认 `v1_close_review` 配置会在 Planner Schema、Skill Registry、Tool Policy 和工具执行器四层使用同一白名单。V1 可按需调用 `hot_stock_ranking`、`sector_performance`、`finance_news`、`stock_news` 和 `stock_activity` 回答热门股票、行业强弱、综合财经快讯及指定股票的收盘后动态；结果必须展示来源和时间，且不得进入评分或被解释为推荐。`remote_limit_up_pool` 和 `web_search` 仅在 `extended` 研发配置中启用；即使 Planner 错误生成这些未开放调用，V1 执行器也会拒绝执行。
 
 ### 5.4 轻量 Multi-Agent
 
@@ -405,7 +405,7 @@ SQLite、进程内限流和单机 Cron 适合第一版部署。未来多实例�
 
 ### 9.4 Agent 只回答 V1 数据边界内的问题
 
-Agent 可以查询本地收盘数据、历史日 K、评分和复盘事实，也可以读取带来源和时间戳的热股榜、行业强弱榜、东方财富与同花顺财经快讯。它仍不回答盘中实时行情、集合竞价或缺少结构化来源的公司最新消息。越界问题统一明确告知无法回答，不能用旧数据、模型记忆或公开常识伪装成实时事实。
+Agent 可以查询本地收盘数据、历史日 K、评分和复盘事实，也可以读取带来源和时间戳的热股榜、行业强弱榜、综合财经快讯和东方财富个股资讯。它仍不回答盘中实时行情、集合竞价或缺少结构化来源的外部事实。越界问题统一明确告知无法回答，不能用旧数据、模型记忆或公开常识伪装成实时事实。
 
 ### 9.5 暂不提供正式账号系统
 

@@ -51,6 +51,7 @@ class AgentSkillRegistryTest(unittest.TestCase):
                 "limit-up-pool",
                 "market-environment",
                 "popularity",
+                "stock-news",
             ],
         )
         catalog = AGENT_SKILL_REGISTRY.schema_prompt()

@@ -82,6 +82,21 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
         ),
     ),
     AgentCapability(
+        "stock_news",
+        "查询一只明确股票最近的新闻、公告类报道或监管消息，要求保留来源、发布时间和链接。",
+        (CapabilityToolRequirement("stock_news", {"days": 7, "limit": 10}),),
+    ),
+    AgentCapability(
+        "stock_activity",
+        "综合查询一只明确股票最近发生了什么或有何动态，包括收盘走势、涨停记录、评分补充事实和个股新闻。",
+        (
+            CapabilityToolRequirement(
+                "stock_activity",
+                {"days": 7, "news_limit": 8},
+            ),
+        ),
+    ),
+    AgentCapability(
         "limit_up_pool",
         "查询某个交易日的涨停、首板、连板或炸板名单；不用于跨日晋级数量和比例。",
         (CapabilityToolRequirement("limit_up_events"),),
@@ -146,6 +161,7 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
 CAPABILITY_BY_NAME = {item.name: item for item in CAPABILITIES}
 SKILL_CAPABILITIES = {
     "finance-news": "finance_news",
+    "stock-news": "stock_news",
     "first-board-rating": "first_board_rating",
     "limit-up-pool": "limit_up_pool",
     "market-environment": "market_environment",

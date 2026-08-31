@@ -11,10 +11,6 @@
     {
       "case_id": "call_auction",
       "message": "今天集合竞价最强的股票有哪些"
-    },
-    {
-      "case_id": "company_latest_news",
-      "message": "中电鑫龙有什么最新消息"
     }
   ]
 }

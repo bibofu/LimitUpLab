@@ -34,6 +34,7 @@ from app.agents.tool_policy import (
     ToolExecution,
     extract_market_index_days as _extract_market_index_days,
     extract_kline_days as _extract_kline_days,
+    extract_stock_news_days as _extract_stock_news_days,
     extract_promotion_days as _extract_promotion_days,
     extract_sector_query as _extract_sector_query,
     extract_trade_date as _extract_trade_date,
@@ -73,7 +74,7 @@ from app.repositories import SQLiteFirstBoardRepository
 from app.services.llm_provider import LLMProvider, get_llm_provider
 
 
-CHAT_AGENT_VERSION = "first-board-chat-policy-v9-generic-finance-news"
+CHAT_AGENT_VERSION = "first-board-chat-policy-v10-stock-news"
 _FORCE_TEMPLATE_ANSWER_OVERRIDE: ContextVar[bool | None] = ContextVar(
     "force_template_answer_override",
     default=None,
@@ -128,8 +129,8 @@ def _template_answer_forced() -> bool:
     }
 
 TEXT = {
-    "greeting": "你好，我是 LimitUpLab 的首板 Agent。我可以总结今日首板、解释个股评分、分析风险，也可以查询热门股票、财经快讯、个股走势和市场环境。",
-    "capability": "我是 LimitUpLab V1 首板复盘 Agent。我使用最新完整收盘数据和个股日 K 线筛选、解释首板候选，生成次日一进二 Top10 观察名单，并复盘 D+1 至 D+5 走势、晋级率和评分表现；也可以按需查询带来源和时间的热门股票榜单及财经快讯。我不提供盘中实时行情、买卖指令、仓位、目标价或收益承诺。",
+    "greeting": "你好，我是 LimitUpLab 的首板 Agent。我可以总结今日首板、解释个股评分、分析风险，也可以查询热门股票、财经快讯、个股新闻、个股走势和市场环境。",
+    "capability": "我是 LimitUpLab V1 首板复盘 Agent。我使用最新完整收盘数据和个股日 K 线筛选、解释首板候选，生成次日一进二 Top10 观察名单，并复盘 D+1 至 D+5 走势、晋级率和评分表现；也可以按需查询带来源和时间的热门股票榜单、财经快讯、个股新闻及近期动态。我不提供盘中实时行情、买卖指令、仓位、目标价或收益承诺。",
     "smalltalk": "我在。你可以直接问首板候选、板块分布、评分理由、风险或个股走势。",
     "out_of_scope": UNANSWERABLE_TEXT,
     "unsafe": "我不能给出直接交易指令、资金配比、价格预测或回报承诺。我可以基于结构化数据分析评分理由、风险、板块热度和市场环境。",
@@ -663,7 +664,12 @@ def _answer_with_llm_tool_agent(
             "tools",
             f"正在查询 {selected_tools}" if selected_tools else "正在查询本地事实数据",
         )
-    execution = _execute_llm_tool_calls(tool_calls, tools, request=request)
+    execution = _execute_llm_tool_calls(
+        tool_calls,
+        tools,
+        request=request,
+        context_symbol=context.symbol,
+    )
     policy.reconcile(
         request=request,
         execution=execution,
@@ -1012,7 +1018,8 @@ def _tool_planner_system_prompt(
             "research product. Use only the latest complete close or stored historical "
             "facts exposed by the available tools, except that current stock-popularity "
             "questions may use the timestamped hot_stock_ranking snapshot and broad "
-            "financial-news digests may use timestamped finance_news feeds. Broad market "
+            "financial-news digests may use timestamped finance_news feeds, while named-stock "
+            "news and after-close activity may use stock_news and stock_activity. Broad market "
             "reviews may also use the latest timestamped sector ranking. Never claim "
             "to have intraday prices, auction data, or arbitrary "
             "public-web evidence. Questions that require those deferred V2 capabilities "
@@ -1071,7 +1078,8 @@ def _tool_planner_system_prompt(
         "For broad-market, major-index, Shanghai Composite, Shenzhen Component or ChiNext Index performance over multiple days, call market_index_trend with the requested trading-day window; never infer index performance from limit-up counts. "
         "If the user asks only for the market/index curve or index return, do not expand it into market_environment, sector_performance or popularity. "
         "For current hot, popular, popularity-ranked, or attention-ranked stocks, call hot_stock_ranking; default to 20 rows when the user gives no count, state the source and Beijing capture time, and say that popularity reflects attention and does not constitute a trading signal. In this answer, never use the exact Chinese tokens 买入, 卖出, 仓位, 目标价, or 收益承诺, even inside a disclaimer. "
-        "For broad latest, today, or recent financial-news and market-flash questions, call finance_news with a 48-hour window and up to 8 items. In this financial product, an unqualified request such as 最新的新闻, 最近的消息, 有什么新闻 or 新闻摘要 means the broad finance_news capability unless the user names a company, sector, announcement or event. State the Beijing retrieval time and each item's publication time, source, title, concise summary and URL. Preserve the tool's item order and do not claim chronological ordering unless the timestamps actually descend. Distinguish reported facts from any market-impact inference, and never fill missing news from memory. For a named company, one sector, an announcement, or a specific event, finance_news is insufficient and public web search remains outside V1. "
+        "For broad latest, today, or recent financial-news and market-flash questions, call finance_news with a 48-hour window and up to 8 items. In this financial product, an unqualified request such as 最新的新闻, 最近的消息, 有什么新闻 or 新闻摘要 means the broad finance_news capability unless the user names a company, sector, announcement or event. State the Beijing retrieval time and each item's publication time, source, title, concise summary and URL. Preserve the tool's item order and do not claim chronological ordering unless the timestamps actually descend. Distinguish reported facts from any market-impact inference, and never fill missing news from memory. "
+        "For a named stock or company asking about 新闻, 消息, 资讯, 公告, 研报 or 舆情, use stock_news; default to seven calendar days and ten items. Resolve the entity to one stock, retain source, publication time and URL, distinguish media reports from formal announcements, and never fill an empty result from memory. For 最近有什么动态, 近况, 最近发生了什么 or a similarly broad named-stock update, use stock_activity instead; summarize its close-based trend, recent limit-up events, available rating context and stock news while explicitly stating missing dimensions. A named sector or industry news request is not stock_news. Public web research remains outside V1. "
         "For market-overview or sentiment questions, call market_summary but report only objective counts and rates; never assign categorical labels such as heating, divergence, cooling, risk-on or risk-off. "
         "For questions about one stock's K-line, price trend, moving averages, recent rise/fall, volume, or drawdown, call stock_kline. "
         "Historical similar-case retrieval is retired. If the user asks for similar stocks or cases, do not invent or infer matches; answer directly that this capability is unavailable and suggest score evidence, stock_kline, or tracked prediction review instead. "
@@ -1602,6 +1610,85 @@ def _template_answer_from_tool_facts(
         lines.append(TEXT["safety"])
         return "\n".join(lines)
 
+    if "stock_activity" in facts:
+        activity = facts["stock_activity"]
+        lines = [
+            f"{activity.get('name')}({activity.get('symbol')}) 近期动态，"
+            f"收盘数据截至 {activity.get('data_as_of') or '暂无'}："
+        ]
+        kline = activity.get("kline") or {}
+        if kline:
+            lines.append(
+                f"- 走势：最近 {kline.get('requested_days')} 个交易日为 "
+                f"{kline.get('trend')}，5日涨跌 {kline.get('return_5d_pct')}%，"
+                f"20日涨跌 {kline.get('return_20d_pct')}%，量比 "
+                f"{kline.get('volume_ratio_5d')}。"
+            )
+        events = activity.get("recent_limit_up_events") or []
+        if events:
+            lines.append("- 近期涨停记录：")
+            for item in events[:5]:
+                lines.append(
+                    f"  - {item.get('trade_date')} {item.get('board_height')}板，"
+                    f"首封 {item.get('first_limit_time')}，炸板 {item.get('break_count')} 次。"
+                )
+        context = activity.get("rating_context") or {}
+        context_parts = []
+        if context.get("popularity_rank") is not None:
+            context_parts.append(f"人气排名 {context.get('popularity_rank')}")
+        if context.get("dragon_tiger_on_list"):
+            context_parts.append("该评分日有龙虎榜记录")
+        if context.get("float_market_cap") is not None:
+            context_parts.append(
+                f"流通市值 {float(context.get('float_market_cap')) / 100_000_000:.2f} 亿元"
+            )
+        if context_parts:
+            lines.append("- 评分补充事实：" + "，".join(context_parts) + "。")
+        news = activity.get("news") or {}
+        if news.get("items"):
+            lines.append(
+                f"- 最近 {news.get('window_days')} 天个股资讯"
+                f"（{news.get('cache_status')}）："
+            )
+            for item in news.get("items", [])[:8]:
+                published_at = str(item.get("published_at") or "").replace("T", " ")[:16]
+                lines.append(
+                    f"  - {published_at} {item.get('source')}：{item.get('title')} "
+                    f"{item.get('url')}"
+                )
+        missing = activity.get("data_missing") or []
+        if missing:
+            lines.append("- 数据限制：" + "；".join(str(item) for item in missing[:4]))
+        lines.append(TEXT["safety"])
+        return "\n".join(lines)
+
+    if "stock_news" in facts:
+        news = facts["stock_news"]
+        fetched_at = str(news.get("fetched_at") or "").replace("T", " ")[:16]
+        lines = [
+            f"{news.get('name')}({news.get('symbol')}) 最近 {news.get('window_days')} 天资讯，"
+            f"抓取时间 {fetched_at}，缓存状态 {news.get('cache_status')}："
+        ]
+        type_labels = {
+            "news": "新闻",
+            "announcement_report": "公告类报道",
+            "research": "研究资讯",
+            "regulatory": "监管信息",
+        }
+        for item in news.get("items", [])[:20]:
+            published_at = str(item.get("published_at") or "").replace("T", " ")[:16]
+            lines.append(
+                f"- [{type_labels.get(item.get('item_type'), '资讯')}] {published_at} "
+                f"{item.get('source')}：{item.get('title')}。"
+                f"{item.get('summary') or ''} {item.get('url')}"
+            )
+        if not news.get("items"):
+            lines.append("该时间窗口内没有获取到与这只股票直接相关的资讯。")
+        if news.get("data_missing"):
+            lines.append("数据限制：" + "；".join(news.get("data_missing")[:3]))
+        lines.append(TEXT["safety"])
+        return "\n".join(lines)
+
     if "stock_kline" in facts:
         kline = facts["stock_kline"]
         trend_label = {
@@ -1800,11 +1887,11 @@ def _tool_answer_system_prompt(
             "popularity is attention rather than a recommendation. For finance_news, "
             "state the Beijing retrieval time plus every item's publication time, source "
             "and URL, and never invent an item or omit that external-news cutoff. For "
-            "For sector_performance, state its source, data_as_of and freshness. For other "
+            "stock_news and stock_activity, retain the resolved stock, source timestamps "
+            "and cache cutoff. For sector_performance, state its source, data_as_of and freshness. For other "
             "factual answers, begin with the relevant YYYY-MM-DD close-data cutoff. Never "
             "imply that a result contains intraday prices or auction data. If the question "
-            "requires live limit-up verification, "
-            "company-specific current news or arbitrary public-web evidence, output "
+            "requires live limit-up verification or arbitrary public-web evidence, output "
             "exactly '抱歉，该问题无法回答'."
         )
     )
@@ -1859,6 +1946,7 @@ def _tool_answer_system_prompt(
         "For prediction evaluation, prioritize next_open_to_close_pct and entry-open drawdown; "
         "treat promotion and intraday highs as separate facts rather than success labels. "
         "For stock trend questions, cite stock_kline.data_as_of and data_fresh, and base the description on returns, moving averages, volume and drawdown. "
+        "For stock_news, state the resolved name and symbol, retrieval time, calendar-day window and cache status; list publication time, source, item type, title, concise summary and URL, and do not call a media report a formal announcement. For stock_activity, separate already observed close/K-line facts, historical limit-up events, rating context and timestamped news; explicitly mention unavailable dimensions and never imply intraday monitoring. "
         "For broad-index trend questions, cite the requested window and data_as_of, compare all returned major indices using period returns, up/down days and drawdown, and do not substitute limit-up counts for index performance. "
         "Do not assign categorical market-sentiment labels such as heating, divergence, cooling, risk-on or risk-off; report objective market counts, rates and index changes instead. "
         "For daily_board_promotion, treat each trade_date as the day promotion was observed from previous_trade_date; report empirical sample counts with every rate and distinguish all limit-up stocks, first-board-to-second-board, and existing continued-board cohorts. "
@@ -2258,6 +2346,7 @@ def _execute_llm_tool_calls(
     tools: AgentToolRegistry,
     *,
     request: AgentChatRequest,
+    context_symbol: str | None = None,
 ) -> ToolExecution:
     """Execute planner-selected tools and return compact facts and traces."""
 
@@ -2547,6 +2636,78 @@ def _execute_llm_tool_calls(
             traces.append(result.trace())
             call_names.append(name)
             references.extend(item.url for item in response.items)
+        elif name == "stock_news":
+            days = _parse_optional_int(arguments.get("days")) or (
+                _extract_stock_news_days(request.message)
+            )
+            limit = _parse_optional_int(arguments.get("limit")) or 10
+            try:
+                target = _resolve_tool_stock_target(
+                    tools=tools,
+                    request=request,
+                    argument_value=_optional_str(arguments.get("symbol")),
+                    context_symbol=context_symbol,
+                )
+                result = tools.stock_news(
+                    target,
+                    days=max(1, min(days, 30)),
+                    limit=max(1, min(limit, 20)),
+                )
+            except Exception as error:  # noqa: BLE001
+                facts["stock_news_error"] = str(error)
+                traces.append(
+                    _tool_error_trace(
+                        name=name,
+                        tool_input={"symbol": arguments.get("symbol"), "days": days, "limit": limit},
+                        summary="个股资讯查询失败，已将失败原因交给 LLM。",
+                        error=str(error),
+                    )
+                )
+                call_names.append(name)
+                continue
+            response = result.output
+            facts["stock_news"] = response.model_dump(mode="json")
+            traces.append(result.trace())
+            call_names.append(name)
+            references.extend(item.url for item in response.items)
+        elif name == "stock_activity":
+            days = _parse_optional_int(arguments.get("days")) or (
+                _extract_stock_news_days(request.message)
+            )
+            news_limit = _parse_optional_int(arguments.get("news_limit")) or 8
+            try:
+                target = _resolve_tool_stock_target(
+                    tools=tools,
+                    request=request,
+                    argument_value=_optional_str(arguments.get("symbol")),
+                    context_symbol=context_symbol,
+                )
+                result = tools.stock_activity(
+                    target,
+                    days=max(1, min(days, 30)),
+                    news_limit=max(1, min(news_limit, 20)),
+                )
+            except Exception as error:  # noqa: BLE001
+                facts["stock_activity_error"] = str(error)
+                traces.append(
+                    _tool_error_trace(
+                        name=name,
+                        tool_input={
+                            "symbol": arguments.get("symbol"),
+                            "days": days,
+                            "news_limit": news_limit,
+                        },
+                        summary="个股近期动态查询失败，已将失败原因交给 LLM。",
+                        error=str(error),
+                    )
+                )
+                call_names.append(name)
+                continue
+            response = result.output
+            facts["stock_activity"] = result.trace_output
+            traces.append(result.trace())
+            call_names.append(name)
+            references.extend(item.url for item in response.news.items)
         elif name == "web_search":
             query = _optional_str(arguments.get("query")) or request.message
             limit = _parse_optional_int(arguments.get("limit")) or 5
@@ -2966,6 +3127,31 @@ def _execute_llm_tool_calls(
         "tool_call_names": call_names,
         "references": list(dict.fromkeys(references)),
     }
+
+
+def _resolve_tool_stock_target(
+    *,
+    tools: AgentToolRegistry,
+    request: AgentChatRequest,
+    argument_value: str | None,
+    context_symbol: str | None,
+) -> str:
+    """Resolve planner, request and conversation stock hints in priority order."""
+
+    for candidate in (
+        argument_value,
+        request.symbol,
+        _extract_symbol_hint(request.message),
+        request.message,
+        context_symbol,
+    ):
+        if not candidate:
+            continue
+        try:
+            return tools.resolve_stock_identity(candidate)[0]
+        except ValueError:
+            continue
+    raise ValueError("Cannot resolve the requested stock.")
 
 
 def _normalize_limit_up_event_arguments(

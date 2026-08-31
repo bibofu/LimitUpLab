@@ -35,10 +35,16 @@ from app.models import (
     PredictionQualityAuditResponse,
     RatingBacktestResponse,
     SectorPerformanceFacts,
+    StockActivityFacts,
     StockKLineFacts,
+    StockNewsFacts,
     WebSearchFacts,
 )
-from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
+from app.repositories import (
+    SQLiteFirstBoardRepository,
+    SQLiteScoringPolicyRepository,
+    SQLiteStockNewsRepository,
+)
 from app.services.analysis import (
     calculate_daily_board_promotion,
     events_for_date,
@@ -51,6 +57,7 @@ from app.services.prediction_quality_audit import build_prediction_quality_audit
 from app.services.rating_backtest import build_rating_backtest
 from app.services.sector_performance import build_sector_performance
 from app.services.stock_kline import build_stock_kline_facts
+from app.services.stock_news import collect_stock_news
 from app.services.scoring_policy_optimizer import build_scoring_policy_registry
 from app.services.web_search import search_web
 from app.agents.review_agent import build_review_agent_report
@@ -553,6 +560,46 @@ TOOL_SCHEMAS = [
         returns="Recent deduplicated financial-news items with summaries, timestamps, categories and source URLs.",
     ),
     AgentToolSchema(
+        name="stock_news",
+        description=(
+            "查询一只已明确 A 股的近期个股新闻、公告类报道和监管动态，返回发布时间、来源、摘要和原文链接。"
+            "用于指定公司或股票的消息问题，不用于综合财经新闻或行业新闻。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "symbol": {
+                    "type": "string",
+                    "description": "Six-digit A-share symbol or exact stock name.",
+                },
+                "days": {"type": "integer", "minimum": 1, "maximum": 30},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 20},
+            },
+            "required": ["symbol"],
+        },
+        returns="Resolved stock identity and recent deduplicated stock-news items with explicit source and cache status.",
+    ),
+    AgentToolSchema(
+        name="stock_activity",
+        description=(
+            "汇总一只 A 股的近期收盘走势、涨停记录、评分补充事实和个股新闻。"
+            "用于‘最近有什么动态、发生了什么、近况如何’等综合个股问题。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "symbol": {
+                    "type": "string",
+                    "description": "Six-digit A-share symbol or exact stock name.",
+                },
+                "days": {"type": "integer", "minimum": 1, "maximum": 30},
+                "news_limit": {"type": "integer", "minimum": 1, "maximum": 20},
+            },
+            "required": ["symbol"],
+        },
+        returns="After-close K-line summary, recent limit-up events, rating context and stock-specific news for one resolved stock.",
+    ),
+    AgentToolSchema(
         name="web_search",
         description=(
             "搜索公开互联网，适合查询本地行情工具未覆盖的最新新闻、公告、政策、研报摘要、"
@@ -603,6 +650,8 @@ V1_CLOSED_MARKET_TOOL_NAMES = frozenset(
         "sector_performance",
         "hot_stock_ranking",
         "finance_news",
+        "stock_news",
+        "stock_activity",
         "daily_board_promotion",
         "dragon_tiger_list",
         "first_board_ratings",
@@ -659,6 +708,7 @@ class AgentToolRegistry:
         self.first_board_repository = first_board_repository or SQLiteFirstBoardRepository()
         self.hithink_collector = hithink_collector or HithinkFinanceCollector()
         self.profile = resolve_agent_profile(profile)
+        self._stock_name_directory: dict[str, str] | None = None
 
     @property
     def enabled_tool_names(self) -> frozenset[str]:
@@ -1106,6 +1156,151 @@ class AgentToolRegistry:
             trace_output=trace_output,
         )
 
+    def stock_news(
+        self,
+        symbol: str,
+        days: int = 7,
+        limit: int = 10,
+    ) -> ToolResult:
+        """Return cached, source-attributed news for one resolved stock."""
+
+        resolved_symbol, resolved_name = self.resolve_stock_identity(symbol)
+        response: StockNewsFacts = collect_stock_news(
+            symbol=resolved_symbol,
+            name=resolved_name,
+            days=max(1, min(days, 30)),
+            limit=max(1, min(limit, 20)),
+            repository=SQLiteStockNewsRepository(
+                self.first_board_repository.database_path
+            ),
+        )
+        trace_output = response.model_dump(mode="json")
+        return ToolResult(
+            name="stock_news",
+            input={
+                "symbol": resolved_symbol,
+                "days": response.window_days,
+                "limit": limit,
+            },
+            output=response,
+            summary=(
+                f"{resolved_name}({resolved_symbol}) 最近 {response.window_days} 天"
+                f"获取到 {len(response.items)} 条个股资讯，缓存状态 {response.cache_status}。"
+            ),
+            trace_output=trace_output,
+        )
+
+    def stock_activity(
+        self,
+        symbol: str,
+        days: int = 7,
+        news_limit: int = 8,
+    ) -> ToolResult:
+        """Assemble one stock's after-close trend, events, enrichment and news."""
+
+        resolved_symbol, resolved_name = self.resolve_stock_identity(symbol)
+        fetched_at = datetime.now(timezone.utc)
+        data_missing: list[str] = []
+        kline: StockKLineFacts | None = None
+        try:
+            kline = self.stock_kline(
+                resolved_symbol,
+                days=20,
+            ).output
+        except Exception as error:  # noqa: BLE001
+            data_missing.append(f"K 线数据：{error}")
+
+        stock_news_result = self.stock_news(
+            resolved_symbol,
+            days=days,
+            limit=news_limit,
+        )
+        news: StockNewsFacts = stock_news_result.output
+        data_missing.extend(news.data_missing)
+
+        matching_events = sorted(
+            (event for event in self.events if event.symbol == resolved_symbol),
+            key=lambda event: event.trade_date,
+            reverse=True,
+        )
+        recent_events = [
+            {
+                "trade_date": event.trade_date.isoformat(),
+                "board_height": event.board_height,
+                "closed_limit": event.closed_limit,
+                "first_limit_time": event.first_limit_time.strftime("%H:%M"),
+                "break_count": event.break_count,
+                "industry": event.industry,
+                "concept": event.concept,
+            }
+            for event in matching_events[:5]
+        ]
+        rating_context: dict[str, Any] = {}
+        for event in matching_events:
+            enrichment = self.first_board_repository.get_enrichment(
+                resolved_symbol,
+                event.trade_date,
+            )
+            if enrichment is None:
+                continue
+            rating_context = {
+                "trade_date": enrichment.trade_date.isoformat(),
+                "float_market_cap": enrichment.float_market_cap,
+                "volume_ratio_5d": enrichment.volume_ratio_5d,
+                "return_20d_pct": enrichment.return_20d_pct,
+                "recent_limit_up_count_20d": enrichment.recent_limit_up_count_20d,
+                "dragon_tiger_on_list": enrichment.dragon_tiger_on_list,
+                "dragon_tiger_net_buy_amount": enrichment.dragon_tiger_net_buy_amount,
+                "dragon_tiger_reason": enrichment.dragon_tiger_reason,
+                "popularity_rank": enrichment.popularity_rank,
+                "popularity_rank_change": enrichment.popularity_rank_change,
+                "popularity_snapshot_at": (
+                    enrichment.popularity_snapshot_at.isoformat()
+                    if enrichment.popularity_snapshot_at
+                    else None
+                ),
+                "position": (
+                    enrichment.position.model_dump(mode="json")
+                    if enrichment.position
+                    else None
+                ),
+            }
+            data_missing.extend(enrichment.data_missing)
+            break
+        if not recent_events:
+            data_missing.append("本地没有该股票的近期涨停事件。")
+        if not rating_context:
+            data_missing.append("本地没有该股票的首板评分补充快照。")
+
+        response = StockActivityFacts(
+            symbol=resolved_symbol,
+            name=resolved_name,
+            fetched_at=fetched_at,
+            data_as_of=kline.data_as_of if kline else None,
+            kline=kline,
+            recent_limit_up_events=recent_events,
+            rating_context=rating_context,
+            news=news,
+            data_missing=list(dict.fromkeys(data_missing)),
+        )
+        trace_output = response.model_dump(mode="json")
+        if isinstance(trace_output.get("kline"), dict):
+            trace_output["kline"].pop("bars", None)
+        return ToolResult(
+            name="stock_activity",
+            input={
+                "symbol": resolved_symbol,
+                "days": days,
+                "news_limit": news_limit,
+            },
+            output=response,
+            summary=(
+                f"已汇总 {resolved_name}({resolved_symbol}) 的收盘走势、"
+                f"{len(recent_events)} 条涨停记录和 {len(news.items)} 条个股资讯。"
+            ),
+            trace_output=trace_output,
+        )
+
     def first_board_ratings(self, trade_date: date | None = None) -> ToolResult:
         """Return explainable first-board ratings."""
 
@@ -1375,6 +1570,62 @@ class AgentToolRegistry:
         if len(contained) == 1:
             return contained.pop()
         raise ValueError(f"Cannot resolve stock symbol from: {value}")
+
+    def resolve_stock_identity(self, value: str) -> tuple[str, str]:
+        """Resolve a stock and retain its latest locally known display name."""
+
+        try:
+            symbol = self.resolve_stock_symbol(value)
+        except ValueError:
+            compact = value.strip().replace(" ", "")
+            directory = self._load_stock_name_directory()
+            exact = [
+                (symbol, name)
+                for symbol, name in directory.items()
+                if name.replace(" ", "") == compact
+            ]
+            contained = sorted(
+                (
+                    (symbol, name)
+                    for symbol, name in directory.items()
+                    if len(name.replace(" ", "")) >= 2
+                    and name.replace(" ", "") in compact
+                ),
+                key=lambda item: len(item[1]),
+                reverse=True,
+            )
+            candidates = exact or contained
+            if not candidates:
+                raise ValueError(f"Cannot resolve stock identity from: {value}") from None
+            longest_length = len(candidates[0][1])
+            longest = [item for item in candidates if len(item[1]) == longest_length]
+            if len(longest) != 1:
+                raise ValueError(f"Ambiguous stock identity: {value}") from None
+            return longest[0]
+        matching = sorted(
+            (event for event in self.events if event.symbol == symbol),
+            key=lambda event: event.trade_date,
+            reverse=True,
+        )
+        if matching:
+            return symbol, matching[0].name
+        compact = value.strip().replace(" ", "")
+        if compact and not compact.isdigit() and len(compact) <= 20:
+            return symbol, compact
+        return symbol, self._load_stock_name_directory().get(symbol, symbol)
+
+    def _load_stock_name_directory(self) -> dict[str, str]:
+        """Load the bounded A-share name directory once per Agent request."""
+
+        if self._stock_name_directory is not None:
+            return self._stock_name_directory
+        try:
+            self._stock_name_directory = (
+                self.hithink_collector.collect_a_share_symbol_names()
+            )
+        except Exception:  # noqa: BLE001
+            self._stock_name_directory = {}
+        return self._stock_name_directory
 
     def rating_backtest(
         self,

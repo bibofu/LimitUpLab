@@ -14,7 +14,7 @@ from app.config import env_bool
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_PATH = BACKEND_ROOT / "data" / "limituplab.sqlite"
-CURRENT_SCHEMA_VERSION = 3
+CURRENT_SCHEMA_VERSION = 4
 DEFAULT_BUSY_TIMEOUT_MS = 5_000
 DEFAULT_LOCK_RETRY_ATTEMPTS = 3
 DEFAULT_LOCK_RETRY_BASE_DELAY_SECONDS = 0.05
@@ -546,6 +546,41 @@ def _apply_schema(connection: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_agent_cache_scope_expires
         ON agent_cache (scope, expires_at)
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS stock_news_items (
+            item_id TEXT PRIMARY KEY,
+            symbol TEXT NOT NULL,
+            name TEXT NOT NULL,
+            title TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            published_at TEXT NOT NULL,
+            source TEXT NOT NULL,
+            url TEXT NOT NULL,
+            item_type TEXT NOT NULL,
+            relevance_score REAL NOT NULL,
+            fetched_at TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_stock_news_symbol_published
+        ON stock_news_items (symbol, published_at DESC)
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS stock_news_sync_state (
+            symbol TEXT NOT NULL,
+            source TEXT NOT NULL,
+            last_attempt_at TEXT NOT NULL,
+            last_success_at TEXT,
+            error_message TEXT,
+            PRIMARY KEY (symbol, source)
+        )
         """
     )
     connection.execute(

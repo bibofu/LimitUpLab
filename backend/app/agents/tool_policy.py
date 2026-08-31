@@ -47,6 +47,8 @@ class QuestionSignals:
     sector_performance: bool
     hot_stock_ranking: bool
     finance_news: bool
+    stock_news: bool
+    stock_activity: bool
     web_search: bool
     daily_board_promotion: bool
     limit_up_events: bool
@@ -103,6 +105,20 @@ class QuestionSignals:
                 and looks_like_finance_news_question(message)
             )
         )
+        stock_news = (
+            "stock_news" in capability_set
+            or (
+                use_lexical_fallback
+                and looks_like_stock_news_question(message)
+            )
+        )
+        stock_activity = (
+            "stock_activity" in capability_set
+            or (
+                use_lexical_fallback
+                and looks_like_stock_activity_question(message)
+            )
+        )
         daily_board_promotion = (
             "board_promotion" in capability_set
             or (
@@ -146,13 +162,15 @@ class QuestionSignals:
                 or market_environment
             ),
             finance_news=finance_news,
+            stock_news=stock_news,
+            stock_activity=stock_activity,
             web_search=(
                 "web_research" in capability_set
                 or (
                     use_lexical_fallback
                     and looks_like_web_search_question(message)
                 )
-            ) and not finance_news,
+            ) and not finance_news and not stock_news and not stock_activity,
             daily_board_promotion=daily_board_promotion,
             limit_up_events=(
                 "limit_up_pool" in capability_set
@@ -212,6 +230,8 @@ class QuestionSignals:
                 self.market_index_trend,
                 self.hot_stock_ranking,
                 self.finance_news,
+                self.stock_news,
+                self.stock_activity,
                 self.web_search,
                 self.daily_board_promotion,
                 self.limit_up_events,
@@ -304,7 +324,7 @@ class AgentToolPolicyEngine:
             if not candidate:
                 continue
             try:
-                return self.tools.resolve_stock_symbol(candidate)
+                return self.tools.resolve_stock_identity(candidate)[0]
             except ValueError:
                 continue
         return None
@@ -393,6 +413,26 @@ class AgentToolPolicyEngine:
                 ),
                 matches=lambda signals: signals.finance_news,
                 repair=self._repair_finance_news,
+            ),
+            ToolRepairRule(
+                name="stock-news-grounding",
+                tool_name="stock_news",
+                reason=(
+                    "A named-stock news answer requires resolved, timestamped and "
+                    "source-attributed stock-news evidence."
+                ),
+                matches=lambda signals: signals.stock_news,
+                repair=self._repair_stock_news,
+            ),
+            ToolRepairRule(
+                name="stock-activity-grounding",
+                tool_name="stock_activity",
+                reason=(
+                    "A named-stock activity summary requires after-close trend, event, "
+                    "enrichment and news evidence."
+                ),
+                matches=lambda signals: signals.stock_activity,
+                repair=self._repair_stock_activity,
             ),
             ToolRepairRule(
                 name="sector-performance-grounding",
@@ -694,6 +734,56 @@ class AgentToolPolicyEngine:
             fact_name="finance_news",
             fact_value=response.model_dump(mode="json"),
             references=[item.url for item in response.items],
+        )
+
+    def _repair_stock_news(
+        self,
+        request: AgentChatRequest,
+        signals: QuestionSignals,
+        execution: ToolExecution,
+        context_symbol: str | None,
+    ) -> None:
+        del signals
+        target = self.resolve_stock_target(request, context_symbol=context_symbol)
+        if target is None:
+            raise ValueError("Cannot resolve the requested stock for news lookup.")
+        result = self.tools.stock_news(
+            target,
+            days=extract_stock_news_days(request.message),
+            limit=extract_result_limit(request.message) or 10,
+        )
+        response = result.output
+        self._record_success(
+            execution,
+            result=result,
+            fact_name="stock_news",
+            fact_value=response.model_dump(mode="json"),
+            references=[item.url for item in response.items],
+        )
+
+    def _repair_stock_activity(
+        self,
+        request: AgentChatRequest,
+        signals: QuestionSignals,
+        execution: ToolExecution,
+        context_symbol: str | None,
+    ) -> None:
+        del signals
+        target = self.resolve_stock_target(request, context_symbol=context_symbol)
+        if target is None:
+            raise ValueError("Cannot resolve the requested stock for activity lookup.")
+        result = self.tools.stock_activity(
+            target,
+            days=extract_stock_news_days(request.message),
+            news_limit=extract_result_limit(request.message) or 8,
+        )
+        response = result.output
+        self._record_success(
+            execution,
+            result=result,
+            fact_name="stock_activity",
+            fact_value=result.trace_output,
+            references=[item.url for item in response.news.items],
         )
 
     def _repair_hot_stock_ranking(
@@ -1083,6 +1173,20 @@ def extract_kline_days(message: str) -> int:
     return max(5, min(int(match.group(1)), 60))
 
 
+def extract_stock_news_days(message: str) -> int:
+    """Extract a bounded calendar-day news window, defaulting to seven days."""
+
+    compact = re.sub(r"\s+", "", message)
+    if any(term in compact for term in ("近一周", "最近一周", "过去一周", "本周")):
+        return 7
+    if any(term in compact for term in ("近一个月", "最近一个月", "过去一个月", "近一月")):
+        return 30
+    match = re.search(r"(?:最近|近|过去)?(\d{1,2})(?:个)?(?:天|日)", compact)
+    if match:
+        return max(1, min(int(match.group(1)), 30))
+    return 7
+
+
 def extract_market_index_days(message: str) -> int:
     """Extract a bounded broad-index window in trading days."""
 
@@ -1404,6 +1508,38 @@ def looks_like_finance_news_question(message: str) -> bool:
     return asks_news and broad_scope and not specific_scope
 
 
+def looks_like_stock_news_question(message: str) -> bool:
+    """Return whether text asks for news about one named stock or company."""
+
+    compact = re.sub(r"[\s，。！？,.!?]", "", message).lower()
+    news_terms = ("新闻", "资讯", "消息", "公告", "研报", "舆情")
+    if not any(term in compact for term in news_terms):
+        return False
+    if any(term in compact for term in ("板块", "行业", "宏观", "政策")):
+        return False
+    explicit_stock_scope = any(
+        term in compact
+        for term in ("这只股票", "这只票", "该股", "个股", "这家公司", "该公司")
+    ) or re.search(r"(?<!\d)\d{6}(?!\d)", compact) is not None
+    return explicit_stock_scope or _has_specific_news_subject(compact, news_terms)
+
+
+def looks_like_stock_activity_question(message: str) -> bool:
+    """Return whether text requests a broad recent update for one stock."""
+
+    compact = re.sub(r"[\s，。！？,.!?]", "", message).lower()
+    activity_terms = ("动态", "近况", "发生了什么", "最近怎么样", "近期怎么样")
+    if not any(term in compact for term in activity_terms):
+        return False
+    if any(term in compact for term in ("板块", "行业", "市场", "大盘")):
+        return False
+    explicit_stock_scope = any(
+        term in compact
+        for term in ("这只股票", "这只票", "该股", "个股", "这家公司", "该公司")
+    ) or re.search(r"(?<!\d)\d{6}(?!\d)", compact) is not None
+    return explicit_stock_scope or _has_specific_news_subject(compact, activity_terms)
+
+
 def _has_specific_news_subject(
     compact: str,
     news_terms: tuple[str, ...],
@@ -1452,6 +1588,11 @@ def _has_specific_news_subject(
         if marker in compact and has_entity(compact.split(marker, 1)[0]):
             return True
     for news_term in news_terms:
+        plain_entity_suffix = f"的{news_term}"
+        if compact.endswith(plain_entity_suffix) and has_entity(
+            compact[: -len(plain_entity_suffix)]
+        ):
+            return True
         for modifier in ("最新", "最近", "近期", "今天", "今日"):
             suffix = f"{modifier}的{news_term}"
             plain_suffix = f"{modifier}{news_term}"

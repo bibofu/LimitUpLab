@@ -165,6 +165,34 @@ class FinanceNewsFacts(BaseModel):
     items: list[FinanceNewsItem] = Field(default_factory=list)
 
 
+class StockNewsItem(BaseModel):
+    """One stock-specific article normalized from a structured provider."""
+
+    symbol: str
+    name: str
+    title: str
+    summary: str
+    published_at: datetime
+    source: str
+    url: str
+    item_type: str
+    relevance_score: float
+    fetched_at: datetime
+
+
+class StockNewsFacts(BaseModel):
+    """Recent news evidence for one resolved A-share stock."""
+
+    symbol: str
+    name: str
+    fetched_at: datetime
+    window_days: int
+    cache_status: str
+    sources: list[str] = Field(default_factory=list)
+    items: list[StockNewsItem] = Field(default_factory=list)
+    data_missing: list[str] = Field(default_factory=list)
+
+
 class StockKLineBar(BaseModel):
     """Daily OHLCV bar for stock detail review."""
 
@@ -196,6 +224,20 @@ class StockKLineFacts(BaseModel):
     max_drawdown_pct: float | None = None
     sources: list[str] = Field(default_factory=list)
     bars: list[StockKLineBar] = Field(default_factory=list)
+
+
+class StockActivityFacts(BaseModel):
+    """After-close activity evidence assembled for one A-share stock."""
+
+    symbol: str
+    name: str
+    fetched_at: datetime
+    data_as_of: date | None = None
+    kline: StockKLineFacts | None = None
+    recent_limit_up_events: list[dict[str, Any]] = Field(default_factory=list)
+    rating_context: dict[str, Any] = Field(default_factory=dict)
+    news: StockNewsFacts
+    data_missing: list[str] = Field(default_factory=list)
 
 
 class StockIntradayKLineBar(BaseModel):
@@ -1593,6 +1635,8 @@ def _evidence_title_kind(tool_name: str) -> tuple[str, str]:
         "dragon_tiger_list": ("同花顺龙虎榜", "market"),
         "remote_limit_up_pool": ("同花顺涨停池", "limit_up_events"),
         "finance_news": ("财经快讯聚合", "tool"),
+        "stock_news": ("个股资讯", "tool"),
+        "stock_activity": ("个股近期动态", "tool"),
         "web_search": ("公开网络检索", "tool"),
         "first_board_ratings": ("首板候选池与评分", "candidate_pool"),
         "limit_up_events": ("涨停事件查询", "limit_up_events"),
@@ -1643,6 +1687,8 @@ def _repair_reason(
         "limit_up_events": "用户询问当天涨停/连板/炸板明细，后端补充 limit_up_events。",
         "sector_performance": "用户询问整个行业板块表现，后端补充 sector_performance。",
         "finance_news": "用户询问最新财经快讯，后端补充 finance_news。",
+        "stock_news": "用户询问指定股票的近期资讯，后端补充 stock_news。",
+        "stock_activity": "用户询问指定股票的近期动态，后端补充 stock_activity。",
         "web_search": "用户询问最新外部信息，后端补充 web_search。",
         "rating_backtest": "用户询问评分效果或回测，后端补充 rating_backtest。",
         "rating_evaluation": "用户询问模型复盘或错判样本，后端补充 rating_evaluation。",

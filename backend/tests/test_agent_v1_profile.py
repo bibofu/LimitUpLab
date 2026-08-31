@@ -17,7 +17,13 @@ from app.agents.tools import (
     AgentToolRegistry,
     ToolResult,
 )
-from app.models import AgentChatRequest, FinanceNewsFacts, FinanceNewsItem
+from app.models import (
+    AgentChatRequest,
+    FinanceNewsFacts,
+    FinanceNewsItem,
+    StockNewsFacts,
+    StockNewsItem,
+)
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.llm_provider import LLMProvider, LLMResult
 from app.services.sample_data import SAMPLE_EVENTS
@@ -118,6 +124,36 @@ class FinanceNewsPolicyRepairProvider(LLMProvider):
         )
 
 
+class StockNewsPolicyRepairProvider(LLMProvider):
+    """Declare the stock-news capability and let the contract add its evidence tool."""
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        del user_prompt
+        if "first job is to decide which tools are needed" in system_prompt:
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": "stock_news",
+                        "skill_name": "stock-news",
+                        "capabilities": ["stock_news"],
+                        "safety": "normal",
+                        "tool_calls": [],
+                        "answer_directly": "",
+                    }
+                ),
+                model="fake-v1-planner",
+                provider="fake",
+            )
+        return LLMResult(
+            content=(
+                "思泉新材(301489)在 2026-08-31 发布一条公告类报道。"
+                "来源：测试资讯源，原文：https://example.com/301489"
+            ),
+            model="fake-v1-answer",
+            provider="fake",
+        )
+
+
 class UnexpectedLLMProvider(LLMProvider):
     """Fail if a V1 scope rejection reaches the LLM."""
 
@@ -162,6 +198,8 @@ class AgentV1ProfileTest(unittest.TestCase):
         self.assertTrue(schema_names.isdisjoint(V1_DEFERRED_REALTIME_TOOL_NAMES))
         self.assertIn("hot_stock_ranking", registry.schema_prompt())
         self.assertIn("finance_news", registry.schema_prompt())
+        self.assertIn("stock_news", registry.schema_prompt())
+        self.assertIn("stock_activity", registry.schema_prompt())
         self.assertIn("sector_performance", registry.schema_prompt())
         self.assertNotIn("web_search", schema_names)
 
@@ -183,6 +221,7 @@ class AgentV1ProfileTest(unittest.TestCase):
         self.assertIn("limit-up-pool", catalog)
         self.assertIn("popularity", catalog)
         self.assertIn("finance-news", catalog)
+        self.assertIn("stock-news", catalog)
         self.assertIsNotNone(
             AGENT_SKILL_REGISTRY.resolve(
                 "popularity",
@@ -193,6 +232,13 @@ class AgentV1ProfileTest(unittest.TestCase):
         self.assertIsNotNone(
             AGENT_SKILL_REGISTRY.resolve(
                 "finance-news",
+                [],
+                V1_CLOSED_MARKET_TOOL_NAMES,
+            )
+        )
+        self.assertIsNotNone(
+            AGENT_SKILL_REGISTRY.resolve(
+                "stock-news",
                 [],
                 V1_CLOSED_MARKET_TOOL_NAMES,
             )
@@ -343,6 +389,54 @@ class AgentV1ProfileTest(unittest.TestCase):
         self.assertIn("央行", response.answer)
         self.assertIn("https://example.com/macro", response.references)
         finance_news.assert_called_once_with(query=None, limit=8, hours=48)
+
+    @patch("app.agents.tools.AgentToolRegistry.stock_news")
+    def test_named_stock_news_question_is_grounded_in_v1(self, stock_news) -> None:
+        facts = StockNewsFacts(
+            symbol="301489",
+            name="思泉新材",
+            fetched_at=datetime(2026, 8, 31, 9, 30, tzinfo=timezone.utc),
+            window_days=7,
+            cache_status="live",
+            sources=["测试资讯源"],
+            items=[
+                StockNewsItem(
+                    symbol="301489",
+                    name="思泉新材",
+                    title="思泉新材发布公告",
+                    summary="公告摘要",
+                    published_at=datetime(2026, 8, 31, 9, 0, tzinfo=timezone.utc),
+                    source="测试资讯源",
+                    url="https://example.com/301489",
+                    item_type="announcement_report",
+                    relevance_score=1.0,
+                    fetched_at=datetime(2026, 8, 31, 9, 30, tzinfo=timezone.utc),
+                )
+            ],
+        )
+        stock_news.return_value = ToolResult(
+            name="stock_news",
+            input={"symbol": "301489", "days": 7, "limit": 10},
+            output=facts,
+            summary="命中一条个股资讯。",
+            trace_output=facts.model_dump(mode="json"),
+        )
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="v1-stock-news",
+                message="思泉新材最近有什么新闻",
+            ),
+            events=SAMPLE_EVENTS,
+            repository=self.repository,
+            llm_provider=StockNewsPolicyRepairProvider(),
+        )
+
+        self.assertIn("stock_news", response.tool_calls)
+        self.assertNotIn("web_search", response.tool_calls)
+        self.assertIn("思泉新材(301489)", response.answer)
+        self.assertIn("https://example.com/301489", response.references)
+        stock_news.assert_called_once_with("301489", days=7, limit=10)
 
     def test_v1_scope_eval_cases_are_rejected_before_llm(self) -> None:
         fixture_path = (

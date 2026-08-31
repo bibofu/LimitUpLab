@@ -114,6 +114,8 @@ scoring_version
 | `limit_up_events` | 查询首板、连板、炸板及题材相关涨停事件 |
 | `daily_board_promotion` | 统计近 5 日总晋级率、首板到二板率、连板梯队及成功股票明细 |
 | `stock_kline` | 查询个股近期 K 线和衍生指标 |
+| `stock_news` | 查询指定股票近 1 至 30 天的结构化个股资讯，保留来源、时间和链接 |
+| `stock_activity` | 汇总指定股票的收盘走势、近期涨停记录、评分补充事实和个股资讯 |
 | `first_board_critic` | 复核评分是否过度乐观或证据不足 |
 | `rating_backtest` | 查看评分分桶历史表现 |
 | `rating_evaluation` | 评价历史预测结果和错误样本 |
@@ -121,7 +123,7 @@ scoring_version
 | `prediction_quality_audit` | 审计预测来源、Outcome 覆盖和基线表现 |
 | `scoring_policy_status` | 查询 Champion、Challenger 和晋级原因 |
 
-默认配置 `LIMITUPLAB_AGENT_PROFILE=v1_close_review` 会在 Schema、Skill、Tool Policy 和执行器四层统一限制工具。V1 允许按需读取带来源和采集时间的 `hot_stock_ranking` 热度快照、`sector_performance` 行业强弱榜，以及东方财富、同花顺的 `finance_news` 财经快讯；这些外部事实不参与首板评分，也不被解释为推荐。`remote_limit_up_pool` 和 `web_search` 仅保留在 `extended` 研发配置中，供 V2 能力开发使用。即使 LLM 伪造这些未开放工具调用，V1 执行器也会拒绝执行。
+默认配置 `LIMITUPLAB_AGENT_PROFILE=v1_close_review` 会在 Schema、Skill、Tool Policy 和执行器四层统一限制工具。V1 允许按需读取带来源和采集时间的 `hot_stock_ranking` 热度快照、`sector_performance` 行业强弱榜、`finance_news` 综合财经快讯，以及带 SQLite 缓存的 `stock_news`、`stock_activity` 个股资讯与收盘后动态；这些外部事实不参与首板评分，也不被解释为推荐。`remote_limit_up_pool` 和 `web_search` 仅保留在 `extended` 研发配置中，供 V2 能力开发使用。即使 LLM 伪造这些未开放工具调用，V1 执行器也会拒绝执行。
 
 Agent Query Contract v3 先把不同说法归一为稳定能力 ID，例如 `market_environment`、`limit_up_pool`、`first_board_rating` 和 `prediction_review`。组合问题可以选择多个能力；多轮追问通过 `standalone`、`entity_followup`、`source_refinement` 区分独立问题、实体继承和上一轮结果集交叉查询，并只继承 Planner 明确选择的 `context_capabilities`。有显式能力契约时，旧关键词判断不再参与语义路由，只在旧 Provider 或 Planner 未输出能力时兜底。
 
@@ -554,7 +556,7 @@ cd backend
 .\.venv\Scripts\python.exe scripts\run_agent_eval.py
 ```
 
-运行 122 条自然语言改写的真实 Planner 三轮评测：
+运行 138 条自然语言改写的真实 Planner 三轮评测：
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_agent_eval.py --suite paraphrase --mode live-llm --summary-only
@@ -623,7 +625,7 @@ npm.cmd run build
 - 当前审计只有 8 个 Top10 次日 Outcome 完整日，覆盖率仍需要持续补齐。
 - 当前预测准确性不高，不能宣称系统已经实现稳定选股。
 - Query Contract v2 已覆盖涨停事件主链路，但其他工具仍需要逐步补齐同等级的结构化契约和更大规模真实 LLM Eval。
-- 公告检索目前主要依赖通用搜索，尚未接入完整的结构化公告数据源。
+- 个股资讯已接入东方财富结构化搜索并持久化缓存；正式公告原文仍需补充交易所或巨潮资讯专用数据源。
 - 当前限流适用于单 Uvicorn 进程；异步 Worker、跨实例 Redis 限流和上游 LLM 主动取消尚未完成。
 - 用户系统、PostgreSQL、Redis、CI/CD 和多实例部署尚未完成；当前 Docker 配置适用于单机公开 Demo。
 
@@ -635,7 +637,7 @@ npm.cmd run build
 2. 持续观察 v3 Challenger 对现行评分、最早封板和固定随机基线的样本外优势。
 3. 完成 V1 Top10 不可变预测、D+1 晋级和 D+1 至 D+5 Outcome 的端到端验收。
 4. 持续扩充 V1 收盘数据问答评测，覆盖工具失败、日期截止点和多轮指代。
-5. V2 再为盘中板块、个股新闻搜索和更多策略建立独立数据契约与 Eval；需要横向扩容时迁移 PostgreSQL、Redis 限流和异步 Worker。
+5. V2 再为盘中板块、正式公告原文和更多策略建立独立数据契约与 Eval；需要横向扩容时迁移 PostgreSQL、Redis 限流和异步 Worker。
 
 详细进度见 [Tasks.md](./docs/Tasks.md)，完整需求见 [需求.md](./docs/%E9%9C%80%E6%B1%82.md)。
 

@@ -1,5 +1,5 @@
 import unittest
-from datetime import date
+from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
@@ -20,6 +20,8 @@ from app.models import (
     MarketSummary,
     SectorPerformanceFacts,
     SectorRankingItem,
+    StockNewsFacts,
+    StockNewsItem,
     build_agent_tool_policy_audit,
 )
 from app.services.sample_data import SAMPLE_EVENTS
@@ -285,16 +287,18 @@ class AgentToolPolicyTest(unittest.TestCase):
                 self.assertTrue(signals.finance_news)
                 self.assertFalse(signals.web_search)
 
-    def test_company_or_sector_news_keeps_specific_research_scope(self) -> None:
-        for message in (
-            "最新的半导体行业新闻",
-            "这家公司最近有什么消息",
-            "关于中电鑫龙的新闻",
-        ):
+    def test_company_news_uses_stock_news_while_sector_news_stays_web_scope(self) -> None:
+        for message in ("这家公司最近有什么消息", "关于中电鑫龙的新闻"):
             with self.subTest(message=message):
                 signals = QuestionSignals.from_message(message)
                 self.assertFalse(signals.finance_news)
-                self.assertTrue(signals.web_search)
+                self.assertTrue(signals.stock_news)
+                self.assertFalse(signals.web_search)
+
+        sector_signals = QuestionSignals.from_message("最新的半导体行业新闻")
+        self.assertFalse(sector_signals.finance_news)
+        self.assertFalse(sector_signals.stock_news)
+        self.assertTrue(sector_signals.web_search)
 
     def test_market_environment_repairs_all_required_evidence_groups(self) -> None:
         request = AgentChatRequest(
@@ -448,11 +452,70 @@ class AgentToolPolicyTest(unittest.TestCase):
             enrich_performance=True,
         )
 
-    def test_company_news_still_uses_generic_web_search(self) -> None:
+    def test_company_news_uses_structured_stock_news(self) -> None:
         signals = QuestionSignals.from_message("中电鑫龙有什么最新消息")
 
         self.assertFalse(signals.finance_news)
-        self.assertTrue(signals.web_search)
+        self.assertTrue(signals.stock_news)
+        self.assertFalse(signals.stock_activity)
+        self.assertFalse(signals.web_search)
+
+    def test_company_activity_uses_composite_stock_activity(self) -> None:
+        signals = QuestionSignals.from_message("中电鑫龙最近有什么动态")
+
+        self.assertTrue(signals.stock_activity)
+        self.assertFalse(signals.stock_news)
+        self.assertFalse(signals.web_search)
+
+    def test_stock_news_followup_uses_context_symbol(self) -> None:
+        request = AgentChatRequest(
+            session_id="policy-stock-news-context",
+            message="它最近有公告吗",
+        )
+        execution = self._empty_execution()
+        facts = StockNewsFacts(
+            symbol="301489",
+            name="思泉新材",
+            fetched_at=datetime(2026, 8, 31, 9, 30, tzinfo=timezone.utc),
+            window_days=7,
+            cache_status="live",
+            sources=["测试资讯源"],
+            items=[
+                StockNewsItem(
+                    symbol="301489",
+                    name="思泉新材",
+                    title="思泉新材发布公告",
+                    summary="公告摘要",
+                    published_at=datetime(2026, 8, 31, 9, 0, tzinfo=timezone.utc),
+                    source="测试资讯源",
+                    url="https://example.com/301489",
+                    item_type="announcement_report",
+                    relevance_score=1.0,
+                    fetched_at=datetime(2026, 8, 31, 9, 30, tzinfo=timezone.utc),
+                )
+            ],
+        )
+        with patch.object(
+            self.tools,
+            "stock_news",
+            return_value=ToolResult(
+                name="stock_news",
+                input={"symbol": "301489", "days": 7, "limit": 10},
+                output=facts,
+                summary="命中一条个股资讯。",
+                trace_output=facts.model_dump(mode="json"),
+            ),
+        ) as stock_news:
+            repaired = self.policy.reconcile(
+                request=request,
+                execution=execution,
+                context_symbol="301489",
+                capabilities=("stock_news",),
+            )
+
+        self.assertEqual(repaired, ["stock_news"])
+        stock_news.assert_called_once_with("301489", days=7, limit=10)
+        self.assertEqual(execution["facts"]["stock_news"]["symbol"], "301489")
 
     def test_scoring_policy_repair_returns_champion_status(self) -> None:
         request = AgentChatRequest(

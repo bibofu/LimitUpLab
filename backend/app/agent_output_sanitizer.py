@@ -15,6 +15,8 @@ INTERNAL_TOOL_LABELS: dict[str, str] = {
     "dragon_tiger_list": "龙虎榜数据",
     "remote_limit_up_pool": "同花顺涨停池",
     "finance_news": "财经资讯",
+    "stock_news": "个股资讯",
+    "stock_activity": "个股近期动态",
     "web_search": "公开信息",
     "first_board_ratings": "首板评级",
     "first_board_filter": "首板筛选结果",
