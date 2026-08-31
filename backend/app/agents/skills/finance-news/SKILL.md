@@ -5,7 +5,7 @@ allowed-tools: finance_news
 metadata:
   required-tools: ["finance_news"]
   default-tool-arguments: {"finance_news": {"query": null, "limit": 8, "hours": 48}}
-  examples: ["最新的财经新闻", "今天有什么财经快讯", "最近有哪些重要市场新闻"]
+  examples: ["最新的财经新闻", "最新的新闻", "今天有什么财经快讯", "最近有哪些重要市场新闻"]
 ---
 
 # 财经快讯摘要

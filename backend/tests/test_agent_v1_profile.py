@@ -331,7 +331,7 @@ class AgentV1ProfileTest(unittest.TestCase):
         response = answer_first_board_chat(
             AgentChatRequest(
                 session_id="v1-latest-finance-news",
-                message="最新的财经新闻",
+                message="最新的新闻",
             ),
             events=SAMPLE_EVENTS,
             repository=self.repository,

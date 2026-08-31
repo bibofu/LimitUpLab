@@ -74,7 +74,7 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
     ),
     AgentCapability(
         "finance_news",
-        "查询最新综合财经新闻和市场快讯。",
+        "查询最新综合财经新闻和市场快讯；用户在金融项目中只说最新新闻、最近消息或新闻摘要且未限定公司/板块时也属于此能力。",
         (
             CapabilityToolRequirement(
                 "finance_news", {"query": None, "limit": 8, "hours": 48}

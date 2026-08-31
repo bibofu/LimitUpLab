@@ -656,7 +656,8 @@ Critic 输出能解释为什么降低或不降低置信度。
   - 新增 17 类标准业务能力；Planner 可为组合问题输出多个 capability，能力契约自动补齐最低证据工具。
   - 显式 Planner/Skill 能力接管 Tool Policy 语义路由；旧 `looks_like_*` 仅在能力缺失或旧 Provider 兼容场景下兜底。
   - 新增 `standalone`、`entity_followup`、`source_refinement` 上下文模式，以及选择性 `context_capabilities` 继承，避免“这些票”“其中”“再结合”等追问丢失上一轮数据源。
-  - `agent_paraphrase_eval_cases.json` 扩展为 121 条静态改写和组合问题，按 11 个能力族组织并保留独立 case id。
+  - `agent_paraphrase_eval_cases.json` 扩展为 122 条静态改写和组合问题，按 11 个能力族组织并保留独立 case id。
+  - 修复未限定主体的“最新的新闻”“最近的消息”“新闻摘要”等通用表达：在金融产品语境中统一使用带时间戳的综合财经快讯；带公司、行业、板块或公告主体的新闻问题仍保持具体研究边界。
   - 新增 10 个双追问会话场景，共 20 个 context-dependent turn；评测使用与生产一致的消息 metadata 和最近能力焦点。
   - `run_agent_eval.py` 新增 `paraphrase`、`conversation` suite 和 `--case-filter` 定向复测；两类 suite 使用生产 Planner-only 路径，默认三轮执行且不重复调用行情工具。
   - 2026-08-30 DeepSeek 全量实测：单轮 121/121 case 通过，363 次调用能力与工具命中率 99.72%，119/121 三轮完全稳定；多轮 10/10 场景和 60/60 turn 通过，9/10 场景三轮完全稳定。

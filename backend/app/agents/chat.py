@@ -73,7 +73,7 @@ from app.repositories import SQLiteFirstBoardRepository
 from app.services.llm_provider import LLMProvider, get_llm_provider
 
 
-CHAT_AGENT_VERSION = "first-board-chat-policy-v8-market-environment"
+CHAT_AGENT_VERSION = "first-board-chat-policy-v9-generic-finance-news"
 _FORCE_TEMPLATE_ANSWER_OVERRIDE: ContextVar[bool | None] = ContextVar(
     "force_template_answer_override",
     default=None,
@@ -1071,7 +1071,7 @@ def _tool_planner_system_prompt(
         "For broad-market, major-index, Shanghai Composite, Shenzhen Component or ChiNext Index performance over multiple days, call market_index_trend with the requested trading-day window; never infer index performance from limit-up counts. "
         "If the user asks only for the market/index curve or index return, do not expand it into market_environment, sector_performance or popularity. "
         "For current hot, popular, popularity-ranked, or attention-ranked stocks, call hot_stock_ranking; default to 20 rows when the user gives no count, state the source and Beijing capture time, and say that popularity reflects attention and does not constitute a trading signal. In this answer, never use the exact Chinese tokens 买入, 卖出, 仓位, 目标价, or 收益承诺, even inside a disclaimer. "
-        "For broad latest, today, or recent financial-news and market-flash questions, call finance_news with a 48-hour window and up to 8 items; state the Beijing retrieval time and each item's publication time, source, title, concise summary and URL. Preserve the tool's item order and do not claim chronological ordering unless the timestamps actually descend. Distinguish reported facts from any market-impact inference, and never fill missing news from memory. For a named company, one sector, an announcement, or a specific event, finance_news is insufficient and public web search remains outside V1. "
+        "For broad latest, today, or recent financial-news and market-flash questions, call finance_news with a 48-hour window and up to 8 items. In this financial product, an unqualified request such as 最新的新闻, 最近的消息, 有什么新闻 or 新闻摘要 means the broad finance_news capability unless the user names a company, sector, announcement or event. State the Beijing retrieval time and each item's publication time, source, title, concise summary and URL. Preserve the tool's item order and do not claim chronological ordering unless the timestamps actually descend. Distinguish reported facts from any market-impact inference, and never fill missing news from memory. For a named company, one sector, an announcement, or a specific event, finance_news is insufficient and public web search remains outside V1. "
         "For market-overview or sentiment questions, call market_summary but report only objective counts and rates; never assign categorical labels such as heating, divergence, cooling, risk-on or risk-off. "
         "For questions about one stock's K-line, price trend, moving averages, recent rise/fall, volume, or drawdown, call stock_kline. "
         "Historical similar-case retrieval is retired. If the user asks for similar stocks or cases, do not invent or infer matches; answer directly that this capability is unavailable and suggest score evidence, stock_kline, or tracked prediction review instead. "

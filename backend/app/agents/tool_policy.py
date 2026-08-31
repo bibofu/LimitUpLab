@@ -1366,21 +1366,99 @@ def looks_like_finance_news_question(message: str) -> bool:
     """Return whether the user asks for a broad current financial-news digest."""
 
     compact = re.sub(r"[\s，。！？,.!?]", "", message).lower()
-    if "财经" in compact and any(term in compact for term in ("新闻", "快讯", "资讯", "消息")):
+    news_terms = ("新闻", "快讯", "资讯", "消息", "消息面")
+    if "财经" in compact and any(term in compact for term in news_terms):
         return True
-    if any(
-        phrase in compact
-        for phrase in (
-            "今天有什么新闻",
-            "今日有什么新闻",
-            "最近有什么新闻",
-            "有什么最新新闻",
-            "最新市场快讯",
-            "今日市场快讯",
-            "最新市场新闻",
+    asks_news = any(term in compact for term in news_terms)
+    broad_scope = any(
+        term in compact
+        for term in (
+            "最新",
+            "今天",
+            "今日",
+            "近期",
+            "最近",
+            "这两天",
+            "刚刚",
+            "刚发生",
+            "有什么",
+            "汇总",
+            "总结",
+            "整理",
         )
-    ):
-        return not any(term in compact for term in ("个股", "公司", "板块", "关于"))
+    ) or compact in news_terms
+    specific_scope = any(
+        term in compact
+        for term in (
+            "个股",
+            "公司",
+            "板块",
+            "行业",
+            "公告",
+            "研报",
+            "关于",
+            "为什么",
+            "原因",
+        )
+    ) or _has_specific_news_subject(compact, news_terms)
+    return asks_news and broad_scope and not specific_scope
+
+
+def _has_specific_news_subject(
+    compact: str,
+    news_terms: tuple[str, ...],
+) -> bool:
+    """Detect an entity prefix without maintaining a brittle stock-name list."""
+
+    generic_prefix_terms = (
+        "请",
+        "帮我",
+        "给我",
+        "麻烦",
+        "看一下",
+        "看看",
+        "整理一下",
+        "整理",
+        "汇总",
+        "总结",
+        "概括",
+        "补一下",
+        "今天",
+        "今日",
+        "最近",
+        "近期",
+        "这两天",
+        "刚刚",
+        "刚发生",
+        "最新",
+        "的",
+        "财经圈",
+        "财经",
+        "金融市场",
+        "资本市场",
+        "a股市场",
+        "a股",
+        "市场",
+        "宏观",
+    )
+
+    def has_entity(prefix: str) -> bool:
+        residue = prefix
+        for term in sorted(generic_prefix_terms, key=len, reverse=True):
+            residue = residue.replace(term, "")
+        return bool(residue)
+
+    for marker in ("有什么", "有哪些", "出了哪些", "发生了什么"):
+        if marker in compact and has_entity(compact.split(marker, 1)[0]):
+            return True
+    for news_term in news_terms:
+        for modifier in ("最新", "最近", "近期", "今天", "今日"):
+            suffix = f"{modifier}的{news_term}"
+            plain_suffix = f"{modifier}{news_term}"
+            if compact.endswith(suffix) and has_entity(compact[: -len(suffix)]):
+                return True
+            if compact.endswith(plain_suffix) and has_entity(compact[: -len(plain_suffix)]):
+                return True
     return False
 
 

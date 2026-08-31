@@ -554,7 +554,7 @@ cd backend
 .\.venv\Scripts\python.exe scripts\run_agent_eval.py
 ```
 
-运行 121 条自然语言改写的真实 Planner 三轮评测：
+运行 122 条自然语言改写的真实 Planner 三轮评测：
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_agent_eval.py --suite paraphrase --mode live-llm --summary-only

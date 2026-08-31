@@ -273,10 +273,28 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertFalse(signals.first_board_facts)
 
     def test_broad_finance_news_uses_specialized_feed(self) -> None:
-        signals = QuestionSignals.from_message("有什么最新财经新闻")
+        for message in (
+            "有什么最新财经新闻",
+            "最新的新闻",
+            "最近的消息",
+            "新闻",
+            "帮我整理一下近期资讯",
+        ):
+            with self.subTest(message=message):
+                signals = QuestionSignals.from_message(message)
+                self.assertTrue(signals.finance_news)
+                self.assertFalse(signals.web_search)
 
-        self.assertTrue(signals.finance_news)
-        self.assertFalse(signals.web_search)
+    def test_company_or_sector_news_keeps_specific_research_scope(self) -> None:
+        for message in (
+            "最新的半导体行业新闻",
+            "这家公司最近有什么消息",
+            "关于中电鑫龙的新闻",
+        ):
+            with self.subTest(message=message):
+                signals = QuestionSignals.from_message(message)
+                self.assertFalse(signals.finance_news)
+                self.assertTrue(signals.web_search)
 
     def test_market_environment_repairs_all_required_evidence_groups(self) -> None:
         request = AgentChatRequest(
