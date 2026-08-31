@@ -6,7 +6,7 @@ from zoneinfo import ZoneInfo
 from fastapi import HTTPException
 
 from app.models import FinanceNewsItem
-from app.routers.market import get_finance_news
+from app.routers.market import _include_market_news, get_finance_news
 from app.services.finance_news import collect_finance_news
 
 
@@ -152,6 +152,72 @@ class FinanceNewsTest(unittest.TestCase):
 
         self.assertEqual(raised.exception.status_code, 502)
         self.assertNotIn("provider detail", str(raised.exception.detail))
+
+    def test_market_feed_removes_foreign_noise_but_keeps_us_and_hk_equities(self) -> None:
+        domestic = self._item(
+            "商务部发布商品消费实施意见",
+            "国内消费政策迎来更新。",
+            source="东方财富",
+            minutes_ago=1,
+            category="宏观",
+            relevance=4,
+        )
+        geopolitical = self._item(
+            "瑞典向法国采购新型护卫舰",
+            "欧洲防务消息。",
+            source="东方财富",
+            minutes_ago=2,
+            category="其他",
+            relevance=0,
+        )
+        us_equity = self._item(
+            "美股三大指数盘前上涨",
+            "纳斯达克指数期货走强。",
+            source="同花顺",
+            minutes_ago=3,
+            category="海外市场",
+            relevance=4,
+        )
+        hk_equity = self._item(
+            "港股恒生科技指数收涨",
+            "香港股市科技板块表现活跃。",
+            source="同花顺",
+            minutes_ago=4,
+            category="海外市场",
+            relevance=4,
+        )
+        japan_equity = self._item(
+            "日本日经指数收跌",
+            "日本股市全天走弱。",
+            source="同花顺",
+            minutes_ago=5,
+            category="海外市场",
+            relevance=2,
+        )
+        foreign_government = self._item(
+            "水利部通报尼泊尔冰川变化",
+            "尼泊尔相关冰川仍有崩落可能。",
+            source="东方财富",
+            minutes_ago=6,
+            category="其他",
+            relevance=0,
+        )
+        a_share_impact = self._item(
+            "美国政策变化影响A股科技板块",
+            "沪深市场科技股出现波动。",
+            source="东方财富",
+            minutes_ago=7,
+            category="A股",
+            relevance=4,
+        )
+
+        self.assertTrue(_include_market_news(domestic))
+        self.assertFalse(_include_market_news(geopolitical))
+        self.assertTrue(_include_market_news(us_equity))
+        self.assertTrue(_include_market_news(hk_equity))
+        self.assertFalse(_include_market_news(japan_equity))
+        self.assertFalse(_include_market_news(foreign_government))
+        self.assertTrue(_include_market_news(a_share_impact))
 
 
 if __name__ == "__main__":
