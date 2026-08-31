@@ -66,6 +66,8 @@ services:
       TZ: Asia/Shanghai
     volumes:
       - limituplab-data:/app/data
+    healthcheck:
+      disable: true
     command:
       - python
       - scripts/run_recommendation_refresh_loop.py
@@ -90,6 +92,8 @@ services:
       TZ: Asia/Shanghai
     volumes:
       - limituplab-data:/app/data
+    healthcheck:
+      disable: true
     command:
       - python
       - scripts/run_auction_final_loop.py
