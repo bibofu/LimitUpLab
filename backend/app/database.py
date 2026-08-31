@@ -14,7 +14,7 @@ from app.config import env_bool
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_PATH = BACKEND_ROOT / "data" / "limituplab.sqlite"
-CURRENT_SCHEMA_VERSION = 5
+CURRENT_SCHEMA_VERSION = 6
 DEFAULT_BUSY_TIMEOUT_MS = 5_000
 DEFAULT_LOCK_RETRY_ATTEMPTS = 3
 DEFAULT_LOCK_RETRY_BASE_DELAY_SECONDS = 0.05
@@ -581,6 +581,22 @@ def _apply_schema(connection: sqlite3.Connection) -> None:
             error_message TEXT,
             PRIMARY KEY (symbol, source)
         )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS recommendation_intelligence_snapshots (
+            refresh_id TEXT PRIMARY KEY,
+            refreshed_at TEXT NOT NULL,
+            status TEXT NOT NULL,
+            response_json TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_recommendation_intelligence_refreshed
+        ON recommendation_intelligence_snapshots (refreshed_at DESC)
         """
     )
     connection.execute(

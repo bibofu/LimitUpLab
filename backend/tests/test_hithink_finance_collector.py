@@ -155,6 +155,40 @@ class HithinkFinanceCollectorTest(unittest.TestCase):
         self.assertIn("snapshot", runner.commands[1])
         self.assertIn("constituents", runner.commands[2])
 
+    def test_quarterly_income_statements_are_normalized(self) -> None:
+        runner = FakeRunner(
+            {
+                "ok": True,
+                "data": {
+                    "item": [
+                        {
+                            "thscode": "600640.SH",
+                            "fiscal_year": 2026,
+                            "fiscal_period": "Q2",
+                            "report_date_ms": 1_787_328_000_000,
+                            "period_end_ms": 1_782_748_800_000,
+                            "operating_income": 877_646_662.99,
+                            "net_profit": 16_254_482.63,
+                            "parent_holder_net_profit": 15_774_212.82,
+                            "basic_eps": 0.0198,
+                        }
+                    ]
+                },
+            }
+        )
+        collector = HithinkFinanceCollector(
+            executable="hithink-finance",
+            runner=runner,
+        )
+
+        statements = collector.collect_income_statements("600640.SH", limit=6)
+
+        self.assertEqual(statements[0].fiscal_period, "Q2")
+        self.assertEqual(statements[0].operating_income, 877_646_662.99)
+        self.assertIn("financials", runner.commands[0])
+        self.assertIn("quarterly", runner.commands[0])
+        self.assertIn("6", runner.commands[0])
+
     def test_market_snapshot_preserves_quote_performance(self) -> None:
         runner = FakeRunner(
             {

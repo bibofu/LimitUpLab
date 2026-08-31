@@ -445,7 +445,7 @@ macOS / Linux 将 Python 和 npm 命令替换为对应虚拟环境命令即可�
 
 - `backend/Dockerfile`：FastAPI、Python 数据依赖和可选同花顺 CLI
 - `frontend/Dockerfile`：React 生产构建与容器内 Nginx
-- `docker-compose.yml`：健康检查、自动重启、SQLite 命名卷和日更 Job
+- `docker-compose.yml`：健康检查、自动重启、SQLite 命名卷、日更 Job 和推荐情报半小时刷新服务
 - `deploy/nginx/`：同域 API 反代、SPA 路由和 SSE 流式配置
 - `.env.production.example`：不含真实密钥的生产环境模板
 
@@ -477,6 +477,19 @@ cd backend
 4. 保存当日 Top10 不可变预测快照。
 5. 回填近期 Top10 的 D+1 至 D+5 走势。
 6. 输出 JSON 数据健康报告。
+
+盘前推荐中的两类 Top10 另有独立情报流水线。它每 30 分钟批量更新
+最新行情和最近个股新闻，并读取同花顺最新季度利润表；财报缓存 24 小时，
+避免对不会频繁变化的数据重复请求。原始推荐分保持不可变，最新情报不会
+覆盖用于回测的预测快照：
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe scripts\run_recommendation_refresh_loop.py --once
+```
+
+本地一键启动和 Docker Compose 会自动启动持续刷新进程。刷新间隔可通过
+`LIMITUPLAB_RECOMMENDATION_REFRESH_MINUTES` 配置，默认值为 `30`。
 
 启动演示前也可以让系统自动判断预期交易日：
 

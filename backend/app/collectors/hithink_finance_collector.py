@@ -112,6 +112,21 @@ class HithinkIndexConstituentFact:
 
 
 @dataclass(frozen=True)
+class HithinkIncomeStatementFact:
+    """One normalized quarterly income-statement row."""
+
+    thscode: str
+    fiscal_year: int
+    fiscal_period: str
+    report_date: date
+    period_end: date
+    operating_income: float | None
+    net_profit: float | None
+    parent_holder_net_profit: float | None
+    basic_eps: float | None
+
+
+@dataclass(frozen=True)
 class HithinkDragonTigerFact:
     """One normalized Dragon-Tiger List row."""
 
@@ -391,6 +406,56 @@ class HithinkFinanceCollector:
             for row in _list(_dict(envelope.get("data")).get("item"))
             if _symbol(row)
         ]
+
+    def collect_income_statements(
+        self,
+        thscode: str,
+        *,
+        limit: int = 6,
+    ) -> list[HithinkIncomeStatementFact]:
+        """Return recent quarterly income statements for one A-share stock."""
+
+        normalized_code = thscode.strip().upper()
+        if not normalized_code:
+            raise ValueError("thscode is required")
+        envelope = self._invoke(
+            "financials",
+            "income",
+            "--thscode",
+            normalized_code,
+            "--period",
+            "quarterly",
+            "--limit",
+            str(max(2, min(limit, 20))),
+        )
+        items: list[HithinkIncomeStatementFact] = []
+        for row in _list(_dict(envelope.get("data")).get("item")):
+            report_date = _timestamp_date(row.get("report_date_ms"))
+            period_end = _timestamp_date(row.get("period_end_ms"))
+            fiscal_year = _integer(row.get("fiscal_year"))
+            fiscal_period = str(row.get("fiscal_period") or "").strip()
+            if report_date is None or period_end is None or fiscal_year is None or not fiscal_period:
+                continue
+            items.append(
+                HithinkIncomeStatementFact(
+                    thscode=str(row.get("thscode") or normalized_code),
+                    fiscal_year=fiscal_year,
+                    fiscal_period=fiscal_period,
+                    report_date=report_date,
+                    period_end=period_end,
+                    operating_income=_number(row.get("operating_income")),
+                    net_profit=_number(row.get("net_profit")),
+                    parent_holder_net_profit=_number(
+                        row.get("parent_holder_net_profit")
+                    ),
+                    basic_eps=_number(row.get("basic_eps")),
+                )
+            )
+        return sorted(
+            items,
+            key=lambda item: (item.period_end, item.report_date),
+            reverse=True,
+        )
 
     def collect_dragon_tiger(
         self,
@@ -675,4 +740,17 @@ def _date(value: object) -> date | None:
     try:
         return date.fromisoformat(text[:10])
     except ValueError:
+        return None
+
+
+def _timestamp_date(value: object) -> date | None:
+    timestamp = _integer(value)
+    if timestamp is None:
+        return None
+    try:
+        return datetime.fromtimestamp(
+            timestamp / 1000,
+            tz=timezone.utc,
+        ).date()
+    except (OSError, OverflowError, ValueError):
         return None

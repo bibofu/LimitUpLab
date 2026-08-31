@@ -56,6 +56,7 @@ import {
   fetchFirstBoardCritic,
   fetchFirstBoardDiscovery,
   fetchFirstBoardRatings,
+  fetchRecommendationIntelligence,
   fetchFailedLimitUpEvents,
   fetchFirstBoardEvents,
   fetchMarketSummary,
@@ -90,6 +91,8 @@ import type {
   LimitUpEvent,
   MarketSummary,
   RatingBacktestResponse,
+  RecommendationIntelligenceItem,
+  RecommendationIntelligenceResponse,
   ReviewAgentPick,
   ReviewAgentReportResponse,
   ReviewPromotionComparison,
@@ -940,6 +943,7 @@ function PremarketRecommendations({ ratings }: { ratings: FirstBoardRatingsRespo
   const [discovery, setDiscovery] = useState<FirstBoardDiscoveryResponse | null>(null);
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const [discoveryLoading, setDiscoveryLoading] = useState(true);
+  const [intelligence, setIntelligence] = useState<RecommendationIntelligenceResponse | null>(null);
 
   useEffect(() => {
     let active = true;
@@ -957,6 +961,26 @@ function PremarketRecommendations({ ratings }: { ratings: FirstBoardRatingsRespo
       });
     return () => {
       active = false;
+    };
+  }, []);
+
+  useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      void fetchRecommendationIntelligence()
+        .then((response) => {
+          if (active) setIntelligence(response);
+        })
+        .catch(() => {
+          // The immutable recommendation snapshots remain usable while the
+          // background intelligence worker is warming up or temporarily stale.
+        });
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 30 * 60 * 1000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
     };
   }, []);
 
@@ -984,14 +1008,22 @@ function PremarketRecommendations({ ratings }: { ratings: FirstBoardRatingsRespo
           一进二接力
         </button>
       </div>
+      {intelligence ? (
+        <div className="recommendation-refresh-status">
+          <RefreshCcw size={14} />
+          行情、新闻及财报更新于 {formatStockNewsTime(intelligence.refreshed_at)}
+          <span>每 {intelligence.interval_minutes} 分钟刷新</span>
+        </div>
+      ) : null}
       {mode === "discovery" ? (
         <FirstBoardDiscoveryPanel
           data={discovery}
           error={discoveryError}
+          intelligence={intelligence}
           loading={discoveryLoading}
         />
       ) : (
-        <FirstBoardRatingPanel ratings={ratings} />
+        <FirstBoardRatingPanel intelligence={intelligence} ratings={ratings} />
       )}
     </section>
   );
@@ -2161,7 +2193,13 @@ function trackedReturnLabel(value: number | null) {
   return "累计持平";
 }
 
-function FirstBoardRatingPanel({ ratings }: { ratings: FirstBoardRatingsResponse }) {
+function FirstBoardRatingPanel({
+  ratings,
+  intelligence,
+}: {
+  ratings: FirstBoardRatingsResponse;
+  intelligence: RecommendationIntelligenceResponse | null;
+}) {
   /** Render the first-board rating summary generated from deterministic facts. */
 
   const topCandidates = ratings.candidates.slice(0, 10);
@@ -2180,8 +2218,13 @@ function FirstBoardRatingPanel({ ratings }: { ratings: FirstBoardRatingsResponse
         </div>
         {topCandidates.length > 0 ? (
           <div className="rating-top-list">
-            {topCandidates.map((candidate, index) => (
-              <Link
+            {topCandidates.map((candidate, index) => {
+              const live = recommendationIntelligenceFor(
+                intelligence,
+                "relay",
+                candidate.facts.symbol,
+              );
+              return <Link
                 className="rating-top-card"
                 key={`${candidate.facts.trade_date}-${candidate.facts.symbol}`}
                 to={stockDetailPath(
@@ -2212,6 +2255,8 @@ function FirstBoardRatingPanel({ ratings }: { ratings: FirstBoardRatingsResponse
                   <Fact label="置信度" value={formatPercent(candidate.confidence)} />
                 </div>
 
+                <RecommendationLiveEvidence item={live} />
+
                 {candidate.facts.enrichment?.position ? (
                   <div className="rating-position-compact">
                     <div>
@@ -2237,8 +2282,8 @@ function FirstBoardRatingPanel({ ratings }: { ratings: FirstBoardRatingsResponse
                     风险观察：{candidate.risks.slice(0, 2).join("；")}
                   </p>
                 ) : null}
-              </Link>
-            ))}
+              </Link>;
+            })}
           </div>
         ) : (
           <div className="rating-summary-copy">
@@ -2253,10 +2298,12 @@ function FirstBoardRatingPanel({ ratings }: { ratings: FirstBoardRatingsResponse
 function FirstBoardDiscoveryPanel({
   data,
   error,
+  intelligence,
   loading,
 }: {
   data: FirstBoardDiscoveryResponse | null;
   error: string | null;
+  intelligence: RecommendationIntelligenceResponse | null;
   loading: boolean;
 }) {
   if (loading) {
@@ -2308,8 +2355,13 @@ function FirstBoardDiscoveryPanel({
 
         {data.candidates.length > 0 ? (
           <div className="rating-top-list discovery-list">
-            {data.candidates.map((candidate, index) => (
-              <Link
+            {data.candidates.map((candidate, index) => {
+              const live = recommendationIntelligenceFor(
+                intelligence,
+                "discovery",
+                candidate.facts.symbol,
+              );
+              return <Link
                 className="rating-top-card discovery-card"
                 key={`${data.data_as_of}-${candidate.facts.symbol}`}
                 to={stockDetailPath(candidate.facts.symbol, data.data_as_of, candidate.facts.name)}
@@ -2342,6 +2394,7 @@ function FirstBoardDiscoveryPanel({
                       ?? `${candidate.facts.themes[0]?.name ?? "相关题材"}当日走强，暂未匹配到明确新闻催化`}
                   </p>
                 </section>
+                <RecommendationLiveEvidence item={live} />
                 <section className="rating-top-reasons">
                   <strong>入选依据</strong>
                   <ul>
@@ -2351,8 +2404,8 @@ function FirstBoardDiscoveryPanel({
                 {candidate.risks.length > 0 ? (
                   <p className="rating-top-risk">待验证：{candidate.risks.slice(0, 2).join("；")}</p>
                 ) : null}
-              </Link>
-            ))}
+              </Link>;
+            })}
           </div>
         ) : (
           <div className="empty-state">本期没有满足数据和流动性要求的观察标的。</div>
@@ -2375,6 +2428,51 @@ function discoveryPatternLabel(pattern: FirstBoardDiscoveryPattern) {
     unclassified: "结构观察",
   };
   return labels[pattern];
+}
+
+function recommendationIntelligenceFor(
+  response: RecommendationIntelligenceResponse | null,
+  strategy: "discovery" | "relay",
+  symbol: string,
+) {
+  return response?.items.find(
+    (item) => item.strategy === strategy && item.symbol === symbol,
+  ) ?? null;
+}
+
+function RecommendationLiveEvidence({
+  item,
+}: {
+  item: RecommendationIntelligenceItem | null;
+}) {
+  if (!item) return null;
+  const report = item.financial_report;
+  const news = item.latest_news[0];
+  return (
+    <section className="recommendation-live-evidence">
+      <div className="recommendation-live-quote">
+        <strong>最新动态</strong>
+        <span>{item.current_price !== null ? item.current_price.toFixed(2) : "价格暂无"}</span>
+        <b className={(item.change_pct ?? 0) >= 0 ? "positive" : "negative"}>
+          {item.change_pct !== null ? `${formatSigned(item.change_pct, 2)}%` : "涨幅暂无"}
+        </b>
+      </div>
+      {news ? (
+        <p className="recommendation-live-news">
+          <Newspaper size={14} />
+          <span>{news.title}</span>
+          <small>{formatStockNewsTime(news.published_at)}</small>
+        </p>
+      ) : null}
+      {report ? (
+        <div className="recommendation-live-financial">
+          <span>{report.fiscal_year} {report.fiscal_period}</span>
+          <span>营收同比 {formatNullableSigned(report.operating_income_yoy_pct)}</span>
+          <span>归母净利同比 {formatNullableSigned(report.net_profit_yoy_pct)}</span>
+        </div>
+      ) : null}
+    </section>
+  );
 }
 
 function formatNullableSigned(value: number | null) {

@@ -46,6 +46,7 @@ from app.models import (
     OutcomeCompletenessReport,
     PredictionQualityAuditResponse,
     RatingBacktestResponse,
+    RecommendationIntelligenceResponse,
     ReviewAgentReportResponse,
     ScoringErrorDiagnosticResponse,
     ScoringPolicyOptimizationResponse,
@@ -60,6 +61,7 @@ from app.repositories import (
     SQLiteFirstBoardRepository,
     SQLiteFirstBoardDiscoveryRepository,
     SQLiteReviewSnapshotRepository,
+    SQLiteRecommendationIntelligenceRepository,
     SQLiteScoringPolicyRepository,
     SessionOwnershipError,
     get_limit_up_repository,
@@ -343,6 +345,22 @@ def get_first_board_discovery(
                 "No first-board discovery snapshot is available. "
                 "Run the daily update first."
             ),
+        )
+    return response
+
+
+@router.get(
+    "/recommendation-intelligence",
+    response_model=RecommendationIntelligenceResponse,
+)
+def get_recommendation_intelligence() -> RecommendationIntelligenceResponse:
+    """Return the latest half-hour quote, news and financial refresh."""
+
+    response = SQLiteRecommendationIntelligenceRepository().get_latest()
+    if response is None:
+        raise HTTPException(
+            status_code=404,
+            detail="No recommendation intelligence snapshot is available.",
         )
     return response
 

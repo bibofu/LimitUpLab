@@ -3812,6 +3812,23 @@ a.entry-card {
   box-shadow: 0 1px 3px rgba(16, 24, 40, 0.12);
 }
 
+.recommendation-refresh-status {
+  display: flex;
+  align-items: center;
+  flex-wrap: wrap;
+  gap: 7px;
+  color: #475467;
+  font-size: 12px;
+}
+
+.recommendation-refresh-status svg {
+  color: #b42318;
+}
+
+.recommendation-refresh-status span {
+  color: #98a2b3;
+}
+
 .discovery-state {
   display: flex;
   align-items: center;
@@ -3935,6 +3952,69 @@ a.entry-card {
   color: #475467;
   font-size: 12px;
   line-height: 1.55;
+}
+
+.recommendation-live-evidence {
+  display: grid;
+  gap: 8px;
+  padding: 10px 0;
+  border-top: 1px solid #eaecf0;
+}
+
+.recommendation-live-quote {
+  display: flex;
+  align-items: center;
+  gap: 8px;
+  font-size: 12px;
+}
+
+.recommendation-live-quote strong {
+  margin-right: auto;
+  color: #344054;
+}
+
+.recommendation-live-quote span {
+  color: #101828;
+  font-weight: 700;
+}
+
+.recommendation-live-quote b {
+  font-size: 12px;
+}
+
+.recommendation-live-news {
+  display: grid;
+  grid-template-columns: 14px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 6px;
+  margin: 0;
+  color: #475467;
+  font-size: 12px;
+}
+
+.recommendation-live-news span {
+  overflow: hidden;
+  text-overflow: ellipsis;
+  white-space: nowrap;
+}
+
+.recommendation-live-news small {
+  color: #98a2b3;
+  font-size: 10px;
+}
+
+.recommendation-live-financial {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px;
+}
+
+.recommendation-live-financial span {
+  padding: 4px 7px;
+  border-radius: 5px;
+  background: #f2f4f7;
+  color: #475467;
+  font-size: 11px;
 }
 
 .discovery-disclaimer {

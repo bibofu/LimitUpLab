@@ -49,6 +49,31 @@ services:
       start_period: 10s
       retries: 3
 
+  recommendation-refresh:
+    image: limituplab-backend:local
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        INSTALL_HITHINK_FINANCE: ${INSTALL_HITHINK_FINANCE:-true}
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env.production
+    environment:
+      LIMITUPLAB_DATABASE_PATH: /app/data/limituplab.sqlite
+      LIMITUPLAB_RECOMMENDATION_REFRESH_MINUTES: ${LIMITUPLAB_RECOMMENDATION_REFRESH_MINUTES:-30}
+      TZ: Asia/Shanghai
+    volumes:
+      - limituplab-data:/app/data
+    command:
+      - python
+      - scripts/run_recommendation_refresh_loop.py
+      - --lock-path
+      - /tmp/recommendation_refresh.lock
+      - --report-path
+      - /app/data/recommendation_refresh_latest.json
+
   daily-update:
     image: limituplab-backend:local
     build:

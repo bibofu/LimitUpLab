@@ -17,6 +17,9 @@ from app.repositories.limit_up_repository import (
     get_limit_up_repository,
 )
 from app.repositories.review_snapshot_repository import SQLiteReviewSnapshotRepository
+from app.repositories.recommendation_intelligence_repository import (
+    SQLiteRecommendationIntelligenceRepository,
+)
 from app.repositories.scoring_policy_repository import SQLiteScoringPolicyRepository
 from app.repositories.stock_news_repository import SQLiteStockNewsRepository
 
@@ -32,6 +35,7 @@ __all__ = [
     "SQLiteFirstBoardRepository",
     "SQLiteFirstBoardDiscoveryRepository",
     "SQLiteLimitUpRepository",
+    "SQLiteRecommendationIntelligenceRepository",
     "SQLiteReviewSnapshotRepository",
     "SQLiteScoringPolicyRepository",
     "SQLiteStockNewsRepository",

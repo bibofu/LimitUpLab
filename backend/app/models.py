@@ -193,6 +193,55 @@ class StockNewsFacts(BaseModel):
     data_missing: list[str] = Field(default_factory=list)
 
 
+class RecommendationFinancialReport(BaseModel):
+    """Latest available quarterly report attached to one recommendation."""
+
+    fiscal_year: int
+    fiscal_period: str
+    report_date: date
+    period_end: date
+    operating_income: float | None = None
+    net_profit: float | None = None
+    parent_holder_net_profit: float | None = None
+    basic_eps: float | None = None
+    operating_income_yoy_pct: float | None = None
+    net_profit_yoy_pct: float | None = None
+    fetched_at: datetime
+    source: str = "hithink-finance"
+
+
+class RecommendationIntelligenceItem(BaseModel):
+    """Mutable quote, news and financial evidence for one immutable pick."""
+
+    strategy: Literal["discovery", "relay"]
+    base_trade_date: date
+    symbol: str
+    name: str
+    rank: int
+    base_score: float
+    current_price: float | None = None
+    change_pct: float | None = None
+    turnover: float | None = None
+    quote_captured_at: datetime | None = None
+    latest_news: list[StockNewsItem] = Field(default_factory=list)
+    financial_report: RecommendationFinancialReport | None = None
+    refreshed_at: datetime
+    data_missing: list[str] = Field(default_factory=list)
+
+
+class RecommendationIntelligenceResponse(BaseModel):
+    """Latest half-hour evidence snapshot for both recommendation strategies."""
+
+    refresh_id: str
+    refreshed_at: datetime
+    interval_minutes: int
+    status: Literal["complete", "partial"]
+    discovery_base_date: date | None = None
+    relay_base_date: date | None = None
+    items: list[RecommendationIntelligenceItem] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class StockKLineBar(BaseModel):
     """Daily OHLCV bar for stock detail review."""
 

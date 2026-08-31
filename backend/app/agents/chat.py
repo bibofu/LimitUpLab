@@ -1494,6 +1494,7 @@ def _template_answer_from_tool_facts(
             themes = item.get("themes") or []
             primary_theme = themes[0] if themes else {}
             catalysts = item.get("news_catalysts") or []
+            live = item.get("latest_intelligence") or {}
             lines.append(
                 f"{index}. {item.get('name')}({item.get('symbol')}) "
                 f"{item.get('score')}分/{item.get('rating')}，"
@@ -1501,6 +1502,11 @@ def _template_answer_from_tool_facts(
                 f"({primary_theme.get('change_pct', 0):+.1f}%)，"
                 f"{item.get('pattern_label')}，量比 {item.get('volume_ratio_5d')}。"
             )
+            if live and live.get("change_pct") is not None:
+                lines.append(
+                    f"   最新情报：{live.get('change_pct')}%，"
+                    f"更新于 {str(live.get('refreshed_at', ''))[:16]}。"
+                )
             if catalysts:
                 lines.append(f"   催化：{catalysts[0]}")
         if not candidates:
@@ -1521,12 +1527,18 @@ def _template_answer_from_tool_facts(
         lines = [f"{ratings.get('trade_date')} 首板候选评分靠前的股票如下："]
         for index, item in enumerate(candidates[:8], start=1):
             fact = item.get("facts") or item if isinstance(item, dict) else {}
+            live = item.get("latest_intelligence") or {}
             lines.append(
                 f"{index}. {fact.get('name')}({fact.get('symbol')}) "
                 f"{item.get('score')}分/{item.get('rating')}，"
                 f"行业 {fact.get('industry')}，首封 {str(fact.get('first_limit_time', ''))[:5]}，"
                 f"炸板 {fact.get('break_count')} 次。"
             )
+            if live and live.get("change_pct") is not None:
+                lines.append(
+                    f"   最新情报：{live.get('change_pct')}%，"
+                    f"更新于 {str(live.get('refreshed_at', ''))[:16]}。"
+                )
         if not candidates:
             lines.append("当前没有满足过滤条件的首板候选。")
         lines.append(TEXT["safety"])

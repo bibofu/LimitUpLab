@@ -17,6 +17,7 @@ import type {
   MarketSummary,
   PostPerformanceStat,
   RatingBacktestResponse,
+  RecommendationIntelligenceResponse,
   ReviewAgentReportResponse,
   ScoringErrorDiagnosticResponse,
   StockCloseSnapshot,
@@ -139,6 +140,12 @@ export function fetchFirstBoardDiscovery(dataAsOf?: string) {
   const query = dataAsOf ? `?data_as_of=${encodeURIComponent(dataAsOf)}` : "";
   return request<FirstBoardDiscoveryResponse>(
     `/api/agents/first-board-discovery${query}`,
+  );
+}
+
+export function fetchRecommendationIntelligence() {
+  return request<RecommendationIntelligenceResponse>(
+    "/api/agents/recommendation-intelligence",
   );
 }
 

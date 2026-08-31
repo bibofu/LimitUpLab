@@ -387,6 +387,49 @@ export interface FirstBoardDiscoveryResponse {
   warnings: string[];
 }
 
+export interface RecommendationFinancialReport {
+  fiscal_year: number;
+  fiscal_period: string;
+  report_date: string;
+  period_end: string;
+  operating_income: number | null;
+  net_profit: number | null;
+  parent_holder_net_profit: number | null;
+  basic_eps: number | null;
+  operating_income_yoy_pct: number | null;
+  net_profit_yoy_pct: number | null;
+  fetched_at: string;
+  source: string;
+}
+
+export interface RecommendationIntelligenceItem {
+  strategy: "discovery" | "relay";
+  base_trade_date: string;
+  symbol: string;
+  name: string;
+  rank: number;
+  base_score: number;
+  current_price: number | null;
+  change_pct: number | null;
+  turnover: number | null;
+  quote_captured_at: string | null;
+  latest_news: StockNewsItem[];
+  financial_report: RecommendationFinancialReport | null;
+  refreshed_at: string;
+  data_missing: string[];
+}
+
+export interface RecommendationIntelligenceResponse {
+  refresh_id: string;
+  refreshed_at: string;
+  interval_minutes: number;
+  status: "complete" | "partial";
+  discovery_base_date: string | null;
+  relay_base_date: string | null;
+  items: RecommendationIntelligenceItem[];
+  warnings: string[];
+}
+
 export interface RatingBacktestBucket {
   rating: string;
   sample_size: number;

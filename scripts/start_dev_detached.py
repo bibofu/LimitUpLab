@@ -21,6 +21,9 @@ BACKEND_LOG = BACKEND / "dev_backend.log"
 BACKEND_ERR = BACKEND / "dev_backend.err.log"
 FRONTEND_LOG = FRONTEND / "dev_frontend.log"
 FRONTEND_ERR = FRONTEND / "dev_frontend.err.log"
+REFRESH_LOG = BACKEND / "recommendation_refresh.log"
+REFRESH_ERR = BACKEND / "recommendation_refresh.err.log"
+REFRESH_LOCK = BACKEND / "data" / "recommendation_refresh.lock"
 
 
 def main() -> int:
@@ -86,6 +89,18 @@ def main() -> int:
             env=env,
         )
 
+    if not refresh_worker_running():
+        spawn_detached(
+            [
+                str(backend_python),
+                "scripts/run_recommendation_refresh_loop.py",
+            ],
+            cwd=BACKEND,
+            stdout_path=REFRESH_LOG,
+            stderr_path=REFRESH_ERR,
+            env=env,
+        )
+
     backend_ok = wait_for("http://127.0.0.1:8001/health", seconds=12)
     frontend_ok = wait_for("http://127.0.0.1:5173/", seconds=12)
 
@@ -93,6 +108,7 @@ def main() -> int:
     print(f"Frontend http://127.0.0.1:5173  {'OK' if frontend_ok else 'FAILED'}")
     print(f"Backend log:  {BACKEND_LOG}")
     print(f"Frontend log: {FRONTEND_LOG}")
+    print(f"Recommendation refresh log: {REFRESH_LOG}")
     return 0 if backend_ok and frontend_ok else 1
 
 
@@ -115,6 +131,18 @@ def run_data_check(backend_python: Path, env: dict[str, str]) -> int:
         timeout=180,
     )
     return result.returncode
+
+
+def refresh_worker_running() -> bool:
+    """Treat a recently touched lock as an active half-hour worker."""
+
+    if not REFRESH_LOCK.exists():
+        return False
+    try:
+        age_seconds = time.time() - REFRESH_LOCK.stat().st_mtime
+    except OSError:
+        return False
+    return age_seconds <= 90 * 60
 
 
 def build_env() -> dict[str, str]:

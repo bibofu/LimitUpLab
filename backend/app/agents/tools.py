@@ -4,6 +4,7 @@ import json
 import os
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
+from pathlib import Path
 from typing import Any
 
 from app.agents.first_board import build_first_board_ratings
@@ -44,6 +45,7 @@ from app.models import (
 from app.repositories import (
     SQLiteFirstBoardDiscoveryRepository,
     SQLiteFirstBoardRepository,
+    SQLiteRecommendationIntelligenceRepository,
     SQLiteScoringPolicyRepository,
     SQLiteStockNewsRepository,
 )
@@ -310,7 +312,8 @@ TOOL_SCHEMAS = [
         description=(
             "读取某个交易日的首板评级候选池、可解释评分、行业分布和基于首板前 K 线的"
             "位置分类（如低位启动、超跌反弹、V形反转、高位突破、二波启动）；"
-            "未传 trade_date 时使用本地最新交易日。"
+            "未传 trade_date 时使用本地最新交易日；最新候选还附带半小时更新的行情、"
+            "个股新闻和季度财报摘要。"
         ),
         args_schema={
             "type": "object",
@@ -332,7 +335,8 @@ TOOL_SCHEMAS = [
         description=(
             "读取收盘后生成的下一交易日首板挖掘 Top10。候选在数据截止日尚未涨停，"
             "候选池来自当日热门题材和新闻催化，再结合近 60 日 K 线量价结构精排；"
-            "适合回答首板挖掘、下一交易日可能首次涨停的观察池，不用于一进二接力。"
+            "同时附带半小时更新的行情、个股新闻和季度财报摘要；适合回答首板挖掘、"
+            "下一交易日可能首次涨停的观察池，不用于一进二接力。"
         ),
         args_schema={
             "type": "object",
@@ -1355,6 +1359,10 @@ class AgentToolRegistry:
             if top
             else "暂无入池候选"
         )
+        intelligence = _recommendation_intelligence_by_symbol(
+            self.first_board_repository.database_path,
+            strategy="relay",
+        )
         trace_output = {
             "trade_date": ratings.trade_date.isoformat(),
             "snapshot_source": ratings.snapshot_source,
@@ -1368,6 +1376,7 @@ class AgentToolRegistry:
                     "rating": item.rating,
                     "score": item.score,
                     "industry": item.facts.industry,
+                    "latest_intelligence": intelligence.get(item.facts.symbol),
                 }
                 for item in ratings.candidates[:5]
             ],
@@ -1397,6 +1406,10 @@ class AgentToolRegistry:
         )
         if response is None:
             raise LookupError("No persisted first-board discovery snapshot is available.")
+        intelligence = _recommendation_intelligence_by_symbol(
+            self.first_board_repository.database_path,
+            strategy="discovery",
+        )
         trace_output = response.model_dump(mode="json")
         trace_output["candidates"] = [
             {
@@ -1418,6 +1431,7 @@ class AgentToolRegistry:
                 "reasons": item.reasons,
                 "risks": item.risks,
                 "data_missing": item.facts.data_missing,
+                "latest_intelligence": intelligence.get(item.facts.symbol),
             }
             for item in response.candidates
         ]
@@ -1976,6 +1990,46 @@ class AgentToolRegistry:
             ),
             trace_output=trace_output,
         )
+
+
+def _recommendation_intelligence_by_symbol(
+    database_path: Path | None,
+    *,
+    strategy: str,
+) -> dict[str, dict[str, Any]]:
+    """Return compact latest evidence without expanding full news payloads."""
+
+    response = SQLiteRecommendationIntelligenceRepository(
+        database_path
+    ).get_latest()
+    if response is None:
+        return {}
+    return {
+        item.symbol: {
+            "refreshed_at": item.refreshed_at.isoformat(),
+            "current_price": item.current_price,
+            "change_pct": item.change_pct,
+            "turnover": item.turnover,
+            "latest_news": [
+                {
+                    "title": news.title,
+                    "published_at": news.published_at.isoformat(),
+                    "source": news.source,
+                    "item_type": news.item_type,
+                    "url": news.url,
+                }
+                for news in item.latest_news[:2]
+            ],
+            "financial_report": (
+                item.financial_report.model_dump(mode="json")
+                if item.financial_report
+                else None
+            ),
+            "data_missing": item.data_missing,
+        }
+        for item in response.items
+        if item.strategy == strategy
+    }
 
 
 def _discovery_pattern_label(pattern: str) -> str:
