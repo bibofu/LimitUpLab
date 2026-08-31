@@ -9,7 +9,7 @@ from app.collectors.hithink_finance_collector import (
     HithinkMarketSnapshot,
     HithinkMarketSnapshotFact,
 )
-from app.models import StockKLineBar
+from app.models import FirstBoardDiscoveryTheme, StockKLineBar
 from app.repositories import (
     SQLiteFirstBoardDiscoveryRepository,
     SQLiteFirstBoardRepository,
@@ -18,6 +18,7 @@ from app.agents.tools import AgentToolRegistry
 from app.routers.agents import get_first_board_discovery
 from app.services.first_board_discovery import (
     FIRST_BOARD_DISCOVERY_VERSION,
+    FirstBoardDiscoveryContext,
     refresh_first_board_discovery,
 )
 
@@ -45,18 +46,34 @@ class FirstBoardDiscoveryTest(unittest.TestCase):
         data_as_of = date(2026, 8, 31)
         snapshot = HithinkMarketSnapshot(
             captured_at=datetime(2026, 8, 31, 7, tzinfo=timezone.utc),
-            total=4,
+            total=5,
             items=[
                 self._quote("000001", "强势样本", amount=900_000_000, change=4.5),
                 self._quote("000002", "低流动性", amount=30_000_000, change=3.0),
                 self._quote("000003", "ST风险", amount=600_000_000, change=3.0),
                 self._quote("000004", "已涨停", amount=800_000_000, change=10.0),
+                self._quote("000005", "非热门题材", amount=1_200_000_000, change=7.0),
             ],
+        )
+        theme = FirstBoardDiscoveryTheme(
+            name="AI视频",
+            category="concept",
+            change_pct=5.7,
+            rank=1,
+            member_count=20,
+            news_headlines=["AI视频应用迎来新进展"],
+        )
+        context = FirstBoardDiscoveryContext(
+            themes=[theme],
+            memberships={"000001": [theme]},
+            popularity_ranks={"000001": 8},
+            warnings=[],
         )
 
         response = refresh_first_board_discovery(
             target_trade_date=date(2026, 9, 1),
             market_collector=lambda: snapshot,
+            theme_collector=lambda _: context,
             history_collector=lambda symbol, days, end_date: self._history(
                 symbol,
                 end_date or data_as_of,
@@ -69,11 +86,18 @@ class FirstBoardDiscoveryTest(unittest.TestCase):
             max_workers=1,
         )
 
-        self.assertEqual(response.universe_count, 4)
+        self.assertEqual(response.universe_count, 5)
         self.assertEqual(response.eligible_count, 1)
         self.assertEqual(response.recalled_count, 1)
         self.assertEqual(len(response.candidates), 1)
         self.assertEqual(response.candidates[0].facts.symbol, "000001")
+        self.assertEqual(response.candidates[0].facts.themes[0].name, "AI视频")
+        self.assertEqual(response.candidates[0].facts.popularity_rank, 8)
+        self.assertEqual(
+            response.candidates[0].facts.news_catalysts,
+            ["AI视频应用迎来新进展"],
+        )
+        self.assertEqual(response.themes[0].name, "AI视频")
         self.assertLess(response.candidates[0].facts.volume_ratio_5d or 0, 5)
         self.assertEqual(response.generated_by, FIRST_BOARD_DISCOVERY_VERSION)
         self.assertAlmostEqual(

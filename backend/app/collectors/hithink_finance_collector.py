@@ -83,6 +83,35 @@ class HithinkMarketSnapshot:
 
 
 @dataclass(frozen=True)
+class HithinkIndexCatalogFact:
+    """One industry or concept index exposed by Tonghuashun."""
+
+    thscode: str
+    name: str
+    category: str
+
+
+@dataclass(frozen=True)
+class HithinkIndexSnapshotFact:
+    """One current industry or concept index quote."""
+
+    thscode: str
+    name: str
+    category: str
+    change_pct: float | None
+    turnover: float | None
+
+
+@dataclass(frozen=True)
+class HithinkIndexConstituentFact:
+    """One A-share constituent of a Tonghuashun index."""
+
+    symbol: str
+    thscode: str
+    name: str
+
+
+@dataclass(frozen=True)
 class HithinkDragonTigerFact:
     """One normalized Dragon-Tiger List row."""
 
@@ -286,6 +315,82 @@ class HithinkFinanceCollector:
             items=named_items,
             total=total or len(named_items),
         )
+
+    def collect_index_catalog(self, category: str) -> list[HithinkIndexCatalogFact]:
+        """Return the complete Tonghuashun industry or concept index directory."""
+
+        if category not in {"industry", "cn_concept"}:
+            raise ValueError("category must be industry or cn_concept")
+        envelope = self._invoke("index", "catalog", "--tag", category)
+        return [
+            HithinkIndexCatalogFact(
+                thscode=str(row.get("thscode") or ""),
+                name=str(row.get("name") or "").strip(),
+                category=category,
+            )
+            for row in _list(_dict(envelope.get("data")).get("item"))
+            if str(row.get("thscode") or "").strip()
+            and str(row.get("name") or "").strip()
+        ]
+
+    def collect_index_snapshots(
+        self,
+        indexes: Sequence[HithinkIndexCatalogFact],
+        *,
+        batch_size: int = 100,
+    ) -> list[HithinkIndexSnapshotFact]:
+        """Return current quotes for a bounded industry/concept index directory."""
+
+        unique = {item.thscode: item for item in indexes}
+        ordered = list(unique.values())
+        batch_size = max(1, min(batch_size, 100))
+        results: list[HithinkIndexSnapshotFact] = []
+        for offset in range(0, len(ordered), batch_size):
+            batch = ordered[offset : offset + batch_size]
+            envelope = self._invoke(
+                "index",
+                "snapshot",
+                "--thscodes",
+                ",".join(item.thscode for item in batch),
+            )
+            by_code = {item.thscode: item for item in batch}
+            for row in _list(_dict(envelope.get("data")).get("item")):
+                thscode = str(row.get("thscode") or "")
+                catalog = by_code.get(thscode)
+                if catalog is None:
+                    continue
+                results.append(
+                    HithinkIndexSnapshotFact(
+                        thscode=thscode,
+                        name=catalog.name,
+                        category=catalog.category,
+                        change_pct=_number(row.get("price_change_ratio_pct")),
+                        turnover=_number(row.get("turnover")),
+                    )
+                )
+        return results
+
+    def collect_index_constituents(
+        self,
+        index: HithinkIndexCatalogFact | HithinkIndexSnapshotFact,
+    ) -> list[HithinkIndexConstituentFact]:
+        """Return all A-share constituents for one industry or concept index."""
+
+        envelope = self._invoke(
+            "index",
+            "constituents",
+            "--thscode",
+            index.thscode,
+        )
+        return [
+            HithinkIndexConstituentFact(
+                symbol=_symbol(row),
+                thscode=str(row.get("thscode") or ""),
+                name=str(row.get("name") or _symbol(row)),
+            )
+            for row in _list(_dict(envelope.get("data")).get("item"))
+            if _symbol(row)
+        ]
 
     def collect_dragon_tiger(
         self,

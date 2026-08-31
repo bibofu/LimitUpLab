@@ -1491,15 +1491,21 @@ def _template_answer_from_tool_facts(
             f"基于 {discovery.get('data_as_of')} 收盘数据，{target} 首板挖掘观察池如下："
         ]
         for index, item in enumerate(candidates[:10], start=1):
+            themes = item.get("themes") or []
+            primary_theme = themes[0] if themes else {}
+            catalysts = item.get("news_catalysts") or []
             lines.append(
                 f"{index}. {item.get('name')}({item.get('symbol')}) "
                 f"{item.get('score')}分/{item.get('rating')}，"
-                f"{item.get('pattern_label')}，当日涨幅 {item.get('change_pct')}%，"
-                f"量比 {item.get('volume_ratio_5d')}。"
+                f"题材 {primary_theme.get('name', '暂无')}"
+                f"({primary_theme.get('change_pct', 0):+.1f}%)，"
+                f"{item.get('pattern_label')}，量比 {item.get('volume_ratio_5d')}。"
             )
+            if catalysts:
+                lines.append(f"   催化：{catalysts[0]}")
         if not candidates:
             lines.append("当前没有满足数据与流动性要求的候选。")
-        lines.append("该名单是量价结构研究排序，不代表涨停概率。")
+        lines.append("该名单先按热门题材和新闻催化圈选，再按量价结构排序，不代表涨停概率。")
         lines.append(TEXT["safety"])
         return "\n".join(lines)
 

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from dataclasses import dataclass
 from datetime import date, datetime, timedelta, timezone
 from math import log10
 from statistics import mean, pstdev
@@ -16,12 +17,14 @@ from app.collectors import (
 from app.collectors.hithink_finance_collector import (
     HithinkMarketSnapshot,
     HithinkMarketSnapshotFact,
+    HithinkIndexSnapshotFact,
     SHANGHAI_TIMEZONE,
 )
 from app.models import (
     FirstBoardDiscoveryCandidate,
     FirstBoardDiscoveryFacts,
     FirstBoardDiscoveryResponse,
+    FirstBoardDiscoveryTheme,
     ScoreBreakdownItem,
     StockDailyBar,
     StockKLineBar,
@@ -30,18 +33,174 @@ from app.repositories import (
     SQLiteFirstBoardDiscoveryRepository,
     SQLiteFirstBoardRepository,
 )
+from app.services.finance_news import collect_finance_news
 
 
-FIRST_BOARD_DISCOVERY_VERSION = "first-board-discovery-v1-price-volume"
+FIRST_BOARD_DISCOVERY_VERSION = "first-board-discovery-v2-theme-driven"
 MIN_DISCOVERY_AMOUNT = 100_000_000
 MIN_HISTORY_BARS = 40
 DEFAULT_RECALL_LIMIT = 60
 DEFAULT_TOP_K = 10
 DEFAULT_HISTORY_WORKERS = 8
+MAX_DISCOVERY_THEMES = 10
 
 MarketCollector = Callable[[], HithinkMarketSnapshot]
 HistoryCollector = Callable[[str, int, date | None], list[StockKLineBar]]
 CalendarCollector = Callable[[date, date], list[date]]
+
+
+@dataclass(frozen=True)
+class FirstBoardDiscoveryContext:
+    """Hot-theme membership, news and popularity facts captured before scoring."""
+
+    themes: list[FirstBoardDiscoveryTheme]
+    memberships: dict[str, list[FirstBoardDiscoveryTheme]]
+    popularity_ranks: dict[str, int]
+    warnings: list[str]
+
+
+ThemeCollector = Callable[[date], FirstBoardDiscoveryContext]
+
+
+def _collect_hot_theme_context(
+    collector: HithinkFinanceCollector,
+    data_as_of: date,
+) -> FirstBoardDiscoveryContext:
+    """Resolve hot indexes to constituents and attach time-bounded news evidence."""
+
+    del data_as_of
+    warnings: list[str] = []
+    catalogs = [
+        *collector.collect_index_catalog("cn_concept"),
+        *collector.collect_index_catalog("industry"),
+    ]
+    snapshots = collector.collect_index_snapshots(catalogs)
+    try:
+        news = collect_finance_news(limit=12, hours=48)
+        news_items = news.items
+    except Exception as error:  # noqa: BLE001
+        news_items = []
+        warnings.append(f"财经快讯不可用，新闻催化未计分：{error}")
+
+    news_by_theme = {
+        item.thscode: [
+            news_item.title
+            for news_item in news_items
+            if _theme_matches_news(
+                item.name,
+                f"{news_item.title} {news_item.summary}",
+            )
+        ][:3]
+        for item in snapshots
+    }
+    selected = _select_hot_theme_snapshots(snapshots, news_by_theme)
+    memberships: dict[str, list[FirstBoardDiscoveryTheme]] = {}
+    themes: list[FirstBoardDiscoveryTheme] = []
+    for index_snapshot, rank in selected:
+        try:
+            constituents = collector.collect_index_constituents(index_snapshot)
+        except Exception as error:  # noqa: BLE001
+            warnings.append(f"{index_snapshot.name}成分股获取失败：{error}")
+            continue
+        theme = FirstBoardDiscoveryTheme(
+            name=index_snapshot.name,
+            category=(
+                "concept" if index_snapshot.category == "cn_concept" else "industry"
+            ),
+            change_pct=round(index_snapshot.change_pct or 0, 2),
+            rank=rank,
+            member_count=len(constituents),
+            news_headlines=news_by_theme.get(index_snapshot.thscode, []),
+        )
+        themes.append(theme)
+        for constituent in constituents:
+            memberships.setdefault(constituent.symbol, []).append(theme)
+
+    try:
+        popularity = collector.collect_hot_stocks(period="day", limit=100)
+        popularity_ranks = {item.symbol: item.rank for item in popularity.items}
+    except Exception as error:  # noqa: BLE001
+        popularity_ranks = {}
+        warnings.append(f"热股榜不可用，个股关注度未计分：{error}")
+    return FirstBoardDiscoveryContext(
+        themes=themes,
+        memberships=memberships,
+        popularity_ranks=popularity_ranks,
+        warnings=warnings,
+    )
+
+
+def _select_hot_theme_snapshots(
+    snapshots: list[HithinkIndexSnapshotFact],
+    news_by_theme: dict[str, list[str]],
+) -> list[tuple[HithinkIndexSnapshotFact, int]]:
+    """Select strong market themes plus a small number of news-confirmed themes."""
+
+    ranked_by_category: dict[str, list[HithinkIndexSnapshotFact]] = {}
+    rank_lookup: dict[str, int] = {}
+    for category in ("cn_concept", "industry"):
+        ranked = sorted(
+            [
+                item
+                for item in snapshots
+                if item.category == category and item.change_pct is not None
+            ],
+            key=lambda item: (-(item.change_pct or 0), item.name),
+        )
+        ranked_by_category[category] = ranked
+        rank_lookup.update({item.thscode: index + 1 for index, item in enumerate(ranked)})
+
+    selected = [
+        *[
+            item
+            for item in ranked_by_category.get("cn_concept", [])
+            if (item.change_pct or 0) >= 1
+        ][:5],
+        *[
+            item
+            for item in ranked_by_category.get("industry", [])
+            if (item.change_pct or 0) >= 1
+        ][:3],
+    ]
+    news_confirmed = sorted(
+        [
+            item
+            for item in snapshots
+            if news_by_theme.get(item.thscode) and (item.change_pct or 0) > 0
+        ],
+        key=lambda item: (
+            -len(news_by_theme.get(item.thscode, [])),
+            -(item.change_pct or 0),
+            item.name,
+        ),
+    )
+    selected.extend(news_confirmed[:2])
+    unique = list({item.thscode: item for item in selected}.values())[
+        :MAX_DISCOVERY_THEMES
+    ]
+    return [(item, rank_lookup.get(item.thscode, 999)) for item in unique]
+
+
+def _theme_matches_news(theme_name: str, news_text: str) -> bool:
+    normalized_name = theme_name.lower().replace("概念", "").replace("行业", "")
+    normalized_text = news_text.lower().replace(" ", "")
+    if len(normalized_name) >= 2 and normalized_name in normalized_text:
+        return True
+    aliases = (
+        (("ai", "人工智能"), ("ai", "人工智能")),
+        (("短剧", "影视", "传媒", "视频"), ("短剧", "影视", "传媒", "视频")),
+        (("芯片", "半导体"), ("芯片", "半导体")),
+        (("机器人",), ("机器人", "人形")),
+        (("算力", "数据中心"), ("算力", "数据中心", "液冷")),
+        (("种业", "农业"), ("种业", "农业", "粮食")),
+        (("医药", "创新药"), ("医药", "创新药")),
+        (("军工", "大飞机"), ("军工", "大飞机", "航空航天")),
+    )
+    return any(
+        any(term in normalized_name for term in theme_terms)
+        and any(term in normalized_text for term in news_terms)
+        for theme_terms, news_terms in aliases
+    )
 
 
 def refresh_first_board_discovery(
@@ -51,19 +210,31 @@ def refresh_first_board_discovery(
     top_k: int = DEFAULT_TOP_K,
     max_workers: int = DEFAULT_HISTORY_WORKERS,
     market_collector: MarketCollector | None = None,
+    theme_collector: ThemeCollector | None = None,
     history_collector: HistoryCollector = collect_stock_kline,
     calendar_collector: CalendarCollector = collect_a_share_trade_dates,
     first_board_repository: SQLiteFirstBoardRepository | None = None,
     snapshot_repository: SQLiteFirstBoardDiscoveryRepository | None = None,
     force: bool = False,
 ) -> FirstBoardDiscoveryResponse:
-    """Collect the market, rank candidates and persist one immutable snapshot."""
+    """Build a theme-led candidate universe, then rank it with K-line facts."""
 
-    active_market_collector = market_collector or (
-        HithinkFinanceCollector().collect_full_market_snapshot
-    )
+    hithink_collector = HithinkFinanceCollector()
+    active_market_collector = market_collector or hithink_collector.collect_full_market_snapshot
     market_snapshot = active_market_collector()
     data_as_of = market_snapshot.captured_at.astimezone(SHANGHAI_TIMEZONE).date()
+    active_theme_collector = theme_collector or (
+        lambda target: _collect_hot_theme_context(hithink_collector, target)
+    )
+    try:
+        discovery_context = active_theme_collector(data_as_of)
+    except Exception as error:  # noqa: BLE001
+        discovery_context = FirstBoardDiscoveryContext(
+            themes=[],
+            memberships={},
+            popularity_ranks={},
+            warnings=[f"热门题材数据获取失败：{error}"],
+        )
     calendar_warning: str | None = None
     if target_trade_date is None:
         try:
@@ -75,11 +246,16 @@ def refresh_first_board_discovery(
         except Exception as error:  # noqa: BLE001
             calendar_warning = f"下一交易日解析失败：{error}"
     eligible = [
-        item for item in market_snapshot.items if _eligible_snapshot(item)
+        item
+        for item in market_snapshot.items
+        if _eligible_snapshot(item) and item.symbol in discovery_context.memberships
     ]
     recalled = sorted(
         eligible,
-        key=lambda item: (-_recall_score(item), item.symbol),
+        key=lambda item: (
+            -_recall_score(item, discovery_context),
+            item.symbol,
+        ),
     )[: max(1, min(recall_limit, 200))]
     histories, collection_errors = _collect_histories(
         recalled,
@@ -110,14 +286,18 @@ def refresh_first_board_discovery(
                 bars,
                 data_as_of=data_as_of,
                 target_trade_date=target_trade_date,
+                discovery_context=discovery_context,
             )
         )
     candidates.sort(key=lambda item: (-item.score, -item.confidence, item.facts.symbol))
 
     warnings = [
-        "首板挖掘 v1 是量价结构基线，尚未把板块强度、公告和新闻催化纳入分数。",
-        "评分用于收盘后研究排序，不代表涨停概率，也不构成交易建议。",
+        "首板挖掘先按热门题材构建候选池，再使用量价和位置结构精排。",
+        "评分是题材与量价研究排序，不代表涨停概率，也不构成交易建议。",
+        *discovery_context.warnings,
     ]
+    if not discovery_context.themes:
+        warnings.append("未获得可用热门题材，本期不使用全市场量价候选补位。")
     if calendar_warning:
         warnings.append(calendar_warning)
     if collection_errors:
@@ -133,6 +313,7 @@ def refresh_first_board_discovery(
         universe_count=market_snapshot.total or len(market_snapshot.items),
         eligible_count=len(eligible),
         recalled_count=len(recalled),
+        themes=discovery_context.themes,
         candidates=candidates[: max(1, min(top_k, 30))],
         generated_by=FIRST_BOARD_DISCOVERY_VERSION,
         source=market_snapshot.source,
@@ -247,7 +428,18 @@ def _risk_warning_name(name: str) -> bool:
     return "ST" in normalized or "退" in name or name.startswith(("N", "C"))
 
 
-def _recall_score(item: HithinkMarketSnapshotFact) -> float:
+def _recall_score(
+    item: HithinkMarketSnapshotFact,
+    discovery_context: FirstBoardDiscoveryContext,
+) -> float:
+    themes = discovery_context.memberships.get(item.symbol, [])
+    theme_priority = _theme_priority(themes) * 1.8
+    popularity_rank = discovery_context.popularity_ranks.get(item.symbol)
+    popularity = (
+        max(0.0, 16 - (popularity_rank - 1) * 0.15)
+        if popularity_rank is not None
+        else 0
+    )
     change_pct = item.change_pct or 0
     momentum = max(0.0, 24 - abs(change_pct - 4.0) * 3.0)
     location = _close_location(item) * 22
@@ -256,7 +448,7 @@ def _recall_score(item: HithinkMarketSnapshotFact) -> float:
     range_score = max(0.0, 18 - abs(range_pct - 5.0) * 2.0)
     open_to_close = _open_to_close_pct(item)
     body_score = min(16.0, max(0.0, 8 + open_to_close * 2.0))
-    return momentum + location + amount + range_score + body_score
+    return theme_priority + popularity + momentum + location + amount + range_score + body_score
 
 
 def _build_candidate(
@@ -265,6 +457,7 @@ def _build_candidate(
     *,
     data_as_of: date,
     target_trade_date: date | None,
+    discovery_context: FirstBoardDiscoveryContext,
 ) -> FirstBoardDiscoveryCandidate:
     return_5d = _period_return(bars, 5)
     return_20d = _period_return(bars, 20)
@@ -279,7 +472,20 @@ def _build_candidate(
         volume_ratio=volume_ratio,
         ma_alignment=ma_alignment,
     )
-    missing = ["sector_strength", "news_catalyst"]
+    themes = discovery_context.memberships.get(item.symbol, [])
+    news_catalysts = list(
+        dict.fromkeys(
+            headline
+            for theme in themes
+            for headline in theme.news_headlines
+        )
+    )[:3]
+    popularity_rank = discovery_context.popularity_ranks.get(item.symbol)
+    missing = []
+    if not news_catalysts:
+        missing.append("news_catalyst")
+    if popularity_rank is None:
+        missing.append("popularity_rank")
     facts = FirstBoardDiscoveryFacts(
         symbol=item.symbol,
         name=item.name or item.symbol,
@@ -300,6 +506,9 @@ def _build_candidate(
         volatility_20d=volatility,
         ma_alignment=ma_alignment,
         pattern=pattern,
+        themes=themes,
+        popularity_rank=popularity_rank,
+        news_catalysts=news_catalysts,
         data_missing=missing,
     )
     breakdown = _score_breakdown(facts)
@@ -310,7 +519,11 @@ def _build_candidate(
         key=lambda value: -value.score,
     )
     reasons = [value.evidence[0] for value in ordered[:3]]
-    risks = ["板块强度和事件催化尚未进入 v1 分数"]
+    risks = []
+    if not news_catalysts:
+        risks.append("暂未匹配到明确新闻催化，当前主要由题材强度驱动")
+    if popularity_rank is None:
+        risks.append("未进入热股 Top100，个股关注度尚未形成共振")
     if volume_ratio is not None and volume_ratio > 4:
         risks.append("量比过高，需警惕单日资金透支")
     if (item.change_pct or 0) > 7:
@@ -329,72 +542,85 @@ def _build_candidate(
 
 
 def _score_breakdown(facts: FirstBoardDiscoveryFacts) -> list[ScoreBreakdownItem]:
-    momentum = _bounded(20 - abs(facts.change_pct - 4) * 1.8, 0, 20)
+    theme_strength = _bounded(_theme_priority(facts.themes), 0, 30)
+    catalyst = _bounded(len(facts.news_catalysts) * 7.5, 0, 15)
+    popularity = (
+        _bounded(10 - (facts.popularity_rank - 1) * 0.1, 1, 10)
+        if facts.popularity_rank is not None
+        else 0
+    )
+    momentum = _bounded(15 - abs(facts.change_pct - 4) * 1.4, 0, 15)
     if facts.return_5d_pct is not None:
-        momentum = (momentum + _bounded(20 - abs(facts.return_5d_pct - 7), 0, 20)) / 2
-    close_strength = _bounded(facts.close_location * 15, 0, 15)
+        momentum = (
+            momentum
+            + _bounded(15 - abs(facts.return_5d_pct - 7) * 0.8, 0, 15)
+        ) / 2
     ratio = facts.volume_ratio_5d or 0
     volume_expansion = (
-        _bounded(20 - abs(ratio - 2) * 8, 0, 20) if ratio > 0 else 0
+        _bounded(10 - abs(ratio - 2) * 4, 0, 10) if ratio > 0 else 0
     )
     distance = facts.distance_20d_high_pct
-    breakout = _bounded(20 - abs(distance or -20) * 1.5, 0, 20)
+    structure = _bounded(10 - abs(distance or -20) * 0.8, 0, 10)
     if facts.ma_alignment == "bullish":
-        breakout = min(20, breakout + 3)
-    liquidity = _bounded(
-        10 - abs(log10(max(facts.amount, 1)) - 9.0) * 3,
-        0,
-        10,
-    )
-    intraday = _bounded(
-        10 - abs(facts.intraday_range_pct - 5) * 1.1
-        + max(0, facts.open_to_close_pct),
-        0,
-        10,
-    )
+        structure += 2
+    structure += facts.close_location * 3
+    structure = _bounded(structure, 0, 15)
     data_quality = 5 if facts.kline_bar_count >= 60 else 3
     return [
         ScoreBreakdownItem(
+            name="题材强度",
+            score=round(theme_strength, 2),
+            max_score=30,
+            evidence=[
+                "命中"
+                + "、".join(
+                    f"{theme.name}({theme.change_pct:+.1f}%)"
+                    for theme in facts.themes[:3]
+                )
+            ],
+        ),
+        ScoreBreakdownItem(
+            name="新闻催化",
+            score=round(catalyst, 2),
+            max_score=15,
+            evidence=[
+                facts.news_catalysts[0]
+                if facts.news_catalysts
+                else "近 48 小时未匹配到明确题材催化"
+            ],
+        ),
+        ScoreBreakdownItem(
+            name="市场关注度",
+            score=round(popularity, 2),
+            max_score=10,
+            evidence=[
+                f"同花顺热股榜第 {facts.popularity_rank} 名"
+                if facts.popularity_rank is not None
+                else "未进入同花顺热股 Top100"
+            ],
+        ),
+        ScoreBreakdownItem(
             name="短期动量",
             score=round(momentum, 2),
-            max_score=20,
+            max_score=15,
             evidence=[
                 f"当日涨幅 {facts.change_pct:+.1f}%，近 5 日 {facts.return_5d_pct or 0:+.1f}%"
             ],
         ),
         ScoreBreakdownItem(
-            name="收盘强度",
-            score=round(close_strength, 2),
-            max_score=15,
-            evidence=[f"收盘位于日内区间 {facts.close_location:.0%} 位置"],
-        ),
-        ScoreBreakdownItem(
             name="量能扩张",
             score=round(volume_expansion, 2),
-            max_score=20,
+            max_score=10,
             evidence=[f"近 5 日量比 {facts.volume_ratio_5d or 0:.2f}"],
         ),
         ScoreBreakdownItem(
-            name="突破位置",
-            score=round(breakout, 2),
-            max_score=20,
+            name="位置结构",
+            score=round(structure, 2),
+            max_score=15,
             evidence=[
                 f"距 20 日高点 {facts.distance_20d_high_pct or 0:+.1f}%，"
-                f"均线结构{_ma_alignment_label(facts.ma_alignment)}"
-            ],
-        ),
-        ScoreBreakdownItem(
-            name="流动性",
-            score=round(liquidity, 2),
-            max_score=10,
-            evidence=[f"成交额 {facts.amount / 100_000_000:.1f} 亿元"],
-        ),
-        ScoreBreakdownItem(
-            name="日内质量",
-            score=round(intraday, 2),
-            max_score=10,
-            evidence=[
-                f"振幅 {facts.intraday_range_pct:.1f}%，开盘至收盘 {facts.open_to_close_pct:+.1f}%"
+                f"均线结构{_ma_alignment_label(facts.ma_alignment)}，"
+                f"收盘位置{facts.close_location:.0%}"
             ],
         ),
         ScoreBreakdownItem(
@@ -404,6 +630,21 @@ def _score_breakdown(facts: FirstBoardDiscoveryFacts) -> list[ScoreBreakdownItem
             evidence=[f"可用日 K {facts.kline_bar_count} 根"],
         ),
     ]
+
+
+def _theme_priority(themes: list[FirstBoardDiscoveryTheme]) -> float:
+    if not themes:
+        return 0
+    contributions = [
+        min(
+            26 if theme.category == "concept" else 23,
+            (15 if theme.category == "concept" else 12)
+            + max(0, theme.change_pct) * 1.8
+            + (3 if theme.news_headlines else 0),
+        )
+        for theme in themes
+    ]
+    return min(30, max(contributions) + min(6, (len(themes) - 1) * 2))
 
 
 def _merge_snapshot_bar(

@@ -449,6 +449,18 @@ FirstBoardDiscoveryPattern = Literal[
 ]
 
 
+class FirstBoardDiscoveryTheme(BaseModel):
+    """One hot industry or concept used to construct the discovery universe."""
+
+    name: str
+    category: Literal["industry", "concept"]
+    change_pct: float
+    rank: int
+    member_count: int = 0
+    news_headlines: list[str] = Field(default_factory=list)
+    source: str = "hithink-finance"
+
+
 class FirstBoardDiscoveryFacts(BaseModel):
     """Point-in-time market and K-line facts for one pre-limit-up candidate."""
 
@@ -471,6 +483,9 @@ class FirstBoardDiscoveryFacts(BaseModel):
     volatility_20d: float | None = None
     ma_alignment: str
     pattern: FirstBoardDiscoveryPattern
+    themes: list[FirstBoardDiscoveryTheme] = Field(default_factory=list)
+    popularity_rank: int | None = None
+    news_catalysts: list[str] = Field(default_factory=list)
     data_missing: list[str] = Field(default_factory=list)
 
 
@@ -494,6 +509,7 @@ class FirstBoardDiscoveryResponse(BaseModel):
     universe_count: int
     eligible_count: int
     recalled_count: int
+    themes: list[FirstBoardDiscoveryTheme] = Field(default_factory=list)
     candidates: list[FirstBoardDiscoveryCandidate]
     generated_by: str
     source: str

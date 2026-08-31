@@ -2283,7 +2283,7 @@ function FirstBoardDiscoveryPanel({
         <div className="discovery-header">
           <div>
             <strong>{data.target_trade_date ? `${data.target_trade_date} 观察池` : "下一交易日观察池"}</strong>
-            <span>基于 {data.data_as_of} 收盘后的全市场量价结构筛选</span>
+            <span>基于 {data.data_as_of} 收盘后的强题材与新闻催化构建候选池，再按量价结构精排</span>
           </div>
           <div className="rating-summary-facts">
             <span>全市场 {data.universe_count}</span>
@@ -2292,6 +2292,19 @@ function FirstBoardDiscoveryPanel({
             <strong>Top {data.candidates.length}</strong>
           </div>
         </div>
+        {data.themes.length > 0 ? (
+          <div className="discovery-themes" aria-label="当日热门题材">
+            <strong>当日强题材</strong>
+            <div>
+              {data.themes.map((theme) => (
+                <span key={`${theme.category}-${theme.name}`}>
+                  {theme.name} <b>{formatSigned(theme.change_pct, 1)}%</b>
+                  {theme.news_headlines.length > 0 ? <small>有催化</small> : null}
+                </span>
+              ))}
+            </div>
+          </div>
+        ) : null}
 
         {data.candidates.length > 0 ? (
           <div className="rating-top-list discovery-list">
@@ -2315,13 +2328,20 @@ function FirstBoardDiscoveryPanel({
                   </div>
                 </header>
                 <div className="rating-top-facts">
+                  <Fact label="核心题材" value={candidate.facts.themes[0]?.name ?? "暂无"} />
+                  <Fact label="题材涨幅" value={candidate.facts.themes[0] ? `${formatSigned(candidate.facts.themes[0].change_pct, 1)}%` : "暂无"} />
+                  <Fact label="热股榜" value={candidate.facts.popularity_rank ? `第 ${candidate.facts.popularity_rank} 名` : "未进Top100"} />
                   <Fact label="当日涨幅" value={`${formatSigned(candidate.facts.change_pct, 1)}%`} />
                   <Fact label="近5日" value={formatNullableSigned(candidate.facts.return_5d_pct)} />
                   <Fact label="量比" value={candidate.facts.volume_ratio_5d?.toFixed(2) ?? "暂无"} />
-                  <Fact label="距20日高" value={formatNullableSigned(candidate.facts.distance_20d_high_pct)} />
-                  <Fact label="成交额" value={formatAmount(candidate.facts.amount)} />
-                  <Fact label="置信度" value={formatPercent(candidate.confidence)} />
                 </div>
+                <section className="discovery-catalyst">
+                  <strong>题材与催化</strong>
+                  <p>
+                    {candidate.facts.news_catalysts[0]
+                      ?? `${candidate.facts.themes[0]?.name ?? "相关题材"}当日走强，暂未匹配到明确新闻催化`}
+                  </p>
+                </section>
                 <section className="rating-top-reasons">
                   <strong>入选依据</strong>
                   <ul>
@@ -2338,7 +2358,7 @@ function FirstBoardDiscoveryPanel({
           <div className="empty-state">本期没有满足数据和流动性要求的观察标的。</div>
         )}
         <p className="discovery-disclaimer">
-          这是量价结构研究排序，不代表次日涨停概率；板块强度与事件催化将在后续版本接入。
+          这是热门题材、新闻催化与量价结构的研究排序，不代表次日涨停概率。
         </p>
       </div>
     </Panel>

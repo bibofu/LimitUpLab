@@ -101,6 +101,60 @@ class HithinkFinanceCollectorTest(unittest.TestCase):
         self.assertIn("symbol", runner.commands[0])
         self.assertIn("10000", runner.commands[0])
 
+    def test_index_catalog_snapshot_and_constituents_are_normalized(self) -> None:
+        runner = SequenceRunner(
+            [
+                {
+                    "ok": True,
+                    "data": {
+                        "item": [
+                            {"thscode": "885001.TI", "name": "AI视频"},
+                        ]
+                    },
+                },
+                {
+                    "ok": True,
+                    "data": {
+                        "item": [
+                            {
+                                "thscode": "885001.TI",
+                                "price_change_ratio_pct": 5.74,
+                                "turnover": 12_000_000_000,
+                            }
+                        ]
+                    },
+                },
+                {
+                    "ok": True,
+                    "data": {
+                        "item": [
+                            {
+                                "thscode": "300001.SZ",
+                                "ticker": "300001",
+                                "name": "主题样本",
+                            }
+                        ]
+                    },
+                },
+            ]
+        )
+        collector = HithinkFinanceCollector(
+            executable="hithink-finance",
+            runner=runner,
+        )
+
+        catalog = collector.collect_index_catalog("cn_concept")
+        snapshots = collector.collect_index_snapshots(catalog)
+        constituents = collector.collect_index_constituents(snapshots[0])
+
+        self.assertEqual(catalog[0].category, "cn_concept")
+        self.assertEqual(snapshots[0].name, "AI视频")
+        self.assertEqual(snapshots[0].change_pct, 5.74)
+        self.assertEqual(constituents[0].symbol, "300001")
+        self.assertIn("catalog", runner.commands[0])
+        self.assertIn("snapshot", runner.commands[1])
+        self.assertIn("constituents", runner.commands[2])
+
     def test_market_snapshot_preserves_quote_performance(self) -> None:
         runner = FakeRunner(
             {

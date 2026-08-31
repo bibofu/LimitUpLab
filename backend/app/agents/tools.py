@@ -331,7 +331,7 @@ TOOL_SCHEMAS = [
         name="first_board_discovery",
         description=(
             "读取收盘后生成的下一交易日首板挖掘 Top10。候选在数据截止日尚未涨停，"
-            "按全市场日行情召回并结合近 60 日 K 线量价结构精排；"
+            "候选池来自当日热门题材和新闻催化，再结合近 60 日 K 线量价结构精排；"
             "适合回答首板挖掘、下一交易日可能首次涨停的观察池，不用于一进二接力。"
         ),
         args_schema={
@@ -1412,6 +1412,9 @@ class AgentToolRegistry:
                 "amount": item.facts.amount,
                 "pattern": item.facts.pattern,
                 "pattern_label": _discovery_pattern_label(item.facts.pattern),
+                "themes": [theme.model_dump(mode="json") for theme in item.facts.themes],
+                "popularity_rank": item.facts.popularity_rank,
+                "news_catalysts": item.facts.news_catalysts,
                 "reasons": item.reasons,
                 "risks": item.risks,
                 "data_missing": item.facts.data_missing,

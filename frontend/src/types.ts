@@ -327,6 +327,16 @@ export type FirstBoardDiscoveryPattern =
   | "range_breakout"
   | "unclassified";
 
+export interface FirstBoardDiscoveryTheme {
+  name: string;
+  category: "industry" | "concept";
+  change_pct: number;
+  rank: number;
+  member_count: number;
+  news_headlines: string[];
+  source: string;
+}
+
 export interface FirstBoardDiscoveryFacts {
   symbol: string;
   name: string;
@@ -347,6 +357,9 @@ export interface FirstBoardDiscoveryFacts {
   volatility_20d: number | null;
   ma_alignment: string;
   pattern: FirstBoardDiscoveryPattern;
+  themes: FirstBoardDiscoveryTheme[];
+  popularity_rank: number | null;
+  news_catalysts: string[];
   data_missing: string[];
 }
 
@@ -366,6 +379,7 @@ export interface FirstBoardDiscoveryResponse {
   universe_count: number;
   eligible_count: number;
   recalled_count: number;
+  themes: FirstBoardDiscoveryTheme[];
   candidates: FirstBoardDiscoveryCandidate[];
   generated_by: string;
   source: string;
