@@ -133,8 +133,11 @@ export function fetchStockTradingDayKLine(
   );
 }
 
-export function fetchFirstBoardRatings(tradeDate?: string) {
-  const query = tradeDate ? `?trade_date=${tradeDate}` : "";
+export function fetchFirstBoardRatings(tradeDate?: string, fullPool = false) {
+  const params = new URLSearchParams();
+  if (tradeDate) params.set("trade_date", tradeDate);
+  if (fullPool) params.set("full_pool", "true");
+  const query = params.size > 0 ? `?${params.toString()}` : "";
   return request<FirstBoardRatingsResponse>(`/api/agents/first-board-ratings${query}`);
 }
 

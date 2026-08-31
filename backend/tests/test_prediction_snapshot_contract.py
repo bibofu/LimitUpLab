@@ -221,6 +221,19 @@ class PredictionSnapshotContractTest(unittest.TestCase):
         self.assertEqual(tool_result.output, api_result)
         self.assertEqual(api_result.snapshot_source, "live")
 
+    def test_full_pool_api_bypasses_persisted_prediction_top10(self) -> None:
+        self._persist_live()
+
+        with (
+            patch("app.routers.agents.SQLiteFirstBoardRepository", return_value=self.repository),
+            patch("app.routers.agents.get_limit_up_repository") as limit_repository,
+        ):
+            limit_repository.return_value.list_events.return_value = SAMPLE_EVENTS
+            api_result = get_first_board_ratings(self.trade_date, full_pool=True)
+
+        self.assertEqual(api_result.snapshot_source, "calculated")
+        self.assertEqual(api_result.trade_date, self.trade_date)
+
     def _persist_live(self) -> int:
         return persist_agent_predictions_for_dates(
             events=SAMPLE_EVENTS,

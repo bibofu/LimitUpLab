@@ -3140,15 +3140,46 @@ function DetailView({ view, data }: { view: StockListViewKey; data: DashboardDat
 
   if (view === "first") {
     return (
-      <Panel title="首板票" icon={detailIcon(view)}>
-        <StockTable events={data.firstBoard} variant="first" />
-      </Panel>
+      <FirstBoardPoolView
+        events={data.firstBoard}
+        initialRatings={data.firstBoardRatings}
+      />
     );
   }
 
   return (
     <Panel title={viewMeta[view].title} icon={detailIcon(view)}>
       <StockTable events={eventsByView[view]} variant={view} />
+    </Panel>
+  );
+}
+
+function FirstBoardPoolView({
+  events,
+  initialRatings,
+}: {
+  events: LimitUpEvent[];
+  initialRatings: FirstBoardRatingsResponse;
+}) {
+  const [ratings, setRatings] = useState(initialRatings);
+  const tradeDate = events[0]?.trade_date;
+
+  useEffect(() => {
+    let active = true;
+    if (!tradeDate) return () => { active = false; };
+    void fetchFirstBoardRatings(tradeDate, true)
+      .then((response) => {
+        if (active) setRatings(response);
+      })
+      .catch(() => {
+        // Keep persisted prediction scores as a partial ordering fallback.
+      });
+    return () => { active = false; };
+  }, [tradeDate]);
+
+  return (
+    <Panel title="首板票" icon={detailIcon("first")}>
+      <StockTable events={events} ratings={ratings} variant="first" />
     </Panel>
   );
 }
@@ -3291,14 +3322,32 @@ function LimitUpPool({ data }: { data: DashboardData }) {
 
 function StockTable({
   events,
+  ratings,
   variant,
 }: {
   events: LimitUpEvent[];
+  ratings?: FirstBoardRatingsResponse;
   variant: ViewKey;
 }) {
   /** Shared clickable table for all stock-list routes. */
 
   const navigate = useNavigate();
+  const ratingBySymbol = new Map(
+    (ratings?.candidates ?? []).map((item) => [item.facts.symbol, item]),
+  );
+  const filteredBySymbol = new Map(
+    (ratings?.filtered_out ?? []).map((item) => [item.symbol, item]),
+  );
+  const visibleEvents = variant === "first"
+    ? [...events].sort((left, right) => {
+        const leftScore = ratingBySymbol.get(left.symbol)?.score;
+        const rightScore = ratingBySymbol.get(right.symbol)?.score;
+        if (leftScore !== undefined && rightScore !== undefined) return rightScore - leftScore;
+        if (leftScore !== undefined) return -1;
+        if (rightScore !== undefined) return 1;
+        return left.first_limit_time.localeCompare(right.first_limit_time);
+      })
+    : events;
 
   function openStock(symbol: string, tradeDate: string) {
     navigate(stockDetailPath(symbol, tradeDate));
@@ -3310,6 +3359,7 @@ function StockTable({
         <thead>
           <tr>
             <th>股票</th>
+            {variant === "first" ? <th>评分</th> : null}
             <th>日期</th>
             <th>高度</th>
             <th>首次封板</th>
@@ -3322,7 +3372,10 @@ function StockTable({
           </tr>
         </thead>
         <tbody>
-          {events.map((event) => (
+          {visibleEvents.map((event) => {
+            const rating = ratingBySymbol.get(event.symbol);
+            const filtered = filteredBySymbol.get(event.symbol);
+            return (
             <tr
               className="stock-row"
               key={`${event.trade_date}-${event.symbol}`}
@@ -3339,6 +3392,12 @@ function StockTable({
                 <strong>{event.name}</strong>
                 <span>{event.symbol}</span>
               </td>
+              {variant === "first" ? (
+                <td>
+                  <strong>{rating ? rating.score.toFixed(1) : "--"}</strong>
+                  <span>{rating ? rating.rating : filtered?.excluded_reasons[0] ?? "未评分"}</span>
+                </td>
+              ) : null}
               <td>{event.trade_date}</td>
               <td>{event.closed_limit ? `${event.board_height} 板` : "未封板"}</td>
               <td>{event.first_limit_time.slice(0, 5)}</td>
@@ -3352,7 +3411,8 @@ function StockTable({
                 <span>{event.industry}</span>
               </td>
             </tr>
-          ))}
+            );
+          })}
         </tbody>
       </table>
     </div>

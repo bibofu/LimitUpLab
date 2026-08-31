@@ -263,13 +263,14 @@ def _non_negative_env_float(name: str) -> float:
 @router.get("/first-board-ratings", response_model=FirstBoardRatingsResponse)
 def get_first_board_ratings(
     trade_date: Optional[date] = None,
+    full_pool: bool = False,
 ) -> FirstBoardRatingsResponse:
-    """Return explainable first-board candidate ratings for a trade date."""
+    """Return prediction Top10 or a freshly calculated complete eligible pool."""
 
     events = get_limit_up_repository().list_events()
     resolved_trade_date = _resolve_trade_date(events, trade_date)
     first_board_repository = SQLiteFirstBoardRepository()
-    if resolved_trade_date is not None:
+    if resolved_trade_date is not None and not full_pool:
         live_snapshot = first_board_repository.get_live_prediction_snapshot(
             resolved_trade_date
         )
@@ -297,6 +298,7 @@ def get_first_board_ratings(
         scope="first_board_ratings",
         key_parts={
             "trade_date": resolved_trade_date.isoformat() if resolved_trade_date else None,
+            "full_pool": full_pool,
             "events": _events_signature(events, start_date=resolved_trade_date, end_date=resolved_trade_date),
             "enrichment": [
                 (
