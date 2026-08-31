@@ -133,6 +133,24 @@ export interface StockNewsFacts {
   data_missing: string[];
 }
 
+export interface FinanceNewsItem {
+  title: string;
+  summary: string;
+  published_at: string;
+  source: string;
+  url: string;
+  category: string;
+  relevance_score: number;
+}
+
+export interface FinanceNewsFacts {
+  query: string | null;
+  fetched_at: string;
+  window_hours: number;
+  sources: string[];
+  items: FinanceNewsItem[];
+}
+
 export interface ContinuationStat {
   board_height: number;
   sample_size: number;

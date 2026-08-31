@@ -2,18 +2,35 @@
 
 from datetime import date
 
-from fastapi import APIRouter, HTTPException
+from fastapi import APIRouter, HTTPException, Query
 
 from app.collectors import (
     HithinkFinanceError,
     collect_market_indices,
 )
-from app.models import DragonTigerReviewResponse, MarketSummary
+from app.models import DragonTigerReviewResponse, FinanceNewsFacts, MarketSummary
 from app.repositories import get_limit_up_repository
 from app.services.analysis import latest_trade_date, summarize_market
 from app.services.dragon_tiger_review import load_dragon_tiger_review
+from app.services.finance_news import collect_finance_news
 
 router = APIRouter()
+
+
+@router.get("/news", response_model=FinanceNewsFacts)
+def get_finance_news(
+    limit: int = Query(default=12, ge=1, le=12),
+    hours: int = Query(default=24, ge=1, le=168),
+) -> FinanceNewsFacts:
+    """Return recent structured market news for the public workspace."""
+
+    try:
+        return collect_finance_news(limit=limit, hours=hours)
+    except Exception as exc:  # noqa: BLE001
+        raise HTTPException(
+            status_code=502,
+            detail="财经快讯数据源暂不可用，请稍后重试。",
+        ) from exc
 
 
 @router.get("/summary", response_model=MarketSummary)

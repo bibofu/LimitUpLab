@@ -10,6 +10,7 @@ import type {
   DragonTigerReviewResponse,
   ContinuationStat,
   FailedRateStat,
+  FinanceNewsFacts,
   FirstBoardCriticResponse,
   FirstBoardDiscoveryResponse,
   FirstBoardRatingsResponse,
@@ -147,6 +148,14 @@ export function fetchRecommendationIntelligence() {
   return request<RecommendationIntelligenceResponse>(
     "/api/agents/recommendation-intelligence",
   );
+}
+
+export function fetchFinanceNews(limit = 12, hours = 24) {
+  const params = new URLSearchParams({
+    limit: String(limit),
+    hours: String(hours),
+  });
+  return request<FinanceNewsFacts>(`/api/market/news?${params.toString()}`);
 }
 
 export function fetchReviewAgentReport(params?: {

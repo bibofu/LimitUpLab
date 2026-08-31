@@ -1,8 +1,12 @@
 import unittest
 from datetime import datetime, timedelta
+from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
+from fastapi import HTTPException
+
 from app.models import FinanceNewsItem
+from app.routers.market import get_finance_news
 from app.services.finance_news import collect_finance_news
 
 
@@ -108,6 +112,39 @@ class FinanceNewsTest(unittest.TestCase):
 
         self.assertEqual(response.sources, ["东方财富"])
         self.assertEqual(response.items[0].title, "A股市场开盘")
+
+    def test_market_news_route_returns_structured_feed(self) -> None:
+        expected = collect_finance_news(
+            loaders={
+                "东方财富": lambda: [
+                    self._item(
+                        "A股盘前政策快讯",
+                        "盘前发布最新政策信息。",
+                        source="东方财富",
+                        minutes_ago=5,
+                        category="A股",
+                        relevance=4,
+                    )
+                ]
+            },
+            now=self.now,
+        )
+        with patch("app.routers.market.collect_finance_news", return_value=expected) as loader:
+            response = get_finance_news(limit=12, hours=24)
+
+        self.assertEqual(response, expected)
+        loader.assert_called_once_with(limit=12, hours=24)
+
+    def test_market_news_route_hides_upstream_error(self) -> None:
+        with patch(
+            "app.routers.market.collect_finance_news",
+            side_effect=RuntimeError("provider detail"),
+        ):
+            with self.assertRaises(HTTPException) as raised:
+                get_finance_news(limit=12, hours=24)
+
+        self.assertEqual(raised.exception.status_code, 502)
+        self.assertNotIn("provider detail", str(raised.exception.detail))
 
 
 if __name__ == "__main__":
