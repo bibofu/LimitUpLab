@@ -110,6 +110,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             self._make_event("002298", "first", trade_date),
             self._make_event("600001", "continued", trade_date, board_height=2),
             self._make_event("000001", "failed", trade_date, closed_limit=False),
+            self._make_event("920001", "bse", trade_date),
             self._make_event("000002", "older", date(2026, 8, 7)),
         ]
         loaded: list[str] = []

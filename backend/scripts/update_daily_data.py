@@ -486,6 +486,7 @@ def warm_latest_intraday_cache(
             event.symbol
             for event in events
             if event.trade_date == trade_date
+            and not event.symbol.startswith(("4", "8", "920"))
         }
     )
     if not symbols:
