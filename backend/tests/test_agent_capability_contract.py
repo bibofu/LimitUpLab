@@ -4,8 +4,11 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.agents.capability_contract import (
+    CAPABILITY_BY_NAME,
+    capability_answer_instruction,
     capability_schema_prompt,
     ensure_capability_tool_calls,
+    infer_capabilities_from_facts,
     normalize_capabilities,
 )
 from app.agents.eval_runner import (
@@ -27,13 +30,15 @@ from app.services.sample_data import SAMPLE_EVENTS
 class CapabilityOnlyProvider(LLMProvider):
     """Simulate semantic planning while intentionally omitting raw tool calls."""
 
+    def __init__(self) -> None:
+        self.answer_system_prompt = ""
+
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         if "first job is to decide which tools are needed" in system_prompt:
             return LLMResult(
                 content=json.dumps(
                     {
                         "intent_label": "limit_up_query",
-                        "skill_name": None,
                         "capabilities": ["limit_up_pool"],
                         "safety": "normal",
                         "tool_calls": [],
@@ -43,6 +48,7 @@ class CapabilityOnlyProvider(LLMProvider):
                 model="fake-capability-planner",
                 provider="fake",
             )
+        self.answer_system_prompt = system_prompt
         return LLMResult(
             content="已根据最新完整收盘事实整理。",
             model="fake-capability-answer",
@@ -63,7 +69,6 @@ class ContextAwareCapabilityProvider(LLMProvider):
             content=json.dumps(
                 {
                     "intent_label": capability,
-                    "skill_name": None,
                     "capabilities": [capability],
                     "safety": "normal",
                     "tool_calls": [],
@@ -83,7 +88,6 @@ class SourceRefinementProvider(LLMProvider):
             content=json.dumps(
                 {
                     "intent_label": "limit_up_query",
-                    "skill_name": None,
                     "capabilities": ["limit_up_pool"],
                     "context_mode": "source_refinement",
                     "context_capabilities": ["popularity"],
@@ -98,14 +102,42 @@ class SourceRefinementProvider(LLMProvider):
 
 
 class AgentCapabilityContractTest(unittest.TestCase):
-    def test_skill_and_tool_plans_remain_backward_compatible(self) -> None:
+    def test_tool_plans_infer_single_tool_capability(self) -> None:
         capabilities = normalize_capabilities(
             None,
-            skill_name="market_environment",
             tool_calls=[{"name": "finance_news", "arguments": {}}],
         )
 
-        self.assertEqual(capabilities, ("market_environment", "finance_news"))
+        self.assertEqual(capabilities, ("finance_news",))
+
+    def test_capability_is_the_single_workflow_manifest(self) -> None:
+        capability = CAPABILITY_BY_NAME["first_board_rating"]
+
+        self.assertIn("首板评级前10名", capability.examples)
+        self.assertEqual(capability.required_tools[0].name, "first_board_ratings")
+        self.assertIn("研究评级", capability.answer_guidance)
+
+    def test_capability_answer_guidance_is_injected_progressively(self) -> None:
+        guidance = capability_answer_instruction(
+            ("market_environment", "popularity")
+        )
+
+        self.assertIn("CAPABILITY_RESPONSE_CONTRACTS", guidance)
+        self.assertIn("- market_environment:", guidance)
+        self.assertNotIn("- popularity:", guidance)
+
+    def test_composite_capability_is_recovered_from_executed_facts(self) -> None:
+        capabilities = infer_capabilities_from_facts(
+            (),
+            {
+                "market_summary": {},
+                "market_index_trend": {},
+                "sector_performance": {},
+                "hot_stock_ranking": {},
+            },
+        )
+
+        self.assertEqual(capabilities, ("market_environment",))
 
     def test_compound_capabilities_merge_required_evidence(self) -> None:
         calls = ensure_capability_tool_calls(
@@ -240,6 +272,7 @@ class AgentCapabilityContractTest(unittest.TestCase):
         )
         self.addCleanup(database_path.unlink, missing_ok=True)
 
+        provider = CapabilityOnlyProvider()
         response = answer_first_board_chat(
             AgentChatRequest(
                 session_id="capability-paraphrase",
@@ -247,10 +280,12 @@ class AgentCapabilityContractTest(unittest.TestCase):
             ),
             events=SAMPLE_EVENTS,
             repository=SQLiteFirstBoardRepository(database_path),
-            llm_provider=CapabilityOnlyProvider(),
+            llm_provider=provider,
         )
 
         self.assertIn("limit_up_events", response.tool_calls)
+        self.assertIn("CAPABILITY_RESPONSE_CONTRACTS", provider.answer_system_prompt)
+        self.assertIn("- limit_up_pool:", provider.answer_system_prompt)
         planner_trace = next(
             trace for trace in response.tool_results if trace.name == "llm_tool_planner"
         )

@@ -22,15 +22,20 @@ class AgentCapability:
     name: str
     description: str
     required_tools: tuple[CapabilityToolRequirement, ...]
+    examples: tuple[str, ...] = ()
+    answer_guidance: str = ""
 
     def planner_payload(self) -> dict[str, Any]:
         """Return the compact capability schema embedded in the planner prompt."""
 
-        return {
+        payload: dict[str, Any] = {
             "name": self.name,
             "description": self.description,
             "required_evidence": [item.name for item in self.required_tools],
         }
+        if self.examples:
+            payload["examples"] = list(self.examples)
+        return payload
 
 
 CAPABILITIES: tuple[AgentCapability, ...] = (
@@ -50,6 +55,13 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
                     "enrich_performance": True,
                 },
             ),
+        ),
+        examples=("今天市场环境如何", "今天 A 股整体怎么样", "总结一下最新盘面情况"),
+        answer_guidance=(
+            "按大盘指数、涨跌停结构、板块强弱、热门个股、客观总结五部分回答。"
+            "指数包含最新日涨跌和近 5 个交易日表现；涨跌停结构包含首板、连板、未回封、"
+            "跌停和最高板，缺失字段明确说明；板块列涨幅前 5 和跌幅前 5；热股列前 5 名及"
+            "可用的最新涨跌。分别注明收盘、板块和人气数据时点，不用单一情绪标签代替事实。"
         ),
     ),
     AgentCapability(
@@ -71,6 +83,12 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
                 {"period": "day", "limit": 20, "source": "auto"},
             ),
         ),
+        examples=("有哪些票比较热门", "热股榜前20名", "同花顺人气榜有哪些股票"),
+        answer_guidance=(
+            "未指定数量时展示前 20 名，指定 Top-N 时严格遵守数量；按事实排名输出名次、名称"
+            "和六位代码，不重新排序。注明真实数据源、北京时间采集时间和实际返回数量。"
+            "人气只代表关注度和拥挤度，不解释为评分、交易信号或上涨概率。"
+        ),
     ),
     AgentCapability(
         "finance_news",
@@ -80,11 +98,23 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
                 "finance_news", {"query": None, "limit": 8, "hours": 48}
             ),
         ),
+        examples=("最新的财经新闻", "最新的新闻", "今天有什么财经快讯"),
+        answer_guidance=(
+            "未指定范围时总结最近 48 小时且最多 8 条，注明北京时间抓取时间和实际成功来源。"
+            "每条保留发布时间、来源、标题、简短摘要和原文链接；新闻事实与可能影响分开，"
+            "影响只能标记为推断。无有效结果时明确无法获取，不用模型记忆补充。"
+        ),
     ),
     AgentCapability(
         "stock_news",
         "查询一只明确股票最近的新闻、公告类报道或监管消息，要求保留来源、发布时间和链接。",
         (CapabilityToolRequirement("stock_news", {"days": 7, "limit": 10}),),
+        examples=("中电鑫龙最近有什么新闻", "600519 有新消息吗", "它最近有公告吗"),
+        answer_guidance=(
+            "先确认唯一股票实体；默认查询近 7 个自然日、最多 10 条并按发布时间倒序。"
+            "注明股票名称和代码、抓取时间、缓存状态；每条保留发布时间、来源、类型、标题、"
+            "摘要和链接。媒体报道不得写成正式公告，没有直接相关结果时不以综合新闻补足。"
+        ),
     ),
     AgentCapability(
         "stock_activity",
@@ -100,11 +130,24 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
         "limit_up_pool",
         "查询某个交易日的涨停、首板、连板或炸板名单；不用于跨日晋级数量和比例。",
         (CapabilityToolRequirement("limit_up_events"),),
+        examples=("首板票有哪些", "今天二连板有哪些", "创业板涨停股票", "列出炸板未回封股票"),
+        answer_guidance=(
+            "严格保留用户指定的日期、市场、板数、状态、题材、排序和数量条件；未指定日期时"
+            "使用最新完整交易日并写明 ISO 日期。先报告匹配数量，再按事实顺序列名称和代码。"
+            "用户要求全部时逐只完整返回且去重，严格区分未回封炸板与开板后重新封住。"
+        ),
     ),
     AgentCapability(
         "first_board_rating",
         "查询首板一进二观察候选、Top10 评级、排名、评分解释、位置和风险。",
         (CapabilityToolRequirement("first_board_ratings"),),
+        examples=("哪些首板候选评分靠前", "为什么这只股票评分高", "首板评级前10名"),
+        answer_guidance=(
+            "未指定日期时使用最新完整交易日并写明 ISO 日期。排名默认最多展示 10 只，包含"
+            "名次、名称、代码、评级、分数和主要依据；解释单只股票时区分基本信息、因子得分、"
+            "支持证据、风险和缺失输入。位置、封板事实和分项得分必须忠于记录，结果称为研究"
+            "评级，不表述为确定性预测。"
+        ),
     ),
     AgentCapability(
         "first_board_discovery",
@@ -164,14 +207,6 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
 )
 
 CAPABILITY_BY_NAME = {item.name: item for item in CAPABILITIES}
-SKILL_CAPABILITIES = {
-    "finance-news": "finance_news",
-    "stock-news": "stock_news",
-    "first-board-rating": "first_board_rating",
-    "limit-up-pool": "limit_up_pool",
-    "market-environment": "market_environment",
-    "popularity": "popularity",
-}
 TOOL_CAPABILITIES = {
     requirement.name: capability.name
     for capability in CAPABILITIES
@@ -183,10 +218,9 @@ TOOL_CAPABILITIES = {
 def normalize_capabilities(
     raw_capabilities: object,
     *,
-    skill_name: object = None,
     tool_calls: Iterable[dict[str, Any]] = (),
 ) -> tuple[str, ...]:
-    """Normalize planner output and infer missing capability IDs for compatibility."""
+    """Normalize planner output and infer capability IDs from selected tools."""
 
     requested: list[str] = []
     if isinstance(raw_capabilities, list):
@@ -198,18 +232,78 @@ def normalize_capabilities(
             if name in CAPABILITY_BY_NAME and name not in requested:
                 requested.append(name)
 
-    if isinstance(skill_name, str):
-        normalized_skill = skill_name.strip().lower().replace("_", "-")
-        capability_name = SKILL_CAPABILITIES.get(normalized_skill)
-        if capability_name and capability_name not in requested:
-            requested.append(capability_name)
-
     for call in tool_calls:
         tool_name = str(call.get("name") or "")
         capability_name = TOOL_CAPABILITIES.get(tool_name)
         if capability_name and capability_name not in requested:
             requested.append(capability_name)
     return tuple(requested)
+
+
+def infer_capabilities_from_facts(
+    capabilities: Iterable[str],
+    facts: dict[str, Any],
+) -> tuple[str, ...]:
+    """Recover capabilities when policy-repaired tools produced the evidence."""
+
+    resolved = list(normalize_capabilities(list(capabilities)))
+    fact_names = set(facts)
+    covered_by_composite = {
+        requirement.name
+        for name in resolved
+        if name in CAPABILITY_BY_NAME
+        and len(CAPABILITY_BY_NAME[name].required_tools) > 1
+        for requirement in CAPABILITY_BY_NAME[name].required_tools
+    }
+    for capability in sorted(
+        CAPABILITIES,
+        key=lambda item: len(item.required_tools),
+        reverse=True,
+    ):
+        if capability.name in resolved:
+            continue
+        if (
+            len(capability.required_tools) == 1
+            and capability.required_tools[0].name in covered_by_composite
+        ):
+            continue
+        if capability.required_tools and all(
+            requirement.name in fact_names for requirement in capability.required_tools
+        ):
+            resolved.append(capability.name)
+            if len(capability.required_tools) > 1:
+                covered_by_composite.update(
+                    requirement.name for requirement in capability.required_tools
+                )
+    return tuple(resolved)
+
+
+def capability_answer_instruction(capabilities: Iterable[str]) -> str:
+    """Build answer guidance only for capabilities active in this request."""
+
+    selected = [
+        CAPABILITY_BY_NAME[name]
+        for name in dict.fromkeys(capabilities)
+        if name in CAPABILITY_BY_NAME
+    ]
+    covered_by_composite = {
+        requirement.name
+        for capability in selected
+        if len(capability.required_tools) > 1
+        for requirement in capability.required_tools
+    }
+    guidance = [
+        f"- {capability.name}: {capability.answer_guidance}"
+        for capability in selected
+        if capability.answer_guidance
+        and not (
+            len(capability.required_tools) == 1
+            and capability.required_tools[0].name in covered_by_composite
+        )
+    ]
+    if not guidance:
+        return ""
+    return " CAPABILITY_RESPONSE_CONTRACTS:\n" + "\n".join(guidance)
 
 
 def ensure_capability_tool_calls(

@@ -12,8 +12,10 @@ from typing import Any, Callable, Iterator
 
 from app.agents.explanation import explain_first_board_rating
 from app.agents.capability_contract import (
+    capability_answer_instruction,
     capability_schema_prompt,
     ensure_capability_tool_calls,
+    infer_capabilities_from_facts,
     normalize_capabilities,
 )
 from app.agent_output_sanitizer import (
@@ -27,7 +29,6 @@ from app.agents.query_contract import (
     extract_result_limit,
     looks_like_exhaustive_request,
 )
-from app.agents.skills import AGENT_SKILL_REGISTRY, AgentSkill
 from app.agents.tool_policy import (
     AgentToolPolicyEngine,
     QuestionSignals as _QuestionSignals,
@@ -75,7 +76,7 @@ from app.repositories import SQLiteFirstBoardRepository
 from app.services.llm_provider import LLMProvider, get_llm_provider
 
 
-CHAT_AGENT_VERSION = "first-board-chat-policy-v10-stock-news"
+CHAT_AGENT_VERSION = "first-board-chat-policy-v11-capability-manifest"
 _FORCE_TEMPLATE_ANSWER_OVERRIDE: ContextVar[bool | None] = ContextVar(
     "force_template_answer_override",
     default=None,
@@ -215,7 +216,6 @@ class AgentQueryPlan:
         capabilities: tuple[str, ...],
         policy_capabilities: tuple[str, ...],
         context_mode: str,
-        active_skill: AgentSkill | None,
         direct_answer: str,
         result: Any,
         duration_ms: int,
@@ -226,7 +226,6 @@ class AgentQueryPlan:
         self.capabilities = capabilities
         self.policy_capabilities = policy_capabilities
         self.context_mode = context_mode
-        self.active_skill = active_skill
         self.direct_answer = direct_answer
         self.result = result
         self.duration_ms = duration_ms
@@ -530,7 +529,6 @@ def _answer_with_llm_tool_agent(
 
     tool_calls = query_plan.tool_calls
     direct_answer = query_plan.direct_answer
-    active_skill = query_plan.active_skill
     capabilities = query_plan.capabilities
     policy_capabilities = query_plan.policy_capabilities
     if intent == "out_of_scope":
@@ -678,12 +676,11 @@ def _answer_with_llm_tool_agent(
         capabilities=policy_capabilities,
     )
     _add_composed_tool_facts(request.message, execution["facts"])
-    active_skill = active_skill or AGENT_SKILL_REGISTRY.resolve_from_facts(
+    capabilities = infer_capabilities_from_facts(
+        capabilities,
         execution["facts"],
-        tools.enabled_tool_names,
     )
-    if active_skill is not None:
-        tool_plan["skill_name"] = active_skill.name
+    tool_plan["capabilities"] = list(capabilities)
     tool_duration_ms = round((perf_counter() - tools_started_at) * 1000)
     if not _has_usable_tool_facts(execution["facts"]):
         return _unanswerable_response(
@@ -739,20 +736,13 @@ def _answer_with_llm_tool_agent(
         request.message,
         execution["facts"],
     )
-    market_environment_answer = (
-        "market_environment" in capabilities
-        or _QuestionSignals.from_message(request.message).market_environment
-    )
     answer_system_prompt = _tool_answer_system_prompt(
         agent_profile=tools.profile,
         exhaustive_event_answer=exhaustive_event_answer,
         complete_position_answer=complete_position_answer,
         complete_hot_stock_answer=complete_hot_stock_answer,
         hot_stock_event_intersection_answer=hot_stock_event_intersection_answer,
-        market_environment_answer=market_environment_answer,
-        skill_instruction=(
-            active_skill.answer_instruction() if active_skill is not None else ""
-        ),
+        capability_instruction=capability_answer_instruction(capabilities),
     )
     answer_user_prompt = _tool_answer_user_prompt(
         request,
@@ -922,7 +912,6 @@ def _generate_llm_query_plan(
 
     planner_system_prompt = _tool_planner_system_prompt(
         tools.schema_prompt(),
-        AGENT_SKILL_REGISTRY.schema_prompt(tools.enabled_tool_names),
         capability_schema_prompt(tools.enabled_tool_names),
         tools.profile,
     )
@@ -939,19 +928,6 @@ def _generate_llm_query_plan(
     tool_calls = _normalize_first_board_position_tool_calls(request, tool_calls)
     tool_calls = _normalize_daily_board_promotion_tool_calls(request, tool_calls)
     direct_answer = str(payload.get("answer_directly") or "").strip()
-    declared_skill_name = payload.get("skill_name")
-    active_skill = AGENT_SKILL_REGISTRY.resolve(
-        declared_skill_name,
-        tool_calls,
-        tools.enabled_tool_names,
-    )
-    if active_skill is not None:
-        payload["skill_name"] = active_skill.name
-        tool_calls = AGENT_SKILL_REGISTRY.ensure_required_tool_calls(
-            active_skill,
-            tool_calls,
-        )
-        direct_answer = ""
     context_mode = str(payload.get("context_mode") or "standalone").strip().lower()
     if context_mode not in {"standalone", "entity_followup", "source_refinement"}:
         context_mode = "standalone"
@@ -973,13 +949,9 @@ def _generate_llm_query_plan(
     payload["context_mode"] = context_mode
     payload["context_capabilities"] = context_capabilities
     payload["capabilities"] = raw_capabilities
-    policy_capabilities = normalize_capabilities(
-        raw_capabilities,
-        skill_name=declared_skill_name,
-    )
+    policy_capabilities = normalize_capabilities(raw_capabilities)
     capabilities = normalize_capabilities(
         raw_capabilities,
-        skill_name=payload.get("skill_name"),
         tool_calls=tool_calls,
     )
     payload["capabilities"] = list(capabilities)
@@ -988,13 +960,14 @@ def _generate_llm_query_plan(
         tool_calls,
         allowed_tool_names=tools.enabled_tool_names,
     )
+    if capabilities:
+        direct_answer = ""
     return AgentQueryPlan(
         payload=payload,
         tool_calls=tool_calls,
         capabilities=capabilities,
         policy_capabilities=policy_capabilities,
         context_mode=context_mode,
-        active_skill=active_skill,
         direct_answer=direct_answer,
         result=result,
         duration_ms=duration_ms,
@@ -1004,7 +977,6 @@ def _generate_llm_query_plan(
 
 def _tool_planner_system_prompt(
     tool_schema_prompt: str,
-    skill_schema_prompt: str,
     capability_contract_prompt: str,
     agent_profile: str,
 ) -> str:
@@ -1035,8 +1007,6 @@ def _tool_planner_system_prompt(
         "unless the question is a greeting, capability question, or small talk. "
         "For an out-of-scope or unsupported question, set intent_label to out_of_scope "
         "and answer_directly to exactly '抱歉，该问题无法回答'. "
-        "Choose one skill_name from the supplied skill catalog when a skill covers the "
-        "question; otherwise use null. A skill is a business workflow, while tools provide facts. "
         "Translate every supported domain request into one or more normalized capabilities "
         "from the supplied capability catalog. Use multiple capabilities for compound questions, "
         "regardless of synonyms, colloquial wording, clause order, or omitted dates. "
@@ -1055,9 +1025,7 @@ def _tool_planner_system_prompt(
         "Example: after popularity, '这些里面哪些涨停' => context_mode source_refinement, "
         "context_capabilities [popularity], capabilities [limit_up_pool]. After a broad market "
         "review, '强势行业展开' => entity_followup with capabilities [sector_performance]. "
-        "When a skill is selected, include its required tools unless the backend can safely fill defaults. "
         "Return only valid JSON. No markdown. "
-        f"Available skills: {skill_schema_prompt}. "
         f"Capability catalog: {capability_contract_prompt}. "
         f"Available tools are described as JSON schemas: {tool_schema_prompt}. "
         "Use YYYY-MM-DD for all dates. "
@@ -1076,7 +1044,7 @@ def _tool_planner_system_prompt(
         "For Dragon-Tiger List, institution flow or hot-money flow questions, call dragon_tiger_list only for a completed trade date. "
         "For a theme or industry inside the local limit-up pool, call limit_up_events. For whole-market industry performance or ranking, call sector_performance and state its source, data_as_of and freshness. "
         "Grouping a previously returned stock set by its existing industry or concept fields does not require sector_performance; use it only for whole-market industry strength, return or ranking. "
-        "For broad market-environment questions, select the market-environment skill and call market_summary with include_limit_down=true, market_index_trend for 5 trading days, sector_performance without a sector filter, and hot_stock_ranking with enrich_performance=true. Do not answer from only one of these evidence groups. "
+        "For broad market-environment questions, select the market_environment capability. Its contract supplies market summary, five-day index trend, sector ranking and enriched popularity evidence; do not answer from only one evidence group. "
         "For broad-market, major-index, Shanghai Composite, Shenzhen Component or ChiNext Index performance over multiple days, call market_index_trend with the requested trading-day window; never infer index performance from limit-up counts. "
         "If the user asks only for the market/index curve or index return, do not expand it into market_environment, sector_performance or popularity. "
         "For current hot, popular, popularity-ranked, or attention-ranked stocks, call hot_stock_ranking; default to 20 rows when the user gives no count, state the source and Beijing capture time, and say that popularity reflects attention and does not constitute a trading signal. In this answer, never use the exact Chinese tokens 买入, 卖出, 仓位, 目标价, or 收益承诺, even inside a disclaimer. "
@@ -1090,7 +1058,6 @@ def _tool_planner_system_prompt(
         "If the user asks for those, set safety to refuse_trade_instruction. "
         "JSON schema: {"
         "\"intent_label\": string, "
-        "\"skill_name\": string|null, "
         "\"capabilities\": [string], "
         "\"context_mode\": \"standalone\"|\"entity_followup\"|\"source_refinement\", "
         "\"context_capabilities\": [string], "
@@ -1962,8 +1929,7 @@ def _tool_answer_system_prompt(
     complete_position_answer: bool = False,
     complete_hot_stock_answer: bool = False,
     hot_stock_event_intersection_answer: bool = False,
-    market_environment_answer: bool = False,
-    skill_instruction: str = "",
+    capability_instruction: str = "",
 ) -> str:
     """Instruct the LLM to answer only from executed tool facts."""
 
@@ -2016,20 +1982,6 @@ def _tool_answer_system_prompt(
         if hot_stock_event_intersection_answer
         else ""
     )
-    market_environment_instruction = (
-        " MARKET_ENVIRONMENT_OUTPUT: Produce a substantive four-section review, not a "
-        "brief sentiment label. Section 1 covers all major indices with latest-day change "
-        "and 5-day return. Section 2 covers limit-up, first-board, continued-board, "
-        "unsealed, limit-down and maximum-board facts, explicitly stating unavailable "
-        "fields. Section 3 lists both the five strongest and five weakest industries with "
-        "change percentages and leaders when available. Section 4 lists the five most "
-        "popular stocks with popularity rank and latest quote change when available. End "
-        "with a short objective synthesis based only on those facts, without a categorical "
-        "market-sentiment label. State every distinct data cutoff because close, sector and "
-        "popularity snapshots may differ."
-        if market_environment_answer
-        else ""
-    )
     return (
         "You are LimitUpLab's A-share first-board research agent. "
         "Answer in Chinese using only the executed tool facts. "
@@ -2055,7 +2007,7 @@ def _tool_answer_system_prompt(
         "Do not provide direct trading instructions, position sizing, target prices, "
         "or return promises."
         f"{exhaustive_instruction}{position_instruction}{hot_stock_instruction}"
-        f"{intersection_instruction}{market_environment_instruction}{skill_instruction}"
+        f"{intersection_instruction}{capability_instruction}"
     )
 
 
@@ -3633,7 +3585,6 @@ def _llm_plan_trace(
             "model": model,
             "provider": provider,
             "intent_label": tool_plan.get("intent_label"),
-            "skill_name": tool_plan.get("skill_name"),
             "capabilities": tool_plan.get("capabilities") or [],
             "context_mode": tool_plan.get("context_mode") or "standalone",
             "context_capabilities": tool_plan.get("context_capabilities") or [],

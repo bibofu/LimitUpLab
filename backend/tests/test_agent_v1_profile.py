@@ -6,8 +6,8 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
+from app.agents.capability_contract import capability_schema_prompt
 from app.agents.chat import UNANSWERABLE_TEXT, answer_first_board_chat
-from app.agents.skills import AGENT_SKILL_REGISTRY
 from app.agents.tool_policy import AgentToolPolicyEngine, ToolExecution
 from app.agents.tools import (
     EXTENDED_AGENT_PROFILE,
@@ -45,7 +45,7 @@ class DeferredToolInjectionProvider(LLMProvider):
                 content=json.dumps(
                     {
                         "intent_label": "remote_limit_up_pool",
-                        "skill_name": None,
+                        "capabilities": [],
                         "safety": "normal",
                         "tool_calls": [
                             {
@@ -76,7 +76,7 @@ class PopularityPolicyRepairProvider(LLMProvider):
                 content=json.dumps(
                     {
                         "intent_label": "hot_stock_ranking",
-                        "skill_name": "popularity",
+                        "capabilities": ["popularity"],
                         "safety": "normal",
                         "tool_calls": [],
                         "answer_directly": "",
@@ -105,7 +105,7 @@ class FinanceNewsPolicyRepairProvider(LLMProvider):
                 content=json.dumps(
                     {
                         "intent_label": "latest_finance_news",
-                        "skill_name": "finance-news",
+                        "capabilities": ["finance_news"],
                         "safety": "normal",
                         "tool_calls": [],
                         "answer_directly": "",
@@ -134,7 +134,6 @@ class StockNewsPolicyRepairProvider(LLMProvider):
                 content=json.dumps(
                     {
                         "intent_label": "stock_news",
-                        "skill_name": "stock-news",
                         "capabilities": ["stock_news"],
                         "safety": "normal",
                         "tool_calls": [],
@@ -214,35 +213,14 @@ class AgentV1ProfileTest(unittest.TestCase):
         self.assertTrue(V1_DEFERRED_REALTIME_TOOL_NAMES.issubset(schema_names))
         self.assertIn("hot_stock_ranking", registry.schema_prompt())
 
-    def test_v1_skill_catalog_includes_read_only_external_workflows(self) -> None:
-        catalog = AGENT_SKILL_REGISTRY.schema_prompt(V1_CLOSED_MARKET_TOOL_NAMES)
+    def test_v1_capability_catalog_includes_read_only_external_workflows(self) -> None:
+        catalog = capability_schema_prompt(V1_CLOSED_MARKET_TOOL_NAMES)
 
-        self.assertIn("first-board-rating", catalog)
-        self.assertIn("limit-up-pool", catalog)
+        self.assertIn("first_board_rating", catalog)
+        self.assertIn("limit_up_pool", catalog)
         self.assertIn("popularity", catalog)
-        self.assertIn("finance-news", catalog)
-        self.assertIn("stock-news", catalog)
-        self.assertIsNotNone(
-            AGENT_SKILL_REGISTRY.resolve(
-                "popularity",
-                [],
-                V1_CLOSED_MARKET_TOOL_NAMES,
-            )
-        )
-        self.assertIsNotNone(
-            AGENT_SKILL_REGISTRY.resolve(
-                "finance-news",
-                [],
-                V1_CLOSED_MARKET_TOOL_NAMES,
-            )
-        )
-        self.assertIsNotNone(
-            AGENT_SKILL_REGISTRY.resolve(
-                "stock-news",
-                [],
-                V1_CLOSED_MARKET_TOOL_NAMES,
-            )
-        )
+        self.assertIn("finance_news", catalog)
+        self.assertIn("stock_news", catalog)
 
     def test_v1_policy_repairs_current_popularity_query(self) -> None:
         registry = AgentToolRegistry(

@@ -19,7 +19,7 @@ V1.0 最终定位：使用完整收盘数据，为最新交易日首板生成次
 - `[x]` 固化 V1 Agent 能力边界。
   - 默认配置为 `LIMITUPLAB_AGENT_PROFILE=v1_close_review`。
   - Planner Schema 只暴露收盘后研究工具。
-  - Skill Registry、Tool Policy 和执行器使用同一工具白名单。
+  - Capability Contract、Tool Policy 和执行器使用同一工具白名单。
   - 即使 LLM 直接生成禁用工具调用，执行器也会拒绝。
   - 保留 `extended` 配置供 V2 开发和既有扩展能力回归测试。
 
@@ -307,13 +307,13 @@ Critic Agent
   - LLM 不可用、未配置 key 或计划 JSON 解析失败时，自动回落到原有确定性规则链路，保证本地演示不崩。
   - 增加 Fake LLM 单测，验证 Agent 会先规划工具，再执行工具并生成回答。
 
-- `[x]` 完成 Agent Skill Contract v1。
-  - 新增运行时 Skill 注册表，由 LLM 在 Planner 阶段从业务工作流目录中选择 Skill，而不是继续增加固定问法 intent。
-  - 已实现 `limit-up-pool`、`popularity`、`first-board-rating`、`finance-news` 和 `market-environment` 等高频 Skill，覆盖涨停池、热门股票、首板评级、财经快讯与综合市场环境问题。
-  - 已重构为标准“独立目录 + `SKILL.md`”结构，通过 YAML front matter 声明发现信息和运行时元数据，正文承载工作流与回答约束。
-  - Python 侧只保留通用 Loader、Registry 和必需工具校验；启动时校验 Skill 名称、目录、元数据与正文，兼容旧下划线名称。
-  - 最终生成阶段按需加载当前 Skill 正文，统一日期、来源、数量、排序、风险提示和禁止推断口径。
-  - 新增 Skill 注册、工具去重、多类工作流执行和回答契约注入测试。
+- `[x]` 完成 Agent Skill 实验并收敛为 Capability Contract（2026-09-01）。
+  - 早期使用独立 `SKILL.md`、Loader 和 Registry 验证了业务工作流按需注入、最低工具补齐和默认参数约束。
+  - 评审发现 Skill 与 Capability 重复声明工具、默认参数和路由映射，Planner 也需同时输出两种业务标识，维护收益低于复杂度成本。
+  - 当前删除运行时 Skill 层，由单一 `AgentCapability` 同时声明示例问法、最低证据、默认参数和回答规范。
+  - Planner 只输出 capability；后端按 capability 补齐工具，并可从 Policy 实际执行的 Facts 恢复遗漏能力。
+  - 回答规范继续按命中能力动态注入，不把所有业务说明常驻 System Prompt。
+  - 测试统一覆盖 Capability 可用性过滤、工具去重、复合证据、Facts 恢复和回答契约注入。
 
 - `[x]` 标准化 Agent 工具 schema 和执行轨迹。
   - 每个 Agent 工具统一声明 `name`、`description`、`args_schema`、`returns`。
@@ -718,7 +718,7 @@ Critic 输出能解释为什么降低或不降低置信度。
 
 - `[x]` 完成 Agent Query Contract v3 语义能力和多轮稳定性评测。
   - 新增 19 类标准业务能力；Planner 可为组合问题输出多个 capability，能力契约自动补齐最低证据工具。
-  - 显式 Planner/Skill 能力接管 Tool Policy 语义路由；旧 `looks_like_*` 仅在能力缺失或旧 Provider 兼容场景下兜底。
+  - 显式 Planner Capability 接管 Tool Policy 语义路由；旧 `looks_like_*` 仅在能力缺失或旧 Provider 兼容场景下兜底。
   - 新增 `standalone`、`entity_followup`、`source_refinement` 上下文模式，以及选择性 `context_capabilities` 继承，避免“这些票”“其中”“再结合”等追问丢失上一轮数据源。
   - `agent_paraphrase_eval_cases.json` 扩展为 138 条静态改写和组合问题，新增个股新闻与个股动态能力族，并保留独立 case id。
   - 修复未限定主体的“最新的新闻”“最近的消息”“新闻摘要”等通用表达：统一使用综合财经快讯；指定公司使用结构化个股资讯，行业或板块新闻仍保持外部研究边界。

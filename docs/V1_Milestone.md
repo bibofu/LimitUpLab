@@ -255,7 +255,7 @@ V1 已形成覆盖核心问答的工具层，包括：
 - Top10 追踪复盘、评分回测和 Evaluation。
 - 预测质量审计、评分策略状态和数据健康。
 
-默认 `v1_close_review` 配置会在 Planner Schema、Skill Registry、Tool Policy 和工具执行器四层使用同一白名单。V1 可按需调用 `hot_stock_ranking`、`sector_performance`、`finance_news`、`stock_news` 和 `stock_activity` 回答热门股票、行业强弱、综合财经快讯及指定股票的收盘后动态；结果必须展示来源和时间，且不得进入评分或被解释为推荐。`remote_limit_up_pool` 和 `web_search` 仅在 `extended` 研发配置中启用；即使 Planner 错误生成这些未开放调用，V1 执行器也会拒绝执行。
+默认 `v1_close_review` 配置会在 Planner Schema、Capability Contract、Tool Policy 和工具执行器四层使用同一白名单。Capability 统一声明业务能力、最低证据、默认参数和按需回答规范，避免 Skill 与 Capability 双重配置。V1 可按需调用 `hot_stock_ranking`、`sector_performance`、`finance_news`、`stock_news` 和 `stock_activity` 回答热门股票、行业强弱、综合财经快讯及指定股票的收盘后动态；结果必须展示来源和时间，且不得进入评分或被解释为推荐。`remote_limit_up_pool` 和 `web_search` 仅在 `extended` 研发配置中启用；即使 Planner 错误生成这些未开放调用，V1 执行器也会拒绝执行。
 
 ### 5.4 轻量 Multi-Agent
 

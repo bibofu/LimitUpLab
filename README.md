@@ -135,7 +135,7 @@ scoring_version
 | `prediction_quality_audit` | 审计预测来源、Outcome 覆盖和基线表现 |
 | `scoring_policy_status` | 查询 Champion、Challenger 和晋级原因 |
 
-默认配置 `LIMITUPLAB_AGENT_PROFILE=v1_close_review` 会在 Schema、Skill、Tool Policy 和执行器四层统一限制工具。V1 允许按需读取带来源和采集时间的 `hot_stock_ranking` 热度快照、`sector_performance` 行业强弱榜、`finance_news` 综合财经快讯，以及带 SQLite 缓存的 `stock_news`、`stock_activity` 个股资讯与收盘后动态；这些外部事实不参与首板评分，也不被解释为推荐。`remote_limit_up_pool` 和 `web_search` 仅保留在 `extended` 研发配置中，供 V2 能力开发使用。即使 LLM 伪造这些未开放工具调用，V1 执行器也会拒绝执行。
+默认配置 `LIMITUPLAB_AGENT_PROFILE=v1_close_review` 会在 Planner Schema、Capability Contract、Tool Policy 和执行器四层统一限制工具。Capability 是业务工作流的单一声明源，同时定义示例问法、最低证据工具、默认参数和按需回答规范；系统不再维护重复的运行时 Skill Registry。V1 允许按需读取带来源和采集时间的 `hot_stock_ranking` 热度快照、`sector_performance` 行业强弱榜、`finance_news` 综合财经快讯，以及带 SQLite 缓存的 `stock_news`、`stock_activity` 个股资讯与收盘后动态；这些外部事实不参与首板评分，也不被解释为推荐。`remote_limit_up_pool` 和 `web_search` 仅保留在 `extended` 研发配置中，供 V2 能力开发使用。即使 LLM 伪造这些未开放工具调用，V1 执行器也会拒绝执行。
 
 Agent Query Contract v3 先把不同说法归一为稳定能力 ID，例如 `market_environment`、`limit_up_pool`、`first_board_rating` 和 `prediction_review`。组合问题可以选择多个能力；多轮追问通过 `standalone`、`entity_followup`、`source_refinement` 区分独立问题、实体继承和上一轮结果集交叉查询，并只继承 Planner 明确选择的 `context_capabilities`。有显式能力契约时，旧关键词判断不再参与语义路由，只在旧 Provider 或 Planner 未输出能力时兜底。
 

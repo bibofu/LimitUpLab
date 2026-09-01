@@ -74,11 +74,11 @@
 
 ### C15. 整条 Agent 链路的瓶颈在哪里？
 
-最大瓶颈通常是两次串行 LLM 调用，其次是同花顺、新闻、K 线等外部 I/O，Tool Policy 的规则计算几乎可以忽略。当前 V1 planner 系统提示约 17,420 字符，粗略约 5.3k token，每次都发送，规划本身既有延迟也有固定输入成本。如果只能优化一处，我会先缩小 planner 上下文：按业务域动态暴露 capability/tool schema，缓存稳定前缀，并为单能力高置信问题使用较小 planner；这同时降低首 token 延迟和成本。随后再并行无依赖工具并建立 p50/p95/p99 分段指标。
+最大瓶颈通常是两次串行 LLM 调用，其次是同花顺、新闻、K 线等外部 I/O，Tool Policy 的规则计算几乎可以忽略。移除重复 Skill 目录后，当前 V1 planner 系统提示实测为 16,165 字符，比此前文档记录的 17,420 字符减少约 7.2%，但每次仍会全量发送，规划本身仍有延迟和固定输入成本。如果只能继续优化一处，我会按业务域动态暴露 capability/tool schema，缓存稳定前缀，并为单能力高置信问题使用较小 planner；随后再并行无依赖工具并建立 p50/p95/p99 分段指标。
 
 ### C16. 工具调用 cap 会怎样影响复杂问题？
 
-原题数字已过时：planner 原始调用先截到 6 个，skill 也最多保留 6 个；capability 合并后总上限是 8，且 required tools 排在最前。超过 8 个时后面的探索性调用被截断，目前不会自动拆成第二轮，也没有给用户一个完整的“哪些证据被舍弃”提示。因此复杂组合问题可能得到最低证据充分但不够丰富的回答。现有测试覆盖合并顺序和必要工具补齐，但还缺系统化的 `7/8/9` 调用质量退化评测；更合理的方案是依赖图、预算感知规划和分阶段执行。
+Planner 原始工具调用经过归一后，再由 Capability Contract 把 required tools 放到最前，总上限是 8。超过 8 个时后面的探索性调用会被截断，目前不会自动拆成第二轮，也没有给用户完整的“哪些证据被舍弃”提示。因此复杂组合问题可能得到最低证据充分但不够丰富的回答。现有测试覆盖合并顺序和必要工具补齐，但还缺系统化的 `7/8/9` 调用质量退化评测；更合理的方案是依赖图、预算感知规划和分阶段执行。
 
 ### C17. 举一条 Tool Policy 修复规则及其假阳性风险。
 
@@ -326,7 +326,7 @@ AI 应用/后端岗：亮点是 planner-tool-answer、能力契约、Policy 修�
 
 ### M68. 6 个月、2 个工程师只能做三件事，选什么？
 
-第一，冻结策略范围，建立 60+ 完整结果日和多目标 outcome 的自动数据质量/研究流水线，因为没有可信标签，其余优化都无法判断。第二，重构 Agent 和前端：将 capability/tool/skill 声明统一为单一 schema，拆分 `chat.py` 与 `App.tsx`，建立线上失败回流和真实 LLM canary。第三，迁移 PostgreSQL + Redis，完成结构化日志、告警、恢复演练和基础用户体系，为真实试用做容量准备。排序依据是先获得真值，再提高迭代效率，最后扩容量；不是先增加更多策略。
+第一，冻结策略范围，建立 60+ 完整结果日和多目标 outcome 的自动数据质量/研究流水线，因为没有可信标签，其余优化都无法判断。第二，继续重构 Agent 和前端：Capability 已成为业务工作流单一声明源，下一步拆分 `chat.py` 与 `App.tsx`，建立线上失败回流和真实 LLM canary。第三，迁移 PostgreSQL + Redis，完成结构化日志、告警、恢复演练和基础用户体系，为真实试用做容量准备。排序依据是先获得真值，再提高迭代效率，最后扩容量；不是先增加更多策略。
 
 ### M69. 数据每天只增加一天，如何加速？
 
@@ -342,7 +342,7 @@ AI 应用/后端岗：亮点是 planner-tool-answer、能力契约、Policy 修�
 
 ### N71. 三句话讲完整数据流；为什么两次 LLM？
 
-第一句：请求先解析日期/实体/查询契约，Planner LLM 从当前 profile 的 skill、capability 和 tool schema 中输出结构化计划。第二句：后端归一参数、补齐必要工具并执行，得到结构化 facts、references 和 trace。第三句：Answer LLM 只能基于 facts 流式组织答案，失败或违反完整性/安全契约时降级到确定性模板并持久化会话与 usage。
+第一句：请求先解析日期、实体和查询契约，Planner LLM 从当前 profile 的 capability 与 tool schema 中输出结构化计划。第二句：后端按 Capability Contract 归一参数、补齐必要工具并执行，得到结构化 facts、references 和 trace。第三句：Answer LLM 只接收命中 Capability 的回答规范并基于 facts 流式组织答案，失败或违反完整性、安全契约时降级到确定性模板并持久化会话与 usage。
 
 拆两次是为了让规划和表达分别可审计、可测试、可降级，也允许后端在生成前修正证据；代价是额外一次 LLM 延迟和约 5.3k planner 固定 token。当前记录 planner/answer duration 和 prompt chars，但还没有可靠的生产 p99 对照实验，因此不能报一个虚构数字。简单单能力问题未来可尝试原生 tool calling 或一次调用循环，复杂高风险问题保留两段式。
 
@@ -362,9 +362,9 @@ AI 应用/后端岗：亮点是 planner-tool-answer、能力契约、Policy 修�
 
 当前算法先按 capability 顺序放 required tools，再追加 Planner 的其他工具，最后截到 8；因此前面的最低证据优先，后面的 capability 或探索工具可能被砍。它不会在缺工具后自动禁止 Answer LLM，所以虽然 Policy 可能再次补事实，仍存在复杂问题证据不全风险。正确改法是让 planner 输出优先级/依赖，先计算预算；无法在预算内完整回答时拆成两个阶段或明确说明未覆盖部分。测试应覆盖 7、8、9、12 调用并检查事实完整性，而不仅检查列表长度。
 
-### N76. skill 和 tool 推出的 capability 冲突时信谁？
+### N76. Planner capability 和 tool 推断冲突时信谁？
 
-原题对现实现略有误读：`normalize_capabilities` 不是二选一，而是先保留 Planner 显式 capability，再补 skill 映射，再补单工具可推断 capability，最终取并集并去重。这样不会“永远只信 skill”，但冲突时可能扩大能力集、增加工具和回答范围，仍缺显式冲突诊断。更合理的是 capability 作为唯一业务意图，skill 是回答/工作流模板，tool 是证据执行；若三者不一致，应记录 `routing_conflict`，按可满足性和最小充分集重新规划，而不是静默 union。
+Capability 现在是唯一业务意图：先保留 Planner 显式 capability，再为 Planner 明确选择的单工具补可推断 capability；工具执行后，只有当某 Capability 的全部 required facts 都真实存在时才恢复遗漏能力。复合能力优先，避免一次市场全景查询又注入四套子能力回答规范。仍有一个缺口：显式 capability 与完全无关的额外工具目前会并集保留，尚未记录 `routing_conflict`；后续应按可满足性和最小充分证据重新规划，而不是继续扩大能力集。
 
 ### N77. 18 条 repair 规则的顺序依赖如何管理？
 
@@ -382,17 +382,17 @@ Policy 捕获异常后把 `<tool>_error` 写入 facts，并生成 error trace；
 
 最初工具都在同一个 FastAPI 进程，直接 Python 调用能共享 typed models、repository 和事务，延迟低、调试简单；MCP 的跨进程发现、复用和权限边界当时不是 V1 目标，所以没有为了追潮流增加协议层。这是有意识的本地优先，但也牺牲了被 Claude Code、Cursor 或其他 Agent 复用的标准接口。迁移并非重写业务：22 个工具已有 schema、参数和结构化结果，可在外层加 MCP server adapter；真正成本在认证、长结果分页、错误语义、资源 URI 和测试，估计是中等改造而非零成本。
 
-### N81. 自定义 Markdown skill 与业界方案相比怎样？
+### N81. 为什么删除自定义 Markdown Skill？
 
-它类似 Claude/Codex skill 的“可读指令包”，比把所有提示硬编码进一个 system prompt 多了目录化版本、required tools、默认参数、examples、运行时可用性过滤和独立测试；比成熟平台少了标准 manifest、动态安装、权限、版本解析、资源文件和跨 Agent 生态。LangChain Tool 更接近原子函数，而这里 skill 是多个工具之上的业务工作流。自建的理由是让业务知识可评审、可替换且不绑 provider；代价是维护自有加载器和双重声明。
+它曾验证过一个有用思路：业务工作流应具备 examples、required tools、默认参数和按需回答规范，而不是全部写死进大 Prompt。但项目只有 6 个固定内部 Skill，且同一信息已经存在于 Capability，导致 Planner 同时输出 `skill_name` 和 `capabilities`，后端再维护 Loader、Registry 与映射，复杂度收益比很差。因此当前删除了运行时 Markdown Skill，把这些有效字段合并进 `AgentCapability`。如果未来需要第三方可安装工作流、独立权限和资源文件，再采用标准 Skill 或 MCP 生态，而不是提前维护半套自定义平台。
 
 ### N82. 为什么手写极简 YAML parser？
 
-是为了只接受一个很小、可控的 frontmatter 子集并避免增加 PyYAML 依赖。4 空格缩进、三层嵌套或不支持语法会明确抛 `SkillLoadError`，不会静默吞掉；注册表在模块 import 时加载，所以 malformed skill 会让 Agent/应用启动失败，属于 fail fast。对仅 6 个内部 skill 这是可接受的，但如果开放第三方 skill，就应该改用标准 YAML 安全加载、schema 校验和单个 skill 隔离，避免一个文档拖垮整个服务。
+历史实现手写 parser 是为了只接受很小的 frontmatter 子集并避免增加 PyYAML，但这恰好暴露了过度设计：项目为 6 个固定工作流承担了语法解析、启动失败面和额外测试，却没有第三方安装、版本或权限需求。当前 parser、Loader 和 Registry 已全部删除，静态 Python dataclass 由类型检查和单元测试保证。若未来真正开放第三方 Skill，应直接使用标准 YAML 安全加载、schema 校验和单 Skill 故障隔离，不恢复这套极简 parser。
 
-### N83. skill、capability、tool 三层声明如何防漂移？
+### N83. Capability 与 Tool 如何防漂移？
 
-当前确实有重复：skill 声明 required-tools，capability 也声明 required_tools，`SKILL_CAPABILITIES` 再连接两者。已有 loader/registry/capability 可用性测试，但还缺一个全量不变量测试，自动断言每个映射 skill 的工具集合与 capability 最低证据兼容。长期应建立单一 manifest，由它生成 planner capability、skill metadata 和 tool requirement；Markdown 只保留回答说明与 examples。现在增加一个工具通常至少要改 tool schema、registry dispatch、capability，若属于 skill 还要改 SKILL.md 和测试，维护成本不低。
+现在 `AgentCapability` 是单一业务 Manifest：同一对象包含 description、examples、required tools、默认参数和 answer guidance，并由它生成 Planner capability schema、确定性工具补齐和按需 Answer 指令。Tool Schema 仍负责原子函数的参数与返回值，两层职责不同。测试覆盖 profile 可用性过滤、复合证据顺序、默认参数合并、Facts 恢复和回答规范注入；增加业务能力不再需要同步修改 Skill 文件、映射表和 Loader。
 
 ### N84. 为什么同时保留 LLM 语义路由和关键词路由？
 
@@ -404,7 +404,7 @@ Policy 捕获异常后把 `<tool>_error` 写入 facts，并生成 error trace；
 
 ### N86. 语义路由评测测哪一层，如何回流？
 
-它主要测 Planner 是否选择预期 capability、skill 和工具，以及经过后端修复后的最终工具契约；部分用例也检查模板答案事实，但不是通用生成质量评分。当前真实 LLM口径是 121 个单轮 case、每个三轮，另有 10 个多轮场景、60 个 turn 运行；固定 fixture 还有 135 条改写。用例来自开发期间真实失败问法和人工扩写，但还没有自动采集独立用户问题的生产回流。下一步应匿名记录 capability、repair、重问和失败反馈，经人工标注后进入新 holdout，避免边修边测同一集合。
+它主要测 Planner 是否选择预期 capability 和工具，以及经过后端修复后的最终工具契约；部分用例也检查模板答案事实，但不是通用生成质量评分。当前真实 LLM 口径是 121 个单轮 case、每个三轮，另有 10 个多轮场景、60 个 turn 运行；固定 fixture 已扩展到 146 条改写。用例来自开发期间真实失败问法和人工扩写，但还没有自动采集独立用户问题的生产回流。下一步应匿名记录 capability、repair、重问和失败反馈，经人工标注后进入新 holdout，避免边修边测同一集合。
 
 ### N87. “LLM 选菜单、后端定参数”是 Agent 还是 dispatcher？
 
@@ -436,7 +436,7 @@ Policy 在生成前保证“拿到了哪些最低事实”；Critic 在单票评
 
 ### N94. Planner prompt 多大，做缓存了吗？
 
-当前 V1 profile 实测系统 prompt 约 17,420 字符，按中英混合粗估约 5.3k token，再加用户上下文；每次 Planner 都全量发送。代码没有显式 prefix caching，也没有确认 DeepSeek 是否对该请求自动命中缓存，因此不能把缓存收益算进成本。稳定 system prompt 很适合前缀缓存，但动态 profile/schema 会改变 cache key。成本应按 usage 表真实 prompt tokens × 请求量 × provider 单价计算；当前价格配置默认 0，未配置单价时只统计 token、不编造美元成本。
+删除重复 Skill catalog 后，当前 V1 profile 的 Planner system prompt 实测为 16,165 字符，比此前 17,420 字符减少约 7.2%，再叠加用户上下文；每次 Planner 仍会全量发送。代码没有显式 prefix caching，也没有确认 DeepSeek 是否自动命中缓存，因此不能把缓存收益算进成本。稳定 system prompt 适合前缀缓存，但动态 profile/schema 会改变 cache key。成本应按 usage 表真实 prompt tokens乘以请求量和 provider 单价计算；当前价格配置默认 0，未配置单价时只统计 token、不编造美元成本。
 
 ### N95. 动态 profile 会导致路由不稳定吗？
 
