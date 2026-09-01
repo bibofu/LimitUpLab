@@ -1,4 +1,4 @@
-"""Forward-only outcome and signal checks for first-board discovery snapshots."""
+"""Forward-only checks retained for the historical first-board discovery experiment."""
 
 from __future__ import annotations
 
@@ -25,7 +25,7 @@ from app.services.factor_signal_diagnostic import (
     sign_flip_p_value,
     spearman_rho,
 )
-from app.services.first_board_discovery import FIRST_BOARD_DISCOVERY_VERSION
+from app.services.first_board_discovery import LEGACY_FIRST_BOARD_DISCOVERY_VERSION
 
 
 DISCOVERY_DIAGNOSTIC_VERSION = "first-board-discovery-diagnostic-v1-date-blocked"
@@ -56,7 +56,7 @@ def build_first_board_discovery_diagnostic(
     end_date: date,
     discovery_repository: SQLiteFirstBoardDiscoveryRepository | None = None,
     auction_repository: SQLiteAuctionFinalRepository | None = None,
-    strategy_version: str = FIRST_BOARD_DISCOVERY_VERSION,
+    strategy_version: str = LEGACY_FIRST_BOARD_DISCOVERY_VERSION,
     top_k: int = 10,
     bootstrap_iterations: int = 200,
     random_seed: int = 29,

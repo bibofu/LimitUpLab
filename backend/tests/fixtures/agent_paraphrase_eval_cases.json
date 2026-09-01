@@ -87,6 +87,21 @@
       ]
     },
     {
+      "family_id": "first_board_discovery",
+      "expected_capabilities": ["first_board_discovery"],
+      "required_tools": ["first_board_discovery"],
+      "messages": [
+        "低位挖掘里现在有哪些观察标的",
+        "结合题材新闻财报找一些刚启动的票",
+        "哪些股票还在低位但开始出现趋势信号",
+        "有没有可能进入主升阶段的研究候选",
+        "按题材、消息和走势讲讲低位观察池",
+        "找一些没有大涨过又开始放量的股票",
+        "最新的低位启动研究名单是什么",
+        "从热门题材里筛一下位置不高的股票"
+      ]
+    },
+    {
       "family_id": "board_promotion",
       "expected_capabilities": ["board_promotion"],
       "required_tools": ["daily_board_promotion"],

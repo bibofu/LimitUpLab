@@ -1,4 +1,4 @@
-"""Build and persist the latest next-session first-board discovery snapshot."""
+"""Build and persist the latest low-position discovery snapshot."""
 
 from __future__ import annotations
 
@@ -15,7 +15,7 @@ from app.services.first_board_discovery import refresh_first_board_discovery
 
 def main() -> None:
     parser = argparse.ArgumentParser(
-        description="Refresh the latest first-board discovery Top30 candidate pool.",
+        description="Refresh the latest low-position research candidate pool.",
     )
     parser.add_argument("--recall-limit", type=int, default=60)
     parser.add_argument("--top-k", type=int, default=30)

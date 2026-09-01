@@ -15,7 +15,7 @@ from app.repositories import (
     SQLiteAuctionFinalRepository,
     SQLiteFirstBoardDiscoveryRepository,
 )
-from app.services.first_board_discovery import FIRST_BOARD_DISCOVERY_VERSION
+from app.services.first_board_discovery import LEGACY_FIRST_BOARD_DISCOVERY_VERSION
 from app.services.first_board_discovery_diagnostic import (
     build_first_board_discovery_diagnostic,
 )
@@ -60,7 +60,7 @@ class FirstBoardDiscoveryDiagnosticTest(unittest.TestCase):
                     eligible_count=100,
                     recalled_count=10,
                     candidates=candidates,
-                    generated_by=FIRST_BOARD_DISCOVERY_VERSION,
+                    generated_by=LEGACY_FIRST_BOARD_DISCOVERY_VERSION,
                     source="test",
                     snapshot_created_at=datetime.combine(
                         target_date - timedelta(days=1),

@@ -373,7 +373,10 @@ export interface FirstBoardDiscoveryFacts {
   kline_bar_count: number;
   return_5d_pct: number | null;
   return_20d_pct: number | null;
+  return_60d_pct: number | null;
   distance_20d_high_pct: number | null;
+  distance_60d_high_pct: number | null;
+  position_60d_pct: number | null;
   volume_ratio_5d: number | null;
   volatility_20d: number | null;
   ma_alignment: string;

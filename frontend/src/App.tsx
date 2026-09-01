@@ -966,7 +966,7 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
       })
       .catch((caught: unknown) => {
         if (active) {
-          setDiscoveryError(caught instanceof Error ? caught.message : "首板挖掘数据加载失败");
+          setDiscoveryError(caught instanceof Error ? caught.message : "低位挖掘数据加载失败");
         }
       })
       .finally(() => {
@@ -1001,7 +1001,7 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
   const draftCandidates = intelligence?.items
     .filter((item) => item.strategy === mode && item.base_trade_date === draftBaseDate)
     .sort((left, right) => left.rank - right.rank)
-    .slice(0, 10)
+    .slice(0, mode === "discovery" ? 15 : 10)
     .map((item) => ({
       ...item,
       sector: item.sector ?? "",
@@ -1024,7 +1024,7 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
           type="button"
         >
           <TrendingUp size={16} />
-          首板挖掘
+          低位挖掘
         </button>
         <button
           aria-selected={mode === "relay"}
@@ -1040,6 +1040,7 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
       {draftCandidates.length > 0 && intelligence ? (
         <RecommendationDraftPanel
           candidates={draftCandidates}
+          discovery={discovery}
           refreshedAt={intelligence.refreshed_at}
           strategy={mode}
         />
@@ -1059,14 +1060,16 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
 
 function RecommendationDraftPanel({
   candidates,
+  discovery,
   refreshedAt,
   strategy,
 }: {
   candidates: RecommendationIntelligenceItem[];
+  discovery: FirstBoardDiscoveryResponse | null;
   refreshedAt: string;
   strategy: "discovery" | "relay";
 }) {
-  const title = strategy === "discovery" ? "首板挖掘" : "一进二接力";
+  const title = strategy === "discovery" ? "低位挖掘" : "一进二接力";
   return (
     <Panel
       title={title}
@@ -1075,15 +1078,19 @@ function RecommendationDraftPanel({
       <div className="rating-summary-panel recommendation-draft-panel">
         <div className="recommendation-draft-header">
           <div>
-            <strong>盘前动态候选 Top{candidates.length}</strong>
-            <span>上一交易日收盘评分结合最新新闻与财报持续重排</span>
+            <strong>{strategy === "discovery" ? `低位启动观察池 · ${candidates.length} 只` : `盘前动态候选 Top${candidates.length}`}</strong>
+            <span>{strategy === "discovery" ? "热门题材与最新催化召回，财报和 K 线位置共同验证" : "上一交易日收盘评分结合最新新闻与财报持续重排"}</span>
           </div>
           <span className="recommendation-draft-time">
             {new Date(refreshedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
           </span>
         </div>
         <div className="rating-top-list">
-          {candidates.map((candidate) => (
+          {candidates.map((candidate) => {
+            const lowPosition = discovery?.candidates.find(
+              (item) => item.facts.symbol === candidate.symbol,
+            );
+            return (
             <Link
               className="rating-top-card"
               key={`${candidate.strategy}-${candidate.base_trade_date}-${candidate.symbol}`}
@@ -1091,33 +1098,79 @@ function RecommendationDraftPanel({
             >
               <header>
                 <div>
-                  <span>Top {candidate.rank} · 收盘第 {candidate.base_rank}</span>
+                  <span>{strategy === "discovery" ? `低位候选 · ${lowPosition ? discoveryPatternLabel(lowPosition.facts.pattern) : "结构待验证"}` : `Top ${candidate.rank} · 收盘第 ${candidate.base_rank}`}</span>
                   <strong>{candidate.name}</strong>
                   <small>{candidate.symbol}{candidate.sector ? ` / ${candidate.sector}` : ""}</small>
                 </div>
                 <div className="rating-top-score">
                   <b>{candidate.draft_score.toFixed(1)}</b>
-                  <span className="rating-score-context">收盘 {candidate.base_score.toFixed(1)}</span>
+                  <span className="rating-score-context">{strategy === "discovery" ? "研究分" : `收盘 ${candidate.base_score.toFixed(1)}`}</span>
                 </div>
               </header>
-              {candidate.update_reasons.length > 0 ? (
+              {strategy === "discovery" ? (
+                <LowPositionEvidence candidate={lowPosition} intelligence={candidate} />
+              ) : candidate.update_reasons.length > 0 ? (
                 <section className="rating-top-reasons">
                   <strong>动态调整依据</strong>
                   <ul>{candidate.update_reasons.slice(0, 3).map((reason) => <li key={reason}>{reason}</li>)}</ul>
                 </section>
               ) : null}
-              {candidate.latest_news[0] ? (
+              {strategy !== "discovery" && candidate.latest_news[0] ? (
                 <section className="discovery-catalyst">
                   <strong>最新动态</strong>
                   <p>{candidate.latest_news[0].title}</p>
                 </section>
               ) : null}
             </Link>
-          ))}
+            );
+          })}
         </div>
-        <p className="discovery-disclaimer">当前为动态研究排序；正式复盘以收盘固化 Top10 为准。</p>
+        <p className="discovery-disclaimer">
+          {strategy === "discovery"
+            ? "低位挖掘用于研究可能进入趋势启动阶段的标的，不代表主升浪或收益概率。"
+            : "当前为动态研究排序；正式复盘以收盘固化 Top10 为准。"}
+        </p>
       </div>
     </Panel>
+  );
+}
+
+function LowPositionEvidence({
+  candidate,
+  intelligence,
+}: {
+  candidate: FirstBoardDiscoveryResponse["candidates"][number] | undefined;
+  intelligence: RecommendationIntelligenceItem | null;
+}) {
+  const facts = candidate?.facts;
+  const themes = facts?.themes.slice(0, 2) ?? [];
+  const latestNews = intelligence?.latest_news[0]?.title
+    ?? facts?.news_catalysts[0]
+    ?? "暂未匹配到明确的近期催化";
+  const report = intelligence?.financial_report;
+  const financial = report
+    ? `${report.fiscal_year} ${report.fiscal_period}，营收同比 ${formatNullableSigned(report.operating_income_yoy_pct)}，归母净利同比 ${formatNullableSigned(report.net_profit_yoy_pct)}`
+    : "暂未获取到可比较的最新季度财报";
+  return (
+    <div className="low-position-evidence">
+      <section>
+        <strong><b>1</b>题材</strong>
+        <p>{themes.length > 0
+          ? themes.map((theme) => `${theme.name} ${formatSigned(theme.change_pct, 1)}%`).join("；")
+          : intelligence?.sector || "暂未匹配到明确热门题材"}</p>
+      </section>
+      <section>
+        <strong><b>2</b>新闻和财报</strong>
+        <p>{latestNews}</p>
+        <small>{financial}</small>
+      </section>
+      <section>
+        <strong><b>3</b>走势</strong>
+        <p>{facts
+          ? `${discoveryPatternLabel(facts.pattern)}；近5日 ${formatNullableSigned(facts.return_5d_pct)}，近20日 ${formatNullableSigned(facts.return_20d_pct)}，近60日 ${formatNullableSigned(facts.return_60d_pct)}；量比 ${facts.volume_ratio_5d?.toFixed(2) ?? "暂无"}，60日区间位置 ${facts.position_60d_pct?.toFixed(0) ?? "暂无"}%`
+          : intelligence?.position_label || "K 线位置事实暂缺"}</p>
+      </section>
+    </div>
   );
 }
 
@@ -2568,35 +2621,35 @@ function FirstBoardDiscoveryPanel({
 }) {
   if (loading) {
     return (
-      <Panel title="首板挖掘" icon={<TrendingUp size={18} />}>
+      <Panel title="低位挖掘" icon={<TrendingUp size={18} />}>
         <div className="discovery-state"><LoaderCircle className="spin" size={20} />正在读取最新挖掘快照</div>
       </Panel>
     );
   }
   if (error || !data) {
     return (
-      <Panel title="首板挖掘" icon={<TrendingUp size={18} />}>
+      <Panel title="低位挖掘" icon={<TrendingUp size={18} />}>
         <div className="discovery-state discovery-state-error">
           <ShieldAlert size={20} />
-          <div><strong>暂时没有可用的首板挖掘结果</strong><span>{error ?? "请先执行每日数据更新"}</span></div>
+          <div><strong>暂时没有可用的低位挖掘结果</strong><span>{error ?? "请先执行每日数据更新"}</span></div>
         </div>
       </Panel>
     );
   }
 
   return (
-    <Panel title="首板挖掘" icon={<TrendingUp size={18} />}>
+    <Panel title="低位挖掘" icon={<TrendingUp size={18} />}>
       <div className="rating-summary-panel discovery-panel">
         <div className="discovery-header">
           <div>
             <strong>{data.target_trade_date ? `${data.target_trade_date} 观察池` : "下一交易日观察池"}</strong>
-            <span>基于 {data.data_as_of} 收盘后的强题材与新闻催化构建候选池，再按量价结构精排</span>
+            <span>基于 {data.data_as_of} 的热门题材与最新催化召回，再用财报和 K 线低位结构验证</span>
           </div>
           <div className="rating-summary-facts">
             <span>全市场 {data.universe_count}</span>
             <span>硬过滤后 {data.eligible_count}</span>
             <span>精排 {data.recalled_count}</span>
-            <strong>候选池 {data.candidates.length} / 展示 Top {Math.min(10, data.candidates.length)}</strong>
+            <strong>低位候选 {data.candidates.length} 只</strong>
           </div>
         </div>
         {data.themes.length > 0 ? (
@@ -2615,7 +2668,7 @@ function FirstBoardDiscoveryPanel({
 
         {data.candidates.length > 0 ? (
           <div className="rating-top-list discovery-list">
-            {data.candidates.slice(0, 10).map((candidate, index) => {
+            {data.candidates.slice(0, 15).map((candidate) => {
               const live = recommendationIntelligenceFor(
                 intelligence,
                 "discovery",
@@ -2628,7 +2681,7 @@ function FirstBoardDiscoveryPanel({
               >
                 <header>
                   <div>
-                    <span>Top {index + 1} · {discoveryPatternLabel(candidate.facts.pattern)}</span>
+                    <span>低位候选 · {discoveryPatternLabel(candidate.facts.pattern)}</span>
                     <strong>{candidate.facts.name}</strong>
                     <small>{candidate.facts.symbol} / 收盘 {candidate.facts.close.toFixed(2)}</small>
                   </div>
@@ -2639,28 +2692,7 @@ function FirstBoardDiscoveryPanel({
                     </span>
                   </div>
                 </header>
-                <div className="rating-top-facts">
-                  <Fact label="核心题材" value={candidate.facts.themes[0]?.name ?? "暂无"} />
-                  <Fact label="题材涨幅" value={candidate.facts.themes[0] ? `${formatSigned(candidate.facts.themes[0].change_pct, 1)}%` : "暂无"} />
-                  <Fact label="热股榜" value={candidate.facts.popularity_rank ? `第 ${candidate.facts.popularity_rank} 名` : "未进Top100"} />
-                  <Fact label="当日涨幅" value={`${formatSigned(candidate.facts.change_pct, 1)}%`} />
-                  <Fact label="近5日" value={formatNullableSigned(candidate.facts.return_5d_pct)} />
-                  <Fact label="量比" value={candidate.facts.volume_ratio_5d?.toFixed(2) ?? "暂无"} />
-                </div>
-                <section className="discovery-catalyst">
-                  <strong>题材与催化</strong>
-                  <p>
-                    {candidate.facts.news_catalysts[0]
-                      ?? `${candidate.facts.themes[0]?.name ?? "相关题材"}当日走强，暂未匹配到明确新闻催化`}
-                  </p>
-                </section>
-                <RecommendationLiveEvidence item={live} />
-                <section className="rating-top-reasons">
-                  <strong>入选依据</strong>
-                  <ul>
-                    {candidate.reasons.slice(0, 3).map((reason) => <li key={reason}>{reason}</li>)}
-                  </ul>
-                </section>
+                <LowPositionEvidence candidate={candidate} intelligence={live} />
                 {candidate.risks.length > 0 ? (
                   <p className="rating-top-risk">待验证：{candidate.risks.slice(0, 2).join("；")}</p>
                 ) : null}
@@ -2671,7 +2703,7 @@ function FirstBoardDiscoveryPanel({
           <div className="empty-state">本期没有满足数据和流动性要求的观察标的。</div>
         )}
         <p className="discovery-disclaimer">
-          这是热门题材、新闻催化与量价结构的研究排序，不代表次日涨停概率。
+          低位挖掘用于研究可能进入趋势启动阶段的标的，不代表主升浪或收益概率。
         </p>
       </div>
     </Panel>

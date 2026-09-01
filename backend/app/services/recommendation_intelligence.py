@@ -29,6 +29,7 @@ from app.repositories import (
     SQLiteScoringPolicyRepository,
 )
 from app.services.stock_news import collect_stock_news
+from app.services.first_board_discovery import FIRST_BOARD_DISCOVERY_VERSION
 
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
@@ -229,10 +230,10 @@ def _load_base_candidates(
 ) -> tuple[list[_BaseCandidate], date | None, date | None, list[str]]:
     candidates: list[_BaseCandidate] = []
     warnings: list[str] = []
-    discovery = discovery_repository.get_latest()
+    discovery = discovery_repository.get_latest(FIRST_BOARD_DISCOVERY_VERSION)
     discovery_date = discovery.data_as_of if discovery else None
     if discovery is None:
-        warnings.append("首板挖掘快照不可用")
+        warnings.append("低位挖掘快照不可用")
     else:
         candidates.extend(
             _BaseCandidate(

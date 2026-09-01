@@ -89,20 +89,25 @@ class SQLiteFirstBoardDiscoveryRepository:
             else None
         )
 
-    def get_latest(self) -> FirstBoardDiscoveryResponse | None:
-        """Return the latest persisted discovery snapshot."""
+    def get_latest(
+        self,
+        strategy_version: str | None = None,
+    ) -> FirstBoardDiscoveryResponse | None:
+        """Return the latest persisted snapshot for an optional strategy version."""
 
         connection = connect(self.database_path)
         try:
             initialize_database(connection)
-            row = connection.execute(
-                """
+            sql = """
                 SELECT response_json
                 FROM first_board_discovery_snapshots
-                ORDER BY data_as_of DESC, created_at DESC
-                LIMIT 1
-                """
-            ).fetchone()
+            """
+            parameters: list[object] = []
+            if strategy_version:
+                sql += " WHERE strategy_version = ?"
+                parameters.append(strategy_version)
+            sql += " ORDER BY data_as_of DESC, created_at DESC LIMIT 1"
+            row = connection.execute(sql, parameters).fetchone()
         finally:
             connection.close()
         return (

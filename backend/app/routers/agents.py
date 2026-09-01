@@ -339,19 +339,19 @@ def get_first_board_ratings(
 def get_first_board_discovery(
     data_as_of: date | None = None,
 ) -> FirstBoardDiscoveryResponse:
-    """Return a persisted next-session first-board discovery snapshot."""
+    """Return a persisted low-position discovery snapshot."""
 
     repository = SQLiteFirstBoardDiscoveryRepository()
     response = (
         repository.get(data_as_of, FIRST_BOARD_DISCOVERY_VERSION)
         if data_as_of is not None
-        else repository.get_latest()
+        else repository.get_latest(FIRST_BOARD_DISCOVERY_VERSION)
     )
     if response is None:
         raise HTTPException(
             status_code=404,
             detail=(
-                "No first-board discovery snapshot is available. "
+                "No low-position discovery snapshot is available. "
                 "Run the daily update first."
             ),
         )

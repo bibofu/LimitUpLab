@@ -4148,6 +4148,51 @@ a.entry-card {
   line-height: 1.55;
 }
 
+.low-position-evidence {
+  display: grid;
+  gap: 0;
+  border-top: 1px solid #eaecf0;
+}
+
+.low-position-evidence section {
+  display: grid;
+  gap: 5px;
+  padding: 11px 0;
+  border-bottom: 1px solid #f2f4f7;
+}
+
+.low-position-evidence strong {
+  display: flex;
+  align-items: center;
+  gap: 7px;
+  color: #344054;
+  font-size: 12px;
+}
+
+.low-position-evidence strong b {
+  display: inline-flex;
+  align-items: center;
+  justify-content: center;
+  width: 20px;
+  height: 20px;
+  border-radius: 50%;
+  background: #f2f4f7;
+  color: #475467;
+  font-size: 11px;
+}
+
+.low-position-evidence p,
+.low-position-evidence small {
+  margin: 0;
+  color: #475467;
+  font-size: 12px;
+  line-height: 1.55;
+}
+
+.low-position-evidence small {
+  color: #667085;
+}
+
 .recommendation-live-evidence {
   display: grid;
   gap: 8px;

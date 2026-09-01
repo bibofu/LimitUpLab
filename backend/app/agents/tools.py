@@ -57,6 +57,7 @@ from app.services.analysis import (
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.finance_news import collect_finance_news
 from app.services.first_board_critic import build_first_board_critic
+from app.services.first_board_discovery import FIRST_BOARD_DISCOVERY_VERSION
 from app.services.prediction_quality_audit import build_prediction_quality_audit
 from app.services.rating_backtest import build_rating_backtest
 from app.services.sector_performance import build_sector_performance
@@ -333,12 +334,10 @@ TOOL_SCHEMAS = [
     AgentToolSchema(
         name="first_board_discovery",
         description=(
-            "读取收盘后生成的下一交易日首板挖掘候选池，并返回由最新新闻和季度财报"
-            "持续重排的盘前研究排序。"
-            "候选在数据截止日尚未涨停，候选池来自当日热门"
-            "题材和新闻催化，再结合近 60 日 K 线量价结构精排；"
-            "同时附带半小时更新的行情、个股新闻和季度财报摘要；适合回答首板挖掘、"
-            "下一交易日可能首次涨停的观察池，不用于一进二接力。"
+            "读取低位挖掘观察池：先按最新新闻和市场热门题材召回，再结合最新季度"
+            "财报与近 60 日 K 线位置、量能和趋势修复进行研究排序。候选不要求已经"
+            "涨停，适合回答低位启动、趋势启动或可能进入主升阶段的研究问题；输出"
+            "必须分别解释题材、新闻和财报、走势，不用于一进二接力。"
         ),
         args_schema={
             "type": "object",
@@ -1406,16 +1405,18 @@ class AgentToolRegistry:
         )
 
     def first_board_discovery(self, data_as_of: date | None = None) -> ToolResult:
-        """Return a persisted next-session first-board discovery snapshot."""
+        """Return a persisted low-position discovery snapshot."""
 
         repository = SQLiteFirstBoardDiscoveryRepository(
             self.first_board_repository.database_path
         )
         response: FirstBoardDiscoveryResponse | None = (
-            repository.get(data_as_of) if data_as_of else repository.get_latest()
+            repository.get(data_as_of, FIRST_BOARD_DISCOVERY_VERSION)
+            if data_as_of
+            else repository.get_latest(FIRST_BOARD_DISCOVERY_VERSION)
         )
         if response is None:
-            raise LookupError("No persisted first-board discovery snapshot is available.")
+            raise LookupError("No persisted low-position discovery snapshot is available.")
         intelligence = _recommendation_intelligence_by_symbol(
             self.first_board_repository.database_path,
             strategy="discovery",
@@ -1430,8 +1431,12 @@ class AgentToolRegistry:
                 "confidence": item.confidence,
                 "change_pct": item.facts.change_pct,
                 "return_5d_pct": item.facts.return_5d_pct,
+                "return_20d_pct": item.facts.return_20d_pct,
+                "return_60d_pct": item.facts.return_60d_pct,
                 "volume_ratio_5d": item.facts.volume_ratio_5d,
                 "distance_20d_high_pct": item.facts.distance_20d_high_pct,
+                "distance_60d_high_pct": item.facts.distance_60d_high_pct,
+                "position_60d_pct": item.facts.position_60d_pct,
                 "amount": item.facts.amount,
                 "pattern": item.facts.pattern,
                 "pattern_label": _discovery_pattern_label(item.facts.pattern),
@@ -1458,7 +1463,7 @@ class AgentToolRegistry:
             input={"data_as_of": data_as_of.isoformat() if data_as_of else None},
             output=response,
             summary=(
-                f"{response.data_as_of.isoformat()} 收盘后首板挖掘观察池"
+                f"{response.data_as_of.isoformat()} 收盘后低位挖掘观察池"
                 f"共 {len(response.candidates)} 只。"
             ),
             trace_output=trace_output,
@@ -2065,7 +2070,7 @@ def _recommendation_draft_facts(
     strategy: str,
     expected_base_date: date,
 ) -> dict[str, Any] | None:
-    """Return the latest replaceable pre-auction ranking for Agent grounding."""
+    """Return the latest replaceable news and financial research ranking."""
 
     response = SQLiteRecommendationIntelligenceRepository(database_path).get_latest()
     if response is None:
@@ -2078,7 +2083,7 @@ def _recommendation_draft_facts(
             and item.base_trade_date == expected_base_date
         ),
         key=lambda item: (item.rank, item.symbol),
-    )[:10]
+    )[: (15 if strategy == "discovery" else 10)]
     if not candidates:
         return None
     base_date = (

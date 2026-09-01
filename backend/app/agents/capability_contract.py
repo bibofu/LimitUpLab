@@ -108,7 +108,7 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
     ),
     AgentCapability(
         "first_board_discovery",
-        "查询收盘后筛选的下一交易日首板挖掘 Top10；候选当前尚未涨停，先按热门题材和新闻催化圈选，再依据量价结构排序。",
+        "查询低位挖掘观察池；按热门题材和新闻催化召回，再用财报与近 60 日 K 线位置、量能和趋势修复验证，并分别解释三类证据。",
         (CapabilityToolRequirement("first_board_discovery"),),
     ),
     AgentCapability(

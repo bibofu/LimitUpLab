@@ -229,7 +229,7 @@ class RecommendationFinancialReport(BaseModel):
 
 
 class RecommendationIntelligenceItem(BaseModel):
-    """Latest mutable pre-auction ranking evidence for one candidate."""
+    """Latest mutable news and financial evidence for one candidate."""
 
     strategy: Literal["discovery", "relay"]
     base_trade_date: date
@@ -267,7 +267,7 @@ class RecommendationIntelligenceItem(BaseModel):
 
 
 class RecommendationIntelligenceResponse(BaseModel):
-    """Latest replaceable pre-auction draft for both strategies."""
+    """Latest replaceable research ranking for both strategies."""
 
     refresh_id: str
     refreshed_at: datetime
@@ -613,7 +613,7 @@ class FirstBoardDiscoveryTheme(BaseModel):
 
 
 class FirstBoardDiscoveryFacts(BaseModel):
-    """Point-in-time market and K-line facts for one pre-limit-up candidate."""
+    """Point-in-time market and K-line facts for one low-position candidate."""
 
     symbol: str
     name: str
@@ -629,7 +629,10 @@ class FirstBoardDiscoveryFacts(BaseModel):
     kline_bar_count: int
     return_5d_pct: float | None = None
     return_20d_pct: float | None = None
+    return_60d_pct: float | None = None
     distance_20d_high_pct: float | None = None
+    distance_60d_high_pct: float | None = None
+    position_60d_pct: float | None = None
     volume_ratio_5d: float | None = None
     volatility_20d: float | None = None
     ma_alignment: str
@@ -641,7 +644,7 @@ class FirstBoardDiscoveryFacts(BaseModel):
 
 
 class FirstBoardDiscoveryCandidate(BaseModel):
-    """Explainable candidate produced by the first-board discovery baseline."""
+    """Explainable candidate produced by the low-position discovery baseline."""
 
     facts: FirstBoardDiscoveryFacts
     score: float
@@ -653,7 +656,7 @@ class FirstBoardDiscoveryCandidate(BaseModel):
 
 
 class FirstBoardDiscoveryResponse(BaseModel):
-    """Immutable Top-K snapshot for the next-session first-board watchlist."""
+    """Immutable snapshot for the low-position research watchlist."""
 
     data_as_of: date
     target_trade_date: date | None = None

@@ -1,4 +1,4 @@
-"""Deterministic two-stage discovery for next-session first-board candidates."""
+"""Deterministic two-stage discovery for low-position momentum candidates."""
 
 from __future__ import annotations
 
@@ -37,9 +37,10 @@ from app.repositories import (
 from app.services.finance_news import collect_finance_news
 
 
-FIRST_BOARD_DISCOVERY_VERSION = "first-board-discovery-v2-theme-driven"
+FIRST_BOARD_DISCOVERY_VERSION = "low-position-discovery-v3"
+LEGACY_FIRST_BOARD_DISCOVERY_VERSION = "first-board-discovery-v2-theme-driven"
 MIN_DISCOVERY_AMOUNT = 100_000_000
-MIN_HISTORY_BARS = 40
+MIN_HISTORY_BARS = 60
 DEFAULT_RECALL_LIMIT = 60
 DEFAULT_TOP_K = 10
 DEFAULT_HISTORY_WORKERS = 8
@@ -244,7 +245,7 @@ def refresh_first_board_discovery(
     snapshot_repository: SQLiteFirstBoardDiscoveryRepository | None = None,
     force: bool = False,
 ) -> FirstBoardDiscoveryResponse:
-    """Build a theme-led candidate universe, then rank it with K-line facts."""
+    """Build a catalyst-led universe, then retain low-position K-line setups."""
 
     hithink_collector = HithinkFinanceCollector()
     active_market_collector = market_collector or hithink_collector.collect_full_market_snapshot
@@ -302,25 +303,28 @@ def refresh_first_board_discovery(
 
     candidates: list[FirstBoardDiscoveryCandidate] = []
     insufficient_history_count = 0
+    extended_position_count = 0
     for item in recalled:
         bars = _merge_snapshot_bar(histories.get(item.symbol, []), item, data_as_of)
         if len(bars) < MIN_HISTORY_BARS:
             insufficient_history_count += 1
             continue
-        candidates.append(
-            _build_candidate(
-                item,
-                bars,
-                data_as_of=data_as_of,
-                target_trade_date=target_trade_date,
-                discovery_context=discovery_context,
-            )
+        candidate = _build_candidate(
+            item,
+            bars,
+            data_as_of=data_as_of,
+            target_trade_date=target_trade_date,
+            discovery_context=discovery_context,
         )
+        if not _is_low_position_candidate(candidate.facts):
+            extended_position_count += 1
+            continue
+        candidates.append(candidate)
     candidates.sort(key=lambda item: (-item.score, -item.confidence, item.facts.symbol))
 
     warnings = [
-        "首板挖掘先按热门题材构建候选池，再使用量价和位置结构精排。",
-        "评分是题材与量价研究排序，不代表涨停概率，也不构成交易建议。",
+        "低位挖掘先按热门题材与新闻构建候选池，再用财报和量价位置验证。",
+        "评分用于寻找低位启动研究线索，不代表主升浪概率，也不构成交易建议。",
         *discovery_context.warnings,
     ]
     if not discovery_context.themes:
@@ -333,6 +337,10 @@ def refresh_first_board_discovery(
         warnings.append(
             f"{insufficient_history_count} 只股票历史不足 {MIN_HISTORY_BARS} 根，"
             "按次新或数据不足排除。"
+        )
+    if extended_position_count:
+        warnings.append(
+            f"{extended_position_count} 只股票近期涨幅或位置偏高，已从低位观察池排除。"
         )
     response = FirstBoardDiscoveryResponse(
         data_as_of=data_as_of,
@@ -488,8 +496,11 @@ def _build_candidate(
 ) -> FirstBoardDiscoveryCandidate:
     return_5d = _period_return(bars, 5)
     return_20d = _period_return(bars, 20)
+    return_60d = _period_return(bars, 60)
     volume_ratio = _volume_ratio(bars)
     distance_high = _distance_to_high(bars, 20)
+    distance_60d_high = _distance_to_high(bars, 60)
+    position_60d = _range_position_pct(bars, 60)
     volatility = _volatility(bars, 20)
     ma_alignment = _ma_alignment(bars)
     pattern = _classify_pattern(
@@ -528,7 +539,10 @@ def _build_candidate(
         kline_bar_count=len(bars),
         return_5d_pct=return_5d,
         return_20d_pct=return_20d,
+        return_60d_pct=return_60d,
         distance_20d_high_pct=distance_high,
+        distance_60d_high_pct=distance_60d_high,
+        position_60d_pct=position_60d,
         volume_ratio_5d=volume_ratio,
         volatility_20d=volatility,
         ma_alignment=ma_alignment,
@@ -569,35 +583,21 @@ def _build_candidate(
 
 
 def _score_breakdown(facts: FirstBoardDiscoveryFacts) -> list[ScoreBreakdownItem]:
-    theme_strength = _bounded(_theme_priority(facts.themes), 0, 30)
+    theme_strength = _bounded(_theme_priority(facts.themes) / 30 * 25, 0, 25)
     catalyst = _bounded(len(facts.news_catalysts) * 7.5, 0, 15)
     popularity = (
-        _bounded(10 - (facts.popularity_rank - 1) * 0.1, 1, 10)
+        _bounded(5 - (facts.popularity_rank - 1) * 0.05, 0.5, 5)
         if facts.popularity_rank is not None
         else 0
     )
-    momentum = _bounded(15 - abs(facts.change_pct - 4) * 1.4, 0, 15)
-    if facts.return_5d_pct is not None:
-        momentum = (
-            momentum
-            + _bounded(15 - abs(facts.return_5d_pct - 7) * 0.8, 0, 15)
-        ) / 2
-    ratio = facts.volume_ratio_5d or 0
-    volume_expansion = (
-        _bounded(10 - abs(ratio - 2) * 4, 0, 10) if ratio > 0 else 0
-    )
-    distance = facts.distance_20d_high_pct
-    structure = _bounded(10 - abs(distance or -20) * 0.8, 0, 10)
-    if facts.ma_alignment == "bullish":
-        structure += 2
-    structure += facts.close_location * 3
-    structure = _bounded(structure, 0, 15)
+    low_position = _low_position_score(facts)
+    starting_signal = _starting_signal_score(facts)
     data_quality = 5 if facts.kline_bar_count >= 60 else 3
     return [
         ScoreBreakdownItem(
-            name="题材强度",
+            name="题材热度",
             score=round(theme_strength, 2),
-            max_score=30,
+            max_score=25,
             evidence=[
                 "命中"
                 + "、".join(
@@ -619,7 +619,7 @@ def _score_breakdown(facts: FirstBoardDiscoveryFacts) -> list[ScoreBreakdownItem
         ScoreBreakdownItem(
             name="市场关注度",
             score=round(popularity, 2),
-            max_score=10,
+            max_score=5,
             evidence=[
                 f"同花顺热股榜第 {facts.popularity_rank} 名"
                 if facts.popularity_rank is not None
@@ -627,27 +627,23 @@ def _score_breakdown(facts: FirstBoardDiscoveryFacts) -> list[ScoreBreakdownItem
             ],
         ),
         ScoreBreakdownItem(
-            name="短期动量",
-            score=round(momentum, 2),
-            max_score=15,
+            name="低位结构",
+            score=round(low_position, 2),
+            max_score=25,
             evidence=[
-                f"当日涨幅 {facts.change_pct:+.1f}%，近 5 日 {facts.return_5d_pct or 0:+.1f}%"
+                f"近 60 日 {facts.return_60d_pct or 0:+.1f}%，"
+                f"区间位置 {facts.position_60d_pct or 0:.0f}%，"
+                f"距 60 日高点 {facts.distance_60d_high_pct or 0:+.1f}%"
             ],
         ),
         ScoreBreakdownItem(
-            name="量能扩张",
-            score=round(volume_expansion, 2),
-            max_score=10,
-            evidence=[f"近 5 日量比 {facts.volume_ratio_5d or 0:.2f}"],
-        ),
-        ScoreBreakdownItem(
-            name="位置结构",
-            score=round(structure, 2),
-            max_score=15,
+            name="启动信号",
+            score=round(starting_signal, 2),
+            max_score=25,
             evidence=[
-                f"距 20 日高点 {facts.distance_20d_high_pct or 0:+.1f}%，"
-                f"均线结构{_ma_alignment_label(facts.ma_alignment)}，"
-                f"收盘位置{facts.close_location:.0%}"
+                f"近 5 日 {facts.return_5d_pct or 0:+.1f}%，"
+                f"量比 {facts.volume_ratio_5d or 0:.2f}，"
+                f"均线{_ma_alignment_label(facts.ma_alignment)}"
             ],
         ),
         ScoreBreakdownItem(
@@ -657,6 +653,50 @@ def _score_breakdown(facts: FirstBoardDiscoveryFacts) -> list[ScoreBreakdownItem
             evidence=[f"可用日 K {facts.kline_bar_count} 根"],
         ),
     ]
+
+
+def _low_position_score(facts: FirstBoardDiscoveryFacts) -> float:
+    """Reward bases that have not already completed a large advance."""
+
+    return_60d = facts.return_60d_pct or 0
+    return_20d = facts.return_20d_pct or 0
+    position = facts.position_60d_pct if facts.position_60d_pct is not None else 50
+    score = 20.0
+    score -= max(0.0, return_60d - 12) * 0.55
+    score -= max(0.0, return_20d - 10) * 0.7
+    score -= max(0.0, -return_60d - 25) * 0.25
+    if 25 <= position <= 75:
+        score += 5
+    elif position < 10 or position > 90:
+        score -= 3
+    return _bounded(score, 0, 25)
+
+
+def _starting_signal_score(facts: FirstBoardDiscoveryFacts) -> float:
+    """Score early momentum, moderate volume expansion and trend repair."""
+
+    return_5d = facts.return_5d_pct or 0
+    ratio = facts.volume_ratio_5d or 0
+    momentum = _bounded(10 - abs(return_5d - 5) * 0.9, 0, 10)
+    volume = _bounded(8 - abs(ratio - 1.8) * 4, 0, 8) if ratio > 0 else 0
+    alignment = {"bullish": 4, "mixed": 2, "bearish": 0}.get(
+        facts.ma_alignment,
+        0,
+    )
+    close_strength = _bounded(facts.close_location * 3, 0, 3)
+    return _bounded(momentum + volume + alignment + close_strength, 0, 25)
+
+
+def _is_low_position_candidate(facts: FirstBoardDiscoveryFacts) -> bool:
+    """Exclude already extended moves from the low-position research pool."""
+
+    return (
+        (facts.return_5d_pct or 0) <= 15
+        and (facts.return_20d_pct or 0) <= 22
+        and (facts.return_60d_pct or 0) <= 35
+        and (facts.position_60d_pct or 50) <= 85
+        and facts.pattern != "second_wave"
+    )
 
 
 def _theme_priority(themes: list[FirstBoardDiscoveryTheme]) -> float:
@@ -758,6 +798,19 @@ def _distance_to_high(bars: list[StockKLineBar], periods: int) -> float | None:
         return None
     high = max(item.high for item in bars[-periods:])
     return round((bars[-1].close / high - 1) * 100, 3) if high > 0 else None
+
+
+def _range_position_pct(bars: list[StockKLineBar], periods: int) -> float | None:
+    """Return the latest close's percentile inside the recent high-low range."""
+
+    if not bars:
+        return None
+    window = bars[-periods:]
+    high = max(item.high for item in window)
+    low = min(item.low for item in window)
+    if high <= low:
+        return 50.0
+    return round(_bounded((bars[-1].close - low) / (high - low) * 100, 0, 100), 2)
 
 
 def _volatility(bars: list[StockKLineBar], periods: int) -> float | None:

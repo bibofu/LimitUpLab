@@ -131,7 +131,7 @@ def _template_answer_forced() -> bool:
 
 TEXT = {
     "greeting": "你好，我是 LimitUpLab 的首板 Agent。我可以总结今日首板、解释个股评分、分析风险，也可以查询热门股票、财经快讯、个股新闻、个股走势和市场环境。",
-    "capability": "我是 LimitUpLab V1 首板复盘 Agent。我使用最新完整收盘数据和个股日 K 线生成首板挖掘与一进二接力两类 Top10 观察名单，并复盘 D+1 至 D+5 走势、晋级率和评分表现；也可以按需查询带来源和时间的热门股票榜单、财经快讯、个股新闻及近期动态。我不提供盘中实时行情、买卖指令、仓位、目标价或收益承诺。",
+    "capability": "我是 LimitUpLab V1 首板复盘 Agent。我使用最新完整收盘数据、热门题材、新闻财报和个股日 K 线生成低位挖掘观察池，并为已涨停首板生成一进二 Top10，持续复盘 D+1 至 D+5 走势、晋级率和评分表现；也可以查询带来源和时间的热门股票榜单、财经快讯、个股新闻及近期动态。我不提供盘中实时行情、买卖指令、仓位、目标价或收益承诺。",
     "smalltalk": "我在。你可以直接问首板候选、板块分布、评分理由、风险或个股走势。",
     "out_of_scope": UNANSWERABLE_TEXT,
     "unsafe": "我不能给出直接交易指令、资金配比、价格预测或回报承诺。我可以基于结构化数据分析评分理由、风险、板块热度和市场环境。",
@@ -1063,7 +1063,7 @@ def _tool_planner_system_prompt(
         "Use YYYY-MM-DD for all dates. "
         "For capability questions, answer_directly must mention LimitUpLab. "
         "For rating explanation questions, first call first_board_ratings before critic tools. "
-        "For next-session first-board discovery, call first_board_discovery; this is a pre-limit-up watchlist and is separate from first_board_ratings, which ranks stocks that already closed at first board for one-to-two continuation. "
+        "For low-position discovery or possible trend-start questions, call first_board_discovery; it combines hot themes, recent news, financial reports and 60-day K-line position, and is separate from first_board_ratings, which ranks stocks that already closed at first board for one-to-two continuation. "
         "For review questions about recent high-score picks, model performance, misses, scoring taste, or Top10 first-to-second-board success versus the market, call review_high_score_picks. "
         "Historical high-score performance and good/bad sample traits are prediction_review only; do not add first_board_rating unless the user separately asks for today's rating facts. "
         "A comparison of which current candidates or first-board samples have better quality is first_board_rating. prediction_review requires explicit realized-outcome language such as 后续表现, 走出来, 兑现, 命中 or 复盘过去结果. "
@@ -1488,47 +1488,55 @@ def _template_answer_from_tool_facts(
         draft = discovery.get("recommendation_draft") or {}
         draft_candidates = draft.get("candidates") or []
         if draft_candidates:
+            base_by_symbol = {
+                item.get("symbol"): item
+                for item in discovery.get("candidates", [])
+                if item.get("symbol")
+            }
             lines = [
                 f"基于 {draft.get('base_date')} 收盘情况，并更新至 "
-                f"{str(draft.get('refreshed_at', ''))[:16]} 的首板挖掘盘前草稿如下："
+                f"{str(draft.get('refreshed_at', ''))[:16]} 的低位挖掘观察池如下："
             ]
-            lines.extend(
-                f"{index}. {item.get('name')}({item.get('symbol')}) "
-                f"动态 {item.get('draft_score')} 分，收盘基础 {item.get('base_score')} 分，"
-                f"新闻修正 {item.get('news_adjustment', 0):+g}，"
-                f"财报修正 {item.get('financial_adjustment', 0):+g}。"
-                for index, item in enumerate(draft_candidates, start=1)
-            )
-            lines.append("该名单会随新闻和财报更新；正式复盘以收盘固化 Top10 为准。")
+            for index, item in enumerate(draft_candidates, start=1):
+                base = base_by_symbol.get(item.get("symbol"), {})
+                themes = base.get("themes") or []
+                theme = themes[0] if themes else {}
+                latest_news = item.get("latest_news") or []
+                financial = item.get("financial_report") or {}
+                lines.extend(
+                    [
+                        f"{index}. {item.get('name')}({item.get('symbol')})，研究分 {item.get('draft_score')}。",
+                        f"   1. 题材：{theme.get('name') or item.get('sector') or '暂无明确题材'}，题材涨幅 {theme.get('change_pct', '暂无')}%。",
+                        f"   2. 新闻和财报：{latest_news[0].get('title') if latest_news else (base.get('news_catalysts') or ['暂无明确催化'])[0]}；营收同比 {financial.get('operating_income_yoy_pct', '暂无')}%，归母净利同比 {financial.get('net_profit_yoy_pct', '暂无')}%。",
+                        f"   3. 走势：{base.get('pattern_label', '结构待验证')}，近5日 {base.get('return_5d_pct', '暂无')}%，近20日 {base.get('return_20d_pct', '暂无')}%，近60日 {base.get('return_60d_pct', '暂无')}%，量比 {base.get('volume_ratio_5d', '暂无')}。",
+                    ]
+                )
+            lines.append("这是低位启动研究排序，不代表主升浪或收益概率。")
             lines.append(TEXT["safety"])
             return "\n".join(lines)
         candidates = discovery.get("candidates", [])
         target = discovery.get("target_trade_date") or "下一交易日"
         lines = [
-            f"基于 {discovery.get('data_as_of')} 收盘数据，{target} 首板挖掘观察池如下："
+            f"基于 {discovery.get('data_as_of')} 收盘数据，{target} 低位挖掘观察池如下："
         ]
         for index, item in enumerate(candidates[:10], start=1):
             themes = item.get("themes") or []
             primary_theme = themes[0] if themes else {}
             catalysts = item.get("news_catalysts") or []
             live = item.get("latest_intelligence") or {}
-            lines.append(
-                f"{index}. {item.get('name')}({item.get('symbol')}) "
-                f"{item.get('score')}分/{item.get('rating')}，"
-                f"题材 {primary_theme.get('name', '暂无')}"
-                f"({primary_theme.get('change_pct', 0):+.1f}%)，"
-                f"{item.get('pattern_label')}，量比 {item.get('volume_ratio_5d')}。"
+            financial = live.get("financial_report") or {}
+            latest_news = live.get("latest_news") or []
+            lines.extend(
+                [
+                    f"{index}. {item.get('name')}({item.get('symbol')})，研究分 {item.get('score')}。",
+                    f"   1. 题材：{primary_theme.get('name', '暂无')}，题材涨幅 {primary_theme.get('change_pct', '暂无')}%。",
+                    f"   2. 新闻和财报：{latest_news[0].get('title') if latest_news else (catalysts[0] if catalysts else '暂无明确催化')}；营收同比 {financial.get('operating_income_yoy_pct', '暂无')}%，归母净利同比 {financial.get('net_profit_yoy_pct', '暂无')}%。",
+                    f"   3. 走势：{item.get('pattern_label')}，近5日 {item.get('return_5d_pct', '暂无')}%，近20日 {item.get('return_20d_pct', '暂无')}%，近60日 {item.get('return_60d_pct', '暂无')}%，量比 {item.get('volume_ratio_5d', '暂无')}。",
+                ]
             )
-            if live and live.get("change_pct") is not None:
-                lines.append(
-                    f"   最新情报：{live.get('change_pct')}%，"
-                    f"更新于 {str(live.get('refreshed_at', ''))[:16]}。"
-                )
-            if catalysts:
-                lines.append(f"   催化：{catalysts[0]}")
         if not candidates:
             lines.append("当前没有满足数据与流动性要求的候选。")
-        lines.append("该名单先按热门题材和新闻催化圈选，再按量价结构排序，不代表涨停概率。")
+        lines.append("该名单先按热门题材和新闻催化圈选，再用财报和低位走势验证，不代表主升浪或收益概率。")
         lines.append(TEXT["safety"])
         return "\n".join(lines)
 
@@ -2024,7 +2032,7 @@ def _tool_answer_system_prompt(
         "For broad-index trend questions, cite the requested window and data_as_of, compare all returned major indices using period returns, up/down days and drawdown, and do not substitute limit-up counts for index performance. "
         "Do not assign categorical market-sentiment labels such as heating, divergence, cooling, risk-on or risk-off; report objective market counts, rates and index changes instead. "
         "For daily_board_promotion, treat each trade_date as the day promotion was observed from previous_trade_date; report empirical sample counts with every rate and distinguish all limit-up stocks, first-board-to-second-board, and existing continued-board cohorts. "
-        "For first_board_discovery and first_board_ratings, prefer recommendation_draft when present; it is a replaceable research ranking based on the previous close plus the latest news and financial facts, while the immutable after-close Top10 remains the review sample. Fall back to the close-data base pool when no draft exists. State the stage and date, never convert a score into a claimed limit-up probability, and explain that first_board_discovery candidates had not reached limit-up on the close-data cutoff date. "
+        "For first_board_discovery, describe it as low-position discovery rather than a first-board Top10 prediction. Prefer recommendation_draft when present and explain every candidate in three evidence groups: 1) hot themes, 2) recent news and financial report, 3) 60-day K-line position, returns and volume. Never claim a main-uptrend probability. For first_board_ratings, the immutable after-close Top10 remains the one-to-two review sample. State every stage and date. "
         "For review_high_score_picks promotion comparisons, report Top10 and full-market first-board sample counts together, separate pending dates, and express promotion_rate_delta as percentage points. "
         "For dragon_tiger_list, omit every missing capital-flow field and format each valid CNY amount as signed 亿元 or 万元; never expose raw yuan values, None, null, NaN, or a missing-data placeholder. "
         "Historical similar-case retrieval is retired; never invent or infer a similar stock or case from the available facts. "
@@ -2973,7 +2981,7 @@ def _execute_llm_tool_calls(
                     _tool_error_trace(
                         name=name,
                         tool_input=arguments,
-                        summary="首板挖掘快照不可用，已将缺失原因交给 LLM。",
+                        summary="低位挖掘快照不可用，已将缺失原因交给 LLM。",
                         error=str(error),
                     )
                 )
