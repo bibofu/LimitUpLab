@@ -109,6 +109,16 @@ export interface StockCloseSnapshot {
   source: string;
 }
 
+export interface StockDetailMarketData {
+  symbol: string;
+  requested_days: number;
+  data_as_of: string;
+  kline: StockKLineBar[];
+  latest_close: StockCloseSnapshot;
+  position_trade_date: string | null;
+  position: StockPositionAssessment | null;
+}
+
 export interface StockNewsItem {
   symbol: string;
   name: string;

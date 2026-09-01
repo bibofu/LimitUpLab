@@ -20,6 +20,7 @@ import type {
   ReviewAgentReportResponse,
   ScoringErrorDiagnosticResponse,
   StockCloseSnapshot,
+  StockDetailMarketData,
   StockIntradayKLineBar,
   StockKLineBar,
   StockNewsFacts,
@@ -27,6 +28,7 @@ import type {
 } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
+const inflightGetRequests = new Map<string, Promise<unknown>>();
 
 /** Fetch JSON from the backend and surface non-2xx responses as errors. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -40,6 +42,21 @@ async function request<T>(path: string, init?: RequestInit): Promise<T> {
   }
 
   return response.json() as Promise<T>;
+}
+
+/** Reuse identical in-flight GETs, including React StrictMode development mounts. */
+function dedupedGet<T>(path: string): Promise<T> {
+  const existing = inflightGetRequests.get(path);
+  if (existing) {
+    return existing as Promise<T>;
+  }
+  const pending = request<T>(path).finally(() => {
+    if (inflightGetRequests.get(path) === pending) {
+      inflightGetRequests.delete(path);
+    }
+  });
+  inflightGetRequests.set(path, pending);
+  return pending;
 }
 
 export function fetchMarketSummary() {
@@ -95,7 +112,21 @@ export function fetchStockEvent(symbol: string, tradeDate?: string) {
 }
 
 export function fetchStockKLine(symbol: string, days = 60) {
-  return request<StockKLineBar[]>(`/api/stocks/${symbol}/kline?days=${days}`);
+  return dedupedGet<StockKLineBar[]>(`/api/stocks/${symbol}/kline?days=${days}`);
+}
+
+export function fetchStockMarketData(
+  symbol: string,
+  days = 60,
+  positionTradeDate?: string,
+) {
+  const params = new URLSearchParams({ days: String(days) });
+  if (positionTradeDate) {
+    params.set("position_trade_date", positionTradeDate);
+  }
+  return dedupedGet<StockDetailMarketData>(
+    `/api/stocks/${symbol}/market-data?${params.toString()}`,
+  );
 }
 
 export function fetchStockNews(symbol: string, name?: string, limit = 3) {
@@ -125,7 +156,7 @@ export function fetchStockTradingDayKLine(
   if (tradeDate) {
     params.set("trade_date", tradeDate);
   }
-  return request<StockIntradayKLineBar[]>(
+  return dedupedGet<StockIntradayKLineBar[]>(
     `/api/stocks/${symbol}/trading-day-kline?${params.toString()}`,
   );
 }

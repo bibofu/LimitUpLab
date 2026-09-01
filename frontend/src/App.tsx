@@ -64,11 +64,9 @@ import {
   fetchMarketSummary,
   fetchScoringErrorDiagnostic,
   fetchRecentLimitUpEvents,
-  fetchStockKLine,
   fetchStockEvent,
-  fetchStockLatestClose,
+  fetchStockMarketData,
   fetchStockNews,
-  fetchStockPosition,
   fetchStockTradingDayKLine,
   renameChatSession,
   streamAgentChatMessage,
@@ -3063,7 +3061,7 @@ function StockDetail({ data }: { data: DashboardData }) {
   const [critic, setCritic] = useState<FirstBoardCriticResponse | null>(null);
   const [klineLoading, setKlineLoading] = useState(true);
   const [klineError, setKlineError] = useState<string | null>(null);
-  const [tradingDayLoading, setTradingDayLoading] = useState(true);
+  const [tradingDayLoading, setTradingDayLoading] = useState(false);
   const [tradingDayError, setTradingDayError] = useState<string | null>(null);
   const [latestCloseLoading, setLatestCloseLoading] = useState(true);
   const [latestCloseError, setLatestCloseError] = useState<string | null>(null);
@@ -3071,6 +3069,7 @@ function StockDetail({ data }: { data: DashboardData }) {
   const [positionLoading, setPositionLoading] = useState(true);
   const [positionError, setPositionError] = useState<string | null>(null);
   const [criticLoading, setCriticLoading] = useState(false);
+  const tradingDayCacheKeyRef = useRef("");
   const resolvedTradeDate = stockEvent?.trade_date
     ?? requestedTradeDate
     ?? data.summary.trade_date;
@@ -3133,83 +3132,72 @@ function StockDetail({ data }: { data: DashboardData }) {
     if (stockEventLoading) {
       return;
     }
-    const tradeDate = resolvedTradeDate;
     let active = true;
 
     setKline([]);
-    setTradingDayKline([]);
     setPosition(null);
     setLatestClose(null);
     setLatestCloseLoading(true);
     setLatestCloseError(null);
-    fetchStockLatestClose(symbol)
-      .then((snapshot) => {
-        if (active) {
-          setLatestClose(snapshot);
-        }
-      })
-      .catch((caught) => {
-        if (active) {
-          setLatestClose(null);
-          setLatestCloseError(caught instanceof Error ? caught.message : "加载最新收盘数据失败");
-        }
-      })
-      .finally(() => {
-        if (active) {
-          setLatestCloseLoading(false);
-        }
-      });
-
     setKlineLoading(true);
     setKlineError(null);
-    fetchStockKLine(symbol, 60)
-      .then((bars) => {
+    setPositionLoading(Boolean(stockEvent));
+    setPositionError(null);
+    fetchStockMarketData(symbol, 60, stockEvent?.trade_date)
+      .then((marketData) => {
         if (active) {
-          setKline(bars);
+          setKline(marketData.kline);
+          setLatestClose(marketData.latest_close);
+          setPosition(marketData.position);
         }
       })
       .catch((caught) => {
         if (active) {
-          setKlineError(caught instanceof Error ? caught.message : "加载 60 日 K 线失败");
+          const message = caught instanceof Error ? caught.message : "加载个股行情失败";
+          setKlineError(message);
+          setLatestCloseError(message);
+          if (stockEvent) {
+            setPositionError(message);
+          }
         }
       })
       .finally(() => {
         if (active) {
           setKlineLoading(false);
+          setLatestCloseLoading(false);
+          setPositionLoading(false);
         }
       });
 
-    if (stockEvent) {
-      setPositionLoading(true);
-      setPositionError(null);
-      fetchStockPosition(symbol, tradeDate)
-        .then((assessment) => {
-          if (active) {
-            setPosition(assessment);
-          }
-        })
-        .catch((caught) => {
-          if (active) {
-            setPosition(null);
-            setPositionError(caught instanceof Error ? caught.message : "加载首板位置判断失败");
-          }
-        })
-        .finally(() => {
-          if (active) {
-            setPositionLoading(false);
-          }
-        });
-    } else {
-      setPositionLoading(false);
-      setPositionError(null);
-    }
+    return () => {
+      active = false;
+    };
+  }, [resolvedTradeDate, stockEvent?.trade_date, stockEventLoading, symbol]);
 
+  useEffect(() => {
+    setTradingDayKline([]);
+    setTradingDayError(null);
+    setTradingDayLoading(false);
+    tradingDayCacheKeyRef.current = "";
+  }, [resolvedTradeDate, symbol]);
+
+  useEffect(() => {
+    if (chartMode !== "intraday" || stockEventLoading) {
+      return;
+    }
+    const tradeDate = resolvedTradeDate;
+    const cacheKey = `${symbol}:${tradeDate}:1`;
+    if (tradingDayCacheKeyRef.current === cacheKey) {
+      return;
+    }
+    let active = true;
     setTradingDayLoading(true);
     setTradingDayError(null);
     fetchStockTradingDayKLine(symbol, 1, tradeDate)
       .then((bars) => {
         if (active) {
           setTradingDayKline(bars);
+          tradingDayCacheKeyRef.current = cacheKey;
         }
       })
       .catch((caught) => {
@@ -3222,28 +3210,39 @@ function StockDetail({ data }: { data: DashboardData }) {
           setTradingDayLoading(false);
         }
       });
+    return () => {
+      active = false;
+    };
+  }, [chartMode, resolvedTradeDate, stockEventLoading, symbol]);
 
+  useEffect(() => {
+    if (stockEventLoading) {
+      return;
+    }
+    const tradeDate = resolvedTradeDate;
     const cachedRating = stockEvent && data.firstBoardRatings.trade_date === tradeDate
       ? data.firstBoardRatings.candidates.find(
           (rating) => rating.facts.symbol === symbol,
         ) ?? null
       : null;
     setFirstBoardRating(cachedRating);
-    if (stockEvent) {
-      fetchFirstBoardRatings(tradeDate)
-        .then((ratings) => {
-          if (active) {
-            setFirstBoardRating(
-              ratings.candidates.find((rating) => rating.facts.symbol === symbol) ?? null,
-            );
-          }
-        })
-        .catch(() => {
-          if (active && !cachedRating) {
-            setFirstBoardRating(null);
-          }
-        });
+    if (!stockEvent) {
+      return;
     }
+    let active = true;
+    fetchFirstBoardRatings(tradeDate)
+      .then((ratings) => {
+        if (active) {
+          setFirstBoardRating(
+            ratings.candidates.find((rating) => rating.facts.symbol === symbol) ?? null,
+          );
+        }
+      })
+      .catch(() => {
+        if (active && !cachedRating) {
+          setFirstBoardRating(null);
+        }
+      });
 
     return () => {
       active = false;
@@ -3251,7 +3250,7 @@ function StockDetail({ data }: { data: DashboardData }) {
   }, [
     data.firstBoardRatings,
     resolvedTradeDate,
-    stockEvent,
+    stockEvent?.trade_date,
     stockEventLoading,
     symbol,
   ]);

@@ -746,6 +746,18 @@ class StockPositionAssessment(BaseModel):
     classifier_version: str
 
 
+class StockDetailMarketData(BaseModel):
+    """Consolidated local-first market data for one stock detail page."""
+
+    symbol: str
+    requested_days: int
+    data_as_of: date
+    kline: list[StockKLineBar] = Field(default_factory=list)
+    latest_close: StockCloseSnapshot
+    position_trade_date: date | None = None
+    position: StockPositionAssessment | None = None
+
+
 class FirstBoardEnrichmentSnapshot(BaseModel):
     """Point-in-time enrichment facts available after the first-board close."""
 

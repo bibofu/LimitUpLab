@@ -2,13 +2,17 @@
 
 from __future__ import annotations
 
+import threading
 from collections.abc import Callable
 from datetime import date, datetime, timezone
 from statistics import mean
+from time import monotonic
 
 from app.collectors import collect_stock_kline, collect_stock_spot_klines
+from app.collectors.stock_kline_collector import build_stock_close_snapshot
 from app.models import (
     StockDailyBar,
+    StockDetailMarketData,
     StockKLineBar,
     StockKLineFacts,
     StockPositionAssessment,
@@ -19,6 +23,10 @@ from app.services.stock_position import classify_stock_position
 
 HistoryCollector = Callable[[str, int, date | None], list[StockKLineBar]]
 SpotCollector = Callable[[list[str], date], dict[str, StockKLineBar]]
+_REFRESH_LOCKS = tuple(threading.Lock() for _ in range(64))
+_REFRESH_ATTEMPT_TTL_SECONDS = 300.0
+_refresh_attempts_lock = threading.Lock()
+_refresh_attempts: dict[tuple[str, date], tuple[float, int]] = {}
 
 
 def load_stock_kline_bars(
@@ -36,37 +44,121 @@ def load_stock_kline_bars(
         raise ValueError("days must be between 1 and 125")
     active_repository = repository or SQLiteFirstBoardRepository()
     cached = _cached_bars(active_repository, symbol, end_date)
-    needs_history = len(cached) < days
-    needs_end_date = not cached or cached[-1].trade_date < end_date
-    collected: list[StockKLineBar] = []
-    collection_error: Exception | None = None
+    if _cache_can_serve(cached, days, end_date) or (
+        cached and _recent_refresh_covers(symbol, end_date, days)
+    ):
+        return [_to_kline_bar(item) for item in cached[-days:]]
 
-    if needs_history or needs_end_date:
+    refresh_lock = _refresh_lock_for(symbol, end_date)
+    with refresh_lock:
+        cached = _cached_bars(active_repository, symbol, end_date)
+        if _cache_can_serve(cached, days, end_date) or (
+            cached and _recent_refresh_covers(symbol, end_date, days)
+        ):
+            return [_to_kline_bar(item) for item in cached[-days:]]
+
+        collected: list[StockKLineBar] = []
+        collection_error: Exception | None = None
+        refresh_completed = False
         try:
             collected = history_collector(symbol, days, end_date)
+            refresh_completed = True
         except Exception as error:  # noqa: BLE001
             collection_error = error
 
-    known_dates = {item.trade_date for item in cached}
-    known_dates.update(item.trade_date for item in collected)
-    if end_date not in known_dates or end_date == date.today():
-        try:
-            spot = spot_collector([symbol], end_date).get(symbol)
-            if spot is not None:
-                collected.append(spot)
-        except Exception as error:  # noqa: BLE001
-            collection_error = collection_error or error
+        known_dates = {item.trade_date for item in cached}
+        known_dates.update(item.trade_date for item in collected)
+        if end_date not in known_dates:
+            try:
+                spot = spot_collector([symbol], end_date).get(symbol)
+                refresh_completed = True
+                if spot is not None:
+                    collected.append(spot)
+            except Exception as error:  # noqa: BLE001
+                collection_error = collection_error or error
 
-    if collected:
-        active_repository.upsert_daily_bars(
-            [_to_daily_bar(symbol, item) for item in collected if item.trade_date <= end_date]
-        )
-    refreshed = _cached_bars(active_repository, symbol, end_date)
-    if not refreshed:
-        if collection_error is not None:
-            raise collection_error
-        raise ValueError(f"No K-line data available for {symbol} through {end_date.isoformat()}")
-    return [_to_kline_bar(item) for item in refreshed[-days:]]
+        if collected:
+            active_repository.upsert_daily_bars(
+                [
+                    _to_daily_bar(symbol, item)
+                    for item in collected
+                    if item.trade_date <= end_date
+                ]
+            )
+        refreshed = _cached_bars(active_repository, symbol, end_date)
+        if not refreshed:
+            if collection_error is not None:
+                raise collection_error
+            raise ValueError(
+                f"No K-line data available for {symbol} through {end_date.isoformat()}"
+            )
+        if refresh_completed:
+            _record_refresh_attempt(symbol, end_date, days)
+        return [_to_kline_bar(item) for item in refreshed[-days:]]
+
+
+def load_stock_detail_market_data(
+    *,
+    symbol: str,
+    days: int,
+    end_date: date,
+    position_trade_date: date | None = None,
+    repository: SQLiteFirstBoardRepository | None = None,
+    history_collector: HistoryCollector = collect_stock_kline,
+    spot_collector: SpotCollector = collect_stock_spot_klines,
+) -> StockDetailMarketData:
+    """Load one reusable market-data bundle for the stock detail page."""
+
+    if not (1 <= days <= 60):
+        raise ValueError("days must be between 1 and 60")
+    active_repository = repository or SQLiteFirstBoardRepository()
+    position = None
+    if position_trade_date is not None:
+        enrichment = active_repository.get_enrichment(symbol, position_trade_date)
+        position = enrichment.position if enrichment else None
+
+    preload_days = days
+    if position_trade_date == end_date and position is None:
+        preload_days = 125
+    bars = load_stock_kline_bars(
+        symbol=symbol,
+        days=preload_days,
+        end_date=end_date,
+        repository=active_repository,
+        history_collector=history_collector,
+        spot_collector=spot_collector,
+    )
+    display_bars = bars[-days:]
+    latest_close = build_stock_close_snapshot(
+        symbol=symbol,
+        bars=bars,
+        source="local-first-kline",
+    )
+
+    if position_trade_date is not None and position is None:
+        if position_trade_date == end_date:
+            position = classify_stock_position(
+                [_to_daily_bar(symbol, item) for item in bars],
+                position_trade_date,
+            )
+        else:
+            position = load_stock_position_assessment(
+                symbol=symbol,
+                end_date=position_trade_date,
+                repository=active_repository,
+                history_collector=history_collector,
+                spot_collector=spot_collector,
+            )
+
+    return StockDetailMarketData(
+        symbol=symbol,
+        requested_days=days,
+        data_as_of=display_bars[-1].trade_date,
+        kline=display_bars,
+        latest_close=latest_close,
+        position_trade_date=position_trade_date,
+        position=position,
+    )
 
 
 def load_stock_position_assessment(
@@ -159,6 +251,53 @@ def _cached_bars(
     end_date: date,
 ) -> list[StockDailyBar]:
     return [item for item in repository.list_daily_bars(symbol) if item.trade_date <= end_date]
+
+
+def _cache_can_serve(
+    bars: list[StockDailyBar],
+    days: int,
+    end_date: date,
+) -> bool:
+    return bool(
+        len(bars) >= days
+        and bars[-1].trade_date >= end_date
+    )
+
+
+def _refresh_lock_for(symbol: str, end_date: date) -> threading.Lock:
+    index = hash((symbol, end_date)) % len(_REFRESH_LOCKS)
+    return _REFRESH_LOCKS[index]
+
+
+def _recent_refresh_covers(symbol: str, end_date: date, days: int) -> bool:
+    now = monotonic()
+    key = (symbol, end_date)
+    with _refresh_attempts_lock:
+        attempt = _refresh_attempts.get(key)
+        if attempt is None:
+            return False
+        attempted_at, requested_days = attempt
+        if now - attempted_at > _REFRESH_ATTEMPT_TTL_SECONDS:
+            _refresh_attempts.pop(key, None)
+            return False
+        return requested_days >= days
+
+
+def _record_refresh_attempt(symbol: str, end_date: date, days: int) -> None:
+    now = monotonic()
+    key = (symbol, end_date)
+    with _refresh_attempts_lock:
+        previous = _refresh_attempts.get(key)
+        covered_days = max(days, previous[1] if previous else 0)
+        _refresh_attempts[key] = (now, covered_days)
+        if len(_refresh_attempts) > 1_024:
+            expired = [
+                item_key
+                for item_key, (attempted_at, _) in _refresh_attempts.items()
+                if now - attempted_at > _REFRESH_ATTEMPT_TTL_SECONDS
+            ]
+            for item_key in expired:
+                _refresh_attempts.pop(item_key, None)
 
 
 def _to_daily_bar(symbol: str, bar: StockKLineBar) -> StockDailyBar:

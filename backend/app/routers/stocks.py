@@ -12,6 +12,7 @@ from app.collectors.stock_kline_collector import build_stock_close_snapshot
 from app.models import (
     LimitUpEvent,
     StockCloseSnapshot,
+    StockDetailMarketData,
     StockIntradayKLineBar,
     StockKLineBar,
     StockNewsFacts,
@@ -24,6 +25,7 @@ from app.repositories import (
 )
 from app.services.analysis import find_stock_event, latest_trade_date
 from app.services.stock_kline import (
+    load_stock_detail_market_data,
     load_stock_kline_bars,
     load_stock_position_assessment,
 )
@@ -92,6 +94,32 @@ def get_stock_kline(
         raise HTTPException(status_code=400, detail=str(error)) from error
     except RequestException as error:
         raise HTTPException(status_code=502, detail="stock kline data source unavailable") from error
+
+
+@router.get("/{symbol}/market-data", response_model=StockDetailMarketData)
+def get_stock_market_data(
+    symbol: str,
+    days: int = Query(default=60, ge=1, le=60),
+    position_trade_date: date | None = None,
+) -> StockDetailMarketData:
+    """Return one local-first bundle for the stock detail market panels."""
+
+    try:
+        events = get_limit_up_repository().list_events()
+        return load_stock_detail_market_data(
+            symbol=symbol,
+            days=days,
+            end_date=latest_trade_date(events),
+            position_trade_date=position_trade_date,
+            repository=SQLiteFirstBoardRepository(),
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except RequestException as error:
+        raise HTTPException(
+            status_code=502,
+            detail="stock market data source unavailable",
+        ) from error
 
 
 @router.get("/{symbol}/position", response_model=StockPositionAssessment)

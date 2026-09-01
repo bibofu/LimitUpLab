@@ -29,7 +29,7 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 | 项目 | 状态 |
 | --- | --- |
-| 后端自动化测试 | 334 项通过，另有 10 个参数化子测试 |
+| 后端自动化测试 | 338 项通过，另有 10 个参数化子测试 |
 | 离线 Agent Eval | Core 18/18、Query Contract 36/36 通过 |
 | 本地数据健康检查 | 已实现 |
 | LLM 流式问答 | 已实现 |
@@ -578,6 +578,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mo
 | `GET` | `/api/limit-up/events` | 涨停事件查询 |
 | `GET` | `/api/analysis/daily-promotion` | 每日连板晋级率与板高分层统计 |
 | `GET` | `/api/stocks/{symbol}/kline` | 个股日 K 线 |
+| `GET` | `/api/stocks/{symbol}/market-data` | 个股详情聚合行情、最新收盘和位置判断 |
 
 完整接口定义以 Swagger 为准。
 
