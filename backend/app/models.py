@@ -229,7 +229,7 @@ class RecommendationFinancialReport(BaseModel):
 
 
 class RecommendationIntelligenceItem(BaseModel):
-    """Latest mutable news and financial evidence for one candidate."""
+    """Latest mutable evidence and bounded adjustments for one candidate."""
 
     strategy: Literal["discovery", "relay"]
     base_trade_date: date
@@ -248,6 +248,18 @@ class RecommendationIntelligenceItem(BaseModel):
     close_information_reasons: list[str] = Field(default_factory=list)
     news_adjustment: float = 0
     financial_adjustment: float = 0
+    dragon_tiger_adjustment: float = 0
+    popularity_adjustment: float = 0
+    dynamic_adjustment: float = 0
+    dragon_tiger_on_list: bool = False
+    dragon_tiger_is_new: bool = False
+    dragon_tiger_net_buy_amount: float | None = None
+    dragon_tiger_source: str | None = None
+    popularity_base_rank: int | None = None
+    popularity_rank: int | None = None
+    popularity_rank_change: int | None = None
+    popularity_snapshot_at: datetime | None = None
+    popularity_source: str | None = None
     update_reasons: list[str] = Field(default_factory=list)
     current_price: float | None = None
     change_pct: float | None = None
@@ -269,6 +281,14 @@ class RecommendationIntelligenceItem(BaseModel):
             payload.setdefault("draft_score", payload.get("base_score", 0))
             payload.setdefault("rule_rank", payload.get("base_rank", 0))
             payload.setdefault("rule_score", payload.get("base_score", 0))
+            payload.setdefault(
+                "dynamic_adjustment",
+                round(
+                    float(payload.get("draft_score", 0))
+                    - float(payload.get("base_score", 0)),
+                    1,
+                ),
+            )
             return payload
         return value
 
@@ -304,6 +324,9 @@ class AuctionFinalCandidate(BaseModel):
     preauction_score: float
     news_adjustment: float = 0
     financial_adjustment: float = 0
+    dragon_tiger_adjustment: float = 0
+    popularity_adjustment: float = 0
+    dynamic_adjustment: float = 0
     final_rank: int
     final_score: float
     auction_score: float

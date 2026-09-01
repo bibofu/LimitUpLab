@@ -159,6 +159,13 @@ def finalize_auction_recommendations(
         preauction_rank = draft.rank if draft_matches else candidate.rank
         news_adjustment = draft.news_adjustment if draft_matches else 0.0
         financial_adjustment = draft.financial_adjustment if draft_matches else 0.0
+        dragon_tiger_adjustment = (
+            draft.dragon_tiger_adjustment if draft_matches else 0.0
+        )
+        popularity_adjustment = (
+            draft.popularity_adjustment if draft_matches else 0.0
+        )
+        dynamic_adjustment = draft.dynamic_adjustment if draft_matches else 0.0
         ranked.append(
             AuctionFinalCandidate(
                 strategy=candidate.strategy,
@@ -175,6 +182,9 @@ def finalize_auction_recommendations(
                 preauction_score=preauction_score,
                 news_adjustment=news_adjustment,
                 financial_adjustment=financial_adjustment,
+                dragon_tiger_adjustment=dragon_tiger_adjustment,
+                popularity_adjustment=popularity_adjustment,
+                dynamic_adjustment=dynamic_adjustment,
                 final_rank=0,
                 final_score=round(
                     preauction_score * AUCTION_BASE_WEIGHT + auction_score,

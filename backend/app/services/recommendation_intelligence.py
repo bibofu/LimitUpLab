@@ -1,4 +1,4 @@
-"""Refresh mutable quote, news and financial facts for persisted recommendations."""
+"""Refresh mutable market, news and financial facts for recommendations."""
 
 from __future__ import annotations
 
@@ -10,6 +10,12 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from app.agents.first_board import build_first_board_ratings
+from app.collectors.first_board_enrichment_collector import (
+    DragonTigerFact,
+    PopularityFact,
+    collect_preferred_dragon_tiger_facts,
+    collect_preferred_popularity,
+)
 from app.collectors.hithink_finance_collector import (
     HithinkFinanceCollector,
     HithinkIncomeStatementFact,
@@ -37,10 +43,13 @@ SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 DEFAULT_REFRESH_INTERVAL_MINUTES = 30
 FINANCIAL_CACHE_TTL = timedelta(hours=24)
 MARKET_CLOSE_TIME = time(15, 0)
+MAX_RELAY_DYNAMIC_ADJUSTMENT = 6.0
 
 QuoteCollector = Callable[[Sequence[str]], HithinkMarketSnapshot]
 NewsCollector = Callable[[str, str], StockNewsFacts]
 FinancialCollector = Callable[[str], list[HithinkIncomeStatementFact]]
+DragonTigerCollector = Callable[[date], dict[str, DragonTigerFact]]
+PopularityCollector = Callable[[], dict[str, PopularityFact]]
 
 
 @dataclass(frozen=True)
@@ -53,6 +62,14 @@ class _BaseCandidate:
     position_label: str | None
     rank: int
     base_score: float
+    amount: float | None = None
+    dragon_tiger_on_list: bool = False
+    dragon_tiger_net_buy_amount: float | None = None
+    dragon_tiger_source: str | None = None
+    popularity_baseline_ready: bool = False
+    popularity_rank: int | None = None
+    popularity_snapshot_at: datetime | None = None
+    popularity_source: str | None = None
 
 
 @dataclass(frozen=True)
@@ -74,8 +91,10 @@ def refresh_recommendation_intelligence(
     quote_collector: QuoteCollector | None = None,
     news_collector: NewsCollector | None = None,
     financial_collector: FinancialCollector | None = None,
+    dragon_tiger_collector: DragonTigerCollector | None = None,
+    popularity_collector: PopularityCollector | None = None,
 ) -> RecommendationIntelligenceResponse:
-    """Rebuild the latest mutable draft from close, news and financial facts."""
+    """Rebuild the mutable draft from point-in-time market evidence."""
 
     refreshed_at = _as_shanghai(now or datetime.now(SHANGHAI_TZ))
     first_repo = first_board_repository or SQLiteFirstBoardRepository()
@@ -104,6 +123,10 @@ def refresh_recommendation_intelligence(
     active_financial_collector = financial_collector or (
         lambda thscode: hithink.collect_income_statements(thscode, limit=6)
     )
+    active_dragon_tiger_collector = (
+        dragon_tiger_collector or collect_preferred_dragon_tiger_facts
+    )
+    active_popularity_collector = popularity_collector or collect_preferred_popularity
 
     unique_candidates = {
         item.symbol: item
@@ -120,6 +143,31 @@ def refresh_recommendation_intelligence(
             quote_captured_at = market.captured_at
         except Exception as error:  # noqa: BLE001
             warnings.append(f"最新行情刷新失败：{error}")
+
+    relay_candidates = [item for item in candidates if item.strategy == "relay"]
+    dragon_tiger_by_symbol: dict[str, DragonTigerFact] = {}
+    dragon_tiger_ready = not relay_candidates
+    if relay_candidates and relay_date is not None:
+        try:
+            dragon_tiger_by_symbol = active_dragon_tiger_collector(relay_date)
+            dragon_tiger_ready = True
+        except Exception as error:  # noqa: BLE001
+            warnings.append(f"龙虎榜刷新失败：{error}")
+
+    popularity_by_symbol: dict[str, PopularityFact] = {}
+    popularity_captured_at: datetime | None = None
+    popularity_ready = not relay_candidates
+    if relay_candidates:
+        try:
+            popularity_by_symbol = active_popularity_collector()
+            if not popularity_by_symbol:
+                raise RuntimeError("人气榜返回空数据")
+            popularity_captured_at = max(
+                (item.captured_at for item in popularity_by_symbol.values()),
+            )
+            popularity_ready = True
+        except Exception as error:  # noqa: BLE001
+            warnings.append(f"人气榜刷新失败：{error}")
 
     previous = intelligence_repo.get_latest()
     previous_financials = {
@@ -155,6 +203,14 @@ def refresh_recommendation_intelligence(
             provider_error_count += 1
         facts_cutoff_at = _market_close(candidate.base_trade_date)
         if candidate.strategy == "relay":
+            current_dragon_tiger = dragon_tiger_by_symbol.get(candidate.symbol)
+            current_popularity = popularity_by_symbol.get(candidate.symbol)
+            if not dragon_tiger_ready:
+                missing.append("最新龙虎榜刷新不可用")
+            if not popularity_ready:
+                missing.append("最新人气榜刷新不可用")
+            elif not candidate.popularity_baseline_ready:
+                missing.append("收盘人气基线不可用")
             close_news_adjustment, close_news_reasons = _news_adjustment(
                 evidence.news,
                 refreshed_at=facts_cutoff_at,
@@ -186,13 +242,50 @@ def refresh_recommendation_intelligence(
                     for reason in close_financial_reasons
                 ),
             ]
+            dragon_tiger_adjustment, dragon_tiger_reasons = (
+                _dragon_tiger_adjustment(candidate, current_dragon_tiger)
+                if dragon_tiger_ready
+                else (0.0, [])
+            )
+            (
+                popularity_adjustment,
+                popularity_reasons,
+                popularity_rank_change,
+            ) = (
+                _popularity_adjustment(
+                    candidate,
+                    current_popularity,
+                    captured_at=popularity_captured_at,
+                )
+                if popularity_ready
+                else (0.0, [], None)
+            )
             update_reasons = [
                 *(f"收盘后新增：{reason}" for reason in news_reasons),
                 *(
                     f"收盘后新增：{reason}"
                     for reason in financial_reasons
                 ),
+                *(f"收盘后新增：{reason}" for reason in dragon_tiger_reasons),
+                *(f"人气变化：{reason}" for reason in popularity_reasons),
             ]
+            raw_dynamic_adjustment = round(
+                news_adjustment
+                + financial_adjustment
+                + dragon_tiger_adjustment
+                + popularity_adjustment,
+                1,
+            )
+            dynamic_adjustment = _bounded_adjustment(
+                raw_dynamic_adjustment,
+                limit=MAX_RELAY_DYNAMIC_ADJUSTMENT,
+            )
+            if dynamic_adjustment != raw_dynamic_adjustment:
+                update_reasons.append(
+                    "盘后动态修正受 ±"
+                    f"{MAX_RELAY_DYNAMIC_ADJUSTMENT:g} 分约束，"
+                    f"原始合计 {raw_dynamic_adjustment:+g} 分"
+                )
         else:
             close_information_adjustment = 0.0
             close_information_reasons = []
@@ -202,6 +295,15 @@ def refresh_recommendation_intelligence(
             )
             financial_adjustment, financial_reasons = _financial_adjustment(
                 evidence.financial_report
+            )
+            dragon_tiger_adjustment = 0.0
+            popularity_adjustment = 0.0
+            popularity_rank_change = None
+            current_dragon_tiger = None
+            current_popularity = None
+            dynamic_adjustment = round(
+                news_adjustment + financial_adjustment,
+                1,
             )
             update_reasons = [*news_reasons, *financial_reasons]
         base_score = _bounded_score(
@@ -221,13 +323,61 @@ def refresh_recommendation_intelligence(
                 rank=candidate.rank,
                 base_score=base_score,
                 draft_score=_bounded_score(
-                    base_score + news_adjustment + financial_adjustment
+                    base_score + dynamic_adjustment
                 ),
                 facts_cutoff_at=facts_cutoff_at,
                 close_information_adjustment=close_information_adjustment,
                 close_information_reasons=close_information_reasons,
                 news_adjustment=news_adjustment,
                 financial_adjustment=financial_adjustment,
+                dragon_tiger_adjustment=dragon_tiger_adjustment,
+                popularity_adjustment=popularity_adjustment,
+                dynamic_adjustment=dynamic_adjustment,
+                dragon_tiger_on_list=(
+                    current_dragon_tiger is not None
+                    or candidate.dragon_tiger_on_list
+                    if candidate.strategy == "relay"
+                    else False
+                ),
+                dragon_tiger_is_new=(
+                    current_dragon_tiger is not None
+                    and not candidate.dragon_tiger_on_list
+                    if candidate.strategy == "relay"
+                    else False
+                ),
+                dragon_tiger_net_buy_amount=(
+                    current_dragon_tiger.net_buy_amount
+                    if current_dragon_tiger
+                    else candidate.dragon_tiger_net_buy_amount
+                ),
+                dragon_tiger_source=(
+                    current_dragon_tiger.source
+                    if current_dragon_tiger
+                    else candidate.dragon_tiger_source
+                ),
+                popularity_base_rank=(
+                    candidate.popularity_rank
+                    if candidate.popularity_rank is not None
+                    else 101
+                    if candidate.popularity_baseline_ready
+                    else None
+                ),
+                popularity_rank=(
+                    current_popularity.rank if current_popularity else None
+                ),
+                popularity_rank_change=popularity_rank_change,
+                popularity_snapshot_at=(
+                    current_popularity.captured_at
+                    if current_popularity
+                    else popularity_captured_at
+                    if candidate.strategy == "relay"
+                    else None
+                ),
+                popularity_source=(
+                    current_popularity.source
+                    if current_popularity
+                    else candidate.popularity_source
+                ),
                 update_reasons=update_reasons,
                 current_price=quote.last_price if quote else None,
                 change_pct=quote.change_pct if quote else None,
@@ -348,6 +498,45 @@ def _load_base_candidates(
                 ),
                 rank=index,
                 base_score=item.score,
+                amount=item.facts.amount,
+                dragon_tiger_on_list=(
+                    item.facts.enrichment.dragon_tiger_on_list
+                    if item.facts.enrichment
+                    else False
+                ),
+                dragon_tiger_net_buy_amount=(
+                    item.facts.enrichment.dragon_tiger_net_buy_amount
+                    if item.facts.enrichment
+                    else None
+                ),
+                dragon_tiger_source=(
+                    item.facts.enrichment.dragon_tiger_source
+                    if item.facts.enrichment
+                    else None
+                ),
+                popularity_baseline_ready=(
+                    item.facts.enrichment is not None
+                    and "popularity_snapshot"
+                    not in item.facts.enrichment.data_missing
+                    and "eastmoney_popularity"
+                    not in item.facts.enrichment.data_missing
+                ),
+                popularity_rank=(
+                    item.facts.enrichment.popularity_rank
+                    if item.facts.enrichment
+                    else None
+                ),
+                popularity_snapshot_at=(
+                    item.facts.enrichment.popularity_snapshot_at
+                    or item.facts.enrichment.created_at
+                    if item.facts.enrichment
+                    else None
+                ),
+                popularity_source=(
+                    item.facts.enrichment.popularity_source
+                    if item.facts.enrichment
+                    else None
+                ),
             )
             for index, item in enumerate(relay_candidates[:30], start=1)
         )
@@ -394,7 +583,9 @@ def _news_adjustment(
     positive: list[str] = []
     negative: list[str] = []
     for item in news.items:
-        text = f"{item.title} {item.summary}"
+        text = item.title
+        if item.item_type in {"announcement_report", "regulatory"}:
+            text = f"{item.title} {item.summary}"
         published_at = _as_shanghai(item.published_at)
         age = refreshed_at - published_at
         if age < timedelta(0) or age > timedelta(hours=48):
@@ -462,6 +653,105 @@ def _bounded_score(value: float) -> float:
     """Clamp a score to the public 0-100 range."""
 
     return round(max(0, min(100, value)), 1)
+
+
+def _bounded_adjustment(value: float, *, limit: float) -> float:
+    """Clamp a mutable adjustment without altering its component evidence."""
+
+    return round(max(-limit, min(limit, value)), 1)
+
+
+def _dragon_tiger_adjustment(
+    candidate: _BaseCandidate,
+    current: DragonTigerFact | None,
+) -> tuple[float, list[str]]:
+    """Score only a Dragon-Tiger record absent from the immutable base facts."""
+
+    if current is None or candidate.dragon_tiger_on_list:
+        return 0.0, []
+    net_buy = current.net_buy_amount
+    if net_buy is None:
+        return 0.0, ["新上龙虎榜，但净买额缺失，不作分数修正"]
+    ratio = (
+        net_buy / candidate.amount
+        if candidate.amount is not None and candidate.amount > 0
+        else None
+    )
+    if ratio is not None and ratio >= 0.05:
+        adjustment = 2.0
+    elif ratio is not None and ratio >= 0.02:
+        adjustment = 1.0
+    elif ratio is not None and ratio <= -0.05:
+        adjustment = -2.0
+    elif ratio is not None and ratio <= -0.02:
+        adjustment = -1.0
+    elif ratio is None and net_buy >= 50_000_000:
+        adjustment = 1.0
+    elif ratio is None and net_buy <= -50_000_000:
+        adjustment = -1.0
+    else:
+        adjustment = 0.0
+    ratio_text = f"，占当日成交额 {ratio * 100:.1f}%" if ratio is not None else ""
+    reason = (
+        f"新上龙虎榜，净买额 {_format_money(net_buy)}{ratio_text}，"
+        f"动态修正 {adjustment:+g} 分"
+    )
+    return adjustment, [reason]
+
+
+def _popularity_adjustment(
+    candidate: _BaseCandidate,
+    current: PopularityFact | None,
+    *,
+    captured_at: datetime | None,
+) -> tuple[float, list[str], int | None]:
+    """Compare a fresh Top100 rank with the persisted base popularity snapshot."""
+
+    base_rank = (
+        candidate.popularity_rank
+        if candidate.popularity_rank is not None
+        else 101
+        if candidate.popularity_baseline_ready
+        else None
+    )
+    base_snapshot_at = candidate.popularity_snapshot_at
+    if base_rank is None or base_snapshot_at is None or captured_at is None:
+        return 0.0, [], None
+    if _as_shanghai(captured_at) <= _as_shanghai(base_snapshot_at):
+        return 0.0, [], None
+
+    current_rank = current.rank if current is not None else 101
+    rank_change = base_rank - current_rank
+    if rank_change >= 50 and current_rank <= 20:
+        adjustment = 2.0
+    elif rank_change >= 20 and current_rank <= 50:
+        adjustment = 1.0
+    elif rank_change <= -50:
+        adjustment = -2.0
+    elif rank_change <= -20:
+        adjustment = -1.0
+    else:
+        adjustment = 0.0
+    if current is None:
+        reason = (
+            f"由第 {base_rank} 名降至 Top100 之外，"
+            f"动态修正 {adjustment:+g} 分"
+        )
+    else:
+        direction = "上升" if rank_change > 0 else "下降" if rank_change < 0 else "持平"
+        reason = (
+            f"由第 {base_rank} 名{direction}至第 {current.rank} 名，"
+            f"动态修正 {adjustment:+g} 分"
+        )
+    return adjustment, [reason] if adjustment != 0 else [], rank_change
+
+
+def _format_money(value: float) -> str:
+    """Format market cash values with a compact Chinese unit."""
+
+    if abs(value) >= 100_000_000:
+        return f"{value / 100_000_000:+.2f} 亿元"
+    return f"{value / 10_000:+.0f} 万元"
 
 
 def _market_close(trade_date: date) -> datetime:

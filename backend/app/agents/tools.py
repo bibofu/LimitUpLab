@@ -2047,6 +2047,22 @@ def _recommendation_intelligence_by_symbol(
             "close_information_reasons": item.close_information_reasons,
             "news_adjustment": item.news_adjustment,
             "financial_adjustment": item.financial_adjustment,
+            "dragon_tiger_adjustment": item.dragon_tiger_adjustment,
+            "popularity_adjustment": item.popularity_adjustment,
+            "dynamic_adjustment": item.dynamic_adjustment,
+            "dragon_tiger_on_list": item.dragon_tiger_on_list,
+            "dragon_tiger_is_new": item.dragon_tiger_is_new,
+            "dragon_tiger_net_buy_amount": item.dragon_tiger_net_buy_amount,
+            "dragon_tiger_source": item.dragon_tiger_source,
+            "popularity_base_rank": item.popularity_base_rank,
+            "popularity_rank": item.popularity_rank,
+            "popularity_rank_change": item.popularity_rank_change,
+            "popularity_snapshot_at": (
+                item.popularity_snapshot_at.isoformat()
+                if item.popularity_snapshot_at
+                else None
+            ),
+            "popularity_source": item.popularity_source,
             "update_reasons": item.update_reasons,
             "current_price": item.current_price,
             "change_pct": item.change_pct,

@@ -1556,12 +1556,15 @@ def _template_answer_from_tool_facts(
                 f"{item.get('rule_score', item.get('base_score'))} 分），"
                 f"收盘后新闻修正 {item.get('news_adjustment', 0):+g}，"
                 f"收盘后财报修正 "
-                f"{item.get('financial_adjustment', 0):+g}。"
+                f"{item.get('financial_adjustment', 0):+g}，"
+                f"龙虎榜修正 {item.get('dragon_tiger_adjustment', 0):+g}，"
+                f"人气变化修正 {item.get('popularity_adjustment', 0):+g}，"
+                f"盘后合计 {item.get('dynamic_adjustment', 0):+g}。"
                 for index, item in enumerate(draft_candidates, start=1)
             )
             lines.append(
-                "收盘前已知新闻和财报已计入收盘综合分；"
-                "动态分只接受收盘后新增信息。"
+                "收盘前已知事实已计入收盘综合分；盘后只接受新增公告、"
+                "新上龙虎榜和可比较的人气变化，且合计修正受限。"
             )
             lines.append(TEXT["safety"])
             return "\n".join(lines)

@@ -1021,6 +1021,19 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
       close_information_reasons: item.close_information_reasons ?? [],
       news_adjustment: item.news_adjustment ?? 0,
       financial_adjustment: item.financial_adjustment ?? 0,
+      dragon_tiger_adjustment: item.dragon_tiger_adjustment ?? 0,
+      popularity_adjustment: item.popularity_adjustment ?? 0,
+      dynamic_adjustment:
+        item.dynamic_adjustment ?? item.draft_score - item.base_score,
+      dragon_tiger_on_list: item.dragon_tiger_on_list ?? false,
+      dragon_tiger_is_new: item.dragon_tiger_is_new ?? false,
+      dragon_tiger_net_buy_amount: item.dragon_tiger_net_buy_amount ?? null,
+      dragon_tiger_source: item.dragon_tiger_source ?? null,
+      popularity_base_rank: item.popularity_base_rank ?? null,
+      popularity_rank: item.popularity_rank ?? null,
+      popularity_rank_change: item.popularity_rank_change ?? null,
+      popularity_snapshot_at: item.popularity_snapshot_at ?? null,
+      popularity_source: item.popularity_source ?? null,
       update_reasons: item.update_reasons ?? [],
     })) ?? [];
 
@@ -1090,7 +1103,7 @@ function RecommendationDraftPanel({
         <div className="recommendation-draft-header">
           <div>
             <strong>{strategy === "discovery" ? `低位启动观察池 · ${candidates.length} 只` : `盘前动态候选 Top${candidates.length}`}</strong>
-            <span>{strategy === "discovery" ? "热门题材与最新催化召回，财报和 K 线位置共同验证" : "收盘前信息计入综合分，仅用收盘后新增信息动态调整"}</span>
+            <span>{strategy === "discovery" ? "热门题材与最新催化召回，财报和 K 线位置共同验证" : "收盘综合分固化基线，盘后按公告、龙虎榜与人气变化做有界修正"}</span>
           </div>
           <span className="recommendation-draft-time">
             {new Date(refreshedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
@@ -1115,7 +1128,11 @@ function RecommendationDraftPanel({
                 </div>
                 <div className="rating-top-score">
                   <b>{candidate.draft_score.toFixed(1)}</b>
-                  <span className="rating-score-context">{strategy === "discovery" ? "研究分" : `收盘综合 ${candidate.base_score.toFixed(1)}`}</span>
+                  <span className="rating-score-context">
+                    {strategy === "discovery"
+                      ? "研究分"
+                      : `收盘综合 ${candidate.base_score.toFixed(1)} · 动态 ${candidate.dynamic_adjustment >= 0 ? "+" : ""}${candidate.dynamic_adjustment.toFixed(1)}`}
+                  </span>
                 </div>
               </header>
               {strategy === "discovery" ? (

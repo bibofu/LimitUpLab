@@ -445,6 +445,18 @@ export interface RecommendationIntelligenceItem {
   close_information_reasons: string[];
   news_adjustment: number;
   financial_adjustment: number;
+  dragon_tiger_adjustment: number;
+  popularity_adjustment: number;
+  dynamic_adjustment: number;
+  dragon_tiger_on_list: boolean;
+  dragon_tiger_is_new: boolean;
+  dragon_tiger_net_buy_amount: number | null;
+  dragon_tiger_source: string | null;
+  popularity_base_rank: number | null;
+  popularity_rank: number | null;
+  popularity_rank_change: number | null;
+  popularity_snapshot_at: string | null;
+  popularity_source: string | null;
   update_reasons: string[];
   current_price: number | null;
   change_pct: number | null;

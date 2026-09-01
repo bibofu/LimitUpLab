@@ -5,6 +5,10 @@ from pathlib import Path
 from unittest.mock import Mock, patch
 from uuid import uuid4
 
+from app.collectors.first_board_enrichment_collector import (
+    DragonTigerFact,
+    PopularityFact,
+)
 from app.collectors.hithink_finance_collector import (
     HithinkIncomeStatementFact,
     HithinkMarketSnapshot,
@@ -21,6 +25,7 @@ from app.routers.agents import get_recommendation_intelligence
 from app.services.recommendation_intelligence import (
     _BaseCandidate,
     _load_base_candidates,
+    _news_adjustment,
     refresh_recommendation_intelligence,
 )
 
@@ -81,6 +86,10 @@ class RecommendationIntelligenceTest(unittest.TestCase):
                 quote_collector=quote_collector,
                 news_collector=news_collector,
                 financial_collector=financial_collector,
+                dragon_tiger_collector=Mock(return_value={}),
+                popularity_collector=Mock(
+                    return_value=self._unrelated_popularity(now)
+                ),
             )
             second = refresh_recommendation_intelligence(
                 now=now + timedelta(minutes=30),
@@ -92,6 +101,10 @@ class RecommendationIntelligenceTest(unittest.TestCase):
                 quote_collector=quote_collector,
                 news_collector=news_collector,
                 financial_collector=financial_collector,
+                dragon_tiger_collector=Mock(return_value={}),
+                popularity_collector=Mock(
+                    return_value=self._unrelated_popularity(now)
+                ),
             )
 
         self.assertEqual({item.strategy for item in first.items}, {"discovery", "relay"})
@@ -180,6 +193,10 @@ class RecommendationIntelligenceTest(unittest.TestCase):
                 quote_collector=Mock(return_value=self._quotes(now)),
                 news_collector=news,
                 financial_collector=Mock(return_value=[]),
+                dragon_tiger_collector=Mock(return_value={}),
+                popularity_collector=Mock(
+                    return_value=self._unrelated_popularity(now)
+                ),
             )
 
         relay = [item for item in response.items if item.strategy == "relay"]
@@ -188,6 +205,36 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         self.assertEqual(relay[0].rank, 1)
         self.assertEqual(relay[0].news_adjustment, 3.0)
         self.assertEqual(relay[1].news_adjustment, -4.0)
+
+    def test_market_table_summary_does_not_create_company_news_adjustment(self) -> None:
+        now = datetime(2026, 9, 1, 9, tzinfo=timezone.utc)
+        facts = StockNewsFacts(
+            symbol="000713",
+            name="国投丰乐",
+            fetched_at=now,
+            window_days=7,
+            cache_status="live",
+            sources=["证券时报网"],
+            items=[
+                StockNewsItem(
+                    symbol="000713",
+                    name="国投丰乐",
+                    title="今日95只股长线走稳 站上年线",
+                    summary="列表中包含国投丰乐，盘中突破年线。",
+                    published_at=now,
+                    source="证券时报网",
+                    url="https://example.com/market-table",
+                    item_type="news",
+                    relevance_score=0.8,
+                    fetched_at=now,
+                )
+            ],
+        )
+
+        adjustment, reasons = _news_adjustment(facts, refreshed_at=now)
+
+        self.assertEqual(adjustment, 0.0)
+        self.assertEqual(reasons, [])
 
     def test_pre_close_news_is_folded_into_relay_close_score(self) -> None:
         now = datetime(2026, 8, 31, 16, tzinfo=timezone.utc)
@@ -241,6 +288,10 @@ class RecommendationIntelligenceTest(unittest.TestCase):
                 quote_collector=Mock(return_value=self._quotes(now)),
                 news_collector=news,
                 financial_collector=Mock(return_value=[]),
+                dragon_tiger_collector=Mock(return_value={}),
+                popularity_collector=Mock(
+                    return_value=self._unrelated_popularity(now)
+                ),
             )
 
         item = response.items[0]
@@ -298,6 +349,10 @@ class RecommendationIntelligenceTest(unittest.TestCase):
                 quote_collector=Mock(return_value=self._quotes(now)),
                 news_collector=Mock(return_value=self._empty_news(now)),
                 financial_collector=financials,
+                dragon_tiger_collector=Mock(return_value={}),
+                popularity_collector=Mock(
+                    return_value=self._unrelated_popularity(now)
+                ),
             )
 
         item = response.items[0]
@@ -306,6 +361,254 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         self.assertEqual(item.financial_adjustment, 3.0)
         self.assertEqual(item.draft_score, 83.0)
         self.assertIn("收盘后新增", item.update_reasons[0])
+
+    def test_new_dragon_tiger_and_popularity_rise_adjust_relay_draft(self) -> None:
+        now = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
+        base_snapshot_at = datetime(
+            2026,
+            8,
+            31,
+            15,
+            30,
+            tzinfo=timezone(timedelta(hours=8)),
+        )
+        candidate = _BaseCandidate(
+            "relay",
+            date(2026, 8, 31),
+            "600640",
+            "国脉文化",
+            "文化传媒",
+            "区间突破",
+            1,
+            80.0,
+            amount=800_000_000,
+            popularity_baseline_ready=True,
+            popularity_snapshot_at=base_snapshot_at,
+        )
+        dragon_tiger = DragonTigerFact(
+            symbol="600640",
+            buy_amount=120_000_000,
+            sell_amount=60_000_000,
+            net_buy_amount=60_000_000,
+            float_market_cap=None,
+            reason="日涨幅偏离值达 7%",
+            source="hithink-finance",
+        )
+        popularity = PopularityFact(
+            symbol="600640",
+            rank=10,
+            rank_change=55,
+            captured_at=now,
+            source="hithink-finance",
+        )
+
+        with patch(
+            "app.services.recommendation_intelligence._load_base_candidates",
+            return_value=([candidate], None, date(2026, 8, 31), []),
+        ):
+            response = refresh_recommendation_intelligence(
+                now=now,
+                max_workers=1,
+                limit_up_repository=self.limit_repo,
+                first_board_repository=self.first_repo,
+                discovery_repository=self.discovery_repo,
+                snapshot_repository=self.snapshot_repo,
+                quote_collector=Mock(return_value=self._quotes(now)),
+                news_collector=Mock(return_value=self._empty_news(now)),
+                financial_collector=Mock(return_value=[]),
+                dragon_tiger_collector=Mock(
+                    return_value={"600640": dragon_tiger}
+                ),
+                popularity_collector=Mock(
+                    return_value={"600640": popularity}
+                ),
+            )
+
+        item = response.items[0]
+        self.assertTrue(item.dragon_tiger_is_new)
+        self.assertEqual(item.dragon_tiger_adjustment, 2.0)
+        self.assertEqual(item.popularity_base_rank, 101)
+        self.assertEqual(item.popularity_rank, 10)
+        self.assertEqual(item.popularity_rank_change, 91)
+        self.assertEqual(item.popularity_adjustment, 2.0)
+        self.assertEqual(item.dynamic_adjustment, 4.0)
+        self.assertEqual(item.draft_score, 84.0)
+        self.assertTrue(any("新上龙虎榜" in reason for reason in item.update_reasons))
+        self.assertTrue(any("人气变化" in reason for reason in item.update_reasons))
+
+    def test_known_dragon_tiger_fact_is_not_scored_twice(self) -> None:
+        now = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
+        candidate = _BaseCandidate(
+            "relay",
+            date(2026, 8, 31),
+            "600640",
+            "国脉文化",
+            "文化传媒",
+            "区间突破",
+            1,
+            80.0,
+            amount=800_000_000,
+            dragon_tiger_on_list=True,
+            dragon_tiger_net_buy_amount=60_000_000,
+        )
+        current = DragonTigerFact(
+            symbol="600640",
+            buy_amount=120_000_000,
+            sell_amount=60_000_000,
+            net_buy_amount=60_000_000,
+            float_market_cap=None,
+            reason=None,
+        )
+
+        with patch(
+            "app.services.recommendation_intelligence._load_base_candidates",
+            return_value=([candidate], None, date(2026, 8, 31), []),
+        ):
+            response = refresh_recommendation_intelligence(
+                now=now,
+                max_workers=1,
+                limit_up_repository=self.limit_repo,
+                first_board_repository=self.first_repo,
+                discovery_repository=self.discovery_repo,
+                snapshot_repository=self.snapshot_repo,
+                quote_collector=Mock(return_value=self._quotes(now)),
+                news_collector=Mock(return_value=self._empty_news(now)),
+                financial_collector=Mock(return_value=[]),
+                dragon_tiger_collector=Mock(return_value={"600640": current}),
+                popularity_collector=Mock(
+                    return_value=self._unrelated_popularity(now)
+                ),
+            )
+
+        item = response.items[0]
+        self.assertTrue(item.dragon_tiger_on_list)
+        self.assertFalse(item.dragon_tiger_is_new)
+        self.assertEqual(item.dragon_tiger_adjustment, 0.0)
+        self.assertEqual(item.dynamic_adjustment, 0.0)
+        self.assertEqual(item.draft_score, 80.0)
+
+    def test_missing_popularity_baseline_is_exposed_without_guessing(self) -> None:
+        now = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
+        candidate = _BaseCandidate(
+            "relay", date(2026, 8, 31), "600640", "国脉文化",
+            "文化传媒", "区间突破", 1, 80.0,
+        )
+        popularity = PopularityFact(
+            symbol="600640",
+            rank=8,
+            rank_change=40,
+            captured_at=now,
+        )
+
+        with patch(
+            "app.services.recommendation_intelligence._load_base_candidates",
+            return_value=([candidate], None, date(2026, 8, 31), []),
+        ):
+            response = refresh_recommendation_intelligence(
+                now=now,
+                max_workers=1,
+                limit_up_repository=self.limit_repo,
+                first_board_repository=self.first_repo,
+                discovery_repository=self.discovery_repo,
+                snapshot_repository=self.snapshot_repo,
+                quote_collector=Mock(return_value=self._quotes(now)),
+                news_collector=Mock(return_value=self._empty_news(now)),
+                financial_collector=Mock(return_value=[]),
+                dragon_tiger_collector=Mock(return_value={}),
+                popularity_collector=Mock(
+                    return_value={"600640": popularity}
+                ),
+            )
+
+        item = response.items[0]
+        self.assertEqual(item.popularity_rank, 8)
+        self.assertEqual(item.popularity_adjustment, 0.0)
+        self.assertIn("收盘人气基线不可用", item.data_missing)
+
+    def test_total_post_close_adjustment_is_capped(self) -> None:
+        now = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
+        candidate = _BaseCandidate(
+            "relay",
+            date(2026, 8, 31),
+            "600640",
+            "国脉文化",
+            "文化传媒",
+            "区间突破",
+            1,
+            80.0,
+            amount=800_000_000,
+            popularity_baseline_ready=True,
+            popularity_rank=65,
+            popularity_snapshot_at=datetime(
+                2026,
+                8,
+                31,
+                15,
+                30,
+                tzinfo=timezone(timedelta(hours=8)),
+            ),
+        )
+        dragon_tiger = DragonTigerFact(
+            symbol="600640",
+            buy_amount=120_000_000,
+            sell_amount=60_000_000,
+            net_buy_amount=60_000_000,
+            float_market_cap=None,
+            reason=None,
+        )
+
+        def positive_news(symbol: str, name: str) -> StockNewsFacts:
+            facts = self._news(symbol, name)
+            return facts.model_copy(
+                update={
+                    "items": [
+                        facts.items[0].model_copy(
+                            update={
+                                "title": "公司签署重大订单",
+                                "summary": "公司签署重大订单",
+                                "published_at": now,
+                            }
+                        )
+                    ]
+                }
+            )
+
+        with patch(
+            "app.services.recommendation_intelligence._load_base_candidates",
+            return_value=([candidate], None, date(2026, 8, 31), []),
+        ):
+            response = refresh_recommendation_intelligence(
+                now=now,
+                max_workers=1,
+                limit_up_repository=self.limit_repo,
+                first_board_repository=self.first_repo,
+                discovery_repository=self.discovery_repo,
+                snapshot_repository=self.snapshot_repo,
+                quote_collector=Mock(return_value=self._quotes(now)),
+                news_collector=positive_news,
+                financial_collector=Mock(return_value=[]),
+                dragon_tiger_collector=Mock(
+                    return_value={"600640": dragon_tiger}
+                ),
+                popularity_collector=Mock(
+                    return_value={
+                        "600640": PopularityFact(
+                            symbol="600640",
+                            rank=10,
+                            rank_change=55,
+                            captured_at=now,
+                        )
+                    }
+                ),
+            )
+
+        item = response.items[0]
+        self.assertEqual(item.news_adjustment, 3.0)
+        self.assertEqual(item.dragon_tiger_adjustment, 2.0)
+        self.assertEqual(item.popularity_adjustment, 2.0)
+        self.assertEqual(item.dynamic_adjustment, 6.0)
+        self.assertEqual(item.draft_score, 86.0)
+        self.assertTrue(any("受 ±6 分约束" in reason for reason in item.update_reasons))
 
     def test_relay_base_pool_excludes_chinext_candidates(self) -> None:
         trade_date = date(2026, 9, 1)
@@ -405,6 +708,17 @@ class RecommendationIntelligenceTest(unittest.TestCase):
             sources=["测试资讯"],
             items=[],
         )
+
+    @staticmethod
+    def _unrelated_popularity(now: datetime) -> dict[str, PopularityFact]:
+        return {
+            "000001": PopularityFact(
+                symbol="000001",
+                rank=100,
+                rank_change=0,
+                captured_at=now,
+            )
+        }
 
     @staticmethod
     def _financials(thscode: str) -> list[HithinkIncomeStatementFact]:
