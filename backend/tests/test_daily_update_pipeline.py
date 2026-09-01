@@ -8,7 +8,11 @@ from uuid import uuid4
 from app.collectors import HithinkLimitUpFact, HithinkLimitUpPoolSnapshot
 from app.models import LimitUpEvent, StockDailyBar, StockKLineBar
 from app.repositories import SQLiteFirstBoardRepository, SQLiteLimitUpRepository
-from scripts.update_daily_data import collect_post_first_board_bars, run_daily_update
+from scripts.update_daily_data import (
+    collect_post_first_board_bars,
+    run_daily_update,
+    warm_latest_intraday_cache,
+)
 
 
 TEST_TMP_ROOT = Path(
@@ -96,6 +100,38 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             self.assertEqual(report.health["first_board_feature_count"], 1)
             self.assertEqual(report.health["status"], "partial")
             self.assertEqual(report.top_candidate["symbol"], "002298")
+        finally:
+            self._cleanup_database(database_path)
+
+    def test_intraday_warmup_covers_every_latest_pool_symbol(self) -> None:
+        database_path = self._database_path()
+        trade_date = date(2026, 8, 10)
+        events = [
+            self._make_event("002298", "first", trade_date),
+            self._make_event("600001", "continued", trade_date, board_height=2),
+            self._make_event("000001", "failed", trade_date, closed_limit=False),
+            self._make_event("000002", "older", date(2026, 8, 7)),
+        ]
+        loaded: list[str] = []
+
+        def loader(*, symbol: str, **_kwargs):
+            loaded.append(symbol)
+            return [] if symbol == "000001" else [object()]
+
+        try:
+            report = warm_latest_intraday_cache(
+                events=events,
+                trade_date=trade_date,
+                repository=SQLiteFirstBoardRepository(database_path=database_path),
+                max_workers=2,
+                loader=loader,
+            )
+
+            self.assertEqual(sorted(loaded), ["000001", "002298", "600001"])
+            self.assertEqual(report["target_count"], 3)
+            self.assertEqual(report["ready_count"], 2)
+            self.assertEqual(report["missing_count"], 1)
+            self.assertTrue(report["warnings"])
         finally:
             self._cleanup_database(database_path)
 

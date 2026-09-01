@@ -9,10 +9,11 @@ from __future__ import annotations
 import argparse
 import json
 import sys
+from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
-from typing import Callable
+from typing import Callable, TypedDict
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_ROOT))
@@ -46,11 +47,22 @@ from app.services.outcome_completeness import build_top10_outcome_completeness
 from app.services.limit_up_reason import merge_limit_up_reasons
 from app.services.first_board_discovery import refresh_first_board_discovery
 from app.services.relay_universe import is_relay_candidate_symbol
+from app.services.stock_kline import load_stock_intraday_bars
 
 
 PostBarCollector = Callable[[str, date, date], list[StockDailyBar]]
 SpotBarCollector = Callable[[list[str], date], dict[str, StockKLineBar]]
 RemoteLimitUpCollector = Callable[[date], HithinkLimitUpPoolSnapshot]
+IntradayLoader = Callable[..., object]
+
+
+class IntradayWarmupResult(TypedDict):
+    """Counts emitted by the best-effort stock-detail cache warmup."""
+
+    target_count: int
+    ready_count: int
+    missing_count: int
+    warnings: list[str]
 
 
 @dataclass
@@ -88,6 +100,9 @@ class DailyUpdateReport:
     tracked_three_day_outcomes_ready: int = 0
     tracked_five_day_paths_expected: int = 0
     tracked_five_day_paths_ready: int = 0
+    intraday_cache_targets: int = 0
+    intraday_cache_ready: int = 0
+    intraday_cache_missing: int = 0
     backfilled_bars: int = 0
     backfilled_outcomes: int = 0
     outcome_completeness: dict[str, object] = field(default_factory=dict)
@@ -437,6 +452,16 @@ def run_daily_update(
             report.warnings.extend(discovery.warnings)
         except Exception as error:  # noqa: BLE001
             report.warnings.append(f"First-board discovery: {error}")
+    if post_bar_collector is None and is_latest_available_date:
+        intraday_cache = warm_latest_intraday_cache(
+            events=events,
+            trade_date=trade_date,
+            repository=first_board_repo,
+        )
+        report.intraday_cache_targets = intraday_cache["target_count"]
+        report.intraday_cache_ready = intraday_cache["ready_count"]
+        report.intraday_cache_missing = intraday_cache["missing_count"]
+        report.warnings.extend(intraday_cache["warnings"])
     report.health = build_agent_data_health(
         events=events,
         first_board_repository=first_board_repo,
@@ -444,6 +469,70 @@ def run_daily_update(
         top_limit=top_targets,
     ).model_dump(mode="json")
     return report
+
+
+def warm_latest_intraday_cache(
+    *,
+    events: list[LimitUpEvent],
+    trade_date: date,
+    repository: SQLiteFirstBoardRepository,
+    max_workers: int = 6,
+    loader: IntradayLoader = load_stock_intraday_bars,
+) -> IntradayWarmupResult:
+    """Preload one-minute bars so stock-detail charts do not block on providers."""
+
+    symbols = sorted(
+        {
+            event.symbol
+            for event in events
+            if event.trade_date == trade_date
+        }
+    )
+    if not symbols:
+        return {
+            "target_count": 0,
+            "ready_count": 0,
+            "missing_count": 0,
+            "warnings": [],
+        }
+
+    ready_count = 0
+    failures: list[str] = []
+
+    def warm(symbol: str) -> bool:
+        return bool(
+            loader(
+                symbol=symbol,
+                trade_date=trade_date,
+                period=1,
+                repository=repository,
+            )
+        )
+
+    with ThreadPoolExecutor(max_workers=max(1, min(max_workers, 12))) as executor:
+        futures = {executor.submit(warm, symbol): symbol for symbol in symbols}
+        for future in as_completed(futures):
+            symbol = futures[future]
+            try:
+                if future.result():
+                    ready_count += 1
+                else:
+                    failures.append(symbol)
+            except Exception:  # noqa: BLE001
+                failures.append(symbol)
+
+    warnings = []
+    if failures:
+        warnings.append(
+            "Intraday chart cache remains incomplete for "
+            f"{len(failures)}/{len(symbols)} latest pool stocks."
+        )
+    return {
+        "target_count": len(symbols),
+        "ready_count": ready_count,
+        "missing_count": len(failures),
+        "warnings": warnings,
+    }
 
 
 def collect_hithink_limit_up_snapshot(
