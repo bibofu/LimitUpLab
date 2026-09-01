@@ -5,6 +5,7 @@ from app.repositories.chat_session_repository import (
     SQLiteChatSessionRepository,
     SessionOwnershipError,
 )
+from app.repositories.chat_memory_repository import SQLiteChatMemoryRepository
 from app.repositories.daily_pipeline_repository import SQLiteDailyPipelineRepository
 from app.repositories.first_board_repository import SQLiteFirstBoardRepository
 from app.repositories.first_board_discovery_repository import (
@@ -30,6 +31,7 @@ __all__ = [
     "SQLiteAgentRunRepository",
     "SQLiteAgentUsageRepository",
     "SQLiteChatSessionRepository",
+    "SQLiteChatMemoryRepository",
     "SessionOwnershipError",
     "SQLiteDailyPipelineRepository",
     "SQLiteFirstBoardRepository",

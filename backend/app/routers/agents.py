@@ -56,6 +56,7 @@ from app.repositories import (
     SQLiteAgentCacheRepository,
     SQLiteAgentRunRepository,
     SQLiteAgentUsageRepository,
+    SQLiteChatMemoryRepository,
     SQLiteChatSessionRepository,
     SQLiteDailyPipelineRepository,
     SQLiteFirstBoardRepository,
@@ -84,6 +85,7 @@ from app.services.llm_provider import (
     LLMUsageTracker,
     capture_llm_usage,
 )
+from app.services.session_memory import prepare_session_context
 from app.config import env_bool
 from app.services.prediction_quality_audit import build_prediction_quality_audit
 from app.services.outcome_completeness import build_top10_outcome_completeness
@@ -937,7 +939,7 @@ def chat_with_first_board_agent(
         )
     except SessionOwnershipError as error:
         raise HTTPException(status_code=404, detail="Chat session not found.") from error
-    conversation_messages = session.messages[-8:]
+    conversation_messages = session.messages
     lease, usage_repository, usage_record = _begin_agent_request(
         http_request,
         owner_id=owner_id,
@@ -961,6 +963,12 @@ def chat_with_first_board_agent(
             owner_id=owner_id,
         )
         with capture_llm_usage() as tracker:
+            context_messages, session_memory = prepare_session_context(
+                session_id=request.session_id,
+                owner_id=owner_id,
+                messages=conversation_messages,
+                repository=SQLiteChatMemoryRepository(),
+            )
             response = answer_first_board_chat(
                 request=request,
                 events=get_limit_up_repository().list_events(),
@@ -970,7 +978,8 @@ def chat_with_first_board_agent(
                     limit=10,
                     owner_id=owner_id,
                 ),
-                conversation_messages=conversation_messages,
+                conversation_messages=context_messages,
+                session_memory=session_memory,
             )
         response.run_id = run_id
         run_repository.save_run(
@@ -1066,7 +1075,7 @@ def stream_first_board_agent_chat(
         )
     except SessionOwnershipError as error:
         raise HTTPException(status_code=404, detail="Chat session not found.") from error
-    conversation_messages = session.messages[-8:]
+    conversation_messages = session.messages
     lease, usage_repository, usage_record = _begin_agent_request(
         http_request,
         owner_id=owner_id,
@@ -1115,6 +1124,12 @@ def stream_first_board_agent_chat(
 
         try:
             with capture_llm_usage() as tracker:
+                context_messages, session_memory = prepare_session_context(
+                    session_id=request.session_id,
+                    owner_id=owner_id,
+                    messages=conversation_messages,
+                    repository=SQLiteChatMemoryRepository(),
+                )
                 response = answer_first_board_chat(
                     request=request,
                     events=get_limit_up_repository().list_events(),
@@ -1124,7 +1139,8 @@ def stream_first_board_agent_chat(
                         limit=10,
                         owner_id=owner_id,
                     ),
-                    conversation_messages=conversation_messages,
+                    conversation_messages=context_messages,
+                    session_memory=session_memory,
                     progress_callback=emit_progress,
                     answer_delta_callback=emit_answer_delta,
                 )

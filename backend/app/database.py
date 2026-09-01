@@ -14,7 +14,7 @@ from app.config import env_bool
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_PATH = BACKEND_ROOT / "data" / "limituplab.sqlite"
-CURRENT_SCHEMA_VERSION = 7
+CURRENT_SCHEMA_VERSION = 8
 DEFAULT_BUSY_TIMEOUT_MS = 5_000
 DEFAULT_LOCK_RETRY_ATTEMPTS = 3
 DEFAULT_LOCK_RETRY_BASE_DELAY_SECONDS = 0.05
@@ -409,6 +409,35 @@ def _apply_schema(connection: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_chat_messages_session_created
         ON chat_messages (session_id, created_at ASC)
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS chat_session_memories (
+            session_id TEXT PRIMARY KEY,
+            owner_id TEXT NOT NULL,
+            memory_version TEXT NOT NULL,
+            summary TEXT NOT NULL,
+            research_goal TEXT NOT NULL,
+            stock_symbols_json TEXT NOT NULL,
+            topics_json TEXT NOT NULL,
+            date_scope TEXT,
+            constraints_json TEXT NOT NULL,
+            unresolved_questions_json TEXT NOT NULL,
+            summarized_message_count INTEGER NOT NULL,
+            last_message_id TEXT,
+            generation_mode TEXT NOT NULL,
+            model TEXT,
+            created_at TEXT NOT NULL,
+            updated_at TEXT NOT NULL,
+            FOREIGN KEY (session_id) REFERENCES chat_sessions(session_id)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_chat_session_memories_owner_updated
+        ON chat_session_memories (owner_id, updated_at DESC)
         """
     )
     connection.execute(

@@ -16,7 +16,7 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 - 首板候选池过滤、结构化 Facts、规则评分和置信度
 - 每日 Top10 推荐快照及 D+1 至 D+5 走势追踪
 - 原生 Function Calling Planner、Tool Policy 修复和 SSE 流式回答
-- 可恢复的多会话对话、历史消息持久化和受控上下文
+- 可恢复的多会话对话、滚动 Session Memory 和受控上下文
 - Explanation、Critic、Review、Evaluation 等轻量 Agent 角色
 - 每日 Top10 预测快照、D+1 至 D+5 走势追踪、1进2全市场对照和不可变每日复盘快照
 - Champion/Challenger 评分策略注册与受约束影子优化
@@ -29,7 +29,7 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 | 项目 | 状态 |
 | --- | --- |
-| 后端自动化测试 | 328 项通过，另有 10 个参数化子测试 |
+| 后端自动化测试 | 334 项通过，另有 10 个参数化子测试 |
 | 离线 Agent Eval | Core 18/18、Query Contract 36/36 通过 |
 | 本地数据健康检查 | 已实现 |
 | LLM 流式问答 | 已实现 |
@@ -141,6 +141,12 @@ Agent Query Contract v3 先把不同说法归一为稳定能力 ID，例如 `mar
 
 Query Contract v2 继续负责涨停查询中的确定性参数：用户明确表达的日期、首板/连板、主板/创业板/科创板/北交所、封板/炸板、题材、排序、Top-N 和完整名单要求优先于 Planner 猜测。Tool Policy Engine 根据 v3 能力补齐所需证据工具，不能让模型直接凭记忆回答市场事实。
 
+### 2.1 Session Memory
+
+长对话不再只依赖固定截断。系统保留最近 8 条原始消息；消息离开该窗口后，每累计 8 条便通过原生 `update_session_memory` Function Call 更新一次 SQLite 滚动记忆。记忆包含会话摘要、研究目标、股票实体、日期范围、用户约束和未解决问题，并与尚未摘要的消息及最近窗口一起交给 Planner 和最终回答。
+
+Memory 按 `owner_id + session_id` 隔离，使用 `last_message_id` 作为增量游标，随会话永久删除。Provider 不支持 Function Calling 时可回退到 JSON 摘要，LLM 完全不可用时使用确定性压缩，因此 Memory 故障不会阻断正常问答。记忆只用于对话连续性，不能作为股价、新闻、评分、排名或市场状态的证据；所有时效性事实仍必须重新调用工具。当前实现是会话级 Memory，不会跨会话建立用户画像。
+
 ### 3. 轻量 Multi-Agent 角色
 
 项目采用有边界的角色编排，不让多个 LLM 无约束地互相讨论。
@@ -197,8 +203,8 @@ Outcome 完整性检查严格按本地市场交易日对齐 D+1、D+3 和 D+5。
 
 - `agent_runs` 保存每次 Agent 执行状态、输入、输出、错误和耗时
 - `agent_usage_events` 保存已接受和被拒绝的请求、真实 token、显式价格下的估算成本及耗时
-- `chat_sessions` 和 `chat_messages` 独立保存会话与消息，支持新建、恢复、重命名和永久删除
-- 页面刷新后恢复完整消息和证据卡；传给 LLM 的上下文只取最近 8 条成功消息，并限制单条长度
+- `chat_sessions`、`chat_messages` 和 `chat_session_memories` 保存会话、原始消息与滚动记忆，支持新建、恢复、重命名和永久删除
+- 页面刷新后恢复完整消息和证据卡；LLM 上下文由滚动摘要、尚未摘要消息和最近 8 条原始消息组成，仍保留硬上限
 - Tool trace 展示 Planner 原始计划、后端修复原因、工具参数和结果摘要
 - SQLite Agent Cache 缓存低风险结构化结果
 - `/api/agents/data-health` 检查评分、预测追踪和 Outcome 所需数据
@@ -243,6 +249,7 @@ sequenceDiagram
     participant User
     participant UI as React UI
     participant API as FastAPI
+    participant Memory as Session Memory
     participant Planner as LLM Planner
     participant Policy as Tool Policy
     participant Tools as Tool Registry
@@ -250,7 +257,9 @@ sequenceDiagram
 
     User->>UI: 输入自然语言问题
     UI->>API: POST /api/agents/chat/stream
-    API->>Planner: 系统指令 + 工具 Schema + 会话上下文
+    API->>Memory: 加载或增量更新滚动摘要
+    Memory-->>API: 摘要 + 结构化状态 + 最近消息
+    API->>Planner: 系统指令 + 工具 Schema + Memory 上下文
     Planner-->>API: submit_agent_plan Function Call
     API->>Policy: 校验事实接地和必需工具
     Policy-->>API: 最终工具计划 + 修复原因
@@ -357,6 +366,8 @@ LIMITUPLAB_LLM_MODEL=deepseek-v4-flash
 LIMITUPLAB_LLM_THINKING_ENABLED=false
 LIMITUPLAB_LLM_NATIVE_FUNCTION_CALLING=true
 DEEPSEEK_API_KEY=<your-api-key>
+LIMITUPLAB_SESSION_MEMORY_ENABLED=true
+LIMITUPLAB_SESSION_MEMORY_REFRESH_MESSAGES=8
 ```
 
 真实 API Key 不应提交到 Git。未配置 LLM 时，结构化评分、检索和模板回答仍然可以运行。

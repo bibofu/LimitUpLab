@@ -313,6 +313,13 @@ Critic Agent
   - Provider 不支持原生调用、协议请求失败或函数参数畸形时，自动回退到旧 Prompt-to-JSON Planner；trace 记录实际模式和回退错误类型。
   - 增加 Provider 请求载荷、函数参数解析、禁用开关、生产 Planner 原生路径和旧 Provider 兼容回退测试。
 
+- `[x]` 完成 Session Memory MVP（2026-09-01）。
+  - 使用“最近 8 条原始消息 + 尚未摘要消息 + SQLite 滚动摘要”替代固定 8 条截断；每累计 8 条旧消息增量刷新一次。
+  - `update_session_memory` 原生 Function Call 提取会话摘要、研究目标、股票实体、日期范围、用户约束和未解决问题；兼容 JSON 与确定性降级。
+  - Memory 按 `owner_id + session_id` 隔离，以 `last_message_id` 作为增量游标，随会话删除；故障不阻断主问答链路。
+  - Planner 和最终回答均接收 Memory，但系统明确禁止把其中的历史行情、新闻、评分或市场状态当作当前事实，时效性结论仍需工具接地。
+  - 测试覆盖原生刷新、重复刷新幂等、增量游标、LLM 禁用降级、owner 隔离、级联删除和 Planner 注入。
+
 - `[x]` 完成 Agent Skill 实验并收敛为 Capability Contract（2026-09-01）。
   - 早期使用独立 `SKILL.md`、Loader 和 Registry 验证了业务工作流按需注入、最低工具补齐和默认参数约束。
   - 评审发现 Skill 与 Capability 重复声明工具、默认参数和路由映射，Planner 也需同时输出两种业务标识，维护收益低于复杂度成本。

@@ -307,6 +307,10 @@ class SQLiteChatSessionRepository:
                 return False
             with connection:
                 connection.execute(
+                    "DELETE FROM chat_session_memories WHERE session_id = ?",
+                    (session_id,),
+                )
+                connection.execute(
                     "DELETE FROM chat_messages WHERE session_id = ?",
                     (session_id,),
                 )

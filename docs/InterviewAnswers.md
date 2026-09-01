@@ -114,7 +114,7 @@ Explanation 把单个评分及证据翻译成人话；Critic 对同一个评分�
 
 ### D24. 无状态 HTTP 如何维持会话，长会话会不会撑爆 SQLite？
 
-浏览器持有 HMAC 签名的匿名 owner cookie；`chat_sessions`、`chat_messages` 和 `agent_runs` 按 `owner_id/session_id` 持久化，HTTP 请求本身仍无状态。每次生成只取最近 8 条消息作为上下文，所以 prompt 不会随历史无限增长，但数据库会：目前支持列出、恢复、重命名和永久删除，会话没有自动 TTL、归档压缩或每用户容量上限。小规模 V1 可接受，公开增长后需要消息保留策略、摘要、附件隔离、索引监控和按 owner 的存储配额。
+浏览器持有 HMAC 签名的匿名 owner cookie；`chat_sessions`、`chat_messages`、`chat_session_memories` 和 `agent_runs` 按 `owner_id/session_id` 持久化，HTTP 请求本身仍无状态。当前上下文采用 Session Memory：保留最近 8 条原始消息，尚未达到刷新批次的旧消息继续随请求携带，每累计 8 条旧消息便通过 `update_session_memory` Function Call 更新滚动摘要和结构化状态；LLM 不可用时确定性降级。`last_message_id` 是增量游标，摘要与原始窗口合计仍有硬上限，因此 prompt 不随历史线性增长。数据库中的完整原始消息仍会增长；目前支持列出、恢复、重命名和永久删除，但还没有自动 TTL、归档压缩或每用户容量上限。公开增长后仍需要消息保留策略、索引监控和按 owner 的存储配额。
 
 ### D25. 为什么命中已有竞价快照还要写库？
 

@@ -1463,6 +1463,31 @@ class ChatSessionMessage(BaseModel):
     created_at: datetime
 
 
+class ChatSessionMemory(BaseModel):
+    """Persisted rolling context for one owner-scoped chat session."""
+
+    session_id: str
+    owner_id: str
+    memory_version: str
+    summary: str = ""
+    research_goal: str = ""
+    stock_symbols: list[str] = Field(default_factory=list)
+    topics: list[str] = Field(default_factory=list)
+    date_scope: str | None = None
+    constraints: list[str] = Field(default_factory=list)
+    unresolved_questions: list[str] = Field(default_factory=list)
+    summarized_message_count: int = 0
+    last_message_id: str | None = None
+    generation_mode: Literal[
+        "llm_function_call",
+        "prompt_json_fallback",
+        "deterministic",
+    ] = "deterministic"
+    model: str | None = None
+    created_at: datetime
+    updated_at: datetime
+
+
 class ChatSessionSummary(BaseModel):
     """List-friendly metadata for one resumable Agent conversation."""
 

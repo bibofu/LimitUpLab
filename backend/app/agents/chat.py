@@ -63,6 +63,7 @@ from app.models import (
     AgentChatResponse,
     AgentToolTrace,
     AgentRun,
+    ChatSessionMemory,
     ChatSessionMessage,
     build_agent_evidence_cards,
     build_agent_tool_policy_audit,
@@ -80,6 +81,7 @@ from app.services.llm_provider import (
     NativeFunctionCallingUnavailable,
     get_llm_provider,
 )
+from app.services.session_memory import memory_prompt_payload
 
 
 CHAT_AGENT_VERSION = "first-board-chat-policy-v12-native-function-calling"
@@ -245,6 +247,7 @@ def plan_agent_query(
     llm_provider: LLMProvider,
     *,
     conversation_messages: list[ChatSessionMessage] | None = None,
+    session_memory: ChatSessionMemory | None = None,
     repository: SQLiteFirstBoardRepository | None = None,
 ) -> AgentQueryPlan:
     """Run only the production LLM planning stage without executing evidence tools."""
@@ -253,7 +256,11 @@ def plan_agent_query(
         events=events,
         first_board_repository=repository or SQLiteFirstBoardRepository(),
     )
-    context = _build_session_context([], conversation_messages or [])
+    context = _build_session_context(
+        [],
+        conversation_messages or [],
+        session_memory=session_memory,
+    )
     return _generate_llm_query_plan(request, tools, context, llm_provider)
 
 
@@ -263,6 +270,7 @@ def answer_first_board_chat(
     repository: SQLiteFirstBoardRepository | None = None,
     recent_runs: list[AgentRun] | None = None,
     conversation_messages: list[ChatSessionMessage] | None = None,
+    session_memory: ChatSessionMemory | None = None,
     llm_provider: LLMProvider | None = None,
     progress_callback: Callable[[str, str], None] | None = None,
     answer_delta_callback: Callable[[str], None] | None = None,
@@ -274,6 +282,7 @@ def answer_first_board_chat(
     context = _build_session_context(
         recent_runs or [],
         conversation_messages or [],
+        session_memory=session_memory,
     )
     if (
         tools.profile != EXTENDED_AGENT_PROFILE
@@ -1215,6 +1224,7 @@ def _tool_planner_user_prompt(
         "request_symbol": request.symbol,
         "page_context": request.page_context,
         "conversation_history": context.conversation_history,
+        "session_memory": context.session_memory,
         "recent_context": {
             "symbol": context.symbol,
             "trade_date": context.trade_date.isoformat() if context.trade_date else None,
@@ -2130,6 +2140,7 @@ def _tool_answer_user_prompt(
     payload = {
         "user_question": request.message,
         "conversation_history": context.conversation_history,
+        "session_memory": context.session_memory,
         "intent": tool_plan.get("intent_label"),
         "executed_tool_facts": facts,
     }
@@ -3723,6 +3734,7 @@ class _SessionContext:
         matched_symbols: list[str] | None = None,
         conversation_history: list[dict[str, str]] | None = None,
         last_capabilities: list[str] | None = None,
+        session_memory: dict[str, Any] | None = None,
     ):
         self.symbol = symbol
         self.trade_date = trade_date
@@ -3730,6 +3742,7 @@ class _SessionContext:
         self.matched_symbols = matched_symbols or []
         self.conversation_history = conversation_history or []
         self.last_capabilities = last_capabilities or []
+        self.session_memory = session_memory
 
 
 def _build_agent_plan(
@@ -4067,6 +4080,8 @@ def _answer_market_context(
 def _build_session_context(
     recent_runs: list[AgentRun],
     conversation_messages: list[ChatSessionMessage] | None = None,
+    *,
+    session_memory: ChatSessionMemory | None = None,
 ) -> _SessionContext:
     """Recover useful symbols, dates and filters from recent successful runs."""
 
@@ -4086,6 +4101,7 @@ def _build_session_context(
     context = _SessionContext(
         conversation_history=history,
         last_capabilities=last_capabilities,
+        session_memory=memory_prompt_payload(session_memory),
     )
     for run in recent_runs:
         if run.status != "success":
