@@ -76,6 +76,7 @@ class DailyCloseLoopTest(unittest.TestCase):
             tracked_candidate_references=10,
             tracked_cache_ready=10,
             tracked_cache_missing=0,
+            discovery_snapshot_ready=True,
             health={
                 "status": "healthy",
                 "raw_events_ready": True,
@@ -120,6 +121,8 @@ class DailyCloseLoopTest(unittest.TestCase):
 
         self.assertEqual(execution.status, "success")
         self.assertTrue(received[0]["persist_live_prediction"])
+        self.assertTrue(received[0]["refresh_discovery"])
+        self.assertFalse(received[0]["force_discovery"])
         self.assertTrue(self.report_path.exists())
         self.assertFalse(self.alert_path.exists())
         persisted = self.run_repository.latest_for_date(target_date)
@@ -147,6 +150,7 @@ class DailyCloseLoopTest(unittest.TestCase):
 
         self.assertEqual(execution.status, "success")
         self.assertFalse(received[0]["persist_live_prediction"])
+        self.assertFalse(received[0]["refresh_discovery"])
         self.assertFalse(execution.run.report["live_prediction_eligible"])
 
     def test_same_day_close_run_remains_live_without_auction_dependency(self) -> None:
@@ -232,6 +236,28 @@ class DailyCloseLoopTest(unittest.TestCase):
         self.assertEqual(execution.run.attempt_count, 2)
         self.assertTrue(self.alert_path.exists())
         self.assertIn("lack available bars", execution.run.error_message)
+
+    def test_missing_discovery_snapshot_writes_partial_alert(self) -> None:
+        target_date = date(2026, 8, 21)
+
+        def incomplete_update(**_kwargs) -> DailyUpdateReport:
+            report = self._complete_report(target_date, live_count=10)
+            report.discovery_snapshot_ready = False
+            return report
+
+        execution = self._execute(
+            requested_date=target_date,
+            now=datetime(2026, 8, 21, 16, 10, tzinfo=CN_TZ),
+            update_runner=incomplete_update,
+        )
+
+        self.assertEqual(execution.status, "partial")
+        self.assertEqual(execution.exit_code, 2)
+        self.assertTrue(self.alert_path.exists())
+        self.assertIn(
+            "low-position discovery snapshot was not persisted",
+            execution.run.error_message,
+        )
 
     def test_incomplete_outcome_maturity_writes_partial_alert(self) -> None:
         target_date = date(2026, 8, 21)

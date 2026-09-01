@@ -280,6 +280,8 @@ def execute_daily_close_loop(
                         refresh_enrichment=refresh_enrichment,
                         replace_date=not skip_import,
                         persist_live_prediction=live_eligible,
+                        refresh_discovery=live_eligible,
+                        force_discovery=force and live_eligible,
                         limit_up_repository=limit_repo,
                         first_board_repository=first_repo,
                     )
@@ -440,6 +442,8 @@ def _incomplete_reasons(
     )
     if live_eligible and report.target_candidates_checked > 0 and not live_snapshot_ready:
         reasons.append("live Top10 prediction snapshot was not persisted")
+    if live_eligible and not report.discovery_snapshot_ready:
+        reasons.append("low-position discovery snapshot was not persisted")
     if report.tracked_cache_missing > 0:
         reasons.append(
             f"{report.tracked_cache_missing} tracked Top10 candidates still lack available bars"
