@@ -24,9 +24,6 @@ FRONTEND_ERR = FRONTEND / "dev_frontend.err.log"
 REFRESH_LOG = BACKEND / "recommendation_refresh.log"
 REFRESH_ERR = BACKEND / "recommendation_refresh.err.log"
 REFRESH_LOCK = BACKEND / "data" / "recommendation_refresh.lock"
-AUCTION_FINAL_LOG = BACKEND / "auction_final.log"
-AUCTION_FINAL_ERR = BACKEND / "auction_final.err.log"
-AUCTION_FINAL_LOCK = BACKEND / "data" / "auction_final.lock"
 
 
 def main() -> int:
@@ -104,18 +101,6 @@ def main() -> int:
             env=env,
         )
 
-    if not worker_lock_active(AUCTION_FINAL_LOCK, stale_after_seconds=3 * 60):
-        spawn_detached(
-            [
-                str(backend_python),
-                "scripts/run_auction_final_loop.py",
-            ],
-            cwd=BACKEND,
-            stdout_path=AUCTION_FINAL_LOG,
-            stderr_path=AUCTION_FINAL_ERR,
-            env=env,
-        )
-
     backend_ok = wait_for("http://127.0.0.1:8001/health", seconds=12)
     frontend_ok = wait_for("http://127.0.0.1:5173/", seconds=12)
 
@@ -124,7 +109,6 @@ def main() -> int:
     print(f"Backend log:  {BACKEND_LOG}")
     print(f"Frontend log: {FRONTEND_LOG}")
     print(f"Recommendation refresh log: {REFRESH_LOG}")
-    print(f"Auction final log: {AUCTION_FINAL_LOG}")
     return 0 if backend_ok and frontend_ok else 1
 
 

@@ -17,7 +17,6 @@ from app.services.scoring_policy import DEFAULT_SCORING_POLICY_VERSION
 
 
 EVALUATION_AGENT_VERSION = "first-board-evaluation-mvp-v1"
-AUCTION_FINAL_REVIEW_START_BASE_DATE = date(2026, 8, 31)
 
 
 def build_agent_evaluation(
@@ -320,9 +319,9 @@ def select_canonical_prediction_snapshots(
 ) -> list[AgentPrediction]:
     """Select one complete prediction batch per date.
 
-    If a live batch exists, no historical row from that date may leak into the
-    displayed Top10. For dates without live picks, one historical scoring
-    version is selected as a coherent batch.
+    If an active live batch exists, no historical row from that date may leak
+    into the displayed Top10. Retired auction-final experiments are ignored;
+    dates without an active live batch use one coherent historical version.
     """
 
     by_date: dict[date, list[AgentPrediction]] = {}
@@ -332,13 +331,12 @@ def select_canonical_prediction_snapshots(
     selected: list[AgentPrediction] = []
     for trade_date in sorted(by_date):
         daily = by_date[trade_date]
-        live = [item for item in daily if item.prediction_source == "live"]
-        if trade_date >= AUCTION_FINAL_REVIEW_START_BASE_DATE:
-            live = [item for item in live if item.data_as_of > item.trade_date]
-            if not live:
-                # From the auction rollout onward, an evening draft is not a
-                # prediction sample and historical backtests must not replace it.
-                continue
+        live = [
+            item
+            for item in daily
+            if item.prediction_source == "live"
+            and "auction-final" not in item.scoring_version
+        ]
         if live:
             batch_key = min(
                 (

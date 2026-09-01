@@ -43,7 +43,6 @@ from app.models import (
     WebSearchFacts,
 )
 from app.repositories import (
-    SQLiteAuctionFinalRepository,
     SQLiteFirstBoardDiscoveryRepository,
     SQLiteFirstBoardRepository,
     SQLiteRecommendationIntelligenceRepository,
@@ -314,8 +313,7 @@ TOOL_SCHEMAS = [
             "读取某个交易日的首板评级候选池、可解释评分、行业分布和基于首板前 K 线的"
             "位置分类（如低位启动、超跌反弹、V形反转、高位突破、二波启动）；"
             "未传 trade_date 时使用本地最新交易日，并返回由收盘基础分、最新新闻和"
-            "季度财报持续重排的盘前草稿；若当日 09:25 正式预测已生成，同时返回"
-            "一进二竞价终选 Top10。"
+            "季度财报持续重排的盘前研究排序。"
         ),
         args_schema={
             "type": "object",
@@ -336,7 +334,7 @@ TOOL_SCHEMAS = [
         name="first_board_discovery",
         description=(
             "读取收盘后生成的下一交易日首板挖掘候选池，并返回由最新新闻和季度财报"
-            "持续重排的盘前草稿；若当日 09:25 正式预测已生成，同时返回竞价终选 Top10。"
+            "持续重排的盘前研究排序。"
             "候选在数据截止日尚未涨停，候选池来自当日热门"
             "题材和新闻催化，再结合近 60 日 K 线量价结构精排；"
             "同时附带半小时更新的行情、个股新闻和季度财报摘要；适合回答首板挖掘、"
@@ -1396,13 +1394,6 @@ class AgentToolRegistry:
             )
             if recommendation_draft is not None:
                 trace_output["recommendation_draft"] = recommendation_draft
-            auction_final = _auction_final_facts(
-                self.first_board_repository.database_path,
-                strategy="relay",
-                expected_base_date=ratings.trade_date,
-            )
-            if auction_final is not None:
-                trace_output["auction_final"] = auction_final
         return ToolResult(
             name="first_board_ratings",
             input={"trade_date": trade_date.isoformat() if trade_date else None},
@@ -1462,13 +1453,6 @@ class AgentToolRegistry:
             )
             if recommendation_draft is not None:
                 trace_output["recommendation_draft"] = recommendation_draft
-            auction_final = _auction_final_facts(
-                self.first_board_repository.database_path,
-                strategy="discovery",
-                expected_base_date=response.data_as_of,
-            )
-            if auction_final is not None:
-                trace_output["auction_final"] = auction_final
         return ToolResult(
             name="first_board_discovery",
             input={"data_as_of": data_as_of.isoformat() if data_as_of else None},
@@ -2109,38 +2093,6 @@ def _recommendation_draft_facts(
         "status": response.status,
         "candidates": [item.model_dump(mode="json") for item in candidates],
         "warnings": response.warnings,
-    }
-
-
-def _auction_final_facts(
-    database_path: Path | None,
-    *,
-    strategy: str,
-    expected_base_date: date,
-) -> dict[str, Any] | None:
-    """Return only today's final auction ranking for Agent grounding."""
-
-    response = SQLiteAuctionFinalRepository(database_path).get_latest()
-    china_now = datetime.now(timezone(timedelta(hours=8)))
-    if (
-        response is None
-        or response.trade_date != china_now.date()
-        or china_now.hour >= 15
-    ):
-        return None
-    candidates = [
-        item.model_dump(mode="json")
-        for item in response.candidates
-        if item.strategy == strategy and item.base_trade_date == expected_base_date
-    ]
-    if not candidates:
-        return None
-    return {
-        "trade_date": response.trade_date.isoformat(),
-        "finalized_at": response.finalized_at.isoformat(),
-        "status": response.status,
-        "scoring_version": response.scoring_version,
-        "candidates": candidates,
     }
 
 

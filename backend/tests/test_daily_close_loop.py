@@ -149,13 +149,13 @@ class DailyCloseLoopTest(unittest.TestCase):
         self.assertFalse(received[0]["persist_live_prediction"])
         self.assertFalse(execution.run.report["live_prediction_eligible"])
 
-    def test_post_rollout_close_run_waits_for_auction_final(self) -> None:
+    def test_same_day_close_run_remains_live_without_auction_dependency(self) -> None:
         target_date = date(2026, 8, 31)
         received: list[dict[str, object]] = []
 
         def fake_update(**kwargs) -> DailyUpdateReport:
             received.append(kwargs)
-            return self._complete_report(target_date, live_count=0)
+            return self._complete_report(target_date, live_count=10)
 
         execution = self._execute(
             requested_date=target_date,
@@ -164,8 +164,8 @@ class DailyCloseLoopTest(unittest.TestCase):
         )
 
         self.assertEqual(execution.status, "success")
-        self.assertFalse(received[0]["persist_live_prediction"])
-        self.assertFalse(execution.run.report["live_prediction_eligible"])
+        self.assertTrue(received[0]["persist_live_prediction"])
+        self.assertTrue(execution.run.report["live_prediction_eligible"])
 
     def test_transient_failure_is_retried_and_audited(self) -> None:
         target_date = date(2026, 8, 21)

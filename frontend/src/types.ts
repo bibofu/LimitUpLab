@@ -460,54 +460,6 @@ export interface RecommendationIntelligenceResponse {
   warnings: string[];
 }
 
-export interface AuctionFinalCandidate {
-  strategy: "discovery" | "relay";
-  base_trade_date: string;
-  target_trade_date: string;
-  symbol: string;
-  name: string;
-  sector: string;
-  position_label: string | null;
-  base_rank: number;
-  base_score: number;
-  base_scoring_version: string;
-  preauction_rank: number;
-  preauction_score: number;
-  news_adjustment: number;
-  financial_adjustment: number;
-  final_rank: number;
-  final_score: number;
-  auction_score: number;
-  auction_price: number;
-  auction_pct: number;
-  auction_volume: number | null;
-  auction_amount: number | null;
-  auction_unmatched: number | null;
-  auction_turnover_pct: number | null;
-  auction_yesterday_ratio_pct: number | null;
-  auction_volume_ratio: number | null;
-  previous_close: number | null;
-  float_market_cap: number | null;
-  reasons: string[];
-  risks: string[];
-}
-
-export interface AuctionFinalRecommendationsResponse {
-  trade_date: string;
-  finalized_at: string;
-  auction_captured_at: string;
-  status: "complete" | "partial";
-  auction_phase: string;
-  data_status: string;
-  scoring_version: string;
-  source: string;
-  discovery_base_date: string | null;
-  relay_base_date: string | null;
-  candidates: AuctionFinalCandidate[];
-  warnings: string[];
-  disclaimer: string;
-}
-
 export interface RatingBacktestBucket {
   rating: string;
   sample_size: number;

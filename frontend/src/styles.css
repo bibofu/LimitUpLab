@@ -3774,11 +3774,11 @@ a.entry-card {
   padding: 20px;
 }
 
-.auction-final-panel {
+.recommendation-draft-panel {
   gap: 16px;
 }
 
-.auction-final-header {
+.recommendation-draft-header {
   display: flex;
   align-items: center;
   justify-content: space-between;
@@ -3787,26 +3787,17 @@ a.entry-card {
   border-bottom: 1px solid #e4e7ec;
 }
 
-.auction-final-header > div {
+.recommendation-draft-header > div {
   display: grid;
   gap: 5px;
 }
 
-.auction-final-header span {
+.recommendation-draft-header span {
   color: #667085;
   font-size: 13px;
 }
 
-.auction-final-badge {
-  flex: 0 0 auto;
-  padding: 5px 8px;
-  border: 1px solid #f2b7aa;
-  background: #fff1ee;
-  color: #b42318 !important;
-  font-weight: 700;
-}
-
-.auction-score-delta {
+.rating-score-context {
   color: #667085;
   font-size: 12px;
   white-space: nowrap;

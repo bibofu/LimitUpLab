@@ -149,7 +149,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
         self.assertEqual(after.data_as_of, final_data_as_of)
         self.assertEqual([item.prediction_id for item in rows], ["auction-final-prediction"])
 
-    def test_post_rollout_draft_is_excluded_from_review(self) -> None:
+    def test_same_day_live_snapshot_is_reviewable_without_auction(self) -> None:
         trade_date = date(2026, 8, 31)
         created_at = datetime(2026, 8, 31, 8, tzinfo=timezone.utc)
         draft = self._prediction(
@@ -159,10 +159,24 @@ class PredictionSnapshotContractTest(unittest.TestCase):
             "live",
             created_at,
         ).model_copy(update={"trade_date": trade_date, "data_as_of": trade_date})
-        official = self._prediction(
+        selected = select_canonical_prediction_snapshots([draft])
+
+        self.assertEqual([item.prediction_id for item in selected], ["draft-live"])
+
+    def test_retired_auction_batch_does_not_override_close_history(self) -> None:
+        trade_date = date(2026, 8, 31)
+        created_at = datetime(2026, 8, 31, 8, tzinfo=timezone.utc)
+        close_history = self._prediction(
+            "close-history",
+            "000001",
+            "close-rule-v4",
+            "historical_backtest",
+            created_at,
+        ).model_copy(update={"trade_date": trade_date, "data_as_of": trade_date})
+        retired_auction = self._prediction(
             "auction-final",
             "000002",
-            "auction-final-v1",
+            "close-rule-v4+auction-final-v1",
             "live",
             created_at + timedelta(days=1),
         ).model_copy(
@@ -172,9 +186,11 @@ class PredictionSnapshotContractTest(unittest.TestCase):
             }
         )
 
-        self.assertEqual(select_canonical_prediction_snapshots([draft]), [])
-        selected = select_canonical_prediction_snapshots([draft, official])
-        self.assertEqual([item.prediction_id for item in selected], ["auction-final"])
+        selected = select_canonical_prediction_snapshots(
+            [close_history, retired_auction]
+        )
+
+        self.assertEqual([item.prediction_id for item in selected], ["close-history"])
 
     def test_live_batch_excludes_same_day_historical_extras(self) -> None:
         created_at = datetime(2026, 8, 29, tzinfo=timezone.utc)

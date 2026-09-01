@@ -32,7 +32,6 @@ from app.repositories import (
     SQLiteReviewSnapshotRepository,
 )
 from app.services.daily_review import build_daily_review_snapshot
-from app.services.evaluation_agent import AUCTION_FINAL_REVIEW_START_BASE_DATE
 from app.services.system_health import expected_local_data_date
 from scripts.update_daily_data import DailyUpdateReport, run_daily_update
 
@@ -262,7 +261,6 @@ def execute_daily_close_loop(
             live_eligible = (
                 target.trade_date == current.date()
                 and current.time() >= AFTER_CLOSE_TIME
-                and target.trade_date < AUCTION_FINAL_REVIEW_START_BASE_DATE
             )
             last_report: DailyUpdateReport | None = None
             last_error: str | None = None
