@@ -132,3 +132,167 @@ caveats 也诚实：明说「未发现信号 ≠ 已证噪声」「Outcome 单�
 项目自上次以来在**工程纪律**（鉴权、限流、并发、备份）和**方法论**（诊断框架）两条线上都有实质进步，
 且在真实数据上保持了诚实的「暂无信号」结论。当前最高 ROI 是两处小修（eval_runner env 污染、Windows 测试），
 真正的科学瓶颈是 outcome 数据积累速度，不是代码。
+
+---
+
+## 第 2 次评审 — 2026-09-01
+
+### 0. 评审基线
+
+- 评审对象：`main` HEAD = `d98e58d`。分支历史再次整体替换，我上次评审的 `c5a2af9`
+  已不在当前线上；但上次标记的两处 P0 都被 codex 采纳并修在 `338a653`/`7ba2b44`，已闭环。
+- 本次评审基于当前真实代码，重读了 `auction_final_recommendations.py`、`first_board_discovery.py`、
+  `recommendation_intelligence.py`、`docs/V1.1_Milestone.md`、README，并实跑诊断。
+- 测试：316 passed + 10 子测试，离线 Agent Eval 11/11。
+- 真实数据诊断：`n=297, trade_dates=20, verdict=no_robust_signal`（数据自上次仅 +1 天：19→20）。
+
+### 1. 先纠正我自己上次的判断 ——「方向漂移」被 codex 正面回应了
+
+上次我担心项目从「收盘后研究工具、NO buy/sell advice」漂移成「交易推荐」。
+本次重读后承认这个判断过重：
+
+- `docs/V1.1_Milestone.md`（codex 今天刚写，记录日期 2026-08-31）**明确自省**：
+  > 「V1.1 仍然是研究和复盘工具，不是实盘交易终端。它不提供自动下单、仓位、目标价、收益承诺或确定性涨停预测。」
+  > 「当前评分结果仍处于研究验证阶段，不能宣称已经获得稳定超额收益或可靠涨停预测能力。」
+- 免责覆盖比我想的广：`chat.py:1500/1546`、`first_board_discovery.py:296`、`prediction_quality_audit.py:146`、
+  `scoring_policy_optimizer.py:845` 等 11 处，并非只在 README。
+- codex 还点明了「集合竞价数据源不能回填回测」这个**真实的数据约束**——这解释了
+  auction 终选为何暂时无法离线验证（不是偷懒，是数据源限制）。
+
+结论：codex 对方向漂移是有意识的，且在文档里主动设了边界。上次我说成「漂移」不准确，
+应改为「有意识的扩展」。这一条我认账。
+
+### 2. 值得肯定的（本轮）
+
+1. **P0 闭环**：`eval_runner` 改用 `contextvars.ContextVar`（`chat.py:79`）彻底不碰 `os.environ`；
+   备份权限测试加 POSIX 守卫。两处都是我上轮标的，codex 照着修了。这是评审闭环的好信号。
+2. **V1.1 milestone 文档质量高**：第 3 节「核心价值」讲的是「预测时间契约」——草稿/正式/复盘
+   哪一版算数、复盘评哪一次输出。第 5 节明说「V1.2 优先继续做可验证，而不是继续堆功能」。
+   这份文档的方向感，是本轮我读到的最清醒的部分。
+3. **测试 316 + 11/11 eval 全绿**，新功能（discovery/auction/intelligence）都带了
+   planted-signal 风格的单测。工程质量在跟。
+4. **不可变快照契约**：`5575683`「make live Top10 snapshots immutable」、`c0cc799`「enforce Top10
+   outcome completeness」——预测/复盘的时间契约在代码层面被守住，避免「用收盘后重算冒充历史预测」。
+
+### 3. 真正值得说的批判（按 ROI 排序）
+
+#### 3.1 【言行张力，最重要】milestone 说「转验证」，提交历史说「还在堆功能」
+
+这是本轮最核心的批评。V1.1_Milestone.md 第 5 节白纸黑字：
+> 「V1.2 优先继续做可验证，而不是继续堆功能。」
+
+但 `eecc406..HEAD` 这段提交（+12799 行 / 79 文件）恰恰是**功能堆叠**：
+first-board discovery MVP、recommendation auction、finance news、semantic routing、
+promotion evaluation、stock news、daily review snapshot……没有一个是「验证已有规则」。
+
+更刺眼的是数据 vs 代码的投入比：**outcome-ready 交易日这段时间只长了 1 天（19→20），
+代码却长了 12799 行。** 真正的瓶颈是数据，却在写功能。codex 自己在文档里承认
+「尚未证明可以稳定预测次日表现」，但提交节奏看不出在攻这个。
+
+> 批评要点：方向承诺是对的，但最近的行动还没兑现承诺。把「V1.2 转验证」从
+> **写进文档** 变成 **写进提交**，是当前最该做的转向。
+
+#### 3.2 【免责在服务层缺失，只在渲染层】auction 的「official Top10」无服务级免责
+
+`auction_final_recommendations.py` 产出 `AuctionFinalRecommendationsResponse`，注释写
+「Build the session's sole official Top10」，并经 `_persist_relay_final_prediction` 写成
+`AgentPrediction(prediction_source="live")`。但**服务层 response 无免责字段**，
+免责散落在 `chat.py:1500` 的渲染分支里。
+
+风险：这个 response 会经 API/前端直接被消费。一旦有人不经过 chat 渲染层拿 JSON（爬虫、
+第三方对接、未来加的纯 API 模式），「official Top10」「live prediction」这些措辞
+会脱离免责上下文被当成推荐。措辞与「不构成投资建议」有张力。
+
+> 修法：免责应是 response 的**结构字段**（如 `disclaimer: str` 常量），而非渲染时
+> 拼一句。或者在服务层固定附加。这是低成本高收益的一处。
+
+#### 3.3 【三套 magic numbers 无验证，且 discovery 部分本可验证却没做】
+
+V1.1 新增了三套手写规则，权重全是拍脑袋：
+
+- `first_board_discovery.py::_recall_score`：`1.8 / 16-r*0.15 / 24-|c-4|*3 / 22*loc /
+  (log10-8)*10 / 18-|r-5|*2 / 16+o2c*2` ——7 个魔法系数。
+- `auction_final_recommendations.py::score_auction_fact`：竞价涨幅 `1/5/8/9.5` 区间阈值、
+  换手 `0.03/0.3`、量比 `1.5/1/0.6/0.3` ——全是手填。
+- `first_board_discovery.py::_theme_matches_news`：7 条硬编码题材别名（ai→人工智能等），
+  会误匹配（任何含 "ai" 的英文标题）也漏匹配。
+
+关键张力：诊断模块用**严谨的日期阻断方法**证明了 14 因子在 20 天上无信号；
+同期 codex 又写了三套**同样手写、同样无验证**的新规则。即在「未验证的假设上叠加
+更多未验证的假设」。
+
+而 `first_board_discovery` 的量价部分（`_recall_score` 里的 momentum/amount/range）
+**本可以用历史数据做和 14 因子一样的日期阻断诊断**（数据源允许），却没做。
+auction 部分被「不能回填竞价」堵死是数据约束，认；但 discovery 的量价验证没做，
+是选择。
+
+> 批评要点：把对 14 因子的那份严谨，分一份给新规则。discovery 的量价打分至少跑一次
+> 「Top10 vs 次日是否首板」的日期阻断验证，哪怕样本少，先建立基线。
+
+#### 3.4 【getter 有写副作用】`finalize_auction_recommendations` 的读触发写
+
+`finalize_auction_recommendations` 在「已有当天快照」分支里：
+```python
+if existing is not None:
+    _persist_relay_final_prediction(existing, ...)   # 写！
+    return existing
+```
+一个 `get` 路径触发 `_persist_relay_final_prediction(replace=True)` 覆盖 relay 的 live 预测。
+可能是故意的幂等重放，但「读函数有写副作用」违反最小惊讶，且 `replace=True` 会无声覆盖。
+建议至少加注释说明为何幂等，或把重放做成显式调用。
+
+#### 3.5 【数据停滞，且 OOS 在恶化】20 天，OOS R² 从 0.034 → 0.014
+
+- 诊断真实结果：`trade_dates=20`（自上次仅 +1），`verdict=no_robust_signal` 稳定。
+- `sector_relay` 仍是最强单因子，方向**负**，平均日 IC=−0.23，未校正 p=0.004
+  （仍 > Bonferroni 0.0036）。这是连续两轮稳定的「最接近显著」线索，方向标反的可能仍在。
+- 联合 Lasso 留一 OOS R² 从上次 0.034 **降到 0.014**。留一日期的方差大，
+  单日进出对结论扰动大 —— 说明 20 天太少，任何单日都还没「稳定」到能下结论。
+- 这条与 §3.1 同源：瓶颈是数据积累速度，不是代码。
+
+#### 3.6 【卫生】根目录 7 个 `pytest-cache-files-*` 空目录又堆回来了
+
+上次我清过 `pytest-cache-*`，这次命名变成 `pytest-cache-files-*` 又攒了 7 个。
+是测试产物没纳入 `.gitignore`/清理。小事，但每轮都出现说明缺一个固定出口。
+
+### 4. 下一步建议（按 ROI 排序）
+
+**P0 — 低成本、消除真实问题（建议现在做）：**
+
+1. **服务层加免责字段**：`AuctionFinalRecommendationsResponse` / `FirstBoardDiscoveryResponse`
+   加固定 `disclaimer` 字段或常量，让「不构成投资建议」脱离渲染层也能被消费方看到。
+   对应 §3.2。
+2. **`pytest-cache-files-*` 纳入 `.gitignore` 并清理**：对应 §3.6。
+
+**P1 — 把 milestone 的「转验证」从承诺变成行动（项目价值最高）：**
+
+3. **给 discovery 的量价打分跑一次日期阻断验证**：用 `first_board_discovery` 的 Top10
+   对「次日是否首板」做和 14 因子同款的 IC + 留一 OOS，建立基线。哪怕样本少，先把
+   「discovery 量价有无信号」这个问题也纳入诚实诊断。对应 §3.3、§3.1。
+4. **盯 `sector_relay` 负方向**：两轮稳定为负且最接近显著，查 `sector_relay` 因子方向
+   是否标反，或在数据增长后确认。对应 §3.5。
+5. **加速 outcome 积累**：D+1..D+5 回填每日确认在跑、未静默跳过；可同时启用
+   `three_day_open_to_close_pct` 口径补充样本。对应 §3.5。
+
+**P2 — 技术债（非紧急）：**
+
+6. **`_theme_matches_news` 升级为实体/事件映射**：V1.1 milestone 第 5.3 节已点名，
+   与我的判断一致。对应 §3.3。
+7. **`finalize_auction_recommendations` 的 getter 写副作用**：加注释说明幂等意图，
+   或拆成显式 `replay` 调用。对应 §3.4。
+8. **auction `score_auction_fact` 阈值做敏感性扫描**：在真实样本积累后，
+   对 `1/5/8/9.5` 等阈值做扰动，看 Top10 排序是否稳定。对应 §3.3。
+
+### 5. 本轮结论
+
+这一轮我要先认一个账：上次说「方向漂移」过重了。`V1.1_Milestone.md` 证明 codex 对
+「研究工具 vs 交易终端」的边界是有意识、有文档、有免责覆盖的，且把「转验证」
+明确写进了下一阶段方向。这份方向自省是真实存在的，值得肯定。
+
+但本轮真正的批评恰恰落在「方向承诺与提交行动的落差」上：文档说 V1.2 要转验证、
+不再堆功能，可 V1.1 这段提交偏偏是 +12799 行的功能堆叠，数据只长了 1 天。
+**把那份诚实写进文档的方向感，分一份写进提交**——先给 discovery 量价规则做一次
+和 14 因子同款的日期阻断验证——是当前 ROI 最高的下一步。其余两处 P0（服务层免责、
+pytest-cache 清理）是小修，建议顺手做掉。
+
+codex 上一轮采纳了我的两个 P0 并照着修了。这轮的 §3.1 是我最希望被听见的一条。
