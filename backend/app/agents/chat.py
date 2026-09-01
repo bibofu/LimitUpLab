@@ -1551,12 +1551,18 @@ def _template_answer_from_tool_facts(
             ]
             lines.extend(
                 f"{index}. {item.get('name')}({item.get('symbol')}) "
-                f"动态 {item.get('draft_score')} 分，收盘基础 {item.get('base_score')} 分，"
-                f"新闻修正 {item.get('news_adjustment', 0):+g}，"
-                f"财报修正 {item.get('financial_adjustment', 0):+g}。"
+                f"动态 {item.get('draft_score')} 分，收盘综合 "
+                f"{item.get('base_score')} 分（原始规则 "
+                f"{item.get('rule_score', item.get('base_score'))} 分），"
+                f"收盘后新闻修正 {item.get('news_adjustment', 0):+g}，"
+                f"收盘后财报修正 "
+                f"{item.get('financial_adjustment', 0):+g}。"
                 for index, item in enumerate(draft_candidates, start=1)
             )
-            lines.append("该名单会随新闻和财报更新；正式复盘以收盘固化 Top10 为准。")
+            lines.append(
+                "收盘前已知新闻和财报已计入收盘综合分；"
+                "动态分只接受收盘后新增信息。"
+            )
             lines.append(TEXT["safety"])
             return "\n".join(lines)
         if _looks_like_first_board_position_question(request.message):

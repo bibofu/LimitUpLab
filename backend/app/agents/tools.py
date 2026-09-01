@@ -2032,10 +2032,19 @@ def _recommendation_intelligence_by_symbol(
             "refreshed_at": item.refreshed_at.isoformat(),
             "sector": item.sector,
             "position_label": item.position_label,
+            "rule_rank": item.rule_rank,
+            "rule_score": item.rule_score,
             "base_rank": item.base_rank,
             "rank": item.rank,
             "base_score": item.base_score,
             "draft_score": item.draft_score,
+            "facts_cutoff_at": (
+                item.facts_cutoff_at.isoformat()
+                if item.facts_cutoff_at
+                else None
+            ),
+            "close_information_adjustment": item.close_information_adjustment,
+            "close_information_reasons": item.close_information_reasons,
             "news_adjustment": item.news_adjustment,
             "financial_adjustment": item.financial_adjustment,
             "update_reasons": item.update_reasons,

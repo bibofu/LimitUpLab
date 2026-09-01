@@ -525,6 +525,8 @@ powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mo
 
 预测来源有严格时间口径：当天完整收盘数据生成且固化的 Top10 标记为 `live`；事后补算只标记为 `historical_backtest`，不能混入真实前向预测准确率统计。盘前动态研究排序不覆盖收盘预测快照。
 
+一进二动态研究排序使用明确的信息时点契约：原始规则分与截至基准交易日 `15:00` 已公开的新闻、财报共同构成收盘综合分；动态修正只接受该时点之后新增的信息，旧财报不得重复加分。每只候选保留 `rule_score`、`base_score`、`facts_cutoff_at` 和收盘前/收盘后修正原因，便于回放。
+
 手动执行、查看任务状态和卸载任务：
 
 ```powershell

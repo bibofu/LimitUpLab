@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import date, datetime, timedelta
+from datetime import date, datetime, time, timedelta
 from typing import Callable, Sequence
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -36,6 +36,7 @@ from app.services.relay_universe import is_relay_candidate_symbol
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 DEFAULT_REFRESH_INTERVAL_MINUTES = 30
 FINANCIAL_CACHE_TTL = timedelta(hours=24)
+MARKET_CLOSE_TIME = time(15, 0)
 
 QuoteCollector = Callable[[Sequence[str]], HithinkMarketSnapshot]
 NewsCollector = Callable[[str, str], StockNewsFacts]
@@ -152,12 +153,59 @@ def refresh_recommendation_intelligence(
             missing.append("最新季度财报不可用")
         if evidence.errors:
             provider_error_count += 1
-        news_adjustment, news_reasons = _news_adjustment(
-            evidence.news,
-            refreshed_at=refreshed_at,
-        )
-        financial_adjustment, financial_reasons = _financial_adjustment(
-            evidence.financial_report
+        facts_cutoff_at = _market_close(candidate.base_trade_date)
+        if candidate.strategy == "relay":
+            close_news_adjustment, close_news_reasons = _news_adjustment(
+                evidence.news,
+                refreshed_at=facts_cutoff_at,
+                published_at_or_before=facts_cutoff_at,
+            )
+            news_adjustment, news_reasons = _news_adjustment(
+                evidence.news,
+                refreshed_at=refreshed_at,
+                published_after=facts_cutoff_at,
+            )
+            (
+                close_financial_adjustment,
+                close_financial_reasons,
+                financial_adjustment,
+                financial_reasons,
+            ) = _split_financial_adjustment(
+                evidence.financial_report,
+                base_trade_date=candidate.base_trade_date,
+                refreshed_at=refreshed_at,
+            )
+            close_information_adjustment = round(
+                close_news_adjustment + close_financial_adjustment,
+                1,
+            )
+            close_information_reasons = [
+                *(f"收盘前已知：{reason}" for reason in close_news_reasons),
+                *(
+                    f"收盘前已知：{reason}"
+                    for reason in close_financial_reasons
+                ),
+            ]
+            update_reasons = [
+                *(f"收盘后新增：{reason}" for reason in news_reasons),
+                *(
+                    f"收盘后新增：{reason}"
+                    for reason in financial_reasons
+                ),
+            ]
+        else:
+            close_information_adjustment = 0.0
+            close_information_reasons = []
+            news_adjustment, news_reasons = _news_adjustment(
+                evidence.news,
+                refreshed_at=refreshed_at,
+            )
+            financial_adjustment, financial_reasons = _financial_adjustment(
+                evidence.financial_report
+            )
+            update_reasons = [*news_reasons, *financial_reasons]
+        base_score = _bounded_score(
+            candidate.base_score + close_information_adjustment
         )
         items.append(
             RecommendationIntelligenceItem(
@@ -167,24 +215,20 @@ def refresh_recommendation_intelligence(
                 name=candidate.name,
                 sector=candidate.sector,
                 position_label=candidate.position_label,
+                rule_rank=candidate.rank,
+                rule_score=candidate.base_score,
                 base_rank=candidate.rank,
                 rank=candidate.rank,
-                base_score=candidate.base_score,
-                draft_score=round(
-                    max(
-                        0,
-                        min(
-                            100,
-                            candidate.base_score
-                            + news_adjustment
-                            + financial_adjustment,
-                        ),
-                    ),
-                    1,
+                base_score=base_score,
+                draft_score=_bounded_score(
+                    base_score + news_adjustment + financial_adjustment
                 ),
+                facts_cutoff_at=facts_cutoff_at,
+                close_information_adjustment=close_information_adjustment,
+                close_information_reasons=close_information_reasons,
                 news_adjustment=news_adjustment,
                 financial_adjustment=financial_adjustment,
-                update_reasons=[*news_reasons, *financial_reasons],
+                update_reasons=update_reasons,
                 current_price=quote.last_price if quote else None,
                 change_pct=quote.change_pct if quote else None,
                 turnover=quote.turnover if quote else None,
@@ -195,10 +239,20 @@ def refresh_recommendation_intelligence(
                 data_missing=list(dict.fromkeys(missing)),
             )
         )
-    ranked_items: list[RecommendationIntelligenceItem] = []
+    base_ranked_items: list[RecommendationIntelligenceItem] = []
     for strategy in ("discovery", "relay"):
         strategy_items = sorted(
             [item for item in items if item.strategy == strategy],
+            key=lambda item: (-item.base_score, item.rule_rank, item.symbol),
+        )
+        base_ranked_items.extend(
+            item.model_copy(update={"base_rank": index})
+            for index, item in enumerate(strategy_items, start=1)
+        )
+    ranked_items: list[RecommendationIntelligenceItem] = []
+    for strategy in ("discovery", "relay"):
+        strategy_items = sorted(
+            [item for item in base_ranked_items if item.strategy == strategy],
             key=lambda item: (-item.draft_score, item.base_rank, item.symbol),
         )
         ranked_items.extend(
@@ -330,6 +384,8 @@ def _news_adjustment(
     news: StockNewsFacts | None,
     *,
     refreshed_at: datetime,
+    published_after: datetime | None = None,
+    published_at_or_before: datetime | None = None,
 ) -> tuple[float, list[str]]:
     """Convert recent explicit company events into a bounded score adjustment."""
 
@@ -339,8 +395,16 @@ def _news_adjustment(
     negative: list[str] = []
     for item in news.items:
         text = f"{item.title} {item.summary}"
-        age = refreshed_at - _as_shanghai(item.published_at)
-        if age > timedelta(hours=48):
+        published_at = _as_shanghai(item.published_at)
+        age = refreshed_at - published_at
+        if age < timedelta(0) or age > timedelta(hours=48):
+            continue
+        if published_after is not None and published_at <= published_after:
+            continue
+        if (
+            published_at_or_before is not None
+            and published_at > published_at_or_before
+        ):
             continue
         if any(term in text for term in POSITIVE_NEWS_TERMS):
             positive.append(item.title)
@@ -374,6 +438,36 @@ def _financial_adjustment(
     if growth < 0:
         return -2.0, [f"归母净利润同比下降 {abs(growth):.1f}%"]
     return 0.0, []
+
+
+def _split_financial_adjustment(
+    report: RecommendationFinancialReport | None,
+    *,
+    base_trade_date: date,
+    refreshed_at: datetime,
+) -> tuple[float, list[str], float, list[str]]:
+    """Separate already-known reports from genuinely post-close reports."""
+
+    adjustment, reasons = _financial_adjustment(report)
+    if report is None or adjustment == 0:
+        return 0.0, [], 0.0, []
+    if report.report_date <= base_trade_date:
+        return adjustment, reasons, 0.0, []
+    if report.report_date <= _as_shanghai(refreshed_at).date():
+        return 0.0, [], adjustment, reasons
+    return 0.0, [], 0.0, []
+
+
+def _bounded_score(value: float) -> float:
+    """Clamp a score to the public 0-100 range."""
+
+    return round(max(0, min(100, value)), 1)
+
+
+def _market_close(trade_date: date) -> datetime:
+    """Return the A-share close cutoff used by recommendation evidence."""
+
+    return datetime.combine(trade_date, MARKET_CLOSE_TIME, tzinfo=SHANGHAI_TZ)
 
 
 def _collect_candidate_evidence(

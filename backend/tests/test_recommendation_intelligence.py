@@ -102,6 +102,17 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         self.assertEqual(report.net_profit_yoy_pct, 100.0)
         self.assertEqual(first.items[0].financial_adjustment, 3.0)
         self.assertEqual(first.items[0].draft_score, 88.3)
+        relay_item = next(item for item in first.items if item.strategy == "relay")
+        self.assertEqual(relay_item.rule_score, 81.2)
+        self.assertEqual(relay_item.base_score, 84.2)
+        self.assertEqual(relay_item.draft_score, 84.2)
+        self.assertEqual(relay_item.close_information_adjustment, 3.0)
+        self.assertEqual(relay_item.financial_adjustment, 0.0)
+        self.assertEqual(
+            relay_item.facts_cutoff_at,
+            datetime(2026, 8, 31, 15, tzinfo=timezone(timedelta(hours=8))),
+        )
+        self.assertIn("收盘前已知", relay_item.close_information_reasons[0])
         self.assertEqual(financial_collector.call_count, 2)
         self.assertEqual(news_collector.call_count, 4)
         self.assertEqual(second.interval_minutes, 30)
@@ -177,6 +188,124 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         self.assertEqual(relay[0].rank, 1)
         self.assertEqual(relay[0].news_adjustment, 3.0)
         self.assertEqual(relay[1].news_adjustment, -4.0)
+
+    def test_pre_close_news_is_folded_into_relay_close_score(self) -> None:
+        now = datetime(2026, 8, 31, 16, tzinfo=timezone.utc)
+        candidate = _BaseCandidate(
+            "relay", date(2026, 8, 31), "600640", "国脉文化",
+            "文化传媒", "区间突破", 1, 80.0,
+        )
+        published_at = datetime(
+            2026,
+            8,
+            31,
+            14,
+            tzinfo=timezone(timedelta(hours=8)),
+        )
+
+        def news(symbol: str, name: str) -> StockNewsFacts:
+            return StockNewsFacts(
+                symbol=symbol,
+                name=name,
+                fetched_at=now,
+                window_days=7,
+                cache_status="live",
+                sources=["测试资讯"],
+                items=[
+                    StockNewsItem(
+                        symbol=symbol,
+                        name=name,
+                        title="公司获得重大订单",
+                        summary="公司获得重大订单",
+                        published_at=published_at,
+                        source="测试资讯",
+                        url="https://example.com/pre-close",
+                        item_type="news",
+                        relevance_score=1,
+                        fetched_at=now,
+                    )
+                ],
+            )
+
+        with patch(
+            "app.services.recommendation_intelligence._load_base_candidates",
+            return_value=([candidate], None, date(2026, 8, 31), []),
+        ):
+            response = refresh_recommendation_intelligence(
+                now=now,
+                max_workers=1,
+                limit_up_repository=self.limit_repo,
+                first_board_repository=self.first_repo,
+                discovery_repository=self.discovery_repo,
+                snapshot_repository=self.snapshot_repo,
+                quote_collector=Mock(return_value=self._quotes(now)),
+                news_collector=news,
+                financial_collector=Mock(return_value=[]),
+            )
+
+        item = response.items[0]
+        self.assertEqual(item.rule_score, 80.0)
+        self.assertEqual(item.base_score, 83.0)
+        self.assertEqual(item.draft_score, 83.0)
+        self.assertEqual(item.close_information_adjustment, 3.0)
+        self.assertEqual(item.news_adjustment, 0.0)
+        self.assertIn("收盘前已知", item.close_information_reasons[0])
+
+    def test_post_close_financial_report_can_adjust_relay_draft(self) -> None:
+        now = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
+        candidate = _BaseCandidate(
+            "relay", date(2026, 8, 31), "600640", "国脉文化",
+            "文化传媒", "区间突破", 1, 80.0,
+        )
+
+        def financials(thscode: str) -> list[HithinkIncomeStatementFact]:
+            return [
+                HithinkIncomeStatementFact(
+                    thscode=thscode,
+                    fiscal_year=2026,
+                    fiscal_period="Q2",
+                    report_date=date(2026, 9, 1),
+                    period_end=date(2026, 6, 30),
+                    operating_income=125,
+                    net_profit=22,
+                    parent_holder_net_profit=20,
+                    basic_eps=0.2,
+                ),
+                HithinkIncomeStatementFact(
+                    thscode=thscode,
+                    fiscal_year=2025,
+                    fiscal_period="Q2",
+                    report_date=date(2025, 8, 22),
+                    period_end=date(2025, 6, 30),
+                    operating_income=100,
+                    net_profit=12,
+                    parent_holder_net_profit=10,
+                    basic_eps=0.1,
+                ),
+            ]
+
+        with patch(
+            "app.services.recommendation_intelligence._load_base_candidates",
+            return_value=([candidate], None, date(2026, 8, 31), []),
+        ):
+            response = refresh_recommendation_intelligence(
+                now=now,
+                max_workers=1,
+                limit_up_repository=self.limit_repo,
+                first_board_repository=self.first_repo,
+                discovery_repository=self.discovery_repo,
+                snapshot_repository=self.snapshot_repo,
+                quote_collector=Mock(return_value=self._quotes(now)),
+                news_collector=Mock(return_value=self._empty_news(now)),
+                financial_collector=financials,
+            )
+
+        item = response.items[0]
+        self.assertEqual(item.base_score, 80.0)
+        self.assertEqual(item.close_information_adjustment, 0.0)
+        self.assertEqual(item.financial_adjustment, 3.0)
+        self.assertEqual(item.draft_score, 83.0)
+        self.assertIn("收盘后新增", item.update_reasons[0])
 
     def test_relay_base_pool_excludes_chinext_candidates(self) -> None:
         trade_date = date(2026, 9, 1)
@@ -263,6 +392,18 @@ class RecommendationIntelligenceTest(unittest.TestCase):
                     fetched_at=fetched_at,
                 )
             ],
+        )
+
+    @staticmethod
+    def _empty_news(now: datetime) -> StockNewsFacts:
+        return StockNewsFacts(
+            symbol="600640",
+            name="国脉文化",
+            fetched_at=now,
+            window_days=7,
+            cache_status="live",
+            sources=["测试资讯"],
+            items=[],
         )
 
     @staticmethod

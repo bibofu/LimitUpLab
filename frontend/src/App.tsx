@@ -1012,8 +1012,13 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
       rank: index + 1,
       sector: item.sector ?? "",
       position_label: item.position_label ?? null,
+      rule_rank: item.rule_rank ?? item.base_rank ?? item.rank,
+      rule_score: item.rule_score ?? item.base_score,
       base_rank: item.base_rank ?? item.rank,
       draft_score: item.draft_score ?? item.base_score,
+      facts_cutoff_at: item.facts_cutoff_at ?? null,
+      close_information_adjustment: item.close_information_adjustment ?? 0,
+      close_information_reasons: item.close_information_reasons ?? [],
       news_adjustment: item.news_adjustment ?? 0,
       financial_adjustment: item.financial_adjustment ?? 0,
       update_reasons: item.update_reasons ?? [],
@@ -1085,7 +1090,7 @@ function RecommendationDraftPanel({
         <div className="recommendation-draft-header">
           <div>
             <strong>{strategy === "discovery" ? `低位启动观察池 · ${candidates.length} 只` : `盘前动态候选 Top${candidates.length}`}</strong>
-            <span>{strategy === "discovery" ? "热门题材与最新催化召回，财报和 K 线位置共同验证" : "上一交易日收盘评分结合最新新闻与财报持续重排"}</span>
+            <span>{strategy === "discovery" ? "热门题材与最新催化召回，财报和 K 线位置共同验证" : "收盘前信息计入综合分，仅用收盘后新增信息动态调整"}</span>
           </div>
           <span className="recommendation-draft-time">
             {new Date(refreshedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
@@ -1104,26 +1109,32 @@ function RecommendationDraftPanel({
             >
               <header>
                 <div>
-                  <span>{strategy === "discovery" ? `低位候选 · ${lowPosition ? discoveryPatternLabel(lowPosition.facts.pattern) : "结构待验证"}` : `Top ${candidate.rank} · 收盘第 ${candidate.base_rank}`}</span>
+                  <span>{strategy === "discovery" ? `低位候选 · ${lowPosition ? discoveryPatternLabel(lowPosition.facts.pattern) : "结构待验证"}` : `Top ${candidate.rank} · 收盘综合第 ${candidate.base_rank}`}</span>
                   <strong>{candidate.name}</strong>
                   <small>{candidate.symbol}{candidate.sector ? ` / ${candidate.sector}` : ""}</small>
                 </div>
                 <div className="rating-top-score">
                   <b>{candidate.draft_score.toFixed(1)}</b>
-                  <span className="rating-score-context">{strategy === "discovery" ? "研究分" : `收盘 ${candidate.base_score.toFixed(1)}`}</span>
+                  <span className="rating-score-context">{strategy === "discovery" ? "研究分" : `收盘综合 ${candidate.base_score.toFixed(1)}`}</span>
                 </div>
               </header>
               {strategy === "discovery" ? (
                 <LowPositionEvidence candidate={lowPosition} intelligence={candidate} />
               ) : candidate.update_reasons.length > 0 ? (
                 <section className="rating-top-reasons">
-                  <strong>动态调整依据</strong>
+                  <strong>收盘后新增信息</strong>
                   <ul>{candidate.update_reasons.slice(0, 3).map((reason) => <li key={reason}>{reason}</li>)}</ul>
+                </section>
+              ) : null}
+              {strategy !== "discovery" && candidate.close_information_reasons.length > 0 ? (
+                <section className="rating-top-reasons">
+                  <strong>收盘综合分已纳入</strong>
+                  <ul>{candidate.close_information_reasons.slice(0, 2).map((reason) => <li key={reason}>{reason}</li>)}</ul>
                 </section>
               ) : null}
               {strategy !== "discovery" && candidate.latest_news[0] ? (
                 <section className="discovery-catalyst">
-                  <strong>最新动态</strong>
+                  <strong>相关资讯</strong>
                   <p>{candidate.latest_news[0].title}</p>
                 </section>
               ) : null}

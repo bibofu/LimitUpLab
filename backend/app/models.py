@@ -237,10 +237,15 @@ class RecommendationIntelligenceItem(BaseModel):
     name: str
     sector: str = ""
     position_label: str | None = None
+    rule_rank: int = 0
+    rule_score: float = 0
     base_rank: int = 0
     rank: int
     base_score: float
     draft_score: float = 0
+    facts_cutoff_at: datetime | None = None
+    close_information_adjustment: float = 0
+    close_information_reasons: list[str] = Field(default_factory=list)
     news_adjustment: float = 0
     financial_adjustment: float = 0
     update_reasons: list[str] = Field(default_factory=list)
@@ -262,6 +267,8 @@ class RecommendationIntelligenceItem(BaseModel):
             payload = dict(value)
             payload.setdefault("base_rank", payload.get("rank", 0))
             payload.setdefault("draft_score", payload.get("base_score", 0))
+            payload.setdefault("rule_rank", payload.get("base_rank", 0))
+            payload.setdefault("rule_score", payload.get("base_score", 0))
             return payload
         return value
 

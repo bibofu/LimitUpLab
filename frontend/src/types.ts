@@ -434,10 +434,15 @@ export interface RecommendationIntelligenceItem {
   name: string;
   sector: string;
   position_label: string | null;
+  rule_rank: number;
+  rule_score: number;
   base_rank: number;
   rank: number;
   base_score: number;
   draft_score: number;
+  facts_cutoff_at: string | null;
+  close_information_adjustment: number;
+  close_information_reasons: string[];
   news_adjustment: number;
   financial_adjustment: number;
   update_reasons: string[];
