@@ -2,10 +2,17 @@ import os
 import unittest
 from datetime import date, datetime, timezone
 from pathlib import Path
+from unittest.mock import patch
 from uuid import uuid4
 
-from app.models import DailyReviewSnapshot, ReviewAgentReportResponse
-from app.repositories import SQLiteReviewSnapshotRepository
+from app.models import (
+    AgentPrediction,
+    DailyReviewSnapshot,
+    ReviewAgentPick,
+    ReviewAgentReportResponse,
+)
+from app.repositories import SQLiteFirstBoardRepository, SQLiteReviewSnapshotRepository
+from app.services.daily_review import review_snapshot_matches_current_predictions
 
 
 TEST_TMP_ROOT = Path(
@@ -44,6 +51,67 @@ class ReviewSnapshotRepositoryTest(unittest.TestCase):
         self.assertEqual(summaries[0].as_of_date, as_of_date)
         self.assertEqual(summaries[0].sample_size, 10)
         self.assertEqual(summaries[0].outcome_ready_count, 8)
+
+    def test_stale_snapshot_is_detected_after_official_prediction_arrives(self) -> None:
+        trade_date = date(2026, 8, 31)
+        data_as_of = date(2026, 9, 1)
+        prediction = AgentPrediction(
+            prediction_id="auction-final-000001",
+            trade_date=trade_date,
+            symbol="000001",
+            name="测试股份",
+            score=88,
+            rating="A",
+            confidence=0.8,
+            scoring_version="auction-final-v1",
+            prediction_source="live",
+            data_as_of=data_as_of,
+            facts_json={},
+            reasons=[],
+            risks=[],
+            created_at=datetime(2026, 9, 1, 1, 25, 10, tzinfo=timezone.utc),
+        )
+        report = self._snapshot(data_as_of, finding="快照早于竞价终选").report
+        first_board_repository = SQLiteFirstBoardRepository(self.database_path)
+
+        with patch.object(
+            first_board_repository,
+            "list_predictions_between",
+            return_value=[prediction],
+        ):
+            self.assertFalse(
+                review_snapshot_matches_current_predictions(
+                    report=report,
+                    first_board_repository=first_board_repository,
+                )
+            )
+
+            current_report = report.model_copy(
+                update={
+                    "sample_size": 1,
+                    "reviewed_picks": [
+                        ReviewAgentPick(
+                            trade_date=trade_date,
+                            symbol=prediction.symbol,
+                            name=prediction.name,
+                            score=prediction.score,
+                            rating=prediction.rating,
+                            confidence=prediction.confidence,
+                            prediction_source=prediction.prediction_source,
+                            data_as_of=prediction.data_as_of,
+                            evaluation_label="pending",
+                            outcome_ready=False,
+                            promoted_to_second_board=False,
+                        )
+                    ],
+                }
+            )
+            self.assertTrue(
+                review_snapshot_matches_current_predictions(
+                    report=current_report,
+                    first_board_repository=first_board_repository,
+                )
+            )
 
     @staticmethod
     def _snapshot(as_of_date: date, *, finding: str) -> DailyReviewSnapshot:

@@ -80,6 +80,25 @@ def main() -> int:
         return 0
 
     with WorkerLock(args.lock_path) as lock:
+        now = datetime.now(SHANGHAI_TZ)
+        catch_up_date = _startup_catch_up_date(
+            now,
+            snapshot_exists=SQLiteAuctionFinalRepository().get(now.date()) is not None,
+        )
+        if catch_up_date is not None:
+            try:
+                _run_once(args.report_path, catch_up_date)
+            except AuctionFinalizationError as error:
+                _write_report(
+                    args.report_path,
+                    {
+                        "status": "error",
+                        "trade_date": catch_up_date.isoformat(),
+                        "attempted_at": now.isoformat(),
+                        "error": str(error),
+                    },
+                )
+                print(f"Auction finalization catch-up failed: {error}", flush=True)
         while True:
             lock.touch()
             now = datetime.now(SHANGHAI_TZ)
@@ -105,6 +124,18 @@ def main() -> int:
                 )
                 print(f"Auction finalization deferred: {error}", flush=True)
                 time.sleep(5 if now.time() < FINAL_RETRY_DEADLINE else 60)
+
+
+def _startup_catch_up_date(
+    now: datetime,
+    *,
+    snapshot_exists: bool,
+) -> date | None:
+    """Return today's session when a late-started worker missed 09:25."""
+
+    if snapshot_exists or now.weekday() >= 5 or now.time() < FINALIZE_AT:
+        return None
+    return now.date()
 
 
 def _next_target(now: datetime) -> datetime:

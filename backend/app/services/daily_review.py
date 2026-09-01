@@ -5,13 +5,67 @@ from __future__ import annotations
 from datetime import date, datetime, timezone
 
 from app.agents.review_agent import build_review_agent_report
-from app.models import DailyReviewSnapshot, LimitUpEvent
+from app.models import (
+    AgentPrediction,
+    DailyReviewSnapshot,
+    LimitUpEvent,
+    ReviewAgentReportResponse,
+)
 from app.repositories.first_board_repository import SQLiteFirstBoardRepository
 from app.repositories.review_snapshot_repository import SQLiteReviewSnapshotRepository
+from app.repositories.scoring_policy_repository import SQLiteScoringPolicyRepository
+from app.services.evaluation_agent import select_canonical_prediction_snapshots
 from app.services.llm_provider import LLMProvider
+from app.services.scoring_policy import DEFAULT_SCORING_POLICY_VERSION
 
 
 DAILY_REVIEW_SNAPSHOT_VERSION = "daily-review-snapshot-v1"
+
+
+def review_snapshot_matches_current_predictions(
+    *,
+    report: ReviewAgentReportResponse,
+    first_board_repository: SQLiteFirstBoardRepository,
+    top_per_day: int = 10,
+) -> bool:
+    """Return whether a persisted report covers the current canonical Top-N."""
+
+    champion = SQLiteScoringPolicyRepository(
+        first_board_repository.database_path
+    ).get_champion()
+    preferred_version = (
+        champion.version if champion else DEFAULT_SCORING_POLICY_VERSION
+    )
+    predictions = select_canonical_prediction_snapshots(
+        first_board_repository.list_predictions_between(
+            report.start_date,
+            report.end_date,
+        ),
+        preferred_scoring_version=preferred_version,
+    )
+    expected = _daily_top_prediction_keys(predictions, top_per_day=top_per_day)
+    actual = {(item.trade_date, item.symbol) for item in report.reviewed_picks}
+    return actual == expected
+
+
+def _daily_top_prediction_keys(
+    predictions: list[AgentPrediction],
+    *,
+    top_per_day: int,
+) -> set[tuple[date, str]]:
+    """Select the same daily Top-N identity set used by the Review Agent."""
+
+    by_date: dict[date, list[AgentPrediction]] = {}
+    for item in predictions:
+        by_date.setdefault(item.trade_date, []).append(item)
+    selected: set[tuple[date, str]] = set()
+    for trade_date, daily in by_date.items():
+        ranked = sorted(
+            daily,
+            key=lambda item: (-item.score, -item.confidence, item.symbol),
+        )[: max(top_per_day, 0)]
+        selected.update((trade_date, item.symbol) for item in ranked)
+    return selected
 
 
 def build_daily_review_snapshot(

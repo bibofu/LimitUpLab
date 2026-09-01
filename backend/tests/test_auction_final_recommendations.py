@@ -21,7 +21,11 @@ from app.services.auction_final_recommendations import (
     finalize_auction_recommendations,
     score_auction_fact,
 )
-from scripts.run_auction_final_loop import SHANGHAI_TZ, _next_target
+from scripts.run_auction_final_loop import (
+    SHANGHAI_TZ,
+    _next_target,
+    _startup_catch_up_date,
+)
 
 
 class AuctionFinalRecommendationsTest(unittest.TestCase):
@@ -150,6 +154,17 @@ class AuctionFinalRecommendationsTest(unittest.TestCase):
         self.assertEqual(
             _next_target(after_deadline).isoformat(),
             "2026-09-01T09:25:10+08:00",
+        )
+
+    def test_late_worker_start_catches_up_missing_current_session(self) -> None:
+        after_close = datetime(2026, 8, 31, 16, 30, tzinfo=SHANGHAI_TZ)
+
+        self.assertEqual(
+            _startup_catch_up_date(after_close, snapshot_exists=False),
+            date(2026, 8, 31),
+        )
+        self.assertIsNone(
+            _startup_catch_up_date(after_close, snapshot_exists=True),
         )
 
     def _snapshot(self, trade_date: date) -> HithinkAuctionSnapshot:
