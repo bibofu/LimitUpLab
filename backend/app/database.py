@@ -601,24 +601,6 @@ def _apply_schema(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         """
-        CREATE TABLE IF NOT EXISTS auction_final_recommendation_snapshots (
-            trade_date TEXT NOT NULL,
-            scoring_version TEXT NOT NULL,
-            finalized_at TEXT NOT NULL,
-            status TEXT NOT NULL,
-            response_json TEXT NOT NULL,
-            PRIMARY KEY (trade_date, scoring_version)
-        )
-        """
-    )
-    connection.execute(
-        """
-        CREATE INDEX IF NOT EXISTS idx_auction_final_recommendation_latest
-        ON auction_final_recommendation_snapshots (trade_date DESC, finalized_at DESC)
-        """
-    )
-    connection.execute(
-        """
         CREATE TABLE IF NOT EXISTS scoring_policies (
             version TEXT PRIMARY KEY,
             parent_version TEXT,

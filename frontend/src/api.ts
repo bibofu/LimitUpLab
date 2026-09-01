@@ -2,7 +2,6 @@ import type {
   AgentChatRequest,
   AgentChatResponse,
   AgentChatStreamEvent,
-  AgentEvaluationResponse,
   ChatSessionDetail,
   ChatSessionsResponse,
   DailyBoardPromotionStat,
@@ -17,7 +16,6 @@ import type {
   LimitUpEvent,
   MarketSummary,
   PostPerformanceStat,
-  RatingBacktestResponse,
   RecommendationIntelligenceResponse,
   ReviewAgentReportResponse,
   ScoringErrorDiagnosticResponse,
@@ -206,14 +204,6 @@ export function fetchScoringErrorDiagnostic(endDate?: string, topK = 10) {
   return request<ScoringErrorDiagnosticResponse>(
     `/api/agents/scoring-error-diagnostic?${query.toString()}`,
   );
-}
-
-export function fetchRatingBacktest() {
-  return request<RatingBacktestResponse>("/api/agents/rating-backtest");
-}
-
-export function fetchRatingEvaluation() {
-  return request<AgentEvaluationResponse>("/api/agents/rating-evaluation");
 }
 
 export function fetchChatSessions(limit = 30) {

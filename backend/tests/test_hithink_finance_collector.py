@@ -227,52 +227,6 @@ class HithinkFinanceCollectorTest(unittest.TestCase):
         self.assertIn("snapshot", runner.commands[0])
         self.assertIn("002491.SZ", runner.commands[0])
 
-    def test_final_auction_snapshot_is_normalized(self) -> None:
-        runner = FakeRunner(
-            {
-                "ok": True,
-                "data": {
-                    "timestamp": 1_788_168_310_000,
-                    "auction_phase": "closed",
-                    "data_status": "final",
-                    "total": 1,
-                    "item": [
-                        {
-                            "thscode": "600640.SH",
-                            "ticker": "600640",
-                            "name": "国脉文化",
-                            "auction_price": 10.61,
-                            "auction_pct": -0.282,
-                            "auction_volume": 262,
-                            "auction_amount": 277982,
-                            "auction_unmatched": 35,
-                            "auction_turnover_pct": 0.0033,
-                            "auction_yesterday_ratio_pct": 0.7361,
-                            "auction_volume_ratio": 0.6583,
-                            "pre_close_price": 10.64,
-                            "open_price": 10.61,
-                            "last_price": 11.08,
-                            "float_market_cap": 8_770_388_847.2,
-                        }
-                    ],
-                },
-            }
-        )
-        collector = HithinkFinanceCollector(
-            executable="hithink-finance",
-            runner=runner,
-        )
-
-        snapshot = collector.collect_auction_snapshots(["600640.SH"])
-
-        self.assertEqual(snapshot.auction_phase, "closed")
-        self.assertEqual(snapshot.data_status, "final")
-        self.assertEqual(snapshot.items[0].symbol, "600640")
-        self.assertEqual(snapshot.items[0].auction_price, 10.61)
-        self.assertEqual(snapshot.items[0].auction_volume_ratio, 0.6583)
-        self.assertIn("auction-snapshot", runner.commands[0])
-        self.assertIn("final", runner.commands[0])
-
     def test_full_market_snapshot_pages_and_resolves_names(self) -> None:
         runner = SequenceRunner(
             [

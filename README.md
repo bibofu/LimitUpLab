@@ -8,7 +8,7 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 ## 项目状态
 
-`v1.0.0` 是首个可用基线，定义为基于完整收盘数据的首板复盘与次日一进二候选研究工具。`v1.1.0` 增加了双策略盘前研究和集合竞价实验。当前主线已暂停集合竞价：每天收盘后固化一进二 Top10 并进入复盘；另一条研究链路改为“低位挖掘”，从热门题材与最新催化出发，结合财报和 60 日 K 线筛选低位启动观察池，不再输出“次日首板 Top10”。历史实现详见 [V1.1 阶段里程碑](docs/V1.1_Milestone.md)。
+`v1.0.0` 是首个可用基线，定义为基于完整收盘数据的首板复盘与次日一进二候选研究工具。`v1.1.0` 增加了双策略盘前研究和集合竞价实验。当前主线已移除集合竞价运行链路：每天收盘后固化一进二 Top10 并进入复盘；另一条研究链路改为“低位挖掘”，从热门题材与最新催化出发，结合财报和 60 日 K 线筛选低位启动观察池，不再输出“次日首板 Top10”。集合竞价实验的代码固定在 `v1.1.0` 标签，设计记录见 [V1.1 阶段里程碑](docs/V1.1_Milestone.md)。
 
 当前版本已经具备可本地运行和单机部署的完整 MVP：
 
@@ -188,8 +188,6 @@ Outcome 完整性检查严格按本地市场交易日对齐 D+1、D+3 和 D+5。
 `/api/agents/prediction-quality-audit` 会先按 `live / historical_backtest` 和评分版本拆分预测，再按交易日选择完整批次；未成熟、Outcome 待回填和完整样本分开统计，避免把未来尚不存在的结果算成失败，也避免把历史重算样本混入真实当日 Top10。
 
 `/api/agents/factor-signal-diagnostic` 提供独立的快速证伪诊断：单因子按交易日计算横截面 IC，并使用日期级符号翻转检验和 Bonferroni 校正；分位比较保留同分样本；联合 Lasso 使用按交易日留一的样本外预测和日期块 bootstrap。该报告只输出“当前未发现可复现信号”或“信号需要继续验证”，不会把小样本下的未显著误写成“因子已被证明为噪声”。
-
-`/api/agents/first-board-discovery-diagnostic` 仅保留用于历史 `first-board-discovery-v2` 实验：它以目标日是否收盘首板作为 Outcome，不能用于评价当前低位挖掘 v3。低位挖掘不再把“次日是否首板”当作唯一目标，后续将单独定义趋势启动、收益和回撤的前向验收口径。
 
 `/api/agents/scoring-error-diagnostic` 从结果完整日期中识别 Top10 高分误选和 Top10 之外的晋级漏选，并对 14 个评分因子逐一做排序消融。诊断只提出“观察上调、观察下调或暂不调整”的影子假设；样本不足、Outcome 不完整或未通过 walk-forward 门槛时不会改写 Champion。
 
@@ -551,7 +549,6 @@ powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mo
 | `GET` | `/api/agents/review-snapshots` | 已固化每日复盘日期与摘要 |
 | `GET` | `/api/agents/prediction-quality-audit` | 预测来源、覆盖率和基线审计 |
 | `GET` | `/api/agents/factor-signal-diagnostic` | 日期阻断的因子快速证伪诊断 |
-| `GET` | `/api/agents/first-board-discovery-diagnostic` | 首板挖掘前向 Outcome 与日期阻断诊断 |
 | `GET` | `/api/agents/scoring-error-diagnostic` | 高分误选、晋级漏选与逐因子消融 |
 | `GET` | `/api/agents/scoring-policies` | Champion/Challenger 状态 |
 | `GET` | `/api/agents/data-health` | Agent 数据健康 |

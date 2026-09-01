@@ -480,54 +480,6 @@ export interface RecommendationIntelligenceResponse {
   warnings: string[];
 }
 
-export interface RatingBacktestBucket {
-  rating: string;
-  sample_size: number;
-  outcome_ready_count: number;
-  avg_next_open_pct: number | null;
-  avg_next_high_pct: number | null;
-  avg_next_close_pct: number | null;
-  avg_next_open_to_high_pct: number | null;
-  avg_next_open_to_close_pct: number | null;
-  avg_next_open_to_low_pct: number | null;
-  avg_three_day_high_pct: number | null;
-  avg_three_day_close_pct: number | null;
-  avg_three_day_open_to_close_pct: number | null;
-  avg_max_drawdown_from_next_open_3d: number | null;
-  next_open_to_close_positive_rate: number | null;
-  next_open_to_close_large_loss_rate: number | null;
-  promoted_to_second_board_rate: number | null;
-}
-
-export interface RatingBacktestFailureSample {
-  symbol: string;
-  name: string;
-  trade_date: string;
-  rating: string;
-  score: number;
-  next_close_pct: number | null;
-  next_open_to_close_pct: number | null;
-  next_open_to_low_pct: number | null;
-  three_day_close_pct: number | null;
-  three_day_open_to_close_pct: number | null;
-  promoted_to_second_board: boolean;
-  reasons: string[];
-  risks: string[];
-}
-
-export interface RatingBacktestResponse {
-  start_date: string;
-  end_date: string;
-  trade_dates: string[];
-  sample_size: number;
-  outcome_ready_count: number;
-  buckets: RatingBacktestBucket[];
-  failure_samples: RatingBacktestFailureSample[];
-  observations: string[];
-  warnings: string[];
-  generated_by: string;
-}
-
 export interface PredictionQualityCohort {
   dimension: "prediction_source" | "scoring_version";
   value: string;
@@ -617,51 +569,6 @@ export interface FirstBoardCriticResponse {
   missing_data: string[];
   critic_warnings: string[];
   review_questions: string[];
-  generated_by: string;
-}
-
-export interface AgentEvaluationItem {
-  prediction_id: string;
-  trade_date: string;
-  symbol: string;
-  name: string;
-  score: number;
-  rating: string;
-  confidence: number;
-  prediction_source: "live" | "historical_backtest";
-  data_as_of: string;
-  evaluation_label:
-    | "success"
-    | "partial"
-    | "miss"
-    | "avoid_success"
-    | "false_negative"
-    | "pending";
-  outcome_ready: boolean;
-  promoted_to_second_board: boolean;
-  next_high_pct: number | null;
-  next_close_pct: number | null;
-  next_open_to_high_pct: number | null;
-  next_open_to_low_pct: number | null;
-  next_open_to_close_pct: number | null;
-  three_day_high_pct: number | null;
-  three_day_close_pct: number | null;
-  three_day_open_to_close_pct: number | null;
-  max_drawdown_from_next_open_3d: number | null;
-  lesson: string;
-  scoring_suggestion: string;
-}
-
-export interface AgentEvaluationResponse {
-  start_date: string;
-  end_date: string;
-  prediction_count: number;
-  outcome_ready_count: number;
-  source_counts: Record<string, number>;
-  label_counts: Record<string, number>;
-  evaluations: AgentEvaluationItem[];
-  summary: string[];
-  warnings: string[];
   generated_by: string;
 }
 

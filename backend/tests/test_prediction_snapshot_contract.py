@@ -104,7 +104,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
             1,
         )
 
-    def test_auction_final_can_replace_provisional_live_snapshot(self) -> None:
+    def test_canonical_snapshot_can_replace_provisional_live_snapshot(self) -> None:
         self._persist_live()
         original = self.repository.get_live_prediction_snapshot(self.trade_date)
         stored = self.repository.list_predictions_between(
@@ -117,7 +117,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
         )
         final_created_at = stored.created_at + timedelta(days=1)
         final_data_as_of = self.trade_date + timedelta(days=1)
-        final_version = "auction-final-v1"
+        final_version = "close-canonical-v1"
         final_snapshot = original.model_copy(
             update={
                 "candidates": [final_rating],
@@ -126,7 +126,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
         )
         final_prediction = stored.model_copy(
             update={
-                "prediction_id": "auction-final-prediction",
+                "prediction_id": "canonical-prediction",
                 "score": final_rating.score,
                 "scoring_version": final_version,
                 "data_as_of": final_data_as_of,
@@ -153,7 +153,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
         assert after is not None
         self.assertEqual(after.generated_by, final_version)
         self.assertEqual(after.data_as_of, final_data_as_of)
-        self.assertEqual([item.prediction_id for item in rows], ["auction-final-prediction"])
+        self.assertEqual([item.prediction_id for item in rows], ["canonical-prediction"])
 
     def test_same_day_live_snapshot_is_reviewable_without_auction(self) -> None:
         trade_date = date(2026, 8, 31)

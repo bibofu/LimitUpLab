@@ -83,39 +83,6 @@ class HithinkMarketSnapshot:
 
 
 @dataclass(frozen=True)
-class HithinkAuctionFact:
-    """One stock's normalized closing call-auction facts."""
-
-    symbol: str
-    thscode: str
-    name: str
-    auction_price: float | None
-    auction_pct: float | None
-    auction_volume: float | None
-    auction_amount: float | None
-    auction_unmatched: float | None
-    auction_turnover_pct: float | None
-    auction_yesterday_ratio_pct: float | None
-    auction_volume_ratio: float | None
-    previous_close: float | None
-    open_price: float | None
-    last_price: float | None
-    float_market_cap: float | None
-
-
-@dataclass(frozen=True)
-class HithinkAuctionSnapshot:
-    """Final call-auction snapshot for an explicit stock list."""
-
-    captured_at: datetime
-    auction_phase: str
-    data_status: str
-    items: list[HithinkAuctionFact]
-    total: int = 0
-    source: str = HITHINK_SOURCE
-
-
-@dataclass(frozen=True)
 class HithinkIndexCatalogFact:
     """One industry or concept index exposed by Tonghuashun."""
 
@@ -318,36 +285,6 @@ class HithinkFinanceCollector:
             str(len(normalized_codes)),
         )
         return _market_snapshot_from_data(_dict(envelope.get("data")))
-
-    def collect_auction_snapshots(
-        self,
-        thscodes: Sequence[str],
-        *,
-        stage: str = "final",
-    ) -> HithinkAuctionSnapshot:
-        """Return current-day call-auction facts for a bounded stock list."""
-
-        if stage not in {"final", "current"}:
-            raise ValueError("stage must be final or current")
-        normalized_codes = list(
-            dict.fromkeys(code.strip() for code in thscodes if code.strip())
-        )[:100]
-        if not normalized_codes:
-            return HithinkAuctionSnapshot(
-                captured_at=datetime.now(timezone.utc),
-                auction_phase="unknown",
-                data_status="empty",
-                items=[],
-            )
-        envelope = self._invoke(
-            "market",
-            "auction-snapshot",
-            "--thscodes",
-            ",".join(normalized_codes),
-            "--stage",
-            stage,
-        )
-        return _auction_snapshot_from_data(_dict(envelope.get("data")))
 
     def collect_full_market_snapshot(
         self,
@@ -703,47 +640,6 @@ def _market_snapshot_from_data(data: dict[str, Any]) -> HithinkMarketSnapshot:
     )
     return HithinkMarketSnapshot(
         captured_at=captured_at,
-        items=items,
-        total=_integer(data.get("total")) or len(items),
-    )
-
-
-def _auction_snapshot_from_data(data: dict[str, Any]) -> HithinkAuctionSnapshot:
-    """Normalize closing auction fields without inventing missing values."""
-
-    items = [
-        HithinkAuctionFact(
-            symbol=_symbol(row),
-            thscode=str(row.get("thscode") or ""),
-            name=str(row.get("name") or ""),
-            auction_price=_number(row.get("auction_price")),
-            auction_pct=_number(row.get("auction_pct")),
-            auction_volume=_number(row.get("auction_volume")),
-            auction_amount=_number(row.get("auction_amount")),
-            auction_unmatched=_number(row.get("auction_unmatched")),
-            auction_turnover_pct=_number(row.get("auction_turnover_pct")),
-            auction_yesterday_ratio_pct=_number(
-                row.get("auction_yesterday_ratio_pct")
-            ),
-            auction_volume_ratio=_number(row.get("auction_volume_ratio")),
-            previous_close=_number(row.get("pre_close_price")),
-            open_price=_number(row.get("open_price")),
-            last_price=_number(row.get("last_price")),
-            float_market_cap=_number(row.get("float_market_cap")),
-        )
-        for row in _list(data.get("item"))
-        if _symbol(row)
-    ]
-    timestamp = _integer(data.get("timestamp"))
-    captured_at = (
-        datetime.fromtimestamp(timestamp / 1000, tz=timezone.utc)
-        if timestamp is not None
-        else datetime.now(timezone.utc)
-    )
-    return HithinkAuctionSnapshot(
-        captured_at=captured_at,
-        auction_phase=_text(data.get("auction_phase")) or "unknown",
-        data_status=_text(data.get("data_status")) or "unknown",
         items=items,
         total=_integer(data.get("total")) or len(items),
     )

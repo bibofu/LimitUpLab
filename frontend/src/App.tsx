@@ -62,8 +62,6 @@ import {
   fetchFailedLimitUpEvents,
   fetchFirstBoardEvents,
   fetchMarketSummary,
-  fetchRatingBacktest,
-  fetchRatingEvaluation,
   fetchScoringErrorDiagnostic,
   fetchRecentLimitUpEvents,
   fetchStockKLine,
@@ -78,7 +76,6 @@ import {
 import type {
   AgentChatStreamStage,
   AgentStockMention,
-  AgentEvaluationResponse,
   ChatSessionDetail,
   ChatSessionMessage,
   ChatSessionSummary,
@@ -94,7 +91,6 @@ import type {
   FinanceNewsItem,
   LimitUpEvent,
   MarketSummary,
-  RatingBacktestResponse,
   RecommendationIntelligenceItem,
   RecommendationIntelligenceResponse,
   ReviewAgentPick,
@@ -119,8 +115,6 @@ interface DashboardData {
   recent: LimitUpEvent[];
   firstBoardRatings: FirstBoardRatingsResponse;
   dailyBoardPromotion: DailyBoardPromotionStat[];
-  ratingBacktest: RatingBacktestResponse;
-  ratingEvaluation: AgentEvaluationResponse;
 }
 
 interface ChatMessage {
@@ -753,8 +747,6 @@ export function App() {
         recent,
         firstBoardRatings,
         dailyBoardPromotion,
-        ratingBacktest,
-        ratingEvaluation,
       ] = await Promise.all([
         fetchMarketSummary(),
         fetchFirstBoardEvents(),
@@ -763,8 +755,6 @@ export function App() {
         fetchRecentLimitUpEvents(5),
         fetchFirstBoardRatings(),
         fetchDailyBoardPromotion(5),
-        fetchRatingBacktest(),
-        fetchRatingEvaluation(),
       ]);
 
       setData({
@@ -775,8 +765,6 @@ export function App() {
         recent,
         firstBoardRatings,
         dailyBoardPromotion,
-        ratingBacktest,
-        ratingEvaluation,
       });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "加载数据失败");
@@ -1381,11 +1369,7 @@ function ReviewDashboard({ data }: { data: DashboardData }) {
 
   return (
     <>
-      <HighScoreReviewPanel
-        backtest={data.ratingBacktest}
-        evaluation={data.ratingEvaluation}
-        latestTradeDate={data.summary.trade_date}
-      />
+      <HighScoreReviewPanel latestTradeDate={data.summary.trade_date} />
       <DailyBoardPromotionPanel stats={data.dailyBoardPromotion} />
       <DragonTigerReviewPanel tradeDate={data.summary.trade_date} />
     </>
@@ -1690,15 +1674,7 @@ function DailyBoardPromotionPanel({ stats }: { stats: DailyBoardPromotionStat[] 
   );
 }
 
-function HighScoreReviewPanel({
-  backtest,
-  evaluation,
-  latestTradeDate,
-}: {
-  backtest: RatingBacktestResponse;
-  evaluation: AgentEvaluationResponse;
-  latestTradeDate: string;
-}) {
+function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) {
   const [report, setReport] = useState<ReviewAgentReportResponse | null>(null);
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
@@ -1771,12 +1747,6 @@ function HighScoreReviewPanel({
   const successRate = readyCount > 0 && report
     ? report.success_count / readyCount
     : null;
-  const evaluationReadyRate = evaluation.prediction_count > 0
-    ? evaluation.outcome_ready_count / evaluation.prediction_count
-    : 0;
-  const backtestReadyRate = backtest.sample_size > 0
-    ? backtest.outcome_ready_count / backtest.sample_size
-    : 0;
   const reviewedPicks = report?.reviewed_picks ?? [];
   const reviewDates = groupReviewPicksByDate(reviewedPicks);
   const trackDates = report ? buildReviewTrackDates(reviewDates, report.end_date) : [];
@@ -1832,7 +1802,7 @@ function HighScoreReviewPanel({
             <strong>
               {report
                 ? `${report.start_date} 至 ${report.end_date}`
-                : `${evaluation.start_date} 至 ${evaluation.end_date || latestTradeDate}`}
+                : `截至 ${latestTradeDate}`}
             </strong>
             <p>
               {report
@@ -1922,39 +1892,10 @@ function HighScoreReviewPanel({
             />
           </>
         ) : (
-          <>
-            <div className="review-agent-metrics">
-              <span>
-                <small>预测快照</small>
-                <strong>{evaluation.prediction_count}</strong>
-              </span>
-              <span>
-                <small>走势覆盖</small>
-                <strong>{formatPercent(evaluationReadyRate)}</strong>
-              </span>
-              <span>
-                <small>误判</small>
-                <strong>{evaluation.label_counts.miss ?? 0}</strong>
-              </span>
-              <span>
-                <small>漏判</small>
-                <strong>{evaluation.label_counts.false_negative ?? 0}</strong>
-              </span>
-              <span>
-                <small>目标口径</small>
-                <strong>5日 x Top10</strong>
-              </span>
-              <span>
-                <small>回测覆盖</small>
-                <strong>{formatPercent(backtestReadyRate)}</strong>
-              </span>
-            </div>
-
-            <div className="review-agent-empty">
-              <strong>暂无 Top10 追踪明细</strong>
-              <p>当前只能看到已有预测概览，明细加载失败时请检查后端 Review Agent 接口。</p>
-            </div>
-          </>
+          <div className="review-agent-empty">
+            <strong>暂无 Top10 追踪明细</strong>
+            <p>请先完成收盘数据同步与每日预测固化，再查看近期复盘。</p>
+          </div>
         )}
       </div>
     </Panel>
@@ -2811,276 +2752,6 @@ function RecommendationLiveEvidence({
 function formatNullableSigned(value: number | null) {
   return value === null ? "暂无" : `${formatSigned(value, 1)}%`;
 }
-
-function RatingBacktestPanel({ backtest }: { backtest: RatingBacktestResponse }) {
-  /** Show whether the current first-board scoring rubric has worked recently. */
-
-  const readyRate = backtest.sample_size > 0
-    ? backtest.outcome_ready_count / backtest.sample_size
-    : 0;
-
-  return (
-    <Panel title="评分回测与自我评价" icon={<BarChart3 size={18} />}>
-      <div className="backtest-panel">
-        <div className="backtest-summary">
-          <div>
-            <span>回测区间</span>
-            <strong>
-              {backtest.start_date} 至 {backtest.end_date}
-            </strong>
-          </div>
-          <div>
-            <span>样本数量</span>
-            <strong>{backtest.sample_size} 个</strong>
-          </div>
-          <div>
-            <span>走势覆盖</span>
-            <strong>{formatPercent(readyRate)}</strong>
-          </div>
-          <div>
-            <span>生成方式</span>
-            <strong>{backtest.generated_by}</strong>
-          </div>
-        </div>
-
-        <div className="backtest-buckets">
-          {backtest.buckets.map((bucket) => (
-            <article className="backtest-bucket" key={bucket.rating}>
-              <header>
-                <span className={`rating-badge rating-${bucket.rating.toLowerCase()}`}>
-                  {bucket.rating}
-                </span>
-                <div>
-                  <strong>{bucket.outcome_ready_count} / {bucket.sample_size}</strong>
-                  <span>已完成走势样本</span>
-                </div>
-              </header>
-              <dl>
-                <div>
-                  <dt>开盘后最高</dt>
-                  <dd>{formatOptionalPercent(bucket.avg_next_open_to_high_pct)}</dd>
-                </div>
-                <div>
-                  <dt>开盘后收盘</dt>
-                  <dd>{formatOptionalPercent(bucket.avg_next_open_to_close_pct)}</dd>
-                </div>
-                <div>
-                  <dt>次日上涨率</dt>
-                  <dd>
-                    {bucket.next_open_to_close_positive_rate === null
-                      ? "暂无"
-                      : formatPercent(bucket.next_open_to_close_positive_rate)}
-                  </dd>
-                </div>
-                <div>
-                  <dt>大跌率</dt>
-                  <dd>
-                    {bucket.next_open_to_close_large_loss_rate === null
-                      ? "暂无"
-                      : formatPercent(bucket.next_open_to_close_large_loss_rate)}
-                  </dd>
-                </div>
-              </dl>
-            </article>
-          ))}
-        </div>
-
-        <div className="backtest-insights">
-          <section>
-            <h3>回测观察</h3>
-            {backtest.observations.length > 0 ? (
-              <ul>
-                {backtest.observations.map((observation) => (
-                  <li key={observation}>{observation}</li>
-                ))}
-              </ul>
-            ) : (
-              <p>暂无足够样本形成稳定观察。</p>
-            )}
-            {backtest.warnings.length > 0 ? (
-              <div className="backtest-warnings">
-                {backtest.warnings.map((warning) => (
-                  <span key={warning}>{warning}</span>
-                ))}
-              </div>
-            ) : null}
-          </section>
-
-          <section>
-            <h3>高分弱表现样本</h3>
-            {backtest.failure_samples.length > 0 ? (
-              <div className="failure-sample-list">
-                {backtest.failure_samples.slice(0, 4).map((sample) => (
-                  <article className="failure-sample-card" key={`${sample.symbol}-${sample.trade_date}`}>
-                    <header>
-                      <div>
-                        <strong>{sample.name}</strong>
-                        <span>{sample.symbol} / {sample.trade_date}</span>
-                      </div>
-                      <span className={`rating-badge rating-${sample.rating.toLowerCase()}`}>
-                        {sample.rating}
-                      </span>
-                    </header>
-                    <dl>
-                      <div>
-                        <dt>评分</dt>
-                        <dd>{sample.score.toFixed(1)}</dd>
-                      </div>
-                      <div>
-                        <dt>次日开收</dt>
-                        <dd>{formatOptionalPercent(sample.next_open_to_close_pct)}</dd>
-                      </div>
-                      <div>
-                        <dt>三日开收</dt>
-                        <dd>{formatOptionalPercent(sample.three_day_open_to_close_pct)}</dd>
-                      </div>
-                    </dl>
-                    <p>{sample.risks[0] ?? sample.reasons[0] ?? "需要结合分时与题材强度复盘。"}</p>
-                  </article>
-                ))}
-              </div>
-            ) : (
-              <p>当前没有可展示的高分弱表现样本。</p>
-            )}
-          </section>
-        </div>
-      </div>
-    </Panel>
-  );
-}
-
-function RatingEvaluationPanel({ evaluation }: { evaluation: AgentEvaluationResponse }) {
-  /** Render saved prediction review results from the Evaluation Agent. */
-
-  const readyRate = evaluation.prediction_count > 0
-    ? evaluation.outcome_ready_count / evaluation.prediction_count
-    : 0;
-  const priorityItems = evaluation.evaluations.slice(0, 6);
-
-  return (
-    <Panel title="Evaluation Agent 预测复盘" icon={<ShieldAlert size={18} />}>
-      <div className="evaluation-panel">
-        <div className="evaluation-summary">
-          <div>
-            <span>复盘区间</span>
-            <strong>{evaluation.start_date} 至 {evaluation.end_date}</strong>
-          </div>
-          <div>
-            <span>预测快照</span>
-            <strong>
-              实时 {evaluation.source_counts.live ?? 0} / 回测 {evaluation.source_counts.historical_backtest ?? 0}
-            </strong>
-          </div>
-          <div>
-            <span>Outcome 覆盖</span>
-            <strong>{formatPercent(readyRate)}</strong>
-          </div>
-          <div>
-            <span>误判 / 漏判</span>
-            <strong>
-              {evaluation.label_counts.miss ?? 0} / {evaluation.label_counts.false_negative ?? 0}
-            </strong>
-          </div>
-        </div>
-
-        <div className="evaluation-labels">
-          {evaluationLabelOrder.map((label) => (
-            <div className={`evaluation-label label-${label}`} key={label}>
-              <span>{evaluationLabelCopy[label]}</span>
-              <strong>{evaluation.label_counts[label] ?? 0}</strong>
-            </div>
-          ))}
-        </div>
-
-        <div className="evaluation-insights">
-          <section>
-            <h3>复盘摘要</h3>
-            {evaluation.summary.length > 0 ? (
-              <ul>
-                {evaluation.summary.map((item) => (
-                  <li key={item}>{item}</li>
-                ))}
-              </ul>
-            ) : (
-              <p>暂无可展示的复盘摘要。</p>
-            )}
-            {evaluation.warnings.length > 0 ? (
-              <div className="backtest-warnings">
-                {evaluation.warnings.map((warning) => (
-                  <span key={warning}>{warning}</span>
-                ))}
-              </div>
-            ) : null}
-          </section>
-
-          <section>
-            <h3>重点样本</h3>
-            {priorityItems.length > 0 ? (
-              <div className="evaluation-card-list">
-                {priorityItems.map((item) => (
-                  <article
-                    className={`evaluation-card label-${item.evaluation_label}`}
-                    key={item.prediction_id}
-                  >
-                    <header>
-                      <div>
-                        <strong>{item.name}</strong>
-                        <span>
-                          {item.symbol} / {item.trade_date} / {item.prediction_source === "live" ? "实时预测" : "历史回测"}
-                        </span>
-                      </div>
-                      <b>{evaluationLabelCopy[item.evaluation_label]}</b>
-                    </header>
-                    <dl>
-                      <div>
-                        <dt>评分</dt>
-                        <dd>{item.rating} / {item.score.toFixed(1)}</dd>
-                      </div>
-                      <div>
-                        <dt>晋级二板</dt>
-                        <dd>{item.promoted_to_second_board ? "是" : "否"}</dd>
-                      </div>
-                      <div>
-                        <dt>次日开收</dt>
-                        <dd>{formatOptionalPercent(item.next_open_to_close_pct)}</dd>
-                      </div>
-                      <div>
-                        <dt>三日最大回撤</dt>
-                        <dd>{formatOptionalPercent(item.max_drawdown_from_next_open_3d)}</dd>
-                      </div>
-                    </dl>
-                    <p>{item.lesson}</p>
-                    <p>{item.scoring_suggestion}</p>
-                  </article>
-                ))}
-              </div>
-            ) : (
-              <p>暂无重点复盘样本。</p>
-            )}
-          </section>
-        </div>
-      </div>
-    </Panel>
-  );
-}
-
-const evaluationLabelOrder = [
-  "success",
-  "partial",
-  "miss",
-  "false_negative",
-  "avoid_success",
-  "pending",
-] as const;
-
-const evaluationLabelCopy: Record<(typeof evaluationLabelOrder)[number], string> = {
-  success: "成功",
-  partial: "部分验证",
-  miss: "误判",
-  false_negative: "漏判",
-  avoid_success: "规避有效",
-  pending: "待验证",
-};
 
 function DetailView({ view, data }: { view: StockListViewKey; data: DashboardData }) {
   /** Render one of the latest-day stock list views. */
