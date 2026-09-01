@@ -1,6 +1,6 @@
 import os
 import unittest
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from unittest.mock import Mock, patch
 from uuid import uuid4
@@ -10,7 +10,7 @@ from app.collectors.hithink_finance_collector import (
     HithinkMarketSnapshot,
     HithinkMarketSnapshotFact,
 )
-from app.models import StockNewsFacts, StockNewsItem
+from app.models import LimitUpEvent, StockNewsFacts, StockNewsItem
 from app.repositories import (
     SQLiteFirstBoardDiscoveryRepository,
     SQLiteFirstBoardRepository,
@@ -20,6 +20,7 @@ from app.repositories import (
 from app.routers.agents import get_recommendation_intelligence
 from app.services.recommendation_intelligence import (
     _BaseCandidate,
+    _load_base_candidates,
     refresh_recommendation_intelligence,
 )
 
@@ -176,6 +177,46 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         self.assertEqual(relay[0].rank, 1)
         self.assertEqual(relay[0].news_adjustment, 3.0)
         self.assertEqual(relay[1].news_adjustment, -4.0)
+
+    def test_relay_base_pool_excludes_chinext_candidates(self) -> None:
+        trade_date = date(2026, 9, 1)
+        main_board = LimitUpEvent(
+            symbol="002001",
+            name="主板样本",
+            trade_date=trade_date,
+            first_limit_time=time(9, 40),
+            last_limit_time=time(9, 40),
+            seal_count=1,
+            break_count=0,
+            closed_limit=True,
+            board_height=1,
+            amount=800_000_000,
+            turnover_rate=6.0,
+            industry="机器人",
+            concept="机器人",
+            next_open_pct=0.0,
+            next_high_pct=0.0,
+            next_close_pct=0.0,
+            three_day_return_pct=0.0,
+            five_day_return_pct=0.0,
+            continued_next_day=False,
+        )
+        chinext = main_board.model_copy(
+            update={"symbol": "300189", "name": "创业板样本"}
+        )
+        self.limit_repo.replace_events([main_board, chinext])
+
+        candidates, _, relay_date, _ = _load_base_candidates(
+            limit_up_repository=self.limit_repo,
+            first_board_repository=self.first_repo,
+            discovery_repository=self.discovery_repo,
+        )
+
+        relay_symbols = [
+            item.symbol for item in candidates if item.strategy == "relay"
+        ]
+        self.assertEqual(relay_date, trade_date)
+        self.assertEqual(relay_symbols, ["002001"])
 
     @staticmethod
     def _quotes(now: datetime) -> HithinkMarketSnapshot:

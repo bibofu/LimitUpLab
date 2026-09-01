@@ -22,7 +22,13 @@ class PredictionSnapshotContractTest(unittest.TestCase):
             / f"prediction-snapshot-{uuid4().hex}.sqlite"
         )
         self.repository = SQLiteFirstBoardRepository(self.database_path)
-        self.trade_date = max(item.trade_date for item in SAMPLE_EVENTS)
+        self.events = [
+            item.model_copy(update={"symbol": "001489"})
+            if item.symbol == "301489"
+            else item
+            for item in SAMPLE_EVENTS
+        ]
+        self.trade_date = max(item.trade_date for item in self.events)
 
     def tearDown(self) -> None:
         for path in (
@@ -223,7 +229,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
     def test_api_and_agent_tool_return_same_live_snapshot(self) -> None:
         self._persist_live()
         tool_result = AgentToolRegistry(
-            events=SAMPLE_EVENTS,
+            events=self.events,
             first_board_repository=self.repository,
         ).first_board_ratings(self.trade_date)
 
@@ -231,7 +237,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
             patch("app.routers.agents.SQLiteFirstBoardRepository", return_value=self.repository),
             patch("app.routers.agents.get_limit_up_repository") as limit_repository,
         ):
-            limit_repository.return_value.list_events.return_value = SAMPLE_EVENTS
+            limit_repository.return_value.list_events.return_value = self.events
             api_result = get_first_board_ratings(self.trade_date)
 
         self.assertEqual(tool_result.output, api_result)
@@ -244,7 +250,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
             patch("app.routers.agents.SQLiteFirstBoardRepository", return_value=self.repository),
             patch("app.routers.agents.get_limit_up_repository") as limit_repository,
         ):
-            limit_repository.return_value.list_events.return_value = SAMPLE_EVENTS
+            limit_repository.return_value.list_events.return_value = self.events
             api_result = get_first_board_ratings(self.trade_date, full_pool=True)
 
         self.assertEqual(api_result.snapshot_source, "calculated")
@@ -252,7 +258,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
 
     def _persist_live(self) -> int:
         return persist_agent_predictions_for_dates(
-            events=SAMPLE_EVENTS,
+            events=self.events,
             trade_dates=[self.trade_date],
             repository=self.repository,
             top_per_day=10,

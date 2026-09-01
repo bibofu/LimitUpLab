@@ -14,6 +14,7 @@ from app.models import (
 )
 from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
 from app.services.scoring_policy import DEFAULT_SCORING_POLICY_VERSION
+from app.services.relay_universe import is_relay_candidate_symbol
 
 
 EVALUATION_AGENT_VERSION = "first-board-evaluation-mvp-v1"
@@ -88,10 +89,15 @@ def persist_agent_predictions_for_dates(
             trade_date=trade_date,
             first_board_repository=repository,
         )
+        eligible_candidates = [
+            item
+            for item in ratings.candidates
+            if is_relay_candidate_symbol(item.facts.symbol)
+        ]
         candidates = (
-            ratings.candidates
+            eligible_candidates
             if top_per_day is None
-            else ratings.candidates[: max(top_per_day, 0)]
+            else eligible_candidates[: max(top_per_day, 0)]
         )
         predictions = [
             _prediction_from_rating(

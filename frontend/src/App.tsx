@@ -999,7 +999,12 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
 
   const draftBaseDate = mode === "discovery" ? discovery?.data_as_of : ratings.trade_date;
   const draftCandidates = intelligence?.items
-    .filter((item) => item.strategy === mode && item.base_trade_date === draftBaseDate)
+    .filter(
+      (item) =>
+        item.strategy === mode &&
+        item.base_trade_date === draftBaseDate &&
+        (mode !== "relay" || isRelayCandidateSymbol(item.symbol)),
+    )
     .sort((left, right) => left.rank - right.rank)
     .slice(0, mode === "discovery" ? 15 : 10)
     .map((item) => ({
@@ -2506,6 +2511,10 @@ function trackedReturnLabel(value: number | null) {
   return "累计持平";
 }
 
+function isRelayCandidateSymbol(symbol: string) {
+  return !symbol.startsWith("300") && !symbol.startsWith("301");
+}
+
 function FirstBoardRatingPanel({
   ratings,
   intelligence,
@@ -2515,7 +2524,10 @@ function FirstBoardRatingPanel({
 }) {
   /** Render the first-board rating summary generated from deterministic facts. */
 
-  const topCandidates = ratings.candidates.slice(0, 10);
+  const eligibleCandidates = ratings.candidates.filter((candidate) =>
+    isRelayCandidateSymbol(candidate.facts.symbol),
+  );
+  const topCandidates = eligibleCandidates.slice(0, 10);
   const topCandidate = topCandidates[0];
 
   return (
@@ -2525,7 +2537,7 @@ function FirstBoardRatingPanel({
           <span>{ratings.trade_date}</span>
           <span>{ratings.snapshot_source === "live" ? "已固化预测" : "动态研究结果"}</span>
           {ratings.data_as_of ? <span>数据截止 {ratings.data_as_of}</span> : null}
-          <strong>{ratings.candidates.length} 只入池</strong>
+          <strong>{eligibleCandidates.length} 只入池</strong>
           <strong>{ratings.filtered_out.length} 只过滤</strong>
           <strong>{topCandidate ? `${topCandidate.rating} / ${topCandidate.score.toFixed(1)}` : "暂无候选"}</strong>
         </div>

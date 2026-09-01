@@ -45,6 +45,7 @@ from app.services.first_board_enrichment import refresh_first_board_enrichment_s
 from app.services.outcome_completeness import build_top10_outcome_completeness
 from app.services.limit_up_reason import merge_limit_up_reasons
 from app.services.first_board_discovery import refresh_first_board_discovery
+from app.services.relay_universe import is_relay_candidate_symbol
 
 
 PostBarCollector = Callable[[str, date, date], list[StockDailyBar]]
@@ -311,7 +312,11 @@ def run_daily_update(
         trade_date=trade_date,
         first_board_repository=first_board_repo,
     )
-    top_ratings = ratings.candidates[: max(top_targets, 0)]
+    top_ratings = [
+        item
+        for item in ratings.candidates
+        if is_relay_candidate_symbol(item.facts.symbol)
+    ][: max(top_targets, 0)]
     if top_ratings:
         top = top_ratings[0]
         report.top_candidate = {

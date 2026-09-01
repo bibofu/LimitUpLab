@@ -30,6 +30,7 @@ from app.repositories import (
 )
 from app.services.stock_news import collect_stock_news
 from app.services.first_board_discovery import FIRST_BOARD_DISCOVERY_VERSION
+from app.services.relay_universe import is_relay_candidate_symbol
 
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
@@ -274,6 +275,11 @@ def _load_base_candidates(
     if relay is None:
         warnings.append("一进二接力快照不可用")
     else:
+        relay_candidates = [
+            item
+            for item in relay.candidates
+            if is_relay_candidate_symbol(item.facts.symbol)
+        ]
         candidates.extend(
             _BaseCandidate(
                 strategy="relay",
@@ -289,7 +295,7 @@ def _load_base_candidates(
                 rank=index,
                 base_score=item.score,
             )
-            for index, item in enumerate(relay.candidates[:30], start=1)
+            for index, item in enumerate(relay_candidates[:30], start=1)
         )
     return candidates, discovery_date, relay_date, warnings
 

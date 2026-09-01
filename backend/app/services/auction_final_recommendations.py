@@ -27,6 +27,7 @@ from app.repositories import (
     SQLiteScoringPolicyRepository,
 )
 from app.services.recommendation_intelligence import refresh_recommendation_intelligence
+from app.services.relay_universe import is_relay_candidate_symbol
 
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
@@ -392,7 +393,14 @@ def _load_base_candidates(
                 score=item.score,
                 scoring_version=ratings.generated_by,
             )
-            for index, item in enumerate(ratings.candidates, start=1)
+            for index, item in enumerate(
+                (
+                    item
+                    for item in ratings.candidates
+                    if is_relay_candidate_symbol(item.facts.symbol)
+                ),
+                start=1,
+            )
         )
     return candidates, discovery_date, relay_date, warnings
 
@@ -419,7 +427,11 @@ def _ensure_relay_final_prediction(
     """
 
     relay_candidates = sorted(
-        [item for item in response.candidates if item.strategy == "relay"],
+        [
+            item
+            for item in response.candidates
+            if item.strategy == "relay" and is_relay_candidate_symbol(item.symbol)
+        ],
         key=lambda item: item.final_rank,
     )
     if not relay_candidates or response.relay_base_date is None:
