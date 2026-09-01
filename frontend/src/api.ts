@@ -29,6 +29,10 @@ import type {
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
 const inflightGetRequests = new Map<string, Promise<unknown>>();
+const resolvedGetRequests = new Map<
+  string,
+  { expiresAt: number; value: unknown }
+>();
 
 /** Fetch JSON from the backend and surface non-2xx responses as errors. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
@@ -57,6 +61,22 @@ function dedupedGet<T>(path: string): Promise<T> {
   });
   inflightGetRequests.set(path, pending);
   return pending;
+}
+
+/** Reuse stable after-close facts across detail-page remounts in this browser tab. */
+async function cachedGet<T>(path: string, ttlMs: number): Promise<T> {
+  const cached = resolvedGetRequests.get(path);
+  if (cached && cached.expiresAt > Date.now()) {
+    return cached.value as T;
+  }
+  if (cached) resolvedGetRequests.delete(path);
+  const value = await dedupedGet<T>(path);
+  if (resolvedGetRequests.size >= 128) {
+    const oldestKey = resolvedGetRequests.keys().next().value;
+    if (oldestKey) resolvedGetRequests.delete(oldestKey);
+  }
+  resolvedGetRequests.set(path, { expiresAt: Date.now() + ttlMs, value });
+  return value;
 }
 
 export function fetchMarketSummary() {
@@ -156,8 +176,9 @@ export function fetchStockTradingDayKLine(
   if (tradeDate) {
     params.set("trade_date", tradeDate);
   }
-  return dedupedGet<StockIntradayKLineBar[]>(
+  return cachedGet<StockIntradayKLineBar[]>(
     `/api/stocks/${symbol}/trading-day-kline?${params.toString()}`,
+    30 * 60 * 1000,
   );
 }
 

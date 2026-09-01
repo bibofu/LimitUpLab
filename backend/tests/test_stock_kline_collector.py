@@ -5,8 +5,11 @@ from unittest.mock import patch
 from app.collectors.stock_kline_collector import (
     _aggregate_intraday_rows,
     _normalize_stock_symbol,
+    _parse_sina_intraday_payload,
     _parse_tencent_spot_line,
+    _sina_intraday_datalen,
     build_stock_close_snapshot,
+    collect_stock_intraday_kline,
     collect_stock_kline,
     _parse_datetime,
 )
@@ -58,6 +61,55 @@ class StockKLineCollectorTest(unittest.TestCase):
             _parse_datetime("2026-05-20 09:35:00"),
             datetime(2026, 5, 20, 9, 35),
         )
+
+    def test_sina_payload_is_parsed_without_akshare_daily_request(self) -> None:
+        class Response:
+            text = (
+                '/* guard */\n=([{"day":"2026-08-31 09:31:00",'
+                '"open":"10.00","high":"10.20","low":"9.90",'
+                '"close":"10.10","volume":"1000","amount":"10100"}]);'
+            )
+
+            @staticmethod
+            def raise_for_status() -> None:
+                return None
+
+        class Session:
+            trust_env = True
+            params: dict[str, str] | None = None
+
+            def get(self, _url: str, *, params, timeout: int):
+                self.params = params
+                self.timeout = timeout
+                return Response()
+
+            @staticmethod
+            def close() -> None:
+                return None
+
+        session = Session()
+        with patch(
+            "app.collectors.stock_kline_collector.requests.Session",
+            return_value=session,
+        ):
+            bars = collect_stock_intraday_kline(
+                "002328",
+                trade_date=date(2026, 8, 31),
+                period=1,
+            )
+
+        self.assertFalse(session.trust_env)
+        self.assertEqual(session.timeout, 8)
+        self.assertEqual(len(bars), 1)
+        self.assertEqual(bars[0].close, 10.1)
+        self.assertLessEqual(int(session.params["datalen"]), 1970)  # type: ignore[index]
+
+    def test_sina_payload_validation_and_bounded_data_length(self) -> None:
+        self.assertEqual(_parse_sina_intraday_payload("=([]);"), [])
+        with self.assertRaises(ValueError):
+            _parse_sina_intraday_payload("not jsonp")
+        self.assertLess(_sina_intraday_datalen(date.today(), 1), 300)
+        self.assertEqual(_sina_intraday_datalen(date(2020, 1, 1), 1), 1970)
 
     def test_parse_tencent_spot_line_requires_expected_trade_date(self) -> None:
         fields = [""] * 35

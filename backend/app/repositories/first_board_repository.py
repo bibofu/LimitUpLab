@@ -14,6 +14,7 @@ from app.models import (
     FirstBoardOutcome,
     FirstBoardRatingsResponse,
     StockDailyBar,
+    StockIntradayKLineBar,
 )
 
 
@@ -124,6 +125,60 @@ class SQLiteFirstBoardRepository:
                     created_at = excluded.created_at
                 """,
                 [self._bar_to_record(bar) for bar in bars],
+            )
+            connection.commit()
+        finally:
+            connection.close()
+
+    def replace_intraday_bars(
+        self,
+        *,
+        symbol: str,
+        trade_date: date,
+        period_minutes: int,
+        bars: list[StockIntradayKLineBar],
+        source: str,
+    ) -> None:
+        """Atomically replace one stock-day-period intraday cache entry."""
+
+        if not bars:
+            return
+        created_at = datetime.now().astimezone().isoformat()
+        connection = connect(self.database_path)
+        try:
+            initialize_database(connection)
+            connection.execute(
+                """
+                DELETE FROM stock_intraday_bars
+                WHERE symbol = ? AND trade_date = ? AND period_minutes = ?
+                """,
+                (symbol, trade_date.isoformat(), period_minutes),
+            )
+            connection.executemany(
+                """
+                INSERT INTO stock_intraday_bars (
+                    symbol, trade_date, period_minutes, timestamp,
+                    open, high, low, close, volume, amount, source, created_at
+                )
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                """,
+                [
+                    (
+                        symbol,
+                        trade_date.isoformat(),
+                        period_minutes,
+                        bar.timestamp.isoformat(),
+                        bar.open,
+                        bar.high,
+                        bar.low,
+                        bar.close,
+                        bar.volume,
+                        bar.amount,
+                        source,
+                        created_at,
+                    )
+                    for bar in bars
+                ],
             )
             connection.commit()
         finally:
@@ -652,6 +707,43 @@ class SQLiteFirstBoardRepository:
             connection.close()
 
         return [self._bar_from_row(row) for row in rows]
+
+    def list_intraday_bars(
+        self,
+        *,
+        symbol: str,
+        trade_date: date,
+        period_minutes: int,
+    ) -> list[StockIntradayKLineBar]:
+        """Return cached intraday bars for one stock and completed trade date."""
+
+        connection = connect(self.database_path)
+        try:
+            initialize_database(connection)
+            rows = connection.execute(
+                """
+                SELECT timestamp, open, high, low, close, volume, amount
+                FROM stock_intraday_bars
+                WHERE symbol = ? AND trade_date = ? AND period_minutes = ?
+                ORDER BY timestamp ASC
+                """,
+                (symbol, trade_date.isoformat(), period_minutes),
+            ).fetchall()
+        finally:
+            connection.close()
+
+        return [
+            StockIntradayKLineBar(
+                timestamp=datetime.fromisoformat(row["timestamp"]),
+                open=row["open"],
+                high=row["high"],
+                low=row["low"],
+                close=row["close"],
+                volume=row["volume"],
+                amount=row["amount"],
+            )
+            for row in rows
+        ]
 
     def list_post_bars(
         self,

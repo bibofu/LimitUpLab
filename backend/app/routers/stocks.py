@@ -5,9 +5,6 @@ from datetime import date
 from fastapi import APIRouter, HTTPException, Query
 from requests import RequestException
 
-from app.collectors import (
-    collect_stock_intraday_kline,
-)
 from app.collectors.stock_kline_collector import build_stock_close_snapshot
 from app.models import (
     LimitUpEvent,
@@ -26,6 +23,7 @@ from app.repositories import (
 from app.services.analysis import find_stock_event, latest_trade_date
 from app.services.stock_kline import (
     load_stock_detail_market_data,
+    load_stock_intraday_bars,
     load_stock_kline_bars,
     load_stock_position_assessment,
 )
@@ -181,10 +179,11 @@ def get_stock_trading_day_kline(
 
     try:
         events = get_limit_up_repository().list_events()
-        return collect_stock_intraday_kline(
-            symbol,
+        return load_stock_intraday_bars(
+            symbol=symbol,
             trade_date=trade_date or latest_trade_date(events),
             period=period,
+            repository=SQLiteFirstBoardRepository(),
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error

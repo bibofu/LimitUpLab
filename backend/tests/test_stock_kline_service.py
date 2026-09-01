@@ -6,11 +6,12 @@ from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from app.models import StockDailyBar, StockKLineBar
+from app.models import StockDailyBar, StockIntradayKLineBar, StockKLineBar
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.stock_kline import (
     build_stock_kline_facts,
     load_stock_detail_market_data,
+    load_stock_intraday_bars,
     load_stock_kline_bars,
     load_stock_position_assessment,
 )
@@ -20,6 +21,103 @@ TEST_TMP_ROOT = Path(os.getenv("LIMITUPLAB_TEST_TMP", Path(__file__).resolve().p
 
 
 class StockKLineServiceTest(unittest.TestCase):
+    def test_intraday_cache_survives_repository_recreation(self) -> None:
+        database_path = TEST_TMP_ROOT / f"stock-intraday-{uuid4().hex}.sqlite"
+        trade_date = date(2026, 8, 31)
+        calls = 0
+
+        def collector(
+            _symbol: str,
+            _trade_date: date,
+            _period: int,
+        ) -> list[StockIntradayKLineBar]:
+            nonlocal calls
+            calls += 1
+            return [
+                StockIntradayKLineBar(
+                    timestamp=datetime(2026, 8, 31, 9, 31),
+                    open=10,
+                    high=10.2,
+                    low=9.9,
+                    close=10.1,
+                    volume=1_000,
+                    amount=10_100,
+                )
+            ]
+
+        try:
+            first = load_stock_intraday_bars(
+                symbol="sz002328",
+                trade_date=trade_date,
+                period=1,
+                repository=SQLiteFirstBoardRepository(database_path=database_path),
+                collector=collector,
+            )
+            second = load_stock_intraday_bars(
+                symbol="002328",
+                trade_date=trade_date,
+                period=1,
+                repository=SQLiteFirstBoardRepository(database_path=database_path),
+                collector=collector,
+            )
+
+            self.assertEqual(calls, 1)
+            self.assertEqual(first, second)
+            self.assertEqual(second[0].timestamp, datetime(2026, 8, 31, 9, 31))
+        finally:
+            _remove_database_files(database_path)
+
+    def test_concurrent_intraday_requests_share_one_cache_fill(self) -> None:
+        database_path = TEST_TMP_ROOT / f"stock-intraday-lock-{uuid4().hex}.sqlite"
+        trade_date = date(2026, 8, 31)
+        collector_started = threading.Event()
+        release_collector = threading.Event()
+        calls = 0
+
+        def collector(
+            _symbol: str,
+            _trade_date: date,
+            _period: int,
+        ) -> list[StockIntradayKLineBar]:
+            nonlocal calls
+            calls += 1
+            collector_started.set()
+            release_collector.wait(timeout=2)
+            return [
+                StockIntradayKLineBar(
+                    timestamp=datetime(2026, 8, 31, 9, 31),
+                    open=10,
+                    high=10.2,
+                    low=9.9,
+                    close=10.1,
+                    volume=1_000,
+                    amount=10_100,
+                )
+            ]
+
+        def load() -> list[StockIntradayKLineBar]:
+            return load_stock_intraday_bars(
+                symbol="002328",
+                trade_date=trade_date,
+                period=1,
+                repository=SQLiteFirstBoardRepository(database_path=database_path),
+                collector=collector,
+            )
+
+        try:
+            with ThreadPoolExecutor(max_workers=2) as executor:
+                first = executor.submit(load)
+                self.assertTrue(collector_started.wait(timeout=2))
+                second = executor.submit(load)
+                release_collector.set()
+                results = [first.result(timeout=2), second.result(timeout=2)]
+
+            self.assertEqual(calls, 1)
+            self.assertEqual([len(result) for result in results], [1, 1])
+        finally:
+            release_collector.set()
+            _remove_database_files(database_path)
+
     def test_complete_current_day_cache_skips_external_collectors(self) -> None:
         database_path = TEST_TMP_ROOT / f"stock-kline-current-{uuid4().hex}.sqlite"
         repository = SQLiteFirstBoardRepository(database_path=database_path)

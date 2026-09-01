@@ -14,7 +14,7 @@ from app.config import env_bool
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_PATH = BACKEND_ROOT / "data" / "limituplab.sqlite"
-CURRENT_SCHEMA_VERSION = 8
+CURRENT_SCHEMA_VERSION = 9
 DEFAULT_BUSY_TIMEOUT_MS = 5_000
 DEFAULT_LOCK_RETRY_ATTEMPTS = 3
 DEFAULT_LOCK_RETRY_BASE_DELAY_SECONDS = 0.05
@@ -261,6 +261,31 @@ def _apply_schema(connection: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_stock_daily_bars_symbol_date
         ON stock_daily_bars (symbol, trade_date)
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS stock_intraday_bars (
+            symbol TEXT NOT NULL,
+            trade_date TEXT NOT NULL,
+            period_minutes INTEGER NOT NULL,
+            timestamp TEXT NOT NULL,
+            open REAL NOT NULL,
+            high REAL NOT NULL,
+            low REAL NOT NULL,
+            close REAL NOT NULL,
+            volume REAL NOT NULL,
+            amount REAL NOT NULL,
+            source TEXT NOT NULL,
+            created_at TEXT NOT NULL,
+            PRIMARY KEY (symbol, trade_date, period_minutes, timestamp)
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_stock_intraday_bars_lookup
+        ON stock_intraday_bars (symbol, trade_date, period_minutes, timestamp)
         """
     )
     connection.execute(

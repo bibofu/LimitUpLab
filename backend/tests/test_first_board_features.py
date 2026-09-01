@@ -44,6 +44,7 @@ class FirstBoardFeaturesTest(unittest.TestCase):
 
         self.assertIn("first_board_features", table_names)
         self.assertIn("stock_daily_bars", table_names)
+        self.assertIn("stock_intraday_bars", table_names)
         self.assertIn("first_board_outcomes", table_names)
         self.assertIn("first_board_enrichment_snapshots", table_names)
         self.assertIn("agent_predictions", table_names)

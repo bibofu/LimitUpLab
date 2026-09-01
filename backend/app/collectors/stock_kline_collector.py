@@ -1,5 +1,6 @@
 ﻿"""AKShare-backed stock K-line collectors for after-close review pages."""
 
+import json
 from datetime import date, datetime, time, timedelta
 from typing import Any
 
@@ -137,7 +138,14 @@ def collect_stock_intraday_kline(
     """
 
     normalized_symbol = _normalize_stock_symbol(symbol)
-    rows = _collect_intraday_rows_from_sina(normalized_symbol, trade_date, period)
+    try:
+        rows = _collect_intraday_rows_from_sina(
+            normalized_symbol,
+            trade_date,
+            period,
+        )
+    except (KeyError, TypeError, ValueError, requests.RequestException):
+        rows = []
     if rows:
         return rows
 
@@ -162,28 +170,69 @@ def _collect_intraday_rows_from_sina(
     trade_date: date,
     period: int,
 ) -> list[StockIntradayKLineBar]:
-    """Read minute bars from Sina and keep only the requested trading date."""
+    """Read only the needed Sina payload without AKShare's extra daily request."""
 
-    with without_proxy():
-        frame = ak.stock_zh_a_minute(
-            symbol=symbol,
-            period=str(period),
-            adjust="",
+    session = requests.Session()
+    session.trust_env = False
+    try:
+        response = session.get(
+            "https://quotes.sina.cn/cn/api/jsonp_v2.php/=/"
+            "CN_MarketDataService.getKLineData",
+            params={
+                "symbol": symbol,
+                "scale": str(period),
+                "ma": "no",
+                "datalen": str(_sina_intraday_datalen(trade_date, period)),
+            },
+            timeout=8,
         )
+        response.raise_for_status()
+    finally:
+        session.close()
 
-    return [
-        StockIntradayKLineBar(
-            timestamp=_parse_datetime(row["day"]),
-            open=round(float(row["open"]), 2),
-            close=round(float(row["close"]), 2),
-            high=round(float(row["high"]), 2),
-            low=round(float(row["low"]), 2),
-            volume=float(row["volume"]),
-            amount=float(row["amount"]),
+    payload = _parse_sina_intraday_payload(response.text)
+    bars: list[StockIntradayKLineBar] = []
+    for row in payload:
+        timestamp = _parse_datetime(row["day"])
+        if timestamp.date() != trade_date:
+            continue
+        bars.append(
+            StockIntradayKLineBar(
+                timestamp=timestamp,
+                open=round(float(row["open"]), 2),
+                close=round(float(row["close"]), 2),
+                high=round(float(row["high"]), 2),
+                low=round(float(row["low"]), 2),
+                volume=float(row["volume"]),
+                amount=float(row["amount"]),
+            )
         )
-        for row in frame.to_dict("records")
-        if _parse_datetime(row["day"]).date() == trade_date
-    ]
+    return bars
+
+
+def _sina_intraday_datalen(trade_date: date, period: int) -> int:
+    """Estimate the smallest recent payload that can include the target day."""
+
+    bars_per_day = max(1, 242 // max(1, period) + 2)
+    calendar_days_ago = max(0, (date.today() - trade_date).days)
+    return min(
+        1970,
+        max(bars_per_day + 16, (calendar_days_ago + 1) * bars_per_day),
+    )
+
+
+def _parse_sina_intraday_payload(payload: str) -> list[dict[str, Any]]:
+    """Decode Sina's JSONP response into minute-bar dictionaries."""
+
+    marker = "=("
+    start = payload.find(marker)
+    end = payload.rfind(");")
+    if start < 0 or end <= start:
+        raise ValueError("invalid Sina intraday response")
+    decoded = json.loads(payload[start + len(marker):end])
+    if not isinstance(decoded, list):
+        raise ValueError("invalid Sina intraday payload")
+    return [row for row in decoded if isinstance(row, dict)]
 
 
 def _intraday_rows_from_frame(frame: Any) -> list[StockIntradayKLineBar]:

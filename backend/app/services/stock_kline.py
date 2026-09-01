@@ -8,11 +8,16 @@ from datetime import date, datetime, timezone
 from statistics import mean
 from time import monotonic
 
-from app.collectors import collect_stock_kline, collect_stock_spot_klines
+from app.collectors import (
+    collect_stock_intraday_kline,
+    collect_stock_kline,
+    collect_stock_spot_klines,
+)
 from app.collectors.stock_kline_collector import build_stock_close_snapshot
 from app.models import (
     StockDailyBar,
     StockDetailMarketData,
+    StockIntradayKLineBar,
     StockKLineBar,
     StockKLineFacts,
     StockPositionAssessment,
@@ -23,10 +28,58 @@ from app.services.stock_position import classify_stock_position
 
 HistoryCollector = Callable[[str, int, date | None], list[StockKLineBar]]
 SpotCollector = Callable[[list[str], date], dict[str, StockKLineBar]]
+IntradayCollector = Callable[[str, date, int], list[StockIntradayKLineBar]]
 _REFRESH_LOCKS = tuple(threading.Lock() for _ in range(64))
+_INTRADAY_REFRESH_LOCKS = tuple(threading.Lock() for _ in range(64))
 _REFRESH_ATTEMPT_TTL_SECONDS = 300.0
 _refresh_attempts_lock = threading.Lock()
 _refresh_attempts: dict[tuple[str, date], tuple[float, int]] = {}
+
+
+def load_stock_intraday_bars(
+    *,
+    symbol: str,
+    trade_date: date,
+    period: int,
+    repository: SQLiteFirstBoardRepository | None = None,
+    collector: IntradayCollector = collect_stock_intraday_kline,
+) -> list[StockIntradayKLineBar]:
+    """Return persistent local intraday bars and coalesce cold cache fills."""
+
+    if not (1 <= period <= 60):
+        raise ValueError("period must be between 1 and 60")
+    normalized_symbol = _normalize_cache_symbol(symbol)
+    active_repository = repository or SQLiteFirstBoardRepository()
+    cached = active_repository.list_intraday_bars(
+        symbol=normalized_symbol,
+        trade_date=trade_date,
+        period_minutes=period,
+    )
+    if cached:
+        return cached
+
+    lock_index = hash((normalized_symbol, trade_date, period)) % len(
+        _INTRADAY_REFRESH_LOCKS
+    )
+    with _INTRADAY_REFRESH_LOCKS[lock_index]:
+        cached = active_repository.list_intraday_bars(
+            symbol=normalized_symbol,
+            trade_date=trade_date,
+            period_minutes=period,
+        )
+        if cached:
+            return cached
+
+        collected = collector(normalized_symbol, trade_date, period)
+        if collected:
+            active_repository.replace_intraday_bars(
+                symbol=normalized_symbol,
+                trade_date=trade_date,
+                period_minutes=period,
+                bars=collected,
+                source="sina-minute-direct",
+            )
+        return collected
 
 
 def load_stock_kline_bars(
@@ -251,6 +304,17 @@ def _cached_bars(
     end_date: date,
 ) -> list[StockDailyBar]:
     return [item for item in repository.list_daily_bars(symbol) if item.trade_date <= end_date]
+
+
+def _normalize_cache_symbol(symbol: str) -> str:
+    """Normalize prefixed and plain A-share codes to one persistent cache key."""
+
+    value = symbol.strip().lower()
+    if value.startswith(("sh", "sz")):
+        value = value[2:]
+    if len(value) != 6 or not value.isdigit():
+        raise ValueError("stock symbol must be a 6-digit A-share code")
+    return value
 
 
 def _cache_can_serve(
