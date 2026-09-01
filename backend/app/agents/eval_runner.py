@@ -52,6 +52,43 @@ class EvalObservedLLMProvider(LLMProvider):
         self.success_count += 1
         return result
 
+    def generate_function_call(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        function_name: str,
+        function_description: str,
+        parameters: dict,
+    ) -> LLMResult:
+        """Delegate native planner calls while preserving eval observability."""
+
+        if (
+            type(self.provider).generate_function_call
+            is LLMProvider.generate_function_call
+        ):
+            return self.provider.generate_function_call(
+                system_prompt,
+                user_prompt,
+                function_name=function_name,
+                function_description=function_description,
+                parameters=parameters,
+            )
+        self.call_count += 1
+        try:
+            result = self.provider.generate_function_call(
+                system_prompt,
+                user_prompt,
+                function_name=function_name,
+                function_description=function_description,
+                parameters=parameters,
+            )
+        except Exception as error:
+            self.errors.append(str(error))
+            raise
+        self.success_count += 1
+        return result
+
     def stream_generate(self, system_prompt, user_prompt, on_delta) -> LLMResult:
         self.call_count += 1
         try:

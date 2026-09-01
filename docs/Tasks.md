@@ -301,11 +301,17 @@ Critic Agent
   - 对直接交易类问题做安全降级，不输出交易指令、资金配比、价格预测或回报承诺。
 
 - `[x]` 增加 LLM Planner 优先的工具调用主链路。
-  - 正常链路调整为：用户问题 -> 拼接系统指令、工具描述和上下文 -> LLM 输出 JSON 工具计划 -> 后端执行工具 -> LLM 基于工具 facts 生成最终回答。
+  - 正常链路调整为：用户问题 -> 拼接系统指令、工具描述和上下文 -> LLM 输出结构化工具计划 -> 后端执行工具 -> LLM 基于工具 facts 生成最终回答。
   - `intent` 降级为日志和审计标签，不再作为真实 LLM 可用时的主控制流。
   - 支持的工具计划包括 `market_summary`、`first_board_ratings`、`first_board_filter`、`stock_kline`。
   - LLM 不可用、未配置 key 或计划 JSON 解析失败时，自动回落到原有确定性规则链路，保证本地演示不崩。
   - 增加 Fake LLM 单测，验证 Agent 会先规划工具，再执行工具并生成回答。
+
+- `[x]` 将生产 Planner 迁移为原生 Function Calling（2026-09-01）。
+  - OpenAI-compatible Provider 使用 `tools` 和强制 `tool_choice` 调用 `submit_agent_plan`，函数参数承载 capability、上下文模式、安全状态和证据工具计划。
+  - Capability Contract 继续在服务端过滤可用能力、补齐最低证据工具和默认参数，原生调用不绕过 Query Contract、Tool Policy 或执行器白名单。
+  - Provider 不支持原生调用、协议请求失败或函数参数畸形时，自动回退到旧 Prompt-to-JSON Planner；trace 记录实际模式和回退错误类型。
+  - 增加 Provider 请求载荷、函数参数解析、禁用开关、生产 Planner 原生路径和旧 Provider 兼容回退测试。
 
 - `[x]` 完成 Agent Skill 实验并收敛为 Capability Contract（2026-09-01）。
   - 早期使用独立 `SKILL.md`、Loader 和 Registry 验证了业务工作流按需注入、最低工具补齐和默认参数约束。

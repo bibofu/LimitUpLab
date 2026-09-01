@@ -20,10 +20,14 @@ from app.agents.eval_runner import (
     run_agent_conversation_planner_eval_suite,
     run_agent_planner_eval_suite,
 )
-from app.agents.chat import answer_first_board_chat
+from app.agents.chat import answer_first_board_chat, plan_agent_query
 from app.models import AgentChatRequest
 from app.repositories import SQLiteFirstBoardRepository
-from app.services.llm_provider import LLMProvider, LLMResult
+from app.services.llm_provider import (
+    LLMProvider,
+    LLMResult,
+    NativeFunctionCallingError,
+)
 from app.services.sample_data import SAMPLE_EVENTS
 
 
@@ -101,7 +105,113 @@ class SourceRefinementProvider(LLMProvider):
         )
 
 
+class NativeFunctionPlanningProvider(LLMProvider):
+    """Exercise the production planner without prompt-to-JSON compatibility."""
+
+    def __init__(self) -> None:
+        self.function_calls = 0
+        self.parameters: dict = {}
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        raise AssertionError("native planner unexpectedly used text generation")
+
+    def generate_function_call(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        function_name: str,
+        function_description: str,
+        parameters: dict,
+    ) -> LLMResult:
+        self.function_calls += 1
+        self.parameters = parameters
+        self.assert_native_prompt = system_prompt
+        return LLMResult(
+            content=json.dumps(
+                {
+                    "intent_label": "limit_up_query",
+                    "capabilities": ["limit_up_pool"],
+                    "context_mode": "standalone",
+                    "context_capabilities": [],
+                    "safety": "normal",
+                    "tool_calls": [],
+                    "answer_directly": "",
+                }
+            ),
+            model="fake-native-planner",
+            provider="fake-native",
+            response_mode="function_call",
+            function_name=function_name,
+        )
+
+
+class MalformedNativeThenJsonProvider(CapabilityOnlyProvider):
+    """Simulate a malformed native response followed by a valid JSON plan."""
+
+    def generate_function_call(self, *args, **kwargs) -> LLMResult:
+        raise NativeFunctionCallingError("malformed submit_agent_plan arguments")
+
+
 class AgentCapabilityContractTest(unittest.TestCase):
+    def test_production_planner_prefers_native_function_calling(self) -> None:
+        provider = NativeFunctionPlanningProvider()
+
+        plan = plan_agent_query(
+            AgentChatRequest(
+                session_id=f"native-{uuid4()}",
+                message="今天首板票有哪些",
+            ),
+            SAMPLE_EVENTS,
+            provider,
+        )
+
+        self.assertEqual(provider.function_calls, 1)
+        self.assertIn("submit_agent_plan exactly once", provider.assert_native_prompt)
+        self.assertNotIn("Return only valid JSON", provider.assert_native_prompt)
+        capability_enum = provider.parameters["properties"]["capabilities"][
+            "items"
+        ]["enum"]
+        self.assertIn("limit_up_pool", capability_enum)
+        self.assertEqual(plan.payload["planner_mode"], "native_function_call")
+        self.assertEqual(plan.capabilities, ("limit_up_pool",))
+        self.assertEqual(plan.tool_calls[0]["name"], "limit_up_events")
+
+    def test_legacy_provider_falls_back_to_prompt_json(self) -> None:
+        provider = CapabilityOnlyProvider()
+
+        plan = plan_agent_query(
+            AgentChatRequest(
+                session_id=f"fallback-{uuid4()}",
+                message="今天首板票有哪些",
+            ),
+            SAMPLE_EVENTS,
+            provider,
+        )
+
+        self.assertEqual(plan.payload["planner_mode"], "prompt_json_fallback")
+        self.assertEqual(
+            plan.payload["native_function_call_fallback_reason"],
+            "NativeFunctionCallingUnavailable",
+        )
+
+    def test_malformed_native_plan_falls_back_to_prompt_json(self) -> None:
+        plan = plan_agent_query(
+            AgentChatRequest(
+                session_id=f"malformed-{uuid4()}",
+                message="今天首板票有哪些",
+            ),
+            SAMPLE_EVENTS,
+            MalformedNativeThenJsonProvider(),
+        )
+
+        self.assertEqual(plan.payload["planner_mode"], "prompt_json_fallback")
+        self.assertEqual(
+            plan.payload["native_function_call_fallback_reason"],
+            "NativeFunctionCallingError",
+        )
+        self.assertEqual(plan.capabilities, ("limit_up_pool",))
+
     def test_tool_plans_infer_single_tool_capability(self) -> None:
         capabilities = normalize_capabilities(
             None,

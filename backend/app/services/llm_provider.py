@@ -9,7 +9,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import dataclass
 from time import perf_counter, sleep
-from typing import Callable
+from typing import Any, Callable
 
 import requests
 
@@ -38,6 +38,16 @@ class LLMResult:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
+    response_mode: str = "text"
+    function_name: str | None = None
+
+
+class NativeFunctionCallingUnavailable(RuntimeError):
+    """Raised when a provider cannot use the native function-calling protocol."""
+
+
+class NativeFunctionCallingError(RuntimeError):
+    """Raised when a native function-call response violates its contract."""
 
 
 @dataclass
@@ -102,6 +112,25 @@ class LLMProvider:
 
         raise NotImplementedError
 
+    def generate_function_call(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        function_name: str,
+        function_description: str,
+        parameters: dict[str, Any],
+    ) -> LLMResult:
+        """Force one native function call and return its JSON arguments as content.
+
+        Custom and test providers stay source-compatible: callers can catch this
+        explicit signal and use the legacy prompt-to-JSON path.
+        """
+
+        raise NativeFunctionCallingUnavailable(
+            f"{type(self).__name__} does not support native function calling"
+        )
+
     def stream_generate(
         self,
         system_prompt: str,
@@ -142,6 +171,7 @@ class OpenAIChatCompletionsProvider(LLMProvider):
         thinking_enabled: bool = False,
         max_attempts: int = DEFAULT_MAX_ATTEMPTS,
         retry_delay_seconds: float = DEFAULT_RETRY_DELAY_SECONDS,
+        native_function_calling_enabled: bool = True,
         session: requests.Session | None = None,
         sleep_fn: Callable[[float], None] = sleep,
     ):
@@ -155,6 +185,7 @@ class OpenAIChatCompletionsProvider(LLMProvider):
         self.thinking_enabled = thinking_enabled
         self.max_attempts = max(1, max_attempts)
         self.retry_delay_seconds = max(0.0, retry_delay_seconds)
+        self.native_function_calling_enabled = native_function_calling_enabled
         self.session = session or _get_thread_session()
         self.sleep_fn = sleep_fn
 
@@ -166,34 +197,7 @@ class OpenAIChatCompletionsProvider(LLMProvider):
         tracker = _usage_tracker.get()
         if tracker is not None:
             tracker.begin_call(self.model)
-        data = None
-        last_error: Exception | None = None
-        for attempt in range(1, self.max_attempts + 1):
-            try:
-                response = self.session.post(
-                    f"{self.base_url}/chat/completions",
-                    json=payload,
-                    headers={
-                        "Authorization": f"Bearer {self.api_key}",
-                        "Content-Type": "application/json",
-                    },
-                    timeout=self.timeout_seconds,
-                )
-                response.raise_for_status()
-                data = response.json()
-                break
-            except (requests.RequestException, ValueError) as error:
-                last_error = error
-                if attempt >= self.max_attempts or not _is_retryable_error(error):
-                    if tracker is not None:
-                        tracker.fail_call()
-                    raise RuntimeError(f"LLM request failed: {error}") from error
-                self.sleep_fn(self.retry_delay_seconds * (2 ** (attempt - 1)))
-
-        if data is None:
-            if tracker is not None:
-                tracker.fail_call()
-            raise RuntimeError(f"LLM request failed: {last_error}")
+        data = self._post_completion(payload, tracker)
 
         try:
             content = data["choices"][0]["message"]["content"]
@@ -213,6 +217,95 @@ class OpenAIChatCompletionsProvider(LLMProvider):
             prompt_tokens=usage[0],
             completion_tokens=usage[1],
             total_tokens=usage[2],
+        )
+        if tracker is not None:
+            tracker.complete_call(result)
+        return result
+
+    def generate_function_call(
+        self,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        function_name: str,
+        function_description: str,
+        parameters: dict[str, Any],
+    ) -> LLMResult:
+        """Force one OpenAI-compatible function call and validate its arguments."""
+
+        if not self.native_function_calling_enabled:
+            raise NativeFunctionCallingUnavailable(
+                "Native function calling is disabled by configuration"
+            )
+        payload = self._build_payload(
+            system_prompt,
+            user_prompt,
+            planner=True,
+        )
+        payload["tools"] = [
+            {
+                "type": "function",
+                "function": {
+                    "name": function_name,
+                    "description": function_description,
+                    "parameters": parameters,
+                },
+            }
+        ]
+        payload["tool_choice"] = {
+            "type": "function",
+            "function": {"name": function_name},
+        }
+        function_contract_chars = len(
+            json.dumps(
+                {
+                    "tools": payload["tools"],
+                    "tool_choice": payload["tool_choice"],
+                },
+                ensure_ascii=False,
+                separators=(",", ":"),
+            )
+        )
+        started_at = perf_counter()
+        tracker = _usage_tracker.get()
+        if tracker is not None:
+            tracker.begin_call(self.model)
+        data = self._post_completion(payload, tracker)
+
+        try:
+            message = data["choices"][0]["message"]
+            function_call = _matching_function_call(message, function_name)
+            raw_arguments = function_call["arguments"]
+            arguments = (
+                raw_arguments
+                if isinstance(raw_arguments, dict)
+                else json.loads(str(raw_arguments))
+            )
+            if not isinstance(arguments, dict):
+                raise TypeError("function arguments must be a JSON object")
+        except (KeyError, IndexError, TypeError, ValueError) as error:
+            if tracker is not None:
+                tracker.fail_call()
+            raise NativeFunctionCallingError(
+                f"LLM did not return a valid {function_name} function call"
+            ) from error
+
+        content = json.dumps(arguments, ensure_ascii=False, separators=(",", ":"))
+        usage = _parse_token_usage(data.get("usage"))
+        result = LLMResult(
+            content=content,
+            model=self.model,
+            provider="openai-chat-completions",
+            duration_ms=round((perf_counter() - started_at) * 1000),
+            prompt_chars=(
+                len(system_prompt) + len(user_prompt) + function_contract_chars
+            ),
+            completion_chars=len(content),
+            prompt_tokens=usage[0],
+            completion_tokens=usage[1],
+            total_tokens=usage[2],
+            response_mode="function_call",
+            function_name=function_name,
         )
         if tracker is not None:
             tracker.complete_call(result)
@@ -304,6 +397,7 @@ class OpenAIChatCompletionsProvider(LLMProvider):
         user_prompt: str,
         *,
         stream: bool = False,
+        planner: bool = False,
     ) -> dict:
         """Build the shared OpenAI-compatible request payload."""
 
@@ -313,17 +407,56 @@ class OpenAIChatCompletionsProvider(LLMProvider):
                 {"role": "system", "content": system_prompt},
                 {"role": "user", "content": user_prompt},
             ],
-            "temperature": 0.0 if "Return only valid JSON" in system_prompt else 0.2,
+            "temperature": (
+                0.0
+                if planner or "Return only valid JSON" in system_prompt
+                else 0.2
+            ),
             "thinking": {
                 "type": "enabled" if self.thinking_enabled else "disabled",
             },
         }
-        if "Return only valid JSON" in system_prompt:
+        if planner or "Return only valid JSON" in system_prompt:
             payload["max_tokens"] = self.planner_max_tokens
         if stream:
             payload["stream"] = True
             payload["stream_options"] = {"include_usage": True}
         return payload
+
+    def _post_completion(
+        self,
+        payload: dict[str, Any],
+        tracker: LLMUsageTracker | None,
+    ) -> dict[str, Any]:
+        """POST one non-streaming completion with bounded retries."""
+
+        last_error: Exception | None = None
+        for attempt in range(1, self.max_attempts + 1):
+            try:
+                response = self.session.post(
+                    f"{self.base_url}/chat/completions",
+                    json=payload,
+                    headers={
+                        "Authorization": f"Bearer {self.api_key}",
+                        "Content-Type": "application/json",
+                    },
+                    timeout=self.timeout_seconds,
+                )
+                response.raise_for_status()
+                data = response.json()
+                if not isinstance(data, dict):
+                    raise ValueError("LLM response body must be a JSON object")
+                return data
+            except (requests.RequestException, ValueError) as error:
+                last_error = error
+                if attempt >= self.max_attempts or not _is_retryable_error(error):
+                    if tracker is not None:
+                        tracker.fail_call()
+                    raise RuntimeError(f"LLM request failed: {error}") from error
+                self.sleep_fn(self.retry_delay_seconds * (2 ** (attempt - 1)))
+        if tracker is not None:
+            tracker.fail_call()
+        raise RuntimeError(f"LLM request failed: {last_error}")
 
 
 def get_llm_provider() -> LLMProvider:
@@ -362,6 +495,10 @@ def get_llm_provider() -> LLMProvider:
         retry_delay_seconds=_read_non_negative_float(
             "LIMITUPLAB_LLM_RETRY_DELAY_SECONDS",
             DEFAULT_RETRY_DELAY_SECONDS,
+        ),
+        native_function_calling_enabled=env_bool(
+            "LIMITUPLAB_LLM_NATIVE_FUNCTION_CALLING",
+            True,
         ),
     )
 
@@ -442,3 +579,25 @@ def _parse_token_usage(
     except (KeyError, TypeError, ValueError):
         return None, None, None
     return prompt_tokens, completion_tokens, total_tokens
+
+
+def _matching_function_call(
+    message: object,
+    function_name: str,
+) -> dict[str, Any]:
+    """Return one matching modern or legacy Chat Completions function call."""
+
+    if not isinstance(message, dict):
+        raise TypeError("message must be an object")
+    tool_calls = message.get("tool_calls")
+    if isinstance(tool_calls, list):
+        for item in tool_calls:
+            if not isinstance(item, dict):
+                continue
+            function = item.get("function")
+            if isinstance(function, dict) and function.get("name") == function_name:
+                return function
+    legacy = message.get("function_call")
+    if isinstance(legacy, dict) and legacy.get("name") == function_name:
+        return legacy
+    raise ValueError(f"missing function call: {function_name}")

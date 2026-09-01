@@ -2,7 +2,11 @@ import unittest
 
 import requests
 
-from app.services.llm_provider import OpenAIChatCompletionsProvider
+from app.services.llm_provider import (
+    NativeFunctionCallingError,
+    NativeFunctionCallingUnavailable,
+    OpenAIChatCompletionsProvider,
+)
 
 
 class FakeResponse:
@@ -27,6 +31,57 @@ class FakeSession:
     def post(self, url: str, **kwargs):
         self.calls.append({"url": url, **kwargs})
         return FakeResponse()
+
+
+class FakeFunctionResponse(FakeResponse):
+    def json(self) -> dict:
+        return {
+            "choices": [
+                {
+                    "message": {
+                        "content": None,
+                        "tool_calls": [
+                            {
+                                "id": "call-plan",
+                                "type": "function",
+                                "function": {
+                                    "name": "submit_agent_plan",
+                                    "arguments": (
+                                        '{"intent_label":"limit_up_query",'
+                                        '"capabilities":["limit_up_pool"],'
+                                        '"context_mode":"standalone",'
+                                        '"context_capabilities":[],"safety":"normal",'
+                                        '"tool_calls":[],"answer_directly":""}'
+                                    ),
+                                },
+                            }
+                        ],
+                    }
+                }
+            ],
+            "usage": {
+                "prompt_tokens": 20,
+                "completion_tokens": 8,
+                "total_tokens": 28,
+            },
+        }
+
+
+class FakeFunctionSession(FakeSession):
+    def post(self, url: str, **kwargs):
+        self.calls.append({"url": url, **kwargs})
+        return FakeFunctionResponse()
+
+
+class MissingFunctionCallResponse(FakeResponse):
+    def json(self) -> dict:
+        return {"choices": [{"message": {"content": "no function"}}]}
+
+
+class MissingFunctionCallSession(FakeSession):
+    def post(self, url: str, **kwargs):
+        self.calls.append({"url": url, **kwargs})
+        return MissingFunctionCallResponse()
 
 
 class FakeStreamingResponse:
@@ -65,6 +120,78 @@ class TransientFailureSession(FakeSession):
 
 
 class LLMProviderTest(unittest.TestCase):
+    def test_native_function_call_forces_named_tool_and_parses_arguments(self) -> None:
+        session = FakeFunctionSession()
+        provider = OpenAIChatCompletionsProvider(
+            api_key="test-key",
+            model="deepseek-v4-flash",
+            planner_max_tokens=320,
+            session=session,  # type: ignore[arg-type]
+        )
+        parameters = {
+            "type": "object",
+            "properties": {"intent_label": {"type": "string"}},
+            "required": ["intent_label"],
+        }
+
+        result = provider.generate_function_call(
+            "Call submit_agent_plan exactly once.",
+            "Plan this question.",
+            function_name="submit_agent_plan",
+            function_description="Submit an Agent plan.",
+            parameters=parameters,
+        )
+
+        payload = session.calls[0]["json"]
+        self.assertEqual(
+            payload["tool_choice"],
+            {
+                "type": "function",
+                "function": {"name": "submit_agent_plan"},
+            },
+        )
+        self.assertEqual(
+            payload["tools"][0]["function"]["parameters"],
+            parameters,
+        )
+        self.assertEqual(payload["temperature"], 0.0)
+        self.assertEqual(payload["max_tokens"], 320)
+        self.assertEqual(result.response_mode, "function_call")
+        self.assertEqual(result.function_name, "submit_agent_plan")
+        self.assertEqual(result.total_tokens, 28)
+        self.assertIn('"capabilities":["limit_up_pool"]', result.content)
+
+    def test_native_function_call_rejects_missing_call(self) -> None:
+        provider = OpenAIChatCompletionsProvider(
+            api_key="test-key",
+            session=MissingFunctionCallSession(),  # type: ignore[arg-type]
+        )
+
+        with self.assertRaises(NativeFunctionCallingError):
+            provider.generate_function_call(
+                "Call submit_agent_plan.",
+                "Plan.",
+                function_name="submit_agent_plan",
+                function_description="Submit a plan.",
+                parameters={"type": "object"},
+            )
+
+    def test_native_function_call_can_be_disabled_for_compatible_provider(self) -> None:
+        provider = OpenAIChatCompletionsProvider(
+            api_key="test-key",
+            native_function_calling_enabled=False,
+            session=FakeFunctionSession(),  # type: ignore[arg-type]
+        )
+
+        with self.assertRaises(NativeFunctionCallingUnavailable):
+            provider.generate_function_call(
+                "Call submit_agent_plan.",
+                "Plan.",
+                function_name="submit_agent_plan",
+                function_description="Submit a plan.",
+                parameters={"type": "object"},
+            )
+
     def test_planner_uses_non_thinking_mode_and_small_token_budget(self) -> None:
         session = FakeSession()
         provider = OpenAIChatCompletionsProvider(

@@ -234,7 +234,7 @@ Explanation 把单个评分及证据翻译成人话；Critic 对同一个评分�
 
 ### H50. 测试有没有跑真实 LLM？
 
-默认 `pytest` 不调用真实 LLM，这是为了可重复和成本可控；它通过 fake/observed provider 测 planner JSON、工具执行、SSE 和降级。真实链路另有可选 eval runner，2026-08-30 对 DeepSeek 跑过 121 个单轮 case、三轮稳定性和 10 个多轮场景，并记录 provider 调用、能力与工具命中。两者之间仍差生产长期可用性：一次真实 eval 不能证明未来 provider 版本、超时和输出质量。因此应在受控预算下定期跑 canary，而不是把它塞进每次单元测试。
+默认 `pytest` 不调用真实 LLM，这是为了可重复和成本可控；它通过 fake/observed provider 测原生 `submit_agent_plan` Function Call、旧 Provider 的 Prompt-to-JSON 兼容回退、工具执行、SSE 和降级。真实链路另有可选 eval runner，2026-08-30 对 DeepSeek 跑过 121 个单轮 case、三轮稳定性和 10 个多轮场景，并记录 provider 调用、能力与工具命中；2026-09-01 又完成了生产 Planner 原生 Function Calling smoke test。两者之间仍差生产长期可用性：一次真实 eval 不能证明未来 provider 版本、超时和输出质量。因此应在受控预算下定期跑 canary，而不是把它塞进每次单元测试。
 
 ### H51. AI 写了多少，项目证明谁的能力？
 

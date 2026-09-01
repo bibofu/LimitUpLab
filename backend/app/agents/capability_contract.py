@@ -364,3 +364,15 @@ def capability_schema_prompt(
         if all(req.name in allowed_tool_names for req in item.required_tools)
     ]
     return json.dumps(available, ensure_ascii=False, separators=(",", ":"))
+
+
+def available_capability_names(
+    allowed_tool_names: set[str] | frozenset[str],
+) -> tuple[str, ...]:
+    """Return capability IDs whose complete evidence contract is available."""
+
+    return tuple(
+        item.name
+        for item in CAPABILITIES
+        if all(req.name in allowed_tool_names for req in item.required_tools)
+    )

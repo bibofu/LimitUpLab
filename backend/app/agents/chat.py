@@ -12,6 +12,7 @@ from typing import Any, Callable, Iterator
 
 from app.agents.explanation import explain_first_board_rating
 from app.agents.capability_contract import (
+    available_capability_names,
     capability_answer_instruction,
     capability_schema_prompt,
     ensure_capability_tool_calls,
@@ -73,10 +74,16 @@ from app.models import (
     MarketSummary,
 )
 from app.repositories import SQLiteFirstBoardRepository
-from app.services.llm_provider import LLMProvider, get_llm_provider
+from app.services.llm_provider import (
+    LLMProvider,
+    NativeFunctionCallingError,
+    NativeFunctionCallingUnavailable,
+    get_llm_provider,
+)
 
 
-CHAT_AGENT_VERSION = "first-board-chat-policy-v11-capability-manifest"
+CHAT_AGENT_VERSION = "first-board-chat-policy-v12-native-function-calling"
+PLANNER_FUNCTION_NAME = "submit_agent_plan"
 _FORCE_TEMPLATE_ANSWER_OVERRIDE: ContextVar[bool | None] = ContextVar(
     "force_template_answer_override",
     default=None,
@@ -910,19 +917,50 @@ def _generate_llm_query_plan(
 ) -> AgentQueryPlan:
     """Generate and normalize the production LLM query plan."""
 
-    planner_system_prompt = _tool_planner_system_prompt(
+    native_system_prompt = _tool_planner_system_prompt(
         tools.schema_prompt(),
         capability_schema_prompt(tools.enabled_tool_names),
         tools.profile,
+        output_mode="function_call",
     )
     planner_user_prompt = _tool_planner_user_prompt(request, context, tools.events)
     started_at = perf_counter()
-    result = provider.generate(planner_system_prompt, planner_user_prompt)
+    planner_mode = "native_function_call"
+    native_error: str | None = None
+    used_system_prompt = native_system_prompt
+    try:
+        result = provider.generate_function_call(
+            native_system_prompt,
+            planner_user_prompt,
+            function_name=PLANNER_FUNCTION_NAME,
+            function_description=(
+                "Submit the normalized LimitUpLab capability and evidence-tool plan."
+            ),
+            parameters=_planner_function_parameters(tools),
+        )
+    except (
+        NativeFunctionCallingUnavailable,
+        NativeFunctionCallingError,
+        RuntimeError,
+    ) as error:
+        planner_mode = "prompt_json_fallback"
+        native_error = type(error).__name__
+        fallback_system_prompt = _tool_planner_system_prompt(
+            tools.schema_prompt(),
+            capability_schema_prompt(tools.enabled_tool_names),
+            tools.profile,
+            output_mode="json",
+        )
+        used_system_prompt = fallback_system_prompt
+        result = provider.generate(fallback_system_prompt, planner_user_prompt)
     payload = _parse_json_object(result.content)
     duration_ms = result.duration_ms or round((perf_counter() - started_at) * 1000)
     prompt_chars = result.prompt_chars or (
-        len(planner_system_prompt) + len(planner_user_prompt)
+        len(used_system_prompt) + len(planner_user_prompt)
     )
+    payload["planner_mode"] = planner_mode
+    if native_error:
+        payload["native_function_call_fallback_reason"] = native_error
 
     tool_calls = _normalize_tool_calls(payload.get("tool_calls"))
     tool_calls = _normalize_first_board_position_tool_calls(request, tool_calls)
@@ -979,8 +1017,10 @@ def _tool_planner_system_prompt(
     tool_schema_prompt: str,
     capability_contract_prompt: str,
     agent_profile: str,
+    *,
+    output_mode: str = "json",
 ) -> str:
-    """Describe the Agent tools and require a strict JSON tool plan."""
+    """Describe Agent planning rules for native or legacy structured output."""
 
     profile_instruction = (
         "The extended preview profile may use every tool explicitly listed in the "
@@ -997,6 +1037,27 @@ def _tool_planner_system_prompt(
             "to have intraday prices, auction data, or arbitrary "
             "public-web evidence. Questions that require those deferred V2 capabilities "
             "are unsupported and must receive exactly '抱歉，该问题无法回答'. "
+        )
+    )
+    output_instruction = (
+        f"Call {PLANNER_FUNCTION_NAME} exactly once and put the complete plan in "
+        "its arguments. Do not answer with assistant text. "
+        if output_mode == "function_call"
+        else "Return only valid JSON. No markdown. "
+    )
+    schema_instruction = (
+        ""
+        if output_mode == "function_call"
+        else (
+            "JSON schema: {"
+            "\"intent_label\": string, "
+            "\"capabilities\": [string], "
+            "\"context_mode\": \"standalone\"|\"entity_followup\"|\"source_refinement\", "
+            "\"context_capabilities\": [string], "
+            "\"safety\": \"normal\"|\"refuse_trade_instruction\", "
+            "\"tool_calls\": [{\"name\": string, \"arguments\": object}], "
+            "\"answer_directly\": string"
+            "}."
         )
     )
     return (
@@ -1025,7 +1086,7 @@ def _tool_planner_system_prompt(
         "Example: after popularity, '这些里面哪些涨停' => context_mode source_refinement, "
         "context_capabilities [popularity], capabilities [limit_up_pool]. After a broad market "
         "review, '强势行业展开' => entity_followup with capabilities [sector_performance]. "
-        "Return only valid JSON. No markdown. "
+        f"{output_instruction}"
         f"Capability catalog: {capability_contract_prompt}. "
         f"Available tools are described as JSON schemas: {tool_schema_prompt}. "
         "Use YYYY-MM-DD for all dates. "
@@ -1056,16 +1117,63 @@ def _tool_planner_system_prompt(
         "For unavailable date/data-availability questions, do not answer directly; let backend verify local dates. "
         "Do not provide direct trading instructions, position sizing, target prices, or return promises. "
         "If the user asks for those, set safety to refuse_trade_instruction. "
-        "JSON schema: {"
-        "\"intent_label\": string, "
-        "\"capabilities\": [string], "
-        "\"context_mode\": \"standalone\"|\"entity_followup\"|\"source_refinement\", "
-        "\"context_capabilities\": [string], "
-        "\"safety\": \"normal\"|\"refuse_trade_instruction\", "
-        "\"tool_calls\": [{\"name\": string, \"arguments\": object}], "
-        "\"answer_directly\": string"
-        "}."
+        f"{schema_instruction}"
     )
+
+
+def _planner_function_parameters(tools: AgentToolRegistry) -> dict[str, Any]:
+    """Build the server-validated schema for the native planner function."""
+
+    capability_names = list(available_capability_names(tools.enabled_tool_names))
+    tool_names = [schema.name for schema in tools.schemas()]
+    return {
+        "type": "object",
+        "properties": {
+            "intent_label": {"type": "string"},
+            "capabilities": {
+                "type": "array",
+                "items": {"type": "string", "enum": capability_names},
+                "maxItems": 8,
+            },
+            "context_mode": {
+                "type": "string",
+                "enum": ["standalone", "entity_followup", "source_refinement"],
+            },
+            "context_capabilities": {
+                "type": "array",
+                "items": {"type": "string", "enum": capability_names},
+                "maxItems": 8,
+            },
+            "safety": {
+                "type": "string",
+                "enum": ["normal", "refuse_trade_instruction"],
+            },
+            "tool_calls": {
+                "type": "array",
+                "items": {
+                    "type": "object",
+                    "properties": {
+                        "name": {"type": "string", "enum": tool_names},
+                        "arguments": {"type": "object"},
+                    },
+                    "required": ["name", "arguments"],
+                    "additionalProperties": False,
+                },
+                "maxItems": 8,
+            },
+            "answer_directly": {"type": "string"},
+        },
+        "required": [
+            "intent_label",
+            "capabilities",
+            "context_mode",
+            "context_capabilities",
+            "safety",
+            "tool_calls",
+            "answer_directly",
+        ],
+        "additionalProperties": False,
+    }
 
 
 def _tool_planner_user_prompt(
@@ -3590,6 +3698,10 @@ def _llm_plan_trace(
             "context_capabilities": tool_plan.get("context_capabilities") or [],
             "safety": tool_plan.get("safety"),
             "tool_calls": tool_plan.get("tool_calls") or [],
+            "planner_mode": tool_plan.get("planner_mode") or "unknown",
+            "native_function_call_fallback_reason": tool_plan.get(
+                "native_function_call_fallback_reason"
+            ),
         },
         summary="\u7531 LLM \u6839\u636e\u5de5\u5177\u63cf\u8ff0\u751f\u6210\u5de5\u5177\u8c03\u7528\u8ba1\u5212\u3002",
         output={
