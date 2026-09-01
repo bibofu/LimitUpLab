@@ -1007,8 +1007,9 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
     )
     .sort((left, right) => left.rank - right.rank)
     .slice(0, mode === "discovery" ? 15 : 10)
-    .map((item) => ({
+    .map((item, index) => ({
       ...item,
+      rank: index + 1,
       sector: item.sector ?? "",
       position_label: item.position_label ?? null,
       base_rank: item.base_rank ?? item.rank,
