@@ -18,10 +18,14 @@ from app.agents.eval_runner import (
     eval_suite_report,
     load_conversation_eval_scenarios,
     load_eval_cases,
+    load_product_eval_scenarios,
     planner_eval_suite_report,
+    product_eval_failure_report,
+    product_eval_suite_report,
     run_agent_conversation_planner_eval_suite,
     run_agent_eval_suite,
     run_agent_planner_eval_suite,
+    run_agent_product_eval_suite,
 )
 from app.agents.query_contract_eval import (
     load_query_contract_eval_cases,
@@ -41,9 +45,12 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run Agent chat eval cases.")
     parser.add_argument(
         "--suite",
-        choices=("core", "paraphrase", "conversation"),
+        choices=("core", "product", "paraphrase", "conversation"),
         default="core",
-        help="core runs stable regressions; paraphrase measures live semantic routing.",
+        help=(
+            "core checks stable regressions; product checks end-to-end user answers; "
+            "paraphrase measures live semantic routing."
+        ),
     )
     parser.add_argument(
         "--mode",
@@ -58,7 +65,10 @@ def main() -> None:
     parser.add_argument(
         "--failure-output",
         default=str(BACKEND_ROOT / "data" / "agent_eval_failures.json"),
-        help="Where to write failed and backend-repaired live eval samples.",
+        help=(
+            "Where to write grouped failures; the product suite writes this "
+            "artifact in offline mode too."
+        ),
     )
     parser.add_argument(
         "--fail-on-failures",
@@ -97,6 +107,7 @@ def main() -> None:
         parser.error(f"--suite {args.suite} requires --mode live-llm")
     fixture_names = {
         "core": "agent_eval_cases.json",
+        "product": "agent_product_eval_scenarios.json",
         "paraphrase": "agent_paraphrase_eval_cases.json",
         "conversation": "agent_conversation_eval_scenarios.json",
     }
@@ -135,7 +146,34 @@ def main() -> None:
         load_query_contract_eval_cases(contract_fixture_path)
     )
     contract_report = query_contract_eval_report(contract_suite)
-    if args.suite == "paraphrase":
+    if args.suite == "product":
+        product_scenarios = load_product_eval_scenarios(fixture_path)
+        if args.case_filter:
+            product_scenarios = [
+                item
+                for item in product_scenarios
+                if args.case_filter in item.scenario_id
+            ]
+        if not product_scenarios:
+            parser.error("--case-filter matched no product scenarios")
+        product_suite = run_agent_product_eval_suite(
+            scenarios=product_scenarios,
+            events=SAMPLE_EVENTS,
+            llm_provider=provider,
+            force_template_answer=not args.live_answer,
+        )
+        report = {
+            "mode": args.mode,
+            "suite": args.suite,
+            "answer_mode": (
+                "live-llm" if args.live_answer else "deterministic-template"
+            ),
+            **product_eval_suite_report(product_suite),
+            "query_contract": contract_report,
+        }
+        suite_ok = product_suite.ok
+        unstable_cases = 0
+    elif args.suite == "paraphrase":
         assert provider is not None
         planner_cases = load_eval_cases(fixture_path)
         if args.case_filter:
@@ -229,13 +267,27 @@ def main() -> None:
         printed_report = report
     print(json.dumps(printed_report, ensure_ascii=False, indent=2))
 
-    if args.mode == "live-llm":
+    if args.mode == "live-llm" or args.suite == "product":
         failure_path = Path(args.failure_output)
         failure_path.parent.mkdir(parents=True, exist_ok=True)
-        failure_payload = (
-            report
-            if args.suite in {"paraphrase", "conversation"}
-            else {
+        if args.suite == "product":
+            failure_payload = {
+                "mode": args.mode,
+                "suite": args.suite,
+                "answer_mode": (
+                    "live-llm" if args.live_answer else "deterministic-template"
+                ),
+                **product_eval_failure_report(product_suite),
+                "query_contract": {
+                    key: value
+                    for key, value in contract_report.items()
+                    if key != "results"
+                },
+            }
+        elif args.suite in {"paraphrase", "conversation"}:
+            failure_payload = report
+        else:
+            failure_payload = {
                 "mode": args.mode,
                 "answer_mode": (
                     "live-llm" if args.live_answer else "deterministic-template"
@@ -243,7 +295,6 @@ def main() -> None:
                 **eval_failure_report(suite),
                 "query_contract": contract_report,
             }
-        )
         failure_path.write_text(
             json.dumps(failure_payload, ensure_ascii=False, indent=2),
             encoding="utf-8",

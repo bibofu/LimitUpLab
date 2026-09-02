@@ -65,7 +65,8 @@ def _template_result(
         for item in rating.score_breakdown[:5]
     )
     answer = (
-        f"{facts.name}({facts.symbol}) 的首板评级为 {rating.rating}，"
+        f"{facts.trade_date.isoformat()} {facts.name}({facts.symbol}) "
+        f"的首板评级为 {rating.rating}，"
         f"评分 {rating.score:.1f}，置信度 {rating.confidence:.0%}。\n"
         f"支持因素：{'；'.join(rating.reasons[:4])}。\n"
         f"评分拆解：{breakdown}。\n"

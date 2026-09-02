@@ -29,8 +29,8 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 | 项目 | 状态 |
 | --- | --- |
-| 后端自动化测试 | 338 项通过，另有 10 个参数化子测试 |
-| 离线 Agent Eval | Core 18/18、Query Contract 36/36 通过 |
+| 后端自动化测试 | 350 项通过，另有 10 个参数化子测试 |
+| 离线 Agent Eval | Core 18/18、Product 30/30、Query Contract 36/36 通过 |
 | 本地数据健康检查 | 已实现 |
 | LLM 流式问答 | 已实现 |
 | Agent 限流与成本审计 | 单访客/IP/全局限制、真实 token 账本已实现 |
@@ -597,6 +597,14 @@ cd backend
 .\.venv\Scripts\python.exe scripts\run_agent_eval.py
 ```
 
+运行面向最终回答的 10 组、30 轮产品场景评测：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py --suite product --mode offline --summary-only
+```
+
+`product` suite 使用生产一致的消息和最近运行记录连续执行完整回答，分别统计意图、事实接地、事实完整性、上下文承接、投资合规、用户表达和响应延迟。失败轮次按维度写入本地 `backend/data/agent_eval_failures.json`，不进入聊天界面，也不提交到 Git。
+
 运行 138 条自然语言改写的真实 Planner 三轮评测：
 
 ```powershell
@@ -624,6 +632,8 @@ CI 或发布前可以组合 `--fail-on-failures --fail-on-unstable` 使用严格
 Eval 会检查：
 
 - 意图和日期解析
+- 多轮代词、日期和单只股票结果的上下文承接
+- 最终回答的事实完整性、内部实现词泄漏、投资合规和延迟门槛
 - Query Contract 的市场、板高、事件状态、题材、排序、数量和参数优先级
 - 必需与禁止调用的工具
 - 最终工具参数、命中数量和股票集合

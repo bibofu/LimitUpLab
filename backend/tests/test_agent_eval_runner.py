@@ -7,8 +7,13 @@ from unittest.mock import patch
 from app.agents.chat import answer_first_board_chat
 from app.agents.eval_runner import (
     AgentEvalCase,
+    AgentProductEvalScenario,
+    AgentProductEvalTurn,
     load_eval_cases,
+    load_product_eval_scenarios,
+    product_eval_failure_report,
     run_agent_eval_suite,
+    run_agent_product_eval_suite,
 )
 from app.routers.agents import get_agent_eval_report
 from app.services.llm_provider import LLMProvider, LLMResult
@@ -113,6 +118,57 @@ class AgentEvalRunnerTest(unittest.TestCase):
         }
         self.assertTrue(suite.ok, failure_report)
         self.assertEqual(suite.total, 18)
+
+    def test_product_fixture_covers_complete_multi_turn_answers(self) -> None:
+        fixture_path = (
+            Path(__file__).parent
+            / "fixtures"
+            / "agent_product_eval_scenarios.json"
+        )
+        suite = run_agent_product_eval_suite(
+            scenarios=load_product_eval_scenarios(fixture_path),
+            events=SAMPLE_EVENTS,
+        )
+
+        failures = {
+            f"{result.scenario_id}/{result.turn_id}": result.failures
+            for result in suite.results
+            if not result.passed
+        }
+        self.assertTrue(suite.ok, failures)
+        self.assertEqual(suite.total_scenarios, 10)
+        self.assertEqual(suite.total_turns, 30)
+        self.assertEqual(suite.metrics["context_continuity_rate"], 1.0)
+        self.assertEqual(suite.metrics["presentation_compliance_rate"], 1.0)
+
+    def test_product_failure_report_groups_actionable_dimensions(self) -> None:
+        suite = run_agent_product_eval_suite(
+            scenarios=[
+                AgentProductEvalScenario(
+                    scenario_id="broken_product_answer",
+                    turns=[
+                        AgentProductEvalTurn(
+                            turn_id="broken_turn",
+                            message="你好",
+                            expected_intent="greeting",
+                            answer_contains=["不存在的事实"],
+                            max_answer_chars=2,
+                            max_total_duration_ms=-1,
+                        )
+                    ],
+                )
+            ],
+            events=SAMPLE_EVENTS,
+        )
+
+        report = product_eval_failure_report(suite)
+
+        self.assertFalse(suite.ok)
+        self.assertEqual(report["failed_turns"], 1)
+        self.assertEqual(len(report["results"]), 1)
+        self.assertEqual(report["failure_categories"]["fact_completeness"], 1)
+        self.assertEqual(report["failure_categories"]["latency_sla"], 1)
+        self.assertEqual(report["failure_categories"]["presentation_compliance"], 1)
 
     def test_eval_report_route_returns_quality_summary(self) -> None:
         report = get_agent_eval_report(_admin=None)

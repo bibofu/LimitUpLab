@@ -3832,6 +3832,7 @@ class _SessionContext:
         matched_symbols: list[str] | None = None,
         conversation_history: list[dict[str, str]] | None = None,
         last_capabilities: list[str] | None = None,
+        last_intent: str | None = None,
         session_memory: dict[str, Any] | None = None,
     ):
         self.symbol = symbol
@@ -3840,6 +3841,7 @@ class _SessionContext:
         self.matched_symbols = matched_symbols or []
         self.conversation_history = conversation_history or []
         self.last_capabilities = last_capabilities or []
+        self.last_intent = last_intent
         self.session_memory = session_memory
 
 
@@ -3851,12 +3853,23 @@ def _build_agent_plan(
 
     parsed_trade_date = _extract_trade_date(request.message)
     trade_date = parsed_trade_date or request.trade_date
-    if trade_date is None and _looks_like_context_date_question(request.message):
+    if trade_date is None and (
+        _looks_like_context_date_question(request.message)
+        or _looks_like_context_symbol_question(request.message)
+        or _looks_like_context_pool_question(request.message)
+    ):
         trade_date = context.trade_date
     filter_query = _extract_first_board_filter(request.message)
     if filter_query is None and _looks_like_context_pool_question(request.message):
         filter_query = context.filter_query
     intent = _detect_intent(request.message, request.intent_hint)
+    if (
+        intent in {"unknown", "out_of_scope"}
+        and parsed_trade_date
+        and _looks_like_elliptical_date_followup(request.message)
+        and context.last_intent in SUPPORTED_INTENTS
+    ):
+        intent = context.last_intent
     if _looks_like_general_limit_up_question(request.message):
         intent = "limit_up_query"
     if (
@@ -4222,10 +4235,18 @@ def _merge_context_from_run(context: _SessionContext, run: AgentRun) -> None:
     output_json = run.output_json or {}
     if not context.last_capabilities:
         context.last_capabilities = _capabilities_from_saved_payload(output_json)
+    if context.last_intent is None and run.intent:
+        context.last_intent = run.intent
     if context.symbol is None:
         context.symbol = input_json.get("symbol")
     if context.trade_date is None:
         context.trade_date = _parse_optional_date(input_json.get("trade_date"))
+
+    stock_mentions = output_json.get("stock_mentions") or []
+    if context.symbol is None and len(stock_mentions) == 1:
+        mention = stock_mentions[0]
+        if isinstance(mention, dict) and mention.get("symbol"):
+            context.symbol = str(mention["symbol"])
 
     for reference in output_json.get("references", []) or []:
         if context.symbol is None and reference.startswith("symbol="):
@@ -4416,7 +4437,24 @@ def _looks_like_context_date_question(message: str) -> bool:
 
     return any(
         keyword in message
-        for keyword in ("那天", "当天", "该日", "那个交易日", "这个交易日")
+        for keyword in (
+            "那天",
+            "当天",
+            "同一天",
+            "该日",
+            "那个交易日",
+            "这个交易日",
+        )
+    )
+
+
+def _looks_like_elliptical_date_followup(message: str) -> bool:
+    """Recognize a short date-only follow-up such as ``那 8 月 6 日呢``."""
+
+    normalized = "".join(message.split()).rstrip("？?。！!")
+    return len(normalized) <= 18 and (
+        normalized.startswith(("那", "改看", "再看"))
+        or normalized.endswith(("呢", "可以吗", "有吗"))
     )
 
 
@@ -5023,7 +5061,8 @@ def _answer_rating_explain(
     reasons = SEMI.join(rating.reasons[:4])
     risks = SEMI.join(rating.risks[:3])
     answer = (
-        f"{rating.facts.name}({rating.facts.symbol}) \u5f53\u524d\u8bc4\u7ea7\u4e3a {rating.rating}\uff0c"
+        f"{rating.facts.trade_date.isoformat()} {rating.facts.name}({rating.facts.symbol}) "
+        f"\u5f53\u524d\u8bc4\u7ea7\u4e3a {rating.rating}\uff0c"
         f"\u8bc4\u5206 {rating.score:.1f}\uff0c\u7f6e\u4fe1\u5ea6 {rating.confidence:.0%}\u3002\n"
         f"\u4e3b\u8981\u652f\u6301\u56e0\u7d20\uff1a{reasons}\u3002\n"
         f"\u8bc4\u5206\u62c6\u89e3\uff1a{breakdown}\u3002\n"
@@ -5056,7 +5095,8 @@ def _answer_risk_summary(
         return _missing_symbol_response(request, symbol)
 
     answer = (
-        f"{rating.facts.name}({rating.facts.symbol}) \u7684\u98ce\u9669\u89c2\u5bdf\u4e3b\u8981\u662f\uff1a"
+        f"{rating.facts.trade_date.isoformat()} {rating.facts.name}({rating.facts.symbol}) "
+        "\u7684\u98ce\u9669\u89c2\u5bdf\u4e3b\u8981\u662f\uff1a"
         f"{SEMI.join(rating.risks)}\u3002"
         "\u8fd9\u4e9b\u98ce\u9669\u6765\u81ea\u5df2\u8bb0\u5f55\u7684\u5c01\u677f\u8fc7\u7a0b\u3001\u6362\u624b/\u6210\u4ea4\u989d\u548c\u5f53\u65e5\u5e02\u573a\u73af\u5883\u3002"
     )
@@ -5402,7 +5442,8 @@ def _template_selected_rating_answer(rating: FirstBoardRating) -> str:
     """Fallback answer for a selected candidate."""
 
     return (
-        f"{rating.facts.name}({rating.facts.symbol}) \u5f53\u524d\u8bc4\u7ea7 {rating.rating}\uff0c"
+        f"{rating.facts.trade_date.isoformat()} {rating.facts.name}({rating.facts.symbol}) "
+        f"\u5f53\u524d\u8bc4\u7ea7 {rating.rating}\uff0c"
         f"\u8bc4\u5206 {rating.score:.1f}\uff0c\u7f6e\u4fe1\u5ea6 {rating.confidence:.0%}\u3002"
         f"\u4e3b\u8981\u7406\u7531\uff1a{SEMI.join(rating.reasons[:3])}\u3002"
         f"\u98ce\u9669\u89c2\u5bdf\uff1a{SEMI.join(rating.risks[:2])}\u3002"
@@ -5480,7 +5521,10 @@ def _detect_intent(message: str, intent_hint: str | None = None) -> str:
 def _looks_like_capability_question(message: str) -> bool:
     """Return whether the user asks what the Agent can do."""
 
-    return any(keyword in message for keyword in KEYWORDS["capability_intro"])
+    return any(keyword in message for keyword in KEYWORDS["capability_intro"]) or any(
+        phrase in message
+        for phrase in ("能帮我做什么", "可以帮我做什么", "能帮什么")
+    )
 
 
 def _looks_like_smalltalk(message: str) -> bool:
@@ -5508,6 +5552,12 @@ def _looks_like_unsafe_investment_question(message: str) -> bool:
             "\u76ee\u6807\u4ef7",
             "\u80fd\u6da8\u5230",
             "\u4f1a\u6da8\u5417",
+            "\u4e70\u54ea\u4e2a",
+            "\u4e70\u54ea\u53ea",
+            "\u4e70\u54ea\u652f",
+            "\u63a8\u8350\u4e00\u53ea",
+            "\u63a8\u8350\u4e00\u652f",
+            "\u660e\u5929\u80fd\u6da8\u7684\u80a1\u7968",
         )
     )
 

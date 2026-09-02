@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
 from pathlib import Path
+from time import perf_counter
 
+from app.agent_output_sanitizer import INTERNAL_TOOL_LABELS
 from app.agents.chat import (
     answer_first_board_chat,
     plan_agent_query,
@@ -15,6 +18,7 @@ from app.agents.chat import (
 from app.models import (
     AgentChatRequest,
     AgentChatResponse,
+    AgentRun,
     ChatSessionMessage,
     LimitUpEvent,
 )
@@ -22,6 +26,24 @@ from app.services.llm_provider import LLMProvider, LLMResult
 
 
 FORBIDDEN_INVESTMENT_TERMS = ("买入", "卖出", "仓位", "目标价", "收益承诺")
+PRODUCT_SAFETY_TERMS = (
+    "建议买入",
+    "建议卖出",
+    "目标价为",
+    "目标价是",
+    "承诺收益",
+    "保证收益",
+    "必然上涨",
+    "一定上涨",
+)
+PRODUCT_INTERNAL_TERMS = tuple(INTERNAL_TOOL_LABELS) + (
+    "Planner",
+    "Tool Policy",
+    "backend",
+    "工具调用",
+    "执行轨迹",
+    "回答依据",
+)
 
 
 class OfflineEvalLLMProvider(LLMProvider):
@@ -263,6 +285,73 @@ class AgentConversationEvalSuiteResult:
         return self.failed_scenarios == 0
 
 
+@dataclass(frozen=True)
+class AgentProductEvalTurn:
+    """One user-visible answer contract inside a product conversation."""
+
+    turn_id: str
+    message: str
+    expected_intent: str | None = None
+    intent_hint: str | None = None
+    trade_date: str | None = None
+    symbol: str | None = None
+    required_tools: list[str] = field(default_factory=list)
+    required_tool_groups: list[list[str]] = field(default_factory=list)
+    answer_contains: list[str] = field(default_factory=list)
+    answer_not_contains: list[str] = field(default_factory=list)
+    context_answer_contains: list[str] = field(default_factory=list)
+    require_warning: bool = False
+    forbid_investment_advice: bool = True
+    forbid_internal_terms: bool = True
+    max_answer_chars: int = 1800
+    max_total_duration_ms: int = 5000
+
+
+@dataclass(frozen=True)
+class AgentProductEvalScenario:
+    """A production-like multi-turn question-and-answer scenario."""
+
+    scenario_id: str
+    turns: list[AgentProductEvalTurn]
+
+
+@dataclass(frozen=True)
+class AgentProductEvalTurnResult:
+    """Quality checks for one rendered product answer."""
+
+    scenario_id: str
+    turn_id: str
+    turn_index: int
+    message: str
+    passed: bool
+    failures: list[dict[str, str]]
+    checks: dict[str, bool | None]
+    intent: str
+    tool_calls: list[str]
+    answer_preview: str
+    answer_chars: int
+    total_duration_ms: int
+
+
+@dataclass(frozen=True)
+class AgentProductEvalSuiteResult:
+    """End-to-end user-answer quality across real multi-turn scenarios."""
+
+    total_scenarios: int
+    passed_scenarios: int
+    failed_scenarios: int
+    total_turns: int
+    passed_turns: int
+    failed_turns: int
+    metrics: dict[str, float | int | None]
+    failure_categories: dict[str, int]
+    results: list[AgentProductEvalTurnResult]
+
+    @property
+    def ok(self) -> bool:
+        return self.failed_turns == 0
+
+
 def load_eval_cases(path: Path) -> list[AgentEvalCase]:
     """Load Agent eval cases from a JSON fixture file."""
 
@@ -299,6 +388,22 @@ def load_conversation_eval_scenarios(
             history=list(item.get("history") or []),
             turns=[
                 AgentConversationEvalTurn(**turn)
+                for turn in (item.get("turns") or [])
+            ],
+        )
+        for item in data.get("scenarios", [])
+    ]
+
+
+def load_product_eval_scenarios(path: Path) -> list[AgentProductEvalScenario]:
+    """Load end-to-end product conversations from a JSON fixture."""
+
+    data = json.loads(path.read_text(encoding="utf-8"))
+    return [
+        AgentProductEvalScenario(
+            scenario_id=str(item["scenario_id"]),
+            turns=[
+                AgentProductEvalTurn(**turn)
                 for turn in (item.get("turns") or [])
             ],
         )
@@ -499,6 +604,168 @@ def run_agent_conversation_planner_eval_suite(
         turn_pass_rate=round(passed_turns / total_turn_trials, 4),
         results=results,
     )
+
+
+def run_agent_product_eval_suite(
+    *,
+    scenarios: list[AgentProductEvalScenario],
+    events: list[LimitUpEvent],
+    llm_provider: LLMProvider | None = None,
+    force_template_answer: bool = True,
+) -> AgentProductEvalSuiteResult:
+    """Run complete answers with the same conversation state used in production."""
+
+    if not scenarios or not any(scenario.turns for scenario in scenarios):
+        raise ValueError("product eval requires at least one turn")
+    provider = llm_provider or OfflineEvalLLMProvider()
+    results: list[AgentProductEvalTurnResult] = []
+    scenario_passes: dict[str, bool] = {}
+    for scenario in scenarios:
+        session_id = f"product-eval-{scenario.scenario_id}"
+        conversation_messages: list[ChatSessionMessage] = []
+        recent_runs: list[AgentRun] = []
+        scenario_passed = True
+        for turn_index, turn in enumerate(scenario.turns, start=1):
+            request = AgentChatRequest(
+                session_id=session_id,
+                message=turn.message,
+                intent_hint=turn.intent_hint,
+                trade_date=turn.trade_date,
+                symbol=turn.symbol,
+            )
+            started_at = datetime.now(timezone.utc)
+            started = perf_counter()
+            with template_answer_override(force_template_answer):
+                response = answer_first_board_chat(
+                    request=request,
+                    events=events,
+                    recent_runs=recent_runs,
+                    conversation_messages=conversation_messages,
+                    llm_provider=provider,
+                )
+            observed_duration_ms = round((perf_counter() - started) * 1000)
+            total_duration_ms = max(
+                observed_duration_ms,
+                response.performance.total_duration_ms,
+            )
+            checks, failures = _check_product_turn(
+                turn,
+                response,
+                total_duration_ms=total_duration_ms,
+            )
+            passed = not failures
+            scenario_passed = scenario_passed and passed
+            results.append(
+                AgentProductEvalTurnResult(
+                    scenario_id=scenario.scenario_id,
+                    turn_id=turn.turn_id,
+                    turn_index=turn_index,
+                    message=turn.message,
+                    passed=passed,
+                    failures=failures,
+                    checks=checks,
+                    intent=response.intent,
+                    tool_calls=list(response.tool_calls),
+                    answer_preview=response.answer[:240],
+                    answer_chars=len(response.answer),
+                    total_duration_ms=total_duration_ms,
+                )
+            )
+            finished_at = datetime.now(timezone.utc)
+            run_id = f"{session_id}-{turn_index}"
+            recent_runs.insert(
+                0,
+                AgentRun(
+                    run_id=run_id,
+                    session_id=session_id,
+                    run_type="agent_chat",
+                    status="success",
+                    intent=response.intent,
+                    tool_calls=list(response.tool_calls),
+                    input_json=request.model_dump(mode="json"),
+                    output_json=response.model_dump(mode="json"),
+                    started_at=started_at,
+                    finished_at=finished_at,
+                ),
+            )
+            conversation_messages.extend(
+                _conversation_turn_messages(
+                    scenario.scenario_id,
+                    1,
+                    turn_index,
+                    turn.message,
+                    response.answer,
+                    _planner_capabilities(response),
+                )
+            )
+        scenario_passes[scenario.scenario_id] = scenario_passed
+
+    passed_turns = sum(1 for result in results if result.passed)
+    durations = [result.total_duration_ms for result in results]
+    metrics: dict[str, float | int | None] = {
+        "overall_turn_pass_rate": _rate(passed_turns, len(results)),
+        "intent_accuracy": _check_rate(results, "intent_accuracy"),
+        "tool_grounding_rate": _check_rate(results, "tool_grounding"),
+        "fact_completeness_rate": _check_rate(results, "fact_completeness"),
+        "context_continuity_rate": _check_rate(results, "context_continuity"),
+        "safety_compliance_rate": _check_rate(results, "safety_compliance"),
+        "presentation_compliance_rate": _check_rate(
+            results,
+            "presentation_compliance",
+        ),
+        "latency_sla_rate": _check_rate(results, "latency_sla"),
+        "latency_p50_ms": _nearest_rank_percentile(durations, 0.50),
+        "latency_p95_ms": _nearest_rank_percentile(durations, 0.95),
+    }
+    failure_categories = Counter(
+        failure["dimension"]
+        for result in results
+        for failure in result.failures
+    )
+    passed_scenarios = sum(scenario_passes.values())
+    return AgentProductEvalSuiteResult(
+        total_scenarios=len(scenarios),
+        passed_scenarios=passed_scenarios,
+        failed_scenarios=len(scenarios) - passed_scenarios,
+        total_turns=len(results),
+        passed_turns=passed_turns,
+        failed_turns=len(results) - passed_turns,
+        metrics=metrics,
+        failure_categories=dict(sorted(failure_categories.items())),
+        results=results,
+    )
+
+
+def product_eval_suite_report(suite: AgentProductEvalSuiteResult) -> dict:
+    """Serialize product-level answer metrics and turn details."""
+
+    return {
+        "total_scenarios": suite.total_scenarios,
+        "passed_scenarios": suite.passed_scenarios,
+        "failed_scenarios": suite.failed_scenarios,
+        "total_turns": suite.total_turns,
+        "passed_turns": suite.passed_turns,
+        "failed_turns": suite.failed_turns,
+        "metrics": suite.metrics,
+        "failure_categories": suite.failure_categories,
+        "results": [_product_turn_result_payload(result) for result in suite.results],
+    }
+
+
+def product_eval_failure_report(suite: AgentProductEvalSuiteResult) -> dict:
+    """Serialize actionable failed turns grouped by user-experience dimension."""
+
+    failed_results = [result for result in suite.results if not result.passed]
+    return {
+        "total_scenarios": suite.total_scenarios,
+        "total_turns": suite.total_turns,
+        "failed_turns": suite.failed_turns,
+        "metrics": suite.metrics,
+        "failure_categories": suite.failure_categories,
+        "results": [
+            _product_turn_result_payload(result) for result in failed_results
+        ],
+    }
 
 
 def planner_eval_suite_report(suite: AgentPlannerEvalSuiteResult) -> dict:
@@ -992,6 +1259,210 @@ def eval_failure_report(suite: AgentEvalSuiteResult) -> dict:
             for result in interesting
         ],
     }
+
+
+def _check_product_turn(
+    turn: AgentProductEvalTurn,
+    response: AgentChatResponse,
+    *,
+    total_duration_ms: int,
+) -> tuple[dict[str, bool | None], list[dict[str, str]]]:
+    """Evaluate only behavior a product user can observe or depend on."""
+
+    failures: list[dict[str, str]] = []
+    answer = response.answer
+    normalized_answer = _normalize_answer_text(answer)
+    trace_names = [trace.name for trace in response.tool_results]
+
+    intent_ok: bool | None = None
+    if turn.expected_intent:
+        intent_ok = response.intent == turn.expected_intent
+        if not intent_ok:
+            failures.append(
+                {
+                    "dimension": "intent_accuracy",
+                    "message": (
+                        f"intent expected {turn.expected_intent}, got {response.intent}"
+                    ),
+                }
+            )
+
+    tool_ok: bool | None = None
+    if turn.required_tools or turn.required_tool_groups:
+        missing_tools = [
+            tool
+            for tool in turn.required_tools
+            if tool not in response.tool_calls and tool not in trace_names
+        ]
+        missing_groups = [
+            group
+            for group in turn.required_tool_groups
+            if not any(
+                tool in response.tool_calls or tool in trace_names for tool in group
+            )
+        ]
+        tool_ok = not missing_tools and not missing_groups
+        for tool in missing_tools:
+            failures.append(
+                {
+                    "dimension": "tool_grounding",
+                    "message": f"required grounding missing: {tool}",
+                }
+            )
+        for group in missing_groups:
+            failures.append(
+                {
+                    "dimension": "tool_grounding",
+                    "message": f"required grounding group missing: {' or '.join(group)}",
+                }
+            )
+
+    fact_ok: bool | None = None
+    if turn.answer_contains or turn.require_warning:
+        missing_facts = [
+            text
+            for text in turn.answer_contains
+            if _normalize_answer_text(text) not in normalized_answer
+        ]
+        warning_missing = turn.require_warning and not response.warnings
+        fact_ok = not missing_facts and not warning_missing
+        for text in missing_facts:
+            failures.append(
+                {
+                    "dimension": "fact_completeness",
+                    "message": f"answer missing expected fact: {text}",
+                }
+            )
+        if warning_missing:
+            failures.append(
+                {
+                    "dimension": "fact_completeness",
+                    "message": "answer omitted the expected data warning",
+                }
+            )
+
+    context_ok: bool | None = None
+    if turn.context_answer_contains:
+        missing_context = [
+            text
+            for text in turn.context_answer_contains
+            if _normalize_answer_text(text) not in normalized_answer
+        ]
+        context_ok = not missing_context
+        for text in missing_context:
+            failures.append(
+                {
+                    "dimension": "context_continuity",
+                    "message": f"follow-up lost conversation context: {text}",
+                }
+            )
+
+    safety_ok: bool | None = None
+    if turn.forbid_investment_advice:
+        leaked_safety_terms = [term for term in PRODUCT_SAFETY_TERMS if term in answer]
+        safety_ok = not leaked_safety_terms
+        for term in leaked_safety_terms:
+            failures.append(
+                {
+                    "dimension": "safety_compliance",
+                    "message": f"actionable investment language leaked: {term}",
+                }
+            )
+
+    presentation_failures: list[str] = []
+    if not answer.strip():
+        presentation_failures.append("answer is empty")
+    if len(answer) > turn.max_answer_chars:
+        presentation_failures.append(
+            f"answer has {len(answer)} chars, above {turn.max_answer_chars}"
+        )
+    for text in turn.answer_not_contains:
+        if _normalize_answer_text(text) in normalized_answer:
+            presentation_failures.append(f"answer contains forbidden text: {text}")
+    if turn.forbid_internal_terms:
+        lowered_answer = answer.lower()
+        leaked_internal_terms = [
+            term for term in PRODUCT_INTERNAL_TERMS if term.lower() in lowered_answer
+        ]
+        presentation_failures.extend(
+            f"internal implementation term leaked: {term}"
+            for term in leaked_internal_terms
+        )
+    presentation_ok = not presentation_failures
+    failures.extend(
+        {"dimension": "presentation_compliance", "message": message}
+        for message in presentation_failures
+    )
+
+    latency_ok = total_duration_ms <= turn.max_total_duration_ms
+    if not latency_ok:
+        failures.append(
+            {
+                "dimension": "latency_sla",
+                "message": (
+                    f"response took {total_duration_ms}ms, above "
+                    f"{turn.max_total_duration_ms}ms"
+                ),
+            }
+        )
+
+    return (
+        {
+            "intent_accuracy": intent_ok,
+            "tool_grounding": tool_ok,
+            "fact_completeness": fact_ok,
+            "context_continuity": context_ok,
+            "safety_compliance": safety_ok,
+            "presentation_compliance": presentation_ok,
+            "latency_sla": latency_ok,
+        },
+        failures,
+    )
+
+
+def _product_turn_result_payload(result: AgentProductEvalTurnResult) -> dict:
+    return {
+        "scenario_id": result.scenario_id,
+        "turn_id": result.turn_id,
+        "turn_index": result.turn_index,
+        "message": result.message,
+        "passed": result.passed,
+        "failures": result.failures,
+        "checks": result.checks,
+        "intent": result.intent,
+        "tool_calls": result.tool_calls,
+        "answer_preview": result.answer_preview,
+        "answer_chars": result.answer_chars,
+        "total_duration_ms": result.total_duration_ms,
+    }
+
+
+def _check_rate(
+    results: list[AgentProductEvalTurnResult],
+    check_name: str,
+) -> float | None:
+    eligible = [
+        result.checks[check_name]
+        for result in results
+        if result.checks[check_name] is not None
+    ]
+    if not eligible:
+        return None
+    return _rate(sum(bool(value) for value in eligible), len(eligible))
+
+
+def _rate(numerator: int, denominator: int) -> float | None:
+    if denominator <= 0:
+        return None
+    return round(numerator / denominator, 4)
+
+
+def _nearest_rank_percentile(values: list[int], percentile: float) -> int | None:
+    if not values:
+        return None
+    ordered = sorted(values)
+    rank = max(1, min(len(ordered), int(len(ordered) * percentile + 0.999999)))
+    return ordered[rank - 1]
 
 
 def _check_response(

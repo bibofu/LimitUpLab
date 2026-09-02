@@ -267,6 +267,19 @@ Chat cases live in `tests/fixtures/agent_eval_cases.json`; the 36 paraphrase and
 parameter-precedence cases for Query Contract v2 live in
 `tests/fixtures/query_contract_v2_cases.json`.
 
+For an end-to-end product gate, run 10 production-like conversations with 30
+complete user-visible answers:
+
+```powershell
+cd backend
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py --suite product --mode offline --summary-only
+```
+
+The product suite measures intent accuracy, tool grounding, fact completeness,
+context continuity, safety, presentation, and response latency. It writes a
+dimension-grouped local failure report to `backend/data/agent_eval_failures.json`
+even in offline mode; internal eval details are not rendered in the chat UI.
+
 To sample the configured live LLM planner and capture cases where the model
 chooses weak tools or needs backend repair:
 
