@@ -1,4 +1,4 @@
-"""Canonical query contract for local limit-up event questions."""
+"""Canonical query contracts for local price-limit event questions."""
 
 from __future__ import annotations
 
@@ -9,9 +9,11 @@ from typing import Any, Literal
 
 
 QUERY_CONTRACT_VERSION = "limit-up-query-v2"
+MARKET_EVENT_QUERY_CONTRACT_VERSION = "market-event-query-v1"
 
 MarketSegment = Literal["main_board", "chinext", "star_market", "beijing"]
 EventStatus = Literal["closed", "failed", "broken_intraday", "all"]
+MarketEventType = Literal["limit_up", "limit_down", "broken_board"]
 ResultMode = Literal["list", "count", "summary", "ranking"]
 SortField = Literal[
     "board_height",
@@ -61,6 +63,17 @@ _STATUS_ALIASES: dict[str, EventStatus] = {
     "开板": "broken_intraday",
     "all": "all",
     "全部": "all",
+}
+_MARKET_EVENT_TYPE_ALIASES: dict[str, MarketEventType] = {
+    "limit_up": "limit_up",
+    "up_limit": "limit_up",
+    "涨停": "limit_up",
+    "limit_down": "limit_down",
+    "down_limit": "limit_down",
+    "跌停": "limit_down",
+    "broken_board": "broken_board",
+    "failed_limit_up": "broken_board",
+    "炸板": "broken_board",
 }
 
 _SORT_ALIASES: dict[str, SortField] = {
@@ -119,6 +132,89 @@ class LimitUpQueryContract:
             "sort_order": self.sort_order,
             "limit": self.limit,
         }
+
+
+@dataclass(frozen=True)
+class MarketEventQueryContract:
+    """One strict, source-independent market event request."""
+
+    event_type: MarketEventType
+    version: str = MARKET_EVENT_QUERY_CONTRACT_VERSION
+    trade_date: date | None = None
+    market: MarketSegment | None = None
+    query: str | None = None
+    result_mode: ResultMode = "list"
+    limit: int = 30
+    exhaustive: bool = False
+
+    def to_dict(self) -> dict[str, Any]:
+        """Serialize the contract for traces and semantic validation."""
+
+        payload = asdict(self)
+        payload["trade_date"] = self.trade_date.isoformat() if self.trade_date else None
+        return payload
+
+    def to_tool_arguments(self) -> dict[str, Any]:
+        """Return canonical arguments accepted by the market event tool."""
+
+        return {
+            "event_type": self.event_type,
+            "trade_date": self.trade_date.isoformat() if self.trade_date else None,
+            "market": self.market,
+            "query": self.query,
+            "result_mode": self.result_mode,
+            "limit": self.limit,
+        }
+
+
+def build_market_event_query_contract(
+    message: str,
+    *,
+    request_trade_date: date | None = None,
+    planner_arguments: dict[str, Any] | None = None,
+) -> MarketEventQueryContract:
+    """Compile open user wording into one validated market-event request.
+
+    Explicit wording always wins. An unsupported planner event type is rejected
+    instead of being silently converted into a different market event.
+    """
+
+    planner = planner_arguments or {}
+    explicit_event_type = extract_market_event_type(message)
+    planner_event_type = normalize_market_event_type(planner.get("event_type"))
+    if explicit_event_type is not None:
+        event_type = explicit_event_type
+    elif planner_event_type is not None:
+        event_type = planner_event_type
+    else:
+        raw_event_type = str(planner.get("event_type") or "").strip()
+        if raw_event_type:
+            raise ValueError(f"Unsupported market event type: {raw_event_type}")
+        raise ValueError("A market event type is required")
+
+    explicit_market = extract_market_segment(message)
+    market = explicit_market or normalize_market_segment(planner.get("market"))
+    result_mode = extract_result_mode(message) or normalize_result_mode(
+        planner.get("result_mode")
+    )
+    exhaustive = looks_like_exhaustive_request(message)
+    limit = (
+        extract_result_limit(message)
+        or _bounded_int(planner.get("limit"), minimum=1, maximum=100)
+        or 30
+    )
+    if exhaustive or result_mode == "count":
+        limit = 100
+
+    return MarketEventQueryContract(
+        event_type=event_type,
+        trade_date=extract_trade_date(message) or request_trade_date,
+        market=market,
+        query=extract_topic_query(message) or _clean_query(planner.get("query")),
+        result_mode=result_mode or "list",
+        limit=max(1, min(limit, 100)),
+        exhaustive=exhaustive,
+    )
 
 
 def build_limit_up_query_contract(
@@ -274,6 +370,69 @@ def normalize_market_segment(value: object) -> MarketSegment | None:
     if not normalized or normalized == "all":
         return None
     return _MARKET_SEGMENT_ALIASES.get(normalized)  # type: ignore[return-value]
+
+
+def extract_market_event_type(message: str) -> MarketEventType | None:
+    """Recognize price-limit event semantics across common Chinese wording."""
+
+    compact = re.sub(r"[\s，。！？,.!?]", "", message).lower()
+    limited_drop_stock_query = "跌幅限制" in compact and any(
+        term in compact for term in ("股票", "个股", "票", "名单", "几只", "多少只")
+    )
+    if "跌停" in compact or limited_drop_stock_query:
+        return "limit_down"
+    if any(term in compact for term in ("炸板", "未回封", "封板失败")):
+        return "broken_board"
+    if any(
+        term in compact
+        for term in ("涨停", "首板", "连板", "二板", "三板", "最高板")
+    ):
+        return "limit_up"
+    return None
+
+
+def looks_like_market_event_query(message: str) -> bool:
+    """Distinguish event-list requests from rules, causes and general explanations."""
+
+    compact = re.sub(r"[\s，。！？,.!?]", "", message).lower()
+    if extract_market_event_type(compact) is None:
+        return False
+    if any(
+        term in compact
+        for term in ("为什么", "原因", "制度", "规则", "什么意思", "怎么计算")
+    ):
+        return False
+    if any(
+        term in compact
+        for term in (
+            "哪些",
+            "有哪",
+            "名单",
+            "列出",
+            "列一下",
+            "几只",
+            "多少只",
+            "数量",
+            "统计",
+            "谁",
+        )
+    ):
+        return True
+    return compact in {
+        "跌停",
+        "今天跌停",
+        "今日跌停",
+        "最新跌停",
+        "跌停股",
+        "跌停票",
+    }
+
+
+def normalize_market_event_type(value: object) -> MarketEventType | None:
+    """Normalize a planner-provided event type without inventing a default."""
+
+    normalized = str(value or "").strip().lower()
+    return _MARKET_EVENT_TYPE_ALIASES.get(normalized)
 
 
 def extract_event_status(message: str) -> EventStatus | None:

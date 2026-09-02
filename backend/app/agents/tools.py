@@ -11,6 +11,7 @@ from app.agents.first_board import build_first_board_ratings
 from app.agents.query_contract import (
     MARKET_SEGMENT_LABELS,
     MARKET_SEGMENT_PREFIXES,
+    normalize_market_event_type,
     normalize_event_status,
     normalize_market_segment,
     normalize_sort_field,
@@ -97,7 +98,11 @@ class AgentToolSchema:
             "name": self.name,
             "description": self.description,
             "arguments": {
-                name: definition.get("type", "any")
+                name: {
+                    key: definition[key]
+                    for key in ("type", "enum")
+                    if key in definition
+                }
                 for name, definition in properties.items()
             },
             "required": self.args_schema.get("required", []),
@@ -390,6 +395,48 @@ TOOL_SCHEMAS = [
         returns=(
             "Persisted next-session candidates with score, confidence, price-volume facts, "
             "pattern, reasons, risks and explicit missing inputs."
+        ),
+    ),
+    AgentToolSchema(
+        name="market_event_pool",
+        description=(
+            "查询完整交易日的市场价格限制事件，统一支持涨停、跌停和炸板名单。"
+            "event_type 必须使用 limit_up、limit_down 或 broken_board；"
+            "适合各种关于哪些股票涨停、跌停或炸板的口语化问法。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "event_type": {
+                    "type": "string",
+                    "enum": ["limit_up", "limit_down", "broken_board"],
+                },
+                "trade_date": {
+                    "type": ["string", "null"],
+                    "description": "YYYY-MM-DD; omit for the latest completed local trade date.",
+                },
+                "market": {
+                    "type": ["string", "null"],
+                    "enum": [
+                        "main_board",
+                        "chinext",
+                        "star_market",
+                        "beijing",
+                        None,
+                    ],
+                },
+                "query": {"type": ["string", "null"]},
+                "result_mode": {
+                    "type": ["string", "null"],
+                    "enum": ["list", "count", "summary", "ranking", None],
+                },
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+            },
+            "required": ["event_type"],
+        },
+        returns=(
+            "A normalized completed-day market event pool with event_type, date, count, "
+            "stock names, symbols and available event fields."
         ),
     ),
     AgentToolSchema(
@@ -724,6 +771,7 @@ V1_CLOSED_MARKET_TOOL_NAMES = frozenset(
         "dragon_tiger_list",
         "first_board_ratings",
         "first_board_discovery",
+        "market_event_pool",
         "limit_up_events",
         "first_board_filter",
         "stock_kline",
@@ -1548,6 +1596,129 @@ class AgentToolRegistry:
                 f"{response.data_as_of.isoformat()} 收盘后低位挖掘观察池"
                 f"共 {len(response.candidates)} 只。"
             ),
+            trace_output=trace_output,
+        )
+
+    def market_event_pool(
+        self,
+        *,
+        event_type: str,
+        trade_date: date | None = None,
+        market: str | None = None,
+        query: str | None = None,
+        result_mode: str = "list",
+        limit: int = 30,
+    ) -> ToolResult:
+        """Return one normalized completed-day price-limit event pool."""
+
+        effective_type = normalize_market_event_type(event_type)
+        if effective_type is None:
+            raise ValueError(f"Unsupported market event type: {event_type}")
+        if result_mode not in {"list", "count", "summary", "ranking"}:
+            raise ValueError(f"Unsupported market event result mode: {result_mode}")
+        target_date = trade_date or max(
+            (event.trade_date for event in self.events),
+            default=date.today(),
+        )
+        effective_market = normalize_market_segment(market)
+        effective_limit = max(1, min(limit, 100))
+        source = "local-limit-up-events"
+
+        if effective_type == "limit_down":
+            snapshot = collect_limit_down_pool(target_date)
+            if snapshot.trade_date != target_date:
+                raise ValueError(
+                    "Limit-down source date does not match the requested trade date"
+                )
+            source = snapshot.source
+            items = [
+                {
+                    "symbol": item.symbol,
+                    "name": item.name,
+                    "event_type": effective_type,
+                    "change_pct": item.change_pct,
+                    "industry": item.industry,
+                }
+                for item in snapshot.items
+            ]
+            if effective_market is not None:
+                prefixes = MARKET_SEGMENT_PREFIXES[effective_market]
+                items = [item for item in items if item["symbol"].startswith(prefixes)]
+            if query:
+                normalized_query = query.strip().lower()
+                items = [
+                    item
+                    for item in items
+                    if normalized_query in item["symbol"].lower()
+                    or normalized_query in item["name"].lower()
+                    or normalized_query in str(item.get("industry") or "").lower()
+                ]
+            items = sorted(
+                items,
+                key=lambda item: (
+                    item.get("change_pct") is None,
+                    item.get("change_pct") or 0.0,
+                    item["symbol"],
+                ),
+            )
+        else:
+            status = "closed" if effective_type == "limit_up" else "failed"
+            legacy_result = self.limit_up_events(
+                trade_date=target_date,
+                market=effective_market,
+                query=query,
+                event_status=status,
+                limit=100,
+            )
+            items = [
+                {
+                    "symbol": event.symbol,
+                    "name": event.name,
+                    "event_type": effective_type,
+                    "change_pct": None,
+                    "industry": event.industry,
+                    "concept": event.concept,
+                    "board_height": event.board_height,
+                    "first_limit_time": event.first_limit_time.strftime("%H:%M"),
+                    "break_count": event.break_count,
+                    "closed_limit": event.closed_limit,
+                }
+                for event in legacy_result.output
+            ]
+
+        matched_count = len(items)
+        visible_items = [] if result_mode == "count" else items[:effective_limit]
+        labels = {
+            "limit_up": "涨停",
+            "limit_down": "跌停",
+            "broken_board": "炸板未回封",
+        }
+        event_label = labels[effective_type]
+        trace_output = {
+            "trade_date": target_date.isoformat(),
+            "event_type": effective_type,
+            "event_label": event_label,
+            "market": effective_market,
+            "market_label": MARKET_SEGMENT_LABELS.get(effective_market or "") or None,
+            "query": query,
+            "result_mode": result_mode,
+            "matched_count": matched_count,
+            "returned_count": len(visible_items),
+            "items": visible_items,
+            "source": source,
+        }
+        return ToolResult(
+            name="market_event_pool",
+            input={
+                "event_type": effective_type,
+                "trade_date": target_date.isoformat(),
+                "market": effective_market,
+                "query": query,
+                "result_mode": result_mode,
+                "limit": effective_limit,
+            },
+            output=trace_output,
+            summary=f"{target_date.isoformat()} {event_label}查询命中 {matched_count} 只。",
             trace_output=trace_output,
         )
 

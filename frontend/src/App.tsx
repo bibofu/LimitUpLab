@@ -717,6 +717,15 @@ function inferChatIntent(message: string) {
   if (/为什么|评分|评级|高分|低分/.test(message)) {
     return "rating_explain";
   }
+  if (
+    /跌停/.test(message)
+    && /哪些|有哪|名单|列出|列一下|几只|多少只|数量|统计|谁|^(今天|今日|最新)?跌停(股|票)?$/.test(message)
+  ) {
+    return "market_event_query";
+  }
+  if (/涨停|首板|连板|二板|三板|炸板|最高板/.test(message)) {
+    return "limit_up_query";
+  }
   if (/医药|医疗|制药|药业|生物|中药|相关|行业|题材/.test(message)) {
     return "first_board_filter";
   }

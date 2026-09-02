@@ -29,7 +29,7 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 | 项目 | 状态 |
 | --- | --- |
-| 后端自动化测试 | 352 项通过，另有 10 个参数化子测试 |
+| 后端自动化测试 | 358 项通过，另有 14 个参数化子测试 |
 | 离线 Agent Eval | Core 18/18、Product 30/30、Query Contract 36/36 通过 |
 | 本地数据健康检查 | 已实现 |
 | LLM 流式问答 | 已实现 |
@@ -106,6 +106,7 @@ scoring_version
 用户问题
   -> LLM Planner 原生调用 submit_agent_plan
   -> Agent Query Contract v3 归一化业务能力和多轮上下文关系
+  -> Market Event Contract v1 统一涨停、跌停和炸板事件语义
   -> Query Contract v2 统一日期、市场、板高、状态、排序和数量
   -> Tool Policy Engine 按能力契约检查事实接地要求
   -> 后端执行结构化工具
@@ -123,6 +124,7 @@ scoring_version
 | `first_board_ratings` | 查询首板评级、拆解和风险 |
 | `first_board_discovery` | 查询低位挖掘观察池，并按题材、新闻财报和走势解释 |
 | `first_board_filter` | 按行业、题材、评级和置信度筛选 |
+| `market_event_pool` | 统一查询完整交易日的涨停、跌停和炸板名单或数量 |
 | `limit_up_events` | 查询首板、连板、炸板及题材相关涨停事件 |
 | `daily_board_promotion` | 统计近 5 日总晋级率、首板到二板率、连板梯队及成功股票明细 |
 | `stock_kline` | 查询个股近期 K 线和衍生指标 |
@@ -137,7 +139,7 @@ scoring_version
 
 默认配置 `LIMITUPLAB_AGENT_PROFILE=v1_close_review` 会在 Planner Schema、Capability Contract、Tool Policy 和执行器四层统一限制工具。Capability 是业务工作流的单一声明源，同时定义示例问法、最低证据工具、默认参数和按需回答规范；系统不再维护重复的运行时 Skill Registry。V1 允许按需读取带来源和采集时间的 `hot_stock_ranking` 热度快照、`sector_performance` 行业强弱榜、`finance_news` 综合财经快讯，以及带 SQLite 缓存的 `stock_news`、`stock_activity` 个股资讯与收盘后动态；这些外部事实不参与首板评分，也不被解释为推荐。`remote_limit_up_pool` 和 `web_search` 仅保留在 `extended` 研发配置中，供 V2 能力开发使用。即使 LLM 伪造这些未开放工具调用，V1 执行器也会拒绝执行。
 
-Agent Query Contract v3 先把不同说法归一为稳定能力 ID，例如 `market_environment`、`limit_up_pool`、`first_board_rating` 和 `prediction_review`。Planner 通过 OpenAI-compatible `tools` 与强制 `tool_choice` 原生调用 `submit_agent_plan`，由函数参数承载能力、上下文关系和证据工具计划，不再依赖模型在文本中手写 JSON；不支持 Function Calling 的兼容 Provider 可回退到 Prompt-to-JSON。组合问题可以选择多个能力；多轮追问通过 `standalone`、`entity_followup`、`source_refinement` 区分独立问题、实体继承和上一轮结果集交叉查询，并只继承 Planner 明确选择的 `context_capabilities`。有显式能力契约时，旧关键词判断不再参与语义路由，只在旧 Provider 或 Planner 未输出能力时兜底。
+Agent Query Contract v3 先把不同说法归一为稳定能力 ID，例如 `market_environment`、`market_events`、`limit_up_pool`、`first_board_rating` 和 `prediction_review`。Planner 通过 OpenAI-compatible `tools` 与强制 `tool_choice` 原生调用 `submit_agent_plan`，由函数参数承载能力、上下文关系和证据工具计划，不再依赖模型在文本中手写 JSON；不支持 Function Calling 的兼容 Provider 可回退到 Prompt-to-JSON。组合问题可以选择多个能力；多轮追问通过 `standalone`、`entity_followup`、`source_refinement` 区分独立问题、实体继承和上一轮结果集交叉查询，并只继承 Planner 明确选择的 `context_capabilities`。有显式能力契约时，旧关键词判断不再参与语义路由，只在旧 Provider 或 Planner 未输出能力时兜底。
 
 Query Contract v2 继续负责涨停查询中的确定性参数：用户明确表达的日期、首板/连板、主板/创业板/科创板/北交所、封板/炸板、题材、排序、Top-N 和完整名单要求优先于 Planner 猜测。Tool Policy Engine 根据 v3 能力补齐所需证据工具，不能让模型直接凭记忆回答市场事实。
 

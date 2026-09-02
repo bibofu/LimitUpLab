@@ -146,6 +146,26 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
         ),
     ),
     AgentCapability(
+        "market_events",
+        "查询完整交易日的涨停、跌停或炸板市场事件名单、数量及常用筛选结果。",
+        (
+            CapabilityToolRequirement(
+                "market_event_pool", {"event_type": "limit_up", "limit": 30}
+            ),
+        ),
+        examples=(
+            "今天跌停的票有哪些",
+            "列出最新跌停名单",
+            "今天哪些股票涨停",
+            "炸板未回封的股票有几只",
+        ),
+        answer_guidance=(
+            "严格遵守用户要求的事件类型、日期、市场和数量；先报告匹配数量，再按返回顺序列出"
+            "名称和代码，可用时补充涨跌幅或行业。不得把跌停查询改成涨停查询，也不得用涨停"
+            "或炸板事实代替跌停名单。未指定日期时使用最新完整交易日。"
+        ),
+    ),
+    AgentCapability(
         "limit_up_pool",
         "查询某个交易日的涨停、首板、连板或炸板名单；不用于跨日晋级数量和比例。",
         (CapabilityToolRequirement("limit_up_events"),),

@@ -25,10 +25,13 @@ from app.agent_output_sanitizer import (
 )
 from app.agents.query_contract import (
     MARKET_SEGMENT_LABELS,
+    build_market_event_query_contract,
     build_limit_up_query_contract,
     extract_board_filters as contract_board_filters,
+    extract_market_event_type,
     extract_result_limit,
     looks_like_exhaustive_request,
+    looks_like_market_event_query,
 )
 from app.agents.tool_policy import (
     AgentToolPolicyEngine,
@@ -84,7 +87,7 @@ from app.services.llm_provider import (
 from app.services.session_memory import memory_prompt_payload
 
 
-CHAT_AGENT_VERSION = "first-board-chat-policy-v12-native-function-calling"
+CHAT_AGENT_VERSION = "first-board-chat-policy-v13-market-events"
 PLANNER_FUNCTION_NAME = "submit_agent_plan"
 _FORCE_TEMPLATE_ANSWER_OVERRIDE: ContextVar[bool | None] = ContextVar(
     "force_template_answer_override",
@@ -110,6 +113,7 @@ SUPPORTED_INTENTS = {
     "first_board_filter",
     "first_board_context_top",
     "first_board_sector_summary",
+    "market_event_query",
     "limit_up_query",
     "today_summary",
     "llm_explanation",
@@ -309,6 +313,12 @@ def answer_first_board_chat(
     )
     if llm_response is not None:
         return llm_response
+    market_event_fallback = _answer_market_event_without_llm(
+        request=request,
+        tools=tools,
+    )
+    if market_event_fallback is not None:
+        return market_event_fallback
     daily_promotion_fallback = _answer_daily_board_promotion_without_llm(
         request=request,
         tools=tools,
@@ -752,7 +762,10 @@ def _answer_with_llm_tool_agent(
         request.message,
         execution["facts"],
     )
-    fast_structured_answer = _is_simple_sector_stock_ranking(execution["facts"])
+    fast_structured_answer = (
+        _is_simple_sector_stock_ranking(execution["facts"])
+        or _is_simple_market_event_pool(execution["facts"])
+    )
     if fast_structured_answer:
         answer_system_prompt = ""
         answer_user_prompt = ""
@@ -998,6 +1011,16 @@ def _generate_llm_query_plan(
         raw_capabilities = [*context_capabilities, *raw_capabilities]
     else:
         context_capabilities = []
+    raw_capabilities, tool_calls = _normalize_market_event_plan(
+        request,
+        raw_capabilities,
+        tool_calls,
+    )
+    if (
+        extract_market_event_type(request.message) == "limit_down"
+        and looks_like_market_event_query(request.message)
+    ):
+        payload["intent_label"] = "market_event_query"
     payload["context_mode"] = context_mode
     payload["context_capabilities"] = context_capabilities
     payload["capabilities"] = raw_capabilities
@@ -1116,6 +1139,7 @@ def _tool_planner_system_prompt(
         "An '一进二观察名单', candidate list, recommendation ranking, or Top10 means first_board_rating; historical realized one-to-two counts or rates mean board_promotion. "
         "For first-board position/location classification, position means the pre-board K-line regime such as low-base breakout, oversold rebound, V reversal, high breakout or second wave; call first_board_ratings and never classify by first seal time. "
         "For ordinary limit-up, first-board, or continued-board lists, call limit_up_events. Follow the backend_query_contract supplied with the user message for date, board height, market, event status, result mode, sorting and limit; do not weaken explicit user filters. Use first_board_ratings only when the user asks for ratings, scores, ranking, or candidate filtering. "
+        "For completed limit-down lists or counts, select market_events and call market_event_pool with event_type=limit_down. Never encode a limit-down request as limit_up_events, and never substitute limit-up or broken-board facts for a limit-down list. "
         "For Dragon-Tiger List, institution flow or hot-money flow questions, call dragon_tiger_list only for a completed trade date. "
         "For a theme or industry inside the local limit-up pool, call limit_up_events. For whole-market industry performance or ranking, call sector_performance and state its source, data_as_of and freshness. "
         "When the user asks which constituent stocks in a named industry or concept have stronger recent trends, call sector_stock_ranking; do not substitute one sector leader or let the model rank names from memory. "
@@ -1365,6 +1389,34 @@ def _template_answer_from_tool_facts(
 
     if _QuestionSignals.from_message(request.message).market_environment:
         return _template_market_environment_answer(facts)
+
+    if "market_event_pool" in facts:
+        payload = facts["market_event_pool"]
+        items = payload.get("items", []) if isinstance(payload, dict) else []
+        matched_count = payload.get("matched_count", 0)
+        event_label = payload.get("event_label") or "市场事件"
+        market_label = payload.get("market_label") or "全市场"
+        lines = [
+            f"{payload.get('trade_date')} {market_label}{event_label}股票共 "
+            f"{matched_count} 只。"
+        ]
+        if payload.get("result_mode") != "count":
+            for index, item in enumerate(items, start=1):
+                metrics: list[str] = []
+                if item.get("change_pct") is not None:
+                    metrics.append(f"涨跌幅 {item['change_pct']:+.2f}%")
+                if item.get("industry"):
+                    metrics.append(f"行业 {item['industry']}")
+                suffix = f"：{'，'.join(metrics)}" if metrics else ""
+                lines.append(
+                    f"{index}. {item.get('name')}（{item.get('symbol')}）{suffix}"
+                )
+            if matched_count and not items:
+                lines.append("本轮没有返回可展示的股票明细。")
+            if len(items) < matched_count:
+                lines.append(f"当前先列出前 {len(items)} 只。")
+        lines.append("不构成买卖建议。")
+        return "\n".join(lines)
 
     if "hot_stock_limit_up_intersection" in facts:
         payload = facts["hot_stock_limit_up_intersection"]
@@ -2489,6 +2541,49 @@ def _normalize_tool_calls(raw_calls: object) -> list[dict[str, Any]]:
     return calls[:6]
 
 
+def _normalize_market_event_plan(
+    request: AgentChatRequest,
+    raw_capabilities: list[object],
+    tool_calls: list[dict[str, Any]],
+) -> tuple[list[object], list[dict[str, Any]]]:
+    """Repair explicit market-event semantics before capability tool injection."""
+
+    requested_event_type = extract_market_event_type(request.message)
+    if requested_event_type != "limit_down" or not looks_like_market_event_query(
+        request.message
+    ):
+        return raw_capabilities, tool_calls
+
+    capabilities = [
+        item
+        for item in raw_capabilities
+        if (
+            item.get("name") if isinstance(item, dict) else item
+        ) != "limit_up_pool"
+    ]
+    if "market_events" not in capabilities:
+        capabilities.append("market_events")
+    normalized_calls = [
+        call for call in tool_calls if call.get("name") != "limit_up_events"
+    ]
+    for call in normalized_calls:
+        if call.get("name") == "market_event_pool":
+            call["arguments"] = {
+                **dict(call.get("arguments") or {}),
+                "event_type": requested_event_type,
+            }
+            break
+    else:
+        normalized_calls.insert(
+            0,
+            {
+                "name": "market_event_pool",
+                "arguments": {"event_type": requested_event_type},
+            },
+        )
+    return capabilities, normalized_calls[:6]
+
+
 def _normalize_first_board_position_tool_calls(
     request: AgentChatRequest,
     tool_calls: list[dict[str, Any]],
@@ -2577,7 +2672,50 @@ def _execute_llm_tool_calls(
             )
             call_names.append(name)
             continue
-        if name == "market_summary":
+        if name == "market_event_pool":
+            try:
+                contract = build_market_event_query_contract(
+                    request.message,
+                    request_trade_date=request.trade_date,
+                    planner_arguments=arguments,
+                )
+                result = tools.market_event_pool(
+                    event_type=contract.event_type,
+                    trade_date=contract.trade_date,
+                    market=contract.market,
+                    query=contract.query,
+                    result_mode=contract.result_mode,
+                    limit=contract.limit,
+                )
+                result.input["query_contract"] = contract.to_dict()
+                result.trace_output["query_contract"] = contract.to_dict()
+                if result.trace_output.get("event_type") != contract.event_type:
+                    raise ValueError(
+                        "Market event facts do not match the requested event type"
+                    )
+            except Exception as error:  # noqa: BLE001
+                facts["market_event_pool_error"] = str(error)
+                traces.append(
+                    _tool_error_trace(
+                        name=name,
+                        tool_input=arguments,
+                        summary="市场事件名单查询失败，已保留明确的失败原因。",
+                        error=str(error),
+                    )
+                )
+                call_names.append(name)
+                continue
+            facts["market_event_pool"] = result.trace_output
+            traces.append(result.trace())
+            call_names.append(name)
+            references.extend(
+                [
+                    f"trade_date={result.trace_output.get('trade_date')}",
+                    f"event_type={contract.event_type}",
+                    f"source={result.trace_output.get('source')}",
+                ]
+            )
+        elif name == "market_summary":
             include_limit_down = bool(arguments.get("include_limit_down")) or (
                 _QuestionSignals.from_message(request.message).market_environment
             )
@@ -3521,6 +3659,71 @@ def _answer_stock_kline_without_llm(
         references=[
             f"symbol={response.symbol}",
             f"data_as_of={response.data_as_of.isoformat()}",
+        ],
+        warnings=[_safety_warning()],
+        generated_by=CHAT_AGENT_VERSION,
+    )
+
+
+def _answer_market_event_without_llm(
+    *,
+    request: AgentChatRequest,
+    tools: AgentToolRegistry,
+) -> AgentChatResponse | None:
+    """Keep an explicit limit-down request usable when the planner is unavailable."""
+
+    if (
+        extract_market_event_type(request.message) != "limit_down"
+        or not looks_like_market_event_query(request.message)
+    ):
+        return None
+    contract = build_market_event_query_contract(
+        request.message,
+        request_trade_date=request.trade_date,
+    )
+    try:
+        result = tools.market_event_pool(
+            event_type=contract.event_type,
+            trade_date=contract.trade_date,
+            market=contract.market,
+            query=contract.query,
+            result_mode=contract.result_mode,
+            limit=contract.limit,
+        )
+    except Exception as error:  # noqa: BLE001
+        trace = _tool_error_trace(
+            name="market_event_pool",
+            tool_input=contract.to_tool_arguments(),
+            summary="跌停名单暂时无法获取。",
+            error=str(error),
+        )
+        return AgentChatResponse(
+            session_id=request.session_id,
+            intent="market_event_query",
+            answer=_ensure_safety_boundary("跌停名单暂时无法获取，请稍后重试。"),
+            tool_calls=["market_event_pool"],
+            tool_results=[trace],
+            references=[],
+            warnings=[_safety_warning()],
+            generated_by=CHAT_AGENT_VERSION,
+        )
+    result.input["query_contract"] = contract.to_dict()
+    result.trace_output["query_contract"] = contract.to_dict()
+    facts = {"market_event_pool": result.trace_output}
+    answer = _template_answer_from_tool_facts(
+        request=request,
+        intent="market_event_query",
+        facts=facts,
+    )
+    return AgentChatResponse(
+        session_id=request.session_id,
+        intent="market_event_query",
+        answer=_ensure_safety_boundary(answer),
+        tool_calls=["market_event_pool", "template_general_answer"],
+        tool_results=[result.trace()],
+        references=[
+            f"trade_date={result.trace_output.get('trade_date')}",
+            f"event_type={contract.event_type}",
         ],
         warnings=[_safety_warning()],
         generated_by=CHAT_AGENT_VERSION,
@@ -5775,6 +5978,15 @@ def _is_simple_sector_stock_ranking(facts: dict[str, Any]) -> bool:
         name for name in facts if not name.endswith("_error")
     }
     return successful_facts == {"sector_stock_ranking"}
+
+
+def _is_simple_market_event_pool(facts: dict[str, Any]) -> bool:
+    """Render a validated market-event list without a second model round-trip."""
+
+    successful_facts = {
+        name for name in facts if not name.endswith("_error")
+    }
+    return successful_facts == {"market_event_pool"}
 
 
 def _safety_warning() -> str:

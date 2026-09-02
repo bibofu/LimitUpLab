@@ -8,11 +8,14 @@ from datetime import date
 from typing import Any, Callable, TypedDict
 
 from app.agents.query_contract import (
+    build_market_event_query_contract,
     build_limit_up_query_contract,
     extract_board_filters as contract_board_filters,
+    extract_market_event_type,
     extract_result_limit,
     extract_market_segment as contract_market_segment,
     extract_trade_date as contract_trade_date,
+    looks_like_market_event_query,
 )
 from app.agents.tools import (
     AgentToolRegistry,
@@ -42,6 +45,7 @@ class QuestionSignals:
     """Small set of deterministic signals used only as Agent guardrails."""
 
     requested_date: date | None
+    market_events: bool
     market_environment: bool
     market_index_trend: bool
     sector_performance: bool
@@ -73,6 +77,7 @@ class QuestionSignals:
 
         capability_set = set(capabilities)
         use_lexical_fallback = not capability_set
+        requested_market_event_type = extract_market_event_type(message)
 
         prediction_quality = use_lexical_fallback and looks_like_prediction_quality_question(
             message
@@ -151,6 +156,13 @@ class QuestionSignals:
         )
         return cls(
             requested_date=extract_trade_date(message),
+            market_events=(
+                "market_events" in capability_set
+                or (
+                    requested_market_event_type == "limit_down"
+                    and looks_like_market_event_query(message)
+                )
+            ),
             market_environment=market_environment,
             market_index_trend=market_index_trend,
             sector_performance=(
@@ -237,6 +249,7 @@ class QuestionSignals:
             (
                 self.sector_performance,
                 self.sector_stock_ranking,
+                self.market_events,
                 self.market_environment,
                 self.market_index_trend,
                 self.hot_stock_ranking,
@@ -388,6 +401,16 @@ class AgentToolPolicyEngine:
         """Return ordered rules; earlier tools may provide facts for later rules."""
 
         return (
+            ToolRepairRule(
+                name="market-event-grounding",
+                tool_name="market_event_pool",
+                reason=(
+                    "A price-limit event list requires matching event type, date and "
+                    "normalized stock rows."
+                ),
+                matches=lambda signals: signals.market_events,
+                repair=self._repair_market_event_pool,
+            ),
             ToolRepairRule(
                 name="market-summary-grounding",
                 tool_name="market_summary",
@@ -724,6 +747,41 @@ class AgentToolPolicyEngine:
                     if response.limit_down_source
                     else []
                 ),
+            ],
+        )
+
+    def _repair_market_event_pool(
+        self,
+        request: AgentChatRequest,
+        signals: QuestionSignals,
+        execution: ToolExecution,
+        context_symbol: str | None,
+    ) -> None:
+        del signals, context_symbol
+        contract = build_market_event_query_contract(
+            request.message,
+            request_trade_date=request.trade_date,
+        )
+        result = self.tools.market_event_pool(
+            event_type=contract.event_type,
+            trade_date=contract.trade_date,
+            market=contract.market,
+            query=contract.query,
+            result_mode=contract.result_mode,
+            limit=contract.limit,
+        )
+        result.input["query_contract"] = contract.to_dict()
+        result.trace_output["query_contract"] = contract.to_dict()
+        if result.trace_output.get("event_type") != contract.event_type:
+            raise ValueError("Market event facts do not match the requested event type")
+        self._record_success(
+            execution,
+            result=result,
+            fact_name="market_event_pool",
+            fact_value=result.trace_output,
+            references=[
+                f"trade_date={result.trace_output.get('trade_date')}",
+                f"event_type={contract.event_type}",
             ],
         )
 

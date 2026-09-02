@@ -17,6 +17,7 @@ from app.collectors import (
     PopularityRankingItem,
     PopularityRankingSnapshot,
 )
+from app.collectors.limit_down_collector import LimitDownItem, LimitDownSnapshot
 from app.models import (
     AgentChatRequest,
     FinanceNewsFacts,
@@ -141,6 +142,39 @@ class SectorRankingPlannerProvider(LLMProvider):
             )
         self.answer_calls += 1
         raise AssertionError("simple Top10 ranking should not call the answer model")
+
+
+class WrongLimitDownPlannerProvider(LLMProvider):
+    """Reproduce the live planner mistake that mapped limit-down to limit-up."""
+
+    def __init__(self) -> None:
+        self.answer_calls = 0
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        if "first job is to decide which tools are needed" in system_prompt:
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": "limit_up_pool_query",
+                        "capabilities": ["limit_up_pool"],
+                        "safety": "normal",
+                        "tool_calls": [
+                            {
+                                "name": "limit_up_events",
+                                "arguments": {
+                                    "event_status": "limit_down",
+                                    "closed_only": True,
+                                },
+                            }
+                        ],
+                        "answer_directly": "",
+                    }
+                ),
+                model="fake-planner",
+                provider="fake",
+            )
+        self.answer_calls += 1
+        raise AssertionError("validated market-event facts should use the concise renderer")
 
 
 class DragonTigerToolProvider(LLMProvider):
@@ -332,6 +366,79 @@ class HotStockDirectGuessProvider(LLMProvider):
     clear=False,
 )
 class AgentExternalToolsTest(unittest.TestCase):
+    @patch("app.agents.tools.collect_limit_down_pool")
+    def test_limit_down_question_repairs_wrong_planner_semantics(self, collect_pool) -> None:
+        trade_date = date(2026, 9, 2)
+        collect_pool.return_value = LimitDownSnapshot(
+            trade_date=trade_date,
+            items=[
+                LimitDownItem(
+                    symbol="000001",
+                    name="跌停样本一",
+                    change_pct=-10.01,
+                    industry="军工装备",
+                ),
+                LimitDownItem(
+                    symbol="300001",
+                    name="跌停样本二",
+                    change_pct=-20.0,
+                    industry="软件服务",
+                ),
+            ],
+        )
+        provider = WrongLimitDownPlannerProvider()
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="limit-down-semantic-repair",
+                message="今天跌停的票有哪些",
+                intent_hint="today_summary",
+                trade_date=trade_date,
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=provider,
+        )
+
+        self.assertEqual(response.intent, "market_event_query")
+        self.assertIn("market_event_pool", response.tool_calls)
+        self.assertNotIn("limit_up_events", response.tool_calls)
+        self.assertIn("跌停样本一（000001）", response.answer)
+        self.assertIn("跌停样本二（300001）", response.answer)
+        self.assertIn("跌停股票共 2 只", response.answer)
+        self.assertNotIn("数据源", response.answer)
+        self.assertEqual(provider.answer_calls, 0)
+        event_trace = next(
+            trace for trace in response.tool_results if trace.name == "market_event_pool"
+        )
+        self.assertEqual(event_trace.output["event_type"], "limit_down")
+        self.assertEqual(response.performance.answer_prompt_chars, 0)
+
+    @patch("app.agents.tools.collect_limit_down_pool")
+    def test_empty_limit_down_pool_is_valid_without_llm(self, collect_pool) -> None:
+        trade_date = date(2026, 9, 2)
+        collect_pool.return_value = LimitDownSnapshot(
+            trade_date=trade_date,
+            items=[],
+        )
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="empty-limit-down-no-llm",
+                message="列一下今天的跌停名单",
+                intent_hint="today_summary",
+                trade_date=trade_date,
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=DisabledLLMProvider(),
+        )
+
+        self.assertIn("跌停股票共 0 只", response.answer)
+        self.assertNotIn("无法回答", response.answer)
+        self.assertEqual(
+            response.tool_calls,
+            ["market_event_pool", "template_general_answer"],
+        )
+
     def test_dragon_tiger_fallback_formats_money_and_omits_missing_fields(
         self,
     ) -> None:

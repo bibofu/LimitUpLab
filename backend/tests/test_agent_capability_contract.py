@@ -173,6 +173,11 @@ class AgentCapabilityContractTest(unittest.TestCase):
             "items"
         ]["enum"]
         self.assertIn("limit_up_pool", capability_enum)
+        self.assertIn("market_events", capability_enum)
+        self.assertIn(
+            '"enum":["limit_up","limit_down","broken_board"]',
+            provider.assert_native_prompt,
+        )
         self.assertEqual(plan.payload["planner_mode"], "native_function_call")
         self.assertEqual(plan.capabilities, ("limit_up_pool",))
         self.assertEqual(plan.tool_calls[0]["name"], "limit_up_events")
