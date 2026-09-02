@@ -40,6 +40,7 @@ import {
 } from "react-router-dom";
 
 import { AgentAnswerMarkdown } from "./components/AgentAnswerMarkdown";
+import { AgentAnswerEvidence } from "./components/AgentAnswerEvidence";
 import {
   MarketKLineChart,
   type MarketCandleBar,
@@ -72,8 +73,12 @@ import {
   streamAgentChatMessage,
 } from "./api";
 import type {
+  AgentChatPerformance,
+  AgentChatResponse,
   AgentChatStreamStage,
+  AgentEvidenceCard,
   AgentStockMention,
+  AgentToolPolicyAudit,
   ChatSessionDetail,
   ChatSessionMessage,
   ChatSessionSummary,
@@ -121,6 +126,13 @@ interface ChatMessage {
   content: string;
   stockMentions: AgentStockMention[];
   status?: "success" | "error";
+  evidenceCards?: AgentEvidenceCard[];
+  toolPolicy?: AgentToolPolicyAudit;
+  references?: string[];
+  warnings?: string[];
+  performance?: AgentChatPerformance;
+  suggestedQuestions?: string[];
+  runId?: string | null;
 }
 
 const ACTIVE_CHAT_SESSION_STORAGE_KEY = "limituplab.activeChatSession";
@@ -132,6 +144,89 @@ function restoredChatMessage(message: ChatSessionMessage): ChatMessage {
     content: message.content,
     stockMentions: stockMentionsFromMetadata(message.metadata),
     status: message.status,
+    evidenceCards: evidenceCardsFromMetadata(message.metadata),
+    toolPolicy: toolPolicyFromMetadata(message.metadata),
+    references: stringArray(message.metadata.references),
+    warnings: stringArray(message.metadata.warnings),
+    performance: performanceFromMetadata(message.metadata),
+    suggestedQuestions: stringArray(message.metadata.suggested_questions),
+    runId: message.run_id,
+  };
+}
+
+function responseMessageMetadata(response: AgentChatResponse): Partial<ChatMessage> {
+  return {
+    stockMentions: response.stock_mentions,
+    evidenceCards: response.evidence_cards,
+    toolPolicy: response.tool_policy,
+    references: response.references,
+    warnings: response.warnings,
+    performance: response.performance,
+    suggestedQuestions: response.suggested_questions,
+    runId: response.run_id,
+    status: "success",
+  };
+}
+
+function stringArray(value: unknown): string[] {
+  return Array.isArray(value)
+    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    : [];
+}
+
+function evidenceCardsFromMetadata(metadata: Record<string, unknown>): AgentEvidenceCard[] {
+  if (!Array.isArray(metadata.evidence_cards)) {
+    return [];
+  }
+  return metadata.evidence_cards.filter((item): item is AgentEvidenceCard => {
+    if (!item || typeof item !== "object") {
+      return false;
+    }
+    const candidate = item as Record<string, unknown>;
+    return (
+      typeof candidate.title === "string"
+      && typeof candidate.summary === "string"
+      && typeof candidate.kind === "string"
+      && typeof candidate.status === "string"
+    );
+  });
+}
+
+function toolPolicyFromMetadata(
+  metadata: Record<string, unknown>,
+): AgentToolPolicyAudit | undefined {
+  const value = metadata.tool_policy;
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const candidate = value as Record<string, unknown>;
+  return {
+    planner_tool_calls: stringArray(candidate.planner_tool_calls),
+    final_tool_calls: stringArray(candidate.final_tool_calls),
+    backend_repaired_tools: stringArray(candidate.backend_repaired_tools),
+    repair_reasons: stringArray(candidate.repair_reasons),
+    safety_fallback_used: candidate.safety_fallback_used === true,
+  };
+}
+
+function performanceFromMetadata(
+  metadata: Record<string, unknown>,
+): AgentChatPerformance | undefined {
+  const value = metadata.performance;
+  if (!value || typeof value !== "object") {
+    return undefined;
+  }
+  const candidate = value as Record<string, unknown>;
+  const metric = (key: keyof AgentChatPerformance) => (
+    typeof candidate[key] === "number" ? candidate[key] : 0
+  );
+  return {
+    planner_duration_ms: metric("planner_duration_ms"),
+    tool_duration_ms: metric("tool_duration_ms"),
+    answer_duration_ms: metric("answer_duration_ms"),
+    total_duration_ms: metric("total_duration_ms"),
+    planner_prompt_chars: metric("planner_prompt_chars"),
+    answer_prompt_chars: metric("answer_prompt_chars"),
   };
 }
 
@@ -191,6 +286,7 @@ function AgentChatDock({
   const [streamStage, setStreamStage] = useState<AgentChatStreamStage>("planning");
   const [streamStatus, setStreamStatus] = useState("正在理解问题并规划工具");
   const [error, setError] = useState<string | null>(null);
+  const [failedPrompt, setFailedPrompt] = useState<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -238,6 +334,7 @@ function AgentChatDock({
     window.localStorage.setItem(ACTIVE_CHAT_SESSION_STORAGE_KEY, detail.session_id);
     setMessages(detail.messages.map(restoredChatMessage));
     setError(null);
+    setFailedPrompt(null);
   }
 
   async function initializeChatSessions() {
@@ -377,15 +474,17 @@ function AgentChatDock({
     setStreamStage("planning");
     setStreamStatus("正在理解问题并规划工具");
     setError(null);
+    setFailedPrompt(null);
+    const agentMessageId = `agent-${Date.now()}`;
 
     try {
-      const agentMessageId = `agent-${Date.now()}`;
       let receivedAnswer = false;
       const response = await streamAgentChatMessage({
         session_id: sessionId,
         message_id: userMessageId,
         message: trimmed,
         intent_hint: inferChatIntent(trimmed),
+        trade_date: tradeDate || undefined,
         symbol,
         page_context: {
           page: symbol ? "stock_detail" : "dashboard",
@@ -425,7 +524,7 @@ function AgentChatDock({
               ? {
                   ...item,
                   content: response.answer,
-                  stockMentions: response.stock_mentions,
+                  ...responseMessageMetadata(response),
                 }
               : item
           ));
@@ -437,18 +536,30 @@ function AgentChatDock({
             role: "agent",
             content: response.answer,
             stockMentions: response.stock_mentions,
+            ...responseMessageMetadata(response),
           },
         ];
       });
       void refreshChatSessions();
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Agent 回答失败");
+      const errorMessage = caught instanceof Error ? caught.message : "Agent 回答失败";
+      setMessages((current) => current.filter((item) => item.id !== agentMessageId));
+      setError(errorMessage);
+      setFailedPrompt(trimmed);
     } finally {
       setSending(false);
     }
   }
 
   const activeSession = sessions.find((item) => item.session_id === sessionId);
+  const latestAgentMessage = [...messages].reverse().find((item) => item.role === "agent");
+  const promptSuggestions = latestAgentMessage?.suggestedQuestions?.length
+    ? latestAgentMessage.suggestedQuestions
+    : [
+        "总结最新交易日的首板结构",
+        "最新一进二 Top10 的主要风险有哪些？",
+        "复盘最近 5 个交易日的一进二晋级率",
+      ];
 
   return (
     <div className="agent-chat-dock">
@@ -594,6 +705,7 @@ function AgentChatDock({
                     content={item.content}
                     stockMentions={item.stockMentions}
                   />
+                  <AgentAnswerEvidence message={item} />
                 </div>
               ) : (
                 <p>{item.content}</p>
@@ -612,15 +724,20 @@ function AgentChatDock({
               </div>
             </div>
           ) : null}
-          {error ? <div className="chat-state error">{error}</div> : null}
+          {error ? (
+            <div className="chat-state error chat-retry-state">
+              <span>{error}</span>
+              {failedPrompt ? (
+                <button disabled={sending || sessionLoading} onClick={() => void sendMessage(failedPrompt)} type="button">
+                  <RefreshCcw aria-hidden="true" size={13} />重试上一个问题
+                </button>
+              ) : null}
+            </div>
+          ) : null}
         </div>
 
         <div className="agent-chat-prompts">
-          {[
-            "总结一下今天首板",
-            "今天市场环境如何",
-            "有哪些一进二候选推荐",
-          ].map((prompt) => (
+          {promptSuggestions.slice(0, 3).map((prompt) => (
             <button
               disabled={sending || sessionLoading || !sessionId}
               key={prompt}

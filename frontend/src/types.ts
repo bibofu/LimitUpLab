@@ -806,6 +806,7 @@ export interface AgentChatResponse {
   references: string[];
   warnings: string[];
   performance: AgentChatPerformance;
+  suggested_questions: string[];
   generated_by: string;
 }
 

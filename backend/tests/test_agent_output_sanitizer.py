@@ -96,6 +96,44 @@ class AgentOutputSanitizerTest(unittest.TestCase):
 
         self.assertEqual(response.stock_mentions, [])
 
+    def test_agent_response_builds_grounded_stock_follow_ups(self) -> None:
+        response = AgentChatResponse(
+            session_id="stock-follow-ups",
+            intent="rating_explain",
+            answer="中电鑫龙(002298)的评分依据来自结构化事实。",
+            tool_results=[
+                AgentToolTrace(
+                    name="first_board_ratings",
+                    summary="返回个股评分",
+                    output={
+                        "trade_date": "2026-08-27",
+                        "candidates": [
+                            {"name": "中电鑫龙", "symbol": "002298"},
+                        ],
+                    },
+                )
+            ],
+            generated_by="test",
+        )
+
+        self.assertEqual(len(response.suggested_questions), 3)
+        self.assertNotIn("评分依据", response.suggested_questions[0])
+        self.assertTrue(
+            any("中电鑫龙（002298）" in item for item in response.suggested_questions)
+        )
+        self.assertTrue(any("主要风险" in item for item in response.suggested_questions))
+
+    def test_agent_response_preserves_explicit_follow_ups(self) -> None:
+        response = AgentChatResponse(
+            session_id="explicit-follow-ups",
+            intent="greeting",
+            answer="你好",
+            suggested_questions=["自定义追问"],
+            generated_by="test",
+        )
+
+        self.assertEqual(response.suggested_questions, ["自定义追问"])
+
 
 if __name__ == "__main__":
     unittest.main()

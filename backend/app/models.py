@@ -1653,6 +1653,7 @@ class AgentChatResponse(BaseModel):
     references: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     performance: AgentChatPerformance = Field(default_factory=AgentChatPerformance)
+    suggested_questions: list[str] = Field(default_factory=list)
     generated_by: str
 
     @model_validator(mode="after")
@@ -1672,6 +1673,11 @@ class AgentChatResponse(BaseModel):
                 tool_calls=self.tool_calls,
                 tool_results=self.tool_results,
                 warnings=self.warnings,
+            )
+        if not self.suggested_questions:
+            self.suggested_questions = build_agent_suggested_questions(
+                intent=self.intent,
+                stock_mentions=self.stock_mentions,
             )
         return self
 
@@ -2095,6 +2101,81 @@ def _compact_texts(values: list[Any], limit: int = 4) -> list[str]:
         if len(result) >= limit:
             break
     return result
+
+
+def build_agent_suggested_questions(
+    *,
+    intent: str,
+    stock_mentions: list[AgentStockMention],
+) -> list[str]:
+    """Build safe, capability-aware follow-ups without asking the LLM to invent them."""
+
+    suggestions: list[str] = []
+    if len(stock_mentions) == 1:
+        stock = stock_mentions[0]
+        subject = f"{stock.name}（{stock.symbol}）"
+        if intent not in {"rating_explain", "llm_explanation"}:
+            suggestions.append(f"{subject}的评分依据是什么？")
+        if intent != "risk_summary":
+            suggestions.append(f"{subject}的主要风险和数据缺口是什么？")
+        suggestions.append(f"{subject}最近 20 个交易日走势如何？")
+
+    intent_suggestions: dict[str, tuple[str, ...]] = {
+        "greeting": (
+            "总结最新交易日的首板结构",
+            "最新一进二 Top10 的主要风险有哪些？",
+            "复盘最近 5 个交易日的一进二晋级率",
+        ),
+        "capability_intro": (
+            "总结最新交易日的首板结构",
+            "解释最新一进二 Top10 的评分依据",
+            "查看当前数据有哪些缺口",
+        ),
+        "market_context": (
+            "结合市场环境总结最新首板结构",
+            "最新交易日哪些板块的首板最集中？",
+            "复盘最近 5 个交易日的一进二晋级率",
+        ),
+        "limit_up_query": (
+            "只看最新交易日首次涨停且封住的股票",
+            "按板块归纳这批涨停股票",
+            "这批股票中有哪些主要风险？",
+        ),
+        "daily_board_promotion": (
+            "拆解最近 5 日首板到二板的样本数",
+            "最近 5 日连板晋级率如何变化？",
+            "对照一进二 Top10 的实际晋级表现",
+        ),
+        "prediction_quality_audit": (
+            "当前预测样本和 Outcome 完整度如何？",
+            "Top10 与全市场基线的差异是什么？",
+            "哪些结论仍然因为样本不足不能成立？",
+        ),
+        "data_availability": (
+            "本地最新可用交易日是哪天？",
+            "总结本地最新交易日的首板结构",
+            "当前数据还有哪些缺口？",
+        ),
+        "out_of_scope": (
+            "你目前能回答哪些收盘后研究问题？",
+            "总结本地最新交易日的首板结构",
+            "查看当前数据有哪些缺口",
+        ),
+    }
+    default_suggestions = (
+        "按板块归纳最新首板候选",
+        "这些候选的共同风险和数据缺口有哪些？",
+        "复盘最近 5 个交易日的一进二晋级率",
+    )
+    suggestions.extend(intent_suggestions.get(intent, default_suggestions))
+
+    deduplicated: list[str] = []
+    for suggestion in suggestions:
+        if suggestion not in deduplicated:
+            deduplicated.append(suggestion)
+        if len(deduplicated) >= 3:
+            break
+    return deduplicated
 
 
 class AgentRunSummary(BaseModel):
