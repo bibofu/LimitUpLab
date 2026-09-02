@@ -43,6 +43,9 @@ from app.agents.tool_policy import (
     extract_promotion_days as _extract_promotion_days,
     extract_sector_query as _extract_sector_query,
     extract_trade_date as _extract_trade_date,
+    looks_like_broad_sector_ranking_question as (
+        _looks_like_broad_sector_ranking_question
+    ),
     looks_like_critic_question as _looks_like_critic_question,
     looks_like_daily_board_promotion_question as _looks_like_daily_board_promotion_question,
     looks_like_evaluation_question as _looks_like_evaluation_question,
@@ -76,6 +79,7 @@ from app.models import (
     LimitUpEvent,
     MarketIndexTrendFacts,
     MarketSummary,
+    SectorPerformanceFacts,
 )
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.llm_provider import (
@@ -116,6 +120,7 @@ SUPPORTED_INTENTS = {
     "market_event_query",
     "limit_up_query",
     "today_summary",
+    "sector_performance",
     "llm_explanation",
 }
 
@@ -313,6 +318,12 @@ def answer_first_board_chat(
     )
     if llm_response is not None:
         return llm_response
+    sector_performance_fallback = _answer_sector_performance_without_llm(
+        request=request,
+        tools=tools,
+    )
+    if sector_performance_fallback is not None:
+        return sector_performance_fallback
     market_event_fallback = _answer_market_event_without_llm(
         request=request,
         tools=tools,
@@ -763,7 +774,8 @@ def _answer_with_llm_tool_agent(
         execution["facts"],
     )
     fast_structured_answer = (
-        _is_simple_sector_stock_ranking(execution["facts"])
+        _is_simple_sector_performance(execution["facts"])
+        or _is_simple_sector_stock_ranking(execution["facts"])
         or _is_simple_market_event_pool(execution["facts"])
     )
     if fast_structured_answer:
@@ -1016,6 +1028,13 @@ def _generate_llm_query_plan(
         raw_capabilities,
         tool_calls,
     )
+    raw_capabilities, tool_calls = _normalize_broad_sector_plan(
+        request,
+        raw_capabilities,
+        tool_calls,
+    )
+    if _looks_like_broad_sector_ranking_question(request.message):
+        payload["intent_label"] = "sector_performance"
     if (
         extract_market_event_type(request.message) == "limit_down"
         and looks_like_market_event_query(request.message)
@@ -2584,6 +2603,43 @@ def _normalize_market_event_plan(
     return capabilities, normalized_calls[:6]
 
 
+def _normalize_broad_sector_plan(
+    request: AgentChatRequest,
+    raw_capabilities: list[object],
+    tool_calls: list[dict[str, Any]],
+) -> tuple[list[object], list[dict[str, Any]]]:
+    """Enforce whole-market ranking semantics for broad sector questions."""
+
+    if not _looks_like_broad_sector_ranking_question(request.message):
+        return raw_capabilities, tool_calls
+
+    broad_capabilities = {"market_environment", "market_index_trend", "popularity"}
+    capabilities = [
+        item
+        for item in raw_capabilities
+        if (item.get("name") if isinstance(item, dict) else item)
+        not in broad_capabilities
+    ]
+    if not any(
+        (item.get("name") if isinstance(item, dict) else item)
+        == "sector_performance"
+        for item in capabilities
+    ):
+        capabilities.append("sector_performance")
+
+    unrelated_tools = {"market_summary", "market_index_trend", "hot_stock_ranking"}
+    normalized_calls = [
+        call
+        for call in tool_calls
+        if call.get("name") not in unrelated_tools | {"sector_performance"}
+    ]
+    normalized_calls.insert(
+        0,
+        {"name": "sector_performance", "arguments": {"sector": None}},
+    )
+    return capabilities, normalized_calls[:6]
+
+
 def _normalize_first_board_position_tool_calls(
     request: AgentChatRequest,
     tool_calls: list[dict[str, Any]],
@@ -2784,7 +2840,12 @@ def _execute_llm_tool_calls(
                 for item in result.output
             )
         elif name == "sector_performance":
-            sector = _optional_str(arguments.get("sector"))
+            broad_sector_ranking = _looks_like_broad_sector_ranking_question(
+                request.message
+            )
+            sector = None if broad_sector_ranking else _optional_str(
+                arguments.get("sector")
+            )
             if sector is None:
                 sector = _extract_sector_query(request.message)
             trade_date = _explicit_request_trade_date(request)
@@ -2809,6 +2870,21 @@ def _execute_llm_tool_calls(
                 call_names.append(name)
                 continue
             response = result.output
+            if broad_sector_ranking and (
+                response.sector_name is not None or not response.top_sectors
+            ):
+                error = "全市场板块榜单返回了不匹配的单板块结果"
+                facts["sector_performance_error"] = error
+                traces.append(
+                    _tool_error_trace(
+                        name=name,
+                        tool_input={"sector": None},
+                        summary="板块榜单结果未通过语义校验。",
+                        error=error,
+                    )
+                )
+                call_names.append(name)
+                continue
             facts["sector_performance"] = response.model_dump(mode="json")
             traces.append(result.trace())
             call_names.append(name)
@@ -3660,6 +3736,59 @@ def _answer_stock_kline_without_llm(
             f"symbol={response.symbol}",
             f"data_as_of={response.data_as_of.isoformat()}",
         ],
+        warnings=[_safety_warning()],
+        generated_by=CHAT_AGENT_VERSION,
+    )
+
+
+def _answer_sector_performance_without_llm(
+    *,
+    request: AgentChatRequest,
+    tools: AgentToolRegistry,
+) -> AgentChatResponse | None:
+    """Answer broad sector rankings when the planner is unavailable."""
+
+    if not _looks_like_broad_sector_ranking_question(request.message):
+        return None
+    trade_date = request.trade_date or _extract_trade_date(request.message)
+    try:
+        result = tools.sector_performance(sector=None, trade_date=trade_date)
+    except Exception as error:  # noqa: BLE001
+        return AgentChatResponse(
+            session_id=request.session_id,
+            intent="sector_performance",
+            answer=_ensure_safety_boundary("板块行情暂时无法获取，请稍后重试。"),
+            tool_calls=["sector_performance"],
+            tool_results=[
+                _tool_error_trace(
+                    name="sector_performance",
+                    tool_input={
+                        "sector": None,
+                        "trade_date": trade_date.isoformat() if trade_date else None,
+                    },
+                    summary="板块行情暂时无法获取。",
+                    error=str(error),
+                )
+            ],
+            references=[],
+            warnings=[_safety_warning()],
+            generated_by=CHAT_AGENT_VERSION,
+        )
+    response: SectorPerformanceFacts = result.output
+    if response.sector_name is not None or not response.top_sectors:
+        return None
+    facts = {"sector_performance": response.model_dump(mode="json")}
+    return AgentChatResponse(
+        session_id=request.session_id,
+        intent="sector_performance",
+        answer=_template_answer_from_tool_facts(
+            request=request,
+            intent="sector_performance",
+            facts=facts,
+        ),
+        tool_calls=["sector_performance", "template_general_answer"],
+        tool_results=[result.trace()],
+        references=[f"data_as_of={response.data_as_of.isoformat()}"],
         warnings=[_safety_warning()],
         generated_by=CHAT_AGENT_VERSION,
     )
@@ -5969,6 +6098,13 @@ def _missing_symbol_response(
         warnings=[_safety_warning()],
         generated_by=CHAT_AGENT_VERSION,
     )
+
+
+def _is_simple_sector_performance(facts: dict[str, Any]) -> bool:
+    """Render a validated all-market sector ranking without another model call."""
+
+    successful_facts = {name for name in facts if not name.endswith("_error")}
+    return successful_facts == {"sector_performance"}
 
 
 def _is_simple_sector_stock_ranking(facts: dict[str, Any]) -> bool:

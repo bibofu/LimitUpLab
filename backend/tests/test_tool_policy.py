@@ -9,6 +9,8 @@ from app.agents.tool_policy import (
     QuestionSignals,
     ToolExecution,
     extract_market_segment,
+    extract_sector_query,
+    looks_like_broad_sector_ranking_question,
 )
 from app.agents.tools import AgentToolRegistry, ToolResult
 from app.models import (
@@ -56,6 +58,32 @@ class AgentToolPolicyTest(unittest.TestCase):
             "tool_call_names": [],
             "references": [],
         }
+
+    def test_broad_sector_questions_do_not_extract_a_fake_sector_name(self) -> None:
+        questions = (
+            "今天大盘哪些板块表现好",
+            "今天哪些板块表现好",
+            "今天板块表现好的有哪些",
+            "今日A股什么行业领涨",
+            "哪些行业今天涨得好",
+        )
+        for question in questions:
+            with self.subTest(question=question):
+                self.assertTrue(looks_like_broad_sector_ranking_question(question))
+                self.assertIsNone(extract_sector_query(question))
+
+    def test_named_sector_and_stock_ranking_remain_specific(self) -> None:
+        self.assertFalse(
+            looks_like_broad_sector_ranking_question("今天半导体板块表现怎么样")
+        )
+        self.assertEqual(
+            extract_sector_query("今天半导体板块表现怎么样"),
+            "半导体",
+        )
+        self.assertFalse(
+            looks_like_broad_sector_ranking_question("游戏板块哪些股票走势好")
+        )
+        self.assertEqual(extract_sector_query("游戏板块哪些股票走势好"), "游戏")
 
     def test_high_score_review_has_one_policy_scope(self) -> None:
         signals = QuestionSignals.from_message(

@@ -710,6 +710,11 @@ function inferChatIntent(message: string) {
   if (/开盘|收盘|集合竞价|交易时间/.test(message)) {
     return "market_schedule";
   }
+  if (
+    /(?:板块|行业|概念).*(?:表现|走势|行情|涨跌|强弱|领涨|领跌|涨得|跌得|排行|排名)|(?:表现|走势|行情|涨跌|强弱|领涨|领跌|涨得|跌得|排行|排名).*(?:板块|行业|概念)/.test(message)
+  ) {
+    return "sector_performance";
+  }
   if (/市场|情绪|赚钱效应|亏钱效应|氛围/.test(message)) {
     return "market_context";
   }

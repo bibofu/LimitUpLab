@@ -1435,8 +1435,77 @@ def extract_market_segment(message: str) -> str | None:
     return contract_market_segment(message)
 
 
+def looks_like_broad_sector_ranking_question(message: str) -> bool:
+    """Return whether the user asks for a whole-market sector ranking."""
+
+    compact = re.sub(r"[\s，。！？,.!?]", "", message)
+    if not any(term in compact for term in ("板块", "行业", "概念")):
+        return False
+    if any(
+        term in compact for term in ("股票", "个股", "成分股", "哪些票", "什么票")
+    ):
+        return False
+    if not any(
+        term in compact
+        for term in (
+            "表现",
+            "走势",
+            "行情",
+            "涨跌",
+            "强弱",
+            "领涨",
+            "领跌",
+            "涨得",
+            "跌得",
+            "上涨",
+            "下跌",
+            "排名",
+            "排行",
+        )
+    ):
+        return False
+
+    category_match = re.search(r"板块|行业|概念", compact)
+    if category_match is None:
+        return False
+    prefix = compact[: category_match.start()]
+    leading_terms = (
+        "请问",
+        "帮我看看",
+        "看看",
+        "分析一下",
+        "分析",
+        "总结一下",
+        "今天",
+        "今日",
+        "最近",
+        "近期",
+        "目前",
+        "现在",
+        "全市场",
+        "市场",
+        "大盘",
+        "A股",
+        "a股",
+    )
+    changed = True
+    while prefix and changed:
+        changed = False
+        for term in leading_terms:
+            if prefix.startswith(term):
+                prefix = prefix[len(term) :]
+                changed = True
+                break
+    return not prefix or any(
+        term in prefix for term in ("哪些", "什么", "哪个", "哪几个", "有哪", "谁")
+    )
+
+
 def extract_sector_query(message: str) -> str | None:
     """Extract a named industry from common Chinese sector questions."""
+
+    if looks_like_broad_sector_ranking_question(message):
+        return None
 
     compact = re.sub(r"\s+", "", message)
     patterns = (
@@ -1462,7 +1531,15 @@ def extract_sector_query(message: str) -> str | None:
             continue
         candidate = matched.group(1)
         candidate = re.sub(r"^(?:请问|看看|分析一下|分析|总结一下)", "", candidate)
-        if candidate and candidate not in generic and len(candidate) <= 12:
+        if (
+            candidate
+            and candidate not in generic
+            and not any(
+                term in candidate
+                for term in ("哪些", "什么", "哪个", "哪几个", "有哪", "谁")
+            )
+            and len(candidate) <= 12
+        ):
             return candidate
     return None
 

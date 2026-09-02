@@ -26,6 +26,7 @@ from app.models import (
     MarketIndexTrendItem,
     MarketIndexTrendPoint,
     SectorPerformanceFacts,
+    SectorRankingItem,
     SectorStockRankingFacts,
     SectorStockTrendItem,
     WebSearchFacts,
@@ -142,6 +143,36 @@ class SectorRankingPlannerProvider(LLMProvider):
             )
         self.answer_calls += 1
         raise AssertionError("simple Top10 ranking should not call the answer model")
+
+
+class WrongBroadSectorPlannerProvider(LLMProvider):
+    """Reproduce a planner that mistakes broad wording for a sector name."""
+
+    def __init__(self) -> None:
+        self.answer_calls = 0
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        if "first job is to decide which tools are needed" in system_prompt:
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": "market_environment",
+                        "capabilities": ["market_environment"],
+                        "safety": "normal",
+                        "tool_calls": [
+                            {
+                                "name": "sector_performance",
+                                "arguments": {"sector": "大盘哪些"},
+                            }
+                        ],
+                        "answer_directly": "",
+                    }
+                ),
+                model="fake-planner",
+                provider="fake",
+            )
+        self.answer_calls += 1
+        raise AssertionError("simple sector ranking should not call the answer model")
 
 
 class WrongLimitDownPlannerProvider(LLMProvider):
@@ -670,6 +701,95 @@ class AgentExternalToolsTest(unittest.TestCase):
         collect_trends.assert_called_once_with(
             days=5,
             end_date=date(2026, 5, 15),
+        )
+
+    @patch("app.agents.tools.build_sector_performance")
+    def test_broad_sector_ranking_overrides_wrong_planner_parameter(
+        self,
+        sector_builder,
+    ) -> None:
+        trade_date = date(2026, 9, 2)
+        sector_builder.return_value = SectorPerformanceFacts(
+            requested_sector=None,
+            sector_name=None,
+            trade_date=trade_date,
+            data_as_of=trade_date,
+            data_fresh=True,
+            sector_count=90,
+            top_sectors=[
+                SectorRankingItem(
+                    sector_name="军工装备", rank=1, change_pct=2.06
+                ),
+                SectorRankingItem(
+                    sector_name="地面兵装", rank=2, change_pct=1.62
+                ),
+                SectorRankingItem(
+                    sector_name="数据确权", rank=3, change_pct=1.52
+                ),
+            ],
+            sources=["fake-sector"],
+        )
+        provider = WrongBroadSectorPlannerProvider()
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="broad-sector-semantic-repair",
+                message="今天大盘哪些板块表现好",
+                intent_hint="market_context",
+                trade_date=trade_date,
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=provider,
+        )
+
+        self.assertEqual(response.intent, "sector_performance")
+        self.assertEqual(response.tool_calls.count("sector_performance"), 1)
+        self.assertNotIn("market_summary", response.tool_calls)
+        self.assertIn("军工装备", response.answer)
+        self.assertIn("地面兵装", response.answer)
+        self.assertIn("数据确权", response.answer)
+        self.assertNotIn("数据源", response.answer)
+        self.assertEqual(provider.answer_calls, 0)
+        self.assertEqual(response.performance.answer_prompt_chars, 0)
+        sector_builder.assert_called_once_with(
+            sector=None,
+            trade_date=trade_date,
+        )
+
+    @patch("app.agents.tools.build_sector_performance")
+    def test_broad_sector_ranking_works_without_llm(self, sector_builder) -> None:
+        trade_date = date(2026, 9, 2)
+        sector_builder.return_value = SectorPerformanceFacts(
+            requested_sector=None,
+            sector_name=None,
+            trade_date=trade_date,
+            data_as_of=trade_date,
+            data_fresh=True,
+            sector_count=90,
+            top_sectors=[
+                SectorRankingItem(
+                    sector_name="军工装备", rank=1, change_pct=2.06
+                )
+            ],
+            sources=["fake-sector"],
+        )
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="broad-sector-no-llm",
+                message="哪些行业今天涨得好",
+                trade_date=trade_date,
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=DisabledLLMProvider(),
+        )
+
+        self.assertEqual(response.intent, "sector_performance")
+        self.assertIn("军工装备", response.answer)
+        self.assertIn("template_general_answer", response.tool_calls)
+        sector_builder.assert_called_once_with(
+            sector=None,
+            trade_date=trade_date,
         )
 
     @patch("app.agents.tools.search_web")
