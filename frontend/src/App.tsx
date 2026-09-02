@@ -45,6 +45,11 @@ import {
   type MarketCandleBar,
 } from "./components/MarketKLineChart";
 import {
+  isRelayCandidateSymbol,
+  rankedRelayCandidates,
+  sortFirstBoardByRelayRanking,
+} from "./relayRanking";
+import {
   deleteChatSession,
   createChatSession,
   fetchContinuedBoardEvents,
@@ -989,7 +994,7 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
   const [discovery, setDiscovery] = useState<FirstBoardDiscoveryResponse | null>(null);
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const [discoveryLoading, setDiscoveryLoading] = useState(true);
-  const [intelligence, setIntelligence] = useState<RecommendationIntelligenceResponse | null>(null);
+  const intelligence = useRecommendationIntelligence();
 
   useEffect(() => {
     let active = true;
@@ -1010,36 +1015,16 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
     };
   }, []);
 
-  useEffect(() => {
-    let active = true;
-    const refresh = () => {
-      void fetchRecommendationIntelligence()
-        .then((response) => {
-          if (active) setIntelligence(response);
-        })
-        .catch(() => {
-          // The close-data base pool remains usable while the dynamic draft
-          // worker is warming up or temporarily stale.
-        });
-    };
-    refresh();
-    const timer = window.setInterval(refresh, 30 * 60 * 1000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, []);
-
   const draftBaseDate = mode === "discovery" ? discovery?.data_as_of : ratings.trade_date;
-  const draftCandidates = intelligence?.items
-    .filter(
-      (item) =>
-        item.strategy === mode &&
-        item.base_trade_date === draftBaseDate &&
-        (mode !== "relay" || isRelayCandidateSymbol(item.symbol)),
-    )
-    .sort((left, right) => left.rank - right.rank)
-    .slice(0, mode === "discovery" ? 15 : 10)
+  const strategyCandidates = mode === "relay"
+    ? rankedRelayCandidates(intelligence?.items ?? [], draftBaseDate, 10)
+    : (intelligence?.items ?? [])
+      .filter(
+        (item) => item.strategy === mode && item.base_trade_date === draftBaseDate,
+      )
+      .sort((left, right) => left.rank - right.rank)
+      .slice(0, 15);
+  const draftCandidates = strategyCandidates
     .map((item, index) => ({
       ...item,
       rank: index + 1,
@@ -1113,6 +1098,31 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
       )}
     </section>
   );
+}
+
+function useRecommendationIntelligence() {
+  const [intelligence, setIntelligence] = useState<RecommendationIntelligenceResponse | null>(null);
+
+  useEffect(() => {
+    let active = true;
+    const refresh = () => {
+      void fetchRecommendationIntelligence()
+        .then((response) => {
+          if (active) setIntelligence(response);
+        })
+        .catch(() => {
+          // Keep close-data rankings usable while the dynamic snapshot is unavailable.
+        });
+    };
+    refresh();
+    const timer = window.setInterval(refresh, 30 * 60 * 1000);
+    return () => {
+      active = false;
+      window.clearInterval(timer);
+    };
+  }, []);
+
+  return intelligence;
 }
 
 function RecommendationDraftPanel({
@@ -2526,10 +2536,6 @@ function trackedReturnLabel(value: number | null) {
   return "累计持平";
 }
 
-function isRelayCandidateSymbol(symbol: string) {
-  return !symbol.startsWith("300") && !symbol.startsWith("301");
-}
-
 function FirstBoardRatingPanel({
   ratings,
   intelligence,
@@ -2831,7 +2837,12 @@ function FirstBoardPoolView({
   initialRatings: FirstBoardRatingsResponse;
 }) {
   const [ratings, setRatings] = useState(initialRatings);
+  const intelligence = useRecommendationIntelligence();
   const tradeDate = events[0]?.trade_date;
+  const relayRanking = rankedRelayCandidates(
+    intelligence?.items ?? [],
+    tradeDate,
+  );
 
   useEffect(() => {
     let active = true;
@@ -2848,7 +2859,24 @@ function FirstBoardPoolView({
 
   return (
     <Panel title="首板票" icon={detailIcon("first")}>
-      <StockTable events={events} ratings={ratings} variant="first" />
+      {relayRanking.length > 0 && intelligence ? (
+        <div className="pool-ranking-status">
+          <strong>动态一进二 Top10 已同步</strong>
+          <span>
+            {new Date(intelligence.refreshed_at).toLocaleTimeString("zh-CN", {
+              hour: "2-digit",
+              minute: "2-digit",
+            })}
+            更新；前 10 名与盘前推荐一致
+          </span>
+        </div>
+      ) : null}
+      <StockTable
+        events={events}
+        ratings={ratings}
+        relayRanking={relayRanking}
+        variant="first"
+      />
     </Panel>
   );
 }
@@ -2992,10 +3020,12 @@ function LimitUpPool({ data }: { data: DashboardData }) {
 function StockTable({
   events,
   ratings,
+  relayRanking = [],
   variant,
 }: {
   events: LimitUpEvent[];
   ratings?: FirstBoardRatingsResponse;
+  relayRanking?: RecommendationIntelligenceItem[];
   variant: ViewKey;
 }) {
   /** Shared clickable table for all stock-list routes. */
@@ -3007,15 +3037,14 @@ function StockTable({
   const filteredBySymbol = new Map(
     (ratings?.filtered_out ?? []).map((item) => [item.symbol, item]),
   );
+  const dynamicBySymbol = new Map(
+    relayRanking.map((item) => [item.symbol, item]),
+  );
+  const ratingScores = new Map(
+    (ratings?.candidates ?? []).map((item) => [item.facts.symbol, item.score]),
+  );
   const visibleEvents = variant === "first"
-    ? [...events].sort((left, right) => {
-        const leftScore = ratingBySymbol.get(left.symbol)?.score;
-        const rightScore = ratingBySymbol.get(right.symbol)?.score;
-        if (leftScore !== undefined && rightScore !== undefined) return rightScore - leftScore;
-        if (leftScore !== undefined) return -1;
-        if (rightScore !== undefined) return 1;
-        return left.first_limit_time.localeCompare(right.first_limit_time);
-      })
+    ? sortFirstBoardByRelayRanking(events, relayRanking, ratingScores)
     : events;
 
   function openStock(symbol: string, tradeDate: string) {
@@ -3044,6 +3073,7 @@ function StockTable({
           {visibleEvents.map((event) => {
             const rating = ratingBySymbol.get(event.symbol);
             const filtered = filteredBySymbol.get(event.symbol);
+            const dynamic = dynamicBySymbol.get(event.symbol);
             return (
             <tr
               className="stock-row"
@@ -3063,8 +3093,20 @@ function StockTable({
               </td>
               {variant === "first" ? (
                 <td>
-                  <strong>{rating ? rating.score.toFixed(1) : "--"}</strong>
-                  <span>{rating ? rating.rating : filtered?.excluded_reasons[0] ?? "未评分"}</span>
+                  <strong>
+                    {dynamic
+                      ? dynamic.draft_score.toFixed(1)
+                      : rating
+                        ? rating.score.toFixed(1)
+                        : "--"}
+                  </strong>
+                  <span>
+                    {dynamic
+                      ? `动态第 ${dynamic.rank}`
+                      : rating
+                        ? rating.rating
+                        : filtered?.excluded_reasons[0] ?? "未评分"}
+                  </span>
                 </td>
               ) : null}
               <td>{event.trade_date}</td>

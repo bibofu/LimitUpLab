@@ -6,7 +6,8 @@
   "scripts": {
     "dev": "vite",
     "build": "tsc -b && vite build",
-    "preview": "vite preview"
+    "preview": "vite preview",
+    "test:relay-ranking": "node --experimental-strip-types --test --test-isolation=none tests/relayRanking.test.ts"
   },
   "dependencies": {
     "lightweight-charts": "^5.2.1",
