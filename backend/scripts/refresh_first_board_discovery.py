@@ -17,7 +17,7 @@ def main() -> None:
     parser = argparse.ArgumentParser(
         description="Refresh the latest low-position research candidate pool.",
     )
-    parser.add_argument("--recall-limit", type=int, default=60)
+    parser.add_argument("--recall-limit", type=int, default=100)
     parser.add_argument("--top-k", type=int, default=50)
     parser.add_argument("--max-workers", type=int, default=8)
     parser.add_argument("--force", action="store_true")
