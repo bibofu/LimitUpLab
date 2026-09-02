@@ -1022,13 +1022,17 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
 
   const draftBaseDate = mode === "discovery" ? discovery?.data_as_of : ratings.trade_date;
   const strategyCandidates = mode === "relay"
-    ? rankedRelayCandidates(intelligence?.items ?? [], draftBaseDate, 10)
+    ? rankedRelayCandidates(
+        intelligence?.items ?? [],
+        draftBaseDate,
+        intelligence?.relay_display_limit ?? 10,
+      )
     : (intelligence?.items ?? [])
       .filter(
         (item) => item.strategy === mode && item.base_trade_date === draftBaseDate,
       )
       .sort((left, right) => left.rank - right.rank)
-      .slice(0, 15);
+      .slice(0, intelligence?.discovery_display_limit ?? 15);
   const draftCandidates = strategyCandidates
     .map((item, index) => ({
       ...item,
@@ -1088,7 +1092,7 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
         <RecommendationDraftPanel
           candidates={draftCandidates}
           discovery={discovery}
-          refreshedAt={intelligence.refreshed_at}
+          intelligence={intelligence}
           strategy={mode}
         />
       ) : mode === "discovery" ? (
@@ -1120,7 +1124,7 @@ function useRecommendationIntelligence() {
         });
     };
     refresh();
-    const timer = window.setInterval(refresh, 30 * 60 * 1000);
+    const timer = window.setInterval(refresh, 60 * 1000);
     return () => {
       active = false;
       window.clearInterval(timer);
@@ -1133,12 +1137,12 @@ function useRecommendationIntelligence() {
 function RecommendationDraftPanel({
   candidates,
   discovery,
-  refreshedAt,
+  intelligence,
   strategy,
 }: {
   candidates: RecommendationIntelligenceItem[];
   discovery: FirstBoardDiscoveryResponse | null;
-  refreshedAt: string;
+  intelligence: RecommendationIntelligenceResponse;
   strategy: "discovery" | "relay";
 }) {
   const title = strategy === "discovery" ? "低位挖掘" : "一进二接力";
@@ -1154,7 +1158,8 @@ function RecommendationDraftPanel({
             <span>{strategy === "discovery" ? "热门题材与最新催化召回，财报和 K 线位置共同验证" : "收盘综合分固化基线，盘后按公告、龙虎榜与人气变化做有界修正"}</span>
           </div>
           <span className="recommendation-draft-time">
-            {new Date(refreshedAt).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
+            {intelligence.stage === "final" ? "09:00 已固化 · " : "动态更新 · "}
+            {new Date(intelligence.refreshed_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
           </span>
         </div>
         <div className="rating-top-list">
@@ -1210,7 +1215,9 @@ function RecommendationDraftPanel({
         <p className="discovery-disclaimer">
           {strategy === "discovery"
             ? "低位挖掘用于研究可能进入趋势启动阶段的标的，不代表主升浪或收益概率。"
-            : "当前为动态研究排序；正式复盘以收盘固化 Top10 为准。"}
+            : intelligence.stage === "final"
+              ? "该排序已于目标交易日 09:00 固化，供盘后复盘使用。"
+              : "当前为动态研究排序；正式复盘以目标交易日 09:00 固化 Top10 为准。"}
         </p>
       </div>
     </Panel>
@@ -3140,6 +3147,7 @@ function StockDetail({ data }: { data: DashboardData }) {
 
   const { symbol = "" } = useParams();
   const [searchParams] = useSearchParams();
+  const intelligence = useRecommendationIntelligence();
   const requestedTradeDate = searchParams.get("trade_date") ?? undefined;
   const linkedStockName = searchParams.get("name")?.trim() ?? "";
   const [stockEvent, setStockEvent] = useState<LimitUpEvent | null>(null);
@@ -3167,6 +3175,11 @@ function StockDetail({ data }: { data: DashboardData }) {
   const resolvedTradeDate = stockEvent?.trade_date
     ?? requestedTradeDate
     ?? data.summary.trade_date;
+  const currentIntelligence = recommendationIntelligenceFor(
+    intelligence,
+    "relay",
+    symbol,
+  );
 
   useEffect(() => {
     let active = true;
@@ -3481,7 +3494,16 @@ function StockDetail({ data }: { data: DashboardData }) {
 
       {firstBoardRating || criticLoading || critic ? (
         <section className="stock-agent-grid">
-          {firstBoardRating ? <FirstBoardRatingDetail rating={firstBoardRating} /> : null}
+          {firstBoardRating ? (
+            <FirstBoardRatingDetail
+              intelligence={
+                currentIntelligence?.base_trade_date === resolvedTradeDate
+                  ? currentIntelligence
+                  : null
+              }
+              rating={firstBoardRating}
+            />
+          ) : null}
           {criticLoading || critic ? (
             <FirstBoardCriticPanel
               data={critic}
@@ -3649,12 +3671,24 @@ function FirstBoardCriticPanel({
   );
 }
 
-function FirstBoardRatingDetail({ rating }: { rating: FirstBoardRating }) {
+function FirstBoardRatingDetail({
+  intelligence,
+  rating,
+}: {
+  intelligence: RecommendationIntelligenceItem | null;
+  rating: FirstBoardRating;
+}) {
   /** Render explainable first-board score details for the selected stock. */
 
   const boardPatternScore = rating.score_breakdown.find((item) => item.name === "上板形态");
   const marketCapScore = rating.score_breakdown.find((item) => item.name === "市值偏好");
   const floatMarketCap = rating.facts.enrichment?.float_market_cap;
+  const dragonTigerOnList = intelligence?.dragon_tiger_on_list
+    ?? rating.facts.enrichment?.dragon_tiger_on_list
+    ?? false;
+  const popularityRank = intelligence?.popularity_rank
+    ?? rating.facts.enrichment?.popularity_rank
+    ?? null;
   const capRule = floatMarketCap === null || floatMarketCap === undefined
     ? "流通市值数据缺失"
     : floatMarketCap <= 5_000_000_000
@@ -3721,14 +3755,14 @@ function FirstBoardRatingDetail({ rating }: { rating: FirstBoardRating }) {
             </span>
             <span>
               <small>龙虎榜</small>
-              <strong>{rating.facts.enrichment.dragon_tiger_on_list ? "上榜" : "未上榜"}</strong>
+              <strong>{dragonTigerOnList ? "上榜" : "当前数据未显示上榜"}</strong>
             </span>
             <span>
-              <small>东财人气</small>
+              <small>当前人气</small>
               <strong>
-                {rating.facts.enrichment.popularity_rank === null
-                  ? "Top100 外"
-                  : `第 ${rating.facts.enrichment.popularity_rank}`}
+                {popularityRank === null
+                  ? "当前榜单未覆盖"
+                  : `第 ${popularityRank}`}
               </strong>
             </span>
           </div>

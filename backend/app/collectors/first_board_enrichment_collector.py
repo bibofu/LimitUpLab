@@ -27,6 +27,7 @@ class DragonTigerFact:
     float_market_cap: float | None
     reason: str | None
     source: str = "eastmoney"
+    hot_rank: int | None = None
 
 
 @dataclass(frozen=True)
@@ -86,6 +87,7 @@ def collect_preferred_dragon_tiger_facts(
                     float_market_cap=None,
                     reason=item.limit_reason,
                     source=snapshot.source,
+                    hot_rank=item.hot_rank,
                 )
                 for item in preferred_rows
             }

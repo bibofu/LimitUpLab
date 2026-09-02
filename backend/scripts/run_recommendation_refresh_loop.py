@@ -18,7 +18,9 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.config import configure_runtime_environment
 from app.services.recommendation_intelligence import (
     DEFAULT_REFRESH_INTERVAL_MINUTES,
+    finalize_recommendation_intelligence,
     refresh_recommendation_intelligence,
+    should_finalize_recommendation_intelligence,
 )
 
 
@@ -37,11 +39,12 @@ class RefreshLoopLock:
     def __enter__(self) -> RefreshLoopLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if self.path.exists():
-            modified_at = datetime.fromtimestamp(
-                self.path.stat().st_mtime,
-                tz=timezone.utc,
-            )
-            if datetime.now(timezone.utc) - modified_at > self.stale_after:
+            lock_pid = _read_lock_pid(self.path)
+            modified_at = datetime.fromtimestamp(self.path.stat().st_mtime, tz=timezone.utc)
+            if (
+                (lock_pid is not None and not _process_exists(lock_pid))
+                or datetime.now(timezone.utc) - modified_at > self.stale_after
+            ):
                 self.path.unlink(missing_ok=True)
         try:
             descriptor = os.open(
@@ -106,10 +109,8 @@ def main() -> int:
         stale_after=timedelta(minutes=interval * 3),
     ) as lock:
         while True:
-            started = time.monotonic()
-            try:
-                _run_refresh(interval, args.report_path)
-            except Exception as error:  # noqa: BLE001
+            error = _run_refresh_with_retries(interval, args.report_path)
+            if error is not None:
                 _write_report(
                     args.report_path,
                     {
@@ -120,12 +121,13 @@ def main() -> int:
                 )
                 print(f"Recommendation refresh failed: {error}", flush=True)
             lock.touch()
-            elapsed = time.monotonic() - started
-            time.sleep(max(1, interval * 60 - elapsed))
+            time.sleep(_seconds_until_next_slot(interval))
 
 
 def _run_refresh(interval: int, report_path: Path) -> None:
     response = refresh_recommendation_intelligence(interval_minutes=interval)
+    if should_finalize_recommendation_intelligence(response):
+        response = finalize_recommendation_intelligence(response)
     payload = response.model_dump(mode="json")
     _write_report(report_path, payload)
     print(
@@ -134,12 +136,64 @@ def _run_refresh(interval: int, report_path: Path) -> None:
                 "status": response.status,
                 "refreshed_at": response.refreshed_at.isoformat(),
                 "item_count": len(response.items),
+                "stage": response.stage,
+                "target_trade_date": (
+                    response.target_trade_date.isoformat()
+                    if response.target_trade_date
+                    else None
+                ),
                 "warnings": response.warnings,
             },
             ensure_ascii=False,
         ),
         flush=True,
     )
+
+
+def _run_refresh_with_retries(
+    interval: int,
+    report_path: Path,
+    *,
+    attempts: int = 3,
+) -> Exception | None:
+    """Retry transient provider failures so the 09:00 run is not skipped."""
+
+    for attempt in range(1, max(attempts, 1) + 1):
+        try:
+            _run_refresh(interval, report_path)
+            return None
+        except Exception as error:  # noqa: BLE001
+            if attempt >= max(attempts, 1):
+                return error
+            time.sleep(5)
+    return None
+
+
+def _seconds_until_next_slot(interval_minutes: int, now: datetime | None = None) -> float:
+    """Align refreshes to wall-clock slots such as 08:30 and 09:00."""
+
+    current = now or datetime.now(timezone.utc)
+    interval_seconds = max(interval_minutes, 1) * 60
+    remainder = current.timestamp() % interval_seconds
+    return max(1.0, interval_seconds - remainder)
+
+
+def _read_lock_pid(path: Path) -> int | None:
+    try:
+        payload = json.loads(path.read_text(encoding="utf-8"))
+        return int(payload.get("pid"))
+    except (OSError, ValueError, TypeError, json.JSONDecodeError):
+        return None
+
+
+def _process_exists(pid: int) -> bool:
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
 
 
 def _write_report(path: Path, payload: dict[str, object]) -> None:

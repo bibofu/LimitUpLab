@@ -26,7 +26,9 @@ from app.services.recommendation_intelligence import (
     _BaseCandidate,
     _load_base_candidates,
     _news_adjustment,
+    finalize_recommendation_intelligence,
     refresh_recommendation_intelligence,
+    should_finalize_recommendation_intelligence,
 )
 
 
@@ -383,6 +385,7 @@ class RecommendationIntelligenceTest(unittest.TestCase):
             80.0,
             amount=800_000_000,
             popularity_baseline_ready=True,
+            popularity_rank=65,
             popularity_snapshot_at=base_snapshot_at,
         )
         dragon_tiger = DragonTigerFact(
@@ -427,9 +430,9 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         item = response.items[0]
         self.assertTrue(item.dragon_tiger_is_new)
         self.assertEqual(item.dragon_tiger_adjustment, 2.0)
-        self.assertEqual(item.popularity_base_rank, 101)
+        self.assertEqual(item.popularity_base_rank, 65)
         self.assertEqual(item.popularity_rank, 10)
-        self.assertEqual(item.popularity_rank_change, 91)
+        self.assertEqual(item.popularity_rank_change, 55)
         self.assertEqual(item.popularity_adjustment, 2.0)
         self.assertEqual(item.dynamic_adjustment, 4.0)
         self.assertEqual(item.draft_score, 84.0)
@@ -524,6 +527,43 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         self.assertEqual(item.popularity_rank, 8)
         self.assertEqual(item.popularity_adjustment, 0.0)
         self.assertIn("收盘人气基线不可用", item.data_missing)
+
+    def test_low_position_pool_uses_current_popularity_as_reranking_signal(self) -> None:
+        now = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
+        candidate = _BaseCandidate(
+            "discovery", date(2026, 8, 31), "600640", "国脉文化",
+            "文化传媒", "区间突破", 1, 80.0,
+        )
+        with patch(
+            "app.services.recommendation_intelligence._load_base_candidates",
+            return_value=([candidate], date(2026, 8, 31), None, []),
+        ):
+            response = refresh_recommendation_intelligence(
+                now=now,
+                max_workers=1,
+                limit_up_repository=self.limit_repo,
+                first_board_repository=self.first_repo,
+                discovery_repository=self.discovery_repo,
+                snapshot_repository=self.snapshot_repo,
+                quote_collector=Mock(return_value=self._quotes(now)),
+                news_collector=Mock(return_value=self._empty_news(now)),
+                financial_collector=Mock(return_value=[]),
+                popularity_collector=Mock(
+                    return_value={
+                        "600640": PopularityFact(
+                            symbol="600640",
+                            rank=5,
+                            rank_change=4,
+                            captured_at=now,
+                        )
+                    }
+                ),
+            )
+
+        item = response.items[0]
+        self.assertEqual(item.popularity_rank, 5)
+        self.assertEqual(item.popularity_adjustment, 2.0)
+        self.assertEqual(item.draft_score, 82.0)
 
     def test_total_post_close_adjustment_is_capped(self) -> None:
         now = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
@@ -649,6 +689,93 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         ]
         self.assertEqual(relay_date, trade_date)
         self.assertEqual(relay_symbols, ["002001"])
+
+    def test_finalization_freezes_one_version_and_trims_display_items(self) -> None:
+        now = datetime(
+            2026, 9, 1, 9, 0,
+            tzinfo=timezone(timedelta(hours=8)),
+        )
+        candidate = _BaseCandidate(
+            "discovery", date(2026, 8, 31), "600640", "国脉文化",
+            "文化传媒", "区间突破", 1, 85.3,
+        )
+        with patch(
+            "app.services.recommendation_intelligence._load_base_candidates",
+            return_value=([candidate], date(2026, 8, 31), None, []),
+        ):
+            draft = refresh_recommendation_intelligence(
+                now=now - timedelta(minutes=30),
+                max_workers=1,
+                limit_up_repository=self.limit_repo,
+                first_board_repository=self.first_repo,
+                discovery_repository=self.discovery_repo,
+                snapshot_repository=self.snapshot_repo,
+                quote_collector=Mock(return_value=self._quotes(now)),
+                news_collector=Mock(return_value=self._empty_news(now)),
+                financial_collector=Mock(return_value=[]),
+            )
+
+        self.assertTrue(
+            should_finalize_recommendation_intelligence(draft, now=now)
+        )
+        final = finalize_recommendation_intelligence(
+            draft,
+            now=now,
+            limit_up_repository=self.limit_repo,
+            first_board_repository=self.first_repo,
+            snapshot_repository=self.snapshot_repo,
+        )
+        repeated = finalize_recommendation_intelligence(
+            draft.model_copy(update={"refresh_id": "different"}),
+            now=now + timedelta(minutes=30),
+            limit_up_repository=self.limit_repo,
+            first_board_repository=self.first_repo,
+            snapshot_repository=self.snapshot_repo,
+        )
+
+        self.assertEqual(final.stage, "final")
+        self.assertEqual(final.finalized_at, now)
+        self.assertEqual(repeated.refresh_id, final.refresh_id)
+        self.assertEqual(self.snapshot_repo.get_latest().stage, "final")
+
+    def test_repository_records_changes_without_periodic_full_snapshots(self) -> None:
+        now = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
+        candidate = _BaseCandidate(
+            "discovery", date(2026, 8, 31), "600640", "国脉文化",
+            "文化传媒", "区间突破", 1, 85.3,
+        )
+        with patch(
+            "app.services.recommendation_intelligence._load_base_candidates",
+            return_value=([candidate], date(2026, 8, 31), None, []),
+        ):
+            first = refresh_recommendation_intelligence(
+                now=now,
+                max_workers=1,
+                limit_up_repository=self.limit_repo,
+                first_board_repository=self.first_repo,
+                discovery_repository=self.discovery_repo,
+                snapshot_repository=self.snapshot_repo,
+                quote_collector=Mock(return_value=self._quotes(now)),
+                news_collector=Mock(return_value=self._empty_news(now)),
+                financial_collector=Mock(return_value=[]),
+            )
+            second = first.model_copy(
+                update={
+                    "refresh_id": "changed-refresh",
+                    "refreshed_at": now + timedelta(minutes=30),
+                    "items": [
+                        first.items[0].model_copy(update={"rank": 2})
+                    ],
+                }
+            )
+            self.snapshot_repo.save(second)
+
+        changes = self.snapshot_repo.list_changes(
+            strategy="discovery",
+            base_trade_date="2026-08-31",
+            symbol="600640",
+        )
+        self.assertEqual(changes[-1]["changes"]["rank"], {"old": 1, "new": 2})
 
     @staticmethod
     def _quotes(now: datetime) -> HithinkMarketSnapshot:

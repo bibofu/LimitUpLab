@@ -14,7 +14,7 @@ from app.config import env_bool
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_PATH = BACKEND_ROOT / "data" / "limituplab.sqlite"
-CURRENT_SCHEMA_VERSION = 9
+CURRENT_SCHEMA_VERSION = 10
 DEFAULT_BUSY_TIMEOUT_MS = 5_000
 DEFAULT_LOCK_RETRY_ATTEMPTS = 3
 DEFAULT_LOCK_RETRY_BASE_DELAY_SECONDS = 0.05
@@ -651,6 +651,47 @@ def _apply_schema(connection: sqlite3.Connection) -> None:
         """
         CREATE INDEX IF NOT EXISTS idx_recommendation_intelligence_refreshed
         ON recommendation_intelligence_snapshots (refreshed_at DESC)
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS recommendation_intelligence_current (
+            slot INTEGER PRIMARY KEY CHECK (slot = 1),
+            refresh_id TEXT NOT NULL,
+            refreshed_at TEXT NOT NULL,
+            status TEXT NOT NULL,
+            response_json TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS recommendation_intelligence_changes (
+            change_id INTEGER PRIMARY KEY AUTOINCREMENT,
+            refresh_id TEXT NOT NULL,
+            changed_at TEXT NOT NULL,
+            strategy TEXT NOT NULL,
+            base_trade_date TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            changes_json TEXT NOT NULL
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE INDEX IF NOT EXISTS idx_recommendation_changes_symbol_time
+        ON recommendation_intelligence_changes (
+            strategy, base_trade_date, symbol, changed_at DESC
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS recommendation_prediction_finals (
+            target_trade_date TEXT PRIMARY KEY,
+            finalized_at TEXT NOT NULL,
+            response_json TEXT NOT NULL
+        )
         """
     )
     connection.execute(

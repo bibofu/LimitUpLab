@@ -9,6 +9,7 @@ import time
 import urllib.error
 import urllib.request
 import argparse
+import json
 import socket
 import winreg
 from pathlib import Path
@@ -146,9 +147,32 @@ def worker_lock_active(lock_path: Path, *, stale_after_seconds: int) -> bool:
         return False
     try:
         age_seconds = time.time() - lock_path.stat().st_mtime
+        payload = json.loads(lock_path.read_text(encoding="utf-8"))
+        pid = int(payload.get("pid"))
     except OSError:
         return False
-    return age_seconds <= stale_after_seconds
+    except (ValueError, TypeError, json.JSONDecodeError):
+        pid = None
+    active = pid is not None and process_exists(pid)
+    if not active or age_seconds > stale_after_seconds:
+        try:
+            lock_path.unlink(missing_ok=True)
+        except OSError:
+            pass
+        return False
+    return True
+
+
+def process_exists(pid: int) -> bool:
+    """Check that the PID recorded by the lock still exists."""
+
+    if pid <= 0:
+        return False
+    try:
+        os.kill(pid, 0)
+    except OSError:
+        return False
+    return True
 
 
 def build_env() -> dict[str, str]:

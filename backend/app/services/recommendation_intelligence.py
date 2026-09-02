@@ -4,7 +4,7 @@ from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from dataclasses import dataclass
-from datetime import date, datetime, time, timedelta
+from datetime import date, datetime, time, timedelta, timezone
 from typing import Callable, Sequence
 from uuid import uuid4
 from zoneinfo import ZoneInfo
@@ -22,6 +22,9 @@ from app.collectors.hithink_finance_collector import (
     HithinkMarketSnapshot,
 )
 from app.models import (
+    AgentPrediction,
+    FirstBoardRating,
+    FirstBoardRatingsResponse,
     RecommendationFinancialReport,
     RecommendationIntelligenceItem,
     RecommendationIntelligenceResponse,
@@ -41,8 +44,12 @@ from app.services.relay_universe import is_relay_candidate_symbol
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 DEFAULT_REFRESH_INTERVAL_MINUTES = 30
+DISCOVERY_POOL_SIZE = 50
+DISCOVERY_DISPLAY_LIMIT = 15
+RELAY_DISPLAY_LIMIT = 10
 FINANCIAL_CACHE_TTL = timedelta(hours=24)
 MARKET_CLOSE_TIME = time(15, 0)
+FINALIZATION_TIME = time(9, 0)
 MAX_RELAY_DYNAMIC_ADJUSTMENT = 6.0
 
 QuoteCollector = Callable[[Sequence[str]], HithinkMarketSnapshot]
@@ -110,6 +117,21 @@ def refresh_recommendation_intelligence(
         first_board_repository=first_repo,
         discovery_repository=discovery_repo,
     )
+    target_trade_date = _target_trade_date(
+        discovery_repository=discovery_repo,
+        base_trade_date=max(
+            (item for item in (discovery_date, relay_date) if item is not None),
+            default=None,
+        ),
+    )
+    previous = intelligence_repo.get_latest()
+    if (
+        previous is not None
+        and previous.stage == "final"
+        and previous.discovery_base_date == discovery_date
+        and previous.relay_base_date == relay_date
+    ):
+        return previous
     hithink = HithinkFinanceCollector()
     active_quote_collector = quote_collector or hithink.collect_market_snapshots
     active_news_collector = news_collector or (
@@ -156,8 +178,8 @@ def refresh_recommendation_intelligence(
 
     popularity_by_symbol: dict[str, PopularityFact] = {}
     popularity_captured_at: datetime | None = None
-    popularity_ready = not relay_candidates
-    if relay_candidates:
+    popularity_ready = not unique_candidates
+    if unique_candidates:
         try:
             popularity_by_symbol = active_popularity_collector()
             if not popularity_by_symbol:
@@ -169,16 +191,34 @@ def refresh_recommendation_intelligence(
         except Exception as error:  # noqa: BLE001
             warnings.append(f"人气榜刷新失败：{error}")
 
-    previous = intelligence_repo.get_latest()
     previous_financials = {
         item.symbol: item.financial_report
         for item in previous.items
         if item.financial_report is not None
     } if previous else {}
+    previous_news = {
+        item.symbol: StockNewsFacts(
+            symbol=item.symbol,
+            name=item.name,
+            fetched_at=item.refreshed_at,
+            window_days=7,
+            cache_status="stale",
+            sources=list(dict.fromkeys(news.source for news in item.latest_news)),
+            items=item.latest_news,
+            data_missing=["新闻刷新失败，沿用上一轮结果"],
+        )
+        for item in previous.items
+        if item.latest_news
+    } if previous else {}
+    previous_items = {
+        (item.strategy, item.base_trade_date, item.symbol): item
+        for item in previous.items
+    } if previous else {}
     evidence_by_symbol = _collect_candidate_evidence(
         list(unique_candidates.values()),
         refreshed_at=refreshed_at,
         previous_financials=previous_financials,
+        previous_news=previous_news,
         news_collector=active_news_collector,
         financial_collector=active_financial_collector,
         max_workers=max_workers,
@@ -188,6 +228,9 @@ def refresh_recommendation_intelligence(
     provider_error_count = 0
     for candidate in candidates:
         quote = quote_by_symbol.get(candidate.symbol)
+        previous_item = previous_items.get(
+            (candidate.strategy, candidate.base_trade_date, candidate.symbol)
+        )
         evidence = evidence_by_symbol.get(
             candidate.symbol,
             _CandidateEvidence(None, None, ["情报刷新未返回结果"]),
@@ -205,6 +248,45 @@ def refresh_recommendation_intelligence(
         if candidate.strategy == "relay":
             current_dragon_tiger = dragon_tiger_by_symbol.get(candidate.symbol)
             current_popularity = popularity_by_symbol.get(candidate.symbol)
+            if current_dragon_tiger is None and previous_item is not None:
+                if previous_item.dragon_tiger_on_list:
+                    current_dragon_tiger = DragonTigerFact(
+                        symbol=candidate.symbol,
+                        buy_amount=None,
+                        sell_amount=None,
+                        net_buy_amount=previous_item.dragon_tiger_net_buy_amount,
+                        float_market_cap=None,
+                        reason=None,
+                        source=previous_item.dragon_tiger_source or "previous-refresh",
+                    )
+            if (
+                current_popularity is None
+                and current_dragon_tiger is not None
+                and current_dragon_tiger.hot_rank is not None
+            ):
+                current_popularity = PopularityFact(
+                    symbol=candidate.symbol,
+                    rank=current_dragon_tiger.hot_rank,
+                    rank_change=None,
+                    captured_at=refreshed_at,
+                    source=f"{current_dragon_tiger.source}-dragon-tiger",
+                )
+            if (
+                current_popularity is None
+                and not popularity_ready
+                and previous_item is not None
+                and previous_item.popularity_rank is not None
+            ):
+                current_popularity = PopularityFact(
+                    symbol=candidate.symbol,
+                    rank=previous_item.popularity_rank,
+                    rank_change=previous_item.popularity_rank_change,
+                    captured_at=(
+                        previous_item.popularity_snapshot_at
+                        or previous_item.refreshed_at
+                    ),
+                    source=previous_item.popularity_source or "previous-refresh",
+                )
             if not dragon_tiger_ready:
                 missing.append("最新龙虎榜刷新不可用")
             if not popularity_ready:
@@ -297,15 +379,41 @@ def refresh_recommendation_intelligence(
                 evidence.financial_report
             )
             dragon_tiger_adjustment = 0.0
-            popularity_adjustment = 0.0
+            current_popularity = popularity_by_symbol.get(candidate.symbol)
+            if (
+                current_popularity is None
+                and not popularity_ready
+                and previous_item is not None
+                and previous_item.popularity_rank is not None
+            ):
+                current_popularity = PopularityFact(
+                    symbol=candidate.symbol,
+                    rank=previous_item.popularity_rank,
+                    rank_change=previous_item.popularity_rank_change,
+                    captured_at=(
+                        previous_item.popularity_snapshot_at
+                        or previous_item.refreshed_at
+                    ),
+                    source=previous_item.popularity_source or "previous-refresh",
+                )
+            if not popularity_ready:
+                missing.append("最新人气榜刷新不可用")
+            popularity_adjustment, popularity_reasons = (
+                _discovery_popularity_adjustment(current_popularity)
+                if popularity_ready
+                else (0.0, [])
+            )
             popularity_rank_change = None
             current_dragon_tiger = None
-            current_popularity = None
             dynamic_adjustment = round(
-                news_adjustment + financial_adjustment,
+                news_adjustment + financial_adjustment + popularity_adjustment,
                 1,
             )
-            update_reasons = [*news_reasons, *financial_reasons]
+            update_reasons = [
+                *news_reasons,
+                *financial_reasons,
+                *(f"人气变化：{reason}" for reason in popularity_reasons),
+            ]
         base_score = _bounded_score(
             candidate.base_score + close_information_adjustment
         )
@@ -357,10 +465,6 @@ def refresh_recommendation_intelligence(
                 ),
                 popularity_base_rank=(
                     candidate.popularity_rank
-                    if candidate.popularity_rank is not None
-                    else 101
-                    if candidate.popularity_baseline_ready
-                    else None
                 ),
                 popularity_rank=(
                     current_popularity.rank if current_popularity else None
@@ -379,10 +483,26 @@ def refresh_recommendation_intelligence(
                     else candidate.popularity_source
                 ),
                 update_reasons=update_reasons,
-                current_price=quote.last_price if quote else None,
-                change_pct=quote.change_pct if quote else None,
-                turnover=quote.turnover if quote else None,
-                quote_captured_at=quote_captured_at if quote else None,
+                current_price=(
+                    quote.last_price
+                    if quote
+                    else previous_item.current_price if previous_item else None
+                ),
+                change_pct=(
+                    quote.change_pct
+                    if quote
+                    else previous_item.change_pct if previous_item else None
+                ),
+                turnover=(
+                    quote.turnover
+                    if quote
+                    else previous_item.turnover if previous_item else None
+                ),
+                quote_captured_at=(
+                    quote_captured_at
+                    if quote
+                    else previous_item.quote_captured_at if previous_item else None
+                ),
                 latest_news=evidence.news.items[:3] if evidence.news else [],
                 financial_report=evidence.financial_report,
                 refreshed_at=refreshed_at,
@@ -417,6 +537,14 @@ def refresh_recommendation_intelligence(
         refresh_id=f"recommendation_{uuid4().hex}",
         refreshed_at=refreshed_at,
         interval_minutes=max(5, min(interval_minutes, 1440)),
+        target_trade_date=target_trade_date,
+        discovery_pool_size=sum(
+            item.strategy == "discovery" for item in ranked_items
+        ),
+        discovery_display_limit=DISCOVERY_DISPLAY_LIMIT,
+        relay_pool_size=sum(item.strategy == "relay" for item in ranked_items),
+        relay_display_limit=RELAY_DISPLAY_LIMIT,
+        popularity_coverage_count=len(popularity_by_symbol),
         status="partial" if warnings else "complete",
         discovery_base_date=discovery_date,
         relay_base_date=relay_date,
@@ -425,6 +553,195 @@ def refresh_recommendation_intelligence(
     )
     intelligence_repo.save(response)
     return response
+
+
+def should_finalize_recommendation_intelligence(
+    response: RecommendationIntelligenceResponse,
+    *,
+    now: datetime | None = None,
+) -> bool:
+    """Return whether the target trading day's 09:00 freeze point has passed."""
+
+    local_now = _as_shanghai(now or datetime.now(SHANGHAI_TZ))
+    return (
+        response.stage == "draft"
+        and response.target_trade_date == local_now.date()
+        and local_now.time() >= FINALIZATION_TIME
+    )
+
+
+def finalize_recommendation_intelligence(
+    response: RecommendationIntelligenceResponse,
+    *,
+    now: datetime | None = None,
+    limit_up_repository: SQLiteLimitUpRepository | None = None,
+    first_board_repository: SQLiteFirstBoardRepository | None = None,
+    snapshot_repository: SQLiteRecommendationIntelligenceRepository | None = None,
+) -> RecommendationIntelligenceResponse:
+    """Freeze display rankings and replace the relay review baseline once."""
+
+    finalized_at = _as_shanghai(now or datetime.now(SHANGHAI_TZ))
+    if response.stage == "final":
+        return response
+    if response.target_trade_date is None:
+        raise ValueError("Cannot finalize a recommendation without target_trade_date.")
+
+    first_repo = first_board_repository or SQLiteFirstBoardRepository()
+    intelligence_repo = snapshot_repository or (
+        SQLiteRecommendationIntelligenceRepository(first_repo.database_path)
+    )
+    existing = intelligence_repo.get_final(response.target_trade_date.isoformat())
+    if existing is not None:
+        intelligence_repo.save(existing)
+        return existing
+
+    selected_items = [
+        *sorted(
+            (item for item in response.items if item.strategy == "discovery"),
+            key=lambda item: (item.rank, item.symbol),
+        )[: response.discovery_display_limit],
+        *sorted(
+            (item for item in response.items if item.strategy == "relay"),
+            key=lambda item: (item.rank, item.symbol),
+        )[: response.relay_display_limit],
+    ]
+    final = response.model_copy(
+        update={
+            "stage": "final",
+            "finalized_at": finalized_at,
+            "refreshed_at": finalized_at,
+            "items": selected_items,
+        }
+    )
+    _persist_final_relay_snapshot(
+        final,
+        limit_up_repository=(
+            limit_up_repository
+            or SQLiteLimitUpRepository(first_repo.database_path, seed_if_empty=False)
+        ),
+        first_board_repository=first_repo,
+    )
+    if not intelligence_repo.save_final(final):
+        persisted = intelligence_repo.get_final(response.target_trade_date.isoformat())
+        if persisted is not None:
+            intelligence_repo.save(persisted)
+            return persisted
+        return final
+    return final
+
+
+def _persist_final_relay_snapshot(
+    response: RecommendationIntelligenceResponse,
+    *,
+    limit_up_repository: SQLiteLimitUpRepository,
+    first_board_repository: SQLiteFirstBoardRepository,
+) -> None:
+    """Make the 09:00 relay Top10 the sole live snapshot used by review."""
+
+    trade_date = response.relay_base_date
+    if trade_date is None or response.target_trade_date is None:
+        return
+    existing = first_board_repository.get_live_prediction_snapshot(trade_date)
+    scoring_policy = (
+        SQLiteScoringPolicyRepository(
+            first_board_repository.database_path
+        ).get_policy(existing.generated_by)
+        if existing is not None
+        else None
+    )
+    rebuilt = build_first_board_ratings(
+        events=limit_up_repository.list_events(),
+        trade_date=trade_date,
+        first_board_repository=first_board_repository,
+        scoring_policy=scoring_policy,
+    )
+    ratings_source = (
+        rebuilt
+        if rebuilt.candidates
+        else existing
+    )
+    if ratings_source is None:
+        ratings_source = build_first_board_ratings(
+            events=limit_up_repository.list_events(),
+            trade_date=trade_date,
+            first_board_repository=first_board_repository,
+        )
+    rating_by_symbol = {
+        item.facts.symbol: item
+        for item in ratings_source.candidates
+    }
+    selected: list[FirstBoardRating] = []
+    for dynamic in sorted(
+        (item for item in response.items if item.strategy == "relay"),
+        key=lambda item: (item.rank, item.symbol),
+    )[: response.relay_display_limit]:
+        rating = rating_by_symbol.get(dynamic.symbol)
+        if rating is None:
+            continue
+        selected.append(
+            rating.model_copy(
+                update={
+                    "score": dynamic.draft_score,
+                    "rating": _rating_for_dynamic_score(dynamic.draft_score),
+                    "reasons": list(
+                        dict.fromkeys([*dynamic.update_reasons, *rating.reasons])
+                    ),
+                }
+            )
+        )
+    created_at = (response.finalized_at or response.refreshed_at).astimezone(
+        timezone.utc
+    )
+    ratings = FirstBoardRatingsResponse(
+        trade_date=trade_date,
+        candidates=selected,
+        filtered_out=ratings_source.filtered_out,
+        universe_count=ratings_source.universe_count,
+        generated_by=ratings_source.generated_by,
+        snapshot_source="live",
+        data_as_of=response.target_trade_date,
+        snapshot_created_at=created_at,
+    )
+    predictions = [
+        AgentPrediction(
+            prediction_id=(
+                f"{trade_date.isoformat()}-{rating.facts.symbol}-"
+                f"{ratings_source.generated_by}-live"
+            ),
+            trade_date=trade_date,
+            symbol=rating.facts.symbol,
+            name=rating.facts.name,
+            score=rating.score,
+            rating=rating.rating,
+            confidence=rating.confidence,
+            scoring_version=ratings_source.generated_by,
+            prediction_source="live",
+            data_as_of=response.target_trade_date,
+            facts_json=rating.facts.model_dump(mode="json"),
+            reasons=rating.reasons,
+            risks=rating.risks,
+            created_at=created_at,
+        )
+        for rating in selected
+    ]
+    first_board_repository.persist_live_prediction_snapshot(
+        ratings=ratings,
+        predictions=predictions,
+        top_limit=response.relay_display_limit,
+        data_as_of=response.target_trade_date,
+        created_at=created_at,
+        replace=True,
+    )
+
+
+def _rating_for_dynamic_score(score: float) -> str:
+    if score >= 80:
+        return "A"
+    if score >= 65:
+        return "B"
+    if score >= 50:
+        return "C"
+    return "D"
 
 
 def _load_base_candidates(
@@ -451,7 +768,10 @@ def _load_base_candidates(
                 rank=index,
                 base_score=item.score,
             )
-            for index, item in enumerate(discovery.candidates[:30], start=1)
+            for index, item in enumerate(
+                discovery.candidates[:DISCOVERY_POOL_SIZE],
+                start=1,
+            )
         )
 
     events = limit_up_repository.list_events()
@@ -538,9 +858,31 @@ def _load_base_candidates(
                     else None
                 ),
             )
-            for index, item in enumerate(relay_candidates[:30], start=1)
+            for index, item in enumerate(relay_candidates, start=1)
         )
     return candidates, discovery_date, relay_date, warnings
+
+
+def _target_trade_date(
+    *,
+    discovery_repository: SQLiteFirstBoardDiscoveryRepository,
+    base_trade_date: date | None,
+) -> date | None:
+    """Use the persisted exchange-calendar target, with a weekday fallback."""
+
+    discovery = discovery_repository.get_latest(FIRST_BOARD_DISCOVERY_VERSION)
+    if (
+        discovery is not None
+        and discovery.data_as_of == base_trade_date
+        and discovery.target_trade_date is not None
+    ):
+        return discovery.target_trade_date
+    if base_trade_date is None:
+        return None
+    target = base_trade_date + timedelta(days=1)
+    while target.weekday() >= 5:
+        target += timedelta(days=1)
+    return target
 
 
 POSITIVE_NEWS_TERMS = (
@@ -699,28 +1041,45 @@ def _dragon_tiger_adjustment(
     return adjustment, [reason]
 
 
+def _discovery_popularity_adjustment(
+    current: PopularityFact | None,
+) -> tuple[float, list[str]]:
+    """Use a covered live rank as one bounded low-position reranking signal."""
+
+    if current is None:
+        return 0.0, []
+    if current.rank <= 10:
+        adjustment = 2.0
+    elif current.rank <= 30:
+        adjustment = 1.0
+    else:
+        adjustment = 0.0
+    return (
+        adjustment,
+        [f"当前榜单第 {current.rank} 名，动态修正 {adjustment:+g} 分"]
+        if adjustment
+        else [],
+    )
+
+
 def _popularity_adjustment(
     candidate: _BaseCandidate,
     current: PopularityFact | None,
     *,
     captured_at: datetime | None,
 ) -> tuple[float, list[str], int | None]:
-    """Compare a fresh Top100 rank with the persisted base popularity snapshot."""
+    """Compare two covered popularity ranks without inferring missing positions."""
 
-    base_rank = (
-        candidate.popularity_rank
-        if candidate.popularity_rank is not None
-        else 101
-        if candidate.popularity_baseline_ready
-        else None
-    )
+    base_rank = candidate.popularity_rank
     base_snapshot_at = candidate.popularity_snapshot_at
     if base_rank is None or base_snapshot_at is None or captured_at is None:
         return 0.0, [], None
     if _as_shanghai(captured_at) <= _as_shanghai(base_snapshot_at):
         return 0.0, [], None
 
-    current_rank = current.rank if current is not None else 101
+    if current is None:
+        return 0.0, [], None
+    current_rank = current.rank
     rank_change = base_rank - current_rank
     if rank_change >= 50 and current_rank <= 20:
         adjustment = 2.0
@@ -732,17 +1091,11 @@ def _popularity_adjustment(
         adjustment = -1.0
     else:
         adjustment = 0.0
-    if current is None:
-        reason = (
-            f"由第 {base_rank} 名降至 Top100 之外，"
-            f"动态修正 {adjustment:+g} 分"
-        )
-    else:
-        direction = "上升" if rank_change > 0 else "下降" if rank_change < 0 else "持平"
-        reason = (
-            f"由第 {base_rank} 名{direction}至第 {current.rank} 名，"
-            f"动态修正 {adjustment:+g} 分"
-        )
+    direction = "上升" if rank_change > 0 else "下降" if rank_change < 0 else "持平"
+    reason = (
+        f"由第 {base_rank} 名{direction}至第 {current.rank} 名，"
+        f"动态修正 {adjustment:+g} 分"
+    )
     return adjustment, [reason] if adjustment != 0 else [], rank_change
 
 
@@ -765,6 +1118,7 @@ def _collect_candidate_evidence(
     *,
     refreshed_at: datetime,
     previous_financials: dict[str, RecommendationFinancialReport],
+    previous_news: dict[str, StockNewsFacts],
     news_collector: NewsCollector,
     financial_collector: FinancialCollector,
     max_workers: int,
@@ -777,6 +1131,7 @@ def _collect_candidate_evidence(
                 candidate,
                 refreshed_at=refreshed_at,
                 previous_financial=previous_financials.get(candidate.symbol),
+                previous_news=previous_news.get(candidate.symbol),
                 news_collector=news_collector,
                 financial_collector=financial_collector,
             ): candidate.symbol
@@ -800,6 +1155,7 @@ def _load_candidate_evidence(
     *,
     refreshed_at: datetime,
     previous_financial: RecommendationFinancialReport | None,
+    previous_news: StockNewsFacts | None,
     news_collector: NewsCollector,
     financial_collector: FinancialCollector,
 ) -> _CandidateEvidence:
@@ -809,7 +1165,7 @@ def _load_candidate_evidence(
         if news.cache_status == "stale" and news.data_missing:
             errors.extend(news.data_missing[:1])
     except Exception as error:  # noqa: BLE001
-        news = None
+        news = previous_news
         errors.append(f"新闻刷新失败：{error}")
 
     financial = previous_financial

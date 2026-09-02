@@ -42,7 +42,7 @@ LEGACY_FIRST_BOARD_DISCOVERY_VERSION = "first-board-discovery-v2-theme-driven"
 MIN_DISCOVERY_AMOUNT = 100_000_000
 MIN_HISTORY_BARS = 60
 DEFAULT_RECALL_LIMIT = 60
-DEFAULT_TOP_K = 10
+DEFAULT_TOP_K = 50
 DEFAULT_HISTORY_WORKERS = 8
 MAX_DISCOVERY_THEMES = 10
 
@@ -349,7 +349,7 @@ def refresh_first_board_discovery(
         eligible_count=len(eligible),
         recalled_count=len(recalled),
         themes=discovery_context.themes,
-        candidates=candidates[: max(1, min(top_k, 30))],
+        candidates=candidates[: max(1, min(top_k, 50))],
         generated_by=FIRST_BOARD_DISCOVERY_VERSION,
         source=market_snapshot.source,
         snapshot_created_at=datetime.now(timezone.utc),

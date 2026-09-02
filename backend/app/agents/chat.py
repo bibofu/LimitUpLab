@@ -43,9 +43,7 @@ from app.agents.tool_policy import (
     extract_promotion_days as _extract_promotion_days,
     extract_sector_query as _extract_sector_query,
     extract_trade_date as _extract_trade_date,
-    looks_like_broad_sector_ranking_question as (
-        _looks_like_broad_sector_ranking_question
-    ),
+    looks_like_broad_sector_ranking_question as _looks_like_broad_sector_ranking_question,
     looks_like_critic_question as _looks_like_critic_question,
     looks_like_daily_board_promotion_question as _looks_like_daily_board_promotion_question,
     looks_like_evaluation_question as _looks_like_evaluation_question,

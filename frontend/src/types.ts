@@ -482,7 +482,14 @@ export interface RecommendationIntelligenceResponse {
   refresh_id: string;
   refreshed_at: string;
   interval_minutes: number;
-  stage: "draft";
+  stage: "draft" | "final";
+  target_trade_date: string | null;
+  finalized_at: string | null;
+  discovery_pool_size: number;
+  discovery_display_limit: number;
+  relay_pool_size: number;
+  relay_display_limit: number;
+  popularity_coverage_count: number;
   status: "complete" | "partial";
   discovery_base_date: string | null;
   relay_base_date: string | null;

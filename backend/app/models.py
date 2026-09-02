@@ -332,12 +332,19 @@ class RecommendationIntelligenceItem(BaseModel):
 
 
 class RecommendationIntelligenceResponse(BaseModel):
-    """Latest replaceable research ranking for both strategies."""
+    """Current draft or the 09:00 final ranking for both strategies."""
 
     refresh_id: str
     refreshed_at: datetime
     interval_minutes: int
-    stage: Literal["draft"] = "draft"
+    stage: Literal["draft", "final"] = "draft"
+    target_trade_date: date | None = None
+    finalized_at: datetime | None = None
+    discovery_pool_size: int = 0
+    discovery_display_limit: int = 15
+    relay_pool_size: int = 0
+    relay_display_limit: int = 10
+    popularity_coverage_count: int = 0
     status: Literal["complete", "partial"]
     discovery_base_date: date | None = None
     relay_base_date: date | None = None
