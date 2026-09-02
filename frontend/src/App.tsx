@@ -3337,7 +3337,7 @@ function StockDetail({ data }: { data: DashboardData }) {
       return;
     }
     let active = true;
-    fetchFirstBoardRatings(tradeDate)
+    fetchFirstBoardRatings(tradeDate, true)
       .then((ratings) => {
         if (active) {
           setFirstBoardRating(
@@ -3680,8 +3680,27 @@ function FirstBoardRatingDetail({
 }) {
   /** Render explainable first-board score details for the selected stock. */
 
-  const boardPatternScore = rating.score_breakdown.find((item) => item.name === "上板形态");
-  const marketCapScore = rating.score_breakdown.find((item) => item.name === "市值偏好");
+  const scoreBreakdown = rating.score_breakdown.map((item) => {
+    if (item.name === "龙虎榜资金" && intelligence) {
+      return {
+        ...item,
+        evidence: [intelligence.dragon_tiger_on_list
+          ? `当前龙虎榜已上榜，净买额 ${formatNetAmount(intelligence.dragon_tiger_net_buy_amount)}`
+          : "当前龙虎榜数据未显示上榜"],
+      };
+    }
+    if (item.name === "市场人气" && intelligence) {
+      return {
+        ...item,
+        evidence: [intelligence.popularity_rank === null
+          ? "当前接入榜单未覆盖该股，不推断榜外名次"
+          : `当前人气排名第 ${intelligence.popularity_rank}`],
+      };
+    }
+    return item;
+  });
+  const boardPatternScore = scoreBreakdown.find((item) => item.name === "上板形态");
+  const marketCapScore = scoreBreakdown.find((item) => item.name === "市值偏好");
   const floatMarketCap = rating.facts.enrichment?.float_market_cap;
   const dragonTigerOnList = intelligence?.dragon_tiger_on_list
     ?? rating.facts.enrichment?.dragon_tiger_on_list
@@ -3689,6 +3708,14 @@ function FirstBoardRatingDetail({
   const popularityRank = intelligence?.popularity_rank
     ?? rating.facts.enrichment?.popularity_rank
     ?? null;
+  const displayScore = intelligence?.draft_score ?? rating.score;
+  const displayRating = displayScore >= 80
+    ? "A"
+    : displayScore >= 65
+      ? "B"
+      : displayScore >= 50
+        ? "C"
+        : "D";
   const capRule = floatMarketCap === null || floatMarketCap === undefined
     ? "流通市值数据缺失"
     : floatMarketCap <= 5_000_000_000
@@ -3701,11 +3728,11 @@ function FirstBoardRatingDetail({
     <Panel title="Agent 评分拆解" icon={<BarChart3 size={18} />}>
       <div className="rating-detail">
         <div className="rating-detail-head">
-          <span className={`rating-badge rating-${rating.rating.toLowerCase()}`}>
-            {rating.rating}
+          <span className={`rating-badge rating-${displayRating.toLowerCase()}`}>
+            {displayRating}
           </span>
           <div>
-            <strong>{rating.score.toFixed(1)}</strong>
+            <strong>{displayScore.toFixed(1)}</strong>
             <span>置信度 {formatPercent(rating.confidence)}</span>
           </div>
         </div>
@@ -3771,7 +3798,7 @@ function FirstBoardRatingDetail({
         <div className="rating-detail-section">
           <h3>评分项</h3>
           <div className="score-breakdown-list">
-            {rating.score_breakdown.map((item) => (
+            {scoreBreakdown.map((item) => (
               <div className="score-breakdown-item" key={item.name}>
                 <div>
                   <strong>{item.name}</strong>

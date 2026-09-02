@@ -164,6 +164,20 @@ def merge_dragon_tiger_review_enrichments(
             "dragon_tiger_reason": item.limit_reason,
             "dragon_tiger_source": response.source,
         }
+        if item.hot_rank is not None:
+            values.update(
+                {
+                    "popularity_rank": item.hot_rank,
+                    "popularity_snapshot_at": timestamp,
+                    "popularity_source": f"{response.source}-dragon-tiger",
+                    "data_missing": [
+                        missing
+                        for missing in enrichment.data_missing
+                        if missing
+                        not in ("popularity_snapshot", "eastmoney_popularity")
+                    ],
+                }
+            )
         if all(getattr(enrichment, key) == value for key, value in values.items()):
             continue
         updates.append(

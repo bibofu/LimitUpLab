@@ -157,6 +157,7 @@ def test_merge_dragon_tiger_review_enrichments_updates_matching_snapshot() -> No
         symbol="000001",
         feature_version="test",
         created_at=original_time,
+        data_missing=["popularity_snapshot", "eastmoney_popularity"],
     )
 
     updates = merge_dragon_tiger_review_enrichments(
@@ -172,5 +173,10 @@ def test_merge_dragon_tiger_review_enrichments_updates_matching_snapshot() -> No
     assert updates[0].dragon_tiger_sell_amount == 100.0
     assert updates[0].dragon_tiger_reason == "日涨幅偏离值达7%"
     assert updates[0].dragon_tiger_source == "hithink-finance"
+    assert updates[0].popularity_rank == 8
+    assert updates[0].popularity_snapshot_at == refreshed_time
+    assert updates[0].popularity_source == "hithink-finance-dragon-tiger"
+    assert "popularity_snapshot" not in updates[0].data_missing
+    assert "eastmoney_popularity" not in updates[0].data_missing
     assert updates[0].created_at == refreshed_time
     assert enrichment.dragon_tiger_on_list is False
