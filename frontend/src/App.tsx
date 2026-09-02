@@ -40,7 +40,6 @@ import {
 } from "react-router-dom";
 
 import { AgentAnswerMarkdown } from "./components/AgentAnswerMarkdown";
-import { AgentAnswerEvidence } from "./components/AgentAnswerEvidence";
 import {
   MarketKLineChart,
   type MarketCandleBar,
@@ -73,12 +72,9 @@ import {
   streamAgentChatMessage,
 } from "./api";
 import type {
-  AgentChatPerformance,
   AgentChatResponse,
   AgentChatStreamStage,
-  AgentEvidenceCard,
   AgentStockMention,
-  AgentToolPolicyAudit,
   ChatSessionDetail,
   ChatSessionMessage,
   ChatSessionSummary,
@@ -126,13 +122,7 @@ interface ChatMessage {
   content: string;
   stockMentions: AgentStockMention[];
   status?: "success" | "error";
-  evidenceCards?: AgentEvidenceCard[];
-  toolPolicy?: AgentToolPolicyAudit;
-  references?: string[];
-  warnings?: string[];
-  performance?: AgentChatPerformance;
   suggestedQuestions?: string[];
-  runId?: string | null;
 }
 
 const ACTIVE_CHAT_SESSION_STORAGE_KEY = "limituplab.activeChatSession";
@@ -144,26 +134,14 @@ function restoredChatMessage(message: ChatSessionMessage): ChatMessage {
     content: message.content,
     stockMentions: stockMentionsFromMetadata(message.metadata),
     status: message.status,
-    evidenceCards: evidenceCardsFromMetadata(message.metadata),
-    toolPolicy: toolPolicyFromMetadata(message.metadata),
-    references: stringArray(message.metadata.references),
-    warnings: stringArray(message.metadata.warnings),
-    performance: performanceFromMetadata(message.metadata),
     suggestedQuestions: stringArray(message.metadata.suggested_questions),
-    runId: message.run_id,
   };
 }
 
 function responseMessageMetadata(response: AgentChatResponse): Partial<ChatMessage> {
   return {
     stockMentions: response.stock_mentions,
-    evidenceCards: response.evidence_cards,
-    toolPolicy: response.tool_policy,
-    references: response.references,
-    warnings: response.warnings,
-    performance: response.performance,
     suggestedQuestions: response.suggested_questions,
-    runId: response.run_id,
     status: "success",
   };
 }
@@ -172,62 +150,6 @@ function stringArray(value: unknown): string[] {
   return Array.isArray(value)
     ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
     : [];
-}
-
-function evidenceCardsFromMetadata(metadata: Record<string, unknown>): AgentEvidenceCard[] {
-  if (!Array.isArray(metadata.evidence_cards)) {
-    return [];
-  }
-  return metadata.evidence_cards.filter((item): item is AgentEvidenceCard => {
-    if (!item || typeof item !== "object") {
-      return false;
-    }
-    const candidate = item as Record<string, unknown>;
-    return (
-      typeof candidate.title === "string"
-      && typeof candidate.summary === "string"
-      && typeof candidate.kind === "string"
-      && typeof candidate.status === "string"
-    );
-  });
-}
-
-function toolPolicyFromMetadata(
-  metadata: Record<string, unknown>,
-): AgentToolPolicyAudit | undefined {
-  const value = metadata.tool_policy;
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const candidate = value as Record<string, unknown>;
-  return {
-    planner_tool_calls: stringArray(candidate.planner_tool_calls),
-    final_tool_calls: stringArray(candidate.final_tool_calls),
-    backend_repaired_tools: stringArray(candidate.backend_repaired_tools),
-    repair_reasons: stringArray(candidate.repair_reasons),
-    safety_fallback_used: candidate.safety_fallback_used === true,
-  };
-}
-
-function performanceFromMetadata(
-  metadata: Record<string, unknown>,
-): AgentChatPerformance | undefined {
-  const value = metadata.performance;
-  if (!value || typeof value !== "object") {
-    return undefined;
-  }
-  const candidate = value as Record<string, unknown>;
-  const metric = (key: keyof AgentChatPerformance) => (
-    typeof candidate[key] === "number" ? candidate[key] : 0
-  );
-  return {
-    planner_duration_ms: metric("planner_duration_ms"),
-    tool_duration_ms: metric("tool_duration_ms"),
-    answer_duration_ms: metric("answer_duration_ms"),
-    total_duration_ms: metric("total_duration_ms"),
-    planner_prompt_chars: metric("planner_prompt_chars"),
-    answer_prompt_chars: metric("answer_prompt_chars"),
-  };
 }
 
 function stockMentionsFromMetadata(metadata: Record<string, unknown>): AgentStockMention[] {
@@ -705,7 +627,6 @@ function AgentChatDock({
                     content={item.content}
                     stockMentions={item.stockMentions}
                   />
-                  <AgentAnswerEvidence message={item} />
                 </div>
               ) : (
                 <p>{item.content}</p>
