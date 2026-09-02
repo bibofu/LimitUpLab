@@ -209,6 +209,12 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertFalse(signals.evaluation)
         self.assertFalse(signals.review)
 
+    def test_sector_stock_ranking_is_distinct_from_whole_sector_performance(self) -> None:
+        signals = QuestionSignals.from_message("游戏板块哪些股票走势好")
+
+        self.assertTrue(signals.sector_stock_ranking)
+        self.assertFalse(signals.sector_performance)
+
     def test_market_index_trend_uses_dedicated_grounding(self) -> None:
         signals = QuestionSignals.from_message("近一周大盘走势怎么样")
 

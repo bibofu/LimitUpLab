@@ -37,6 +37,7 @@ from app.models import (
     PredictionQualityAuditResponse,
     RatingBacktestResponse,
     SectorPerformanceFacts,
+    SectorStockRankingFacts,
     StockActivityFacts,
     StockKLineFacts,
     StockNewsFacts,
@@ -61,6 +62,7 @@ from app.services.first_board_discovery import FIRST_BOARD_DISCOVERY_VERSION
 from app.services.prediction_quality_audit import build_prediction_quality_audit
 from app.services.rating_backtest import build_rating_backtest
 from app.services.sector_performance import build_sector_performance
+from app.services.sector_stock_ranking import build_sector_stock_ranking
 from app.services.stock_kline import build_stock_kline_facts
 from app.services.stock_news import collect_stock_news
 from app.services.scoring_policy_optimizer import build_scoring_policy_registry
@@ -216,6 +218,34 @@ TOOL_SCHEMAS = [
         returns=(
             "Sector change, market rank, breadth, turnover, fund flow, leader, "
             "5/20-day returns and top/bottom sector rankings."
+        ),
+    ),
+    AgentToolSchema(
+        name="sector_stock_ranking",
+        description=(
+            "解析同花顺行业或概念板块成分股，并按截至最新完整收盘日的K线趋势排序。"
+            "适合回答游戏板块哪些股票走势好、半导体近期强势股等问题；结果是历史趋势比较，"
+            "不是未来涨跌预测。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "sector": {
+                    "type": "string",
+                    "description": "Industry or concept name, such as 游戏 or 半导体.",
+                },
+                "days": {"type": "integer", "minimum": 5, "maximum": 60},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 20},
+                "end_date": {
+                    "type": ["string", "null"],
+                    "description": "YYYY-MM-DD; omit for the latest local trade date.",
+                },
+            },
+            "required": ["sector"],
+        },
+        returns=(
+            "Resolved sector name/category, constituent coverage, data cutoff and ranked "
+            "stocks with 5/20-day returns, moving-average trend, volume ratio and drawdown."
         ),
     ),
     AgentToolSchema(
@@ -677,6 +707,7 @@ V1_CLOSED_MARKET_TOOL_NAMES = frozenset(
         "market_summary",
         "market_index_trend",
         "sector_performance",
+        "sector_stock_ranking",
         "hot_stock_ranking",
         "finance_news",
         "stock_news",
@@ -934,6 +965,49 @@ class AgentToolRegistry:
             output=response,
             summary=summary,
             trace_output=trace_output,
+        )
+
+    def sector_stock_ranking(
+        self,
+        sector: str,
+        days: int = 20,
+        limit: int = 10,
+        end_date: date | None = None,
+    ) -> ToolResult:
+        """Rank one sector's constituents by completed daily trend facts."""
+
+        latest_local_date = max(
+            (item.trade_date for item in self.events),
+            default=date.today(),
+        )
+        resolved_end_date = end_date or latest_local_date
+        response: SectorStockRankingFacts = build_sector_stock_ranking(
+            sector=sector,
+            end_date=resolved_end_date,
+            days=days,
+            limit=limit,
+            collector=self.hithink_collector,
+            repository=self.first_board_repository,
+        )
+        leaders = "、".join(
+            f"{item.name}({item.symbol})" for item in response.items[:3]
+        ) or "暂无可排名成分股"
+        summary = (
+            f"截至{response.data_as_of.isoformat()}，{response.sector_name}板块"
+            f"共{response.member_count}只成分股，完成{response.analyzed_count}只趋势比较；"
+            f"排名靠前：{leaders}。"
+        )
+        return ToolResult(
+            name="sector_stock_ranking",
+            input={
+                "sector": sector,
+                "days": response.requested_days,
+                "limit": response.requested_limit,
+                "end_date": resolved_end_date.isoformat(),
+            },
+            output=response,
+            summary=summary,
+            trace_output=response.model_dump(mode="json"),
         )
 
     def hot_stock_ranking(

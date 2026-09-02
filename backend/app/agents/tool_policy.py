@@ -45,6 +45,7 @@ class QuestionSignals:
     market_environment: bool
     market_index_trend: bool
     sector_performance: bool
+    sector_stock_ranking: bool
     hot_stock_ranking: bool
     finance_news: bool
     stock_news: bool
@@ -141,6 +142,13 @@ class QuestionSignals:
             )
             or market_environment
         )
+        sector_stock_ranking = (
+            "sector_stock_ranking" in capability_set
+            or (
+                use_lexical_fallback
+                and looks_like_sector_stock_ranking_question(message)
+            )
+        )
         return cls(
             requested_date=extract_trade_date(message),
             market_environment=market_environment,
@@ -150,9 +158,11 @@ class QuestionSignals:
                 or (
                     use_lexical_fallback
                     and looks_like_sector_performance_question(message)
+                    and not sector_stock_ranking
                 )
                 or market_environment
             ),
+            sector_stock_ranking=sector_stock_ranking,
             hot_stock_ranking=(
                 "popularity" in capability_set
                 or (
@@ -226,6 +236,7 @@ class QuestionSignals:
         return any(
             (
                 self.sector_performance,
+                self.sector_stock_ranking,
                 self.market_environment,
                 self.market_index_trend,
                 self.hot_stock_ranking,
@@ -433,6 +444,16 @@ class AgentToolPolicyEngine:
                 ),
                 matches=lambda signals: signals.stock_activity,
                 repair=self._repair_stock_activity,
+            ),
+            ToolRepairRule(
+                name="sector-stock-ranking-grounding",
+                tool_name="sector_stock_ranking",
+                reason=(
+                    "A sector constituent ranking requires a resolved sector universe "
+                    "and comparable completed K-line facts."
+                ),
+                matches=lambda signals: signals.sector_stock_ranking,
+                repair=self._repair_sector_stock_ranking,
             ),
             ToolRepairRule(
                 name="sector-performance-grounding",
@@ -646,6 +667,36 @@ class AgentToolPolicyEngine:
             fact_value=response.model_dump(mode="json"),
             references=[
                 f"sector={response.sector_name or 'industry-ranking'}",
+                f"data_as_of={response.data_as_of.isoformat()}",
+                *[f"source={source}" for source in response.sources],
+            ],
+        )
+
+    def _repair_sector_stock_ranking(
+        self,
+        request: AgentChatRequest,
+        signals: QuestionSignals,
+        execution: ToolExecution,
+        context_symbol: str | None,
+    ) -> None:
+        del context_symbol
+        sector = extract_sector_query(request.message)
+        if not sector:
+            raise ValueError("缺少需要查询的行业或概念名称")
+        result = self.tools.sector_stock_ranking(
+            sector=sector,
+            days=extract_sector_trend_days(request.message),
+            limit=extract_result_limit(request.message) or 10,
+            end_date=request.trade_date or signals.requested_date,
+        )
+        response = result.output
+        self._record_success(
+            execution,
+            result=result,
+            fact_name="sector_stock_ranking",
+            fact_value=response.model_dump(mode="json"),
+            references=[
+                f"sector={response.sector_name}",
                 f"data_as_of={response.data_as_of.isoformat()}",
                 *[f"source={source}" for source in response.sources],
             ],
@@ -1331,8 +1382,8 @@ def extract_sector_query(message: str) -> str | None:
 
     compact = re.sub(r"\s+", "", message)
     patterns = (
-        r"(?:今天|今日|最近|近期)?(.{1,16}?)(?:板块|行业)(?:今天|今日)?(?:表现|走势|行情|涨跌|强弱|资金|怎么样|如何|为何|为什么)",
-        r"(?:今天|今日|最近|近期)?(.{1,16}?)(?:板块|行业)",
+        r"(?:今天|今日|最近|近期)?(.{1,16}?)(?:板块|行业|概念)(?:今天|今日)?(?:表现|走势|行情|涨跌|强弱|资金|怎么样|如何|为何|为什么)",
+        r"(?:今天|今日|最近|近期)?(.{1,16}?)(?:板块|行业|概念)",
     )
     generic = {
         "哪些",
@@ -1340,6 +1391,7 @@ def extract_sector_query(message: str) -> str | None:
         "哪个",
         "行业",
         "板块",
+        "概念",
         "热门",
         "强势",
         "弱势",
@@ -1413,6 +1465,45 @@ def looks_like_sector_performance_question(message: str) -> bool:
     if any(term in message for term in ("首板", "涨停", "评分", "高分票")):
         return "板块表现" in message or "行业表现" in message
     return True
+
+
+def looks_like_sector_stock_ranking_question(message: str) -> bool:
+    """Return whether text asks to compare stocks inside one named sector."""
+
+    compact = re.sub(r"\s+", "", message)
+    if not any(term in compact for term in ("板块", "行业", "概念")):
+        return False
+    asks_stocks = any(
+        term in compact for term in ("股票", "个股", "成分股", "哪些票", "什么票")
+    )
+    asks_comparison = any(
+        term in compact
+        for term in (
+            "走势好",
+            "表现好",
+            "强势",
+            "趋势",
+            "排名",
+            "排行",
+            "涨得好",
+            "涨得多",
+        )
+    )
+    return asks_stocks and asks_comparison
+
+
+def extract_sector_trend_days(message: str) -> int:
+    """Extract a bounded daily trend window from a sector-stock question."""
+
+    compact = re.sub(r"\s+", "", message)
+    matched = re.search(r"(?:近|最近)?(\d{1,2})(?:个)?(?:交易)?日", compact)
+    if matched:
+        return max(5, min(int(matched.group(1)), 60))
+    if any(term in compact for term in ("一个月", "1个月")):
+        return 20
+    if any(term in compact for term in ("两个月", "2个月")):
+        return 40
+    return 20
 
 
 def looks_like_hot_stock_question(message: str) -> bool:

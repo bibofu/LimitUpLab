@@ -1113,6 +1113,7 @@ def _tool_planner_system_prompt(
         "For ordinary limit-up, first-board, or continued-board lists, call limit_up_events. Follow the backend_query_contract supplied with the user message for date, board height, market, event status, result mode, sorting and limit; do not weaken explicit user filters. Use first_board_ratings only when the user asks for ratings, scores, ranking, or candidate filtering. "
         "For Dragon-Tiger List, institution flow or hot-money flow questions, call dragon_tiger_list only for a completed trade date. "
         "For a theme or industry inside the local limit-up pool, call limit_up_events. For whole-market industry performance or ranking, call sector_performance and state its source, data_as_of and freshness. "
+        "When the user asks which constituent stocks in a named industry or concept have stronger recent trends, call sector_stock_ranking; do not substitute one sector leader or let the model rank names from memory. "
         "Grouping a previously returned stock set by its existing industry or concept fields does not require sector_performance; use it only for whole-market industry strength, return or ranking. "
         "For broad market-environment questions, select the market_environment capability. Its contract supplies market summary, five-day index trend, sector ranking and enriched popularity evidence; do not answer from only one evidence group. "
         "For broad-market, major-index, Shanghai Composite, Shenzhen Component or ChiNext Index performance over multiple days, call market_index_trend with the requested trading-day window; never infer index performance from limit-up counts. "
@@ -1562,6 +1563,44 @@ def _template_answer_from_tool_facts(
                 f"- {item.get('title')}：{item.get('url')}"
                 for item in facts["web_search"].get("results", [])[:3]
             )
+        lines.append(TEXT["safety"])
+        return "\n".join(lines)
+
+    if "sector_stock_ranking" in facts:
+        ranking = facts["sector_stock_ranking"]
+        category = "概念" if ranking.get("sector_category") == "concept" else "行业"
+        lines = [
+            f"截至 {ranking.get('data_as_of')}，已将“{ranking.get('requested_sector')}”解析为"
+            f"同花顺{category}“{ranking.get('sector_name')}”。",
+            f"共 {ranking.get('member_count', 0)} 只成分股，本次完成 "
+            f"{ranking.get('analyzed_count', 0)} 只趋势比较。",
+        ]
+        trend_labels = {
+            "rising": "上升",
+            "oscillating": "震荡",
+            "falling": "回落",
+            "insufficient": "数据不足",
+        }
+        for item in ranking.get("items", []):
+            metrics = [
+                f"趋势分 {item.get('trend_score')}",
+                f"状态 {trend_labels.get(item.get('trend'), item.get('trend'))}",
+            ]
+            if item.get("return_5d_pct") is not None:
+                metrics.append(f"近5日 {item['return_5d_pct']:+.2f}%")
+            if item.get("return_20d_pct") is not None:
+                metrics.append(f"近20日 {item['return_20d_pct']:+.2f}%")
+            if item.get("volume_ratio_5d") is not None:
+                metrics.append(f"5日量比 {item['volume_ratio_5d']:.2f}")
+            if item.get("max_drawdown_pct") is not None:
+                metrics.append(f"区间最大回撤 {item['max_drawdown_pct']:.2f}%")
+            lines.append(
+                f"{item.get('rank')}. {item.get('name')}（{item.get('symbol')}）："
+                + "，".join(metrics)
+                + "。"
+            )
+        lines.extend(ranking.get("warnings", []))
+        lines.append("以上排名只比较已发生的收盘趋势与量能结构，不代表后续上涨概率。")
         lines.append(TEXT["safety"])
         return "\n".join(lines)
 
@@ -2639,6 +2678,65 @@ def _execute_llm_tool_calls(
             references.extend(
                 [
                     f"sector={response.sector_name or 'industry-ranking'}",
+                    f"data_as_of={response.data_as_of.isoformat()}",
+                    *[f"source={source}" for source in response.sources],
+                ]
+            )
+        elif name == "sector_stock_ranking":
+            sector = _optional_str(arguments.get("sector"))
+            if sector is None:
+                sector = _extract_sector_query(request.message)
+            days = _parse_optional_int(arguments.get("days")) or 20
+            limit = (
+                extract_result_limit(request.message)
+                or _parse_optional_int(arguments.get("limit"))
+                or 10
+            )
+            end_date = _explicit_request_trade_date(request)
+            if not sector:
+                error = "缺少需要查询的行业或概念名称"
+                facts["sector_stock_ranking_error"] = error
+                traces.append(
+                    _tool_error_trace(
+                        name=name,
+                        tool_input={"sector": None, "days": days, "limit": limit},
+                        summary="板块成分股走势查询失败，已将失败原因交给 LLM。",
+                        error=error,
+                    )
+                )
+                call_names.append(name)
+                continue
+            try:
+                result = tools.sector_stock_ranking(
+                    sector=sector,
+                    days=max(5, min(days, 60)),
+                    limit=max(1, min(limit, 20)),
+                    end_date=end_date,
+                )
+            except Exception as error:  # noqa: BLE001
+                facts["sector_stock_ranking_error"] = str(error)
+                traces.append(
+                    _tool_error_trace(
+                        name=name,
+                        tool_input={
+                            "sector": sector,
+                            "days": days,
+                            "limit": limit,
+                            "end_date": end_date.isoformat() if end_date else None,
+                        },
+                        summary="板块成分股走势查询失败，已将失败原因交给 LLM。",
+                        error=str(error),
+                    )
+                )
+                call_names.append(name)
+                continue
+            response = result.output
+            facts["sector_stock_ranking"] = response.model_dump(mode="json")
+            traces.append(result.trace())
+            call_names.append(name)
+            references.extend(
+                [
+                    f"sector={response.sector_name}",
                     f"data_as_of={response.data_as_of.isoformat()}",
                     *[f"source={source}" for source in response.sources],
                 ]

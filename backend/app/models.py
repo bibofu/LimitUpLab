@@ -130,6 +130,44 @@ class SectorPerformanceFacts(BaseModel):
     sources: list[str] = Field(default_factory=list)
 
 
+class SectorStockTrendItem(BaseModel):
+    """One sector constituent ranked by deterministic close-based trend facts."""
+
+    rank: int
+    symbol: str
+    name: str
+    trend_score: float
+    trend: Literal["rising", "oscillating", "falling", "insufficient"]
+    data_as_of: date
+    latest_close: float
+    return_5d_pct: float | None = None
+    return_20d_pct: float | None = None
+    ma5: float | None = None
+    ma10: float | None = None
+    ma20: float | None = None
+    volume_ratio_5d: float | None = None
+    max_drawdown_pct: float | None = None
+
+
+class SectorStockRankingFacts(BaseModel):
+    """A bounded, auditable trend ranking for one industry or concept."""
+
+    requested_sector: str
+    sector_name: str
+    sector_category: Literal["industry", "concept"]
+    sector_thscode: str
+    requested_days: int
+    requested_limit: int
+    data_as_of: date
+    member_count: int
+    analyzed_count: int
+    missing_count: int
+    truncated_count: int
+    items: list[SectorStockTrendItem] = Field(default_factory=list)
+    sources: list[str] = Field(default_factory=list)
+    warnings: list[str] = Field(default_factory=list)
+
+
 class WebSearchResult(BaseModel):
     """One sanitized result returned by the generic web-search tool."""
 
@@ -1866,6 +1904,7 @@ def _evidence_title_kind(tool_name: str) -> tuple[str, str]:
         "llm_tool_planner": ("LLM 工具规划", "execution"),
         "market_summary": ("市场环境事实", "market"),
         "sector_performance": ("行业板块行情", "market"),
+        "sector_stock_ranking": ("板块成分股走势", "market"),
         "hot_stock_ranking": ("同花顺热股榜", "market"),
         "dragon_tiger_list": ("同花顺龙虎榜", "market"),
         "remote_limit_up_pool": ("同花顺涨停池", "limit_up_events"),
@@ -1921,6 +1960,7 @@ def _repair_reason(
         "limit_up_event_dates": "用户询问本地是否有某日数据，后端补充 limit_up_event_dates。",
         "limit_up_events": "用户询问当天涨停/连板/炸板明细，后端补充 limit_up_events。",
         "sector_performance": "用户询问整个行业板块表现，后端补充 sector_performance。",
+        "sector_stock_ranking": "用户询问板块内哪些股票近期走势更强，后端补充 sector_stock_ranking。",
         "finance_news": "用户询问最新财经快讯，后端补充 finance_news。",
         "stock_news": "用户询问指定股票的近期资讯，后端补充 stock_news。",
         "stock_activity": "用户询问指定股票的近期动态，后端补充 stock_activity。",
@@ -1945,6 +1985,12 @@ def _evidence_metrics(output: dict[str, Any]) -> dict[str, Any]:
         "source",
         "sector_name",
         "sector_count",
+        "member_count",
+        "analyzed_count",
+        "missing_count",
+        "truncated_count",
+        "requested_days",
+        "requested_limit",
         "rank",
         "change_pct",
         "up_count",

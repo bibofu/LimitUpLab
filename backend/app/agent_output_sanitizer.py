@@ -11,6 +11,7 @@ INTERNAL_TOOL_LABELS: dict[str, str] = {
     "market_index_trend": "大盘指数走势",
     "daily_board_promotion": "连板晋级统计",
     "sector_performance": "板块行情",
+    "sector_stock_ranking": "板块个股走势",
     "hot_stock_ranking": "热股排行",
     "dragon_tiger_list": "龙虎榜数据",
     "remote_limit_up_pool": "同花顺涨停池",

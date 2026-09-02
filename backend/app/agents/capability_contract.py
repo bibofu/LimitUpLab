@@ -75,6 +75,25 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
         (CapabilityToolRequirement("sector_performance", {"sector": None}),),
     ),
     AgentCapability(
+        "sector_stock_ranking",
+        "查询一个明确行业或概念板块中，哪些成分股近期已发生的日K线趋势相对更强。",
+        (
+            CapabilityToolRequirement(
+                "sector_stock_ranking", {"days": 20, "limit": 10}
+            ),
+        ),
+        examples=(
+            "游戏板块哪些股票走势好",
+            "半导体板块近期强势股有哪些",
+            "软件行业近20日走势排名",
+        ),
+        answer_guidance=(
+            "注明解析到的同花顺行业或概念名称、数据截止日和成分股覆盖率；按工具顺序列出"
+            "名次、股票名称与代码、趋势分、近5/20日涨跌、均线趋势、量比和回撤，缺失项"
+            "明确省略。趋势分只用于比较已经发生的价格量能结构，不解释为未来上涨概率。"
+        ),
+    ),
+    AgentCapability(
         "popularity",
         "查询当前热门股票、人气榜、关注度榜或指定 Top-N。",
         (

@@ -25,6 +25,8 @@ from app.models import (
     MarketIndexTrendItem,
     MarketIndexTrendPoint,
     SectorPerformanceFacts,
+    SectorStockRankingFacts,
+    SectorStockTrendItem,
     WebSearchFacts,
     WebSearchResult,
 )
@@ -579,6 +581,52 @@ class AgentExternalToolsTest(unittest.TestCase):
         self.assertNotIn("rating_evaluation", response.tool_calls)
         self.assertIn("7.44%", response.answer)
         self.assertIn("https://example.com/report", response.references)
+
+    @patch("app.agents.tools.build_sector_stock_ranking")
+    def test_policy_repairs_sector_constituent_ranking_tool(self, ranking_builder) -> None:
+        today = date.today()
+        ranking_builder.return_value = SectorStockRankingFacts(
+            requested_sector="游戏",
+            sector_name="游戏",
+            sector_category="industry",
+            sector_thscode="881275.TI",
+            requested_days=20,
+            requested_limit=10,
+            data_as_of=today,
+            member_count=23,
+            analyzed_count=23,
+            missing_count=0,
+            truncated_count=0,
+            items=[
+                SectorStockTrendItem(
+                    rank=1,
+                    symbol="600892",
+                    name="大晟文化",
+                    trend_score=80.56,
+                    trend="rising",
+                    data_as_of=today,
+                    latest_close=5.35,
+                    return_5d_pct=32.1,
+                    return_20d_pct=28.61,
+                    volume_ratio_5d=0.31,
+                    max_drawdown_pct=-20.52,
+                )
+            ],
+            sources=["fake-sector-ranking"],
+        )
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="sector-stock-ranking",
+                message="游戏板块哪些股票走势好",
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=ExternalToolProvider(),
+        )
+
+        self.assertIn("sector_stock_ranking", response.tool_calls)
+        self.assertNotIn("sector_performance", response.tool_calls)
+        ranking_builder.assert_called_once()
 
     @patch("app.collectors.hithink_finance_collector.HithinkFinanceCollector.collect_hot_stocks")
     def test_llm_can_call_tonghuashun_hot_stock_tool(self, collect_hot_stocks) -> None:

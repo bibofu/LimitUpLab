@@ -18,6 +18,23 @@
       ]
     },
     {
+      "family_id": "sector_stock_ranking",
+      "expected_capabilities": ["sector_stock_ranking"],
+      "required_tools": ["sector_stock_ranking"],
+      "messages": [
+        "游戏板块哪些股票走势好",
+        "半导体板块近期强势股有哪些",
+        "软件行业近20日走势排名",
+        "机器人概念里最近走得好的个股是谁",
+        "消费电子板块成分股按趋势排一下",
+        "算力板块中哪些票近期表现更强",
+        "医药行业里近一个月涨势靠前的股票",
+        "把游戏行业的股票按K线趋势列前十",
+        "低空经济概念有哪些个股走势相对强",
+        "证券板块内部最近谁涨得比较好"
+      ]
+    },
+    {
       "family_id": "popularity",
       "expected_capabilities": ["popularity"],
       "required_tools": ["hot_stock_ranking"],
