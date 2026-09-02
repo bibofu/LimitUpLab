@@ -752,25 +752,30 @@ def _answer_with_llm_tool_agent(
         request.message,
         execution["facts"],
     )
-    answer_system_prompt = _tool_answer_system_prompt(
-        agent_profile=tools.profile,
-        exhaustive_event_answer=exhaustive_event_answer,
-        complete_position_answer=complete_position_answer,
-        complete_hot_stock_answer=complete_hot_stock_answer,
-        hot_stock_event_intersection_answer=hot_stock_event_intersection_answer,
-        capability_instruction=capability_answer_instruction(capabilities),
-    )
-    answer_user_prompt = _tool_answer_user_prompt(
-        request,
-        tool_plan,
-        execution["facts"],
-        context,
-    )
+    fast_structured_answer = _is_simple_sector_stock_ranking(execution["facts"])
+    if fast_structured_answer:
+        answer_system_prompt = ""
+        answer_user_prompt = ""
+    else:
+        answer_system_prompt = _tool_answer_system_prompt(
+            agent_profile=tools.profile,
+            exhaustive_event_answer=exhaustive_event_answer,
+            complete_position_answer=complete_position_answer,
+            complete_hot_stock_answer=complete_hot_stock_answer,
+            hot_stock_event_intersection_answer=hot_stock_event_intersection_answer,
+            capability_instruction=capability_answer_instruction(capabilities),
+        )
+        answer_user_prompt = _tool_answer_user_prompt(
+            request,
+            tool_plan,
+            execution["facts"],
+            context,
+        )
     answer_started_at = perf_counter()
     final_result = None
     if progress_callback:
         progress_callback("answering", "正在基于工具事实生成回答")
-    if _template_answer_forced():
+    if _template_answer_forced() or fast_structured_answer:
         answer = _ensure_safety_boundary(fallback)
         answer = _ensure_explicit_symbol_mentioned(request, answer)
         source = "template_general_answer"
@@ -1568,12 +1573,10 @@ def _template_answer_from_tool_facts(
 
     if "sector_stock_ranking" in facts:
         ranking = facts["sector_stock_ranking"]
-        category = "概念" if ranking.get("sector_category") == "concept" else "行业"
+        items = ranking.get("items", [])
         lines = [
-            f"截至 {ranking.get('data_as_of')}，已将“{ranking.get('requested_sector')}”解析为"
-            f"同花顺{category}“{ranking.get('sector_name')}”。",
-            f"共 {ranking.get('member_count', 0)} 只成分股，本次完成 "
-            f"{ranking.get('analyzed_count', 0)} 只趋势比较。",
+            f"截至 {ranking.get('data_as_of')}，{ranking.get('sector_name')}板块"
+            f"本轮表现靠前的 {len(items)} 只个股："
         ]
         trend_labels = {
             "rising": "上升",
@@ -1581,25 +1584,21 @@ def _template_answer_from_tool_facts(
             "falling": "回落",
             "insufficient": "数据不足",
         }
-        for item in ranking.get("items", []):
+        for item in items:
             metrics = [
-                f"趋势分 {item.get('trend_score')}",
                 f"状态 {trend_labels.get(item.get('trend'), item.get('trend'))}",
             ]
             if item.get("return_5d_pct") is not None:
                 metrics.append(f"近5日 {item['return_5d_pct']:+.2f}%")
             if item.get("return_20d_pct") is not None:
                 metrics.append(f"近20日 {item['return_20d_pct']:+.2f}%")
-            if item.get("volume_ratio_5d") is not None:
-                metrics.append(f"5日量比 {item['volume_ratio_5d']:.2f}")
-            if item.get("max_drawdown_pct") is not None:
-                metrics.append(f"区间最大回撤 {item['max_drawdown_pct']:.2f}%")
             lines.append(
                 f"{item.get('rank')}. {item.get('name')}（{item.get('symbol')}）："
                 + "，".join(metrics)
                 + "。"
             )
-        lines.extend(ranking.get("warnings", []))
+        if len(items) < ranking.get("requested_limit", 10):
+            lines.append("部分成分股数据不足，本轮未能补足请求数量。")
         lines.append("以上排名只比较已发生的收盘趋势与量能结构，不代表后续上涨概率。")
         lines.append(TEXT["safety"])
         return "\n".join(lines)
@@ -2687,11 +2686,7 @@ def _execute_llm_tool_calls(
             if sector is None:
                 sector = _extract_sector_query(request.message)
             days = _parse_optional_int(arguments.get("days")) or 20
-            limit = (
-                extract_result_limit(request.message)
-                or _parse_optional_int(arguments.get("limit"))
-                or 10
-            )
+            limit = extract_result_limit(request.message) or 10
             end_date = _explicit_request_trade_date(request)
             if not sector:
                 error = "缺少需要查询的行业或概念名称"
@@ -5771,6 +5766,15 @@ def _missing_symbol_response(
         warnings=[_safety_warning()],
         generated_by=CHAT_AGENT_VERSION,
     )
+
+
+def _is_simple_sector_stock_ranking(facts: dict[str, Any]) -> bool:
+    """Use the complete deterministic Top-N list without another model round-trip."""
+
+    successful_facts = {
+        name for name in facts if not name.endswith("_error")
+    }
+    return successful_facts == {"sector_stock_ranking"}
 
 
 def _safety_warning() -> str:

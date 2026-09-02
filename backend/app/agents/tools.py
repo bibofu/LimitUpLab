@@ -235,7 +235,15 @@ TOOL_SCHEMAS = [
                     "description": "Industry or concept name, such as 游戏 or 半导体.",
                 },
                 "days": {"type": "integer", "minimum": 5, "maximum": 60},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 20},
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "description": (
+                        "Return 10 stocks unless the user explicitly asks for "
+                        "another count."
+                    ),
+                },
                 "end_date": {
                     "type": ["string", "null"],
                     "description": "YYYY-MM-DD; omit for the latest local trade date.",

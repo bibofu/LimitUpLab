@@ -5,11 +5,13 @@ from __future__ import annotations
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import date
 from typing import Callable
+from zoneinfo import ZoneInfo
 
 from app.collectors.hithink_finance_collector import (
     HithinkFinanceCollector,
     HithinkIndexCatalogFact,
     HithinkIndexConstituentFact,
+    HithinkMarketSnapshotFact,
 )
 from app.models import (
     SectorStockRankingFacts,
@@ -20,8 +22,11 @@ from app.repositories import SQLiteFirstBoardRepository
 from app.services.stock_kline import build_stock_kline_facts
 
 
-MAX_ANALYZED_CONSTITUENTS = 120
-DEFAULT_WORKERS = 8
+DEFAULT_RESULT_LIMIT = 10
+MIN_ANALYZED_CONSTITUENTS = 20
+ANALYSIS_UNIVERSE_MULTIPLIER = 2
+MAX_ANALYZED_CONSTITUENTS = 40
+DEFAULT_WORKERS = 10
 TrendFactsBuilder = Callable[..., StockKLineFacts]
 
 
@@ -30,7 +35,7 @@ def build_sector_stock_ranking(
     sector: str,
     end_date: date,
     days: int = 20,
-    limit: int = 10,
+    limit: int = DEFAULT_RESULT_LIMIT,
     collector: HithinkFinanceCollector | None = None,
     repository: SQLiteFirstBoardRepository | None = None,
     facts_builder: TrendFactsBuilder = build_stock_kline_facts,
@@ -57,7 +62,16 @@ def build_sector_stock_ranking(
     if not constituents:
         raise ValueError(f"{selected.name}板块未返回成分股")
 
-    analyzed_members = constituents[:MAX_ANALYZED_CONSTITUENTS]
+    analysis_limit = min(
+        MAX_ANALYZED_CONSTITUENTS,
+        max(MIN_ANALYZED_CONSTITUENTS, requested_limit * ANALYSIS_UNIVERSE_MULTIPLIER),
+    )
+    analyzed_members, snapshot_shortlisted = _select_analysis_members(
+        constituents,
+        limit=analysis_limit,
+        end_date=end_date,
+        collector=active_collector,
+    )
     facts_by_symbol: dict[str, StockKLineFacts] = {}
     failures: list[str] = []
 
@@ -122,9 +136,16 @@ def build_sector_stock_ranking(
     if failures:
         warnings.append(f"{len(failures)}只成分股缺少可用K线，未进入排名。")
     if truncated_count:
-        warnings.append(
-            f"板块成分股超过分析上限，另有{truncated_count}只未进入本次比较。"
-        )
+        if snapshot_shortlisted:
+            warnings.append(
+                f"为控制响应耗时，先按{end_date.isoformat()}日涨幅从全板块召回"
+                f"{len(analyzed_members)}只，再用{requested_days}日K线生成本轮排名。"
+            )
+        else:
+            warnings.append(
+                f"为控制响应耗时，本次只比较{len(analyzed_members)}只成分股，"
+                f"另有{truncated_count}只未进入本轮排名。"
+            )
     actual_dates = [facts.data_as_of for facts in facts_by_symbol.values()]
     data_as_of = min(actual_dates) if actual_dates else end_date
     return SectorStockRankingFacts(
@@ -142,8 +163,61 @@ def build_sector_stock_ranking(
         missing_count=len(failures),
         truncated_count=truncated_count,
         items=items,
-        sources=["hithink-finance", "local-first-daily-kline"],
+        sources=[
+            "hithink-finance",
+            "local-first-daily-kline",
+            *(["hithink-finance-market-snapshot-shortlist"] if snapshot_shortlisted else []),
+        ],
         warnings=warnings,
+    )
+
+
+def _select_analysis_members(
+    constituents: list[HithinkIndexConstituentFact],
+    *,
+    limit: int,
+    end_date: date,
+    collector: HithinkFinanceCollector,
+) -> tuple[list[HithinkIndexConstituentFact], bool]:
+    """Recall a small latest-day shortlist before loading multi-day K-lines."""
+
+    if len(constituents) <= limit:
+        return constituents, False
+    try:
+        snapshot = collector.collect_market_snapshots(
+            [item.thscode for item in constituents]
+        )
+    except Exception:  # noqa: BLE001
+        return constituents[:limit], False
+    snapshot_date = snapshot.captured_at.astimezone(
+        ZoneInfo("Asia/Shanghai")
+    ).date()
+    if snapshot_date != end_date or not snapshot.items:
+        return constituents[:limit], False
+    facts_by_symbol: dict[str, HithinkMarketSnapshotFact] = {
+        item.symbol: item for item in snapshot.items
+    }
+    ranked = sorted(
+        constituents,
+        key=lambda member: _snapshot_shortlist_key(
+            member,
+            facts_by_symbol.get(member.symbol),
+        ),
+    )
+    return ranked[:limit], True
+
+
+def _snapshot_shortlist_key(
+    member: HithinkIndexConstituentFact,
+    snapshot: HithinkMarketSnapshotFact | None,
+) -> tuple[bool, float, float, str]:
+    if snapshot is None:
+        return True, 0.0, 0.0, member.symbol
+    return (
+        False,
+        -_sort_metric(snapshot.change_pct),
+        -_sort_metric(snapshot.turnover),
+        member.symbol,
     )
 
 

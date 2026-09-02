@@ -109,6 +109,40 @@ class HithinkToolProvider(LLMProvider):
         )
 
 
+class SectorRankingPlannerProvider(LLMProvider):
+    """Request too many rows so the backend default limit can be verified."""
+
+    def __init__(self) -> None:
+        self.answer_calls = 0
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        if "first job is to decide which tools are needed" in system_prompt:
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": "sector_stock_ranking",
+                        "capabilities": ["sector_stock_ranking"],
+                        "safety": "normal",
+                        "tool_calls": [
+                            {
+                                "name": "sector_stock_ranking",
+                                "arguments": {
+                                    "sector": "军工装备",
+                                    "days": 20,
+                                    "limit": 20,
+                                },
+                            }
+                        ],
+                        "answer_directly": "",
+                    }
+                ),
+                model="fake-planner",
+                provider="fake",
+            )
+        self.answer_calls += 1
+        raise AssertionError("simple Top10 ranking should not call the answer model")
+
+
 class DragonTigerToolProvider(LLMProvider):
     """Planner selects the Dragon-Tiger tool with an intentionally stale date."""
 
@@ -627,6 +661,55 @@ class AgentExternalToolsTest(unittest.TestCase):
         self.assertIn("sector_stock_ranking", response.tool_calls)
         self.assertNotIn("sector_performance", response.tool_calls)
         ranking_builder.assert_called_once()
+
+    @patch("app.agents.tools.build_sector_stock_ranking")
+    def test_unspecified_sector_ranking_is_capped_at_top_ten(self, ranking_builder) -> None:
+        today = date.today()
+        ranking_builder.return_value = SectorStockRankingFacts(
+            requested_sector="军工装备",
+            sector_name="军工装备",
+            sector_category="industry",
+            sector_thscode="881166.TI",
+            requested_days=20,
+            requested_limit=10,
+            data_as_of=today,
+            member_count=82,
+            analyzed_count=20,
+            missing_count=0,
+            truncated_count=62,
+            items=[
+                SectorStockTrendItem(
+                    rank=1,
+                    symbol="000001",
+                    name="军工样本",
+                    trend_score=80.0,
+                    trend="rising",
+                    data_as_of=today,
+                    latest_close=10.0,
+                    return_5d_pct=8.0,
+                    return_20d_pct=16.0,
+                )
+            ],
+            sources=["fake-sector-ranking"],
+        )
+        provider = SectorRankingPlannerProvider()
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="sector-stock-ranking-top10",
+                message="军工装备哪些个股表现比较好",
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=provider,
+        )
+
+        self.assertEqual(ranking_builder.call_args.kwargs["limit"], 10)
+        self.assertEqual(provider.answer_calls, 0)
+        self.assertIn("军工样本", response.answer)
+        self.assertNotIn("趋势分", response.answer)
+        self.assertNotIn("共 82 只成分股", response.answer)
+        self.assertIn("template_general_answer", response.tool_calls)
+        self.assertEqual(response.performance.answer_prompt_chars, 0)
 
     @patch("app.collectors.hithink_finance_collector.HithinkFinanceCollector.collect_hot_stocks")
     def test_llm_can_call_tonghuashun_hot_stock_tool(self, collect_hot_stocks) -> None:
