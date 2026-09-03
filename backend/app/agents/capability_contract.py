@@ -71,7 +71,7 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
     ),
     AgentCapability(
         "sector_performance",
-        "查询全市场行业强弱榜或指定行业表现。",
+        "查询全市场行业强弱榜，或指定行业、概念板块的行情表现。",
         (CapabilityToolRequirement("sector_performance", {"sector": None}),),
     ),
     AgentCapability(

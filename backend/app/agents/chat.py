@@ -1158,7 +1158,7 @@ def _tool_planner_system_prompt(
         "For ordinary limit-up, first-board, or continued-board lists, call limit_up_events. Follow the backend_query_contract supplied with the user message for date, board height, market, event status, result mode, sorting and limit; do not weaken explicit user filters. Use first_board_ratings only when the user asks for ratings, scores, ranking, or candidate filtering. "
         "For completed limit-down lists or counts, select market_events and call market_event_pool with event_type=limit_down. Never encode a limit-down request as limit_up_events, and never substitute limit-up or broken-board facts for a limit-down list. "
         "For Dragon-Tiger List, institution flow or hot-money flow questions, call dragon_tiger_list only for a completed trade date. "
-        "For a theme or industry inside the local limit-up pool, call limit_up_events. For whole-market industry performance or ranking, call sector_performance and state its source, data_as_of and freshness. "
+        "For a theme or industry inside the local limit-up pool, call limit_up_events. For whole-market industry ranking or a named industry/concept performance, call sector_performance and state its source, data_as_of and freshness. "
         "When the user asks which constituent stocks in a named industry or concept have stronger recent trends, call sector_stock_ranking; do not substitute one sector leader or let the model rank names from memory. "
         "Grouping a previously returned stock set by its existing industry or concept fields does not require sector_performance; use it only for whole-market industry strength, return or ranking. "
         "For broad market-environment questions, select the market_environment capability. Its contract supplies market summary, five-day index trend, sector ranking and enriched popularity evidence; do not answer from only one evidence group. "
@@ -1396,6 +1396,23 @@ def _format_capital_flow_amount(value: object) -> str | None:
     return f"{sign}{amount / 10_000:.2f} 万元"
 
 
+def _asks_for_bottom_sector_ranking(message: str) -> bool:
+    """Return whether a broad sector question explicitly asks for laggards."""
+
+    compact = re.sub(r"[\s，。！？,.!?]", "", message)
+    return any(
+        term in compact
+        for term in (
+            "领跌",
+            "跌得最",
+            "跌幅最大",
+            "跌幅靠前",
+            "最弱",
+            "垫底",
+        )
+    )
+
+
 def _template_answer_from_tool_facts(
     *,
     request: AgentChatRequest,
@@ -1612,24 +1629,74 @@ def _template_answer_from_tool_facts(
 
     if "sector_performance" in facts:
         sector = facts["sector_performance"]
-        if sector.get("sector_name"):
+        matched_sectors = sector.get("matched_sectors") or []
+        if matched_sectors:
+            requested_sector = sector.get("requested_sector") or sector.get("sector_name")
             lines = [
-                f"{sector.get('data_as_of')} {sector.get('sector_name')}板块涨跌幅 "
-                f"{sector.get('change_pct')}%，行业排名 "
-                f"{sector.get('rank')}/{sector.get('sector_count')}。",
-                f"上涨 {sector.get('up_count')} 家，下跌 {sector.get('down_count')} 家，"
-                f"成交额 {sector.get('amount_yi')} 亿元，资金净流入 "
-                f"{sector.get('net_inflow_yi')} 亿元。",
-                f"领涨股为 {sector.get('leader_name')}，涨跌幅 "
-                f"{sector.get('leader_change_pct')}%。",
+                f"{sector.get('data_as_of')} “{requested_sector}”对应多个行业，"
+                "分别列示，避免把其中一个细分行业当成整个板块："
             ]
+            for item in matched_sectors:
+                row = (
+                    f"- {item.get('sector_name')}：涨跌幅 "
+                    f"{float(item.get('change_pct') or 0):+.2f}%，行业排名 "
+                    f"{item.get('rank')}/{sector.get('sector_count')}"
+                )
+                if item.get("up_count") is not None and item.get("down_count") is not None:
+                    row += (
+                        f"，上涨 {item.get('up_count')} 家、"
+                        f"下跌 {item.get('down_count')} 家"
+                    )
+                lines.append(row + "。")
+        elif sector.get("sector_name"):
+            sector_label = (
+                "概念板块" if sector.get("sector_type") == "concept" else "行业板块"
+            )
+            change_pct = sector.get("change_pct")
+            first_line = f"{sector.get('data_as_of')} {sector.get('sector_name')}{sector_label}"
+            first_line += (
+                f"涨跌幅 {float(change_pct):+.2f}%"
+                if isinstance(change_pct, (int, float))
+                else "涨跌幅暂缺"
+            )
+            if sector.get("rank") is not None and sector.get("sector_count"):
+                first_line += (
+                    f"，排名 {sector.get('rank')}/{sector.get('sector_count')}"
+                )
+            lines = [first_line + "。"]
+            if sector.get("up_count") is not None and sector.get("down_count") is not None:
+                breadth = (
+                    f"上涨 {sector.get('up_count')} 家，下跌 "
+                    f"{sector.get('down_count')} 家"
+                )
+                if sector.get("amount_yi") is not None:
+                    breadth += f"，成交额 {sector.get('amount_yi')} 亿元"
+                if sector.get("net_inflow_yi") is not None:
+                    breadth += f"，资金净流入 {sector.get('net_inflow_yi')} 亿元"
+                lines.append(breadth + "。")
+            if sector.get("leader_name"):
+                leader = f"领涨股为 {sector.get('leader_name')}"
+                if sector.get("leader_change_pct") is not None:
+                    leader += f"，涨跌幅 {sector.get('leader_change_pct')}%"
+                lines.append(leader + "。")
+            returns = []
+            if sector.get("return_5d_pct") is not None:
+                returns.append(f"近5日 {float(sector.get('return_5d_pct')):+.2f}%")
+            if sector.get("return_20d_pct") is not None:
+                returns.append(f"近20日 {float(sector.get('return_20d_pct')):+.2f}%")
+            if returns:
+                lines.append("已发生的区间走势：" + "，".join(returns) + "。")
             if not sector.get("data_fresh"):
                 lines.append("板块历史数据未到请求日期，以上按最近可用交易日展示。")
         else:
-            lines = [f"{sector.get('data_as_of')} 行业板块涨幅靠前："]
+            show_bottom = _asks_for_bottom_sector_ranking(request.message)
+            ranking_key = "bottom_sectors" if show_bottom else "top_sectors"
+            ranking_label = "跌幅靠前" if show_bottom else "涨幅靠前"
+            lines = [f"{sector.get('data_as_of')} 行业板块{ranking_label}："]
             lines.extend(
-                f"- {item.get('sector_name')}：{item.get('change_pct')}%"
-                for item in sector.get("top_sectors", [])
+                f"- {item.get('sector_name')}："
+                f"{float(item.get('change_pct') or 0):+.2f}%"
+                for item in sector.get(ranking_key, [])
             )
         if "web_search" in facts:
             lines.append("相关公开信息：")

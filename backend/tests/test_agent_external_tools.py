@@ -510,6 +510,79 @@ class AgentExternalToolsTest(unittest.TestCase):
         self.assertNotIn("None", answer)
         self.assertNotIn("52746072.0", answer)
 
+    def test_sector_template_lists_every_matching_military_subsector(self) -> None:
+        answer = _template_answer_from_tool_facts(
+            request=AgentChatRequest(
+                session_id="military-sector-group",
+                message="今天军工板块表现如何？",
+            ),
+            intent="sector_performance",
+            facts={
+                "sector_performance": SectorPerformanceFacts(
+                    requested_sector="国防军工",
+                    sector_name="军工",
+                    sector_type="industry_group",
+                    trade_date=date(2026, 9, 3),
+                    data_as_of=date(2026, 9, 3),
+                    data_fresh=True,
+                    sector_count=90,
+                    matched_sectors=[
+                        SectorRankingItem(
+                            sector_name="军工装备",
+                            rank=45,
+                            change_pct=-0.59,
+                            up_count=28,
+                            down_count=53,
+                        ),
+                        SectorRankingItem(
+                            sector_name="军工电子",
+                            rank=66,
+                            change_pct=-0.92,
+                            up_count=14,
+                            down_count=46,
+                        ),
+                    ],
+                ).model_dump(mode="json")
+            },
+        )
+
+        self.assertIn("对应多个行业", answer)
+        self.assertIn("军工装备", answer)
+        self.assertIn("军工电子", answer)
+        self.assertNotIn("无法回答", answer)
+
+    def test_sector_template_formats_history_only_concept_without_nulls(
+        self,
+    ) -> None:
+        answer = _template_answer_from_tool_facts(
+            request=AgentChatRequest(
+                session_id="ai-concept-history",
+                message="今天 AI 概念板块怎么样？",
+            ),
+            intent="sector_performance",
+            facts={
+                "sector_performance": SectorPerformanceFacts(
+                    requested_sector="AI",
+                    sector_name="人工智能",
+                    sector_type="concept",
+                    trade_date=date(2026, 9, 3),
+                    data_as_of=date(2026, 9, 2),
+                    data_fresh=False,
+                    sector_count=0,
+                    change_pct=-0.80,
+                    return_5d_pct=2.97,
+                    return_20d_pct=1.83,
+                    sources=["fake-concept-history"],
+                ).model_dump(mode="json")
+            },
+        )
+
+        self.assertIn("人工智能概念板块涨跌幅 -0.80%", answer)
+        self.assertIn("近5日 +2.97%", answer)
+        self.assertIn("最近可用交易日", answer)
+        self.assertNotIn("None", answer)
+        self.assertNotIn("排名", answer)
+
     def test_capital_flow_formatter_rejects_non_numeric_values(self) -> None:
         self.assertIsNone(_format_capital_flow_amount(None))
         self.assertIsNone(_format_capital_flow_amount("41000000"))
@@ -787,6 +860,55 @@ class AgentExternalToolsTest(unittest.TestCase):
         self.assertEqual(response.intent, "sector_performance")
         self.assertIn("军工装备", response.answer)
         self.assertIn("template_general_answer", response.tool_calls)
+        sector_builder.assert_called_once_with(
+            sector=None,
+            trade_date=trade_date,
+        )
+
+    @patch("app.agents.tools.build_sector_performance")
+    def test_broad_sector_laggard_question_uses_bottom_ranking(
+        self,
+        sector_builder,
+    ) -> None:
+        trade_date = date(2026, 9, 3)
+        sector_builder.return_value = SectorPerformanceFacts(
+            requested_sector=None,
+            sector_name=None,
+            trade_date=trade_date,
+            data_as_of=trade_date,
+            data_fresh=True,
+            sector_count=90,
+            top_sectors=[
+                SectorRankingItem(
+                    sector_name="保险", rank=1, change_pct=2.56
+                )
+            ],
+            bottom_sectors=[
+                SectorRankingItem(
+                    sector_name="农产品加工", rank=90, change_pct=-1.94
+                ),
+                SectorRankingItem(
+                    sector_name="教育", rank=89, change_pct=-1.90
+                ),
+            ],
+            sources=["fake-sector"],
+        )
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="broad-sector-laggards",
+                message="今天哪个行业跌得最惨？",
+                trade_date=trade_date,
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=DisabledLLMProvider(),
+        )
+
+        self.assertEqual(response.intent, "sector_performance")
+        self.assertIn("行业板块跌幅靠前", response.answer)
+        self.assertIn("农产品加工：-1.94%", response.answer)
+        self.assertIn("教育：-1.90%", response.answer)
+        self.assertNotIn("保险", response.answer)
         sector_builder.assert_called_once_with(
             sector=None,
             trade_date=trade_date,

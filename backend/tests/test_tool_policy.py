@@ -237,6 +237,9 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertFalse(signals.evaluation)
         self.assertFalse(signals.review)
 
+        concept_signals = QuestionSignals.from_message("今天 AI 概念表现怎么样")
+        self.assertTrue(concept_signals.sector_performance)
+
     def test_sector_stock_ranking_is_distinct_from_whole_sector_performance(self) -> None:
         signals = QuestionSignals.from_message("游戏板块哪些股票走势好")
 

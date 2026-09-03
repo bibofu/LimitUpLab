@@ -109,6 +109,7 @@ class SectorPerformanceFacts(BaseModel):
 
     requested_sector: str | None = None
     sector_name: str | None = None
+    sector_type: Literal["industry", "concept", "industry_group"] = "industry"
     trade_date: date
     data_as_of: date
     data_fresh: bool
@@ -126,6 +127,7 @@ class SectorPerformanceFacts(BaseModel):
     return_20d_pct: float | None = None
     top_sectors: list[SectorRankingItem] = Field(default_factory=list)
     bottom_sectors: list[SectorRankingItem] = Field(default_factory=list)
+    matched_sectors: list[SectorRankingItem] = Field(default_factory=list)
     history: list[SectorHistoryPoint] = Field(default_factory=list)
     sources: list[str] = Field(default_factory=list)
 

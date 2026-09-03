@@ -1,4 +1,4 @@
-"""On-demand industry-sector market data collectors backed by AKShare."""
+"""On-demand industry and concept market-data collectors backed by AKShare."""
 
 from __future__ import annotations
 
@@ -42,7 +42,11 @@ class SectorDailyRow:
 _SPOT_CACHE_TTL = timedelta(minutes=5)
 _HISTORY_CACHE_TTL = timedelta(minutes=15)
 _spot_cache: tuple[datetime, list[SectorSpotRow]] | None = None
+_concept_spot_cache: tuple[datetime, list[SectorSpotRow]] | None = None
 _history_cache: dict[
+    tuple[str, date, date], tuple[datetime, list[SectorDailyRow]]
+] = {}
+_concept_history_cache: dict[
     tuple[str, date, date], tuple[datetime, list[SectorDailyRow]]
 ] = {}
 _cache_lock = threading.Lock()
@@ -117,6 +121,79 @@ def collect_sector_history(
     )
 
 
+def collect_concept_spot() -> list[SectorSpotRow]:
+    """Collect the latest Eastmoney concept-board ranking."""
+
+    global _concept_spot_cache
+    now = datetime.now()
+    with _cache_lock:
+        if (
+            _concept_spot_cache
+            and now - _concept_spot_cache[0] < _SPOT_CACHE_TTL
+        ):
+            return list(_concept_spot_cache[1])
+
+    try:
+        rows = _normalize_em_spot(
+            _load_eastmoney_concept_spot(),
+            "akshare-eastmoney-concept-spot",
+        )
+        if not rows:
+            raise ValueError("provider returned no concept rows")
+    except Exception as error:  # noqa: BLE001
+        raise RuntimeError(
+            f"unable to collect concept spot data: {error}"
+        ) from error
+
+    with _cache_lock:
+        _concept_spot_cache = (now, rows)
+    return list(rows)
+
+
+def collect_concept_history(
+    concept_name: str,
+    start_date: date,
+    end_date: date,
+) -> list[SectorDailyRow]:
+    """Collect completed concept-index history with provider fallback."""
+
+    cache_key = (concept_name, start_date, end_date)
+    now = datetime.now()
+    with _cache_lock:
+        cached = _concept_history_cache.get(cache_key)
+        if cached and now - cached[0] < _HISTORY_CACHE_TTL:
+            return list(cached[1])
+
+    errors: list[str] = []
+    providers = (
+        (
+            "akshare-eastmoney-concept-history",
+            _load_eastmoney_concept_history,
+            _normalize_em_history,
+        ),
+        (
+            "akshare-ths-concept-history",
+            _load_ths_concept_history,
+            _normalize_ths_history,
+        ),
+    )
+    for source, loader, normalizer in providers:
+        try:
+            frame = loader(concept_name, start_date, end_date)
+            rows = normalizer(frame, source)
+            if not rows:
+                raise ValueError("provider returned no concept history rows")
+            with _cache_lock:
+                _concept_history_cache[cache_key] = (now, rows)
+            return list(rows)
+        except Exception as error:  # noqa: BLE001
+            errors.append(f"{source}: {error}")
+    raise RuntimeError(
+        f"unable to collect concept history for {concept_name}: "
+        + "; ".join(errors)
+    )
+
+
 def _load_ths_spot():
     with without_proxy():
         return ak.stock_board_industry_summary_ths()
@@ -125,6 +202,11 @@ def _load_ths_spot():
 def _load_eastmoney_spot():
     with without_proxy():
         return ak.stock_board_industry_name_em()
+
+
+def _load_eastmoney_concept_spot():
+    with without_proxy():
+        return ak.stock_board_concept_name_em()
 
 
 def _load_ths_history(sector_name: str, start_date: date, end_date: date):
@@ -144,6 +226,34 @@ def _load_eastmoney_history(sector_name: str, start_date: date, end_date: date):
             end_date=end_date.strftime("%Y%m%d"),
             period="日k",
             adjust="",
+        )
+
+
+def _load_eastmoney_concept_history(
+    concept_name: str,
+    start_date: date,
+    end_date: date,
+):
+    with without_proxy():
+        return ak.stock_board_concept_hist_em(
+            symbol=concept_name,
+            start_date=start_date.strftime("%Y%m%d"),
+            end_date=end_date.strftime("%Y%m%d"),
+            period="daily",
+            adjust="",
+        )
+
+
+def _load_ths_concept_history(
+    concept_name: str,
+    start_date: date,
+    end_date: date,
+):
+    with without_proxy():
+        return ak.stock_board_concept_index_ths(
+            symbol=concept_name,
+            start_date=start_date.strftime("%Y%m%d"),
+            end_date=end_date.strftime("%Y%m%d"),
         )
 
 

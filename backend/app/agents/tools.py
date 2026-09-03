@@ -203,7 +203,7 @@ TOOL_SCHEMAS = [
     AgentToolSchema(
         name="sector_performance",
         description=(
-            "按需获取A股行业板块行情。可查询指定板块的涨跌幅、行业排名、成交额、"
+            "按需获取A股行业或概念板块行情。可查询指定板块的涨跌幅、排名、成交额、"
             "资金净流入、上涨/下跌家数、领涨股和近期趋势；sector 为空时返回行业强弱榜。"
         ),
         args_schema={
@@ -211,7 +211,10 @@ TOOL_SCHEMAS = [
             "properties": {
                 "sector": {
                     "type": ["string", "null"],
-                    "description": "Industry sector name such as 半导体; omit for overall ranking.",
+                    "description": (
+                        "Industry or concept name such as 半导体 or AI; "
+                        "omit for overall industry ranking."
+                    ),
                 },
                 "trade_date": {
                     "type": ["string", "null"],
@@ -999,13 +1002,28 @@ class AgentToolRegistry:
                 }
             )
         trace_output = response.model_dump(mode="json")
-        if response.sector_name:
-            summary = (
-                f"{response.data_as_of.isoformat()} {response.sector_name}"
-                f"涨跌幅{response.change_pct}%，行业排名"
-                f"{response.rank}/{response.sector_count}，"
-                f"上涨{response.up_count}家、下跌{response.down_count}家。"
+        if response.matched_sectors:
+            matches = "、".join(
+                f"{item.sector_name}({item.change_pct:+.2f}%)"
+                for item in response.matched_sectors
             )
+            summary = (
+                f"{response.data_as_of.isoformat()} 与"
+                f"{response.requested_sector or response.sector_name}匹配的板块："
+                f"{matches}。"
+            )
+        elif response.sector_name:
+            label = "概念" if response.sector_type == "concept" else "行业"
+            parts = [
+                f"{response.data_as_of.isoformat()} {response.sector_name}{label}板块"
+            ]
+            if response.change_pct is not None:
+                parts.append(f"涨跌幅{response.change_pct}%")
+            if response.rank is not None and response.sector_count:
+                parts.append(f"{label}排名{response.rank}/{response.sector_count}")
+            if response.up_count is not None and response.down_count is not None:
+                parts.append(f"上涨{response.up_count}家、下跌{response.down_count}家")
+            summary = "，".join(parts) + "。"
         else:
             leaders = "、".join(
                 f"{item.sector_name}({item.change_pct:+.2f}%)"

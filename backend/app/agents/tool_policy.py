@@ -1574,7 +1574,7 @@ def looks_like_market_environment_question(message: str) -> bool:
 def looks_like_sector_performance_question(message: str) -> bool:
     """Return whether text asks about whole-sector market performance."""
 
-    if not any(term in message for term in ("板块", "行业")):
+    if not any(term in message for term in ("板块", "行业", "概念")):
         return False
     asks_performance = any(
         term in message
