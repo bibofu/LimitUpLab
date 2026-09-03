@@ -50,7 +50,12 @@ RELAY_DISPLAY_LIMIT = 10
 FINANCIAL_CACHE_TTL = timedelta(hours=24)
 MARKET_CLOSE_TIME = time(15, 0)
 FINALIZATION_TIME = time(9, 0)
+MARKET_OPEN_TIME = time(9, 30)
 MAX_RELAY_DYNAMIC_ADJUSTMENT = 6.0
+MISSED_CUTOFF_WARNING = (
+    "盘前推荐未在 09:30 开盘前固化，已停止更新；"
+    "不会使用开盘后行情、新闻或人气数据补算盘前排名。"
+)
 
 QuoteCollector = Callable[[Sequence[str]], HithinkMarketSnapshot]
 NewsCollector = Callable[[str, str], StockNewsFacts]
@@ -125,13 +130,35 @@ def refresh_recommendation_intelligence(
         ),
     )
     previous = intelligence_repo.get_latest()
+    same_basis = _matches_recommendation_basis(
+        previous,
+        target_trade_date=target_trade_date,
+        discovery_base_date=discovery_date,
+        relay_base_date=relay_date,
+    )
     if (
-        previous is not None
+        same_basis
+        and previous is not None
         and previous.stage == "final"
-        and previous.discovery_base_date == discovery_date
-        and previous.relay_base_date == relay_date
+        and _was_refreshed_before_market_open(previous)
     ):
         return previous
+    if same_basis and previous is not None and previous.stage == "missed_cutoff":
+        return previous
+    if _premarket_refresh_window_closed(
+        target_trade_date=target_trade_date,
+        now=refreshed_at,
+    ):
+        missed = _missed_cutoff_response(
+            previous=previous if same_basis else None,
+            refreshed_at=refreshed_at,
+            interval_minutes=interval_minutes,
+            target_trade_date=target_trade_date,
+            discovery_base_date=discovery_date,
+            relay_base_date=relay_date,
+        )
+        intelligence_repo.save(missed)
+        return missed
     hithink = HithinkFinanceCollector()
     active_quote_collector = quote_collector or hithink.collect_market_snapshots
     active_news_collector = news_collector or (
@@ -560,13 +587,14 @@ def should_finalize_recommendation_intelligence(
     *,
     now: datetime | None = None,
 ) -> bool:
-    """Return whether the target trading day's 09:00 freeze point has passed."""
+    """Return whether a draft is inside the pre-open finalization window."""
 
     local_now = _as_shanghai(now or datetime.now(SHANGHAI_TZ))
     return (
         response.stage == "draft"
         and response.target_trade_date == local_now.date()
         and local_now.time() >= FINALIZATION_TIME
+        and local_now.time() < MARKET_OPEN_TIME
     )
 
 
@@ -585,6 +613,11 @@ def finalize_recommendation_intelligence(
         return response
     if response.target_trade_date is None:
         raise ValueError("Cannot finalize a recommendation without target_trade_date.")
+    if not should_finalize_recommendation_intelligence(response, now=finalized_at):
+        raise ValueError(
+            "Recommendation finalization is only allowed from 09:00 until "
+            "the 09:30 market open on the target trading day."
+        )
 
     first_repo = first_board_repository or SQLiteFirstBoardRepository()
     intelligence_repo = snapshot_repository or (
@@ -630,13 +663,106 @@ def finalize_recommendation_intelligence(
     return final
 
 
+def _matches_recommendation_basis(
+    response: RecommendationIntelligenceResponse | None,
+    *,
+    target_trade_date: date | None,
+    discovery_base_date: date | None,
+    relay_base_date: date | None,
+) -> bool:
+    """Return whether a persisted snapshot belongs to the current prediction day."""
+
+    return bool(
+        response is not None
+        and response.target_trade_date == target_trade_date
+        and response.discovery_base_date == discovery_base_date
+        and response.relay_base_date == relay_base_date
+    )
+
+
+def _premarket_refresh_window_closed(
+    *,
+    target_trade_date: date | None,
+    now: datetime,
+) -> bool:
+    """Prevent a missing pre-market snapshot from being rebuilt after the open."""
+
+    if target_trade_date is None:
+        return False
+    local_now = _as_shanghai(now)
+    return local_now >= datetime.combine(
+        target_trade_date,
+        MARKET_OPEN_TIME,
+        tzinfo=SHANGHAI_TZ,
+    )
+
+
+def _was_refreshed_before_market_open(
+    response: RecommendationIntelligenceResponse,
+) -> bool:
+    """Reject legacy finals whose evidence was first collected after the open."""
+
+    if response.target_trade_date is None:
+        return False
+    return _as_shanghai(response.refreshed_at) < datetime.combine(
+        response.target_trade_date,
+        MARKET_OPEN_TIME,
+        tzinfo=SHANGHAI_TZ,
+    )
+
+
+def _missed_cutoff_response(
+    *,
+    previous: RecommendationIntelligenceResponse | None,
+    refreshed_at: datetime,
+    interval_minutes: int,
+    target_trade_date: date | None,
+    discovery_base_date: date | None,
+    relay_base_date: date | None,
+) -> RecommendationIntelligenceResponse:
+    """Persist an explicit non-prediction instead of fabricating a late final."""
+
+    safe_previous = (
+        previous
+        if previous is not None
+        and previous.stage == "draft"
+        and _was_refreshed_before_market_open(previous)
+        else None
+    )
+    if safe_previous is not None:
+        return safe_previous.model_copy(
+            update={
+                "refresh_id": f"recommendation_missed_{uuid4().hex}",
+                "stage": "missed_cutoff",
+                "status": "partial",
+                "finalized_at": None,
+                "warnings": list(
+                    dict.fromkeys([*safe_previous.warnings, MISSED_CUTOFF_WARNING])
+                ),
+            }
+        )
+    return RecommendationIntelligenceResponse(
+        refresh_id=f"recommendation_missed_{uuid4().hex}",
+        refreshed_at=refreshed_at,
+        interval_minutes=max(5, min(interval_minutes, 1440)),
+        stage="missed_cutoff",
+        target_trade_date=target_trade_date,
+        finalized_at=None,
+        status="partial",
+        discovery_base_date=discovery_base_date,
+        relay_base_date=relay_base_date,
+        items=[],
+        warnings=[MISSED_CUTOFF_WARNING],
+    )
+
+
 def _persist_final_relay_snapshot(
     response: RecommendationIntelligenceResponse,
     *,
     limit_up_repository: SQLiteLimitUpRepository,
     first_board_repository: SQLiteFirstBoardRepository,
 ) -> None:
-    """Make the 09:00 relay Top10 the sole live snapshot used by review."""
+    """Make the pre-open relay Top10 the sole live snapshot used by review."""
 
     trade_date = response.relay_base_date
     if trade_date is None or response.target_trade_date is None:

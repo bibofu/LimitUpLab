@@ -99,7 +99,7 @@ class SQLiteRecommendationIntelligenceRepository:
         )
 
     def save_final(self, response: RecommendationIntelligenceResponse) -> bool:
-        """Persist one immutable 09:00 final prediction and expose it as current."""
+        """Persist one immutable pre-open final and expose it as current."""
 
         if response.stage != "final" or response.target_trade_date is None:
             raise ValueError("A final response with target_trade_date is required.")

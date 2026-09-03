@@ -1088,7 +1088,9 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
           一进二接力
         </button>
       </div>
-      {draftCandidates.length > 0 && intelligence ? (
+      {intelligence?.stage === "missed_cutoff" ? (
+        <PremarketCutoffMissedPanel intelligence={intelligence} strategy={mode} />
+      ) : draftCandidates.length > 0 && intelligence ? (
         <RecommendationDraftPanel
           candidates={draftCandidates}
           discovery={discovery}
@@ -1106,6 +1108,39 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
         <FirstBoardRatingPanel intelligence={intelligence} ratings={ratings} />
       )}
     </section>
+  );
+}
+
+function PremarketCutoffMissedPanel({
+  intelligence,
+  strategy,
+}: {
+  intelligence: RecommendationIntelligenceResponse;
+  strategy: "discovery" | "relay";
+}) {
+  const targetLabel = intelligence.target_trade_date ?? "今日";
+  const lastSafeRefresh = intelligence.items.length > 0
+    ? new Date(intelligence.refreshed_at).toLocaleTimeString("zh-CN", {
+        hour: "2-digit",
+        minute: "2-digit",
+      })
+    : null;
+  return (
+    <Panel
+      title={strategy === "discovery" ? "低位挖掘" : "一进二接力"}
+      icon={<ShieldAlert size={18} />}
+    >
+      <div className="discovery-state discovery-state-error">
+        <ShieldAlert size={20} />
+        <div>
+          <strong>{targetLabel} 盘前榜未在开盘前固化</strong>
+          <span>
+            已停止排名更新，不会使用开盘后数据补算盘前结果。
+            {lastSafeRefresh ? ` 最后一版盘前草稿更新于 ${lastSafeRefresh}，未作为正式 Top10 发布。` : ""}
+          </span>
+        </div>
+      </div>
+    </Panel>
   );
 }
 
@@ -1146,6 +1181,9 @@ function RecommendationDraftPanel({
   strategy: "discovery" | "relay";
 }) {
   const title = strategy === "discovery" ? "低位挖掘" : "一进二接力";
+  const targetLabel = intelligence.target_trade_date
+    ? `${intelligence.target_trade_date} 目标日`
+    : "下一交易日";
   return (
     <Panel
       title={title}
@@ -1154,12 +1192,12 @@ function RecommendationDraftPanel({
       <div className="rating-summary-panel recommendation-draft-panel">
         <div className="recommendation-draft-header">
           <div>
-            <strong>{strategy === "discovery" ? `低位启动观察池 · ${candidates.length} 只` : `盘前动态候选 Top${candidates.length}`}</strong>
+            <strong>{strategy === "discovery" ? `低位启动观察池 · ${candidates.length} 只` : `盘前动态候选 Top${candidates.length}`} · {targetLabel}</strong>
             <span>{strategy === "discovery" ? "热门题材与最新催化召回，财报和 K 线位置共同验证" : "收盘综合分固化基线，盘后按公告、龙虎榜与人气变化做有界修正"}</span>
           </div>
           <span className="recommendation-draft-time">
-            {intelligence.stage === "final" ? "09:00 已固化 · " : "动态更新 · "}
-            {new Date(intelligence.refreshed_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
+            {intelligence.stage === "final" ? "开盘前已固化 · " : "盘前动态更新 · "}
+            {new Date(intelligence.finalized_at ?? intelligence.refreshed_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
           </span>
         </div>
         <div className="rating-top-list">
@@ -1216,8 +1254,8 @@ function RecommendationDraftPanel({
           {strategy === "discovery"
             ? "低位挖掘用于研究可能进入趋势启动阶段的标的，不代表主升浪或收益概率。"
             : intelligence.stage === "final"
-              ? "该排序已于目标交易日 09:00 固化，供盘后复盘使用。"
-              : "当前为动态研究排序；正式复盘以目标交易日 09:00 固化 Top10 为准。"}
+              ? "该排序已于目标交易日开盘前固化，供盘后复盘使用。"
+              : "当前为盘前动态研究排序；开盘后停止更新，只有开盘前固化的 Top10 才进入复盘。"}
         </p>
       </div>
     </Panel>

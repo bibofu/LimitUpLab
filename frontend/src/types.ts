@@ -482,7 +482,7 @@ export interface RecommendationIntelligenceResponse {
   refresh_id: string;
   refreshed_at: string;
   interval_minutes: number;
-  stage: "draft" | "final";
+  stage: "draft" | "final" | "missed_cutoff";
   target_trade_date: string | null;
   finalized_at: string | null;
   discovery_pool_size: number;

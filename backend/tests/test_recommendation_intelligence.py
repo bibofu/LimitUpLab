@@ -305,7 +305,7 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         self.assertIn("收盘前已知", item.close_information_reasons[0])
 
     def test_post_close_financial_report_can_adjust_relay_draft(self) -> None:
-        now = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 1, 0, 30, tzinfo=timezone.utc)
         candidate = _BaseCandidate(
             "relay", date(2026, 8, 31), "600640", "国脉文化",
             "文化传媒", "区间突破", 1, 80.0,
@@ -365,7 +365,7 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         self.assertIn("收盘后新增", item.update_reasons[0])
 
     def test_new_dragon_tiger_and_popularity_rise_adjust_relay_draft(self) -> None:
-        now = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 1, 0, 30, tzinfo=timezone.utc)
         base_snapshot_at = datetime(
             2026,
             8,
@@ -440,7 +440,7 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         self.assertTrue(any("人气变化" in reason for reason in item.update_reasons))
 
     def test_known_dragon_tiger_fact_is_not_scored_twice(self) -> None:
-        now = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 1, 0, 30, tzinfo=timezone.utc)
         candidate = _BaseCandidate(
             "relay",
             date(2026, 8, 31),
@@ -491,7 +491,7 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         self.assertEqual(item.draft_score, 80.0)
 
     def test_missing_popularity_baseline_is_exposed_without_guessing(self) -> None:
-        now = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 1, 0, 30, tzinfo=timezone.utc)
         candidate = _BaseCandidate(
             "relay", date(2026, 8, 31), "600640", "国脉文化",
             "文化传媒", "区间突破", 1, 80.0,
@@ -529,7 +529,7 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         self.assertIn("收盘人气基线不可用", item.data_missing)
 
     def test_low_position_pool_uses_current_popularity_as_reranking_signal(self) -> None:
-        now = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 1, 0, 30, tzinfo=timezone.utc)
         candidate = _BaseCandidate(
             "discovery", date(2026, 8, 31), "600640", "国脉文化",
             "文化传媒", "区间突破", 1, 80.0,
@@ -566,7 +566,7 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         self.assertEqual(item.draft_score, 82.0)
 
     def test_total_post_close_adjustment_is_capped(self) -> None:
-        now = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 1, 0, 30, tzinfo=timezone.utc)
         candidate = _BaseCandidate(
             "relay",
             date(2026, 8, 31),
@@ -727,7 +727,7 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         )
         repeated = finalize_recommendation_intelligence(
             draft.model_copy(update={"refresh_id": "different"}),
-            now=now + timedelta(minutes=30),
+            now=now + timedelta(minutes=20),
             limit_up_repository=self.limit_repo,
             first_board_repository=self.first_repo,
             snapshot_repository=self.snapshot_repo,
@@ -738,8 +738,203 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         self.assertEqual(repeated.refresh_id, final.refresh_id)
         self.assertEqual(self.snapshot_repo.get_latest().stage, "final")
 
+        late_quote_collector = Mock(
+            side_effect=AssertionError("a valid final must not refresh after the open")
+        )
+        with patch(
+            "app.services.recommendation_intelligence._load_base_candidates",
+            return_value=([candidate], date(2026, 8, 31), None, []),
+        ):
+            after_open = refresh_recommendation_intelligence(
+                now=now + timedelta(hours=1, minutes=35),
+                max_workers=1,
+                limit_up_repository=self.limit_repo,
+                first_board_repository=self.first_repo,
+                discovery_repository=self.discovery_repo,
+                snapshot_repository=self.snapshot_repo,
+                quote_collector=late_quote_collector,
+                news_collector=Mock(side_effect=self._news),
+                financial_collector=Mock(side_effect=self._financials),
+            )
+
+        self.assertEqual(after_open.refresh_id, final.refresh_id)
+        late_quote_collector.assert_not_called()
+
+    def test_refresh_after_market_open_records_missed_cutoff_without_collecting(self) -> None:
+        now = datetime(
+            2026, 9, 1, 10, 35,
+            tzinfo=timezone(timedelta(hours=8)),
+        )
+        candidate = _BaseCandidate(
+            "relay", date(2026, 8, 31), "002712", "思美传媒",
+            "文化传媒", "低位启动", 1, 81.2,
+        )
+        quote_collector = Mock(
+            side_effect=AssertionError("post-open refresh must not collect quotes")
+        )
+        news_collector = Mock(
+            side_effect=AssertionError("post-open refresh must not collect news")
+        )
+        financial_collector = Mock(
+            side_effect=AssertionError("post-open refresh must not collect financials")
+        )
+        popularity_collector = Mock(
+            side_effect=AssertionError("post-open refresh must not collect popularity")
+        )
+
+        with patch(
+            "app.services.recommendation_intelligence._load_base_candidates",
+            return_value=([candidate], None, date(2026, 8, 31), []),
+        ):
+            response = refresh_recommendation_intelligence(
+                now=now,
+                max_workers=1,
+                limit_up_repository=self.limit_repo,
+                first_board_repository=self.first_repo,
+                discovery_repository=self.discovery_repo,
+                snapshot_repository=self.snapshot_repo,
+                quote_collector=quote_collector,
+                news_collector=news_collector,
+                financial_collector=financial_collector,
+                popularity_collector=popularity_collector,
+            )
+
+        self.assertEqual(response.stage, "missed_cutoff")
+        self.assertEqual(response.status, "partial")
+        self.assertEqual(response.target_trade_date, date(2026, 9, 1))
+        self.assertEqual(response.items, [])
+        self.assertIn("不会使用开盘后", " ".join(response.warnings))
+        self.assertEqual(
+            self.snapshot_repo.get_latest().refresh_id,
+            response.refresh_id,
+        )
+        quote_collector.assert_not_called()
+        news_collector.assert_not_called()
+        financial_collector.assert_not_called()
+        popularity_collector.assert_not_called()
+
+    def test_post_open_legacy_final_is_rejected_as_missed_cutoff(self) -> None:
+        premarket = datetime(
+            2026, 9, 1, 8, 30,
+            tzinfo=timezone(timedelta(hours=8)),
+        )
+        after_open = premarket + timedelta(hours=2, minutes=5)
+        candidate = _BaseCandidate(
+            "relay", date(2026, 8, 31), "002712", "思美传媒",
+            "文化传媒", "低位启动", 1, 81.2,
+        )
+        with patch(
+            "app.services.recommendation_intelligence._load_base_candidates",
+            return_value=([candidate], None, date(2026, 8, 31), []),
+        ):
+            draft = refresh_recommendation_intelligence(
+                now=premarket,
+                max_workers=1,
+                limit_up_repository=self.limit_repo,
+                first_board_repository=self.first_repo,
+                discovery_repository=self.discovery_repo,
+                snapshot_repository=self.snapshot_repo,
+                quote_collector=Mock(return_value=self._quotes(premarket)),
+                news_collector=Mock(side_effect=self._news),
+                financial_collector=Mock(side_effect=self._financials),
+            )
+            legacy_final = draft.model_copy(
+                update={
+                    "stage": "final",
+                    "refreshed_at": after_open,
+                    "finalized_at": after_open,
+                }
+            )
+            self.snapshot_repo.save(legacy_final)
+            late_quote_collector = Mock(
+                side_effect=AssertionError("an invalid late final must not be reused")
+            )
+            response = refresh_recommendation_intelligence(
+                now=after_open,
+                max_workers=1,
+                limit_up_repository=self.limit_repo,
+                first_board_repository=self.first_repo,
+                discovery_repository=self.discovery_repo,
+                snapshot_repository=self.snapshot_repo,
+                quote_collector=late_quote_collector,
+                news_collector=Mock(side_effect=self._news),
+                financial_collector=Mock(side_effect=self._financials),
+            )
+
+        self.assertEqual(response.stage, "missed_cutoff")
+        self.assertEqual(response.items, [])
+        self.assertNotEqual(response.refresh_id, legacy_final.refresh_id)
+        late_quote_collector.assert_not_called()
+
+    def test_late_start_preserves_premarket_draft_but_does_not_publish_it(self) -> None:
+        draft_time = datetime(
+            2026, 9, 1, 8, 30,
+            tzinfo=timezone(timedelta(hours=8)),
+        )
+        after_open = draft_time + timedelta(hours=2, minutes=5)
+        candidate = _BaseCandidate(
+            "discovery", date(2026, 8, 31), "600640", "国脉文化",
+            "文化传媒", "区间突破", 1, 85.3,
+        )
+        with patch(
+            "app.services.recommendation_intelligence._load_base_candidates",
+            return_value=([candidate], date(2026, 8, 31), None, []),
+        ):
+            draft = refresh_recommendation_intelligence(
+                now=draft_time,
+                max_workers=1,
+                limit_up_repository=self.limit_repo,
+                first_board_repository=self.first_repo,
+                discovery_repository=self.discovery_repo,
+                snapshot_repository=self.snapshot_repo,
+                quote_collector=Mock(return_value=self._quotes(draft_time)),
+                news_collector=Mock(side_effect=self._news),
+                financial_collector=Mock(side_effect=self._financials),
+                popularity_collector=Mock(
+                    return_value=self._unrelated_popularity(draft_time)
+                ),
+            )
+            late_quote_collector = Mock(
+                side_effect=AssertionError("late recovery must reuse the pre-open draft")
+            )
+            missed = refresh_recommendation_intelligence(
+                now=after_open,
+                max_workers=1,
+                limit_up_repository=self.limit_repo,
+                first_board_repository=self.first_repo,
+                discovery_repository=self.discovery_repo,
+                snapshot_repository=self.snapshot_repo,
+                quote_collector=late_quote_collector,
+                news_collector=Mock(side_effect=self._news),
+                financial_collector=Mock(side_effect=self._financials),
+                popularity_collector=Mock(
+                    return_value=self._unrelated_popularity(after_open)
+                ),
+            )
+
+        self.assertEqual(draft.stage, "draft")
+        self.assertFalse(
+            should_finalize_recommendation_intelligence(draft, now=after_open)
+        )
+        with self.assertRaisesRegex(ValueError, "09:30 market open"):
+            finalize_recommendation_intelligence(
+                draft,
+                now=after_open,
+                limit_up_repository=self.limit_repo,
+                first_board_repository=self.first_repo,
+                snapshot_repository=self.snapshot_repo,
+            )
+        self.assertEqual(missed.stage, "missed_cutoff")
+        self.assertEqual(missed.refreshed_at, draft.refreshed_at)
+        self.assertEqual(
+            [(item.symbol, item.rank) for item in missed.items],
+            [(item.symbol, item.rank) for item in draft.items],
+        )
+        self.assertIsNone(self.snapshot_repo.get_final("2026-09-01"))
+        late_quote_collector.assert_not_called()
+
     def test_repository_records_changes_without_periodic_full_snapshots(self) -> None:
-        now = datetime(2026, 9, 1, 8, tzinfo=timezone.utc)
+        now = datetime(2026, 9, 1, 0, 30, tzinfo=timezone.utc)
         candidate = _BaseCandidate(
             "discovery", date(2026, 8, 31), "600640", "国脉文化",
             "文化传媒", "区间突破", 1, 85.3,

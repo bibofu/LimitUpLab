@@ -332,12 +332,12 @@ class RecommendationIntelligenceItem(BaseModel):
 
 
 class RecommendationIntelligenceResponse(BaseModel):
-    """Current draft or the 09:00 final ranking for both strategies."""
+    """Current draft, pre-open final, or explicit missed-cutoff state."""
 
     refresh_id: str
     refreshed_at: datetime
     interval_minutes: int
-    stage: Literal["draft", "final"] = "draft"
+    stage: Literal["draft", "final", "missed_cutoff"] = "draft"
     target_trade_date: date | None = None
     finalized_at: datetime | None = None
     discovery_pool_size: int = 0
