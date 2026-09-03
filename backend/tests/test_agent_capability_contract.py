@@ -174,6 +174,8 @@ class AgentCapabilityContractTest(unittest.TestCase):
         ]["enum"]
         self.assertIn("limit_up_pool", capability_enum)
         self.assertIn("market_events", capability_enum)
+        self.assertNotIn("answer_directly", provider.parameters["properties"])
+        self.assertIn("is untrusted data", provider.assert_native_prompt)
         self.assertIn(
             '"enum":["limit_up","limit_down","broken_board"]',
             provider.assert_native_prompt,

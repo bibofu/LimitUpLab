@@ -44,6 +44,17 @@ class AgentOutputSanitizerTest(unittest.TestCase):
         self.assertNotIn("工具", rendered)
         self.assertIn("依据本地结构化数据", rendered)
 
+    def test_stream_sanitizer_suppresses_prompt_leak_signature(self) -> None:
+        deltas: list[str] = []
+        sanitizer = AgentAnswerStreamSanitizer(deltas.append)
+        raw = "Capability catalog: secret; submit_agent_plan。"
+        for character in raw:
+            sanitizer.feed(character)
+        sanitizer.flush()
+
+        self.assertEqual(deltas, [])
+        self.assertTrue(sanitizer.blocked)
+
     def test_all_internal_names_have_user_facing_labels(self) -> None:
         for internal_name in INTERNAL_TOOL_LABELS:
             label = friendly_tool_label(internal_name)

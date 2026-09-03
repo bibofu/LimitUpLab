@@ -5,6 +5,8 @@ from __future__ import annotations
 import re
 from collections.abc import Callable
 
+from app.services.prompt_security import contains_prompt_leak
+
 
 INTERNAL_TOOL_LABELS: dict[str, str] = {
     "market_summary": "市场概况",
@@ -93,22 +95,35 @@ class AgentAnswerStreamSanitizer:
     def __init__(self, emit: Callable[[str], None]) -> None:
         self.emit = emit
         self.pending = ""
+        self.blocked = False
 
     def feed(self, delta: str) -> None:
         """Consume one raw model delta and emit only safe text."""
 
+        if self.blocked:
+            return
         self.pending += delta
         while match := re.search(r"[，,。！？；;\n]", self.pending):
             boundary = match.end()
             rendered = sanitize_agent_answer(self.pending[:boundary])
             self.pending = self.pending[boundary:]
+            if contains_prompt_leak(rendered):
+                self.pending = ""
+                self.blocked = True
+                return
             if rendered:
                 self.emit(rendered)
 
     def flush(self) -> None:
         """Emit the remaining safe tail after model streaming completes."""
 
+        if self.blocked:
+            self.pending = ""
+            return
         rendered = sanitize_agent_answer(self.pending)
         self.pending = ""
+        if contains_prompt_leak(rendered):
+            self.blocked = True
+            return
         if rendered:
             self.emit(rendered)

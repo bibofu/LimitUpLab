@@ -17,6 +17,7 @@ from app.services.llm_provider import (
     NativeFunctionCallingUnavailable,
     get_llm_provider,
 )
+from app.services.prompt_security import assess_direct_prompt_injection
 
 
 SESSION_MEMORY_VERSION = "session-memory-v1"
@@ -401,11 +402,24 @@ def _deterministic_topics(content: str) -> list[str]:
 def _successful_messages(
     messages: list[ChatSessionMessage],
 ) -> list[ChatSessionMessage]:
-    return [
-        item
-        for item in messages
-        if item.status == "success" and item.content.strip()
-    ]
+    filtered: list[ChatSessionMessage] = []
+    skip_injection_response = False
+    for item in messages:
+        if item.status != "success" or not item.content.strip():
+            continue
+        if item.role == "user":
+            skip_injection_response = assess_direct_prompt_injection(
+                item.content
+            ).detected
+            if skip_injection_response:
+                continue
+        elif item.role == "assistant" and skip_injection_response:
+            skip_injection_response = False
+            continue
+        else:
+            skip_injection_response = False
+        filtered.append(item)
+    return filtered
 
 
 def _messages_after_memory(
