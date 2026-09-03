@@ -999,7 +999,11 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
   const [discovery, setDiscovery] = useState<FirstBoardDiscoveryResponse | null>(null);
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const [discoveryLoading, setDiscoveryLoading] = useState(true);
-  const intelligence = useRecommendationIntelligence();
+  const {
+    intelligence,
+    loading: intelligenceLoading,
+    error: intelligenceError,
+  } = useRecommendationIntelligence();
 
   useEffect(() => {
     let active = true;
@@ -1090,6 +1094,18 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
       </div>
       {intelligence?.stage === "missed_cutoff" ? (
         <PremarketCutoffMissedPanel intelligence={intelligence} strategy={mode} />
+      ) : intelligenceLoading ? (
+        <PremarketRankingStatePanel
+          message="正在读取统一的盘前排名与证据"
+          state="loading"
+          strategy={mode}
+        />
+      ) : !intelligence ? (
+        <PremarketRankingStatePanel
+          message={intelligenceError ?? "盘前动态榜暂不可用"}
+          state="error"
+          strategy={mode}
+        />
       ) : draftCandidates.length > 0 && intelligence ? (
         <RecommendationDraftPanel
           candidates={draftCandidates}
@@ -1097,17 +1113,47 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
           intelligence={intelligence}
           strategy={mode}
         />
-      ) : mode === "discovery" ? (
-        <FirstBoardDiscoveryPanel
-          data={discovery}
-          error={discoveryError}
-          intelligence={intelligence}
-          loading={discoveryLoading}
-        />
       ) : (
-        <FirstBoardRatingPanel intelligence={intelligence} ratings={ratings} />
+        <PremarketRankingStatePanel
+          message={mode === "discovery" && discoveryLoading
+            ? "正在读取低位挖掘证据"
+            : mode === "discovery" && discoveryError
+              ? discoveryError
+              : "当前目标交易日没有可展示的盘前候选"}
+          state={mode === "discovery" && discoveryLoading
+            ? "loading"
+            : mode === "discovery" && discoveryError
+              ? "error"
+              : "empty"}
+          strategy={mode}
+        />
       )}
     </section>
+  );
+}
+
+function PremarketRankingStatePanel({
+  message,
+  state,
+  strategy,
+}: {
+  message: string;
+  state: "loading" | "error" | "empty";
+  strategy: "discovery" | "relay";
+}) {
+  const icon = state === "error"
+    ? <ShieldAlert size={20} />
+    : <LoaderCircle className={state === "loading" ? "spin" : undefined} size={20} />;
+  return (
+    <Panel
+      title={strategy === "discovery" ? "低位挖掘" : "一进二接力"}
+      icon={strategy === "discovery" ? <TrendingUp size={18} /> : <BarChart3 size={18} />}
+    >
+      <div className={`discovery-state${state === "error" ? " discovery-state-error" : ""}`}>
+        {icon}
+        <span>{message}</span>
+      </div>
+    </Panel>
   );
 }
 
@@ -1146,16 +1192,26 @@ function PremarketCutoffMissedPanel({
 
 function useRecommendationIntelligence() {
   const [intelligence, setIntelligence] = useState<RecommendationIntelligenceResponse | null>(null);
+  const [loading, setLoading] = useState(true);
+  const [error, setError] = useState<string | null>(null);
 
   useEffect(() => {
     let active = true;
     const refresh = () => {
       void fetchRecommendationIntelligence()
         .then((response) => {
-          if (active) setIntelligence(response);
+          if (active) {
+            setIntelligence(response);
+            setError(null);
+          }
         })
-        .catch(() => {
-          // Keep close-data rankings usable while the dynamic snapshot is unavailable.
+        .catch((caught: unknown) => {
+          if (active) {
+            setError(caught instanceof Error ? caught.message : "盘前动态榜加载失败");
+          }
+        })
+        .finally(() => {
+          if (active) setLoading(false);
         });
     };
     refresh();
@@ -1166,7 +1222,7 @@ function useRecommendationIntelligence() {
     };
   }, []);
 
-  return intelligence;
+  return { intelligence, loading, error };
 }
 
 function RecommendationDraftPanel({
@@ -1226,6 +1282,15 @@ function RecommendationDraftPanel({
                   </span>
                 </div>
               </header>
+              {strategy === "relay" ? (
+                <div className="rating-top-facts">
+                  <Fact label="首封" value={candidate.first_limit_time?.slice(0, 5) ?? "暂无"} />
+                  <Fact label="炸板" value={candidate.break_count !== null ? `${candidate.break_count}` : "暂无"} />
+                  <Fact label="换手" value={candidate.turnover_rate !== null ? `${candidate.turnover_rate.toFixed(1)}%` : "暂无"} />
+                  <Fact label="成交额" value={candidate.amount !== null ? formatAmount(candidate.amount) : "暂无"} />
+                  <Fact label="置信度" value={candidate.confidence !== null ? formatPercent(candidate.confidence) : "暂无"} />
+                </div>
+              ) : null}
               {strategy === "discovery" ? (
                 <LowPositionEvidence candidate={lowPosition} intelligence={candidate} />
               ) : candidate.update_reasons.length > 0 ? (
@@ -2887,7 +2952,7 @@ function FirstBoardPoolView({
   initialRatings: FirstBoardRatingsResponse;
 }) {
   const [ratings, setRatings] = useState(initialRatings);
-  const intelligence = useRecommendationIntelligence();
+  const { intelligence } = useRecommendationIntelligence();
   const tradeDate = events[0]?.trade_date;
   const relayRanking = rankedRelayCandidates(
     intelligence?.items ?? [],
@@ -3185,7 +3250,7 @@ function StockDetail({ data }: { data: DashboardData }) {
 
   const { symbol = "" } = useParams();
   const [searchParams] = useSearchParams();
-  const intelligence = useRecommendationIntelligence();
+  const { intelligence } = useRecommendationIntelligence();
   const requestedTradeDate = searchParams.get("trade_date") ?? undefined;
   const linkedStockName = searchParams.get("name")?.trim() ?? "";
   const [stockEvent, setStockEvent] = useState<LimitUpEvent | null>(null);

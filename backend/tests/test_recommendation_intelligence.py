@@ -68,6 +68,11 @@ class RecommendationIntelligenceTest(unittest.TestCase):
             _BaseCandidate(
                 "relay", date(2026, 8, 31), "002712", "思美传媒",
                 "文化传媒", "低位启动", 1, 81.2,
+                amount=680_000_000,
+                first_limit_time=time(10, 5),
+                break_count=2,
+                turnover_rate=12.3,
+                confidence=0.84,
             ),
         ]
         quote_collector = Mock(return_value=self._quotes(now))
@@ -123,6 +128,11 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         self.assertEqual(relay_item.draft_score, 84.2)
         self.assertEqual(relay_item.close_information_adjustment, 3.0)
         self.assertEqual(relay_item.financial_adjustment, 0.0)
+        self.assertEqual(relay_item.first_limit_time, time(10, 5))
+        self.assertEqual(relay_item.break_count, 2)
+        self.assertEqual(relay_item.turnover_rate, 12.3)
+        self.assertEqual(relay_item.amount, 680_000_000)
+        self.assertEqual(relay_item.confidence, 0.84)
         self.assertEqual(
             relay_item.facts_cutoff_at,
             datetime(2026, 8, 31, 15, tzinfo=timezone(timedelta(hours=8))),
