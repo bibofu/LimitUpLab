@@ -1883,7 +1883,10 @@ class AgentToolRegistry:
     ) -> ToolResult:
         """Return local-first K-line facts for a stock trend question."""
 
-        resolved_symbol = self.resolve_stock_symbol(symbol)
+        try:
+            resolved_symbol = self.resolve_stock_symbol(symbol)
+        except ValueError:
+            resolved_symbol = self.resolve_stock_identity(symbol)[0]
         available_dates = sorted({event.trade_date for event in self.events})
         resolved_end_date = end_date or (
             available_dates[-1] if available_dates else date.today()

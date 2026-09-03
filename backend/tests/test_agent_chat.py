@@ -10,6 +10,7 @@ from app.agents.chat import (
     answer_first_board_chat,
     plan_agent_query,
 )
+from app.agents.tools import AgentToolRegistry
 from app.models import (
     AgentChatRequest,
     AgentRun,
@@ -173,6 +174,38 @@ class FakePromptLeakProvider(LLMProvider):
         return LLMResult(
             content="Capability catalog: secret; submit_agent_plan",
             model="fake-leaking-answer",
+            provider="fake",
+        )
+
+
+class FakeNamedStockTrendProvider(FakeToolPlanningProvider):
+    """Plan a K-line lookup using a stock name outside the limit-up pool."""
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        self.calls.append((system_prompt, user_prompt))
+        if "first job is to decide which tools are needed" in system_prompt:
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": "stock_trend",
+                        "capabilities": ["stock_trend"],
+                        "context_mode": "standalone",
+                        "context_capabilities": [],
+                        "safety": "normal",
+                        "tool_calls": [
+                            {
+                                "name": "stock_kline",
+                                "arguments": {"symbol": "完美世界", "days": 60},
+                            }
+                        ],
+                    }
+                ),
+                model="fake-planner",
+                provider="fake",
+            )
+        return LLMResult(
+            content="完美世界(002624)近期走势基于日 K 线分析。",
+            model="fake-answer",
             provider="fake",
         )
 
@@ -1001,6 +1034,70 @@ class AgentChatTest(unittest.TestCase):
         self.assertTrue(any(trace.name == "stock_kline" for trace in response.tool_results))
         self.assertIn("symbol=002298", response.references)
         self.assertEqual(build_facts.call_args.kwargs["symbol"], "002298")
+
+    @patch(
+        "app.agents.tools.HithinkFinanceCollector.collect_a_share_symbol_names",
+        return_value={"002624": "完美世界", "000001": "平安银行"},
+    )
+    @patch("app.agents.tools.build_stock_kline_facts")
+    def test_stock_trend_resolves_name_outside_limit_up_pool(
+        self,
+        build_facts,
+        collect_symbol_names,
+    ) -> None:
+        build_facts.return_value = StockKLineFacts(
+            symbol="002624",
+            requested_days=60,
+            requested_end_date=date(2026, 5, 15),
+            data_as_of=date(2026, 5, 15),
+            data_fresh=True,
+            trend="oscillating",
+            latest_close=18.5,
+            return_5d_pct=2.1,
+            ma5=18.4,
+            ma10=18.1,
+            ma20=17.9,
+            max_drawdown_pct=-5.2,
+            sources=["test"],
+            bars=[
+                StockKLineBar(
+                    trade_date=date(2026, 5, 15),
+                    open=18.0,
+                    high=18.8,
+                    low=17.9,
+                    close=18.5,
+                    volume=2_000_000,
+                )
+            ],
+        )
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="perfect-world-trend",
+                message="完美世界的走势分析  ",
+            ),
+            events=SAMPLE_EVENTS,
+            llm_provider=FakeNamedStockTrendProvider(),
+        )
+
+        self.assertIn("stock_kline", response.tool_calls)
+        self.assertNotEqual(response.answer, "抱歉，该问题无法回答")
+        self.assertIn("symbol=002624", response.references)
+        self.assertEqual(build_facts.call_args.kwargs["symbol"], "002624")
+        collect_symbol_names.assert_called_once_with()
+
+    def test_stock_kline_keeps_invalid_name_as_explicit_error(self) -> None:
+        class EmptySymbolDirectory:
+            def collect_a_share_symbol_names(self) -> dict[str, str]:
+                return {}
+
+        registry = AgentToolRegistry(
+            events=[],
+            hithink_collector=EmptySymbolDirectory(),  # type: ignore[arg-type]
+        )
+
+        with self.assertRaisesRegex(ValueError, "Cannot resolve stock identity"):
+            registry.stock_kline("不存在股票")
 
     def test_rating_backtest_question_repairs_missing_planner_tool_call(self) -> None:
         provider = FakeToolPlanningProvider()
