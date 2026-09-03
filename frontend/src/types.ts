@@ -444,11 +444,6 @@ export interface RecommendationIntelligenceItem {
   name: string;
   sector: string;
   position_label: string | null;
-  first_limit_time: string | null;
-  break_count: number | null;
-  turnover_rate: number | null;
-  amount: number | null;
-  confidence: number | null;
   rule_rank: number;
   rule_score: number;
   base_rank: number;

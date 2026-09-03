@@ -75,10 +75,6 @@ class _BaseCandidate:
     rank: int
     base_score: float
     amount: float | None = None
-    first_limit_time: time | None = None
-    break_count: int | None = None
-    turnover_rate: float | None = None
-    confidence: float | None = None
     dragon_tiger_on_list: bool = False
     dragon_tiger_net_buy_amount: float | None = None
     dragon_tiger_source: str | None = None
@@ -456,11 +452,6 @@ def refresh_recommendation_intelligence(
                 name=candidate.name,
                 sector=candidate.sector,
                 position_label=candidate.position_label,
-                first_limit_time=candidate.first_limit_time,
-                break_count=candidate.break_count,
-                turnover_rate=candidate.turnover_rate,
-                amount=candidate.amount,
-                confidence=candidate.confidence,
                 rule_rank=candidate.rank,
                 rule_score=candidate.base_score,
                 base_rank=candidate.rank,
@@ -954,10 +945,6 @@ def _load_base_candidates(
                 rank=index,
                 base_score=item.score,
                 amount=item.facts.amount,
-                first_limit_time=item.facts.first_limit_time,
-                break_count=item.facts.break_count,
-                turnover_rate=item.facts.turnover_rate,
-                confidence=item.confidence,
                 dragon_tiger_on_list=(
                     item.facts.enrichment.dragon_tiger_on_list
                     if item.facts.enrichment

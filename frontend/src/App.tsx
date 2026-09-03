@@ -1282,15 +1282,6 @@ function RecommendationDraftPanel({
                   </span>
                 </div>
               </header>
-              {strategy === "relay" ? (
-                <div className="rating-top-facts">
-                  <Fact label="首封" value={candidate.first_limit_time?.slice(0, 5) ?? "暂无"} />
-                  <Fact label="炸板" value={candidate.break_count !== null ? `${candidate.break_count}` : "暂无"} />
-                  <Fact label="换手" value={candidate.turnover_rate !== null ? `${candidate.turnover_rate.toFixed(1)}%` : "暂无"} />
-                  <Fact label="成交额" value={candidate.amount !== null ? formatAmount(candidate.amount) : "暂无"} />
-                  <Fact label="置信度" value={candidate.confidence !== null ? formatPercent(candidate.confidence) : "暂无"} />
-                </div>
-              ) : null}
               {strategy === "discovery" ? (
                 <LowPositionEvidence candidate={lowPosition} intelligence={candidate} />
               ) : candidate.update_reasons.length > 0 ? (

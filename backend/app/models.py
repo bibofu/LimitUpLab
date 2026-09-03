@@ -275,11 +275,6 @@ class RecommendationIntelligenceItem(BaseModel):
     name: str
     sector: str = ""
     position_label: str | None = None
-    first_limit_time: time | None = None
-    break_count: int | None = None
-    turnover_rate: float | None = None
-    amount: float | None = None
-    confidence: float | None = None
     rule_rank: int = 0
     rule_score: float = 0
     base_rank: int = 0
