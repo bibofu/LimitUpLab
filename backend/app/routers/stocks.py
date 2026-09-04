@@ -10,6 +10,7 @@ from app.models import (
     LimitUpEvent,
     StockCloseSnapshot,
     StockDetailMarketData,
+    StockIntradayHistoryResponse,
     StockIntradayKLineBar,
     StockKLineBar,
     StockNewsFacts,
@@ -24,6 +25,7 @@ from app.services.analysis import find_stock_event, latest_trade_date
 from app.services.stock_kline import (
     load_stock_detail_market_data,
     load_stock_intraday_bars,
+    load_stock_intraday_history,
     load_stock_kline_bars,
     load_stock_position_assessment,
 )
@@ -191,5 +193,44 @@ def get_stock_trading_day_kline(
         raise HTTPException(
             status_code=502,
             detail="stock trading day kline data source unavailable",
+        ) from error
+
+
+@router.get("/{symbol}/intraday-history", response_model=StockIntradayHistoryResponse)
+def get_stock_intraday_history(
+    symbol: str,
+    days: int = Query(default=5, ge=2, le=10),
+    period: int = Query(default=1, ge=1, le=60),
+    end_date: date | None = None,
+) -> StockIntradayHistoryResponse:
+    """Return recent trading sessions of minute bars for the five-day chart."""
+
+    try:
+        events = get_limit_up_repository().list_events()
+        target_date = end_date or latest_trade_date(events)
+        repository = SQLiteFirstBoardRepository()
+        daily_bars = load_stock_kline_bars(
+            symbol=symbol,
+            days=days + 1,
+            end_date=target_date,
+            repository=repository,
+        )
+        trade_dates = [item.trade_date for item in daily_bars if item.trade_date <= target_date]
+        requested_dates = trade_dates[-days:]
+        if len(requested_dates) < days:
+            raise ValueError(f"Only {len(requested_dates)} trading dates are available")
+        return load_stock_intraday_history(
+            symbol=symbol,
+            trade_dates=requested_dates,
+            period=period,
+            daily_bars=daily_bars,
+            repository=repository,
+        )
+    except ValueError as error:
+        raise HTTPException(status_code=400, detail=str(error)) from error
+    except RequestException as error:
+        raise HTTPException(
+            status_code=502,
+            detail="stock intraday history data source unavailable",
         ) from error
 

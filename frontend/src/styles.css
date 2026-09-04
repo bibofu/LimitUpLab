@@ -3117,12 +3117,22 @@ td span {
 
 .chart-mode-switch {
   display: inline-grid;
-  grid-template-columns: repeat(2, minmax(78px, 1fr));
+  grid-template-columns: repeat(3, minmax(64px, 1fr));
   gap: 2px;
   padding: 3px;
   border: 1px solid #d0d5dd;
   border-radius: 6px;
   background: #f9fafb;
+}
+
+.chart-data-warning {
+  margin: 10px 20px 0;
+  padding: 8px 10px;
+  border: 1px solid #fedf89;
+  border-radius: 6px;
+  background: #fffaeb;
+  color: #b54708;
+  font-size: 12px;
 }
 
 .chart-mode-switch button {

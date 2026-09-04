@@ -26,7 +26,11 @@ export interface MarketCandleBar {
   low: number;
   volume: number;
   amount?: number;
+  session?: string;
+  referencePrice?: number;
 }
+
+type ChartMode = "daily" | "intraday" | "intraday5d";
 
 interface MovingAverageValue {
   window: number;
@@ -50,7 +54,7 @@ export function MarketKLineChart({
 }: {
   bars: MarketCandleBar[];
   emptyLabel: string;
-  mode: "daily" | "intraday";
+  mode: ChartMode;
   referencePrice?: number | null;
 }) {
   const chartContainerRef = useRef<HTMLDivElement | null>(null);
@@ -65,11 +69,12 @@ export function MarketKLineChart({
   const displayedIndex = displayedBar
     ? orderedBars.findIndex((item) => chartTimeKey(item.time) === chartTimeKey(displayedBar.time))
     : -1;
-  const intradayReferencePrice = mode === "intraday" && referencePrice && referencePrice > 0
+  const isIntraday = mode !== "daily";
+  const intradayReferencePrice = isIntraday && referencePrice && referencePrice > 0
     ? referencePrice
     : null;
-  const comparisonPrice = mode === "intraday"
-    ? intradayReferencePrice
+  const comparisonPrice = isIntraday
+    ? displayedBar?.referencePrice ?? intradayReferencePrice
     : displayedIndex > 0
       ? orderedBars[displayedIndex - 1].close
       : null;
@@ -77,9 +82,17 @@ export function MarketKLineChart({
     displayedBar && comparisonPrice
       ? ((displayedBar.close / comparisonPrice) - 1) * 100
       : null;
-  const intradayAverage = mode === "intraday"
-    ? cumulativeAverageAt(orderedBars, displayedIndex)
+  const intradayAverages = useMemo(
+    () => intradayAverageValues(orderedBars, mode === "intraday5d"),
+    [mode, orderedBars],
+  );
+  const intradayAverage = isIntraday && displayedIndex >= 0
+    ? intradayAverages[displayedIndex]
     : null;
+  const barsByTime = useMemo(
+    () => new Map(orderedBars.map((bar) => [chartTimeKey(bar.time), bar])),
+    [orderedBars],
+  );
   const movingAverages = useMemo(
     () => movingAverageReadout(orderedBars, displayedIndex),
     [displayedIndex, orderedBars],
@@ -101,6 +114,7 @@ export function MarketKLineChart({
       return undefined;
     }
 
+    const renderStartedAt = performance.now();
     const chart = createChart(container, {
       autoSize: true,
       height: 470,
@@ -140,11 +154,11 @@ export function MarketKLineChart({
       },
       timeScale: {
         borderColor: "#e4e7ec",
-        timeVisible: mode === "intraday",
+        timeVisible: isIntraday,
         secondsVisible: false,
-        rightOffset: mode === "daily" ? 2 : 1,
-        barSpacing: mode === "daily" ? 8 : 6,
-        minBarSpacing: 3,
+        rightOffset: mode === "daily" ? 2 : mode === "intraday5d" ? 0.5 : 1,
+        barSpacing: mode === "daily" ? 8 : mode === "intraday5d" ? 1 : 6,
+        minBarSpacing: mode === "intraday5d" ? 0.5 : 3,
         fixLeftEdge: true,
         tickMarkFormatter: (time: Time) => formatAxisTime(time, mode),
       },
@@ -248,9 +262,13 @@ export function MarketKLineChart({
             }
           : { type: "price", precision: 2, minMove: 0.01 },
       });
-      averageSeries.setData(intradayAverageLine(orderedBars));
+      averageSeries.setData(intradayAverageLine(orderedBars, intradayAverages));
 
-      const bounds = intradayPriceBounds(orderedBars, intradayReferencePrice);
+      const bounds = intradayPriceBounds(
+        orderedBars,
+        intradayReferencePrice,
+        intradayAverages,
+      );
       const scaleGuardSeries = chart.addSeries(LineSeries, {
         color: "rgba(0, 0, 0, 0)",
         lineWidth: 1,
@@ -312,6 +330,11 @@ export function MarketKLineChart({
     panes[0]?.setStretchFactor(4);
     panes[1]?.setStretchFactor(1.15);
     chart.timeScale().fitContent();
+    container.dataset.renderMs = (performance.now() - renderStartedAt).toFixed(2);
+    container.dataset.pointCount = String(orderedBars.length);
+    const paintFrame = requestAnimationFrame(() => {
+      container.dataset.paintMs = (performance.now() - renderStartedAt).toFixed(2);
+    });
 
     chart.subscribeCrosshairMove((param) => {
       if (!param.time || !param.point || param.point.x < 0 || param.point.y < 0) {
@@ -319,14 +342,15 @@ export function MarketKLineChart({
         return;
       }
       const key = chartTimeKey(param.time);
-      setActiveBar(orderedBars.find((bar) => chartTimeKey(bar.time) === key) ?? null);
+      setActiveBar(barsByTime.get(key) ?? null);
     });
 
     return () => {
+      cancelAnimationFrame(paintFrame);
       chartRef.current = null;
       chart.remove();
     };
-  }, [intradayReferencePrice, mode, orderedBars, volumeRatios]);
+  }, [barsByTime, intradayAverages, intradayReferencePrice, isIntraday, mode, orderedBars, volumeRatios]);
 
   if (orderedBars.length === 0) {
     return <div className="chart-state">{emptyLabel}</div>;
@@ -394,37 +418,44 @@ function movingAverageLine(bars: MarketCandleBar[], window: number): LineData<Ti
   });
 }
 
-function intradayAverageLine(bars: MarketCandleBar[]): LineData<Time>[] {
+function intradayAverageValues(
+  bars: MarketCandleBar[],
+  resetBySession: boolean,
+): Array<number | null> {
   let totalAmount = 0;
   let totalVolume = 0;
-  return bars.flatMap((bar) => {
+  let activeSession: string | undefined;
+  return bars.map((bar) => {
+    if (resetBySession && bar.session !== activeSession) {
+      activeSession = bar.session;
+      totalAmount = 0;
+      totalVolume = 0;
+    }
     totalAmount += bar.amount ?? 0;
     totalVolume += bar.volume;
     if (totalAmount <= 0 || totalVolume <= 0) {
-      return [];
+      return null;
     }
-    return [{
-      time: toChartTime(bar.time),
-      value: Number((totalAmount / totalVolume).toFixed(3)),
-    }];
+    return Number((totalAmount / totalVolume).toFixed(3));
   });
 }
 
-function cumulativeAverageAt(bars: MarketCandleBar[], selectedIndex: number): number | null {
-  if (selectedIndex < 0) {
-    return null;
-  }
-  const selectedBars = bars.slice(0, selectedIndex + 1);
-  const totalAmount = selectedBars.reduce((total, item) => total + (item.amount ?? 0), 0);
-  const totalVolume = selectedBars.reduce((total, item) => total + item.volume, 0);
-  return totalAmount > 0 && totalVolume > 0 ? totalAmount / totalVolume : null;
+function intradayAverageLine(
+  bars: MarketCandleBar[],
+  averages: Array<number | null>,
+): LineData<Time>[] {
+  return bars.flatMap((bar, index) => {
+    const value = averages[index];
+    return value === null ? [] : [{ time: toChartTime(bar.time), value }];
+  });
 }
 
 function intradayPriceBounds(
   bars: MarketCandleBar[],
   referencePrice: number | null,
+  averages: Array<number | null>,
 ): { low: number; high: number } {
-  const averageValues = intradayAverageLine(bars).map((item) => item.value);
+  const averageValues = averages.filter((value): value is number => value !== null);
   const prices = [...bars.map((bar) => bar.close), ...averageValues];
   const reference = referencePrice ?? bars[0]?.open ?? prices[0] ?? 1;
   const halfRange = Math.max(
@@ -483,12 +514,13 @@ function chartTimeKey(value: Time | string | number): string {
   return `${value.year}-${String(value.month).padStart(2, "0")}-${String(value.day).padStart(2, "0")}`;
 }
 
-function formatAxisTime(value: Time, mode: "daily" | "intraday"): string {
-  if (mode === "intraday" && typeof value === "number") {
+function formatAxisTime(value: Time, mode: ChartMode): string {
+  if (mode !== "daily" && typeof value === "number") {
+    const options: Intl.DateTimeFormatOptions = mode === "intraday5d"
+      ? { month: "2-digit", day: "2-digit", hour: "2-digit", minute: "2-digit", hour12: false }
+      : { hour: "2-digit", minute: "2-digit", hour12: false };
     return new Intl.DateTimeFormat("zh-CN", {
-      hour: "2-digit",
-      minute: "2-digit",
-      hour12: false,
+      ...options,
       timeZone: "Asia/Shanghai",
     }).format(new Date(value * 1000));
   }
@@ -496,8 +528,8 @@ function formatAxisTime(value: Time, mode: "daily" | "intraday"): string {
   return key.length >= 10 ? key.slice(5) : key;
 }
 
-function formatCrosshairTime(value: Time, mode: "daily" | "intraday"): string {
-  if (mode === "intraday" && typeof value === "number") {
+function formatCrosshairTime(value: Time, mode: ChartMode): string {
+  if (mode !== "daily" && typeof value === "number") {
     return new Intl.DateTimeFormat("zh-CN", {
       month: "2-digit",
       day: "2-digit",

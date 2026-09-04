@@ -22,6 +22,7 @@ import type {
   StockCloseSnapshot,
   StockDetailMarketData,
   StockIntradayKLineBar,
+  StockIntradayHistoryResponse,
   StockKLineBar,
   StockNewsFacts,
   StockPositionAssessment,
@@ -178,6 +179,25 @@ export function fetchStockTradingDayKLine(
   }
   return cachedGet<StockIntradayKLineBar[]>(
     `/api/stocks/${symbol}/trading-day-kline?${params.toString()}`,
+    30 * 60 * 1000,
+  );
+}
+
+export function fetchStockIntradayHistory(
+  symbol: string,
+  days = 5,
+  period = 1,
+  endDate?: string,
+) {
+  const params = new URLSearchParams({
+    days: String(days),
+    period: String(period),
+  });
+  if (endDate) {
+    params.set("end_date", endDate);
+  }
+  return cachedGet<StockIntradayHistoryResponse>(
+    `/api/stocks/${symbol}/intraday-history?${params.toString()}`,
     30 * 60 * 1000,
   );
 }

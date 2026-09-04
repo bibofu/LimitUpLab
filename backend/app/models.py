@@ -413,6 +413,30 @@ class StockIntradayKLineBar(BaseModel):
     amount: float
 
 
+class StockIntradayHistoryDay(BaseModel):
+    """One requested trading day's intraday series and completeness state."""
+
+    trade_date: date
+    previous_close: float | None = None
+    status: Literal["complete", "missing", "error"]
+    bars: list[StockIntradayKLineBar] = Field(default_factory=list)
+    error: str | None = None
+
+
+class StockIntradayHistoryResponse(BaseModel):
+    """A bounded multi-day intraday series for stock-detail visualization."""
+
+    symbol: str
+    requested_days: int
+    period_minutes: int
+    start_date: date
+    end_date: date
+    data_as_of: date | None = None
+    complete: bool
+    missing_trade_dates: list[date] = Field(default_factory=list)
+    days: list[StockIntradayHistoryDay] = Field(default_factory=list)
+
+
 class StockCloseSnapshot(BaseModel):
     """Latest available daily close snapshot for stock detail display."""
 

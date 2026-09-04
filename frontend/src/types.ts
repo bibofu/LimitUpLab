@@ -98,6 +98,26 @@ export interface StockIntradayKLineBar {
   amount: number;
 }
 
+export interface StockIntradayHistoryDay {
+  trade_date: string;
+  previous_close: number | null;
+  status: "complete" | "missing" | "error";
+  bars: StockIntradayKLineBar[];
+  error: string | null;
+}
+
+export interface StockIntradayHistoryResponse {
+  symbol: string;
+  requested_days: number;
+  period_minutes: number;
+  start_date: string;
+  end_date: string;
+  data_as_of: string | null;
+  complete: boolean;
+  missing_trade_dates: string[];
+  days: StockIntradayHistoryDay[];
+}
+
 export interface StockCloseSnapshot {
   symbol: string;
   trade_date: string;

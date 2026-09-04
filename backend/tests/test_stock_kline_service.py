@@ -12,6 +12,7 @@ from app.services.stock_kline import (
     build_stock_kline_facts,
     load_stock_detail_market_data,
     load_stock_intraday_bars,
+    load_stock_intraday_history,
     load_stock_kline_bars,
     load_stock_position_assessment,
 )
@@ -21,6 +22,66 @@ TEST_TMP_ROOT = Path(os.getenv("LIMITUPLAB_TEST_TMP", Path(__file__).resolve().p
 
 
 class StockKLineServiceTest(unittest.TestCase):
+    def test_intraday_history_groups_five_sessions_and_preserves_partial_errors(self) -> None:
+        database_path = TEST_TMP_ROOT / f"stock-intraday-history-{uuid4().hex}.sqlite"
+        repository = SQLiteFirstBoardRepository(database_path=database_path)
+        trade_dates = [date(2026, 8, 24) + timedelta(days=index) for index in range(5)]
+        daily_bars = [
+            StockKLineBar(
+                trade_date=date(2026, 8, 21) + timedelta(days=index),
+                open=10 + index,
+                high=10.5 + index,
+                low=9.5 + index,
+                close=10.2 + index,
+                volume=1_000,
+            )
+            for index in range(9)
+        ]
+
+        def collector(
+            _symbol: str,
+            trade_date: date,
+            _period: int,
+        ) -> list[StockIntradayKLineBar]:
+            if trade_date == trade_dates[2]:
+                raise RuntimeError("upstream unavailable")
+            return [
+                StockIntradayKLineBar(
+                    timestamp=datetime.combine(trade_date, datetime.min.time()).replace(
+                        hour=9,
+                        minute=31,
+                    ),
+                    open=10,
+                    high=10.2,
+                    low=9.9,
+                    close=10.1,
+                    volume=1_000,
+                    amount=10_100,
+                )
+            ]
+
+        try:
+            response = load_stock_intraday_history(
+                symbol="sz002624",
+                trade_dates=trade_dates,
+                period=1,
+                daily_bars=daily_bars,
+                repository=repository,
+                collector=collector,
+            )
+
+            self.assertEqual(response.symbol, "002624")
+            self.assertEqual(response.requested_days, 5)
+            self.assertEqual(len(response.days), 5)
+            self.assertFalse(response.complete)
+            self.assertEqual(response.missing_trade_dates, [trade_dates[2]])
+            self.assertEqual(response.days[2].status, "error")
+            self.assertEqual(response.days[2].error, "RuntimeError")
+            self.assertEqual(response.days[0].previous_close, 12.2)
+            self.assertEqual(response.data_as_of, trade_dates[-1])
+        finally:
+            _remove_database_files(database_path)
+
     def test_intraday_cache_survives_repository_recreation(self) -> None:
         database_path = TEST_TMP_ROOT / f"stock-intraday-{uuid4().hex}.sqlite"
         trade_date = date(2026, 8, 31)

@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import threading
 from collections.abc import Callable
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
 from statistics import mean
 from time import monotonic
@@ -17,6 +18,8 @@ from app.collectors.stock_kline_collector import build_stock_close_snapshot
 from app.models import (
     StockDailyBar,
     StockDetailMarketData,
+    StockIntradayHistoryDay,
+    StockIntradayHistoryResponse,
     StockIntradayKLineBar,
     StockKLineBar,
     StockKLineFacts,
@@ -80,6 +83,80 @@ def load_stock_intraday_bars(
                 source="sina-minute-direct",
             )
         return collected
+
+
+def load_stock_intraday_history(
+    *,
+    symbol: str,
+    trade_dates: list[date],
+    period: int,
+    daily_bars: list[StockKLineBar],
+    repository: SQLiteFirstBoardRepository | None = None,
+    collector: IntradayCollector = collect_stock_intraday_kline,
+) -> StockIntradayHistoryResponse:
+    """Load several completed sessions concurrently while preserving day-level errors."""
+
+    if not trade_dates:
+        raise ValueError("At least one trade date is required")
+    if not (1 <= len(trade_dates) <= 10):
+        raise ValueError("trade_dates must contain between 1 and 10 dates")
+    if not (1 <= period <= 60):
+        raise ValueError("period must be between 1 and 60")
+
+    normalized_symbol = _normalize_cache_symbol(symbol)
+    requested_dates = sorted(set(trade_dates))
+    if len(requested_dates) != len(trade_dates):
+        raise ValueError("trade_dates must not contain duplicates")
+    active_repository = repository or SQLiteFirstBoardRepository()
+    closes = {
+        item.trade_date: item.close
+        for item in sorted(daily_bars, key=lambda item: item.trade_date)
+    }
+    ordered_daily_dates = sorted(closes)
+    previous_closes: dict[date, float | None] = {}
+    for trade_date in requested_dates:
+        earlier_dates = [item for item in ordered_daily_dates if item < trade_date]
+        previous_closes[trade_date] = closes[earlier_dates[-1]] if earlier_dates else None
+
+    def load_day(trade_date: date) -> StockIntradayHistoryDay:
+        try:
+            bars = load_stock_intraday_bars(
+                symbol=normalized_symbol,
+                trade_date=trade_date,
+                period=period,
+                repository=active_repository,
+                collector=collector,
+            )
+        except Exception as error:  # noqa: BLE001 - retain partial multi-day results
+            return StockIntradayHistoryDay(
+                trade_date=trade_date,
+                previous_close=previous_closes[trade_date],
+                status="error",
+                error=type(error).__name__,
+            )
+        return StockIntradayHistoryDay(
+            trade_date=trade_date,
+            previous_close=previous_closes[trade_date],
+            status="complete" if bars else "missing",
+            bars=bars,
+        )
+
+    with ThreadPoolExecutor(max_workers=min(5, len(requested_dates))) as executor:
+        loaded = list(executor.map(load_day, requested_dates))
+
+    missing_dates = [item.trade_date for item in loaded if item.status != "complete"]
+    available_dates = [item.trade_date for item in loaded if item.bars]
+    return StockIntradayHistoryResponse(
+        symbol=normalized_symbol,
+        requested_days=len(requested_dates),
+        period_minutes=period,
+        start_date=requested_dates[0],
+        end_date=requested_dates[-1],
+        data_as_of=max(available_dates) if available_dates else None,
+        complete=not missing_dates,
+        missing_trade_dates=missing_dates,
+        days=loaded,
+    )
 
 
 def load_stock_kline_bars(

@@ -70,6 +70,7 @@ import {
   fetchScoringErrorDiagnostic,
   fetchRecentLimitUpEvents,
   fetchStockEvent,
+  fetchStockIntradayHistory,
   fetchStockMarketData,
   fetchStockNews,
   fetchStockTradingDayKLine,
@@ -102,11 +103,16 @@ import type {
   ReviewPromotionComparison,
   ScoringErrorDiagnosticResponse,
   StockCloseSnapshot,
+  StockIntradayHistoryResponse,
   StockIntradayKLineBar,
   StockKLineBar,
   StockNewsFacts,
   StockPositionAssessment,
 } from "./types";
+import {
+  toFiveDayIntradayCandleBars,
+  toIntradayCandleBars,
+} from "./intradayChart";
 
 type ViewKey = "overview" | "recommendation" | "review" | "pool" | "first" | "continued" | "failed" | "recent";
 type StockListViewKey = "first" | "continued" | "failed";
@@ -3250,7 +3256,8 @@ function StockDetail({ data }: { data: DashboardData }) {
   const [firstBoardRating, setFirstBoardRating] = useState<FirstBoardRating | null>(null);
   const [kline, setKline] = useState<StockKLineBar[]>([]);
   const [tradingDayKline, setTradingDayKline] = useState<StockIntradayKLineBar[]>([]);
-  const [chartMode, setChartMode] = useState<"daily" | "intraday">("daily");
+  const [fiveDayKline, setFiveDayKline] = useState<StockIntradayHistoryResponse | null>(null);
+  const [chartMode, setChartMode] = useState<"daily" | "intraday" | "intraday5d">("daily");
   const [latestClose, setLatestClose] = useState<StockCloseSnapshot | null>(null);
   const [stockNews, setStockNews] = useState<StockNewsFacts | null>(null);
   const [position, setPosition] = useState<StockPositionAssessment | null>(null);
@@ -3259,6 +3266,8 @@ function StockDetail({ data }: { data: DashboardData }) {
   const [klineError, setKlineError] = useState<string | null>(null);
   const [tradingDayLoading, setTradingDayLoading] = useState(false);
   const [tradingDayError, setTradingDayError] = useState<string | null>(null);
+  const [fiveDayLoading, setFiveDayLoading] = useState(false);
+  const [fiveDayError, setFiveDayError] = useState<string | null>(null);
   const [latestCloseLoading, setLatestCloseLoading] = useState(true);
   const [latestCloseError, setLatestCloseError] = useState<string | null>(null);
   const [stockNewsLoading, setStockNewsLoading] = useState(true);
@@ -3266,6 +3275,7 @@ function StockDetail({ data }: { data: DashboardData }) {
   const [positionError, setPositionError] = useState<string | null>(null);
   const [criticLoading, setCriticLoading] = useState(false);
   const tradingDayCacheKeyRef = useRef("");
+  const fiveDayCacheKeyRef = useRef("");
   const resolvedTradeDate = stockEvent?.trade_date
     ?? requestedTradeDate
     ?? data.summary.trade_date;
@@ -3380,6 +3390,10 @@ function StockDetail({ data }: { data: DashboardData }) {
     setTradingDayError(null);
     setTradingDayLoading(false);
     tradingDayCacheKeyRef.current = "";
+    setFiveDayKline(null);
+    setFiveDayError(null);
+    setFiveDayLoading(false);
+    fiveDayCacheKeyRef.current = "";
   }, [resolvedTradeDate, symbol]);
 
   useEffect(() => {
@@ -3409,6 +3423,39 @@ function StockDetail({ data }: { data: DashboardData }) {
       .finally(() => {
         if (active) {
           setTradingDayLoading(false);
+        }
+      });
+    return () => {
+      active = false;
+    };
+  }, [chartMode, resolvedTradeDate, stockEventLoading, symbol]);
+
+  useEffect(() => {
+    if (chartMode !== "intraday5d" || stockEventLoading) {
+      return;
+    }
+    const cacheKey = `${symbol}:${resolvedTradeDate}:5:1`;
+    if (fiveDayCacheKeyRef.current === cacheKey) {
+      return;
+    }
+    let active = true;
+    setFiveDayLoading(true);
+    setFiveDayError(null);
+    fetchStockIntradayHistory(symbol, 5, 1, resolvedTradeDate)
+      .then((history) => {
+        if (active) {
+          setFiveDayKline(history);
+          fiveDayCacheKeyRef.current = cacheKey;
+        }
+      })
+      .catch((caught) => {
+        if (active) {
+          setFiveDayError(caught instanceof Error ? caught.message : "加载五日分时失败");
+        }
+      })
+      .finally(() => {
+        if (active) {
+          setFiveDayLoading(false);
         }
       });
     return () => {
@@ -3477,6 +3524,14 @@ function StockDetail({ data }: { data: DashboardData }) {
     );
     return eventIndex > 0 ? kline[eventIndex - 1].close : null;
   }, [kline, resolvedTradeDate]);
+  const fiveDayChartBars = useMemo(
+    () => toFiveDayIntradayCandleBars(fiveDayKline),
+    [fiveDayKline],
+  );
+  const fiveDayReferencePrice = useMemo(
+    () => fiveDayKline?.days.find((day) => day.bars.length > 0)?.previous_close ?? null,
+    [fiveDayKline],
+  );
 
   if (stockEventLoading) {
     return <ShellState label="正在加载个股详情..." />;
@@ -3545,6 +3600,13 @@ function StockDetail({ data }: { data: DashboardData }) {
               >
                 分时
               </button>
+              <button
+                type="button"
+                aria-pressed={chartMode === "intraday5d"}
+                onClick={() => setChartMode("intraday5d")}
+              >
+                五日
+              </button>
             </div>
           )}
         >
@@ -3560,17 +3622,35 @@ function StockDetail({ data }: { data: DashboardData }) {
                 mode="daily"
               />
             )
-          ) : tradingDayLoading ? (
+          ) : chartMode === "intraday" && tradingDayLoading ? (
             <div className="chart-state">正在加载交易日走势...</div>
-          ) : tradingDayError ? (
+          ) : chartMode === "intraday" && tradingDayError ? (
             <div className="chart-state">{tradingDayError}</div>
-          ) : (
+          ) : chartMode === "intraday" ? (
             <MarketKLineChart
               bars={toIntradayCandleBars(tradingDayKline)}
               emptyLabel="暂无交易日走势数据"
               mode="intraday"
               referencePrice={intradayReferencePrice}
             />
+          ) : fiveDayLoading ? (
+            <div className="chart-state">正在加载最近五日分时...</div>
+          ) : fiveDayError ? (
+            <div className="chart-state">{fiveDayError}</div>
+          ) : (
+            <>
+              {fiveDayKline && !fiveDayKline.complete ? (
+                <div className="chart-data-warning">
+                  部分交易日分时缺失：{fiveDayKline.missing_trade_dates.join("、")}
+                </div>
+              ) : null}
+              <MarketKLineChart
+                bars={fiveDayChartBars}
+                emptyLabel="暂无最近五日分时数据"
+                mode="intraday5d"
+                referencePrice={fiveDayReferencePrice}
+              />
+            </>
           )}
         </Panel>
       </section>
@@ -4029,21 +4109,6 @@ function toDailyCandleBars(bars: StockKLineBar[]): MarketCandleBar[] {
     high: bar.high,
     low: bar.low,
     volume: bar.volume,
-  }));
-}
-
-function toIntradayCandleBars(bars: StockIntradayKLineBar[]): MarketCandleBar[] {
-  /** Convert API intraday bars into chart-friendly candle bars. */
-
-  return bars.map((bar) => ({
-    time: Math.floor(new Date(bar.timestamp).getTime() / 1000),
-    label: bar.timestamp.slice(11, 16),
-    open: bar.open,
-    close: bar.close,
-    high: bar.high,
-    low: bar.low,
-    volume: bar.volume,
-    amount: bar.amount,
   }));
 }
 

@@ -586,6 +586,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mo
 | `GET` | `/api/analysis/daily-promotion` | 每日连板晋级率与板高分层统计 |
 | `GET` | `/api/stocks/{symbol}/kline` | 个股日 K 线 |
 | `GET` | `/api/stocks/{symbol}/market-data` | 个股详情聚合行情、最新收盘和位置判断 |
+| `GET` | `/api/stocks/{symbol}/intraday-history` | 最近 2-10 个交易日的分钟分时，默认五日一分钟周期 |
 
 完整接口定义以 Swagger 为准。
 
