@@ -1,8 +1,5 @@
 import {
-  ChevronDown,
-  ChevronLeft,
   ChevronRight,
-  ExternalLink,
   GitBranch,
   Landmark,
   LoaderCircle,
@@ -422,12 +419,6 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
     }
   }
 
-  const readyCount = report
-    ? report.sample_size - report.pending_count
-    : 0;
-  const successRate = readyCount > 0 && report
-    ? report.success_count / readyCount
-    : null;
   const reviewedPicks = report?.reviewed_picks ?? [];
   const reviewDates = groupReviewPicksByDate(reviewedPicks);
   const trackDates = report ? buildReviewTrackDates(reviewDates, report.end_date) : [];
@@ -986,48 +977,6 @@ function buildReviewTrackDates(
     .sort()
     .reverse()
     .slice(0, 5);
-}
-
-function ReviewInsightCard({
-  title,
-  items,
-  tone = "neutral",
-}: {
-  title: string;
-  items: string[];
-  tone?: "neutral" | "good" | "risk" | "warn";
-}) {
-  return (
-    <article className={`review-insight-card review-${tone}`}>
-      <strong>{title}</strong>
-      {items.length > 0 ? (
-        <ul>
-          {items.slice(0, 5).map((item) => (
-            <li key={item}>{item}</li>
-          ))}
-        </ul>
-      ) : (
-        <p>暂无足够样本。</p>
-      )}
-    </article>
-  );
-}
-
-function ReviewToolTraceCard({ traces }: { traces: ReviewAgentReportResponse["tool_results"] }) {
-  return (
-    <article className="review-insight-card review-tools">
-      <strong>工具链</strong>
-      <div className="review-tool-chain">
-        {traces.length > 0 ? (
-          traces.map((trace) => (
-            <span key={trace.name}>{trace.name}</span>
-          ))
-        ) : (
-          <span>暂无工具 trace</span>
-        )}
-      </div>
-    </article>
-  );
 }
 
 function ReviewPickTable({

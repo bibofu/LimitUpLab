@@ -4,11 +4,8 @@ import unittest
 from datetime import date, datetime, timezone
 from unittest.mock import patch
 
-from app.agents.chat import (
-    _format_capital_flow_amount,
-    _template_answer_from_tool_facts,
-    answer_first_board_chat,
-)
+from app.agents.chat import _template_answer_from_tool_facts, answer_first_board_chat
+from app.agents.chat_templates import _format_capital_flow_amount
 from app.collectors import (
     HithinkDragonTigerFact,
     HithinkDragonTigerSnapshot,

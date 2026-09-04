@@ -1,6 +1,5 @@
 """Tool-grounded first-board chat agent."""
 
-import json
 import os
 import re
 from contextlib import contextmanager
@@ -12,7 +11,6 @@ from typing import Any, Callable, Iterator
 from app.agents.explanation import explain_first_board_rating
 from app.agents.chat_answer_validation import (
     _add_composed_tool_facts,
-    _asks_for_promoted_stock_details,
     _contains_complete_position_groups,
     _contains_daily_promotion_facts,
     _contains_every_event_symbol,
@@ -46,7 +44,6 @@ from app.agents.chat_prompts import (
 from app.agents.chat_templates import (
     TEXT,
     UNANSWERABLE_TEXT,
-    _format_capital_flow_amount,
     _looks_like_high_score_promotion_question,
     _template_answer_from_tool_facts,
     _template_daily_board_promotion_answer,
@@ -70,7 +67,6 @@ from app.agents.query_contract import (
     extract_board_filters as contract_board_filters,
     extract_market_event_type,
     extract_result_limit,
-    looks_like_exhaustive_request,
     looks_like_market_event_query,
 )
 from app.agents.tool_policy import (
@@ -84,14 +80,10 @@ from app.agents.tool_policy import (
     extract_sector_query as _extract_sector_query,
     extract_trade_date as _extract_trade_date,
     looks_like_broad_sector_ranking_question as _looks_like_broad_sector_ranking_question,
-    looks_like_critic_question as _looks_like_critic_question,
     looks_like_daily_board_promotion_question as _looks_like_daily_board_promotion_question,
-    looks_like_evaluation_question as _looks_like_evaluation_question,
     looks_like_first_board_position_question as _looks_like_first_board_position_question,
     looks_like_limit_up_event_question as _looks_like_limit_up_event_question,
-    looks_like_rating_backtest_question as _looks_like_rating_backtest_question,
     looks_like_rating_explain_question as _looks_like_rating_explain_question,
-    looks_like_review_question as _looks_like_review_question,
     looks_like_stock_kline_question as _looks_like_stock_kline_question,
 )
 from app.agents.tools import (
@@ -2862,43 +2854,6 @@ def _answer_market_schedule(
     )
 
 
-def _answer_market_context(
-    request: AgentChatRequest,
-    tools: AgentToolRegistry,
-) -> AgentChatResponse:
-    """Answer market-overview questions with objective facts plus the LLM."""
-
-    market_tool = tools.market_summary()
-    summary = market_tool.output
-    facts = {
-        "trade_date": summary.trade_date.isoformat(),
-        "limit_up_count": summary.limit_up_count,
-        "first_board_count": summary.first_board_count,
-        "continued_board_count": summary.continued_board_count,
-        "failed_count": summary.failed_count,
-        "failed_limit_up_rate": summary.failed_limit_up_rate,
-        "max_board_height": summary.max_board_height,
-        "hot_industries": summary.hot_industries,
-        "hot_concepts": [item.model_dump(mode="json") for item in summary.hot_concepts],
-    }
-    answer, source, warnings = _generate_llm_answer(
-        request=request,
-        intent="market_context",
-        facts=facts,
-        fallback=_template_market_overview_answer(summary),
-    )
-    return AgentChatResponse(
-        session_id=request.session_id,
-        intent="market_context",
-        answer=answer,
-        tool_calls=["market_summary", source],
-        tool_results=[market_tool.trace()],
-        references=[f"trade_date={summary.trade_date.isoformat()}"],
-        warnings=warnings,
-        generated_by=CHAT_AGENT_VERSION,
-    )
-
-
 def _build_session_context(
     recent_runs: list[AgentRun],
     conversation_messages: list[ChatSessionMessage] | None = None,
@@ -3538,19 +3493,6 @@ def _filter_first_board_candidates(
     ]
 
 
-def _select_filtered_target(
-    matches: list[FirstBoardRating],
-    preferred_symbol: str | None,
-) -> FirstBoardRating:
-    """Pick the explicit symbol if present; otherwise choose the top score."""
-
-    if preferred_symbol:
-        explicit = _find_rating(preferred_symbol, matches)
-        if explicit is not None:
-            return explicit
-    return matches[0]
-
-
 def _build_first_board_filter_trace(
     ratings: FirstBoardRatingsResponse,
     filter_query: _FirstBoardFilterQuery,
@@ -3618,87 +3560,6 @@ def _answer_missing_trade_date(
         ],
         references=[f"requested_date={requested_date.isoformat()}"],
         warnings=[],
-        generated_by=CHAT_AGENT_VERSION,
-    )
-
-
-def _answer_today_summary(
-    request: AgentChatRequest,
-    ratings_tool: ToolResult,
-) -> AgentChatResponse:
-    """Summarize the latest first-board candidate pool."""
-
-    ratings: FirstBoardRatingsResponse = ratings_tool.output
-    candidates = ratings.candidates
-    trade_date = ratings.trade_date
-    top_items = candidates[:5]
-    lines = [
-        f"{trade_date.isoformat()} \u9996\u677f\u5019\u9009\u6c60\u5171\u6709 {len(candidates)} \u53ea\u5165\u6c60\u80a1\u7968\u3002",
-    ]
-    if top_items:
-        summary = IDEOGRAPHIC_COMMA.join(
-            f"{item.facts.name}({item.facts.symbol}) {item.rating}/{item.score:.1f}"
-            for item in top_items
-        )
-        lines.append(f"\u5f53\u524d\u8bc4\u5206\u9760\u524d\u7684\u662f\uff1a{summary}\u3002")
-        lines.append(
-            "\u6574\u4f53\u89c2\u5bdf\uff1a\u9ad8\u5206\u4e3b\u8981\u6765\u81ea\u9996\u5c01\u65f6\u95f4\u3001\u5c01\u677f\u7a33\u5b9a\u6027\u3001\u6210\u4ea4\u989d/\u6362\u624b\u7387\u548c\u884c\u4e1a\u70ed\u5ea6\u7b49\u7ed3\u6784\u5316\u56e0\u5b50\u3002"
-        )
-    else:
-        lines.append("\u5f53\u524d\u4ea4\u6613\u65e5\u6ca1\u6709\u6ee1\u8db3\u8fc7\u6ee4\u6761\u4ef6\u7684\u9996\u677f\u5019\u9009\u3002")
-
-    return AgentChatResponse(
-        session_id=request.session_id,
-        intent="today_summary",
-        answer="\n".join(lines),
-        tool_calls=["first_board_ratings"],
-        tool_results=[ratings_tool.trace()],
-        references=[f"trade_date={trade_date.isoformat()}"],
-        warnings=[_safety_warning()],
-        generated_by=CHAT_AGENT_VERSION,
-    )
-
-
-def _answer_first_board_sector_summary(
-    request: AgentChatRequest,
-    ratings_tool: ToolResult,
-) -> AgentChatResponse:
-    """Summarize major sectors in the first-board pool via tool facts and LLM."""
-
-    ratings: FirstBoardRatingsResponse = ratings_tool.output
-    sector_rows = _summarize_first_board_industries(ratings.candidates)
-    facts = {
-        "trade_date": ratings.trade_date.isoformat(),
-        "candidate_count": len(ratings.candidates),
-        "industry_distribution": sector_rows,
-        "top_candidates": [
-            {
-                "symbol": item.facts.symbol,
-                "name": item.facts.name,
-                "industry": item.facts.industry,
-                "concept": item.facts.concept,
-                "rating": item.rating,
-                "score": item.score,
-                "first_limit_time": item.facts.first_limit_time.strftime("%H:%M"),
-                "break_count": item.facts.break_count,
-            }
-            for item in ratings.candidates[:10]
-        ],
-    }
-    answer, source, warnings = _generate_llm_answer(
-        request=request,
-        intent="first_board_sector_summary",
-        facts=facts,
-        fallback=_template_first_board_sector_summary(ratings, sector_rows),
-    )
-    return AgentChatResponse(
-        session_id=request.session_id,
-        intent="first_board_sector_summary",
-        answer=answer,
-        tool_calls=["first_board_ratings", source],
-        tool_results=[ratings_tool.trace()],
-        references=[f"trade_date={ratings.trade_date.isoformat()}"],
-        warnings=[_safety_warning(), *warnings],
         generated_by=CHAT_AGENT_VERSION,
     )
 
@@ -3829,58 +3690,6 @@ def _answer_risk_summary(
             f"trade_date={rating.facts.trade_date.isoformat()}",
         ],
         warnings=[_safety_warning()],
-        generated_by=CHAT_AGENT_VERSION,
-    )
-
-
-def _answer_general_llm(
-    request: AgentChatRequest,
-    tools: AgentToolRegistry,
-    ratings_tool: ToolResult,
-) -> AgentChatResponse:
-    """Use a compact tool context for broad questions that miss fixed intents."""
-
-    market_tool = tools.market_summary()
-    summary = market_tool.output
-    ratings: FirstBoardRatingsResponse = ratings_tool.output
-    candidates = ratings.candidates
-    facts = {
-        "trade_date": summary.trade_date.isoformat(),
-        "market_summary": {
-            "limit_up_count": summary.limit_up_count,
-            "first_board_count": summary.first_board_count,
-            "continued_board_count": summary.continued_board_count,
-            "failed_limit_up_rate": summary.failed_limit_up_rate,
-            "max_board_height": summary.max_board_height,
-            "hot_industries": summary.hot_industries,
-        },
-        "top_first_board_candidates": [
-            {
-                "symbol": item.facts.symbol,
-                "name": item.facts.name,
-                "rating": item.rating,
-                "score": item.score,
-                "confidence": item.confidence,
-                "reasons": item.reasons[:3],
-                "risks": item.risks[:3],
-            }
-            for item in candidates[:5]
-        ],
-    }
-    answer, source, warnings = _generate_llm_answer(
-        request=request,
-        intent="general_llm",
-        facts=facts,
-        fallback=TEXT["unknown"],
-    )
-    return AgentChatResponse(
-        session_id=request.session_id,
-        intent="general_llm",
-        answer=answer,
-        tool_calls=["market_summary", "first_board_ratings", source],
-        tool_results=[market_tool.trace(), ratings_tool.trace()],
-        references=[f"trade_date={summary.trade_date.isoformat()}"],
-        warnings=warnings,
         generated_by=CHAT_AGENT_VERSION,
     )
 
@@ -4399,21 +4208,6 @@ def _generate_llm_answer(
             _safety_warning(),
             f"LLM unavailable; template fallback used: {error}",
         ]
-
-
-def _template_market_overview_answer(summary) -> str:
-    """Build a deterministic answer from objective market facts."""
-
-    return (
-        f"{summary.trade_date.isoformat()} \u672c\u5730\u6570\u636e\u663e\u793a\uff0c"
-        f"\u5f53\u65e5\u6da8\u505c {summary.limit_up_count} \u53ea\uff0c"
-        f"\u9996\u677f {summary.first_board_count} \u53ea\uff0c"
-        f"\u8fde\u677f {summary.continued_board_count} \u53ea\uff0c"
-        f"\u70b8\u677f\u7387 {summary.failed_limit_up_rate:.0%}\uff0c"
-        f"\u6700\u9ad8\u8fde\u677f {summary.max_board_height} \u677f\u3002"
-        "\u8fd9\u662f\u57fa\u4e8e\u672c\u5730\u6da8\u505c\u6570\u636e\u7684\u590d\u76d8\u5224\u65ad\uff0c"
-        "\u4e0d\u5305\u542b\u5b9e\u65f6\u65b0\u95fb\u6216\u5168\u5e02\u6210\u4ea4\u989d\u6570\u636e\u3002"
-    )
 
 
 def _contains_forbidden_terms(content: str) -> bool:
