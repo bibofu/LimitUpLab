@@ -312,7 +312,7 @@ sequenceDiagram
 LimitUpLab/
 ├── backend/
 │   ├── app/
-│   │   ├── agents/          # Chat、Explanation、Review、Eval 和 Tool Policy
+│   │   ├── agents/          # Chat 编排、Prompt、确定性答案模板、Review、Eval 和 Tool Policy
 │   │   ├── collectors/      # 涨停、K 线、板块、指数和扩展数据采集
 │   │   ├── repositories/    # SQLite Repository
 │   │   ├── routers/         # FastAPI 路由
@@ -320,7 +320,7 @@ LimitUpLab/
 │   ├── scripts/             # 数据同步、回填、Eval 和启动脚本
 │   └── tests/               # 单元测试与 Agent Eval 数据集
 ├── frontend/
-│   └── src/                 # React 工作台、API 类型和样式
+│   └── src/                 # React 工作台、独立 Agent 会话面板、API 类型和样式
 ├── scripts/                 # 项目级本地启动脚本
 └── docs/
     ├── Tasks.md             # 开发路线图和进度

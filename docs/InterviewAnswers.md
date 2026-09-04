@@ -286,7 +286,7 @@ Planner 只能从 profile allowlist 的 schema 中选工具，后端会拒绝未
 
 ### K60. `App.tsx` 单文件和请求 race 怎么看？
 
-批评成立，而且当前 `App.tsx` 已接近 4000 行。顶层 `loadDashboard` 没有 AbortController，也没有 generation id；React StrictMode 开发环境会执行 effect 的额外挂载周期，可能产生重复请求，快速刷新也可能让旧响应覆盖新响应。React 18 对卸载后 setState 不再总是警告，不代表 race 不存在。应拆出 route page、自定义 query hooks 和服务状态层，引入 AbortController 或 TanStack Query 的取消/去重/缓存，并测试慢旧请求晚于新请求返回的场景。
+批评成立。第一轮已经把 Agent 会话状态、SSE 交互、历史会话管理和展示从 `App.tsx` 抽到独立 `AgentChatDock.tsx`，`App.tsx` 不再同时承担聊天子系统；后续仍应继续拆 route page 和自定义 query hooks。顶层 `loadDashboard` 没有 AbortController，也没有 generation id；React StrictMode 开发环境会执行 effect 的额外挂载周期，可能产生重复请求，快速刷新也可能让旧响应覆盖新响应。React 18 对卸载后 setState 不再总是警告，不代表 race 不存在。下一步应引入 AbortController 或 TanStack Query 的取消、去重和缓存，并测试慢旧请求晚于新请求返回的场景。
 
 ### K61. lightweight-charts 性能上限测过吗？
 
@@ -326,7 +326,7 @@ AI 应用/后端岗：亮点是 planner-tool-answer、能力契约、Policy 修�
 
 ### M68. 6 个月、2 个工程师只能做三件事，选什么？
 
-第一，冻结策略范围，建立 60+ 完整结果日和多目标 outcome 的自动数据质量/研究流水线，因为没有可信标签，其余优化都无法判断。第二，继续重构 Agent 和前端：Capability 已成为业务工作流单一声明源，下一步拆分 `chat.py` 与 `App.tsx`，建立线上失败回流和真实 LLM canary。第三，迁移 PostgreSQL + Redis，完成结构化日志、告警、恢复演练和基础用户体系，为真实试用做容量准备。排序依据是先获得真值，再提高迭代效率，最后扩容量；不是先增加更多策略。
+第一，冻结策略范围，建立 60+ 完整结果日和多目标 outcome 的自动数据质量/研究流水线，因为没有可信标签，其余优化都无法判断。第二，继续重构 Agent 和前端：Capability 已成为业务工作流单一声明源，`chat.py` 已拆出 Prompt 与确定性答案模板，`App.tsx` 已拆出 Agent 会话面板；下一步继续拆执行器、route page，并建立线上失败回流和真实 LLM canary。第三，迁移 PostgreSQL + Redis，完成结构化日志、告警、恢复演练和基础用户体系，为真实试用做容量准备。排序依据是先获得真值，再提高迭代效率，最后扩容量；不是先增加更多策略。
 
 ### M69. 数据每天只增加一天，如何加速？
 
@@ -468,4 +468,4 @@ trace 当前定位为开发者/管理员可观测性：记录 planner、final to
 
 LimitUpLab 最值得讲的不是“我找到了能预测首板的模型”，因为当前数据不支持这个结论。它真正完成的是一套受约束的金融研究 Agent 工程：把 point-in-time 数据、版本化评分、不可变前向快照、D+1 至 D+5 outcome、工具接地问答、失败降级、治理门槛和单机部署连成可审计闭环。
 
-我会主动承认四个核心缺口：样本只有 21 个完整结果日；评分 magic numbers 尚未被实证；前端和 Agent 内部模块过大；独立真实用户反馈不足。能把这些缺口量化、阻止系统在证据不足时自动晋升，并知道下一步先补真值和验证而不是继续堆功能，才是这个项目最能证明的工程能力。
+我会主动承认四个核心缺口：样本只有 21 个完整结果日；评分 magic numbers 尚未被实证；前端页面和 Agent 执行编排仍有继续模块化空间；独立真实用户反馈不足。第一轮已经分离 Prompt、确定性答案模板和前端会话面板，但这不等于技术债清零。能把这些缺口量化、阻止系统在证据不足时自动晋升，并知道下一步先补真值和验证而不是继续堆功能，才是这个项目最能证明的工程能力。
