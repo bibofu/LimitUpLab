@@ -725,7 +725,11 @@ def _answer_with_llm_tool_agent(
     )
     tool_plan["capabilities"] = list(capabilities)
     tool_duration_ms = round((perf_counter() - tools_started_at) * 1000)
-    if not _has_usable_tool_facts(execution["facts"]):
+    outcome_warnings = _tool_outcome_warnings(execution["tool_results"])
+    if not _has_usable_tool_facts(
+        execution["facts"],
+        execution["tool_results"],
+    ):
         return _unanswerable_response(
             request=request,
             intent=intent,
@@ -742,7 +746,10 @@ def _answer_with_llm_tool_agent(
                 *execution["tool_results"],
             ],
             references=execution["references"],
-            warnings=["No successful evidence was available for this question."],
+            warnings=[
+                "No successful evidence was available for this question.",
+                *outcome_warnings,
+            ],
             performance=AgentChatPerformance(
                 planner_duration_ms=planner_duration_ms,
                 tool_duration_ms=tool_duration_ms,
@@ -801,6 +808,7 @@ def _answer_with_llm_tool_agent(
             tool_plan,
             execution["facts"],
             context,
+            execution["tool_results"],
         )
     answer_started_at = perf_counter()
     final_result = None
@@ -928,6 +936,7 @@ def _answer_with_llm_tool_agent(
         else len(answer_system_prompt) + len(answer_user_prompt)
     )
 
+    warnings = list(dict.fromkeys([*warnings, *outcome_warnings]))
     return AgentChatResponse(
         session_id=request.session_id,
         intent=intent,
@@ -2339,6 +2348,7 @@ def _tool_answer_system_prompt(
         "For review_high_score_picks promotion comparisons, report Top10 and full-market first-board sample counts together, separate pending dates, and express promotion_rate_delta as percentage points. "
         "For dragon_tiger_list, omit every missing capital-flow field and format each valid CNY amount as signed 亿元 or 万元; never expose raw yuan values, None, null, NaN, or a missing-data placeholder. "
         "Historical similar-case retrieval is retired; never invent or infer a similar stock or case from the available facts. "
+        "Read tool_data_results before answering: empty means the query succeeded with no matching rows; partial means only the returned payload is usable and the missing source must be disclosed; error means its payload must not be used as evidence. "
         "When mentioning dates, include ISO format YYYY-MM-DD even if also using Chinese date wording. "
         "If the facts do not directly and sufficiently support the question, output exactly "
         "'抱歉，该问题无法回答' and nothing else. Never expose internal tool names, function names, fact keys, "
@@ -2358,6 +2368,7 @@ def _tool_answer_user_prompt(
     tool_plan: dict[str, Any],
     facts: dict[str, Any],
     context: "_SessionContext",
+    tool_results: list[AgentToolTrace],
 ) -> str:
     """Build the final answer prompt from question, plan and tool outputs."""
 
@@ -2367,6 +2378,16 @@ def _tool_answer_user_prompt(
         "session_memory": context.session_memory,
         "intent": tool_plan.get("intent_label"),
         "executed_tool_facts": facts,
+        "tool_data_results": [
+            {
+                "tool": trace.name,
+                "status": trace.result.status,
+                "data_fresh": trace.result.data_fresh,
+                "source_errors": trace.result.source_errors,
+            }
+            for trace in tool_results
+            if trace.result is not None
+        ],
     }
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
@@ -4520,10 +4541,37 @@ def _answer_static_text(
     )
 
 
-def _has_usable_tool_facts(facts: dict[str, Any]) -> bool:
-    """Return whether at least one executed tool produced non-error evidence."""
+def _has_usable_tool_facts(
+    facts: dict[str, Any],
+    tool_results: list[AgentToolTrace] | None = None,
+) -> bool:
+    """Return whether a tool produced usable, explicitly classified evidence."""
 
+    if tool_results:
+        return any(
+            trace.result is not None
+            and trace.result.status in {"ok", "empty", "partial"}
+            for trace in tool_results
+        )
     return any(not key.endswith("_error") for key in facts)
+
+
+def _tool_outcome_warnings(tool_results: list[AgentToolTrace]) -> list[str]:
+    """Render partial/error outcomes without conflating them with empty data."""
+
+    warnings: list[str] = []
+    for trace in tool_results:
+        if trace.result is None or trace.result.status not in {"partial", "error"}:
+            continue
+        label = friendly_tool_label(trace.name)
+        state = "数据仅部分可用" if trace.result.status == "partial" else "查询失败"
+        detail = (
+            trace.result.source_errors[0]
+            if trace.result.source_errors
+            else trace.error
+        )
+        warnings.append(f"{label}{state}" + (f"：{detail}" if detail else "。"))
+    return warnings
 
 
 def _unanswerable_response(
@@ -5321,6 +5369,13 @@ def _answer_missing_trade_date(
     latest_dates = IDEOGRAPHIC_COMMA.join(
         item.isoformat() for item in available_dates[:5]
     )
+    output = {
+        "requested_trade_date": requested_date.isoformat(),
+        "latest_local_trade_date": (
+            available_dates[0].isoformat() if available_dates else None
+        ),
+        "available_trade_dates": [item.isoformat() for item in available_dates[:20]],
+    }
     answer = (
         f"\u6211\u672c\u5730\u6682\u65f6\u6ca1\u6709 {requested_date.isoformat()} \u7684\u6da8\u505c/\u9996\u677f\u6570\u636e\u3002"
         f"\u5f53\u524d\u53ef\u7528\u7684\u6700\u8fd1\u4ea4\u6613\u65e5\u5305\u62ec\uff1a{latest_dates}\u3002"
@@ -5337,6 +5392,7 @@ def _answer_missing_trade_date(
                 "name": "limit_up_event_dates",
                 "input": {"requested_date": requested_date.isoformat()},
                 "summary": f"未找到 {requested_date.isoformat()}，最近可用日期：{latest_dates}。",
+                "output": output,
             }
         ],
         references=[f"requested_date={requested_date.isoformat()}"],

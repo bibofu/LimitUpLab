@@ -70,6 +70,9 @@ class DailyUpdateReport:
     """Summary of one daily data update run."""
 
     trade_date: str
+    akshare_status: str | None = None
+    akshare_data_fresh: bool | None = None
+    akshare_source_errors: list[str] = field(default_factory=list)
     imported_events: int = 0
     closed_limit_events: int = 0
     failed_limit_events: int = 0
@@ -221,7 +224,12 @@ def run_daily_update(
     report = DailyUpdateReport(trade_date=trade_date.isoformat())
 
     if not skip_import:
-        imported_events = collect_limit_up_events(trade_date.strftime("%Y%m%d"))
+        collection = collect_limit_up_events(trade_date.strftime("%Y%m%d"))
+        report.akshare_status = collection.status
+        report.akshare_data_fresh = collection.data_fresh
+        report.akshare_source_errors = list(collection.source_errors)
+        report.warnings.extend(collection.source_errors)
+        imported_events = collection.payload
         try:
             remote_snapshot = (
                 remote_limit_up_collector(trade_date)
@@ -235,7 +243,7 @@ def run_daily_update(
             )
         except Exception as error:  # noqa: BLE001
             report.warnings.append(f"Tonghuashun limit-up verification: {error}")
-        if replace_date:
+        if replace_date and collection.status in {"ok", "empty"}:
             limit_repo.delete_events_for_date(trade_date)
         limit_repo.upsert_events(imported_events)
         report.imported_events = len(imported_events)

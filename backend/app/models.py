@@ -1715,6 +1715,15 @@ class AgentChatResponse(BaseModel):
         return self
 
 
+class AgentToolOutcome(BaseModel):
+    """Uniform data outcome shared by every Agent tool trace."""
+
+    status: Literal["ok", "empty", "partial", "error"]
+    data_fresh: bool | None = None
+    source_errors: list[str] = Field(default_factory=list)
+    payload: dict[str, Any] = Field(default_factory=dict)
+
+
 class AgentToolTrace(BaseModel):
     """Compact trace for one tool execution inside an Agent run."""
 
@@ -1725,6 +1734,111 @@ class AgentToolTrace(BaseModel):
     output: dict[str, Any] = Field(default_factory=dict)
     error: str | None = None
     duration_ms: int | None = None
+    result: AgentToolOutcome | None = None
+
+    @model_validator(mode="after")
+    def normalize_result(self) -> "AgentToolTrace":
+        """Populate the uniform result envelope for new and persisted traces."""
+
+        if self.result is None and self.name in {
+            "agent_plan",
+            "llm_tool_planner",
+            "llm_tool_answer",
+            "template_general_answer",
+        }:
+            return self
+        if self.result is None:
+            self.result = _infer_agent_tool_outcome(
+                execution_status=self.status,
+                output=self.output,
+                error=self.error,
+            )
+        elif self.output != self.result.payload:
+            self.output = self.result.payload
+        return self
+
+
+def _infer_agent_tool_outcome(
+    *,
+    execution_status: str,
+    output: dict[str, Any],
+    error: str | None,
+) -> AgentToolOutcome:
+    """Map legacy trace fields into the canonical data-result semantics."""
+
+    if execution_status in {"error", "skipped"}:
+        source_errors = [error] if error else []
+        return AgentToolOutcome(
+            status="error",
+            data_fresh=None,
+            source_errors=source_errors,
+            payload=output,
+        )
+
+    source_errors = _agent_tool_source_errors(output)
+    data_fresh = output.get("data_fresh")
+    if not isinstance(data_fresh, bool):
+        data_fresh = None
+    empty = _agent_tool_payload_is_empty(output)
+    partial = bool(
+        source_errors
+        or output.get("complete") is False
+        or output.get("data_missing")
+        or output.get("missing_trade_dates")
+    )
+    if source_errors and empty:
+        result_status = "error"
+    elif partial:
+        result_status = "partial"
+    elif empty:
+        result_status = "empty"
+    else:
+        result_status = "ok"
+    return AgentToolOutcome(
+        status=result_status,
+        data_fresh=data_fresh,
+        source_errors=source_errors,
+        payload=output,
+    )
+
+
+def _agent_tool_source_errors(output: dict[str, Any]) -> list[str]:
+    raw_errors = output.get("source_errors") or []
+    if isinstance(raw_errors, str):
+        return [raw_errors]
+    if not isinstance(raw_errors, list):
+        return []
+    return [str(item) for item in raw_errors if str(item).strip()]
+
+
+def _agent_tool_payload_is_empty(output: dict[str, Any]) -> bool:
+    if not output:
+        return True
+    collection_keys = (
+        "items",
+        "events",
+        "candidates",
+        "rows",
+        "bars",
+        "results",
+        "promoted_stocks",
+        "matches",
+    )
+    collections = [output[key] for key in collection_keys if key in output]
+    if not collections:
+        return False
+    positive_counts = [
+        value
+        for key, value in output.items()
+        if key.endswith("_count")
+        and not key.startswith("requested_")
+        and isinstance(value, (int, float))
+        and not isinstance(value, bool)
+        and value > 0
+    ]
+    if positive_counts:
+        return False
+    return all(isinstance(value, list) and not value for value in collections)
 
 
 def extract_agent_stock_mentions(
@@ -1853,20 +1967,42 @@ def build_agent_evidence_cards(
             tool_results=tool_results,
             warnings=warnings,
         )
-        success_count = sum(1 for trace in tool_results if trace.status == "success")
-        error_count = sum(1 for trace in tool_results if trace.status == "error")
+        outcome_statuses = [
+            trace.result.status
+            for trace in tool_results
+            if trace.result is not None
+        ]
+        success_count = sum(status == "ok" for status in outcome_statuses)
+        empty_count = sum(status == "empty" for status in outcome_statuses)
+        partial_count = sum(status == "partial" for status in outcome_statuses)
+        error_count = sum(status == "error" for status in outcome_statuses)
+        control_count = sum(trace.result is None for trace in tool_results)
         skipped_count = sum(1 for trace in tool_results if trace.status == "skipped")
         cards.append(
             AgentEvidenceCard(
                 title="Agent 执行摘要",
                 kind="execution",
-                status="error" if error_count else "success",
-                summary=f"本次回答调用 {len(tool_results)} 个工具，其中 {success_count} 个成功。",
+                status=(
+                    "error"
+                    if error_count
+                    else "skipped"
+                    if partial_count
+                    else "success"
+                ),
+                summary=(
+                    f"本次回答包含 {len(tool_results)} 条执行记录："
+                    f"{success_count} 条有数据、{empty_count} 条无结果、"
+                    f"{partial_count} 条部分可用、{error_count} 条失败、"
+                    f"{control_count} 条控制记录。"
+                ),
                 facts=_compact_texts([trace.summary for trace in tool_results[:4]]),
                 metrics={
                     "tool_count": len(tool_results),
                     "success_count": success_count,
+                    "empty_count": empty_count,
+                    "partial_count": partial_count,
                     "error_count": error_count,
+                    "control_count": control_count,
                     "skipped_count": skipped_count,
                     "repair_count": len(policy.backend_repaired_tools),
                 },
@@ -1924,11 +2060,25 @@ def _evidence_card_from_trace(trace: AgentToolTrace) -> AgentEvidenceCard | None
     if trace.name in {"llm_tool_answer", "template_general_answer"}:
         return None
 
+    result_status = trace.result.status if trace.result is not None else None
+    card_status = trace.status
+    if result_status is not None:
+        card_status = (
+            "success"
+            if result_status == "ok"
+            else "error"
+            if result_status == "error"
+            else "skipped"
+        )
+    status_summary = {
+        "empty": "查询成功，但没有匹配数据。",
+        "partial": "部分数据源不可用，以下结果不完整。",
+    }.get(result_status)
     return AgentEvidenceCard(
         title=title,
         kind=kind,
-        status=trace.status,
-        summary=trace.error or trace.summary,
+        status=card_status,
+        summary=trace.error or status_summary or trace.summary,
         facts=facts,
         metrics=metrics,
         source_tools=[trace.name],

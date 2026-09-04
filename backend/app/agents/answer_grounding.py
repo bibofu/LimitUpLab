@@ -106,15 +106,22 @@ def evaluate_answer_grounding(
         trace for trace in tool_results if trace.name not in _NON_EVIDENCE_TOOLS
     ]
     successes = [
-        trace for trace in traces if trace.status == "success" and trace.output
+        trace
+        for trace in traces
+        if trace.result is not None
+        and trace.result.status in {"ok", "empty", "partial"}
     ]
-    failures = [trace for trace in traces if trace.status == "error"]
+    failures = [
+        trace
+        for trace in traces
+        if trace.result is not None and trace.result.status == "error"
+    ]
     strings: dict[str, set[str]] = {}
     numbers: list[_EvidenceNumber] = []
     pairs: dict[tuple[str, str], set[str]] = {}
     for trace in successes:
         _collect_evidence(
-            trace.output,
+            trace.result.payload if trace.result is not None else trace.output,
             path=trace.name,
             strings=strings,
             numbers=numbers,

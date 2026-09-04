@@ -286,6 +286,16 @@ conversion. Failure artifacts list every claim with its supporting evidence path
 `backend/data/agent_eval_failures.json` even in offline mode; internal eval details
 are not rendered in the chat UI.
 
+Every data-tool trace also carries a normalized `result` envelope with
+`status=ok|empty|partial|error`, `data_fresh`, `source_errors`, and `payload`.
+The legacy execution `status` and `output` fields remain available for stored-run
+and frontend compatibility. `empty` means the query completed with no matching
+rows; it is never used for an upstream exception. Partial results remain usable
+but are disclosed in answer warnings, while error-only executions produce the
+fixed unanswerable response. The AKShare limit-up importer uses the same four-state
+contract, so a failed open-board source can no longer masquerade as an empty pool
+or erase previously persisted rows during a replace operation.
+
 To sample the configured live LLM planner and capture cases where the model
 chooses weak tools or needs backend repair:
 

@@ -5,14 +5,25 @@ shape. Closed limit-up events are imported first; failed/open-board events are
 then added only when they are not already present for the same date and symbol.
 """
 
+from dataclasses import dataclass
 from datetime import date, time
 from math import isnan
-from typing import Any
+from typing import Any, Literal
 
 import akshare as ak
 
 from app.models import LimitUpEvent
 from app.collectors.network import without_proxy
+
+
+@dataclass(frozen=True)
+class LimitUpCollectionResult:
+    """Explicit result for the two-source AKShare limit-up collection."""
+
+    status: Literal["ok", "empty", "partial", "error"]
+    data_fresh: bool | None
+    source_errors: tuple[str, ...]
+    payload: list[LimitUpEvent]
 
 
 def parse_akshare_trade_date(value: str) -> date:
@@ -23,25 +34,34 @@ def parse_akshare_trade_date(value: str) -> date:
     return date(int(value[:4]), int(value[4:6]), int(value[6:8]))
 
 
-def collect_limit_up_events(trade_date: str) -> list[LimitUpEvent]:
-    """Collect closed and failed limit-up events for one trading date."""
+def collect_limit_up_events(trade_date: str) -> LimitUpCollectionResult:
+    """Collect both pools without conflating an empty pool with source failure."""
 
     parsed_date = parse_akshare_trade_date(trade_date)
     events_by_key: dict[tuple[date, str], LimitUpEvent] = {}
 
+    source_errors: list[str] = []
+    successful_sources = 0
     with without_proxy():
-        for event in _collect_closed_limit_up_events(parsed_date, trade_date):
-            events_by_key[(event.trade_date, event.symbol)] = event
-
+        try:
+            closed_events = _collect_closed_limit_up_events(parsed_date, trade_date)
+            successful_sources += 1
+        except Exception as error:  # noqa: BLE001 - preserve cross-source partial data
+            closed_events = []
+            source_errors.append(f"akshare.closed_limit_pool: {error}")
         try:
             failed_events = _collect_failed_limit_up_events(parsed_date, trade_date)
-        except Exception:
+            successful_sources += 1
+        except Exception as error:  # noqa: BLE001 - preserve cross-source partial data
             failed_events = []
+            source_errors.append(f"akshare.failed_limit_pool: {error}")
 
+    for event in closed_events:
+        events_by_key[(event.trade_date, event.symbol)] = event
     for event in failed_events:
         events_by_key.setdefault((event.trade_date, event.symbol), event)
 
-    return sorted(
+    events = sorted(
         events_by_key.values(),
         key=lambda event: (
             event.trade_date,
@@ -50,6 +70,20 @@ def collect_limit_up_events(trade_date: str) -> list[LimitUpEvent]:
             event.first_limit_time,
         ),
         reverse=True,
+    )
+    if successful_sources == 0:
+        status = "error"
+    elif source_errors:
+        status = "partial"
+    elif not events:
+        status = "empty"
+    else:
+        status = "ok"
+    return LimitUpCollectionResult(
+        status=status,
+        data_fresh=successful_sources > 0,
+        source_errors=tuple(source_errors),
+        payload=events,
     )
 
 

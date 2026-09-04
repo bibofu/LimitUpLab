@@ -996,6 +996,14 @@ export interface AgentToolTrace {
   output: Record<string, unknown>;
   error: string | null;
   duration_ms: number | null;
+  result: AgentToolOutcome | null;
+}
+
+export interface AgentToolOutcome {
+  status: "ok" | "empty" | "partial" | "error";
+  data_fresh: boolean | null;
+  source_errors: string[];
+  payload: Record<string, unknown>;
 }
 
 export interface AgentToolPolicyAudit {

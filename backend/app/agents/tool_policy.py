@@ -2025,6 +2025,8 @@ def _mark_latest_trace_as_repair(
             "reason": rule.reason,
         },
     }
+    if trace.result is not None:
+        trace.result.payload = trace.output
 
 
 def _extract_symbol_hint(message: str) -> str | None:

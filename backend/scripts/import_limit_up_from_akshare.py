@@ -26,20 +26,25 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    events = collect_limit_up_events(args.date)
+    collection = collect_limit_up_events(args.date)
+    events = collection.payload
     repository = SQLiteLimitUpRepository()
 
-    if args.replace_date:
+    if collection.status == "error":
+        raise SystemExit("Collection failed: " + "; ".join(collection.source_errors))
+    if args.replace_date and collection.status in {"ok", "empty"}:
         repository.delete_events_for_date(parse_akshare_trade_date(args.date))
 
     repository.upsert_events(events)
     closed_count = sum(1 for event in events if event.closed_limit)
     failed_count = sum(1 for event in events if not event.closed_limit)
     print(
-        f"Imported {len(events)} events "
+        f"Imported {len(events)} events with status={collection.status} "
         f"({closed_count} closed, {failed_count} failed) "
         f"for {args.date} into {get_database_path()}"
     )
+    for source_error in collection.source_errors:
+        print(f"Warning: {source_error}")
 
 
 if __name__ == "__main__":

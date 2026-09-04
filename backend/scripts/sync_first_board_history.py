@@ -157,19 +157,30 @@ def _fetch_recent_limit_up_events(
 
         trade_date_text = current_date.strftime("%Y%m%d")
         try:
-            events = collect_limit_up_events(trade_date_text)
+            collection = collect_limit_up_events(trade_date_text)
         except Exception as error:  # AKShare raises provider-specific exceptions.
             print(f"Skipped {trade_date_text}: {error}")
             continue
 
+        if collection.status == "error":
+            details = "; ".join(collection.source_errors)
+            print(f"Skipped {trade_date_text}: {details}")
+            continue
+        events = collection.payload
         if not events:
             print(f"Skipped {trade_date_text}: no events")
             continue
 
-        repository.delete_events_for_date(current_date)
+        if collection.status != "partial":
+            repository.delete_events_for_date(current_date)
         repository.upsert_events(events)
         imported_dates.append(current_date)
-        print(f"Imported {len(events)} events for {trade_date_text}")
+        suffix = (
+            f" (partial: {'; '.join(collection.source_errors)})"
+            if collection.status == "partial"
+            else ""
+        )
+        print(f"Imported {len(events)} events for {trade_date_text}{suffix}")
 
         if len(set(imported_dates)) >= days:
             break

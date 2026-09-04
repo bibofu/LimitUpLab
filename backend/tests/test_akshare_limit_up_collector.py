@@ -49,6 +49,7 @@ class AKShareLimitUpCollectorTest(unittest.TestCase):
 
         self.assertEqual(events[0].board_height, 1)
         self.assertFalse(events[0].closed_limit)
+
     def test_collect_limit_up_events_keeps_closed_pool_when_failed_pool_errors(self) -> None:
         closed_event = LimitUpEvent(
             symbol="002001",
@@ -79,9 +80,43 @@ class AKShareLimitUpCollectorTest(unittest.TestCase):
             "app.collectors.akshare_limit_up_collector._collect_failed_limit_up_events",
             side_effect=RuntimeError("failed pool unavailable"),
         ):
-            events = collect_limit_up_events("20260807")
+            result = collect_limit_up_events("20260807")
 
-        self.assertEqual(events, [closed_event])
+        self.assertEqual(result.status, "partial")
+        self.assertTrue(result.data_fresh)
+        self.assertEqual(result.payload, [closed_event])
+        self.assertEqual(len(result.source_errors), 1)
+        self.assertIn("akshare.failed_limit_pool", result.source_errors[0])
+
+    def test_collect_limit_up_events_distinguishes_empty_from_source_error(self) -> None:
+        with patch(
+            "app.collectors.akshare_limit_up_collector._collect_closed_limit_up_events",
+            return_value=[],
+        ), patch(
+            "app.collectors.akshare_limit_up_collector._collect_failed_limit_up_events",
+            return_value=[],
+        ):
+            empty = collect_limit_up_events("20260807")
+
+        with patch(
+            "app.collectors.akshare_limit_up_collector._collect_closed_limit_up_events",
+            side_effect=RuntimeError("closed pool unavailable"),
+        ), patch(
+            "app.collectors.akshare_limit_up_collector._collect_failed_limit_up_events",
+            side_effect=RuntimeError("failed pool unavailable"),
+        ):
+            failed = collect_limit_up_events("20260807")
+
+        self.assertEqual(empty.status, "empty")
+        self.assertTrue(empty.data_fresh)
+        self.assertEqual(empty.payload, [])
+        self.assertEqual(empty.source_errors, ())
+        self.assertEqual(failed.status, "error")
+        self.assertFalse(failed.data_fresh)
+        self.assertEqual(failed.payload, [])
+        self.assertEqual(len(failed.source_errors), 2)
+
+
 if __name__ == "__main__":
     unittest.main()
 

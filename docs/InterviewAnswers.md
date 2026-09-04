@@ -376,7 +376,7 @@ Policy 捕获异常后把 `<tool>_error` 写入 facts，并生成 error trace；
 
 ### N79. 空数据与工具失败能区分吗？
 
-部分能，尚未完全统一。抛异常的外部工具会产生 `<tool>_error` 和 error trace；成功但确实无结果通常返回结构化空 items、source、data_as_of 和 status。问题是 AKShare 炸板等底层 collector 有把异常吞成空列表的历史路径，此时上层无法区分“真空”与“源失败”。工具契约应统一为 `status=ok|empty|partial|error`、`data_fresh`、`source_errors` 和 payload，禁止用裸空 list 表示两种语义。
+现在可以明确区分。每个数据工具 trace 都带统一结果信封：`status=ok|empty|partial|error`、`data_fresh`、`source_errors` 和 `payload`；旧的执行 `status/output` 只为历史记录与前端兼容保留。`empty` 只表示查询成功但没有匹配行，`partial` 表示返回数据仍可使用但必须披露缺失来源，`error` 的 payload 不得作为事实。Agent 的可回答判断、最终回答提示和证据卡都消费这套状态。AKShare 涨停采集也不再吞掉炸板池异常：两个来源分别记录，单源失败返回 partial，双源失败返回 error；partial/error 时替换式导入不会删除已有日期数据。
 
 ### N80. 为什么没用 MCP，能迁移吗？
 

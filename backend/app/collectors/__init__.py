@@ -1,4 +1,5 @@
 ﻿from app.collectors.akshare_limit_up_collector import (
+    LimitUpCollectionResult,
     collect_limit_up_events,
     parse_akshare_trade_date,
 )
@@ -47,6 +48,7 @@ from app.collectors.stock_kline_collector import (
 from app.collectors.trading_calendar_collector import collect_a_share_trade_dates
 
 __all__ = [
+    "LimitUpCollectionResult",
     "collect_limit_up_events",
     "collect_limit_down_pool",
     "collect_dragon_tiger_facts",

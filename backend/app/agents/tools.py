@@ -5,7 +5,7 @@ import os
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any
+from typing import Any, Literal
 
 from app.agents.first_board import build_first_board_ratings
 from app.agents.query_contract import (
@@ -25,6 +25,7 @@ from app.collectors import (
 )
 from app.models import (
     AgentEvaluationResponse,
+    AgentToolOutcome,
     AgentToolTrace,
     DailyBoardPromotionStat,
     FinanceNewsFacts,
@@ -120,10 +121,21 @@ class ToolResult:
     status: str = "success"
     trace_output: dict[str, Any] = field(default_factory=dict)
     error: str | None = None
+    result_status: Literal["ok", "empty", "partial", "error"] | None = None
+    data_fresh: bool | None = None
+    source_errors: tuple[str, ...] = ()
 
     def trace(self) -> AgentToolTrace:
         """Return the compact trace sent to frontend and saved in runs."""
 
+        result = None
+        if self.result_status is not None:
+            result = AgentToolOutcome(
+                status=self.result_status,
+                data_fresh=self.data_fresh,
+                source_errors=list(self.source_errors),
+                payload=self.trace_output,
+            )
         return AgentToolTrace(
             name=self.name,
             input=self.input,
@@ -131,6 +143,7 @@ class ToolResult:
             status=self.status,  # type: ignore[arg-type]
             output=self.trace_output,
             error=self.error,
+            result=result,
         )
 
 

@@ -5,7 +5,11 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
-from app.collectors import HithinkLimitUpFact, HithinkLimitUpPoolSnapshot
+from app.collectors import (
+    HithinkLimitUpFact,
+    HithinkLimitUpPoolSnapshot,
+    LimitUpCollectionResult,
+)
 from app.models import LimitUpEvent, StockDailyBar, StockKLineBar
 from app.repositories import SQLiteFirstBoardRepository, SQLiteLimitUpRepository
 from scripts.update_daily_data import (
@@ -232,9 +236,12 @@ class DailyUpdatePipelineTest(unittest.TestCase):
     ) -> None:
         database_path = self._database_path()
         trade_date = date(2026, 8, 21)
-        collect_events.return_value = [
-            self._make_event("002491", "通鼎互联", trade_date),
-        ]
+        collect_events.return_value = LimitUpCollectionResult(
+            status="ok",
+            data_fresh=True,
+            source_errors=(),
+            payload=[self._make_event("002491", "通鼎互联", trade_date)],
+        )
         try:
             report = run_daily_update(
                 trade_date=trade_date,
@@ -278,6 +285,56 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             self.assertEqual(stored[0].concept, "通信设备+算力")
             self.assertTrue(
                 any("source count mismatch" in item for item in report.warnings)
+            )
+        finally:
+            self._cleanup_database(database_path)
+
+    @patch("scripts.update_daily_data.collect_limit_up_events")
+    def test_partial_import_does_not_delete_existing_date_rows(
+        self,
+        collect_events,
+    ) -> None:
+        database_path = self._database_path()
+        trade_date = date(2026, 8, 21)
+        limit_repo = SQLiteLimitUpRepository(database_path=database_path)
+        first_board_repo = SQLiteFirstBoardRepository(database_path=database_path)
+        existing = self._make_event(
+            "002050",
+            "三花智控",
+            trade_date,
+            closed_limit=False,
+        )
+        partial_event = self._make_event("002491", "通鼎互联", trade_date)
+        limit_repo.upsert_events([existing])
+        collect_events.return_value = LimitUpCollectionResult(
+            status="partial",
+            data_fresh=True,
+            source_errors=("akshare.failed_limit_pool: provider timeout",),
+            payload=[partial_event],
+        )
+
+        def unavailable_remote(_trade_date):
+            raise RuntimeError("remote verification unavailable")
+
+        try:
+            report = run_daily_update(
+                trade_date=trade_date,
+                replace_date=True,
+                top_targets=0,
+                max_tracked_kline_fetches=0,
+                refresh_enrichment=False,
+                limit_up_repository=limit_repo,
+                first_board_repository=first_board_repo,
+                post_bar_collector=lambda _symbol, _base_date, _as_of_date: [],
+                remote_limit_up_collector=unavailable_remote,
+            )
+
+            symbols = {item.symbol for item in limit_repo.list_events()}
+            self.assertEqual(symbols, {"002050", "002491"})
+            self.assertEqual(report.akshare_status, "partial")
+            self.assertIn(
+                "akshare.failed_limit_pool: provider timeout",
+                report.akshare_source_errors,
             )
         finally:
             self._cleanup_database(database_path)
