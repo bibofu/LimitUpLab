@@ -1524,6 +1524,8 @@ class AgentToolRegistry:
                     "name": item.facts.name,
                     "rating": item.rating,
                     "score": item.score,
+                    "confidence": item.confidence,
+                    "break_count": item.facts.break_count,
                     "industry": item.facts.industry,
                     "latest_intelligence": intelligence.get(item.facts.symbol),
                 }

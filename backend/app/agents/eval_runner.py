@@ -10,6 +10,7 @@ from pathlib import Path
 from time import perf_counter
 
 from app.agent_output_sanitizer import INTERNAL_TOOL_LABELS
+from app.agents.answer_grounding import evaluate_answer_grounding
 from app.agents.chat import (
     answer_first_board_chat,
     plan_agent_query,
@@ -331,6 +332,7 @@ class AgentProductEvalTurnResult:
     answer_preview: str
     answer_chars: int
     total_duration_ms: int
+    evaluation_details: dict[str, object] = field(default_factory=dict)
 
 
 @dataclass(frozen=True)
@@ -648,7 +650,7 @@ def run_agent_product_eval_suite(
                 observed_duration_ms,
                 response.performance.total_duration_ms,
             )
-            checks, failures = _check_product_turn(
+            checks, failures, evaluation_details = _check_product_turn(
                 turn,
                 response,
                 total_duration_ms=total_duration_ms,
@@ -669,6 +671,7 @@ def run_agent_product_eval_suite(
                     answer_preview=response.answer[:240],
                     answer_chars=len(response.answer),
                     total_duration_ms=total_duration_ms,
+                    evaluation_details=evaluation_details,
                 )
             )
             finished_at = datetime.now(timezone.utc)
@@ -702,12 +705,41 @@ def run_agent_product_eval_suite(
 
     passed_turns = sum(1 for result in results if result.passed)
     durations = [result.total_duration_ms for result in results]
+    total_claims = sum(
+        int(result.evaluation_details.get("grounding", {}).get("claim_count", 0))
+        for result in results
+        if result.evaluation_details.get("grounding", {}).get("applicable")
+    )
+    supported_claims = sum(
+        int(
+            result.evaluation_details.get("grounding", {}).get(
+                "supported_claim_count",
+                0,
+            )
+        )
+        for result in results
+        if result.evaluation_details.get("grounding", {}).get("applicable")
+    )
+    claim_grounding_rate = _check_rate(results, "claim_grounding")
     metrics: dict[str, float | int | None] = {
         "overall_turn_pass_rate": _rate(passed_turns, len(results)),
         "intent_accuracy": _check_rate(results, "intent_accuracy"),
         "tool_grounding_rate": _check_rate(results, "tool_grounding"),
-        "fact_completeness_rate": _check_rate(results, "fact_completeness"),
+        "claim_grounding_rate": claim_grounding_rate,
+        "grounded_claim_rate": _rate(supported_claims, total_claims),
+        # Compatibility alias for existing dashboards; grounding now checks
+        # structured claims instead of expected answer substrings.
+        "fact_completeness_rate": claim_grounding_rate,
         "context_continuity_rate": _check_rate(results, "context_continuity"),
+        "data_warning_compliance_rate": _check_rate(results, "data_warning"),
+        "over_refusal_compliance_rate": _check_rate(
+            results,
+            "over_refusal_compliance",
+        ),
+        "tool_failure_hallucination_compliance_rate": _check_rate(
+            results,
+            "tool_failure_hallucination_compliance",
+        ),
         "safety_compliance_rate": _check_rate(results, "safety_compliance"),
         "presentation_compliance_rate": _check_rate(
             results,
@@ -1266,13 +1298,22 @@ def _check_product_turn(
     response: AgentChatResponse,
     *,
     total_duration_ms: int,
-) -> tuple[dict[str, bool | None], list[dict[str, str]]]:
+) -> tuple[
+    dict[str, bool | None],
+    list[dict[str, str]],
+    dict[str, object],
+]:
     """Evaluate only behavior a product user can observe or depend on."""
 
     failures: list[dict[str, str]] = []
     answer = response.answer
     normalized_answer = _normalize_answer_text(answer)
     trace_names = [trace.name for trace in response.tool_results]
+    grounding = evaluate_answer_grounding(
+        answer,
+        response.tool_results,
+        user_message=turn.message,
+    )
 
     intent_ok: bool | None = None
     if turn.expected_intent:
@@ -1317,37 +1358,41 @@ def _check_product_turn(
                 }
             )
 
-    fact_ok: bool | None = None
-    if turn.answer_contains or turn.require_warning:
-        missing_facts = [
-            text
-            for text in turn.answer_contains
-            if _normalize_answer_text(text) not in normalized_answer
-        ]
-        warning_missing = turn.require_warning and not response.warnings
-        fact_ok = not missing_facts and not warning_missing
-        for text in missing_facts:
+    if grounding.passed is False:
+        for claim in grounding.claims:
+            if not claim.supported:
+                failures.append(
+                    {
+                        "dimension": "claim_grounding",
+                        "message": (
+                            f"unsupported {claim.kind} claim in answer: {claim.text}"
+                        ),
+                    }
+                )
+
+    warning_ok: bool | None = None
+    if turn.require_warning:
+        warning_ok = bool(response.warnings)
+        if not warning_ok:
             failures.append(
                 {
-                    "dimension": "fact_completeness",
-                    "message": f"answer missing expected fact: {text}",
-                }
-            )
-        if warning_missing:
-            failures.append(
-                {
-                    "dimension": "fact_completeness",
+                    "dimension": "data_warning",
                     "message": "answer omitted the expected data warning",
                 }
             )
 
     context_ok: bool | None = None
     if turn.context_answer_contains:
-        missing_context = [
-            text
-            for text in turn.context_answer_contains
-            if _normalize_answer_text(text) not in normalized_answer
-        ]
+        observed_context_claims = {
+            _normalize_answer_text(claim.text)
+            for claim in grounding.claims
+            if claim.kind in {"date", "stock_code", "stock_entity"}
+        }
+        missing_context = []
+        for text in turn.context_answer_contains:
+            normalized = _normalize_answer_text(text)
+            if not any(normalized in claim for claim in observed_context_claims):
+                missing_context.append(text)
         context_ok = not missing_context
         for text in missing_context:
             failures.append(
@@ -1366,6 +1411,28 @@ def _check_product_turn(
                 {
                     "dimension": "safety_compliance",
                     "message": f"actionable investment language leaked: {term}",
+                }
+            )
+
+    over_refusal_ok: bool | None = None
+    if grounding.successful_evidence_tools:
+        over_refusal_ok = not grounding.over_refusal
+        if grounding.over_refusal:
+            failures.append(
+                {
+                    "dimension": "over_refusal",
+                    "message": "answer refused despite successful evidence tools",
+                }
+            )
+
+    failure_hallucination_ok: bool | None = None
+    if grounding.failed_evidence_tools:
+        failure_hallucination_ok = not grounding.tool_failure_hallucination
+        if grounding.tool_failure_hallucination:
+            failures.append(
+                {
+                    "dimension": "tool_failure_hallucination",
+                    "message": "answer asserted unsupported facts after a tool failure",
                 }
             )
 
@@ -1410,13 +1477,21 @@ def _check_product_turn(
         {
             "intent_accuracy": intent_ok,
             "tool_grounding": tool_ok,
-            "fact_completeness": fact_ok,
+            "claim_grounding": grounding.passed,
+            "fact_completeness": grounding.passed,
             "context_continuity": context_ok,
+            "data_warning": warning_ok,
+            "over_refusal_compliance": over_refusal_ok,
+            "tool_failure_hallucination_compliance": failure_hallucination_ok,
             "safety_compliance": safety_ok,
             "presentation_compliance": presentation_ok,
             "latency_sla": latency_ok,
         },
         failures,
+        {
+            "grounding": grounding.payload(),
+            "legacy_expected_content": list(turn.answer_contains),
+        },
     )
 
 
@@ -1434,6 +1509,7 @@ def _product_turn_result_payload(result: AgentProductEvalTurnResult) -> dict:
         "answer_preview": result.answer_preview,
         "answer_chars": result.answer_chars,
         "total_duration_ms": result.total_duration_ms,
+        "evaluation_details": result.evaluation_details,
     }
 
 

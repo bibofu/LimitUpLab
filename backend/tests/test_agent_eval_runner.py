@@ -15,6 +15,7 @@ from app.agents.eval_runner import (
     run_agent_eval_suite,
     run_agent_product_eval_suite,
 )
+from app.models import AgentChatRequest, AgentToolTrace
 from app.routers.agents import get_agent_eval_report
 from app.services.llm_provider import LLMProvider, LLMResult
 from app.services.sample_data import SAMPLE_EVENTS
@@ -138,37 +139,65 @@ class AgentEvalRunnerTest(unittest.TestCase):
         self.assertTrue(suite.ok, failures)
         self.assertEqual(suite.total_scenarios, 10)
         self.assertEqual(suite.total_turns, 30)
+        self.assertEqual(suite.metrics["claim_grounding_rate"], 1.0)
+        self.assertEqual(suite.metrics["grounded_claim_rate"], 1.0)
         self.assertEqual(suite.metrics["context_continuity_rate"], 1.0)
         self.assertEqual(suite.metrics["presentation_compliance_rate"], 1.0)
 
     def test_product_failure_report_groups_actionable_dimensions(self) -> None:
-        suite = run_agent_product_eval_suite(
-            scenarios=[
-                AgentProductEvalScenario(
-                    scenario_id="broken_product_answer",
-                    turns=[
-                        AgentProductEvalTurn(
-                            turn_id="broken_turn",
-                            message="你好",
-                            expected_intent="greeting",
-                            answer_contains=["不存在的事实"],
-                            max_answer_chars=2,
-                            max_total_duration_ms=-1,
-                        )
-                    ],
-                )
-            ],
+        response = answer_first_board_chat(
+            request=AgentChatRequest(session_id="broken", message="你好"),
             events=SAMPLE_EVENTS,
+        ).model_copy(
+            update={
+                "answer": "幻觉股份(600000)上涨 99%。",
+                "tool_results": [
+                    AgentToolTrace(
+                        name="stock_facts",
+                        input={},
+                        summary="grounding fixture",
+                        output={
+                            "symbol": "002050",
+                            "name": "三花智控",
+                            "change_pct": 9.98,
+                        },
+                    )
+                ],
+            }
         )
+        with patch(
+            "app.agents.eval_runner.answer_first_board_chat",
+            return_value=response,
+        ):
+            suite = run_agent_product_eval_suite(
+                scenarios=[
+                    AgentProductEvalScenario(
+                        scenario_id="broken_product_answer",
+                        turns=[
+                            AgentProductEvalTurn(
+                                turn_id="broken_turn",
+                                message="你好",
+                                expected_intent="greeting",
+                                max_answer_chars=2,
+                                max_total_duration_ms=-1,
+                            )
+                        ],
+                    )
+                ],
+                events=SAMPLE_EVENTS,
+            )
 
         report = product_eval_failure_report(suite)
 
         self.assertFalse(suite.ok)
         self.assertEqual(report["failed_turns"], 1)
         self.assertEqual(len(report["results"]), 1)
-        self.assertEqual(report["failure_categories"]["fact_completeness"], 1)
+        self.assertNotIn("fact_completeness", report["failure_categories"])
+        self.assertEqual(report["failure_categories"]["claim_grounding"], 2)
         self.assertEqual(report["failure_categories"]["latency_sla"], 1)
         self.assertEqual(report["failure_categories"]["presentation_compliance"], 1)
+        grounding = report["results"][0]["evaluation_details"]["grounding"]
+        self.assertEqual(grounding["unsupported_claim_count"], 2)
 
     def test_eval_report_route_returns_quality_summary(self) -> None:
         report = get_agent_eval_report(_admin=None)

@@ -275,10 +275,16 @@ cd backend
 .\.venv\Scripts\python.exe scripts\run_agent_eval.py --suite product --mode offline --summary-only
 ```
 
-The product suite measures intent accuracy, tool grounding, fact completeness,
-context continuity, safety, presentation, and response latency. It writes a
-dimension-grouped local failure report to `backend/data/agent_eval_failures.json`
-even in offline mode; internal eval details are not rendered in the chat UI.
+The product suite measures intent accuracy, tool use, deterministic claim
+grounding, context continuity, data-warning compliance, over-refusal, hallucination
+after tool failures, safety, presentation, and response latency. Numeric, date,
+time, stock-code, and `name(symbol)` claims are checked against structured
+`tool_results.output` evidence, including percentage rounding and 万/亿 unit
+conversion. Failure artifacts list every claim with its supporting evidence path;
+`fact_completeness_rate` remains as a compatibility alias for
+`claim_grounding_rate`. The suite writes its dimension-grouped local report to
+`backend/data/agent_eval_failures.json` even in offline mode; internal eval details
+are not rendered in the chat UI.
 
 To sample the configured live LLM planner and capture cases where the model
 chooses weak tools or needs backend repair:
