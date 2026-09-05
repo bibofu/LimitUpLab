@@ -2,10 +2,9 @@ export function formatPercent(value: number) {
   return `${Math.round(value * 100)}%`;
 }
 
-export function stockDetailPath(symbol: string, tradeDate?: string, name?: string) {
+export function stockDetailPath(symbol: string, name?: string) {
   const path = `/stocks/${encodeURIComponent(symbol)}`;
   const params = new URLSearchParams();
-  if (tradeDate) params.set("trade_date", tradeDate);
   if (name) params.set("name", name);
   const query = params.toString();
   return query ? `${path}?${query}` : path;

@@ -177,7 +177,7 @@ function DragonTigerReviewPanel({ tradeDate }: { tradeDate: string }) {
                           <tr key={item.symbol}>
                             <td className="dragon-tiger-stock">
                               {item.detail_trade_date ? (
-                                <Link to={stockDetailPath(item.symbol, item.detail_trade_date)}>
+                                <Link to={stockDetailPath(item.symbol)}>
                                   {stockIdentity}
                                   <ChevronRight size={15} aria-hidden="true" />
                                 </Link>
@@ -326,7 +326,7 @@ function DailyBoardPromotionPanel({ stats }: { stats: DailyBoardPromotionStat[] 
                 {selected.promoted_stocks.map((stock) => (
                   <Link
                     className="promotion-stock-row"
-                    to={stockDetailPath(stock.symbol, selected.trade_date)}
+                    to={stockDetailPath(stock.symbol)}
                     key={stock.symbol}
                   >
                     <div>
@@ -792,7 +792,7 @@ function ReviewPickTable({
         <Link
           className={`review-pick-row pick-${pick.evaluation_label}`}
           key={`${pick.trade_date}-${pick.symbol}`}
-          to={stockDetailPath(pick.symbol, pick.trade_date)}
+          to={stockDetailPath(pick.symbol)}
         >
           <strong>
             {pick.name}

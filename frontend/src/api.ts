@@ -127,9 +127,8 @@ export function fetchPostPerformanceStats() {
   return request<PostPerformanceStat[]>("/api/analysis/post-performance");
 }
 
-export function fetchStockEvent(symbol: string, tradeDate?: string) {
-  const query = tradeDate ? `?trade_date=${encodeURIComponent(tradeDate)}` : "";
-  return request<LimitUpEvent>(`/api/stocks/${symbol}/event${query}`);
+export function fetchStockEvent(symbol: string) {
+  return request<LimitUpEvent>(`/api/stocks/${symbol}/event`);
 }
 
 export function fetchStockKLine(symbol: string, days = 60) {

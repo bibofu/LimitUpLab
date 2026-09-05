@@ -642,7 +642,7 @@ function RecommendationDraftPanel({
             <Link
               className="rating-top-card"
               key={`${candidate.strategy}-${candidate.base_trade_date}-${candidate.symbol}`}
-              to={stockDetailPath(candidate.symbol, candidate.base_trade_date, candidate.name)}
+              to={stockDetailPath(candidate.symbol, candidate.name)}
             >
               <header>
                 <div>
@@ -1171,8 +1171,8 @@ function StockTable({
     ? sortFirstBoardByRelayRanking(events, relayRanking, ratingScores)
     : events;
 
-  function openStock(symbol: string, tradeDate: string) {
-    navigate(stockDetailPath(symbol, tradeDate));
+  function openStock(symbol: string) {
+    navigate(stockDetailPath(symbol));
   }
 
   return (
@@ -1202,11 +1202,11 @@ function StockTable({
             <tr
               className="stock-row"
               key={`${event.trade_date}-${event.symbol}`}
-              onClick={() => openStock(event.symbol, event.trade_date)}
+              onClick={() => openStock(event.symbol)}
               onKeyDown={(keyboardEvent) => {
                 if (keyboardEvent.key === "Enter" || keyboardEvent.key === " ") {
                   keyboardEvent.preventDefault();
-                  openStock(event.symbol, event.trade_date);
+                  openStock(event.symbol);
                 }
               }}
               tabIndex={0}
@@ -1260,7 +1260,6 @@ function StockDetail({ data }: { data: DashboardData }) {
   const { symbol = "" } = useParams();
   const [searchParams] = useSearchParams();
   const { intelligence } = useRecommendationIntelligence();
-  const requestedTradeDate = searchParams.get("trade_date") ?? undefined;
   const linkedStockName = searchParams.get("name")?.trim() ?? "";
   const [stockEvent, setStockEvent] = useState<LimitUpEvent | null>(null);
   const [stockEventLoading, setStockEventLoading] = useState(true);
@@ -1289,7 +1288,6 @@ function StockDetail({ data }: { data: DashboardData }) {
   const tradingDayCacheKeyRef = useRef("");
   const fiveDayCacheKeyRef = useRef("");
   const resolvedTradeDate = stockEvent?.trade_date
-    ?? requestedTradeDate
     ?? data.summary.trade_date;
   const currentIntelligence = recommendationIntelligenceFor(
     intelligence,
@@ -1302,7 +1300,7 @@ function StockDetail({ data }: { data: DashboardData }) {
     setStockEvent(null);
     setStockEventLoading(true);
     setStockEventError(null);
-    fetchStockEvent(symbol, requestedTradeDate)
+    fetchStockEvent(symbol)
       .then((event) => {
         if (active) {
           setStockEvent(event);
@@ -1321,7 +1319,7 @@ function StockDetail({ data }: { data: DashboardData }) {
     return () => {
       active = false;
     };
-  }, [requestedTradeDate, symbol]);
+  }, [symbol]);
 
   useEffect(() => {
     if (stockEventLoading) {
