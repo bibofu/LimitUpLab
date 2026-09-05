@@ -1289,6 +1289,7 @@ function StockDetail({ data }: { data: DashboardData }) {
   const fiveDayCacheKeyRef = useRef("");
   const resolvedTradeDate = stockEvent?.trade_date
     ?? data.summary.trade_date;
+  const marketTradeDate = data.summary.trade_date;
   const currentIntelligence = recommendationIntelligenceFor(
     intelligence,
     "relay",
@@ -1393,7 +1394,7 @@ function StockDetail({ data }: { data: DashboardData }) {
     return () => {
       active = false;
     };
-  }, [resolvedTradeDate, stockEvent?.trade_date, stockEventLoading, symbol]);
+  }, [marketTradeDate, stockEvent?.trade_date, stockEventLoading, symbol]);
 
   useEffect(() => {
     setTradingDayKline([]);
@@ -1404,13 +1405,13 @@ function StockDetail({ data }: { data: DashboardData }) {
     setFiveDayError(null);
     setFiveDayLoading(false);
     fiveDayCacheKeyRef.current = "";
-  }, [resolvedTradeDate, symbol]);
+  }, [marketTradeDate, symbol]);
 
   useEffect(() => {
     if (chartMode !== "intraday" || stockEventLoading) {
       return;
     }
-    const tradeDate = resolvedTradeDate;
+    const tradeDate = marketTradeDate;
     const cacheKey = `${symbol}:${tradeDate}:1`;
     if (tradingDayCacheKeyRef.current === cacheKey) {
       return;
@@ -1438,20 +1439,20 @@ function StockDetail({ data }: { data: DashboardData }) {
     return () => {
       active = false;
     };
-  }, [chartMode, resolvedTradeDate, stockEventLoading, symbol]);
+  }, [chartMode, marketTradeDate, stockEventLoading, symbol]);
 
   useEffect(() => {
     if (chartMode !== "intraday5d" || stockEventLoading) {
       return;
     }
-    const cacheKey = `${symbol}:${resolvedTradeDate}:5:1`;
+    const cacheKey = `${symbol}:${marketTradeDate}:5:1`;
     if (fiveDayCacheKeyRef.current === cacheKey) {
       return;
     }
     let active = true;
     setFiveDayLoading(true);
     setFiveDayError(null);
-    fetchStockIntradayHistory(symbol, 5, 1, resolvedTradeDate)
+    fetchStockIntradayHistory(symbol, 5, 1, marketTradeDate)
       .then((history) => {
         if (active) {
           setFiveDayKline(history);
@@ -1471,7 +1472,7 @@ function StockDetail({ data }: { data: DashboardData }) {
     return () => {
       active = false;
     };
-  }, [chartMode, resolvedTradeDate, stockEventLoading, symbol]);
+  }, [chartMode, marketTradeDate, stockEventLoading, symbol]);
 
   useEffect(() => {
     if (stockEventLoading) {
@@ -1530,10 +1531,10 @@ function StockDetail({ data }: { data: DashboardData }) {
 
   const intradayReferencePrice = useMemo(() => {
     const eventIndex = kline.findIndex(
-      (bar) => bar.trade_date === resolvedTradeDate,
+      (bar) => bar.trade_date === marketTradeDate,
     );
     return eventIndex > 0 ? kline[eventIndex - 1].close : null;
-  }, [kline, resolvedTradeDate]);
+  }, [kline, marketTradeDate]);
   const fiveDayChartBars = useMemo(
     () => toFiveDayIntradayCandleBars(fiveDayKline),
     [fiveDayKline],
@@ -1551,7 +1552,7 @@ function StockDetail({ data }: { data: DashboardData }) {
     <div className="stock-detail">
       <section className="stock-hero">
         <div>
-          <p className="eyebrow">{resolvedTradeDate}</p>
+          <p className="eyebrow">行情截至 {marketTradeDate}</p>
           <h2>{stockEvent?.name || linkedStockName || symbol}</h2>
           <span>{symbol}</span>
         </div>
@@ -1578,6 +1579,7 @@ function StockDetail({ data }: { data: DashboardData }) {
       {stockEvent ? (
         <Panel title="封板信息" icon={<Flame size={18} />}>
           <div className="stock-facts">
+            <Fact label="封板日期" value={stockEvent.trade_date} />
             <Fact label="首次封板" value={stockEvent.first_limit_time.slice(0, 5)} />
             <Fact label="最后封板" value={stockEvent.last_limit_time.slice(0, 5)} />
             <Fact label="封板次数" value={`${stockEvent.seal_count}`} />
