@@ -24,6 +24,8 @@ backend/data/dev_check_report.json
 backend/data/daily_close_loop_latest.json
 backend/data/daily_close_loop_alert.json
 backend/data/daily_close_loop.lock
+backend/data/prediction_time_audit*.json
+backend/data/backups/
 
 # Frontend
 node_modules/

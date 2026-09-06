@@ -932,6 +932,7 @@ class FirstBoardRatingsResponse(BaseModel):
     snapshot_source: Literal["live", "historical_backtest", "calculated"] = "calculated"
     data_as_of: date | None = None
     snapshot_created_at: datetime | None = None
+    prediction_provenance: dict[str, Any] = Field(default_factory=dict)
 
 
 class ScoringPolicy(BaseModel):
@@ -1336,6 +1337,7 @@ class AgentPrediction(BaseModel):
     reasons: list[str]
     risks: list[str]
     created_at: datetime
+    prediction_provenance: dict[str, Any] = Field(default_factory=dict)
 
 
 class AgentEvaluationItem(BaseModel):
@@ -1350,6 +1352,7 @@ class AgentEvaluationItem(BaseModel):
     confidence: float
     prediction_source: Literal["live", "historical_backtest"]
     data_as_of: date
+    time_cohort: str = "unverified"
     evaluation_label: Literal[
         "success",
         "partial",
@@ -1381,6 +1384,8 @@ class AgentEvaluationResponse(BaseModel):
     prediction_count: int
     outcome_ready_count: int
     source_counts: dict[str, int]
+    time_cohort_counts: dict[str, int] = Field(default_factory=dict)
+    excluded_time_prediction_count: int = 0
     label_counts: dict[str, int]
     evaluations: list[AgentEvaluationItem]
     summary: list[str]
@@ -1399,6 +1404,7 @@ class ReviewAgentPick(BaseModel):
     confidence: float
     prediction_source: Literal["live", "historical_backtest"]
     data_as_of: date
+    time_cohort: str = "unverified"
     evaluation_label: str
     outcome_ready: bool
     promoted_to_second_board: bool
@@ -1451,6 +1457,8 @@ class ReviewAgentReportResponse(BaseModel):
     start_date: date
     end_date: date
     sample_size: int
+    time_cohort_counts: dict[str, int] = Field(default_factory=dict)
+    time_audit_status: str = "unverified"
     success_count: int
     failed_count: int
     pending_count: int
@@ -1491,6 +1499,7 @@ class DailyReviewSnapshotSummary(BaseModel):
     as_of_date: date
     start_date: date
     sample_size: int
+    time_audit_status: str = "unverified"
     outcome_ready_count: int
     top_pick_promotion_rate: float | None = None
     market_promotion_rate: float | None = None

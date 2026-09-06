@@ -14,7 +14,7 @@ from app.config import env_bool
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_PATH = BACKEND_ROOT / "data" / "limituplab.sqlite"
-CURRENT_SCHEMA_VERSION = 10
+CURRENT_SCHEMA_VERSION = 11
 DEFAULT_BUSY_TIMEOUT_MS = 5_000
 DEFAULT_LOCK_RETRY_ATTEMPTS = 3
 DEFAULT_LOCK_RETRY_BASE_DELAY_SECONDS = 0.05
@@ -573,6 +573,26 @@ def _apply_schema(connection: sqlite3.Connection) -> None:
     )
     _ensure_agent_predictions_schema(connection)
     _ensure_agent_live_prediction_snapshots_schema(connection)
+    _ensure_columns(connection, "agent_predictions", {"provenance_json": "TEXT NOT NULL DEFAULT '{}'"})
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS prediction_time_audits (
+            artifact_type TEXT NOT NULL,
+            artifact_key TEXT NOT NULL,
+            content_hash TEXT NOT NULL,
+            verdict_json TEXT NOT NULL,
+            audited_at TEXT NOT NULL,
+            PRIMARY KEY (artifact_type, artifact_key, content_hash)
+        )
+    """)
+    connection.execute("""
+        CREATE TABLE IF NOT EXISTS prediction_snapshot_archive (
+            snapshot_id TEXT PRIMARY KEY,
+            trade_date TEXT NOT NULL,
+            snapshot_record_json TEXT NOT NULL,
+            prediction_rows_json TEXT NOT NULL,
+            archived_at TEXT NOT NULL
+        )
+    """)
     connection.execute(
         """
         CREATE INDEX IF NOT EXISTS idx_agent_predictions_date
