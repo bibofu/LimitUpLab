@@ -29,7 +29,7 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 | 项目 | 状态 |
 | --- | --- |
-| 后端自动化测试 | 421 项通过，另有 19 个参数化子测试 |
+| 后端自动化测试 | 统一验收入口生成当次测试数量、结果和 JUnit 报告 |
 | 离线 Agent Eval | Core 18/18、Product 30/30、Query Contract 36/36 通过 |
 | 本地数据健康检查 | 已实现 |
 | LLM 流式问答 | 已实现 |
@@ -591,6 +591,22 @@ powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mo
 完整接口定义以 Swagger 为准。
 
 ## 测试与 Agent Eval
+
+推荐从项目根目录运行统一离线验收。需要 Python 3.13、Node.js 24，并先安装依赖：
+
+```powershell
+backend/.venv/Scripts/python.exe -m pip install -r backend/requirements-dev.txt
+npm --prefix frontend ci
+backend/.venv/Scripts/python.exe scripts/check_project.py
+```
+
+Linux 使用对应虚拟环境的 `python scripts/check_project.py`。也可通过 `--scope backend` 或 `--scope frontend` 单独验收一侧。
+
+该入口依次运行完整 pytest、Core 与 Product 离线 Eval（含 Query Contract）、全部前端逻辑测试以及 TypeScript/Vite 生产构建。每次使用独立数据库和测试目录，关闭真实 LLM，并在 `output/validation/<运行标识>/` 保存各步骤日志、JUnit 和 `summary.json`。任一步失败都会使整体退出码非零，但其余独立检查仍会执行。它不替代浏览器端业务验收、真实模型评测、部署检查或压力测试。
+
+GitHub Actions 配置在 `.github/workflows/validate.yml`，对 PR、main 与 codex 分支推送运行 Windows/Linux 两套检查，使用相同验收入口，不需要行情或模型密钥。失败日志保留 7 天；测试数据库不上传。流水线文件进入远端仓库后才能实际触发，分支保护仍需在仓库设置中启用。
+
+工具执行模块职责与扩展规范见 [Agent 执行层维护说明](docs/Agent_Execution_Maintenance.md)。以下单项命令仍可用于定位失败。
 
 运行后端测试：
 

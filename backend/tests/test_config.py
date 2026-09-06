@@ -132,6 +132,9 @@ class ConfigTest(unittest.TestCase):
         self,
         _reachable,
     ) -> None:
+        # Exercise automatic defaults independently of the caller's environment.
+        for name in ("LIMITUPLAB_LLM_ENABLED", "LIMITUPLAB_LLM_BASE_URL", "LIMITUPLAB_LLM_MODEL"):
+            os.environ.pop(name, None)
         os.environ["DEEPSEEK_API_KEY"] = "test-secret"
         os.environ["HTTP_PROXY"] = "http://127.0.0.1:65534"
         os.environ["HTTPS_PROXY"] = "http://127.0.0.1:65534"
