@@ -19,6 +19,7 @@ from app.models import (
 )
 from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
 from app.services.evaluation_agent import select_canonical_prediction_snapshots
+from app.services.prediction_time import assess_prediction_time, time_cohort_counts
 
 
 PREDICTION_QUALITY_AUDIT_VERSION = "prediction-quality-audit-v1"
@@ -55,7 +56,8 @@ def build_prediction_quality_audit(
     audited_rows = [
         item for item in raw_predictions if item.scoring_version == audited_version
     ]
-    canonical = _canonical_predictions(audited_rows)
+    all_canonical = select_canonical_prediction_snapshots(raw_predictions, preferred_scoring_version=audited_version)
+    canonical = [p for p in all_canonical if p.scoring_version == audited_version]
     outcomes = {
         (item.base_trade_date, item.symbol): item
         for item in repository.list_outcomes_between(start_date, end_date)
@@ -72,15 +74,29 @@ def build_prediction_quality_audit(
         available_dates=available_dates,
         top_k=bounded_top_k,
     )
+    strict_predictions = [p for p in canonical if assess_prediction_time(p).strict_forward_eligible]
     benchmarks = _build_benchmarks(
-        canonical=canonical,
+        canonical=strict_predictions,
         outcomes=outcomes,
         events=event_index,
         complete_dates=complete_dates,
         top_k=bounded_top_k,
     )
+    research_groups = defaultdict(list)
+    for prediction in all_canonical:
+        research_groups[f"{assess_prediction_time(prediction).cohort}/{prediction.scoring_version}"].append(prediction)
+    benchmark_cohorts = {}
+    for key, group in sorted(research_groups.items()):
+        _, group_complete_dates = _build_date_coverage(
+            canonical=group, outcomes=outcomes, available_dates=available_dates, top_k=bounded_top_k,
+        )
+        benchmark_cohorts[key] = _build_benchmarks(
+            canonical=group, outcomes=outcomes, events=event_index,
+            complete_dates=group_complete_dates, top_k=bounded_top_k,
+        )
     outcome_ready_dates = {
-        item.base_trade_date for item in outcomes.values() if item.next_day_ready
+        p.trade_date for p in strict_predictions
+        if (outcome := outcomes.get((p.trade_date, p.symbol))) and outcome.next_day_ready
     }
     latest_run = registry.get_latest_optimization_run()
     policy_status = PredictionQualityPolicyStatus(
@@ -117,7 +133,7 @@ def build_prediction_quality_audit(
         (item.trade_date, item.symbol) for item in raw_predictions
     }
     data_as_of_violations = sum(
-        item.data_as_of > item.trade_date for item in raw_predictions
+        not assess_prediction_time(item).research_eligible for item in raw_predictions
     )
     cohorts = [
         *_cohort_summaries(raw_predictions, outcomes, dimension="prediction_source"),
@@ -141,6 +157,7 @@ def build_prediction_quality_audit(
         benchmarks=benchmarks,
     )
     warnings = [
+        "benchmarks 仅统计现行盘前终选；旧版收盘、收盘基线和历史补算分别见 benchmark_cohorts，不合并为前向结果。",
         "historical_backtest 是按历史数据重算的研究样本，不能等同于当日真实 live 预测。",
         "基线只使用本地已有 Outcome 的候选，缓存不完整时可能存在样本选择偏差。",
         "审计指标用于比较评分方法，不代表未来收益或交易建议。",
@@ -167,6 +184,10 @@ def build_prediction_quality_audit(
         cohorts=cohorts,
         date_coverage=date_coverage,
         benchmarks=benchmarks,
+        benchmark_cohorts=benchmark_cohorts,
+        time_cohort_counts=time_cohort_counts(raw_predictions),
+        excluded_time_prediction_count=data_as_of_violations,
+        strict_forward_prediction_count=len(strict_predictions),
         policy_status=policy_status,
         findings=findings,
         recommendations=recommendations,
@@ -465,10 +486,10 @@ def _audit_findings(
         )
     if data_as_of_violations:
         findings.append(
-            f"发现 {data_as_of_violations} 行 data_as_of 晚于预测日，需要排查潜在时间穿越。"
+            f"排除 {data_as_of_violations} 行时间契约不合格或已退役实验记录；按实际生成时点和阶段校验，不以日期字段大小代替。"
         )
     else:
-        findings.append("未发现 data_as_of 晚于预测日的显式时间穿越记录。")
+        findings.append("未发现需要排除的时间契约记录；旧版样本的输入时点仍未经完整验证。")
     return findings
 
 

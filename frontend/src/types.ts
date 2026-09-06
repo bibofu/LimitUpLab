@@ -634,6 +634,8 @@ export interface AgentEvalReportResponse {
 }
 
 export interface ReviewAgentPick {
+  time_cohort?: string;
+  scoring_version?: string | null;
   trade_date: string;
   symbol: string;
   name: string;
@@ -685,6 +687,9 @@ export interface ReviewPromotionComparison {
 }
 
 export interface ReviewAgentReportResponse {
+  excluded_time_prediction_count?: number;
+  time_cohort_counts?: Record<string, number>;
+  time_audit_status?: string;
   start_date: string;
   end_date: string;
   sample_size: number;
@@ -713,6 +718,7 @@ export interface ReviewAgentReportResponse {
 }
 
 export interface DailyReviewSnapshotSummary {
+  time_audit_status?: string;
   as_of_date: string;
   start_date: string;
   sample_size: number;

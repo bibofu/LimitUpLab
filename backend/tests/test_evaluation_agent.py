@@ -125,6 +125,7 @@ class EvaluationAgentTest(unittest.TestCase):
                 repository=repository,
                 prediction_source="live",
                 data_as_of=trade_date,
+                created_at=datetime.combine(trade_date, time(8), timezone.utc),
             )
 
             response = build_agent_evaluation(
@@ -152,7 +153,7 @@ class EvaluationAgentTest(unittest.TestCase):
         try:
             repository = SQLiteFirstBoardRepository(database_path=database_path)
             trade_date = date(2026, 8, 25)
-            created_at = datetime(2026, 8, 25, 7, 0, tzinfo=timezone.utc)
+            created_at = datetime(2026, 8, 25, 8, 0, tzinfo=timezone.utc)
             repository.upsert_predictions(
                 [
                     AgentPrediction(

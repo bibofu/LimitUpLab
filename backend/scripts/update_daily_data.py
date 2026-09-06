@@ -28,6 +28,7 @@ from app.collectors import (
     parse_akshare_trade_date,
 )
 from app.models import AgentPrediction, LimitUpEvent, StockDailyBar, StockKLineBar
+from app.services.prediction_time import CN_TZ, close_provenance, provenance_errors
 from app.repositories import (
     SQLiteFirstBoardDiscoveryRepository,
     SQLiteFirstBoardRepository,
@@ -210,6 +211,7 @@ def run_daily_update(
     spot_bar_collector: SpotBarCollector | None = None,
     remote_limit_up_collector: RemoteLimitUpCollector | None = None,
     persist_live_prediction: bool | None = None,
+    now: datetime | None = None,
     refresh_discovery: bool = False,
     force_discovery: bool = False,
 ) -> DailyUpdateReport:
@@ -355,8 +357,10 @@ def run_daily_update(
     )[:6]
     latest_available_date = max(event.trade_date for event in events)
     is_latest_available_date = trade_date == latest_available_date
-    should_persist_live = is_latest_available_date and (
-        persist_live_prediction is not False
+    should_persist_live = (
+        is_latest_available_date and persist_live_prediction is not False
+        and not provenance_errors(base_date=trade_date, data_as_of=trade_date,
+                                  created_at=now or datetime.now(CN_TZ), provenance=close_provenance())
     )
     target_has_live_prediction = (
         first_board_repo.get_live_prediction_snapshot(trade_date) is not None
@@ -386,6 +390,7 @@ def run_daily_update(
             top_per_day=top_targets,
             prediction_source="live",
             data_as_of=trade_date,
+            created_at=now,
         )
         if should_persist_live
         else 0

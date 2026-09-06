@@ -33,6 +33,7 @@ import {
   stockDetailPath,
 } from "../dashboardFormatters";
 import { Panel } from "./Panel";
+import { summarizeReviewPromotion } from "../reviewCohorts";
 
 interface ReviewDashboardProps {
   dailyBoardPromotion: DailyBoardPromotionStat[];
@@ -53,6 +54,24 @@ export function ReviewDashboard({
 }
 
 type DragonTigerFilter = "all" | "organization" | "hot_money";
+
+const timeCohortLabels: Record<string, string> = {
+  premarket_final: "盘前终选",
+  close_baseline: "收盘基线",
+  legacy_close: "旧版收盘研究",
+  historical_backtest: "历史回测",
+  unverified: "待核验样本",
+};
+
+function pickTimeCohort(pick: ReviewAgentPick): string {
+  const stage = pick.time_cohort ?? (pick.prediction_source === "historical_backtest" ? "historical_backtest" : "unverified");
+  return `${stage}/${pick.scoring_version ?? "版本待核验"}`;
+}
+
+function timeCohortLabel(key: string): string {
+  const [stage, ...version] = key.split("/");
+  return `${timeCohortLabels[stage] ?? "待核验样本"} · ${version.join("/").replace("first-board-rule-", "")}`;
+}
 
 function DragonTigerReviewPanel({ tradeDate }: { tradeDate: string }) {
   /** Load post-close Dragon-Tiger facts without delaying the rest of the dashboard. */
@@ -411,7 +430,16 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
     }
   }
 
-  const reviewedPicks = report?.reviewed_picks ?? [];
+  const [selectedTimeCohort, setSelectedTimeCohort] = useState("");
+  const allReviewedPicks = report?.reviewed_picks ?? [];
+  const cohortOrder = Object.keys(timeCohortLabels);
+  const availableTimeCohorts = [...new Set(allReviewedPicks.map(pickTimeCohort))].sort(
+    (left, right) => cohortOrder.indexOf(left.split("/")[0]) - cohortOrder.indexOf(right.split("/")[0])
+      || right.localeCompare(left),
+  );
+  const activeTimeCohort = availableTimeCohorts.includes(selectedTimeCohort)
+    ? selectedTimeCohort : availableTimeCohorts[0] ?? "unverified";
+  const reviewedPicks = allReviewedPicks.filter((pick) => pickTimeCohort(pick) === activeTimeCohort);
   const reviewDates = groupReviewPicksByDate(reviewedPicks);
   const trackDates = report ? buildReviewTrackDates(reviewDates, report.end_date) : [];
   const trackedSampleSize = trackDates.reduce(
@@ -430,6 +458,9 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
     0,
   );
   const trackedSuccessRate = trackedReadyCount > 0 ? trackedSuccessCount / trackedReadyCount : null;
+  const cohortPromotion = summarizeReviewPromotion(
+    reviewedPicks.filter((pick) => trackDates.includes(pick.trade_date)), report?.promotion_comparisons ?? [],
+  );
   const promotionComparisons = (report?.promotion_comparisons ?? []).reduce<
     Record<string, ReviewPromotionComparison>
   >((items, item) => {
@@ -478,6 +509,12 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
 
         {error ? <p className="review-agent-error">{error}</p> : null}
 
+        {(report?.excluded_time_prediction_count ?? 0) > 0 ? (
+          <p className="review-agent-error">
+            本期已排除 {report?.excluded_time_prediction_count} 条时间口径不合格或已退役实验记录；旧报告原件保留供审计。
+          </p>
+        ) : null}
+
         <div className="review-date-selector">
           <label htmlFor="review-as-of-date">复盘截止日</label>
           <select
@@ -491,11 +528,26 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
             ).map((item) => (
               <option key={item.as_of_date} value={item.as_of_date}>
                 {item.as_of_date}
+                {item.time_audit_status === "excluded" ? "（原报告含排除样本）" : ""}
               </option>
             ))}
           </select>
-          <span>{snapshotDates.length > 0 ? "已固化复盘" : "当前动态复盘"}</span>
+          <span>{snapshotDates.find((item) => item.as_of_date === selectedAsOfDate)?.time_audit_status === "checked"
+            ? "已固化复盘" : "按当前审计口径重算"}</span>
         </div>
+
+        {report ? (
+          <div className="review-date-selector">
+            <label htmlFor="review-time-cohort">样本口径</label>
+            <select id="review-time-cohort" value={activeTimeCohort}
+              onChange={(event) => setSelectedTimeCohort(event.target.value)}>
+              {availableTimeCohorts.map((cohort) => (
+                <option key={cohort} value={cohort}>{timeCohortLabel(cohort)}</option>
+              ))}
+            </select>
+            <span>各组独立统计；仅盘前终选属于现行前向验证。</span>
+          </div>
+        ) : null}
 
         {running && !report ? (
           <div className="review-agent-empty">
@@ -515,20 +567,20 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
               </span>
               <span>
                 <small>Top10 1进2</small>
-                <strong>{formatEmpiricalRate(report.top_pick_promotion_rate)}</strong>
-                <em>{report.top_pick_promoted_count}/{report.top_pick_promotion_sample_size}</em>
+                <strong>{formatEmpiricalRate(cohortPromotion.top_pick_promotion_rate)}</strong>
+                <em>{cohortPromotion.top_pick_promoted_count}/{cohortPromotion.top_pick_promotion_sample_size}</em>
               </span>
               <span>
                 <small>同期全部首板</small>
-                <strong>{formatEmpiricalRate(report.market_promotion_rate)}</strong>
-                <em>{report.market_promoted_count}/{report.market_promotion_sample_size}</em>
+                <strong>{formatEmpiricalRate(cohortPromotion.market_promotion_rate)}</strong>
+                <em>{cohortPromotion.market_promoted_count}/{cohortPromotion.market_promotion_sample_size}</em>
               </span>
               <span>
                 <small>相对全市场</small>
-                <strong className={(report.promotion_rate_delta ?? 0) >= 0 ? "positive" : "negative"}>
-                  {report.promotion_rate_delta === null
+                <strong className={(cohortPromotion.promotion_rate_delta ?? 0) >= 0 ? "positive" : "negative"}>
+                  {cohortPromotion.promotion_rate_delta === null
                     ? "暂无"
-                    : `${formatSigned(report.promotion_rate_delta * 100, 1)} 个百分点`}
+                    : `${formatSigned(cohortPromotion.promotion_rate_delta * 100, 1)} 个百分点`}
                 </strong>
               </span>
               <span>
@@ -798,7 +850,7 @@ function ReviewPickTable({
             {pick.name}
             <small>
               {showTradeDate ? `${pick.trade_date} / ` : ""}
-              {pick.symbol} / {pick.prediction_source === "live" ? "实时预测" : "历史回测"}
+              {pick.symbol} / {timeCohortLabel(pickTimeCohort(pick))}
             </small>
           </strong>
           <span>{pick.score.toFixed(1)} / {pick.rating}</span>

@@ -38,6 +38,7 @@ class OutcomeCompletenessTest(unittest.TestCase):
             top_per_day=1,
             prediction_source="live",
             data_as_of=self.trade_dates[0],
+            created_at=datetime.combine(self.trade_dates[0], time(8), timezone.utc),
         )
 
     def tearDown(self) -> None:

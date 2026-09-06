@@ -85,6 +85,12 @@ def provenance_errors(*, base_date: date, data_as_of: date, created_at: datetime
         errors.append("information_cutoff_outside_window")
     if provenance.get("calendar_verified") is not True:
         errors.append("target_calendar_unverified")
+    try:
+        days = sorted({date.fromisoformat(value) for value in provenance["calendar_trade_dates"]})
+        if base_date not in days or next((day for day in days if day > base_date), None) != target:
+            errors.append("target_is_not_next_trading_day")
+    except (KeyError, TypeError, ValueError):
+        errors.append("calendar_evidence_missing")
     return errors
 
 
@@ -95,3 +101,29 @@ def close_provenance() -> dict:
 def time_cohort_counts(predictions) -> dict[str, int]:
     from collections import Counter
     return dict(Counter(assess_prediction_time(item).cohort for item in predictions))
+
+
+def validate_final_response(response) -> None:
+    """Shared final write gate, including evidence timestamps for both strategies."""
+    base = response.relay_base_date or response.discovery_base_date
+    if response.stage != "final" or base is None or response.finalized_at is None:
+        raise ValueError("Final prediction metadata is incomplete.")
+    errors = provenance_errors(base_date=base, data_as_of=response.target_trade_date,
+                               created_at=response.finalized_at, provenance=response.prediction_provenance)
+    if errors:
+        raise ValueError("Invalid final prediction time: " + ", ".join(errors))
+    cutoff = datetime.fromisoformat(response.prediction_provenance["information_cutoff_at"])
+    for item in response.items:
+        timestamps = [item.refreshed_at, item.facts_cutoff_at, item.quote_captured_at,
+                      item.popularity_snapshot_at]
+        for news in item.latest_news:
+            timestamps.extend([news.published_at, news.fetched_at])
+        if item.financial_report is not None:
+            timestamps.append(item.financial_report.fetched_at)
+            if item.financial_report.report_date and item.financial_report.report_date > cutoff.date():
+                raise ValueError("Financial report publication exceeds information cutoff.")
+        if item.base_trade_date != base:
+            raise ValueError("Final candidates have different base trading dates.")
+        for timestamp in timestamps:
+            if timestamp is not None and (timestamp.tzinfo is None or timestamp > cutoff):
+                raise ValueError("Final evidence timestamp exceeds information cutoff or lacks timezone.")

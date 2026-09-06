@@ -7,6 +7,7 @@ from collections import Counter
 from dataclasses import dataclass
 from datetime import date
 from statistics import median
+from app.services.prediction_time import assess_prediction_time
 from typing import Any
 
 from app.models import (
@@ -267,6 +268,8 @@ def build_review_agent_report(
         end_date=end_date,
     )
     feature_comparison = toolbox.feature_comparison()
+    excluded_time_count = sum(not assess_prediction_time(p).research_eligible
+                              for p in toolbox._prediction_lookup().values())
     completeness = build_top10_outcome_completeness(
         events=events,
         repository=active_repository,
@@ -285,6 +288,7 @@ def build_review_agent_report(
         ],
         feature_comparison=feature_comparison,
         promotion_comparisons=promotion_comparisons,
+        excluded_time_count=excluded_time_count,
     )
     try:
         content = active_provider.generate(
@@ -302,6 +306,7 @@ def build_review_agent_report(
             promotion_comparisons=promotion_comparisons,
         )
         report.warnings.extend(completeness.warnings)
+        report.excluded_time_prediction_count = excluded_time_count
         return report
     except Exception as error:
         fallback.warnings.append(f"Review LLM unavailable: {error}")
@@ -392,6 +397,8 @@ def _review_picks_from_toolbox(toolbox: ReviewAgentToolbox) -> list[ReviewAgentP
                 confidence=item.confidence,
                 prediction_source=item.prediction_source,
                 data_as_of=item.data_as_of,
+                time_cohort=item.time_cohort,
+                scoring_version=item.scoring_version,
                 evaluation_label=item.evaluation_label,
                 outcome_ready=item.outcome_ready,
                 promoted_to_second_board=item.promoted_to_second_board,
@@ -581,12 +588,14 @@ def _fallback_report(
     warnings: list[str],
     feature_comparison: dict[str, Any] | None = None,
     promotion_comparisons: list[ReviewPromotionComparison] | None = None,
+    excluded_time_count: int = 0,
 ) -> ReviewAgentReportResponse:
     ready = [item for item in picks if item.outcome_ready]
     successes = [item for item in picks if item.evaluation_label == "success"]
     failures = [item for item in picks if item.evaluation_label == "miss"]
     pending = [item for item in picks if item.evaluation_label == "pending"]
     report_warnings = list(warnings)
+    report_warnings.append("以下为分来源研究样本的复盘；旧版收盘、收盘基线和历史补算不代表现行盘前终选的前向验证。")
     incomplete_cache = [item for item in picks if not item.post_bar_cache_complete]
     if incomplete_cache:
         report_warnings.append(
@@ -627,6 +636,9 @@ def _fallback_report(
         start_date=start_date,
         end_date=end_date,
         sample_size=len(picks),
+        time_cohort_counts=dict(Counter(item.time_cohort for item in picks)),
+        time_audit_status="checked",
+        excluded_time_prediction_count=excluded_time_count,
         success_count=len(successes),
         failed_count=len(failures),
         pending_count=len(pending),
@@ -677,6 +689,8 @@ def _report_from_payload(
         start_date=start_date,
         end_date=end_date,
         sample_size=len(picks),
+        time_cohort_counts=fallback.time_cohort_counts,
+        time_audit_status="checked",
         success_count=sum(1 for item in picks if item.evaluation_label == "success"),
         failed_count=sum(1 for item in picks if item.evaluation_label == "miss"),
         pending_count=sum(1 for item in picks if item.evaluation_label == "pending"),

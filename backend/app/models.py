@@ -342,6 +342,7 @@ class RecommendationIntelligenceResponse(BaseModel):
     stage: Literal["draft", "final", "missed_cutoff"] = "draft"
     target_trade_date: date | None = None
     finalized_at: datetime | None = None
+    prediction_provenance: dict[str, Any] = Field(default_factory=dict)
     discovery_pool_size: int = 0
     discovery_display_limit: int = 15
     relay_pool_size: int = 0
@@ -1120,6 +1121,10 @@ class PredictionQualityAuditResponse(BaseModel):
     cohorts: list[PredictionQualityCohort]
     date_coverage: list[PredictionDateCoverage]
     benchmarks: list[PredictionBenchmarkMetrics]
+    benchmark_cohorts: dict[str, list[PredictionBenchmarkMetrics]] = Field(default_factory=dict)
+    time_cohort_counts: dict[str, int] = Field(default_factory=dict)
+    excluded_time_prediction_count: int = 0
+    strict_forward_prediction_count: int = 0
     policy_status: PredictionQualityPolicyStatus
     findings: list[str]
     recommendations: list[str]
@@ -1353,6 +1358,7 @@ class AgentEvaluationItem(BaseModel):
     prediction_source: Literal["live", "historical_backtest"]
     data_as_of: date
     time_cohort: str = "unverified"
+    scoring_version: str | None = None
     evaluation_label: Literal[
         "success",
         "partial",
@@ -1405,6 +1411,7 @@ class ReviewAgentPick(BaseModel):
     prediction_source: Literal["live", "historical_backtest"]
     data_as_of: date
     time_cohort: str = "unverified"
+    scoring_version: str | None = None
     evaluation_label: str
     outcome_ready: bool
     promoted_to_second_board: bool
@@ -1459,6 +1466,7 @@ class ReviewAgentReportResponse(BaseModel):
     sample_size: int
     time_cohort_counts: dict[str, int] = Field(default_factory=dict)
     time_audit_status: str = "unverified"
+    excluded_time_prediction_count: int = 0
     success_count: int
     failed_count: int
     pending_count: int

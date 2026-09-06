@@ -1,5 +1,8 @@
 import unittest
-from datetime import date, datetime, timedelta, timezone
+import json
+import sqlite3
+from contextlib import closing
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
@@ -115,7 +118,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
         final_rating = original.candidates[0].model_copy(
             update={"score": original.candidates[0].score + 3}
         )
-        final_created_at = stored.created_at + timedelta(days=1)
+        final_created_at = datetime.combine(self.trade_date + timedelta(days=1), time(1), timezone.utc)
         final_data_as_of = self.trade_date + timedelta(days=1)
         final_version = "close-canonical-v1"
         final_snapshot = original.model_copy(
@@ -131,6 +134,12 @@ class PredictionSnapshotContractTest(unittest.TestCase):
                 "scoring_version": final_version,
                 "data_as_of": final_data_as_of,
                 "created_at": final_created_at,
+                "prediction_provenance": {
+                    "version": "prediction-time-v1", "stage": "premarket_final",
+                    "target_trade_date": final_data_as_of.isoformat(),
+                    "information_cutoff_at": final_created_at.isoformat(), "calendar_verified": True,
+                    "calendar_trade_dates": [self.trade_date.isoformat(), final_data_as_of.isoformat()],
+                },
             }
         )
 
@@ -154,6 +163,16 @@ class PredictionSnapshotContractTest(unittest.TestCase):
         self.assertEqual(after.generated_by, final_version)
         self.assertEqual(after.data_as_of, final_data_as_of)
         self.assertEqual([item.prediction_id for item in rows], ["canonical-prediction"])
+        with closing(sqlite3.connect(self.database_path)) as connection:
+            archived = connection.execute("SELECT snapshot_record_json, prediction_rows_json FROM prediction_snapshot_archive").fetchone()
+        self.assertIsNotNone(archived)
+        self.assertEqual(json.loads(archived[0])["created_at"], stored.created_at.isoformat())
+        self.assertEqual(json.loads(archived[1])[0]["prediction_id"], stored.prediction_id)
+        # Even an explicit replacement cannot rewrite a final a second time.
+        self.assertEqual(self.repository.persist_live_prediction_snapshot(
+            ratings=final_snapshot, predictions=[final_prediction], top_limit=10,
+            data_as_of=final_data_as_of, created_at=final_created_at, replace=True,
+        ), 0)
 
     def test_same_day_live_snapshot_is_reviewable_without_auction(self) -> None:
         trade_date = date(2026, 8, 31)
@@ -199,7 +218,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
         self.assertEqual([item.prediction_id for item in selected], ["close-history"])
 
     def test_live_batch_excludes_same_day_historical_extras(self) -> None:
-        created_at = datetime(2026, 8, 29, tzinfo=timezone.utc)
+        created_at = datetime.combine(self.trade_date, time(8), timezone.utc)
         live = [
             self._prediction("live-a", "000001", "live-v1", "live", created_at),
             self._prediction("live-b", "000002", "live-v1", "live", created_at),
@@ -264,6 +283,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
             top_per_day=10,
             prediction_source="live",
             data_as_of=self.trade_date,
+            created_at=datetime.combine(self.trade_date, time(8), timezone.utc),
         )
 
     def _prediction(

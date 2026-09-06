@@ -94,7 +94,7 @@ class FirstBoardFeaturesTest(unittest.TestCase):
                     INSERT INTO agent_predictions VALUES (
                         'live', '2026-08-10', '002001', 'live sample',
                         81, 'A', 0.9, 'v-test', 'live', '2026-08-10',
-                        '{}', '[]', '[]', '2026-08-10T11:00:00+00:00'
+                        '{}', '[]', '[]', '2026-08-10T11:00:00+00:00', '{}'
                     )
                     """
                 )

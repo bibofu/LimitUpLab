@@ -15,6 +15,7 @@ from app.models import (
 from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
 from app.services.scoring_policy import DEFAULT_SCORING_POLICY_VERSION
 from app.services.relay_universe import is_relay_candidate_symbol
+from app.services.prediction_time import assess_prediction_time, time_cohort_counts
 
 
 EVALUATION_AGENT_VERSION = "first-board-evaluation-mvp-v1"
@@ -34,8 +35,9 @@ def build_agent_evaluation(
     scoring_version = (
         champion.version if champion else DEFAULT_SCORING_POLICY_VERSION
     )
+    raw_predictions = repository.list_predictions_between(start_date, end_date)
     predictions = select_canonical_prediction_snapshots(
-        repository.list_predictions_between(start_date, end_date),
+        raw_predictions,
         preferred_scoring_version=scoring_version,
     )
     outcomes = {
@@ -59,10 +61,13 @@ def build_agent_evaluation(
         prediction_count=len(predictions),
         outcome_ready_count=ready_count,
         source_counts=dict(Counter(item.prediction_source for item in predictions)),
+        time_cohort_counts=time_cohort_counts(predictions),
+        excluded_time_prediction_count=sum(not assess_prediction_time(p).research_eligible for p in raw_predictions),
         label_counts=label_counts,
         evaluations=_rank_evaluations(evaluations)[: max(limit, 0)],
         summary=_build_summary(evaluations),
-        warnings=_build_warnings(predictions, ready_count),
+        warnings=[*_build_warnings(predictions, ready_count),
+                  "收盘基线、旧版收盘样本和历史补算仅用于各自研究，不能计作现行盘前终选的前向验证。"],
         generated_by=EVALUATION_AGENT_VERSION,
     )
 
@@ -75,12 +80,13 @@ def persist_agent_predictions_for_dates(
     top_per_day: int | None = None,
     prediction_source: Literal["live", "historical_backtest"] = "historical_backtest",
     data_as_of: date | None = None,
+    created_at: datetime | None = None,
 ) -> int:
     """Persist immutable rating snapshots with an explicit provenance label."""
 
     historical_predictions: list[AgentPrediction] = []
     inserted = 0
-    now = datetime.now(timezone.utc)
+    now = created_at or datetime.now(timezone.utc)
     from app.agents.first_board import build_first_board_ratings
 
     for trade_date in trade_dates:
@@ -177,6 +183,8 @@ def _evaluate_prediction(
         confidence=prediction.confidence,
         prediction_source=prediction.prediction_source,
         data_as_of=prediction.data_as_of,
+        time_cohort=assess_prediction_time(prediction).cohort,
+        scoring_version=prediction.scoring_version,
         evaluation_label=label,
         outcome_ready=bool(outcome and outcome.next_day_ready),
         promoted_to_second_board=bool(outcome and outcome.promoted_to_second_board),
@@ -337,11 +345,15 @@ def select_canonical_prediction_snapshots(
     selected: list[AgentPrediction] = []
     for trade_date in sorted(by_date):
         daily = by_date[trade_date]
+        invalid_live = [item for item in daily if item.prediction_source == "live"
+                        and "auction-final" not in item.scoring_version
+                        and not assess_prediction_time(item).research_eligible]
         live = [
             item
             for item in daily
             if item.prediction_source == "live"
             and "auction-final" not in item.scoring_version
+            and assess_prediction_time(item).research_eligible
         ]
         if live:
             batch_key = min(
@@ -362,6 +374,10 @@ def select_canonical_prediction_snapshots(
                 )
                 == batch_key
             )
+            continue
+
+        # An excluded live date stays excluded; never silently substitute a backtest.
+        if invalid_live:
             continue
 
         historical = [

@@ -1,5 +1,8 @@
 import os
 import unittest
+import json
+import sqlite3
+from contextlib import closing
 from datetime import date, datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
@@ -21,6 +24,22 @@ TEST_TMP_ROOT = Path(
 
 
 class ReviewSnapshotRepositoryTest(unittest.TestCase):
+    def test_audit_annotation_does_not_rewrite_saved_report(self) -> None:
+        from app.services.prediction_time_audit import content_hash
+        snapshot = self._snapshot(date(2026, 9, 3), finding="original")
+        repository = SQLiteReviewSnapshotRepository(self.database_path)
+        repository.save_snapshot(snapshot)
+        with closing(sqlite3.connect(self.database_path)) as connection, connection:
+            original = connection.execute("SELECT report_json FROM daily_review_snapshots").fetchone()[0]
+            connection.execute("INSERT INTO prediction_time_audits VALUES ('review', ?, ?, ?, ?)",
+                ("2026-09-03", content_hash(original), json.dumps({"status": "excluded"}), "2026-09-07T01:00:00+08:00"))
+        loaded = repository.get_snapshot(date(2026, 9, 3))
+        self.assertEqual(loaded.report.time_audit_status, "excluded")
+        self.assertTrue(loaded.report.warnings)
+        self.assertIsNone(repository.list_summaries()[0].top_pick_promotion_rate)
+        with closing(sqlite3.connect(self.database_path)) as connection:
+            self.assertEqual(connection.execute("SELECT report_json FROM daily_review_snapshots").fetchone()[0], original)
+
     def setUp(self) -> None:
         TEST_TMP_ROOT.mkdir(exist_ok=True)
         self.database_path = TEST_TMP_ROOT / f"review-snapshot-{uuid4().hex}.sqlite"
@@ -69,7 +88,7 @@ class ReviewSnapshotRepositoryTest(unittest.TestCase):
             facts_json={},
             reasons=[],
             risks=[],
-            created_at=datetime(2026, 9, 1, 1, 25, 10, tzinfo=timezone.utc),
+            created_at=datetime(2026, 8, 31, 8, 0, tzinfo=timezone.utc),
         )
         report = self._snapshot(data_as_of, finding="快照早于竞价终选").report
         first_board_repository = SQLiteFirstBoardRepository(self.database_path)
@@ -89,6 +108,7 @@ class ReviewSnapshotRepositoryTest(unittest.TestCase):
             current_report = report.model_copy(
                 update={
                     "sample_size": 1,
+                    "time_audit_status": "checked",
                     "reviewed_picks": [
                         ReviewAgentPick(
                             trade_date=trade_date,
@@ -99,6 +119,8 @@ class ReviewSnapshotRepositoryTest(unittest.TestCase):
                             confidence=prediction.confidence,
                             prediction_source=prediction.prediction_source,
                             data_as_of=prediction.data_as_of,
+                            time_cohort="legacy_close",
+                            scoring_version=prediction.scoring_version,
                             evaluation_label="pending",
                             outcome_ready=False,
                             promoted_to_second_board=False,

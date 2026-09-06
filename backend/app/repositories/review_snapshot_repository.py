@@ -8,6 +8,7 @@ from datetime import date, datetime
 from pathlib import Path
 
 from app.database import connect, initialize_database
+from app.services.prediction_time_audit import content_hash
 from app.models import (
     DailyReviewSnapshot,
     DailyReviewSnapshotSummary,
@@ -61,9 +62,16 @@ class SQLiteReviewSnapshotRepository:
                 """,
                 (as_of_date.isoformat(),),
             ).fetchone()
+            audit = self._audit_verdict(connection, row) if row is not None else {}
         finally:
             connection.close()
-        return self._from_row(row) if row is not None else None
+        if row is None:
+            return None
+        snapshot = self._from_row(row)
+        if audit.get("status") == "excluded":
+            snapshot.report.time_audit_status = "excluded"
+            snapshot.report.warnings.append("此旧复盘包含时间口径不合格的预测，原件仅供审计，不用于有效样本统计。")
+        return snapshot
 
     def list_summaries(self, limit: int = 20) -> list[DailyReviewSnapshotSummary]:
         """Return newest persisted review dates without loading every full report."""
@@ -80,9 +88,24 @@ class SQLiteReviewSnapshotRepository:
                 """,
                 (max(1, min(limit, 100)),),
             ).fetchall()
+            audits = [self._audit_verdict(connection, row) for row in rows]
         finally:
             connection.close()
-        return [self._summary_from_row(row) for row in rows]
+        summaries = [self._summary_from_row(row) for row in rows]
+        for summary, audit in zip(summaries, audits):
+            if audit.get("status") == "excluded":
+                summary.time_audit_status = "excluded"
+                summary.top_pick_promotion_rate = None
+                summary.market_promotion_rate = None
+        return summaries
+
+    @staticmethod
+    def _audit_verdict(connection, row) -> dict:
+        audit = connection.execute("""
+            SELECT verdict_json FROM prediction_time_audits
+            WHERE artifact_type = 'review' AND artifact_key = ? AND content_hash = ?
+        """, (row["as_of_date"], content_hash(row["report_json"]))).fetchone()
+        return json.loads(audit[0]) if audit else {}
 
     @staticmethod
     def _from_row(row: sqlite3.Row) -> DailyReviewSnapshot:
@@ -102,6 +125,7 @@ class SQLiteReviewSnapshotRepository:
             as_of_date=date.fromisoformat(row["as_of_date"]),
             start_date=date.fromisoformat(row["start_date"]),
             sample_size=int(payload.get("sample_size") or 0),
+            time_audit_status=payload.get("time_audit_status", "unverified"),
             outcome_ready_count=(
                 int(payload.get("sample_size") or 0)
                 - int(payload.get("pending_count") or 0)

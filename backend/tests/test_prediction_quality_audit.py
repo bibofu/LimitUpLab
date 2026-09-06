@@ -36,7 +36,7 @@ class PredictionQualityAuditTest(unittest.TestCase):
                 update={
                     "prediction_id": "live-duplicate",
                     "prediction_source": "live",
-                    "created_at": datetime(2026, 7, 2, tzinfo=timezone.utc),
+                    "created_at": datetime(2026, 7, 1, 8, tzinfo=timezone.utc),
                 }
             )
         )
@@ -65,7 +65,7 @@ class PredictionQualityAuditTest(unittest.TestCase):
         self.assertEqual(report.audited_prediction_rows, 13)
         self.assertEqual(report.canonical_prediction_count, 10)
         self.assertEqual(report.cross_cohort_duplicate_rows, 2)
-        self.assertEqual(report.data_as_of_violation_count, 1)
+        self.assertEqual(report.data_as_of_violation_count, 0)
         self.assertEqual(report.next_day_mature_trade_date_count, 3)
         self.assertEqual(report.complete_next_day_trade_date_count, 1)
         self.assertEqual(
@@ -73,8 +73,10 @@ class PredictionQualityAuditTest(unittest.TestCase):
             ["complete", "partial", "pending", "not_mature"],
         )
         self.assertEqual(report.benchmarks[0].benchmark, "audited_policy_top_k")
-        self.assertEqual(report.benchmarks[0].sample_size, 1)
-        self.assertEqual(report.policy_status.outcome_ready_trade_dates, 2)
+        self.assertEqual(report.benchmarks[0].sample_size, 0)
+        self.assertEqual(report.benchmark_cohorts[f"close_baseline/{self.policy.version}"][0].sample_size, 1)
+        self.assertEqual(report.strict_forward_prediction_count, 0)
+        self.assertEqual(report.policy_status.outcome_ready_trade_dates, 0)
         self.assertFalse(report.policy_status.readiness_rate >= 1)
 
     def _predictions(self) -> list[AgentPrediction]:

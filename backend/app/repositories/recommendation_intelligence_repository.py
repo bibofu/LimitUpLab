@@ -8,6 +8,7 @@ from typing import Any
 
 from app.database import connect, initialize_database
 from app.models import RecommendationIntelligenceResponse
+from app.services.prediction_time import validate_final_response
 
 
 class SQLiteRecommendationIntelligenceRepository:
@@ -101,8 +102,7 @@ class SQLiteRecommendationIntelligenceRepository:
     def save_final(self, response: RecommendationIntelligenceResponse) -> bool:
         """Persist one immutable pre-open final and expose it as current."""
 
-        if response.stage != "final" or response.target_trade_date is None:
-            raise ValueError("A final response with target_trade_date is required.")
+        validate_final_response(response)
         connection = connect(self.database_path)
         try:
             initialize_database(connection)

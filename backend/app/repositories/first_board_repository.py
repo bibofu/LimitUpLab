@@ -5,8 +5,11 @@ import json
 import sqlite3
 from datetime import date, datetime
 from pathlib import Path
+from types import SimpleNamespace
+from typing import Callable
 
 from app.database import connect, initialize_database
+from app.services.prediction_time import assess_prediction_time, close_provenance, provenance_errors
 from app.models import (
     AgentPrediction,
     FirstBoardEnrichmentSnapshot,
@@ -15,6 +18,7 @@ from app.models import (
     FirstBoardRatingsResponse,
     StockDailyBar,
     StockIntradayKLineBar,
+    RecommendationIntelligenceResponse,
 )
 
 
@@ -419,6 +423,7 @@ class SQLiteFirstBoardRepository:
                 "snapshot_source": "live",
                 "data_as_of": first.data_as_of.isoformat(),
                 "snapshot_created_at": first.created_at.isoformat(),
+                "prediction_provenance": first.prediction_provenance or close_provenance(),
             }
             inserted += self._insert_live_prediction_batch(
                 predictions=items,
@@ -436,8 +441,16 @@ class SQLiteFirstBoardRepository:
         data_as_of: date,
         created_at: datetime,
         replace: bool = False,
+        final_response: RecommendationIntelligenceResponse | None = None,
+        before_commit: Callable[[], None] | None = None,
     ) -> int:
         """Insert a live batch, optionally replacing its provisional same-day draft."""
+
+        if final_response is not None:
+            from app.services.prediction_time import validate_final_response
+            validate_final_response(final_response)
+            if final_response.prediction_provenance != ratings.prediction_provenance:
+                raise ValueError("Final response and relay snapshot provenance differ.")
 
         if data_as_of < ratings.trade_date:
             raise ValueError("Live prediction data_as_of cannot precede its base date.")
@@ -461,7 +474,11 @@ class SQLiteFirstBoardRepository:
             update={
                 "snapshot_source": "live",
                 "data_as_of": data_as_of,
-                "snapshot_created_at": created_at,
+                    "snapshot_created_at": created_at,
+                    "prediction_provenance": (
+                        predictions[0].prediction_provenance if predictions
+                        else ratings.prediction_provenance
+                    ) or close_provenance(),
             }
         )
         return self._insert_live_prediction_batch(
@@ -479,6 +496,8 @@ class SQLiteFirstBoardRepository:
                 created_at,
             ),
             replace_existing=replace,
+            final_response_json=final_response.model_dump_json() if final_response else None,
+            before_commit=before_commit,
         )
 
     def get_live_prediction_snapshot(
@@ -502,7 +521,16 @@ class SQLiteFirstBoardRepository:
             connection.close()
         if row is None:
             return None
-        return FirstBoardRatingsResponse.model_validate_json(row["snapshot_json"])
+        snapshot = FirstBoardRatingsResponse.model_validate_json(row["snapshot_json"])
+        if snapshot.snapshot_created_at is None or snapshot.data_as_of is None:
+            return None
+        verdict = assess_prediction_time(SimpleNamespace(
+            prediction_source="live", scoring_version=snapshot.generated_by,
+            trade_date=snapshot.trade_date, data_as_of=snapshot.data_as_of,
+            created_at=snapshot.snapshot_created_at,
+            prediction_provenance=snapshot.prediction_provenance,
+        ))
+        return snapshot if verdict.research_eligible else None
 
     def _upsert_historical_predictions(
         self,
@@ -521,9 +549,9 @@ class SQLiteFirstBoardRepository:
                 INSERT INTO agent_predictions (
                     prediction_id, trade_date, symbol, name, score, rating,
                     confidence, scoring_version, prediction_source, data_as_of,
-                    facts_json, reasons_json, risks_json, created_at
+                    facts_json, reasons_json, risks_json, created_at, provenance_json
                 )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                 ON CONFLICT(trade_date, symbol, scoring_version, prediction_source) DO NOTHING
                 """,
                 [self._prediction_to_record(item) for item in predictions],
@@ -542,6 +570,8 @@ class SQLiteFirstBoardRepository:
         top_limit: int,
         empty_batch_metadata: tuple[date, str, date, datetime] | None = None,
         replace_existing: bool = False,
+        final_response_json: str | None = None,
+        before_commit: Callable[[], None] | None = None,
     ) -> int:
         """Insert one live batch under a per-date transaction lock."""
 
@@ -555,15 +585,34 @@ class SQLiteFirstBoardRepository:
             trade_date, scoring_version, data_as_of, created_at = empty_batch_metadata
         else:
             raise ValueError("Empty live batches require explicit metadata.")
+        payload = json.loads(snapshot_json)
+        provenance = payload.get("prediction_provenance") or close_provenance()
+        errors = provenance_errors(base_date=trade_date, data_as_of=data_as_of,
+                                   created_at=created_at, provenance=provenance)
+        if errors:
+            raise ValueError("Invalid live prediction time: " + ", ".join(errors))
+        if any(item.prediction_provenance and item.prediction_provenance != provenance for item in predictions):
+            raise ValueError("Prediction time provenance differs within the batch.")
+        predictions = [item.model_copy(update={"prediction_provenance": provenance}) for item in predictions]
+        payload["prediction_provenance"] = provenance
+        snapshot_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         content_hash = hashlib.sha256(snapshot_json.encode("utf-8")).hexdigest()
 
         connection = connect(self.database_path)
         try:
             initialize_database(connection)
             connection.execute("BEGIN IMMEDIATE")
+            if final_response_json is not None:
+                existing_final = connection.execute(
+                    "SELECT 1 FROM recommendation_prediction_finals WHERE target_trade_date = ?",
+                    (provenance["target_trade_date"],),
+                ).fetchone()
+                if existing_final:
+                    connection.rollback()
+                    return 0
             existing = connection.execute(
                 """
-                SELECT prediction_count
+                SELECT *
                 FROM agent_live_prediction_snapshots
                 WHERE trade_date = ?
                 """,
@@ -573,6 +622,24 @@ class SQLiteFirstBoardRepository:
                 if not replace_existing:
                     connection.rollback()
                     return 0
+                old_provenance = json.loads(existing["snapshot_json"]).get("prediction_provenance") or {}
+                if old_provenance.get("stage") == "premarket_final":
+                    connection.rollback()
+                    return 0
+                if provenance.get("stage") != "premarket_final":
+                    raise ValueError("Only a validated premarket final may supersede a close baseline.")
+                original_rows = connection.execute(
+                    "SELECT * FROM agent_predictions WHERE trade_date = ? AND prediction_source = 'live'",
+                    (trade_date.isoformat(),),
+                ).fetchall()
+                connection.execute("""
+                    INSERT OR IGNORE INTO prediction_snapshot_archive
+                    (snapshot_id, trade_date, snapshot_record_json, prediction_rows_json, archived_at)
+                    VALUES (?, ?, ?, ?, ?)
+                """, (existing["snapshot_id"], trade_date.isoformat(),
+                      json.dumps(dict(existing), ensure_ascii=False),
+                      json.dumps([dict(row) for row in original_rows], ensure_ascii=False),
+                      created_at.isoformat()))
                 connection.execute(
                     """
                     DELETE FROM agent_predictions
@@ -613,12 +680,19 @@ class SQLiteFirstBoardRepository:
                     INSERT INTO agent_predictions (
                         prediction_id, trade_date, symbol, name, score, rating,
                         confidence, scoring_version, prediction_source, data_as_of,
-                        facts_json, reasons_json, risks_json, created_at
+                        facts_json, reasons_json, risks_json, created_at, provenance_json
                     )
-                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
+                    VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
                     """,
                     [self._prediction_to_record(item) for item in predictions],
                 )
+            if final_response_json is not None:
+                connection.execute("""
+                    INSERT INTO recommendation_prediction_finals
+                    (target_trade_date, finalized_at, response_json) VALUES (?, ?, ?)
+                """, (provenance["target_trade_date"], created_at.isoformat(), final_response_json))
+            if before_commit is not None:
+                before_commit()
             connection.commit()
             return len(predictions)
         except Exception:
@@ -1009,6 +1083,7 @@ class SQLiteFirstBoardRepository:
             json.dumps(prediction.reasons, ensure_ascii=False),
             json.dumps(prediction.risks, ensure_ascii=False),
             prediction.created_at.isoformat(),
+            json.dumps(prediction.prediction_provenance, ensure_ascii=False, sort_keys=True),
         )
 
     def _feature_from_row(self, row: sqlite3.Row) -> FirstBoardFeature:
@@ -1158,6 +1233,7 @@ class SQLiteFirstBoardRepository:
             reasons=json.loads(row["reasons_json"]),
             risks=json.loads(row["risks_json"]),
             created_at=datetime.fromisoformat(row["created_at"]),
+            prediction_provenance=json.loads(row["provenance_json"]),
         )
 
 

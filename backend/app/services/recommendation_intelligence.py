@@ -10,6 +10,8 @@ from uuid import uuid4
 from zoneinfo import ZoneInfo
 
 from app.agents.first_board import build_first_board_ratings
+from app.collectors.trading_calendar_collector import collect_a_share_trade_dates
+from app.services.prediction_time import TIME_CONTRACT_VERSION, validate_final_response
 from app.collectors.first_board_enrichment_collector import (
     DragonTigerFact,
     PopularityFact,
@@ -610,6 +612,7 @@ def finalize_recommendation_intelligence(
 
     finalized_at = _as_shanghai(now or datetime.now(SHANGHAI_TZ))
     if response.stage == "final":
+        validate_final_response(response)
         return response
     if response.target_trade_date is None:
         raise ValueError("Cannot finalize a recommendation without target_trade_date.")
@@ -625,8 +628,22 @@ def finalize_recommendation_intelligence(
     )
     existing = intelligence_repo.get_final(response.target_trade_date.isoformat())
     if existing is not None:
+        validate_final_response(existing)
         intelligence_repo.save(existing)
         return existing
+
+    base_date = response.relay_base_date or response.discovery_base_date
+    if base_date is None:
+        raise ValueError("Cannot finalize without a base trading date.")
+    calendar = collect_a_share_trade_dates(base_date, response.target_trade_date)
+    provenance = {
+        "version": TIME_CONTRACT_VERSION, "stage": "premarket_final",
+        "target_trade_date": response.target_trade_date.isoformat(),
+        "information_cutoff_at": finalized_at.isoformat(),
+        "calendar_verified": True,
+        "calendar_source": "akshare.tool_trade_date_hist_sina",
+        "calendar_trade_dates": [day.isoformat() for day in calendar],
+    }
 
     selected_items = [
         *sorted(
@@ -644,8 +661,16 @@ def finalize_recommendation_intelligence(
             "finalized_at": finalized_at,
             "refreshed_at": finalized_at,
             "items": selected_items,
+            "prediction_provenance": provenance,
         }
     )
+    validate_final_response(final)
+    def verify_commit_window() -> None:
+        written_at = _as_shanghai(now or datetime.now(SHANGHAI_TZ))
+        if not (written_at.date() == final.target_trade_date
+                and FINALIZATION_TIME <= written_at.time() < MARKET_OPEN_TIME):
+            raise ValueError("Finalization completed outside the 09:00-09:30 window.")
+
     _persist_final_relay_snapshot(
         final,
         limit_up_repository=(
@@ -653,7 +678,10 @@ def finalize_recommendation_intelligence(
             or SQLiteLimitUpRepository(first_repo.database_path, seed_if_empty=False)
         ),
         first_board_repository=first_repo,
+        before_commit=verify_commit_window,
     )
+    if final.relay_base_date is None:
+        verify_commit_window()
     if not intelligence_repo.save_final(final):
         persisted = intelligence_repo.get_final(response.target_trade_date.isoformat())
         if persisted is not None:
@@ -761,6 +789,7 @@ def _persist_final_relay_snapshot(
     *,
     limit_up_repository: SQLiteLimitUpRepository,
     first_board_repository: SQLiteFirstBoardRepository,
+    before_commit: Callable[[], None] | None = None,
 ) -> None:
     """Make the pre-open relay Top10 the sole live snapshot used by review."""
 
@@ -827,6 +856,7 @@ def _persist_final_relay_snapshot(
         snapshot_source="live",
         data_as_of=response.target_trade_date,
         snapshot_created_at=created_at,
+        prediction_provenance=response.prediction_provenance,
     )
     predictions = [
         AgentPrediction(
@@ -847,6 +877,7 @@ def _persist_final_relay_snapshot(
             reasons=rating.reasons,
             risks=rating.risks,
             created_at=created_at,
+            prediction_provenance=response.prediction_provenance,
         )
         for rating in selected
     ]
@@ -857,6 +888,8 @@ def _persist_final_relay_snapshot(
         data_as_of=response.target_trade_date,
         created_at=created_at,
         replace=True,
+        final_response=response,
+        before_commit=before_commit,
     )
 
 

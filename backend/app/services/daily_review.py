@@ -15,6 +15,7 @@ from app.repositories.first_board_repository import SQLiteFirstBoardRepository
 from app.repositories.review_snapshot_repository import SQLiteReviewSnapshotRepository
 from app.repositories.scoring_policy_repository import SQLiteScoringPolicyRepository
 from app.services.evaluation_agent import select_canonical_prediction_snapshots
+from app.services.prediction_time import assess_prediction_time
 from app.services.llm_provider import LLMProvider
 from app.services.scoring_policy import DEFAULT_SCORING_POLICY_VERSION
 
@@ -30,6 +31,9 @@ def review_snapshot_matches_current_predictions(
 ) -> bool:
     """Return whether a persisted report covers the current canonical Top-N."""
 
+    if report.time_audit_status != "checked":
+        return False
+
     champion = SQLiteScoringPolicyRepository(
         first_board_repository.database_path
     ).get_champion()
@@ -44,7 +48,8 @@ def review_snapshot_matches_current_predictions(
         preferred_scoring_version=preferred_version,
     )
     expected = _daily_top_prediction_keys(predictions, top_per_day=top_per_day)
-    actual = {(item.trade_date, item.symbol) for item in report.reviewed_picks}
+    actual = {(item.trade_date, item.symbol, item.score, item.confidence, item.data_as_of, item.time_cohort, item.scoring_version)
+              for item in report.reviewed_picks}
     return actual == expected
 
 
@@ -52,19 +57,20 @@ def _daily_top_prediction_keys(
     predictions: list[AgentPrediction],
     *,
     top_per_day: int,
-) -> set[tuple[date, str]]:
+) -> set[tuple[date, str, float, float, date, str, str]]:
     """Select the same daily Top-N identity set used by the Review Agent."""
 
     by_date: dict[date, list[AgentPrediction]] = {}
     for item in predictions:
         by_date.setdefault(item.trade_date, []).append(item)
-    selected: set[tuple[date, str]] = set()
+    selected: set[tuple[date, str, float, float, date, str, str]] = set()
     for trade_date, daily in by_date.items():
         ranked = sorted(
             daily,
             key=lambda item: (-item.score, -item.confidence, item.symbol),
         )[: max(top_per_day, 0)]
-        selected.update((trade_date, item.symbol) for item in ranked)
+        selected.update((item.trade_date, item.symbol, item.score, item.confidence,
+                         item.data_as_of, assess_prediction_time(item).cohort, item.scoring_version) for item in ranked)
     return selected
 
 

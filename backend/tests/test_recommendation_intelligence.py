@@ -690,7 +690,9 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         self.assertEqual(relay_date, trade_date)
         self.assertEqual(relay_symbols, ["002001"])
 
-    def test_finalization_freezes_one_version_and_trims_display_items(self) -> None:
+    @patch("app.services.recommendation_intelligence.collect_a_share_trade_dates",
+           return_value=[date(2026, 8, 31), date(2026, 9, 1)])
+    def test_finalization_freezes_one_version_and_trims_display_items(self, _calendar) -> None:
         now = datetime(
             2026, 9, 1, 9, 0,
             tzinfo=timezone(timedelta(hours=8)),

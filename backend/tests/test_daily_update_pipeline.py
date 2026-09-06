@@ -201,6 +201,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             )
             kwargs = {
                 "trade_date": trade_date,
+                "now": datetime.combine(trade_date, time(8), timezone.utc),
                 "top_targets": 1,
                 "max_tracked_kline_fetches": 0,
                 "skip_import": True,
@@ -409,6 +410,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
 
             report = run_daily_update(
                 trade_date=trade_dates[-1],
+                now=datetime.combine(trade_dates[-1], time(8), timezone.utc),
                 history_days=60,
                 top_targets=2,
                 max_tracked_kline_fetches=20,
