@@ -26,6 +26,8 @@ backend/data/daily_close_loop_alert.json
 backend/data/daily_close_loop.lock
 backend/data/prediction_time_audit*.json
 backend/data/backups/
+output/
+tmp/pdfs/
 
 # Frontend
 node_modules/
