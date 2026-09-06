@@ -149,9 +149,10 @@ data:
 .\.venv\Scripts\python.exe scripts\update_daily_data.py --date 20260810 --skip-import
 ```
 
-The pipeline writes immutable Top10 prediction snapshots. The latest available
-trading date is stored as `live`; older missing dates are stored as
-`historical_backtest`. Evaluation endpoints only read these snapshots and never
+The pipeline stores same-day after-close batches as `close_baseline`; historical
+backfills are always `historical_backtest`, even when they are the latest local
+data date. The compatibility `live` label alone does not establish forward
+eligibility. Evaluation endpoints only read these snapshots and never
 create historical predictions as a side effect. Outcome evaluation uses the
 next trading day's open as the executable entry baseline; promotion and
 intraday highs remain separate facts.
@@ -185,9 +186,18 @@ cd backend
 
 The runner resolves the latest closed A-share trading date, uses a process lock,
 retries transient failures, persists execution history, and writes the latest
-JSON report under `backend/data`. Only a same-day run after 15:30 Asia/Shanghai
-can persist `live` predictions. Late backfills are always labeled
-`historical_backtest`.
+JSON report under `backend/data`. Both the runner and direct update script require
+the base date's 15:30 Asia/Shanghai gate for a new close baseline. A separate
+pre-open final must pass the next-trading-day calendar, 09:00–09:30 window and
+information-cutoff checks. Only these `premarket_final` samples count in current
+forward benchmarks; legacy close batches and backtests are grouped separately
+by scoring version. Original baselines are archived transactionally before a
+final takes over the active slot. See [Prediction time contract](../docs/Prediction_Time_Contract.md).
+
+`python scripts/audit_prediction_times.py` produces a read-only local audit.
+Add `--apply` to create a consistent backup and append hash-bound annotations
+without rewriting original predictions or saved review reports. Invalid saved
+reports are marked and normal review requests recompute eligible samples.
 
 Install the Windows Task Scheduler entry from the project root:
 
