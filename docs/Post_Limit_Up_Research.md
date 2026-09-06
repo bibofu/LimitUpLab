@@ -13,6 +13,18 @@
 
 输出 `comparison.json`、`signals.csv`、`eligible_pool.csv` 和 `daily_coverage.csv`。JSON 保存 SQL、输入记录摘要 SHA-256、脚本 SHA-256、固定定义、排除原因、覆盖率和完整结果。数据库使用 `mode=ro`、`query_only` 和一致性读取事务，不写回业务数据。输入摘要针对查询结果，不是 SQLite 文件二进制摘要。
 
+### 回撤与横盘重点比较
+
+```powershell
+& backend/.venv/Scripts/python.exe backend/scripts/research_pattern_positive_rates.py
+& backend/.venv/Scripts/python.exe backend/scripts/research_pullback_consolidation.py
+& backend/.venv/Scripts/python.exe -m pytest backend/tests/test_pattern_positive_rates.py backend/tests/test_pullback_consolidation_research.py -q
+```
+
+第一条命令对冻结 CSV 做固定交易摩擦情景的正比例分析；第二条生成 `pullback_vs_consolidation.md/json`，比较同日、锚点年龄、板高分组及回撤距离下的共同样本，并在相同价格横盘条件内比较缩量与非缩量。它读取 SQLite 前先使用原 SQL 核对输入摘要，数据库已变化时拒绝与旧 CSV 混用。需要先重建一致的基础研究导出，不能绕过校验。
+
+主比较沿用各形态首次信号；缩量增量分析使用每日观察，明确保留重复锚点，两者不能混作样本数量。直接比较对双方共同股票做对称排除；合格配对在日期/年龄/板高分层内等权，再按日期等权。两组缺少共同价格区间时，不外推匹配结果。匹配日期和双方股票名单保存在 `matching_strata`。所有新增比较仍为探索，区间没有校正多重检验，不构成策略上线或交易结论。
+
 ## 时间和样本口径
 
 - T 是形态确认的收盘日。最近涨停是 T、T-1、T-2、T-3、T-4 中最近一次收盘涨停；再次涨停会重置锚点。
