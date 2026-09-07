@@ -5,7 +5,7 @@ import sqlite3
 from contextlib import closing
 from datetime import date, datetime, timezone
 from pathlib import Path
-from unittest.mock import Mock, patch
+from unittest.mock import patch
 from uuid import uuid4
 
 from app.models import (
@@ -15,7 +15,7 @@ from app.models import (
     ReviewAgentReportResponse,
 )
 from app.repositories import SQLiteFirstBoardRepository, SQLiteReviewSnapshotRepository
-from app.services.daily_review import resolve_review_start_date, review_snapshot_matches_current_predictions
+from app.services.daily_review import review_snapshot_matches_current_predictions
 
 
 TEST_TMP_ROOT = Path(
@@ -24,45 +24,6 @@ TEST_TMP_ROOT = Path(
 
 
 class ReviewSnapshotRepositoryTest(unittest.TestCase):
-    def test_review_window_finds_five_mature_prediction_dates_across_market_gaps(self) -> None:
-        available_dates = [
-            date(2026, 8, 28), date(2026, 8, 31), date(2026, 9, 1),
-            date(2026, 9, 2), date(2026, 9, 3), date(2026, 9, 4), date(2026, 9, 7),
-        ]
-        prediction_dates = [
-            date(2026, 8, 28), date(2026, 8, 31), date(2026, 9, 1),
-            date(2026, 9, 3), date(2026, 9, 4), date(2026, 9, 7),
-        ]
-        predictions = [
-            AgentPrediction(
-                prediction_id=f"historical-{trade_date.isoformat()}",
-                trade_date=trade_date,
-                symbol="000001",
-                name="测试股份",
-                score=88,
-                rating="A",
-                confidence=0.8,
-                scoring_version="review-window-v1",
-                prediction_source="historical_backtest",
-                data_as_of=trade_date,
-                facts_json={},
-                reasons=[],
-                risks=[],
-                created_at=datetime(2026, 9, 7, 10, 0, tzinfo=timezone.utc),
-            )
-            for trade_date in prediction_dates
-        ]
-        repository = Mock(spec=SQLiteFirstBoardRepository)
-        repository.list_predictions_between.return_value = predictions
-
-        result = resolve_review_start_date(
-            available_dates=available_dates,
-            as_of_date=date(2026, 9, 7),
-            first_board_repository=repository,
-        )
-
-        self.assertEqual(result, date(2026, 8, 28))
-
     def test_audit_annotation_does_not_rewrite_saved_report(self) -> None:
         from app.services.prediction_time_audit import content_hash
         snapshot = self._snapshot(date(2026, 9, 3), finding="original")

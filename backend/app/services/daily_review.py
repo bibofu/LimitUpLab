@@ -23,30 +23,6 @@ from app.services.scoring_policy import DEFAULT_SCORING_POLICY_VERSION
 DAILY_REVIEW_SNAPSHOT_VERSION = "daily-review-snapshot-v1"
 
 
-def resolve_review_start_date(
-    *,
-    available_dates: list[date],
-    as_of_date: date,
-    first_board_repository: SQLiteFirstBoardRepository,
-    mature_prediction_days: int = 5,
-    scan_market_days: int = 30,
-) -> date:
-    """Find enough eligible prediction dates instead of assuming every market date has one."""
-
-    eligible_dates = [item for item in available_dates if item <= as_of_date]
-    if not eligible_dates:
-        raise ValueError(f"No limit-up events available for {as_of_date.isoformat()}.")
-    end_index = eligible_dates.index(as_of_date) if as_of_date in eligible_dates else len(eligible_dates) - 1
-    scan_start = eligible_dates[max(0, end_index - max(scan_market_days, mature_prediction_days))]
-    canonical = select_canonical_prediction_snapshots(
-        first_board_repository.list_predictions_between(scan_start, as_of_date)
-    )
-    mature_dates = sorted({item.trade_date for item in canonical if item.trade_date < as_of_date})
-    if len(mature_dates) >= mature_prediction_days:
-        return mature_dates[-mature_prediction_days]
-    return eligible_dates[max(0, end_index - mature_prediction_days)]
-
-
 def review_snapshot_matches_current_predictions(
     *,
     report: ReviewAgentReportResponse,
@@ -123,12 +99,8 @@ def build_daily_review_snapshot(
     )
     if not available_dates or as_of_date not in available_dates:
         raise ValueError(f"No limit-up events available for {as_of_date.isoformat()}.")
-    start_date = resolve_review_start_date(
-        available_dates=available_dates,
-        as_of_date=as_of_date,
-        first_board_repository=first_board_repository,
-        mature_prediction_days=max(1, history_dates - 1),
-    )
+    end_index = available_dates.index(as_of_date)
+    start_date = available_dates[max(0, end_index - max(1, history_dates - 1))]
     report = build_review_agent_report(
         events=events,
         start_date=start_date,

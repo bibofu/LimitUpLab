@@ -1940,11 +1940,16 @@ td span {
 .review-pick-table-head,
 .review-pick-row {
   display: grid;
-  grid-template-columns: 1.15fr 0.72fr 0.72fr 0.8fr minmax(260px, 1.8fr);
+  grid-template-columns: 1.15fr 0.72fr 0.72fr minmax(260px, 1.8fr);
   gap: 10px;
   align-items: center;
   min-height: 54px;
   padding: 9px 12px;
+}
+
+.review-pick-table-head.with-latest-return,
+.review-pick-row.with-latest-return {
+  grid-template-columns: 1.15fr 0.72fr 0.72fr 0.8fr minmax(260px, 1.8fr);
 }
 
 .review-pick-table-head {

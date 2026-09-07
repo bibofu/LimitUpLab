@@ -68,7 +68,6 @@ from app.repositories import (
     get_limit_up_repository,
 )
 from app.services.data_health import build_agent_data_health
-from app.services.daily_review import resolve_review_start_date, review_snapshot_matches_current_predictions
 from app.services.factor_signal_diagnostic import build_factor_signal_diagnostic
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.first_board_critic import build_first_board_critic
@@ -758,14 +757,6 @@ def get_review_agent_report(
     available_dates = sorted({event.trade_date for event in events})
     resolved_end = end_date or available_dates[-1]
     first_board_repository = SQLiteFirstBoardRepository()
-    if start_date is None:
-        resolved_start = resolve_review_start_date(
-            available_dates=available_dates,
-            as_of_date=resolved_end,
-            first_board_repository=first_board_repository,
-        )
-    else:
-        resolved_start = start_date
     if (
         start_date is None
         and min_score == 0
@@ -773,12 +764,13 @@ def get_review_agent_report(
         and follow_days == 5
     ):
         snapshot = SQLiteReviewSnapshotRepository().get_snapshot(resolved_end)
-        if snapshot is not None and snapshot.report.start_date <= resolved_start and review_snapshot_matches_current_predictions(
-            report=snapshot.report,
-            first_board_repository=first_board_repository,
-            top_per_day=top_per_day,
-        ):
+        if snapshot is not None:
             return snapshot.report
+    if start_date is None:
+        end_index = available_dates.index(resolved_end) if resolved_end in available_dates else len(available_dates) - 1
+        resolved_start = available_dates[max(0, end_index - 5)]
+    else:
+        resolved_start = start_date
     if resolved_start > resolved_end:
         raise HTTPException(status_code=400, detail="start_date must be before end_date.")
     return build_review_agent_report(

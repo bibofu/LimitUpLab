@@ -54,23 +54,6 @@ export function ReviewDashboard({
 
 type DragonTigerFilter = "all" | "organization" | "hot_money";
 
-function pickTimeCohort(pick: ReviewAgentPick): string {
-  const stage = pick.time_cohort ?? (pick.prediction_source === "historical_backtest" ? "historical_backtest" : "unverified");
-  return `${stage}/${pick.scoring_version ?? "版本待核验"}`;
-}
-
-function timeCohortLabel(key: string): string {
-  const timeCohortLabels: Record<string, string> = {
-    premarket_final: "盘前终选",
-    close_baseline: "收盘基线",
-    legacy_close: "旧版收盘研究",
-    historical_backtest: "历史回测",
-    unverified: "待核验样本",
-  };
-  const [stage, ...version] = key.split("/");
-  return `${timeCohortLabels[stage] ?? "待核验样本"} · ${version.join("/").replace("first-board-rule-", "")}`;
-}
-
 function DragonTigerReviewPanel({ tradeDate }: { tradeDate: string }) {
   /** Load post-close Dragon-Tiger facts without delaying the rest of the dashboard. */
 
@@ -381,10 +364,13 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
       .then((response) => {
         if (!active) return;
         setSnapshotDates(response.snapshots);
+        const latestCompletedSnapshot = response.snapshots.find(
+          (item) => item.as_of_date < latestTradeDate,
+        ) ?? response.snapshots[0];
         setSelectedAsOfDate((current) => (
-          response.snapshots.some((item) => item.as_of_date === current)
+          current !== latestTradeDate && response.snapshots.some((item) => item.as_of_date === current)
             ? current
-            : response.snapshots[0]?.as_of_date ?? latestTradeDate
+            : latestCompletedSnapshot?.as_of_date ?? latestTradeDate
         ));
       })
       .catch(() => {
@@ -487,8 +473,8 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
             </strong>
             <p>
               {report
-                ? `最近 5 个可评价预测日，每天一个卡片；点进去看当日 Top10 到 ${report.end_date} 收盘的走势。`
-                : "自动加载最近 5 个可评价预测日的 Top10，点击日期卡片查看到最新收盘的走势。"}
+                ? `过去 5 个交易日，每天一个卡片；点进去看当日 Top10 到 ${report.end_date} 收盘的走势。`
+                : "自动加载过去 5 个交易日的每日 Top10 评分票，点击日期卡片查看到最新收盘的兑现情况。"}
             </p>
           </div>
         </div>
@@ -798,24 +784,23 @@ function ReviewPickTable({
 
   return (
     <div className="review-pick-table">
-      <div className="review-pick-table-head">
+      <div className={`review-pick-table-head ${showLatestReturn ? "with-latest-return" : ""}`}>
         <span>股票</span>
         <span>评分</span>
         <span>结论</span>
-        <span>{showLatestReturn ? "首板至今" : "次日开收"}</span>
+        {showLatestReturn ? <span>首板至今</span> : null}
         <span>走势追踪</span>
       </div>
       {visible.map((pick) => (
         <Link
-          className={`review-pick-row pick-${pick.evaluation_label}`}
+          className={`review-pick-row pick-${pick.evaluation_label} ${showLatestReturn ? "with-latest-return" : ""}`}
           key={`${pick.trade_date}-${pick.symbol}`}
           to={stockDetailPath(pick.symbol)}
         >
           <strong>
             {pick.name}
             <small>
-              {showTradeDate ? `${pick.trade_date} / ` : ""}
-              {pick.symbol} / {timeCohortLabel(pickTimeCohort(pick))}
+              {showTradeDate ? `${pick.trade_date} / ` : ""}{pick.symbol}
             </small>
           </strong>
           <span>{pick.score.toFixed(1)} / {pick.rating}</span>
@@ -831,11 +816,7 @@ function ReviewPickTable({
                   : "未晋级二板"}
             </small>
           </span>
-          <span>
-            {formatOptionalPercent(
-              showLatestReturn ? latestTrackedReturn(pick) : pick.next_open_to_close_pct,
-            )}
-          </span>
+          {showLatestReturn ? <span>{formatOptionalPercent(latestTrackedReturn(pick))}</span> : null}
           <ReviewPostBars
             bars={pick.post_bars}
             expectedCount={pick.expected_post_bar_count}
