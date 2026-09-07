@@ -393,6 +393,7 @@ def _review_picks_from_toolbox(toolbox: ReviewAgentToolbox) -> list[ReviewAgentP
                 trade_date=item.trade_date,
                 symbol=item.symbol,
                 name=item.name,
+                concept=str(prediction.facts_json.get("concept") or "") if prediction else "",
                 score=item.score,
                 rating=item.rating,
                 confidence=item.confidence,

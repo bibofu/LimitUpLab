@@ -639,6 +639,7 @@ export interface ReviewAgentPick {
   trade_date: string;
   symbol: string;
   name: string;
+  concept: string;
   score: number;
   rating: string;
   confidence: number;

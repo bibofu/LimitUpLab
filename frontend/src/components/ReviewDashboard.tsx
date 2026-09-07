@@ -746,7 +746,7 @@ function ReviewPickTable({
     <div className="review-pick-table">
       <div className={`review-pick-table-head ${showLatestReturn ? "with-latest-return" : ""}`}>
         <span>股票</span>
-        <span>评分</span>
+        <span>{showLatestReturn ? "评分" : "题材"}</span>
         <span>结论</span>
         {showLatestReturn ? <span>首板至今</span> : null}
         <span>走势追踪</span>
@@ -763,7 +763,13 @@ function ReviewPickTable({
               {showTradeDate ? `${pick.trade_date} / ` : ""}{pick.symbol}
             </small>
           </strong>
-          <span>{pick.score.toFixed(1)} / {pick.rating}</span>
+          {showLatestReturn ? (
+            <span>{pick.score.toFixed(1)} / {pick.rating}</span>
+          ) : (
+            <span className="review-pick-concept" title={pick.concept || "题材待补充"}>
+              {pick.concept || "题材待补充"}
+            </span>
+          )}
           <span className="review-pick-verdict">
             {showLatestReturn
               ? trackedReturnLabel(latestTrackedReturn(pick))

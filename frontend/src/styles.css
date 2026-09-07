@@ -1937,11 +1937,20 @@ td span {
 .review-pick-table-head,
 .review-pick-row {
   display: grid;
-  grid-template-columns: 1.15fr 0.72fr 0.72fr minmax(260px, 1.8fr);
+  grid-template-columns: 1fr 1.2fr 0.72fr minmax(260px, 1.8fr);
   gap: 10px;
   align-items: center;
   min-height: 54px;
   padding: 9px 12px;
+}
+
+.review-pick-concept {
+  overflow: hidden;
+  color: #344054;
+  font-size: 12px;
+  line-height: 1.45;
+  text-overflow: ellipsis;
+  white-space: nowrap;
 }
 
 .review-pick-table-head.with-latest-return,

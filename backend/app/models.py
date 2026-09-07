@@ -1405,6 +1405,7 @@ class ReviewAgentPick(BaseModel):
     trade_date: date
     symbol: str
     name: str
+    concept: str = ""
     score: float
     rating: str
     confidence: float
