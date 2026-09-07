@@ -32,7 +32,6 @@ from app.services.prediction_time import CN_TZ, close_provenance, provenance_err
 from app.repositories import (
     SQLiteFirstBoardRepository,
     SQLiteLimitUpRepository,
-    SQLiteStrategyRepository,
 )
 from app.services.first_board_features import (
     build_first_board_features,
@@ -48,7 +47,6 @@ from app.services.outcome_completeness import build_top10_outcome_completeness
 from app.services.limit_up_reason import merge_limit_up_reasons
 from app.services.relay_universe import is_relay_candidate_symbol
 from app.services.stock_kline import load_stock_intraday_bars
-from app.services.strategy_platform import materialize_all_strategies
 
 
 PostBarCollector = Callable[[str, date, date], list[StockDailyBar]]
@@ -114,8 +112,6 @@ class DailyUpdateReport:
     post_limit_cache_missing: int = 0
     post_limit_cache_fetches: int = 0
     post_limit_cache_bars: int = 0
-    strategy_snapshot_count: int = 0
-    strategy_candidate_count: int = 0
     outcome_completeness: dict[str, object] = field(default_factory=dict)
     top_candidate: dict[str, object] | None = None
     health: dict[str, object] = field(default_factory=dict)
@@ -447,17 +443,6 @@ def run_daily_update(
         report.post_limit_cache_fetches = int(post_limit_backfill["fetch_count"])
         report.post_limit_cache_bars = int(post_limit_backfill["bar_count"])
         report.warnings.extend(post_limit_backfill["warnings"])
-        try:
-            strategy_runs = materialize_all_strategies(
-                data_as_of=trade_date,
-                repository=SQLiteStrategyRepository(first_board_repo.database_path),
-                first_board_repository=first_board_repo,
-                limit_up_repository=limit_repo,
-            )
-            report.strategy_snapshot_count = len(strategy_runs)
-            report.strategy_candidate_count = sum(run.candidate_count for run in strategy_runs)
-        except Exception as error:  # noqa: BLE001
-            report.warnings.append(f"Strategy snapshots: {error}")
     if post_bar_collector is None and is_latest_available_date:
         intraday_cache = warm_latest_intraday_cache(
             events=events,

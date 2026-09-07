@@ -12,7 +12,6 @@ import type {
   FailedRateStat,
   FinanceNewsPage,
   FirstBoardCriticResponse,
-  FirstBoardDiscoveryResponse,
   FirstBoardRatingsResponse,
   LimitUpEvent,
   MarketSummary,
@@ -213,13 +212,6 @@ export function fetchFirstBoardRatings(tradeDate?: string, fullPool = false) {
   if (fullPool) params.set("full_pool", "true");
   const query = params.size > 0 ? `?${params.toString()}` : "";
   return request<FirstBoardRatingsResponse>(`/api/agents/first-board-ratings${query}`);
-}
-
-export function fetchFirstBoardDiscovery(dataAsOf?: string) {
-  const query = dataAsOf ? `?data_as_of=${encodeURIComponent(dataAsOf)}` : "";
-  return request<FirstBoardDiscoveryResponse>(
-    `/api/agents/first-board-discovery${query}`,
-  );
 }
 
 export function fetchRecommendationIntelligence() {

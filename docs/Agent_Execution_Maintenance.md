@@ -8,7 +8,7 @@
 | `context.py` | 单次请求的可变状态，包括评级缓存、Facts、trace 和来源 |
 | `market.py` | 市场事件、指数、晋级率、板块、人气及扩展涨停池 |
 | `stocks.py` | 个股行情、资讯、龙虎榜及扩展搜索 |
-| `ratings.py` | 首板评级、低位挖掘、候选过滤及 Critic |
+| `ratings.py` | 首板评级、候选过滤及 Critic |
 | `review.py` | 预测质量、回测、评价、Top10 追踪及策略状态 |
 | `helpers.py` | 无对话编排依赖的参数解析与证据序列化 |
 

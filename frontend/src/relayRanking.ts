@@ -1,5 +1,5 @@
 export interface RelayRankingItem {
-  strategy: "discovery" | "relay";
+  strategy: "relay";
   base_trade_date: string;
   symbol: string;
   rank: number;
