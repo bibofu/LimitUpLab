@@ -76,6 +76,12 @@ from app.services.strategy_catalog import (
     resolve_strategy_id,
     strategy_id_for_shape,
 )
+from app.services.strategy_platform import (
+    build_strategy_catalog,
+    materialize_strategy_run,
+    strategy_statistics as build_strategy_statistics,
+    strategy_stock_path as build_strategy_stock_path,
+)
 from app.repositories import SQLiteStrategyRepository
 from app.services.web_search import search_web
 from app.agents.review_agent import build_review_agent_report
@@ -2118,8 +2124,6 @@ class AgentToolRegistry:
     def strategy_catalog(self) -> ToolResult:
         """Return the fixed strategy registry with latest immutable-run coverage."""
 
-        from app.services.strategy_platform import build_strategy_catalog
-
         response = build_strategy_catalog(
             SQLiteStrategyRepository(self.first_board_repository.database_path)
         )
@@ -2149,8 +2153,6 @@ class AgentToolRegistry:
 
     def strategy_latest(self, strategy_id: str, data_as_of: date | None = None) -> ToolResult:
         """Return one registered immutable run without accepting ad-hoc scoring input."""
-
-        from app.services.strategy_platform import materialize_strategy_run
 
         try:
             strategy_id = resolve_strategy_id(strategy_id)
@@ -2189,8 +2191,6 @@ class AgentToolRegistry:
 
     def strategy_stock_path(self, strategy_id: str, symbol: str, data_as_of: date | None = None) -> ToolResult:
         """Return registered candidate evidence and its event-anchored path."""
-
-        from app.services.strategy_platform import strategy_stock_path as build_strategy_stock_path
 
         resolved_symbol = self.resolve_stock_identity(symbol)[0]
         latest = self.strategy_latest(strategy_id, data_as_of).output
@@ -2234,8 +2234,6 @@ class AgentToolRegistry:
         days: int = 30,
     ) -> ToolResult:
         """Compare only registered descriptive statistics under an explicit quality gate."""
-
-        from app.services.strategy_platform import strategy_statistics as build_strategy_statistics
 
         try:
             unique_ids = list(dict.fromkeys(resolve_strategy_id(item) for item in strategy_ids))

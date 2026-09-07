@@ -179,7 +179,7 @@ def test_strategy_comparison_refuses_ranking_when_samples_are_not_comparable(
             "sample_quality": "insufficient",
         }
 
-    monkeypatch.setattr("app.services.strategy_platform.strategy_statistics", fake_statistics)
+    monkeypatch.setattr("app.agents.tools.build_strategy_statistics", fake_statistics)
     registry = AgentToolRegistry(
         events=[],
         first_board_repository=SQLiteFirstBoardRepository(tmp_path / "compare.sqlite"),
