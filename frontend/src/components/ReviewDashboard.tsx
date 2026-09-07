@@ -33,7 +33,6 @@ import {
   stockDetailPath,
 } from "../dashboardFormatters";
 import { Panel } from "./Panel";
-import { summarizeReviewPromotion } from "../reviewCohorts";
 
 interface ReviewDashboardProps {
   dailyBoardPromotion: DailyBoardPromotionStat[];
@@ -55,20 +54,19 @@ export function ReviewDashboard({
 
 type DragonTigerFilter = "all" | "organization" | "hot_money";
 
-const timeCohortLabels: Record<string, string> = {
-  premarket_final: "盘前终选",
-  close_baseline: "收盘基线",
-  legacy_close: "旧版收盘研究",
-  historical_backtest: "历史回测",
-  unverified: "待核验样本",
-};
-
 function pickTimeCohort(pick: ReviewAgentPick): string {
   const stage = pick.time_cohort ?? (pick.prediction_source === "historical_backtest" ? "historical_backtest" : "unverified");
   return `${stage}/${pick.scoring_version ?? "版本待核验"}`;
 }
 
 function timeCohortLabel(key: string): string {
+  const timeCohortLabels: Record<string, string> = {
+    premarket_final: "盘前终选",
+    close_baseline: "收盘基线",
+    legacy_close: "旧版收盘研究",
+    historical_backtest: "历史回测",
+    unverified: "待核验样本",
+  };
   const [stage, ...version] = key.split("/");
   return `${timeCohortLabels[stage] ?? "待核验样本"} · ${version.join("/").replace("first-board-rule-", "")}`;
 }
@@ -449,9 +447,6 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
     0,
   );
   const trackedSuccessRate = trackedReadyCount > 0 ? trackedSuccessCount / trackedReadyCount : null;
-  const cohortPromotion = summarizeReviewPromotion(
-    reviewedPicks.filter((pick) => trackDates.includes(pick.trade_date)), report?.promotion_comparisons ?? [],
-  );
   const promotionComparisons = (report?.promotion_comparisons ?? []).reduce<
     Record<string, ReviewPromotionComparison>
   >((items, item) => {
@@ -500,12 +495,6 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
 
         {error ? <p className="review-agent-error">{error}</p> : null}
 
-        {(report?.excluded_time_prediction_count ?? 0) > 0 ? (
-          <p className="review-agent-error">
-            本期已排除 {report?.excluded_time_prediction_count} 条时间口径不合格或已退役实验记录；旧报告原件保留供审计。
-          </p>
-        ) : null}
-
         <div className="review-date-selector">
           <label htmlFor="review-as-of-date">复盘截止日</label>
           <select
@@ -519,15 +508,11 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
             ).map((item) => (
               <option key={item.as_of_date} value={item.as_of_date}>
                 {item.as_of_date}
-                {item.time_audit_status === "excluded" ? "（原报告含排除样本）" : ""}
               </option>
             ))}
           </select>
-          <span>{snapshotDates.find((item) => item.as_of_date === selectedAsOfDate)?.time_audit_status === "checked"
-            ? "已固化复盘" : "按当前审计口径重算"}</span>
+          <span>{snapshotDates.length > 0 ? "已固化复盘" : "当前动态复盘"}</span>
         </div>
-
-        {report ? <p className="review-agent-audit-note">日期卡片逐日标注记录来源；跨日期数字只作历史研究追踪，不代表盘前终选的前向验证。</p> : null}
 
         {running && !report ? (
           <div className="review-agent-empty">
@@ -546,21 +531,21 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
                 <strong>{trackDates.length}</strong>
               </span>
               <span>
-                <small>Top10 1进2 · 研究</small>
-                <strong>{formatEmpiricalRate(cohortPromotion.top_pick_promotion_rate)}</strong>
-                <em>{cohortPromotion.top_pick_promoted_count}/{cohortPromotion.top_pick_promotion_sample_size}</em>
+                <small>Top10 1进2</small>
+                <strong>{formatEmpiricalRate(report.top_pick_promotion_rate)}</strong>
+                <em>{report.top_pick_promoted_count}/{report.top_pick_promotion_sample_size}</em>
               </span>
               <span>
                 <small>同期全部首板</small>
-                <strong>{formatEmpiricalRate(cohortPromotion.market_promotion_rate)}</strong>
-                <em>{cohortPromotion.market_promoted_count}/{cohortPromotion.market_promotion_sample_size}</em>
+                <strong>{formatEmpiricalRate(report.market_promotion_rate)}</strong>
+                <em>{report.market_promoted_count}/{report.market_promotion_sample_size}</em>
               </span>
               <span>
-                <small>相对全市场 · 研究</small>
-                <strong className={(cohortPromotion.promotion_rate_delta ?? 0) >= 0 ? "positive" : "negative"}>
-                  {cohortPromotion.promotion_rate_delta === null
+                <small>相对全市场</small>
+                <strong className={(report.promotion_rate_delta ?? 0) >= 0 ? "positive" : "negative"}>
+                  {report.promotion_rate_delta === null
                     ? "暂无"
-                    : `${formatSigned(cohortPromotion.promotion_rate_delta * 100, 1)} 个百分点`}
+                    : `${formatSigned(report.promotion_rate_delta * 100, 1)} 个百分点`}
                 </strong>
               </span>
               <span>
@@ -649,7 +634,7 @@ function DailyTopReview({
             type="button"
             onClick={() => onSelect(tradeDate)}
           >
-            <span>{tradeDate} · {dailyPicks[0] ? timeCohortLabels[pickTimeCohort(dailyPicks[0]).split("/")[0]] ?? "待核验样本" : "无样本"}</span>
+            <span>{tradeDate}</span>
             <strong>Top10 追踪</strong>
             <small>{readyCount} / {dailyPicks.length} 缓存已同步</small>
             <b>

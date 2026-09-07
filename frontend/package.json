@@ -9,8 +9,7 @@
     "preview": "vite preview",
     "test": "node --experimental-strip-types --test --test-isolation=none tests/*.test.ts",
     "test:intraday-chart": "node --experimental-strip-types --test --test-isolation=none tests/intradayChart.test.ts",
-    "test:relay-ranking": "node --experimental-strip-types --test --test-isolation=none tests/relayRanking.test.ts",
-    "test:review-cohorts": "node --experimental-strip-types --test --test-isolation=none tests/reviewCohorts.test.ts"
+    "test:relay-ranking": "node --experimental-strip-types --test --test-isolation=none tests/relayRanking.test.ts"
   },
   "dependencies": {
     "lightweight-charts": "^5.2.1",
