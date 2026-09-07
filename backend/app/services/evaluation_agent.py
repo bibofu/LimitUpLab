@@ -27,6 +27,7 @@ def build_agent_evaluation(
     end_date: date,
     first_board_repository: SQLiteFirstBoardRepository | None = None,
     limit: int = 30,
+    include_time_invalid_live: bool = False,
 ) -> AgentEvaluationResponse:
     """Evaluate existing immutable rating snapshots against ready outcomes."""
 
@@ -39,6 +40,7 @@ def build_agent_evaluation(
     predictions = select_canonical_prediction_snapshots(
         raw_predictions,
         preferred_scoring_version=scoring_version,
+        include_time_invalid_live=include_time_invalid_live,
     )
     outcomes = {
         (outcome.base_trade_date, outcome.symbol): outcome
@@ -330,6 +332,7 @@ def select_canonical_prediction_snapshots(
     predictions: list[AgentPrediction],
     *,
     preferred_scoring_version: str | None = None,
+    include_time_invalid_live: bool = False,
 ) -> list[AgentPrediction]:
     """Select one complete prediction batch per date.
 
@@ -353,7 +356,10 @@ def select_canonical_prediction_snapshots(
             for item in daily
             if item.prediction_source == "live"
             and "auction-final" not in item.scoring_version
-            and assess_prediction_time(item).research_eligible
+            and (
+                include_time_invalid_live
+                or assess_prediction_time(item).research_eligible
+            )
         ]
         if live:
             batch_key = min(
@@ -377,7 +383,7 @@ def select_canonical_prediction_snapshots(
             continue
 
         # An excluded live date stays excluded; never silently substitute a backtest.
-        if invalid_live:
+        if invalid_live and not include_time_invalid_live:
             continue
 
         historical = [

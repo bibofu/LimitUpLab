@@ -9,6 +9,7 @@ from app.repositories import SQLiteFirstBoardRepository
 from app.services.evaluation_agent import (
     build_agent_evaluation,
     persist_agent_predictions_for_dates,
+    select_canonical_prediction_snapshots,
 )
 
 
@@ -203,6 +204,32 @@ class EvaluationAgentTest(unittest.TestCase):
             self.assertEqual(response.evaluations[0].prediction_id, "legacy-live-prediction")
         finally:
             self._cleanup_database(database_path)
+
+    def test_review_replay_can_restore_a_late_saved_live_batch(self) -> None:
+        trade_date = date(2026, 9, 2)
+        prediction = AgentPrediction(
+            prediction_id="late-saved-live",
+            trade_date=trade_date,
+            symbol="002001",
+            name="历史复盘样本",
+            score=82,
+            rating="A",
+            confidence=0.8,
+            scoring_version="first-board-rule-v5-board-shape-market-cap",
+            prediction_source="live",
+            data_as_of=date(2026, 9, 3),
+            facts_json={},
+            reasons=[],
+            risks=[],
+            created_at=datetime(2026, 9, 3, 2, 35, tzinfo=timezone.utc),
+        )
+
+        self.assertEqual(select_canonical_prediction_snapshots([prediction]), [])
+        replayed = select_canonical_prediction_snapshots(
+            [prediction],
+            include_time_invalid_live=True,
+        )
+        self.assertEqual([item.prediction_id for item in replayed], ["late-saved-live"])
 
 
 if __name__ == "__main__":

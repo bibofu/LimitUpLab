@@ -217,6 +217,7 @@ class ReviewAgentToolbox:
                 end_date=self.end_date,
                 first_board_repository=self.repository,
                 limit=500,
+                include_time_invalid_live=True,
             )
             by_date: dict[date, list[AgentEvaluationItem]] = {}
             for item in response.evaluations:

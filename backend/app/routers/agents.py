@@ -756,6 +756,8 @@ def get_review_agent_report(
         raise HTTPException(status_code=404, detail="No local limit-up events available.")
     available_dates = sorted({event.trade_date for event in events})
     resolved_end = end_date or available_dates[-1]
+    end_index = available_dates.index(resolved_end) if resolved_end in available_dates else len(available_dates) - 1
+    required_tracking_dates = set(available_dates[max(0, end_index - 5):end_index])
     first_board_repository = SQLiteFirstBoardRepository()
     if (
         start_date is None
@@ -764,10 +766,12 @@ def get_review_agent_report(
         and follow_days == 5
     ):
         snapshot = SQLiteReviewSnapshotRepository().get_snapshot(resolved_end)
-        if snapshot is not None:
+        snapshot_prediction_dates = {
+            item.trade_date for item in snapshot.report.reviewed_picks
+        } if snapshot is not None else set()
+        if snapshot is not None and required_tracking_dates.issubset(snapshot_prediction_dates):
             return snapshot.report
     if start_date is None:
-        end_index = available_dates.index(resolved_end) if resolved_end in available_dates else len(available_dates) - 1
         resolved_start = available_dates[max(0, end_index - 5)]
     else:
         resolved_start = start_date
