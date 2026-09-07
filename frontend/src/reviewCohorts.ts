@@ -1,18 +1,5 @@
 import type { ReviewAgentPick, ReviewPromotionComparison } from "./types";
 
-/** Prefer the most authoritative cohort that has at least one completed-date card. */
-export function selectReviewCohort(
-  availableCohorts: string[],
-  picks: Array<{ cohort: string; tradeDate: string }>,
-  latestTradeDate: string,
-  selectedCohort = "",
-) {
-  if (availableCohorts.includes(selectedCohort)) return selectedCohort;
-  return availableCohorts.find((cohort) => (
-    picks.some((pick) => pick.cohort === cohort && pick.tradeDate < latestTradeDate)
-  )) ?? availableCohorts[0] ?? "unverified";
-}
-
 /** Aggregate only the dates in the visible cohort, never the report-wide totals. */
 export function summarizeReviewPromotion(
   picks: Pick<ReviewAgentPick, "trade_date">[],

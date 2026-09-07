@@ -33,7 +33,7 @@ import {
   stockDetailPath,
 } from "../dashboardFormatters";
 import { Panel } from "./Panel";
-import { selectReviewCohort, summarizeReviewPromotion } from "../reviewCohorts";
+import { summarizeReviewPromotion } from "../reviewCohorts";
 
 interface ReviewDashboardProps {
   dailyBoardPromotion: DailyBoardPromotionStat[];
@@ -430,20 +430,7 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
     }
   }
 
-  const [selectedTimeCohort, setSelectedTimeCohort] = useState("");
-  const allReviewedPicks = report?.reviewed_picks ?? [];
-  const cohortOrder = Object.keys(timeCohortLabels);
-  const availableTimeCohorts = [...new Set(allReviewedPicks.map(pickTimeCohort))].sort(
-    (left, right) => cohortOrder.indexOf(left.split("/")[0]) - cohortOrder.indexOf(right.split("/")[0])
-      || right.localeCompare(left),
-  );
-  const activeTimeCohort = selectReviewCohort(
-    availableTimeCohorts,
-    allReviewedPicks.map((pick) => ({ cohort: pickTimeCohort(pick), tradeDate: pick.trade_date })),
-    report?.end_date ?? latestTradeDate,
-    selectedTimeCohort,
-  );
-  const reviewedPicks = allReviewedPicks.filter((pick) => pickTimeCohort(pick) === activeTimeCohort);
+  const reviewedPicks = report?.reviewed_picks ?? [];
   const reviewDates = groupReviewPicksByDate(reviewedPicks);
   const trackDates = report ? buildReviewTrackDates(reviewDates, report.end_date) : [];
   const trackedSampleSize = trackDates.reduce(
@@ -505,8 +492,8 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
             </strong>
             <p>
               {report
-                ? `过去 5 个交易日，每天一个卡片；点进去看当日 Top10 到 ${report.end_date} 收盘的走势。`
-                : "自动加载过去 5 个交易日的每日 Top10 评分票，点击日期卡片查看到最新收盘的兑现情况。"}
+                ? `最近 5 个可评价预测日，每天一个卡片；点进去看当日 Top10 到 ${report.end_date} 收盘的走势。`
+                : "自动加载最近 5 个可评价预测日的 Top10，点击日期卡片查看到最新收盘的走势。"}
             </p>
           </div>
         </div>
@@ -540,18 +527,7 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
             ? "已固化复盘" : "按当前审计口径重算"}</span>
         </div>
 
-        {report ? (
-          <div className="review-date-selector">
-            <label htmlFor="review-time-cohort">样本口径</label>
-            <select id="review-time-cohort" value={activeTimeCohort}
-              onChange={(event) => setSelectedTimeCohort(event.target.value)}>
-              {availableTimeCohorts.map((cohort) => (
-                <option key={cohort} value={cohort}>{timeCohortLabel(cohort)}</option>
-              ))}
-            </select>
-            <span>各组独立统计；仅盘前终选属于现行前向验证。</span>
-          </div>
-        ) : null}
+        {report ? <p className="review-agent-audit-note">日期卡片逐日标注记录来源；跨日期数字只作历史研究追踪，不代表盘前终选的前向验证。</p> : null}
 
         {running && !report ? (
           <div className="review-agent-empty">
@@ -570,7 +546,7 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
                 <strong>{trackDates.length}</strong>
               </span>
               <span>
-                <small>Top10 1进2</small>
+                <small>Top10 1进2 · 研究</small>
                 <strong>{formatEmpiricalRate(cohortPromotion.top_pick_promotion_rate)}</strong>
                 <em>{cohortPromotion.top_pick_promoted_count}/{cohortPromotion.top_pick_promotion_sample_size}</em>
               </span>
@@ -580,7 +556,7 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
                 <em>{cohortPromotion.market_promoted_count}/{cohortPromotion.market_promotion_sample_size}</em>
               </span>
               <span>
-                <small>相对全市场</small>
+                <small>相对全市场 · 研究</small>
                 <strong className={(cohortPromotion.promotion_rate_delta ?? 0) >= 0 ? "positive" : "negative"}>
                   {cohortPromotion.promotion_rate_delta === null
                     ? "暂无"
@@ -673,7 +649,7 @@ function DailyTopReview({
             type="button"
             onClick={() => onSelect(tradeDate)}
           >
-            <span>{tradeDate}</span>
+            <span>{tradeDate} · {dailyPicks[0] ? timeCohortLabels[pickTimeCohort(dailyPicks[0]).split("/")[0]] ?? "待核验样本" : "无样本"}</span>
             <strong>Top10 追踪</strong>
             <small>{readyCount} / {dailyPicks.length} 缓存已同步</small>
             <b>
