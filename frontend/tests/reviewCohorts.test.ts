@@ -1,6 +1,26 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { summarizeReviewPromotion } from "../src/reviewCohorts.ts";
+import { selectReviewCohort, summarizeReviewPromotion } from "../src/reviewCohorts.ts";
+
+test("default cohort skips a current-day-only group that has no review card", () => {
+  const cohorts = ["close_baseline/v5", "legacy_close/v5", "historical_backtest/v5"];
+  const picks = [
+    { cohort: cohorts[0], tradeDate: "2026-09-07" },
+    { cohort: cohorts[1], tradeDate: "2026-09-04" },
+    { cohort: cohorts[2], tradeDate: "2026-09-03" },
+  ];
+  assert.equal(selectReviewCohort(cohorts, picks, "2026-09-07"), cohorts[1]);
+  assert.equal(selectReviewCohort(cohorts, picks, "2026-09-07", cohorts[2]), cohorts[2]);
+});
+
+test("default cohort keeps the first authoritative group when it has a mature date", () => {
+  const cohorts = ["premarket_final/v5", "legacy_close/v5"];
+  const picks = [
+    { cohort: cohorts[0], tradeDate: "2026-09-04" },
+    { cohort: cohorts[1], tradeDate: "2026-09-03" },
+  ];
+  assert.equal(selectReviewCohort(cohorts, picks, "2026-09-07"), cohorts[0]);
+});
 
 test("switching cohorts excludes other dates and immature outcomes from all metrics", () => {
   const comparisons = [

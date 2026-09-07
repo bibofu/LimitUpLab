@@ -33,7 +33,7 @@ import {
   stockDetailPath,
 } from "../dashboardFormatters";
 import { Panel } from "./Panel";
-import { summarizeReviewPromotion } from "../reviewCohorts";
+import { selectReviewCohort, summarizeReviewPromotion } from "../reviewCohorts";
 
 interface ReviewDashboardProps {
   dailyBoardPromotion: DailyBoardPromotionStat[];
@@ -437,8 +437,12 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
     (left, right) => cohortOrder.indexOf(left.split("/")[0]) - cohortOrder.indexOf(right.split("/")[0])
       || right.localeCompare(left),
   );
-  const activeTimeCohort = availableTimeCohorts.includes(selectedTimeCohort)
-    ? selectedTimeCohort : availableTimeCohorts[0] ?? "unverified";
+  const activeTimeCohort = selectReviewCohort(
+    availableTimeCohorts,
+    allReviewedPicks.map((pick) => ({ cohort: pickTimeCohort(pick), tradeDate: pick.trade_date })),
+    report?.end_date ?? latestTradeDate,
+    selectedTimeCohort,
+  );
   const reviewedPicks = allReviewedPicks.filter((pick) => pickTimeCohort(pick) === activeTimeCohort);
   const reviewDates = groupReviewPicksByDate(reviewedPicks);
   const trackDates = report ? buildReviewTrackDates(reviewDates, report.end_date) : [];
