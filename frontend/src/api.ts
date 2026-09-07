@@ -1,3 +1,4 @@
+import type { ConsolidationPool } from "./consolidation";
 import type {
   AgentChatRequest,
   AgentChatResponse,
@@ -82,6 +83,11 @@ async function cachedGet<T>(path: string, ttlMs: number): Promise<T> {
 
 export function fetchMarketSummary() {
   return request<MarketSummary>("/api/market/overview");
+}
+
+export function fetchConsolidationPool(dataAsOf?: string) {
+  const query = dataAsOf ? `?data_as_of=${encodeURIComponent(dataAsOf)}` : "";
+  return dedupedGet<ConsolidationPool>(`/api/strategies/consolidation${query}`);
 }
 
 export function fetchDragonTigerReview(tradeDate?: string) {

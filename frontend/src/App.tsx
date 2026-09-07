@@ -29,6 +29,7 @@ import {
 } from "react-router-dom";
 
 import { AgentChatDock } from "./components/AgentChatDock";
+import { ConsolidationPanel } from "./components/ConsolidationPanel";
 import { Panel } from "./components/Panel";
 import { ReviewDashboard } from "./components/ReviewDashboard";
 import {
@@ -370,9 +371,14 @@ function PremarketPage({ ratings }: { ratings: FirstBoardRatingsResponse }) {
 }
 
 function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsResponse }) {
-  /** Keep the two pre-market strategies distinct while sharing one workspace. */
+  /** Keep each strategy independent while sharing a bookmarkable workspace. */
 
-  const [mode, setMode] = useState<"discovery" | "relay">("discovery");
+  const [strategyParams, setStrategyParams] = useSearchParams();
+  const requestedMode = strategyParams.get("strategy");
+  const mode = requestedMode === "relay" || requestedMode === "consolidation" ? requestedMode : "discovery";
+  const setMode = (value: "discovery" | "relay" | "consolidation") => {
+    setStrategyParams((previous) => { const next = new URLSearchParams(previous); next.set("strategy", value); return next; });
+  };
   const [discovery, setDiscovery] = useState<FirstBoardDiscoveryResponse | null>(null);
   const [discoveryError, setDiscoveryError] = useState<string | null>(null);
   const [discoveryLoading, setDiscoveryLoading] = useState(true);
@@ -468,8 +474,18 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
           <Layers3 size={16} />
           一进二接力
         </button>
+        <button
+          aria-selected={mode === "consolidation"}
+          aria-controls="consolidation-panel"
+          className={mode === "consolidation" ? "active" : undefined}
+          onClick={() => setMode("consolidation")}
+          role="tab"
+          type="button"
+        >
+          <LineChart size={16} />涨停后缩量整理
+        </button>
       </div>
-      {intelligence?.stage === "missed_cutoff" ? (
+      {mode === "consolidation" ? <ConsolidationPanel /> : intelligence?.stage === "missed_cutoff" ? (
         <PremarketCutoffMissedPanel intelligence={intelligence} strategy={mode} />
       ) : intelligenceLoading ? (
         <PremarketRankingStatePanel
