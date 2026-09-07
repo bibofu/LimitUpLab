@@ -2,12 +2,14 @@ import { useEffect, useState } from "react";
 import { Layers3, RefreshCcw } from "lucide-react";
 import { Link } from "react-router-dom";
 import { fetchConsolidationPool } from "../api";
-import { consolidationEmptyMessage, consolidationReason, type ConsolidationPool } from "../consolidation";
+import { consolidationEmptyMessage, consolidationReason, type ConsolidationPool, type ObservationStrategy } from "../consolidation";
 import { stockDetailPath } from "../dashboardFormatters";
 import { Panel } from "./Panel";
 
 export function ConsolidationPanel() {
   const [pool, setPool] = useState<ConsolidationPool | null>(null);
+  const [strategy, setStrategy] = useState<ObservationStrategy>("consolidation");
+  const isDrawdown = strategy === "drawdown";
   const [asOf, setAsOf] = useState("");
   const [revision, setRevision] = useState(0);
   const [loading, setLoading] = useState(true);
@@ -16,12 +18,12 @@ export function ConsolidationPanel() {
     let active = true;
     setLoading(true);
     setError(null);
-    void fetchConsolidationPool(asOf || undefined)
+    void fetchConsolidationPool(asOf || undefined, strategy)
       .then((response) => { if (active) setPool(response); })
       .catch((caught: unknown) => { if (active) setError(caught instanceof Error ? caught.message : "观察池加载失败"); })
       .finally(() => { if (active) setLoading(false); });
     return () => { active = false; };
-  }, [asOf, revision]);
+  }, [asOf, revision, strategy]);
 
   return (
     <div role="tabpanel" id="consolidation-panel" aria-label="涨停后观察">
@@ -31,8 +33,12 @@ export function ConsolidationPanel() {
         </button>
       }>
         <div className="consolidation-content">
+          <div className="strategy-switch" role="group" aria-label="涨停后观察子策略">
+            <button type="button" className={isDrawdown ? "" : "active"} aria-pressed={!isDrawdown} onClick={() => setStrategy("consolidation")}>缩量整理</button>
+            <button type="button" className={isDrawdown ? "active" : ""} aria-pressed={isDrawdown} onClick={() => setStrategy("drawdown")}>高位回撤</button>
+          </div>
           <div className="consolidation-heading">
-            <div><strong>涨停后观察池</strong><p>观察股票涨停后的价格与成交量变化。</p></div>
+            <div><strong>{isDrawdown ? "高位回撤观察池" : "缩量整理观察池"}</strong><p>{isDrawdown ? "观察近期涨停股从局部高点回落的幅度，尚未要求止跌确认。回撤为负表示收盘高于此前参考高点。" : "观察股票涨停后的价格与成交量变化。"}</p></div>
             <label>截至交易日
               <select aria-label="整理策略截至交易日" value={asOf} onChange={(event) => setAsOf(event.target.value)}>
                 <option value="">最新收盘</option>
@@ -40,7 +46,7 @@ export function ConsolidationPanel() {
               </select>
             </label>
           </div>
-          {loading ? <p role="status">正在核对近期涨停、整理区间与成交量…</p>
+          {loading || (!error && pool && pool.strategy !== strategy) ? <p role="status">正在核对近期涨停与量价指标…</p>
             : error ? <p role="alert" className="consolidation-warning">{error}，可点击刷新重试。</p>
             : pool ? <>
               <div className="consolidation-meta">
@@ -62,17 +68,24 @@ export function ConsolidationPanel() {
               </p>}
               {pool.candidates.length === 0 && <div className="discovery-state"><strong>暂无符合条件的候选</strong><p>{consolidationEmptyMessage(pool)}</p></div>}
               {pool.evaluated_stocks.length > 0 && <>
-                <div><strong>可评价股票 · {pool.evaluated_stocks.length} 只</strong><p className="consolidation-note">已通过研究范围、整理天数与数据质量检查；符合项优先展示，未符合项列出全部形态条件差距。</p></div>
+                <div><strong>可评价股票 · {pool.evaluated_stocks.length} 只</strong><p className="consolidation-note">已通过研究范围、{isDrawdown ? "涨停后天数" : "整理天数"}与数据质量检查；符合项优先展示，未符合项列出全部形态条件差距。</p></div>
                 <div className="consolidation-grid">
                   {pool.evaluated_stocks.map((candidate) => <article className="consolidation-card" key={candidate.symbol}>
                     <header><Link to={stockDetailPath(candidate.symbol, candidate.name)}>{candidate.name} <small>{candidate.symbol}</small></Link><span className={candidate.state === "rejected" ? "consolidation-badge-rejected" : "consolidation-badge-qualified"}>{candidate.state === "rejected" ? "未符合" : candidate.state === "new" ? "首次符合" : "持续观察"}</span></header>
                     <p className="consolidation-note">涨停 {candidate.anchor_date}{candidate.confirmed_date ? ` · 首次确认 ${candidate.confirmed_date}` : " · 尚未同时满足形态条件"}</p>
                     <dl>
-                      <div><dt>整理天数</dt><dd>{candidate.consolidation_days} 日</dd></div>
-                      <div><dt>区间幅度 · ≤8%</dt><dd>{candidate.range_pct.toFixed(2)}%</dd></div>
-                      <div><dt>整理期量比 · ≤0.75</dt><dd>{candidate.volume_ratio.toFixed(3)}</dd></div>
-                      <div><dt>相对涨停 · −10%～+8%</dt><dd>{candidate.anchor_change_pct > 0 ? "+" : ""}{candidate.anchor_change_pct.toFixed(2)}%</dd></div>
-                      <div><dt>整理区间</dt><dd>{candidate.range_low.toFixed(2)}–{candidate.range_high.toFixed(2)} 元</dd></div>
+                      <div><dt>{isDrawdown ? "涨停后天数" : "整理天数"}</dt><dd>{candidate.consolidation_days} 日</dd></div>
+                      {isDrawdown ? <>
+                        <div><dt>高点回撤 · ≥10%</dt><dd>{candidate.drawdown_pct?.toFixed(2) ?? "—"}%</dd></div>
+                        <div><dt>参考高点</dt><dd>{candidate.peak_price?.toFixed(2) ?? "—"} 元</dd></div>
+                        <div><dt>高点日期</dt><dd>{candidate.peak_date ?? "—"}</dd></div>
+                        <div><dt>期间量比 · 仅展示</dt><dd>{candidate.volume_ratio.toFixed(3)}</dd></div>
+                      </> : <>
+                        <div><dt>区间幅度 · ≤8%</dt><dd>{candidate.range_pct.toFixed(2)}%</dd></div>
+                        <div><dt>整理期量比 · ≤0.75</dt><dd>{candidate.volume_ratio.toFixed(3)}</dd></div>
+                        <div><dt>相对涨停 · −10%～+8%</dt><dd>{candidate.anchor_change_pct > 0 ? "+" : ""}{candidate.anchor_change_pct.toFixed(2)}%</dd></div>
+                        <div><dt>整理区间</dt><dd>{candidate.range_low.toFixed(2)}–{candidate.range_high.toFixed(2)} 元</dd></div>
+                      </>}
                       <div><dt>最新收盘</dt><dd>{candidate.close.toFixed(2)} 元</dd></div>
                     </dl>
                     <p>{candidate.reasons.join("；")}。</p>

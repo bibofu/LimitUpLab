@@ -1,3 +1,5 @@
+export type ObservationStrategy = "consolidation" | "drawdown";
+
 export interface ConsolidationEvaluation {
   symbol: string;
   name: string;
@@ -13,6 +15,9 @@ export interface ConsolidationEvaluation {
   range_pct: number;
   anchor_change_pct: number;
   volume_ratio: number;
+  peak_date: string | null;
+  peak_price: number | null;
+  drawdown_pct: number | null;
   source: string;
   reasons: string[];
   risks: string[];
@@ -24,6 +29,7 @@ export interface ConsolidationCandidate extends ConsolidationEvaluation {
 }
 
 export interface ConsolidationPool {
+  strategy: ObservationStrategy;
   strategy_version: string;
   generated_at: string;
   data_as_of: string | null;
@@ -45,6 +51,8 @@ export interface ConsolidationPool {
 const REASONS: Record<string, string> = {
   unsupported_security: "不在主板研究范围或含 ST、退市标记",
   age_outside_2_4: "涨停后尚未整理满 2 日",
+  age_outside_1_4: "涨停后尚未经过 1 个交易日",
+  drawdown_below_10pct: "较参考高点回撤不足 10%",
   missing_history20: "连续 20 日行情不完整",
   price_discontinuity: "存在明显价格断点",
   anchor_price_mismatch: "涨停事件与价格不一致",

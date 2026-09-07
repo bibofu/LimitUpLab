@@ -85,8 +85,8 @@ export function fetchMarketSummary() {
   return request<MarketSummary>("/api/market/overview");
 }
 
-export function fetchConsolidationPool(dataAsOf?: string) {
-  const query = dataAsOf ? `?data_as_of=${encodeURIComponent(dataAsOf)}` : "";
+export function fetchConsolidationPool(dataAsOf?: string, strategy: ConsolidationPool["strategy"] = "consolidation") {
+  const query = `?strategy=${strategy}${dataAsOf ? `&data_as_of=${encodeURIComponent(dataAsOf)}` : ""}`;
   return dedupedGet<ConsolidationPool>(`/api/strategies/consolidation${query}`);
 }
 

@@ -49,12 +49,13 @@ def test_confirmation_waits_until_both_volume_and_price_rules_hold():
     assert candidate.volume_ratio == .7
 
 
-def test_future_prices_and_events_cannot_change_historical_screen():
+@pytest.mark.parametrize("strategy", ["consolidation", "drawdown"])
+def test_future_prices_and_events_cannot_change_historical_screen(strategy):
     events, bars, dates, end, now = fixture()
-    before = screen_consolidation(events, bars, dates, end, now)
+    before = screen_consolidation(events, bars, dates, end, now, strategy)
     events.append(dict(symbol="600001", name="ST未来名称", trade_date="2026-09-01", closed_limit=1))
     bars.append({**bars[-1], "trade_date": "2026-09-01", "close": 9999.})
-    after = screen_consolidation(events, bars, [*dates, "2026-09-01"], end, now)
+    after = screen_consolidation(events, bars, [*dates, "2026-09-01"], end, now, strategy)
     assert before == after
 
 
@@ -173,6 +174,10 @@ def test_repository_is_read_only_and_does_not_use_later_data(tmp_path):
     assert len(result.candidates) == 1
     historical = load_consolidation_pool(date.fromisoformat(dates[26]), now, path)
     assert historical.candidates[0].state == "new"
+    drawdown = load_consolidation_pool(None, now, path, strategy="drawdown")
+    assert drawdown.strategy == "drawdown"
+    assert drawdown.evaluated_count == 1
+    assert drawdown.evaluated_stocks[0].peak_date.isoformat() == dates[26]
     assert path.read_bytes() == original
     with pytest.raises(ValueError):
         load_consolidation_pool(date(2026, 10, 1), now, path)
@@ -182,3 +187,57 @@ def test_absent_database_is_explicit(tmp_path):
     result = load_consolidation_pool(None, fixture()[-1], tmp_path / "absent.sqlite")
     assert result.status == "data_missing"
     assert result.data_missing == ["local_database"]
+
+
+@pytest.mark.parametrize("drawdown,accepted", [(9.99, False), (10., True), (10.1, True)])
+def test_drawdown_threshold_includes_boundary_without_volume_filter(drawdown, accepted):
+    events, bars, dates, end, now = fixture()
+    close = 11. * (1 - drawdown/100)
+    for bar in bars[25:]:
+        bar.update(open=close, high=close, low=close, close=close, volume=1500.)
+    result = screen_consolidation(events, bars, dates, end, now, "drawdown")
+    assert result.strategy_version == "drawdown_research_v0.1"
+    assert result.evaluated_count == 1
+    assert bool(result.candidates) == accepted
+    stock = result.evaluated_stocks[0]
+    assert stock.drawdown_pct == drawdown
+    assert stock.peak_date.isoformat() == dates[24]
+    assert stock.volume_ratio == 1.5
+    if accepted:
+        assert stock.confirmed_date.isoformat() == dates[25]
+        assert stock.state == "watching"
+    else:
+        assert stock.failed_conditions == ["drawdown_below_10pct"]
+
+
+def test_drawdown_reference_excludes_observation_day_high():
+    events, bars, dates, end, now = fixture()
+    for bar in bars[25:]:
+        bar.update(open=11., high=11., low=11., close=11.)
+    bars[-1]["high"] = 12.2
+    stock = screen_consolidation(events, bars, dates, end, now, "drawdown").evaluated_stocks[0]
+    assert stock.peak_price == 11.
+    assert stock.peak_date.isoformat() == dates[26]
+    assert stock.drawdown_pct == 0
+
+
+def test_drawdown_large_decline_is_observed_with_risk_and_no_range_filter():
+    events, bars, dates, end, now = fixture()
+    for bar, close in zip(bars[25:], [9.9, 8.91, 8.5]):
+        bar.update(open=close, high=close, low=close, close=close)
+    stock = screen_consolidation(events, bars, dates, end, now, "drawdown").candidates[0]
+    assert stock.drawdown_pct == 22.7273
+    assert stock.range_pct > 8
+    assert stock.anchor_change_pct < -10
+    assert any("20%" in risk for risk in stock.risks)
+
+
+def test_drawdown_data_quality_and_new_anchor_still_apply():
+    events, bars, dates, end, now = fixture()
+    bars[-1]["volume"] = None
+    result = screen_consolidation(events, bars, dates, end, now, "drawdown")
+    assert result.evaluated_stocks == []
+    assert result.data_missing == ["invalid_volume"]
+    events.append(dict(symbol="600001", name="测试股份", trade_date=dates[-1], closed_limit=1))
+    result = screen_consolidation(events, bars, dates, end, now, "drawdown")
+    assert result.exclusions == {"age_outside_1_4": 1}

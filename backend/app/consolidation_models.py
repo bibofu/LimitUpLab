@@ -4,6 +4,8 @@ from typing import Literal
 
 from pydantic import BaseModel, Field
 
+ObservationStrategy = Literal["consolidation", "drawdown"]
+
 
 class ConsolidationEvaluation(BaseModel):
     symbol: str
@@ -20,6 +22,9 @@ class ConsolidationEvaluation(BaseModel):
     range_pct: float
     anchor_change_pct: float
     volume_ratio: float
+    peak_date: date | None = None
+    peak_price: float | None = None
+    drawdown_pct: float | None = None
     source: str
     reasons: list[str]
     risks: list[str]
@@ -31,6 +36,7 @@ class ConsolidationCandidate(ConsolidationEvaluation):
 
 
 class ConsolidationPool(BaseModel):
+    strategy: ObservationStrategy = "consolidation"
     strategy_version: str = "consolidation_research_v0.2"
     generated_at: datetime
     data_as_of: date | None = None

@@ -3,16 +3,17 @@ from datetime import date, datetime
 from pathlib import Path
 import sqlite3
 
-from app.consolidation_models import ConsolidationPool
+from app.consolidation_models import ConsolidationPool, ObservationStrategy
 from app.database import get_database_path
-from app.services.consolidation import RULES, WARNINGS, completed_date_limit, screen_consolidation
+from app.services.consolidation import observation_pool, completed_date_limit, screen_consolidation
 
 
 def load_consolidation_pool(as_of: date | None, now: datetime,
-                            database_path: Path | None = None) -> ConsolidationPool:
+                            database_path: Path | None = None,
+                            strategy: ObservationStrategy = "consolidation") -> ConsolidationPool:
     path = database_path or get_database_path()
     if not path.exists():
-        return ConsolidationPool(generated_at=now, data_missing=["local_database"], rules=RULES, warnings=WARNINGS)
+        return observation_pool(now, strategy, data_missing=["local_database"])
     limit = completed_date_limit(now)
     if as_of is not None and as_of > limit:
         raise ValueError("只能查询已结束交易日，当前交易日须在 15:30 后查询。")
@@ -23,7 +24,7 @@ def load_consolidation_pool(as_of: date | None, now: datetime,
         available = [r[0] for r in conn.execute(
             "SELECT DISTINCT trade_date FROM stock_daily_bars WHERE trade_date <= ? ORDER BY trade_date DESC LIMIT 60", (limit.isoformat(),))]
         if not available:
-            return ConsolidationPool(generated_at=now, data_missing=["daily_bars"], rules=RULES, warnings=WARNINGS)
+            return observation_pool(now, strategy, data_missing=["daily_bars"])
         end = as_of.isoformat() if as_of else available[0]
         dates = sorted(r[0] for r in conn.execute(
             "SELECT DISTINCT trade_date FROM stock_daily_bars WHERE trade_date <= ? ORDER BY trade_date DESC LIMIT 25", (end,)))
@@ -40,7 +41,7 @@ def load_consolidation_pool(as_of: date | None, now: datetime,
                 "SELECT symbol,trade_date,open,high,low,close,volume,source FROM stock_daily_bars "
                 "WHERE trade_date BETWEEN ? AND ? AND symbol IN ("+",".join("?" for _ in batch)+")",
                 [dates[0], end, *batch]))
-    result = screen_consolidation(events, bars, dates, date.fromisoformat(end), now)
+    result = screen_consolidation(events, bars, dates, date.fromisoformat(end), now, strategy)
     result.latest_data_date = date.fromisoformat(available[0])
     result.available_dates = [date.fromisoformat(d) for d in available[:30]]
     return result
