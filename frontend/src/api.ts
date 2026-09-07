@@ -1,4 +1,3 @@
-import type { ConsolidationPool } from "./consolidation";
 import type {
   AgentChatRequest,
   AgentChatResponse,
@@ -12,7 +11,6 @@ import type {
   FailedRateStat,
   FinanceNewsPage,
   FirstBoardCriticResponse,
-  FirstBoardDiscoveryResponse,
   FirstBoardRatingsResponse,
   LimitUpEvent,
   MarketSummary,
@@ -27,6 +25,11 @@ import type {
   StockKLineBar,
   StockNewsFacts,
   StockPositionAssessment,
+  StrategyCatalogResponse,
+  StrategyHistoryResponse,
+  StrategyRunSnapshot,
+  StrategyStatisticsResponse,
+  StrategyStockResponse,
 } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -83,11 +86,6 @@ async function cachedGet<T>(path: string, ttlMs: number): Promise<T> {
 
 export function fetchMarketSummary() {
   return request<MarketSummary>("/api/market/overview");
-}
-
-export function fetchConsolidationPool(dataAsOf?: string, strategy: ConsolidationPool["strategy"] = "consolidation") {
-  const query = `?strategy=${strategy}${dataAsOf ? `&data_as_of=${encodeURIComponent(dataAsOf)}` : ""}`;
-  return dedupedGet<ConsolidationPool>(`/api/strategies/consolidation${query}`);
 }
 
 export function fetchDragonTigerReview(tradeDate?: string) {
@@ -215,10 +213,35 @@ export function fetchFirstBoardRatings(tradeDate?: string, fullPool = false) {
   return request<FirstBoardRatingsResponse>(`/api/agents/first-board-ratings${query}`);
 }
 
-export function fetchFirstBoardDiscovery(dataAsOf?: string) {
+export function fetchStrategies() {
+  return dedupedGet<StrategyCatalogResponse>("/api/strategies");
+}
+
+export function fetchStrategyLatest(strategyId: string, dataAsOf?: string) {
   const query = dataAsOf ? `?data_as_of=${encodeURIComponent(dataAsOf)}` : "";
-  return request<FirstBoardDiscoveryResponse>(
-    `/api/agents/first-board-discovery${query}`,
+  return dedupedGet<StrategyRunSnapshot>(
+    `/api/strategies/${encodeURIComponent(strategyId)}/latest${query}`,
+  );
+}
+
+export function fetchStrategyHistory(strategyId: string, limit = 30) {
+  return dedupedGet<StrategyHistoryResponse>(
+    `/api/strategies/${encodeURIComponent(strategyId)}/history?limit=${limit}`,
+  );
+}
+
+export function fetchStrategyStock(strategyId: string, symbol: string, dataAsOf?: string) {
+  const query = dataAsOf ? `?data_as_of=${encodeURIComponent(dataAsOf)}` : "";
+  return dedupedGet<StrategyStockResponse>(
+    `/api/strategies/${encodeURIComponent(strategyId)}/stocks/${encodeURIComponent(symbol)}${query}`,
+  );
+}
+
+export function fetchStrategyStatistics(strategyId: string, dataAsOf?: string, days = 30) {
+  const params = new URLSearchParams({ days: String(days) });
+  if (dataAsOf) params.set("data_as_of", dataAsOf);
+  return dedupedGet<StrategyStatisticsResponse>(
+    `/api/strategies/${encodeURIComponent(strategyId)}/statistics?${params.toString()}`,
   );
 }
 

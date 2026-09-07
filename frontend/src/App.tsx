@@ -1,7 +1,6 @@
 ﻿import {
   BarChart3,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
   ExternalLink,
   Flame,
@@ -29,9 +28,9 @@ import {
 } from "react-router-dom";
 
 import { AgentChatDock } from "./components/AgentChatDock";
-import { ConsolidationPanel } from "./components/ConsolidationPanel";
 import { Panel } from "./components/Panel";
 import { ReviewDashboard } from "./components/ReviewDashboard";
+import { StrategyWorkspace } from "./components/StrategyWorkspace";
 import {
   formatAmount,
   formatNetAmount,
@@ -52,9 +51,7 @@ import {
   fetchContinuedBoardEvents,
   fetchDailyBoardPromotion,
   fetchFirstBoardCritic,
-  fetchFirstBoardDiscovery,
   fetchFirstBoardRatings,
-  fetchFinanceNews,
   fetchRecommendationIntelligence,
   fetchFailedLimitUpEvents,
   fetchFirstBoardEvents,
@@ -69,12 +66,8 @@ import {
 import type {
   DailyBoardPromotionStat,
   FirstBoardCriticResponse,
-  FirstBoardDiscoveryPattern,
-  FirstBoardDiscoveryResponse,
   FirstBoardRating,
   FirstBoardRatingsResponse,
-  FinanceNewsPage,
-  FinanceNewsItem,
   LimitUpEvent,
   MarketSummary,
   RecommendationIntelligenceItem,
@@ -296,7 +289,7 @@ export function App() {
         <Route path="/" element={null} />
         <Route
           path="/recommendations"
-          element={<PremarketPage ratings={data.firstBoardRatings} />}
+          element={<StrategyWorkspace />}
         />
         <Route
           path="/review"
@@ -361,587 +354,36 @@ function MarketSnapshot({ summary }: { summary: MarketSummary }) {
   );
 }
 
-function PremarketPage({ ratings }: { ratings: FirstBoardRatingsResponse }) {
-  return (
-    <div className="premarket-page">
-      <RecommendationNewsBoard />
-      <PremarketStrategyWorkspace ratings={ratings} />
-    </div>
-  );
-}
-
-function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsResponse }) {
-  /** Keep each strategy independent while sharing a bookmarkable workspace. */
-
-  const [strategyParams, setStrategyParams] = useSearchParams();
-  const requestedMode = strategyParams.get("strategy");
-  const mode = requestedMode === "relay" || requestedMode === "consolidation" ? requestedMode : "discovery";
-  const setMode = (value: "discovery" | "relay" | "consolidation") => {
-    setStrategyParams((previous) => { const next = new URLSearchParams(previous); next.set("strategy", value); return next; });
-  };
-  const [discovery, setDiscovery] = useState<FirstBoardDiscoveryResponse | null>(null);
-  const [discoveryError, setDiscoveryError] = useState<string | null>(null);
-  const [discoveryLoading, setDiscoveryLoading] = useState(true);
-  const {
-    intelligence,
-    loading: intelligenceLoading,
-    error: intelligenceError,
-  } = useRecommendationIntelligence();
+function useRecommendationIntelligence() {
+  const [intelligence, setIntelligence] =
+    useState<RecommendationIntelligenceResponse | null>(null);
 
   useEffect(() => {
     let active = true;
-    void fetchFirstBoardDiscovery()
+    void fetchRecommendationIntelligence()
       .then((response) => {
-        if (active) setDiscovery(response);
+        if (active) setIntelligence(response);
       })
-      .catch((caught: unknown) => {
-        if (active) {
-          setDiscoveryError(caught instanceof Error ? caught.message : "低位挖掘数据加载失败");
-        }
-      })
-      .finally(() => {
-        if (active) setDiscoveryLoading(false);
+      .catch(() => {
+        if (active) setIntelligence(null);
       });
     return () => {
       active = false;
     };
   }, []);
 
-  const draftBaseDate = mode === "discovery" ? discovery?.data_as_of : ratings.trade_date;
-  const strategyCandidates = mode === "relay"
-    ? rankedRelayCandidates(
-        intelligence?.items ?? [],
-        draftBaseDate,
-        intelligence?.relay_display_limit ?? 10,
-      )
-    : (intelligence?.items ?? [])
-      .filter(
-        (item) => item.strategy === mode && item.base_trade_date === draftBaseDate,
-      )
-      .sort((left, right) => left.rank - right.rank)
-      .slice(0, intelligence?.discovery_display_limit ?? 15);
-  const draftCandidates = strategyCandidates
-    .map((item, index) => ({
-      ...item,
-      rank: index + 1,
-      sector: item.sector ?? "",
-      position_label: item.position_label ?? null,
-      rule_rank: item.rule_rank ?? item.base_rank ?? item.rank,
-      rule_score: item.rule_score ?? item.base_score,
-      base_rank: item.base_rank ?? item.rank,
-      draft_score: item.draft_score ?? item.base_score,
-      facts_cutoff_at: item.facts_cutoff_at ?? null,
-      close_information_adjustment: item.close_information_adjustment ?? 0,
-      close_information_reasons: item.close_information_reasons ?? [],
-      news_adjustment: item.news_adjustment ?? 0,
-      financial_adjustment: item.financial_adjustment ?? 0,
-      dragon_tiger_adjustment: item.dragon_tiger_adjustment ?? 0,
-      popularity_adjustment: item.popularity_adjustment ?? 0,
-      dynamic_adjustment:
-        item.dynamic_adjustment ?? item.draft_score - item.base_score,
-      dragon_tiger_on_list: item.dragon_tiger_on_list ?? false,
-      dragon_tiger_is_new: item.dragon_tiger_is_new ?? false,
-      dragon_tiger_net_buy_amount: item.dragon_tiger_net_buy_amount ?? null,
-      dragon_tiger_source: item.dragon_tiger_source ?? null,
-      popularity_base_rank: item.popularity_base_rank ?? null,
-      popularity_rank: item.popularity_rank ?? null,
-      popularity_rank_change: item.popularity_rank_change ?? null,
-      popularity_snapshot_at: item.popularity_snapshot_at ?? null,
-      popularity_source: item.popularity_source ?? null,
-      update_reasons: item.update_reasons ?? [],
-    })) ?? [];
-
-  return (
-    <section className="premarket-workspace">
-      <div aria-label="盘前策略" className="strategy-switch" role="tablist">
-        <button
-          aria-selected={mode === "discovery"}
-          className={mode === "discovery" ? "active" : undefined}
-          onClick={() => setMode("discovery")}
-          role="tab"
-          type="button"
-        >
-          <TrendingUp size={16} />
-          低位挖掘
-        </button>
-        <button
-          aria-selected={mode === "relay"}
-          className={mode === "relay" ? "active" : undefined}
-          onClick={() => setMode("relay")}
-          role="tab"
-          type="button"
-        >
-          <Layers3 size={16} />
-          一进二接力
-        </button>
-        <button
-          aria-selected={mode === "consolidation"}
-          aria-controls="consolidation-panel"
-          className={mode === "consolidation" ? "active" : undefined}
-          onClick={() => setMode("consolidation")}
-          role="tab"
-          type="button"
-        >
-          <LineChart size={16} />涨停后观察
-        </button>
-      </div>
-      {mode === "consolidation" ? <ConsolidationPanel /> : intelligence?.stage === "missed_cutoff" ? (
-        <PremarketCutoffMissedPanel intelligence={intelligence} strategy={mode} />
-      ) : intelligenceLoading ? (
-        <PremarketRankingStatePanel
-          message="正在读取统一的盘前排名与证据"
-          state="loading"
-          strategy={mode}
-        />
-      ) : !intelligence ? (
-        <PremarketRankingStatePanel
-          message={intelligenceError ?? "盘前动态榜暂不可用"}
-          state="error"
-          strategy={mode}
-        />
-      ) : draftCandidates.length > 0 && intelligence ? (
-        <RecommendationDraftPanel
-          candidates={draftCandidates}
-          discovery={discovery}
-          intelligence={intelligence}
-          strategy={mode}
-        />
-      ) : (
-        <PremarketRankingStatePanel
-          message={mode === "discovery" && discoveryLoading
-            ? "正在读取低位挖掘证据"
-            : mode === "discovery" && discoveryError
-              ? discoveryError
-              : "当前目标交易日没有可展示的盘前候选"}
-          state={mode === "discovery" && discoveryLoading
-            ? "loading"
-            : mode === "discovery" && discoveryError
-              ? "error"
-              : "empty"}
-          strategy={mode}
-        />
-      )}
-    </section>
-  );
-}
-
-function PremarketRankingStatePanel({
-  message,
-  state,
-  strategy,
-}: {
-  message: string;
-  state: "loading" | "error" | "empty";
-  strategy: "discovery" | "relay";
-}) {
-  const icon = state === "error"
-    ? <ShieldAlert size={20} />
-    : <LoaderCircle className={state === "loading" ? "spin" : undefined} size={20} />;
-  return (
-    <Panel
-      title={strategy === "discovery" ? "低位挖掘" : "一进二接力"}
-      icon={strategy === "discovery" ? <TrendingUp size={18} /> : <BarChart3 size={18} />}
-    >
-      <div className={`discovery-state${state === "error" ? " discovery-state-error" : ""}`}>
-        {icon}
-        <span>{message}</span>
-      </div>
-    </Panel>
-  );
-}
-
-function PremarketCutoffMissedPanel({
-  intelligence,
-  strategy,
-}: {
-  intelligence: RecommendationIntelligenceResponse;
-  strategy: "discovery" | "relay";
-}) {
-  const targetLabel = intelligence.target_trade_date ?? "今日";
-  const lastSafeRefresh = intelligence.items.length > 0
-    ? new Date(intelligence.refreshed_at).toLocaleTimeString("zh-CN", {
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : null;
-  return (
-    <Panel
-      title={strategy === "discovery" ? "低位挖掘" : "一进二接力"}
-      icon={<ShieldAlert size={18} />}
-    >
-      <div className="discovery-state discovery-state-error">
-        <ShieldAlert size={20} />
-        <div>
-          <strong>{targetLabel} 盘前榜未在开盘前固化</strong>
-          <span>
-            已停止排名更新，不会使用开盘后数据补算盘前结果。
-            {lastSafeRefresh ? ` 最后一版盘前草稿更新于 ${lastSafeRefresh}，未作为正式 Top10 发布。` : ""}
-          </span>
-        </div>
-      </div>
-    </Panel>
-  );
-}
-
-function useRecommendationIntelligence() {
-  const [intelligence, setIntelligence] = useState<RecommendationIntelligenceResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    const refresh = () => {
-      void fetchRecommendationIntelligence()
-        .then((response) => {
-          if (active) {
-            setIntelligence(response);
-            setError(null);
-          }
-        })
-        .catch((caught: unknown) => {
-          if (active) {
-            setError(caught instanceof Error ? caught.message : "盘前动态榜加载失败");
-          }
-        })
-        .finally(() => {
-          if (active) setLoading(false);
-        });
-    };
-    refresh();
-    const timer = window.setInterval(refresh, 60 * 1000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, []);
-
-  return { intelligence, loading, error };
-}
-
-function RecommendationDraftPanel({
-  candidates,
-  discovery,
-  intelligence,
-  strategy,
-}: {
-  candidates: RecommendationIntelligenceItem[];
-  discovery: FirstBoardDiscoveryResponse | null;
-  intelligence: RecommendationIntelligenceResponse;
-  strategy: "discovery" | "relay";
-}) {
-  const title = strategy === "discovery" ? "低位挖掘" : "一进二接力";
-  const targetLabel = intelligence.target_trade_date
-    ? `${intelligence.target_trade_date} 目标日`
-    : "下一交易日";
-  return (
-    <Panel
-      title={title}
-      icon={strategy === "discovery" ? <TrendingUp size={18} /> : <BarChart3 size={18} />}
-    >
-      <div className="rating-summary-panel recommendation-draft-panel">
-        <div className="recommendation-draft-header">
-          <div>
-            <strong>{strategy === "discovery" ? `低位启动观察池 · ${candidates.length} 只` : `盘前动态候选 Top${candidates.length}`} · {targetLabel}</strong>
-            <span>{strategy === "discovery" ? "热门题材与最新催化召回，财报和 K 线位置共同验证" : "收盘综合分固化基线，盘后按公告、龙虎榜与人气变化做有界修正"}</span>
-          </div>
-          <span className="recommendation-draft-time">
-            {intelligence.stage === "final" ? "开盘前已固化 · " : "盘前动态更新 · "}
-            {new Date(intelligence.finalized_at ?? intelligence.refreshed_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
-          </span>
-        </div>
-        <div className="rating-top-list">
-          {candidates.map((candidate) => {
-            const lowPosition = discovery?.candidates.find(
-              (item) => item.facts.symbol === candidate.symbol,
-            );
-            return (
-            <Link
-              className="rating-top-card"
-              key={`${candidate.strategy}-${candidate.base_trade_date}-${candidate.symbol}`}
-              to={stockDetailPath(candidate.symbol, candidate.name)}
-            >
-              <header>
-                <div>
-                  <span>{strategy === "discovery" ? `低位候选 · ${lowPosition ? discoveryPatternLabel(lowPosition.facts.pattern) : "结构待验证"}` : `Top ${candidate.rank} · 收盘综合第 ${candidate.base_rank}`}</span>
-                  <strong>{candidate.name}</strong>
-                  <small>{candidate.symbol}{candidate.sector ? ` / ${candidate.sector}` : ""}</small>
-                </div>
-                <div className="rating-top-score">
-                  <b>{candidate.draft_score.toFixed(1)}</b>
-                  <span className="rating-score-context">
-                    {strategy === "discovery"
-                      ? "研究分"
-                      : `收盘综合 ${candidate.base_score.toFixed(1)} · 动态 ${candidate.dynamic_adjustment >= 0 ? "+" : ""}${candidate.dynamic_adjustment.toFixed(1)}`}
-                  </span>
-                </div>
-              </header>
-              {strategy === "discovery" ? (
-                <LowPositionEvidence candidate={lowPosition} intelligence={candidate} />
-              ) : candidate.update_reasons.length > 0 ? (
-                <section className="rating-top-reasons">
-                  <strong>收盘后新增信息</strong>
-                  <ul>{candidate.update_reasons.slice(0, 3).map((reason) => <li key={reason}>{reason}</li>)}</ul>
-                </section>
-              ) : null}
-              {strategy !== "discovery" && candidate.close_information_reasons.length > 0 ? (
-                <section className="rating-top-reasons">
-                  <strong>收盘综合分已纳入</strong>
-                  <ul>{candidate.close_information_reasons.slice(0, 2).map((reason) => <li key={reason}>{reason}</li>)}</ul>
-                </section>
-              ) : null}
-              {strategy !== "discovery" && candidate.latest_news[0] ? (
-                <section className="discovery-catalyst">
-                  <strong>相关资讯</strong>
-                  <p>{candidate.latest_news[0].title}</p>
-                </section>
-              ) : null}
-            </Link>
-            );
-          })}
-        </div>
-        <p className="discovery-disclaimer">
-          {strategy === "discovery"
-            ? "低位挖掘用于研究可能进入趋势启动阶段的标的，不代表主升浪或收益概率。"
-            : intelligence.stage === "final"
-              ? "该排序已于目标交易日开盘前固化，供盘后复盘使用。"
-              : "当前为盘前动态研究排序；开盘后停止更新，只有开盘前固化的 Top10 才进入复盘。"}
-        </p>
-      </div>
-    </Panel>
-  );
-}
-
-function LowPositionEvidence({
-  candidate,
-  intelligence,
-}: {
-  candidate: FirstBoardDiscoveryResponse["candidates"][number] | undefined;
-  intelligence: RecommendationIntelligenceItem | null;
-}) {
-  const facts = candidate?.facts;
-  const themes = facts?.themes.slice(0, 2) ?? [];
-  const latestNews = intelligence?.latest_news[0]?.title
-    ?? facts?.news_catalysts[0]
-    ?? "暂未匹配到明确的近期催化";
-  const report = intelligence?.financial_report;
-  const financial = report
-    ? `${report.fiscal_year} ${report.fiscal_period}，营收同比 ${formatNullableSigned(report.operating_income_yoy_pct)}，归母净利同比 ${formatNullableSigned(report.net_profit_yoy_pct)}`
-    : "暂未获取到可比较的最新季度财报";
-  return (
-    <div className="low-position-evidence">
-      <section>
-        <strong><b>1</b>题材</strong>
-        <p>{themes.length > 0
-          ? themes.map((theme) => `${theme.name} ${formatSigned(theme.change_pct, 1)}%`).join("；")
-          : intelligence?.sector || "暂未匹配到明确热门题材"}</p>
-      </section>
-      <section>
-        <strong><b>2</b>新闻和财报</strong>
-        <p>{latestNews}</p>
-        <small>{financial}</small>
-      </section>
-      <section>
-        <strong><b>3</b>走势</strong>
-        <p>{facts
-          ? `${discoveryPatternLabel(facts.pattern)}；近5日 ${formatNullableSigned(facts.return_5d_pct)}，近20日 ${formatNullableSigned(facts.return_20d_pct)}，近60日 ${formatNullableSigned(facts.return_60d_pct)}；量比 ${facts.volume_ratio_5d?.toFixed(2) ?? "暂无"}，60日区间位置 ${facts.position_60d_pct?.toFixed(0) ?? "暂无"}%`
-          : intelligence?.position_label || "K 线位置事实暂缺"}</p>
-      </section>
-    </div>
-  );
-}
-
-interface RecommendationNewsViewItem {
-  key: string;
-  title: string;
-  summary: string;
-  publishedAt: string;
-  source: string;
-  url: string;
-  category: string;
-}
-
-function RecommendationNewsBoard() {
-  /** Paginate the factual 24-hour market feed without involving the LLM. */
-
-  const [page, setPage] = useState(1);
-  const [news, setNews] = useState<FinanceNewsPage | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(() => {
-    let active = true;
-    const refresh = (showLoading: boolean) => {
-      if (showLoading) setLoading(true);
-      void fetchFinanceNews(page)
-        .then((response) => {
-          if (!active) return;
-          setNews(response);
-          setFailed(false);
-          setPage(response.page);
-        })
-        .catch(() => {
-          if (active) setFailed(true);
-        })
-        .finally(() => {
-          if (active) setLoading(false);
-        });
-    };
-    refresh(true);
-    const timer = window.setInterval(() => refresh(false), 5 * 60 * 1000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, [page]);
-
-  const visibleNews = useMemo(
-    () => (news?.items ?? []).map(marketNewsViewItem),
-    [news],
-  );
-  const pageNumbers = news ? paginationWindow(news.page, news.total_pages) : [];
-
-  return (
-    <section className="recommendation-news-board" aria-label="盘前实时新闻">
-      <header className="recommendation-news-header">
-        <div>
-          <Newspaper size={18} />
-          <span>
-            <strong>实时新闻</strong>
-            <small>
-              {news
-                ? `近 24 小时 · ${news.sources.join(" · ")} · 共 ${news.total} 条`
-                : "近 24 小时 · 5 分钟自动更新"}
-            </small>
-          </span>
-        </div>
-        <span className="recommendation-news-refresh">5 分钟自动更新</span>
-      </header>
-      {loading && !news ? (
-        <div className="recommendation-news-state">
-          <LoaderCircle className="state-spinner" size={18} />
-          正在获取最新新闻...
-        </div>
-      ) : null}
-      {failed ? (
-        <div className="recommendation-news-state">财经快讯暂时没有加载成功。</div>
-      ) : null}
-      {!loading && !failed && visibleNews.length === 0 ? (
-        <div className="recommendation-news-state">
-          近 24 小时没有获取到市场快讯。
-        </div>
-      ) : null}
-      {visibleNews.length > 0 ? (
-        <div className="recommendation-news-list">
-          {visibleNews.map((item) => (
-            <article className="recommendation-news-item" key={item.key}>
-              <time dateTime={item.publishedAt}>{formatRecommendationNewsTime(item.publishedAt)}</time>
-              <div className="recommendation-news-body">
-                <a href={item.url} target="_blank" rel="noreferrer">
-                  <strong>{item.title}</strong>
-                  <ExternalLink size={13} aria-hidden="true" />
-                </a>
-                <span>{item.source} · {item.category}</span>
-              </div>
-            </article>
-          ))}
-        </div>
-      ) : null}
-      {news && news.total_pages > 1 ? (
-        <footer className="recommendation-news-pagination" aria-label="市场快讯分页">
-          <span>第 {news.page} / {news.total_pages} 页</span>
-          <div>
-            <button
-              aria-label="上一页"
-              disabled={news.page <= 1}
-              onClick={() => setPage((value) => Math.max(1, value - 1))}
-              title="上一页"
-              type="button"
-            >
-              <ChevronLeft size={15} />
-            </button>
-            {pageNumbers.map((pageNumber) => (
-              <button
-                aria-current={pageNumber === news.page ? "page" : undefined}
-                className={pageNumber === news.page ? "active" : undefined}
-                key={pageNumber}
-                onClick={() => setPage(pageNumber)}
-                type="button"
-              >
-                {pageNumber}
-              </button>
-            ))}
-            <button
-              aria-label="下一页"
-              disabled={news.page >= news.total_pages}
-              onClick={() => setPage((value) => Math.min(news.total_pages, value + 1))}
-              title="下一页"
-              type="button"
-            >
-              <ChevronRight size={15} />
-            </button>
-          </div>
-        </footer>
-      ) : null}
-    </section>
-  );
-}
-
-function marketNewsViewItem(item: FinanceNewsItem): RecommendationNewsViewItem {
-  return {
-    key: `${item.source}-${item.url}-${item.published_at}`,
-    title: item.title,
-    summary: item.summary,
-    publishedAt: item.published_at,
-    source: item.source,
-    url: item.url,
-    category: item.category,
-  };
-}
-
-function paginationWindow(current: number, total: number): number[] {
-  const visible = Math.min(5, total);
-  const start = Math.max(1, Math.min(current - 2, total - visible + 1));
-  return Array.from({ length: visible }, (_, index) => start + index);
-}
-
-function formatRecommendationNewsTime(value: string): string {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value.slice(5, 16).replace("T", " ");
-  const now = new Date();
-  const sameDay = parsed.toDateString() === now.toDateString();
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: sameDay ? undefined : "2-digit",
-    day: sameDay ? undefined : "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(parsed);
-}
-
-function discoveryPatternLabel(pattern: FirstBoardDiscoveryPattern) {
-  const labels: Record<FirstBoardDiscoveryPattern, string> = {
-    low_base_breakout: "低位突破",
-    trend_acceleration: "趋势加速",
-    oversold_rebound: "超跌反弹",
-    second_wave: "二波观察",
-    range_breakout: "区间突破",
-    unclassified: "结构观察",
-  };
-  return labels[pattern];
+  return { intelligence };
 }
 
 function recommendationIntelligenceFor(
   response: RecommendationIntelligenceResponse | null,
-  strategy: "discovery" | "relay",
   symbol: string,
 ) {
-  return response?.items.find(
-    (item) => item.strategy === strategy && item.symbol === symbol,
-  ) ?? null;
+  return response?.items.find((item) => item.symbol === symbol) ?? null;
 }
 
 function formatNullableSigned(value: number | null) {
-  return value === null ? "暂无" : `${formatSigned(value, 1)}%`;
+  return value === null ? "—" : formatSigned(value);
 }
 
 function DetailView({ view, data }: { view: StockListViewKey; data: DashboardData }) {
@@ -1308,7 +750,6 @@ function StockDetail({ data }: { data: DashboardData }) {
   const marketTradeDate = data.summary.trade_date;
   const currentIntelligence = recommendationIntelligenceFor(
     intelligence,
-    "relay",
     symbol,
   );
 
