@@ -25,7 +25,7 @@ class ConsolidationCandidate(BaseModel):
 
 
 class ConsolidationPool(BaseModel):
-    strategy_version: str = "consolidation_research_v0.1"
+    strategy_version: str = "consolidation_research_v0.2"
     generated_at: datetime
     data_as_of: date | None = None
     latest_data_date: date | None = None

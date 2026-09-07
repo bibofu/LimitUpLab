@@ -83,11 +83,25 @@ def test_failed_conditions_never_become_candidates(change, reason):
 def test_inclusive_price_and_volume_boundaries():
     events, bars, dates, end, now = fixture()
     for bar in bars[25:]:
-        bar.update(open=10.5, high=10.8, low=10., close=10.45, volume=750.)
+        bar.update(open=10., high=10.692, low=9.9, close=9.9, volume=750.)
     candidate = screen_consolidation(events, bars, dates, end, now).candidates[0]
     assert candidate.range_pct == 8
-    assert candidate.anchor_change_pct == -5
+    assert candidate.anchor_change_pct == -10
     assert candidate.volume_ratio == .75
+
+
+@pytest.mark.parametrize("change,accepted", [
+    (-.101, False), (-.10, True), (-.07, True), (.08, True), (.081, False),
+])
+def test_relative_close_band(change, accepted):
+    events, bars, dates, end, now = fixture()
+    close = 11. * (1 + change)
+    for bar in bars[25:]:
+        bar.update(open=close, high=close, low=close, close=close)
+    result = screen_consolidation(events, bars, dates, end, now)
+    assert bool(result.candidates) is accepted
+    if not accepted:
+        assert result.exclusions == {"close_outside_band": 1}
 
 
 def test_missing_event_date_blocks_anchor_inference():

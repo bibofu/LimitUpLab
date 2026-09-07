@@ -12,7 +12,7 @@ RULES = [
     "沪深主板；按涨停事件名称排除 ST 与退市标记。",
     "最近 5 个交易日有收盘涨停，以最近一次为锚点；整理 2–4 个交易日。",
     "涨停后最高价 ÷ 最低价 − 1 ≤ 8%。",
-    "最新收盘相对涨停日收盘在 −5% 至 +8% 之间。",
+    "最新收盘相对涨停日收盘在 −10% 至 +8% 之间。",
     "整理期日均成交量 ÷ 涨停日成交量 ≤ 0.75，且量价来源标签一致。",
     "连续 20 个市场交易日量价历史中的 OHLC 完整，剔除明显价格断点及锚点不一致。",
 ]
@@ -63,7 +63,7 @@ def assess(symbol: str, anchor: str, end: str, calendar: list[str], bars: dict):
     ratio = mean(b["volume"] for b in window[1:])/window[0]["volume"]
     if high/low-1 > .08 + 1e-12:
         return "range_above_8pct", None
-    if not -.05 - 1e-12 <= relative <= .08 + 1e-12:
+    if not -.10 - 1e-12 <= relative <= .08 + 1e-12:
         return "close_outside_band", None
     if ratio > .75 + 1e-12:
         return "volume_above_075", None
