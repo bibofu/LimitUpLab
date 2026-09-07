@@ -35,7 +35,7 @@ def test_feature_source_requires_full_anchor_to_signal_window():
     bars = {('s', d): {'open': 10, 'close': 10, 'low': 9.9, 'high': 10.1,
                        'volume': 100 if d == '0' else 50, 'source': 'akshare.stock_zh_a_hist_tx'} for d in calendar}
     assert m.observations(pool, bars, calendar)[0]['arm'] == 'shrink'
-    bars[('s', '0')]['source'] = 'first-board-discovery'
+    bars[('s', '0')]['source'] = 'mixed-legacy-source'
     result = m.observations(pool, bars, calendar)[0]
     assert result['arm'] == 'unknown'
     assert not result['feature_tencent']

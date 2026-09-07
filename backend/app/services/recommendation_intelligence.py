@@ -33,21 +33,17 @@ from app.models import (
     StockNewsFacts,
 )
 from app.repositories import (
-    SQLiteFirstBoardDiscoveryRepository,
     SQLiteFirstBoardRepository,
     SQLiteLimitUpRepository,
     SQLiteRecommendationIntelligenceRepository,
     SQLiteScoringPolicyRepository,
 )
 from app.services.stock_news import collect_stock_news
-from app.services.first_board_discovery import FIRST_BOARD_DISCOVERY_VERSION
 from app.services.relay_universe import is_relay_candidate_symbol
 
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 DEFAULT_REFRESH_INTERVAL_MINUTES = 30
-DISCOVERY_POOL_SIZE = 50
-DISCOVERY_DISPLAY_LIMIT = 15
 RELAY_DISPLAY_LIMIT = 10
 FINANCIAL_CACHE_TTL = timedelta(hours=24)
 MARKET_CLOSE_TIME = time(15, 0)
@@ -100,7 +96,6 @@ def refresh_recommendation_intelligence(
     now: datetime | None = None,
     limit_up_repository: SQLiteLimitUpRepository | None = None,
     first_board_repository: SQLiteFirstBoardRepository | None = None,
-    discovery_repository: SQLiteFirstBoardDiscoveryRepository | None = None,
     snapshot_repository: SQLiteRecommendationIntelligenceRepository | None = None,
     quote_collector: QuoteCollector | None = None,
     news_collector: NewsCollector | None = None,
@@ -113,29 +108,20 @@ def refresh_recommendation_intelligence(
     refreshed_at = _as_shanghai(now or datetime.now(SHANGHAI_TZ))
     first_repo = first_board_repository or SQLiteFirstBoardRepository()
     limit_repo = limit_up_repository or SQLiteLimitUpRepository(seed_if_empty=False)
-    discovery_repo = discovery_repository or SQLiteFirstBoardDiscoveryRepository(
-        first_repo.database_path
-    )
     intelligence_repo = snapshot_repository or (
         SQLiteRecommendationIntelligenceRepository(first_repo.database_path)
     )
-    candidates, discovery_date, relay_date, warnings = _load_base_candidates(
+    candidates, relay_date, warnings = _load_base_candidates(
         limit_up_repository=limit_repo,
         first_board_repository=first_repo,
-        discovery_repository=discovery_repo,
     )
     target_trade_date = _target_trade_date(
-        discovery_repository=discovery_repo,
-        base_trade_date=max(
-            (item for item in (discovery_date, relay_date) if item is not None),
-            default=None,
-        ),
+        base_trade_date=relay_date,
     )
     previous = intelligence_repo.get_latest()
     same_basis = _matches_recommendation_basis(
         previous,
         target_trade_date=target_trade_date,
-        discovery_base_date=discovery_date,
         relay_base_date=relay_date,
     )
     if (
@@ -156,7 +142,6 @@ def refresh_recommendation_intelligence(
             refreshed_at=refreshed_at,
             interval_minutes=interval_minutes,
             target_trade_date=target_trade_date,
-            discovery_base_date=discovery_date,
             relay_base_date=relay_date,
         )
         intelligence_repo.save(missed)
@@ -397,52 +382,6 @@ def refresh_recommendation_intelligence(
                     f"{MAX_RELAY_DYNAMIC_ADJUSTMENT:g} 分约束，"
                     f"原始合计 {raw_dynamic_adjustment:+g} 分"
                 )
-        else:
-            close_information_adjustment = 0.0
-            close_information_reasons = []
-            news_adjustment, news_reasons = _news_adjustment(
-                evidence.news,
-                refreshed_at=refreshed_at,
-            )
-            financial_adjustment, financial_reasons = _financial_adjustment(
-                evidence.financial_report
-            )
-            dragon_tiger_adjustment = 0.0
-            current_popularity = popularity_by_symbol.get(candidate.symbol)
-            if (
-                current_popularity is None
-                and not popularity_ready
-                and previous_item is not None
-                and previous_item.popularity_rank is not None
-            ):
-                current_popularity = PopularityFact(
-                    symbol=candidate.symbol,
-                    rank=previous_item.popularity_rank,
-                    rank_change=previous_item.popularity_rank_change,
-                    captured_at=(
-                        previous_item.popularity_snapshot_at
-                        or previous_item.refreshed_at
-                    ),
-                    source=previous_item.popularity_source or "previous-refresh",
-                )
-            if not popularity_ready:
-                missing.append("最新人气榜刷新不可用")
-            popularity_adjustment, popularity_reasons = (
-                _discovery_popularity_adjustment(current_popularity)
-                if popularity_ready
-                else (0.0, [])
-            )
-            popularity_rank_change = None
-            current_dragon_tiger = None
-            dynamic_adjustment = round(
-                news_adjustment + financial_adjustment + popularity_adjustment,
-                1,
-            )
-            update_reasons = [
-                *news_reasons,
-                *financial_reasons,
-                *(f"人气变化：{reason}" for reason in popularity_reasons),
-            ]
         base_score = _bounded_score(
             candidate.base_score + close_information_adjustment
         )
@@ -539,7 +478,7 @@ def refresh_recommendation_intelligence(
             )
         )
     base_ranked_items: list[RecommendationIntelligenceItem] = []
-    for strategy in ("discovery", "relay"):
+    for strategy in ("relay",):
         strategy_items = sorted(
             [item for item in items if item.strategy == strategy],
             key=lambda item: (-item.base_score, item.rule_rank, item.symbol),
@@ -549,7 +488,7 @@ def refresh_recommendation_intelligence(
             for index, item in enumerate(strategy_items, start=1)
         )
     ranked_items: list[RecommendationIntelligenceItem] = []
-    for strategy in ("discovery", "relay"):
+    for strategy in ("relay",):
         strategy_items = sorted(
             [item for item in base_ranked_items if item.strategy == strategy],
             key=lambda item: (-item.draft_score, item.base_rank, item.symbol),
@@ -567,15 +506,10 @@ def refresh_recommendation_intelligence(
         refreshed_at=refreshed_at,
         interval_minutes=max(5, min(interval_minutes, 1440)),
         target_trade_date=target_trade_date,
-        discovery_pool_size=sum(
-            item.strategy == "discovery" for item in ranked_items
-        ),
-        discovery_display_limit=DISCOVERY_DISPLAY_LIMIT,
         relay_pool_size=sum(item.strategy == "relay" for item in ranked_items),
         relay_display_limit=RELAY_DISPLAY_LIMIT,
         popularity_coverage_count=len(popularity_by_symbol),
         status="partial" if warnings else "complete",
-        discovery_base_date=discovery_date,
         relay_base_date=relay_date,
         items=ranked_items,
         warnings=warnings,
@@ -632,7 +566,7 @@ def finalize_recommendation_intelligence(
         intelligence_repo.save(existing)
         return existing
 
-    base_date = response.relay_base_date or response.discovery_base_date
+    base_date = response.relay_base_date
     if base_date is None:
         raise ValueError("Cannot finalize without a base trading date.")
     calendar = collect_a_share_trade_dates(base_date, response.target_trade_date)
@@ -646,10 +580,6 @@ def finalize_recommendation_intelligence(
     }
 
     selected_items = [
-        *sorted(
-            (item for item in response.items if item.strategy == "discovery"),
-            key=lambda item: (item.rank, item.symbol),
-        )[: response.discovery_display_limit],
         *sorted(
             (item for item in response.items if item.strategy == "relay"),
             key=lambda item: (item.rank, item.symbol),
@@ -695,7 +625,6 @@ def _matches_recommendation_basis(
     response: RecommendationIntelligenceResponse | None,
     *,
     target_trade_date: date | None,
-    discovery_base_date: date | None,
     relay_base_date: date | None,
 ) -> bool:
     """Return whether a persisted snapshot belongs to the current prediction day."""
@@ -703,7 +632,6 @@ def _matches_recommendation_basis(
     return bool(
         response is not None
         and response.target_trade_date == target_trade_date
-        and response.discovery_base_date == discovery_base_date
         and response.relay_base_date == relay_base_date
     )
 
@@ -745,7 +673,6 @@ def _missed_cutoff_response(
     refreshed_at: datetime,
     interval_minutes: int,
     target_trade_date: date | None,
-    discovery_base_date: date | None,
     relay_base_date: date | None,
 ) -> RecommendationIntelligenceResponse:
     """Persist an explicit non-prediction instead of fabricating a late final."""
@@ -777,7 +704,6 @@ def _missed_cutoff_response(
         target_trade_date=target_trade_date,
         finalized_at=None,
         status="partial",
-        discovery_base_date=discovery_base_date,
         relay_base_date=relay_base_date,
         items=[],
         warnings=[MISSED_CUTOFF_WARNING],
@@ -907,32 +833,9 @@ def _load_base_candidates(
     *,
     limit_up_repository: SQLiteLimitUpRepository,
     first_board_repository: SQLiteFirstBoardRepository,
-    discovery_repository: SQLiteFirstBoardDiscoveryRepository,
-) -> tuple[list[_BaseCandidate], date | None, date | None, list[str]]:
+) -> tuple[list[_BaseCandidate], date | None, list[str]]:
     candidates: list[_BaseCandidate] = []
     warnings: list[str] = []
-    discovery = discovery_repository.get_latest(FIRST_BOARD_DISCOVERY_VERSION)
-    discovery_date = discovery.data_as_of if discovery else None
-    if discovery is None:
-        warnings.append("低位挖掘快照不可用")
-    else:
-        candidates.extend(
-            _BaseCandidate(
-                strategy="discovery",
-                base_trade_date=discovery.data_as_of,
-                symbol=item.facts.symbol,
-                name=item.facts.name,
-                sector=item.facts.themes[0].name if item.facts.themes else "",
-                position_label=item.facts.pattern,
-                rank=index,
-                base_score=item.score,
-            )
-            for index, item in enumerate(
-                discovery.candidates[:DISCOVERY_POOL_SIZE],
-                start=1,
-            )
-        )
-
     events = limit_up_repository.list_events()
     relay_date = max((item.trade_date for item in events), default=None)
     live_relay = (
@@ -1019,23 +922,15 @@ def _load_base_candidates(
             )
             for index, item in enumerate(relay_candidates, start=1)
         )
-    return candidates, discovery_date, relay_date, warnings
+    return candidates, relay_date, warnings
 
 
 def _target_trade_date(
     *,
-    discovery_repository: SQLiteFirstBoardDiscoveryRepository,
     base_trade_date: date | None,
 ) -> date | None:
-    """Use the persisted exchange-calendar target, with a weekday fallback."""
+    """Return the next weekday target for the relay draft."""
 
-    discovery = discovery_repository.get_latest(FIRST_BOARD_DISCOVERY_VERSION)
-    if (
-        discovery is not None
-        and discovery.data_as_of == base_trade_date
-        and discovery.target_trade_date is not None
-    ):
-        return discovery.target_trade_date
     if base_trade_date is None:
         return None
     target = base_trade_date + timedelta(days=1)
@@ -1198,27 +1093,6 @@ def _dragon_tiger_adjustment(
         f"动态修正 {adjustment:+g} 分"
     )
     return adjustment, [reason]
-
-
-def _discovery_popularity_adjustment(
-    current: PopularityFact | None,
-) -> tuple[float, list[str]]:
-    """Use a covered live rank as one bounded low-position reranking signal."""
-
-    if current is None:
-        return 0.0, []
-    if current.rank <= 10:
-        adjustment = 2.0
-    elif current.rank <= 30:
-        adjustment = 1.0
-    else:
-        adjustment = 0.0
-    return (
-        adjustment,
-        [f"当前榜单第 {current.rank} 名，动态修正 {adjustment:+g} 分"]
-        if adjustment
-        else [],
-    )
 
 
 def _popularity_adjustment(

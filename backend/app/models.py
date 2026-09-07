@@ -271,7 +271,7 @@ class RecommendationFinancialReport(BaseModel):
 class RecommendationIntelligenceItem(BaseModel):
     """Latest mutable evidence and bounded adjustments for one candidate."""
 
-    strategy: Literal["discovery", "relay"]
+    strategy: Literal["relay"] = "relay"
     base_trade_date: date
     symbol: str
     name: str
@@ -343,13 +343,10 @@ class RecommendationIntelligenceResponse(BaseModel):
     target_trade_date: date | None = None
     finalized_at: datetime | None = None
     prediction_provenance: dict[str, Any] = Field(default_factory=dict)
-    discovery_pool_size: int = 0
-    discovery_display_limit: int = 15
     relay_pool_size: int = 0
     relay_display_limit: int = 10
     popularity_coverage_count: int = 0
     status: Literal["complete", "partial"]
-    discovery_base_date: date | None = None
     relay_base_date: date | None = None
     items: list[RecommendationIntelligenceItem] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
@@ -623,88 +620,6 @@ class StockDailyBar(BaseModel):
     change_pct: float | None = None
     source: str
     created_at: datetime
-
-
-FirstBoardDiscoveryPattern = Literal[
-    "low_base_breakout",
-    "trend_acceleration",
-    "oversold_rebound",
-    "second_wave",
-    "range_breakout",
-    "unclassified",
-]
-
-
-class FirstBoardDiscoveryTheme(BaseModel):
-    """One hot industry or concept used to construct the discovery universe."""
-
-    name: str
-    category: Literal["industry", "concept"]
-    change_pct: float
-    rank: int
-    member_count: int = 0
-    news_headlines: list[str] = Field(default_factory=list)
-    source: str = "hithink-finance"
-
-
-class FirstBoardDiscoveryFacts(BaseModel):
-    """Point-in-time market and K-line facts for one low-position candidate."""
-
-    symbol: str
-    name: str
-    data_as_of: date
-    target_trade_date: date | None = None
-    close: float
-    change_pct: float
-    amount: float
-    volume: float
-    intraday_range_pct: float
-    close_location: float
-    open_to_close_pct: float
-    kline_bar_count: int
-    return_5d_pct: float | None = None
-    return_20d_pct: float | None = None
-    return_60d_pct: float | None = None
-    distance_20d_high_pct: float | None = None
-    distance_60d_high_pct: float | None = None
-    position_60d_pct: float | None = None
-    volume_ratio_5d: float | None = None
-    volatility_20d: float | None = None
-    ma_alignment: str
-    pattern: FirstBoardDiscoveryPattern
-    themes: list[FirstBoardDiscoveryTheme] = Field(default_factory=list)
-    popularity_rank: int | None = None
-    news_catalysts: list[str] = Field(default_factory=list)
-    data_missing: list[str] = Field(default_factory=list)
-
-
-class FirstBoardDiscoveryCandidate(BaseModel):
-    """Explainable candidate produced by the low-position discovery baseline."""
-
-    facts: FirstBoardDiscoveryFacts
-    score: float
-    rating: Literal["A", "B", "C", "D"]
-    confidence: float
-    score_breakdown: list["ScoreBreakdownItem"]
-    reasons: list[str] = Field(default_factory=list)
-    risks: list[str] = Field(default_factory=list)
-
-
-class FirstBoardDiscoveryResponse(BaseModel):
-    """Immutable snapshot for the low-position research watchlist."""
-
-    data_as_of: date
-    target_trade_date: date | None = None
-    universe_count: int
-    eligible_count: int
-    recalled_count: int
-    themes: list[FirstBoardDiscoveryTheme] = Field(default_factory=list)
-    candidates: list[FirstBoardDiscoveryCandidate]
-    generated_by: str
-    source: str
-    snapshot_created_at: datetime
-    warnings: list[str] = Field(default_factory=list)
-    disclaimer: str = RESEARCH_DISCLAIMER
 
 
 class FirstBoardOutcome(BaseModel):

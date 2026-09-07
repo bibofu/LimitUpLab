@@ -105,7 +105,7 @@ def time_cohort_counts(predictions) -> dict[str, int]:
 
 def validate_final_response(response) -> None:
     """Shared final write gate, including evidence timestamps for both strategies."""
-    base = response.relay_base_date or response.discovery_base_date
+    base = response.relay_base_date
     if response.stage != "final" or base is None or response.finalized_at is None:
         raise ValueError("Final prediction metadata is incomplete.")
     errors = provenance_errors(base_date=base, data_as_of=response.target_trade_date,

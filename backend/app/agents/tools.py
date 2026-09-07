@@ -30,7 +30,6 @@ from app.models import (
     DailyBoardPromotionStat,
     FinanceNewsFacts,
     FirstBoardCriticResponse,
-    FirstBoardDiscoveryResponse,
     FirstBoardRating,
     LimitUpEvent,
     MarketIndexTrendFacts,
@@ -43,7 +42,6 @@ from app.models import (
     WebSearchFacts,
 )
 from app.repositories import (
-    SQLiteFirstBoardDiscoveryRepository,
     SQLiteFirstBoardRepository,
     SQLiteRecommendationIntelligenceRepository,
     SQLiteScoringPolicyRepository,
@@ -57,7 +55,6 @@ from app.services.analysis import (
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.finance_news import collect_finance_news
 from app.services.first_board_critic import build_first_board_critic
-from app.services.first_board_discovery import FIRST_BOARD_DISCOVERY_VERSION
 from app.services.prediction_quality_audit import build_prediction_quality_audit
 from app.services.rating_backtest import build_rating_backtest
 from app.services.sector_performance import build_sector_performance
@@ -392,29 +389,6 @@ TOOL_SCHEMAS = [
         returns=(
             "First-board candidate ratings, filters, industry distribution and complete "
             "K-line position groups for the rated candidate pool."
-        ),
-    ),
-    AgentToolSchema(
-        name="first_board_discovery",
-        description=(
-            "读取低位挖掘观察池：先按最新新闻和市场热门题材召回，再结合最新季度"
-            "财报与近 60 日 K 线位置、量能和趋势修复进行研究排序。候选不要求已经"
-            "涨停，适合回答低位启动、趋势启动或可能进入主升阶段的研究问题；输出"
-            "必须分别解释题材、新闻和财报、走势，不用于一进二接力。"
-        ),
-        args_schema={
-            "type": "object",
-            "properties": {
-                "data_as_of": {
-                    "type": ["string", "null"],
-                    "description": "YYYY-MM-DD close-data cutoff; omit for latest snapshot.",
-                }
-            },
-            "required": [],
-        },
-        returns=(
-            "Persisted next-session candidates with score, confidence, price-volume facts, "
-            "pattern, reasons, risks and explicit missing inputs."
         ),
     ),
     AgentToolSchema(
@@ -863,7 +837,6 @@ V1_CLOSED_MARKET_TOOL_NAMES = frozenset(
         "daily_board_promotion",
         "dragon_tiger_list",
         "first_board_ratings",
-        "first_board_discovery",
         "market_event_pool",
         "limit_up_events",
         "first_board_filter",
@@ -1643,71 +1616,6 @@ class AgentToolRegistry:
             summary=(
                 f"{ratings.trade_date.isoformat()} 首板评级入池{len(ratings.candidates)}只，"
                 f"{top_summary}。"
-            ),
-            trace_output=trace_output,
-        )
-
-    def first_board_discovery(self, data_as_of: date | None = None) -> ToolResult:
-        """Return a persisted low-position discovery snapshot."""
-
-        repository = SQLiteFirstBoardDiscoveryRepository(
-            self.first_board_repository.database_path
-        )
-        response: FirstBoardDiscoveryResponse | None = (
-            repository.get(data_as_of, FIRST_BOARD_DISCOVERY_VERSION)
-            if data_as_of
-            else repository.get_latest(FIRST_BOARD_DISCOVERY_VERSION)
-        )
-        if response is None:
-            raise LookupError("No persisted low-position discovery snapshot is available.")
-        intelligence = _recommendation_intelligence_by_symbol(
-            self.first_board_repository.database_path,
-            strategy="discovery",
-        )
-        trace_output = response.model_dump(mode="json")
-        trace_output["candidates"] = [
-            {
-                "symbol": item.facts.symbol,
-                "name": item.facts.name,
-                "score": item.score,
-                "rating": item.rating,
-                "confidence": item.confidence,
-                "change_pct": item.facts.change_pct,
-                "return_5d_pct": item.facts.return_5d_pct,
-                "return_20d_pct": item.facts.return_20d_pct,
-                "return_60d_pct": item.facts.return_60d_pct,
-                "volume_ratio_5d": item.facts.volume_ratio_5d,
-                "distance_20d_high_pct": item.facts.distance_20d_high_pct,
-                "distance_60d_high_pct": item.facts.distance_60d_high_pct,
-                "position_60d_pct": item.facts.position_60d_pct,
-                "amount": item.facts.amount,
-                "pattern": item.facts.pattern,
-                "pattern_label": _discovery_pattern_label(item.facts.pattern),
-                "themes": [theme.model_dump(mode="json") for theme in item.facts.themes],
-                "popularity_rank": item.facts.popularity_rank,
-                "news_catalysts": item.facts.news_catalysts,
-                "reasons": item.reasons,
-                "risks": item.risks,
-                "data_missing": item.facts.data_missing,
-                "latest_intelligence": intelligence.get(item.facts.symbol),
-            }
-            for item in response.candidates
-        ]
-        if data_as_of is None:
-            recommendation_draft = _recommendation_draft_facts(
-                self.first_board_repository.database_path,
-                strategy="discovery",
-                expected_base_date=response.data_as_of,
-            )
-            if recommendation_draft is not None:
-                trace_output["recommendation_draft"] = recommendation_draft
-        return ToolResult(
-            name="first_board_discovery",
-            input={"data_as_of": data_as_of.isoformat() if data_as_of else None},
-            output=response,
-            summary=(
-                f"{response.data_as_of.isoformat()} 收盘后低位挖掘观察池"
-                f"共 {len(response.candidates)} 只。"
             ),
             trace_output=trace_output,
         )
@@ -2588,14 +2496,10 @@ def _recommendation_draft_facts(
             and item.base_trade_date == expected_base_date
         ),
         key=lambda item: (item.rank, item.symbol),
-    )[: (15 if strategy == "discovery" else 10)]
+    )[:10]
     if not candidates:
         return None
-    base_date = (
-        response.discovery_base_date
-        if strategy == "discovery"
-        else response.relay_base_date
-    )
+    base_date = response.relay_base_date
     return {
         "stage": "draft",
         "base_date": base_date.isoformat() if base_date else None,
@@ -2604,19 +2508,6 @@ def _recommendation_draft_facts(
         "candidates": [item.model_dump(mode="json") for item in candidates],
         "warnings": response.warnings,
     }
-
-
-def _discovery_pattern_label(pattern: str) -> str:
-    """Translate the discovery classifier value for user-facing evidence."""
-
-    return {
-        "low_base_breakout": "低位突破",
-        "trend_acceleration": "趋势加速",
-        "oversold_rebound": "超跌反弹",
-        "second_wave": "二波观察",
-        "range_breakout": "区间突破",
-        "unclassified": "结构观察",
-    }.get(pattern, "结构观察")
 
 
 def compact_first_board_position_groups(

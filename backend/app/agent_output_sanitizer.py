@@ -22,7 +22,6 @@ INTERNAL_TOOL_LABELS: dict[str, str] = {
     "stock_activity": "个股近期动态",
     "web_search": "公开信息",
     "first_board_ratings": "首板评级",
-    "first_board_discovery": "低位挖掘快照",
     "first_board_filter": "首板筛选结果",
     "market_event_pool": "市场事件名单",
     "limit_up_events": "涨停事件数据",

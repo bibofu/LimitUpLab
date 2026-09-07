@@ -1,9 +1,6 @@
 """Planner tool handlers for ratings; preserve domain-specific evidence contracts."""
 
-from datetime import date
 from typing import Any
-
-from app.models import FirstBoardDiscoveryResponse
 
 from .context import ExecutionState
 from .helpers import (
@@ -60,34 +57,6 @@ def first_board_ratings(state: ExecutionState, name: str, arguments: dict[str, A
     state.traces.append(result.trace())
     state.call_names.append(name)
     state.references.append(f"trade_date={state.latest_ratings.trade_date.isoformat()}")
-
-
-def first_board_discovery(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
-    raw_data_as_of = arguments.get("data_as_of")
-    try:
-        data_as_of = (
-            date.fromisoformat(str(raw_data_as_of))
-            if raw_data_as_of
-            else None
-        )
-        result = state.tools.first_board_discovery(data_as_of=data_as_of)
-    except Exception as error:  # noqa: BLE001
-        state.facts["first_board_discovery_error"] = str(error)
-        state.traces.append(
-            _tool_error_trace(
-                name=name,
-                tool_input=arguments,
-                summary="低位挖掘快照不可用，已将缺失原因交给 LLM。",
-                error=str(error),
-            )
-        )
-        state.call_names.append(name)
-        return
-    response: FirstBoardDiscoveryResponse = result.output
-    state.facts["first_board_discovery"] = result.trace_output
-    state.traces.append(result.trace())
-    state.call_names.append(name)
-    state.references.append(f"data_as_of={response.data_as_of.isoformat()}")
 
 
 def first_board_filter(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:

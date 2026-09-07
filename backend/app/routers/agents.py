@@ -40,7 +40,6 @@ from app.models import (
     DailyPipelineStatusResponse,
     DailyReviewSnapshotsResponse,
     FirstBoardCriticResponse,
-    FirstBoardDiscoveryResponse,
     FirstBoardRatingsResponse,
     FactorSignalDiagnosticResponse,
     OutcomeCompletenessReport,
@@ -60,7 +59,6 @@ from app.repositories import (
     SQLiteChatSessionRepository,
     SQLiteDailyPipelineRepository,
     SQLiteFirstBoardRepository,
-    SQLiteFirstBoardDiscoveryRepository,
     SQLiteReviewSnapshotRepository,
     SQLiteRecommendationIntelligenceRepository,
     SQLiteScoringPolicyRepository,
@@ -71,7 +69,6 @@ from app.services.data_health import build_agent_data_health
 from app.services.factor_signal_diagnostic import build_factor_signal_diagnostic
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.first_board_critic import build_first_board_critic
-from app.services.first_board_discovery import FIRST_BOARD_DISCOVERY_VERSION
 from app.services.dragon_tiger_review import load_dragon_tiger_review
 from app.services.agent_rate_limit import (
     AgentRateLimitError,
@@ -325,32 +322,6 @@ def get_first_board_ratings(
             }
         ),
     )
-
-
-@router.get(
-    "/first-board-discovery",
-    response_model=FirstBoardDiscoveryResponse,
-)
-def get_first_board_discovery(
-    data_as_of: date | None = None,
-) -> FirstBoardDiscoveryResponse:
-    """Return a persisted low-position discovery snapshot."""
-
-    repository = SQLiteFirstBoardDiscoveryRepository()
-    response = (
-        repository.get(data_as_of, FIRST_BOARD_DISCOVERY_VERSION)
-        if data_as_of is not None
-        else repository.get_latest(FIRST_BOARD_DISCOVERY_VERSION)
-    )
-    if response is None:
-        raise HTTPException(
-            status_code=404,
-            detail=(
-                "No low-position discovery snapshot is available. "
-                "Run the daily update first."
-            ),
-        )
-    return response
 
 
 @router.get(

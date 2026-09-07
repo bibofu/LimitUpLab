@@ -221,11 +221,6 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
         ),
     ),
     AgentCapability(
-        "first_board_discovery",
-        "查询低位挖掘观察池；按热门题材和新闻催化召回，再用财报与近 60 日 K 线位置、量能和趋势修复验证，并分别解释三类证据。",
-        (CapabilityToolRequirement("first_board_discovery"),),
-    ),
-    AgentCapability(
         "board_promotion",
         "查询前一交易日封板股票在次日继续连板的数量、比例，或首板到二板的跨日实现情况。",
         (CapabilityToolRequirement("daily_board_promotion", {"days": 5}),),

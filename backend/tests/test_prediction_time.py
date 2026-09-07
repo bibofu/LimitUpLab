@@ -155,7 +155,7 @@ def test_final_evidence_must_not_exceed_cutoff():
     item = SimpleNamespace(base_trade_date=date(2026, 9, 2), refreshed_at=created, facts_cutoff_at=created,
                            quote_captured_at=datetime.fromisoformat("2026-09-03T09:30:00+08:00"),
                            popularity_snapshot_at=None, latest_news=[], financial_report=None)
-    response = SimpleNamespace(stage="final", relay_base_date=date(2026, 9, 2), discovery_base_date=None,
+    response = SimpleNamespace(stage="final", relay_base_date=date(2026, 9, 2),
                                finalized_at=created, target_trade_date=date(2026, 9, 3),
                                prediction_provenance=final_provenance(), items=[item])
     with pytest.raises(ValueError, match="evidence timestamp"):

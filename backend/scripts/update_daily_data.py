@@ -30,9 +30,9 @@ from app.collectors import (
 from app.models import AgentPrediction, LimitUpEvent, StockDailyBar, StockKLineBar
 from app.services.prediction_time import CN_TZ, close_provenance, provenance_errors
 from app.repositories import (
-    SQLiteFirstBoardDiscoveryRepository,
     SQLiteFirstBoardRepository,
     SQLiteLimitUpRepository,
+    SQLiteStrategyRepository,
 )
 from app.services.first_board_features import (
     build_first_board_features,
@@ -46,9 +46,9 @@ from app.services.evaluation_agent import (
 from app.services.first_board_enrichment import refresh_first_board_enrichment_snapshots
 from app.services.outcome_completeness import build_top10_outcome_completeness
 from app.services.limit_up_reason import merge_limit_up_reasons
-from app.services.first_board_discovery import refresh_first_board_discovery
 from app.services.relay_universe import is_relay_candidate_symbol
 from app.services.stock_kline import load_stock_intraday_bars
+from app.services.strategy_platform import materialize_all_strategies
 
 
 PostBarCollector = Callable[[str, date, date], list[StockDailyBar]]
@@ -114,13 +114,10 @@ class DailyUpdateReport:
     post_limit_cache_missing: int = 0
     post_limit_cache_fetches: int = 0
     post_limit_cache_bars: int = 0
+    strategy_snapshot_count: int = 0
+    strategy_candidate_count: int = 0
     outcome_completeness: dict[str, object] = field(default_factory=dict)
     top_candidate: dict[str, object] | None = None
-    discovery_snapshot_ready: bool = False
-    discovery_data_as_of: str | None = None
-    discovery_target_trade_date: str | None = None
-    discovery_candidate_count: int = 0
-    discovery_generated_by: str | None = None
     health: dict[str, object] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
 
@@ -180,16 +177,6 @@ def main() -> None:
         action="store_true",
         help="Delete existing raw events for --date before importing.",
     )
-    parser.add_argument(
-        "--skip-discovery",
-        action="store_true",
-        help="Skip the full-market next-session first-board discovery scan.",
-    )
-    parser.add_argument(
-        "--force-discovery",
-        action="store_true",
-        help="Replace the same-date discovery snapshot for the current strategy.",
-    )
     args = parser.parse_args()
 
     report = run_daily_update(
@@ -202,8 +189,6 @@ def main() -> None:
         refresh_enrichment=not args.skip_enrichment,
         force_enrichment=args.force_enrichment,
         replace_date=args.replace_date,
-        refresh_discovery=not args.skip_discovery,
-        force_discovery=args.force_discovery,
     )
     print(json.dumps(asdict(report), ensure_ascii=False, indent=2))
 
@@ -225,8 +210,6 @@ def run_daily_update(
     remote_limit_up_collector: RemoteLimitUpCollector | None = None,
     persist_live_prediction: bool | None = None,
     now: datetime | None = None,
-    refresh_discovery: bool = False,
-    force_discovery: bool = False,
 ) -> DailyUpdateReport:
     """Update raw events, scoring features, tracked bars and health checks."""
 
@@ -464,33 +447,17 @@ def run_daily_update(
         report.post_limit_cache_fetches = int(post_limit_backfill["fetch_count"])
         report.post_limit_cache_bars = int(post_limit_backfill["bar_count"])
         report.warnings.extend(post_limit_backfill["warnings"])
-    if refresh_discovery and is_latest_available_date:
         try:
-            discovery = refresh_first_board_discovery(
+            strategy_runs = materialize_all_strategies(
+                data_as_of=trade_date,
+                repository=SQLiteStrategyRepository(first_board_repo.database_path),
                 first_board_repository=first_board_repo,
-                snapshot_repository=SQLiteFirstBoardDiscoveryRepository(
-                    first_board_repo.database_path
-                ),
-                top_k=50,
-                force=force_discovery,
+                limit_up_repository=limit_repo,
             )
-            report.discovery_snapshot_ready = True
-            report.discovery_data_as_of = discovery.data_as_of.isoformat()
-            report.discovery_target_trade_date = (
-                discovery.target_trade_date.isoformat()
-                if discovery.target_trade_date
-                else None
-            )
-            report.discovery_candidate_count = len(discovery.candidates)
-            report.discovery_generated_by = discovery.generated_by
-            if discovery.data_as_of != trade_date:
-                report.warnings.append(
-                    "First-board discovery market date differs from update date: "
-                    f"market={discovery.data_as_of}, update={trade_date}."
-                )
-            report.warnings.extend(discovery.warnings)
+            report.strategy_snapshot_count = len(strategy_runs)
+            report.strategy_candidate_count = sum(run.candidate_count for run in strategy_runs)
         except Exception as error:  # noqa: BLE001
-            report.warnings.append(f"First-board discovery: {error}")
+            report.warnings.append(f"Strategy snapshots: {error}")
     if post_bar_collector is None and is_latest_available_date:
         intraday_cache = warm_latest_intraday_cache(
             events=events,

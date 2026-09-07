@@ -19,7 +19,7 @@ IDEOGRAPHIC_COMMA = "\u3001"
 UNANSWERABLE_TEXT = "抱歉，该问题无法回答"
 TEXT = {
     "greeting": "你好，我是 LimitUpLab 的首板 Agent。我可以总结今日首板、解释个股评分、分析风险，也可以查询热门股票、财经快讯、个股新闻、个股走势和市场环境。",
-    "capability": "我是 LimitUpLab V1 首板复盘 Agent。我使用最新完整收盘数据和日 K 线研究低位挖掘、一进二 Top10，以及涨停后的高位回撤、横盘缩量、回撤企稳、断板修复和逐日走势；也可以重算这些形态的历史 D+1 至 D+5 描述性统计，并查询热门股票、财经快讯和个股动态。我不提供盘中实时行情、买卖指令、仓位、目标价或收益承诺。",
+    "capability": "我是 LimitUpLab V1 涨停后首板研究 Agent。我以策略目录为统一入口，使用最新完整收盘数据和日 K 线查询、筛选、解释、比较与复盘一进二接力、高位回撤、横盘缩量、回撤企稳、强势不连板、断板修复和二进三；也可以查看 D+1、D+3、D+5 描述性 Outcome、热门股票、财经快讯和个股动态。我不临时创造评分或修改策略，也不提供盘中实时行情、买卖指令、仓位、目标价或收益承诺。",
     "smalltalk": "我在。你可以直接问首板候选、板块分布、评分理由、风险或个股走势。",
     "prompt_injection": "我不能执行改变系统规则、泄露内部提示或调用未授权工具的指令。你可以继续询问 LimitUpLab 支持的收盘复盘问题。",
     "out_of_scope": UNANSWERABLE_TEXT,
@@ -394,63 +394,6 @@ def _template_answer_from_tool_facts(
 
     if "daily_board_promotion" in facts:
         return _template_daily_board_promotion_answer(facts["daily_board_promotion"])
-
-    if "first_board_discovery" in facts:
-        discovery = facts["first_board_discovery"]
-        draft = discovery.get("recommendation_draft") or {}
-        draft_candidates = draft.get("candidates") or []
-        if draft_candidates:
-            base_by_symbol = {
-                item.get("symbol"): item
-                for item in discovery.get("candidates", [])
-                if item.get("symbol")
-            }
-            lines = [
-                f"基于 {draft.get('base_date')} 收盘情况，并更新至 "
-                f"{str(draft.get('refreshed_at', ''))[:16]} 的低位挖掘观察池如下："
-            ]
-            for index, item in enumerate(draft_candidates, start=1):
-                base = base_by_symbol.get(item.get("symbol"), {})
-                themes = base.get("themes") or []
-                theme = themes[0] if themes else {}
-                latest_news = item.get("latest_news") or []
-                financial = item.get("financial_report") or {}
-                lines.extend(
-                    [
-                        f"{index}. {item.get('name')}({item.get('symbol')})，研究分 {item.get('draft_score')}。",
-                        f"   1. 题材：{theme.get('name') or item.get('sector') or '暂无明确题材'}，题材涨幅 {theme.get('change_pct', '暂无')}%。",
-                        f"   2. 新闻和财报：{latest_news[0].get('title') if latest_news else (base.get('news_catalysts') or ['暂无明确催化'])[0]}；营收同比 {financial.get('operating_income_yoy_pct', '暂无')}%，归母净利同比 {financial.get('net_profit_yoy_pct', '暂无')}%。",
-                        f"   3. 走势：{base.get('pattern_label', '结构待验证')}，近5日 {base.get('return_5d_pct', '暂无')}%，近20日 {base.get('return_20d_pct', '暂无')}%，近60日 {base.get('return_60d_pct', '暂无')}%，量比 {base.get('volume_ratio_5d', '暂无')}。",
-                    ]
-                )
-            lines.append("这是低位启动研究排序，不代表主升浪或收益概率。")
-            lines.append(TEXT["safety"])
-            return "\n".join(lines)
-        candidates = discovery.get("candidates", [])
-        target = discovery.get("target_trade_date") or "下一交易日"
-        lines = [
-            f"基于 {discovery.get('data_as_of')} 收盘数据，{target} 低位挖掘观察池如下："
-        ]
-        for index, item in enumerate(candidates[:10], start=1):
-            themes = item.get("themes") or []
-            primary_theme = themes[0] if themes else {}
-            catalysts = item.get("news_catalysts") or []
-            live = item.get("latest_intelligence") or {}
-            financial = live.get("financial_report") or {}
-            latest_news = live.get("latest_news") or []
-            lines.extend(
-                [
-                    f"{index}. {item.get('name')}({item.get('symbol')})，研究分 {item.get('score')}。",
-                    f"   1. 题材：{primary_theme.get('name', '暂无')}，题材涨幅 {primary_theme.get('change_pct', '暂无')}%。",
-                    f"   2. 新闻和财报：{latest_news[0].get('title') if latest_news else (catalysts[0] if catalysts else '暂无明确催化')}；营收同比 {financial.get('operating_income_yoy_pct', '暂无')}%，归母净利同比 {financial.get('net_profit_yoy_pct', '暂无')}%。",
-                    f"   3. 走势：{item.get('pattern_label')}，近5日 {item.get('return_5d_pct', '暂无')}%，近20日 {item.get('return_20d_pct', '暂无')}%，近60日 {item.get('return_60d_pct', '暂无')}%，量比 {item.get('volume_ratio_5d', '暂无')}。",
-                ]
-            )
-        if not candidates:
-            lines.append("当前没有满足数据与流动性要求的候选。")
-        lines.append("该名单先按热门题材和新闻催化圈选，再用财报和低位走势验证，不代表主升浪或收益概率。")
-        lines.append(TEXT["safety"])
-        return "\n".join(lines)
 
     if "first_board_ratings" in facts and "limit_up_events" not in facts:
         ratings = facts["first_board_ratings"]

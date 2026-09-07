@@ -42,7 +42,6 @@ HANDLERS: MappingProxyType[str, Handler] = MappingProxyType({
     "post_limit_path": post_limit.path,
     "post_limit_statistics": post_limit.statistics,
     "first_board_ratings": ratings.first_board_ratings,
-    "first_board_discovery": ratings.first_board_discovery,
     "first_board_filter": ratings.first_board_filter,
     "first_board_critic": ratings.first_board_critic,
     "prediction_quality_audit": review.prediction_quality_audit,

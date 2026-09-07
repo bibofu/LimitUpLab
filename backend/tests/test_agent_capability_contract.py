@@ -305,7 +305,7 @@ class AgentCapabilityContractTest(unittest.TestCase):
         path = Path(__file__).parent / "fixtures" / "agent_paraphrase_eval_cases.json"
         cases = load_eval_cases(path)
 
-        self.assertEqual(len(cases), 156)
+        self.assertEqual(len(cases), 148)
         self.assertTrue(all(case.expected_capabilities for case in cases))
         self.assertTrue(any(len(case.expected_capabilities) > 1 for case in cases))
 

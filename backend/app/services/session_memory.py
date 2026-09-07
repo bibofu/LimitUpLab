@@ -394,7 +394,8 @@ def _deterministic_topics(content: str) -> list[str]:
         "个股新闻",
         "财报",
         "高分票复盘",
-        "低位挖掘",
+        "策略列表",
+        "涨停后策略",
     )
     return [topic for topic in topic_terms if topic in content]
 

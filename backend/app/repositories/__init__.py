@@ -8,9 +8,6 @@ from app.repositories.chat_session_repository import (
 from app.repositories.chat_memory_repository import SQLiteChatMemoryRepository
 from app.repositories.daily_pipeline_repository import SQLiteDailyPipelineRepository
 from app.repositories.first_board_repository import SQLiteFirstBoardRepository
-from app.repositories.first_board_discovery_repository import (
-    SQLiteFirstBoardDiscoveryRepository,
-)
 from app.repositories.limit_up_repository import (
     LimitUpRepository,
     SampleLimitUpRepository,
@@ -23,6 +20,7 @@ from app.repositories.recommendation_intelligence_repository import (
 )
 from app.repositories.scoring_policy_repository import SQLiteScoringPolicyRepository
 from app.repositories.stock_news_repository import SQLiteStockNewsRepository
+from app.repositories.strategy_repository import SQLiteStrategyRepository
 
 __all__ = [
     "LimitUpRepository",
@@ -35,11 +33,11 @@ __all__ = [
     "SessionOwnershipError",
     "SQLiteDailyPipelineRepository",
     "SQLiteFirstBoardRepository",
-    "SQLiteFirstBoardDiscoveryRepository",
     "SQLiteLimitUpRepository",
     "SQLiteRecommendationIntelligenceRepository",
     "SQLiteReviewSnapshotRepository",
     "SQLiteScoringPolicyRepository",
     "SQLiteStockNewsRepository",
+    "SQLiteStrategyRepository",
     "get_limit_up_repository",
 ]

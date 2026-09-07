@@ -14,7 +14,7 @@ from app.config import env_bool
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 DEFAULT_DATABASE_PATH = BACKEND_ROOT / "data" / "limituplab.sqlite"
-CURRENT_SCHEMA_VERSION = 11
+CURRENT_SCHEMA_VERSION = 12
 DEFAULT_BUSY_TIMEOUT_MS = 5_000
 DEFAULT_LOCK_RETRY_ATTEMPTS = 3
 DEFAULT_LOCK_RETRY_BASE_DELAY_SECONDS = 0.05
@@ -757,21 +757,59 @@ def _apply_schema(connection: sqlite3.Connection) -> None:
     )
     connection.execute(
         """
-        CREATE TABLE IF NOT EXISTS first_board_discovery_snapshots (
-            data_as_of TEXT NOT NULL,
+        CREATE TABLE IF NOT EXISTS strategy_runs (
+            run_id TEXT PRIMARY KEY,
+            strategy_id TEXT NOT NULL,
             strategy_version TEXT NOT NULL,
-            target_trade_date TEXT,
-            response_json TEXT NOT NULL,
-            source TEXT NOT NULL,
-            created_at TEXT NOT NULL,
-            PRIMARY KEY (data_as_of, strategy_version)
+            signal_date TEXT NOT NULL,
+            data_as_of TEXT NOT NULL,
+            generated_at TEXT NOT NULL,
+            input_fingerprint TEXT NOT NULL,
+            status TEXT NOT NULL,
+            maturity TEXT NOT NULL,
+            output_type TEXT NOT NULL,
+            candidate_count INTEGER NOT NULL,
+            payload_json TEXT NOT NULL,
+            UNIQUE (strategy_id, strategy_version, signal_date)
         )
         """
     )
     connection.execute(
         """
-        CREATE INDEX IF NOT EXISTS idx_first_board_discovery_created
-        ON first_board_discovery_snapshots (created_at DESC)
+        CREATE INDEX IF NOT EXISTS idx_strategy_runs_strategy_date
+        ON strategy_runs (strategy_id, signal_date DESC)
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS strategy_candidates (
+            run_id TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            anchor_date TEXT NOT NULL,
+            candidate_json TEXT NOT NULL,
+            PRIMARY KEY (run_id, symbol),
+            FOREIGN KEY (run_id) REFERENCES strategy_runs(run_id) ON DELETE CASCADE
+        )
+        """
+    )
+    connection.execute(
+        """
+        CREATE TABLE IF NOT EXISTS strategy_outcomes (
+            run_id TEXT NOT NULL,
+            symbol TEXT NOT NULL,
+            d1_ready INTEGER NOT NULL DEFAULT 0,
+            d3_ready INTEGER NOT NULL DEFAULT 0,
+            d5_ready INTEGER NOT NULL DEFAULT 0,
+            d1_open_to_close_pct REAL,
+            d3_open_to_close_pct REAL,
+            d5_open_to_close_pct REAL,
+            mae5_pct REAL,
+            mfe5_pct REAL,
+            updated_at TEXT NOT NULL,
+            PRIMARY KEY (run_id, symbol),
+            FOREIGN KEY (run_id, symbol) REFERENCES strategy_candidates(run_id, symbol)
+                ON DELETE CASCADE
+        )
         """
     )
     _repair_legacy_failed_pool_board_heights(connection)
