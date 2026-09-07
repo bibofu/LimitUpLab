@@ -60,23 +60,26 @@ export function ConsolidationPanel() {
               {pool.data_missing.length > 0 && <p className="consolidation-warning">
                 部分股票未能评价：{pool.data_missing.map(consolidationReason).join("；")}。
               </p>}
-              {pool.candidates.length === 0 ? <div className="discovery-state"><strong>暂无符合条件的候选</strong><p>{consolidationEmptyMessage(pool)}</p></div>
-                : <div className="consolidation-grid">
-                  {pool.candidates.map((candidate) => <article className="consolidation-card" key={candidate.symbol}>
-                    <header><Link to={stockDetailPath(candidate.symbol, candidate.name)}>{candidate.name} <small>{candidate.symbol}</small></Link><span>{candidate.state === "new" ? "首次符合" : "持续观察"}</span></header>
-                    <p className="consolidation-note">涨停 {candidate.anchor_date} · 首次确认 {candidate.confirmed_date}</p>
+              {pool.candidates.length === 0 && <div className="discovery-state"><strong>暂无符合条件的候选</strong><p>{consolidationEmptyMessage(pool)}</p></div>}
+              {pool.evaluated_stocks.length > 0 && <>
+                <div><strong>可评价股票 · {pool.evaluated_stocks.length} 只</strong><p className="consolidation-note">已通过研究范围、整理天数与数据质量检查；符合项优先展示，未符合项列出全部形态条件差距。</p></div>
+                <div className="consolidation-grid">
+                  {pool.evaluated_stocks.map((candidate) => <article className="consolidation-card" key={candidate.symbol}>
+                    <header><Link to={stockDetailPath(candidate.symbol, candidate.name)}>{candidate.name} <small>{candidate.symbol}</small></Link><span className={candidate.state === "rejected" ? "consolidation-badge-rejected" : "consolidation-badge-qualified"}>{candidate.state === "rejected" ? "未符合" : candidate.state === "new" ? "首次符合" : "持续观察"}</span></header>
+                    <p className="consolidation-note">涨停 {candidate.anchor_date}{candidate.confirmed_date ? ` · 首次确认 ${candidate.confirmed_date}` : " · 尚未同时满足形态条件"}</p>
                     <dl>
                       <div><dt>整理天数</dt><dd>{candidate.consolidation_days} 日</dd></div>
-                      <div><dt>区间幅度</dt><dd>{candidate.range_pct.toFixed(2)}%</dd></div>
-                      <div><dt>整理期量比</dt><dd>{candidate.volume_ratio.toFixed(3)}</dd></div>
-                      <div><dt>相对涨停收盘</dt><dd>{candidate.anchor_change_pct > 0 ? "+" : ""}{candidate.anchor_change_pct.toFixed(2)}%</dd></div>
+                      <div><dt>区间幅度 · ≤8%</dt><dd>{candidate.range_pct.toFixed(2)}%</dd></div>
+                      <div><dt>整理期量比 · ≤0.75</dt><dd>{candidate.volume_ratio.toFixed(3)}</dd></div>
+                      <div><dt>相对涨停 · −10%～+8%</dt><dd>{candidate.anchor_change_pct > 0 ? "+" : ""}{candidate.anchor_change_pct.toFixed(2)}%</dd></div>
                       <div><dt>整理区间</dt><dd>{candidate.range_low.toFixed(2)}–{candidate.range_high.toFixed(2)} 元</dd></div>
                       <div><dt>最新收盘</dt><dd>{candidate.close.toFixed(2)} 元</dd></div>
                     </dl>
                     <p>{candidate.reasons.join("；")}。</p>
+                    {candidate.failed_conditions.length > 0 && <p className="consolidation-warning">未通过：{candidate.failed_conditions.map(consolidationReason).join("；")}。</p>}
                     <details><summary>数据来源与风险</summary><p>来源标签：{candidate.source}</p><ul>{candidate.risks.map((risk) => <li key={risk}>{risk}</li>)}</ul></details>
                   </article>)}
-                </div>}
+                </div></>}
               {Object.keys(pool.exclusions).length > 0 && <details className="consolidation-rules"><summary>未入选及数据不足原因</summary><ul>{Object.entries(pool.exclusions).map(([reason, count]) => <li key={reason}>{consolidationReason(reason)}：{count} 只</li>)}</ul><p>每只股票只记录首个未通过条件。</p></details>}
               <details className="consolidation-rules"><summary>研究口径与限制</summary><ul>{pool.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul><p>规则版本 {pool.strategy_version} · 计算时间 {new Date(pool.generated_at).toLocaleString("zh-CN")}</p></details>
             </> : null}

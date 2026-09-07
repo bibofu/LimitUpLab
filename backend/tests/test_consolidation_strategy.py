@@ -36,6 +36,7 @@ def test_first_confirmation_and_continuing_observation_are_distinct():
     assert candidate.state == "watching"
     assert candidate.confirmed_date.isoformat() == dates[26]
     assert result.pool_count == result.evaluated_count == 1
+    assert result.evaluated_stocks == result.candidates
     assert screen_consolidation(events, bars, dates, date.fromisoformat(dates[26]), now).candidates[0].state == "new"
 
 
@@ -78,6 +79,42 @@ def test_failed_conditions_never_become_candidates(change, reason):
     result = screen_consolidation(events, bars, dates, end, now)
     assert not result.candidates
     assert result.exclusions[reason] == 1
+    assert result.evaluated_count == len(result.evaluated_stocks)
+    if reason == "volume_above_075":
+        assert result.evaluated_stocks[0].state == "rejected"
+        assert result.evaluated_stocks[0].confirmed_date is None
+        assert result.evaluated_stocks[0].failed_conditions == [reason]
+    else:
+        assert result.evaluated_stocks == []
+
+
+def test_evaluable_rejections_keep_facts_and_all_failed_conditions():
+    events, bars, dates, end, now = fixture()
+    for bar in bars[25:]:
+        bar.update(open=11., high=12., low=10.7, close=12., volume=900.)
+    result = screen_consolidation(events, bars, dates, end, now)
+    assert result.candidates == []
+    assert result.evaluated_count == 1
+    stock = result.evaluated_stocks[0]
+    assert stock.state == "rejected"
+    assert stock.failed_conditions == ["range_above_8pct", "close_outside_band", "volume_above_075"]
+    assert stock.range_pct == 12.1495
+    assert stock.anchor_change_pct == 9.0909
+    assert stock.volume_ratio == .9
+    assert result.exclusions == {"range_above_8pct": 1}
+
+
+def test_qualified_cards_precede_rejections_without_duplicating_stocks():
+    events, bars, dates, end, now = fixture()
+    bars += [{**bar, "symbol": "600002"} for bar in bars]
+    events.append({**events[-1], "symbol": "600002"})
+    for bar in bars:
+        if bar["symbol"] == "600001" and bar["trade_date"] > dates[24]:
+            bar["volume"] = 900.
+    result = screen_consolidation(events, bars, dates, end, now)
+    assert result.evaluated_count == 2
+    assert [stock.symbol for stock in result.evaluated_stocks] == ["600002", "600001"]
+    assert [stock.symbol for stock in result.candidates] == ["600002"]
 
 
 def test_inclusive_price_and_volume_boundaries():

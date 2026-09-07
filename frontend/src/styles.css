@@ -3806,6 +3806,8 @@ a.entry-card {
 .consolidation-card > header a:hover { text-decoration: underline; }
 .consolidation-card small { color: #667085; font-size: 12px; font-weight: 400; }
 .consolidation-card header > span { color: #475467; font-size: 12px; }
+.consolidation-card header > span.consolidation-badge-rejected { color: #92400e; background: #fffbeb; padding: 2px 8px; border-radius: 4px; }
+.consolidation-card header > span.consolidation-badge-qualified { color: #175cd3; background: #eff8ff; padding: 2px 8px; border-radius: 4px; }
 .consolidation-card dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0; }
 .consolidation-card dt { color: #667085; font-size: 12px; }
 .consolidation-card dd { margin: 3px 0 0; font-weight: 600; }

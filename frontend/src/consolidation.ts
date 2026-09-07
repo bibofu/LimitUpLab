@@ -1,9 +1,10 @@
-export interface ConsolidationCandidate {
+export interface ConsolidationEvaluation {
   symbol: string;
   name: string;
   anchor_date: string;
-  confirmed_date: string;
-  state: "new" | "watching";
+  confirmed_date: string | null;
+  state: "new" | "watching" | "rejected";
+  failed_conditions: string[];
   consolidation_days: number;
   anchor_close: number;
   close: number;
@@ -15,6 +16,11 @@ export interface ConsolidationCandidate {
   source: string;
   reasons: string[];
   risks: string[];
+}
+
+export interface ConsolidationCandidate extends ConsolidationEvaluation {
+  confirmed_date: string;
+  state: "new" | "watching";
 }
 
 export interface ConsolidationPool {
@@ -29,6 +35,7 @@ export interface ConsolidationPool {
   pool_count: number;
   evaluated_count: number;
   candidates: ConsolidationCandidate[];
+  evaluated_stocks: ConsolidationEvaluation[];
   exclusions: Record<string, number>;
   data_missing: string[];
   warnings: string[];

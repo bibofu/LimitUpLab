@@ -5,12 +5,13 @@ from typing import Literal
 from pydantic import BaseModel, Field
 
 
-class ConsolidationCandidate(BaseModel):
+class ConsolidationEvaluation(BaseModel):
     symbol: str
     name: str
     anchor_date: date
-    confirmed_date: date
-    state: Literal["new", "watching"]
+    confirmed_date: date | None = None
+    state: Literal["new", "watching", "rejected"]
+    failed_conditions: list[str] = Field(default_factory=list)
     consolidation_days: int
     anchor_close: float
     close: float
@@ -22,6 +23,11 @@ class ConsolidationCandidate(BaseModel):
     source: str
     reasons: list[str]
     risks: list[str]
+
+
+class ConsolidationCandidate(ConsolidationEvaluation):
+    confirmed_date: date
+    state: Literal["new", "watching"]
 
 
 class ConsolidationPool(BaseModel):
@@ -36,6 +42,7 @@ class ConsolidationPool(BaseModel):
     pool_count: int = 0
     evaluated_count: int = 0
     candidates: list[ConsolidationCandidate] = Field(default_factory=list)
+    evaluated_stocks: list[ConsolidationEvaluation] = Field(default_factory=list)
     exclusions: dict[str, int] = Field(default_factory=dict)
     data_missing: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)

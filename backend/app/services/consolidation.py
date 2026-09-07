@@ -5,7 +5,7 @@ import math
 from statistics import mean
 from zoneinfo import ZoneInfo
 
-from app.consolidation_models import ConsolidationCandidate, ConsolidationPool
+from app.consolidation_models import ConsolidationCandidate, ConsolidationEvaluation, ConsolidationPool
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 RULES = [
@@ -61,13 +61,14 @@ def assess(symbol: str, anchor: str, end: str, calendar: list[str], bars: dict):
     low, high = min(b["low"] for b in window[1:]), max(b["high"] for b in window[1:])
     relative = window[-1]["close"]/window[0]["close"]-1
     ratio = mean(b["volume"] for b in window[1:])/window[0]["volume"]
+    failed = []
     if high/low-1 > .08 + 1e-12:
-        return "range_above_8pct", None
+        failed.append("range_above_8pct")
     if not -.10 - 1e-12 <= relative <= .08 + 1e-12:
-        return "close_outside_band", None
+        failed.append("close_outside_band")
     if ratio > .75 + 1e-12:
-        return "volume_above_075", None
-    return None, dict(consolidation_days=t-a, anchor_close=window[0]["close"],
+        failed.append("volume_above_075")
+    return failed[0] if failed else None, dict(failed_conditions=failed, consolidation_days=t-a, anchor_close=window[0]["close"],
                       close=window[-1]["close"], range_low=low, range_high=high,
                       range_pct=round((high/low-1)*100, 4),
                       anchor_change_pct=round(relative*100, 4),
@@ -104,25 +105,31 @@ def screen_consolidation(events: list[dict], rows: list[dict], calendar: list[st
         reason, facts = assess(symbol, event["trade_date"], end, dates, bars)
         if reason:
             exclusions[reason] += 1
+        if facts is None:
             continue
-        first = end
+        first = None if reason else end
         a = dates.index(event["trade_date"])
-        for earlier in dates[a+2:dates.index(end)]:
+        for earlier in dates[a+2:dates.index(end)] if not reason else []:
             if assess(symbol, event["trade_date"], earlier, dates, bars)[0] is None:
                 first = earlier
                 break
-        result.candidates.append(ConsolidationCandidate(
+        model = ConsolidationEvaluation if reason else ConsolidationCandidate
+        stock = model(
             symbol=symbol, name=event["name"], anchor_date=event["trade_date"],
-            confirmed_date=first, state="new" if first == end else "watching", **facts,
+            confirmed_date=first, state="rejected" if reason else "new" if first == end else "watching", **facts,
             reasons=[f"涨停后整理 {facts['consolidation_days']} 日，区间幅度 {facts['range_pct']:.2f}%",
                      f"相对涨停收盘 {facts['anchor_change_pct']:+.2f}%，整理期量比 {facts['volume_ratio']:.3f}"],
             risks=["整理形态可能失效；缩量不能直接证明抛压消失。",
                    "行情为本地未复权缓存，成交量单位及当前证券状态尚未独立核验。"],
-        ))
+        )
+        result.evaluated_stocks.append(stock)
+        if not reason:
+            result.candidates.append(stock)
     result.candidates.sort(key=lambda c:(-c.confirmed_date.toordinal(), c.symbol))
+    result.evaluated_stocks = [*result.candidates, *(s for s in result.evaluated_stocks if s.state == "rejected")]
     result.exclusions = dict(sorted(exclusions.items()))
     quality_keys = {"missing_history20", "price_discontinuity", "anchor_price_mismatch", "invalid_volume", "mixed_or_missing_source"}
-    result.evaluated_count = result.pool_count - sum(v for k,v in exclusions.items() if k in quality_keys | {"unsupported_security", "age_outside_2_4"})
+    result.evaluated_count = len(result.evaluated_stocks)
     result.data_missing = sorted(k for k in quality_keys if exclusions[k])
     result.status = "ready" if result.candidates else "data_missing" if result.data_missing else "empty"
     return result
