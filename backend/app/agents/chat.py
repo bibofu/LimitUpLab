@@ -343,6 +343,12 @@ def answer_first_board_chat(
             "out_of_scope",
             "历史相似案例功能已经下线。你可以改为询问这只股票的评分依据、主要风险、近期 K 线走势，或查看高分票追踪复盘。",
         )
+    strategy_catalog_response = _answer_strategy_catalog(request, tools)
+    if strategy_catalog_response is not None:
+        return strategy_catalog_response
+    strategy_result_response = _answer_registered_strategy_request(request, tools)
+    if strategy_result_response is not None:
+        return strategy_result_response
     llm_response = _answer_with_llm_tool_agent(
         request=request,
         tools=tools,
@@ -1318,6 +1324,106 @@ def _answer_post_limit_without_llm(
         tool_results=execution["tool_results"],
         references=execution["references"],
         warnings=[_safety_warning(), *_tool_outcome_warnings(execution["tool_results"])],
+        generated_by=CHAT_AGENT_VERSION,
+    )
+
+
+def _answer_strategy_catalog(
+    request: AgentChatRequest,
+    tools: AgentToolRegistry,
+) -> AgentChatResponse | None:
+    """Serve directory questions deterministically from the strategy registry."""
+
+    compact = re.sub(r"\s+", "", request.message).lower()
+    mentions_strategy = "策略" in compact
+    asks_directory = any(
+        term in compact
+        for term in ("有哪些", "目录", "列表", "各自", "成熟度", "研究什么", "多少个")
+    )
+    if not mentions_strategy or not asks_directory:
+        return None
+    result = tools.strategy_catalog()
+    facts = {"strategy_catalog": result.output}
+    return AgentChatResponse(
+        session_id=request.session_id,
+        intent="strategy_catalog",
+        answer=_template_answer_from_tool_facts(
+            request=request,
+            intent="strategy_catalog",
+            facts=facts,
+        ),
+        tool_calls=["strategy_catalog", "template_general_answer"],
+        tool_results=[result.trace()],
+        references=["strategy_registry=post_limit_v1"],
+        warnings=[_safety_warning()],
+        generated_by=CHAT_AGENT_VERSION,
+    )
+
+
+def _answer_registered_strategy_request(
+    request: AgentChatRequest,
+    tools: AgentToolRegistry,
+) -> AgentChatResponse | None:
+    """Route explicit registered-strategy result and comparison questions."""
+
+    compact = re.sub(r"\s+", "", request.message).lower()
+    aliases = (
+        ("relay_one_to_two", ("一进二接力", "一进二")),
+        ("high_drawdown", ("高位回撤",)),
+        ("volume_consolidation", ("横盘缩量",)),
+        ("pullback_stabilizing", ("回撤企稳",)),
+        ("strong_nonconsecutive", ("强势不连板",)),
+        ("broken_board_repair", ("断板修复",)),
+        ("second_to_third", ("二进三", "2进3")),
+    )
+    strategy_ids = [
+        strategy_id
+        for strategy_id, names in aliases
+        if any(name in compact for name in names)
+    ]
+    if not strategy_ids or "策略" not in compact:
+        return None
+    data_as_of = request.trade_date or _extract_trade_date(request.message)
+    compare = len(strategy_ids) > 1 and any(
+        term in compact for term in ("比较", "对比", "哪个", "优劣", "统计", "历史样本")
+    )
+    latest = len(strategy_ids) == 1 and any(
+        term in compact for term in ("最新", "候选", "观察池", "结果", "名单", "排名")
+    )
+    if not compare and not latest:
+        return None
+    try:
+        result = (
+            tools.strategy_statistics(strategy_ids, data_as_of=data_as_of, days=30)
+            if compare
+            else tools.strategy_latest(strategy_ids[0], data_as_of)
+        )
+    except Exception as error:  # noqa: BLE001
+        return AgentChatResponse(
+            session_id=request.session_id,
+            intent="strategy_data_missing",
+            answer=_ensure_safety_boundary(f"当前无法形成该策略结果：{error}"),
+            tool_calls=["strategy_statistics" if compare else "strategy_latest"],
+            tool_results=[],
+            references=[],
+            warnings=[_safety_warning()],
+            generated_by=CHAT_AGENT_VERSION,
+        )
+    facts = {result.name: result.output}
+    return AgentChatResponse(
+        session_id=request.session_id,
+        intent=result.name,
+        answer=_template_answer_from_tool_facts(
+            request=request,
+            intent=result.name,
+            facts=facts,
+        ),
+        tool_calls=[result.name, "template_general_answer"],
+        tool_results=[result.trace()],
+        references=[
+            f"data_as_of={data_as_of.isoformat()}" if data_as_of else "data_as_of=latest"
+        ],
+        warnings=[_safety_warning()],
         generated_by=CHAT_AGENT_VERSION,
     )
 

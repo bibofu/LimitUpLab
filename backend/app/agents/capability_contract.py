@@ -177,6 +177,38 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
         ),
     ),
     AgentCapability(
+        "strategy_catalog",
+        "查询当前注册的涨停后策略目录、每项策略研究对象、版本、成熟度、输出性质和最新样本覆盖。",
+        (CapabilityToolRequirement("strategy_catalog"),),
+        examples=("目前有哪些涨停后策略", "这些策略各自研究什么", "策略成熟度如何"),
+        answer_guidance=(
+            "严格按注册表顺序展示策略名称、生命周期阶段、版本、成熟度、输出性质、"
+            "最新数据日和样本量。一进二是前向验证研究排名，其余策略是探索观察池；"
+            "不得把探索策略描述为概率预测或构造跨策略总榜。"
+        ),
+    ),
+    AgentCapability(
+        "strategy_result",
+        "按注册策略读取指定截止日的不可变研究排名或观察池。",
+        (CapabilityToolRequirement("strategy_latest"),),
+        examples=("查看高位回撤策略最新观察池", "一进二策略最新结果"),
+        answer_guidance="说明策略版本、数据截止日、成熟度、输出性质，并逐只给出涨停锚点和缺失项。",
+    ),
+    AgentCapability(
+        "strategy_stock_evidence",
+        "查询某只股票在一个注册策略中的涨停锚点、入选证据和逐日路径。",
+        (CapabilityToolRequirement("strategy_stock_path"),),
+        examples=("看一下001299在高位回撤策略里的逐日路径",),
+        answer_guidance="只描述截止日前已发生路径，说明策略版本、成熟度、涨停锚点、证据和缺失项。",
+    ),
+    AgentCapability(
+        "strategy_comparison",
+        "统一查询或比较多个注册策略的样本量、完整度、时间范围和风险指标。",
+        (CapabilityToolRequirement("strategy_statistics"),),
+        examples=("比较一进二和高位回撤的历史样本", "这些策略哪个更成熟"),
+        answer_guidance="同时展示样本量、完整度、时间范围和风险指标；comparison_allowed为false时明确拒绝优劣结论。",
+    ),
+    AgentCapability(
         "post_limit_screening",
         "筛选近期涨停后出现高位回撤、横盘缩量、回撤企稳、强势不连板、断板修复或2进3形态的股票。",
         (CapabilityToolRequirement("post_limit_screen", {"shape": "high_drawdown"}),),

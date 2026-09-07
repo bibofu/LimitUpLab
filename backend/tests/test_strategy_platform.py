@@ -4,8 +4,12 @@ from pathlib import Path
 import pytest
 
 from app.database import connect, initialize_database
+from app.agents.chat import answer_first_board_chat
+from app.agents.tools import AgentToolRegistry
 from app.main import app
-from app.repositories import SQLiteStrategyRepository
+from app.models import AgentChatRequest
+from app.repositories import SQLiteFirstBoardRepository, SQLiteStrategyRepository
+from app.services.llm_provider import DisabledLLMProvider
 from app.services.strategy_catalog import STRATEGY_IDS, list_strategy_definitions
 from app.strategy_models import StrategyRunSnapshot
 
@@ -95,3 +99,70 @@ def test_public_strategy_routes_replace_legacy_consolidation_route() -> None:
     assert "/api/strategies/{strategy_id}/statistics" in paths
     assert "/api/strategies/consolidation" not in paths
     assert "/api/agents/first-board-discovery" not in paths
+
+
+def test_agent_strategy_catalog_is_registry_grounded_and_non_predictive(tmp_path: Path) -> None:
+    response = answer_first_board_chat(
+        AgentChatRequest(session_id="strategy-catalog", message="目前有哪些涨停后策略，各自研究什么，成熟度如何？"),
+        events=[],
+        repository=SQLiteFirstBoardRepository(tmp_path / "agent.sqlite"),
+        llm_provider=DisabledLLMProvider(),
+    )
+    assert response.intent == "strategy_catalog"
+    assert response.tool_calls[0] == "strategy_catalog"
+    assert all(name in response.answer for name in ("一进二接力", "高位回撤", "横盘缩量", "断板修复", "二进三"))
+    assert "前向验证" in response.answer
+    assert "探索研究" in response.answer
+    assert "预测概率" in response.answer
+    assert "低位挖掘" not in response.answer
+
+
+def test_agent_reads_registered_latest_run_with_version_cutoff_and_anchor(tmp_path: Path) -> None:
+    database = tmp_path / "agent-latest.sqlite"
+    SQLiteStrategyRepository(database).save_if_absent(_snapshot())
+    response = answer_first_board_chat(
+        AgentChatRequest(session_id="strategy-latest", message="一进二接力策略最新排名和候选"),
+        events=[],
+        repository=SQLiteFirstBoardRepository(database),
+        llm_provider=DisabledLLMProvider(),
+    )
+    assert response.intent == "strategy_latest"
+    assert "版本 test" in response.answer
+    assert "数据截止 2026-09-01" in response.answer
+    assert "涨停锚点 2026-09-01" in response.answer
+    assert "前向验证" in response.answer
+    assert "研究排名" in response.answer
+
+
+def test_strategy_comparison_refuses_ranking_when_samples_are_not_comparable(
+    tmp_path: Path,
+    monkeypatch: pytest.MonkeyPatch,
+) -> None:
+    def fake_statistics(strategy_id: str, *, data_as_of, days: int):
+        return {
+            "status": "ready",
+            "candidate_count": 4,
+            "run_count": 2,
+            "signal_dates": ["2026-09-01", "2026-09-02"],
+            "sample_quality": "insufficient",
+        }
+
+    monkeypatch.setattr("app.agents.tools.build_strategy_statistics", fake_statistics)
+    registry = AgentToolRegistry(
+        events=[],
+        first_board_repository=SQLiteFirstBoardRepository(tmp_path / "compare.sqlite"),
+    )
+    result = registry.strategy_statistics(["一进二", "高位回撤"])
+    assert result.output["comparison_allowed"] is False
+    assert len(result.output["entries"]) == 2
+    assert "拒绝给出策略优劣结论" in result.output["comparison_warning"]
+    response = answer_first_board_chat(
+        AgentChatRequest(session_id="strategy-compare", message="比较一进二策略和高位回撤策略哪个更好，看历史样本"),
+        events=[],
+        repository=registry.first_board_repository,
+        llm_provider=DisabledLLMProvider(),
+    )
+    assert response.intent == "strategy_statistics"
+    assert "样本 4" in response.answer
+    assert "完整度" in response.answer
+    assert "拒绝给出策略优劣结论" in response.answer
