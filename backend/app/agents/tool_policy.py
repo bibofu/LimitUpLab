@@ -17,6 +17,12 @@ from app.agents.query_contract import (
     extract_trade_date as contract_trade_date,
     looks_like_market_event_query,
 )
+from app.post_limit_query_contract import (
+    build_post_limit_query_contract,
+    looks_like_post_limit_path_question,
+    looks_like_post_limit_question,
+    looks_like_post_limit_statistics_question,
+)
 from app.agents.tools import (
     AgentToolRegistry,
     ToolResult,
@@ -60,6 +66,9 @@ class QuestionSignals:
     first_board_facts: bool
     rating_explanation: bool
     stock_kline: bool
+    post_limit_screen: bool
+    post_limit_path: bool
+    post_limit_statistics: bool
     prediction_quality: bool
     rating_backtest: bool
     critic: bool
@@ -154,6 +163,18 @@ class QuestionSignals:
                 and looks_like_sector_stock_ranking_question(message)
             )
         )
+        post_limit_statistics = (
+            "post_limit_statistics" in capability_set
+            or looks_like_post_limit_statistics_question(message)
+        )
+        post_limit_path = (
+            "post_limit_path" in capability_set
+            or looks_like_post_limit_path_question(message)
+        ) and not post_limit_statistics
+        post_limit_screen = (
+            "post_limit_screening" in capability_set
+            or looks_like_post_limit_question(message)
+        ) and not post_limit_statistics and not post_limit_path
         return cls(
             requested_date=extract_trade_date(message),
             market_events=(
@@ -200,7 +221,7 @@ class QuestionSignals:
                     use_lexical_fallback
                     and looks_like_limit_up_event_question(message)
                 )
-            ),
+            ) and not (post_limit_screen or post_limit_path or post_limit_statistics),
             first_board_facts=(
                 "first_board_rating" in capability_set
                 or (
@@ -224,7 +245,11 @@ class QuestionSignals:
                     )
                 )
                 and not market_index_trend
+                and not post_limit_path
             ),
+            post_limit_screen=post_limit_screen,
+            post_limit_path=post_limit_path,
+            post_limit_statistics=post_limit_statistics,
             prediction_quality=(
                 "prediction_quality" in capability_set or prediction_quality
             ),
@@ -262,6 +287,9 @@ class QuestionSignals:
                 self.first_board_facts,
                 self.rating_explanation,
                 self.stock_kline,
+                self.post_limit_screen,
+                self.post_limit_path,
+                self.post_limit_statistics,
                 self.prediction_quality,
                 self.rating_backtest,
                 self.critic,
@@ -279,6 +307,9 @@ class QuestionSignals:
             (
                 self.market_environment,
                 self.limit_up_events,
+                self.post_limit_screen,
+                self.post_limit_path,
+                self.post_limit_statistics,
                 self.daily_board_promotion,
                 self.first_board_facts,
                 self.rating_explanation,
@@ -500,6 +531,27 @@ class AgentToolPolicyEngine:
                 ),
                 matches=lambda signals: signals.daily_board_promotion,
                 repair=self._repair_daily_board_promotion,
+            ),
+            ToolRepairRule(
+                name="post-limit-screen-grounding",
+                tool_name="post_limit_screen",
+                reason="A post-limit shape list requires event-relative price and volume facts.",
+                matches=lambda signals: signals.post_limit_screen,
+                repair=self._repair_post_limit_screen,
+            ),
+            ToolRepairRule(
+                name="post-limit-path-grounding",
+                tool_name="post_limit_path",
+                reason="A stock's post-limit path requires an explicit limit-up anchor and aligned daily bars.",
+                matches=lambda signals: signals.post_limit_path,
+                repair=self._repair_post_limit_path,
+            ),
+            ToolRepairRule(
+                name="post-limit-statistics-grounding",
+                tool_name="post_limit_statistics",
+                reason="Historical post-limit claims require mature, versioned event-relative cohorts.",
+                matches=lambda signals: signals.post_limit_statistics,
+                repair=self._repair_post_limit_statistics,
             ),
             ToolRepairRule(
                 name="limit-up-events-required",
@@ -999,6 +1051,82 @@ class AgentToolPolicyEngine:
             references=[
                 f"symbol={response.symbol}",
                 f"data_as_of={response.data_as_of.isoformat()}",
+            ],
+        )
+
+    def _repair_post_limit_screen(
+        self,
+        request: AgentChatRequest,
+        signals: QuestionSignals,
+        execution: ToolExecution,
+        context_symbol: str | None,
+    ) -> None:
+        del signals, context_symbol
+        contract = build_post_limit_query_contract(
+            request.message, request_trade_date=request.trade_date
+        )
+        result = self.tools.post_limit_screen(contract)
+        self._record_success(
+            execution,
+            result=result,
+            fact_name="post_limit_screen",
+            fact_value=result.output,
+            references=[
+                f"data_as_of={result.output.get('data_as_of')}",
+                f"rule_version={result.output.get('rule_version')}",
+            ],
+        )
+
+    def _repair_post_limit_path(
+        self,
+        request: AgentChatRequest,
+        signals: QuestionSignals,
+        execution: ToolExecution,
+        context_symbol: str | None,
+    ) -> None:
+        del signals
+        target = self.resolve_stock_target(request, context_symbol=context_symbol)
+        if target is None:
+            raise ValueError("Cannot resolve the requested stock symbol.")
+        contract = build_post_limit_query_contract(
+            request.message,
+            request_trade_date=request.trade_date,
+            planner_arguments={"mode": "path", "symbol": target},
+        )
+        result = self.tools.post_limit_path(contract, target)
+        self._record_success(
+            execution,
+            result=result,
+            fact_name="post_limit_path",
+            fact_value=result.output,
+            references=[
+                f"symbol={target}",
+                f"data_as_of={result.output.get('data_as_of')}",
+            ],
+        )
+
+    def _repair_post_limit_statistics(
+        self,
+        request: AgentChatRequest,
+        signals: QuestionSignals,
+        execution: ToolExecution,
+        context_symbol: str | None,
+    ) -> None:
+        del signals, context_symbol
+        contract = build_post_limit_query_contract(
+            request.message,
+            request_trade_date=request.trade_date,
+            planner_arguments={"mode": "statistics"},
+        )
+        result = self.tools.post_limit_statistics(contract)
+        self._record_success(
+            execution,
+            result=result,
+            fact_name="post_limit_statistics",
+            fact_value=result.output,
+            references=[
+                f"data_as_of={result.output.get('data_as_of')}",
+                f"rule_version={result.output.get('rule_version')}",
             ],
         )
 

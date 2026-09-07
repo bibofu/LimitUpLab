@@ -19,7 +19,7 @@ IDEOGRAPHIC_COMMA = "\u3001"
 UNANSWERABLE_TEXT = "抱歉，该问题无法回答"
 TEXT = {
     "greeting": "你好，我是 LimitUpLab 的首板 Agent。我可以总结今日首板、解释个股评分、分析风险，也可以查询热门股票、财经快讯、个股新闻、个股走势和市场环境。",
-    "capability": "我是 LimitUpLab V1 首板复盘 Agent。我使用最新完整收盘数据、热门题材、新闻财报和个股日 K 线生成低位挖掘观察池，并为已涨停首板生成一进二 Top10，持续复盘 D+1 至 D+5 走势、晋级率和评分表现；也可以查询带来源和时间的热门股票榜单、财经快讯、个股新闻及近期动态。我不提供盘中实时行情、买卖指令、仓位、目标价或收益承诺。",
+    "capability": "我是 LimitUpLab V1 首板复盘 Agent。我使用最新完整收盘数据和日 K 线研究低位挖掘、一进二 Top10，以及涨停后的高位回撤、横盘缩量、回撤企稳、断板修复和逐日走势；也可以重算这些形态的历史 D+1 至 D+5 描述性统计，并查询热门股票、财经快讯和个股动态。我不提供盘中实时行情、买卖指令、仓位、目标价或收益承诺。",
     "smalltalk": "我在。你可以直接问首板候选、板块分布、评分理由、风险或个股走势。",
     "prompt_injection": "我不能执行改变系统规则、泄露内部提示或调用未授权工具的指令。你可以继续询问 LimitUpLab 支持的收盘复盘问题。",
     "out_of_scope": UNANSWERABLE_TEXT,
@@ -69,6 +69,13 @@ def _template_answer_from_tool_facts(
 
     if _QuestionSignals.from_message(request.message).market_environment:
         return _template_market_environment_answer(facts)
+
+    if "post_limit_screen" in facts:
+        return _template_post_limit_screen(facts["post_limit_screen"])
+    if "post_limit_path" in facts:
+        return _template_post_limit_path(facts["post_limit_path"])
+    if "post_limit_statistics" in facts:
+        return _template_post_limit_statistics(facts["post_limit_statistics"])
 
     if "market_event_pool" in facts:
         payload = facts["market_event_pool"]
@@ -755,6 +762,164 @@ def _template_answer_from_tool_facts(
         return "\n".join(lines)
 
     return UNANSWERABLE_TEXT
+
+
+def _template_post_limit_screen(payload: dict[str, Any]) -> str:
+    """Render a complete evidence-first post-limit candidate list."""
+
+    labels = payload.get("shape_labels") or {}
+    shapes = payload.get("shapes") or []
+    shape_text = "、".join(labels.get(shape, shape) for shape in shapes) or "涨停后形态"
+    lines = [
+        f"截至 {payload.get('data_as_of')} 收盘，按{shape_text}口径筛选沪深主板"
+        f"（规则版本 {payload.get('rule_version')}）。",
+        f"近期涨停观察池 {payload.get('pool_count', 0)} 只，可评价 {payload.get('evaluable_count', 0)} 只"
+        f"（覆盖率 {float(payload.get('coverage_ratio') or 0):.1%}），符合 {payload.get('matched_count', 0)} 只。",
+    ]
+    contract = payload.get("query_contract") or {}
+    filters = [f"回看最近{contract.get('recent_limit_days', 5)}个交易日的收盘涨停"]
+    if contract.get("board_height"):
+        filters.append(f"板高={contract['board_height']}")
+    if contract.get("query"):
+        filters.append(f"名称/行业/题材包含“{contract['query']}”")
+    lines.append("筛选条件：" + "；".join(filters) + "。")
+    rules = payload.get("rules") or {}
+    for shape in shapes:
+        if rules.get(shape):
+            lines.append(f"- {labels.get(shape, shape)}：{rules[shape]}")
+    for index, item in enumerate(payload.get("candidates") or [], start=1):
+        lines.append(
+            f"{index}. {item.get('name')}（{item.get('symbol')}）：涨停锚点 {item.get('anchor_date')}，"
+            f"{item.get('board_height')}板，距锚点 {item.get('anchor_age')} 日；"
+            f"相对涨停收盘 {float(item.get('anchor_change_pct') or 0):+.2f}%，"
+            f"较 {item.get('peak_date')} 高点回撤 {float(item.get('peak_drawdown_pct') or 0):.2f}%，"
+            f"区间幅度 {float(item.get('range_pct') or 0):.2f}%，量比 {float(item.get('volume_ratio') or 0):.3f}。"
+        )
+        if item.get("concept"):
+            lines.append(f"   题材：{item['concept']}。")
+        if item.get("risks"):
+            lines.append(
+                "   风险："
+                + "；".join(str(risk).rstrip("。；") for risk in item["risks"])
+                + "。"
+            )
+    if not payload.get("candidates"):
+        lines.append("当前没有符合条件且数据完整的股票。")
+    if payload.get("data_missing"):
+        missing_labels = {
+            "missing_history20": "缺少20日历史",
+            "mixed_or_missing_source": "量价来源混合或缺失",
+            "price_discontinuity": "存在价格断点",
+            "missing_path_bar": "路径K线缺失",
+            "anchor_price_mismatch": "涨停锚点价格不匹配",
+            "invalid_volume": "成交量无效",
+        }
+        exclusions = payload.get("exclusions") or {}
+        details = [
+            f"{missing_labels.get(key, key)} {exclusions.get(key, 0)}只"
+            for key in payload["data_missing"]
+        ]
+        lines.append(
+            f"数据缺口（待补 {payload.get('pending_data_count', sum(exclusions.get(key, 0) for key in payload['data_missing']))}只）："
+            + "、".join(details) + "。"
+        )
+    lines.extend(payload.get("warnings") or [])
+    lines.append(TEXT["safety"])
+    return "\n".join(lines)
+
+
+def _template_post_limit_path(payload: dict[str, Any]) -> str:
+    """Render an annotated event-relative path for one stock."""
+
+    anchor = payload.get("anchor") or {}
+    lines = [
+        f"{payload.get('name') or payload.get('symbol')}（{payload.get('symbol')}）涨停后走势，"
+        f"锚点 {anchor.get('anchor_date')}，数据截至 {payload.get('data_as_of')} 收盘"
+        f"（规则版本 {payload.get('rule_version')}）。",
+        "口径：指定锚点优先，否则取最近20个交易日内最新一次收盘涨停；逐日数据均不晚于截止日。",
+    ]
+    matched_labels = payload.get("matched_shape_labels") or []
+    if matched_labels:
+        lines.append("截止日形态：" + "、".join(matched_labels) + "。")
+        rules = payload.get("rules") or {}
+        for shape in payload.get("matched_shapes") or []:
+            if rules.get(shape):
+                lines.append(f"- 入选条件：{rules[shape]}")
+    for item in payload.get("path") or []:
+        state_text = "，状态 " + "、".join(item.get("states") or []) if item.get("states") else ""
+        lines.append(
+            f"- {item.get('trade_date')} {item.get('day')}：收盘 {item.get('close')}，"
+            f"相对涨停收盘 {float(item.get('change_from_anchor_close_pct') or 0):+.2f}%，"
+            f"相对运行高点 {float(item.get('drawdown_from_running_peak_pct') or 0):+.2f}%，"
+            f"相对涨停日量比 {float(item.get('volume_vs_anchor') or 0):.3f}{state_text}。"
+        )
+    if not payload.get("path"):
+        lines.append("指定范围内没有可用的完整涨停后路径。")
+    if payload.get("data_missing"):
+        lines.append("数据缺口：" + "、".join(payload["data_missing"]) + "。")
+    lines.extend(payload.get("warnings") or [])
+    lines.append(TEXT["safety"])
+    return "\n".join(lines)
+
+
+def _template_post_limit_statistics(payload: dict[str, Any]) -> str:
+    """Render bounded historical outcome statistics without overclaiming."""
+
+    lines = [
+        f"截至 {payload.get('data_as_of')}，按当前本地数据重算最近 "
+        f"{payload.get('requested_signal_days', 7)} 个已满足D+5的信号交易日"
+        f"（规则版本 {payload.get('rule_version')}）。",
+        f"共 {payload.get('signal_count', 0)} 个首次形态信号，其中 "
+        f"{payload.get('complete_sample_count', 0)} 个结果完整，覆盖 "
+        f"{payload.get('complete_signal_date_count', 0)} 个信号日。D+1开盘为统一观察基准。",
+    ]
+    contract = payload.get("query_contract") or {}
+    lines.append(
+        f"筛选条件：每个信号日回看最近{contract.get('recent_limit_days', 5)}个交易日的收盘涨停"
+        + (f"；板高={contract['board_height']}" if contract.get("board_height") else "")
+        + (f"；名称/行业/题材包含“{contract['query']}”" if contract.get("query") else "")
+        + "。"
+    )
+    rules = payload.get("rules") or {}
+    labels = payload.get("shape_labels") or {}
+    for shape in payload.get("shapes") or []:
+        if rules.get(shape):
+            lines.append(f"- {labels.get(shape, shape)}口径：{rules[shape]}")
+    for item in payload.get("summaries") or []:
+        if not item.get("sample_count"):
+            lines.append(f"- {item.get('label')}：没有完整样本。")
+            continue
+        lines.append(
+            f"- {item.get('label')}：{item.get('sample_count')}个样本/{item.get('signal_date_count')}个信号日；"
+            f"D+1均值/中位数 {float(item.get('d1_mean_pct') or 0):+.2f}%/"
+            f"{float(item.get('d1_median_pct') or 0):+.2f}%，"
+            f"D+3均值/中位数 {float(item.get('d3_mean_pct') or 0):+.2f}%/"
+            f"{float(item.get('d3_median_pct') or 0):+.2f}%，"
+            f"D+5均值/中位数 {float(item.get('d5_mean_pct') or 0):+.2f}%/"
+            f"{float(item.get('d5_median_pct') or 0):+.2f}%，"
+            f"正比例 {float(item.get('d5_positive_pct') or 0):.1f}%，"
+            f"低于−5%比例 {float(item.get('d5_below_minus5_pct') or 0):.1f}%，"
+            f"MAE5均值/中位数 {float(item.get('mae5_mean_pct') or 0):+.2f}%/"
+            f"{float(item.get('mae5_median_pct') or 0):+.2f}%，"
+            f"MFE5均值/中位数 {float(item.get('mfe5_mean_pct') or 0):+.2f}%/"
+            f"{float(item.get('mfe5_median_pct') or 0):+.2f}%，"
+            f"次日继续涨停比例 {float(item.get('next_day_closed_limit_pct') or 0):.1f}%。"
+        )
+    if payload.get("sample_quality") == "insufficient" or (
+        len(payload.get("summaries") or []) > 1 and not payload.get("comparison_allowed")
+    ):
+        lines.append("当前完整样本少于30个或不足5个信号日，只能作描述，不能据此判断形态优劣。")
+    if payload.get("data_missing"):
+        outcome_missing = payload.get("outcome_missing") or {}
+        lines.append(
+            "结果缺口：" + "、".join(
+                f"{key} {outcome_missing.get(key, 0)}个"
+                for key in payload["data_missing"]
+            ) + "。"
+        )
+    lines.extend(payload.get("warnings") or [])
+    lines.append(TEXT["safety"])
+    return "\n".join(lines)
 
 
 def _template_market_environment_answer(facts: dict[str, Any]) -> str:

@@ -80,6 +80,10 @@ from app.agents.query_contract import (
     extract_market_event_type,
     looks_like_market_event_query,
 )
+from app.post_limit_query_contract import (
+    build_post_limit_query_contract,
+    looks_like_post_limit_question,
+)
 from app.agents.tool_policy import (
     AgentToolPolicyEngine,
     QuestionSignals as _QuestionSignals,
@@ -349,6 +353,13 @@ def answer_first_board_chat(
     )
     if llm_response is not None:
         return llm_response
+    post_limit_fallback = _answer_post_limit_without_llm(
+        request=request,
+        tools=tools,
+        context=context,
+    )
+    if post_limit_fallback is not None:
+        return post_limit_fallback
     sector_performance_fallback = _answer_sector_performance_without_llm(
         request=request,
         tools=tools,
@@ -620,7 +631,7 @@ def _answer_with_llm_tool_agent(
                 planner_prompt_chars=planner_prompt_chars,
             ),
         )
-    if not tool_calls and _looks_like_general_limit_up_question(request.message):
+    if not tool_calls and _looks_like_general_limit_up_question(request.message) and not looks_like_post_limit_question(request.message):
         tool_calls = [
             {
                 "name": "limit_up_events",
@@ -703,6 +714,7 @@ def _answer_with_llm_tool_agent(
             )
     if (
         _looks_like_general_limit_up_question(request.message)
+        and not looks_like_post_limit_question(request.message)
         and not any(call.get("name") == "limit_up_events" for call in tool_calls)
     ):
         tool_calls.insert(
@@ -808,6 +820,12 @@ def _answer_with_llm_tool_agent(
         _is_simple_sector_performance(execution["facts"])
         or _is_simple_sector_stock_ranking(execution["facts"])
         or _is_simple_market_event_pool(execution["facts"])
+        or any(
+            name in execution["facts"]
+            for name in (
+                "post_limit_screen", "post_limit_path", "post_limit_statistics"
+            )
+        )
     )
     if fast_structured_answer:
         answer_system_prompt = ""
@@ -1074,6 +1092,38 @@ def _generate_llm_query_plan(
     tool_calls = _normalize_tool_calls(payload.get("tool_calls"))
     tool_calls = _normalize_first_board_position_tool_calls(request, tool_calls)
     tool_calls = _normalize_daily_board_promotion_tool_calls(request, tool_calls)
+    is_post_limit_query = looks_like_post_limit_question(
+        request.message
+    ) or _looks_like_post_limit_context_followup(request.message, context)
+    if is_post_limit_query:
+        planner_post_arguments = next(
+            (
+                call.get("arguments") or {}
+                for call in tool_calls
+                if call.get("name") in {
+                    "post_limit_screen", "post_limit_path", "post_limit_statistics"
+                }
+            ),
+            {},
+        )
+        if context.anchor_date and not planner_post_arguments.get("anchor_date"):
+            planner_post_arguments["anchor_date"] = context.anchor_date.isoformat()
+        if _looks_like_post_limit_context_followup(request.message, context):
+            planner_post_arguments["mode"] = "path"
+        post_contract = build_post_limit_query_contract(
+            request.message,
+            request_trade_date=request.trade_date,
+            planner_arguments=planner_post_arguments,
+        )
+        required_post_tool = {
+            "screen": "post_limit_screen",
+            "path": "post_limit_path",
+            "statistics": "post_limit_statistics",
+        }[post_contract.mode]
+        tool_calls = [{
+            "name": required_post_tool,
+            "arguments": post_contract.to_tool_arguments(),
+        }]
     # Planner output is never executable user-facing text. Conversational intents
     # are rendered from server-owned templates after the plan is normalized.
     payload.pop("answer_directly", None)
@@ -1084,6 +1134,12 @@ def _generate_llm_query_plan(
     raw_capabilities = payload.get("capabilities")
     if not isinstance(raw_capabilities, list):
         raw_capabilities = []
+    if is_post_limit_query:
+        raw_capabilities = [{
+            "screen": "post_limit_screening",
+            "path": "post_limit_path",
+            "statistics": "post_limit_statistics",
+        }[post_contract.mode]]
     raw_context_capabilities = payload.get("context_capabilities")
     if not isinstance(raw_context_capabilities, list):
         raw_context_capabilities = []
@@ -1207,6 +1263,61 @@ def _answer_stock_kline_without_llm(
             f"data_as_of={response.data_as_of.isoformat()}",
         ],
         warnings=[_safety_warning()],
+        generated_by=CHAT_AGENT_VERSION,
+    )
+
+
+def _answer_post_limit_without_llm(
+    request: AgentChatRequest,
+    tools: AgentToolRegistry,
+    context: "_SessionContext",
+) -> AgentChatResponse | None:
+    """Answer post-limit research deterministically when the LLM is unavailable."""
+
+    is_context_followup = _looks_like_post_limit_context_followup(
+        request.message, context
+    )
+    if not looks_like_post_limit_question(request.message) and not is_context_followup:
+        return None
+    planner_arguments: dict[str, Any] = {}
+    if context.anchor_date:
+        planner_arguments["anchor_date"] = context.anchor_date.isoformat()
+    if is_context_followup:
+        planner_arguments["mode"] = "path"
+    contract = build_post_limit_query_contract(
+        request.message,
+        request_trade_date=request.trade_date,
+        planner_arguments=planner_arguments,
+    )
+    tool_name = {
+        "screen": "post_limit_screen",
+        "path": "post_limit_path",
+        "statistics": "post_limit_statistics",
+    }[contract.mode]
+    arguments = contract.to_tool_arguments()
+    if tool_name == "post_limit_path" and context.symbol and not arguments.get("symbol"):
+        arguments["symbol"] = context.symbol
+    execution = _execute_llm_tool_calls(
+        [{"name": tool_name, "arguments": arguments}],
+        tools,
+        request=request,
+        context_symbol=context.symbol,
+    )
+    facts = execution["facts"]
+    if tool_name not in facts:
+        return None
+    return AgentChatResponse(
+        session_id=request.session_id,
+        intent=tool_name,
+        answer=_template_answer_from_tool_facts(
+            request=request,
+            intent=tool_name,
+            facts=facts,
+        ),
+        tool_calls=[tool_name, "template_general_answer"],
+        tool_results=execution["tool_results"],
+        references=execution["references"],
+        warnings=[_safety_warning(), *_tool_outcome_warnings(execution["tool_results"])],
         generated_by=CHAT_AGENT_VERSION,
     )
 
@@ -1488,6 +1599,7 @@ class _SessionContext:
     def __init__(
         self,
         symbol: str | None = None,
+        anchor_date: date | None = None,
         trade_date: date | None = None,
         filter_query: _FirstBoardFilterQuery | None = None,
         matched_symbols: list[str] | None = None,
@@ -1497,6 +1609,7 @@ class _SessionContext:
         session_memory: dict[str, Any] | None = None,
     ):
         self.symbol = symbol
+        self.anchor_date = anchor_date
         self.trade_date = trade_date
         self.filter_query = filter_query
         self.matched_symbols = matched_symbols or []
@@ -1935,6 +2048,23 @@ def _merge_context_from_run(context: _SessionContext, run: AgentRun) -> None:
                     for item in (tool_result.get("output", {}).get("events", []) or [])
                     if isinstance(item, dict) and item.get("symbol")
                 ]
+        if tool_result.get("name") in {"post_limit_screen", "post_limit_path"}:
+            tool_output = tool_result.get("output") or {}
+            if context.symbol is None:
+                context.symbol = tool_input.get("symbol")
+            if context.anchor_date is None:
+                anchor = tool_output.get("anchor") or {}
+                context.anchor_date = _parse_optional_date(
+                    anchor.get("anchor_date") or tool_input.get("anchor_date")
+                )
+            candidates = tool_output.get("candidates") or []
+            if len(candidates) == 1 and isinstance(candidates[0], dict):
+                if context.symbol is None:
+                    context.symbol = str(candidates[0].get("symbol") or "") or None
+                if context.anchor_date is None:
+                    context.anchor_date = _parse_optional_date(
+                        candidates[0].get("anchor_date")
+                    )
 
 
 def _capabilities_from_saved_payload(payload: dict[str, Any] | None) -> list[str]:
@@ -1956,7 +2086,32 @@ def _capabilities_from_saved_payload(payload: dict[str, Any] | None) -> list[str
         capabilities = tool_input.get("capabilities") or []
         if isinstance(capabilities, list):
             return [str(item) for item in capabilities if isinstance(item, str)]
-    return []
+    tool_capabilities = {
+        "post_limit_screen": "post_limit_screening",
+        "post_limit_path": "post_limit_path",
+        "post_limit_statistics": "post_limit_statistics",
+    }
+    return list(dict.fromkeys(
+        tool_capabilities[tool_result.get("name")]
+        for tool_result in payload.get("tool_results", []) or []
+        if isinstance(tool_result, dict) and tool_result.get("name") in tool_capabilities
+    ))
+
+
+def _looks_like_post_limit_context_followup(
+    message: str,
+    context: _SessionContext,
+) -> bool:
+    """Recognize a pronoun follow-up after a grounded post-limit answer."""
+
+    if not set(context.last_capabilities) & {
+        "post_limit_screening", "post_limit_path", "post_limit_statistics"
+    }:
+        return False
+    compact = re.sub(r"\s+", "", message)
+    return any(term in compact for term in ("这只", "它", "该股", "这票")) and any(
+        term in compact for term in ("为什么入选", "入选原因", "怎么走", "走势", "路径", "量比", "回撤")
+    )
 
 
 def _looks_like_first_board_data_question(message: str) -> bool:

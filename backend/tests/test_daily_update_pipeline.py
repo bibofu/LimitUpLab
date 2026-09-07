@@ -13,6 +13,7 @@ from app.collectors import (
 from app.models import LimitUpEvent, StockDailyBar, StockKLineBar
 from app.repositories import SQLiteFirstBoardRepository, SQLiteLimitUpRepository
 from scripts.update_daily_data import (
+    backfill_recent_post_limit_bars,
     collect_post_first_board_bars,
     run_daily_update,
     warm_latest_intraday_cache,
@@ -360,6 +361,49 @@ class DailyUpdatePipelineTest(unittest.TestCase):
 
         self.assertEqual([item.trade_date for item in bars], [base_date, as_of_date])
         self.assertEqual(collect_kline.call_args.kwargs["end_date"], as_of_date)
+
+    def test_post_limit_cache_backfills_twenty_session_history(self) -> None:
+        database_path = self._database_path()
+        try:
+            repository = SQLiteFirstBoardRepository(database_path=database_path)
+            trade_dates = []
+            item_date = date(2026, 7, 1)
+            while len(trade_dates) < 20:
+                if item_date.weekday() < 5:
+                    trade_dates.append(item_date)
+                item_date = date.fromordinal(item_date.toordinal() + 1)
+            events = [self._make_event("999999", "calendar", day) for day in trade_dates]
+            events.append(self._make_event("600001", "research", trade_dates[-1]))
+
+            def history_collector(symbol, *, days, end_date):
+                self.assertEqual(symbol, "600001")
+                self.assertEqual(days, 35)
+                self.assertEqual(end_date, trade_dates[-1])
+                return [
+                    StockKLineBar(
+                        trade_date=day, open=10, high=10.5, low=9.8,
+                        close=10.2, volume=1_000_000,
+                    )
+                    for day in trade_dates
+                ]
+
+            result = backfill_recent_post_limit_bars(
+                events=events,
+                repository=repository,
+                as_of_date=trade_dates[-1],
+                history_collector=history_collector,
+            )
+
+            self.assertEqual(result["target_count"], 1)
+            self.assertEqual(result["ready_count"], 1)
+            self.assertEqual(result["missing_count"], 0)
+            self.assertEqual(result["bar_count"], 20)
+            self.assertEqual(
+                len(repository.list_daily_bars("600001")),
+                20,
+            )
+        finally:
+            self._cleanup_database(database_path)
 
     def test_recent_daily_top_picks_cache_all_available_follow_up_bars(self) -> None:
         database_path = self._database_path()

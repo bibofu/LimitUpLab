@@ -10,6 +10,10 @@ from typing import Any, Protocol
 
 from app.agents.capability_contract import available_capability_names
 from app.agents.query_contract import build_limit_up_query_contract
+from app.post_limit_query_contract import (
+    build_post_limit_query_contract,
+    looks_like_post_limit_question,
+)
 from app.agents.tool_policy import looks_like_limit_up_event_question
 from app.agents.tools import AgentToolRegistry, EXTENDED_AGENT_PROFILE
 from app.models import AgentChatRequest, AgentToolTrace, LimitUpEvent
@@ -122,6 +126,7 @@ def _tool_planner_system_prompt(
         "An '一进二观察名单', candidate list, recommendation ranking, or Top10 means first_board_rating; historical realized one-to-two counts or rates mean board_promotion. "
         "For first-board position/location classification, position means the pre-board K-line regime such as low-base breakout, oversold rebound, V reversal, high breakout or second wave; call first_board_ratings and never classify by first seal time. "
         "For ordinary limit-up, first-board, or continued-board lists, call limit_up_events. Follow the backend_query_contract supplied with the user message for date, board height, market, event status, result mode, sorting and limit; do not weaken explicit user filters. Use first_board_ratings only when the user asks for ratings, scores, ranking, or candidate filtering. "
+        "For event-relative questions containing 涨停后, 高位回撤, 横盘缩量, 回撤企稳, 强势不连板, 断板修复 or 2进3, use the matching post_limit capability. Use post_limit_screen for a stock list, post_limit_path for one stock's anchored daily path, and post_limit_statistics for historical metrics or shape comparisons. Never substitute limit_up_events or generic stock_kline for these questions. "
         "For completed limit-down lists or counts, select market_events and call market_event_pool with event_type=limit_down. Never encode a limit-down request as limit_up_events, and never substitute limit-up or broken-board facts for a limit-down list. "
         "For Dragon-Tiger List, institution flow or hot-money flow questions, call dragon_tiger_list only for a completed trade date. "
         "For a theme or industry inside the local limit-up pool, call limit_up_events. For whole-market industry ranking or a named industry/concept performance, call sector_performance and state its source, data_as_of and freshness. "
@@ -222,7 +227,12 @@ def _tool_planner_user_prompt(
         ),
         "message": request.message,
         "backend_query_contract": (
-            build_limit_up_query_contract(
+            build_post_limit_query_contract(
+                request.message,
+                request_trade_date=request.trade_date,
+            ).to_dict()
+            if looks_like_post_limit_question(request.message)
+            else build_limit_up_query_contract(
                 request.message,
                 request_trade_date=request.trade_date,
             ).to_dict()
@@ -317,6 +327,7 @@ def _tool_answer_system_prompt(
         "For prediction evaluation, prioritize next_open_to_close_pct and entry-open drawdown; "
         "treat promotion and intraday highs as separate facts rather than success labels. "
         "For stock trend questions, cite stock_kline.data_as_of and data_fresh, and base the description on returns, moving averages, volume and drawdown. "
+        "For post-limit screens and paths, state the completed-close cutoff, actual rule, anchor date, evaluable coverage and missing-data limits; describe peak drawdown and anchor-close change as different metrics. For post-limit statistics, state that results are recomputed historical research using D+1 open as baseline, report sample counts with every metric, and never rank shapes when comparison_allowed is false. "
         "For stock_news, state the resolved name and symbol, retrieval time, calendar-day window and cache status; list publication time, source, item type, title, concise summary and URL, and do not call a media report a formal announcement. For stock_activity, separate already observed close/K-line facts, historical limit-up events, rating context and timestamped news; explicitly mention unavailable dimensions and never imply intraday monitoring. "
         "For broad-index trend questions, cite the requested window and data_as_of, compare all returned major indices using period returns, up/down days and drawdown, and do not substitute limit-up counts for index performance. "
         "Do not assign categorical market-sentiment labels such as heating, divergence, cooling, risk-on or risk-off; report objective market counts, rates and index changes instead. "

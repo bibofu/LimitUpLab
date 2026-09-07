@@ -109,6 +109,11 @@ class DailyUpdateReport:
     intraday_cache_missing: int = 0
     backfilled_bars: int = 0
     backfilled_outcomes: int = 0
+    post_limit_cache_targets: int = 0
+    post_limit_cache_ready: int = 0
+    post_limit_cache_missing: int = 0
+    post_limit_cache_fetches: int = 0
+    post_limit_cache_bars: int = 0
     outcome_completeness: dict[str, object] = field(default_factory=dict)
     top_candidate: dict[str, object] | None = None
     discovery_snapshot_ready: bool = False
@@ -150,6 +155,12 @@ def main() -> None:
         help="Maximum remote fetches reserved for recent daily Top10 tracking.",
     )
     parser.add_argument(
+        "--max-post-limit-kline-fetches",
+        type=int,
+        default=120,
+        help="Maximum remote fetches used to fill 20-day bars for recent limit-up stocks.",
+    )
+    parser.add_argument(
         "--skip-import",
         action="store_true",
         help="Skip AkShare limit-up import and only refresh derived data.",
@@ -186,6 +197,7 @@ def main() -> None:
         history_days=args.history_days,
         top_targets=args.top_targets,
         max_tracked_kline_fetches=args.max_tracked_kline_fetches,
+        max_post_limit_kline_fetches=args.max_post_limit_kline_fetches,
         skip_import=args.skip_import,
         refresh_enrichment=not args.skip_enrichment,
         force_enrichment=args.force_enrichment,
@@ -201,6 +213,7 @@ def run_daily_update(
     history_days: int = 60,
     top_targets: int = 10,
     max_tracked_kline_fetches: int = 60,
+    max_post_limit_kline_fetches: int = 120,
     skip_import: bool = False,
     refresh_enrichment: bool = True,
     force_enrichment: bool = False,
@@ -438,6 +451,19 @@ def run_daily_update(
     report.backfilled_outcomes = int(tracked_backfill["outcome_count"])
     report.outcome_completeness = dict(tracked_backfill["outcome_completeness"])
     report.warnings.extend(tracked_backfill["warnings"])
+    if post_bar_collector is None and is_latest_available_date:
+        post_limit_backfill = backfill_recent_post_limit_bars(
+            events=events,
+            repository=first_board_repo,
+            as_of_date=trade_date,
+            max_kline_fetches=max_post_limit_kline_fetches,
+        )
+        report.post_limit_cache_targets = int(post_limit_backfill["target_count"])
+        report.post_limit_cache_ready = int(post_limit_backfill["ready_count"])
+        report.post_limit_cache_missing = int(post_limit_backfill["missing_count"])
+        report.post_limit_cache_fetches = int(post_limit_backfill["fetch_count"])
+        report.post_limit_cache_bars = int(post_limit_backfill["bar_count"])
+        report.warnings.extend(post_limit_backfill["warnings"])
     if refresh_discovery and is_latest_available_date:
         try:
             discovery = refresh_first_board_discovery(
@@ -837,6 +863,108 @@ def collect_post_first_board_bars(
         )
         for bar in filtered_bars
     ]
+
+
+def backfill_recent_post_limit_bars(
+    *,
+    events: list[LimitUpEvent],
+    repository: SQLiteFirstBoardRepository,
+    as_of_date: date,
+    max_kline_fetches: int = 120,
+    history_collector: Callable[..., list] = collect_stock_kline,
+) -> dict[str, object]:
+    """Fill the 20-session local cache for every recent supported limit-up stock."""
+
+    trade_dates = sorted({event.trade_date for event in events if event.trade_date <= as_of_date})
+    recent_dates = set(trade_dates[-5:])
+    targets = sorted({
+        event.symbol
+        for event in events
+        if event.trade_date in recent_dates
+        and event.closed_limit
+        and event.symbol.startswith(("000", "001", "002", "003", "600", "601", "603", "605"))
+        and "ST" not in event.name.upper()
+        and "退" not in event.name
+    })
+    expected_dates = set(trade_dates[-20:])
+    cached_rows = repository.list_daily_bars_for_symbols(targets, end_date=as_of_date)
+    cached_by_symbol: dict[str, dict[date, str]] = {}
+    for bar in cached_rows:
+        cached_by_symbol.setdefault(bar.symbol, {})[bar.trade_date] = bar.source
+    ready = 0
+    fetches = 0
+    bar_count = 0
+    failures: list[str] = []
+    for symbol in targets:
+        cached = cached_by_symbol.get(symbol, {})
+        cached_dates = set(cached)
+        cached_sources = {cached[item] for item in expected_dates if item in cached}
+        if (
+            len(expected_dates) >= 20
+            and expected_dates <= cached_dates
+            and len(cached_sources) == 1
+            and next(iter(cached_sources), None)
+        ):
+            ready += 1
+            continue
+        if fetches >= max(0, max_kline_fetches):
+            failures.append(symbol)
+            continue
+        fetches += 1
+        try:
+            raw = history_collector(symbol, days=35, end_date=as_of_date)
+            normalized = [
+                StockDailyBar(
+                    symbol=symbol,
+                    trade_date=bar.trade_date,
+                    open=bar.open,
+                    high=bar.high,
+                    low=bar.low,
+                    close=bar.close,
+                    volume=bar.volume,
+                    amount=bar.volume,
+                    change_pct=None,
+                    source="akshare.stock_zh_a_hist_tx",
+                    created_at=datetime.now(timezone.utc),
+                )
+                for bar in raw
+                if bar.trade_date <= as_of_date
+            ]
+            repository.upsert_daily_bars(normalized)
+            bar_count += len(normalized)
+            refreshed = {
+                bar.trade_date: bar.source
+                for bar in repository.list_daily_bars(symbol)
+                if bar.trade_date <= as_of_date
+            }
+            refreshed_sources = {
+                refreshed[item] for item in expected_dates if item in refreshed
+            }
+            if (
+                len(expected_dates) >= 20
+                and expected_dates <= set(refreshed)
+                and len(refreshed_sources) == 1
+                and next(iter(refreshed_sources), None)
+            ):
+                ready += 1
+            else:
+                failures.append(symbol)
+        except Exception:  # noqa: BLE001
+            failures.append(symbol)
+    warnings = []
+    if failures:
+        warnings.append(
+            f"Post-limit 20-day K-line cache is incomplete for {len(failures)}/{len(targets)} stocks."
+        )
+    return {
+        "target_count": len(targets),
+        "ready_count": ready,
+        "missing_count": len(failures),
+        "fetch_count": fetches,
+        "bar_count": bar_count,
+        "coverage_ratio": round(ready / len(targets), 4) if targets else 1.0,
+        "warnings": warnings,
+    }
 
 
 if __name__ == "__main__":

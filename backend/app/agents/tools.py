@@ -63,6 +63,13 @@ from app.services.rating_backtest import build_rating_backtest
 from app.services.sector_performance import build_sector_performance
 from app.services.sector_stock_ranking import build_sector_stock_ranking
 from app.services.stock_kline import build_stock_kline_facts
+from app.post_limit_query_contract import PostLimitQueryContract
+from app.repositories.post_limit_repository import load_post_limit_dataset
+from app.services.post_limit import (
+    build_post_limit_path,
+    build_post_limit_screen,
+    build_post_limit_statistics,
+)
 from app.services.stock_news import collect_stock_news
 from app.services.scoring_policy_optimizer import build_scoring_policy_registry
 from app.services.web_search import search_web
@@ -571,6 +578,79 @@ TOOL_SCHEMAS = [
         returns="Daily OHLCV bars, data freshness, trend, returns, moving averages, volume ratio and drawdown.",
     ),
     AgentToolSchema(
+        name="post_limit_screen",
+        description=(
+            "筛选沪深主板近期涨停后的形态，支持高位大幅回撤、横盘缩量、回撤企稳、"
+            "强势不连板、断板修复和2进3观察。用于回答‘有哪些涨停后……的票’，"
+            "不要用普通涨停名单替代。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "shape": {"type": "string", "enum": ["high_drawdown", "volume_consolidation", "pullback_stabilizing", "strong_nonconsecutive", "broken_board_repair", "second_to_third"]},
+                "shapes": {"type": "array", "items": {"type": "string", "enum": ["high_drawdown", "volume_consolidation", "pullback_stabilizing", "strong_nonconsecutive", "broken_board_repair", "second_to_third"]}},
+                "data_as_of": {"type": ["string", "null"]},
+                "recent_limit_days": {"type": "integer", "minimum": 1, "maximum": 20},
+                "min_peak_drawdown_pct": {"type": ["number", "null"]},
+                "max_volume_ratio": {"type": ["number", "null"]},
+                "max_range_pct": {"type": ["number", "null"]},
+                "min_anchor_change_pct": {"type": ["number", "null"]},
+                "max_anchor_change_pct": {"type": ["number", "null"]},
+                "board_height": {"type": ["integer", "null"]},
+                "query": {"type": ["string", "null"]},
+                "sort_by": {"type": ["string", "null"], "enum": ["peak_drawdown_pct", "volume_ratio", "range_pct", "anchor_change_pct", "anchor_date", "symbol", None]},
+                "sort_order": {"type": "string", "enum": ["asc", "desc"]},
+                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+            },
+            "required": [],
+        },
+        returns="Post-limit candidates, applied rules, anchor-relative metrics, coverage, exclusions and missing data.",
+    ),
+    AgentToolSchema(
+        name="post_limit_path",
+        description=(
+            "分析一只股票从指定或最近一次收盘涨停开始的逐日量价路径，返回涨停锚点、"
+            "局部高点、回撤、相对涨停价变化和成交量变化。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "symbol": {"type": "string"},
+                "anchor_date": {"type": ["string", "null"]},
+                "data_as_of": {"type": ["string", "null"]},
+                "recent_limit_days": {"type": "integer", "minimum": 1, "maximum": 20},
+            },
+            "required": [],
+        },
+        returns="Annotated daily post-limit path and event-relative metrics for one resolved stock.",
+    ),
+    AgentToolSchema(
+        name="post_limit_statistics",
+        description=(
+            "重算涨停后形态的历史描述性统计或形态比较，默认使用最近7个已满足D+5的"
+            "信号交易日，返回D+1/D+3/D+5、MAE、MFE、样本覆盖和成熟度。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "shapes": {"type": "array", "items": {"type": "string", "enum": ["high_drawdown", "volume_consolidation", "pullback_stabilizing", "strong_nonconsecutive", "broken_board_repair", "second_to_third"]}},
+                "data_as_of": {"type": ["string", "null"]},
+                "statistics_days": {"type": "integer", "minimum": 1, "maximum": 30},
+                "recent_limit_days": {"type": "integer", "minimum": 1, "maximum": 20},
+                "min_peak_drawdown_pct": {"type": ["number", "null"]},
+                "max_volume_ratio": {"type": ["number", "null"]},
+                "max_range_pct": {"type": ["number", "null"]},
+                "min_anchor_change_pct": {"type": ["number", "null"]},
+                "max_anchor_change_pct": {"type": ["number", "null"]},
+                "board_height": {"type": ["integer", "null"]},
+                "query": {"type": ["string", "null"]},
+                "group_by": {"type": ["string", "null"], "enum": ["shape", "board_height", "anchor_age", "industry", "concept", "signal_date", None]},
+            },
+            "required": [],
+        },
+        returns="Versioned recomputed historical cohorts, outcome statistics, grouping, coverage and sample-quality warning.",
+    ),
+    AgentToolSchema(
         name="prediction_quality_audit",
         description=(
             "审计首板预测的数据覆盖、版本/来源重复、时间成熟度、Top10 表现和简单基线，"
@@ -788,6 +868,9 @@ V1_CLOSED_MARKET_TOOL_NAMES = frozenset(
         "limit_up_events",
         "first_board_filter",
         "stock_kline",
+        "post_limit_screen",
+        "post_limit_path",
+        "post_limit_statistics",
         "prediction_quality_audit",
         "rating_backtest",
         "first_board_critic",
@@ -1936,6 +2019,117 @@ class AgentToolRegistry:
                 f"5d={response.return_5d_pct}."
             ),
             trace_output=trace_output,
+        )
+
+    def post_limit_screen(self, contract: PostLimitQueryContract) -> ToolResult:
+        """Return a read-only post-limit shape screen."""
+
+        payload = build_post_limit_screen(
+            load_post_limit_dataset(
+                contract.data_as_of,
+                database_path=self.first_board_repository.database_path,
+            ),
+            contract,
+        )
+        return ToolResult(
+            name="post_limit_screen",
+            input=contract.to_dict(),
+            output=payload,
+            summary=(
+                f"{payload.get('data_as_of')} {payload.get('matched_count', 0)}只符合"
+                f"涨停后形态，可评价覆盖率{payload.get('coverage_ratio', 0):.1%}。"
+            ),
+            trace_output={
+                "data_as_of": payload.get("data_as_of"),
+                "matched_count": payload.get("matched_count", 0),
+                "evaluable_count": payload.get("evaluable_count", 0),
+                "pool_count": payload.get("pool_count", 0),
+                "coverage_ratio": payload.get("coverage_ratio", 0),
+                "rule_version": payload.get("rule_version"),
+                "candidates": [
+                    {
+                        "symbol": item.get("symbol"),
+                        "anchor_date": item.get("anchor_date"),
+                    }
+                    for item in payload.get("candidates", [])[:10]
+                ],
+                "data_missing": payload.get("data_missing", []),
+            },
+            result_status=(
+                "partial" if payload.get("data_missing")
+                else "empty" if not payload.get("matched_count")
+                else "ok"
+            ),
+            data_fresh=payload.get("data_as_of") == payload.get("latest_data_date"),
+        )
+
+    def post_limit_path(self, contract: PostLimitQueryContract, symbol: str) -> ToolResult:
+        """Return an annotated path from a resolved stock's limit-up anchor."""
+
+        resolved_symbol = self.resolve_stock_identity(symbol)[0]
+        payload = build_post_limit_path(
+            load_post_limit_dataset(
+                contract.data_as_of,
+                database_path=self.first_board_repository.database_path,
+            ),
+            contract,
+            symbol=resolved_symbol,
+        )
+        return ToolResult(
+            name="post_limit_path",
+            input={**contract.to_dict(), "symbol": resolved_symbol},
+            output=payload,
+            summary=(
+                f"{resolved_symbol} 涨停后路径返回"
+                f"{len(payload.get('path', []))}个交易日。"
+            ),
+            trace_output={
+                "symbol": resolved_symbol,
+                "data_as_of": payload.get("data_as_of"),
+                "anchor": payload.get("anchor"),
+                "path_count": len(payload.get("path", [])),
+                "data_missing": payload.get("data_missing", []),
+            },
+            result_status=(
+                "partial" if payload.get("data_missing")
+                else "empty" if not payload.get("path")
+                else "ok"
+            ),
+            data_fresh=payload.get("data_as_of") == payload.get("latest_data_date"),
+        )
+
+    def post_limit_statistics(self, contract: PostLimitQueryContract) -> ToolResult:
+        """Return bounded, recomputed historical post-limit statistics."""
+
+        payload = build_post_limit_statistics(
+            load_post_limit_dataset(
+                contract.data_as_of,
+                database_path=self.first_board_repository.database_path,
+            ),
+            contract,
+        )
+        return ToolResult(
+            name="post_limit_statistics",
+            input=contract.to_dict(),
+            output=payload,
+            summary=(
+                f"涨停后历史研究包含{payload.get('complete_sample_count', 0)}个完整样本、"
+                f"{payload.get('complete_signal_date_count', 0)}个信号日。"
+            ),
+            trace_output={
+                "data_as_of": payload.get("data_as_of"),
+                "complete_sample_count": payload.get("complete_sample_count", 0),
+                "complete_signal_date_count": payload.get("complete_signal_date_count", 0),
+                "sample_quality": payload.get("sample_quality"),
+                "rule_version": payload.get("rule_version"),
+                "data_missing": payload.get("data_missing", []),
+            },
+            result_status=(
+                "partial" if payload.get("data_missing")
+                else "empty" if not payload.get("complete_sample_count")
+                else "ok"
+            ),
+            data_fresh=False,
         )
 
     def resolve_stock_symbol(self, value: str) -> str:

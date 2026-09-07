@@ -1,5 +1,6 @@
 """Health checks for Agent data dependencies."""
 
+from collections import Counter
 from datetime import date
 
 from app.agents.first_board import build_first_board_ratings
@@ -98,6 +99,45 @@ def build_agent_data_health(
     )
     if outcome_completeness.status in {"partial", "missing"}:
         warnings.extend(outcome_completeness.warnings)
+    recent_dates = sorted({event.trade_date for event in events if event.trade_date <= target_date})[-5:]
+    expected_dates = set(sorted({event.trade_date for event in events if event.trade_date <= target_date})[-20:])
+    post_limit_symbols = sorted({
+        event.symbol
+        for event in events
+        if event.trade_date in recent_dates and event.closed_limit
+        and event.symbol.startswith(("000", "001", "002", "003", "600", "601", "603", "605"))
+        and "ST" not in event.name.upper() and "退" not in event.name
+    })
+    cached_post_limit_bars = repository.list_daily_bars_for_symbols(
+        post_limit_symbols, end_date=target_date
+    )
+    cached_by_symbol: dict[str, list] = {}
+    for bar in cached_post_limit_bars:
+        cached_by_symbol.setdefault(bar.symbol, []).append(bar)
+    post_limit_evaluable = 0
+    post_limit_source_consistent = 0
+    post_limit_missing_reasons: Counter[str] = Counter()
+    for symbol in post_limit_symbols:
+        bars = cached_by_symbol.get(symbol, [])
+        by_date = {bar.trade_date: bar for bar in bars}
+        if len(expected_dates) < 20 or not expected_dates <= set(by_date):
+            post_limit_missing_reasons["missing_history20"] += 1
+            continue
+        sources = {by_date[item].source for item in expected_dates}
+        if len(sources) != 1 or not next(iter(sources), None):
+            post_limit_missing_reasons["mixed_or_missing_source"] += 1
+            continue
+        post_limit_source_consistent += 1
+        post_limit_evaluable += 1
+    post_limit_coverage = (
+        round(post_limit_evaluable / len(post_limit_symbols), 4)
+        if post_limit_symbols else 1.0
+    )
+    if post_limit_coverage < 1:
+        warnings.append(
+            "Recent post-limit research cache coverage is "
+            f"{post_limit_evaluable}/{len(post_limit_symbols)}."
+        )
 
     status = _overall_status(
         raw_events_ready=True,
@@ -117,6 +157,13 @@ def build_agent_data_health(
         top_candidates_checked=len(candidate_health),
         top_candidates=candidate_health,
         outcome_completeness=outcome_completeness,
+        post_limit_pool_count=len(post_limit_symbols),
+        post_limit_evaluable_count=post_limit_evaluable,
+        post_limit_coverage_ratio=post_limit_coverage,
+        post_limit_missing_history_count=post_limit_missing_reasons["missing_history20"],
+        post_limit_source_consistent_count=post_limit_source_consistent,
+        post_limit_pending_symbol_count=len(post_limit_symbols) - post_limit_evaluable,
+        post_limit_missing_reasons=dict(sorted(post_limit_missing_reasons.items())),
         warnings=warnings,
     )
 

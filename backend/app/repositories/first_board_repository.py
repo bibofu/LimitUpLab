@@ -782,6 +782,34 @@ class SQLiteFirstBoardRepository:
 
         return [self._bar_from_row(row) for row in rows]
 
+    def list_daily_bars_for_symbols(
+        self,
+        symbols: list[str],
+        *,
+        end_date: date | None = None,
+    ) -> list[StockDailyBar]:
+        """Return daily bars for a bounded stock set with batched SQLite reads."""
+
+        if not symbols:
+            return []
+        connection = connect(self.database_path)
+        try:
+            initialize_database(connection)
+            rows = []
+            for offset in range(0, len(symbols), 400):
+                batch = symbols[offset:offset + 400]
+                placeholders = ",".join("?" for _ in batch)
+                date_clause = " AND trade_date <= ?" if end_date else ""
+                parameters = [*batch, *([end_date.isoformat()] if end_date else [])]
+                rows.extend(connection.execute(
+                    f"SELECT * FROM stock_daily_bars WHERE symbol IN ({placeholders})"
+                    f"{date_clause} ORDER BY symbol,trade_date",
+                    parameters,
+                ).fetchall())
+        finally:
+            connection.close()
+        return [self._bar_from_row(row) for row in rows]
+
     def list_intraday_bars(
         self,
         *,

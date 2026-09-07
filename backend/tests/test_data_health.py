@@ -84,6 +84,10 @@ class AgentDataHealthTest(unittest.TestCase):
             self.assertFalse(health.top_candidates[0].enrichment_ready)
             self.assertIsNotNone(health.outcome_completeness)
             self.assertEqual(health.outcome_completeness.status, "missing")
+            self.assertEqual(health.post_limit_pool_count, 1)
+            self.assertEqual(health.post_limit_evaluable_count, 0)
+            self.assertEqual(health.post_limit_pending_symbol_count, 1)
+            self.assertEqual(health.post_limit_missing_reasons, {"missing_history20": 1})
         finally:
             self._cleanup_database(database_path)
 

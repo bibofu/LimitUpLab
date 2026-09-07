@@ -2122,6 +2122,9 @@ def _evidence_title_kind(tool_name: str) -> tuple[str, str]:
         "first_board_ratings": ("首板候选池与评分", "candidate_pool"),
         "market_event_pool": ("市场事件查询", "limit_up_events"),
         "limit_up_events": ("涨停事件查询", "limit_up_events"),
+        "post_limit_screen": ("涨停后形态筛选", "candidate_pool"),
+        "post_limit_path": ("涨停后逐日走势", "tool"),
+        "post_limit_statistics": ("涨停后历史统计", "evaluation"),
         "first_board_filter": ("首板条件筛选", "candidate_pool"),
         "first_board_critic": ("评分反证与风险", "critic"),
         "rating_backtest": ("评分历史回测", "evaluation"),
@@ -2168,6 +2171,9 @@ def _repair_reason(
         "limit_up_event_dates": "用户询问本地是否有某日数据，后端补充 limit_up_event_dates。",
         "market_event_pool": "用户询问涨停、跌停或炸板明细，后端补充对应市场事件。",
         "limit_up_events": "用户询问当天涨停/连板/炸板明细，后端补充 limit_up_events。",
+        "post_limit_screen": "用户询问涨停后形态名单，后端补充事件锚定的量价筛选。",
+        "post_limit_path": "用户询问单票涨停后走势，后端补充锚点后的逐日路径。",
+        "post_limit_statistics": "用户询问涨停后历史表现，后端补充成熟样本统计。",
         "sector_performance": "用户询问整个行业板块表现，后端补充 sector_performance。",
         "sector_stock_ranking": "用户询问板块内哪些股票近期走势更强，后端补充 sector_stock_ranking。",
         "finance_news": "用户询问最新财经快讯，后端补充 finance_news。",
@@ -2206,6 +2212,13 @@ def _evidence_metrics(output: dict[str, Any]) -> dict[str, Any]:
         "down_count",
         "candidate_count",
         "matched_count",
+        "pool_count",
+        "evaluable_count",
+        "coverage_ratio",
+        "complete_sample_count",
+        "complete_signal_date_count",
+        "sample_quality",
+        "rule_version",
         "upstream_total",
         "stock_count",
         "event_count",
@@ -2431,6 +2444,13 @@ class AgentDataHealthResponse(BaseModel):
     top_candidates_checked: int
     top_candidates: list[AgentDataHealthTopCandidate] = Field(default_factory=list)
     outcome_completeness: OutcomeCompletenessReport | None = None
+    post_limit_pool_count: int = 0
+    post_limit_evaluable_count: int = 0
+    post_limit_coverage_ratio: float = 1.0
+    post_limit_missing_history_count: int = 0
+    post_limit_source_consistent_count: int = 0
+    post_limit_pending_symbol_count: int = 0
+    post_limit_missing_reasons: dict[str, int] = Field(default_factory=dict)
     warnings: list[str] = Field(default_factory=list)
 
 

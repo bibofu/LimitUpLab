@@ -13,6 +13,7 @@ from app.models import AgentChatRequest
 
 from . import (
     market,
+    post_limit,
     ratings,
     review,
     stocks,
@@ -37,6 +38,9 @@ HANDLERS: MappingProxyType[str, Handler] = MappingProxyType({
     "web_search": stocks.web_search,
     "limit_up_events": stocks.limit_up_events,
     "stock_kline": stocks.stock_kline,
+    "post_limit_screen": post_limit.screen,
+    "post_limit_path": post_limit.path,
+    "post_limit_statistics": post_limit.statistics,
     "first_board_ratings": ratings.first_board_ratings,
     "first_board_discovery": ratings.first_board_discovery,
     "first_board_filter": ratings.first_board_filter,

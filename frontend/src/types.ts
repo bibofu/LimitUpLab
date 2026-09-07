@@ -952,6 +952,13 @@ export interface AgentDataHealthResponse {
   top_candidates_checked: number;
   top_candidates: AgentDataHealthTopCandidate[];
   outcome_completeness: OutcomeCompletenessReport | null;
+  post_limit_pool_count: number;
+  post_limit_evaluable_count: number;
+  post_limit_coverage_ratio: number;
+  post_limit_missing_history_count: number;
+  post_limit_source_consistent_count: number;
+  post_limit_pending_symbol_count: number;
+  post_limit_missing_reasons: Record<string, number>;
   warnings: string[];
 }
 

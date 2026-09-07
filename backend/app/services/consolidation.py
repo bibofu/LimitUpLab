@@ -2,10 +2,14 @@
 from collections import Counter
 from datetime import date, datetime, time, timedelta
 import math
-from statistics import mean
 from zoneinfo import ZoneInfo
 
 from app.consolidation_models import ConsolidationCandidate, ConsolidationEvaluation, ConsolidationPool, ObservationStrategy
+from app.services.post_limit import (
+    build_post_limit_metrics,
+    matches_high_drawdown,
+    matches_volume_consolidation,
+)
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
 RULES = [
@@ -61,38 +65,24 @@ def assess(symbol: str, anchor: str, end: str, calendar: list[str], bars: dict,
     minimum_age = 1 if strategy == "drawdown" else 2
     if not minimum_age <= t - a <= 4:
         return "age_outside_1_4" if strategy == "drawdown" else "age_outside_2_4", None
-    history = [bars.get((symbol, d)) for d in calendar[max(0, t-19):t+1]]
-    if len(history) != 20 or not all(valid_bar(b) for b in history):
-        return "missing_history20", None
-    if any(abs(b["close"]/p["close"]-1) > .111 or b["high"]/p["close"]-1 > .112
-           or b["low"]/p["close"]-1 < -.112 for p, b in zip(history, history[1:])):
-        return "price_discontinuity", None
-    window = [bars[(symbol, d)] for d in calendar[a:t+1]]
-    previous = bars.get((symbol, calendar[a-1])) if a else None
-    if not valid_bar(previous) or not .085 <= window[0]["close"]/previous["close"]-1 <= .111:
-        return "anchor_price_mismatch", None
-    if not all(isinstance(b.get("volume"), (int, float)) and math.isfinite(b["volume"])
-               and b["volume"] > 0 for b in window):
-        return "invalid_volume", None
-    sources = {b.get("source") for b in window}
-    if len(sources) != 1 or not next(iter(sources)):
-        return "mixed_or_missing_source", None
-    low, high = min(b["low"] for b in window[1:]), max(b["high"] for b in window[1:])
-    relative = window[-1]["close"]/window[0]["close"]-1
-    ratio = mean(b["volume"] for b in window[1:])/window[0]["volume"]
+    metrics, issue = build_post_limit_metrics(
+        {"symbol": symbol, "trade_date": anchor}, end, calendar, bars
+    )
+    if issue or metrics is None:
+        return issue or "unknown", None
+    low, high = metrics["range_low"], metrics["range_high"]
+    relative = metrics["anchor_change_pct"] / 100
+    ratio = metrics["volume_ratio"]
     if strategy == "drawdown":
-        # Fix the reference high before the observation day; do not mix in today's intraday path.
-        peak = max(range(len(window)-1), key=lambda i: (window[i]["high"], i))
-        peak_price = window[peak]["high"]
-        drawdown = 1 - window[-1]["close"]/peak_price
-        failed = ["drawdown_below_10pct"] if drawdown < .10 - 1e-12 else []
+        drawdown = metrics["peak_drawdown_pct"] / 100
+        failed = [] if matches_high_drawdown(t-a, metrics["peak_drawdown_pct"]) else ["drawdown_below_10pct"]
         return failed[0] if failed else None, dict(
             failed_conditions=failed, consolidation_days=t-a,
-            anchor_close=window[0]["close"], close=window[-1]["close"],
-            range_low=low, range_high=high, range_pct=round((high/low-1)*100, 4),
-            anchor_change_pct=round(relative*100, 4), volume_ratio=round(ratio, 6),
-            source=window[0]["source"], peak_date=calendar[a+peak], peak_price=peak_price,
-            drawdown_pct=round(drawdown*100, 4),
+            anchor_close=metrics["anchor_close"], close=metrics["close"],
+            range_low=low, range_high=high, range_pct=metrics["range_pct"],
+            anchor_change_pct=metrics["anchor_change_pct"], volume_ratio=ratio,
+            source=metrics["source"], peak_date=metrics["peak_date"],
+            peak_price=metrics["peak_price"], drawdown_pct=metrics["peak_drawdown_pct"],
         )
     failed = []
     if high/low-1 > .08 + 1e-12:
@@ -101,11 +91,20 @@ def assess(symbol: str, anchor: str, end: str, calendar: list[str], bars: dict,
         failed.append("close_outside_band")
     if ratio > .75 + 1e-12:
         failed.append("volume_above_075")
-    return failed[0] if failed else None, dict(failed_conditions=failed, consolidation_days=t-a, anchor_close=window[0]["close"],
-                      close=window[-1]["close"], range_low=low, range_high=high,
-                      range_pct=round((high/low-1)*100, 4),
-                      anchor_change_pct=round(relative*100, 4),
-                      volume_ratio=round(ratio, 6), source=window[0]["source"])
+    # Keep detailed failure reasons above, while sharing the inclusive acceptance
+    # predicate with the Agent-facing research engine.
+    accepted = matches_volume_consolidation(
+        t-a, metrics["range_pct"], metrics["anchor_change_pct"], ratio
+    )
+    if accepted:
+        failed = []
+    return failed[0] if failed else None, dict(
+        failed_conditions=failed, consolidation_days=t-a,
+        anchor_close=metrics["anchor_close"], close=metrics["close"],
+        range_low=low, range_high=high, range_pct=metrics["range_pct"],
+        anchor_change_pct=metrics["anchor_change_pct"],
+        volume_ratio=ratio, source=metrics["source"],
+    )
 
 
 def screen_consolidation(events: list[dict], rows: list[dict], calendar: list[str],
