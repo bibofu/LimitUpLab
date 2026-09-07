@@ -482,7 +482,7 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
           role="tab"
           type="button"
         >
-          <LineChart size={16} />涨停后缩量整理
+          <LineChart size={16} />涨停后观察
         </button>
       </div>
       {mode === "consolidation" ? <ConsolidationPanel /> : intelligence?.stage === "missed_cutoff" ? (
