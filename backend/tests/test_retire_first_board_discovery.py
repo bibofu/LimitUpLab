@@ -51,3 +51,11 @@ def test_cleanup_is_backed_up_idempotent_and_preserves_prediction_records(tmp_pa
             "recommendation_prediction_finals",
         ):
             assert connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0] == 0
+        for table in (
+            "agent_live_prediction_snapshots",
+            "agent_predictions",
+            "first_board_outcomes",
+            "daily_review_snapshots",
+            "scoring_policies",
+        ):
+            assert connection.execute(f"SELECT value FROM {table}").fetchall() == [("protected",)]
