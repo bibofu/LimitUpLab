@@ -147,26 +147,13 @@ def materialize_all_strategies(
     return runs
 
 
-def strategy_stock_path(
-    strategy_id: str,
-    symbol: str,
-    *,
-    data_as_of: date,
-    repository: SQLiteStrategyRepository | None = None,
-) -> dict[str, Any]:
+def strategy_stock_path(strategy_id: str, symbol: str, *, data_as_of: date) -> dict[str, Any]:
     shape = strategy_shape(strategy_id)
     contract = PostLimitQueryContract(
         mode="path", shape=shape or "high_drawdown", data_as_of=data_as_of,
         symbol=symbol, recent_limit_days=20,
     )
-    return build_post_limit_path(
-        load_post_limit_dataset(
-            data_as_of,
-            database_path=repository.database_path if repository else None,
-        ),
-        contract,
-        symbol=symbol,
-    )
+    return build_post_limit_path(load_post_limit_dataset(data_as_of), contract, symbol=symbol)
 
 
 def strategy_statistics(strategy_id: str, *, data_as_of: date | None, days: int) -> dict[str, Any]:

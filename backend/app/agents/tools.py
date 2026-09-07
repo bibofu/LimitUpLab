@@ -43,7 +43,6 @@ from app.models import (
 )
 from app.repositories import (
     SQLiteFirstBoardRepository,
-    SQLiteLimitUpRepository,
     SQLiteRecommendationIntelligenceRepository,
     SQLiteScoringPolicyRepository,
     SQLiteStockNewsRepository,
@@ -70,19 +69,6 @@ from app.services.post_limit import (
 )
 from app.services.stock_news import collect_stock_news
 from app.services.scoring_policy_optimizer import build_scoring_policy_registry
-from app.services.strategy_catalog import (
-    STRATEGY_IDS,
-    get_strategy_definition,
-    resolve_strategy_id,
-    strategy_id_for_shape,
-)
-from app.services.strategy_platform import (
-    build_strategy_catalog,
-    materialize_strategy_run,
-    strategy_statistics as build_strategy_statistics,
-    strategy_stock_path as build_strategy_stock_path,
-)
-from app.repositories import SQLiteStrategyRepository
 from app.services.web_search import search_web
 from app.agents.review_agent import build_review_agent_report
 
@@ -566,56 +552,6 @@ TOOL_SCHEMAS = [
         returns="Daily OHLCV bars, data freshness, trend, returns, moving averages, volume ratio and drawdown.",
     ),
     AgentToolSchema(
-        name="strategy_catalog",
-        description=(
-            "查询 LimitUpLab 当前正式注册的涨停后策略目录、研究阶段、版本、成熟度、"
-            "输出性质、最新数据日和样本量。用于回答有哪些策略、各自研究什么或成熟度如何。"
-        ),
-        args_schema={"type": "object", "properties": {}, "required": []},
-        returns="Fixed-order post-limit strategy definitions and latest immutable-run coverage.",
-    ),
-    AgentToolSchema(
-        name="strategy_latest",
-        description="按注册策略读取或冻结指定截止日的最新候选/观察池，不创建临时评分。",
-        args_schema={
-            "type": "object",
-            "properties": {
-                "strategy_id": {"type": "string", "enum": list(STRATEGY_IDS)},
-                "data_as_of": {"type": ["string", "null"]},
-            },
-            "required": ["strategy_id"],
-        },
-        returns="Registered strategy contract plus immutable run and anchored candidates.",
-    ),
-    AgentToolSchema(
-        name="strategy_stock_path",
-        description="查询某注册策略下一只股票的入选证据、真实涨停锚点和逐日路径。",
-        args_schema={
-            "type": "object",
-            "properties": {
-                "strategy_id": {"type": "string", "enum": list(STRATEGY_IDS)},
-                "symbol": {"type": "string"},
-                "data_as_of": {"type": ["string", "null"]},
-            },
-            "required": ["strategy_id", "symbol"],
-        },
-        returns="Strategy metadata, selected candidate evidence and exact-date post-limit path.",
-    ),
-    AgentToolSchema(
-        name="strategy_statistics",
-        description="查询或比较注册策略的样本量、完整度、时间范围和风险指标；样本不可比时拒绝优劣结论。",
-        args_schema={
-            "type": "object",
-            "properties": {
-                "strategy_ids": {"type": "array", "items": {"type": "string", "enum": list(STRATEGY_IDS)}},
-                "data_as_of": {"type": ["string", "null"]},
-                "days": {"type": "integer", "minimum": 1, "maximum": 30},
-            },
-            "required": ["strategy_ids"],
-        },
-        returns="Comparable metadata and descriptive statistics for registered strategies, with an explicit comparison gate.",
-    ),
-    AgentToolSchema(
         name="post_limit_screen",
         description=(
             "筛选沪深主板近期涨停后的形态，支持高位大幅回撤、横盘缩量、回撤企稳、"
@@ -905,10 +841,6 @@ V1_CLOSED_MARKET_TOOL_NAMES = frozenset(
         "limit_up_events",
         "first_board_filter",
         "stock_kline",
-        "strategy_catalog",
-        "strategy_latest",
-        "strategy_stock_path",
-        "strategy_statistics",
         "post_limit_screen",
         "post_limit_path",
         "post_limit_statistics",
@@ -2007,10 +1939,6 @@ class AgentToolRegistry:
             ),
             contract,
         )
-        payload["strategy_contracts"] = [
-            get_strategy_definition(strategy_id_for_shape(shape)).model_dump(mode="json")
-            for shape in payload.get("shapes", [])
-        ]
         return ToolResult(
             name="post_limit_screen",
             input=contract.to_dict(),
@@ -2055,11 +1983,6 @@ class AgentToolRegistry:
             contract,
             symbol=resolved_symbol,
         )
-        path_shapes = payload.get("matched_shapes", []) or ([contract.shape] if contract.shape else [])
-        payload["strategy_contracts"] = [
-            get_strategy_definition(strategy_id_for_shape(shape)).model_dump(mode="json")
-            for shape in path_shapes
-        ]
         return ToolResult(
             name="post_limit_path",
             input={**contract.to_dict(), "symbol": resolved_symbol},
@@ -2093,10 +2016,6 @@ class AgentToolRegistry:
             ),
             contract,
         )
-        payload["strategy_contracts"] = [
-            get_strategy_definition(strategy_id_for_shape(shape)).model_dump(mode="json")
-            for shape in payload.get("shapes", [])
-        ]
         return ToolResult(
             name="post_limit_statistics",
             input=contract.to_dict(),
@@ -2118,170 +2037,6 @@ class AgentToolRegistry:
                 else "empty" if not payload.get("complete_sample_count")
                 else "ok"
             ),
-            data_fresh=False,
-        )
-
-    def strategy_catalog(self) -> ToolResult:
-        """Return the fixed strategy registry with latest immutable-run coverage."""
-
-        response = build_strategy_catalog(
-            SQLiteStrategyRepository(self.first_board_repository.database_path)
-        )
-        payload = response.model_dump(mode="json")
-        return ToolResult(
-            name="strategy_catalog",
-            input={},
-            output=payload,
-            summary=f"策略目录包含{len(response.strategies)}项涨停后研究策略。",
-            trace_output={
-                "strategy_count": len(response.strategies),
-                "strategies": [
-                    {
-                        "strategy_id": item.strategy_id,
-                        "version": item.version,
-                        "maturity": item.maturity,
-                        "output_type": item.output_type,
-                        "latest_data_date": item.latest_data_date,
-                        "latest_sample_size": item.latest_sample_size,
-                    }
-                    for item in response.strategies
-                ],
-            },
-            result_status="ok",
-            data_fresh=True,
-        )
-
-    def strategy_latest(self, strategy_id: str, data_as_of: date | None = None) -> ToolResult:
-        """Return one registered immutable run without accepting ad-hoc scoring input."""
-
-        try:
-            strategy_id = resolve_strategy_id(strategy_id)
-        except KeyError as error:
-            raise ValueError(f"Unknown strategy_id: {strategy_id}") from error
-        repo = SQLiteStrategyRepository(self.first_board_repository.database_path)
-        run = repo.latest(strategy_id) if data_as_of is None else None
-        run = run or materialize_strategy_run(
-            strategy_id,
-            data_as_of=data_as_of,
-            repository=repo,
-            first_board_repository=self.first_board_repository,
-            limit_up_repository=SQLiteLimitUpRepository(self.first_board_repository.database_path),
-        )
-        definition = get_strategy_definition(strategy_id)
-        payload = {
-            "strategy": definition.model_dump(mode="json"),
-            "run": run.model_dump(mode="json"),
-        }
-        return ToolResult(
-            name="strategy_latest",
-            input={"strategy_id": strategy_id, "data_as_of": data_as_of.isoformat() if data_as_of else None},
-            output=payload,
-            summary=f"{definition.name}在{run.data_as_of.isoformat()}包含{run.candidate_count}个样本。",
-            trace_output={
-                "strategy_id": strategy_id,
-                "version": run.strategy_version,
-                "maturity": run.maturity,
-                "output_type": run.output_type,
-                "data_as_of": run.data_as_of.isoformat(),
-                "candidate_count": run.candidate_count,
-            },
-            result_status="empty" if run.candidate_count == 0 else "ok",
-            data_fresh=True,
-        )
-
-    def strategy_stock_path(self, strategy_id: str, symbol: str, data_as_of: date | None = None) -> ToolResult:
-        """Return registered candidate evidence and its event-anchored path."""
-
-        resolved_symbol = self.resolve_stock_identity(symbol)[0]
-        latest = self.strategy_latest(strategy_id, data_as_of).output
-        strategy_id = latest["strategy"]["strategy_id"]
-        run = latest["run"]
-        repo = SQLiteStrategyRepository(self.first_board_repository.database_path)
-        candidate = repo.get_candidate(run["run_id"], resolved_symbol)
-        path = build_strategy_stock_path(
-            strategy_id,
-            resolved_symbol,
-            data_as_of=date.fromisoformat(run["data_as_of"]),
-            repository=repo,
-        )
-        payload = {
-            "strategy": latest["strategy"],
-            "data_as_of": run["data_as_of"],
-            "candidate": candidate,
-            "path": path,
-        }
-        return ToolResult(
-            name="strategy_stock_path",
-            input={"strategy_id": strategy_id, "symbol": resolved_symbol, "data_as_of": run["data_as_of"]},
-            output=payload,
-            summary=f"{resolved_symbol}在{latest['strategy']['name']}下的涨停锚点与逐日路径已返回。",
-            trace_output={
-                "strategy_id": strategy_id,
-                "symbol": resolved_symbol,
-                "data_as_of": run["data_as_of"],
-                "anchor_date": candidate.get("anchor_date") if candidate else None,
-                "data_missing": path.get("data_missing", []),
-            },
-            result_status="ok" if candidate else "empty",
-            data_fresh=True,
-        )
-
-    def strategy_statistics(
-        self,
-        strategy_ids: list[str],
-        *,
-        data_as_of: date | None = None,
-        days: int = 30,
-    ) -> ToolResult:
-        """Compare only registered descriptive statistics under an explicit quality gate."""
-
-        try:
-            unique_ids = list(dict.fromkeys(resolve_strategy_id(item) for item in strategy_ids))
-        except KeyError as error:
-            raise ValueError("strategy_ids must contain registered strategies.") from error
-        if not unique_ids:
-            raise ValueError("strategy_ids must contain registered strategies.")
-        entries = []
-        for strategy_id in unique_ids:
-            definition = get_strategy_definition(strategy_id)
-            statistics = build_strategy_statistics(strategy_id, data_as_of=data_as_of, days=days)
-            sample_size = int(statistics.get("complete_sample_count") or statistics.get("candidate_count") or 0)
-            signal_days = int(statistics.get("complete_signal_date_count") or statistics.get("run_count") or 0)
-            complete = int(statistics.get("complete_sample_count") or 0)
-            total = int(statistics.get("signal_count") or sample_size)
-            entries.append({
-                "strategy": definition.model_dump(mode="json"),
-                "sample_size": sample_size,
-                "signal_day_count": signal_days,
-                "completeness": round(complete / total, 4) if total else 0,
-                "time_range": statistics.get("signal_dates") or statistics.get("signal_date_range"),
-                "risk_metrics": statistics.get("summaries") or [],
-                "statistics": statistics,
-            })
-        comparable = len(entries) > 1 and all(
-            entry["sample_size"] >= 30 and entry["signal_day_count"] >= 5
-            for entry in entries
-        )
-        payload = {
-            "data_as_of": data_as_of.isoformat() if data_as_of else None,
-            "entries": entries,
-            "comparison_allowed": comparable,
-            "comparison_conclusion": None,
-            "comparison_warning": (
-                None if comparable else "样本量、完整度或时间覆盖不足/不可比，拒绝给出策略优劣结论。"
-            ),
-        }
-        return ToolResult(
-            name="strategy_statistics",
-            input={"strategy_ids": unique_ids, "data_as_of": payload["data_as_of"], "days": days},
-            output=payload,
-            summary=f"返回{len(entries)}项注册策略的描述性统计；比较门槛{'通过' if comparable else '未通过'}。",
-            trace_output={
-                "strategy_ids": unique_ids,
-                "sample_sizes": {item["strategy"]["strategy_id"]: item["sample_size"] for item in entries},
-                "comparison_allowed": comparable,
-            },
-            result_status="ok" if entries else "empty",
             data_fresh=False,
         )
 

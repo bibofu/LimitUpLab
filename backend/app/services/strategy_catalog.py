@@ -38,29 +38,6 @@ def strategy_shape(strategy_id: str) -> str | None:
     return spec.shape
 
 
-def strategy_id_for_shape(shape: str) -> str:
-    for spec in _SPECS:
-        if spec.shape == shape:
-            return spec.strategy_id
-    raise KeyError(shape)
-
-
-def resolve_strategy_id(value: str) -> str:
-    normalized = value.strip().lower().replace("-", "_")
-    aliases = {
-        "一进二": "relay_one_to_two",
-        "一进二接力": "relay_one_to_two",
-        "2进3": "second_to_third",
-        "二进三": "second_to_third",
-    }
-    if normalized in aliases:
-        return aliases[normalized]
-    for spec in _SPECS:
-        if normalized in {spec.strategy_id, spec.name.lower(), str(spec.shape or "")}:
-            return spec.strategy_id
-    raise KeyError(value)
-
-
 def get_strategy_definition(strategy_id: str) -> StrategyDefinition:
     spec = _spec(strategy_id)
     ranked = spec.output_type == "ranked_research"

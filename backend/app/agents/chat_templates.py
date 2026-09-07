@@ -70,14 +70,6 @@ def _template_answer_from_tool_facts(
     if _QuestionSignals.from_message(request.message).market_environment:
         return _template_market_environment_answer(facts)
 
-    if "strategy_catalog" in facts:
-        return _template_strategy_catalog(facts["strategy_catalog"])
-    if "strategy_latest" in facts:
-        return _template_strategy_latest(facts["strategy_latest"])
-    if "strategy_stock_path" in facts:
-        return _template_strategy_stock_path(facts["strategy_stock_path"])
-    if "strategy_statistics" in facts:
-        return _template_strategy_statistics(facts["strategy_statistics"])
     if "post_limit_screen" in facts:
         return _template_post_limit_screen(facts["post_limit_screen"])
     if "post_limit_path" in facts:
@@ -438,20 +430,13 @@ def _template_answer_from_tool_facts(
             if isinstance(ratings, dict)
             else []
         )
-        strategy = ratings.get("strategy") or {}
-        lines = [
-            f"{ratings.get('trade_date')} 首板候选评分靠前的股票如下：",
-            f"策略 一进二接力：版本 {ratings.get('strategy_version') or strategy.get('version')}，"
-            "成熟度 前向验证，输出性质 研究排名；数据截止日 "
-            f"{ratings.get('data_as_of') or ratings.get('trade_date')}。",
-        ]
+        lines = [f"{ratings.get('trade_date')} 首板候选评分靠前的股票如下："]
         for index, item in enumerate(candidates[:8], start=1):
             fact = item.get("facts") or item if isinstance(item, dict) else {}
             live = item.get("latest_intelligence") or {}
             lines.append(
                 f"{index}. {fact.get('name')}({fact.get('symbol')}) "
                 f"{item.get('score')}分/{item.get('rating')}，"
-                f"涨停锚点 {fact.get('anchor_date') or ratings.get('trade_date')}，"
                 f"行业 {fact.get('industry')}，首封 {str(fact.get('first_limit_time', ''))[:5]}，"
                 f"炸板 {fact.get('break_count')} 次。"
             )
@@ -722,113 +707,6 @@ def _template_answer_from_tool_facts(
     return UNANSWERABLE_TEXT
 
 
-def _template_strategy_catalog(payload: dict[str, Any]) -> str:
-    """Render the fixed post-limit strategy registry without implied forecasts."""
-
-    maturity_labels = {
-        "exploratory": "探索研究",
-        "forward_validation": "前向验证",
-        "validated": "已验证",
-    }
-    output_labels = {
-        "ranked_research": "研究排名",
-        "observation_pool": "观察池",
-    }
-    strategies = payload.get("strategies") or []
-    lines = [f"目前注册了 {len(strategies)} 项涨停后策略，按产品顺序如下："]
-    for index, strategy in enumerate(strategies, start=1):
-        latest = strategy.get("latest_data_date") or "待生成"
-        lines.append(
-            f"{index}. {strategy.get('name')}（{strategy.get('strategy_id')}）："
-            f"{strategy.get('description')}阶段为 {strategy.get('lifecycle_stage')}；"
-            f"版本 {strategy.get('version')}，成熟度 {maturity_labels.get(strategy.get('maturity'), strategy.get('maturity'))}，"
-            f"输出为 {output_labels.get(strategy.get('output_type'), strategy.get('output_type'))}；"
-            f"最新数据日 {latest}，当前样本 {strategy.get('latest_sample_size', 0)}。"
-        )
-    lines.append("只有一进二接力当前具备研究排名资格；其余策略保留为无名次观察池，不展示预测概率、胜率承诺或跨策略总榜。")
-    lines.append(TEXT["safety"])
-    return "\n".join(lines)
-
-
-def _template_strategy_latest(payload: dict[str, Any]) -> str:
-    strategy = payload.get("strategy") or {}
-    run = payload.get("run") or {}
-    candidates = (run.get("payload") or {}).get("candidates") or []
-    ranked = strategy.get("output_type") == "ranked_research"
-    maturity = {
-        "exploratory": "探索研究",
-        "forward_validation": "前向验证",
-        "validated": "已验证",
-    }.get(strategy.get("maturity"), strategy.get("maturity"))
-    lines = [
-        f"{strategy.get('name')}：策略版本 {run.get('strategy_version') or strategy.get('version')}，"
-        f"数据截止 {run.get('data_as_of')}，成熟度 {maturity}，"
-        f"输出性质 {'研究排名' if ranked else '无名次观察池'}，样本 {len(candidates)} 只。"
-    ]
-    for index, candidate in enumerate(candidates[:10], start=1):
-        prefix = f"{candidate.get('rank', index)}." if ranked else "-"
-        score = f"，研究分 {candidate.get('score')}" if ranked and candidate.get("score") is not None else ""
-        lines.append(
-            f"{prefix} {candidate.get('name')}（{candidate.get('symbol')}）："
-            f"涨停锚点 {candidate.get('anchor_date')}{score}。"
-        )
-        if candidate.get("data_missing"):
-            lines.append("  缺失：" + "、".join(candidate["data_missing"]) + "。")
-    if not candidates:
-        lines.append("当前快照为空池，不使用默认值补齐样本。")
-    if not ranked:
-        lines.append("探索策略不展示预测概率、胜率承诺或跨策略名次。")
-    lines.append(TEXT["safety"])
-    return "\n".join(lines)
-
-
-def _template_strategy_stock_path(payload: dict[str, Any]) -> str:
-    strategy = payload.get("strategy") or {}
-    candidate = payload.get("candidate") or {}
-    path = payload.get("path") or {}
-    lines = [
-        f"{strategy.get('name')}单股路径：版本 {strategy.get('version')}，成熟度 {strategy.get('maturity')}，"
-        f"输出性质 {strategy.get('output_type')}，数据截止 {payload.get('data_as_of')}。",
-        f"股票 {candidate.get('name') or path.get('name') or path.get('symbol')}（{candidate.get('symbol') or path.get('symbol')}），"
-        f"涨停锚点 {candidate.get('anchor_date') or (path.get('anchor') or {}).get('anchor_date')}。",
-    ]
-    for row in (path.get("path") or [])[:20]:
-        lines.append(
-            f"- {row.get('trade_date')} {row.get('day')}：收盘 {row.get('close')}，"
-            f"相对锚点 {float(row.get('change_from_anchor_close_pct') or 0):+.2f}%，"
-            f"相对运行高点 {float(row.get('drawdown_from_running_peak_pct') or 0):+.2f}%。"
-        )
-    missing = list(dict.fromkeys([*(candidate.get("data_missing") or []), *(path.get("data_missing") or [])]))
-    if missing:
-        lines.append("数据缺失：" + "、".join(missing) + "。")
-    lines.append(TEXT["safety"])
-    return "\n".join(lines)
-
-
-def _template_strategy_statistics(payload: dict[str, Any]) -> str:
-    lines = ["注册策略描述性统计（不临时重算评分或修改策略）："]
-    for entry in payload.get("entries") or []:
-        strategy = entry.get("strategy") or {}
-        lines.append(
-            f"- {strategy.get('name')}：版本 {strategy.get('version')}，成熟度 {strategy.get('maturity')}，"
-            f"输出 {strategy.get('output_type')}；样本 {entry.get('sample_size')}，"
-            f"完整度 {float(entry.get('completeness') or 0):.1%}，"
-            f"信号日 {entry.get('signal_day_count')}，时间范围 {entry.get('time_range') or '未形成'}。"
-        )
-        summaries = entry.get("risk_metrics") or []
-        if summaries:
-            lines.append("  风险指标：" + "；".join(
-                f"{item.get('label')} MAE5 {item.get('mae5_mean_pct')}%、MFE5 {item.get('mfe5_mean_pct')}%"
-                for item in summaries[:4]
-            ) + "。")
-    if not payload.get("comparison_allowed"):
-        lines.append(payload.get("comparison_warning") or "样本不可比，拒绝给出策略优劣结论。")
-    else:
-        lines.append("比较门槛已满足，但这里只展示描述性差异，不输出交易建议或确定性排序。")
-    lines.append(TEXT["safety"])
-    return "\n".join(lines)
-
-
 def _template_post_limit_screen(payload: dict[str, Any]) -> str:
     """Render a complete evidence-first post-limit candidate list."""
 
@@ -841,7 +719,6 @@ def _template_post_limit_screen(payload: dict[str, Any]) -> str:
         f"近期涨停观察池 {payload.get('pool_count', 0)} 只，可评价 {payload.get('evaluable_count', 0)} 只"
         f"（覆盖率 {float(payload.get('coverage_ratio') or 0):.1%}），符合 {payload.get('matched_count', 0)} 只。",
     ]
-    lines.extend(_strategy_contract_lines(payload))
     contract = payload.get("query_contract") or {}
     filters = [f"回看最近{contract.get('recent_limit_days', 5)}个交易日的收盘涨停"]
     if contract.get("board_height"):
@@ -904,7 +781,6 @@ def _template_post_limit_path(payload: dict[str, Any]) -> str:
         f"（规则版本 {payload.get('rule_version')}）。",
         "口径：指定锚点优先，否则取最近20个交易日内最新一次收盘涨停；逐日数据均不晚于截止日。",
     ]
-    lines.extend(_strategy_contract_lines(payload))
     matched_labels = payload.get("matched_shape_labels") or []
     if matched_labels:
         lines.append("截止日形态：" + "、".join(matched_labels) + "。")
@@ -940,7 +816,6 @@ def _template_post_limit_statistics(payload: dict[str, Any]) -> str:
         f"{payload.get('complete_sample_count', 0)} 个结果完整，覆盖 "
         f"{payload.get('complete_signal_date_count', 0)} 个信号日。D+1开盘为统一观察基准。",
     ]
-    lines.extend(_strategy_contract_lines(payload))
     contract = payload.get("query_contract") or {}
     lines.append(
         f"筛选条件：每个信号日回看最近{contract.get('recent_limit_days', 5)}个交易日的收盘涨停"
@@ -988,24 +863,6 @@ def _template_post_limit_statistics(payload: dict[str, Any]) -> str:
     lines.extend(payload.get("warnings") or [])
     lines.append(TEXT["safety"])
     return "\n".join(lines)
-
-
-def _strategy_contract_lines(payload: dict[str, Any]) -> list[str]:
-    maturity_labels = {
-        "exploratory": "探索研究",
-        "forward_validation": "前向验证",
-        "validated": "已验证",
-    }
-    output_labels = {
-        "ranked_research": "研究排名",
-        "observation_pool": "观察池",
-    }
-    return [
-        f"策略 {item.get('name')}：版本 {item.get('version')}，"
-        f"成熟度 {maturity_labels.get(item.get('maturity'), item.get('maturity'))}，"
-        f"输出性质 {output_labels.get(item.get('output_type'), item.get('output_type'))}。"
-        for item in payload.get("strategy_contracts") or []
-    ]
 
 
 def _template_market_environment_answer(facts: dict[str, Any]) -> str:

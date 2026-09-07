@@ -20,7 +20,6 @@ from app.models import (
     FirstBoardRatingsResponse,
     LimitUpEvent,
 )
-from app.services.strategy_catalog import get_strategy_definition
 
 
 class _FirstBoardFilterQuery:
@@ -95,10 +94,6 @@ def _compact_ratings_facts(ratings: FirstBoardRatingsResponse) -> dict[str, Any]
 
     return {
         "trade_date": ratings.trade_date.isoformat(),
-        "data_as_of": ratings.data_as_of.isoformat() if ratings.data_as_of else ratings.trade_date.isoformat(),
-        "strategy": get_strategy_definition("relay_one_to_two").model_dump(mode="json"),
-        "strategy_version": ratings.generated_by,
-        "snapshot_source": ratings.snapshot_source,
         "candidate_count": len(ratings.candidates),
         "filtered_out_count": len(ratings.filtered_out),
         "top_candidates": [
@@ -376,7 +371,6 @@ def _rating_fact(rating: FirstBoardRating | None) -> dict | None:
     return {
         "symbol": facts.symbol,
         "name": facts.name,
-        "anchor_date": facts.trade_date.isoformat(),
         "industry": facts.industry,
         "concept": facts.concept,
         "rating": rating.rating,
@@ -399,7 +393,6 @@ def _brief_rating_fact(rating: FirstBoardRating) -> dict[str, Any]:
     return {
         "symbol": facts.symbol,
         "name": facts.name,
-        "anchor_date": facts.trade_date.isoformat(),
         "industry": facts.industry,
         "rating": rating.rating,
         "score": rating.score,
