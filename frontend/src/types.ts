@@ -370,88 +370,76 @@ export interface FirstBoardRatingsResponse {
   snapshot_created_at: string | null;
 }
 
-export type StrategyMaturity = "exploratory" | "forward_validation" | "validated";
-export type StrategyOutputType = "ranked_research" | "observation_pool";
+export type FirstBoardDiscoveryPattern =
+  | "low_base_breakout"
+  | "trend_acceleration"
+  | "oversold_rebound"
+  | "second_wave"
+  | "range_breakout"
+  | "unclassified";
 
-export interface StrategyDefinition {
-  strategy_id: string;
+export interface FirstBoardDiscoveryTheme {
   name: string;
-  description: string;
-  version: string;
-  lifecycle_stage: string;
-  maturity: StrategyMaturity;
-  output_type: StrategyOutputType;
-  universe: string;
-  cutoff_contract: string;
-  required_data: string[];
-  missing_data_policy: string;
-  outcome_metrics: string[];
-  promotion_gate: string;
-  latest_data_date: string | null;
-  latest_sample_size: number;
+  category: "industry" | "concept";
+  change_pct: number;
+  rank: number;
+  member_count: number;
+  news_headlines: string[];
+  source: string;
 }
 
-export interface StrategyCatalogResponse {
-  strategies: StrategyDefinition[];
-  generated_at: string;
-  generated_by: string;
-}
-
-export interface StrategyCandidate {
+export interface FirstBoardDiscoveryFacts {
   symbol: string;
-  name?: string;
-  anchor_date: string;
-  signal_date?: string;
-  rank?: number;
-  score?: number;
-  rating?: string;
-  confidence?: number;
-  reasons?: string[];
-  evidence?: string[];
-  trigger_reasons?: string[];
-  risks?: string[];
-  data_missing?: string[];
-  [key: string]: unknown;
-}
-
-export interface StrategyRunSnapshot {
-  run_id: string;
-  strategy_id: string;
-  strategy_version: string;
-  signal_date: string;
+  name: string;
   data_as_of: string;
-  generated_at: string;
-  input_fingerprint: string;
-  status: "ready" | "empty" | "data_missing";
-  maturity: StrategyMaturity;
-  output_type: StrategyOutputType;
-  candidate_count: number;
-  payload: {
-    candidates?: StrategyCandidate[];
-    warnings?: string[];
-    [key: string]: unknown;
-  };
+  target_trade_date: string | null;
+  close: number;
+  change_pct: number;
+  amount: number;
+  volume: number;
+  intraday_range_pct: number;
+  close_location: number;
+  open_to_close_pct: number;
+  kline_bar_count: number;
+  return_5d_pct: number | null;
+  return_20d_pct: number | null;
+  return_60d_pct: number | null;
+  distance_20d_high_pct: number | null;
+  distance_60d_high_pct: number | null;
+  position_60d_pct: number | null;
+  volume_ratio_5d: number | null;
+  volatility_20d: number | null;
+  ma_alignment: string;
+  pattern: FirstBoardDiscoveryPattern;
+  themes: FirstBoardDiscoveryTheme[];
+  popularity_rank: number | null;
+  news_catalysts: string[];
+  data_missing: string[];
 }
 
-export interface StrategyHistoryResponse {
-  strategy: StrategyDefinition;
-  runs: StrategyRunSnapshot[];
-  generated_by: string;
+export interface FirstBoardDiscoveryCandidate {
+  facts: FirstBoardDiscoveryFacts;
+  score: number;
+  rating: "A" | "B" | "C" | "D";
+  confidence: number;
+  score_breakdown: ScoreBreakdownItem[];
+  reasons: string[];
+  risks: string[];
 }
 
-export interface StrategyStockResponse {
-  strategy: StrategyDefinition;
+export interface FirstBoardDiscoveryResponse {
   data_as_of: string;
-  symbol: string;
-  candidate: StrategyCandidate | null;
-  path: Record<string, unknown>;
+  target_trade_date: string | null;
+  universe_count: number;
+  eligible_count: number;
+  recalled_count: number;
+  themes: FirstBoardDiscoveryTheme[];
+  candidates: FirstBoardDiscoveryCandidate[];
   generated_by: string;
-}
-
-export interface StrategyStatisticsResponse {
-  strategy: StrategyDefinition;
-  statistics: Record<string, unknown>;
-  generated_by: string;
+  source: string;
+  snapshot_created_at: string;
+  warnings: string[];
+  disclaimer: string;
 }
 
 export interface RecommendationFinancialReport {
@@ -470,7 +458,7 @@ export interface RecommendationFinancialReport {
 }
 
 export interface RecommendationIntelligenceItem {
-  strategy: "relay";
+  strategy: "discovery" | "relay";
   base_trade_date: string;
   symbol: string;
   name: string;
@@ -517,10 +505,13 @@ export interface RecommendationIntelligenceResponse {
   stage: "draft" | "final" | "missed_cutoff";
   target_trade_date: string | null;
   finalized_at: string | null;
+  discovery_pool_size: number;
+  discovery_display_limit: number;
   relay_pool_size: number;
   relay_display_limit: number;
   popularity_coverage_count: number;
   status: "complete" | "partial";
+  discovery_base_date: string | null;
   relay_base_date: string | null;
   items: RecommendationIntelligenceItem[];
   warnings: string[];
