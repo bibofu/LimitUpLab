@@ -1357,7 +1357,7 @@ td span {
   color: #b42318;
 }
 
-.review-date-selector {
+.review-date-cutoff {
   display: flex;
   align-items: center;
   justify-content: flex-end;
@@ -1367,18 +1367,15 @@ td span {
   font-weight: 700;
 }
 
-.review-date-selector select {
-  height: 34px;
-  padding: 0 30px 0 10px;
-  border: 1px solid #d0d5dd;
-  border-radius: 6px;
-  background: #ffffff;
+.review-date-cutoff time {
   color: #101828;
-  font: inherit;
+  font-size: 13px;
+  font-weight: 800;
 }
 
-.review-date-selector span {
+.review-date-cutoff em {
   color: #98a2b3;
+  font-style: normal;
   font-weight: 600;
 }
 
@@ -4919,7 +4916,7 @@ td span {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .review-date-selector {
+  .review-date-cutoff {
     align-items: flex-start;
     justify-content: flex-start;
     flex-wrap: wrap;

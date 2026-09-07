@@ -11,13 +11,11 @@ import { useEffect, useMemo, useState } from "react";
 import { Link } from "react-router-dom";
 
 import {
-  fetchDailyReviewSnapshots,
   fetchDragonTigerReview,
   fetchReviewAgentReport,
 } from "../api";
 import type {
   DailyBoardPromotionStat,
-  DailyReviewSnapshotSummary,
   DragonTigerReviewResponse,
   ReviewAgentPick,
   ReviewAgentReportResponse,
@@ -355,35 +353,10 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
   const [running, setRunning] = useState(false);
   const [error, setError] = useState<string | null>(null);
   const [activeReviewSelection, setActiveReviewSelection] = useState<string | null>(null);
-  const [snapshotDates, setSnapshotDates] = useState<DailyReviewSnapshotSummary[]>([]);
-  const [selectedAsOfDate, setSelectedAsOfDate] = useState(latestTradeDate);
 
   useEffect(() => {
-    let active = true;
-    void fetchDailyReviewSnapshots()
-      .then((response) => {
-        if (!active) return;
-        setSnapshotDates(response.snapshots);
-        const latestCompletedSnapshot = response.snapshots.find(
-          (item) => item.as_of_date < latestTradeDate,
-        ) ?? response.snapshots[0];
-        setSelectedAsOfDate((current) => (
-          current !== latestTradeDate && response.snapshots.some((item) => item.as_of_date === current)
-            ? current
-            : latestCompletedSnapshot?.as_of_date ?? latestTradeDate
-        ));
-      })
-      .catch(() => {
-        if (active) setSnapshotDates([]);
-      });
-    return () => {
-      active = false;
-    };
+    void loadReview(latestTradeDate);
   }, [latestTradeDate]);
-
-  useEffect(() => {
-    void loadReview(selectedAsOfDate);
-  }, [selectedAsOfDate]);
 
   async function loadReview(endDate: string) {
     setRunning(true);
@@ -481,23 +454,10 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
 
         {error ? <p className="review-agent-error">{error}</p> : null}
 
-        <div className="review-date-selector">
-          <label htmlFor="review-as-of-date">复盘截止日</label>
-          <select
-            id="review-as-of-date"
-            onChange={(event) => setSelectedAsOfDate(event.target.value)}
-            value={selectedAsOfDate}
-          >
-            {(snapshotDates.length > 0
-              ? snapshotDates
-              : [{ as_of_date: latestTradeDate } as DailyReviewSnapshotSummary]
-            ).map((item) => (
-              <option key={item.as_of_date} value={item.as_of_date}>
-                {item.as_of_date}
-              </option>
-            ))}
-          </select>
-          <span>{snapshotDates.length > 0 ? "已固化复盘" : "当前动态复盘"}</span>
+        <div className="review-date-cutoff">
+          <span>复盘截止日</span>
+          <time dateTime={latestTradeDate}>{latestTradeDate}</time>
+          <em>最新交易日</em>
         </div>
 
         {running && !report ? (
