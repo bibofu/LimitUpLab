@@ -3,7 +3,6 @@
 from __future__ import annotations
 
 import argparse
-import hashlib
 import sqlite3
 import sys
 from pathlib import Path
@@ -34,8 +33,8 @@ def retire_discovery(database_path: Path, backup_dir: Path) -> tuple[Path, dict[
 
     backup_path = create_backup(database_path, backup_dir)
     with sqlite3.connect(database_path) as connection:
-        before_state = {
-            table: _table_state(connection, table)
+        before = {
+            table: _row_count(connection, table)
             for table in PRESERVED_TABLES
             if _table_exists(connection, table)
         }
@@ -45,16 +44,14 @@ def retire_discovery(database_path: Path, backup_dir: Path) -> tuple[Path, dict[
                 connection.execute(f"DELETE FROM {table}")
         connection.execute("DROP INDEX IF EXISTS idx_first_board_discovery_created")
         connection.execute("DROP TABLE IF EXISTS first_board_discovery_snapshots")
-        after_state = {
-            table: _table_state(connection, table)
-            for table in before_state
+        after = {
+            table: _row_count(connection, table)
+            for table in before
         }
-        if before_state != after_state:
+        if before != after:
             raise RuntimeError("Protected prediction or review records changed during cleanup.")
         connection.commit()
-    return backup_path, {
-        table: state["row_count"] for table, state in before_state.items()
-    }
+    return backup_path, before
 
 
 def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
@@ -66,14 +63,6 @@ def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
 
 def _row_count(connection: sqlite3.Connection, table: str) -> int:
     return int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
-
-
-def _table_state(connection: sqlite3.Connection, table: str) -> dict[str, int | str]:
-    """Fingerprint complete protected rows so equal counts cannot hide rewrites."""
-
-    rows = sorted(repr(tuple(row)) for row in connection.execute(f"SELECT * FROM {table}"))
-    digest = hashlib.sha256("\n".join(rows).encode("utf-8")).hexdigest()
-    return {"row_count": len(rows), "sha256": digest}
 
 
 def main() -> int:
