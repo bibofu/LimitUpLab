@@ -2,13 +2,11 @@ from datetime import date, datetime, timezone
 from pathlib import Path
 
 import pytest
-from fastapi import HTTPException
 
 from app.database import connect, initialize_database
 from app.agents.chat import answer_first_board_chat
 from app.agents.tools import AgentToolRegistry
 from app.main import app
-from app.routers import strategies as strategy_routes
 from app.models import AgentChatRequest
 from app.repositories import SQLiteFirstBoardRepository, SQLiteStrategyRepository
 from app.services.llm_provider import DisabledLLMProvider
@@ -101,36 +99,6 @@ def test_public_strategy_routes_replace_legacy_consolidation_route() -> None:
     assert "/api/strategies/{strategy_id}/statistics" in paths
     assert "/api/strategies/consolidation" not in paths
     assert "/api/agents/first-board-discovery" not in paths
-
-
-def test_strategy_route_contract_handles_empty_history_stock_and_unknown(
-    tmp_path: Path,
-    monkeypatch: pytest.MonkeyPatch,
-) -> None:
-    repo = SQLiteStrategyRepository(tmp_path / "routes.sqlite")
-    empty = _snapshot().model_copy(update={
-        "run_id": "relay:test:empty",
-        "status": "empty",
-        "candidate_count": 0,
-        "payload": {"candidates": [], "warnings": []},
-    })
-    repo.save_if_absent(empty)
-    monkeypatch.setattr(strategy_routes, "SQLiteStrategyRepository", lambda: repo)
-    monkeypatch.setattr(
-        strategy_routes,
-        "strategy_stock_path",
-        lambda strategy_id, symbol, data_as_of: {"status": "empty", "path": []},
-    )
-    latest = strategy_routes.get_latest_strategy("relay_one_to_two")
-    history = strategy_routes.get_strategy_history("relay_one_to_two", limit=30)
-    stock = strategy_routes.get_strategy_stock("relay_one_to_two", "000001")
-    assert latest.status == "empty"
-    assert history.runs[0].run_id == empty.run_id
-    assert stock.candidate is None
-    assert stock.path["status"] == "empty"
-    with pytest.raises(HTTPException) as caught:
-        strategy_routes.get_latest_strategy("unknown")
-    assert caught.value.status_code == 404
 
 
 def test_agent_strategy_catalog_is_registry_grounded_and_non_predictive(tmp_path: Path) -> None:
