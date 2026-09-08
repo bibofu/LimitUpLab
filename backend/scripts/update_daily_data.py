@@ -47,6 +47,8 @@ from app.services.outcome_completeness import build_top10_outcome_completeness
 from app.services.limit_up_reason import merge_limit_up_reasons
 from app.services.relay_universe import is_relay_candidate_symbol
 from app.services.stock_kline import load_stock_intraday_bars
+from app.services.daily_bar_source import daily_bar_source_family
+from app.post_limit_query_contract import PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS
 
 
 PostBarCollector = Callable[[str, date, date], list[StockDailyBar]]
@@ -436,6 +438,7 @@ def run_daily_update(
             repository=first_board_repo,
             as_of_date=trade_date,
             max_kline_fetches=max_post_limit_kline_fetches,
+            spot_bar_collector=active_spot_collector,
         )
         report.post_limit_cache_targets = int(post_limit_backfill["target_count"])
         report.post_limit_cache_ready = int(post_limit_backfill["ready_count"])
@@ -824,11 +827,12 @@ def backfill_recent_post_limit_bars(
     as_of_date: date,
     max_kline_fetches: int = 120,
     history_collector: Callable[..., list] = collect_stock_kline,
+    spot_bar_collector: SpotBarCollector | None = None,
 ) -> dict[str, object]:
     """Fill the 20-session local cache for every recent supported limit-up stock."""
 
     trade_dates = sorted({event.trade_date for event in events if event.trade_date <= as_of_date})
-    recent_dates = set(trade_dates[-5:])
+    recent_dates = set(trade_dates[-PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS:])
     targets = sorted({
         event.symbol
         for event in events
@@ -839,6 +843,34 @@ def backfill_recent_post_limit_bars(
         and "退" not in event.name
     })
     expected_dates = set(trade_dates[-20:])
+    spot_count = 0
+    spot_warnings: list[str] = []
+    if spot_bar_collector is not None and targets:
+        for offset in range(0, len(targets), 60):
+            batch = targets[offset:offset + 60]
+            try:
+                spot_bars = spot_bar_collector(batch, as_of_date)
+                normalized_spot_bars = [
+                    StockDailyBar(
+                        symbol=symbol,
+                        trade_date=bar.trade_date,
+                        open=bar.open,
+                        high=bar.high,
+                        low=bar.low,
+                        close=bar.close,
+                        volume=bar.volume,
+                        amount=0,
+                        change_pct=None,
+                        source="tencent.qt.gtimg.cn",
+                        created_at=datetime.now(timezone.utc),
+                    )
+                    for symbol, bar in spot_bars.items()
+                    if symbol in batch and bar.trade_date == as_of_date
+                ]
+                repository.upsert_daily_bars(normalized_spot_bars)
+                spot_count += len(normalized_spot_bars)
+            except Exception as error:  # noqa: BLE001
+                spot_warnings.append(f"Latest post-limit spot K-line batch: {error}")
     cached_rows = repository.list_daily_bars_for_symbols(targets, end_date=as_of_date)
     cached_by_symbol: dict[str, dict[date, str]] = {}
     for bar in cached_rows:
@@ -850,7 +882,9 @@ def backfill_recent_post_limit_bars(
     for symbol in targets:
         cached = cached_by_symbol.get(symbol, {})
         cached_dates = set(cached)
-        cached_sources = {cached[item] for item in expected_dates if item in cached}
+        cached_sources = {
+            daily_bar_source_family(cached[item]) for item in expected_dates if item in cached
+        }
         if (
             len(expected_dates) >= 20
             and expected_dates <= cached_dates
@@ -890,7 +924,8 @@ def backfill_recent_post_limit_bars(
                 if bar.trade_date <= as_of_date
             }
             refreshed_sources = {
-                refreshed[item] for item in expected_dates if item in refreshed
+                daily_bar_source_family(refreshed[item])
+                for item in expected_dates if item in refreshed
             }
             if (
                 len(expected_dates) >= 20
@@ -903,7 +938,7 @@ def backfill_recent_post_limit_bars(
                 failures.append(symbol)
         except Exception:  # noqa: BLE001
             failures.append(symbol)
-    warnings = []
+    warnings = list(spot_warnings)
     if failures:
         warnings.append(
             f"Post-limit 20-day K-line cache is incomplete for {len(failures)}/{len(targets)} stocks."
@@ -913,7 +948,7 @@ def backfill_recent_post_limit_bars(
         "ready_count": ready,
         "missing_count": len(failures),
         "fetch_count": fetches,
-        "bar_count": bar_count,
+        "bar_count": bar_count + spot_count,
         "coverage_ratio": round(ready / len(targets), 4) if targets else 1.0,
         "warnings": warnings,
     }

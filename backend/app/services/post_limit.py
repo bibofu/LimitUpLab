@@ -13,9 +13,10 @@ from zoneinfo import ZoneInfo
 
 from app.post_limit_query_contract import PostLimitQueryContract, PostLimitShape
 from app.repositories.post_limit_repository import PostLimitDataset
+from app.services.daily_bar_source import daily_bar_source_family
 
 
-POST_LIMIT_RULE_VERSION = "post_limit_research_v2"
+POST_LIMIT_RULE_VERSION = "post_limit_research_v3"
 MAIN_BOARD_PREFIXES = ("000", "001", "002", "003", "600", "601", "603", "605")
 SHAPE_LABELS: dict[PostLimitShape, str] = {
     "high_drawdown": "高位大幅回撤",
@@ -368,7 +369,7 @@ def build_post_limit_metrics(
         return None, "anchor_price_mismatch"
     if not all(_valid_volume(bar) for bar in window):
         return None, "invalid_volume"
-    sources = {bar.get("source") for bar in window}
+    sources = {daily_bar_source_family(bar.get("source")) for bar in window}
     if len(sources) != 1 or not next(iter(sources)):
         return None, "mixed_or_missing_source"
 

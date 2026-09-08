@@ -233,6 +233,23 @@ class DailyCloseLoopTest(unittest.TestCase):
         self.assertTrue(self.alert_path.exists())
         self.assertIn("lack available bars", execution.run.error_message)
 
+    def test_incomplete_observation_cache_writes_partial_alert(self) -> None:
+        target_date = date(2026, 8, 21)
+
+        def incomplete_observation_update(**_kwargs) -> DailyUpdateReport:
+            report = self._complete_report(target_date, live_count=10)
+            report.post_limit_cache_missing = 3
+            return report
+
+        execution = self._execute(
+            requested_date=target_date,
+            now=datetime(2026, 8, 21, 16, 10, tzinfo=CN_TZ),
+            update_runner=incomplete_observation_update,
+        )
+
+        self.assertEqual(execution.status, "partial")
+        self.assertIn("post-limit observation stocks", execution.run.error_message)
+
     def test_incomplete_outcome_maturity_writes_partial_alert(self) -> None:
         target_date = date(2026, 8, 21)
 

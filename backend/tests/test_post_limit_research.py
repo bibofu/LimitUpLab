@@ -181,7 +181,7 @@ def test_disabled_llm_still_returns_grounded_post_limit_screen(monkeypatch):
     payload = {
         "data_as_of": "2026-09-07",
         "latest_data_date": "2026-09-07",
-        "rule_version": "post_limit_research_v2",
+        "rule_version": "post_limit_research_v3",
         "shapes": ["high_drawdown"],
         "shape_labels": {"high_drawdown": "高位大幅回撤"},
         "rules": {"high_drawdown": "峰值回撤不低于10%"},
@@ -222,7 +222,7 @@ def test_disabled_llm_still_returns_grounded_post_limit_screen(monkeypatch):
 def test_wrong_planner_tool_is_replaced_by_only_post_limit_screen(monkeypatch):
     payload = {
         "data_as_of": "2026-09-07", "latest_data_date": "2026-09-07",
-        "rule_version": "post_limit_research_v2", "shapes": ["high_drawdown"],
+        "rule_version": "post_limit_research_v3", "shapes": ["high_drawdown"],
         "shape_labels": {"high_drawdown": "高位大幅回撤"}, "rules": {},
         "pool_count": 1, "evaluable_count": 1, "coverage_ratio": 1,
         "matched_count": 0, "candidates": [], "data_missing": [], "warnings": [],
@@ -265,7 +265,7 @@ def test_pronoun_followup_reuses_previous_symbol_and_anchor(monkeypatch):
     captured = {}
     payload = {
         "data_as_of": "2026-09-07", "latest_data_date": "2026-09-07",
-        "rule_version": "post_limit_research_v2", "symbol": "600001", "name": "回撤样本",
+        "rule_version": "post_limit_research_v3", "symbol": "600001", "name": "回撤样本",
         "anchor": {"anchor_date": "2026-09-01"}, "metrics": {}, "matched_shapes": ["high_drawdown"],
         "path": [{
             "trade_date": "2026-09-01", "day": "T+0", "close": 11,

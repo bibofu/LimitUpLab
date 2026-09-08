@@ -444,6 +444,10 @@ def _incomplete_reasons(
         reasons.append(
             f"{report.tracked_cache_missing} tracked Top10 candidates still lack available bars"
         )
+    if report.post_limit_cache_missing > 0:
+        reasons.append(
+            f"{report.post_limit_cache_missing} post-limit observation stocks still lack complete bars"
+        )
     if (
         report.tracked_next_day_outcomes_ready
         < report.tracked_next_day_outcomes_expected

@@ -18,7 +18,7 @@ RULES = [
     "最近 7 个交易日有收盘涨停，以最近一次为锚点；整理 2–4 个交易日。",
     "涨停后最高价 ÷ 最低价 − 1 ≤ 8%。",
     "最新收盘相对涨停日收盘在 −10% 至 +8% 之间。",
-    "整理期日均成交量 ÷ 涨停日成交量 ≤ 0.75，且量价来源标签一致。",
+    "整理期日均成交量 ÷ 涨停日成交量 ≤ 0.75，且量价来自同一底层行情源。",
     "连续 20 个市场交易日量价历史中的 OHLC 完整，剔除明显价格断点及锚点不一致。",
 ]
 WARNINGS = [
@@ -32,7 +32,7 @@ DRAWDOWN_RULES = [
     "最近 7 个交易日有收盘涨停，以最近一次为锚点；涨停后经过 1–4 个交易日。",
     "参考高点为涨停日至截止日前一交易日的最高价；同价高点取最近日期。",
     "最新收盘较参考高点回撤至少 10%（含边界）；不要求缩量或窄幅整理。",
-    "成交量须有效、来源标签一致，沿用连续 20 日 OHLC 与价格断点检查。",
+    "成交量须有效、量价来自同一底层行情源，沿用连续 20 日 OHLC 与价格断点检查。",
     "10% 是观察分类阈值；高位仅指本次涨停后的局部高点，不代表长期估值位置。",
 ]
 
@@ -40,7 +40,7 @@ DRAWDOWN_RULES = [
 def observation_pool(now: datetime, strategy: ObservationStrategy, **kwargs) -> ConsolidationPool:
     return ConsolidationPool(
         generated_at=now, strategy=strategy,
-        strategy_version="drawdown_research_v0.2" if strategy == "drawdown" else "consolidation_research_v0.3",
+        strategy_version="drawdown_research_v0.3" if strategy == "drawdown" else "consolidation_research_v0.4",
         rules=DRAWDOWN_RULES if strategy == "drawdown" else RULES,
         warnings=WARNINGS, **kwargs,
     )

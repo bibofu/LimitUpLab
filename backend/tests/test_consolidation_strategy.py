@@ -89,6 +89,17 @@ def test_failed_conditions_never_become_candidates(change, reason):
         assert result.evaluated_stocks == []
 
 
+def test_tencent_history_and_close_snapshot_are_one_source_family():
+    events, bars, dates, end, now = fixture()
+    for bar in bars:
+        bar["source"] = "akshare.stock_zh_a_hist_tx"
+    bars[-1]["source"] = "tencent.qt.gtimg.cn"
+    result = screen_consolidation(events, bars, dates, end, now)
+    assert result.status == "ready"
+    assert result.candidates
+    assert "mixed_or_missing_source" not in result.exclusions
+
+
 def test_evaluable_rejections_keep_facts_and_all_failed_conditions():
     events, bars, dates, end, now = fixture()
     for bar in bars[25:]:
@@ -215,7 +226,7 @@ def test_drawdown_threshold_includes_boundary_without_volume_filter(drawdown, ac
     for bar in bars[25:]:
         bar.update(open=close, high=close, low=close, close=close, volume=1500.)
     result = screen_consolidation(events, bars, dates, end, now, "drawdown")
-    assert result.strategy_version == "drawdown_research_v0.2"
+    assert result.strategy_version == "drawdown_research_v0.3"
     assert result.evaluated_count == 1
     assert bool(result.candidates) == accepted
     stock = result.evaluated_stocks[0]

@@ -405,6 +405,67 @@ class DailyUpdatePipelineTest(unittest.TestCase):
         finally:
             self._cleanup_database(database_path)
 
+    def test_post_limit_cache_uses_seven_days_and_same_provider_close_snapshot(self) -> None:
+        database_path = self._database_path()
+        try:
+            repository = SQLiteFirstBoardRepository(database_path=database_path)
+            trade_dates = []
+            item_date = date(2026, 7, 1)
+            while len(trade_dates) < 20:
+                if item_date.weekday() < 5:
+                    trade_dates.append(item_date)
+                item_date = date.fromordinal(item_date.toordinal() + 1)
+            events = [self._make_event("999999", "calendar", day) for day in trade_dates]
+            symbols = [f"6000{index:02d}" for index in range(7)]
+            events.extend(
+                self._make_event(symbol, "research", event_date)
+                for symbol, event_date in zip(symbols, trade_dates[-7:], strict=True)
+            )
+            spot_batches: list[list[str]] = []
+
+            def history_collector(_symbol, *, days, end_date):
+                self.assertEqual(days, 35)
+                self.assertEqual(end_date, trade_dates[-1])
+                return [
+                    StockKLineBar(
+                        trade_date=day, open=10, high=10.5, low=9.8,
+                        close=10.2, volume=1_000_000,
+                    )
+                    for day in trade_dates[:-1]
+                ]
+
+            def spot_collector(batch, requested_date):
+                spot_batches.append(batch)
+                self.assertEqual(requested_date, trade_dates[-1])
+                return {
+                    symbol: StockKLineBar(
+                        trade_date=requested_date, open=10.1, high=10.6,
+                        low=10, close=10.3, volume=900_000,
+                    )
+                    for symbol in batch
+                }
+
+            result = backfill_recent_post_limit_bars(
+                events=events, repository=repository, as_of_date=trade_dates[-1],
+                max_kline_fetches=7, history_collector=history_collector,
+                spot_bar_collector=spot_collector,
+            )
+
+            self.assertEqual(result["target_count"], 7)
+            self.assertEqual(result["ready_count"], 7)
+            self.assertEqual(result["missing_count"], 0)
+            self.assertEqual(spot_batches, [symbols])
+            sources = {
+                bar.source
+                for bar in repository.list_daily_bars(symbols[0])
+            }
+            self.assertEqual(
+                sources,
+                {"akshare.stock_zh_a_hist_tx", "tencent.qt.gtimg.cn"},
+            )
+        finally:
+            self._cleanup_database(database_path)
+
     def test_recent_daily_top_picks_cache_all_available_follow_up_bars(self) -> None:
         database_path = self._database_path()
         try:
