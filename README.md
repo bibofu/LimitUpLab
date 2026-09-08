@@ -692,7 +692,7 @@ npm.cmd run build
 - Query Contract v2 已覆盖涨停事件主链路，但其他工具仍需要逐步补齐同等级的结构化契约和更大规模真实 LLM Eval。
 - 个股资讯已接入东方财富结构化搜索并持久化缓存；正式公告原文仍需补充交易所或巨潮资讯专用数据源。
 - 当前限流适用于单 Uvicorn 进程；异步 Worker、跨实例 Redis 限流和上游 LLM 主动取消尚未完成。
-- 用户系统、PostgreSQL、Redis、CI/CD 和多实例部署尚未完成；当前 Docker 配置适用于单机公开 Demo。
+- 用户系统、PostgreSQL、Redis 和多实例部署尚未完成；当前 Docker 配置适用于单机公开 Demo。标签触发的自动验证、备份与部署见 [自动部署说明](deploy/Tag_Deployment.md)。
 
 ## Roadmap
 

@@ -93,6 +93,10 @@ sudo certbot renew --dry-run
 
 ## 4. 安装每日收盘任务
 
+采用自动部署时，先按 [标签自动部署说明](Tag_Deployment.md) 安装
+`/usr/local/lib/limituplab/release.py`、`job.py` 和共享锁；下列 cron
+文件通过该入口执行，避免日更、备份与部署同时切换版本。
+
 ```bash
 sudo cp deploy/cron/limituplab-daily /etc/cron.d/limituplab-daily
 sudo cp deploy/cron/limituplab-backup /etc/cron.d/limituplab-backup
@@ -116,6 +120,10 @@ docker compose --env-file .env.production logs --tail=100 backend frontend
 ```
 
 ## 5. 更新、备份与回滚
+
+推荐使用 [标签自动部署流程](Tag_Deployment.md)：推送新的 `vX.Y.Z` 标签，
+Windows / Ubuntu 验证全部通过后自动备份并上线。下面的手动更新命令仅适用于
+尚未启用自动部署的旧安装；启用后不要绕开共享锁直接更新容器。
 
 更新代码：
 
