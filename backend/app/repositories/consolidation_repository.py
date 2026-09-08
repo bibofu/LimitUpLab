@@ -5,8 +5,8 @@ import sqlite3
 
 from app.consolidation_models import ConsolidationPool, ObservationStrategy
 from app.database import get_database_path
+from app.post_limit_query_contract import PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS
 from app.services.consolidation import (
-    RECENT_LIMIT_UP_TRADING_DAYS,
     completed_date_limit,
     observation_pool,
     screen_consolidation,
@@ -41,7 +41,7 @@ def load_consolidation_pool(as_of: date | None, now: datetime,
             e["symbol"]
             for e in events
             if e["closed_limit"]
-            and e["trade_date"] in dates[-RECENT_LIMIT_UP_TRADING_DAYS:]
+            and e["trade_date"] in dates[-PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS:]
         })
         bars = []
         # SQLite builds may limit bind variables; keep batches below that limit.

@@ -7,7 +7,9 @@ from dataclasses import asdict, dataclass
 from datetime import date
 from typing import Any, Literal
 
-POST_LIMIT_QUERY_VERSION = "post-limit-query-v1"
+POST_LIMIT_QUERY_VERSION = "post-limit-query-v2"
+DEFAULT_RECENT_LIMIT_DAYS = 5
+PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS = 7
 PostLimitMode = Literal["screen", "path", "statistics"]
 PostLimitShape = Literal[
     "high_drawdown",
@@ -37,6 +39,17 @@ SHAPE_ALIASES: tuple[tuple[PostLimitShape, tuple[str, ...]], ...] = (
         ),
     ),
 )
+PREMARKET_OBSERVATION_SHAPES = frozenset(
+    {"high_drawdown", "volume_consolidation"}
+)
+
+
+def default_recent_limit_days(shapes: tuple[str, ...], mode: str = "screen") -> int:
+    return (
+        PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS
+        if mode != "path" and PREMARKET_OBSERVATION_SHAPES.intersection(shapes)
+        else DEFAULT_RECENT_LIMIT_DAYS
+    )
 
 
 @dataclass(frozen=True)
@@ -49,7 +62,7 @@ class PostLimitQueryContract:
     shapes: tuple[PostLimitShape, ...] = ()
     data_as_of: date | None = None
     anchor_date: date | None = None
-    recent_limit_days: int = 5
+    recent_limit_days: int = 0  # Internal sentinel, resolved before serialization.
     statistics_days: int = 7
     symbol: str | None = None
     query: str | None = None
@@ -64,6 +77,12 @@ class PostLimitQueryContract:
     sort_order: Literal["asc", "desc"] = "desc"
     limit: int = 10
     exhaustive: bool = False
+
+    def __post_init__(self) -> None:
+        if self.recent_limit_days == 0:
+            object.__setattr__(self, "recent_limit_days", default_recent_limit_days(
+                self.shapes or (self.shape,), self.mode
+            ))
 
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
@@ -158,6 +177,13 @@ def build_post_limit_query_contract(
     explicit_group_by = _extract_group_by(message)
     explicit_sort_by = _extract_sort_by(message)
     explicit_sort_order = _extract_sort_order(message)
+    selected_shapes = shapes or (shape,)
+    default_window = default_recent_limit_days(selected_shapes, mode)
+    recent_limit_days = (
+        _bounded_int(recent_days, default_window, 1, 20)
+        if recent_days is not None
+        else default_window
+    )
 
     peak_drawdown = _extract_percent_after(
         message, ("高位回撤", "高点回撤", "大幅回撤", "回撤"), ("以上", "至少", "不低于")
@@ -171,7 +197,7 @@ def build_post_limit_query_contract(
         shapes=shapes,
         data_as_of=data_as_of,
         anchor_date=anchor_date,
-        recent_limit_days=_bounded_int(recent_days or planner.get("recent_limit_days"), 5, 1, 20),
+        recent_limit_days=recent_limit_days,
         statistics_days=_bounded_int(statistics_days or planner.get("statistics_days"), 7, 1, 30),
         symbol=_text(planner.get("symbol")),
         query=explicit_query or _text(planner.get("query")),
@@ -243,6 +269,12 @@ def _mode(value: object) -> PostLimitMode | None:
 
 def _extract_recent_days(message: str, *, statistics: bool) -> int | None:
     compact = re.sub(r"\s+", "", message.lower())
+    # In statistics questions, distinguish the event lookback from signal days.
+    event_window = re.search(r"(?:回看|近)(\d{1,2})个?(?:交易日|日)(?:内)?(?:有|的)?(?:收盘)?涨停", compact)
+    if event_window:
+        if not statistics:
+            return int(event_window.group(1))
+        compact = compact[:event_window.start()] + compact[event_window.end():]
     match = re.search(r"近(\d{1,2})个?(?:信号)?(?:交易日|日)", compact)
     if not match:
         return None

@@ -564,7 +564,12 @@ TOOL_SCHEMAS = [
                 "shape": {"type": "string", "enum": ["high_drawdown", "volume_consolidation", "pullback_stabilizing", "strong_nonconsecutive", "broken_board_repair", "second_to_third"]},
                 "shapes": {"type": "array", "items": {"type": "string", "enum": ["high_drawdown", "volume_consolidation", "pullback_stabilizing", "strong_nonconsecutive", "broken_board_repair", "second_to_third"]}},
                 "data_as_of": {"type": ["string", "null"]},
-                "recent_limit_days": {"type": "integer", "minimum": 1, "maximum": 20},
+                "recent_limit_days": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "description": "Explicit user-requested event lookback; high-drawdown and volume-consolidation default to 7 trading days.",
+                },
                 "min_peak_drawdown_pct": {"type": ["number", "null"]},
                 "max_volume_ratio": {"type": ["number", "null"]},
                 "max_range_pct": {"type": ["number", "null"]},

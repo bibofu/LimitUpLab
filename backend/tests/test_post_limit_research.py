@@ -1,5 +1,6 @@
 from datetime import date, datetime, timedelta, timezone
 import json
+import pytest
 
 from app.post_limit_query_contract import (
     PostLimitQueryContract,
@@ -105,6 +106,36 @@ def test_query_contract_routes_shapes_and_user_numeric_overrides():
     assert anchored_path.data_as_of == date(2026, 9, 7)
 
 
+def test_premarket_observation_shapes_default_to_seven_event_days():
+    high_drawdown = build_post_limit_query_contract(
+        "有哪些涨停后从高位大幅回撤的票",
+        planner_arguments={"recent_limit_days": 5},
+    )
+    volume_consolidation = build_post_limit_query_contract("有哪些缩量整理的股票")
+    combined = build_post_limit_query_contract("筛选高位回撤和回撤企稳的股票")
+    other_shape = build_post_limit_query_contract(
+        "断板修复有哪些",
+        planner_arguments={"recent_limit_days": 5},
+    )
+    stock_path = build_post_limit_query_contract("600001涨停后的逐日走势")
+
+    assert high_drawdown.version == "post-limit-query-v2"
+    assert high_drawdown.recent_limit_days == 7
+    assert volume_consolidation.recent_limit_days == 7
+    assert combined.recent_limit_days == 7
+    assert other_shape.recent_limit_days == 5
+    assert stock_path.recent_limit_days == 5
+
+
+def test_explicit_event_window_overrides_seven_day_default():
+    contract = build_post_limit_query_contract(
+        "近10个交易日涨停后从高位回撤的股票",
+        planner_arguments={"recent_limit_days": 5},
+    )
+
+    assert contract.recent_limit_days == 10
+
+
 def test_policy_signal_prevents_generic_limit_up_and_kline_routing():
     screen = QuestionSignals.from_message("有哪些涨停后从高位大幅回撤的票")
     assert screen.post_limit_screen
@@ -150,7 +181,7 @@ def test_disabled_llm_still_returns_grounded_post_limit_screen(monkeypatch):
     payload = {
         "data_as_of": "2026-09-07",
         "latest_data_date": "2026-09-07",
-        "rule_version": "post-limit-rules-v1",
+        "rule_version": "post_limit_research_v2",
         "shapes": ["high_drawdown"],
         "shape_labels": {"high_drawdown": "高位大幅回撤"},
         "rules": {"high_drawdown": "峰值回撤不低于10%"},
@@ -166,6 +197,7 @@ def test_disabled_llm_still_returns_grounded_post_limit_screen(monkeypatch):
         }],
         "data_missing": ["missing_history20=10"],
         "warnings": [],
+        "query_contract": {"recent_limit_days": 7},
     }
 
     def fake_screen(self, contract):
@@ -184,12 +216,13 @@ def test_disabled_llm_still_returns_grounded_post_limit_screen(monkeypatch):
     assert "limit_up_events" not in response.tool_calls
     assert "回撤样本（600001）" in response.answer
     assert "覆盖率 50.0%" in response.answer
+    assert "回看最近7个交易日的收盘涨停" in response.answer
 
 
 def test_wrong_planner_tool_is_replaced_by_only_post_limit_screen(monkeypatch):
     payload = {
         "data_as_of": "2026-09-07", "latest_data_date": "2026-09-07",
-        "rule_version": "post_limit_research_v1", "shapes": ["high_drawdown"],
+        "rule_version": "post_limit_research_v2", "shapes": ["high_drawdown"],
         "shape_labels": {"high_drawdown": "高位大幅回撤"}, "rules": {},
         "pool_count": 1, "evaluable_count": 1, "coverage_ratio": 1,
         "matched_count": 0, "candidates": [], "data_missing": [], "warnings": [],
@@ -232,7 +265,7 @@ def test_pronoun_followup_reuses_previous_symbol_and_anchor(monkeypatch):
     captured = {}
     payload = {
         "data_as_of": "2026-09-07", "latest_data_date": "2026-09-07",
-        "rule_version": "post_limit_research_v1", "symbol": "600001", "name": "回撤样本",
+        "rule_version": "post_limit_research_v2", "symbol": "600001", "name": "回撤样本",
         "anchor": {"anchor_date": "2026-09-01"}, "metrics": {}, "matched_shapes": ["high_drawdown"],
         "path": [{
             "trade_date": "2026-09-01", "day": "T+0", "close": 11,
@@ -285,6 +318,71 @@ def test_screen_uses_peak_before_observation_day_and_preserves_overlap():
     assert item["peak_date"] == dataset.calendar[33]
     assert item["peak_drawdown_pct"] == 12.5
     assert item["matched_shapes"] == ["high_drawdown", "pullback_stabilizing"]
+
+
+@pytest.mark.parametrize("offset", [5, 6])
+def test_seven_day_agent_window_reports_a_sixth_day_event_gap(offset):
+    dataset = _dataset()
+    end = date.fromisoformat(dataset.calendar[35])
+    missing_day = dataset.calendar[35 - offset]
+    changed = PostLimitDataset(
+        [event for event in dataset.events if event["trade_date"] != missing_day],
+        dataset.bars,
+        dataset.calendar,
+        [day for day in dataset.event_dates if day != missing_day],
+        dataset.latest_data_date,
+    )
+    contract = build_post_limit_query_contract(
+        "有哪些涨停后从高位大幅回撤的票",
+        request_trade_date=end,
+    )
+
+    result = build_post_limit_screen(changed, contract)
+
+    assert result["query_contract"]["recent_limit_days"] == 7
+    assert result["status"] == "data_missing"
+    assert result["data_missing"] == ["recent_event_dates"]
+
+
+@pytest.mark.parametrize("shape", ["high_drawdown", "volume_consolidation"])
+def test_direct_contract_and_statistics_use_seven_days(shape):
+    contract = PostLimitQueryContract(shape=shape, mode="statistics")
+    assert contract.to_dict()["recent_limit_days"] == 7
+    assert PostLimitQueryContract(shape=shape, recent_limit_days=10).recent_limit_days == 10
+
+
+@pytest.mark.parametrize("message", ["回撤企稳有哪些", "强势不连板有哪些", "断板修复有哪些", "2进3有哪些"])
+def test_other_shapes_ignore_injected_seven_day_capability_default(message):
+    assert build_post_limit_query_contract(message, planner_arguments={"recent_limit_days": 7}).recent_limit_days == 5
+
+
+def test_statistics_separates_event_lookback_and_signal_day_count():
+    contract = build_post_limit_query_contract("统计近3个信号日、回看近10个交易日有收盘涨停的缩量整理历史表现")
+    assert contract.recent_limit_days == 10
+    assert contract.statistics_days == 3
+    assert build_post_limit_query_contract("比较近7日横盘缩量和回撤企稳的历史表现").recent_limit_days == 7
+
+
+def test_statistics_discloses_missing_event_windows():
+    dataset = _dataset()
+    missing_day = dataset.calendar[29]
+    dataset.events[:] = [e for e in dataset.events if e["trade_date"] != missing_day]
+    result = build_post_limit_statistics(dataset, PostLimitQueryContract(mode="statistics"))
+    assert "recent_event_dates" in result["data_missing"]
+    assert any(missing_day in warning for warning in result["warnings"])
+    assert not result["comparison_allowed"]
+    from app.agents.chat_templates import _template_post_limit_statistics
+    answer = _template_post_limit_statistics(result)
+    assert "事件回看窗口记录不完整" in answer
+    assert "recent_event_dates 0个" not in answer
+
+
+@pytest.mark.parametrize("days", [5, 7, 10])
+def test_answer_renders_actual_event_window(days):
+    from app.agents.chat_templates import _template_post_limit_screen, _template_post_limit_statistics
+    payload = {"query_contract": {"recent_limit_days": days}, "shapes": ["high_drawdown"]}
+    assert f"最近{days}个交易日" in _template_post_limit_screen(payload)
+    assert f"最近{days}个交易日" in _template_post_limit_statistics(payload)
 
 
 def test_repeated_limit_up_resets_anchor_and_future_bars_are_isolated():

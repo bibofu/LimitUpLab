@@ -13,6 +13,7 @@ from app.agents.tool_policy import (
     looks_like_first_board_position_question as _looks_like_first_board_position_question,
 )
 from app.models import AgentChatRequest
+from app.post_limit_query_contract import default_recent_limit_days
 
 
 IDEOGRAPHIC_COMMA = "\u3001"
@@ -720,7 +721,11 @@ def _template_post_limit_screen(payload: dict[str, Any]) -> str:
         f"（覆盖率 {float(payload.get('coverage_ratio') or 0):.1%}），符合 {payload.get('matched_count', 0)} 只。",
     ]
     contract = payload.get("query_contract") or {}
-    filters = [f"回看最近{contract.get('recent_limit_days', 5)}个交易日的收盘涨停"]
+    filters = [
+        "回看最近"
+        f"{contract.get('recent_limit_days', default_recent_limit_days(tuple(shapes)))}"
+        "个交易日的收盘涨停"
+    ]
     if contract.get("board_height"):
         filters.append(f"板高={contract['board_height']}")
     if contract.get("query"):
@@ -818,7 +823,9 @@ def _template_post_limit_statistics(payload: dict[str, Any]) -> str:
     ]
     contract = payload.get("query_contract") or {}
     lines.append(
-        f"筛选条件：每个信号日回看最近{contract.get('recent_limit_days', 5)}个交易日的收盘涨停"
+        "筛选条件：每个信号日回看最近"
+        f"{contract.get('recent_limit_days', default_recent_limit_days(tuple(payload.get('shapes') or [])))}"
+        "个交易日的收盘涨停"
         + (f"；板高={contract['board_height']}" if contract.get("board_height") else "")
         + (f"；名称/行业/题材包含“{contract['query']}”" if contract.get("query") else "")
         + "。"
@@ -851,12 +858,14 @@ def _template_post_limit_statistics(payload: dict[str, Any]) -> str:
     if payload.get("sample_quality") == "insufficient" or (
         len(payload.get("summaries") or []) > 1 and not payload.get("comparison_allowed")
     ):
-        lines.append("当前完整样本少于30个或不足5个信号日，只能作描述，不能据此判断形态优劣。")
+        lines.append("当前样本量或事件覆盖不足，只能作描述，不能据此判断形态优劣。")
     if payload.get("data_missing"):
         outcome_missing = payload.get("outcome_missing") or {}
         lines.append(
-            "结果缺口：" + "、".join(
-                f"{key} {outcome_missing.get(key, 0)}个"
+            "数据缺口：" + "、".join(
+                "事件回看窗口记录不完整" if key == "recent_event_dates"
+                else f"{key} {outcome_missing[key]}个" if key in outcome_missing
+                else key
                 for key in payload["data_missing"]
             ) + "。"
         )

@@ -15,7 +15,7 @@ from app.post_limit_query_contract import PostLimitQueryContract, PostLimitShape
 from app.repositories.post_limit_repository import PostLimitDataset
 
 
-POST_LIMIT_RULE_VERSION = "post_limit_research_v1"
+POST_LIMIT_RULE_VERSION = "post_limit_research_v2"
 MAIN_BOARD_PREFIXES = ("000", "001", "002", "003", "600", "601", "603", "605")
 SHAPE_LABELS: dict[PostLimitShape, str] = {
     "high_drawdown": "高位大幅回撤",
@@ -162,16 +162,22 @@ def build_post_limit_statistics(
     if end_text not in dataset.calendar:
         raise ValueError("所选日期没有完整的本地日K数据。")
     shapes = contract.shapes or (contract.shape,)
-    event_date_set = {day for day in dataset.event_dates if day <= end_text}
+    event_date_set = {event["trade_date"] for event in dataset.events if event["trade_date"] <= end_text}
     end_index = dataset.calendar.index(end_text)
     mature_dates = dataset.calendar[: max(0, end_index - 4)]
-    eligible_signal_dates = [
-        day for day in mature_dates
-        if day in event_date_set
-        and len([prior for prior in dataset.calendar[max(0, dataset.calendar.index(day)-4):dataset.calendar.index(day)+1] if prior in event_date_set]) == min(5, dataset.calendar.index(day)+1)
-    ]
+    eligible_signal_dates = []
+    missing_event_dates = set()
+    for index, day in enumerate(mature_dates):
+        window = dataset.calendar[max(0, index - contract.recent_limit_days + 1):index + 1]
+        missing = set(window) - event_date_set
+        if missing:
+            missing_event_dates.update(missing)
+        else:
+            eligible_signal_dates.append(day)
     if not eligible_signal_dates:
-        return _empty_result(contract, "data_missing", ["mature_signal_dates"])
+        return _empty_result(contract, "data_missing", [
+            "recent_event_dates" if missing_event_dates else "mature_signal_dates"
+        ], dataset=dataset, end=end)
 
     raw_signals: list[dict[str, Any]] = []
     for signal_day in eligible_signal_dates:
@@ -209,8 +215,8 @@ def build_post_limit_statistics(
     summaries = [_summarize_shape(shape, complete) for shape in shapes]
     groups = _group_statistics(complete, contract.group_by) if contract.group_by else []
     complete_dates = len({item["signal_date"] for item in complete})
-    quality = "sufficient" if complete_dates >= 5 and len(complete) >= 30 else "insufficient"
-    comparison_allowed = len(summaries) > 1 and all(
+    quality = "sufficient" if complete_dates >= 5 and len(complete) >= 30 and not missing_event_dates else "insufficient"
+    comparison_allowed = not missing_event_dates and len(summaries) > 1 and all(
         item.get("sample_quality") == "sufficient" for item in summaries
     )
     digest_payload = [
@@ -219,7 +225,7 @@ def build_post_limit_statistics(
     ]
     return {
         **_base_metadata(dataset, contract, end),
-        "status": "ready" if complete else "data_missing" if outcome_missing else "empty",
+        "status": "ready" if complete else "data_missing" if outcome_missing or missing_event_dates else "empty",
         "snapshot_kind": "recomputed_historical_research",
         "shapes": list(shapes),
         "shape_labels": {shape: SHAPE_LABELS[shape] for shape in shapes},
@@ -234,11 +240,12 @@ def build_post_limit_statistics(
         "summaries": summaries,
         "groups": groups,
         "outcome_missing": dict(sorted(outcome_missing.items())),
-        "data_missing": sorted(outcome_missing),
+        "data_missing": sorted({*outcome_missing, *(["recent_event_dates"] if missing_event_dates else [])}),
         "input_fingerprint": hashlib.sha256(
             json.dumps(digest_payload, ensure_ascii=True, separators=(",", ":")).encode()
         ).hexdigest(),
         "warnings": [
+            *(["事件覆盖不完整，以下日期缺失，统计仅包含已覆盖窗口：" + "、".join(sorted(missing_event_dates))] if missing_event_dates else []),
             "这是按当前本地数据重算的历史描述性研究，不是当时发布的预测。",
             "不同形态可能包含同一股票，样本数不能直接相加。",
             *( ["至少一个形态的完整样本少于30个或不足5个信号日，不据此判断形态优劣。"] if not comparison_allowed and len(shapes) > 1 else []),

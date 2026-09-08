@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from dataclasses import dataclass, field
 from typing import Any, Iterable
+from app.post_limit_query_contract import PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS
 
 
 @dataclass(frozen=True)
@@ -179,8 +180,13 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
     AgentCapability(
         "post_limit_screening",
         "筛选近期涨停后出现高位回撤、横盘缩量、回撤企稳、强势不连板、断板修复或2进3形态的股票。",
-        (CapabilityToolRequirement("post_limit_screen", {"shape": "high_drawdown"}),),
-        examples=("有哪些涨停后从高位大幅回撤的票", "近5日涨停后横盘缩量的股票", "断板修复有哪些"),
+        (
+            CapabilityToolRequirement(
+                "post_limit_screen",
+                {"shape": "high_drawdown", "recent_limit_days": PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS},
+            ),
+        ),
+        examples=("有哪些涨停后从高位大幅回撤的票", "近7日涨停后横盘缩量的股票", "断板修复有哪些"),
         answer_guidance=(
             "先写明收盘数据截止日、沪深主板范围、实际规则和回看窗口，再报告观察池、"
             "可评价数、覆盖率和匹配数。逐只列名称代码、涨停锚点、距锚点天数、峰值回撤、"
@@ -200,7 +206,7 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
     AgentCapability(
         "post_limit_statistics",
         "统计或比较涨停后形态的历史D+1、D+3、D+5路径、MAE、MFE和次日继续涨停比例。",
-        (CapabilityToolRequirement("post_limit_statistics", {"shapes": ["high_drawdown"], "statistics_days": 7}),),
+        (CapabilityToolRequirement("post_limit_statistics", {"shapes": ["high_drawdown"], "statistics_days": 7, "recent_limit_days": PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS}),),
         examples=("统计高位回撤历史表现", "横盘缩量和回撤企稳哪个历史样本更好", "按题材统计涨停后走势"),
         answer_guidance=(
             "明确这是按当前本地数据重算的历史描述性研究，以D+1开盘为共同基准。"

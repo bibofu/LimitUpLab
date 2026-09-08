@@ -5,6 +5,7 @@ import math
 from zoneinfo import ZoneInfo
 
 from app.consolidation_models import ConsolidationCandidate, ConsolidationEvaluation, ConsolidationPool, ObservationStrategy
+from app.post_limit_query_contract import PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS
 from app.services.post_limit import (
     build_post_limit_metrics,
     matches_high_drawdown,
@@ -12,7 +13,6 @@ from app.services.post_limit import (
 )
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
-RECENT_LIMIT_UP_TRADING_DAYS = 7
 RULES = [
     "沪深主板；按涨停事件名称排除 ST 与退市标记。",
     "最近 7 个交易日有收盘涨停，以最近一次为锚点；整理 2–4 个交易日。",
@@ -120,7 +120,7 @@ def screen_consolidation(events: list[dict], rows: list[dict], calendar: list[st
     if end not in dates or len(dates) < 20:
         result.data_missing = ["market_history20"]
         return result
-    recent_dates = set(dates[-RECENT_LIMIT_UP_TRADING_DAYS:])
+    recent_dates = set(dates[-PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS:])
     visible_events = [e for e in events if e["trade_date"] <= end]
     if recent_dates - {e["trade_date"] for e in visible_events}:
         result.data_missing = ["recent_event_dates"]
