@@ -5,7 +5,12 @@ import sqlite3
 
 from app.consolidation_models import ConsolidationPool, ObservationStrategy
 from app.database import get_database_path
-from app.services.consolidation import observation_pool, completed_date_limit, screen_consolidation
+from app.services.consolidation import (
+    RECENT_LIMIT_UP_TRADING_DAYS,
+    completed_date_limit,
+    observation_pool,
+    screen_consolidation,
+)
 
 
 def load_consolidation_pool(as_of: date | None, now: datetime,
@@ -32,7 +37,12 @@ def load_consolidation_pool(as_of: date | None, now: datetime,
             raise ValueError("所选日期没有本地日K数据。")
         events = [dict(r) for r in conn.execute(
             "SELECT symbol,name,trade_date,closed_limit FROM limit_up_events WHERE trade_date BETWEEN ? AND ?", (dates[0], end))]
-        symbols = sorted({e["symbol"] for e in events if e["closed_limit"] and e["trade_date"] in dates[-5:]})
+        symbols = sorted({
+            e["symbol"]
+            for e in events
+            if e["closed_limit"]
+            and e["trade_date"] in dates[-RECENT_LIMIT_UP_TRADING_DAYS:]
+        })
         bars = []
         # SQLite builds may limit bind variables; keep batches below that limit.
         for offset in range(0, len(symbols), 400):

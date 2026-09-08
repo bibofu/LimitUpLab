@@ -12,9 +12,10 @@ from app.services.post_limit import (
 )
 
 SHANGHAI = ZoneInfo("Asia/Shanghai")
+RECENT_LIMIT_UP_TRADING_DAYS = 7
 RULES = [
     "沪深主板；按涨停事件名称排除 ST 与退市标记。",
-    "最近 5 个交易日有收盘涨停，以最近一次为锚点；整理 2–4 个交易日。",
+    "最近 7 个交易日有收盘涨停，以最近一次为锚点；整理 2–4 个交易日。",
     "涨停后最高价 ÷ 最低价 − 1 ≤ 8%。",
     "最新收盘相对涨停日收盘在 −10% 至 +8% 之间。",
     "整理期日均成交量 ÷ 涨停日成交量 ≤ 0.75，且量价来源标签一致。",
@@ -28,7 +29,7 @@ WARNINGS = [
 ]
 DRAWDOWN_RULES = [
     RULES[0],
-    "最近 5 个交易日有收盘涨停，以最近一次为锚点；涨停后经过 1–4 个交易日。",
+    "最近 7 个交易日有收盘涨停，以最近一次为锚点；涨停后经过 1–4 个交易日。",
     "参考高点为涨停日至截止日前一交易日的最高价；同价高点取最近日期。",
     "最新收盘较参考高点回撤至少 10%（含边界）；不要求缩量或窄幅整理。",
     "成交量须有效、来源标签一致，沿用连续 20 日 OHLC 与价格断点检查。",
@@ -39,7 +40,7 @@ DRAWDOWN_RULES = [
 def observation_pool(now: datetime, strategy: ObservationStrategy, **kwargs) -> ConsolidationPool:
     return ConsolidationPool(
         generated_at=now, strategy=strategy,
-        strategy_version="drawdown_research_v0.1" if strategy == "drawdown" else "consolidation_research_v0.2",
+        strategy_version="drawdown_research_v0.2" if strategy == "drawdown" else "consolidation_research_v0.3",
         rules=DRAWDOWN_RULES if strategy == "drawdown" else RULES,
         warnings=WARNINGS, **kwargs,
     )
@@ -119,7 +120,7 @@ def screen_consolidation(events: list[dict], rows: list[dict], calendar: list[st
     if end not in dates or len(dates) < 20:
         result.data_missing = ["market_history20"]
         return result
-    recent_dates = set(dates[-5:])
+    recent_dates = set(dates[-RECENT_LIMIT_UP_TRADING_DAYS:])
     visible_events = [e for e in events if e["trade_date"] <= end]
     if recent_dates - {e["trade_date"] for e in visible_events}:
         result.data_missing = ["recent_event_dates"]

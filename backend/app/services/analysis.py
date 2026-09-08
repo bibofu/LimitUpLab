@@ -23,6 +23,8 @@ from app.models import (
     PostPerformanceStat,
 )
 
+RECENT_LIMIT_UP_TRADING_DAYS = 7
+
 
 def latest_trade_date(events: list[LimitUpEvent]) -> date:
     """Return the newest trading date available in a non-empty event list."""
@@ -144,7 +146,10 @@ def list_failed_events(events: list[LimitUpEvent]) -> list[LimitUpEvent]:
     )
 
 
-def list_recent_limit_up(events: list[LimitUpEvent], days: int = 5) -> list[LimitUpEvent]:
+def list_recent_limit_up(
+    events: list[LimitUpEvent],
+    days: int = RECENT_LIMIT_UP_TRADING_DAYS,
+) -> list[LimitUpEvent]:
     """Return events from the most recent N trading dates in reverse order."""
 
     trade_dates = sorted({event.trade_date for event in events}, reverse=True)[:days]

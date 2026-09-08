@@ -37,7 +37,7 @@ class ConsolidationCandidate(ConsolidationEvaluation):
 
 class ConsolidationPool(BaseModel):
     strategy: ObservationStrategy = "consolidation"
-    strategy_version: str = "consolidation_research_v0.2"
+    strategy_version: str = "consolidation_research_v0.3"
     generated_at: datetime
     data_as_of: date | None = None
     latest_data_date: date | None = None

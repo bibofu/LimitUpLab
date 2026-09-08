@@ -79,6 +79,30 @@ class AnalysisTest(unittest.TestCase):
         self.assertEqual(trade_dates, {date(2026, 5, 15), date(2026, 5, 14)})
         self.assertEqual(len(events), 5)
 
+    def test_recent_limit_up_defaults_to_seven_trading_days(self) -> None:
+        template = SAMPLE_EVENTS[0]
+        trade_dates = [
+            date(2026, 5, 6),
+            date(2026, 5, 7),
+            date(2026, 5, 8),
+            date(2026, 5, 11),
+            date(2026, 5, 12),
+            date(2026, 5, 13),
+            date(2026, 5, 14),
+            date(2026, 5, 15),
+        ]
+        events = [
+            template.model_copy(
+                update={"symbol": f"60000{index}", "trade_date": trade_date}
+            )
+            for index, trade_date in enumerate(trade_dates)
+        ]
+
+        recent = list_recent_limit_up(events)
+
+        self.assertEqual(len(recent), 7)
+        self.assertEqual({event.trade_date for event in recent}, set(trade_dates[-7:]))
+
     def test_continuation_stats(self) -> None:
         stats = {item.board_height: item for item in calculate_continuation(SAMPLE_EVENTS)}
 

@@ -69,7 +69,7 @@ const REASONS: Record<string, string> = {
   local_database: "本地行情库尚未就绪",
   daily_bars: "暂无已结束交易日的日K",
   market_history20: "市场交易日历史不足 20 日",
-  recent_event_dates: "近 5 个交易日的涨停事件记录不完整",
+  recent_event_dates: "近 7 个交易日的涨停事件记录不完整",
 };
 
 export function consolidationReason(key: string): string {

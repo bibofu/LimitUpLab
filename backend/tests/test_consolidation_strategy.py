@@ -144,10 +144,29 @@ def test_relative_close_band(change, accepted):
 
 def test_missing_event_date_blocks_anchor_inference():
     events, bars, dates, end, now = fixture()
-    events = [e for e in events if e["trade_date"] != dates[-1]]
+    events = [e for e in events if e["trade_date"] != dates[-6]]
     result = screen_consolidation(events, bars, dates, end, now)
     assert result.status == "data_missing"
     assert result.data_missing == ["recent_event_dates"]
+
+
+def test_recent_limit_up_anchor_window_includes_seven_trading_days():
+    events, bars, dates, end, now = fixture()
+    for event in events:
+        event["closed_limit"] = 0
+    events.append(
+        dict(
+            symbol="600001",
+            name="测试股份",
+            trade_date=dates[-6],
+            closed_limit=1,
+        )
+    )
+
+    result = screen_consolidation(events, bars, dates, end, now)
+
+    assert result.pool_count == 1
+    assert result.exclusions == {"age_outside_2_4": 1}
 
 
 def test_intraday_cutoff_and_timezone():
@@ -196,7 +215,7 @@ def test_drawdown_threshold_includes_boundary_without_volume_filter(drawdown, ac
     for bar in bars[25:]:
         bar.update(open=close, high=close, low=close, close=close, volume=1500.)
     result = screen_consolidation(events, bars, dates, end, now, "drawdown")
-    assert result.strategy_version == "drawdown_research_v0.1"
+    assert result.strategy_version == "drawdown_research_v0.2"
     assert result.evaluated_count == 1
     assert bool(result.candidates) == accepted
     stock = result.evaluated_stocks[0]

@@ -13,6 +13,7 @@ test("missing data is not presented as a fully observed empty market", () => {
   assert.match(consolidationEmptyMessage({ status: "empty" } as ConsolidationPool), /保持空池/);
   assert.equal(consolidationReason("mixed_or_missing_source"), "量价来源混用或缺失");
   assert.equal(consolidationReason("drawdown_below_10pct"), "较参考高点回撤不足 10%");
+  assert.equal(consolidationReason("recent_event_dates"), "近 7 个交易日的涨停事件记录不完整");
 });
 
 test("all three pre-market strategies are top-level URL modes", () => {

@@ -115,7 +115,7 @@ const viewMeta: Record<ViewKey, { title: string; eyebrow: string }> = {
   first: { title: "首板票", eyebrow: "First Board" },
   continued: { title: "连板票", eyebrow: "Continued Board" },
   failed: { title: "炸板票", eyebrow: "Failed Limit-Up" },
-  recent: { title: "近五日涨停票复盘", eyebrow: "Recent Limit-Up" },
+  recent: { title: "近七个交易日涨停票复盘", eyebrow: "Recent Limit-Up" },
 };
 
 const routeToView: Record<string, ViewKey> = {
@@ -180,7 +180,7 @@ export function App() {
         fetchFirstBoardEvents(),
         fetchContinuedBoardEvents(),
         fetchFailedLimitUpEvents(),
-        fetchRecentLimitUpEvents(5),
+        fetchRecentLimitUpEvents(7),
         fetchFirstBoardRatings(),
         fetchDailyBoardPromotion(5),
       ]);
@@ -1013,9 +1013,9 @@ function LimitUpPool({ data }: { data: DashboardData }) {
     },
     {
       to: "/stocks/recent-limit-up",
-      label: "近五日涨停票",
+      label: "近七个交易日涨停票",
       count: `${data.recent.length} 条`,
-      description: "按交易日回看最近五日涨停记录",
+      description: "按交易日回看最近七个交易日涨停记录",
       icon: <TrendingUp size={18} />,
     },
   ];

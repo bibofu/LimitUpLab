@@ -5,6 +5,7 @@ from fastapi import APIRouter
 from app.models import LimitUpEvent
 from app.repositories import get_limit_up_repository
 from app.services.analysis import (
+    RECENT_LIMIT_UP_TRADING_DAYS,
     list_continued_board,
     list_failed_events,
     list_first_board,
@@ -48,7 +49,9 @@ def list_failed_limit_up_events() -> list[LimitUpEvent]:
 
 
 @router.get("/recent", response_model=list[LimitUpEvent])
-def list_recent_limit_up_events(days: int = 5) -> list[LimitUpEvent]:
+def list_recent_limit_up_events(
+    days: int = RECENT_LIMIT_UP_TRADING_DAYS,
+) -> list[LimitUpEvent]:
     """Return events from the most recent N persisted trading days."""
 
     return list_recent_limit_up(get_limit_up_repository().list_events(), days=days)
