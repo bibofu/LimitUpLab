@@ -456,14 +456,6 @@ class ConceptHeat(BaseModel):
     failed_count: int
 
 
-class MarketCollectionStatus(BaseModel):
-    """Public collection stage, without internal reports or provider errors."""
-
-    trade_date: date | None = None
-    phase: Literal["preview", "final"] | None = None
-    status: Literal["running", "success", "partial", "error", "skipped"] | None = None
-
-
 class MarketSummary(BaseModel):
     """Objective dashboard facts for the latest persisted trading day."""
 

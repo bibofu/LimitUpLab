@@ -1,6 +1,5 @@
 """Offline release safety tests; no Docker, SSH or production data required."""
 from datetime import datetime
-from contextlib import nullcontext
 import importlib.util
 import json
 from pathlib import Path
@@ -16,31 +15,6 @@ spec = importlib.util.spec_from_file_location("deployment_release", ROOT / "depl
 release = importlib.util.module_from_spec(spec)
 sys.modules[spec.name] = release
 spec.loader.exec_module(release)
-
-
-@pytest.mark.parametrize("stage", ["daily-preview", "daily-update"])
-def test_daily_job_dispatches_both_stages_under_deployment_lock(stage, tmp_path, monkeypatch):
-    monkeypatch.setitem(sys.modules, "release", release)
-    job_spec = importlib.util.spec_from_file_location("deployment_job_test", ROOT / "deploy/job.py")
-    job = importlib.util.module_from_spec(job_spec)
-    job_spec.loader.exec_module(job)
-    lock = Mock(return_value=nullcontext())
-    run = Mock(return_value=Mock(returncode=0))
-    monkeypatch.setattr(job, "deployment_lock", lock)
-    monkeypatch.setattr(job, "MAINTENANCE", tmp_path / "maintenance")
-    monkeypatch.setattr(job.subprocess, "run", run)
-    monkeypatch.setattr(sys, "argv", ["job.py", stage])
-    assert job.main() == 0
-    lock.assert_called_once_with(timeout=7200)
-    command = run.call_args.args[0]
-    if stage == "daily-preview":
-        assert command[-2:] == ["--phase", "preview"]
-    else:
-        assert command[-1] == "daily-update"
-        assert '"--phase", "final"' in (ROOT / "docker-compose.yml").read_text(encoding="utf-8")
-    cron = (ROOT / "deploy/cron/limituplab-daily").read_text(encoding="utf-8")
-    assert "30 15 * * 1-5" in cron
-    assert "10 16 * * 1-5" in cron
 
 
 @pytest.mark.parametrize("command", ["", "bash", "deploy v1.3.1 HEAD", "deploy v1.3.1 " + "a" * 40 + ";id",

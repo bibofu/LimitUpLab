@@ -7,9 +7,6 @@ from release import MAINTENANCE, REPO, deployment_lock
 
 def main() -> int:
     commands = {
-        "daily-preview": ["docker", "compose", "--env-file", ".env.production", "--profile", "jobs",
-                          "run", "--rm", "daily-update", "python", "scripts/run_daily_close_loop.py",
-                          "--trigger", "scheduled", "--phase", "preview"],
         "daily-update": ["docker", "compose", "--env-file", ".env.production", "--profile", "jobs",
                          "run", "--rm", "daily-update"],
         "backup": ["docker", "run", "--rm", "-v", "limituplab-data:/app/data",
@@ -18,7 +15,7 @@ def main() -> int:
                    "--output-dir", "/backups", "--retain-count", "14"],
     }
     if len(sys.argv) != 2 or sys.argv[1] not in commands:
-        raise ValueError("Expected daily-preview, daily-update or backup")
+        raise ValueError("Expected daily-update or backup")
     with deployment_lock(timeout=7200):
         if MAINTENANCE.exists():
             raise RuntimeError("Maintenance active; job blocked until operator recovery")

@@ -14,9 +14,8 @@ from app.models import (
     FinanceNewsItem,
     FinanceNewsPage,
     MarketSummary,
-    MarketCollectionStatus,
 )
-from app.repositories import get_limit_up_repository, SQLiteDailyPipelineRepository
+from app.repositories import get_limit_up_repository
 from app.services.analysis import latest_trade_date, summarize_market
 from app.services.dragon_tiger_review import load_dragon_tiger_review
 from app.services.finance_news import collect_finance_news
@@ -199,20 +198,6 @@ def get_market_overview() -> MarketSummary:
     """Return the dashboard overview payload."""
 
     return _build_latest_market_summary()
-
-
-@router.get("/collection-status", response_model=MarketCollectionStatus)
-def get_market_collection_status() -> MarketCollectionStatus:
-    """Expose only the current public collection stage; detailed reports stay admin-only."""
-    runs = SQLiteDailyPipelineRepository().list_recent(limit=1)
-    if not runs:
-        return MarketCollectionStatus()
-    run = runs[0]
-    phase = (run.report or {}).get("phase", "final")
-    return MarketCollectionStatus(
-        trade_date=run.trade_date, phase=phase if phase in {"preview", "final"} else None,
-        status=run.status,
-    )
 
 
 def _build_latest_market_summary() -> MarketSummary:

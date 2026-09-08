@@ -60,7 +60,6 @@ import {
   fetchFailedLimitUpEvents,
   fetchFirstBoardEvents,
   fetchMarketSummary,
-  fetchDailyPipelineStatus,
   fetchRecentLimitUpEvents,
   fetchStockEvent,
   fetchStockIntradayHistory,
@@ -70,7 +69,6 @@ import {
 } from "./api";
 import type {
   DailyBoardPromotionStat,
-  MarketCollectionStatus,
   FirstBoardCriticResponse,
   FirstBoardRating,
   FirstBoardRatingsResponse,
@@ -95,7 +93,6 @@ import {
   premarketStrategyFromParam,
   type PremarketStrategy,
 } from "./consolidation";
-import { DAILY_COLLECTION_SCHEDULE, dailyPipelineNotice } from "./dailyPipeline";
 
 type ViewKey = "overview" | "recommendation" | "review" | "pool" | "first" | "continued" | "failed" | "recent";
 type StockListViewKey = "first" | "continued" | "failed";
@@ -108,7 +105,6 @@ interface DashboardData {
   recent: LimitUpEvent[];
   firstBoardRatings: FirstBoardRatingsResponse;
   dailyBoardPromotion: DailyBoardPromotionStat[];
-  pipeline: MarketCollectionStatus | null;
 }
 
 const viewMeta: Record<ViewKey, { title: string; eyebrow: string }> = {
@@ -179,7 +175,6 @@ export function App() {
         recent,
         firstBoardRatings,
         dailyBoardPromotion,
-        pipeline,
       ] = await Promise.all([
         fetchMarketSummary(),
         fetchFirstBoardEvents(),
@@ -188,7 +183,6 @@ export function App() {
         fetchRecentLimitUpEvents(7),
         fetchFirstBoardRatings(),
         fetchDailyBoardPromotion(5),
-        fetchDailyPipelineStatus().catch(() => null),
       ]);
 
       setData({
@@ -199,7 +193,6 @@ export function App() {
         recent,
         firstBoardRatings,
         dailyBoardPromotion,
-        pipeline,
       });
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "加载数据失败");
@@ -233,7 +226,6 @@ export function App() {
   const activeMeta = isStockDetail
     ? { title: "个股详情", eyebrow: "Stock Detail" }
     : viewMeta[activeView];
-  const pipelineNotice = dailyPipelineNotice(data.pipeline, data.summary.trade_date);
 
   return (
     <main className="app-shell">
@@ -265,7 +257,7 @@ export function App() {
         </nav>
 
         <div className="app-header-actions">
-          <div className="data-as-of" title={DAILY_COLLECTION_SCHEDULE}>
+          <div className="data-as-of">
             <i aria-hidden="true" />
             <span>
               <small>数据日期</small>
@@ -283,12 +275,6 @@ export function App() {
           </button>
         </div>
       </header>
-
-      {pipelineNotice ? (
-        <p className="consolidation-warning" role="status">
-          {pipelineNotice}
-        </p>
-      ) : null}
 
       {activeView !== "overview" || isStockDetail ? (
         <section className="topbar">

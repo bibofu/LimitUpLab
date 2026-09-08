@@ -11,7 +11,6 @@ from app.models import (
 )
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.analysis import latest_trade_date
-from app.post_limit_query_contract import PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS
 from app.services.outcome_completeness import build_top10_outcome_completeness
 
 
@@ -100,7 +99,7 @@ def build_agent_data_health(
     )
     if outcome_completeness.status in {"partial", "missing"}:
         warnings.extend(outcome_completeness.warnings)
-    recent_dates = sorted({event.trade_date for event in events if event.trade_date <= target_date})[-PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS:]
+    recent_dates = sorted({event.trade_date for event in events if event.trade_date <= target_date})[-5:]
     expected_dates = set(sorted({event.trade_date for event in events if event.trade_date <= target_date})[-20:])
     post_limit_symbols = sorted({
         event.symbol

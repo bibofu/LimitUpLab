@@ -3,7 +3,6 @@ import unittest
 from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import Mock
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -306,83 +305,8 @@ class DailyCloseLoopTest(unittest.TestCase):
             )
 
         self.assertEqual(execution.status, "skipped")
-        self.assertEqual(execution.exit_code, 75)
         self.assertIsNone(execution.run)
         self.assertIn("already running", execution.message)
-
-    def test_preview_and_final_are_independently_idempotent(self) -> None:
-        target_date = date(2026, 8, 21)
-        preview_report = DailyUpdateReport(
-            trade_date=target_date.isoformat(),
-            health={"raw_events_ready": True, "first_board_features_ready": True},
-        )
-        update = Mock(return_value=preview_report)
-        review = Mock()
-        arguments = dict(requested_date=target_date, phase="preview",
-                         now=datetime(2026, 8, 21, 15, 30, tzinfo=CN_TZ),
-                         update_runner=update, review_snapshot_builder=review)
-        preview = self._execute(**arguments)
-        self.assertEqual(preview.status, "success")
-        self.assertEqual(preview.run.report["phase"], "preview")
-        self.assertIsNone(preview.run.report["review_snapshot"])
-        review.assert_not_called()
-        self.assertTrue(update.call_args.kwargs["preview_only"])
-        self.assertFalse(update.call_args.kwargs["verify_inputs"])
-        self.assertFalse(update.call_args.kwargs["persist_live_prediction"])
-        self.assertEqual(self._execute(**arguments).status, "skipped")
-        update.assert_called_once()
-
-        final_update = Mock(return_value=self._complete_report(target_date, live_count=10))
-        final_arguments = dict(requested_date=target_date, phase="final",
-                               now=datetime(2026, 8, 21, 16, 10, tzinfo=CN_TZ),
-                               update_runner=final_update)
-        final = self._execute(**final_arguments)
-        self.assertEqual(final.status, "success")
-        self.assertNotEqual(final.run.run_id, preview.run.run_id)
-        self.assertTrue(final_update.call_args.kwargs["verify_inputs"])
-        self.assertFalse(final_update.call_args.kwargs["preview_only"])
-        self.assertIsNotNone(final.run.report["review_snapshot"])
-        self.assertEqual(self._execute(**final_arguments).status, "skipped")
-        final_update.assert_called_once()
-
-    def test_phase_time_gates_do_not_write_or_collect(self) -> None:
-        for phase, hour, minute in [("preview", 15, 29), ("preview", 16, 10), ("final", 15, 30)]:
-            with self.subTest(phase=phase, hour=hour, minute=minute):
-                update = Mock()
-                execution = self._execute(
-                    phase=phase, now=datetime(2026, 8, 21, hour, minute, tzinfo=CN_TZ),
-                    update_runner=update,
-                )
-                self.assertEqual(execution.status, "skipped")
-                update.assert_not_called()
-
-    def test_verification_failure_never_builds_review_snapshot(self) -> None:
-        target_date = date(2026, 8, 21)
-        report = self._complete_report(target_date, live_count=0)
-        report.verification_errors = ["limit-up source counts do not match"]
-        review = Mock()
-        execution = self._execute(
-            now=datetime(2026, 8, 21, 16, 10, tzinfo=CN_TZ),
-            update_runner=Mock(return_value=report), review_snapshot_builder=review,
-        )
-        self.assertEqual(execution.status, "partial")
-        self.assertIn("source counts do not match", execution.run.error_message)
-        review.assert_not_called()
-
-    def test_preview_missing_data_is_partial_without_final_requirements(self) -> None:
-        report = DailyUpdateReport(
-            trade_date="2026-08-21", post_limit_cache_missing=2,
-            akshare_status="error", akshare_data_fresh=False,
-            health={"raw_events_ready": True, "first_board_features_ready": True},
-        )
-        execution = self._execute(
-            phase="preview", now=datetime(2026, 8, 21, 15, 30, tzinfo=CN_TZ),
-            update_runner=Mock(return_value=report),
-        )
-        self.assertEqual(execution.status, "partial")
-        self.assertIn("observation stocks", execution.run.error_message)
-        self.assertIn("incomplete or stale", execution.run.error_message)
-        self.assertNotIn("prediction", execution.run.error_message)
 
 
 if __name__ == "__main__":

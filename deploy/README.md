@@ -106,7 +106,7 @@ sudo chmod 644 /etc/cron.d/limituplab-daily /etc/cron.d/limituplab-backup
 sudo systemctl restart cron
 ```
 
-收盘流水线在工作日北京时间 `15:30` 提前采集展示（`daily-preview`），`16:10` 独立补齐核验（`daily-update`），两阶段均检查交易日历，节假日跳过。提前阶段不固化预测/复盘；核验缺口会显式报 partial 并重试，16:10 是启动时间而非数据必定齐全的承诺。两阶段共用部署锁与流水线锁，避免并发；晚于 16:10 启动的 preview 跳过，由 final 完成采集核验。更新既有部署时需同步安装新的 cron 和 job.py。备份任务每天 `03:25` 使用 SQLite 在线备份 API 生成一致性快照，保留最近 14 份。日志位于 `/var/log/limituplab/`（提前采集日志为 `daily-preview.log`），备份位于仅服务用户可读的 `/var/backups/limituplab/`。
+收盘流水线在工作日北京时间 `16:10` 运行，并再次检查交易日历，因此节假日会跳过。备份任务每天 `03:25` 使用 SQLite 在线备份 API 生成一致性快照，保留最近 14 份。日志位于 `/var/log/limituplab/`，备份位于仅服务用户可读的 `/var/backups/limituplab/`。
 
 手动验证：
 
