@@ -2,7 +2,13 @@ import { useEffect, useState } from "react";
 import { Layers3, RefreshCcw } from "lucide-react";
 import { Link } from "react-router-dom";
 import { fetchConsolidationPool } from "../api";
-import { consolidationEmptyMessage, consolidationReason, type ConsolidationPool, type ObservationStrategy } from "../consolidation";
+import {
+  consolidationEmptyMessage,
+  consolidationReason,
+  observationDisplayStocks,
+  type ConsolidationPool,
+  type ObservationStrategy,
+} from "../consolidation";
 import { stockDetailPath } from "../dashboardFormatters";
 import { Panel } from "./Panel";
 
@@ -13,6 +19,10 @@ export function ConsolidationPanel({ strategy }: { strategy: ObservationStrategy
   const [revision, setRevision] = useState(0);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
+  const displayStocks = pool ? observationDisplayStocks(pool) : [];
+  const showingNearMatches = Boolean(
+    pool && pool.candidates.length === 0 && displayStocks.length > 0,
+  );
   useEffect(() => {
     let active = true;
     setLoading(true);
@@ -61,12 +71,12 @@ export function ConsolidationPanel({ strategy }: { strategy: ObservationStrategy
               {pool.data_missing.length > 0 && <p className="consolidation-warning">
                 部分股票未能评价：{pool.data_missing.map(consolidationReason).join("；")}。
               </p>}
-              {pool.candidates.length === 0 && <div className="discovery-state"><strong>暂无符合条件的候选</strong><p>{consolidationEmptyMessage(pool)}</p></div>}
-              {pool.evaluated_stocks.length > 0 && <>
-                <div><strong>可评价股票 · {pool.evaluated_stocks.length} 只</strong><p className="consolidation-note">已通过研究范围、{isDrawdown ? "涨停后天数" : "整理天数"}与数据质量检查；符合项优先展示，未符合项列出全部形态条件差距。</p></div>
+              {pool.candidates.length === 0 && <div className="discovery-state"><strong>暂无符合条件的候选</strong><p>{displayStocks.length > 0 ? `以下展示最接近条件的 ${displayStocks.length} 只股票，均未入选正式观察池。` : consolidationEmptyMessage(pool)}</p></div>}
+              {displayStocks.length > 0 && <>
+                <div><strong>{showingNearMatches ? "接近条件" : "符合条件股票"} · {displayStocks.length} 只</strong><p className="consolidation-note">{showingNearMatches ? "按未通过条件数量和超出阈值的距离排序；以下股票仍不符合全部条件。" : `仅展示同时满足全部${isDrawdown ? "高位回撤" : "缩量整理"}条件的股票。`}</p></div>
                 <div className="consolidation-grid">
-                  {pool.evaluated_stocks.map((candidate) => <article className="consolidation-card" key={candidate.symbol}>
-                    <header><Link to={stockDetailPath(candidate.symbol, candidate.name)}>{candidate.name} <small>{candidate.symbol}</small></Link><span className={candidate.state === "rejected" ? "consolidation-badge-rejected" : "consolidation-badge-qualified"}>{candidate.state === "rejected" ? "未符合" : candidate.state === "new" ? "首次符合" : "持续观察"}</span></header>
+                  {displayStocks.map((candidate) => <article className="consolidation-card" key={candidate.symbol}>
+                    <header><Link to={stockDetailPath(candidate.symbol, candidate.name)}>{candidate.name} <small>{candidate.symbol}</small></Link><span className={candidate.state === "rejected" ? "consolidation-badge-rejected" : "consolidation-badge-qualified"}>{showingNearMatches ? "接近条件" : candidate.state === "new" ? "首次符合" : "持续观察"}</span></header>
                     <p className="consolidation-note">涨停 {candidate.anchor_date}{candidate.confirmed_date ? ` · 首次确认 ${candidate.confirmed_date}` : " · 尚未同时满足形态条件"}</p>
                     <dl>
                       <div><dt>{isDrawdown ? "涨停后天数" : "整理天数"}</dt><dd>{candidate.consolidation_days} 日</dd></div>

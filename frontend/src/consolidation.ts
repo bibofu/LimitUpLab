@@ -81,3 +81,36 @@ export function consolidationEmptyMessage(pool: ConsolidationPool): string {
     ? "现有可核验样本中暂无符合项，部分数据不足，不能据此判断全市场没有符合形态的股票。"
     : "该交易日现有样本中没有同时满足全部条件的股票，保持空池。";
 }
+
+export function observationDisplayStocks(
+  pool: ConsolidationPool,
+  fallbackLimit = 6,
+): ConsolidationEvaluation[] {
+  if (pool.candidates.length > 0) return pool.candidates;
+  return [...pool.evaluated_stocks]
+    .filter((stock) => stock.state === "rejected")
+    .sort((left, right) => (
+      left.failed_conditions.length - right.failed_conditions.length
+      || observationThresholdDistance(left, pool.strategy)
+        - observationThresholdDistance(right, pool.strategy)
+      || left.symbol.localeCompare(right.symbol)
+    ))
+    .slice(0, Math.max(0, fallbackLimit));
+}
+
+function observationThresholdDistance(
+  stock: ConsolidationEvaluation,
+  strategy: ObservationStrategy,
+): number {
+  if (strategy === "drawdown") {
+    return stock.drawdown_pct === null
+      ? Number.POSITIVE_INFINITY
+      : Math.max(0, 10 - stock.drawdown_pct) / 10;
+  }
+  const rangeGap = Math.max(0, stock.range_pct - 8) / 8;
+  const closeGap = stock.anchor_change_pct < -10
+    ? (-10 - stock.anchor_change_pct) / 10
+    : Math.max(0, stock.anchor_change_pct - 8) / 8;
+  const volumeGap = Math.max(0, stock.volume_ratio - 0.75) / 0.75;
+  return rangeGap + closeGap + volumeGap;
+}
