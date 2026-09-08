@@ -1,4 +1,9 @@
 export type ObservationStrategy = "consolidation" | "drawdown";
+export type PremarketStrategy = "relay" | ObservationStrategy;
+
+export function premarketStrategyFromParam(value: string | null): PremarketStrategy {
+  return value === "consolidation" || value === "drawdown" ? value : "relay";
+}
 
 export interface ConsolidationEvaluation {
   symbol: string;

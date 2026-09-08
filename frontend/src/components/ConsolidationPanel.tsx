@@ -6,9 +6,8 @@ import { consolidationEmptyMessage, consolidationReason, type ConsolidationPool,
 import { stockDetailPath } from "../dashboardFormatters";
 import { Panel } from "./Panel";
 
-export function ConsolidationPanel() {
+export function ConsolidationPanel({ strategy }: { strategy: ObservationStrategy }) {
   const [pool, setPool] = useState<ConsolidationPool | null>(null);
-  const [strategy, setStrategy] = useState<ObservationStrategy>("consolidation");
   const isDrawdown = strategy === "drawdown";
   const [asOf, setAsOf] = useState("");
   const [revision, setRevision] = useState(0);
@@ -26,21 +25,17 @@ export function ConsolidationPanel() {
   }, [asOf, revision, strategy]);
 
   return (
-    <div role="tabpanel" id="consolidation-panel" aria-label="涨停后观察">
-      <Panel title="涨停后观察" icon={<Layers3 size={18} />} actions={
+    <div role="tabpanel" id={`${strategy}-panel`} aria-label={isDrawdown ? "高位回撤" : "缩量整理"}>
+      <Panel title={isDrawdown ? "高位回撤" : "缩量整理"} icon={<Layers3 size={18} />} actions={
         <button type="button" className="consolidation-refresh" disabled={loading} onClick={() => setRevision((value) => value + 1)}>
           <RefreshCcw size={14} />刷新
         </button>
       }>
         <div className="consolidation-content">
-          <div className="strategy-switch" role="group" aria-label="涨停后观察子策略">
-            <button type="button" className={isDrawdown ? "" : "active"} aria-pressed={!isDrawdown} onClick={() => setStrategy("consolidation")}>缩量整理</button>
-            <button type="button" className={isDrawdown ? "active" : ""} aria-pressed={isDrawdown} onClick={() => setStrategy("drawdown")}>高位回撤</button>
-          </div>
           <div className="consolidation-heading">
             <div><strong>{isDrawdown ? "高位回撤观察池" : "缩量整理观察池"}</strong><p>{isDrawdown ? "观察近期涨停股从局部高点回落的幅度，尚未要求止跌确认。回撤为负表示收盘高于此前参考高点。" : "观察股票涨停后的价格与成交量变化。"}</p></div>
             <label>截至交易日
-              <select aria-label="整理策略截至交易日" value={asOf} onChange={(event) => setAsOf(event.target.value)}>
+              <select aria-label={`${isDrawdown ? "高位回撤" : "缩量整理"}截至交易日`} value={asOf} onChange={(event) => setAsOf(event.target.value)}>
                 <option value="">最新收盘</option>
                 {(pool?.available_dates ?? []).map((day) => <option value={day} key={day}>{day}</option>)}
               </select>

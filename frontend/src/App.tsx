@@ -13,6 +13,7 @@
   Newspaper,
   RefreshCcw,
   ShieldAlert,
+  TrendingDown,
   TrendingUp,
 } from "lucide-react";
 import { useEffect, useMemo, useRef, useState } from "react";
@@ -88,6 +89,10 @@ import {
   toFiveDayIntradayCandleBars,
   toIntradayCandleBars,
 } from "./intradayChart";
+import {
+  premarketStrategyFromParam,
+  type PremarketStrategy,
+} from "./consolidation";
 
 type ViewKey = "overview" | "recommendation" | "review" | "pool" | "first" | "continued" | "failed" | "recent";
 type StockListViewKey = "first" | "continued" | "failed";
@@ -372,9 +377,8 @@ function PremarketStrategyWorkspace() {
   /** Keep each strategy independent while sharing a bookmarkable workspace. */
 
   const [strategyParams, setStrategyParams] = useSearchParams();
-  const requestedMode = strategyParams.get("strategy");
-  const mode = requestedMode === "consolidation" ? "consolidation" : "relay";
-  const setMode = (value: "relay" | "consolidation") => {
+  const mode = premarketStrategyFromParam(strategyParams.get("strategy"));
+  const setMode = (value: PremarketStrategy) => {
     setStrategyParams((previous) => { const next = new URLSearchParams(previous); next.set("strategy", value); return next; });
   };
   const {
@@ -439,10 +443,20 @@ function PremarketStrategyWorkspace() {
           role="tab"
           type="button"
         >
-          <LineChart size={16} />涨停后观察
+          <LineChart size={16} />缩量整理
+        </button>
+        <button
+          aria-selected={mode === "drawdown"}
+          aria-controls="drawdown-panel"
+          className={mode === "drawdown" ? "active" : undefined}
+          onClick={() => setMode("drawdown")}
+          role="tab"
+          type="button"
+        >
+          <TrendingDown size={16} />高位回撤
         </button>
       </div>
-      {mode === "consolidation" ? <ConsolidationPanel /> : intelligenceLoading ? (
+      {mode !== "relay" ? <ConsolidationPanel strategy={mode} /> : intelligenceLoading ? (
         <PremarketRankingStatePanel
           message="正在读取统一的盘前排名与证据"
           state="loading"
