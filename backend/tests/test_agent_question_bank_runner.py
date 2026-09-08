@@ -15,14 +15,18 @@ from scripts.run_agent_question_bank import parse_question_bank, render_markdown
 
 
 class AgentQuestionBankRunnerTest(unittest.TestCase):
-    def test_claude_question_bank_parses_all_numbered_questions(self) -> None:
-        questions = parse_question_bank(BACKEND_ROOT.parent / "testQuestion.md")
+    def test_question_bank_fixture_parses_numbered_questions(self) -> None:
+        questions = parse_question_bank(
+            BACKEND_ROOT / "tests" / "fixtures" / "agent_question_bank_sample.md"
+        )
 
-        self.assertEqual(len(questions), 100)
+        self.assertEqual(len(questions), 3)
         self.assertEqual(questions[0].number, 1)
         self.assertEqual(questions[0].text, "你好，你能做什么？")
         self.assertEqual(questions[0].expected_capability, "capability_intro")
-        self.assertEqual(questions[-1].number, 100)
+        self.assertEqual(questions[1].expected_capability, "")
+        self.assertEqual(questions[-1].number, 3)
+        self.assertEqual(questions[-1].section, "评分解释")
         self.assertIn("评分系统", questions[-1].text)
 
     def test_markdown_report_keeps_complete_answer_and_latency(self) -> None:
