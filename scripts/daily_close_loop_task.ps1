@@ -1,7 +1,7 @@
 param(
     [ValidateSet("Install", "Uninstall", "Status")]
     [string]$Mode = "Install",
-    [string]$RunAt = "16:10",
+    [string]$RunAt = "16:00",
     [string]$TaskName = "LimitUpLab-DailyCloseLoop"
 )
 

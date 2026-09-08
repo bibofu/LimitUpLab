@@ -106,7 +106,7 @@ sudo chmod 644 /etc/cron.d/limituplab-daily /etc/cron.d/limituplab-backup
 sudo systemctl restart cron
 ```
 
-收盘流水线在工作日北京时间 `16:10` 运行，并再次检查交易日历，因此节假日会跳过。备份任务每天 `03:25` 使用 SQLite 在线备份 API 生成一致性快照，保留最近 14 份。日志位于 `/var/log/limituplab/`，备份位于仅服务用户可读的 `/var/backups/limituplab/`。
+收盘流水线在工作日北京时间 `16:00` 运行，并再次检查交易日历，因此节假日会跳过。备份任务每天 `03:25` 使用 SQLite 在线备份 API 生成一致性快照，保留最近 14 份。日志位于 `/var/log/limituplab/`，备份位于仅服务用户可读的 `/var/backups/limituplab/`。
 
 手动验证：
 
