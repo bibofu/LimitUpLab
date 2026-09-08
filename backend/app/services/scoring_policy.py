@@ -7,6 +7,18 @@ from datetime import datetime, timezone
 from app.models import ScoringPolicy
 
 
+def rating_for_score(score: float) -> str:
+    """Map rule and dynamic scores to the same A/B/C/D rating bands."""
+
+    if score >= 80:
+        return "A"
+    if score >= 65:
+        return "B"
+    if score >= 50:
+        return "C"
+    return "D"
+
+
 DEFAULT_SCORING_POLICY_VERSION = "first-board-rule-v5-board-shape-market-cap"
 REASON_AWARE_POLICY_PREFIX = "first-board-rule-v6-reason-aware"
 REASON_AWARE_POLICY_VERSION = f"{REASON_AWARE_POLICY_PREFIX}-shadow-1"

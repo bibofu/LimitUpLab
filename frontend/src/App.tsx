@@ -391,36 +391,10 @@ function PremarketStrategyWorkspace() {
     intelligence?.items ?? [],
     intelligence?.relay_display_limit ?? 10,
   );
-  const draftCandidates = strategyCandidates
-    .map((item, index) => ({
-      ...item,
-      rank: index + 1,
-      sector: item.sector ?? "",
-      position_label: item.position_label ?? null,
-      rule_rank: item.rule_rank ?? item.base_rank ?? item.rank,
-      rule_score: item.rule_score ?? item.base_score,
-      base_rank: item.base_rank ?? item.rank,
-      draft_score: item.draft_score ?? item.base_score,
-      facts_cutoff_at: item.facts_cutoff_at ?? null,
-      close_information_adjustment: item.close_information_adjustment ?? 0,
-      close_information_reasons: item.close_information_reasons ?? [],
-      news_adjustment: item.news_adjustment ?? 0,
-      financial_adjustment: item.financial_adjustment ?? 0,
-      dragon_tiger_adjustment: item.dragon_tiger_adjustment ?? 0,
-      popularity_adjustment: item.popularity_adjustment ?? 0,
-      dynamic_adjustment:
-        item.dynamic_adjustment ?? item.draft_score - item.base_score,
-      dragon_tiger_on_list: item.dragon_tiger_on_list ?? false,
-      dragon_tiger_is_new: item.dragon_tiger_is_new ?? false,
-      dragon_tiger_net_buy_amount: item.dragon_tiger_net_buy_amount ?? null,
-      dragon_tiger_source: item.dragon_tiger_source ?? null,
-      popularity_base_rank: item.popularity_base_rank ?? null,
-      popularity_rank: item.popularity_rank ?? null,
-      popularity_rank_change: item.popularity_rank_change ?? null,
-      popularity_snapshot_at: item.popularity_snapshot_at ?? null,
-      popularity_source: item.popularity_source ?? null,
-      update_reasons: item.update_reasons ?? [],
-    })) ?? [];
+  const draftCandidates = strategyCandidates.map((item, index) => ({
+    ...item,
+    rank: index + 1,
+  }));
 
   return (
     <section className="premarket-workspace">
@@ -466,7 +440,7 @@ function PremarketStrategyWorkspace() {
           message={intelligenceError ?? "盘前动态榜暂不可用"}
           state="error"
         />
-      ) : draftCandidates.length > 0 && intelligence ? (
+      ) : draftCandidates.length > 0 ? (
         <RecommendationDraftPanel
           candidates={draftCandidates}
           intelligence={intelligence}
@@ -845,10 +819,6 @@ function recommendationIntelligenceFor(
   return response?.items.find(
     (item) => item.strategy === strategy && item.symbol === symbol,
   ) ?? null;
-}
-
-function formatNullableSigned(value: number | null) {
-  return value === null ? "暂无" : `${formatSigned(value, 1)}%`;
 }
 
 function DetailView({ view, data }: { view: StockListViewKey; data: DashboardData }) {

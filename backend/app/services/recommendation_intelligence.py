@@ -40,6 +40,7 @@ from app.repositories import (
 )
 from app.services.stock_news import collect_stock_news
 from app.services.relay_universe import is_relay_candidate_symbol
+from app.services.scoring_policy import rating_for_score
 
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
@@ -763,7 +764,7 @@ def _persist_final_relay_snapshot(
             rating.model_copy(
                 update={
                     "score": dynamic.draft_score,
-                    "rating": _rating_for_dynamic_score(dynamic.draft_score),
+                    "rating": rating_for_score(dynamic.draft_score),
                     "reasons": list(
                         dict.fromkeys([*dynamic.update_reasons, *rating.reasons])
                     ),
@@ -817,16 +818,6 @@ def _persist_final_relay_snapshot(
         final_response=response,
         before_commit=before_commit,
     )
-
-
-def _rating_for_dynamic_score(score: float) -> str:
-    if score >= 80:
-        return "A"
-    if score >= 65:
-        return "B"
-    if score >= 50:
-        return "C"
-    return "D"
 
 
 def _load_base_candidates(

@@ -85,6 +85,36 @@ class RecommendationIntelligenceTest(unittest.TestCase):
                 refreshed_at=datetime.now(timezone.utc),
             )
 
+    def test_legacy_snapshot_fields_are_normalized_before_display(self) -> None:
+        snapshot_at = datetime(2026, 9, 7, 16, tzinfo=timezone.utc)
+        legacy_item = {
+            "base_trade_date": "2026-09-07", "symbol": "002712",
+            "name": "思美传媒", "rank": 3, "base_score": 81.2,
+            "refreshed_at": snapshot_at.isoformat(),
+        }
+        for overrides, expected_adjustment in (({}, 0), ({"draft_score": 83.2}, 2)):
+            with self.subTest(overrides=overrides):
+                snapshot = RecommendationIntelligenceResponse.model_validate({
+                    "refresh_id": "legacy", "refreshed_at": snapshot_at,
+                    "interval_minutes": 30, "status": "partial",
+                    "items": [{**legacy_item, **overrides}],
+                })
+                self.snapshot_repo.save(snapshot)
+                restored = self.snapshot_repo.get_latest_displayable()
+                self.assertIsNotNone(restored)
+                item = restored.model_dump(mode="json")["items"][0]
+                self.assertEqual(item["rule_rank"], 3)
+                self.assertEqual(item["base_rank"], 3)
+                self.assertEqual(item["rule_score"], 81.2)
+                self.assertEqual(item["draft_score"], overrides.get("draft_score", 81.2))
+                self.assertEqual(item["dynamic_adjustment"], expected_adjustment)
+                self.assertEqual(item["sector"], "")
+                self.assertIsNone(item["facts_cutoff_at"])
+                self.assertIsNone(item["popularity_rank"])
+                self.assertFalse(item["dragon_tiger_on_list"])
+                self.assertEqual(item["update_reasons"], [])
+                self.assertEqual(item["data_missing"], [])
+
     def test_latest_displayable_falls_back_when_missed_cutoff_has_no_items(self) -> None:
         snapshot_at = datetime(2026, 9, 7, 16, tzinfo=timezone.utc)
         candidate = RecommendationIntelligenceItem(

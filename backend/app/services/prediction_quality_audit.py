@@ -196,14 +196,6 @@ def build_prediction_quality_audit(
     )
 
 
-def _canonical_predictions(
-    predictions: list[AgentPrediction],
-) -> list[AgentPrediction]:
-    """Use the same coherent daily snapshot as Evaluation and Review."""
-
-    return select_canonical_prediction_snapshots(predictions)
-
-
 def _build_date_coverage(
     *,
     canonical: list[AgentPrediction],

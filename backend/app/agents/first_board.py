@@ -26,6 +26,7 @@ from app.services.scoring_policy import (
     DEFAULT_SCORING_POLICY_VERSION,
     FACTOR_KEYS_BY_NAME,
     REASON_AWARE_POLICY_PREFIX,
+    rating_for_score,
     validate_policy_factor_keys,
 )
 
@@ -205,7 +206,7 @@ def _rate_candidate(
     return FirstBoardRating(
         facts=facts,
         score=score,
-        rating=_rating_for_score(score),
+        rating=rating_for_score(score),
         confidence=confidence,
         score_breakdown=breakdown,
         reasons=_build_reasons(facts),
@@ -695,18 +696,6 @@ def _calculate_confidence(facts: FirstBoardCandidateFacts) -> float:
         confidence -= 0.08
 
     return round(max(0.35, min(0.95, confidence)), 2)
-
-
-def _rating_for_score(score: float) -> str:
-    """Map numeric score to the A/B/C/D rating bands."""
-
-    if score >= 80:
-        return "A"
-    if score >= 65:
-        return "B"
-    if score >= 50:
-        return "C"
-    return "D"
 
 
 def _build_reasons(facts: FirstBoardCandidateFacts) -> list[str]:
