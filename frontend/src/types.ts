@@ -14,6 +14,12 @@ export interface ConceptHeat {
   failed_count: number;
 }
 
+export interface MarketCollectionStatus {
+  trade_date: string | null;
+  phase: "preview" | "final" | null;
+  status: "running" | "success" | "partial" | "error" | "skipped" | null;
+}
+
 export interface MarketSummary {
   trade_date: string;
   limit_up_count: number;

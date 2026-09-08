@@ -6,6 +6,7 @@ import type {
   ChatSessionDetail,
   ChatSessionsResponse,
   DailyBoardPromotionStat,
+  MarketCollectionStatus,
   DailyReviewSnapshotsResponse,
   DragonTigerReviewResponse,
   ContinuationStat,
@@ -82,6 +83,10 @@ async function cachedGet<T>(path: string, ttlMs: number): Promise<T> {
 
 export function fetchMarketSummary() {
   return request<MarketSummary>("/api/market/overview");
+}
+
+export function fetchDailyPipelineStatus() {
+  return request<MarketCollectionStatus>("/api/market/collection-status");
 }
 
 export function fetchConsolidationPool(dataAsOf?: string, strategy: ConsolidationPool["strategy"] = "consolidation") {

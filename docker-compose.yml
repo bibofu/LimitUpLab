@@ -92,7 +92,7 @@ services:
       TZ: Asia/Shanghai
     volumes:
       - limituplab-data:/app/data
-    command: ["python", "scripts/run_daily_close_loop.py", "--trigger", "scheduled"]
+    command: ["python", "scripts/run_daily_close_loop.py", "--trigger", "scheduled", "--phase", "final"]
 
 volumes:
   limituplab-data:

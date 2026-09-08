@@ -43,6 +43,7 @@ from app.services.evaluation_agent import (
     select_canonical_prediction_snapshots,
 )
 from app.services.first_board_enrichment import refresh_first_board_enrichment_snapshots
+from app.post_limit_query_contract import PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS
 from app.services.outcome_completeness import build_top10_outcome_completeness
 from app.services.limit_up_reason import merge_limit_up_reasons
 from app.services.relay_universe import is_relay_candidate_symbol
@@ -116,6 +117,7 @@ class DailyUpdateReport:
     top_candidate: dict[str, object] | None = None
     health: dict[str, object] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+    verification_errors: list[str] = field(default_factory=list)
 
 
 def main() -> None:
@@ -206,6 +208,8 @@ def run_daily_update(
     remote_limit_up_collector: RemoteLimitUpCollector | None = None,
     persist_live_prediction: bool | None = None,
     now: datetime | None = None,
+    preview_only: bool = False,
+    verify_inputs: bool = False,
 ) -> DailyUpdateReport:
     """Update raw events, scoring features, tracked bars and health checks."""
 
@@ -270,6 +274,25 @@ def run_daily_update(
         first_board_repository=first_board_repo,
         history_days=history_days,
     )
+    if preview_only or verify_inputs:
+        # Preview writes display data only, including no historical predictions.
+        cache = backfill_recent_post_limit_bars(
+            events=events, repository=first_board_repo, as_of_date=trade_date,
+            max_kline_fetches=max_post_limit_kline_fetches,
+        )
+        report.post_limit_cache_targets = int(cache["target_count"])
+        report.post_limit_cache_ready = int(cache["ready_count"])
+        report.post_limit_cache_missing = int(cache["missing_count"])
+        report.post_limit_cache_fetches = int(cache["fetch_count"])
+        report.post_limit_cache_bars = int(cache["bar_count"])
+        report.warnings.extend(cache["warnings"])
+    if preview_only:
+        report.warnings.append("15:30 提前采集结果，待 16:10 补齐核验；未固化预测或复盘快照。")
+        report.health = build_agent_data_health(
+            events=events, first_board_repository=first_board_repo,
+            trade_date=trade_date, top_limit=top_targets,
+        ).model_dump(mode="json")
+        return report
     eligible_count = sum(
         1
         for item in events
@@ -347,6 +370,25 @@ def run_daily_update(
         {event.trade_date for event in events if event.trade_date <= trade_date},
         reverse=True,
     )[:6]
+    if verify_inputs:
+        if not skip_import and (report.akshare_status not in {"ok", "empty"}
+                                or report.akshare_data_fresh is not True):
+            report.verification_errors.append("raw event source is incomplete or stale")
+        if not skip_import and report.hithink_limit_up_count is None:
+            report.verification_errors.append("limit-up cross-source verification is unavailable")
+        if report.limit_up_count_difference:
+            report.verification_errors.append("limit-up source counts do not match")
+        for item in top_ratings:
+            enrichment = item.facts.enrichment
+            if enrichment is None or enrichment.kline_bar_count < 20 or enrichment.float_market_cap is None:
+                report.verification_errors.append(f"{item.facts.symbol}: extended rating inputs incomplete")
+        if report.verification_errors:
+            report.target_candidates_checked = len(top_ratings)
+            report.health = build_agent_data_health(
+                events=events, first_board_repository=first_board_repo,
+                trade_date=trade_date, top_limit=top_targets,
+            ).model_dump(mode="json")
+            return report
     latest_available_date = max(event.trade_date for event in events)
     is_latest_available_date = trade_date == latest_available_date
     should_persist_live = (
@@ -430,7 +472,7 @@ def run_daily_update(
     report.backfilled_outcomes = int(tracked_backfill["outcome_count"])
     report.outcome_completeness = dict(tracked_backfill["outcome_completeness"])
     report.warnings.extend(tracked_backfill["warnings"])
-    if post_bar_collector is None and is_latest_available_date:
+    if post_bar_collector is None and is_latest_available_date and not verify_inputs:
         post_limit_backfill = backfill_recent_post_limit_bars(
             events=events,
             repository=first_board_repo,
@@ -828,7 +870,7 @@ def backfill_recent_post_limit_bars(
     """Fill the 20-session local cache for every recent supported limit-up stock."""
 
     trade_dates = sorted({event.trade_date for event in events if event.trade_date <= as_of_date})
-    recent_dates = set(trade_dates[-5:])
+    recent_dates = set(trade_dates[-PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS:])
     targets = sorted({
         event.symbol
         for event in events

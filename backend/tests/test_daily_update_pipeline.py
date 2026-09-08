@@ -108,6 +108,100 @@ class DailyUpdatePipelineTest(unittest.TestCase):
         finally:
             self._cleanup_database(database_path)
 
+    def test_preview_updates_display_data_without_any_prediction_writes(self) -> None:
+        database_path = self._database_path()
+        try:
+            trade_date = date(2026, 8, 21)
+            limit_repo = SQLiteLimitUpRepository(database_path=database_path, seed_if_empty=False)
+            first_repo = SQLiteFirstBoardRepository(database_path)
+            limit_repo.upsert_events([self._make_event("002298", "示例", trade_date)])
+            cache_result = dict(target_count=1, ready_count=1, missing_count=0,
+                                fetch_count=1, bar_count=20, warnings=[])
+            with (
+                patch("scripts.update_daily_data.backfill_recent_post_limit_bars", return_value=cache_result) as cache,
+                patch("scripts.update_daily_data.refresh_first_board_enrichment_snapshots") as enrichment,
+                patch("scripts.update_daily_data.persist_agent_predictions_for_dates") as persist,
+                patch("scripts.update_daily_data.backfill_recent_daily_top_candidate_bars") as outcomes,
+            ):
+                report = run_daily_update(
+                    trade_date=trade_date, skip_import=True, preview_only=True,
+                    limit_up_repository=limit_repo, first_board_repository=first_repo,
+                )
+            cache.assert_called_once()
+            enrichment.assert_not_called()
+            persist.assert_not_called()
+            outcomes.assert_not_called()
+            self.assertEqual(report.synced_features, 1)
+            self.assertEqual(report.post_limit_cache_ready, 1)
+            self.assertEqual(report.persisted_top_predictions, 0)
+            self.assertIsNone(first_repo.get_live_prediction_snapshot(trade_date))
+            self.assertTrue(any("16:10" in warning for warning in report.warnings))
+        finally:
+            self._cleanup_database(database_path)
+
+    def test_final_rejects_missing_rating_inputs_before_predictions(self) -> None:
+        database_path = self._database_path()
+        try:
+            trade_date = date(2026, 8, 21)
+            limit_repo = SQLiteLimitUpRepository(database_path=database_path, seed_if_empty=False)
+            first_repo = SQLiteFirstBoardRepository(database_path)
+            limit_repo.upsert_events([self._make_event("002298", "示例", trade_date)])
+            with (
+                patch("scripts.update_daily_data.backfill_recent_post_limit_bars",
+                      return_value=dict(target_count=1, ready_count=0, missing_count=1,
+                                        fetch_count=1, bar_count=0, warnings=[])),
+                patch("scripts.update_daily_data.persist_agent_predictions_for_dates") as persist,
+            ):
+                report = run_daily_update(
+                    trade_date=trade_date, skip_import=True, refresh_enrichment=False,
+                    verify_inputs=True, limit_up_repository=limit_repo,
+                    first_board_repository=first_repo,
+                )
+            persist.assert_not_called()
+            self.assertIn("002298: extended rating inputs incomplete", report.verification_errors)
+            self.assertEqual(report.post_limit_cache_missing, 1)
+            self.assertIsNone(first_repo.get_live_prediction_snapshot(trade_date))
+        finally:
+            self._cleanup_database(database_path)
+
+    def test_final_checks_raw_freshness_and_cross_source_counts_before_freezing(self) -> None:
+        for source_status, fresh, remote_count, expected_error in [
+            ("ok", True, 2, "source counts do not match"),
+            ("partial", False, 1, "incomplete or stale"),
+            ("ok", True, None, "verification is unavailable"),
+        ]:
+            with self.subTest(expected_error=expected_error):
+                database_path = self._database_path()
+                try:
+                    trade_date = date(2026, 8, 21)
+                    event = self._make_event("002298", "示例", trade_date)
+                    def remote(_date):
+                        if remote_count is None:
+                            raise RuntimeError("source unavailable")
+                        return HithinkLimitUpPoolSnapshot(
+                            trade_date=trade_date, page=1, page_size=200,
+                            total=remote_count, items=[],
+                        )
+                    with (
+                        patch("scripts.update_daily_data.collect_limit_up_events",
+                              return_value=LimitUpCollectionResult(
+                                  status=source_status, data_fresh=fresh, source_errors=(), payload=[event])),
+                        patch("scripts.update_daily_data.backfill_recent_post_limit_bars",
+                              return_value=dict(target_count=0, ready_count=0, missing_count=0,
+                                                fetch_count=0, bar_count=0, warnings=[])),
+                        patch("scripts.update_daily_data.persist_agent_predictions_for_dates") as persist,
+                    ):
+                        report = run_daily_update(
+                            trade_date=trade_date, top_targets=0, refresh_enrichment=False,
+                            verify_inputs=True, remote_limit_up_collector=remote,
+                            limit_up_repository=SQLiteLimitUpRepository(database_path=database_path, seed_if_empty=False),
+                            first_board_repository=SQLiteFirstBoardRepository(database_path),
+                        )
+                    persist.assert_not_called()
+                    self.assertTrue(any(expected_error in reason for reason in report.verification_errors))
+                finally:
+                    self._cleanup_database(database_path)
+
     def test_intraday_warmup_covers_every_latest_pool_symbol(self) -> None:
         database_path = self._database_path()
         trade_date = date(2026, 8, 10)
@@ -402,6 +496,21 @@ class DailyUpdatePipelineTest(unittest.TestCase):
                 len(repository.list_daily_bars("600001")),
                 20,
             )
+        finally:
+            self._cleanup_database(database_path)
+
+    def test_observation_backfill_covers_sixth_and_seventh_sessions(self) -> None:
+        database_path = self._database_path()
+        try:
+            dates = [date(2026, 8, day) for day in (12, 13, 14, 17, 18, 19, 20, 21)]
+            events = [self._make_event(f"60000{index}", "示例", day)
+                      for index, day in enumerate(dates)]
+            result = backfill_recent_post_limit_bars(
+                events=events, repository=SQLiteFirstBoardRepository(database_path),
+                as_of_date=dates[-1], max_kline_fetches=0,
+            )
+            self.assertEqual(result["target_count"], 7)
+            self.assertEqual(result["missing_count"], 7)
         finally:
             self._cleanup_database(database_path)
 

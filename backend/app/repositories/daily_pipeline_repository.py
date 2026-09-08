@@ -65,7 +65,7 @@ class SQLiteDailyPipelineRepository:
             connection.close()
         return [self._from_row(row) for row in rows]
 
-    def latest_for_date(self, trade_date: date) -> DailyPipelineRun | None:
+    def latest_for_date(self, trade_date: date, phase: str | None = None) -> DailyPipelineRun | None:
         """Return the newest execution for one target trade date."""
 
         connection = connect(self.database_path)
@@ -76,10 +76,11 @@ class SQLiteDailyPipelineRepository:
                 SELECT *
                 FROM daily_pipeline_runs
                 WHERE trade_date = ?
+                  AND (? IS NULL OR COALESCE(json_extract(report_json, '$.phase'), 'final') = ?)
                 ORDER BY started_at DESC
                 LIMIT 1
                 """,
-                (trade_date.isoformat(),),
+                (trade_date.isoformat(), phase, phase),
             ).fetchone()
         finally:
             connection.close()

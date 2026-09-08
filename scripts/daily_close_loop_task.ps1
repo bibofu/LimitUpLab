@@ -2,6 +2,7 @@ param(
     [ValidateSet("Install", "Uninstall", "Status")]
     [string]$Mode = "Install",
     [string]$RunAt = "16:10",
+    [string]$PreviewAt = "15:30",
     [string]$TaskName = "LimitUpLab-DailyCloseLoop"
 )
 
@@ -13,24 +14,27 @@ $Runner = Join-Path $BackendRoot "scripts\run_daily_close_loop.py"
 
 if ($Mode -eq "Uninstall") {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
+    Unregister-ScheduledTask -TaskName "$TaskName-Preview" -Confirm:$false -ErrorAction SilentlyContinue
     Write-Host "Removed scheduled task: $TaskName"
     exit 0
 }
 
 if ($Mode -eq "Status") {
-    $task = Get-ScheduledTask -TaskName $TaskName -ErrorAction SilentlyContinue
+    foreach ($name in @("$TaskName-Preview", $TaskName)) {
+    $task = Get-ScheduledTask -TaskName $name -ErrorAction SilentlyContinue
     if (-not $task) {
-        Write-Host "Scheduled task is not installed: $TaskName"
-        exit 1
+        Write-Host "Scheduled task is not installed: $name"
+        continue
     }
-    $info = Get-ScheduledTaskInfo -TaskName $TaskName
+    $info = Get-ScheduledTaskInfo -TaskName $name
     [pscustomobject]@{
-        TaskName = $TaskName
+        TaskName = $name
         State = $task.State
         LastRunTime = $info.LastRunTime
         LastTaskResult = $info.LastTaskResult
         NextRunTime = $info.NextRunTime
     } | Format-List
+    }
     exit 0
 }
 
@@ -41,10 +45,14 @@ if (-not (Test-Path -LiteralPath $Runner)) {
     throw "Daily close-loop runner not found: $Runner"
 }
 
-$at = [datetime]::ParseExact($RunAt, "HH:mm", $null)
+foreach ($stage in @(
+    @{ Name = "$TaskName-Preview"; At = $PreviewAt; Phase = "preview" },
+    @{ Name = $TaskName; At = $RunAt; Phase = "final" }
+)) {
+$at = [datetime]::ParseExact($stage.At, "HH:mm", $null)
 $action = New-ScheduledTaskAction `
     -Execute $Python `
-    -Argument "`"$Runner`" --trigger scheduled" `
+    -Argument "`"$Runner`" --trigger scheduled --phase $($stage.Phase)" `
     -WorkingDirectory $BackendRoot
 $trigger = New-ScheduledTaskTrigger `
     -Weekly `
@@ -63,7 +71,7 @@ $principal = New-ScheduledTaskPrincipal `
     -RunLevel Limited
 
 Register-ScheduledTask `
-    -TaskName $TaskName `
+    -TaskName $stage.Name `
     -Action $action `
     -Trigger $trigger `
     -Settings $settings `
@@ -71,7 +79,7 @@ Register-ScheduledTask `
     -Description "LimitUpLab after-close data, live Top10 prediction and D+1-D+5 outcome loop." `
     -Force | Out-Null
 
-Write-Host "Installed scheduled task: $TaskName"
-Write-Host "Schedule: weekdays at $RunAt (Asia/Shanghai local time)"
+Write-Host "Installed scheduled task: $($stage.Name) at $($stage.At) ($($stage.Phase))"
+}
 Write-Host "Latest report: $BackendRoot\data\daily_close_loop_latest.json"
 Write-Host "Failure alert: $BackendRoot\data\daily_close_loop_alert.json"

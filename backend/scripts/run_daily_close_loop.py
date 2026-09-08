@@ -38,6 +38,7 @@ from scripts.update_daily_data import DailyUpdateReport, run_daily_update
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
 AFTER_CLOSE_TIME = time(15, 30)
+FINAL_CHECK_TIME = time(16, 10)
 DEFAULT_LOCK_PATH = BACKEND_ROOT / "data" / "daily_close_loop.lock"
 DEFAULT_REPORT_PATH = BACKEND_ROOT / "data" / "daily_close_loop_latest.json"
 DEFAULT_ALERT_PATH = BACKEND_ROOT / "data" / "daily_close_loop_alert.json"
@@ -75,10 +76,11 @@ class DailyCloseLoopExecution:
 class DailyCloseLoopLock:
     """Cross-process file lock with bounded stale-lock recovery."""
 
-    def __init__(self, path: Path, *, stale_after: timedelta = timedelta(hours=6)):
+    def __init__(self, path: Path, *, stale_after: timedelta = timedelta(hours=6), wait_seconds: float = 0):
         self.path = path
         self.stale_after = stale_after
         self._owned = False
+        self.wait_seconds = max(0, wait_seconds)
 
     def __enter__(self) -> DailyCloseLoopLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
@@ -90,15 +92,17 @@ class DailyCloseLoopLock:
             },
             ensure_ascii=False,
         )
-        try:
-            descriptor = os.open(
-                self.path,
-                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-            )
-        except FileExistsError as error:
-            raise DailyCloseLoopAlreadyRunning(
-                f"Daily close loop is already running; lock={self.path}"
-            ) from error
+        deadline = time_module.monotonic() + self.wait_seconds
+        while True:
+            try:
+                descriptor = os.open(self.path, os.O_CREAT | os.O_EXCL | os.O_WRONLY)
+                break
+            except FileExistsError as error:
+                if time_module.monotonic() >= deadline:
+                    raise DailyCloseLoopAlreadyRunning(
+                        f"Daily close loop is already running; lock={self.path}"
+                    ) from error
+                time_module.sleep(min(5, max(0, deadline - time_module.monotonic())))
         with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
             handle.write(payload)
         self._owned = True
@@ -134,6 +138,8 @@ def main() -> None:
         default="manual",
     )
     parser.add_argument("--force", action="store_true", help="Rerun even if already successful.")
+    parser.add_argument("--phase", choices=("preview", "final"), default="final")
+    parser.add_argument("--lock-wait-seconds", type=float, default=3600)
     parser.add_argument("--skip-import", action="store_true")
     parser.add_argument("--skip-enrichment", action="store_true")
     parser.add_argument("--max-attempts", type=int, default=3)
@@ -150,6 +156,8 @@ def main() -> None:
         requested_date=parse_akshare_trade_date(args.date) if args.date else None,
         trigger=args.trigger,
         force=args.force,
+        phase=args.phase,
+        lock_wait_seconds=args.lock_wait_seconds,
         skip_import=args.skip_import,
         refresh_enrichment=not args.skip_enrichment,
         max_attempts=args.max_attempts,
@@ -180,6 +188,8 @@ def execute_daily_close_loop(
     requested_date: date | None = None,
     trigger: str = "manual",
     force: bool = False,
+    phase: str = "final",
+    lock_wait_seconds: float = 0,
     skip_import: bool = False,
     refresh_enrichment: bool = True,
     max_attempts: int = 3,
@@ -204,10 +214,17 @@ def execute_daily_close_loop(
     current = now or datetime.now(CN_TZ)
     if current.tzinfo is None:
         current = current.replace(tzinfo=CN_TZ)
+    current = current.astimezone(CN_TZ)
+    if phase not in {"preview", "final"}:
+        raise ValueError("phase must be preview or final")
     run_repo = run_repository or SQLiteDailyPipelineRepository()
 
     try:
-        with DailyCloseLoopLock(lock_path):
+        with DailyCloseLoopLock(lock_path, wait_seconds=lock_wait_seconds):
+            # Recheck the clock after waiting behind the other stage.
+            current = current if now is not None else datetime.now(CN_TZ)
+            if phase == "preview" and not AFTER_CLOSE_TIME <= current.time() < FINAL_CHECK_TIME:
+                return DailyCloseLoopExecution("skipped", 0, None, "Preview only runs between 15:30 and 16:10; final verification handles late starts.")
             target = resolve_target_trade_date(
                 now=current,
                 requested_date=requested_date,
@@ -222,6 +239,7 @@ def execute_daily_close_loop(
                     status="skipped",
                     attempt_count=0,
                     report={
+                        "phase": phase,
                         "calendar_source": target.calendar_source,
                         "warning": target.warning,
                         "reason": target.skip_reason,
@@ -232,7 +250,9 @@ def execute_daily_close_loop(
                     message=target.skip_reason,
                 )
 
-            previous = run_repo.latest_for_date(target.trade_date)
+            if phase == "final" and target.trade_date == current.date() and current.time() < FINAL_CHECK_TIME:
+                return DailyCloseLoopExecution("skipped", 0, None, "Final verification starts at 16:10; use preview for early display data.")
+            previous = run_repo.latest_for_date(target.trade_date, phase=phase)
             if previous and previous.status == "success" and not force:
                 return DailyCloseLoopExecution(
                     status="skipped",
@@ -251,7 +271,7 @@ def execute_daily_close_loop(
                 trigger=trigger,
                 status="running",
                 attempt_count=0,
-                report=None,
+                report={"phase": phase},
                 started_at=started_at,
             )
             run_repo.save_run(run)
@@ -261,6 +281,7 @@ def execute_daily_close_loop(
             live_eligible = (
                 target.trade_date == current.date()
                 and current.time() >= AFTER_CLOSE_TIME
+                and phase == "final"
             )
             last_report: DailyUpdateReport | None = None
             last_error: str | None = None
@@ -282,12 +303,15 @@ def execute_daily_close_loop(
                         persist_live_prediction=live_eligible,
                         limit_up_repository=limit_repo,
                         first_board_repository=first_repo,
+                        preview_only=phase == "preview",
+                        verify_inputs=phase == "final",
                     )
                     if target.warning:
                         last_report.warnings.insert(0, target.warning)
                     incomplete_reasons = _incomplete_reasons(
                         last_report,
                         live_eligible=live_eligible,
+                        preview_only=phase == "preview",
                     )
                     last_error = None
                     if not incomplete_reasons:
@@ -301,7 +325,7 @@ def execute_daily_close_loop(
 
             report_payload = asdict(last_report) if last_report else None
             review_snapshot_payload: dict[str, str] | None = None
-            if last_report is not None and last_error is None:
+            if last_report is not None and last_error is None and not incomplete_reasons and phase == "final":
                 try:
                     review_snapshot = review_snapshot_builder(
                         events=limit_repo.list_events(),
@@ -338,6 +362,8 @@ def execute_daily_close_loop(
                 exit_code = 0
 
             final_report = {
+                "phase": phase,
+                "display_notice": "提前采集，待 16:10 补齐核验" if phase == "preview" else "补齐核验",
                 "calendar_source": target.calendar_source,
                 "live_prediction_eligible": live_eligible,
                 "pipeline": report_payload,
@@ -367,7 +393,7 @@ def execute_daily_close_loop(
     except DailyCloseLoopAlreadyRunning as error:
         return DailyCloseLoopExecution(
             status="skipped",
-            exit_code=0,
+            exit_code=75,
             run=None,
             message=str(error),
         )
@@ -427,6 +453,7 @@ def _incomplete_reasons(
     report: DailyUpdateReport,
     *,
     live_eligible: bool,
+    preview_only: bool = False,
 ) -> list[str]:
     reasons: list[str] = []
     health = report.health
@@ -434,6 +461,15 @@ def _incomplete_reasons(
         reasons.append("raw limit-up events are missing")
     if health.get("raw_events_ready") and not health.get("first_board_features_ready"):
         reasons.append("first-board features are missing")
+    reasons.extend(report.verification_errors)
+    if report.post_limit_cache_missing:
+        reasons.append(f"{report.post_limit_cache_missing} observation stocks lack complete K-line data")
+    if preview_only:
+        if report.akshare_status is not None and (
+            report.akshare_status not in {"ok", "empty"} or report.akshare_data_fresh is not True
+        ):
+            reasons.append("preview raw event source is incomplete or stale")
+        return reasons
     live_snapshot_ready = (
         report.live_prediction_snapshot_ready
         or report.persisted_live_predictions > 0
