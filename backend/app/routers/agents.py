@@ -329,9 +329,9 @@ def get_first_board_ratings(
     response_model=RecommendationIntelligenceResponse,
 )
 def get_recommendation_intelligence() -> RecommendationIntelligenceResponse:
-    """Return the latest half-hour quote, news and financial refresh."""
+    """Return the latest displayable quote, news and financial snapshot."""
 
-    response = SQLiteRecommendationIntelligenceRepository().get_latest()
+    response = SQLiteRecommendationIntelligenceRepository().get_latest_displayable()
     if response is None:
         raise HTTPException(
             status_code=404,

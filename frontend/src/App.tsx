@@ -45,6 +45,7 @@ import {
   type MarketCandleBar,
 } from "./components/MarketKLineChart";
 import {
+  latestRelayCandidates,
   rankedRelayCandidates,
   sortFirstBoardByRelayRanking,
 } from "./relayRanking";
@@ -293,7 +294,7 @@ export function App() {
         <Route path="/" element={null} />
         <Route
           path="/recommendations"
-          element={<PremarketPage ratings={data.firstBoardRatings} />}
+          element={<PremarketPage />}
         />
         <Route
           path="/review"
@@ -358,16 +359,16 @@ function MarketSnapshot({ summary }: { summary: MarketSummary }) {
   );
 }
 
-function PremarketPage({ ratings }: { ratings: FirstBoardRatingsResponse }) {
+function PremarketPage() {
   return (
     <div className="premarket-page">
       <RecommendationNewsBoard />
-      <PremarketStrategyWorkspace ratings={ratings} />
+      <PremarketStrategyWorkspace />
     </div>
   );
 }
 
-function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsResponse }) {
+function PremarketStrategyWorkspace() {
   /** Keep each strategy independent while sharing a bookmarkable workspace. */
 
   const [strategyParams, setStrategyParams] = useSearchParams();
@@ -382,9 +383,8 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
     error: intelligenceError,
   } = useRecommendationIntelligence();
 
-  const strategyCandidates = rankedRelayCandidates(
+  const strategyCandidates = latestRelayCandidates(
     intelligence?.items ?? [],
-    ratings.trade_date,
     intelligence?.relay_display_limit ?? 10,
   );
   const draftCandidates = strategyCandidates
@@ -442,9 +442,7 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
           <LineChart size={16} />涨停后观察
         </button>
       </div>
-      {mode === "consolidation" ? <ConsolidationPanel /> : intelligence?.stage === "missed_cutoff" ? (
-        <PremarketCutoffMissedPanel intelligence={intelligence} />
-      ) : intelligenceLoading ? (
+      {mode === "consolidation" ? <ConsolidationPanel /> : intelligenceLoading ? (
         <PremarketRankingStatePanel
           message="正在读取统一的盘前排名与证据"
           state="loading"
@@ -459,6 +457,8 @@ function PremarketStrategyWorkspace({ ratings }: { ratings: FirstBoardRatingsRes
           candidates={draftCandidates}
           intelligence={intelligence}
         />
+      ) : intelligence.stage === "missed_cutoff" ? (
+        <PremarketCutoffMissedPanel intelligence={intelligence} />
       ) : (
         <PremarketRankingStatePanel
           message="当前目标交易日没有可展示的盘前候选"
@@ -568,6 +568,23 @@ function RecommendationDraftPanel({
   const targetLabel = intelligence.target_trade_date
     ? `${intelligence.target_trade_date} 目标日`
     : "下一交易日";
+  const snapshotCopy = intelligence.stage === "missed_cutoff"
+    ? {
+        subtitle: "展示开盘前最后一次可用快照；未使用开盘后数据补算",
+        timePrefix: "最新盘前快照 · ",
+        disclaimer: "开盘前服务未完成固化，当前展示最近一次盘前快照；该快照不是正式 Top10，且未使用开盘后信息补算。",
+      }
+    : intelligence.stage === "final"
+      ? {
+          subtitle: "收盘综合分固化基线，盘后按公告、龙虎榜与人气变化做有界修正",
+          timePrefix: "开盘前已固化 · ",
+          disclaimer: "该排序已于目标交易日开盘前固化，供盘后复盘使用。",
+        }
+      : {
+          subtitle: "展示最新可用盘前快照，按收盘后新增信息做有界修正",
+          timePrefix: "快照更新 · ",
+          disclaimer: "当前展示最新可用的盘前研究快照；开盘后停止更新，只有开盘前固化的 Top10 才进入复盘。",
+        };
   return (
     <Panel
       title="一进二接力"
@@ -576,11 +593,14 @@ function RecommendationDraftPanel({
       <div className="rating-summary-panel recommendation-draft-panel">
         <div className="recommendation-draft-header">
           <div>
-            <strong>盘前动态候选 Top{candidates.length} · {targetLabel}</strong>
-            <span>收盘综合分固化基线，盘后按公告、龙虎榜与人气变化做有界修正</span>
+            <strong>
+              {intelligence.stage === "final" ? "盘前固化候选" : "最新候选快照"}
+              {` Top${candidates.length} · ${targetLabel}`}
+            </strong>
+            <span>{snapshotCopy.subtitle}</span>
           </div>
           <span className="recommendation-draft-time">
-            {intelligence.stage === "final" ? "开盘前已固化 · " : "盘前动态更新 · "}
+            {snapshotCopy.timePrefix}
             {new Date(intelligence.finalized_at ?? intelligence.refreshed_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
           </span>
         </div>
@@ -628,9 +648,7 @@ function RecommendationDraftPanel({
           })}
         </div>
         <p className="discovery-disclaimer">
-          {intelligence.stage === "final"
-            ? "该排序已于目标交易日开盘前固化，供盘后复盘使用。"
-            : "当前为盘前动态研究排序；开盘后停止更新，只有开盘前固化的 Top10 才进入复盘。"}
+          {snapshotCopy.disclaimer}
         </p>
       </div>
     </Panel>

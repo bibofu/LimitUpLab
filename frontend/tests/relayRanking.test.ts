@@ -2,6 +2,7 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  latestRelayCandidates,
   rankedRelayCandidates,
   sortFirstBoardByRelayRanking,
 } from "../src/relayRanking.ts";
@@ -52,4 +53,35 @@ test("a stale dynamic snapshot cannot reorder another trade date", () => {
 
   assert.deepEqual(currentRanking, []);
   assert.deepEqual(poolOrder.map((item) => item.symbol), ["000002", "000001"]);
+});
+
+test("the pre-market page defaults to the latest available relay snapshot", () => {
+  const snapshots = [
+    {
+      strategy: "relay" as const,
+      base_trade_date: "2026-09-05",
+      symbol: "000001",
+      rank: 1,
+      draft_score: 90,
+    },
+    {
+      strategy: "relay" as const,
+      base_trade_date: "2026-09-07",
+      symbol: "000002",
+      rank: 2,
+      draft_score: 88,
+    },
+    {
+      strategy: "relay" as const,
+      base_trade_date: "2026-09-07",
+      symbol: "000003",
+      rank: 1,
+      draft_score: 89,
+    },
+  ];
+
+  assert.deepEqual(
+    latestRelayCandidates(snapshots).map((item) => item.symbol),
+    ["000003", "000002"],
+  );
 });

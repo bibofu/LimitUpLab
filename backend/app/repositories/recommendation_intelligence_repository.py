@@ -36,6 +36,20 @@ class SQLiteRecommendationIntelligenceRepository:
                 if current_row
                 else None
             )
+            if previous is not None and previous.items and not response.items:
+                connection.execute(
+                    """
+                    INSERT OR IGNORE INTO recommendation_intelligence_snapshots (
+                        refresh_id, refreshed_at, status, response_json
+                    ) VALUES (?, ?, ?, ?)
+                    """,
+                    (
+                        previous.refresh_id,
+                        previous.refreshed_at.isoformat(),
+                        previous.status,
+                        previous.model_dump_json(),
+                    ),
+                )
             connection.executemany(
                 """
                 INSERT INTO recommendation_intelligence_changes (
@@ -98,6 +112,39 @@ class SQLiteRecommendationIntelligenceRepository:
             if row
             else None
         )
+
+    def get_latest_displayable(self) -> RecommendationIntelligenceResponse | None:
+        """Return the latest refresh containing candidates, with history fallback."""
+
+        current = self.get_latest()
+        if current is not None and current.items:
+            return current
+
+        connection = connect(self.database_path)
+        try:
+            initialize_database(connection)
+            rows = connection.execute(
+                """
+                SELECT response_json, snapshot_at
+                FROM (
+                    SELECT response_json, refreshed_at AS snapshot_at
+                    FROM recommendation_intelligence_snapshots
+                    UNION ALL
+                    SELECT response_json, finalized_at AS snapshot_at
+                    FROM recommendation_prediction_finals
+                )
+                ORDER BY snapshot_at DESC
+                """
+            ).fetchall()
+        finally:
+            connection.close()
+        for row in rows:
+            response = RecommendationIntelligenceResponse.model_validate_json(
+                row["response_json"]
+            )
+            if response.items:
+                return response
+        return current
 
     def save_final(self, response: RecommendationIntelligenceResponse) -> bool:
         """Persist one immutable pre-open final and expose it as current."""

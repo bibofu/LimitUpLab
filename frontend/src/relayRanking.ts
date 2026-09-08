@@ -32,6 +32,19 @@ export function rankedRelayCandidates<T extends RelayRankingItem>(
   return limit === undefined ? ranked : ranked.slice(0, Math.max(0, limit));
 }
 
+export function latestRelayCandidates<T extends RelayRankingItem>(
+  items: readonly T[],
+  limit?: number,
+) {
+  const latestTradeDate = items.reduce<string | undefined>((latest, item) => {
+    if (item.strategy !== "relay" || !isRelayCandidateSymbol(item.symbol)) return latest;
+    return latest === undefined || item.base_trade_date > latest
+      ? item.base_trade_date
+      : latest;
+  }, undefined);
+  return rankedRelayCandidates(items, latestTradeDate, limit);
+}
+
 export function sortFirstBoardByRelayRanking<T extends FirstBoardSortableEvent>(
   events: readonly T[],
   relayRanking: readonly RelayRankingItem[],

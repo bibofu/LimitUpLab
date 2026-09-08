@@ -7,7 +7,11 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
-from app.models import RecommendationIntelligenceItem, StockNewsFacts
+from app.models import (
+    RecommendationIntelligenceItem,
+    RecommendationIntelligenceResponse,
+    StockNewsFacts,
+)
 from app.repositories import (
     SQLiteFirstBoardRepository,
     SQLiteLimitUpRepository,
@@ -80,6 +84,45 @@ class RecommendationIntelligenceTest(unittest.TestCase):
                 base_score=80,
                 refreshed_at=datetime.now(timezone.utc),
             )
+
+    def test_latest_displayable_falls_back_when_missed_cutoff_has_no_items(self) -> None:
+        snapshot_at = datetime(2026, 9, 7, 16, tzinfo=timezone.utc)
+        candidate = RecommendationIntelligenceItem(
+            base_trade_date=date(2026, 9, 7),
+            symbol="002712",
+            name="思美传媒",
+            rank=1,
+            base_score=81.2,
+            refreshed_at=snapshot_at,
+        )
+        available = RecommendationIntelligenceResponse(
+            refresh_id="available",
+            refreshed_at=snapshot_at,
+            interval_minutes=30,
+            target_trade_date=date(2026, 9, 8),
+            relay_base_date=date(2026, 9, 7),
+            status="complete",
+            items=[candidate],
+        )
+        missed = RecommendationIntelligenceResponse(
+            refresh_id="missed",
+            refreshed_at=datetime(2026, 9, 9, 2, tzinfo=timezone.utc),
+            interval_minutes=30,
+            stage="missed_cutoff",
+            target_trade_date=date(2026, 9, 9),
+            relay_base_date=date(2026, 9, 8),
+            status="partial",
+            warnings=["开盘前未生成快照"],
+        )
+
+        self.snapshot_repo.save(available)
+        self.snapshot_repo.save(missed)
+
+        self.assertEqual(self.snapshot_repo.get_latest(), missed)
+        self.assertEqual(
+            self.snapshot_repo.get_latest_displayable(),
+            available,
+        )
 
 
 if __name__ == "__main__":
