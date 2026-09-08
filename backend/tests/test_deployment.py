@@ -4,6 +4,7 @@ import importlib.util
 import json
 from pathlib import Path
 import sys
+import urllib.error
 from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
@@ -159,3 +160,35 @@ def test_workflow_gates_production_on_matrix_success_and_tag_push():
     assert "group: limituplab-production\n      cancel-in-progress: false" in text
     assert "DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}" in text
     assert "--ff-only" in (ROOT / "deploy/release.py").read_text()
+
+
+@pytest.mark.parametrize("status,allowed", [(404, True), (500, False)])
+def test_probe_distinguishes_missing_snapshot_from_broken_reader(tmp_path, monkeypatch, status, allowed):
+    monkeypatch.setattr(release, "STATE", tmp_path)
+    item = release.Deployment("v1.3.2", "a" * 40)
+    class Response:
+        status = 200
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *_args):
+            pass
+
+        def read(self):
+            return b'{"status":"ok"}'
+
+    def open_url(url, timeout):
+        if url.endswith("/api/agents/recommendation-intelligence"):
+            raise urllib.error.HTTPError(url, status, "test", {}, None)
+        return Response()
+
+    opener = Mock()
+    opener.open.side_effect = open_url
+    monkeypatch.setattr(release.urllib.request, "build_opener", Mock(return_value=opener))
+    if allowed:
+        item.probe()
+        assert len(opener.open.call_args_list) == 8
+    else:
+        with pytest.raises(urllib.error.HTTPError):
+            item.probe()

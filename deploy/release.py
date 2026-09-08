@@ -16,6 +16,7 @@ import subprocess
 import sys
 import time
 import urllib.request
+import urllib.error
 from zoneinfo import ZoneInfo
 
 REPO = Path("/opt/LimitUpLab")
@@ -192,14 +193,26 @@ class Deployment:
 
     def probe(self) -> None:
         for route in ("/health", "/", "/recommendations?strategy=relay",
-                      "/recommendations?strategy=consolidation", "/recommendations?strategy=drawdown"):
-            with urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
-                    "http://127.0.0.1:8080" + route, timeout=15) as response:
+                      "/recommendations?strategy=consolidation", "/recommendations?strategy=drawdown",
+                      "/api/agents/recommendation-intelligence",
+                      "/api/strategies/consolidation?strategy=consolidation",
+                      "/api/strategies/consolidation?strategy=drawdown"):
+            try:
+                response = urllib.request.build_opener(urllib.request.ProxyHandler({})).open(
+                    "http://127.0.0.1:8080" + route, timeout=30)
+            except urllib.error.HTTPError as error:
+                # A new installation may have no snapshot yet; 500 is never an empty state.
+                if route == "/api/agents/recommendation-intelligence" and error.code == 404:
+                    continue
+                raise
+            with response:
                 if response.status != 200:
                     raise RuntimeError(f"Health check failed: {route}")
                 body = response.read()
                 if route == "/health" and json.loads(body).get("status") != "ok":
                     raise RuntimeError("Backend health payload is not ok")
+                if route.startswith("/api/") and not isinstance(json.loads(body), dict):
+                    raise RuntimeError(f"Business endpoint did not return an object: {route}")
 
     def restore_local_tags(self, release: dict) -> None:
         for service in ("backend", "frontend"):

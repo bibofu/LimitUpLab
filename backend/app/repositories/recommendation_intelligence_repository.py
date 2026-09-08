@@ -11,6 +11,23 @@ from app.models import RecommendationIntelligenceResponse
 from app.services.prediction_time import validate_final_response
 
 
+RETIRED_DISCOVERY_WARNING = "历史快照中的低位挖掘条目已退役，不在当前视图展示；原始记录保留。"
+
+
+def _load_persisted_response(raw_json: str) -> RecommendationIntelligenceResponse:
+    """Adapt known retired items on read; keep public validation and stored originals strict."""
+
+    payload = json.loads(raw_json)
+    items = payload.get("items", [])
+    if any(isinstance(item, dict) and item.get("strategy") == "discovery" for item in items):
+        payload["items"] = [
+            item for item in items
+            if not (isinstance(item, dict) and item.get("strategy") == "discovery")
+        ]
+        payload["warnings"] = list(dict.fromkeys([*payload.get("warnings", []), RETIRED_DISCOVERY_WARNING]))
+    return RecommendationIntelligenceResponse.model_validate(payload)
+
+
 class SQLiteRecommendationIntelligenceRepository:
     """Store recent mutable evidence without rewriting prediction snapshots."""
 
@@ -30,13 +47,16 @@ class SQLiteRecommendationIntelligenceRepository:
                 "SELECT response_json FROM recommendation_intelligence_current WHERE slot = 1"
             ).fetchone()
             previous = (
-                RecommendationIntelligenceResponse.model_validate_json(
+                _load_persisted_response(
                     current_row["response_json"]
                 )
                 if current_row
                 else None
             )
-            if previous is not None and previous.items and not response.items:
+            if previous is not None and (
+                (previous.items and not response.items)
+                or RETIRED_DISCOVERY_WARNING in previous.warnings
+            ):
                 connection.execute(
                     """
                     INSERT OR IGNORE INTO recommendation_intelligence_snapshots (
@@ -47,7 +67,7 @@ class SQLiteRecommendationIntelligenceRepository:
                         previous.refresh_id,
                         previous.refreshed_at.isoformat(),
                         previous.status,
-                        previous.model_dump_json(),
+                        current_row["response_json"],
                     ),
                 )
             connection.executemany(
@@ -106,7 +126,7 @@ class SQLiteRecommendationIntelligenceRepository:
         finally:
             connection.close()
         return (
-            RecommendationIntelligenceResponse.model_validate_json(
+            _load_persisted_response(
                 row["response_json"]
             )
             if row
@@ -139,7 +159,7 @@ class SQLiteRecommendationIntelligenceRepository:
         finally:
             connection.close()
         for row in rows:
-            response = RecommendationIntelligenceResponse.model_validate_json(
+            response = _load_persisted_response(
                 row["response_json"]
             )
             if response.items:
@@ -193,7 +213,7 @@ class SQLiteRecommendationIntelligenceRepository:
         finally:
             connection.close()
         return (
-            RecommendationIntelligenceResponse.model_validate_json(
+            _load_persisted_response(
                 row["response_json"]
             )
             if row
