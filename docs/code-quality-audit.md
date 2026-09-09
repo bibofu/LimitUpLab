@@ -361,10 +361,10 @@
 
 | 顺序 | 内容 | 风险 | 状态 |
 | --- | --- | --- | --- |
-| 1 | 先增加分项字符指标、预算测试和重构前基线 | 低 | 待实施 |
-| 2 | 从 Planner 移走纯 Answer 展示规则，保持现有输出契约 | 中 | 待实施 |
-| 3 | 将 Planner 改为 Capability-first，由契约确定性映射工具和参数 | 高 | 待实施，需单独授权实施 |
-| 4 | 精简 Planner/Answer 的重复历史上下文并做多轮真实回归 | 中 | 待实施 |
+| 1 | 先增加分项字符指标、预算测试和重构前基线 | 低 | 已完成：`a8f2dba` |
+| 2 | 从 Planner 移走纯 Answer 展示规则，保持现有输出契约 | 中 | 已完成：`a8f2dba` |
+| 3 | 将 Planner 改为 Capability-first，由契约确定性映射工具和参数 | 高 | 已完成：`a8f2dba` |
+| 4 | 精简 Planner/Answer 的重复历史上下文并做多轮真实回归 | 中 | 已完成：`a8f2dba` |
 
 本专项未发现 P0。建议先完成第 1 步，再以第 2、3 步为一个可回滚的核心变更批次；不能只删除文字后以现有单问测试通过作为完成依据。目标是减少重复决策面，而不是单纯追求更短的 Prompt。
 
@@ -374,6 +374,28 @@
 - 运行记录：只读统计本地 2026-09-09 当天 29 条有 Planner 输入的使用记录；未修改数据库。
 - 定向测试：`test_agent_capability_contract.py`、`test_agent_v1_profile.py`、`test_agent_chat.py` 共 **81 passed、3 subtests passed、1 warning**。warning 为 pytest 无法写入仓库根目录 `.pytest_cache`，不是测试跳过或业务失败。
 - 未运行付费 Planner 评估、完整后端 pytest、前端测试或构建；本次只新增审查文档，不改变运行逻辑。
+
+### 实施结果（2026-09-09）
+
+提交 `a8f2dba` 完成 Capability-first Planner 重构。原生函数契约不再允许 LLM 输出 `tool_calls`，Capability 目录也不再向 Planner 暴露 `required_evidence`；服务端继续通过 `CapabilityToolRequirement` 注入工具，并从用户原话确定性编译日期、窗口、板数、板块、排序和数量。为保持兼容，JSON 降级解析仍可接收旧 Provider 的额外工具调用，但生产原生契约只要求 Capability、上下文模式和安全类型。Chat Agent 版本递增为 `first-board-chat-policy-v17-capability-first-planner`，Planner 契约为 `capability-first-v2`。
+
+QP-01、QP-02、QP-03 已关闭。QP-04 的固定输入预算与 Planner trace 分项已落地：`planner_system_chars`、`capability_catalog_chars`、`embedded_tool_catalog_chars`、`function_contract_chars`、`fixed_input_chars` 和 `planner_user_chars` 均可检查；动态 Answer facts 的 P50/P90 聚合仍作为后续可观测性增强，不影响本次正确性关闭。
+
+重构后的固定输入实测如下：
+
+| 组成 | 重构前 | 重构后 | 变化 |
+| --- | ---: | ---: | ---: |
+| Planner system prompt | 21,842 | 5,627 | -74.2% |
+| 原生函数调用契约 | 2,308 | 1,584 | -31.4% |
+| system + 原生契约固定输入 | 24,150 | 7,211 | -70.1% |
+| Planner 内嵌完整工具目录 | 8,364 | 0 | -100% |
+
+验证结果：
+
+- 定向 Agent 回归：73 passed，无失败、跳过或 warning。
+- 完整后端：580 passed、21 subtests passed，无失败或跳过。沙箱内首次从 backend 根目录运行时，被遗留无权限目录阻断收集并产生 9 个 collection error；随后限定正式 tests 仍被 Windows `tmp_path` ACL 阻断。最终在沙箱外使用同一工作区和解释器完成上述完整通过结果，不能把前两次环境错误记为业务测试通过。
+- 前端：9 passed；生产构建成功。Vite 仍报告既有的单 chunk 超过 500 kB 警告，本次未修改前端产物边界。
+- 真实 HTTP：重启 8001 后，原始两轮“一进二名单 → 这些票晋级日高开还是低开”均使用 `daily_board_promotion(days=2)`，第二轮保留 Markdown 表格；“近期农业板块涨停过的股票有哪些”“近期哪些板块涨停的股票比较多”“近期涨停后回撤比较多的股票有哪些”分别命中 `limit_up_pool`、`limit_up_pool`、`post_limit_screening`。响应版本、最终工具和确定性参数均与 trace 一致。
 
 ## 附录 A：全部超大文件
 

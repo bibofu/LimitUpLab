@@ -276,6 +276,45 @@ Agent 选择了涨停事件工具，但最终回答“抱歉，该问题无法�
 
 ---
 
+## BC-009：Planner 提示词持续膨胀，语义能力和原始工具调用重复决策
+
+记录日期：2026-09-09。
+
+### 用户反馈与风险表现
+
+> 当前系统提示词有多长？这是不是有点多？那你就做一次吧。
+
+审查发现 Planner system prompt 已达 21,842 字符，加上原生函数契约后的固定输入为 24,150 字符。Planner 同时输出 Capability 和原始 `tool_calls`，相同路由边界分散在固定提示词、Capability 描述、工具 schema 和函数参数枚举中。近期多个问答问题因此依赖继续追加提示词规则以及后端事后修正，既增加每次请求成本，也让“模型选对能力、却给错工具参数”的冲突更难追踪。
+
+### 根因
+
+1. LLM 被要求同时做语义理解、工具映射和日期/窗口/筛选参数编译，但后两项本来已有 Capability Contract 与 Query Contract 的确定性实现。
+2. 完整 24 工具 schema 每轮都嵌入 Planner system prompt，原生函数契约又重复发送工具和 Capability 枚举。
+3. 新闻展示、来源披露、表格和免责声明等 Answer 职责混入 Planner，稀释真正需要模型判断的能力边界。
+4. 原始会话历史和 Session Memory 同时发送给 Planner 与 Answer；Answer 已有当前问题和结构化工具事实，重复历史会增加长度及旧回答干扰。
+5. 缺少固定提示词预算测试和组成级 trace，规则增长只能在数据库总 token 明显升高后被发现。
+
+### 解决方案
+
+1. 将生产 Planner 契约升级为 `capability-first-v2`：只输出 Capability、上下文模式和安全类型，不再输出原始工具调用或参数。
+2. 服务端根据 `CapabilityToolRequirement` 确定性注入工具；日期、交易日窗口、板数、板块、排序和数量继续从用户原话编译，显式参数不交给 Planner 猜测。
+3. 从 Planner 移除完整工具目录、`required_evidence` 和纯展示规则；Answer 继续按 Capability 渐进加载回答约束。
+4. Answer 阶段不再重复发送会话全文和 Session Memory，只使用当前问题、计划和已执行事实；多轮指代在 Planner/结构化上下文阶段完成。
+5. 新增 10,000 字符 system、12,000 字符固定输入预算，并把各组成写入 Planner trace。实际固定输入降至 7,211 字符，较 24,150 字符下降 70.1%。
+6. 工具执行入口补齐 Capability-only 参数恢复：个股 K 线和 Critic 从问题/上下文解析股票，板块成分趋势和一进二统计从原话恢复实际窗口。
+7. 相关实现提交：`a8f2dba refactor: make agent planner capability first`。
+
+### 验收与防回归
+
+- 定向测试 73 项通过；完整后端 580 项及 21 个子测试通过；前端 9 项通过且生产构建成功。
+- 新增预算断言，完整工具目录字符数必须为 0，固定输入不得超过 12,000 字符。
+- 原生函数参数断言不再包含 `tool_calls`；旧 Provider 的 JSON 结果仍可兼容解析，避免一次性破坏降级路径。
+- 真实 HTTP 两轮回归“最近两天一进二成功票 → 这些票晋级日如何开盘”，两轮都固定为 `days=2`，第二轮保持完整表格。
+- 真实 HTTP 回归农业板块、近期涨停板块统计和高位回撤三条既有问题，Capability、最终工具与 Query Contract 均一致。
+- 服务重启后响应必须显示 `first-board-chat-policy-v17-capability-first-planner` 和 `capability-first-v2`；仅 `/health` 成功不算验收完成。
+
+---
+
 ## 共性问题总结
 
 近期 Bad Case 不是单一的“LLM 意图识别不够聪明”，而是以下几类系统问题叠加：
