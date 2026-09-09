@@ -10,6 +10,7 @@ from app.post_limit_query_contract import (
     looks_like_post_limit_statistics_question,
 )
 from app.repositories.post_limit_repository import PostLimitDataset
+from app.repositories import SQLiteFirstBoardRepository
 from app.services.post_limit import (
     _attach_outcome,
     _matched_shapes,
@@ -22,7 +23,7 @@ from app.services.post_limit import (
 from app.agents.chat import answer_first_board_chat
 from app.agents.tools import AgentToolRegistry, ToolResult
 from app.agents.tool_policy import QuestionSignals
-from app.models import AgentChatRequest, AgentRun
+from app.models import AgentChatRequest, AgentChatResponse, AgentRun
 from app.services.llm_provider import DisabledLLMProvider, LLMProvider, LLMResult
 
 
@@ -128,6 +129,51 @@ def test_drawdown_magnitude_wording_routes_to_complete_screen_list():
     signals = QuestionSignals.from_message(message)
     assert signals.post_limit_screen
     assert not signals.post_limit_statistics
+
+
+def test_post_limit_trace_keeps_all_candidate_names_for_stock_links(
+    monkeypatch,
+    tmp_path,
+):
+    dataset = _dataset()
+    monkeypatch.setattr(
+        "app.agents.tools.load_post_limit_dataset",
+        lambda *_args, **_kwargs: dataset,
+    )
+    registry = AgentToolRegistry(
+        events=[],
+        first_board_repository=SQLiteFirstBoardRepository(tmp_path / "links.sqlite"),
+    )
+    contract = build_post_limit_query_contract(
+        "近期涨停后回撤比较多的股票有哪些",
+        request_trade_date=date.fromisoformat(dataset.calendar[35]),
+    )
+
+    result = registry.post_limit_screen(contract)
+    traced_candidates = result.trace().output["candidates"]
+    response = AgentChatResponse(
+        session_id="stock-links",
+        intent="post_limit_screen",
+        answer="回撤样本（600001）",
+        tool_calls=["post_limit_screen", "template_general_answer"],
+        tool_results=[result.trace()],
+        generated_by="test",
+    )
+
+    assert traced_candidates == [
+        {
+            "symbol": "600001",
+            "name": "回撤样本",
+            "anchor_date": dataset.calendar[32],
+        }
+    ]
+    assert [item.model_dump(mode="json") for item in response.stock_mentions] == [
+        {
+            "name": "回撤样本",
+            "symbol": "600001",
+            "trade_date": dataset.calendar[35],
+        }
+    ]
 
 
 def test_premarket_observation_shapes_default_to_seven_event_days():

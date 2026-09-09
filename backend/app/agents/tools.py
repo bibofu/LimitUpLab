@@ -1962,9 +1962,10 @@ class AgentToolRegistry:
                 "candidates": [
                     {
                         "symbol": item.get("symbol"),
+                        "name": item.get("name"),
                         "anchor_date": item.get("anchor_date"),
                     }
-                    for item in payload.get("candidates", [])[:10]
+                    for item in payload.get("candidates", [])
                 ],
                 "data_missing": payload.get("data_missing", []),
             },
