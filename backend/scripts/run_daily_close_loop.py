@@ -24,7 +24,11 @@ from app.config import (
     detect_local_proxy,
     replace_proxy_environment,
 )
-from app.models import DailyPipelineRun, DailyReviewSnapshot
+from app.models import (
+    DailyPipelineRun,
+    DailyReviewSnapshot,
+    RecommendationIntelligenceResponse,
+)
 from app.repositories import (
     SQLiteDailyPipelineRepository,
     SQLiteFirstBoardRepository,
@@ -32,6 +36,7 @@ from app.repositories import (
     SQLiteReviewSnapshotRepository,
 )
 from app.services.daily_review import build_daily_review_snapshot
+from app.services.recommendation_intelligence import refresh_recommendation_intelligence
 from app.services.system_health import expected_local_data_date
 from scripts.update_daily_data import DailyUpdateReport, run_daily_update
 
@@ -46,6 +51,7 @@ CalendarCollector = Callable[[date, date], list[date]]
 UpdateRunner = Callable[..., DailyUpdateReport]
 SleepFunction = Callable[[float], None]
 ReviewSnapshotBuilder = Callable[..., DailyReviewSnapshot]
+RecommendationRefresher = Callable[..., RecommendationIntelligenceResponse]
 
 
 class DailyCloseLoopAlreadyRunning(RuntimeError):
@@ -197,6 +203,7 @@ def execute_daily_close_loop(
     calendar_collector: CalendarCollector = collect_a_share_trade_dates,
     update_runner: UpdateRunner = run_daily_update,
     review_snapshot_builder: ReviewSnapshotBuilder = build_daily_review_snapshot,
+    recommendation_refresher: RecommendationRefresher = refresh_recommendation_intelligence,
     sleep_fn: SleepFunction = time_module.sleep,
 ) -> DailyCloseLoopExecution:
     """Resolve, lock, retry and audit one complete after-close pipeline run."""
@@ -265,6 +272,7 @@ def execute_daily_close_loop(
             last_report: DailyUpdateReport | None = None
             last_error: str | None = None
             incomplete_reasons: list[str] = []
+            recommendation_refresh_payload: dict[str, object] | None = None
             attempts = max(1, max_attempts)
 
             for attempt in range(1, attempts + 1):
@@ -285,6 +293,41 @@ def execute_daily_close_loop(
                     )
                     if target.warning:
                         last_report.warnings.insert(0, target.warning)
+                    if (
+                        recommendation_refresh_payload is None
+                        and _recommendation_refresh_ready(
+                            last_report,
+                            live_eligible=live_eligible,
+                        )
+                    ):
+                        recommendation = recommendation_refresher(
+                            now=current,
+                            limit_up_repository=limit_repo,
+                            first_board_repository=first_repo,
+                        )
+                        if recommendation.relay_base_date != target.trade_date:
+                            actual_base_date = (
+                                recommendation.relay_base_date.isoformat()
+                                if recommendation.relay_base_date
+                                else "none"
+                            )
+                            raise RuntimeError(
+                                "recommendation refresh did not advance to the current "
+                                f"close ({actual_base_date} != {target.trade_date.isoformat()})"
+                            )
+                        recommendation_refresh_payload = {
+                            "refresh_id": recommendation.refresh_id,
+                            "stage": recommendation.stage,
+                            "status": recommendation.status,
+                            "relay_base_date": recommendation.relay_base_date.isoformat(),
+                            "target_trade_date": (
+                                recommendation.target_trade_date.isoformat()
+                                if recommendation.target_trade_date
+                                else None
+                            ),
+                            "refreshed_at": recommendation.refreshed_at.isoformat(),
+                            "item_count": len(recommendation.items),
+                        }
                     incomplete_reasons = _incomplete_reasons(
                         last_report,
                         live_eligible=live_eligible,
@@ -341,6 +384,7 @@ def execute_daily_close_loop(
                 "calendar_source": target.calendar_source,
                 "live_prediction_eligible": live_eligible,
                 "pipeline": report_payload,
+                "recommendation_refresh": recommendation_refresh_payload,
                 "review_snapshot": review_snapshot_payload,
                 "incomplete_reasons": incomplete_reasons,
             }
@@ -475,6 +519,27 @@ def _incomplete_reasons(
     if health.get("status") == "missing" and not reasons:
         reasons.append("agent data health is missing")
     return reasons
+
+
+def _recommendation_refresh_ready(
+    report: DailyUpdateReport,
+    *,
+    live_eligible: bool,
+) -> bool:
+    """Only publish a new recommendation basis after today's close data is ready."""
+
+    if not live_eligible:
+        return False
+    health = report.health
+    if not health.get("raw_events_ready") or not health.get(
+        "first_board_features_ready"
+    ):
+        return False
+    return (
+        report.target_candidates_checked == 0
+        or report.live_prediction_snapshot_ready
+        or report.persisted_live_predictions > 0
+    )
 
 
 def _persist_terminal_run(

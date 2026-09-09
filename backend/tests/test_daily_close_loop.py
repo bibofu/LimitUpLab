@@ -102,24 +102,51 @@ class DailyCloseLoopTest(unittest.TestCase):
             ),
         }
         arguments.update(overrides)
+        arguments.setdefault(
+            "recommendation_refresher",
+            lambda **kwargs: SimpleNamespace(
+                refresh_id="test-recommendation-refresh",
+                refreshed_at=kwargs["now"],
+                stage="draft",
+                status="complete",
+                relay_base_date=kwargs["now"].date(),
+                target_trade_date=kwargs["now"].date(),
+                items=[],
+            ),
+        )
         return execute_daily_close_loop(**arguments)
 
     def test_same_day_after_close_persists_live_prediction(self) -> None:
         target_date = date(2026, 8, 21)
         received: list[dict[str, object]] = []
+        refresh_calls: list[dict[str, object]] = []
 
         def fake_update(**kwargs) -> DailyUpdateReport:
             received.append(kwargs)
             return self._complete_report(target_date, live_count=10)
 
+        def fake_refresh(**kwargs):
+            refresh_calls.append(kwargs)
+            return SimpleNamespace(
+                refresh_id="refresh-current-close",
+                refreshed_at=kwargs["now"],
+                stage="draft",
+                status="complete",
+                relay_base_date=target_date,
+                target_trade_date=date(2026, 8, 24),
+                items=[SimpleNamespace()],
+            )
+
         execution = self._execute(
             requested_date=target_date,
             now=datetime(2026, 8, 21, 16, 10, tzinfo=CN_TZ),
             update_runner=fake_update,
+            recommendation_refresher=fake_refresh,
         )
 
         self.assertEqual(execution.status, "success")
         self.assertTrue(received[0]["persist_live_prediction"])
+        self.assertEqual(len(refresh_calls), 1)
         self.assertTrue(self.report_path.exists())
         self.assertFalse(self.alert_path.exists())
         persisted = self.run_repository.latest_for_date(target_date)
@@ -129,6 +156,59 @@ class DailyCloseLoopTest(unittest.TestCase):
         self.assertEqual(
             persisted.report["review_snapshot"]["as_of_date"],
             target_date.isoformat(),
+        )
+        self.assertEqual(
+            persisted.report["recommendation_refresh"]["relay_base_date"],
+            target_date.isoformat(),
+        )
+        self.assertEqual(
+            persisted.report["recommendation_refresh"]["target_trade_date"],
+            "2026-08-24",
+        )
+
+    def test_recommendation_refresh_failure_is_retried(self) -> None:
+        target_date = date(2026, 8, 21)
+        update_calls = 0
+        refresh_calls = 0
+
+        def fake_update(**_kwargs) -> DailyUpdateReport:
+            nonlocal update_calls
+            update_calls += 1
+            report = self._complete_report(target_date, live_count=10)
+            if update_calls > 1:
+                report.persisted_live_predictions = 0
+                report.live_prediction_snapshot_ready = True
+            return report
+
+        def flaky_refresh(**kwargs):
+            nonlocal refresh_calls
+            refresh_calls += 1
+            if refresh_calls == 1:
+                raise RuntimeError("temporary recommendation failure")
+            return SimpleNamespace(
+                refresh_id="refresh-after-retry",
+                refreshed_at=kwargs["now"],
+                stage="draft",
+                status="complete",
+                relay_base_date=target_date,
+                target_trade_date=date(2026, 8, 24),
+                items=[],
+            )
+
+        execution = self._execute(
+            requested_date=target_date,
+            now=datetime(2026, 8, 21, 16, 10, tzinfo=CN_TZ),
+            max_attempts=2,
+            update_runner=fake_update,
+            recommendation_refresher=flaky_refresh,
+        )
+
+        self.assertEqual(execution.status, "success")
+        self.assertEqual(update_calls, 2)
+        self.assertEqual(refresh_calls, 2)
+        self.assertEqual(
+            execution.run.report["recommendation_refresh"]["refresh_id"],
+            "refresh-after-retry",
         )
 
     def test_late_backfill_cannot_be_labeled_live(self) -> None:
