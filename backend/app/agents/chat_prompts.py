@@ -32,6 +32,8 @@ class ChatPromptContext(Protocol):
     filter_query: Any
     matched_symbols: list[str]
     last_capabilities: list[str]
+    promotion_days: int | None
+    promotion_symbols: list[str]
 
 
 def _tool_planner_system_prompt(
@@ -121,6 +123,7 @@ def _tool_planner_system_prompt(
         "A comparison of which current candidates or first-board samples have better quality is first_board_rating. prediction_review requires explicit realized-outcome language such as 后续表现, 走出来, 兑现, 命中 or 复盘过去结果. "
         "For scoring weights, strategy versions, autonomous learning, Champion, or Challenger questions, call scoring_policy_status. "
         "For daily limit-up promotion rates, first-board-to-second-board rates, or continued-board ladder success, call daily_board_promotion; do not infer rates from same-day counts. "
+        "For a follow-up about how those promoted stocks opened on the promotion day, preserve recent_context.promotion_days, call daily_board_promotion again, and use its deterministic previous-close opening gaps; do not interpret 开盘 as an exchange-hours question. "
         "Questions asking how many stocks sealed yesterday continued to seal today are also board_promotion, not a same-day limit_up_pool list. "
         "An '一进二观察名单', candidate list, recommendation ranking, or Top10 means first_board_rating; historical realized one-to-two counts or rates mean board_promotion. "
         "For first-board position/location classification, position means the pre-board K-line regime such as low-base breakout, oversold rebound, V reversal, high breakout or second wave; call first_board_ratings and never classify by first seal time. "
@@ -251,6 +254,8 @@ def _tool_planner_user_prompt(
             "filter": context.filter_query.label if context.filter_query else None,
             "matched_symbols": context.matched_symbols[:20],
             "last_capabilities": context.last_capabilities,
+            "promotion_days": context.promotion_days,
+            "promotion_symbols": context.promotion_symbols[:60],
         },
     }
     return json.dumps(context_payload, ensure_ascii=False, separators=(",", ":"))
@@ -331,6 +336,7 @@ def _tool_answer_system_prompt(
         "For broad-index trend questions, cite the requested window and data_as_of, compare all returned major indices using period returns, up/down days and drawdown, and do not substitute limit-up counts for index performance. "
         "Do not assign categorical market-sentiment labels such as heating, divergence, cooling, risk-on or risk-off; report objective market counts, rates and index changes instead. "
         "For daily_board_promotion, treat each trade_date as the day promotion was observed from previous_trade_date; report empirical sample counts with every rate and distinguish all limit-up stocks, first-board-to-second-board, and existing continued-board cohorts. "
+        "When asked about promotion-day opening conditions, use only first-board-to-second-board stocks, report each opening gap against the previous close, disclose missing K-line rows, and compare high-open with low-open counts. "
         "For first_board_ratings, the immutable after-close Top10 remains the one-to-two review sample. State every stage and date. "
         "For review_high_score_picks promotion comparisons, report Top10 and full-market first-board sample counts together, separate pending dates, and express promotion_rate_delta as percentage points. "
         "For dragon_tiger_list, omit every missing capital-flow field and format each valid CNY amount as signed 亿元 or 万元; never expose raw yuan values, None, null, NaN, or a missing-data placeholder. "

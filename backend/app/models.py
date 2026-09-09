@@ -538,6 +538,10 @@ class BoardPromotionStock(BaseModel):
     to_board_height: int
     first_limit_time: time
     break_count: int
+    previous_close: float | None = None
+    open_price: float | None = None
+    open_gap_pct: float | None = None
+    open_type: Literal["high", "flat", "low"] | None = None
 
 
 class DailyBoardPromotionStat(BaseModel):
@@ -556,6 +560,11 @@ class DailyBoardPromotionStat(BaseModel):
     continued_board_probability: float | None = None
     buckets: list[BoardPromotionBucket]
     promoted_stocks: list[BoardPromotionStock]
+    first_board_opening_evaluable_count: int = 0
+    first_board_high_open_count: int = 0
+    first_board_flat_open_count: int = 0
+    first_board_low_open_count: int = 0
+    first_board_opening_missing_symbols: list[str] = Field(default_factory=list)
 
 
 class FailedRateStat(BaseModel):

@@ -96,6 +96,7 @@ from app.agents.tool_policy import (
     looks_like_broad_sector_ranking_question as _looks_like_broad_sector_ranking_question,
     looks_like_daily_board_promotion_question as _looks_like_daily_board_promotion_question,
     looks_like_first_board_position_question as _looks_like_first_board_position_question,
+    looks_like_promotion_opening_question as _looks_like_promotion_opening_question,
     looks_like_rating_explain_question as _looks_like_rating_explain_question,
     looks_like_stock_kline_question as _looks_like_stock_kline_question,
 )
@@ -137,7 +138,7 @@ from app.services.prompt_security import (
 from app.services.session_memory import memory_prompt_payload
 
 
-CHAT_AGENT_VERSION = "first-board-chat-policy-v14-prompt-security"
+CHAT_AGENT_VERSION = "first-board-chat-policy-v15-promotion-opening"
 _FORCE_TEMPLATE_ANSWER_OVERRIDE: ContextVar[bool | None] = ContextVar(
     "force_template_answer_override",
     default=None,
@@ -383,6 +384,7 @@ def answer_first_board_chat(
     daily_promotion_fallback = _answer_daily_board_promotion_without_llm(
         request=request,
         tools=tools,
+        context=context,
     )
     if daily_promotion_fallback is not None:
         return daily_promotion_fallback
@@ -582,7 +584,7 @@ def _answer_with_llm_tool_agent(
 ) -> AgentChatResponse | None:
     """Let the LLM choose tools first, then answer from executed tool facts."""
 
-    deterministic = _deterministic_pre_llm_response(request, tools.events)
+    deterministic = _deterministic_pre_llm_response(request, tools.events, context)
     if deterministic is not None:
         return deterministic
 
@@ -842,6 +844,7 @@ def _answer_with_llm_tool_agent(
         or _is_simple_sector_performance(execution["facts"])
         or _is_simple_sector_stock_ranking(execution["facts"])
         or _is_simple_market_event_pool(execution["facts"])
+        or _looks_like_promotion_opening_question(request.message)
         or any(
             name in execution["facts"]
             for name in (
@@ -1113,7 +1116,11 @@ def _generate_llm_query_plan(
 
     tool_calls = _normalize_tool_calls(payload.get("tool_calls"))
     tool_calls = _normalize_first_board_position_tool_calls(request, tool_calls)
-    tool_calls = _normalize_daily_board_promotion_tool_calls(request, tool_calls)
+    tool_calls = _normalize_daily_board_promotion_tool_calls(
+        request,
+        tool_calls,
+        default_days=context.promotion_days or 5,
+    )
     is_post_limit_query = looks_like_post_limit_question(
         request.message
     ) or _looks_like_post_limit_context_followup(request.message, context)
@@ -1221,10 +1228,11 @@ def _generate_llm_query_plan(
 def _deterministic_pre_llm_response(
     request: AgentChatRequest,
     events: list[LimitUpEvent],
+    context: "_SessionContext",
 ) -> AgentChatResponse | None:
     """Handle stable product and availability questions before LLM planning."""
 
-    plan = _build_agent_plan(request=request, context=_SessionContext())
+    plan = _build_agent_plan(request=request, context=context)
     if plan.intent == "capability_intro":
         return _with_plan_trace(
             _answer_static_text(request, "capability_intro", TEXT["capability"]),
@@ -1544,13 +1552,17 @@ def _answer_market_index_trend_without_llm(
 def _answer_daily_board_promotion_without_llm(
     request: AgentChatRequest,
     tools: AgentToolRegistry,
+    context: "_SessionContext",
 ) -> AgentChatResponse | None:
     """Answer promotion-rate questions deterministically when the LLM is unavailable."""
 
     if not _looks_like_daily_board_promotion_question(request.message):
         return None
     result = tools.daily_board_promotion(
-        days=_extract_promotion_days(request.message),
+        days=_extract_promotion_days(
+            request.message,
+            default_days=context.promotion_days or 5,
+        ),
         end_date=request.trade_date or _extract_trade_date(request.message),
     )
     facts = result.trace_output
@@ -1558,7 +1570,10 @@ def _answer_daily_board_promotion_without_llm(
         session_id=request.session_id,
         intent="daily_board_promotion",
         answer=_ensure_safety_boundary(
-            _template_daily_board_promotion_answer(facts)
+            _template_daily_board_promotion_answer(
+                facts,
+                message=request.message,
+            )
         ),
         tool_calls=["daily_board_promotion", "template_general_answer"],
         tool_results=[result.trace()],
@@ -1668,6 +1683,8 @@ class _SessionContext:
         conversation_history: list[dict[str, str]] | None = None,
         last_capabilities: list[str] | None = None,
         last_intent: str | None = None,
+        promotion_days: int | None = None,
+        promotion_symbols: list[str] | None = None,
         session_memory: dict[str, Any] | None = None,
     ):
         self.symbol = symbol
@@ -1678,6 +1695,8 @@ class _SessionContext:
         self.conversation_history = conversation_history or []
         self.last_capabilities = last_capabilities or []
         self.last_intent = last_intent
+        self.promotion_days = promotion_days
+        self.promotion_symbols = promotion_symbols or []
         self.session_memory = session_memory
 
 
@@ -2094,6 +2113,29 @@ def _merge_context_from_run(context: _SessionContext, run: AgentRun) -> None:
                 )
             if not context.matched_symbols:
                 context.matched_symbols = list(tool_input.get("matched_symbols") or [])
+        if tool_result.get("name") == "daily_board_promotion":
+            if context.promotion_days is None:
+                try:
+                    context.promotion_days = max(
+                        1,
+                        min(int(tool_input.get("days")), 60),
+                    )
+                except (TypeError, ValueError):
+                    pass
+            if not context.promotion_symbols:
+                tool_output = tool_result.get("output") or {}
+                context.promotion_symbols = list(
+                    dict.fromkeys(
+                        str(stock.get("symbol"))
+                        for item in tool_output.get("items") or []
+                        if isinstance(item, dict)
+                        for stock in item.get("promoted_stocks") or []
+                        if isinstance(stock, dict)
+                        and stock.get("symbol")
+                        and int(stock.get("from_board_height") or 0) == 1
+                        and int(stock.get("to_board_height") or 0) == 2
+                    )
+                )
         if tool_result.get("name") == "limit_up_events":
             query_contract = tool_input.get("query_contract") or {}
             if context.trade_date is None:
@@ -2918,9 +2960,10 @@ def _detect_intent(message: str, intent_hint: str | None = None) -> str:
         return "greeting"
     if _looks_like_smalltalk(normalized):
         return "smalltalk"
+    if _looks_like_market_schedule_question(normalized):
+        return "market_schedule"
     for intent in (
         "greeting",
-        "market_schedule",
         "market_context",
         "limit_up_query",
         "risk_summary",
@@ -2936,6 +2979,43 @@ def _detect_intent(message: str, intent_hint: str | None = None) -> str:
     if _looks_like_domain_question(normalized):
         return "unknown"
     return "out_of_scope"
+
+
+def _looks_like_market_schedule_question(message: str) -> bool:
+    """Distinguish exchange hours from stock opening-price analysis."""
+
+    compact = re.sub(r"[\s，。！？,.!?]", "", message.lower())
+    if any(
+        term in compact
+        for term in (
+            "高开",
+            "低开",
+            "平开",
+            "开盘价",
+            "开盘情况",
+            "开盘表现",
+            "开盘涨",
+            "开盘跌",
+        )
+    ):
+        return False
+    return any(
+        term in compact
+        for term in (
+            "几点开盘",
+            "什么时候开盘",
+            "何时开盘",
+            "几点收盘",
+            "什么时候收盘",
+            "何时收盘",
+            "交易时间",
+            "开市时间",
+            "今天开不开盘",
+            "今天是否开盘",
+            "今天开盘吗",
+            "集合竞价时间",
+        )
+    )
 
 
 def _looks_like_capability_question(message: str) -> bool:

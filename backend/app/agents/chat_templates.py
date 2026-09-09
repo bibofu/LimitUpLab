@@ -11,6 +11,7 @@ from app.agents.query_contract import (
 from app.agents.tool_policy import (
     QuestionSignals as _QuestionSignals,
     looks_like_first_board_position_question as _looks_like_first_board_position_question,
+    looks_like_promotion_opening_question as _looks_like_promotion_opening_question,
 )
 from app.models import AgentChatRequest
 from app.post_limit_query_contract import default_recent_limit_days
@@ -394,7 +395,10 @@ def _template_answer_from_tool_facts(
         return "\n".join(lines)
 
     if "daily_board_promotion" in facts:
-        return _template_daily_board_promotion_answer(facts["daily_board_promotion"])
+        return _template_daily_board_promotion_answer(
+            facts["daily_board_promotion"],
+            message=request.message,
+        )
 
     if "first_board_ratings" in facts and "limit_up_events" not in facts:
         ratings = facts["first_board_ratings"]
@@ -1083,12 +1087,19 @@ def _looks_like_high_score_promotion_question(message: str) -> bool:
     )
 
 
-def _template_daily_board_promotion_answer(payload: dict[str, Any]) -> str:
+def _template_daily_board_promotion_answer(
+    payload: dict[str, Any],
+    *,
+    message: str = "",
+) -> str:
     """Render daily empirical board-promotion rates from tool facts."""
 
     items = payload.get("items") or []
     if not items:
         return "本地没有足够的相邻交易日收盘数据，暂时无法计算每日连板晋级率。"
+
+    if _looks_like_promotion_opening_question(message):
+        return _template_promotion_opening_answer(items)
 
     def cohort_text(item: dict[str, Any], prefix: str) -> str:
         sample_size = int(item.get(f"{prefix}_sample_size") or 0)
@@ -1136,6 +1147,67 @@ def _template_daily_board_promotion_answer(payload: dict[str, Any]) -> str:
     else:
         lines.append("最新交易日没有识别到收盘晋级成功的股票。")
     lines.append("该指标是已发生样本的经验比例，用于描述接力环境，不代表未来成功概率。")
+    return "\n".join(lines)
+
+
+def _template_promotion_opening_answer(items: list[dict[str, Any]]) -> str:
+    """Render all first-to-second promotion-day opening gaps and distribution."""
+
+    labels = {"high": "高开", "flat": "平开", "low": "低开"}
+    total_high = total_flat = total_low = total_missing = 0
+    lines = ["按晋级日开盘价相对前一交易日收盘价统计，一进二样本如下："]
+    for item in items:
+        stocks = [
+            stock
+            for stock in item.get("promoted_stocks") or []
+            if int(stock.get("from_board_height") or 0) == 1
+            and int(stock.get("to_board_height") or 0) == 2
+        ]
+        high_count = int(item.get("first_board_high_open_count") or 0)
+        flat_count = int(item.get("first_board_flat_open_count") or 0)
+        low_count = int(item.get("first_board_low_open_count") or 0)
+        missing_count = len(item.get("first_board_opening_missing_symbols") or [])
+        total_high += high_count
+        total_flat += flat_count
+        total_low += low_count
+        total_missing += missing_count
+        lines.append(
+            f"- {item.get('trade_date')}：高开 {high_count} 只，"
+            f"平开 {flat_count} 只，低开 {low_count} 只"
+            + (f"，缺少开盘数据 {missing_count} 只" if missing_count else "")
+            + "。"
+        )
+        details = []
+        for stock in stocks:
+            open_type = stock.get("open_type")
+            gap = stock.get("open_gap_pct")
+            if open_type in labels and gap is not None:
+                details.append(
+                    f"{stock.get('name')}({stock.get('symbol')}) "
+                    f"{labels[open_type]} {float(gap):+.2f}%"
+                )
+            else:
+                details.append(
+                    f"{stock.get('name')}({stock.get('symbol')}) 开盘数据缺失"
+                )
+        if details:
+            lines.append("  " + IDEOGRAPHIC_COMMA.join(details) + "。")
+
+    evaluable = total_high + total_flat + total_low
+    comparison = (
+        "高开更多"
+        if total_high > total_low
+        else "低开更多"
+        if total_low > total_high
+        else "高开与低开数量相同"
+    )
+    lines.append(
+        f"合计可评价 {evaluable} 只：高开 {total_high} 只、平开 {total_flat} 只、"
+        f"低开 {total_low} 只，{comparison}。"
+    )
+    if total_missing:
+        lines.append(f"另有 {total_missing} 只缺少对应两日完整 K 线，未计入高低开比较。")
+    lines.append("以上为已发生行情的复盘统计，不代表后续表现。")
     return "\n".join(lines)
 
 

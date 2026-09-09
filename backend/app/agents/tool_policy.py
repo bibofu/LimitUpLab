@@ -1534,21 +1534,71 @@ def looks_like_daily_board_promotion_question(message: str) -> bool:
     scoring_policy_terms = ("Champion", "Challenger", "冠军", "挑战者", "评分策略")
     if any(term.lower() in message.lower() for term in scoring_policy_terms):
         return False
-    stock_detail_question = "晋级" in message and any(
+    stock_detail_question = any(
+        term in message for term in ("晋级", "一进二", "1进2", "1-2")
+    ) and any(
         term in message
         for term in ("哪些票", "哪些股票", "哪些个股", "股票有哪些", "票有哪些")
     )
-    return (
+    promotion_opening_question = "晋级" in message and any(
+        term in message for term in ("开盘", "高开", "平开", "低开")
+    )
+    return promotion_opening_question or (
         any(term in message for term in promotion_terms)
         and any(term in message for term in board_terms)
     ) or stock_detail_question
 
 
-def extract_promotion_days(message: str) -> int:
+def extract_promotion_days(message: str, default_days: int = 5) -> int:
     """Extract a bounded number of recent promotion observations."""
 
     match = re.search(r"(?:最近|近|过去)?\s*(\d{1,2})\s*(?:个?交易日|天|日)", message)
-    return max(1, min(int(match.group(1)), 60)) if match else 5
+    if match:
+        return max(1, min(int(match.group(1)), 60))
+    chinese_match = re.search(
+        r"(?:最近|近|过去)?\s*([一二三四五六七八九十两]{1,3})\s*(?:个?交易日|天|日)",
+        message,
+    )
+    if chinese_match:
+        chinese_days = _parse_chinese_integer(chinese_match.group(1))
+        if chinese_days is not None:
+            return max(1, min(chinese_days, 60))
+    return max(1, min(default_days, 60))
+
+
+def _parse_chinese_integer(value: str) -> int | None:
+    """Parse the small Chinese integers used in trading-day windows."""
+
+    digits = {
+        "一": 1,
+        "二": 2,
+        "两": 2,
+        "三": 3,
+        "四": 4,
+        "五": 5,
+        "六": 6,
+        "七": 7,
+        "八": 8,
+        "九": 9,
+    }
+    if value in digits:
+        return digits[value]
+    if value == "十":
+        return 10
+    if "十" not in value:
+        return None
+    tens, ones = value.split("十", 1)
+    tens_value = digits.get(tens, 1) if tens else 1
+    ones_value = digits.get(ones, 0) if ones else 0
+    return tens_value * 10 + ones_value
+
+
+def looks_like_promotion_opening_question(message: str) -> bool:
+    """Return whether promotion-day opening gaps are the requested evidence."""
+
+    return "晋级" in message and any(
+        term in message for term in ("开盘", "高开", "平开", "低开")
+    )
 
 
 def extract_board_filters(message: str) -> tuple[int | None, int | None]:

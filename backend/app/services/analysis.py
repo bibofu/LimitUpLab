@@ -21,6 +21,7 @@ from app.models import (
     MarketIndexSnapshot,
     MarketSummary,
     PostPerformanceStat,
+    StockDailyBar,
 )
 
 RECENT_LIMIT_UP_TRADING_DAYS = 7
@@ -303,6 +304,72 @@ def calculate_daily_board_promotion(
     if end_date is not None:
         daily_stats = [item for item in daily_stats if item.trade_date <= end_date]
     return daily_stats[-days:]
+
+
+def enrich_board_promotion_openings(
+    stats: list[DailyBoardPromotionStat],
+    daily_bars: list[StockDailyBar],
+) -> list[DailyBoardPromotionStat]:
+    """Attach deterministic promotion-day opening gaps from persisted daily bars."""
+
+    bars_by_key = {(bar.symbol, bar.trade_date): bar for bar in daily_bars}
+    enriched: list[DailyBoardPromotionStat] = []
+    for stat in stats:
+        promoted_stocks: list[BoardPromotionStock] = []
+        for stock in stat.promoted_stocks:
+            previous = bars_by_key.get((stock.symbol, stat.previous_trade_date))
+            current = bars_by_key.get((stock.symbol, stat.trade_date))
+            if previous is None or current is None or previous.close <= 0:
+                promoted_stocks.append(stock)
+                continue
+            open_gap_pct = round((current.open / previous.close - 1) * 100, 2)
+            open_type = (
+                "high"
+                if current.open > previous.close
+                else "low"
+                if current.open < previous.close
+                else "flat"
+            )
+            promoted_stocks.append(
+                stock.model_copy(
+                    update={
+                        "previous_close": previous.close,
+                        "open_price": current.open,
+                        "open_gap_pct": open_gap_pct,
+                        "open_type": open_type,
+                    }
+                )
+            )
+
+        first_to_second = [
+            stock
+            for stock in promoted_stocks
+            if stock.from_board_height == 1 and stock.to_board_height == 2
+        ]
+        evaluable = [stock for stock in first_to_second if stock.open_type is not None]
+        enriched.append(
+            stat.model_copy(
+                update={
+                    "promoted_stocks": promoted_stocks,
+                    "first_board_opening_evaluable_count": len(evaluable),
+                    "first_board_high_open_count": sum(
+                        stock.open_type == "high" for stock in evaluable
+                    ),
+                    "first_board_flat_open_count": sum(
+                        stock.open_type == "flat" for stock in evaluable
+                    ),
+                    "first_board_low_open_count": sum(
+                        stock.open_type == "low" for stock in evaluable
+                    ),
+                    "first_board_opening_missing_symbols": [
+                        stock.symbol
+                        for stock in first_to_second
+                        if stock.open_type is None
+                    ],
+                }
+            )
+        )
+    return enriched
 
 
 def _optional_rate(count: int, sample_size: int) -> float | None:

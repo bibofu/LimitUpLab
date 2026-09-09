@@ -50,6 +50,7 @@ from app.repositories import (
 )
 from app.services.analysis import (
     calculate_daily_board_promotion,
+    enrich_board_promotion_openings,
     events_for_date,
     summarize_market,
 )
@@ -1036,6 +1037,18 @@ class AgentToolRegistry:
             days=max(1, min(days, 60)),
             end_date=end_date,
         )
+        promoted_symbols = sorted(
+            {
+                stock.symbol
+                for stat in stats
+                for stock in stat.promoted_stocks
+            }
+        )
+        daily_bars = self.first_board_repository.list_daily_bars_for_symbols(
+            promoted_symbols,
+            end_date=stats[-1].trade_date if stats else end_date,
+        )
+        stats = enrich_board_promotion_openings(stats, daily_bars)
         trace_output = {
             "requested_days": days,
             "end_date": end_date.isoformat() if end_date else None,

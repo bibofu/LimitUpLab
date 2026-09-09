@@ -163,15 +163,26 @@ def _normalize_first_board_position_tool_calls(
 def _normalize_daily_board_promotion_tool_calls(
     request: AgentChatRequest,
     tool_calls: list[dict[str, Any]],
+    *,
+    default_days: int = 5,
 ) -> list[dict[str, Any]]:
     """Route daily promotion questions to the adjacent-close cohort tool."""
 
     if not _looks_like_daily_board_promotion_question(request.message):
         return tool_calls
+    requested_days = _extract_promotion_days(
+        request.message,
+        default_days=default_days,
+    )
     normalized = [
         call for call in tool_calls if call.get("name") != "limit_up_events"
     ]
-    if any(call.get("name") == "daily_board_promotion" for call in normalized):
+    for call in normalized:
+        if call.get("name") != "daily_board_promotion":
+            continue
+        arguments = dict(call.get("arguments") or {})
+        arguments["days"] = requested_days
+        call["arguments"] = arguments
         return normalized
     end_date = request.trade_date or _extract_trade_date(request.message)
     normalized.insert(
@@ -179,10 +190,9 @@ def _normalize_daily_board_promotion_tool_calls(
         {
             "name": "daily_board_promotion",
             "arguments": {
-                "days": _extract_promotion_days(request.message),
+                "days": requested_days,
                 "end_date": end_date.isoformat() if end_date else None,
             },
         },
     )
     return normalized[:6]
-

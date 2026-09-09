@@ -6,9 +6,13 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from app.agents.chat import (
+    _build_session_context,
     _template_answer_from_tool_facts,
     answer_first_board_chat,
     plan_agent_query,
+)
+from app.agents.chat_plan_normalization import (
+    _normalize_daily_board_promotion_tool_calls,
 )
 from app.agents.tools import AgentToolRegistry
 from app.models import (
@@ -19,6 +23,7 @@ from app.models import (
     LimitUpEvent,
     StockKLineBar,
     StockKLineFacts,
+    StockDailyBar,
     StockPositionAssessment,
     StockPositionMatch,
 )
@@ -984,6 +989,176 @@ class AgentChatTest(unittest.TestCase):
         self.assertEqual(fallback_response.intent, "daily_board_promotion")
         self.assertIn("daily_board_promotion", fallback_response.tool_calls)
         self.assertIn("0/1", fallback_response.answer)
+
+    def test_promotion_opening_followup_reuses_previous_days_and_kline(self) -> None:
+        database_path = (
+            Path(__file__).resolve().parents[1]
+            / f"promotion-opening-{uuid4().hex}.sqlite"
+        )
+        for suffix in ("", "-shm", "-wal"):
+            self.addCleanup(Path(f"{database_path}{suffix}").unlink, missing_ok=True)
+        repository = SQLiteFirstBoardRepository(database_path=database_path)
+        template = SAMPLE_EVENTS[0]
+
+        def event(symbol: str, name: str, trade_date: date, height: int) -> LimitUpEvent:
+            return template.model_copy(
+                update={
+                    "symbol": symbol,
+                    "name": name,
+                    "trade_date": trade_date,
+                    "board_height": height,
+                    "closed_limit": True,
+                }
+            )
+
+        first_date = date(2026, 9, 7)
+        second_date = date(2026, 9, 8)
+        third_date = date(2026, 9, 9)
+        events = [
+            event("000001", "高开样本", first_date, 1),
+            event("000001", "高开样本", second_date, 2),
+            event("000003", "缺失样本", first_date, 1),
+            event("000003", "缺失样本", second_date, 2),
+            event("000002", "低开样本", second_date, 1),
+            event("000002", "低开样本", third_date, 2),
+        ]
+        created_at = datetime(2026, 9, 9, tzinfo=timezone.utc)
+
+        def bar(symbol: str, trade_date: date, open_price: float, close: float) -> StockDailyBar:
+            return StockDailyBar(
+                symbol=symbol,
+                trade_date=trade_date,
+                open=open_price,
+                high=max(open_price, close),
+                low=min(open_price, close),
+                close=close,
+                volume=1_000_000,
+                amount=10_000_000,
+                source="test",
+                created_at=created_at,
+            )
+
+        repository.upsert_daily_bars(
+            [
+                bar("000001", first_date, 9.8, 10.0),
+                bar("000001", second_date, 10.5, 11.0),
+                bar("000002", second_date, 20.2, 20.0),
+                bar("000002", third_date, 19.0, 22.0),
+            ]
+        )
+        previous = AgentRun(
+            run_id="promotion-source-run",
+            session_id="promotion-followup",
+            run_type="agent_chat",
+            status="success",
+            intent="daily_board_promotion",
+            tool_calls=["daily_board_promotion"],
+            input_json={"message": "最近两天，一进二成功的票有哪些"},
+            output_json={
+                "tool_results": [
+                    {
+                        "name": "daily_board_promotion",
+                        "input": {"days": 2, "end_date": None},
+                        "output": {
+                            "items": [
+                                {
+                                    "promoted_stocks": [
+                                        {
+                                            "symbol": "000001",
+                                            "from_board_height": 1,
+                                            "to_board_height": 2,
+                                        },
+                                        {
+                                            "symbol": "000002",
+                                            "from_board_height": 1,
+                                            "to_board_height": 2,
+                                        },
+                                        {
+                                            "symbol": "000003",
+                                            "from_board_height": 1,
+                                            "to_board_height": 2,
+                                        },
+                                    ]
+                                }
+                            ]
+                        },
+                    }
+                ]
+            },
+            started_at=created_at,
+            finished_at=created_at,
+        )
+        recovered_context = _build_session_context([previous])
+        self.assertEqual(recovered_context.promotion_days, 2)
+        self.assertEqual(
+            recovered_context.promotion_symbols,
+            ["000001", "000002", "000003"],
+        )
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="promotion-followup",
+                message="这些票在1-2晋级成功的那天，开盘的情况是什么样，高开还是低开的多",
+            ),
+            events=events,
+            repository=repository,
+            recent_runs=[previous],
+            llm_provider=DisabledLLMProvider(),
+        )
+
+        self.assertEqual(response.intent, "daily_board_promotion")
+        self.assertIn("daily_board_promotion", response.tool_calls)
+        self.assertNotEqual(response.intent, "market_schedule")
+        self.assertIn("高开样本(000001) 高开 +5.00%", response.answer)
+        self.assertIn("低开样本(000002) 低开 -5.00%", response.answer)
+        self.assertIn("缺失样本(000003) 开盘数据缺失", response.answer)
+        self.assertIn("另有 1 只缺少对应两日完整 K 线", response.answer)
+        self.assertIn("高开与低开数量相同", response.answer)
+        trace = next(
+            item for item in response.tool_results if item.name == "daily_board_promotion"
+        )
+        self.assertEqual(trace.input["days"], 2)
+
+    def test_market_schedule_requires_a_schedule_question(self) -> None:
+        response = answer_first_board_chat(
+            AgentChatRequest(session_id="schedule", message="A股几点开盘？"),
+            events=SAMPLE_EVENTS,
+            llm_provider=DisabledLLMProvider(),
+        )
+
+        self.assertEqual(response.intent, "market_schedule")
+        self.assertIn("09:30-11:30", response.answer)
+
+    def test_promotion_opening_normalization_overrides_planner_days(self) -> None:
+        calls = _normalize_daily_board_promotion_tool_calls(
+            AgentChatRequest(
+                session_id="promotion-normalization",
+                message="这些票晋级当天高开还是低开的多",
+            ),
+            [
+                {
+                    "name": "daily_board_promotion",
+                    "arguments": {"days": 5},
+                }
+            ],
+            default_days=2,
+        )
+
+        self.assertEqual(calls[0]["arguments"]["days"], 2)
+
+        first_turn_calls = _normalize_daily_board_promotion_tool_calls(
+            AgentChatRequest(
+                session_id="promotion-normalization",
+                message="最近两天，一进二成功的票有哪些",
+            ),
+            [
+                {
+                    "name": "daily_board_promotion",
+                    "arguments": {"days": 5},
+                }
+            ],
+        )
+        self.assertEqual(first_turn_calls[0]["arguments"]["days"], 2)
 
     @patch("app.agents.tools.build_stock_kline_facts")
     def test_stock_trend_question_repairs_to_kline_tool(self, build_facts) -> None:
