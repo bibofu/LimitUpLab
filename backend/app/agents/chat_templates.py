@@ -1100,6 +1100,8 @@ def _template_daily_board_promotion_answer(
 
     if _looks_like_promotion_opening_question(message):
         return _template_promotion_opening_answer(items)
+    if _looks_like_first_to_second_stock_list(message):
+        return _template_first_to_second_stock_list(items)
 
     def cohort_text(item: dict[str, Any], prefix: str) -> str:
         sample_size = int(item.get(f"{prefix}_sample_size") or 0)
@@ -1147,6 +1149,49 @@ def _template_daily_board_promotion_answer(
     else:
         lines.append("最新交易日没有识别到收盘晋级成功的股票。")
     lines.append("该指标是已发生样本的经验比例，用于描述接力环境，不代表未来成功概率。")
+    return "\n".join(lines)
+
+
+def _looks_like_first_to_second_stock_list(message: str) -> bool:
+    """Return whether concrete first-to-second promoted stocks are requested."""
+
+    return any(term in message for term in ("一进二", "1进2", "1-2")) and any(
+        term in message
+        for term in ("哪些票", "哪些股票", "哪些个股", "股票有哪些", "票有哪些")
+    )
+
+
+def _template_first_to_second_stock_list(items: list[dict[str, Any]]) -> str:
+    """Render every first-to-second stock for every requested promotion day."""
+
+    lines = ["按相邻交易日收盘封板口径，一进二成功股票如下："]
+    for item in items:
+        stocks = [
+            stock
+            for stock in item.get("promoted_stocks") or []
+            if int(stock.get("from_board_height") or 0) == 1
+            and int(stock.get("to_board_height") or 0) == 2
+        ]
+        sample_size = int(item.get("first_board_sample_size") or 0)
+        promoted_count = int(item.get("first_board_promoted_count") or 0)
+        probability = item.get("first_board_probability")
+        rate = f"{float(probability):.1%}" if probability is not None else "无样本"
+        lines.append(
+            f"- {item.get('trade_date')}（前一交易日 {item.get('previous_trade_date')}）："
+            f"{promoted_count}/{sample_size}，晋级率 {rate}。"
+        )
+        if stocks:
+            lines.append(
+                "  "
+                + IDEOGRAPHIC_COMMA.join(
+                    f"{stock.get('name')}({stock.get('symbol')})"
+                    for stock in stocks
+                )
+                + "。"
+            )
+        else:
+            lines.append("  当日没有识别到一进二成功股票。")
+    lines.append("以上为已发生收盘行情的复盘统计，不代表未来晋级结果。")
     return "\n".join(lines)
 
 

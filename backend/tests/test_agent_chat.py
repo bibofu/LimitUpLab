@@ -1095,6 +1095,21 @@ class AgentChatTest(unittest.TestCase):
             ["000001", "000002", "000003"],
         )
 
+        first_response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="promotion-first-turn",
+                message="最近两天，一进二成功的票有哪些",
+            ),
+            events=events,
+            repository=repository,
+            llm_provider=DisabledLLMProvider(),
+        )
+        self.assertIn("2026-09-08", first_response.answer)
+        self.assertIn("2026-09-09", first_response.answer)
+        self.assertIn("高开样本(000001)", first_response.answer)
+        self.assertIn("低开样本(000002)", first_response.answer)
+        self.assertNotIn("2→3板", first_response.answer)
+
         response = answer_first_board_chat(
             AgentChatRequest(
                 session_id="promotion-followup",
