@@ -605,7 +605,11 @@ export function AgentChatDock({
 function inferChatIntent(message: string) {
   /** Infer a deterministic tool hint before the backend performs final routing. */
 
-  if (/开盘|收盘|集合竞价|交易时间/.test(message)) {
+  if (
+    /(?:几点|什么时候|何时).*(?:开盘|收盘)|(?:开盘|收盘).*(?:几点|什么时候|何时)|交易时间|开市时间|今天(?:开不开盘|是否开盘|开盘吗)|集合竞价时间/.test(
+      message,
+    )
+  ) {
     return "market_schedule";
   }
   if (

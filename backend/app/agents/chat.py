@@ -2948,7 +2948,13 @@ def _answer_llm_explanation(
 def _detect_intent(message: str, intent_hint: str | None = None) -> str:
     """Map common questions to a supported tool intent."""
 
-    if intent_hint in SUPPORTED_INTENTS:
+    if (
+        intent_hint in SUPPORTED_INTENTS
+        and (
+            intent_hint != "market_schedule"
+            or _looks_like_market_schedule_question(message)
+        )
+    ):
         return intent_hint
 
     normalized = message.strip().lower()

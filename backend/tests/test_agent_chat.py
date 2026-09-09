@@ -1114,6 +1114,7 @@ class AgentChatTest(unittest.TestCase):
             AgentChatRequest(
                 session_id="promotion-followup",
                 message="这些票在1-2晋级成功的那天，开盘的情况是什么样，高开还是低开的多",
+                intent_hint="market_schedule",
             ),
             events=events,
             repository=repository,
