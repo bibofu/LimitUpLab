@@ -106,6 +106,30 @@ def test_query_contract_routes_shapes_and_user_numeric_overrides():
     assert anchored_path.data_as_of == date(2026, 9, 7)
 
 
+def test_drawdown_magnitude_wording_routes_to_complete_screen_list():
+    message = "近期涨停后回撤比较多的股票有哪些"
+    contract = build_post_limit_query_contract(
+        message,
+        planner_arguments={
+            "mode": "statistics",
+            "shape": "pullback_stabilizing",
+            "recent_limit_days": 5,
+        },
+    )
+
+    assert looks_like_post_limit_question(message)
+    assert not looks_like_post_limit_statistics_question(message)
+    assert contract.mode == "screen"
+    assert contract.shape == "high_drawdown"
+    assert contract.shapes == ("high_drawdown",)
+    assert contract.recent_limit_days == 7
+    assert contract.exhaustive
+    assert contract.limit == 100
+    signals = QuestionSignals.from_message(message)
+    assert signals.post_limit_screen
+    assert not signals.post_limit_statistics
+
+
 def test_premarket_observation_shapes_default_to_seven_event_days():
     high_drawdown = build_post_limit_query_contract(
         "有哪些涨停后从高位大幅回撤的票",
@@ -119,7 +143,7 @@ def test_premarket_observation_shapes_default_to_seven_event_days():
     )
     stock_path = build_post_limit_query_contract("600001涨停后的逐日走势")
 
-    assert high_drawdown.version == "post-limit-query-v2"
+    assert high_drawdown.version == "post-limit-query-v3"
     assert high_drawdown.recent_limit_days == 7
     assert volume_consolidation.recent_limit_days == 7
     assert combined.recent_limit_days == 7

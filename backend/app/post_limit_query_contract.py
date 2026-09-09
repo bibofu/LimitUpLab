@@ -7,7 +7,7 @@ from dataclasses import asdict, dataclass
 from datetime import date
 from typing import Any, Literal
 
-POST_LIMIT_QUERY_VERSION = "post-limit-query-v2"
+POST_LIMIT_QUERY_VERSION = "post-limit-query-v3"
 DEFAULT_RECENT_LIMIT_DAYS = 5
 PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS = 7
 PostLimitMode = Literal["screen", "path", "statistics"]
@@ -36,6 +36,11 @@ SHAPE_ALIASES: tuple[tuple[PostLimitShape, tuple[str, ...]], ...] = (
             "冲高回落",
             "高位回撤",
             "大幅回撤",
+            "回撤比较多",
+            "回撤较多",
+            "回撤比较大",
+            "回撤较大",
+            "回撤较深",
         ),
     ),
 )
@@ -116,13 +121,29 @@ def looks_like_post_limit_question(message: str) -> bool:
 
 def looks_like_post_limit_statistics_question(message: str) -> bool:
     compact = re.sub(r"\s+", "", message.lower())
-    return looks_like_post_limit_question(message) and any(
-        term in compact
-        for term in (
-            "统计", "历史表现", "正比例", "平均", "均值", "中位数", "样本数", "多少样本",
-            "哪种形态", "比较", "胜率", "盈利", "成功率", "d+1", "d+3", "d+5",
-        )
+    if not looks_like_post_limit_question(message):
+        return False
+    statistical_terms = (
+        "统计", "历史表现", "正比例", "平均", "均值", "中位数", "样本数", "多少样本",
+        "哪种形态", "胜率", "盈利", "成功率", "d+1", "d+3", "d+5",
     )
+    if any(term in compact for term in statistical_terms):
+        return True
+    # “回撤比较多/较大” describes magnitude; it is not a comparison request.
+    magnitude_wording_removed = re.sub(
+        r"比较(?:多|大|深|高|低|强|弱|明显|严重)",
+        "",
+        compact,
+    )
+    shapes = _extract_shapes(message)
+    explicit_comparison = (
+        "比较" in magnitude_wording_removed
+        and any(term in compact for term in ("和", "与", "相比", "对比"))
+    )
+    choice_comparison = len(shapes) > 1 and any(
+        term in compact for term in ("哪个", "哪种", "更好", "孰优")
+    )
+    return explicit_comparison or choice_comparison
 
 
 def looks_like_post_limit_path_question(message: str) -> bool:
@@ -155,6 +176,9 @@ def build_post_limit_query_contract(
     mode: PostLimitMode = (
         "statistics" if looks_like_post_limit_statistics_question(message)
         else "path" if looks_like_post_limit_path_question(message)
+        else "screen" if any(
+            term in message for term in ("哪些", "有哪些", "筛选", "查找", "找出", "名单")
+        )
         else _mode(planner.get("mode")) or "screen"
     )
     explicit_shapes = _extract_shapes(message)
@@ -170,14 +194,22 @@ def build_post_limit_query_contract(
 
     recent_days = _extract_recent_days(message, statistics=False)
     statistics_days = _extract_recent_days(message, statistics=True)
-    exhaustive = any(term in message for term in ("全部", "所有", "完整名单", "逐只"))
+    selected_shapes = shapes or (shape,)
+    simple_shape_list = (
+        mode == "screen"
+        and len(selected_shapes) == 1
+        and selected_shapes[0] == "high_drawdown"
+        and any(term in message for term in ("哪些", "有哪些"))
+    )
+    exhaustive = simple_shape_list or any(
+        term in message for term in ("全部", "所有", "完整名单", "逐只")
+    )
     explicit_limit = extract_result_limit(message)
     explicit_query = _extract_query_filter(message)
     explicit_board_height = _extract_board_height(message)
     explicit_group_by = _extract_group_by(message)
     explicit_sort_by = _extract_sort_by(message)
     explicit_sort_order = _extract_sort_order(message)
-    selected_shapes = shapes or (shape,)
     default_window = default_recent_limit_days(selected_shapes, mode)
     recent_limit_days = (
         _bounded_int(recent_days, default_window, 1, 20)

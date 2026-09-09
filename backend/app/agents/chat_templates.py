@@ -714,13 +714,31 @@ def _template_post_limit_screen(payload: dict[str, Any]) -> str:
     labels = payload.get("shape_labels") or {}
     shapes = payload.get("shapes") or []
     shape_text = "、".join(labels.get(shape, shape) for shape in shapes) or "涨停后形态"
+    contract = payload.get("query_contract") or {}
+    if shapes == ["high_drawdown"] and contract.get("exhaustive"):
+        lines = [
+            f"截至 {payload.get('data_as_of')} 收盘，盘前推荐—高位回撤符合条件的股票共 "
+            f"{payload.get('matched_count', 0)} 只："
+        ]
+        for index, item in enumerate(payload.get("candidates") or [], start=1):
+            lines.append(
+                f"{index}. {item.get('name')}（{item.get('symbol')}），"
+                f"较参考高点回撤 {float(item.get('peak_drawdown_pct') or 0):.2f}%"
+            )
+        if not payload.get("candidates"):
+            lines.append("当前没有符合条件且数据完整的股票。")
+        lines.append(
+            f"口径：最近{contract.get('recent_limit_days', 7)}个交易日有收盘涨停，"
+            "距涨停1–4个交易日，较涨停日至观察日前一日的最高价回撤至少10%。"
+        )
+        lines.append(TEXT["safety"])
+        return "\n".join(lines)
     lines = [
         f"截至 {payload.get('data_as_of')} 收盘，按{shape_text}口径筛选沪深主板"
         f"（规则版本 {payload.get('rule_version')}）。",
         f"近期涨停观察池 {payload.get('pool_count', 0)} 只，可评价 {payload.get('evaluable_count', 0)} 只"
         f"（覆盖率 {float(payload.get('coverage_ratio') or 0):.1%}），符合 {payload.get('matched_count', 0)} 只。",
     ]
-    contract = payload.get("query_contract") or {}
     filters = [
         "回看最近"
         f"{contract.get('recent_limit_days', default_recent_limit_days(tuple(shapes)))}"
