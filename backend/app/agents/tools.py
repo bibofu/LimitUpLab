@@ -436,8 +436,8 @@ TOOL_SCHEMAS = [
     AgentToolSchema(
         name="limit_up_events",
         description=(
-            "查询某个交易日的涨停事件列表，可按市场板块、板数、首板/连板、炸板次数、"
-            "行业、题材或股票名称过滤。用户提到主板、创业板、科创板、北交所时，"
+            "查询单日或最近多个交易日的涨停事件，可按市场板块、板数、首板/连板、炸板次数、"
+            "行业、题材或股票名称过滤，也可按行业或题材聚合。用户提到主板、创业板、科创板、北交所时，"
             "分别设置 market=main_board、chinext、star_market、beijing。"
             "普通涨停/首板/连板名单默认只返回收盘封住的股票；查询炸板或曾开板时使用 broken_only。"
         ),
@@ -494,6 +494,17 @@ TOOL_SCHEMAS = [
                 "result_mode": {
                     "type": ["string", "null"],
                     "enum": ["list", "count", "summary", "ranking", None],
+                },
+                "recent_trade_days": {
+                    "type": ["integer", "null"],
+                    "minimum": 1,
+                    "maximum": 20,
+                    "description": "Number of latest local trading days to include; defaults to 1.",
+                },
+                "group_by": {
+                    "type": ["string", "null"],
+                    "enum": ["industry", "concept", None],
+                    "description": "Aggregate matched stocks by industry or concept.",
                 },
                 "sort_by": {
                     "type": ["string", "null"],
@@ -1759,13 +1770,30 @@ class AgentToolRegistry:
         broken_only: bool | None = None,
         closed_only: bool | None = None,
         event_status: str | None = None,
+        recent_trade_days: int = 1,
+        group_by: str | None = None,
         sort_by: str | None = None,
         sort_order: str | None = None,
         limit: int = 30,
     ) -> ToolResult:
         """Return filtered limit-up events for general limit-up questions."""
 
-        target_events = events_for_date(self.events, trade_date)
+        effective_recent_days = max(1, min(recent_trade_days, 20))
+        available_dates = sorted(
+            {
+                event.trade_date
+                for event in self.events
+                if trade_date is None or event.trade_date <= trade_date
+            }
+        )
+        selected_dates = available_dates[-effective_recent_days:]
+        if effective_recent_days == 1:
+            target_events = events_for_date(self.events, trade_date)
+        else:
+            selected_date_set = set(selected_dates)
+            target_events = [
+                event for event in self.events if event.trade_date in selected_date_set
+            ]
         effective_market = normalize_market_segment(market)
         effective_status = normalize_event_status(event_status)
         if effective_status is None:
@@ -1822,8 +1850,47 @@ class AgentToolRegistry:
             sort_order=effective_sort_order,
         )
         matched_count = len(target_events)
+        unique_stock_count = len({event.symbol for event in target_events})
+        sector_summary: list[dict[str, Any]] = []
+        unclassified_event_count = 0
+        if group_by in {"industry", "concept"}:
+            grouped: dict[str, list[LimitUpEvent]] = {}
+            for event in target_events:
+                label = str(getattr(event, group_by) or "").strip()
+                if not label:
+                    unclassified_event_count += 1
+                    continue
+                grouped.setdefault(label, []).append(event)
+            for label, group_events in grouped.items():
+                stocks_by_symbol = {
+                    event.symbol: event.name for event in group_events
+                }
+                sector_summary.append(
+                    {
+                        "sector_name": label,
+                        "unique_stock_count": len(stocks_by_symbol),
+                        "limit_up_event_count": len(group_events),
+                        "trade_day_count": len(
+                            {event.trade_date for event in group_events}
+                        ),
+                        "stocks": [
+                            {"symbol": symbol, "name": name}
+                            for symbol, name in sorted(stocks_by_symbol.items())
+                        ],
+                    }
+                )
+            sector_summary.sort(
+                key=lambda item: (
+                    -item["unique_stock_count"],
+                    -item["limit_up_event_count"],
+                    item["sector_name"],
+                )
+            )
+            sector_summary = sector_summary[: max(1, min(limit, 100))]
         target_events = target_events[: max(1, min(limit, 100))]
-        if trade_date is not None:
+        if selected_dates:
+            trade_date_text = selected_dates[-1].isoformat()
+        elif trade_date is not None:
             trade_date_text = trade_date.isoformat()
         elif self.events:
             trade_date_text = max(event.trade_date for event in self.events).isoformat()
@@ -1834,6 +1901,10 @@ class AgentToolRegistry:
         names = "、".join(f"{event.name}({event.symbol})" for event in target_events[:5])
         trace_output = {
             "trade_date": trade_date_text,
+            "start_trade_date": selected_dates[0].isoformat() if selected_dates else None,
+            "recent_trade_days": effective_recent_days,
+            "selected_trade_day_count": len(selected_dates),
+            "group_by": group_by,
             "market": effective_market,
             "market_label": market_text or None,
             "event_status": effective_status,
@@ -1841,7 +1912,10 @@ class AgentToolRegistry:
             "sort_by": effective_sort_by,
             "sort_order": effective_sort_order,
             "matched_count": matched_count,
+            "unique_stock_count": unique_stock_count,
             "returned_count": len(target_events),
+            "sector_summary": sector_summary,
+            "unclassified_event_count": unclassified_event_count,
             "events": [
                 {
                     "symbol": event.symbol,
@@ -1871,13 +1945,16 @@ class AgentToolRegistry:
                 "broken_only": broken_only,
                 "closed_only": effective_closed_only,
                 "event_status": effective_status,
+                "recent_trade_days": effective_recent_days,
+                "group_by": group_by,
                 "sort_by": effective_sort_by,
                 "sort_order": effective_sort_order,
                 "limit": limit,
             },
             output=target_events,
             summary=(
-                f"{trade_date_text} {market_text}{board_text}查询命中 {matched_count} 只"
+                f"{trade_date_text} {market_text}{board_text}查询命中 {matched_count} "
+                f"{'条事件' if group_by else '只'}"
                 f"{f'：{names}' if names else '。'}"
             ),
             trace_output=trace_output,

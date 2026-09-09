@@ -78,6 +78,7 @@ from app.agents.query_contract import (
     build_market_event_query_contract,
     build_limit_up_query_contract,
     extract_market_event_type,
+    looks_like_limit_up_sector_summary_question,
     looks_like_market_event_query,
 )
 from app.post_limit_query_contract import (
@@ -360,6 +361,12 @@ def answer_first_board_chat(
     )
     if post_limit_fallback is not None:
         return post_limit_fallback
+    limit_up_sector_fallback = _answer_limit_up_sector_summary_without_llm(
+        request=request,
+        tools=tools,
+    )
+    if limit_up_sector_fallback is not None:
+        return limit_up_sector_fallback
     sector_performance_fallback = _answer_sector_performance_without_llm(
         request=request,
         tools=tools,
@@ -725,6 +732,15 @@ def _answer_with_llm_tool_agent(
             },
         )
 
+    if looks_like_limit_up_sector_summary_question(request.message):
+        tool_calls = [
+            {
+                "name": "limit_up_events",
+                "arguments": _limit_up_query_arguments_from_message(request),
+            }
+        ]
+        direct_answer = ""
+
     tools_started_at = perf_counter()
     if progress_callback:
         selected_tools = "、".join(
@@ -817,7 +833,8 @@ def _answer_with_llm_tool_agent(
         execution["facts"],
     )
     fast_structured_answer = (
-        _is_simple_sector_performance(execution["facts"])
+        looks_like_limit_up_sector_summary_question(request.message)
+        or _is_simple_sector_performance(execution["facts"])
         or _is_simple_sector_stock_ranking(execution["facts"])
         or _is_simple_market_event_pool(execution["facts"])
         or any(
@@ -1315,6 +1332,43 @@ def _answer_post_limit_without_llm(
             facts=facts,
         ),
         tool_calls=[tool_name, "template_general_answer"],
+        tool_results=execution["tool_results"],
+        references=execution["references"],
+        warnings=[_safety_warning(), *_tool_outcome_warnings(execution["tool_results"])],
+        generated_by=CHAT_AGENT_VERSION,
+    )
+
+
+def _answer_limit_up_sector_summary_without_llm(
+    *,
+    request: AgentChatRequest,
+    tools: AgentToolRegistry,
+) -> AgentChatResponse | None:
+    """Aggregate recent local limit-up events when the planner is unavailable."""
+
+    if not looks_like_limit_up_sector_summary_question(request.message):
+        return None
+    contract = build_limit_up_query_contract(
+        request.message,
+        request_trade_date=request.trade_date,
+    )
+    execution = _execute_llm_tool_calls(
+        [{"name": "limit_up_events", "arguments": contract.to_tool_arguments()}],
+        tools,
+        request=request,
+        context_symbol=None,
+    )
+    if "limit_up_events" not in execution["facts"]:
+        return None
+    return AgentChatResponse(
+        session_id=request.session_id,
+        intent="limit_up_sector_summary",
+        answer=_template_answer_from_tool_facts(
+            request=request,
+            intent="limit_up_sector_summary",
+            facts=execution["facts"],
+        ),
+        tool_calls=["limit_up_events", "template_general_answer"],
         tool_results=execution["tool_results"],
         references=execution["references"],
         warnings=[_safety_warning(), *_tool_outcome_warnings(execution["tool_results"])],
@@ -2950,6 +3004,8 @@ def _looks_like_general_limit_up_question(message: str) -> bool:
     """Return whether the user asks for same-day limit-up event lists."""
 
     normalized = message.lower()
+    if looks_like_limit_up_sector_summary_question(message):
+        return True
     if _looks_like_daily_board_promotion_question(message):
         return False
     if "\u9996\u677f" in normalized:

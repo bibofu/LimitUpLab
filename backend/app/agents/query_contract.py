@@ -8,7 +8,7 @@ from datetime import date
 from typing import Any, Literal
 
 
-QUERY_CONTRACT_VERSION = "limit-up-query-v2"
+QUERY_CONTRACT_VERSION = "limit-up-query-v3"
 MARKET_EVENT_QUERY_CONTRACT_VERSION = "market-event-query-v1"
 
 MarketSegment = Literal["main_board", "chinext", "star_market", "beijing"]
@@ -23,6 +23,7 @@ SortField = Literal[
     "break_count",
 ]
 SortOrder = Literal["asc", "desc"]
+LimitUpGroupBy = Literal["industry", "concept"]
 
 
 MARKET_SEGMENT_PREFIXES: dict[str, tuple[str, ...]] = {
@@ -104,6 +105,8 @@ class LimitUpQueryContract:
     market: MarketSegment | None = None
     query: str | None = None
     event_status: EventStatus = "closed"
+    recent_trade_days: int = 1
+    group_by: LimitUpGroupBy | None = None
     result_mode: ResultMode = "list"
     sort_by: SortField = "board_height"
     sort_order: SortOrder = "desc"
@@ -128,6 +131,8 @@ class LimitUpQueryContract:
             "market": self.market,
             "query": self.query,
             "event_status": self.event_status,
+            "recent_trade_days": self.recent_trade_days,
+            "group_by": self.group_by,
             "sort_by": self.sort_by,
             "sort_order": self.sort_order,
             "limit": self.limit,
@@ -265,9 +270,32 @@ def build_limit_up_query_contract(
         else:
             event_status = "closed"
 
+    sector_summary = looks_like_limit_up_sector_summary_question(message)
+    if sector_summary:
+        # A distribution request describes the grouping dimension, not a topic
+        # keyword. Do not let a planner turn words such as "板块" into a filter.
+        query = None
     result_mode = extract_result_mode(message) or normalize_result_mode(
         planner.get("result_mode")
     )
+    if sector_summary:
+        result_mode = "summary"
+    explicit_recent_trade_days = extract_recent_trade_days(message)
+    recent_trade_days = (
+        explicit_recent_trade_days or 7
+        if sector_summary
+        else _bounded_int(planner.get("recent_trade_days"), minimum=1, maximum=20)
+        or 1
+    )
+    group_by: LimitUpGroupBy | None = None
+    if sector_summary:
+        group_by = (
+            "concept"
+            if any(term in message for term in ("题材", "概念"))
+            else "industry"
+        )
+    elif planner.get("group_by") in {"industry", "concept"}:
+        group_by = planner["group_by"]
     sort_by, sort_order = extract_sort(message)
     sort_by = sort_by or normalize_sort_field(planner.get("sort_by")) or "board_height"
     sort_order = (
@@ -298,12 +326,48 @@ def build_limit_up_query_contract(
         market=market,
         query=query,
         event_status=event_status,
+        recent_trade_days=recent_trade_days,
+        group_by=group_by,
         result_mode=result_mode or "list",
         sort_by=sort_by,
         sort_order=sort_order,
         limit=max(1, min(limit, 100)),
         exhaustive=exhaustive,
     )
+
+
+def looks_like_limit_up_sector_summary_question(message: str) -> bool:
+    """Recognize requests to aggregate recent limit-up stocks by sector."""
+
+    compact = re.sub(r"[\s，。！？,.!?]", "", message)
+    has_limit_up = "涨停" in compact
+    has_sector = any(term in compact for term in ("板块", "行业", "题材", "概念"))
+    has_distribution = any(
+        term in compact
+        for term in (
+            "比较多",
+            "较多",
+            "最多",
+            "集中",
+            "分布",
+            "排名",
+            "排行",
+            "哪些板块",
+            "哪些行业",
+            "哪些题材",
+            "哪些概念",
+        )
+    )
+    return has_limit_up and has_sector and has_distribution
+
+
+def extract_recent_trade_days(message: str) -> int | None:
+    """Extract an explicit recent trading-day window from the user wording."""
+
+    match = re.search(r"(?:近|最近)\s*(\d{1,2})\s*个?交易日", message)
+    if not match:
+        return None
+    return max(1, min(int(match.group(1)), 20))
 
 
 def extract_trade_date(message: str) -> date | None:

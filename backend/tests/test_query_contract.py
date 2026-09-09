@@ -4,6 +4,7 @@ from pathlib import Path
 from app.agents.query_contract import (
     build_limit_up_query_contract,
     build_market_event_query_contract,
+    looks_like_limit_up_sector_summary_question,
     looks_like_market_event_query,
 )
 from app.agents.query_contract_eval import (
@@ -69,6 +70,30 @@ class QueryContractV2Test(unittest.TestCase):
 
         self.assertIsNone(contract.trade_date)
         self.assertEqual(contract.board_height, 1)
+
+    def test_recent_limit_up_sector_summary_defaults_to_seven_trade_days(self) -> None:
+        contract = build_limit_up_query_contract(
+            "近期哪些板块涨停的股票比较多",
+            planner_arguments={"recent_trade_days": 1, "group_by": "concept"},
+        )
+
+        self.assertEqual(contract.version, "limit-up-query-v3")
+        self.assertEqual(contract.recent_trade_days, 7)
+        self.assertEqual(contract.group_by, "industry")
+        self.assertEqual(contract.result_mode, "summary")
+
+    def test_explicit_recent_window_and_concept_group_override_defaults(self) -> None:
+        contract = build_limit_up_query_contract(
+            "近10个交易日哪些题材的涨停股票最多"
+        )
+
+        self.assertEqual(contract.recent_trade_days, 10)
+        self.assertEqual(contract.group_by, "concept")
+        self.assertTrue(
+            looks_like_limit_up_sector_summary_question(
+                "近10个交易日哪些题材的涨停股票最多"
+            )
+        )
 
     def test_limit_down_wording_compiles_to_one_market_event_type(self) -> None:
         for message in (

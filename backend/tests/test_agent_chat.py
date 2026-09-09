@@ -1258,6 +1258,42 @@ class AgentChatTest(unittest.TestCase):
         tool_trace = next(trace for trace in response.tool_results if trace.name == "limit_up_events")
         self.assertEqual(tool_trace.input["board_height"], 2)
 
+    def test_recent_limit_up_sector_question_aggregates_existing_local_events(self) -> None:
+        events = [
+            self._make_event("002101", "软件甲", "软件开发", "AI").model_copy(
+                update={"trade_date": date(2026, 8, 5)}
+            ),
+            self._make_event("002101", "软件甲", "软件开发", "AI").model_copy(
+                update={"trade_date": date(2026, 8, 6)}
+            ),
+            self._make_event("002102", "软件乙", "软件开发", "云计算").model_copy(
+                update={"trade_date": date(2026, 8, 7)}
+            ),
+            self._make_event("002103", "医药甲", "化学制药", "医药").model_copy(
+                update={"trade_date": date(2026, 8, 7)}
+            ),
+        ]
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="recent-sector-limit-ups",
+                message="近期哪些板块涨停的股票比较多",
+            ),
+            events=events,
+            llm_provider=DisabledLLMProvider(),
+        )
+
+        self.assertIn("limit_up_events", response.tool_calls)
+        self.assertIn("软件开发：2 只股票，3 次涨停事件", response.answer)
+        self.assertIn("同一股票多日涨停只计 1 只", response.answer)
+        trace = next(
+            item for item in response.tool_results if item.name == "limit_up_events"
+        )
+        self.assertEqual(trace.input["recent_trade_days"], 7)
+        self.assertEqual(trace.input["group_by"], "industry")
+        self.assertEqual(trace.output["unique_stock_count"], 3)
+        self.assertEqual(trace.output["sector_summary"][0]["sector_name"], "软件开发")
+
     def test_chinext_limit_up_question_filters_market_before_llm_answer(self) -> None:
         events = [
             self._make_event("002101", "主板样本", "软件开发", "AI"),

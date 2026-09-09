@@ -453,6 +453,33 @@ def _template_answer_from_tool_facts(
 
     if "limit_up_events" in facts:
         payload = facts["limit_up_events"]
+        sector_summary = (
+            payload.get("sector_summary", []) if isinstance(payload, dict) else []
+        )
+        if sector_summary:
+            group_label = "题材" if payload.get("group_by") == "concept" else "行业"
+            lines = [
+                f"截至 {payload.get('trade_date')}，最近 {payload.get('selected_trade_day_count')} 个本地交易日"
+                f"（{payload.get('start_trade_date')} 至 {payload.get('trade_date')}）共有 "
+                f"{payload.get('unique_stock_count')} 只不同股票收盘涨停，按{group_label}统计如下："
+            ]
+            for index, item in enumerate(sector_summary[:10], start=1):
+                stocks = "、".join(
+                    f"{stock.get('name')}({stock.get('symbol')})"
+                    for stock in (item.get("stocks") or [])[:5]
+                )
+                lines.append(
+                    f"{index}. {item.get('sector_name')}：{item.get('unique_stock_count')} 只股票，"
+                    f"{item.get('limit_up_event_count')} 次涨停事件，覆盖 {item.get('trade_day_count')} 个交易日"
+                    f"{f'；代表股票：{stocks}' if stocks else ''}。"
+                )
+            if payload.get("unclassified_event_count"):
+                lines.append(
+                    f"另有 {payload.get('unclassified_event_count')} 条涨停事件缺少{group_label}分类，未纳入排名。"
+                )
+            lines.append("排名按不同股票数降序，同一股票多日涨停只计 1 只，事件次数另列。")
+            lines.append(TEXT["safety"])
+            return "\n".join(lines)
         events = payload.get("events", []) if isinstance(payload, dict) else []
         lines = [f"{payload.get('trade_date')} 查询到 {len(events)} 条匹配涨停事件："]
         display_events = (
