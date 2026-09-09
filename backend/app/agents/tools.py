@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -1856,11 +1857,21 @@ class AgentToolRegistry:
         if group_by in {"industry", "concept"}:
             grouped: dict[str, list[LimitUpEvent]] = {}
             for event in target_events:
-                label = str(getattr(event, group_by) or "").strip()
-                if not label:
+                raw_label = str(getattr(event, group_by) or "").strip()
+                labels = (
+                    [raw_label]
+                    if group_by == "industry" and raw_label
+                    else [
+                        item.strip()
+                        for item in re.split(r"[+＋、,，;/；|]", raw_label)
+                        if item.strip()
+                    ]
+                )
+                if not labels:
                     unclassified_event_count += 1
                     continue
-                grouped.setdefault(label, []).append(event)
+                for label in dict.fromkeys(labels):
+                    grouped.setdefault(label, []).append(event)
             for label, group_events in grouped.items():
                 stocks_by_symbol = {
                     event.symbol: event.name for event in group_events

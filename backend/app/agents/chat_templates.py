@@ -457,7 +457,7 @@ def _template_answer_from_tool_facts(
             payload.get("sector_summary", []) if isinstance(payload, dict) else []
         )
         if sector_summary:
-            group_label = "题材" if payload.get("group_by") == "concept" else "行业"
+            group_label = "涨停题材" if payload.get("group_by") == "concept" else "行业"
             lines = [
                 f"截至 {payload.get('trade_date')}，最近 {payload.get('selected_trade_day_count')} 个本地交易日"
                 f"（{payload.get('start_trade_date')} 至 {payload.get('trade_date')}）共有 "
@@ -478,6 +478,8 @@ def _template_answer_from_tool_facts(
                     f"另有 {payload.get('unclassified_event_count')} 条涨停事件缺少{group_label}分类，未纳入排名。"
                 )
             lines.append("排名按不同股票数降序，同一股票多日涨停只计 1 只，事件次数另列。")
+            if payload.get("group_by") == "concept":
+                lines.append("一只股票可对应多个涨停题材，因此各题材股票数不能相加作为总数。")
             lines.append(TEXT["safety"])
             return "\n".join(lines)
         events = payload.get("events", []) if isinstance(payload, dict) else []

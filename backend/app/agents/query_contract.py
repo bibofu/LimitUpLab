@@ -8,7 +8,7 @@ from datetime import date
 from typing import Any, Literal
 
 
-QUERY_CONTRACT_VERSION = "limit-up-query-v3"
+QUERY_CONTRACT_VERSION = "limit-up-query-v4"
 MARKET_EVENT_QUERY_CONTRACT_VERSION = "market-event-query-v1"
 
 MarketSegment = Literal["main_board", "chinext", "star_market", "beijing"]
@@ -290,9 +290,9 @@ def build_limit_up_query_contract(
     group_by: LimitUpGroupBy | None = None
     if sector_summary:
         group_by = (
-            "concept"
-            if any(term in message for term in ("题材", "概念"))
-            else "industry"
+            "industry"
+            if "行业" in message and not any(term in message for term in ("题材", "概念"))
+            else "concept"
         )
     elif planner.get("group_by") in {"industry", "concept"}:
         group_by = planner["group_by"]

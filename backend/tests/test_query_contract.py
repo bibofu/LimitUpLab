@@ -77,9 +77,9 @@ class QueryContractV2Test(unittest.TestCase):
             planner_arguments={"recent_trade_days": 1, "group_by": "concept"},
         )
 
-        self.assertEqual(contract.version, "limit-up-query-v3")
+        self.assertEqual(contract.version, "limit-up-query-v4")
         self.assertEqual(contract.recent_trade_days, 7)
-        self.assertEqual(contract.group_by, "industry")
+        self.assertEqual(contract.group_by, "concept")
         self.assertEqual(contract.result_mode, "summary")
 
     def test_explicit_recent_window_and_concept_group_override_defaults(self) -> None:
@@ -94,6 +94,13 @@ class QueryContractV2Test(unittest.TestCase):
                 "近10个交易日哪些题材的涨停股票最多"
             )
         )
+
+    def test_explicit_industry_wording_uses_industry_instead_of_limit_reason(self) -> None:
+        contract = build_limit_up_query_contract(
+            "近期哪些行业的涨停股票比较多"
+        )
+
+        self.assertEqual(contract.group_by, "industry")
 
     def test_limit_down_wording_compiles_to_one_market_event_type(self) -> None:
         for message in (
