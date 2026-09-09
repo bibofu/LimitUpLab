@@ -49,12 +49,15 @@ from app.agents.chat_plan_normalization import (
     _parse_json_object,
 )
 from app.agents.chat_prompts import (
+    PLANNER_CONTRACT_VERSION,
+    PLANNER_FUNCTION_DESCRIPTION,
     PLANNER_FUNCTION_NAME,
     _planner_function_parameters,
     _tool_answer_system_prompt,
     _tool_answer_user_prompt,
     _tool_planner_system_prompt,
     _tool_planner_user_prompt,
+    planner_prompt_component_sizes,
 )
 from app.agents.chat_templates import (
     TEXT,
@@ -139,7 +142,7 @@ from app.services.prompt_security import (
 from app.services.session_memory import memory_prompt_payload
 
 
-CHAT_AGENT_VERSION = "first-board-chat-policy-v16-shared-limit-up-execution"
+CHAT_AGENT_VERSION = "first-board-chat-policy-v17-capability-first-planner"
 _FORCE_TEMPLATE_ANSWER_OVERRIDE: ContextVar[bool | None] = ContextVar(
     "force_template_answer_override",
     default=None,
@@ -1071,7 +1074,6 @@ def _generate_llm_query_plan(
         )
 
     native_system_prompt = _tool_planner_system_prompt(
-        tools.schema_prompt(),
         capability_schema_prompt(tools.enabled_tool_names),
         tools.profile,
         output_mode="function_call",
@@ -1086,9 +1088,7 @@ def _generate_llm_query_plan(
             native_system_prompt,
             planner_user_prompt,
             function_name=PLANNER_FUNCTION_NAME,
-            function_description=(
-                "Submit the normalized LimitUpLab capability and evidence-tool plan."
-            ),
+            function_description=PLANNER_FUNCTION_DESCRIPTION,
             parameters=_planner_function_parameters(tools),
         )
     except (
@@ -1099,7 +1099,6 @@ def _generate_llm_query_plan(
         planner_mode = "prompt_json_fallback"
         native_error = type(error).__name__
         fallback_system_prompt = _tool_planner_system_prompt(
-            tools.schema_prompt(),
             capability_schema_prompt(tools.enabled_tool_names),
             tools.profile,
             output_mode="json",
@@ -1112,6 +1111,11 @@ def _generate_llm_query_plan(
         len(used_system_prompt) + len(planner_user_prompt)
     )
     payload["planner_mode"] = planner_mode
+    payload["planner_contract_version"] = PLANNER_CONTRACT_VERSION
+    payload["prompt_components"] = {
+        **planner_prompt_component_sizes(tools),
+        "planner_user_chars": len(planner_user_prompt),
+    }
     if native_error:
         payload["native_function_call_fallback_reason"] = native_error
 
@@ -1213,6 +1217,14 @@ def _generate_llm_query_plan(
         tool_calls,
         allowed_tool_names=tools.enabled_tool_names,
     )
+    # Capability-first plans intentionally carry no raw arguments. Re-run the
+    # deterministic compiler after tool injection so explicit user windows survive.
+    tool_calls = _normalize_daily_board_promotion_tool_calls(
+        request,
+        tool_calls,
+        default_days=context.promotion_days or 5,
+    )
+    payload["tool_calls"] = tool_calls
     return AgentQueryPlan(
         payload=payload,
         tool_calls=tool_calls,
@@ -1658,6 +1670,7 @@ def _llm_plan_trace(
             "safety": tool_plan.get("safety"),
             "tool_calls": tool_plan.get("tool_calls") or [],
             "planner_mode": tool_plan.get("planner_mode") or "unknown",
+            "planner_contract_version": tool_plan.get("planner_contract_version"),
             "native_function_call_fallback_reason": tool_plan.get(
                 "native_function_call_fallback_reason"
             ),
@@ -1666,6 +1679,7 @@ def _llm_plan_trace(
         output={
             "prompt_chars": prompt_chars,
             "completion_chars": completion_chars,
+            "prompt_components": tool_plan.get("prompt_components") or {},
         },
         duration_ms=duration_ms,
     )

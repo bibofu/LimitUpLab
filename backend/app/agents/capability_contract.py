@@ -27,12 +27,11 @@ class AgentCapability:
     answer_guidance: str = ""
 
     def planner_payload(self) -> dict[str, Any]:
-        """Return the compact capability schema embedded in the planner prompt."""
+        """Return semantic routing data; tool mapping stays server-side."""
 
         payload: dict[str, Any] = {
             "name": self.name,
             "description": self.description,
-            "required_evidence": [item.name for item in self.required_tools],
         }
         if self.examples:
             payload["examples"] = list(self.examples)

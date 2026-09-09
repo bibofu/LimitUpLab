@@ -11,6 +11,7 @@ from .helpers import (
     _filter_query_from_context,
     _has_events_for_date,
     _rating_fact,
+    _resolve_tool_stock_target,
     _tool_error_trace,
 )
 
@@ -84,20 +85,14 @@ def first_board_filter(state: ExecutionState, name: str, arguments: dict[str, An
 
 
 def first_board_critic(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
-    symbol = str(arguments.get("symbol") or "").strip()
     trade_date = _explicit_request_trade_date(state.request)
-    if not symbol:
-        state.facts["first_board_critic_error"] = "symbol is required"
-        state.traces.append(
-            _tool_error_trace(
-                name=name,
-                tool_input=arguments,
-                summary="Critic tool skipped because symbol is missing.",
-                error="symbol is required",
-            )
-        )
-        return
     try:
+        symbol = _resolve_tool_stock_target(
+            tools=state.tools,
+            request=state.request,
+            argument_value=str(arguments.get("symbol") or "").strip() or None,
+            context_symbol=state.context_symbol,
+        )
         result = state.tools.first_board_critic(
             symbol=symbol,
             trade_date=trade_date,

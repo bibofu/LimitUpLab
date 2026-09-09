@@ -184,7 +184,7 @@ class FakePromptLeakProvider(LLMProvider):
 
 
 class FakeNamedStockTrendProvider(FakeToolPlanningProvider):
-    """Plan a K-line lookup using a stock name outside the limit-up pool."""
+    """Select stock trend without supplying raw tool arguments."""
 
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         self.calls.append((system_prompt, user_prompt))
@@ -197,12 +197,7 @@ class FakeNamedStockTrendProvider(FakeToolPlanningProvider):
                         "context_mode": "standalone",
                         "context_capabilities": [],
                         "safety": "normal",
-                        "tool_calls": [
-                            {
-                                "name": "stock_kline",
-                                "arguments": {"symbol": "完美世界", "days": 60},
-                            }
-                        ],
+                        "tool_calls": [],
                     }
                 ),
                 model="fake-planner",
@@ -790,7 +785,8 @@ class AgentChatTest(unittest.TestCase):
 
         self.assertEqual(response.intent, "first_board_top_candidates")
         self.assertEqual(len(provider.calls), 2)
-        self.assertIn("Available tools", provider.calls[0][0])
+        self.assertIn("Capability catalog", provider.calls[0][0])
+        self.assertNotIn("Available tools are described", provider.calls[0][0])
         self.assertEqual(response.tool_calls[0], "llm_tool_planner")
         self.assertIn("first_board_ratings", response.tool_calls)
         self.assertIn("llm_tool_answer", response.tool_calls)
@@ -803,7 +799,7 @@ class AgentChatTest(unittest.TestCase):
             any(card.title == "首板候选池与评分" for card in response.evidence_cards)
         )
 
-    def test_llm_prompts_receive_bounded_persisted_conversation_history(self) -> None:
+    def test_only_planner_receives_bounded_persisted_conversation_history(self) -> None:
         provider = FakeToolPlanningProvider()
         history = [
             ChatSessionMessage(
@@ -840,10 +836,8 @@ class AgentChatTest(unittest.TestCase):
             planner_payload["conversation_history"][0]["content"],
             "先看一下中电鑫龙",
         )
-        self.assertEqual(
-            answer_payload["conversation_history"],
-            planner_payload["conversation_history"],
-        )
+        self.assertNotIn("conversation_history", answer_payload)
+        self.assertNotIn("session_memory", answer_payload)
 
     def test_llm_answer_reports_progress_and_streams_deltas(self) -> None:
         provider = FakeToolPlanningProvider()

@@ -11,6 +11,7 @@ from app.agents.tool_policy import (
     QuestionSignals as _QuestionSignals,
     extract_market_index_days as _extract_market_index_days,
     extract_sector_query as _extract_sector_query,
+    extract_sector_trend_days as _extract_sector_trend_days,
     looks_like_broad_sector_ranking_question as _looks_like_broad_sector_ranking_question,
 )
 from app.models import MarketIndexTrendFacts, MarketSummary
@@ -207,7 +208,9 @@ def sector_stock_ranking(state: ExecutionState, name: str, arguments: dict[str, 
     sector = _optional_str(arguments.get("sector"))
     if sector is None:
         sector = _extract_sector_query(state.request.message)
-    days = _parse_optional_int(arguments.get("days")) or 20
+    days = _parse_optional_int(arguments.get("days")) or _extract_sector_trend_days(
+        state.request.message
+    )
     limit = extract_result_limit(state.request.message) or 10
     end_date = _explicit_request_trade_date(state.request)
     if not sector:

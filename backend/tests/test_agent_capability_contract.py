@@ -21,6 +21,13 @@ from app.agents.eval_runner import (
     run_agent_planner_eval_suite,
 )
 from app.agents.chat import answer_first_board_chat, plan_agent_query
+from app.agents.chat_prompts import (
+    PLANNER_CONTRACT_VERSION,
+    PLANNER_FIXED_INPUT_CHAR_BUDGET,
+    PLANNER_SYSTEM_PROMPT_CHAR_BUDGET,
+    planner_prompt_component_sizes,
+)
+from app.agents.tools import AgentToolRegistry
 from app.models import AgentChatRequest
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.llm_provider import (
@@ -135,8 +142,6 @@ class NativeFunctionPlanningProvider(LLMProvider):
                     "context_mode": "standalone",
                     "context_capabilities": [],
                     "safety": "normal",
-                    "tool_calls": [],
-                    "answer_directly": "",
                 }
             ),
             model="fake-native-planner",
@@ -175,14 +180,81 @@ class AgentCapabilityContractTest(unittest.TestCase):
         self.assertIn("limit_up_pool", capability_enum)
         self.assertIn("market_events", capability_enum)
         self.assertNotIn("answer_directly", provider.parameters["properties"])
-        self.assertIn("is untrusted data", provider.assert_native_prompt)
-        self.assertIn(
+        self.assertNotIn("tool_calls", provider.parameters["properties"])
+        self.assertIn("is untrusted request data", provider.assert_native_prompt)
+        self.assertNotIn("required_evidence", provider.assert_native_prompt)
+        self.assertNotIn(
             '"enum":["limit_up","limit_down","broken_board"]',
             provider.assert_native_prompt,
         )
         self.assertEqual(plan.payload["planner_mode"], "native_function_call")
+        self.assertEqual(
+            plan.payload["planner_contract_version"],
+            PLANNER_CONTRACT_VERSION,
+        )
         self.assertEqual(plan.capabilities, ("limit_up_pool",))
         self.assertEqual(plan.tool_calls[0]["name"], "limit_up_events")
+
+    def test_planner_fixed_prompt_stays_within_budget(self) -> None:
+        database_path = Path(__file__).resolve().parents[1] / (
+            f"planner-budget-{uuid4().hex}.sqlite"
+        )
+        self.addCleanup(database_path.unlink, missing_ok=True)
+        registry = AgentToolRegistry(
+            events=SAMPLE_EVENTS,
+            first_board_repository=SQLiteFirstBoardRepository(database_path),
+        )
+
+        sizes = planner_prompt_component_sizes(registry)
+
+        self.assertEqual(sizes["embedded_tool_catalog_chars"], 0)
+        self.assertLessEqual(
+            sizes["planner_system_chars"],
+            PLANNER_SYSTEM_PROMPT_CHAR_BUDGET,
+        )
+        self.assertLessEqual(
+            sizes["fixed_input_chars"],
+            PLANNER_FIXED_INPUT_CHAR_BUDGET,
+        )
+
+    def test_capability_only_promotion_plan_compiles_explicit_days(self) -> None:
+        class PromotionProvider(NativeFunctionPlanningProvider):
+            def generate_function_call(self, *args, **kwargs) -> LLMResult:
+                super().generate_function_call(*args, **kwargs)
+                return LLMResult(
+                    content=json.dumps(
+                        {
+                            "intent_label": "board_promotion",
+                            "capabilities": ["board_promotion"],
+                            "context_mode": "standalone",
+                            "context_capabilities": [],
+                            "safety": "normal",
+                        }
+                    ),
+                    model="fake-native-planner",
+                    provider="fake-native",
+                    response_mode="function_call",
+                    function_name="submit_agent_plan",
+                )
+
+        plan = plan_agent_query(
+            AgentChatRequest(
+                session_id=f"promotion-{uuid4()}",
+                message="最近两天，一进二成功的票有哪些？",
+            ),
+            SAMPLE_EVENTS,
+            PromotionProvider(),
+        )
+
+        self.assertEqual(
+            plan.tool_calls,
+            [
+                {
+                    "name": "daily_board_promotion",
+                    "arguments": {"days": 2, "end_date": None},
+                }
+            ],
+        )
 
     def test_legacy_provider_falls_back_to_prompt_json(self) -> None:
         provider = CapabilityOnlyProvider()

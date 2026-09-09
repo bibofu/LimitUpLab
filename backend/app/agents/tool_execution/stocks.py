@@ -4,7 +4,10 @@ from typing import Any
 
 from app.agents.limit_up_execution import execute_limit_up_query
 from app.agents.query_contract import build_limit_up_query_contract
-from app.agents.tool_policy import extract_stock_news_days as _extract_stock_news_days
+from app.agents.tool_policy import (
+    extract_kline_days as _extract_kline_days,
+    extract_stock_news_days as _extract_stock_news_days,
+)
 
 from .context import ExecutionState
 from .helpers import (
@@ -237,23 +240,19 @@ def limit_up_events(state: ExecutionState, name: str, arguments: dict[str, Any])
 
 
 def stock_kline(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
-    raw_symbol = str(
-        arguments.get("symbol") or arguments.get("query") or ""
-    ).strip()
-    days = _parse_optional_int(arguments.get("days")) or 20
+    days = _parse_optional_int(arguments.get("days")) or _extract_kline_days(
+        state.request.message
+    )
     end_date = _explicit_request_trade_date(state.request)
-    if not raw_symbol:
-        state.facts["stock_kline_error"] = "symbol is required"
-        state.traces.append(
-            _tool_error_trace(
-                name=name,
-                tool_input=arguments,
-                summary="K线工具缺少股票代码或名称，未执行查询。",
-                error="symbol is required",
-            )
-        )
-        return
     try:
+        raw_symbol = _resolve_tool_stock_target(
+            tools=state.tools,
+            request=state.request,
+            argument_value=_optional_str(
+                arguments.get("symbol") or arguments.get("query")
+            ),
+            context_symbol=state.context_symbol,
+        )
         result = state.tools.stock_kline(
             symbol=raw_symbol,
             days=max(5, min(days, 60)),
