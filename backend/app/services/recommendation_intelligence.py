@@ -44,11 +44,11 @@ from app.services.scoring_policy import rating_for_score
 
 
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
-DEFAULT_REFRESH_INTERVAL_MINUTES = 30
+DEFAULT_REFRESH_INTERVAL_MINUTES = 1440
 RELAY_DISPLAY_LIMIT = 10
 FINANCIAL_CACHE_TTL = timedelta(hours=24)
 MARKET_CLOSE_TIME = time(15, 0)
-FINALIZATION_TIME = time(9, 0)
+FINALIZATION_TIME = time(8, 0)
 MARKET_OPEN_TIME = time(9, 30)
 MAX_RELAY_DYNAMIC_ADJUSTMENT = 6.0
 MISSED_CUTOFF_WARNING = (
@@ -125,6 +125,18 @@ def refresh_recommendation_intelligence(
         target_trade_date=target_trade_date,
         relay_base_date=relay_date,
     )
+    if (
+        same_basis
+        and previous is not None
+        and previous.stage == "draft"
+        and target_trade_date is not None
+        and refreshed_at < datetime.combine(
+            target_trade_date,
+            FINALIZATION_TIME,
+            tzinfo=SHANGHAI_TZ,
+        )
+    ):
+        return previous
     if (
         same_basis
         and previous is not None
@@ -553,7 +565,7 @@ def finalize_recommendation_intelligence(
         raise ValueError("Cannot finalize a recommendation without target_trade_date.")
     if not should_finalize_recommendation_intelligence(response, now=finalized_at):
         raise ValueError(
-            "Recommendation finalization is only allowed from 09:00 until "
+            "Recommendation finalization is only allowed from 08:00 until "
             "the 09:30 market open on the target trading day."
         )
 
@@ -600,7 +612,7 @@ def finalize_recommendation_intelligence(
         written_at = _as_shanghai(now or datetime.now(SHANGHAI_TZ))
         if not (written_at.date() == final.target_trade_date
                 and FINALIZATION_TIME <= written_at.time() < MARKET_OPEN_TIME):
-            raise ValueError("Finalization completed outside the 09:00-09:30 window.")
+            raise ValueError("Finalization completed outside the 08:00-09:30 window.")
 
     _persist_final_relay_snapshot(
         final,

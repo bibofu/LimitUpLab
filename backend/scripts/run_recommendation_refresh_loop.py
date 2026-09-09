@@ -1,4 +1,4 @@
-"""Refresh recommendation quotes, news and financial reports every 30 minutes."""
+"""Refresh and finalize recommendation intelligence at 08:00 Asia/Shanghai."""
 
 from __future__ import annotations
 
@@ -7,8 +7,9 @@ import json
 import os
 import sys
 import time
-from datetime import datetime, timedelta, timezone
+from datetime import datetime, time as datetime_time, timedelta, timezone
 from pathlib import Path
+from zoneinfo import ZoneInfo
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -26,6 +27,10 @@ from app.services.recommendation_intelligence import (
 
 DEFAULT_LOCK_PATH = BACKEND_ROOT / "data" / "recommendation_refresh.lock"
 DEFAULT_REPORT_PATH = BACKEND_ROOT / "data" / "recommendation_refresh_latest.json"
+SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
+PREMARKET_REFRESH_TIME = datetime_time(8, 0)
+MARKET_OPEN_TIME = datetime_time(9, 30)
+WORKER_STALE_AFTER = timedelta(hours=30)
 
 
 class RefreshLoopLock:
@@ -82,7 +87,7 @@ def main() -> int:
 
     configure_runtime_environment()
     parser = argparse.ArgumentParser(
-        description="Refresh recommendation intelligence on a fixed interval.",
+        description="Refresh recommendation intelligence at 08:00 Asia/Shanghai.",
     )
     parser.add_argument("--once", action="store_true")
     parser.add_argument(
@@ -104,11 +109,11 @@ def main() -> int:
         _run_refresh(interval, args.report_path)
         return 0
 
-    with RefreshLoopLock(
-        args.lock_path,
-        stale_after=timedelta(minutes=interval * 3),
-    ) as lock:
+    with RefreshLoopLock(args.lock_path, stale_after=WORKER_STALE_AFTER) as lock:
+        run_immediately = _inside_premarket_catch_up_window()
         while True:
+            if not run_immediately:
+                time.sleep(_seconds_until_next_premarket_refresh())
             error = _run_refresh_with_retries(interval, args.report_path)
             if error is not None:
                 _write_report(
@@ -121,7 +126,7 @@ def main() -> int:
                 )
                 print(f"Recommendation refresh failed: {error}", flush=True)
             lock.touch()
-            time.sleep(_seconds_until_next_slot(interval))
+            run_immediately = False
 
 
 def _run_refresh(interval: int, report_path: Path) -> None:
@@ -156,7 +161,7 @@ def _run_refresh_with_retries(
     *,
     attempts: int = 3,
 ) -> Exception | None:
-    """Retry transient provider failures so the 09:00 run is not skipped."""
+    """Retry transient provider failures so the 08:00 finalization is not skipped."""
 
     for attempt in range(1, max(attempts, 1) + 1):
         try:
@@ -169,13 +174,25 @@ def _run_refresh_with_retries(
     return None
 
 
-def _seconds_until_next_slot(interval_minutes: int, now: datetime | None = None) -> float:
-    """Align refreshes to wall-clock slots such as 08:30 and 09:00."""
+def _seconds_until_next_premarket_refresh(now: datetime | None = None) -> float:
+    """Return the delay until the next 08:00 Asia/Shanghai refresh."""
 
-    current = now or datetime.now(timezone.utc)
-    interval_seconds = max(interval_minutes, 1) * 60
-    remainder = current.timestamp() % interval_seconds
-    return max(1.0, interval_seconds - remainder)
+    current = (now or datetime.now(SHANGHAI_TZ)).astimezone(SHANGHAI_TZ)
+    scheduled = datetime.combine(
+        current.date(),
+        PREMARKET_REFRESH_TIME,
+        tzinfo=SHANGHAI_TZ,
+    )
+    if current >= scheduled:
+        scheduled += timedelta(days=1)
+    return max(1.0, (scheduled - current).total_seconds())
+
+
+def _inside_premarket_catch_up_window(now: datetime | None = None) -> bool:
+    """Catch up after a worker restart, but never collect evidence after market open."""
+
+    current = (now or datetime.now(SHANGHAI_TZ)).astimezone(SHANGHAI_TZ)
+    return PREMARKET_REFRESH_TIME <= current.time() < MARKET_OPEN_TIME
 
 
 def _read_lock_pid(path: Path) -> int | None:

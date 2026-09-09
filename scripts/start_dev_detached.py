@@ -135,9 +135,9 @@ def run_data_check(backend_python: Path, env: dict[str, str]) -> int:
 
 
 def refresh_worker_running() -> bool:
-    """Treat a recently touched lock as an active half-hour worker."""
+    """Treat the daily 08:00 refresh worker lock as active."""
 
-    return worker_lock_active(REFRESH_LOCK, stale_after_seconds=90 * 60)
+    return worker_lock_active(REFRESH_LOCK, stale_after_seconds=30 * 60 * 60)
 
 
 def worker_lock_active(lock_path: Path, *, stale_after_seconds: int) -> bool:

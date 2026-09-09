@@ -73,6 +73,42 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         self.assertEqual(response.relay_base_date, date(2026, 8, 31))
         self.assertFalse(hasattr(response, "discovery_base_date"))
 
+    def test_existing_close_draft_is_not_refreshed_before_target_day_0800(self) -> None:
+        base_date = date(2026, 8, 31)
+        target_date = date(2026, 9, 1)
+        close_time = datetime.fromisoformat("2026-08-31T16:00:00+08:00")
+        candidate = _BaseCandidate(
+            "relay", base_date, "002712", "思美传媒",
+            "文化传媒", "低位启动", 1, 81.2,
+        )
+        previous = RecommendationIntelligenceResponse(
+            refresh_id="close-draft",
+            refreshed_at=close_time,
+            interval_minutes=1440,
+            stage="draft",
+            status="complete",
+            relay_base_date=base_date,
+            target_trade_date=target_date,
+        )
+        self.snapshot_repo.save(previous)
+
+        with patch(
+            "app.services.recommendation_intelligence._load_base_candidates",
+            return_value=([candidate], base_date, []),
+        ):
+            response = refresh_recommendation_intelligence(
+                now=datetime.fromisoformat("2026-08-31T22:00:00+08:00"),
+                limit_up_repository=self.limit_repo,
+                first_board_repository=self.first_repo,
+                snapshot_repository=self.snapshot_repo,
+                quote_collector=lambda _symbols: self.fail(
+                    "intermediate quote refresh must not run"
+                ),
+            )
+
+        self.assertEqual(response.refresh_id, "close-draft")
+        self.assertEqual(response.refreshed_at, close_time)
+
     def test_discovery_item_is_rejected_by_public_model(self) -> None:
         with self.assertRaises(ValidationError):
             RecommendationIntelligenceItem(

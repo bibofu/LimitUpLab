@@ -188,7 +188,7 @@ The runner resolves the latest closed A-share trading date, uses a process lock,
 retries transient failures, persists execution history, and writes the latest
 JSON report under `backend/data`. Both the runner and direct update script require
 the base date's 15:30 Asia/Shanghai gate for a new close baseline. A separate
-pre-open final must pass the next-trading-day calendar, 09:00–09:30 window and
+pre-open final must pass the next-trading-day calendar, 08:00–09:30 window and
 information-cutoff checks. Only these `premarket_final` samples count in current
 forward benchmarks; legacy close batches and backtests are grouped separately
 by scoring version. Original baselines are archived transactionally before a

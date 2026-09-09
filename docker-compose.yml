@@ -62,7 +62,6 @@ services:
       - .env.production
     environment:
       LIMITUPLAB_DATABASE_PATH: /app/data/limituplab.sqlite
-      LIMITUPLAB_RECOMMENDATION_REFRESH_MINUTES: ${LIMITUPLAB_RECOMMENDATION_REFRESH_MINUTES:-30}
       TZ: Asia/Shanghai
     volumes:
       - limituplab-data:/app/data

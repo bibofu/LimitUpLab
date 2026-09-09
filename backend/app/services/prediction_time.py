@@ -8,7 +8,8 @@ from zoneinfo import ZoneInfo
 
 
 CN_TZ = ZoneInfo("Asia/Shanghai")
-TIME_CONTRACT_VERSION = "prediction-time-v1"
+TIME_CONTRACT_VERSION = "prediction-time-v2"
+LEGACY_TIME_CONTRACT_VERSION = "prediction-time-v1"
 
 
 @dataclass(frozen=True)
@@ -58,7 +59,11 @@ def provenance_errors(*, base_date: date, data_as_of: date, created_at: datetime
     if created_at.tzinfo is None:
         return ["timezone_missing"]
     created = created_at.astimezone(CN_TZ)
-    if provenance.get("version") != TIME_CONTRACT_VERSION:
+    contract_version = provenance.get("version")
+    if contract_version not in {
+        LEGACY_TIME_CONTRACT_VERSION,
+        TIME_CONTRACT_VERSION,
+    }:
         return ["time_contract_version_missing"]
     stage = provenance.get("stage")
     if stage == "close_baseline":
@@ -77,8 +82,13 @@ def provenance_errors(*, base_date: date, data_as_of: date, created_at: datetime
         return ["cutoff_timezone_missing"]
     cutoff = cutoff.astimezone(CN_TZ)
     errors = []
+    finalization_time = (
+        time(8)
+        if contract_version == TIME_CONTRACT_VERSION
+        else time(9)
+    )
     if not (target > base_date and created.date() == target and data_as_of == target
-            and time(9) <= created.time() < time(9, 30)):
+            and finalization_time <= created.time() < time(9, 30)):
         errors.append("final_outside_preopen_window")
     if not (datetime.combine(base_date, time(15), CN_TZ) <= cutoff <= created
             and cutoff < datetime.combine(target, time(9, 30), CN_TZ)):

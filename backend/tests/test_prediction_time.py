@@ -20,6 +20,12 @@ def final_provenance(created="2026-09-03T09:00:00+08:00", *, base="2026-09-02", 
             "calendar_verified": True, "calendar_trade_dates": calendar or [base, target]}
 
 
+def current_final_provenance(created="2026-09-03T08:00:00+08:00"):
+    payload = final_provenance(created)
+    payload["version"] = "prediction-time-v2"
+    return payload
+
+
 def stored_prediction(created="2026-09-02T16:10:00+08:00", **changes):
     data = dict(prediction_id="p", trade_date=date(2026, 9, 2), symbol="600000", name="test",
                 score=80, rating="A", confidence=0.8, scoring_version="v5", prediction_source="live",
@@ -89,6 +95,20 @@ def test_audit_keeps_originals_and_marks_only_matching_late_review():
 ])
 def test_final_window_uses_target_day_and_timezone(created, eligible):
     p = prediction(created, data_as_of=date(2026, 9, 3), prediction_provenance=final_provenance(created))
+    assert assess_prediction_time(p).strict_forward_eligible is eligible
+
+
+@pytest.mark.parametrize("created,eligible", [
+    ("2026-09-03T08:00:00+08:00", True),
+    ("2026-09-03T07:59:59+08:00", False),
+    ("2026-09-03T09:30:00+08:00", False),
+])
+def test_current_final_window_starts_at_0800(created, eligible):
+    p = prediction(
+        created,
+        data_as_of=date(2026, 9, 3),
+        prediction_provenance=current_final_provenance(created),
+    )
     assert assess_prediction_time(p).strict_forward_eligible is eligible
 
 
