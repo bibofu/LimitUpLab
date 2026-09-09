@@ -270,25 +270,6 @@ def _rating_matches_filter(
     return any(alias.lower() in searchable for alias in filter_query.aliases)
 
 
-def _event_fact(event: LimitUpEvent) -> dict[str, Any]:
-    """Serialize one limit-up event into compact Agent facts."""
-
-    return {
-        "symbol": event.symbol,
-        "name": event.name,
-        "trade_date": event.trade_date.isoformat(),
-        "board_height": event.board_height,
-        "industry": event.industry,
-        "concept": event.concept,
-        "first_limit_time": event.first_limit_time.strftime("%H:%M"),
-        "last_limit_time": event.last_limit_time.strftime("%H:%M"),
-        "break_count": event.break_count,
-        "closed_limit": event.closed_limit,
-        "amount": event.amount,
-        "turnover_rate": event.turnover_rate,
-    }
-
-
 def _filter_first_board_candidates(
     ratings: FirstBoardRatingsResponse,
     filter_query: _FirstBoardFilterQuery,

@@ -8,6 +8,7 @@ from datetime import date
 from time import perf_counter
 from typing import Any, Callable, Iterator
 
+from app.agents.limit_up_execution import execute_limit_up_query
 from app.agents.tool_execution import execute_tool_calls as _execute_llm_tool_calls
 from app.agents.tool_execution.helpers import (
     _FirstBoardFilterQuery,
@@ -138,7 +139,7 @@ from app.services.prompt_security import (
 from app.services.session_memory import memory_prompt_payload
 
 
-CHAT_AGENT_VERSION = "first-board-chat-policy-v15-promotion-opening"
+CHAT_AGENT_VERSION = "first-board-chat-policy-v16-shared-limit-up-execution"
 _FORCE_TEMPLATE_ANSWER_OVERRIDE: ContextVar[bool | None] = ContextVar(
     "force_template_answer_override",
     default=None,
@@ -2458,32 +2459,24 @@ def _answer_limit_up_query(
         request_trade_date=trade_date,
         planner_arguments=planner_arguments,
     )
-    result = tools.limit_up_events(
-        trade_date=contract.trade_date,
-        board_height=contract.board_height,
-        min_board_height=contract.min_board_height,
-        highest_only=contract.highest_only,
-        market=contract.market,
-        query=contract.query,
-        event_status=contract.event_status,
-        sort_by=contract.sort_by,
-        sort_order=contract.sort_order,
-        limit=contract.limit,
-    )
-    result.input["query_contract"] = contract.to_dict()
-    result.trace_output["query_contract"] = contract.to_dict()
+    result, facts = execute_limit_up_query(tools, contract)
     events: list[LimitUpEvent] = result.output
 
-    answer = _template_limit_up_events_answer(
-        request=request,
-        trade_date=str(result.trace_output.get("trade_date")),
-        events=events,
-        board_height=contract.board_height,
-        min_board_height=contract.min_board_height,
-        query=contract.query,
-        broken_only=contract.event_status in {"failed", "broken_intraday"},
-        market=contract.market,
-    )
+    if contract.recent_trade_days > 1 or contract.group_by:
+        answer = _template_answer_from_tool_facts(
+            request=request, intent="limit_up_query", facts={"limit_up_events": facts},
+        )
+    else:
+        answer = _template_limit_up_events_answer(
+            request=request,
+            trade_date=str(result.trace_output.get("trade_date")),
+            events=events,
+            board_height=contract.board_height,
+            min_board_height=contract.min_board_height,
+            query=contract.query,
+            broken_only=contract.event_status in {"failed", "broken_intraday"},
+            market=contract.market,
+        )
     return AgentChatResponse(
         session_id=request.session_id,
         intent="limit_up_query",

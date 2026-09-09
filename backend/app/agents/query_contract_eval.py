@@ -1,4 +1,4 @@
-"""Deterministic regression runner for Agent Query Contract v2."""
+"""Deterministic regression runner for the current Agent Query Contract."""
 
 from __future__ import annotations
 
@@ -8,7 +8,7 @@ from datetime import date
 from pathlib import Path
 from typing import Any
 
-from app.agents.query_contract import build_limit_up_query_contract
+from app.agents.query_contract import QUERY_CONTRACT_VERSION, build_limit_up_query_contract
 
 
 @dataclass(frozen=True)
@@ -96,7 +96,7 @@ def query_contract_eval_report(suite: QueryContractEvalSuite) -> dict[str, Any]:
     """Serialize a contract suite for CLI and CI artifacts."""
 
     return {
-        "version": "limit-up-query-v2",
+        "version": QUERY_CONTRACT_VERSION,
         "total": suite.total,
         "passed": suite.passed,
         "failed": suite.failed,

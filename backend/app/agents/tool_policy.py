@@ -7,6 +7,7 @@ from dataclasses import dataclass
 from datetime import date
 from typing import Any, Callable, TypedDict
 
+from app.agents.limit_up_execution import execute_limit_up_query
 from app.agents.query_contract import (
     build_market_event_query_contract,
     build_limit_up_query_contract,
@@ -995,29 +996,7 @@ class AgentToolPolicyEngine:
             request.message,
             request_trade_date=request.trade_date or signals.requested_date,
         )
-        result = self.tools.limit_up_events(
-            trade_date=contract.trade_date,
-            board_height=contract.board_height,
-            min_board_height=contract.min_board_height,
-            highest_only=contract.highest_only,
-            market=contract.market,
-            query=contract.query,
-            event_status=contract.event_status,
-            sort_by=contract.sort_by,
-            sort_order=contract.sort_order,
-            limit=contract.limit,
-        )
-        result.input["query_contract"] = contract.to_dict()
-        result.trace_output["query_contract"] = contract.to_dict()
-        payload = {
-            "trade_date": result.trace_output.get("trade_date"),
-            "market": result.trace_output.get("market"),
-            "market_label": result.trace_output.get("market_label"),
-            "matched_count": result.trace_output.get("matched_count"),
-            "returned_count": result.trace_output.get("returned_count"),
-            "query_contract": contract.to_dict(),
-            "events": result.trace_output.get("events", []),
-        }
+        result, payload = execute_limit_up_query(self.tools, contract)
         self._record_success(
             execution,
             result=result,

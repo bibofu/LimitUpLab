@@ -2,12 +2,12 @@
 
 from typing import Any
 
+from app.agents.limit_up_execution import execute_limit_up_query
 from app.agents.query_contract import build_limit_up_query_contract
 from app.agents.tool_policy import extract_stock_news_days as _extract_stock_news_days
 
 from .context import ExecutionState
 from .helpers import (
-    _event_fact,
     _explicit_request_trade_date,
     _has_events_for_date,
     _latest_external_trade_date,
@@ -229,38 +229,8 @@ def limit_up_events(state: ExecutionState, name: str, arguments: dict[str, Any])
         request_trade_date=state.request.trade_date,
         planner_arguments=arguments,
     )
-    result = state.tools.limit_up_events(
-        trade_date=contract.trade_date,
-        board_height=contract.board_height,
-        min_board_height=contract.min_board_height,
-        highest_only=contract.highest_only,
-        market=contract.market,
-        query=contract.query,
-        event_status=contract.event_status,
-        recent_trade_days=contract.recent_trade_days,
-        group_by=contract.group_by,
-        sort_by=contract.sort_by,
-        sort_order=contract.sort_order,
-        limit=contract.limit,
-    )
-    result.input["query_contract"] = contract.to_dict()
-    result.trace_output["query_contract"] = contract.to_dict()
-    state.facts["limit_up_events"] = {
-        "trade_date": result.trace_output.get("trade_date"),
-        "market": result.trace_output.get("market"),
-        "market_label": result.trace_output.get("market_label"),
-        "matched_count": result.trace_output.get("matched_count"),
-        "unique_stock_count": result.trace_output.get("unique_stock_count"),
-        "returned_count": result.trace_output.get("returned_count"),
-        "start_trade_date": result.trace_output.get("start_trade_date"),
-        "recent_trade_days": result.trace_output.get("recent_trade_days"),
-        "selected_trade_day_count": result.trace_output.get("selected_trade_day_count"),
-        "group_by": result.trace_output.get("group_by"),
-        "sector_summary": result.trace_output.get("sector_summary", []),
-        "unclassified_event_count": result.trace_output.get("unclassified_event_count", 0),
-        "query_contract": contract.to_dict(),
-        "events": [_event_fact(event) for event in result.output],
-    }
+    result, facts = execute_limit_up_query(state.tools, contract)
+    state.facts["limit_up_events"] = facts
     state.traces.append(result.trace())
     state.call_names.append(name)
     state.references.append(f"trade_date={result.trace_output.get('trade_date')}")
