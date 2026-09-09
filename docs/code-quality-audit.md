@@ -290,6 +290,91 @@
 
 下列附录是初次审查基线的覆盖与规模证据；“基础完成”表示该文件已进入扫描和结构检查，并非没有任何潜在问题。
 
+## 7. 专项审查：Agent 提示词体积与职责边界（2026-09-09）
+
+审查基线：`232c627`。本节仅审查并记录问题，未修改提示词、Planner 输出契约或运行逻辑。审查覆盖 `backend/app/agents/chat_prompts.py`、`capability_contract.py`、`tools.py`、`chat.py`、`session_memory.py`、`llm_provider.py`，以及 2026-09-09 当天本地 `agent_usage_events` 中有 Planner 调用的 29 条运行记录。
+
+### 量化结果
+
+当前运行 profile 为 `v1_close_review`，Planner 每次可见 24 个工具和 23 个 Capability。以下字符数由生产构建函数直接生成；字符数是 Python `len(str)`，不是 token 数。
+
+| 组成 | 字符数 | 占 Planner system 比例 | 说明 |
+| --- | ---: | ---: | --- |
+| Planner system prompt | 21,842 | 100.0% | 原生 function-call 模式 |
+| 固定规则（移除两个目录后的剩余部分） | 10,015 | 45.9% | 角色、安全、上下文、逐领域路由规则 |
+| 工具目录 | 8,364 | 38.3% | 24 个工具的描述、参数类型、枚举和必填项 |
+| Capability 目录 | 3,463 | 15.9% | 23 个能力的描述、示例和所需证据 |
+| 原生函数调用契约 | 2,308 | — | API payload 中另行发送，不属于 system message |
+| Planner JSON 降级 system prompt | 22,032 | — | 比原生模式多 190 字符的输出 schema 说明 |
+| Answer 基础 system prompt | 4,788 | — | 未计入按请求追加的 Capability 回答约束 |
+| 全部 Capability 回答约束 | 1,343 | — | 实际只追加当前请求涉及的部分 |
+
+工具目录中最大的单项为 `limit_up_events` 1,170 字符、`post_limit_screen` 960 字符、`post_limit_statistics` 735 字符。它们既在目录中描述参数和用途，又在固定 Planner 规则及 Capability 目录中重复描述选择边界。
+
+真实运行记录显示，固定模板之外的动态上下文也不可忽略：
+
+| 指标 | 样本数 | 最小 | 中位数 | P90 | 最大 |
+| --- | ---: | ---: | ---: | ---: | ---: |
+| Planner 总输入字符 | 29 | 24,616 | 26,619 | 27,947 | 27,963 |
+| Answer 总输入字符（仅发生 Answer LLM 调用） | 18 | 5,381 | 11,062 | 17,801 | 20,373 |
+| API 返回 prompt tokens | 25 | 7,348 | 8,557 | 13,643 | 14,794 |
+
+`prompt_tokens` 是一次业务运行内所有 LLM 调用的合计，不能当作 system prompt 的精确 token 数；4 条 token usage 不完整的运行未纳入该行。29 条运行中有 11 条只调用 Planner，随后由确定性模板回答。Planner 总输入已包含 system prompt、动态 user JSON 和 2,308 字符的原生函数契约。
+
+### QP-01 — P1：Capability 与工具调用是重复的规划输出，四处路由描述形成冲突面
+
+**证据：** `chat_prompts.py:97–148` 以自然语言逐领域指定 Capability/工具；同一请求边界又出现在 `capability_contract.py` 的 Capability 描述、`tools.py` 的工具 schema，以及 `_planner_function_parameters` 的 Capability/工具枚举。Planner 被要求同时输出 `capabilities` 和 `tool_calls`，但 `ensure_capability_tool_calls` 已能根据 Capability 确定性补齐所需工具和默认参数，Query Contract 也会再次以用户原文覆盖 Planner 参数。
+
+近期 `3d8bfd4`、`16b0dee`、`3709f63`、`85d0ceb` 分别围绕板块涨停、晋级日开盘、多日股票集合和错误日程提示补规则或补救，说明当前可靠性依赖“Prompt 提示 + Planner 结果 + 后端修正”三方保持一致。新增一句 Prompt 能缓解已知问法，但继续扩大重复规则和冲突面。
+
+**影响：** 每次普通问题都支付完整工具目录和重复枚举成本；模型可能给出 Capability 正确但 tool call 错误、或参数与 Query Contract 冲突的计划，后端再修复，trace 难以区分模型决策与确定性契约。该问题同时影响成本、延迟、可维护性和问答稳定性，列为 P1。
+
+**建议：** 将 Planner 收敛为 Capability-first 契约，只输出 Capability、上下文模式、安全类型和少量无法由用户原文确定的语义槽位。Capability 到工具及默认参数完全由 `CapabilityToolRequirement` 映射，日期、窗口、板数、行业查询、排序和数量继续由 Query Contract 从用户原文编译。移除 Planner system 中的完整工具目录和 LLM 输出中的原始 `tool_calls`；后端执行 trace 仍记录最终工具与参数。不要用新增一套散落正则代替 Planner，而要复用现有 Query Contract 和 Capability Contract。
+
+**目标与验收：** Planner system 不超过 10,000 字符，system 加原生函数契约的固定部分不超过 12,000 字符；Capability 契约、最终工具、Query Contract 和 trace 可回放一致。运行完整 Capability/Query Contract/Tool Policy/Agent Chat 测试，使用 `badCase.md` 全部真实问法做回归，并对多意图、同义改写及两轮指代执行真实 HTTP 验收。
+
+### QP-02 — P2：Planner 固定规则混入大量 Answer 展示职责
+
+**证据：** Planner 规则不仅决定证据能力，还要求热门股回答注明采集时间、新闻逐条保留来源和 URL、市场综述使用哪些展示维度、禁止某些回答措辞等；相同要求已经存在于 `_tool_answer_system_prompt` 和 Capability 的 `answer_guidance`。Planner 本应只产出计划，这些展示约束不会改善工具参数的确定性。
+
+**影响：** Answer 格式或披露口径变化时需同步修改 Planner、Answer prompt、Capability guidance 和确定性模板。展示规则进入 Planner 还会稀释真正重要的能力区分与上下文继承规则。
+
+**建议：** Planner 仅保留会改变 Capability 选择的对比规则，例如“板块近期涨停统计”与“全市场板块行情”的区别。来源披露、表格列、完整名单、免责声明和指标解释移到按请求加载的 `answer_guidance` 或确定性 renderer；安全边界保留在 Planner 与 Answer 的短公共核心中。
+
+### QP-03 — P2：原始会话历史和 Session Memory 在 Planner 与 Answer 中重复发送
+
+**证据：** `_tool_planner_user_prompt` 与 `_tool_answer_user_prompt` 都包含 `conversation_history` 和 `session_memory`。历史最多取 8 条、每条 400 字符；Planner 另有结构化 `recent_context`，Answer 已获得解析后的问题、计划和工具事实。真实 Answer 总输入中位数 11,062 字符、最大 20,373 字符，说明动态事实与重复上下文在部分回答中已经超过 Answer 基础 system prompt。
+
+**影响：** 同一轮对话文本被发送两次；旧助手回答虽被标记为“不可信且不可复用证据”，仍占用上下文并可能干扰最终事实总结。长工具事实与历史叠加时更容易触发模型上下文压力。
+
+**建议：** Planner 保留结构化 Session Memory、最近必要用户话语和 `recent_context`；Answer 默认只接收当前用户问题、已解析的实体/日期/上下文来源和工具事实。只有确需保留用户表达约束的 Capability 才附加压缩后的约束，不再发送旧助手回答全文。必须用“一进二名单 → 这些票开盘如何”等多轮 Bad Case 证明指代没有退化。
+
+### QP-04 — P2：缺少提示词预算与组成级可观测性，增长只能事后发现
+
+**证据：** 当前测试只断言 `planner_prompt_chars`、`answer_prompt_chars` 大于零，或检查目录包含/排除某工具；没有 system、工具目录、Capability 目录、函数契约和动态上下文的独立预算。运行表只保存 Planner/Answer 合计字符数，无法直接判断增长来自固定规则、schema、历史还是工具 facts。
+
+**影响：** 每次为 Bad Case 增加规则都可能静默推高全量请求成本；只有查看数据库总量才能发现变化，也无法为 PR 提供明确回归门槛。
+
+**建议：** 增加纯构建测试和分项指标：`planner_system_chars`、`tool_catalog_chars`、`capability_catalog_chars`、`function_contract_chars`、`conversation_context_chars`、`answer_facts_chars`。为固定部分设置上限，动态部分设置截断和告警而非简单测试失败；在使用量聚合中观察 P50/P90，并在重构前后比较首 token 延迟、总耗时和 token 用量。
+
+### 建议实施顺序与当前状态
+
+| 顺序 | 内容 | 风险 | 状态 |
+| --- | --- | --- | --- |
+| 1 | 先增加分项字符指标、预算测试和重构前基线 | 低 | 待实施 |
+| 2 | 从 Planner 移走纯 Answer 展示规则，保持现有输出契约 | 中 | 待实施 |
+| 3 | 将 Planner 改为 Capability-first，由契约确定性映射工具和参数 | 高 | 待实施，需单独授权实施 |
+| 4 | 精简 Planner/Answer 的重复历史上下文并做多轮真实回归 | 中 | 待实施 |
+
+本专项未发现 P0。建议先完成第 1 步，再以第 2、3 步为一个可回滚的核心变更批次；不能只删除文字后以现有单问测试通过作为完成依据。目标是减少重复决策面，而不是单纯追求更短的 Prompt。
+
+### 本次验证
+
+- 提示词构建实测：上述字符数均由当前生产函数和 `v1_close_review` profile 直接生成。
+- 运行记录：只读统计本地 2026-09-09 当天 29 条有 Planner 输入的使用记录；未修改数据库。
+- 定向测试：`test_agent_capability_contract.py`、`test_agent_v1_profile.py`、`test_agent_chat.py` 共 **81 passed、3 subtests passed、1 warning**。warning 为 pytest 无法写入仓库根目录 `.pytest_cache`，不是测试跳过或业务失败。
+- 未运行付费 Planner 评估、完整后端 pytest、前端测试或构建；本次只新增审查文档，不改变运行逻辑。
+
 ## 附录 A：全部超大文件
 
 | 文件 | 行数 | 复核结论 |
