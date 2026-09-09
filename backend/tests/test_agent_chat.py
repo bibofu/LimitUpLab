@@ -1106,8 +1106,9 @@ class AgentChatTest(unittest.TestCase):
         )
         self.assertIn("2026-09-08", first_response.answer)
         self.assertIn("2026-09-09", first_response.answer)
-        self.assertIn("高开样本(000001)", first_response.answer)
-        self.assertIn("低开样本(000002)", first_response.answer)
+        self.assertIn("| 代码 | 名称 | 行业 | 首次封板 | 炸板次数 |", first_response.answer)
+        self.assertIn("| 000001 | 高开样本 |", first_response.answer)
+        self.assertIn("| 000002 | 低开样本 |", first_response.answer)
         self.assertNotIn("2→3板", first_response.answer)
 
         response = answer_first_board_chat(
@@ -1125,9 +1126,10 @@ class AgentChatTest(unittest.TestCase):
         self.assertEqual(response.intent, "daily_board_promotion")
         self.assertIn("daily_board_promotion", response.tool_calls)
         self.assertNotEqual(response.intent, "market_schedule")
-        self.assertIn("高开样本(000001) 高开 +5.00%", response.answer)
-        self.assertIn("低开样本(000002) 低开 -5.00%", response.answer)
-        self.assertIn("缺失样本(000003) 开盘数据缺失", response.answer)
+        self.assertIn("| 代码 | 名称 | 开盘类型 | 开盘涨跌幅 | 晋级日开盘 | 前收 |", response.answer)
+        self.assertIn("| 000001 | 高开样本 | 高开 | +5.00% |", response.answer)
+        self.assertIn("| 000002 | 低开样本 | 低开 | -5.00% |", response.answer)
+        self.assertIn("| 000003 | 缺失样本 | 数据缺失 | — |", response.answer)
         self.assertIn("另有 1 只缺少对应两日完整 K 线", response.answer)
         self.assertIn("高开与低开数量相同", response.answer)
         trace = next(

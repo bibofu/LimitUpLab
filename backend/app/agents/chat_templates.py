@@ -1164,7 +1164,7 @@ def _looks_like_first_to_second_stock_list(message: str) -> bool:
 def _template_first_to_second_stock_list(items: list[dict[str, Any]]) -> str:
     """Render every first-to-second stock for every requested promotion day."""
 
-    lines = ["按相邻交易日收盘封板口径，一进二成功股票如下："]
+    lines = ["按相邻交易日收盘封板口径，一进二成功股票如下：", ""]
     for item in items:
         stocks = [
             stock
@@ -1176,21 +1176,40 @@ def _template_first_to_second_stock_list(items: list[dict[str, Any]]) -> str:
         promoted_count = int(item.get("first_board_promoted_count") or 0)
         probability = item.get("first_board_probability")
         rate = f"{float(probability):.1%}" if probability is not None else "无样本"
-        lines.append(
-            f"- {item.get('trade_date')}（前一交易日 {item.get('previous_trade_date')}）："
-            f"{promoted_count}/{sample_size}，晋级率 {rate}。"
+        lines.extend(
+            [
+                f"## {item.get('trade_date')} 晋级",
+                "",
+                f"前一交易日 {item.get('previous_trade_date')} 首板样本 "
+                f"{sample_size} 只，成功晋级二板 {promoted_count} 只，"
+                f"晋级率 {rate}。",
+                "",
+            ]
         )
         if stocks:
-            lines.append(
-                "  "
-                + IDEOGRAPHIC_COMMA.join(
-                    f"{stock.get('name')}({stock.get('symbol')})"
-                    for stock in stocks
-                )
-                + "。"
+            lines.extend(
+                [
+                    "| 代码 | 名称 | 行业 | 首次封板 | 炸板次数 |",
+                    "| --- | --- | --- | --- | ---: |",
+                    *[
+                        "| "
+                        + " | ".join(
+                            (
+                                _markdown_cell(stock.get("symbol")),
+                                _markdown_cell(stock.get("name")),
+                                _markdown_cell(stock.get("industry")),
+                                _markdown_cell(stock.get("first_limit_time")),
+                                _markdown_cell(stock.get("break_count")),
+                            )
+                        )
+                        + " |"
+                        for stock in stocks
+                    ],
+                    "",
+                ]
             )
         else:
-            lines.append("  当日没有识别到一进二成功股票。")
+            lines.extend(["当日没有识别到一进二成功股票。", ""])
     lines.append("以上为已发生收盘行情的复盘统计，不代表未来晋级结果。")
     return "\n".join(lines)
 
@@ -1200,7 +1219,7 @@ def _template_promotion_opening_answer(items: list[dict[str, Any]]) -> str:
 
     labels = {"high": "高开", "flat": "平开", "low": "低开"}
     total_high = total_flat = total_low = total_missing = 0
-    lines = ["按晋级日开盘价相对前一交易日收盘价统计，一进二样本如下："]
+    lines = ["按晋级日开盘价相对前一交易日收盘价统计，一进二样本如下：", ""]
     for item in items:
         stocks = [
             stock
@@ -1216,27 +1235,48 @@ def _template_promotion_opening_answer(items: list[dict[str, Any]]) -> str:
         total_flat += flat_count
         total_low += low_count
         total_missing += missing_count
-        lines.append(
-            f"- {item.get('trade_date')}：高开 {high_count} 只，"
-            f"平开 {flat_count} 只，低开 {low_count} 只"
-            + (f"，缺少开盘数据 {missing_count} 只" if missing_count else "")
-            + "。"
+        lines.extend(
+            [
+                f"## {item.get('trade_date')} 晋级日开盘",
+                "",
+                f"高开 {high_count} 只，平开 {flat_count} 只，低开 {low_count} 只"
+                + (f"，缺少开盘数据 {missing_count} 只" if missing_count else "")
+                + "。",
+                "",
+                "| 代码 | 名称 | 开盘类型 | 开盘涨跌幅 | 晋级日开盘 | 前收 |",
+                "| --- | --- | --- | ---: | ---: | ---: |",
+            ]
         )
-        details = []
         for stock in stocks:
             open_type = stock.get("open_type")
             gap = stock.get("open_gap_pct")
             if open_type in labels and gap is not None:
-                details.append(
-                    f"{stock.get('name')}({stock.get('symbol')}) "
-                    f"{labels[open_type]} {float(gap):+.2f}%"
-                )
+                open_label = labels[open_type]
+                gap_text = f"{float(gap):+.2f}%"
             else:
-                details.append(
-                    f"{stock.get('name')}({stock.get('symbol')}) 开盘数据缺失"
+                open_label = "数据缺失"
+                gap_text = "—"
+            open_price = stock.get("open_price")
+            previous_close = stock.get("previous_close")
+            lines.append(
+                "| "
+                + " | ".join(
+                    (
+                        _markdown_cell(stock.get("symbol")),
+                        _markdown_cell(stock.get("name")),
+                        open_label,
+                        gap_text,
+                        f"{float(open_price):.2f}" if open_price is not None else "—",
+                        (
+                            f"{float(previous_close):.2f}"
+                            if previous_close is not None
+                            else "—"
+                        ),
+                    )
                 )
-        if details:
-            lines.append("  " + IDEOGRAPHIC_COMMA.join(details) + "。")
+                + " |"
+            )
+        lines.append("")
 
     evaluable = total_high + total_flat + total_low
     comparison = (
@@ -1254,6 +1294,13 @@ def _template_promotion_opening_answer(items: list[dict[str, Any]]) -> str:
         lines.append(f"另有 {total_missing} 只缺少对应两日完整 K 线，未计入高低开比较。")
     lines.append("以上为已发生行情的复盘统计，不代表后续表现。")
     return "\n".join(lines)
+
+
+def _markdown_cell(value: object) -> str:
+    """Escape a compact scalar for deterministic Markdown table cells."""
+
+    text = str(value) if value not in (None, "") else "—"
+    return text.replace("|", "\\|").replace("\n", " ")
 
 
 def _template_first_board_position_answer(ratings: dict[str, Any]) -> str:
