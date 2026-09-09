@@ -516,24 +516,6 @@ export interface PredictionQualityAuditResponse {
   generated_by: string;
 }
 
-export interface FirstBoardCriticResponse {
-  symbol: string;
-  name: string;
-  trade_date: string;
-  rating: string;
-  score: number;
-  original_confidence: number;
-  suggested_confidence: number;
-  confidence_delta: number;
-  verdict: "supportive" | "cautious" | "fragile";
-  support_evidence: string[];
-  counter_evidence: string[];
-  missing_data: string[];
-  critic_warnings: string[];
-  review_questions: string[];
-  generated_by: string;
-}
-
 export interface AgentEvalCaseReport {
   case_id: string;
   passed: boolean;

@@ -2574,12 +2574,6 @@ td span {
   font-size: 22px;
   line-height: 1;
 }
-.stock-agent-grid {
-  display: grid;
-  gap: 18px;
-  align-items: start;
-}
-
 .stock-market-chart {
   min-width: 0;
 }
@@ -2658,83 +2652,6 @@ td span {
   color: #b42318;
 }
 
-.stock-agent-grid {
-  grid-template-columns: 1fr;
-}
-
-.critic-detail {
-  display: grid;
-  gap: 18px;
-  padding: 20px;
-}
-
-.critic-verdict {
-  display: grid;
-  grid-template-columns: repeat(2, minmax(0, 1fr));
-  gap: 12px;
-}
-
-.critic-verdict div {
-  display: grid;
-  gap: 6px;
-  padding: 14px;
-  border: 1px solid #eaecf0;
-  border-radius: 8px;
-  background: #fcfcfd;
-}
-
-.critic-verdict span {
-  color: #667085;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.critic-verdict strong {
-  color: #101828;
-  font-size: 18px;
-}
-
-.critic-supportive div:first-child {
-  background: #f6fef9;
-}
-
-.critic-supportive div:first-child strong {
-  color: #027a48;
-}
-
-.critic-cautious div:first-child {
-  background: #fffaeb;
-}
-
-.critic-cautious div:first-child strong {
-  color: #b54708;
-}
-
-.critic-fragile div:first-child {
-  background: #fff1f0;
-}
-
-.critic-fragile div:first-child strong {
-  color: #b42318;
-}
-
-.critic-warnings {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-  padding-top: 12px;
-  border-top: 1px solid #eaecf0;
-}
-
-.critic-warnings span {
-  padding: 6px 8px;
-  border-radius: 8px;
-  background: #f2f4f7;
-  color: #475467;
-  font-size: 12px;
-  font-weight: 700;
-  line-height: 1.4;
-}
 .rating-detail,
 .rating-detail-empty {
   display: grid;
@@ -4630,15 +4547,13 @@ td span {
   .overview-grid,
   .index-grid,
   .latest-close-strip,
-  .critic-verdict,
   .rating-top-list {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
 
 .overview-content,
-.promotion-latest,
-.stock-agent-grid {
+.promotion-latest {
     grid-template-columns: 1fr;
   }
 
@@ -4856,7 +4771,6 @@ td span {
   .index-grid,
   .latest-close-strip,
   .stock-facts,
-  .critic-verdict,
   .rating-top-list {
     grid-template-columns: 1fr;
   }

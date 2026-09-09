@@ -53,7 +53,6 @@ import {
 import {
   fetchContinuedBoardEvents,
   fetchDailyBoardPromotion,
-  fetchFirstBoardCritic,
   fetchFirstBoardRatings,
   fetchFinanceNews,
   fetchRecommendationIntelligence,
@@ -69,7 +68,6 @@ import {
 } from "./api";
 import type {
   DailyBoardPromotionStat,
-  FirstBoardCriticResponse,
   FirstBoardRating,
   FirstBoardRatingsResponse,
   FinanceNewsPage,
@@ -1165,7 +1163,6 @@ function StockDetail({ data }: { data: DashboardData }) {
   const [latestClose, setLatestClose] = useState<StockCloseSnapshot | null>(null);
   const [stockNews, setStockNews] = useState<StockNewsFacts | null>(null);
   const [position, setPosition] = useState<StockPositionAssessment | null>(null);
-  const [critic, setCritic] = useState<FirstBoardCriticResponse | null>(null);
   const [klineLoading, setKlineLoading] = useState(true);
   const [klineError, setKlineError] = useState<string | null>(null);
   const [tradingDayLoading, setTradingDayLoading] = useState(false);
@@ -1177,7 +1174,6 @@ function StockDetail({ data }: { data: DashboardData }) {
   const [stockNewsLoading, setStockNewsLoading] = useState(true);
   const [positionLoading, setPositionLoading] = useState(true);
   const [positionError, setPositionError] = useState<string | null>(null);
-  const [criticLoading, setCriticLoading] = useState(false);
   const tradingDayCacheKeyRef = useRef("");
   const fiveDayCacheKeyRef = useRef("");
   const resolvedTradeDate = stockEvent?.trade_date
@@ -1407,21 +1403,6 @@ function StockDetail({ data }: { data: DashboardData }) {
     symbol,
   ]);
 
-  useEffect(() => {
-    if (!firstBoardRating) {
-      setCritic(null);
-      setCriticLoading(false);
-      return;
-    }
-
-    setCritic(null);
-    setCriticLoading(true);
-    fetchFirstBoardCritic(symbol, firstBoardRating.facts.trade_date)
-      .then(setCritic)
-      .catch(() => setCritic(null))
-      .finally(() => setCriticLoading(false));
-  }, [firstBoardRating, symbol]);
-
   const intradayReferencePrice = useMemo(() => {
     const eventIndex = kline.findIndex(
       (bar) => bar.trade_date === marketTradeDate,
@@ -1571,25 +1552,15 @@ function StockDetail({ data }: { data: DashboardData }) {
         />
       ) : null}
 
-      {firstBoardRating || criticLoading || critic ? (
-        <section className="stock-agent-grid">
-          {firstBoardRating ? (
-            <FirstBoardRatingDetail
-              intelligence={
-                currentIntelligence?.base_trade_date === resolvedTradeDate
-                  ? currentIntelligence
-                  : null
-              }
-              rating={firstBoardRating}
-            />
-          ) : null}
-          {criticLoading || critic ? (
-            <FirstBoardCriticPanel
-              data={critic}
-              loading={criticLoading}
-            />
-          ) : null}
-        </section>
+      {firstBoardRating ? (
+        <FirstBoardRatingDetail
+          intelligence={
+            currentIntelligence?.base_trade_date === resolvedTradeDate
+              ? currentIntelligence
+              : null
+          }
+          rating={firstBoardRating}
+        />
       ) : null}
     </div>
   );
@@ -1687,68 +1658,6 @@ function StockPositionPanel({
   );
 }
 
-
-function FirstBoardCriticPanel({
-  data,
-  loading,
-}: {
-  data: FirstBoardCriticResponse | null;
-  loading: boolean;
-}) {
-  /** Render critic-side review that challenges the original rating. */
-
-  const verdictCopy = {
-    supportive: "证据较稳",
-    cautious: "需要谨慎",
-    fragile: "结论偏脆弱",
-  };
-
-  if (loading) {
-    return (
-      <Panel title="Critic 复核" icon={<ShieldAlert size={18} />}>
-        <div className="rating-detail-empty">正在复核评分可靠性...</div>
-      </Panel>
-    );
-  }
-
-  if (!data) {
-    return null;
-  }
-
-  return (
-    <Panel title="Critic 复核" icon={<ShieldAlert size={18} />}>
-      <div className="critic-detail">
-        <div className={`critic-verdict critic-${data.verdict}`}>
-          <div>
-            <span>复核结论</span>
-            <strong>{verdictCopy[data.verdict]}</strong>
-          </div>
-          <div>
-            <span>置信度建议</span>
-            <strong>
-              {formatPercent(data.original_confidence)} {"->"} {formatPercent(data.suggested_confidence)}
-            </strong>
-          </div>
-        </div>
-
-        <TagSection title="支持证据" items={data.support_evidence} tone="good" />
-        <TagSection title="反向证据" items={data.counter_evidence} tone="risk" />
-        {data.missing_data.length > 0 ? (
-          <TagSection title="缺失数据" items={data.missing_data} tone="muted" />
-        ) : null}
-        <TagSection title="复盘问题" items={data.review_questions} tone="muted" />
-
-        {data.critic_warnings.length > 0 ? (
-          <div className="critic-warnings">
-            {data.critic_warnings.map((warning) => (
-              <span key={warning}>{warning}</span>
-            ))}
-          </div>
-        ) : null}
-      </div>
-    </Panel>
-  );
-}
 
 function FirstBoardRatingDetail({
   intelligence,

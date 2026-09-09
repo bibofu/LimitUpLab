@@ -11,7 +11,6 @@ import type {
   ContinuationStat,
   FailedRateStat,
   FinanceNewsPage,
-  FirstBoardCriticResponse,
   FirstBoardRatingsResponse,
   LimitUpEvent,
   MarketSummary,
@@ -303,16 +302,6 @@ export function deleteChatSession(sessionId: string) {
   return request<{ deleted: boolean }>(`/api/agents/chat/sessions/${sessionId}`, {
     method: "DELETE",
   });
-}
-
-export function fetchFirstBoardCritic(symbol: string, tradeDate?: string) {
-  const params = new URLSearchParams({ symbol });
-  if (tradeDate) {
-    params.set("trade_date", tradeDate);
-  }
-  return request<FirstBoardCriticResponse>(
-    `/api/agents/first-board-critic?${params.toString()}`,
-  );
 }
 
 export function sendAgentChatMessage(payload: AgentChatRequest) {
