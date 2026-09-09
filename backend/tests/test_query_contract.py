@@ -5,6 +5,7 @@ from app.agents.query_contract import (
     build_limit_up_query_contract,
     build_market_event_query_contract,
     looks_like_limit_up_sector_summary_question,
+    looks_like_named_limit_up_sector_list_question,
     looks_like_market_event_query,
 )
 from app.agents.query_contract_eval import (
@@ -77,7 +78,7 @@ class QueryContractV2Test(unittest.TestCase):
             planner_arguments={"recent_trade_days": 1, "group_by": "concept"},
         )
 
-        self.assertEqual(contract.version, "limit-up-query-v4")
+        self.assertEqual(contract.version, "limit-up-query-v5")
         self.assertEqual(contract.recent_trade_days, 7)
         self.assertEqual(contract.group_by, "concept")
         self.assertEqual(contract.result_mode, "summary")
@@ -101,6 +102,37 @@ class QueryContractV2Test(unittest.TestCase):
         )
 
         self.assertEqual(contract.group_by, "industry")
+
+    def test_recent_named_sector_stock_list_uses_clean_query_and_seven_days(self) -> None:
+        message = "近期农业板块涨停过的股票有哪些"
+        contract = build_limit_up_query_contract(
+            message,
+            planner_arguments={"query": "近期农业", "recent_trade_days": 1},
+        )
+
+        self.assertTrue(looks_like_named_limit_up_sector_list_question(message))
+        self.assertEqual(contract.version, "limit-up-query-v5")
+        self.assertEqual(contract.query, "农业")
+        self.assertEqual(contract.recent_trade_days, 7)
+        self.assertEqual(contract.result_mode, "list")
+        self.assertIsNone(contract.group_by)
+        self.assertTrue(contract.exhaustive)
+        self.assertEqual(contract.limit, 100)
+
+    def test_today_named_sector_stock_list_keeps_single_day_scope(self) -> None:
+        contract = build_limit_up_query_contract("今天农业板块涨停的股票有哪些")
+
+        self.assertEqual(contract.query, "农业")
+        self.assertEqual(contract.recent_trade_days, 1)
+
+    def test_explicit_named_sector_window_overrides_seven_day_default(self) -> None:
+        contract = build_limit_up_query_contract(
+            "近10个交易日农业板块涨停过的股票有哪些",
+            planner_arguments={"recent_trade_days": 1},
+        )
+
+        self.assertEqual(contract.query, "农业")
+        self.assertEqual(contract.recent_trade_days, 10)
 
     def test_limit_down_wording_compiles_to_one_market_event_type(self) -> None:
         for message in (

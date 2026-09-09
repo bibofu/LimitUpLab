@@ -78,6 +78,7 @@ from app.agents.query_contract import (
     build_market_event_query_contract,
     build_limit_up_query_contract,
     extract_market_event_type,
+    looks_like_named_limit_up_sector_list_question,
     looks_like_limit_up_sector_summary_question,
     looks_like_market_event_query,
 )
@@ -732,7 +733,10 @@ def _answer_with_llm_tool_agent(
             },
         )
 
-    if looks_like_limit_up_sector_summary_question(request.message):
+    if (
+        looks_like_limit_up_sector_summary_question(request.message)
+        or looks_like_named_limit_up_sector_list_question(request.message)
+    ):
         tool_calls = [
             {
                 "name": "limit_up_events",
@@ -834,6 +838,7 @@ def _answer_with_llm_tool_agent(
     )
     fast_structured_answer = (
         looks_like_limit_up_sector_summary_question(request.message)
+        or looks_like_named_limit_up_sector_list_question(request.message)
         or _is_simple_sector_performance(execution["facts"])
         or _is_simple_sector_stock_ranking(execution["facts"])
         or _is_simple_market_event_pool(execution["facts"])
@@ -1346,7 +1351,10 @@ def _answer_limit_up_sector_summary_without_llm(
 ) -> AgentChatResponse | None:
     """Aggregate recent local limit-up events when the planner is unavailable."""
 
-    if not looks_like_limit_up_sector_summary_question(request.message):
+    if not (
+        looks_like_limit_up_sector_summary_question(request.message)
+        or looks_like_named_limit_up_sector_list_question(request.message)
+    ):
         return None
     contract = build_limit_up_query_contract(
         request.message,
@@ -3005,6 +3013,8 @@ def _looks_like_general_limit_up_question(message: str) -> bool:
 
     normalized = message.lower()
     if looks_like_limit_up_sector_summary_question(message):
+        return True
+    if looks_like_named_limit_up_sector_list_question(message):
         return True
     if _looks_like_daily_board_promotion_question(message):
         return False

@@ -483,6 +483,57 @@ def _template_answer_from_tool_facts(
             lines.append(TEXT["safety"])
             return "\n".join(lines)
         events = payload.get("events", []) if isinstance(payload, dict) else []
+        recent_trade_days = int(payload.get("recent_trade_days") or 1)
+        if recent_trade_days > 1:
+            events_by_symbol: dict[str, list[dict[str, Any]]] = {}
+            for item in events:
+                events_by_symbol.setdefault(
+                    str(item.get("symbol") or ""), []
+                ).append(item)
+            query = (payload.get("query_contract") or {}).get("query")
+            if not events_by_symbol:
+                return "\n".join(
+                    [
+                        f"截至 {payload.get('trade_date')}，最近 {payload.get('selected_trade_day_count')} 个本地交易日"
+                        f"（{payload.get('start_trade_date')} 至 {payload.get('trade_date')}）没有命中"
+                        f"{f'“{query}”相关' if query else ''}收盘涨停股票。",
+                        TEXT["safety"],
+                    ]
+                )
+            lines = [
+                f"截至 {payload.get('trade_date')}，最近 {payload.get('selected_trade_day_count')} 个本地交易日"
+                f"（{payload.get('start_trade_date')} 至 {payload.get('trade_date')}），"
+                f"{f'“{query}”相关' if query else ''}收盘涨停股票共 {payload.get('unique_stock_count')} 只："
+            ]
+            for symbol, stock_events in events_by_symbol.items():
+                latest = max(
+                    stock_events,
+                    key=lambda item: str(item.get("trade_date") or ""),
+                )
+                event_dates = sorted(
+                    {
+                        str(item.get("trade_date"))
+                        for item in stock_events
+                        if item.get("trade_date")
+                    }
+                )
+                date_text = f"（{'、'.join(event_dates)}）" if event_dates else ""
+                explicit_industry_query = "行业" in request.message and not any(
+                    term in request.message for term in ("板块", "题材", "概念")
+                )
+                classification_text = (
+                    f"行业 {latest.get('industry')}"
+                    if explicit_industry_query
+                    else f"涨停题材 {latest.get('concept')}"
+                )
+                lines.append(
+                    f"- {latest.get('name')}({symbol})，期间收盘涨停 {len(stock_events)} 次"
+                    f"{date_text}，"
+                    f"{classification_text}。"
+                )
+            lines.append("同一股票期间多次涨停只在名单中列示一次，涨停次数和日期另行注明。")
+            lines.append(TEXT["safety"])
+            return "\n".join(lines)
         lines = [f"{payload.get('trade_date')} 查询到 {len(events)} 条匹配涨停事件："]
         display_events = (
             events

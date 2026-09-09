@@ -8,7 +8,7 @@ from datetime import date
 from typing import Any, Literal
 
 
-QUERY_CONTRACT_VERSION = "limit-up-query-v4"
+QUERY_CONTRACT_VERSION = "limit-up-query-v5"
 MARKET_EVENT_QUERY_CONTRACT_VERSION = "market-event-query-v1"
 
 MarketSegment = Literal["main_board", "chinext", "star_market", "beijing"]
@@ -271,6 +271,7 @@ def build_limit_up_query_contract(
             event_status = "closed"
 
     sector_summary = looks_like_limit_up_sector_summary_question(message)
+    named_sector_list = looks_like_named_limit_up_sector_list_question(message)
     if sector_summary:
         # A distribution request describes the grouping dimension, not a topic
         # keyword. Do not let a planner turn words such as "板块" into a filter.
@@ -281,9 +282,13 @@ def build_limit_up_query_contract(
     if sector_summary:
         result_mode = "summary"
     explicit_recent_trade_days = extract_recent_trade_days(message)
+    recent_named_sector_list = named_sector_list and (
+        explicit_recent_trade_days is not None
+        or any(term in message for term in ("近期", "最近", "近来"))
+    )
     recent_trade_days = (
         explicit_recent_trade_days or 7
-        if sector_summary
+        if sector_summary or recent_named_sector_list
         else _bounded_int(planner.get("recent_trade_days"), minimum=1, maximum=20)
         or 1
     )
@@ -303,7 +308,7 @@ def build_limit_up_query_contract(
         or normalize_sort_order(planner.get("sort_order"))
         or _default_sort_order(sort_by)
     )
-    exhaustive = looks_like_exhaustive_request(message)
+    exhaustive = looks_like_exhaustive_request(message) or named_sector_list
     explicit_limit = extract_result_limit(message)
     planner_limit = _bounded_int(planner.get("limit"), minimum=1, maximum=100)
     limit = explicit_limit or planner_limit or 30
@@ -359,6 +364,26 @@ def looks_like_limit_up_sector_summary_question(message: str) -> bool:
         )
     )
     return has_limit_up and has_sector and has_distribution
+
+
+def looks_like_named_limit_up_sector_list_question(message: str) -> bool:
+    """Recognize a named sector/theme request whose result should be stocks."""
+
+    compact = re.sub(r"[\s，。！？,.!?]", "", message)
+    if looks_like_limit_up_sector_summary_question(message):
+        return False
+    has_limit_up = "涨停" in compact
+    has_sector = any(term in compact for term in ("板块", "行业", "题材", "概念"))
+    wants_stocks = any(
+        term in compact
+        for term in ("哪些股票", "股票有哪些", "哪些票", "票有哪些", "名单", "列出")
+    )
+    return (
+        has_limit_up
+        and has_sector
+        and wants_stocks
+        and extract_topic_query(message) is not None
+    )
 
 
 def extract_recent_trade_days(message: str) -> int | None:
@@ -643,10 +668,22 @@ def extract_topic_query(message: str) -> str | None:
     for pattern in patterns:
         match = re.search(pattern, compact, flags=re.IGNORECASE)
         if match:
-            candidate = match.group(1).strip("的与和")
+            candidate = _clean_topic_candidate(match.group(1))
             if candidate and candidate not in stop_words:
                 return candidate
     return None
+
+
+def _clean_topic_candidate(value: str) -> str:
+    """Remove time/scope words captured before a named sector or theme."""
+
+    candidate = value.strip("的与和")
+    candidate = re.sub(
+        r"^(?:(?:近|最近|过去)\d{1,2}个?交易日|近期|最近|近来|今天|今日|当前|本周)+",
+        "",
+        candidate,
+    )
+    return candidate.strip("的与和")
 
 
 def _clean_query(value: object) -> str | None:

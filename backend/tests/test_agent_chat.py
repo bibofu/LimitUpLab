@@ -1315,6 +1315,45 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("有色金属：1 只股票", response.answer)
         self.assertNotIn("汽车零部", response.answer)
 
+    def test_recent_named_sector_limit_up_question_lists_unique_stocks(self) -> None:
+        events = [
+            self._make_event("600108", "亚盛集团", "种植业", "现代农业+农业种植").model_copy(
+                update={"trade_date": date(2026, 9, 3)}
+            ),
+            self._make_event("600108", "亚盛集团", "种植业", "现代农业+农业种植").model_copy(
+                update={"trade_date": date(2026, 9, 8)}
+            ),
+            self._make_event("000816", "智慧农业", "汽车零部", "有色金属+智慧农业").model_copy(
+                update={"trade_date": date(2026, 9, 7)}
+            ),
+            self._make_event("002102", "软件样本", "软件开发", "AI").model_copy(
+                update={"trade_date": date(2026, 9, 9)}
+            ),
+        ]
+
+        response = answer_first_board_chat(
+            AgentChatRequest(
+                session_id="recent-agriculture-limit-ups",
+                message="近期农业板块涨停过的股票有哪些",
+            ),
+            events=events,
+            llm_provider=DisabledLLMProvider(),
+        )
+
+        trace = next(
+            item for item in response.tool_results if item.name == "limit_up_events"
+        )
+        self.assertEqual(trace.input["query_contract"]["version"], "limit-up-query-v5")
+        self.assertEqual(trace.input["query"], "农业")
+        self.assertEqual(trace.input["recent_trade_days"], 7)
+        self.assertEqual(trace.output["unique_stock_count"], 2)
+        self.assertEqual(response.answer.count("亚盛集团(600108)"), 1)
+        self.assertEqual(response.answer.count("智慧农业(000816)"), 1)
+        self.assertNotIn("软件样本", response.answer)
+        self.assertNotIn("汽车零部", response.answer)
+        self.assertIn("涨停题材 有色金属+智慧农业", response.answer)
+        self.assertIn("期间收盘涨停 2 次", response.answer)
+
     def test_chinext_limit_up_question_filters_market_before_llm_answer(self) -> None:
         events = [
             self._make_event("002101", "主板样本", "软件开发", "AI"),
