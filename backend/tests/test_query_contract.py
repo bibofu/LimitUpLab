@@ -2,6 +2,7 @@ import unittest
 from datetime import date
 
 from app.agents.query_contract import (
+    build_conversation_query_understanding_view,
     build_query_understanding_view,
     build_limit_up_query_contract,
     build_market_event_query_contract,
@@ -13,6 +14,21 @@ from app.agents.query_contract import (
 
 
 class QueryContractV2Test(unittest.TestCase):
+
+    def test_multi_turn_query_view_retains_referenced_date_and_market(self) -> None:
+        with query_reference_date_override(date(2026, 5, 15)):
+            previous_day = build_conversation_query_understanding_view(
+                ["今天创业板涨停股有哪些？", "换成前一个交易日呢？"]
+            )
+            same_day = build_conversation_query_understanding_view(
+                ["今天创业板涨停股有哪些？", "同一天主板的呢？"]
+            )
+
+        self.assertEqual(previous_day["trade_date"], "2026-05-14")
+        self.assertEqual(previous_day["market"], "chinext")
+        self.assertEqual(same_day["trade_date"], "2026-05-15")
+        self.assertEqual(same_day["market"], "main_board")
+        self.assertEqual(same_day["context_reference"], "previous_date")
 
     # Regression scenario: relative dates are stable inside an eval request.
     def test_relative_dates_use_request_scoped_anchor(self) -> None:

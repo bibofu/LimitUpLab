@@ -79,7 +79,7 @@ from app.agent_output_sanitizer import (
 )
 from app.agents.query_contract import (
     MARKET_SEGMENT_LABELS,
-    build_query_understanding_view,
+    build_conversation_query_understanding_view,
     build_market_event_query_contract,
     build_limit_up_query_contract,
     current_query_reference_date,
@@ -346,8 +346,15 @@ def answer_first_board_chat(
             ),
             None,
         )
-        view = build_query_understanding_view(
-            request.message,
+        view = build_conversation_query_understanding_view(
+            [
+                *[
+                    item.content
+                    for item in conversation_messages or []
+                    if item.role == "user"
+                ],
+                request.message,
+            ],
             request_trade_date=request.trade_date,
             request_symbol=request.symbol,
             executed_contract=executed_contract,

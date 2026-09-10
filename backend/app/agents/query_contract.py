@@ -7,7 +7,7 @@ from contextlib import contextmanager
 from contextvars import ContextVar
 from dataclasses import asdict, dataclass
 from datetime import date, timedelta
-from typing import Any, Iterator, Literal
+from typing import Any, Iterable, Iterator, Literal
 
 
 QUERY_CONTRACT_VERSION = "limit-up-query-v5"
@@ -439,6 +439,8 @@ def extract_trade_date(message: str) -> date | None:
     # making today/yesterday deterministic without changing live fallback rules.
     reference = _query_reference_date.get()
     if reference is not None:
+        if any(term in normalized for term in ("前一个交易日", "上一个交易日")):
+            return _previous_weekday(reference)
         if any(term in normalized for term in ("昨天", "昨日")):
             return _previous_weekday(reference)
         if any(term in normalized for term in ("今天", "今日")):
@@ -472,6 +474,7 @@ def build_query_understanding_view(
         "min_board_height": min_board_height,
         "event_status": extract_event_status(message),
         "result_mode": extract_result_mode(message),
+        "context_reference": _extract_context_reference(message),
     }
     # The executed Query Contract includes inherited context and canonical defaults;
     # explicit user fields remain the source of truth when both are present.
@@ -482,9 +485,63 @@ def build_query_understanding_view(
     return {key: value for key, value in merged.items() if value is not None}
 
 
+def build_conversation_query_understanding_view(
+    user_messages: Iterable[str],
+    *,
+    request_trade_date: date | None = None,
+    request_symbol: str | None = None,
+    executed_contract: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Resolve explicit fields on the last turn and retain referenced context."""
+
+    messages = [message for message in user_messages if message.strip()]
+    if not messages:
+        return {}
+    retained: dict[str, Any] = {}
+    retained_keys = {
+        "trade_date",
+        "symbol",
+        "market",
+        "sector",
+        "recent_trade_days",
+        "board_height",
+        "min_board_height",
+        "event_status",
+    }
+    current: dict[str, Any] = {}
+    for index, message in enumerate(messages):
+        is_last = index == len(messages) - 1
+        current = build_query_understanding_view(
+            message,
+            request_trade_date=request_trade_date if is_last else None,
+            request_symbol=request_symbol if is_last else None,
+            executed_contract=executed_contract if is_last else None,
+        )
+        if index and current.get("context_reference"):
+            for key in retained_keys:
+                if key not in current and key in retained:
+                    current[key] = retained[key]
+        retained.update(
+            {key: value for key, value in current.items() if key in retained_keys}
+        )
+    return current
+
+
 def _extract_stock_symbol(message: str) -> str | None:
     match = re.search(r"(?<!\d)([0368]\d{5})(?!\d)", message)
     return match.group(1) if match else None
+
+
+def _extract_context_reference(message: str) -> str | None:
+    if any(term in message for term in ("同一天", "前一个交易日", "上一个交易日")):
+        return "previous_date"
+    if any(term in message for term in ("这些", "里面", "上述", "它们")):
+        return "previous_result_set"
+    if any(term in message for term in ("第一只", "第一名")):
+        return "previous_first_entity"
+    if any(term in message for term in ("这只", "这票", "它")):
+        return "previous_entity"
+    return None
 
 
 def _previous_weekday(value: date) -> date:
