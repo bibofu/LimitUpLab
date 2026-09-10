@@ -79,8 +79,10 @@ from app.agent_output_sanitizer import (
 )
 from app.agents.query_contract import (
     MARKET_SEGMENT_LABELS,
+    build_query_understanding_view,
     build_market_event_query_contract,
     build_limit_up_query_contract,
+    current_query_reference_date,
     extract_market_event_type,
     looks_like_named_limit_up_sector_list_question,
     looks_like_limit_up_sector_summary_question,
@@ -310,6 +312,58 @@ def plan_agent_query(
 
 
 def answer_first_board_chat(
+    request: AgentChatRequest,
+    events: list[LimitUpEvent],
+    repository: SQLiteFirstBoardRepository | None = None,
+    recent_runs: list[AgentRun] | None = None,
+    conversation_messages: list[ChatSessionMessage] | None = None,
+    session_memory: ChatSessionMemory | None = None,
+    llm_provider: LLMProvider | None = None,
+    progress_callback: Callable[[str, str], None] | None = None,
+    answer_delta_callback: Callable[[str], None] | None = None,
+    tool_registry: AgentToolRegistry | None = None,
+) -> AgentChatResponse:
+    """Answer one question and attach the normalized Query Understanding trace."""
+
+    response = _answer_first_board_chat_impl(
+        request=request,
+        events=events,
+        repository=repository,
+        recent_runs=recent_runs,
+        conversation_messages=conversation_messages,
+        session_memory=session_memory,
+        llm_provider=llm_provider,
+        progress_callback=progress_callback,
+        answer_delta_callback=answer_delta_callback,
+        tool_registry=tool_registry,
+    )
+    if not any(trace.name == "query_understanding" for trace in response.tool_results):
+        executed_contract = next(
+            (
+                trace.input.get("query_contract")
+                for trace in response.tool_results
+                if isinstance(trace.input.get("query_contract"), dict)
+            ),
+            None,
+        )
+        view = build_query_understanding_view(
+            request.message,
+            request_trade_date=request.trade_date,
+            request_symbol=request.symbol,
+            executed_contract=executed_contract,
+        )
+        response.tool_results.append(
+            AgentToolTrace(
+                name="query_understanding",
+                input=view,
+                output=view,
+                summary="已记录确定性解析后的 Query Understanding。",
+            )
+        )
+    return response
+
+
+def _answer_first_board_chat_impl(
     request: AgentChatRequest,
     events: list[LimitUpEvent],
     repository: SQLiteFirstBoardRepository | None = None,
@@ -1300,7 +1354,10 @@ def _deterministic_pre_llm_response(
             plan,
         )
     if plan.intent == "market_schedule":
-        latest_date = max((event.trade_date for event in events), default=date.today())
+        latest_date = max(
+            (event.trade_date for event in events),
+            default=current_query_reference_date(),
+        )
         return _with_plan_trace(_answer_market_schedule(request, latest_date), plan)
     if (
         plan.trade_date
@@ -2054,7 +2111,7 @@ def _answer_market_schedule(
 ) -> AgentChatResponse:
     """Answer basic A-share market schedule questions."""
 
-    requested_date = date.today()
+    requested_date = current_query_reference_date()
     is_weekday = requested_date.weekday() < 5
     is_known_trading_day = requested_date == latest_trade_date
     if not is_weekday:

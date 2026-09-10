@@ -1,15 +1,49 @@
 import unittest
+from datetime import date
 
 from app.agents.query_contract import (
+    build_query_understanding_view,
     build_limit_up_query_contract,
     build_market_event_query_contract,
     looks_like_limit_up_sector_summary_question,
     looks_like_named_limit_up_sector_list_question,
     looks_like_market_event_query,
+    query_reference_date_override,
 )
 
 
 class QueryContractV2Test(unittest.TestCase):
+
+    # Regression scenario: relative dates are stable inside an eval request.
+    def test_relative_dates_use_request_scoped_anchor(self) -> None:
+        with query_reference_date_override(date(2026, 9, 14)):
+            today = build_query_understanding_view("今天创业板涨停股")
+            yesterday = build_query_understanding_view("昨天主板涨停股")
+
+        self.assertEqual(today["reference_date"], "2026-09-14")
+        self.assertEqual(today["trade_date"], "2026-09-14")
+        self.assertEqual(today["market"], "chinext")
+        self.assertEqual(yesterday["trade_date"], "2026-09-11")
+        self.assertEqual(yesterday["market"], "main_board")
+
+    # Regression scenario: executed canonical defaults complement explicit wording.
+    def test_query_view_merges_executed_contract_with_explicit_fields(self) -> None:
+        with query_reference_date_override(date(2026, 5, 15)):
+            view = build_query_understanding_view(
+                "今天301489三连板成交额前2名",
+                executed_contract={
+                    "trade_date": "2026-05-14",
+                    "sort_by": "amount",
+                    "sort_order": "desc",
+                    "limit": 2,
+                },
+            )
+
+        self.assertEqual(view["trade_date"], "2026-05-15")
+        self.assertEqual(view["symbol"], "301489")
+        self.assertEqual(view["board_height"], 3)
+        self.assertEqual(view["sort_by"], "amount")
+        self.assertEqual(view["limit"], 2)
 
     # Regression scenario: user filters override conflicting planner arguments.
     def test_user_filters_override_conflicting_planner_arguments(self) -> None:

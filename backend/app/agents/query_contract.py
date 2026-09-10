@@ -3,13 +3,36 @@
 from __future__ import annotations
 
 import re
+from contextlib import contextmanager
+from contextvars import ContextVar
 from dataclasses import asdict, dataclass
-from datetime import date
-from typing import Any, Literal
+from datetime import date, timedelta
+from typing import Any, Iterator, Literal
 
 
 QUERY_CONTRACT_VERSION = "limit-up-query-v5"
 MARKET_EVENT_QUERY_CONTRACT_VERSION = "market-event-query-v1"
+QUERY_UNDERSTANDING_VERSION = "query-understanding-v1"
+_query_reference_date: ContextVar[date | None] = ContextVar(
+    "query_reference_date", default=None
+)
+
+
+@contextmanager
+def query_reference_date_override(value: date) -> Iterator[None]:
+    """Anchor relative date wording inside one request or evaluation context."""
+
+    token = _query_reference_date.set(value)
+    try:
+        yield
+    finally:
+        _query_reference_date.reset(token)
+
+
+def current_query_reference_date() -> date:
+    """Return the request-scoped date used by relative-language parsing."""
+
+    return _query_reference_date.get() or date.today()
 
 MarketSegment = Literal["main_board", "chinext", "star_market", "beijing"]
 EventStatus = Literal["closed", "failed", "broken_intraday", "all"]
@@ -410,8 +433,65 @@ def extract_trade_date(message: str) -> date | None:
     short_match = re.search(r"(?<!\d)(\d{1,2})[./月](\d{1,2})(?:日|号)?", normalized)
     if short_match:
         month, day = (int(part) for part in short_match.groups())
-        return _safe_date(date.today().year, month, day)
+        return _safe_date(current_query_reference_date().year, month, day)
+    # Production keeps its established "latest complete local trade date"
+    # behavior for relative wording. Evaluations opt into an explicit anchor,
+    # making today/yesterday deterministic without changing live fallback rules.
+    reference = _query_reference_date.get()
+    if reference is not None:
+        if any(term in normalized for term in ("昨天", "昨日")):
+            return _previous_weekday(reference)
+        if any(term in normalized for term in ("今天", "今日")):
+            return reference
     return None
+
+
+def build_query_understanding_view(
+    message: str,
+    *,
+    request_trade_date: date | None = None,
+    request_symbol: str | None = None,
+    executed_contract: dict[str, Any] | None = None,
+) -> dict[str, Any]:
+    """Build the stable, evaluator-facing interpretation of one user message."""
+
+    observed = dict(executed_contract or {})
+    explicit_date = extract_trade_date(message)
+    board_height, min_board_height = extract_board_filters(message)
+    extracted = {
+        "version": QUERY_UNDERSTANDING_VERSION,
+        "reference_date": current_query_reference_date().isoformat(),
+        "trade_date": (
+            explicit_date or request_trade_date
+        ).isoformat() if explicit_date or request_trade_date else None,
+        "symbol": request_symbol or _extract_stock_symbol(message),
+        "market": extract_market_segment(message),
+        "sector": extract_topic_query(message),
+        "recent_trade_days": extract_recent_trade_days(message),
+        "board_height": board_height,
+        "min_board_height": min_board_height,
+        "event_status": extract_event_status(message),
+        "result_mode": extract_result_mode(message),
+    }
+    # The executed Query Contract includes inherited context and canonical defaults;
+    # explicit user fields remain the source of truth when both are present.
+    merged = {**extracted, **observed}
+    for key, value in extracted.items():
+        if value is not None and key not in {"version"}:
+            merged[key] = value
+    return {key: value for key, value in merged.items() if value is not None}
+
+
+def _extract_stock_symbol(message: str) -> str | None:
+    match = re.search(r"(?<!\d)([0368]\d{5})(?!\d)", message)
+    return match.group(1) if match else None
+
+
+def _previous_weekday(value: date) -> date:
+    previous = value - timedelta(days=1)
+    while previous.weekday() >= 5:
+        previous -= timedelta(days=1)
+    return previous
 
 
 def extract_board_filters(message: str) -> tuple[int | None, int | None]:

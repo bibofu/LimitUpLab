@@ -12,7 +12,10 @@ from app.agents.capability_contract import (
     available_capability_names,
     capability_schema_prompt,
 )
-from app.agents.query_contract import build_limit_up_query_contract
+from app.agents.query_contract import (
+    build_limit_up_query_contract,
+    current_query_reference_date,
+)
 from app.post_limit_query_contract import (
     build_post_limit_query_contract,
     looks_like_post_limit_question,
@@ -221,7 +224,7 @@ def _tool_planner_user_prompt(
     available_dates = sorted({event.trade_date for event in events}, reverse=True)
     latest_local_trade_date = available_dates[0] if available_dates else None
     context_payload = {
-        "calendar_today": date.today().isoformat(),
+        "calendar_today": current_query_reference_date().isoformat(),
         "latest_local_trade_date": (
             latest_local_trade_date.isoformat() if latest_local_trade_date else None
         ),
