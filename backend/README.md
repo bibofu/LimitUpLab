@@ -47,12 +47,21 @@ configuration looks like this:
 
 ```powershell
 LIMITUPLAB_LLM_ENABLED=true
+LIMITUPLAB_LLM_BACKEND=langchain
 LIMITUPLAB_LLM_BASE_URL=https://api.deepseek.com
 LIMITUPLAB_LLM_MODEL=deepseek-v4-flash
 LIMITUPLAB_LLM_THINKING_ENABLED=false
 LIMITUPLAB_LLM_PLANNER_MAX_TOKENS=320
 DEEPSEEK_API_KEY=<your-api-key>
 ```
+
+The default model backend uses LangChain `ChatPromptTemplate`, LCEL,
+`ChatOpenAI.bind_tools` and native streaming behind the existing `LLMProvider`
+interface. Business query contracts, Tool Policy and SQLite memory remain owned
+by this application. Set `LIMITUPLAB_LLM_BACKEND=requests` and restart to use the
+original adapter. The SDK controls LangChain retry backoff; the existing
+`LIMITUPLAB_LLM_RETRY_DELAY_SECONDS` setting applies only to Requests.
+See [integration and verification details](../docs/LangChain_Integration.md).
 
 Chat uses non-thinking mode by default because tool selection and grounded
 summaries are latency-sensitive structured tasks. Planner, local-tool and

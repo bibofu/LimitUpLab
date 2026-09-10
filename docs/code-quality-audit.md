@@ -789,3 +789,39 @@ QP-01、QP-02、QP-03 已关闭。QP-04 的固定输入预算与 Planner trace �
 | `scripts/daily_close_loop_task.ps1` | 77 | — | 基础 |
 | `scripts/start_dev_detached.py` | 294 | 11 / 84 | 基础 |
 | `scripts/start_local.cmd` | 50 | — | 基础 |
+
+## 2026-09-10：LangChain 模型适配专项审查
+
+范围：基于 `f0664e0`，检查本次模型适配器、Provider 选择、依赖、示例配置、测试和接入文档。实现与本审查记录位于同一 `feat: integrate LangChain model adapter` 提交。没有修改 Query Contract、Tool Policy、评分策略、预测快照、日更管线或前端。
+
+### 变更与边界
+
+- `backend/app/services/langchain_provider.py`：ChatPromptTemplate/LCEL、ChatOpenAI、bind_tools、流式适配及账本转换；`llm_provider.py` 默认选择 LangChain，保留显式 Requests 回退。
+- `backend/requirements.txt` 锁定 LangChain Core/OpenAI 1.6.2；保留 Pydantic 2.10.4，`pip check` 无依赖冲突。
+- `backend/tests/test_langchain_provider.py` 使用真实框架与 SDK、模拟 HTTP transport 验证协议；README、示例配置、面试答案链接和 `LangChain_Integration.md` 同步说明实际接入范围。
+- 没有新增业务工具或改变 Planner 能力 Schema。现有角色、SQLite Memory、profile 检查、缺失 Facts 和模板降级继续由原有代码处理。本次是框架接入，没有修复用户问答 Bad Case，因此未添加虚构的 `badCase.md` 记录。
+
+### 分级结果与处置
+
+| 分级 | 问题 / 风险 | 证据与状态 |
+| --- | --- | --- |
+| P0 | 本次范围未发现新增阻断问题 | 不等于对整个系统作无缺陷声明 |
+| P1，已处理 | LangChain 对部分缺失 token 数补零，会误报完整用量 | 保留原始 SSE usage，经共享解析器转换；普通/流式、空/部分/完整计数均有断言 |
+| P1，已处理 | ChatOpenAI 自动改写 `max_tokens`，可能破坏现有 DeepSeek Planner 预算 | 请求仍发送 `max_tokens`，函数调用和 JSON 回退都验证 320 预算；不额外限制普通答案 |
+| P2，保留并受控 | 两处窄范围内部扩展点受 LangChain 升级影响 | 锁定版本并加真实 SDK 线协议测试；升级依赖时重新验证。当前保留原因是维护参数和计费契约 |
+| P2，既有边界未扩展 | 最终回答校验不能撤回已发送 SSE delta | 本次保留已有行为，接入文档明确说明；后续改流式校验时需单独验收 |
+
+### 验证结果
+
+| 检查 | 结果 | 证据 |
+| --- | --- | --- |
+| Provider 定向回归 | 30 passed；0 failed/error/skipped | 新 LangChain 测试及原 `test_llm_provider.py`；含中断关闭、重试不重放、函数参数和缺失计费 |
+| 最终完整后端 | 608 passed、21 subtests passed；0 failed/error/skipped | `output/validation/20260910T105043Z-042dc3c5/pytest.log`、`pytest.xml` |
+| 离线评测 | Core 18/18，Query Contract 36/36，Product 10 场景 30/30 轮 | 同目录 `eval-core.log`、`eval-product.log` |
+| 真实回环 HTTP | 4/4 HTTP 200 且业务断言通过 | `output/langchain/http-results.json`：LangChain 普通问答、LangChain SSE、Requests 回退、上游失败模板降级 |
+| 账本验收 | 正常请求每次 2 次模型调用、32 个模拟服务报告 token；失败请求记录 2 次失败且用量未知 | 隔离 SQLite `agent_usage_events` 与工具 Trace；不是实际模型消费数字 |
+| 依赖与 diff | `pip check` 无冲突；完整 diff 与 `git diff --check` 检查 | 只提交本次相关文件，排除虚拟环境、临时脚本、数据库和生成报告 |
+
+失败与限制如实记录：第一次沙箱完整测试产生 **30 个 setup error、0 个业务失败、0 个 skipped**，JUnit 指向同一 Windows pytest 临时目录 PermissionError；随后 sessionfinish 清理也被该权限阻断。该次 Core/Product gate 通过。宿主环境使用新目录重跑先得到 604 passed、21 subtests passed，补充最终边界测试后再次完整重跑得到上表结果。第一次 HTTP 验收脚本误读不存在的 `source` 字段产生 KeyError，改为检查实际 `tool_calls` 与 provider Trace 后 4/4 通过，未为此改变业务实现。
+
+HTTP 使用真实 Uvicorn/HTTP/SSE、LangChain/OpenAI SDK 和实际查询契约/工具，数据与上游模型服务均为本地合成 fixture。验收后关闭测试服务；未调用付费模型、未验证真实模型准确率、未重启生产服务、未修改生产数据。没有前端变更，本轮未运行前端测试或构建。原有审查待办不因本次专项接入自动关闭。

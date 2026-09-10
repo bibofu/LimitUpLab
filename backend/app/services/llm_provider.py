@@ -478,7 +478,10 @@ def get_llm_provider() -> LLMProvider:
         or os.getenv("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL).strip()
     )
     timeout = _read_timeout_seconds()
-    return OpenAIChatCompletionsProvider(
+    backend = os.getenv("LIMITUPLAB_LLM_BACKEND", "langchain").strip().lower()
+    if backend not in {"langchain", "requests"}:
+        raise ValueError("LIMITUPLAB_LLM_BACKEND must be langchain or requests")
+    provider_options = dict(
         api_key=api_key,
         model=model,
         base_url=base_url,
@@ -492,13 +495,19 @@ def get_llm_provider() -> LLMProvider:
             "LIMITUPLAB_LLM_MAX_ATTEMPTS",
             DEFAULT_MAX_ATTEMPTS,
         ),
-        retry_delay_seconds=_read_non_negative_float(
-            "LIMITUPLAB_LLM_RETRY_DELAY_SECONDS",
-            DEFAULT_RETRY_DELAY_SECONDS,
-        ),
         native_function_calling_enabled=env_bool(
             "LIMITUPLAB_LLM_NATIVE_FUNCTION_CALLING",
             True,
+        ),
+    )
+    if backend == "langchain":
+        from app.services.langchain_provider import LangChainChatProvider
+
+        return LangChainChatProvider(**provider_options)
+    return OpenAIChatCompletionsProvider(
+        **provider_options,
+        retry_delay_seconds=_read_non_negative_float(
+            "LIMITUPLAB_LLM_RETRY_DELAY_SECONDS", DEFAULT_RETRY_DELAY_SECONDS,
         ),
     )
 

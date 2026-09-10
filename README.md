@@ -21,7 +21,7 @@ V1 后续以质量优化为主，暂不扩展大型功能；下一阶段聚焦 A
 - 真实涨停、炸板、K 线、板块、人气和龙虎榜数据流水线
 - 首板候选池过滤、结构化 Facts、规则评分和置信度
 - 每日 Top10 推荐快照及 D+1 至 D+5 走势追踪
-- 原生 Function Calling Planner、Tool Policy 修复和 SSE 流式回答
+- LangChain 模型适配、原生 Function Calling Planner、Tool Policy 修复和 SSE 流式回答
 - 可恢复的多会话对话、滚动 Session Memory 和受控上下文
 - Explanation、Critic、Review、Evaluation 等轻量 Agent 角色
 - 每日 Top10 预测快照、D+1 至 D+5 走势追踪、1进2全市场对照和不可变每日复盘快照
@@ -95,6 +95,8 @@ scoring_version
 其中 `score` 表示候选强度，`confidence` 表示当前数据对该评分的支持程度，两者不会混为一谈。
 
 ### 2. Tool-Using Chat Agent
+
+模型层默认由 LangChain 的 `ChatPromptTemplate`、LCEL、`ChatOpenAI.bind_tools` 和流式调用承接，业务能力、查询参数与工具执行仍由后端契约控制。可配置切回原 Requests 适配器，接入边界与面试说明见 [LangChain 接入](docs/LangChain_Integration.md)。
 
 正常问答主链路是：
 
@@ -277,6 +279,7 @@ sequenceDiagram
 - SQLite
 - AKShare
 - Requests + BeautifulSoup
+- LangChain Core + LangChain OpenAI（提示链、函数绑定、模型流式适配）
 - DeepSeek 兼容 Chat Completions API
 
 ### Frontend
