@@ -140,6 +140,37 @@ def test_committed_dev_dataset_covers_every_v1_capability_three_times() -> None:
             assert case.expected.result_states[tool] in {"ok", "partial"}
 
 
+def test_v1_migration_manifest_individually_disposes_all_50_cases() -> None:
+    path = (
+        Path(__file__).resolve().parent
+        / "fixtures"
+        / "agent_chat_eval_v1_migration.json"
+    )
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    entries = payload["entries"]
+    dev_ids = {case.case_id for case in load_dev_dataset().cases}
+
+    assert payload["reviewed_count"] == 50
+    assert [item["old_case_id"] for item in entries] == [
+        f"G{index:03d}" for index in range(1, 51)
+    ]
+    assert all(item["reason"].strip() for item in entries)
+    assert all(
+        item["disposition"] in {"exact", "reauthored", "rejected"}
+        for item in entries
+    )
+    assert all(
+        replacement in dev_ids
+        for item in entries
+        for replacement in item["replacement_case_ids"]
+    )
+    assert all(
+        bool(item["replacement_case_ids"])
+        == (item["disposition"] != "rejected")
+        for item in entries
+    )
+
+
 def test_loader_rejects_distribution_drift(tmp_path: Path) -> None:
     payload = _dataset_payload("dev")
     payload["cases"][69]["primary_type"] = "composite"
