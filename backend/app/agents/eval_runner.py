@@ -2,11 +2,9 @@
 
 from __future__ import annotations
 
-import json
 from collections import Counter
 from dataclasses import dataclass, field
 from datetime import datetime, timezone
-from pathlib import Path
 from time import perf_counter
 
 from app.agent_output_sanitizer import INTERNAL_TOOL_LABELS
@@ -359,65 +357,6 @@ class AgentProductEvalSuiteResult:
     @property
     def ok(self) -> bool:
         return self.failed_turns == 0
-
-
-def load_eval_cases(path: Path) -> list[AgentEvalCase]:
-    """Load Agent eval cases from a JSON fixture file."""
-
-    data = json.loads(path.read_text(encoding="utf-8"))
-    cases = [AgentEvalCase(**item) for item in data.get("cases", [])]
-    for family in data.get("families", []):
-        family_id = str(family["family_id"])
-        messages = family.get("messages") or []
-        shared = {
-            key: value
-            for key, value in family.items()
-            if key not in {"family_id", "messages"}
-        }
-        cases.extend(
-            AgentEvalCase(
-                case_id=f"{family_id}_{index:02d}",
-                message=str(message),
-                **shared,
-            )
-            for index, message in enumerate(messages, start=1)
-        )
-    return cases
-
-
-def load_conversation_eval_scenarios(
-    path: Path,
-) -> list[AgentConversationEvalScenario]:
-    """Load explicit multi-turn context scenarios from JSON."""
-
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return [
-        AgentConversationEvalScenario(
-            scenario_id=str(item["scenario_id"]),
-            history=list(item.get("history") or []),
-            turns=[
-                AgentConversationEvalTurn(**turn)
-                for turn in (item.get("turns") or [])
-            ],
-        )
-        for item in data.get("scenarios", [])
-    ]
-
-
-def load_product_eval_scenarios(path: Path) -> list[AgentProductEvalScenario]:
-    """Load end-to-end product conversations from a JSON fixture."""
-
-    data = json.loads(path.read_text(encoding="utf-8"))
-    return [
-        AgentProductEvalScenario(
-            scenario_id=str(item["scenario_id"]),
-            turns=[
-                AgentProductEvalTurn(**turn)
-                for turn in (item.get("turns") or [])
-            ],
-        )
-        for item in data.get("scenarios", [])
-    ]
 
 
 def run_agent_planner_eval_suite(
@@ -775,22 +714,6 @@ def run_agent_product_eval_suite(
     )
 
 
-def product_eval_suite_report(suite: AgentProductEvalSuiteResult) -> dict:
-    """Serialize product-level answer metrics and turn details."""
-
-    return {
-        "total_scenarios": suite.total_scenarios,
-        "passed_scenarios": suite.passed_scenarios,
-        "failed_scenarios": suite.failed_scenarios,
-        "total_turns": suite.total_turns,
-        "passed_turns": suite.passed_turns,
-        "failed_turns": suite.failed_turns,
-        "metrics": suite.metrics,
-        "failure_categories": suite.failure_categories,
-        "results": [_product_turn_result_payload(result) for result in suite.results],
-    }
-
-
 def product_eval_failure_report(suite: AgentProductEvalSuiteResult) -> dict:
     """Serialize actionable failed turns grouped by user-experience dimension."""
 
@@ -804,58 +727,6 @@ def product_eval_failure_report(suite: AgentProductEvalSuiteResult) -> dict:
         "results": [
             _product_turn_result_payload(result) for result in failed_results
         ],
-    }
-
-
-def planner_eval_suite_report(suite: AgentPlannerEvalSuiteResult) -> dict:
-    """Serialize semantic-routing metrics and per-question failures."""
-
-    return {
-        "total": suite.total,
-        "passed": suite.passed,
-        "failed": suite.failed,
-        "stable_cases": suite.stable_cases,
-        "unstable_cases": suite.unstable_cases,
-        "trials_per_case": suite.trials_per_case,
-        "minimum_pass_rate": suite.minimum_pass_rate,
-        "capability_success_rate": suite.capability_success_rate,
-        "effective_tool_success_rate": suite.effective_tool_success_rate,
-        "raw_planner_tool_success_rate": suite.raw_planner_tool_success_rate,
-        "results": [
-            {
-                "case_id": result.case_id,
-                "message": result.message,
-                "passed": result.passed,
-                "stable": result.stable,
-                "pass_rate": result.pass_rate,
-                "expected_capabilities": result.expected_capabilities,
-                "observed_capabilities": result.observed_capabilities,
-                "expected_tools": result.expected_tools,
-                "observed_tools": result.observed_tools,
-                "raw_planner_tools": result.raw_planner_tools,
-                "failures": result.failures,
-                "trials": result.trials,
-            }
-            for result in suite.results
-        ],
-    }
-
-
-def conversation_eval_suite_report(
-    suite: AgentConversationEvalSuiteResult,
-) -> dict:
-    """Serialize multi-turn routing stability metrics."""
-
-    return {
-        "total_scenarios": suite.total_scenarios,
-        "total_turns": suite.total_turns,
-        "passed_scenarios": suite.passed_scenarios,
-        "failed_scenarios": suite.failed_scenarios,
-        "stable_scenarios": suite.stable_scenarios,
-        "unstable_scenarios": suite.unstable_scenarios,
-        "trials_per_scenario": suite.trials_per_scenario,
-        "turn_pass_rate": suite.turn_pass_rate,
-        "results": suite.results,
     }
 
 
@@ -1197,107 +1068,6 @@ def run_agent_eval_case(
         provider_success_count=observed_provider.success_count,
         provider_errors=observed_provider.errors,
     )
-
-
-def eval_suite_report(suite: AgentEvalSuiteResult) -> dict:
-    """Serialize a suite result for CLI output and failure reports."""
-
-    return {
-        "total": suite.total,
-        "passed": suite.passed,
-        "failed": suite.failed,
-        "trials_per_case": suite.trials_per_case,
-        "minimum_pass_rate": suite.minimum_pass_rate,
-        "stable_cases": suite.stable_cases,
-        "unstable_cases": suite.unstable_cases,
-        "llm_expected_trials": suite.llm_expected_trials,
-        "llm_planner_trials": suite.llm_planner_trials,
-        "llm_coverage_rate": suite.llm_coverage_rate,
-        "planner_tool_success_rate": suite.planner_tool_success_rate,
-        "backend_repair_rate": suite.backend_repair_rate,
-        "results": [
-            {
-                "case_id": result.case_id,
-                "passed": result.passed,
-                "failures": result.failures,
-                "intent": result.intent,
-                "planner_tool_calls": result.planner_tool_calls,
-                "final_tool_calls": result.tool_calls,
-                "backend_repaired_tools": result.backend_repaired_tools,
-                "repair_reasons": result.repair_reasons,
-                "planner_required_tools_missing": result.planner_required_tools_missing,
-                "planner_capabilities": result.planner_capabilities,
-                "planner_capabilities_missing": result.planner_capabilities_missing,
-                "trace_names": result.trace_names,
-                "warnings": result.warnings,
-                "answer_preview": result.answer_preview,
-                "trial_count": result.trial_count,
-                "passed_trials": result.passed_trials,
-                "pass_rate": result.pass_rate,
-                "stable": result.stable,
-                "llm_planner_trials": result.llm_planner_trials,
-                "planner_tool_success_trials": result.planner_tool_success_trials,
-                "backend_repair_trials": result.backend_repair_trials,
-                "provider_failure_trials": result.provider_failure_trials,
-                "provider_call_count": result.provider_call_count,
-                "provider_success_count": result.provider_success_count,
-                "provider_errors": result.provider_errors,
-                "trials": result.trial_results,
-            }
-            for result in suite.results
-        ],
-    }
-
-
-def eval_failure_report(suite: AgentEvalSuiteResult) -> dict:
-    """Serialize failed cases and repaired cases for model-quality review."""
-
-    interesting = [
-        result
-        for result in suite.results
-        if (not result.passed) or (not result.stable) or result.backend_repair_trials
-    ]
-    return {
-        "total": suite.total,
-        "passed": suite.passed,
-        "failed": suite.failed,
-        "unstable_cases": suite.unstable_cases,
-        "llm_coverage_rate": suite.llm_coverage_rate,
-        "planner_tool_success_rate": suite.planner_tool_success_rate,
-        "backend_repair_rate": suite.backend_repair_rate,
-        "interesting_count": len(interesting),
-        "results": [
-            {
-                "case_id": result.case_id,
-                "passed": result.passed,
-                "failures": result.failures,
-                "intent": result.intent,
-                "planner_tool_calls": result.planner_tool_calls,
-                "final_tool_calls": result.tool_calls,
-                "backend_repaired_tools": result.backend_repaired_tools,
-                "repair_reasons": result.repair_reasons,
-                "planner_required_tools_missing": result.planner_required_tools_missing,
-                "planner_capabilities": result.planner_capabilities,
-                "planner_capabilities_missing": result.planner_capabilities_missing,
-                "trace_names": result.trace_names,
-                "warnings": result.warnings,
-                "answer_preview": result.answer_preview,
-                "trial_count": result.trial_count,
-                "passed_trials": result.passed_trials,
-                "pass_rate": result.pass_rate,
-                "stable": result.stable,
-                "llm_planner_trials": result.llm_planner_trials,
-                "planner_tool_success_trials": result.planner_tool_success_trials,
-                "backend_repair_trials": result.backend_repair_trials,
-                "provider_failure_trials": result.provider_failure_trials,
-                "provider_call_count": result.provider_call_count,
-                "provider_success_count": result.provider_success_count,
-                "provider_errors": result.provider_errors,
-                "trials": result.trial_results,
-            }
-            for result in interesting
-        ],
-    }
 
 
 def _check_product_turn(

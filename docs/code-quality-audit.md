@@ -68,3 +68,30 @@
 ### 建议顺序
 
 先处理 A01—A03 的可复现正确性问题，再完善 A05 的版本验收证据；按产品任务需要引入 A04 的有限执行循环，并在长任务或多人场景前补 A06。当前缺陷不应通过单纯增加角色数量、接入框架或拉长提示词来衡量是否解决。
+
+## 2026-09-10：评测资产清理与 Golden 入口收敛
+
+### 范围与结果
+
+- 按用户确认的清单删除 6 个非 Golden 用例 JSON、`backend/data` 中 5 个 Agent 历史评测 JSON、`output/validation` 中 51 个评测失败 JSON。删除前逐个验证绝对路径属于项目目录；没有递归删除目录。
+- fixtures 中唯一 JSON 为 `agent_golden_dataset.json`；50 条用例内容未变，SHA256 清理前后均为 `B8C9362ADFDA08E499A65DF580E66475BB1528805B4BC3DE247933172D9C587C`。
+- CLI 默认且仅支持 Golden；CI、评测接口和启用离线评测的系统健康检查使用同一数据源。接口保持原有字段，四层失败带层名展开，实际工具轨迹与答案预览取自同一次运行。
+- 删除旧题库整库加载测试、失去消费者的加载器、序列化器和测试替身。保留独立构造输入的组件测试，没有把旧 JSON 复制成另一种题库。
+- 没有修改 Agent 问答、评分和数据流水线逻辑；没有更改 Golden 判定标准。本次不处理 ReAct 或评测体系升级。
+- 用户已有 `AGENTS.md` 修改、`testQuestion.md` 和 `interviewPre.md` 删除不纳入任务提交；业务数据、Markdown 和综合验证日志保留。验证产生的临时评测 JSON 在交付前清理。
+
+### 验证
+
+- 第一轮定向 pytest 遇到 Windows 临时目录 ACL，5 个 setup error，收尾也发生 PermissionError；不能算作通过。改用宿主权限及新的隔离目录后，17 项定向测试通过。
+- 完整后端验收：608 项测试及 18 个子测试通过，0 失败、0 setup error、0 跳过。首次完整日志：`output/validation/20260910T133026Z-5f9a7845/pytest.log`；最终移除无消费者常量/测试替身后再次完整验证，同为 608 项及 18 个子测试通过，日志为 `output/golden-cleanup/final-pytest.log`。
+- Golden 离线评测：清理前后均为 19/50 通过、31/50 失败，四层失败明细逐项对照完全一致；Planner 78%、Tool Execution 54%、Grounding 66%、Answer 80%。CLI 返回 1，因此整个共享验收门禁正确报告失败。
+- 31 个既有失败 ID：G003、G005、G008、G009、G012、G013、G016、G017、G018、G019、G020、G021、G022、G023、G024、G025、G026、G029、G031、G034、G035、G037、G040、G041、G042、G044、G045、G046、G048、G049、G050。逐项原话和失败层明细见本地 `output/golden-cleanup/verification.md`，生成报告不提交。
+- 真实 HTTP：独立 Uvicorn（PID 16556、端口 62099、隔离 SQLite）执行 `/api/agents/eval` 与 `/api/agents/system-health?run_offline_eval=true`，均 HTTP 200。评测返回 total=50、passed=19、failed=31，逐项错误与 CLI 基线一致；健康检查返回 total=50、failed=31、passed=false。
+- 运行版本分别为 `agent-eval-panel-v2:agent-golden-v1` 和 `agent-system-health-v2-golden`；验证服务已停止。未调用真实模型，未修改现有运行服务。
+- 本轮没有前端变更，未运行前端测试和构建。旧文件引用搜索及 `git diff --check` 纳入提交检查。
+
+### 问题与处理状态
+
+- P1：Golden 仍有 31 项既有失败，涉及能力/参数不符、证据缺失、拒答和答案契约。风险为研究问答质量不足，证据为清理前后同样的逐项结果。按本次范围暂不修复；下次 Agent 质量修复或发布前处理，不放宽金标绕过。
+- P2：多题库、多入口引用与历史 JSON 报告混杂已完成清理。相关提交：`95aa49e`（入口、接口、CI 与文档）、`e3a50fe`（旧 core/product、V1 和契约题库清理）；本文所在提交完成剩余改写/多轮题库及无消费者代码清理。
+- 上一节 A01—A06 的业务缺陷与架构限制维持原状态；此次仅完成 A05 中的数据源和默认入口收敛，不表示已建立真实模型验收门禁。

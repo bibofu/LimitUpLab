@@ -15,8 +15,6 @@ from app.agents.eval_runner import (
     AgentConversationEvalScenario,
     AgentConversationEvalTurn,
     AgentEvalCase,
-    load_conversation_eval_scenarios,
-    load_eval_cases,
     run_agent_conversation_planner_eval_suite,
     run_agent_planner_eval_suite,
 )
@@ -65,31 +63,6 @@ class CapabilityOnlyProvider(LLMProvider):
         return LLMResult(
             content="已根据最新完整收盘事实整理。",
             model="fake-capability-answer",
-            provider="fake",
-        )
-
-
-class ContextAwareCapabilityProvider(LLMProvider):
-    """Return semantic plans for follow-ups and verify history is present."""
-
-    # Build the LLMResult fixture used by the surrounding regression scenario.
-    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
-        payload = json.loads(user_prompt)
-        if not payload["conversation_history"]:
-            raise AssertionError("multi-turn planner did not receive conversation history")
-        message = payload["message"]
-        capability = "stock_trend" if "走" in message else "first_board_rating"
-        return LLMResult(
-            content=json.dumps(
-                {
-                    "intent_label": capability,
-                    "capabilities": [capability],
-                    "safety": "normal",
-                    "tool_calls": [],
-                    "answer_directly": "",
-                }
-            ),
-            model="fake-context-planner",
             provider="fake",
         )
 
@@ -396,15 +369,6 @@ class AgentCapabilityContractTest(unittest.TestCase):
 
         self.assertEqual(names, {"popularity", "limit_up_pool"})
 
-    # Regression scenario: paraphrase eval fixture covers single and compound requests.
-    def test_paraphrase_eval_fixture_covers_single_and_compound_requests(self) -> None:
-        path = Path(__file__).parent / "fixtures" / "agent_paraphrase_eval_cases.json"
-        cases = load_eval_cases(path)
-
-        self.assertEqual(len(cases), 148)
-        self.assertTrue(all(case.expected_capabilities for case in cases))
-        self.assertTrue(any(len(case.expected_capabilities) > 1 for case in cases))
-
     # Regression scenario: planner eval repeats each case three times.
     def test_planner_eval_repeats_each_case_three_times(self) -> None:
         suite = run_agent_planner_eval_suite(
@@ -425,26 +389,6 @@ class AgentCapabilityContractTest(unittest.TestCase):
         self.assertEqual(suite.trials_per_case, 3)
         self.assertEqual(suite.stable_cases, 1)
         self.assertEqual(suite.capability_success_rate, 1.0)
-
-    # Regression scenario: conversation eval preserves history across turns.
-    def test_conversation_eval_preserves_history_across_turns(self) -> None:
-        path = (
-            Path(__file__).parent
-            / "fixtures"
-            / "agent_conversation_eval_scenarios.json"
-        )
-        scenario = load_conversation_eval_scenarios(path)[0]
-        suite = run_agent_conversation_planner_eval_suite(
-            scenarios=[scenario],
-            events=SAMPLE_EVENTS,
-            llm_provider=ContextAwareCapabilityProvider(),
-            trials_per_scenario=3,
-        )
-
-        self.assertTrue(suite.ok)
-        self.assertEqual(suite.total_turns, 2)
-        self.assertEqual(suite.stable_scenarios, 1)
-        self.assertEqual(suite.turn_pass_rate, 1.0)
 
     # Regression scenario: source refinement merges previous evidence capability.
     def test_source_refinement_merges_previous_evidence_capability(self) -> None:
