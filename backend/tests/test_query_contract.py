@@ -170,6 +170,14 @@ class QueryContractV2Test(unittest.TestCase):
         self.assertTrue(contract.exhaustive)
         self.assertEqual(contract.limit, 100)
 
+    def test_date_prefix_does_not_pollute_named_sector_query(self) -> None:
+        message = "2026-09-08 近期农业板块涨停过的股票有哪些"
+        contract = build_limit_up_query_contract(message)
+
+        self.assertEqual(contract.trade_date, date(2026, 9, 8))
+        self.assertEqual(contract.query, "农业")
+        self.assertEqual(contract.recent_trade_days, 7)
+
     # Regression scenario: today named sector stock list keeps single day scope.
     def test_today_named_sector_stock_list_keeps_single_day_scope(self) -> None:
         contract = build_limit_up_query_contract("今天农业板块涨停的股票有哪些")

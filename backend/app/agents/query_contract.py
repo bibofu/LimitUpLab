@@ -802,7 +802,17 @@ def extract_result_limit(message: str) -> int | None:
 def extract_topic_query(message: str) -> str | None:
     """Extract conservative industry/concept terms; leave ambiguous text to the LLM."""
 
-    compact = re.sub(r"\s+", "", message)
+    date_neutral = re.sub(
+        r"(?<!\d)\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}(?:日|号)?",
+        "",
+        message,
+    )
+    date_neutral = re.sub(
+        r"(?<!\d)\d{1,2}[./月]\d{1,2}(?:日|号)?",
+        "",
+        date_neutral,
+    )
+    compact = re.sub(r"\s+", "", date_neutral)
     patterns = (
         r"(?:票|股票|涨停股)(?:里|中|里面)([A-Za-z0-9\u4e00-\u9fff]{1,12}?)(?:相关|题材|概念|板块|行业)",
         r"([A-Za-z0-9\u4e00-\u9fff]{1,12}?)(?:相关|题材|概念|板块|行业)(?:的)?(?:首板|涨停)",
