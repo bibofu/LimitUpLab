@@ -2,10 +2,17 @@ import assert from "node:assert/strict";
 import test from "node:test";
 
 import {
+  displayRelayPositionLabel,
   latestRelayCandidates,
   rankedRelayCandidates,
   sortFirstBoardByRelayRanking,
 } from "../src/relayRanking.ts";
+
+test("relay cards expose the first-board position with an explicit missing fallback", () => {
+  assert.equal(displayRelayPositionLabel("低位启动首板"), "低位启动首板");
+  assert.equal(displayRelayPositionLabel("  高位震荡首板  "), "高位震荡首板");
+  assert.equal(displayRelayPositionLabel(null), "首板位置待补充");
+});
 
 test("the first-board table uses the same dynamic Top10 order as pre-market", () => {
   const tradeDate = "2026-09-02";

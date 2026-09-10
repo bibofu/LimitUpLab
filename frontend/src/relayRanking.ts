@@ -15,6 +15,11 @@ export function isRelayCandidateSymbol(symbol: string) {
   return !symbol.startsWith("300") && !symbol.startsWith("301");
 }
 
+export function displayRelayPositionLabel(positionLabel: string | null | undefined) {
+  const normalized = positionLabel?.trim();
+  return normalized || "首板位置待补充";
+}
+
 export function rankedRelayCandidates<T extends RelayRankingItem>(
   items: readonly T[],
   tradeDate: string | undefined,

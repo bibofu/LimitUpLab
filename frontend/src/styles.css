@@ -4105,6 +4105,33 @@ a.entry-card {
   line-height: 1;
 }
 
+.rating-position-label {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+  min-width: 0;
+  color: #667489;
+  font-size: 12px;
+}
+
+.rating-position-label svg {
+  flex: 0 0 auto;
+  color: #d92d20;
+}
+
+.rating-position-label strong {
+  min-width: 0;
+  overflow-wrap: anywhere;
+  color: #202938;
+  font-size: 13px;
+}
+
+.rating-position-label.is-missing,
+.rating-position-label.is-missing strong,
+.rating-position-label.is-missing svg {
+  color: #98a2b3;
+}
+
 
 
 

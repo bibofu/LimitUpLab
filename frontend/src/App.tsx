@@ -46,6 +46,7 @@ import {
   type MarketCandleBar,
 } from "./components/MarketKLineChart";
 import {
+  displayRelayPositionLabel,
   latestRelayCandidates,
   rankedRelayCandidates,
   sortFirstBoardByRelayRanking,
@@ -611,6 +612,13 @@ function RecommendationDraftPanel({
                   </span>
                 </div>
               </header>
+              <div
+                className={`rating-position-label${candidate.position_label ? "" : " is-missing"}`}
+              >
+                <MapPin aria-hidden="true" size={14} />
+                <span>首板位置</span>
+                <strong>{displayRelayPositionLabel(candidate.position_label)}</strong>
+              </div>
               {candidate.update_reasons.length > 0 ? (
                 <section className="rating-top-reasons">
                   <strong>收盘后新增信息</strong>
