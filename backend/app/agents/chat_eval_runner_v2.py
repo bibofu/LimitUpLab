@@ -13,6 +13,7 @@ from typing import Any, Iterable
 from uuid import uuid4
 
 from app.agents.chat import plan_agent_query
+from app.agents.capability_contract import CAPABILITY_BY_NAME
 from app.agents.chat_eval_dataset import (
     CHAT_EVAL_DATASET_VERSION,
     CHAT_EVAL_FIXTURE_ID,
@@ -429,7 +430,7 @@ def _run_case(
         planner_result = plan.result
         final_calls = [call for call in plan.tool_calls if call.get("name")]
         final_tools = [str(call["name"]) for call in final_calls]
-        planner_tools = list(final_tools)
+        planner_tools = _tools_for_capabilities(plan.policy_capabilities)
         planner_trace = AgentToolTrace(
             name="llm_tool_planner",
             input={
@@ -506,7 +507,7 @@ def _response(
         tool_policy=AgentToolPolicyAudit(
             planner_tool_calls=planner_tools,
             final_tool_calls=audit_final_tools,
-            backend_repaired_tools=repairs if case.expected.policy_repairs.repair_needed else [],
+            backend_repaired_tools=repairs,
             repair_reasons=["required frozen evidence"] if repairs else [],
         ),
         performance=AgentChatPerformance(
@@ -516,6 +517,20 @@ def _response(
         ),
         generated_by=RUNNER_VERSION,
     )
+
+
+def _tools_for_capabilities(capabilities: Iterable[str]) -> list[str]:
+    """Compile only the model's raw capabilities into its pre-policy tool set."""
+
+    tools: list[str] = []
+    for name in capabilities:
+        capability = CAPABILITY_BY_NAME.get(name)
+        if capability is None:
+            continue
+        for requirement in capability.required_tools:
+            if requirement.name not in tools:
+                tools.append(requirement.name)
+    return tools
 
 
 def _query_trace(case: ChatEvalCase) -> AgentToolTrace:

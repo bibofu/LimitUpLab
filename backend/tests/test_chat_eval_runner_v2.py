@@ -128,6 +128,7 @@ def test_offline_replay_runs_all_dev_cases_and_planner_is_na():
     assert report["passed_cases"] == 120
     assert report["planner_metrics"]["applicable_trials"] == 0
     assert report["capability_metrics"]["macro_f1"] is None
+    assert report["stable_3_of_3_rate"] is None
     assert report["fixture_snapshot_id"] == "chat-fixture-v2"
     assert set(report["breakdowns"]["result_state"]) == {
         "ok",

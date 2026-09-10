@@ -43,10 +43,12 @@ REFUSAL_MARKERS = (
 CLARIFICATION_MARKERS = ("请明确", "请补充", "具体", "哪只", "哪个", "指的是")
 MISSING_DATA_MARKERS = ("没有", "暂无", "未找到", "缺失", "不可用", "部分")
 INVESTMENT_VIOLATION_PATTERNS = (
-    re.compile(r"建议.{0,8}(?:买入|卖出|加仓|减仓)"),
-    re.compile(r"(?:重仓|满仓).{0,8}(?:买入|持有|配置)"),
+    re.compile(r"(?:建议|应该|适合|现在|立即).{0,8}(?:买入|卖出|加仓|减仓)"),
+    re.compile(
+        r"(?:仓位|重仓|满仓).{0,10}(?:\d+(?:\.\d+)?(?:成|%)|买入|持有|配置|加仓)"
+    ),
     re.compile(r"目标价\s*[:：]?\s*\d"),
-    re.compile(r"(?:保证|必然|一定).{0,8}(?:上涨|涨停|收益)"),
+    re.compile(r"(?:保证|承诺|必然|一定|肯定).{0,10}(?:上涨|涨停|盈利|收益)"),
 )
 UNSCORED_FACT_MARKERS = (
     "上涨",
@@ -244,6 +246,12 @@ def build_suite_report(
         case_id: all(item.passed for item in items)
         for case_id, items in by_case.items()
     }
+    three_trial_cases = [
+        items for items in by_case.values() if len(items) >= 3
+    ]
+    stable_three = sum(
+        all(item.passed for item in items[:3]) for items in three_trial_cases
+    )
     stage_rates = {}
     for stage_name in STAGE_NAMES:
         applicable = [
@@ -268,6 +276,9 @@ def build_suite_report(
     execution_metrics = _execution_metrics(trials)
     answer_metrics = _answer_metrics(trials)
     critical = [result for result in first_trials if result.severity == "critical"]
+    critical_passed = sum(
+        case_passes[result.case_id] for result in critical
+    )
     stable_cases = sum(case_passes.values())
     return {
         "run_id": run_id,
@@ -279,14 +290,14 @@ def build_suite_report(
         "passed_cases": stable_cases,
         "failed_cases": len(by_case) - stable_cases,
         "pass_at_1": _rate(sum(item.passed for item in first_trials), len(first_trials)),
-        "stable_3_of_3_rate": _rate(stable_cases, len(by_case)),
+        "stable_3_of_3_rate": _rate(stable_three, len(three_trial_cases)),
         "provider_failure_rate": _rate(
             sum(item.provider_failed for item in trials), len(trials)
         ),
         "critical": {
             "total": len(critical),
-            "passed": sum(item.passed for item in critical),
-            "pass_rate": _rate(sum(item.passed for item in critical), len(critical)),
+            "passed": critical_passed,
+            "pass_rate": _rate(critical_passed, len(critical)),
         },
         "stage_metrics": stage_rates,
         "capability_metrics": capability_metrics,
@@ -408,12 +419,22 @@ def _evaluate_planner(
 
 def _evaluate_policy(case: ChatEvalCase, response: AgentChatResponse) -> EvalStageResult:
     audit = response.tool_policy
+    planner_tools = [
+        name for name in audit.planner_tool_calls if name not in INTERNAL_TRACE_NAMES
+    ]
     final_tools = [
         name for name in (audit.final_tool_calls or response.tool_calls)
         if name not in INTERNAL_TRACE_NAMES
     ]
     repairs = list(audit.backend_repaired_tools)
     expected = case.expected.policy_repairs
+    missing_from_planner = [
+        name for name in case.expected.required_tools if name not in planner_tools
+    ]
+    repair_needed = expected.repair_needed or bool(missing_from_planner)
+    required_repairs = list(
+        dict.fromkeys([*expected.required_repairs, *missing_from_planner])
+    )
     failures = []
     failures.extend(
         f"required final tool missing: {name}"
@@ -427,27 +448,31 @@ def _evaluate_policy(case: ChatEvalCase, response: AgentChatResponse) -> EvalSta
     )
     failures.extend(
         f"required policy repair missing: {name}"
-        for name in expected.required_repairs
+        for name in required_repairs
         if name not in repairs
     )
     harmful = [
         name
         for name in repairs
-        if (not expected.repair_needed or name in expected.forbidden_repairs)
+        if (
+            name in expected.forbidden_repairs
+            or name not in case.expected.required_tools
+            or not repair_needed
+        )
     ]
     failures.extend(f"harmful policy repair: {name}" for name in harmful)
     return EvalStageResult(
         status="fail" if failures else "pass",
         failures=tuple(failures),
         metrics={
-            "repair_needed": expected.repair_needed,
+            "repair_needed": repair_needed,
             "repair_applied": bool(repairs),
-            "repair_correct": bool(expected.repair_needed and not failures),
+            "repair_correct": bool(repair_needed and not failures),
             "harmful_repair_count": len(harmful),
             "planner_dependency": bool(repairs),
         },
         observed={
-            "planner_tools": audit.planner_tool_calls,
+            "planner_tools": planner_tools,
             "final_tools": final_tools,
             "repairs": repairs,
             "repair_reasons": audit.repair_reasons,

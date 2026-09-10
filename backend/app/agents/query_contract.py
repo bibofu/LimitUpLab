@@ -460,6 +460,7 @@ def build_query_understanding_view(
     observed = dict(executed_contract or {})
     explicit_date = extract_trade_date(message)
     board_height, min_board_height = extract_board_filters(message)
+    sort_by, sort_order = extract_sort(message)
     extracted = {
         "version": QUERY_UNDERSTANDING_VERSION,
         "reference_date": current_query_reference_date().isoformat(),
@@ -473,7 +474,13 @@ def build_query_understanding_view(
         "board_height": board_height,
         "min_board_height": min_board_height,
         "event_status": extract_event_status(message),
+        "event_type": extract_market_event_type(message),
         "result_mode": extract_result_mode(message),
+        "sort_by": sort_by,
+        "sort_order": sort_order,
+        "limit": extract_result_limit(message),
+        "highest_only": True if "最高板" in message else None,
+        "exhaustive": True if looks_like_exhaustive_request(message) else None,
         "context_reference": _extract_context_reference(message),
     }
     # The executed Query Contract includes inherited context and canonical defaults;
@@ -507,6 +514,12 @@ def build_conversation_query_understanding_view(
         "board_height",
         "min_board_height",
         "event_status",
+        "event_type",
+        "sort_by",
+        "sort_order",
+        "limit",
+        "highest_only",
+        "exhaustive",
     }
     current: dict[str, Any] = {}
     for index, message in enumerate(messages):

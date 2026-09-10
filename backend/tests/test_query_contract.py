@@ -61,6 +61,18 @@ class QueryContractV2Test(unittest.TestCase):
         self.assertEqual(view["sort_by"], "amount")
         self.assertEqual(view["limit"], 2)
 
+    def test_query_view_exposes_event_sort_quantity_and_scope_constraints(self) -> None:
+        with query_reference_date_override(date(2026, 5, 15)):
+            ranked = build_query_understanding_view("今天涨停股成交额前2名")
+            highest = build_query_understanding_view("列出今天所有最高板")
+
+        self.assertEqual(ranked["event_type"], "limit_up")
+        self.assertEqual(ranked["sort_by"], "amount")
+        self.assertEqual(ranked["sort_order"], "desc")
+        self.assertEqual(ranked["limit"], 2)
+        self.assertEqual(highest["highest_only"], True)
+        self.assertEqual(highest["exhaustive"], True)
+
     # Regression scenario: user filters override conflicting planner arguments.
     def test_user_filters_override_conflicting_planner_arguments(self) -> None:
         contract = build_limit_up_query_contract(
