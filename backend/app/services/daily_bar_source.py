@@ -9,4 +9,6 @@ def daily_bar_source_family(source: str | None) -> str | None:
         return None
     if "stock_zh_a_hist_tx" in normalized or "qt.gtimg.cn" in normalized or "tencent" in normalized:
         return "tencent"
+    if "hithink-finance.market." in normalized:
+        return "hithink-finance"
     return normalized

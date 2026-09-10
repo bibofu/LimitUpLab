@@ -227,6 +227,48 @@ class HithinkFinanceCollectorTest(unittest.TestCase):
         self.assertIn("snapshot", runner.commands[0])
         self.assertIn("002491.SZ", runner.commands[0])
 
+    def test_stock_history_is_unadjusted_and_end_date_is_inclusive(self) -> None:
+        runner = FakeRunner(
+            {
+                "ok": True,
+                "data": {
+                    "item": [
+                        {
+                            "date_ms": 1_788_192_000_000,
+                            "open_price": 10.1,
+                            "high_price": 10.8,
+                            "low_price": 10.0,
+                            "close_price": 10.6,
+                            "volume": 12_000_000,
+                            "turnover": 126_000_000,
+                        }
+                    ]
+                },
+            }
+        )
+        collector = HithinkFinanceCollector(
+            executable="hithink-finance",
+            runner=runner,
+        )
+
+        history = collector.collect_stock_history(
+            "002491.SZ",
+            start_date=date(2026, 8, 31),
+            end_date=date(2026, 9, 1),
+            adjustment="none",
+        )
+
+        self.assertEqual(history.adjustment, "none")
+        self.assertEqual(history.items[0].trade_date, date(2026, 9, 1))
+        self.assertEqual(history.items[0].turnover, 126_000_000)
+        command = runner.commands[0]
+        self.assertEqual(command[1:3], ["--source", "remote"])
+        self.assertEqual(command[command.index("--adjust") + 1], "none")
+        self.assertEqual(
+            command[command.index("--end-ms") + 1],
+            "1788278400000",
+        )
+
     def test_full_market_snapshot_pages_and_resolves_names(self) -> None:
         runner = SequenceRunner(
             [

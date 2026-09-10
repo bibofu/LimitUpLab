@@ -162,7 +162,7 @@ def get_stock_latest_close(symbol: str) -> StockCloseSnapshot:
         return build_stock_close_snapshot(
             symbol=symbol,
             bars=bars,
-            source="local-first-kline",
+            source=bars[-1].source,
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error

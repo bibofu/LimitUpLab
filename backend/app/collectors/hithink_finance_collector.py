@@ -83,6 +83,31 @@ class HithinkMarketSnapshot:
 
 
 @dataclass(frozen=True)
+class HithinkDailyBarFact:
+    """One unambiguous daily OHLCV row returned by market history."""
+
+    trade_date: date
+    open: float
+    high: float
+    low: float
+    close: float
+    volume: float
+    turnover: float
+
+
+@dataclass(frozen=True)
+class HithinkStockHistory:
+    """Normalized single-stock daily history with its adjustment contract."""
+
+    thscode: str
+    start_date: date
+    end_date: date
+    adjustment: str
+    items: list[HithinkDailyBarFact]
+    source: str = HITHINK_SOURCE
+
+
+@dataclass(frozen=True)
 class HithinkIndexCatalogFact:
     """One industry or concept index exposed by Tonghuashun."""
 
@@ -285,6 +310,68 @@ class HithinkFinanceCollector:
             str(len(normalized_codes)),
         )
         return _market_snapshot_from_data(_dict(envelope.get("data")))
+
+    def collect_stock_history(
+        self,
+        thscode: str,
+        *,
+        start_date: date,
+        end_date: date,
+        adjustment: str = "none",
+    ) -> HithinkStockHistory:
+        """Return inclusive daily history with an explicit adjustment mode."""
+
+        normalized_code = thscode.strip().upper()
+        if adjustment not in {"none", "forward", "backward"}:
+            raise ValueError("adjustment must be none, forward or backward")
+        if start_date > end_date:
+            raise ValueError("start_date must not be after end_date")
+        envelope = self._invoke(
+            "market",
+            "history",
+            "--thscode",
+            normalized_code,
+            "--start-ms",
+            str(_shanghai_midnight_ms(start_date)),
+            "--end-ms",
+            str(_shanghai_midnight_ms(end_date + timedelta(days=1))),
+            "--adjust",
+            adjustment,
+        )
+        items: list[HithinkDailyBarFact] = []
+        for row in _list(_dict(envelope.get("data")).get("item")):
+            trade_date = _shanghai_timestamp_date(row.get("date_ms"))
+            open_price = _number(row.get("open_price"))
+            high_price = _number(row.get("high_price"))
+            low_price = _number(row.get("low_price"))
+            close_price = _number(row.get("close_price"))
+            volume = _number(row.get("volume"))
+            turnover = _number(row.get("turnover"))
+            if (
+                trade_date is None
+                or trade_date < start_date
+                or trade_date > end_date
+                or None in (open_price, high_price, low_price, close_price, volume)
+            ):
+                continue
+            items.append(
+                HithinkDailyBarFact(
+                    trade_date=trade_date,
+                    open=open_price,
+                    high=high_price,
+                    low=low_price,
+                    close=close_price,
+                    volume=volume,
+                    turnover=turnover or 0.0,
+                )
+            )
+        return HithinkStockHistory(
+            thscode=normalized_code,
+            start_date=start_date,
+            end_date=end_date,
+            adjustment=adjustment,
+            items=sorted(items, key=lambda item: item.trade_date),
+        )
 
     def collect_full_market_snapshot(
         self,
@@ -581,7 +668,10 @@ class HithinkFinanceCollector:
         """Run one CLI command and require a successful JSON envelope."""
 
         executable = self.executable or _find_executable()
-        command = _build_command(executable, [*arguments, "--format", "json"])
+        command = _build_command(
+            executable,
+            ["--source", "remote", *arguments, "--format", "json"],
+        )
         try:
             completed = self.runner(
                 command,
@@ -751,6 +841,19 @@ def _timestamp_date(value: object) -> date | None:
         return datetime.fromtimestamp(
             timestamp / 1000,
             tz=timezone.utc,
+        ).date()
+    except (OSError, OverflowError, ValueError):
+        return None
+
+
+def _shanghai_timestamp_date(value: object) -> date | None:
+    timestamp = _integer(value)
+    if timestamp is None:
+        return None
+    try:
+        return datetime.fromtimestamp(
+            timestamp / 1000,
+            tz=SHANGHAI_TIMEZONE,
         ).date()
     except (OSError, OverflowError, ValueError):
         return None

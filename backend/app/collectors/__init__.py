@@ -28,6 +28,7 @@ from app.collectors.first_board_enrichment_collector import (
 )
 from app.collectors.hithink_finance_collector import (
     HITHINK_SOURCE,
+    HithinkDailyBarFact,
     HithinkDragonTigerFact,
     HithinkDragonTigerSnapshot,
     HithinkFinanceCollector,
@@ -38,6 +39,7 @@ from app.collectors.hithink_finance_collector import (
     HithinkLimitUpPoolSnapshot,
     HithinkMarketSnapshot,
     HithinkMarketSnapshotFact,
+    HithinkStockHistory,
 )
 from app.collectors.stock_kline_collector import (
     collect_stock_close_snapshot,
@@ -70,6 +72,7 @@ __all__ = [
     "parse_akshare_trade_date",
     "DragonTigerFact",
     "HITHINK_SOURCE",
+    "HithinkDailyBarFact",
     "HithinkDragonTigerFact",
     "HithinkDragonTigerSnapshot",
     "HithinkFinanceCollector",
@@ -80,6 +83,7 @@ __all__ = [
     "HithinkLimitUpPoolSnapshot",
     "HithinkMarketSnapshot",
     "HithinkMarketSnapshotFact",
+    "HithinkStockHistory",
     "LimitDownItem",
     "LimitDownSnapshot",
     "PopularityFact",

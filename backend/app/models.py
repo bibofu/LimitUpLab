@@ -361,6 +361,8 @@ class StockKLineBar(BaseModel):
     high: float
     low: float
     volume: float
+    amount: float = 0
+    source: str = "unknown"
 
 
 class StockKLineFacts(BaseModel):

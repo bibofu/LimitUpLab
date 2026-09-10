@@ -383,6 +383,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
                     StockKLineBar(
                         trade_date=day, open=10, high=10.5, low=9.8,
                         close=10.2, volume=1_000_000,
+                        source="akshare.stock_zh_a_hist_tx",
                     )
                     for day in trade_dates
                 ]
@@ -430,6 +431,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
                     StockKLineBar(
                         trade_date=day, open=10, high=10.5, low=9.8,
                         close=10.2, volume=1_000_000,
+                        source="akshare.stock_zh_a_hist_tx",
                     )
                     for day in trade_dates[:-1]
                 ]
@@ -441,6 +443,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
                     symbol: StockKLineBar(
                         trade_date=requested_date, open=10.1, high=10.6,
                         low=10, close=10.3, volume=900_000,
+                        source="tencent.qt.gtimg.cn",
                     )
                     for symbol in batch
                 }

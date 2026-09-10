@@ -44,6 +44,8 @@ def collect_stock_kline(
             high=round(float(row["high"]), 2),
             low=round(float(row["low"]), 2),
             volume=float(row["amount"]),
+            amount=float(row.get("turnover") or 0),
+            source="akshare.stock_zh_a_hist_tx",
         )
         for row in rows
     ]
@@ -330,6 +332,7 @@ def _parse_tencent_spot_line(
             low=round(low, 2),
             close=round(close, 2),
             volume=volume,
+            source="tencent.qt.gtimg.cn",
         ),
     )
 

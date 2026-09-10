@@ -11,8 +11,6 @@ from time import monotonic
 
 from app.collectors import (
     collect_stock_intraday_kline,
-    collect_stock_kline,
-    collect_stock_spot_klines,
 )
 from app.collectors.stock_kline_collector import build_stock_close_snapshot
 from app.models import (
@@ -27,6 +25,10 @@ from app.models import (
 )
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.stock_position import classify_stock_position
+from app.services.market_data_provider import (
+    collect_preferred_stock_kline,
+    collect_preferred_stock_spot_klines,
+)
 
 
 HistoryCollector = Callable[[str, int, date | None], list[StockKLineBar]]
@@ -165,8 +167,8 @@ def load_stock_kline_bars(
     days: int,
     end_date: date,
     repository: SQLiteFirstBoardRepository | None = None,
-    history_collector: HistoryCollector = collect_stock_kline,
-    spot_collector: SpotCollector = collect_stock_spot_klines,
+    history_collector: HistoryCollector = collect_preferred_stock_kline,
+    spot_collector: SpotCollector = collect_preferred_stock_spot_klines,
 ) -> list[StockKLineBar]:
     """Return cached daily bars, refreshing missing history and the end date."""
 
@@ -234,8 +236,8 @@ def load_stock_detail_market_data(
     end_date: date,
     position_trade_date: date | None = None,
     repository: SQLiteFirstBoardRepository | None = None,
-    history_collector: HistoryCollector = collect_stock_kline,
-    spot_collector: SpotCollector = collect_stock_spot_klines,
+    history_collector: HistoryCollector = collect_preferred_stock_kline,
+    spot_collector: SpotCollector = collect_preferred_stock_spot_klines,
 ) -> StockDetailMarketData:
     """Load one reusable market-data bundle for the stock detail page."""
 
@@ -262,7 +264,7 @@ def load_stock_detail_market_data(
     latest_close = build_stock_close_snapshot(
         symbol=symbol,
         bars=bars,
-        source="local-first-kline",
+        source=bars[-1].source,
     )
 
     if position_trade_date is not None and position is None:
@@ -296,8 +298,8 @@ def load_stock_position_assessment(
     symbol: str,
     end_date: date,
     repository: SQLiteFirstBoardRepository | None = None,
-    history_collector: HistoryCollector = collect_stock_kline,
-    spot_collector: SpotCollector = collect_stock_spot_klines,
+    history_collector: HistoryCollector = collect_preferred_stock_kline,
+    spot_collector: SpotCollector = collect_preferred_stock_spot_klines,
 ) -> StockPositionAssessment:
     """Return a point-in-time position assessment for one stock detail page."""
 
@@ -324,8 +326,8 @@ def build_stock_kline_facts(
     days: int = 20,
     end_date: date,
     repository: SQLiteFirstBoardRepository | None = None,
-    history_collector: HistoryCollector = collect_stock_kline,
-    spot_collector: SpotCollector = collect_stock_spot_klines,
+    history_collector: HistoryCollector = collect_preferred_stock_kline,
+    spot_collector: SpotCollector = collect_preferred_stock_spot_klines,
 ) -> StockKLineFacts:
     """Load K-line bars and derive compact facts suitable for an LLM answer."""
 
@@ -450,9 +452,9 @@ def _to_daily_bar(symbol: str, bar: StockKLineBar) -> StockDailyBar:
         low=bar.low,
         close=bar.close,
         volume=bar.volume,
-        amount=0,
+        amount=bar.amount,
         change_pct=None,
-        source="stock-kline-tool",
+        source=bar.source,
         created_at=datetime.now(timezone.utc),
     )
 
@@ -465,6 +467,8 @@ def _to_kline_bar(bar: StockDailyBar) -> StockKLineBar:
         low=bar.low,
         close=bar.close,
         volume=bar.volume,
+        amount=bar.amount,
+        source=bar.source,
     )
 
 

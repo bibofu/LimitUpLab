@@ -100,6 +100,17 @@ def test_tencent_history_and_close_snapshot_are_one_source_family():
     assert "mixed_or_missing_source" not in result.exclusions
 
 
+def test_hithink_history_and_snapshot_are_one_source_family():
+    events, bars, dates, end, now = fixture()
+    for bar in bars:
+        bar["source"] = "hithink-finance.market.history.none"
+    bars[-1]["source"] = "hithink-finance.market.snapshot"
+    result = screen_consolidation(events, bars, dates, end, now)
+    assert result.status == "ready"
+    assert result.candidates
+    assert "mixed_or_missing_source" not in result.exclusions
+
+
 def test_evaluable_rejections_keep_facts_and_all_failed_conditions():
     events, bars, dates, end, now = fixture()
     for bar in bars[25:]:

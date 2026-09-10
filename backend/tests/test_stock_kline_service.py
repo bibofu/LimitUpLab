@@ -362,6 +362,7 @@ class StockKLineServiceTest(unittest.TestCase):
                     low=9.8 + index * 0.02,
                     close=10.2 + index * 0.02,
                     volume=1_000 + index,
+                    source="hithink-finance.market.history.none",
                 )
                 for index in range(125)
             ]
@@ -380,6 +381,10 @@ class StockKLineServiceTest(unittest.TestCase):
             self.assertEqual(requested_days, [125])
             self.assertEqual(len(result.kline), 60)
             self.assertEqual(result.latest_close.trade_date, end_date)
+            self.assertEqual(
+                result.latest_close.source,
+                "hithink-finance.market.history.none",
+            )
             self.assertIsNotNone(result.position)
             self.assertEqual(result.position.bar_count, 125)
         finally:

@@ -404,7 +404,7 @@ LIMITUPLAB_PROXY_URL=http://127.0.0.1:17891
 
 ### 4. 配置同花顺结构化数据
 
-项目通过官方 `hithink-finance` CLI 获取热股榜、龙虎榜和远端涨停池。凭据保存在 CLI 系统凭据库，不写入项目 `.env`：
+项目通过官方 `hithink-finance` CLI 获取未复权个股日 K、最新行情、热股榜、龙虎榜和远端涨停池。凭据保存在 CLI 系统凭据库，不写入项目 `.env`：
 
 ```powershell
 npm.cmd install -g @hithink-tech/hithink-finance-cli
@@ -412,7 +412,7 @@ hithink-finance auth login
 hithink-finance symbol search --q 600519 --limit 1 --format json
 ```
 
-CLI 不可用或请求失败时，每日 enrichment 会回退到原有 AkShare/东方财富来源。V1 Agent 不暴露同花顺实时工具；这些工具仅在 `extended` 研发配置中用于 V2 开发，请求失败时会明确返回错误，不会伪造结果。
+业务读取仍以项目 SQLite 快照为先；缺少日线或当日收盘时统一经过 MarketDataProvider 调用 CLI，固定使用 `adjust=none`，并把 CLI 的“股”转换为项目统一的“手”。CLI 不可用或请求失败时，日线和收盘快照显式回退腾讯行情并保留真实来源；分钟 K 继续使用新浪、东方财富。V1 Agent 不暴露同花顺实时工具；这些工具仅在 `extended` 研发配置中用于 V2 开发，请求失败时会明确返回错误，不会伪造结果。
 
 ### 5. 安装前端
 
@@ -673,10 +673,10 @@ npm.cmd run build
 
 当前数据来自官方同花顺 CLI、AKShare 封装或公开接口：
 
-- 同花顺热股榜、龙虎榜和远端涨停池
+- 同花顺个股日 K、最新行情、热股榜、龙虎榜和远端涨停池
 - 东方财富涨停池和炸板池
 - 同花顺与东方财富行业板块行情
-- 腾讯、Sina、东方财富历史与分钟 K 线
+- 腾讯日线与收盘行情回退源，Sina、东方财富分钟 K 线
 - CNInfo 上市日期
 - 东方财富龙虎榜和人气快照回退源
 - 360 搜索、Bing 和 DuckDuckGo 的公开搜索结果回退链路
@@ -686,6 +686,7 @@ npm.cmd run build
 - 项目定位是收盘后复盘，不是实时交易终端。
 - 免费公开数据源可能限流、延迟、变更字段或暂时不可用。
 - 历史人气和龙虎榜时点数据无法在所有日期完整重建。
+- 日 K 统一使用未复权价格；同花顺历史行情成交量由“股”标准化为“手”，来源和成交额随行持久化。
 - Web 搜索内容被视为外部不可信证据，只用于解释增强，不直接决定评分。
 - SQLite 适合本地 MVP，不代表正式多用户网站的最终存储方案。
 

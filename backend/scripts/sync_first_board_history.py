@@ -12,9 +12,10 @@ from pathlib import Path
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.collectors import collect_limit_up_events, collect_stock_kline
+from app.collectors import collect_limit_up_events
 from app.models import LimitUpEvent, StockDailyBar
 from app.repositories import SQLiteFirstBoardRepository, SQLiteLimitUpRepository
+from app.services.market_data_provider import collect_preferred_stock_kline as collect_stock_kline
 from app.services.first_board_features import (
     build_first_board_features,
     build_first_board_outcome,
@@ -204,9 +205,9 @@ def _collect_post_first_board_bars(event: LimitUpEvent) -> list[StockDailyBar]:
             low=bar.low,
             close=bar.close,
             volume=bar.volume,
-            amount=bar.volume,
+            amount=bar.amount,
             change_pct=None,
-            source="akshare.stock_zh_a_hist_tx",
+            source=bar.source,
             created_at=datetime.now(timezone.utc),
         )
         for bar in filtered_bars

@@ -23,8 +23,6 @@ from app.collectors import (
     HithinkFinanceCollector,
     HithinkLimitUpPoolSnapshot,
     collect_limit_up_events,
-    collect_stock_kline,
-    collect_stock_spot_klines,
     parse_akshare_trade_date,
 )
 from app.models import AgentPrediction, LimitUpEvent, StockDailyBar, StockKLineBar
@@ -47,6 +45,10 @@ from app.services.outcome_completeness import build_top10_outcome_completeness
 from app.services.limit_up_reason import merge_limit_up_reasons
 from app.services.relay_universe import is_relay_candidate_symbol
 from app.services.stock_kline import load_stock_intraday_bars
+from app.services.market_data_provider import (
+    collect_preferred_stock_kline as collect_stock_kline,
+    collect_preferred_stock_spot_klines as collect_stock_spot_klines,
+)
 from app.services.daily_bar_source import daily_bar_source_family
 from app.post_limit_query_contract import PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS
 
@@ -624,9 +626,9 @@ def backfill_recent_daily_top_candidate_bars(
                     low=bar.low,
                     close=bar.close,
                     volume=bar.volume,
-                    amount=0,
+                    amount=bar.amount,
                     change_pct=None,
-                    source="tencent.qt.gtimg.cn",
+                    source=bar.source,
                     created_at=datetime.now(timezone.utc),
                 )
                 for symbol, bar in spot_bars.items()
@@ -811,9 +813,9 @@ def collect_post_first_board_bars(
             low=bar.low,
             close=bar.close,
             volume=bar.volume,
-            amount=bar.volume,
+            amount=bar.amount,
             change_pct=None,
-            source="akshare.stock_zh_a_hist_tx",
+            source=bar.source,
             created_at=datetime.now(timezone.utc),
         )
         for bar in filtered_bars
@@ -859,9 +861,9 @@ def backfill_recent_post_limit_bars(
                         low=bar.low,
                         close=bar.close,
                         volume=bar.volume,
-                        amount=0,
+                        amount=bar.amount,
                         change_pct=None,
-                        source="tencent.qt.gtimg.cn",
+                        source=bar.source,
                         created_at=datetime.now(timezone.utc),
                     )
                     for symbol, bar in spot_bars.items()
@@ -908,9 +910,9 @@ def backfill_recent_post_limit_bars(
                     low=bar.low,
                     close=bar.close,
                     volume=bar.volume,
-                    amount=bar.volume,
+                    amount=bar.amount,
                     change_pct=None,
-                    source="akshare.stock_zh_a_hist_tx",
+                    source=bar.source,
                     created_at=datetime.now(timezone.utc),
                 )
                 for bar in raw

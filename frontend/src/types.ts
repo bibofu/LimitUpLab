@@ -86,6 +86,8 @@ export interface StockKLineBar {
   high: number;
   low: number;
   volume: number;
+  amount: number;
+  source: string;
 }
 
 export interface StockIntradayKLineBar {

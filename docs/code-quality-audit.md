@@ -397,6 +397,22 @@ QP-01、QP-02、QP-03 已关闭。QP-04 的固定输入预算与 Planner trace �
 - 前端：9 passed；生产构建成功。Vite 仍报告既有的单 chunk 超过 500 kB 警告，本次未修改前端产物边界。
 - 真实 HTTP：重启 8001 后，原始两轮“一进二名单 → 这些票晋级日高开还是低开”均使用 `daily_board_promotion(days=2)`，第二轮保留 Markdown 表格；“近期农业板块涨停过的股票有哪些”“近期哪些板块涨停的股票比较多”“近期涨停后回撤比较多的股票有哪些”分别命中 `limit_up_pool`、`limit_up_pool`、`post_limit_screening`。响应版本、最终工具和确定性参数均与 trace 一致。
 
+## 8. 专项审查：行情 Provider 收敛（2026-09-10）
+
+**触发原因：** 修改日 K、最新行情和每日数据流水线这一高风险核心链路。
+
+**审查范围：** `hithink_finance_collector.py`、`market_data_provider.py`、`stock_kline.py`、首板 enrichment、历史同步与日更脚本，以及行情来源一致性判断。新闻和分钟 K 不在本次迁移范围。
+
+**问题分级与处理：**
+
+- P1（已处理）：原实现由详情服务、首板 enrichment 和脚本分别直接调用腾讯行情并硬编码来源，来源选择和持久化口径无法统一追踪。现已收敛到 MarketDataProvider，SQLite 继续作为业务缓存，`hithink-finance` 为日线/同日快照主源，腾讯为显式降级源。
+- P1（已处理）：CLI 历史行情默认前复权，直接替换会改变涨停价和历史形态。Provider 固定请求 `adjust=none`，测试断言命令契约。
+- P1（已处理）：同花顺返回成交量为“股”，项目历史口径为“手”。Provider 在入库前统一除以 100，并保留成交额、来源；测试覆盖历史与快照两条路径。
+- P2（保留）：`hithink-finance` 当前不提供分钟 K 和 A 股个股新闻，继续由新浪/东方财富承担，不用近似数据替代。
+- P2（保留）：历史 SQLite 中已完整的腾讯 K 线不会强制重写，避免一次性改写既有研究快照；新缺口刷新后逐步使用同花顺来源，同一评价窗口继续执行来源族一致性检查。
+
+**验证状态：** 107 项行情、日更、enrichment、形态和数据健康定向测试通过；最终完整后端为 586 passed、21 subtests passed；前端 10 passed，生产构建成功（保留既有单 chunk 超过 500 kB 警告）。重启 8001 后通过真实 HTTP 请求贵州茅台 5 日行情，日 K、详情最新收盘和独立最新收盘接口均返回 `hithink-finance.market.history.none`；成交量已换算为手，成交额随行返回。修复提交为本次行情 Provider 收敛提交。
+
 ## 附录 A：全部超大文件
 
 | 文件 | 行数 | 复核结论 |

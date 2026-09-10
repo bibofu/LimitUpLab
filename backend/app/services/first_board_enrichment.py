@@ -14,7 +14,6 @@ from app.collectors import (
     collect_preferred_dragon_tiger_facts,
     collect_preferred_popularity,
     collect_recent_listing_dates,
-    collect_stock_kline,
 )
 from app.models import (
     FirstBoardEnrichmentSnapshot,
@@ -24,9 +23,10 @@ from app.models import (
 )
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.stock_position import classify_stock_position
+from app.services.market_data_provider import collect_preferred_stock_kline
 
 
-ENRICHMENT_FEATURE_VERSION = "first-board-enrichment-v3-position"
+ENRICHMENT_FEATURE_VERSION = "first-board-enrichment-v4-hithink-market"
 MIN_AMOUNT = 100_000_000
 KLineCollector = Callable[[str, int, date | None], list[StockKLineBar]]
 
@@ -52,7 +52,7 @@ def refresh_first_board_enrichment_snapshots(
     events: list[LimitUpEvent],
     trade_date: date,
     repository: SQLiteFirstBoardRepository,
-    kline_collector: KLineCollector = collect_stock_kline,
+    kline_collector: KLineCollector = collect_preferred_stock_kline,
     listing_collector: Callable[[], dict[str, date]] = collect_recent_listing_dates,
     listing_detail_collector: Callable[[str], date | None] = collect_listing_date,
     dragon_tiger_collector: Callable[[date], dict[str, DragonTigerFact]] = collect_preferred_dragon_tiger_facts,
@@ -235,9 +235,9 @@ def _load_candidate_bars(
                 low=bar.low,
                 close=bar.close,
                 volume=bar.volume,
-                amount=0,
+                amount=bar.amount,
                 change_pct=None,
-                source="akshare.stock_zh_a_hist_tx",
+                source=bar.source,
                 created_at=datetime.now(timezone.utc),
             )
             for bar in raw_bars
