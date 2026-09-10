@@ -38,10 +38,10 @@ def build_checks(scope: str, output: Path) -> list[Check]:
             "--basetemp", str(output / "pytest-tmp"),
             "--junitxml", str(output / "pytest.xml"),
         ], ROOT / "backend"))
-        checks.append(Check("eval-golden", [
-            sys.executable, "scripts/run_agent_eval.py", "--suite", "golden",
-            "--mode", "offline", "--summary-only",
-            "--failure-output", str(output / "eval-golden-failures.json"),
+        checks.append(Check("eval-chat-v2", [
+            sys.executable, "scripts/run_agent_eval.py",
+            "--dataset", "dev", "--mode", "offline", "--trials", "1",
+            "--summary-only", "--output-root", str(output / "agent-eval"),
         ], ROOT / "backend"))
     if scope in {"all", "frontend"}:
         # Calling npm through Node avoids shell quoting and .cmd execution on Windows.
