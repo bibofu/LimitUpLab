@@ -23,6 +23,7 @@ from app.services.sample_data import SAMPLE_EVENTS
 
 
 FIXTURE_PATH = Path(__file__).parent / "fixtures" / "agent_golden_dataset.json"
+V2_FIXTURE_PATH = Path(__file__).parent / "fixtures" / "agent_chat_eval_dev_v2.json"
 
 
 class StockNewsPlanner(LLMProvider):
@@ -55,7 +56,10 @@ class StockNewsPlanner(LLMProvider):
 class AgentGoldenEvalTest(unittest.TestCase):
     # Regression scenario: dataset has fifty strictly versioned cases and required coverage.
     def test_dataset_has_fifty_strictly_versioned_cases_and_required_coverage(self) -> None:
-        self.assertEqual(set(FIXTURE_PATH.parent.glob("*.json")), {FIXTURE_PATH})
+        self.assertEqual(
+            set(FIXTURE_PATH.parent.glob("*.json")),
+            {FIXTURE_PATH, V2_FIXTURE_PATH},
+        )
         version, cases = load_golden_cases(FIXTURE_PATH)
 
         self.assertEqual(version, "agent-golden-v1")

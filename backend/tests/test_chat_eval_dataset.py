@@ -13,6 +13,7 @@ from app.agents.chat_eval_dataset import (
     DEV_PRIMARY_TYPE_COUNTS,
     HOLDOUT_PATH_ENV,
     ChatEvalCase,
+    load_dev_dataset,
     load_chat_eval_dataset,
     load_dataset_selection,
     load_holdout_dataset,
@@ -116,6 +117,18 @@ def test_loader_accepts_exact_dev_distribution(tmp_path: Path) -> None:
     )
     assert len(dataset.cases) == 120
     assert dataset.version == CHAT_EVAL_DATASET_VERSION
+
+
+def test_committed_dev_dataset_covers_every_v1_capability_three_times() -> None:
+    dataset = load_dev_dataset()
+    capability_cases = [
+        case for case in dataset.cases if case.primary_type == "capability_base"
+    ]
+    observed = [case.expected.allowed_capability_sets[0][0] for case in capability_cases]
+    capabilities = set(available_capability_names(V1_CLOSED_MARKET_TOOL_NAMES))
+    assert len(dataset.cases) == 120
+    assert set(observed) == capabilities
+    assert all(observed.count(capability) == 3 for capability in capabilities)
 
 
 def test_loader_rejects_distribution_drift(tmp_path: Path) -> None:
