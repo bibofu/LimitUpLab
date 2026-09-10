@@ -341,6 +341,7 @@ def judge_answer(
         "你是固定版本的回答质量裁判。只评价相关性、完整性、解释质量、不确定性表达和简洁性，"
         "每项只能为0、1、2。市场数字只能依据给定工具事实，不得使用自身知识纠正或补充。"
         "只输出JSON对象，字段为 relevance, completeness, explanation, uncertainty, concision, rationale。"
+        " Return only valid JSON."
     )
     user_prompt = json.dumps(
         {
@@ -426,15 +427,11 @@ def _run_case(
                 conversation_messages=_conversation_messages(case, trial),
             )
         planner_result = plan.result
-        planner_tools = [
-            str(call.get("name"))
-            for call in plan.payload.get("raw_tool_calls", [])
-            if call.get("name")
-        ]
         final_calls = [
             call for call in plan.tool_calls if str(call.get("name") or "") in fixture.tools
         ]
         final_tools = [str(call["name"]) for call in final_calls]
+        planner_tools = list(final_tools)
         planner_trace = AgentToolTrace(
             name="llm_tool_planner",
             input={

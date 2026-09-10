@@ -249,6 +249,9 @@ def build_suite_report(
     grounding_counts = _grounding_counts(trials)
     capability_metrics = _capability_metrics(trials)
     efficiency = _efficiency_metrics(trials)
+    query_metrics = _query_metrics(trials)
+    execution_metrics = _execution_metrics(trials)
+    answer_metrics = _answer_metrics(trials)
     critical = [result for result in first_trials if result.severity == "critical"]
     stable_cases = sum(case_passes.values())
     return {
@@ -272,13 +275,22 @@ def build_suite_report(
         },
         "stage_metrics": stage_rates,
         "capability_metrics": capability_metrics,
+        "query_metrics": query_metrics,
         "planner_metrics": planner_counts,
         "policy_metrics": policy_counts,
+        "execution_metrics": execution_metrics,
         "grounding_metrics": grounding_counts,
+        "answer_metrics": answer_metrics,
         "efficiency_metrics": efficiency,
         "breakdowns": {
             "severity": _breakdown(first_trials, lambda item: item.severity),
+            "dataset": _breakdown(first_trials, lambda item: item.dataset),
             "primary_type": _breakdown(first_trials, lambda item: item.primary_type),
+            "turn_type": _breakdown(
+                first_trials,
+                lambda item: "multi_turn" if item.primary_type == "multi_turn" else "single_turn",
+            ),
+            "result_state": _result_state_breakdown(first_trials),
             "capability": _breakdown(
                 first_trials, lambda item: item.capabilities[0] if item.capabilities else "none"
             ),
@@ -443,19 +455,29 @@ def _evaluate_execution(
         if trace.name not in INTERNAL_TRACE_NAMES
     }
     failures = []
+    parameter_fields = 0
+    parameter_failures = 0
+    state_checks = 0
+    state_failures = 0
     for tool in case.expected.required_tools:
         trace = evidence.get(tool)
         if trace is None:
             failures.append(f"required tool was not executed: {tool}")
             continue
         expected_parameters = case.expected.tool_parameters.get(tool, {})
-        failures.extend(
+        tool_parameter_failures = [
             f"{tool} parameter {failure}"
             for failure in _subset_failures(expected_parameters, trace.input)
-        )
+        ]
+        parameter_fields += _leaf_count(expected_parameters) if expected_parameters else 0
+        parameter_failures += len(tool_parameter_failures)
+        failures.extend(tool_parameter_failures)
         expected_state = case.expected.result_states.get(tool)
         actual_state = trace.result.status if trace.result is not None else None
+        if expected_state is not None:
+            state_checks += 1
         if expected_state is not None and actual_state != expected_state:
+            state_failures += 1
             failures.append(
                 f"{tool} result_state expected {expected_state!r}, got {actual_state!r}"
             )
@@ -467,6 +489,14 @@ def _evaluate_execution(
             "executed_required_tools": sum(
                 tool in evidence for tool in case.expected.required_tools
             ),
+            "forbidden_tool_count": len(case.expected.forbidden_tools),
+            "executed_forbidden_tools": sum(
+                tool in evidence for tool in case.expected.forbidden_tools
+            ),
+            "parameter_field_count": parameter_fields,
+            "correct_parameter_fields": max(0, parameter_fields - parameter_failures),
+            "result_state_count": state_checks,
+            "correct_result_states": state_checks - state_failures,
         },
         observed={
             name: {
@@ -822,16 +852,176 @@ def _grounding_counts(results: list[ChatEvalTrialResult]) -> dict[str, Any]:
 
 def _capability_metrics(results: list[ChatEvalTrialResult]) -> dict[str, Any]:
     applicable = [
-        result.stages["planner"]
+        result
         for result in results
         if result.stages["planner"].status != "not_applicable"
     ]
     if not applicable:
-        return {"macro_precision": None, "macro_recall": None, "macro_f1": None}
+        return {
+            "macro_precision": None,
+            "macro_recall": None,
+            "macro_f1": None,
+            "micro_precision": None,
+            "micro_recall": None,
+            "micro_f1": None,
+            "per_capability_recall": {},
+        }
+    stages = [result.stages["planner"] for result in applicable]
+    tp = fp = fn = 0
+    per_capability_total: Counter[str] = Counter()
+    per_capability_hit: Counter[str] = Counter()
+    for result in applicable:
+        expected = set(result.capabilities)
+        observed = set(result.stages["planner"].observed.get("capabilities") or [])
+        tp += len(expected & observed)
+        fp += len(observed - expected)
+        fn += len(expected - observed)
+        for capability in expected:
+            per_capability_total[capability] += 1
+            if capability in observed:
+                per_capability_hit[capability] += 1
+    micro_precision = tp / (tp + fp) if tp + fp else float(not fn)
+    micro_recall = tp / (tp + fn) if tp + fn else float(not fp)
+    micro_f1 = (
+        2 * micro_precision * micro_recall / (micro_precision + micro_recall)
+        if micro_precision + micro_recall
+        else 0.0
+    )
     return {
-        "macro_precision": round(sum(float(item.metrics["precision"]) for item in applicable) / len(applicable), 4),
-        "macro_recall": round(sum(float(item.metrics["recall"]) for item in applicable) / len(applicable), 4),
-        "macro_f1": round(sum(float(item.metrics["f1"]) for item in applicable) / len(applicable), 4),
+        "macro_precision": round(sum(float(item.metrics["precision"]) for item in stages) / len(stages), 4),
+        "macro_recall": round(sum(float(item.metrics["recall"]) for item in stages) / len(stages), 4),
+        "macro_f1": round(sum(float(item.metrics["f1"]) for item in stages) / len(stages), 4),
+        "micro_precision": round(micro_precision, 4),
+        "micro_recall": round(micro_recall, 4),
+        "micro_f1": round(micro_f1, 4),
+        "per_capability_recall": {
+            name: _rate(per_capability_hit[name], total)
+            for name, total in sorted(per_capability_total.items())
+        },
+    }
+
+
+def _query_metrics(results: list[ChatEvalTrialResult]) -> dict[str, Any]:
+    stages = [
+        (result.case_id, result.stages["query_understanding"])
+        for result in results
+        if result.stages["query_understanding"].status != "not_applicable"
+    ]
+    fields = sum(int(stage.metrics.get("field_count") or 0) for _, stage in stages)
+    correct = sum(int(stage.metrics.get("correct_fields") or 0) for _, stage in stages)
+    return {
+        "field_accuracy": _rate(correct, fields),
+        "field_count": fields,
+        "correct_fields": correct,
+        "field_errors": [
+            {"case_id": case_id, "error": failure}
+            for case_id, stage in stages
+            for failure in stage.failures
+        ],
+    }
+
+
+def _execution_metrics(results: list[ChatEvalTrialResult]) -> dict[str, Any]:
+    metrics = [
+        result.stages["execution"].metrics
+        for result in results
+        if result.stages["execution"].status != "not_applicable"
+    ]
+    required = sum(int(item.get("required_tool_count") or 0) for item in metrics)
+    executed = sum(int(item.get("executed_required_tools") or 0) for item in metrics)
+    forbidden = sum(int(item.get("forbidden_tool_count") or 0) for item in metrics)
+    forbidden_executed = sum(
+        int(item.get("executed_forbidden_tools") or 0) for item in metrics
+    )
+    parameter_fields = sum(
+        int(item.get("parameter_field_count") or 0) for item in metrics
+    )
+    correct_parameters = sum(
+        int(item.get("correct_parameter_fields") or 0) for item in metrics
+    )
+    states = sum(int(item.get("result_state_count") or 0) for item in metrics)
+    correct_states = sum(
+        int(item.get("correct_result_states") or 0) for item in metrics
+    )
+    return {
+        "required_tool_recall": _rate(executed, required),
+        "required_tool_count": required,
+        "forbidden_tool_accuracy": _rate(forbidden - forbidden_executed, forbidden),
+        "forbidden_tool_count": forbidden,
+        "parameter_accuracy": _rate(correct_parameters, parameter_fields),
+        "parameter_field_count": parameter_fields,
+        "result_state_accuracy": _rate(correct_states, states),
+    }
+
+
+def _answer_metrics(results: list[ChatEvalTrialResult]) -> dict[str, Any]:
+    stages = [result.stages["final_answer"] for result in results]
+    judge_scores = [
+        int(stage.metrics["judge_total"])
+        for stage in stages
+        if stage.metrics.get("judge_total") is not None
+    ]
+    judged = [
+        stage for stage in stages if stage.metrics.get("judge_passed") is not None
+    ]
+    refusals = [
+        stage
+        for stage in stages
+        if stage.observed.get("response_behavior") == "refuse"
+    ]
+    answerable = [
+        stage
+        for stage in stages
+        if stage.observed.get("response_behavior") == "answer"
+    ]
+    return {
+        "deterministic_pass_rate": _rate(
+            sum(stage.status == "pass" for stage in stages), len(stages)
+        ),
+        "judge_case_pass_rate": _rate(
+            sum(bool(stage.metrics.get("judge_passed")) for stage in judged),
+            len(judged),
+        ),
+        "judge_average": (
+            round(sum(judge_scores) / len(judge_scores), 4) if judge_scores else None
+        ),
+        "safety_violation_count": sum(
+            int(stage.metrics.get("safety_violation_count") or 0) for stage in stages
+        ),
+        "safety_refusal_accuracy": _rate(
+            sum(bool(stage.metrics.get("refused")) for stage in refusals),
+            len(refusals),
+        ),
+        "over_refusal_rate": _rate(
+            sum(bool(stage.metrics.get("over_refusal")) for stage in answerable),
+            len(answerable),
+        ),
+    }
+
+
+def _result_state_breakdown(
+    results: list[ChatEvalTrialResult],
+) -> dict[str, dict[str, float | int]]:
+    totals: Counter[str] = Counter()
+    passes: Counter[str] = Counter()
+    for result in results:
+        observed = result.stages["execution"].observed
+        states = {
+            str(item.get("result_state"))
+            for item in observed.values()
+            if isinstance(item, dict) and item.get("result_state")
+        }
+        for state in states or {"none"}:
+            totals[state] += 1
+            if result.passed:
+                passes[state] += 1
+    return {
+        state: {
+            "total": total,
+            "passed": passes[state],
+            "pass_rate": _rate(passes[state], total),
+        }
+        for state, total in sorted(totals.items())
     }
 
 

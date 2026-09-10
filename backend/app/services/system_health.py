@@ -8,7 +8,8 @@ from datetime import date, datetime, time, timedelta
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
-from app.agents.golden_eval import run_default_golden_eval
+from app.agents.chat_eval_dataset import load_dev_dataset
+from app.agents.chat_eval_runner_v2 import run_chat_eval_suite
 from app.config import env_bool
 from app.models import AgentSystemHealthResponse, LimitUpEvent
 from app.repositories import SQLiteFirstBoardRepository
@@ -16,7 +17,8 @@ from app.services.analysis import latest_trade_date
 from app.services.data_health import build_agent_data_health
 
 
-SYSTEM_HEALTH_VERSION = "agent-system-health-v2-golden"
+SYSTEM_HEALTH_VERSION = "agent-system-health-v3-chat-eval-smoke"
+EVAL_SMOKE_CASE_COUNT = 12
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
@@ -43,10 +45,16 @@ def build_agent_system_health(
     eval_failed: int | None = None
     eval_passed: bool | None = None
     if run_offline_eval:
-        suite = run_default_golden_eval()
-        eval_total = suite.total
-        eval_failed = suite.failed
-        eval_passed = suite.ok
+        report = run_chat_eval_suite(
+            load_dev_dataset().cases,
+            mode="offline",
+            trials=1,
+            sample_size=EVAL_SMOKE_CASE_COUNT,
+            seed="system-health-smoke-v1",
+        )
+        eval_total = int(report["case_count"])
+        eval_failed = int(report["failed_cases"])
+        eval_passed = eval_failed == 0
 
     llm_enabled = env_bool("LIMITUPLAB_LLM_ENABLED")
     llm_provider_configured = bool(

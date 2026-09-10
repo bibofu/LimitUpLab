@@ -534,13 +534,33 @@ export interface AgentEvalCaseReport {
 }
 
 export interface AgentEvalReportResponse {
-  mode: "offline";
-  total: number;
-  passed: number;
-  failed: number;
-  pass_rate: number;
-  results: AgentEvalCaseReport[];
-  generated_by: string;
+  status: "completed";
+  run_id: string;
+  dataset_version: string;
+  mode: "offline" | "live" | "online-shadow";
+  judge_enabled: boolean;
+  case_count: number;
+  trial_count: number;
+  passed_cases: number;
+  failed_cases: number;
+  pass_at_1: number | null;
+  stable_3_of_3_rate: number | null;
+  provider_failure_rate: number | null;
+  stage_metrics: Record<string, unknown>;
+  capability_metrics: Record<string, unknown>;
+  query_metrics: Record<string, unknown>;
+  planner_metrics: Record<string, unknown>;
+  policy_metrics: Record<string, unknown>;
+  execution_metrics: Record<string, unknown>;
+  grounding_metrics: Record<string, unknown>;
+  answer_metrics: Record<string, unknown>;
+  efficiency_metrics: Record<string, unknown>;
+  breakdowns: Record<string, unknown>;
+  results: Array<Record<string, unknown>>;
+  runner_version: string;
+  fixture_snapshot_id: string | null;
+  completed_at: string;
+  release_gate?: Record<string, unknown>;
 }
 
 export interface ReviewAgentPick {

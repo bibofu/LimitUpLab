@@ -16,13 +16,13 @@ from fastapi.responses import StreamingResponse
 
 from app.agents import answer_first_board_chat, build_first_board_ratings, build_review_agent_report
 from app.agents.review_agent import enrich_review_position_labels
-from app.agents.golden_eval import golden_panel_report, run_default_golden_eval
+from app.agents.chat_eval_runner_v2 import load_latest_completed_report
 from app.collectors import HithinkFinanceError
 from app.models import (
     AgentChatRequest,
     AgentChatResponse,
     AgentDataHealthResponse,
-    AgentEvalReportResponse,
+    AgentEvalV2ReportResponse,
     AgentEvaluationResponse,
     AgentRun,
     AgentRunsResponse,
@@ -491,16 +491,20 @@ def get_daily_pipeline_status(
     )
 
 
-@router.get("/eval", response_model=AgentEvalReportResponse)
+@router.get("/eval", response_model=AgentEvalV2ReportResponse)
 def get_agent_eval_report(
     _admin: Annotated[None, Depends(require_admin_access)],
-) -> AgentEvalReportResponse:
-    """Run the Golden dataset and preserve the quality-panel response contract."""
+) -> AgentEvalV2ReportResponse:
+    """Read the latest completed report; GET never starts a paid evaluation."""
     try:
-        suite = run_default_golden_eval()
+        report = load_latest_completed_report()
     except FileNotFoundError as error:
-        raise HTTPException(status_code=404, detail="Agent Golden fixture not found.") from error
-    return golden_panel_report(suite)
+        raise HTTPException(
+            status_code=404, detail="No completed Agent eval report is available."
+        ) from error
+    except ValueError as error:
+        raise HTTPException(status_code=409, detail=str(error)) from error
+    return AgentEvalV2ReportResponse.model_validate(report)
 
 
 @router.get(
