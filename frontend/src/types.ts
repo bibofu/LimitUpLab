@@ -245,6 +245,7 @@ export interface FirstBoardFilterResult {
   symbol: string;
   name: string;
   included: boolean;
+  position_label: string | null;
   excluded_reasons: string[];
   data_missing: string[];
 }

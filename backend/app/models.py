@@ -704,6 +704,7 @@ class FirstBoardFilterResult(BaseModel):
     symbol: str
     name: str
     included: bool
+    position_label: str | None = None
     excluded_reasons: list[str]
     data_missing: list[str]
 

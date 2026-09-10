@@ -162,6 +162,11 @@ def _evaluate_candidate_filter(
         symbol=event.symbol,
         name=event.name,
         included=len(excluded_reasons) == 0,
+        position_label=(
+            enrichment.position.primary.label
+            if enrichment is not None and enrichment.position is not None
+            else None
+        ),
         excluded_reasons=excluded_reasons,
         data_missing=data_missing,
     )

@@ -1081,6 +1081,7 @@ function StockTable({
           <tr>
             <th>股票</th>
             {variant === "first" ? <th>评分</th> : null}
+            {variant === "first" ? <th>首板位置</th> : null}
             <th>日期</th>
             <th>高度</th>
             <th>首次封板</th>
@@ -1097,6 +1098,9 @@ function StockTable({
             const rating = ratingBySymbol.get(event.symbol);
             const filtered = filteredBySymbol.get(event.symbol);
             const dynamic = dynamicBySymbol.get(event.symbol);
+            const positionLabel = dynamic?.position_label
+              ?? rating?.facts.enrichment?.position?.primary.label
+              ?? filtered?.position_label;
             return (
             <tr
               className="stock-row"
@@ -1130,6 +1134,11 @@ function StockTable({
                         ? rating.rating
                         : filtered?.excluded_reasons[0] ?? "未评分"}
                   </span>
+                </td>
+              ) : null}
+              {variant === "first" ? (
+                <td className={`stock-position-cell${positionLabel ? "" : " is-missing"}`}>
+                  <strong>{displayRelayPositionLabel(positionLabel)}</strong>
                 </td>
               ) : null}
               <td>{event.trade_date}</td>

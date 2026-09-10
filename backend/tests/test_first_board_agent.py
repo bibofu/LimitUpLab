@@ -2,8 +2,8 @@ import unittest
 from datetime import date, datetime, time, timezone
 
 from app.agents import build_first_board_ratings
-from app.agents.first_board import _score_market_cap_preference
-from app.models import FirstBoardEnrichmentSnapshot, LimitUpEvent
+from app.agents.first_board import _evaluate_candidate_filter, _score_market_cap_preference
+from app.models import FirstBoardEnrichmentSnapshot, LimitUpEvent, StockPositionAssessment
 from app.services.scoring_policy import build_reason_aware_challenger_policy
 from app.services.first_board_critic import build_first_board_critic
 from app.services.sample_data import SAMPLE_EVENTS
@@ -92,6 +92,36 @@ class FirstBoardAgentTest(unittest.TestCase):
         self.assertIn("北交所股票", reasons["430001"])
         self.assertIn("ST 或退市风险警示", reasons["002002"])
         self.assertIn("成交额过小", reasons["002003"])
+
+    def test_filter_result_keeps_position_label_for_pool_display(self) -> None:
+        enrichment = FirstBoardEnrichmentSnapshot(
+            trade_date=date(2026, 5, 16),
+            symbol="002003",
+            position=StockPositionAssessment(
+                primary={
+                    "regime": "low_base_breakout",
+                    "label": "低位启动首板",
+                    "score": 0.9,
+                },
+                alternatives=[],
+                confidence=0.9,
+                tags=[],
+                evidence=[],
+                metrics={},
+                bar_count=20,
+                classifier_version="test-position-v1",
+            ),
+            feature_version="test",
+            created_at=datetime(2026, 5, 16, tzinfo=timezone.utc),
+        )
+
+        result = _evaluate_candidate_filter(
+            make_event("002003", "小额样本", amount=30_000_000),
+            enrichment,
+        )
+
+        self.assertFalse(result.included)
+        self.assertEqual(result.position_label, "低位启动首板")
 
     def test_empty_concept_is_not_counted_as_market_wide_topic(self) -> None:
         events = [

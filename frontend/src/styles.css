@@ -4500,6 +4500,21 @@ a.entry-card {
   font-size: 12px;
 }
 
+.stock-position-cell {
+  min-width: 126px;
+}
+
+.stock-position-cell strong {
+  color: #202938;
+  font-size: 12px;
+  white-space: nowrap;
+}
+
+.stock-position-cell.is-missing strong {
+  color: #98a2b3;
+  font-weight: 500;
+}
+
 table {
   width: 100%;
   min-width: 980px;
