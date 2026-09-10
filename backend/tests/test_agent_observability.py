@@ -6,6 +6,7 @@ from app.routers.agents import _summarize_agent_run
 
 
 class AgentObservabilityTest(unittest.TestCase):
+    # Regression scenario: summarizes persisted run for frontend.
     def test_summarizes_persisted_run_for_frontend(self) -> None:
         started_at = datetime.now(timezone.utc)
         run = AgentRun(

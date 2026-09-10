@@ -43,6 +43,7 @@ def make_event(
 
 
 class FirstBoardAgentTest(unittest.TestCase):
+    # Regression scenario: build first board ratings filters latest candidates.
     def test_build_first_board_ratings_filters_latest_candidates(self) -> None:
         response = build_first_board_ratings(SAMPLE_EVENTS)
 
@@ -56,6 +57,7 @@ class FirstBoardAgentTest(unittest.TestCase):
             )
         )
 
+    # Regression scenario: rating has breakdown reasons risks and confidence.
     def test_rating_has_breakdown_reasons_risks_and_confidence(self) -> None:
         response = build_first_board_ratings(SAMPLE_EVENTS)
         rating = response.candidates[0]
@@ -68,6 +70,7 @@ class FirstBoardAgentTest(unittest.TestCase):
         self.assertTrue(rating.reasons)
         self.assertTrue(rating.risks)
 
+    # Regression scenario: filter excludes special boards and small amount.
     def test_filter_excludes_special_boards_and_small_amount(self) -> None:
         events = [
             make_event("002001", "普通股票"),
@@ -93,6 +96,7 @@ class FirstBoardAgentTest(unittest.TestCase):
         self.assertIn("ST 或退市风险警示", reasons["002002"])
         self.assertIn("成交额过小", reasons["002003"])
 
+    # Regression scenario: filter result keeps position label for pool display.
     def test_filter_result_keeps_position_label_for_pool_display(self) -> None:
         enrichment = FirstBoardEnrichmentSnapshot(
             trade_date=date(2026, 5, 16),
@@ -123,6 +127,7 @@ class FirstBoardAgentTest(unittest.TestCase):
         self.assertFalse(result.included)
         self.assertEqual(result.position_label, "低位启动首板")
 
+    # Regression scenario: empty concept is not counted as market wide topic.
     def test_empty_concept_is_not_counted_as_market_wide_topic(self) -> None:
         events = [
             make_event("002001", "空题材一").model_copy(update={"concept": ""}),
@@ -135,6 +140,7 @@ class FirstBoardAgentTest(unittest.TestCase):
             all(item.facts.same_concept_limit_up_count == 0 for item in response.candidates)
         )
 
+    # Regression scenario: reason aware challenger rewards shared reason labels.
     def test_reason_aware_challenger_rewards_shared_reason_labels(self) -> None:
         events = [
             make_event("002001", "房地产一").model_copy(
@@ -164,6 +170,7 @@ class FirstBoardAgentTest(unittest.TestCase):
         self.assertGreater(shared_heat.score, isolated_heat.score)
         self.assertIn("共享涨停原因标签 2 只", shared_heat.evidence)
 
+    # Regression scenario: output avoids investment advice terms.
     def test_output_avoids_investment_advice_terms(self) -> None:
         response = build_first_board_ratings(SAMPLE_EVENTS)
         rendered = response.model_dump_json()
@@ -172,6 +179,7 @@ class FirstBoardAgentTest(unittest.TestCase):
         for term in forbidden_terms:
             self.assertNotIn(term, rendered)
 
+    # Regression scenario: one word board scores below intraday limit up.
     def test_one_word_board_scores_below_intraday_limit_up(self) -> None:
         one_word = make_event("002010", "一字板样本").model_copy(
             update={
@@ -203,6 +211,7 @@ class FirstBoardAgentTest(unittest.TestCase):
         self.assertLess(board_pattern.score, intraday_pattern.score)
         self.assertIn("一字板", "".join(board_pattern.evidence))
 
+    # Regression scenario: opening time normalized to 0930 is one word board.
     def test_opening_time_normalized_to_0930_is_one_word_board(self) -> None:
         opening_board = make_event("605277", "新亚电子").model_copy(
             update={
@@ -228,6 +237,7 @@ class FirstBoardAgentTest(unittest.TestCase):
         self.assertFalse(ratings["605278"].facts.is_one_word_board)
         self.assertIn("一字板缺少盘中换手与承接验证", ratings["605277"].risks)
 
+    # Regression scenario: low float market cap scores above high float market cap.
     def test_low_float_market_cap_scores_above_high_float_market_cap(self) -> None:
         common = {
             "trade_date": date(2026, 5, 16),
@@ -254,6 +264,7 @@ class FirstBoardAgentTest(unittest.TestCase):
         self.assertIn("低市值", "".join(low_score.evidence))
         self.assertIn("高市值", "".join(high_score.evidence))
 
+    # Regression scenario: first board critic challenges rating without changing score.
     def test_first_board_critic_challenges_rating_without_changing_score(self) -> None:
         ratings = build_first_board_ratings(SAMPLE_EVENTS)
         rating = ratings.candidates[0]

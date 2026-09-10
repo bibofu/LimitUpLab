@@ -11,6 +11,7 @@ from app.services.limit_up_reason import (
 
 
 class LimitUpReasonTest(unittest.TestCase):
+    # Build the LimitUpEvent fixture used by the surrounding regression scenario.
     def _event(self, symbol: str, concept: str = "") -> LimitUpEvent:
         return LimitUpEvent(
             symbol=symbol,
@@ -34,6 +35,7 @@ class LimitUpReasonTest(unittest.TestCase):
             continued_next_day=False,
         )
 
+    # Regression scenario: merge normalizes provider reason and preserves unmatched event.
     def test_merge_normalizes_provider_reason_and_preserves_unmatched_event(self) -> None:
         events = [self._event("000011"), self._event("000012", "原题材")]
         snapshot = HithinkLimitUpPoolSnapshot(
@@ -66,6 +68,7 @@ class LimitUpReasonTest(unittest.TestCase):
         self.assertEqual(merged[0].concept, "房地产开发+物业管理")
         self.assertEqual(merged[1].concept, "原题材")
 
+    # Regression scenario: peer count uses label overlap and ignores empty reasons.
     def test_peer_count_uses_label_overlap_and_ignores_empty_reasons(self) -> None:
         events = [
             self._event("000011", "房地产开发+物业管理"),

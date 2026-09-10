@@ -14,6 +14,7 @@ from app.services.sample_data import SAMPLE_EVENTS
 
 
 class StockNewsTest(unittest.TestCase):
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         self.database_path = (
             Path(__file__).resolve().parents[1]
@@ -23,10 +24,12 @@ class StockNewsTest(unittest.TestCase):
         self.now = datetime(2026, 8, 31, 9, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
         self.addCleanup(self._cleanup_database)
 
+    # Release the temporary resources owned by this test fixture.
     def _cleanup_database(self) -> None:
         for suffix in ("", "-shm", "-wal"):
             Path(f"{self.database_path}{suffix}").unlink(missing_ok=True)
 
+    # Build the StockNewsItem fixture used by the surrounding regression scenario.
     def _item(self, title: str, *, hours_ago: int, url_suffix: str) -> StockNewsItem:
         return StockNewsItem(
             symbol="301489",
@@ -41,7 +44,10 @@ class StockNewsTest(unittest.TestCase):
             fetched_at=self.now,
         )
 
+    # Regression scenario: collects persists sorts and filters the requested window.
     def test_collects_persists_sorts_and_filters_the_requested_window(self) -> None:
+        # Provide controlled source data for the surrounding test without relying on a live data
+        # service.
         def loader(symbol: str, name: str, fetched_at: datetime) -> list[StockNewsItem]:
             self.assertEqual((symbol, name), ("301489", "思泉新材"))
             self.assertEqual(fetched_at, self.now)
@@ -72,7 +78,10 @@ class StockNewsTest(unittest.TestCase):
         )
         self.assertEqual(len(cached), 2)
 
+    # Regression scenario: returns stale cache and explicit error when provider fails.
     def test_returns_stale_cache_and_explicit_error_when_provider_fails(self) -> None:
+        # The inline callback supplies the fixture value or replacement behavior used by this
+        # test; it is evaluated only when the code under test calls it.
         collect_stock_news(
             symbol="301489",
             name="思泉新材",
@@ -81,6 +90,8 @@ class StockNewsTest(unittest.TestCase):
             now=self.now,
         )
 
+        # Simulate the dependency failure required by this regression scenario so its error or
+        # fallback path is exercised.
         def failing_loader(*_args) -> list[StockNewsItem]:
             raise RuntimeError("upstream unavailable")
 
@@ -96,6 +107,7 @@ class StockNewsTest(unittest.TestCase):
         self.assertEqual(response.items[0].title, "缓存消息")
         self.assertTrue(any("upstream unavailable" in item for item in response.data_missing))
 
+    # Regression scenario: stock news route resolves name and bounds detail items.
     @patch("app.routers.stocks.collect_stock_news")
     @patch("app.routers.stocks.get_limit_up_repository")
     def test_stock_news_route_resolves_name_and_bounds_detail_items(
@@ -128,6 +140,7 @@ class StockNewsTest(unittest.TestCase):
         self.assertEqual(call["limit"], 3)
         self.assertIsInstance(call["repository"], SQLiteStockNewsRepository)
 
+    # Regression scenario: stock activity combines close facts events and news.
     def test_stock_activity_combines_close_facts_events_and_news(self) -> None:
         news = StockNewsFacts(
             symbol="301489",
@@ -181,10 +194,13 @@ class StockNewsTest(unittest.TestCase):
         self.assertEqual(result.output.news.items[0].title, "公司动态")
         self.assertNotIn("bars", result.trace_output["kline"])
 
+    # Regression scenario: stock news identity can resolve name outside local limit up pool.
     def test_stock_news_identity_can_resolve_name_outside_local_limit_up_pool(self) -> None:
         class SymbolDirectory:
             calls = 0
 
+            # Provide controlled source data for the surrounding test without relying on a live
+            # data service.
             def collect_a_share_symbol_names(self) -> dict[str, str]:
                 self.calls += 1
                 return {"300750": "宁德时代", "000001": "平安银行"}

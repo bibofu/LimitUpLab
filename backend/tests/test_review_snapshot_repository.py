@@ -24,6 +24,7 @@ TEST_TMP_ROOT = Path(
 
 
 class ReviewSnapshotRepositoryTest(unittest.TestCase):
+    # Regression scenario: audit annotation does not rewrite saved report.
     def test_audit_annotation_does_not_rewrite_saved_report(self) -> None:
         from app.services.prediction_time_audit import content_hash
         snapshot = self._snapshot(date(2026, 9, 3), finding="original")
@@ -40,11 +41,13 @@ class ReviewSnapshotRepositoryTest(unittest.TestCase):
         with closing(sqlite3.connect(self.database_path)) as connection:
             self.assertEqual(connection.execute("SELECT report_json FROM daily_review_snapshots").fetchone()[0], original)
 
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         TEST_TMP_ROOT.mkdir(exist_ok=True)
         self.database_path = TEST_TMP_ROOT / f"review-snapshot-{uuid4().hex}.sqlite"
         self.repository = SQLiteReviewSnapshotRepository(self.database_path)
 
+    # Release the test resources and restore the environment after this test scope.
     def tearDown(self) -> None:
         for path in (
             self.database_path,
@@ -53,6 +56,7 @@ class ReviewSnapshotRepositoryTest(unittest.TestCase):
         ):
             path.unlink(missing_ok=True)
 
+    # Regression scenario: snapshot is immutable and listed as summary.
     def test_snapshot_is_immutable_and_listed_as_summary(self) -> None:
         as_of_date = date(2026, 8, 28)
         original = self._snapshot(as_of_date, finding="原始复盘结论")
@@ -71,6 +75,7 @@ class ReviewSnapshotRepositoryTest(unittest.TestCase):
         self.assertEqual(summaries[0].sample_size, 10)
         self.assertEqual(summaries[0].outcome_ready_count, 8)
 
+    # Regression scenario: stale snapshot is detected after official prediction arrives.
     def test_stale_snapshot_is_detected_after_official_prediction_arrives(self) -> None:
         trade_date = date(2026, 8, 31)
         data_as_of = date(2026, 9, 1)
@@ -135,6 +140,7 @@ class ReviewSnapshotRepositoryTest(unittest.TestCase):
                 )
             )
 
+    # Build the DailyReviewSnapshot fixture used by the surrounding regression scenario.
     @staticmethod
     def _snapshot(as_of_date: date, *, finding: str) -> DailyReviewSnapshot:
         report = ReviewAgentReportResponse(

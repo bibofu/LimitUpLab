@@ -17,12 +17,16 @@ TEST_TMP_ROOT = Path(os.getenv("LIMITUPLAB_TEST_TMP", Path(__file__).resolve().p
 
 
 class EvaluationAgentTest(unittest.TestCase):
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         TEST_TMP_ROOT.mkdir(exist_ok=True)
 
+    # Prepare the database path fixture or observation used by the surrounding regression
+    # scenario.
     def _database_path(self) -> Path:
         return TEST_TMP_ROOT / f"evaluation-agent-{uuid4().hex}.sqlite"
 
+    # Release the temporary resources owned by this test fixture.
     def _cleanup_database(self, database_path: Path) -> None:
         for path in (
             database_path,
@@ -31,6 +35,7 @@ class EvaluationAgentTest(unittest.TestCase):
         ):
             path.unlink(missing_ok=True)
 
+    # Build the LimitUpEvent fixture used by the surrounding regression scenario.
     def _event(
         self,
         symbol: str,
@@ -61,6 +66,7 @@ class EvaluationAgentTest(unittest.TestCase):
             continued_next_day=False,
         )
 
+    # Build the FirstBoardOutcome fixture used by the surrounding regression scenario.
     def _make_outcome(
         self,
         symbol: str,
@@ -95,6 +101,7 @@ class EvaluationAgentTest(unittest.TestCase):
             created_at=datetime.now(timezone.utc),
         )
 
+    # Regression scenario: evaluation agent reads immutable predictions and labels entry returns.
     def test_evaluation_agent_reads_immutable_predictions_and_labels_entry_returns(self) -> None:
         database_path = self._database_path()
         try:
@@ -149,6 +156,7 @@ class EvaluationAgentTest(unittest.TestCase):
         finally:
             self._cleanup_database(database_path)
 
+    # Regression scenario: evaluation keeps live predictions visible after policy upgrade.
     def test_evaluation_keeps_live_predictions_visible_after_policy_upgrade(self) -> None:
         database_path = self._database_path()
         try:
@@ -205,6 +213,7 @@ class EvaluationAgentTest(unittest.TestCase):
         finally:
             self._cleanup_database(database_path)
 
+    # Regression scenario: review replay can restore a late saved live batch.
     def test_review_replay_can_restore_a_late_saved_live_batch(self) -> None:
         trade_date = date(2026, 9, 2)
         prediction = AgentPrediction(

@@ -16,12 +16,16 @@ TEST_TMP_ROOT = Path(
 
 
 class AgentDataHealthTest(unittest.TestCase):
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         TEST_TMP_ROOT.mkdir(exist_ok=True)
 
+    # Prepare the database path fixture or observation used by the surrounding regression
+    # scenario.
     def _database_path(self) -> Path:
         return TEST_TMP_ROOT / f"data-health-test-{uuid4().hex}.sqlite"
 
+    # Release the temporary resources owned by this test fixture.
     def _cleanup_database(self, database_path: Path) -> None:
         for path in (
             database_path,
@@ -30,6 +34,7 @@ class AgentDataHealthTest(unittest.TestCase):
         ):
             path.unlink(missing_ok=True)
 
+    # Build the LimitUpEvent fixture used by the surrounding regression scenario.
     def _make_event(self, symbol: str, name: str, trade_date: date) -> LimitUpEvent:
         return LimitUpEvent(
             symbol=symbol,
@@ -53,6 +58,7 @@ class AgentDataHealthTest(unittest.TestCase):
             continued_next_day=False,
         )
 
+    # Regression scenario: missing events returns missing status.
     def test_missing_events_returns_missing_status(self) -> None:
         health = build_agent_data_health(events=[])
 
@@ -60,6 +66,7 @@ class AgentDataHealthTest(unittest.TestCase):
         self.assertFalse(health.raw_events_ready)
         self.assertTrue(health.warnings)
 
+    # Regression scenario: features without enrichment returns partial status.
     def test_features_without_enrichment_returns_partial_status(self) -> None:
         database_path = self._database_path()
         try:

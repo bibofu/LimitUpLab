@@ -18,6 +18,7 @@ from app.models import AgentChatRequest
 from app.services.sample_data import SAMPLE_EVENTS
 
 
+# Build the AgentToolRegistry fixture used by the surrounding regression scenario.
 def event_registry():
     rows = [
         ("600001", "农业甲", "2026-08-31", "农业+机械"),
@@ -39,10 +40,12 @@ def event_registry():
     )
 
 
+# Prepare the empty execution fixture or observation used by the surrounding regression scenario.
 def empty_execution():
     return {"facts": {}, "tool_results": [], "tool_call_names": [], "references": []}
 
 
+# Regression scenario: repair and dispatch preserve window grouping and evidence.
 @pytest.mark.parametrize("message,days,group,count,unique,trade_date", [
     ("近期农业板块涨停过的股票有哪些", 7, None, 3, 2, None),
     ("近10个交易日农业板块涨停过的股票有哪些", 10, None, 3, 2, None),
@@ -82,6 +85,7 @@ def test_repair_and_dispatch_preserve_window_grouping_and_evidence(
         assert all(item["trade_date"] <= "2026-09-08" for item in facts["events"])
 
 
+# Regression scenario: legacy fallback uses full cross day evidence.
 def test_legacy_fallback_uses_full_cross_day_evidence():
     response = _answer_limit_up_query(
         AgentChatRequest(session_id="legacy", message="近期农业板块涨停过的股票有哪些"),
@@ -93,6 +97,7 @@ def test_legacy_fallback_uses_full_cross_day_evidence():
     assert response.tool_results[0].input["recent_trade_days"] == 7
 
 
+# Regression scenario: policy keeps tool failure and profile boundaries.
 def test_policy_keeps_tool_failure_and_profile_boundaries():
     tools = event_registry()
     tools.limit_up_events = Mock(side_effect=RuntimeError("event source unavailable"))
@@ -109,6 +114,7 @@ def test_policy_keeps_tool_failure_and_profile_boundaries():
     tools.limit_up_events.assert_not_called()
 
 
+# Regression scenario: eval report uses actual contract version even for empty suite.
 @pytest.mark.parametrize("cases", [[], [QueryContractEvalCase("version", "今天涨停股票有哪些", {})]])
 def test_eval_report_uses_actual_contract_version_even_for_empty_suite(cases):
     report = query_contract_eval_report(run_query_contract_eval_suite(cases))

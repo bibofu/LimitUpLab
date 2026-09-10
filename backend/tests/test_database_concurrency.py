@@ -11,6 +11,7 @@ from app.database import CURRENT_SCHEMA_VERSION, connect, initialize_database
 
 
 class DatabaseConcurrencyTest(unittest.TestCase):
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         self.database_path = (
             Path(__file__).resolve().parents[1]
@@ -31,6 +32,7 @@ class DatabaseConcurrencyTest(unittest.TestCase):
         self.environment.start()
         self.addCleanup(self.environment.stop)
 
+    # Regression scenario: connection enables wal busy timeout and foreign keys.
     def test_connection_enables_wal_busy_timeout_and_foreign_keys(self) -> None:
         connection = connect(self.database_path)
         try:
@@ -49,9 +51,12 @@ class DatabaseConcurrencyTest(unittest.TestCase):
         self.assertEqual(synchronous, 1)  # NORMAL
         self.assertEqual(schema_version, CURRENT_SCHEMA_VERSION)
 
+    # Regression scenario: concurrent schema initialization is idempotent.
     def test_concurrent_schema_initialization_is_idempotent(self) -> None:
         barrier = threading.Barrier(8)
 
+        # Prepare the initialize from worker fixture or observation used by the surrounding
+        # regression scenario.
         def initialize_from_worker() -> int:
             barrier.wait(timeout=5)
             connection = connect(self.database_path)
@@ -62,6 +67,8 @@ class DatabaseConcurrencyTest(unittest.TestCase):
                 connection.close()
 
         with ThreadPoolExecutor(max_workers=8) as executor:
+            # The inline callback supplies the fixture value or replacement behavior used by this
+            # test; it is evaluated only when the code under test calls it.
             versions = list(executor.map(lambda _index: initialize_from_worker(), range(8)))
 
         connection = connect(self.database_path)
@@ -79,6 +86,7 @@ class DatabaseConcurrencyTest(unittest.TestCase):
         self.assertIn("limit_up_events", tables)
         self.assertIn("agent_usage_events", tables)
 
+    # Regression scenario: wal reader is not blocked by uncommitted writer.
     def test_wal_reader_is_not_blocked_by_uncommitted_writer(self) -> None:
         writer = connect(self.database_path)
         initialize_database(writer)
@@ -100,6 +108,7 @@ class DatabaseConcurrencyTest(unittest.TestCase):
         self.assertEqual(count, 0)
         self.assertLess(duration, 0.5)
 
+    # Regression scenario: competing writer retries until lock is released.
     def test_competing_writer_retries_until_lock_is_released(self) -> None:
         first = connect(self.database_path)
         initialize_database(first)
@@ -109,6 +118,8 @@ class DatabaseConcurrencyTest(unittest.TestCase):
         first.execute("INSERT INTO concurrency_probe VALUES ('first')")
         attempting_write = threading.Event()
 
+        # Prepare the write second fixture or observation used by the surrounding regression
+        # scenario.
         def write_second() -> None:
             second = connect(self.database_path)
             try:
@@ -140,6 +151,7 @@ class DatabaseConcurrencyTest(unittest.TestCase):
 
         self.assertEqual(values, ["first", "second"])
 
+    # Release the temporary resources owned by this test fixture.
     def _remove_database_files(self) -> None:
         for suffix in ("", "-wal", "-shm"):
             Path(f"{self.database_path}{suffix}").unlink(missing_ok=True)

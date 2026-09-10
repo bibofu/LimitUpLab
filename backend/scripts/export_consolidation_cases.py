@@ -12,19 +12,23 @@ focus = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(focus)
 
 
+# Assign the export's historical outcome category from the observed measurements.
 def label(gross):
     value = focus.net(gross)
     return 'positive' if value > 1e-10 else 'negative' if value < -1e-10 else 'flat'
 
 
+# Select recent case rows for the bounded review export.
 def select_recent(rows, outcome_label, count=3):
     eligible = [r for r in rows if r['outcome_status'] == 'complete' and label(r['r5']) == outcome_label]
-    # No best/worst return sorting. Date descending, symbol ascending for ties.
+    # The key compares symbol.
     eligible.sort(key=lambda r: r['symbol'])
+    # The key compares signal date. reverse=True reverses the resulting order.
     eligible.sort(key=lambda r: r['signal_date'], reverse=True)
     return eligible[:count]
 
 
+# Assemble a case's anchor, shape and observed-outcome fields for the export.
 def case_facts(row, bars, calendar):
     a, t = calendar.index(row['anchor_date']), calendar.index(row['signal_date'])
     window = [bars[(row['symbol'], d)] for d in calendar[a:t+1]]
@@ -55,6 +59,7 @@ def case_facts(row, bars, calendar):
     return result
 
 
+# Read the frozen research cohort and write the selected case evidence exports.
 def analyze(directory, db):
     original = json.loads((directory/'comparison.json').read_text(encoding='utf-8'))
     bars = focus.load_frozen_bars(db, original)
@@ -64,6 +69,8 @@ def analyze(directory, db):
     facts = [case_facts(r,bars,calendar) for r in rows]
     selected = select_recent(rows,'positive') + select_recent(rows,'negative')
     keys = {(r['symbol'],r['signal_date']) for r in selected}
+    # The key compares `r['label'] != 'positive'`, then `int(r['signal_date'].replace('-', ''))`
+    # (negated for descending order), then symbol.
     result = {'rule_version':'consolidation_research_v0.1', 'data_end':original['inventory']['data_end'],
               'input_sha256':original['input_sha256'],
               'script_sha256':hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),

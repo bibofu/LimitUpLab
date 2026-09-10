@@ -32,6 +32,7 @@ from app.repositories import SQLiteFirstBoardRepository
 
 
 class AgentToolPolicyTest(unittest.TestCase):
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         self.database_path = (
             Path(__file__).resolve().parents[1]
@@ -46,10 +47,13 @@ class AgentToolPolicyTest(unittest.TestCase):
         )
         self.policy = AgentToolPolicyEngine(self.tools)
 
+    # Release the temporary resources owned by this test fixture.
     def _cleanup_database(self) -> None:
         for suffix in ("", "-shm", "-wal"):
             Path(f"{self.database_path}{suffix}").unlink(missing_ok=True)
 
+    # Prepare the empty execution fixture or observation used by the surrounding regression
+    # scenario.
     @staticmethod
     def _empty_execution() -> ToolExecution:
         return {
@@ -59,6 +63,7 @@ class AgentToolPolicyTest(unittest.TestCase):
             "references": [],
         }
 
+    # Regression scenario: broad sector questions do not extract a fake sector name.
     def test_broad_sector_questions_do_not_extract_a_fake_sector_name(self) -> None:
         questions = (
             "今天大盘哪些板块表现好",
@@ -72,6 +77,7 @@ class AgentToolPolicyTest(unittest.TestCase):
                 self.assertTrue(looks_like_broad_sector_ranking_question(question))
                 self.assertIsNone(extract_sector_query(question))
 
+    # Regression scenario: named sector and stock ranking remain specific.
     def test_named_sector_and_stock_ranking_remain_specific(self) -> None:
         self.assertFalse(
             looks_like_broad_sector_ranking_question("今天半导体板块表现怎么样")
@@ -85,6 +91,7 @@ class AgentToolPolicyTest(unittest.TestCase):
         )
         self.assertEqual(extract_sector_query("游戏板块哪些股票走势好"), "游戏")
 
+    # Regression scenario: high score review has one policy scope.
     def test_high_score_review_has_one_policy_scope(self) -> None:
         signals = QuestionSignals.from_message(
             "最近高分票后续走势怎么样，评分审美怎么改"
@@ -103,6 +110,7 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertFalse(promotion_signals.daily_board_promotion)
         self.assertFalse(promotion_signals.rating_explanation)
 
+    # Regression scenario: explicit capability disables conflicting keyword routing.
     def test_explicit_capability_disables_conflicting_keyword_routing(self) -> None:
         signals = QuestionSignals.from_message(
             "最近首板评分准吗，顺便做个回测",
@@ -113,6 +121,7 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertTrue(signals.rating_explanation)
         self.assertFalse(signals.rating_backtest)
 
+    # Regression scenario: scoring policy question has one policy scope.
     def test_scoring_policy_question_has_one_policy_scope(self) -> None:
         signals = QuestionSignals.from_message("评分权重有没有自动优化")
 
@@ -121,6 +130,7 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertFalse(signals.evaluation)
         self.assertFalse(signals.rating_explanation)
 
+    # Regression scenario: prediction quality has one policy scope.
     def test_prediction_quality_has_one_policy_scope(self) -> None:
         signals = QuestionSignals.from_message(
             "做一次预测质量审计，评分 v3 准备好了吗"
@@ -133,12 +143,14 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertFalse(signals.scoring_policy)
         self.assertFalse(signals.rating_explanation)
 
+    # Regression scenario: exhaustive first board list is not a rating question.
     def test_exhaustive_first_board_list_is_not_a_rating_question(self) -> None:
         signals = QuestionSignals.from_message("列出今天所有首板")
 
         self.assertFalse(signals.first_board_facts)
         self.assertFalse(signals.rating_explanation)
 
+    # Regression scenario: hot stock top100 repair preserves explicit limit.
     def test_hot_stock_top100_repair_preserves_explicit_limit(self) -> None:
         signals = QuestionSignals.from_message("热股榜前100名")
         self.assertTrue(signals.hot_stock_ranking)
@@ -176,12 +188,14 @@ class AgentToolPolicyTest(unittest.TestCase):
         ranking.assert_called_once_with(period="day", limit=100, source="auto")
         self.assertEqual(execution["facts"]["hot_stock_ranking"]["count"], 100)
 
+    # Regression scenario: market segment extraction uses explicit board names.
     def test_market_segment_extraction_uses_explicit_board_names(self) -> None:
         self.assertEqual(extract_market_segment("今天创业板有哪些股票涨停"), "chinext")
         self.assertEqual(extract_market_segment("科创板今天涨停股"), "star_market")
         self.assertEqual(extract_market_segment("北交所有哪些涨停"), "beijing")
         self.assertEqual(extract_market_segment("沪深主板涨停名单"), "main_board")
 
+    # Regression scenario: first board position classification uses rating facts.
     def test_first_board_position_classification_uses_rating_facts(self) -> None:
         signals = QuestionSignals.from_message("今天首板按照位置分类一下")
 
@@ -204,6 +218,7 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertEqual(classification["candidate_count"], 1)
         self.assertEqual(classification["missing_count"], 1)
 
+    # Regression scenario: daily board promotion uses adjacent close facts.
     def test_daily_board_promotion_uses_adjacent_close_facts(self) -> None:
         signals = QuestionSignals.from_message("最近5个交易日连板晋级概率怎么样")
 
@@ -229,6 +244,7 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertTrue(detail_signals.daily_board_promotion)
         self.assertFalse(detail_signals.limit_up_events)
 
+    # Regression scenario: sector performance does not trigger rating review.
     def test_sector_performance_does_not_trigger_rating_review(self) -> None:
         signals = QuestionSignals.from_message("今天半导体板块表现怎么样")
 
@@ -240,12 +256,14 @@ class AgentToolPolicyTest(unittest.TestCase):
         concept_signals = QuestionSignals.from_message("今天 AI 概念表现怎么样")
         self.assertTrue(concept_signals.sector_performance)
 
+    # Regression scenario: sector stock ranking is distinct from whole sector performance.
     def test_sector_stock_ranking_is_distinct_from_whole_sector_performance(self) -> None:
         signals = QuestionSignals.from_message("游戏板块哪些股票走势好")
 
         self.assertTrue(signals.sector_stock_ranking)
         self.assertFalse(signals.sector_performance)
 
+    # Regression scenario: market index trend uses dedicated grounding.
     def test_market_index_trend_uses_dedicated_grounding(self) -> None:
         signals = QuestionSignals.from_message("近一周大盘走势怎么样")
 
@@ -303,6 +321,7 @@ class AgentToolPolicyTest(unittest.TestCase):
         index_trend.assert_called_once_with(days=5, end_date=None)
         self.assertIn("market_index_trend", execution["facts"])
 
+    # Regression scenario: sector move reason does not trigger rating explanation.
     def test_sector_move_reason_does_not_trigger_rating_explanation(self) -> None:
         signals = QuestionSignals.from_message("今天半导体板块为什么下跌")
 
@@ -311,6 +330,7 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertFalse(signals.rating_explanation)
         self.assertFalse(signals.first_board_facts)
 
+    # Regression scenario: broad finance news uses specialized feed.
     def test_broad_finance_news_uses_specialized_feed(self) -> None:
         for message in (
             "有什么最新财经新闻",
@@ -324,6 +344,7 @@ class AgentToolPolicyTest(unittest.TestCase):
                 self.assertTrue(signals.finance_news)
                 self.assertFalse(signals.web_search)
 
+    # Regression scenario: company news uses stock news while sector news stays web scope.
     def test_company_news_uses_stock_news_while_sector_news_stays_web_scope(self) -> None:
         for message in ("这家公司最近有什么消息", "关于中电鑫龙的新闻"):
             with self.subTest(message=message):
@@ -337,6 +358,7 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertFalse(sector_signals.stock_news)
         self.assertTrue(sector_signals.web_search)
 
+    # Regression scenario: market environment repairs all required evidence groups.
     def test_market_environment_repairs_all_required_evidence_groups(self) -> None:
         request = AgentChatRequest(
             session_id="policy-market-environment",
@@ -489,6 +511,7 @@ class AgentToolPolicyTest(unittest.TestCase):
             enrich_performance=True,
         )
 
+    # Regression scenario: company news uses structured stock news.
     def test_company_news_uses_structured_stock_news(self) -> None:
         signals = QuestionSignals.from_message("中电鑫龙有什么最新消息")
 
@@ -497,6 +520,7 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertFalse(signals.stock_activity)
         self.assertFalse(signals.web_search)
 
+    # Regression scenario: company activity uses composite stock activity.
     def test_company_activity_uses_composite_stock_activity(self) -> None:
         signals = QuestionSignals.from_message("中电鑫龙最近有什么动态")
 
@@ -504,6 +528,7 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertFalse(signals.stock_news)
         self.assertFalse(signals.web_search)
 
+    # Regression scenario: stock news followup uses context symbol.
     def test_stock_news_followup_uses_context_symbol(self) -> None:
         request = AgentChatRequest(
             session_id="policy-stock-news-context",
@@ -554,6 +579,7 @@ class AgentToolPolicyTest(unittest.TestCase):
         stock_news.assert_called_once_with("301489", days=7, limit=10)
         self.assertEqual(execution["facts"]["stock_news"]["symbol"], "301489")
 
+    # Regression scenario: scoring policy repair returns champion status.
     def test_scoring_policy_repair_returns_champion_status(self) -> None:
         request = AgentChatRequest(
             session_id="policy-test",
@@ -568,6 +594,7 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertEqual(payload["champion"]["status"], "champion")
         self.assertIn("scoring_version=", execution["references"][0])
 
+    # Regression scenario: rating repair records rule and audit reason.
     def test_rating_repair_records_rule_and_audit_reason(self) -> None:
         request = AgentChatRequest(
             session_id="policy-test",
@@ -594,6 +621,7 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertEqual(audit.backend_repaired_tools, ["first_board_ratings"])
         self.assertEqual(audit.repair_reasons, [repair["reason"]])
 
+    # Regression scenario: prediction quality repair returns coverage facts.
     def test_prediction_quality_repair_returns_coverage_facts(self) -> None:
         request = AgentChatRequest(
             session_id="policy-test",
@@ -611,6 +639,7 @@ class AgentToolPolicyTest(unittest.TestCase):
         )
         self.assertEqual(payload["policy_status"]["required_trade_dates"], 60)
 
+    # Regression scenario: missing date short circuits domain tools.
     def test_missing_date_short_circuits_domain_tools(self) -> None:
         request = AgentChatRequest(
             session_id="policy-test",

@@ -15,6 +15,7 @@ from app.services.prediction_time_audit import audit_prediction_times
 from scripts.backup_database import create_backup
 
 
+# Parse audit options and report prediction timing/provenance from the selected database.
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database", type=Path, default=DEFAULT_DATABASE_PATH)

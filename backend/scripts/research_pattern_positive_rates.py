@@ -21,6 +21,7 @@ def adjusted_pct(gross_pct, total_friction_pct):
     return ((1 + gross_pct / 100) * (1 - half) / (1 + half) - 1) * 100
 
 
+# Summarize the selected historical outcome sample with its empirical positive-rate measurements.
 def stats(rows, horizon=5, cost=.3):
     values = [adjusted_pct(float(r[f"r{horizon}"]), cost) for r in rows]
     if not values:
@@ -33,6 +34,7 @@ def stats(rows, horizon=5, cost=.3):
             "below_minus5_pct": mean(x < -5 for x in values) * 100}
 
 
+# Compare historical positive outcomes within the matched cohort definition.
 def matched_probability(rows, pool, dates, cost=.3):
     peers = defaultdict(list)
     for r in pool:
@@ -60,7 +62,9 @@ def matched_probability(rows, pool, dates, cost=.3):
     return {"dates": len(daily), "difference_pp": mean(mean(v) for v in daily.values()), "ci95_pp": interval}
 
 
+# Read exported historical cohorts and calculate the pattern positive-rate comparisons.
 def analyze(directory):
+    # Load one named input file from the surrounding research export directory.
     def read(name):
         with (directory / name).open(encoding='utf-8-sig', newline='') as f:
             return list(csv.DictReader(f))

@@ -4,6 +4,7 @@ from app.models import StockDailyBar
 from app.services.stock_position import classify_stock_position
 
 
+# Prepare the bars fixture or observation used by the surrounding regression scenario.
 def _bars(closes: list[float]) -> list[StockDailyBar]:
     start = date(2026, 1, 1)
     return [
@@ -24,12 +25,14 @@ def _bars(closes: list[float]) -> list[StockDailyBar]:
     ]
 
 
+# Prepare the linear fixture or observation used by the surrounding regression scenario.
 def _linear(start: float, end: float, count: int) -> list[float]:
     if count <= 1:
         return [end]
     return [start + (end - start) * index / (count - 1) for index in range(count)]
 
 
+# Regression scenario: position requires enough pre board bars.
 def test_position_requires_enough_pre_board_bars() -> None:
     bars = _bars([10, 10.1, 11.1])
 
@@ -39,6 +42,7 @@ def test_position_requires_enough_pre_board_bars() -> None:
     assert result.confidence < 0.2
 
 
+# Regression scenario: classifies oversold rebound.
 def test_classifies_oversold_rebound() -> None:
     bars = _bars([*_linear(20, 8, 120), 8.8])
 
@@ -49,6 +53,7 @@ def test_classifies_oversold_rebound() -> None:
     assert result.metrics["position_120_pct"] < 20
 
 
+# Regression scenario: classifies low base breakout.
 def test_classifies_low_base_breakout() -> None:
     bars = _bars([
         *_linear(15, 10, 85),
@@ -62,6 +67,7 @@ def test_classifies_low_base_breakout() -> None:
     assert "突破20日平台" in result.tags
 
 
+# Regression scenario: classifies v reversal.
 def test_classifies_v_reversal() -> None:
     bars = _bars([
         *[10.0] * 60,
@@ -76,6 +82,7 @@ def test_classifies_v_reversal() -> None:
     assert result.metrics["pullback_from_wave_peak_pct"] < -18
 
 
+# Regression scenario: classifies second wave.
 def test_classifies_second_wave() -> None:
     bars = _bars([
         *[10.0] * 60,

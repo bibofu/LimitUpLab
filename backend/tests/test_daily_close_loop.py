@@ -29,6 +29,7 @@ CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
 class DailyCloseLoopTest(unittest.TestCase):
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         TEST_TMP_ROOT.mkdir(exist_ok=True)
         token = uuid4().hex
@@ -43,6 +44,7 @@ class DailyCloseLoopTest(unittest.TestCase):
         )
         self.first_board_repository = SQLiteFirstBoardRepository(self.database_path)
 
+    # Release the test resources and restore the environment after this test scope.
     def tearDown(self) -> None:
         for path in (
             self.database_path,
@@ -56,6 +58,7 @@ class DailyCloseLoopTest(unittest.TestCase):
         ):
             path.unlink(missing_ok=True)
 
+    # Prepare the calendar fixture or observation used by the surrounding regression scenario.
     @staticmethod
     def _calendar(start: date, end: date) -> list[date]:
         day_count = (end - start).days
@@ -65,6 +68,7 @@ class DailyCloseLoopTest(unittest.TestCase):
             if start.fromordinal(start.toordinal() + offset).weekday() < 5
         ]
 
+    # Build the DailyUpdateReport fixture used by the surrounding regression scenario.
     @staticmethod
     def _complete_report(trade_date: date, *, live_count: int) -> DailyUpdateReport:
         return DailyUpdateReport(
@@ -83,7 +87,10 @@ class DailyCloseLoopTest(unittest.TestCase):
             },
         )
 
+    # Prepare the execute fixture or observation used by the surrounding regression scenario.
     def _execute(self, **overrides):
+        # The inline callback supplies the fixture value or replacement behavior used by this
+        # test; it is evaluated only when the code under test calls it.
         arguments = {
             "trigger": "scheduled",
             "max_attempts": 1,
@@ -102,6 +109,8 @@ class DailyCloseLoopTest(unittest.TestCase):
             ),
         }
         arguments.update(overrides)
+        # The inline callback supplies the fixture value or replacement behavior used by this
+        # test; it is evaluated only when the code under test calls it.
         arguments.setdefault(
             "recommendation_refresher",
             lambda **kwargs: SimpleNamespace(
@@ -116,15 +125,19 @@ class DailyCloseLoopTest(unittest.TestCase):
         )
         return execute_daily_close_loop(**arguments)
 
+    # Regression scenario: same day after close persists live prediction.
     def test_same_day_after_close_persists_live_prediction(self) -> None:
         target_date = date(2026, 8, 21)
         received: list[dict[str, object]] = []
         refresh_calls: list[dict[str, object]] = []
 
+        # Prepare the fake update fixture or observation used by the surrounding regression
+        # scenario.
         def fake_update(**kwargs) -> DailyUpdateReport:
             received.append(kwargs)
             return self._complete_report(target_date, live_count=10)
 
+        # Build the SimpleNamespace fixture used by the surrounding regression scenario.
         def fake_refresh(**kwargs):
             refresh_calls.append(kwargs)
             return SimpleNamespace(
@@ -166,11 +179,14 @@ class DailyCloseLoopTest(unittest.TestCase):
             "2026-08-24",
         )
 
+    # Regression scenario: recommendation refresh failure is retried.
     def test_recommendation_refresh_failure_is_retried(self) -> None:
         target_date = date(2026, 8, 21)
         update_calls = 0
         refresh_calls = 0
 
+        # Prepare the fake update fixture or observation used by the surrounding regression
+        # scenario.
         def fake_update(**_kwargs) -> DailyUpdateReport:
             nonlocal update_calls
             update_calls += 1
@@ -180,6 +196,7 @@ class DailyCloseLoopTest(unittest.TestCase):
                 report.live_prediction_snapshot_ready = True
             return report
 
+        # Build the SimpleNamespace fixture used by the surrounding regression scenario.
         def flaky_refresh(**kwargs):
             nonlocal refresh_calls
             refresh_calls += 1
@@ -211,10 +228,13 @@ class DailyCloseLoopTest(unittest.TestCase):
             "refresh-after-retry",
         )
 
+    # Regression scenario: late backfill cannot be labeled live.
     def test_late_backfill_cannot_be_labeled_live(self) -> None:
         target_date = date(2026, 8, 20)
         received: list[dict[str, object]] = []
 
+        # Prepare the fake update fixture or observation used by the surrounding regression
+        # scenario.
         def fake_update(**kwargs) -> DailyUpdateReport:
             received.append(kwargs)
             return self._complete_report(target_date, live_count=0)
@@ -229,10 +249,13 @@ class DailyCloseLoopTest(unittest.TestCase):
         self.assertFalse(received[0]["persist_live_prediction"])
         self.assertFalse(execution.run.report["live_prediction_eligible"])
 
+    # Regression scenario: same day close run remains live without auction dependency.
     def test_same_day_close_run_remains_live_without_auction_dependency(self) -> None:
         target_date = date(2026, 8, 31)
         received: list[dict[str, object]] = []
 
+        # Prepare the fake update fixture or observation used by the surrounding regression
+        # scenario.
         def fake_update(**kwargs) -> DailyUpdateReport:
             received.append(kwargs)
             return self._complete_report(target_date, live_count=10)
@@ -247,11 +270,14 @@ class DailyCloseLoopTest(unittest.TestCase):
         self.assertTrue(received[0]["persist_live_prediction"])
         self.assertTrue(execution.run.report["live_prediction_eligible"])
 
+    # Regression scenario: transient failure is retried and audited.
     def test_transient_failure_is_retried_and_audited(self) -> None:
         target_date = date(2026, 8, 21)
         calls = 0
         delays: list[float] = []
 
+        # Simulate the dependency failure required by this regression scenario so its error or
+        # fallback path is exercised.
         def flaky_update(**_kwargs) -> DailyUpdateReport:
             nonlocal calls
             calls += 1
@@ -273,9 +299,12 @@ class DailyCloseLoopTest(unittest.TestCase):
         self.assertEqual(delays, [2])
         self.assertEqual(execution.run.attempt_count, 2)
 
+    # Regression scenario: review snapshot failure marks pipeline partial.
     def test_review_snapshot_failure_marks_pipeline_partial(self) -> None:
         target_date = date(2026, 8, 21)
 
+        # The inline callback supplies the fixture value or replacement behavior used by this
+        # test; it is evaluated only when the code under test calls it.
         execution = self._execute(
             requested_date=target_date,
             now=datetime(2026, 8, 21, 16, 10, tzinfo=CN_TZ),
@@ -291,14 +320,19 @@ class DailyCloseLoopTest(unittest.TestCase):
         self.assertEqual(execution.status, "partial")
         self.assertIn("daily review snapshot failed", execution.run.error_message)
 
+    # Regression scenario: incomplete cache writes partial alert.
     def test_incomplete_cache_writes_partial_alert(self) -> None:
         target_date = date(2026, 8, 21)
 
+        # Prepare the incomplete update fixture or observation used by the surrounding regression
+        # scenario.
         def incomplete_update(**_kwargs) -> DailyUpdateReport:
             report = self._complete_report(target_date, live_count=10)
             report.tracked_cache_missing = 2
             return report
 
+        # The inline callback supplies the fixture value or replacement behavior used by this
+        # test; it is evaluated only when the code under test calls it.
         execution = self._execute(
             requested_date=target_date,
             now=datetime(2026, 8, 21, 16, 10, tzinfo=CN_TZ),
@@ -313,9 +347,12 @@ class DailyCloseLoopTest(unittest.TestCase):
         self.assertTrue(self.alert_path.exists())
         self.assertIn("lack available bars", execution.run.error_message)
 
+    # Regression scenario: incomplete observation cache writes partial alert.
     def test_incomplete_observation_cache_writes_partial_alert(self) -> None:
         target_date = date(2026, 8, 21)
 
+        # Prepare the incomplete observation update fixture or observation used by the surrounding
+        # regression scenario.
         def incomplete_observation_update(**_kwargs) -> DailyUpdateReport:
             report = self._complete_report(target_date, live_count=10)
             report.post_limit_cache_missing = 3
@@ -330,9 +367,12 @@ class DailyCloseLoopTest(unittest.TestCase):
         self.assertEqual(execution.status, "partial")
         self.assertIn("post-limit observation stocks", execution.run.error_message)
 
+    # Regression scenario: incomplete outcome maturity writes partial alert.
     def test_incomplete_outcome_maturity_writes_partial_alert(self) -> None:
         target_date = date(2026, 8, 21)
 
+        # Prepare the incomplete update fixture or observation used by the surrounding regression
+        # scenario.
         def incomplete_update(**_kwargs) -> DailyUpdateReport:
             report = self._complete_report(target_date, live_count=10)
             report.tracked_next_day_outcomes_expected = 10
@@ -350,9 +390,12 @@ class DailyCloseLoopTest(unittest.TestCase):
         self.assertTrue(self.alert_path.exists())
         self.assertIn("D+1 outcomes are incomplete", execution.run.error_message)
 
+    # Regression scenario: existing live snapshot is valid during outcome retry.
     def test_existing_live_snapshot_is_valid_during_outcome_retry(self) -> None:
         target_date = date(2026, 8, 21)
 
+        # Prepare the retry update fixture or observation used by the surrounding regression
+        # scenario.
         def retry_update(**_kwargs) -> DailyUpdateReport:
             report = self._complete_report(target_date, live_count=0)
             report.live_prediction_snapshot_ready = True
@@ -367,6 +410,7 @@ class DailyCloseLoopTest(unittest.TestCase):
         self.assertEqual(execution.status, "success")
         self.assertEqual(execution.exit_code, 0)
 
+    # Regression scenario: successful date is idempotently skipped.
     def test_successful_date_is_idempotently_skipped(self) -> None:
         target_date = date(2026, 8, 21)
         completed = DailyPipelineRun(
@@ -381,6 +425,8 @@ class DailyCloseLoopTest(unittest.TestCase):
         )
         self.run_repository.save_run(completed)
 
+        # Prepare the unexpected update fixture or observation used by the surrounding regression
+        # scenario.
         def unexpected_update(**_kwargs) -> DailyUpdateReport:
             self.fail("already successful date must not run again")
 
@@ -393,8 +439,11 @@ class DailyCloseLoopTest(unittest.TestCase):
         self.assertEqual(execution.status, "skipped")
         self.assertEqual(execution.run.run_id, "daily_existing")
 
+    # Regression scenario: existing lock prevents overlapping run.
     def test_existing_lock_prevents_overlapping_run(self) -> None:
         with DailyCloseLoopLock(self.lock_path):
+            # The inline callback supplies the fixture value or replacement behavior used by this
+            # test; it is evaluated only when the code under test calls it.
             execution = self._execute(
                 requested_date=date(2026, 8, 21),
                 now=datetime(2026, 8, 21, 16, 10, tzinfo=CN_TZ),

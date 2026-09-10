@@ -8,6 +8,7 @@ from app.repositories.agent_usage_repository import SQLiteAgentUsageRepository
 
 
 class AgentUsageRepositoryTest(unittest.TestCase):
+    # Regression scenario: started request counts and finished usage is aggregated.
     def test_started_request_counts_and_finished_usage_is_aggregated(self) -> None:
         database_path = Path(__file__).resolve().parents[1] / f"usage-{uuid4().hex}.sqlite"
         try:

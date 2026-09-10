@@ -14,6 +14,7 @@ from app.repositories.recommendation_intelligence_repository import (
 )
 
 
+# Prepare the legacy payload fixture or observation used by the surrounding regression scenario.
 def legacy_payload(*, discovery_only=False):
     item = {"strategy": "relay", "base_trade_date": "2026-09-07", "symbol": "600001",
             "name": "测试", "rank": 1, "base_score": 80, "refreshed_at": "2026-09-07T16:00:00+00:00"}
@@ -23,6 +24,7 @@ def legacy_payload(*, discovery_only=False):
             ]}
 
 
+# Regression scenario: legacy reads preserve original json and expose only relay.
 @pytest.mark.parametrize("table", ["recommendation_intelligence_current", "recommendation_intelligence_snapshots", "recommendation_prediction_finals"])
 def test_legacy_reads_preserve_original_json_and_expose_only_relay(tmp_path, table):
     path = tmp_path / "legacy.sqlite"
@@ -45,6 +47,7 @@ def test_legacy_reads_preserve_original_json_and_expose_only_relay(tmp_path, tab
         assert connection.execute(f"SELECT response_json FROM {table}").fetchone()[0] == raw
 
 
+# Regression scenario: refresh archives original mixed snapshot.
 def test_refresh_archives_original_mixed_snapshot(tmp_path):
     path = tmp_path / "legacy.sqlite"
     raw = json.dumps(legacy_payload(discovery_only=True))
@@ -61,6 +64,7 @@ def test_refresh_archives_original_mixed_snapshot(tmp_path):
     assert repository.get_latest().refresh_id == "new"
 
 
+# Regression scenario: unknown strategy is not silently hidden.
 def test_unknown_strategy_is_not_silently_hidden():
     payload = legacy_payload()
     payload["items"][0]["strategy"] = "unknown-strategy"
@@ -68,6 +72,7 @@ def test_unknown_strategy_is_not_silently_hidden():
         _load_persisted_response(json.dumps(payload))
 
 
+# Regression scenario: public model still rejects retired strategy.
 def test_public_model_still_rejects_retired_strategy():
     with pytest.raises(ValidationError):
         RecommendationIntelligenceResponse.model_validate(legacy_payload())

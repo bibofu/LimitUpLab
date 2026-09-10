@@ -9,11 +9,13 @@ m=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 
 
+# Prepare the row fixture or observation used by the surrounding regression scenario.
 def row(symbol, date='d', age='2', board='1', retreat=-4, r5=5):
     return {'symbol':symbol,'signal_date':date,'age':age,'board_height':board,
             'anchor_to_signal_pct':retreat,'r5':r5,'mae5':-3}
 
 
+# Regression scenario: matching excludes same stock from both sides.
 def test_matching_excludes_same_stock_from_both_sides():
     left=[row('shared'),row('left')]
     right=[row('shared',r5=-3),row('right',r5=-3),row('age1',age='1')]
@@ -24,6 +26,7 @@ def test_matching_excludes_same_stock_from_both_sides():
     assert result[0]['positive_pp']==100
 
 
+# Regression scenario: board and retreat controls use signal attributes.
 def test_board_and_retreat_controls_use_signal_attributes():
     left=[row('left')]
     right=[row('high',board='2'),row('deep',retreat=-12),row('ok',retreat=-5)]
@@ -32,6 +35,7 @@ def test_board_and_retreat_controls_use_signal_attributes():
     assert not m.pair_rows(left,[row('deep',retreat=-12)],retreat_tolerance=2)
 
 
+# Regression scenario: date weight is not pair count weight.
 def test_date_weight_is_not_pair_count_weight():
     strata=[{'date':'a','left_n':1,'right_n':100,'positive_pp':100,'mean_pp':5,'mae_pp':2},
             {'date':'b','left_n':1,'right_n':1,'positive_pp':-100,'mean_pp':-5,'mae_pp':-2}]
@@ -40,6 +44,7 @@ def test_date_weight_is_not_pair_count_weight():
     assert result['mean_pp_ci95'] is None
 
 
+# Regression scenario: price box ablation does not read volume.
 def test_price_box_ablation_does_not_read_volume():
     bars=[{'close':10,'high':10.1,'low':9.9,'volume':None} for _ in range(3)]
     assert m.price_box(bars)
@@ -48,6 +53,7 @@ def test_price_box_ablation_does_not_read_volume():
     assert not m.price_box(bars)
 
 
+# Regression scenario: changed snapshot refused without writing.
 def test_changed_snapshot_refused_without_writing(tmp_path):
     db=tmp_path/'test.sqlite'
     with sqlite3.connect(db) as c:

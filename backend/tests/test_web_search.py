@@ -5,10 +5,15 @@ from app.services.web_search import search_web
 
 
 class WebSearchTest(unittest.TestCase):
+    # Regression scenario: provider fallback returns structured evidence.
     def test_provider_fallback_returns_structured_evidence(self) -> None:
+        # Simulate the dependency failure required by this regression scenario so its error or
+        # fallback path is exercised.
         def failing_loader(_query: str, _limit: int):
             raise RuntimeError("provider unavailable")
 
+        # Prepare the working loader fixture or observation used by the surrounding regression
+        # scenario.
         def working_loader(_query: str, _limit: int):
             return [
                 WebSearchResult(

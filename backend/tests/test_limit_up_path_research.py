@@ -8,11 +8,13 @@ research = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(research)
 
 
+# Prepare the bar fixture or observation used by the surrounding regression scenario.
 def bar(close=10, **kw):
     return {"open": close, "close": close, "low": close - .2, "high": close + .2,
             "volume": 100, "source": "test", **kw}
 
 
+# Regression scenario: first and second board require previous event consistency.
 def test_first_and_second_board_require_previous_event_consistency():
     assert research.classify({"board_height": 1}, [bar()]) == ["first_board"]
     assert research.classify({"board_height": 2}, [bar()]) == []
@@ -21,6 +23,7 @@ def test_first_and_second_board_require_previous_event_consistency():
     assert research.classify({"board_height": 1}, [bar()], prev) == []
 
 
+# Regression scenario: stabilization requires two observed post anchor days.
 def test_stabilization_requires_two_observed_post_anchor_days():
     anchor = {"board_height": 1}
     window = [bar(10), bar(9.4), bar(9.5, low=9.2, high=9.6)]
@@ -28,6 +31,7 @@ def test_stabilization_requires_two_observed_post_anchor_days():
     assert "mild_stable" not in research.classify(anchor, window[:2])
 
 
+# Regression scenario: volume comparison does not cross source labels.
 def test_volume_comparison_does_not_cross_source_labels():
     anchor = {"board_height": 1}
     window = [bar(10, volume=200), bar(10), bar(10)]
@@ -36,6 +40,7 @@ def test_volume_comparison_does_not_cross_source_labels():
     assert "consolidation" not in research.classify(anchor, window)
 
 
+# Regression scenario: missing next day cannot be replaced by next available bar.
 def test_missing_next_day_cannot_be_replaced_by_next_available_bar():
     dates = [str(x) for x in range(7)]
     bars = {("s", d): bar() for d in dates if d != "1"}
@@ -47,6 +52,7 @@ def test_missing_next_day_cannot_be_replaced_by_next_available_bar():
     assert abs(result["r5"] - (10 / 9.9 - 1) * 100) < 1e-9
 
 
+# Regression scenario: immature is distinct from missing and discontinuity.
 def test_immature_is_distinct_from_missing_and_discontinuity():
     row = {"symbol": "s", "signal_date": "0"}
     assert research.attach_outcome(row, {}, ["0", "1"], {})["outcome_status"] == "immature"
@@ -54,6 +60,7 @@ def test_immature_is_distinct_from_missing_and_discontinuity():
     assert not research.price_break([bar(10), bar(10.9)])
 
 
+# Regression scenario: dedup keeps first even if its outcome is missing.
 def test_dedup_keeps_first_even_if_its_outcome_is_missing():
     common = {"symbol": "s", "anchor_date": "0", "tags": ["mild_raw"]}
     rows = [{**common, "signal_date": "1", "outcome_status": "missing_bar"},
@@ -63,7 +70,9 @@ def test_dedup_keeps_first_even_if_its_outcome_is_missing():
     assert len(research.nonoverlap(rows, [str(x) for x in range(8)])) == 1
 
 
+# Regression scenario: baseline matches exact date age and excludes self.
 def test_baseline_matches_exact_date_age_and_excludes_self():
+    # Prepare the row fixture or observation used by the surrounding regression scenario.
     def row(symbol, age=2, date="1", r5=3):
         return {"symbol": symbol, "age": age, "signal_date": date,
                 "r5": r5, "outcome_status": "complete"}
@@ -74,6 +83,7 @@ def test_baseline_matches_exact_date_age_and_excludes_self():
     assert signal["excess5"] == 6
 
 
+# Regression scenario: read only analysis has no future outcome input to classification.
 def test_read_only_analysis_has_no_future_outcome_input_to_classification():
     # A future change alters labels but cannot alter a separately fixed signal.
     anchor = {"board_height": 1}

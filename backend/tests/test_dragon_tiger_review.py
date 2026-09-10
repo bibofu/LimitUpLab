@@ -11,6 +11,7 @@ from app.services.dragon_tiger_review import (
 )
 
 
+# Build the HithinkDragonTigerFact fixture used by the surrounding regression scenario.
 def _fact(
     symbol: str,
     *,
@@ -38,6 +39,7 @@ def _fact(
     )
 
 
+# Build the LimitUpEvent fixture used by the surrounding regression scenario.
 def _event(symbol: str) -> LimitUpEvent:
     return LimitUpEvent(
         symbol=symbol,
@@ -62,6 +64,7 @@ def _event(symbol: str) -> LimitUpEvent:
     )
 
 
+# Regression scenario: build dragon tiger review deduplicates and links local event.
 def test_build_dragon_tiger_review_deduplicates_and_links_local_event() -> None:
     snapshot = HithinkDragonTigerSnapshot(
         trade_date=date(2026, 8, 25),
@@ -108,6 +111,7 @@ def test_build_dragon_tiger_review_deduplicates_and_links_local_event() -> None:
     )
 
 
+# Regression scenario: build dragon tiger review excludes st names.
 def test_build_dragon_tiger_review_excludes_st_names() -> None:
     snapshot = HithinkDragonTigerSnapshot(
         trade_date=date(2026, 8, 25),
@@ -132,6 +136,7 @@ def test_build_dragon_tiger_review_excludes_st_names() -> None:
     assert [item.symbol for item in response.items] == ["000001"]
 
 
+# Regression scenario: merge dragon tiger review enrichments updates matching snapshot.
 def test_merge_dragon_tiger_review_enrichments_updates_matching_snapshot() -> None:
     response = build_dragon_tiger_review(
         HithinkDragonTigerSnapshot(

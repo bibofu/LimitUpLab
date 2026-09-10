@@ -16,6 +16,7 @@ from app.services.scoring_policy_optimizer import (
 
 
 class ScoringPolicyOptimizerTest(unittest.TestCase):
+    # Regression scenario: default policy exposes explicit board shape and market cap weights.
     def test_default_policy_exposes_explicit_board_shape_and_market_cap_weights(self) -> None:
         policy = build_default_scoring_policy()
 
@@ -34,6 +35,7 @@ class ScoringPolicyOptimizerTest(unittest.TestCase):
             list(policy.factor_weights.values()),
         )
 
+    # Regression scenario: explicit challenger changes factor contribution.
     def test_explicit_challenger_changes_factor_contribution(self) -> None:
         baseline = build_default_scoring_policy()
         weights = dict(baseline.factor_weights)
@@ -60,6 +62,7 @@ class ScoringPolicyOptimizerTest(unittest.TestCase):
         self.assertEqual(challenger_response.generated_by, "test-challenger")
         self.assertNotEqual(challenger_response.candidates[0].score, baseline_score)
 
+    # Regression scenario: legacy default champion migrates to current default.
     def test_legacy_default_champion_migrates_to_current_default(self) -> None:
         database_path = (
             Path(__file__).resolve().parents[1]
@@ -88,6 +91,7 @@ class ScoringPolicyOptimizerTest(unittest.TestCase):
             "archived",
         )
 
+    # Regression scenario: walk forward registers but does not promote thin sample.
     def test_walk_forward_registers_but_does_not_promote_thin_sample(self) -> None:
         database_path = (
             Path(__file__).resolve().parents[1]
@@ -149,6 +153,7 @@ class ScoringPolicyOptimizerTest(unittest.TestCase):
             report.run_id,
         )
 
+    # Regression scenario: policy metrics make promotion lift explicit.
     def test_policy_metrics_make_promotion_lift_explicit(self) -> None:
         database_path = (
             Path(__file__).resolve().parents[1]
@@ -177,6 +182,7 @@ class ScoringPolicyOptimizerTest(unittest.TestCase):
         self.assertEqual(metrics.promotion_rate_lift, 0.75)
         self.assertIsNotNone(metrics.objective_score)
 
+    # Regression scenario: promotion metrics do not depend on return cache coverage.
     def test_promotion_metrics_do_not_depend_on_return_cache_coverage(self) -> None:
         database_path = (
             Path(__file__).resolve().parents[1]
@@ -213,6 +219,7 @@ class ScoringPolicyOptimizerTest(unittest.TestCase):
         self.assertEqual(metrics.promoted_to_second_board_rate, 1.0)
         self.assertEqual(metrics.pool_promoted_to_second_board_rate, 0.25)
 
+    # Release the temporary resources owned by this test fixture.
     @staticmethod
     def _cleanup_database(database_path: Path) -> None:
         for path in (
@@ -222,6 +229,7 @@ class ScoringPolicyOptimizerTest(unittest.TestCase):
         ):
             path.unlink(missing_ok=True)
 
+    # Prepare the history fixture or observation used by the surrounding regression scenario.
     @staticmethod
     def _history(days: int) -> tuple[list[LimitUpEvent], list[FirstBoardOutcome]]:
         events: list[LimitUpEvent] = []

@@ -92,6 +92,7 @@ def parse_question_bank(path: Path) -> list[Question]:
     return questions
 
 
+# Extract selected capabilities from the planner trace for question-bank reporting.
 def _planner_capabilities(response: Any) -> list[str]:
     for trace in response.tool_results:
         if trace.name == "llm_tool_planner":
@@ -100,6 +101,7 @@ def _planner_capabilities(response: Any) -> list[str]:
     return []
 
 
+# Build conversation-message objects from recorded turns for replay or evaluation.
 def _conversation_messages(
     *,
     session_id: str,
@@ -128,6 +130,9 @@ def _conversation_messages(
     ]
 
 
+# Compute the requested percentile using nearest-rank selection over measured values.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _nearest_rank(values: list[int], proportion: float) -> int | None:
     if not values:
         return None
@@ -156,6 +161,7 @@ def build_summary(results: list[dict[str, Any]]) -> dict[str, Any]:
     }
 
 
+# Render a measured duration for the question-bank report.
 def _format_duration(duration_ms: int | None) -> str:
     if duration_ms is None:
         return "—"
@@ -246,6 +252,8 @@ def save_report(report: dict[str, Any], json_path: Path, markdown_path: Path) ->
     markdown_tmp.replace(markdown_path)
 
 
+# Load the question bank, execute the configured planner/chat evaluation and export the result
+# report.
 def main() -> None:
     parser = argparse.ArgumentParser(
         description="Run a Markdown question bank through the production chat Agent."
@@ -431,6 +439,7 @@ def main() -> None:
                 }
             )
             print(f"    error after {wall_duration_ms}ms: {error}", flush=True)
+        # The key compares `int(item['number'])`.
         report["results"].sort(key=lambda item: int(item["number"]))
         save_report(report, json_path, markdown_path)
 

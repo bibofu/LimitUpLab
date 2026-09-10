@@ -12,11 +12,15 @@ from app.services.sector_stock_ranking import build_sector_stock_ranking
 
 
 class FakeSectorCollector:
+    # Provide controlled source data for the surrounding test without relying on a live data
+    # service.
     def collect_index_catalog(self, category: str):
         if category == "industry":
             return [HithinkIndexCatalogFact("881164.TI", "游戏", "industry")]
         return [HithinkIndexCatalogFact("885946.TI", "云游戏", "cn_concept")]
 
+    # Provide controlled source data for the surrounding test without relying on a live data
+    # service.
     def collect_index_constituents(self, index):
         self.selected = index
         return [
@@ -27,6 +31,8 @@ class FakeSectorCollector:
 
 
 class LargeFakeSectorCollector(FakeSectorCollector):
+    # Provide controlled source data for the surrounding test without relying on a live data
+    # service.
     def collect_index_constituents(self, index):
         self.selected = index
         return [
@@ -38,6 +44,7 @@ class LargeFakeSectorCollector(FakeSectorCollector):
             for index in range(1, 51)
         ]
 
+    # Build the HithinkMarketSnapshot fixture used by the surrounding regression scenario.
     def collect_market_snapshots(self, thscodes):
         return HithinkMarketSnapshot(
             captured_at=datetime(2026, 9, 1, 8, tzinfo=timezone.utc),
@@ -54,6 +61,7 @@ class LargeFakeSectorCollector(FakeSectorCollector):
         )
 
 
+# Build the StockKLineFacts fixture used by the surrounding regression scenario.
 def fake_kline_builder(*, symbol, days, end_date, repository):
     del repository
     values = {
@@ -81,6 +89,7 @@ def fake_kline_builder(*, symbol, days, end_date, repository):
 
 
 class SectorStockRankingTests(unittest.TestCase):
+    # Regression scenario: resolves exact industry and ranks completed trends.
     def test_resolves_exact_industry_and_ranks_completed_trends(self):
         collector = FakeSectorCollector()
         result = build_sector_stock_ranking(
@@ -101,9 +110,11 @@ class SectorStockRankingTests(unittest.TestCase):
         self.assertEqual([item.symbol for item in result.items], ["000001", "000002"])
         self.assertGreater(result.items[0].trend_score, result.items[1].trend_score)
 
+    # Regression scenario: default top ten only analyzes a bounded shortlist.
     def test_default_top_ten_only_analyzes_a_bounded_shortlist(self):
         loaded_symbols: list[str] = []
 
+        # Build the StockKLineFacts fixture used by the surrounding regression scenario.
         def bounded_builder(*, symbol, days, end_date, repository):
             del repository
             loaded_symbols.append(symbol)
@@ -138,6 +149,7 @@ class SectorStockRankingTests(unittest.TestCase):
         self.assertEqual(set(loaded_symbols), {f"{index:06d}" for index in range(31, 51)})
         self.assertTrue(any("控制响应耗时" in item for item in result.warnings))
 
+    # Regression scenario: rejects unknown sector instead of guessing.
     def test_rejects_unknown_sector_instead_of_guessing(self):
         with self.assertRaisesRegex(ValueError, "未找到"):
             build_sector_stock_ranking(

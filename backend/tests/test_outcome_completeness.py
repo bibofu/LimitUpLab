@@ -12,6 +12,7 @@ from scripts.update_daily_data import backfill_recent_daily_top_candidate_bars
 
 
 class OutcomeCompletenessTest(unittest.TestCase):
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         self.database_path = (
             Path(__file__).resolve().parents[1]
@@ -41,6 +42,7 @@ class OutcomeCompletenessTest(unittest.TestCase):
             created_at=datetime.combine(self.trade_dates[0], time(8), timezone.utc),
         )
 
+    # Release the test resources and restore the environment after this test scope.
     def tearDown(self) -> None:
         for path in (
             self.database_path,
@@ -49,6 +51,7 @@ class OutcomeCompletenessTest(unittest.TestCase):
         ):
             path.unlink(missing_ok=True)
 
+    # Regression scenario: missing exact d1 is not relabelled from later bar.
     def test_missing_exact_d1_is_not_relabelled_from_later_bar(self) -> None:
         bars = [
             self._bar(item)
@@ -67,6 +70,7 @@ class OutcomeCompletenessTest(unittest.TestCase):
         self.assertIsNone(outcome.next_trade_date)
         self.assertFalse(outcome.three_day_ready)
 
+    # Regression scenario: report recovers after missing bar is backfilled.
     def test_report_recovers_after_missing_bar_is_backfilled(self) -> None:
         incomplete_bars = [
             self._bar(item)
@@ -115,6 +119,7 @@ class OutcomeCompletenessTest(unittest.TestCase):
         self.assertEqual(complete.d5_ready_count, 1)
         self.assertEqual(complete.missing_case_count, 0)
 
+    # Regression scenario: daily backfill retries partial case outside recent six dates.
     def test_daily_backfill_retries_partial_case_outside_recent_six_dates(self) -> None:
         extra_date = date(2026, 8, 18)
         events = [*self.events, self._event("000107", extra_date)]
@@ -131,6 +136,8 @@ class OutcomeCompletenessTest(unittest.TestCase):
             ]
         )
 
+        # The inline callback supplies the fixture value or replacement behavior used by this
+        # test; it is evaluated only when the code under test calls it.
         result = backfill_recent_daily_top_candidate_bars(
             events=events,
             first_board_repository=self.repository,
@@ -149,6 +156,7 @@ class OutcomeCompletenessTest(unittest.TestCase):
         self.assertEqual(result["five_day_paths_ready"], 1)
         self.assertEqual(result["outcome_completeness"]["status"], "healthy")
 
+    # Prepare the report fixture or observation used by the surrounding regression scenario.
     def _report(self):
         return build_top10_outcome_completeness(
             events=self.events,
@@ -158,6 +166,7 @@ class OutcomeCompletenessTest(unittest.TestCase):
             top_per_day=10,
         )
 
+    # Build the LimitUpEvent fixture used by the surrounding regression scenario.
     def _event(self, symbol: str, trade_date: date) -> LimitUpEvent:
         return LimitUpEvent(
             symbol=symbol,
@@ -181,6 +190,7 @@ class OutcomeCompletenessTest(unittest.TestCase):
             continued_next_day=False,
         )
 
+    # Build the StockDailyBar fixture used by the surrounding regression scenario.
     def _bar(self, trade_date: date) -> StockDailyBar:
         offset = self.trade_dates.index(trade_date)
         return StockDailyBar(

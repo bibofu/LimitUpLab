@@ -24,12 +24,14 @@ from app.services.recommendation_intelligence import (
 
 
 class RecommendationIntelligenceTest(unittest.TestCase):
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         self.database_path = Path(__file__).resolve().parents[1] / f"relay-{uuid4().hex}.sqlite"
         self.first_repo = SQLiteFirstBoardRepository(self.database_path)
         self.limit_repo = SQLiteLimitUpRepository(self.database_path, seed_if_empty=False)
         self.snapshot_repo = SQLiteRecommendationIntelligenceRepository(self.database_path)
 
+    # Release the test resources and restore the environment after this test scope.
     def tearDown(self) -> None:
         for path in (
             self.database_path,
@@ -38,6 +40,7 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         ):
             path.unlink(missing_ok=True)
 
+    # Regression scenario: refresh is relay only.
     def test_refresh_is_relay_only(self) -> None:
         now = datetime(2026, 8, 31, 8, tzinfo=timezone.utc)
         candidate = _BaseCandidate(
@@ -55,6 +58,8 @@ class RecommendationIntelligenceTest(unittest.TestCase):
             "app.services.recommendation_intelligence._load_base_candidates",
             return_value=([candidate], date(2026, 8, 31), []),
         ):
+            # The inline callback supplies the fixture value or replacement behavior used by this
+            # test; it is evaluated only when the code under test calls it.
             response = refresh_recommendation_intelligence(
                 now=now,
                 max_workers=1,
@@ -73,6 +78,7 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         self.assertEqual(response.relay_base_date, date(2026, 8, 31))
         self.assertFalse(hasattr(response, "discovery_base_date"))
 
+    # Regression scenario: existing close draft is not refreshed before target day 0800.
     def test_existing_close_draft_is_not_refreshed_before_target_day_0800(self) -> None:
         base_date = date(2026, 8, 31)
         target_date = date(2026, 9, 1)
@@ -96,6 +102,8 @@ class RecommendationIntelligenceTest(unittest.TestCase):
             "app.services.recommendation_intelligence._load_base_candidates",
             return_value=([candidate], base_date, []),
         ):
+            # The inline callback supplies the fixture value or replacement behavior used by this
+            # test; it is evaluated only when the code under test calls it.
             response = refresh_recommendation_intelligence(
                 now=datetime.fromisoformat("2026-08-31T22:00:00+08:00"),
                 limit_up_repository=self.limit_repo,
@@ -109,6 +117,7 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         self.assertEqual(response.refresh_id, "close-draft")
         self.assertEqual(response.refreshed_at, close_time)
 
+    # Regression scenario: discovery item is rejected by public model.
     def test_discovery_item_is_rejected_by_public_model(self) -> None:
         with self.assertRaises(ValidationError):
             RecommendationIntelligenceItem(
@@ -121,6 +130,7 @@ class RecommendationIntelligenceTest(unittest.TestCase):
                 refreshed_at=datetime.now(timezone.utc),
             )
 
+    # Regression scenario: legacy snapshot fields are normalized before display.
     def test_legacy_snapshot_fields_are_normalized_before_display(self) -> None:
         snapshot_at = datetime(2026, 9, 7, 16, tzinfo=timezone.utc)
         legacy_item = {
@@ -151,6 +161,7 @@ class RecommendationIntelligenceTest(unittest.TestCase):
                 self.assertEqual(item["update_reasons"], [])
                 self.assertEqual(item["data_missing"], [])
 
+    # Regression scenario: latest displayable falls back when missed cutoff has no items.
     def test_latest_displayable_falls_back_when_missed_cutoff_has_no_items(self) -> None:
         snapshot_at = datetime(2026, 9, 7, 16, tzinfo=timezone.utc)
         candidate = RecommendationIntelligenceItem(

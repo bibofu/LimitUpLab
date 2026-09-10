@@ -15,6 +15,7 @@ from scripts.run_agent_question_bank import parse_question_bank, render_markdown
 
 
 class AgentQuestionBankRunnerTest(unittest.TestCase):
+    # Regression scenario: question bank fixture parses numbered questions.
     def test_question_bank_fixture_parses_numbered_questions(self) -> None:
         questions = parse_question_bank(
             BACKEND_ROOT / "tests" / "fixtures" / "agent_question_bank_sample.md"
@@ -29,6 +30,7 @@ class AgentQuestionBankRunnerTest(unittest.TestCase):
         self.assertEqual(questions[-1].section, "评分解释")
         self.assertIn("评分系统", questions[-1].text)
 
+    # Regression scenario: markdown report keeps complete answer and latency.
     def test_markdown_report_keeps_complete_answer_and_latency(self) -> None:
         report = {
             "started_at": "2026-09-03T09:00:00+00:00",

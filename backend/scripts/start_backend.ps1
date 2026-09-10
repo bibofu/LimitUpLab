@@ -9,6 +9,8 @@ $ErrorActionPreference = "Stop"
 $BackendRoot = Split-Path -Parent $PSScriptRoot
 Set-Location $BackendRoot
 
+# Fill a process-local setting only when the caller has not already supplied it.
+# Reading persisted keys below does not print or rewrite the user's saved secret.
 function Set-EnvIfMissing {
     param(
         [string]$Name,
@@ -34,6 +36,8 @@ if ($apiKey) {
     Set-EnvIfMissing "LIMITUPLAB_LLM_MODEL" "deepseek-v4-flash"
 }
 
+# Probe a local proxy with a short timeout. Always dispose the socket, including
+# failed probes, so startup does not leave connections open while trying ports.
 function Test-LocalProxyPort {
     param([int]$ProxyPort)
     $client = [System.Net.Sockets.TcpClient]::new()

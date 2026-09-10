@@ -31,6 +31,7 @@ TEST_TMP_ROOT = Path(os.getenv("LIMITUPLAB_TEST_TMP", Path(__file__).resolve().p
 class FactorSignalStatsTest(unittest.TestCase):
     """Pure-statistics helpers, no DB and no rating engine."""
 
+    # Regression scenario: spearman recovers perfect monotone.
     def test_spearman_recovers_perfect_monotone(self) -> None:
         x = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0])
         y = np.array([3.0, 5.0, 7.0, 9.0, 11.0, 13.0, 15.0, 17.0])
@@ -38,6 +39,7 @@ class FactorSignalStatsTest(unittest.TestCase):
         self.assertIsNotNone(rho)
         self.assertAlmostEqual(rho, 1.0, places=6)
 
+    # Regression scenario: sign flip detects consistent daily ic.
     def test_sign_flip_detects_consistent_daily_ic(self) -> None:
         p = sign_flip_p_value(
             np.array([0.8] * 12),
@@ -47,22 +49,26 @@ class FactorSignalStatsTest(unittest.TestCase):
         self.assertIsNotNone(p)
         self.assertLess(p, 0.01)
 
+    # Regression scenario: spearman inverse is negative.
     def test_spearman_inverse_is_negative(self) -> None:
         x = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0])
         y = np.array([6.0, 5.0, 4.0, 3.0, 2.0, 1.0])
         rho = spearman_rho(x, y)
         self.assertAlmostEqual(rho, -1.0, places=6)
 
+    # Regression scenario: spearman constant column is none.
     def test_spearman_constant_column_is_none(self) -> None:
         x = np.array([2.0, 2.0, 2.0, 2.0])
         y = np.array([1.0, 2.0, 3.0, 4.0])
         self.assertIsNone(spearman_rho(x, y))
 
+    # Regression scenario: average ranks handles ties.
     def test_average_ranks_handles_ties(self) -> None:
         ranks = _average_ranks(np.array([10.0, 10.0, 20.0, 10.0, 30.0]))
         # 10 appears 3 times -> ranks 1,2,3 average to 2.0; 20 -> 4; 30 -> 5.
         np.testing.assert_allclose(ranks, np.array([2.0, 2.0, 4.0, 2.0, 5.0]))
 
+    # Regression scenario: tercile spread direction.
     def test_tercile_spread_direction(self) -> None:
         factor = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0])
         outcome = np.array([1.0, 2.0, 3.0, 4.0, 5.0, 6.0, 7.0, 8.0, 9.0])
@@ -75,6 +81,7 @@ class FactorSignalStatsTest(unittest.TestCase):
         self.assertAlmostEqual(bottom_mean, 2.0)
         self.assertAlmostEqual(spread, 6.0)
 
+    # Regression scenario: tercile spread keeps ties in same group.
     def test_tercile_spread_keeps_ties_in_same_group(self) -> None:
         factor = np.array([1.0, 1.0, 1.0, 1.0, 2.0, 2.0])
         outcome = np.array([-2.0, -1.0, 0.0, 1.0, 4.0, 6.0])
@@ -87,6 +94,7 @@ class FactorSignalStatsTest(unittest.TestCase):
         self.assertAlmostEqual(bottom_mean, -0.5)
         self.assertAlmostEqual(spread, 5.5)
 
+    # Regression scenario: lasso keeps signal drops noise.
     def test_lasso_keeps_signal_drops_noise(self) -> None:
         rng = np.random.default_rng(7)
         signal = rng.normal(size=40)
@@ -99,6 +107,7 @@ class FactorSignalStatsTest(unittest.TestCase):
         self.assertGreater(abs(beta[0]), 1e-3)
         self.assertLess(abs(beta[1]), 1e-3)
 
+    # Regression scenario: joint signal changes verdict without single factor signal.
     def test_joint_signal_changes_verdict_without_single_factor_signal(self) -> None:
         factor_row = FactorSignalDiagnosticRow(
             factor_key="example",
@@ -145,12 +154,16 @@ class FactorSignalStatsTest(unittest.TestCase):
 class FactorSignalDiagnosticIntegrationTest(unittest.TestCase):
     """End-to-end over a temp SQLite DB with a planted monotone signal."""
 
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         TEST_TMP_ROOT.mkdir(exist_ok=True)
 
+    # Prepare the database path fixture or observation used by the surrounding regression
+    # scenario.
     def _database_path(self) -> Path:
         return TEST_TMP_ROOT / f"factor-signal-{uuid4().hex}.sqlite"
 
+    # Release the temporary resources owned by this test fixture.
     def _cleanup_database(self, database_path: Path) -> None:
         for path in (
             database_path,
@@ -159,6 +172,7 @@ class FactorSignalDiagnosticIntegrationTest(unittest.TestCase):
         ):
             path.unlink(missing_ok=True)
 
+    # Build the LimitUpEvent fixture used by the surrounding regression scenario.
     def _event(
         self,
         symbol: str,
@@ -188,6 +202,7 @@ class FactorSignalDiagnosticIntegrationTest(unittest.TestCase):
             continued_next_day=False,
         )
 
+    # Build the FirstBoardOutcome fixture used by the surrounding regression scenario.
     def _make_outcome(
         self,
         symbol: str,
@@ -218,6 +233,7 @@ class FactorSignalDiagnosticIntegrationTest(unittest.TestCase):
             created_at=datetime.now(timezone.utc),
         )
 
+    # Regression scenario: diagnostic detects planted signal.
     def test_diagnostic_detects_planted_signal(self) -> None:
         database_path = self._database_path()
         try:
@@ -289,6 +305,7 @@ class FactorSignalDiagnosticIntegrationTest(unittest.TestCase):
         finally:
             self._cleanup_database(database_path)
 
+    # Regression scenario: trade date count excludes dates without ready outcome.
     def test_trade_date_count_excludes_dates_without_ready_outcome(self) -> None:
         database_path = self._database_path()
         try:
@@ -316,6 +333,7 @@ class FactorSignalDiagnosticIntegrationTest(unittest.TestCase):
         finally:
             self._cleanup_database(database_path)
 
+    # Regression scenario: diagnostic too few samples is honest.
     def test_diagnostic_too_few_samples_is_honest(self) -> None:
         database_path = self._database_path()
         try:

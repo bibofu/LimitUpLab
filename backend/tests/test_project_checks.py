@@ -11,6 +11,7 @@ sys.modules[spec.name] = checks
 spec.loader.exec_module(checks)
 
 
+# Regression scenario: failure is reported and later independent gate still runs.
 def test_failure_is_reported_and_later_independent_gate_still_runs(tmp_path):
     commands = [
         checks.Check("bad", [sys.executable, "-c", "raise SystemExit(7)"], tmp_path),
@@ -23,6 +24,7 @@ def test_failure_is_reported_and_later_independent_gate_still_runs(tmp_path):
     assert (tmp_path / "summary.json").is_file()
 
 
+# Regression scenario: missing executable is a failed gate.
 def test_missing_executable_is_a_failed_gate(tmp_path):
     command = checks.Check("missing", [str(tmp_path / "no-such-executable")], tmp_path)
     report = checks.run_checks([command], tmp_path, dict(os.environ), 10)
@@ -30,6 +32,7 @@ def test_missing_executable_is_a_failed_gate(tmp_path):
     assert report["checks"][0]["error"]
 
 
+# Regression scenario: backend gates use offline eval and report local paths.
 def test_backend_gates_use_offline_eval_and_report_local_paths(tmp_path):
     plan = checks.build_checks("backend", tmp_path)
     assert [item.name for item in plan] == ["pytest", "eval-core", "eval-product"]

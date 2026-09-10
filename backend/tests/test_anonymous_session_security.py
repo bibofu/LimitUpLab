@@ -21,6 +21,7 @@ from app.security import (
 
 
 class AnonymousSessionSecurityTest(unittest.TestCase):
+    # Regression scenario: admin access rejects missing and invalid keys.
     def test_admin_access_rejects_missing_and_invalid_keys(self) -> None:
         with patch.dict(
             os.environ,
@@ -47,6 +48,7 @@ class AnonymousSessionSecurityTest(unittest.TestCase):
             "ApiKey",
         )
 
+    # Regression scenario: production admin key must be strong and independent.
     def test_production_admin_key_must_be_strong_and_independent(self) -> None:
         with patch.dict(
             os.environ,
@@ -60,6 +62,7 @@ class AnonymousSessionSecurityTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 validate_admin_security()
 
+    # Regression scenario: sensitive routes require the admin dependency.
     def test_sensitive_routes_require_the_admin_dependency(self) -> None:
         protected_paths = {
             "/scoring-policies",
@@ -99,6 +102,7 @@ class AnonymousSessionSecurityTest(unittest.TestCase):
 
         self.assertEqual(ADMIN_API_KEY_HEADER, "X-LimitUpLab-Admin-Key")
 
+    # Regression scenario: signed owner token rejects tampering.
     def test_signed_owner_token_rejects_tampering(self) -> None:
         owner_id = "visitor_0123456789abcdef0123456789abcdef"
         with patch.dict(
@@ -115,6 +119,7 @@ class AnonymousSessionSecurityTest(unittest.TestCase):
             self.assertIsNone(verify_visitor_token(f"{token}x"))
             self.assertFalse(resolve_visitor_identity(f"{token}x").owner_id == owner_id)
 
+    # Regression scenario: production requires a strong session secret.
     def test_production_requires_a_strong_session_secret(self) -> None:
         with patch.dict(
             os.environ,
@@ -127,14 +132,18 @@ class AnonymousSessionSecurityTest(unittest.TestCase):
             with self.assertRaises(RuntimeError):
                 validate_session_security()
 
+    # Regression scenario: middleware sets http only cookie and reuses identity.
     def test_middleware_sets_http_only_cookie_and_reuses_identity(self) -> None:
         captured_owner_ids: list[str] = []
 
+        # Prepare the downstream fixture or observation used by the surrounding regression
+        # scenario.
         async def downstream(scope, _receive, send) -> None:
             captured_owner_ids.append(scope["state"]["owner_id"])
             await send({"type": "http.response.start", "status": 200, "headers": []})
             await send({"type": "http.response.body", "body": b"ok"})
 
+        # Prepare the request fixture or observation used by the surrounding regression scenario.
         async def request(
             cookie_header: str = "",
             *,
@@ -143,9 +152,12 @@ class AnonymousSessionSecurityTest(unittest.TestCase):
         ) -> list[dict]:
             sent: list[dict] = []
 
+            # Prepare the receive fixture or observation used by the surrounding regression
+            # scenario.
             async def receive() -> dict:
                 return {"type": "http.request", "body": b"", "more_body": False}
 
+            # Prepare the send fixture or observation used by the surrounding regression scenario.
             async def send(message: dict) -> None:
                 sent.append(message)
 

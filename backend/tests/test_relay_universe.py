@@ -4,6 +4,7 @@ from app.services.relay_universe import is_relay_candidate_symbol
 
 
 class RelayUniverseTest(unittest.TestCase):
+    # Regression scenario: excludes chinext and keeps supported a share boards.
     def test_excludes_chinext_and_keeps_supported_a_share_boards(self) -> None:
         self.assertFalse(is_relay_candidate_symbol("300189"))
         self.assertFalse(is_relay_candidate_symbol("301489"))

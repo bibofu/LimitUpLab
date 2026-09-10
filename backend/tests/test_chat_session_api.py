@@ -25,6 +25,7 @@ from app.routers.agents import (
 
 
 class ChatSessionApiTest(unittest.TestCase):
+    # Regression scenario: session lifecycle and message restore.
     def test_session_lifecycle_and_message_restore(self) -> None:
         owner_id = "visitor_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         other_owner_id = "visitor_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"

@@ -103,6 +103,7 @@ def _apply_user_api_key() -> None:
     hydrate_windows_environment(("DEEPSEEK_API_KEY", "OPENAI_API_KEY"))
 
 
+# Aggregate stored usage over the requested interval and optional owner scope.
 def _summary(report: dict) -> dict:
     after = report["after"]
     update = report["update_report"]

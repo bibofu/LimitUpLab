@@ -29,12 +29,16 @@ TEST_TMP_ROOT = Path(
 
 
 class DailyUpdatePipelineTest(unittest.TestCase):
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         TEST_TMP_ROOT.mkdir(exist_ok=True)
 
+    # Prepare the database path fixture or observation used by the surrounding regression
+    # scenario.
     def _database_path(self) -> Path:
         return TEST_TMP_ROOT / f"daily-update-test-{uuid4().hex}.sqlite"
 
+    # Release the temporary resources owned by this test fixture.
     def _cleanup_database(self, database_path: Path) -> None:
         for path in (
             database_path,
@@ -43,6 +47,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
         ):
             path.unlink(missing_ok=True)
 
+    # Build the LimitUpEvent fixture used by the surrounding regression scenario.
     def _make_event(
         self,
         symbol: str,
@@ -73,6 +78,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             continued_next_day=False,
         )
 
+    # Regression scenario: skip import syncs features and health report.
     def test_skip_import_syncs_features_and_health_report(self) -> None:
         database_path = self._database_path()
         try:
@@ -85,6 +91,8 @@ class DailyUpdatePipelineTest(unittest.TestCase):
                 ]
             )
 
+            # The inline callback supplies the fixture value or replacement behavior used by this
+            # test; it is evaluated only when the code under test calls it.
             report = run_daily_update(
                 trade_date=trade_date,
                 history_days=60,
@@ -108,6 +116,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
         finally:
             self._cleanup_database(database_path)
 
+    # Regression scenario: intraday warmup covers every latest pool symbol.
     def test_intraday_warmup_covers_every_latest_pool_symbol(self) -> None:
         database_path = self._database_path()
         trade_date = date(2026, 8, 10)
@@ -120,6 +129,8 @@ class DailyUpdatePipelineTest(unittest.TestCase):
         ]
         loaded: list[str] = []
 
+        # Provide controlled source data for the surrounding test without relying on a live data
+        # service.
         def loader(*, symbol: str, **_kwargs):
             loaded.append(symbol)
             return [] if symbol == "000001" else [object()]
@@ -141,6 +152,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
         finally:
             self._cleanup_database(database_path)
 
+    # Regression scenario: missing raw events reports unhealthy state.
     def test_missing_raw_events_reports_unhealthy_state(self) -> None:
         database_path = self._database_path()
         try:
@@ -158,6 +170,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
         finally:
             self._cleanup_database(database_path)
 
+    # Regression scenario: late target is persisted as historical backtest.
     def test_late_target_is_persisted_as_historical_backtest(self) -> None:
         database_path = self._database_path()
         try:
@@ -168,6 +181,8 @@ class DailyUpdatePipelineTest(unittest.TestCase):
                 [self._make_event("002298", "\u4e2d\u7535\u946b\u9f99", trade_date)]
             )
 
+            # The inline callback supplies the fixture value or replacement behavior used by this
+            # test; it is evaluated only when the code under test calls it.
             report = run_daily_update(
                 trade_date=trade_date,
                 top_targets=1,
@@ -191,6 +206,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
         finally:
             self._cleanup_database(database_path)
 
+    # Regression scenario: repeated latest update does not rewrite live predictions.
     def test_repeated_latest_update_does_not_rewrite_live_predictions(self) -> None:
         database_path = self._database_path()
         try:
@@ -200,6 +216,8 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             limit_repo.upsert_events(
                 [self._make_event("002298", "candidate", trade_date)]
             )
+            # The inline callback supplies the fixture value or replacement behavior used by this
+            # test; it is evaluated only when the code under test calls it.
             kwargs = {
                 "trade_date": trade_date,
                 "now": datetime.combine(trade_date, time(8), timezone.utc),
@@ -231,6 +249,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
         finally:
             self._cleanup_database(database_path)
 
+    # Regression scenario: import reports tonghuashun limit up count difference.
     @patch("scripts.update_daily_data.collect_limit_up_events")
     def test_import_reports_tonghuashun_limit_up_count_difference(
         self,
@@ -245,6 +264,8 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             payload=[self._make_event("002491", "通鼎互联", trade_date)],
         )
         try:
+            # The inline callback supplies the fixture value or replacement behavior used by this
+            # test; it is evaluated only when the code under test calls it.
             report = run_daily_update(
                 trade_date=trade_date,
                 top_targets=0,
@@ -291,6 +312,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
         finally:
             self._cleanup_database(database_path)
 
+    # Regression scenario: partial import does not delete existing date rows.
     @patch("scripts.update_daily_data.collect_limit_up_events")
     def test_partial_import_does_not_delete_existing_date_rows(
         self,
@@ -315,10 +337,14 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             payload=[partial_event],
         )
 
+        # Simulate the dependency failure required by this regression scenario so its error or
+        # fallback path is exercised.
         def unavailable_remote(_trade_date):
             raise RuntimeError("remote verification unavailable")
 
         try:
+            # The inline callback supplies the fixture value or replacement behavior used by this
+            # test; it is evaluated only when the code under test calls it.
             report = run_daily_update(
                 trade_date=trade_date,
                 replace_date=True,
@@ -341,6 +367,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
         finally:
             self._cleanup_database(database_path)
 
+    # Regression scenario: post bar collection includes as of date.
     @patch("scripts.update_daily_data.collect_stock_kline")
     def test_post_bar_collection_includes_as_of_date(self, collect_kline) -> None:
         base_date = date(2026, 8, 17)
@@ -362,6 +389,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
         self.assertEqual([item.trade_date for item in bars], [base_date, as_of_date])
         self.assertEqual(collect_kline.call_args.kwargs["end_date"], as_of_date)
 
+    # Regression scenario: post limit cache backfills twenty session history.
     def test_post_limit_cache_backfills_twenty_session_history(self) -> None:
         database_path = self._database_path()
         try:
@@ -375,6 +403,8 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             events = [self._make_event("999999", "calendar", day) for day in trade_dates]
             events.append(self._make_event("600001", "research", trade_dates[-1]))
 
+            # Provide controlled source data for the surrounding test without relying on a live
+            # data service.
             def history_collector(symbol, *, days, end_date):
                 self.assertEqual(symbol, "600001")
                 self.assertEqual(days, 35)
@@ -406,6 +436,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
         finally:
             self._cleanup_database(database_path)
 
+    # Regression scenario: post limit cache uses seven days and same provider close snapshot.
     def test_post_limit_cache_uses_seven_days_and_same_provider_close_snapshot(self) -> None:
         database_path = self._database_path()
         try:
@@ -424,6 +455,8 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             )
             spot_batches: list[list[str]] = []
 
+            # Provide controlled source data for the surrounding test without relying on a live
+            # data service.
             def history_collector(_symbol, *, days, end_date):
                 self.assertEqual(days, 35)
                 self.assertEqual(end_date, trade_dates[-1])
@@ -436,6 +469,8 @@ class DailyUpdatePipelineTest(unittest.TestCase):
                     for day in trade_dates[:-1]
                 ]
 
+            # Provide controlled source data for the surrounding test without relying on a live
+            # data service.
             def spot_collector(batch, requested_date):
                 spot_batches.append(batch)
                 self.assertEqual(requested_date, trade_dates[-1])
@@ -469,6 +504,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
         finally:
             self._cleanup_database(database_path)
 
+    # Regression scenario: recent daily top picks cache all available follow up bars.
     def test_recent_daily_top_picks_cache_all_available_follow_up_bars(self) -> None:
         database_path = self._database_path()
         try:
@@ -493,6 +529,8 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             ]
             limit_repo.upsert_events(events)
 
+            # Prepare the fake bar collector fixture or observation used by the surrounding
+            # regression scenario.
             def fake_bar_collector(
                 symbol: str,
                 base_date: date,

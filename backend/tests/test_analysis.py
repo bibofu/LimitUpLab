@@ -18,15 +18,18 @@ from app.services.sample_data import SAMPLE_EVENTS
 
 
 class AnalysisTest(unittest.TestCase):
+    # Regression scenario: latest trade date.
     def test_latest_trade_date(self) -> None:
         self.assertEqual(latest_trade_date(SAMPLE_EVENTS), date(2026, 5, 15))
 
+    # Regression scenario: events for latest date.
     def test_events_for_latest_date(self) -> None:
         events = events_for_date(SAMPLE_EVENTS)
 
         self.assertEqual(len(events), 5)
         self.assertTrue(all(event.trade_date == date(2026, 5, 15) for event in events))
 
+    # Regression scenario: find stock event supports latest and exact date.
     def test_find_stock_event_supports_latest_and_exact_date(self) -> None:
         repeated = SAMPLE_EVENTS[0].model_copy(
             update={"trade_date": date(2026, 5, 14), "board_height": 2}
@@ -44,6 +47,7 @@ class AnalysisTest(unittest.TestCase):
         self.assertEqual(historical, repeated)
         self.assertIsNone(find_stock_event(events, "999999"))
 
+    # Regression scenario: summarize market.
     def test_summarize_market(self) -> None:
         summary = summarize_market(SAMPLE_EVENTS)
 
@@ -55,16 +59,19 @@ class AnalysisTest(unittest.TestCase):
         self.assertEqual(summary.failed_limit_up_rate, 0.8)
         self.assertEqual(summary.max_board_height, 4)
 
+    # Regression scenario: first board list.
     def test_first_board_list(self) -> None:
         symbols = [event.symbol for event in list_first_board(SAMPLE_EVENTS)]
 
         self.assertEqual(symbols, ["301489"])
 
+    # Regression scenario: continued board list.
     def test_continued_board_list(self) -> None:
         symbols = [event.symbol for event in list_continued_board(SAMPLE_EVENTS)]
 
         self.assertEqual(symbols, ["600519", "002230"])
 
+    # Regression scenario: failed events list.
     def test_failed_events_list(self) -> None:
         events = list_failed_events(SAMPLE_EVENTS)
         symbols = [event.symbol for event in events]
@@ -72,6 +79,7 @@ class AnalysisTest(unittest.TestCase):
         self.assertEqual(symbols, ["603083", "002050"])
         self.assertTrue(all(not event.closed_limit for event in events))
 
+    # Regression scenario: recent limit up uses trading days.
     def test_recent_limit_up_uses_trading_days(self) -> None:
         events = list_recent_limit_up(SAMPLE_EVENTS, days=2)
         trade_dates = {event.trade_date for event in events}
@@ -79,6 +87,7 @@ class AnalysisTest(unittest.TestCase):
         self.assertEqual(trade_dates, {date(2026, 5, 15), date(2026, 5, 14)})
         self.assertEqual(len(events), 5)
 
+    # Regression scenario: recent limit up defaults to seven trading days.
     def test_recent_limit_up_defaults_to_seven_trading_days(self) -> None:
         template = SAMPLE_EVENTS[0]
         trade_dates = [
@@ -103,6 +112,7 @@ class AnalysisTest(unittest.TestCase):
         self.assertEqual(len(recent), 7)
         self.assertEqual({event.trade_date for event in recent}, set(trade_dates[-7:]))
 
+    # Regression scenario: continuation stats.
     def test_continuation_stats(self) -> None:
         stats = {item.board_height: item for item in calculate_continuation(SAMPLE_EVENTS)}
 
@@ -111,9 +121,11 @@ class AnalysisTest(unittest.TestCase):
         self.assertEqual(stats[1].probability, 0.4286)
         self.assertEqual(stats[3].probability, 1.0)
 
+    # Regression scenario: daily board promotion uses adjacent close cohorts.
     def test_daily_board_promotion_uses_adjacent_close_cohorts(self) -> None:
         template = SAMPLE_EVENTS[2]
 
+        # Prepare the event fixture or observation used by the surrounding regression scenario.
         def event(symbol: str, trade_date: date, height: int, closed: bool = True):
             return template.model_copy(
                 update={
@@ -173,6 +185,7 @@ class AnalysisTest(unittest.TestCase):
             [latest],
         )
 
+    # Regression scenario: failed rate stats.
     def test_failed_rate_stats(self) -> None:
         stats = {item.board_height: item for item in calculate_failed_rates(SAMPLE_EVENTS)}
 

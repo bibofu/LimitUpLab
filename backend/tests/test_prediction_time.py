@@ -14,18 +14,22 @@ from app.repositories.recommendation_intelligence_repository import SQLiteRecomm
 from app.services.evaluation_agent import select_canonical_prediction_snapshots
 
 
+# Prepare the final provenance fixture or observation used by the surrounding regression scenario.
 def final_provenance(created="2026-09-03T09:00:00+08:00", *, base="2026-09-02", target="2026-09-03", calendar=None):
     return {"version": "prediction-time-v1", "stage": "premarket_final",
             "target_trade_date": target, "information_cutoff_at": created,
             "calendar_verified": True, "calendar_trade_dates": calendar or [base, target]}
 
 
+# Prepare the current final provenance fixture or observation used by the surrounding regression
+# scenario.
 def current_final_provenance(created="2026-09-03T08:00:00+08:00"):
     payload = final_provenance(created)
     payload["version"] = "prediction-time-v2"
     return payload
 
 
+# Build the AgentPrediction fixture used by the surrounding regression scenario.
 def stored_prediction(created="2026-09-02T16:10:00+08:00", **changes):
     data = dict(prediction_id="p", trade_date=date(2026, 9, 2), symbol="600000", name="test",
                 score=80, rating="A", confidence=0.8, scoring_version="v5", prediction_source="live",
@@ -35,6 +39,7 @@ def stored_prediction(created="2026-09-02T16:10:00+08:00", **changes):
     return AgentPrediction(**data)
 
 
+# Build the SimpleNamespace fixture used by the surrounding regression scenario.
 def prediction(created="2026-09-02T16:10:00+08:00", **changes):
     fields = dict(prediction_source="live", scoring_version="rule-v5",
                   trade_date=date(2026, 9, 2), data_as_of=date(2026, 9, 2),
@@ -43,6 +48,7 @@ def prediction(created="2026-09-02T16:10:00+08:00", **changes):
     return SimpleNamespace(**fields)
 
 
+# Regression scenario: legacy close is separate from current forward final.
 def test_legacy_close_is_separate_from_current_forward_final():
     verdict = assess_prediction_time(prediction())
     assert verdict.research_eligible and not verdict.strict_forward_eligible
@@ -50,16 +56,19 @@ def test_legacy_close_is_separate_from_current_forward_final():
     assert "before_data_readiness_gate" in assess_prediction_time(prediction("2026-09-02T15:10:00+08:00")).reasons
 
 
+# Regression scenario: legacy late final is excluded even with backdated data as of.
 def test_legacy_late_final_is_excluded_even_with_backdated_data_as_of():
     assert not assess_prediction_time(prediction("2026-09-03T10:35:33+08:00")).research_eligible
 
 
+# Regression scenario: close write gate requires same day after 1530.
 def test_close_write_gate_requires_same_day_after_1530():
     for timestamp in ("2026-09-02T15:29:59+08:00", "2026-09-03T16:00:00+08:00"):
         assert provenance_errors(base_date=date(2026, 9, 2), data_as_of=date(2026, 9, 2),
                                  created_at=datetime.fromisoformat(timestamp), provenance=close_provenance())
 
 
+# Regression scenario: audit keeps originals and marks only matching late review.
 def test_audit_keeps_originals_and_marks_only_matching_late_review():
     connection = sqlite3.connect(":memory:")
     connection.row_factory = sqlite3.Row
@@ -87,6 +96,7 @@ def test_audit_keeps_originals_and_marks_only_matching_late_review():
     connection.close()
 
 
+# Regression scenario: final window uses target day and timezone.
 @pytest.mark.parametrize("created,eligible", [
     ("2026-09-03T09:00:00+08:00", True),
     ("2026-09-03T01:29:59+00:00", True),
@@ -98,6 +108,7 @@ def test_final_window_uses_target_day_and_timezone(created, eligible):
     assert assess_prediction_time(p).strict_forward_eligible is eligible
 
 
+# Regression scenario: current final window starts at 0800.
 @pytest.mark.parametrize("created,eligible", [
     ("2026-09-03T08:00:00+08:00", True),
     ("2026-09-03T07:59:59+08:00", False),
@@ -112,6 +123,7 @@ def test_current_final_window_starts_at_0800(created, eligible):
     assert assess_prediction_time(p).strict_forward_eligible is eligible
 
 
+# Regression scenario: exchange calendar handles weekend and rejects holiday target.
 def test_exchange_calendar_handles_weekend_and_rejects_holiday_target():
     metadata = final_provenance("2026-09-07T09:00:00+08:00", base="2026-09-04", target="2026-09-07")
     p = prediction("2026-09-07T09:00:00+08:00", trade_date=date(2026, 9, 4),
@@ -121,6 +133,7 @@ def test_exchange_calendar_handles_weekend_and_rejects_holiday_target():
     assert not assess_prediction_time(p).research_eligible
 
 
+# Regression scenario: public upsert rejects backfilled or early live rows.
 @pytest.mark.parametrize("timestamp", ["2026-09-02T15:29:59+08:00", "2026-09-03T16:00:00+08:00"])
 def test_public_upsert_rejects_backfilled_or_early_live_rows(tmp_path, timestamp):
     repo = SQLiteFirstBoardRepository(tmp_path / "test.sqlite")
@@ -128,12 +141,14 @@ def test_public_upsert_rejects_backfilled_or_early_live_rows(tmp_path, timestamp
         repo.upsert_predictions([stored_prediction(timestamp)])
 
 
+# Regression scenario: invalid live date cannot be filled with historical rows.
 def test_invalid_live_date_cannot_be_filled_with_historical_rows():
     late = stored_prediction("2026-09-03T10:35:00+08:00")
     historical = late.model_copy(update={"prediction_id": "h", "prediction_source": "historical_backtest"})
     assert select_canonical_prediction_snapshots([late, historical]) == []
 
 
+# Regression scenario: final public save rejects late metadata.
 def test_final_public_save_rejects_late_metadata(tmp_path):
     response = RecommendationIntelligenceResponse(
         refresh_id="late", refreshed_at=datetime.fromisoformat("2026-09-03T10:00:00+08:00"),
@@ -145,6 +160,7 @@ def test_final_public_save_rejects_late_metadata(tmp_path):
         SQLiteRecommendationIntelligenceRepository(tmp_path / "test.sqlite").save_final(response)
 
 
+# Regression scenario: commit window failure rolls back archive replacement and final.
 def test_commit_window_failure_rolls_back_archive_replacement_and_final(tmp_path):
     repo = SQLiteFirstBoardRepository(tmp_path / "test.sqlite")
     repo.upsert_predictions([stored_prediction()])
@@ -157,6 +173,8 @@ def test_commit_window_failure_rolls_back_archive_replacement_and_final(tmp_path
     )
     ratings = FirstBoardRatingsResponse(trade_date=date(2026, 9, 2), candidates=[], filtered_out=[],
                                         universe_count=0, generated_by="v5", prediction_provenance=provenance)
+    # Simulate the dependency failure required by this regression scenario so its error or
+    # fallback path is exercised.
     def missed_window():
         raise ValueError("completed after open")
     with pytest.raises(ValueError, match="completed after open"):
@@ -169,6 +187,7 @@ def test_commit_window_failure_rolls_back_archive_replacement_and_final(tmp_path
         assert c.execute("SELECT count(*) FROM recommendation_prediction_finals").fetchone()[0] == 0
 
 
+# Regression scenario: final evidence must not exceed cutoff.
 def test_final_evidence_must_not_exceed_cutoff():
     from app.services.prediction_time import validate_final_response
     created = datetime.fromisoformat("2026-09-03T09:00:00+08:00")

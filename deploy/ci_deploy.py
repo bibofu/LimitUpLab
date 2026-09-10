@@ -7,6 +7,8 @@ import tempfile
 from release import parse_request
 
 
+# Validate the release tag and commit, then invoke the restricted deployment command over SSH
+# using the CI key.
 def main() -> None:
     tag = os.environ["RELEASE_TAG"]
     sha = os.environ["RELEASE_SHA"]

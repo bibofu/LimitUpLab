@@ -9,6 +9,7 @@ from zoneinfo import ZoneInfo
 from scripts.backup_database import create_backup, prune_backups
 
 
+# Regression scenario: create backup copies database and restricts permissions.
 def test_create_backup_copies_database_and_restricts_permissions(tmp_path: Path) -> None:
     source_path = tmp_path / "source.sqlite"
     with sqlite3.connect(source_path) as connection:
@@ -29,6 +30,7 @@ def test_create_backup_copies_database_and_restricts_permissions(tmp_path: Path)
         assert backup_path.stat().st_mode & 0o777 == 0o600
 
 
+# Regression scenario: prune backups only removes older managed snapshots.
 def test_prune_backups_only_removes_older_managed_snapshots(tmp_path: Path) -> None:
     names = [
         "limituplab-20260827-032500.sqlite",

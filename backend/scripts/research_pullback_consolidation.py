@@ -14,10 +14,12 @@ import numpy as np
 KEYS = ['consolidation', 'mild_raw', 'mild_stable', 'deep_raw', 'deep_repair']
 
 
+# Calculate the historical return after the script's assumed friction adjustment.
 def net(gross):
     return ((1 + float(gross) / 100) * .9985 / 1.0015 - 1) * 100
 
 
+# Compute the historical sample's return and drawdown summary measurements.
 def metrics(rows):
     if not rows:
         return {'n': 0}
@@ -44,6 +46,7 @@ def pair_rows(left, right, same_age=True, same_board=False, retreat_tolerance=No
     Only signal-time attributes determine strata and permitted cross-pairs.
     """
     lg, rg = defaultdict(list), defaultdict(list)
+    # Build the stratification key used to match comparable historical observations.
     def key(r):
         base = (r['signal_date'], r['age'] if same_age else None)
         return base + (('1' if int(r['board_height']) == 1 else '2+'),) if same_board else base
@@ -70,6 +73,7 @@ def pair_rows(left, right, same_age=True, same_board=False, retreat_tolerance=No
     return result
 
 
+# Compare the two historical cohorts using the script's matched-observation method.
 def comparison(strata, dates):
     if not strata:
         return {'dates': 0, 'strata': 0}
@@ -105,6 +109,7 @@ def price_box(window):
     return (-.05<=retreat<=.08 and max(r['high'] for r in post)/min(r['low'] for r in post)-1<=.08)
 
 
+# Load only bars belonging to the previously recorded research snapshot and cutoff.
 def load_frozen_bars(db, original):
     # Verify the exact original snapshot fingerprint before adding any features.
     with sqlite3.connect(db.resolve().as_uri()+'?mode=ro',uri=True) as c:
@@ -118,7 +123,10 @@ def load_frozen_bars(db, original):
     return {(r['symbol'],r['trade_date']):r for r in inputs[1]}
 
 
+# Reconstruct pullback/consolidation cohorts from frozen inputs and export their historical
+# comparison.
 def analyze(directory,db):
+    # Load one named input file from the surrounding research export directory.
     def read(name):
         with (directory/name).open(encoding='utf-8-sig',newline='') as f:
             return list(csv.DictReader(f))

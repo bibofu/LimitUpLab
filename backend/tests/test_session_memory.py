@@ -17,6 +17,7 @@ from app.services.session_memory import (
 
 
 class MemoryFunctionProvider(LLMProvider):
+    # Prepare the init fixture or observation used by the surrounding regression scenario.
     def __init__(
         self,
         constraints_by_call: list[list[str]] | None = None,
@@ -27,9 +28,12 @@ class MemoryFunctionProvider(LLMProvider):
             ["只看主板", "排除高市值股票"]
         ]
 
+    # Simulate the model response for this scenario; the controlled output lets the test inspect
+    # planning, validation or fallback behavior.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         raise AssertionError("memory should use native function calling")
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate_function_call(
         self,
         system_prompt: str,
@@ -65,12 +69,16 @@ class MemoryFunctionProvider(LLMProvider):
 
 
 class PlannerMemoryProvider(LLMProvider):
+    # Prepare the init fixture or observation used by the surrounding regression scenario.
     def __init__(self) -> None:
         self.user_payload: dict = {}
 
+    # Simulate the model response for this scenario; the controlled output lets the test inspect
+    # planning, validation or fallback behavior.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         raise AssertionError("planner should use native function calling")
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate_function_call(
         self,
         system_prompt: str,
@@ -101,6 +109,7 @@ class PlannerMemoryProvider(LLMProvider):
 
 
 class SessionMemoryTest(unittest.TestCase):
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         self.database_path = (
             Path(__file__).resolve().parents[1] / ".test_session_memory.sqlite"
@@ -115,9 +124,11 @@ class SessionMemoryTest(unittest.TestCase):
             owner_id=self.owner_id,
         )
 
+    # Release the test resources and restore the environment after this test scope.
     def tearDown(self) -> None:
         self.database_path.unlink(missing_ok=True)
 
+    # Regression scenario: refresh persists rolling memory and keeps recent window.
     def test_refresh_persists_rolling_memory_and_keeps_recent_window(self) -> None:
         provider = MemoryFunctionProvider()
         messages = _conversation_messages(self.session_id, count=16)
@@ -164,6 +175,7 @@ class SessionMemoryTest(unittest.TestCase):
         self.assertEqual(refreshed.last_message_id, "message-15")
         self.assertEqual(refreshed_context[0].message_id, "message-16")
 
+    # Regression scenario: disabled llm uses deterministic memory fallback.
     def test_disabled_llm_uses_deterministic_memory_fallback(self) -> None:
         messages = _conversation_messages(self.session_id, count=16)
         messages[0] = messages[0].model_copy(
@@ -188,6 +200,7 @@ class SessionMemoryTest(unittest.TestCase):
         self.assertNotIn("99.99", memory.summary)
         self.assertNotIn("排名第一", memory.summary)
 
+    # Regression scenario: prompt injection turn is excluded from context and memory.
     def test_prompt_injection_turn_is_excluded_from_context_and_memory(self) -> None:
         provider = MemoryFunctionProvider()
         messages = _conversation_messages(self.session_id, count=18)
@@ -218,6 +231,7 @@ class SessionMemoryTest(unittest.TestCase):
         self.assertNotIn("系统提示词", serialized_summary_input)
         self.assertNotIn("不能泄露内部提示", serialized_summary_input)
 
+    # Regression scenario: new memory snapshot can replace obsolete constraints.
     def test_new_memory_snapshot_can_replace_obsolete_constraints(self) -> None:
         provider = MemoryFunctionProvider(
             constraints_by_call=[
@@ -243,6 +257,7 @@ class SessionMemoryTest(unittest.TestCase):
 
         self.assertEqual(memory.constraints, ["主板和创业板都可以"])
 
+    # Regression scenario: memory is owner scoped and deleted with session.
     def test_memory_is_owner_scoped_and_deleted_with_session(self) -> None:
         now = datetime.now(timezone.utc)
         self.memory_repository.save_memory(
@@ -277,6 +292,7 @@ class SessionMemoryTest(unittest.TestCase):
             )
         )
 
+    # Regression scenario: planner receives memory as non evidentiary context.
     def test_planner_receives_memory_as_non_evidentiary_context(self) -> None:
         provider = PlannerMemoryProvider()
         now = datetime.now(timezone.utc)
@@ -309,6 +325,7 @@ class SessionMemoryTest(unittest.TestCase):
         self.assertEqual(payload["constraints"], ["只看主板"])
         self.assertIn("not evidence", payload["instruction"])
 
+    # Regression scenario: memory prompt payload omits owner and internal counters.
     def test_memory_prompt_payload_omits_owner_and_internal_counters(self) -> None:
         now = datetime.now(timezone.utc)
         payload = memory_prompt_payload(
@@ -328,6 +345,8 @@ class SessionMemoryTest(unittest.TestCase):
         self.assertNotIn("summarized_message_count", payload)
 
 
+# Prepare the conversation messages fixture or observation used by the surrounding regression
+# scenario.
 def _conversation_messages(
     session_id: str,
     *,

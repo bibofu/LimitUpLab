@@ -54,6 +54,7 @@ def retire_discovery(database_path: Path, backup_dir: Path) -> tuple[Path, dict[
     return backup_path, before
 
 
+# Check SQLite's catalog before querying an optional legacy table.
 def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
     return connection.execute(
         "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?",
@@ -61,10 +62,13 @@ def _table_exists(connection: sqlite3.Connection, table: str) -> bool:
     ).fetchone() is not None
 
 
+# Count rows in the selected maintenance table for the retirement report.
 def _row_count(connection: sqlite3.Connection, table: str) -> int:
     return int(connection.execute(f"SELECT COUNT(*) FROM {table}").fetchone()[0])
 
 
+# Parse the maintenance options and retire the legacy discovery data through the script's guarded
+# workflow.
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database", type=Path, required=True)

@@ -19,15 +19,18 @@ from scripts.run_recommendation_refresh_loop import (
 
 
 class RecommendationRefreshLoopTest(unittest.TestCase):
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         self.lock_path = (
             Path(__file__).resolve().parents[1]
             / f"recommendation-refresh-{uuid4().hex}.lock"
         )
 
+    # Release the test resources and restore the environment after this test scope.
     def tearDown(self) -> None:
         self.lock_path.unlink(missing_ok=True)
 
+    # Regression scenario: refresh wait targets next shanghai 0800.
     def test_refresh_wait_targets_next_shanghai_0800(self) -> None:
         now = datetime(2026, 9, 2, 8, 42, 30, tzinfo=timezone.utc)
 
@@ -36,6 +39,7 @@ class RecommendationRefreshLoopTest(unittest.TestCase):
             15 * 60 * 60 + 17.5 * 60,
         )
 
+    # Regression scenario: worker restart only catches up before market open.
     def test_worker_restart_only_catches_up_before_market_open(self) -> None:
         self.assertTrue(
             _inside_premarket_catch_up_window(
@@ -48,6 +52,7 @@ class RecommendationRefreshLoopTest(unittest.TestCase):
             )
         )
 
+    # Regression scenario: target day finalization starts at 0800.
     def test_target_day_finalization_starts_at_0800(self) -> None:
         response = RecommendationIntelligenceResponse(
             refresh_id="draft",
@@ -77,6 +82,7 @@ class RecommendationRefreshLoopTest(unittest.TestCase):
             )
         )
 
+    # Regression scenario: dead recent pid does not block worker restart.
     def test_dead_recent_pid_does_not_block_worker_restart(self) -> None:
         self.lock_path.write_text(
             json.dumps({"pid": 2_147_483_647}),

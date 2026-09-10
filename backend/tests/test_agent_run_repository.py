@@ -7,6 +7,7 @@ from app.repositories import SQLiteAgentRunRepository, SQLiteChatSessionReposito
 
 
 class AgentRunRepositoryTest(unittest.TestCase):
+    # Regression scenario: save and list recent runs.
     def test_save_and_list_recent_runs(self) -> None:
         database_path = Path(__file__).resolve().parents[1] / ".test_agent_runs.sqlite"
         if database_path.exists():

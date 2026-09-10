@@ -18,6 +18,8 @@ from app.services.sample_data import SAMPLE_EVENTS
 TEST_TMP_ROOT = Path(os.getenv("LIMITUPLAB_TEST_TMP", Path(__file__).resolve().parents[1]))
 
 
+# Prepare the temporary database path fixture or observation used by the surrounding regression
+# scenario.
 @contextmanager
 def temporary_database_path():
     database_path = TEST_TMP_ROOT / f"first-board-test-{uuid4().hex}.sqlite"
@@ -28,6 +30,7 @@ def temporary_database_path():
 
 
 class FirstBoardFeaturesTest(unittest.TestCase):
+    # Regression scenario: initialize database creates feature tables.
     def test_initialize_database_creates_feature_tables(self) -> None:
         with temporary_database_path() as database_path:
             connection = connect(database_path)
@@ -50,6 +53,7 @@ class FirstBoardFeaturesTest(unittest.TestCase):
         self.assertIn("agent_predictions", table_names)
         self.assertIn("agent_live_prediction_snapshots", table_names)
 
+    # Regression scenario: initialize database migrates legacy prediction snapshots.
     def test_initialize_database_migrates_legacy_prediction_snapshots(self) -> None:
         with temporary_database_path() as database_path:
             connection = connect(database_path)
@@ -105,6 +109,7 @@ class FirstBoardFeaturesTest(unittest.TestCase):
             finally:
                 connection.close()
 
+    # Regression scenario: schema v2 keeps earliest live batch per date.
     def test_schema_v2_keeps_earliest_live_batch_per_date(self) -> None:
         with temporary_database_path() as database_path:
             connection = connect(database_path)
@@ -181,6 +186,7 @@ class FirstBoardFeaturesTest(unittest.TestCase):
             finally:
                 connection.close()
 
+    # Regression scenario: build first board features.
     def test_build_first_board_features(self) -> None:
         features = build_first_board_features(SAMPLE_EVENTS, trade_date=date(2026, 5, 15))
 
@@ -192,6 +198,7 @@ class FirstBoardFeaturesTest(unittest.TestCase):
         self.assertEqual(feature.market_failed_rate_bucket, "fragile")
         self.assertEqual(feature.feature_version, "first-board-feature-v2-no-sentiment")
 
+    # Regression scenario: initialize database removes legacy market sentiment column.
     def test_initialize_database_removes_legacy_market_sentiment_column(self) -> None:
         features = build_first_board_features(SAMPLE_EVENTS, trade_date=date(2026, 5, 15))
 
@@ -224,6 +231,7 @@ class FirstBoardFeaturesTest(unittest.TestCase):
         self.assertNotIn("market_sentiment", columns)
         self.assertEqual(row_count, 1)
 
+    # Regression scenario: repository upserts and lists features.
     def test_repository_upserts_and_lists_features(self) -> None:
         features = build_first_board_features(SAMPLE_EVENTS, trade_date=date(2026, 5, 15))
 
@@ -235,6 +243,7 @@ class FirstBoardFeaturesTest(unittest.TestCase):
         self.assertEqual(len(persisted), 1)
         self.assertEqual(persisted[0].symbol, "301489")
 
+    # Regression scenario: build first board outcome from event performance.
     def test_build_first_board_outcome_from_event_performance(self) -> None:
         event = next(item for item in SAMPLE_EVENTS if item.symbol == "301489")
         prices = [
@@ -274,6 +283,7 @@ class FirstBoardFeaturesTest(unittest.TestCase):
         self.assertTrue(outcome.promoted_to_second_board)
         self.assertEqual(outcome.outcome_version, "first-board-outcome-v2-entry-open")
 
+    # Regression scenario: outcome does not shift forward when base bar is missing.
     def test_outcome_does_not_shift_forward_when_base_bar_is_missing(self) -> None:
         event = next(item for item in SAMPLE_EVENTS if item.symbol == "301489")
         bars = [

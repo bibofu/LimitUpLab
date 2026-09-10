@@ -7,6 +7,7 @@ from app.repositories.consolidation_repository import load_consolidation_pool
 from app.services.consolidation import completed_date_limit, screen_consolidation
 
 
+# Prepare the fixture fixture or observation used by the surrounding regression scenario.
 def fixture():
     dates = []
     day = date(2026, 7, 1)
@@ -28,6 +29,7 @@ def fixture():
     return events, bars, dates, date.fromisoformat(dates[-1]), now
 
 
+# Regression scenario: first confirmation and continuing observation are distinct.
 def test_first_confirmation_and_continuing_observation_are_distinct():
     events, bars, dates, end, now = fixture()
     result = screen_consolidation(events, bars, dates, end, now)
@@ -40,6 +42,7 @@ def test_first_confirmation_and_continuing_observation_are_distinct():
     assert screen_consolidation(events, bars, dates, date.fromisoformat(dates[26]), now).candidates[0].state == "new"
 
 
+# Regression scenario: confirmation waits until both volume and price rules hold.
 def test_confirmation_waits_until_both_volume_and_price_rules_hold():
     events, bars, dates, end, now = fixture()
     bars[25]["volume"], bars[26]["volume"], bars[27]["volume"] = 1000., 1000., 100.
@@ -49,6 +52,7 @@ def test_confirmation_waits_until_both_volume_and_price_rules_hold():
     assert candidate.volume_ratio == .7
 
 
+# Regression scenario: future prices and events cannot change historical screen.
 @pytest.mark.parametrize("strategy", ["consolidation", "drawdown"])
 def test_future_prices_and_events_cannot_change_historical_screen(strategy):
     events, bars, dates, end, now = fixture()
@@ -59,6 +63,7 @@ def test_future_prices_and_events_cannot_change_historical_screen(strategy):
     assert before == after
 
 
+# Regression scenario: new limit up resets anchor.
 def test_new_limit_up_resets_anchor():
     events, bars, dates, end, now = fixture()
     events.append(dict(symbol="600001", name="测试股份", trade_date=dates[-2], closed_limit=1))
@@ -67,6 +72,7 @@ def test_new_limit_up_resets_anchor():
     assert result.exclusions == {"age_outside_2_4": 1}
 
 
+# Regression scenario: failed conditions never become candidates.
 @pytest.mark.parametrize("change,reason", [
     ({"source": "another-source"}, "mixed_or_missing_source"),
     ({"volume": 0.}, "invalid_volume"),
@@ -89,6 +95,7 @@ def test_failed_conditions_never_become_candidates(change, reason):
         assert result.evaluated_stocks == []
 
 
+# Regression scenario: tencent history and close snapshot are one source family.
 def test_tencent_history_and_close_snapshot_are_one_source_family():
     events, bars, dates, end, now = fixture()
     for bar in bars:
@@ -100,6 +107,7 @@ def test_tencent_history_and_close_snapshot_are_one_source_family():
     assert "mixed_or_missing_source" not in result.exclusions
 
 
+# Regression scenario: hithink history and snapshot are one source family.
 def test_hithink_history_and_snapshot_are_one_source_family():
     events, bars, dates, end, now = fixture()
     for bar in bars:
@@ -111,6 +119,7 @@ def test_hithink_history_and_snapshot_are_one_source_family():
     assert "mixed_or_missing_source" not in result.exclusions
 
 
+# Regression scenario: evaluable rejections keep facts and all failed conditions.
 def test_evaluable_rejections_keep_facts_and_all_failed_conditions():
     events, bars, dates, end, now = fixture()
     for bar in bars[25:]:
@@ -127,6 +136,7 @@ def test_evaluable_rejections_keep_facts_and_all_failed_conditions():
     assert result.exclusions == {"range_above_8pct": 1}
 
 
+# Regression scenario: qualified cards precede rejections without duplicating stocks.
 def test_qualified_cards_precede_rejections_without_duplicating_stocks():
     events, bars, dates, end, now = fixture()
     bars += [{**bar, "symbol": "600002"} for bar in bars]
@@ -140,6 +150,7 @@ def test_qualified_cards_precede_rejections_without_duplicating_stocks():
     assert [stock.symbol for stock in result.candidates] == ["600002"]
 
 
+# Regression scenario: inclusive price and volume boundaries.
 def test_inclusive_price_and_volume_boundaries():
     events, bars, dates, end, now = fixture()
     for bar in bars[25:]:
@@ -150,6 +161,7 @@ def test_inclusive_price_and_volume_boundaries():
     assert candidate.volume_ratio == .75
 
 
+# Regression scenario: relative close band.
 @pytest.mark.parametrize("change,accepted", [
     (-.101, False), (-.10, True), (-.07, True), (.08, True), (.081, False),
 ])
@@ -164,6 +176,7 @@ def test_relative_close_band(change, accepted):
         assert result.exclusions == {"close_outside_band": 1}
 
 
+# Regression scenario: missing event date blocks anchor inference.
 def test_missing_event_date_blocks_anchor_inference():
     events, bars, dates, end, now = fixture()
     events = [e for e in events if e["trade_date"] != dates[-6]]
@@ -172,6 +185,7 @@ def test_missing_event_date_blocks_anchor_inference():
     assert result.data_missing == ["recent_event_dates"]
 
 
+# Regression scenario: recent limit up anchor window includes seven trading days.
 def test_recent_limit_up_anchor_window_includes_seven_trading_days():
     events, bars, dates, end, now = fixture()
     for event in events:
@@ -191,6 +205,7 @@ def test_recent_limit_up_anchor_window_includes_seven_trading_days():
     assert result.exclusions == {"age_outside_2_4": 1}
 
 
+# Regression scenario: intraday cutoff and timezone.
 def test_intraday_cutoff_and_timezone():
     before = datetime(2026, 9, 7, 7, 29, tzinfo=timezone.utc)
     after = datetime(2026, 9, 7, 7, 30, tzinfo=timezone.utc)
@@ -201,6 +216,7 @@ def test_intraday_cutoff_and_timezone():
         screen_consolidation(events, bars, dates, date(2026, 9, 7), before)
 
 
+# Regression scenario: repository is read only and does not use later data.
 def test_repository_is_read_only_and_does_not_use_later_data(tmp_path):
     events, bars, dates, end, now = fixture()
     path = tmp_path / "screen.sqlite"
@@ -224,12 +240,14 @@ def test_repository_is_read_only_and_does_not_use_later_data(tmp_path):
         load_consolidation_pool(date(2026, 10, 1), now, path)
 
 
+# Regression scenario: absent database is explicit.
 def test_absent_database_is_explicit(tmp_path):
     result = load_consolidation_pool(None, fixture()[-1], tmp_path / "absent.sqlite")
     assert result.status == "data_missing"
     assert result.data_missing == ["local_database"]
 
 
+# Regression scenario: drawdown threshold includes boundary without volume filter.
 @pytest.mark.parametrize("drawdown,accepted", [(9.99, False), (10., True), (10.1, True)])
 def test_drawdown_threshold_includes_boundary_without_volume_filter(drawdown, accepted):
     events, bars, dates, end, now = fixture()
@@ -251,6 +269,7 @@ def test_drawdown_threshold_includes_boundary_without_volume_filter(drawdown, ac
         assert stock.failed_conditions == ["drawdown_below_10pct"]
 
 
+# Regression scenario: drawdown reference excludes observation day high.
 def test_drawdown_reference_excludes_observation_day_high():
     events, bars, dates, end, now = fixture()
     for bar in bars[25:]:
@@ -262,6 +281,7 @@ def test_drawdown_reference_excludes_observation_day_high():
     assert stock.drawdown_pct == 0
 
 
+# Regression scenario: drawdown large decline is observed with risk and no range filter.
 def test_drawdown_large_decline_is_observed_with_risk_and_no_range_filter():
     events, bars, dates, end, now = fixture()
     for bar, close in zip(bars[25:], [9.9, 8.91, 8.5]):
@@ -273,6 +293,7 @@ def test_drawdown_large_decline_is_observed_with_risk_and_no_range_filter():
     assert any("20%" in risk for risk in stock.risks)
 
 
+# Regression scenario: drawdown data quality and new anchor still apply.
 def test_drawdown_data_quality_and_new_anchor_still_apply():
     events, bars, dates, end, now = fixture()
     bars[-1]["volume"] = None

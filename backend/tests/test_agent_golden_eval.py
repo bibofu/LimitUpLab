@@ -25,6 +25,7 @@ FIXTURE_PATH = Path(__file__).parent / "fixtures" / "agent_golden_dataset.json"
 
 
 class StockNewsPlanner(LLMProvider):
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         return LLMResult(
             content=json.dumps(
@@ -51,6 +52,7 @@ class StockNewsPlanner(LLMProvider):
 
 
 class AgentGoldenEvalTest(unittest.TestCase):
+    # Regression scenario: dataset has fifty strictly versioned cases and required coverage.
     def test_dataset_has_fifty_strictly_versioned_cases_and_required_coverage(self) -> None:
         version, cases = load_golden_cases(FIXTURE_PATH)
 
@@ -77,6 +79,7 @@ class AgentGoldenEvalTest(unittest.TestCase):
             all(REQUIRED_CASE_FIELDS.issubset(item) for item in raw["cases"])
         )
 
+    # Regression scenario: one run reports each layer without collapsing failures.
     def test_one_run_reports_each_layer_without_collapsing_failures(self) -> None:
         case = GoldenEvalCase(
             case_id="layer-isolation",
@@ -139,6 +142,7 @@ class AgentGoldenEvalTest(unittest.TestCase):
             {"planner", "tool_execution", "grounding", "answer"},
         )
 
+    # Regression scenario: expected tool failure is executed without hallucination.
     def test_expected_tool_failure_is_executed_without_hallucination(self) -> None:
         case = GoldenEvalCase(
             case_id="tool-failure",

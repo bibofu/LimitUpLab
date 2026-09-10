@@ -81,11 +81,13 @@ class DailyCloseLoopExecution:
 class DailyCloseLoopLock:
     """Cross-process file lock with bounded stale-lock recovery."""
 
+    # Initialize DailyCloseLoopLock with the supplied dependencies and per-instance state.
     def __init__(self, path: Path, *, stale_after: timedelta = timedelta(hours=6)):
         self.path = path
         self.stale_after = stale_after
         self._owned = False
 
+    # Acquire ownership of the process lock before allowing the guarded loop to run.
     def __enter__(self) -> DailyCloseLoopLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._remove_stale_lock()
@@ -110,11 +112,14 @@ class DailyCloseLoopLock:
         self._owned = True
         return self
 
+    # Remove the lock only if this instance acquired it, including when the guarded work raised an
+    # exception.
     def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
         if self._owned:
             self.path.unlink(missing_ok=True)
             self._owned = False
 
+    # Remove an existing lock only when its age exceeds this loop's configured stale threshold.
     def _remove_stale_lock(self) -> None:
         if not self.path.exists():
             return
@@ -467,6 +472,7 @@ def resolve_target_trade_date(
         )
 
 
+# Collect the readiness failures that prevent a daily close-loop run from being reported complete.
 def _incomplete_reasons(
     report: DailyUpdateReport,
     *,
@@ -542,6 +548,7 @@ def _recommendation_refresh_ready(
     )
 
 
+# Save the final pipeline state, including any failure or incomplete-work explanation.
 def _persist_terminal_run(
     *,
     repository: SQLiteDailyPipelineRepository,
@@ -577,6 +584,7 @@ def _persist_terminal_run(
     )
 
 
+# Write the latest close-loop execution report and its alert artifact.
 def _write_execution_files(
     *,
     run: DailyPipelineRun,
@@ -591,6 +599,8 @@ def _write_execution_files(
         alert_path.unlink(missing_ok=True)
 
 
+# Serialize a report to a sibling temporary file and replace the destination only after writing
+# finishes.
 def _atomic_write_json(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary_path = path.with_name(f"{path.name}.tmp")

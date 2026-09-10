@@ -33,6 +33,7 @@ from app.services.llm_provider import DisabledLLMProvider, LLMProvider, LLMResul
 from app.services.sample_data import SAMPLE_EVENTS
 
 
+# Build the HithinkDragonTigerFact fixture used by the surrounding regression scenario.
 def _dragon_tiger_fact() -> HithinkDragonTigerFact:
     return HithinkDragonTigerFact(
         symbol="000001",
@@ -55,6 +56,7 @@ def _dragon_tiger_fact() -> HithinkDragonTigerFact:
 class ExternalToolProvider(LLMProvider):
     """Planner intentionally skips tools so policy repair is exercised."""
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         if "first job is to decide which tools are needed" in system_prompt:
             return LLMResult(
@@ -82,6 +84,7 @@ class ExternalToolProvider(LLMProvider):
 class HithinkToolProvider(LLMProvider):
     """Planner selects the structured Tonghuashun popularity tool."""
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         if "first job is to decide which tools are needed" in system_prompt:
             return LLMResult(
@@ -111,9 +114,11 @@ class HithinkToolProvider(LLMProvider):
 class SectorRankingPlannerProvider(LLMProvider):
     """Request too many rows so the backend default limit can be verified."""
 
+    # Prepare the init fixture or observation used by the surrounding regression scenario.
     def __init__(self) -> None:
         self.answer_calls = 0
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         if "first job is to decide which tools are needed" in system_prompt:
             return LLMResult(
@@ -145,9 +150,11 @@ class SectorRankingPlannerProvider(LLMProvider):
 class WrongBroadSectorPlannerProvider(LLMProvider):
     """Reproduce a planner that mistakes broad wording for a sector name."""
 
+    # Prepare the init fixture or observation used by the surrounding regression scenario.
     def __init__(self) -> None:
         self.answer_calls = 0
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         if "first job is to decide which tools are needed" in system_prompt:
             return LLMResult(
@@ -175,9 +182,11 @@ class WrongBroadSectorPlannerProvider(LLMProvider):
 class WrongLimitDownPlannerProvider(LLMProvider):
     """Reproduce the live planner mistake that mapped limit-down to limit-up."""
 
+    # Prepare the init fixture or observation used by the surrounding regression scenario.
     def __init__(self) -> None:
         self.answer_calls = 0
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         if "first job is to decide which tools are needed" in system_prompt:
             return LLMResult(
@@ -208,6 +217,7 @@ class WrongLimitDownPlannerProvider(LLMProvider):
 class DragonTigerToolProvider(LLMProvider):
     """Planner selects the Dragon-Tiger tool with an intentionally stale date."""
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         if "first job is to decide which tools are needed" in system_prompt:
             return LLMResult(
@@ -241,6 +251,7 @@ class DragonTigerToolProvider(LLMProvider):
 class Top100HotStockProvider(LLMProvider):
     """Planner under-requests rows and final answer intentionally truncates them."""
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         if "first job is to decide which tools are needed" in system_prompt:
             return LLMResult(
@@ -274,6 +285,7 @@ class Top100HotStockProvider(LLMProvider):
 class HotStockFirstBoardIntersectionProvider(LLMProvider):
     """Planner omits the event pool while the final answer returns the wrong set."""
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         if "first job is to decide which tools are needed" in system_prompt:
             return LLMResult(
@@ -307,6 +319,7 @@ class HotStockFirstBoardIntersectionProvider(LLMProvider):
 class FinanceNewsProvider(LLMProvider):
     """Planner skips the feed so the deterministic grounding policy repairs it."""
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         if "first job is to decide which tools are needed" in system_prompt:
             return LLMResult(
@@ -334,9 +347,11 @@ class FinanceNewsProvider(LLMProvider):
 class FailedMarketTrendProvider(LLMProvider):
     """Fake planner whose required market-data tool fails."""
 
+    # Prepare the init fixture or observation used by the surrounding regression scenario.
     def __init__(self) -> None:
         self.calls = 0
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         self.calls += 1
         if "first job is to decide which tools are needed" in system_prompt:
@@ -367,6 +382,7 @@ class FailedMarketTrendProvider(LLMProvider):
 class HotStockDirectGuessProvider(LLMProvider):
     """Fake planner that tries to guess an undated popularity answer."""
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         if "first job is to decide which tools are needed" in system_prompt:
             return LLMResult(
@@ -394,6 +410,7 @@ class HotStockDirectGuessProvider(LLMProvider):
     clear=False,
 )
 class AgentExternalToolsTest(unittest.TestCase):
+    # Regression scenario: limit down question repairs wrong planner semantics.
     @patch("app.agents.tools.collect_limit_down_pool")
     def test_limit_down_question_repairs_wrong_planner_semantics(self, collect_pool) -> None:
         trade_date = date(2026, 9, 2)
@@ -441,6 +458,7 @@ class AgentExternalToolsTest(unittest.TestCase):
         self.assertEqual(event_trace.output["event_type"], "limit_down")
         self.assertEqual(response.performance.answer_prompt_chars, 0)
 
+    # Regression scenario: empty limit down pool is valid without llm.
     @patch("app.agents.tools.collect_limit_down_pool")
     def test_empty_limit_down_pool_is_valid_without_llm(self, collect_pool) -> None:
         trade_date = date(2026, 9, 2)
@@ -467,6 +485,7 @@ class AgentExternalToolsTest(unittest.TestCase):
             ["market_event_pool", "template_general_answer"],
         )
 
+    # Regression scenario: dragon tiger fallback formats money and omits missing fields.
     def test_dragon_tiger_fallback_formats_money_and_omits_missing_fields(
         self,
     ) -> None:
@@ -507,6 +526,7 @@ class AgentExternalToolsTest(unittest.TestCase):
         self.assertNotIn("None", answer)
         self.assertNotIn("52746072.0", answer)
 
+    # Regression scenario: sector template lists every matching military subsector.
     def test_sector_template_lists_every_matching_military_subsector(self) -> None:
         answer = _template_answer_from_tool_facts(
             request=AgentChatRequest(
@@ -548,6 +568,7 @@ class AgentExternalToolsTest(unittest.TestCase):
         self.assertIn("军工电子", answer)
         self.assertNotIn("无法回答", answer)
 
+    # Regression scenario: sector template formats history only concept without nulls.
     def test_sector_template_formats_history_only_concept_without_nulls(
         self,
     ) -> None:
@@ -580,11 +601,13 @@ class AgentExternalToolsTest(unittest.TestCase):
         self.assertNotIn("None", answer)
         self.assertNotIn("排名", answer)
 
+    # Regression scenario: capital flow formatter rejects non numeric values.
     def test_capital_flow_formatter_rejects_non_numeric_values(self) -> None:
         self.assertIsNone(_format_capital_flow_amount(None))
         self.assertIsNone(_format_capital_flow_amount("41000000"))
         self.assertIsNone(_format_capital_flow_amount(float("inf")))
 
+    # Regression scenario: undated dragon tiger question uses latest local trade date.
     @patch(
         "app.collectors.hithink_finance_collector."
         "HithinkFinanceCollector.collect_dragon_tiger"
@@ -623,6 +646,7 @@ class AgentExternalToolsTest(unittest.TestCase):
         self.assertEqual(trace.input["trade_date"], latest_date.isoformat())
         self.assertEqual(trace.output["trade_date"], latest_date.isoformat())
 
+    # Regression scenario: explicit dragon tiger date overrides latest default.
     @patch(
         "app.collectors.hithink_finance_collector."
         "HithinkFinanceCollector.collect_dragon_tiger"
@@ -653,6 +677,7 @@ class AgentExternalToolsTest(unittest.TestCase):
             requested_date,
         )
 
+    # Regression scenario: natural undated popularity question uses latest snapshot.
     @patch("app.collectors.hithink_finance_collector.HithinkFinanceCollector.collect_hot_stocks")
     def test_natural_undated_popularity_question_uses_latest_snapshot(
         self,
@@ -688,6 +713,7 @@ class AgentExternalToolsTest(unittest.TestCase):
         self.assertNotIn("我猜", response.answer)
         collect_hot_stocks.assert_called_once_with(period="day", limit=20)
 
+    # Regression scenario: failed required tool returns fixed unanswerable text.
     @patch("app.agents.tools.collect_market_index_trends")
     def test_failed_required_tool_returns_fixed_unanswerable_text(
         self,
@@ -709,8 +735,10 @@ class AgentExternalToolsTest(unittest.TestCase):
         self.assertIn("market_index_trend", response.tool_calls)
         self.assertEqual(provider.calls, 1)
 
+    # Regression scenario: weekly market trend uses major index history.
     @patch("app.agents.tools.collect_market_index_trends")
     def test_weekly_market_trend_uses_major_index_history(self, collect_trends) -> None:
+        # Build the MarketIndexTrendItem fixture used by the surrounding regression scenario.
         def index_item(
             name: str,
             symbol: str,
@@ -773,6 +801,7 @@ class AgentExternalToolsTest(unittest.TestCase):
             end_date=date(2026, 5, 15),
         )
 
+    # Regression scenario: broad sector ranking overrides wrong planner parameter.
     @patch("app.agents.tools.build_sector_performance")
     def test_broad_sector_ranking_overrides_wrong_planner_parameter(
         self,
@@ -826,6 +855,7 @@ class AgentExternalToolsTest(unittest.TestCase):
             trade_date=trade_date,
         )
 
+    # Regression scenario: broad sector ranking works without llm.
     @patch("app.agents.tools.build_sector_performance")
     def test_broad_sector_ranking_works_without_llm(self, sector_builder) -> None:
         trade_date = date(2026, 9, 2)
@@ -862,6 +892,7 @@ class AgentExternalToolsTest(unittest.TestCase):
             trade_date=trade_date,
         )
 
+    # Regression scenario: broad sector laggard question uses bottom ranking.
     @patch("app.agents.tools.build_sector_performance")
     def test_broad_sector_laggard_question_uses_bottom_ranking(
         self,
@@ -911,6 +942,7 @@ class AgentExternalToolsTest(unittest.TestCase):
             trade_date=trade_date,
         )
 
+    # Regression scenario: policy repairs sector and search tools.
     @patch("app.agents.tools.search_web")
     @patch("app.agents.tools.build_sector_performance")
     def test_policy_repairs_sector_and_search_tools(
@@ -962,6 +994,7 @@ class AgentExternalToolsTest(unittest.TestCase):
         self.assertIn("7.44%", response.answer)
         self.assertIn("https://example.com/report", response.references)
 
+    # Regression scenario: policy repairs sector constituent ranking tool.
     @patch("app.agents.tools.build_sector_stock_ranking")
     def test_policy_repairs_sector_constituent_ranking_tool(self, ranking_builder) -> None:
         today = date.today()
@@ -1008,6 +1041,7 @@ class AgentExternalToolsTest(unittest.TestCase):
         self.assertNotIn("sector_performance", response.tool_calls)
         ranking_builder.assert_called_once()
 
+    # Regression scenario: unspecified sector ranking is capped at top ten.
     @patch("app.agents.tools.build_sector_stock_ranking")
     def test_unspecified_sector_ranking_is_capped_at_top_ten(self, ranking_builder) -> None:
         today = date.today()
@@ -1057,6 +1091,7 @@ class AgentExternalToolsTest(unittest.TestCase):
         self.assertIn("template_general_answer", response.tool_calls)
         self.assertEqual(response.performance.answer_prompt_chars, 0)
 
+    # Regression scenario: llm can call tonghuashun hot stock tool.
     @patch("app.collectors.hithink_finance_collector.HithinkFinanceCollector.collect_hot_stocks")
     def test_llm_can_call_tonghuashun_hot_stock_tool(self, collect_hot_stocks) -> None:
         collect_hot_stocks.return_value = HithinkHotStockSnapshot(
@@ -1091,6 +1126,7 @@ class AgentExternalToolsTest(unittest.TestCase):
         self.assertIn("002491", response.answer)
         self.assertIn("source=hithink-finance", response.references)
 
+    # Regression scenario: explicit top100 overrides planner limit and renders every stock.
     @patch("app.agents.tools.collect_eastmoney_hot_stock_ranking")
     def test_explicit_top100_overrides_planner_limit_and_renders_every_stock(
         self,
@@ -1133,6 +1169,7 @@ class AgentExternalToolsTest(unittest.TestCase):
         self.assertTrue(any("incomplete" in warning for warning in response.warnings))
         self.assertIn("source=eastmoney", response.references)
 
+    # Regression scenario: hot stock top100 first board question returns only intersection.
     @patch("app.agents.tools.collect_eastmoney_hot_stock_ranking")
     def test_hot_stock_top100_first_board_question_returns_only_intersection(
         self,
@@ -1189,6 +1226,7 @@ class AgentExternalToolsTest(unittest.TestCase):
         self.assertIn("共有 1 只首板票", response.answer)
         self.assertTrue(any("cross-list" in warning for warning in response.warnings))
 
+    # Regression scenario: policy repairs broad finance news with structured feed.
     @patch("app.agents.tools.collect_finance_news")
     def test_policy_repairs_broad_finance_news_with_structured_feed(
         self,

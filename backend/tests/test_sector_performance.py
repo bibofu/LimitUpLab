@@ -6,6 +6,7 @@ from app.services.sector_performance import build_sector_performance
 
 
 class SectorPerformanceTest(unittest.TestCase):
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         self.today = date.today()
         self.spot_rows = [
@@ -46,7 +47,10 @@ class SectorPerformanceTest(unittest.TestCase):
             for index in range(26)
         ]
 
+    # Regression scenario: named sector returns ranking breadth and trend.
     def test_named_sector_returns_ranking_breadth_and_trend(self) -> None:
+        # The inline callback supplies the fixture value or replacement behavior used by this
+        # test; it is evaluated only when the code under test calls it.
         response = build_sector_performance(
             "半导体板块",
             trade_date=self.today,
@@ -62,7 +66,10 @@ class SectorPerformanceTest(unittest.TestCase):
         self.assertIsNotNone(response.return_5d_pct)
         self.assertEqual(response.sources, ["fake-spot", "fake-history"])
 
+    # Regression scenario: empty sector returns market ranking.
     def test_empty_sector_returns_market_ranking(self) -> None:
+        # The inline callback supplies the fixture value or replacement behavior used by this
+        # test; it is evaluated only when the code under test calls it.
         response = build_sector_performance(
             trade_date=self.today,
             spot_collector=lambda: self.spot_rows,
@@ -73,6 +80,7 @@ class SectorPerformanceTest(unittest.TestCase):
         self.assertEqual(response.top_sectors[0].sector_name, "厨卫电器")
         self.assertEqual(response.bottom_sectors[0].sector_name, "半导体")
 
+    # Regression scenario: military alias returns all matching industry subsectors.
     def test_military_alias_returns_all_matching_industry_subsectors(self) -> None:
         military_rows = [
             SectorSpotRow(
@@ -103,6 +111,8 @@ class SectorPerformanceTest(unittest.TestCase):
             ),
         ]
 
+        # The inline callback supplies the fixture value or replacement behavior used by this
+        # test; it is evaluated only when the code under test calls it.
         response = build_sector_performance(
             "国防军工",
             trade_date=self.today,
@@ -117,6 +127,7 @@ class SectorPerformanceTest(unittest.TestCase):
             ["军工装备", "军工电子"],
         )
 
+    # Regression scenario: ai alias falls back to concept ranking.
     def test_ai_alias_falls_back_to_concept_ranking(self) -> None:
         concept_rows = [
             SectorSpotRow(
@@ -134,6 +145,8 @@ class SectorPerformanceTest(unittest.TestCase):
             )
         ]
 
+        # The inline callback supplies the fixture value or replacement behavior used by this
+        # test; it is evaluated only when the code under test calls it.
         response = build_sector_performance(
             "AI",
             trade_date=self.today,
@@ -149,7 +162,10 @@ class SectorPerformanceTest(unittest.TestCase):
         self.assertEqual(response.change_pct, 1.26)
         self.assertEqual(response.sources, ["fake-concept", "fake-history"])
 
+    # Regression scenario: named concept uses history when spot source is unavailable.
     def test_named_concept_uses_history_when_spot_source_is_unavailable(self) -> None:
+        # The inline callback supplies the fixture value or replacement behavior used by this
+        # test; it is evaluated only when the code under test calls it.
         response = build_sector_performance(
             "AI",
             trade_date=self.today,

@@ -4,6 +4,7 @@ from pathlib import Path
 from scripts.retire_first_board_discovery import retire_discovery
 
 
+# Regression scenario: cleanup is backed up idempotent and preserves prediction records.
 def test_cleanup_is_backed_up_idempotent_and_preserves_prediction_records(tmp_path: Path) -> None:
     database = tmp_path / "test.sqlite"
     backup_dir = tmp_path / "backups"

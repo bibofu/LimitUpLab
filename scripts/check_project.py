@@ -28,6 +28,8 @@ class Check:
     cwd: Path
 
 
+# Construct the backend test/evaluation and frontend test/build commands for the selected
+# acceptance scope.
 def build_checks(scope: str, output: Path) -> list[Check]:
     checks = []
     if scope in {"all", "backend"}:
@@ -60,6 +62,7 @@ def build_checks(scope: str, output: Path) -> list[Check]:
     return checks
 
 
+# Run each acceptance gate with its own log and timeout, then save an honest combined result.
 def run_checks(checks: list[Check], output: Path, env: dict[str, str], timeout: int) -> dict:
     results = []
     for check in checks:
@@ -96,6 +99,7 @@ def run_checks(checks: list[Check], output: Path, env: dict[str, str], timeout: 
     return report
 
 
+# Create an isolated offline validation workspace and run the selected acceptance gates.
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--scope", choices=("all", "backend", "frontend"), default="all")

@@ -21,17 +21,20 @@ TEST_TMP_ROOT = Path(os.getenv("LIMITUPLAB_TEST_TMP", Path(__file__).resolve().p
 
 
 class ConfigTest(unittest.TestCase):
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         self._original_env = dict(os.environ)
         TEST_TMP_ROOT.mkdir(exist_ok=True)
         self._test_dir = TEST_TMP_ROOT / f"config-test-{uuid4().hex}"
         self._test_dir.mkdir()
 
+    # Release the test resources and restore the environment after this test scope.
     def tearDown(self) -> None:
         os.environ.clear()
         os.environ.update(self._original_env)
         shutil.rmtree(self._test_dir, ignore_errors=True)
 
+    # Regression scenario: loads env file without overriding existing values.
     def test_loads_env_file_without_overriding_existing_values(self) -> None:
         for name in (
             "LIMITUPLAB_LLM_ENABLED",
@@ -59,6 +62,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(os.getenv("LIMITUPLAB_LLM_MODEL"), "from-process")
         self.assertEqual(os.getenv("LIMITUPLAB_LLM_BASE_URL"), "https://api.example.com")
 
+    # Regression scenario: proxy alias sets standard proxy variables.
     def test_proxy_alias_sets_standard_proxy_variables(self) -> None:
         env_path = self._test_dir / ".env"
         env_path.write_text(
@@ -72,6 +76,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(os.getenv("HTTPS_PROXY"), "http://127.0.0.1:17891")
         self.assertEqual(os.getenv("ALL_PROXY"), "http://127.0.0.1:17891")
 
+    # Regression scenario: hydrates missing windows environment without overwriting process.
     @patch("app.config._read_windows_environment_value", return_value="secret-value")
     def test_hydrates_missing_windows_environment_without_overwriting_process(
         self,
@@ -90,6 +95,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(loaded_again, [])
         self.assertEqual(os.getenv("TEST_WINDOWS_SECRET"), "process-value")
 
+    # Regression scenario: replace proxy environment removes all inherited variants.
     def test_replace_proxy_environment_removes_all_inherited_variants(self) -> None:
         for name in PROXY_ENV_NAMES:
             os.environ[name] = "http://localhost:65535"
@@ -106,11 +112,13 @@ class ConfigTest(unittest.TestCase):
         replace_proxy_environment()
         self.assertTrue(all(name not in os.environ for name in PROXY_ENV_NAMES))
 
+    # Regression scenario: cors origins default to local development.
     def test_cors_origins_default_to_local_development(self) -> None:
         os.environ.pop("LIMITUPLAB_CORS_ORIGINS", None)
 
         self.assertEqual(configured_cors_origins(), list(DEFAULT_CORS_ORIGINS))
 
+    # Regression scenario: cors origins are trimmed deduplicated and normalized.
     def test_cors_origins_are_trimmed_deduplicated_and_normalized(self) -> None:
         os.environ["LIMITUPLAB_CORS_ORIGINS"] = (
             "https://example.com/, https://www.example.com, https://example.com"
@@ -121,12 +129,14 @@ class ConfigTest(unittest.TestCase):
             ["https://example.com", "https://www.example.com"],
         )
 
+    # Regression scenario: cors origins reject wildcard with credentials.
     def test_cors_origins_reject_wildcard_with_credentials(self) -> None:
         os.environ["LIMITUPLAB_CORS_ORIGINS"] = "*"
 
         with self.assertRaisesRegex(ValueError, "explicit origins"):
             configured_cors_origins()
 
+    # Regression scenario: runtime configuration enables llm and clears dead proxy.
     @patch("app.config._proxy_endpoint_reachable", return_value=False)
     def test_runtime_configuration_enables_llm_and_clears_dead_proxy(
         self,
@@ -146,6 +156,7 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(os.getenv("LIMITUPLAB_LLM_MODEL"), "deepseek-v4-flash")
         self.assertTrue(all(name not in os.environ for name in PROXY_ENV_NAMES))
 
+    # Regression scenario: dead proxy cleanup leaves valid proxy untouched.
     @patch("app.config._proxy_endpoint_reachable", return_value=True)
     def test_dead_proxy_cleanup_leaves_valid_proxy_untouched(
         self,

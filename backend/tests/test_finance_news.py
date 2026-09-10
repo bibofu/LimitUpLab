@@ -11,9 +11,11 @@ from app.services.finance_news import collect_finance_news
 
 
 class FinanceNewsTest(unittest.TestCase):
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         self.now = datetime(2026, 8, 24, 9, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
 
+    # Build the FinanceNewsItem fixture used by the surrounding regression scenario.
     def _item(
         self,
         title: str,
@@ -34,7 +36,10 @@ class FinanceNewsTest(unittest.TestCase):
             relevance_score=relevance,
         )
 
+    # Regression scenario: aggregates deduplicates and ranks market news.
     def test_aggregates_deduplicates_and_ranks_market_news(self) -> None:
+        # Prepare the eastmoney loader fixture or observation used by the surrounding regression
+        # scenario.
         def eastmoney_loader() -> list[FinanceNewsItem]:
             return [
                 self._item(
@@ -55,6 +60,8 @@ class FinanceNewsTest(unittest.TestCase):
                 ),
             ]
 
+        # Prepare the tonghuashun loader fixture or observation used by the surrounding regression
+        # scenario.
         def tonghuashun_loader() -> list[FinanceNewsItem]:
             return [
                 self._item(
@@ -89,10 +96,15 @@ class FinanceNewsTest(unittest.TestCase):
         self.assertIn("数据中心", duplicate.summary)
         self.assertFalse(any("课堂" in item.title for item in response.items))
 
+    # Regression scenario: keeps working when one source fails.
     def test_keeps_working_when_one_source_fails(self) -> None:
+        # Simulate the dependency failure required by this regression scenario so its error or
+        # fallback path is exercised.
         def failing_loader() -> list[FinanceNewsItem]:
             raise RuntimeError("upstream unavailable")
 
+        # Prepare the working loader fixture or observation used by the surrounding regression
+        # scenario.
         def working_loader() -> list[FinanceNewsItem]:
             return [
                 self._item(
@@ -113,7 +125,10 @@ class FinanceNewsTest(unittest.TestCase):
         self.assertEqual(response.sources, ["东方财富"])
         self.assertEqual(response.items[0].title, "A股市场开盘")
 
+    # Regression scenario: market news route returns structured feed.
     def test_market_news_route_returns_structured_feed(self) -> None:
+        # The inline callback supplies the fixture value or replacement behavior used by this
+        # test; it is evaluated only when the code under test calls it.
         expected = collect_finance_news(
             limit=200,
             loaders={
@@ -142,6 +157,7 @@ class FinanceNewsTest(unittest.TestCase):
         self.assertGreater(response.items[0].published_at, response.items[-1].published_at)
         loader.assert_called_once_with(limit=2000, hours=24)
 
+    # Regression scenario: market news route hides upstream error.
     def test_market_news_route_hides_upstream_error(self) -> None:
         with patch(
             "app.routers.market.collect_finance_news",
@@ -153,6 +169,7 @@ class FinanceNewsTest(unittest.TestCase):
         self.assertEqual(raised.exception.status_code, 502)
         self.assertNotIn("provider detail", str(raised.exception.detail))
 
+    # Regression scenario: market feed removes foreign noise but keeps us and hk equities.
     def test_market_feed_removes_foreign_noise_but_keeps_us_and_hk_equities(self) -> None:
         domestic = self._item(
             "商务部发布商品消费实施意见",

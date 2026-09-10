@@ -8,9 +8,11 @@ from app.collectors import limit_down_collector
 
 
 class LimitDownCollectorTest(unittest.TestCase):
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         limit_down_collector._cache.clear()
 
+    # Regression scenario: limit down pool uses requested date and normalizes rows.
     @patch("app.collectors.limit_down_collector.ak.stock_zt_pool_dtgc_em")
     def test_limit_down_pool_uses_requested_date_and_normalizes_rows(self, loader) -> None:
         loader.return_value = pd.DataFrame(
@@ -32,6 +34,7 @@ class LimitDownCollectorTest(unittest.TestCase):
         self.assertEqual(snapshot.items[0].symbol, "002963")
         self.assertEqual(snapshot.items[0].change_pct, -10.01)
 
+    # Regression scenario: empty limit down pool is a valid zero count.
     @patch("app.collectors.limit_down_collector.ak.stock_zt_pool_dtgc_em")
     def test_empty_limit_down_pool_is_a_valid_zero_count(self, loader) -> None:
         loader.return_value = pd.DataFrame()

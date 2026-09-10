@@ -38,11 +38,13 @@ LABELS = {
 }
 
 
+# Apply the historical research script's supported-security filter to one event.
 def supported(event):
     return (event["symbol"].startswith(("600", "601", "603", "605", "000", "001", "002", "003"))
             and "ST" not in event["name"].upper() and "退" not in event["name"])
 
 
+# Check the historical bar's finite positive OHLC fields before using it in a path.
 def valid_bar(b):
     return bool(b and all(b.get(k) is not None and math.isfinite(b[k]) and b[k] > 0
                          for k in ("open", "high", "low", "close"))
@@ -133,6 +135,7 @@ def attach_outcome(row, bars, calendar, events):
 def first_triggers(pool):
     """Deduplicate from signal information before inspecting outcome availability."""
     seen, result = set(), []
+    # The key compares signal date, then symbol.
     for row in sorted(pool, key=lambda x: (x["signal_date"], x["symbol"])):
         for tag in row["tags"]:
             key = row["symbol"], row["anchor_date"], tag
@@ -142,6 +145,7 @@ def first_triggers(pool):
     return result
 
 
+# Match eligible baseline observations to research signals using the declared comparison strata.
 def match_baselines(signals, pool):
     groups = defaultdict(list)
     for r in pool:
@@ -200,6 +204,7 @@ def block_interval(rows, dates, reps=2000):
     return [float(x) for x in np.quantile(boot, [0.025, 0.975])]
 
 
+# Aggregate the requested outcome field for the historical research report.
 def metric(rows):
     if not rows:
         return {"n": 0, "dates": 0}
@@ -225,6 +230,7 @@ def nonoverlap(rows, calendar):
     """Greedy symbol-level six-session spacing, decided from ALL signals."""
     last, kept = {}, []
     index = {d: i for i, d in enumerate(calendar)}
+    # The key compares signal date, then symbol.
     for row in sorted(rows, key=lambda x: (x["signal_date"], x["symbol"])):
         i = index[row["signal_date"]]
         if i > last.get(row["symbol"], -100) + 5:
@@ -233,6 +239,7 @@ def nonoverlap(rows, calendar):
     return kept
 
 
+# Build historical post-limit paths and comparison cohorts from the selected local database.
 def analyze(db, start, output):
     query_events = "SELECT * FROM limit_up_events ORDER BY trade_date,symbol"
     query_bars = "SELECT symbol,trade_date,open,high,low,close,volume,source FROM stock_daily_bars ORDER BY trade_date,symbol"

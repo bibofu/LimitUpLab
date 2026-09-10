@@ -26,6 +26,7 @@ MAINTENANCE = REPO / ".maintenance"
 SERVICES = ("backend", "frontend", "recommendation-refresh", "daily-update")
 
 
+# Accept only the deployment command's exact tag/SHA format and return the validated pair.
 def parse_request(command: str) -> tuple[str, str]:
     match = re.fullmatch(r"deploy (v[0-9]+\.[0-9]+\.[0-9]+) ([0-9a-f]{40})", command)
     if not match:
@@ -33,12 +34,14 @@ def parse_request(command: str) -> tuple[str, str]:
     return match.group(1), match.group(2)
 
 
+# Reject deployment during the protected Shanghai market-opening interval.
 def check_window(now: datetime | None = None) -> None:
     local = (now or datetime.now(ZoneInfo("Asia/Shanghai"))).astimezone(ZoneInfo("Asia/Shanghai"))
     if clock_time(8, 30) <= local.time() < clock_time(9, 35):
         raise RuntimeError("Deployment blocked during 08:30-09:35 Asia/Shanghai; rerun later")
 
 
+# Hold the cross-process deployment/update/backup lock, waiting only up to the requested timeout.
 @contextmanager
 def deployment_lock(timeout: int = 0):
     import fcntl
@@ -59,6 +62,8 @@ def deployment_lock(timeout: int = 0):
             fcntl.flock(handle, fcntl.LOCK_UN)
 
 
+# Write release metadata through a temporary sibling and replacement to avoid a partially written
+# journal.
 def write_json(path: Path, value: dict) -> None:
     temporary = path.with_suffix(".tmp")
     temporary.write_text(json.dumps(value, indent=2) + "\n", encoding="utf-8")
@@ -66,6 +71,7 @@ def write_json(path: Path, value: dict) -> None:
 
 
 class Deployment:
+    # Initialize Deployment with the supplied dependencies and per-instance state.
     def __init__(self, tag: str, sha: str):
         self.tag, self.sha = tag, sha
         self.record = {"tag": tag, "sha": sha, "started_at": datetime.now().isoformat()}
@@ -76,10 +82,13 @@ class Deployment:
         self.maintenance = False
         self.promoted = False
 
+    # Update the in-memory release state and persist it to the deployment journal.
     def status(self, status: str, **details) -> None:
         self.record.update(status=status, **details)
         write_json(self.journal, self.record)
 
+    # Execute a deployment subprocess with bounded runtime and logged stderr; optionally return
+    # captured stdout.
     def run(self, *args: str, capture: bool = False, timeout: int = 600) -> str:
         env = {**os.environ, "GIT_SSH_COMMAND": "ssh -o BatchMode=yes -o StrictHostKeyChecking=yes -o ConnectTimeout=15"}
         with self.log.open("a", encoding="utf-8") as log:
@@ -90,9 +99,12 @@ class Deployment:
             raise RuntimeError(f"{args[0]} {args[1]} failed ({result.returncode}); see {self.log}")
         return result.stdout.strip() if capture else ""
 
+    # Run a Git command through the deployment's logged subprocess boundary and return its output.
     def git(self, *args: str) -> str:
         return self.run("git", *args, capture=True)
 
+    # Create or validate the release checkout and its production-environment link without
+    # overwriting unexpected files.
     def worktree(self, sha: str) -> Path:
         path = STATE / "releases" / sha
         if not path.exists():
@@ -110,6 +122,7 @@ class Deployment:
             raise RuntimeError("Release environment symlink points outside production configuration")
         return path
 
+    # Run Docker Compose against the selected release and its pinned image override.
     def compose(self, release: dict, *args: str, timeout: int = 600) -> str:
         path = Path(release["path"])
         override = STATE / "releases" / f"{release['sha']}-images.json"
@@ -122,6 +135,7 @@ class Deployment:
                         "-f", str(path / "docker-compose.yml"), "-f", str(override),
                         *args, timeout=timeout)
 
+    # Validate the release source and prepare its images before entering the service-switch phase.
     def prepare(self) -> dict:
         if MAINTENANCE.exists():
             raise RuntimeError("Maintenance is already active; operator recovery required")
@@ -157,6 +171,7 @@ class Deployment:
         self.compose(target, "build", "backend", "frontend", timeout=2400)
         return target
 
+    # Wait for an existing daily-update container to finish before the service switch.
     def wait_for_jobs(self) -> None:
         deadline = time.monotonic() + 600
         while self.run("docker", "ps", "-q", "--filter", "label=com.docker.compose.project=limituplab",
@@ -165,6 +180,7 @@ class Deployment:
                 raise RuntimeError("Existing daily-update is still running; no services were stopped")
             time.sleep(5)
 
+    # Read the current database schema version and hash using a read-only container mount.
     def schema(self) -> dict:
         code = (
             "import sqlite3,json,hashlib; "
@@ -177,6 +193,7 @@ class Deployment:
                                   "-v", "limituplab-data:/app/data:ro", self.previous["backend"],
                                   "python", "-c", code, capture=True))
 
+    # Create and verify a deployment-specific database backup outside the daily retention set.
     def backup(self) -> None:
         # Deployment snapshots live outside the rolling daily backup retention set.
         directory = f"/backups/deployments/{self.journal.stem}"
@@ -191,6 +208,8 @@ class Deployment:
         self.status("backed_up", backup=match.group(1).replace("/backups/", "/var/backups/limituplab/", 1),
                     previous_schema=self.previous_schema)
 
+    # Verify the switched service's HTTP routes and expected payload shapes before accepting the
+    # release.
     def probe(self) -> None:
         for route in ("/health", "/", "/recommendations?strategy=relay",
                       "/recommendations?strategy=consolidation", "/recommendations?strategy=drawdown",
@@ -214,10 +233,12 @@ class Deployment:
                 if route.startswith("/api/") and not isinstance(json.loads(body), dict):
                     raise RuntimeError(f"Business endpoint did not return an object: {route}")
 
+    # Point the local backend/frontend image tags at the selected release images.
     def restore_local_tags(self, release: dict) -> None:
         for service in ("backend", "frontend"):
             self.run("docker", "tag", release[service], f"limituplab-{service}:local")
 
+    # Start the release's background worker after the foreground service transition.
     def start_worker(self, release: dict) -> None:
         self.compose(release, "up", "-d", "--no-build", "recommendation-refresh")
         # Check it remains alive, rather than only checking a successful docker start.
@@ -227,6 +248,8 @@ class Deployment:
         if not state["Running"] or state["Restarting"]:
             raise RuntimeError("Recommendation refresh worker is not stable")
 
+    # Attempt release recovery using the recorded previous state, retaining maintenance protection
+    # when rollback is unsafe.
     def recover(self, target: dict) -> None:
         self.compose(target, "stop", "-t", "60", "recommendation-refresh", "backend", "frontend")
         if self.promoted or self.previous_schema is None or self.schema() != self.previous_schema:
@@ -240,6 +263,8 @@ class Deployment:
         self.maintenance = False
         self.status("rolled_back")
 
+    # Coordinate preparation, maintenance, backup, service switch, verification and recovery as
+    # one journaled release.
     def execute(self) -> None:
         check_window()
         target = self.prepare()
@@ -274,6 +299,7 @@ class Deployment:
             raise
 
 
+# Parse the restricted deployment request, hold the deployment lock and report the release result.
 def main() -> int:
     tag, sha = parse_request(os.environ.get("SSH_ORIGINAL_COMMAND", " ".join(sys.argv[1:])))
     os.umask(0o077)

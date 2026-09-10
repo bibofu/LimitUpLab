@@ -36,11 +36,13 @@ WORKER_STALE_AFTER = timedelta(hours=30)
 class RefreshLoopLock:
     """Prevent duplicate local or container refresh workers."""
 
+    # Initialize RefreshLoopLock with the supplied dependencies and per-instance state.
     def __init__(self, path: Path, *, stale_after: timedelta):
         self.path = path
         self.stale_after = stale_after
         self._owned = False
 
+    # Acquire ownership of the process lock before allowing the guarded loop to run.
     def __enter__(self) -> RefreshLoopLock:
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if self.path.exists():
@@ -72,10 +74,13 @@ class RefreshLoopLock:
         self._owned = True
         return self
 
+    # Refresh the modification time of the lock owned by this loop as a liveness signal.
     def touch(self) -> None:
         if self._owned:
             self.path.touch()
 
+    # Remove the lock only if this instance acquired it, including when the guarded work raised an
+    # exception.
     def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
         if self._owned:
             self.path.unlink(missing_ok=True)
@@ -129,6 +134,7 @@ def main() -> int:
             run_immediately = False
 
 
+# Refresh candidate intelligence, finalize it when eligible and persist the iteration report.
 def _run_refresh(interval: int, report_path: Path) -> None:
     response = refresh_recommendation_intelligence(interval_minutes=interval)
     if should_finalize_recommendation_intelligence(response):
@@ -195,6 +201,9 @@ def _inside_premarket_catch_up_window(now: datetime | None = None) -> bool:
     return PREMARKET_REFRESH_TIME <= current.time() < MARKET_OPEN_TIME
 
 
+# Read the process identity stored in a refresh-loop lock; invalid lock content returns None.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _read_lock_pid(path: Path) -> int | None:
     try:
         payload = json.loads(path.read_text(encoding="utf-8"))
@@ -203,6 +212,7 @@ def _read_lock_pid(path: Path) -> int | None:
         return None
 
 
+# Check whether the recorded process ID is still present before reclaiming its lock.
 def _process_exists(pid: int) -> bool:
     if pid <= 0:
         return False
@@ -213,6 +223,7 @@ def _process_exists(pid: int) -> bool:
     return True
 
 
+# Persist the refresh result through a temporary file so readers see a complete report.
 def _write_report(path: Path, payload: dict[str, object]) -> None:
     path.parent.mkdir(parents=True, exist_ok=True)
     temporary = path.with_suffix(f"{path.suffix}.tmp")

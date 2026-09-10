@@ -4,6 +4,7 @@ from app.agents.answer_grounding import evaluate_answer_grounding
 from app.models import AgentToolTrace
 
 
+# Build the AgentToolTrace fixture used by the surrounding regression scenario.
 def _trace(*, status: str = "success", output: dict | None = None) -> AgentToolTrace:
     return AgentToolTrace(
         name="stock_facts",
@@ -16,6 +17,7 @@ def _trace(*, status: str = "success", output: dict | None = None) -> AgentToolT
 
 
 class AnswerGroundingTest(unittest.TestCase):
+    # Regression scenario: structured claims support formatting and unit conversion.
     def test_structured_claims_support_formatting_and_unit_conversion(self) -> None:
         result = evaluate_answer_grounding(
             (
@@ -50,6 +52,7 @@ class AnswerGroundingTest(unittest.TestCase):
         self.assertEqual(result.claim_support_rate, 1.0)
         self.assertTrue(all(claim.evidence_paths for claim in result.claims))
 
+    # Regression scenario: unsupported entity and number are reported individually.
     def test_unsupported_entity_and_number_are_reported_individually(self) -> None:
         result = evaluate_answer_grounding(
             "幻觉股份(600000) 的涨幅是 99%。",
@@ -75,6 +78,7 @@ class AnswerGroundingTest(unittest.TestCase):
             {"stock_entity", "number"},
         )
 
+    # Regression scenario: user supplied claim is not treated as agent hallucination.
     def test_user_supplied_claim_is_not_treated_as_agent_hallucination(self) -> None:
         result = evaluate_answer_grounding(
             "目前无法确认 2026-05-15 的 600000。",
@@ -85,6 +89,7 @@ class AnswerGroundingTest(unittest.TestCase):
         self.assertEqual(result.claim_count, 0)
         self.assertFalse(result.tool_failure_hallucination)
 
+    # Regression scenario: tool failure hallucination and over refusal are distinct.
     def test_tool_failure_hallucination_and_over_refusal_are_distinct(self) -> None:
         hallucination = evaluate_answer_grounding(
             "工具失败，但我确认三花智控(002050)上涨 8%。",

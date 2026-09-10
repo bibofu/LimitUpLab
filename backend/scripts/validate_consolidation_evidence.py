@@ -13,6 +13,8 @@ focus = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(focus)
 
 
+# Build volume-comparison observations from eligible price boxes, retaining unknown-volume/source
+# cases.
 def observations(pool, bars, calendar):
     index = {d: i for i, d in enumerate(calendar)}
     result = []
@@ -37,6 +39,7 @@ def first_box(rows):
     Later shrinkage, completeness and performance cannot change the assignment.
     """
     seen, kept = set(), []
+    # The key compares signal date, then symbol.
     for r in sorted(rows, key=lambda r: (r['signal_date'], r['symbol'])):
         key = r['symbol'], r['anchor_date']
         if key not in seen:
@@ -45,8 +48,11 @@ def first_box(rows):
     return kept
 
 
+# Thin repeated signals for each stock so retained observations are more than five trading days
+# apart.
 def spaced(rows, calendar):
     index, last, kept = {d: i for i, d in enumerate(calendar)}, {}, []
+    # The key compares signal date, then symbol.
     for r in sorted(rows, key=lambda r: (r['signal_date'], r['symbol'])):
         i = index[r['signal_date']]
         if i > last.get(r['symbol'], -100) + 5:
@@ -55,10 +61,12 @@ def spaced(rows, calendar):
     return kept
 
 
+# Select the named comparison arm with fully observed outcome windows.
 def complete(rows, arm):
     return [r for r in rows if r['arm'] == arm and r['outcome_status'] == 'complete']
 
 
+# Calculate matched differences by date, then average dates so dense dates do not dominate.
 def point_comparison(left, right):
     strata = focus.pair_rows(left, right)
     result = {'dates': len({r['date'] for r in strata}), 'left_n': sum(r['left_n'] for r in strata),
@@ -71,6 +79,8 @@ def point_comparison(left, right):
     return result
 
 
+# Repeat the comparison after removing each group to measure sensitivity to concentrated
+# observations.
 def influence(left, right, field):
     values = sorted({r[field] for r in left + right})
     results = [{'removed': value, **point_comparison([r for r in left if r[field] != value],
@@ -81,6 +91,8 @@ def influence(left, right, field):
     return {'removals': len(results), 'ranges': ranges, 'details': results}
 
 
+# Re-evaluate the frozen consolidation comparison under deduplication, source and sensitivity
+# diagnostics.
 def analyze(directory, db):
     original = json.loads((directory / 'comparison.json').read_text(encoding='utf-8'))
     with (directory / 'eligible_pool.csv').open(encoding='utf-8-sig', newline='') as f:
@@ -143,8 +155,10 @@ def analyze(directory, db):
               'first_price_box_tencent_features': '固定分组+特征窗口纯腾讯历史',
               'first_price_box_tencent_full_window': '固定分组+特征和结果纯腾讯历史',
               'first_price_box_early': '固定分组前段7/24至8/7', 'first_price_box_late': '固定分组后段8/17至8/28'}
+    # Format an optional signed report metric while keeping missing observations visible.
     def fmt(value):
         return '无' if value is None else f'{value:+.2f}'
+    # Render a sample's size, positive share and average outcome in one report-table cell.
     def cell(r):
         return '无样本' if not r['n'] else f"{r['n']} / {r['positive5']:.1f}% / {r['mean5']:+.2f}%"
     lines = ['# 横盘缩量证据：去重、来源与集中度验证', '',

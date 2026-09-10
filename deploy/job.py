@@ -5,6 +5,7 @@ import sys
 from release import MAINTENANCE, REPO, deployment_lock
 
 
+# Run the selected scheduled data-update or backup job under the shared deployment lock.
 def main() -> int:
     commands = {
         "daily-update": ["docker", "compose", "--env-file", ".env.production", "--profile", "jobs",

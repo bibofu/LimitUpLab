@@ -12,17 +12,21 @@ from app.models import LimitUpEvent
 
 
 class AKShareLimitUpCollectorTest(unittest.TestCase):
+    # Regression scenario: parse akshare trade date.
     def test_parse_akshare_trade_date(self) -> None:
         self.assertEqual(parse_akshare_trade_date("20260515"), date(2026, 5, 15))
 
+    # Regression scenario: parse akshare trade date rejects invalid format.
     def test_parse_akshare_trade_date_rejects_invalid_format(self) -> None:
         with self.assertRaises(ValueError):
             parse_akshare_trade_date("2026-05-15")
 
+    # Regression scenario: parse hhmmss.
     def test_parse_hhmmss(self) -> None:
         self.assertEqual(_parse_hhmmss("092500"), time(9, 25))
         self.assertEqual(_parse_hhmmss(93046), time(9, 30, 46))
 
+    # Regression scenario: failed pool stat is not used as consecutive board height.
     def test_failed_pool_stat_is_not_used_as_consecutive_board_height(self) -> None:
         frame = MagicMock()
         frame.iterrows.return_value = [
@@ -50,6 +54,7 @@ class AKShareLimitUpCollectorTest(unittest.TestCase):
         self.assertEqual(events[0].board_height, 1)
         self.assertFalse(events[0].closed_limit)
 
+    # Regression scenario: collect limit up events keeps closed pool when failed pool errors.
     def test_collect_limit_up_events_keeps_closed_pool_when_failed_pool_errors(self) -> None:
         closed_event = LimitUpEvent(
             symbol="002001",
@@ -88,6 +93,7 @@ class AKShareLimitUpCollectorTest(unittest.TestCase):
         self.assertEqual(len(result.source_errors), 1)
         self.assertIn("akshare.failed_limit_pool", result.source_errors[0])
 
+    # Regression scenario: collect limit up events distinguishes empty from source error.
     def test_collect_limit_up_events_distinguishes_empty_from_source_error(self) -> None:
         with patch(
             "app.collectors.akshare_limit_up_collector._collect_closed_limit_up_events",

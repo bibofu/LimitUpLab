@@ -17,10 +17,12 @@ from app.services.market_data_provider import (
 
 
 class StubHithink:
+    # Prepare the init fixture or observation used by the surrounding regression scenario.
     def __init__(self, *, fail_history: bool = False) -> None:
         self.fail_history = fail_history
         self.history_calls: list[dict[str, object]] = []
 
+    # Build the HithinkStockHistory fixture used by the surrounding regression scenario.
     def collect_stock_history(self, thscode: str, **kwargs) -> HithinkStockHistory:
         self.history_calls.append({"thscode": thscode, **kwargs})
         if self.fail_history:
@@ -43,6 +45,7 @@ class StubHithink:
             ],
         )
 
+    # Build the HithinkMarketSnapshot fixture used by the surrounding regression scenario.
     def collect_market_snapshots(self, thscodes: list[str]) -> HithinkMarketSnapshot:
         return HithinkMarketSnapshot(
             captured_at=datetime(2026, 9, 10, 8, tzinfo=timezone.utc),
@@ -64,6 +67,7 @@ class StubHithink:
 
 
 class MarketDataProviderTest(unittest.TestCase):
+    # Regression scenario: hithink history is primary unadjusted and normalizes volume.
     def test_hithink_history_is_primary_unadjusted_and_normalizes_volume(self) -> None:
         hithink = StubHithink()
         provider = MarketDataProvider(hithink=hithink)  # type: ignore[arg-type]
@@ -76,9 +80,11 @@ class MarketDataProviderTest(unittest.TestCase):
         self.assertEqual(bars[0].amount, 1_260_000)
         self.assertEqual(bars[0].source, HITHINK_HISTORY_SOURCE)
 
+    # Regression scenario: history falls back to tencent with source preserved.
     def test_history_falls_back_to_tencent_with_source_preserved(self) -> None:
         fallback_calls: list[tuple[str, int, date | None]] = []
 
+        # Prepare the fallback fixture or observation used by the surrounding regression scenario.
         def fallback(symbol: str, days: int, end_date: date | None):
             fallback_calls.append((symbol, days, end_date))
             return [
@@ -103,6 +109,7 @@ class MarketDataProviderTest(unittest.TestCase):
         self.assertEqual(fallback_calls, [("002491", 5, date(2026, 9, 10))])
         self.assertEqual(bars[0].source, "akshare.stock_zh_a_hist_tx")
 
+    # Regression scenario: same day snapshot is normalized to hands.
     def test_same_day_snapshot_is_normalized_to_hands(self) -> None:
         provider = MarketDataProvider(hithink=StubHithink())  # type: ignore[arg-type]
 

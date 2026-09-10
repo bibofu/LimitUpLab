@@ -32,10 +32,12 @@ from app.services.sample_data import SAMPLE_EVENTS
 class DeferredToolInjectionProvider(LLMProvider):
     """Request a hidden V2 tool to verify server-side enforcement."""
 
+    # Prepare the init fixture or observation used by the surrounding regression scenario.
     def __init__(self) -> None:
         self.planner_system_prompt = ""
         self.calls = 0
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         del user_prompt
         self.calls += 1
@@ -69,6 +71,7 @@ class DeferredToolInjectionProvider(LLMProvider):
 class PopularityPolicyRepairProvider(LLMProvider):
     """Skip planning the popularity tool so the policy contract must repair it."""
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         del user_prompt
         if "first job is to decide which tools are needed" in system_prompt:
@@ -98,6 +101,7 @@ class PopularityPolicyRepairProvider(LLMProvider):
 class FinanceNewsPolicyRepairProvider(LLMProvider):
     """Skip planning the news tool so the policy contract must repair it."""
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         del user_prompt
         if "first job is to decide which tools are needed" in system_prompt:
@@ -127,6 +131,7 @@ class FinanceNewsPolicyRepairProvider(LLMProvider):
 class StockNewsPolicyRepairProvider(LLMProvider):
     """Declare the stock-news capability and let the contract add its evidence tool."""
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         del user_prompt
         if "first job is to decide which tools are needed" in system_prompt:
@@ -156,12 +161,15 @@ class StockNewsPolicyRepairProvider(LLMProvider):
 class UnexpectedLLMProvider(LLMProvider):
     """Fail if a V1 scope rejection reaches the LLM."""
 
+    # Simulate the model response for this scenario; the controlled output lets the test inspect
+    # planning, validation or fallback behavior.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         del system_prompt, user_prompt
         raise AssertionError("V1 deferred capability must be rejected before LLM")
 
 
 class AgentV1ProfileTest(unittest.TestCase):
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         self.database_path = (
             Path(__file__).resolve().parents[1]
@@ -170,10 +178,13 @@ class AgentV1ProfileTest(unittest.TestCase):
         self.repository = SQLiteFirstBoardRepository(self.database_path)
         self.addCleanup(self._cleanup_database)
 
+    # Release the temporary resources owned by this test fixture.
     def _cleanup_database(self) -> None:
         for suffix in ("", "-shm", "-wal"):
             Path(f"{self.database_path}{suffix}").unlink(missing_ok=True)
 
+    # Prepare the empty execution fixture or observation used by the surrounding regression
+    # scenario.
     @staticmethod
     def _empty_execution() -> ToolExecution:
         return {
@@ -183,6 +194,7 @@ class AgentV1ProfileTest(unittest.TestCase):
             "references": [],
         }
 
+    # Regression scenario: default profile exposes close tools and read only external facts.
     def test_default_profile_exposes_close_tools_and_read_only_external_facts(self) -> None:
         with patch.dict(os.environ, {}, clear=False):
             os.environ.pop("LIMITUPLAB_AGENT_PROFILE", None)
@@ -202,6 +214,7 @@ class AgentV1ProfileTest(unittest.TestCase):
         self.assertIn("sector_performance", registry.schema_prompt())
         self.assertNotIn("web_search", schema_names)
 
+    # Regression scenario: extended profile preserves deferred v2 tools.
     def test_extended_profile_preserves_deferred_v2_tools(self) -> None:
         registry = AgentToolRegistry(
             events=SAMPLE_EVENTS,
@@ -213,6 +226,7 @@ class AgentV1ProfileTest(unittest.TestCase):
         self.assertTrue(V1_DEFERRED_REALTIME_TOOL_NAMES.issubset(schema_names))
         self.assertIn("hot_stock_ranking", registry.schema_prompt())
 
+    # Regression scenario: v1 capability catalog includes read only external workflows.
     def test_v1_capability_catalog_includes_read_only_external_workflows(self) -> None:
         catalog = capability_schema_prompt(V1_CLOSED_MARKET_TOOL_NAMES)
 
@@ -222,6 +236,7 @@ class AgentV1ProfileTest(unittest.TestCase):
         self.assertIn("finance_news", catalog)
         self.assertIn("stock_news", catalog)
 
+    # Regression scenario: v1 policy repairs current popularity query.
     def test_v1_policy_repairs_current_popularity_query(self) -> None:
         registry = AgentToolRegistry(
             events=SAMPLE_EVENTS,
@@ -261,6 +276,7 @@ class AgentV1ProfileTest(unittest.TestCase):
         self.assertEqual(execution["tool_call_names"], ["hot_stock_ranking"])
         ranking.assert_called_once_with(period="day", limit=20, source="auto")
 
+    # Regression scenario: injected deferred tool call is blocked.
     @patch("app.agents.tools.AgentToolRegistry.remote_limit_up_pool")
     def test_injected_deferred_tool_call_is_blocked(self, remote_limit_up_pool) -> None:
         provider = DeferredToolInjectionProvider()
@@ -286,6 +302,7 @@ class AgentV1ProfileTest(unittest.TestCase):
         )
         self.assertEqual(blocked_trace.status, "error")
 
+    # Regression scenario: current popularity question is grounded in v1.
     @patch("app.agents.tools.AgentToolRegistry.hot_stock_ranking")
     def test_current_popularity_question_is_grounded_in_v1(self, hot_stock_ranking) -> None:
         payload = {
@@ -326,6 +343,7 @@ class AgentV1ProfileTest(unittest.TestCase):
             source="auto",
         )
 
+    # Regression scenario: latest finance news question is grounded in v1.
     @patch("app.agents.tools.AgentToolRegistry.finance_news")
     def test_latest_finance_news_question_is_grounded_in_v1(self, finance_news) -> None:
         facts = FinanceNewsFacts(
@@ -368,6 +386,7 @@ class AgentV1ProfileTest(unittest.TestCase):
         self.assertIn("https://example.com/macro", response.references)
         finance_news.assert_called_once_with(query=None, limit=8, hours=48)
 
+    # Regression scenario: named stock news question is grounded in v1.
     @patch("app.agents.tools.AgentToolRegistry.stock_news")
     def test_named_stock_news_question_is_grounded_in_v1(self, stock_news) -> None:
         facts = StockNewsFacts(
@@ -416,6 +435,7 @@ class AgentV1ProfileTest(unittest.TestCase):
         self.assertIn("https://example.com/301489", response.references)
         stock_news.assert_called_once_with("301489", days=7, limit=10)
 
+    # Regression scenario: v1 scope eval cases are rejected before llm.
     def test_v1_scope_eval_cases_are_rejected_before_llm(self) -> None:
         fixture_path = (
             Path(__file__).parent
@@ -440,6 +460,7 @@ class AgentV1ProfileTest(unittest.TestCase):
                 self.assertEqual(response.answer, UNANSWERABLE_TEXT)
                 self.assertEqual(response.tool_calls, [])
 
+    # Regression scenario: capability text states v1 close only scope.
     def test_capability_text_states_v1_close_only_scope(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(

@@ -13,12 +13,16 @@ TEST_TMP_ROOT = Path(os.getenv("LIMITUPLAB_TEST_TMP", Path(__file__).resolve().p
 
 
 class RatingBacktestTest(unittest.TestCase):
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         TEST_TMP_ROOT.mkdir(exist_ok=True)
 
+    # Prepare the database path fixture or observation used by the surrounding regression
+    # scenario.
     def _database_path(self) -> Path:
         return TEST_TMP_ROOT / f"rating-backtest-{uuid4().hex}.sqlite"
 
+    # Release the temporary resources owned by this test fixture.
     def _cleanup_database(self, database_path: Path) -> None:
         for path in (
             database_path,
@@ -27,6 +31,7 @@ class RatingBacktestTest(unittest.TestCase):
         ):
             path.unlink(missing_ok=True)
 
+    # Build the LimitUpEvent fixture used by the surrounding regression scenario.
     def _event(
         self,
         symbol: str,
@@ -57,6 +62,7 @@ class RatingBacktestTest(unittest.TestCase):
             continued_next_day=False,
         )
 
+    # Build the FirstBoardOutcome fixture used by the surrounding regression scenario.
     def _make_outcome(
         self,
         symbol: str,
@@ -89,6 +95,7 @@ class RatingBacktestTest(unittest.TestCase):
             created_at=datetime.now(timezone.utc),
         )
 
+    # Regression scenario: backtest aggregates rating buckets and failures.
     def test_backtest_aggregates_rating_buckets_and_failures(self) -> None:
         database_path = self._database_path()
         try:

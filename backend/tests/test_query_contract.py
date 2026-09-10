@@ -15,6 +15,7 @@ from app.agents.query_contract_eval import (
 
 
 class QueryContractV2Test(unittest.TestCase):
+    # Regression scenario: contract fixture passes.
     def test_contract_fixture_passes(self) -> None:
         fixture_path = Path(__file__).parent / "fixtures" / "query_contract_v2_cases.json"
 
@@ -30,6 +31,7 @@ class QueryContractV2Test(unittest.TestCase):
         self.assertEqual(suite.total, 36)
         self.assertTrue(suite.ok, failures)
 
+    # Regression scenario: user filters override conflicting planner arguments.
     def test_user_filters_override_conflicting_planner_arguments(self) -> None:
         contract = build_limit_up_query_contract(
             "2026-08-07 创业板二板股成交额前5名",
@@ -48,6 +50,7 @@ class QueryContractV2Test(unittest.TestCase):
         self.assertEqual(contract.sort_by, "amount")
         self.assertEqual(contract.limit, 5)
 
+    # Regression scenario: failed and intraday opened are distinct.
     def test_failed_and_intraday_opened_are_distinct(self) -> None:
         failed = build_limit_up_query_contract("今天炸板票有哪些")
         opened = build_limit_up_query_contract("今天有哪些涨停股曾开板")
@@ -55,6 +58,7 @@ class QueryContractV2Test(unittest.TestCase):
         self.assertEqual(failed.event_status, "failed")
         self.assertEqual(opened.event_status, "broken_intraday")
 
+    # Regression scenario: plain limit up scope overrides wrong planner status.
     def test_plain_limit_up_scope_overrides_wrong_planner_status(self) -> None:
         contract = build_limit_up_query_contract(
             "今天创业板有哪些股票涨停",
@@ -63,6 +67,7 @@ class QueryContractV2Test(unittest.TestCase):
 
         self.assertEqual(contract.event_status, "closed")
 
+    # Regression scenario: undated query ignores planner historical date.
     def test_undated_query_ignores_planner_historical_date(self) -> None:
         contract = build_limit_up_query_contract(
             "首板票有哪些",
@@ -72,6 +77,7 @@ class QueryContractV2Test(unittest.TestCase):
         self.assertIsNone(contract.trade_date)
         self.assertEqual(contract.board_height, 1)
 
+    # Regression scenario: recent limit up sector summary defaults to seven trade days.
     def test_recent_limit_up_sector_summary_defaults_to_seven_trade_days(self) -> None:
         contract = build_limit_up_query_contract(
             "近期哪些板块涨停的股票比较多",
@@ -83,6 +89,7 @@ class QueryContractV2Test(unittest.TestCase):
         self.assertEqual(contract.group_by, "concept")
         self.assertEqual(contract.result_mode, "summary")
 
+    # Regression scenario: explicit recent window and concept group override defaults.
     def test_explicit_recent_window_and_concept_group_override_defaults(self) -> None:
         contract = build_limit_up_query_contract(
             "近10个交易日哪些题材的涨停股票最多"
@@ -96,6 +103,7 @@ class QueryContractV2Test(unittest.TestCase):
             )
         )
 
+    # Regression scenario: explicit industry wording uses industry instead of limit reason.
     def test_explicit_industry_wording_uses_industry_instead_of_limit_reason(self) -> None:
         contract = build_limit_up_query_contract(
             "近期哪些行业的涨停股票比较多"
@@ -103,6 +111,7 @@ class QueryContractV2Test(unittest.TestCase):
 
         self.assertEqual(contract.group_by, "industry")
 
+    # Regression scenario: recent named sector stock list uses clean query and seven days.
     def test_recent_named_sector_stock_list_uses_clean_query_and_seven_days(self) -> None:
         message = "近期农业板块涨停过的股票有哪些"
         contract = build_limit_up_query_contract(
@@ -119,12 +128,14 @@ class QueryContractV2Test(unittest.TestCase):
         self.assertTrue(contract.exhaustive)
         self.assertEqual(contract.limit, 100)
 
+    # Regression scenario: today named sector stock list keeps single day scope.
     def test_today_named_sector_stock_list_keeps_single_day_scope(self) -> None:
         contract = build_limit_up_query_contract("今天农业板块涨停的股票有哪些")
 
         self.assertEqual(contract.query, "农业")
         self.assertEqual(contract.recent_trade_days, 1)
 
+    # Regression scenario: explicit named sector window overrides seven day default.
     def test_explicit_named_sector_window_overrides_seven_day_default(self) -> None:
         contract = build_limit_up_query_contract(
             "近10个交易日农业板块涨停过的股票有哪些",
@@ -134,6 +145,7 @@ class QueryContractV2Test(unittest.TestCase):
         self.assertEqual(contract.query, "农业")
         self.assertEqual(contract.recent_trade_days, 10)
 
+    # Regression scenario: limit down wording compiles to one market event type.
     def test_limit_down_wording_compiles_to_one_market_event_type(self) -> None:
         for message in (
             "今天跌停的票有哪些",
@@ -145,6 +157,7 @@ class QueryContractV2Test(unittest.TestCase):
                 contract = build_market_event_query_contract(message)
                 self.assertEqual(contract.event_type, "limit_down")
 
+    # Regression scenario: explicit limit down overrides wrong planner event type.
     def test_explicit_limit_down_overrides_wrong_planner_event_type(self) -> None:
         contract = build_market_event_query_contract(
             "今天跌停的票有哪些",
@@ -154,6 +167,7 @@ class QueryContractV2Test(unittest.TestCase):
         self.assertEqual(contract.event_type, "limit_down")
         self.assertEqual(contract.limit, 20)
 
+    # Regression scenario: unknown planner event type is rejected without silent default.
     def test_unknown_planner_event_type_is_rejected_without_silent_default(self) -> None:
         with self.assertRaisesRegex(ValueError, "Unsupported market event type"):
             build_market_event_query_contract(
@@ -161,6 +175,7 @@ class QueryContractV2Test(unittest.TestCase):
                 planner_arguments={"event_type": "mystery_event"},
             )
 
+    # Regression scenario: market event list signal excludes rules and causes.
     def test_market_event_list_signal_excludes_rules_and_causes(self) -> None:
         self.assertTrue(looks_like_market_event_query("今天跌停的票有哪些"))
         self.assertFalse(looks_like_market_event_query("股票为什么会跌停"))

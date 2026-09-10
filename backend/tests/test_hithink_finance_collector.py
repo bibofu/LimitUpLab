@@ -10,11 +10,13 @@ from app.collectors.hithink_finance_collector import (
 
 
 class FakeRunner:
+    # Prepare the init fixture or observation used by the surrounding regression scenario.
     def __init__(self, payload: dict, returncode: int = 0) -> None:
         self.payload = payload
         self.returncode = returncode
         self.commands: list[list[str]] = []
 
+    # Build the subprocess.CompletedProcess fixture used by the surrounding regression scenario.
     def __call__(self, command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
         self.commands.append(command)
         return subprocess.CompletedProcess(
@@ -26,10 +28,12 @@ class FakeRunner:
 
 
 class SequenceRunner:
+    # Prepare the init fixture or observation used by the surrounding regression scenario.
     def __init__(self, payloads: list[dict]) -> None:
         self.payloads = list(payloads)
         self.commands: list[list[str]] = []
 
+    # Build the subprocess.CompletedProcess fixture used by the surrounding regression scenario.
     def __call__(self, command: list[str], **_kwargs) -> subprocess.CompletedProcess[str]:
         self.commands.append(command)
         payload = self.payloads.pop(0)
@@ -42,6 +46,7 @@ class SequenceRunner:
 
 
 class HithinkFinanceCollectorTest(unittest.TestCase):
+    # Regression scenario: hot stock snapshot is normalized.
     def test_hot_stock_snapshot_is_normalized(self) -> None:
         runner = FakeRunner(
             {
@@ -75,6 +80,7 @@ class HithinkFinanceCollectorTest(unittest.TestCase):
         self.assertIn("hot-stock", runner.commands[0])
         self.assertEqual(runner.commands[0][-2:], ["--format", "json"])
 
+    # Regression scenario: a share symbol directory returns name mapping.
     def test_a_share_symbol_directory_returns_name_mapping(self) -> None:
         runner = FakeRunner(
             {
@@ -101,6 +107,7 @@ class HithinkFinanceCollectorTest(unittest.TestCase):
         self.assertIn("symbol", runner.commands[0])
         self.assertIn("10000", runner.commands[0])
 
+    # Regression scenario: index catalog snapshot and constituents are normalized.
     def test_index_catalog_snapshot_and_constituents_are_normalized(self) -> None:
         runner = SequenceRunner(
             [
@@ -155,6 +162,7 @@ class HithinkFinanceCollectorTest(unittest.TestCase):
         self.assertIn("snapshot", runner.commands[1])
         self.assertIn("constituents", runner.commands[2])
 
+    # Regression scenario: quarterly income statements are normalized.
     def test_quarterly_income_statements_are_normalized(self) -> None:
         runner = FakeRunner(
             {
@@ -189,6 +197,7 @@ class HithinkFinanceCollectorTest(unittest.TestCase):
         self.assertIn("quarterly", runner.commands[0])
         self.assertIn("6", runner.commands[0])
 
+    # Regression scenario: market snapshot preserves quote performance.
     def test_market_snapshot_preserves_quote_performance(self) -> None:
         runner = FakeRunner(
             {
@@ -227,6 +236,7 @@ class HithinkFinanceCollectorTest(unittest.TestCase):
         self.assertIn("snapshot", runner.commands[0])
         self.assertIn("002491.SZ", runner.commands[0])
 
+    # Regression scenario: stock history is unadjusted and end date is inclusive.
     def test_stock_history_is_unadjusted_and_end_date_is_inclusive(self) -> None:
         runner = FakeRunner(
             {
@@ -269,6 +279,7 @@ class HithinkFinanceCollectorTest(unittest.TestCase):
             "1788278400000",
         )
 
+    # Regression scenario: full market snapshot pages and resolves names.
     def test_full_market_snapshot_pages_and_resolves_names(self) -> None:
         runner = SequenceRunner(
             [
@@ -319,6 +330,7 @@ class HithinkFinanceCollectorTest(unittest.TestCase):
         self.assertIn("--offset", runner.commands[0])
         self.assertIn("symbol", runner.commands[1])
 
+    # Regression scenario: dragon tiger snapshot preserves capital flow.
     def test_dragon_tiger_snapshot_preserves_capital_flow(self) -> None:
         runner = FakeRunner(
             {
@@ -360,6 +372,7 @@ class HithinkFinanceCollectorTest(unittest.TestCase):
         self.assertEqual(snapshot.items[0].organization_net_buy_amount, 167_141_952.47)
         self.assertEqual(snapshot.items[0].concepts, ["5G"])
 
+    # Regression scenario: limit up pool uses shanghai midnight and normalizes height.
     def test_limit_up_pool_uses_shanghai_midnight_and_normalizes_height(self) -> None:
         runner = FakeRunner(
             {
@@ -397,6 +410,7 @@ class HithinkFinanceCollectorTest(unittest.TestCase):
         date_ms_index = runner.commands[0].index("--date-ms") + 1
         self.assertEqual(runner.commands[0][date_ms_index], "1787241600000")
 
+    # Regression scenario: cli error envelope becomes typed error.
     def test_cli_error_envelope_becomes_typed_error(self) -> None:
         runner = FakeRunner(
             {

@@ -24,9 +24,11 @@ from app.services.sample_data import SAMPLE_EVENTS
 class IntermittentPlannerProvider(LLMProvider):
     """Return a valid plan twice and simulate one provider outage."""
 
+    # Prepare the init fixture or observation used by the surrounding regression scenario.
     def __init__(self) -> None:
         self.calls = 0
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         self.calls += 1
         if self.calls == 2:
@@ -53,6 +55,7 @@ class IntermittentPlannerProvider(LLMProvider):
 class EmptyPlannerProvider(LLMProvider):
     """Return a valid but incomplete plan to exercise policy repair metrics."""
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         return LLMResult(
             content=json.dumps(
@@ -69,6 +72,7 @@ class EmptyPlannerProvider(LLMProvider):
 
 
 class AgentEvalRunnerTest(unittest.TestCase):
+    # Regression scenario: eval template override does not mutate process environment.
     def test_eval_template_override_does_not_mutate_process_environment(self) -> None:
         case = AgentEvalCase(
             case_id="template_isolation",
@@ -77,6 +81,8 @@ class AgentEvalRunnerTest(unittest.TestCase):
         )
         observed_values: list[str | None] = []
 
+        # Prepare the observe environment fixture or observation used by the surrounding
+        # regression scenario.
         def observe_environment(**kwargs):
             observed_values.append(
                 os.environ.get("LIMITUPLAB_FORCE_TEMPLATE_ANSWER")
@@ -105,6 +111,7 @@ class AgentEvalRunnerTest(unittest.TestCase):
         self.assertTrue(suite.ok)
         self.assertEqual(observed_values, ["preserved"])
 
+    # Regression scenario: fixture eval suite passes against deterministic agent.
     def test_fixture_eval_suite_passes_against_deterministic_agent(self) -> None:
         fixture_path = Path(__file__).parent / "fixtures" / "agent_eval_cases.json"
         suite = run_agent_eval_suite(
@@ -120,6 +127,7 @@ class AgentEvalRunnerTest(unittest.TestCase):
         self.assertTrue(suite.ok, failure_report)
         self.assertEqual(suite.total, 18)
 
+    # Regression scenario: product fixture covers complete multi turn answers.
     def test_product_fixture_covers_complete_multi_turn_answers(self) -> None:
         fixture_path = (
             Path(__file__).parent
@@ -144,6 +152,7 @@ class AgentEvalRunnerTest(unittest.TestCase):
         self.assertEqual(suite.metrics["context_continuity_rate"], 1.0)
         self.assertEqual(suite.metrics["presentation_compliance_rate"], 1.0)
 
+    # Regression scenario: product failure report groups actionable dimensions.
     def test_product_failure_report_groups_actionable_dimensions(self) -> None:
         response = answer_first_board_chat(
             request=AgentChatRequest(session_id="broken", message="你好"),
@@ -199,6 +208,7 @@ class AgentEvalRunnerTest(unittest.TestCase):
         grounding = report["results"][0]["evaluation_details"]["grounding"]
         self.assertEqual(grounding["unsupported_claim_count"], 2)
 
+    # Regression scenario: eval report route returns quality summary.
     def test_eval_report_route_returns_quality_summary(self) -> None:
         report = get_agent_eval_report(_admin=None)
 
@@ -208,6 +218,7 @@ class AgentEvalRunnerTest(unittest.TestCase):
         self.assertEqual(report.pass_rate, 1.0)
         self.assertTrue(report.results)
 
+    # Regression scenario: repeated live trials expose provider flakiness.
     def test_repeated_live_trials_expose_provider_flakiness(self) -> None:
         case = AgentEvalCase(
             case_id="top_candidates_live",
@@ -233,6 +244,7 @@ class AgentEvalRunnerTest(unittest.TestCase):
         self.assertEqual(suite.llm_planner_trials, 2)
         self.assertEqual(suite.llm_coverage_rate, 0.6667)
 
+    # Regression scenario: live eval rejects silent template fallback.
     def test_live_eval_rejects_silent_template_fallback(self) -> None:
         case = AgentEvalCase(
             case_id="top_candidates_no_llm",
@@ -253,6 +265,7 @@ class AgentEvalRunnerTest(unittest.TestCase):
             suite.results[0].failures,
         )
 
+    # Regression scenario: live eval separates backend success from planner quality.
     def test_live_eval_separates_backend_success_from_planner_quality(self) -> None:
         case = AgentEvalCase(
             case_id="top_candidates_repaired",

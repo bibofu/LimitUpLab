@@ -221,6 +221,8 @@ def run_daily_update(
     )
     report = DailyUpdateReport(trade_date=trade_date.isoformat())
 
+    # Import status matters as much as row count: a successful empty pool and a
+    # failed provider request must not trigger the same replacement behavior.
     if not skip_import:
         collection = collect_limit_up_events(trade_date.strftime("%Y%m%d"))
         report.akshare_status = collection.status
@@ -258,6 +260,8 @@ def run_daily_update(
                     f"Tonghuashun={remote_snapshot.total}."
                 )
 
+    # Re-read persisted events after import so downstream features, enrichment
+    # and outcome work all use the same stored event set.
     events = limit_repo.list_events()
     if not any(event.trade_date == trade_date for event in events):
         report.warnings.append(f"No raw limit-up events found for {trade_date.isoformat()}.")
@@ -496,6 +500,7 @@ def warm_latest_intraday_cache(
     ready_count = 0
     failures: list[str] = []
 
+    # Load one stock's intraday data for cache warming and report whether any data was returned.
     def warm(symbol: str) -> bool:
         return bool(
             loader(
@@ -596,6 +601,7 @@ def backfill_recent_daily_top_candidate_bars(
         predictions_by_date.setdefault(prediction.trade_date, []).append(prediction)
     targets: list[tuple[date, str]] = []
     for item_date in trade_dates:
+        # The key compares score (negated for descending order), then symbol.
         daily_predictions = sorted(
             predictions_by_date.get(item_date, []),
             key=lambda item: (-item.score, item.symbol),

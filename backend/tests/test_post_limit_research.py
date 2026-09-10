@@ -27,6 +27,7 @@ from app.models import AgentChatRequest, AgentChatResponse, AgentRun
 from app.services.llm_provider import DisabledLLMProvider, LLMProvider, LLMResult
 
 
+# Prepare the dates fixture or observation used by the surrounding regression scenario.
 def _dates(count=40):
     result = []
     day = date(2026, 7, 1)
@@ -37,6 +38,7 @@ def _dates(count=40):
     return result
 
 
+# Build the PostLimitDataset fixture used by the surrounding regression scenario.
 def _dataset():
     dates = _dates()
     events = [
@@ -75,6 +77,7 @@ def _dataset():
     return PostLimitDataset(events, list(by_key.values()), dates, dates, date.fromisoformat(dates[-1]))
 
 
+# Regression scenario: query contract routes shapes and user numeric overrides.
 def test_query_contract_routes_shapes_and_user_numeric_overrides():
     contract = build_post_limit_query_contract(
         "2026-09-07近10日涨停后从高位回撤15%以上的2板票，题材为机器人，按回撤从高到低排序，前5只",
@@ -107,6 +110,7 @@ def test_query_contract_routes_shapes_and_user_numeric_overrides():
     assert anchored_path.data_as_of == date(2026, 9, 7)
 
 
+# Regression scenario: drawdown magnitude wording routes to complete screen list.
 def test_drawdown_magnitude_wording_routes_to_complete_screen_list():
     message = "近期涨停后回撤比较多的股票有哪些"
     contract = build_post_limit_query_contract(
@@ -131,11 +135,14 @@ def test_drawdown_magnitude_wording_routes_to_complete_screen_list():
     assert not signals.post_limit_statistics
 
 
+# Regression scenario: post limit trace keeps all candidate names for stock links.
 def test_post_limit_trace_keeps_all_candidate_names_for_stock_links(
     monkeypatch,
     tmp_path,
 ):
     dataset = _dataset()
+    # The inline callback supplies the fixture value or replacement behavior used by this test; it
+    # is evaluated only when the code under test calls it.
     monkeypatch.setattr(
         "app.agents.tools.load_post_limit_dataset",
         lambda *_args, **_kwargs: dataset,
@@ -176,6 +183,7 @@ def test_post_limit_trace_keeps_all_candidate_names_for_stock_links(
     ]
 
 
+# Regression scenario: premarket observation shapes default to seven event days.
 def test_premarket_observation_shapes_default_to_seven_event_days():
     high_drawdown = build_post_limit_query_contract(
         "有哪些涨停后从高位大幅回撤的票",
@@ -197,6 +205,7 @@ def test_premarket_observation_shapes_default_to_seven_event_days():
     assert stock_path.recent_limit_days == 5
 
 
+# Regression scenario: explicit event window overrides seven day default.
 def test_explicit_event_window_overrides_seven_day_default():
     contract = build_post_limit_query_contract(
         "近10个交易日涨停后从高位回撤的股票",
@@ -206,6 +215,7 @@ def test_explicit_event_window_overrides_seven_day_default():
     assert contract.recent_limit_days == 10
 
 
+# Regression scenario: policy signal prevents generic limit up and kline routing.
 def test_policy_signal_prevents_generic_limit_up_and_kline_routing():
     screen = QuestionSignals.from_message("有哪些涨停后从高位大幅回撤的票")
     assert screen.post_limit_screen
@@ -219,6 +229,7 @@ def test_policy_signal_prevents_generic_limit_up_and_kline_routing():
     assert not stats.post_limit_screen
 
 
+# Regression scenario: inclusive rule boundaries.
 def test_inclusive_rule_boundaries():
     assert matches_high_drawdown(1, 10)
     assert matches_high_drawdown(4, 10)
@@ -228,6 +239,7 @@ def test_inclusive_rule_boundaries():
     assert not matches_volume_consolidation(4, 8.0001, 0, .75)
 
 
+# Regression scenario: strong nonconsecutive and broken board repair rules.
 def test_strong_nonconsecutive_and_broken_board_repair_rules():
     base = {
         "anchor_age": 2, "anchor_change_pct": 3, "peak_drawdown_pct": 2,
@@ -247,6 +259,7 @@ def test_strong_nonconsecutive_and_broken_board_repair_rules():
     )
 
 
+# Regression scenario: disabled llm still returns grounded post limit screen.
 def test_disabled_llm_still_returns_grounded_post_limit_screen(monkeypatch):
     payload = {
         "data_as_of": "2026-09-07",
@@ -270,6 +283,7 @@ def test_disabled_llm_still_returns_grounded_post_limit_screen(monkeypatch):
         "query_contract": {"recent_limit_days": 7},
     }
 
+    # Build the ToolResult fixture used by the surrounding regression scenario.
     def fake_screen(self, contract):
         return ToolResult(
             name="post_limit_screen", input=contract.to_dict(), output=payload,
@@ -289,6 +303,7 @@ def test_disabled_llm_still_returns_grounded_post_limit_screen(monkeypatch):
     assert "回看最近7个交易日的收盘涨停" in response.answer
 
 
+# Regression scenario: wrong planner tool is replaced by only post limit screen.
 def test_wrong_planner_tool_is_replaced_by_only_post_limit_screen(monkeypatch):
     payload = {
         "data_as_of": "2026-09-07", "latest_data_date": "2026-09-07",
@@ -298,6 +313,7 @@ def test_wrong_planner_tool_is_replaced_by_only_post_limit_screen(monkeypatch):
         "matched_count": 0, "candidates": [], "data_missing": [], "warnings": [],
     }
 
+    # Build the ToolResult fixture used by the surrounding regression scenario.
     def fake_screen(self, contract):
         return ToolResult(
             name="post_limit_screen", input=contract.to_dict(), output=payload,
@@ -305,6 +321,7 @@ def test_wrong_planner_tool_is_replaced_by_only_post_limit_screen(monkeypatch):
         )
 
     class WrongPlanner(LLMProvider):
+        # Build the LLMResult fixture used by the surrounding regression scenario.
         def generate(self, system_prompt, user_prompt):
             if "first job is to decide which tools are needed" in system_prompt:
                 return LLMResult(
@@ -331,6 +348,7 @@ def test_wrong_planner_tool_is_replaced_by_only_post_limit_screen(monkeypatch):
     assert "stock_kline" not in response.tool_calls
 
 
+# Regression scenario: pronoun followup reuses previous symbol and anchor.
 def test_pronoun_followup_reuses_previous_symbol_and_anchor(monkeypatch):
     captured = {}
     payload = {
@@ -345,6 +363,7 @@ def test_pronoun_followup_reuses_previous_symbol_and_anchor(monkeypatch):
         "data_missing": [], "warnings": [],
     }
 
+    # Build the ToolResult fixture used by the surrounding regression scenario.
     def fake_path(self, contract, symbol):
         captured["symbol"] = symbol
         captured["anchor_date"] = contract.anchor_date
@@ -374,6 +393,7 @@ def test_pronoun_followup_reuses_previous_symbol_and_anchor(monkeypatch):
     assert captured == {"symbol": "600001", "anchor_date": date(2026, 9, 1)}
 
 
+# Regression scenario: screen uses peak before observation day and preserves overlap.
 def test_screen_uses_peak_before_observation_day_and_preserves_overlap():
     dataset = _dataset()
     end = date.fromisoformat(dataset.calendar[35])
@@ -390,6 +410,7 @@ def test_screen_uses_peak_before_observation_day_and_preserves_overlap():
     assert item["matched_shapes"] == ["high_drawdown", "pullback_stabilizing"]
 
 
+# Regression scenario: seven day agent window reports a sixth day event gap.
 @pytest.mark.parametrize("offset", [5, 6])
 def test_seven_day_agent_window_reports_a_sixth_day_event_gap(offset):
     dataset = _dataset()
@@ -414,6 +435,7 @@ def test_seven_day_agent_window_reports_a_sixth_day_event_gap(offset):
     assert result["data_missing"] == ["recent_event_dates"]
 
 
+# Regression scenario: direct contract and statistics use seven days.
 @pytest.mark.parametrize("shape", ["high_drawdown", "volume_consolidation"])
 def test_direct_contract_and_statistics_use_seven_days(shape):
     contract = PostLimitQueryContract(shape=shape, mode="statistics")
@@ -421,11 +443,13 @@ def test_direct_contract_and_statistics_use_seven_days(shape):
     assert PostLimitQueryContract(shape=shape, recent_limit_days=10).recent_limit_days == 10
 
 
+# Regression scenario: other shapes ignore injected seven day capability default.
 @pytest.mark.parametrize("message", ["回撤企稳有哪些", "强势不连板有哪些", "断板修复有哪些", "2进3有哪些"])
 def test_other_shapes_ignore_injected_seven_day_capability_default(message):
     assert build_post_limit_query_contract(message, planner_arguments={"recent_limit_days": 7}).recent_limit_days == 5
 
 
+# Regression scenario: statistics separates event lookback and signal day count.
 def test_statistics_separates_event_lookback_and_signal_day_count():
     contract = build_post_limit_query_contract("统计近3个信号日、回看近10个交易日有收盘涨停的缩量整理历史表现")
     assert contract.recent_limit_days == 10
@@ -433,6 +457,7 @@ def test_statistics_separates_event_lookback_and_signal_day_count():
     assert build_post_limit_query_contract("比较近7日横盘缩量和回撤企稳的历史表现").recent_limit_days == 7
 
 
+# Regression scenario: statistics discloses missing event windows.
 def test_statistics_discloses_missing_event_windows():
     dataset = _dataset()
     missing_day = dataset.calendar[29]
@@ -447,6 +472,7 @@ def test_statistics_discloses_missing_event_windows():
     assert "recent_event_dates 0个" not in answer
 
 
+# Regression scenario: answer renders actual event window.
 @pytest.mark.parametrize("days", [5, 7, 10])
 def test_answer_renders_actual_event_window(days):
     from app.agents.chat_templates import _template_post_limit_screen, _template_post_limit_statistics
@@ -455,6 +481,7 @@ def test_answer_renders_actual_event_window(days):
     assert f"最近{days}个交易日" in _template_post_limit_statistics(payload)
 
 
+# Regression scenario: repeated limit up resets anchor and future bars are isolated.
 def test_repeated_limit_up_resets_anchor_and_future_bars_are_isolated():
     dataset = _dataset()
     later_anchor = dataset.calendar[34]
@@ -478,6 +505,7 @@ def test_repeated_limit_up_resets_anchor_and_future_bars_are_isolated():
     assert item["peak_price"] == 12.76
 
 
+# Regression scenario: missing and mixed source are disclosed separately.
 def test_missing_and_mixed_source_are_disclosed_separately():
     dataset = _dataset()
     end = date.fromisoformat(dataset.calendar[35])
@@ -500,6 +528,7 @@ def test_missing_and_mixed_source_are_disclosed_separately():
     assert set(result["data_missing"]) >= {"missing_history20", "mixed_or_missing_source"}
 
 
+# Regression scenario: consolidation and second to third presets.
 def test_consolidation_and_second_to_third_presets():
     dataset = _dataset()
     consolidation = build_post_limit_screen(
@@ -514,6 +543,7 @@ def test_consolidation_and_second_to_third_presets():
     assert [item["symbol"] for item in relay["candidates"]] == ["600003"]
 
 
+# Regression scenario: single stock path is anchored and annotated.
 def test_single_stock_path_is_anchored_and_annotated():
     dataset = _dataset()
     result = build_post_limit_path(
@@ -527,6 +557,7 @@ def test_single_stock_path_is_anchored_and_annotated():
     assert "收盘低于涨停收盘" in result["path"][2]["states"]
 
 
+# Regression scenario: outcome uses exact d1 open and reports mae mfe.
 def test_outcome_uses_exact_d1_open_and_reports_mae_mfe():
     dataset = _dataset()
     bars = {(bar["symbol"], bar["trade_date"]): bar for bar in dataset.bars}
@@ -545,6 +576,7 @@ def test_outcome_uses_exact_d1_open_and_reports_mae_mfe():
     assert immature is None and issue == "immature"
 
 
+# Regression scenario: statistics uses first trigger and marks small sample.
 def test_statistics_uses_first_trigger_and_marks_small_sample():
     dataset = _dataset()
     result = build_post_limit_statistics(

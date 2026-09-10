@@ -9,6 +9,7 @@ from app.repositories.chat_session_repository import SessionOwnershipError
 
 
 class ChatSessionRepositoryTest(unittest.TestCase):
+    # Regression scenario: sessions are scoped to their owner.
     def test_sessions_are_scoped_to_their_owner(self) -> None:
         database_path = Path(__file__).resolve().parents[1] / ".test_owner_sessions.sqlite"
         database_path.unlink(missing_ok=True)
@@ -37,6 +38,7 @@ class ChatSessionRepositoryTest(unittest.TestCase):
         finally:
             database_path.unlink(missing_ok=True)
 
+    # Regression scenario: create resume rename and delete session.
     def test_create_resume_rename_and_delete_session(self) -> None:
         database_path = Path(__file__).resolve().parents[1] / ".test_chat_sessions.sqlite"
         if database_path.exists():
@@ -122,6 +124,7 @@ class ChatSessionRepositoryTest(unittest.TestCase):
         self.assertEqual(remaining_runs, [])
         self.assertEqual(remaining_message_count, 0)
 
+    # Regression scenario: old agent message backfills grounded stock mentions.
     def test_old_agent_message_backfills_grounded_stock_mentions(self) -> None:
         database_path = Path(__file__).resolve().parents[1] / ".test_chat_stock_links.sqlite"
         if database_path.exists():

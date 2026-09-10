@@ -11,6 +11,8 @@ import shutil
 import subprocess
 
 
+# Install the production deployment helpers and dedicated SSH authorization after checking root
+# privileges and key identity.
 def main() -> None:
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--public-key", type=Path, required=True)

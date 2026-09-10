@@ -5,6 +5,7 @@ from app.collectors import collect_eastmoney_hot_stock_ranking
 
 
 class PopularityCollectorTest(unittest.TestCase):
+    # Regression scenario: eastmoney top100 keeps names and rank order.
     @patch("app.collectors.first_board_enrichment_collector.requests.post")
     def test_eastmoney_top100_keeps_names_and_rank_order(self, post: MagicMock) -> None:
         response = MagicMock()
@@ -16,6 +17,8 @@ class PopularityCollectorTest(unittest.TestCase):
         }
         post.return_value = response
 
+        # The inline callback supplies the fixture value or replacement behavior used by this
+        # test; it is evaluated only when the code under test calls it.
         snapshot = collect_eastmoney_hot_stock_ranking(
             limit=100,
             name_resolver=lambda: {

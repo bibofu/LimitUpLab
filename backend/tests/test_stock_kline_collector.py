@@ -17,9 +17,12 @@ from app.models import StockIntradayKLineBar, StockKLineBar
 
 
 class StockKLineCollectorTest(unittest.TestCase):
+    # Regression scenario: daily collector includes end date and excludes later rows.
     @patch("app.collectors.stock_kline_collector.ak.stock_zh_a_hist_tx")
     def test_daily_collector_includes_end_date_and_excludes_later_rows(self, history) -> None:
         class Frame:
+            # Prepare the to dict fixture or observation used by the surrounding regression
+            # scenario.
             def to_dict(self, _orient: str):
                 return [
                     {
@@ -47,21 +50,25 @@ class StockKLineCollectorTest(unittest.TestCase):
         )
         self.assertEqual(history.call_args.kwargs["end_date"], "20260819")
 
+    # Regression scenario: normalize stock symbol.
     def test_normalize_stock_symbol(self) -> None:
         self.assertEqual(_normalize_stock_symbol("001259"), "sz001259")
         self.assertEqual(_normalize_stock_symbol("600519"), "sh600519")
         self.assertEqual(_normalize_stock_symbol("sz001259"), "sz001259")
 
+    # Regression scenario: normalize stock symbol rejects invalid symbol.
     def test_normalize_stock_symbol_rejects_invalid_symbol(self) -> None:
         with self.assertRaises(ValueError):
             _normalize_stock_symbol("abc")
 
+    # Regression scenario: parse datetime.
     def test_parse_datetime(self) -> None:
         self.assertEqual(
             _parse_datetime("2026-05-20 09:35:00"),
             datetime(2026, 5, 20, 9, 35),
         )
 
+    # Regression scenario: sina payload is parsed without akshare daily request.
     def test_sina_payload_is_parsed_without_akshare_daily_request(self) -> None:
         class Response:
             text = (
@@ -70,6 +77,8 @@ class StockKLineCollectorTest(unittest.TestCase):
                 '"close":"10.10","volume":"1000","amount":"10100"}]);'
             )
 
+            # Implement the context/response protocol expected by the code under test using this
+            # local fixture.
             @staticmethod
             def raise_for_status() -> None:
                 return None
@@ -78,11 +87,13 @@ class StockKLineCollectorTest(unittest.TestCase):
             trust_env = True
             params: dict[str, str] | None = None
 
+            # Build the Response fixture used by the surrounding regression scenario.
             def get(self, _url: str, *, params, timeout: int):
                 self.params = params
                 self.timeout = timeout
                 return Response()
 
+            # Release the temporary resources owned by this test fixture.
             @staticmethod
             def close() -> None:
                 return None
@@ -104,6 +115,7 @@ class StockKLineCollectorTest(unittest.TestCase):
         self.assertEqual(bars[0].close, 10.1)
         self.assertLessEqual(int(session.params["datalen"]), 1970)  # type: ignore[index]
 
+    # Regression scenario: sina payload validation and bounded data length.
     def test_sina_payload_validation_and_bounded_data_length(self) -> None:
         self.assertEqual(_parse_sina_intraday_payload("=([]);"), [])
         with self.assertRaises(ValueError):
@@ -111,6 +123,7 @@ class StockKLineCollectorTest(unittest.TestCase):
         self.assertLess(_sina_intraday_datalen(date.today(), 1), 300)
         self.assertEqual(_sina_intraday_datalen(date(2020, 1, 1), 1), 1970)
 
+    # Regression scenario: parse tencent spot line requires expected trade date.
     def test_parse_tencent_spot_line_requires_expected_trade_date(self) -> None:
         fields = [""] * 35
         fields[2] = "002365"
@@ -133,6 +146,7 @@ class StockKLineCollectorTest(unittest.TestCase):
         self.assertIsNone(_parse_tencent_spot_line(line, date(2026, 8, 17)))
 
 
+    # Regression scenario: build stock close snapshot.
     def test_build_stock_close_snapshot(self) -> None:
         bars = [
             StockKLineBar(
@@ -163,6 +177,7 @@ class StockKLineCollectorTest(unittest.TestCase):
         self.assertEqual(snapshot.change_pct, 10.0)
         self.assertEqual(snapshot.volume, 1500)
         self.assertEqual(snapshot.source, "test")
+    # Regression scenario: aggregate intraday rows.
     def test_aggregate_intraday_rows(self) -> None:
         rows = [
             StockIntradayKLineBar(

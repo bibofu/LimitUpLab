@@ -19,6 +19,7 @@ from app.services.sample_data import SAMPLE_EVENTS
 
 
 class PredictionSnapshotContractTest(unittest.TestCase):
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         self.database_path = (
             Path(__file__).resolve().parents[1]
@@ -33,6 +34,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
         ]
         self.trade_date = max(item.trade_date for item in self.events)
 
+    # Release the test resources and restore the environment after this test scope.
     def tearDown(self) -> None:
         for path in (
             self.database_path,
@@ -41,6 +43,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
         ):
             path.unlink(missing_ok=True)
 
+    # Regression scenario: repeated live generation is idempotent.
     def test_repeated_live_generation_is_idempotent(self) -> None:
         first_count = self._persist_live()
         second_count = self._persist_live()
@@ -59,6 +62,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
         self.assertEqual(snapshot.data_as_of, self.trade_date)
         self.assertTrue(snapshot.candidates[0].score_breakdown)
 
+    # Regression scenario: later scoring version cannot replace live snapshot.
     def test_later_scoring_version_cannot_replace_live_snapshot(self) -> None:
         self._persist_live()
         original = self.repository.get_live_prediction_snapshot(self.trade_date)
@@ -107,6 +111,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
             1,
         )
 
+    # Regression scenario: canonical snapshot can replace provisional live snapshot.
     def test_canonical_snapshot_can_replace_provisional_live_snapshot(self) -> None:
         self._persist_live()
         original = self.repository.get_live_prediction_snapshot(self.trade_date)
@@ -174,6 +179,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
             data_as_of=final_data_as_of, created_at=final_created_at, replace=True,
         ), 0)
 
+    # Regression scenario: same day live snapshot is reviewable without auction.
     def test_same_day_live_snapshot_is_reviewable_without_auction(self) -> None:
         trade_date = date(2026, 8, 31)
         created_at = datetime(2026, 8, 31, 8, tzinfo=timezone.utc)
@@ -188,6 +194,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
 
         self.assertEqual([item.prediction_id for item in selected], ["draft-live"])
 
+    # Regression scenario: retired auction batch does not override close history.
     def test_retired_auction_batch_does_not_override_close_history(self) -> None:
         trade_date = date(2026, 8, 31)
         created_at = datetime(2026, 8, 31, 8, tzinfo=timezone.utc)
@@ -217,6 +224,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
 
         self.assertEqual([item.prediction_id for item in selected], ["close-history"])
 
+    # Regression scenario: live batch excludes same day historical extras.
     def test_live_batch_excludes_same_day_historical_extras(self) -> None:
         created_at = datetime.combine(self.trade_date, time(8), timezone.utc)
         live = [
@@ -245,6 +253,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
         self.assertEqual([item.symbol for item in selected], ["000001", "000002"])
         self.assertTrue(all(item.prediction_source == "live" for item in selected))
 
+    # Regression scenario: api and agent tool return same live snapshot.
     def test_api_and_agent_tool_return_same_live_snapshot(self) -> None:
         self._persist_live()
         tool_result = AgentToolRegistry(
@@ -262,6 +271,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
         self.assertEqual(tool_result.output, api_result)
         self.assertEqual(api_result.snapshot_source, "live")
 
+    # Regression scenario: full pool api bypasses persisted prediction top10.
     def test_full_pool_api_bypasses_persisted_prediction_top10(self) -> None:
         self._persist_live()
 
@@ -275,6 +285,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
         self.assertEqual(api_result.snapshot_source, "calculated")
         self.assertEqual(api_result.trade_date, self.trade_date)
 
+    # Prepare the persist live fixture or observation used by the surrounding regression scenario.
     def _persist_live(self) -> int:
         return persist_agent_predictions_for_dates(
             events=self.events,
@@ -286,6 +297,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
             created_at=datetime.combine(self.trade_date, time(8), timezone.utc),
         )
 
+    # Build the AgentPrediction fixture used by the surrounding regression scenario.
     def _prediction(
         self,
         prediction_id: str,

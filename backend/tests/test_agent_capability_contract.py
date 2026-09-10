@@ -41,9 +41,11 @@ from app.services.sample_data import SAMPLE_EVENTS
 class CapabilityOnlyProvider(LLMProvider):
     """Simulate semantic planning while intentionally omitting raw tool calls."""
 
+    # Prepare the init fixture or observation used by the surrounding regression scenario.
     def __init__(self) -> None:
         self.answer_system_prompt = ""
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         if "first job is to decide which tools are needed" in system_prompt:
             return LLMResult(
@@ -70,6 +72,7 @@ class CapabilityOnlyProvider(LLMProvider):
 class ContextAwareCapabilityProvider(LLMProvider):
     """Return semantic plans for follow-ups and verify history is present."""
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         payload = json.loads(user_prompt)
         if not payload["conversation_history"]:
@@ -94,6 +97,7 @@ class ContextAwareCapabilityProvider(LLMProvider):
 class SourceRefinementProvider(LLMProvider):
     """Select only the new capability and let the context contract merge sources."""
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         return LLMResult(
             content=json.dumps(
@@ -115,13 +119,17 @@ class SourceRefinementProvider(LLMProvider):
 class NativeFunctionPlanningProvider(LLMProvider):
     """Exercise the production planner without prompt-to-JSON compatibility."""
 
+    # Prepare the init fixture or observation used by the surrounding regression scenario.
     def __init__(self) -> None:
         self.function_calls = 0
         self.parameters: dict = {}
 
+    # Simulate the model response for this scenario; the controlled output lets the test inspect
+    # planning, validation or fallback behavior.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         raise AssertionError("native planner unexpectedly used text generation")
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate_function_call(
         self,
         system_prompt: str,
@@ -154,11 +162,14 @@ class NativeFunctionPlanningProvider(LLMProvider):
 class MalformedNativeThenJsonProvider(CapabilityOnlyProvider):
     """Simulate a malformed native response followed by a valid JSON plan."""
 
+    # Simulate the model response for this scenario; the controlled output lets the test inspect
+    # planning, validation or fallback behavior.
     def generate_function_call(self, *args, **kwargs) -> LLMResult:
         raise NativeFunctionCallingError("malformed submit_agent_plan arguments")
 
 
 class AgentCapabilityContractTest(unittest.TestCase):
+    # Regression scenario: production planner prefers native function calling.
     def test_production_planner_prefers_native_function_calling(self) -> None:
         provider = NativeFunctionPlanningProvider()
 
@@ -195,6 +206,7 @@ class AgentCapabilityContractTest(unittest.TestCase):
         self.assertEqual(plan.capabilities, ("limit_up_pool",))
         self.assertEqual(plan.tool_calls[0]["name"], "limit_up_events")
 
+    # Regression scenario: planner fixed prompt stays within budget.
     def test_planner_fixed_prompt_stays_within_budget(self) -> None:
         database_path = Path(__file__).resolve().parents[1] / (
             f"planner-budget-{uuid4().hex}.sqlite"
@@ -217,8 +229,10 @@ class AgentCapabilityContractTest(unittest.TestCase):
             PLANNER_FIXED_INPUT_CHAR_BUDGET,
         )
 
+    # Regression scenario: capability only promotion plan compiles explicit days.
     def test_capability_only_promotion_plan_compiles_explicit_days(self) -> None:
         class PromotionProvider(NativeFunctionPlanningProvider):
+            # Build the LLMResult fixture used by the surrounding regression scenario.
             def generate_function_call(self, *args, **kwargs) -> LLMResult:
                 super().generate_function_call(*args, **kwargs)
                 return LLMResult(
@@ -256,6 +270,7 @@ class AgentCapabilityContractTest(unittest.TestCase):
             ],
         )
 
+    # Regression scenario: legacy provider falls back to prompt json.
     def test_legacy_provider_falls_back_to_prompt_json(self) -> None:
         provider = CapabilityOnlyProvider()
 
@@ -274,6 +289,7 @@ class AgentCapabilityContractTest(unittest.TestCase):
             "NativeFunctionCallingUnavailable",
         )
 
+    # Regression scenario: malformed native plan falls back to prompt json.
     def test_malformed_native_plan_falls_back_to_prompt_json(self) -> None:
         plan = plan_agent_query(
             AgentChatRequest(
@@ -291,6 +307,7 @@ class AgentCapabilityContractTest(unittest.TestCase):
         )
         self.assertEqual(plan.capabilities, ("limit_up_pool",))
 
+    # Regression scenario: tool plans infer single tool capability.
     def test_tool_plans_infer_single_tool_capability(self) -> None:
         capabilities = normalize_capabilities(
             None,
@@ -299,6 +316,7 @@ class AgentCapabilityContractTest(unittest.TestCase):
 
         self.assertEqual(capabilities, ("finance_news",))
 
+    # Regression scenario: capability is the single workflow manifest.
     def test_capability_is_the_single_workflow_manifest(self) -> None:
         capability = CAPABILITY_BY_NAME["first_board_rating"]
 
@@ -306,6 +324,7 @@ class AgentCapabilityContractTest(unittest.TestCase):
         self.assertEqual(capability.required_tools[0].name, "first_board_ratings")
         self.assertIn("研究评级", capability.answer_guidance)
 
+    # Regression scenario: capability answer guidance is injected progressively.
     def test_capability_answer_guidance_is_injected_progressively(self) -> None:
         guidance = capability_answer_instruction(
             ("market_environment", "popularity")
@@ -315,6 +334,7 @@ class AgentCapabilityContractTest(unittest.TestCase):
         self.assertIn("- market_environment:", guidance)
         self.assertNotIn("- popularity:", guidance)
 
+    # Regression scenario: composite capability is recovered from executed facts.
     def test_composite_capability_is_recovered_from_executed_facts(self) -> None:
         capabilities = infer_capabilities_from_facts(
             (),
@@ -328,6 +348,7 @@ class AgentCapabilityContractTest(unittest.TestCase):
 
         self.assertEqual(capabilities, ("market_environment",))
 
+    # Regression scenario: compound capabilities merge required evidence.
     def test_compound_capabilities_merge_required_evidence(self) -> None:
         calls = ensure_capability_tool_calls(
             ("popularity", "limit_up_pool"),
@@ -342,6 +363,7 @@ class AgentCapabilityContractTest(unittest.TestCase):
         self.assertEqual(calls[0]["arguments"]["limit"], 100)
         self.assertEqual(calls[0]["arguments"]["source"], "auto")
 
+    # Regression scenario: market environment contract requires four evidence groups.
     def test_market_environment_contract_requires_four_evidence_groups(self) -> None:
         calls = ensure_capability_tool_calls(
             ("market_environment",),
@@ -365,6 +387,7 @@ class AgentCapabilityContractTest(unittest.TestCase):
         )
         self.assertTrue(calls[-1]["arguments"]["enrich_performance"])
 
+    # Regression scenario: capability catalog only exposes available workflows.
     def test_capability_catalog_only_exposes_available_workflows(self) -> None:
         payload = json.loads(
             capability_schema_prompt({"hot_stock_ranking", "limit_up_events"})
@@ -373,6 +396,7 @@ class AgentCapabilityContractTest(unittest.TestCase):
 
         self.assertEqual(names, {"popularity", "limit_up_pool"})
 
+    # Regression scenario: paraphrase eval fixture covers single and compound requests.
     def test_paraphrase_eval_fixture_covers_single_and_compound_requests(self) -> None:
         path = Path(__file__).parent / "fixtures" / "agent_paraphrase_eval_cases.json"
         cases = load_eval_cases(path)
@@ -381,6 +405,7 @@ class AgentCapabilityContractTest(unittest.TestCase):
         self.assertTrue(all(case.expected_capabilities for case in cases))
         self.assertTrue(any(len(case.expected_capabilities) > 1 for case in cases))
 
+    # Regression scenario: planner eval repeats each case three times.
     def test_planner_eval_repeats_each_case_three_times(self) -> None:
         suite = run_agent_planner_eval_suite(
             cases=[
@@ -401,6 +426,7 @@ class AgentCapabilityContractTest(unittest.TestCase):
         self.assertEqual(suite.stable_cases, 1)
         self.assertEqual(suite.capability_success_rate, 1.0)
 
+    # Regression scenario: conversation eval preserves history across turns.
     def test_conversation_eval_preserves_history_across_turns(self) -> None:
         path = (
             Path(__file__).parent
@@ -420,6 +446,7 @@ class AgentCapabilityContractTest(unittest.TestCase):
         self.assertEqual(suite.stable_scenarios, 1)
         self.assertEqual(suite.turn_pass_rate, 1.0)
 
+    # Regression scenario: source refinement merges previous evidence capability.
     def test_source_refinement_merges_previous_evidence_capability(self) -> None:
         scenario = AgentConversationEvalScenario(
             scenario_id="source-refinement",
@@ -455,6 +482,7 @@ class AgentCapabilityContractTest(unittest.TestCase):
             ["popularity", "limit_up_pool"],
         )
 
+    # Regression scenario: capability routes a paraphrase without keyword policy help.
     def test_capability_routes_a_paraphrase_without_keyword_policy_help(self) -> None:
         database_path = Path(__file__).resolve().parents[1] / (
             f"capability-contract-{uuid4().hex}.sqlite"

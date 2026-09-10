@@ -20,6 +20,7 @@ from app.services.llm_provider import (
 USAGE = {"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16}
 
 
+# Prepare the completion fixture or observation used by the surrounding regression scenario.
 def completion(message=None, usage=USAGE):
     return {
         "id": "chat-test", "object": "chat.completion", "created": 1,
@@ -31,6 +32,7 @@ def completion(message=None, usage=USAGE):
     }
 
 
+# Prepare the tool message fixture or observation used by the surrounding regression scenario.
 def tool_message(name="submit_agent_plan", arguments='{"capabilities":["limit_up_pool"]}'):
     return {"role": "assistant", "content": None, "tool_calls": [{
         "id": "call-1", "type": "function",
@@ -38,6 +40,7 @@ def tool_message(name="submit_agent_plan", arguments='{"capabilities":["limit_up
     }]}
 
 
+# Prepare the sse fixture or observation used by the surrounding regression scenario.
 def sse(usage=USAGE, chunks=("依据", "数据回答。")):
     events = [{
         "id": "chat-test", "object": "chat.completion.chunk", "created": 1,
@@ -53,6 +56,7 @@ def sse(usage=USAGE, chunks=("依据", "数据回答。")):
     return "".join(f"data: {json.dumps(event)}\n\n" for event in events) + "data: [DONE]\n\n"
 
 
+# Prepare the provider for fixture or observation used by the surrounding regression scenario.
 @contextmanager
 def provider_for(handler, *, native=True, retries=0):
     with httpx.Client(transport=httpx.MockTransport(handler)) as client:
@@ -70,9 +74,11 @@ def provider_for(handler, *, native=True, retries=0):
         )
 
 
+# Regression scenario: lcel prompt preserves json and usage.
 def test_lcel_prompt_preserves_json_and_usage():
     payloads = []
 
+    # Build the httpx.Response fixture used by the surrounding regression scenario.
     def handle(request):
         assert request.url.path == "/v1/chat/completions"
         payloads.append(json.loads(request.content))
@@ -90,11 +96,13 @@ def test_lcel_prompt_preserves_json_and_usage():
     assert tracker.token_usage_complete
 
 
+# Regression scenario: bind tools forces named function and preserves schema.
 @pytest.mark.parametrize("function_name", ["submit_agent_plan", "update_session_memory"])
 def test_bind_tools_forces_named_function_and_preserves_schema(function_name):
     payloads = []
     schema = {"type": "object", "properties": {"capabilities": {"type": "array", "items": {"type": "string"}}}}
 
+    # Build the httpx.Response fixture used by the surrounding regression scenario.
     def handle(request):
         payloads.append(json.loads(request.content))
         return httpx.Response(200, json=completion(tool_message(function_name)))
@@ -115,12 +123,15 @@ def test_bind_tools_forces_named_function_and_preserves_schema(function_name):
     assert json.loads(result.content)["capabilities"] == ["limit_up_pool"]
 
 
+# Regression scenario: invalid function call fails and is counted.
 @pytest.mark.parametrize("message", [
     {"role": "assistant", "content": "plain text"},
     tool_message("wrong_function"), tool_message(arguments="broken JSON"),
     {**tool_message(), "tool_calls": tool_message()["tool_calls"] * 2},
 ])
 def test_invalid_function_call_fails_and_is_counted(message):
+    # The inline callback supplies the fixture value or replacement behavior used by this test; it
+    # is evaluated only when the code under test calls it.
     with provider_for(lambda _: httpx.Response(200, json=completion(message))) as provider:
         with capture_llm_usage() as tracker, pytest.raises(NativeFunctionCallingError):
             provider.generate_function_call(
@@ -131,11 +142,13 @@ def test_invalid_function_call_fails_and_is_counted(message):
     assert not tracker.token_usage_complete
 
 
+# Regression scenario: missing usage is never invented.
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("usage", [USAGE, None, {"prompt_tokens": 12}, {}])
 def test_missing_usage_is_never_invented(streaming, usage):
     payloads = []
 
+    # Prepare the handle fixture or observation used by the surrounding regression scenario.
     def handle(request):
         payloads.append(json.loads(request.content))
         return (httpx.Response(200, text=sse(usage), headers={"content-type": "text/event-stream"})
@@ -153,9 +166,11 @@ def test_missing_usage_is_never_invented(streaming, usage):
     assert result.total_tokens == (16 if usage == USAGE else None)
 
 
+# Regression scenario: function disabled preserves json fallback.
 def test_function_disabled_preserves_json_fallback():
     payloads = []
 
+    # Build the httpx.Response fixture used by the surrounding regression scenario.
     def handle(request):
         payloads.append(json.loads(request.content))
         return httpx.Response(200, json=completion())
@@ -172,7 +187,10 @@ def test_function_disabled_preserves_json_fallback():
     assert payloads[0]["max_tokens"] == 320
 
 
+# Regression scenario: http failure is counted without leaking response.
 def test_http_failure_is_counted_without_leaking_response():
+    # The inline callback supplies the fixture value or replacement behavior used by this test; it
+    # is evaluated only when the code under test calls it.
     with provider_for(lambda _: httpx.Response(401, json={"error": {"message": "sensitive"}})) as provider:
         with capture_llm_usage() as tracker, pytest.raises(RuntimeError) as error:
             provider.generate("Answer", "Facts")
@@ -180,9 +198,11 @@ def test_http_failure_is_counted_without_leaking_response():
     assert tracker.failed_call_count == 1
 
 
+# Regression scenario: transient http error retries within one logical call.
 def test_transient_http_error_retries_within_one_logical_call():
     calls = []
 
+    # Build the httpx.Response fixture used by the surrounding regression scenario.
     def handle(request):
         calls.append(request)
         if len(calls) == 1:
@@ -196,20 +216,25 @@ def test_transient_http_error_retries_within_one_logical_call():
     assert tracker.call_count == 1 and tracker.failed_call_count == 0
 
 
+# Regression scenario: interrupted stream closes connection and does not replay text.
 def test_interrupted_stream_closes_connection_and_does_not_replay_text():
     class BrokenStream(httpx.SyncByteStream):
         closed = False
 
+        # Simulate the dependency failure required by this regression scenario so its error or
+        # fallback path is exercised.
         def __iter__(self):
             yield sse(chunks=("已输出",)).split("\n\n", 1)[0].encode() + b"\n\n"
             raise httpx.ReadError("interrupted stream")
 
+        # Release the temporary resources owned by this test fixture.
         def close(self):
             self.closed = True
 
     body = BrokenStream()
     calls = []
 
+    # Build the httpx.Response fixture used by the surrounding regression scenario.
     def handle(request):
         calls.append(request)
         return httpx.Response(200, stream=body, headers={"content-type": "text/event-stream"})
@@ -223,27 +248,38 @@ def test_interrupted_stream_closes_connection_and_does_not_replay_text():
     assert tracker.failed_call_count == 1 and not tracker.token_usage_complete
 
 
+# Regression scenario: empty stream fails instead of succeeding with usage only.
 def test_empty_stream_fails_instead_of_succeeding_with_usage_only():
+    # The inline callback supplies the fixture value or replacement behavior used by this test; it
+    # is evaluated only when the code under test calls it.
     response = lambda _: httpx.Response(200, text=sse(chunks=()), headers={"content-type": "text/event-stream"})
     with provider_for(response) as provider:
         with capture_llm_usage() as tracker, pytest.raises(RuntimeError, match="did not contain text"):
+            # The inline callback supplies the fixture value or replacement behavior used by this
+            # test; it is evaluated only when the code under test calls it.
             provider.stream_generate("Answer", "Facts", lambda _: None)
     assert tracker.failed_call_count == 1
 
 
+# Regression scenario: deepseek final content chunk preserves usage.
 def test_deepseek_final_content_chunk_preserves_usage():
     last = {
         "id": "chat-test", "object": "chat.completion.chunk", "created": 1,
         "model": "test-model", "usage": USAGE,
         "choices": [{"index": 0, "delta": {"role": "assistant", "content": "完成"}, "finish_reason": "stop"}],
     }
+    # The inline callback supplies the fixture value or replacement behavior used by this test; it
+    # is evaluated only when the code under test calls it.
     response = lambda _: httpx.Response(200, text=f"data: {json.dumps(last)}\n\ndata: [DONE]\n\n", headers={"content-type": "text/event-stream"})
     with provider_for(response) as provider, capture_llm_usage() as tracker:
+        # The inline callback supplies the fixture value or replacement behavior used by this
+        # test; it is evaluated only when the code under test calls it.
         result = provider.stream_generate("Answer", "Facts", lambda _: None)
     assert result.content == "完成" and tracker.total_tokens == 16
     assert tracker.token_usage_complete
 
 
+# Regression scenario: default backend and explicit rollback.
 def test_default_backend_and_explicit_rollback(monkeypatch):
     monkeypatch.setenv("LIMITUPLAB_LLM_ENABLED", "true")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")

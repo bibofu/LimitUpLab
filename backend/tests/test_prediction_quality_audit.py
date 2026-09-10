@@ -10,6 +10,7 @@ from app.services.scoring_policy import build_default_scoring_policy
 
 
 class PredictionQualityAuditTest(unittest.TestCase):
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         self.database_path = (
             Path(__file__).resolve().parents[1]
@@ -21,6 +22,7 @@ class PredictionQualityAuditTest(unittest.TestCase):
         self.policy_repository.upsert_policy(self.policy)
         self.events = self._events(days=4, stocks=3)
 
+    # Release the test resources and restore the environment after this test scope.
     def tearDown(self) -> None:
         for path in (
             self.database_path,
@@ -29,6 +31,7 @@ class PredictionQualityAuditTest(unittest.TestCase):
         ):
             path.unlink(missing_ok=True)
 
+    # Regression scenario: audit separates cohorts and reports maturity.
     def test_audit_separates_cohorts_and_reports_maturity(self) -> None:
         predictions = self._predictions()
         predictions.append(
@@ -79,6 +82,7 @@ class PredictionQualityAuditTest(unittest.TestCase):
         self.assertEqual(report.policy_status.outcome_ready_trade_dates, 0)
         self.assertFalse(report.policy_status.readiness_rate >= 1)
 
+    # Prepare the predictions fixture or observation used by the surrounding regression scenario.
     def _predictions(self) -> list[AgentPrediction]:
         created_at = datetime(2026, 7, 1, tzinfo=timezone.utc)
         predictions: list[AgentPrediction] = []
@@ -103,6 +107,7 @@ class PredictionQualityAuditTest(unittest.TestCase):
             )
         return predictions
 
+    # Prepare the outcomes fixture or observation used by the surrounding regression scenario.
     def _outcomes(self) -> list[FirstBoardOutcome]:
         outcomes: list[FirstBoardOutcome] = []
         started = self.events[0].trade_date
@@ -130,6 +135,7 @@ class PredictionQualityAuditTest(unittest.TestCase):
                 )
         return outcomes
 
+    # Prepare the events fixture or observation used by the surrounding regression scenario.
     @staticmethod
     def _events(days: int, stocks: int) -> list[LimitUpEvent]:
         events: list[LimitUpEvent] = []

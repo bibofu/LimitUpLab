@@ -9,6 +9,7 @@ from app.services.scoring_error_diagnostic import build_scoring_error_diagnostic
 
 
 class ScoringErrorDiagnosticTest(unittest.TestCase):
+    # Regression scenario: reports top false positives promoted omissions and ablations.
     def test_reports_top_false_positives_promoted_omissions_and_ablations(self) -> None:
         database_path = (
             Path(__file__).resolve().parents[1]
@@ -38,6 +39,7 @@ class ScoringErrorDiagnosticTest(unittest.TestCase):
         self.assertTrue(report.false_positive_samples[0].leading_factors)
         self.assertIn("影子假设", " ".join(report.warnings))
 
+    # Release the temporary resources owned by this test fixture.
     @staticmethod
     def _cleanup_database(database_path: Path) -> None:
         for path in (
@@ -47,6 +49,7 @@ class ScoringErrorDiagnosticTest(unittest.TestCase):
         ):
             path.unlink(missing_ok=True)
 
+    # Prepare the history fixture or observation used by the surrounding regression scenario.
     @staticmethod
     def _history(days: int) -> tuple[list[LimitUpEvent], list[FirstBoardOutcome]]:
         events: list[LimitUpEvent] = []

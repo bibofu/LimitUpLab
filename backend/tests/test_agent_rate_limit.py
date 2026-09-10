@@ -14,14 +14,17 @@ from app.services.agent_rate_limit import agent_rate_limiter
 
 
 class FakeClock:
+    # Prepare the init fixture or observation used by the surrounding regression scenario.
     def __init__(self) -> None:
         self.now = 0.0
 
+    # Prepare the call fixture or observation used by the surrounding regression scenario.
     def __call__(self) -> float:
         return self.now
 
 
 class AgentRateLimiterTest(unittest.TestCase):
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         self.clock = FakeClock()
         self.limiter = AgentRateLimiter(clock=self.clock)
@@ -40,9 +43,11 @@ class AgentRateLimiterTest(unittest.TestCase):
         )
         self.environment.start()
 
+    # Release the test resources and restore the environment after this test scope.
     def tearDown(self) -> None:
         self.environment.stop()
 
+    # Regression scenario: owner concurrency is released by idempotent lease.
     def test_owner_concurrency_is_released_by_idempotent_lease(self) -> None:
         lease = self.limiter.acquire(
             "owner-a",
@@ -64,6 +69,7 @@ class AgentRateLimiterTest(unittest.TestCase):
         self.assertEqual(self.limiter.snapshot()["active_global"], 1)
         replacement.release()
 
+    # Regression scenario: minute limit counts rejected concurrent attempts.
     def test_minute_limit_counts_rejected_concurrent_attempts(self) -> None:
         lease = self.limiter.acquire("owner-a", "ip-a", daily_request_count=0)
         with self.assertRaises(AgentRateLimitError):
@@ -73,6 +79,7 @@ class AgentRateLimiterTest(unittest.TestCase):
         self.assertEqual(blocked.exception.code, "owner_minute_limit")
         lease.release()
 
+    # Regression scenario: daily and global limits are independent.
     def test_daily_and_global_limits_are_independent(self) -> None:
         with self.assertRaises(AgentRateLimitError) as daily:
             self.limiter.acquire("owner-a", "ip-a", daily_request_count=3)
@@ -88,6 +95,7 @@ class AgentRateLimiterTest(unittest.TestCase):
 
 
 class AgentRequestGuardIntegrationTest(unittest.TestCase):
+    # Regression scenario: concurrent request returns http 429 and is audited.
     def test_concurrent_request_returns_http_429_and_is_audited(self) -> None:
         database_path = Path(__file__).resolve().parents[1] / f"rate-{uuid4().hex}.sqlite"
         self.addCleanup(database_path.unlink, missing_ok=True)

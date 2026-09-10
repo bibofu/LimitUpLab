@@ -11,10 +11,12 @@ TEST_TMP_ROOT = Path(os.getenv("LIMITUPLAB_TEST_TMP", Path(__file__).resolve().p
 
 
 class AgentCacheRepositoryTest(unittest.TestCase):
+    # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         TEST_TMP_ROOT.mkdir(exist_ok=True)
         self.database_path = TEST_TMP_ROOT / f"agent-cache-test-{uuid4().hex}.sqlite"
 
+    # Release the test resources and restore the environment after this test scope.
     def tearDown(self) -> None:
         for path in (
             self.database_path,
@@ -23,6 +25,7 @@ class AgentCacheRepositoryTest(unittest.TestCase):
         ):
             path.unlink(missing_ok=True)
 
+    # Regression scenario: set and get json before expiry.
     def test_set_and_get_json_before_expiry(self) -> None:
         repository = SQLiteAgentCacheRepository(database_path=self.database_path)
 
@@ -38,6 +41,7 @@ class AgentCacheRepositoryTest(unittest.TestCase):
             {"answer": "ok", "count": 2},
         )
 
+    # Regression scenario: expired json is removed.
     def test_expired_json_is_removed(self) -> None:
         repository = SQLiteAgentCacheRepository(database_path=self.database_path)
         repository.set_json(

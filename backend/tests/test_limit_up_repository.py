@@ -18,6 +18,8 @@ TEST_TMP_ROOT = Path(
 )
 
 
+# Prepare the temporary database path fixture or observation used by the surrounding regression
+# scenario.
 @contextmanager
 def temporary_database_path():
     database_path = TEST_TMP_ROOT / f"limituplab-test-{uuid4().hex}.sqlite"
@@ -33,6 +35,7 @@ def temporary_database_path():
 
 
 class SQLiteLimitUpRepositoryTest(unittest.TestCase):
+    # Regression scenario: replace and list events.
     def test_replace_and_list_events(self) -> None:
         with temporary_database_path() as database_path:
             repository = SQLiteLimitUpRepository(database_path=database_path)
@@ -44,6 +47,7 @@ class SQLiteLimitUpRepositoryTest(unittest.TestCase):
         self.assertEqual(events[0].trade_date.isoformat(), "2026-05-15")
         self.assertEqual(events[0].symbol, "600519")
 
+    # Regression scenario: upsert updates existing event.
     def test_upsert_updates_existing_event(self) -> None:
         with temporary_database_path() as database_path:
             repository = SQLiteLimitUpRepository(database_path=database_path)
@@ -57,6 +61,7 @@ class SQLiteLimitUpRepositoryTest(unittest.TestCase):
         self.assertEqual(len(events), 1)
         self.assertEqual(events[0].name, "科大讯飞测试")
 
+    # Regression scenario: seed if empty bootstraps sample events.
     def test_seed_if_empty_bootstraps_sample_events(self) -> None:
         with temporary_database_path() as database_path:
             repository = SQLiteLimitUpRepository(
@@ -68,6 +73,7 @@ class SQLiteLimitUpRepositoryTest(unittest.TestCase):
 
         self.assertEqual(len(events), len(SAMPLE_EVENTS))
 
+    # Regression scenario: delete events for date.
     def test_delete_events_for_date(self) -> None:
         with temporary_database_path() as database_path:
             repository = SQLiteLimitUpRepository(database_path=database_path)
@@ -78,6 +84,7 @@ class SQLiteLimitUpRepositoryTest(unittest.TestCase):
 
         self.assertTrue(all(event.trade_date.isoformat() != "2026-05-15" for event in events))
 
+    # Regression scenario: legacy unclosed event does not keep rolling board count.
     def test_legacy_unclosed_event_does_not_keep_rolling_board_count(self) -> None:
         with temporary_database_path() as database_path:
             repository = SQLiteLimitUpRepository(database_path=database_path)

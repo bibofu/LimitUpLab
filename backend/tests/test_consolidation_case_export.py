@@ -6,6 +6,7 @@ m=importlib.util.module_from_spec(spec)
 spec.loader.exec_module(m)
 
 
+# Regression scenario: case selection prioritizes recency not best return.
 def test_case_selection_prioritizes_recency_not_best_return():
     rows=[{'symbol':'000002','signal_date':'2026-08-12','r5':100,'outcome_status':'complete'},
           {'symbol':'000001','signal_date':'2026-08-12','r5':1,'outcome_status':'complete'},
@@ -15,6 +16,7 @@ def test_case_selection_prioritizes_recency_not_best_return():
     assert [r['symbol'] for r in selected]==['000003','000001']
 
 
+# Regression scenario: label applies friction and does not label missing results.
 def test_label_applies_friction_and_does_not_label_missing_results():
     assert m.label(.1)=='negative'
     assert m.label(1)=='positive'

@@ -36,9 +36,11 @@ from app.services.sample_data import SAMPLE_EVENTS
 class FakeToolPlanningProvider(LLMProvider):
     """Fake LLM that first plans tools and then writes the final answer."""
 
+    # Prepare the init fixture or observation used by the surrounding regression scenario.
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         self.calls.append((system_prompt, user_prompt))
         if "first job is to decide which tools are needed" in system_prompt:
@@ -66,6 +68,7 @@ class FakeToolPlanningProvider(LLMProvider):
 class FakeDirectFirstBoardProvider(FakeToolPlanningProvider):
     """Fake planner that incorrectly tries to answer a data question directly."""
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         self.calls.append((system_prompt, user_prompt))
         if "first job is to decide which tools are needed" in system_prompt:
@@ -91,6 +94,7 @@ class FakeDirectFirstBoardProvider(FakeToolPlanningProvider):
 class FakeUnsupportedDirectProvider(FakeToolPlanningProvider):
     """Fake planner that fabricates an unsupported answer without evidence."""
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         self.calls.append((system_prompt, user_prompt))
         if "first job is to decide which tools are needed" in system_prompt:
@@ -112,13 +116,18 @@ class FakeUnsupportedDirectProvider(FakeToolPlanningProvider):
 class FailIfCalledProvider(LLMProvider):
     """Verify direct injection is rejected before any model request."""
 
+    # Prepare the init fixture or observation used by the surrounding regression scenario.
     def __init__(self) -> None:
         self.calls = 0
 
+    # Simulate the model response for this scenario; the controlled output lets the test inspect
+    # planning, validation or fallback behavior.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         self.calls += 1
         raise AssertionError("prompt injection must not reach text generation")
 
+    # Simulate the model response for this scenario; the controlled output lets the test inspect
+    # planning, validation or fallback behavior.
     def generate_function_call(self, *args, **kwargs) -> LLMResult:
         self.calls += 1
         raise AssertionError("prompt injection must not reach planning")
@@ -127,12 +136,16 @@ class FailIfCalledProvider(LLMProvider):
 class FakePlannerDirectInjectionProvider(LLMProvider):
     """Simulate a planner trying to smuggle user-facing prompt text."""
 
+    # Prepare the init fixture or observation used by the surrounding regression scenario.
     def __init__(self) -> None:
         self.calls = 0
 
+    # Simulate the model response for this scenario; the controlled output lets the test inspect
+    # planning, validation or fallback behavior.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         raise AssertionError("static conversational intents need no answer model")
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate_function_call(self, *args, **kwargs) -> LLMResult:
         self.calls += 1
         return LLMResult(
@@ -157,6 +170,7 @@ class FakePlannerDirectInjectionProvider(LLMProvider):
 class FakePromptLeakProvider(LLMProvider):
     """Simulate final generation leaking a known internal prompt signature."""
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate_function_call(self, *args, **kwargs) -> LLMResult:
         return LLMResult(
             content=json.dumps(
@@ -175,6 +189,7 @@ class FakePromptLeakProvider(LLMProvider):
             function_name="submit_agent_plan",
         )
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         return LLMResult(
             content="Capability catalog: secret; submit_agent_plan",
@@ -186,6 +201,7 @@ class FakePromptLeakProvider(LLMProvider):
 class FakeNamedStockTrendProvider(FakeToolPlanningProvider):
     """Select stock trend without supplying raw tool arguments."""
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         self.calls.append((system_prompt, user_prompt))
         if "first job is to decide which tools are needed" in system_prompt:
@@ -213,6 +229,7 @@ class FakeNamedStockTrendProvider(FakeToolPlanningProvider):
 class FakeStaleDateFirstBoardProvider(FakeToolPlanningProvider):
     """Fake planner that incorrectly injects a historical date into an undated query."""
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         self.calls.append((system_prompt, user_prompt))
         if "first job is to decide which tools are needed" in system_prompt:
@@ -243,6 +260,7 @@ class FakeStaleDateFirstBoardProvider(FakeToolPlanningProvider):
 class FakeExhaustiveListProvider(FakeToolPlanningProvider):
     """Fake planner whose final answer intentionally truncates a full list."""
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         self.calls.append((system_prompt, user_prompt))
         if "first job is to decide which tools are needed" in system_prompt:
@@ -276,6 +294,7 @@ class FakeExhaustiveListProvider(FakeToolPlanningProvider):
 class FakeWrongPositionProvider(FakeToolPlanningProvider):
     """Fake planner and writer that mistake K-line position for seal time."""
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         self.calls.append((system_prompt, user_prompt))
         if "first job is to decide which tools are needed" in system_prompt:
@@ -306,6 +325,7 @@ class FakeWrongPositionProvider(FakeToolPlanningProvider):
 class FakeWrongPromotionProvider(FakeToolPlanningProvider):
     """Fake LLM that guesses a promotion rate without adjacent-day facts."""
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         self.calls.append((system_prompt, user_prompt))
         if "first job is to decide which tools are needed" in system_prompt:
@@ -334,6 +354,7 @@ class FakeWrongPromotionProvider(FakeToolPlanningProvider):
 
 
 class AgentChatTest(unittest.TestCase):
+    # Build the LimitUpEvent fixture used by the surrounding regression scenario.
     def _make_event(
         self,
         symbol: str,
@@ -363,6 +384,7 @@ class AgentChatTest(unittest.TestCase):
             continued_next_day=False,
         )
 
+    # Regression scenario: greeting does not route to market tools.
     def test_greeting_does_not_route_to_market_tools(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(session_id="s1", message="\u4f60\u597d"),
@@ -373,6 +395,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertEqual(response.tool_calls, [])
         self.assertIn("LimitUpLab", response.answer)
 
+    # Regression scenario: capability question does not call stock tools.
     def test_capability_question_does_not_call_stock_tools(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(
@@ -387,6 +410,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("\u9996\u677f", response.answer)
         self.assertIn("K \u7ebf", response.answer)
 
+    # Regression scenario: retired similar case question does not call tools.
     def test_retired_similar_case_question_does_not_call_tools(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(
@@ -401,6 +425,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertEqual(response.tool_calls, [])
         self.assertIn("已经下线", response.answer)
 
+    # Regression scenario: prediction quality uses audit tool when llm is disabled.
     def test_prediction_quality_uses_audit_tool_when_llm_is_disabled(self) -> None:
         database_path = (
             Path(__file__).resolve().parents[1]
@@ -423,6 +448,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("60", response.answer)
         self.assertNotIn("首板候选评分靠前", response.answer)
 
+    # Regression scenario: out of scope question does not force stock facts.
     def test_out_of_scope_question_does_not_force_stock_facts(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(
@@ -436,6 +462,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertEqual(response.tool_calls, [])
         self.assertEqual(response.answer, "抱歉，该问题无法回答")
 
+    # Regression scenario: direct prompt injection is rejected before llm or tools.
     def test_direct_prompt_injection_is_rejected_before_llm_or_tools(self) -> None:
         provider = FailIfCalledProvider()
 
@@ -453,6 +480,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertEqual(provider.calls, 0)
         self.assertIn("不能执行改变系统规则", response.answer)
 
+    # Regression scenario: role tag injection is rejected before llm.
     def test_role_tag_injection_is_rejected_before_llm(self) -> None:
         provider = FailIfCalledProvider()
 
@@ -471,6 +499,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertEqual(response.intent, "prompt_injection_refusal")
         self.assertEqual(provider.calls, 0)
 
+    # Regression scenario: planner api rejects injection without calling llm.
     def test_planner_api_rejects_injection_without_calling_llm(self) -> None:
         provider = FailIfCalledProvider()
 
@@ -488,6 +517,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertEqual(plan.payload["planner_mode"], "deterministic_prompt_security")
         self.assertEqual(provider.calls, 0)
 
+    # Regression scenario: planner direct text is replaced by server template.
     def test_planner_direct_text_is_replaced_by_server_template(self) -> None:
         provider = FakePlannerDirectInjectionProvider()
 
@@ -509,6 +539,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertNotIn("SYSTEM PROMPT", response.answer)
         self.assertNotIn("llm_planner_direct_answer", response.tool_calls)
 
+    # Regression scenario: prompt leak output uses deterministic fallback.
     def test_prompt_leak_output_uses_deterministic_fallback(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(
@@ -526,6 +557,7 @@ class AgentChatTest(unittest.TestCase):
             any("internal-prompt signature" in item for item in response.warnings)
         )
 
+    # Regression scenario: unsupported planner direct answer is rejected.
     def test_unsupported_planner_direct_answer_is_rejected(self) -> None:
         provider = FakeUnsupportedDirectProvider()
 
@@ -542,6 +574,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertNotIn("llm_planner_direct_answer", response.tool_calls)
         self.assertEqual(len(provider.calls), 1)
 
+    # Regression scenario: unsafe investment question is not routed to recommendation.
     def test_unsafe_investment_question_is_not_routed_to_recommendation(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(
@@ -556,6 +589,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("\u4e0d\u80fd", response.answer)
         self.assertNotIn("\u4e70\u5165", response.answer)
 
+    # Regression scenario: market schedule does not route to rating tools.
     def test_market_schedule_does_not_route_to_rating_tools(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(
@@ -571,6 +605,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("09:30", response.answer)
         self.assertIn("15:00", response.answer)
 
+    # Regression scenario: market overview question uses objective market facts.
     def test_market_overview_question_uses_objective_market_facts(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(
@@ -588,6 +623,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertNotIn("\u5206\u6b67", response.answer)
         self.assertNotIn("\u9000\u6f6e", response.answer)
 
+    # Regression scenario: market environment fallback keeps all four sections.
     def test_market_environment_fallback_keeps_all_four_sections(self) -> None:
         answer = _template_answer_from_tool_facts(
             request=AgentChatRequest(
@@ -654,6 +690,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("半导体", answer)
         self.assertIn("测试热门股(000001)", answer)
 
+    # Regression scenario: exhaustive first board list is closed only and complete.
     def test_exhaustive_first_board_list_is_closed_only_and_complete(self) -> None:
         events = [
             self._make_event(
@@ -688,6 +725,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertEqual(trace.input["board_height"], 1)
         self.assertTrue(any("incomplete" in item for item in response.warnings))
 
+    # Regression scenario: undated first board query uses latest local close.
     def test_undated_first_board_query_uses_latest_local_close(self) -> None:
         old_event = self._make_event("002001", "历史样本", "测试行业", "测试题材")
         latest_event = self._make_event(
@@ -714,6 +752,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("002002", response.answer)
         self.assertNotIn("002001", response.answer)
 
+    # Regression scenario: today summary uses first board tool.
     def test_today_summary_uses_first_board_tool(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(
@@ -728,6 +767,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("2026-05-15", response.answer)
         self.assertTrue(response.warnings)
 
+    # Regression scenario: shorthand date can select historical first board data.
     def test_shorthand_date_can_select_historical_first_board_data(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(
@@ -740,6 +780,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertEqual(response.intent, "today_summary")
         self.assertIn("2026-05-15", response.answer)
 
+    # Regression scenario: dated first board data question uses ratings not general llm.
     def test_dated_first_board_data_question_uses_ratings_not_general_llm(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(
@@ -755,6 +796,7 @@ class AgentChatTest(unittest.TestCase):
             {"llm_general_answer", "template_general_answer"} & set(response.tool_calls)
         )
 
+    # Regression scenario: top candidate question uses unified tool grounded answer.
     def test_top_candidate_question_uses_unified_tool_grounded_answer(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(
@@ -771,6 +813,7 @@ class AgentChatTest(unittest.TestCase):
         )
         self.assertIn("301489", response.answer)
 
+    # Regression scenario: llm planner selects tools before answering.
     def test_llm_planner_selects_tools_before_answering(self) -> None:
         provider = FakeToolPlanningProvider()
 
@@ -799,6 +842,7 @@ class AgentChatTest(unittest.TestCase):
             any(card.title == "首板候选池与评分" for card in response.evidence_cards)
         )
 
+    # Regression scenario: only planner receives bounded persisted conversation history.
     def test_only_planner_receives_bounded_persisted_conversation_history(self) -> None:
         provider = FakeToolPlanningProvider()
         history = [
@@ -839,11 +883,14 @@ class AgentChatTest(unittest.TestCase):
         self.assertNotIn("conversation_history", answer_payload)
         self.assertNotIn("session_memory", answer_payload)
 
+    # Regression scenario: llm answer reports progress and streams deltas.
     def test_llm_answer_reports_progress_and_streams_deltas(self) -> None:
         provider = FakeToolPlanningProvider()
         progress: list[tuple[str, str]] = []
         deltas: list[str] = []
 
+        # The inline callback supplies the fixture value or replacement behavior used by this
+        # test; it is evaluated only when the code under test calls it.
         response = answer_first_board_chat(
             AgentChatRequest(
                 session_id="s1",
@@ -863,6 +910,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("301489", "".join(deltas))
         self.assertIn("".join(deltas), response.answer)
 
+    # Regression scenario: first board question repairs planner direct answer.
     def test_first_board_question_repairs_planner_direct_answer(self) -> None:
         provider = FakeDirectFirstBoardProvider()
         deltas: list[str] = []
@@ -883,6 +931,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertNotIn("llm_planner_direct_answer", response.tool_calls)
         self.assertIn("301489", "".join(deltas))
 
+    # Regression scenario: first board position question uses complete kline groups.
     def test_first_board_position_question_uses_complete_kline_groups(self) -> None:
         database_path = (
             Path(__file__).resolve().parents[1]
@@ -953,6 +1002,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("低位启动首板", fallback_response.answer)
         self.assertIn("301489", fallback_response.answer)
 
+    # Regression scenario: daily promotion question uses adjacent close statistics.
     def test_daily_promotion_question_uses_adjacent_close_statistics(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(
@@ -984,6 +1034,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("daily_board_promotion", fallback_response.tool_calls)
         self.assertIn("0/1", fallback_response.answer)
 
+    # Regression scenario: promotion opening followup reuses previous days and kline.
     def test_promotion_opening_followup_reuses_previous_days_and_kline(self) -> None:
         database_path = (
             Path(__file__).resolve().parents[1]
@@ -994,6 +1045,7 @@ class AgentChatTest(unittest.TestCase):
         repository = SQLiteFirstBoardRepository(database_path=database_path)
         template = SAMPLE_EVENTS[0]
 
+        # Prepare the event fixture or observation used by the surrounding regression scenario.
         def event(symbol: str, name: str, trade_date: date, height: int) -> LimitUpEvent:
             return template.model_copy(
                 update={
@@ -1018,6 +1070,7 @@ class AgentChatTest(unittest.TestCase):
         ]
         created_at = datetime(2026, 9, 9, tzinfo=timezone.utc)
 
+        # Build the StockDailyBar fixture used by the surrounding regression scenario.
         def bar(symbol: str, trade_date: date, open_price: float, close: float) -> StockDailyBar:
             return StockDailyBar(
                 symbol=symbol,
@@ -1131,6 +1184,7 @@ class AgentChatTest(unittest.TestCase):
         )
         self.assertEqual(trace.input["days"], 2)
 
+    # Regression scenario: market schedule requires a schedule question.
     def test_market_schedule_requires_a_schedule_question(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(session_id="schedule", message="A股几点开盘？"),
@@ -1141,6 +1195,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertEqual(response.intent, "market_schedule")
         self.assertIn("09:30-11:30", response.answer)
 
+    # Regression scenario: promotion opening normalization overrides planner days.
     def test_promotion_opening_normalization_overrides_planner_days(self) -> None:
         calls = _normalize_daily_board_promotion_tool_calls(
             AgentChatRequest(
@@ -1172,6 +1227,7 @@ class AgentChatTest(unittest.TestCase):
         )
         self.assertEqual(first_turn_calls[0]["arguments"]["days"], 2)
 
+    # Regression scenario: stock trend question repairs to kline tool.
     @patch("app.agents.tools.build_stock_kline_facts")
     def test_stock_trend_question_repairs_to_kline_tool(self, build_facts) -> None:
         build_facts.return_value = StockKLineFacts(
@@ -1222,6 +1278,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("symbol=002298", response.references)
         self.assertEqual(build_facts.call_args.kwargs["symbol"], "002298")
 
+    # Regression scenario: stock trend resolves name outside limit up pool.
     @patch(
         "app.agents.tools.HithinkFinanceCollector.collect_a_share_symbol_names",
         return_value={"002624": "完美世界", "000001": "平安银行"},
@@ -1273,8 +1330,11 @@ class AgentChatTest(unittest.TestCase):
         self.assertEqual(build_facts.call_args.kwargs["symbol"], "002624")
         collect_symbol_names.assert_called_once_with()
 
+    # Regression scenario: stock kline keeps invalid name as explicit error.
     def test_stock_kline_keeps_invalid_name_as_explicit_error(self) -> None:
         class EmptySymbolDirectory:
+            # Provide controlled source data for the surrounding test without relying on a live
+            # data service.
             def collect_a_share_symbol_names(self) -> dict[str, str]:
                 return {}
 
@@ -1286,6 +1346,7 @@ class AgentChatTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Cannot resolve stock identity"):
             registry.stock_kline("不存在股票")
 
+    # Regression scenario: rating backtest question repairs missing planner tool call.
     def test_rating_backtest_question_repairs_missing_planner_tool_call(self) -> None:
         provider = FakeToolPlanningProvider()
 
@@ -1301,6 +1362,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("rating_backtest", response.tool_calls)
         self.assertTrue(any(trace.name == "rating_backtest" for trace in response.tool_results))
 
+    # Regression scenario: critic question repairs missing planner tool call.
     def test_critic_question_repairs_missing_planner_tool_call(self) -> None:
         provider = FakeToolPlanningProvider()
 
@@ -1316,6 +1378,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("first_board_critic", response.tool_calls)
         self.assertTrue(any(trace.name == "first_board_critic" for trace in response.tool_results))
 
+    # Regression scenario: evaluation question repairs missing planner tool call.
     def test_evaluation_question_repairs_missing_planner_tool_call(self) -> None:
         provider = FakeToolPlanningProvider()
 
@@ -1331,6 +1394,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("rating_evaluation", response.tool_calls)
         self.assertTrue(any(trace.name == "rating_evaluation" for trace in response.tool_results))
 
+    # Regression scenario: review question repairs to review agent tool.
     def test_review_question_repairs_to_review_agent_tool(self) -> None:
         provider = FakeToolPlanningProvider()
 
@@ -1357,6 +1421,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("review_high_score_picks", promotion_response.tool_calls)
         self.assertNotIn("daily_board_promotion", promotion_response.tool_calls)
 
+    # Regression scenario: broad top candidate question does not inherit previous symbol.
     def test_broad_top_candidate_question_does_not_inherit_previous_symbol(self) -> None:
         previous = AgentRun(
             run_id="r1",
@@ -1384,6 +1449,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("first_board_ratings", response.tool_calls)
         self.assertNotEqual(response.intent, "symbol_not_found")
 
+    # Regression scenario: dated first board topic question filters candidate pool.
     def test_dated_first_board_topic_question_filters_candidate_pool(self) -> None:
         events = [
             self._make_event(
@@ -1414,6 +1480,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("002001", response.answer)
         self.assertNotIn("002002", response.answer)
 
+    # Regression scenario: second board question uses general limit up tool.
     def test_second_board_question_uses_general_limit_up_tool(self) -> None:
         events = [
             self._make_event(
@@ -1445,6 +1512,7 @@ class AgentChatTest(unittest.TestCase):
         tool_trace = next(trace for trace in response.tool_results if trace.name == "limit_up_events")
         self.assertEqual(tool_trace.input["board_height"], 2)
 
+    # Regression scenario: recent limit up sector question aggregates existing local events.
     def test_recent_limit_up_sector_question_aggregates_existing_local_events(self) -> None:
         events = [
             self._make_event("002101", "软件甲", "软件开发", "AI+机器人").model_copy(
@@ -1482,6 +1550,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertEqual(trace.output["unique_stock_count"], 3)
         self.assertEqual(trace.output["sector_summary"][0]["sector_name"], "AI")
 
+    # Regression scenario: board summary does not present source industry mislabel as sector.
     def test_board_summary_does_not_present_source_industry_mislabel_as_sector(self) -> None:
         event = self._make_event(
             "000816",
@@ -1502,6 +1571,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("有色金属：1 只股票", response.answer)
         self.assertNotIn("汽车零部", response.answer)
 
+    # Regression scenario: recent named sector limit up question lists unique stocks.
     def test_recent_named_sector_limit_up_question_lists_unique_stocks(self) -> None:
         events = [
             self._make_event("600108", "亚盛集团", "种植业", "现代农业+农业种植").model_copy(
@@ -1541,6 +1611,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("涨停题材 有色金属+智慧农业", response.answer)
         self.assertIn("期间收盘涨停 2 次", response.answer)
 
+    # Regression scenario: chinext limit up question filters market before llm answer.
     def test_chinext_limit_up_question_filters_market_before_llm_answer(self) -> None:
         events = [
             self._make_event("002101", "主板样本", "软件开发", "AI"),
@@ -1569,6 +1640,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertNotIn("002101", response.answer)
         self.assertNotIn("688169", response.answer)
 
+    # Regression scenario: limit up topic question does not route to first board filter.
     def test_limit_up_topic_question_does_not_route_to_first_board_filter(self) -> None:
         events = [
             self._make_event(
@@ -1598,6 +1670,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("002201", response.answer)
         self.assertNotIn("first_board_filter", response.tool_calls)
 
+    # Regression scenario: dated first board sector question summarizes industries.
     def test_dated_first_board_sector_question_summarizes_industries(self) -> None:
         events = [
             self._make_event(
@@ -1635,6 +1708,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("\u5316\u5b66\u5236\u836f", response.answer)
         self.assertIn("\u5143\u4ef6", response.answer)
 
+    # Regression scenario: agent plan trace is returned for tool answers.
     def test_agent_plan_trace_is_returned_for_tool_answers(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(
@@ -1652,6 +1726,7 @@ class AgentChatTest(unittest.TestCase):
             "first_board_ratings",
         )
 
+    # Regression scenario: filter and top question is planned as multi tool flow.
     def test_filter_and_top_question_is_planned_as_multi_tool_flow(self) -> None:
         events = [
             self._make_event(
@@ -1690,6 +1765,7 @@ class AgentChatTest(unittest.TestCase):
         )
         self.assertIn("002001", response.answer)
 
+    # Regression scenario: follow up can ask top stock in previous filtered pool.
     def test_follow_up_can_ask_top_stock_in_previous_filtered_pool(self) -> None:
         events = [
             self._make_event(
@@ -1739,6 +1815,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("symbol=002001", response.references)
         self.assertEqual(response.tool_results[0].input["filter"], "\u533b\u836f")
 
+    # Regression scenario: follow up risk question can use previous selected symbol.
     def test_follow_up_risk_question_can_use_previous_selected_symbol(self) -> None:
         previous_run = AgentRun(
             run_id="run_top",
@@ -1773,6 +1850,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertTrue(any("301489" in item for item in response.references))
         self.assertIn("first_board_ratings", response.tool_calls)
 
+    # Regression scenario: missing shorthand date reports data availability.
     def test_missing_shorthand_date_reports_data_availability(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(
@@ -1786,6 +1864,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("limit_up_event_dates", response.tool_calls)
         self.assertIn("2026-08-06", response.answer)
 
+    # Regression scenario: symbol question uses context symbol.
     def test_symbol_question_uses_context_symbol(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(
@@ -1801,6 +1880,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("301489", response.answer)
         self.assertIn("first_board_ratings", response.tool_calls)
 
+    # Regression scenario: unknown symbol is not hallucinated.
     def test_unknown_symbol_is_not_hallucinated(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(
@@ -1814,6 +1894,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertEqual(response.intent, "symbol_not_found")
         self.assertIn("000001", response.answer)
 
+    # Regression scenario: follow up can use recent run context symbol.
     def test_follow_up_can_use_recent_run_context_symbol(self) -> None:
         previous_run = AgentRun(
             run_id="run_previous",
@@ -1841,6 +1922,7 @@ class AgentChatTest(unittest.TestCase):
         self.assertEqual(response.intent, "risk_summary")
         self.assertIn("301489", response.answer)
 
+    # Regression scenario: llm explanation intent uses explanation tool.
     def test_llm_explanation_intent_uses_explanation_tool(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(
@@ -1859,6 +1941,7 @@ class AgentChatTest(unittest.TestCase):
         )
         self.assertIn("301489", response.answer)
 
+    # Regression scenario: output avoids investment advice terms.
     def test_output_avoids_investment_advice_terms(self) -> None:
         response = answer_first_board_chat(
             AgentChatRequest(

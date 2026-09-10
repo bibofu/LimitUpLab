@@ -9,6 +9,7 @@ from app.collectors.market_index_collector import (
 
 
 class MarketIndexCollectorTest(unittest.TestCase):
+    # Prepare the rows fixture or observation used by the surrounding regression scenario.
     @staticmethod
     def _rows(*dates_and_closes: tuple[str, float]) -> list[dict[str, object]]:
         return [
@@ -16,6 +17,7 @@ class MarketIndexCollectorTest(unittest.TestCase):
             for trade_date, close in dates_and_closes
         ]
 
+    # Regression scenario: tencent snapshot matches requested trade date.
     @patch("app.collectors.market_index_collector._tencent_rows")
     def test_tencent_snapshot_matches_requested_trade_date(self, tencent_rows) -> None:
         tencent_rows.return_value = self._rows(
@@ -36,6 +38,7 @@ class MarketIndexCollectorTest(unittest.TestCase):
         self.assertEqual(snapshot.change_pct, -2.4)
         self.assertEqual(snapshot.source, "tencent_index_daily_spot")
 
+    # Regression scenario: stale sources are rejected.
     @patch("app.collectors.market_index_collector._sina_rows")
     @patch("app.collectors.market_index_collector._eastmoney_rows")
     @patch("app.collectors.market_index_collector._tencent_rows")
@@ -61,6 +64,7 @@ class MarketIndexCollectorTest(unittest.TestCase):
                 trade_date=date(2026, 8, 19),
             )
 
+    # Regression scenario: trend uses requested trading day window.
     def test_trend_uses_requested_trading_day_window(self) -> None:
         trend = _trend_from_rows(
             name="上证指数",
@@ -86,6 +90,7 @@ class MarketIndexCollectorTest(unittest.TestCase):
         self.assertEqual(trend.max_drawdown_pct, -0.98)
         self.assertEqual(len(trend.points), 5)
 
+    # Regression scenario: trend rejects stale requested date.
     def test_trend_rejects_stale_requested_date(self) -> None:
         with self.assertRaisesRegex(ValueError, "stale index data"):
             _trend_from_rows(

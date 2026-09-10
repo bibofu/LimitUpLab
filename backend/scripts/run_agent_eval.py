@@ -46,6 +46,7 @@ from app.services.llm_provider import DisabledLLMProvider, get_llm_provider
 from app.services.sample_data import SAMPLE_EVENTS
 
 
+# Parse evaluation options, execute the requested suite and write its summary/failure output.
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run Agent chat eval cases.")
     parser.add_argument(

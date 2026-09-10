@@ -18,6 +18,7 @@ from app.services.sample_data import SAMPLE_EVENTS
 from app.services.scoring_policy import build_default_scoring_policy, rating_for_score
 
 
+# Regression scenario: rating bands in both scoring paths.
 @pytest.mark.parametrize("score, expected", [
     (0, "D"), (49.9, "D"), (50, "C"), (50.1, "C"),
     (64.9, "C"), (65, "B"), (65.1, "B"),
@@ -31,6 +32,8 @@ def test_rating_bands_in_both_scoring_paths(monkeypatch, score, expected):
         event, events, summarize_market(events),
     )
     policy = build_default_scoring_policy()
+    # The inline callback supplies the fixture value or replacement behavior used by this test; it
+    # is evaluated only when the code under test calls it.
     monkeypatch.setattr(first_board, "_apply_scoring_policy", lambda *_args: [
         ScoreBreakdownItem(name="test", score=score, max_score=100, evidence=[]),
     ])
@@ -44,6 +47,8 @@ def test_rating_bands_in_both_scoring_paths(monkeypatch, score, expected):
         trade_date=event.trade_date, candidates=[base_rating], filtered_out=[],
         universe_count=len(events), generated_by=policy.version,
     )
+    # The inline callback supplies the fixture value or replacement behavior used by this test; it
+    # is evaluated only when the code under test calls it.
     monkeypatch.setattr(recommendation_intelligence, "build_first_board_ratings", lambda **_kwargs: rebuilt)
     now = datetime(2026, 5, 18, 1, tzinfo=timezone.utc)
     response = RecommendationIntelligenceResponse(

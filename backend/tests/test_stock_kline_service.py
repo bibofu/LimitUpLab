@@ -22,6 +22,7 @@ TEST_TMP_ROOT = Path(os.getenv("LIMITUPLAB_TEST_TMP", Path(__file__).resolve().p
 
 
 class StockKLineServiceTest(unittest.TestCase):
+    # Regression scenario: intraday history groups five sessions and preserves partial errors.
     def test_intraday_history_groups_five_sessions_and_preserves_partial_errors(self) -> None:
         database_path = TEST_TMP_ROOT / f"stock-intraday-history-{uuid4().hex}.sqlite"
         repository = SQLiteFirstBoardRepository(database_path=database_path)
@@ -38,6 +39,8 @@ class StockKLineServiceTest(unittest.TestCase):
             for index in range(9)
         ]
 
+        # Simulate the dependency failure required by this regression scenario so its error or
+        # fallback path is exercised.
         def collector(
             _symbol: str,
             trade_date: date,
@@ -82,11 +85,14 @@ class StockKLineServiceTest(unittest.TestCase):
         finally:
             _remove_database_files(database_path)
 
+    # Regression scenario: intraday cache survives repository recreation.
     def test_intraday_cache_survives_repository_recreation(self) -> None:
         database_path = TEST_TMP_ROOT / f"stock-intraday-{uuid4().hex}.sqlite"
         trade_date = date(2026, 8, 31)
         calls = 0
 
+        # Provide controlled source data for the surrounding test without relying on a live data
+        # service.
         def collector(
             _symbol: str,
             _trade_date: date,
@@ -128,6 +134,7 @@ class StockKLineServiceTest(unittest.TestCase):
         finally:
             _remove_database_files(database_path)
 
+    # Regression scenario: concurrent intraday requests share one cache fill.
     def test_concurrent_intraday_requests_share_one_cache_fill(self) -> None:
         database_path = TEST_TMP_ROOT / f"stock-intraday-lock-{uuid4().hex}.sqlite"
         trade_date = date(2026, 8, 31)
@@ -135,6 +142,8 @@ class StockKLineServiceTest(unittest.TestCase):
         release_collector = threading.Event()
         calls = 0
 
+        # Provide controlled source data for the surrounding test without relying on a live data
+        # service.
         def collector(
             _symbol: str,
             _trade_date: date,
@@ -156,6 +165,8 @@ class StockKLineServiceTest(unittest.TestCase):
                 )
             ]
 
+        # Provide controlled source data for the surrounding test without relying on a live data
+        # service.
         def load() -> list[StockIntradayKLineBar]:
             return load_stock_intraday_bars(
                 symbol="002328",
@@ -179,6 +190,7 @@ class StockKLineServiceTest(unittest.TestCase):
             release_collector.set()
             _remove_database_files(database_path)
 
+    # Regression scenario: complete current day cache skips external collectors.
     def test_complete_current_day_cache_skips_external_collectors(self) -> None:
         database_path = TEST_TMP_ROOT / f"stock-kline-current-{uuid4().hex}.sqlite"
         repository = SQLiteFirstBoardRepository(database_path=database_path)
@@ -205,6 +217,8 @@ class StockKLineServiceTest(unittest.TestCase):
         history_calls = 0
         spot_calls = 0
 
+        # Provide controlled source data for the surrounding test without relying on a live data
+        # service.
         def history_collector(
             _symbol: str,
             _days: int,
@@ -214,6 +228,8 @@ class StockKLineServiceTest(unittest.TestCase):
             history_calls += 1
             return []
 
+        # Provide controlled source data for the surrounding test without relying on a live data
+        # service.
         def spot_collector(
             _symbols: list[str],
             _trade_date: date,
@@ -238,12 +254,15 @@ class StockKLineServiceTest(unittest.TestCase):
         finally:
             _remove_database_files(database_path)
 
+    # Regression scenario: partial history refresh is not repeated within ttl.
     def test_partial_history_refresh_is_not_repeated_within_ttl(self) -> None:
         database_path = TEST_TMP_ROOT / f"stock-kline-partial-{uuid4().hex}.sqlite"
         repository = SQLiteFirstBoardRepository(database_path=database_path)
         end_date = date(2026, 8, 18)
         history_calls = 0
 
+        # Provide controlled source data for the surrounding test without relying on a live data
+        # service.
         def history_collector(
             _symbol: str,
             _days: int,
@@ -264,6 +283,8 @@ class StockKLineServiceTest(unittest.TestCase):
             ]
 
         try:
+            # The inline callback supplies the fixture value or replacement behavior used by this
+            # test; it is evaluated only when the code under test calls it.
             first = load_stock_kline_bars(
                 symbol="600002",
                 days=21,
@@ -272,6 +293,8 @@ class StockKLineServiceTest(unittest.TestCase):
                 history_collector=history_collector,
                 spot_collector=lambda _symbols, _trade_date: {},
             )
+            # The inline callback supplies the fixture value or replacement behavior used by this
+            # test; it is evaluated only when the code under test calls it.
             second = load_stock_kline_bars(
                 symbol="600002",
                 days=21,
@@ -287,6 +310,7 @@ class StockKLineServiceTest(unittest.TestCase):
         finally:
             _remove_database_files(database_path)
 
+    # Regression scenario: concurrent history requests are coalesced.
     def test_concurrent_history_requests_are_coalesced(self) -> None:
         database_path = TEST_TMP_ROOT / f"stock-kline-concurrent-{uuid4().hex}.sqlite"
         repository = SQLiteFirstBoardRepository(database_path=database_path)
@@ -296,6 +320,8 @@ class StockKLineServiceTest(unittest.TestCase):
         collector_started = threading.Event()
         release_collector = threading.Event()
 
+        # Provide controlled source data for the surrounding test without relying on a live data
+        # service.
         def history_collector(
             _symbol: str,
             _days: int,
@@ -318,7 +344,11 @@ class StockKLineServiceTest(unittest.TestCase):
                 for index in range(21)
             ]
 
+        # Provide controlled source data for the surrounding test without relying on a live data
+        # service.
         def load() -> list[StockKLineBar]:
+            # The inline callback supplies the fixture value or replacement behavior used by this
+            # test; it is evaluated only when the code under test calls it.
             return load_stock_kline_bars(
                 symbol="600004",
                 days=21,
@@ -342,12 +372,15 @@ class StockKLineServiceTest(unittest.TestCase):
             release_collector.set()
             _remove_database_files(database_path)
 
+    # Regression scenario: detail bundle reuses one history load for position and chart.
     def test_detail_bundle_reuses_one_history_load_for_position_and_chart(self) -> None:
         database_path = TEST_TMP_ROOT / f"stock-market-data-{uuid4().hex}.sqlite"
         repository = SQLiteFirstBoardRepository(database_path=database_path)
         end_date = date(2026, 8, 18)
         requested_days: list[int] = []
 
+        # Provide controlled source data for the surrounding test without relying on a live data
+        # service.
         def history_collector(
             _symbol: str,
             days: int,
@@ -368,6 +401,8 @@ class StockKLineServiceTest(unittest.TestCase):
             ]
 
         try:
+            # The inline callback supplies the fixture value or replacement behavior used by this
+            # test; it is evaluated only when the code under test calls it.
             result = load_stock_detail_market_data(
                 symbol="600003",
                 days=60,
@@ -390,6 +425,7 @@ class StockKLineServiceTest(unittest.TestCase):
         finally:
             _remove_database_files(database_path)
 
+    # Regression scenario: merges history with latest spot and reuses cache.
     def test_merges_history_with_latest_spot_and_reuses_cache(self) -> None:
         database_path = TEST_TMP_ROOT / f"stock-kline-test-{uuid4().hex}.sqlite"
         repository = SQLiteFirstBoardRepository(database_path=database_path)
@@ -397,6 +433,8 @@ class StockKLineServiceTest(unittest.TestCase):
         history_calls = 0
         spot_calls = 0
 
+        # Provide controlled source data for the surrounding test without relying on a live data
+        # service.
         def history_collector(
             _symbol: str,
             _days: int,
@@ -416,6 +454,8 @@ class StockKLineServiceTest(unittest.TestCase):
                 for index in range(21)
             ]
 
+        # Provide controlled source data for the surrounding test without relying on a live data
+        # service.
         def spot_collector(
             symbols: list[str],
             _trade_date: date,
@@ -462,12 +502,15 @@ class StockKLineServiceTest(unittest.TestCase):
         finally:
             _remove_database_files(database_path)
 
+    # Regression scenario: loads 125 point in time bars for position assessment.
     def test_loads_125_point_in_time_bars_for_position_assessment(self) -> None:
         database_path = TEST_TMP_ROOT / f"stock-position-test-{uuid4().hex}.sqlite"
         repository = SQLiteFirstBoardRepository(database_path=database_path)
         end_date = date(2026, 8, 17)
         requested_days: list[int] = []
 
+        # Provide controlled source data for the surrounding test without relying on a live data
+        # service.
         def history_collector(
             symbol: str,
             days: int,
@@ -487,6 +530,8 @@ class StockKLineServiceTest(unittest.TestCase):
             ]
 
         try:
+            # The inline callback supplies the fixture value or replacement behavior used by this
+            # test; it is evaluated only when the code under test calls it.
             position = load_stock_position_assessment(
                 symbol="002365",
                 end_date=end_date,
@@ -503,6 +548,7 @@ class StockKLineServiceTest(unittest.TestCase):
             _remove_database_files(database_path)
 
 
+# Release the temporary resources owned by this test fixture.
 def _remove_database_files(database_path: Path) -> None:
     for path in (
         database_path,

@@ -19,6 +19,8 @@ from app.services.sample_data import SAMPLE_EVENTS
 TEST_TMP_ROOT = Path(os.getenv("LIMITUPLAB_TEST_TMP", Path(__file__).resolve().parents[1]))
 
 
+# Prepare the temporary database path fixture or observation used by the surrounding regression
+# scenario.
 @contextmanager
 def temporary_database_path():
     database_path = TEST_TMP_ROOT / f"enrichment-test-{uuid4().hex}.sqlite"
@@ -52,12 +54,15 @@ def fake_kline_collector(
 
 
 class FirstBoardEnrichmentTest(unittest.TestCase):
+    # Regression scenario: refresh persists all rating inputs and agent uses them.
     def test_refresh_persists_all_rating_inputs_and_agent_uses_them(self) -> None:
         trade_date = date(2026, 5, 15)
         captured_at = datetime(2026, 5, 15, 8, tzinfo=timezone.utc)
 
         with temporary_database_path() as database_path:
             repository = SQLiteFirstBoardRepository(database_path=database_path)
+            # The inline callback supplies the fixture value or replacement behavior used by this
+            # test; it is evaluated only when the code under test calls it.
             report = refresh_first_board_enrichment_snapshots(
                 events=SAMPLE_EVENTS,
                 trade_date=trade_date,

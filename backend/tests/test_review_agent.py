@@ -13,9 +13,11 @@ from app.services.sample_data import SAMPLE_EVENTS
 
 
 class FakeReviewLLMProvider(LLMProvider):
+    # Prepare the init fixture or observation used by the surrounding regression scenario.
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
 
+    # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         self.calls.append((system_prompt, user_prompt))
         if "planner" in system_prompt.lower():
@@ -45,6 +47,7 @@ class FakeReviewLLMProvider(LLMProvider):
 
 
 class ReviewAgentTest(unittest.TestCase):
+    # Regression scenario: review agent uses llm planner and tools.
     def test_review_agent_uses_llm_planner_and_tools(self) -> None:
         provider = FakeReviewLLMProvider()
 
@@ -69,6 +72,7 @@ class ReviewAgentTest(unittest.TestCase):
             ],
         )
 
+    # Regression scenario: feature comparison describes success and failure groups.
     def test_feature_comparison_describes_success_and_failure_groups(self) -> None:
         evaluations: list[AgentEvaluationItem] = []
         predictions: dict[str, AgentPrediction] = {}
@@ -181,9 +185,11 @@ class ReviewAgentTest(unittest.TestCase):
         self.assertIn("流通市值中位数 140.0 亿元", failed_text)
         self.assertIn("三日最大回撤平均 -10.00%", failed_text)
 
+    # Regression scenario: top10 promotion is compared with same day market cohort.
     def test_top10_promotion_is_compared_with_same_day_market_cohort(self) -> None:
         template = SAMPLE_EVENTS[2]
 
+        # Prepare the event fixture or observation used by the surrounding regression scenario.
         def event(symbol: str, trade_date: date, height: int):
             return template.model_copy(
                 update={

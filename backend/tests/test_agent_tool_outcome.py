@@ -5,6 +5,7 @@ from app.models import AgentToolOutcome, AgentToolTrace, build_agent_evidence_ca
 
 
 class AgentToolOutcomeTest(unittest.TestCase):
+    # Regression scenario: successful empty payload is not a tool error.
     def test_successful_empty_payload_is_not_a_tool_error(self) -> None:
         trace = AgentToolTrace(
             name="limit_up_events",
@@ -23,6 +24,7 @@ class AgentToolOutcomeTest(unittest.TestCase):
         self.assertEqual(serialized["result"]["status"], "empty")
         self.assertEqual(serialized["result"]["payload"], trace.output)
 
+    # Regression scenario: partial payload preserves source errors.
     def test_partial_payload_preserves_source_errors(self) -> None:
         trace = AgentToolTrace(
             name="stock_activity",
@@ -40,6 +42,7 @@ class AgentToolOutcomeTest(unittest.TestCase):
         self.assertFalse(trace.result.data_fresh)
         self.assertEqual(trace.result.source_errors, ["news source unavailable"])
 
+    # Regression scenario: legacy error trace is normalized to error outcome.
     def test_legacy_error_trace_is_normalized_to_error_outcome(self) -> None:
         trace = AgentToolTrace(
             name="stock_kline",
@@ -54,6 +57,7 @@ class AgentToolOutcomeTest(unittest.TestCase):
         self.assertIsNone(trace.result.data_fresh)
         self.assertEqual(trace.result.source_errors, ["provider timeout"])
 
+    # Regression scenario: explicit partial outcome wins over empty payload inference.
     def test_explicit_partial_outcome_wins_over_empty_payload_inference(self) -> None:
         trace = AgentToolTrace(
             name="multi_source_tool",
@@ -75,6 +79,7 @@ class AgentToolOutcomeTest(unittest.TestCase):
         self.assertEqual(cards[1].status, "skipped")
         self.assertIn("不完整", cards[1].summary)
 
+    # Regression scenario: answerability uses outcome instead of naked empty payload.
     def test_answerability_uses_outcome_instead_of_naked_empty_payload(self) -> None:
         empty = AgentToolTrace(
             name="limit_up_events",

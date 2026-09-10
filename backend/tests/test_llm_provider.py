@@ -10,9 +10,13 @@ from app.services.llm_provider import (
 
 
 class FakeResponse:
+    # Implement the context/response protocol expected by the code under test using this local
+    # fixture.
     def raise_for_status(self) -> None:
         pass
 
+    # Implement the context/response protocol expected by the code under test using this local
+    # fixture.
     def json(self) -> dict:
         return {
             "choices": [{"message": {"content": "{\"ok\":true}"}}],
@@ -25,15 +29,19 @@ class FakeResponse:
 
 
 class FakeSession:
+    # Prepare the init fixture or observation used by the surrounding regression scenario.
     def __init__(self) -> None:
         self.calls: list[dict] = []
 
+    # Build the FakeResponse fixture used by the surrounding regression scenario.
     def post(self, url: str, **kwargs):
         self.calls.append({"url": url, **kwargs})
         return FakeResponse()
 
 
 class FakeFunctionResponse(FakeResponse):
+    # Implement the context/response protocol expected by the code under test using this local
+    # fixture.
     def json(self) -> dict:
         return {
             "choices": [
@@ -68,50 +76,63 @@ class FakeFunctionResponse(FakeResponse):
 
 
 class FakeFunctionSession(FakeSession):
+    # Build the FakeFunctionResponse fixture used by the surrounding regression scenario.
     def post(self, url: str, **kwargs):
         self.calls.append({"url": url, **kwargs})
         return FakeFunctionResponse()
 
 
 class MissingFunctionCallResponse(FakeResponse):
+    # Implement the context/response protocol expected by the code under test using this local
+    # fixture.
     def json(self) -> dict:
         return {"choices": [{"message": {"content": "no function"}}]}
 
 
 class MissingFunctionCallSession(FakeSession):
+    # Build the MissingFunctionCallResponse fixture used by the surrounding regression scenario.
     def post(self, url: str, **kwargs):
         self.calls.append({"url": url, **kwargs})
         return MissingFunctionCallResponse()
 
 
 class FakeStreamingResponse:
+    # Prepare the init fixture or observation used by the surrounding regression scenario.
     def __init__(self) -> None:
         self.closed = False
 
+    # Implement the context/response protocol expected by the code under test using this local
+    # fixture.
     def raise_for_status(self) -> None:
         pass
 
+    # Implement the context/response protocol expected by the code under test using this local
+    # fixture.
     def iter_lines(self):
         yield b'data: {"choices":[{"delta":{"content":"\\u6839\\u636e"}}]}'
         yield b'data: {"choices":[{"delta":{"content":" facts"}}]}'
         yield b'data: {"choices":[],"usage":{"prompt_tokens":8,"completion_tokens":3,"total_tokens":11}}'
         yield b"data: [DONE]"
 
+    # Release the temporary resources owned by this test fixture.
     def close(self) -> None:
         self.closed = True
 
 
 class FakeStreamingSession(FakeSession):
+    # Prepare the init fixture or observation used by the surrounding regression scenario.
     def __init__(self) -> None:
         super().__init__()
         self.response = FakeStreamingResponse()
 
+    # Prepare the post fixture or observation used by the surrounding regression scenario.
     def post(self, url: str, **kwargs):
         self.calls.append({"url": url, **kwargs})
         return self.response
 
 
 class TransientFailureSession(FakeSession):
+    # Build the FakeResponse fixture used by the surrounding regression scenario.
     def post(self, url: str, **kwargs):
         self.calls.append({"url": url, **kwargs})
         if len(self.calls) == 1:
@@ -120,6 +141,7 @@ class TransientFailureSession(FakeSession):
 
 
 class LLMProviderTest(unittest.TestCase):
+    # Regression scenario: native function call forces named tool and parses arguments.
     def test_native_function_call_forces_named_tool_and_parses_arguments(self) -> None:
         session = FakeFunctionSession()
         provider = OpenAIChatCompletionsProvider(
@@ -161,6 +183,7 @@ class LLMProviderTest(unittest.TestCase):
         self.assertEqual(result.total_tokens, 28)
         self.assertIn('"capabilities":["limit_up_pool"]', result.content)
 
+    # Regression scenario: native function call rejects missing call.
     def test_native_function_call_rejects_missing_call(self) -> None:
         provider = OpenAIChatCompletionsProvider(
             api_key="test-key",
@@ -176,6 +199,7 @@ class LLMProviderTest(unittest.TestCase):
                 parameters={"type": "object"},
             )
 
+    # Regression scenario: native function call can be disabled for compatible provider.
     def test_native_function_call_can_be_disabled_for_compatible_provider(self) -> None:
         provider = OpenAIChatCompletionsProvider(
             api_key="test-key",
@@ -192,6 +216,7 @@ class LLMProviderTest(unittest.TestCase):
                 parameters={"type": "object"},
             )
 
+    # Regression scenario: planner uses non thinking mode and small token budget.
     def test_planner_uses_non_thinking_mode_and_small_token_budget(self) -> None:
         session = FakeSession()
         provider = OpenAIChatCompletionsProvider(
@@ -215,6 +240,7 @@ class LLMProviderTest(unittest.TestCase):
         self.assertGreater(result.prompt_chars, 0)
         self.assertEqual(result.total_tokens, 16)
 
+    # Regression scenario: answer does not send a token limit.
     def test_answer_does_not_send_a_token_limit(self) -> None:
         session = FakeSession()
         provider = OpenAIChatCompletionsProvider(
@@ -226,6 +252,7 @@ class LLMProviderTest(unittest.TestCase):
 
         self.assertNotIn("max_tokens", session.calls[0]["json"])
 
+    # Regression scenario: exhaustive list does not send a token limit.
     def test_exhaustive_list_does_not_send_a_token_limit(self) -> None:
         session = FakeSession()
         provider = OpenAIChatCompletionsProvider(
@@ -237,6 +264,7 @@ class LLMProviderTest(unittest.TestCase):
 
         self.assertNotIn("max_tokens", session.calls[0]["json"])
 
+    # Regression scenario: stream answer emits native sse deltas.
     def test_stream_answer_emits_native_sse_deltas(self) -> None:
         session = FakeStreamingSession()
         provider = OpenAIChatCompletionsProvider(
@@ -265,6 +293,7 @@ class LLMProviderTest(unittest.TestCase):
         self.assertEqual(result.completion_tokens, 3)
         self.assertEqual(result.total_tokens, 11)
 
+    # Regression scenario: non streaming request retries transient timeout.
     def test_non_streaming_request_retries_transient_timeout(self) -> None:
         session = TransientFailureSession()
         delays: list[float] = []
