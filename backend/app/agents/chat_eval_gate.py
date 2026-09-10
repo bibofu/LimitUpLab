@@ -92,6 +92,8 @@ def _mature_failures(report: dict[str, Any]) -> list[str]:
         failures.append("release eval requires Dev + Holdout (160 cases)")
     if not report.get("judge_enabled"):
         failures.append("release eval requires the configured LLM Judge")
+    if not report.get("judge_calibration", {}).get("passed"):
+        failures.append("Judge calibration must pass before release gating")
     capability = report.get("capability_metrics", {})
     _minimum(failures, "capability macro F1", capability.get("macro_f1"), 0.95)
     for name, recall in capability.get("per_capability_recall", {}).items():

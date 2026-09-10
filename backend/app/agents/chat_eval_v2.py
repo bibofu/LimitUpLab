@@ -48,6 +48,21 @@ INVESTMENT_VIOLATION_PATTERNS = (
     re.compile(r"目标价\s*[:：]?\s*\d"),
     re.compile(r"(?:保证|必然|一定).{0,8}(?:上涨|涨停|收益)"),
 )
+UNSCORED_FACT_MARKERS = (
+    "上涨",
+    "下跌",
+    "改善",
+    "恶化",
+    "领先",
+    "最强",
+    "最弱",
+    "净买入",
+    "涨停",
+    "跌停",
+    "增长",
+    "下降",
+    "排名",
+)
 
 
 @dataclass(frozen=True)
@@ -202,7 +217,7 @@ def evaluate_chat_response(
         capabilities=_expected_capabilities(case),
         passed=all(stage.passed for stage in stages.values()) and not provider_failed,
         stages=stages,
-        answer_preview=response.answer[:300],
+        answer_preview="" if mode == "online-shadow" else response.answer[:300],
         provider_failed=provider_failed,
         trial=trial,
     )
@@ -338,25 +353,55 @@ def _evaluate_planner(
             return EvalStageResult(status="pass", observed={"capabilities": []})
         return EvalStageResult(status="fail", failures=("planner trace is missing",))
     capabilities = tuple(str(item) for item in trace.input.get("capabilities") or [])
-    planned_tools = tuple(
-        str(item.get("name"))
+    raw_calls = [
+        item
         for item in trace.input.get("tool_calls") or []
         if isinstance(item, dict) and item.get("name")
+    ]
+    planned_tools = tuple(
+        str(item.get("name"))
+        for item in raw_calls
     )
     allowed = [tuple(items) for items in case.expected.allowed_capability_sets]
     matched = any(set(capabilities) == set(items) for items in allowed)
-    failures = () if matched else (
-        f"capabilities {list(capabilities)} do not match any allowed set {allowed}",
-    )
+    failures = [] if matched else [
+        f"capabilities {list(capabilities)} do not match any allowed set {allowed}"
+    ]
+    parameter_fields = 0
+    parameter_failures: list[str] = []
+    if any(call.get("arguments") for call in raw_calls):
+        calls_by_name = {str(call["name"]): call for call in raw_calls}
+        for tool, expected_parameters in case.expected.tool_parameters.items():
+            call = calls_by_name.get(tool)
+            if call is None or not expected_parameters:
+                continue
+            parameter_fields += _leaf_count(expected_parameters)
+            parameter_failures.extend(
+                f"raw {tool} parameter {failure}"
+                for failure in _subset_failures(
+                    expected_parameters, call.get("arguments") or {}
+                )
+            )
+    failures.extend(parameter_failures)
     precision, recall, f1 = _best_set_scores(capabilities, allowed)
     return EvalStageResult(
         status="fail" if failures else "pass",
-        failures=failures,
-        metrics={"precision": precision, "recall": recall, "f1": f1},
+        failures=tuple(failures),
+        metrics={
+            "precision": precision,
+            "recall": recall,
+            "f1": f1,
+            "raw_parameter_field_count": parameter_fields,
+            "raw_parameter_correct_fields": max(
+                0, parameter_fields - len(parameter_failures)
+            ),
+        },
         observed={
             "capabilities": list(capabilities),
             "planned_tools": list(planned_tools),
-            "raw_parameter_accuracy": None,
+            "raw_parameter_accuracy": _rate(
+                parameter_fields - len(parameter_failures), parameter_fields
+            ),
         },
     )
 
@@ -528,6 +573,7 @@ def _evaluate_grounding(
         if claim not in missing_claims
         and not _answer_mentions_evidence_claim(claim, response.answer)
     ]
+    unscored_claims = _unscored_factual_sentences(response.answer, grounding)
     failures = [
         f"expected evidence claim missing: {claim.source_path}={claim.value!r}"
         for claim in missing_claims
@@ -536,6 +582,7 @@ def _evaluate_grounding(
         f"expected evidence claim not used in answer: {claim.metric}={claim.value!r}"
         for claim in unmentioned_claims
     )
+    failures.extend(f"unscored factual claim: {text}" for text in unscored_claims)
     failures.extend(
         f"unsupported {claim.kind} claim: {claim.text}"
         for claim in grounding.claims
@@ -554,12 +601,12 @@ def _evaluate_grounding(
             "claim_precision": grounding.claim_support_rate,
             "required_evidence_count": required,
             "evidence_completeness": _rate(found, required),
-            "unscored_claim_count": 0,
+            "unscored_claim_count": len(unscored_claims),
             "critical_claim_failures": sum(
                 claim.critical for claim in [*missing_claims, *unmentioned_claims]
             ),
         },
-        observed=grounding.payload(),
+        observed={**grounding.payload(), "unscored_claims": unscored_claims},
     )
 
 
@@ -690,6 +737,8 @@ def _evaluate_efficiency(
         "prompt_tokens": usage.get("prompt_tokens"),
         "completion_tokens": usage.get("completion_tokens"),
         "total_tokens": usage.get("total_tokens"),
+        "planner_tokens": usage.get("planner_tokens"),
+        "answer_tokens": usage.get("answer_tokens"),
     }
     return EvalStageResult(
         status="fail" if failures else "pass",
@@ -733,6 +782,26 @@ def _answer_mentions_evidence_claim(claim: EvalEvidenceClaim, answer: str) -> bo
         return False
     value = str(claim.value).lower()
     return value in answer.lower()
+
+
+def _unscored_factual_sentences(
+    answer: str, grounding: AnswerGroundingResult
+) -> list[str]:
+    """Surface qualitative market assertions the deterministic parser cannot bind."""
+
+    scored_text = {_compact(claim.text) for claim in grounding.claims}
+    unscored = []
+    for sentence in re.split(r"[。！？!?；;\n]+", answer):
+        text = sentence.strip()
+        compact = _compact(text)
+        if not compact or not any(marker in text for marker in UNSCORED_FACT_MARKERS):
+            continue
+        if any(claim_text and claim_text in compact for claim_text in scored_text):
+            continue
+        if any(marker in text for marker in ("不构成", "不能", "无法", "不要", "不得")):
+            continue
+        unscored.append(text[:160])
+    return unscored
 
 
 def _read_path(value: Any, path: str) -> Any:
@@ -810,9 +879,18 @@ def _planner_counts(results: list[ChatEvalTrialResult]) -> dict[str, Any]:
         for result in results
         if result.stages["planner"].status != "not_applicable"
     ]
+    parameter_fields = sum(
+        int(item.metrics.get("raw_parameter_field_count") or 0)
+        for item in applicable
+    )
+    correct_parameters = sum(
+        int(item.metrics.get("raw_parameter_correct_fields") or 0)
+        for item in applicable
+    )
     return {
         "applicable_trials": len(applicable),
         "raw_accuracy": _rate(sum(item.status == "pass" for item in applicable), len(applicable)),
+        "raw_parameter_accuracy": _rate(correct_parameters, parameter_fields),
     }
 
 
@@ -1035,6 +1113,24 @@ def _efficiency_metrics(results: list[ChatEvalTrialResult]) -> dict[str, Any]:
         for result in results
         if result.stages["efficiency"].metrics.get("total_tokens") is not None
     ]
+    planner_tokens = [
+        int(result.stages["efficiency"].metrics.get("planner_tokens") or 0)
+        for result in results
+        if result.stages["efficiency"].metrics.get("planner_tokens") is not None
+    ]
+    answer_tokens = [
+        int(result.stages["efficiency"].metrics.get("answer_tokens") or 0)
+        for result in results
+        if result.stages["efficiency"].metrics.get("answer_tokens") is not None
+    ]
+    planner_latency = [
+        int(result.stages["efficiency"].metrics.get("planner_duration_ms") or 0)
+        for result in results
+    ]
+    answer_latency = [
+        int(result.stages["efficiency"].metrics.get("answer_duration_ms") or 0)
+        for result in results
+    ]
     calls = [
         int(result.stages["efficiency"].metrics.get("tool_call_count") or 0)
         for result in results
@@ -1044,6 +1140,14 @@ def _efficiency_metrics(results: list[ChatEvalTrialResult]) -> dict[str, Any]:
         "latency_p95_ms": _percentile(totals, 0.95),
         "token_p50": _percentile(tokens, 0.5) if tokens else None,
         "token_p95": _percentile(tokens, 0.95) if tokens else None,
+        "planner_token_p50": _percentile(planner_tokens, 0.5) if planner_tokens else None,
+        "planner_token_p95": _percentile(planner_tokens, 0.95) if planner_tokens else None,
+        "answer_token_p50": _percentile(answer_tokens, 0.5) if answer_tokens else None,
+        "answer_token_p95": _percentile(answer_tokens, 0.95) if answer_tokens else None,
+        "planner_latency_p50_ms": _percentile(planner_latency, 0.5),
+        "planner_latency_p95_ms": _percentile(planner_latency, 0.95),
+        "answer_latency_p50_ms": _percentile(answer_latency, 0.5),
+        "answer_latency_p95_ms": _percentile(answer_latency, 0.95),
         "average_tool_calls": round(sum(calls) / len(calls), 4) if calls else 0.0,
         "max_tool_calls": max(calls, default=0),
     }

@@ -132,6 +132,7 @@ def test_committed_dev_dataset_covers_every_v1_capability_three_times() -> None:
     assert all(case.expected.query for case in dataset.cases)
     assert sum(bool(case.expected.tool_parameters) for case in dataset.cases) >= 100
     assert sum(len(case.expected.evidence_claims) for case in dataset.cases) >= 100
+    assert all(case.expected.forbidden_tools for case in dataset.cases)
     for case in dataset.cases:
         for claim in case.expected.evidence_claims:
             tool = claim.source_path.partition(".")[0]

@@ -23,6 +23,7 @@ from app.agents.query_contract import (
     build_conversation_query_understanding_view,
     query_reference_date_override,
 )
+from app.agents.tools import V1_CLOSED_MARKET_TOOL_NAMES
 
 
 ANCHOR = "2026-05-15T18:00:00+08:00"
@@ -260,7 +261,7 @@ def _expected(
         "query": query,
         "allowed_capability_sets": [capabilities] if capabilities else [[]],
         "required_tools": tools,
-        "forbidden_tools": [],
+        "forbidden_tools": sorted(set(V1_CLOSED_MARKET_TOOL_NAMES) - set(tools)),
         "tool_parameters": parameters,
         "policy_repairs": {},
         "result_states": {tool: result_state for tool in tools},

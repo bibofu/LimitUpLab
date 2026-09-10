@@ -9,6 +9,7 @@ def _release_report() -> dict:
         "case_count": 160,
         "trial_count": 480,
         "judge_enabled": True,
+        "judge_calibration": {"passed": True},
         "pass_at_1": 0.96,
         "stable_3_of_3_rate": 0.91,
         "provider_failure_rate": 0.005,

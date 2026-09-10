@@ -14,6 +14,7 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from app.agents.chat_eval_dataset import load_dataset_selection
 from app.agents.chat_eval_gate import evaluate_release_gate
+from app.agents.chat_eval_judge_calibration import evaluate_judge_calibration
 from app.agents.chat_eval_runner_v2 import (
     EvalConfigurationError,
     run_chat_eval_suite,
@@ -101,6 +102,8 @@ def main() -> None:
                 llm_provider=llm_provider,
                 judge_provider=judge_provider,
             )
+            if args.judge:
+                report["judge_calibration"] = _load_judge_calibration()
         release_scope = (
             args.sample_size is None
             and args.case_filter is None
@@ -194,6 +197,16 @@ def _load_approved_baseline() -> dict | None:
     if payload.get("mode") != "live" or payload.get("status") != "completed":
         raise EvalConfigurationError("approved eval baseline must be a completed live report")
     return payload
+
+
+def _load_judge_calibration() -> dict:
+    raw_path = os.getenv("LIMITUPLAB_EVAL_JUDGE_CALIBRATION_PATH", "").strip()
+    if not raw_path:
+        return {"status": "missing", "passed": False}
+    path = Path(raw_path).expanduser().resolve()
+    if not path.is_file():
+        raise EvalConfigurationError(f"Judge calibration not found: {path}")
+    return evaluate_judge_calibration(path)
 
 
 if __name__ == "__main__":

@@ -190,6 +190,22 @@ def test_planner_rejects_extra_capability_even_when_policy_executes_required_too
     assert result.stages["tool_policy"].status == "pass"
 
 
+def test_planner_raw_parameters_are_scored_only_when_model_emits_them() -> None:
+    response = _response()
+    planner = next(
+        trace for trace in response.tool_results if trace.name == "llm_tool_planner"
+    )
+    planner.input["tool_calls"][0]["arguments"] = {
+        "query_contract": {"trade_date": "2026-05-14", "market": "chinext"}
+    }
+    result = evaluate_chat_response(_case(), response, mode="live")
+
+    stage = result.stages["planner"]
+    assert stage.status == "fail"
+    assert stage.observed["raw_parameter_accuracy"] == 0.5
+    assert any("trade_date" in failure for failure in stage.failures)
+
+
 def test_unneeded_policy_repair_is_harmful() -> None:
     result = evaluate_chat_response(
         _case(), _response(repairs=["limit_up_events"]), mode="live"
@@ -244,3 +260,16 @@ def test_suite_reports_stage_rates_stability_and_breakdowns() -> None:
     assert report["stable_3_of_3_rate"] == 1.0
     assert report["capability_metrics"]["macro_f1"] == 1.0
     assert report["efficiency_metrics"]["latency_p95_ms"] == 60
+
+
+def test_unparsed_qualitative_market_claim_is_not_defaulted_to_pass() -> None:
+    result = evaluate_chat_response(
+        _case(evidence_claims=[]),
+        _response(answer="半导体板块今天最强。"),
+        mode="live",
+    )
+
+    grounding = result.stages["grounding"]
+    assert grounding.status == "fail"
+    assert grounding.metrics["unscored_claim_count"] == 1
+    assert grounding.observed["unscored_claims"] == ["半导体板块今天最强"]

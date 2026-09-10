@@ -427,9 +427,7 @@ def _run_case(
                 conversation_messages=_conversation_messages(case, trial),
             )
         planner_result = plan.result
-        final_calls = [
-            call for call in plan.tool_calls if str(call.get("name") or "") in fixture.tools
-        ]
+        final_calls = [call for call in plan.tool_calls if call.get("name")]
         final_tools = [str(call["name"]) for call in final_calls]
         planner_tools = list(final_tools)
         planner_trace = AgentToolTrace(
@@ -684,13 +682,17 @@ def _evaluate_shadow_run(run: AgentRun, trial: int) -> ChatEvalTrialResult:
     )
 
 
-def _sum_usage(*results: LLMResult | None) -> dict[str, Any]:
-    values = [item for item in results if item is not None]
+def _sum_usage(
+    planner: LLMResult | None, answer: LLMResult | None
+) -> dict[str, Any]:
+    values = [item for item in (planner, answer) if item is not None]
     complete = values and all(item.total_tokens is not None for item in values)
     return {
         "prompt_tokens": sum(item.prompt_tokens or 0 for item in values) if complete else None,
         "completion_tokens": sum(item.completion_tokens or 0 for item in values) if complete else None,
         "total_tokens": sum(item.total_tokens or 0 for item in values) if complete else None,
+        "planner_tokens": planner.total_tokens if planner else None,
+        "answer_tokens": answer.total_tokens if answer else None,
     }
 
 

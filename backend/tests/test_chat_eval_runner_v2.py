@@ -129,6 +129,42 @@ def test_offline_replay_runs_all_dev_cases_and_planner_is_na():
     assert report["planner_metrics"]["applicable_trials"] == 0
     assert report["capability_metrics"]["macro_f1"] is None
     assert report["fixture_snapshot_id"] == "chat-fixture-v2"
+    assert set(report["breakdowns"]["result_state"]) == {
+        "ok",
+        "empty",
+        "partial",
+        "error",
+        "none",
+    }
+
+
+def test_offline_structured_results_repeat_for_same_fixture_and_seed():
+    case = _limit_up_case()
+    first = run_chat_eval_suite(
+        [case], mode="offline", trials=1, seed="repeatable"
+    )
+    second = run_chat_eval_suite(
+        [case], mode="offline", trials=1, seed="repeatable"
+    )
+
+    def stable(report: dict) -> dict:
+        payload = json.loads(json.dumps(report))
+        for key in ("run_id", "completed_at"):
+            payload.pop(key, None)
+        payload["efficiency_metrics"].pop("latency_p50_ms", None)
+        payload["efficiency_metrics"].pop("latency_p95_ms", None)
+        for result in payload["results"]:
+            metrics = result["stages"]["efficiency"]["metrics"]
+            for key in (
+                "planner_duration_ms",
+                "tool_duration_ms",
+                "answer_duration_ms",
+                "total_duration_ms",
+            ):
+                metrics.pop(key, None)
+        return payload
+
+    assert stable(first) == stable(second)
 
 
 def test_live_mode_uses_real_planner_and_answer_on_frozen_tools():
@@ -145,6 +181,8 @@ def test_live_mode_uses_real_planner_and_answer_on_frozen_tools():
     assert result["stages"]["planner"]["status"] == "pass"
     assert result["stages"]["execution"]["status"] == "pass"
     assert report["efficiency_metrics"]["token_p50"] == 30
+    assert report["efficiency_metrics"]["planner_token_p50"] == 15
+    assert report["efficiency_metrics"]["answer_token_p50"] == 15
 
 
 def test_provider_failure_is_not_hidden_by_template_fallback():
