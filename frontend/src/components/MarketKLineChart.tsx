@@ -46,6 +46,11 @@ const MA_CONFIG = [
   { window: 20, color: "#2477d4" },
 ] as const;
 
+/**
+ * Render daily or intraday market bars with mode-specific indicators and crosshair readouts.
+ * Chart instances and subscriptions are owned by the effect and disposed when their inputs
+ * change or the component unmounts.
+ */
 export function MarketKLineChart({
   bars,
   emptyLabel,
@@ -61,13 +66,13 @@ export function MarketKLineChart({
   const chartRef = useRef<IChartApi | null>(null);
   const [activeBar, setActiveBar] = useState<MarketCandleBar | null>(null);
   const orderedBars = useMemo(
-    () => [...bars].sort((left, right) => chartTimeKey(left.time).localeCompare(chartTimeKey(right.time))),
+    /* Derive orderedBars from the listed dependencies, reusing it until those dependencies change. */ () => [...bars].sort(/* Compare two entries using the explicit tie-break order for MarketKLineChart. */ (left, right) => chartTimeKey(left.time).localeCompare(chartTimeKey(right.time))),
     [bars],
   );
   const latestBar = orderedBars[orderedBars.length - 1] ?? null;
   const displayedBar = activeBar ?? latestBar;
   const displayedIndex = displayedBar
-    ? orderedBars.findIndex((item) => chartTimeKey(item.time) === chartTimeKey(displayedBar.time))
+    ? orderedBars.findIndex(/* Locate the entry matching the active identity/time used by MarketKLineChart. */ (item) => chartTimeKey(item.time) === chartTimeKey(displayedBar.time))
     : -1;
   const isIntraday = mode !== "daily";
   const intradayReferencePrice = isIntraday && referencePrice && referencePrice > 0
@@ -83,32 +88,32 @@ export function MarketKLineChart({
       ? ((displayedBar.close / comparisonPrice) - 1) * 100
       : null;
   const intradayAverages = useMemo(
-    () => intradayAverageValues(orderedBars, mode === "intraday5d"),
+    /* Derive intradayAverages from the listed dependencies, reusing it until those dependencies change. */ () => intradayAverageValues(orderedBars, mode === "intraday5d"),
     [mode, orderedBars],
   );
   const intradayAverage = isIntraday && displayedIndex >= 0
     ? intradayAverages[displayedIndex]
     : null;
   const barsByTime = useMemo(
-    () => new Map(orderedBars.map((bar) => [chartTimeKey(bar.time), bar])),
+    /* Derive barsByTime from the listed dependencies, reusing it until those dependencies change. */ () => new Map(orderedBars.map(/* Transform each entry in orderedBars into the result used by MarketKLineChart. */ (bar) => [chartTimeKey(bar.time), bar])),
     [orderedBars],
   );
   const movingAverages = useMemo(
-    () => movingAverageReadout(orderedBars, displayedIndex),
+    /* Derive movingAverages from the listed dependencies, reusing it until those dependencies change. */ () => movingAverageReadout(orderedBars, displayedIndex),
     [displayedIndex, orderedBars],
   );
   const volumeRatios = useMemo(
-    () => rollingVolumeRatios(orderedBars, 5),
+    /* Derive volumeRatios from the listed dependencies, reusing it until those dependencies change. */ () => rollingVolumeRatios(orderedBars, 5),
     [orderedBars],
   );
   const displayedVolumeRatio =
     displayedIndex >= 0 ? volumeRatios[displayedIndex] : null;
 
-  useEffect(() => {
+  useEffect(/* Synchronize MarketKLineChart with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
     setActiveBar(null);
   }, [bars, mode]);
 
-  useEffect(() => {
+  useEffect(/* Synchronize MarketKLineChart with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
     const container = chartContainerRef.current;
     if (!container || orderedBars.length === 0) {
       return undefined;
@@ -160,7 +165,7 @@ export function MarketKLineChart({
         barSpacing: mode === "daily" ? 8 : mode === "intraday5d" ? 1 : 6,
         minBarSpacing: mode === "intraday5d" ? 0.5 : 3,
         fixLeftEdge: true,
-        tickMarkFormatter: (time: Time) => formatAxisTime(time, mode),
+        tickMarkFormatter: /* Format a time-axis tick according to the active daily/intraday mode. */ (time: Time) => formatAxisTime(time, mode),
       },
       handleScroll: {
         mouseWheel: true,
@@ -171,8 +176,8 @@ export function MarketKLineChart({
       handleScale: false,
       localization: {
         locale: "zh-CN",
-        priceFormatter: (price: number) => price.toFixed(2),
-        timeFormatter: (time: Time) => formatCrosshairTime(time, mode),
+        priceFormatter: /* Format a chart price using the current display precision. */ (price: number) => price.toFixed(2),
+        timeFormatter: /* Format the crosshair time according to the active chart mode. */ (time: Time) => formatCrosshairTime(time, mode),
       },
     });
     chartRef.current = chart;
@@ -191,7 +196,7 @@ export function MarketKLineChart({
         lastValueVisible: true,
         priceFormat: { type: "price", precision: 2, minMove: 0.01 },
       });
-      const candleData: CandlestickData<Time>[] = orderedBars.map((bar) => ({
+      const candleData: CandlestickData<Time>[] = orderedBars.map(/* Transform each entry in orderedBars into the result used by MarketKLineChart. */ (bar) => ({
         time: toChartTime(bar.time),
         open: bar.open,
         high: bar.high,
@@ -225,13 +230,13 @@ export function MarketKLineChart({
           ? {
               type: "custom",
               minMove: 0.01,
-              formatter: (price: number) => formatPercent(
+              formatter: /* Format this chart series' value for its scale or readout. */ (price: number) => formatPercent(
                 ((price / intradayReferencePrice) - 1) * 100,
               ),
             }
           : { type: "price", precision: 2, minMove: 0.01 },
       });
-      priceSeries.setData(orderedBars.map((bar) => ({
+      priceSeries.setData(orderedBars.map(/* Transform each entry in orderedBars into the result used by MarketKLineChart. */ (bar) => ({
         time: toChartTime(bar.time),
         value: bar.close,
       })));
@@ -256,7 +261,7 @@ export function MarketKLineChart({
           ? {
               type: "custom",
               minMove: 0.01,
-              formatter: (price: number) => formatPercent(
+              formatter: /* Format this chart series' value for its scale or readout. */ (price: number) => formatPercent(
                 ((price / intradayReferencePrice) - 1) * 100,
               ),
             }
@@ -289,7 +294,7 @@ export function MarketKLineChart({
           ? {
               type: "custom",
               minMove: 0.01,
-              formatter: (value: number) => `${value.toFixed(2)}x`,
+              formatter: /* Format this chart series' value for its scale or readout. */ (value: number) => `${value.toFixed(2)}x`,
             }
           : { type: "volume" },
         priceLineVisible: false,
@@ -298,7 +303,7 @@ export function MarketKLineChart({
       1,
     );
     const secondaryData: HistogramData<Time>[] = mode === "daily"
-      ? orderedBars.flatMap((bar, index) => {
+      ? orderedBars.flatMap(/* Handle the callback from orderedBars.flatMap within MarketKLineChart. */ (bar, index) => {
           const ratio = volumeRatios[index];
           if (ratio === null) {
             return [];
@@ -309,7 +314,7 @@ export function MarketKLineChart({
             color: ratio >= 1 ? `${UP_COLOR}b3` : `${DOWN_COLOR}b3`,
           }];
         })
-      : orderedBars.map((bar) => ({
+      : orderedBars.map(/* Transform each entry in orderedBars into the result used by MarketKLineChart. */ (bar) => ({
           time: toChartTime(bar.time),
           value: bar.volume,
           color: bar.close >= bar.open ? `${UP_COLOR}b3` : `${DOWN_COLOR}b3`,
@@ -332,11 +337,11 @@ export function MarketKLineChart({
     chart.timeScale().fitContent();
     container.dataset.renderMs = (performance.now() - renderStartedAt).toFixed(2);
     container.dataset.pointCount = String(orderedBars.length);
-    const paintFrame = requestAnimationFrame(() => {
+    const paintFrame = requestAnimationFrame(/* Handle the callback from requestAnimationFrame within MarketKLineChart. */ () => {
       container.dataset.paintMs = (performance.now() - renderStartedAt).toFixed(2);
     });
 
-    chart.subscribeCrosshairMove((param) => {
+    chart.subscribeCrosshairMove(/* Handle the callback from chart.subscribeCrosshairMove within MarketKLineChart. */ (param) => {
       if (!param.time || !param.point || param.point.x < 0 || param.point.y < 0) {
         setActiveBar(null);
         return;
@@ -345,8 +350,9 @@ export function MarketKLineChart({
       setActiveBar(barsByTime.get(key) ?? null);
     });
 
-    return () => {
+    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => {
       cancelAnimationFrame(paintFrame);
+      // Disposal releases the old canvas and subscriptions when chart inputs change.
       chartRef.current = null;
       chart.remove();
     };
@@ -383,7 +389,7 @@ export function MarketKLineChart({
         </div>
         {mode === "daily" ? (
           <div className="market-kline-ma" aria-label="移动平均线">
-            {movingAverages.map((item) => (
+            {movingAverages.map(/* Transform each entry in movingAverages into the result used by MarketKLineChart. */ (item) => (
               <span key={item.window} style={{ color: item.color }}>
                 MA{item.window} {item.value === null ? "--" : item.value.toFixed(2)}
               </span>
@@ -407,17 +413,23 @@ export function MarketKLineChart({
   );
 }
 
+/**
+ * Build the closing-price moving-average series, omitting points without a full window.
+ */
 function movingAverageLine(bars: MarketCandleBar[], window: number): LineData<Time>[] {
-  return bars.flatMap((bar, index) => {
+  return bars.flatMap(/* Handle the callback from bars.flatMap within movingAverageLine. */ (bar, index) => {
     if (index + 1 < window) {
       return [];
     }
     const values = bars.slice(index + 1 - window, index + 1);
-    const value = values.reduce((total, item) => total + item.close, 0) / window;
+    const value = values.reduce(/* Accumulate the entries into the derived value used by movingAverageLine. */ (total, item) => total + item.close, 0) / window;
     return [{ time: toChartTime(bar.time), value: Number(value.toFixed(3)) }];
   });
 }
 
+/**
+ * Compute cumulative intraday average prices, resetting at day boundaries when requested.
+ */
 function intradayAverageValues(
   bars: MarketCandleBar[],
   resetBySession: boolean,
@@ -425,7 +437,7 @@ function intradayAverageValues(
   let totalAmount = 0;
   let totalVolume = 0;
   let activeSession: string | undefined;
-  return bars.map((bar) => {
+  return bars.map(/* Transform each entry in bars into the result used by intradayAverageValues. */ (bar) => {
     if (resetBySession && bar.session !== activeSession) {
       activeSession = bar.session;
       totalAmount = 0;
@@ -440,27 +452,33 @@ function intradayAverageValues(
   });
 }
 
+/**
+ * Convert the computed intraday averages into chart-series points.
+ */
 function intradayAverageLine(
   bars: MarketCandleBar[],
   averages: Array<number | null>,
 ): LineData<Time>[] {
-  return bars.flatMap((bar, index) => {
+  return bars.flatMap(/* Handle the callback from bars.flatMap within intradayAverageLine. */ (bar, index) => {
     const value = averages[index];
     return value === null ? [] : [{ time: toChartTime(bar.time), value }];
   });
 }
 
+/**
+ * Choose chart bounds around the available intraday prices and reference price.
+ */
 function intradayPriceBounds(
   bars: MarketCandleBar[],
   referencePrice: number | null,
   averages: Array<number | null>,
 ): { low: number; high: number } {
-  const averageValues = averages.filter((value): value is number => value !== null);
-  const prices = [...bars.map((bar) => bar.close), ...averageValues];
+  const averageValues = averages.filter(/* Keep only entries satisfying this predicate for intradayPriceBounds. */ (value): value is number => value !== null);
+  const prices = [...bars.map(/* Transform each entry in bars into the result used by intradayPriceBounds. */ (bar) => bar.close), ...averageValues];
   const reference = referencePrice ?? bars[0]?.open ?? prices[0] ?? 1;
   const halfRange = Math.max(
     reference * 0.015,
-    ...prices.map((price) => Math.abs(price - reference)),
+    ...prices.map(/* Transform each entry in prices into the result used by intradayPriceBounds. */ (price) => Math.abs(price - reference)),
   );
   return {
     low: reference - halfRange,
@@ -468,31 +486,37 @@ function intradayPriceBounds(
   };
 }
 
+/**
+ * Read the supported moving averages at the currently displayed bar index.
+ */
 function movingAverageReadout(
   bars: MarketCandleBar[],
   selectedIndex: number,
 ): MovingAverageValue[] {
-  return MA_CONFIG.map((config) => {
+  return MA_CONFIG.map(/* Transform each entry in MA_CONFIG into the result used by movingAverageReadout. */ (config) => {
     if (selectedIndex + 1 < config.window) {
       return { ...config, value: null };
     }
     const values = bars.slice(selectedIndex + 1 - config.window, selectedIndex + 1);
-    const value = values.reduce((total, item) => total + item.close, 0) / config.window;
+    const value = values.reduce(/* Accumulate the entries into the derived value used by movingAverageReadout. */ (total, item) => total + item.close, 0) / config.window;
     return { ...config, value };
   });
 }
 
+/**
+ * Compare each bar's volume with its trailing baseline when enough history is available.
+ */
 function rollingVolumeRatios(
   bars: MarketCandleBar[],
   window: number,
 ): Array<number | null> {
-  return bars.map((bar, index) => {
+  return bars.map(/* Transform each entry in bars into the result used by rollingVolumeRatios. */ (bar, index) => {
     if (index < window) {
       return null;
     }
     const baseline = bars
       .slice(index - window, index)
-      .reduce((total, item) => total + item.volume, 0) / window;
+      .reduce(/* Accumulate the entries into the derived value used by rollingVolumeRatios. */ (total, item) => total + item.volume, 0) / window;
     if (baseline <= 0) {
       return null;
     }
@@ -500,10 +524,16 @@ function rollingVolumeRatios(
   });
 }
 
+/**
+ * Convert the application's bar time to the chart library's Time representation.
+ */
 function toChartTime(value: string | number): Time {
   return typeof value === "number" ? (value as UTCTimestamp) : value;
 }
 
+/**
+ * Normalize a chart time into a stable key for ordering and crosshair lookup.
+ */
 function chartTimeKey(value: Time | string | number): string {
   if (typeof value === "number") {
     return String(value);
@@ -514,6 +544,9 @@ function chartTimeKey(value: Time | string | number): string {
   return `${value.year}-${String(value.month).padStart(2, "0")}-${String(value.day).padStart(2, "0")}`;
 }
 
+/**
+ * Render compact daily or intraday labels for the chart's horizontal axis.
+ */
 function formatAxisTime(value: Time, mode: ChartMode): string {
   if (mode !== "daily" && typeof value === "number") {
     const options: Intl.DateTimeFormatOptions = mode === "intraday5d"
@@ -528,6 +561,9 @@ function formatAxisTime(value: Time, mode: ChartMode): string {
   return key.length >= 10 ? key.slice(5) : key;
 }
 
+/**
+ * Render the detailed date/time shown for the active crosshair bar.
+ */
 function formatCrosshairTime(value: Time, mode: ChartMode): string {
   if (mode !== "daily" && typeof value === "number") {
     return new Intl.DateTimeFormat("zh-CN", {
@@ -542,18 +578,30 @@ function formatCrosshairTime(value: Time, mode: ChartMode): string {
   return chartTimeKey(value);
 }
 
+/**
+ * Render an optional chart price to the configured decimal precision.
+ */
 function formatPrice(value: number | undefined): string {
   return value === undefined ? "--" : value.toFixed(2);
 }
 
+/**
+ * Format an already-percent-valued chart change, retaining its sign and missing-value state.
+ */
 function formatPercent(value: number | null): string {
   return value === null ? "--" : `${value >= 0 ? "+" : ""}${value.toFixed(2)}%`;
 }
 
+/**
+ * Render an optional volume ratio without disguising a missing baseline as zero.
+ */
 function formatVolumeRatio(value: number | null): string {
   return value === null ? "--" : `${value.toFixed(2)}x`;
 }
 
+/**
+ * Choose readable units for a chart volume value.
+ */
 function formatVolume(value: number | undefined): string {
   if (value === undefined) {
     return "--";
@@ -567,6 +615,10 @@ function formatVolume(value: number | undefined): string {
   return value.toFixed(0);
 }
 
+/**
+ * Choose readable chart amount units, retaining an explicit unavailable display for missing
+ * values.
+ */
 function formatAmount(value: number | undefined): string {
   if (value === undefined) {
     return "--";

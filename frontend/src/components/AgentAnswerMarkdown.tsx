@@ -20,6 +20,10 @@ const SKIPPED_NODE_TYPES = new Set([
   "linkReference",
 ]);
 
+/**
+ * Render Agent markdown and link only stock mentions grounded in the response metadata.
+ * Existing links remain explicit navigation rather than guessed stock identities.
+ */
 export function AgentAnswerMarkdown({
   content,
   stockMentions,
@@ -30,7 +34,7 @@ export function AgentAnswerMarkdown({
   return (
     <ReactMarkdown
       components={{
-        a: ({ children, href, title }) => (
+        a: /* Render markdown links through the application's internal/external navigation handling. */ ({ children, href, title }) => (
           href?.startsWith("/stocks/") ? (
             <Link title={title} to={href}>{children}</Link>
           ) : (
@@ -50,22 +54,28 @@ export function AgentAnswerMarkdown({
   );
 }
 
+/**
+ * Build the markdown-tree transformer that adds links for known stock mentions.
+ */
 function remarkStockLinks({
   stockMentions = [],
 }: {
   stockMentions?: AgentStockMention[];
 }) {
   const mentions = [...stockMentions]
-    .filter((item) => item.name && /^\d{6}$/.test(item.symbol))
-    .sort((left, right) => right.name.length - left.name.length);
+    .filter(/* Keep only entries satisfying this predicate for remarkStockLinks. */ (item) => item.name && /^\d{6}$/.test(item.symbol))
+    .sort(/* Compare two entries using the explicit tie-break order for remarkStockLinks. */ (left, right) => right.name.length - left.name.length);
 
-  return (tree: MarkdownNode) => {
+  return /* Transform the markdown tree when the remark pipeline invokes this plugin. */ (tree: MarkdownNode) => {
     if (mentions.length > 0) {
       linkifyChildren(tree, mentions);
     }
   };
 }
 
+/**
+ * Walk markdown child nodes and replace eligible text with grounded stock links.
+ */
 function linkifyChildren(parent: MarkdownNode, mentions: AgentStockMention[]) {
   if (!parent.children || SKIPPED_NODE_TYPES.has(parent.type)) {
     return;
@@ -83,6 +93,9 @@ function linkifyChildren(parent: MarkdownNode, mentions: AgentStockMention[]) {
   parent.children = children;
 }
 
+/**
+ * Split a text node around known stock names/codes, retaining untouched text between matches.
+ */
 function linkifyText(value: string, mentions: AgentStockMention[]): MarkdownNode[] {
   const nodes: MarkdownNode[] = [];
   let cursor = 0;
@@ -119,6 +132,9 @@ function linkifyText(value: string, mentions: AgentStockMention[]): MarkdownNode
   return nodes;
 }
 
+/**
+ * Build the stock-detail link from a grounded mention's symbol, name and optional date.
+ */
 function stockMentionPath(mention: AgentStockMention) {
   const params = new URLSearchParams({ name: mention.name });
   if (mention.trade_date) {

@@ -7,6 +7,9 @@ interface PanelProps {
   children: ReactNode;
 }
 
+/**
+ * Provide the common titled panel container around the supplied content.
+ */
 export function Panel({ title, icon, actions, children }: PanelProps) {
   return (
     <section className="panel">

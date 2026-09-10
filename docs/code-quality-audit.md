@@ -847,3 +847,63 @@ HTTP 使用真实 Uvicorn/HTTP/SSE、LangChain/OpenAI SDK 和实际查询契约/
 - Loader 强制 50～80 条、唯一 case id、版本号和用户指定的八个核心字段；多轮 case 通过 `conversation_id` 复用生产消息与 recent run 上下文。
 - Golden 框架 3 项专门测试及 Agent 相关定向回归通过，最终完整后端 611 passed；验证数据集契约、类别覆盖、“四层不互相掩盖”和真实编排中的确定性 Tool Failure：构造错误参数时 Planner、Grounding、Answer 通过，只有 Tool Execution 失败；注入新闻源故障时工具返回 error 且回答不产生无依据事实。
 - Golden 离线命令按设计退出非零并写入 `backend/data/agent_eval_failures.json`，因为当前基线存在 31 条失败；这是产品质量信号，不计为评测框架测试失败。
+
+## 2026-09-10: English function comments and code-reading guide
+
+Scope: English purpose comments for previously undocumented functions across the
+backend, frontend, tests and operational scripts, plus explanations at important
+Agent, scoring, query-contract, publication, data-pipeline and SSE steps. Existing
+runtime docstrings, prompt strings, SQL, thresholds and API contracts are retained.
+The reading guide is `docs/code-reading-guide.md`.
+
+Coverage and change boundaries:
+
+- Inspected 214 tracked Python files: all 2,264 named functions now have a purpose
+  comment or an existing docstring. Added explanations for the 191 lambda
+  expressions as well, grouping callbacks that share one surrounding statement.
+- Inspected 19 tracked TypeScript/TSX files: all 430 function implementations,
+  including callbacks, have comments/JSDoc. The two PowerShell helper functions
+  in `backend/scripts/start_backend.ps1` are also documented.
+- Backend comments: commit `db994b6`. Script/test comments: commit `ba0b9a3`.
+  Frontend comments, this record and the guide belong to the commit containing
+  this section. Generated inventories, editing helpers, validation logs and
+  databases remain under ignored `output/`; existing untracked user data is not
+  included in these commits.
+- Full diff boundaries and `git diff --check` were checked. Python AST and
+  executable-token comparisons against the pre-edit files pass, preserving
+  docstrings and type-ignore tags while allowing source line numbers to move.
+  TypeScript transpilation with comments removed produces identical JavaScript.
+  PowerShell executable tokens are identical and parsing reports zero errors.
+- Comments naturally change source-file hashes reported by research scripts;
+  unchanged executable structure does not imply unchanged source fingerprints.
+
+Final validation: `output/validation/20260910T122204Z-54567ba8/`.
+
+| Check | Result |
+| --- | --- |
+| Full backend pytest | 611 passed, 21 subtests passed; 0 failures, errors or skips |
+| Offline core evaluation | 18/18 cases; Query Contract 36/36 |
+| Offline product evaluation | 10/10 scenarios, 30/30 turns |
+| Frontend tests | 10 passed; 0 failed, cancelled, skipped or todo |
+| Frontend production build | TypeScript and Vite build passed |
+| Function-comment coverage | No uncovered named Python or TypeScript functions |
+
+Vite reports a non-blocking chunk-size warning for the existing bundled JavaScript
+(over 500 kB); the production build succeeds. Bundle restructuring is outside
+this comment-only scope.
+
+The initial sandbox validation had 30 pytest setup errors, zero assertion
+failures and zero skips because its temporary directory was inaccessible;
+session-finish cleanup also hit that permission error. The same run's frontend
+build could not spawn esbuild (`EPERM`). Offline evaluations and frontend tests
+passed in that run. Host validation with a fresh isolated directory resolved both
+environment blocks. Final validation above was run after the comment edits.
+
+P0/P1: no executable behavior changes detected by the comparisons and regression
+gates. P2: purpose comments must be kept aligned when behavior changes; comments
+are explanations, not enforcement. Existing business rules and test assertions
+remain the source of executable behavior. Earlier audit findings, including the
+Golden baseline failures, are not closed by this documentation-only change.
+There is no Agent answer bug fix in this scope, so no synthetic `badCase.md`
+entry was added. No running-service logic was changed or production service
+restarted; HTTP acceptance and live-model accuracy are not claimed here.

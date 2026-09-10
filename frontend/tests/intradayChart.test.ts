@@ -5,7 +5,7 @@ import { performance } from "node:perf_hooks";
 import { toFiveDayIntradayCandleBars } from "../src/intradayChart.ts";
 import type { StockIntradayHistoryResponse } from "../src/types.ts";
 
-test("prepares five one-minute sessions without a render-path bottleneck", () => {
+test("prepares five one-minute sessions without a render-path bottleneck", /* Regression scenario: prepares five one-minute sessions without a render-path bottleneck. */ () => {
   const history: StockIntradayHistoryResponse = {
     symbol: "002624",
     requested_days: 5,
@@ -15,13 +15,13 @@ test("prepares five one-minute sessions without a render-path bottleneck", () =>
     data_as_of: "2026-09-04",
     complete: true,
     missing_trade_dates: [],
-    days: ["2026-08-31", "2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04"].map((tradeDate, dayIndex) => {
+    days: ["2026-08-31", "2026-09-01", "2026-09-02", "2026-09-03", "2026-09-04"].map(/* Transform each entry in collection into the result used by this view. */ (tradeDate, dayIndex) => {
       return {
         trade_date: tradeDate,
         previous_close: 10 + dayIndex,
         status: "complete" as const,
         error: null,
-        bars: Array.from({ length: 240 }, (_, minuteIndex) => ({
+        bars: Array.from({ length: 240 }, /* Handle the callback from Array.from within this view. */ (_, minuteIndex) => ({
           timestamp: `${tradeDate}T${String(9 + Math.floor(minuteIndex / 60)).padStart(2, "0")}:${String(minuteIndex % 60).padStart(2, "0")}:00+08:00`,
           open: 10 + dayIndex,
           high: 10.2 + dayIndex,

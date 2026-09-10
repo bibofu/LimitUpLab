@@ -153,6 +153,11 @@ const agentWorkspaceHiddenPaths = new Set([
   "/review",
 ]);
 
+/**
+ * Load the dashboard datasets and route between the market, review and stock-detail
+ * workspaces. The initial Promise.all batch shares one loading/error state and must complete
+ * before the combined data is displayed.
+ */
 export function App() {
   const [data, setData] = useState<DashboardData | null>(null);
   const [error, setError] = useState<string | null>(null);
@@ -200,7 +205,7 @@ export function App() {
     }
   }
 
-  useEffect(() => {
+  useEffect(/* Synchronize App with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
     void loadDashboard();
   }, []);
 
@@ -238,9 +243,9 @@ export function App() {
         </Link>
 
         <nav aria-label="主导航" className="primary-navigation">
-          {primaryNavigation.map((item) => (
+          {primaryNavigation.map(/* Transform each entry in primaryNavigation into the result used by App. */ (item) => (
             <NavLink
-              className={({ isActive }) => (
+              className={/* Handle className for this control in App. */ ({ isActive }) => (
                 isActive
                 || (item.to === "/stocks/limit-up-pool" && stockListPaths.has(location.pathname))
                   ? "active"
@@ -324,6 +329,9 @@ export function App() {
   );
 }
 
+/**
+ * Render the current market summary and its compact counts from backend facts.
+ */
 function MarketSnapshot({ summary }: { summary: MarketSummary }) {
   return (
     <section className="market-snapshot">
@@ -331,7 +339,7 @@ function MarketSnapshot({ summary }: { summary: MarketSummary }) {
         <time className="market-snapshot-date" dateTime={summary.trade_date}>
           {summary.trade_date}
         </time>
-        {summary.indices.map((index) => (
+        {summary.indices.map(/* Transform each entry in summary.indices into the result used by MarketSnapshot. */ (index) => (
           <article key={index.symbol}>
             <span>{index.name}</span>
             <div>
@@ -363,6 +371,9 @@ function MarketSnapshot({ summary }: { summary: MarketSummary }) {
   );
 }
 
+/**
+ * Read the requested strategy from the URL and open its research workspace.
+ */
 function PremarketPage() {
   return (
     <div className="premarket-page">
@@ -372,13 +383,16 @@ function PremarketPage() {
   );
 }
 
+/**
+ * Coordinate the strategy selector and the corresponding relay or observation-pool view.
+ */
 function PremarketStrategyWorkspace() {
   /** Keep each strategy independent while sharing a bookmarkable workspace. */
 
   const [strategyParams, setStrategyParams] = useSearchParams();
   const mode = premarketStrategyFromParam(strategyParams.get("strategy"));
-  const setMode = (value: PremarketStrategy) => {
-    setStrategyParams((previous) => { const next = new URLSearchParams(previous); next.set("strategy", value); return next; });
+  const setMode = /* Update the strategy in the URL so navigation and reloads preserve the selected research view. */ (value: PremarketStrategy) => {
+    setStrategyParams(/* Compute strategy params from the latest React state to avoid overwriting intervening updates. */ (previous) => { const next = new URLSearchParams(previous); next.set("strategy", value); return next; });
   };
   const {
     intelligence,
@@ -390,7 +404,7 @@ function PremarketStrategyWorkspace() {
     intelligence?.items ?? [],
     intelligence?.relay_display_limit ?? 10,
   );
-  const draftCandidates = strategyCandidates.map((item, index) => ({
+  const draftCandidates = strategyCandidates.map(/* Transform each entry in strategyCandidates into the result used by PremarketStrategyWorkspace. */ (item, index) => ({
     ...item,
     rank: index + 1,
   }));
@@ -401,7 +415,7 @@ function PremarketStrategyWorkspace() {
         <button
           aria-selected={mode === "relay"}
           className={mode === "relay" ? "active" : undefined}
-          onClick={() => setMode("relay")}
+          onClick={/* Handle onClick for this control in PremarketStrategyWorkspace. */ () => setMode("relay")}
           role="tab"
           type="button"
         >
@@ -412,7 +426,7 @@ function PremarketStrategyWorkspace() {
           aria-selected={mode === "consolidation"}
           aria-controls="consolidation-panel"
           className={mode === "consolidation" ? "active" : undefined}
-          onClick={() => setMode("consolidation")}
+          onClick={/* Handle onClick for this control in PremarketStrategyWorkspace. */ () => setMode("consolidation")}
           role="tab"
           type="button"
         >
@@ -422,7 +436,7 @@ function PremarketStrategyWorkspace() {
           aria-selected={mode === "drawdown"}
           aria-controls="drawdown-panel"
           className={mode === "drawdown" ? "active" : undefined}
-          onClick={() => setMode("drawdown")}
+          onClick={/* Handle onClick for this control in PremarketStrategyWorkspace. */ () => setMode("drawdown")}
           role="tab"
           type="button"
         >
@@ -456,6 +470,9 @@ function PremarketStrategyWorkspace() {
   );
 }
 
+/**
+ * Explain the current ranking's data/publication state before presenting candidate rows.
+ */
 function PremarketRankingStatePanel({
   message,
   state,
@@ -479,6 +496,9 @@ function PremarketRankingStatePanel({
   );
 }
 
+/**
+ * Explain why the publication cutoff was missed and expose the available research state.
+ */
 function PremarketCutoffMissedPanel({
   intelligence,
 }: {
@@ -510,33 +530,37 @@ function PremarketCutoffMissedPanel({
   );
 }
 
+/**
+ * Load and refresh candidate intelligence while keeping loading, failure and current-result
+ * state together.
+ */
 function useRecommendationIntelligence() {
   const [intelligence, setIntelligence] = useState<RecommendationIntelligenceResponse | null>(null);
   const [loading, setLoading] = useState(true);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(() => {
+  useEffect(/* Synchronize useRecommendationIntelligence with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
     let active = true;
-    const refresh = () => {
+    const refresh = /* Reload this panel's source data and update its success/error state for the next render. */ () => {
       void fetchRecommendationIntelligence()
-        .then((response) => {
+        .then(/* Apply the resolved asynchronous result to the current view state. */ (response) => {
           if (active) {
             setIntelligence(response);
             setError(null);
           }
         })
-        .catch((caught: unknown) => {
+        .catch(/* Handle this asynchronous failure using the enclosing view's error/fallback state. */ (caught: unknown) => {
           if (active) {
             setError(caught instanceof Error ? caught.message : "盘前动态榜加载失败");
           }
         })
-        .finally(() => {
+        .finally(/* Release request state after either success or failure. */ () => {
           if (active) setLoading(false);
         });
     };
     refresh();
     const timer = window.setInterval(refresh, 60 * 1000);
-    return () => {
+    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => {
       active = false;
       window.clearInterval(timer);
     };
@@ -545,6 +569,10 @@ function useRecommendationIntelligence() {
   return { intelligence, loading, error };
 }
 
+/**
+ * Render candidate intelligence with its draft/final provenance, evidence adjustments and
+ * missing-data explanations.
+ */
 function RecommendationDraftPanel({
   candidates,
   intelligence,
@@ -592,7 +620,7 @@ function RecommendationDraftPanel({
           </span>
         </div>
         <div className="rating-top-list">
-          {candidates.map((candidate) => {
+          {candidates.map(/* Transform each entry in candidates into the result used by RecommendationDraftPanel. */ (candidate) => {
             return (
             <Link
               className="rating-top-card"
@@ -622,13 +650,13 @@ function RecommendationDraftPanel({
               {candidate.update_reasons.length > 0 ? (
                 <section className="rating-top-reasons">
                   <strong>收盘后新增信息</strong>
-                  <ul>{candidate.update_reasons.slice(0, 3).map((reason) => <li key={reason}>{reason}</li>)}</ul>
+                  <ul>{candidate.update_reasons.slice(0, 3).map(/* Transform each entry in candidate.update_reasons.slice(0, 3) into the result used by RecommendationDraftPanel. */ (reason) => <li key={reason}>{reason}</li>)}</ul>
                 </section>
               ) : null}
               {candidate.close_information_reasons.length > 0 ? (
                 <section className="rating-top-reasons">
                   <strong>收盘综合分已纳入</strong>
-                  <ul>{candidate.close_information_reasons.slice(0, 2).map((reason) => <li key={reason}>{reason}</li>)}</ul>
+                  <ul>{candidate.close_information_reasons.slice(0, 2).map(/* Transform each entry in candidate.close_information_reasons.slice(0, 2) into the result used by RecommendationDraftPanel. */ (reason) => <li key={reason}>{reason}</li>)}</ul>
                 </section>
               ) : null}
               {candidate.latest_news[0] ? (
@@ -659,6 +687,9 @@ interface RecommendationNewsViewItem {
   category: string;
 }
 
+/**
+ * Show paginated research news with its fetch state and source links.
+ */
 function RecommendationNewsBoard() {
   /** Paginate the factual 24-hour market feed without involving the LLM. */
 
@@ -667,34 +698,34 @@ function RecommendationNewsBoard() {
   const [loading, setLoading] = useState(true);
   const [failed, setFailed] = useState(false);
 
-  useEffect(() => {
+  useEffect(/* Synchronize RecommendationNewsBoard with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
     let active = true;
-    const refresh = (showLoading: boolean) => {
+    const refresh = /* Reload this panel's source data and update its success/error state for the next render. */ (showLoading: boolean) => {
       if (showLoading) setLoading(true);
       void fetchFinanceNews(page)
-        .then((response) => {
+        .then(/* Apply the resolved asynchronous result to the current view state. */ (response) => {
           if (!active) return;
           setNews(response);
           setFailed(false);
           setPage(response.page);
         })
-        .catch(() => {
+        .catch(/* Handle this asynchronous failure using the enclosing view's error/fallback state. */ () => {
           if (active) setFailed(true);
         })
-        .finally(() => {
+        .finally(/* Release request state after either success or failure. */ () => {
           if (active) setLoading(false);
         });
     };
     refresh(true);
-    const timer = window.setInterval(() => refresh(false), 5 * 60 * 1000);
-    return () => {
+    const timer = window.setInterval(/* Handle the callback from window.setInterval within RecommendationNewsBoard. */ () => refresh(false), 5 * 60 * 1000);
+    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => {
       active = false;
       window.clearInterval(timer);
     };
   }, [page]);
 
   const visibleNews = useMemo(
-    () => (news?.items ?? []).map(marketNewsViewItem),
+    /* Derive visibleNews from the listed dependencies, reusing it until those dependencies change. */ () => (news?.items ?? []).map(marketNewsViewItem),
     [news],
   );
   const pageNumbers = news ? paginationWindow(news.page, news.total_pages) : [];
@@ -731,7 +762,7 @@ function RecommendationNewsBoard() {
       ) : null}
       {visibleNews.length > 0 ? (
         <div className="recommendation-news-list">
-          {visibleNews.map((item) => (
+          {visibleNews.map(/* Transform each entry in visibleNews into the result used by RecommendationNewsBoard. */ (item) => (
             <article className="recommendation-news-item" key={item.key}>
               <time dateTime={item.publishedAt}>{formatRecommendationNewsTime(item.publishedAt)}</time>
               <div className="recommendation-news-body">
@@ -752,18 +783,18 @@ function RecommendationNewsBoard() {
             <button
               aria-label="上一页"
               disabled={news.page <= 1}
-              onClick={() => setPage((value) => Math.max(1, value - 1))}
+              onClick={/* Handle onClick for this control in RecommendationNewsBoard. */ () => setPage(/* Compute page from the latest React state to avoid overwriting intervening updates. */ (value) => Math.max(1, value - 1))}
               title="上一页"
               type="button"
             >
               <ChevronLeft size={15} />
             </button>
-            {pageNumbers.map((pageNumber) => (
+            {pageNumbers.map(/* Transform each entry in pageNumbers into the result used by RecommendationNewsBoard. */ (pageNumber) => (
               <button
                 aria-current={pageNumber === news.page ? "page" : undefined}
                 className={pageNumber === news.page ? "active" : undefined}
                 key={pageNumber}
-                onClick={() => setPage(pageNumber)}
+                onClick={/* Handle onClick for this control in RecommendationNewsBoard. */ () => setPage(pageNumber)}
                 type="button"
               >
                 {pageNumber}
@@ -772,7 +803,7 @@ function RecommendationNewsBoard() {
             <button
               aria-label="下一页"
               disabled={news.page >= news.total_pages}
-              onClick={() => setPage((value) => Math.min(news.total_pages, value + 1))}
+              onClick={/* Handle onClick for this control in RecommendationNewsBoard. */ () => setPage(/* Compute page from the latest React state to avoid overwriting intervening updates. */ (value) => Math.min(news.total_pages, value + 1))}
               title="下一页"
               type="button"
             >
@@ -785,6 +816,9 @@ function RecommendationNewsBoard() {
   );
 }
 
+/**
+ * Convert a market-news record into the common news-board display shape.
+ */
 function marketNewsViewItem(item: FinanceNewsItem): RecommendationNewsViewItem {
   return {
     key: `${item.source}-${item.url}-${item.published_at}`,
@@ -797,12 +831,18 @@ function marketNewsViewItem(item: FinanceNewsItem): RecommendationNewsViewItem {
   };
 }
 
+/**
+ * Choose the bounded range of page numbers around the current page.
+ */
 function paginationWindow(current: number, total: number): number[] {
   const visible = Math.min(5, total);
   const start = Math.max(1, Math.min(current - 2, total - visible + 1));
-  return Array.from({ length: visible }, (_, index) => start + index);
+  return Array.from({ length: visible }, /* Handle the callback from Array.from within paginationWindow. */ (_, index) => start + index);
 }
 
+/**
+ * Render the publication time used by the intelligence news board.
+ */
 function formatRecommendationNewsTime(value: string): string {
   const parsed = new Date(value);
   if (Number.isNaN(parsed.getTime())) return value.slice(5, 16).replace("T", " ");
@@ -817,16 +857,22 @@ function formatRecommendationNewsTime(value: string): string {
   }).format(parsed);
 }
 
+/**
+ * Find the current intelligence item for the requested stock identity.
+ */
 function recommendationIntelligenceFor(
   response: RecommendationIntelligenceResponse | null,
   strategy: "relay",
   symbol: string,
 ) {
   return response?.items.find(
-    (item) => item.strategy === strategy && item.symbol === symbol,
+    /* Locate the entry matching the active identity/time used by recommendationIntelligenceFor. */ (item) => item.strategy === strategy && item.symbol === symbol,
   ) ?? null;
 }
 
+/**
+ * Choose the dashboard detail panel corresponding to the active view.
+ */
 function DetailView({ view, data }: { view: StockListViewKey; data: DashboardData }) {
   /** Render one of the latest-day stock list views. */
 
@@ -852,6 +898,9 @@ function DetailView({ view, data }: { view: StockListViewKey; data: DashboardDat
   );
 }
 
+/**
+ * Present the first-board pool using the supplied ratings and research ranking.
+ */
 function FirstBoardPoolView({
   events,
   initialRatings,
@@ -867,17 +916,17 @@ function FirstBoardPoolView({
     tradeDate,
   );
 
-  useEffect(() => {
+  useEffect(/* Synchronize FirstBoardPoolView with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
     let active = true;
-    if (!tradeDate) return () => { active = false; };
+    if (!tradeDate) return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => { active = false; };
     void fetchFirstBoardRatings(tradeDate, true)
-      .then((response) => {
+      .then(/* Apply the resolved asynchronous result to the current view state. */ (response) => {
         if (active) setRatings(response);
       })
-      .catch(() => {
+      .catch(/* Handle this asynchronous failure using the enclosing view's error/fallback state. */ () => {
         // Keep persisted prediction scores as a partial ordering fallback.
       });
-    return () => { active = false; };
+    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => { active = false; };
   }, [tradeDate]);
 
   return (
@@ -904,26 +953,32 @@ function FirstBoardPoolView({
   );
 }
 
+/**
+ * Show recent dated event groups and keep their expanded/collapsed state local to the view.
+ */
 function RecentLimitUp({ events }: { events: LimitUpEvent[] }) {
   /** Group recent events by persisted trading date for review. */
 
-  const dateGroups = useMemo(() => {
-    const grouped = events.reduce<Record<string, LimitUpEvent[]>>((groups, event) => {
+  const dateGroups = useMemo(/* Derive dateGroups from the listed dependencies, reusing it until those dependencies change. */ () => {
+    const grouped = events.reduce<Record<string, LimitUpEvent[]>>(/* Accumulate the entries into the derived value used by RecentLimitUp. */ (groups, event) => {
       groups[event.trade_date] = groups[event.trade_date] ?? [];
       groups[event.trade_date].push(event);
       return groups;
     }, {});
-    return Object.entries(grouped).sort(([left], [right]) => right.localeCompare(left));
+    return Object.entries(grouped).sort(/* Compare two entries using the explicit tie-break order for RecentLimitUp. */ ([left], [right]) => right.localeCompare(left));
   }, [events]);
-  const [expandedDates, setExpandedDates] = useState<string[]>(() => (
+  const [expandedDates, setExpandedDates] = useState<string[]>(/* Handle the callback from useState within RecentLimitUp. */ () => (
     dateGroups[0] ? [dateGroups[0][0]] : []
   ));
   const allExpanded = expandedDates.length === dateGroups.length;
 
+  /**
+   * Toggle the expanded state of one date group without changing other groups.
+   */
   function toggleDate(tradeDate: string) {
-    setExpandedDates((current) => (
+    setExpandedDates(/* Compute expanded dates from the latest React state to avoid overwriting intervening updates. */ (current) => (
       current.includes(tradeDate)
-        ? current.filter((item) => item !== tradeDate)
+        ? current.filter(/* Keep only entries satisfying this predicate for toggleDate. */ (item) => item !== tradeDate)
         : [...current, tradeDate]
     ));
   }
@@ -938,24 +993,24 @@ function RecentLimitUp({ events }: { events: LimitUpEvent[] }) {
         <div className="recent-groups-actions">
           <button
             type="button"
-            onClick={() => setExpandedDates(dateGroups.map(([date]) => date))}
+            onClick={/* Handle onClick for this control in RecentLimitUp. */ () => setExpandedDates(dateGroups.map(/* Transform each entry in dateGroups into the result used by RecentLimitUp. */ ([date]) => date))}
             disabled={allExpanded}
           >
             <ChevronDown size={16} aria-hidden="true" />
             全部展开
           </button>
-          <button type="button" onClick={() => setExpandedDates([])} disabled={expandedDates.length === 0}>
+          <button type="button" onClick={/* Handle onClick for this control in RecentLimitUp. */ () => setExpandedDates([])} disabled={expandedDates.length === 0}>
             <Minus size={16} aria-hidden="true" />
             全部收起
           </button>
         </div>
       </div>
 
-      {dateGroups.map(([tradeDate, items], index) => {
+      {dateGroups.map(/* Transform each entry in dateGroups into the result used by RecentLimitUp. */ ([tradeDate, items], index) => {
         const expanded = expandedDates.includes(tradeDate);
-        const firstBoardCount = items.filter((item) => item.board_height === 1).length;
+        const firstBoardCount = items.filter(/* Keep only entries satisfying this predicate for RecentLimitUp. */ (item) => item.board_height === 1).length;
         const continuedBoardCount = items.length - firstBoardCount;
-        const maxBoardHeight = Math.max(...items.map((item) => item.board_height));
+        const maxBoardHeight = Math.max(...items.map(/* Transform each entry in items into the result used by RecentLimitUp. */ (item) => item.board_height));
         const contentId = `recent-limit-up-${tradeDate}`;
         return (
           <section className={`recent-date-group ${expanded ? "expanded" : ""}`} key={tradeDate}>
@@ -964,7 +1019,7 @@ function RecentLimitUp({ events }: { events: LimitUpEvent[] }) {
               aria-expanded={expanded}
               className="recent-date-toggle"
               type="button"
-              onClick={() => toggleDate(tradeDate)}
+              onClick={/* Handle onClick for this control in RecentLimitUp. */ () => toggleDate(tradeDate)}
             >
               <span className="recent-date-primary">
                 {expanded
@@ -992,6 +1047,9 @@ function RecentLimitUp({ events }: { events: LimitUpEvent[] }) {
   );
 }
 
+/**
+ * Render the selected event pool and the stock table for its available rows.
+ */
 function LimitUpPool({ data }: { data: DashboardData }) {
   /** Group the four limit-up datasets behind one focused navigation page. */
 
@@ -1028,7 +1086,7 @@ function LimitUpPool({ data }: { data: DashboardData }) {
 
   return (
     <nav className="overview-grid" aria-label="涨停池分类">
-      {entries.map((entry) => (
+      {entries.map(/* Transform each entry in entries into the result used by LimitUpPool. */ (entry) => (
         <Link className="entry-card" key={entry.to} to={entry.to}>
           <div className="metric-icon" aria-hidden="true">{entry.icon}</div>
           <span>{entry.label}</span>
@@ -1040,6 +1098,9 @@ function LimitUpPool({ data }: { data: DashboardData }) {
   );
 }
 
+/**
+ * Render comparable stock facts and stock-detail navigation for the supplied event rows.
+ */
 function StockTable({
   events,
   ratings,
@@ -1055,21 +1116,24 @@ function StockTable({
 
   const navigate = useNavigate();
   const ratingBySymbol = new Map(
-    (ratings?.candidates ?? []).map((item) => [item.facts.symbol, item]),
+    (ratings?.candidates ?? []).map(/* Transform each entry in (ratings?.candidates ?? []) into the result used by StockTable. */ (item) => [item.facts.symbol, item]),
   );
   const filteredBySymbol = new Map(
-    (ratings?.filtered_out ?? []).map((item) => [item.symbol, item]),
+    (ratings?.filtered_out ?? []).map(/* Transform each entry in (ratings?.filtered_out ?? []) into the result used by StockTable. */ (item) => [item.symbol, item]),
   );
   const dynamicBySymbol = new Map(
-    relayRanking.map((item) => [item.symbol, item]),
+    relayRanking.map(/* Transform each entry in relayRanking into the result used by StockTable. */ (item) => [item.symbol, item]),
   );
   const ratingScores = new Map(
-    (ratings?.candidates ?? []).map((item) => [item.facts.symbol, item.score]),
+    (ratings?.candidates ?? []).map(/* Transform each entry in (ratings?.candidates ?? []) into the result used by StockTable. */ (item) => [item.facts.symbol, item.score]),
   );
   const visibleEvents = variant === "first"
     ? sortFirstBoardByRelayRanking(events, relayRanking, ratingScores)
     : events;
 
+  /**
+   * Navigate to the selected stock's detail route with its encoded identity.
+   */
   function openStock(symbol: string) {
     navigate(stockDetailPath(symbol));
   }
@@ -1094,7 +1158,7 @@ function StockTable({
           </tr>
         </thead>
         <tbody>
-          {visibleEvents.map((event) => {
+          {visibleEvents.map(/* Transform each entry in visibleEvents into the result used by StockTable. */ (event) => {
             const rating = ratingBySymbol.get(event.symbol);
             const filtered = filteredBySymbol.get(event.symbol);
             const dynamic = dynamicBySymbol.get(event.symbol);
@@ -1105,8 +1169,8 @@ function StockTable({
             <tr
               className="stock-row"
               key={`${event.trade_date}-${event.symbol}`}
-              onClick={() => openStock(event.symbol)}
-              onKeyDown={(keyboardEvent) => {
+              onClick={/* Handle onClick for this control in StockTable. */ () => openStock(event.symbol)}
+              onKeyDown={/* Handle onKeyDown for this control in StockTable. */ (keyboardEvent) => {
                 if (keyboardEvent.key === "Enter" || keyboardEvent.key === " ") {
                   keyboardEvent.preventDefault();
                   openStock(event.symbol);
@@ -1162,6 +1226,10 @@ function StockTable({
   );
 }
 
+/**
+ * Load a stock's event, rating, news and market data and coordinate daily/intraday chart
+ * views. Separate request state preserves useful evidence when one optional source fails.
+ */
 function StockDetail({ data }: { data: DashboardData }) {
   /** Render one stock's event facts together with daily and intraday K-lines. */
 
@@ -1202,33 +1270,33 @@ function StockDetail({ data }: { data: DashboardData }) {
     symbol,
   );
 
-  useEffect(() => {
+  useEffect(/* Synchronize StockDetail with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
     let active = true;
     setStockEvent(null);
     setStockEventLoading(true);
     setStockEventError(null);
     fetchStockEvent(symbol)
-      .then((event) => {
+      .then(/* Apply the resolved asynchronous result to the current view state. */ (event) => {
         if (active) {
           setStockEvent(event);
         }
       })
-      .catch((caught) => {
+      .catch(/* Handle this asynchronous failure using the enclosing view's error/fallback state. */ (caught) => {
         if (active) {
           setStockEventError(caught instanceof Error ? caught.message : "加载涨停事件失败");
         }
       })
-      .finally(() => {
+      .finally(/* Release request state after either success or failure. */ () => {
         if (active) {
           setStockEventLoading(false);
         }
       });
-    return () => {
+    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => {
       active = false;
     };
   }, [symbol]);
 
-  useEffect(() => {
+  useEffect(/* Synchronize StockDetail with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
     if (stockEventLoading) {
       return;
     }
@@ -1236,27 +1304,27 @@ function StockDetail({ data }: { data: DashboardData }) {
     setStockNews(null);
     setStockNewsLoading(true);
     fetchStockNews(symbol, stockEvent?.name || linkedStockName || undefined, 3)
-      .then((news) => {
+      .then(/* Apply the resolved asynchronous result to the current view state. */ (news) => {
         if (active) {
           setStockNews(news);
         }
       })
-      .catch(() => {
+      .catch(/* Handle this asynchronous failure using the enclosing view's error/fallback state. */ () => {
         if (active) {
           setStockNews(null);
         }
       })
-      .finally(() => {
+      .finally(/* Release request state after either success or failure. */ () => {
         if (active) {
           setStockNewsLoading(false);
         }
       });
-    return () => {
+    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => {
       active = false;
     };
   }, [linkedStockName, stockEvent?.name, stockEventLoading, symbol]);
 
-  useEffect(() => {
+  useEffect(/* Synchronize StockDetail with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
     if (stockEventLoading) {
       return;
     }
@@ -1272,14 +1340,14 @@ function StockDetail({ data }: { data: DashboardData }) {
     setPositionLoading(Boolean(stockEvent));
     setPositionError(null);
     fetchStockMarketData(symbol, 60, stockEvent?.trade_date)
-      .then((marketData) => {
+      .then(/* Apply the resolved asynchronous result to the current view state. */ (marketData) => {
         if (active) {
           setKline(marketData.kline);
           setLatestClose(marketData.latest_close);
           setPosition(marketData.position);
         }
       })
-      .catch((caught) => {
+      .catch(/* Handle this asynchronous failure using the enclosing view's error/fallback state. */ (caught) => {
         if (active) {
           const message = caught instanceof Error ? caught.message : "加载个股行情失败";
           setKlineError(message);
@@ -1289,7 +1357,7 @@ function StockDetail({ data }: { data: DashboardData }) {
           }
         }
       })
-      .finally(() => {
+      .finally(/* Release request state after either success or failure. */ () => {
         if (active) {
           setKlineLoading(false);
           setLatestCloseLoading(false);
@@ -1297,12 +1365,12 @@ function StockDetail({ data }: { data: DashboardData }) {
         }
       });
 
-    return () => {
+    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => {
       active = false;
     };
   }, [marketTradeDate, stockEvent?.trade_date, stockEventLoading, symbol]);
 
-  useEffect(() => {
+  useEffect(/* Synchronize StockDetail with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
     setTradingDayKline([]);
     setTradingDayError(null);
     setTradingDayLoading(false);
@@ -1313,7 +1381,7 @@ function StockDetail({ data }: { data: DashboardData }) {
     fiveDayCacheKeyRef.current = "";
   }, [marketTradeDate, symbol]);
 
-  useEffect(() => {
+  useEffect(/* Synchronize StockDetail with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
     if (chartMode !== "intraday" || stockEventLoading) {
       return;
     }
@@ -1326,28 +1394,28 @@ function StockDetail({ data }: { data: DashboardData }) {
     setTradingDayLoading(true);
     setTradingDayError(null);
     fetchStockTradingDayKLine(symbol, 1, tradeDate)
-      .then((bars) => {
+      .then(/* Apply the resolved asynchronous result to the current view state. */ (bars) => {
         if (active) {
           setTradingDayKline(bars);
           tradingDayCacheKeyRef.current = cacheKey;
         }
       })
-      .catch((caught) => {
+      .catch(/* Handle this asynchronous failure using the enclosing view's error/fallback state. */ (caught) => {
         if (active) {
           setTradingDayError(caught instanceof Error ? caught.message : "加载交易日走势失败");
         }
       })
-      .finally(() => {
+      .finally(/* Release request state after either success or failure. */ () => {
         if (active) {
           setTradingDayLoading(false);
         }
       });
-    return () => {
+    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => {
       active = false;
     };
   }, [chartMode, marketTradeDate, stockEventLoading, symbol]);
 
-  useEffect(() => {
+  useEffect(/* Synchronize StockDetail with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
     if (chartMode !== "intraday5d" || stockEventLoading) {
       return;
     }
@@ -1359,35 +1427,35 @@ function StockDetail({ data }: { data: DashboardData }) {
     setFiveDayLoading(true);
     setFiveDayError(null);
     fetchStockIntradayHistory(symbol, 5, 1, marketTradeDate)
-      .then((history) => {
+      .then(/* Apply the resolved asynchronous result to the current view state. */ (history) => {
         if (active) {
           setFiveDayKline(history);
           fiveDayCacheKeyRef.current = cacheKey;
         }
       })
-      .catch((caught) => {
+      .catch(/* Handle this asynchronous failure using the enclosing view's error/fallback state. */ (caught) => {
         if (active) {
           setFiveDayError(caught instanceof Error ? caught.message : "加载五日分时失败");
         }
       })
-      .finally(() => {
+      .finally(/* Release request state after either success or failure. */ () => {
         if (active) {
           setFiveDayLoading(false);
         }
       });
-    return () => {
+    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => {
       active = false;
     };
   }, [chartMode, marketTradeDate, stockEventLoading, symbol]);
 
-  useEffect(() => {
+  useEffect(/* Synchronize StockDetail with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
     if (stockEventLoading) {
       return;
     }
     const tradeDate = resolvedTradeDate;
     const cachedRating = stockEvent && data.firstBoardRatings.trade_date === tradeDate
       ? data.firstBoardRatings.candidates.find(
-          (rating) => rating.facts.symbol === symbol,
+          /* Locate the entry matching the active identity/time used by StockDetail. */ (rating) => rating.facts.symbol === symbol,
         ) ?? null
       : null;
     setFirstBoardRating(cachedRating);
@@ -1396,20 +1464,20 @@ function StockDetail({ data }: { data: DashboardData }) {
     }
     let active = true;
     fetchFirstBoardRatings(tradeDate, true)
-      .then((ratings) => {
+      .then(/* Apply the resolved asynchronous result to the current view state. */ (ratings) => {
         if (active) {
           setFirstBoardRating(
-            ratings.candidates.find((rating) => rating.facts.symbol === symbol) ?? null,
+            ratings.candidates.find(/* Locate the entry matching the active identity/time used by StockDetail. */ (rating) => rating.facts.symbol === symbol) ?? null,
           );
         }
       })
-      .catch(() => {
+      .catch(/* Handle this asynchronous failure using the enclosing view's error/fallback state. */ () => {
         if (active && !cachedRating) {
           setFirstBoardRating(null);
         }
       });
 
-    return () => {
+    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => {
       active = false;
     };
   }, [
@@ -1420,18 +1488,18 @@ function StockDetail({ data }: { data: DashboardData }) {
     symbol,
   ]);
 
-  const intradayReferencePrice = useMemo(() => {
+  const intradayReferencePrice = useMemo(/* Derive intradayReferencePrice from the listed dependencies, reusing it until those dependencies change. */ () => {
     const eventIndex = kline.findIndex(
-      (bar) => bar.trade_date === marketTradeDate,
+      /* Locate the entry matching the active identity/time used by StockDetail. */ (bar) => bar.trade_date === marketTradeDate,
     );
     return eventIndex > 0 ? kline[eventIndex - 1].close : null;
   }, [kline, marketTradeDate]);
   const fiveDayChartBars = useMemo(
-    () => toFiveDayIntradayCandleBars(fiveDayKline),
+    /* Derive fiveDayChartBars from the listed dependencies, reusing it until those dependencies change. */ () => toFiveDayIntradayCandleBars(fiveDayKline),
     [fiveDayKline],
   );
   const fiveDayReferencePrice = useMemo(
-    () => fiveDayKline?.days.find((day) => day.bars.length > 0)?.previous_close ?? null,
+    /* Derive fiveDayReferencePrice from the listed dependencies, reusing it until those dependencies change. */ () => fiveDayKline?.days.find(/* Locate the entry matching the active identity/time used by StockDetail. */ (day) => day.bars.length > 0)?.previous_close ?? null,
     [fiveDayKline],
   );
 
@@ -1492,21 +1560,21 @@ function StockDetail({ data }: { data: DashboardData }) {
               <button
                 type="button"
                 aria-pressed={chartMode === "daily"}
-                onClick={() => setChartMode("daily")}
+                onClick={/* Handle onClick for this control in StockDetail. */ () => setChartMode("daily")}
               >
                 日 K · 60日
               </button>
               <button
                 type="button"
                 aria-pressed={chartMode === "intraday"}
-                onClick={() => setChartMode("intraday")}
+                onClick={/* Handle onClick for this control in StockDetail. */ () => setChartMode("intraday")}
               >
                 分时
               </button>
               <button
                 type="button"
                 aria-pressed={chartMode === "intraday5d"}
-                onClick={() => setChartMode("intraday5d")}
+                onClick={/* Handle onClick for this control in StockDetail. */ () => setChartMode("intraday5d")}
               >
                 五日
               </button>
@@ -1583,6 +1651,9 @@ function StockDetail({ data }: { data: DashboardData }) {
   );
 }
 
+/**
+ * Render stock-specific news with source links and explicit cache/data availability.
+ */
 function StockNewsPanel({
   news,
   loading,
@@ -1604,7 +1675,7 @@ function StockNewsPanel({
         <div className="stock-news-loading">正在获取个股资讯...</div>
       ) : (
         <div className="stock-news-list">
-          {news?.items.slice(0, 3).map((item) => (
+          {news?.items.slice(0, 3).map(/* Transform each entry in news?.items.slice(0, 3) into the result used by StockNewsPanel. */ (item) => (
             <a
               className="stock-news-item"
               href={item.url}
@@ -1626,6 +1697,9 @@ function StockNewsPanel({
   );
 }
 
+/**
+ * Render the timestamp shown next to an individual stock-news item.
+ */
 function formatStockNewsTime(value: string) {
   const timestamp = new Date(value);
   if (Number.isNaN(timestamp.getTime())) {
@@ -1641,6 +1715,9 @@ function formatStockNewsTime(value: string) {
 }
 
 
+/**
+ * Show the backend's price-position assessment and supporting evidence.
+ */
 function StockPositionPanel({
   position,
   tradeDate,
@@ -1676,6 +1753,9 @@ function StockPositionPanel({
 }
 
 
+/**
+ * Explain a first-board rating through its score breakdown, confidence, facts and risks.
+ */
 function FirstBoardRatingDetail({
   intelligence,
   rating,
@@ -1685,7 +1765,7 @@ function FirstBoardRatingDetail({
 }) {
   /** Render explainable first-board score details for the selected stock. */
 
-  const scoreBreakdown = rating.score_breakdown.map((item) => {
+  const scoreBreakdown = rating.score_breakdown.map(/* Transform each entry in rating.score_breakdown into the result used by FirstBoardRatingDetail. */ (item) => {
     if (item.name === "龙虎榜资金" && intelligence) {
       return {
         ...item,
@@ -1704,8 +1784,8 @@ function FirstBoardRatingDetail({
     }
     return item;
   });
-  const boardPatternScore = scoreBreakdown.find((item) => item.name === "上板形态");
-  const marketCapScore = scoreBreakdown.find((item) => item.name === "市值偏好");
+  const boardPatternScore = scoreBreakdown.find(/* Locate the entry matching the active identity/time used by FirstBoardRatingDetail. */ (item) => item.name === "上板形态");
+  const marketCapScore = scoreBreakdown.find(/* Locate the entry matching the active identity/time used by FirstBoardRatingDetail. */ (item) => item.name === "市值偏好");
   const floatMarketCap = rating.facts.enrichment?.float_market_cap;
   const dragonTigerOnList = intelligence?.dragon_tiger_on_list
     ?? rating.facts.enrichment?.dragon_tiger_on_list
@@ -1803,7 +1883,7 @@ function FirstBoardRatingDetail({
         <div className="rating-detail-section">
           <h3>评分项</h3>
           <div className="score-breakdown-list">
-            {scoreBreakdown.map((item) => (
+            {scoreBreakdown.map(/* Transform each entry in scoreBreakdown into the result used by FirstBoardRatingDetail. */ (item) => (
               <div className="score-breakdown-item" key={item.name}>
                 <div>
                   <strong>{item.name}</strong>
@@ -1825,6 +1905,9 @@ function FirstBoardRatingDetail({
   );
 }
 
+/**
+ * Render the detailed regime matches and measurements behind a position assessment.
+ */
 function StockPositionDetail({
   position,
   tradeDate,
@@ -1842,20 +1925,23 @@ function StockPositionDetail({
         <b>匹配度 {position.primary.score.toFixed(0)}</b>
       </header>
       <div className="stock-position-tags">
-        {position.tags.map((tag) => <span key={tag}>{tag}</span>)}
+        {position.tags.map(/* Transform each entry in position.tags into the result used by StockPositionDetail. */ (tag) => <span key={tag}>{tag}</span>)}
       </div>
       <ul>
-        {position.evidence.map((item) => <li key={item}>{item}</li>)}
+        {position.evidence.map(/* Transform each entry in position.evidence into the result used by StockPositionDetail. */ (item) => <li key={item}>{item}</li>)}
       </ul>
       {position.alternatives.length > 0 ? (
         <small>
-          次选：{position.alternatives.map((item) => `${item.label} ${item.score.toFixed(0)}`).join("；")}
+          次选：{position.alternatives.map(/* Transform each entry in position.alternatives into the result used by StockPositionDetail. */ (item) => `${item.label} ${item.score.toFixed(0)}`).join("；")}
         </small>
       ) : null}
     </section>
   );
 }
 
+/**
+ * Render a titled group of evidence/risk tags from the supplied text items.
+ */
 function TagSection({
   title,
   items,
@@ -1869,13 +1955,16 @@ function TagSection({
     <div className="rating-detail-section">
       <h3>{title}</h3>
       <div className="tag-list">
-        {items.map((item) => (
+        {items.map(/* Transform each entry in items into the result used by TagSection. */ (item) => (
           <span className={`detail-tag tag-${tone}`} key={item}>{item}</span>
         ))}
       </div>
     </div>
   );
 }
+/**
+ * Show the latest known close and its change using the available reference price.
+ */
 function LatestCloseStrip({
   snapshot,
   loading,
@@ -1920,6 +2009,9 @@ function LatestCloseStrip({
     </section>
   );
 }
+/**
+ * Render one labeled fact with consistent dashboard styling.
+ */
 function Fact({ label, value }: { label: string; value: string }) {
   return (
     <div className="fact-row">
@@ -1929,10 +2021,13 @@ function Fact({ label, value }: { label: string; value: string }) {
   );
 }
 
+/**
+ * Adapt daily K-line records to the common chart-bar shape without recalculating market facts.
+ */
 function toDailyCandleBars(bars: StockKLineBar[]): MarketCandleBar[] {
   /** Convert API daily K-line bars into chart-friendly candle bars. */
 
-  return bars.map((bar) => ({
+  return bars.map(/* Transform each entry in bars into the result used by toDailyCandleBars. */ (bar) => ({
     time: bar.trade_date,
     label: bar.trade_date,
     open: bar.open,
@@ -1943,6 +2038,9 @@ function toDailyCandleBars(bars: StockKLineBar[]): MarketCandleBar[] {
   }));
 }
 
+/**
+ * Render the workspace's loading or unavailable state around the supplied message.
+ */
 function ShellState({
   label,
   detail,
@@ -1970,6 +2068,9 @@ function ShellState({
   );
 }
 
+/**
+ * Select the icon associated with the current dashboard detail view.
+ */
 function detailIcon(view: ViewKey) {
   if (view === "first") {
     return <Flame size={18} />;

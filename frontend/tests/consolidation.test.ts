@@ -8,7 +8,7 @@ import {
   type ConsolidationPool,
 } from "../src/consolidation.ts";
 
-test("missing data is not presented as a fully observed empty market", () => {
+test("missing data is not presented as a fully observed empty market", /* Regression scenario: missing data is not presented as a fully observed empty market. */ () => {
   assert.match(consolidationEmptyMessage({ status: "data_missing" } as ConsolidationPool), /不能据此判断全市场/);
   assert.match(consolidationEmptyMessage({ status: "empty" } as ConsolidationPool), /保持空池/);
   assert.equal(consolidationReason("mixed_or_missing_source"), "量价来源混用或缺失");
@@ -16,7 +16,7 @@ test("missing data is not presented as a fully observed empty market", () => {
   assert.equal(consolidationReason("recent_event_dates"), "近 7 个交易日的涨停事件记录不完整");
 });
 
-test("all three pre-market strategies are top-level URL modes", () => {
+test("all three pre-market strategies are top-level URL modes", /* Regression scenario: all three pre-market strategies are top-level URL modes. */ () => {
   assert.equal(premarketStrategyFromParam(null), "relay");
   assert.equal(premarketStrategyFromParam("relay"), "relay");
   assert.equal(premarketStrategyFromParam("consolidation"), "consolidation");
@@ -24,7 +24,7 @@ test("all three pre-market strategies are top-level URL modes", () => {
   assert.equal(premarketStrategyFromParam("unknown"), "relay");
 });
 
-test("observation strategies only show qualified stocks when candidates exist", () => {
+test("observation strategies only show qualified stocks when candidates exist", /* Regression scenario: observation strategies only show qualified stocks when candidates exist. */ () => {
   const qualified = { symbol: "600001", state: "new" };
   const rejected = { symbol: "600002", state: "rejected" };
   const pool = {
@@ -34,13 +34,13 @@ test("observation strategies only show qualified stocks when candidates exist", 
   } as ConsolidationPool;
 
   assert.deepEqual(
-    observationDisplayStocks(pool).map((stock) => stock.symbol),
+    observationDisplayStocks(pool).map(/* Transform each entry in observationDisplayStocks(pool) into the result used by this view. */ (stock) => stock.symbol),
     ["600001"],
   );
 });
 
-test("an empty observation pool shows the six nearest rejected stocks", () => {
-  const evaluated = Array.from({ length: 8 }, (_, index) => ({
+test("an empty observation pool shows the six nearest rejected stocks", /* Regression scenario: an empty observation pool shows the six nearest rejected stocks. */ () => {
+  const evaluated = Array.from({ length: 8 }, /* Handle the callback from Array.from within this view. */ (_, index) => ({
     symbol: String(600001 + index),
     state: "rejected" as const,
     failed_conditions: ["drawdown_below_10pct"],
@@ -53,12 +53,12 @@ test("an empty observation pool shows the six nearest rejected stocks", () => {
   } as ConsolidationPool;
 
   assert.deepEqual(
-    observationDisplayStocks(pool).map((stock) => stock.symbol),
+    observationDisplayStocks(pool).map(/* Transform each entry in observationDisplayStocks(pool) into the result used by this view. */ (stock) => stock.symbol),
     ["600008", "600007", "600006", "600005", "600004", "600003"],
   );
 });
 
-test("consolidation near matches prioritize fewer failed rules, then threshold distance", () => {
+test("consolidation near matches prioritize fewer failed rules, then threshold distance", /* Regression scenario: consolidation near matches prioritize fewer failed rules, then threshold distance. */ () => {
   const pool = {
     strategy: "consolidation",
     candidates: [],
@@ -70,7 +70,7 @@ test("consolidation near matches prioritize fewer failed rules, then threshold d
   } as ConsolidationPool;
 
   assert.deepEqual(
-    observationDisplayStocks(pool).map((stock) => stock.symbol),
+    observationDisplayStocks(pool).map(/* Transform each entry in observationDisplayStocks(pool) into the result used by this view. */ (stock) => stock.symbol),
     ["600002", "600001", "600003"],
   );
 });

@@ -12,6 +12,10 @@ import {
 import { stockDetailPath } from "../dashboardFormatters";
 import { Panel } from "./Panel";
 
+/**
+ * Render the selected observation strategy's candidates, rejected examples, rules and data
+ * gaps.
+ */
 export function ConsolidationPanel({ strategy }: { strategy: ObservationStrategy }) {
   const [pool, setPool] = useState<ConsolidationPool | null>(null);
   const isDrawdown = strategy === "drawdown";
@@ -23,21 +27,21 @@ export function ConsolidationPanel({ strategy }: { strategy: ObservationStrategy
   const showingNearMatches = Boolean(
     pool && pool.candidates.length === 0 && displayStocks.length > 0,
   );
-  useEffect(() => {
+  useEffect(/* Synchronize ConsolidationPanel with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
     let active = true;
     setLoading(true);
     setError(null);
     void fetchConsolidationPool(asOf || undefined, strategy)
-      .then((response) => { if (active) setPool(response); })
-      .catch((caught: unknown) => { if (active) setError(caught instanceof Error ? caught.message : "观察池加载失败"); })
-      .finally(() => { if (active) setLoading(false); });
-    return () => { active = false; };
+      .then(/* Apply the resolved asynchronous result to the current view state. */ (response) => { if (active) setPool(response); })
+      .catch(/* Handle this asynchronous failure using the enclosing view's error/fallback state. */ (caught: unknown) => { if (active) setError(caught instanceof Error ? caught.message : "观察池加载失败"); })
+      .finally(/* Release request state after either success or failure. */ () => { if (active) setLoading(false); });
+    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => { active = false; };
   }, [asOf, revision, strategy]);
 
   return (
     <div role="tabpanel" id={`${strategy}-panel`} aria-label={isDrawdown ? "高位回撤" : "缩量整理"}>
       <Panel title={isDrawdown ? "高位回撤" : "缩量整理"} icon={<Layers3 size={18} />} actions={
-        <button type="button" className="consolidation-refresh" disabled={loading} onClick={() => setRevision((value) => value + 1)}>
+        <button type="button" className="consolidation-refresh" disabled={loading} onClick={/* Handle onClick for this control in ConsolidationPanel. */ () => setRevision(/* Compute revision from the latest React state to avoid overwriting intervening updates. */ (value) => value + 1)}>
           <RefreshCcw size={14} />刷新
         </button>
       }>
@@ -45,9 +49,9 @@ export function ConsolidationPanel({ strategy }: { strategy: ObservationStrategy
           <div className="consolidation-heading">
             <div><strong>{isDrawdown ? "高位回撤观察池" : "缩量整理观察池"}</strong><p>{isDrawdown ? "观察近期涨停股从局部高点回落的幅度，尚未要求止跌确认。回撤为负表示收盘高于此前参考高点。" : "观察股票涨停后的价格与成交量变化。"}</p></div>
             <label>截至交易日
-              <select aria-label={`${isDrawdown ? "高位回撤" : "缩量整理"}截至交易日`} value={asOf} onChange={(event) => setAsOf(event.target.value)}>
+              <select aria-label={`${isDrawdown ? "高位回撤" : "缩量整理"}截至交易日`} value={asOf} onChange={/* Handle onChange for this control in ConsolidationPanel. */ (event) => setAsOf(event.target.value)}>
                 <option value="">最新收盘</option>
-                {(pool?.available_dates ?? []).map((day) => <option value={day} key={day}>{day}</option>)}
+                {(pool?.available_dates ?? []).map(/* Transform each entry in (pool?.available_dates ?? []) into the result used by ConsolidationPanel. */ (day) => <option value={day} key={day}>{day}</option>)}
               </select>
             </label>
           </div>
@@ -66,7 +70,7 @@ export function ConsolidationPanel({ strategy }: { strategy: ObservationStrategy
               </p>
               <details className="consolidation-rules" open>
                 <summary>筛选条件</summary>
-                <ul>{pool.rules.map((rule) => <li key={rule}>{rule}</li>)}</ul>
+                <ul>{pool.rules.map(/* Transform each entry in pool.rules into the result used by ConsolidationPanel. */ (rule) => <li key={rule}>{rule}</li>)}</ul>
               </details>
               {pool.data_missing.length > 0 && <p className="consolidation-warning">
                 部分股票未能评价：{pool.data_missing.map(consolidationReason).join("；")}。
@@ -75,7 +79,7 @@ export function ConsolidationPanel({ strategy }: { strategy: ObservationStrategy
               {displayStocks.length > 0 && <>
                 <div><strong>{showingNearMatches ? "接近条件" : "符合条件股票"} · {displayStocks.length} 只</strong><p className="consolidation-note">{showingNearMatches ? "按未通过条件数量和超出阈值的距离排序；以下股票仍不符合全部条件。" : `仅展示同时满足全部${isDrawdown ? "高位回撤" : "缩量整理"}条件的股票。`}</p></div>
                 <div className="consolidation-grid">
-                  {displayStocks.map((candidate) => <article className="consolidation-card" key={candidate.symbol}>
+                  {displayStocks.map(/* Transform each entry in displayStocks into the result used by ConsolidationPanel. */ (candidate) => <article className="consolidation-card" key={candidate.symbol}>
                     <header><Link to={stockDetailPath(candidate.symbol, candidate.name)}>{candidate.name} <small>{candidate.symbol}</small></Link><span className={candidate.state === "rejected" ? "consolidation-badge-rejected" : "consolidation-badge-qualified"}>{showingNearMatches ? "接近条件" : candidate.state === "new" ? "首次符合" : "持续观察"}</span></header>
                     <p className="consolidation-note">涨停 {candidate.anchor_date}{candidate.confirmed_date ? ` · 首次确认 ${candidate.confirmed_date}` : " · 尚未同时满足形态条件"}</p>
                     <dl>
@@ -95,11 +99,11 @@ export function ConsolidationPanel({ strategy }: { strategy: ObservationStrategy
                     </dl>
                     <p>{candidate.reasons.join("；")}。</p>
                     {candidate.failed_conditions.length > 0 && <p className="consolidation-warning">未通过：{candidate.failed_conditions.map(consolidationReason).join("；")}。</p>}
-                    <details><summary>数据来源与风险</summary><p>来源标签：{candidate.source}</p><ul>{candidate.risks.map((risk) => <li key={risk}>{risk}</li>)}</ul></details>
+                    <details><summary>数据来源与风险</summary><p>来源标签：{candidate.source}</p><ul>{candidate.risks.map(/* Transform each entry in candidate.risks into the result used by ConsolidationPanel. */ (risk) => <li key={risk}>{risk}</li>)}</ul></details>
                   </article>)}
                 </div></>}
-              {Object.keys(pool.exclusions).length > 0 && <details className="consolidation-rules"><summary>未入选及数据不足原因</summary><ul>{Object.entries(pool.exclusions).map(([reason, count]) => <li key={reason}>{consolidationReason(reason)}：{count} 只</li>)}</ul><p>每只股票只记录首个未通过条件。</p></details>}
-              <details className="consolidation-rules"><summary>研究口径与限制</summary><ul>{pool.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul><p>规则版本 {pool.strategy_version} · 计算时间 {new Date(pool.generated_at).toLocaleString("zh-CN")}</p></details>
+              {Object.keys(pool.exclusions).length > 0 && <details className="consolidation-rules"><summary>未入选及数据不足原因</summary><ul>{Object.entries(pool.exclusions).map(/* Transform each entry in Object.entries(pool.exclusions) into the result used by ConsolidationPanel. */ ([reason, count]) => <li key={reason}>{consolidationReason(reason)}：{count} 只</li>)}</ul><p>每只股票只记录首个未通过条件。</p></details>}
+              <details className="consolidation-rules"><summary>研究口径与限制</summary><ul>{pool.warnings.map(/* Transform each entry in pool.warnings into the result used by ConsolidationPanel. */ (warning) => <li key={warning}>{warning}</li>)}</ul><p>规则版本 {pool.strategy_version} · 计算时间 {new Date(pool.generated_at).toLocaleString("zh-CN")}</p></details>
             </> : null}
         </div>
       </Panel>

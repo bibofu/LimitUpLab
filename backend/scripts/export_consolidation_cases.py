@@ -21,6 +21,8 @@ def label(gross):
 # Select recent case rows for the bounded review export.
 def select_recent(rows, outcome_label, count=3):
     eligible = [r for r in rows if r['outcome_status'] == 'complete' and label(r['r5']) == outcome_label]
+    # No best/worst return sorting. Date descending, symbol ascending for ties.
+    # Python's stable second sort preserves the first sort within equal dates.
     # The key compares symbol.
     eligible.sort(key=lambda r: r['symbol'])
     # The key compares signal date. reverse=True reverses the resulting order.

@@ -41,6 +41,9 @@ interface ChatMessage {
 
 const ACTIVE_CHAT_SESSION_STORAGE_KEY = "limituplab.activeChatSession";
 
+/**
+ * Convert a persisted message and its metadata back into the chat UI representation.
+ */
 function restoredChatMessage(message: ChatSessionMessage): ChatMessage {
   return {
     id: message.message_id,
@@ -52,6 +55,9 @@ function restoredChatMessage(message: ChatSessionMessage): ChatMessage {
   };
 }
 
+/**
+ * Extract the final response fields needed by the rendered chat message.
+ */
 function responseMessageMetadata(response: AgentChatResponse): Partial<ChatMessage> {
   return {
     stockMentions: response.stock_mentions,
@@ -60,18 +66,24 @@ function responseMessageMetadata(response: AgentChatResponse): Partial<ChatMessa
   };
 }
 
+/**
+ * Keep string members from unknown persisted metadata before rendering them.
+ */
 function stringArray(value: unknown): string[] {
   return Array.isArray(value)
-    ? value.filter((item): item is string => typeof item === "string" && item.trim().length > 0)
+    ? value.filter(/* Keep only entries satisfying this predicate for stringArray. */ (item): item is string => typeof item === "string" && item.trim().length > 0)
     : [];
 }
 
+/**
+ * Validate persisted stock-link metadata before using it for navigation.
+ */
 function stockMentionsFromMetadata(metadata: Record<string, unknown>): AgentStockMention[] {
   const value = metadata.stock_mentions;
   if (!Array.isArray(value)) {
     return [];
   }
-  return value.filter((item): item is AgentStockMention => {
+  return value.filter(/* Keep only entries satisfying this predicate for stockMentionsFromMetadata. */ (item): item is AgentStockMention => {
     if (!item || typeof item !== "object") {
       return false;
     }
@@ -84,6 +96,9 @@ function stockMentionsFromMetadata(metadata: Record<string, unknown>): AgentStoc
   });
 }
 
+/**
+ * Format the conversation update time for the history sidebar.
+ */
 function sessionTimeLabel(value: string) {
   const timestamp = new Date(value);
   if (Number.isNaN(timestamp.getTime())) {
@@ -96,6 +111,11 @@ function sessionTimeLabel(value: string) {
   return timestamp.toLocaleDateString("zh-CN", { month: "2-digit", day: "2-digit" });
 }
 
+/**
+ * Own conversation selection, message submission, SSE progress and final answer rendering. The
+ * server owns persisted messages; local state provides responsive display while the request
+ * runs.
+ */
 export function AgentChatDock({
   tradeDate,
   symbol,
@@ -123,7 +143,7 @@ export function AgentChatDock({
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const isConversationActive = sending || messages.length > 0;
 
-  useEffect(() => {
+  useEffect(/* Synchronize AgentChatDock with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
     if (initializedSessions.current) {
       return;
     }
@@ -131,29 +151,32 @@ export function AgentChatDock({
     void initializeChatSessions();
   }, []);
 
-  useEffect(() => {
+  useEffect(/* Synchronize AgentChatDock with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
     if (!sending) {
       setElapsedMs(0);
       return undefined;
     }
     const startedAt = Date.now();
-    const timer = window.setInterval(() => {
+    const timer = window.setInterval(/* Handle the callback from window.setInterval within AgentChatDock. */ () => {
       setElapsedMs(Date.now() - startedAt);
     }, 100);
-    return () => window.clearInterval(timer);
+    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => window.clearInterval(timer);
   }, [sending]);
 
-  useEffect(() => {
+  useEffect(/* Synchronize AgentChatDock with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
     const container = messagesContainerRef.current;
     if (!container) {
       return;
     }
-    const frame = window.requestAnimationFrame(() => {
+    const frame = window.requestAnimationFrame(/* Handle the callback from window.requestAnimationFrame within AgentChatDock. */ () => {
       container.scrollTop = container.scrollHeight;
     });
-    return () => window.cancelAnimationFrame(frame);
+    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => window.cancelAnimationFrame(frame);
   }, [messages, sending]);
 
+  /**
+   * Replace the active conversation with the fetched detail and remember its ID for reloads.
+   */
   function applyChatSession(detail: ChatSessionDetail) {
     setSessionId(detail.session_id);
     window.localStorage.setItem(ACTIVE_CHAT_SESSION_STORAGE_KEY, detail.session_id);
@@ -162,6 +185,10 @@ export function AgentChatDock({
     setFailedPrompt(null);
   }
 
+  /**
+   * Restore the previously selected conversation when available, otherwise select or create a
+   * usable session.
+   */
   async function initializeChatSessions() {
     setSessionLoading(true);
     try {
@@ -169,7 +196,7 @@ export function AgentChatDock({
       if (response.sessions.length > 0) {
         const savedSessionId = window.localStorage.getItem(ACTIVE_CHAT_SESSION_STORAGE_KEY);
         const targetSession = response.sessions.find(
-          (item) => item.session_id === savedSessionId,
+          /* Locate the entry matching the active identity/time used by initializeChatSessions. */ (item) => item.session_id === savedSessionId,
         ) ?? response.sessions[0];
         const detail = await fetchChatSession(targetSession.session_id);
         setSessions(response.sessions);
@@ -186,12 +213,18 @@ export function AgentChatDock({
     }
   }
 
+  /**
+   * Refresh the sidebar's conversation summaries after a conversation mutation.
+   */
   async function refreshChatSessions() {
     const response = await fetchChatSessions();
     setSessions(response.sessions);
     return response.sessions;
   }
 
+  /**
+   * Load the chosen conversation while preventing a switch during an active submission.
+   */
   async function openChatSession(targetSessionId: string) {
     if (sending || targetSessionId === sessionId) {
       setSessionPanelOpen(false);
@@ -210,6 +243,9 @@ export function AgentChatDock({
     }
   }
 
+  /**
+   * Create and select a new server-backed conversation.
+   */
   async function startNewChatSession() {
     if (sending) {
       return;
@@ -217,7 +253,7 @@ export function AgentChatDock({
     setSessionLoading(true);
     try {
       const created = await createChatSession();
-      setSessions((current) => [created, ...current]);
+      setSessions(/* Compute sessions from the latest React state to avoid overwriting intervening updates. */ (current) => [created, ...current]);
       applyChatSession(created);
       setSessionPanelOpen(false);
       setEditingSessionId(null);
@@ -228,6 +264,9 @@ export function AgentChatDock({
     }
   }
 
+  /**
+   * Persist the edited conversation title and update its sidebar entry.
+   */
   async function saveSessionTitle(targetSessionId: string) {
     const title = editingTitle.trim();
     if (!title) {
@@ -235,7 +274,7 @@ export function AgentChatDock({
     }
     try {
       const updated = await renameChatSession(targetSessionId, title);
-      setSessions((current) => current.map((item) => (
+      setSessions(/* Compute sessions from the latest React state to avoid overwriting intervening updates. */ (current) => current.map(/* Transform each entry in current into the result used by saveSessionTitle. */ (item) => (
         item.session_id === targetSessionId ? updated : item
       )));
       setEditingSessionId(null);
@@ -244,11 +283,14 @@ export function AgentChatDock({
     }
   }
 
+  /**
+   * Delete the selected conversation and select or create a replacement when it was active.
+   */
   async function deleteSession(targetSessionId: string) {
     if (sending) {
       return;
     }
-    const targetSession = sessions.find((item) => item.session_id === targetSessionId);
+    const targetSession = sessions.find(/* Locate the entry matching the active identity/time used by deleteSession. */ (item) => item.session_id === targetSessionId);
     const confirmed = window.confirm(
       `确定删除会话“${targetSession?.title ?? "未命名会话"}”吗？删除后无法恢复。`,
     );
@@ -277,6 +319,11 @@ export function AgentChatDock({
     }
   }
 
+  /**
+   * Submit a question with page context, append streamed draft text and replace it with the
+   * validated final answer. On transport failure, remove the incomplete draft and retain the
+   * prompt for retry.
+   */
   async function sendMessage(prompt?: string) {
     const trimmed = (prompt ?? message).trim();
     if (!trimmed || sending || sessionLoading || !sessionId) {
@@ -290,7 +337,7 @@ export function AgentChatDock({
       content: trimmed,
       stockMentions: [],
     };
-    setMessages((current) => [
+    setMessages(/* Compute messages from the latest React state to avoid overwriting intervening updates. */ (current) => [
       ...current,
       userMessage,
     ]);
@@ -304,6 +351,8 @@ export function AgentChatDock({
 
     try {
       let receivedAnswer = false;
+      // The page supplies identity/date hints. The backend combines these with
+      // the question and server-owned context before obtaining factual evidence.
       const response = await streamAgentChatMessage({
         session_id: sessionId,
         message_id: userMessageId,
@@ -314,20 +363,21 @@ export function AgentChatDock({
         page_context: {
           page: symbol ? "stock_detail" : "dashboard",
         },
-      }, (event) => {
+      }, /* Handle progress and draft-answer events while awaiting the authoritative completed response. */ (event) => {
         if (event.event === "progress") {
           setStreamStage(event.data.stage);
           setStreamStatus(event.data.message);
           return;
         }
         if (event.event === "answer_delta") {
+          // Draft fragments can be replaced if final validation selects a fallback.
           const delta = event.data.delta;
           setStreamStage("answering");
           setStreamStatus("正在生成回答");
-          setMessages((current) => {
-            const existing = current.find((item) => item.id === agentMessageId);
+          setMessages(/* Compute messages from the latest React state to avoid overwriting intervening updates. */ (current) => {
+            const existing = current.find(/* Locate the entry matching the active identity/time used by sendMessage. */ (item) => item.id === agentMessageId);
             if (existing) {
-              return current.map((item) => (
+              return current.map(/* Transform each entry in current into the result used by sendMessage. */ (item) => (
                 item.id === agentMessageId
                   ? { ...item, content: item.content + delta }
                   : item
@@ -341,13 +391,14 @@ export function AgentChatDock({
           });
         }
       });
-      setMessages((current) => {
-        const existing = current.find((item) => item.id === agentMessageId);
+      setMessages(/* Compute messages from the latest React state to avoid overwriting intervening updates. */ (current) => {
+        const existing = current.find(/* Locate the entry matching the active identity/time used by sendMessage. */ (item) => item.id === agentMessageId);
         if (existing || receivedAnswer) {
-          return current.map((item) => (
+          return current.map(/* Transform each entry in current into the result used by sendMessage. */ (item) => (
             item.id === agentMessageId
               ? {
                   ...item,
+                  // Replace rather than append: this is the authoritative answer.
                   content: response.answer,
                   ...responseMessageMetadata(response),
                 }
@@ -368,7 +419,7 @@ export function AgentChatDock({
       void refreshChatSessions();
     } catch (caught) {
       const errorMessage = caught instanceof Error ? caught.message : "Agent 回答失败";
-      setMessages((current) => current.filter((item) => item.id !== agentMessageId));
+      setMessages(/* Compute messages from the latest React state to avoid overwriting intervening updates. */ (current) => current.filter(/* Keep only entries satisfying this predicate for sendMessage. */ (item) => item.id !== agentMessageId));
       setError(errorMessage);
       setFailedPrompt(trimmed);
     } finally {
@@ -376,8 +427,8 @@ export function AgentChatDock({
     }
   }
 
-  const activeSession = sessions.find((item) => item.session_id === sessionId);
-  const latestAgentMessage = [...messages].reverse().find((item) => item.role === "agent");
+  const activeSession = sessions.find(/* Locate the entry matching the active identity/time used by AgentChatDock. */ (item) => item.session_id === sessionId);
+  const latestAgentMessage = [...messages].reverse().find(/* Locate the entry matching the active identity/time used by AgentChatDock. */ (item) => item.role === "agent");
   const promptSuggestions = latestAgentMessage?.suggestedQuestions?.length
     ? latestAgentMessage.suggestedQuestions
     : [
@@ -399,7 +450,7 @@ export function AgentChatDock({
               aria-label="新建会话"
               className="icon-button compact"
               disabled={sending || sessionLoading}
-              onClick={() => void startNewChatSession()}
+              onClick={/* Handle onClick for this control in AgentChatDock. */ () => void startNewChatSession()}
               title="新建会话"
               type="button"
             >
@@ -414,7 +465,7 @@ export function AgentChatDock({
                 <span>正在加载会话</span>
               </div>
             ) : null}
-            {sessions.map((session) => (
+            {sessions.map(/* Transform each entry in sessions into the result used by AgentChatDock. */ (session) => (
               <div
                 className={`chat-session-item ${session.session_id === sessionId ? "active" : ""}`}
                 key={session.session_id}
@@ -422,7 +473,7 @@ export function AgentChatDock({
                 {editingSessionId === session.session_id ? (
                   <form
                     className="chat-session-rename"
-                    onSubmit={(event) => {
+                    onSubmit={/* Handle onSubmit for this control in AgentChatDock. */ (event) => {
                       event.preventDefault();
                       void saveSessionTitle(session.session_id);
                     }}
@@ -431,7 +482,7 @@ export function AgentChatDock({
                       aria-label="会话标题"
                       autoFocus
                       maxLength={80}
-                      onChange={(event) => setEditingTitle(event.target.value)}
+                      onChange={/* Handle onChange for this control in AgentChatDock. */ (event) => setEditingTitle(event.target.value)}
                       value={editingTitle}
                     />
                     <button aria-label="保存标题" title="保存" type="submit">
@@ -439,7 +490,7 @@ export function AgentChatDock({
                     </button>
                     <button
                       aria-label="取消重命名"
-                      onClick={() => setEditingSessionId(null)}
+                      onClick={/* Handle onClick for this control in AgentChatDock. */ () => setEditingSessionId(null)}
                       title="取消"
                       type="button"
                     >
@@ -451,7 +502,7 @@ export function AgentChatDock({
                     <button
                       className="chat-session-select"
                       disabled={sending}
-                      onClick={() => void openChatSession(session.session_id)}
+                      onClick={/* Handle onClick for this control in AgentChatDock. */ () => void openChatSession(session.session_id)}
                       type="button"
                     >
                       <span>
@@ -464,7 +515,7 @@ export function AgentChatDock({
                       {session.session_id === sessionId ? (
                         <button
                           aria-label="重命名当前会话"
-                          onClick={() => {
+                          onClick={/* Handle onClick for this control in AgentChatDock. */ () => {
                             setEditingSessionId(session.session_id);
                             setEditingTitle(session.title);
                           }}
@@ -477,7 +528,7 @@ export function AgentChatDock({
                       <button
                         aria-label={`删除会话 ${session.title}`}
                         disabled={sending || sessionLoading}
-                        onClick={() => void deleteSession(session.session_id)}
+                        onClick={/* Handle onClick for this control in AgentChatDock. */ () => void deleteSession(session.session_id)}
                         title="删除会话"
                         type="button"
                       >
@@ -501,7 +552,7 @@ export function AgentChatDock({
             <button
               aria-label={sessionPanelOpen ? "关闭历史会话" : "打开历史会话"}
               className="icon-button compact session-history-toggle"
-              onClick={() => setSessionPanelOpen((current) => !current)}
+              onClick={/* Handle onClick for this control in AgentChatDock. */ () => setSessionPanelOpen(/* Compute session panel open from the latest React state to avoid overwriting intervening updates. */ (current) => !current)}
               title={sessionPanelOpen ? "关闭历史会话" : "历史会话"}
               type="button"
             >
@@ -519,7 +570,7 @@ export function AgentChatDock({
           className="agent-chat-messages"
           ref={messagesContainerRef}
         >
-          {messages.map((item) => (
+          {messages.map(/* Transform each entry in messages into the result used by AgentChatDock. */ (item) => (
             <article
               className={`chat-message chat-${item.role} ${item.status === "error" ? "chat-error" : ""}`}
               key={item.id}
@@ -552,7 +603,7 @@ export function AgentChatDock({
             <div className="chat-state error chat-retry-state">
               <span>{error}</span>
               {failedPrompt ? (
-                <button disabled={sending || sessionLoading} onClick={() => void sendMessage(failedPrompt)} type="button">
+                <button disabled={sending || sessionLoading} onClick={/* Handle onClick for this control in AgentChatDock. */ () => void sendMessage(failedPrompt)} type="button">
                   <RefreshCcw aria-hidden="true" size={13} />重试上一个问题
                 </button>
               ) : null}
@@ -561,12 +612,12 @@ export function AgentChatDock({
         </div>
 
         <div className="agent-chat-prompts">
-          {promptSuggestions.slice(0, 3).map((prompt) => (
+          {promptSuggestions.slice(0, 3).map(/* Transform each entry in promptSuggestions.slice(0, 3) into the result used by AgentChatDock. */ (prompt) => (
             <button
               disabled={sending || sessionLoading || !sessionId}
               key={prompt}
               type="button"
-              onClick={() => void sendMessage(prompt)}
+              onClick={/* Handle onClick for this control in AgentChatDock. */ () => void sendMessage(prompt)}
             >
               {prompt}
             </button>
@@ -575,7 +626,7 @@ export function AgentChatDock({
 
         <form
           className="agent-chat-input"
-          onSubmit={(event) => {
+          onSubmit={/* Handle onSubmit for this control in AgentChatDock. */ (event) => {
             event.preventDefault();
             void sendMessage();
           }}
@@ -583,7 +634,7 @@ export function AgentChatDock({
           <input
             disabled={sessionLoading || !sessionId}
             value={message}
-            onChange={(event) => setMessage(event.target.value)}
+            onChange={/* Handle onChange for this control in AgentChatDock. */ (event) => setMessage(event.target.value)}
             placeholder={symbol ? "问当前股票评分、风险或走势" : "问今日涨停、评分或风险"}
           />
           <button
@@ -602,6 +653,10 @@ export function AgentChatDock({
   );
 }
 
+/**
+ * Provide a lightweight UI intent hint; the backend remains responsible for authoritative
+ * planning.
+ */
 function inferChatIntent(message: string) {
   /** Infer a deterministic tool hint before the backend performs final routing. */
 

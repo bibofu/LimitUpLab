@@ -1,6 +1,9 @@
 export type ObservationStrategy = "consolidation" | "drawdown";
 export type PremarketStrategy = "relay" | ObservationStrategy;
 
+/**
+ * Validate the strategy URL parameter; unsupported or absent values use relay.
+ */
 export function premarketStrategyFromParam(value: string | null): PremarketStrategy {
   return value === "consolidation" || value === "drawdown" ? value : "relay";
 }
@@ -72,24 +75,34 @@ const REASONS: Record<string, string> = {
   recent_event_dates: "近 7 个交易日的涨停事件记录不完整",
 };
 
+/**
+ * Translate a backend reason key into display text, retaining unknown keys for diagnosis.
+ */
 export function consolidationReason(key: string): string {
   return REASONS[key] ?? key;
 }
 
+/**
+ * Distinguish a truly empty observed sample from insufficient data in the explanation.
+ */
 export function consolidationEmptyMessage(pool: ConsolidationPool): string {
   return pool.status === "data_missing"
     ? "现有可核验样本中暂无符合项，部分数据不足，不能据此判断全市场没有符合形态的股票。"
     : "该交易日现有样本中没有同时满足全部条件的股票，保持空池。";
 }
 
+/**
+ * Show qualifying candidates first. If none qualify, select a bounded set of rejected
+ * observations closest to the rules for inspection; they remain rejected observations.
+ */
 export function observationDisplayStocks(
   pool: ConsolidationPool,
   fallbackLimit = 6,
 ): ConsolidationEvaluation[] {
   if (pool.candidates.length > 0) return pool.candidates;
   return [...pool.evaluated_stocks]
-    .filter((stock) => stock.state === "rejected")
-    .sort((left, right) => (
+    .filter(/* Keep only entries satisfying this predicate for observationDisplayStocks. */ (stock) => stock.state === "rejected")
+    .sort(/* Compare two entries using the explicit tie-break order for observationDisplayStocks. */ (left, right) => (
       left.failed_conditions.length - right.failed_conditions.length
       || observationThresholdDistance(left, pool.strategy)
         - observationThresholdDistance(right, pool.strategy)
@@ -98,6 +111,10 @@ export function observationDisplayStocks(
     .slice(0, Math.max(0, fallbackLimit));
 }
 
+/**
+ * Measure normalized distance from the displayed strategy thresholds for ordering rejected
+ * examples.
+ */
 function observationThresholdDistance(
   stock: ConsolidationEvaluation,
   strategy: ObservationStrategy,
