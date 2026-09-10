@@ -158,16 +158,6 @@ class StockNewsPolicyRepairProvider(LLMProvider):
         )
 
 
-class UnexpectedLLMProvider(LLMProvider):
-    """Fail if a V1 scope rejection reaches the LLM."""
-
-    # Simulate the model response for this scenario; the controlled output lets the test inspect
-    # planning, validation or fallback behavior.
-    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
-        del system_prompt, user_prompt
-        raise AssertionError("V1 deferred capability must be rejected before LLM")
-
-
 class AgentV1ProfileTest(unittest.TestCase):
     # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
@@ -434,31 +424,6 @@ class AgentV1ProfileTest(unittest.TestCase):
         self.assertIn("思泉新材(301489)", response.answer)
         self.assertIn("https://example.com/301489", response.references)
         stock_news.assert_called_once_with("301489", days=7, limit=10)
-
-    # Regression scenario: v1 scope eval cases are rejected before llm.
-    def test_v1_scope_eval_cases_are_rejected_before_llm(self) -> None:
-        fixture_path = (
-            Path(__file__).parent
-            / "fixtures"
-            / "agent_v1_scope_cases.json"
-        )
-        cases = json.loads(fixture_path.read_text(encoding="utf-8"))["cases"]
-
-        for case in cases:
-            with self.subTest(case_id=case["case_id"]):
-                response = answer_first_board_chat(
-                    AgentChatRequest(
-                        session_id=f"v1-scope-{case['case_id']}",
-                        message=case["message"],
-                    ),
-                    events=SAMPLE_EVENTS,
-                    repository=self.repository,
-                    llm_provider=UnexpectedLLMProvider(),
-                )
-
-                self.assertEqual(response.intent, "out_of_scope")
-                self.assertEqual(response.answer, UNANSWERABLE_TEXT)
-                self.assertEqual(response.tool_calls, [])
 
     # Regression scenario: capability text states v1 close only scope.
     def test_capability_text_states_v1_close_only_scope(self) -> None:

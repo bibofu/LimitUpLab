@@ -2,10 +2,8 @@
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
 from datetime import date
-from pathlib import Path
 from typing import Any
 
 from app.agents.query_contract import QUERY_CONTRACT_VERSION, build_limit_up_query_contract
@@ -45,13 +43,6 @@ class QueryContractEvalSuite:
     @property
     def ok(self) -> bool:
         return self.failed == 0
-
-
-def load_query_contract_eval_cases(path: Path) -> list[QueryContractEvalCase]:
-    """Load query-contract cases from a UTF-8 JSON fixture."""
-
-    payload = json.loads(path.read_text(encoding="utf-8"))
-    return [QueryContractEvalCase(**item) for item in payload["cases"]]
 
 
 def run_query_contract_eval_suite(

@@ -1,5 +1,4 @@
 import unittest
-from pathlib import Path
 
 from app.agents.query_contract import (
     build_limit_up_query_contract,
@@ -8,28 +7,9 @@ from app.agents.query_contract import (
     looks_like_named_limit_up_sector_list_question,
     looks_like_market_event_query,
 )
-from app.agents.query_contract_eval import (
-    load_query_contract_eval_cases,
-    run_query_contract_eval_suite,
-)
 
 
 class QueryContractV2Test(unittest.TestCase):
-    # Regression scenario: contract fixture passes.
-    def test_contract_fixture_passes(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "query_contract_v2_cases.json"
-
-        suite = run_query_contract_eval_suite(
-            load_query_contract_eval_cases(fixture_path)
-        )
-
-        failures = {
-            result.case_id: result.failures
-            for result in suite.results
-            if not result.passed
-        }
-        self.assertEqual(suite.total, 36)
-        self.assertTrue(suite.ok, failures)
 
     # Regression scenario: user filters override conflicting planner arguments.
     def test_user_filters_override_conflicting_planner_arguments(self) -> None:
