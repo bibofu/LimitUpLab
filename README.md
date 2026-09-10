@@ -600,7 +600,7 @@ backend/.venv/Scripts/python.exe scripts/check_project.py
 
 Linux 使用对应虚拟环境的 `python scripts/check_project.py`。也可通过 `--scope backend` 或 `--scope frontend` 单独验收一侧。
 
-该入口依次运行完整 pytest、Core 与 Product 离线 Eval（含 Query Contract）、全部前端逻辑测试以及 TypeScript/Vite 生产构建。每次使用独立数据库和测试目录，关闭真实 LLM，并在 `output/validation/<运行标识>/` 保存各步骤日志、JUnit 和 `summary.json`。任一步失败都会使整体退出码非零，但其余独立检查仍会执行。它不替代浏览器端业务验收、真实模型评测、部署检查或压力测试。
+该入口依次运行完整 pytest、Golden 离线 Eval、全部前端逻辑测试以及 TypeScript/Vite 生产构建。每次使用独立数据库和测试目录，关闭真实 LLM，并在 `output/validation/<运行标识>/` 保存各步骤日志、JUnit 和 `summary.json`。任一步失败都会使整体退出码非零，但其余独立检查仍会执行。它不替代浏览器端业务验收、真实模型评测、部署检查或压力测试。
 
 GitHub Actions 配置在 `.github/workflows/validate.yml`，对 PR、main 与 codex 分支推送运行 Windows/Linux 两套检查，使用相同验收入口，不需要行情或模型密钥。失败日志保留 7 天；测试数据库不上传。流水线文件进入远端仓库后才能实际触发，分支保护仍需在仓库设置中启用。
 
@@ -613,73 +613,34 @@ cd backend
 .\.venv\Scripts\python.exe -m pytest tests -q -p no:cacheprovider
 ```
 
-运行确定性 Agent 回归和 Query Contract v2 回归：
+运行唯一的 Agent Golden Dataset 离线评测（默认 suite 为 golden）：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py --mode offline --summary-only
 ```
 
-运行面向最终回答的 10 组、30 轮产品场景评测：
+唯一金标文件为 `backend/tests/fixtures/agent_golden_dataset.json`，当前保留 50 条用例及原有期望。完整契约见 [Agent Golden Dataset 与四层端到端评测](docs/Agent_Golden_Eval.md)。CLI、`/api/agents/eval` 和启用离线评测的系统健康检查均使用这一个数据集；多轮由 `conversation_id` 关联，工具故障由 `simulate_tool_failure` 注入。
+
+报告分别列出 Planner、Tool Execution、Grounding、Answer 四层结果。离线失败返回非零退出码，CI 如实失败；接口仍返回真实通过数、失败数及带层名的失败详情。2026-09-10 清理前的隔离基线为 19/50 通过，不应将既有失败隐藏或修改金标来制造通过。
+
+定向检查用例或分类：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --suite product --mode offline --summary-only
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py --case-filter G002
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py --case-filter aggregation
 ```
 
-`product` suite 使用生产一致的消息和最近运行记录连续执行完整回答，分别统计意图、事实接地、事实完整性、上下文承接、投资合规、用户表达和响应延迟。失败轮次按维度写入本地 `backend/data/agent_eval_failures.json`，不进入聊天界面，也不提交到 Git。
-
-运行 50 条真实问法组成的 Golden Dataset 四层端到端评测：
+真实 Planner 与最终 Answer 模型验收：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --suite golden --mode offline --summary-only
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py --mode live-llm --live-answer --fail-on-failures
 ```
 
-金标文件为 `backend/tests/fixtures/agent_golden_dataset.json`，版本号独立维护，完整约定见 [Agent Golden Dataset 与四层端到端评测](docs/Agent_Golden_Eval.md)。每条 case 固定保存 `question`、`expected_capabilities`、`required_tools`、`expected_parameters`、`required_facts`、`must_include`、`must_not_include` 和 `allow_refusal`，并可用 `conversation_id` 串联多轮上下文、用 `simulate_tool_failure` 做确定性故障注入。报告不会只给一个最终答案分数，而是分别回答：Planner 是否理解正确、工具是否按参数执行、事实是否有工具证据、最终回答是否完整合规。`required_facts` 是必须出现在成功工具结构化输出中的事实片段，不从答案文本反推事实。
+CLI 只接受 `golden` suite，每次执行所选用例一次。`--live-answer` 仅在 `live-llm` 模式可用；不启用时答案使用确定性模板。Windows CLI 继续读取配置的模型环境，并处理代理配置。
 
-离线模式用于可重复地检查后端确定性路径；真实 Planner 与最终 Answer 模型验收使用：
+失败报告默认写入本地 `backend/data/agent_eval_failures.json`，也可通过 `--failure-output` 指定路径；生成报告不提交到 Git。共享验收入口将本次 Golden 报告放在独立的 `output/validation/<运行标识>/`。本次删除的是历史报告，后续运行仍可生成新报告。
 
-```powershell
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --suite golden --mode live-llm --live-answer --fail-on-failures
-```
-
-失败明细按 `planner`、`tool_execution`、`grounding`、`answer` 四层写入 `backend/data/agent_eval_failures.json`。Golden Dataset 是质量基线，不为追求通过率放宽契约；新增真实 Bad Case 时先补金标，再修对应层。
-
-运行 138 条自然语言改写的真实 Planner 三轮评测：
-
-```powershell
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --suite paraphrase --mode live-llm --summary-only
-```
-
-运行携带生产消息结构和上一轮能力焦点的多轮评测：
-
-```powershell
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --suite conversation --mode live-llm --summary-only
-```
-
-`paraphrase` 和 `conversation` 都只执行生产 Planner，不重复调用行情、新闻和 K 线工具；默认每条运行 3 次，从而把语义路由波动与外部数据源波动分开。可用 `--case-filter first_board_rating_05` 定向复测失败 case。报告分别输出能力命中率、有效工具命中率、case 通过率和三轮不稳定数量。
-
-2026-08-30 的真实 DeepSeek 全量结果：121/121 单轮 case 达到最低通过门槛，363 次 Planner 调用的能力与工具命中率均为 99.72%，119 个 case 三轮完全一致；多轮场景 10/10 通过、60/60 turn 命中，9 个场景三轮完全一致。剩余波动会继续保留为模型稳定性治理对象，不用后端关键词规则掩盖。
-
-需要抽查完整端到端回答时执行：
-
-```powershell
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --suite core --mode live-llm --trials 1 --live-answer
-```
-
-CI 或发布前可以组合 `--fail-on-failures --fail-on-unstable` 使用严格门禁。Windows CLI 会读取 User/Machine 环境中的 API Key，并自动排除已知失效代理；LLM 对超时、连接失败、限流和服务端错误进行有限指数退避重试。
-
-Eval 会检查：
-
-- 意图和日期解析
-- 多轮代词、日期和单只股票结果的上下文承接
-- 最终回答的事实完整性、内部实现词泄漏、投资合规和延迟门槛
-- Query Contract 的市场、板高、事件状态、题材、排序、数量和参数优先级
-- 必需与禁止调用的工具
-- 最终工具参数、命中数量和股票集合
-- Tool Policy 是否发生后端修复
-- 回答是否包含关键事实
-- 投资建议安全边界
-- 工具调用失败和数据缺失时的表达
-- 多次采样下的 Planner 一致性和真实 LLM 覆盖率
+本次清理没有合并旧题库或升级评测标准。Query Contract 等组件的独立代码测试继续运行；未来新增 Agent 金标只维护 Golden Dataset，并遵守其当前加载契约。
 
 前端生产构建：
 

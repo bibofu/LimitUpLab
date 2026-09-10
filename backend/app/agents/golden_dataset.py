@@ -8,6 +8,7 @@ from pathlib import Path
 
 
 GOLDEN_DATASET_VERSION = "agent-golden-v1"
+GOLDEN_DATASET_PATH = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "agent_golden_dataset.json"
 REQUIRED_CASE_FIELDS = frozenset(
     {
         "question",

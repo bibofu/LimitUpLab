@@ -38,12 +38,11 @@ def build_checks(scope: str, output: Path) -> list[Check]:
             "--basetemp", str(output / "pytest-tmp"),
             "--junitxml", str(output / "pytest.xml"),
         ], ROOT / "backend"))
-        for suite in ("core", "product"):
-            checks.append(Check(f"eval-{suite}", [
-                sys.executable, "scripts/run_agent_eval.py", "--suite", suite,
-                "--mode", "offline", "--summary-only",
-                "--failure-output", str(output / f"eval-{suite}-failures.json"),
-            ], ROOT / "backend"))
+        checks.append(Check("eval-golden", [
+            sys.executable, "scripts/run_agent_eval.py", "--suite", "golden",
+            "--mode", "offline", "--summary-only",
+            "--failure-output", str(output / "eval-golden-failures.json"),
+        ], ROOT / "backend"))
     if scope in {"all", "frontend"}:
         # Calling npm through Node avoids shell quoting and .cmd execution on Windows.
         node = shutil.which("node")

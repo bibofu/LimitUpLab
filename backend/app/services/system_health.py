@@ -5,24 +5,18 @@ from __future__ import annotations
 import os
 import socket
 from datetime import date, datetime, time, timedelta
-from pathlib import Path
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
-from app.agents.eval_runner import load_eval_cases, run_agent_eval_suite
-from app.agents.query_contract_eval import (
-    load_query_contract_eval_cases,
-    run_query_contract_eval_suite,
-)
+from app.agents.golden_eval import run_default_golden_eval
 from app.config import env_bool
 from app.models import AgentSystemHealthResponse, LimitUpEvent
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.analysis import latest_trade_date
 from app.services.data_health import build_agent_data_health
-from app.services.sample_data import SAMPLE_EVENTS
 
 
-SYSTEM_HEALTH_VERSION = "agent-system-health-v1"
+SYSTEM_HEALTH_VERSION = "agent-system-health-v2-golden"
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
@@ -49,23 +43,10 @@ def build_agent_system_health(
     eval_failed: int | None = None
     eval_passed: bool | None = None
     if run_offline_eval:
-        fixture_path = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "agent_eval_cases.json"
-        suite = run_agent_eval_suite(
-            cases=load_eval_cases(fixture_path),
-            events=SAMPLE_EVENTS,
-        )
-        contract_fixture_path = (
-            Path(__file__).resolve().parents[2]
-            / "tests"
-            / "fixtures"
-            / "query_contract_v2_cases.json"
-        )
-        contract_suite = run_query_contract_eval_suite(
-            load_query_contract_eval_cases(contract_fixture_path)
-        )
-        eval_total = suite.total + contract_suite.total
-        eval_failed = suite.failed + contract_suite.failed
-        eval_passed = suite.ok and contract_suite.ok
+        suite = run_default_golden_eval()
+        eval_total = suite.total
+        eval_failed = suite.failed
+        eval_passed = suite.ok
 
     llm_enabled = env_bool("LIMITUPLAB_LLM_ENABLED")
     llm_provider_configured = bool(

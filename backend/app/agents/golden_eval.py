@@ -12,10 +12,15 @@ from app.agents.answer_grounding import evaluate_answer_grounding
 from app.agents.capability_contract import TOOL_CAPABILITIES
 from app.agents.chat import answer_first_board_chat, template_answer_override
 from app.agents.eval_runner import OfflineEvalLLMProvider
-from app.agents.golden_dataset import GOLDEN_DATASET_VERSION, GoldenEvalCase
+from app.agents.golden_dataset import (
+    GOLDEN_DATASET_PATH, GOLDEN_DATASET_VERSION, GoldenEvalCase, load_golden_cases,
+)
 from app.agents.tools import AgentToolRegistry
 from app.models import (
     AgentChatRequest,
+    AgentChatResponse,
+    AgentEvalCaseReport,
+    AgentEvalReportResponse,
     AgentRun,
     AgentToolTrace,
     ChatSessionMessage,
@@ -23,6 +28,7 @@ from app.models import (
 )
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.llm_provider import LLMProvider
+from app.services.sample_data import SAMPLE_EVENTS
 
 
 INTERNAL_TOOL_NAMES = {
@@ -62,6 +68,7 @@ class GoldenCaseResult:
     tool_execution: GoldenLayerResult
     grounding: GoldenLayerResult
     answer: GoldenLayerResult
+    response: AgentChatResponse
 
 
 @dataclass(frozen=True)
@@ -144,6 +151,7 @@ def run_golden_eval_suite(
             tool_execution=execution,
             grounding=grounding,
             answer=answer,
+            response=response,
         )
         results.append(result)
         finished_at = datetime.now(timezone.utc)
@@ -192,6 +200,43 @@ def run_golden_eval_suite(
             for category, total in sorted(category_totals.items())
         },
         results=results,
+    )
+
+
+def run_default_golden_eval() -> GoldenSuiteResult:
+    """Use the same Golden source and offline mode for API and system health."""
+    version, cases = load_golden_cases(GOLDEN_DATASET_PATH)
+    return run_golden_eval_suite(
+        cases=cases, events=SAMPLE_EVENTS, dataset_version=version,
+    )
+
+
+def golden_panel_report(suite: GoldenSuiteResult) -> AgentEvalReportResponse:
+    """Keep the quality-panel contract while exposing every Golden layer failure."""
+    results = []
+    for result in suite.results:
+        response = result.response
+        results.append(AgentEvalCaseReport(
+            case_id=result.case_id,
+            passed=result.passed,
+            failures=[
+                f"{name}: {failure}"
+                for name in LAYER_QUESTIONS
+                for failure in getattr(result, name).failures
+            ],
+            intent=response.intent,
+            planner_tool_calls=response.tool_policy.planner_tool_calls,
+            final_tool_calls=response.tool_policy.final_tool_calls,
+            backend_repaired_tools=response.tool_policy.backend_repaired_tools,
+            repair_reasons=response.tool_policy.repair_reasons,
+            trace_names=[trace.name for trace in response.tool_results],
+            warnings=response.warnings,
+            answer_preview=response.answer[:300],
+        ))
+    return AgentEvalReportResponse(
+        mode="offline", total=suite.total, passed=suite.passed, failed=suite.failed,
+        pass_rate=suite.passed / suite.total if suite.total else 0,
+        results=results, generated_by=f"agent-eval-panel-v2:{suite.dataset_version}",
     )
 
 

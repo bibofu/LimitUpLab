@@ -7,7 +7,6 @@ import queue
 import threading
 from datetime import date, datetime, timezone
 from datetime import timedelta
-from pathlib import Path
 from typing import Annotated, Any, Callable, TypeVar
 from typing import Optional
 from uuid import uuid4
@@ -17,13 +16,12 @@ from fastapi.responses import StreamingResponse
 
 from app.agents import answer_first_board_chat, build_first_board_ratings, build_review_agent_report
 from app.agents.review_agent import enrich_review_position_labels
-from app.agents.eval_runner import eval_suite_report, load_eval_cases, run_agent_eval_suite
+from app.agents.golden_eval import golden_panel_report, run_default_golden_eval
 from app.collectors import HithinkFinanceError
 from app.models import (
     AgentChatRequest,
     AgentChatResponse,
     AgentDataHealthResponse,
-    AgentEvalCaseReport,
     AgentEvalReportResponse,
     AgentEvaluationResponse,
     AgentRun,
@@ -92,14 +90,12 @@ from app.services.scoring_policy_optimizer import (
     build_scoring_policy_registry,
     optimize_scoring_policy,
 )
-from app.services.sample_data import SAMPLE_EVENTS
 from app.services.system_health import build_agent_system_health
 from app.security import current_owner_id, require_admin_access
 
 router = APIRouter()
 ResponseModel = TypeVar("ResponseModel")
 STRUCTURED_CACHE_TTL_MINUTES = 10
-BACKEND_ROOT = Path(__file__).resolve().parents[2]
 CHAT_SESSIONS_VERSION = "chat-sessions-v1"
 
 
@@ -499,43 +495,12 @@ def get_daily_pipeline_status(
 def get_agent_eval_report(
     _admin: Annotated[None, Depends(require_admin_access)],
 ) -> AgentEvalReportResponse:
-    """Run deterministic chat Agent eval cases for the quality panel."""
-
-    fixture_path = BACKEND_ROOT / "tests" / "fixtures" / "agent_eval_cases.json"
-    if not fixture_path.exists():
-        raise HTTPException(status_code=404, detail="Agent eval fixture not found.")
-
-    suite = run_agent_eval_suite(
-        cases=load_eval_cases(fixture_path),
-        events=SAMPLE_EVENTS,
-        check_intent=True,
-    )
-    report = eval_suite_report(suite)
-    total = int(report["total"])
-    return AgentEvalReportResponse(
-        mode="offline",
-        total=total,
-        passed=int(report["passed"]),
-        failed=int(report["failed"]),
-        pass_rate=(int(report["passed"]) / total) if total else 0,
-        results=[
-            AgentEvalCaseReport(
-                case_id=item["case_id"],
-                passed=item["passed"],
-                failures=item["failures"],
-                intent=item["intent"],
-                planner_tool_calls=item["planner_tool_calls"],
-                final_tool_calls=item["final_tool_calls"],
-                backend_repaired_tools=item["backend_repaired_tools"],
-                repair_reasons=item["repair_reasons"],
-                trace_names=item["trace_names"],
-                warnings=item["warnings"],
-                answer_preview=item["answer_preview"],
-            )
-            for item in report["results"]
-        ],
-        generated_by="agent-eval-panel-v1",
-    )
+    """Run the Golden dataset and preserve the quality-panel response contract."""
+    try:
+        suite = run_default_golden_eval()
+    except FileNotFoundError as error:
+        raise HTTPException(status_code=404, detail="Agent Golden fixture not found.") from error
+    return golden_panel_report(suite)
 
 
 @router.get(

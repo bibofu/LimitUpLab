@@ -1,7 +1,6 @@
 import json
 import os
 import unittest
-from pathlib import Path
 from unittest.mock import patch
 
 from app.agents.chat import answer_first_board_chat
@@ -9,8 +8,6 @@ from app.agents.eval_runner import (
     AgentEvalCase,
     AgentProductEvalScenario,
     AgentProductEvalTurn,
-    load_eval_cases,
-    load_product_eval_scenarios,
     product_eval_failure_report,
     run_agent_eval_suite,
     run_agent_product_eval_suite,
@@ -111,47 +108,6 @@ class AgentEvalRunnerTest(unittest.TestCase):
         self.assertTrue(suite.ok)
         self.assertEqual(observed_values, ["preserved"])
 
-    # Regression scenario: fixture eval suite passes against deterministic agent.
-    def test_fixture_eval_suite_passes_against_deterministic_agent(self) -> None:
-        fixture_path = Path(__file__).parent / "fixtures" / "agent_eval_cases.json"
-        suite = run_agent_eval_suite(
-            cases=load_eval_cases(fixture_path),
-            events=SAMPLE_EVENTS,
-        )
-
-        failure_report = {
-            result.case_id: result.failures
-            for result in suite.results
-            if not result.passed
-        }
-        self.assertTrue(suite.ok, failure_report)
-        self.assertEqual(suite.total, 18)
-
-    # Regression scenario: product fixture covers complete multi turn answers.
-    def test_product_fixture_covers_complete_multi_turn_answers(self) -> None:
-        fixture_path = (
-            Path(__file__).parent
-            / "fixtures"
-            / "agent_product_eval_scenarios.json"
-        )
-        suite = run_agent_product_eval_suite(
-            scenarios=load_product_eval_scenarios(fixture_path),
-            events=SAMPLE_EVENTS,
-        )
-
-        failures = {
-            f"{result.scenario_id}/{result.turn_id}": result.failures
-            for result in suite.results
-            if not result.passed
-        }
-        self.assertTrue(suite.ok, failures)
-        self.assertEqual(suite.total_scenarios, 10)
-        self.assertEqual(suite.total_turns, 30)
-        self.assertEqual(suite.metrics["claim_grounding_rate"], 1.0)
-        self.assertEqual(suite.metrics["grounded_claim_rate"], 1.0)
-        self.assertEqual(suite.metrics["context_continuity_rate"], 1.0)
-        self.assertEqual(suite.metrics["presentation_compliance_rate"], 1.0)
-
     # Regression scenario: product failure report groups actionable dimensions.
     def test_product_failure_report_groups_actionable_dimensions(self) -> None:
         response = answer_first_board_chat(
@@ -213,9 +169,15 @@ class AgentEvalRunnerTest(unittest.TestCase):
         report = get_agent_eval_report(_admin=None)
 
         self.assertEqual(report.mode, "offline")
-        self.assertEqual(report.total, 18)
-        self.assertEqual(report.failed, 0)
-        self.assertEqual(report.pass_rate, 1.0)
+        self.assertEqual(report.total, 50)
+        self.assertEqual(report.failed, sum(not item.passed for item in report.results))
+        self.assertEqual(report.passed + report.failed, report.total)
+        self.assertEqual(report.pass_rate, report.passed / report.total)
+        self.assertIn("agent-golden-v1", report.generated_by)
+        self.assertTrue(all(
+            failure.split(":", 1)[0] in {"planner", "tool_execution", "grounding", "answer"}
+            for item in report.results for failure in item.failures
+        ))
         self.assertTrue(report.results)
 
     # Regression scenario: repeated live trials expose provider flakiness.

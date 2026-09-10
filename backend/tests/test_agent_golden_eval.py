@@ -14,6 +14,7 @@ from app.agents.golden_dataset import (
 )
 from app.agents.golden_eval import (
     golden_suite_report,
+    golden_panel_report,
     run_golden_eval_suite,
 )
 from app.models import AgentChatResponse, AgentToolTrace
@@ -136,6 +137,14 @@ class AgentGoldenEvalTest(unittest.TestCase):
         self.assertTrue(result.grounding.passed)
         self.assertTrue(result.answer.passed)
         self.assertFalse(result.passed)
+        panel = golden_panel_report(suite)
+        self.assertEqual((panel.total, panel.passed, panel.failed), (1, 0, 1))
+        self.assertEqual(panel.pass_rate, 0)
+        self.assertEqual(panel.results[0].intent, response.intent)
+        self.assertEqual(panel.results[0].planner_tool_calls, ["limit_up_events"])
+        self.assertEqual(panel.results[0].trace_names, ["llm_tool_planner", "limit_up_events"])
+        self.assertEqual(panel.results[0].answer_preview, response.answer)
+        self.assertTrue(all(item.startswith("tool_execution:") for item in panel.results[0].failures))
         report = golden_suite_report(suite)
         self.assertEqual(
             set(report["results"][0]["layers"]),

@@ -40,6 +40,8 @@ Golden Dataset 用少量高质量真实问题持续约束 Agent 的完整行为�
 
 ## 执行
 
+CLI 默认且仅支持 `golden` suite。评测接口、系统健康检查与 CI 共用此数据集；不再附带独立题库的 Query Contract 评测。组件测试继续由 pytest 运行。
+
 可重复的离线全量基线：
 
 ```powershell
@@ -73,4 +75,4 @@ cd backend
 
 ## 初始基线
 
-`agent-golden-v1` 首次离线运行结果为 19/50 全层通过：Planner 78%、Tool Execution 54%、Grounding 66%、Answer 80%。这些失败是后续治理队列，不表示评测器失败；框架自身由 pytest 验证。初始阶段不把 Golden 全量加入普通 CI 的强制通过门禁，待真实问题逐层修复并形成稳定基线后，再启用 `--fail-on-failures`。
+`agent-golden-v1` 首次离线运行结果为 19/50 全层通过：Planner 78%、Tool Execution 54%、Grounding 66%、Answer 80%。这些失败是后续治理队列，不表示评测器失败；框架自身由 pytest 验证。该段记录创建时的基线。自 2026-09-10 题库清理起，Golden 已替代旧评测套件进入 CI；离线失败始终返回非零退出码，既有失败会使门禁失败。`--fail-on-failures` 用于真实模型模式。清理未修改金标或放宽判定。
