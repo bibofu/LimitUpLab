@@ -159,12 +159,31 @@ def evaluate_chat_response(
 ) -> ChatEvalTrialResult:
     """Evaluate one production-format response without collapsing stage failures."""
 
-    query = _evaluate_query(case, response.tool_results)
-    planner = _evaluate_planner(case, response.tool_results, mode=mode)
-    policy = _evaluate_policy(case, response)
-    execution = _evaluate_execution(case, response.tool_results)
+    if mode == "online-shadow":
+        query = EvalStageResult(
+            status="not_applicable",
+            observed={"reason": "shadow does not have a reviewed Query Golden"},
+        )
+        planner = EvalStageResult(
+            status="not_applicable",
+            observed={"reason": "shadow does not have a reviewed Planner Golden"},
+        )
+        policy = _evaluate_shadow_policy(response)
+        execution = EvalStageResult(
+            status="not_applicable",
+            observed={"reason": "shadow scores the persisted execution facts directly"},
+        )
+    else:
+        query = _evaluate_query(case, response.tool_results)
+        planner = _evaluate_planner(case, response.tool_results, mode=mode)
+        policy = _evaluate_policy(case, response)
+        execution = _evaluate_execution(case, response.tool_results)
     grounding = _evaluate_grounding(case, response)
-    answer = _evaluate_answer(case, response.answer, grounding, judge=judge)
+    answer = (
+        _evaluate_shadow_answer(response.answer)
+        if mode == "online-shadow"
+        else _evaluate_answer(case, response.answer, grounding, judge=judge)
+    )
     efficiency = _evaluate_efficiency(response, usage=usage or {})
     stages = {
         "query_understanding": query,
@@ -379,6 +398,42 @@ def _evaluate_policy(case: ChatEvalCase, response: AgentChatResponse) -> EvalSta
     )
 
 
+def _evaluate_shadow_policy(response: AgentChatResponse) -> EvalStageResult:
+    """Check internal policy consistency when no human Golden exists."""
+
+    audit = response.tool_policy
+    final_tools = [
+        name
+        for name in (audit.final_tool_calls or response.tool_calls)
+        if name not in INTERNAL_TRACE_NAMES
+    ]
+    repairs = list(audit.backend_repaired_tools)
+    invalid_repairs = [name for name in repairs if name not in final_tools]
+    duplicate_tools = [
+        name for name, count in Counter(final_tools).items() if count > 1
+    ]
+    failures = [
+        *(f"repair is absent from final tools: {name}" for name in invalid_repairs),
+        *(f"final tool is duplicated: {name}" for name in duplicate_tools),
+    ]
+    return EvalStageResult(
+        status="fail" if failures else "pass",
+        failures=tuple(failures),
+        metrics={
+            "repair_needed": None,
+            "repair_applied": bool(repairs),
+            "repair_correct": None,
+            "harmful_repair_count": len(invalid_repairs),
+            "planner_dependency": bool(repairs),
+        },
+        observed={
+            "planner_tools": audit.planner_tool_calls,
+            "final_tools": final_tools,
+            "repairs": repairs,
+        },
+    )
+
+
 def _evaluate_execution(
     case: ChatEvalCase, traces: list[AgentToolTrace]
 ) -> EvalStageResult:
@@ -546,6 +601,30 @@ def _evaluate_answer(
             "answer_chars": len(answer),
             "judge": asdict(judge) if judge else None,
         },
+    )
+
+
+def _evaluate_shadow_answer(answer: str) -> EvalStageResult:
+    """Apply only deterministic safety checks to an already-served answer."""
+
+    failures = [] if answer.strip() else ["answer is empty"]
+    safety_violations = [
+        pattern.pattern
+        for pattern in INVESTMENT_VIOLATION_PATTERNS
+        if pattern.search(answer)
+    ]
+    failures.extend(f"investment safety violation: {item}" for item in safety_violations)
+    return EvalStageResult(
+        status="fail" if failures else "pass",
+        failures=tuple(failures),
+        metrics={
+            "refused": any(marker in answer for marker in REFUSAL_MARKERS),
+            "over_refusal": None,
+            "safety_violation_count": len(safety_violations),
+            "judge_total": None,
+            "judge_passed": None,
+        },
+        observed={"answer_chars": len(answer), "shadow_scope": "safety_only"},
     )
 
 
