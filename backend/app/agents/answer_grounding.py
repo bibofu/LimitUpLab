@@ -3,7 +3,7 @@
 from __future__ import annotations
 
 import re
-from dataclasses import asdict, dataclass
+from dataclasses import asdict, dataclass, replace
 from typing import Any, Iterable
 
 from app.models import AgentToolTrace
@@ -24,7 +24,13 @@ _LABELED_NUMBER_RE = re.compile(
     r"(?P<number>[-+]?\d+(?:\.\d+)?)"
 )
 _REFUSAL_TERMS = ("无法回答", "不能回答", "暂不支持", "没有能力回答")
-_NON_EVIDENCE_TOOLS = {"agent_plan", "llm_tool_planner", "tool_policy"}
+_NON_EVIDENCE_TOOLS = {
+    "agent_plan",
+    "query_understanding",
+    "llm_tool_planner",
+    "tool_policy",
+}
+_CLAUSE_BOUNDARIES = "；;。！？!?\n"
 
 
 @dataclass(frozen=True)
@@ -90,6 +96,9 @@ class _RawClaim:
     value: object
     unit: str = ""
     decimals: int = 0
+    entity_symbol: str | None = None
+    entity_name: str | None = None
+    claim_date: str | None = None
 
 
 def evaluate_answer_grounding(
@@ -280,8 +289,49 @@ def _extract_claims(answer: str) -> list[_RawClaim]:
             )
         )
         occupied.append(match.span())
-    # The key compares start.
-    return sorted(claims, key=lambda claim: claim.start)
+    # Bind metrics and times to an entity/date in the same clause. Evidence
+    # matching later requires compatible record paths, so values cannot be
+    # borrowed from another stock or date merely because they exist somewhere
+    # in the same tool payload.
+    ordered = sorted(claims, key=lambda claim: claim.start)
+    contextualized: list[_RawClaim] = []
+    for claim in ordered:
+        if claim.kind not in {"number", "time"}:
+            contextualized.append(claim)
+            continue
+        clause_start, clause_end = _clause_span(answer, claim.start)
+        entity_candidates = [
+            item
+            for item in ordered
+            if item.kind in {"stock_entity", "stock_code"}
+            and clause_start <= item.start < clause_end
+            and item.start <= claim.start
+        ]
+        date_candidates = [
+            item
+            for item in ordered
+            if item.kind == "date"
+            and clause_start <= item.start < clause_end
+            and item.start <= claim.start
+        ]
+        entity_symbol = None
+        entity_name = None
+        if entity_candidates:
+            entity = max(entity_candidates, key=lambda item: item.start)
+            if entity.kind == "stock_entity":
+                entity_name, entity_symbol = entity.value  # type: ignore[misc]
+            else:
+                entity_symbol = entity.text
+        claim_date = str(max(date_candidates, key=lambda item: item.start).value) if date_candidates else None
+        contextualized.append(
+            replace(
+                claim,
+                entity_symbol=entity_symbol,
+                entity_name=entity_name,
+                claim_date=claim_date,
+            )
+        )
+    return contextualized
 
 
 # Compare one extracted answer claim with compatible evidence, allowing the claim-specific numeric
@@ -310,6 +360,12 @@ def _verify_claim(
             for text, evidence_paths in strings.items():
                 if text[:5] == short_time:
                     paths.update(evidence_paths)
+        paths = _filter_context_paths(
+            paths,
+            claim=claim,
+            strings=strings,
+            pairs=pairs,
+        )
     else:
         expected_category = _unit_category(claim.unit)
         tolerance = _claim_tolerance(claim)
@@ -319,7 +375,15 @@ def _verify_claim(
             evidence_value = evidence.value
             if expected_category == "ratio" and abs(evidence_value) <= 1:
                 evidence_value *= 100
-            if abs(float(claim.value) - evidence_value) <= tolerance:
+            if (
+                abs(float(claim.value) - evidence_value) <= tolerance
+                and _path_matches_claim_context(
+                    evidence.path,
+                    claim=claim,
+                    strings=strings,
+                    pairs=pairs,
+                )
+            ):
                 paths.add(evidence.path)
     return GroundingClaim(
         text=claim.text,
@@ -344,6 +408,94 @@ def _compact(value: str) -> str:
 # Check whether a candidate text span intersects a span already assigned to another claim.
 def _overlaps(span: tuple[int, int], occupied: list[tuple[int, int]]) -> bool:
     return any(span[0] < end and span[1] > start for start, end in occupied)
+
+
+def _clause_span(answer: str, position: int) -> tuple[int, int]:
+    """Return the nearest punctuation-delimited clause containing a claim."""
+
+    start = max((answer.rfind(char, 0, position) for char in _CLAUSE_BOUNDARIES), default=-1) + 1
+    ends = [answer.find(char, position) for char in _CLAUSE_BOUNDARIES]
+    usable = [item for item in ends if item >= 0]
+    return start, min(usable) if usable else len(answer)
+
+
+def _filter_context_paths(
+    candidate_paths: set[str],
+    *,
+    claim: _RawClaim,
+    strings: dict[str, set[str]],
+    pairs: dict[tuple[str, str], set[str]],
+) -> set[str]:
+    if claim.kind == "stock_code":
+        return candidate_paths
+    return {
+        path
+        for path in candidate_paths
+        if _path_matches_claim_context(
+            path,
+            claim=claim,
+            strings=strings,
+            pairs=pairs,
+        )
+    }
+
+
+def _path_matches_claim_context(
+    evidence_path: str,
+    *,
+    claim: _RawClaim,
+    strings: dict[str, set[str]],
+    pairs: dict[tuple[str, str], set[str]],
+) -> bool:
+    entity_paths: set[str] = set()
+    if claim.entity_symbol:
+        canonical_symbol = _canonical_string(claim.entity_symbol)
+        entity_paths.update(strings.get(canonical_symbol, set()))
+        if claim.entity_name:
+            entity_paths.update(
+                pairs.get((claim.entity_name, claim.entity_symbol), set())
+            )
+            if not entity_paths:
+                for (name, symbol), paths in pairs.items():
+                    if symbol == claim.entity_symbol and claim.entity_name.endswith(name):
+                        entity_paths.update(paths)
+    if entity_paths and not any(
+        _same_record(evidence_path, path) for path in entity_paths
+    ):
+        return False
+
+    if claim.claim_date:
+        date_paths = strings.get(claim.claim_date, set())
+        if not date_paths or not any(
+            _same_record(evidence_path, path, allow_parent_scope=True)
+            for path in date_paths
+        ):
+            return False
+    return True
+
+
+def _same_record(
+    left: str,
+    right: str,
+    *,
+    allow_parent_scope: bool = False,
+) -> bool:
+    left_record = _record_path(left)
+    right_record = _record_path(right)
+    if left_record == right_record:
+        return True
+    if allow_parent_scope:
+        return left_record.startswith(right_record + ".") or right_record.startswith(
+            left_record + "."
+        )
+    return False
+
+
+def _record_path(path: str) -> str:
+    """Strip a leaf field while preserving list indices that identify one row."""
+
+    head, separator, _leaf = path.rpartition(".")
+    return head if separator else path
 
 
 # Separate a numeric claim from its unit so values can be compared on a common scale.

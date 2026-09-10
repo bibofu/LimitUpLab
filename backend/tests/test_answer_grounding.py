@@ -105,6 +105,76 @@ class AnswerGroundingTest(unittest.TestCase):
         self.assertTrue(refusal.over_refusal)
         self.assertFalse(refusal.tool_failure_hallucination)
 
+    # Regression scenario: numbers must stay attached to the stock row that owns them.
+    def test_swapped_stock_metrics_do_not_borrow_global_evidence(self) -> None:
+        evidence = _trace(
+            output={
+                "events": [
+                    {
+                        "symbol": "600001",
+                        "name": "甲股份",
+                        "score": 10,
+                        "change_pct": 2,
+                    },
+                    {
+                        "symbol": "600002",
+                        "name": "乙股份",
+                        "score": 90,
+                        "change_pct": 8,
+                    },
+                ]
+            }
+        )
+
+        correct = evaluate_answer_grounding(
+            "甲股份(600001)评分10分、涨幅2%；乙股份(600002)评分90分、涨幅8%。",
+            [evidence],
+        )
+        swapped = evaluate_answer_grounding(
+            "甲股份(600001)评分90分、涨幅8%；乙股份(600002)评分10分、涨幅2%。",
+            [evidence],
+        )
+
+        self.assertTrue(correct.passed)
+        self.assertFalse(swapped.passed)
+        unsupported = [claim.text for claim in swapped.claims if not claim.supported]
+        self.assertEqual(set(unsupported), {"评分90", "8%", "评分10", "2%"})
+
+    # Regression scenario: a metric cannot use the same stock's value from another date.
+    def test_swapped_dates_do_not_borrow_evidence_from_another_row(self) -> None:
+        evidence = _trace(
+            output={
+                "events": [
+                    {
+                        "symbol": "600001",
+                        "name": "甲股份",
+                        "trade_date": "2026-05-14",
+                        "score": 10,
+                    },
+                    {
+                        "symbol": "600001",
+                        "name": "甲股份",
+                        "trade_date": "2026-05-15",
+                        "score": 90,
+                    },
+                ]
+            }
+        )
+
+        correct = evaluate_answer_grounding(
+            "甲股份(600001)在2026-05-14评分10分；"
+            "甲股份(600001)在2026-05-15评分90分。",
+            [evidence],
+        )
+        swapped = evaluate_answer_grounding(
+            "甲股份(600001)在2026-05-14评分90分；"
+            "甲股份(600001)在2026-05-15评分10分。",
+            [evidence],
+        )
+
+        self.assertTrue(correct.passed)
+        self.assertFalse(swapped.passed)
+
 
 if __name__ == "__main__":
     unittest.main()
