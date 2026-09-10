@@ -180,6 +180,7 @@ def _collect_evidence(
     strings: dict[str, set[str]],
     numbers: list[_EvidenceNumber],
     pairs: dict[tuple[str, str], set[str]],
+    category_hint: str | None = None,
 ) -> None:
     if isinstance(value, list):
         for index, item in enumerate(value):
@@ -189,13 +190,19 @@ def _collect_evidence(
                 strings=strings,
                 numbers=numbers,
                 pairs=pairs,
+                category_hint=category_hint,
             )
         return
     if isinstance(value, dict):
         symbol = str(value.get("symbol") or "").strip()
-        name = str(value.get("name") or "").strip()
+        name = str(value.get("name") or value.get("entity") or "").strip()
         if symbol.isdigit() and len(symbol) == 6 and name:
             pairs.setdefault((name, symbol), set()).add(path)
+        metric_category = (
+            _path_category(str(value.get("metric")))
+            if value.get("metric") is not None
+            else None
+        )
         for key, item in value.items():
             _collect_evidence(
                 item,
@@ -203,11 +210,12 @@ def _collect_evidence(
                 strings=strings,
                 numbers=numbers,
                 pairs=pairs,
+                category_hint=metric_category if key == "value" else None,
             )
         return
     if isinstance(value, bool) or value is None:
         return
-    category = _path_category(path)
+    category = category_hint or _path_category(path)
     if isinstance(value, (int, float)):
         numbers.append(_EvidenceNumber(float(value), path, category))
         strings.setdefault(str(value), set()).add(path)
@@ -373,7 +381,11 @@ def _verify_claim(
             if not _categories_compatible(expected_category, evidence.category):
                 continue
             evidence_value = evidence.value
-            if expected_category == "ratio" and abs(evidence_value) <= 1:
+            if (
+                expected_category == "ratio"
+                and abs(evidence_value) <= 1
+                and _ratio_path_uses_fraction(evidence.path)
+            ):
                 evidence_value *= 100
             if (
                 abs(float(claim.value) - evidence_value) <= tolerance
@@ -566,7 +578,7 @@ def _path_category(path: str) -> str:
         return "ratio"
     if any(
         token in lowered
-        for token in ("amount", "turnover", "market_cap", "money", "value")
+        for token in ("amount", "turnover", "market_cap", "money", "net_buy")
     ):
         return "money"
     if "board_height" in lowered:
@@ -585,6 +597,13 @@ def _path_category(path: str) -> str:
     if any(token in lowered for token in ("days", "window", "period")):
         return "duration"
     return "generic"
+
+
+def _ratio_path_uses_fraction(path: str) -> bool:
+    """Distinguish stored fractions from already-percent `*_pct` values."""
+
+    lowered = path.lower()
+    return any(token in lowered for token in ("confidence", "_rate", "_ratio"))
 
 
 # Decide whether the evidence metric and the answer claim describe compatible quantities.

@@ -175,6 +175,36 @@ class AnswerGroundingTest(unittest.TestCase):
         self.assertTrue(correct.passed)
         self.assertFalse(swapped.passed)
 
+    def test_relation_metric_classifies_generic_value_by_metric_name(self) -> None:
+        evidence = _trace(
+            output={
+                "records": [
+                    {
+                        "entity": "甲股份",
+                        "symbol": "600001",
+                        "date": "2026-05-15",
+                        "metric": "change_pct",
+                        "value": 2.5,
+                    }
+                ]
+            }
+        )
+
+        result = evaluate_answer_grounding(
+            "甲股份(600001)在2026-05-15涨幅2.5%。",
+            [evidence],
+        )
+
+        self.assertTrue(result.passed)
+
+    def test_small_change_pct_is_not_mistaken_for_a_fraction(self) -> None:
+        result = evaluate_answer_grounding(
+            "上证指数在2026-05-15上涨0.42%。",
+            [_trace(output={"change_pct": 0.42, "trade_date": "2026-05-15"})],
+        )
+
+        self.assertTrue(result.passed)
+
 
 if __name__ == "__main__":
     unittest.main()
