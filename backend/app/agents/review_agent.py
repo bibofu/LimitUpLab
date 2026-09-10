@@ -26,7 +26,7 @@ from app.services.llm_provider import LLMProvider, get_llm_provider
 from app.services.outcome_completeness import build_top10_outcome_completeness
 
 
-REVIEW_AGENT_VERSION = "review-agent-tool-use-v4"
+REVIEW_AGENT_VERSION = "review-agent-tool-use-v5-position-label"
 
 
 @dataclass(frozen=True)
@@ -394,6 +394,7 @@ def _review_picks_from_toolbox(toolbox: ReviewAgentToolbox) -> list[ReviewAgentP
                 symbol=item.symbol,
                 name=item.name,
                 concept=str(prediction.facts_json.get("concept") or "") if prediction else "",
+                position_label=_review_position_label(prediction),
                 score=item.score,
                 rating=item.rating,
                 confidence=item.confidence,
@@ -421,6 +422,54 @@ def _review_picks_from_toolbox(toolbox: ReviewAgentToolbox) -> list[ReviewAgentP
             )
         )
     return picks
+
+
+def enrich_review_position_labels(
+    report: ReviewAgentReportResponse,
+    repository: SQLiteFirstBoardRepository,
+) -> ReviewAgentReportResponse:
+    """Project persisted prediction positions onto legacy immutable review snapshots."""
+
+    predictions = repository.list_predictions_between(report.start_date, report.end_date)
+    by_key = {
+        (item.trade_date, item.symbol, item.scoring_version): item
+        for item in predictions
+    }
+    by_stock_date = {
+        (item.trade_date, item.symbol): item
+        for item in predictions
+    }
+    enriched_picks: list[ReviewAgentPick] = []
+    for pick in report.reviewed_picks:
+        prediction = by_key.get((pick.trade_date, pick.symbol, pick.scoring_version))
+        if prediction is None:
+            prediction = by_stock_date.get((pick.trade_date, pick.symbol))
+        position_label = pick.position_label or _review_position_label(prediction)
+        enriched_picks.append(
+            pick.model_copy(update={"position_label": position_label})
+        )
+    return report.model_copy(update={"reviewed_picks": enriched_picks})
+
+
+def _review_position_label(prediction: AgentPrediction | None) -> str | None:
+    """Return the persisted pre-board K-line position label for one prediction."""
+
+    if prediction is None:
+        return None
+    enrichment = prediction.facts_json.get("enrichment")
+    if not isinstance(enrichment, dict):
+        return None
+    position = enrichment.get("position")
+    if not isinstance(position, dict):
+        return None
+    primary = position.get("primary")
+    if not isinstance(primary, dict):
+        return None
+    label = primary.get("label")
+    if not isinstance(label, str):
+        return None
+    normalized = label.strip()
+    return normalized or None
 
 
 def _expected_post_bar_count(toolbox: ReviewAgentToolbox, trade_date: date) -> int:

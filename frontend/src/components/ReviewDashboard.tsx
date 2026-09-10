@@ -30,6 +30,7 @@ import {
   numberTone,
   stockDetailPath,
 } from "../dashboardFormatters";
+import { displayRelayPositionLabel } from "../relayRanking";
 import { Panel } from "./Panel";
 
 interface ReviewDashboardProps {
@@ -762,6 +763,9 @@ function ReviewPickTable({
             <small>
               {showTradeDate ? `${pick.trade_date} / ` : ""}{pick.symbol}
             </small>
+            <span className={`review-pick-position${pick.position_label ? "" : " is-missing"}`}>
+              首板位置 · <b>{displayRelayPositionLabel(pick.position_label)}</b>
+            </span>
           </strong>
           {showLatestReturn ? (
             <span>{pick.score.toFixed(1)} / {pick.rating}</span>

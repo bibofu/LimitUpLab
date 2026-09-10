@@ -1330,6 +1330,7 @@ class ReviewAgentPick(BaseModel):
     symbol: str
     name: str
     concept: str = ""
+    position_label: str | None = None
     score: float
     rating: str
     confidence: float

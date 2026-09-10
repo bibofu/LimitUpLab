@@ -16,6 +16,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from fastapi.responses import StreamingResponse
 
 from app.agents import answer_first_board_chat, build_first_board_ratings, build_review_agent_report
+from app.agents.review_agent import enrich_review_position_labels
 from app.agents.eval_runner import eval_suite_report, load_eval_cases, run_agent_eval_suite
 from app.collectors import HithinkFinanceError
 from app.models import (
@@ -741,7 +742,7 @@ def get_review_agent_report(
             item.trade_date for item in snapshot.report.reviewed_picks
         } if snapshot is not None else set()
         if snapshot is not None and required_tracking_dates.issubset(snapshot_prediction_dates):
-            return snapshot.report
+            return enrich_review_position_labels(snapshot.report, first_board_repository)
     if start_date is None:
         resolved_start = available_dates[max(0, end_index - 5)]
     else:

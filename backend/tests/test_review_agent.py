@@ -4,6 +4,7 @@ from datetime import date, datetime, timezone
 from app.agents.review_agent import (
     _build_feature_comparison,
     _build_promotion_comparisons,
+    _review_position_label,
     build_review_agent_report,
 )
 from app.models import AgentEvaluationItem, AgentPrediction, ReviewAgentPick
@@ -56,7 +57,7 @@ class ReviewAgentTest(unittest.TestCase):
         )
 
         self.assertEqual(len(provider.calls), 2)
-        self.assertEqual(report.generated_by, "review-agent-tool-use-v4")
+        self.assertEqual(report.generated_by, "review-agent-tool-use-v5-position-label")
         self.assertEqual(report.confidence, 0.77)
         self.assertTrue(report.main_findings)
         self.assertEqual(
@@ -153,6 +154,14 @@ class ReviewAgentTest(unittest.TestCase):
         )
 
         self.assertEqual(comparison["success_count"], 3)
+        self.assertEqual(
+            _review_position_label(predictions["prediction-0"]),
+            "低位启动首板",
+        )
+        self.assertEqual(
+            _review_position_label(predictions["prediction-5"]),
+            "高位震荡首板",
+        )
         self.assertEqual(comparison["failed_count"], 3)
         successful_text = "".join(comparison["successful_patterns"])
         failed_text = "".join(comparison["failed_patterns"])

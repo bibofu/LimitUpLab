@@ -547,6 +547,7 @@ export interface ReviewAgentPick {
   symbol: string;
   name: string;
   concept: string;
+  position_label: string | null;
   score: number;
   rating: string;
   confidence: number;
