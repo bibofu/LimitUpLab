@@ -861,6 +861,56 @@ def _answer_with_llm_tool_agent(
         context_symbol=context.symbol,
         capabilities=policy_capabilities,
     )
+    tool_duration_ms = round((perf_counter() - tools_started_at) * 1000)
+    requested_symbol = request.symbol or _extract_symbol_hint(request.message)
+    rating_lookup = execution["facts"].get("first_board_rating_lookup")
+    if (
+        requested_symbol
+        and _looks_like_rating_explain_question(request.message)
+        and isinstance(rating_lookup, dict)
+        and rating_lookup.get("found") is False
+    ):
+        tool_results = [
+            _llm_plan_trace(
+                tool_plan,
+                plan_result.model,
+                plan_result.provider,
+                planner_duration_ms,
+                planner_prompt_chars,
+                plan_result.completion_chars,
+            ),
+            *execution["tool_results"],
+        ]
+        warnings = [
+            _safety_warning(),
+            "The requested symbol is absent from the rated first-board pool.",
+        ]
+        response = AgentChatResponse(
+            session_id=request.session_id,
+            intent="symbol_not_found",
+            answer=(
+                f"没有在当前首板评级候选池中找到 {requested_symbol}，"
+                "因此不能基于本工具解释它的评分。"
+            ),
+            tool_calls=["llm_tool_planner", *execution["tool_call_names"]],
+            tool_results=tool_results,
+            references=[*execution["references"], f"symbol={requested_symbol}"],
+            warnings=warnings,
+            performance=AgentChatPerformance(
+                planner_duration_ms=planner_duration_ms,
+                tool_duration_ms=tool_duration_ms,
+                total_duration_ms=round((perf_counter() - agent_started_at) * 1000),
+                planner_prompt_chars=planner_prompt_chars,
+            ),
+            generated_by=CHAT_AGENT_VERSION,
+        )
+        response.tool_policy = build_agent_tool_policy_audit(
+            tool_calls=response.tool_calls,
+            tool_results=tool_results,
+            warnings=warnings,
+        )
+        response.evidence_cards = build_agent_evidence_cards(tool_results, warnings)
+        return response
     # Cross-tool operations, such as intersecting two stock lists, are computed
     # here so the answer writer receives the actual intersection as evidence.
     _add_composed_tool_facts(request.message, execution["facts"])
@@ -869,7 +919,6 @@ def _answer_with_llm_tool_agent(
         execution["facts"],
     )
     tool_plan["capabilities"] = list(capabilities)
-    tool_duration_ms = round((perf_counter() - tools_started_at) * 1000)
     outcome_warnings = _tool_outcome_warnings(execution["tool_results"])
     # An empty, failed or wholly unusable evidence set cannot justify a market
     # answer. Return the explicit unavailable response before calling the writer.
@@ -1885,6 +1934,8 @@ def _build_agent_plan(
         and _mentions_first_board_scope(request.message)
         and filter_query is None
         and intent != "first_board_sector_summary"
+        and request.symbol is None
+        and _extract_symbol_hint(request.message) is None
         and not _looks_like_general_limit_up_question(request.message)
     ):
         intent = "today_summary"

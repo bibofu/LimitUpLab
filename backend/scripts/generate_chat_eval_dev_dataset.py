@@ -192,7 +192,7 @@ FAILURES: list[tuple[str, str, str]] = [
     ("301489的K线服务异常时不要补造走势", "stock_trend", "error"),
     ("今天龙虎榜没有返回数据", "dragon_tiger", "empty"),
     ("板块行情只返回部分来源时怎么回答？", "sector_performance", "partial"),
-    ("今天没有符合条件的首板候选", "first_board_rating", "empty"),
+    ("600000在2026年5月15日的首板评分是多少？", "first_board_rating", "empty"),
     ("涨停后形态数据缺失时列出缺口", "post_limit_screening", "partial"),
     ("预测复盘样本为空时不要给结论", "prediction_review", "empty"),
     ("评分策略状态工具报错时不要猜权重", "scoring_policy", "error"),
@@ -304,8 +304,9 @@ def _case(
     tags: list[str] | None = None,
     response_behavior: str = "answer",
     result_state: str = "ok",
+    bad_case_id: str | None = None,
 ) -> dict[str, Any]:
-    return {
+    payload = {
         "case_id": f"CEV2-D{index:03d}",
         "dataset": "dev",
         "profile": "v1_close_review",
@@ -322,6 +323,9 @@ def _case(
             result_state=result_state,
         ),
     }
+    if bad_case_id:
+        payload["bad_case_id"] = bad_case_id
+    return payload
 
 
 def build_cases() -> list[dict[str, Any]]:
@@ -366,6 +370,7 @@ def build_cases() -> list[dict[str, Any]]:
                 severity="critical",
                 response_behavior=behavior,
                 result_state=state,
+                bad_case_id=("BC-013" if "600000" in question else None),
             )
         )
         index += 1

@@ -91,6 +91,28 @@ class FakeDirectFirstBoardProvider(FakeToolPlanningProvider):
         )
 
 
+class FakeMissingSymbolRatingProvider(FakeToolPlanningProvider):
+    """Plan a rating lookup whose explicit stock is absent from the pool."""
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        self.calls.append((system_prompt, user_prompt))
+        if "first job is to decide which tools are needed" in system_prompt:
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": "rating_explain",
+                        "capabilities": ["first_board_rating"],
+                        "context_mode": "standalone",
+                        "context_capabilities": [],
+                        "safety": "normal",
+                    }
+                ),
+                model="fake-planner",
+                provider="fake",
+            )
+        raise AssertionError("A missing requested symbol must skip answer generation.")
+
+
 class FakeUnsupportedDirectProvider(FakeToolPlanningProvider):
     """Fake planner that fabricates an unsupported answer without evidence."""
 
@@ -766,6 +788,38 @@ class AgentChatTest(unittest.TestCase):
         self.assertIn("first_board_ratings", response.tool_calls)
         self.assertIn("2026-05-15", response.answer)
         self.assertTrue(response.warnings)
+
+    def test_explicit_missing_rating_symbol_does_not_return_pool_summary(self) -> None:
+        request = AgentChatRequest(
+            session_id="missing-rating-symbol",
+            message="600000在2026年5月15日的首板评分是多少？",
+        )
+
+        fallback = answer_first_board_chat(
+            request,
+            events=SAMPLE_EVENTS,
+            llm_provider=DisabledLLMProvider(),
+        )
+        provider = FakeMissingSymbolRatingProvider()
+        live = answer_first_board_chat(
+            request,
+            events=SAMPLE_EVENTS,
+            llm_provider=provider,
+        )
+
+        for response in (fallback, live):
+            self.assertEqual(response.intent, "symbol_not_found")
+            self.assertIn("600000", response.answer)
+            self.assertIn("没有在当前首板评级候选池中找到", response.answer)
+            self.assertNotIn("评分靠前", response.answer)
+        self.assertEqual(len(provider.calls), 1)
+        rating_trace = next(
+            trace for trace in live.tool_results if trace.name == "first_board_ratings"
+        )
+        self.assertEqual(
+            rating_trace.output["requested_symbol_lookup"],
+            {"symbol": "600000", "found": False, "rating": None},
+        )
 
     # Regression scenario: shorthand date can select historical first board data.
     def test_shorthand_date_can_select_historical_first_board_data(self) -> None:

@@ -7,6 +7,7 @@ from .helpers import (
     _build_first_board_filter_trace,
     _compact_ratings_facts,
     _explicit_request_trade_date,
+    _extract_symbol_hint,
     _filter_first_board_candidates,
     _filter_query_from_context,
     _has_events_for_date,
@@ -53,6 +54,23 @@ def first_board_ratings(state: ExecutionState, name: str, arguments: dict[str, A
     state.latest_ratings_tool = result
     state.latest_ratings = result.output
     state.facts["first_board_ratings"] = _compact_ratings_facts(state.latest_ratings)
+    requested_symbol = state.request.symbol or _extract_symbol_hint(state.request.message)
+    if requested_symbol:
+        matched = next(
+            (
+                item
+                for item in state.latest_ratings.candidates
+                if item.facts.symbol == requested_symbol
+            ),
+            None,
+        )
+        lookup = {
+            "symbol": requested_symbol,
+            "found": matched is not None,
+            "rating": _rating_fact(matched) if matched is not None else None,
+        }
+        state.facts["first_board_rating_lookup"] = lookup
+        result.trace_output["requested_symbol_lookup"] = lookup
     if result.trace_output.get("recommendation_draft"):
         state.facts["first_board_ratings"]["recommendation_draft"] = (
             result.trace_output["recommendation_draft"]
