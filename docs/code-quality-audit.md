@@ -825,3 +825,25 @@ QP-01、QP-02、QP-03 已关闭。QP-04 的固定输入预算与 Planner trace �
 失败与限制如实记录：第一次沙箱完整测试产生 **30 个 setup error、0 个业务失败、0 个 skipped**，JUnit 指向同一 Windows pytest 临时目录 PermissionError；随后 sessionfinish 清理也被该权限阻断。该次 Core/Product gate 通过。宿主环境使用新目录重跑先得到 604 passed、21 subtests passed，补充最终边界测试后再次完整重跑得到上表结果。第一次 HTTP 验收脚本误读不存在的 `source` 字段产生 KeyError，改为检查实际 `tool_calls` 与 provider Trace 后 4/4 通过，未为此改变业务实现。
 
 HTTP 使用真实 Uvicorn/HTTP/SSE、LangChain/OpenAI SDK 和实际查询契约/工具，数据与上游模型服务均为本地合成 fixture。验收后关闭测试服务；未调用付费模型、未验证真实模型准确率、未重启生产服务、未修改生产数据。没有前端变更，本轮未运行前端测试或构建。原有审查待办不因本次专项接入自动关闭。
+
+## 2026-09-10：Agent Golden Dataset 与四层 E2E Eval 专项审查
+
+范围：新增版本化的 50 条真实问法金标集、四层评测器、可控工具故障注入和 CLI `golden` suite；Agent 业务工具、Query Contract、评分与数据流水线未改动。
+
+### 变更边界与风险处理
+
+| 分级 | 问题 / 风险 | 证据与状态 |
+| --- | --- | --- |
+| P0 | 本次范围未发现阻断性实现问题 | 不代表当前 Agent 已通过全部 Golden case |
+| P1，已处理 | 旧评测把 Planner、工具、事实接地和答案揉成一个结果，失败后难以定位 | `golden_eval.py` 对同一次生产 Agent Run 输出四个独立 layer result 和通过率 |
+| P1，已处理 | 仅检查答案关键词会允许正确措辞掩盖错误工具或参数 | 每条 case 固定能力、工具、参数子集和工具输出事实片段，答案约束单独判定 |
+| P1，已处理 | 外部新闻/K 线故障不可重复，Tool Failure 回归不稳定 | 测试专用 `tool_registry` 注入点和 `simulate_tool_failure` 在真实编排中生成确定性工具错误；生产默认行为不变 |
+| P2，保留 | 离线确定性 Planner 不覆盖真实模型语义波动 | CLI 支持 `--mode live-llm --live-answer`；真实模型评测涉及成本和外部可用性，不纳入普通 pytest |
+| P2，作为后续修复队列 | 当前 Agent 对部分真实问法仍存在路由、参数和拒答缺口 | 初始离线基线 19/50 全层通过；Planner 78%、Tool Execution 54%、Grounding 66%、Answer 80%。不通过项保留在失败产物，不能通过放宽金标静默消除 |
+
+### 数据集与验收
+
+- 数据集版本 `agent-golden-v1`，共 50 条，覆盖意图理解、参数抽取、工具选择、聚合、对比、多轮、上下文、缺数据、工具失败、防幻觉和 Safety 11 类。
+- Loader 强制 50～80 条、唯一 case id、版本号和用户指定的八个核心字段；多轮 case 通过 `conversation_id` 复用生产消息与 recent run 上下文。
+- Golden 框架 3 项专门测试及 Agent 相关定向回归通过，最终完整后端 611 passed；验证数据集契约、类别覆盖、“四层不互相掩盖”和真实编排中的确定性 Tool Failure：构造错误参数时 Planner、Grounding、Answer 通过，只有 Tool Execution 失败；注入新闻源故障时工具返回 error 且回答不产生无依据事实。
+- Golden 离线命令按设计退出非零并写入 `backend/data/agent_eval_failures.json`，因为当前基线存在 31 条失败；这是产品质量信号，不计为评测框架测试失败。

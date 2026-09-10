@@ -317,6 +317,7 @@ def answer_first_board_chat(
     llm_provider: LLMProvider | None = None,
     progress_callback: Callable[[str, str], None] | None = None,
     answer_delta_callback: Callable[[str], None] | None = None,
+    tool_registry: AgentToolRegistry | None = None,
 ) -> AgentChatResponse:
     """Answer a user question with LLM-planned tools and deterministic fallback."""
 
@@ -329,7 +330,10 @@ def answer_first_board_chat(
         )
 
     active_repository = repository or SQLiteFirstBoardRepository()
-    tools = AgentToolRegistry(events=events, first_board_repository=active_repository)
+    tools = tool_registry or AgentToolRegistry(
+        events=events,
+        first_board_repository=active_repository,
+    )
     context = _build_session_context(
         recent_runs or [],
         conversation_messages or [],

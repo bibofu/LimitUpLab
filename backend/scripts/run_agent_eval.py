@@ -27,6 +27,11 @@ from app.agents.eval_runner import (
     run_agent_planner_eval_suite,
     run_agent_product_eval_suite,
 )
+from app.agents.golden_eval import (
+    golden_suite_report,
+    run_golden_eval_suite,
+)
+from app.agents.golden_dataset import load_golden_cases
 from app.agents.query_contract_eval import (
     load_query_contract_eval_cases,
     query_contract_eval_report,
@@ -45,10 +50,11 @@ def main() -> None:
     parser = argparse.ArgumentParser(description="Run Agent chat eval cases.")
     parser.add_argument(
         "--suite",
-        choices=("core", "product", "paraphrase", "conversation"),
+        choices=("core", "product", "golden", "paraphrase", "conversation"),
         default="core",
         help=(
             "core checks stable regressions; product checks end-to-end user answers; "
+            "golden scores planner, tools, grounding and answer independently; "
             "paraphrase measures live semantic routing."
         ),
     )
@@ -108,6 +114,7 @@ def main() -> None:
     fixture_names = {
         "core": "agent_eval_cases.json",
         "product": "agent_product_eval_scenarios.json",
+        "golden": "agent_golden_dataset.json",
         "paraphrase": "agent_paraphrase_eval_cases.json",
         "conversation": "agent_conversation_eval_scenarios.json",
     }
@@ -146,7 +153,36 @@ def main() -> None:
         load_query_contract_eval_cases(contract_fixture_path)
     )
     contract_report = query_contract_eval_report(contract_suite)
-    if args.suite == "product":
+    if args.suite == "golden":
+        dataset_version, golden_cases = load_golden_cases(fixture_path)
+        if args.case_filter:
+            golden_cases = [
+                item
+                for item in golden_cases
+                if args.case_filter in item.case_id
+                or args.case_filter in item.category
+            ]
+        if not golden_cases:
+            parser.error("--case-filter matched no golden cases")
+        golden_suite = run_golden_eval_suite(
+            cases=golden_cases,
+            events=SAMPLE_EVENTS,
+            dataset_version=dataset_version,
+            llm_provider=provider,
+            force_template_answer=not args.live_answer,
+        )
+        report = {
+            "mode": args.mode,
+            "suite": args.suite,
+            "answer_mode": (
+                "live-llm" if args.live_answer else "deterministic-template"
+            ),
+            **golden_suite_report(golden_suite),
+            "query_contract": contract_report,
+        }
+        suite_ok = golden_suite.ok
+        unstable_cases = 0
+    elif args.suite == "product":
         product_scenarios = load_product_eval_scenarios(fixture_path)
         if args.case_filter:
             product_scenarios = [
@@ -267,10 +303,24 @@ def main() -> None:
         printed_report = report
     print(json.dumps(printed_report, ensure_ascii=False, indent=2))
 
-    if args.mode == "live-llm" or args.suite == "product":
+    if args.mode == "live-llm" or args.suite in {"product", "golden"}:
         failure_path = Path(args.failure_output)
         failure_path.parent.mkdir(parents=True, exist_ok=True)
-        if args.suite == "product":
+        if args.suite == "golden":
+            failure_payload = {
+                "mode": args.mode,
+                "suite": args.suite,
+                "answer_mode": (
+                    "live-llm" if args.live_answer else "deterministic-template"
+                ),
+                **golden_suite_report(golden_suite, failures_only=True),
+                "query_contract": {
+                    key: value
+                    for key, value in contract_report.items()
+                    if key != "results"
+                },
+            }
+        elif args.suite == "product":
             failure_payload = {
                 "mode": args.mode,
                 "suite": args.suite,

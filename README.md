@@ -627,6 +627,22 @@ cd backend
 
 `product` suite 使用生产一致的消息和最近运行记录连续执行完整回答，分别统计意图、事实接地、事实完整性、上下文承接、投资合规、用户表达和响应延迟。失败轮次按维度写入本地 `backend/data/agent_eval_failures.json`，不进入聊天界面，也不提交到 Git。
 
+运行 50 条真实问法组成的 Golden Dataset 四层端到端评测：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py --suite golden --mode offline --summary-only
+```
+
+金标文件为 `backend/tests/fixtures/agent_golden_dataset.json`，版本号独立维护，完整约定见 [Agent Golden Dataset 与四层端到端评测](docs/Agent_Golden_Eval.md)。每条 case 固定保存 `question`、`expected_capabilities`、`required_tools`、`expected_parameters`、`required_facts`、`must_include`、`must_not_include` 和 `allow_refusal`，并可用 `conversation_id` 串联多轮上下文、用 `simulate_tool_failure` 做确定性故障注入。报告不会只给一个最终答案分数，而是分别回答：Planner 是否理解正确、工具是否按参数执行、事实是否有工具证据、最终回答是否完整合规。`required_facts` 是必须出现在成功工具结构化输出中的事实片段，不从答案文本反推事实。
+
+离线模式用于可重复地检查后端确定性路径；真实 Planner 与最终 Answer 模型验收使用：
+
+```powershell
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py --suite golden --mode live-llm --live-answer --fail-on-failures
+```
+
+失败明细按 `planner`、`tool_execution`、`grounding`、`answer` 四层写入 `backend/data/agent_eval_failures.json`。Golden Dataset 是质量基线，不为追求通过率放宽契约；新增真实 Bad Case 时先补金标，再修对应层。
+
 运行 138 条自然语言改写的真实 Planner 三轮评测：
 
 ```powershell
