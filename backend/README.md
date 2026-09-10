@@ -273,7 +273,7 @@ python -m unittest discover -s tests
 
 Chat Eval V2 evaluates Query Understanding, raw Planner output, Tool Policy,
 frozen tool Execution, Grounding, Final Answer and Efficiency independently.
-The public Dev split has 120 cases; a private 40-case Holdout is injected with
+The public Dev split has 89 cases; a private 40-case Holdout is injected with
 `LIMITUPLAB_EVAL_HOLDOUT_PATH`.
 
 The retired 50-case Golden was reviewed item by item in

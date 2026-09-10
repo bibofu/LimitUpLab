@@ -14,14 +14,15 @@ gates. Reports do not manufacture a weighted overall score.
 ## Dataset and frozen facts
 
 The committed Dev split is
-`backend/tests/fixtures/agent_chat_eval_dev_v2.json`; it contains exactly 120
-cases: 69 capability basics (three for each of 23 V1 capabilities), 18 multi-turn,
-12 composite, 9 empty/partial/error, 6 safety and 6 ambiguity/out-of-scope cases.
+`backend/tests/fixtures/agent_chat_eval_dev_v2.json`; it contains exactly 89
+cases: 46 capability basics (two materially different cases for each of 23 V1
+capabilities), 12 multi-turn, 10 composite, 9 empty/partial/error, 6 safety and
+6 ambiguity/out-of-scope cases.
 The private Holdout contains 40 cases and is loaded only from
 `LIMITUPLAB_EVAL_HOLDOUT_PATH`. Dev and Holdout duplicates are rejected.
-Together the two splits contain 92 capability basics, exactly four for each V1
-capability, plus 24 multi-turn, 16 composite, 12 failure, 8 safety and 8
-ambiguity/out-of-scope cases.
+Together the current splits contain 129 cases. Holdout remains private and keeps
+one capability case per V1 capability; Dev intentionally no longer pads its size
+with low-value paraphrases.
 
 Every case has a timezone-aware `anchor_datetime`. Relative words such as today,
 yesterday and previous trading day are resolved from that anchor, never from the
@@ -30,11 +31,18 @@ machine clock. Tool output comes from the versioned
 the current database, network, or market. Expected facts use the relation tuple
 `(entity, date, metric, value, source_path)`.
 
-The 120-case Dev artifact currently has non-empty Query View goldens on all cases,
-tool-parameter goldens on 108 cases, and relation evidence for every usable
+The 89-case Dev artifact has non-empty Query View goldens on all cases,
+tool-parameter goldens on every case that requires a tool, and relation evidence for every usable
 `ok`/`partial` required tool. The generator is deterministic and checked by the
 dataset loader; generated output is still reviewed and committed as the public
 Golden artifact.
+
+Tool expectations distinguish `required_tools`, `optional_tools` and
+`forbidden_tools`. Optional tools are useful alternative or enrichment paths and
+do not become mandatory merely because one author preferred them. Forbidden tools
+are listed only when they would substitute the wrong evidence domain or violate a
+boundary. Failure observations are injected by fixture `case_overrides`; user
+questions remain ordinary business questions.
 
 The retired 50-case V1 artifact was not copied wholesale. The review disposition
 for every `G001` through `G050` is recorded in
@@ -78,7 +86,7 @@ cd backend
 .\.venv\Scripts\python.exe scripts\run_agent_eval.py --dataset dev --mode offline --trials 1 --summary-only
 ```
 
-Nightly live stratified sample (40 cases, three trials):
+Nightly live stratified sample (up to 40 cases, three trials):
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_agent_eval.py --dataset dev --mode live --sample-size 40 --trials 3 --seed night-1

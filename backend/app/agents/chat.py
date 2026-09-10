@@ -1383,6 +1383,18 @@ def _generate_llm_query_plan(
         tool_calls,
         allowed_tool_names=tools.enabled_tool_names,
     )
+    # The standalone planner API is also used by live eval. Compile the same
+    # deterministic limit-up Query Contract that the production execution path
+    # applies, so capability-first plans retain date/board/status/list semantics.
+    if any(call.get("name") == "limit_up_events" for call in tool_calls) and (
+        _looks_like_general_limit_up_question(request.message)
+        or looks_like_limit_up_sector_summary_question(request.message)
+        or looks_like_named_limit_up_sector_list_question(request.message)
+    ):
+        compiled_arguments = _limit_up_query_arguments_from_message(request)
+        for call in tool_calls:
+            if call.get("name") == "limit_up_events":
+                call["arguments"] = compiled_arguments
     # Capability-first plans intentionally carry no raw arguments. Re-run the
     # deterministic compiler after tool injection so explicit user windows survive.
     tool_calls = _normalize_daily_board_promotion_tool_calls(

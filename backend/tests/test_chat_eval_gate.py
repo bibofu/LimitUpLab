@@ -6,8 +6,8 @@ from app.agents.chat_eval_gate import evaluate_release_gate
 def _release_report() -> dict:
     return {
         "mode": "live",
-        "case_count": 160,
-        "trial_count": 480,
+        "case_count": 129,
+        "trial_count": 387,
         "judge_enabled": True,
         "judge_calibration": {"passed": True},
         "pass_at_1": 0.96,

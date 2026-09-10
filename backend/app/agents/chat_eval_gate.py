@@ -88,8 +88,8 @@ def _mature_failures(report: dict[str, Any]) -> list[str]:
     failures = _critical_failures(report)
     if report.get("trial_count") != report.get("case_count", 0) * 3:
         failures.append("release eval requires exactly three trials per case")
-    if report.get("case_count") != 160:
-        failures.append("release eval requires Dev + Holdout (160 cases)")
+    if report.get("case_count") != 129:
+        failures.append("release eval requires Dev + Holdout (129 cases)")
     if not report.get("judge_enabled"):
         failures.append("release eval requires the configured LLM Judge")
     if not report.get("judge_calibration", {}).get("passed"):

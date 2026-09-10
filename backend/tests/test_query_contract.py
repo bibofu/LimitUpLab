@@ -15,6 +15,27 @@ from app.agents.query_contract import (
 
 class QueryContractV2Test(unittest.TestCase):
 
+    def test_broad_limit_structure_does_not_invent_one_event_type(self) -> None:
+        view = build_query_understanding_view("总结今天的涨跌停结构")
+
+        self.assertNotIn("event_type", view)
+        self.assertEqual(view["result_mode"], "summary")
+
+    def test_review_top10_is_summary_not_a_ranking_request(self) -> None:
+        view = build_query_understanding_view("复盘最近高分Top10后续表现")
+
+        self.assertEqual(view["result_mode"], "summary")
+
+    def test_plain_how_many_is_a_count_request(self) -> None:
+        view = build_query_understanding_view("截至今天首板晋级二板的有多少？")
+
+        self.assertEqual(view["result_mode"], "count")
+
+    def test_named_sector_is_exposed_in_query_view(self) -> None:
+        view = build_query_understanding_view("比较半导体板块走势和强势股")
+
+        self.assertEqual(view["sector"], "半导体")
+
     def test_multi_turn_query_view_retains_referenced_date_and_market(self) -> None:
         with query_reference_date_override(date(2026, 5, 15)):
             previous_day = build_conversation_query_understanding_view(

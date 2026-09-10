@@ -620,6 +620,8 @@ def extract_market_event_type(message: str) -> MarketEventType | None:
     """Recognize price-limit event semantics across common Chinese wording."""
 
     compact = re.sub(r"[\s，。！？,.!?]", "", message).lower()
+    if "涨跌停" in compact or ("涨停" in compact and "跌停" in compact):
+        return None
     limited_drop_stock_query = "跌幅限制" in compact and any(
         term in compact for term in ("股票", "个股", "票", "名单", "几只", "多少只")
     )
@@ -711,9 +713,16 @@ def normalize_event_status(value: object) -> EventStatus | None:
 def extract_result_mode(message: str) -> ResultMode | None:
     """Extract whether the user wants a list, count, summary or ranking."""
 
-    if any(term in message for term in ("多少只", "有几只", "数量", "共几只", "一共几只")):
+    if any(term in message for term in ("多少", "有几只", "数量", "共几只", "一共几只")):
         return "count"
-    if any(term in message for term in ("主要板块", "行业分布", "题材分布", "分类", "概况", "总结")):
+    if any(
+        term in message
+        for term in (
+            "主要板块", "行业分布", "题材分布", "分类", "概况", "总结",
+            "汇总", "统计", "复盘", "审计", "比较", "共性", "共同特征",
+            "整体市场", "市场环境",
+        )
+    ):
         return "summary"
     if re.search(r"(?:top\s*\d+|前\s*\d+|前几)", message, flags=re.IGNORECASE) or any(
         term in message for term in ("最高", "最低", "最早", "最晚", "排序", "排名")
@@ -814,6 +823,8 @@ def extract_topic_query(message: str) -> str | None:
     )
     compact = re.sub(r"\s+", "", date_neutral)
     patterns = (
+        r"([A-Za-z0-9\u4e00-\u9fff]{1,12}?)(?:板块|行业|题材|概念)(?=今天|近期|近\d|哪些|表现|走势|成分|行情|中|里|的|涨跌|$)",
+        r"([A-Za-z0-9\u4e00-\u9fff]{1,12}?)成分股",
         r"(?:票|股票|涨停股)(?:里|中|里面)([A-Za-z0-9\u4e00-\u9fff]{1,12}?)(?:相关|题材|概念|板块|行业)",
         r"([A-Za-z0-9\u4e00-\u9fff]{1,12}?)(?:相关|题材|概念|板块|行业)(?:的)?(?:首板|涨停)",
     )
@@ -829,6 +840,7 @@ def extract_topic_query(message: str) -> str | None:
         "创业板",
         "科创板",
         "主板",
+        "那个",
     }
     for pattern in patterns:
         match = re.search(pattern, compact, flags=re.IGNORECASE)
@@ -843,6 +855,7 @@ def _clean_topic_candidate(value: str) -> str:
     """Remove time/scope words captured before a named sector or theme."""
 
     candidate = value.strip("的与和")
+    candidate = re.sub(r"^(?:并)?(?:比较|分析|查询|看看|看一下)", "", candidate)
     candidate = re.sub(
         r"^(?:(?:近|最近|过去)\d{1,2}个?交易日|近期|最近|近来|今天|今日|当前|本周)+",
         "",

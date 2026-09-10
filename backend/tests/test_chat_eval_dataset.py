@@ -44,6 +44,7 @@ def _case_payload(
             "query": {},
             "allowed_capability_sets": [[capability]],
             "required_tools": [],
+            "optional_tools": [],
             "forbidden_tools": [],
             "tool_parameters": {},
             "policy_repairs": {},
@@ -57,7 +58,7 @@ def _case_payload(
 
 def _dataset_payload(split: str) -> dict:
     capabilities = list(available_capability_names(V1_CLOSED_MARKET_TOOL_NAMES))
-    per_capability = 3 if split == "dev" else 1
+    per_capability = 2 if split == "dev" else 1
     distribution = (
         DEV_PRIMARY_TYPE_COUNTS
         if split == "dev"
@@ -115,24 +116,25 @@ def test_loader_accepts_exact_dev_distribution(tmp_path: Path) -> None:
     dataset = load_chat_eval_dataset(
         _write_dataset(tmp_path, "dev"), expected_split="dev"
     )
-    assert len(dataset.cases) == 120
+    assert len(dataset.cases) == 89
     assert dataset.version == CHAT_EVAL_DATASET_VERSION
 
 
-def test_committed_dev_dataset_covers_every_v1_capability_three_times() -> None:
+def test_committed_dev_dataset_covers_every_v1_capability_twice() -> None:
     dataset = load_dev_dataset()
     capability_cases = [
         case for case in dataset.cases if case.primary_type == "capability_base"
     ]
     observed = [case.expected.allowed_capability_sets[0][0] for case in capability_cases]
     capabilities = set(available_capability_names(V1_CLOSED_MARKET_TOOL_NAMES))
-    assert len(dataset.cases) == 120
+    assert len(dataset.cases) == 89
     assert set(observed) == capabilities
-    assert all(observed.count(capability) == 3 for capability in capabilities)
+    assert all(observed.count(capability) == 2 for capability in capabilities)
     assert all(case.expected.query for case in dataset.cases)
-    assert sum(bool(case.expected.tool_parameters) for case in dataset.cases) >= 100
-    assert sum(len(case.expected.evidence_claims) for case in dataset.cases) >= 100
-    assert all(case.expected.forbidden_tools for case in dataset.cases)
+    assert sum(bool(case.expected.tool_parameters) for case in dataset.cases) >= 70
+    assert sum(len(case.expected.evidence_claims) for case in dataset.cases) >= 75
+    assert any(case.expected.optional_tools for case in dataset.cases)
+    assert any(not case.expected.forbidden_tools for case in dataset.cases)
     for case in dataset.cases:
         for claim in case.expected.evidence_claims:
             tool = claim.source_path.partition(".")[0]
@@ -173,7 +175,7 @@ def test_v1_migration_manifest_individually_disposes_all_50_cases() -> None:
 
 def test_loader_rejects_distribution_drift(tmp_path: Path) -> None:
     payload = _dataset_payload("dev")
-    payload["cases"][69]["primary_type"] = "composite"
+    payload["cases"][46]["primary_type"] = "composite"
     path = tmp_path / "bad.json"
     path.write_text(json.dumps(payload, ensure_ascii=False), encoding="utf-8")
     with pytest.raises(ValueError, match="distribution"):
@@ -189,7 +191,7 @@ def test_case_rejects_naive_anchor_and_overlapping_tools() -> None:
     payload = _case_payload(1, "limit_up_pool")
     payload["expected"]["required_tools"] = ["limit_up_events"]
     payload["expected"]["forbidden_tools"] = ["limit_up_events"]
-    with pytest.raises(ValueError, match="both required and forbidden"):
+    with pytest.raises(ValueError, match="must be disjoint"):
         ChatEvalCase.model_validate(payload)
 
 
@@ -212,5 +214,5 @@ def test_all_selection_combines_dev_and_private_holdout(
         "app.agents.chat_eval_dataset.DEV_DATASET_PATH", dev_path
     )
     cases = load_dataset_selection("all")
-    assert len(cases) == 160
+    assert len(cases) == 129
     assert {case.dataset for case in cases} == {"dev", "holdout"}

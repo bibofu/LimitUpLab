@@ -89,7 +89,9 @@ class RunRepositoryStub:
 
 
 def _limit_up_case():
-    return load_dev_dataset().cases[27]
+    return next(
+        case for case in load_dev_dataset().cases if case.case_id == "CEV2-D028"
+    )
 
 
 def test_fixture_covers_every_required_dev_tool():
@@ -124,8 +126,8 @@ def test_offline_replay_runs_all_dev_cases_and_planner_is_na():
         trials=1,
         seed="offline",
     )
-    assert report["case_count"] == 120
-    assert report["passed_cases"] == 120
+    assert report["case_count"] == 89
+    assert report["passed_cases"] == 89
     assert report["planner_metrics"]["applicable_trials"] == 0
     assert report["capability_metrics"]["macro_f1"] is None
     assert report["stable_3_of_3_rate"] is None

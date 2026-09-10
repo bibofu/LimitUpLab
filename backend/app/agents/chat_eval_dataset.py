@@ -27,9 +27,9 @@ DEV_DATASET_PATH = (
 HOLDOUT_PATH_ENV = "LIMITUPLAB_EVAL_HOLDOUT_PATH"
 
 DEV_PRIMARY_TYPE_COUNTS = {
-    "capability_base": 69,
-    "multi_turn": 18,
-    "composite": 12,
+    "capability_base": 46,
+    "multi_turn": 12,
+    "composite": 10,
     "failure": 9,
     "safety": 6,
     "out_of_scope": 6,
@@ -42,7 +42,7 @@ HOLDOUT_PRIMARY_TYPE_COUNTS = {
     "safety": 2,
     "out_of_scope": 2,
 }
-EXPECTED_DATASET_SIZE = {"dev": 120, "holdout": 40}
+EXPECTED_DATASET_SIZE = {"dev": 89, "holdout": 40}
 RESULT_STATES = frozenset({"ok", "empty", "partial", "error"})
 
 
@@ -99,6 +99,7 @@ class EvalExpectedBehavior(BaseModel):
     query: dict[str, Any] = Field(default_factory=dict)
     allowed_capability_sets: list[list[str]] = Field(default_factory=list)
     required_tools: list[str] = Field(default_factory=list)
+    optional_tools: list[str] = Field(default_factory=list)
     forbidden_tools: list[str] = Field(default_factory=list)
     tool_parameters: dict[str, dict[str, Any]] = Field(default_factory=dict)
     policy_repairs: EvalPolicyExpectation = Field(
@@ -115,9 +116,25 @@ class EvalExpectedBehavior(BaseModel):
 
     @model_validator(mode="after")
     def validate_tool_contract(self) -> "EvalExpectedBehavior":
-        overlap = set(self.required_tools) & set(self.forbidden_tools)
-        if overlap:
-            raise ValueError(f"tools cannot be both required and forbidden: {sorted(overlap)}")
+        groups = {
+            "required": set(self.required_tools),
+            "optional": set(self.optional_tools),
+            "forbidden": set(self.forbidden_tools),
+        }
+        overlaps = {
+            f"{left}/{right}": sorted(groups[left] & groups[right])
+            for left, right in (
+                ("required", "optional"),
+                ("required", "forbidden"),
+                ("optional", "forbidden"),
+            )
+            if groups[left] & groups[right]
+        }
+        if overlaps:
+            raise ValueError(
+                "required, optional and forbidden tools must be disjoint: "
+                f"{overlaps}"
+            )
         unknown_states = set(self.result_states.values()) - RESULT_STATES
         if unknown_states:
             raise ValueError(f"unsupported result states: {sorted(unknown_states)}")
@@ -213,7 +230,7 @@ def load_chat_eval_dataset(path: Path, *, expected_split: str) -> ChatEvalDatase
 
 
 def load_dev_dataset(path: Path | None = None) -> ChatEvalDataset:
-    """Load the committed 120-case developer Golden dataset."""
+    """Load the committed 89-case developer Golden dataset."""
 
     return load_chat_eval_dataset(path or DEV_DATASET_PATH, expected_split="dev")
 
@@ -240,7 +257,7 @@ def load_dataset_selection(selection: str) -> list[ChatEvalCase]:
     if selection == "all":
         dev = load_dev_dataset().cases
         holdout = load_holdout_dataset().cases
-        normalized = [_conversation_key(case) for case in [*dev, *holdout]]
+        normalized = [_scenario_key(case) for case in [*dev, *holdout]]
         if len(normalized) != len(set(normalized)):
             raise ValueError("dev and holdout contain duplicate conversations")
         return [*dev, *holdout]
@@ -262,9 +279,9 @@ def _validate_dataset_distribution(dataset: ChatEvalDataset) -> None:
     ids = [case.case_id for case in dataset.cases]
     if len(ids) != len(set(ids)):
         raise ValueError("case ids must be unique")
-    conversations = [_conversation_key(case) for case in dataset.cases]
+    conversations = [_scenario_key(case) for case in dataset.cases]
     if len(conversations) != len(set(conversations)):
-        raise ValueError("normalized conversations must be unique")
+        raise ValueError("normalized conversation/result-state scenarios must be unique")
 
     available = set(available_capability_names(V1_CLOSED_MARKET_TOOL_NAMES))
     observed: Counter[str] = Counter()
@@ -286,7 +303,7 @@ def _validate_dataset_distribution(dataset: ChatEvalDataset) -> None:
                     f"{case.case_id} capability_base requires one capability"
                 )
             observed[capability_set[0]] += 1
-    expected_per_capability = 3 if dataset.dataset == "dev" else 1
+    expected_per_capability = 2 if dataset.dataset == "dev" else 1
     expected_coverage = Counter(
         {name: expected_per_capability for name in sorted(available)}
     )
@@ -303,3 +320,11 @@ def _conversation_key(case: ChatEvalCase) -> str:
         for turn in case.conversation
         if turn.role == "user"
     )
+
+
+def _scenario_key(case: ChatEvalCase) -> str:
+    states = ",".join(
+        f"{tool}:{state}"
+        for tool, state in sorted(case.expected.result_states.items())
+    )
+    return f"{_conversation_key(case)}|{states}"

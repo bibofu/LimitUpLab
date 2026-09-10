@@ -428,6 +428,9 @@ def _evaluate_policy(case: ChatEvalCase, response: AgentChatResponse) -> EvalSta
     ]
     repairs = list(audit.backend_repaired_tools)
     expected = case.expected.policy_repairs
+    allowed_tools = set(case.expected.required_tools) | set(
+        case.expected.optional_tools
+    )
     missing_from_planner = [
         name for name in case.expected.required_tools if name not in planner_tools
     ]
@@ -456,8 +459,8 @@ def _evaluate_policy(case: ChatEvalCase, response: AgentChatResponse) -> EvalSta
         for name in repairs
         if (
             name in expected.forbidden_repairs
-            or name not in case.expected.required_tools
-            or not repair_needed
+            or name not in allowed_tools
+            or (name in case.expected.required_tools and not repair_needed)
         )
     ]
     failures.extend(f"harmful policy repair: {name}" for name in harmful)
@@ -529,6 +532,9 @@ def _evaluate_execution(
     parameter_failures = 0
     state_checks = 0
     state_failures = 0
+    executed_optional_tools = sum(
+        tool in evidence for tool in case.expected.optional_tools
+    )
     for tool in case.expected.required_tools:
         trace = evidence.get(tool)
         if trace is None:
@@ -563,6 +569,8 @@ def _evaluate_execution(
             "executed_forbidden_tools": sum(
                 tool in evidence for tool in case.expected.forbidden_tools
             ),
+            "optional_tool_count": len(case.expected.optional_tools),
+            "executed_optional_tools": executed_optional_tools,
             "parameter_field_count": parameter_fields,
             "correct_parameter_fields": max(0, parameter_fields - parameter_failures),
             "result_state_count": state_checks,

@@ -432,3 +432,53 @@ Evidence 遍历现在会从同一记录的 `metric` 为 `value` 传入类型提�
 5. 页面已有能力被 Agent 复用时，验证两端候选集合与筛选口径一致。
 6. 服务重启后用真实 HTTP 请求验证用户原始问题，并核对契约版本。
 7. 对数据源冲突保留专项样本，例如智慧农业，防止同类错误再次出现。
+
+---
+
+## BC-014：Live Eval 的 capability-first 涨停计划丢失 Query 参数
+
+### 现象
+
+真实 Planner 只返回 `limit_up_pool` capability 时，生产问答会在执行前补齐日期、板数、
+状态和结果模式，但独立 `plan_agent_query`（Live Eval 使用）只生成空参数的
+`limit_up_events`。因此正确 Golden 会报告 `trade_date`、`board_height`、
+`event_status` 和 `result_mode` 缺失。
+
+### 根因与修复
+
+独立规划接口没有复用生产链路已有的确定性 Limit-Up Query Contract 编译步骤。
+修复后，Planner 注入 capability 工具后立即编译同一份参数契约；Live Eval 不再依靠
+Golden 参数反向填充执行，而是观察真实规划输出。
+
+### 防回归
+
+- `CEV2-D028` 保留首板日期、板数、状态和列表模式的正确参数期望。
+- Live Planner 替身只返回 capability，执行层仍必须拿到完整参数。
+- Offline fixture 与 Live Eval 使用同一正确 Golden，不通过删除参数断言换取全绿。
+
+---
+
+## BC-015：Query View 将“涨跌停结构”和“复盘Top10”误标为单一事件/排名
+
+### 现象
+
+“把涨跌停结构放在一起总结”被解析为 `event_type=limit_down`；“复盘最近高分
+Top10 后续表现”因为包含 `Top10` 被解析为排名请求。类似“有多少”但未带“只”
+的问法也被默认成列表。
+
+### 修复
+
+Query Contract 现在把同时包含涨停和跌停的表达视为综合结构，不强行选择一个事件；
+复盘、审计、比较、统计和汇总优先归为 summary；一般“多少”归为 count。新增专项
+Query Contract 测试，并重新生成独立审计后的 Dev Golden。
+
+---
+
+## BC-016：具名板块问题的 Query View 缺失 sector
+
+### 现象与修复
+
+“半导体板块今天表现如何”“半导体成分股近10日趋势”虽然工具参数能带 sector，
+Query Understanding trace 却没有该字段，生成式 Golden 又会静默接受缺失。
+Query Contract 现对明确的“板块/行业/题材/概念/成分股”结构做保守抽取，拒绝“那个
+板块”等歧义词；dataset consistency test 从问题文本独立核对 sector，避免解析器自证。

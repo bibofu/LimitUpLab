@@ -82,13 +82,18 @@ class FrozenToolFixture:
         self.path = path
         self.anchor_date = str(payload.get("anchor_date") or "")
         self.tools: dict[str, dict[str, Any]] = payload["tools"]
+        self.entities: dict[str, dict[str, str]] = dict(payload.get("entities") or {})
+        self.case_overrides: dict[str, dict[str, Any]] = dict(
+            payload.get("case_overrides") or {}
+        )
 
     def trace(
         self,
         tool: str,
         *,
         arguments: dict[str, Any],
-        result_state: str,
+        result_state: str | None = None,
+        case_id: str | None = None,
     ) -> AgentToolTrace:
         fixture = self.tools.get(tool)
         if fixture is None:
@@ -105,7 +110,13 @@ class FrozenToolFixture:
                     payload={},
                 ),
             )
-        state = result_state if result_state in {"ok", "empty", "partial", "error"} else "ok"
+        override = self.case_overrides.get(case_id or "", {}).get(tool, {})
+        injected_state = override.get("result_state", result_state)
+        state = (
+            injected_state
+            if injected_state in {"ok", "empty", "partial", "error"}
+            else "ok"
+        )
         payload = dict(fixture.get("payload") or {})
         source_errors: list[str] = []
         if state == "empty":
@@ -390,6 +401,7 @@ def _run_case(
                     tool,
                     arguments=case.expected.tool_parameters.get(tool, {}),
                     result_state=case.expected.result_states.get(tool, "ok"),
+                    case_id=case.case_id,
                 )
                 for tool in final_tools
             ],
@@ -453,6 +465,7 @@ def _run_case(
                     tool,
                     arguments=dict(call.get("arguments") or {}),
                     result_state=case.expected.result_states.get(tool, "ok"),
+                    case_id=case.case_id,
                 )
             )
         traces.append(query_trace)

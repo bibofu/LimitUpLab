@@ -23,6 +23,7 @@ def _case(**expected_updates) -> ChatEvalCase:
         "query": {"trade_date": "2026-05-15", "market": "chinext"},
         "allowed_capability_sets": [["limit_up_pool"]],
         "required_tools": ["limit_up_events"],
+        "optional_tools": [],
         "forbidden_tools": ["stock_news"],
         "tool_parameters": {
             "limit_up_events": {
@@ -215,6 +216,18 @@ def test_unneeded_policy_repair_is_harmful() -> None:
     policy = result.stages["tool_policy"]
     assert policy.status == "fail"
     assert policy.metrics["harmful_repair_count"] == 1
+
+
+def test_optional_tool_is_allowed_without_becoming_a_required_path() -> None:
+    case = _case(optional_tools=["stock_news"], forbidden_tools=[])
+    response = _response(repairs=["stock_news"])
+    response.tool_policy.final_tool_calls.append("stock_news")
+
+    result = evaluate_chat_response(case, response, mode="live")
+
+    policy = result.stages["tool_policy"]
+    assert policy.status == "pass"
+    assert policy.metrics["harmful_repair_count"] == 0
 
 
 def test_needed_policy_repair_is_reported_separately_from_planner_failure() -> None:
