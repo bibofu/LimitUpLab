@@ -600,7 +600,7 @@ backend/.venv/Scripts/python.exe scripts/check_project.py
 
 Linux 使用对应虚拟环境的 `python scripts/check_project.py`。也可通过 `--scope backend` 或 `--scope frontend` 单独验收一侧。
 
-该入口依次运行完整 pytest、Golden 离线 Eval、全部前端逻辑测试以及 TypeScript/Vite 生产构建。每次使用独立数据库和测试目录，关闭真实 LLM，并在 `output/validation/<运行标识>/` 保存各步骤日志、JUnit 和 `summary.json`。任一步失败都会使整体退出码非零，但其余独立检查仍会执行。它不替代浏览器端业务验收、真实模型评测、部署检查或压力测试。
+该入口依次运行完整 pytest、Chat Eval V2 的 120-case Dev 离线契约门禁、全部前端逻辑测试以及 TypeScript/Vite 生产构建。每次使用独立数据库和测试目录，关闭真实 LLM，并在 `output/validation/<运行标识>/` 保存各步骤日志、JUnit 和 `summary.json`。任一步失败都会使整体退出码非零，但其余独立检查仍会执行。它不替代浏览器端业务验收、真实模型评测、部署检查或压力测试。
 
 GitHub Actions 配置在 `.github/workflows/validate.yml`，对 PR、main 与 codex 分支推送运行 Windows/Linux 两套检查，使用相同验收入口，不需要行情或模型密钥。失败日志保留 7 天；测试数据库不上传。流水线文件进入远端仓库后才能实际触发，分支保护仍需在仓库设置中启用。
 
@@ -613,34 +613,30 @@ cd backend
 .\.venv\Scripts\python.exe -m pytest tests -q -p no:cacheprovider
 ```
 
-运行唯一的 Agent Golden Dataset 离线评测（默认 suite 为 golden）：
+运行 Chat Eval V2 的公开 Dev 契约集：
 
 ```powershell
 .\.venv\Scripts\python.exe scripts\run_agent_eval.py --mode offline --summary-only
 ```
 
-唯一金标文件为 `backend/tests/fixtures/agent_golden_dataset.json`，当前保留 50 条用例及原有期望。完整契约见 [Agent Golden Dataset 与四层端到端评测](docs/Agent_Golden_Eval.md)。CLI、`/api/agents/eval` 和启用离线评测的系统健康检查均使用这一个数据集；多轮由 `conversation_id` 关联，工具故障由 `simulate_tool_failure` 注入。
+公开金标为 `backend/tests/fixtures/agent_chat_eval_dev_v2.json`，共 120 case；私有 40-case Holdout 通过 `LIMITUPLAB_EVAL_HOLDOUT_PATH` 注入。工具事实来自版本化 `agent_chat_eval_tool_fixture_v2.json`，不读取当前数据库或网络。原 50 题的逐题去向记录在 `agent_chat_eval_v1_migration.json`，冲突题不会直接进入 V2。完整契约见 [LimitUpLab Chat Eval V2](docs/Agent_Golden_Eval.md)。
 
-报告分别列出 Planner、Tool Execution、Grounding、Answer 四层结果。离线失败返回非零退出码，CI 如实失败；接口仍返回真实通过数、失败数及带层名的失败详情。2026-09-10 清理前的隔离基线为 19/50 通过，不应将既有失败隐藏或修改金标来制造通过。
+报告分别列出 Query Understanding、Planner、Tool Policy、Execution、Grounding、Final Answer、Efficiency 七层结果。离线 Planner 明确为 N/A，只验证确定性解析、Policy、冻结执行、接地和答案契约，不冒充模型能力。
 
 定向检查用例或分类：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --case-filter G002
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --case-filter aggregation
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py --case-filter CEV2-D001
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py --case-filter limit_up_pool
 ```
 
 真实 Planner 与最终 Answer 模型验收：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --mode live-llm --live-answer --fail-on-failures
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py --dataset dev --mode live --sample-size 40 --trials 3 --seed night-1
 ```
 
-CLI 只接受 `golden` suite，每次执行所选用例一次。`--live-answer` 仅在 `live-llm` 模式可用；不启用时答案使用确定性模板。Windows CLI 继续读取配置的模型环境，并处理代理配置。
-
-失败报告默认写入本地 `backend/data/agent_eval_failures.json`，也可通过 `--failure-output` 指定路径；生成报告不提交到 Git。共享验收入口将本次 Golden 报告放在独立的 `output/validation/<运行标识>/`。本次删除的是历史报告，后续运行仍可生成新报告。
-
-本次清理没有合并旧题库或升级评测标准。Query Contract 等组件的独立代码测试继续运行；未来新增 Agent 金标只维护 Golden Dataset，并遵守其当前加载契约。
+发布前使用 `--dataset all --mode live --trials 3 --judge`，并配置私有 Holdout、固定 Judge 模型和批准基线。`online-shadow` 每周只读已保存的真实 trace，不改变用户答案。完整报告写入 `output/agent-eval/<run_id>/`；`GET /api/agents/eval` 只读取最近一次完成报告，系统健康最多运行 12 条 smoke case。
 
 前端生产构建：
 

@@ -271,69 +271,41 @@ python -m unittest discover -s tests
 
 ## Agent Evals
 
-The chat Agent has deterministic regression suites for common questions,
-safety boundaries, and Query Contract v2. They check intent routing,
-required/forbidden tool calls, canonical limit-up filters, exact result sets,
-answer facts, warnings, and investment-advice guardrails without depending on a
-live LLM provider:
+Chat Eval V2 evaluates Query Understanding, raw Planner output, Tool Policy,
+frozen tool Execution, Grounding, Final Answer and Efficiency independently.
+The public Dev split has 120 cases; a private 40-case Holdout is injected with
+`LIMITUPLAB_EVAL_HOLDOUT_PATH`.
+
+The retired 50-case Golden was reviewed item by item in
+`tests/fixtures/agent_chat_eval_v1_migration.json`; date, fixture, scope and
+relation-evidence conflicts are rejected rather than silently copied into V2.
 
 ```powershell
 cd backend
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py --dataset dev --mode offline --trials 1 --summary-only
 ```
 
-Chat cases live in `tests/fixtures/agent_eval_cases.json`; the 36 paraphrase and
-parameter-precedence cases for Query Contract v2 live in
-`tests/fixtures/query_contract_v2_cases.json`.
-
-For an end-to-end product gate, run 10 production-like conversations with 30
-complete user-visible answers:
+Offline mode replays deterministic plans and versioned tool facts. Raw Planner
+accuracy is N/A. Live mode invokes the real Planner and Answer model while keeping
+the tool facts frozen:
 
 ```powershell
 cd backend
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --suite product --mode offline --summary-only
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py --dataset dev --mode live --sample-size 40 --trials 3 --seed night-1
 ```
 
-The product suite measures intent accuracy, tool use, deterministic claim
-grounding, context continuity, data-warning compliance, over-refusal, hallucination
-after tool failures, safety, presentation, and response latency. Numeric, date,
-time, stock-code, and `name(symbol)` claims are checked against structured
-`tool_results.output` evidence, including percentage rounding and 万/亿 unit
-conversion. Failure artifacts list every claim with its supporting evidence path;
-`fact_completeness_rate` remains as a compatibility alias for
-`claim_grounding_rate`. The suite writes its dimension-grouped local report to
-`backend/data/agent_eval_failures.json` even in offline mode; internal eval details
-are not rendered in the chat UI.
-
-Every data-tool trace also carries a normalized `result` envelope with
-`status=ok|empty|partial|error`, `data_fresh`, `source_errors`, and `payload`.
-The legacy execution `status` and `output` fields remain available for stored-run
-and frontend compatibility. `empty` means the query completed with no matching
-rows; it is never used for an upstream exception. Partial results remain usable
-but are disclosed in answer warnings, while error-only executions produce the
-fixed unanswerable response. The AKShare limit-up importer uses the same four-state
-contract, so a failed open-board source can no longer masquerade as an empty pool
-or erase previously persisted rows during a replace operation.
-
-To sample the configured live LLM planner and capture cases where the model
-chooses weak tools or needs backend repair:
+The full release command requires Dev + Holdout, three trials and an independent
+pinned Judge model:
 
 ```powershell
 cd backend
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --mode live-llm --summary-only
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py --dataset all --mode live --trials 3 --judge
 ```
 
-Live eval runs three Planner trials per case by default. A real
-`llm_tool_planner` trace is mandatory for LLM-eligible cases, so provider
-failures cannot silently pass through deterministic fallback. The report
-separates LLM coverage, required-tool accuracy, backend repair rate, pass rate,
-and cross-trial instability. Add `--live-answer --trials 1` for an end-to-end
-answer smoke test, or `--fail-on-failures --fail-on-unstable` for a strict gate.
-
-Live eval writes failed, unstable, or backend-repaired samples to
-`backend/data/agent_eval_failures.json` by default. This file is local output and
-is ignored by git. On Windows the CLI can hydrate a configured API key from the
-User/Machine environment scopes and remove the known dead proxy placeholder.
+Completed artifacts are written under `output/agent-eval/<run_id>/`. The API only
+reads `latest.json`; it never starts an evaluation. Online shadow mode samples
+already persisted traces without rerunning or exposing the original question.
+See `docs/Agent_Golden_Eval.md` for schema, Judge settings, metrics and gates.
 
 The chat Agent also exposes a general `limit_up_events` internal tool for
 same-day limit-up questions such as continued-board lists, board-height filters,
