@@ -110,6 +110,7 @@ def load_stock_intraday_history(
     if len(requested_dates) != len(trade_dates):
         raise ValueError("trade_dates must not contain duplicates")
     active_repository = repository or SQLiteFirstBoardRepository()
+    # The key compares trade date.
     closes = {
         item.trade_date: item.close
         for item in sorted(daily_bars, key=lambda item: item.trade_date)
@@ -120,6 +121,7 @@ def load_stock_intraday_history(
         earlier_dates = [item for item in ordered_daily_dates if item < trade_date]
         previous_closes[trade_date] = closes[earlier_dates[-1]] if earlier_dates else None
 
+    # Load the dated bar data for one day within the surrounding collection task.
     def load_day(trade_date: date) -> StockIntradayHistoryDay:
         try:
             bars = load_stock_intraday_bars(
@@ -377,6 +379,7 @@ def build_stock_kline_facts(
     )
 
 
+# Read cached stock bars through the requested end date.
 def _cached_bars(
     repository: SQLiteFirstBoardRepository,
     symbol: str,
@@ -396,6 +399,7 @@ def _normalize_cache_symbol(symbol: str) -> str:
     return value
 
 
+# Check whether cached bars satisfy the requested history length and date boundary.
 def _cache_can_serve(
     bars: list[StockDailyBar],
     days: int,
@@ -407,11 +411,13 @@ def _cache_can_serve(
     )
 
 
+# Return the lock shared by refreshes for the same stock and end date.
 def _refresh_lock_for(symbol: str, end_date: date) -> threading.Lock:
     index = hash((symbol, end_date)) % len(_REFRESH_LOCKS)
     return _REFRESH_LOCKS[index]
 
 
+# Check whether a recent refresh attempt already covers this history request.
 def _recent_refresh_covers(symbol: str, end_date: date, days: int) -> bool:
     now = monotonic()
     key = (symbol, end_date)
@@ -426,6 +432,7 @@ def _recent_refresh_covers(symbol: str, end_date: date, days: int) -> bool:
         return requested_days >= days
 
 
+# Record the refresh window so repeated requests can avoid immediate duplicate collection.
 def _record_refresh_attempt(symbol: str, end_date: date, days: int) -> None:
     now = monotonic()
     key = (symbol, end_date)
@@ -443,6 +450,7 @@ def _record_refresh_attempt(symbol: str, end_date: date, days: int) -> None:
                 _refresh_attempts.pop(item_key, None)
 
 
+# Convert an API K-line bar to the persistent daily-bar model.
 def _to_daily_bar(symbol: str, bar: StockKLineBar) -> StockDailyBar:
     return StockDailyBar(
         symbol=symbol,
@@ -459,6 +467,7 @@ def _to_daily_bar(symbol: str, bar: StockKLineBar) -> StockDailyBar:
     )
 
 
+# Convert a persistent daily bar to the K-line response model.
 def _to_kline_bar(bar: StockDailyBar) -> StockKLineBar:
     return StockKLineBar(
         trade_date=bar.trade_date,
@@ -472,18 +481,28 @@ def _to_kline_bar(bar: StockDailyBar) -> StockKLineBar:
     )
 
 
+# Average the requested closing-price window when enough bars are available.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _moving_average(bars: list[StockKLineBar], window: int) -> float | None:
     if len(bars) < window:
         return None
     return round(mean(item.close for item in bars[-window:]), 3)
 
 
+# Calculate percentage change over the requested historical window when the required bars are
+# available.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _period_return(bars: list[StockKLineBar], periods: int) -> float | None:
     if len(bars) <= periods or bars[-periods - 1].close == 0:
         return None
     return round((bars[-1].close / bars[-periods - 1].close - 1) * 100, 3)
 
 
+# Compare the latest volume with the historical baseline used by this K-line service.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _volume_ratio(bars: list[StockKLineBar]) -> float | None:
     if len(bars) < 6:
         return None
@@ -491,6 +510,9 @@ def _volume_ratio(bars: list[StockKLineBar]) -> float | None:
     return round(bars[-1].volume / baseline, 3) if baseline > 0 else None
 
 
+# Measure the largest peak-to-subsequent-decline observed in the supplied price history.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _max_drawdown(bars: list[StockKLineBar]) -> float | None:
     if not bars:
         return None
@@ -503,6 +525,7 @@ def _max_drawdown(bars: list[StockKLineBar]) -> float | None:
     return round(drawdown, 3)
 
 
+# Classify the current close relative to the available moving averages.
 def _trend_label(
     close: float,
     ma5: float | None,

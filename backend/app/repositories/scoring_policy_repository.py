@@ -18,6 +18,8 @@ from app.services.scoring_policy import (
 class SQLiteScoringPolicyRepository:
     """Persist Champion/Challenger policies independently from predictions."""
 
+    # Initialize SQLiteScoringPolicyRepository with the supplied dependencies and per-instance
+    # state.
     def __init__(self, database_path: Path | None = None) -> None:
         self.database_path = database_path
 
@@ -221,6 +223,7 @@ class SQLiteScoringPolicyRepository:
             return None
         return ScoringPolicyOptimizationResponse.model_validate_json(row["report_json"])
 
+    # Serialize a scoring policy and its structured fields for persistence.
     @staticmethod
     def _policy_record(policy: ScoringPolicy) -> tuple[object, ...]:
         return (
@@ -236,6 +239,7 @@ class SQLiteScoringPolicyRepository:
             policy.activated_at.isoformat() if policy.activated_at else None,
         )
 
+    # Reconstruct a scoring policy from its stored columns and JSON fields.
     @staticmethod
     def _policy_from_row(row) -> ScoringPolicy:
         return ScoringPolicy(
@@ -264,5 +268,6 @@ class SQLiteScoringPolicyRepository:
         )
 
 
+# Convert a date field to the representation required by this storage or source boundary.
 def _date_value(value: date | None) -> str | None:
     return value.isoformat() if value else None

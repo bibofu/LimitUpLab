@@ -56,6 +56,7 @@ class ReviewToolResult:
 class ReviewAgentToolbox:
     """Tools available to the Review Agent planner."""
 
+    # Initialize ReviewAgentToolbox with the supplied dependencies and per-instance state.
     def __init__(
         self,
         *,
@@ -198,6 +199,7 @@ class ReviewAgentToolbox:
             tracked_returns=tracked_returns,
         )
 
+    # Index saved predictions by their identifying fields for outcome matching.
     def _prediction_lookup(self) -> dict[str, AgentPrediction]:
         if self._predictions is None:
             self._predictions = {
@@ -209,6 +211,7 @@ class ReviewAgentToolbox:
             }
         return self._predictions
 
+    # Select evaluations belonging to the review's high-score cohort.
     def _high_score_evaluations(self) -> list[AgentEvaluationItem]:
         if self._evaluations is None:
             response = build_agent_evaluation(
@@ -226,6 +229,8 @@ class ReviewAgentToolbox:
                 by_date.setdefault(item.trade_date, []).append(item)
             selected: list[AgentEvaluationItem] = []
             for trade_date in sorted(by_date):
+                # The key compares score (negated for descending order), then confidence (negated
+                # for descending order), then symbol.
                 daily_items = sorted(
                     by_date[trade_date],
                     key=lambda item: (-item.score, -item.confidence, item.symbol),
@@ -382,6 +387,7 @@ def _run_review_tool(toolbox: ReviewAgentToolbox, name: str) -> ReviewToolResult
         )
 
 
+# Assemble the selected historical picks and their observed outcomes from review tools.
 def _review_picks_from_toolbox(toolbox: ReviewAgentToolbox) -> list[ReviewAgentPick]:
     picks: list[ReviewAgentPick] = []
     for item in toolbox._high_score_evaluations():
@@ -564,6 +570,7 @@ def _build_promotion_comparisons(
 
         next_events = events_by_date[next_trade_date]
 
+        # Determine whether this observed post-board path meets the promotion condition.
         def promoted(symbol: str) -> bool:
             event = next_events.get(symbol)
             return bool(event and event.closed_limit and event.board_height == 2)
@@ -630,6 +637,7 @@ def _optional_review_rate(count: int, sample_size: int) -> float | None:
     return round(count / sample_size, 4) if sample_size else None
 
 
+# Build a deterministic review report when an LLM report cannot be used.
 def _fallback_report(
     *,
     start_date: date,
@@ -717,6 +725,7 @@ def _fallback_report(
     )
 
 
+# Convert an LLM report payload into the validated review response, retaining supplied evidence.
 def _report_from_payload(
     *,
     payload: dict[str, Any],
@@ -779,6 +788,7 @@ def _report_from_payload(
     )
 
 
+# Define the review writer's evidence requirements and research-only output boundary.
 def _review_report_system_prompt() -> str:
     return (
         "You are LimitUpLab's Review Agent. Use only tool facts. "
@@ -791,6 +801,7 @@ def _review_report_system_prompt() -> str:
     )
 
 
+# Package historical picks and evaluation facts for the review writer.
 def _review_report_user_prompt(
     start_date: date,
     end_date: date,
@@ -815,6 +826,7 @@ def _review_report_user_prompt(
     )
 
 
+# Reduce a saved prediction to the fields needed by the review report.
 def _pick_summary(item: AgentEvaluationItem) -> dict[str, Any]:
     return {
         "trade_date": item.trade_date.isoformat(),
@@ -829,6 +841,7 @@ def _pick_summary(item: AgentEvaluationItem) -> dict[str, Any]:
     }
 
 
+# Summarize observed post-prediction outcomes without changing the original prediction.
 def _outcome_summary(item: AgentEvaluationItem) -> dict[str, Any]:
     return {
         **_pick_summary(item),
@@ -941,6 +954,9 @@ def _build_feature_comparison(
     return result
 
 
+# Describe the input-feature patterns present in the reviewed cohort.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _review_feature_profile(
     evaluation: AgentEvaluationItem,
     prediction: AgentPrediction | None,
@@ -986,6 +1002,7 @@ def _review_feature_profile(
     }
 
 
+# Compute cohort averages for the requested profile fields.
 def _profile_averages(profiles: list[dict[str, Any]]) -> dict[str, float]:
     keys = {
         key
@@ -1045,6 +1062,7 @@ def _selection_profile_pattern(profiles: list[dict[str, Any]]) -> str | None:
     return "；".join(parts) if parts else None
 
 
+# Count and order categorical features for a compact cohort description.
 def _top_categories(
     profiles: list[dict[str, Any]],
     key: str,
@@ -1058,6 +1076,7 @@ def _top_categories(
     if not values:
         return ""
     counts = Counter(values)
+    # The key compares 1 (negated for descending order), then 0.
     return "、".join(
         f"{name} {count}只"
         for name, count in sorted(
@@ -1077,6 +1096,9 @@ def _percentile(values: list[float], ratio: float) -> float:
     return values[lower_index] + (values[upper_index] - values[lower_index]) * fraction
 
 
+# Classify the recorded sealing behavior for historical review.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _seal_pattern(label: str, averages: dict[str, float]) -> str | None:
     first_limit = averages.get("first_limit_minutes")
     break_count = averages.get("break_count")
@@ -1088,6 +1110,9 @@ def _seal_pattern(label: str, averages: dict[str, float]) -> str | None:
     )
 
 
+# Classify the recorded price-structure features for historical review.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _structure_pattern(label: str, averages: dict[str, float]) -> str | None:
     industry_count = averages.get("industry_limit_up_count")
     return_20d = averages.get("return_20d_pct")
@@ -1100,6 +1125,9 @@ def _structure_pattern(label: str, averages: dict[str, float]) -> str | None:
     )
 
 
+# Label the observed outcome pattern for the review report.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _outcome_pattern(label: str, averages: dict[str, float]) -> str | None:
     promotion = averages.get("promotion")
     next_return = averages.get("next_open_to_close_pct")
@@ -1118,6 +1146,9 @@ def _outcome_pattern(label: str, averages: dict[str, float]) -> str | None:
     )
 
 
+# Convert a clock value into minutes for aggregation and ordering.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _time_to_minutes(value: Any) -> float | None:
     text = str(value or "")
     try:
@@ -1127,11 +1158,16 @@ def _time_to_minutes(value: Any) -> float | None:
         return None
 
 
+# Render a minute offset as a readable clock time.
 def _format_minutes(value: float) -> str:
     rounded = int(round(value))
     return f"{rounded // 60:02d}:{rounded % 60:02d}"
 
 
+# Parse a numeric provider/report field; an unparseable value follows the explicit missing-value
+# branch below.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _number(value: Any) -> float | None:
     if value is None or isinstance(value, bool):
         return None
@@ -1141,6 +1177,9 @@ def _number(value: Any) -> float | None:
         return None
 
 
+# Normalize a category value used in the review's grouped statistics.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _category(value: Any) -> str | None:
     text = str(value or "").strip()
     if not text or text.lower() in {"none", "null", "unknown"}:
@@ -1150,6 +1189,7 @@ def _category(value: Any) -> str | None:
     return text
 
 
+# Recover the JSON object from a model response before validating the report.
 def _extract_json_object(content: str) -> dict[str, Any]:
     start = content.find("{")
     end = content.rfind("}")
@@ -1161,16 +1201,19 @@ def _extract_json_object(content: str) -> dict[str, Any]:
     return payload
 
 
+# Keep string items from the supplied value for a report text list.
 def _string_list(value: Any) -> list[str]:
     if not isinstance(value, list):
         return []
     return [str(item).strip() for item in value if str(item).strip()][:8]
 
 
+# Merge report text lists while removing repeated entries.
 def _merge_texts(primary: list[str], secondary: list[str]) -> list[str]:
     return _top_texts([*primary, *secondary])
 
 
+# Select the most frequent text entries for a bounded report section.
 def _top_texts(values) -> list[str]:
     seen: set[str] = set()
     result: list[str] = []

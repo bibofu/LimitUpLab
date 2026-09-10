@@ -60,9 +60,14 @@ def execute_tool_calls(
     context_symbol: str | None = None,
 ) -> ToolExecution:
     """Execute in plan order so filters can reuse prior rating evidence."""
+    # State belongs to this request only. Each domain handler adds compact facts
+    # for the writer and a trace for persistence/UI inspection; those serve
+    # different audiences and should not be confused with raw provider responses.
     state = ExecutionState(tools=tools, request=request, context_symbol=context_symbol)
     for call in tool_calls:
         name, arguments = call["name"], call["arguments"]
+        # Recheck availability here even though the planner schema was filtered.
+        # This also protects legacy plans and direct callers of the dispatcher.
         if not tools.is_enabled(name):
             error = (
                 f"{name} is unavailable in Agent profile {tools.profile}; "

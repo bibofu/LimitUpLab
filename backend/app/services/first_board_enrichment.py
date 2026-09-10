@@ -73,6 +73,8 @@ def refresh_first_board_enrichment_snapshots(
         report.warnings,
         "listing dates",
     )
+    # The callback defers dragon_tiger_collector until its wrapper invokes it, preserving the
+    # surrounding request's arguments.
     dragon_tiger = _collect_optional(
         lambda: dragon_tiger_collector(trade_date),
         {},
@@ -203,6 +205,7 @@ def build_enrichment_snapshot(
     )
 
 
+# Select the day's events eligible for first-board enrichment.
 def _candidate_events(events: list[LimitUpEvent], trade_date: date) -> list[LimitUpEvent]:
     return [
         item
@@ -217,6 +220,7 @@ def _candidate_events(events: list[LimitUpEvent], trade_date: date) -> list[Limi
     ]
 
 
+# Obtain one candidate's price history from storage or collection and append collection warnings.
 def _load_candidate_bars(
     *,
     event: LimitUpEvent,
@@ -254,7 +258,9 @@ def _load_candidate_bars(
     ][-125:]
 
 
+# Compute the enrichment's technical measurements using bars available at the trade date.
 def _technical_features(bars: list[StockDailyBar], trade_date: date) -> dict[str, object]:
+    # The key compares trade date.
     ordered = sorted((bar for bar in bars if bar.trade_date <= trade_date), key=lambda item: item.trade_date)
     closes = [item.close for item in ordered]
     volumes = [item.volume for item in ordered]
@@ -296,12 +302,19 @@ def _technical_features(bars: list[StockDailyBar], trade_date: date) -> dict[str
     }
 
 
+# Calculate percentage change over the requested historical window when the required bars are
+# available.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _period_return(closes: list[float], days: int) -> float | None:
     if len(closes) <= days or not closes[-days - 1]:
         return None
     return round(((closes[-1] - closes[-days - 1]) / closes[-days - 1]) * 100, 3)
 
 
+# Measure the latest price's distance from the high in the supplied history.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _distance_from_high(bars: list[StockDailyBar]) -> float | None:
     if not bars:
         return None
@@ -315,6 +328,7 @@ def _recent_limit_up_counts(
 ) -> tuple[int, int]:
     """Count probable limit-up closes from daily bars using board-specific limits."""
 
+    # The key compares trade date.
     ordered = sorted(bars, key=lambda item: item.trade_date)
     threshold = 19.5 if symbol.startswith(("300", "301")) else 9.5
     daily_returns = [
@@ -328,12 +342,14 @@ def _recent_limit_up_counts(
     )
 
 
+# Build the target stock's same-day market and peer context from event facts.
 def _market_context(events: list[LimitUpEvent], target: LimitUpEvent) -> dict[str, object]:
     same_day = [item for item in events if item.trade_date == target.trade_date]
     industry = [item for item in same_day if item.industry == target.industry]
     industry_first = [item for item in industry if item.board_height == 1 and item.closed_limit]
     industry_continued = [item for item in industry if item.board_height >= 2 and item.closed_limit]
     industry_failed = [item for item in industry if not item.closed_limit]
+    # The key compares first limit time, then symbol.
     ordered_first = sorted(industry_first, key=lambda item: (item.first_limit_time, item.symbol))
 
     available_dates = sorted({item.trade_date for item in events if item.trade_date <= target.trade_date})
@@ -376,6 +392,7 @@ def _market_context(events: list[LimitUpEvent], target: LimitUpEvent) -> dict[st
     }
 
 
+# Run an optional enrichment source and record its failure while returning the specified fallback.
 def _collect_optional(
     collector: Callable[[], object],
     fallback: object,

@@ -24,6 +24,7 @@ def collect_a_share_trade_dates(start_date: date, end_date: date) -> list[date]:
     return sorted(item for item in dates if start_date <= item <= end_date)
 
 
+# Normalize a trading-calendar date from its provider representation.
 def _parse_trade_date(value: object) -> date:
     if isinstance(value, date):
         return value

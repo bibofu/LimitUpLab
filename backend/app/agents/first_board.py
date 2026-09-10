@@ -43,6 +43,11 @@ def build_first_board_ratings(
 ) -> FirstBoardRatingsResponse:
     """Build first-board ratings for a trade date from persisted events."""
 
+    # Pipeline: choose one day's events -> load that day's enrichment and policy
+    # -> apply hard eligibility filters -> build verifiable Facts -> score/rank.
+    # The score is deterministic; an LLM explanation cannot change these inputs
+    # or weights. The response retains exclusions as well as accepted candidates.
+
     target_date = trade_date or latest_trade_date(events)
     latest_events = events_for_date(events, target_date)
     summary = summarize_market(latest_events)
@@ -50,6 +55,8 @@ def build_first_board_ratings(
     active_policy = scoring_policy or SQLiteScoringPolicyRepository(
         repository.database_path
     ).ensure_default_policy()
+    # Fail early if the stored policy refers to unknown factors; silently ignoring
+    # a weight would make saved scores impossible to reproduce accurately.
     validate_policy_factor_keys(active_policy)
     enrichments = {
         item.symbol: item
@@ -62,6 +69,8 @@ def build_first_board_ratings(
     included_symbols = {
         result.symbol for result in filter_results if result.included
     }
+    # Carry missing-data markers from filtering into each candidate's Facts.
+    # Missing enrichment must remain visible when confidence is later computed.
     facts = [
         build_first_board_candidate_facts(
             event=event,
@@ -78,6 +87,8 @@ def build_first_board_ratings(
         if event.symbol in included_symbols
     ]
 
+    # The key compares score (negated for descending order), then confidence (negated for
+    # descending order), then symbol.
     return FirstBoardRatingsResponse(
         trade_date=target_date,
         candidates=sorted(
@@ -134,6 +145,9 @@ def _evaluate_candidate_filter(
 ) -> FirstBoardFilterResult:
     """Evaluate hard candidate-pool filters and record unavailable fields."""
 
+    # Exclusion means a known rule failed; data_missing means evidence is absent.
+    # Keeping them separate lets the UI explain both eligibility and confidence.
+
     excluded_reasons: list[str] = []
     data_missing: list[str] = []
 
@@ -178,6 +192,10 @@ def _rate_candidate(
 ) -> FirstBoardRating:
     """Score one first-board candidate with transparent factor weights."""
 
+    # Each factor returns its points, maximum points and the observations behind
+    # them. First compute those local assessments, then rescale them through the
+    # active versioned policy so the final breakdown can reproduce the total.
+
     base_breakdown = [
         _score_first_limit_time(facts.first_limit_time),
         _score_board_pattern(facts.is_one_word_board),
@@ -206,6 +224,8 @@ def _rate_candidate(
     )
     raw_score = sum(item.score for item in breakdown)
     score = round(max(0, min(100, raw_score)), 1)
+    # Confidence is a separate assessment of evidence quality. A neutral score
+    # used for missing enrichment must not imply that the evidence is complete.
     confidence = _calculate_confidence(facts)
 
     return FirstBoardRating(
@@ -224,6 +244,10 @@ def _apply_scoring_policy(
     scoring_policy: ScoringPolicy,
 ) -> list[ScoreBreakdownItem]:
     """Scale raw factor scores to the active policy's 100-point weights."""
+
+    # Divide the policy's target weight by the factor's original maximum. Applying
+    # that ratio to both score and maximum preserves the factor's relative result
+    # while making its contribution match the selected policy.
 
     weighted: list[ScoreBreakdownItem] = []
     for item in items:

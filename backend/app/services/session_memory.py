@@ -39,6 +39,9 @@ def prepare_session_context(
 ) -> tuple[list[ChatSessionMessage], ChatSessionMemory | None]:
     """Return bounded raw context and memory without making chat depend on memory."""
 
+    # Memory improves continuity but is optional. A summarization/storage failure
+    # falls back to existing memory or recent messages instead of blocking chat.
+
     memory_repository = repository or SQLiteChatMemoryRepository()
     try:
         memory = refresh_session_memory(
@@ -71,6 +74,8 @@ def refresh_session_memory(
     if not env_bool("LIMITUPLAB_SESSION_MEMORY_ENABLED", True):
         return existing
 
+    # Leave the recent tail verbatim; summarize only messages that have moved out
+    # of that window. The refresh threshold avoids an extra model call every turn.
     successful = _successful_messages(messages)
     refresh_interval = _positive_int_setting(
         "LIMITUPLAB_SESSION_MEMORY_REFRESH_MESSAGES",
@@ -146,6 +151,7 @@ def memory_prompt_payload(memory: ChatSessionMemory | None) -> dict[str, Any] | 
     }
 
 
+# Try structured LLM summarization, then the supported fallback path for session memory.
 def _generate_memory_draft(
     *,
     existing: ChatSessionMemory | None,
@@ -183,6 +189,7 @@ def _generate_memory_draft(
     return _deterministic_memory_draft(existing, messages), "deterministic", None
 
 
+# Define what the memory summarizer may retain and its required output format.
 def _memory_system_prompt(*, output_mode: str) -> str:
     output_instruction = (
         f"Call {SESSION_MEMORY_FUNCTION_NAME} exactly once. "
@@ -203,6 +210,7 @@ def _memory_system_prompt(*, output_mode: str) -> str:
     )
 
 
+# Package the previous memory and newly summarized messages for the summarizer.
 def _memory_user_prompt(
     existing: ChatSessionMemory | None,
     messages: list[ChatSessionMessage],
@@ -221,6 +229,7 @@ def _memory_user_prompt(
     return json.dumps(payload, ensure_ascii=False, separators=(",", ":"))
 
 
+# Declare the structured schema accepted from the memory summarizer.
 def _memory_function_parameters() -> dict[str, Any]:
     list_field = {
         "type": "array",
@@ -251,6 +260,7 @@ def _memory_function_parameters() -> dict[str, Any]:
     }
 
 
+# Decode the summarizer's JSON object before bounded memory validation.
 def _parse_memory_object(content: str) -> dict[str, Any]:
     text = content.strip()
     if text.startswith("```"):
@@ -262,6 +272,7 @@ def _parse_memory_object(content: str) -> dict[str, Any]:
     return parsed
 
 
+# Normalize a memory draft and bind it to the owning session and summary boundary.
 def _build_memory(
     *,
     session_id: str,
@@ -325,6 +336,7 @@ def _build_memory(
     )
 
 
+# Extract continuity hints from messages when model-based summarization is unavailable.
 def _deterministic_memory_draft(
     existing: ChatSessionMemory | None,
     messages: list[ChatSessionMessage],
@@ -400,6 +412,7 @@ def _deterministic_topics(content: str) -> list[str]:
     return [topic for topic in topic_terms if topic in content]
 
 
+# Keep successful user/assistant messages eligible for future conversational context.
 def _successful_messages(
     messages: list[ChatSessionMessage],
 ) -> list[ChatSessionMessage]:
@@ -440,12 +453,14 @@ def _messages_after_memory(
     return messages[start:]
 
 
+# Trim and truncate a memory field to its allowed character budget.
 def _bounded_text(value: object, limit: int) -> str:
     if not isinstance(value, str):
         return ""
     return " ".join(value.split()).strip()[:limit]
 
 
+# Normalize and bound a memory list before adding it to later prompts.
 def _bounded_list(value: object, limit: int) -> list[str]:
     if not isinstance(value, list):
         return []
@@ -474,6 +489,7 @@ def _resolved_memory_list(
     return _merge_unique(existing, fallback, limit=limit)
 
 
+# Merge ordered string groups without duplicates and stop at the configured item budget.
 def _merge_unique(*groups: list[str], limit: int) -> list[str]:
     merged: list[str] = []
     for group in groups:
@@ -486,6 +502,7 @@ def _merge_unique(*groups: list[str], limit: int) -> list[str]:
     return merged
 
 
+# Read a positive integer setting used to bound session-memory refresh behavior.
 def _positive_int_setting(name: str, default: int) -> int:
     raw = os.getenv(name, "").strip()
     try:

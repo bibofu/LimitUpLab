@@ -250,6 +250,7 @@ def _estimate_llm_cost_usd(
     )
 
 
+# Read a nonnegative numeric environment setting for request-cost accounting.
 def _non_negative_env_float(name: str) -> float:
     try:
         value = float(os.getenv(name, "").strip())
@@ -292,6 +293,9 @@ def get_first_board_ratings(
         if resolved_trade_date
         else []
     )
+    # The callback defers build_first_board_ratings(events=events, trade_date=trade_date,
+    # first_board_repository=first_board_repository, scoring_policy=scoring_policy).model_copy
+    # until its wrapper invokes it, preserving the surrounding request's arguments.
     return _cached_response(
         scope="first_board_ratings",
         key_parts={
@@ -656,6 +660,8 @@ def get_rating_backtest(
     resolved_start = start_date or available_dates[max(0, len(available_dates) - 20)]
     if resolved_start > resolved_end:
         raise HTTPException(status_code=400, detail="start_date must be before end_date.")
+    # The callback defers build_rating_backtest until its wrapper invokes it, preserving the
+    # surrounding request's arguments.
     return _cached_response(
         scope="rating_backtest",
         key_parts={
@@ -692,6 +698,8 @@ def get_rating_evaluation(
     resolved_start = start_date or available_dates[max(0, len(available_dates) - 20)]
     if resolved_start > resolved_end:
         raise HTTPException(status_code=400, detail="start_date must be before end_date.")
+    # The callback defers build_agent_evaluation until its wrapper invokes it, preserving the
+    # surrounding request's arguments.
     return _cached_response(
         scope="rating_evaluation",
         key_parts={
@@ -1035,6 +1043,10 @@ def stream_first_board_agent_chat(
 ) -> StreamingResponse:
     """Stream Agent progress, answer deltas and the complete persisted response."""
 
+    # The HTTP generator and synchronous Agent run communicate through a queue.
+    # The worker owns model/tool calls; the generator owns SSE framing. This keeps
+    # the transport independent from the same answer function used by /chat.
+    # 校验身份和会话归属，执行限流与额度检查，保存用户消息，创建本次 run_id
     run_id = f"run_{uuid4().hex}"
     started_at = datetime.now(timezone.utc)
     run_repository = SQLiteAgentRunRepository()
@@ -1075,20 +1087,26 @@ def stream_first_board_agent_chat(
         )
         lease.release()
         raise
+    # None is the internal end-of-stream sentinel, not a user-visible SSE event.
     event_queue: queue.Queue[tuple[str, dict[str, Any]] | None] = queue.Queue()
 
+    # Place one SSE event in the worker-to-response queue; the HTTP generator serializes it later.
     def emit(event: str, data: dict[str, Any]) -> None:
         event_queue.put((event, data))
 
+    # Run the chat pipeline in the worker thread, persist its result and always release the
+    # request lease.
     def run_agent() -> None:
         answer_started = False
         tracker: LLMUsageTracker | None = None
         response: AgentChatResponse | None = None
         execution_error: Exception | None = None
 
+        # Publish a named processing stage for the frontend's progress indicator.
         def emit_progress(stage: str, message: str) -> None:
             emit("progress", {"stage": stage, "message": message})
 
+        # Mark answer streaming as started and enqueue the next visible text fragment.
         def emit_answer_delta(delta: str) -> None:
             nonlocal answer_started
             answer_started = True
@@ -1117,6 +1135,8 @@ def stream_first_board_agent_chat(
                     answer_delta_callback=emit_answer_delta,
                 )
             response.run_id = run_id
+            # Fixed/template answers do not produce model tokens. Emit the whole
+            # answer once so the client can use the same display path for them.
             if not answer_started:
                 emit_progress("answering", "正在整理最终回答")
                 emit_answer_delta(response.answer)
@@ -1146,6 +1166,9 @@ def stream_first_board_agent_chat(
                 ),
                 owner_id=owner_id,
             )
+            # completed is authoritative: validation may have replaced streamed
+            # model prose with a deterministic answer. Persist before announcing
+            # completion so reopening the conversation restores this exact result.
             emit("completed", response.model_dump(mode="json"))
         except Exception as error:
             execution_error = error
@@ -1192,6 +1215,7 @@ def stream_first_board_agent_chat(
             lease.release()
             event_queue.put(None)
 
+    # Drain queued events as SSE frames until the worker sends its completion sentinel.
     def event_stream():
         while True:
             item = event_queue.get()
@@ -1276,12 +1300,16 @@ def _cached_response(
     return response
 
 
+# Hash the scope and request-specific key parts into a stable cache identifier.
 def _build_cache_key(scope: str, key_parts: dict[str, Any]) -> str:
     raw = json.dumps(key_parts, ensure_ascii=False, sort_keys=True, default=str)
     digest = hashlib.sha256(raw.encode("utf-8")).hexdigest()
     return f"{scope}:{digest}"
 
 
+# Use the requested trade date, or resolve the available event date when it is omitted.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _resolve_trade_date(events: list[Any], trade_date: date | None) -> date | None:
     if trade_date is not None:
         return trade_date
@@ -1290,6 +1318,7 @@ def _resolve_trade_date(events: list[Any], trade_date: date | None) -> date | No
     return max(event.trade_date for event in events)
 
 
+# Fingerprint the selected event interval so cached results depend on their input data.
 def _events_signature(
     events: list[Any],
     *,

@@ -228,6 +228,7 @@ def _template_answer_from_tool_facts(
             {},
         )
 
+        # Format an optional template metric, keeping unavailable values visible to the reader.
         def metric(item: dict[str, Any], key: str) -> str:
             value = item.get(key)
             return "暂无" if value is None else f"{float(value):.2f}%"
@@ -510,6 +511,7 @@ def _template_answer_from_tool_facts(
                 f"{f'“{query}”相关' if query else ''}收盘涨停股票共 {payload.get('unique_stock_count')} 只："
             ]
             for symbol, stock_events in events_by_symbol.items():
+                # The key compares `str(item.get('trade_date') or '')`.
                 latest = max(
                     stock_events,
                     key=lambda item: str(item.get("trade_date") or ""),
@@ -1103,6 +1105,7 @@ def _template_daily_board_promotion_answer(
     if _looks_like_first_to_second_stock_list(message):
         return _template_first_to_second_stock_list(items)
 
+    # Format one prediction cohort for the surrounding answer template.
     def cohort_text(item: dict[str, Any], prefix: str) -> str:
         sample_size = int(item.get(f"{prefix}_sample_size") or 0)
         promoted_count = int(item.get(f"{prefix}_promoted_count") or 0)

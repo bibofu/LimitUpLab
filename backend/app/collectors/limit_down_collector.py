@@ -62,11 +62,16 @@ def collect_limit_down_pool(trade_date: date) -> LimitDownSnapshot:
     return snapshot
 
 
+# Check that the source value is a supported stock-code representation.
 def _valid_symbol(value: object) -> bool:
     symbol = str(value or "").strip()
     return len(symbol) == 6 and symbol.isdigit()
 
 
+# Parse a numeric provider/report field; an unparseable value follows the explicit missing-value
+# branch below.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _number(value: object) -> float | None:
     try:
         return float(value)
@@ -74,6 +79,7 @@ def _number(value: object) -> float | None:
         return None
 
 
+# Normalize the source value into the text representation used by this boundary.
 def _text(value: object) -> str | None:
     text = str(value or "").strip()
     return text or None

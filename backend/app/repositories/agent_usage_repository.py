@@ -16,6 +16,7 @@ SHANGHAI_TIMEZONE = ZoneInfo("Asia/Shanghai")
 class SQLiteAgentUsageRepository:
     """Persist one accounting record per accepted Agent request."""
 
+    # Initialize SQLiteAgentUsageRepository with the supplied dependencies and per-instance state.
     def __init__(self, database_path: Path | None = None) -> None:
         self.database_path = database_path
 
@@ -101,6 +102,7 @@ class SQLiteAgentUsageRepository:
         start = datetime.now(timezone.utc) - timedelta(days=max(1, days))
         return self._summary(start)
 
+    # Aggregate stored usage over the requested interval and optional owner scope.
     def _summary(
         self,
         start: datetime,
@@ -162,6 +164,7 @@ class SQLiteAgentUsageRepository:
         )
 
 
+# Convert a usage record to values in the SQL statement's column order.
 def _record_tuple(record: AgentUsageRecord) -> tuple[object, ...]:
     return (
         record.usage_id,
@@ -188,11 +191,13 @@ def _record_tuple(record: AgentUsageRecord) -> tuple[object, ...]:
     )
 
 
+# Find the UTC instant at which the current Shanghai accounting day began.
 def _shanghai_day_start_utc() -> datetime:
     local_now = datetime.now(SHANGHAI_TIMEZONE)
     local_start = local_now.replace(hour=0, minute=0, second=0, microsecond=0)
     return local_start.astimezone(timezone.utc)
 
 
+# Parse an optional integer field while keeping unavailable values distinguishable from zero.
 def _optional_int(value: object) -> int | None:
     return int(value) if value is not None else None

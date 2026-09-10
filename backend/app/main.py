@@ -35,6 +35,7 @@ app.add_middleware(
 app.add_middleware(AnonymousVisitorMiddleware)
 
 
+# Return the lightweight service health response; this endpoint does not execute a business query.
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}

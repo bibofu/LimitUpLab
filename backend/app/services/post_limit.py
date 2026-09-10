@@ -84,6 +84,7 @@ def build_post_limit_path(
             "data_missing": [],
             "warnings": ["指定范围内没有找到该股票的收盘涨停锚点。"],
         }
+    # The key compares trade date.
     anchor = max(candidates, key=lambda item: item["trade_date"])
     anchor = _with_previous_board_state(anchor, dataset)
     bars = _bar_map(dataset)
@@ -165,6 +166,9 @@ def build_post_limit_statistics(
     shapes = contract.shapes or (contract.shape,)
     event_date_set = {event["trade_date"] for event in dataset.events if event["trade_date"] <= end_text}
     end_index = dataset.calendar.index(end_text)
+    # Only signal dates with room for the required forward window can enter this
+    # historical evaluation. This is an outcome-readiness filter, not permission
+    # to use those later prices when deciding whether the original signal matched.
     mature_dates = dataset.calendar[: max(0, end_index - 4)]
     eligible_signal_dates = []
     missing_event_dates = set()
@@ -198,6 +202,9 @@ def build_post_limit_statistics(
                 if shape in shapes:
                     raw_signals.append({**item, "shape": shape, "signal_date": signal_day})
 
+    # Repeated appearances of one setup are not independent discoveries. Assign
+    # the first trigger before attaching outcomes so future availability cannot
+    # select a more favorable signal date for the same setup.
     signals = _first_triggers(raw_signals)
     available_signal_dates = sorted({item["signal_date"] for item in signals})
     selected_dates = available_signal_dates[-contract.statistics_days:]
@@ -206,6 +213,9 @@ def build_post_limit_statistics(
     events = {(item["symbol"], item["trade_date"]): item for item in dataset.events}
     complete: list[dict[str, Any]] = []
     outcome_missing = Counter()
+    # Future observations are attached only after eligibility, signal identity
+    # and the analysis window are fixed. Missing outcomes remain explicit and do
+    # not count as observed failures or zeros in the complete-sample statistics.
     for signal in selected:
         outcome, issue = _attach_outcome(signal, bars, dataset.calendar, events)
         if issue:
@@ -254,6 +264,8 @@ def build_post_limit_statistics(
     }
 
 
+# Screen an already loaded post-limit dataset under the normalized contract and completed-date
+# boundary.
 def _screen_loaded(
     dataset: PostLimitDataset,
     contract: PostLimitQueryContract,
@@ -269,6 +281,7 @@ def _screen_loaded(
     if recent_dates - present_event_dates:
         return _empty_result(contract, "data_missing", ["recent_event_dates"], dataset=dataset, end=end)
     latest: dict[str, dict] = {}
+    # The key compares trade date.
     for event in sorted(visible_events, key=lambda item: item["trade_date"]):
         if event["trade_date"] in recent_dates and event["closed_limit"] and _supported(event):
             latest[event["symbol"]] = event
@@ -378,6 +391,7 @@ def build_post_limit_metrics(
     prior = window[-2] if age >= 1 else previous
     post = window[1:]
     peak_window = window[:-1] if age >= 1 else window
+    # The key compares `float(peak_window[index]['high'])`, then index.
     peak_index = max(range(len(peak_window)), key=lambda index: (float(peak_window[index]["high"]), index))
     peak = float(peak_window[peak_index]["high"])
     low = min(float(bar["low"]) for bar in post) if post else float(window[0]["low"])
@@ -409,6 +423,7 @@ def build_post_limit_metrics(
     }, None
 
 
+# Return the requested post-limit shapes whose deterministic rules match these measurements.
 def _matched_shapes(metrics: dict[str, Any], anchor: dict, contract: PostLimitQueryContract) -> list[PostLimitShape]:
     age = metrics["anchor_age"]
     anchor_change = metrics["anchor_change_pct"]
@@ -468,6 +483,8 @@ def matches_volume_consolidation(
     )
 
 
+# Attach later observed bars to a historical signal for evaluation, after the signal has been
+# formed.
 def _attach_outcome(signal: dict, bars: dict, calendar: list[str], events: dict) -> tuple[dict[str, Any] | None, str | None]:
     index = calendar.index(signal["signal_date"])
     horizon = calendar[index+1:index+6]
@@ -493,6 +510,7 @@ def _attach_outcome(signal: dict, bars: dict, calendar: list[str], events: dict)
     }, None
 
 
+# Aggregate the observed outcomes for one post-limit shape cohort.
 def _summarize_shape(shape: PostLimitShape, rows: list[dict[str, Any]]) -> dict[str, Any]:
     selected = [row for row in rows if row["shape"] == shape]
     if not selected:
@@ -520,6 +538,7 @@ def _summarize_shape(shape: PostLimitShape, rows: list[dict[str, Any]]) -> dict[
     }
 
 
+# Partition historical signal rows by the requested dimension and calculate group summaries.
 def _group_statistics(rows: list[dict[str, Any]], group_by: str) -> list[dict[str, Any]]:
     field = {"anchor_age": "anchor_age", "signal_date": "signal_date"}.get(group_by, group_by)
     groups: dict[str, list[dict[str, Any]]] = defaultdict(list)
@@ -546,12 +565,15 @@ def _group_statistics(rows: list[dict[str, Any]], group_by: str) -> list[dict[st
             "d5_positive_pct": _pct(mean(row["d5_close_pct"] > 0 for row in selected)),
             "mae5_median_pct": round(median(row["mae5_pct"] for row in selected), 4),
         })
+    # The key compares sample count (negated for descending order), then group.
     return sorted(result, key=lambda item: (-item["sample_count"], item["group"]))[:20]
 
 
+# Keep the first qualifying trigger for each grouping used by the statistical denominator.
 def _first_triggers(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     seen: set[tuple[str, str, str]] = set()
     result = []
+    # The key compares signal date, then symbol, then shape.
     for row in sorted(rows, key=lambda item: (item["signal_date"], item["symbol"], item["shape"])):
         key = row["symbol"], row["anchor_date"], row["shape"]
         if key not in seen:
@@ -560,6 +582,7 @@ def _first_triggers(rows: Iterable[dict[str, Any]]) -> list[dict[str, Any]]:
     return result
 
 
+# Describe the dataset, query contract and cutoff shared by post-limit results.
 def _base_metadata(dataset: PostLimitDataset, contract: PostLimitQueryContract, end: date) -> dict[str, Any]:
     return {
         "rule_version": POST_LIMIT_RULE_VERSION,
@@ -584,6 +607,8 @@ def _resolve_completed_end(dataset: PostLimitDataset, contract: PostLimitQueryCo
     return contract.data_as_of or date.fromisoformat(eligible[-1])
 
 
+# Return a structured empty/unavailable result with explicit missing-data reasons and query
+# metadata.
 def _empty_result(contract: PostLimitQueryContract, status: str, missing: list[str], *, dataset: PostLimitDataset | None = None, end: date | None = None) -> dict[str, Any]:
     metadata = _base_metadata(dataset, contract, end) if dataset and end else {
         "rule_version": POST_LIMIT_RULE_VERSION,
@@ -596,6 +621,7 @@ def _empty_result(contract: PostLimitQueryContract, status: str, missing: list[s
     return {**metadata, "status": status, "candidates": [], "data_missing": missing, "warnings": []}
 
 
+# Project the reference limit-up event into the fields exposed as anchor evidence.
 def _anchor_fact(anchor: dict) -> dict[str, Any]:
     return {
         "symbol": anchor["symbol"], "name": anchor["name"],
@@ -627,39 +653,48 @@ def _with_previous_board_state(anchor: dict, dataset: PostLimitDataset) -> dict:
     }
 
 
+# Check whether an event belongs to the supported security universe.
 def _supported(event: dict) -> bool:
     return event["symbol"].startswith(MAIN_BOARD_PREFIXES) and "ST" not in event["name"].upper() and "退" not in event["name"]
 
 
+# Match the requested stock/sector text against the event's searchable fields.
 def _matches_query(event: dict, query: str) -> bool:
     needle = query.strip().lower()
     return any(needle in str(event.get(field) or "").lower() for field in ("symbol", "name", "industry", "concept"))
 
 
+# Index dataset bars for efficient stock/date lookup during screening and outcome tracing.
 def _bar_map(dataset: PostLimitDataset) -> dict[tuple[str, str], dict]:
     return {(row["symbol"], row["trade_date"]): row for row in dataset.bars}
 
 
+# Check that a bar contains the price fields needed by the calculation.
 def _valid_bar(bar: dict | None) -> bool:
     return bool(bar and all(isinstance(bar.get(key), (int, float)) and math.isfinite(bar[key]) and bar[key] > 0 for key in ("open", "high", "low", "close")) and bar["low"] <= min(bar["open"], bar["close"]) <= max(bar["open"], bar["close"]) <= bar["high"])
 
 
+# Check that the bar's volume is usable before computing volume-based measurements.
 def _valid_volume(bar: dict | None) -> bool:
     return bool(bar and isinstance(bar.get("volume"), (int, float)) and math.isfinite(bar["volume"]) and bar["volume"] > 0)
 
 
+# Detect discontinuities in the supplied price sequence that invalidate shape measurements.
 def _price_break(bars: list[dict]) -> bool:
     return any(abs(float(current["close"]) / float(previous["close"]) - 1) > .111 or float(current["high"]) / float(previous["close"]) - 1 > .112 or float(current["low"]) / float(previous["close"]) - 1 < -.112 for previous, current in zip(bars, bars[1:]))
 
 
+# Convert a fractional change to percentage points and round it for the result payload.
 def _pct(value: float) -> float:
     return round(value * 100, 4)
 
 
+# Average the named field across rows with available values.
 def _avg(rows: list[dict[str, Any]], field: str) -> float:
     return round(mean(float(row[field]) for row in rows), 4)
 
 
+# Choose the default ranking metric for the requested post-limit shape.
 def _default_sort(shape: PostLimitShape) -> str:
     return {
         "high_drawdown": "peak_drawdown_pct",
@@ -671,15 +706,21 @@ def _default_sort(shape: PostLimitShape) -> str:
     }[shape]
 
 
+# Check that the trading-day distance from the anchor is eligible for this shape.
 def _shape_age_eligible(shape: PostLimitShape, age: int) -> bool:
     return age == 0 if shape == "second_to_third" else 1 <= age <= 4 if shape == "high_drawdown" else 2 <= age <= 4
 
 
+# Order candidate rows by the requested field and direction using the implemented missing-value
+# rules.
 def _sort_candidates(rows: list[dict[str, Any]], field: str, order: str) -> list[dict[str, Any]]:
+    # The key compares symbol.
     ordered = sorted(rows, key=lambda row: row["symbol"])
+    # The key compares `row.get(field) is None`, then `row.get(field) or 0`.
     return sorted(ordered, key=lambda row: (row.get(field) is None, row.get(field) or 0), reverse=order == "desc")
 
 
+# Describe the shape rule with the thresholds actually selected by the contract.
 def _effective_rule(shape: PostLimitShape, contract: PostLimitQueryContract) -> str:
     overrides = []
     if shape == "high_drawdown" and contract.min_peak_drawdown_pct is not None:
@@ -696,6 +737,7 @@ def _effective_rule(shape: PostLimitShape, contract: PostLimitQueryContract) -> 
     return RULES[shape] + (" 用户覆盖：" + "、".join(overrides) + "。" if overrides else "")
 
 
+# Render matched shapes and measurements as human-readable evidence statements.
 def _reasons(shapes: list[PostLimitShape], metrics: dict[str, Any]) -> list[str]:
     reasons = [f"符合{SHAPE_LABELS[shape]}" for shape in shapes]
     reasons.append(f"涨停后{metrics['anchor_age']}个交易日，相对涨停收盘{metrics['anchor_change_pct']:+.2f}%")
@@ -703,6 +745,7 @@ def _reasons(shapes: list[PostLimitShape], metrics: dict[str, Any]) -> list[str]
     return reasons
 
 
+# Select the research risks associated with the matched post-limit shapes.
 def _risks(shapes: list[PostLimitShape]) -> list[str]:
     result = ["形态只描述已发生的量价路径，不能证明后续方向。"]
     if "high_drawdown" in shapes:

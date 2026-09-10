@@ -60,6 +60,7 @@ def count_reason_peers(event: LimitUpEvent, events: list[LimitUpEvent]) -> int:
     )
 
 
+# Clean a limit-up reason string before grouping or comparing peer explanations.
 def _normalized_reason(value: str | None) -> str:
     return "+".join(limit_reason_tokens_raw(value))
 

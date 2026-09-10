@@ -279,6 +279,8 @@ def _rank_evaluations(items: list[AgentEvaluationItem]) -> list[AgentEvaluationI
         "avoid_success": 4,
         "pending": 5,
     }
+    # The key compares `label_priority.get(item.evaluation_label, 9)`, then score (negated for
+    # descending order), then trade date, then symbol.
     return sorted(
         items,
         key=lambda item: (
@@ -395,6 +397,7 @@ def select_canonical_prediction_snapshots(
         if preferred_scoring_version in versions:
             selected_version = preferred_scoring_version
         else:
+            # The key compares the derived comparison value.
             selected_version = max(
                 versions,
                 key=lambda version: max(
@@ -407,4 +410,5 @@ def select_canonical_prediction_snapshots(
             item for item in historical if item.scoring_version == selected_version
         )
 
+    # The key compares trade date, then score (negated for descending order), then symbol.
     return sorted(selected, key=lambda item: (item.trade_date, -item.score, item.symbol))

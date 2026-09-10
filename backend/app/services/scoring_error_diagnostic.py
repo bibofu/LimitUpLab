@@ -130,6 +130,8 @@ def build_scoring_error_diagnostic(
     if not pool_samples:
         warnings.append("当前区间没有可用于误差诊断的次日晋级标签。")
 
+    # The key compares the derived comparison value, then score (negated for descending order).
+    # The key compares score (negated for descending order), then rank.
     return ScoringErrorDiagnosticResponse(
         start_date=start_date,
         end_date=end_date,
@@ -179,6 +181,8 @@ def build_scoring_error_diagnostic(
     )
 
 
+# Construct factor diagnostics from eligible samples and observed false-positive/false-negative
+# groups.
 def _build_factor_rows(
     *,
     daily_samples: dict[date, list[_ReadyCandidate]],
@@ -197,6 +201,9 @@ def _build_factor_rows(
         ablation_promoted = 0
         ablation_count = 0
         for samples in daily_samples.values():
+            # The key compares `item.rating.score - _weighted_factor_score(item.rating,
+            # factor_key)` (negated for descending order), then confidence (negated for descending
+            # order), then symbol.
             reranked = sorted(
                 samples,
                 key=lambda item: (
@@ -232,6 +239,9 @@ def _build_factor_rows(
                 ),
             )
         )
+    # The key compares `abs(item.ablation_delta or 0.0)` (negated for descending order), then
+    # `abs(item.false_negative_minus_false_positive or 0.0)` (negated for descending order), then
+    # factor key.
     return sorted(
         rows,
         key=lambda item: (
@@ -242,6 +252,7 @@ def _build_factor_rows(
     )
 
 
+# Group candidate factor scores for comparison across the diagnostic sample.
 def _factor_score_groups(
     samples: list[_ReadyCandidate],
 ) -> dict[str, list[float]]:
@@ -254,6 +265,7 @@ def _factor_score_groups(
     return grouped
 
 
+# Read a factor's contribution from the candidate's existing rating breakdown.
 def _weighted_factor_score(rating: FirstBoardRating, factor_key: str) -> float:
     return next(
         (
@@ -265,6 +277,7 @@ def _weighted_factor_score(rating: FirstBoardRating, factor_key: str) -> float:
     )
 
 
+# Classify the diagnostic direction from ablation and slice differences.
 def _recommendation(
     ablation_delta: float | None,
     slice_delta: float | None,
@@ -280,6 +293,7 @@ def _recommendation(
     return "neutral"
 
 
+# Explain the diagnostic recommendation using its measured ablation and slice changes.
 def _factor_evidence(
     *,
     recommendation: str,
@@ -304,7 +318,10 @@ def _factor_evidence(
     return f"{action}：{ablation_text}；{slice_text}。"
 
 
+# Project one misclassified sample into the error-case report representation.
 def _error_case(sample: _ReadyCandidate) -> ScoringErrorCase:
+    # The key compares `item.score / item.max_score if item.max_score else 0.0` (negated for
+    # descending order).
     leading_factors = [
         item.name
         for item in sorted(
@@ -328,6 +345,7 @@ def _error_case(sample: _ReadyCandidate) -> ScoringErrorCase:
     )
 
 
+# Summarize promotion-rate differences and factor diagnostics into report findings.
 def _build_findings(
     *,
     top_rate: float | None,
@@ -361,14 +379,19 @@ def _build_findings(
     return findings
 
 
+# Average the available observations; an empty usable sample remains unavailable.
 def _average(values: list[float]) -> float | None:
     return round(mean(values), 4) if values else None
 
 
+# Divide the observed count by its sample size, using the explicit empty-sample convention below.
 def _rate(numerator: int, denominator: int) -> float | None:
     return round(numerator / denominator, 4) if denominator else None
 
 
+# Subtract comparable metrics while preserving a missing operand as unavailable.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _difference(left: float | None, right: float | None) -> float | None:
     if left is None or right is None:
         return None

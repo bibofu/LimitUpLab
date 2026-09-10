@@ -252,6 +252,8 @@ def build_limit_up_query_contract(
         else _bounded_int(planner.get("min_board_height"), minimum=1, maximum=20)
     )
     if board_height is not None:
+        # An exact height and a minimum-height range are alternative query scopes.
+        # Retaining both could make the planner's stale range narrow the request.
         min_board_height = None
 
     explicit_market = extract_market_segment(message)
@@ -259,6 +261,9 @@ def build_limit_up_query_contract(
     query = extract_topic_query(message) or _clean_query(planner.get("query"))
 
     explicit_status = extract_event_status(message)
+    # closed, failed and broken_intraday describe different event sets. In
+    # particular, an intraday break does not imply the stock failed to reseal by
+    # the close; the normalized status keeps that distinction in downstream tools.
     event_status = explicit_status or normalize_event_status(
         planner.get("event_status") or planner.get("status")
     )
@@ -686,11 +691,16 @@ def _clean_topic_candidate(value: str) -> str:
     return candidate.strip("的与和")
 
 
+# Trim the optional free-text query and normalize an empty value.
 def _clean_query(value: object) -> str | None:
     normalized = str(value or "").strip()
     return normalized[:32] if normalized else None
 
 
+# Parse an integer and constrain it to the permitted range using this boundary's invalid-input
+# fallback.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _bounded_int(value: object, *, minimum: int, maximum: int) -> int | None:
     try:
         parsed = int(value)  # type: ignore[arg-type]
@@ -699,6 +709,9 @@ def _bounded_int(value: object, *, minimum: int, maximum: int) -> int | None:
     return max(minimum, min(parsed, maximum))
 
 
+# Interpret supported planner values as a boolean without relying on string truthiness.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _as_bool(value: object) -> bool | None:
     if isinstance(value, bool):
         return value
@@ -710,6 +723,9 @@ def _as_bool(value: object) -> bool | None:
     return None
 
 
+# Parse an optional date argument before applying it to a query.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _parse_date(value: object) -> date | None:
     if isinstance(value, date):
         return value
@@ -719,6 +735,9 @@ def _parse_date(value: object) -> date | None:
         return None
 
 
+# Construct a calendar date while handling invalid year/month/day combinations.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _safe_date(year: int, month: int, day: int) -> date | None:
     try:
         return date(year, month, day)
@@ -726,5 +745,6 @@ def _safe_date(year: int, month: int, day: int) -> date | None:
         return None
 
 
+# Select the contract's default ordering for the requested sort field.
 def _default_sort_order(sort_by: SortField) -> SortOrder:
     return "asc" if sort_by == "first_limit_time" else "desc"

@@ -59,6 +59,7 @@ def build_top10_outcome_completeness(
         position = date_positions.get(trade_date)
         if position is None:
             continue
+        # The key compares score (negated for descending order), then symbol.
         candidates = sorted(
             by_date[trade_date],
             key=lambda item: (-item.score, item.symbol),
@@ -143,6 +144,7 @@ def build_top10_outcome_completeness(
     )
 
 
+# Combine per-date completeness checks into the overall outcome-readiness report.
 def _build_report(
     *,
     as_of_date: date,
@@ -187,6 +189,7 @@ def _build_report(
     )
 
 
+# Return an explicit unavailable completeness report with its reason.
 def _empty_report(as_of_date: date | None, warning: str) -> OutcomeCompletenessReport:
     return OutcomeCompletenessReport(
         as_of_date=as_of_date,
@@ -205,6 +208,7 @@ def _empty_report(as_of_date: date | None, warning: str) -> OutcomeCompletenessR
     )
 
 
+# Find expected stock identifiers absent from the ready-outcome set.
 def _missing_symbols(expected: list[str], ready: list[str]) -> list[str]:
     ready_set = set(ready)
     return [symbol for symbol in expected if symbol not in ready_set]

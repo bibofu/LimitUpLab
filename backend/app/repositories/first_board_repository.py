@@ -400,6 +400,7 @@ class SQLiteFirstBoardRepository:
         inserted = self._upsert_historical_predictions(historical)
         for trade_date, items in live_by_date.items():
             first = items[0]
+            # The key compares score (negated for descending order), then symbol.
             payload = {
                 "trade_date": trade_date.isoformat(),
                 "candidates": [
@@ -463,6 +464,9 @@ class SQLiteFirstBoardRepository:
             for item in predictions
         ):
             raise ValueError("Live prediction rows do not match the snapshot metadata.")
+        # Snapshot rows and prediction rows must describe the same ordered cohort.
+        # Otherwise later Top-K evaluation could compare outcomes with a different
+        # list than the one the user actually saw at publication time.
         snapshot_symbols = [item.facts.symbol for item in ratings.candidates]
         prediction_symbols = [item.symbol for item in predictions]
         if snapshot_symbols != prediction_symbols:

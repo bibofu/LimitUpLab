@@ -36,6 +36,7 @@ class GroundingClaim:
     supported: bool
     evidence_paths: tuple[str, ...] = ()
 
+    # Expose the stored assessment fields as a serializable payload.
     def payload(self) -> dict[str, object]:
         return asdict(self)
 
@@ -56,6 +57,7 @@ class AnswerGroundingResult:
     over_refusal: bool
     tool_failure_hallucination: bool
 
+    # Expose the stored assessment fields as a serializable payload.
     def payload(self) -> dict[str, object]:
         return {
             "applicable": self.applicable,
@@ -161,6 +163,7 @@ def evaluate_answer_grounding(
     )
 
 
+# Walk tool payloads and collect the values that answer claims can be checked against.
 def _collect_evidence(
     value: Any,
     *,
@@ -210,6 +213,7 @@ def _collect_evidence(
         numbers.append(_EvidenceNumber(_base_value(number, unit), path, category))
 
 
+# Identify explicit dates, symbols, counts and numeric claims in the generated answer.
 def _extract_claims(answer: str) -> list[_RawClaim]:
     claims: list[_RawClaim] = []
     occupied: list[tuple[int, int]] = []
@@ -276,9 +280,12 @@ def _extract_claims(answer: str) -> list[_RawClaim]:
             )
         )
         occupied.append(match.span())
+    # The key compares start.
     return sorted(claims, key=lambda claim: claim.start)
 
 
+# Compare one extracted answer claim with compatible evidence, allowing the claim-specific numeric
+# tolerance.
 def _verify_claim(
     claim: _RawClaim,
     *,
@@ -322,20 +329,26 @@ def _verify_claim(
     )
 
 
+# Normalize equivalent textual representations before comparing evidence with an answer claim.
 def _canonical_string(value: str) -> str:
     if value.count(":"):
         return value.strip()
     return value.strip().replace("/", "-").lstrip("0")
 
 
+# Remove presentation differences so matching focuses on the text content.
 def _compact(value: str) -> str:
     return re.sub(r"\s+", "", value).replace("（", "(").replace("）", ")")
 
 
+# Check whether a candidate text span intersects a span already assigned to another claim.
 def _overlaps(span: tuple[int, int], occupied: list[tuple[int, int]]) -> bool:
     return any(span[0] < end and span[1] > start for start, end in occupied)
 
 
+# Separate a numeric claim from its unit so values can be compared on a common scale.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _parse_number_with_unit(value: str) -> tuple[float, str, int] | None:
     match = re.fullmatch(
         r"\s*([-+]?\d+(?:\.\d+)?)\s*(%|亿元|万元|亿|万|元|只|家|次|板|名|天|日|个|分|点)?\s*",
@@ -347,6 +360,7 @@ def _parse_number_with_unit(value: str) -> tuple[float, str, int] | None:
     return float(number_text), match.group(2) or "", len(number_text.partition(".")[2])
 
 
+# Convert a number and its display unit into the base value used for evidence comparison.
 def _base_value(number: float, unit: str) -> float:
     if unit in {"亿", "亿元"}:
         return number * 100_000_000
@@ -355,6 +369,7 @@ def _base_value(number: float, unit: str) -> float:
     return number
 
 
+# Choose the allowed rounding difference for a numeric answer claim.
 def _claim_tolerance(claim: _RawClaim) -> float:
     if claim.unit in {"亿", "亿元"}:
         multiplier = 100_000_000
@@ -367,6 +382,8 @@ def _claim_tolerance(claim: _RawClaim) -> float:
     return max(1e-7, 0.5 * (10 ** (-claim.decimals)) * multiplier)
 
 
+# Classify a unit so an amount cannot be accepted as evidence for an unrelated price or
+# percentage.
 def _unit_category(unit: str) -> str:
     if unit == "%":
         return "ratio"
@@ -387,6 +404,7 @@ def _unit_category(unit: str) -> str:
     return "generic"
 
 
+# Infer a metric's meaning from its path in a structured tool result.
 def _path_category(path: str) -> str:
     lowered = path.lower()
     if any(
@@ -417,5 +435,6 @@ def _path_category(path: str) -> str:
     return "generic"
 
 
+# Decide whether the evidence metric and the answer claim describe compatible quantities.
 def _categories_compatible(expected: str, actual: str) -> bool:
     return actual == expected or actual == "generic"

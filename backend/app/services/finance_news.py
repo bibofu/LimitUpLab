@@ -117,6 +117,10 @@ def collect_finance_news(
 
     earliest = current_time - timedelta(hours=bounded_hours)
     deep_scan = bounded_limit > 200
+    # The callback defers _load_eastmoney until its wrapper invokes it, preserving the surrounding
+    # request's arguments.
+    # The callback defers _load_tonghuashun until its wrapper invokes it, preserving the
+    # surrounding request's arguments.
     available = loaders or {
         "东方财富": lambda: _load_eastmoney(
             earliest=earliest,
@@ -292,6 +296,9 @@ def _rows_cover_boundary(
     return bool(valid) and min(valid) <= earliest
 
 
+# Normalize one provider news row into the common item model.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _news_item(
     *,
     title: object,
@@ -321,6 +328,7 @@ def _news_item(
     )
 
 
+# Remove repeated news items and order the remainder by the query/relevance rules.
 def _rank_and_deduplicate(
     items: list[FinanceNewsItem],
     *,
@@ -343,6 +351,8 @@ def _rank_and_deduplicate(
             len(candidate.summary), candidate.published_at
         ) > (len(previous.summary), previous.published_at):
             selected[key] = candidate
+    # The key compares relevance score, then published at. reverse=True reverses the resulting
+    # order.
     return sorted(
         selected.values(),
         key=lambda item: (item.relevance_score, item.published_at),
@@ -350,6 +360,7 @@ def _rank_and_deduplicate(
     )
 
 
+# Assign a supported news category from the item's text.
 def _classify(text: str) -> tuple[str, float]:
     best_category = "公司"
     best_hits = 0
@@ -366,6 +377,9 @@ def _classify(text: str) -> tuple[str, float]:
     return best_category, float(total_hits * 2 - noise_penalty)
 
 
+# Parse the provider's publication timestamp into the news time representation.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _parse_published_at(value: object) -> datetime | None:
     if isinstance(value, datetime):
         return _as_shanghai_time(value)
@@ -384,17 +398,20 @@ def _parse_published_at(value: object) -> datetime | None:
     return _as_shanghai_time(parsed)
 
 
+# Normalize a datetime to Shanghai time before freshness or date comparisons.
 def _as_shanghai_time(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=_SHANGHAI)
     return value.astimezone(_SHANGHAI)
 
 
+# Strip HTML presentation, normalize whitespace and cap the resulting news text.
 def _clean_text(value: object, *, limit: int) -> str:
     raw = BeautifulSoup(html.unescape(str(value or "")), "html.parser").get_text(" ")
     return " ".join(raw.split())[:limit]
 
 
+# Resolve the configured network timeout with this service's bounds and fallback.
 def _timeout_seconds() -> float:
     raw = os.getenv("LIMITUPLAB_FINANCE_NEWS_TIMEOUT_SECONDS", "8").strip()
     try:

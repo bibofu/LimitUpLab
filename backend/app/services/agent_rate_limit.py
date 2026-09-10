@@ -35,6 +35,7 @@ class AgentRateLimitConfig:
 class AgentRateLimitError(RuntimeError):
     """A public Agent request exceeded one configured boundary."""
 
+    # Initialize AgentRateLimitError with the supplied dependencies and per-instance state.
     def __init__(self, code: str, message: str, retry_after_seconds: int) -> None:
         super().__init__(message)
         self.code = code
@@ -45,6 +46,7 @@ class AgentRateLimitError(RuntimeError):
 class AgentRequestLease:
     """Idempotent lease representing one active Agent execution."""
 
+    # Initialize AgentRequestLease with the supplied dependencies and per-instance state.
     def __init__(
         self,
         limiter: "AgentRateLimiter",
@@ -72,6 +74,7 @@ class AgentRequestLease:
 class AgentRateLimiter:
     """Thread-safe fixed-window request limiter plus concurrency guard."""
 
+    # Initialize AgentRateLimiter with the supplied dependencies and per-instance state.
     def __init__(self, clock: Callable[[], float] = time.monotonic) -> None:
         self._clock = clock
         self._lock = threading.Lock()
@@ -223,17 +226,20 @@ def load_agent_rate_limit_config() -> AgentRateLimitConfig:
     )
 
 
+# Remove request timestamps that no longer belong to the active rate-limit window.
 def _trim_window(attempts: deque[float], now: float) -> None:
     while attempts and now - attempts[0] >= 60:
         attempts.popleft()
 
 
+# Compute when a caller can retry based on the oldest request still in the window.
 def _retry_after(attempts: deque[float], now: float) -> int:
     if not attempts:
         return 1
     return max(1, int(61 - (now - attempts[0])))
 
 
+# Read a positive integer setting used by the request limiter.
 def _positive_int(name: str, default: int) -> int:
     try:
         value = int(os.getenv(name, "").strip())
@@ -242,6 +248,7 @@ def _positive_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+# Read a nonnegative numeric environment setting for request limiting.
 def _non_negative_float(name: str, default: float) -> float:
     try:
         value = float(os.getenv(name, "").strip())

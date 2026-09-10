@@ -75,6 +75,8 @@ def build_sector_stock_ranking(
     facts_by_symbol: dict[str, StockKLineFacts] = {}
     failures: list[str] = []
 
+    # Build K-line evidence for one shortlisted sector member within the bounded history-fetch
+    # task.
     def load(member: HithinkIndexConstituentFact) -> StockKLineFacts:
         return facts_builder(
             symbol=member.symbol,
@@ -97,6 +99,9 @@ def build_sector_stock_ranking(
                 failures.append(member.symbol)
 
     member_by_symbol = {item.symbol: item for item in analyzed_members}
+    # The key compares 0 (negated for descending order), then
+    # `_sort_metric(item[2].return_20d_pct)` (negated for descending order), then
+    # `_sort_metric(item[2].return_5d_pct)` (negated for descending order), then symbol.
     ranked = sorted(
         (
             (_trend_score(facts), member_by_symbol[symbol], facts)
@@ -197,6 +202,7 @@ def _select_analysis_members(
     facts_by_symbol: dict[str, HithinkMarketSnapshotFact] = {
         item.symbol: item for item in snapshot.items
     }
+    # The key compares `_snapshot_shortlist_key(member, facts_by_symbol.get(member.symbol))`.
     ranked = sorted(
         constituents,
         key=lambda member: _snapshot_shortlist_key(
@@ -207,6 +213,7 @@ def _select_analysis_members(
     return ranked[:limit], True
 
 
+# Rank a sector member's snapshot for selecting the bounded history-fetch shortlist.
 def _snapshot_shortlist_key(
     member: HithinkIndexConstituentFact,
     snapshot: HithinkMarketSnapshotFact | None,
@@ -242,6 +249,7 @@ def _resolve_sector_index(
     return min(contains, key=_sector_preference)
 
 
+# Remove naming differences that should not distinguish equivalent sector names.
 def _normalize_sector_name(value: str) -> str:
     normalized = value.strip().lower().replace(" ", "")
     for term in ("今天", "今日", "最近", "近期", "a股", "板块", "行业", "概念", "相关"):
@@ -249,10 +257,12 @@ def _normalize_sector_name(value: str) -> str:
     return normalized
 
 
+# Rank candidate index-catalog matches when resolving a sector name.
 def _sector_preference(item: HithinkIndexCatalogFact) -> tuple[int, int, str]:
     return (0 if item.category == "industry" else 1, len(item.name), item.thscode)
 
 
+# Keep one constituent entry per stock identity.
 def _deduplicate_constituents(
     items: list[HithinkIndexConstituentFact],
 ) -> list[HithinkIndexConstituentFact]:
@@ -289,9 +299,11 @@ def _trend_score(facts: StockKLineFacts) -> float:
     return round(max(0.0, min(100.0, score)), 2)
 
 
+# Clamp an available numeric value to the configured range.
 def _bounded(value: float | None, lower: float, upper: float) -> float:
     return max(lower, min(upper, value or 0.0))
 
 
+# Convert an optional ranking metric to the sort value used for missing-data ordering.
 def _sort_metric(value: float | None) -> float:
     return value if value is not None else -999.0

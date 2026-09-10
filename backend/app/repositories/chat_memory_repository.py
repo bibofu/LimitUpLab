@@ -12,6 +12,7 @@ from app.repositories.chat_session_repository import SessionOwnershipError
 class SQLiteChatMemoryRepository:
     """Persist one compact rolling-memory snapshot per chat session."""
 
+    # Initialize SQLiteChatMemoryRepository with the supplied dependencies and per-instance state.
     def __init__(self, database_path: Path | None = None):
         self.database_path = database_path
 
@@ -97,6 +98,7 @@ class SQLiteChatMemoryRepository:
         return saved
 
 
+# Serialize structured session memory into database column values.
 def _memory_record(memory: ChatSessionMemory) -> tuple[object, ...]:
     return (
         memory.session_id,
@@ -118,6 +120,7 @@ def _memory_record(memory: ChatSessionMemory) -> tuple[object, ...]:
     )
 
 
+# Reconstruct the validated session-memory model from a database row.
 def _memory_from_row(row) -> ChatSessionMemory:
     return ChatSessionMemory(
         session_id=row["session_id"],

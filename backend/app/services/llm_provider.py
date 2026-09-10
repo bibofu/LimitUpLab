@@ -62,10 +62,12 @@ class LLMUsageTracker:
     total_tokens: int = 0
     model: str | None = None
 
+    # Record the start of a model invocation for request-scoped usage accounting.
     def begin_call(self, model: str) -> None:
         self.call_count += 1
         self.model = model
 
+    # Accumulate a completed model invocation's usage, preserving unknown token counts.
     def complete_call(self, result: LLMResult) -> None:
         if (
             result.prompt_tokens is None
@@ -78,9 +80,11 @@ class LLMUsageTracker:
         self.completion_tokens += result.completion_tokens
         self.total_tokens += result.total_tokens
 
+    # Increment failed-call accounting for the current request.
     def fail_call(self) -> None:
         self.failed_call_count += 1
 
+    # Report whether token counts are known for the tracked calls.
     @property
     def token_usage_complete(self) -> bool:
         return self.call_count > 0 and self.measured_call_count == self.call_count
@@ -512,6 +516,7 @@ def get_llm_provider() -> LLMProvider:
     )
 
 
+# Read the configured LLM timeout with the implemented numeric fallback.
 def _read_timeout_seconds() -> float:
     raw_timeout = os.getenv("LIMITUPLAB_LLM_TIMEOUT_SECONDS", "").strip()
     if not raw_timeout:
@@ -538,6 +543,7 @@ def _read_positive_int(name: str, default: int) -> int:
     return value if value > 0 else default
 
 
+# Read a nonnegative numeric LLM setting, using the declared default for invalid input.
 def _read_non_negative_float(name: str, default: float) -> float:
     raw_value = os.getenv(name, "").strip()
     if not raw_value:

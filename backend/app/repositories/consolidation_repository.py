@@ -13,6 +13,7 @@ from app.services.consolidation import (
 )
 
 
+# Load the local event/bar dataset and build the requested observation pool at its data cutoff.
 def load_consolidation_pool(as_of: date | None, now: datetime,
                             database_path: Path | None = None,
                             strategy: ObservationStrategy = "consolidation") -> ConsolidationPool:

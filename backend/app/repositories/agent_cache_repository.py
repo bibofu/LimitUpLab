@@ -103,11 +103,13 @@ class SQLiteAgentCacheRepository:
             connection.close()
 
 
+# Reconstruct a stored timestamp for cache expiry comparisons.
 def _parse_datetime(value: str) -> datetime:
     parsed = datetime.fromisoformat(value)
     return _to_utc(parsed)
 
 
+# Normalize a datetime to UTC for storage and expiry comparisons.
 def _to_utc(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=timezone.utc)

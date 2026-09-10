@@ -90,6 +90,7 @@ def build_first_board_outcome(
 ) -> FirstBoardOutcome:
     """Build an outcome using exact market trading-date alignment."""
 
+    # The key compares trade date.
     ordered_bars = sorted(
         [bar for bar in bars if bar.symbol == event.symbol and bar.trade_date >= event.trade_date],
         key=lambda bar: bar.trade_date,

@@ -20,6 +20,8 @@ def list_limit_up_events() -> list[LimitUpEvent]:
     """Return all persisted limit-up events, newest first."""
 
     events = get_limit_up_repository().list_events()
+    # The key compares trade date, then board height, then first limit time. reverse=True reverses
+    # the resulting order.
     return sorted(
         events,
         key=lambda event: (event.trade_date, event.board_height, event.first_limit_time),

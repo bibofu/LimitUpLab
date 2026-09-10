@@ -14,6 +14,8 @@ from app.models import DailyPipelineRun
 class SQLiteDailyPipelineRepository:
     """Store and query after-close pipeline execution history."""
 
+    # Initialize SQLiteDailyPipelineRepository with the supplied dependencies and per-instance
+    # state.
     def __init__(self, database_path: Path | None = None):
         self.database_path = database_path
 
@@ -85,6 +87,7 @@ class SQLiteDailyPipelineRepository:
             connection.close()
         return self._from_row(row) if row is not None else None
 
+    # Serialize a daily-pipeline run into the column values expected by persistence.
     @staticmethod
     def _to_record(run: DailyPipelineRun) -> tuple[object, ...]:
         return (
@@ -101,6 +104,7 @@ class SQLiteDailyPipelineRepository:
             run.finished_at.isoformat() if run.finished_at else None,
         )
 
+    # Reconstruct the repository's domain model from a stored database row.
     @staticmethod
     def _from_row(row: sqlite3.Row) -> DailyPipelineRun:
         return DailyPipelineRun(

@@ -31,6 +31,8 @@ def _load_persisted_response(raw_json: str) -> RecommendationIntelligenceRespons
 class SQLiteRecommendationIntelligenceRepository:
     """Store recent mutable evidence without rewriting prediction snapshots."""
 
+    # Initialize SQLiteRecommendationIntelligenceRepository with the supplied dependencies and
+    # per-instance state.
     def __init__(self, database_path: Path | None = None):
         self.database_path = database_path
 

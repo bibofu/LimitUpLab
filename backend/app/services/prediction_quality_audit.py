@@ -196,6 +196,7 @@ def build_prediction_quality_audit(
     )
 
 
+# Measure prediction and outcome completeness per date before forming audit cohorts.
 def _build_date_coverage(
     *,
     canonical: list[AgentPrediction],
@@ -210,6 +211,7 @@ def _build_date_coverage(
     coverage: list[PredictionDateCoverage] = []
     complete_dates: set[date] = set()
     for trade_date in sorted(by_date):
+        # The key compares score (negated for descending order), then symbol.
         candidates = sorted(
             by_date[trade_date], key=lambda item: (-item.score, item.symbol)
         )
@@ -251,6 +253,7 @@ def _build_date_coverage(
     return coverage, complete_dates
 
 
+# Build comparable prediction and baseline cohorts using only the eligible complete dates.
 def _build_benchmarks(
     *,
     canonical: list[AgentPrediction],
@@ -269,6 +272,7 @@ def _build_benchmarks(
     random_daily: dict[date, list[FirstBoardOutcome]] = {}
     pool_daily: dict[date, list[FirstBoardOutcome]] = {}
     for trade_date, predictions in by_date.items():
+        # The key compares score (negated for descending order), then symbol.
         ranked = sorted(predictions, key=lambda item: (-item.score, item.symbol))
         model_daily[trade_date] = _prediction_outcomes(
             ranked[:top_k], outcomes
@@ -280,6 +284,8 @@ def _build_benchmarks(
             and outcome.next_day_ready
         ]
         pool_daily[trade_date] = _prediction_outcomes(ready_predictions, outcomes)
+        # The key compares the derived comparison value, then the derived comparison value, then
+        # symbol.
         early_ranked = sorted(
             ready_predictions,
             key=lambda item: (
@@ -295,6 +301,7 @@ def _build_benchmarks(
         early_daily[trade_date] = _prediction_outcomes(
             early_ranked[:top_k], outcomes
         )
+        # The key compares the derived comparison value.
         random_ranked = sorted(
             ready_predictions,
             key=lambda item: hashlib.sha256(
@@ -340,6 +347,7 @@ def _build_benchmarks(
     ]
 
 
+# Join saved predictions to observed outcomes using their date and stock identity.
 def _prediction_outcomes(
     predictions: list[AgentPrediction],
     outcomes: dict[tuple[date, str], FirstBoardOutcome],
@@ -352,6 +360,7 @@ def _prediction_outcomes(
     ]
 
 
+# Calculate the benchmark's outcome metrics from its dated cohorts.
 def _benchmark_metrics(
     *,
     benchmark: str,
@@ -396,6 +405,7 @@ def _benchmark_metrics(
     )
 
 
+# Attach the benchmark's excess over the available pool average.
 def _with_pool_excess(
     metrics: PredictionBenchmarkMetrics,
     pool_avg: float | None,
@@ -409,6 +419,7 @@ def _with_pool_excess(
     return metrics.model_copy(update={"excess_vs_ready_pool_pct": excess})
 
 
+# Group predictions by the selected provenance dimension and summarize their observed outcomes.
 def _cohort_summaries(
     predictions: list[AgentPrediction],
     outcomes: dict[tuple[date, str], FirstBoardOutcome],
@@ -424,6 +435,7 @@ def _cohort_summaries(
         )
         groups[value].append(item)
     summaries: list[PredictionQualityCohort] = []
+    # The key compares 0.
     for value, items in sorted(groups.items(), key=lambda pair: pair[0]):
         unique = {(item.trade_date, item.symbol) for item in items}
         ready = sum(
@@ -444,6 +456,7 @@ def _cohort_summaries(
     return summaries
 
 
+# Turn audit coverage, provenance and benchmark measurements into explicit findings.
 def _audit_findings(
     *,
     raw_count: int,
@@ -485,6 +498,7 @@ def _audit_findings(
     return findings
 
 
+# Describe follow-up data or evaluation work justified by the measured audit gaps.
 def _audit_recommendations(
     *,
     outcome_ready_dates: int,
@@ -529,10 +543,12 @@ def _audit_recommendations(
     return recommendations
 
 
+# Average the available observations; an empty usable sample remains unavailable.
 def _average(values: list[float | None]) -> float | None:
     present = [float(item) for item in values if item is not None]
     return round(mean(present), 4) if present else None
 
 
+# Return a rounded count ratio; this audit uses zero when the denominator is empty.
 def _safe_ratio(numerator: int, denominator: int) -> float:
     return round(numerator / denominator, 4) if denominator else 0.0

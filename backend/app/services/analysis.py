@@ -57,6 +57,7 @@ def find_stock_event(
         if event.symbol.lower() == normalized_symbol
         and (trade_date is None or event.trade_date == trade_date)
     ]
+    # The key compares trade date.
     return max(matches, key=lambda event: event.trade_date, default=None)
 
 
@@ -115,6 +116,7 @@ def summarize_market(
 def list_first_board(events: list[LimitUpEvent]) -> list[LimitUpEvent]:
     """Return latest-day first-board events sorted by first seal time."""
 
+    # The key compares first limit time.
     return sorted(
         [
             event
@@ -128,6 +130,7 @@ def list_first_board(events: list[LimitUpEvent]) -> list[LimitUpEvent]:
 def list_continued_board(events: list[LimitUpEvent]) -> list[LimitUpEvent]:
     """Return latest-day continued-board events, highest board first."""
 
+    # The key compares board height (negated for descending order), then first limit time.
     return sorted(
         [
             event
@@ -141,6 +144,7 @@ def list_continued_board(events: list[LimitUpEvent]) -> list[LimitUpEvent]:
 def list_failed_events(events: list[LimitUpEvent]) -> list[LimitUpEvent]:
     """Return latest-day stocks that touched limit-up but did not close there."""
 
+    # The key compares break count (negated for descending order), then first limit time.
     return sorted(
         [event for event in events_for_date(events) if not event.closed_limit],
         key=lambda event: (-event.break_count, event.first_limit_time),
@@ -154,6 +158,8 @@ def list_recent_limit_up(
     """Return events from the most recent N trading dates in reverse order."""
 
     trade_dates = sorted({event.trade_date for event in events}, reverse=True)[:days]
+    # The key compares trade date, then board height, then first limit time. reverse=True reverses
+    # the resulting order.
     return sorted(
         [
             event
@@ -257,6 +263,8 @@ def calculate_daily_board_promotion(
         continued_promoted_count = sum(
             1 for event in continued_board_events if event.symbol in promoted_symbols
         )
+        # The key compares to board height (negated for descending order), then first limit time,
+        # then symbol.
         promoted_stocks = sorted(
             (
                 BoardPromotionStock(

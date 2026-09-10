@@ -333,6 +333,7 @@ def infer_capabilities_from_facts(
         and len(CAPABILITY_BY_NAME[name].required_tools) > 1
         for requirement in CAPABILITY_BY_NAME[name].required_tools
     }
+    # The key compares `len(item.required_tools)`. reverse=True reverses the resulting order.
     for capability in sorted(
         CAPABILITIES,
         key=lambda item: len(item.required_tools),

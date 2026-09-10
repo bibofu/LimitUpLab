@@ -159,6 +159,7 @@ def _load_eastmoney_stock_news(
     return items
 
 
+# Package normalized news items, sources, cache status and errors as stock-news evidence.
 def _facts(
     *,
     symbol: str,
@@ -190,6 +191,8 @@ def _facts(
 def _deduplicate_items(items: list[StockNewsItem]) -> list[StockNewsItem]:
     """Keep the newest copy when providers repeat the same normalized title."""
 
+    # The key compares published at, then relevance score, then `len(item.summary)`. reverse=True
+    # reverses the resulting order.
     ranked = sorted(
         items,
         key=lambda item: (item.published_at, item.relevance_score, len(item.summary)),
@@ -206,12 +209,16 @@ def _deduplicate_items(items: list[StockNewsItem]) -> list[StockNewsItem]:
     return selected
 
 
+# Check whether the last successful news fetch is still within the cache freshness window.
 def _is_fresh(last_success_at: datetime | None, now: datetime) -> bool:
     if last_success_at is None:
         return False
     return now - _as_shanghai_time(last_success_at) <= _CACHE_TTL
 
 
+# Parse a publication time into the timestamp representation used by stock-news freshness checks.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _parse_time(value: object) -> datetime | None:
     if isinstance(value, datetime):
         return _as_shanghai_time(value)
@@ -225,23 +232,27 @@ def _parse_time(value: object) -> datetime | None:
     return _as_shanghai_time(parsed)
 
 
+# Normalize a datetime to Shanghai time before freshness or date comparisons.
 def _as_shanghai_time(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=_SHANGHAI)
     return value.astimezone(_SHANGHAI)
 
 
+# Strip HTML presentation, normalize whitespace and cap the resulting news text.
 def _clean_text(value: object, *, limit: int) -> str:
     text = html.unescape(str(value or ""))
     text = re.sub(r"<[^>]+>", " ", text)
     return " ".join(text.split())[:limit]
 
 
+# Accept URLs satisfying the news service's supported link scheme rules.
 def _valid_url(value: str) -> bool:
     parsed = urlparse(value)
     return parsed.scheme in {"http", "https"} and bool(parsed.netloc)
 
 
+# Score a news item's stock relevance using the explicit symbol/name and its text.
 def _relevance_score(*, symbol: str, name: str, title: str, summary: str) -> float:
     title_lower = title.lower()
     combined = f"{title} {summary}".lower()
@@ -257,6 +268,7 @@ def _relevance_score(*, symbol: str, name: str, title: str, summary: str) -> flo
     return min(1.0, round(score, 2))
 
 
+# Assign a news category from the item's title and summary.
 def _classify_item(title: str, summary: str) -> str:
     combined = f"{title} {summary}"
     categories = (

@@ -23,6 +23,8 @@ from .helpers import (
 )
 
 
+# Execute the dragon tiger list evidence step, resolving request arguments and recording its facts
+# and trace.
 def dragon_tiger_list(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     trade_date = _latest_external_trade_date(state.request, state.tools.events)
     board_type = _optional_str(arguments.get("board_type")) or "all"
@@ -63,6 +65,8 @@ def dragon_tiger_list(state: ExecutionState, name: str, arguments: dict[str, Any
     )
 
 
+# Execute the finance news evidence step, resolving request arguments and recording its facts and
+# trace.
 def finance_news(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     query = _optional_str(arguments.get("query"))
     limit = _parse_optional_int(arguments.get("limit")) or 8
@@ -92,6 +96,8 @@ def finance_news(state: ExecutionState, name: str, arguments: dict[str, Any]) ->
     state.references.extend(item.url for item in response.items)
 
 
+# Execute the stock news evidence step, resolving request arguments and recording its facts and
+# trace.
 def stock_news(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     days = _parse_optional_int(arguments.get("days")) or (
         _extract_stock_news_days(state.request.message)
@@ -128,6 +134,8 @@ def stock_news(state: ExecutionState, name: str, arguments: dict[str, Any]) -> N
     state.references.extend(item.url for item in response.items)
 
 
+# Execute the stock activity evidence step, resolving request arguments and recording its facts
+# and trace.
 def stock_activity(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     days = _parse_optional_int(arguments.get("days")) or (
         _extract_stock_news_days(state.request.message)
@@ -168,6 +176,8 @@ def stock_activity(state: ExecutionState, name: str, arguments: dict[str, Any]) 
     state.references.extend(item.url for item in response.news.items)
 
 
+# Execute the web search evidence step, resolving request arguments and recording its facts and
+# trace.
 def web_search(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     query = _optional_str(arguments.get("query")) or state.request.message
     limit = _parse_optional_int(arguments.get("limit")) or 5
@@ -195,6 +205,8 @@ def web_search(state: ExecutionState, name: str, arguments: dict[str, Any]) -> N
     state.references.extend(item.url for item in response.results)
 
 
+# Execute the limit up events evidence step, resolving request arguments and recording its facts
+# and trace.
 def limit_up_events(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     arguments = _normalize_limit_up_event_arguments(
         state.request,
@@ -239,6 +251,8 @@ def limit_up_events(state: ExecutionState, name: str, arguments: dict[str, Any])
     state.references.append(f"trade_date={result.trace_output.get('trade_date')}")
 
 
+# Execute the stock kline evidence step, resolving request arguments and recording its facts and
+# trace.
 def stock_kline(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     days = _parse_optional_int(arguments.get("days")) or _extract_kline_days(
         state.request.message

@@ -30,12 +30,15 @@ class ResilientSQLiteConnection(sqlite3.Connection):
     lock_retry_attempts: int = DEFAULT_LOCK_RETRY_ATTEMPTS
     lock_retry_base_delay_seconds: float = DEFAULT_LOCK_RETRY_BASE_DELAY_SECONDS
 
+    # Run one SQL statement through the connection's lock-conflict retry policy.
     def execute(self, sql: str, parameters=(), /) -> sqlite3.Cursor:
         return self._retry_locked(super().execute, sql, parameters)
 
+    # Run a batch of SQL bindings through the connection's lock-conflict retry policy.
     def executemany(self, sql: str, seq_of_parameters, /) -> sqlite3.Cursor:
         return self._retry_locked(super().executemany, sql, seq_of_parameters)
 
+    # Commit the current transaction through the connection's lock-conflict retry policy.
     def commit(self) -> None:
         self._retry_locked(super().commit)
 
@@ -758,16 +761,20 @@ def _apply_schema(connection: sqlite3.Connection) -> None:
     _repair_legacy_failed_pool_board_heights(connection)
 
 
+# Read SQLite's schema version for the connection or migration checks.
 def _database_schema_version(connection: sqlite3.Connection) -> int:
     row = connection.execute("PRAGMA user_version").fetchone()
     return int(row[0]) if row is not None else 0
 
 
+# Distinguish SQLite locking errors from failures that should not be retried.
 def _is_lock_conflict(error: sqlite3.OperationalError) -> bool:
     message = str(error).lower()
     return "locked" in message or "busy" in message
 
 
+# Parse an integer and constrain it to the permitted range using this boundary's invalid-input
+# fallback.
 def _bounded_int(
     name: str,
     default: int,
@@ -782,6 +789,7 @@ def _bounded_int(
     return min(maximum, max(minimum, value))
 
 
+# Read a numeric setting and constrain it to the configured safe range.
 def _bounded_float(
     name: str,
     default: float,

@@ -27,6 +27,7 @@ logger = logging.getLogger(__name__)
 class MarketDataProvider:
     """Read unadjusted daily data from hithink-finance, then named fallbacks."""
 
+    # Initialize MarketDataProvider with the supplied dependencies and per-instance state.
     def __init__(
         self,
         *,
@@ -136,6 +137,7 @@ class MarketDataProvider:
 _default_provider = MarketDataProvider()
 
 
+# Fetch one stock's historical bars through the configured preferred/fallback source policy.
 def collect_preferred_stock_kline(
     symbol: str,
     days: int = 5,
@@ -144,6 +146,7 @@ def collect_preferred_stock_kline(
     return _default_provider.collect_history(symbol, days, end_date)
 
 
+# Fetch a batch of dated stock snapshot bars through the preferred/fallback source policy.
 def collect_preferred_stock_spot_klines(
     symbols: list[str],
     trade_date: date,
@@ -151,6 +154,7 @@ def collect_preferred_stock_spot_klines(
     return _default_provider.collect_spot(symbols, trade_date)
 
 
+# Strip provider-specific market decorations from a stock identifier.
 def _plain_symbol(symbol: str) -> str:
     value = symbol.strip().upper()
     if "." in value:
@@ -162,6 +166,7 @@ def _plain_symbol(symbol: str) -> str:
     return value
 
 
+# Translate a plain stock code to the exchange-qualified Tonghuashun identifier.
 def _to_thscode(symbol: str) -> str:
     value = _plain_symbol(symbol)
     if value.startswith(("4", "8", "920")):

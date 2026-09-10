@@ -133,6 +133,7 @@ def expected_local_data_date(now: datetime | None = None) -> tuple[date | None, 
     return previous, "Before close: previous weekday data is acceptable."
 
 
+# Read the proxy configuration relevant to the runtime health report.
 def _current_proxy() -> str:
     return (
         os.getenv("HTTPS_PROXY", "").strip()
@@ -141,6 +142,9 @@ def _current_proxy() -> str:
     )
 
 
+# Describe the detected proxy configuration issue for the health report.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _proxy_warning() -> str | None:
     proxy = _current_proxy()
     if not proxy:
@@ -155,6 +159,7 @@ def _proxy_warning() -> str | None:
         return f"Configured local proxy {parsed.hostname}:{parsed.port} is unreachable."
 
 
+# Combine data, model-configuration and offline-evaluation checks into the reported health state.
 def _overall_status(
     *,
     data_health_status: str,

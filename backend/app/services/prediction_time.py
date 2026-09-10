@@ -19,6 +19,7 @@ class TimeVerdict:
     strict_forward_eligible: bool
     reasons: tuple[str, ...] = ()
 
+    # Serialize this object's fields into the dictionary representation used at the boundary.
     def to_dict(self) -> dict:
         return asdict(self)
 
@@ -104,10 +105,12 @@ def provenance_errors(*, base_date: date, data_as_of: date, created_at: datetime
     return errors
 
 
+# Describe the close-time provenance used to interpret prediction availability.
 def close_provenance() -> dict:
     return {"version": TIME_CONTRACT_VERSION, "stage": "close_baseline"}
 
 
+# Count predictions by the time/provenance cohorts used in the audit.
 def time_cohort_counts(predictions) -> dict[str, int]:
     from collections import Counter
     return dict(Counter(assess_prediction_time(item).cohort for item in predictions))

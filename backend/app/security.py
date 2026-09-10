@@ -146,9 +146,12 @@ def current_owner_id(request: Request) -> str:
 class AnonymousVisitorMiddleware:
     """Install a signed anonymous owner id and refresh invalid visitor cookies."""
 
+    # Initialize AnonymousVisitorMiddleware with the supplied dependencies and per-instance state.
     def __init__(self, app: Callable[..., Awaitable[None]]) -> None:
         self.app = app
 
+    # Wrap the ASGI request with anonymous identity handling and attach the session cookie to the
+    # response.
     async def __call__(
         self,
         scope: dict[str, Any],
@@ -165,6 +168,7 @@ class AnonymousVisitorMiddleware:
         )
         scope.setdefault("state", {})["owner_id"] = identity.owner_id
 
+        # Attach the anonymous-session cookie to the outgoing ASGI response when needed.
         async def send_with_identity(message: dict[str, Any]) -> None:
             if (
                 identity.is_new
@@ -184,6 +188,7 @@ class AnonymousVisitorMiddleware:
         await self.app(scope, receive, send_with_identity)
 
 
+# Resolve the signing secret used to authenticate anonymous-session tokens.
 def _session_secret() -> bytes:
     secret = os.getenv("LIMITUPLAB_SESSION_SECRET", "")
     if secret:
@@ -193,6 +198,9 @@ def _session_secret() -> bytes:
     return _LOCAL_DEVELOPMENT_SECRET.encode("utf-8")
 
 
+# Extract one named cookie from the raw request Cookie header.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _cookie_value(raw_cookie: str, name: str) -> str | None:
     if not raw_cookie:
         return None
@@ -217,6 +225,7 @@ def _request_uses_https(scope: dict[str, Any]) -> bool:
     return str(scope.get("scheme", "")).lower() in {"https", "wss"}
 
 
+# Build the session Set-Cookie header with the configured transport protections.
 def _session_cookie_header(token: str, *, secure: bool) -> str:
     cookie = SimpleCookie()
     cookie[SESSION_COOKIE_NAME] = token

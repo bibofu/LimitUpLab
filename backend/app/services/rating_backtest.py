@@ -167,6 +167,7 @@ def _build_failure_samples(
         and sample.outcome.next_open_to_close_pct is not None
         and sample.outcome.next_open_to_close_pct < 0
     ]
+    # The key compares the derived comparison value.
     high_rated.sort(
         key=lambda sample: (
             sample.outcome.three_day_open_to_close_pct

@@ -13,6 +13,7 @@ from app.models import StockNewsItem
 class SQLiteStockNewsRepository:
     """Persist deduplicated stock news and per-source synchronization state."""
 
+    # Initialize SQLiteStockNewsRepository with the supplied dependencies and per-instance state.
     def __init__(self, database_path: Path | None = None):
         self.database_path = database_path
 
@@ -162,6 +163,7 @@ class SQLiteStockNewsRepository:
         return datetime.fromisoformat(row["last_success_at"])
 
 
+# Derive the stable news-item key used to deduplicate stored records.
 def _item_id(item: StockNewsItem) -> str:
     identity = "|".join(
         (

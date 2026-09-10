@@ -50,6 +50,7 @@ def build_sector_performance(
     """Return latest industry/concept ranking and optional named-sector facts."""
 
     target_date = trade_date or date.today()
+    # The key compares rank.
     spot_rows = sorted(spot_collector(), key=lambda item: item.rank)
     if not spot_rows:
         raise ValueError("sector provider returned no ranking rows")
@@ -73,6 +74,7 @@ def build_sector_performance(
             except ValueError as error:
                 industry_match_error = error
                 try:
+                    # The key compares rank.
                     concept_rows = sorted(
                         concept_spot_collector(),
                         key=lambda item: item.rank,
@@ -182,6 +184,7 @@ def build_sector_performance(
     )
 
 
+# Resolve a broad industry-group query against the available sector snapshot rows.
 def _resolve_industry_group(
     query: str,
     rows: list[SectorSpotRow],
@@ -198,11 +201,13 @@ def _resolve_industry_group(
     ]
 
 
+# Return the display label for the recognized broad industry group.
 def _industry_group_label(query: str) -> str:
     normalized = _normalize_sector_name(query)
     return _INDUSTRY_GROUP_LABELS.get(normalized, query.strip())
 
 
+# Match a sector query against available rows and configured aliases.
 def _resolve_sector(
     query: str,
     rows: list[SectorSpotRow],
@@ -224,6 +229,7 @@ def _resolve_sector(
     if len(contains) == 1:
         return contains[0]
     if contains:
+        # The key compares `len(item.sector_name)`.
         return min(contains, key=lambda item: len(item.sector_name))
     raise ValueError(f"未找到与“{query}”匹配的行业板块")
 
@@ -298,6 +304,7 @@ def _build_history_only_concept(
     )
 
 
+# Remove naming differences that should not distinguish equivalent sector names.
 def _normalize_sector_name(value: str) -> str:
     normalized = value.strip().lower().replace(" ", "")
     for term in ("今天", "今日", "a股", "板块", "行业", "概念", "相关"):
@@ -305,12 +312,17 @@ def _normalize_sector_name(value: str) -> str:
     return normalized
 
 
+# Calculate percentage change over the requested historical window when the required bars are
+# available.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _period_return(rows: list[SectorDailyRow], days: int) -> float | None:
     if len(rows) <= days or rows[-days - 1].close == 0:
         return None
     return round((rows[-1].close - rows[-days - 1].close) / rows[-days - 1].close * 100, 2)
 
 
+# Convert a sector snapshot row into the compact ranking response.
 def _ranking_item(row: SectorSpotRow) -> SectorRankingItem:
     return SectorRankingItem(
         sector_name=row.sector_name,

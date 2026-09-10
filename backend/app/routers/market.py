@@ -150,6 +150,7 @@ def get_finance_news(
             status_code=502,
             detail="财经快讯数据源暂不可用，请稍后重试。",
         ) from exc
+    # The key compares published at. reverse=True reverses the resulting order.
     ordered = sorted(
         (item for item in facts.items if _include_market_news(item)),
         key=lambda item: item.published_at,

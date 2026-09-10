@@ -94,6 +94,7 @@ def sanitize_agent_answer(text: str) -> str:
 class AgentAnswerStreamSanitizer:
     """Sanitize complete clauses even when an LLM splits names across deltas."""
 
+    # Initialize AgentAnswerStreamSanitizer with the supplied dependencies and per-instance state.
     def __init__(self, emit: Callable[[str], None]) -> None:
         self.emit = emit
         self.pending = ""

@@ -132,6 +132,9 @@ def _tool_planner_system_prompt(
 def _planner_function_parameters(tools: AgentToolRegistry) -> dict[str, Any]:
     """Build the capability-only schema for the native planner function."""
 
+    # Restrict the model's enum to capabilities backed by currently enabled tools.
+    # Arguments such as date windows remain the backend compiler's responsibility.
+
     capability_names = list(available_capability_names(tools.enabled_tool_names))
     return {
         "type": "object",
@@ -370,6 +373,9 @@ def _tool_answer_user_prompt(
 ) -> str:
     """Build the final answer prompt from question, plan and tool outputs."""
 
+    # Keep old answers out of the writing prompt: they may contain stale prices
+    # or earlier mistakes. Stock/date follow-ups have already been resolved while
+    # planning and executing this turn's tools.
     del context  # Continuity is resolved before this facts-only answer stage.
 
     payload = {

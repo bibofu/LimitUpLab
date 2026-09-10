@@ -36,6 +36,7 @@ class AuditedChatOpenAI(ChatOpenAI):
     langchain-openai. Missing billing evidence must remain unknown in our ledger.
     """
 
+    # Adapt the outgoing LangChain payload to the provider's supported request fields.
     def _get_request_payload(self, input_, *, stop=None, **kwargs):
         payload = super()._get_request_payload(input_, stop=stop, **kwargs)
         # ChatOpenAI renames this to max_completion_tokens. DeepSeek documents
@@ -44,6 +45,7 @@ class AuditedChatOpenAI(ChatOpenAI):
             payload["max_tokens"] = payload.pop("max_completion_tokens")
         return payload
 
+    # Adapt provider streaming chunks to LangChain's generation format.
     def _convert_chunk_to_generation_chunk(
         self, chunk: dict, default_chunk_class: type, base_generation_info: dict | None,
     ):
@@ -58,6 +60,7 @@ class AuditedChatOpenAI(ChatOpenAI):
 class LangChainChatProvider(LLMProvider):
     """Use LCEL, bind_tools and native streaming behind the existing interface."""
 
+    # Initialize LangChainChatProvider with the supplied dependencies and per-instance state.
     def __init__(
         self,
         *,
@@ -88,6 +91,7 @@ class LangChainChatProvider(LLMProvider):
             }},
         )
 
+    # Select the model configuration for the current answer-generation task.
     def _answer_model(self, system_prompt: str) -> Runnable:
         if "Return only valid JSON" in system_prompt:
             return self.chat_model.bind(
@@ -95,11 +99,15 @@ class LangChainChatProvider(LLMProvider):
             )
         return self.chat_model
 
+    # Generate a complete text response through the common LangChain execution and usage-
+    # accounting path.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         return self._run(
             self._answer_model(system_prompt), system_prompt, user_prompt,
         )
 
+    # Bind the requested structured function contract and return its arguments as the common LLM
+    # result.
     def generate_function_call(
         self,
         system_prompt: str,
@@ -132,6 +140,8 @@ class LangChainChatProvider(LLMProvider):
             function_name=function_name, contract_chars=contract_chars,
         )
 
+    # Generate a response incrementally and forward visible text through the supplied delta
+    # callback.
     def stream_generate(
         self,
         system_prompt: str,
@@ -143,6 +153,7 @@ class LangChainChatProvider(LLMProvider):
             on_delta=on_delta,
         )
 
+    # Execute the LangChain request or stream, normalize usage and return the common LLM result.
     def _run(
         self,
         model: Runnable,
@@ -208,6 +219,7 @@ class LangChainChatProvider(LLMProvider):
         return result
 
 
+# Extract textual content from a LangChain message, including structured content blocks.
 def _text_content(message: BaseMessage) -> str:
     if isinstance(message.content, str):
         return message.content
@@ -218,6 +230,7 @@ def _text_content(message: BaseMessage) -> str:
     )
 
 
+# Extract the requested native function call's arguments from an AI message.
 def _function_arguments(message: AIMessage, function_name: str) -> str:
     calls = message.tool_calls
     if (

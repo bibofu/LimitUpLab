@@ -341,6 +341,7 @@ class ToolRepairRule:
 class AgentToolPolicyEngine:
     """Reconcile an LLM tool plan with minimum domain evidence requirements."""
 
+    # Initialize AgentToolPolicyEngine with the supplied dependencies and per-instance state.
     def __init__(
         self,
         tools: AgentToolRegistry,
@@ -395,6 +396,10 @@ class AgentToolPolicyEngine:
     ) -> list[str]:
         """Apply all matching rules and return names of repaired tools."""
 
+        # Capabilities identify required evidence; lexical signals cover plans
+        # without capability metadata. Repair adds facts to the same execution
+        # object, so the caller receives both original and supplementary results.
+
         signals = QuestionSignals.from_message(request.message, capabilities)
         if not signals.needs_domain_facts:
             return []
@@ -409,6 +414,8 @@ class AgentToolPolicyEngine:
         for rule in self._rules():
             if not self.tools.is_enabled(rule.tool_name):
                 continue
+            # An existing error/empty outcome is still an outcome. Repeating the
+            # same failed source here would obscure the failure and add latency.
             if not rule.matches(signals) or _has_tool_outcome(execution, rule.tool_name):
                 continue
             try:
@@ -432,6 +439,52 @@ class AgentToolPolicyEngine:
     def _rules(self) -> tuple[ToolRepairRule, ...]:
         """Return ordered rules; earlier tools may provide facts for later rules."""
 
+        # The rule predicate checks signals.market_events; only matching questions are eligible
+        # for this evidence repair.
+        # The rule predicate checks signals.market_environment; only matching questions are
+        # eligible for this evidence repair.
+        # The rule predicate checks signals.market_index_trend; only matching questions are
+        # eligible for this evidence repair.
+        # The rule predicate checks signals.hot_stock_ranking; only matching questions are
+        # eligible for this evidence repair.
+        # The rule predicate checks signals.finance_news; only matching questions are eligible for
+        # this evidence repair.
+        # The rule predicate checks signals.stock_news; only matching questions are eligible for
+        # this evidence repair.
+        # The rule predicate checks signals.stock_activity; only matching questions are eligible
+        # for this evidence repair.
+        # The rule predicate checks signals.sector_stock_ranking; only matching questions are
+        # eligible for this evidence repair.
+        # The rule predicate checks signals.sector_performance; only matching questions are
+        # eligible for this evidence repair.
+        # The rule predicate checks signals.web_search; only matching questions are eligible for
+        # this evidence repair.
+        # The rule predicate checks signals.daily_board_promotion; only matching questions are
+        # eligible for this evidence repair.
+        # The rule predicate checks signals.post_limit_screen; only matching questions are
+        # eligible for this evidence repair.
+        # The rule predicate checks signals.post_limit_path; only matching questions are eligible
+        # for this evidence repair.
+        # The rule predicate checks signals.post_limit_statistics; only matching questions are
+        # eligible for this evidence repair.
+        # The rule predicate checks signals.limit_up_events; only matching questions are eligible
+        # for this evidence repair.
+        # The rule predicate checks signals.first_board_facts or signals.rating_explanation; only
+        # matching questions are eligible for this evidence repair.
+        # The rule predicate checks signals.stock_kline; only matching questions are eligible for
+        # this evidence repair.
+        # The rule predicate checks signals.prediction_quality; only matching questions are
+        # eligible for this evidence repair.
+        # The rule predicate checks signals.rating_backtest; only matching questions are eligible
+        # for this evidence repair.
+        # The rule predicate checks signals.critic; only matching questions are eligible for this
+        # evidence repair.
+        # The rule predicate checks signals.evaluation; only matching questions are eligible for
+        # this evidence repair.
+        # The rule predicate checks signals.scoring_policy; only matching questions are eligible
+        # for this evidence repair.
+        # The rule predicate checks signals.review; only matching questions are eligible for this
+        # evidence repair.
         return (
             ToolRepairRule(
                 name="market-event-grounding",
@@ -627,6 +680,7 @@ class AgentToolPolicyEngine:
             ),
         )
 
+    # Check whether the requested local-event date is absent from the registry's data.
     def _requested_date_is_missing(self, signals: QuestionSignals) -> bool:
         requested_date = signals.requested_date
         return (
@@ -635,6 +689,7 @@ class AgentToolPolicyEngine:
             and requested_date not in {event.trade_date for event in self.tools.events}
         )
 
+    # Add missing data availability evidence to the execution result when the policy requires it.
     def _repair_data_availability(
         self,
         request: AgentChatRequest,
@@ -677,6 +732,7 @@ class AgentToolPolicyEngine:
             [f"missing_trade_date={requested_date.isoformat()}"],
         )
 
+    # Add missing ratings evidence to the execution result when the policy requires it.
     def _repair_ratings(
         self,
         request: AgentChatRequest,
@@ -696,6 +752,8 @@ class AgentToolPolicyEngine:
             references=[f"trade_date={ratings.trade_date.isoformat()}"],
         )
 
+    # Add missing daily board promotion evidence to the execution result when the policy requires
+    # it.
     def _repair_daily_board_promotion(
         self,
         request: AgentChatRequest,
@@ -723,6 +781,7 @@ class AgentToolPolicyEngine:
             ],
         )
 
+    # Add missing sector performance evidence to the execution result when the policy requires it.
     def _repair_sector_performance(
         self,
         request: AgentChatRequest,
@@ -748,6 +807,8 @@ class AgentToolPolicyEngine:
             ],
         )
 
+    # Add missing sector stock ranking evidence to the execution result when the policy requires
+    # it.
     def _repair_sector_stock_ranking(
         self,
         request: AgentChatRequest,
@@ -778,6 +839,7 @@ class AgentToolPolicyEngine:
             ],
         )
 
+    # Add missing market summary evidence to the execution result when the policy requires it.
     def _repair_market_summary(
         self,
         request: AgentChatRequest,
@@ -803,6 +865,7 @@ class AgentToolPolicyEngine:
             ],
         )
 
+    # Add missing market event pool evidence to the execution result when the policy requires it.
     def _repair_market_event_pool(
         self,
         request: AgentChatRequest,
@@ -838,6 +901,7 @@ class AgentToolPolicyEngine:
             ],
         )
 
+    # Add missing market index trend evidence to the execution result when the policy requires it.
     def _repair_market_index_trend(
         self,
         request: AgentChatRequest,
@@ -862,6 +926,7 @@ class AgentToolPolicyEngine:
             ],
         )
 
+    # Add missing web search evidence to the execution result when the policy requires it.
     def _repair_web_search(
         self,
         request: AgentChatRequest,
@@ -880,6 +945,7 @@ class AgentToolPolicyEngine:
             references=[item.url for item in response.results],
         )
 
+    # Add missing finance news evidence to the execution result when the policy requires it.
     def _repair_finance_news(
         self,
         request: AgentChatRequest,
@@ -898,6 +964,7 @@ class AgentToolPolicyEngine:
             references=[item.url for item in response.items],
         )
 
+    # Add missing stock news evidence to the execution result when the policy requires it.
     def _repair_stock_news(
         self,
         request: AgentChatRequest,
@@ -923,6 +990,7 @@ class AgentToolPolicyEngine:
             references=[item.url for item in response.items],
         )
 
+    # Add missing stock activity evidence to the execution result when the policy requires it.
     def _repair_stock_activity(
         self,
         request: AgentChatRequest,
@@ -948,6 +1016,7 @@ class AgentToolPolicyEngine:
             references=[item.url for item in response.news.items],
         )
 
+    # Add missing hot stock ranking evidence to the execution result when the policy requires it.
     def _repair_hot_stock_ranking(
         self,
         request: AgentChatRequest,
@@ -984,6 +1053,7 @@ class AgentToolPolicyEngine:
             ],
         )
 
+    # Add missing limit up events evidence to the execution result when the policy requires it.
     def _repair_limit_up_events(
         self,
         request: AgentChatRequest,
@@ -1005,6 +1075,7 @@ class AgentToolPolicyEngine:
             references=[f"trade_date={payload['trade_date']}"],
         )
 
+    # Add missing stock kline evidence to the execution result when the policy requires it.
     def _repair_stock_kline(
         self,
         request: AgentChatRequest,
@@ -1033,6 +1104,7 @@ class AgentToolPolicyEngine:
             ],
         )
 
+    # Add missing post limit screen evidence to the execution result when the policy requires it.
     def _repair_post_limit_screen(
         self,
         request: AgentChatRequest,
@@ -1056,6 +1128,7 @@ class AgentToolPolicyEngine:
             ],
         )
 
+    # Add missing post limit path evidence to the execution result when the policy requires it.
     def _repair_post_limit_path(
         self,
         request: AgentChatRequest,
@@ -1084,6 +1157,8 @@ class AgentToolPolicyEngine:
             ],
         )
 
+    # Add missing post limit statistics evidence to the execution result when the policy requires
+    # it.
     def _repair_post_limit_statistics(
         self,
         request: AgentChatRequest,
@@ -1109,6 +1184,7 @@ class AgentToolPolicyEngine:
             ],
         )
 
+    # Add missing rating backtest evidence to the execution result when the policy requires it.
     def _repair_rating_backtest(
         self,
         request: AgentChatRequest,
@@ -1135,6 +1211,7 @@ class AgentToolPolicyEngine:
             ],
         )
 
+    # Add missing prediction quality evidence to the execution result when the policy requires it.
     def _repair_prediction_quality(
         self,
         request: AgentChatRequest,
@@ -1164,6 +1241,7 @@ class AgentToolPolicyEngine:
             ],
         )
 
+    # Add missing critic evidence to the execution result when the policy requires it.
     def _repair_critic(
         self,
         request: AgentChatRequest,
@@ -1197,6 +1275,7 @@ class AgentToolPolicyEngine:
             ],
         )
 
+    # Add missing evaluation evidence to the execution result when the policy requires it.
     def _repair_evaluation(
         self,
         request: AgentChatRequest,
@@ -1223,6 +1302,7 @@ class AgentToolPolicyEngine:
             ],
         )
 
+    # Add missing review evidence to the execution result when the policy requires it.
     def _repair_review(
         self,
         request: AgentChatRequest,
@@ -1255,6 +1335,7 @@ class AgentToolPolicyEngine:
             ],
         )
 
+    # Add missing scoring policy evidence to the execution result when the policy requires it.
     def _repair_scoring_policy(
         self,
         request: AgentChatRequest,
@@ -1279,6 +1360,9 @@ class AgentToolPolicyEngine:
             ],
         )
 
+    # Resolve the stock and its first-board evidence for policy repair.
+    # A None result represents the unavailable or inapplicable branch; callers must check it
+    # before using the value.
     def _resolve_first_board_target(
         self,
         request: AgentChatRequest,
@@ -1320,12 +1404,14 @@ class AgentToolPolicyEngine:
             return str(candidates[0]["symbol"]), trade_date
         return None
 
+    # Derive the fallback review interval from the locally available event dates.
     def _default_date_range(self) -> tuple[date, date]:
         available_dates = sorted({event.trade_date for event in self.tools.events})
         if not available_dates:
             raise ValueError("No local limit-up events available.")
         return available_dates[max(0, len(available_dates) - 20)], available_dates[-1]
 
+    # Append a successful policy repair's facts, trace and references to the current execution.
     @staticmethod
     def _record_success(
         execution: ToolExecution,
@@ -1346,6 +1432,7 @@ class AgentToolPolicyEngine:
             execution["tool_call_names"].append(result.name)
         _extend_references(execution, references)
 
+    # Record a failed policy repair as a tool error instead of inventing evidence.
     @staticmethod
     def _record_error(
         execution: ToolExecution,
@@ -1961,6 +2048,7 @@ def _has_specific_news_subject(
         "宏观",
     )
 
+    # Check whether the wording contains an entity marker required by this question classifier.
     def has_entity(prefix: str) -> bool:
         residue = prefix
         for term in sorted(generic_prefix_terms, key=len, reverse=True):
@@ -2159,17 +2247,20 @@ def looks_like_rating_explain_question(message: str) -> bool:
     )
 
 
+# Check whether execution already contains an outcome for a tool, including unsuccessful outcomes.
 def _has_tool_outcome(execution: ToolExecution, tool_name: str) -> bool:
     facts = execution["facts"]
     return tool_name in facts or f"{tool_name}_error" in facts
 
 
+# Merge new evidence references into the execution result without duplicates.
 def _extend_references(execution: ToolExecution, references: list[str]) -> None:
     execution["references"] = list(
         dict.fromkeys([*execution["references"], *references])
     )
 
 
+# Attach the policy rule and repair reason to the newly added tool trace.
 def _mark_latest_trace_as_repair(
     execution: ToolExecution,
     rule: ToolRepairRule,
@@ -2186,11 +2277,15 @@ def _mark_latest_trace_as_repair(
         trace.result.payload = trace.output
 
 
+# Extract an explicit stock-code hint from the user's message.
 def _extract_symbol_hint(message: str) -> str | None:
     match = re.search(r"(?<!\d)(\d{6})(?!\d)", message)
     return match.group(1) if match else None
 
 
+# Parse an optional date argument before applying it to a query.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _parse_date(value: object) -> date | None:
     if isinstance(value, date):
         return value
@@ -2202,6 +2297,9 @@ def _parse_date(value: object) -> date | None:
         return None
 
 
+# Construct a calendar date while handling invalid year/month/day combinations.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _safe_date(year: int, month: int, day: int) -> date | None:
     try:
         return date(year, month, day)
@@ -2223,6 +2321,7 @@ def _default_compact_ratings(ratings: FirstBoardRatingsResponse) -> dict[str, An
     }
 
 
+# Keep the rating fields needed as answer evidence rather than forwarding the entire model.
 def _compact_rating(rating: FirstBoardRating) -> dict[str, Any]:
     return {
         "symbol": rating.facts.symbol,

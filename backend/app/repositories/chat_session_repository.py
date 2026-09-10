@@ -27,6 +27,8 @@ class SessionOwnershipError(PermissionError):
 class SQLiteChatSessionRepository:
     """Store user-facing conversations separately from Agent execution traces."""
 
+    # Initialize SQLiteChatSessionRepository with the supplied dependencies and per-instance
+    # state.
     def __init__(self, database_path: Path | None = None):
         self.database_path = database_path
 
@@ -327,11 +329,13 @@ class SQLiteChatSessionRepository:
             connection.close()
 
 
+# Trim and bound a user-supplied conversation title.
 def _normalize_title(title: str | None) -> str:
     normalized = " ".join((title or "").split()).strip()
     return normalized[:80] or DEFAULT_SESSION_TITLE
 
 
+# Derive the initial conversation title from the first message.
 def _title_from_message(message: str | None) -> str:
     normalized = " ".join((message or "").split()).strip()
     if not normalized:
@@ -339,6 +343,7 @@ def _title_from_message(message: str | None) -> str:
     return normalized if len(normalized) <= 28 else f"{normalized[:28]}..."
 
 
+# Build the conversation-list representation from an aggregated database row.
 def _session_summary_from_row(row: sqlite3.Row) -> ChatSessionSummary:
     preview = str(row["last_message_preview"] or "").strip()
     return ChatSessionSummary(
@@ -352,6 +357,7 @@ def _session_summary_from_row(row: sqlite3.Row) -> ChatSessionSummary:
     )
 
 
+# Deserialize a stored chat message and its metadata.
 def _message_from_row(row: sqlite3.Row) -> ChatSessionMessage:
     metadata = json.loads(row["metadata_json"] or "{}")
     if (

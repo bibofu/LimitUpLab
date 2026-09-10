@@ -27,6 +27,8 @@ from .helpers import (
 )
 
 
+# Execute the market event pool evidence step, resolving request arguments and recording its facts
+# and trace.
 def market_event_pool(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     try:
         contract = build_market_event_query_contract(
@@ -72,6 +74,8 @@ def market_event_pool(state: ExecutionState, name: str, arguments: dict[str, Any
     )
 
 
+# Execute the market summary evidence step, resolving request arguments and recording its facts
+# and trace.
 def market_summary(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     include_limit_down = bool(arguments.get("include_limit_down")) or (
         _QuestionSignals.from_message(state.request.message).market_environment
@@ -90,6 +94,8 @@ def market_summary(state: ExecutionState, name: str, arguments: dict[str, Any]) 
         state.references.append(f"limit_down_source={summary.limit_down_source}")
 
 
+# Execute the market index trend evidence step, resolving request arguments and recording its
+# facts and trace.
 def market_index_trend(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     days = _parse_optional_int(arguments.get("days")) or (
         _extract_market_index_days(state.request.message)
@@ -130,6 +136,8 @@ def market_index_trend(state: ExecutionState, name: str, arguments: dict[str, An
     )
 
 
+# Execute the daily board promotion evidence step, resolving request arguments and recording its
+# facts and trace.
 def daily_board_promotion(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     days = _parse_optional_int(arguments.get("days")) or 5
     end_date = _explicit_request_trade_date(state.request)
@@ -146,6 +154,8 @@ def daily_board_promotion(state: ExecutionState, name: str, arguments: dict[str,
     )
 
 
+# Execute the sector performance evidence step, resolving request arguments and recording its
+# facts and trace.
 def sector_performance(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     broad_sector_ranking = _looks_like_broad_sector_ranking_question(
         state.request.message
@@ -204,6 +214,8 @@ def sector_performance(state: ExecutionState, name: str, arguments: dict[str, An
     )
 
 
+# Execute the sector stock ranking evidence step, resolving request arguments and recording its
+# facts and trace.
 def sector_stock_ranking(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     sector = _optional_str(arguments.get("sector"))
     if sector is None:
@@ -263,6 +275,8 @@ def sector_stock_ranking(state: ExecutionState, name: str, arguments: dict[str, 
     )
 
 
+# Execute the hot stock ranking evidence step, resolving request arguments and recording its facts
+# and trace.
 def hot_stock_ranking(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     period = _optional_str(arguments.get("period")) or "day"
     limit = (
@@ -315,6 +329,8 @@ def hot_stock_ranking(state: ExecutionState, name: str, arguments: dict[str, Any
     )
 
 
+# Execute the remote limit up pool evidence step, resolving request arguments and recording its
+# facts and trace.
 def remote_limit_up_pool(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     trade_date = _explicit_request_trade_date(state.request)
     board_height = (

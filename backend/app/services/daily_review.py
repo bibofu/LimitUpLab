@@ -65,6 +65,8 @@ def _daily_top_prediction_keys(
         by_date.setdefault(item.trade_date, []).append(item)
     selected: set[tuple[date, str, float, float, date, str, str]] = set()
     for trade_date, daily in by_date.items():
+        # The key compares score (negated for descending order), then confidence (negated for
+        # descending order), then symbol.
         ranked = sorted(
             daily,
             key=lambda item: (-item.score, -item.confidence, item.symbol),

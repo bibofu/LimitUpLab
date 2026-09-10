@@ -37,6 +37,7 @@ DRAWDOWN_RULES = [
 ]
 
 
+# Create the observation response with the selected strategy's rules, metadata and warnings.
 def observation_pool(now: datetime, strategy: ObservationStrategy, **kwargs) -> ConsolidationPool:
     return ConsolidationPool(
         generated_at=now, strategy=strategy,
@@ -46,11 +47,13 @@ def observation_pool(now: datetime, strategy: ObservationStrategy, **kwargs) -> 
     )
 
 
+# Determine the latest date eligible for completed-day research from the Shanghai clock.
 def completed_date_limit(now: datetime) -> date:
     local = now.astimezone(SHANGHAI)
     return local.date() if local.time() >= time(15, 30) else local.date() - timedelta(days=1)
 
 
+# Check that a bar has the finite positive price fields needed by observation screening.
 def valid_bar(bar: dict | None) -> bool:
     return bool(bar and all(isinstance(bar.get(k), (int, float)) and
                            math.isfinite(bar[k]) and bar[k] > 0
@@ -108,6 +111,7 @@ def assess(symbol: str, anchor: str, end: str, calendar: list[str], bars: dict,
     )
 
 
+# Evaluate local stocks against the selected observation rules using only data through the cutoff.
 def screen_consolidation(events: list[dict], rows: list[dict], calendar: list[str],
                          as_of: date, now: datetime,
                          strategy: ObservationStrategy = "consolidation") -> ConsolidationPool:
@@ -126,6 +130,7 @@ def screen_consolidation(events: list[dict], rows: list[dict], calendar: list[st
         result.data_missing = ["recent_event_dates"]
         return result
     latest = {}
+    # The key compares trade date.
     for event in sorted(visible_events, key=lambda e:e["trade_date"]):
         if event["trade_date"] in recent_dates and event["closed_limit"]:
             latest[event["symbol"]] = event
@@ -165,6 +170,7 @@ def screen_consolidation(events: list[dict], rows: list[dict], calendar: list[st
         result.evaluated_stocks.append(stock)
         if not reason:
             result.candidates.append(stock)
+    # The key compares confirmed date (negated for descending order), then symbol.
     result.candidates.sort(key=lambda c:(-c.confirmed_date.toordinal(), c.symbol))
     result.evaluated_stocks = [*result.candidates, *(s for s in result.evaluated_stocks if s.state == "rejected")]
     result.exclusions = dict(sorted(exclusions.items()))

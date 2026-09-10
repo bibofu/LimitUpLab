@@ -828,6 +828,8 @@ def _sort_limit_up_events(
 ) -> list[LimitUpEvent]:
     """Sort event rows deterministically while preserving a symbol tie-breaker."""
 
+    # The inline predicate/value callback is evaluated by the surrounding operation for each
+    # supplied item.
     key_getters = {
         "board_height": lambda event: event.board_height,
         "first_limit_time": lambda event: event.first_limit_time,
@@ -836,6 +838,7 @@ def _sort_limit_up_events(
         "break_count": lambda event: event.break_count,
     }
     key_getter = key_getters.get(sort_by, key_getters["board_height"])
+    # The key compares symbol.
     ordered = sorted(events, key=lambda event: event.symbol)
     return sorted(ordered, key=key_getter, reverse=sort_order == "desc")
 
@@ -1492,6 +1495,7 @@ class AgentToolRegistry:
         news: StockNewsFacts = stock_news_result.output
         data_missing.extend(news.data_missing)
 
+        # The key compares trade date. reverse=True reverses the resulting order.
         matching_events = sorted(
             (event for event in self.events if event.symbol == resolved_symbol),
             key=lambda event: event.trade_date,
@@ -1577,6 +1581,10 @@ class AgentToolRegistry:
 
     def first_board_ratings(self, trade_date: date | None = None) -> ToolResult:
         """Return explainable first-board ratings."""
+
+        # Prefer the published snapshot so a historical question sees the rating
+        # recorded for that date. Recalculation is explicitly labeled calculated;
+        # it must not be presented as a prediction that was actually published.
 
         target_date = trade_date or max(
             (item.trade_date for item in self.events),
@@ -1704,6 +1712,8 @@ class AgentToolRegistry:
                     or normalized_query in item["name"].lower()
                     or normalized_query in str(item.get("industry") or "").lower()
                 ]
+            # The key compares `item.get('change_pct') is None`, then `item.get('change_pct') or
+            # 0.0`, then symbol.
             items = sorted(
                 items,
                 key=lambda item: (
@@ -1903,6 +1913,8 @@ class AgentToolRegistry:
                         ],
                     }
                 )
+            # The key compares unique stock count (negated for descending order), then limit up
+            # event count (negated for descending order), then sector name.
             sector_summary.sort(
                 key=lambda item: (
                     -item["unique_stock_count"],
@@ -2187,6 +2199,7 @@ class AgentToolRegistry:
                 for symbol, name in directory.items()
                 if name.replace(" ", "") == compact
             ]
+            # The key compares `len(item[1])`. reverse=True reverses the resulting order.
             contained = sorted(
                 (
                     (symbol, name)
@@ -2205,6 +2218,7 @@ class AgentToolRegistry:
             if len(longest) != 1:
                 raise ValueError(f"Ambiguous stock identity: {value}") from None
             return longest[0]
+        # The key compares trade date. reverse=True reverses the resulting order.
         matching = sorted(
             (event for event in self.events if event.symbol == symbol),
             key=lambda event: event.trade_date,
@@ -2595,6 +2609,7 @@ def _recommendation_draft_facts(
     response = SQLiteRecommendationIntelligenceRepository(database_path).get_latest()
     if response is None:
         return None
+    # The key compares rank, then symbol.
     candidates = sorted(
         (
             item
@@ -2635,6 +2650,7 @@ def compact_first_board_position_groups(
 
     groups: list[dict[str, Any]] = []
     for (regime, label), entries in grouped.items():
+        # The key compares score (negated for descending order), then symbol.
         ordered = sorted(
             entries,
             key=lambda entry: (-entry[0].score, entry[0].facts.symbol),
@@ -2664,9 +2680,12 @@ def compact_first_board_position_groups(
             }
         )
 
+    # The key compares count (negated for descending order), then avg score (negated for
+    # descending order), then label.
     groups.sort(
         key=lambda item: (-item["count"], -item["avg_score"], item["label"])
     )
+    # The key compares score (negated for descending order), then symbol.
     return {
         "scope": "rated_first_board_candidate_pool",
         "scope_note": (

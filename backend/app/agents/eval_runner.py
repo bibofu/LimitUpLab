@@ -59,12 +59,15 @@ class OfflineEvalLLMProvider(LLMProvider):
 class EvalObservedLLMProvider(LLMProvider):
     """Record real provider calls so fallback cannot hide upstream failures."""
 
+    # Initialize EvalObservedLLMProvider with the supplied dependencies and per-instance state.
     def __init__(self, provider: LLMProvider):
         self.provider = provider
         self.call_count = 0
         self.success_count = 0
         self.errors: list[str] = []
 
+    # Return the deterministic planner/answer fixture selected by this offline evaluation
+    # provider.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         self.call_count += 1
         try:
@@ -112,6 +115,7 @@ class EvalObservedLLMProvider(LLMProvider):
         self.success_count += 1
         return result
 
+    # Expose the deterministic evaluation response through the streaming callback interface.
     def stream_generate(self, system_prompt, user_prompt, on_delta) -> LLMResult:
         self.call_count += 1
         try:
@@ -243,6 +247,7 @@ class AgentPlannerEvalSuiteResult:
     raw_planner_tool_success_rate: float
     results: list[AgentPlannerEvalCaseResult]
 
+    # Report whether this evaluation result has no failing checks.
     @property
     def ok(self) -> bool:
         return self.failed == 0
@@ -281,6 +286,7 @@ class AgentConversationEvalSuiteResult:
     turn_pass_rate: float
     results: list[dict[str, object]]
 
+    # Report whether this evaluation result has no failing checks.
     @property
     def ok(self) -> bool:
         return self.failed_scenarios == 0
@@ -349,6 +355,7 @@ class AgentProductEvalSuiteResult:
     failure_categories: dict[str, int]
     results: list[AgentProductEvalTurnResult]
 
+    # Report whether this evaluation result has no failing checks.
     @property
     def ok(self) -> bool:
         return self.failed_turns == 0
@@ -1495,6 +1502,7 @@ def _check_product_turn(
     )
 
 
+# Serialize one product-evaluation turn, including its checks and observed execution.
 def _product_turn_result_payload(result: AgentProductEvalTurnResult) -> dict:
     return {
         "scenario_id": result.scenario_id,
@@ -1513,6 +1521,9 @@ def _product_turn_result_payload(result: AgentProductEvalTurnResult) -> dict:
     }
 
 
+# Measure how often the named evaluation check passed across the supplied cases.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _check_rate(
     results: list[AgentProductEvalTurnResult],
     check_name: str,
@@ -1527,12 +1538,18 @@ def _check_rate(
     return _rate(sum(bool(value) for value in eligible), len(eligible))
 
 
+# Divide the observed count by its sample size, using the explicit empty-sample convention below.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _rate(numerator: int, denominator: int) -> float | None:
     if denominator <= 0:
         return None
     return round(numerator / denominator, 4)
 
 
+# Select a percentile using the nearest-rank convention rather than interpolation.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _nearest_rank_percentile(values: list[int], percentile: float) -> int | None:
     if not values:
         return None
@@ -1541,6 +1558,7 @@ def _nearest_rank_percentile(values: list[int], percentile: float) -> int | None
     return ordered[rank - 1]
 
 
+# Compare an Agent response with the case's expected tools, facts and answer constraints.
 def _check_response(
     case: AgentEvalCase,
     response: AgentChatResponse,
@@ -1789,6 +1807,7 @@ def _normalize_answer_text(value: str) -> str:
     )
 
 
+# Recover the planned tool names from the planner trace for comparison with actual execution.
 def _planner_tool_calls(response: AgentChatResponse) -> list[str]:
     for trace in response.tool_results:
         if trace.name != "llm_tool_planner":
@@ -1817,6 +1836,7 @@ def _planner_capabilities(response: AgentChatResponse) -> list[str]:
     return []
 
 
+# Extract tools added by backend policy rather than selected by the original planner.
 def _backend_repaired_tools(response: AgentChatResponse) -> list[str]:
     planner_calls = set(_planner_tool_calls(response))
     if not any(trace.name == "llm_tool_planner" for trace in response.tool_results):

@@ -200,6 +200,7 @@ def collect_eastmoney_hot_stock_ranking(
                 ),
             )
         )
+    # The key compares rank, then symbol.
     items.sort(key=lambda item: (item.rank, item.symbol))
     return PopularityRankingSnapshot(
         captured_at=captured_at,
@@ -265,6 +266,9 @@ def collect_listing_date(symbol: str) -> date | None:
     return None if pd.isna(parsed) else parsed.date()
 
 
+# Parse an optional numeric field while keeping unavailable values distinguishable from zero.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _optional_float(value: object) -> float | None:
     try:
         number = float(value)
@@ -273,6 +277,9 @@ def _optional_float(value: object) -> float | None:
     return None if pd.isna(number) else number
 
 
+# Parse an optional integer field while keeping unavailable values distinguishable from zero.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _optional_int(value: object) -> int | None:
     try:
         return int(value)
@@ -280,6 +287,9 @@ def _optional_int(value: object) -> int | None:
         return None
 
 
+# Normalize an optional text field while preserving the absence of useful content.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _optional_text(value: object) -> str | None:
     if value is None or pd.isna(value):
         return None
@@ -300,6 +310,7 @@ def _representative_hithink_dragon_tiger_rows(
     return [selected[symbol] for symbol in sorted(selected)]
 
 
+# Choose the ordering key used to select among multiple Dragon Tiger records.
 def _dragon_tiger_priority(item: HithinkDragonTigerFact) -> tuple[bool, float]:
     turnover = (item.buy_amount or 0) + (item.sell_amount or 0)
     return (item.range_days != 1, -turnover)

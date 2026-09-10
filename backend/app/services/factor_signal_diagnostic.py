@@ -850,6 +850,7 @@ def _build_verdict(
         row for row in factor_rows if row.significant_after_bonferroni
     ]
     tested_factor_count = sum(row.p_value is not None for row in factor_rows)
+    # The key compares `abs(row.mean_daily_ic or 0.0)`.
     strongest = max(
         (row for row in factor_rows if row.mean_daily_ic is not None),
         key=lambda row: abs(row.mean_daily_ic or 0.0),

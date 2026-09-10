@@ -61,6 +61,8 @@ def collect_limit_up_events(trade_date: str) -> LimitUpCollectionResult:
     for event in failed_events:
         events_by_key.setdefault((event.trade_date, event.symbol), event)
 
+    # The key compares trade date, then closed limit, then board height, then first limit time.
+    # reverse=True reverses the resulting order.
     events = sorted(
         events_by_key.values(),
         key=lambda event: (
@@ -169,6 +171,7 @@ def _parse_hhmmss(value: Any) -> time:
     return time(int(text[:2]), int(text[2:4]), int(text[4:6]))
 
 
+# Convert a provider value to an integer, using the collector's fallback for invalid input.
 def _safe_int(value: Any) -> int:
     try:
         return int(value)
@@ -176,6 +179,7 @@ def _safe_int(value: Any) -> int:
         return 0
 
 
+# Convert a provider value to a float, using the collector's fallback for invalid input.
 def _safe_float(value: Any) -> float:
     try:
         number = float(value)

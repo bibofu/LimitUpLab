@@ -76,6 +76,7 @@ class GoldenSuiteResult:
     category_pass_rates: dict[str, float]
     results: list[GoldenCaseResult]
 
+    # Report whether this evaluation result has no failing checks.
     @property
     def ok(self) -> bool:
         return self.failed == 0
@@ -218,6 +219,7 @@ def golden_suite_report(
     }
 
 
+# Check the observed plan against the golden case's capability and tool expectations.
 def _evaluate_planner(
     case: GoldenEvalCase,
     traces: list[AgentToolTrace],
@@ -236,6 +238,8 @@ def _evaluate_planner(
     )
 
 
+# Check tool outcomes against the golden case, keeping execution failures distinct from empty
+# data.
 def _evaluate_tool_execution(
     case: GoldenEvalCase,
     traces: list[AgentToolTrace],
@@ -278,6 +282,7 @@ def _evaluate_tool_execution(
     )
 
 
+# Evaluate whether factual answer claims are supported by the executed tool traces.
 def _evaluate_grounding(
     case: GoldenEvalCase,
     answer: str,
@@ -313,6 +318,7 @@ def _evaluate_grounding(
     )
 
 
+# Apply the golden case's answer requirements to the final text.
 def _evaluate_answer(
     case: GoldenEvalCase,
     answer: str,
@@ -343,6 +349,7 @@ def _evaluate_answer(
     )
 
 
+# Extract planner fields from the response trace for deterministic evaluation.
 def _planner_observations(
     traces: list[AgentToolTrace],
     final_tool_calls: list[str],
@@ -367,6 +374,7 @@ def _planner_observations(
     return _capabilities_for_tools(planned), planned
 
 
+# Map tool names back to capability names when constructing evaluation expectations.
 def _capabilities_for_tools(tools: list[str]) -> list[str]:
     return list(
         dict.fromkeys(
@@ -377,17 +385,21 @@ def _capabilities_for_tools(tools: list[str]) -> list[str]:
     )
 
 
+# Replace selected tool methods with failing test doubles to exercise graceful degradation.
 def _inject_tool_failures(registry: AgentToolRegistry, tool_names: list[str]) -> None:
     for tool_name in tool_names:
         if not hasattr(registry, tool_name):
             raise ValueError(f"cannot inject unknown tool failure: {tool_name}")
 
+        # Raise the injected tool failure so the golden evaluation can observe the degradation
+        # path.
         def fail(*_args, _tool_name: str = tool_name, **_kwargs):
             raise RuntimeError(f"golden eval injected {_tool_name} source failure")
 
         setattr(registry, tool_name, fail)
 
 
+# Report expected key/value constraints missing from the observed result.
 def _subset_failures(
     expected: dict[str, object],
     actual: dict[str, object],
@@ -406,6 +418,7 @@ def _subset_failures(
     return failures
 
 
+# Build conversation-message objects from recorded turns for replay or evaluation.
 def _conversation_messages(
     session_id: str,
     case_id: str,
@@ -431,6 +444,7 @@ def _conversation_messages(
     ]
 
 
+# Serialize a golden evaluation case result for the report.
 def _case_payload(result: GoldenCaseResult) -> dict[str, object]:
     return {
         "case_id": result.case_id,
@@ -447,9 +461,11 @@ def _case_payload(result: GoldenCaseResult) -> dict[str, object]:
     }
 
 
+# Normalize text before comparing evaluation expectations with observed output.
 def _normalize(value: str) -> str:
     return "".join(value.lower().split())
 
 
+# Divide the observed count by its sample size, using the explicit empty-sample convention below.
 def _rate(numerator: int, denominator: int) -> float:
     return round(numerator / denominator, 4) if denominator else 0.0

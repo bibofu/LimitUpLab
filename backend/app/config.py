@@ -139,6 +139,7 @@ def detect_local_proxy() -> str:
     return ""
 
 
+# List the environment-file locations considered by the configuration loader.
 def _candidate_env_paths(path: str | Path | None) -> list[Path]:
     if path is not None:
         return [Path(path).expanduser().resolve()]
@@ -152,6 +153,7 @@ def _candidate_env_paths(path: str | Path | None) -> list[Path]:
     return [backend_root / ".env", project_root / ".env"]
 
 
+# Apply assignments from one environment file, respecting the caller's override flag.
 def _load_env_file(path: Path, *, override: bool) -> None:
     for raw_line in path.read_text(encoding="utf-8").splitlines():
         line = raw_line.strip()
@@ -169,12 +171,14 @@ def _load_env_file(path: Path, *, override: bool) -> None:
         os.environ[key] = _normalize_env_value(value.strip())
 
 
+# Remove environment-file quoting from a configuration value.
 def _normalize_env_value(value: str) -> str:
     if len(value) >= 2 and value[0] == value[-1] and value[0] in {"'", '"'}:
         value = value[1:-1]
     return value
 
 
+# Map the project's proxy setting to the standard proxy variables used by HTTP clients.
 def _apply_proxy_alias() -> None:
     proxy_url = os.getenv("LIMITUPLAB_PROXY_URL", "").strip()
     if not proxy_url:
@@ -182,15 +186,20 @@ def _apply_proxy_alias() -> None:
     replace_proxy_environment(proxy_url)
 
 
+# Fill a configuration value only when no nonblank value is already present.
 def _set_default_if_blank(name: str, value: str) -> None:
     if not os.getenv(name, "").strip():
         os.environ[name] = value
 
 
+# Split a configured list and discard empty entries.
 def _split_env_list(value: str) -> list[str]:
     return [item.strip().rstrip("/") for item in value.split(",") if item.strip()]
 
 
+# Extract a local proxy host and port for the reachability check.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _local_proxy_endpoint(value: str) -> tuple[str, int] | None:
     normalized = value.strip()
     if not normalized:
@@ -206,6 +215,7 @@ def _local_proxy_endpoint(value: str) -> tuple[str, int] | None:
         return None
 
 
+# Attempt a bounded connection to the configured proxy endpoint.
 def _proxy_endpoint_reachable(host: str, port: int) -> bool:
     try:
         with socket.create_connection((host, port), timeout=0.2):
@@ -214,6 +224,7 @@ def _proxy_endpoint_reachable(host: str, port: int) -> bool:
         return False
 
 
+# Read a persisted Windows environment value for local configuration hydration.
 def _read_windows_environment_value(name: str) -> str:
     if os.name != "nt":
         return ""

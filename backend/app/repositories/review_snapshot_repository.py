@@ -19,6 +19,8 @@ from app.models import (
 class SQLiteReviewSnapshotRepository:
     """Store one review report per market data cutoff date."""
 
+    # Initialize SQLiteReviewSnapshotRepository with the supplied dependencies and per-instance
+    # state.
     def __init__(self, database_path: Path | None = None):
         self.database_path = database_path
 
@@ -99,6 +101,7 @@ class SQLiteReviewSnapshotRepository:
                 summary.market_promotion_rate = None
         return summaries
 
+    # Check a stored review snapshot against the evidence available to this repository.
     @staticmethod
     def _audit_verdict(connection, row) -> dict:
         audit = connection.execute("""
@@ -107,6 +110,7 @@ class SQLiteReviewSnapshotRepository:
         """, (row["as_of_date"], content_hash(row["report_json"]))).fetchone()
         return json.loads(audit[0]) if audit else {}
 
+    # Reconstruct the repository's domain model from a stored database row.
     @staticmethod
     def _from_row(row: sqlite3.Row) -> DailyReviewSnapshot:
         report = ReviewAgentReportResponse.model_validate_json(row["report_json"])
@@ -118,6 +122,7 @@ class SQLiteReviewSnapshotRepository:
             generated_at=datetime.fromisoformat(row["generated_at"]),
         )
 
+    # Build the compact review-snapshot representation used by list endpoints.
     @staticmethod
     def _summary_from_row(row: sqlite3.Row) -> DailyReviewSnapshotSummary:
         payload = json.loads(row["report_json"])

@@ -15,6 +15,8 @@ from .helpers import (
 )
 
 
+# Execute the prediction quality audit evidence step, resolving request arguments and recording
+# its facts and trace.
 def prediction_quality_audit(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     available_dates = sorted({event.trade_date for event in state.tools.events})
     if not available_dates:
@@ -60,6 +62,8 @@ def prediction_quality_audit(state: ExecutionState, name: str, arguments: dict[s
     )
 
 
+# Execute the rating backtest evidence step, resolving request arguments and recording its facts
+# and trace.
 def rating_backtest(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     available_dates = sorted({event.trade_date for event in state.tools.events})
     if not available_dates:
@@ -95,6 +99,8 @@ def rating_backtest(state: ExecutionState, name: str, arguments: dict[str, Any])
     )
 
 
+# Execute the rating evaluation evidence step, resolving request arguments and recording its facts
+# and trace.
 def rating_evaluation(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     available_dates = sorted({event.trade_date for event in state.tools.events})
     if not available_dates:
@@ -130,6 +136,8 @@ def rating_evaluation(state: ExecutionState, name: str, arguments: dict[str, Any
     )
 
 
+# Execute the review high score picks evidence step, resolving request arguments and recording its
+# facts and trace.
 def review_high_score_picks(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     available_dates = sorted({event.trade_date for event in state.tools.events})
     if not available_dates:
@@ -176,6 +184,8 @@ def review_high_score_picks(state: ExecutionState, name: str, arguments: dict[st
     )
 
 
+# Execute the scoring policy status evidence step, resolving request arguments and recording its
+# facts and trace.
 def scoring_policy_status(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     result = state.tools.scoring_policy_status()
     payload = result.output

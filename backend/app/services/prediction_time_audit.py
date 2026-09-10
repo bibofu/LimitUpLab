@@ -12,6 +12,7 @@ from types import SimpleNamespace
 from app.services.prediction_time import CN_TZ, assess_prediction_time
 
 
+# Hash serialized prediction content so immutable-record comparisons do not depend on row order.
 def content_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
@@ -40,6 +41,7 @@ def audit_prediction_times(connection: sqlite3.Connection, *, apply: bool = Fals
         summary = {"trade_date": key[0], "source": key[1], "scoring_version": key[2],
                    "created_at": key[3], "count": len(rows), **verdict.to_dict()}
         summaries.append(summary)
+        # The key compares prediction id.
         original = json.dumps(sorted(rows, key=lambda x: x["prediction_id"]), sort_keys=True)
         annotations.append(("prediction_batch", json.dumps(key), content_hash(original), summary))
         if not verdict.research_eligible:

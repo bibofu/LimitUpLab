@@ -49,6 +49,7 @@ PREMARKET_OBSERVATION_SHAPES = frozenset(
 )
 
 
+# Choose the shared anchor-search window for the requested post-limit shapes and mode.
 def default_recent_limit_days(shapes: tuple[str, ...], mode: str = "screen") -> int:
     return (
         PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS
@@ -83,12 +84,14 @@ class PostLimitQueryContract:
     limit: int = 10
     exhaustive: bool = False
 
+    # Normalize and validate the contract after dataclass construction.
     def __post_init__(self) -> None:
         if self.recent_limit_days == 0:
             object.__setattr__(self, "recent_limit_days", default_recent_limit_days(
                 self.shapes or (self.shape,), self.mode
             ))
 
+    # Serialize this object's fields into the dictionary representation used at the boundary.
     def to_dict(self) -> dict[str, Any]:
         payload = asdict(self)
         payload["shapes"] = list(self.shapes)
@@ -97,6 +100,7 @@ class PostLimitQueryContract:
             payload[field] = value.isoformat() if value else None
         return payload
 
+    # Compile the normalized query contract into the arguments accepted by its evidence tool.
     def to_tool_arguments(self) -> dict[str, Any]:
         payload = self.to_dict()
         payload.pop("version", None)
@@ -119,6 +123,8 @@ def looks_like_post_limit_question(message: str) -> bool:
     )
 
 
+# Recognize wording that asks for historical post-limit statistics rather than a current candidate
+# list.
 def looks_like_post_limit_statistics_question(message: str) -> bool:
     compact = re.sub(r"\s+", "", message.lower())
     if not looks_like_post_limit_question(message):
@@ -146,6 +152,7 @@ def looks_like_post_limit_statistics_question(message: str) -> bool:
     return explicit_comparison or choice_comparison
 
 
+# Recognize wording that asks to trace an individual post-limit price path.
 def looks_like_post_limit_path_question(message: str) -> bool:
     compact = re.sub(r"\s+", "", message.lower())
     if looks_like_post_limit_statistics_question(message):
@@ -247,6 +254,7 @@ def build_post_limit_query_contract(
     )
 
 
+# Match supported shape labels and aliases in the user's post-limit question.
 def _extract_shapes(message: str) -> tuple[PostLimitShape, ...]:
     compact = re.sub(r"\s+", "", message.lower())
     found = [shape for shape, aliases in SHAPE_ALIASES if any(alias.replace(" ", "") in compact for alias in aliases)]
@@ -275,6 +283,9 @@ def extract_result_limit(message: str) -> int | None:
     return max(1, min(int(match.group(1)), 100)) if match else None
 
 
+# Construct a calendar date while handling invalid year/month/day combinations.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _safe_date(year: int, month: int, day: int) -> date | None:
     try:
         return date(year, month, day)
@@ -282,23 +293,29 @@ def _safe_date(year: int, month: int, day: int) -> date | None:
         return None
 
 
+# Normalize and deduplicate the requested post-limit shape names.
 def _normalize_shapes(value: object) -> tuple[PostLimitShape, ...]:
     values = value if isinstance(value, list) else [value]
     result = [shape for item in values if (shape := _shape(item))]
     return tuple(dict.fromkeys(result))
 
 
+# Resolve one supported post-limit shape value.
 def _shape(value: object) -> PostLimitShape | None:
     valid = {item[0] for item in SHAPE_ALIASES}
     text = _text(value)
     return text if text in valid else None  # type: ignore[return-value]
 
 
+# Normalize the post-limit query mode into screening, path or statistics.
 def _mode(value: object) -> PostLimitMode | None:
     text = _text(value)
     return text if text in {"screen", "path", "statistics"} else None  # type: ignore[return-value]
 
 
+# Extract the requested trading-day window, accounting for statistics wording.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _extract_recent_days(message: str, *, statistics: bool) -> int | None:
     compact = re.sub(r"\s+", "", message.lower())
     # In statistics questions, distinguish the event lookback from signal days.
@@ -315,6 +332,7 @@ def _extract_recent_days(message: str, *, statistics: bool) -> int | None:
     return None if looks_like_post_limit_statistics_question(message) else int(match.group(1))
 
 
+# Extract the date of the reference limit-up event from the question.
 def _extract_anchor_date(message: str) -> date | None:
     labeled = re.search(
         r"(?:锚点|涨停日)[为是:]?\s*((?:20\d{2}[-/.年])?\d{1,2}[-/.月]\d{1,2}(?:日|号)?)",
@@ -330,6 +348,7 @@ def _extract_anchor_date(message: str) -> date | None:
     return extract_trade_date(anchored.group(1)) if anchored else None
 
 
+# Extract the requested data cutoff so later observations do not leak into the query.
 def _extract_cutoff_date(message: str) -> date | None:
     match = re.search(
         r"(?:截至|截止|数据截至)[为到:]?\s*"
@@ -339,6 +358,7 @@ def _extract_cutoff_date(message: str) -> date | None:
     return extract_trade_date(match.group(1)) if match else None
 
 
+# Read the requested consecutive-board height from the question.
 def _extract_board_height(message: str) -> int | None:
     if match := re.search(r"(?<!\d)(\d{1,2})\s*板(?!块)", message):
         return _bounded_optional_int(match.group(1), 1, 20)
@@ -347,6 +367,9 @@ def _extract_board_height(message: str) -> int | None:
     return chinese.get(match.group(1)) if match else None
 
 
+# Extract the stock or sector text filter used by post-limit screening.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _extract_query_filter(message: str) -> str | None:
     patterns = (
         r"(?:题材|概念|行业)[为是:]\s*([\u4e00-\u9fffA-Za-z0-9_-]{2,12})",
@@ -363,6 +386,7 @@ def _extract_query_filter(message: str) -> str | None:
     return None
 
 
+# Determine the dimension requested for grouped post-limit statistics.
 def _extract_group_by(message: str) -> str | None:
     compact = re.sub(r"\s+", "", message)
     aliases = (
@@ -376,6 +400,7 @@ def _extract_group_by(message: str) -> str | None:
     return next((key for key, terms in aliases if any(term in compact for term in terms)), None)
 
 
+# Identify the metric requested for candidate ordering.
 def _extract_sort_by(message: str) -> str | None:
     compact = re.sub(r"\s+", "", message)
     aliases = (
@@ -389,6 +414,9 @@ def _extract_sort_by(message: str) -> str | None:
     return next((key for key, terms in aliases if any(term in compact for term in terms)), None)
 
 
+# Identify whether the question requests ascending or descending ordering.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _extract_sort_order(message: str) -> Literal["asc", "desc"] | None:
     compact = re.sub(r"\s+", "", message)
     if any(term in compact for term in ("升序", "从低到高", "最小优先", "最低优先", "量比最低", "振幅最小", "回撤最小")):
@@ -398,6 +426,9 @@ def _extract_sort_order(message: str) -> Literal["asc", "desc"] | None:
     return None
 
 
+# Parse a percentage threshold next to the specified metric and comparison wording.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _extract_percent_after(message: str, names: tuple[str, ...], bounds: tuple[str, ...]) -> float | None:
     joined_names = "|".join(map(re.escape, names))
     joined_bounds = "|".join(map(re.escape, bounds))
@@ -411,6 +442,7 @@ def _extract_percent_after(message: str, names: tuple[str, ...], bounds: tuple[s
     return None
 
 
+# Parse a numeric threshold next to the specified metric and comparison wording.
 def _extract_number_after(message: str, names: tuple[str, ...], bounds: tuple[str, ...]) -> float | None:
     joined_names = "|".join(map(re.escape, names))
     joined_bounds = "|".join(map(re.escape, bounds))
@@ -418,6 +450,9 @@ def _extract_number_after(message: str, names: tuple[str, ...], bounds: tuple[st
     return max(0.0, min(float(match.group(1)), 5.0)) if match else None
 
 
+# Parse the supported date representation for this collector or query contract.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _date(value: object) -> date | None:
     if isinstance(value, date):
         return value
@@ -427,11 +462,15 @@ def _date(value: object) -> date | None:
         return None
 
 
+# Normalize the source value into the text representation used by this boundary.
 def _text(value: object) -> str | None:
     text = str(value).strip() if value is not None else ""
     return text or None
 
 
+# Parse an optional floating-point contract argument.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _float(value: object) -> float | None:
     try:
         return float(value) if value is not None else None
@@ -439,6 +478,8 @@ def _float(value: object) -> float | None:
         return None
 
 
+# Parse an integer and constrain it to the permitted range using this boundary's invalid-input
+# fallback.
 def _bounded_int(value: object, default: int, minimum: int, maximum: int) -> int:
     try:
         return max(minimum, min(int(value), maximum))
@@ -446,10 +487,12 @@ def _bounded_int(value: object, default: int, minimum: int, maximum: int) -> int
         return default
 
 
+# Parse and clamp an optional integer while preserving the absence of a value.
 def _bounded_optional_int(value: object, minimum: int, maximum: int) -> int | None:
     return _bounded_int(value, minimum, minimum, maximum) if value is not None else None
 
 
+# Accept a value only when it belongs to the supported enumeration.
 def _enum(value: object, allowed: set[str]) -> str | None:
     text = _text(value)
     return text if text in allowed else None

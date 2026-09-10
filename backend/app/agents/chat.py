@@ -218,6 +218,7 @@ KEYWORDS = {
 class _AgentPlan:
     """Deterministic tool plan produced before answer generation."""
 
+    # Initialize _AgentPlan with the supplied dependencies and per-instance state.
     def __init__(
         self,
         intent: str,
@@ -260,6 +261,7 @@ class _AgentPlan:
 class AgentQueryPlan:
     """Normalized LLM plan shared by runtime execution and semantic evals."""
 
+    # Initialize AgentQueryPlan with the supplied dependencies and per-instance state.
     def __init__(
         self,
         *,
@@ -321,6 +323,11 @@ def answer_first_board_chat(
 ) -> AgentChatResponse:
     """Answer a user question with LLM-planned tools and deterministic fallback."""
 
+    # This is the shared entry point for both JSON and SSE chat routes. The route
+    # owns persistence and transport; this function owns the answer decision.
+    # Inputs include fresh event facts plus bounded conversational context. Past
+    # answers help resolve follow-ups, but must not replace current tool evidence.
+
     injection = assess_direct_prompt_injection(request.message)
     if injection.detected:
         return _answer_static_text(
@@ -354,6 +361,9 @@ def answer_first_board_chat(
             "out_of_scope",
             "历史相似案例功能已经下线。你可以改为询问这只股票的评分依据、主要风险、近期 K 线走势，或查看高分票追踪复盘。",
         )
+    # Prefer the capability-based planner. A None return means planning could not
+    # produce a usable response, so the deterministic handlers below get a chance.
+    # A structured refusal or an explicit empty-data answer is already a response.
     llm_response = _answer_with_llm_tool_agent(
         request=request,
         tools=tools,
@@ -364,6 +374,9 @@ def answer_first_board_chat(
     )
     if llm_response is not None:
         return llm_response
+    # More specific domains run before the broad first-board intent classifier.
+    # This ordering keeps a post-limit path or promotion statistic from being
+    # accidentally answered with the generic first-board candidate pool.
     post_limit_fallback = _answer_post_limit_without_llm(
         request=request,
         tools=tools,
@@ -592,6 +605,10 @@ def _answer_with_llm_tool_agent(
 ) -> AgentChatResponse | None:
     """Let the LLM choose tools first, then answer from executed tool facts."""
 
+    # The normal turn has two model stages: choose capabilities, then explain the
+    # resulting facts. Tool selection/arguments are normalized between them.
+    # Structured list paths may skip the second model stage entirely.
+
     deterministic = _deterministic_pre_llm_response(request, tools.events, context)
     if deterministic is not None:
         return deterministic
@@ -766,18 +783,25 @@ def _answer_with_llm_tool_agent(
             "tools",
             f"正在查询 {selected_tools}" if selected_tools else "正在查询本地事实数据",
         )
+    # Execute in order because later handlers can reuse earlier rating/filter
+    # facts. The registry also checks the active profile at execution time.
     execution = _execute_llm_tool_calls(
         tool_calls,
         tools,
         request=request,
         context_symbol=context.symbol,
     )
+    # Post-execution repair fills required evidence omitted from the initial plan.
+    # It records the reason in Trace, making Planner-versus-Final differences
+    # inspectable instead of silently pretending the model selected every tool.
     policy.reconcile(
         request=request,
         execution=execution,
         context_symbol=context.symbol,
         capabilities=policy_capabilities,
     )
+    # Cross-tool operations, such as intersecting two stock lists, are computed
+    # here so the answer writer receives the actual intersection as evidence.
     _add_composed_tool_facts(request.message, execution["facts"])
     capabilities = infer_capabilities_from_facts(
         capabilities,
@@ -786,6 +810,8 @@ def _answer_with_llm_tool_agent(
     tool_plan["capabilities"] = list(capabilities)
     tool_duration_ms = round((perf_counter() - tools_started_at) * 1000)
     outcome_warnings = _tool_outcome_warnings(execution["tool_results"])
+    # An empty, failed or wholly unusable evidence set cannot justify a market
+    # answer. Return the explicit unavailable response before calling the writer.
     if not _has_usable_tool_facts(
         execution["facts"],
         execution["tool_results"],
@@ -818,6 +844,8 @@ def _answer_with_llm_tool_agent(
             ),
         )
 
+    # Prepare an evidence-derived answer before asking the model to write prose.
+    # It is also the recovery answer if generation or a completeness check fails.
     fallback = direct_answer or _template_answer_from_tool_facts(
         request=request,
         intent=intent,
@@ -846,6 +874,8 @@ def _answer_with_llm_tool_agent(
         request.message,
         execution["facts"],
     )
+    # For these result shapes, deterministic rendering preserves all rows and
+    # counts while avoiding an unnecessary model round trip.
     fast_structured_answer = (
         looks_like_limit_up_sector_summary_question(request.message)
         or looks_like_named_limit_up_sector_list_question(request.message)
@@ -890,6 +920,9 @@ def _answer_with_llm_tool_agent(
         warnings = [_safety_warning()]
     else:
         try:
+            # Streaming text is a draft: the final response can still replace it
+            # after safety or list-completeness validation. The frontend performs
+            # that replacement when it receives the completed response.
             if answer_delta_callback:
                 stream_sanitizer = AgentAnswerStreamSanitizer(answer_delta_callback)
                 final_result = active_provider.stream_generate(
@@ -914,6 +947,9 @@ def _answer_with_llm_tool_agent(
                 answer = _ensure_safety_boundary(final_result.content)
                 source = "llm_tool_answer"
                 warnings = [_safety_warning()]
+            # These are targeted business checks, not a universal proof of every
+            # sentence. Each verifies an output property the user explicitly
+            # requested, then falls back to deterministic facts if it is missing.
             if exhaustive_event_answer and not _contains_every_event_symbol(
                 answer,
                 execution["facts"],
@@ -1048,6 +1084,10 @@ def _generate_llm_query_plan(
 ) -> AgentQueryPlan:
     """Generate and normalize the production LLM query plan."""
 
+    # The native schema asks for capabilities and conversational intent rather
+    # than arbitrary executable code. The backend maps those capabilities to its
+    # registered tools and derives domain arguments from the request/contracts.
+
     injection = assess_direct_prompt_injection(request.message)
     if injection.detected:
         payload = {
@@ -1164,6 +1204,8 @@ def _generate_llm_query_plan(
         }]
     # Planner output is never executable user-facing text. Conversational intents
     # are rendered from server-owned templates after the plan is normalized.
+    # A planner response is control data, never a trusted final answer. Remove
+    # legacy direct-answer text even if a provider still returns that field.
     payload.pop("answer_directly", None)
     direct_answer = ""
     context_mode = str(payload.get("context_mode") or "standalone").strip().lower()
@@ -1186,6 +1228,8 @@ def _generate_llm_query_plan(
         for item in raw_context_capabilities
         if isinstance(item, str) and item in context.last_capabilities
     ]
+    # Only an explicit source-refinement follow-up inherits earlier evidence
+    # capabilities. A new question must not inherit unrelated tools by accident.
     if context_mode == "source_refinement":
         raw_capabilities = [*context_capabilities, *raw_capabilities]
     else:
@@ -1692,6 +1736,7 @@ def _llm_plan_trace(
 class _SessionContext:
     """Minimal chat context recovered from recent Agent runs."""
 
+    # Initialize _SessionContext with the supplied dependencies and per-instance state.
     def __init__(
         self,
         symbol: str | None = None,

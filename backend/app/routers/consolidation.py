@@ -9,6 +9,7 @@ from app.repositories.consolidation_repository import load_consolidation_pool
 router = APIRouter()
 
 
+# Serve the requested consolidation or drawdown observation pool using Shanghai time.
 @router.get("/consolidation", response_model=ConsolidationPool)
 def get_consolidation_pool(data_as_of: date | None = None,
                            strategy: ObservationStrategy = "consolidation") -> ConsolidationPool:

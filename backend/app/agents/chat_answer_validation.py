@@ -63,6 +63,8 @@ def _build_hot_stock_event_intersection(
                 "closed_limit": event.get("closed_limit"),
             }
         )
+    # The key compares `item.get('rank') if isinstance(item.get('rank'), int) else 10000`, then
+    # `item.get('symbol') or ''`.
     joined.sort(
         key=lambda item: (
             item.get("rank") if isinstance(item.get("rank"), int) else 10_000,

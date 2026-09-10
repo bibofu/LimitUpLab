@@ -82,6 +82,7 @@ def search_web(
     raise RuntimeError("web search failed: " + "; ".join(errors))
 
 
+# Fetch and parse a bounded set of Bing search results.
 def _search_bing(query: str, limit: int) -> list[WebSearchResult]:
     with without_proxy():
         response = requests.get(
@@ -110,6 +111,7 @@ def _search_bing(query: str, limit: int) -> list[WebSearchResult]:
     return results
 
 
+# Fetch and parse a bounded set of 360 Search results.
 def _search_so(query: str, limit: int) -> list[WebSearchResult]:
     with without_proxy():
         response = requests.get(
@@ -143,6 +145,7 @@ def _search_so(query: str, limit: int) -> list[WebSearchResult]:
     return results
 
 
+# Fetch and parse a bounded set of 360 news-search results.
 def _search_so_news(query: str, limit: int) -> list[WebSearchResult]:
     with without_proxy():
         response = requests.get(
@@ -175,6 +178,7 @@ def _search_so_news(query: str, limit: int) -> list[WebSearchResult]:
     return results
 
 
+# Fetch and parse a bounded set of DuckDuckGo search results.
 def _search_duckduckgo(query: str, limit: int) -> list[WebSearchResult]:
     with without_proxy():
         response = requests.get(
@@ -204,6 +208,9 @@ def _search_duckduckgo(query: str, limit: int) -> list[WebSearchResult]:
     return results
 
 
+# Normalize one search hit into the shared title/link/snippet representation.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _result(title: str, url: str, snippet: str) -> WebSearchResult | None:
     parsed = urlparse(url)
     if parsed.scheme not in {"http", "https"} or not parsed.netloc:
@@ -219,6 +226,7 @@ def _result(title: str, url: str, snippet: str) -> WebSearchResult | None:
     )
 
 
+# Recover the destination URL from a DuckDuckGo redirect link.
 def _unwrap_duckduckgo_url(url: str) -> str:
     parsed = urlparse(url)
     if "duckduckgo.com" not in parsed.netloc:
@@ -227,6 +235,7 @@ def _unwrap_duckduckgo_url(url: str) -> str:
     return target[0] if target else url
 
 
+# Resolve the configured network timeout with this service's bounds and fallback.
 def _timeout_seconds() -> float:
     raw = os.getenv("LIMITUPLAB_WEB_SEARCH_TIMEOUT_SECONDS", "12").strip()
     try:
@@ -236,6 +245,7 @@ def _timeout_seconds() -> float:
     return max(3.0, min(timeout, 30.0))
 
 
+# Detect wording that should prefer a news-search source.
 def _looks_like_news_query(query: str) -> bool:
     return any(
         term in query

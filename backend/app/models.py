@@ -1639,6 +1639,10 @@ class AgentChatResponse(BaseModel):
     def populate_agent_ui_fields(self) -> "AgentChatResponse":
         """Build UI evidence and planner audit fields when callers omit them."""
 
+        # This validator runs when the response model is built, including template
+        # and early-return paths. Derive UI metadata from the actual traces so all
+        # paths share the same evidence cards, stock links and policy audit shape.
+
         self.answer = sanitize_agent_answer(self.answer)
         if not self.stock_mentions:
             self.stock_mentions = extract_agent_stock_mentions(
@@ -1748,6 +1752,7 @@ def _infer_agent_tool_outcome(
     )
 
 
+# Collect source-level errors embedded in a tool payload for the uniform outcome envelope.
 def _agent_tool_source_errors(output: dict[str, Any]) -> list[str]:
     raw_errors = output.get("source_errors") or []
     if isinstance(raw_errors, str):
@@ -1757,6 +1762,8 @@ def _agent_tool_source_errors(output: dict[str, Any]) -> list[str]:
     return [str(item) for item in raw_errors if str(item).strip()]
 
 
+# Recognize tool-specific empty payloads so an empty result is not reported as successful
+# evidence.
 def _agent_tool_payload_is_empty(output: dict[str, Any]) -> bool:
     if not output:
         return True
@@ -1795,6 +1802,8 @@ def extract_agent_stock_mentions(
 
     mentions: dict[tuple[str, str], AgentStockMention] = {}
 
+    # Recursively inspect nested tool payloads, carrying the inherited trade date to stock
+    # entities.
     def visit(value: Any, inherited_trade_date: date | None = None) -> None:
         if isinstance(value, list):
             for item in value:
@@ -1828,6 +1837,7 @@ def extract_agent_stock_mentions(
     for trace in tool_results:
         visit(trace.output)
 
+    # The key compares `len(item.name)` (negated for descending order), then symbol.
     return sorted(
         mentions.values(),
         key=lambda item: (-len(item.name), item.symbol),

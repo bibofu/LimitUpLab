@@ -161,6 +161,8 @@ def refresh_recommendation_intelligence(
         return missed
     hithink = HithinkFinanceCollector()
     active_quote_collector = quote_collector or hithink.collect_market_snapshots
+    # The callback defers collect_stock_news until its wrapper invokes it, preserving the
+    # surrounding request's arguments.
     active_news_collector = news_collector or (
         lambda symbol, name: collect_stock_news(
             symbol=symbol,
@@ -169,6 +171,8 @@ def refresh_recommendation_intelligence(
             limit=3,
         )
     )
+    # The callback defers hithink.collect_income_statements until its wrapper invokes it,
+    # preserving the surrounding request's arguments.
     active_financial_collector = financial_collector or (
         lambda thscode: hithink.collect_income_statements(thscode, limit=6)
     )
@@ -492,6 +496,7 @@ def refresh_recommendation_intelligence(
         )
     base_ranked_items: list[RecommendationIntelligenceItem] = []
     for strategy in ("relay",):
+        # The key compares base score (negated for descending order), then rule rank, then symbol.
         strategy_items = sorted(
             [item for item in items if item.strategy == strategy],
             key=lambda item: (-item.base_score, item.rule_rank, item.symbol),
@@ -502,6 +507,8 @@ def refresh_recommendation_intelligence(
         )
     ranked_items: list[RecommendationIntelligenceItem] = []
     for strategy in ("relay",):
+        # The key compares draft score (negated for descending order), then base rank, then
+        # symbol.
         strategy_items = sorted(
             [item for item in base_ranked_items if item.strategy == strategy],
             key=lambda item: (-item.draft_score, item.base_rank, item.symbol),
@@ -557,6 +564,9 @@ def finalize_recommendation_intelligence(
 ) -> RecommendationIntelligenceResponse:
     """Freeze display rankings and replace the relay review baseline once."""
 
+    # Finalization is a publication event with a market-clock boundary. The draft
+    # can change during refreshes; a previously stored final result is reused so
+    # a retry does not rewrite the historical published cohort.
     finalized_at = _as_shanghai(now or datetime.now(SHANGHAI_TZ))
     if response.stage == "final":
         validate_final_response(response)
@@ -592,6 +602,7 @@ def finalize_recommendation_intelligence(
         "calendar_trade_dates": [day.isoformat() for day in calendar],
     }
 
+    # The key compares rank, then symbol.
     selected_items = [
         *sorted(
             (item for item in response.items if item.strategy == "relay"),
@@ -608,7 +619,11 @@ def finalize_recommendation_intelligence(
         }
     )
     validate_final_response(final)
+    # Recheck the publication time window immediately before committing refreshed research
+    # records.
     def verify_commit_window() -> None:
+        # Fetching evidence or waiting for SQLite may cross the cutoff. Recheck
+        # inside the persistence workflow, not just at the beginning of this call.
         written_at = _as_shanghai(now or datetime.now(SHANGHAI_TZ))
         if not (written_at.date() == final.target_trade_date
                 and FINALIZATION_TIME <= written_at.time() < MARKET_OPEN_TIME):
@@ -765,6 +780,7 @@ def _persist_final_relay_snapshot(
         for item in ratings_source.candidates
     }
     selected: list[FirstBoardRating] = []
+    # The key compares rank, then symbol.
     for dynamic in sorted(
         (item for item in response.items if item.strategy == "relay"),
         key=lambda item: (item.rank, item.symbol),
@@ -832,6 +848,7 @@ def _persist_final_relay_snapshot(
     )
 
 
+# Load the base candidate universe and associated persisted first-board evidence.
 def _load_base_candidates(
     *,
     limit_up_repository: SQLiteLimitUpRepository,
@@ -1149,6 +1166,7 @@ def _market_close(trade_date: date) -> datetime:
     return datetime.combine(trade_date, MARKET_CLOSE_TIME, tzinfo=SHANGHAI_TZ)
 
 
+# Collect candidate news and financial evidence with bounded worker concurrency.
 def _collect_candidate_evidence(
     candidates: list[_BaseCandidate],
     *,
@@ -1186,6 +1204,8 @@ def _collect_candidate_evidence(
     return results
 
 
+# Refresh one candidate's news/financial evidence, using the supplied previous records where
+# applicable.
 def _load_candidate_evidence(
     candidate: _BaseCandidate,
     *,
@@ -1220,12 +1240,16 @@ def _load_candidate_evidence(
     return _CandidateEvidence(news, financial, errors)
 
 
+# Build the candidate's financial-evidence summary from the supplied income statements.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _build_financial_report(
     statements: list[HithinkIncomeStatementFact],
     fetched_at: datetime,
 ) -> RecommendationFinancialReport | None:
     if not statements:
         return None
+    # The key compares period end, then report date.
     latest = max(statements, key=lambda item: (item.period_end, item.report_date))
     previous = next(
         (
@@ -1257,16 +1281,21 @@ def _build_financial_report(
     )
 
 
+# Compute growth from the previous financial value when both operands and the baseline are usable.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _growth_pct(current: float | None, previous: float | None) -> float | None:
     if current is None or previous is None or previous == 0:
         return None
     return round((current - previous) / abs(previous) * 100, 2)
 
 
+# Translate a plain stock code to the exchange-qualified Tonghuashun identifier.
 def _to_thscode(symbol: str) -> str:
     return f"{symbol}.SH" if symbol.startswith("6") else f"{symbol}.SZ"
 
 
+# Normalize a timestamp to the Shanghai timezone for refresh-window comparisons.
 def _as_shanghai(value: datetime) -> datetime:
     if value.tzinfo is None:
         return value.replace(tzinfo=SHANGHAI_TZ)

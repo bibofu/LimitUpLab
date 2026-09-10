@@ -16,6 +16,8 @@ from .helpers import (
 )
 
 
+# Execute the first board ratings evidence step, resolving request arguments and recording its
+# facts and trace.
 def first_board_ratings(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     trade_date = _explicit_request_trade_date(state.request)
     if trade_date and not _has_events_for_date(state.tools.events, trade_date):
@@ -60,6 +62,8 @@ def first_board_ratings(state: ExecutionState, name: str, arguments: dict[str, A
     state.references.append(f"trade_date={state.latest_ratings.trade_date.isoformat()}")
 
 
+# Execute the first board filter evidence step, resolving request arguments and recording its
+# facts and trace.
 def first_board_filter(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     if state.latest_ratings is None:
         result = state.tools.first_board_ratings(trade_date=None)
@@ -84,6 +88,8 @@ def first_board_filter(state: ExecutionState, name: str, arguments: dict[str, An
     state.references.append(f"filter={filter_query.label}")
 
 
+# Execute the first board critic evidence step, resolving request arguments and recording its
+# facts and trace.
 def first_board_critic(state: ExecutionState, name: str, arguments: dict[str, Any]) -> None:
     trade_date = _explicit_request_trade_date(state.request)
     try:

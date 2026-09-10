@@ -20,6 +20,7 @@ Runner = Callable[..., subprocess.CompletedProcess[str]]
 class HithinkFinanceError(RuntimeError):
     """Raised when the hithink-finance CLI is unavailable or rejects a request."""
 
+    # Initialize HithinkFinanceError with the supplied dependencies and per-instance state.
     def __init__(
         self,
         message: str,
@@ -216,6 +217,7 @@ class HithinkLimitUpPoolSnapshot:
 class HithinkFinanceCollector:
     """Invoke the official CLI and normalize selected special-data responses."""
 
+    # Initialize HithinkFinanceCollector with the supplied dependencies and per-instance state.
     def __init__(
         self,
         *,
@@ -365,6 +367,7 @@ class HithinkFinanceCollector:
                     turnover=turnover or 0.0,
                 )
             )
+        # The key compares trade date.
         return HithinkStockHistory(
             thscode=normalized_code,
             start_date=start_date,
@@ -538,6 +541,8 @@ class HithinkFinanceCollector:
                     basic_eps=_number(row.get("basic_eps")),
                 )
             )
+        # The key compares period end, then report date. reverse=True reverses the resulting
+        # order.
         return sorted(
             items,
             key=lambda item: (item.period_end, item.report_date),
@@ -735,6 +740,7 @@ def _market_snapshot_from_data(data: dict[str, Any]) -> HithinkMarketSnapshot:
     )
 
 
+# Locate the configured or installed hithink-finance command-line executable.
 def _find_executable() -> str:
     configured = os.getenv("LIMITUPLAB_HITHINK_FINANCE_CLI", "").strip()
     if configured:
@@ -745,6 +751,7 @@ def _find_executable() -> str:
     raise HithinkFinanceError("hithink-finance CLI is not installed or not on PATH")
 
 
+# Construct the argument vector used to launch the financial-data CLI.
 def _build_command(executable: str, arguments: Sequence[str]) -> list[str]:
     path = Path(executable)
     if os.name == "nt" and path.suffix.lower() in {".cmd", ".bat"}:
@@ -752,6 +759,7 @@ def _build_command(executable: str, arguments: Sequence[str]) -> list[str]:
     return [executable, *arguments]
 
 
+# Resolve the CLI timeout from configuration and apply the implemented fallback.
 def _configured_timeout() -> float:
     try:
         return max(1.0, float(os.getenv("LIMITUPLAB_HITHINK_TIMEOUT_SECONDS", "15")))
@@ -759,6 +767,7 @@ def _configured_timeout() -> float:
         return 15.0
 
 
+# Decode the CLI JSON envelope and surface its error response to the collector.
 def _parse_envelope(stdout: str) -> dict[str, Any]:
     text = stdout.strip()
     if not text:
@@ -772,10 +781,12 @@ def _parse_envelope(stdout: str) -> dict[str, Any]:
     return value
 
 
+# Convert a Shanghai calendar date to a midnight Unix timestamp in milliseconds.
 def _shanghai_midnight_ms(value: date) -> int:
     return int(datetime.combine(value, datetime.min.time(), SHANGHAI_TIMEZONE).timestamp() * 1000)
 
 
+# Extract and normalize the security identifier from a provider row.
 def _symbol(row: dict[str, Any]) -> str:
     ticker = str(row.get("ticker") or "").strip()
     if len(ticker) == 6 and ticker.isdigit():
@@ -785,16 +796,21 @@ def _symbol(row: dict[str, Any]) -> str:
     return candidate if len(candidate) == 6 and candidate.isdigit() else ""
 
 
+# Accept a dictionary-shaped provider value; use the local fallback for other shapes.
 def _dict(value: object) -> dict[str, Any]:
     return value if isinstance(value, dict) else {}
 
 
+# Accept a list-shaped provider value; use the local fallback for other shapes.
 def _list(value: object) -> list[dict[str, Any]]:
     if not isinstance(value, list):
         return []
     return [item for item in value if isinstance(item, dict)]
 
 
+# Normalize the source value into the text representation used by this boundary.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _text(value: object) -> str | None:
     if value is None:
         return None
@@ -802,6 +818,10 @@ def _text(value: object) -> str | None:
     return text or None
 
 
+# Parse a numeric provider/report field; an unparseable value follows the explicit missing-value
+# branch below.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _number(value: object) -> float | None:
     try:
         return float(value)
@@ -809,6 +829,9 @@ def _number(value: object) -> float | None:
         return None
 
 
+# Convert the source field into the integer representation expected by the domain model.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _integer(value: object) -> int | None:
     try:
         return int(value)
@@ -816,6 +839,9 @@ def _integer(value: object) -> int | None:
         return None
 
 
+# Convert the provider's ratio representation to the percentage convention used by this collector.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _ratio_pct(value: object) -> float | None:
     number = _number(value)
     if number is None:
@@ -823,6 +849,9 @@ def _ratio_pct(value: object) -> float | None:
     return round(number * 100, 4) if abs(number) <= 2 else round(number, 4)
 
 
+# Parse the supported date representation for this collector or query contract.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _date(value: object) -> date | None:
     text = _text(value)
     if not text:
@@ -833,6 +862,9 @@ def _date(value: object) -> date | None:
         return None
 
 
+# Extract a date from the provider's timestamp representation.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _timestamp_date(value: object) -> date | None:
     timestamp = _integer(value)
     if timestamp is None:
@@ -846,6 +878,9 @@ def _timestamp_date(value: object) -> date | None:
         return None
 
 
+# Interpret a timestamp in the Shanghai timezone before taking its calendar date.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _shanghai_timestamp_date(value: object) -> date | None:
     timestamp = _integer(value)
     if timestamp is None:

@@ -138,6 +138,7 @@ def optimize_scoring_policy(
             )
             validation_candidates.append((strength, candidate, metrics))
 
+        # The key compares `_policy_selection_key(item[2])`.
         selected_strength, selected, _ = max(
             validation_candidates,
             key=lambda item: _policy_selection_key(item[2]),
@@ -445,6 +446,8 @@ def _factor_target_correlations(
     return correlations
 
 
+# Adjust candidate factor weights using measured correlations and the configured adjustment
+# strength.
 def _candidate_weights(
     champion_weights: dict[str, float],
     correlations: dict[str, float],
@@ -471,6 +474,7 @@ def _candidate_weights(
     return normalized
 
 
+# Build a versioned challenger policy from proposed weights and its training evidence.
 def _challenger_policy(
     *,
     champion: ScoringPolicy,
@@ -480,6 +484,8 @@ def _challenger_policy(
     created_at: datetime,
     version_suffix: str,
 ) -> ScoringPolicy:
+    # The key compares `abs(weights[key] - champion.factor_weights[key])`. reverse=True reverses
+    # the resulting order.
     changed = sorted(
         weights,
         key=lambda key: abs(weights[key] - champion.factor_weights[key]),
@@ -509,6 +515,7 @@ def _challenger_policy(
     )
 
 
+# Derive a version identifier from the champion, candidate weights and generation time.
 def _challenger_version(
     champion_version: str,
     weights: dict[str, float],
@@ -574,6 +581,7 @@ def _aggregate_metrics(
     top_return_size = sum(item.top_return_sample_size for item in metrics)
     pool_return_size = sum(item.pool_return_sample_size for item in metrics)
 
+    # Aggregate the named return metric across the current optimizer evaluation folds.
     def return_weighted(field: str) -> float | None:
         return _weighted_metric(metrics, field, "top_return_sample_size")
 
@@ -634,6 +642,9 @@ def _aggregate_metrics(
     )
 
 
+# Combine fold metrics using the requested weight field.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _weighted_metric(
     metrics: list[ScoringPolicyMetrics],
     field: str,
@@ -654,6 +665,8 @@ def _weighted_metric(
     )
 
 
+# Compare champion and challenger measurements against the implemented eligibility and acceptance
+# gates.
 def _compare_policies(
     champion: ScoringPolicyMetrics,
     challenger: ScoringPolicyMetrics,
@@ -717,6 +730,9 @@ def _compare_policies(
     )
 
 
+# Combine measured return, drawdown, promotion and loss metrics into the optimizer's objective.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _objective_score(
     *,
     avg_next: float | None,
@@ -763,6 +779,7 @@ def _policy_selection_key(metrics: ScoringPolicyMetrics) -> tuple[float, ...]:
     )
 
 
+# Calculate Pearson correlation for the supplied pairs, handling insufficient or constant samples.
 def _pearson(pairs: list[tuple[float, float]]) -> float:
     if len(pairs) < 8:
         return 0.0
@@ -788,7 +805,9 @@ def _spearman(pairs: list[tuple[float, float]]) -> float:
     return _pearson(list(zip(xs, ys)))
 
 
+# Convert values to ranks for correlation calculations, accounting for ties.
 def _ranks(values: list[float]) -> list[float]:
+    # The key compares 1.
     indexed = sorted(enumerate(values), key=lambda item: item[1])
     ranks = [0.0] * len(values)
     cursor = 0
@@ -803,11 +822,15 @@ def _ranks(values: list[float]) -> list[float]:
     return ranks
 
 
+# Average the available observations; an empty usable sample remains unavailable.
 def _average(values: list[float | None]) -> float | None:
     present = [float(value) for value in values if value is not None]
     return round(mean(present), 4) if present else None
 
 
+# Calculate the positive share among available numeric outcomes.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _positive_rate(values: list[float | None]) -> float | None:
     present = [float(value) for value in values if value is not None]
     if not present:
@@ -815,12 +838,18 @@ def _positive_rate(values: list[float | None]) -> float | None:
     return round(sum(value > 0 for value in present) / len(present), 4)
 
 
+# Calculate the true share of the supplied boolean observations.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _boolean_rate(values: list[bool]) -> float | None:
     if not values:
         return None
     return round(sum(values) / len(values), 4)
 
 
+# Calculate the share of available outcomes meeting the configured threshold condition.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _threshold_rate(
     values: list[float | None],
     *,
@@ -832,10 +861,12 @@ def _threshold_rate(
     return round(sum(value <= threshold for value in present) / len(present), 4)
 
 
+# Subtract comparable metrics while preserving a missing operand as unavailable.
 def _difference(left: float | None, right: float | None) -> float | None:
     return round(left - right, 4) if left is not None and right is not None else None
 
 
+# Explain sample-size, comparison and activation limitations for the optimization result.
 def _optimization_warnings(
     trade_dates: list[date],
     comparison: ScoringPolicyComparison,

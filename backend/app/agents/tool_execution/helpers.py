@@ -25,6 +25,7 @@ from app.models import (
 class _FirstBoardFilterQuery:
     """Structured filter parsed from a first-board natural-language question."""
 
+    # Initialize _FirstBoardFilterQuery with the supplied dependencies and per-instance state.
     def __init__(self, label: str, aliases: tuple[str, ...]):
         self.label = label
         self.aliases = aliases
@@ -323,6 +324,7 @@ def _summarize_first_board_industries(
 
     rows = []
     for industry, items in grouped.items():
+        # The key compares score (negated for descending order), then first limit time.
         top_items = sorted(items, key=lambda item: (-item.score, item.facts.first_limit_time))[:5]
         rows.append(
             {
@@ -340,6 +342,8 @@ def _summarize_first_board_industries(
                 ],
             }
         )
+    # The key compares count (negated for descending order), then avg score (negated for
+    # descending order), then industry.
     return sorted(rows, key=lambda item: (-item["count"], -item["avg_score"], item["industry"]))[:8]
 
 

@@ -43,6 +43,7 @@ def classify_stock_position(
 
     metrics = _build_metrics(ordered)
     scores = _score_regimes(metrics)
+    # The key compares 1 (negated for descending order), then 0.
     ranked = sorted(scores.items(), key=lambda item: (-item[1], item[0]))
     best_regime, best_score = ranked[0]
     alternatives = [
@@ -79,6 +80,7 @@ def classify_stock_position(
     )
 
 
+# Filter the history at the trade-date boundary and put bars in chronological order.
 def _ordered_bars(bars: list[StockDailyBar], trade_date: date) -> list[StockDailyBar]:
     by_date = {
         item.trade_date: item
@@ -88,6 +90,7 @@ def _ordered_bars(bars: list[StockDailyBar], trade_date: date) -> list[StockDail
     return [by_date[value] for value in sorted(by_date)][-125:]
 
 
+# Calculate price-position measurements from the eligible ordered history.
 def _build_metrics(ordered: list[StockDailyBar]) -> dict[str, float | None]:
     current = ordered[-1]
     prior = ordered[:-1]
@@ -137,6 +140,7 @@ def _build_metrics(ordered: list[StockDailyBar]) -> dict[str, float | None]:
     }
 
 
+# Measure the local price wave relative to the current close.
 def _wave_metrics(
     bars: list[StockDailyBar],
     current_close: float,
@@ -153,6 +157,7 @@ def _wave_metrics(
         }
 
     peak_search = bars[:-3]
+    # The key compares high.
     peak_index = max(range(len(peak_search)), key=lambda index: peak_search[index].high)
     peak_price = bars[peak_index].high
     before_peak = bars[: peak_index + 1]
@@ -168,6 +173,7 @@ def _wave_metrics(
             "rebound_from_wave_trough_pct": None,
             "wave_low_retained_pct": None,
         }
+    # The key compares low.
     trough_offset = min(range(len(after_peak)), key=lambda index: after_peak[index].low)
     trough_index = peak_index + 1 + trough_offset
     trough_price = bars[trough_index].low
@@ -182,7 +188,10 @@ def _wave_metrics(
     }
 
 
+# Score each supported price-position regime against the available measurements.
 def _score_regimes(metrics: dict[str, float | None]) -> dict[StockPositionRegime, float]:
+    # The callback defers metrics.get until its wrapper invokes it, preserving the surrounding
+    # request's arguments.
     value = lambda key: metrics.get(key)  # noqa: E731
     position_120 = value("position_120_pct")
     position_60 = value("position_60_pct")
@@ -284,6 +293,7 @@ def _score_regimes(metrics: dict[str, float | None]) -> dict[StockPositionRegime
     return {key: round(score, 1) for key, score in scores.items()}
 
 
+# Derive readable position tags from metrics and history coverage.
 def _build_tags(metrics: dict[str, float | None], bar_count: int) -> list[str]:
     tags: list[str] = []
     position = metrics.get("position_120_pct")
@@ -303,6 +313,7 @@ def _build_tags(metrics: dict[str, float | None], bar_count: int) -> list[str]:
     return tags[:5]
 
 
+# Explain the selected position regime using the measured values.
 def _build_evidence(
     regime: StockPositionRegime,
     metrics: dict[str, float | None],
@@ -347,6 +358,7 @@ def _build_evidence(
     return evidence[:4]
 
 
+# Return an explicit unclassified position result with the evidence gap.
 def _unclassified_assessment(
     *,
     bar_count: int,
@@ -363,6 +375,7 @@ def _unclassified_assessment(
     )
 
 
+# Represent a candidate regime match with its computed score.
 def _match(regime: StockPositionRegime, score: float) -> StockPositionMatch:
     return StockPositionMatch(
         regime=regime,
@@ -371,27 +384,40 @@ def _match(regime: StockPositionRegime, score: float) -> StockPositionMatch:
     )
 
 
+# Express a value's relative position between the supplied low and high boundaries.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _range_position(value: float, low: float, high: float) -> float | None:
     if high <= low:
         return None
     return ((value - low) / (high - low)) * 100
 
 
+# Calculate percentage change over the requested historical window when the required bars are
+# available.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _period_return(bars: list[StockDailyBar], days: int) -> float | None:
     if len(bars) <= days:
         return None
     return _pct(bars[-1].close, bars[-days - 1].close)
 
 
+# Calculate percentage change from the supplied baseline; return None when the baseline is absent
+# or zero.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _pct(value: float, base: float | None) -> float | None:
     if base in (None, 0):
         return None
     return ((value - base) / base) * 100
 
 
+# Add the weights of satisfied conditions when scoring a price-position regime.
 def _sum_points(*conditions: tuple[bool, float]) -> float:
     return sum(points for matched, points in conditions if matched)
 
 
+# Round an available metric while preserving missingness.
 def _rounded(value: float | None) -> float | None:
     return round(value, 3) if value is not None else None

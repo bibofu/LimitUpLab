@@ -41,6 +41,7 @@ class QueryContractEvalSuite:
     failed: int
     results: list[QueryContractEvalResult]
 
+    # Report whether this evaluation result has no failing checks.
     @property
     def ok(self) -> bool:
         return self.failed == 0

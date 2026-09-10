@@ -194,21 +194,25 @@ def collect_concept_history(
     )
 
 
+# Fetch the Tonghuashun industry snapshot through the configured market-data library.
 def _load_ths_spot():
     with without_proxy():
         return ak.stock_board_industry_summary_ths()
 
 
+# Fetch the Eastmoney industry snapshot through the configured market-data library.
 def _load_eastmoney_spot():
     with without_proxy():
         return ak.stock_board_industry_name_em()
 
 
+# Fetch the Eastmoney concept-sector snapshot.
 def _load_eastmoney_concept_spot():
     with without_proxy():
         return ak.stock_board_concept_name_em()
 
 
+# Fetch Tonghuashun industry history for the requested date interval.
 def _load_ths_history(sector_name: str, start_date: date, end_date: date):
     with without_proxy():
         return ak.stock_board_industry_index_ths(
@@ -218,6 +222,7 @@ def _load_ths_history(sector_name: str, start_date: date, end_date: date):
         )
 
 
+# Fetch Eastmoney industry history for the requested date interval.
 def _load_eastmoney_history(sector_name: str, start_date: date, end_date: date):
     with without_proxy():
         return ak.stock_board_industry_hist_em(
@@ -229,6 +234,7 @@ def _load_eastmoney_history(sector_name: str, start_date: date, end_date: date):
         )
 
 
+# Fetch Eastmoney concept history for the requested date interval.
 def _load_eastmoney_concept_history(
     concept_name: str,
     start_date: date,
@@ -244,6 +250,7 @@ def _load_eastmoney_concept_history(
         )
 
 
+# Fetch Tonghuashun concept history for the requested date interval.
 def _load_ths_concept_history(
     concept_name: str,
     start_date: date,
@@ -257,6 +264,7 @@ def _load_ths_concept_history(
         )
 
 
+# Translate Tonghuashun snapshot columns into the shared sector-row representation.
 def _normalize_ths_spot(frame, source: str) -> list[SectorSpotRow]:
     return [
         SectorSpotRow(
@@ -277,6 +285,7 @@ def _normalize_ths_spot(frame, source: str) -> list[SectorSpotRow]:
     ]
 
 
+# Translate Eastmoney snapshot columns into the shared sector-row representation.
 def _normalize_em_spot(frame, source: str) -> list[SectorSpotRow]:
     return [
         SectorSpotRow(
@@ -297,6 +306,7 @@ def _normalize_em_spot(frame, source: str) -> list[SectorSpotRow]:
     ]
 
 
+# Translate Tonghuashun history columns into dated sector bars.
 def _normalize_ths_history(frame, source: str) -> list[SectorDailyRow]:
     records = frame.to_dict("records")
     closes = [_number(row.get("收盘价")) for row in records]
@@ -314,9 +324,11 @@ def _normalize_ths_history(frame, source: str) -> list[SectorDailyRow]:
                 source=source,
             )
         )
+    # The key compares trade date.
     return sorted(rows, key=lambda item: item.trade_date)
 
 
+# Translate Eastmoney history columns into dated sector bars.
 def _normalize_em_history(frame, source: str) -> list[SectorDailyRow]:
     rows = [
         SectorDailyRow(
@@ -328,15 +340,20 @@ def _normalize_em_history(frame, source: str) -> list[SectorDailyRow]:
         for row in frame.to_dict("records")
         if _number(row.get("收盘")) is not None
     ]
+    # The key compares trade date.
     return sorted(rows, key=lambda item: item.trade_date)
 
 
+# Compute the percentage change from the previous value when a usable denominator exists.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _change_pct(current: float, previous: float | None) -> float | None:
     if previous is None or previous == 0:
         return None
     return round((current - previous) / previous * 100, 2)
 
 
+# Convert a date field to the representation required by this storage or source boundary.
 def _date_value(value: Any) -> date:
     if isinstance(value, datetime):
         return value.date()
@@ -345,6 +362,10 @@ def _date_value(value: Any) -> date:
     return date.fromisoformat(str(value)[:10])
 
 
+# Parse a numeric provider/report field; an unparseable value follows the explicit missing-value
+# branch below.
+# A None result represents the unavailable or inapplicable branch; callers must check it before
+# using the value.
 def _number(value: Any) -> float | None:
     if value is None or str(value).strip() in {"", "-", "nan", "None"}:
         return None
@@ -354,6 +375,7 @@ def _number(value: Any) -> float | None:
         return None
 
 
+# Require a usable numeric field and reject rows that cannot supply it.
 def _required_number(value: Any) -> float:
     number = _number(value)
     if number is None:
@@ -361,11 +383,13 @@ def _required_number(value: Any) -> float:
     return number
 
 
+# Convert the source field into the integer representation expected by the domain model.
 def _integer(value: Any) -> int | None:
     number = _number(value)
     return int(number) if number is not None else None
 
 
+# Normalize the source value into the text representation used by this boundary.
 def _text(value: Any) -> str | None:
     text = str(value or "").strip()
     return text if text and text != "-" else None
