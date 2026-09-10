@@ -1217,7 +1217,13 @@ def _generate_llm_query_plan(
     if native_error:
         payload["native_function_call_fallback_reason"] = native_error
 
-    tool_calls = _normalize_tool_calls(payload.get("tool_calls"))
+    raw_planner_capabilities = (
+        list(payload.get("capabilities"))
+        if isinstance(payload.get("capabilities"), list)
+        else []
+    )
+    raw_planner_tool_calls = _normalize_tool_calls(payload.get("tool_calls"))
+    tool_calls = list(raw_planner_tool_calls)
     tool_calls = _normalize_first_board_position_tool_calls(request, tool_calls)
     tool_calls = _normalize_daily_board_promotion_tool_calls(
         request,
@@ -1307,6 +1313,8 @@ def _generate_llm_query_plan(
         payload["intent_label"] = "market_event_query"
     payload["context_mode"] = context_mode
     payload["context_capabilities"] = context_capabilities
+    payload["raw_capabilities"] = raw_planner_capabilities
+    payload["raw_tool_calls"] = raw_planner_tool_calls
     payload["capabilities"] = raw_capabilities
     policy_capabilities = normalize_capabilities(raw_capabilities)
     capabilities = normalize_capabilities(
@@ -1769,11 +1777,19 @@ def _llm_plan_trace(
             "model": model,
             "provider": provider,
             "intent_label": tool_plan.get("intent_label"),
-            "capabilities": tool_plan.get("capabilities") or [],
+            "capabilities": tool_plan.get(
+                "raw_capabilities", tool_plan.get("capabilities")
+            )
+            or [],
+            "resolved_capabilities": tool_plan.get("capabilities") or [],
             "context_mode": tool_plan.get("context_mode") or "standalone",
             "context_capabilities": tool_plan.get("context_capabilities") or [],
             "safety": tool_plan.get("safety"),
-            "tool_calls": tool_plan.get("tool_calls") or [],
+            "tool_calls": tool_plan.get(
+                "raw_tool_calls", tool_plan.get("tool_calls")
+            )
+            or [],
+            "resolved_tool_calls": tool_plan.get("tool_calls") or [],
             "planner_mode": tool_plan.get("planner_mode") or "unknown",
             "planner_contract_version": tool_plan.get("planner_contract_version"),
             "native_function_call_fallback_reason": tool_plan.get(

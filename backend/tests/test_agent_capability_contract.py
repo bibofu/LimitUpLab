@@ -451,6 +451,14 @@ class AgentCapabilityContractTest(unittest.TestCase):
             trace for trace in response.tool_results if trace.name == "llm_tool_planner"
         )
         self.assertEqual(planner_trace.input["capabilities"], ["limit_up_pool"])
+        self.assertEqual(planner_trace.input["tool_calls"], [])
+        self.assertEqual(
+            planner_trace.input["resolved_capabilities"], ["limit_up_pool"]
+        )
+        self.assertEqual(
+            planner_trace.input["resolved_tool_calls"][0]["name"],
+            "limit_up_events",
+        )
 
 
 if __name__ == "__main__":
