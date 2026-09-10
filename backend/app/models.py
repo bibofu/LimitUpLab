@@ -1451,34 +1451,6 @@ class DailyReviewSnapshotsResponse(BaseModel):
     generated_by: str
 
 
-class AgentEvalCaseReport(BaseModel):
-    """One deterministic chat eval case shown in the frontend quality panel."""
-
-    case_id: str
-    passed: bool
-    failures: list[str] = Field(default_factory=list)
-    intent: str
-    planner_tool_calls: list[str] = Field(default_factory=list)
-    final_tool_calls: list[str] = Field(default_factory=list)
-    backend_repaired_tools: list[str] = Field(default_factory=list)
-    repair_reasons: list[str] = Field(default_factory=list)
-    trace_names: list[str] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-    answer_preview: str
-
-
-class AgentEvalReportResponse(BaseModel):
-    """Deterministic Agent regression suite report for local quality checks."""
-
-    mode: Literal["offline"]
-    total: int
-    passed: int
-    failed: int
-    pass_rate: float
-    results: list[AgentEvalCaseReport]
-    generated_by: str
-
-
 class AgentEvalV2ReportResponse(BaseModel):
     """Last completed seven-stage Chat Eval artifact returned by the API."""
 

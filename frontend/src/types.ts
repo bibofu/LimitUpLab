@@ -519,20 +519,6 @@ export interface PredictionQualityAuditResponse {
   generated_by: string;
 }
 
-export interface AgentEvalCaseReport {
-  case_id: string;
-  passed: boolean;
-  failures: string[];
-  intent: string;
-  planner_tool_calls: string[];
-  final_tool_calls: string[];
-  backend_repaired_tools: string[];
-  repair_reasons: string[];
-  trace_names: string[];
-  warnings: string[];
-  answer_preview: string;
-}
-
 export interface AgentEvalReportResponse {
   status: "completed";
   run_id: string;
