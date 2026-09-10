@@ -129,6 +129,14 @@ def test_committed_dev_dataset_covers_every_v1_capability_three_times() -> None:
     assert len(dataset.cases) == 120
     assert set(observed) == capabilities
     assert all(observed.count(capability) == 3 for capability in capabilities)
+    assert all(case.expected.query for case in dataset.cases)
+    assert sum(bool(case.expected.tool_parameters) for case in dataset.cases) >= 100
+    assert sum(len(case.expected.evidence_claims) for case in dataset.cases) >= 100
+    for case in dataset.cases:
+        for claim in case.expected.evidence_claims:
+            tool = claim.source_path.partition(".")[0]
+            assert tool in case.expected.required_tools
+            assert case.expected.result_states[tool] in {"ok", "partial"}
 
 
 def test_loader_rejects_distribution_drift(tmp_path: Path) -> None:

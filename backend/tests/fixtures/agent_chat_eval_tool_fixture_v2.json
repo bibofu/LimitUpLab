@@ -3,7 +3,7 @@
   "schema_version": "chat-eval-tool-fixture-v2",
   "anchor_date": "2026-05-15",
   "tools": {
-    "market_summary": {"summary": "冻结盘面样本已返回涨跌停结构。", "payload": {"as_of_date": "2026-05-15", "limit_up_count": 3, "first_board_count": 2, "failed_count": 1}},
+    "market_summary": {"summary": "冻结盘面样本已返回涨跌停结构。", "payload": {"as_of_date": "2026-05-15", "limit_up_count": 3, "first_board_count": 2, "failed_count": 1, "eval_claim": {"entity": "A股", "date": "2026-05-15", "metric": "limit_up_count", "value": 3}}},
     "market_index_trend": {"summary": "冻结指数样本已返回近五日走势。", "payload": {"as_of_date": "2026-05-15", "indices": [{"entity": "上证指数", "date": "2026-05-15", "metric": "change_pct", "value": 0.42}]}},
     "sector_performance": {"summary": "冻结板块样本已返回行业强弱。", "payload": {"as_of_date": "2026-05-15", "sectors": [{"entity": "半导体", "date": "2026-05-15", "metric": "change_pct", "value": 1.8}]}},
     "sector_stock_ranking": {"summary": "冻结板块成分样本已返回趋势排名。", "payload": {"as_of_date": "2026-05-15", "stocks": [{"entity": "样本科技", "symbol": "300001", "date": "2026-05-15", "metric": "trend_score", "value": 72.0}]}},

@@ -125,6 +125,12 @@ class EvalExpectedBehavior(BaseModel):
             raise ValueError("tool parameters may only target required tools")
         if set(self.result_states) - set(self.required_tools):
             raise ValueError("result states may only target required tools")
+        for claim in self.evidence_claims:
+            tool = claim.source_path.partition(".")[0]
+            if tool not in self.required_tools:
+                raise ValueError("evidence claims must reference a required tool")
+            if self.result_states.get(tool) in {"empty", "error"}:
+                raise ValueError("empty or error tools cannot provide expected evidence")
         return self
 
 

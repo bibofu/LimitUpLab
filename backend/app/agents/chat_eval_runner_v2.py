@@ -26,7 +26,7 @@ from app.agents.chat_eval_v2 import (
     evaluate_chat_response,
 )
 from app.agents.query_contract import (
-    build_query_understanding_view,
+    build_conversation_query_understanding_view,
     query_reference_date_override,
 )
 from app.models import (
@@ -525,7 +525,9 @@ def _response(
 
 def _query_trace(case: ChatEvalCase) -> AgentToolTrace:
     with query_reference_date_override(case.anchor_datetime.date()):
-        view = build_query_understanding_view(case.conversation[-1].content)
+        view = build_conversation_query_understanding_view(
+            [turn.content for turn in case.conversation if turn.role == "user"]
+        )
     return AgentToolTrace(
         name="query_understanding",
         input=view,
@@ -568,18 +570,46 @@ def _template_answer(case: ChatEvalCase, traces: list[AgentToolTrace]) -> str:
             if trace.result is not None and trace.name not in INTERNAL_TRACE_NAMES
         ]
         if "partial" in states:
-            return "冻结工具只返回部分数据；缺失来源已披露，因此不补造未返回的事实。"
+            facts = "；".join(
+                _render_expected_claim(claim)
+                for claim in case.expected.evidence_claims
+            )
+            prefix = f"已核验的部分事实为：{facts}；" if facts else ""
+            return f"{prefix}冻结工具只返回部分数据；缺失来源已披露，因此不补造未返回的事实。"
         return "冻结工具暂无可用数据或执行失败，因此无法给出事实结论。"
+    facts = [_render_expected_claim(claim) for claim in case.expected.evidence_claims]
     summaries = [
         trace.summary
         for trace in traces
         if trace.name not in INTERNAL_TRACE_NAMES and trace.result is not None
     ]
-    core = "；".join(summaries[:4]) or "冻结结构化事实已核验"
+    core = "；".join(facts or summaries[:4]) or "冻结结构化事实已核验"
     assertions = case.expected.answer_assertions
     required = "；".join(assertions.must_include + assertions.required_symbols)
     suffix = f"；{required}" if required else ""
     return f"{core}{suffix}。仅作收盘后研究，不构成投资建议。"
+
+
+def _render_expected_claim(claim: Any) -> str:
+    entity = claim.entity or "样本"
+    claim_date = f"在{claim.date}" if claim.date else ""
+    metric = claim.metric
+    value = claim.value
+    suffix = ""
+    if isinstance(value, (int, float)):
+        if "pct" in metric:
+            suffix = "%"
+        elif "score" in metric:
+            suffix = "分"
+        elif "rank" in metric:
+            suffix = "名"
+        elif "board" in metric:
+            suffix = "板"
+        elif any(term in metric for term in ("count", "size", "rows")):
+            suffix = "个"
+        elif "buy" in metric:
+            suffix = "元"
+    return f"{entity}{claim_date}的{metric}为{value}{suffix}"
 
 
 def _generate_live_answer(

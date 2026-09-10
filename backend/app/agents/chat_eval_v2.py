@@ -492,10 +492,20 @@ def _evaluate_grounding(
         for claim in case.expected.evidence_claims
         if not _evidence_claim_present(claim, response.tool_results)
     ]
+    unmentioned_claims = [
+        claim
+        for claim in case.expected.evidence_claims
+        if claim not in missing_claims
+        and not _answer_mentions_evidence_claim(claim, response.answer)
+    ]
     failures = [
         f"expected evidence claim missing: {claim.source_path}={claim.value!r}"
         for claim in missing_claims
     ]
+    failures.extend(
+        f"expected evidence claim not used in answer: {claim.metric}={claim.value!r}"
+        for claim in unmentioned_claims
+    )
     failures.extend(
         f"unsupported {claim.kind} claim: {claim.text}"
         for claim in grounding.claims
@@ -504,7 +514,7 @@ def _evaluate_grounding(
     if grounding.tool_failure_hallucination:
         failures.append("answer asserted unsupported facts after a tool failure")
     required = len(case.expected.evidence_claims)
-    found = required - len(missing_claims)
+    found = required - len(missing_claims) - len(unmentioned_claims)
     return EvalStageResult(
         status="fail" if failures else "pass",
         failures=tuple(failures),
@@ -515,7 +525,9 @@ def _evaluate_grounding(
             "required_evidence_count": required,
             "evidence_completeness": _rate(found, required),
             "unscored_claim_count": 0,
-            "critical_claim_failures": sum(claim.critical for claim in missing_claims),
+            "critical_claim_failures": sum(
+                claim.critical for claim in [*missing_claims, *unmentioned_claims]
+            ),
         },
         observed=grounding.payload(),
     )
@@ -681,6 +693,16 @@ def _evidence_claim_present(
         return False
     value = _read_path(trace.result.payload, raw_path)
     return _values_equal(value, claim.value)
+
+
+def _answer_mentions_evidence_claim(claim: EvalEvidenceClaim, answer: str) -> bool:
+    compact = _compact(answer)
+    if claim.entity and _compact(claim.entity) not in compact:
+        return False
+    if claim.date and claim.date not in answer and claim.date.replace("-", "/") not in answer:
+        return False
+    value = str(claim.value).lower()
+    return value in answer.lower()
 
 
 def _read_path(value: Any, path: str) -> Any:
