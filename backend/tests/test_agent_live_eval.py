@@ -1,7 +1,9 @@
+from copy import deepcopy
 from datetime import date
 from pathlib import Path
 
 import json
+import pytest
 
 from app.agents.chat_live_eval import aggregate_live_results, evaluate_live_trial
 from app.agents.chat_live_eval_runner import (
@@ -11,7 +13,9 @@ from app.agents.chat_live_eval_runner import (
     judge_dimensions_for_case,
     judge_live_answer,
     load_live_eval_dataset,
+    load_live_tool_world,
     run_live_eval_suite,
+    validate_live_tool_world,
 )
 from app.agents.tool_execution import execute_tool_calls
 from app.agents.tool_policy import AgentToolPolicyEngine
@@ -35,7 +39,7 @@ def test_live_dataset_has_exact_high_value_distribution() -> None:
 
 def test_live_dataset_uses_fully_frozen_tool_environment() -> None:
     dataset = load_live_eval_dataset(DATASET_PATH)
-    assert dataset.environment_id == "chat-fixture-v2-fully-frozen-v1"
+    assert dataset.environment_id == "chat-live-world-v2-fully-frozen-v1"
     registry = FrozenLiveToolRegistry([])
     mentioned = {
         tool
@@ -46,7 +50,17 @@ def test_live_dataset_uses_fully_frozen_tool_environment() -> None:
             *case.expected.forbidden_tools,
         ]
     }
-    assert mentioned <= set(registry.fixture.tools) | {"first_board_filter"}
+    assert mentioned <= set(registry.fixture.tools)
+
+
+def test_live_tool_world_validation_rejects_cross_dated_payload() -> None:
+    dataset = load_live_eval_dataset(DATASET_PATH)
+    fixture = load_live_tool_world()
+    fixture.tools = deepcopy(fixture.tools)
+    fixture.tools["dragon_tiger_list"]["payload"]["as_of_date"] = "2026-05-16"
+
+    with pytest.raises(ValueError, match="dragon_tiger_list must declare as_of_date"):
+        validate_live_tool_world(dataset, fixture)
 
 
 def test_frozen_registry_executes_fixture_without_production_delegate() -> None:
@@ -119,9 +133,9 @@ def test_live_suite_runs_real_orchestration_against_only_frozen_facts() -> None:
         trials=1,
     )
 
-    assert report["runner_version"] == "agent-live-eval-runner-v2"
+    assert report["runner_version"] == "agent-live-eval-runner-v3"
     assert report["tool_environment"] == {
-        "fixture_snapshot_id": "chat-fixture-v2",
+        "fixture_snapshot_id": "chat-live-world-v2",
         "fully_frozen": True,
         "database_access": False,
         "network_access": False,

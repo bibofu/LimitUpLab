@@ -69,7 +69,9 @@ Live schema 使用当前 trace 可验证的字段：`required_capabilities`、re
 
 多源依赖支持对多个 Observation 集合求 `intersection` 或 `union`，并用所有 target calls 参数的并集进行 `same_set`、`subset`、`member` 或 `equals` 判断。`LIVE-REPLAN-006` 与 `LIVE-STRESS-002` 由此验证真正的热股∩涨停股集合，而不是只对其中一个来源做弱约束。
 
-Live Eval 的环境标识为 `chat-fixture-v2-fully-frozen-v1`。真实 Planner、Tool Policy、生产编排和 Answer LLM 保持运行，但初始工具调用与 Policy 补救都由 `FrozenLiveToolRegistry` 执行，只读取版本化 `chat-fixture-v2`。它不实例化生产 `AgentToolRegistry`，因此不会访问 SQLite、DuckDB、同花顺接口、新闻源或其他网络 provider。
+Live Eval 的环境标识为 `chat-live-world-v2-fully-frozen-v1`。真实 Planner、Tool Policy、生产编排和 Answer LLM 保持运行，但初始工具调用与 Policy 补救都由 `FrozenLiveToolRegistry` 执行，只读取专用、版本化的 `chat-live-world-v2`。它不实例化生产 `AgentToolRegistry`，因此不会访问 SQLite、DuckDB、同花顺接口、新闻源或其他网络 provider。
+
+`chat-live-world-v2` 是人工策展的行为评测世界，不是对 2026-05-15 真实市场的重建。它固定 24 个 V1 工具、实体目录和足够支撑 TopN/比较/多轮问题的结果集合；加载时会校验日期、实体名称、所属板块、事件汇总和关键覆盖，避免 fixture 内部自相矛盾。
 
 错误、空结果和部分结果也在同一个冻结执行器内按 case 注入；带 `match_args` 的异常只作用于匹配参数的调用。fixture 未定义或 V1 profile 未启用的工具返回显式 `error`，不得回退到真实工具。每次报告写入 `fully_frozen=true`、fixture id，以及 `database_access=false`、`network_access=false`，便于拒绝混合环境报告。
 

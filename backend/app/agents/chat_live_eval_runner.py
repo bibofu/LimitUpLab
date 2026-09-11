@@ -13,7 +13,6 @@ from typing import Any
 from uuid import uuid4
 
 from app.agents.chat import answer_first_board_chat
-from app.agents.chat_eval_dataset import CHAT_EVAL_FIXTURE_ID
 from app.agents.chat_eval_runner_v2 import FrozenToolFixture
 from app.agents.chat_live_eval import (
     LIVE_EVAL_ENVIRONMENT_ID,
@@ -33,13 +32,114 @@ from app.services.sample_data import SAMPLE_EVENTS
 
 
 DATASET_PATH = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "agent_chat_live_eval_v1.json"
+LIVE_TOOL_WORLD_PATH = (
+    Path(__file__).resolve().parents[2]
+    / "tests"
+    / "fixtures"
+    / "agent_chat_live_tool_world_v2.json"
+)
+LIVE_TOOL_WORLD_ID = "chat-live-world-v2"
+LIVE_TOOL_WORLD_SCHEMA_VERSION = "chat-live-tool-world-v2"
 DEFAULT_OUTPUT_ROOT = Path(__file__).resolve().parents[3] / "output" / "agent-live-eval"
-RUNNER_VERSION = "agent-live-eval-runner-v2"
+RUNNER_VERSION = "agent-live-eval-runner-v3"
 JUDGE_PROMPT_VERSION = "agent-live-eval-judge-v2"
 
 
 def load_live_eval_dataset(path: Path = DATASET_PATH) -> LiveEvalDataset:
-    return LiveEvalDataset.model_validate_json(path.read_text(encoding="utf-8"))
+    dataset = LiveEvalDataset.model_validate_json(path.read_text(encoding="utf-8"))
+    validate_live_tool_world(dataset, load_live_tool_world())
+    return dataset
+
+
+def load_live_tool_world(path: Path = LIVE_TOOL_WORLD_PATH) -> FrozenToolFixture:
+    return FrozenToolFixture(
+        path,
+        expected_snapshot_id=LIVE_TOOL_WORLD_ID,
+        expected_schema_version=LIVE_TOOL_WORLD_SCHEMA_VERSION,
+    )
+
+
+def validate_live_tool_world(
+    dataset: LiveEvalDataset,
+    fixture: FrozenToolFixture,
+) -> None:
+    """Reject an incomplete, cross-dated or internally inconsistent Live world."""
+
+    anchor_dates = {
+        datetime.fromisoformat(case.anchor_datetime).date().isoformat()
+        for case in dataset.cases
+    }
+    if anchor_dates != {fixture.anchor_date}:
+        raise ValueError(
+            f"Live case anchors {sorted(anchor_dates)} do not match {fixture.anchor_date}"
+        )
+    missing_tools = set(V1_CLOSED_MARKET_TOOL_NAMES) - set(fixture.tools)
+    if missing_tools:
+        raise ValueError(f"Live tool world is missing tools: {sorted(missing_tools)}")
+    for tool_name, definition in fixture.tools.items():
+        payload = definition.get("payload") or {}
+        if payload.get("as_of_date") != fixture.anchor_date:
+            raise ValueError(f"{tool_name} must declare as_of_date={fixture.anchor_date}")
+        for item in _walk_mappings(payload):
+            symbol = str(item.get("symbol") or "")
+            entity = str(item.get("entity") or item.get("name") or "")
+            if not symbol or not entity:
+                continue
+            canonical = fixture.entities.get(symbol)
+            if canonical is None:
+                raise ValueError(f"{tool_name} references unknown symbol {symbol}")
+            if entity != canonical.get("name"):
+                raise ValueError(
+                    f"{tool_name} binds {symbol} to {entity}, expected {canonical.get('name')}"
+                )
+            sector = item.get("sector")
+            if sector and sector != canonical.get("sector"):
+                raise ValueError(
+                    f"{tool_name} binds {symbol} to sector {sector}, "
+                    f"expected {canonical.get('sector')}"
+                )
+    market = fixture.tools["market_summary"]["payload"]
+    limit_up = fixture.tools["limit_up_events"]["payload"]["events"]
+    if market.get("limit_up_count") != len(limit_up):
+        raise ValueError("market_summary limit_up_count must match limit_up_events")
+    if market.get("first_board_count") != sum(
+        item.get("board_height") == 1 for item in limit_up
+    ):
+        raise ValueError("market_summary first_board_count must match limit_up_events")
+    if len(fixture.tools["hot_stock_ranking"]["payload"].get("stocks", [])) < 10:
+        raise ValueError("Live tool world requires at least ten hot stocks")
+    if len(fixture.tools["first_board_ratings"]["payload"].get("ratings", [])) < 5:
+        raise ValueError("Live tool world requires at least five rated first boards")
+    rankings = fixture.tools["sector_stock_ranking"]["payload"].get("by_sector", {})
+    if len(rankings.get("半导体", [])) < 5 or len(rankings.get("医药", [])) < 3:
+        raise ValueError("Live tool world lacks sector comparison/ranking coverage")
+    ratings = {
+        item["symbol"]
+        for item in fixture.tools["first_board_ratings"]["payload"]["ratings"]
+    }
+    hot = {
+        item["symbol"]
+        for item in fixture.tools["hot_stock_ranking"]["payload"]["stocks"]
+    }
+    limit_up_symbols = {item["symbol"] for item in limit_up}
+    kline = set(fixture.tools["stock_kline"]["payload"].get("by_symbol", {}))
+    news = set(fixture.tools["stock_news"]["payload"].get("by_symbol", {}))
+    if "300750" not in ratings or not {"300750", "600000"} <= kline:
+        raise ValueError("Live tool world lacks named-stock rating/K-line coverage")
+    if "300750" not in news:
+        raise ValueError("Live tool world lacks named-stock news coverage")
+    if not hot & limit_up_symbols:
+        raise ValueError("Live tool world must contain a non-empty hot/limit-up intersection")
+
+
+def _walk_mappings(value: Any):
+    if isinstance(value, dict):
+        yield value
+        for item in value.values():
+            yield from _walk_mappings(item)
+    elif isinstance(value, list):
+        for item in value:
+            yield from _walk_mappings(item)
 
 
 def run_live_eval_suite(
@@ -76,7 +176,7 @@ def run_live_eval_suite(
         "runner_version": RUNNER_VERSION,
         "environment_id": LIVE_EVAL_ENVIRONMENT_ID,
         "tool_environment": {
-            "fixture_snapshot_id": CHAT_EVAL_FIXTURE_ID,
+            "fixture_snapshot_id": LIVE_TOOL_WORLD_ID,
             "fully_frozen": True,
             "database_access": False,
             "network_access": False,
@@ -213,7 +313,11 @@ class FrozenLiveToolRegistry:
         injections: list[FailureInjection],
         fixture: FrozenToolFixture | None = None,
     ) -> None:
-        self.fixture = fixture or FrozenToolFixture()
+        self.fixture = fixture or FrozenToolFixture(
+            LIVE_TOOL_WORLD_PATH,
+            expected_snapshot_id=LIVE_TOOL_WORLD_ID,
+            expected_schema_version=LIVE_TOOL_WORLD_SCHEMA_VERSION,
+        )
         self._injections = injections
         self.profile = V1_AGENT_PROFILE
         self.events = SAMPLE_EVENTS
@@ -356,9 +460,8 @@ class FrozenLiveToolRegistry:
         arguments: dict[str, Any],
         result_state: str | None,
     ) -> AgentToolTrace:
-        fixture_name = "first_board_ratings" if name == "first_board_filter" else name
         trace = self.fixture.trace(
-            fixture_name,
+            name,
             arguments=arguments,
             result_state=result_state,
         )
@@ -424,7 +527,7 @@ def _normalize_frozen_payload(
                 **item,
                 "name": item.get("entity"),
                 "return_pct": item.get("value"),
-                "source": "chat-fixture-v2",
+                "source": LIVE_TOOL_WORLD_ID,
             }
             for item in payload["indices"]
         ]
@@ -438,19 +541,37 @@ def _normalize_frozen_payload(
             }
             for item in payload["sectors"]
         ]
-        payload["sources"] = ["chat-fixture-v2"]
+        payload["sources"] = [LIVE_TOOL_WORLD_ID]
     elif tool_name == "sector_stock_ranking":
+        rankings = payload.get("by_sector", {})
+        requested_sector = str(arguments.get("sector") or "半导体")
+        selected = rankings.get(requested_sector)
+        if selected is None and rankings:
+            selected = next(iter(rankings.values()))
         payload["data_as_of"] = as_of
-        payload["sector_name"] = arguments.get("sector") or payload.get("sector")
+        payload["sector_name"] = requested_sector
+        payload["stocks"] = selected or []
     elif tool_name == "hot_stock_ranking" and "stocks" in payload:
         payload["items"] = [
             {**item, "name": item.get("entity"), "rank": item.get("value")}
             for item in payload["stocks"]
         ]
         payload.update(
-            {"source": "chat-fixture-v2", "captured_at": f"{as_of}T15:10:00+08:00", "data_fresh": True}
+            {"source": LIVE_TOOL_WORLD_ID, "captured_at": f"{as_of}T15:10:00+08:00", "data_fresh": True}
         )
-    elif tool_name in {"stock_news", "finance_news"} and "items" in payload:
+    elif tool_name == "stock_news" and "by_symbol" in payload:
+        requested_symbol = str(arguments.get("symbol") or "300750")
+        payload["symbol"] = requested_symbol
+        payload["items"] = payload["by_symbol"].get(requested_symbol, [])
+        payload["items"] = [
+            {
+                **item,
+                "title": item.get("value"),
+                "url": f"fixture://{tool_name}/{index}",
+            }
+            for index, item in enumerate(payload["items"], start=1)
+        ]
+    elif tool_name == "finance_news" and "items" in payload:
         payload["items"] = [
             {
                 **item,
@@ -469,18 +590,27 @@ def _normalize_frozen_payload(
             for item in payload["ratings"]
         ]
     elif tool_name == "first_board_filter":
-        ratings = payload.get("ratings", [])
-        payload["matches"] = ratings
-        payload["matched_count"] = len(ratings)
-    elif tool_name == "stock_kline" and isinstance(payload.get("stock"), dict):
-        stock = payload["stock"]
-        requested = arguments.get("symbol")
-        if requested:
-            stock = {**stock, "symbol": requested, "entity": requested}
-            payload["stock"] = stock
+        payload.setdefault("matches", [])
+        payload["matched_count"] = len(payload["matches"])
+    elif tool_name == "stock_kline" and "by_symbol" in payload:
+        requested = str(arguments.get("symbol") or "300750")
+        stock = payload["by_symbol"].get(requested, {})
+        payload["stock"] = stock
         payload.update(
-            {"symbol": stock.get("symbol"), "name": stock.get("entity"), "data_as_of": as_of}
+            {
+                "symbol": stock.get("symbol", requested),
+                "name": stock.get("entity", requested),
+                "data_as_of": as_of,
+            }
         )
+    elif tool_name == "stock_activity" and "by_symbol" in payload:
+        requested = str(arguments.get("symbol") or "300750")
+        payload["symbol"] = requested
+        payload["stock"] = payload["by_symbol"].get(requested, {})
+    elif tool_name == "first_board_critic" and "by_symbol" in payload:
+        requested = str(arguments.get("symbol") or "301489")
+        payload["symbol"] = requested
+        payload["critic"] = payload["by_symbol"].get(requested, {})
     elif tool_name == "scoring_policy_status":
         policy = payload.get("policy", {})
         challenger = payload.get("challenger", {})

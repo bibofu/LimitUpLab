@@ -71,15 +71,26 @@ class EvalConfigurationError(RuntimeError):
 class FrozenToolFixture:
     """Read-only versioned facts used by both offline replay and live-model eval."""
 
-    def __init__(self, path: Path = TOOL_FIXTURE_PATH) -> None:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        if payload.get("fixture_snapshot_id") != CHAT_EVAL_FIXTURE_ID:
+    def __init__(
+        self,
+        path: Path = TOOL_FIXTURE_PATH,
+        *,
+        expected_snapshot_id: str = CHAT_EVAL_FIXTURE_ID,
+        expected_schema_version: str = "chat-eval-tool-fixture-v2",
+    ) -> None:
+        payload = json.loads(
+            path.read_text(encoding="utf-8"),
+            object_pairs_hook=_json_object_without_duplicates,
+        )
+        if payload.get("fixture_snapshot_id") != expected_snapshot_id:
             raise ValueError("tool fixture snapshot does not match the dataset")
-        if payload.get("schema_version") != "chat-eval-tool-fixture-v2":
+        if payload.get("schema_version") != expected_schema_version:
             raise ValueError("unsupported Chat Eval tool fixture schema")
         if not isinstance(payload.get("tools"), dict):
             raise ValueError("tool fixture must contain a tools object")
         self.path = path
+        self.snapshot_id = expected_snapshot_id
+        self.schema_version = expected_schema_version
         self.anchor_date = str(payload.get("anchor_date") or "")
         self.tools: dict[str, dict[str, Any]] = payload["tools"]
         self.entities: dict[str, dict[str, str]] = dict(payload.get("entities") or {})
@@ -142,6 +153,17 @@ class FrozenToolFixture:
                 payload=payload,
             ),
         )
+
+
+def _json_object_without_duplicates(
+    pairs: list[tuple[str, Any]],
+) -> dict[str, Any]:
+    payload: dict[str, Any] = {}
+    for key, value in pairs:
+        if key in payload:
+            raise ValueError(f"duplicate JSON key in frozen fixture: {key}")
+        payload[key] = value
+    return payload
 
 
 def select_eval_cases(
