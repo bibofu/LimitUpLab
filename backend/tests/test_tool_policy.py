@@ -642,7 +642,8 @@ class AgentToolPolicyTest(unittest.TestCase):
             tool_calls=["first_board_ratings"],
             tool_results=[planner_trace, *execution["tool_results"]],
         )
-        self.assertEqual(audit.backend_repaired_tools, ["first_board_ratings"])
+        self.assertEqual(audit.policy_repaired_tools, ["first_board_ratings"])
+        self.assertEqual(audit.backend_repaired_tools, [])
         self.assertEqual(audit.repair_reasons, [repair["reason"]])
 
     # Regression scenario: prediction quality repair returns coverage facts.

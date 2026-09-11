@@ -574,3 +574,25 @@ empty 明确写“没有”、风险回答包含结构化风险项。
 完全冻结工具世界真实模型验收从 0/3 提升为 3/3，工具调用保持 3 次；确定性名单模板把
 模型调用从 2 次降为 1 次，平均 token 由 5,367 降至 2,809，p95 延迟由基线样本的
 2,073/1,581/1,979 ms 降至 1,325 ms。其他 observation-dependent case 仍属于 Phase 2 范围。
+
+---
+
+## BC-022：Complex Path 无法依据 Observation 补计划
+
+### 现象
+
+动态 Top-N、龙虎榜 empty 条件分支、新闻 empty fallback、评级证据不足和交集风险分析在
+首次工具返回后没有 Completion Check 或 Replan。冻结基线中目标 6 个 Replan case 与一条
+stress case 合计 0/21；已有 Phase 1 只能完成固定的热股∩涨停→评分绑定。
+
+### 修复与回归
+
+Complex Path 增加 LangGraph bounded loop，并把 planner、executor、observer、completion、
+replanner 拆分。每批调用在动态参数解析后先经过 Tool Policy preflight；确定性 Completion
+Check 只对缺失要求触发结构化 Replan，最多 2 次、10 次工具、4 次 LLM。批量 K线参数支持
+最多 20 个代码并逐项容错，避免动态集合因逻辑调用计数失真而天然超预算。
+
+真实模型 fully frozen A/B 后，上述目标从 0/21 提升到 21/21；触发 Replan 的 18/18 trial
+最终通过，unnecessary replan 为 0。`LIVE-REPLAN-006` 保持 3/3 且不触发 Replan；3 个
+Simple case 全部 3/3，普通 Multi-tool 中 001/003 为 3/3，002 因一次答案漏写指定代码为
+2/3，工具链未回归，作为答案层随机波动继续跟踪。

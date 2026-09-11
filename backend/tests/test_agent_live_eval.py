@@ -336,9 +336,10 @@ def test_raw_planner_and_effective_recall_are_separate() -> None:
     assert trial["raw_capability_recall"] == 1.0
     assert trial["raw_required_tool_recall"] == 0.0
     assert trial["effective_required_tool_recall"] == 1.0
-    assert trial["backend_repair_needed"]
+    assert not trial["backend_repair_needed"]
+    assert trial["policy_repair_count"] == 1
     metrics = aggregate_live_results([trial])
-    assert metrics["backend_repair_rate"] == 1.0
+    assert metrics["backend_repair_rate"] == 0.0
 
 
 def test_required_fact_coverage_does_not_claim_unsupported_detection() -> None:
@@ -379,7 +380,7 @@ def _response(
         tool_results=traces,
         tool_policy=AgentToolPolicyAudit(
             final_tool_calls=tools,
-            backend_repaired_tools=repaired_tools or [],
+            policy_repaired_tools=repaired_tools or [],
         ),
         generated_by="test",
     )
