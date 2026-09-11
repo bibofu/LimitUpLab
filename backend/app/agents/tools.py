@@ -557,7 +557,9 @@ TOOL_SCHEMAS = [
             "type": "object",
             "properties": {
                 "symbol": {
-                    "type": "string",
+                    "type": ["string", "array"],
+                    "items": {"type": "string", "pattern": "^[0-9]{6}$"},
+                    "maxItems": 20,
                     "description": "Six-digit A-share symbol or an exact stock name present in local data.",
                 },
                 "days": {"type": "integer", "minimum": 5, "maximum": 60},

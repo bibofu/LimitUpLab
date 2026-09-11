@@ -77,8 +77,9 @@ from app.agents.capability_contract import (
 )
 from app.agents.complex_graph import (
     route_complexity,
-    run_hot_limit_up_rating_graph,
+    run_complex_graph,
 )
+from app.agents.complex_graph.graph import scenario_capabilities
 from app.agent_output_sanitizer import (
     AgentAnswerStreamSanitizer,
     friendly_tool_label,
@@ -697,7 +698,7 @@ def _answer_with_complex_graph(
     progress_callback: Callable[[str, str], None] | None = None,
     answer_delta_callback: Callable[[str], None] | None = None,
 ) -> AgentChatResponse | None:
-    """Run the allowlisted Phase 1 dependency graph and reuse answer guardrails."""
+    """Run an allowlisted bounded complex graph and reuse answer guardrails."""
 
     started_at = perf_counter()
     active_provider = provider or get_llm_provider()
@@ -715,8 +716,11 @@ def _answer_with_complex_graph(
     if str(query_plan.payload.get("safety") or "normal") == "refuse_trade_instruction":
         return _answer_static_text(request, "unsafe_investment_advice", TEXT["unsafe"])
 
-    required_capabilities = ("popularity", "limit_up_pool", "first_board_rating")
-    capabilities = required_capabilities
+    decision = route_complexity(request.message)
+    scenario = decision.supported_scenario
+    if not scenario:
+        return None
+    capabilities = scenario_capabilities(scenario)
     answer_result: LLMResult | None = None
     answer_started_at = 0.0
     answer_prompt_chars = 0
@@ -735,12 +739,12 @@ def _answer_with_complex_graph(
                 "source": "template_general_answer",
                 "warnings": [
                     _safety_warning(),
-                    "Complex Graph had no usable evidence; no replan was attempted.",
+                    "Complex Graph had no usable evidence after bounded completion checks.",
                 ],
                 "answer_prompt_chars": 0,
                 "answer_duration_ms": 0,
             }
-        if (
+        if scenario == "hot_limit_up_rating_intersection_v1" and (
             "hot_stock_limit_up_intersection" in facts
             and "first_board_ratings" in facts
         ):
@@ -800,7 +804,10 @@ def _answer_with_complex_graph(
             if (
                 contains_prompt_leak(content)
                 or _contains_forbidden_terms(answer)
-                or not _contains_exact_hot_stock_event_intersection(answer, facts)
+                or (
+                    scenario == "hot_limit_up_rating_intersection_v1"
+                    and not _contains_exact_hot_stock_event_intersection(answer, facts)
+                )
                 or (content.strip() == UNANSWERABLE_TEXT and fallback != UNANSWERABLE_TEXT)
             ):
                 answer = _ensure_safety_boundary(fallback)
@@ -828,13 +835,14 @@ def _answer_with_complex_graph(
         }
 
     tools_started_at = perf_counter()
-    graph_result = run_hot_limit_up_rating_graph(
+    graph_result = run_complex_graph(
+        scenario=scenario,
         request=request,
         tools=tools,
         limit_up_arguments=_limit_up_query_arguments_from_message(request),
-        capabilities=capabilities,
         context_symbol=context.symbol,
         answer_builder=build_answer,
+        llm_call_count=1,
     )
     tool_duration_ms = round((perf_counter() - tools_started_at) * 1000) - int(
         graph_result.answer_meta.get("answer_duration_ms") or 0
@@ -851,14 +859,19 @@ def _answer_with_complex_graph(
         name="complex_graph_plan",
         input={
             "route": "complex",
+            "graph_run_id": graph_result.graph_run_id,
             "plan_steps": graph_result.plan_steps,
-            "replan_count": 0,
+            "replan_count": graph_result.replan_count,
+            "graph_compilation_count": graph_result.graph_compilation_count,
+            "backend_repair_count": graph_result.backend_repair_count,
+            "policy_repair_count": graph_result.policy_repair_count,
         },
         output={
             "completion_status": graph_result.completion_status,
+            "completion_check": graph_result.completion_check,
             "failed_steps": graph_result.failed_steps,
         },
-        summary="LangGraph Phase 1 dependency plan executed without replan.",
+        summary=f"Bounded Complex Graph completed with {graph_result.replan_count} replan(s).",
         status="error" if graph_result.failed_steps else "success",
     )
     source = str(graph_result.answer_meta.get("source") or "template_general_answer")
@@ -871,7 +884,7 @@ def _answer_with_complex_graph(
     ]
     response = AgentChatResponse(
         session_id=request.session_id,
-        intent="hot_limit_up_rating_intersection",
+        intent=scenario,
         answer=graph_result.final_answer,
         tool_calls=[
             "llm_tool_planner",

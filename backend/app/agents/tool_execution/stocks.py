@@ -8,6 +8,7 @@ from app.agents.tool_policy import (
     extract_kline_days as _extract_kline_days,
     extract_stock_news_days as _extract_stock_news_days,
 )
+from app.models import AgentToolOutcome, AgentToolTrace
 
 from .context import ExecutionState
 from .helpers import (
@@ -258,6 +259,42 @@ def stock_kline(state: ExecutionState, name: str, arguments: dict[str, Any]) -> 
         state.request.message
     )
     end_date = _explicit_request_trade_date(state.request)
+    requested_symbols = arguments.get("symbol")
+    if isinstance(requested_symbols, list):
+        payloads: list[dict[str, Any]] = []
+        errors: list[str] = []
+        for requested_symbol in requested_symbols[:20]:
+            try:
+                raw_symbol = _resolve_tool_stock_target(
+                    tools=state.tools,
+                    request=state.request,
+                    argument_value=_optional_str(requested_symbol),
+                    context_symbol=state.context_symbol,
+                )
+                result = state.tools.stock_kline(
+                    symbol=raw_symbol,
+                    days=max(5, min(days, 60)),
+                    end_date=end_date,
+                )
+                payload = result.output.model_dump(mode="json")
+                payloads.append(payload)
+                state.references.extend([f"symbol={result.output.symbol}", f"data_as_of={result.output.data_as_of.isoformat()}"])
+            except Exception as error:  # noqa: BLE001
+                errors.append(f"{requested_symbol}: {error}")
+        result_status = "ok" if payloads and not errors else ("partial" if payloads else "error")
+        output = {"stocks": payloads, "requested_symbols": requested_symbols[:20], "source_errors": errors}
+        state.facts["stock_kline"] = output
+        state.traces.append(AgentToolTrace(
+            name=name,
+            input={**arguments, "symbol": requested_symbols[:20]},
+            summary=f"批量 K 线查询完成 {len(payloads)}/{len(requested_symbols[:20])} 只。",
+            status="success" if payloads else "error",
+            output=output,
+            error="; ".join(errors) if errors and not payloads else None,
+            result=AgentToolOutcome(status=result_status, data_fresh=bool(payloads), source_errors=errors, payload=output),
+        ))
+        state.call_names.append(name)
+        return
     try:
         raw_symbol = _resolve_tool_stock_target(
             tools=state.tools,

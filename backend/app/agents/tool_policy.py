@@ -337,6 +337,43 @@ class ToolRepairRule:
     repair: RepairAction
 
 
+def _validate_schema_value(value: Any, schema: dict[str, Any]) -> list[str]:
+    """Validate the small JSON-Schema subset used by registered Agent tools."""
+
+    allowed = schema.get("type")
+    allowed_types = set(allowed if isinstance(allowed, list) else [allowed])
+    if value is None:
+        return [] if "null" in allowed_types else ["null is not allowed"]
+    checks = {
+        "string": lambda item: isinstance(item, str),
+        "integer": lambda item: isinstance(item, int) and not isinstance(item, bool),
+        "number": lambda item: isinstance(item, (int, float)) and not isinstance(item, bool),
+        "boolean": lambda item: isinstance(item, bool),
+        "array": lambda item: isinstance(item, (list, tuple)),
+        "object": lambda item: isinstance(item, dict),
+    }
+    if allowed_types and not any(checks.get(kind, lambda _item: False)(value) for kind in allowed_types):
+        return [f"expected {sorted(allowed_types)}, got {type(value).__name__}"]
+    errors: list[str] = []
+    if "enum" in schema and value not in schema["enum"]:
+        errors.append(f"value is outside enum {schema['enum']}")
+    if isinstance(value, (int, float)) and not isinstance(value, bool):
+        if "minimum" in schema and value < schema["minimum"]:
+            errors.append(f"must be >= {schema['minimum']}")
+        if "maximum" in schema and value > schema["maximum"]:
+            errors.append(f"must be <= {schema['maximum']}")
+    if isinstance(value, (list, tuple)):
+        if "maxItems" in schema and len(value) > schema["maxItems"]:
+            errors.append(f"must contain <= {schema['maxItems']} items")
+        item_schema = schema.get("items")
+        if isinstance(item_schema, dict):
+            for index, item in enumerate(value):
+                errors.extend(f"item {index}: {error}" for error in _validate_schema_value(item, item_schema))
+    if isinstance(value, str) and schema.get("pattern") and not re.fullmatch(str(schema["pattern"]), value):
+        errors.append("does not match required pattern")
+    return errors
+
+
 class AgentToolPolicyEngine:
     """Reconcile an LLM tool plan with minimum domain evidence requirements."""
 
@@ -384,6 +421,53 @@ class AgentToolPolicyEngine:
             except ValueError:
                 continue
         return None
+
+    def validate_calls(
+        self,
+        calls: list[dict[str, Any]],
+        *,
+        capability: str,
+    ) -> list[str]:
+        """Reject an invalid ready batch before any tool side effect occurs."""
+
+        from app.agents.capability_contract import CAPABILITY_BY_NAME
+
+        contract = CAPABILITY_BY_NAME.get(capability)
+        if contract is None:
+            return [f"unknown capability: {capability}"]
+        authorized = {item.name for item in contract.required_tools}
+        schemas = {item.name: item.args_schema for item in self.tools.schemas()}
+        errors: list[str] = []
+        for call in calls:
+            name = str(call.get("name") or "")
+            arguments = call.get("arguments")
+            if name not in authorized:
+                errors.append(f"{name}: not authorized by capability {capability}")
+                continue
+            if not self.tools.is_enabled(name):
+                errors.append(f"{name}: disabled in profile {self.tools.profile}")
+                continue
+            schema = schemas.get(name)
+            if schema is None:
+                errors.append(f"{name}: missing registered schema")
+                continue
+            if not isinstance(arguments, dict):
+                errors.append(f"{name}: arguments must be an object")
+                continue
+            properties = schema.get("properties", {})
+            unknown = set(arguments) - set(properties)
+            if unknown:
+                errors.append(f"{name}: unknown arguments {sorted(unknown)}")
+            missing = [key for key in schema.get("required", []) if arguments.get(key) is None]
+            if missing:
+                errors.append(f"{name}: missing required arguments {missing}")
+            errors.extend(
+                f"{name}.{argument}: {error}"
+                for argument, value in arguments.items()
+                if argument in properties
+                for error in _validate_schema_value(value, properties[argument])
+            )
+        return errors
 
     def reconcile(
         self,

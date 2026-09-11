@@ -1610,7 +1610,9 @@ class AgentToolPolicyAudit(BaseModel):
 
     planner_tool_calls: list[str] = Field(default_factory=list)
     final_tool_calls: list[str] = Field(default_factory=list)
+    graph_compiled_tools: list[str] = Field(default_factory=list)
     backend_repaired_tools: list[str] = Field(default_factory=list)
+    policy_repaired_tools: list[str] = Field(default_factory=list)
     repair_reasons: list[str] = Field(default_factory=list)
     safety_fallback_used: bool = False
 
@@ -1689,6 +1691,8 @@ AGENT_CONTROL_TRACE_NAMES = {
     "routing_decision",
     "complex_graph_plan",
     "complex_graph_step",
+    "complex_graph_completion",
+    "complex_graph_replan",
 }
 
 
@@ -1894,18 +1898,30 @@ def build_agent_tool_policy_audit(
             for trace in tool_results
             if trace.name not in AGENT_CONTROL_TRACE_NAMES
         ]
+    graph_plan_present = any(trace.name == "complex_graph_plan" for trace in tool_results)
+    graph_compiled = list(final_calls) if graph_plan_present else []
+    policy_repaired = [
+        trace.name for trace in tool_results
+        if isinstance(trace.output.get("policy_repair"), dict)
+    ]
     backend_repaired = [
         tool
         for tool in final_calls
-        if planner_trace_present and tool not in planner_calls
+        if planner_trace_present
+        and tool not in planner_calls
+        and tool not in graph_compiled
+        and tool not in policy_repaired
     ]
     warnings = warnings or []
     return AgentToolPolicyAudit(
         planner_tool_calls=planner_calls,
         final_tool_calls=final_calls,
+        graph_compiled_tools=graph_compiled,
         backend_repaired_tools=backend_repaired,
+        policy_repaired_tools=list(dict.fromkeys(policy_repaired)),
         repair_reasons=[
-            _repair_reason(tool, tool_results) for tool in backend_repaired
+            _repair_reason(tool, tool_results)
+            for tool in dict.fromkeys([*backend_repaired, *policy_repaired])
         ],
         safety_fallback_used=any(
             "template fallback" in warning.lower()

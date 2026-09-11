@@ -1,34 +1,55 @@
-"""LangGraph Phase 1 execution for the hot-stock/limit-up rating join."""
+"""Bounded Observe → Check → Replan orchestration for complex queries."""
 
 from __future__ import annotations
 
 from dataclasses import dataclass
-from typing import Any, Callable
+from time import perf_counter
+from typing import Any, Callable, Literal, TypedDict
+from uuid import uuid4
 
 from langgraph.graph import END, START, StateGraph
 
-from app.agents.capability_contract import CAPABILITY_BY_NAME
 from app.agents.chat_answer_validation import _add_composed_tool_facts
-from app.agents.tool_execution import execute_tool_calls
-from app.agents.tool_policy import AgentToolPolicyEngine, ToolExecution
+from app.agents.capability_contract import CAPABILITY_BY_NAME
+from app.agents.tool_policy import ToolExecution
 from app.agents.tools import AgentToolRegistry
 from app.models import AgentChatRequest, AgentToolTrace
 
-from .models import (
-    ArgumentBinding,
-    ComplexAgentState,
-    ComplexPlanStep,
-    EntityRef,
-    ResultReference,
-)
+from .completion import check_completion
+from .executor import execute_step, graph_step_trace, resolve_dynamic_arguments
+from .models import ComplexPlanStep, EntityRef, ReplanRequest
+from .observer import observation_payload, symbols_from_trace
+from .planner import build_flagship_plan, build_initial_plan, scenario_capabilities
+from .replanner import replan, validate_replan
 
+MAX_REPLAN = 2
+MAX_TOOL_CALLS = 10
+MAX_LLM_CALLS = 4
 MAX_DYNAMIC_ENTITIES = 20
+
+
+class _GraphState(TypedDict):
+    pending: list[ComplexPlanStep]
+    all_steps: list[ComplexPlanStep]
+    execution: ToolExecution
+    graph_traces: list[AgentToolTrace]
+    entity_sets: dict[str, list[EntityRef]]
+    completed_steps: list[str]
+    failed_steps: list[str]
+    replan_count: int
+    completion: dict[str, Any]
+    terminal_reason: str | None
+    budget_exhausted: bool
+    active_step: ComplexPlanStep | None
+    active_calls: list[dict[str, Any]]
+    active_observations: list[AgentToolTrace]
+    active_errors: list[str]
+    active_latency_ms: int
+    answer_meta: dict[str, Any]
 
 
 @dataclass(frozen=True)
 class ComplexGraphResult:
-    """State returned to the existing chat response adapter."""
-
     execution: ToolExecution
     graph_traces: list[AgentToolTrace]
     final_answer: str
@@ -36,331 +57,228 @@ class ComplexGraphResult:
     completion_status: str
     failed_steps: list[str]
     plan_steps: list[dict[str, Any]]
+    graph_run_id: str
+    completion_check: dict[str, Any]
+    replan_count: int
+    graph_compilation_count: int
+    backend_repair_count: int
+    policy_repair_count: int
 
 
-def build_flagship_plan(limit_up_arguments: dict[str, Any]) -> list[ComplexPlanStep]:
-    """Build the only dependency-aware plan supported in Phase 1."""
+def _merge_execution(target: ToolExecution, part: ToolExecution) -> None:
+    target["facts"].update(part["facts"])
+    target["tool_results"].extend(part["tool_results"])
+    target["tool_call_names"].extend(part["tool_call_names"])
+    target["references"] = list(dict.fromkeys([*target["references"], *part["references"]]))
 
-    limit_up_source_arguments = {
-        **limit_up_arguments,
-        "board_height": None,
-        "min_board_height": None,
-        "highest_only": False,
-        "query": None,
-        "limit": 100,
-    }
-    return [
-        ComplexPlanStep(
-            step_id="S1",
-            capability="popularity",
-            tool_name="hot_stock_ranking",
-            arguments={"period": "day", "limit": 10, "source": "auto"},
-        ),
-        ComplexPlanStep(
-            step_id="S2",
-            capability="limit_up_pool",
-            tool_name="limit_up_events",
-            arguments=limit_up_source_arguments,
-        ),
-        ComplexPlanStep(
-            step_id="S3",
-            depends_on=("S1", "S2"),
-            operation="intersection",
-            output_entity_set="hot_limit_up_intersection",
-        ),
-        ComplexPlanStep(
-            step_id="S4",
-            capability="first_board_rating",
-            tool_name="first_board_ratings",
-            depends_on=("S3",),
-            argument_bindings=(
-                ArgumentBinding(
-                    target_argument="symbols",
-                    reference=ResultReference(
-                        source_step="S3",
-                        entity_set="hot_limit_up_intersection",
-                    ),
-                ),
-            ),
-        ),
+
+def _observe_entity_set(step: ComplexPlanStep, traces: list[AgentToolTrace], entity_sets: dict[str, list[EntityRef]]) -> None:
+    if not step.output_entity_set or not traces:
+        return
+    limit = 3 if step.output_entity_set == "top_ratings" else MAX_DYNAMIC_ENTITIES
+    entities = symbols_from_trace(traces[0], limit=limit)
+    for entity in entities:
+        entity["source_steps"] = [step.step_id]
+    entity_sets[step.output_entity_set] = entities
+
+
+def _execute_operation(step: ComplexPlanStep, execution: ToolExecution, entity_sets: dict[str, list[EntityRef]]) -> str | None:
+    if step.operation != "intersection" or not step.output_entity_set:
+        return "unsupported deterministic operation"
+    _add_composed_tool_facts("热股和涨停股交集", execution["facts"])
+    payload = execution["facts"].get("hot_stock_limit_up_intersection")
+    if not isinstance(payload, dict):
+        return "intersection sources were unavailable"
+    payload["event_label"] = "涨停票"
+    entity_sets[step.output_entity_set] = [
+        {"symbol": str(item["symbol"]), "name": item.get("name"), "source_steps": list(step.depends_on)}
+        for item in payload.get("items", [])[:MAX_DYNAMIC_ENTITIES]
+        if isinstance(item, dict) and item.get("symbol")
     ]
+    return None
 
 
-def resolve_dynamic_arguments(
-    step: ComplexPlanStep,
-    entity_sets: dict[str, list[EntityRef]],
-) -> dict[str, Any]:
-    """Resolve validated entity-set references without asking an LLM to guess."""
-
-    arguments = dict(step.arguments)
-    for binding in step.argument_bindings:
-        reference = binding.reference
-        if reference.source_step not in step.depends_on:
-            raise ValueError(f"binding source is not a dependency: {reference.source_step}")
-        entities = entity_sets.get(reference.entity_set)
-        if entities is None:
-            raise ValueError(f"missing entity set: {reference.entity_set}")
-        symbols = [item["symbol"] for item in entities[: reference.max_items]]
-        arguments[binding.target_argument] = symbols
-    return arguments
-
-
-def run_hot_limit_up_rating_graph(
+def run_complex_graph(
     *,
+    scenario: str,
     request: AgentChatRequest,
     tools: AgentToolRegistry,
     limit_up_arguments: dict[str, Any],
-    capabilities: tuple[str, ...],
     context_symbol: str | None,
     answer_builder: Callable[[ToolExecution], dict[str, Any]],
+    llm_call_count: int = 1,
 ) -> ComplexGraphResult:
-    """Execute the bounded Phase 1 graph; no replan or retry edge exists."""
+    """Execute the allowlisted graph; every ready step is policy-gated."""
 
-    steps = build_flagship_plan(limit_up_arguments)
-    step_by_id = {step.step_id: step for step in steps}
-
-    def trace(step: ComplexPlanStep, **payload: Any) -> AgentToolTrace:
-        status = str(payload.pop("step_status", "completed"))
-        return AgentToolTrace(
-            name="complex_graph_step",
-            input={
-                "graph_step_id": step.step_id,
-                "step_capability": step.capability,
-                "step_tool": step.tool_name,
-                "dependency_sources": list(step.depends_on),
-                "step_status": status,
-                **payload,
-            },
-            summary=f"Complex Graph {step.step_id}: {status}",
-            status="error" if status == "failed" else "success",
-        )
-
-    def validate_plan(state: ComplexAgentState) -> dict[str, Any]:
-        errors: list[str] = []
-        known_ids = set(step_by_id)
-        for step in steps:
-            if any(item not in known_ids for item in step.depends_on):
-                errors.append(f"{step.step_id}: unknown dependency")
-            if step.tool_name:
-                capability = CAPABILITY_BY_NAME.get(step.capability or "")
-                allowed = {
-                    item.name for item in capability.required_tools
-                } if capability else set()
-                if step.tool_name not in allowed or not tools.is_enabled(step.tool_name):
-                    errors.append(f"{step.step_id}: tool is not capability-authorized")
-        if errors:
-            return {
-                "failed_steps": ["validate_plan"],
-                "failure_reason": "; ".join(errors),
-                "completion_status": "failed",
-            }
-        return {"current_step": "S1"}
-
-    def execute_sources(state: ComplexAgentState) -> dict[str, Any]:
-        if state.get("failure_reason"):
-            return {}
-        calls = [
-            {"name": step_by_id[step_id].tool_name, "arguments": step_by_id[step_id].arguments}
-            for step_id in ("S1", "S2")
-        ]
-        source_request = request.model_copy(
-            update={"message": "查询当日完整涨停池"}
-        )
-        execution = execute_tool_calls(
-            calls, tools, request=source_request, context_symbol=context_symbol
-        )
-        traces = [
-            trace(
-                step_by_id[step_id],
-                resolved_dynamic_args=calls[index]["arguments"],
-                observation_summary=execution["tool_results"][index].summary,
+    graph_run_id = f"cgraph-{uuid4().hex[:12]}"
+    initial_steps = build_initial_plan(scenario, request, limit_up_arguments)
+    validation_errors: list[str] = []
+    for step in initial_steps:
+        if not step.tool_name:
+            continue
+        contract = CAPABILITY_BY_NAME.get(step.capability or "")
+        authorized = {item.name for item in contract.required_tools} if contract else set()
+        if step.tool_name not in authorized or not tools.is_enabled(step.tool_name):
+            validation_errors.append(f"{step.step_id}: tool is not capability-authorized or enabled")
+    def execute_node(state: _GraphState) -> dict[str, Any]:
+        if not state["pending"]:
+            return {"active_step": None}
+        step, remaining = state["pending"][0], state["pending"][1:]
+        started = perf_counter()
+        if any(item not in state["completed_steps"] for item in step.depends_on):
+            errors, calls, observations = ["unresolved dependency"], [], []
+        elif step.step_type == "operation":
+            error = _execute_operation(step, state["execution"], state["entity_sets"])
+            errors, calls, observations = ([error] if error else []), [], []
+        else:
+            part, calls, errors = execute_step(
+                step, request=request, tools=tools, context_symbol=context_symbol,
+                entity_sets=state["entity_sets"],
+                remaining_tool_calls=MAX_TOOL_CALLS - len(state["execution"]["tool_call_names"]),
             )
-            for index, step_id in enumerate(("S1", "S2"))
-        ]
+            observations = part["tool_results"]
+            if not errors:
+                _merge_execution(state["execution"], part)
         return {
-            "facts": execution["facts"],
-            "tool_results": execution["tool_results"],
-            "tool_call_names": execution["tool_call_names"],
-            "references": execution["references"],
-            "graph_traces": traces,
-            "completed_steps": ["S1", "S2"],
-            "tool_call_count": len(execution["tool_call_names"]),
-            "current_step": "S3",
+            "pending": remaining, "active_step": step, "active_calls": calls,
+            "active_observations": observations, "active_errors": [str(item) for item in errors],
+            "active_latency_ms": round((perf_counter() - started) * 1000),
         }
 
-    def observe_intersection(state: ComplexAgentState) -> dict[str, Any]:
-        if state.get("failure_reason"):
+    def observe_node(state: _GraphState) -> dict[str, Any]:
+        step = state["active_step"]
+        if step is None:
             return {}
-        facts = dict(state["facts"])
-        _add_composed_tool_facts(request.message, facts)
-        payload = facts.get("hot_stock_limit_up_intersection")
-        if not isinstance(payload, dict):
-            return {
-                "failed_steps": [*state["failed_steps"], "S3"],
-                "failure_reason": "intersection sources were unavailable",
-                "completion_status": "failed",
-            }
-        payload["event_label"] = "涨停票"
-        entities: list[EntityRef] = [
-            {
-                "symbol": str(item["symbol"]),
-                "name": item.get("name"),
-                "source_steps": ["S1", "S2"],
-            }
-            for item in payload.get("items", [])[:MAX_DYNAMIC_ENTITIES]
-            if isinstance(item, dict) and item.get("symbol")
-        ]
-        return {
-            "facts": facts,
-            "entity_sets": {"hot_limit_up_intersection": entities},
-            "graph_traces": [
-                *state["graph_traces"],
-                trace(
-                    step_by_id["S3"],
-                    resolved_dynamic_args={},
-                    observation_summary=f"intersection produced {len(entities)} symbols",
-                ),
-            ],
-            "completed_steps": [*state["completed_steps"], "S3"],
-            "current_step": "S4",
-        }
-
-    def execute_rating(state: ComplexAgentState) -> dict[str, Any]:
-        if state.get("failure_reason"):
-            return {}
-        step = step_by_id["S4"]
-        try:
-            arguments = resolve_dynamic_arguments(step, state["entity_sets"])
-        except ValueError as error:
-            return {
-                "failed_steps": [*state["failed_steps"], "S4"],
-                "failure_reason": str(error),
-                "completion_status": "failed",
-            }
-        symbols = arguments.get("symbols") or []
-        if not symbols:
-            return {
-                "failed_steps": [*state["failed_steps"], "S4"],
-                "failure_reason": "dynamic symbol set is empty",
-                "completion_status": "failed",
-                "graph_traces": [
-                    *state["graph_traces"],
-                    trace(
-                        step,
-                        resolved_dynamic_args=arguments,
-                        observation_summary="downstream call skipped for empty entity set",
-                        step_status="failed",
-                    ),
-                ],
-            }
-        part = execute_tool_calls(
-            [{"name": step.tool_name, "arguments": arguments}],
-            tools,
-            request=request,
-            context_symbol=context_symbol,
+        errors = state["active_errors"]
+        completed, failed = list(state["completed_steps"]), list(state["failed_steps"])
+        terminal_reason = state["terminal_reason"]
+        if errors:
+            failed.append(step.step_id)
+            terminal_reason = "; ".join(errors)
+        else:
+            _observe_entity_set(step, state["active_observations"], state["entity_sets"])
+            completed.append(step.step_id)
+        trace = graph_step_trace(
+            graph_run_id=graph_run_id, step=step, step_index=len(completed) + len(failed),
+            calls=state["active_calls"], observations=state["active_observations"],
+            status="failed" if errors else "completed",
+            tool_call_count=len(state["execution"]["tool_call_names"]), llm_call_count=llm_call_count,
+            latency_ms=state["active_latency_ms"],
         )
-        facts = {**state["facts"], **part["facts"]}
-        return {
-            "facts": facts,
-            "tool_results": [*state["tool_results"], *part["tool_results"]],
-            "tool_call_names": [*state["tool_call_names"], *part["tool_call_names"]],
-            "references": list(dict.fromkeys([*state["references"], *part["references"]])),
-            "graph_traces": [
-                *state["graph_traces"],
-                trace(
-                    step,
-                    resolved_dynamic_args=arguments,
-                    observation_summary=part["tool_results"][0].summary,
-                ),
-            ],
-            "completed_steps": [*state["completed_steps"], "S4"],
-            "tool_call_count": state["tool_call_count"] + len(part["tool_call_names"]),
-        }
+        return {"completed_steps": completed, "failed_steps": failed, "terminal_reason": terminal_reason, "graph_traces": [*state["graph_traces"], trace]}
 
-    def apply_policy(state: ComplexAgentState) -> dict[str, Any]:
-        if state.get("failure_reason"):
-            return {}
-        execution: ToolExecution = {
-            "facts": state["facts"],
-            "tool_results": state["tool_results"],
-            "tool_call_names": state["tool_call_names"],
-            "references": state["references"],
-        }
-        AgentToolPolicyEngine(tools).reconcile(
-            request=request,
-            execution=execution,
-            context_symbol=context_symbol,
-            capabilities=capabilities,
+    def completion_node(state: _GraphState) -> dict[str, Any]:
+        completion = check_completion(scenario, state["execution"]["tool_results"], state["replan_count"])
+        trace = AgentToolTrace(
+            name="complex_graph_completion",
+            input={"graph_run_id": graph_run_id, "completion_check": completion.model_dump(mode="json"), "completion_reason": completion.reason, "tool_call_count": len(state["execution"]["tool_call_names"]), "llm_call_count": llm_call_count},
+            output=completion.model_dump(mode="json"), summary=f"Completion check: {completion.reason}",
+            status="success" if completion.complete else "skipped",
         )
-        return {**execution, "tool_call_count": len(execution["tool_call_names"])}
+        terminal_reason = state["terminal_reason"]
+        budget_exhausted = not completion.complete and (
+            state["replan_count"] >= MAX_REPLAN
+            or len(state["execution"]["tool_call_names"]) >= MAX_TOOL_CALLS
+            or llm_call_count >= MAX_LLM_CALLS
+        )
+        if budget_exhausted:
+            terminal_reason = terminal_reason or "bounded graph budget exhausted"
+        return {"completion": completion.model_dump(mode="json"), "terminal_reason": terminal_reason, "budget_exhausted": budget_exhausted, "graph_traces": [*state["graph_traces"], trace]}
 
-    def complete(state: ComplexAgentState) -> dict[str, Any]:
-        completed = "S4" in state["completed_steps"] and not state["failed_steps"]
-        return {"completion_status": "complete" if completed else "failed"}
-
-    def answer(state: ComplexAgentState) -> dict[str, Any]:
-        execution: ToolExecution = {
-            "facts": state["facts"],
-            "tool_results": state["tool_results"],
-            "tool_call_names": state["tool_call_names"],
-            "references": state["references"],
-        }
-        answer_meta = answer_builder(execution)
+    def replan_node(state: _GraphState) -> dict[str, Any]:
+        completion = state["completion"]
+        payload = ReplanRequest(
+            original_user_query=request.message,
+            original_plan=[item.model_dump(mode="json") for item in initial_steps],
+            completed_steps=state["completed_steps"], failed_steps=state["failed_steps"],
+            tool_observations=observation_payload(state["execution"]["tool_results"]),
+            missing_requirements=list(completion["missing_requirements"]),
+            remaining_tool_calls=MAX_TOOL_CALLS - len(state["execution"]["tool_call_names"]),
+            remaining_replans=MAX_REPLAN - state["replan_count"],
+        )
+        index = state["replan_count"] + 1
+        output = replan(scenario, payload, replan_index=index)
+        errors = validate_replan(output, prior_steps=[item.model_dump(mode="json") for item in state["all_steps"]], remaining_tool_calls=payload.remaining_tool_calls)
+        trace = AgentToolTrace(
+            name="complex_graph_replan",
+            input={"graph_run_id": graph_run_id, "replan_triggered": True, "replan_reason": output.reason, "replan_index": index, **payload.model_dump(mode="json")},
+            output={"replan_output": output.model_dump(mode="json"), **output.model_dump(mode="json"), "validation_errors": errors},
+            summary=f"Replan {index}: {output.reason}", status="error" if errors else "success",
+        )
         return {
-            "final_answer": str(answer_meta["answer"]),
-            "answer_meta": answer_meta,
+            "replan_count": index, "pending": [] if errors else list(output.new_steps),
+            "all_steps": [*state["all_steps"], *([] if errors else output.new_steps)],
+            "terminal_reason": "; ".join(errors) if errors else state["terminal_reason"],
+            "graph_traces": [*state["graph_traces"], trace],
         }
 
-    builder = StateGraph(ComplexAgentState)
-    builder.add_node("validate_plan", validate_plan)
-    builder.add_node("execute_sources", execute_sources)
-    builder.add_node("observe_intersection", observe_intersection)
-    builder.add_node("execute_rating", execute_rating)
-    builder.add_node("apply_policy", apply_policy)
-    builder.add_node("complete", complete)
-    builder.add_node("answer", answer)
-    builder.add_edge(START, "validate_plan")
-    builder.add_edge("validate_plan", "execute_sources")
-    builder.add_edge("execute_sources", "observe_intersection")
-    builder.add_edge("observe_intersection", "execute_rating")
-    builder.add_edge("execute_rating", "apply_policy")
-    builder.add_edge("apply_policy", "complete")
-    builder.add_edge("complete", "answer")
+    def answer_node(state: _GraphState) -> dict[str, Any]:
+        answer_meta = answer_builder(state["execution"])
+        if not state["completion"].get("complete"):
+            answer_meta["answer"] = f"当前信息不足或部分步骤未完成。\n\n{answer_meta.get('answer', '')}".strip()
+            answer_meta.setdefault("warnings", []).append(state["terminal_reason"] or state["completion"].get("reason"))
+        return {"answer_meta": answer_meta}
+
+    def after_observe(state: _GraphState) -> Literal["execute", "completion"]:
+        return "execute" if state["pending"] else "completion"
+
+    def after_completion(state: _GraphState) -> Literal["replan", "answer"]:
+        return "answer" if state["completion"].get("complete") or state["budget_exhausted"] else "replan"
+
+    def after_replan(state: _GraphState) -> Literal["execute", "answer"]:
+        return "execute" if state["pending"] else "answer"
+
+    builder = StateGraph(_GraphState)
+    builder.add_node("execute", execute_node)
+    builder.add_node("observe", observe_node)
+    builder.add_node("completion", completion_node)
+    builder.add_node("replan", replan_node)
+    builder.add_node("answer", answer_node)
+    builder.add_edge(START, "execute")
+    builder.add_edge("execute", "observe")
+    builder.add_conditional_edges("observe", after_observe)
+    builder.add_conditional_edges("completion", after_completion)
+    builder.add_conditional_edges("replan", after_replan)
     builder.add_edge("answer", END)
-
-    initial: ComplexAgentState = {
-        "user_query": request.message,
-        "messages": [{"role": "user", "content": request.message}],
-        "plan_steps": [step.model_dump(mode="json") for step in steps],
-        "current_step": None,
-        "entity_sets": {},
-        "facts": {},
-        "tool_results": [],
-        "graph_traces": [],
-        "completed_steps": [],
-        "failed_steps": [],
-        "tool_call_names": [],
-        "references": [],
-        "tool_call_count": 0,
-        "llm_call_count": 1,
-        "final_answer": "",
-        "answer_meta": {},
-        "completion_status": "pending",
-        "failure_reason": None,
+    initial: _GraphState = {
+        "pending": [] if validation_errors else list(initial_steps), "all_steps": list(initial_steps),
+        "execution": {"facts": {}, "tool_results": [], "tool_call_names": [], "references": []},
+        "graph_traces": [], "entity_sets": {}, "completed_steps": [],
+        "failed_steps": ["validate_plan"] if validation_errors else [], "replan_count": 0,
+        "completion": check_completion(scenario, [], 0).model_dump(mode="json"),
+        "terminal_reason": "; ".join(validation_errors) if validation_errors else None,
+        "budget_exhausted": False,
+        "active_step": None, "active_calls": [], "active_observations": [],
+        "active_errors": [], "active_latency_ms": 0, "answer_meta": {},
     }
-    state = builder.compile().invoke(initial)
-    execution: ToolExecution = {
-        "facts": state["facts"],
-        "tool_results": state["tool_results"],
-        "tool_call_names": state["tool_call_names"],
-        "references": state["references"],
-    }
+    state = builder.compile().invoke(initial, config={"recursion_limit": 64})
+    execution = state["execution"]
+    graph_traces = state["graph_traces"]
+    completion = state["completion"]
+    answer_meta = state["answer_meta"]
+    failed_steps = state["failed_steps"]
+    all_steps = state["all_steps"]
+    replan_count = state["replan_count"]
     return ComplexGraphResult(
-        execution=execution,
-        graph_traces=state["graph_traces"],
-        final_answer=state["final_answer"],
-        answer_meta=state["answer_meta"],
-        completion_status=state["completion_status"],
-        failed_steps=state["failed_steps"],
-        plan_steps=state["plan_steps"],
+        execution=execution, graph_traces=graph_traces,
+        final_answer=str(answer_meta["answer"]), answer_meta=answer_meta,
+        completion_status=("complete" if completion["complete"] else ("failed" if not execution["tool_results"] else "partial")),
+        failed_steps=failed_steps, plan_steps=[item.model_dump(mode="json") for item in all_steps],
+        graph_run_id=graph_run_id, completion_check=completion,
+        replan_count=replan_count, graph_compilation_count=sum(item.tool_name is not None for item in all_steps),
+        backend_repair_count=0, policy_repair_count=0,
     )
+
+
+def run_hot_limit_up_rating_graph(**kwargs: Any) -> ComplexGraphResult:
+    """Keep the Phase 1 entry point and deterministic intersection binding."""
+
+    kwargs.pop("capabilities", None)
+    return run_complex_graph(scenario="hot_limit_up_rating_intersection_v1", **kwargs)
+
+
+__all__ = [
+    "MAX_LLM_CALLS", "MAX_REPLAN", "MAX_TOOL_CALLS", "ComplexGraphResult",
+    "build_flagship_plan", "resolve_dynamic_arguments", "run_complex_graph",
+    "run_hot_limit_up_rating_graph", "scenario_capabilities",
+]

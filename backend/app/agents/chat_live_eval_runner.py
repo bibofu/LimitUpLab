@@ -655,7 +655,14 @@ def _normalize_frozen_payload(
         payload.setdefault("matches", [])
         payload["matched_count"] = len(payload["matches"])
     elif tool_name == "stock_kline" and "by_symbol" in payload:
-        requested = str(arguments.get("symbol") or "300750")
+        raw_requested = arguments.get("symbol") or "300750"
+        if isinstance(raw_requested, list):
+            selected = [payload["by_symbol"][str(symbol)] for symbol in raw_requested if str(symbol) in payload["by_symbol"]]
+            payload["stocks"] = selected
+            payload["requested_symbols"] = [str(symbol) for symbol in raw_requested]
+            payload["data_as_of"] = as_of
+            return payload
+        requested = str(raw_requested)
         stock = payload["by_symbol"].get(requested, {})
         payload["stock"] = stock
         payload.update(

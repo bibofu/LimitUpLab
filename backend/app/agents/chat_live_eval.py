@@ -37,6 +37,7 @@ INTERNAL_TRACES = {
     "agent_plan", "query_understanding", "llm_tool_planner",
     "llm_tool_answer", "template_general_answer", "tool_policy",
     "routing_decision", "complex_graph_plan", "complex_graph_step",
+    "complex_graph_completion", "complex_graph_replan",
 }
 REFUSAL_MARKERS = ("不能", "无法", "不提供", "不会", "不支持")
 CLARIFY_MARKERS = ("请明确", "请补充", "哪只", "哪个", "具体指")
@@ -382,7 +383,10 @@ def evaluate_live_trial(
         else:
             required_fact_assertions_passed += 1
 
-    policy_repairs = sum(len(response.tool_policy.backend_repaired_tools) for response in responses)
+    policy_repairs = sum(len(response.tool_policy.policy_repaired_tools) for response in responses)
+    backend_repairs = sum(len(response.tool_policy.backend_repaired_tools) for response in responses)
+    graph_plans = [trace for trace in traces if trace.name == "complex_graph_plan"]
+    completion_traces = [trace for trace in traces if trace.name == "complex_graph_completion"]
     required_capabilities = set(case.expected.required_capabilities)
     required_tools = set(case.expected.required_tools)
     raw_capability_hits = len(required_capabilities & capabilities)
@@ -390,7 +394,10 @@ def evaluate_live_trial(
     effective_required_tool_hits = len(required_tools & set(tools))
     llm_calls = int(llm_usage.get("call_count") or 0)
     tool_calls = len(tools)
-    replan_count = 0  # The current production runtime has no Observation -> Planner loop.
+    replan_count = sum(int(trace.input.get("replan_count") or 0) for trace in graph_plans)
+    graph_compilation_count = sum(int(trace.input.get("graph_compilation_count") or 0) for trace in graph_plans)
+    backend_repair_count = backend_repairs + sum(int(trace.input.get("backend_repair_count") or 0) for trace in graph_plans)
+    policy_repair_count = policy_repairs + sum(int(trace.input.get("policy_repair_count") or 0) for trace in graph_plans)
     if tool_calls > case.expected.max_tool_calls:
         failures.append(f"tool budget exceeded: {tool_calls}/{case.expected.max_tool_calls}")
     if llm_calls > case.expected.max_llm_calls:
@@ -417,7 +424,10 @@ def evaluate_live_trial(
         "llm_call_count": llm_calls,
         "tool_call_count": tool_calls,
         "replan_count": replan_count,
-        "backend_repair_count": policy_repairs,
+        "initial_plan_complete": bool(completion_traces and completion_traces[0].output.get("complete")),
+        "graph_compilation_count": graph_compilation_count,
+        "backend_repair_count": backend_repair_count,
+        "policy_repair_count": policy_repair_count,
         "token_usage": llm_usage,
         "latency_ms": latency_ms,
         "judge_result": judge,
@@ -430,7 +440,7 @@ def evaluate_live_trial(
         "raw_required_tool_recall": _rate(raw_required_tool_hits, len(required_tools)),
         "effective_required_tool_hits": effective_required_tool_hits,
         "effective_required_tool_recall": _rate(effective_required_tool_hits, len(required_tools)),
-        "backend_repair_needed": policy_repairs > 0,
+        "backend_repair_needed": backend_repair_count > 0,
         "required_fact_assertions": required_fact_assertions,
         "required_fact_assertions_passed": required_fact_assertions_passed,
     }
@@ -452,6 +462,8 @@ def aggregate_live_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         for category in LIVE_CATEGORIES
     }
     observation_dependent_trials = [item for item in results if item["category"] in {"replan", "stress"}]
+    complex_trials = [item for item in results if item.get("graph_compilation_count", 0) > 0]
+    triggered_replans = [item for item in complex_trials if item["replan_count"] > 0]
     recovery_trials = [item for item in results if item["category"] == "recovery"]
     multi_turn = [item for item in results if item["category"] == "multi_turn"]
     fact_total = sum(item["required_fact_assertions"] for item in results)
@@ -471,6 +483,8 @@ def aggregate_live_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         "raw_required_tool_recall": metric(sum(item["raw_required_tool_hits"] for item in results), tool_total),
         "effective_required_tool_recall": metric(sum(item["effective_required_tool_hits"] for item in results), tool_total),
         "backend_repair_rate": metric(sum(item["backend_repair_needed"] for item in results), len(results)),
+        "policy_repair_rate": metric(sum(item["policy_repair_count"] > 0 for item in results), len(results)),
+        "avg_graph_compilations": round(sum(item["graph_compilation_count"] for item in results) / len(results), 2),
         "required_fact_coverage": metric(fact_passed, fact_total),
         "unsupported_claim_rate": None,
         "unsupported_claim_rate_reason": "current runtime has no sentence-level claim ledger",
@@ -480,6 +494,11 @@ def aggregate_live_results(results: list[dict[str, Any]]) -> dict[str, Any]:
             sum(item["passed"] for item in observation_dependent_trials),
             len(observation_dependent_trials),
         ),
+        "replan_trigger_rate": metric(len(triggered_replans), len(complex_trials)),
+        "replan_success_rate": metric(sum(item["passed"] for item in triggered_replans), len(triggered_replans)),
+        "unnecessary_replan_rate": metric(sum(item.get("initial_plan_complete", False) for item in triggered_replans), len(triggered_replans)),
+        "avg_replans_per_complex_task": round(sum(item["replan_count"] for item in complex_trials) / len(complex_trials), 2) if complex_trials else None,
+        "max_replans_observed": max((item["replan_count"] for item in complex_trials), default=0),
         "avg_tool_calls": round(sum(item["tool_call_count"] for item in results) / len(results), 2),
         "avg_llm_calls": round(sum(item["llm_call_count"] for item in results) / len(results), 2),
         "avg_tokens": round(sum(item["token_usage"].get("total_tokens", 0) for item in results) / len(results), 2),
