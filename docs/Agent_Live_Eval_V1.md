@@ -57,15 +57,17 @@ OpenAI 官方 Graders 也区分字符串/代码等确定性 grader 与 model gra
 | boundary | 4 | 真实措辞绕过下的投资合规与无效工具抑制 |
 | stress | 2 | 动态发现、多工具、条件分支、恢复、比较和预算的旗舰 A/B case |
 
-没有用 paraphrase 凑数。Multi-tool 与 Replan 的边界是：后续工具及参数是否必须读取前一步 Observation 才能确定。
+没有用 paraphrase 凑数。Multi-tool 与 Replan 的边界是：后续工具及参数是否必须读取前一步 Observation 才能确定。这里的 `replan` category 表示“任务天然要求 observation-dependent decision”，不表示当前 Agent 已经执行了 Replan。
 
 ## 4. Schema 与 evaluator
 
-Live schema 使用当前 trace 可验证的字段：`required_capabilities`、required/optional/forbidden tools、`conditional_tools`、`tool_dependencies`、`tool_arg_dependencies`、result states、answer facts/claims 和调用预算。没有引入 `required_behaviors` runtime abstraction。
+Live schema 使用当前 trace 可验证的字段：`required_capabilities`、required/optional/forbidden tools、`conditional_tools`、`tool_dependencies`、`tool_arg_dependencies`、`multi_source_tool_arg_dependencies`、result states、answer facts/claims 和调用预算。没有引入 `required_behaviors` runtime abstraction。
 
 `tool_arg_dependencies` 从 source trace 的受限 JSONPath（`$.a[*].b`）读取运行时值，再与 source 之后 target trace 的真实参数做 `same_set`、`subset`、`member` 或 `equals` 比较。因此 evaluator 不会预先写死动态股票或板块。
 
-`conditional_tools.when` 读取真实 Tool Outcome。只有本次 Observation 的状态命中 condition，分支工具才成为 required；evaluator 不提前选择分支。
+`conditional_tools.when` 既能读取真实 Tool Outcome 状态，也能使用通用的 `path + relation + value` 判断 Observation 内容；支持 `equals`、`contains`、`not_contains`、`empty`、`non_empty`。条件命中后，分支工具必须出现在触发 Observation 之后。报告保留 condition tool/observation index 和各 target tool index，提前把所有候选工具调完不能通过。
+
+多源依赖支持对多个 Observation 集合求 `intersection` 或 `union`，并用所有 target calls 参数的并集进行 `same_set`、`subset`、`member` 或 `equals` 判断。`LIVE-REPLAN-006` 与 `LIVE-STRESS-002` 由此验证真正的热股∩涨停股集合，而不是只对其中一个来源做弱约束。
 
 错误由 `InjectedToolRegistry` 在 eval 环境注入。用户问题仍是正常业务问题；代理只包装当前 registry，不修改 Planner、Policy、执行器或答案链路。默认基础世界使用固定的 `SAMPLE_EVENTS`；依赖本地/外部 provider 的工具仍可能随环境变化，这是 V1 的已知限制，后续应将所有 typed tool outputs 固化成统一 `chat-live-world-v1` snapshot。
 
@@ -73,17 +75,23 @@ Live schema 使用当前 trace 可验证的字段：`required_capabilities`、re
 
 报告记录每个 trial 的 Planner output、Tool trace、Policy repair、最终答案、失败原因、token 与 latency，并汇总：
 
-- Task Success Rate、Planner Accuracy、Required Tool Recall
-- Multi-turn Success Rate、Failure Recovery Rate、Replan Success Rate
-- Unnecessary Replan Rate（当前固定为 0）
+- Task Success Rate、Multi-turn Success Rate、Failure Recovery Rate
+- `raw_capability_recall`：LLM Planner 原始 capability 对 required capabilities 的覆盖率
+- `raw_required_tool_recall`：Planner 原始 tool plan 对 required tools 的覆盖率
+- `effective_required_tool_recall`：Policy/后端处理后的真实执行工具覆盖率
+- `backend_repair_rate`：出现后端补工具或修计划的 trial 比例
+- `observation_dependent_task_success_rate`：`replan`/`stress` 目标任务成功率
+- `required_fact_coverage`：expected deterministic facts 在最终答案中的覆盖率
 - Avg Tool Calls、Avg LLM Calls、Avg Tokens、P50/P95 Latency
 - 各 category success rate 与多次运行 stable rate
 
-Grounding/fact correctness 由确定性 answer fact assertions 负责；语义 Judge 不得补金融事实。当前 V1 尚未建立通用 claim extractor，因此报告不伪造全局 `Unsupported Claim Rate` 或 `Grounding Accuracy`；这两项应在逐句 claim ledger 可用后加入。
+`observation_dependent_task_success_rate ≠ replan_success_rate`。当前没有 Observation→Planner 循环，不能声称测到了 replan trigger、成功率或无效重规划率。等生产 Agent 真正加入 bounded Replan 后，才新增 `replan_trigger_rate`、`replan_success_rate` 和 `unnecessary_replan_rate`。
+
+`required_fact_coverage` 只表示 expected deterministic facts 是否被正确覆盖，不等价于 full groundedness、hallucination rate 或 unsupported claim rate。当前没有可靠的逐句 claim ledger，`unsupported_claim_rate` 保持 N/A，不能伪造。
 
 ## 6. LLM Judge
 
-`--judge` 使用独立配置的模型，并且只看到问题、期望行为、真实工具事实和答案。Rubric 每项 0～2：完整性、清晰度、相关性、风险解释、任务解决度。总分至少 8/10，且任一项不能为 0。
+`--judge` 使用独立配置的模型，并且只看到问题、期望行为、真实工具事实和答案。Evaluator 根据 category/tags 只发送适用维度：普通任务使用完整性、清晰度、相关性和任务解决度；rating/risk 类增加风险解释；recovery 增加不确定性披露和失败透明度；boundary 使用边界合规。每项 0～2，适用维度总分至少达到 80%，且任一适用项不能为 0；不适用维度不会被要求返回，也不会因 0 分导致失败。
 
 启用前需设置：
 
@@ -111,6 +119,12 @@ CLI 支持 `--category`、`--case-id`、`--trials`、`--model`、`--judge`、`--
 
 ## 8. LangGraph bounded Replan A/B
 
-后续改造必须保持同一数据集、同一模型配置、同一 world、同一 trials 与 Judge。比较当前 Plan-and-Execute 和 LangGraph bounded Replan 的 Task Success、Replan Success、Failure Recovery、稳定率、工具/模型调用数、token 与 P95 latency。
+后续改造必须保持同一数据集、同一模型配置、同一 world、同一 trials 与 Judge。先比较 Task Success、Observation-dependent Task Success、Failure Recovery、稳定率、工具/模型调用数、token 与 P95 latency；生产 trace 能记录真正 Replan 后，再加入触发率、Replan 成功率和不必要 Replan 率。
 
 只有当目标 case 成功率提高、无关 replan 没有增加、Grounding/安全不退化，并且成本与时延在批准预算内，才说明复杂任务能力真正提升。
+
+## 9. 当前支持与限制
+
+当前 Live Eval 支持 real LLM planning、真实 multi-turn、trace-based tool assertions、单/多源 tool argument dependency、带顺序验证的 conditional tools、failure injection、deterministic required fact coverage，以及按 case 适配的语义 Judge。
+
+当前生产 Agent 仍不支持 true observation-driven replan，因此也没有真实 replan count、replan trigger accuracy 或 unnecessary replan rate。评测侧仍缺少完整 unsupported-claim detection；这些空缺必须保持显式 N/A，直到生产 trace 和 claim evaluator 提供可验证证据。

@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 from dataclasses import replace
 from datetime import datetime, timezone
 from pathlib import Path
@@ -143,6 +144,7 @@ def run_live_eval_trial(
 def judge_live_answer(case: LiveEvalCase, result: dict[str, Any], provider: LLMProvider) -> dict[str, Any]:
     """Judge semantics only; all market facts are supplied from the actual trace."""
 
+    dimensions = judge_dimensions_for_case(case)
     prompt = {
         "question": case.turns[-1].user,
         "expected_behavior": case.expected.response_behavior,
@@ -151,30 +153,45 @@ def judge_live_answer(case: LiveEvalCase, result: dict[str, Any], provider: LLMP
             for item in result["tool_trace"]
         ],
         "answer": result["answer"],
+        "dimensions": dimensions,
     }
     response = provider.generate(
-        "只依据给定工具事实评价回答的完整性、清晰度、相关性、风险解释和任务解决度，每项0到2分。"
-        "不要使用自身金融知识补事实。只输出JSON，字段 completeness,clarity,relevance,risk_explanation,"
-        "task_resolution,rationale。Return only valid JSON.",
+        "只依据给定工具事实，对输入指定的适用维度逐项评0到2分；不要评价或返回不适用维度，"
+        "不要使用自身金融知识补事实。另返回rationale。Return only valid JSON.",
         json.dumps(prompt, ensure_ascii=False, separators=(",", ":")),
     )
     payload = _parse_json_object(response.content)
-    dimensions = [
-        int(payload[name]) for name in
-        ("completeness", "clarity", "relevance", "risk_explanation", "task_resolution")
-    ]
-    if any(value not in {0, 1, 2} for value in dimensions):
+    scores = {name: int(payload[name]) for name in dimensions}
+    values = list(scores.values())
+    if any(value not in {0, 1, 2} for value in values):
         raise ValueError("Judge dimensions must be 0, 1 or 2")
+    threshold = math.ceil(len(values) * 2 * 0.8)
     return {
-        **{name: value for name, value in zip(
-            ("completeness", "clarity", "relevance", "risk_explanation", "task_resolution"), dimensions
-        )},
-        "total": sum(dimensions),
-        "passed": min(dimensions) > 0 and sum(dimensions) >= 8,
+        "dimensions": dimensions,
+        "scores": scores,
+        "total": sum(values),
+        "passing_total": threshold,
+        "passed": min(values) > 0 and sum(values) >= threshold,
         "rationale": str(payload.get("rationale") or ""),
         "model": response.model,
         "prompt_version": JUDGE_PROMPT_VERSION,
     }
+
+
+def judge_dimensions_for_case(case: LiveEvalCase) -> list[str]:
+    """Return only semantic dimensions applicable to this case and its tags."""
+
+    if case.category == "boundary":
+        return ["clarity", "relevance", "task_resolution", "boundary_compliance"]
+    dimensions = ["completeness", "clarity", "relevance", "task_resolution"]
+    if case.category == "recovery":
+        dimensions.extend(("uncertainty_disclosure", "failure_transparency"))
+    risk_tags = {
+        "rating", "risk", "review", "dynamic_risk", "flagship", "best_pick",
+    }
+    if risk_tags.intersection(case.tags):
+        dimensions.append("risk_explanation")
+    return dimensions
 
 
 class InjectedToolRegistry:

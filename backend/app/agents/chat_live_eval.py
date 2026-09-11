@@ -50,7 +50,18 @@ class LiveTurn(BaseModel):
 class ObservationCondition(BaseModel):
     model_config = ConfigDict(extra="forbid")
     tool: str
-    result_state: Literal["ok", "empty", "partial", "error"]
+    result_state: Literal["ok", "empty", "partial", "error"] | None = None
+    path: str | None = None
+    relation: Literal["equals", "contains", "not_contains", "empty", "non_empty"] | None = None
+    value: Any = None
+
+    @model_validator(mode="after")
+    def validate_condition(self) -> "ObservationCondition":
+        if self.result_state is None and (self.path is None or self.relation is None):
+            raise ValueError("condition requires result_state or path/relation")
+        if (self.path is None) != (self.relation is None):
+            raise ValueError("content conditions require both path and relation")
+        return self
 
 
 class ConditionalTools(BaseModel):
@@ -67,6 +78,21 @@ class ToolDependency(BaseModel):
 
 class ToolArgDependency(ToolDependency):
     source_path: str
+    target_arg: str
+    relation: Literal["same_set", "subset", "member", "equals"] = "same_set"
+
+
+class DependencySource(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    tool: str
+    path: str
+
+
+class MultiSourceToolArgDependency(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    sources: list[DependencySource] = Field(min_length=2)
+    operation: Literal["intersection", "union"]
+    target_tool: str
     target_arg: str
     relation: Literal["same_set", "subset", "member", "equals"] = "same_set"
 
@@ -95,6 +121,7 @@ class LiveExpected(BaseModel):
     conditional_tools: list[ConditionalTools] = Field(default_factory=list)
     tool_dependencies: list[ToolDependency] = Field(default_factory=list)
     tool_arg_dependencies: list[ToolArgDependency] = Field(default_factory=list)
+    multi_source_tool_arg_dependencies: list[MultiSourceToolArgDependency] = Field(default_factory=list)
     expected_result_states: dict[str, str] = Field(default_factory=dict)
     required_answer_facts: list[AnswerFact] = Field(default_factory=list)
     required_answer_terms: list[str] = Field(default_factory=list)
@@ -117,6 +144,9 @@ class LiveExpected(BaseModel):
             mentioned.update(item.required_tools)
         for item in [*self.tool_dependencies, *self.tool_arg_dependencies]:
             mentioned.update((item.source_tool, item.target_tool))
+        for item in self.multi_source_tool_arg_dependencies:
+            mentioned.add(item.target_tool)
+            mentioned.update(source.tool for source in item.sources)
         if mentioned - known_tools:
             raise ValueError(f"unknown tools: {sorted(mentioned - known_tools)}")
         known_capabilities = set(available_capability_names(V1_CLOSED_MARKET_TOOL_NAMES))
@@ -143,7 +173,12 @@ class LiveEvalCase(BaseModel):
             raise ValueError("invalid live case id")
         if self.category == "multi_turn" and len(self.turns) < 2:
             raise ValueError("multi-turn cases require at least two real turns")
-        if self.category == "replan" and not self.expected.tool_arg_dependencies and not self.expected.conditional_tools:
+        if (
+            self.category == "replan"
+            and not self.expected.tool_arg_dependencies
+            and not self.expected.multi_source_tool_arg_dependencies
+            and not self.expected.conditional_tools
+        ):
             raise ValueError("replan cases require an observation-dependent assertion")
         return self
 
@@ -188,6 +223,12 @@ def evaluate_live_trial(
     }
     tool_traces = [trace for trace in traces if trace.name not in INTERNAL_TRACES]
     tools = [trace.name for trace in tool_traces]
+    raw_tools = {
+        str(call["name"])
+        for trace in planner_traces
+        for call in trace.input.get("tool_calls", [])
+        if isinstance(call, dict) and call.get("name")
+    }
     failures: list[str] = []
 
     missing_capabilities = set(case.expected.required_capabilities) - capabilities
@@ -200,10 +241,28 @@ def evaluate_live_trial(
     if forbidden:
         failures.append(f"forbidden tools called: {sorted(forbidden)}")
 
+    conditional_targets = {
+        tool for item in case.expected.conditional_tools for tool in item.required_tools
+    }
+    active_conditional_targets = {
+        tool
+        for item in case.expected.conditional_tools
+        if any(
+            trace.name == item.when.tool and _condition_matches(trace, item.when)
+            for trace in tool_traces
+        )
+        for tool in item.required_tools
+    }
+
     for dependency in case.expected.tool_dependencies:
         if not _ordered(tools, dependency.source_tool, dependency.target_tool):
             failures.append(f"dependency failed: {dependency.source_tool} -> {dependency.target_tool}")
     for dependency in case.expected.tool_arg_dependencies:
+        if (
+            dependency.target_tool in conditional_targets
+            and dependency.target_tool not in active_conditional_targets
+        ):
+            continue
         source = _first_trace(tool_traces, dependency.source_tool)
         targets = _traces_after(tool_traces, dependency.target_tool, source)
         source_values = _path_values(source.output if source else {}, dependency.source_path)
@@ -213,12 +272,80 @@ def evaluate_live_trial(
                 f"argument dependency failed: {dependency.source_tool}.{dependency.source_path} "
                 f"-> {dependency.target_tool}.{dependency.target_arg}"
             )
+    for dependency in case.expected.multi_source_tool_arg_dependencies:
+        source_sets: list[set[str]] = []
+        latest_source_index = -1
+        missing_sources: list[str] = []
+        for source in dependency.sources:
+            matching_sources = [
+                (index, trace)
+                for index, trace in enumerate(tool_traces)
+                if trace.name == source.tool
+            ]
+            values = [
+                value
+                for _index, trace in matching_sources
+                for value in _path_values(trace.output, source.path)
+            ]
+            if not matching_sources or not values:
+                missing_sources.append(source.tool)
+                continue
+            source_sets.append(set(map(str, values)))
+            latest_source_index = max(
+                latest_source_index,
+                max(index for index, _trace in matching_sources),
+            )
+        targets = [
+            trace for index, trace in enumerate(tool_traces)
+            if trace.name == dependency.target_tool and index > latest_source_index
+        ]
+        target_values = [
+            value for trace in targets
+            for value in _as_values(trace.input.get(dependency.target_arg))
+        ]
+        expected_values = _combine_source_sets(source_sets, dependency.operation)
+        if missing_sources or not _relation_holds(
+            list(expected_values), target_values, dependency.relation
+        ):
+            detail = f"; missing sources: {sorted(missing_sources)}" if missing_sources else ""
+            failures.append(
+                f"multi-source dependency failed: {dependency.operation} -> "
+                f"{dependency.target_tool}.{dependency.target_arg}{detail}"
+            )
+    conditional_assertions: list[dict[str, Any]] = []
     for conditional in case.expected.conditional_tools:
-        observed = [trace for trace in tool_traces if trace.name == conditional.when.tool]
-        if any(_result_state(trace) == conditional.when.result_state for trace in observed):
-            missing = set(conditional.required_tools) - set(tools)
+        matches = [
+            (index, trace) for index, trace in enumerate(tool_traces)
+            if trace.name == conditional.when.tool and _condition_matches(trace, conditional.when)
+        ]
+        if matches:
+            condition_index, _condition_trace = matches[0]
+            target_indices = {
+                tool: [
+                    index for index, trace in enumerate(tool_traces)
+                    if trace.name == tool and index > condition_index
+                ]
+                for tool in conditional.required_tools
+            }
+            missing = {tool for tool, indices in target_indices.items() if not indices}
             if missing:
-                failures.append(f"conditional tools missing: {sorted(missing)}")
+                failures.append(
+                    f"conditional tools missing after observation: {sorted(missing)}"
+                )
+            conditional_assertions.append(
+                {
+                    "condition_tool": conditional.when.tool,
+                    "condition_tool_call_index": condition_index,
+                    "condition_observation_index": condition_index,
+                    "target_tool_call_indices": target_indices,
+                    "matched": True,
+                    "passed": not missing,
+                }
+            )
+        else:
+            conditional_assertions.append(
+                {"condition_tool": conditional.when.tool, "matched": False, "passed": True}
+            )
     for tool, expected_state in case.expected.expected_result_states.items():
         observed = [_result_state(trace) for trace in tool_traces if trace.name == tool]
         if expected_state not in observed:
@@ -233,8 +360,8 @@ def evaluate_live_trial(
     markers = behavior_markers.get(case.expected.response_behavior)
     if markers and not any(marker in answer for marker in markers):
         failures.append(f"answer does not satisfy {case.expected.response_behavior} behavior")
-    fact_assertions = 0
-    fact_assertions_passed = 0
+    required_fact_assertions = 0
+    required_fact_assertions_passed = 0
     for term in case.expected.required_answer_terms:
         if term not in answer:
             failures.append(f"answer missing required term: {term}")
@@ -242,7 +369,7 @@ def evaluate_live_trial(
         if re.search(claim, answer, re.IGNORECASE):
             failures.append(f"forbidden answer claim matched: {claim}")
     for fact in case.expected.required_answer_facts:
-        fact_assertions += 1
+        required_fact_assertions += 1
         trace = _first_trace(tool_traces, fact.source_tool)
         values = _path_values(trace.output if trace else {}, fact.source_path)
         hits = [str(value) in answer for value in values if value is not None]
@@ -252,9 +379,14 @@ def evaluate_live_trial(
         if failed_fact:
             failures.append(f"answer fact missing: {fact.source_tool}.{fact.source_path}")
         else:
-            fact_assertions_passed += 1
+            required_fact_assertions_passed += 1
 
     policy_repairs = sum(len(response.tool_policy.backend_repaired_tools) for response in responses)
+    required_capabilities = set(case.expected.required_capabilities)
+    required_tools = set(case.expected.required_tools)
+    raw_capability_hits = len(required_capabilities & capabilities)
+    raw_required_tool_hits = len(required_tools & raw_tools)
+    effective_required_tool_hits = len(required_tools & set(tools))
     llm_calls = int(llm_usage.get("call_count") or 0)
     tool_calls = len(tools)
     replan_count = 0  # The current production runtime has no Observation -> Planner loop.
@@ -275,6 +407,7 @@ def evaluate_live_trial(
         "failure_reasons": failures,
         "capabilities": sorted(capabilities),
         "tool_calls": tools,
+        "raw_tool_calls": sorted(raw_tools),
         "planner_output": [trace.input for trace in planner_traces],
         "tool_trace": [trace.model_dump(mode="json") for trace in tool_traces],
         "policy_repair": [response.tool_policy.model_dump(mode="json") for response in responses],
@@ -287,8 +420,18 @@ def evaluate_live_trial(
         "token_usage": llm_usage,
         "latency_ms": latency_ms,
         "judge_result": judge,
-        "grounding_assertions": fact_assertions,
-        "grounding_assertions_passed": fact_assertions_passed,
+        "conditional_assertions": conditional_assertions,
+        "required_capability_count": len(required_capabilities),
+        "raw_capability_hits": raw_capability_hits,
+        "raw_capability_recall": _rate(raw_capability_hits, len(required_capabilities)),
+        "required_tool_count": len(required_tools),
+        "raw_required_tool_hits": raw_required_tool_hits,
+        "raw_required_tool_recall": _rate(raw_required_tool_hits, len(required_tools)),
+        "effective_required_tool_hits": effective_required_tool_hits,
+        "effective_required_tool_recall": _rate(effective_required_tool_hits, len(required_tools)),
+        "backend_repair_needed": policy_repairs > 0,
+        "required_fact_assertions": required_fact_assertions,
+        "required_fact_assertions_passed": required_fact_assertions_passed,
     }
 
 
@@ -307,12 +450,13 @@ def aggregate_live_results(results: list[dict[str, Any]]) -> dict[str, Any]:
                          sum(item["category"] == category for item in first))
         for category in LIVE_CATEGORIES
     }
-    required_tool_checks = sum("missing required tools" not in " ".join(item["failure_reasons"]) for item in results)
-    dependency_trials = [item for item in results if item["category"] in {"replan", "stress"}]
+    observation_dependent_trials = [item for item in results if item["category"] in {"replan", "stress"}]
     recovery_trials = [item for item in results if item["category"] == "recovery"]
     multi_turn = [item for item in results if item["category"] == "multi_turn"]
-    grounding_total = sum(item["grounding_assertions"] for item in results)
-    grounding_passed = sum(item["grounding_assertions_passed"] for item in results)
+    fact_total = sum(item["required_fact_assertions"] for item in results)
+    fact_passed = sum(item["required_fact_assertions_passed"] for item in results)
+    capability_total = sum(item["required_capability_count"] for item in results)
+    tool_total = sum(item["required_tool_count"] for item in results)
     return {
         "case_count": len(by_case),
         "trial_count": len(results),
@@ -322,15 +466,19 @@ def aggregate_live_results(results: list[dict[str, Any]]) -> dict[str, Any]:
             sum(bool(item["token_usage"].get("failed_call_count")) for item in results),
             len(results),
         ),
-        "planner_accuracy": metric(sum(not any("missing capabilities" in f for f in item["failure_reasons"]) for item in results), len(results)),
-        "required_tool_recall": metric(required_tool_checks, len(results)),
-        "grounding_accuracy": metric(grounding_passed, grounding_total),
+        "raw_capability_recall": metric(sum(item["raw_capability_hits"] for item in results), capability_total),
+        "raw_required_tool_recall": metric(sum(item["raw_required_tool_hits"] for item in results), tool_total),
+        "effective_required_tool_recall": metric(sum(item["effective_required_tool_hits"] for item in results), tool_total),
+        "backend_repair_rate": metric(sum(item["backend_repair_needed"] for item in results), len(results)),
+        "required_fact_coverage": metric(fact_passed, fact_total),
         "unsupported_claim_rate": None,
         "unsupported_claim_rate_reason": "current runtime has no sentence-level claim ledger",
         "multi_turn_success_rate": metric(sum(item["passed"] for item in multi_turn), len(multi_turn)),
         "failure_recovery_rate": metric(sum(item["passed"] for item in recovery_trials), len(recovery_trials)),
-        "replan_success_rate": metric(sum(item["passed"] for item in dependency_trials), len(dependency_trials)),
-        "unnecessary_replan_rate": 0.0,
+        "observation_dependent_task_success_rate": metric(
+            sum(item["passed"] for item in observation_dependent_trials),
+            len(observation_dependent_trials),
+        ),
         "avg_tool_calls": round(sum(item["tool_call_count"] for item in results) / len(results), 2),
         "avg_llm_calls": round(sum(item["llm_call_count"] for item in results) / len(results), 2),
         "avg_tokens": round(sum(item["token_usage"].get("total_tokens", 0) for item in results) / len(results), 2),
@@ -394,6 +542,37 @@ def _relation_holds(source: list[Any], target: list[Any], relation: str) -> bool
     if relation in {"member", "equals"}:
         return bool(left & right) if relation == "member" else left == right
     return right == left if relation == "same_set" else right <= left
+
+
+def _condition_matches(trace: AgentToolTrace, condition: ObservationCondition) -> bool:
+    if condition.result_state is not None and _result_state(trace) != condition.result_state:
+        return False
+    if condition.path is None or condition.relation is None:
+        return True
+    values = _path_values(trace.output, condition.path)
+    expected = str(condition.value)
+    observed = set(map(str, values))
+    if condition.relation == "equals":
+        return observed == {expected}
+    if condition.relation == "contains":
+        return expected in observed
+    if condition.relation == "not_contains":
+        return expected not in observed
+    if condition.relation == "empty":
+        return not values
+    return bool(values)
+
+
+def _combine_source_sets(source_sets: list[set[str]], operation: str) -> set[str]:
+    if not source_sets:
+        return set()
+    if operation == "intersection":
+        return set.intersection(*source_sets)
+    return set.union(*source_sets)
+
+
+def _rate(numerator: int, denominator: int) -> float | None:
+    return round(numerator / denominator, 4) if denominator else None
 
 
 def _percentile(values: list[int], quantile: float) -> int | None:
