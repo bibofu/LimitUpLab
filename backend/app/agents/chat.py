@@ -741,6 +741,24 @@ def _answer_with_complex_graph(
                 "answer_prompt_chars": 0,
                 "answer_duration_ms": 0,
             }
+        if (
+            "hot_stock_limit_up_intersection" in facts
+            and "first_board_ratings" in facts
+        ):
+            return {
+                "answer": _ensure_safety_boundary(fallback),
+                "source": "template_general_answer",
+                "warnings": list(
+                    dict.fromkeys(
+                        [
+                            _safety_warning(),
+                            *_tool_outcome_warnings(execution["tool_results"]),
+                        ]
+                    )
+                ),
+                "answer_prompt_chars": 0,
+                "answer_duration_ms": 0,
+            }
         answer_system_prompt = _tool_answer_system_prompt(
             agent_profile=tools.profile,
             hot_stock_event_intersection_answer=True,

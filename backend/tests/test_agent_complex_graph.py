@@ -185,6 +185,7 @@ def test_live_target_uses_complex_trace_and_observed_rating_symbols() -> None:
     assert rating["input"]["symbols"] == [
         symbol for symbol in hot_symbols if symbol in limit_up_symbols
     ]
+    assert "llm_tool_answer" not in trial["tool_calls"]
 
 
 def test_simple_live_case_stays_on_fast_path() -> None:
