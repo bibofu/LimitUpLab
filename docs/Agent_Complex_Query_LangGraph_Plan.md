@@ -21,6 +21,8 @@ execute → observe → completion
 
 小范围真实模型 A/B（同一 fully frozen tool world，每 case 3 次）：基线报告中的 6 个目标 Replan case和 `LIVE-STRESS-002` 合计 0/21；Phase 2 后为 21/21。其中 18 个 trial 真正触发 Replan并全部成功，`replan_success_rate=100%`、`unnecessary_replan_rate=0%`；`LIVE-REPLAN-006` 保持 3/3、0 Replan。目标组平均工具调用 1.57→4.00、LLM 调用 1.14→1.86、token 2,779→5,016、延迟 1,210→2,347 ms；基线中多条请求在 Planner 前结束，因此成本增量同时包含“从未执行到完成执行”的必要成本。
 
+Partial 单候选失败另用现有 `LIVE-RECOVERY-004` 验收：首次 300750 error、600000 ok 后只重试 300750 一次，最终保留 600000 证据回答，3/3 通过；该 case 的合法预算同步明确为 `max_replans=1`。
+
 已知限制：当前 Router/Replanner 仍是小范围场景白名单；未实现通用 DAG、模型辅助 Completion、跨请求 checkpoint 或任意任务 Replan。Phase 3 暂不建议立即启动；应先观察线上 bad case、修复普通答案层的指定实体遗漏，并验证更多真实 observation 是否无法由现有确定性模式覆盖。
 
 ## Phase 1 历史实施状态（2026-09-11）

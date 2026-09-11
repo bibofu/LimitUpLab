@@ -139,6 +139,11 @@ def run_complex_graph(
             observations = part["tool_results"]
             if not errors:
                 _merge_execution(state["execution"], part)
+                if observations and all(
+                    item.result is not None and item.result.status == "error"
+                    for item in observations
+                ):
+                    errors = ["tool observation returned error"]
         return {
             "pending": remaining, "active_step": step, "active_calls": calls,
             "active_observations": observations, "active_errors": [str(item) for item in errors],
@@ -198,7 +203,12 @@ def run_complex_graph(
         )
         index = state["replan_count"] + 1
         output = replan(scenario, payload, replan_index=index)
-        errors = validate_replan(output, prior_steps=[item.model_dump(mode="json") for item in state["all_steps"]], remaining_tool_calls=payload.remaining_tool_calls)
+        errors = validate_replan(
+            output,
+            prior_steps=[item.model_dump(mode="json") for item in state["all_steps"]],
+            remaining_tool_calls=payload.remaining_tool_calls,
+            completed_step_ids=set(state["completed_steps"]),
+        )
         trace = AgentToolTrace(
             name="complex_graph_replan",
             input={"graph_run_id": graph_run_id, "replan_triggered": True, "replan_reason": output.reason, "replan_index": index, **payload.model_dump(mode="json")},

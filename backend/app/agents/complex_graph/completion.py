@@ -48,7 +48,10 @@ def check_completion(scenario: str, traces: list[AgentToolTrace], replan_count: 
         complete = has("limit_up_events") and bool(dragon) and (not fallback_needed or has("stock_kline"))
         return CompletionCheck(complete=complete, missing_requirements=[] if complete else ["highest_board_risk_evidence"], reason="highest-board observations drive risk evidence branch")
     if scenario == "partial_stock_comparison_v2":
-        successful = sum(result_state(item) in {"ok", "partial"} for item in by_name.get("stock_kline", []))
-        complete = successful >= 1 and len(by_name.get("stock_kline", [])) >= 2
-        return CompletionCheck(complete=complete, missing_requirements=[] if complete else ["at_least_one_comparable_candidate"], reason="single-candidate failure must not discard successful evidence")
+        kline = by_name.get("stock_kline", [])
+        successful = sum(result_state(item) in {"ok", "partial"} for item in kline)
+        failed = sum(result_state(item) == "error" for item in kline)
+        complete = successful >= 1 and len(kline) >= 2 and (failed == 0 or replan_count >= 1)
+        missing = [] if complete else (["retry_failed_candidate_only"] if successful and failed else ["at_least_one_comparable_candidate"])
+        return CompletionCheck(complete=complete, missing_requirements=missing, reason="retry only failed candidates once, then preserve successful evidence")
     return CompletionCheck(complete=False, missing_requirements=["unsupported_scenario"], reason="no deterministic completion rule")

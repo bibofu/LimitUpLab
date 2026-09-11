@@ -502,5 +502,7 @@ def test_multi_stock_failure_continues_and_answers_from_success() -> None:
     stock_traces = [
         item for item in result["tool_trace"] if item["name"] == "stock_kline"
     ]
-    assert [item["result"]["status"] for item in stock_traces] == ["error", "ok"]
+    assert [item["result"]["status"] for item in stock_traces] == ["error", "ok", "error"]
+    assert stock_traces[-1]["input"]["symbol"] == "300750"
+    assert result["replan_count"] == 1
     assert "600000" in result["answer"]

@@ -207,9 +207,11 @@ def test_empty_observation_replans_to_fallback_tools() -> None:
 def test_partial_candidate_failure_keeps_successful_candidate() -> None:
     result = _run_scenario("LIVE-RECOVERY-004", "partial_stock_comparison_v2")
     assert result.completion_status == "complete"
-    assert result.replan_count == 0
-    assert result.execution["tool_call_names"] == ["stock_kline", "stock_kline"]
-    assert [item.result.status for item in result.execution["tool_results"]] == ["error", "ok"]
+    assert result.replan_count == 1
+    assert result.execution["tool_call_names"] == ["stock_kline", "stock_kline", "stock_kline"]
+    assert [item.result.status for item in result.execution["tool_results"]] == ["error", "ok", "error"]
+    retry = result.execution["tool_results"][-1]
+    assert retry.input["symbol"] == "300750"
 
 
 def test_first_plan_complete_does_not_trigger_replan() -> None:
