@@ -195,6 +195,7 @@ Judge 未配置，所以 completeness、clarity、relevance、task resolution、
 - 当前没有 Observation→Planner 循环；`replan_count=0` 是事实，不应生成 replan success 指标。
 - Capability-first Planner 的 raw `tool_calls` 为空，工具几乎全部由后端 resolve/repair，限制了 raw tool planning 指标的解释力。
 - 工具世界并未完全冻结。运行中观察到本地 hithink-finance DuckDB 文件占用、上游 429、代理连接错误及现有 fallback；新闻/热榜还返回了 2026-09-11 的当前数据，而 case anchor 是 2026-05-15。这降低了未来跨版本 A/B 的可比性。
+- 后续修复：`agent-live-eval-runner-v2` 已改为 `chat-fixture-v2-fully-frozen-v1`，初始调用与 Policy repair 均禁止访问数据库和网络。由于评测环境发生实质变化，本页旧基线保留为历史诊断，不作为新环境的对照基线；需重新执行 36×3。
 - Trace 能记录总 token 和 latency，但不能拆分 Planner/Answer token；无 LLM 调用的 trial token completeness 为 false。
 - Judge 未配置，deterministic PASS 会漏掉通用拒答、解释质量和答案相关性问题。
 - Unsupported-claim evaluator 尚不存在，无法报告 hallucination rate。

@@ -4,16 +4,17 @@ from __future__ import annotations
 
 import json
 import math
-from dataclasses import replace
+import re
+from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
-from typing import Any, Callable
+from typing import Any
 from uuid import uuid4
 
-from pydantic import BaseModel
-
 from app.agents.chat import answer_first_board_chat
+from app.agents.chat_eval_dataset import CHAT_EVAL_FIXTURE_ID
+from app.agents.chat_eval_runner_v2 import FrozenToolFixture
 from app.agents.chat_live_eval import (
     LIVE_EVAL_ENVIRONMENT_ID,
     LIVE_EVAL_VERSION,
@@ -24,15 +25,16 @@ from app.agents.chat_live_eval import (
     evaluate_live_trial,
 )
 from app.agents.query_contract import query_reference_date_override
-from app.agents.tools import AgentToolRegistry, ToolResult
-from app.models import AgentChatRequest, ChatSessionMessage
+from app.agents.tool_policy import ToolExecution
+from app.agents.tools import TOOL_SCHEMAS, V1_AGENT_PROFILE, V1_CLOSED_MARKET_TOOL_NAMES
+from app.models import AgentChatRequest, AgentToolOutcome, AgentToolTrace, ChatSessionMessage
 from app.services.llm_provider import LLMProvider, capture_llm_usage
 from app.services.sample_data import SAMPLE_EVENTS
 
 
 DATASET_PATH = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "agent_chat_live_eval_v1.json"
 DEFAULT_OUTPUT_ROOT = Path(__file__).resolve().parents[3] / "output" / "agent-live-eval"
-RUNNER_VERSION = "agent-live-eval-runner-v1"
+RUNNER_VERSION = "agent-live-eval-runner-v2"
 JUDGE_PROMPT_VERSION = "agent-live-eval-judge-v2"
 
 
@@ -45,7 +47,6 @@ def run_live_eval_suite(
     *,
     llm_provider: LLMProvider,
     trials: int = 3,
-    registry_factory: Callable[[LiveEvalCase], Any] | None = None,
     judge_provider: LLMProvider | None = None,
 ) -> dict[str, Any]:
     """Run real planner/answer LLM calls and real multi-turn production orchestration."""
@@ -59,7 +60,7 @@ def run_live_eval_suite(
                 case,
                 trial=trial,
                 llm_provider=llm_provider,
-                tool_registry=(registry_factory or _default_registry)(case),
+                tool_registry=_default_registry(case),
             )
             if judge_provider is not None:
                 result["judge_result"] = judge_live_answer(case, result, judge_provider)
@@ -74,6 +75,12 @@ def run_live_eval_suite(
         "dataset_version": LIVE_EVAL_VERSION,
         "runner_version": RUNNER_VERSION,
         "environment_id": LIVE_EVAL_ENVIRONMENT_ID,
+        "tool_environment": {
+            "fixture_snapshot_id": CHAT_EVAL_FIXTURE_ID,
+            "fully_frozen": True,
+            "database_access": False,
+            "network_access": False,
+        },
         "agent_architecture": "plan-and-execute",
         "observation_driven_replan_supported": False,
         "judge_enabled": judge_provider is not None,
@@ -198,41 +205,186 @@ def judge_dimensions_for_case(case: LiveEvalCase) -> list[str]:
     return dimensions
 
 
-class InjectedToolRegistry:
-    """Eval-only proxy that injects failures without changing production orchestration."""
+class FrozenLiveToolRegistry:
+    """Eval-only registry that cannot reach production databases or providers."""
 
-    def __init__(self, delegate: AgentToolRegistry, injections: list[FailureInjection]) -> None:
-        self._delegate = delegate
+    def __init__(
+        self,
+        injections: list[FailureInjection],
+        fixture: FrozenToolFixture | None = None,
+    ) -> None:
+        self.fixture = fixture or FrozenToolFixture()
         self._injections = injections
+        self.profile = V1_AGENT_PROFILE
+        self.events = SAMPLE_EVENTS
 
-    def __getattr__(self, name: str) -> Any:
-        value = getattr(self._delegate, name)
-        matching = [item for item in self._injections if item.tool == name]
-        if not matching or not callable(value):
-            return value
+    @property
+    def enabled_tool_names(self) -> frozenset[str]:
+        return V1_CLOSED_MARKET_TOOL_NAMES
 
-        def injected(*args: Any, **kwargs: Any) -> Any:
-            injection = next(
-                (item for item in matching if _arguments_match(item.match_args, args, kwargs)),
-                None,
+    def is_enabled(self, tool_name: str) -> bool:
+        return tool_name in self.enabled_tool_names
+
+    def schemas(self) -> list[Any]:
+        return [schema for schema in TOOL_SCHEMAS if self.is_enabled(schema.name)]
+
+    def schema_prompt(self) -> str:
+        return json.dumps(
+            [schema.planner_dump() for schema in self.schemas()],
+            ensure_ascii=False,
+            separators=(",", ":"),
+        )
+
+    def resolve_stock_identity(self, value: str) -> tuple[str, str]:
+        text = str(value).strip()
+        symbol_match = re.search(r"(?<!\d)(\d{6})(?!\d)", text)
+        if symbol_match:
+            symbol = symbol_match.group(1)
+            entity = self.fixture.entities.get(symbol, {})
+            return symbol, entity.get("name", symbol)
+        for symbol, entity in self.fixture.entities.items():
+            name = entity.get("name", "")
+            if name and name in text:
+                return symbol, name
+        raise ValueError(f"Cannot resolve stock symbol from frozen fixture: {value}")
+
+    def execute_frozen_calls(
+        self,
+        tool_calls: list[dict[str, Any]],
+        *,
+        request: AgentChatRequest,
+        context_symbol: str | None = None,
+    ) -> ToolExecution:
+        execution: ToolExecution = {
+            "facts": {},
+            "tool_results": [],
+            "tool_call_names": [],
+            "references": [],
+        }
+        for call in tool_calls:
+            self._execute_one(
+                str(call.get("name") or ""),
+                dict(call.get("arguments") or {}),
+                request=request,
+                execution=execution,
+                context_symbol=context_symbol,
             )
-            if injection is None:
-                return value(*args, **kwargs)
-            if injection.result_state == "error":
-                raise RuntimeError(f"live eval injected {name} provider error")
-            result = value(*args, **kwargs)
-            if not isinstance(result, ToolResult):
-                return result
-            if injection.result_state == "empty":
-                return _empty_result(result)
-            return replace(
-                result,
-                result_status="partial",
-                data_fresh=False,
-                source_errors=("live_eval_injected_partial",),
-            )
+        return execution
 
-        return injected
+    def repair_frozen_tool(
+        self,
+        tool_name: str,
+        *,
+        request: AgentChatRequest,
+        execution: ToolExecution,
+        context_symbol: str | None,
+    ) -> None:
+        arguments: dict[str, Any] = {}
+        if request.trade_date is not None:
+            arguments["trade_date"] = request.trade_date.isoformat()
+        try:
+            symbol = self.resolve_stock_identity(
+                request.symbol or request.message or context_symbol or ""
+            )[0]
+        except ValueError:
+            symbol = context_symbol
+        if symbol and tool_name in {
+            "stock_news", "stock_activity", "stock_kline", "first_board_critic",
+        }:
+            arguments["symbol"] = symbol
+        self._execute_one(
+            tool_name,
+            arguments,
+            request=request,
+            execution=execution,
+            context_symbol=context_symbol,
+        )
+
+    def _execute_one(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        *,
+        request: AgentChatRequest,
+        execution: ToolExecution,
+        context_symbol: str | None,
+    ) -> None:
+        del context_symbol
+        if not self.is_enabled(name):
+            trace = AgentToolTrace(
+                name=name,
+                input=arguments,
+                summary="冻结工具世界未启用该工具。",
+                status="error",
+                error="tool unavailable in frozen live eval profile",
+                result=AgentToolOutcome(
+                    status="error",
+                    data_fresh=False,
+                    source_errors=["frozen_tool_unavailable"],
+                    payload={},
+                ),
+            )
+        else:
+            state = self._injected_state(name, arguments)
+            trace = self._trace(name, arguments, state)
+        execution["tool_results"].append(trace)
+        execution["tool_call_names"].append(name)
+        payload = trace.result.payload if trace.result is not None else trace.output
+        if trace.result is not None and trace.result.status == "error":
+            execution["facts"][f"{name}_error"] = trace.error or "frozen fixture error"
+        else:
+            execution["facts"][name] = payload
+        if name == "first_board_ratings":
+            requested = request.symbol or _symbol_from_text(request.message)
+            if requested:
+                candidates = payload.get("top_candidates", []) if isinstance(payload, dict) else []
+                matched = next(
+                    (item for item in candidates if item.get("symbol") == requested),
+                    None,
+                )
+                execution["facts"]["first_board_rating_lookup"] = {
+                    "symbol": requested,
+                    "found": matched is not None,
+                    "rating": matched,
+                }
+        if isinstance(payload, dict) and payload.get("as_of_date"):
+            execution["references"].append(f"fixture_as_of={payload['as_of_date']}")
+
+    def _trace(
+        self,
+        name: str,
+        arguments: dict[str, Any],
+        result_state: str | None,
+    ) -> AgentToolTrace:
+        fixture_name = "first_board_ratings" if name == "first_board_filter" else name
+        trace = self.fixture.trace(
+            fixture_name,
+            arguments=arguments,
+            result_state=result_state,
+        )
+        payload = _normalize_frozen_payload(name, deepcopy(trace.output or {}), arguments)
+        result = trace.result
+        if result is not None:
+            result = result.model_copy(update={"payload": payload})
+        return trace.model_copy(
+            update={
+                "name": name,
+                "input": arguments,
+                "output": payload,
+                "summary": f"{trace.summary}（Live Eval 完全冻结）",
+                "result": result,
+            }
+        )
+
+    def _injected_state(self, name: str, arguments: dict[str, Any]) -> str | None:
+        injection = next(
+            (
+                item for item in self._injections
+                if item.tool == name and _mapping_matches(item.match_args, arguments)
+            ),
+            None,
+        )
+        return injection.result_state if injection is not None else None
 
 
 def write_live_eval_report(report: dict[str, Any], output_root: Path = DEFAULT_OUTPUT_ROOT) -> Path:
@@ -243,53 +395,100 @@ def write_live_eval_report(report: dict[str, Any], output_root: Path = DEFAULT_O
     return path
 
 
-def _default_registry(case: LiveEvalCase) -> InjectedToolRegistry:
-    return InjectedToolRegistry(AgentToolRegistry(events=SAMPLE_EVENTS), case.failure_injections)
+def _default_registry(case: LiveEvalCase) -> FrozenLiveToolRegistry:
+    return FrozenLiveToolRegistry(case.failure_injections)
 
 
-def _arguments_match(expected: dict[str, Any], args: tuple[Any, ...], kwargs: dict[str, Any]) -> bool:
-    if not expected:
-        return True
-    observed = dict(kwargs)
-    if args:
-        observed.setdefault("symbol", args[0])
+def _mapping_matches(expected: dict[str, Any], observed: dict[str, Any]) -> bool:
     return all(str(observed.get(key)) == str(value) for key, value in expected.items())
 
 
-def _empty_result(result: ToolResult) -> ToolResult:
-    output = result.output
-    if isinstance(output, dict):
-        output = _empty_mapping(output)
-    elif isinstance(output, list):
-        output = []
-    elif isinstance(output, BaseModel):
-        updates: dict[str, Any] = {}
-        for name in type(output).model_fields:
-            value = getattr(output, name)
-            if isinstance(value, list):
-                updates[name] = []
-            elif isinstance(value, int) and any(token in name for token in ("count", "total")):
-                updates[name] = 0
-        output = output.model_copy(update=updates)
-    return replace(
-        result,
-        output=output,
-        trace_output=_empty_mapping(result.trace_output),
-        summary=f"{result.name} returned no rows (live eval injection).",
-        result_status="empty",
-        data_fresh=True,
-        source_errors=(),
-    )
+def _symbol_from_text(value: str) -> str | None:
+    match = re.search(r"(?<!\d)(\d{6})(?!\d)", value)
+    return match.group(1) if match else None
 
 
-def _empty_mapping(payload: dict[str, Any]) -> dict[str, Any]:
-    empty = dict(payload)
-    for key, value in list(empty.items()):
-        if isinstance(value, list):
-            empty[key] = []
-        elif isinstance(value, int) and any(token in key for token in ("count", "total")):
-            empty[key] = 0
-    return empty
+def _normalize_frozen_payload(
+    tool_name: str,
+    payload: dict[str, Any],
+    arguments: dict[str, Any],
+) -> dict[str, Any]:
+    """Expose production-like keys while preserving the fixture's canonical facts."""
+
+    as_of = payload.get("as_of_date")
+    if tool_name == "market_index_trend" and "indices" in payload:
+        payload["data_as_of"] = as_of
+        payload["requested_days"] = int(arguments.get("days") or 5)
+        payload["indices"] = [
+            {
+                **item,
+                "name": item.get("entity"),
+                "return_pct": item.get("value"),
+                "source": "chat-fixture-v2",
+            }
+            for item in payload["indices"]
+        ]
+    elif tool_name == "sector_performance" and "sectors" in payload:
+        payload["data_as_of"] = as_of
+        payload["top_sectors"] = [
+            {
+                **item,
+                "sector_name": item.get("entity"),
+                "change_pct": item.get("value"),
+            }
+            for item in payload["sectors"]
+        ]
+        payload["sources"] = ["chat-fixture-v2"]
+    elif tool_name == "sector_stock_ranking":
+        payload["data_as_of"] = as_of
+        payload["sector_name"] = arguments.get("sector") or payload.get("sector")
+    elif tool_name == "hot_stock_ranking" and "stocks" in payload:
+        payload["items"] = [
+            {**item, "name": item.get("entity"), "rank": item.get("value")}
+            for item in payload["stocks"]
+        ]
+        payload.update(
+            {"source": "chat-fixture-v2", "captured_at": f"{as_of}T15:10:00+08:00", "data_fresh": True}
+        )
+    elif tool_name in {"stock_news", "finance_news"} and "items" in payload:
+        payload["items"] = [
+            {
+                **item,
+                "title": item.get("value"),
+                "url": f"fixture://{tool_name}/{index}",
+            }
+            for index, item in enumerate(payload["items"], start=1)
+        ]
+    elif tool_name == "first_board_ratings" and "ratings" in payload:
+        payload["top_candidates"] = [
+            {
+                **item,
+                "name": item.get("entity"),
+                "total_score": item.get("value"),
+            }
+            for item in payload["ratings"]
+        ]
+    elif tool_name == "first_board_filter":
+        ratings = payload.get("ratings", [])
+        payload["matches"] = ratings
+        payload["matched_count"] = len(ratings)
+    elif tool_name == "stock_kline" and isinstance(payload.get("stock"), dict):
+        stock = payload["stock"]
+        requested = arguments.get("symbol")
+        if requested:
+            stock = {**stock, "symbol": requested, "entity": requested}
+            payload["stock"] = stock
+        payload.update(
+            {"symbol": stock.get("symbol"), "name": stock.get("entity"), "data_as_of": as_of}
+        )
+    elif tool_name == "scoring_policy_status":
+        policy = payload.get("policy", {})
+        challenger = payload.get("challenger", {})
+        payload["champion"] = {"version": policy.get("value")}
+        payload["latest_optimization"] = {
+            "challenger_policy": {"version": challenger.get("value")}
+        }
+    return payload
 
 
 def _parse_json_object(content: str) -> dict[str, Any]:

@@ -69,7 +69,9 @@ Live schema 使用当前 trace 可验证的字段：`required_capabilities`、re
 
 多源依赖支持对多个 Observation 集合求 `intersection` 或 `union`，并用所有 target calls 参数的并集进行 `same_set`、`subset`、`member` 或 `equals` 判断。`LIVE-REPLAN-006` 与 `LIVE-STRESS-002` 由此验证真正的热股∩涨停股集合，而不是只对其中一个来源做弱约束。
 
-错误由 `InjectedToolRegistry` 在 eval 环境注入。用户问题仍是正常业务问题；代理只包装当前 registry，不修改 Planner、Policy、执行器或答案链路。默认基础世界使用固定的 `SAMPLE_EVENTS`；依赖本地/外部 provider 的工具仍可能随环境变化，这是 V1 的已知限制，后续应将所有 typed tool outputs 固化成统一 `chat-live-world-v1` snapshot。
+Live Eval 的环境标识为 `chat-fixture-v2-fully-frozen-v1`。真实 Planner、Tool Policy、生产编排和 Answer LLM 保持运行，但初始工具调用与 Policy 补救都由 `FrozenLiveToolRegistry` 执行，只读取版本化 `chat-fixture-v2`。它不实例化生产 `AgentToolRegistry`，因此不会访问 SQLite、DuckDB、同花顺接口、新闻源或其他网络 provider。
+
+错误、空结果和部分结果也在同一个冻结执行器内按 case 注入；带 `match_args` 的异常只作用于匹配参数的调用。fixture 未定义或 V1 profile 未启用的工具返回显式 `error`，不得回退到真实工具。每次报告写入 `fully_frozen=true`、fixture id，以及 `database_access=false`、`network_access=false`，便于拒绝混合环境报告。
 
 ## 5. 指标
 
@@ -115,7 +117,7 @@ python scripts/run_agent_live_eval.py --trials 3 --judge
 
 CLI 支持 `--category`、`--case-id`、`--trials`、`--model`、`--judge`、`--output`。报告默认写入 `output/agent-live-eval/<run_id>/summary.json`，不得提交仓库。
 
-本次只建立 suite，没有执行 36×3 的付费 baseline。首次基线必须记录 model、配置、代码 commit 与数据快照；不能把单次 sample 当发布结果。预期当前版本在 simple 和一部分 multi-tool/multi-turn 上可通过，而真正 observation-dependent case 会暴露 `replan_count=0` 的能力缺口。
+历史基线 `live-20260911T080804Z-f4288138` 使用的是部分冻结环境，只能用于诊断，不能与完全冻结后的结果直接做发布 A/B。完全冻结实现上线后必须重新运行 36×3，记录 model、配置、代码 commit、`environment_id` 与 fixture snapshot；不能把单次 sample 当发布结果。
 
 ## 8. LangGraph bounded Replan A/B
 
@@ -125,7 +127,7 @@ CLI 支持 `--category`、`--case-id`、`--trials`、`--model`、`--judge`、`--
 
 ## 9. 当前支持与限制
 
-当前 Live Eval 支持 real LLM planning、真实 multi-turn、trace-based tool assertions、单/多源 tool argument dependency、带顺序验证的 conditional tools、failure injection、deterministic required fact coverage，以及按 case 适配的语义 Judge。
+当前 Live Eval 支持 real LLM planning、完全冻结的版本化工具世界、真实 multi-turn、trace-based tool assertions、单/多源 tool argument dependency、带顺序验证的 conditional tools、failure injection、deterministic required fact coverage，以及按 case 适配的语义 Judge。
 
 当前生产 Agent 仍不支持 true observation-driven replan，因此也没有真实 replan count、replan trigger accuracy 或 unnecessary replan rate。评测侧仍缺少完整 unsupported-claim detection；这些空缺必须保持显式 N/A，直到生产 trace 和 claim evaluator 提供可验证证据。
 

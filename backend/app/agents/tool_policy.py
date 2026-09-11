@@ -420,7 +420,16 @@ class AgentToolPolicyEngine:
                 continue
             try:
                 before = len(execution["tool_results"])
-                rule.repair(request, signals, execution, context_symbol)
+                frozen_repair = getattr(self.tools, "repair_frozen_tool", None)
+                if callable(frozen_repair):
+                    frozen_repair(
+                        rule.tool_name,
+                        request=request,
+                        execution=execution,
+                        context_symbol=context_symbol,
+                    )
+                else:
+                    rule.repair(request, signals, execution, context_symbol)
                 if len(execution["tool_results"]) == before:
                     continue
                 _mark_latest_trace_as_repair(execution, rule)

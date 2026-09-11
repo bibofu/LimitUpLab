@@ -60,6 +60,13 @@ def execute_tool_calls(
     context_symbol: str | None = None,
 ) -> ToolExecution:
     """Execute in plan order so filters can reuse prior rating evidence."""
+    frozen_executor = getattr(tools, "execute_frozen_calls", None)
+    if callable(frozen_executor):
+        return frozen_executor(
+            tool_calls,
+            request=request,
+            context_symbol=context_symbol,
+        )
     # State belongs to this request only. Each domain handler adds compact facts
     # for the writer and a trace for persistence/UI inspection; those serve
     # different audiences and should not be confused with raw provider responses.

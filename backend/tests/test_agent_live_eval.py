@@ -1,3 +1,4 @@
+from datetime import date
 from pathlib import Path
 
 import json
@@ -5,11 +6,22 @@ import json
 from app.agents.chat_live_eval import aggregate_live_results, evaluate_live_trial
 from app.agents.chat_live_eval_runner import (
     DATASET_PATH,
+    FrozenLiveToolRegistry,
+    _default_registry,
     judge_dimensions_for_case,
     judge_live_answer,
     load_live_eval_dataset,
+    run_live_eval_suite,
 )
-from app.models import AgentChatResponse, AgentToolOutcome, AgentToolPolicyAudit, AgentToolTrace
+from app.agents.tool_execution import execute_tool_calls
+from app.agents.tool_policy import AgentToolPolicyEngine
+from app.models import (
+    AgentChatRequest,
+    AgentChatResponse,
+    AgentToolOutcome,
+    AgentToolPolicyAudit,
+    AgentToolTrace,
+)
 from app.services.llm_provider import LLMProvider, LLMResult
 
 
@@ -19,6 +31,106 @@ def test_live_dataset_has_exact_high_value_distribution() -> None:
     assert sum(case.category == "replan" for case in dataset.cases) == 8
     assert sum(len(case.turns) > 1 for case in dataset.cases) == 6
     assert all(case.expected.max_tool_calls <= 8 for case in dataset.cases)
+
+
+def test_live_dataset_uses_fully_frozen_tool_environment() -> None:
+    dataset = load_live_eval_dataset(DATASET_PATH)
+    assert dataset.environment_id == "chat-fixture-v2-fully-frozen-v1"
+    registry = FrozenLiveToolRegistry([])
+    mentioned = {
+        tool
+        for case in dataset.cases
+        for tool in [
+            *case.expected.required_tools,
+            *case.expected.optional_tools,
+            *case.expected.forbidden_tools,
+        ]
+    }
+    assert mentioned <= set(registry.fixture.tools) | {"first_board_filter"}
+
+
+def test_frozen_registry_executes_fixture_without_production_delegate() -> None:
+    case = _case("LIVE-SIMPLE-002")
+    registry = _default_registry(case)
+    execution = execute_tool_calls(
+        [{"name": "market_index_trend", "arguments": {"days": 5}}],
+        registry,
+        request=AgentChatRequest(
+            session_id="frozen-world",
+            message=case.turns[0].user,
+            trade_date=date(2026, 5, 15),
+        ),
+    )
+
+    assert not hasattr(registry, "_delegate")
+    trace = execution["tool_results"][0]
+    assert trace.result is not None and trace.result.status == "ok"
+    assert trace.output["as_of_date"] == "2026-05-15"
+    assert trace.output["indices"][0]["name"] == "上证指数"
+    assert "完全冻结" in trace.summary
+
+
+def test_frozen_registry_applies_argument_scoped_failure_injection() -> None:
+    case = _case("LIVE-RECOVERY-004")
+    execution = execute_tool_calls(
+        [
+            {"name": "stock_kline", "arguments": {"symbol": "300750", "days": 20}},
+            {"name": "stock_kline", "arguments": {"symbol": "600000", "days": 20}},
+        ],
+        _default_registry(case),
+        request=AgentChatRequest(
+            session_id="frozen-injection",
+            message=case.turns[0].user,
+            trade_date=date(2026, 5, 15),
+        ),
+    )
+
+    assert [trace.result.status for trace in execution["tool_results"]] == ["error", "ok"]
+    assert execution["tool_results"][1].output["symbol"] == "600000"
+
+
+def test_policy_repairs_use_the_same_frozen_executor() -> None:
+    case = _case("LIVE-SIMPLE-001")
+    registry = _default_registry(case)
+    request = AgentChatRequest(
+        session_id="frozen-policy",
+        message=case.turns[0].user,
+        trade_date=date(2026, 5, 15),
+    )
+    execution = execute_tool_calls([], registry, request=request)
+    repaired = AgentToolPolicyEngine(registry).reconcile(
+        request=request,
+        execution=execution,
+        capabilities=("market_environment",),
+    )
+
+    assert set(case.expected.required_tools) <= set(repaired)
+    assert all("完全冻结" in trace.summary for trace in execution["tool_results"])
+    assert all(
+        trace.result is not None and trace.result.payload.get("as_of_date") == "2026-05-15"
+        for trace in execution["tool_results"]
+    )
+
+
+def test_live_suite_runs_real_orchestration_against_only_frozen_facts() -> None:
+    report = run_live_eval_suite(
+        [_case("LIVE-SIMPLE-002")],
+        llm_provider=_FrozenWorldProvider(),
+        trials=1,
+    )
+
+    assert report["runner_version"] == "agent-live-eval-runner-v2"
+    assert report["tool_environment"] == {
+        "fixture_snapshot_id": "chat-fixture-v2",
+        "fully_frozen": True,
+        "database_access": False,
+        "network_access": False,
+    }
+    tool_trace = next(
+        item for item in report["results"][0]["tool_trace"]
+        if item["name"] == "market_index_trend"
+    )
+    assert tool_trace["output"]["as_of_date"] == "2026-05-15"
 
 
 def test_argument_dependency_uses_observed_source_values() -> None:
@@ -266,5 +378,31 @@ class _JudgeProvider(LLMProvider):
                 else {**scores, "rationale": "ok"}
             ),
             model="judge-test",
+            provider="test",
+        )
+
+
+class _FrozenWorldProvider(LLMProvider):
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        del user_prompt
+        if "first job is to decide which tools are needed" in system_prompt:
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": "market_index_trend",
+                        "safety": "normal",
+                        "capabilities": ["market_index_trend"],
+                        "tool_calls": [
+                            {"name": "market_index_trend", "arguments": {"days": 5}}
+                        ],
+                        "answer_directly": "",
+                    }
+                ),
+                model="frozen-test-planner",
+                provider="test",
+            )
+        return LLMResult(
+            content="截至2026-05-15，上证指数、深证成指和创业板指近5日数据已返回。",
+            model="frozen-test-answer",
             provider="test",
         )

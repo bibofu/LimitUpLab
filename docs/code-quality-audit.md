@@ -134,3 +134,18 @@
 - P2：尚未执行真实供应商的 `160 × 3 + Judge` 发布跑批，因为仓库按设计不包含私有 Holdout、Judge 凭据、50 条人工双标校准集或批准的真实模型基线。缺失配置会返回 `configuration_error`，不能把本次 120-case Offline 通过解释为真实模型已达成熟门槛。后续触发条件：准备模型/Prompt 发布时注入私有资产，先冻结批准基线，再执行完整发布命令。
 - P2：Online Shadow 的匿名化与只读 trace 路径已有测试，但本次没有可授权的 30–50 条真实线上样本供运行。后续触发条件：积累并人工确认真实问题后执行周度抽样，确认失败再回流 Dev。
 - P2：上一节 A03 的生产会话摘要窗口空档不属于本轮评测实现，仍保持未修复；V2 多轮测试验证评测 Query View，不代表该生产 Memory 问题已经解决。后续修改会话记忆前优先处理。
+
+## 2026-09-11：Live Behavioral Eval 工具世界冻结审查
+
+### 范围与结论
+
+- 审查 `chat_live_eval_runner.py`、共享工具 dispatcher、Tool Policy reconcile 扩展点、36-case Live 数据契约与相关测试。生产工具实现、数据库、数据流水线和用户问答语义未修改。
+- Live 环境由 `sample-events-plus-current-registry-v1` 升级为 `chat-fixture-v2-fully-frozen-v1`。默认 runner 不再创建生产 `AgentToolRegistry`；真实 Planner/Answer 保留，初始调用和 Policy repair 统一读取 `chat-fixture-v2`。
+- failure injection 在冻结层按工具和可选参数匹配；未定义或未启用工具只返回可审计 error，不允许 fallback 到 SQLite、DuckDB 或网络 provider。
+- 报告新增冻结声明：fixture snapshot、`fully_frozen`、database/network access。历史部分冻结 baseline 与新环境不可直接比较，必须重新冻结 36×3 基线。
+
+### 验证与问题分级
+
+- 定向与共享 Agent 回归：97 项测试及 12 个子测试通过。完整后端在宿主隔离目录中为 686 项测试及 18 个子测试通过，0 失败、0 setup error、0 跳过；此前两次沙箱运行均有 42 个 `tmp_path` ACL setup error（其余 644 项通过），未计为成功。另有端到端替身验证真实生产编排只接收到 `2026-05-15` fixture facts。
+- P0/P1：未发现未处理问题。冻结扩展点仅在 registry 明确实现协议时启用，生产 registry 沿用原 dispatcher 和 Policy repair 分支。
+- P2：冻结 payload 是小型、一致的行为评测世界，不是真实 2026-05-15 行情重建；完全冻结后的真实供应商 36×3 + Judge 尚未重新执行。后续触发条件为下一次模型/Prompt 基线验收。

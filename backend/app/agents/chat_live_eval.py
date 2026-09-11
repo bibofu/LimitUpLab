@@ -14,7 +14,7 @@ from app.models import AgentChatResponse, AgentToolTrace
 
 
 LIVE_EVAL_VERSION = "agent-chat-live-eval-v1"
-LIVE_EVAL_ENVIRONMENT_ID = "sample-events-plus-current-registry-v1"
+LIVE_EVAL_ENVIRONMENT_ID = "chat-fixture-v2-fully-frozen-v1"
 LIVE_CATEGORIES = (
     "simple",
     "multi_tool",
@@ -186,7 +186,7 @@ class LiveEvalCase(BaseModel):
 class LiveEvalDataset(BaseModel):
     model_config = ConfigDict(extra="forbid")
     version: Literal["agent-chat-live-eval-v1"]
-    environment_id: Literal["sample-events-plus-current-registry-v1"]
+    environment_id: Literal["chat-fixture-v2-fully-frozen-v1"]
     description: str
     cases: list[LiveEvalCase]
 
