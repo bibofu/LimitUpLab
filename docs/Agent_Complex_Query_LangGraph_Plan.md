@@ -1,5 +1,19 @@
 # LimitUpLab 复杂问题多步规划改造计划
 
+## Phase 1 实施状态（2026-09-11）
+
+Phase 1 已实施，当前采用 `Fast Path + allowlisted Complex Path`：
+
+- 默认请求继续走原有 Plan-and-Execute；确定性 Router 仅在问题同时包含热股范围、涨停范围、集合筛选和评分意图时进入 Complex Path。
+- 当前最小状态包含用户问题、消息、结构化步骤、当前步骤、实体集合、工具事实/trace、完成/失败步骤、工具/模型调用计数、最终答案和失败原因。
+- 当前节点链路为 `validate_plan → execute_sources → observe_intersection → execute_rating → apply_policy → complete → answer`，不存在 Replan、Retry 或循环边。
+- `ResultReference(source_step, entity_set, path, max_items)` 与 `ArgumentBinding` 负责动态参数绑定。交集由确定性代码按股票代码计算，`first_board_ratings.symbols` 直接读取 `S3` 的实体集合，不把 Observation 交给 LLM 猜测。
+- 已支持的唯一 MVP 是“热股 Top10 ∩ 当日涨停股 → 仅对交集查询首板评分”。空集合、来源缺失、工具错误和绑定失败会明确标记失败并进入既有回答/降级机制。
+- Capability Contract、Tool Policy、工具执行、事实组合、答案校验与投资合规继续复用现有实现；LangGraph 仅管理状态和步骤迁移。
+- Trace 新增 `routing_decision`、`complex_graph_plan`、`complex_graph_step`，记录 dependency、resolved args、observation summary、step status，且 `replan_count=0`。
+
+当前限制：其他动态依赖、条件分支、多轮实体集合、通用 DAG、Evidence Gap、bounded Replan、Retry、checkpoint 和 human approval 均未实现。进入 Phase 2 前，应先持续观察本 MVP 的真实失败样本和独立 Complex Path 基线。
+
 ## 1. 背景与目标
 
 LimitUpLab 当前 Chat Agent 主要采用一次性链路：

@@ -551,3 +551,24 @@ ok，最终答案包含 600000 且 warnings 保留首项失败。替身集成测
 替换；模板新增兼容生产与冻结契约的 critic 风险渲染，并能联合渲染 K线与新闻。
 `LIVE-RECOVERY-002`、`LIVE-MTURN-003` 的真实单次验收均由失败变为通过；新增测试保证
 empty 明确写“没有”、风险回答包含结构化风险项。
+
+---
+
+## BC-021：热股与涨停交集无法绑定到下游评分参数
+
+### 现象
+
+> 取今天热股 Top10 和涨停股的交集，只对交集股票查询首板评分，并给出结果。
+
+原 Plan-and-Execute 能选齐三个 capability 和三个工具，但一次性 Planner 无法在执行前知道
+交集股票，导致 `first_board_ratings` 没有 `symbols`，`LIVE-REPLAN-006` 的多来源参数依赖
+连续 3 次失败。
+
+### 修复与回归
+
+新增确定性 Complexity Router 与 LangGraph Phase 1 Complex Path。Graph 先执行热股和涨停
+来源，由既有事实组合器按股票代码求交集，再通过结构化 `ResultReference` 把 Observation
+绑定到 `first_board_ratings.symbols`；Tool Policy、Grounding、答案校验和安全边界保持生效。
+完全冻结工具世界真实模型验收从 0/3 提升为 3/3，工具调用保持 3 次；确定性名单模板把
+模型调用从 2 次降为 1 次，平均 token 由 5,367 降至 2,809，p95 延迟由基线样本的
+2,073/1,581/1,979 ms 降至 1,325 ms。其他 observation-dependent case 仍属于 Phase 2 范围。

@@ -198,3 +198,24 @@ def test_simple_live_case_stays_on_fast_path() -> None:
     routing = next(item for item in response.tool_results if item.name == "routing_decision")
     assert routing.input["route"] == "fast"
     assert not any(item.name == "complex_graph_plan" for item in response.tool_results)
+
+
+def test_complex_control_traces_do_not_appear_as_tools_or_evidence_cards() -> None:
+    response = answer_first_board_chat(
+        AgentChatRequest(
+            session_id="phase-one-control-traces",
+            message="取今天热股 Top10 和涨停股的交集，只对交集股票查询首板评分",
+        ),
+        SAMPLE_EVENTS,
+        llm_provider=_PhaseOneProvider(),
+        tool_registry=FrozenLiveToolRegistry([]),
+    )
+    assert response.tool_policy.final_tool_calls == [
+        "hot_stock_ranking",
+        "limit_up_events",
+        "first_board_ratings",
+    ]
+    assert all(
+        card.title not in {"complex_graph_plan", "complex_graph_step"}
+        for card in response.evidence_cards
+    )

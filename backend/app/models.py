@@ -1680,6 +1680,18 @@ class AgentToolOutcome(BaseModel):
     payload: dict[str, Any] = Field(default_factory=dict)
 
 
+AGENT_CONTROL_TRACE_NAMES = {
+    "agent_plan",
+    "llm_tool_planner",
+    "llm_tool_answer",
+    "template_general_answer",
+    "query_understanding",
+    "routing_decision",
+    "complex_graph_plan",
+    "complex_graph_step",
+}
+
+
 class AgentToolTrace(BaseModel):
     """Compact trace for one tool execution inside an Agent run."""
 
@@ -1696,12 +1708,7 @@ class AgentToolTrace(BaseModel):
     def normalize_result(self) -> "AgentToolTrace":
         """Populate the uniform result envelope for new and persisted traces."""
 
-        if self.result is None and self.name in {
-            "agent_plan",
-            "llm_tool_planner",
-            "llm_tool_answer",
-            "template_general_answer",
-        }:
+        if self.result is None and self.name in AGENT_CONTROL_TRACE_NAMES:
             return self
         if self.result is None:
             self.result = _infer_agent_tool_outcome(
@@ -1880,16 +1887,12 @@ def build_agent_tool_policy_audit(
     planner_trace_present = any(
         trace.name == "llm_tool_planner" for trace in tool_results
     )
-    final_calls = [
-        tool
-        for tool in tool_calls
-        if tool not in {"llm_tool_planner", "llm_tool_answer", "template_general_answer"}
-    ]
+    final_calls = [tool for tool in tool_calls if tool not in AGENT_CONTROL_TRACE_NAMES]
     if not final_calls:
         final_calls = [
             trace.name
             for trace in tool_results
-            if trace.name not in {"llm_tool_planner", "llm_tool_answer", "template_general_answer"}
+            if trace.name not in AGENT_CONTROL_TRACE_NAMES
         ]
     backend_repaired = [
         tool
@@ -2019,7 +2022,14 @@ def _evidence_card_from_trace(trace: AgentToolTrace) -> AgentEvidenceCard | None
     facts = _evidence_facts(trace, output)
     title, kind = _evidence_title_kind(trace.name)
 
-    if trace.name in {"llm_tool_answer", "template_general_answer"}:
+    if trace.name in {
+        "llm_tool_answer",
+        "template_general_answer",
+        "query_understanding",
+        "routing_decision",
+        "complex_graph_plan",
+        "complex_graph_step",
+    }:
         return None
 
     result_status = trace.result.status if trace.result is not None else None

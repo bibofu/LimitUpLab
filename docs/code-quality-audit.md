@@ -175,3 +175,27 @@
 - P1：复合个股新闻提前拒绝、显式证据折叠、明确多股票参数缺失、empty/风险过度拒答已修复。
 - P1：观察值驱动参数绑定仍未实现。`first_board_ratings → dragon_tiger_list.query`、行业 TopN → 成分股、交集集合 → 逐股 K线等动态依赖需要 observation-driven execution 或有界 Replan；本次不以预执行全部可选工具或放宽 Golden 掩盖。下一阶段应先实现结构化引用/集合展开，再重跑 8 个 Replan 与 2 个 Stress。
 - P2：真实模型结果目前是修复用例的单次验收，不代表新的 36×3 稳定性基线；完成动态参数绑定后再执行全量基线与 Judge 校准。
+
+## 2026-09-11：LangGraph Phase 1 动态依赖路径审查
+
+### 范围与架构一致性
+
+- 源码提交 `b7eed3b` 新增独立 `complex_graph` 包、确定性 Router、最小 State、结构化结果引用和唯一白名单图；`2a51635` 将完全结构化的交集评分答案改为既有确定性模板，避免无必要的 Answer LLM。
+- Fast Path 保持默认且未迁移；只有热股、涨停、集合筛选、评分四类信号同时出现才进入 Complex Path。LangGraph 不实现业务工具、集合事实、Policy、Grounding 或安全规则，只编排现有组件。
+- 下游 `first_board_ratings.symbols` 只接受前序实体集合引用，最多 20 个六位股票代码；生产工具与完全冻结工具适配器都按相同参数过滤候选。Planner 的无关 capability 不会扩大白名单图的工具范围。
+- Phase 1 没有 Replan、Retry、critic、checkpoint 或循环边。dependency 缺失、空集合、执行错误和参数绑定失败会确定性失败并进入答案/降级路径。
+
+### 验证与 A/B
+
+- 新增 8 项 Router、动态绑定、Graph、Policy/工具白名单和 Fast Path 测试；Agent 定向回归 114 项通过，评测契约/runner 回归在宿主隔离目录 65 项通过。沙箱内评测测试曾有 4 个 `tmp_path` setup error，原因是 Windows pytest 临时目录 ACL，未计为通过。
+- 完整后端首轮为 703/704 通过、22 个子测试通过；唯一失败是旧 mock 严格期望未传 `symbols=None`。改为只在动态集合存在时传参后，定向 14 项通过；补充 Graph 控制 trace 归类测试后，最终完整后端为 705 项及 22 个子测试通过，0 失败、0 setup error、0 跳过。
+- 真实模型完全冻结小样本：Simple 6/6、Multi-tool 6/6，均未进入 Complex Graph；目标 `LIVE-REPLAN-006` 从旧基线 0/3 提升到 3/3，raw capability recall 与 effective tool recall 均为 100%，Provider failure 为 0。
+- 目标调用严格为 `hot_stock_ranking → limit_up_events → first_board_ratings`，评分参数是前两项实际 Observation 的同序交集。工具调用保持 3；模板优化后模型调用从 2 降为 1，平均 token 从 5,367 降至 2,809，p50/p95 延迟为 1,057/1,325 ms。
+- 真实 HTTP/SSE：重启本地 Uvicorn 后，简单指数请求返回 `route=fast`；复杂原始问法依次返回兼容的 `progress`、`answer_delta`、`completed` 事件。生产工具结果交集为风华高科（000636），评分工具 trace 的 `symbols=["000636"]`，答案明确披露该股不在当前评级候选池。Graph 控制 trace 已从业务工具、Policy repair 和用户证据卡统计中排除。
+
+### 问题分级与状态
+
+- P0：未发现。
+- P1：`LIVE-REPLAN-006` 的多来源集合绑定已修复；Fast Path 小样本未发现回归。
+- P2：当前 Router 和 Graph 只覆盖一个白名单场景，另外 7 个 Replan 与 2 个 Stress case 未声称修复；在新增第二个经过真实 Bad Case 驱动的场景前，不建议立即引入通用 bounded Replan。
+- P2：Complex Path 尚未建立 36×3 全量稳定性与 Judge 基线；本轮按计划只执行小范围 A/B，生成报告留在本地 `output/agent-live-eval/`，不提交仓库。
