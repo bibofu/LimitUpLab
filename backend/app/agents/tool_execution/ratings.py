@@ -50,7 +50,16 @@ def first_board_ratings(state: ExecutionState, name: str, arguments: dict[str, A
             )
         )
         return
-    result = state.tools.first_board_ratings(trade_date=trade_date)
+    raw_symbols = arguments.get("symbols")
+    symbols = (
+        [str(item) for item in raw_symbols if str(item).isdigit()]
+        if isinstance(raw_symbols, list)
+        else None
+    )
+    tool_arguments: dict[str, Any] = {"trade_date": trade_date}
+    if symbols is not None:
+        tool_arguments["symbols"] = symbols
+    result = state.tools.first_board_ratings(**tool_arguments)
     state.latest_ratings_tool = result
     state.latest_ratings = result.output
     state.facts["first_board_ratings"] = _compact_ratings_facts(state.latest_ratings)

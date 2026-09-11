@@ -75,6 +75,10 @@ from app.agents.capability_contract import (
     infer_capabilities_from_facts,
     normalize_capabilities,
 )
+from app.agents.complex_graph import (
+    route_complexity,
+    run_hot_limit_up_rating_graph,
+)
 from app.agent_output_sanitizer import (
     AgentAnswerStreamSanitizer,
     friendly_tool_label,
@@ -97,6 +101,7 @@ from app.post_limit_query_contract import (
 from app.agents.tool_policy import (
     AgentToolPolicyEngine,
     QuestionSignals as _QuestionSignals,
+    ToolExecution,
     extract_market_index_days as _extract_market_index_days,
     extract_kline_days as _extract_kline_days,
     extract_promotion_days as _extract_promotion_days,
@@ -146,7 +151,7 @@ from app.services.prompt_security import (
 from app.services.session_memory import memory_prompt_payload
 
 
-CHAT_AGENT_VERSION = "first-board-chat-policy-v18-explicit-evidence"
+CHAT_AGENT_VERSION = "first-board-chat-langgraph-phase1-v19"
 _FORCE_TEMPLATE_ANSWER_OVERRIDE: ContextVar[bool | None] = ContextVar(
     "force_template_answer_override",
     default=None,
@@ -339,6 +344,20 @@ def answer_first_board_chat(
         answer_delta_callback=answer_delta_callback,
         tool_registry=tool_registry,
     )
+    decision = route_complexity(request.message)
+    if not any(trace.name == "routing_decision" for trace in response.tool_results):
+        response.tool_results.append(
+            AgentToolTrace(
+                name="routing_decision",
+                input={
+                    "route": decision.route,
+                    "routing_reason": list(decision.reason_codes),
+                    "supported_scenario": decision.supported_scenario,
+                },
+                output=decision.model_dump(mode="json"),
+                summary=f"Complexity Router selected {decision.route} path.",
+            )
+        )
     if not any(trace.name == "query_understanding" for trace in response.tool_results):
         executed_contract = next(
             (
@@ -424,6 +443,18 @@ def _answer_first_board_chat_impl(
             "out_of_scope",
             "历史相似案例功能已经下线。你可以改为询问这只股票的评分依据、主要风险、近期 K 线走势，或查看高分票追踪复盘。",
         )
+    decision = route_complexity(request.message)
+    if decision.route == "complex":
+        complex_response = _answer_with_complex_graph(
+            request=request,
+            tools=tools,
+            context=context,
+            provider=llm_provider,
+            progress_callback=progress_callback,
+            answer_delta_callback=answer_delta_callback,
+        )
+        if complex_response is not None:
+            return complex_response
     # Prefer the capability-based planner. A None return means planning could not
     # produce a usable response, so the deterministic handlers below get a chance.
     # A structured refusal or an explicit empty-data answer is already a response.
@@ -656,6 +687,199 @@ def _requires_deferred_v1_capability(message: str) -> bool:
         "最新价格",
     )
     return any(term in compact for term in realtime_terms)
+
+
+def _answer_with_complex_graph(
+    request: AgentChatRequest,
+    tools: AgentToolRegistry,
+    context: "_SessionContext",
+    provider: LLMProvider | None = None,
+    progress_callback: Callable[[str, str], None] | None = None,
+    answer_delta_callback: Callable[[str], None] | None = None,
+) -> AgentChatResponse | None:
+    """Run the allowlisted Phase 1 dependency graph and reuse answer guardrails."""
+
+    started_at = perf_counter()
+    active_provider = provider or get_llm_provider()
+    if progress_callback:
+        progress_callback("planning", "正在规划动态依赖任务")
+    try:
+        query_plan = _generate_llm_query_plan(
+            request,
+            tools,
+            context,
+            active_provider,
+        )
+    except Exception:
+        return None
+    if str(query_plan.payload.get("safety") or "normal") == "refuse_trade_instruction":
+        return _answer_static_text(request, "unsafe_investment_advice", TEXT["unsafe"])
+
+    required_capabilities = ("popularity", "limit_up_pool", "first_board_rating")
+    capabilities = required_capabilities
+    answer_result: LLMResult | None = None
+    answer_started_at = 0.0
+    answer_prompt_chars = 0
+
+    def build_answer(execution: ToolExecution) -> dict[str, Any]:
+        nonlocal answer_result, answer_started_at, answer_prompt_chars
+        facts = execution["facts"]
+        _add_composed_tool_facts(request.message, facts)
+        fallback = _template_answer_from_tool_facts(
+            request=request,
+            intent="hot_limit_up_rating_intersection",
+            facts=facts,
+        )
+        if not _has_usable_tool_facts(facts, execution["tool_results"]):
+            return {
+                "answer": UNANSWERABLE_TEXT,
+                "source": "template_general_answer",
+                "warnings": [
+                    _safety_warning(),
+                    "Complex Graph had no usable evidence; no replan was attempted.",
+                ],
+                "answer_prompt_chars": 0,
+                "answer_duration_ms": 0,
+            }
+        answer_system_prompt = _tool_answer_system_prompt(
+            agent_profile=tools.profile,
+            hot_stock_event_intersection_answer=True,
+            capability_instruction=capability_answer_instruction(capabilities),
+        )
+        query_plan.payload["capabilities"] = list(capabilities)
+        answer_user_prompt = _tool_answer_user_prompt(
+            request,
+            query_plan.payload,
+            facts,
+            context,
+            execution["tool_results"],
+        )
+        answer_prompt_chars = len(answer_system_prompt) + len(answer_user_prompt)
+        answer_started_at = perf_counter()
+        if progress_callback:
+            progress_callback("answering", "正在基于动态交集和评分事实生成回答")
+        try:
+            if _template_answer_forced():
+                content = fallback
+                source = "template_general_answer"
+            elif answer_delta_callback:
+                sanitizer = AgentAnswerStreamSanitizer(answer_delta_callback)
+                answer_result = active_provider.stream_generate(
+                    answer_system_prompt,
+                    answer_user_prompt,
+                    sanitizer.feed,
+                )
+                sanitizer.flush()
+                content = answer_result.content
+                source = "llm_tool_answer"
+            else:
+                answer_result = active_provider.generate(
+                    answer_system_prompt,
+                    answer_user_prompt,
+                )
+                content = answer_result.content
+                source = "llm_tool_answer"
+            answer = _ensure_safety_boundary(content)
+            if (
+                contains_prompt_leak(content)
+                or _contains_forbidden_terms(answer)
+                or not _contains_exact_hot_stock_event_intersection(answer, facts)
+                or (content.strip() == UNANSWERABLE_TEXT and fallback != UNANSWERABLE_TEXT)
+            ):
+                answer = _ensure_safety_boundary(fallback)
+                source = "template_general_answer"
+                warning = "Complex answer validation failed; deterministic rendering used."
+            else:
+                warning = ""
+        except Exception as error:  # noqa: BLE001
+            answer = _ensure_safety_boundary(fallback)
+            source = "template_general_answer"
+            warning = f"LLM unavailable during Complex answer; template used: {error}"
+        warnings = [_safety_warning(), *_tool_outcome_warnings(execution["tool_results"])]
+        if warning:
+            warnings.append(warning)
+        return {
+            "answer": answer,
+            "source": source,
+            "warnings": list(dict.fromkeys(warnings)),
+            "answer_prompt_chars": answer_prompt_chars,
+            "answer_duration_ms": (
+                answer_result.duration_ms
+                if answer_result and answer_result.duration_ms
+                else round((perf_counter() - answer_started_at) * 1000)
+            ),
+        }
+
+    tools_started_at = perf_counter()
+    graph_result = run_hot_limit_up_rating_graph(
+        request=request,
+        tools=tools,
+        limit_up_arguments=_limit_up_query_arguments_from_message(request),
+        capabilities=capabilities,
+        context_symbol=context.symbol,
+        answer_builder=build_answer,
+    )
+    tool_duration_ms = round((perf_counter() - tools_started_at) * 1000) - int(
+        graph_result.answer_meta.get("answer_duration_ms") or 0
+    )
+    plan_trace = _llm_plan_trace(
+        query_plan.payload,
+        query_plan.result.model,
+        query_plan.result.provider,
+        query_plan.duration_ms,
+        query_plan.prompt_chars,
+        query_plan.result.completion_chars,
+    )
+    graph_plan_trace = AgentToolTrace(
+        name="complex_graph_plan",
+        input={
+            "route": "complex",
+            "plan_steps": graph_result.plan_steps,
+            "replan_count": 0,
+        },
+        output={
+            "completion_status": graph_result.completion_status,
+            "failed_steps": graph_result.failed_steps,
+        },
+        summary="LangGraph Phase 1 dependency plan executed without replan.",
+        status="error" if graph_result.failed_steps else "success",
+    )
+    source = str(graph_result.answer_meta.get("source") or "template_general_answer")
+    warnings = list(graph_result.answer_meta.get("warnings") or [])
+    tool_results = [
+        plan_trace,
+        graph_plan_trace,
+        *graph_result.execution["tool_results"],
+        *graph_result.graph_traces,
+    ]
+    response = AgentChatResponse(
+        session_id=request.session_id,
+        intent="hot_limit_up_rating_intersection",
+        answer=graph_result.final_answer,
+        tool_calls=[
+            "llm_tool_planner",
+            *graph_result.execution["tool_call_names"],
+            source,
+        ],
+        tool_results=tool_results,
+        references=graph_result.execution["references"],
+        warnings=warnings,
+        performance=AgentChatPerformance(
+            planner_duration_ms=query_plan.duration_ms or 0,
+            tool_duration_ms=max(0, tool_duration_ms),
+            answer_duration_ms=int(graph_result.answer_meta.get("answer_duration_ms") or 0),
+            total_duration_ms=round((perf_counter() - started_at) * 1000),
+            planner_prompt_chars=query_plan.prompt_chars,
+            answer_prompt_chars=int(graph_result.answer_meta.get("answer_prompt_chars") or 0),
+        ),
+        generated_by=CHAT_AGENT_VERSION,
+    )
+    response.tool_policy = build_agent_tool_policy_audit(
+        tool_calls=response.tool_calls,
+        tool_results=tool_results,
+        warnings=warnings,
+    )
+    return response
 
 
 def _answer_with_llm_tool_agent(

@@ -384,7 +384,13 @@ TOOL_SCHEMAS = [
                 "trade_date": {
                     "type": ["string", "null"],
                     "description": "YYYY-MM-DD; omit or null for latest local trade date.",
-                }
+                },
+                "symbols": {
+                    "type": ["array", "null"],
+                    "items": {"type": "string", "pattern": "^[0-9]{6}$"},
+                    "maxItems": 20,
+                    "description": "Optional dynamic stock set produced by a validated prior step.",
+                },
             },
             "required": [],
         },
@@ -1579,7 +1585,11 @@ class AgentToolRegistry:
             trace_output=trace_output,
         )
 
-    def first_board_ratings(self, trade_date: date | None = None) -> ToolResult:
+    def first_board_ratings(
+        self,
+        trade_date: date | None = None,
+        symbols: list[str] | None = None,
+    ) -> ToolResult:
         """Return explainable first-board ratings."""
 
         # Prefer the published snapshot so a historical question sees the rating
@@ -1604,6 +1614,18 @@ class AgentToolRegistry:
                 update={
                     "snapshot_source": "calculated",
                     "data_as_of": target_date,
+                }
+            )
+        requested_symbols = list(dict.fromkeys(symbols or []))[:20]
+        if requested_symbols:
+            allowed_symbols = set(requested_symbols)
+            ratings = ratings.model_copy(
+                update={
+                    "candidates": [
+                        item
+                        for item in ratings.candidates
+                        if item.facts.symbol in allowed_symbols
+                    ]
                 }
             )
         top = ratings.candidates[0] if ratings.candidates else None
@@ -1649,7 +1671,10 @@ class AgentToolRegistry:
                 trace_output["recommendation_draft"] = recommendation_draft
         return ToolResult(
             name="first_board_ratings",
-            input={"trade_date": trade_date.isoformat() if trade_date else None},
+            input={
+                "trade_date": trade_date.isoformat() if trade_date else None,
+                "symbols": requested_symbols or None,
+            },
             output=ratings,
             summary=(
                 f"{ratings.trade_date.isoformat()} 首板评级入池{len(ratings.candidates)}只，"

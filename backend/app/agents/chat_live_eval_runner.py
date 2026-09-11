@@ -579,8 +579,18 @@ def _normalize_frozen_payload(
             {**item, "name": item.get("entity"), "rank": item.get("value")}
             for item in payload["stocks"]
         ]
+        requested_count = int(arguments.get("limit") or len(payload["items"]))
         payload.update(
-            {"source": LIVE_TOOL_WORLD_ID, "captured_at": f"{as_of}T15:10:00+08:00", "data_fresh": True}
+            {
+                "source": LIVE_TOOL_WORLD_ID,
+                "source_label": "冻结热股",
+                "captured_at": f"{as_of}T15:10:00+08:00",
+                "captured_at_beijing": f"{as_of}T15:10:00+08:00",
+                "data_fresh": True,
+                "requested_count": requested_count,
+                "count": len(payload["items"]),
+                "complete": len(payload["items"]) >= requested_count,
+            }
         )
     elif tool_name == "stock_news" and "by_symbol" in payload:
         requested_symbol = str(arguments.get("symbol") or "300750")
@@ -624,6 +634,15 @@ def _normalize_frozen_payload(
             for index, item in enumerate(payload["items"], start=1)
         ]
     elif tool_name == "first_board_ratings" and "ratings" in payload:
+        requested_symbols = {
+            str(item) for item in arguments.get("symbols", [])
+        } if isinstance(arguments.get("symbols"), list) else set()
+        if requested_symbols:
+            payload["ratings"] = [
+                item
+                for item in payload["ratings"]
+                if str(item.get("symbol")) in requested_symbols
+            ]
         payload["top_candidates"] = [
             {
                 **item,

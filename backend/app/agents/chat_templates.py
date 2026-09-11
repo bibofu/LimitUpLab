@@ -147,6 +147,45 @@ def _template_answer_from_tool_facts(
         lines.append("不构成买卖建议。")
         return "\n".join(lines)
 
+    if (
+        "hot_stock_limit_up_intersection" in facts
+        and "first_board_ratings" in facts
+    ):
+        intersection = facts["hot_stock_limit_up_intersection"]
+        ratings = facts["first_board_ratings"]
+        candidates = ratings.get("top_candidates", []) if isinstance(ratings, dict) else []
+        ratings_by_symbol = {
+            str(item.get("symbol")): item
+            for item in candidates
+            if isinstance(item, dict) and item.get("symbol")
+        }
+        intersection_items = (
+            intersection.get("items", []) if isinstance(intersection, dict) else []
+        )
+        lines = [
+            f"{intersection.get('trade_date')} 热股 Top{intersection.get('requested_count')} "
+            f"与{intersection.get('event_label') or '涨停股'}的交集共 "
+            f"{intersection.get('matched_count', 0)} 只；仅对交集股票查询首板评分："
+        ]
+        if intersection_items:
+            for entity in intersection_items:
+                item = ratings_by_symbol.get(str(entity.get("symbol")))
+                if item is None:
+                    lines.append(
+                        f"- {entity.get('name')}（{entity.get('symbol')}）："
+                        "不在当前首板评级候选池，暂无评分。"
+                    )
+                    continue
+                score = item.get("score", item.get("total_score", item.get("value")))
+                lines.append(
+                    f"- {item.get('name') or item.get('entity')}（{item.get('symbol')}）："
+                    f"评分 {score}。"
+                )
+        else:
+            lines.append("交集为空或交集股票不在首板评级候选池中。")
+        lines.append(TEXT["safety"])
+        return "\n".join(lines)
+
     if "hot_stock_limit_up_intersection" in facts:
         payload = facts["hot_stock_limit_up_intersection"]
         items = payload.get("items", []) if isinstance(payload, dict) else []

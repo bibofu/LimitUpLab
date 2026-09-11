@@ -36,6 +36,7 @@ EXPECTED_CATEGORY_COUNTS = {
 INTERNAL_TRACES = {
     "agent_plan", "query_understanding", "llm_tool_planner",
     "llm_tool_answer", "template_general_answer", "tool_policy",
+    "routing_decision", "complex_graph_plan", "complex_graph_step",
 }
 REFUSAL_MARKERS = ("不能", "无法", "不提供", "不会", "不支持")
 CLARIFY_MARKERS = ("请明确", "请补充", "哪只", "哪个", "具体指")

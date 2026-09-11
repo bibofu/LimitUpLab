@@ -92,7 +92,7 @@ def _looks_like_hot_stock_event_intersection_question(message: str) -> bool:
     compact = re.sub(r"\s+", "", message).lower()
     has_hot_stock_scope = any(
         term in compact
-        for term in ("热股榜", "热股排行", "热门股", "人气榜", "人气排名")
+        for term in ("热股", "热股榜", "热股排行", "热门股", "人气榜", "人气排名")
     )
     has_event_filter = any(
         term in compact
@@ -373,4 +373,3 @@ def _limit_up_items_from_facts(facts: dict[str, Any]) -> list[dict[str, Any]]:
     if isinstance(remote_payload, dict) and isinstance(remote_payload.get("items"), list):
         return [item for item in remote_payload["items"] if isinstance(item, dict)]
     return []
-
