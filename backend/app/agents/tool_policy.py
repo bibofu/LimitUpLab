@@ -121,12 +121,11 @@ class QuestionSignals:
                 and looks_like_finance_news_question(message)
             )
         )
+        # Explicit evidence requests remain authoritative even when the planner
+        # selected a broader convenience capability such as stock_activity.
         stock_news = (
             "stock_news" in capability_set
-            or (
-                use_lexical_fallback
-                and looks_like_stock_news_question(message)
-            )
+            or looks_like_stock_news_question(message)
         )
         stock_activity = (
             "stock_activity" in capability_set
@@ -241,8 +240,8 @@ class QuestionSignals:
                 (
                     "stock_trend" in capability_set
                     or (
-                        use_lexical_fallback
-                        and looks_like_stock_kline_question(message)
+                        looks_like_stock_kline_question(message)
+                        and (use_lexical_fallback or stock_news)
                     )
                 )
                 and not market_index_trend
@@ -1994,13 +1993,36 @@ def looks_like_stock_news_question(message: str) -> bool:
     news_terms = ("新闻", "资讯", "消息", "公告", "研报", "舆情")
     if not any(term in compact for term in news_terms):
         return False
-    if any(term in compact for term in ("板块", "行业", "宏观", "政策")):
+    # Compound plans can establish a stock set in an earlier clause and request
+    # news conditionally. Keep that stock-scoped even if an earlier clause also
+    # mentioned an industry, or the generic web guard will block the Planner.
+    dynamic_stock_scope = any(
+        term in compact
+        for term in (
+            "这些股票",
+            "交集股票",
+            "候选股票",
+            "候选股",
+            "首板",
+            "龙虎榜",
+            "该股",
+            "股票",
+            "k线",
+        )
+    )
+    if not dynamic_stock_scope and any(
+        term in compact for term in ("板块", "行业", "宏观", "政策")
+    ):
         return False
     explicit_stock_scope = any(
         term in compact
         for term in ("这只股票", "这只票", "该股", "个股", "这家公司", "该公司")
     ) or re.search(r"(?<!\d)\d{6}(?!\d)", compact) is not None
-    return explicit_stock_scope or _has_specific_news_subject(compact, news_terms)
+    return (
+        dynamic_stock_scope
+        or explicit_stock_scope
+        or _has_specific_news_subject(compact, news_terms)
+    )
 
 
 def looks_like_stock_activity_question(message: str) -> bool:

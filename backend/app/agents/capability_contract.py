@@ -137,7 +137,7 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
     ),
     AgentCapability(
         "stock_activity",
-        "综合查询一只明确股票最近发生了什么或有何动态，包括收盘走势、涨停记录、评分补充事实和个股新闻。",
+        "综合查询一只明确股票最近发生了什么或有何动态；仅用于用户未明确指定K线、新闻等分项证据的宽泛近况问题。",
         (
             CapabilityToolRequirement(
                 "stock_activity",
@@ -239,7 +239,7 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
     ),
     AgentCapability(
         "stock_trend",
-        "查询单只股票的 K 线、收益、均线、量价或回撤。",
+        "查询一只或多只明确股票的 K 线、收益、均线、量价或回撤；比较多只股票时仍选择一次该能力，由后端展开实体参数。",
         (CapabilityToolRequirement("stock_kline"),),
     ),
     AgentCapability(

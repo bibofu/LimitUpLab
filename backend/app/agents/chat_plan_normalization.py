@@ -9,11 +9,15 @@ from app.agents.query_contract import (
     looks_like_market_event_query,
 )
 from app.agents.tool_policy import (
+    extract_kline_days as _extract_kline_days,
     extract_promotion_days as _extract_promotion_days,
+    extract_stock_news_days as _extract_stock_news_days,
     extract_trade_date as _extract_trade_date,
     looks_like_broad_sector_ranking_question as _looks_like_broad_sector_ranking_question,
     looks_like_daily_board_promotion_question as _looks_like_daily_board_promotion_question,
     looks_like_first_board_position_question as _looks_like_first_board_position_question,
+    looks_like_stock_kline_question as _looks_like_stock_kline_question,
+    looks_like_stock_news_question as _looks_like_stock_news_question,
 )
 from app.models import AgentChatRequest
 
@@ -132,6 +136,82 @@ def _normalize_broad_sector_plan(
         {"name": "sector_performance", "arguments": {"sector": None}},
     )
     return capabilities, normalized_calls[:6]
+
+
+def _normalize_explicit_stock_evidence_plan(
+    request: AgentChatRequest,
+    raw_capabilities: list[object],
+    tool_calls: list[dict[str, Any]],
+) -> tuple[list[object], list[dict[str, Any]]]:
+    """Preserve explicitly requested K-line and stock-news evidence."""
+
+    asks_kline = _looks_like_stock_kline_question(request.message)
+    asks_news = _looks_like_stock_news_question(request.message)
+    # This normalizer exists to disambiguate stock-scoped news and its optional
+    # K-line companion. A generic "哪些板块股票走势好" must remain the sector
+    # constituent-ranking capability rather than being rewritten as stock_trend.
+    if not asks_news:
+        return raw_capabilities, tool_calls
+
+    capabilities = list(raw_capabilities)
+    capability_names = {
+        item.get("name") if isinstance(item, dict) else item
+        for item in capabilities
+    }
+    if asks_kline and "stock_trend" not in capability_names:
+        capabilities.append("stock_trend")
+    if asks_news and "stock_news" not in capability_names:
+        capabilities.append("stock_news")
+
+    # A broad stock_activity call must not replace granular evidence that the
+    # user explicitly named.
+    if asks_kline and asks_news:
+        capabilities = [
+            item
+            for item in capabilities
+            if (item.get("name") if isinstance(item, dict) else item)
+            != "stock_activity"
+        ]
+        tool_calls = [
+            call for call in tool_calls if call.get("name") != "stock_activity"
+        ]
+    return capabilities, tool_calls
+
+
+def _normalize_explicit_stock_tool_calls(
+    request: AgentChatRequest,
+    tool_calls: list[dict[str, Any]],
+) -> list[dict[str, Any]]:
+    """Bind explicit stock symbols/windows and fan out multi-stock calls."""
+
+    symbols = list(dict.fromkeys(re.findall(r"(?<!\d)\d{6}(?!\d)", request.message)))
+    if not symbols:
+        return tool_calls
+
+    normalized: list[dict[str, Any]] = []
+    for call in tool_calls:
+        name = call.get("name")
+        if name not in {"stock_kline", "stock_news"}:
+            normalized.append(call)
+            continue
+        base_arguments = dict(call.get("arguments") or {})
+        days = (
+            _extract_kline_days(request.message)
+            if name == "stock_kline"
+            else _extract_stock_news_days(request.message)
+        )
+        for symbol in symbols:
+            normalized.append(
+                {
+                    "name": name,
+                    "arguments": {
+                        **base_arguments,
+                        "symbol": symbol,
+                        "days": days,
+                    },
+                }
+            )
+    return normalized[:6]
 
 
 def _normalize_first_board_position_tool_calls(

@@ -151,3 +151,27 @@
 - P0：未发现。
 - P1：最终 36×1 预检通过 22/36，Critical 仅 6/14；8 个 Replan 和 2 个 Stress 全部失败。主要证据是下游工具参数没有绑定上游 Observation、复杂入口未形成有效 capability 集合，以及按实体失败注入因调用缺少实体参数而未触发。修复这些 Agent 行为前不得冻结 36×3 正式基线。
 - P2：冻结 payload 是专用、一致的行为评测世界，不是真实 2026-05-15 行情重建。Judge 尚未启用，sentence-level claim ledger 仍缺失；后续触发条件为 36×1 Critical 和 Replan 明显恢复，再生成新的 36×3 Judge 校准样本。
+
+## 2026-09-11：基础 Agent Planner/Tool Selection 修复审查
+
+### 范围与架构一致性
+
+- 审查真实冻结基线中更早发生的 Planner/Tool-selection 失败，修改 capability 描述与 prompt、plan normalization、Tool Policy signal、事实模板和对应测试；没有修改 Live Golden、冻结工具 fixture、evaluator 或通过门槛。
+- 复合任务中的“新闻”现在先判断股票作用域，避免 V1 已支持的 `stock_news` 被误判为 `web_research` 并在 Planner 前拒绝。显式“K线+新闻”在 Planner 契约、normalization 和 Policy 三层保持相同语义。
+- Capability-first 仍由后端负责编译显式参数。多个六位股票代码按原顺序展开为独立工具调用，窗口由共享提取器生成；执行器既有逐项异常隔离保证单项失败后继续执行。
+- Answer LLM 只有在已有可用工具证据且确定性模板确实可回答时，固定笼统拒答才会被替换。安全拒答、无可用证据和真正越界请求不受影响。
+- Agent 版本升级为 `first-board-chat-policy-v18-explicit-evidence`，Planner contract 升级为 `capability-first-v3`。Bad Case 新增 BC-017 至 BC-020。
+
+### 验证
+
+- 定向回归最终为 108 项测试及 16 个子测试通过；覆盖复合新闻分类、宽泛 activity 纠偏、多股票参数展开、empty 过度拒答、critic 风险/冻结 K线模板及既有板块成分股路由。
+- 完整后端为 696 项测试及 22 个子测试通过，0 失败、0 setup error、0 跳过。首次未限定 `tests` 的运行因仓库中 20 个既有 ACL 目录在收集阶段报 PermissionError，未计为通过；随后以宿主权限和隔离 `--basetemp` 完成有效全量运行。
+- 真实模型、完全冻结工具世界单次验收：`LIVE-MULTI-005`、`LIVE-RECOVERY-002`、`LIVE-RECOVERY-004`、`LIVE-MTURN-003` 均 1/1 通过；无 Provider failure。`LIVE-REPLAN-002` 已从 Planner 前拒绝恢复为 raw capability recall 100%、effective required tool recall 100%，但仍因上游评分结果没有绑定到 `dragon_tiger_list.query` 而失败。
+- 真实 HTTP：临时 Uvicorn 端口 62150 对原始 BC-018 问法返回 HTTP 200；trace 为 `stock_trend + stock_news`、实际执行 `stock_kline + stock_news`，回答包含 10 日 K线和 7 日新闻，运行版本为 v18。验收服务已停止。
+
+### 问题分级与状态
+
+- P0：未发现。
+- P1：复合个股新闻提前拒绝、显式证据折叠、明确多股票参数缺失、empty/风险过度拒答已修复。
+- P1：观察值驱动参数绑定仍未实现。`first_board_ratings → dragon_tiger_list.query`、行业 TopN → 成分股、交集集合 → 逐股 K线等动态依赖需要 observation-driven execution 或有界 Replan；本次不以预执行全部可选工具或放宽 Golden 掩盖。下一阶段应先实现结构化引用/集合展开，再重跑 8 个 Replan 与 2 个 Stress。
+- P2：真实模型结果目前是修复用例的单次验收，不代表新的 36×3 稳定性基线；完成动态参数绑定后再执行全量基线与 Judge 校准。

@@ -482,3 +482,72 @@ Query Contract 测试，并重新生成独立审计后的 Dev Golden。
 Query Understanding trace 却没有该字段，生成式 Golden 又会静默接受缺失。
 Query Contract 现对明确的“板块/行业/题材/概念/成分股”结构做保守抽取，拒绝“那个
 板块”等歧义词；dataset consistency test 从问题文本独立核对 sector，避免解析器自证。
+
+---
+
+## BC-017：复合个股新闻任务在 Planner 前被误判为公网检索
+
+### 现象
+
+“找出评分最高的3只首板；有龙虎榜的分析机构行为，没有龙虎榜的查K线和新闻”等任务，
+明明只要求 V1 已支持的结构化个股新闻，却被通用“新闻”关键词标成 `web_research`，在
+V1 能力门禁处直接拒绝，Planner 和工具均未运行。
+
+### 修复与回归
+
+个股新闻识别现在支持“这些股票、交集股票、候选股、首板、龙虎榜、K线”等跨分句股票
+作用域；即使前文出现行业，也不会把后续个股新闻分支升级为公网检索。四条原始 Live
+复合问法均验证 `stock_news=true`、`web_search=false`；真实 `LIVE-REPLAN-002` 已能进入
+Planner 并选齐 capability，剩余失败明确定位为观察值参数绑定，而非提前拒绝。
+
+---
+
+## BC-018：显式“K线+新闻”被宽泛 stock_activity 吞掉
+
+### 现象
+
+> 结合宁德时代最近10日K线和7天新闻，说明它近期发生了什么。
+
+真实 Planner 曾只选择 `stock_activity`，导致 Live Eval 缺失 `stock_trend`、`stock_news`，
+也无法分别审计两个证据源。
+
+### 修复与回归
+
+Planner 契约明确规定：用户显式点名 K线和新闻时必须选择两个 granular capability，不能
+折叠为 `stock_activity`；后端 normalization 和 Policy 保留同一确定性兜底。真实模型冻结
+验收由 0/1 变为 1/1，raw capability recall 和 effective tool recall 均为 100%；真实 HTTP
+返回 `stock_trend + stock_news`、`stock_kline + stock_news`，并正确执行两个工具。
+
+---
+
+## BC-019：双股票 K线比较缺少实体参数且首个失败后未保留另一只结果
+
+### 现象
+
+> 比较300750和600000最近20日K线，即使一只失败也继续分析另一只。
+
+Capability-first Planner 不生成参数，原执行计划只有一次空参数 `stock_kline`，因此按
+`symbol=300750` 配置的失败注入无法可靠触发，也无法证明 600000 仍被执行和回答。
+
+### 修复与回归
+
+后端从用户明确写出的六位代码编译工具参数，将同一种个股工具按去重后的实体顺序展开，
+并统一写入 K线/新闻窗口。执行器保持逐项容错：300750 返回 error 后，600000 继续返回
+ok，最终答案包含 600000 且 warnings 保留首项失败。替身集成测试和真实模型
+`LIVE-RECOVERY-004` 均通过。
+
+---
+
+## BC-020：empty 或风险事实已存在时 Answer LLM 仍笼统拒答
+
+### 现象
+
+龙虎榜 empty 已是有效业务结果，但回答可能输出“抱歉，该问题无法回答”；多轮评分后追问
+“主要风险”时，冻结 `first_board_critic` 明明含 risks，模板却不认识该事实形状。
+
+### 修复与回归
+
+当工具存在 ok/empty/partial 证据且确定性模板可回答时，空文本或固定笼统拒答会被事实模板
+替换；模板新增兼容生产与冻结契约的 critic 风险渲染，并能联合渲染 K线与新闻。
+`LIVE-RECOVERY-002`、`LIVE-MTURN-003` 的真实单次验收均由失败变为通过；新增测试保证
+empty 明确写“没有”、风险回答包含结构化风险项。

@@ -43,6 +43,8 @@ from app.agents.chat_answer_validation import (
 from app.agents.chat_plan_normalization import (
     _normalize_broad_sector_plan,
     _normalize_daily_board_promotion_tool_calls,
+    _normalize_explicit_stock_evidence_plan,
+    _normalize_explicit_stock_tool_calls,
     _normalize_first_board_position_tool_calls,
     _normalize_market_event_plan,
     _normalize_tool_calls,
@@ -144,7 +146,7 @@ from app.services.prompt_security import (
 from app.services.session_memory import memory_prompt_payload
 
 
-CHAT_AGENT_VERSION = "first-board-chat-policy-v17-capability-first-planner"
+CHAT_AGENT_VERSION = "first-board-chat-policy-v18-explicit-evidence"
 _FORCE_TEMPLATE_ANSWER_OVERRIDE: ContextVar[bool | None] = ContextVar(
     "force_template_answer_override",
     default=None,
@@ -1053,6 +1055,19 @@ def _answer_with_llm_tool_agent(
                     _safety_warning(),
                     "LLM output matched an internal-prompt signature; template fallback used.",
                 ]
+            elif (
+                not final_result.content.strip()
+                or (
+                    final_result.content.strip() == UNANSWERABLE_TEXT
+                    and fallback.strip() != UNANSWERABLE_TEXT
+                )
+            ):
+                answer = _ensure_safety_boundary(fallback)
+                source = "template_general_answer"
+                warnings = [
+                    _safety_warning(),
+                    "LLM declined despite usable tool evidence; template fallback used.",
+                ]
             else:
                 answer = _ensure_safety_boundary(final_result.content)
                 source = "llm_tool_answer"
@@ -1360,6 +1375,11 @@ def _generate_llm_query_plan(
         raw_capabilities,
         tool_calls,
     )
+    raw_capabilities, tool_calls = _normalize_explicit_stock_evidence_plan(
+        request,
+        raw_capabilities,
+        tool_calls,
+    )
     if _looks_like_broad_sector_ranking_question(request.message):
         payload["intent_label"] = "sector_performance"
     if (
@@ -1383,6 +1403,7 @@ def _generate_llm_query_plan(
         tool_calls,
         allowed_tool_names=tools.enabled_tool_names,
     )
+    tool_calls = _normalize_explicit_stock_tool_calls(request, tool_calls)
     # The standalone planner API is also used by live eval. Compile the same
     # deterministic limit-up Query Contract that the production execution path
     # applies, so capability-first plans retain date/board/status/list semantics.

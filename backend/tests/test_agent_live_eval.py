@@ -446,3 +446,60 @@ class _FrozenWorldProvider(LLMProvider):
             model="frozen-test-answer",
             provider="test",
         )
+
+
+class _RefusingEvidenceProvider(LLMProvider):
+    """Return a valid capability plan but decline the grounded answer."""
+
+    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
+        if "first job is to decide which tools are needed" in system_prompt:
+            capability = (
+                "dragon_tiger"
+                if "龙虎榜" in user_prompt
+                else "stock_trend"
+            )
+            return LLMResult(
+                content=json.dumps(
+                    {
+                        "intent_label": capability,
+                        "safety": "normal",
+                        "capabilities": [capability],
+                        "tool_calls": [],
+                    }
+                ),
+                model="refusing-test-planner",
+                provider="test",
+            )
+        return LLMResult(
+            content="抱歉，该问题无法回答",
+            model="refusing-test-answer",
+            provider="test",
+        )
+
+
+def test_grounded_empty_result_replaces_llm_over_refusal() -> None:
+    report = run_live_eval_suite(
+        [_case("LIVE-RECOVERY-002")],
+        llm_provider=_RefusingEvidenceProvider(),
+        trials=1,
+    )
+
+    result = report["results"][0]
+    assert result["passed"]
+    assert "没有" in result["answer"]
+    assert "抱歉，该问题无法回答" not in result["answer"]
+
+
+def test_multi_stock_failure_continues_and_answers_from_success() -> None:
+    report = run_live_eval_suite(
+        [_case("LIVE-RECOVERY-004")],
+        llm_provider=_RefusingEvidenceProvider(),
+        trials=1,
+    )
+
+    result = report["results"][0]
+    stock_traces = [
+        item for item in result["tool_trace"] if item["name"] == "stock_kline"
+    ]
+    assert [item["result"]["status"] for item in stock_traces] == ["error", "ok"]
+    assert "600000" in result["answer"]

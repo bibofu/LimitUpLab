@@ -11,6 +11,7 @@ from app.agents.tool_policy import (
     extract_market_segment,
     extract_sector_query,
     looks_like_broad_sector_ranking_question,
+    looks_like_stock_news_question,
 )
 from app.agents.tools import AgentToolRegistry, ToolResult
 from app.models import (
@@ -120,6 +121,29 @@ class AgentToolPolicyTest(unittest.TestCase):
         self.assertTrue(signals.first_board_facts)
         self.assertTrue(signals.rating_explanation)
         self.assertFalse(signals.rating_backtest)
+
+    def test_compound_stock_news_is_not_misrouted_to_public_web(self) -> None:
+        questions = (
+            "找出评分最高的3只首板；有龙虎榜的分析机构行为，没有龙虎榜的查K线和新闻。",
+            "查宁德时代最近新闻；如果没有结果，就结合最近10日K线和公司近期动态回答。",
+            "先找今天表现最强的两个行业，再检查这些股票的龙虎榜，没有的结合K线和新闻。",
+            "取热股Top10和涨停池交集，如果龙虎榜为空就查新闻。",
+        )
+        for question in questions:
+            with self.subTest(question=question):
+                self.assertTrue(looks_like_stock_news_question(question))
+                signals = QuestionSignals.from_message(question)
+                self.assertTrue(signals.stock_news)
+                self.assertFalse(signals.web_search)
+
+    def test_explicit_kline_and_news_survive_broad_activity_capability(self) -> None:
+        signals = QuestionSignals.from_message(
+            "结合宁德时代最近10日K线和7天新闻，说明它近期发生了什么。",
+            ("stock_activity",),
+        )
+
+        self.assertTrue(signals.stock_kline)
+        self.assertTrue(signals.stock_news)
 
     # Regression scenario: scoring policy question has one policy scope.
     def test_scoring_policy_question_has_one_policy_scope(self) -> None:

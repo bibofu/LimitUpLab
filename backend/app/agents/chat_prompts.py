@@ -29,7 +29,7 @@ PLANNER_FUNCTION_NAME = "submit_agent_plan"
 PLANNER_FUNCTION_DESCRIPTION = (
     "Submit the normalized LimitUpLab capability plan."
 )
-PLANNER_CONTRACT_VERSION = "capability-first-v2"
+PLANNER_CONTRACT_VERSION = "capability-first-v3"
 PLANNER_SYSTEM_PROMPT_CHAR_BUDGET = 10_000
 PLANNER_FIXED_INPUT_CHAR_BUDGET = 12_000
 
@@ -124,7 +124,11 @@ def _tool_planner_system_prompt(
         "Use sector_performance for whole-market sector returns/rankings, sector_stock_ranking "
         "for constituent trend comparisons, and market_environment only for a multi-dimensional "
         "market overview. Use finance_news for unqualified financial news, stock_news for a named "
-        "stock's news, and stock_activity for a named stock's broad recent update. "
+        "stock's news, and stock_activity only for a named stock's broad recent update when "
+        "the user did not explicitly request component evidence. If the user explicitly asks "
+        "for both K-line/trend and news, select both stock_trend and stock_news; never collapse "
+        "that compound request into stock_activity. For comparisons of multiple explicit stock "
+        "symbols, select the relevant capability once; the backend fans it out per symbol. "
         "Historical similar-case retrieval is unavailable. "
         "Do not provide direct trading instructions, position sizing, target prices, or return promises. "
         "If asked for those, set safety=refuse_trade_instruction. "

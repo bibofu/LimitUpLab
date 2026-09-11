@@ -13,6 +13,8 @@ from app.agents.chat import (
 )
 from app.agents.chat_plan_normalization import (
     _normalize_daily_board_promotion_tool_calls,
+    _normalize_explicit_stock_evidence_plan,
+    _normalize_explicit_stock_tool_calls,
 )
 from app.agents.tools import AgentToolRegistry
 from app.models import (
@@ -405,6 +407,89 @@ class AgentChatTest(unittest.TestCase):
             five_day_return_pct=0,
             continued_next_day=False,
         )
+
+    def test_explicit_kline_and_news_replace_broad_activity_plan(self) -> None:
+        request = AgentChatRequest(
+            session_id="explicit-evidence",
+            message="结合宁德时代最近10日K线和7天新闻，说明它近期发生了什么。",
+        )
+
+        capabilities, calls = _normalize_explicit_stock_evidence_plan(
+            request,
+            ["stock_activity"],
+            [{"name": "stock_activity", "arguments": {"symbol": "300750"}}],
+        )
+
+        self.assertEqual(capabilities, ["stock_trend", "stock_news"])
+        self.assertEqual(calls, [])
+
+    def test_explicit_multi_stock_kline_fans_out_with_window(self) -> None:
+        request = AgentChatRequest(
+            session_id="multi-stock",
+            message="比较300750和600000最近20日K线，即使一只失败也继续分析另一只。",
+        )
+
+        calls = _normalize_explicit_stock_tool_calls(
+            request,
+            [{"name": "stock_kline", "arguments": {}}],
+        )
+
+        self.assertEqual(
+            calls,
+            [
+                {"name": "stock_kline", "arguments": {"symbol": "300750", "days": 20}},
+                {"name": "stock_kline", "arguments": {"symbol": "600000", "days": 20}},
+            ],
+        )
+
+    def test_critic_template_explicitly_renders_risk(self) -> None:
+        answer = _template_answer_from_tool_facts(
+            request=AgentChatRequest(
+                session_id="risk-template",
+                message="再说说它的主要风险。",
+            ),
+            intent="risk_summary",
+            facts={
+                "first_board_critic": {
+                    "as_of_date": "2026-05-15",
+                    "symbol": "301489",
+                    "critic": {
+                        "entity": "思泉新材",
+                        "symbol": "301489",
+                        "supports": ["评分领先"],
+                        "risks": ["波动较高"],
+                    },
+                }
+            },
+        )
+
+        self.assertIn("思泉新材", answer)
+        self.assertIn("主要风险：波动较高", answer)
+
+    def test_frozen_kline_template_uses_stock_window_shape(self) -> None:
+        answer = _template_answer_from_tool_facts(
+            request=AgentChatRequest(
+                session_id="frozen-kline-template",
+                message="比较300750和600000最近20日K线。",
+            ),
+            intent="stock_trend",
+            facts={
+                "stock_kline": {
+                    "as_of_date": "2026-05-15",
+                    "symbol": "600000",
+                    "stock": {
+                        "entity": "浦发银行",
+                        "symbol": "600000",
+                        "window_days": 20,
+                        "change_pct": 0.8,
+                        "max_drawdown_pct": -2.4,
+                    },
+                }
+            },
+        )
+
+        self.assertIn("浦发银行（600000）", answer)
+        self.assertIn("20 个交易日上涨 +0.80%", answer)
 
     # Regression scenario: greeting does not route to market tools.
     def test_greeting_does_not_route_to_market_tools(self) -> None:

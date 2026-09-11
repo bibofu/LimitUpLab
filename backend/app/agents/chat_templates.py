@@ -72,6 +72,46 @@ def _template_answer_from_tool_facts(
     if _QuestionSignals.from_message(request.message).market_environment:
         return _template_market_environment_answer(facts)
 
+    if "stock_news" in facts and "stock_kline" in facts:
+        news_answer = _template_answer_from_tool_facts(
+            request=request,
+            intent=intent,
+            facts={"stock_news": facts["stock_news"]},
+        )
+        kline_answer = _template_answer_from_tool_facts(
+            request=request,
+            intent=intent,
+            facts={"stock_kline": facts["stock_kline"]},
+        )
+        news_answer = news_answer.removesuffix(TEXT["safety"]).rstrip()
+        return f"{news_answer}\n{kline_answer}"
+
+    if "first_board_critic" in facts:
+        payload = facts["first_board_critic"]
+        critic = payload.get("critic") or payload
+        symbol = critic.get("symbol") or payload.get("symbol")
+        name = critic.get("entity") or critic.get("name") or symbol or "该股票"
+        supports = critic.get("supports") or critic.get("support_evidence") or []
+        risks = (
+            critic.get("risks")
+            or critic.get("counter_evidence")
+            or critic.get("critic_warnings")
+            or []
+        )
+        lines = [f"{name}（{symbol}）的评级复核："]
+        if supports:
+            lines.append("- 支持依据：" + "；".join(str(item) for item in supports))
+        if risks:
+            lines.append("- 主要风险：" + "；".join(str(item) for item in risks))
+        else:
+            lines.append("- 主要风险：当前结构化复核结果未提供明确风险项。")
+        if payload.get("as_of_date") or payload.get("trade_date"):
+            lines.append(
+                f"- 数据日期：{payload.get('as_of_date') or payload.get('trade_date')}。"
+            )
+        lines.append(TEXT["safety"])
+        return "\n".join(lines)
+
     if "post_limit_screen" in facts:
         return _template_post_limit_screen(facts["post_limit_screen"])
     if "post_limit_path" in facts:
@@ -724,15 +764,32 @@ def _template_answer_from_tool_facts(
 
     if "stock_kline" in facts:
         kline = facts["stock_kline"]
+        stock = kline.get("stock") or kline
+        symbol = stock.get("symbol") or kline.get("symbol")
+        requested_days = (
+            kline.get("requested_days")
+            or stock.get("window_days")
+            or kline.get("window_days")
+        )
         trend_label = {
             "rising": "偏强上行",
             "falling": "偏弱下行",
             "oscillating": "震荡",
             "insufficient": "样本不足",
         }.get(kline.get("trend"), str(kline.get("trend")))
+        if stock.get("change_pct") is not None and kline.get("trend") is None:
+            change = float(stock["change_pct"])
+            trend_label = "上涨" if change > 0 else "下跌" if change < 0 else "持平"
+            return (
+                f"{stock.get('entity') or kline.get('name') or symbol}（{symbol}）最近 "
+                f"{requested_days} 个交易日{trend_label} {change:+.2f}%，"
+                f"区间最大回撤 {stock.get('max_drawdown_pct')}%，"
+                f"数据截至 {kline.get('data_as_of') or kline.get('as_of_date')}。\n"
+                f"{TEXT['safety']}"
+            )
         freshness = "已到指定交易日" if kline.get("data_fresh") else "数据尚未到指定交易日"
         return (
-            f"{kline.get('symbol')} 最近 {kline.get('requested_days')} 个交易日走势为{trend_label}，"
+            f"{symbol} 最近 {requested_days} 个交易日走势为{trend_label}，"
             f"截至 {kline.get('data_as_of')} 收盘 {kline.get('latest_close')}。"
             f"5日涨跌 {kline.get('return_5d_pct')}%，10日涨跌 {kline.get('return_10d_pct')}%，"
             f"20日涨跌 {kline.get('return_20d_pct')}%，区间最大回撤 {kline.get('max_drawdown_pct')}%。"
