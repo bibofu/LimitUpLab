@@ -39,7 +39,7 @@ def test_live_dataset_has_exact_high_value_distribution() -> None:
 
 def test_live_dataset_uses_fully_frozen_tool_environment() -> None:
     dataset = load_live_eval_dataset(DATASET_PATH)
-    assert dataset.environment_id == "chat-live-world-v2-fully-frozen-v1"
+    assert dataset.environment_id == "chat-live-world-v2-fully-frozen-v2"
     registry = FrozenLiveToolRegistry([])
     mentioned = {
         tool
@@ -61,6 +61,32 @@ def test_live_tool_world_validation_rejects_cross_dated_payload() -> None:
 
     with pytest.raises(ValueError, match="dragon_tiger_list must declare as_of_date"):
         validate_live_tool_world(dataset, fixture)
+
+
+def test_frozen_live_world_normalizes_production_answer_contracts() -> None:
+    registry = FrozenLiveToolRegistry([])
+    request = AgentChatRequest(
+        session_id="frozen-contract",
+        message="检查冻结事实契约",
+        trade_date=date(2026, 5, 15),
+    )
+
+    index_trace = registry.execute_frozen_calls(
+        [{"name": "market_index_trend", "arguments": {"days": 5}}],
+        request=request,
+    )["tool_results"][0]
+    news_trace = registry.execute_frozen_calls(
+        [{"name": "stock_news", "arguments": {"symbol": "300750", "days": 7}}],
+        request=request,
+    )["tool_results"][0]
+
+    index = index_trace.output["indices"][0]
+    assert index_trace.output["requested_end_date"] == "2026-05-15"
+    assert {"start_close", "end_close", "positive_days", "max_drawdown_pct"} <= set(index)
+    assert news_trace.output["name"] == "宁德时代"
+    assert news_trace.output["window_days"] == 7
+    assert news_trace.output["cache_status"] == "frozen_fixture"
+    assert news_trace.output["items"][0]["published_at"].startswith("2026-05-15")
 
 
 def test_frozen_registry_executes_fixture_without_production_delegate() -> None:
@@ -133,7 +159,7 @@ def test_live_suite_runs_real_orchestration_against_only_frozen_facts() -> None:
         trials=1,
     )
 
-    assert report["runner_version"] == "agent-live-eval-runner-v3"
+    assert report["runner_version"] == "agent-live-eval-runner-v4"
     assert report["tool_environment"] == {
         "fixture_snapshot_id": "chat-live-world-v2",
         "fully_frozen": True,

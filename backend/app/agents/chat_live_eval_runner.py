@@ -41,7 +41,7 @@ LIVE_TOOL_WORLD_PATH = (
 LIVE_TOOL_WORLD_ID = "chat-live-world-v2"
 LIVE_TOOL_WORLD_SCHEMA_VERSION = "chat-live-tool-world-v2"
 DEFAULT_OUTPUT_ROOT = Path(__file__).resolve().parents[3] / "output" / "agent-live-eval"
-RUNNER_VERSION = "agent-live-eval-runner-v3"
+RUNNER_VERSION = "agent-live-eval-runner-v4"
 JUDGE_PROMPT_VERSION = "agent-live-eval-judge-v2"
 
 
@@ -520,13 +520,36 @@ def _normalize_frozen_payload(
 
     as_of = payload.get("as_of_date")
     if tool_name == "market_index_trend" and "indices" in payload:
+        symbols = {
+            "上证指数": "000001.SH",
+            "深证成指": "399001.SZ",
+            "创业板指": "399006.SZ",
+        }
         payload["data_as_of"] = as_of
         payload["requested_days"] = int(arguments.get("days") or 5)
+        payload["requested_end_date"] = as_of
+        payload["data_fresh"] = True
         payload["indices"] = [
             {
                 **item,
                 "name": item.get("entity"),
+                "symbol": symbols.get(str(item.get("entity")), "fixture-index"),
+                "start_date": "2026-05-11",
+                "end_date": as_of,
+                "start_close": 100.0,
+                "end_close": round(100.0 + float(item.get("value") or 0), 2),
                 "return_pct": item.get("value"),
+                "max_drawdown_pct": -0.35,
+                "positive_days": 3,
+                "negative_days": 2,
+                "points": [
+                    {"trade_date": "2026-05-11", "close": 100.0, "change_pct": None},
+                    {
+                        "trade_date": as_of,
+                        "close": round(100.0 + float(item.get("value") or 0), 2),
+                        "change_pct": item.get("value"),
+                    },
+                ],
                 "source": LIVE_TOOL_WORLD_ID,
             }
             for item in payload["indices"]
@@ -561,13 +584,33 @@ def _normalize_frozen_payload(
         )
     elif tool_name == "stock_news" and "by_symbol" in payload:
         requested_symbol = str(arguments.get("symbol") or "300750")
+        fetched_at = f"{as_of}T18:00:00+08:00"
         payload["symbol"] = requested_symbol
+        payload["name"] = next(
+            (
+                str(item.get("entity"))
+                for item in payload["by_symbol"].get(requested_symbol, [])
+                if item.get("entity")
+            ),
+            requested_symbol,
+        )
+        payload["fetched_at"] = fetched_at
+        payload["window_days"] = int(arguments.get("days") or 7)
+        payload["cache_status"] = "frozen_fixture"
+        payload["sources"] = [LIVE_TOOL_WORLD_ID]
+        payload["data_missing"] = []
         payload["items"] = payload["by_symbol"].get(requested_symbol, [])
         payload["items"] = [
             {
                 **item,
+                "name": item.get("entity"),
                 "title": item.get("value"),
+                "summary": "冻结评测世界中的公司业务进展事实。",
+                "published_at": f"{item.get('date') or as_of}T16:00:00+08:00",
                 "url": f"fixture://{tool_name}/{index}",
+                "item_type": "announcement_report",
+                "relevance_score": 1.0,
+                "fetched_at": fetched_at,
             }
             for index, item in enumerate(payload["items"], start=1)
         ]

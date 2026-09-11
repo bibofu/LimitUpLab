@@ -140,13 +140,14 @@
 ### 范围与结论
 
 - 审查 `chat_live_eval_runner.py`、共享工具 dispatcher、Tool Policy reconcile 扩展点、36-case Live 数据契约与相关测试。生产工具实现、数据库、数据流水线和用户问答语义未修改。
-- Live 环境由 `sample-events-plus-current-registry-v1` 升级为 `chat-live-world-v2-fully-frozen-v1`。默认 runner 不再创建生产 `AgentToolRegistry`；真实 Planner/Answer 保留，初始调用和 Policy repair 统一读取专用 `chat-live-world-v2`。
+- Live 环境由 `sample-events-plus-current-registry-v1` 升级为 `chat-live-world-v2-fully-frozen-v2`。默认 runner 不再创建生产 `AgentToolRegistry`；真实 Planner/Answer 保留，初始调用和 Policy repair 统一读取专用 `chat-live-world-v2`。
 - `chat-live-world-v2` 明确标记为人工策展的行为评测世界，而非真实历史行情重建；加载器会验证 24 个 V1 工具覆盖、统一锚定日期、实体/板块关系、事件汇总与 TopN 题目所需数据量。
 - failure injection 在冻结层按工具和可选参数匹配；未定义或未启用工具只返回可审计 error，不允许 fallback 到 SQLite、DuckDB 或网络 provider。
 - 报告新增冻结声明：fixture snapshot、`fully_frozen`、database/network access。历史部分冻结 baseline 与新环境不可直接比较，必须重新冻结 36×3 基线。
 
 ### 验证与问题分级
 
-- 定向与共享 Agent 回归：107 项测试及 12 个子测试通过。完整后端在宿主隔离目录中为 687 项测试及 18 个子测试通过，0 失败、0 setup error、0 跳过；此前一次沙箱运行有 1 个 `tmp_path` ACL setup error（其余 106 项通过），未计为成功。另有端到端替身验证真实生产编排只接收到 `2026-05-15` fixture facts。
-- P0/P1：未发现未处理问题。冻结扩展点仅在 registry 明确实现协议时启用，生产 registry 沿用原 dispatcher 和 Policy repair 分支。
-- P2：冻结 payload 是专用、一致的行为评测世界，不是真实 2026-05-15 行情重建；完全冻结后的真实供应商 36×3 + Judge 尚未重新执行。后续触发条件为 36×1 预检通过并完成 Judge 新校准。
+- 定向与共享 Agent 回归：108 项测试及 12 个子测试通过。完整后端在宿主隔离目录中为 688 项测试及 18 个子测试通过，0 失败、0 setup error、0 跳过；此前一次沙箱运行有 1 个 `tmp_path` ACL setup error（其余 106 项通过），未计为成功。另有端到端替身验证真实生产编排只接收到 `2026-05-15` fixture facts。
+- P0：未发现。
+- P1：最终 36×1 预检通过 22/36，Critical 仅 6/14；8 个 Replan 和 2 个 Stress 全部失败。主要证据是下游工具参数没有绑定上游 Observation、复杂入口未形成有效 capability 集合，以及按实体失败注入因调用缺少实体参数而未触发。修复这些 Agent 行为前不得冻结 36×3 正式基线。
+- P2：冻结 payload 是专用、一致的行为评测世界，不是真实 2026-05-15 行情重建。Judge 尚未启用，sentence-level claim ledger 仍缺失；后续触发条件为 36×1 Critical 和 Replan 明显恢复，再生成新的 36×3 Judge 校准样本。

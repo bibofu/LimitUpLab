@@ -195,7 +195,7 @@ Judge 未配置，所以 completeness、clarity、relevance、task resolution、
 - 当前没有 Observation→Planner 循环；`replan_count=0` 是事实，不应生成 replan success 指标。
 - Capability-first Planner 的 raw `tool_calls` 为空，工具几乎全部由后端 resolve/repair，限制了 raw tool planning 指标的解释力。
 - 工具世界并未完全冻结。运行中观察到本地 hithink-finance DuckDB 文件占用、上游 429、代理连接错误及现有 fallback；新闻/热榜还返回了 2026-09-11 的当前数据，而 case anchor 是 2026-05-15。这降低了未来跨版本 A/B 的可比性。
-- 后续修复：`agent-live-eval-runner-v3` 已改为专用的 `chat-live-world-v2-fully-frozen-v1`，初始调用与 Policy repair 均禁止访问数据库和网络，并在加载时验证评测世界内部一致性。由于评测环境发生实质变化，本页旧基线保留为历史诊断，不作为新环境的对照基线；需先执行 36×1 预检，再重新执行 36×3。
+- 后续修复：`agent-live-eval-runner-v4` 已改为专用的 `chat-live-world-v2-fully-frozen-v2`，初始调用与 Policy repair 均禁止访问数据库和网络，并在加载时验证评测世界内部一致性。由于评测环境发生实质变化，本页旧基线保留为历史诊断，不作为新环境的对照基线；需先执行 36×1 预检，再重新执行 36×3。
 - Trace 能记录总 token 和 latency，但不能拆分 Planner/Answer token；无 LLM 调用的 trial token completeness 为 false。
 - Judge 未配置，deterministic PASS 会漏掉通用拒答、解释质量和答案相关性问题。
 - Unsupported-claim evaluator 尚不存在，无法报告 hallucination rate。
@@ -215,3 +215,19 @@ Simple 的 deterministic contract 为 18/18，boundary 为 12/12；但抽查发�
 动态参数、交集和失败后 fallback 需要这一循环，bounded Replan 有明确价值；但 Stress 入口失败、raw planning/Policy 边界、multi-turn entity carry-over、答案完成度以及未完全冻结的工具环境，不会因为引入 LangGraph 自动消失。
 
 结论选择 **C：当前问题主要不在 Replan，应先修 Planner/Tool/Memory**。建议顺序是：先冻结完整 tool world、校准并启用 Judge、修复复杂意图入口和上下文参数传递；随后只对已经获得有效 Observation、且确实缺少动态参数或 fallback 的节点做局部 bounded Replan A/B。现在直接全面迁移 LangGraph，会把多种失败原因混在一起，难以证明收益来自 Replan。
+
+## 13. Fully Frozen V2 36×1 Precheck
+
+2026-09-11 在 `agent-live-eval-runner-v4`、`chat-live-world-v2-fully-frozen-v2` 和 `deepseek-v4-flash` 上执行 36 case × 1 trial，未启用 Judge。正式预检报告为 `live-20260911T095301Z-a7a323a8`；工具层声明 `database_access=false`、`network_access=false`。
+
+- 通过 22/36，task success / pass@1 为 61.11%；Provider failure 为 0。
+- Simple 6/6、Boundary 4/4，说明基础事实题和安全边界在冻结世界中可用。
+- Multi-tool 4/6、Multi-turn 5/6、Recovery 3/4；仍有复杂能力遗漏、风险披露遗漏和按实体注入失败未触发。
+- Replan 0/8、Stress 0/2；observation-dependent task success 为 0。六个 Replan case 虽执行了上下游工具，但下游参数没有绑定上游 Observation；其余复杂入口没有形成有效能力集合。
+- raw capability recall 73.08%，effective required tool recall 75.86%，backend repair rate 77.78%。Capability-first Planner 的 raw tool calls 仍为空，因此 raw required tool recall 0 只描述当前架构边界，不等价于最终工具完全不可用。
+- required fact coverage 100%；平均工具调用 1.72，平均 LLM 调用 2.0，平均 token 4761.25，p50/p95 latency 为 2267/4529 ms。
+- Critical 通过 6/14，仅 42.86%，当前不能升级为 36×3 正式基线，也不应开始新 Judge 校准。
+
+在预检前，指数和个股新闻两个 case 暴露出冻结 payload 缺少生产回答契约字段。补齐窗口、回撤、涨跌日、抓取时间、缓存状态和资讯元数据后，两题单独复跑均通过；环境因此升级到 fully-frozen-v2，旧的 v1 预检报告作废，不用于拼接成绩。
+
+下一步优先修复 Observation→下游参数绑定，以及复杂请求的 capability 入口；随后重跑 36×1。只有 Critical 明显恢复且 Replan 不再系统性为 0，才执行 36×3 并生成新的 Judge 校准样本。
