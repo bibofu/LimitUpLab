@@ -33,7 +33,7 @@ from app.services.sample_data import SAMPLE_EVENTS
 DATASET_PATH = Path(__file__).resolve().parents[2] / "tests" / "fixtures" / "agent_chat_live_eval_v1.json"
 DEFAULT_OUTPUT_ROOT = Path(__file__).resolve().parents[3] / "output" / "agent-live-eval"
 RUNNER_VERSION = "agent-live-eval-runner-v1"
-JUDGE_PROMPT_VERSION = "agent-live-eval-judge-v1"
+JUDGE_PROMPT_VERSION = "agent-live-eval-judge-v2"
 
 
 def load_live_eval_dataset(path: Path = DATASET_PATH) -> LiveEvalDataset:
@@ -157,11 +157,15 @@ def judge_live_answer(case: LiveEvalCase, result: dict[str, Any], provider: LLMP
     }
     response = provider.generate(
         "只依据给定工具事实，对输入指定的适用维度逐项评0到2分；不要评价或返回不适用维度，"
-        "不要使用自身金融知识补事实。另返回rationale。Return only valid JSON.",
+        "不要使用自身金融知识补事实。只返回JSON："
+        '{"scores":{"适用维度名":0},"rationale":"简要理由"}。',
         json.dumps(prompt, ensure_ascii=False, separators=(",", ":")),
     )
     payload = _parse_json_object(response.content)
-    scores = {name: int(payload[name]) for name in dimensions}
+    score_payload = payload.get("scores", payload)
+    if not isinstance(score_payload, dict):
+        raise ValueError("Judge scores must be one JSON object")
+    scores = {name: int(score_payload[name]) for name in dimensions}
     values = list(scores.values())
     if any(value not in {0, 1, 2} for value in values):
         raise ValueError("Judge dimensions must be 0, 1 or 2")

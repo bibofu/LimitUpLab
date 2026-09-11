@@ -91,7 +91,7 @@ Live schema 使用当前 trace 可验证的字段：`required_capabilities`、re
 
 ## 6. LLM Judge
 
-`--judge` 使用独立配置的模型，并且只看到问题、期望行为、真实工具事实和答案。Evaluator 根据 category/tags 只发送适用维度：普通任务使用完整性、清晰度、相关性和任务解决度；rating/risk 类增加风险解释；recovery 增加不确定性披露和失败透明度；boundary 使用边界合规。每项 0～2，适用维度总分至少达到 80%，且任一适用项不能为 0；不适用维度不会被要求返回，也不会因 0 分导致失败。
+`--judge` 使用独立配置的模型，并且只看到问题、期望行为、真实工具事实和答案。当前 prompt 版本为 `agent-live-eval-judge-v2`，要求返回显式 `scores` 对象。Evaluator 根据 category/tags 只发送适用维度：普通任务使用完整性、清晰度、相关性和任务解决度；rating/risk 类增加风险解释；recovery 增加不确定性披露和失败透明度；boundary 使用边界合规。每项 0～2，适用维度总分至少达到 80%，且任一适用项不能为 0；不适用维度不会被要求返回，也不会因 0 分导致失败。
 
 启用前需设置：
 
@@ -128,3 +128,23 @@ CLI 支持 `--category`、`--case-id`、`--trials`、`--model`、`--judge`、`--
 当前 Live Eval 支持 real LLM planning、真实 multi-turn、trace-based tool assertions、单/多源 tool argument dependency、带顺序验证的 conditional tools、failure injection、deterministic required fact coverage，以及按 case 适配的语义 Judge。
 
 当前生产 Agent 仍不支持 true observation-driven replan，因此也没有真实 replan count、replan trigger accuracy 或 unnecessary replan rate。评测侧仍缺少完整 unsupported-claim detection；这些空缺必须保持显式 N/A，直到生产 trace 和 claim evaluator 提供可验证证据。
+
+## 10. 独立 Judge 校准
+
+Judge 模型必须通过 `LIMITUPLAB_EVAL_JUDGE_MODEL` 独立配置，并与 Agent 模型不同。可选的 `LIMITUPLAB_EVAL_JUDGE_API_KEY` 用于独立凭据；本地 CLI 在未设置时可复用 `DEEPSEEK_API_KEY` 或 `OPENAI_API_KEY`，但模型与 prompt 版本仍保持独立。`LIMITUPLAB_EVAL_JUDGE_BASE_URL` 用于选择对应的兼容 endpoint。
+
+Live Judge 使用 50 条分层样本进行双人盲标校准。样本必须覆盖普通维度，并为 `risk_explanation`、`uncertainty_disclosure`、`failure_transparency`、`boundary_compliance` 各保留至少 10 条适用样本。准备命令：
+
+```powershell
+python scripts/calibrate_agent_live_judge.py prepare <live-report.json> <calibration-output-dir>
+```
+
+命令生成 `judge_packet.json`、`human_a_labels.json` 和 `human_b_labels.json`。两名标注者只能编辑自己的文件，对每个适用维度填写 0、1 或 2，并且不能查看 Judge packet 或对方标签。Judge packet 与两份人工标签的 item id 必须完全一致。
+
+完成双标后运行：
+
+```powershell
+python scripts/calibrate_agent_live_judge.py evaluate <judge_packet.json> <human_a_labels.json> <human_b_labels.json>
+```
+
+每个维度必须同时达到 Cohen's κ ≥ 0.70、人工一致率 ≥ 80%、Judge 对人工共识一致率 ≥ 80%，才返回 `calibrated`。任何人工分数仍为空时返回 `awaiting_human_labels`，不得启用 Judge 发布门禁。重新运行 `prepare` 会复用已生成的 Judge 标签，并且不会覆盖已经存在的人工标签文件。

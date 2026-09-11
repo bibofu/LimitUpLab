@@ -161,6 +161,18 @@ def test_judge_omits_non_applicable_dimensions() -> None:
     assert "risk_explanation" not in result["scores"]
 
 
+def test_judge_accepts_explicit_nested_scores_schema() -> None:
+    case = _case("LIVE-SIMPLE-002")
+    result = judge_live_answer(
+        case,
+        {"tool_trace": [], "answer": "指数最近5日震荡。"},
+        _JudgeProvider(nested_scores=True),
+    )
+
+    assert result["scores"]["completeness"] == 2
+    assert result["passed"]
+
+
 def test_raw_planner_and_effective_recall_are_separate() -> None:
     case = _case("LIVE-SIMPLE-006")
     response = _response(
@@ -241,10 +253,18 @@ def _evaluate(case, response: AgentChatResponse) -> dict:
 
 
 class _JudgeProvider(LLMProvider):
+    def __init__(self, *, nested_scores: bool = False) -> None:
+        self.nested_scores = nested_scores
+
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         requested = json.loads(user_prompt)["dimensions"]
+        scores = {name: 2 for name in requested}
         return LLMResult(
-            content=json.dumps({**{name: 2 for name in requested}, "rationale": "ok"}),
+            content=json.dumps(
+                {"scores": scores, "rationale": "ok"}
+                if self.nested_scores
+                else {**scores, "rationale": "ok"}
+            ),
             model="judge-test",
             provider="test",
         )

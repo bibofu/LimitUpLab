@@ -52,13 +52,21 @@ def main() -> None:
 
 def _judge_provider() -> OpenAIChatCompletionsProvider:
     model = os.getenv("LIMITUPLAB_EVAL_JUDGE_MODEL", "").strip()
-    key = os.getenv("LIMITUPLAB_EVAL_JUDGE_API_KEY", "").strip()
+    key = (
+        os.getenv("LIMITUPLAB_EVAL_JUDGE_API_KEY", "").strip()
+        or os.getenv("DEEPSEEK_API_KEY", "").strip()
+        or os.getenv("OPENAI_API_KEY", "").strip()
+    )
     if not model or not key:
-        raise SystemExit("--judge requires LIMITUPLAB_EVAL_JUDGE_MODEL and LIMITUPLAB_EVAL_JUDGE_API_KEY")
+        raise SystemExit("--judge requires LIMITUPLAB_EVAL_JUDGE_MODEL and an available API key")
     return OpenAIChatCompletionsProvider(
         api_key=key,
         model=model,
-        base_url=os.getenv("LIMITUPLAB_EVAL_JUDGE_BASE_URL", "https://api.openai.com/v1"),
+        base_url=(
+            os.getenv("LIMITUPLAB_EVAL_JUDGE_BASE_URL", "").strip()
+            or os.getenv("LIMITUPLAB_LLM_BASE_URL", "").strip()
+            or "https://api.openai.com/v1"
+        ),
         thinking_enabled=False,
         native_function_calling_enabled=False,
     )
