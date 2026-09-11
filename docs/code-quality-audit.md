@@ -183,6 +183,7 @@
 - 源码提交 `b7eed3b` 新增独立 `complex_graph` 包、确定性 Router、最小 State、结构化结果引用和唯一白名单图；`2a51635` 将完全结构化的交集评分答案改为既有确定性模板，避免无必要的 Answer LLM。
 - Fast Path 保持默认且未迁移；只有热股、涨停、集合筛选、评分四类信号同时出现才进入 Complex Path。LangGraph 不实现业务工具、集合事实、Policy、Grounding 或安全规则，只编排现有组件。
 - 下游 `first_board_ratings.symbols` 只接受前序实体集合引用，最多 20 个六位股票代码；生产工具与完全冻结工具适配器都按相同参数过滤候选。Planner 的无关 capability 不会扩大白名单图的工具范围。
+- 白名单计划把“热股 Top10”和“首板评分”的词面约束限定在各自步骤：热股取 10 条，涨停来源取完整池（非仅首板、上限 100），避免通用 Query Contract 将两个修饰语错误传播到涨停来源。
 - Phase 1 没有 Replan、Retry、critic、checkpoint 或循环边。dependency 缺失、空集合、执行错误和参数绑定失败会确定性失败并进入答案/降级路径。
 
 ### 验证与 A/B

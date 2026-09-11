@@ -131,6 +131,8 @@ def test_graph_executes_sources_then_binds_intersection_to_ratings(
         "limit_up_events",
         "first_board_ratings",
     ]
+    assert result.execution["tool_results"][1].input["board_height"] is None
+    assert result.execution["tool_results"][1].input["limit"] == 100
     rating_trace = result.execution["tool_results"][-1]
     intersection = result.execution["facts"]["hot_stock_limit_up_intersection"]
     expected_symbols = [item["symbol"] for item in intersection["items"]]

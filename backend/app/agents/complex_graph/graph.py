@@ -41,6 +41,14 @@ class ComplexGraphResult:
 def build_flagship_plan(limit_up_arguments: dict[str, Any]) -> list[ComplexPlanStep]:
     """Build the only dependency-aware plan supported in Phase 1."""
 
+    limit_up_source_arguments = {
+        **limit_up_arguments,
+        "board_height": None,
+        "min_board_height": None,
+        "highest_only": False,
+        "query": None,
+        "limit": 100,
+    }
     return [
         ComplexPlanStep(
             step_id="S1",
@@ -52,7 +60,7 @@ def build_flagship_plan(limit_up_arguments: dict[str, Any]) -> list[ComplexPlanS
             step_id="S2",
             capability="limit_up_pool",
             tool_name="limit_up_events",
-            arguments=limit_up_arguments,
+            arguments=limit_up_source_arguments,
         ),
         ComplexPlanStep(
             step_id="S3",

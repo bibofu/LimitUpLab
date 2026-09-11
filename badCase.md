@@ -569,6 +569,8 @@ empty 明确写“没有”、风险回答包含结构化风险项。
 新增确定性 Complexity Router 与 LangGraph Phase 1 Complex Path。Graph 先执行热股和涨停
 来源，由既有事实组合器按股票代码求交集，再通过结构化 `ResultReference` 把 Observation
 绑定到 `first_board_ratings.symbols`；Tool Policy、Grounding、答案校验和安全边界保持生效。
+白名单计划还隔离了“首板评分”和“热股 Top10”对上游 Query Contract 的词面污染：涨停
+来源固定查询完整涨停池（非仅首板、最多 100 条），Top10 只约束热股来源。
 完全冻结工具世界真实模型验收从 0/3 提升为 3/3，工具调用保持 3 次；确定性名单模板把
 模型调用从 2 次降为 1 次，平均 token 由 5,367 降至 2,809，p95 延迟由基线样本的
 2,073/1,581/1,979 ms 降至 1,325 ms。其他 observation-dependent case 仍属于 Phase 2 范围。
