@@ -146,6 +146,7 @@ def test_graph_executes_sources_then_binds_intersection_to_ratings(
     assert result.execution["tool_results"][1].input["limit"] == 100
     rating_trace = result.execution["tool_results"][-1]
     intersection = result.execution["facts"]["hot_stock_limit_up_intersection"]
+    assert intersection["event_label"] == "涨停票"
     expected_symbols = [item["symbol"] for item in intersection["items"]]
     assert rating_trace.input["symbols"] == expected_symbols
     assert {

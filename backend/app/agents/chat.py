@@ -724,7 +724,6 @@ def _answer_with_complex_graph(
     def build_answer(execution: ToolExecution) -> dict[str, Any]:
         nonlocal answer_result, answer_started_at, answer_prompt_chars
         facts = execution["facts"]
-        _add_composed_tool_facts(request.message, facts)
         fallback = _template_answer_from_tool_facts(
             request=request,
             intent="hot_limit_up_rating_intersection",

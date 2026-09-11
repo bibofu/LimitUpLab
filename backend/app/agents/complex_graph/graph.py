@@ -200,6 +200,7 @@ def run_hot_limit_up_rating_graph(
                 "failure_reason": "intersection sources were unavailable",
                 "completion_status": "failed",
             }
+        payload["event_label"] = "涨停票"
         entities: list[EntityRef] = [
             {
                 "symbol": str(item["symbol"]),
