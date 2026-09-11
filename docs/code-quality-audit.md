@@ -189,7 +189,7 @@
 ### 验证与 A/B
 
 - 新增 8 项 Router、动态绑定、Graph、Policy/工具白名单和 Fast Path 测试；Agent 定向回归 114 项通过，评测契约/runner 回归在宿主隔离目录 65 项通过。沙箱内评测测试曾有 4 个 `tmp_path` setup error，原因是 Windows pytest 临时目录 ACL，未计为通过。
-- 完整后端首轮为 703/704 通过、22 个子测试通过；唯一失败是旧 mock 严格期望未传 `symbols=None`。改为只在动态集合存在时传参后，定向 14 项通过；补充 Graph 控制 trace 归类测试后，最终完整后端为 705 项及 22 个子测试通过，0 失败、0 setup error、0 跳过。
+- 完整后端首轮为 703/704 通过、22 个子测试通过；唯一失败是旧 mock 严格期望未传 `symbols=None`。改为只在动态集合存在时传参后，定向 14 项通过；补充 Graph 控制 trace 与执行器参数归一化测试后，最终完整后端为 706 项及 22 个子测试通过，0 失败、0 setup error、0 跳过。
 - 真实模型完全冻结小样本：Simple 6/6、Multi-tool 6/6，均未进入 Complex Graph；目标 `LIVE-REPLAN-006` 从旧基线 0/3 提升到 3/3，raw capability recall 与 effective tool recall 均为 100%，Provider failure 为 0。
 - 目标调用严格为 `hot_stock_ranking → limit_up_events → first_board_ratings`，评分参数是前两项实际 Observation 的同序交集。工具调用保持 3；模板优化后模型调用从 2 降为 1，平均 token 从 5,367 降至 2,809，p50/p95 延迟为 1,057/1,325 ms。
 - 真实 HTTP/SSE：重启本地 Uvicorn 后，简单指数请求返回 `route=fast`；复杂原始问法依次返回兼容的 `progress`、`answer_delta`、`completed` 事件。生产工具结果交集为风华高科（000636），评分工具 trace 的 `symbols=["000636"]`，答案明确披露该股不在当前评级候选池。Graph 控制 trace 已从业务工具、Policy repair 和用户证据卡统计中排除。

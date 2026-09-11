@@ -163,8 +163,11 @@ def run_hot_limit_up_rating_graph(
             {"name": step_by_id[step_id].tool_name, "arguments": step_by_id[step_id].arguments}
             for step_id in ("S1", "S2")
         ]
+        source_request = request.model_copy(
+            update={"message": "查询当日完整涨停池"}
+        )
         execution = execute_tool_calls(
-            calls, tools, request=request, context_symbol=context_symbol
+            calls, tools, request=source_request, context_symbol=context_symbol
         )
         traces = [
             trace(

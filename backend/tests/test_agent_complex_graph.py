@@ -20,6 +20,7 @@ from app.agents.complex_graph.graph import (
     resolve_dynamic_arguments,
 )
 from app.agents.tool_policy import AgentToolPolicyEngine
+from app.agents.tool_execution.helpers import _normalize_limit_up_event_arguments
 from app.models import AgentChatRequest
 from app.services.llm_provider import LLMProvider, LLMResult
 
@@ -95,6 +96,16 @@ def test_dynamic_binding_uses_observed_entity_set_and_keeps_empty_set() -> None:
 def test_dynamic_binding_rejects_missing_source() -> None:
     with pytest.raises(ValueError, match="missing entity set"):
         resolve_dynamic_arguments(build_flagship_plan({})[-1], {})
+
+
+def test_flagship_source_contract_is_not_polluted_by_top_or_rating_terms() -> None:
+    step = build_flagship_plan({"event_status": "closed"})[1]
+    normalized = _normalize_limit_up_event_arguments(
+        AgentChatRequest(session_id="source-contract", message="查询当日完整涨停池"),
+        step.arguments,
+    )
+    assert normalized["board_height"] is None
+    assert normalized["limit"] == 100
 
 
 def test_graph_executes_sources_then_binds_intersection_to_ratings(
