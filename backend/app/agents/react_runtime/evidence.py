@@ -8,6 +8,18 @@ from uuid import uuid4
 from fastapi.encoders import jsonable_encoder
 
 COLLECTIONS = ("events", "top_candidates", "items", "stocks", "top_sectors", "bars", "candidates")
+EVIDENCE_VERSION = "react-evidence-v2"
+
+
+def keyed_rows(rows, key):
+    """Set operations use distinct, non-null scalar identities in source order."""
+    indexed = {}
+    for row in rows:
+        value = row.get(key) if isinstance(row, dict) else None
+        if type(value) not in (str, int, float) or value == "" or (isinstance(value, float) and not isfinite(value)):
+            raise ValueError(f"Set key missing or invalid: {key}")
+        indexed.setdefault(value, row)
+    return indexed
 
 
 def compact(value, limit=8):
@@ -62,13 +74,16 @@ class EvidenceStore:
         rows = rows_of(payload)
         metadata = payload if isinstance(payload, dict) else {}
         # Source truncation is different from the small model preview page.
-        truncated = tool != "compute_result" and isinstance(metadata.get("matched_count"), int) and metadata["matched_count"] > len(rows)
+        truncated = bool(metadata.get("source_truncated") or metadata.get("truncated")) or (
+            tool != "compute_result" and isinstance(metadata.get("matched_count"), int)
+            and metadata["matched_count"] > len(rows)
+        )
         source_missing = metadata.get("data_missing") or []
-        if state == "ok" and (source_missing or metadata.get("data_fresh") is False):
+        if state in {"ok", "empty"} and (source_missing or truncated or metadata.get("data_fresh") is False):
             state = "partial"
         self.records[key] = {
             "evidence_id": key, "tool": tool, "payload": payload, "result_state": state,
-            "schema_version": "react-evidence-v1", "retrieved_at": datetime.now(timezone.utc).isoformat(),
+            "schema_version": EVIDENCE_VERSION, "retrieved_at": datetime.now(timezone.utc).isoformat(),
             "source_truncated": truncated, "data_missing": source_missing, "historical_reference": False,
             "arguments": arguments, "sources": sources or (
                 payload.get("sources") or ([payload["source"]] if payload.get("source") else [])
@@ -108,25 +123,25 @@ class EvidenceStore:
         if any(not isinstance(row, dict) for row in rows):
             raise ValueError("This evidence is not a row collection")
         inputs = [spec.evidence_id]
+        parents = [source]
         if spec.operation in {"intersection", "difference", "union"}:
             other = self.get(spec.other_id)
             if (other["result_state"] not in {"ok", "empty"} or source["result_state"] == "partial"
                     or source.get("source_truncated") or other.get("source_truncated")):
                 raise ValueError("Set comparison requires complete source sets")
-            if any(spec.key not in row for row in rows + other["rows"]):
-                raise ValueError("Set key is missing")
-            keys = {row[spec.key] for row in other["rows"]}
+            left = keyed_rows(rows, spec.key)
+            right = keyed_rows(other["rows"], spec.key)
             if spec.operation == "intersection":
-                rows = [row for row in rows if row[spec.key] in keys]
+                rows = [row for key, row in left.items() if key in right]
             elif spec.operation == "difference":
-                rows = [row for row in rows if row[spec.key] not in keys]
+                rows = [row for key, row in left.items() if key not in right]
             else:
-                rows = list({row[spec.key]: row for row in rows + other["rows"]}.values())
+                # Keep the left row consistently; never silently replace its facts.
+                rows = [left[key] for key in left] + [right[key] for key in right if key not in left]
             inputs.append(spec.other_id)
+            parents.append(other)
         if spec.operation == "distinct":
-            if any(spec.key not in row or row[spec.key] is None for row in rows):
-                raise ValueError("Distinct key missing")
-            rows = list({row[spec.key]: row for row in rows}.values())
+            rows = list(keyed_rows(rows, spec.key).values())
         for predicate in spec.filters:
             if any(predicate.field not in row or row[predicate.field] is None for row in rows):
                 raise ValueError(f"Filter field missing: {predicate.field}")
@@ -141,7 +156,8 @@ class EvidenceStore:
                 return value <= target
             rows = [row for row in rows if matches(row)]
         if spec.operation == "aggregate":
-            groups = {}
+            # An ungrouped empty count is zero, not an absent aggregate row.
+            groups = {"all": []} if not rows and not spec.group_by and spec.aggregate == "count" else {}
             for row in rows:
                 if spec.group_by and spec.group_by not in row:
                     raise ValueError("Group field missing")
@@ -162,10 +178,20 @@ class EvidenceStore:
             rows.sort(key=lambda row: row[spec.sort_by], reverse=spec.descending)
         total = len(rows)
         selected = rows[spec.offset:spec.offset + spec.limit]
-        derived_state = "partial" if source.get("source_truncated") or source["result_state"] == "partial" else "ok" if selected else "empty"
-        return self.add(
+        derived_state = "partial" if any(p.get("source_truncated") or p["result_state"] == "partial" for p in parents) else "ok" if selected else "empty"
+        missing = []
+        for parent in parents:
+            for item in parent.get("data_missing", []):
+                if item not in missing:
+                    missing.append(deepcopy(item))
+        key = self.add(
             tool="compute_result", state=derived_state,
             payload={"items": selected, "matched_count": total, "returned_count": len(selected),
-                     "operation": spec.model_dump(), "source_evidence_ids": inputs},
+                     "operation": spec.model_dump(), "source_evidence_ids": inputs,
+                     "data_missing": missing,
+                     "source_truncated": any(p.get("source_truncated") for p in parents)},
             arguments=spec.model_dump(), sources=inputs,
         )
+        # Computing an old set does not turn it into freshly fetched evidence.
+        self.records[key]["historical_reference"] = any(p.get("historical_reference") for p in parents)
+        return key

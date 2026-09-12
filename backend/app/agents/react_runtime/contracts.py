@@ -65,5 +65,5 @@ CONTROL_MODELS = {
     "update_task": (UpdateTask, "维护多项交付清单，不执行数据查询。不允许删除用户要求。"),
     "finish": (Finish, "提交最终中文回答、任务状态、证据ID和未完成要求。只能单独调用，等待数据返回后使用。"),
     "read_evidence": (ReadEvidence, "展开本次会话已返回的证据；支持offset分页，不能猜证据ID。"),
-    "compute_result": (Compute, "对证据rows确定性筛选、排序、名次切片、交并差集或分组聚合。offset=3,limit=3取第4至6名。字段必须来自实际rows。"),
+    "compute_result": (Compute, "对证据rows确定性筛选、排序、名次切片、交并差集或分组聚合。offset=3,limit=3取第4至6名。字段必须来自实际rows。集合按key去重，重复成员保留左侧首条记录，不合并两侧指标；来源缺失、截断及历史引用标记沿计算链保留。"),
 }

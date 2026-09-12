@@ -258,3 +258,14 @@
 - ReAct 调度不依赖 task DAG adapter 或 capability 修复；补齐原虚拟 first_board_filter 的直接执行、原 Python 必填日期及空 symbols 防扩张检查。
 - 历史证据仅从 Router 提供的同会话 assistant metadata 恢复，并标注 historical_reference；不作为当前结果缓存。截断全集不能通过交并差集证明全量结论。
 - 定向 16 通过、1 条依赖弃用预告；首次测试 1 失败因新增测试缺 created_at，补齐 fixture 后通过。尚未完成全部真实工具/多轮验收；用户要求跳过上一条回答的重复验证，下一阶段集中验证新增运行流程。
+
+### 2026-09-12：ReAct C 集合证据链续作审查
+
+- 范围：基于 `ba5db9b`，只修改 evidence、计算工具说明、新增证据回归测试及计划/Bad Case/本记录；现有未提交 runtime、lifecycle、Router、Provider 和运行时测试改动保留，不纳入本次提交。对应提交以 `fix: preserve ReAct computation evidence lineage` 标题定位。
+- P1 已修（本提交）：派生历史结果被标为当前事实（BC-028）；缺失或截断的空结果参与完整差集、连续计算丢失缺失原因（BC-029）；重复/空主键污染集合与计数（BC-030）。证据版本递增为 v2，保留来源证据 ID；显式排名切片不冒充来源缺页。
+- 测试：ReAct 定向 59 通过、0 失败/跳过；默认 react 完整后端 733 通过、94 失败、22 子测试通过、0 setup error/跳过；显式 legacy 完整后端 827 通过、22 子测试通过、0 失败/setup error/跳过。宿主完整回归均有 1 条 LangGraph serializer 弃用预告。首次沙箱全量因 Windows 临时目录 ACL 导致 setup/收尾异常，未取得可信完整汇总，不计为通过；首次定向另有 pytest cache ACL 警告，最终定向关闭缓存后无此警告。
+- HTTP：独立随机本地端口、冻结模型和数据、真实 Uvicorn/HTTP/StateGraph。取热榜→distinct→count→finish，HTTP 200、task_status partial、1 次业务工具与 2 次计算；具体缺页原因保留。验证服务已关闭；没有替换现有服务，没有验证生产 Router/真实模型/市场来源，不能称为 Live 验收。
+- P1 未完成：94 项默认入口失败暴露旧测试仍断言 Planner intent/agent_plan 或仅提供旧 generate 协议；显式 legacy 复跑全部通过支持协议不匹配判断。下一批迁移评测/测试适配时处理，保持原任务覆盖和阈值；当前不得宣称默认 ReAct 全量回归通过。
+- P1 发布风险：默认 react 已在前序提交启用，早于计划 E 的真实质量门槛。本轮未擅自改回部署入口，也未继续扩大工具覆盖；切换/发布前必须完成 B 真实四类场景、稳定性及 C 多轮验收。
+- P1 待 D：此处仅保留历史/缺失证据标签，最终回答是否误用历史事实仍须关系门禁；运行恢复/幂等等工作区代码尚未纳入本轮验收，后续接续该工作时独立检查并提交。
+- 审查结论：本次为有界数据正确性修复，不改变评分、预测快照、市场日期或用户筛选口径；不触发大规模重构与发布。完整 diff 与空白检查在提交前执行。
