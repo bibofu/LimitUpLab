@@ -35,7 +35,7 @@ class AgentQuestionBankRunnerTest(unittest.TestCase):
         report = {
             "started_at": "2026-09-03T09:00:00+00:00",
             "updated_at": "2026-09-03T09:00:01+00:00",
-            "mode": "live-llm",
+            "mode": "react-live",
             "model": "test-model",
             "question_bank": "testQuestion.md",
             "question_count": 100,
@@ -74,7 +74,7 @@ class AgentQuestionBankRunnerTest(unittest.TestCase):
 
         self.assertIn("这是完整回答。", rendered)
         self.assertIn("墙钟耗时：1.234s", rendered)
-        self.assertIn("Planner 0.100s", rendered)
+        self.assertIn("ReAct 内部耗时：1.200s", rendered)
 
 
 if __name__ == "__main__":

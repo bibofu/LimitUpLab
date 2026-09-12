@@ -23,7 +23,7 @@ PROJECT_ROOT = BACKEND_ROOT.parent
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.agents.chat import answer_first_board_chat, template_answer_override
+from app.agents.chat import answer_first_board_chat
 from app.config import configure_runtime_environment
 from app.models import AgentChatRequest, AgentRun, ChatSessionMessage
 from app.repositories import SQLiteFirstBoardRepository, get_limit_up_repository
@@ -92,15 +92,6 @@ def parse_question_bank(path: Path) -> list[Question]:
     return questions
 
 
-# Extract selected capabilities from the planner trace for question-bank reporting.
-def _planner_capabilities(response: Any) -> list[str]:
-    for trace in response.tool_results:
-        if trace.name == "llm_tool_planner":
-            capabilities = trace.input.get("capabilities") or []
-            return [str(item) for item in capabilities if isinstance(item, str)]
-    return []
-
-
 # Build conversation-message objects from recorded turns for replay or evaluation.
 def _conversation_messages(
     *,
@@ -108,7 +99,7 @@ def _conversation_messages(
     question_number: int,
     question: str,
     answer: str,
-    capabilities: list[str],
+    metadata: dict[str, Any],
 ) -> list[ChatSessionMessage]:
     created_at = datetime.now(timezone.utc)
     return [
@@ -124,7 +115,7 @@ def _conversation_messages(
             session_id=session_id,
             role="assistant",
             content=answer,
-            metadata={"capabilities": capabilities},
+            metadata=metadata,
             created_at=created_at,
         ),
     ]
@@ -219,11 +210,7 @@ def render_markdown(report: dict[str, Any]) -> str:
         performance = item.get("performance") or {}
         if performance:
             lines.append(
-                "- 内部耗时："
-                f"Planner {_format_duration(performance.get('planner_duration_ms'))}，"
-                f"工具 {_format_duration(performance.get('tool_duration_ms'))}，"
-                f"回答 {_format_duration(performance.get('answer_duration_ms'))}，"
-                f"合计 {_format_duration(performance.get('total_duration_ms'))}"
+                f"- ReAct 内部耗时：{_format_duration(performance.get('total_duration_ms'))}"
             )
         if item.get("warnings"):
             lines.append(f"- 警告：{'；'.join(item['warnings'])}")
@@ -252,7 +239,7 @@ def save_report(report: dict[str, Any], json_path: Path, markdown_path: Path) ->
     markdown_tmp.replace(markdown_path)
 
 
-# Load the question bank, execute the configured planner/chat evaluation and export the result
+# Load the question bank, execute the production ReAct evaluation and export the result
 # report.
 def main() -> None:
     parser = argparse.ArgumentParser(
@@ -277,11 +264,6 @@ def main() -> None:
         action="store_true",
         help="Resume from an existing JSON report and rebuild section context.",
     )
-    parser.add_argument(
-        "--template-answer",
-        action="store_true",
-        help="Use deterministic final answers while retaining the configured planner.",
-    )
     args = parser.parse_args()
 
     if args.start < 1 or args.end < args.start:
@@ -304,13 +286,15 @@ def main() -> None:
     markdown_path = output_stem.with_suffix(".md")
     if args.resume and json_path.exists():
         report = json.loads(json_path.read_text(encoding="utf-8"))
+        if report.get("schema_version") != "agent-question-bank-eval-v2" or report.get("mode") != "react-live":
+            parser.error("cannot resume a legacy report; select a new output stem for ReAct")
     else:
         report = {
-            "schema_version": "agent-question-bank-eval-v1",
+            "schema_version": "agent-question-bank-eval-v2",
             "question_bank": str(args.input.resolve()),
             "question_count": len(questions),
             "selected_range": [args.start, args.end],
-            "mode": "template-answer" if args.template_answer else "live-llm",
+            "mode": "react-live",
             "model": getattr(provider, "model", type(provider).__name__),
             "started_at": datetime.now(timezone.utc).isoformat(),
             "updated_at": datetime.now(timezone.utc).isoformat(),
@@ -332,7 +316,7 @@ def main() -> None:
                 question_number=int(item["number"]),
                 question=str(item["question"]),
                 answer=str(item.get("answer") or ""),
-                capabilities=list(item.get("planner_capabilities") or []),
+                metadata=dict(item.get("response") or {}),
             )
         )
 
@@ -355,15 +339,14 @@ def main() -> None:
         started = perf_counter()
         print(f"[{question.number:03d}/100] {question.text}", flush=True)
         try:
-            with template_answer_override(args.template_answer):
-                response = answer_first_board_chat(
-                    request=request,
-                    events=events,
-                    repository=repository,
-                    recent_runs=recent_runs.get(question.section, []),
-                    conversation_messages=conversations.get(question.section, []),
-                    llm_provider=provider,
-                )
+            response = answer_first_board_chat(
+                request=request,
+                events=events,
+                repository=repository,
+                recent_runs=recent_runs.get(question.section, []),
+                conversation_messages=conversations.get(question.section, []),
+                llm_provider=provider,
+            )
             wall_duration_ms = round((perf_counter() - started) * 1000)
             finished_at = datetime.now(timezone.utc)
             performance = response.performance.model_dump(mode="json")
@@ -379,7 +362,8 @@ def main() -> None:
                 "intent": response.intent,
                 "generated_by": response.generated_by,
                 "tool_calls": list(response.tool_calls),
-                "planner_capabilities": _planner_capabilities(response),
+                "task_status": response.task_status,
+                "response": response.model_dump(mode="json"),
                 "warnings": list(response.warnings),
                 "references": list(response.references),
                 "performance": performance,
@@ -392,7 +376,7 @@ def main() -> None:
                     question_number=question.number,
                     question=question.text,
                     answer=response.answer,
-                    capabilities=item["planner_capabilities"],
+                    metadata=item["response"],
                 )
             )
             run_id = f"question-bank-{question.number}"
