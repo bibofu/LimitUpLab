@@ -592,6 +592,26 @@ def _normalize_frozen_payload(
                 "complete": len(payload["items"]) >= requested_count,
             }
         )
+    elif tool_name == "limit_up_events" and "events" in payload:
+        events = list(payload["events"])
+        if arguments.get("board_height") is not None:
+            events = [item for item in events if item.get("board_height") == int(arguments["board_height"])]
+        if arguments.get("min_board_height") is not None:
+            events = [item for item in events if int(item.get("board_height") or 0) >= int(arguments["min_board_height"])]
+        if arguments.get("highest_only") and events:
+            highest = max(int(item.get("board_height") or 0) for item in events)
+            events = [item for item in events if int(item.get("board_height") or 0) == highest]
+        if arguments.get("market"):
+            market = "star" if arguments["market"] == "star_market" else arguments["market"]
+            events = [item for item in events if item.get("market") == market]
+        if arguments.get("query"):
+            query = str(arguments["query"])
+            events = [item for item in events if query in str(item.get("symbol")) or query in str(item.get("entity"))]
+        matched_count = len(events)
+        events = events[:int(arguments.get("limit") or 100)]
+        payload.update(events=events, matched_count=matched_count,
+                       unique_stock_count=len({item.get("symbol") for item in events}),
+                       returned_count=len(events), event_status=arguments.get("event_status") or "closed")
     elif tool_name == "stock_news" and "by_symbol" in payload:
         requested_symbol = str(arguments.get("symbol") or "300750")
         fetched_at = f"{as_of}T18:00:00+08:00"

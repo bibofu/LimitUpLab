@@ -10,8 +10,9 @@ from langgraph.graph import END, START, StateGraph
 from app.agents.capability_contract import CAPABILITIES
 from app.agents.query_contract import current_query_reference_date
 from app.agents.complex_graph.executor import resolved_call_fingerprint
-from app.agents.task_runtime.adapter import invoke, schemas_for_runtime
-from app.agents.task_runtime.contracts import Completion, PlanPatch, TaskPlan, validate_steps, values_at
+from app.agents.task_runtime.adapter import invoke, schemas_for_runtime, evidence_payload
+from app.agents.task_runtime.contracts import Completion, PlanPatch, TaskPlan, validate_steps, evidence_values
+from app.agents.task_runtime.selection import matches, select
 from app.models import AgentChatPerformance, AgentChatResponse, AgentToolTrace
 from app.services.llm_provider import NativeFunctionCallingUnavailable
 
@@ -29,6 +30,7 @@ class State(TypedDict, total=False):
     replans: int
     stop: str | None
     answer: str
+    answer_draft: dict | None
 
 
 SYSTEM = """You are a bounded research task planner for LimitUpLab. Treat queries,
@@ -40,10 +42,19 @@ Only use registered capabilities and their authorized tools. Arguments MUST conf
 to the supplied schemas. Never invent a stock or use empty symbol to mean prior results.
 Plan in topological order. Bind downstream arguments to earlier step output fields via
 bindings (source_step, dot path with * for list items, target_argument, fan_out, limit).
+Unqualified binding paths are relative to source.payload. Explicit payload.* and
+selected.* namespaces are also supported. A select_path does not remove a payload
+collection prefix. Use output_contract.entity_path; arrays need fan_out=false for
+batch tools, scalar arguments need fan_out=true when multiple entities are selected.
 Use select_path and take to select TopN before downstream use; preserve original rank.
 Use different steps for different dates, entities or filters, even with the same tool.
 For intersection use step_type=operation, operation=intersection, depends_on two steps
 whose select_path selects entity rows; matching is deterministic on symbol.
+The intersection operation returns payload.items; bind items.*.symbol from it.
+For generic filter/sort/TopN use operation=select with ONE dependency and select_path
+relative to that dependency.payload. It returns payload.items. Operation order is
+filters, sort_field, take. For TopN-then-filter use two select steps. Conditional
+when_predicate tests the when_step.payload; it is not a question/scenario rule.
 Conditional steps use when_step and when_states. Existing dependencies do not require
 replanning. Do not pre-execute optional fallback evidence if its condition is false.
 Capability names and tool names differ: use the catalog. Tool defaults apply ONLY to
@@ -102,6 +113,7 @@ def run(request, tools, provider, context, progress=None):
         "conversation": context,
         "capabilities": catalog,
         "tool_schemas": schemas_for_runtime(tools),
+        "budgets": {"tool_calls": MAX_TOOL_CALLS, "llm_calls": MAX_LLM_CALLS, "replans": MAX_REPLANS},
     }
 
     def decide(kind, model, payload):
@@ -147,37 +159,46 @@ def run(request, tools, provider, context, progress=None):
             record = {"requirement_ids": list(step.requirement_ids), "tool": step.tool_name, "calls": [], "payload": {}, "state": "error"}
             records[step.step_id] = record
             try:
-                if step.when_step and records[step.when_step]["state"] not in step.when_states:
-                    record.update(state="skipped", reason="condition not met")
-                    continue
+                if step.when_step:
+                    source = records[step.when_step]
+                    if step.when_predicate and source["state"] in {"error", "skipped"}:
+                        raise ValueError("conditional evidence unavailable")
+                    condition = (not step.when_states or source["state"] in step.when_states) and (step.when_predicate is None or matches(source["payload"], step.when_predicate))
+                    if not condition:
+                        record.update(state="skipped", reason="condition not met")
+                        continue
                 if any(records[key]["state"] in {"error", "skipped"} for key in step.depends_on if key != step.when_step):
                     raise ValueError("required dependency failed or was skipped")
                 if step.step_type == "operation":
+                    if step.operation == "select" and len(step.depends_on) == 1:
+                        rows = select(records[step.depends_on[0]]["payload"], step)
+                        record.update(payload={"items": rows}, selected=rows, state="ok" if rows else "empty")
+                        continue
                     if step.operation != "intersection" or len(step.depends_on) != 2:
                         raise ValueError("unsupported operation")
-                    left, right = [records[key]["payload"] for key in step.depends_on]
+                    left, right = [records[key].get("selected", records[key]["payload"]) for key in step.depends_on]
                     if not isinstance(left, list) or not isinstance(right, list):
                         raise ValueError("intersection requires two selected row lists")
                     symbols = {r["symbol"] for r in right if isinstance(r, dict) and "symbol" in r}
                     payload = [r for r in left if isinstance(r, dict) and r.get("symbol") in symbols]
-                    record.update(payload=payload, state="ok" if payload else "empty")
+                    record.update(payload={"items": payload}, selected=payload, state="ok" if payload else "empty")
                     continue
                 calls = [dict(step.arguments)]
                 for binding in step.bindings:
                     source = records[binding.source_step]
                     if source["state"] not in {"ok", "partial", "empty"}:
                         raise ValueError("dependency did not produce usable evidence")
-                    values = values_at(source["payload"], binding.path)[:binding.limit]
+                    values = evidence_values(source, binding.path)[:binding.limit]
                     if not values:
                         if source["state"] == "empty":
                             calls = []
                             break
                         raise ValueError("binding path missing from nonempty evidence")
+                    schema = next(s for s in tools.schemas() if s.name == step.tool_name)
+                    array_arg = schema.args_schema.get("properties", {}).get(binding.target_argument, {}).get("type") == "array"
                     if binding.fan_out:
-                        calls = [{**args, binding.target_argument: value} for args in calls for value in values]
+                        calls = [{**args, binding.target_argument: [value] if array_arg else value} for args in calls for value in values]
                     else:
-                        schema = next(s for s in tools.schemas() if s.name == step.tool_name)
-                        array_arg = schema.args_schema.get("properties", {}).get(binding.target_argument, {}).get("type") == "array"
                         for args in calls:
                             args[binding.target_argument] = values if array_arg or len(values) > 1 else values[0]
                 results = []
@@ -199,7 +220,7 @@ def run(request, tools, provider, context, progress=None):
                         result = invoke(tools, step.capability, step.tool_name, args)
                         trace = result.trace()
                         traces.append(trace)
-                        payload = result.output.model_dump(mode="json") if hasattr(result.output, "model_dump") else result.output
+                        payload = evidence_payload(result)
                         if not isinstance(payload, (dict, list)):
                             payload = trace.output
                         status = trace.result.status if trace.result else ("error" if trace.status == "error" else "ok")
@@ -215,13 +236,12 @@ def run(request, tools, provider, context, progress=None):
                         record["calls"].append({"arguments": args, "state": "error", "error": str(error)})
                         traces.append(AgentToolTrace(name=step.tool_name, input=args, status="error", error=str(error), summary="Task tool failed; other tasks continue"))
                 payload = results[0] if len(results) == 1 else results
+                record["payload"] = payload
                 if step.select_path:
-                    selected = values_at(payload, step.select_path)
-                    payload = selected[0] if len(selected) == 1 and isinstance(selected[0], list) else selected
-                    if step.take is not None:
-                        payload = payload[:step.take]
+                    selected = select(payload, step)
+                    record["selected"] = selected
                 status = "empty" if not calls or statuses and all(s == "empty" for s in statuses) else "error" if statuses and all(s == "error" for s in statuses) else "partial" if any(s in {"error", "partial"} for s in statuses) else "ok"
-                if step.select_path and payload == [] and status == "ok":
+                if step.select_path and record["selected"] == [] and status == "ok":
                     status = "empty"
                 record.update(payload=payload, state=status)
             except Exception as error:
@@ -231,11 +251,15 @@ def run(request, tools, provider, context, progress=None):
     def check(state):
         if state["plan"].behavior != "execute":
             return {"stop": state["plan"].behavior}
+        from .writer import Answer, ANSWER_INSTRUCTION, fact_catalog
         completion = decide("completion", Completion, {
             "requirements": [r.model_dump() for r in state["plan"].requirements],
             "plan": [s.model_dump() for s in state["steps"]],
             "evidence": _summary(state["records"]),
-            "instruction": "Check ALL original requirements against observed evidence, including actual parameters. Do not invent facts. Empty results can satisfy a query with disclosure. Truncated evidence cannot establish exhaustive coverage. Missing steps/incorrect scope must remain missing. Judge evidence readiness, not answer prose. Return satisfied_ids and missing by requirement ID.",
+            "answer_schema": Answer.model_json_schema(),
+            "copyable_claims": fact_catalog(state["records"]),
+            "recovery_guidance": "Set can_recover=false when missing facts are unavailable from registered sources or returned data explicitly lacks requested granularity. Do not repeatedly query the same source or relax dates/windows to claim success. Such a task remains partial with disclosure, not complete. Return concise missing reasons, not speculation about future tool results.",
+            "instruction": "Check ALL original requirements against observed evidence, including actual parameters. Do not invent facts. Empty results can satisfy a query with disclosure. Truncated evidence cannot establish exhaustive coverage. Missing steps/incorrect scope must remain missing. Return satisfied_ids and missing by requirement ID. In the SAME call provide answer conforming to answer_schema, even when partial. Answer drafting does not override the completion verdict. " + ANSWER_INSTRUCTION,
         })
         ids = {r.id for r in state["plan"].requirements}
         if not set(completion.satisfied_ids) <= ids or not set(completion.missing) <= ids:
@@ -247,10 +271,8 @@ def run(request, tools, provider, context, progress=None):
             usable = [r for r in state["records"].values() if rid in r["requirement_ids"] and r["state"] in {"ok", "empty"}]
             if not usable:
                 completion.missing[rid] = "no complete or empty evidence for requirement"
-            if any(r["state"] == "partial" and rid in r["requirement_ids"] for r in state["records"].values()):
-                completion.missing[rid] = "partial step coverage requires explicit disclosure; not fully completed"
         completion.complete = completion.complete and not completion.missing and set(completion.satisfied_ids) == ids
-        return {"completion": completion, "stop": "complete" if completion.complete else "partial" if state["replans"] >= MAX_REPLANS or counters["tools"] >= MAX_TOOL_CALLS or counters["llm"] >= MAX_LLM_CALLS - 2 else None}
+        return {"completion": completion, "answer_draft": completion.answer, "stop": "complete" if completion.complete else "partial" if not completion.can_recover or state["replans"] >= MAX_REPLANS or counters["tools"] >= MAX_TOOL_CALLS or counters["llm"] >= MAX_LLM_CALLS - 2 else None}
 
     def replan(state):
         patch = decide("replan", PlanPatch, {
@@ -262,6 +284,11 @@ def run(request, tools, provider, context, progress=None):
             "instruction": "Append only necessary repair/supplement steps with NEW IDs. Preserve user constraints and successful evidence. Resolve gaps from observations; no fixed scenarios. If impossible, return no steps and explain. Do not repeat successful calls; reuse dependencies.",
         })
         validate_steps(patch.new_steps, {r.id for r in state["plan"].requirements}, [s.step_id for s in state["steps"]])
+        def signature(step):
+            return _json(step.model_dump(exclude={"step_id", "requirement_ids"}))
+        old_signatures = {signature(step) for step in state["steps"]}
+        if patch.new_steps and all(signature(step) in old_signatures for step in patch.new_steps):
+            return {"replans": state["replans"] + 1, "stop": "partial"}
         return {"steps": [*state["steps"], *patch.new_steps], "replans": state["replans"] + 1, "stop": None if patch.new_steps else "partial"}
 
     def answer(state):

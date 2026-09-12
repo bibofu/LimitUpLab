@@ -403,6 +403,7 @@ def evaluate_live_trial(
     replan_count = sum(int(trace.input.get("replan_count") or 0) for trace in graph_plans)
     replan_count += sum(int(trace.output.get("replan_count") or 0) for trace in task_executions)
     graph_compilation_count = sum(int(trace.input.get("graph_compilation_count") or 0) for trace in graph_plans)
+    graph_compilation_count += len(task_executions)
     backend_repair_count = backend_repairs + sum(int(trace.input.get("backend_repair_count") or 0) for trace in graph_plans)
     policy_repair_count = policy_repairs + sum(int(trace.input.get("policy_repair_count") or 0) for trace in graph_plans)
     if tool_calls > case.expected.max_tool_calls:

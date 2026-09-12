@@ -7,6 +7,42 @@ from typing import get_type_hints
 from app.agents.tool_policy import AgentToolPolicyEngine
 from app.post_limit_query_contract import PostLimitQueryContract
 
+OUTPUT_COLLECTIONS = {
+    "first_board_ratings": ("top_candidates", "symbol"),
+    "limit_up_events": ("events", "symbol"),
+    "hot_stock_ranking": ("items", "symbol"),
+    "sector_performance": ("top_sectors", "sector_name"),
+    "sector_stock_ranking": ("stocks", "symbol"),
+    "daily_board_promotion": ("items", "trade_date"),
+    "stock_news": ("items", "title"),
+    "finance_news": ("items", "title"),
+}
+
+
+def evidence_payload(result):
+    """Stable public evidence shape; preserve full ratings, avoid model repr strings."""
+    from fastapi.encoders import jsonable_encoder
+    raw = jsonable_encoder(result.output)
+    def named_metrics(value):
+        if isinstance(value, list):
+            return [named_metrics(item) for item in value]
+        if isinstance(value, dict):
+            value = {key: named_metrics(item) for key, item in value.items()}
+            metric = value.get("metric")
+            if isinstance(metric, str) and metric.isidentifier() and "value" in value:
+                value.setdefault(metric, value["value"])
+        return value
+    raw = named_metrics(raw)
+    trace = jsonable_encoder(result.trace_output)
+    if result.name == "first_board_ratings" and isinstance(raw, dict) and "candidates" in raw:
+        return {**raw, **trace, "top_candidates": [
+            {**item.get("facts", {}), **{k: v for k, v in item.items() if k != "facts"}}
+            for item in raw["candidates"]
+        ]}
+    if isinstance(raw, list) and trace:
+        return trace
+    return raw if isinstance(raw, (dict, list)) else trace
+
 
 def schemas_for_runtime(tools):
     """Expose Python-required parameters omitted by the legacy planner schema."""
@@ -15,6 +51,9 @@ def schemas_for_runtime(tools):
     result = []
     for schema in tools.schemas():
         item = deepcopy(schema.model_dump())
+        if schema.name in OUTPUT_COLLECTIONS:
+            collection, entity = OUTPUT_COLLECTIONS[schema.name]
+            item["output_contract"] = {"collection_path": collection, "entity_path": f"{collection}.*.{entity}"}
         method = getattr(AgentToolRegistry, schema.name, None)
         if method and not schema.name.startswith("post_limit_"):
             required = set(item["args_schema"].get("required", []))
@@ -31,6 +70,13 @@ def invoke(tools, capability, name, arguments):
     )
     if errors:
         raise ValueError("; ".join(errors))
+    arguments = dict(arguments)
+    resolver = getattr(tools, "resolve_stock_identity", None)
+    if callable(resolver):
+        if isinstance(arguments.get("symbol"), str):
+            arguments["symbol"] = resolver(arguments["symbol"])[0]
+        if isinstance(arguments.get("symbols"), list):
+            arguments["symbols"] = [resolver(value)[0] for value in arguments["symbols"]]
     if callable(getattr(tools, "execute_frozen_calls", None)):
         from app.agents.tools import ToolResult
         from app.models import AgentChatRequest
