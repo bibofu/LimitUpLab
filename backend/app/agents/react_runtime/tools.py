@@ -8,7 +8,7 @@ from typing import get_type_hints
 
 from app.agents.query_contract import current_query_reference_date
 from app.agents.react_runtime.catalog import CATALOG, schemas
-from app.agents.tool_policy import _validate_schema_value
+from app.agents.tool_schema import validate_schema_value
 from app.agents.tools import ToolResult
 from app.post_limit_query_contract import PostLimitQueryContract
 from app.agents.react_runtime.contracts import CONTROL_MODELS
@@ -50,7 +50,7 @@ class ToolGateway:
             raise ValueError("Unknown arguments: " + str(sorted(set(args) - set(schema["properties"]))))
         errors = [f"Missing required field: {k}" for k in schema.get("required", []) if args.get(k) is None]
         errors.extend(f"{key}: {error}" for key, value in args.items()
-                      for error in _validate_schema_value(value, schema["properties"][key]))
+                      for error in validate_schema_value(value, schema["properties"][key]))
         if errors:
             raise ValueError("; ".join(errors))
         for key in (*CATALOG[name].dates, "requested_as_of"):

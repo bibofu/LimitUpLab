@@ -1,44 +1,25 @@
-"""Tool-grounded first-board chat agent."""
+"""ReAct chat entry and planning-only helpers still consumed by evaluation.
 
-import os
+Legacy chat execution and scenario fallbacks have been retired. The planner
+helpers below are not part of the production ReAct decision loop.
+"""
+
 import re
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import date
 from time import perf_counter
-from typing import Any, Callable, Iterator
+from typing import (
+    Any,
+    Callable,
+    Iterator,
+)
 
-from app.agents.limit_up_execution import execute_limit_up_query
-from app.agents.tool_execution import execute_tool_calls as _execute_llm_tool_calls
 from app.agents.tool_execution.helpers import (
     _FirstBoardFilterQuery,
-    _build_first_board_filter_trace,
-    _compact_ratings_facts,
     _extract_first_board_filter,
-    _extract_symbol_hint,
-    _filter_first_board_candidates,
     _filter_query_from_context,
-    _has_events_for_date,
     _parse_optional_date,
-    _rating_fact,
-    _summarize_first_board_industries,
-    _tool_error_trace,
-)
-from app.agents.explanation import explain_first_board_rating
-from app.agents.chat_answer_validation import (
-    _add_composed_tool_facts,
-    _contains_complete_position_groups,
-    _contains_daily_promotion_facts,
-    _contains_every_event_symbol,
-    _contains_every_hot_stock_symbol,
-    _contains_exact_hot_stock_event_intersection,
-    _contains_high_score_promotion_facts,
-    _requires_complete_hot_stock_answer,
-    _requires_complete_position_answer,
-    _requires_daily_promotion_answer,
-    _requires_exhaustive_event_answer,
-    _requires_high_score_promotion_answer,
-    _requires_hot_stock_event_intersection_answer,
 )
 from app.agents.chat_plan_normalization import (
     _normalize_broad_sector_plan,
@@ -55,36 +36,21 @@ from app.agents.chat_prompts import (
     PLANNER_FUNCTION_DESCRIPTION,
     PLANNER_FUNCTION_NAME,
     _planner_function_parameters,
-    _tool_answer_system_prompt,
-    _tool_answer_user_prompt,
     _tool_planner_system_prompt,
     _tool_planner_user_prompt,
     planner_prompt_component_sizes,
 )
 from app.agents.chat_templates import (
-    TEXT,
     UNANSWERABLE_TEXT,
     _template_answer_from_tool_facts,
-    _template_daily_board_promotion_answer,
-    _template_first_board_position_answer,
 )
 from app.agents.capability_contract import (
-    capability_answer_instruction,
     capability_schema_prompt,
     ensure_capability_tool_calls,
-    infer_capabilities_from_facts,
     normalize_capabilities,
 )
-from app.agent_output_sanitizer import (
-    AgentAnswerStreamSanitizer,
-    friendly_tool_label,
-)
 from app.agents.query_contract import (
-    MARKET_SEGMENT_LABELS,
-    build_conversation_query_understanding_view,
-    build_market_event_query_contract,
     build_limit_up_query_contract,
-    current_query_reference_date,
     extract_market_event_type,
     looks_like_named_limit_up_sector_list_question,
     looks_like_limit_up_sector_summary_question,
@@ -95,42 +61,17 @@ from app.post_limit_query_contract import (
     looks_like_post_limit_question,
 )
 from app.agents.tool_policy import (
-    AgentToolPolicyEngine,
-    QuestionSignals as _QuestionSignals,
-    ToolExecution,
-    extract_market_index_days as _extract_market_index_days,
-    extract_kline_days as _extract_kline_days,
-    extract_promotion_days as _extract_promotion_days,
-    extract_trade_date as _extract_trade_date,
     looks_like_broad_sector_ranking_question as _looks_like_broad_sector_ranking_question,
     looks_like_daily_board_promotion_question as _looks_like_daily_board_promotion_question,
-    looks_like_first_board_position_question as _looks_like_first_board_position_question,
-    looks_like_promotion_opening_question as _looks_like_promotion_opening_question,
-    looks_like_rating_explain_question as _looks_like_rating_explain_question,
-    looks_like_stock_kline_question as _looks_like_stock_kline_question,
 )
-from app.agents.tools import (
-    AgentToolRegistry,
-    EXTENDED_AGENT_PROFILE,
-    ToolResult,
-    compact_prediction_quality_audit,
-)
+from app.agents.tools import AgentToolRegistry
 from app.models import (
     AgentChatRequest,
-    AgentChatPerformance,
     AgentChatResponse,
-    AgentToolTrace,
     AgentRun,
     ChatSessionMemory,
     ChatSessionMessage,
-    build_agent_evidence_cards,
-    build_agent_tool_policy_audit,
-    FirstBoardRating,
-    FirstBoardRatingsResponse,
     LimitUpEvent,
-    MarketIndexTrendFacts,
-    MarketSummary,
-    SectorPerformanceFacts,
 )
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.llm_provider import (
@@ -140,44 +81,14 @@ from app.services.llm_provider import (
     NativeFunctionCallingUnavailable,
     get_llm_provider,
 )
-from app.services.prompt_security import (
-    assess_direct_prompt_injection,
-    contains_prompt_leak,
-)
+from app.services.prompt_security import assess_direct_prompt_injection
 from app.services.session_memory import memory_prompt_payload
 
 
-CHAT_AGENT_VERSION = "first-board-chat-langgraph-phase2-v20"
 _FORCE_TEMPLATE_ANSWER_OVERRIDE: ContextVar[bool | None] = ContextVar(
     "force_template_answer_override",
     default=None,
 )
-SEMI = "\uff1b"
-IDEOGRAPHIC_COMMA = "\u3001"
-PLANNER_DIRECT_ANSWER_INTENTS = {"capability_intro", "greeting", "smalltalk"}
-SUPPORTED_INTENTS = {
-    "capability_intro",
-    "greeting",
-    "smalltalk",
-    "prompt_injection_refusal",
-    "out_of_scope",
-    "unsafe_investment_advice",
-    "market_schedule",
-    "market_context",
-    "general_llm",
-    "tool_grounded_answer",
-    "stock_trend",
-    "risk_summary",
-    "rating_explain",
-    "first_board_filter",
-    "first_board_context_top",
-    "first_board_sector_summary",
-    "market_event_query",
-    "limit_up_query",
-    "today_summary",
-    "sector_performance",
-    "llm_explanation",
-}
 
 
 @contextmanager
@@ -191,30 +102,8 @@ def template_answer_override(enabled: bool) -> Iterator[None]:
         _FORCE_TEMPLATE_ANSWER_OVERRIDE.reset(token)
 
 
-
-
-KEYWORDS = {
-    "capability_intro": ("\u4f60\u80fd\u505a\u4ec0\u4e48", "\u4f60\u4f1a\u4ec0\u4e48", "\u600e\u4e48\u7528", "\u80fd\u529b", "\u529f\u80fd", "\u5e2e\u52a9", "help"),
-    "greeting": ("\u4f60\u597d", "\u55e8", "hello", "hi"),
-    "smalltalk": ("\u8c22\u8c22", "\u597d\u7684", "\u7ee7\u7eed", "ok", "thanks"),
-    "market_schedule": ("\u5f00\u76d8", "\u6536\u76d8", "\u96c6\u5408\u7ade\u4ef7", "\u4ea4\u6613\u65f6\u95f4", "open", "close"),
-    "market_context": ("\u5e02\u573a", "\u60c5\u7eea", "\u8d5a\u94b1\u6548\u5e94", "\u4e8f\u94b1\u6548\u5e94", "\u6c1b\u56f4", "sentiment", "market"),
-    "risk_summary": ("\u98ce\u9669", "\u7f3a\u70b9", "\u95ee\u9898", "risk"),
-    "llm_explanation": ("\u8be6\u7ec6", "\u89e3\u91ca", "\u5206\u6790", "explain"),
-    "rating_explain": ("\u4e3a\u4ec0\u4e48", "\u8bc4\u5206", "\u8bc4\u7ea7", "\u9ad8\u5206", "\u4f4e\u5206", "score"),
-    "first_board_filter": ("\u76f8\u5173", "\u884c\u4e1a", "\u9898\u6750", "\u533b\u836f", "\u533b\u7597", "\u5236\u836f", "\u836f\u4e1a", "\u751f\u7269"),
-    "first_board_sector_summary": ("\u677f\u5757", "\u884c\u4e1a", "\u4e3b\u8981\u677f\u5757", "\u54ea\u4e9b\u677f\u5757"),
-    "limit_up_query": ("\u6da8\u505c", "\u8fde\u677f", "\u4e8c\u8fde\u677f", "\u4e09\u8fde\u677f", "\u6700\u9ad8\u677f", "\u68af\u961f", "\u70b8\u677f"),
-    "today_summary": ("\u603b\u7ed3", "\u4eca\u5929", "\u9996\u677f", "\u5019\u9009", "summary"),
-}
-
-
-
-
-
-
 class AgentQueryPlan:
-    """Normalized LLM plan shared by runtime execution and semantic evals."""
+    """Legacy planner result retained for planning-only evaluation."""
 
     # Initialize AgentQueryPlan with the supplied dependencies and per-instance state.
     def __init__(
@@ -250,7 +139,7 @@ def plan_agent_query(
     session_memory: ChatSessionMemory | None = None,
     repository: SQLiteFirstBoardRepository | None = None,
 ) -> AgentQueryPlan:
-    """Run only the production LLM planning stage without executing evidence tools."""
+    """Run the historical planning-only evaluator without executing evidence tools."""
 
     tools = AgentToolRegistry(
         events=events,
@@ -286,14 +175,6 @@ def answer_first_board_chat(
     if answer_delta_callback:
         answer_delta_callback(response.answer)
     return response
-
-
-
-
-
-
-
-
 
 
 def _generate_llm_query_plan(
@@ -532,26 +413,6 @@ def _generate_llm_query_plan(
     )
 
 
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 class _SessionContext:
     """Minimal chat context recovered from recent Agent runs."""
 
@@ -581,26 +442,6 @@ class _SessionContext:
         self.promotion_days = promotion_days
         self.promotion_symbols = promotion_symbols or []
         self.session_memory = session_memory
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def _build_session_context(
@@ -793,68 +634,6 @@ def _looks_like_post_limit_context_followup(
     return any(term in compact for term in ("这只", "它", "该股", "这票")) and any(
         term in compact for term in ("为什么入选", "入选原因", "怎么走", "走势", "路径", "量比", "回撤")
     )
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
-
 
 
 def _looks_like_general_limit_up_question(message: str) -> bool:
