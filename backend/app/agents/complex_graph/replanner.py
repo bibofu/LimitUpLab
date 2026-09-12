@@ -68,6 +68,23 @@ def replan(scenario: str, request: ReplanRequest, *, replan_index: int) -> Repla
             ]
         else:
             steps = [ComplexPlanStep(step_id=f"{suffix}-N", capability="stock_news", tool_name="stock_news", depends_on=("S3",), arguments={"days": 7, "limit": 10}, argument_bindings=_bound("S3", "hot_limit_up_intersection", "symbol"), replan_index=replan_index)]
+    elif scenario == "stock_risk_branch_v2":
+        symbol = next(
+            (
+                item.get("tool_args", {}).get("query")
+                for item in request.tool_observations
+                if item["tool"] == "dragon_tiger_list"
+                and isinstance(item.get("tool_args"), dict)
+                and item["tool_args"].get("query")
+            ),
+            None,
+        )
+        if isinstance(symbol, str) and symbol.strip():
+            steps = [ComplexPlanStep(
+                step_id=f"{suffix}-N", capability="stock_news", tool_name="stock_news",
+                arguments={"symbol": symbol.strip(), "days": 7, "limit": 10},
+                replan_index=replan_index,
+            )]
     elif scenario == "partial_stock_comparison_v2":
         failed_args = next((item["tool_args"] for item in request.tool_observations if item["tool"] == "stock_kline" and item["result_state"] == "error"), None)
         if failed_args:

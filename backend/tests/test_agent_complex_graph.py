@@ -87,6 +87,23 @@ def test_complexity_router_selects_dynamic_intersection_query() -> None:
     assert "dependent_tool_arguments" in decision.reason_codes
 
 
+def test_router_prefers_deep_intersection_risk_scenario() -> None:
+    decision = route_complexity(
+        "找出今天热股榜前20中同时涨停的股票，只对交集股票查询首板评分和最近20日K线；"
+        "再查龙虎榜，如果没有结果就补查新闻。"
+    )
+    assert decision.route == "complex"
+    assert decision.supported_scenario == "intersection_risk_v2"
+
+
+def test_router_selects_explicit_stock_risk_branch() -> None:
+    decision = route_complexity(
+        "那再查询风华高科最近20日K线和龙虎榜；如果龙虎榜没有结果，就用最近7天新闻补充风险证据。"
+    )
+    assert decision.route == "complex"
+    assert decision.supported_scenario == "stock_risk_branch_v2"
+
+
 @pytest.mark.parametrize(
     ("case_id", "scenario"),
     [
@@ -104,11 +121,17 @@ def test_router_exposes_only_supported_phase_two_scenarios(case_id: str, scenari
     assert decision.matched_signals
 
 
-@pytest.mark.parametrize("case_id", ["LIVE-REPLAN-005", "LIVE-REPLAN-007", "LIVE-STRESS-002"])
+@pytest.mark.parametrize("case_id", ["LIVE-REPLAN-005", "LIVE-REPLAN-007"])
 def test_router_keeps_non_allowlisted_phase_two_scenarios_on_fast_path(case_id: str) -> None:
     decision = route_complexity(_live_case(case_id).turns[-1].user)
     assert decision.route == "fast"
     assert decision.supported_scenario is None
+
+
+def test_router_exposes_existing_intersection_risk_graph() -> None:
+    decision = route_complexity(_live_case("LIVE-STRESS-002").turns[-1].user)
+    assert decision.route == "complex"
+    assert decision.supported_scenario == "intersection_risk_v2"
 
 
 def test_dynamic_binding_uses_observed_entity_set_and_keeps_empty_set() -> None:
@@ -292,6 +315,88 @@ def test_production_shaped_empty_dragon_tiger_replans_to_fallback_tools() -> Non
         "stock_kline",
         "stock_news",
     ]
+
+
+def test_stock_risk_branch_uses_context_target_and_replans_empty_dragon_tiger() -> None:
+    result = run_complex_graph(
+        scenario="stock_risk_branch_v2",
+        request=AgentChatRequest(
+            session_id="context-stock-risk",
+            message="那再查最近20日K线和龙虎榜；如果龙虎榜没有结果，就用最近7天新闻补充。",
+            trade_date=date(2026, 5, 15),
+        ),
+        tools=FrozenLiveToolRegistry(_live_case("LIVE-REPLAN-002").failure_injections),
+        limit_up_arguments={},
+        context_symbol="300750",
+        answer_builder=lambda execution: {
+            "answer": "已基于工具证据回答。",
+            "source": "test",
+        },
+    )
+
+    assert result.completion_status == "complete"
+    assert result.replan_count == 1
+    assert result.execution["tool_call_names"] == [
+        "stock_kline", "dragon_tiger_list", "stock_news",
+    ]
+    assert all(
+        trace.input.get("symbol") == "300750"
+        for trace in result.execution["tool_results"]
+        if trace.name in {"stock_kline", "stock_news"}
+    )
+    dragon = next(
+        trace for trace in result.execution["tool_results"]
+        if trace.name == "dragon_tiger_list"
+    )
+    assert dragon.input["query"] == "300750"
+
+
+def test_stock_risk_branch_answer_fallback_keeps_kline_and_dragon_tiger() -> None:
+    response = answer_first_board_chat(
+        AgentChatRequest(
+            session_id="stock-risk-answer",
+            symbol="300750",
+            message="查询宁德时代最近20日K线和龙虎榜；如果龙虎榜没有结果，就用最近7天新闻补充。",
+            trade_date=date(2026, 5, 15),
+        ),
+        SAMPLE_EVENTS,
+        llm_provider=_PhaseOneProvider(),
+        tool_registry=FrozenLiveToolRegistry([]),
+    )
+
+    assert response.intent == "stock_risk_branch_v2"
+    assert "stock_kline" in response.tool_calls
+    assert "dragon_tiger_list" in response.tool_calls
+    assert "300750" in response.answer
+    assert "龙虎榜" in response.answer
+    assert "交易日" in response.answer
+
+
+def test_intersection_risk_answer_fallback_keeps_all_evidence_groups() -> None:
+    case = _live_case("LIVE-STRESS-002")
+    response = answer_first_board_chat(
+        AgentChatRequest(
+            session_id="intersection-risk-answer",
+            message=case.turns[-1].user,
+            trade_date=date(2026, 5, 15),
+        ),
+        SAMPLE_EVENTS,
+        llm_provider=_PhaseOneProvider(),
+        tool_registry=FrozenLiveToolRegistry(case.failure_injections),
+    )
+
+    assert response.intent == "intersection_risk_v2"
+    assert all(
+        tool in response.tool_calls
+        for tool in (
+            "hot_stock_ranking", "limit_up_events", "first_board_ratings",
+            "stock_kline", "dragon_tiger_list", "stock_news",
+        )
+    )
+    assert "龙虎榜" in response.answer
+    assert "交易日" in response.answer
+    assert "资讯" in response.answer
+    assert "None" not in response.answer
 
 
 def test_empty_news_plan_requires_an_explicit_stock_target() -> None:

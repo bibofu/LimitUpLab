@@ -25,6 +25,23 @@ def check_completion(scenario: str, traces: list[AgentToolTrace], replan_count: 
         complete = all(has(tool) for tool in ("hot_stock_ranking", "limit_up_events", "first_board_ratings", "stock_kline")) and bool(dragon) and (not fallback_needed or has("stock_news"))
         missing = [] if complete else (["intersection_news_fallback"] if dragon else ["intersection_risk_evidence"])
         return CompletionCheck(complete=complete, missing_requirements=missing, reason="intersection members require trend and conditional risk evidence")
+    if scenario == "stock_risk_branch_v2":
+        dragon = by_name.get("dragon_tiger_list", [])
+        fallback_needed = bool(dragon) and any(
+            result_state(item) in {"empty", "partial", "error"} for item in dragon
+        )
+        complete = has("stock_kline") and bool(dragon) and (
+            not fallback_needed or has("stock_news")
+        )
+        missing = [] if complete else (
+            ["stock_news_fallback"] if dragon and fallback_needed
+            else ["stock_kline_and_dragon_tiger_evidence"]
+        )
+        return CompletionCheck(
+            complete=complete,
+            missing_requirements=missing,
+            reason="stock risk branch requires trend and conditional Dragon-Tiger fallback evidence",
+        )
     if scenario == "top_ratings_then_kline_v2":
         complete = has("first_board_ratings") and has("stock_kline")
         return CompletionCheck(complete=complete, missing_requirements=[] if complete else ["top_candidate_kline"], reason="top candidates require downstream K-line evidence")

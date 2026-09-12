@@ -638,3 +638,36 @@ bindings/source references，执行级 fingerprint 使用 resolved arguments。
 `stock_count` 覆盖，为正时仍支持只返回数量、不返回明细的 count-only 模式。新增生产形状
 龙虎榜 payload 的 Complex Graph 回归，验证评分、龙虎榜及 K线/新闻 fallback 经两次 bounded
 Replan 完成。
+
+---
+
+## BC-025：深层交集风险问法退回窄交集路径
+
+### 现象
+
+> 找出今天热股榜前20中同时涨停的股票，只对交集股票查询首板评分和最近20日K线；再查龙虎榜，如果没有结果就补查新闻。
+
+生产 Router 没有暴露已经实现的 `intersection_risk_v2`。请求退回普通路径后只完成
+热股与涨停交集及首板评分，遗漏 K线、龙虎榜和条件新闻。
+
+### 修复与回归
+
+新增高优先级深层交集规则并补齐 Answer Contract，使已有的交集、评分、批量 K线、龙虎榜
+及 empty 新闻 fallback 图正式接入生产入口。路由回归同时验证它优先于窄版 Phase 1 交集。
+
+---
+
+## BC-026：跨轮个股风险组合只执行新闻
+
+### 现象
+
+> 那再查询风华高科最近20日K线和龙虎榜；如果龙虎榜没有结果，就用最近7天新闻补充风险证据。
+
+会话能够继承个股，但没有对应的 bounded graph 场景，普通 Planner 最终只执行新闻，遗漏
+用户明确要求的 K线和龙虎榜。
+
+### 修复与回归
+
+新增 `stock_risk_branch_v2`：先并列执行显式或上下文股票的 K线与龙虎榜，仅在龙虎榜
+empty、partial 或 error 时 Replan 新闻；股票名称提取同步覆盖 K线/龙虎榜问法。回归验证
+上下文代码绑定、20日窗口、conditional fallback 和工具完整性。

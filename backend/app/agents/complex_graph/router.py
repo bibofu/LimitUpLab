@@ -45,6 +45,7 @@ def extract_explicit_stock_target(message: str, explicit_symbol: str | None = No
     if code:
         return code.group(0)
     for pattern in (
+        r"(?:查|查询|看看|分析)([\u4e00-\u9fff]{2,8}?)(?:最近|近期|\d{1,2}(?:日|天))?(?:k线|龙虎榜)",
         r"(?:查|查询|看看|分析)([\u4e00-\u9fff]{2,8}?)(?:最近|近期).{0,6}?新闻",
         r"([\u4e00-\u9fff]{2,8}?)(?:最近|近期).{0,6}?新闻",
     ):
@@ -70,13 +71,15 @@ def _signals(message: str) -> frozenset[str]:
         found.add("rating")
     if any(term in compact for term in ("评分最高", "最高分首板", "评分前")):
         found.add("top_ratings")
-    if "k线" in compact:
+    if any(term in compact for term in ("k线", "走势")):
         found.add("kline")
     if any(term in compact for term in ("逐只", "分别", "每只")):
         found.add("per_candidate")
     if "龙虎榜" in compact:
         found.add("dragon_tiger")
-    if any(term in compact for term in ("没有龙虎榜", "龙虎榜为空", "未上榜")):
+    if any(term in compact for term in ("没有龙虎榜", "龙虎榜为空", "未上榜")) or re.search(
+        r"龙虎榜.{0,8}(?:没有结果|无结果|查不到|为空)", compact
+    ):
         found.add("empty_dragon_tiger_branch")
     if "新闻" in compact:
         found.add("news")
@@ -101,6 +104,24 @@ _FLAGSHIP_RULE = ScenarioRule(
 )
 
 _PHASE_TWO_RULES = (
+    ScenarioRule(
+        "intersection_risk_v2",
+        frozenset({
+            "hot_scope", "limit_up_scope", "intersection", "rating", "kline",
+            "dragon_tiger", "empty_dragon_tiger_branch", "news",
+        }),
+        "intersection members require ratings, trend and conditional risk evidence",
+        priority=120,
+    ),
+    ScenarioRule(
+        "stock_risk_branch_v2",
+        frozenset({
+            "explicit_stock_target", "kline", "dragon_tiger",
+            "empty_dragon_tiger_branch", "news",
+        }),
+        "an explicit stock requires K-line and Dragon-Tiger evidence with conditional news fallback",
+        priority=110,
+    ),
     ScenarioRule(
         "rating_dragon_tiger_branch_v2",
         frozenset({"top_ratings", "dragon_tiger", "empty_dragon_tiger_branch"}),
@@ -129,7 +150,7 @@ _PHASE_TWO_RULES = (
 
 
 def route_complexity(message: str) -> ComplexityDecision:
-    """Route only the flagship and four explicitly supported Phase 2 patterns."""
+    """Route only allowlisted observation-dependent graph scenarios."""
 
     signals = _signals(message)
     for rule in sorted((_FLAGSHIP_RULE, *_PHASE_TWO_RULES), key=lambda item: item.priority, reverse=True):

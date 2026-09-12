@@ -72,6 +72,30 @@ def _template_answer_from_tool_facts(
     if _QuestionSignals.from_message(request.message).market_environment:
         return _template_market_environment_answer(facts)
 
+    if intent in {"intersection_risk", "stock_risk_branch"}:
+        parts: list[str] = []
+        groups: list[dict[str, Any]] = []
+        if {
+            "hot_stock_limit_up_intersection", "first_board_ratings",
+        } <= facts.keys():
+            groups.append({
+                "hot_stock_limit_up_intersection": facts["hot_stock_limit_up_intersection"],
+                "first_board_ratings": facts["first_board_ratings"],
+            })
+        for key in ("stock_kline", "dragon_tiger_list", "stock_news"):
+            if key in facts:
+                groups.append({key: facts[key]})
+        for group in groups:
+            rendered = _template_answer_from_tool_facts(
+                request=request,
+                intent="complex_evidence_component",
+                facts=group,
+            ).removesuffix(TEXT["safety"]).rstrip()
+            if rendered and rendered != UNANSWERABLE_TEXT:
+                parts.append(rendered)
+        if parts:
+            return "\n\n".join(parts) + f"\n{TEXT['safety']}"
+
     if "stock_news" in facts and "stock_kline" in facts:
         news_answer = _template_answer_from_tool_facts(
             request=request,
@@ -261,11 +285,15 @@ def _template_answer_from_tool_facts(
 
     if "dragon_tiger_list" in facts:
         payload = facts["dragon_tiger_list"]
+        items = payload.get("items", [])
+        matched_count = payload.get("matched_count")
+        if not isinstance(matched_count, (int, float)) or isinstance(matched_count, bool):
+            matched_count = len(items) if isinstance(items, list) else 0
         lines = [
             f"{payload.get('trade_date') or '最新'} 同花顺龙虎榜命中 "
-            f"{payload.get('matched_count')} 条："
+            f"{matched_count} 条："
         ]
-        for item in payload.get("items", [])[:20]:
+        for item in items[:20]:
             flow_parts = []
             for label, key in (
                 ("净买额", "net_buy_amount"),
@@ -803,6 +831,31 @@ def _template_answer_from_tool_facts(
 
     if "stock_kline" in facts:
         kline = facts["stock_kline"]
+        batch_rows = kline.get("stocks") if isinstance(kline, dict) else None
+        if not isinstance(batch_rows, list) and isinstance(kline, dict):
+            by_symbol = kline.get("by_symbol")
+            if isinstance(by_symbol, dict):
+                batch_rows = list(by_symbol.values())
+        if isinstance(batch_rows, list):
+            lines = ["批量 K 线证据："]
+            for row in batch_rows:
+                if not isinstance(row, dict):
+                    continue
+                row_payload = dict(row)
+                if not row_payload.get("data_as_of") and not row_payload.get("as_of_date"):
+                    row_payload["data_as_of"] = kline.get("data_as_of") or kline.get("as_of_date")
+                rendered = _template_answer_from_tool_facts(
+                    request=request,
+                    intent="complex_evidence_component",
+                    facts={"stock_kline": row_payload},
+                ).removesuffix(TEXT["safety"]).rstrip()
+                if rendered and rendered != UNANSWERABLE_TEXT:
+                    lines.append(f"- {rendered}")
+            source_errors = kline.get("source_errors") or []
+            if source_errors:
+                lines.append("K线数据限制：" + "；".join(str(item) for item in source_errors[:3]))
+            lines.append(TEXT["safety"])
+            return "\n".join(lines)
         stock = kline.get("stock") or kline
         symbol = stock.get("symbol") or kline.get("symbol")
         requested_days = (

@@ -42,6 +42,17 @@ _CONTRACTS = {
         instruction=" Preserve every successful stock result, identify failed stock lookups explicitly, and compare only dimensions supported for the successful candidates.",
         progress_label="正在整理多股票比较与失败披露",
     ),
+    "intersection_risk_v2": ScenarioAnswerContract(
+        fallback_intent="intersection_risk",
+        instruction=" Report only the observed hot-stock/limit-up intersection, ratings and trend evidence. Use news only when the Dragon-Tiger observation is empty, partial or error, and disclose missing evidence.",
+        progress_label="正在整理交集股票的评分、走势与风险证据",
+        intersection_output=True,
+    ),
+    "stock_risk_branch_v2": ScenarioAnswerContract(
+        fallback_intent="stock_risk_branch",
+        instruction=" Report the requested stock's K-line and Dragon-Tiger evidence. Use returned news only when Dragon-Tiger evidence is empty, partial or error, and disclose the boundary.",
+        progress_label="正在整理个股走势与条件风险证据",
+    ),
 }
 
 
@@ -63,7 +74,10 @@ def apply_scenario_disclosures(scenario: str, answer: str, execution: ToolExecut
             additions.append(
                 "本次新闻检索未返回可用结果；补充判断仅基于已返回的 K 线和个股动态，不能据此断言不存在其他重大新闻。"
             )
-    elif scenario == "rating_dragon_tiger_branch_v2":
+    elif scenario in {
+        "rating_dragon_tiger_branch_v2", "intersection_risk_v2",
+        "stock_risk_branch_v2",
+    }:
         dragon = [item for item in traces if item.name == "dragon_tiger_list"]
         if dragon and any(item.result and item.result.status in {"empty", "partial", "error"} for item in dragon):
             additions.append(
@@ -97,22 +111,32 @@ def violates_scenario_contract(
 
     if scenario == "hot_limit_up_rating_intersection_v1":
         return False
-    if any(term in answer for term in ("热股 Top10 与涨停", "热股和涨停股交集", "热股与涨停交集")):
+    if scenario != "intersection_risk_v2" and any(
+        term in answer
+        for term in ("热股 Top10 与涨停", "热股和涨停股交集", "热股与涨停交集")
+    ):
         return True
     traces = execution["tool_results"]
     if scenario in {
         "top_ratings_then_kline_v2",
         "rating_dragon_tiger_branch_v2",
         "partial_stock_comparison_v2",
+        "stock_risk_branch_v2",
+        "intersection_risk_v2",
     }:
-        successful_symbols = {
-            str(item.input["symbol"])
-            for item in traces
-            if item.name == "stock_kline"
-            and item.result is not None
-            and item.result.status in {"ok", "partial"}
-            and isinstance(item.input.get("symbol"), str)
-        }
+        successful_symbols: set[str] = set()
+        for item in traces:
+            if (
+                item.name != "stock_kline"
+                or item.result is None
+                or item.result.status not in {"ok", "partial"}
+            ):
+                continue
+            symbols = item.input.get("symbol")
+            if isinstance(symbols, str):
+                successful_symbols.add(symbols)
+            elif isinstance(symbols, list):
+                successful_symbols.update(str(symbol) for symbol in symbols)
         return bool(successful_symbols) and any(
             symbol not in answer for symbol in successful_symbols
         )

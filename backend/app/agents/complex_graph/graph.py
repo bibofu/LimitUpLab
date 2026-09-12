@@ -119,13 +119,13 @@ def run_complex_graph(
     graph_run_id = f"cgraph-{uuid4().hex[:12]}"
     planning_request = request
     validation_errors: list[str] = []
-    if scenario == "empty_news_fallback_v2":
+    if scenario in {"empty_news_fallback_v2", "stock_risk_branch_v2"}:
         resolved_target = AgentToolPolicyEngine(tools).resolve_stock_target(
             request, context_symbol=context_symbol
         )
         if not resolved_target:
             validation_errors.append(
-                "missing reliable stock target for empty-news fallback; replan rejected"
+                f"missing reliable stock target for {scenario}; replan rejected"
             )
         else:
             planning_request = request.model_copy(update={"symbol": resolved_target})

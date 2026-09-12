@@ -20,6 +20,7 @@ SCENARIO_CAPABILITIES: dict[str, tuple[str, ...]] = {
     "highest_board_risk_v2": ("limit_up_pool", "dragon_tiger"),
     "partial_stock_comparison_v2": ("stock_trend",),
     "intersection_risk_v2": ("popularity", "limit_up_pool", "first_board_rating", "stock_trend", "dragon_tiger"),
+    "stock_risk_branch_v2": ("stock_trend", "dragon_tiger", "stock_news"),
 }
 
 
@@ -70,6 +71,21 @@ def build_initial_plan(
     if scenario == "partial_stock_comparison_v2":
         symbols = list(dict.fromkeys(re.findall(r"(?<!\d)\d{6}(?!\d)", request.message)))[:2]
         return [ComplexPlanStep(step_id=f"S{index + 1}", capability="stock_trend", tool_name="stock_kline", arguments={"symbol": symbol, "days": 20}) for index, symbol in enumerate(symbols)]
+    if scenario == "stock_risk_branch_v2":
+        if not request.symbol:
+            raise ValueError("missing reliable stock target for stock risk branch")
+        match = re.search(r"最近\s*(\d{1,2})\s*(?:日|天).*?k线", request.message.lower())
+        days = max(1, min(int(match.group(1)), 60)) if match else 20
+        return [
+            ComplexPlanStep(
+                step_id="S1", capability="stock_trend", tool_name="stock_kline",
+                arguments={"symbol": request.symbol, "days": days},
+            ),
+            ComplexPlanStep(
+                step_id="S2", capability="dragon_tiger", tool_name="dragon_tiger_list",
+                arguments={"trade_date": trade_date, "board_type": "all", "query": request.symbol, "limit": 30},
+            ),
+        ]
     raise ValueError(f"unsupported complex scenario: {scenario}")
 
 
