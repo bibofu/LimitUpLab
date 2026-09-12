@@ -623,7 +623,7 @@ cd backend
 
 公开金标为 `backend/tests/fixtures/agent_chat_eval_dev_v2.json`，共 120 case；私有 40-case Holdout 通过 `LIMITUPLAB_EVAL_HOLDOUT_PATH` 注入。工具事实来自版本化 `agent_chat_eval_tool_fixture_v2.json`，不读取当前数据库或网络。原 50 题的逐题去向记录在 `agent_chat_eval_v1_migration.json`，冲突题不会直接进入 V2。完整契约见 [LimitUpLab Chat Eval V2](docs/Agent_Golden_Eval.md)。
 
-报告分别列出 Query Understanding、Planner、Tool Policy、Execution、Grounding、Final Answer、Efficiency 七层结果。离线 Planner 明确为 N/A，只验证确定性解析、Policy、冻结执行、接地和答案契约，不冒充模型能力。
+回放报告保留七层历史契约格式，离线 Planner 为 N/A；其结果仅验证冻结夹具的契约、接地和答案检查，不代表当前 ReAct 的 Policy 执行或真实模型能力。
 
 定向检查用例或分类：
 
@@ -632,13 +632,16 @@ cd backend
 .\.venv\Scripts\python.exe scripts\run_agent_eval.py --case-filter limit_up_pool
 ```
 
-真实 Planner 与最终 Answer 模型验收：
+生产 ReAct 真实模型 + 冻结工具世界验收：
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --dataset dev --mode live --sample-size 40 --trials 3 --seed night-1
+.\.venv\Scripts\python.exe scripts\run_agent_live_eval.py --case-id LIVE-SIMPLE-002 --trials 1
+.\.venv\Scripts\python.exe scripts\run_agent_live_eval.py --trials 3 --judge
 ```
 
-发布前使用 `--dataset all --mode live --trials 3 --judge`，并配置私有 Holdout、固定 Judge 模型和批准基线。`online-shadow` 每周只读已保存的真实 trace，不改变用户答案。完整报告写入 `output/agent-eval/<run_id>/`；`GET /api/agents/eval` 只读取最近一次完成报告，系统健康最多运行 12 条 smoke case。
+旧 `run_agent_eval.py --mode live`（独立 Planner + Answer）已退役；`run_agent_eval.py` 只保留 offline 回放与 online-shadow。ReAct Live 报告写入 `output/agent-live-eval/`，记录原始决策、实际工具、任务终态和模型调用数。公开 Live 集不等同于私有 Holdout 发布验收，完整发布适配仍待完成，不能把旧 Planner 成绩当作 ReAct 成绩。
+
+`online-shadow` 只读已保存的 trace，不改变用户答案；历史报告仍可读取。回放报告写入 `output/agent-eval/<run_id>/`，`GET /api/agents/eval` 只读取最近一次完成报告，系统健康最多运行 12 条冻结 smoke case。离线回放不是生产工具执行或模型质量证明。
 
 前端生产构建：
 

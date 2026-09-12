@@ -1,10 +1,9 @@
-"""Semantic capability contracts for planner-driven Agent workflows."""
+"""Research capability labels and evidence requirements for evaluation."""
 
 from __future__ import annotations
 
-import json
 from dataclasses import dataclass, field
-from typing import Any, Iterable
+from typing import Any
 from app.post_limit_query_contract import PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS
 
 
@@ -18,24 +17,13 @@ class CapabilityToolRequirement:
 
 @dataclass(frozen=True)
 class AgentCapability:
-    """A wording-independent business capability exposed to the LLM planner."""
+    """A research capability with explicit evidence requirements."""
 
     name: str
     description: str
     required_tools: tuple[CapabilityToolRequirement, ...]
     examples: tuple[str, ...] = ()
     answer_guidance: str = ""
-
-    def planner_payload(self) -> dict[str, Any]:
-        """Return semantic routing data; tool mapping stays server-side."""
-
-        payload: dict[str, Any] = {
-            "name": self.name,
-            "description": self.description,
-        }
-        if self.examples:
-            payload["examples"] = list(self.examples)
-        return payload
 
 
 CAPABILITIES: tuple[AgentCapability, ...] = (
@@ -285,164 +273,6 @@ CAPABILITIES: tuple[AgentCapability, ...] = (
 )
 
 CAPABILITY_BY_NAME = {item.name: item for item in CAPABILITIES}
-TOOL_CAPABILITIES = {
-    requirement.name: capability.name
-    for capability in CAPABILITIES
-    for requirement in capability.required_tools
-    if len(capability.required_tools) == 1
-}
-
-
-def normalize_capabilities(
-    raw_capabilities: object,
-    *,
-    tool_calls: Iterable[dict[str, Any]] = (),
-) -> tuple[str, ...]:
-    """Normalize planner output and infer capability IDs from selected tools."""
-
-    requested: list[str] = []
-    if isinstance(raw_capabilities, list):
-        for item in raw_capabilities:
-            raw_name = item.get("name") if isinstance(item, dict) else item
-            if not isinstance(raw_name, str):
-                continue
-            name = raw_name.strip().lower().replace("-", "_")
-            if name in CAPABILITY_BY_NAME and name not in requested:
-                requested.append(name)
-
-    for call in tool_calls:
-        tool_name = str(call.get("name") or "")
-        capability_name = TOOL_CAPABILITIES.get(tool_name)
-        if capability_name and capability_name not in requested:
-            requested.append(capability_name)
-    return tuple(requested)
-
-
-def infer_capabilities_from_facts(
-    capabilities: Iterable[str],
-    facts: dict[str, Any],
-) -> tuple[str, ...]:
-    """Recover capabilities when policy-repaired tools produced the evidence."""
-
-    resolved = list(normalize_capabilities(list(capabilities)))
-    fact_names = set(facts)
-    covered_by_composite = {
-        requirement.name
-        for name in resolved
-        if name in CAPABILITY_BY_NAME
-        and len(CAPABILITY_BY_NAME[name].required_tools) > 1
-        for requirement in CAPABILITY_BY_NAME[name].required_tools
-    }
-    # The key compares `len(item.required_tools)`. reverse=True reverses the resulting order.
-    for capability in sorted(
-        CAPABILITIES,
-        key=lambda item: len(item.required_tools),
-        reverse=True,
-    ):
-        if capability.name in resolved:
-            continue
-        if (
-            len(capability.required_tools) == 1
-            and capability.required_tools[0].name in covered_by_composite
-        ):
-            continue
-        if capability.required_tools and all(
-            requirement.name in fact_names for requirement in capability.required_tools
-        ):
-            resolved.append(capability.name)
-            if len(capability.required_tools) > 1:
-                covered_by_composite.update(
-                    requirement.name for requirement in capability.required_tools
-                )
-    return tuple(resolved)
-
-
-def capability_answer_instruction(capabilities: Iterable[str]) -> str:
-    """Build answer guidance only for capabilities active in this request."""
-
-    selected = [
-        CAPABILITY_BY_NAME[name]
-        for name in dict.fromkeys(capabilities)
-        if name in CAPABILITY_BY_NAME
-    ]
-    covered_by_composite = {
-        requirement.name
-        for capability in selected
-        if len(capability.required_tools) > 1
-        for requirement in capability.required_tools
-    }
-    guidance = [
-        f"- {capability.name}: {capability.answer_guidance}"
-        for capability in selected
-        if capability.answer_guidance
-        and not (
-            len(capability.required_tools) == 1
-            and capability.required_tools[0].name in covered_by_composite
-        )
-    ]
-    if not guidance:
-        return ""
-    return " CAPABILITY_RESPONSE_CONTRACTS:\n" + "\n".join(guidance)
-
-
-def ensure_capability_tool_calls(
-    capabilities: Iterable[str],
-    tool_calls: list[dict[str, Any]],
-    *,
-    allowed_tool_names: set[str] | frozenset[str],
-    max_calls: int = 8,
-) -> list[dict[str, Any]]:
-    """Merge minimum evidence calls into a planner plan without duplicating tools."""
-
-    normalized = [
-        {
-            "name": str(call.get("name") or ""),
-            "arguments": dict(call.get("arguments") or {}),
-        }
-        for call in tool_calls
-        if isinstance(call, dict) and call.get("name")
-    ]
-    by_name = {call["name"]: call for call in normalized}
-    required_order: list[str] = []
-    for capability_name in capabilities:
-        capability = CAPABILITY_BY_NAME.get(capability_name)
-        if capability is None:
-            continue
-        for requirement in capability.required_tools:
-            if requirement.name not in allowed_tool_names:
-                continue
-            existing = by_name.get(requirement.name)
-            if existing is None:
-                existing = {
-                    "name": requirement.name,
-                    "arguments": dict(requirement.default_arguments),
-                }
-                by_name[requirement.name] = existing
-                normalized.append(existing)
-            else:
-                existing["arguments"] = {
-                    **requirement.default_arguments,
-                    **existing["arguments"],
-                }
-            if requirement.name not in required_order:
-                required_order.append(requirement.name)
-
-    ordered = [by_name[name] for name in required_order]
-    ordered.extend(call for call in normalized if call["name"] not in required_order)
-    return ordered[:max_calls]
-
-
-def capability_schema_prompt(
-    allowed_tool_names: set[str] | frozenset[str],
-) -> str:
-    """Serialize capabilities whose evidence tools are available in this profile."""
-
-    available = [
-        item.planner_payload()
-        for item in CAPABILITIES
-        if all(req.name in allowed_tool_names for req in item.required_tools)
-    ]
-    return json.dumps(available, ensure_ascii=False, separators=(",", ":"))
 
 
 def available_capability_names(

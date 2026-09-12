@@ -6,41 +6,33 @@ come from deterministic code and recorded data; the model plans and explains.
 
 ## Start with one user question
 
-1. `frontend/src/components/AgentChatDock.tsx`, `sendMessage`: builds the request
-   with the question, session ID and current stock/date context. Its callback
-   displays progress and draft answer fragments.
-2. `frontend/src/api.ts`, `streamAgentChatMessage`: sends the POST and parses
-   server-sent events (SSE). A network chunk can contain part of a record or
-   several records; the buffer handles both cases.
-3. `backend/app/routers/agents.py`, `stream_first_board_agent_chat`: verifies
-   conversation ownership, reserves the request quota, saves the user's message
-   and starts the worker. It also owns persistence and usage accounting.
-4. `backend/app/services/session_memory.py`, `prepare_session_context`: selects
-   bounded recent messages and optionally updates an older-message summary.
-   Memory resolves conversational references; it is not current market evidence.
-5. `backend/app/agents/chat.py`, `answer_first_board_chat`: coordinates the answer
-   paths. It handles security and scope boundaries, tries model planning and
-   falls back to deterministic domain handlers when planning is unavailable.
-6. `_generate_llm_query_plan`: asks the model for capabilities, intent and context
-   mode. `capability_contract.py` maps capabilities to evidence tools. Query
-   contracts and normalization helpers derive and constrain business arguments.
-7. `backend/app/agents/tool_execution/__init__.py`, `execute_tool_calls`: checks
-   tool availability and dispatches in order to domain handlers. Those handlers
-   call `AgentToolRegistry` in `tools.py`, which connects services and repositories.
-8. `backend/app/agents/tool_policy.py`, `reconcile`: checks the executed results
-   and adds required evidence omitted by the plan. Repair reasons stay in Trace.
-9. `_answer_with_llm_tool_agent` in `chat.py`: composes tool facts and selects a
-   deterministic template or a facts-only model answer. Specific completeness
-   and safety checks can replace model prose with the prepared template.
-10. `AgentChatResponse` in `models.py`: derives stock mentions, evidence cards,
-    suggested questions and planner-versus-final audit metadata. The route saves
-    the answer and sends `completed`; the frontend replaces any provisional text.
+1. `frontend/src/components/AgentChatDock.tsx`: sends the question and session
+   context, displays progress, and publishes only the completed answer.
+2. `frontend/src/utils/agentChatTransport.ts`: parses SSE, reconnects once with
+   the event cursor, and preserves request identity for an in-page retry.
+3. `backend/app/routers/react_chat.py`: owns authenticated request admission,
+   workers, cancellation, reconnect and atomic completion persistence.
+4. `backend/app/agents/react_runtime/lifecycle.py`: stores run identity,
+   checkpoints, call results and events, with owner isolation and idempotency.
+5. `backend/app/agents/chat.py`: the small public ReAct entry. There is no
+   separate capability Planner, legacy routing or template-mode switch.
+6. `backend/app/agents/react_runtime/runtime.py`: the single compiled StateGraph
+   performs model decisions, Policy checks, tool calls, observation and final
+   validation. Model/tool/deadline limits bound the same loop.
+7. `react_runtime/tools.py` and `tool_schema.py`: validate explicit arguments and
+   dispatch to `agents/tools.py`. They do not silently add tools based on wording.
+8. `react_runtime/catalog.py`, `contracts.py` and `evidence.py`: define tool
+   capabilities, controlled computation, full result references and provenance.
+9. `react_runtime/context.py`: separates historical evidence from new facts and
+   gives current explicit conditions priority over earlier context.
+10. `models.py`: builds user-visible metadata and retains compatibility for
+    historical stored traces. `react_chat.py` persists the final response once.
 
-The non-streaming `/chat` route shares the answer function. Capability questions,
-missing-data responses, structured lists and failures can take shorter paths.
-There is no requirement that every turn call every Agent role or call a model
-exactly twice. Memory refreshes and fallback attempts can add calls; deterministic
-paths can omit them.
+For evaluation, `chat_live_eval_runner.py` executes this production loop with
+frozen tools. `chat_eval_runner_v2.py` retains fixture replay, shadow and report
+reading; it no longer runs a separate Planner/Answer model pipeline. The deleted
+`eval_runner.py`, `tool_policy.py`, `tool_execution/` and old chat Prompt/template
+modules are not part of the current call graph.
 
 ## Follow the data behind an answer
 

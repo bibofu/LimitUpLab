@@ -94,23 +94,6 @@ class AgentToolSchema:
             "returns": self.returns,
         }
 
-    def planner_dump(self) -> dict[str, Any]:
-        """Serialize only fields needed by the LLM to choose and call a tool."""
-
-        properties = self.args_schema.get("properties", {})
-        return {
-            "name": self.name,
-            "description": self.description,
-            "arguments": {
-                name: {
-                    key: definition[key]
-                    for key in ("type", "enum")
-                    if key in definition
-                }
-                for name, definition in properties.items()
-            },
-            "required": self.args_schema.get("required", []),
-        }
 
 
 @dataclass(frozen=True)
@@ -945,14 +928,6 @@ class AgentToolRegistry:
             schema for schema in TOOL_SCHEMAS if self.is_enabled(schema.name)
         ]
 
-    def schema_prompt(self) -> str:
-        """Return a JSON tool description block for the planner prompt."""
-
-        return json.dumps(
-            [schema.planner_dump() for schema in self.schemas()],
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
 
     def market_summary(self, *, include_limit_down: bool = False) -> ToolResult:
         """Return the latest objective local market facts."""

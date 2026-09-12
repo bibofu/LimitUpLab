@@ -315,6 +315,15 @@ checkpoint 标识绑定 owner 和 run；同会话串行化或拒绝重叠执行�
 - 重启实际后端后，真实模型/真实数据 HTTP 请求返回 2026-09-11 四只主板二板完整名单；只调用 `limit_up_events`，重复同 message_id 响应一致。详细本地记录 `output/react-retirement-20260912/http.json` 不提交。
 - 尚未完成：旧评测 Planner/Prompt、残留旧协议测试及其专用 Policy/模板需按消费者继续退役或迁移；历史 trace 展示兼容仍有消费者。BC-033～035 和成本问题本次未修，正式质量验收仍是独立门槛。
 
+### 2026-09-12 续作记录：旧评测依赖退役完成
+
+- 在上一轮旧执行链路删除基础上，迁移或退役最后的评测消费者，物理删除旧 `eval_runner.py`、Planner、Prompt、参数归一化、答案校验/模板、`tool_policy.py`、`tool_execution/` 和旧执行入口；`chat.py` 681→32 行，仅保留 ReAct 公共入口。
+- 删除旧协议专属测试，保留共享数据服务、Query Contract、会话、目录和历史报告读取测试；移除共享工具目录中只供旧 Planner 使用的 Prompt 序列化和自动补工具函数。
+- Live runner 使用生产 ReAct 图与完整多轮 metadata，分开记录原始工具选择和实际执行；错误/取消不能通过评测。旧 Planner-only Live 与模板题库模式退役，offline/shadow 和历史报告读取保留。能力标签依据原始工具集合，不再冒充独立 Planner 能力。
+- 最终全后端 616 通过、6 子测试通过、0 失败/跳过、3 条依赖弃用警告。重启后真实 HTTP 返回 2026-09-11 主板二板完整名单共4只，重复 message_id 响应一致。
+- 用户叫停前已完成一题真实模型冻结 Live CLI 冒烟；收到“不用跑 live 评测”后不再扩展。该单题不构成正式质量、稳定性、成本或私有 Holdout 验收。
+- 历史 trace 展示兼容及评测能力元数据仍有明确消费者，继续保留；BC-033～035、正式发布验收和成本问题保持未完成。详见 `docs/code-quality-audit.md` 最终记录。
+
 ### 2026-09-12 续作记录：C 集合计算证据链
 
 - 补齐派生证据的 `historical_reference`、`data_missing`、`source_truncated` 继承；计算历史集合不会使其变为本轮新鲜事实。

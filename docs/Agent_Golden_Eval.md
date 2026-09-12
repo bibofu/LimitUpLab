@@ -86,19 +86,21 @@ cd backend
 .\.venv\Scripts\python.exe scripts\run_agent_eval.py --dataset dev --mode offline --trials 1 --summary-only
 ```
 
-Nightly live stratified sample (up to 40 cases, three trials):
+Production ReAct behavior now uses the separate Live Behavioral Eval runner:
 
 ```powershell
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --dataset dev --mode live --sample-size 40 --trials 3 --seed night-1
+.\.venv\Scripts\python.exe scripts\run_agent_live_eval.py --case-id LIVE-SIMPLE-002 --trials 1
+.\.venv\Scripts\python.exe scripts\run_agent_live_eval.py --trials 3 --judge
 ```
 
-Release run (Dev + private Holdout, three trials, Judge enabled):
-
-```powershell
-$env:LIMITUPLAB_EVAL_HOLDOUT_PATH = "C:\private\chat_eval_holdout_v2.json"
-$env:LIMITUPLAB_EVAL_JUDGE_MODEL = "pinned-judge-version"
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --dataset all --mode live --trials 3 --judge
-```
+The former `run_agent_eval.py --mode live` Planner/Answer pipeline is retired.
+Its old release command must not be used. Public Live cases are not a substitute
+for private Holdout acceptance; migration of the full release gate is pending.
+Frozen Dev/Holdout artifacts and historical reports remain unchanged.
+ReAct capabilities are labeled from raw tool selection (`capability_basis`),
+not measured as a separate Planner. Independent Replan and graph compilation
+metrics are removed; reports retain decisions, actual calls and task statuses.
+Live reports use `output/agent-live-eval/`; replay and shadow use `output/agent-eval/`.
 
 Anonymous online shadow reads already persisted successful Agent runs. It does not
 rerun a user answer and does not write the original question or run id into the
