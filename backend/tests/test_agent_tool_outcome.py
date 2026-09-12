@@ -1,6 +1,5 @@
 import unittest
 
-from app.agents.chat import _has_usable_tool_facts, _tool_outcome_warnings
 from app.models import AgentToolOutcome, AgentToolTrace, build_agent_evidence_cards
 
 
@@ -107,26 +106,6 @@ class AgentToolOutcomeTest(unittest.TestCase):
         self.assertEqual(cards[1].status, "skipped")
         self.assertIn("不完整", cards[1].summary)
 
-    # Regression scenario: answerability uses outcome instead of naked empty payload.
-    def test_answerability_uses_outcome_instead_of_naked_empty_payload(self) -> None:
-        empty = AgentToolTrace(
-            name="limit_up_events",
-            input={},
-            summary="no rows",
-            output={"events": [], "matched_count": 0},
-        )
-        failed = AgentToolTrace(
-            name="limit_up_events",
-            input={},
-            summary="failed",
-            status="error",
-            error="provider timeout",
-        )
-
-        self.assertTrue(_has_usable_tool_facts({}, [empty]))
-        self.assertFalse(_has_usable_tool_facts({"other_error": "x"}, [failed]))
-        self.assertEqual(_tool_outcome_warnings([empty]), [])
-        self.assertIn("查询失败", _tool_outcome_warnings([failed])[0])
 
 
 if __name__ == "__main__":

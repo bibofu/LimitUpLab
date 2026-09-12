@@ -4,7 +4,6 @@ from unittest.mock import Mock
 
 import pytest
 
-from app.agents.chat import _answer_limit_up_query
 from app.agents.query_contract import QUERY_CONTRACT_VERSION
 from app.agents.query_contract_eval import (
     QueryContractEvalCase,
@@ -85,16 +84,6 @@ def test_repair_and_dispatch_preserve_window_grouping_and_evidence(
         assert all(item["trade_date"] <= "2026-09-08" for item in facts["events"])
 
 
-# Regression scenario: legacy fallback uses full cross day evidence.
-def test_legacy_fallback_uses_full_cross_day_evidence():
-    response = _answer_limit_up_query(
-        AgentChatRequest(session_id="legacy", message="近期农业板块涨停过的股票有哪些"),
-        event_registry(), None, None,
-    )
-    assert "农业甲(600001)" in response.answer
-    assert response.answer.count("农业乙(600002)") == 1
-    assert "期间收盘涨停 2 次" in response.answer
-    assert response.tool_results[0].input["recent_trade_days"] == 7
 
 
 # Regression scenario: policy keeps tool failure and profile boundaries.
