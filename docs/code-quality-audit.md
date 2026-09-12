@@ -212,3 +212,11 @@
 - P1：`LIVE-REPLAN-006` 的多来源集合绑定已修复；Fast Path 小样本未发现回归。
 - P2：当前 Router 和 Graph 只覆盖一个白名单场景，另外 7 个 Replan 与 2 个 Stress case 未声称修复；在新增第二个经过真实 Bad Case 驱动的场景前，不建议立即引入通用 bounded Replan。
 - P2：Complex Path 尚未建立 36×3 全量稳定性与 Judge 基线；本轮按计划只执行小范围 A/B，生成报告留在本地 `output/agent-live-eval/`，不提交仓库。
+# 2026-09-12：通用任务运行时第一批实现审查
+
+- 范围：task_runtime 新包、Chat 入口开关、控制 trace 分类、Live Eval 读取原始 task_plan；未修改业务评分、行情数据和题库。
+- 证据：新运行时9项测试通过；完整后端宿主回归748项、22个子测试通过，无失败/跳过，1项依赖弃用警告。沙箱首轮临时目录 ACL 及清理异常中断，未产生可信最终计数，不计通过。
+- 后续 Live Eval trace 适配定向28项通过。真实模型简单6×1初验0/6：原始 capability 与工具 recall 100%，全部超过旧2次LLM预算，3题另有引用异常。
+- P1 已修正待真实复测：字段路径语法导致整答异常；成功 fan-out 证据被预算异常覆盖；遗漏任务被 Completion 误判完成。
+- P1 未完成：语义安全与完整事实关系校验、简单题成本门禁、deadline/取消/恢复、完整HTTP和稳定性验收。`LIMITUPLAB_AGENT_RUNTIME=task` 仅迁移验证，默认 legacy，禁止按此结果发布为高可用。
+- P2：当前顺序执行独立步骤，尚未并发；摘要有截断标记，但尚无按需证据展开协议。后续实现不得放宽原有评测阈值来获得通过。

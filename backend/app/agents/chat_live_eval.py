@@ -218,12 +218,15 @@ def evaluate_live_trial(
 
     traces = [trace for response in responses for trace in response.tool_results]
     planner_traces = [trace for trace in traces if trace.name == "llm_tool_planner"]
+    task_plans = [trace for trace in traces if trace.name == "task_plan"]
     capabilities = {
         str(value)
         for trace in planner_traces
         for value in trace.input.get("capabilities", [])
     }
-    tool_traces = [trace for trace in traces if trace.name not in INTERNAL_TRACES]
+    capabilities.update(str(step["capability"]) for trace in task_plans
+                        for step in trace.output.get("steps", []) if step.get("capability"))
+    tool_traces = [trace for trace in traces if trace.name not in INTERNAL_TRACES and not trace.name.startswith("task_")]
     tools = [trace.name for trace in tool_traces]
     raw_tools = {
         str(call["name"])
@@ -231,6 +234,8 @@ def evaluate_live_trial(
         for call in trace.input.get("tool_calls", [])
         if isinstance(call, dict) and call.get("name")
     }
+    raw_tools.update(str(step["tool_name"]) for trace in task_plans
+                     for step in trace.output.get("steps", []) if step.get("tool_name"))
     failures: list[str] = []
 
     missing_capabilities = set(case.expected.required_capabilities) - capabilities
@@ -386,7 +391,8 @@ def evaluate_live_trial(
     policy_repairs = sum(len(response.tool_policy.policy_repaired_tools) for response in responses)
     backend_repairs = sum(len(response.tool_policy.backend_repaired_tools) for response in responses)
     graph_plans = [trace for trace in traces if trace.name == "complex_graph_plan"]
-    completion_traces = [trace for trace in traces if trace.name == "complex_graph_completion"]
+    completion_traces = [trace for trace in traces if trace.name in {"complex_graph_completion", "task_completion"}]
+    task_executions = [trace for trace in traces if trace.name == "task_execution"]
     required_capabilities = set(case.expected.required_capabilities)
     required_tools = set(case.expected.required_tools)
     raw_capability_hits = len(required_capabilities & capabilities)
@@ -395,6 +401,7 @@ def evaluate_live_trial(
     llm_calls = int(llm_usage.get("call_count") or 0)
     tool_calls = len(tools)
     replan_count = sum(int(trace.input.get("replan_count") or 0) for trace in graph_plans)
+    replan_count += sum(int(trace.output.get("replan_count") or 0) for trace in task_executions)
     graph_compilation_count = sum(int(trace.input.get("graph_compilation_count") or 0) for trace in graph_plans)
     backend_repair_count = backend_repairs + sum(int(trace.input.get("backend_repair_count") or 0) for trace in graph_plans)
     policy_repair_count = policy_repairs + sum(int(trace.input.get("policy_repair_count") or 0) for trace in graph_plans)
@@ -416,12 +423,12 @@ def evaluate_live_trial(
         "capabilities": sorted(capabilities),
         "tool_calls": tools,
         "raw_tool_calls": sorted(raw_tools),
-        "planner_output": [trace.input for trace in planner_traces],
+        "planner_output": [trace.input for trace in planner_traces] + [trace.output for trace in task_plans],
         "tool_trace": [trace.model_dump(mode="json") for trace in tool_traces],
         "graph_trace": [
             trace.model_dump(mode="json")
             for trace in traces
-            if trace.name.startswith("complex_graph_") or trace.name == "routing_decision"
+            if trace.name.startswith(("complex_graph_", "task_")) or trace.name == "routing_decision"
         ],
         "full_trace": [trace.model_dump(mode="json") for trace in traces],
         "policy_repair": [response.tool_policy.model_dump(mode="json") for response in responses],

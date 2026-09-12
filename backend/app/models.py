@@ -1683,6 +1683,8 @@ class AgentToolOutcome(BaseModel):
 
 
 AGENT_CONTROL_TRACE_NAMES = {
+    "task_plan", "task_completion", "task_replan", "task_answer", "task_execution",
+    "task_plan_error", "task_execute_error", "task_check_error", "task_replan_error", "task_answer_error",
     "agent_plan",
     "llm_tool_planner",
     "llm_tool_answer",
@@ -2040,6 +2042,8 @@ def build_agent_evidence_cards(
 def _evidence_card_from_trace(trace: AgentToolTrace) -> AgentEvidenceCard | None:
     """Create one evidence card from a trace."""
 
+    if trace.name.startswith("task_"):
+        return None
     output = trace.output or {}
     metrics = _evidence_metrics(output)
     facts = _evidence_facts(trace, output)

@@ -436,6 +436,17 @@ def _answer_first_board_chat_impl(
         conversation_messages or [],
         session_memory=session_memory,
     )
+    if os.getenv("LIMITUPLAB_AGENT_RUNTIME", "legacy").strip() == "task":
+        from app.agents.task_runtime.runtime import run
+        response = run(
+            request, tools, llm_provider or get_llm_provider(),
+            {"history": context.conversation_history, "symbol": context.symbol,
+             "trade_date": context.trade_date, "matched_symbols": context.matched_symbols,
+             "memory": context.session_memory}, progress_callback,
+        )
+        if answer_delta_callback:
+            answer_delta_callback(response.answer)
+        return response
     if (
         tools.profile != EXTENDED_AGENT_PROFILE
         and _requires_deferred_v1_capability(request.message)
