@@ -1,7 +1,5 @@
 import json
 import unittest
-from pathlib import Path
-from uuid import uuid4
 
 from app.agents.capability_contract import (
     CAPABILITY_BY_NAME,
@@ -11,43 +9,9 @@ from app.agents.capability_contract import (
     infer_capabilities_from_facts,
     normalize_capabilities,
 )
-from app.agents.eval_runner import (
-    AgentConversationEvalScenario,
-    AgentConversationEvalTurn,
-    AgentEvalCase,
-    run_agent_conversation_planner_eval_suite,
-    run_agent_planner_eval_suite,
-)
-from app.agents.chat import answer_first_board_chat, plan_agent_query
-from app.agents.chat_prompts import (
-    PLANNER_CONTRACT_VERSION,
-    PLANNER_FIXED_INPUT_CHAR_BUDGET,
-    PLANNER_SYSTEM_PROMPT_CHAR_BUDGET,
-    planner_prompt_component_sizes,
-)
-from app.agents.tools import AgentToolRegistry
-from app.models import AgentChatRequest
-from app.repositories import SQLiteFirstBoardRepository
-from app.services.llm_provider import (
-    LLMProvider,
-    LLMResult,
-    NativeFunctionCallingError,
-)
-from app.services.sample_data import SAMPLE_EVENTS
-
-
-
-
-
-
-
-
 
 
 class AgentCapabilityContractTest(unittest.TestCase):
-
-
-
 
 
     # Regression scenario: tool plans infer single tool capability.
@@ -138,9 +102,6 @@ class AgentCapabilityContractTest(unittest.TestCase):
         names = {item["name"] for item in payload}
 
         self.assertEqual(names, {"popularity", "limit_up_pool"})
-
-
-
 
 
 if __name__ == "__main__":

@@ -1,6 +1,4 @@
 """The same event query must mean the same thing on every execution path."""
-from datetime import date
-from unittest.mock import Mock
 
 import pytest
 
@@ -10,23 +8,12 @@ from app.agents.query_contract_eval import (
     query_contract_eval_report,
     run_query_contract_eval_suite,
 )
-from app.agents.tool_execution import execute_tool_calls
-from app.agents.tool_policy import AgentToolPolicyEngine
-from app.agents.tools import AgentToolRegistry
-from app.models import AgentChatRequest
-from app.services.sample_data import SAMPLE_EVENTS
 
 
 # Build the AgentToolRegistry fixture used by the surrounding regression scenario.
 
 
 # Prepare the empty execution fixture or observation used by the surrounding regression scenario.
-
-
-
-
-
-
 
 
 # Regression scenario: eval report uses actual contract version even for empty suite.

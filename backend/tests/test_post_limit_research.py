@@ -1,5 +1,4 @@
-from datetime import date, datetime, timedelta, timezone
-import json
+from datetime import date, timedelta
 import pytest
 
 from app.post_limit_query_contract import (
@@ -20,11 +19,8 @@ from app.services.post_limit import (
     matches_high_drawdown,
     matches_volume_consolidation,
 )
-from app.agents.chat import answer_first_board_chat
-from app.agents.tools import AgentToolRegistry, ToolResult
-from app.agents.tool_policy import QuestionSignals
-from app.models import AgentChatRequest, AgentChatResponse, AgentRun
-from app.services.llm_provider import DisabledLLMProvider, LLMProvider, LLMResult
+from app.agents.tools import AgentToolRegistry
+from app.models import AgentChatResponse
 
 
 # Prepare the dates fixture or observation used by the surrounding regression scenario.
@@ -110,8 +106,6 @@ def test_query_contract_routes_shapes_and_user_numeric_overrides():
     assert anchored_path.data_as_of == date(2026, 9, 7)
 
 
-
-
 # Regression scenario: post limit trace keeps all candidate names for stock links.
 def test_post_limit_trace_keeps_all_candidate_names_for_stock_links(
     monkeypatch,
@@ -192,8 +186,6 @@ def test_explicit_event_window_overrides_seven_day_default():
     assert contract.recent_limit_days == 10
 
 
-
-
 # Regression scenario: inclusive rule boundaries.
 def test_inclusive_rule_boundaries():
     assert matches_high_drawdown(1, 10)
@@ -222,12 +214,6 @@ def test_strong_nonconsecutive_and_broken_board_repair_rules():
     assert "broken_board_repair" in _matched_shapes(
         repair, {"board_height": 2}, PostLimitQueryContract(shape="broken_board_repair")
     )
-
-
-
-
-
-
 
 
 # Regression scenario: screen uses peak before observation day and preserves overlap.
@@ -303,9 +289,6 @@ def test_statistics_discloses_missing_event_windows():
     assert "recent_event_dates" in result["data_missing"]
     assert any(missing_day in warning for warning in result["warnings"])
     assert not result["comparison_allowed"]
-
-
-
 
 
 # Regression scenario: repeated limit up resets anchor and future bars are isolated.

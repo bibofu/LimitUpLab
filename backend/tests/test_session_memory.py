@@ -3,11 +3,9 @@ import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from app.agents.chat import plan_agent_query
-from app.models import AgentChatRequest, ChatSessionMemory, ChatSessionMessage
+from app.models import ChatSessionMemory, ChatSessionMessage
 from app.repositories import SQLiteChatMemoryRepository, SQLiteChatSessionRepository
 from app.services.llm_provider import DisabledLLMProvider, LLMProvider, LLMResult
-from app.services.sample_data import SAMPLE_EVENTS
 from app.services.session_memory import (
     SESSION_MEMORY_VERSION,
     memory_prompt_payload,
@@ -66,8 +64,6 @@ class MemoryFunctionProvider(LLMProvider):
             response_mode="function_call",
             function_name=function_name,
         )
-
-
 
 
 class SessionMemoryTest(unittest.TestCase):

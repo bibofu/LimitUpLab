@@ -1,40 +1,13 @@
-import json
 import os
 import unittest
-from datetime import datetime, timezone
 from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
 from app.agents.capability_contract import capability_schema_prompt
-from app.agents.chat import UNANSWERABLE_TEXT, answer_first_board_chat
-from app.agents.tool_policy import AgentToolPolicyEngine, ToolExecution
-from app.agents.tools import (
-    EXTENDED_AGENT_PROFILE,
-    V1_AGENT_PROFILE,
-    V1_CLOSED_MARKET_TOOL_NAMES,
-    V1_DEFERRED_REALTIME_TOOL_NAMES,
-    AgentToolRegistry,
-    ToolResult,
-)
-from app.models import (
-    AgentChatRequest,
-    FinanceNewsFacts,
-    FinanceNewsItem,
-    StockNewsFacts,
-    StockNewsItem,
-)
+from app.agents.tools import EXTENDED_AGENT_PROFILE, V1_AGENT_PROFILE, V1_CLOSED_MARKET_TOOL_NAMES, V1_DEFERRED_REALTIME_TOOL_NAMES, AgentToolRegistry
 from app.repositories import SQLiteFirstBoardRepository
-from app.services.llm_provider import LLMProvider, LLMResult
 from app.services.sample_data import SAMPLE_EVENTS
-
-
-
-
-
-
-
-
 
 
 class AgentV1ProfileTest(unittest.TestCase):
@@ -95,12 +68,6 @@ class AgentV1ProfileTest(unittest.TestCase):
         self.assertIn("popularity", catalog)
         self.assertIn("finance_news", catalog)
         self.assertIn("stock_news", catalog)
-
-
-
-
-
-
 
 
 if __name__ == "__main__":
