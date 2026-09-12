@@ -1784,6 +1784,13 @@ def _agent_tool_source_errors(output: dict[str, Any]) -> list[str]:
 def _agent_tool_payload_is_empty(output: dict[str, Any]) -> bool:
     if not output:
         return True
+    # Result-set counts describe the rows returned for this query.  They must win
+    # over broader source metadata such as ``stock_count``: a Dragon-Tiger source
+    # can contain stocks while the requested candidates still match zero rows.
+    for key in ("matched_count", "returned_count"):
+        value = output.get(key)
+        if isinstance(value, (int, float)) and not isinstance(value, bool):
+            return value <= 0
     collection_keys = (
         "items",
         "events",

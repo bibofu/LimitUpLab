@@ -33,7 +33,7 @@ from app.agents.complex_graph.replanner import replan, validate_replan
 from app.agents.tool_policy import AgentToolPolicyEngine
 from app.agents.tool_execution.helpers import _normalize_limit_up_event_arguments
 from app.agents.query_contract import query_reference_date_override
-from app.models import AgentChatRequest
+from app.models import AgentChatRequest, AgentToolTrace
 from app.services.llm_provider import LLMProvider, LLMResult
 
 
@@ -242,6 +242,56 @@ def test_empty_observation_replans_to_fallback_tools() -> None:
         for trace in result.execution["tool_results"]
         if trace.name in {"stock_kline", "stock_activity"}
     )
+
+
+def test_production_shaped_empty_dragon_tiger_replans_to_fallback_tools() -> None:
+    class _ProductionEmptyDragonTigerRegistry(FrozenLiveToolRegistry):
+        def _trace(self, name: str, arguments: dict, result_state: str | None):
+            if name == "dragon_tiger_list":
+                return AgentToolTrace(
+                    name=name,
+                    input=arguments,
+                    summary="2026-05-15 同花顺龙虎榜命中 0 条。",
+                    output={
+                        "source": "hithink",
+                        "trade_date": "2026-05-15",
+                        "stock_count": 36,
+                        "matched_count": 0,
+                        "items": [],
+                    },
+                )
+            return super()._trace(name, arguments, result_state)
+
+    case = _live_case("LIVE-REPLAN-002")
+    result = run_complex_graph(
+        scenario="rating_dragon_tiger_branch_v2",
+        request=AgentChatRequest(
+            session_id="production-empty-dragon-tiger",
+            message=case.turns[-1].user,
+            trade_date=date(2026, 5, 15),
+        ),
+        tools=_ProductionEmptyDragonTigerRegistry([]),
+        limit_up_arguments={"trade_date": "2026-05-15", "event_status": "closed"},
+        context_symbol=None,
+        answer_builder=lambda execution: {
+            "answer": "已基于工具证据回答。",
+            "source": "test",
+        },
+    )
+
+    dragon = next(
+        trace for trace in result.execution["tool_results"]
+        if trace.name == "dragon_tiger_list"
+    )
+    assert dragon.result is not None and dragon.result.status == "empty"
+    assert result.completion_status == "complete"
+    assert result.replan_count == 2
+    assert result.execution["tool_call_names"] == [
+        "first_board_ratings",
+        "dragon_tiger_list",
+        "stock_kline",
+        "stock_news",
+    ]
 
 
 def test_empty_news_plan_requires_an_explicit_stock_target() -> None:

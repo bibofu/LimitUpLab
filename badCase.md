@@ -619,3 +619,22 @@ bindings/source references，执行级 fingerprint 使用 resolved arguments。
 15/15，通过 Replan 的 12/12 trial 全部成功，unnecessary replan 为 0；两个 Simple 和两个
 普通 Multi-tool 对照均走 Fast Path 且 4/4 通过。四类 Phase 2 答案没有出现 Phase 1 交集
 串场，empty、conditional 和 partial 场景均明确披露数据边界。
+
+---
+
+## BC-024：龙虎榜零匹配被来源总量误判为非空
+
+### 现象
+
+> 找出评分最高的3只首板；有龙虎榜的分析机构行为，没有龙虎榜的查K线和新闻。
+
+真实工具返回 `matched_count=0` 和 `items=[]`，同时携带整个龙虎榜来源的
+`stock_count>0`。统一 Outcome 推断把任意正数 `*_count` 都视作有效结果，因此将本次查询
+错误标记为 `ok`；Completion Check 没有触发 K线和新闻 fallback。
+
+### 修复与回归
+
+统一空结果识别改为优先使用查询结果口径的 `matched_count`；其为零时不再被来源总体
+`stock_count` 覆盖，为正时仍支持只返回数量、不返回明细的 count-only 模式。新增生产形状
+龙虎榜 payload 的 Complex Graph 回归，验证评分、龙虎榜及 K线/新闻 fallback 经两次 bounded
+Replan 完成。

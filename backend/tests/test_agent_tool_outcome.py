@@ -24,6 +24,34 @@ class AgentToolOutcomeTest(unittest.TestCase):
         self.assertEqual(serialized["result"]["status"], "empty")
         self.assertEqual(serialized["result"]["payload"], trace.output)
 
+    # Regression scenario: source population must not hide an empty query match.
+    def test_matched_count_wins_over_positive_source_population(self) -> None:
+        trace = AgentToolTrace(
+            name="dragon_tiger_list",
+            input={"query": "605058,605011,605088"},
+            summary="龙虎榜命中 0 条",
+            output={
+                "stock_count": 36,
+                "matched_count": 0,
+                "items": [],
+            },
+        )
+
+        assert trace.result is not None
+        self.assertEqual(trace.result.status, "empty")
+
+    # Count-only tools may intentionally omit rows while still reporting matches.
+    def test_positive_matched_count_keeps_count_only_payload_non_empty(self) -> None:
+        trace = AgentToolTrace(
+            name="limit_up_events",
+            input={"result_mode": "count"},
+            summary="涨停查询命中 12 只",
+            output={"matched_count": 12, "returned_count": 0, "items": []},
+        )
+
+        assert trace.result is not None
+        self.assertEqual(trace.result.status, "ok")
+
     # Regression scenario: partial payload preserves source errors.
     def test_partial_payload_preserves_source_errors(self) -> None:
         trace = AgentToolTrace(
