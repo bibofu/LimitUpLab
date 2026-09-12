@@ -1,5 +1,72 @@
 # Agent 应用质量审查
 
+## 2026-09-12：当前 ReAct 范式、冗余与硬编码专项审查
+
+### 范围与结论
+
+- 基线：`4095758`。本次只审查当前生产 ReAct、模型适配、工具契约、评分规则和共享时间口径，不修改业务实现，不触碰未跟踪的 `artifacts/`、`backend/data/`、`tmp/`。
+- 当前实现确实是原生工具调用驱动的 `StateGraph` 循环，不应简单判定为“没有 LangGraph”或“必须改用已弃用的 `create_react_agent`”。LangGraph v1 官方推荐简单 Agent 使用 `langchain.agents.create_agent`；需要精细工具控制的自定义图使用 `MessagesState`、`ToolNode` 和 checkpointer。当前项目选择自定义图有金融 Policy、证据存储和幂等需求，方向合理，但复制了较多框架职责且出现下述契约漂移。
+- P0：未发现。P1：3 项未修。P2：4 项未修。此前 BC-033/034/035、正式真实模型质量/成本门槛等问题仍沿用上一节状态，本节不重复改写。
+
+### P1 / A36：文档与配置承诺的 Requests 回退后端已不能运行 ReAct
+
+- 证据：`backend/app/services/llm_provider.py:489-520` 仍接受 `LIMITUPLAB_LLM_BACKEND=requests` 并返回 `OpenAIChatCompletionsProvider`；`backend/README.md:61-63`、`backend/.env.example:17-18` 和 `docs/LangChain_Integration.md:50` 仍称其为可重启切换的显式回退。生产 ReAct 唯一调用 `generate_messages`（`react_runtime/runtime.py:121`），但 Requests Provider 没有覆盖该方法，只继承 `LLMProvider.generate_messages` 的 `NativeFunctionCallingUnavailable`。
+- 隔离复现：构造不联网的 Requests Provider 进入当前 `run()`，连续两轮 provider error 后得到 `task_status=error`、`stop_reason=provider_error`；没有发出网络请求。
+- 影响：配置表面合法、文档明确支持，实际会令所有聊天失败；同时保留两套模型协议增加测试和维护面。
+- 建议：二选一。若坚持纯 LangChain/LangGraph，删除 Requests 配置分支、回退文档及仅剩消费者；若确需灾备，给它实现并测试完整的消息/多工具调用协议，而不是旧的单次 function-call 接口。
+- 状态：未修复；下一次 Agent 配置或 Provider 改动前处理。
+
+### P1 / A37：普通模型文本绕过类型化 `finish` 与证据完成门禁
+
+- 证据：系统提示在 `react_runtime/runtime.py:39` 要求最终必须单独调用 `finish`，但 `:130-134` 在模型无 tool call 时自行构造 `status=complete`、引用全部证据并把 `missing` 置空；随后 `gate()` 只校验这些自动填入的 ID 是否存在，不能证明答案声明与证据、缺口或任务清单一致。
+- 隔离复现：模型对“查询市场事实”首轮直接返回无工具普通文本，当前运行结果为 `task_status=complete`、`stop_reason=answered`，且没有任何业务工具证据。
+- 影响：模型偶发不调用工具时，事实优先、真实状态和缺失披露均可被绕过；也解释了 BC-033/034 一类关系/口径错误为何能通过现有 answer gate。
+- 建议：无 tool call 只在明确非事实型回答或拒答场景接受；其余情况生成可观察的校验反馈并强制类型化终态。更标准的实现可使用 `create_agent(response_format=...)`，自定义图则应把结构化终态作为唯一出口，并增加 plain-response、错 evidence ID、错实体/指标、漏 requirement 回归。
+- 状态：未修复；应优先于继续扩工具或提示词调优。
+
+### P1 / A38：评分策略只版本化权重，分箱、过滤和置信度规则仍散落在代码中
+
+- 证据：`services/scoring_policy.py:53-77` 的 Policy 只保存 14 个 factor weight；实际分数分箱、中性分和上限写在 `agents/first_board.py:274-696`，过滤条件写在 `:142-186`，置信度扣分写在 `:699-727`。同一 `0.55/0.35` 炸板率、`1/18` 换手率、`9:45` 首封、Top5/20 人气等阈值又在 reasons/risks（`:730-803`）和 `services/first_board_critic.py:64-149` 重复。
+- 影响：数据库中的 policy/version 不能独立重放完整评分逻辑；修改任一分箱但漏改解释或 Critic 会产生“分数、理由、质疑口径不一致”。硬过滤 `MIN_AMOUNT=5000万` 与 enrichment 的 `MIN_AMOUNT=1亿` 也属于不同阶段的同名常量，名称不足以表达业务差异。
+- 建议：建立版本化 `ScoringRuleSet`，包含 eligibility、bins、neutral score、confidence penalties、rating bands 和展示标签；评分、reason/risk、Critic 从同一规则对象产出。历史快照保留完整规则摘要或不可变 rule-set hash，不只保存权重。
+- 状态：未修复；属于评分核心高风险项，实施前需先冻结现有输出并做回放对照。
+
+### P2 / A39：LangGraph 目前更像调度外壳，核心状态和持久化在图外重复实现
+
+- 证据：`react_runtime/runtime.py:49-55` 的 Graph State 只保存消息和少量路由字段；预算、证据、缓存、requirements、trace、deadline 和最终状态都在可变 `Run` 对象（`:62-99`）。图以 `configurable.run` 注入进程对象（`:307-312`），`compile()` 没有 checkpointer（`:324-337`），另由 `lifecycle.py` 自建 SQLite checkpoint/call journal。
+- 官方范式差异：官方 persistence 以 checkpointer + `thread_id` 在 super-step 保存 Graph State；自定义工具工作流通常用 `MessagesState`/message reducer 与 `ToolNode`。当前手工实现不是功能错误，且已有调用幂等保护，但框架无法直接检查/恢复完整状态，节点保存顺序、序列化、并发、错误配对都由项目自行维护。
+- 建议：不要为了“像框架”机械重写。先修 A36/A37；之后做小型 spike，对比“现有 Policy Gateway + 标准 BaseTool/ToolNode + SQLite checkpointer”是否能保留证据裁剪、单独 finish、调用幂等和取消语义，再决定迁移。
+- 状态：设计债务，未修复。
+
+### P2 / A40：工具定义存在三份真相源，未使用 LangChain 的类型化工具契约
+
+- 证据：26 个工具的 JSON Schema 手写在 `agents/tools.py:136-811`，执行签名在同文件 `AgentToolRegistry` 方法中，时态/集合契约又手写在 `react_runtime/catalog.py:18-45`；`catalog.schemas()` 再用 `inspect.signature` 和名称特判修补 required/schema（`:48-75`）。扫描已发现 `limit_up_events.result_mode` 只存在于 Schema、执行前再被丢弃，三个 post-limit 工具还依赖专用 adapter 将扁平 Schema 转成 `PostLimitQueryContract`。
+- 现有保护：`test_every_existing_tool_has_reviewed_contract` 能保证名称集合相同，但不能保证参数类型、默认值、描述、adapter 和执行签名持续一致。
+- 建议：以 Pydantic args model + LangChain `BaseTool`/`StructuredTool` 为单一契约源；额外的金融时态和集合能力作为 tool metadata，由 Policy middleware/gateway 消费。保留自定义 ToolNode 也不需要保留三套 Schema。
+- 状态：未修复；新增或修改工具时最容易触发。
+
+### P2 / A41：旧 Query Understanding 仍作为公共 API 和评测口径存在，与生产 ReAct 语义形成双轨
+
+- 证据：`agents/query_contract.py` 仍有 923 行正则解析和 contract builder；当前生产 Agent 只从中导入日期锚点及几个 normalize helper，完整 `build_limit_up_query_contract` / `build_market_event_query_contract` 只由评测代码使用，却仍由 `agents/__init__.py` 公开导出。`docs/LangChain_Integration.md:18-35` 的流程图仍描述已经退役的 Planner/Policy/模板链路，并明确声称没有 LangGraph。
+- 影响：离线 Query 指标可继续评价旧解析器而非真实 ReAct 决策；公共导出和过时文档让维护者误判生产调用链。
+- 建议：把仍需共享的日期/枚举规范化拆成小型 contract 模块；把旧 parser 明确移到 eval/compat 命名空间或退役，对 ReAct 使用真实 decision/tool trace 评测。同步重写 LangChain 集成文档。
+- 状态：未修复；属于上一轮旧链路退役后的收尾冗余。
+
+### P2 / A42：共享时间与风险口径仍有跨模块魔法值
+
+- 证据：收盘后数据就绪时间 `15:30` 分散于 `services/system_health.py`、`consolidation.py`、`post_limit.py`、`prediction_time.py`；上海时区也以 `SHANGHAI`、`SHANGHAI_TZ`、`CN_TZ`、`_SHANGHAI` 和固定 `UTC+8` 多次定义。`LARGE_LOSS_THRESHOLD_PCT=-3.0` 在 prediction audit 与 optimizer 重复定义。
+- 影响：修改数据就绪窗口、时区实现或大亏口径时容易出现页面、健康检查、研究统计和晋级策略不一致，违反新增业务窗口优先抽成共享常量/Query Contract 的项目约定。
+- 建议：增加共享 `MarketClockContract` 和审计阈值契约，名称区分交易收盘 `15:00` 与数据可用 `15:30`；消费者只引用契约，不各自复制。
+- 状态：未修复。
+
+### 验证结果与边界
+
+- 完整后端第一次从 backend 根目录运行，47 个历史临时目录因 Windows ACL 在收集阶段报错；显式限定 `tests/` 后沙箱临时目录仍出现 setup error 和收尾 PermissionError，均不计为通过。
+- 宿主权限、隔离 basetemp 最终结果：**616 passed，6 subtests passed，0 failed，0 setup error，0 skipped，3 warnings**，耗时 12.65 秒。警告为 LangGraph serializer 默认值待变更以及 websockets 两项弃用。
+- 另做两个无网络隔离复现：A36 得到 provider_error；A37 得到无证据 complete。当前测试集全绿说明这两个边界尚无回归覆盖，不代表结论不存在。
+- 未运行真实模型、前端构建或真实 HTTP；本次没有修改运行中服务。审查只给出问题和建议，不实施重构。
+- 官方依据：[LangGraph v1 说明](https://docs.langchain.com/oss/python/releases/langgraph-v1)、[LangChain Tools / ToolNode](https://docs.langchain.com/oss/python/langchain/tools)、[LangGraph Persistence](https://docs.langchain.com/oss/python/langgraph/persistence)。
+
 ## 2026-09-12：十题真实复杂问答与通用运行时重构前审查
 
 - 基线：`1302726`。只读核对十次真实页面请求的持久化 trace 与 Router、Planner、Policy、执行适配器、完成检查、安全校验和兜底模板；本次未修改业务代码。
