@@ -33,253 +33,20 @@ from app.services.llm_provider import DisabledLLMProvider, LLMProvider, LLMResul
 from app.services.sample_data import SAMPLE_EVENTS
 
 
-# Build the HithinkDragonTigerFact fixture used by the surrounding regression scenario.
-def _dragon_tiger_fact() -> HithinkDragonTigerFact:
-    return HithinkDragonTigerFact(
-        symbol="000001",
-        thscode="000001.SZ",
-        name="平安银行",
-        change_pct=1.2,
-        buy_amount=200_000_000,
-        sell_amount=100_000_000,
-        net_buy_amount=100_000_000,
-        net_rate=10.0,
-        organization_net_buy_amount=50_000_000,
-        hot_money_net_buy_amount=20_000_000,
-        hot_rank=10,
-        range_days=1,
-        limit_reason="日涨幅偏离值达7%",
-        concepts=["银行"],
-    )
 
 
-class ExternalToolProvider(LLMProvider):
-    """Planner intentionally skips tools so policy repair is exercised."""
-
-    # Build the LLMResult fixture used by the surrounding regression scenario.
-    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
-        if "first job is to decide which tools are needed" in system_prompt:
-            return LLMResult(
-                content=json.dumps(
-                    {
-                        "intent_label": "sector_move_reason",
-                        "safety": "normal",
-                        "tool_calls": [],
-                        "answer_directly": "没有工具支撑的猜测",
-                    }
-                ),
-                model="fake-planner",
-                provider="fake",
-            )
-        return LLMResult(
-            content=(
-                "半导体板块当日下跌7.44%，上涨4家、下跌181家；"
-                "公开报道中的原因需结合来源链接核对。"
-            ),
-            model="fake-answer",
-            provider="fake",
-        )
 
 
-class HithinkToolProvider(LLMProvider):
-    """Planner selects the structured Tonghuashun popularity tool."""
-
-    # Build the LLMResult fixture used by the surrounding regression scenario.
-    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
-        if "first job is to decide which tools are needed" in system_prompt:
-            return LLMResult(
-                content=json.dumps(
-                    {
-                        "intent_label": "hot_stock_ranking",
-                        "safety": "normal",
-                        "tool_calls": [
-                            {
-                                "name": "hot_stock_ranking",
-                                "arguments": {"period": "day", "limit": 5},
-                            }
-                        ],
-                        "answer_directly": "",
-                    }
-                ),
-                model="fake-planner",
-                provider="fake",
-            )
-        return LLMResult(
-            content="同花顺热股榜中，通鼎互联(002491)当前排名第3。",
-            model="fake-answer",
-            provider="fake",
-        )
 
 
-class SectorRankingPlannerProvider(LLMProvider):
-    """Request too many rows so the backend default limit can be verified."""
-
-    # Prepare the init fixture or observation used by the surrounding regression scenario.
-    def __init__(self) -> None:
-        self.answer_calls = 0
-
-    # Build the LLMResult fixture used by the surrounding regression scenario.
-    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
-        if "first job is to decide which tools are needed" in system_prompt:
-            return LLMResult(
-                content=json.dumps(
-                    {
-                        "intent_label": "sector_stock_ranking",
-                        "capabilities": ["sector_stock_ranking"],
-                        "safety": "normal",
-                        "tool_calls": [
-                            {
-                                "name": "sector_stock_ranking",
-                                "arguments": {
-                                    "sector": "军工装备",
-                                    "days": 20,
-                                    "limit": 20,
-                                },
-                            }
-                        ],
-                        "answer_directly": "",
-                    }
-                ),
-                model="fake-planner",
-                provider="fake",
-            )
-        self.answer_calls += 1
-        raise AssertionError("simple Top10 ranking should not call the answer model")
 
 
-class WrongBroadSectorPlannerProvider(LLMProvider):
-    """Reproduce a planner that mistakes broad wording for a sector name."""
-
-    # Prepare the init fixture or observation used by the surrounding regression scenario.
-    def __init__(self) -> None:
-        self.answer_calls = 0
-
-    # Build the LLMResult fixture used by the surrounding regression scenario.
-    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
-        if "first job is to decide which tools are needed" in system_prompt:
-            return LLMResult(
-                content=json.dumps(
-                    {
-                        "intent_label": "market_environment",
-                        "capabilities": ["market_environment"],
-                        "safety": "normal",
-                        "tool_calls": [
-                            {
-                                "name": "sector_performance",
-                                "arguments": {"sector": "大盘哪些"},
-                            }
-                        ],
-                        "answer_directly": "",
-                    }
-                ),
-                model="fake-planner",
-                provider="fake",
-            )
-        self.answer_calls += 1
-        raise AssertionError("simple sector ranking should not call the answer model")
 
 
-class WrongLimitDownPlannerProvider(LLMProvider):
-    """Reproduce the live planner mistake that mapped limit-down to limit-up."""
-
-    # Prepare the init fixture or observation used by the surrounding regression scenario.
-    def __init__(self) -> None:
-        self.answer_calls = 0
-
-    # Build the LLMResult fixture used by the surrounding regression scenario.
-    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
-        if "first job is to decide which tools are needed" in system_prompt:
-            return LLMResult(
-                content=json.dumps(
-                    {
-                        "intent_label": "limit_up_pool_query",
-                        "capabilities": ["limit_up_pool"],
-                        "safety": "normal",
-                        "tool_calls": [
-                            {
-                                "name": "limit_up_events",
-                                "arguments": {
-                                    "event_status": "limit_down",
-                                    "closed_only": True,
-                                },
-                            }
-                        ],
-                        "answer_directly": "",
-                    }
-                ),
-                model="fake-planner",
-                provider="fake",
-            )
-        self.answer_calls += 1
-        raise AssertionError("validated market-event facts should use the concise renderer")
 
 
-class DragonTigerToolProvider(LLMProvider):
-    """Planner selects the Dragon-Tiger tool with an intentionally stale date."""
-
-    # Build the LLMResult fixture used by the surrounding regression scenario.
-    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
-        if "first job is to decide which tools are needed" in system_prompt:
-            return LLMResult(
-                content=json.dumps(
-                    {
-                        "intent_label": "dragon_tiger_list_query",
-                        "safety": "normal",
-                        "tool_calls": [
-                            {
-                                "name": "dragon_tiger_list",
-                                "arguments": {
-                                    "trade_date": "2026-05-14",
-                                    "board_type": "all",
-                                    "limit": 30,
-                                },
-                            }
-                        ],
-                        "answer_directly": "",
-                    }
-                ),
-                model="fake-planner",
-                provider="fake",
-            )
-        return LLMResult(
-            content="已按最新完整交易日汇总龙虎榜。",
-            model="fake-answer",
-            provider="fake",
-        )
 
 
-class Top100HotStockProvider(LLMProvider):
-    """Planner under-requests rows and final answer intentionally truncates them."""
-
-    # Build the LLMResult fixture used by the surrounding regression scenario.
-    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
-        if "first job is to decide which tools are needed" in system_prompt:
-            return LLMResult(
-                content=json.dumps(
-                    {
-                        "intent_label": "hot_stock_ranking",
-                        "safety": "normal",
-                        "tool_calls": [
-                            {
-                                "name": "hot_stock_ranking",
-                                "arguments": {
-                                    "period": "day",
-                                    "limit": 30,
-                                    "source": "auto",
-                                },
-                            }
-                        ],
-                        "answer_directly": "",
-                    }
-                ),
-                model="fake-planner",
-                provider="fake",
-            )
-        return LLMResult(
-            content="东方财富热股榜第1名是测试股票1(600001)。",
-            model="fake-answer",
-            provider="fake",
-        )
 
 
 class HotStockFirstBoardIntersectionProvider(LLMProvider):
@@ -347,9 +114,6 @@ class FinanceNewsProvider(LLMProvider):
 class FailedMarketTrendProvider(LLMProvider):
     """Fake planner whose required market-data tool fails."""
 
-    # Prepare the init fixture or observation used by the surrounding regression scenario.
-    def __init__(self) -> None:
-        self.calls = 0
 
     # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
