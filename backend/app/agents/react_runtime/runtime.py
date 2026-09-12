@@ -263,10 +263,10 @@ class Run:
     def gate(self, state):
         if self.control and self.control.cancelled():
             return self.stop("cancelled")
-        from app.agents.task_runtime.writer import _unsafe
+        from app.agents.react_runtime.safety import unsafe_answer
         try:
             final = Finish.model_validate(state["finish"])
-            if _unsafe(final.answer) or contains_prompt_leak(final.answer):
+            if unsafe_answer(final.answer) or contains_prompt_leak(final.answer):
                 raise ValueError("Unsafe or internal content; answer research facts only")
             for key in final.evidence_ids:
                 self.evidence.get(key)
