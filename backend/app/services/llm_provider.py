@@ -111,6 +111,10 @@ def capture_llm_usage():
 class LLMProvider:
     """Interface for text generation providers."""
 
+    def generate_messages(self, messages, tools, *, timeout_seconds=30, max_tokens=4096):
+        """One native tool-calling turn; callers own the loop and retries."""
+        raise NativeFunctionCallingUnavailable("Provider does not support conversational tool calling")
+
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         """Generate a response for a system/user prompt pair."""
 

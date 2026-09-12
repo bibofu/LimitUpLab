@@ -336,7 +336,18 @@ def answer_first_board_chat(
     answer_delta_callback: Callable[[str], None] | None = None,
     tool_registry: AgentToolRegistry | None = None,
 ) -> AgentChatResponse:
-    """Answer one question and attach the normalized Query Understanding trace."""
+    """Use the unified ReAct runtime by default; legacy is an explicit rollback."""
+
+    if os.getenv("LIMITUPLAB_AGENT_RUNTIME", "react").strip() == "react":
+        from app.agents.react_runtime.runtime import run
+        response = run(
+            request, tool_registry or AgentToolRegistry(
+                events=events, first_board_repository=repository or SQLiteFirstBoardRepository(),
+            ), llm_provider or get_llm_provider(), conversation_messages, session_memory, progress_callback,
+        )
+        if answer_delta_callback:
+            answer_delta_callback(response.answer)
+        return response
 
     response = _answer_first_board_chat_impl(
         request=request,

@@ -1632,6 +1632,8 @@ class AgentChatResponse(BaseModel):
     run_id: str | None = None
     intent: str
     answer: str
+    task_status: Literal["complete", "partial", "empty", "clarify", "refuse", "error", "cancelled"] | None = None
+    stop_reason: str | None = None
     stock_mentions: list[AgentStockMention] = Field(default_factory=list)
     tool_calls: list[str] = Field(default_factory=list)
     tool_results: list["AgentToolTrace"] = Field(default_factory=list)
@@ -1683,6 +1685,8 @@ class AgentToolOutcome(BaseModel):
 
 
 AGENT_CONTROL_TRACE_NAMES = {
+    "react_decision", "react_policy", "react_observe", "react_execution",
+    "react_provider_error", "react_answer_check",
     "task_plan", "task_completion", "task_replan", "task_answer", "task_execution",
     "task_answer_repair",
     "task_plan_error", "task_execute_error", "task_check_error", "task_replan_error", "task_answer_error",

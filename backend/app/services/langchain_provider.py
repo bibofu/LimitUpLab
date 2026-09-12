@@ -106,6 +106,49 @@ class LangChainChatProvider(LLMProvider):
             self._answer_model(system_prompt), system_prompt, user_prompt,
         )
 
+    def generate_messages(self, messages, tools, *, timeout_seconds=30, max_tokens=4096):
+        """Preserve AI/Tool messages and count every physical model attempt."""
+        tracker = _usage_tracker.get()
+        if tracker:
+            tracker.begin_call(self.model)
+        started = perf_counter()
+        try:
+            # max_retries belongs to this request-local copy, never the shared model.
+            model = self.chat_model.model_copy(update={
+                "max_retries": 0, "request_timeout": timeout_seconds,
+            })
+            choice = {"tool_choice": "finish"} if len(tools) == 1 and tools[0]["function"]["name"] == "finish" else {}
+            bound = model.bind_tools(tools, temperature=0, max_tokens=max_tokens, **choice) if tools else model.bind(
+                temperature=0, max_tokens=max_tokens,
+            )
+            message = bound.invoke(messages, config={"run_name": "react_decision"})
+            if not isinstance(message, AIMessage):
+                raise NativeFunctionCallingError("Expected an AIMessage")
+            usage = message.usage_metadata or {}
+            raw = message.response_metadata.get("token_usage")
+            tokens = _parse_token_usage(raw) if raw else (
+                usage.get("input_tokens"), usage.get("output_tokens"), usage.get("total_tokens"),
+            )
+            result = LLMResult(
+                content=_text_content(message), model=self.model, provider="langchain-openai",
+                duration_ms=round((perf_counter() - started) * 1000),
+                prompt_tokens=tokens[0], completion_tokens=tokens[1], total_tokens=tokens[2],
+            )
+            if tracker:
+                tracker.complete_call(result)
+            if message.invalid_tool_calls:
+                raise NativeFunctionCallingError("Malformed tool arguments")
+            ids = [call.get("id") for call in message.tool_calls]
+            if any(not value for value in ids) or len(ids) != len(set(ids)):
+                raise NativeFunctionCallingError("Missing or duplicate tool_call_id")
+            return message
+        except Exception as error:
+            if tracker:
+                tracker.fail_call()
+            if isinstance(error, APIError):
+                raise RuntimeError(f"Model request failed ({type(error).__name__})") from error
+            raise
+
     # Bind the requested structured function contract and return its arguments as the common LLM
     # result.
     def generate_function_call(
