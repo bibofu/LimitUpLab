@@ -2,7 +2,7 @@
 
 - 日期：2026-09-12。
 - 代码审查基线：`33f2a54`。
-- 状态：实施中。B 最小闭环与 C 首批契约已提交，B/C 真实验收尚未完成；D 后端运行可靠性已接入专用测试与冻结 HTTP 验收，输出关系门禁和完整 Live 验收尚未完成。新运行时尚未通过发布验收。
+- 状态：实施中。ReAct 主链路、工具契约与运行恢复已落地，完成五题真实页面抽查；输出关系门禁和正式 Live/Holdout 验收仍未完成。按用户最新决定，提前执行旧链路删除：legacy HTTP/SSE、Task DAG、Complex Graph 及专属测试已退役；旧评测 Planner 和仍有消费者的共享模块尚待清理。新运行时尚未通过发布验收。
 - 范围：Tool-Using Chat Agent；保留现有数据服务、评分逻辑、预测记录和投资合规边界。
 - 方向：LangChain 模型/工具接口 + LangGraph 自定义 StateGraph + 单一有界 ReAct 循环。
 - 文档关系：本方案取代 [原任务运行时设计](agent-task-runtime-redesign.md) 中“预先生成完整 TaskPlan DAG + 独立 PlanPatch/Replan”的后续实施方向；原文保留为历史设计和失败证据。
@@ -11,7 +11,7 @@
 
 ### 1.1 当前实现及实际问题
 
-当前 Chat 入口根据 `LIMITUPLAB_AGENT_RUNTIME` 在默认 `legacy` 与显式启用的 `task` 之间切换：
+重构前 Chat 入口根据 `LIMITUPLAB_AGENT_RUNTIME` 在默认 `legacy` 与显式启用的 `task` 之间切换（以下为历史问题描述，当前这些入口已删除）：
 
 - Legacy：关键词/场景复杂路由；普通请求由 LLM 选择 capability，后端映射工具、归一化参数并执行 Policy 补救；部分场景进入旧 Complex Graph。
 - Task：LLM 先生成 requirements 和完整步骤图，包含参数、依赖、绑定路径及条件；执行后由 Completion LLM 判断并提出补充步骤，必要时再调用 Replan LLM，最后生成和修复答案。
@@ -295,15 +295,25 @@ checkpoint 标识绑定 owner 和 run；同会话串行化或拒绝重叠执行�
 
 ### E. 验收、切换与退役
 
+2026-09-12 顺序调整：用户明确要求先删除旧流程，因此旧链路退役提前于完整质量验收；不再保留 `LIMITUPLAB_AGENT_RUNTIME` 作为进程内回滚开关。需要回滚时部署已知 Git 提交，不能把重新启用旧流程作为 ReAct 请求的隐式降级。此调整不表示质量门槛已通过。
+
 1. 完成新运行时冻结Live、稳定性、Holdout和真实HTTP/页面业务验收；条件一致的已有旧报告可用于A/B对照，其余仅作为历史参考。
 2. 新运行时通过质量与成本门槛后切换默认入口。
-3. 迁移期保留单个显式部署开关；单次请求不自动跌回Legacy掩盖新链路失败。
+3. 当前仅保留 ReAct 入口；遗留 legacy/task 环境变量不再改变执行路径。单次请求不能跌回旧流程掩盖失败。
 4. 确认无消费者后删除旧路由、PlanPatch、重复Prompt/Policy和不可达前端逻辑。
 5. 完成核心链路代码质量审查，记录风险、测试与提交；保留部署回滚能力。
 
 按项目约定分小提交，每次源代码提交修改不超过1000行；只提交相关文件，真实修复记入badCase.md。阶段审查写入code-quality-audit.md；本设计文档本身不表示这些实施步骤已完成。
 
 ## 11. 测试、观测与验收
+
+### 2026-09-12 续作记录：旧执行链路退役
+
+- `081eccb`～`5a9e88d` 共十个小提交：删除 legacy 同步/SSE、旧意图分派/工具循环/模板回退、整个 `task_runtime/` 和 `complex_graph/` 源码，以及三个专属旧协议测试文件；同步移除混合测试中的两项旧 fallback 断言。
+- ReAct 当前使用的安全检查迁入 `react_runtime/safety.py`，Schema 校验抽到无路由行为的 `tool_schema.py`。保留数据服务、评分、Query Contract、历史记录和预测快照。`chat.py` 从 3809 行降至 681 行，剩余 Planner/历史上下文辅助仍被评测器消费，不属于生产 ReAct 循环。
+- ReAct 与共享结果模型最终 103 项通过，0 失败/跳过，3 条依赖弃用警告；全后端仅收集检查 772 项，无导入错误，未执行旧 Agent 回归。首次沙箱测试临时目录权限失败及中间拆分的一处注解导入错误已处理，详见阶段审查。
+- 重启实际后端后，真实模型/真实数据 HTTP 请求返回 2026-09-11 四只主板二板完整名单；只调用 `limit_up_events`，重复同 message_id 响应一致。详细本地记录 `output/react-retirement-20260912/http.json` 不提交。
+- 尚未完成：旧评测 Planner/Prompt、残留旧协议测试及其专用 Policy/模板需按消费者继续退役或迁移；历史 trace 展示兼容仍有消费者。BC-033～035 和成本问题本次未修，正式质量验收仍是独立门槛。
 
 ### 2026-09-12 续作记录：C 集合计算证据链
 
