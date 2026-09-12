@@ -1,4 +1,4 @@
-"""Deterministic replay, live-model, shadow, Judge and artifact runner for Chat Eval V2."""
+"""Frozen replay, shadow, Judge and historical reports; model behavior uses ReAct Live Eval."""
 
 from __future__ import annotations
 
@@ -12,8 +12,6 @@ from time import perf_counter
 from typing import Any, Iterable
 from uuid import uuid4
 
-from app.agents.chat import plan_agent_query
-from app.agents.capability_contract import CAPABILITY_BY_NAME
 from app.agents.chat_eval_dataset import (
     CHAT_EVAL_DATASET_VERSION,
     CHAT_EVAL_FIXTURE_ID,
@@ -30,22 +28,12 @@ from app.agents.query_contract import (
     build_conversation_query_understanding_view,
     query_reference_date_override,
 )
-from app.models import (
-    AgentChatPerformance,
-    AgentChatRequest,
-    AgentChatResponse,
-    AgentRun,
-    AgentToolOutcome,
-    AgentToolPolicyAudit,
-    AgentToolTrace,
-    ChatSessionMessage,
-)
+from app.models import AgentChatPerformance, AgentChatResponse, AgentRun, AgentToolOutcome, AgentToolPolicyAudit, AgentToolTrace
 from app.repositories import SQLiteAgentRunRepository
-from app.services.llm_provider import LLMProvider, LLMResult
-from app.services.sample_data import SAMPLE_EVENTS
+from app.services.llm_provider import LLMProvider
 
 
-RUNNER_VERSION = "chat-eval-runner-v2"
+RUNNER_VERSION = "chat-eval-replay-shadow-v3"
 JUDGE_PROMPT_VERSION = "chat-eval-judge-v1"
 TOOL_FIXTURE_PATH = (
     Path(__file__).resolve().parents[2]
@@ -209,14 +197,14 @@ def run_chat_eval_suite(
     judge_provider: LLMProvider | None = None,
     fixture: FrozenToolFixture | None = None,
 ) -> dict[str, Any]:
-    """Run an immutable dataset through replay/live evaluation and aggregate it."""
+    """Replay an immutable fixture dataset; this does not measure model behavior."""
 
     if mode == "online-shadow":
         raise ValueError("use run_online_shadow_eval for persisted production traces")
     if trials < 1:
         raise ValueError("trials must be positive")
-    if mode == "live" and llm_provider is None:
-        raise EvalConfigurationError("live mode requires a configured LLM provider")
+    if mode == "live":
+        raise EvalConfigurationError("Planner-only live mode retired; use run_agent_live_eval.py for production ReAct")
     selected = select_eval_cases(cases, sample_size=sample_size, seed=seed)
     if not selected:
         raise ValueError("no Chat Eval cases selected")
@@ -411,8 +399,6 @@ def _run_case(
     trial: int,
 ) -> tuple[AgentChatResponse, dict[str, Any], bool]:
     started_at = perf_counter()
-    anchor_date = case.anchor_datetime.date()
-    message = case.conversation[-1].content
     query_trace = _query_trace(case)
     if mode == "offline":
         final_tools = list(case.expected.required_tools)
@@ -443,81 +429,7 @@ def _run_case(
             False,
         )
 
-    assert llm_provider is not None
-    planner_result: LLMResult | None = None
-    answer_result: LLMResult | None = None
-    provider_failed = False
-    planner_trace: AgentToolTrace
-    planner_tools: list[str] = []
-    final_tools: list[str] = []
-    try:
-        with query_reference_date_override(anchor_date):
-            plan = plan_agent_query(
-                AgentChatRequest(
-                    session_id=f"eval-{case.case_id}-{trial}",
-                    message=message,
-                ),
-                SAMPLE_EVENTS,
-                llm_provider,
-                conversation_messages=_conversation_messages(case, trial),
-            )
-        planner_result = plan.result
-        final_calls = [call for call in plan.tool_calls if call.get("name")]
-        final_tools = [str(call["name"]) for call in final_calls]
-        planner_tools = _tools_for_capabilities(plan.policy_capabilities)
-        planner_trace = AgentToolTrace(
-            name="llm_tool_planner",
-            input={
-                "model": plan.result.model,
-                "provider": plan.result.provider,
-                "capabilities": list(plan.policy_capabilities),
-                "resolved_capabilities": list(plan.capabilities),
-                "tool_calls": plan.payload.get("raw_tool_calls", []),
-                "resolved_tool_calls": plan.tool_calls,
-                "planner_mode": plan.payload.get("planner_mode"),
-            },
-            summary="真实模型原始规划及确定性解析结果。",
-            duration_ms=plan.duration_ms,
-        )
-        traces = [planner_trace]
-        for call in final_calls:
-            tool = str(call["name"])
-            traces.append(
-                fixture.trace(
-                    tool,
-                    arguments=dict(call.get("arguments") or {}),
-                    result_state=case.expected.result_states.get(tool, "ok"),
-                    case_id=case.case_id,
-                )
-            )
-        traces.append(query_trace)
-        answer_result = _generate_live_answer(case, traces, llm_provider)
-        answer = answer_result.content
-    except Exception as error:
-        provider_failed = True
-        traces = [
-            AgentToolTrace(
-                name="llm_tool_planner",
-                input={"capabilities": [], "tool_calls": []},
-                summary="模型调用失败。",
-                status="error",
-                error=f"{type(error).__name__}: {error}",
-            ),
-            query_trace,
-        ]
-        answer = "模型服务暂时不可用，无法基于冻结事实完成本次回答。"
-    usage = _sum_usage(planner_result, answer_result)
-    response = _response(
-        case,
-        answer=answer,
-        traces=traces,
-        planner_tools=planner_tools,
-        final_tools=final_tools,
-        total_ms=round((perf_counter() - started_at) * 1000),
-        planner_ms=planner_result.duration_ms if planner_result else 0,
-        answer_ms=answer_result.duration_ms if answer_result else 0,
-    )
-    return response, usage, provider_failed
+    raise EvalConfigurationError("Only offline replay is supported here")
 
 
 def _response(
@@ -552,20 +464,6 @@ def _response(
         ),
         generated_by=RUNNER_VERSION,
     )
-
-
-def _tools_for_capabilities(capabilities: Iterable[str]) -> list[str]:
-    """Compile only the model's raw capabilities into its pre-policy tool set."""
-
-    tools: list[str] = []
-    for name in capabilities:
-        capability = CAPABILITY_BY_NAME.get(name)
-        if capability is None:
-            continue
-        for requirement in capability.required_tools:
-            if requirement.name not in tools:
-                tools.append(requirement.name)
-    return tools
 
 
 def _query_trace(case: ChatEvalCase) -> AgentToolTrace:
@@ -657,53 +555,6 @@ def _render_expected_claim(claim: Any) -> str:
     return f"{entity}{claim_date}的{metric}为{value}{suffix}"
 
 
-def _generate_live_answer(
-    case: ChatEvalCase,
-    traces: list[AgentToolTrace],
-    provider: LLMProvider,
-) -> LLMResult:
-    evidence = [
-        {
-            "tool": trace.name,
-            "result_state": trace.result.status if trace.result else None,
-            "summary": trace.summary,
-            "payload": trace.result.payload if trace.result else trace.output,
-        }
-        for trace in traces
-        if trace.name not in INTERNAL_TRACE_NAMES
-    ]
-    system_prompt = (
-        "你是 LimitUpLab 收盘研究助手。只能依据给定冻结工具事实回答；错误、空结果和缺失必须"
-        "明确披露，不得使用模型记忆补数字。不得给出买卖、仓位、目标价、收益承诺或确定性预测。"
-        "回答使用简洁中文。"
-    )
-    user_prompt = json.dumps(
-        {
-            "conversation": [turn.model_dump() for turn in case.conversation],
-            "anchor_datetime": case.anchor_datetime.isoformat(),
-            "tool_facts": evidence,
-        },
-        ensure_ascii=False,
-        separators=(",", ":"),
-    )
-    return provider.generate(system_prompt, user_prompt)
-
-
-def _conversation_messages(
-    case: ChatEvalCase, trial: int
-) -> list[ChatSessionMessage]:
-    return [
-        ChatSessionMessage(
-            message_id=f"eval-{case.case_id}-{trial}-{index}",
-            session_id=f"eval-{case.case_id}-{trial}",
-            role=turn.role,
-            content=turn.content,
-            created_at=case.anchor_datetime,
-        )
-        for index, turn in enumerate(case.conversation[:-1])
-    ]
-
-
 def _evaluate_shadow_run(run: AgentRun, trial: int) -> ChatEvalTrialResult:
     response = AgentChatResponse.model_validate(run.output_json)
     case = ChatEvalCase.model_validate(
@@ -730,20 +581,6 @@ def _evaluate_shadow_run(run: AgentRun, trial: int) -> ChatEvalTrialResult:
         trial=trial,
         provider_failed=False,
     )
-
-
-def _sum_usage(
-    planner: LLMResult | None, answer: LLMResult | None
-) -> dict[str, Any]:
-    values = [item for item in (planner, answer) if item is not None]
-    complete = values and all(item.total_tokens is not None for item in values)
-    return {
-        "prompt_tokens": sum(item.prompt_tokens or 0 for item in values) if complete else None,
-        "completion_tokens": sum(item.completion_tokens or 0 for item in values) if complete else None,
-        "total_tokens": sum(item.total_tokens or 0 for item in values) if complete else None,
-        "planner_tokens": planner.total_tokens if planner else None,
-        "answer_tokens": answer.total_tokens if answer else None,
-    }
 
 
 def _parse_json_object(content: str) -> dict[str, Any]:

@@ -1,6 +1,5 @@
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 
 import pytest
 
@@ -14,43 +13,8 @@ from app.agents.chat_eval_runner_v2 import (
     select_eval_cases,
     write_completed_report,
 )
-from app.models import (
-    AgentChatResponse,
-    AgentRun,
-    AgentToolPolicyAudit,
-    AgentToolTrace,
-)
+from app.models import AgentChatResponse, AgentRun, AgentToolPolicyAudit
 from app.services.llm_provider import LLMProvider, LLMResult
-
-
-class LiveEvalProvider(LLMProvider):
-    def __init__(self) -> None:
-        self.calls = 0
-
-    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
-        self.calls += 1
-        if "first job is to decide which tools are needed" in system_prompt:
-            content = json.dumps(
-                {
-                    "intent_label": "limit_up_query",
-                    "capabilities": ["limit_up_pool"],
-                    "context_mode": "standalone",
-                    "context_capabilities": [],
-                    "safety": "normal",
-                }
-            )
-            model = "planner-fixture"
-        else:
-            content = "冻结涨停样本已返回筛选后的名单。仅作研究，不构成投资建议。"
-            model = "answer-fixture"
-        return LLMResult(
-            content=content,
-            model=model,
-            provider="test",
-            prompt_tokens=10,
-            completion_tokens=5,
-            total_tokens=15,
-        )
 
 
 class JudgeProvider(LLMProvider):
@@ -72,11 +36,6 @@ class JudgeProvider(LLMProvider):
             model="judge-pinned-v1",
             provider="test",
         )
-
-
-class FailingProvider(LLMProvider):
-    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
-        raise RuntimeError("provider unavailable")
 
 
 class RunRepositoryStub:
@@ -170,36 +129,6 @@ def test_offline_structured_results_repeat_for_same_fixture_and_seed():
     assert stable(first) == stable(second)
 
 
-def test_live_mode_uses_real_planner_and_answer_on_frozen_tools():
-    provider = LiveEvalProvider()
-    report = run_chat_eval_suite(
-        [_limit_up_case()],
-        mode="live",
-        trials=1,
-        seed="live",
-        llm_provider=provider,
-    )
-    result = report["results"][0]
-    assert provider.calls == 2
-    assert result["stages"]["planner"]["status"] == "pass"
-    assert result["stages"]["execution"]["status"] == "pass"
-    assert report["efficiency_metrics"]["token_p50"] == 30
-    assert report["efficiency_metrics"]["planner_token_p50"] == 15
-    assert report["efficiency_metrics"]["answer_token_p50"] == 15
-
-
-def test_provider_failure_is_not_hidden_by_template_fallback():
-    report = run_chat_eval_suite(
-        [_limit_up_case()],
-        mode="live",
-        trials=1,
-        seed="live",
-        llm_provider=FailingProvider(),
-    )
-    assert report["provider_failure_rate"] == 1
-    assert report["failed_cases"] == 1
-
-
 def test_judge_receives_only_question_behavior_facts_and_answer():
     case = _limit_up_case()
     response = AgentChatResponse(
@@ -270,3 +199,9 @@ def test_online_shadow_uses_persisted_response_and_omits_question_from_report():
     assert report["stage_metrics"]["planner"]["applicable_trials"] == 0
     assert "这是匿名真实问题" not in serialized
     assert "private-run-id" not in serialized
+
+
+def test_planner_only_live_mode_is_retired_before_provider_call():
+    from app.agents.chat_eval_runner_v2 import EvalConfigurationError
+    with pytest.raises(EvalConfigurationError, match="run_agent_live_eval.py"):
+        run_chat_eval_suite([_limit_up_case()], mode="live", trials=1, seed="retired", llm_provider=object())

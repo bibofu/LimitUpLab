@@ -21,25 +21,15 @@ from app.agents.chat_eval_runner_v2 import (
     run_online_shadow_eval,
     write_completed_report,
 )
-from app.config import (
-    detect_local_proxy,
-    hydrate_windows_environment,
-    replace_proxy_environment,
-    env_bool,
-)
-from app.services.llm_provider import (
-    DEFAULT_OPENAI_BASE_URL,
-    DisabledLLMProvider,
-    OpenAIChatCompletionsProvider,
-    get_llm_provider,
-)
+from app.config import hydrate_windows_environment, env_bool
+from app.services.llm_provider import DEFAULT_OPENAI_BASE_URL, OpenAIChatCompletionsProvider
 
 
 def main() -> None:
     parser = argparse.ArgumentParser(description="Run Chat Eval V2.")
     parser.add_argument("--dataset", choices=("dev", "holdout", "all"), default="dev")
     parser.add_argument(
-        "--mode", choices=("offline", "live", "online-shadow"), default="offline"
+        "--mode", choices=("offline", "online-shadow"), default="offline"
     )
     parser.add_argument("--trials", type=int)
     parser.add_argument("--judge", action="store_true")
@@ -84,14 +74,6 @@ def main() -> None:
                 ]
             if not cases:
                 parser.error("--case-filter matched no Chat Eval V2 cases")
-            llm_provider = None
-            if args.mode == "live":
-                _prepare_live_llm_environment()
-                llm_provider = get_llm_provider()
-                if isinstance(llm_provider, DisabledLLMProvider):
-                    raise EvalConfigurationError(
-                        "live mode requires LIMITUPLAB_LLM_ENABLED and an API key"
-                    )
             judge_provider = _judge_provider() if args.judge else None
             report = run_chat_eval_suite(
                 cases,
@@ -99,7 +81,6 @@ def main() -> None:
                 trials=trials,
                 seed=args.seed,
                 sample_size=args.sample_size,
-                llm_provider=llm_provider,
                 judge_provider=judge_provider,
             )
             if args.judge:
@@ -109,7 +90,6 @@ def main() -> None:
             and args.case_filter is None
             and (
                 (args.mode == "offline" and args.dataset == "dev")
-                or (args.mode == "live" and args.dataset == "all")
             )
         )
         report["release_gate"] = evaluate_release_gate(
@@ -142,18 +122,6 @@ def main() -> None:
     print(json.dumps(printable, ensure_ascii=False, indent=2))
     if report["failed_cases"] or report["release_gate"].get("passed") is False:
         raise SystemExit(1)
-
-
-def _prepare_live_llm_environment() -> None:
-    """Make CLI model settings match the Windows development startup path."""
-
-    hydrate_windows_environment(("DEEPSEEK_API_KEY", "OPENAI_API_KEY"))
-    if os.getenv("DEEPSEEK_API_KEY", "").strip():
-        os.environ.setdefault("LIMITUPLAB_LLM_ENABLED", "true")
-        os.environ.setdefault("LIMITUPLAB_LLM_BASE_URL", "https://api.deepseek.com")
-        os.environ.setdefault("LIMITUPLAB_LLM_MODEL", "deepseek-v4-flash")
-    proxy = os.getenv("LIMITUPLAB_PROXY_URL", "").strip() or detect_local_proxy()
-    replace_proxy_environment(proxy)
 
 
 def _judge_provider() -> OpenAIChatCompletionsProvider:
