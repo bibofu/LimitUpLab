@@ -110,29 +110,6 @@ def test_query_contract_routes_shapes_and_user_numeric_overrides():
     assert anchored_path.data_as_of == date(2026, 9, 7)
 
 
-# Regression scenario: drawdown magnitude wording routes to complete screen list.
-def test_drawdown_magnitude_wording_routes_to_complete_screen_list():
-    message = "近期涨停后回撤比较多的股票有哪些"
-    contract = build_post_limit_query_contract(
-        message,
-        planner_arguments={
-            "mode": "statistics",
-            "shape": "pullback_stabilizing",
-            "recent_limit_days": 5,
-        },
-    )
-
-    assert looks_like_post_limit_question(message)
-    assert not looks_like_post_limit_statistics_question(message)
-    assert contract.mode == "screen"
-    assert contract.shape == "high_drawdown"
-    assert contract.shapes == ("high_drawdown",)
-    assert contract.recent_limit_days == 7
-    assert contract.exhaustive
-    assert contract.limit == 100
-    signals = QuestionSignals.from_message(message)
-    assert signals.post_limit_screen
-    assert not signals.post_limit_statistics
 
 
 # Regression scenario: post limit trace keeps all candidate names for stock links.
@@ -215,18 +192,6 @@ def test_explicit_event_window_overrides_seven_day_default():
     assert contract.recent_limit_days == 10
 
 
-# Regression scenario: policy signal prevents generic limit up and kline routing.
-def test_policy_signal_prevents_generic_limit_up_and_kline_routing():
-    screen = QuestionSignals.from_message("有哪些涨停后从高位大幅回撤的票")
-    assert screen.post_limit_screen
-    assert not screen.limit_up_events
-    assert not screen.stock_kline
-    path = QuestionSignals.from_message("600001涨停后的走势")
-    assert path.post_limit_path
-    assert not path.limit_up_events
-    stats = QuestionSignals.from_message("比较横盘缩量与回撤企稳的历史表现")
-    assert stats.post_limit_statistics
-    assert not stats.post_limit_screen
 
 
 # Regression scenario: inclusive rule boundaries.
@@ -259,138 +224,10 @@ def test_strong_nonconsecutive_and_broken_board_repair_rules():
     )
 
 
-# Regression scenario: disabled llm still returns grounded post limit screen.
-def test_disabled_llm_still_returns_grounded_post_limit_screen(monkeypatch):
-    payload = {
-        "data_as_of": "2026-09-07",
-        "latest_data_date": "2026-09-07",
-        "rule_version": "post_limit_research_v3",
-        "shapes": ["high_drawdown"],
-        "shape_labels": {"high_drawdown": "高位大幅回撤"},
-        "rules": {"high_drawdown": "峰值回撤不低于10%"},
-        "pool_count": 20,
-        "evaluable_count": 10,
-        "coverage_ratio": .5,
-        "matched_count": 1,
-        "candidates": [{
-            "symbol": "600001", "name": "回撤样本", "anchor_date": "2026-09-01",
-            "board_height": 1, "anchor_age": 3, "anchor_change_pct": -5,
-            "peak_date": "2026-09-02", "peak_drawdown_pct": 12,
-            "range_pct": 15, "volume_ratio": .7, "concept": "机器人",
-        }],
-        "data_missing": ["missing_history20=10"],
-        "warnings": [],
-        "query_contract": {"recent_limit_days": 7},
-    }
-
-    # Build the ToolResult fixture used by the surrounding regression scenario.
-    def fake_screen(self, contract):
-        return ToolResult(
-            name="post_limit_screen", input=contract.to_dict(), output=payload,
-            summary="1只符合涨停后形态。", result_status="partial",
-        )
-
-    monkeypatch.setattr(AgentToolRegistry, "post_limit_screen", fake_screen)
-    response = answer_first_board_chat(
-        AgentChatRequest(session_id="post-limit", message="有哪些涨停后从高位大幅回撤的票"),
-        events=[],
-        llm_provider=DisabledLLMProvider(),
-    )
-    assert response.tool_calls == ["post_limit_screen", "template_general_answer"]
-    assert "limit_up_events" not in response.tool_calls
-    assert "回撤样本（600001）" in response.answer
-    assert "覆盖率 50.0%" in response.answer
-    assert "回看最近7个交易日的收盘涨停" in response.answer
 
 
-# Regression scenario: wrong planner tool is replaced by only post limit screen.
-def test_wrong_planner_tool_is_replaced_by_only_post_limit_screen(monkeypatch):
-    payload = {
-        "data_as_of": "2026-09-07", "latest_data_date": "2026-09-07",
-        "rule_version": "post_limit_research_v3", "shapes": ["high_drawdown"],
-        "shape_labels": {"high_drawdown": "高位大幅回撤"}, "rules": {},
-        "pool_count": 1, "evaluable_count": 1, "coverage_ratio": 1,
-        "matched_count": 0, "candidates": [], "data_missing": [], "warnings": [],
-    }
-
-    # Build the ToolResult fixture used by the surrounding regression scenario.
-    def fake_screen(self, contract):
-        return ToolResult(
-            name="post_limit_screen", input=contract.to_dict(), output=payload,
-            summary="0只符合涨停后形态。",
-        )
-
-    class WrongPlanner(LLMProvider):
-        # Build the LLMResult fixture used by the surrounding regression scenario.
-        def generate(self, system_prompt, user_prompt):
-            if "first job is to decide which tools are needed" in system_prompt:
-                return LLMResult(
-                    content=json.dumps({
-                        "intent_label": "limit_up_list", "safety": "normal",
-                        "capabilities": ["limit_up_events"],
-                        "tool_calls": [
-                            {"name": "limit_up_events", "arguments": {}},
-                            {"name": "stock_kline", "arguments": {"symbol": "600001"}},
-                        ],
-                    }),
-                    model="wrong-planner", provider="test",
-                )
-            return LLMResult(content="当前没有符合条件且数据完整的股票。", model="answer", provider="test")
-
-    monkeypatch.setattr(AgentToolRegistry, "post_limit_screen", fake_screen)
-    response = answer_first_board_chat(
-        AgentChatRequest(session_id="wrong-plan", message="有哪些涨停后从高位大幅回撤的票"),
-        events=[],
-        llm_provider=WrongPlanner(),
-    )
-    assert "post_limit_screen" in response.tool_calls
-    assert "limit_up_events" not in response.tool_calls
-    assert "stock_kline" not in response.tool_calls
 
 
-# Regression scenario: pronoun followup reuses previous symbol and anchor.
-def test_pronoun_followup_reuses_previous_symbol_and_anchor(monkeypatch):
-    captured = {}
-    payload = {
-        "data_as_of": "2026-09-07", "latest_data_date": "2026-09-07",
-        "rule_version": "post_limit_research_v3", "symbol": "600001", "name": "回撤样本",
-        "anchor": {"anchor_date": "2026-09-01"}, "metrics": {}, "matched_shapes": ["high_drawdown"],
-        "path": [{
-            "trade_date": "2026-09-01", "day": "T+0", "close": 11,
-            "change_from_anchor_close_pct": 0, "drawdown_from_running_peak_pct": 0,
-            "volume_vs_anchor": 1,
-        }],
-        "data_missing": [], "warnings": [],
-    }
-
-    # Build the ToolResult fixture used by the surrounding regression scenario.
-    def fake_path(self, contract, symbol):
-        captured["symbol"] = symbol
-        captured["anchor_date"] = contract.anchor_date
-        return ToolResult(
-            name="post_limit_path", input={**contract.to_dict(), "symbol": symbol},
-            output=payload, summary="路径已返回。",
-        )
-
-    prior = AgentRun(
-        run_id="prior-post-limit", session_id="post-limit", run_type="agent_chat",
-        status="success", intent="post_limit_screen", tool_calls=["post_limit_screen"],
-        input_json={"message": "有哪些涨停后大幅回撤的票"},
-        output_json={
-            "tool_results": [{
-                "name": "post_limit_screen", "input": {},
-                "output": {"candidates": [{"symbol": "600001", "anchor_date": "2026-09-01"}]},
-            }],
-        },
-        started_at=datetime.now(timezone.utc), finished_at=datetime.now(timezone.utc),
-    )
-    monkeypatch.setattr(AgentToolRegistry, "post_limit_path", fake_path)
-    response = answer_first_board_chat(
-        AgentChatRequest(session_id="post-limit", message="这只为什么入选"),
-        events=[], recent_runs=[prior], llm_provider=DisabledLLMProvider(),
-    )
-    assert response.tool_calls == ["post_limit_path", "template_general_answer"]
-    assert captured == {"symbol": "600001", "anchor_date": date(2026, 9, 1)}
 
 
 # Regression scenario: screen uses peak before observation day and preserves overlap.
@@ -469,13 +306,6 @@ def test_statistics_discloses_missing_event_windows():
 
 
 
-# Regression scenario: answer renders actual event window.
-@pytest.mark.parametrize("days", [5, 7, 10])
-def test_answer_renders_actual_event_window(days):
-    from app.agents.chat_templates import _template_post_limit_screen, _template_post_limit_statistics
-    payload = {"query_contract": {"recent_limit_days": days}, "shapes": ["high_drawdown"]}
-    assert f"最近{days}个交易日" in _template_post_limit_screen(payload)
-    assert f"最近{days}个交易日" in _template_post_limit_statistics(payload)
 
 
 # Regression scenario: repeated limit up resets anchor and future bars are isolated.

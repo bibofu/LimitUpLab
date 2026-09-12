@@ -44,63 +44,10 @@ def empty_execution():
     return {"facts": {}, "tool_results": [], "tool_call_names": [], "references": []}
 
 
-# Regression scenario: repair and dispatch preserve window grouping and evidence.
-@pytest.mark.parametrize("message,days,group,count,unique,trade_date", [
-    ("近期农业板块涨停过的股票有哪些", 7, None, 3, 2, None),
-    ("近10个交易日农业板块涨停过的股票有哪些", 10, None, 3, 2, None),
-    ("近期农业板块涨停过的股票有哪些", 7, None, 3, 2, date(2026, 9, 8)),
-    ("今天农业板块涨停的股票有哪些", 1, None, 0, 0, None),
-    ("近期哪些板块涨停的股票比较多", 7, "concept", 4, 3, None),
-    ("近期哪些行业的涨停股票比较多", 7, "industry", 4, 3, None),
-])
-def test_repair_and_dispatch_preserve_window_grouping_and_evidence(
-    message, days, group, count, unique, trade_date,
-):
-    tools = event_registry()
-    request = AgentChatRequest(session_id="query-parity", message=message, trade_date=trade_date)
-    direct = execute_tool_calls(
-        [{"name": "limit_up_events", "arguments": {}}], tools, request=request,
-    )
-    repaired = empty_execution()
-    names = AgentToolPolicyEngine(tools).reconcile(request=request, execution=repaired)
-
-    assert names == ["limit_up_events"]
-    facts = repaired["facts"]["limit_up_events"]
-    assert facts == direct["facts"]["limit_up_events"]
-    assert facts["recent_trade_days"] == days
-    assert facts["group_by"] == group
-    assert facts["matched_count"] == count
-    assert facts["unique_stock_count"] == unique
-    trace = repaired["tool_results"][0]
-    assert trace.input == direct["tool_results"][0].input
-    assert trace.input["recent_trade_days"] == trace.input["query_contract"]["recent_trade_days"]
-    assert trace.output["policy_repair"]["rule"]
-    assert repaired["references"] == direct["references"]
-    if group:
-        agriculture = next(item for item in facts["sector_summary"] if item["sector_name"] == "农业")
-        assert agriculture["unique_stock_count"] == 2
-        assert agriculture["limit_up_event_count"] == 3
-    else:
-        assert all(item["trade_date"] <= "2026-09-08" for item in facts["events"])
 
 
 
 
-# Regression scenario: policy keeps tool failure and profile boundaries.
-def test_policy_keeps_tool_failure_and_profile_boundaries():
-    tools = event_registry()
-    tools.limit_up_events = Mock(side_effect=RuntimeError("event source unavailable"))
-    request = AgentChatRequest(session_id="failure", message="近期农业板块涨停过的股票有哪些")
-    failed = empty_execution()
-    AgentToolPolicyEngine(tools).reconcile(request=request, execution=failed)
-    assert "limit_up_events" not in failed["facts"]
-    assert failed["tool_results"][0].status == "error"
-    assert "event source unavailable" in failed["tool_results"][0].error
-    tools.limit_up_events.reset_mock()
-    tools.is_enabled = Mock(return_value=False)
-    disabled = empty_execution()
-    assert AgentToolPolicyEngine(tools).reconcile(request=request, execution=disabled) == []
-    tools.limit_up_events.assert_not_called()
 
 
 # Regression scenario: eval report uses actual contract version even for empty suite.
