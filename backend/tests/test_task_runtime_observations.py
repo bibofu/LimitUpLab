@@ -72,6 +72,21 @@ def test_generic_selection_top_then_filter_and_condition():
     assert select({"items": selected}, filtered) == [{"name": "B", "score": 9}]
 
 
+def test_missing_predicate_field_is_not_a_false_observation():
+    import pytest
+    from app.agents.task_runtime.contracts import Predicate, TaskStep
+    from app.agents.task_runtime.selection import evaluate, select
+    predicate = Predicate(path="missing.rank", operator="less_than", value=6)
+    assert evaluate({"items": [{"rank": 1}]}, predicate) == (False, False)
+    step = TaskStep(
+        step_id="filter", requirement_ids=("r",), step_type="operation",
+        operation="select", depends_on=("source",), select_path="items",
+        filters=(Predicate(path="market_rank", operator="less_than", value=6),),
+    )
+    with pytest.raises(ValueError, match="filter field missing"):
+        select({"items": [{"sector_name": "半导体"}]}, step)
+
+
 def test_explicit_evidence_namespaces_are_unambiguous():
     from app.agents.task_runtime.contracts import evidence_values
     record = {"payload": {"items": [{"symbol": "1"}, {"symbol": "2"}]}, "selected": [{"symbol": "1"}], "state": "ok"}
@@ -112,3 +127,178 @@ def test_undeclared_numeric_claim_rejected():
     unsupported = valid.model_copy(update={"content": "评分88，排名第3。"})
     assert _valid(valid, requirement, state)
     assert not _valid(unsupported, requirement, state)
+
+
+def test_numeric_scope_from_original_requirement_does_not_need_market_claim():
+    from app.agents.task_runtime.contracts import Requirement
+    from app.agents.task_runtime.writer import AnswerBlock, Claim, _valid
+    requirement = Requirement(
+        id="r", description="2026-05-15评分Top3", source_text="查2026-05-15评分Top3",
+        constraints={"top_n": 3},
+    )
+    state = {"records": {"s": {"requirement_ids": ["r"], "payload": {"score": 88}, "state": "ok"}}}
+    block = AnswerBlock(
+        requirement_id="r", content="2026-05-15评分Top3中该项评分88。",
+        evidence_steps=["s"], claims=[Claim(step_id="s", path="score", value=88)],
+    )
+    assert _valid(block, requirement, state)
+
+
+def test_planner_source_text_normalization_does_not_discard_plan():
+    from app.agents.task_runtime.runtime import run
+    outputs = [{
+        "requirements": [{"id": "r", "description": "说明", "source_text": "模型改写"}],
+        "steps": [], "behavior": "answer", "message": "这是一般说明。",
+    }]
+    provider = SimpleNamespace(generate_function_call=lambda *a, **k: LLMResult(
+        content=json.dumps(outputs.pop(0)), model="test", provider="test"
+    ))
+    tools = SimpleNamespace(events=[], profile="test", is_enabled=lambda n: True, schemas=lambda: TOOL_SCHEMAS)
+    response = run(AgentChatRequest(session_id="test", message="请做一般说明"), tools, provider, [])
+    assert response.answer == "这是一般说明。"
+    assert response.warnings == ["planner source_text was normalized to the original user query"]
+
+
+def test_unmatched_conditional_branch_is_valid_observation_not_replan_gap():
+    from app.agents.task_runtime.runtime import run
+    plan = {
+        "requirements": [
+            {"id": "r1", "description": "查询", "source_text": "研究"},
+            {"id": "r2", "description": "否则分支", "source_text": "研究"},
+        ],
+        "steps": [
+            {"step_id": "s1", "requirement_ids": ["r1"], "capability": "popularity", "tool_name": "hot_stock_ranking"},
+            {"step_id": "s2", "requirement_ids": ["r2"], "capability": "stock_trend", "tool_name": "stock_kline", "arguments": {"symbol": "000001"}, "when_step": "s1", "when_states": ["empty"]},
+        ],
+    }
+    completion = {"complete": True, "satisfied_ids": ["r1", "r2"], "missing": {}, "reason": "else branch not applicable", "answer": {"blocks": [
+        {"requirement_id": "r1", "content": "已取得证据。", "evidence_steps": ["s1"]},
+        {"requirement_id": "r2", "content": "条件未满足，该分支不适用。", "evidence_steps": ["s2"]},
+    ]}}
+    outputs = [plan, completion]
+    provider = SimpleNamespace(generate_function_call=lambda *a, **k: LLMResult(content=json.dumps(outputs.pop(0)), model="test", provider="test"))
+    tools = SimpleNamespace(events=[], profile="test", is_enabled=lambda n: True, schemas=lambda: TOOL_SCHEMAS,
+        hot_stock_ranking=lambda: ToolResult(name="hot_stock_ranking", input={}, output={"items": [{"symbol": "000001"}]}, trace_output={"items": [{"symbol": "000001"}]}, summary="ok"))
+    response = run(AgentChatRequest(session_id="test", message="研究"), tools, provider, [])
+    ledger = next(t.output for t in response.tool_results if t.name == "task_execution")
+    assert ledger["terminal_state"] == "complete"
+    assert ledger["replan_count"] == 0
+    assert ledger["records"]["s2"]["condition"]["matched"] is False
+
+
+def test_binding_contract_error_overrides_false_unrecoverable_verdict():
+    from app.agents.task_runtime.runtime import run
+    outputs = [
+        {"requirements": [{"id": "r", "description": "研究", "source_text": "研究"}], "steps": [
+            {"step_id": "s1", "requirement_ids": ["r"], "capability": "popularity", "tool_name": "hot_stock_ranking"},
+            {"step_id": "s2", "requirement_ids": ["r"], "capability": "stock_trend", "tool_name": "stock_kline", "bindings": [{"source_step": "s1", "path": "missing.symbol", "target_argument": "symbol"}]},
+        ]},
+        {"complete": False, "satisfied_ids": [], "missing": {"r": "binding failed"}, "reason": "incorrectly called unavailable", "can_recover": False},
+        {"new_steps": [], "reason": "no valid repair"},
+        {"blocks": [{"requirement_id": "r", "content": "下游证据缺失。", "evidence_steps": ["s2"]}]},
+    ]
+    provider = SimpleNamespace(generate_function_call=lambda *a, **k: LLMResult(content=json.dumps(outputs.pop(0)), model="test", provider="test"))
+    tools = SimpleNamespace(events=[], profile="test", is_enabled=lambda n: True, schemas=lambda: TOOL_SCHEMAS,
+        hot_stock_ranking=lambda: ToolResult(name="hot_stock_ranking", input={}, output={"items": [{"symbol": "000001"}]}, trace_output={"items": [{"symbol": "000001"}]}, summary="ok"))
+    response = run(AgentChatRequest(session_id="test", message="研究"), tools, provider, [])
+    ledger = next(t.output for t in response.tool_results if t.name == "task_execution")
+    assert ledger["replan_count"] == 1
+    assert any(t.name == "task_replan" for t in response.tool_results)
+
+
+def test_invalid_native_structure_retries_once_as_explicit_json():
+    from app.agents.task_runtime.runtime import run
+    from app.services.llm_provider import NativeFunctionCallingError
+    plan = {
+        "requirements": [{"id": "r", "description": "说明", "source_text": "说明"}],
+        "steps": [], "behavior": "answer", "message": "一般说明。",
+    }
+    class Provider:
+        planner_max_tokens = 100
+        max_attempts = 2
+        def generate_function_call(self, *args, **kwargs):
+            raise NativeFunctionCallingError("invalid envelope")
+        def generate(self, *args, **kwargs):
+            return LLMResult(content=json.dumps(plan), model="test", provider="test")
+    tools = SimpleNamespace(events=[], profile="test", is_enabled=lambda n: True, schemas=lambda: TOOL_SCHEMAS)
+    response = run(AgentChatRequest(session_id="test", message="说明"), tools, Provider(), [])
+    ledger = next(t.output for t in response.tool_results if t.name == "task_execution")
+    assert response.answer == "一般说明。"
+    assert ledger["llm_calls"] == 2
+    assert any(t.name == "task_plan_provider_error" for t in response.tool_results)
+
+
+def test_completion_proposes_observation_patch_without_second_replan_call():
+    from app.agents.task_runtime.runtime import run
+    plan = {"requirements": [{"id": "r", "description": "研究", "source_text": "研究"}], "steps": [
+        {"step_id": "s1", "requirement_ids": ["r"], "capability": "stock_news", "tool_name": "stock_news", "arguments": {"symbol": "000001"}},
+    ]}
+    completion = {
+        "complete": False, "satisfied_ids": [], "missing": {"r": "news empty; need trend"},
+        "reason": "observed empty", "can_recover": True,
+        "proposed_steps": [{"step_id": "s2", "requirement_ids": ["r"], "capability": "stock_trend", "tool_name": "stock_kline", "arguments": {"symbol": "000001"}}],
+    }
+    final = {"complete": True, "satisfied_ids": ["r"], "missing": {}, "reason": "trend available", "answer": {"blocks": [
+        {"requirement_id": "r", "content": "新闻为空，走势证据可用。", "evidence_steps": ["s1", "s2"]},
+    ]}}
+    outputs = [plan, completion, final]
+    provider = SimpleNamespace(generate_function_call=lambda *a, **k: LLMResult(content=json.dumps(outputs.pop(0)), model="test", provider="test"))
+    tools = SimpleNamespace(events=[], profile="test", is_enabled=lambda n: True, schemas=lambda: TOOL_SCHEMAS,
+        stock_news=lambda symbol: ToolResult(name="stock_news", input={"symbol": symbol}, output={"items": []}, trace_output={"items": []}, summary="empty", result_status="empty"),
+        stock_kline=lambda symbol: ToolResult(name="stock_kline", input={"symbol": symbol}, output={"symbol": symbol}, trace_output={"symbol": symbol}, summary="ok"))
+    response = run(AgentChatRequest(session_id="test", message="研究"), tools, provider, [])
+    ledger = next(t.output for t in response.tool_results if t.name == "task_execution")
+    assert not outputs
+    assert ledger["llm_calls"] == 3
+    assert ledger["replan_count"] == 1
+    assert next(t for t in response.tool_results if t.name == "task_replan").input["decision_type"] == "completion_patch"
+
+
+def test_completion_duplicate_patch_stops_without_reexecuting_tool():
+    from app.agents.task_runtime.runtime import run
+    plan = {"requirements": [{"id": "r", "description": "研究", "source_text": "研究"}], "steps": [
+        {"step_id": "s1", "requirement_ids": ["r"], "capability": "stock_news", "tool_name": "stock_news", "arguments": {"symbol": "000001"}},
+    ]}
+    completion = {
+        "complete": False, "satisfied_ids": [], "missing": {"r": "fixture has no item"},
+        "reason": "no evidence", "can_recover": True,
+        "proposed_steps": [{"step_id": "s2", "requirement_ids": ["r"], "capability": "stock_news", "tool_name": "stock_news", "arguments": {"symbol": "000001"}}],
+        "answer": {"blocks": [{"requirement_id": "r", "content": "新闻结果为空。", "evidence_steps": ["s1"]}]},
+    }
+    outputs = [plan, completion]
+    provider = SimpleNamespace(generate_function_call=lambda *a, **k: LLMResult(content=json.dumps(outputs.pop(0)), model="test", provider="test"))
+    calls = []
+    def stock_news(symbol):
+        calls.append(symbol)
+        return ToolResult(name="stock_news", input={"symbol": symbol}, output={"items": []}, trace_output={"items": []}, summary="empty", result_status="empty")
+    tools = SimpleNamespace(events=[], profile="test", is_enabled=lambda n: True, schemas=lambda: TOOL_SCHEMAS, stock_news=stock_news)
+    response = run(AgentChatRequest(session_id="test", message="研究"), tools, provider, [])
+    ledger = next(t.output for t in response.tool_results if t.name == "task_execution")
+    assert calls == ["000001"]
+    assert ledger["llm_calls"] == 2
+    assert ledger["replan_count"] == 1
+    assert ledger["terminal_state"] == "partial"
+
+
+def test_snapshot_only_tool_cannot_mix_current_fact_into_historical_request():
+    from datetime import date
+    from app.agents.query_contract import query_reference_date_override
+    from app.agents.task_runtime.runtime import run
+    plan = {"requirements": [{"id": "r", "description": "历史热榜", "source_text": "查询2026-05-15历史热榜", "constraints": {"trade_date": "2026-05-15"}}], "steps": [
+        {"step_id": "s1", "requirement_ids": ["r"], "capability": "popularity", "tool_name": "hot_stock_ranking", "arguments": {"limit": 2}},
+    ]}
+    completion = {"complete": False, "satisfied_ids": [], "missing": {"r": "工具仅支持当前快照"}, "reason": "historical unavailable", "can_recover": False, "answer": {"blocks": [
+        {"requirement_id": "r", "content": "无法取得2026-05-15的历史热榜。", "evidence_steps": ["s1"]},
+    ]}}
+    outputs = [plan, completion]
+    provider = SimpleNamespace(generate_function_call=lambda *a, **k: LLMResult(content=json.dumps(outputs.pop(0)), model="test", provider="test"))
+    calls = []
+    tools = SimpleNamespace(events=[], profile="test", is_enabled=lambda n: True, schemas=lambda: TOOL_SCHEMAS,
+        hot_stock_ranking=lambda limit=10: calls.append(limit))
+    with query_reference_date_override(date(2026, 9, 12)):
+        response = run(AgentChatRequest(session_id="test", message="查询2026-05-15历史热榜"), tools, provider, [])
+    ledger = next(t.output for t in response.tool_results if t.name == "task_execution")
+    assert calls == []
+    assert ledger["tool_calls"] == 0
+    assert "snapshot-only" in ledger["records"]["s1"]["reason"]
+    assert "无法取得2026-05-15" in response.answer

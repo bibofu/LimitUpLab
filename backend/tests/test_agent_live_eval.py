@@ -208,6 +208,24 @@ def test_argument_dependency_uses_observed_source_values() -> None:
     assert any("argument dependency failed" in item for item in failed["failure_reasons"])
 
 
+def test_unscoped_empty_result_proves_no_source_entity_matches() -> None:
+    case = _case("LIVE-REPLAN-002")
+    response = _response(
+        [
+            _planner(["first_board_rating", "dragon_tiger"]),
+            _trace("first_board_ratings", {}, {"top_candidates": [{"symbol": "300750"}]}),
+            _trace("dragon_tiger_list", {"limit": 100}, {"items": []}, state="empty"),
+            _trace("stock_kline", {"symbol": "300750"}, {"symbol": "300750"}),
+            _trace("stock_news", {"symbol": "300750"}, {"symbol": "300750"}),
+        ],
+        answer="龙虎榜为空，已补查K线和新闻。",
+    )
+    result = evaluate_live_trial(
+        case, [response], llm_usage={"call_count": 2}, latency_ms=10
+    )
+    assert not any("argument dependency failed" in item for item in result["failure_reasons"])
+
+
 def test_runtime_condition_requires_fallback_only_when_observed() -> None:
     case = next(
         case for case in load_live_eval_dataset().cases

@@ -44,13 +44,23 @@ def evidence_payload(result):
     return raw if isinstance(raw, (dict, list)) else trace
 
 
-def schemas_for_runtime(tools):
+def schemas_for_runtime(tools, *, snapshot_date=None):
     """Expose Python-required parameters omitted by the legacy planner schema."""
     from copy import deepcopy
     from app.agents.tools import AgentToolRegistry
     result = []
     for schema in tools.schemas():
         item = deepcopy(schema.model_dump())
+        properties = item["args_schema"].get("properties", {})
+        date_parameters = sorted(
+            name for name in properties
+            if name in {"trade_date", "start_date", "end_date", "as_of_date", "date"}
+        )
+        item["temporal_contract"] = {
+            "mode": "historical" if date_parameters else "snapshot_only",
+            "date_parameters": date_parameters,
+            "snapshot_date": str(snapshot_date) if snapshot_date is not None else None,
+        }
         if schema.name in OUTPUT_COLLECTIONS:
             collection, entity = OUTPUT_COLLECTIONS[schema.name]
             item["output_contract"] = {"collection_path": collection, "entity_path": f"{collection}.*.{entity}"}

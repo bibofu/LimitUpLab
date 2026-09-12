@@ -273,8 +273,18 @@ def evaluate_live_trial(
         source = _first_trace(tool_traces, dependency.source_tool)
         targets = _traces_after(tool_traces, dependency.target_tool, source)
         source_values = _path_values(source.output if source else {}, dependency.source_path)
-        target_values = [value for trace in targets for value in _as_values(trace.input.get(dependency.target_arg))]
-        if not _relation_holds(source_values, target_values, dependency.relation):
+        target_values = [
+            value for trace in targets
+            for value in _as_values(trace.input.get(dependency.target_arg))
+            if value is not None
+        ]
+        # An unscoped, complete empty query is stronger evidence than querying
+        # each source entity separately: none of the candidates can be present.
+        unscoped_empty_proof = bool(targets) and not target_values and all(
+            dependency.target_arg not in trace.input and _result_state(trace) == "empty"
+            for trace in targets
+        )
+        if not unscoped_empty_proof and not _relation_holds(source_values, target_values, dependency.relation):
             failures.append(
                 f"argument dependency failed: {dependency.source_tool}.{dependency.source_path} "
                 f"-> {dependency.target_tool}.{dependency.target_arg}"

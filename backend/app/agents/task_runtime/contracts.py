@@ -102,6 +102,7 @@ class Completion(BaseModel):
     missing: dict[str, str] = Field(default_factory=dict)
     reason: str
     can_recover: bool = True
+    proposed_steps: list[TaskStep] = Field(default_factory=list, max_length=8)
     # Completion and drafting share one observation pass; prose is validated later.
     answer: dict[str, Any] | None = None
 

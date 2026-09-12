@@ -1,5 +1,6 @@
 """Per-requirement answers with local repair and evidence-preserving fallback."""
 
+import json
 import re
 
 from pydantic import BaseModel, ConfigDict, Field
@@ -28,7 +29,8 @@ class Answer(BaseModel):
 
 
 ANSWER_INSTRUCTION = """Write a concise Chinese research answer, ONE block per requirement ID.
-Use only supplied evidence and cite evidence_steps. Every factual numeric claim needs
+Use only supplied evidence and cite evidence_steps. Every factual numeric claim other
+than a date, count, rank, or window copied from the original requirement needs
 exact step_id/path/value from record.payload; paths use items.0.metric notation.
 Never guess a field name: copy the actual key. Do not include the date or symbol as
 a claim unless that value actually exists at the cited path. Claims must have scalar
@@ -57,30 +59,39 @@ def fact_catalog(records, limit=300):
     return {"claims": facts, "possibly_truncated": len(facts) >= limit}
 
 
-def _valid(block, requirement, state):
+def _validation_errors(block, requirement, state):
+    errors = []
     if block is None or not block.content.strip() or _unsafe(block.content):
-        return False
+        return ["missing, empty, or unsafe content"]
     if not block.evidence_steps or not all(key in state["records"] and requirement.id in state["records"][key]["requirement_ids"] for key in block.evidence_steps):
-        return False
-    if re.search(r"\d", block.content) and not block.claims:
-        return False
+        errors.append("evidence step is missing or belongs to another requirement")
     for claim in block.claims:
         record = state["records"].get(claim.step_id)
         if record is None or claim.step_id not in block.evidence_steps:
-            return False
+            errors.append(f"claim step is not cited: {claim.step_id}")
+            continue
         try:
             if claim.value not in evidence_values(record, claim.path):
-                return False
+                errors.append(f"unsupported claim: {claim.step_id}.{claim.path}={claim.value}")
         except ValueError:
-            return False
+            errors.append(f"invalid claim path: {claim.step_id}.{claim.path}")
     content_numbers = set(re.findall(r"(?<![A-Za-z])\d+(?:\.\d+)?", re.sub(r"(?m)^\s*\d+[.)、]\s*", "", block.content)))
     claim_numbers = {
         number for claim in block.claims
         for number in re.findall(r"\d+(?:\.\d+)?", str(claim.value))
     }
-    if not content_numbers <= claim_numbers:
-        return False
-    return True
+    scope_numbers = set(re.findall(
+        r"\d+(?:\.\d+)?",
+        requirement.source_text + " " + requirement.description + " "
+        + json.dumps(requirement.constraints, ensure_ascii=False, default=str),
+    ))
+    if not content_numbers <= claim_numbers | scope_numbers:
+        errors.append(f"undeclared numeric tokens: {sorted(content_numbers - claim_numbers - scope_numbers)}")
+    return errors
+
+
+def _valid(block, requirement, state):
+    return not _validation_errors(block, requirement, state)
 
 
 def _unsafe(text):
@@ -89,7 +100,6 @@ def _unsafe(text):
 
 
 def _fallback(requirement, state):
-    import json
     from .runtime import _summary
     parts = []
     for record in state.get("records", {}).values():
@@ -136,7 +146,12 @@ def compose(state, decide):
         blocks = {b.requirement_id: b for b in result.blocks}
     except Exception:
         blocks = {}
-    invalid = [r for r in plan.requirements if not _valid(blocks.get(r.id), r, state)]
+    validation = {
+        r.id: _validation_errors(blocks.get(r.id), r, state)
+        for r in plan.requirements
+    }
+    invalid = [r for r in plan.requirements if validation[r.id]]
+    state["answer_validation"] = {"initial": validation}
     # One bounded local repair; never replace already verified task paragraphs.
     if invalid and state.get("answer_draft") is not None:
         try:
@@ -144,6 +159,7 @@ def compose(state, decide):
                 "requirements": [r.model_dump() for r in invalid],
                 "evidence": _summary({key: record for key, record in state["records"].items() if any(r.id in record["requirement_ids"] for r in invalid)}, 30),
                 "invalid_blocks": [blocks[r.id].model_dump() for r in invalid if r.id in blocks],
+                "validation_errors": {r.id: validation[r.id] for r in invalid},
                 "instruction": ANSWER_INSTRUCTION + " Repair only listed blocks: evidence references or values were invalid, missing, or unsafe. Use exact paths and values from payload, not the record wrapper.",
             })
             for block in repaired.blocks:
@@ -151,6 +167,10 @@ def compose(state, decide):
                     blocks[block.requirement_id] = block
         except Exception:
             pass
+    state["answer_validation"]["final"] = {
+        r.id: _validation_errors(blocks.get(r.id), r, state)
+        for r in plan.requirements
+    }
     sections = []
     for requirement in plan.requirements:
         block = blocks.get(requirement.id)

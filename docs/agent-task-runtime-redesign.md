@@ -135,6 +135,8 @@ AnswerPlan为每项requirement分配段落，段落引用ExecutionRecord的证�
 已实现任务契约、按步骤保存证据、直接参数适配、LLM计划/完成检查/Replan、分任务证据兜底和冻结工具入口。未改题库。
 首轮冻结简单题6×1按原门禁0/6；修正引用、输出契约并合并完成检查/答案草稿后，6×1为6/6，随后6×3为17/18，唯一失败是Provider错误。稳定率83.33%、Provider失败率5.56%，仍未达到90%/<1%发布门槛。
 复杂Replan 8×3为15/24，逐题3/3稳定仅3/8；raw capability/tool recall均100%，effective tool recall 97.62%。失败集中在过度补查、预算、冻结参数语义和一次Provider结构化输出异常，报告位于 output/agent-live-eval/live-20260912T073858Z-e771706b/。
+在提交 `6f4eea3` 上以最终代码重跑为10/24、稳定3/8、Provider失败0、effective tool recall 88.1%、无效Replan 88.89%，报告位于 output/agent-live-eval/live-20260912T075003Z-e7bf71f4/。下降主要暴露条件分支覆盖、Planner溯源字符串和Evaluator全集empty语义缺陷；对应通用契约已修正，结果待再次真实验收，不能用旧15/24替代最新基线。
+合并Completion与观测后patch、补齐重复patch门禁后，最新正式复杂8×3为18/24、稳定4/8、Provider失败0、raw/effective required tool recall均100%、无效Replan 0；平均3.42次LLM、3.79次工具、约40951 token，p95 23058ms，报告位于 output/agent-live-eval/live-20260912T081721Z-a6ee40f5/。仍未达到稳定性、成功率及成本门槛。
 真实HTTP已验证同一工具两个日期的参数互不串用（run_58e27cbeceaf4e46b78ea0d9f2d88207），以及一个empty任务不影响另一独立任务（run_8a0b1488ce5c47b9b05746f8d11f0bbb）；SSE合规拒答通过。完整参数/事实关系、安全语义、deadline/取消/checkpoint/SSE重连仍待完善。
-不得把单元测试和后端回归通过，当作旧十题及未见复杂题已全部通过。新路径不切换默认。
+后续真实HTTP又发现历史日期混入当前热榜/新闻，已增加工具时间能力契约和执行前门禁。按用户要求停止后不再运行Live；最终定向48项通过，此时间门禁尚未做二次真实HTTP验收。不得把单测当作旧十题及未见复杂题已全部通过，新路径仍不切换默认。
 旧答案拒答/为空的精确生成原因仍待补足受控调试记录，记录需脱敏并限制留存。

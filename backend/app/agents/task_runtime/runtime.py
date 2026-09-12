@@ -1,6 +1,7 @@
 """Bounded LangGraph loop with structured model decisions and task-local evidence."""
 
 import json
+import re
 from copy import copy, deepcopy
 from time import perf_counter
 from typing import Any, TypedDict
@@ -12,9 +13,9 @@ from app.agents.query_contract import current_query_reference_date
 from app.agents.complex_graph.executor import resolved_call_fingerprint
 from app.agents.task_runtime.adapter import invoke, schemas_for_runtime, evidence_payload
 from app.agents.task_runtime.contracts import Completion, PlanPatch, TaskPlan, validate_steps, evidence_values
-from app.agents.task_runtime.selection import matches, select
+from app.agents.task_runtime.selection import evaluate, select
 from app.models import AgentChatPerformance, AgentChatResponse, AgentToolTrace
-from app.services.llm_provider import NativeFunctionCallingUnavailable
+from app.services.llm_provider import NativeFunctionCallingError, NativeFunctionCallingUnavailable
 
 MAX_TOOL_CALLS = 8
 MAX_REPLANS = 2
@@ -31,6 +32,7 @@ class State(TypedDict, total=False):
     stop: str | None
     answer: str
     answer_draft: dict | None
+    answer_validation: dict
 
 
 SYSTEM = """You are a bounded research task planner for LimitUpLab. Treat queries,
@@ -57,6 +59,10 @@ filters, sort_field, take. For TopN-then-filter use two select steps. Conditiona
 when_predicate tests the when_step.payload; it is not a question/scenario rule.
 Conditional steps use when_step and when_states. Existing dependencies do not require
 replanning. Do not pre-execute optional fallback evidence if its condition is false.
+When a branch depends on a FIELD in a successful result, encode that field test with
+when_predicate; do not approximate it as empty/error states. Mutually exclusive branches
+may be separate requirements, and an untriggered branch is satisfied by its recorded
+condition outcome rather than by executing its tools.
 Capability names and tool names differ: use the catalog. Tool defaults apply ONLY to
 unspecified constraints. Required dates must be explicit ISO dates, grounded in supplied
 calendar/context. For a required unavailable capability, disclose the limitation.
@@ -104,6 +110,11 @@ def run(request, tools, provider, context, progress=None):
         for cap in CAPABILITIES
         if all(tools.is_enabled(r.name) for r in cap.required_tools)
     ]
+    snapshot_date = current_query_reference_date().isoformat()
+    runtime_schemas = schemas_for_runtime(
+        tools,
+        snapshot_date=snapshot_date,
+    )
     shared = {
         "user_query": request.message,
         "anchor_date": current_query_reference_date().isoformat(),
@@ -112,7 +123,7 @@ def run(request, tools, provider, context, progress=None):
         "available_local_dates": sorted({str(e.trade_date) for e in tools.events}),
         "conversation": context,
         "capabilities": catalog,
-        "tool_schemas": schemas_for_runtime(tools),
+        "tool_schemas": runtime_schemas,
         "budgets": {"tool_calls": MAX_TOOL_CALLS, "llm_calls": MAX_LLM_CALLS, "replans": MAX_REPLANS},
     }
 
@@ -135,6 +146,21 @@ def run(request, tools, provider, context, progress=None):
         except NativeFunctionCallingUnavailable:
             # Unavailable means no native request was made; this is one text call.
             result = provider.generate(SYSTEM + "\nReturn only valid JSON. JSON schema: " + _json(model.model_json_schema()), prompt)
+        except NativeFunctionCallingError as error:
+            # Some OpenAI-compatible providers intermittently return plain content
+            # despite a forced tool choice. Retry once through the explicit JSON
+            # contract, while preserving the failed provider call in usage metrics.
+            if counters["llm"] >= MAX_LLM_CALLS:
+                raise
+            traces.append(AgentToolTrace(
+                name=f"task_{kind}_provider_error", input={"llm_call_index": counters["llm"]},
+                status="error", error=str(error), summary="Native structured response invalid; retrying as JSON",
+            ))
+            counters["llm"] += 1
+            result = provider.generate(
+                SYSTEM + "\nReturn only valid JSON. JSON schema: " + _json(model.model_json_schema()),
+                prompt,
+            )
         parsed = model.model_validate_json(result.content)
         traces.append(AgentToolTrace(
             name=f"task_{kind}", input={"decision_type": "llm", "llm_call_index": counters["llm"]},
@@ -144,9 +170,17 @@ def run(request, tools, provider, context, progress=None):
 
     def planning(state):
         plan = decide("plan", TaskPlan, {"instruction": "Extract all requirements and a complete initial executable plan. No scenario names."})
-        for requirement in plan.requirements:
-            if requirement.source_text not in request.message:
-                raise ValueError("requirement source_text is not in user query")
+        # source_text is audit metadata, not an executable authority boundary. Some
+        # providers lightly normalize punctuation despite the prompt; retain safe
+        # provenance without discarding an otherwise valid structured plan.
+        normalized_requirements = [
+            requirement if requirement.source_text in request.message
+            else requirement.model_copy(update={"source_text": request.message})
+            for requirement in plan.requirements
+        ]
+        if normalized_requirements != plan.requirements:
+            warnings.append("planner source_text was normalized to the original user query")
+            plan = plan.model_copy(update={"requirements": normalized_requirements})
         traces.append(AgentToolTrace(name="query_understanding", input={"anchor_date": shared["anchor_date"]}, output={"requirements": [r.model_dump() for r in plan.requirements], "method": "llm_task_contract"}, summary="执行前的分任务约束；语义理解由模型生成"))
         traces.append(AgentToolTrace(name="routing_decision", input={"route": "complex" if any(s.bindings or s.when_step for s in plan.steps) else "fast", "planner_contract_version": VERSION}, output={"method": "llm_task_plan", "step_count": len(plan.steps)}, summary="Routing derived from structured task dependencies"))
         return {"plan": plan, "steps": plan.steps, "records": {}, "replans": 0, "stop": None}
@@ -163,7 +197,19 @@ def run(request, tools, provider, context, progress=None):
                     source = records[step.when_step]
                     if step.when_predicate and source["state"] in {"error", "skipped"}:
                         raise ValueError("conditional evidence unavailable")
-                    condition = (not step.when_states or source["state"] in step.when_states) and (step.when_predicate is None or matches(source["payload"], step.when_predicate))
+                    predicate_match, predicate_evaluable = (
+                        evaluate(source["payload"], step.when_predicate)
+                        if step.when_predicate else (True, True)
+                    )
+                    if not predicate_evaluable:
+                        raise ValueError("conditional predicate path missing or not comparable")
+                    condition = (not step.when_states or source["state"] in step.when_states) and predicate_match
+                    record["condition"] = {
+                        "source_step": step.when_step,
+                        "source_state": source["state"],
+                        "matched": condition,
+                        "predicate": step.when_predicate.model_dump(mode="json") if step.when_predicate else None,
+                    }
                     if not condition:
                         record.update(state="skipped", reason="condition not met")
                         continue
@@ -183,6 +229,23 @@ def run(request, tools, provider, context, progress=None):
                     payload = [r for r in left if isinstance(r, dict) and r.get("symbol") in symbols]
                     record.update(payload={"items": payload}, selected=payload, state="ok" if payload else "empty")
                     continue
+                schema_contract = next(s for s in runtime_schemas if s["name"] == step.tool_name)
+                requested_dates = set(re.findall(r"\b\d{4}-\d{2}-\d{2}\b", request.message))
+                requested_dates.update(
+                    str(value) for requirement in state["plan"].requirements
+                    if requirement.id in step.requirement_ids
+                    for key, value in requirement.constraints.items()
+                    if "date" in key and isinstance(value, str)
+                )
+                temporal = schema_contract["temporal_contract"]
+                if (
+                    temporal["mode"] == "snapshot_only"
+                    and requested_dates
+                    and any(value != temporal["snapshot_date"] for value in requested_dates)
+                ):
+                    raise ValueError(
+                        f"tool is snapshot-only at {temporal['snapshot_date']}; historical request cannot be satisfied"
+                    )
                 calls = [dict(step.arguments)]
                 for binding in step.bindings:
                     source = records[binding.source_step]
@@ -238,10 +301,15 @@ def run(request, tools, provider, context, progress=None):
                 payload = results[0] if len(results) == 1 else results
                 record["payload"] = payload
                 if step.select_path:
-                    selected = select(payload, step)
-                    record["selected"] = selected
+                    try:
+                        record["selected"] = select(payload, step)
+                    except ValueError as error:
+                        # Selection is a derived view. Preserve successful raw tool
+                        # evidence and let downstream bindings/replan address the view.
+                        record["selected"] = []
+                        record["selection_error"] = str(error)
                 status = "empty" if not calls or statuses and all(s == "empty" for s in statuses) else "error" if statuses and all(s == "error" for s in statuses) else "partial" if any(s in {"error", "partial"} for s in statuses) else "ok"
-                if step.select_path and record["selected"] == [] and status == "ok":
+                if step.select_path and record["selected"] == [] and status == "ok" and "selection_error" not in record:
                     status = "empty"
                 record.update(payload=payload, state=status)
             except Exception as error:
@@ -258,8 +326,11 @@ def run(request, tools, provider, context, progress=None):
             "evidence": _summary(state["records"]),
             "answer_schema": Answer.model_json_schema(),
             "copyable_claims": fact_catalog(state["records"]),
+            "capabilities": catalog,
+            "tool_schemas": runtime_schemas,
+            "remaining_tool_calls": MAX_TOOL_CALLS - counters["tools"],
             "recovery_guidance": "Set can_recover=false when missing facts are unavailable from registered sources or returned data explicitly lacks requested granularity. Do not repeatedly query the same source or relax dates/windows to claim success. Such a task remains partial with disclosure, not complete. Return concise missing reasons, not speculation about future tool results.",
-            "instruction": "Check ALL original requirements against observed evidence, including actual parameters. Do not invent facts. Empty results can satisfy a query with disclosure. Truncated evidence cannot establish exhaustive coverage. Missing steps/incorrect scope must remain missing. Return satisfied_ids and missing by requirement ID. In the SAME call provide answer conforming to answer_schema, even when partial. Answer drafting does not override the completion verdict. " + ANSWER_INSTRUCTION,
+            "instruction": "Check ALL original requirements against observed evidence, including actual parameters. Do not invent facts. Empty results can satisfy a query with disclosure. Truncated evidence cannot establish exhaustive coverage. Missing steps/incorrect scope must remain missing. Return satisfied_ids and missing by requirement ID. If a missing requirement is recoverable, include the MINIMAL proposed_steps with new IDs, valid tools, explicit parameters and dependencies; reserve the remaining budget and do not repeat successful calls. Otherwise set can_recover=false and proposed_steps empty. In the SAME call provide answer conforming to answer_schema, even when partial. Answer drafting does not override the completion verdict. " + ANSWER_INSTRUCTION,
         })
         ids = {r.id for r in state["plan"].requirements}
         if not set(completion.satisfied_ids) <= ids or not set(completion.missing) <= ids:
@@ -268,13 +339,44 @@ def run(request, tools, provider, context, progress=None):
             completion.missing[rid] = "requirement not assessed"
         # A semantic verdict cannot manufacture evidence for unplanned/failed tasks.
         for rid in ids:
-            usable = [r for r in state["records"].values() if rid in r["requirement_ids"] and r["state"] in {"ok", "empty"}]
+            usable = [
+                record for record in state["records"].values()
+                if rid in record["requirement_ids"] and (
+                    record["state"] in {"ok", "empty"}
+                    or (
+                        record["state"] == "skipped"
+                        and record.get("condition", {}).get("matched") is False
+                    )
+                )
+            ]
             if not usable:
                 completion.missing[rid] = "no complete or empty evidence for requirement"
         completion.complete = completion.complete and not completion.missing and set(completion.satisfied_ids) == ids
-        return {"completion": completion, "answer_draft": completion.answer, "stop": "complete" if completion.complete else "partial" if not completion.can_recover or state["replans"] >= MAX_REPLANS or counters["tools"] >= MAX_TOOL_CALLS or counters["llm"] >= MAX_LLM_CALLS - 2 else None}
+        planner_faults = any(
+            record["state"] == "error" and any(
+                marker in str(record.get("reason", ""))
+                for marker in ("binding path missing", "conditional evidence unavailable", "conditional predicate path missing", "required dependency failed")
+            )
+            for record in state["records"].values()
+        )
+        can_recover = completion.can_recover or planner_faults
+        return {"completion": completion, "answer_draft": completion.answer, "stop": "complete" if completion.complete else "partial" if not can_recover or state["replans"] >= MAX_REPLANS or counters["tools"] >= MAX_TOOL_CALLS or counters["llm"] >= MAX_LLM_CALLS - 2 else None}
 
     def replan(state):
+        def signature(step):
+            return _json(step.model_dump(exclude={"step_id", "requirement_ids"}))
+        old_signatures = {signature(step) for step in state["steps"]}
+        if state["completion"].proposed_steps:
+            new_steps = state["completion"].proposed_steps
+            validate_steps(new_steps, {r.id for r in state["plan"].requirements}, [s.step_id for s in state["steps"]])
+            if all(signature(step) in old_signatures for step in new_steps):
+                return {"replans": state["replans"] + 1, "stop": "partial"}
+            traces.append(AgentToolTrace(
+                name="task_replan", input={"decision_type": "completion_patch"},
+                output={"new_steps": [step.model_dump(mode="json") for step in new_steps], "reason": state["completion"].reason},
+                summary="Observation-driven patch proposed by completion model",
+            ))
+            return {"steps": [*state["steps"], *new_steps], "replans": state["replans"] + 1, "stop": None}
         patch = decide("replan", PlanPatch, {
             "requirements": [r.model_dump() for r in state["plan"].requirements],
             "existing_plan": [s.model_dump() for s in state["steps"]],
@@ -284,9 +386,6 @@ def run(request, tools, provider, context, progress=None):
             "instruction": "Append only necessary repair/supplement steps with NEW IDs. Preserve user constraints and successful evidence. Resolve gaps from observations; no fixed scenarios. If impossible, return no steps and explain. Do not repeat successful calls; reuse dependencies.",
         })
         validate_steps(patch.new_steps, {r.id for r in state["plan"].requirements}, [s.step_id for s in state["steps"]])
-        def signature(step):
-            return _json(step.model_dump(exclude={"step_id", "requirement_ids"}))
-        old_signatures = {signature(step) for step in state["steps"]}
         if patch.new_steps and all(signature(step) in old_signatures for step in patch.new_steps):
             return {"replans": state["replans"] + 1, "stop": "partial"}
         return {"steps": [*state["steps"], *patch.new_steps], "replans": state["replans"] + 1, "stop": None if patch.new_steps else "partial"}
@@ -313,7 +412,7 @@ def run(request, tools, provider, context, progress=None):
     graph.add_conditional_edges("replan", lambda s: "answer" if s.get("stop") else "execute")
     graph.add_edge("answer", END)
     state = graph.compile().invoke({})
-    traces.append(AgentToolTrace(name="task_execution", input={"version": VERSION}, output={"records": state.get("records", {}), "completion": state.get("completion").model_dump() if state.get("completion") else None, "terminal_state": state.get("stop"), "replan_count": state.get("replans", 0), "llm_calls": counters["llm"], "tool_calls": counters["tools"]}, summary="Task execution ledger"))
+    traces.append(AgentToolTrace(name="task_execution", input={"version": VERSION}, output={"records": state.get("records", {}), "completion": state.get("completion").model_dump() if state.get("completion") else None, "answer_validation": state.get("answer_validation", {}), "terminal_state": state.get("stop"), "replan_count": state.get("replans", 0), "llm_calls": counters["llm"], "tool_calls": counters["tools"]}, summary="Task execution ledger"))
     return AgentChatResponse(
         session_id=request.session_id, intent="task_research", answer=state.get("answer", "当前任务未完成。"),
         tool_calls=[t.name for t in traces if not t.name.startswith("task_") and t.name not in {"routing_decision", "query_understanding"}], tool_results=traces, warnings=warnings,
