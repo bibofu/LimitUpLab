@@ -11,12 +11,17 @@ from langgraph.graph import END, START, StateGraph
 
 from app.agents.chat_answer_validation import _add_composed_tool_facts
 from app.agents.capability_contract import CAPABILITY_BY_NAME
-from app.agents.tool_policy import ToolExecution
+from app.agents.tool_policy import AgentToolPolicyEngine, ToolExecution
 from app.agents.tools import AgentToolRegistry
 from app.models import AgentChatRequest, AgentToolTrace
 
 from .completion import check_completion
-from .executor import execute_step, graph_step_trace, resolve_dynamic_arguments
+from .executor import (
+    execute_step,
+    graph_step_trace,
+    resolved_call_fingerprint,
+    resolve_dynamic_arguments,
+)
 from .models import ComplexPlanStep, EntityRef, ReplanRequest
 from .observer import observation_payload, symbols_from_trace
 from .planner import build_flagship_plan, build_initial_plan, scenario_capabilities
@@ -46,6 +51,7 @@ class _GraphState(TypedDict):
     active_errors: list[str]
     active_latency_ms: int
     answer_meta: dict[str, Any]
+    successful_call_fingerprints: list[str]
 
 
 @dataclass(frozen=True)
@@ -111,8 +117,23 @@ def run_complex_graph(
     """Execute the allowlisted graph; every ready step is policy-gated."""
 
     graph_run_id = f"cgraph-{uuid4().hex[:12]}"
-    initial_steps = build_initial_plan(scenario, request, limit_up_arguments)
+    planning_request = request
     validation_errors: list[str] = []
+    if scenario == "empty_news_fallback_v2":
+        resolved_target = AgentToolPolicyEngine(tools).resolve_stock_target(
+            request, context_symbol=context_symbol
+        )
+        if not resolved_target:
+            validation_errors.append(
+                "missing reliable stock target for empty-news fallback; replan rejected"
+            )
+        else:
+            planning_request = request.model_copy(update={"symbol": resolved_target})
+    initial_steps = (
+        []
+        if validation_errors
+        else build_initial_plan(scenario, planning_request, limit_up_arguments)
+    )
     for step in initial_steps:
         if not step.tool_name:
             continue
@@ -135,6 +156,7 @@ def run_complex_graph(
                 step, request=request, tools=tools, context_symbol=context_symbol,
                 entity_sets=state["entity_sets"],
                 remaining_tool_calls=MAX_TOOL_CALLS - len(state["execution"]["tool_call_names"]),
+                successful_call_fingerprints=set(state["successful_call_fingerprints"]),
             )
             observations = part["tool_results"]
             if not errors:
@@ -156,6 +178,7 @@ def run_complex_graph(
             return {}
         errors = state["active_errors"]
         completed, failed = list(state["completed_steps"]), list(state["failed_steps"])
+        successful_fingerprints = list(state["successful_call_fingerprints"])
         terminal_reason = state["terminal_reason"]
         if errors:
             failed.append(step.step_id)
@@ -163,6 +186,11 @@ def run_complex_graph(
         else:
             _observe_entity_set(step, state["active_observations"], state["entity_sets"])
             completed.append(step.step_id)
+            for call, observation in zip(state["active_calls"], state["active_observations"], strict=False):
+                if observation.result is not None and observation.result.status in {"ok", "partial"}:
+                    fingerprint = resolved_call_fingerprint(call)
+                    if fingerprint not in successful_fingerprints:
+                        successful_fingerprints.append(fingerprint)
         trace = graph_step_trace(
             graph_run_id=graph_run_id, step=step, step_index=len(completed) + len(failed),
             calls=state["active_calls"], observations=state["active_observations"],
@@ -170,7 +198,13 @@ def run_complex_graph(
             tool_call_count=len(state["execution"]["tool_call_names"]), llm_call_count=llm_call_count,
             latency_ms=state["active_latency_ms"],
         )
-        return {"completed_steps": completed, "failed_steps": failed, "terminal_reason": terminal_reason, "graph_traces": [*state["graph_traces"], trace]}
+        return {
+            "completed_steps": completed,
+            "failed_steps": failed,
+            "successful_call_fingerprints": successful_fingerprints,
+            "terminal_reason": terminal_reason,
+            "graph_traces": [*state["graph_traces"], trace],
+        }
 
     def completion_node(state: _GraphState) -> dict[str, Any]:
         completion = check_completion(scenario, state["execution"]["tool_results"], state["replan_count"])
@@ -233,7 +267,11 @@ def run_complex_graph(
         return "execute" if state["pending"] else "completion"
 
     def after_completion(state: _GraphState) -> Literal["replan", "answer"]:
-        return "answer" if state["completion"].get("complete") or state["budget_exhausted"] else "replan"
+        return "answer" if (
+            state["completion"].get("complete")
+            or state["budget_exhausted"]
+            or "validate_plan" in state["failed_steps"]
+        ) else "replan"
 
     def after_replan(state: _GraphState) -> Literal["execute", "answer"]:
         return "execute" if state["pending"] else "answer"
@@ -253,13 +291,22 @@ def run_complex_graph(
     initial: _GraphState = {
         "pending": [] if validation_errors else list(initial_steps), "all_steps": list(initial_steps),
         "execution": {"facts": {}, "tool_results": [], "tool_call_names": [], "references": []},
-        "graph_traces": [], "entity_sets": {}, "completed_steps": [],
+        "graph_traces": ([
+            AgentToolTrace(
+                name="complex_graph_validation",
+                input={"graph_run_id": graph_run_id, "validation_errors": validation_errors},
+                output={"accepted": False},
+                summary=f"Complex Graph plan rejected: {'; '.join(validation_errors)}",
+                status="error",
+            )
+        ] if validation_errors else []), "entity_sets": {}, "completed_steps": [],
         "failed_steps": ["validate_plan"] if validation_errors else [], "replan_count": 0,
         "completion": check_completion(scenario, [], 0).model_dump(mode="json"),
         "terminal_reason": "; ".join(validation_errors) if validation_errors else None,
         "budget_exhausted": False,
         "active_step": None, "active_calls": [], "active_observations": [],
         "active_errors": [], "active_latency_ms": 0, "answer_meta": {},
+        "successful_call_fingerprints": [],
     }
     state = builder.compile().invoke(initial, config={"recursion_limit": 64})
     execution = state["execution"]

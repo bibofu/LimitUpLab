@@ -1,6 +1,6 @@
 # LimitUpLab 复杂问题多步规划改造计划
 
-## Phase 2 实施状态（2026-09-11）
+## Phase 2 实施状态（2026-09-12 定向接通）
 
 Phase 2 已实施。Complex Path 现在由 LangGraph 显式编排：
 
@@ -12,18 +12,22 @@ execute → observe → completion
 
 - Completion Check 默认使用确定性规则，检查必需工具结果、动态依赖、条件分支和证据类型；输出 `complete`、`missing_requirements`、`reason`。当前白名单场景均可确定性判断，尚未启用 LLM-assisted completion。
 - Replanner 输入包含原问题、初始计划、完成/失败步骤、工具 observation、缺失要求及剩余预算；输出固定 Pydantic schema `ReplanOutput(new_steps, reason)`，不执行自由文本计划。
-- 每个 ready step 在动态参数解析后、执行前经过 Capability Contract、enabled-tool、必需参数和 JSON Schema 子集校验。非法/禁用工具、错误参数、重复 step、未知依赖、空 replan 和超预算计划会被拒绝。
+- 每个 ready step 在动态参数解析后、执行前经过 Capability Contract、enabled-tool、必需参数和 JSON Schema 子集校验。非法/禁用工具、错误参数、重复 step、未知依赖、空 replan 和超预算计划会被拒绝；执行层还会按最终 resolved arguments 阻止重复执行已经成功的同一调用。
 - 预算固定为 `MAX_REPLAN=2`、`MAX_TOOL_CALLS=10`、`MAX_LLM_CALLS=4`；耗尽后生成 partial/fallback，并明确披露“当前信息不足或部分步骤未完成”。
-- 支持 Top-N 动态候选 K 线、龙虎榜 empty/partial 后补 K 线与新闻、个股新闻 empty 后补走势/动态、评级解释证据不足后补 K 线/critic、最高连板动态风险分支，以及交集集合的 stress 风险链路。
+- 生产 Router 只开放四个经过定向验收的 Phase 2 场景：Top-N 动态候选 K 线、评分候选的龙虎榜条件分支、个股新闻 empty 后补走势/动态、以及多股票 partial failure 后保留成功项并仅重试失败项。评级补证、最高连板风险和 stress 交集链路仍保留为内部实验能力，不进入生产 Complex Path。
 - Phase 1 的热股与涨停交集仍走 deterministic binding，首次计划完整时不触发 Replan；Simple 和静态 Multi-tool 仍走 Fast Path。
-- Trace 持久化 `graph_run_id`、step/capability/tool/args/dependencies、resolved args、完整 observation、step status、completion、replan reason/index/output、调用计数和节点耗时。
+- Router 使用结构化 signal 规则，不再使用难以审计的关键词布尔元组；Trace 持久化 `route`、`scenario`、`reason`、`matched_signals`，Graph 继续保存 `graph_run_id`、step/capability/tool/args/dependencies、resolved args、完整 observation、step status、completion、replan reason/index/output、调用计数和节点耗时。
+- Complex Answer 按 scenario 使用独立 intent、提示约束和确定性校验。新闻 empty、龙虎榜 empty/partial 与单项执行失败会追加明确数据边界；Phase 2 答案不得误用 Phase 1 的“热股与涨停交集”话术。
+- 新闻 fallback 的股票必须来自请求显式 symbol/code/name 并能被当前 Registry 解析；无法可靠解析时拒绝进入 fallback，绝不再默认使用 `300750`。
 - 指标拆分为 `graph_compilation_count`、`backend_repair_count`、`policy_repair_count`，并增加 replan trigger/success/unnecessary、平均/最大 replan。
 
 小范围真实模型 A/B（同一 fully frozen tool world，每 case 3 次）：基线报告中的 6 个目标 Replan case和 `LIVE-STRESS-002` 合计 0/21；Phase 2 后为 21/21。其中 18 个 trial 真正触发 Replan并全部成功，`replan_success_rate=100%`、`unnecessary_replan_rate=0%`；`LIVE-REPLAN-006` 保持 3/3、0 Replan。目标组平均工具调用 1.57→4.00、LLM 调用 1.14→1.86、token 2,779→5,016、延迟 1,210→2,347 ms；基线中多条请求在 Planner 前结束，因此成本增量同时包含“从未执行到完成执行”的必要成本。
 
+上述 21-trial 是实现阶段对内部 scenario 的广覆盖验证，不代表所有 scenario 都继续生产可路由；2026-09-12 定向接通后以本节列出的四个 Phase 2 规则为正式生产边界，最新验证见 `Agent_LangGraph_Phase2_Validation.md`。
+
 Partial 单候选失败另用现有 `LIVE-RECOVERY-004` 验收：首次 300750 error、600000 ok 后只重试 300750 一次，最终保留 600000 证据回答，3/3 通过；该 case 的合法预算同步明确为 `max_replans=1`。
 
-已知限制：当前 Router/Replanner 仍是小范围场景白名单；未实现通用 DAG、模型辅助 Completion、跨请求 checkpoint 或任意任务 Replan。Phase 3 暂不建议立即启动；应先观察线上 bad case、修复普通答案层的指定实体遗漏，并验证更多真实 observation 是否无法由现有确定性模式覆盖。
+已知限制：当前 Router/Replanner 仍是小范围场景白名单；未实现通用 DAG、模型辅助 Completion、跨请求 checkpoint 或任意任务 Replan。Phase 3 暂不启动；先用生产流量观察四类规则外的真实 observation gap，再判断是否确有引入 LLM Replanner 的必要。
 
 ## Phase 1 历史实施状态（2026-09-11）
 

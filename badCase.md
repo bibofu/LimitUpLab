@@ -596,3 +596,26 @@ Check 只对缺失要求触发结构化 Replan，最多 2 次、10 次工具、4
 最终通过，unnecessary replan 为 0。`LIVE-REPLAN-006` 保持 3/3 且不触发 Replan；3 个
 Simple case 全部 3/3，普通 Multi-tool 中 001/003 为 3/3，002 因一次答案漏写指定代码为
 2/3，工具链未回归，作为答案层随机波动继续跟踪。
+
+---
+
+## BC-023：Phase 2 入口、回答语义与 fallback 参数未形成同一生产契约
+
+### 现象
+
+Phase 2 虽已有 deterministic Replan 节点，但 Router 规则暴露范围不清晰，Complex Answer
+仍统一使用 Phase 1 交集 intent/prompt；新闻空结果分支还会在无法恢复实体时默认查询
+`300750`。Replan 去重只比较静态参数，也可能把不同动态实体误判为重复，或在解析后重复
+执行同一成功调用。
+
+### 修复与回归
+
+生产 Router 收敛为四个结构化、高精度 Phase 2 规则，并记录 reason 和 matched signals；回答
+按 scenario 选择 intent、证据重点与数据缺失披露。新闻 fallback 必须从请求或上下文解析出
+可验证股票，否则以明确 validation trace 终止，禁止猜测股票。计划级 fingerprint 纳入
+bindings/source references，执行级 fingerprint 使用 resolved arguments。
+
+真实模型、完全冻结 Tool World 验收中，Phase 1 flagship 与四个 Phase 2 target 合计
+15/15，通过 Replan 的 12/12 trial 全部成功，unnecessary replan 为 0；两个 Simple 和两个
+普通 Multi-tool 对照均走 Fast Path 且 4/4 通过。四类 Phase 2 答案没有出现 Phase 1 交集
+串场，empty、conditional 和 partial 场景均明确披露数据边界。

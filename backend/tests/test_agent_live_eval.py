@@ -159,7 +159,9 @@ def test_live_suite_runs_real_orchestration_against_only_frozen_facts() -> None:
         trials=1,
     )
 
-    assert report["runner_version"] == "agent-live-eval-runner-v4"
+    assert report["runner_version"] == "agent-live-eval-runner-v5"
+    assert report["agent_architecture"] == "langgraph-bounded-plan-and-execute"
+    assert report["observation_driven_replan_supported"] is True
     assert report["tool_environment"] == {
         "fixture_snapshot_id": "chat-live-world-v2",
         "fully_frozen": True,

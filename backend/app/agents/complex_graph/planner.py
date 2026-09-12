@@ -8,6 +8,7 @@ from typing import Any
 from app.models import AgentChatRequest
 
 from .models import ArgumentBinding, ComplexPlanStep, ResultReference
+from .router import extract_explicit_stock_target
 
 
 SCENARIO_CAPABILITIES: dict[str, tuple[str, ...]] = {
@@ -60,7 +61,10 @@ def build_initial_plan(
             arguments={"trade_date": trade_date}, output_entity_set="top_ratings",
         )]
     if scenario == "empty_news_fallback_v2":
-        return [ComplexPlanStep(step_id="S1", capability="stock_news", tool_name="stock_news", arguments={"symbol": request.symbol or "300750", "days": 7, "limit": 10})]
+        symbol = extract_explicit_stock_target(request.message, request.symbol)
+        if not symbol:
+            raise ValueError("missing reliable stock target for empty-news fallback")
+        return [ComplexPlanStep(step_id="S1", capability="stock_news", tool_name="stock_news", arguments={"symbol": symbol, "days": 7, "limit": 10})]
     if scenario == "highest_board_risk_v2":
         return [ComplexPlanStep(step_id="S1", capability="limit_up_pool", tool_name="limit_up_events", arguments={**limit_up_arguments, "highest_only": True, "limit": 20}, output_entity_set="highest_board")]
     if scenario == "partial_stock_comparison_v2":

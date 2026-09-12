@@ -1,4 +1,4 @@
-"""LangGraph Phase 1 routing, binding and frozen-world execution tests."""
+"""LangGraph Phase 1/2 routing, binding and frozen-world execution tests."""
 
 from __future__ import annotations
 
@@ -20,10 +20,19 @@ from app.agents.complex_graph.graph import (
     build_flagship_plan,
     resolve_dynamic_arguments,
 )
-from app.agents.complex_graph.models import ComplexPlanStep, ReplanOutput
-from app.agents.complex_graph.replanner import validate_replan
+from app.agents.complex_graph.executor import execute_step, resolved_call_fingerprint
+from app.agents.complex_graph.models import (
+    ArgumentBinding,
+    ComplexPlanStep,
+    ReplanOutput,
+    ReplanRequest,
+    ResultReference,
+)
+from app.agents.complex_graph.planner import build_initial_plan
+from app.agents.complex_graph.replanner import replan, validate_replan
 from app.agents.tool_policy import AgentToolPolicyEngine
 from app.agents.tool_execution.helpers import _normalize_limit_up_event_arguments
+from app.agents.query_contract import query_reference_date_override
 from app.models import AgentChatRequest
 from app.services.llm_provider import LLMProvider, LLMResult
 
@@ -76,6 +85,30 @@ def test_complexity_router_selects_dynamic_intersection_query() -> None:
     )
     assert decision.route == "complex"
     assert "dependent_tool_arguments" in decision.reason_codes
+
+
+@pytest.mark.parametrize(
+    ("case_id", "scenario"),
+    [
+        ("LIVE-REPLAN-001", "top_ratings_then_kline_v2"),
+        ("LIVE-REPLAN-002", "rating_dragon_tiger_branch_v2"),
+        ("LIVE-REPLAN-004", "empty_news_fallback_v2"),
+        ("LIVE-RECOVERY-004", "partial_stock_comparison_v2"),
+    ],
+)
+def test_router_exposes_only_supported_phase_two_scenarios(case_id: str, scenario: str) -> None:
+    decision = route_complexity(_live_case(case_id).turns[-1].user)
+    assert decision.route == "complex"
+    assert decision.supported_scenario == scenario
+    assert decision.reason
+    assert decision.matched_signals
+
+
+@pytest.mark.parametrize("case_id", ["LIVE-REPLAN-005", "LIVE-REPLAN-007", "LIVE-STRESS-002"])
+def test_router_keeps_non_allowlisted_phase_two_scenarios_on_fast_path(case_id: str) -> None:
+    decision = route_complexity(_live_case(case_id).turns[-1].user)
+    assert decision.route == "fast"
+    assert decision.supported_scenario is None
 
 
 def test_dynamic_binding_uses_observed_entity_set_and_keeps_empty_set() -> None:
@@ -202,6 +235,65 @@ def test_empty_observation_replans_to_fallback_tools() -> None:
     assert result.completion_status == "complete"
     assert result.replan_count == 1
     assert result.execution["tool_call_names"] == ["stock_news", "stock_kline", "stock_activity"]
+    news = next(trace for trace in result.execution["tool_results"] if trace.name == "stock_news")
+    assert news.input["symbol"] in {"宁德时代", "300750"}
+    assert all(
+        trace.input.get("symbol") == "300750"
+        for trace in result.execution["tool_results"]
+        if trace.name in {"stock_kline", "stock_activity"}
+    )
+
+
+def test_empty_news_plan_requires_an_explicit_stock_target() -> None:
+    request = AgentChatRequest(
+        session_id="missing-news-target",
+        message="查最近新闻；如果没有结果，就结合最近10日K线回答。",
+    )
+    with pytest.raises(ValueError, match="missing reliable stock target"):
+        build_initial_plan("empty_news_fallback_v2", request, {})
+
+
+def test_empty_news_replan_rejects_missing_observed_target() -> None:
+    output = replan(
+        "empty_news_fallback_v2",
+        ReplanRequest(
+            original_user_query="查最近新闻",
+            original_plan=[],
+            completed_steps=[],
+            failed_steps=["S1"],
+            tool_observations=[
+                {"tool": "stock_news", "tool_args": {}, "result_state": "empty"}
+            ],
+            missing_requirements=["news_fallback_evidence"],
+            remaining_tool_calls=4,
+            remaining_replans=1,
+        ),
+        replan_index=1,
+    )
+    assert output.new_steps == []
+    assert "missing reliable stock target" in output.reason
+    assert "300750" not in output.model_dump_json()
+
+
+def test_empty_news_graph_records_missing_target_failure_without_execution() -> None:
+    result = run_complex_graph(
+        scenario="empty_news_fallback_v2",
+        request=AgentChatRequest(
+            session_id="missing-target-trace",
+            message="查最近新闻；如果没有结果，就结合最近10日K线回答。",
+        ),
+        tools=FrozenLiveToolRegistry([]),
+        limit_up_arguments={},
+        context_symbol=None,
+        answer_builder=lambda execution: {"answer": "无法完成。", "source": "test"},
+    )
+    validation = next(
+        item for item in result.graph_traces if item.name == "complex_graph_validation"
+    )
+    assert result.completion_status == "failed"
+    assert result.execution["tool_call_names"] == []
+    assert "missing reliable stock target" in validation.summary
+    assert "300750" not in validation.model_dump_json()
 
 
 def test_partial_candidate_failure_keeps_successful_candidate() -> None:
@@ -242,6 +334,67 @@ def test_duplicate_replan_is_rejected() -> None:
         new_steps=[ComplexPlanStep(step_id="S1", capability="stock_trend", tool_name="stock_kline")],
     )
     assert "duplicate step" in validate_replan(output, prior_steps=[{"step_id": "S1"}], remaining_tool_calls=5)
+
+
+def test_replan_fingerprint_includes_bindings() -> None:
+    binding_a = ArgumentBinding(
+        target_argument="symbol",
+        reference=ResultReference(source_step="S1", entity_set="top_ratings"),
+    )
+    binding_b = ArgumentBinding(
+        target_argument="symbol",
+        reference=ResultReference(source_step="S2", entity_set="other_ratings"),
+    )
+    prior = ComplexPlanStep(
+        step_id="S3", capability="stock_trend", tool_name="stock_kline",
+        arguments={"days": 5}, depends_on=("S1",), argument_bindings=(binding_a,),
+    )
+    distinct = ComplexPlanStep(
+        step_id="R1-K", capability="stock_trend", tool_name="stock_kline",
+        arguments={"days": 5}, depends_on=("S2",), argument_bindings=(binding_b,),
+    )
+    duplicate = prior.model_copy(update={"step_id": "R1-D"})
+    assert "duplicate successful tool step" not in validate_replan(
+        ReplanOutput(new_steps=[distinct], reason="distinct binding"),
+        prior_steps=[prior.model_dump(mode="json")], remaining_tool_calls=5,
+    )
+    assert "duplicate successful tool step" in validate_replan(
+        ReplanOutput(new_steps=[duplicate], reason="same binding"),
+        prior_steps=[prior.model_dump(mode="json")], remaining_tool_calls=5,
+    )
+
+
+def test_execution_rejects_a_duplicate_successful_resolved_call() -> None:
+    request = AgentChatRequest(session_id="resolved-dedupe", message="看300750最近5日K线")
+    step = ComplexPlanStep(
+        step_id="S1", capability="stock_trend", tool_name="stock_kline",
+        arguments={"symbol": "300750", "days": 5},
+    )
+    fingerprint = resolved_call_fingerprint(
+        {"name": "stock_kline", "arguments": {"symbol": "300750", "days": 5}}
+    )
+    execution, calls, errors = execute_step(
+        step,
+        request=request,
+        tools=FrozenLiveToolRegistry([]),
+        context_symbol=None,
+        entity_sets={},
+        remaining_tool_calls=5,
+        successful_call_fingerprints={fingerprint},
+    )
+    assert execution["tool_call_names"] == []
+    assert calls
+    assert errors == ["duplicate successful resolved tool call"]
+
+
+def test_resolved_calls_for_different_symbols_are_not_duplicates() -> None:
+    first = resolved_call_fingerprint(
+        {"name": "stock_kline", "arguments": {"days": 5, "symbol": "300750"}}
+    )
+    second = resolved_call_fingerprint(
+        {"name": "stock_kline", "arguments": {"symbol": "600000", "days": 5}}
+    )
+    assert first != second
 
 
 def test_illegal_replan_tool_is_blocked_before_execution() -> None:
@@ -293,6 +446,8 @@ def test_live_target_uses_complex_trace_and_observed_rating_symbols() -> None:
     )
     trial = report["results"][0]
     traces = trial["tool_trace"]
+    assert any(item["name"] == "complex_graph_plan" for item in trial["graph_trace"])
+    assert any(item["name"] == "complex_graph_completion" for item in trial["full_trace"])
     rating = next(item for item in traces if item["name"] == "first_board_ratings")
     hot_symbols = [
         item["symbol"]
@@ -313,6 +468,32 @@ def test_live_target_uses_complex_trace_and_observed_rating_symbols() -> None:
     assert "llm_tool_answer" not in trial["tool_calls"]
 
 
+@pytest.mark.parametrize(
+    ("case_id", "scenario", "required_terms"),
+    [
+        ("LIVE-REPLAN-001", "top_ratings_then_kline_v2", ("301489", "600276", "300750")),
+        ("LIVE-REPLAN-002", "rating_dragon_tiger_branch_v2", ("龙虎榜", "301489")),
+        ("LIVE-REPLAN-004", "empty_news_fallback_v2", ("新闻检索未返回", "300750")),
+        ("LIVE-RECOVERY-004", "partial_stock_comparison_v2", ("600000", "300750", "获取失败")),
+    ],
+)
+def test_phase_two_answer_contracts_are_scenario_specific(
+    case_id: str, scenario: str, required_terms: tuple[str, ...]
+) -> None:
+    case = _live_case(case_id)
+    with query_reference_date_override(date(2026, 5, 15)):
+        response = answer_first_board_chat(
+            AgentChatRequest(session_id=f"answer-contract-{case_id}", message=case.turns[-1].user),
+            SAMPLE_EVENTS,
+            llm_provider=_PhaseOneProvider(),
+            tool_registry=FrozenLiveToolRegistry(case.failure_injections),
+        )
+    assert response.intent == scenario
+    assert response.generated_by == "first-board-chat-langgraph-phase2-v20"
+    assert all(term in response.answer for term in required_terms)
+    assert "热股与涨停交集" not in response.answer
+
+
 def test_simple_live_case_stays_on_fast_path() -> None:
     response = answer_first_board_chat(
         AgentChatRequest(session_id="phase-one-fast", message="上证指数最近5天走势如何？"),
@@ -322,6 +503,8 @@ def test_simple_live_case_stays_on_fast_path() -> None:
     )
     routing = next(item for item in response.tool_results if item.name == "routing_decision")
     assert routing.input["route"] == "fast"
+    assert routing.input["routing_reason"] == "no allowlisted complex scenario matched"
+    assert "matched_signals" in routing.input
     assert not any(item.name == "complex_graph_plan" for item in response.tool_results)
 
 

@@ -418,6 +418,12 @@ def evaluate_live_trial(
         "raw_tool_calls": sorted(raw_tools),
         "planner_output": [trace.input for trace in planner_traces],
         "tool_trace": [trace.model_dump(mode="json") for trace in tool_traces],
+        "graph_trace": [
+            trace.model_dump(mode="json")
+            for trace in traces
+            if trace.name.startswith("complex_graph_") or trace.name == "routing_decision"
+        ],
+        "full_trace": [trace.model_dump(mode="json") for trace in traces],
         "policy_repair": [response.tool_policy.model_dump(mode="json") for response in responses],
         "answer": answer,
         "turn_answers": [response.answer for response in responses],

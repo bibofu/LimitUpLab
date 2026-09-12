@@ -107,3 +107,4 @@ class ComplexAgentState(TypedDict):
     graph_compilation_count: int
     backend_repair_count: int
     policy_repair_count: int
+    successful_call_fingerprints: list[str]

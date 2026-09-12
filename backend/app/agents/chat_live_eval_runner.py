@@ -41,7 +41,7 @@ LIVE_TOOL_WORLD_PATH = (
 LIVE_TOOL_WORLD_ID = "chat-live-world-v2"
 LIVE_TOOL_WORLD_SCHEMA_VERSION = "chat-live-tool-world-v2"
 DEFAULT_OUTPUT_ROOT = Path(__file__).resolve().parents[3] / "output" / "agent-live-eval"
-RUNNER_VERSION = "agent-live-eval-runner-v4"
+RUNNER_VERSION = "agent-live-eval-runner-v5"
 JUDGE_PROMPT_VERSION = "agent-live-eval-judge-v2"
 
 
@@ -181,8 +181,8 @@ def run_live_eval_suite(
             "database_access": False,
             "network_access": False,
         },
-        "agent_architecture": "plan-and-execute",
-        "observation_driven_replan_supported": False,
+        "agent_architecture": "langgraph-bounded-plan-and-execute",
+        "observation_driven_replan_supported": True,
         "judge_enabled": judge_provider is not None,
         "completed_at": datetime.now(timezone.utc).isoformat(),
         "metrics": aggregate_live_results(results),

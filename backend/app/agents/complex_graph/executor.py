@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 from typing import Any
 
 from app.agents.tool_execution import execute_tool_calls
@@ -10,6 +11,24 @@ from app.agents.tools import AgentToolRegistry
 from app.models import AgentChatRequest, AgentToolTrace
 
 from .models import ComplexPlanStep, EntityRef
+
+
+def _normalized(value: Any) -> Any:
+    if isinstance(value, dict):
+        return {str(key): _normalized(value[key]) for key in sorted(value)}
+    if isinstance(value, (list, tuple)):
+        return [_normalized(item) for item in value]
+    return value
+
+
+def resolved_call_fingerprint(call: dict[str, Any]) -> str:
+    """Identify an executable call after all dynamic bindings are resolved."""
+
+    material = {
+        "tool_name": call.get("name"),
+        "arguments": call.get("arguments") or {},
+    }
+    return json.dumps(_normalized(material), ensure_ascii=False, sort_keys=True, separators=(",", ":"))
 
 
 def _resolve_argument_sets(step: ComplexPlanStep, entity_sets: dict[str, list[EntityRef]]) -> list[dict[str, Any]]:
@@ -51,6 +70,7 @@ def execute_step(
     context_symbol: str | None,
     entity_sets: dict[str, list[EntityRef]],
     remaining_tool_calls: int,
+    successful_call_fingerprints: set[str] | None = None,
 ) -> tuple[ToolExecution, list[dict[str, Any]], list[str]]:
     """Resolve, validate with Tool Policy, budget, then execute the ready step."""
 
@@ -64,6 +84,11 @@ def execute_step(
     calls = [{"name": step.tool_name, "arguments": arguments} for arguments in argument_sets]
     if not calls:
         return empty, [], ["resolved dependency produced no executable calls"]
+    successful = successful_call_fingerprints or set()
+    new_calls = [call for call in calls if resolved_call_fingerprint(call) not in successful]
+    if not new_calls:
+        return empty, calls, ["duplicate successful resolved tool call"]
+    calls = new_calls
     if len(calls) > remaining_tool_calls:
         return empty, calls, [f"tool budget exceeded: need {len(calls)}, remaining {remaining_tool_calls}"]
     errors = AgentToolPolicyEngine(tools).validate_calls(calls, capability=step.capability)

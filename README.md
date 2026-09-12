@@ -134,6 +134,8 @@ scoring_version
 | `prediction_quality_audit` | 审计预测来源、Outcome 覆盖和基线表现 |
 | `scoring_policy_status` | 查询 Champion、Challenger 和晋级原因 |
 
+对于需要读取上一步结果才能确定下一步参数的问题，生产 Agent 使用 bounded LangGraph Complex Path。Phase 1 保留“热股 Top10 与涨停池交集后查询评分”的确定性绑定；Phase 2 仅开放 Top-N 候选逐只查 K 线、评分候选龙虎榜条件分支、个股新闻空结果补充证据、双股票单项失败继续比较四类结构化规则。每一步仍在执行前经过 Tool Policy，最多 Replan 2 次、工具调用 10 次；其他问题继续使用既有 Fast Path。Complex Answer 使用场景专属契约，不把 Phase 1 交集话术复用于其他场景。
+
 默认配置 `LIMITUPLAB_AGENT_PROFILE=v1_close_review` 会在 Planner Schema、Capability Contract、Tool Policy 和执行器四层统一限制工具。Capability 是业务工作流的单一声明源，同时定义示例问法、最低证据工具、默认参数和按需回答规范；系统不再维护重复的运行时 Skill Registry。V1 允许按需读取带来源和采集时间的 `hot_stock_ranking` 热度快照、`sector_performance` 行业强弱榜、`finance_news` 综合财经快讯，以及带 SQLite 缓存的 `stock_news`、`stock_activity` 个股资讯与收盘后动态；这些外部事实不参与首板评分，也不被解释为推荐。`remote_limit_up_pool` 和 `web_search` 仅保留在 `extended` 研发配置中，供 V2 能力开发使用。即使 LLM 伪造这些未开放工具调用，V1 执行器也会拒绝执行。
 
 Agent Query Contract v3 先把不同说法归一为稳定能力 ID，例如 `market_environment`、`market_events`、`limit_up_pool`、`first_board_rating` 和 `prediction_review`。Planner 通过 OpenAI-compatible `tools` 与强制 `tool_choice` 原生调用 `submit_agent_plan`，由函数参数承载能力、上下文关系和证据工具计划，不再依赖模型在文本中手写 JSON；不支持 Function Calling 的兼容 Provider 可回退到 Prompt-to-JSON。组合问题可以选择多个能力；多轮追问通过 `standalone`、`entity_followup`、`source_refinement` 区分独立问题、实体继承和上一轮结果集交叉查询，并只继承 Planner 明确选择的 `context_capabilities`。有显式能力契约时，旧关键词判断不再参与语义路由，只在旧 Provider 或 Planner 未输出能力时兜底。

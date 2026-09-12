@@ -79,6 +79,11 @@ from app.agents.complex_graph import (
     route_complexity,
     run_complex_graph,
 )
+from app.agents.complex_graph.answer_contracts import (
+    apply_scenario_disclosures,
+    scenario_answer_contract,
+    violates_scenario_contract,
+)
 from app.agents.complex_graph.graph import scenario_capabilities
 from app.agent_output_sanitizer import (
     AgentAnswerStreamSanitizer,
@@ -152,7 +157,7 @@ from app.services.prompt_security import (
 from app.services.session_memory import memory_prompt_payload
 
 
-CHAT_AGENT_VERSION = "first-board-chat-langgraph-phase1-v19"
+CHAT_AGENT_VERSION = "first-board-chat-langgraph-phase2-v20"
 _FORCE_TEMPLATE_ANSWER_OVERRIDE: ContextVar[bool | None] = ContextVar(
     "force_template_answer_override",
     default=None,
@@ -352,7 +357,9 @@ def answer_first_board_chat(
                 name="routing_decision",
                 input={
                     "route": decision.route,
-                    "routing_reason": list(decision.reason_codes),
+                    "routing_reason": decision.reason,
+                    "reason_codes": list(decision.reason_codes),
+                    "matched_signals": list(decision.matched_signals),
                     "supported_scenario": decision.supported_scenario,
                 },
                 output=decision.model_dump(mode="json"),
@@ -721,6 +728,7 @@ def _answer_with_complex_graph(
     if not scenario:
         return None
     capabilities = scenario_capabilities(scenario)
+    answer_contract = scenario_answer_contract(scenario)
     answer_result: LLMResult | None = None
     answer_started_at = 0.0
     answer_prompt_chars = 0
@@ -730,7 +738,7 @@ def _answer_with_complex_graph(
         facts = execution["facts"]
         fallback = _template_answer_from_tool_facts(
             request=request,
-            intent="hot_limit_up_rating_intersection",
+            intent=answer_contract.fallback_intent,
             facts=facts,
         )
         if not _has_usable_tool_facts(facts, execution["tool_results"]):
@@ -764,8 +772,11 @@ def _answer_with_complex_graph(
             }
         answer_system_prompt = _tool_answer_system_prompt(
             agent_profile=tools.profile,
-            hot_stock_event_intersection_answer=True,
-            capability_instruction=capability_answer_instruction(capabilities),
+            hot_stock_event_intersection_answer=answer_contract.intersection_output,
+            capability_instruction=(
+                capability_answer_instruction(capabilities)
+                + answer_contract.instruction
+            ),
         )
         query_plan.payload["capabilities"] = list(capabilities)
         answer_user_prompt = _tool_answer_user_prompt(
@@ -778,7 +789,7 @@ def _answer_with_complex_graph(
         answer_prompt_chars = len(answer_system_prompt) + len(answer_user_prompt)
         answer_started_at = perf_counter()
         if progress_callback:
-            progress_callback("answering", "正在基于动态交集和评分事实生成回答")
+            progress_callback("answering", answer_contract.progress_label)
         try:
             if _template_answer_forced():
                 content = fallback
@@ -808,6 +819,7 @@ def _answer_with_complex_graph(
                     scenario == "hot_limit_up_rating_intersection_v1"
                     and not _contains_exact_hot_stock_event_intersection(answer, facts)
                 )
+                or violates_scenario_contract(scenario, answer, execution)
                 or (content.strip() == UNANSWERABLE_TEXT and fallback != UNANSWERABLE_TEXT)
             ):
                 answer = _ensure_safety_boundary(fallback)
@@ -822,6 +834,9 @@ def _answer_with_complex_graph(
         warnings = [_safety_warning(), *_tool_outcome_warnings(execution["tool_results"])]
         if warning:
             warnings.append(warning)
+        answer = _ensure_safety_boundary(
+            apply_scenario_disclosures(scenario, answer, execution)
+        )
         return {
             "answer": answer,
             "source": source,
