@@ -30,35 +30,8 @@ TEXT = {
     "safety": "\u4ee5\u4e0a\u4e3a\u57fa\u4e8e\u672c\u5730\u7ed3\u6784\u5316\u6570\u636e\u7684\u590d\u76d8\u5206\u6790\uff0c\u4e0d\u6784\u6210\u4e70\u5356\u5efa\u8bae\u3002",
 }
 
-def _format_capital_flow_amount(value: object) -> str | None:
-    """Format a valid yuan amount for user-facing capital-flow answers."""
-
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        return None
-    amount = float(value)
-    if not math.isfinite(amount):
-        return None
-    sign = "+" if amount > 0 else ""
-    if abs(amount) >= 100_000_000:
-        return f"{sign}{amount / 100_000_000:.2f} 亿元"
-    return f"{sign}{amount / 10_000:.2f} 万元"
 
 
-def _asks_for_bottom_sector_ranking(message: str) -> bool:
-    """Return whether a broad sector question explicitly asks for laggards."""
-
-    compact = re.sub(r"[\s，。！？,.!?]", "", message)
-    return any(
-        term in compact
-        for term in (
-            "领跌",
-            "跌得最",
-            "跌幅最大",
-            "跌幅靠前",
-            "最弱",
-            "垫底",
-        )
-    )
 
 
 def _template_answer_from_tool_facts(
@@ -335,10 +308,7 @@ def _template_answer_from_tool_facts(
             {},
         )
 
-        # Format an optional template metric, keeping unavailable values visible to the reader.
-        def metric(item: dict[str, Any], key: str) -> str:
-            value = item.get(key)
-            return "暂无" if value is None else f"{float(value):.2f}%"
+        pass
 
         coverage = float(audit.get("next_day_outcome_coverage_rate") or 0)
         ready_dates = int(status.get("outcome_ready_trade_dates") or 0)
@@ -943,299 +913,14 @@ def _template_answer_from_tool_facts(
     return UNANSWERABLE_TEXT
 
 
-def _template_post_limit_screen(payload: dict[str, Any]) -> str:
-    """Render a complete evidence-first post-limit candidate list."""
-
-    labels = payload.get("shape_labels") or {}
-    shapes = payload.get("shapes") or []
-    shape_text = "、".join(labels.get(shape, shape) for shape in shapes) or "涨停后形态"
-    contract = payload.get("query_contract") or {}
-    if shapes == ["high_drawdown"] and contract.get("exhaustive"):
-        lines = [
-            f"截至 {payload.get('data_as_of')} 收盘，盘前推荐—高位回撤符合条件的股票共 "
-            f"{payload.get('matched_count', 0)} 只："
-        ]
-        for index, item in enumerate(payload.get("candidates") or [], start=1):
-            lines.append(
-                f"{index}. {item.get('name')}（{item.get('symbol')}），"
-                f"较参考高点回撤 {float(item.get('peak_drawdown_pct') or 0):.2f}%"
-            )
-        if not payload.get("candidates"):
-            lines.append("当前没有符合条件且数据完整的股票。")
-        lines.append(
-            f"口径：最近{contract.get('recent_limit_days', 7)}个交易日有收盘涨停，"
-            "距涨停1–4个交易日，较涨停日至观察日前一日的最高价回撤至少10%。"
-        )
-        lines.append(TEXT["safety"])
-        return "\n".join(lines)
-    lines = [
-        f"截至 {payload.get('data_as_of')} 收盘，按{shape_text}口径筛选沪深主板"
-        f"（规则版本 {payload.get('rule_version')}）。",
-        f"近期涨停观察池 {payload.get('pool_count', 0)} 只，可评价 {payload.get('evaluable_count', 0)} 只"
-        f"（覆盖率 {float(payload.get('coverage_ratio') or 0):.1%}），符合 {payload.get('matched_count', 0)} 只。",
-    ]
-    filters = [
-        "回看最近"
-        f"{contract.get('recent_limit_days', default_recent_limit_days(tuple(shapes)))}"
-        "个交易日的收盘涨停"
-    ]
-    if contract.get("board_height"):
-        filters.append(f"板高={contract['board_height']}")
-    if contract.get("query"):
-        filters.append(f"名称/行业/题材包含“{contract['query']}”")
-    lines.append("筛选条件：" + "；".join(filters) + "。")
-    rules = payload.get("rules") or {}
-    for shape in shapes:
-        if rules.get(shape):
-            lines.append(f"- {labels.get(shape, shape)}：{rules[shape]}")
-    for index, item in enumerate(payload.get("candidates") or [], start=1):
-        lines.append(
-            f"{index}. {item.get('name')}（{item.get('symbol')}）：涨停锚点 {item.get('anchor_date')}，"
-            f"{item.get('board_height')}板，距锚点 {item.get('anchor_age')} 日；"
-            f"相对涨停收盘 {float(item.get('anchor_change_pct') or 0):+.2f}%，"
-            f"较 {item.get('peak_date')} 高点回撤 {float(item.get('peak_drawdown_pct') or 0):.2f}%，"
-            f"区间幅度 {float(item.get('range_pct') or 0):.2f}%，量比 {float(item.get('volume_ratio') or 0):.3f}。"
-        )
-        if item.get("concept"):
-            lines.append(f"   题材：{item['concept']}。")
-        if item.get("risks"):
-            lines.append(
-                "   风险："
-                + "；".join(str(risk).rstrip("。；") for risk in item["risks"])
-                + "。"
-            )
-    if not payload.get("candidates"):
-        lines.append("当前没有符合条件且数据完整的股票。")
-    if payload.get("data_missing"):
-        missing_labels = {
-            "missing_history20": "缺少20日历史",
-            "mixed_or_missing_source": "量价来源混合或缺失",
-            "price_discontinuity": "存在价格断点",
-            "missing_path_bar": "路径K线缺失",
-            "anchor_price_mismatch": "涨停锚点价格不匹配",
-            "invalid_volume": "成交量无效",
-        }
-        exclusions = payload.get("exclusions") or {}
-        details = [
-            f"{missing_labels.get(key, key)} {exclusions.get(key, 0)}只"
-            for key in payload["data_missing"]
-        ]
-        lines.append(
-            f"数据缺口（待补 {payload.get('pending_data_count', sum(exclusions.get(key, 0) for key in payload['data_missing']))}只）："
-            + "、".join(details) + "。"
-        )
-    lines.extend(payload.get("warnings") or [])
-    lines.append(TEXT["safety"])
-    return "\n".join(lines)
 
 
-def _template_post_limit_path(payload: dict[str, Any]) -> str:
-    """Render an annotated event-relative path for one stock."""
-
-    anchor = payload.get("anchor") or {}
-    lines = [
-        f"{payload.get('name') or payload.get('symbol')}（{payload.get('symbol')}）涨停后走势，"
-        f"锚点 {anchor.get('anchor_date')}，数据截至 {payload.get('data_as_of')} 收盘"
-        f"（规则版本 {payload.get('rule_version')}）。",
-        "口径：指定锚点优先，否则取最近20个交易日内最新一次收盘涨停；逐日数据均不晚于截止日。",
-    ]
-    matched_labels = payload.get("matched_shape_labels") or []
-    if matched_labels:
-        lines.append("截止日形态：" + "、".join(matched_labels) + "。")
-        rules = payload.get("rules") or {}
-        for shape in payload.get("matched_shapes") or []:
-            if rules.get(shape):
-                lines.append(f"- 入选条件：{rules[shape]}")
-    for item in payload.get("path") or []:
-        state_text = "，状态 " + "、".join(item.get("states") or []) if item.get("states") else ""
-        lines.append(
-            f"- {item.get('trade_date')} {item.get('day')}：收盘 {item.get('close')}，"
-            f"相对涨停收盘 {float(item.get('change_from_anchor_close_pct') or 0):+.2f}%，"
-            f"相对运行高点 {float(item.get('drawdown_from_running_peak_pct') or 0):+.2f}%，"
-            f"相对涨停日量比 {float(item.get('volume_vs_anchor') or 0):.3f}{state_text}。"
-        )
-    if not payload.get("path"):
-        lines.append("指定范围内没有可用的完整涨停后路径。")
-    if payload.get("data_missing"):
-        lines.append("数据缺口：" + "、".join(payload["data_missing"]) + "。")
-    lines.extend(payload.get("warnings") or [])
-    lines.append(TEXT["safety"])
-    return "\n".join(lines)
 
 
-def _template_post_limit_statistics(payload: dict[str, Any]) -> str:
-    """Render bounded historical outcome statistics without overclaiming."""
-
-    lines = [
-        f"截至 {payload.get('data_as_of')}，按当前本地数据重算最近 "
-        f"{payload.get('requested_signal_days', 7)} 个已满足D+5的信号交易日"
-        f"（规则版本 {payload.get('rule_version')}）。",
-        f"共 {payload.get('signal_count', 0)} 个首次形态信号，其中 "
-        f"{payload.get('complete_sample_count', 0)} 个结果完整，覆盖 "
-        f"{payload.get('complete_signal_date_count', 0)} 个信号日。D+1开盘为统一观察基准。",
-    ]
-    contract = payload.get("query_contract") or {}
-    lines.append(
-        "筛选条件：每个信号日回看最近"
-        f"{contract.get('recent_limit_days', default_recent_limit_days(tuple(payload.get('shapes') or [])))}"
-        "个交易日的收盘涨停"
-        + (f"；板高={contract['board_height']}" if contract.get("board_height") else "")
-        + (f"；名称/行业/题材包含“{contract['query']}”" if contract.get("query") else "")
-        + "。"
-    )
-    rules = payload.get("rules") or {}
-    labels = payload.get("shape_labels") or {}
-    for shape in payload.get("shapes") or []:
-        if rules.get(shape):
-            lines.append(f"- {labels.get(shape, shape)}口径：{rules[shape]}")
-    for item in payload.get("summaries") or []:
-        if not item.get("sample_count"):
-            lines.append(f"- {item.get('label')}：没有完整样本。")
-            continue
-        lines.append(
-            f"- {item.get('label')}：{item.get('sample_count')}个样本/{item.get('signal_date_count')}个信号日；"
-            f"D+1均值/中位数 {float(item.get('d1_mean_pct') or 0):+.2f}%/"
-            f"{float(item.get('d1_median_pct') or 0):+.2f}%，"
-            f"D+3均值/中位数 {float(item.get('d3_mean_pct') or 0):+.2f}%/"
-            f"{float(item.get('d3_median_pct') or 0):+.2f}%，"
-            f"D+5均值/中位数 {float(item.get('d5_mean_pct') or 0):+.2f}%/"
-            f"{float(item.get('d5_median_pct') or 0):+.2f}%，"
-            f"正比例 {float(item.get('d5_positive_pct') or 0):.1f}%，"
-            f"低于−5%比例 {float(item.get('d5_below_minus5_pct') or 0):.1f}%，"
-            f"MAE5均值/中位数 {float(item.get('mae5_mean_pct') or 0):+.2f}%/"
-            f"{float(item.get('mae5_median_pct') or 0):+.2f}%，"
-            f"MFE5均值/中位数 {float(item.get('mfe5_mean_pct') or 0):+.2f}%/"
-            f"{float(item.get('mfe5_median_pct') or 0):+.2f}%，"
-            f"次日继续涨停比例 {float(item.get('next_day_closed_limit_pct') or 0):.1f}%。"
-        )
-    if payload.get("sample_quality") == "insufficient" or (
-        len(payload.get("summaries") or []) > 1 and not payload.get("comparison_allowed")
-    ):
-        lines.append("当前样本量或事件覆盖不足，只能作描述，不能据此判断形态优劣。")
-    if payload.get("data_missing"):
-        outcome_missing = payload.get("outcome_missing") or {}
-        lines.append(
-            "数据缺口：" + "、".join(
-                "事件回看窗口记录不完整" if key == "recent_event_dates"
-                else f"{key} {outcome_missing[key]}个" if key in outcome_missing
-                else key
-                for key in payload["data_missing"]
-            ) + "。"
-        )
-    lines.extend(payload.get("warnings") or [])
-    lines.append(TEXT["safety"])
-    return "\n".join(lines)
 
 
-def _template_market_environment_answer(facts: dict[str, Any]) -> str:
-    """Render a complete four-part market review when the final LLM is unavailable."""
-
-    summary = facts.get("market_summary")
-    trend = facts.get("market_index_trend")
-    sectors = facts.get("sector_performance")
-    popularity = facts.get("hot_stock_ranking")
-    summary = summary if isinstance(summary, dict) else {}
-    trend = trend if isinstance(trend, dict) else {}
-    sectors = sectors if isinstance(sectors, dict) else {}
-    popularity = popularity if isinstance(popularity, dict) else {}
-
-    lines = [f"截至 {summary.get('trade_date') or trend.get('data_as_of') or '最新可用交易日'} 的市场环境综述："]
-    lines.append("\n### 大盘指数")
-    indices = trend.get("indices") or []
-    if indices:
-        for item in indices:
-            points = item.get("points") or []
-            latest_change = points[-1].get("change_pct") if points else None
-            latest_text = (
-                f"最新交易日 {float(latest_change):+.2f}%"
-                if isinstance(latest_change, (int, float))
-                else "最新交易日涨跌暂缺"
-            )
-            lines.append(
-                f"- {item.get('name')}：{latest_text}，近 "
-                f"{trend.get('requested_days')} 个交易日 "
-                f"{float(item.get('return_pct') or 0):+.2f}%，最大回撤 "
-                f"{float(item.get('max_drawdown_pct') or 0):.2f}%。"
-            )
-    else:
-        lines.append("- 指数走势数据暂时无法获取。")
-
-    lines.append("\n### 涨跌停结构")
-    if summary:
-        down_text = (
-            f"跌停 {summary.get('limit_down_count')} 只"
-            if summary.get("limit_down_count") is not None
-            else "跌停数量暂缺"
-        )
-        lines.append(
-            f"- 涨停 {summary.get('limit_up_count')} 只，其中首板 "
-            f"{summary.get('first_board_count')} 只、连板 "
-            f"{summary.get('continued_board_count')} 只；未回封 "
-            f"{summary.get('unsealed_count')} 只，{down_text}，最高 "
-            f"{summary.get('max_board_height')} 板。"
-        )
-    else:
-        lines.append("- 涨跌停结构数据暂时无法获取。")
-
-    lines.append("\n### 板块强弱")
-    top_sectors = sectors.get("top_sectors") or []
-    bottom_sectors = sectors.get("bottom_sectors") or []
-    if top_sectors:
-        lines.append("- 涨幅靠前：" + "；".join(_format_sector_row(item) for item in top_sectors[:5]) + "。")
-        lines.append("- 跌幅靠前：" + "；".join(_format_sector_row(item) for item in bottom_sectors[:5]) + "。")
-    else:
-        lines.append("- 行业强弱榜暂时无法获取。")
-
-    lines.append("\n### 热门个股")
-    hot_items = popularity.get("items") or []
-    if hot_items:
-        for item in hot_items[:5]:
-            performance = (
-                f"，最新涨跌 {float(item.get('change_pct')):+.2f}%"
-                if isinstance(item.get("change_pct"), (int, float))
-                else "，最新涨跌暂缺"
-            )
-            lines.append(
-                f"- 人气第 {item.get('rank')} 名 "
-                f"{item.get('name')}({item.get('symbol')}){performance}。"
-            )
-    else:
-        lines.append("- 热门个股数据暂时无法获取。")
-
-    cutoff_parts = []
-    if trend.get("data_as_of"):
-        cutoff_parts.append(f"指数截至 {trend.get('data_as_of')}")
-    if sectors.get("data_as_of"):
-        cutoff_parts.append(f"板块截至 {sectors.get('data_as_of')}")
-    if popularity.get("captured_at_beijing"):
-        cutoff_parts.append(f"人气榜抓取于 {popularity.get('captured_at_beijing')}（北京时间）")
-    if cutoff_parts:
-        lines.append("\n数据口径：" + "；".join(cutoff_parts) + "。")
-    lines.append("以上按客观数据拆分展示，不使用单一情绪标签代替事实。")
-    lines.append(TEXT["safety"])
-    return "\n".join(lines)
-def _format_sector_row(item: dict[str, Any]) -> str:
-    """Format one sector ranking row without exposing missing placeholders."""
-
-    leader = (
-        f"，领涨 {item.get('leader_name')}"
-        if item.get("leader_name")
-        else ""
-    )
-    return (
-        f"{item.get('sector_name')} "
-        f"{float(item.get('change_pct') or 0):+.2f}%{leader}"
-    )
 
 
-def _looks_like_high_score_promotion_question(message: str) -> bool:
-    """Return whether the user asks how score-ranked picks promoted to second board."""
-
-    high_score_terms = ("高分票", "高评分", "评分前", "top10", "Top10", "选出的")
-    promotion_terms = ("1进2", "一进二", "晋级二板", "二板成功率", "进二板")
-    return any(term in message for term in high_score_terms) and any(
-        term in message for term in promotion_terms
-    )
 
 
 def _template_daily_board_promotion_answer(
@@ -1254,16 +939,7 @@ def _template_daily_board_promotion_answer(
     if _looks_like_first_to_second_stock_list(message):
         return _template_first_to_second_stock_list(items)
 
-    # Format one prediction cohort for the surrounding answer template.
-    def cohort_text(item: dict[str, Any], prefix: str) -> str:
-        sample_size = int(item.get(f"{prefix}_sample_size") or 0)
-        promoted_count = int(item.get(f"{prefix}_promoted_count") or 0)
-        probability = item.get(f"{prefix}_probability")
-        return (
-            f"{promoted_count}/{sample_size}（{float(probability):.1%}）"
-            if sample_size and probability is not None
-            else "无样本"
-        )
+    pass
 
     lines = [
         "每日连板晋级率按前一交易日收盘封住的股票计算，晋级日口径如下："
@@ -1304,13 +980,6 @@ def _template_daily_board_promotion_answer(
     return "\n".join(lines)
 
 
-def _looks_like_first_to_second_stock_list(message: str) -> bool:
-    """Return whether concrete first-to-second promoted stocks are requested."""
-
-    return any(term in message for term in ("一进二", "1进2", "1-2")) and any(
-        term in message
-        for term in ("哪些票", "哪些股票", "哪些个股", "股票有哪些", "票有哪些")
-    )
 
 
 def _template_first_to_second_stock_list(items: list[dict[str, Any]]) -> str:
@@ -1448,11 +1117,6 @@ def _template_promotion_opening_answer(items: list[dict[str, Any]]) -> str:
     return "\n".join(lines)
 
 
-def _markdown_cell(value: object) -> str:
-    """Escape a compact scalar for deterministic Markdown table cells."""
-
-    text = str(value) if value not in (None, "") else "—"
-    return text.replace("|", "\\|").replace("\n", " ")
 
 
 def _template_first_board_position_answer(ratings: dict[str, Any]) -> str:
