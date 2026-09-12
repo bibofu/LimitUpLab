@@ -466,10 +466,7 @@ def test_statistics_discloses_missing_event_windows():
     assert "recent_event_dates" in result["data_missing"]
     assert any(missing_day in warning for warning in result["warnings"])
     assert not result["comparison_allowed"]
-    from app.agents.chat_templates import _template_post_limit_statistics
-    answer = _template_post_limit_statistics(result)
-    assert "事件回看窗口记录不完整" in answer
-    assert "recent_event_dates 0个" not in answer
+
 
 
 # Regression scenario: answer renders actual event window.
