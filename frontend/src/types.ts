@@ -759,6 +759,8 @@ export interface AgentChatResponse {
   performance: AgentChatPerformance;
   suggested_questions: string[];
   generated_by: string;
+  task_status?: "complete" | "partial" | "empty" | "clarify" | "refuse" | "error" | "cancelled" | null;
+  stop_reason?: string | null;
 }
 
 export interface AgentChatPerformance {
@@ -774,12 +776,12 @@ export type AgentChatStreamStage = "planning" | "tools" | "answering";
 
 export type AgentChatStreamEvent =
   | {
-      event: "progress";
-      data: { stage: AgentChatStreamStage; message: string };
+      event: "accepted";
+      data: { run_id: string; session_id: string };
     }
   | {
-      event: "answer_delta";
-      data: { delta: string };
+      event: "progress";
+      data: { stage: AgentChatStreamStage; message: string };
     }
   | {
       event: "completed";

@@ -1,3 +1,4 @@
+import { streamChat } from "./utils/agentChatTransport";
 import type { ConsolidationPool } from "./consolidation";
 import type {
   AgentChatRequest,
@@ -447,80 +448,13 @@ export async function streamAgentChatMessage(
   payload: AgentChatRequest,
   onEvent: (event: AgentChatStreamEvent) => void,
 ): Promise<AgentChatResponse> {
-  const response = await fetch(`${API_BASE_URL}/api/agents/chat/stream`, {
-    method: "POST",
-    credentials: "include",
-    headers: {
-      Accept: "text/event-stream",
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
-  });
+  return streamChat(API_BASE_URL, payload, onEvent);
+}
 
-  if (!response.ok || !response.body) {
-    throw new Error(await responseErrorMessage(response, "Agent 请求失败"));
-  }
-
-  const reader = response.body.getReader();
-  const decoder = new TextDecoder();
-  let buffer = "";
-  let completed: AgentChatResponse | null = null;
-
-  /**
-   * Parse one complete SSE record and dispatch it; keep final completion separate from
-   * progress and draft text.
-   */
-  function consumeRecord(record: string) {
-    let eventName = "message";
-    const dataLines: string[] = [];
-    for (const line of record.split("\n")) {
-      if (line.startsWith("event:")) {
-        eventName = line.slice(6).trim();
-      } else if (line.startsWith("data:")) {
-        dataLines.push(line.slice(5).trimStart());
-      }
-    }
-    if (dataLines.length === 0) {
-      return;
-    }
-    const event = {
-      event: eventName,
-      data: JSON.parse(dataLines.join("\n")),
-    } as AgentChatStreamEvent;
-    if (event.event === "error") {
-      throw new Error(event.data.message);
-    }
-    if (event.event === "completed") {
-      completed = event.data;
-    }
-    onEvent(event);
-  }
-
-  while (true) {
-    // A network read is not an SSE message boundary. Preserve partial records
-    // between reads, and let TextDecoder preserve split UTF-8 characters too.
-    const { done, value } = await reader.read();
-    buffer += decoder.decode(value, { stream: !done }).replace(/\r\n/g, "\n");
-    let boundary = buffer.indexOf("\n\n");
-    while (boundary >= 0) {
-      consumeRecord(buffer.slice(0, boundary));
-      buffer = buffer.slice(boundary + 2);
-      boundary = buffer.indexOf("\n\n");
-    }
-    if (done) {
-      if (buffer.trim()) {
-        consumeRecord(buffer);
-      }
-      break;
-    }
-  }
-
-  if (!completed) {
-    // Partial prose is not a successful answer: validation or persistence may
-    // still have been running when the connection ended.
-    throw new Error("Agent stream ended before completion");
-  }
-  return completed;
+export function cancelAgentChatRun(runId: string) {
+  return request<{ run_id: string; cancel_requested: boolean }>(
+    `/api/agents/chat/runs/${encodeURIComponent(runId)}/cancel`, { method: "POST" },
+  );
 }
 
 /** Prefer a safe backend detail such as the user-facing 429 explanation. */

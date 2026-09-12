@@ -279,3 +279,11 @@
 - Provider：generate_messages 使用请求独立 SDK client，3 秒 timeout 和禁止隐式重试经 mock HTTP 503 验证；共享模型配置不变、失败计入 usage。底层市场来源内部重试仍待独立盘点。
 - P1 后续触发：多进程部署前须补数据库执行租约/跨进程 worker 接管；当前只支持单进程 SQLite。真实模型/冻结 Live、输出事实关系门禁和成本门槛仍未完成，不能据此发布为已全面验收。
 - P2：恢复要求客户端保留 message_id；不确定远端调用只披露失败，不保证远端恰好一次。取消不强杀线程，已启动的底层请求可能在收尾后完成。证据/checkpoint 随会话删除，独立保留期清理策略待后续部署阶段。
+
+### 2026-09-12：ReAct D 工作台接入
+
+- 后端对应 `bc4f9fd`；本批提交 `feat: expose ReAct task status cancellation and reconnect`，只改前端 API/传输、工作台、类型、样式与回归/文档。
+- P1 已修（本提交，BC-032）：统一 HTTP completed/success 掩盖业务 partial，断线重试另建 message_id，未检查草稿提前显示。前端展示真实 task_status；自动重连只执行一次 GET 并带 last cursor，服务端 error 不触发补执行；当前页面手动重试复用原请求参数。取消入口复用同 run_id，只有 validated completed 进入答案区。
+- 清理：删除前端关键词 inferChatIntent、answer_delta 类型/消费及原 SSE 解析副本，后端负责语义决策；旧历史消息没有 task_status 时不补造“已完成”标签。
+- 验证：前端全量 15 通过，0 失败/跳过；生产构建通过，仍有 Vite 单 chunk 超过 500 kB 提醒。首次构建因 Object.hasOwn 与现有编译 target 不兼容失败，已使用兼容写法；随后沙箱 esbuild spawn EPERM，宿主构建成功。没有执行浏览器视觉验收或真实模型 Live，不将冻结传输测试视为模型能力提升。
+- P2 后续：整页刷新后的活动 run 自动发现及持久化恢复入口尚未接入；需要在新增刷新恢复场景时补测试。状态/取消/重连为 D 阶段本批交付，输出关系门禁、批量源调用计量和真实质量门槛仍待完成。

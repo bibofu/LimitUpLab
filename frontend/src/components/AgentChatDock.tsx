@@ -13,6 +13,7 @@ import {
 import { useEffect, useRef, useState } from "react";
 
 import {
+  cancelAgentChatRun,
   createChatSession,
   deleteChatSession,
   fetchChatSession,
@@ -21,6 +22,7 @@ import {
   streamAgentChatMessage,
 } from "../api";
 import type {
+  AgentChatRequest,
   AgentChatResponse,
   AgentChatStreamStage,
   AgentStockMention,
@@ -29,6 +31,7 @@ import type {
   ChatSessionSummary,
 } from "../types";
 import { AgentAnswerMarkdown } from "./AgentAnswerMarkdown";
+import { taskStatusLabel } from "../utils/agentChatTransport";
 
 interface ChatMessage {
   id: string;
@@ -37,6 +40,7 @@ interface ChatMessage {
   stockMentions: AgentStockMention[];
   status?: "success" | "error";
   suggestedQuestions?: string[];
+  taskLabel?: string;
 }
 
 const ACTIVE_CHAT_SESSION_STORAGE_KEY = "limituplab.activeChatSession";
@@ -52,6 +56,7 @@ function restoredChatMessage(message: ChatSessionMessage): ChatMessage {
     stockMentions: stockMentionsFromMetadata(message.metadata),
     status: message.status,
     suggestedQuestions: stringArray(message.metadata.suggested_questions),
+    taskLabel: taskStatusLabel(message.metadata.task_status),
   };
 }
 
@@ -62,7 +67,8 @@ function responseMessageMetadata(response: AgentChatResponse): Partial<ChatMessa
   return {
     stockMentions: response.stock_mentions,
     suggestedQuestions: response.suggested_questions,
-    status: "success",
+    status: response.task_status === "error" ? "error" : "success",
+    taskLabel: taskStatusLabel(response.task_status),
   };
 }
 
@@ -132,6 +138,9 @@ export function AgentChatDock({
   const [streamStatus, setStreamStatus] = useState("正在理解问题并规划工具");
   const [error, setError] = useState<string | null>(null);
   const [failedPrompt, setFailedPrompt] = useState<string | null>(null);
+  const failedRequest = useRef<AgentChatRequest | null>(null);
+  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [cancelRequested, setCancelRequested] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
@@ -183,6 +192,9 @@ export function AgentChatDock({
     setMessages(detail.messages.map(restoredChatMessage));
     setError(null);
     setFailedPrompt(null);
+    failedRequest.current = null;
+    setActiveRunId(null);
+    setCancelRequested(false);
   }
 
   /**
@@ -319,18 +331,33 @@ export function AgentChatDock({
     }
   }
 
-  /**
-   * Submit a question with page context, append streamed draft text and replace it with the
-   * validated final answer. On transport failure, remove the incomplete draft and retain the
-   * prompt for retry.
-   */
+  async function cancelCurrentRun() {
+    if (!activeRunId || cancelRequested) return;
+    setCancelRequested(true);
+    try {
+      await cancelAgentChatRun(activeRunId);
+      setStreamStatus("已请求取消，等待任务收尾");
+    } catch (caught) {
+      setCancelRequested(false);
+      setError(caught instanceof Error ? caught.message : "取消请求失败");
+    }
+  }
+
+  /** Preserve the exact request on transport failure; show only validated answers. */
   async function sendMessage(prompt?: string) {
     const trimmed = (prompt ?? message).trim();
     if (!trimmed || sending || sessionLoading || !sessionId) {
       return;
     }
 
-    const userMessageId = `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const retry = failedRequest.current?.session_id === sessionId && failedRequest.current.message === trimmed
+      ? failedRequest.current : null;
+    const userMessageId = retry?.message_id ?? `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`;
+    const payload: AgentChatRequest = retry ?? {
+      session_id: sessionId, message_id: userMessageId, message: trimmed,
+      trade_date: tradeDate || undefined, symbol,
+      page_context: { page: symbol ? "stock_detail" : "dashboard" },
+    };
     const userMessage: ChatMessage = {
       id: userMessageId,
       role: "user",
@@ -339,7 +366,7 @@ export function AgentChatDock({
     };
     setMessages(/* Compute messages from the latest React state to avoid overwriting intervening updates. */ (current) => [
       ...current,
-      userMessage,
+      ...(current.some(item => item.id === userMessageId) ? [] : [userMessage]),
     ]);
     setMessage("");
     setSending(true);
@@ -347,81 +374,33 @@ export function AgentChatDock({
     setStreamStatus("正在理解问题并规划工具");
     setError(null);
     setFailedPrompt(null);
+    if (!retry) {
+      setActiveRunId(null);
+      setCancelRequested(false);
+    }
     const agentMessageId = `agent-${Date.now()}`;
 
     try {
-      let receivedAnswer = false;
-      // The page supplies identity/date hints. The backend combines these with
-      // the question and server-owned context before obtaining factual evidence.
-      const response = await streamAgentChatMessage({
-        session_id: sessionId,
-        message_id: userMessageId,
-        message: trimmed,
-        intent_hint: inferChatIntent(trimmed),
-        trade_date: tradeDate || undefined,
-        symbol,
-        page_context: {
-          page: symbol ? "stock_detail" : "dashboard",
-        },
-      }, /* Handle progress and draft-answer events while awaiting the authoritative completed response. */ (event) => {
+      const response = await streamAgentChatMessage(payload, event => {
+        if (event.event === "accepted") setActiveRunId(event.data.run_id);
         if (event.event === "progress") {
           setStreamStage(event.data.stage);
           setStreamStatus(event.data.message);
-          return;
-        }
-        if (event.event === "answer_delta") {
-          // Draft fragments can be replaced if final validation selects a fallback.
-          const delta = event.data.delta;
-          setStreamStage("answering");
-          setStreamStatus("正在生成回答");
-          setMessages(/* Compute messages from the latest React state to avoid overwriting intervening updates. */ (current) => {
-            const existing = current.find(/* Locate the entry matching the active identity/time used by sendMessage. */ (item) => item.id === agentMessageId);
-            if (existing) {
-              return current.map(/* Transform each entry in current into the result used by sendMessage. */ (item) => (
-                item.id === agentMessageId
-                  ? { ...item, content: item.content + delta }
-                  : item
-              ));
-            }
-            receivedAnswer = true;
-            return [
-              ...current,
-              { id: agentMessageId, role: "agent", content: delta, stockMentions: [] },
-            ];
-          });
         }
       });
-      setMessages(/* Compute messages from the latest React state to avoid overwriting intervening updates. */ (current) => {
-        const existing = current.find(/* Locate the entry matching the active identity/time used by sendMessage. */ (item) => item.id === agentMessageId);
-        if (existing || receivedAnswer) {
-          return current.map(/* Transform each entry in current into the result used by sendMessage. */ (item) => (
-            item.id === agentMessageId
-              ? {
-                  ...item,
-                  // Replace rather than append: this is the authoritative answer.
-                  content: response.answer,
-                  ...responseMessageMetadata(response),
-                }
-              : item
-          ));
-        }
-        return [
-          ...current,
-          {
-            id: agentMessageId,
-            role: "agent",
-            content: response.answer,
-            stockMentions: response.stock_mentions,
-            ...responseMessageMetadata(response),
-          },
-        ];
-      });
+      setMessages(current => [...current, {
+        id: agentMessageId, role: "agent", content: response.answer,
+        stockMentions: response.stock_mentions, ...responseMessageMetadata(response),
+      }]);
+      failedRequest.current = null;
+      setActiveRunId(null);
+      setError(null);
       void refreshChatSessions();
     } catch (caught) {
       const errorMessage = caught instanceof Error ? caught.message : "Agent 回答失败";
-      setMessages(/* Compute messages from the latest React state to avoid overwriting intervening updates. */ (current) => current.filter(/* Keep only entries satisfying this predicate for sendMessage. */ (item) => item.id !== agentMessageId));
       setError(errorMessage);
       setFailedPrompt(trimmed);
+      failedRequest.current = payload;
     } finally {
       setSending(false);
     }
@@ -577,6 +556,7 @@ export function AgentChatDock({
             >
               {item.role === "agent" ? (
                 <div className="chat-markdown">
+                  {item.taskLabel ? <small className="chat-task-status">{item.taskLabel}</small> : null}
                   <AgentAnswerMarkdown
                     content={item.content}
                     stockMentions={item.stockMentions}
@@ -637,67 +617,24 @@ export function AgentChatDock({
             onChange={/* Handle onChange for this control in AgentChatDock. */ (event) => setMessage(event.target.value)}
             placeholder={symbol ? "问当前股票评分、风险或走势" : "问今日涨停、评分或风险"}
           />
-          <button
-            aria-label="发送问题"
-            className="icon-button"
-            disabled={sending || sessionLoading || !sessionId || !message.trim()}
-            title="发送"
-            type="submit"
-          >
-            <Send size={17} />
-          </button>
+          {activeRunId ? (
+            <button className="chat-cancel" type="button" disabled={cancelRequested} onClick={() => void cancelCurrentRun()}>
+              {cancelRequested ? "正在取消" : "取消任务"}
+            </button>
+          ) : (
+            <button
+              aria-label="发送问题"
+              className="icon-button"
+              disabled={sending || sessionLoading || !sessionId || !message.trim()}
+              title="发送"
+              type="submit"
+            >
+              <Send size={17} />
+            </button>
+          )}
         </form>
       </section>
       </div>
     </div>
   );
-}
-
-/**
- * Provide a lightweight UI intent hint; the backend remains responsible for authoritative
- * planning.
- */
-function inferChatIntent(message: string) {
-  /** Infer a deterministic tool hint before the backend performs final routing. */
-
-  if (
-    /(?:几点|什么时候|何时).*(?:开盘|收盘)|(?:开盘|收盘).*(?:几点|什么时候|何时)|交易时间|开市时间|今天(?:开不开盘|是否开盘|开盘吗)|集合竞价时间/.test(
-      message,
-    )
-  ) {
-    return "market_schedule";
-  }
-  if (
-    /(?:板块|行业|概念).*(?:表现|走势|行情|涨跌|强弱|领涨|领跌|涨得|跌得|排行|排名)|(?:表现|走势|行情|涨跌|强弱|领涨|领跌|涨得|跌得|排行|排名).*(?:板块|行业|概念)/.test(message)
-  ) {
-    return "sector_performance";
-  }
-  if (/市场|情绪|赚钱效应|亏钱效应|氛围/.test(message)) {
-    return "market_context";
-  }
-  if (/风险|缺点|问题/.test(message)) {
-    return "risk_summary";
-  }
-  if (/详细|解释|分析/.test(message)) {
-    return "llm_explanation";
-  }
-  if (/为什么|评分|评级|高分|低分/.test(message)) {
-    return "rating_explain";
-  }
-  if (
-    /跌停/.test(message)
-    && /哪些|有哪|名单|列出|列一下|几只|多少只|数量|统计|谁|^(今天|今日|最新)?跌停(股|票)?$/.test(message)
-  ) {
-    return "market_event_query";
-  }
-  if (/涨停|首板|连板|二板|三板|炸板|最高板/.test(message)) {
-    return "limit_up_query";
-  }
-  if (/医药|医疗|制药|药业|生物|中药|相关|行业|题材/.test(message)) {
-    return "first_board_filter";
-  }
-  if (/总结|今天|首板|候选|市场环境/.test(message)) {
-    return "today_summary";
-  }
-  return undefined;
 }

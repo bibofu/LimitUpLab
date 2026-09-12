@@ -1055,6 +1055,22 @@ td span {
   line-height: 1.65;
 }
 
+.chat-task-status {
+  display: block;
+  margin-bottom: 8px;
+  color: #6b7280;
+  font-weight: 600;
+}
+
+.chat-cancel {
+  padding: 0 12px;
+  border: 1px solid #d0d5dd;
+  border-radius: 8px;
+  background: #ffffff;
+  color: #374151;
+  font: inherit;
+}
+
 .chat-markdown > :first-child {
   margin-top: 0;
 }
