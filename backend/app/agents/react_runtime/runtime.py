@@ -2,12 +2,13 @@
 
 import json
 import os
-from concurrent.futures import ThreadPoolExecutor
+from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from contextvars import copy_context
+from datetime import datetime, timezone
 from time import perf_counter
 from typing import TypedDict
 
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage, ToolMessage
+from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage, messages_from_dict, messages_to_dict
 from langgraph.graph import END, START, StateGraph
 
 from app.agents.query_contract import current_query_reference_date
@@ -15,8 +16,9 @@ from app.agents.react_runtime.contracts import (
     CONTROL_MODELS, Compute, Finish, MAX_CONCURRENCY, MAX_CONTROL_CALLS,
     MAX_MODEL_CALLS, MAX_TOOL_CALLS, ReadEvidence, VERSION,
 )
-from app.agents.react_runtime.evidence import EvidenceStore, compact
+from app.agents.react_runtime.evidence import EvidenceStore
 from app.agents.react_runtime.context import prepare_history
+from app.agents.react_runtime.lifecycle import CURRENT_CONTROL
 from app.agents.react_runtime.tools import ToolGateway
 from app.models import AgentChatPerformance, AgentChatResponse, AgentToolOutcome, AgentToolTrace
 from app.services.prompt_security import assess_direct_prompt_injection, contains_prompt_leak
@@ -50,6 +52,11 @@ class State(TypedDict, total=False):
     observations: list
     finish: dict | None
     done: bool
+    resume_node: str
+
+
+# A process-wide bound prevents timed-out requests spawning unlimited new pools.
+TOOL_POOL = ThreadPoolExecutor(max_workers=MAX_CONCURRENCY, thread_name_prefix="react-tool")
 
 
 class Run:
@@ -64,14 +71,43 @@ class Run:
         self.cache = {}
         self.answer, self.status, self.reason = "", "error", ""
         self.history = history
+        self.control = CURRENT_CONTROL.get()
+        if self.control:
+            elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(self.control.row["started_at"])).total_seconds()
+            self.deadline -= max(0, elapsed)
+
+    def save(self, state, next_node):
+        if self.control is None:
+            return
+        snapshot = {key: getattr(self, key) for key in (
+            "models", "tools", "controls", "repairs", "requirements", "errors", "cache", "answer", "status", "reason",
+        )}
+        snapshot["traces"] = [t.model_dump(mode="json") for t in self.traces]
+        snapshot["evidence"] = self.evidence.records
+        self.control.save({"runtime": snapshot, "state": {**state, "messages": messages_to_dict(state["messages"]), "resume_node": next_node}})
+
+    def restore(self):
+        if self.control is None or not self.control.row.get("checkpoint_json"):
+            return None
+        snapshot = json.loads(self.control.row["checkpoint_json"])
+        for key, value in snapshot["runtime"].items():
+            if key == "traces": self.traces = [AgentToolTrace.model_validate(t) for t in value]
+            elif key == "evidence": self.evidence.records = value
+            else: setattr(self, key, value)
+        state = snapshot["state"]
+        state["messages"] = messages_from_dict(state["messages"])
+        return state
 
     def trace(self, name, output, **kwargs):
         self.traces.append(AgentToolTrace(name=name, output=output, summary=name, **kwargs))
 
     def agent(self, state):
+        if self.control and self.control.cancelled():
+            return self.stop("cancelled")
         if self.models >= MAX_MODEL_CALLS or perf_counter() >= self.deadline:
             return self.stop("budget_exhausted")
         self.models += 1
+        self.save(state, "agent")
         if self.progress:
             self.progress("planning", "正在根据已有证据决定下一步" if self.tools else "正在理解问题并选择查询")
         definitions = self.gateway.definitions()
@@ -137,30 +173,50 @@ class Run:
         business = [c for c in state["pending"] if c["name"] not in CONTROL_MODELS]
         def execute(call):
             started = perf_counter()
+            if self.control:
+                previous = self.control.begin_call(call)
+                if previous is not None:
+                    return call, previous
             try:
-                if perf_counter() >= self.deadline:
+                if perf_counter() >= self.deadline or (self.control and self.control.cancelled()):
                     raise TimeoutError("Run deadline exceeded")
                 result, payload, status = self.gateway.execute(call["name"], call["args"])
-                return call, (result, payload, status, round((perf_counter() - started) * 1000))
+                value = {"ok": True, "input": result.input, "payload": payload, "status": status,
+                         "summary": result.summary, "duration": round((perf_counter() - started) * 1000)}
             except Exception as error:
-                return call, {"execution_status": "failed", "result_state": "error",
-                              "error_type": type(error).__name__, "error": str(error)[:300]}
+                value = {"execution_status": "failed", "result_state": "error",
+                         "error_type": type(error).__name__, "error": "Tool execution failed; preserve other results and report missing evidence"}
+            if self.control:
+                self.control.finish_call(call["id"], value)
+            return call, value
         if business:
             if self.progress:
                 self.progress("tools", f"正在执行 {len(business)} 项数据查询")
-            with ThreadPoolExecutor(max_workers=MAX_CONCURRENCY) as pool:
-                futures = [pool.submit(copy_context().run, execute, call) for call in business]
-                for future in futures:
-                    call, result = future.result()
-                    if isinstance(result, dict):
+            pending = {TOOL_POOL.submit(copy_context().run, execute, call): call for call in business}
+            while pending:
+                if perf_counter() >= self.deadline or (self.control and self.control.cancelled()):
+                    for future, call in pending.items():
+                        future.cancel()
+                        value = {"execution_status": "cancelled", "result_state": "error", "error": "Run cancelled or deadline exceeded"}
+                        observations.append((call, value))
+                        self.trace(call["name"], value, input=call["args"], status="error")
+                    break
+                completed, _ = wait(pending, timeout=min(.2, max(0, self.deadline - perf_counter())), return_when=FIRST_COMPLETED)
+                for future in completed:
+                    call = pending.pop(future)
+                    try:
+                        _, result = future.result()
+                    except Exception as error:
+                        result = {"execution_status": "failed", "result_state": "error", "error_type": type(error).__name__}
+                    if not result.get("ok"):
                         observations.append((call, result))
                         self.trace(call["name"], result, input=call["args"], status="error")
                         continue
-                    raw, payload, status, duration = result
-                    key = self.evidence.add(tool=call["name"], payload=payload, state=status, arguments=raw.input)
+                    payload, status = result["payload"], result["status"]
+                    key = self.evidence.add(tool=call["name"], payload=payload, state=status, arguments=result["input"])
                     self.traces.append(AgentToolTrace(
-                        name=call["name"], input=raw.input, output=payload if isinstance(payload, dict) else {"items": payload},
-                        summary=raw.summary, duration_ms=duration,
+                        name=call["name"], input=result["input"], output=payload if isinstance(payload, dict) else {"items": payload},
+                        summary=result["summary"], duration_ms=result["duration"],
                         result=AgentToolOutcome(status=status, payload=payload if isinstance(payload, dict) else {"items": payload}),
                     ))
                     if status in {"ok", "empty"}:
@@ -205,6 +261,8 @@ class Run:
         return {"messages": messages, "pending": []}
 
     def gate(self, state):
+        if self.control and self.control.cancelled():
+            return self.stop("cancelled")
         from app.agents.task_runtime.writer import _unsafe
         try:
             final = Finish.model_validate(state["finish"])
@@ -231,6 +289,8 @@ class Run:
         self.reason = reason
         current = [r for r in self.evidence.records.values() if not r.get("historical_reference")]
         self.status = "partial" if current else "error"
+        if reason == "cancelled":
+            self.status = "cancelled"
         lines = ["本次研究尚未全部完成。"]
         for record in current:
             names = [str(r.get("name") or r.get("symbol") or "") for r in record["rows"][:5] if isinstance(r, dict)]
@@ -238,22 +298,34 @@ class Run:
                 lines.append("一项查询返回空结果，不能据此推断其他日期或来源。")
             elif any(names):
                 lines.append("已取得以下对象的部分数据：" + "、".join(filter(None, names)) + "。")
-        lines.append("部分证据或回答校验未完成，请缩小范围后重试。")
+        lines.append("已取消任务，尚在进行的底层数据请求可能稍后结束，不再启动新查询。" if reason == "cancelled" else "部分证据或回答校验未完成，请缩小范围后重试。")
         self.answer = "\n\n".join(lines)
         return {"done": True}
 
 
 def _node(name):
     def call(state, config):
-        return getattr(config["configurable"]["run"], name)(state)
+        runtime = config["configurable"]["run"]
+        result = getattr(runtime, name)(state)
+        merged = {**state, **result}
+        runtime.save(merged, _next(name, merged))
+        return result
     return call
+
+
+def _next(name, state):
+    if state.get("done"):
+        return END
+    if name == "agent":
+        return "policy" if state.get("pending") else "gate" if state.get("finish") else "agent"
+    return {"policy": "tools_node", "tools_node": "observe", "observe": "gate" if state.get("finish") else "agent", "gate": "agent"}[name]
 
 
 def _graph():
     graph = StateGraph(State)
     for name in ("agent", "policy", "tools_node", "observe", "gate"):
         graph.add_node(name, _node(name))
-    graph.add_edge(START, "agent")
+    graph.add_conditional_edges(START, lambda s: s.get("resume_node", "agent"))
     graph.add_conditional_edges("agent", lambda s: END if s.get("done") else "policy" if s.get("pending") else "gate" if s.get("finish") else "agent")
     graph.add_edge("policy", "tools_node")
     graph.add_edge("tools_node", "observe")
@@ -280,7 +352,9 @@ def run(request, registry, provider, history=None, memory=None, progress=None):
         messages = [SystemMessage(content=SYSTEM + "\n可信运行上下文：" + dump(context))]
         messages.extend(history_messages)
         messages.append(HumanMessage(content=request.message))
-        GRAPH.invoke({"messages": messages, "done": False}, config={"configurable": {"run": runtime}, "recursion_limit": 60})
+        initial = runtime.restore() or {"messages": messages, "done": False}
+        if initial.get("resume_node") != END:
+            GRAPH.invoke(initial, config={"configurable": {"run": runtime}, "recursion_limit": 60})
     runtime.trace("react_execution", {"version": VERSION, "model_calls": runtime.models, "tool_calls": runtime.tools,
                                        "task_status": runtime.status, "stop_reason": runtime.reason,
                                        "requirements": runtime.requirements, "evidence": runtime.evidence.records})

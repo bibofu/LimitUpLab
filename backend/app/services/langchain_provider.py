@@ -113,10 +113,15 @@ class LangChainChatProvider(LLMProvider):
             tracker.begin_call(self.model)
         started = perf_counter()
         try:
-            # max_retries belongs to this request-local copy, never the shared model.
-            model = self.chat_model.model_copy(update={
+            # Copying pydantic options alone does not reconfigure the existing SDK
+            # client. Set timeout/retries on a request-local client as well.
+            options = {
                 "max_retries": 0, "request_timeout": timeout_seconds,
-            })
+            }
+            if self.chat_model.root_client is not None:
+                client = self.chat_model.root_client.with_options(max_retries=0, timeout=timeout_seconds)
+                options.update(root_client=client, client=client.chat.completions)
+            model = self.chat_model.model_copy(update=options)
             choice = {"tool_choice": "finish"} if len(tools) == 1 and tools[0]["function"]["name"] == "finish" else {}
             bound = model.bind_tools(tools, temperature=0, max_tokens=max_tokens, **choice) if tools else model.bind(
                 temperature=0, max_tokens=max_tokens,

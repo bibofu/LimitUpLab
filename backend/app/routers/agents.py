@@ -93,7 +93,10 @@ from app.services.scoring_policy_optimizer import (
 from app.services.system_health import build_agent_system_health
 from app.security import current_owner_id, require_admin_access
 
+from app.routers.react_chat import router as react_chat_router
+
 router = APIRouter()
+router.include_router(react_chat_router)
 ResponseModel = TypeVar("ResponseModel")
 STRUCTURED_CACHE_TTL_MINUTES = 10
 CHAT_SESSIONS_VERSION = "chat-sessions-v1"
@@ -840,10 +843,11 @@ def delete_chat_session(
 ) -> dict[str, bool]:
     """Permanently delete one local conversation and its stored data."""
 
-    deleted = SQLiteChatSessionRepository().delete_session(
-        session_id,
-        owner_id=owner_id,
-    )
+    from app.agents.react_runtime.lifecycle import RunConflict
+    try:
+        deleted = SQLiteChatSessionRepository().delete_session(session_id, owner_id=owner_id)
+    except RunConflict as error:
+        raise HTTPException(409, str(error)) from error
     if not deleted:
         raise HTTPException(status_code=404, detail="Chat session not found.")
     return {"deleted": True}
@@ -875,6 +879,11 @@ def chat_with_first_board_agent(
     owner_id: Annotated[str, Depends(current_owner_id)],
 ) -> AgentChatResponse:
     """Answer first-board questions and persist an Agent run trace."""
+
+    if os.getenv("LIMITUPLAB_AGENT_RUNTIME", "react").strip() == "react":
+        from app.routers.react_chat import start, synchronous
+        journal, row = start(request, http_request, owner_id)
+        return synchronous(journal, row, owner_id)
 
     run_id = f"run_{uuid4().hex}"
     started_at = datetime.now(timezone.utc)
@@ -1011,6 +1020,11 @@ def stream_first_board_agent_chat(
     owner_id: Annotated[str, Depends(current_owner_id)],
 ) -> StreamingResponse:
     """Stream Agent progress, answer deltas and the complete persisted response."""
+
+    if os.getenv("LIMITUPLAB_AGENT_RUNTIME", "react").strip() == "react":
+        from app.routers.react_chat import start, stream
+        journal, row = start(request, http_request, owner_id)
+        return stream(journal, row, owner_id)
 
     # The HTTP generator and synchronous Agent run communicate through a queue.
     # The worker owns model/tool calls; the generator owns SSE framing. This keeps

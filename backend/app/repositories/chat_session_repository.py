@@ -297,6 +297,13 @@ class SQLiteChatSessionRepository:
         connection = connect(self.database_path)
         try:
             initialize_database(connection)
+            # Serialize deletion with ReAct creation, not just a router precheck.
+            connection.execute("BEGIN IMMEDIATE")
+            if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='react_runs'").fetchone():
+                active = connection.execute("SELECT 1 FROM react_runs WHERE session_id=? AND owner_id=? AND active=1", (session_id, owner_id)).fetchone()
+                if active:
+                    from app.agents.react_runtime.lifecycle import RunConflict
+                    raise RunConflict("请先取消并等待当前任务结束，再删除会话")
             session = connection.execute(
                 """
                 SELECT session_id

@@ -36,7 +36,7 @@ def test_react_observes_error_and_selects_next_tool():
                 return call("stock_news", {"symbol": "000001"}, "n")
             latest = [m for m in messages if isinstance(m, ToolMessage)][-1]
             if self.calls == 2:
-                assert latest.tool_call_id == "n" and "source unavailable" in latest.content
+                assert latest.tool_call_id == "n" and "execution failed" in latest.content
                 return call("stock_kline", {"symbol": "000001", "days": 12, "end_date": "2026-05-15"}, "k")
             import json
             evidence_id = json.loads(latest.content)["evidence_id"]

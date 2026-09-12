@@ -20,6 +20,21 @@ from app.services.llm_provider import (
 USAGE = {"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16}
 
 
+def test_react_message_request_bounds_sdk_retry_and_timeout():
+    from langchain_core.messages import HumanMessage
+    calls = []
+    def handle(request):
+        calls.append(request)
+        assert request.extensions["timeout"]["read"] == 3
+        return httpx.Response(503, json={"error": {"message": "fixture unavailable"}})
+    with provider_for(handle, retries=2) as provider, capture_llm_usage() as tracker:
+        original = provider.chat_model.root_client.max_retries
+        with pytest.raises(Exception):
+            provider.generate_messages([HumanMessage(content="研究")], [], timeout_seconds=3)
+        assert provider.chat_model.root_client.max_retries == original == 2
+    assert len(calls) == 1 and tracker.failed_call_count == 1
+
+
 # Prepare the completion fixture or observation used by the surrounding regression scenario.
 def completion(message=None, usage=USAGE):
     return {
