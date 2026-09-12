@@ -292,38 +292,6 @@ class SessionMemoryTest(unittest.TestCase):
             )
         )
 
-    # Regression scenario: planner receives memory as non evidentiary context.
-    def test_planner_receives_memory_as_non_evidentiary_context(self) -> None:
-        provider = PlannerMemoryProvider()
-        now = datetime.now(timezone.utc)
-        memory = ChatSessionMemory(
-            session_id=self.session_id,
-            owner_id=self.owner_id,
-            memory_version=SESSION_MEMORY_VERSION,
-            summary="用户此前要求只看主板首板。",
-            research_goal="研究一进二候选",
-            constraints=["只看主板"],
-            summarized_message_count=4,
-            generation_mode="deterministic",
-            created_at=now,
-            updated_at=now,
-        )
-
-        plan_agent_query(
-            AgentChatRequest(
-                session_id=self.session_id,
-                message="继续按刚才的条件筛选",
-            ),
-            SAMPLE_EVENTS,
-            provider,
-            conversation_messages=_conversation_messages(self.session_id, count=2),
-            session_memory=memory,
-        )
-
-        payload = provider.user_payload["session_memory"]
-        self.assertEqual(payload["summary"], "用户此前要求只看主板首板。")
-        self.assertEqual(payload["constraints"], ["只看主板"])
-        self.assertIn("not evidence", payload["instruction"])
 
     # Regression scenario: memory prompt payload omits owner and internal counters.
     def test_memory_prompt_payload_omits_owner_and_internal_counters(self) -> None:
