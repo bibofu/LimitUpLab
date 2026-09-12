@@ -21,10 +21,10 @@ from app.security import current_owner_id
 from test_react_lifecycle import Model
 
 
-@pytest.fixture
-def http_server(tmp_path, monkeypatch):
+@pytest.fixture(params=["react", "legacy", "task"])
+def http_server(tmp_path, monkeypatch, request):
     monkeypatch.setenv("LIMITUPLAB_DATABASE_PATH", str(tmp_path / "http.sqlite"))
-    monkeypatch.setenv("LIMITUPLAB_AGENT_RUNTIME", "react")
+    monkeypatch.setenv("LIMITUPLAB_AGENT_RUNTIME", request.param)
     state = SimpleNamespace(calls=0, block=False, entered=threading.Event(), release=threading.Event())
     def ranking(**args):
         state.calls += 1
