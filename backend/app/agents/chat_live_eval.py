@@ -8,7 +8,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.agents.capability_contract import available_capability_names
+from app.agents.capability_contract import available_capability_names, CAPABILITY_BY_NAME
 from app.agents.tools import V1_CLOSED_MARKET_TOOL_NAMES
 from app.models import AgentChatResponse, AgentToolTrace
 
@@ -32,12 +32,6 @@ EXPECTED_CATEGORY_COUNTS = {
     "recovery": 4,
     "boundary": 4,
     "stress": 2,
-}
-INTERNAL_TRACES = {
-    "agent_plan", "query_understanding", "llm_tool_planner",
-    "llm_tool_answer", "template_general_answer", "tool_policy",
-    "routing_decision", "complex_graph_plan", "complex_graph_step",
-    "complex_graph_completion", "complex_graph_replan",
 }
 REFUSAL_MARKERS = ("不能", "无法", "不提供", "不会", "不支持")
 CLARIFY_MARKERS = ("请明确", "请补充", "哪只", "哪个", "具体指")
@@ -217,26 +211,23 @@ def evaluate_live_trial(
     """Evaluate actual production response traces; no expected plan is injected."""
 
     traces = [trace for response in responses for trace in response.tool_results]
-    planner_traces = [trace for trace in traces if trace.name == "llm_tool_planner"]
-    task_plans = [trace for trace in traces if trace.name == "task_plan"]
-    capabilities = {
-        str(value)
-        for trace in planner_traces
-        for value in trace.input.get("capabilities", [])
-    }
-    capabilities.update(str(step["capability"]) for trace in task_plans
-                        for step in trace.output.get("steps", []) if step.get("capability"))
-    tool_traces = [trace for trace in traces if trace.name not in INTERNAL_TRACES and not trace.name.startswith("task_")]
+    decisions = [trace for trace in traces if trace.name == "react_decision"]
+    executions = [trace for trace in traces if trace.name == "react_execution"]
+    tool_traces = [trace for trace in traces if trace.name in V1_CLOSED_MARKET_TOOL_NAMES]
     tools = [trace.name for trace in tool_traces]
     raw_tools = {
-        str(call["name"])
-        for trace in planner_traces
-        for call in trace.input.get("tool_calls", [])
-        if isinstance(call, dict) and call.get("name")
+        str(call["name"]) for trace in decisions
+        for call in trace.output.get("tool_calls", [])
+        if isinstance(call, dict) and call.get("name") in V1_CLOSED_MARKET_TOOL_NAMES
     }
-    raw_tools.update(str(step["tool_name"]) for trace in task_plans
-                     for step in trace.output.get("steps", []) if step.get("tool_name"))
+    # Capability labels are derived from raw tool selection, not a separate Planner.
+    capabilities = {
+        name for name, capability in CAPABILITY_BY_NAME.items()
+        if capability.required_tools and {item.name for item in capability.required_tools} <= raw_tools
+    }
     failures: list[str] = []
+    if any(response.task_status in {"error", "cancelled"} for response in responses):
+        failures.append("runtime did not finish the requested task")
 
     missing_capabilities = set(case.expected.required_capabilities) - capabilities
     if missing_capabilities:
@@ -398,30 +389,17 @@ def evaluate_live_trial(
         else:
             required_fact_assertions_passed += 1
 
-    policy_repairs = sum(len(response.tool_policy.policy_repaired_tools) for response in responses)
-    backend_repairs = sum(len(response.tool_policy.backend_repaired_tools) for response in responses)
-    graph_plans = [trace for trace in traces if trace.name == "complex_graph_plan"]
-    completion_traces = [trace for trace in traces if trace.name in {"complex_graph_completion", "task_completion"}]
-    task_executions = [trace for trace in traces if trace.name == "task_execution"]
     required_capabilities = set(case.expected.required_capabilities)
     required_tools = set(case.expected.required_tools)
     raw_capability_hits = len(required_capabilities & capabilities)
     raw_required_tool_hits = len(required_tools & raw_tools)
     effective_required_tool_hits = len(required_tools & set(tools))
-    llm_calls = int(llm_usage.get("call_count") or 0)
+    llm_calls = sum(int(trace.output.get("model_calls") or 0) for trace in executions)
     tool_calls = len(tools)
-    replan_count = sum(int(trace.input.get("replan_count") or 0) for trace in graph_plans)
-    replan_count += sum(int(trace.output.get("replan_count") or 0) for trace in task_executions)
-    graph_compilation_count = sum(int(trace.input.get("graph_compilation_count") or 0) for trace in graph_plans)
-    graph_compilation_count += len(task_executions)
-    backend_repair_count = backend_repairs + sum(int(trace.input.get("backend_repair_count") or 0) for trace in graph_plans)
-    policy_repair_count = policy_repairs + sum(int(trace.input.get("policy_repair_count") or 0) for trace in graph_plans)
     if tool_calls > case.expected.max_tool_calls:
         failures.append(f"tool budget exceeded: {tool_calls}/{case.expected.max_tool_calls}")
     if llm_calls > case.expected.max_llm_calls:
         failures.append(f"LLM budget exceeded: {llm_calls}/{case.expected.max_llm_calls}")
-    if replan_count > case.expected.max_replans:
-        failures.append(f"replan budget exceeded: {replan_count}/{case.expected.max_replans}")
     if judge is not None and not judge.get("passed", False):
         failures.append("LLM Judge semantic quality gate failed")
 
@@ -434,24 +412,19 @@ def evaluate_live_trial(
         "capabilities": sorted(capabilities),
         "tool_calls": tools,
         "raw_tool_calls": sorted(raw_tools),
-        "planner_output": [trace.input for trace in planner_traces] + [trace.output for trace in task_plans],
+        "decision_output": [trace.output for trace in decisions],
+        "capability_basis": "raw_tool_calls",
         "tool_trace": [trace.model_dump(mode="json") for trace in tool_traces],
         "graph_trace": [
             trace.model_dump(mode="json")
             for trace in traces
-            if trace.name.startswith(("complex_graph_", "task_")) or trace.name == "routing_decision"
+            if trace.name.startswith("react_")
         ],
         "full_trace": [trace.model_dump(mode="json") for trace in traces],
-        "policy_repair": [response.tool_policy.model_dump(mode="json") for response in responses],
         "answer": answer,
         "turn_answers": [response.answer for response in responses],
         "llm_call_count": llm_calls,
         "tool_call_count": tool_calls,
-        "replan_count": replan_count,
-        "initial_plan_complete": bool(completion_traces and completion_traces[0].output.get("complete")),
-        "graph_compilation_count": graph_compilation_count,
-        "backend_repair_count": backend_repair_count,
-        "policy_repair_count": policy_repair_count,
         "token_usage": llm_usage,
         "latency_ms": latency_ms,
         "judge_result": judge,
@@ -464,7 +437,7 @@ def evaluate_live_trial(
         "raw_required_tool_recall": _rate(raw_required_tool_hits, len(required_tools)),
         "effective_required_tool_hits": effective_required_tool_hits,
         "effective_required_tool_recall": _rate(effective_required_tool_hits, len(required_tools)),
-        "backend_repair_needed": backend_repair_count > 0,
+        "task_statuses": [response.task_status for response in responses],
         "required_fact_assertions": required_fact_assertions,
         "required_fact_assertions_passed": required_fact_assertions_passed,
     }
@@ -486,8 +459,6 @@ def aggregate_live_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         for category in LIVE_CATEGORIES
     }
     observation_dependent_trials = [item for item in results if item["category"] in {"replan", "stress"}]
-    complex_trials = [item for item in results if item.get("graph_compilation_count", 0) > 0]
-    triggered_replans = [item for item in complex_trials if item["replan_count"] > 0]
     recovery_trials = [item for item in results if item["category"] == "recovery"]
     multi_turn = [item for item in results if item["category"] == "multi_turn"]
     fact_total = sum(item["required_fact_assertions"] for item in results)
@@ -506,9 +477,6 @@ def aggregate_live_results(results: list[dict[str, Any]]) -> dict[str, Any]:
         "raw_capability_recall": metric(sum(item["raw_capability_hits"] for item in results), capability_total),
         "raw_required_tool_recall": metric(sum(item["raw_required_tool_hits"] for item in results), tool_total),
         "effective_required_tool_recall": metric(sum(item["effective_required_tool_hits"] for item in results), tool_total),
-        "backend_repair_rate": metric(sum(item["backend_repair_needed"] for item in results), len(results)),
-        "policy_repair_rate": metric(sum(item["policy_repair_count"] > 0 for item in results), len(results)),
-        "avg_graph_compilations": round(sum(item["graph_compilation_count"] for item in results) / len(results), 2),
         "required_fact_coverage": metric(fact_passed, fact_total),
         "unsupported_claim_rate": None,
         "unsupported_claim_rate_reason": "current runtime has no sentence-level claim ledger",
@@ -518,11 +486,6 @@ def aggregate_live_results(results: list[dict[str, Any]]) -> dict[str, Any]:
             sum(item["passed"] for item in observation_dependent_trials),
             len(observation_dependent_trials),
         ),
-        "replan_trigger_rate": metric(len(triggered_replans), len(complex_trials)),
-        "replan_success_rate": metric(sum(item["passed"] for item in triggered_replans), len(triggered_replans)),
-        "unnecessary_replan_rate": metric(sum(item.get("initial_plan_complete", False) for item in triggered_replans), len(triggered_replans)),
-        "avg_replans_per_complex_task": round(sum(item["replan_count"] for item in complex_trials) / len(complex_trials), 2) if complex_trials else None,
-        "max_replans_observed": max((item["replan_count"] for item in complex_trials), default=0),
         "avg_tool_calls": round(sum(item["tool_call_count"] for item in results) / len(results), 2),
         "avg_llm_calls": round(sum(item["llm_call_count"] for item in results) / len(results), 2),
         "avg_tokens": round(sum(item["token_usage"].get("total_tokens", 0) for item in results) / len(results), 2),

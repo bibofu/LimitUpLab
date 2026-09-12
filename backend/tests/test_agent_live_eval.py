@@ -17,8 +17,6 @@ from app.agents.chat_live_eval_runner import (
     run_live_eval_suite,
     validate_live_tool_world,
 )
-from app.agents.tool_execution import execute_tool_calls
-from app.agents.tool_policy import AgentToolPolicyEngine
 from app.models import (
     AgentChatRequest,
     AgentChatResponse,
@@ -92,9 +90,8 @@ def test_frozen_live_world_normalizes_production_answer_contracts() -> None:
 def test_frozen_registry_executes_fixture_without_production_delegate() -> None:
     case = _case("LIVE-SIMPLE-002")
     registry = _default_registry(case)
-    execution = execute_tool_calls(
+    execution = registry.execute_frozen_calls(
         [{"name": "market_index_trend", "arguments": {"days": 5}}],
-        registry,
         request=AgentChatRequest(
             session_id="frozen-world",
             message=case.turns[0].user,
@@ -112,12 +109,11 @@ def test_frozen_registry_executes_fixture_without_production_delegate() -> None:
 
 def test_frozen_registry_applies_argument_scoped_failure_injection() -> None:
     case = _case("LIVE-RECOVERY-004")
-    execution = execute_tool_calls(
+    execution = _default_registry(case).execute_frozen_calls(
         [
             {"name": "stock_kline", "arguments": {"symbol": "300750", "days": 20}},
             {"name": "stock_kline", "arguments": {"symbol": "600000", "days": 20}},
         ],
-        _default_registry(case),
         request=AgentChatRequest(
             session_id="frozen-injection",
             message=case.turns[0].user,
@@ -129,29 +125,6 @@ def test_frozen_registry_applies_argument_scoped_failure_injection() -> None:
     assert execution["tool_results"][1].output["symbol"] == "600000"
 
 
-def test_policy_repairs_use_the_same_frozen_executor() -> None:
-    case = _case("LIVE-SIMPLE-001")
-    registry = _default_registry(case)
-    request = AgentChatRequest(
-        session_id="frozen-policy",
-        message=case.turns[0].user,
-        trade_date=date(2026, 5, 15),
-    )
-    execution = execute_tool_calls([], registry, request=request)
-    repaired = AgentToolPolicyEngine(registry).reconcile(
-        request=request,
-        execution=execution,
-        capabilities=("market_environment",),
-    )
-
-    assert set(case.expected.required_tools) <= set(repaired)
-    assert all("完全冻结" in trace.summary for trace in execution["tool_results"])
-    assert all(
-        trace.result is not None and trace.result.payload.get("as_of_date") == "2026-05-15"
-        for trace in execution["tool_results"]
-    )
-
-
 def test_live_suite_runs_real_orchestration_against_only_frozen_facts() -> None:
     report = run_live_eval_suite(
         [_case("LIVE-SIMPLE-002")],
@@ -159,8 +132,8 @@ def test_live_suite_runs_real_orchestration_against_only_frozen_facts() -> None:
         trials=1,
     )
 
-    assert report["runner_version"] == "agent-live-eval-runner-v5"
-    assert report["agent_architecture"] == "langgraph-bounded-plan-and-execute"
+    assert report["runner_version"] == "agent-react-live-eval-runner-v6"
+    assert report["agent_architecture"] == "langgraph-bounded-react"
     assert report["observation_driven_replan_supported"] is True
     assert report["tool_environment"] == {
         "fixture_snapshot_id": "chat-live-world-v2",
@@ -345,7 +318,7 @@ def test_judge_accepts_explicit_nested_scores_schema() -> None:
     assert result["passed"]
 
 
-def test_raw_planner_and_effective_recall_are_separate() -> None:
+def test_raw_decision_and_effective_recall_are_separate() -> None:
     case = _case("LIVE-SIMPLE-006")
     response = _response(
         [_planner(["limit_up_pool"], raw_tools=[]), _trace("limit_up_events", {}, {"events": []})],
@@ -353,13 +326,12 @@ def test_raw_planner_and_effective_recall_are_separate() -> None:
         repaired_tools=["limit_up_events"],
     )
     trial = _evaluate(case, response)
-    assert trial["raw_capability_recall"] == 1.0
+    assert trial["raw_capability_recall"] == 0.0
     assert trial["raw_required_tool_recall"] == 0.0
     assert trial["effective_required_tool_recall"] == 1.0
-    assert not trial["backend_repair_needed"]
-    assert trial["policy_repair_count"] == 1
+    assert trial["capability_basis"] == "raw_tool_calls"
     metrics = aggregate_live_results([trial])
-    assert metrics["backend_repair_rate"] == 0.0
+    assert "replan_trigger_rate" not in metrics
 
 
 def test_required_fact_coverage_does_not_claim_unsupported_detection() -> None:
@@ -409,8 +381,8 @@ def _response(
 def _planner(capabilities: list[str], raw_tools: list[str] | None = None) -> AgentToolTrace:
     calls = [{"name": name, "arguments": {}} for name in (raw_tools or [])]
     return AgentToolTrace(
-        name="llm_tool_planner",
-        input={"capabilities": capabilities, "tool_calls": calls},
+        name="react_decision",
+        output={"tool_calls": calls},
         summary="plan",
     )
 
@@ -443,86 +415,54 @@ class _JudgeProvider(LLMProvider):
         )
 
 
-class _FrozenWorldProvider(LLMProvider):
-    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
-        del user_prompt
-        if "first job is to decide which tools are needed" in system_prompt:
-            return LLMResult(
-                content=json.dumps(
-                    {
-                        "intent_label": "market_index_trend",
-                        "safety": "normal",
-                        "capabilities": ["market_index_trend"],
-                        "tool_calls": [
-                            {"name": "market_index_trend", "arguments": {"days": 5}}
-                        ],
-                        "answer_directly": "",
-                    }
-                ),
-                model="frozen-test-planner",
-                provider="test",
-            )
-        return LLMResult(
-            content="截至2026-05-15，上证指数、深证成指和创业板指近5日数据已返回。",
-            model="frozen-test-answer",
-            provider="test",
-        )
+class _FrozenWorldProvider:
+    def generate_messages(self, messages, tools, **kwargs):
+        from langchain_core.messages import AIMessage, ToolMessage
+        observed = [m for m in messages if isinstance(m, ToolMessage)]
+        if not observed:
+            return AIMessage(content="", tool_calls=[{"name": "market_index_trend", "args": {"days": 5}, "id": "index"}])
+        evidence_id = json.loads(observed[-1].content)["evidence_id"]
+        return AIMessage(content="", tool_calls=[{"name": "finish", "args": {
+            "status": "complete", "answer": "截至2026-05-15，上证指数、深证成指和创业板指近5日数据已返回。",
+            "evidence_ids": [evidence_id], "missing": []}, "id": "finish"}])
 
 
-class _RefusingEvidenceProvider(LLMProvider):
-    """Return a valid capability plan but decline the grounded answer."""
-
-    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
-        if "first job is to decide which tools are needed" in system_prompt:
-            capability = (
-                "dragon_tiger"
-                if "龙虎榜" in user_prompt
-                else "stock_trend"
-            )
-            return LLMResult(
-                content=json.dumps(
-                    {
-                        "intent_label": capability,
-                        "safety": "normal",
-                        "capabilities": [capability],
-                        "tool_calls": [],
-                    }
-                ),
-                model="refusing-test-planner",
-                provider="test",
-            )
-        return LLMResult(
-            content="抱歉，该问题无法回答",
-            model="refusing-test-answer",
-            provider="test",
-        )
-
-
-def test_grounded_empty_result_replaces_llm_over_refusal() -> None:
-    report = run_live_eval_suite(
-        [_case("LIVE-RECOVERY-002")],
-        llm_provider=_RefusingEvidenceProvider(),
-        trials=1,
-    )
-
+def test_react_control_traces_do_not_count_as_business_tools():
+    report = run_live_eval_suite([_case("LIVE-SIMPLE-002")], llm_provider=_FrozenWorldProvider(), trials=1)
     result = report["results"][0]
-    assert result["passed"]
-    assert "没有" in result["answer"]
-    assert "抱歉，该问题无法回答" not in result["answer"]
+    assert result["llm_call_count"] == 2
+    assert result["tool_call_count"] == 1
+    assert result["raw_required_tool_recall"] == 1.0
+    assert result["task_statuses"] == ["complete"]
+    assert [t["name"] for t in result["tool_trace"]] == ["market_index_trend"]
+    assert any(t["name"] == "react_execution" for t in result["graph_trace"])
 
 
-def test_multi_stock_failure_continues_and_answers_from_success() -> None:
-    report = run_live_eval_suite(
-        [_case("LIVE-RECOVERY-004")],
-        llm_provider=_RefusingEvidenceProvider(),
-        trials=1,
-    )
+def test_frozen_react_preserves_success_when_another_entity_fails():
+    from langchain_core.messages import AIMessage, ToolMessage
+    class Model:
+        def generate_messages(self, messages, tools, **kwargs):
+            observed = [m for m in messages if isinstance(m, ToolMessage)]
+            if not observed:
+                return AIMessage(content="", tool_calls=[
+                    {"name": "stock_kline", "args": {"symbol": symbol, "days": 20, "end_date": "2026-05-15"}, "id": symbol}
+                    for symbol in ["300750", "600000"]])
+            payloads = [json.loads(m.content) for m in observed]
+            assert {p["result_state"] for p in payloads} == {"error", "ok"}
+            return AIMessage(content="", tool_calls=[{"name": "finish", "id": "done", "args": {
+                "status": "partial", "answer": "300750行情来源失败；600000行情已返回，保留其研究结果。",
+                "evidence_ids": [p["evidence_id"] for p in payloads], "missing": ["300750行情"]}}])
+    result = run_live_eval_suite([_case("LIVE-RECOVERY-004")], llm_provider=Model(), trials=1)["results"][0]
+    assert result["task_statuses"] == ["partial"]
+    traces = result["tool_trace"]
+    assert [(t["input"]["symbol"], t["result"]["status"]) for t in traces] == [("300750", "error"), ("600000", "ok")]
+    assert result["llm_call_count"] == 2
 
-    result = report["results"][0]
-    stock_traces = [
-        item for item in result["tool_trace"] if item["name"] == "stock_kline"
-    ]
-    assert [item["result"]["status"] for item in stock_traces] == ["error", "ok", "error"]
-    assert stock_traces[-1]["input"]["symbol"] == "300750"
-    assert result["replan_count"] == 1
-    assert "600000" in result["answer"]
+
+def test_failed_react_run_is_never_a_successful_boundary_answer():
+    case = _case("LIVE-SIMPLE-002")
+    response = _response([_trace("market_index_trend", {}, {"indices": [{"name": "上证指数"}]})], answer="上证指数")
+    response.task_status = "error"
+    result = _evaluate(case, response)
+    assert not result["passed"]
+    assert "runtime did not finish the requested task" in result["failure_reasons"]

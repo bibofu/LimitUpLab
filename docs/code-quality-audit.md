@@ -312,3 +312,11 @@
 - P1 未修：BC-033/034 的事实关系解释错误、既有正式 Live/Holdout/稳定性验收缺口仍存在；本轮删除不改变这一状态。继续 D 输出接地工作时优先处理。
 - P2 未修：旧评测器仍消费 plan_agent_query、旧 Prompt/参数归一化/Policy 和模板；部分旧协议测试尚未迁移。暂留原因是仍有显式评测/共享消费者，不是供聊天回退。下一批清理以评测器迁移和依赖收敛为触发条件，不能将旧 Planner 成绩冒充 ReAct 能力。template_answer_override 对新聊天链路已无效，相关评测模式需随评测器一并退役。
 - P2 未修：BC-035 日期链接、上下文成本及刷新恢复等既有问题本次未处理。回滚操作依赖版本部署；不再承诺单环境开关恢复旧流程。
+
+### 2026-09-12：旧评测依赖清理阶段检查（一）
+
+- 用户要求继续退役 Planner/Prompt/Policy 评测依赖。`0d5b5e3` 删除 Chat Eval V2 的 Planner-only Live 执行，CLI 只允许 offline/online-shadow；生产模型评测统一使用 `run_agent_live_eval.py`。历史报告、冻结世界、Dev/Holdout 样本及其阈值不修改。
+- `6d67934`～`61692b0` 分小提交删除旧问答、Planner、Policy、模板协议测试与无人使用的模型夹具。保留同文件的数据/能力目录/报告读取/会话测试，43 项通过。旧模板与原始数据断言共存时只移除模板断言，例如 Post Limit 缺失事件窗口检查仍保留。
+- 本次 Live 适配变更：移除 Frozen Registry 对旧 Policy 的类型与 repair 方法依赖，使用 ReAct 原始 decision/execution trace；控制 trace 不算业务工具，失败/取消不能通过验收，多轮传递完整已完成响应 metadata。原始工具与实际工具召回分别计算；capability 标签明确由原始工具集合推导，不再当作独立 Planner 意图识别成绩。旧 Replan/Graph Compilation 指标退役，冻结样本中的历史类别和 max_replans 字段保留原样但不作为 ReAct 独立 Replanner 指标。
+- Live/回放定向最终 28 通过、0 失败/跳过、1 条依赖弃用警告；包括原生消息两轮决策、控制 trace 计数、单实体失败保留另一实体、错误运行不通过。此前沙箱一次运行 27 通过、1 个报告临时目录 setup error，宿主重跑已通过。以上模型输出为夹具，不是新真实模型质量结论。
+- 阶段依赖扫描：移除这些消费者后，旧 eval_runner/chat Planner/Prompt/Policy/执行器可继续物理删除。当前检查无新增数据写入或评分变更；删除尚在进行，后续须完成全后端回归、实际进程重启及 HTTP/CLI 验证后记录最终结果。

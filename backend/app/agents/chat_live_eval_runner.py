@@ -9,7 +9,7 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from pathlib import Path
 from time import perf_counter
-from typing import Any
+from typing import Any, TypedDict
 from uuid import uuid4
 
 from app.agents.chat import answer_first_board_chat
@@ -24,7 +24,6 @@ from app.agents.chat_live_eval import (
     evaluate_live_trial,
 )
 from app.agents.query_contract import query_reference_date_override
-from app.agents.tool_policy import ToolExecution
 from app.agents.tools import TOOL_SCHEMAS, V1_AGENT_PROFILE, V1_CLOSED_MARKET_TOOL_NAMES
 from app.models import AgentChatRequest, AgentToolOutcome, AgentToolTrace, ChatSessionMessage
 from app.services.llm_provider import LLMProvider, capture_llm_usage
@@ -41,8 +40,16 @@ LIVE_TOOL_WORLD_PATH = (
 LIVE_TOOL_WORLD_ID = "chat-live-world-v2"
 LIVE_TOOL_WORLD_SCHEMA_VERSION = "chat-live-tool-world-v2"
 DEFAULT_OUTPUT_ROOT = Path(__file__).resolve().parents[3] / "output" / "agent-live-eval"
-RUNNER_VERSION = "agent-live-eval-runner-v5"
+RUNNER_VERSION = "agent-react-live-eval-runner-v6"
 JUDGE_PROMPT_VERSION = "agent-live-eval-judge-v2"
+
+
+class FrozenExecution(TypedDict):
+    """Observed fixture calls without planning or policy repair."""
+    facts: dict[str, Any]
+    tool_results: list[AgentToolTrace]
+    tool_call_names: list[str]
+    references: list[str]
 
 
 def load_live_eval_dataset(path: Path = DATASET_PATH) -> LiveEvalDataset:
@@ -149,7 +156,7 @@ def run_live_eval_suite(
     trials: int = 3,
     judge_provider: LLMProvider | None = None,
 ) -> dict[str, Any]:
-    """Run real planner/answer LLM calls and real multi-turn production orchestration."""
+    """Run the production ReAct loop against frozen tools."""
 
     if trials < 1:
         raise ValueError("trials must be positive")
@@ -181,7 +188,7 @@ def run_live_eval_suite(
             "database_access": False,
             "network_access": False,
         },
-        "agent_architecture": "langgraph-bounded-plan-and-execute",
+        "agent_architecture": "langgraph-bounded-react",
         "observation_driven_replan_supported": True,
         "judge_enabled": judge_provider is not None,
         "completed_at": datetime.now(timezone.utc).isoformat(),
@@ -227,7 +234,7 @@ def run_live_eval_trial(
                     ChatSessionMessage(
                         message_id=f"{session_id}-a{index}", session_id=session_id,
                         role="assistant", content=response.answer,
-                        metadata={"tool_calls": response.tool_calls}, created_at=now,
+                        metadata=response.model_dump(mode="json"), created_at=now,
                     ),
                 ]
             )
@@ -332,12 +339,6 @@ class FrozenLiveToolRegistry:
     def schemas(self) -> list[Any]:
         return [schema for schema in TOOL_SCHEMAS if self.is_enabled(schema.name)]
 
-    def schema_prompt(self) -> str:
-        return json.dumps(
-            [schema.planner_dump() for schema in self.schemas()],
-            ensure_ascii=False,
-            separators=(",", ":"),
-        )
 
     def resolve_stock_identity(self, value: str) -> tuple[str, str]:
         text = str(value).strip()
@@ -358,8 +359,8 @@ class FrozenLiveToolRegistry:
         *,
         request: AgentChatRequest,
         context_symbol: str | None = None,
-    ) -> ToolExecution:
-        execution: ToolExecution = {
+    ) -> FrozenExecution:
+        execution: FrozenExecution = {
             "facts": {},
             "tool_results": [],
             "tool_call_names": [],
@@ -375,34 +376,6 @@ class FrozenLiveToolRegistry:
             )
         return execution
 
-    def repair_frozen_tool(
-        self,
-        tool_name: str,
-        *,
-        request: AgentChatRequest,
-        execution: ToolExecution,
-        context_symbol: str | None,
-    ) -> None:
-        arguments: dict[str, Any] = {}
-        if request.trade_date is not None:
-            arguments["trade_date"] = request.trade_date.isoformat()
-        try:
-            symbol = self.resolve_stock_identity(
-                request.symbol or request.message or context_symbol or ""
-            )[0]
-        except ValueError:
-            symbol = context_symbol
-        if symbol and tool_name in {
-            "stock_news", "stock_activity", "stock_kline", "first_board_critic",
-        }:
-            arguments["symbol"] = symbol
-        self._execute_one(
-            tool_name,
-            arguments,
-            request=request,
-            execution=execution,
-            context_symbol=context_symbol,
-        )
 
     def _execute_one(
         self,
@@ -410,7 +383,7 @@ class FrozenLiveToolRegistry:
         arguments: dict[str, Any],
         *,
         request: AgentChatRequest,
-        execution: ToolExecution,
+        execution: FrozenExecution,
         context_symbol: str | None,
     ) -> None:
         del context_symbol
