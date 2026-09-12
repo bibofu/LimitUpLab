@@ -1,5 +1,7 @@
 # Agent 通用任务运行时重构设计
 
+> 后续方向更新（2026-09-12）：请以 [LangChain + LangGraph ReAct 重构计划](agent-react-refactor-plan.md) 为新一轮实施依据。本文保留既有任务 DAG 设计与历史失败证据；新计划尚待实施，不表示当前运行时已替换。
+
 日期：2026-09-12。审查基线：`1302726`。
 状态：通用任务运行时第一批实现已接通，显式 `LIMITUPLAB_AGENT_RUNTIME=task` 启用；默认保留 legacy。尚未通过发布验收，不代表高可用。
 
