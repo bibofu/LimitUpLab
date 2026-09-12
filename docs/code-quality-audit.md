@@ -1,5 +1,14 @@
 # Agent 应用质量审查
 
+## 2026-09-13：V1.4.0 标签部署失败与 SQLite 只读挂载修复
+
+- GitHub Actions run `34704996201` 的 Windows/Ubuntu 验收通过，生产任务在镜像构建完成后失败。服务器 journal `v1.4.0-20260913T002448.json` 为 `failed_before_switch`，未进入维护、停服务、备份或迁移阶段；公网 `/health` 仍为 200。
+- 根因：发布器用 `limituplab-data:/app/data:ro` 启动 schema 容器，SQLite 即使以 URI `mode=ro` 连接，仍需在卷内创建或访问 WAL/SHM 协调文件，因此报 `sqlite3.OperationalError: unable to open database file`。同样的错误也潜伏在后续备份容器。
+- 生产隔离复现：数据目录与数据库为 `10001:10001`、容器用户为 UID 10001，直接读取文件成功；原始只读挂载连接失败，`immutable=1` 成功读出 schema version 12。后者可能忽略未 checkpoint WAL，故不作为修复。
+- 修复：schema 与 backup 的 Docker 数据卷改为可写挂载，SQLite 源连接继续使用 `mode=ro`；增加命令级回归，防止重新引入 `:ro`。部署入口是 root 安装副本，发布前需审查并更新 `/usr/local/lib/limituplab/release.py`。
+- 发布策略：不移动失败的 `v1.4.0`；修复验证后创建 `v1.4.1`，先安装受信发布器，再推送标签并观察自动部署和生产健康状态。
+- 验证：部署专项首次在沙箱中 12 项通过、13 项因 Windows 临时目录 ACL setup error，收尾为 `WinError 5`，不计为通过；宿主隔离目录重跑 26/26 通过。统一验收最终为后端 **617 passed + 6 subtests passed**、0 失败/跳过、3 条依赖弃用警告，离线 Agent Dev **89/89**，前端 **15/15**，TypeScript/Vite 构建通过并保留 664.04 kB 单 chunk 警告。
+
 ## 2026-09-13：V1.4 文档与标签前阶段审查
 
 - 范围：以当前生产源码和 `v1.3.2..HEAD` 为准，更新根目录、后端、LangChain/LangGraph、评测、代码阅读、面试及里程碑文档；不修改业务代码、评分、数据库或历史预测，不纳入 `artifacts/`、`backend/data/`、`tmp/` 和 `output/`。

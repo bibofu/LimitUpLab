@@ -10,7 +10,7 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 ## 项目状态
 
-当前里程碑为 **V1.4（`v1.4.0`）**，详见 [V1.4 阶段里程碑](docs/V1.4_Milestone.md)。这一版完成聊天执行链路收敛：生产入口统一为 LangChain 原生工具调用与 LangGraph 自定义 StateGraph 的有界 ReAct 循环，旧 Planner/Capability/Policy/模板执行器、Task DAG 和 Complex Graph 已退出生产调用图。
+当前里程碑为 **V1.4（最新修订 `v1.4.1`，架构基线 `v1.4.0`）**，详见 [V1.4 阶段里程碑](docs/V1.4_Milestone.md)。这一版完成聊天执行链路收敛：生产入口统一为 LangChain 原生工具调用与 LangGraph 自定义 StateGraph 的有界 ReAct 循环，旧 Planner/Capability/Policy/模板执行器、Task DAG 和 Complex Graph 已退出生产调用图。`v1.4.1` 修复标签部署时 SQLite WAL/SHM 无法在只读 Docker volume 打开的阻断问题。
 
 盘前推荐继续并列提供一进二接力、缩量整理和高位回撤；一进二区分收盘基线、盘前终选及历史样本，后两类形态观察不混入一进二前向统计。集合竞价和面向未涨停股票的首板挖掘仍保持退役。
 
@@ -36,7 +36,7 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 | 项目 | 状态 |
 | --- | --- |
 | 后端自动化测试 | 统一验收入口生成当次测试数量、结果和 JUnit 报告 |
-| 后端回归 | V1.4 标记前 616 项及 6 个子测试通过 |
+| 后端回归 | V1.4.1 标记前 617 项及 6 个子测试通过 |
 | 本地数据健康检查 | 已实现 |
 | LLM 流式问答 | 已实现 |
 | Agent 限流与成本审计 | 单访客/IP/全局限制、真实 token 账本已实现 |

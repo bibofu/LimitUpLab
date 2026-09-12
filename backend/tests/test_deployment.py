@@ -177,6 +177,28 @@ def test_workflow_gates_production_on_matrix_success_and_tag_push():
     assert "--ff-only" in (ROOT / "deploy/release.py").read_text()
 
 
+# Regression scenario: SQLite mode=ro still needs a writable volume for WAL/SHM coordination.
+def test_schema_and_backup_use_writable_sqlite_mount(tmp_path, monkeypatch):
+    monkeypatch.setattr(release, "STATE", tmp_path)
+    item = release.Deployment("v1.4.1", "a" * 40)
+    item.previous = {"backend": "old-back"}
+    item.run = Mock(side_effect=[
+        '{"version": 12, "hash": "unchanged"}',
+        "backup=/backups/deployments/test/limituplab-20260913-010000.sqlite removed=0",
+    ])
+
+    assert item.schema() == {"version": 12, "hash": "unchanged"}
+    item.backup()
+
+    schema_args = item.run.call_args_list[0].args
+    backup_args = item.run.call_args_list[1].args
+    assert "limituplab-data:/app/data" in schema_args
+    assert "limituplab-data:/app/data" in backup_args
+    assert "limituplab-data:/app/data:ro" not in schema_args
+    assert "limituplab-data:/app/data:ro" not in backup_args
+    assert any("mode=ro" in argument for argument in schema_args)
+
+
 # Regression scenario: probe distinguishes missing snapshot from broken reader.
 @pytest.mark.parametrize("status,allowed", [(404, True), (500, False)])
 def test_probe_distinguishes_missing_snapshot_from_broken_reader(tmp_path, monkeypatch, status, allowed):

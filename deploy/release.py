@@ -189,16 +189,21 @@ class Deployment:
             "print(json.dumps({'version':c.execute('PRAGMA user_version').fetchone()[0],"
             "'hash':hashlib.sha256(json.dumps(rows).encode()).hexdigest()}))"
         )
+        # Keep the SQLite connection read-only, but mount the volume writable so SQLite can
+        # create/open its WAL shared-memory sidecar. A Docker read-only mount fails even when the
+        # database file itself is readable.
         return json.loads(self.run("docker", "run", "--rm", "--network", "none",
-                                  "-v", "limituplab-data:/app/data:ro", self.previous["backend"],
+                                  "-v", "limituplab-data:/app/data", self.previous["backend"],
                                   "python", "-c", code, capture=True))
 
     # Create and verify a deployment-specific database backup outside the daily retention set.
     def backup(self) -> None:
         # Deployment snapshots live outside the rolling daily backup retention set.
         directory = f"/backups/deployments/{self.journal.stem}"
+        # backup_database.py opens the source with mode=ro; the writable Docker mount is required
+        # only for SQLite's WAL/SHM coordination files.
         output = self.run("docker", "run", "--rm", "--network", "none",
-                          "-v", "limituplab-data:/app/data:ro", "-v", "/var/backups/limituplab:/backups",
+                          "-v", "limituplab-data:/app/data", "-v", "/var/backups/limituplab:/backups",
                           self.previous["backend"], "python", "scripts/backup_database.py",
                           "--database", "/app/data/limituplab.sqlite", "--output-dir", directory,
                           "--retain-count", "1", capture=True)

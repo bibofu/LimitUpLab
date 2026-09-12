@@ -33,6 +33,7 @@ git push origin v1.3.1
 - 切换时创建 `/opt/LimitUpLab/.maintenance`，公网 Nginx 返回 503；内部 8080 保留健康检查通道。停止刷新、前端和后端后，用 SQLite 在线备份 API 创建并完整性校验专属发布备份。
 - 发布备份在 `/var/backups/limituplab/deployments/<运行标识>/`，不进入每日最近 14 份备份的轮换集合。生产数据库卷 `limituplab-data` 不删除。
 - 新前后端容器健康、内部代理及页面路由通过，刷新进程启动并保持运行后，更新 local 镜像引用、快进生产 main，记录 `current.json` 并解除维护。日更与定时备份继续使用当前 local 镜像。
+- Schema 检查和备份容器以可写方式挂载数据卷，但 SQLite 连接固定使用 `mode=ro`。这是为了允许 SQLite 创建或读取 WAL/SHM 协调文件；把 Docker volume 标成 `:ro` 会导致数据库文件权限正确时仍报 `unable to open database file`，不得用 `immutable=1` 忽略可能尚未 checkpoint 的 WAL。
 - SSH 断开不主动中断服务端部署；客户端失败后先查服务器日志和状态，不立即启动第二次部署。部署中途重启主机、进程被强杀或数据库结构变化后的失败需要人工恢复，不能宣称所有故障都能自动回滚。
 
 ## 失败与恢复
