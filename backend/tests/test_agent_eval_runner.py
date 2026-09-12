@@ -18,54 +18,8 @@ from app.services.llm_provider import LLMProvider, LLMResult
 from app.services.sample_data import SAMPLE_EVENTS
 
 
-class IntermittentPlannerProvider(LLMProvider):
-    """Return a valid plan twice and simulate one provider outage."""
-
-    # Prepare the init fixture or observation used by the surrounding regression scenario.
-    def __init__(self) -> None:
-        self.calls = 0
-
-    # Build the LLMResult fixture used by the surrounding regression scenario.
-    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
-        self.calls += 1
-        if self.calls == 2:
-            raise RuntimeError("temporary provider outage")
-        return LLMResult(
-            content=json.dumps(
-                {
-                    "intent_label": "today_summary",
-                    "safety": "normal",
-                    "tool_calls": [
-                        {
-                            "name": "first_board_ratings",
-                            "arguments": {"trade_date": "2026-05-15"},
-                        }
-                    ],
-                    "answer_directly": "",
-                }
-            ),
-            model="fake-live-model",
-            provider="fake-live-provider",
-        )
 
 
-class EmptyPlannerProvider(LLMProvider):
-    """Return a valid but incomplete plan to exercise policy repair metrics."""
-
-    # Build the LLMResult fixture used by the surrounding regression scenario.
-    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
-        return LLMResult(
-            content=json.dumps(
-                {
-                    "intent_label": "today_summary",
-                    "safety": "normal",
-                    "tool_calls": [],
-                    "answer_directly": "",
-                }
-            ),
-            model="fake-live-model",
-            provider="fake-live-provider",
-        )
 
 
 class AgentEvalRunnerTest(unittest.TestCase):

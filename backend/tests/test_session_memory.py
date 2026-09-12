@@ -68,44 +68,6 @@ class MemoryFunctionProvider(LLMProvider):
         )
 
 
-class PlannerMemoryProvider(LLMProvider):
-    # Prepare the init fixture or observation used by the surrounding regression scenario.
-    def __init__(self) -> None:
-        self.user_payload: dict = {}
-
-    # Simulate the model response for this scenario; the controlled output lets the test inspect
-    # planning, validation or fallback behavior.
-    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
-        raise AssertionError("planner should use native function calling")
-
-    # Build the LLMResult fixture used by the surrounding regression scenario.
-    def generate_function_call(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        *,
-        function_name: str,
-        function_description: str,
-        parameters: dict,
-    ) -> LLMResult:
-        self.user_payload = json.loads(user_prompt)
-        return LLMResult(
-            content=json.dumps(
-                {
-                    "intent_label": "first_board_rating",
-                    "capabilities": ["first_board_rating"],
-                    "context_mode": "source_refinement",
-                    "context_capabilities": ["first_board_rating"],
-                    "safety": "normal",
-                    "tool_calls": [],
-                    "answer_directly": "",
-                }
-            ),
-            model="fake-planner",
-            provider="fake",
-            response_mode="function_call",
-            function_name=function_name,
-        )
 
 
 class SessionMemoryTest(unittest.TestCase):

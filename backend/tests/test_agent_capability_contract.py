@@ -36,109 +36,12 @@ from app.services.llm_provider import (
 from app.services.sample_data import SAMPLE_EVENTS
 
 
-class CapabilityOnlyProvider(LLMProvider):
-    """Simulate semantic planning while intentionally omitting raw tool calls."""
-
-    # Prepare the init fixture or observation used by the surrounding regression scenario.
-    def __init__(self) -> None:
-        self.answer_system_prompt = ""
-
-    # Build the LLMResult fixture used by the surrounding regression scenario.
-    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
-        if "first job is to decide which tools are needed" in system_prompt:
-            return LLMResult(
-                content=json.dumps(
-                    {
-                        "intent_label": "limit_up_query",
-                        "capabilities": ["limit_up_pool"],
-                        "safety": "normal",
-                        "tool_calls": [],
-                        "answer_directly": "",
-                    }
-                ),
-                model="fake-capability-planner",
-                provider="fake",
-            )
-        self.answer_system_prompt = system_prompt
-        return LLMResult(
-            content="已根据最新完整收盘事实整理。",
-            model="fake-capability-answer",
-            provider="fake",
-        )
 
 
-class SourceRefinementProvider(LLMProvider):
-    """Select only the new capability and let the context contract merge sources."""
-
-    # Build the LLMResult fixture used by the surrounding regression scenario.
-    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
-        return LLMResult(
-            content=json.dumps(
-                {
-                    "intent_label": "limit_up_query",
-                    "capabilities": ["limit_up_pool"],
-                    "context_mode": "source_refinement",
-                    "context_capabilities": ["popularity"],
-                    "safety": "normal",
-                    "tool_calls": [],
-                    "answer_directly": "",
-                }
-            ),
-            model="fake-refinement-planner",
-            provider="fake",
-        )
 
 
-class NativeFunctionPlanningProvider(LLMProvider):
-    """Exercise the production planner without prompt-to-JSON compatibility."""
-
-    # Prepare the init fixture or observation used by the surrounding regression scenario.
-    def __init__(self) -> None:
-        self.function_calls = 0
-        self.parameters: dict = {}
-
-    # Simulate the model response for this scenario; the controlled output lets the test inspect
-    # planning, validation or fallback behavior.
-    def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
-        raise AssertionError("native planner unexpectedly used text generation")
-
-    # Build the LLMResult fixture used by the surrounding regression scenario.
-    def generate_function_call(
-        self,
-        system_prompt: str,
-        user_prompt: str,
-        *,
-        function_name: str,
-        function_description: str,
-        parameters: dict,
-    ) -> LLMResult:
-        self.function_calls += 1
-        self.parameters = parameters
-        self.assert_native_prompt = system_prompt
-        return LLMResult(
-            content=json.dumps(
-                {
-                    "intent_label": "limit_up_query",
-                    "capabilities": ["limit_up_pool"],
-                    "context_mode": "standalone",
-                    "context_capabilities": [],
-                    "safety": "normal",
-                }
-            ),
-            model="fake-native-planner",
-            provider="fake-native",
-            response_mode="function_call",
-            function_name=function_name,
-        )
 
 
-class MalformedNativeThenJsonProvider(CapabilityOnlyProvider):
-    """Simulate a malformed native response followed by a valid JSON plan."""
-
-    # Simulate the model response for this scenario; the controlled output lets the test inspect
-    # planning, validation or fallback behavior.
-    def generate_function_call(self, *args, **kwargs) -> LLMResult:
-        raise NativeFunctionCallingError("malformed submit_agent_plan arguments")
 
 
 class AgentCapabilityContractTest(unittest.TestCase):
