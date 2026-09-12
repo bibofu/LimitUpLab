@@ -31,7 +31,7 @@ class Finish(StrictModel):
     status: Literal["complete", "partial", "empty", "clarify", "refuse"]
     answer: str = Field(min_length=1, max_length=16000)
     evidence_ids: list[str] = Field(default_factory=list)
-    missing: list[str] = Field(default_factory=list)
+    missing: list[str] = Field(default_factory=list, description="Only unmet USER-requested deliverables. Irrelevant missing source fields are caveats in the answer, not unfinished tasks.")
 
 
 class ReadEvidence(StrictModel):
@@ -48,7 +48,7 @@ class Filter(StrictModel):
 
 class Compute(StrictModel):
     evidence_id: str
-    operation: Literal["select", "intersection", "difference", "union", "aggregate"] = "select"
+    operation: Literal["select", "intersection", "difference", "union", "distinct", "aggregate"] = "select"
     other_id: str | None = None
     key: str = "symbol"
     filters: list[Filter] = Field(default_factory=list, max_length=8)

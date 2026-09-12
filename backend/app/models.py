@@ -1686,7 +1686,7 @@ class AgentToolOutcome(BaseModel):
 
 AGENT_CONTROL_TRACE_NAMES = {
     "react_decision", "react_policy", "react_observe", "react_execution",
-    "react_provider_error", "react_answer_check",
+    "react_provider_error", "react_answer_check", "react_compute",
     "task_plan", "task_completion", "task_replan", "task_answer", "task_execution",
     "task_answer_repair",
     "task_plan_error", "task_execute_error", "task_check_error", "task_replan_error", "task_answer_error",

@@ -16,6 +16,7 @@ from app.agents.react_runtime.contracts import (
     MAX_MODEL_CALLS, MAX_TOOL_CALLS, ReadEvidence, VERSION,
 )
 from app.agents.react_runtime.evidence import EvidenceStore, compact
+from app.agents.react_runtime.context import prepare_history
 from app.agents.react_runtime.tools import ToolGateway
 from app.models import AgentChatPerformance, AgentChatResponse, AgentToolOutcome, AgentToolTrace
 from app.services.prompt_security import assess_direct_prompt_injection, contains_prompt_leak
@@ -183,6 +184,7 @@ class Run:
                 elif name == "compute_result":
                     key = self.evidence.compute(Compute.model_validate(args))
                     result = self.evidence.view(key)
+                    self.trace("react_compute", {"call_id": call["id"], **result})
                 else:
                     spec = ReadEvidence.model_validate(args)
                     result = self.evidence.view(spec.evidence_id, spec.offset, spec.limit)
@@ -227,9 +229,10 @@ class Run:
 
     def stop(self, reason):
         self.reason = reason
-        self.status = "partial" if self.evidence.records else "error"
+        current = [r for r in self.evidence.records.values() if not r.get("historical_reference")]
+        self.status = "partial" if current else "error"
         lines = ["本次研究尚未全部完成。"]
-        for record in self.evidence.records.values():
+        for record in current:
             names = [str(r.get("name") or r.get("symbol") or "") for r in record["rows"][:5] if isinstance(r, dict)]
             if record["result_state"] == "empty":
                 lines.append("一项查询返回空结果，不能据此推断其他日期或来源。")
@@ -268,12 +271,14 @@ def run(request, registry, provider, history=None, memory=None, progress=None):
     if injection.detected:
         runtime.answer, runtime.status, runtime.reason = "我可以协助查询有来源的股票研究事实，不能执行绕过系统边界的指令。", "refuse", "input_policy"
     else:
+        history_messages, history_refs = prepare_history(request, history or [], runtime.evidence)
         context = {"anchor_date": current_query_reference_date().isoformat(),
                    "page_default_date": request.trade_date, "page_default_symbol": request.symbol,
                    "available_local_dates": sorted({str(e.trade_date) for e in registry.events}),
-                   "memory": memory.model_dump(mode="json") if memory else None}
+                   "memory": memory.model_dump(mode="json") if memory else None,
+                   "historical_evidence_references": history_refs}
         messages = [SystemMessage(content=SYSTEM + "\n可信运行上下文：" + dump(context))]
-        messages.extend((HumanMessage if m.role == "user" else AIMessage)(content=m.content) for m in (history or [])[-8:])
+        messages.extend(history_messages)
         messages.append(HumanMessage(content=request.message))
         GRAPH.invoke({"messages": messages, "done": False}, config={"configurable": {"run": runtime}, "recursion_limit": 60})
     runtime.trace("react_execution", {"version": VERSION, "model_calls": runtime.models, "tool_calls": runtime.tools,

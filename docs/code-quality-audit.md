@@ -251,3 +251,10 @@
 - P1 待后续提交：工具历史/输出契约覆盖、受控调用超时及底层重试、事实关系和未验证声明门禁、上下文证据继承。
 - P1 待 D：checkpoint、幂等/重连/取消/清理、前端业务终态；当前仅 HTTP response/trace 有 task_status，运行表 success 仍仅表示执行返回。
 - 本提交作为实施中间点，不满足发布门槛；本地后端显式 react，用于后续验证。
+
+### ReAct C 契约接入进展
+
+- 全部 26 个既有工具列入显式时间/集合覆盖表 `react_runtime/catalog.py`；未知工具缺契约时注册失败，不再按参数名称猜测历史能力。
+- ReAct 调度不依赖 task DAG adapter 或 capability 修复；补齐原虚拟 first_board_filter 的直接执行、原 Python 必填日期及空 symbols 防扩张检查。
+- 历史证据仅从 Router 提供的同会话 assistant metadata 恢复，并标注 historical_reference；不作为当前结果缓存。截断全集不能通过交并差集证明全量结论。
+- 定向 16 通过、1 条依赖弃用预告；首次测试 1 失败因新增测试缺 created_at，补齐 fixture 后通过。尚未完成全部真实工具/多轮验收；用户要求跳过上一条回答的重复验证，下一阶段集中验证新增运行流程。

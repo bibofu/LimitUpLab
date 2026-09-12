@@ -1,6 +1,8 @@
 """Full evidence stays outside model messages; bounded views preserve provenance."""
 
 from copy import deepcopy
+from datetime import datetime, timezone
+from math import isfinite
 from uuid import uuid4
 
 from fastapi.encoders import jsonable_encoder
@@ -31,6 +33,12 @@ def payload_of(result):
             {**item.get("facts", {}), **{k: v for k, v in item.items() if k != "facts"}}
             for item in raw.get("candidates", [])
         ]}
+    if result.name == "stock_kline" and isinstance(raw, dict):
+        return {**raw, "metric_definitions": {
+            "return_Nd_pct": "(close[t] / close[t-N] - 1)*100; N trading intervals, N+1 closes. Displayed N bars have N-1 intervals. Not an adjustment explanation.",
+            "trend": "Moving-average alignment label; not consecutive daily increases.",
+            "max_drawdown_pct": "Peak-to-subsequent-trough in displayed bars, percent.",
+        }}
     return raw if isinstance(raw, (dict, list)) else trace
 
 
@@ -51,12 +59,21 @@ class EvidenceStore:
 
     def add(self, *, tool, payload, state, arguments, sources=None):
         key = "ev_" + uuid4().hex[:16]
+        rows = rows_of(payload)
+        metadata = payload if isinstance(payload, dict) else {}
+        # Source truncation is different from the small model preview page.
+        truncated = tool != "compute_result" and isinstance(metadata.get("matched_count"), int) and metadata["matched_count"] > len(rows)
+        source_missing = metadata.get("data_missing") or []
+        if state == "ok" and (source_missing or metadata.get("data_fresh") is False):
+            state = "partial"
         self.records[key] = {
             "evidence_id": key, "tool": tool, "payload": payload, "result_state": state,
+            "schema_version": "react-evidence-v1", "retrieved_at": datetime.now(timezone.utc).isoformat(),
+            "source_truncated": truncated, "data_missing": source_missing, "historical_reference": False,
             "arguments": arguments, "sources": sources or (
                 payload.get("sources") or ([payload["source"]] if payload.get("source") else [])
                 if isinstance(payload, dict) else []
-            ), "rows": rows_of(payload),
+            ), "rows": rows,
         }
         return key
 
@@ -77,6 +94,10 @@ class EvidenceStore:
             # even when read_evidence explicitly requested thirty.
             "rows": [compact(row, 20) for row in rows[offset:offset + limit]], "row_count": len(rows),
             "offset": offset, "truncated": offset + limit < len(rows), "sources": record["sources"],
+            "source_truncated": record.get("source_truncated", False),
+            "data_missing": record.get("data_missing", []),
+            "historical_reference": record.get("historical_reference", False),
+            "retrieved_at": record.get("retrieved_at"),
         }
 
     def compute(self, spec):
@@ -89,7 +110,8 @@ class EvidenceStore:
         inputs = [spec.evidence_id]
         if spec.operation in {"intersection", "difference", "union"}:
             other = self.get(spec.other_id)
-            if other["result_state"] not in {"ok", "empty"} or source["result_state"] == "partial":
+            if (other["result_state"] not in {"ok", "empty"} or source["result_state"] == "partial"
+                    or source.get("source_truncated") or other.get("source_truncated")):
                 raise ValueError("Set comparison requires complete source sets")
             if any(spec.key not in row for row in rows + other["rows"]):
                 raise ValueError("Set key is missing")
@@ -101,6 +123,10 @@ class EvidenceStore:
             else:
                 rows = list({row[spec.key]: row for row in rows + other["rows"]}.values())
             inputs.append(spec.other_id)
+        if spec.operation == "distinct":
+            if any(spec.key not in row or row[spec.key] is None for row in rows):
+                raise ValueError("Distinct key missing")
+            rows = list({row[spec.key]: row for row in rows}.values())
         for predicate in spec.filters:
             if any(predicate.field not in row or row[predicate.field] is None for row in rows):
                 raise ValueError(f"Filter field missing: {predicate.field}")
@@ -123,7 +149,7 @@ class EvidenceStore:
             rows = []
             for group, members in groups.items():
                 numbers = [row.get(spec.metric) for row in members]
-                if spec.aggregate != "count" and any(not isinstance(n, (int, float)) for n in numbers):
+                if spec.aggregate != "count" and any(type(n) not in (int, float) or not isfinite(n) for n in numbers):
                     raise ValueError("Aggregate requires available numeric values")
                 value = len(members) if spec.aggregate == "count" else {
                     "sum": lambda: sum(numbers), "mean": lambda: sum(numbers) / len(numbers),
@@ -136,8 +162,9 @@ class EvidenceStore:
             rows.sort(key=lambda row: row[spec.sort_by], reverse=spec.descending)
         total = len(rows)
         selected = rows[spec.offset:spec.offset + spec.limit]
+        derived_state = "partial" if source.get("source_truncated") or source["result_state"] == "partial" else "ok" if selected else "empty"
         return self.add(
-            tool="compute_result", state="empty" if not selected else source["result_state"],
+            tool="compute_result", state=derived_state,
             payload={"items": selected, "matched_count": total, "returned_count": len(selected),
                      "operation": spec.model_dump(), "source_evidence_ids": inputs},
             arguments=spec.model_dump(), sources=inputs,
