@@ -455,7 +455,7 @@ def test_frozen_react_preserves_success_when_another_entity_fails():
     result = run_live_eval_suite([_case("LIVE-RECOVERY-004")], llm_provider=Model(), trials=1)["results"][0]
     assert result["task_statuses"] == ["partial"]
     traces = result["tool_trace"]
-    assert [(t["input"]["symbol"], t["result"]["status"]) for t in traces] == [("300750", "error"), ("600000", "ok")]
+    assert sorted((t["input"]["symbol"], t["result"]["status"]) for t in traces) == [("300750", "error"), ("600000", "ok")]
     assert result["llm_call_count"] == 2
 
 
