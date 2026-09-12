@@ -10,18 +10,18 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 ## 项目状态
 
-V1 后续以质量优化为主，暂不扩展大型功能；下一阶段聚焦 Agent 回答质量与盘前推荐策略，见 [V1.4 设计文档](docs/V1.4_Design.md)（待执行）。
+当前里程碑为 **V1.4（`v1.4.0`）**，详见 [V1.4 阶段里程碑](docs/V1.4_Milestone.md)。这一版完成聊天执行链路收敛：生产入口统一为 LangChain 原生工具调用与 LangGraph 自定义 StateGraph 的有界 ReAct 循环，旧 Planner/Capability/Policy/模板执行器、Task DAG 和 Complex Graph 已退出生产调用图。
 
-当前里程碑为 **V1.3（`v1.3.0`）**，详见 [V1.3 阶段里程碑](docs/V1.3_Milestone.md)。盘前推荐并列提供一进二接力、缩量整理和高位回撤；一进二区分收盘基线、盘前终选及历史样本，后两类形态观察不混入一进二前向统计。集合竞价和面向未涨停股票的首板挖掘已退出运行链路。
+盘前推荐继续并列提供一进二接力、缩量整理和高位回撤；一进二区分收盘基线、盘前终选及历史样本，后两类形态观察不混入一进二前向统计。集合竞价和面向未涨停股票的首板挖掘仍保持退役。
 
-历史版本：[V1.0](docs/V1_Milestone.md) 是首个首板复盘基线，[V1.1](docs/V1.1_Milestone.md) 记录集合竞价实验，[V1.2](docs/V1.2_Milestone.md) 记录工程收敛与会话记忆。历史实现由对应 Git 标签保留，现行预测与复盘口径以 [预测时间契约](docs/Prediction_Time_Contract.md) 为准。
+历史版本：[V1.0](docs/V1_Milestone.md) 是首个首板复盘基线，[V1.1](docs/V1.1_Milestone.md) 记录集合竞价实验，[V1.2](docs/V1.2_Milestone.md) 记录工程收敛与会话记忆，[V1.3](docs/V1.3_Milestone.md) 记录盘前多策略与发布基线。历史实现由对应 Git 标签保留，现行预测与复盘口径以 [预测时间契约](docs/Prediction_Time_Contract.md) 为准。
 
 当前版本已经具备可本地运行和单机部署的完整 MVP：
 
 - 真实涨停、炸板、K 线、板块、人气和龙虎榜数据流水线
 - 首板候选池过滤、结构化 Facts、规则评分和置信度
 - 每日 Top10 推荐快照及 D+1 至 D+5 走势追踪
-- LangChain 模型适配、原生 Function Calling Planner、Tool Policy 修复和 SSE 流式回答
+- LangChain 原生工具调用、LangGraph 有界 ReAct、证据引用与可恢复 SSE 任务
 - 可恢复的多会话对话、滚动 Session Memory 和受控上下文
 - Explanation、Critic、Review、Evaluation 等轻量 Agent 角色
 - 每日 Top10 预测快照、D+1 至 D+5 走势追踪、1进2全市场对照和不可变每日复盘快照
@@ -36,7 +36,7 @@ V1 后续以质量优化为主，暂不扩展大型功能；下一阶段聚焦 A
 | 项目 | 状态 |
 | --- | --- |
 | 后端自动化测试 | 统一验收入口生成当次测试数量、结果和 JUnit 报告 |
-| 离线 Agent Eval | Core 18/18、Product 30/30、Query Contract 36/36 通过 |
+| 后端回归 | V1.4 标记前 616 项及 6 个子测试通过 |
 | 本地数据健康检查 | 已实现 |
 | LLM 流式问答 | 已实现 |
 | Agent 限流与成本审计 | 单访客/IP/全局限制、真实 token 账本已实现 |
@@ -96,20 +96,19 @@ scoring_version
 
 ### 2. Tool-Using Chat Agent
 
-模型层默认由 LangChain 的 `ChatPromptTemplate`、LCEL、`ChatOpenAI.bind_tools` 和流式调用承接，业务能力、查询参数与工具执行仍由后端契约控制。可配置切回原 Requests 适配器，接入边界与面试说明见 [LangChain 接入](docs/LangChain_Integration.md)。
+模型层由 LangChain `ChatOpenAI.bind_tools` 承接，LangGraph 自定义 `StateGraph` 在同一个有界循环中完成思考、行动、观察和最终回答。业务参数、工具权限、证据裁剪、确定性计算与最终状态仍由后端控制。当前生产 ReAct 只支持 LangChain 消息工具调用后端；Requests Provider 保留给独立文本/Judge 调用，不是聊天运行时回退。实现边界见 [LangChain + LangGraph 集成](docs/LangChain_Integration.md)。
 
 正常问答主链路是：
 
 ```text
 用户问题
-  -> LLM Planner 原生调用 submit_agent_plan
-  -> Agent Query Contract v3 归一化业务能力和多轮上下文关系
-  -> Market Event Contract v1 统一涨停、跌停和炸板事件语义
-  -> Query Contract v2 统一日期、市场、板高、状态、排序和数量
-  -> Tool Policy Engine 按能力契约检查事实接地要求
-  -> 后端执行结构化工具
-  -> LLM 只基于工具 Facts 生成回答
-  -> SSE 流式返回文本和执行轨迹
+  -> Durable Run 创建任务、绑定 owner/session/message_id
+  -> ReAct Agent 根据当前消息和历史上下文选择一批原生工具调用
+  -> ToolGateway 校验 profile、Schema、日期能力和参数边界
+  -> 工具并发执行，完整结果进入 EvidenceStore，模型只接收有界预览
+  -> 模型观察 ToolMessage，按需继续查询、读取/计算证据或调用 finish
+  -> Answer Gate 校验状态、证据 ID、缺失项与安全边界
+  -> SQLite 原子保存回答，SSE 返回进度和 completed；断线只读重连
 ```
 
 当前主要工具：
@@ -134,19 +133,17 @@ scoring_version
 | `prediction_quality_audit` | 审计预测来源、Outcome 覆盖和基线表现 |
 | `scoring_policy_status` | 查询 Champion、Challenger 和晋级原因 |
 
-对于需要读取上一步结果才能确定下一步参数的问题，生产 Agent 使用 bounded LangGraph Complex Path。Phase 1 保留“热股 Top10 与涨停池交集后查询评分”的确定性绑定；Phase 2 仅开放 Top-N 候选逐只查 K 线、评分候选龙虎榜条件分支、个股新闻空结果补充证据、双股票单项失败继续比较四类结构化规则。每一步仍在执行前经过 Tool Policy，最多 Replan 2 次、工具调用 10 次；其他问题继续使用既有 Fast Path。Complex Answer 使用场景专属契约，不把 Phase 1 交集话术复用于其他场景。
+生产环境不再区分 Fast Path、Complex Path 或独立 Replanner。依赖上一步名单的查询由模型在观察结果后发起下一轮工具调用；集合交并差、筛选、排序和聚合交给受限 `compute_result`，完整证据按 ID 保存在请求级 EvidenceStore，不允许模型执行任意表达式或猜测隐藏行。
 
-默认配置 `LIMITUPLAB_AGENT_PROFILE=v1_close_review` 会在 Planner Schema、Capability Contract、Tool Policy 和执行器四层统一限制工具。Capability 是业务工作流的单一声明源，同时定义示例问法、最低证据工具、默认参数和按需回答规范；系统不再维护重复的运行时 Skill Registry。V1 允许按需读取带来源和采集时间的 `hot_stock_ranking` 热度快照、`sector_performance` 行业强弱榜、`finance_news` 综合财经快讯，以及带 SQLite 缓存的 `stock_news`、`stock_activity` 个股资讯与收盘后动态；这些外部事实不参与首板评分，也不被解释为推荐。`remote_limit_up_pool` 和 `web_search` 仅保留在 `extended` 研发配置中，供 V2 能力开发使用。即使 LLM 伪造这些未开放工具调用，V1 执行器也会拒绝执行。
+默认 `LIMITUPLAB_AGENT_PROFILE=v1_close_review` 只暴露收盘后与历史研究工具；`remote_limit_up_pool` 和 `web_search` 只在 `extended` 研发 profile 开放。ToolGateway 对每一次调用重新校验 allowlist、JSON Schema、日期能力、单股票约束和空集合边界，未知或未开放工具即使由模型生成也不会执行。
 
-Agent Query Contract v3 先把不同说法归一为稳定能力 ID，例如 `market_environment`、`market_events`、`limit_up_pool`、`first_board_rating` 和 `prediction_review`。Planner 通过 OpenAI-compatible `tools` 与强制 `tool_choice` 原生调用 `submit_agent_plan`，由函数参数承载能力、上下文关系和证据工具计划，不再依赖模型在文本中手写 JSON；不支持 Function Calling 的兼容 Provider 可回退到 Prompt-to-JSON。组合问题可以选择多个能力；多轮追问通过 `standalone`、`entity_followup`、`source_refinement` 区分独立问题、实体继承和上一轮结果集交叉查询，并只继承 Planner 明确选择的 `context_capabilities`。有显式能力契约时，旧关键词判断不再参与语义路由，只在旧 Provider 或 Planner 未输出能力时兜底。
-
-Query Contract v2 继续负责涨停查询中的确定性参数：用户明确表达的日期、首板/连板、主板/创业板/科创板/北交所、封板/炸板、题材、排序、Top-N 和完整名单要求优先于 Planner 猜测。Tool Policy Engine 根据 v3 能力补齐所需证据工具，不能让模型直接凭记忆回答市场事实。
+旧 Query Contract 仍为部分确定性工具参数和离线兼容评测提供共享枚举/解析函数，但它不再担任生产聊天的全局语义路由器。生产执行事实以 ReAct decision、ToolMessage、EvidenceStore 和最终 trace 为准。
 
 ### 2.1 Session Memory
 
-长对话不再只依赖固定截断。系统保留最近 8 条原始消息；消息离开该窗口后，每累计 8 条便通过原生 `update_session_memory` Function Call 更新一次 SQLite 滚动记忆。记忆包含会话摘要、研究目标、股票实体、日期范围、用户约束和未解决问题，并与尚未摘要的消息及最近窗口一起交给 Planner 和最终回答。
+长对话不只依赖固定截断。系统保留 SQLite 滚动记忆，并把受预算限制的历史原始消息交给 ReAct；历史回答中的证据可以作为明确标记的 `historical_reference` 恢复，但不能自动冒充本轮行情事实。
 
-Memory 按 `owner_id + session_id` 隔离，使用 `last_message_id` 作为增量游标，随会话永久删除。Provider 不支持 Function Calling 时可回退到 JSON 摘要，LLM 完全不可用时使用确定性压缩，因此 Memory 故障不会阻断正常问答。记忆只用于对话连续性，不能作为股价、新闻、评分、排名或市场状态的证据；所有时效性事实仍必须重新调用工具。当前实现是会话级 Memory，不会跨会话建立用户画像。
+Memory 按 `owner_id + session_id` 隔离，使用 `last_message_id` 作为增量游标，随会话永久删除。记忆只用于对话连续性，不能作为股价、新闻、评分、排名或市场状态的证据；所有时效性事实仍必须重新调用工具。当前实现是会话级 Memory，不会跨会话建立用户画像。
 
 ### 3. 轻量 Multi-Agent 角色
 
@@ -205,12 +202,12 @@ Outcome 完整性检查严格按本地市场交易日对齐 D+1、D+3 和 D+5。
 - `agent_runs` 保存每次 Agent 执行状态、输入、输出、错误和耗时
 - `agent_usage_events` 保存已接受和被拒绝的请求、真实 token、显式价格下的估算成本及耗时
 - `chat_sessions`、`chat_messages` 和 `chat_session_memories` 保存会话、原始消息与滚动记忆，支持新建、恢复、重命名和永久删除
-- 页面刷新后恢复完整消息和证据卡；LLM 上下文由滚动摘要、尚未摘要消息和最近 8 条原始消息组成，仍保留硬上限
-- Tool trace 展示 Planner 原始计划、后端修复原因、工具参数和结果摘要
-- SQLite Agent Cache 缓存低风险结构化结果
+- SSE 断线后按 `run_id + event cursor` 只读重连；同一 `message_id` 可恢复中断 checkpoint，已完成工具不会主动重放
+- Tool trace 保存每轮原生 decision、Policy allow/reject、工具参数、结果状态、证据引用和最终校验
+- 请求级 EvidenceStore 保存完整工具结果，模型消息只携带有界预览；SQLite journal 保存运行 checkpoint 与调用结果
 - `/api/agents/data-health` 检查评分、预测追踪和 Outcome 所需数据
 - `/api/agents/system-health` 检查数据新鲜度、LLM、代理和 Eval 状态
-- LLM 不可用时回退到基于相同 Facts 的模板答案
+- LLM 不可用或连续调用失败时返回明确 error/partial，不使用已退役的通用聊天模板伪装成功
 - 工具失败时返回明确错误，不允许模型补造数字
 - 匿名访客按分钟、按日限额，同一访客单并发，并设置单进程全局并发上限；超限统一返回 `429` 和 `Retry-After`
 
@@ -228,14 +225,14 @@ flowchart LR
 
     U[User] --> I[React Agent Workspace]
     I --> J[FastAPI Chat / SSE]
-    J --> S[(Chat Sessions + Messages)]
-    J --> K[LLM Planner]
-    K --> L[Tool Policy Engine]
-    L --> M[Tool Registry]
+    J --> S[(Sessions + Run Journal)]
+    J --> K[LangGraph ReAct]
+    K --> L[ToolGateway + Policy]
+    L --> M[Tool Registry + EvidenceStore]
     M --> C
     M --> N[Sector / Web Search]
     M --> O[Critic / Review / Evaluation]
-    M --> P[LLM Grounded Answer]
+    M --> P[Observe + Finish Gate]
     P --> I
 
     G --> Q[Outcome Backfill]
@@ -250,25 +247,25 @@ sequenceDiagram
     participant User
     participant UI as React UI
     participant API as FastAPI
-    participant Memory as Session Memory
-    participant Planner as LLM Planner
-    participant Policy as Tool Policy
+    participant Journal as Run Journal
+    participant Graph as LangGraph ReAct
+    participant Gateway as ToolGateway
     participant Tools as Tool Registry
-    participant Answer as LLM Answer
+    participant Evidence as EvidenceStore
 
     User->>UI: 输入自然语言问题
     UI->>API: POST /api/agents/chat/stream
-    API->>Memory: 加载或增量更新滚动摘要
-    Memory-->>API: 摘要 + 结构化状态 + 最近消息
-    API->>Planner: 系统指令 + 工具 Schema + Memory 上下文
-    Planner-->>API: submit_agent_plan Function Call
-    API->>Policy: 校验事实接地和必需工具
-    Policy-->>API: 最终工具计划 + 修复原因
-    API->>Tools: 执行结构化查询
-    Tools-->>API: Facts + References + Trace
-    API->>Answer: 用户问题 + 工具 Facts
-    Answer-->>UI: SSE answer_delta
-    API-->>UI: completed + run_id + tool trace
+    API->>Journal: 创建幂等 run，保存用户消息
+    API-->>UI: accepted + run_id
+    API->>Graph: 消息、记忆、profile、截止时间
+    Graph->>Gateway: 原生 tool calls
+    Gateway->>Gateway: Schema、时态、权限和预算校验
+    Gateway->>Tools: 有界并发执行
+    Tools-->>Evidence: 完整结构化结果与来源
+    Evidence-->>Graph: ToolMessage 有界预览
+    Graph->>Graph: 继续行动或单独调用 finish
+    Graph->>Journal: 校验并原子保存最终回答
+    Journal-->>UI: SSE completed；断线按 cursor 重连
 ```
 
 ## 技术栈
@@ -281,7 +278,8 @@ sequenceDiagram
 - SQLite
 - AKShare
 - Requests + BeautifulSoup
-- LangChain Core + LangChain OpenAI（提示链、函数绑定、模型流式适配）
+- LangChain Core + LangChain OpenAI（消息、原生工具绑定和模型适配）
+- LangGraph（自定义 StateGraph ReAct 循环）
 - DeepSeek 兼容 Chat Completions API
 
 ### Frontend
@@ -295,11 +293,11 @@ sequenceDiagram
 
 ### Agent Engineering
 
-- LLM Tool Planner
-- 声明式 Tool Schema
-- Tool Policy Repair
-- Facts Grounding
-- SSE Streaming
+- Native Tool-Calling ReAct
+- LangGraph StateGraph
+- Tool Schema + Temporal Policy Gateway
+- Evidence IDs + Controlled Compute
+- Durable SSE Task / Reconnect / Cancel
 - Controlled Conversation Context
 - Persistent Chat Sessions
 - Agent Run Observability
@@ -312,7 +310,7 @@ sequenceDiagram
 LimitUpLab/
 ├── backend/
 │   ├── app/
-│   │   ├── agents/          # Chat 编排、Prompt、确定性答案模板、Review、Eval 和 Tool Policy
+│   │   ├── agents/          # ReAct runtime、工具/证据契约、评分、Review 与 Eval
 │   │   ├── collectors/      # 涨停、K 线、板块、指数和扩展数据采集
 │   │   ├── repositories/    # SQLite Repository
 │   │   ├── routers/         # FastAPI 路由
@@ -323,8 +321,9 @@ LimitUpLab/
 │   └── src/                 # React 工作台、独立 Agent 会话面板、API 类型和样式
 ├── scripts/                 # 项目级本地启动脚本
 └── docs/
-    ├── Tasks.md             # 开发路线图和进度
-    └── 需求.md              # 完整产品与 Agent 需求
+    ├── V1.4_Milestone.md    # 当前版本边界、验证与遗留项
+    ├── LangChain_Integration.md # 当前 ReAct 架构说明
+    └── code-quality-audit.md # 阶段性代码质量审查
 ```
 
 ## 快速开始
@@ -372,7 +371,7 @@ LIMITUPLAB_SESSION_MEMORY_ENABLED=true
 LIMITUPLAB_SESSION_MEMORY_REFRESH_MESSAGES=8
 ```
 
-真实 API Key 不应提交到 Git。未配置 LLM 时，结构化评分、检索和模板回答仍然可以运行。
+真实 API Key 不应提交到 Git。未配置 LLM 时，结构化评分、数据检索等确定性接口仍可运行；生产聊天 ReAct 会明确报配置错误，不会伪装成正常回答。
 
 公开运行时建议同时配置 Agent 容量。默认每访客 8 次/分钟、60 次/天、同访客 1 个并发、全站 4 个并发。管理接口 `GET /api/agents/usage?days=7` 可查看请求、拒绝、LLM 调用和 token 汇总，需要 `X-LimitUpLab-Admin-Key`。
 
@@ -602,11 +601,11 @@ backend/.venv/Scripts/python.exe scripts/check_project.py
 
 Linux 使用对应虚拟环境的 `python scripts/check_project.py`。也可通过 `--scope backend` 或 `--scope frontend` 单独验收一侧。
 
-该入口依次运行完整 pytest、Chat Eval V2 的 89-case Dev 离线契约门禁、全部前端逻辑测试以及 TypeScript/Vite 生产构建。每次使用独立数据库和测试目录，关闭真实 LLM，并在 `output/validation/<运行标识>/` 保存各步骤日志、JUnit 和 `summary.json`。任一步失败都会使整体退出码非零，但其余独立检查仍会执行。它不替代浏览器端业务验收、真实模型评测、部署检查或压力测试。
+该入口依次运行完整 pytest、Chat Eval V2 的 89-case Dev 离线回放门禁、全部前端逻辑测试以及 TypeScript/Vite 生产构建。每次使用独立数据库和测试目录，关闭真实 LLM，并在 `output/validation/<运行标识>/` 保存各步骤日志、JUnit 和 `summary.json`。任一步失败都会使整体退出码非零，但其余独立检查仍会执行。它不替代浏览器端业务验收、真实模型评测、部署检查或压力测试。
 
 GitHub Actions 配置在 `.github/workflows/validate.yml`，对 PR、main 与 codex 分支推送运行 Windows/Linux 两套检查，使用相同验收入口，不需要行情或模型密钥。失败日志保留 7 天；测试数据库不上传。流水线文件进入远端仓库后才能实际触发，分支保护仍需在仓库设置中启用。
 
-工具执行模块职责与扩展规范见 [Agent 执行层维护说明](docs/Agent_Execution_Maintenance.md)。以下单项命令仍可用于定位失败。
+ReAct 执行与证据契约见 [LangChain + LangGraph 集成](docs/LangChain_Integration.md) 和 [代码阅读指南](docs/code-reading-guide.md)。以下单项命令仍可用于定位失败。
 
 运行后端测试：
 
@@ -676,7 +675,7 @@ npm.cmd run build
 - 评分 v3 工程闭环已完成，但仍缺至少 60 个结果完整交易日的可靠样本外验证。
 - 当前审计只有 8 个 Top10 次日 Outcome 完整日，覆盖率仍需要持续补齐。
 - 当前预测准确性不高，不能宣称系统已经实现稳定选股。
-- Query Contract v2 已覆盖涨停事件主链路，但其他工具仍需要逐步补齐同等级的结构化契约和更大规模真实 LLM Eval。
+- 生产 ReAct 已覆盖现有工具目录，但工具 Schema、执行签名和时态 Catalog 仍有多处定义，需要继续收敛为单一类型化契约。
 - 个股资讯已接入东方财富结构化搜索并持久化缓存；正式公告原文仍需补充交易所或巨潮资讯专用数据源。
 - 当前限流适用于单 Uvicorn 进程；异步 Worker、跨实例 Redis 限流和上游 LLM 主动取消尚未完成。
 - 用户系统、PostgreSQL、Redis 和多实例部署尚未完成；当前 Docker 配置适用于单机公开 Demo。标签触发的自动验证、备份与部署见 [自动部署说明](deploy/Tag_Deployment.md)。
@@ -688,10 +687,10 @@ npm.cmd run build
 1. 滚动补齐 Top10 Outcome，将结果完整交易日从 14 个积累到至少 60 个。
 2. 持续观察 v3 Challenger 对现行评分、最早封板和固定随机基线的样本外优势。
 3. 完成 V1 Top10 不可变预测、D+1 晋级和 D+1 至 D+5 Outcome 的端到端验收。
-4. 持续扩充 V1 收盘数据问答评测，覆盖工具失败、日期截止点和多轮指代。
+4. 修复 ReAct 类型化终态和输出关系门禁，持续扩充工具失败、日期截止点和多轮指代评测。
 5. V2 再为盘中板块、正式公告原文和更多策略建立独立数据契约与 Eval；需要横向扩容时迁移 PostgreSQL、Redis 限流和异步 Worker。
 
-详细进度见 [Tasks.md](./docs/Tasks.md)，完整需求见 [需求.md](./docs/%E9%9C%80%E6%B1%82.md)。
+当前版本边界见 [V1.4 阶段里程碑](./docs/V1.4_Milestone.md)，后续架构工作见 [ReAct 重构计划](./docs/agent-react-refactor-plan.md)。
 
 ## 面试演示建议
 
@@ -701,7 +700,7 @@ npm.cmd run build
 2. 查看当日首板评级 Top10 和评分拆解。
 3. 打开一个候选，查看封板事实、K 线、当前位置和 Critic 复核。
 4. 在 Agent 中询问“为什么这只股票评分高，有哪些反向风险”。
-5. 展开工具轨迹，说明 LLM Planner、Tool Policy 和 Facts Grounding。
+5. 展开工具轨迹，说明 ReAct decision、Policy Gateway、Evidence ID 和最终门禁。
 6. 查看过去五个交易日 Top10 的后续走势与 Evaluation 结果。
 7. 展示 Champion/Challenger 未自动晋级的原因，说明系统如何避免无约束自我修改。
 

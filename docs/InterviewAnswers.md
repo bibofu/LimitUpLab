@@ -2,9 +2,9 @@
 
 本文逐题回答根目录 `interviewPre.md` 中的 100 道问题。回答以当前代码和本地数据为准，不把“已经编码”说成“已经验证”，也不把启发式评分说成有效预测模型。
 
-2026-09-10 补充：模型层已接入 LangChain 的 Chat Model、ChatPromptTemplate、LCEL、bind_tools 与流式调用；业务契约与工具执行仍由项目控制。具体实现、验证边界及面试讲法见 [LangChain 接入与面试说明](LangChain_Integration.md)。下文历史测试数量和审计数据保留原日期口径。
+2026-09-13 补充：生产聊天已统一为 LangChain `bind_tools` + LangGraph 自定义 `StateGraph` 的有界 ReAct 循环，旧 Planner/Capability/Tool Policy/答案模板执行链已退出生产调用图。具体实现、验证边界及面试讲法见 [LangChain 接入与面试说明](LangChain_Integration.md)。下文带日期的历史统计仍保留原口径。
 
-截至 2026-09-01，本地最新事实是：完整后端测试为 `332 passed`，另有 `10` 个参数化子测试；首板因子诊断新增到 21 个 outcome-ready 交易日、307 个候选，但样本依然不足；近 10 个预测日 Top10 的成熟 D+1、D+3、D+5 缓存当前均完整。原题中的 17 个工具、14 条修复规则和 11 条评测等数字已经过时，当前 V1 profile 暴露 20 个工具，系统注册 20 个 capability、18 条 Tool Policy 修复规则，并有 121 条以上单轮真实 LLM 评测口径。
+截至 V1.4 发布前基线，完整后端测试为 `616 passed`，另有 `6` 个参数化子测试；公开离线 ReAct Dev 集为 89 条，私有 Holdout 仍为 40 条。2026-09-01 的首板研究统计仍是 21 个 outcome-ready 交易日、307 个候选，样本不足的结论没有改变。旧题中的工具数、Capability 数、修复规则数和 Planner 评测数字只适用于已退役架构，不再作为当前生产能力口径。
 
 ---
 
@@ -76,23 +76,23 @@
 
 ### C15. 整条 Agent 链路的瓶颈在哪里？
 
-最大瓶颈通常是两次串行 LLM 调用，其次是同花顺、新闻、K 线等外部 I/O，Tool Policy 的规则计算几乎可以忽略。移除重复 Skill 目录后，当前 V1 planner 系统提示实测为 16,165 字符，比此前文档记录的 17,420 字符减少约 7.2%，但每次仍会全量发送，规划本身仍有延迟和固定输入成本。如果只能继续优化一处，我会按业务域动态暴露 capability/tool schema，缓存稳定前缀，并为单能力高置信问题使用较小 planner；随后再并行无依赖工具并建立 p50/p95/p99 分段指标。
+当前瓶颈不再是固定的 Planner/Answer 两次调用，而是多轮 ReAct 的模型往返、每轮重复携带的消息与工具 schema，以及行情/新闻等工具 I/O。简单问题可能一轮结束，复杂问题会经历多次 `agent → tools → observe → gate`。优先优化项是缩小按场景暴露的工具集合、压缩 observation、复用稳定前缀，并分别观测模型、工具和持久化的 p50/p95/p99，而不是假设每个请求成本固定。
 
 ### C16. 工具调用 cap 会怎样影响复杂问题？
 
-Planner 原始工具调用经过归一后，再由 Capability Contract 把 required tools 放到最前，总上限是 8。超过 8 个时后面的探索性调用会被截断，目前不会自动拆成第二轮，也没有给用户完整的“哪些证据被舍弃”提示。因此复杂组合问题可能得到最低证据充分但不够丰富的回答。现有测试覆盖合并顺序和必要工具补齐，但还缺系统化的 `7/8/9` 调用质量退化评测；更合理的方案是依赖图、预算感知规划和分阶段执行。
+运行时分别限制模型调用、工具调用和控制循环，当前默认上限分别为 8、8、16，并为最后一次模型生成预留预算；工具并发默认最多 3。达到预算后，gate 应把任务收敛为 `partial` 或 `error`，而不是无限循环。复杂问题的风险是证据尚未闭合就耗尽预算，因此结果必须携带缺失项和终态；后续还需要系统化评测临界预算下的答案退化。
 
-### C17. 举一条 Tool Policy 修复规则及其假阳性风险。
+### C17. 当前 Policy 放在哪里，如何避免硬编码路由？
 
-例如“今天市场环境如何”要求 `market_summary + market_index_trend + sector_performance + hot_stock_ranking`。Planner 只选涨停统计时，Policy 会补齐另外三类事实，修复“用一个局部指标概括全市场”的 failure mode。误触发的代价是额外延迟、token 和过度展开，所以 `market_environment` 与单纯“指数走势”被拆成不同 capability，并有“不应扩展”的负例测试。当前有规则互斥、空计划、缺失日期和多类修复测试，但还没有用真实线上分布统计每条规则的假阳性率，这是缺口。
+V1.4 没有独立的关键词 Tool Policy 修复器。每次模型提出工具调用后，图中的 policy 节点按 profile allowlist、参数 schema、日期语义和安全边界逐项校验，再交给统一 ToolGateway 执行。例如用户要求历史日期时，不能把只支持“最新”的热度工具悄悄改写成当前数据。确定性校验仍是规则，但规则约束的是权限、类型和时间语义，不负责替模型猜业务意图。
 
-### C18. post-hoc recompute 的触发条件是什么？
+### C18. 最终回答如何过闸？
 
-它不是通用幻觉检测器，只校验少数可确定证明的答案契约：完整涨停名单是否包含每个 symbol、位置分类是否覆盖完整分组、热股 TopN 是否齐全、热股与涨停交集是否精确、晋级统计是否包含关键分子分母，以及输出是否含禁止交易措辞。不满足时，用同一工具 facts 生成确定性模板。这个判断对“集合完整性”较强，对语言质量和一般事实幻觉无能为力；误判代价是把一段可读的回答换成较生硬模板。更重要的现存缺口是流式 delta 可能已经发出后才做最终校验，已发送文本无法撤回。
+推荐路径是模型调用类型化 `finish`，明确提交 `complete|partial|error`、证据引用、缺失项和安全声明，gate 再检查证据充分性与状态一致性。答案只在通过 gate 后作为最终事件发出，过程流只发送进度，不再把未经验证的 token delta 直接展示。当前仍有一个已知缺口：普通文本响应可被兼容逻辑自动包装为 `complete`，可能绕过严格的 `finish` 契约。
 
 ### C19. LLM provider 挂了，用户看到什么？
 
-Planner 失败时，系统会尝试确定性路由和旧兼容路径；最终回答 LLM 失败时，会直接基于已取得的工具 facts 使用模板回答；既无 LLM 又无可用事实时，返回明确的“抱歉，该问题无法回答”，而不是空内容。Provider 重试默认最多 2 次。相关故障路径有单元测试，但降级回答的覆盖面不等于正常 LLM，开放式解释会明显变机械，所以还需要在 UI/监控中区分 provider outage，而不是让用户误以为系统正常。
+模型调用失败会进入 observation/gate 的受控错误路径；连续失败达到阈值后，任务以 `partial` 或 `error` 结束，并保留已取得证据、错误摘要和可恢复运行记录。当前生产聊天没有 Requests Provider 或通用答案模板回退，所以不会把 provider 故障伪装成一次正常智能回答。前端应明确显示失败或部分完成状态。
 
 ### C20. Explanation、Critic、Review、Evaluation 有什么区别？
 
@@ -100,11 +100,11 @@ Explanation 把单个评分及证据翻译成人话；Critic 对同一个评分�
 
 ### C21. 为什么 ContextVar 能修复 `os.environ` 的并发污染？
 
-`os.environ` 是进程级共享可变状态，一个请求在 try/finally 中改值时，其他线程和协程都会看到；finally 只能恢复最终值，不能隔离重叠执行。`ContextVar` 的值属于当前执行上下文，async task 创建时会复制上下文，set 会返回 token，reset 只恢复当前上下文，因此并发任务互不覆盖。需要注意它不会无条件传播到任意手工新线程；如果跨线程执行，要明确复制 context 或在目标线程内设置。当前 override 位于每次 Agent 执行上下文中，避免了评测修改真实 chat 的进程全局配置。
+`os.environ` 是进程级共享可变状态，无法隔离重叠请求；`ContextVar` 则属于当前执行上下文。当前 ReAct 控制对象通过 `CURRENT_CONTROL` 绑定到单次运行，提交到线程池时显式使用 `copy_context()` 传播，因此工具线程仍能读取正确的 deadline、取消信号与预算。它解决的是请求级控制传播，不应再被描述成切换旧运行时实现。
 
 ### C22. 评测集是否有代表性？
 
-原来的 11/11 已经扩展：基础单轮 fixture 有 18 条，改写集有 14 个语义家族、135 条消息，多轮有 10 个场景、20 个上下文 turn；2026-08-30 还运行了真实 DeepSeek 的 121 case 三轮稳定性和 10 个多轮场景。它们覆盖市场、涨停池、热门股、新闻、个股、评分、复盘和上下文交叉，但仍是开发者设计的分布，不能代表所有真实用户。最容易“评测全绿、线上仍挂”的是新实体歧义、混合约束、外部源异常和从未见过的口语改写。防止过拟合的下一步是匿名失败样本回流、独立 holdout 和按 capability 报告混淆矩阵。
+公开 Dev 集现在是 89 条、私有 Holdout 是 40 条。离线 gate 使用冻结工具事实，验证决策、工具参数、接地、安全、终态和效率，不调用真实市场或真实模型；生产 ReAct 另有 Live Behavioral Eval runner。它们仍是人工设计分布，不能代表全部用户，因此发布级结论必须区分离线回放、真实模型行为、私有 Holdout 与人工质量判断。
 
 ---
 
@@ -236,7 +236,7 @@ Explanation 把单个评分及证据翻译成人话；Critic 对同一个评分�
 
 ### H50. 测试有没有跑真实 LLM？
 
-默认 `pytest` 不调用真实 LLM，这是为了可重复和成本可控；它通过 fake/observed provider 测原生 `submit_agent_plan` Function Call、旧 Provider 的 Prompt-to-JSON 兼容回退、工具执行、SSE 和降级。真实链路另有可选 eval runner，2026-08-30 对 DeepSeek 跑过 121 个单轮 case、三轮稳定性和 10 个多轮场景，并记录 provider 调用、能力与工具命中；2026-09-01 又完成了生产 Planner 原生 Function Calling smoke test。两者之间仍差生产长期可用性：一次真实 eval 不能证明未来 provider 版本、超时和输出质量。因此应在受控预算下定期跑 canary，而不是把它塞进每次单元测试。
+默认 `pytest` 不调用真实 LLM，这是为了可重复和成本可控；它通过 fake model、冻结工具和持久化夹具验证原生 tool call、ReAct 循环、SSE 恢复、取消与终态。公开 89 条 Dev 的 offline gate 也是回放，不代表真实模型质量。真实链路由独立 Live Behavioral Eval runner 在生产 ReAct 图上运行，可配固定 Judge；历史 Planner 成绩不与它混算。一次 live eval 仍不能证明 provider 的长期稳定性，因此应在受控预算下定期跑 canary。
 
 ### H51. AI 写了多少，项目证明谁的能力？
 
@@ -280,7 +280,7 @@ cron 每天北京时间 03:25 使用 SQLite online backup API 生成一致性快
 
 ### J59. Prompt 注入能否越权调用工具？
 
-Planner 只能从 profile allowlist 的 schema 中选工具，后端会拒绝未启用或未知工具，参数也经过日期、数量、symbol 等边界归一；V1 不暴露任意文件、shell、数据库 SQL 或私有用户数据工具，所以用户要求查询某只公开股票本身不是越权。Tool Policy 主要解决证据充分性，不是完整安全策略。仍需防两类风险：新闻/网页内容中的间接 prompt injection 被拼进 answer prompt，以及未来工具加入私有数据后缺少逐工具授权。应把外部文本标为不可信数据、限制 egress、做参数 schema 校验和 owner 级授权。
+模型只能看到当前 profile allowlist 中的 tool schema；每个调用还会经过 policy gateway 的名称、参数、日期与权限校验，未知或未启用工具会被拒绝。V1 不暴露任意文件、shell、自由 SQL 或私有用户数据工具，所以注入文本不能仅靠提示词获得这些能力。仍需防新闻/网页内容的间接 prompt injection，以及未来私有工具的 owner 级授权；外部文本必须作为不可信 observation 处理，不能当系统指令。
 
 ---
 
@@ -328,7 +328,7 @@ AI 应用/后端岗：亮点是 planner-tool-answer、能力契约、Policy 修�
 
 ### M68. 6 个月、2 个工程师只能做三件事，选什么？
 
-第一，冻结策略范围，建立 60+ 完整结果日和多目标 outcome 的自动数据质量/研究流水线，因为没有可信标签，其余优化都无法判断。第二，继续重构 Agent 和前端：Capability 已成为业务工作流单一声明源，`chat.py` 已拆出 Prompt 与确定性答案模板，`App.tsx` 已拆出 Agent 会话面板；下一步继续拆执行器、route page，并建立线上失败回流和真实 LLM canary。第三，迁移 PostgreSQL + Redis，完成结构化日志、告警、恢复演练和基础用户体系，为真实试用做容量准备。排序依据是先获得真值，再提高迭代效率，最后扩容量；不是先增加更多策略。
+第一，冻结策略范围，建立 60+ 完整结果日和多目标 outcome 的自动数据质量/研究流水线，因为没有可信标签，其余优化都无法判断。第二，继续加固统一后的 ReAct：强制类型化 `finish`、消除工具 schema 多源漂移、修复 BC-033/034，并建立线上失败回流与真实 LLM canary。第三，再迁移 PostgreSQL + Redis，补齐结构化日志、告警、恢复演练和基础用户体系。排序依据是先获得真值，再封闭 Agent 正确性，最后扩容量。
 
 ### M69. 数据每天只增加一天，如何加速？
 
@@ -341,6 +341,22 @@ AI 应用/后端岗：亮点是 planner-tool-answer、能力契约、Policy 修�
 ---
 
 ## N. Agent 设计
+
+> 本节 N71-N100 保留的是 V1.3 旧 Planner/Capability/Tool Policy 架构的面试追问，用于说明设计演进，不代表 V1.4 生产调用图。V1.4 的当前口径如下。
+
+### N0. V1.4 三句话讲完整数据流
+
+FastAPI 将消息写入 durable run，LangGraph 的 `agent` 节点通过 LangChain 原生工具调用决定下一步。每个调用先经 policy gateway，再由 ToolGateway 执行，结果写入 EvidenceStore 并作为 observation 返回图中。模型通过类型化 `finish` 提交答案和终态，gate 校验证据、缺失项与安全边界后持久化并通过 SSE 交付；断线可按事件游标恢复，取消与 deadline 由统一 control 传播。
+
+### N0.1. 为什么不用 `create_agent`，这是否偏离标准范式？
+
+LangChain 的 `create_agent` 适合通用工具 Agent；本项目需要逐调用时间语义校验、证据 ID、部分成功、持久化事件、断线续传、取消和明确终态，因此使用 LangGraph `StateGraph` 显式建模 `agent → policy → tools → observe → gate`。核心仍是标准的 messages + native tool calls + ReAct 思路，只是把金融研究所需的控制面展开了。真正需要继续收敛的不是“换一个封装函数”，而是减少自定义状态与官方 messages/checkpointer 能力的重复。
+
+### N0.2. 当前最重要的三个 Agent 风险是什么？
+
+第一，普通文本可被兼容逻辑自动包装为 `complete`，弱化类型化 `finish`；第二，工具 schema 同时存在于 registry、LangChain adapter 和 policy 描述，容易漂移；第三，正式 Live + 私有 Holdout + 独立 Judge 发布门禁尚未完全闭环。另有 BC-033/034 关系答案缺口和评分阈值硬编码问题，均已进入阶段审查。
+
+### V1.3 历史架构追问（仅作演进记录）
 
 ### N71. 三句话讲完整数据流；为什么两次 LLM？
 
@@ -470,4 +486,4 @@ trace 当前定位为开发者/管理员可观测性：记录 planner、final to
 
 LimitUpLab 最值得讲的不是“我找到了能预测首板的模型”，因为当前数据不支持这个结论。它真正完成的是一套受约束的金融研究 Agent 工程：把 point-in-time 数据、版本化评分、不可变前向快照、D+1 至 D+5 outcome、工具接地问答、失败降级、治理门槛和单机部署连成可审计闭环。
 
-我会主动承认四个核心缺口：样本只有 21 个完整结果日；评分 magic numbers 尚未被实证；前端页面和 Agent 执行编排仍有继续模块化空间；独立真实用户反馈不足。第一轮已经分离 Prompt、确定性答案模板和前端会话面板，但这不等于技术债清零。能把这些缺口量化、阻止系统在证据不足时自动晋升，并知道下一步先补真值和验证而不是继续堆功能，才是这个项目最能证明的工程能力。
+我会主动承认四个核心缺口：样本只有 21 个完整结果日；评分 magic numbers 尚未被实证；Agent 的类型化完成、工具 schema 单一来源和正式发布门禁仍未完全封闭；独立真实用户反馈不足。V1.4 已把生产聊天统一为 LangChain 原生工具调用与 LangGraph 有界 ReAct 图，并删除旧 Planner/Policy/模板执行链，但这不等于技术债清零。能把这些缺口量化、阻止系统在证据不足时自动晋升，并知道下一步先补真值和验证而不是继续堆功能，才是这个项目最能证明的工程能力。

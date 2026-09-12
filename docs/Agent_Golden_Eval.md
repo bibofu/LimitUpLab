@@ -3,13 +3,16 @@
 ## Scope
 
 Chat Eval V2 only evaluates the Tool-Using Chat Agent. It does not score Top10,
-first-board strategy quality, or D+1 to D+5 investment outcomes. One case follows
-the same seven independently diagnosable stages as production:
+first-board strategy quality, or D+1 to D+5 investment outcomes. The report keeps
+the following seven diagnostic columns for historical continuity:
 
 `Query Understanding → Planner → Tool Policy → Execution → Grounding → Final Answer → Efficiency`
 
 Safety, data boundaries, repeatability and provider failures are cross-cutting
-gates. Reports do not manufacture a weighted overall score.
+gates. These columns are an evaluation projection, not a claim that production
+still runs an independent Planner and Tool Policy pipeline. V1.4 production uses
+one bounded LangGraph ReAct loop. Reports do not manufacture a weighted overall
+score.
 
 ## Dataset and frozen facts
 

@@ -2,7 +2,7 @@
 
 - 日期：2026-09-12。
 - 代码审查基线：`33f2a54`。
-- 状态：实施中。ReAct 主链路、工具契约与运行恢复已落地，完成五题真实页面抽查；输出关系门禁和正式 Live/Holdout 验收仍未完成。按用户最新决定，提前执行旧链路删除：legacy HTTP/SSE、Task DAG、Complex Graph 及专属测试已退役；旧评测 Planner 和仍有消费者的共享模块尚待清理。新运行时尚未通过发布验收。
+- 状态：V1.4 架构实施完成、质量验收继续。生产入口已统一为 ReAct；legacy HTTP/SSE、Planner/Capability/Policy/模板执行器、Task DAG、Complex Graph 及专属评测依赖均已退役。输出关系门禁、类型化终态绕过、正式 Live/Holdout 稳定性与成本门槛仍未完成，因此标签只表示架构里程碑，不表示模型质量发布门槛全部通过。
 - 范围：Tool-Using Chat Agent；保留现有数据服务、评分逻辑、预测记录和投资合规边界。
 - 方向：LangChain 模型/工具接口 + LangGraph 自定义 StateGraph + 单一有界 ReAct 循环。
 - 文档关系：本方案取代 [原任务运行时设计](agent-task-runtime-redesign.md) 中“预先生成完整 TaskPlan DAG + 独立 PlanPatch/Replan”的后续实施方向；原文保留为历史设计和失败证据。
@@ -306,6 +306,13 @@ checkpoint 标识绑定 owner 和 run；同会话串行化或拒绝重叠执行�
 按项目约定分小提交，每次源代码提交修改不超过1000行；只提交相关文件，真实修复记入badCase.md。阶段审查写入code-quality-audit.md；本设计文档本身不表示这些实施步骤已完成。
 
 ## 11. 测试、观测与验收
+
+### 2026-09-13 V1.4 标记状态
+
+- B/C 的单一 ReAct 循环、全工具目录、证据引用、受限计算和多轮上下文已经进入生产调用图；D 的 run journal、checkpoint、调用幂等、SSE 重连、取消、业务终态前端展示和原子发布已经落地。
+- E 的旧执行与旧评测依赖退役已完成，`chat.py` 只保留 32 行公共入口；默认或遗留环境值均不再切回旧运行时。完整后端 616 项及 6 个子测试通过。
+- 尚未完成的不是“再接一套编排”，而是当前实现的质量债：普通文本可绕过 `finish`、BC-033/034 关系/口径门禁、工具三份契约、图外状态/checkpoint、评分分箱硬编码、正式私有 Holdout 与成本稳定性门槛。
+- V1.4 文档以 [LangChain + LangGraph ReAct 集成](LangChain_Integration.md) 为现行说明；本计划后续章节保留实施过程和中间测试结果，不应把早期默认 ReAct 失败数当成最终回归状态。
 
 ### 2026-09-12 续作记录：旧执行链路退役
 

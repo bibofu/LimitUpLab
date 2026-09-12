@@ -1,5 +1,14 @@
 # Agent 应用质量审查
 
+## 2026-09-13：V1.4 文档与标签前阶段审查
+
+- 范围：以当前生产源码和 `v1.3.2..HEAD` 为准，更新根目录、后端、LangChain/LangGraph、评测、代码阅读、面试及里程碑文档；不修改业务代码、评分、数据库或历史预测，不纳入 `artifacts/`、`backend/data/`、`tmp/` 和 `output/`。
+- 架构结论：生产聊天是 LangChain 原生 tool calling 驱动的 LangGraph 有界 ReAct 图；旧 Planner/Capability/Tool Policy 补计划、答案模板、Task DAG 和 Complex Graph 仅在历史文档中保留演进记录。Requests Provider 仍不能运行生产 ReAct，文档已取消“聊天回退”承诺，但代码配置债 A36 保持未修。
+- 文档修正：删除不存在的 `docs/Tasks.md`、`docs/需求.md` 引用；公开 Chat Eval Dev 数量按实际夹具与本次报告从错误的 120 统一为 89；V1.3 面试问答明确标为历史架构，避免与当前调用图混淆。
+- 发布校验：第一次沙箱运行中，pytest 收尾因临时目录 ACL 报 `WinError 5`，Vite/esbuild 因 `spawn EPERM` 失败；同一入口在宿主权限下重跑全部通过。最终为后端 **616 passed + 6 subtests passed**、0 失败/跳过、3 条依赖弃用警告；离线 Agent Dev **89/89**；前端 **15/15**；TypeScript/Vite 构建通过，保留 664.04 kB 单 chunk 警告。
+- 风险状态：未新增 P0。A37 类型化 `finish` 绕过、A38 评分规则未完整版本化和 BC-033/034 仍为 P1；A39-A42 及正式 Live/Holdout/Judge/成本门禁仍未完成。因此 `v1.4.0` 只标记架构与文档基线，不表示模型质量或评分有效性已全部验收。
+- 检查：本地 Markdown 相对链接扫描通过；提交前继续执行完整 diff、`git diff --check` 与精确暂存检查。标签只在本地创建，不推送、不触发部署。
+
 ## 2026-09-12：当前 ReAct 范式、冗余与硬编码专项审查
 
 ### 范围与结论

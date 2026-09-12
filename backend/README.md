@@ -28,11 +28,13 @@ py -3.13 -m venv .venv
 
 The API will be available at `http://localhost:8000`.
 
-## LLM Explanation
+## LLM and ReAct Runtime
 
-LLM integration is disabled by default. When disabled, the Explanation Agent
-uses a deterministic template fallback, so local development still works
-without external API access.
+Deterministic ratings and data APIs work without an LLM. The production chat
+runtime requires an enabled LangChain message provider with native tool calling;
+when it is unavailable, chat returns an explicit error or partial result instead
+of using the retired general-answer template path. The standalone Explanation
+Agent still has its own deterministic fallback.
 
 For local development, copy the example env file and fill in your own API key:
 
@@ -55,17 +57,18 @@ LIMITUPLAB_LLM_PLANNER_MAX_TOKENS=320
 DEEPSEEK_API_KEY=<your-api-key>
 ```
 
-The default model backend uses LangChain `ChatPromptTemplate`, LCEL,
-`ChatOpenAI.bind_tools` and native streaming behind the existing `LLMProvider`
-interface. Business query contracts, Tool Policy and SQLite memory remain owned
-by this application. Set `LIMITUPLAB_LLM_BACKEND=requests` and restart to use the
-original adapter. The SDK controls LangChain retry backoff; the existing
-`LIMITUPLAB_LLM_RETRY_DELAY_SECONDS` setting applies only to Requests.
+The production chat backend uses LangChain messages and
+`ChatOpenAI.bind_tools`. A custom LangGraph `StateGraph` runs one bounded ReAct
+loop; `ToolGateway`, `EvidenceStore` and the SQLite run journal retain financial
+policy, provenance, idempotency and recovery control. Set
+`LIMITUPLAB_LLM_BACKEND=langchain` for chat. The legacy Requests provider remains
+available to isolated text/Judge callers but does not implement the conversational
+multi-tool protocol and is not a chat-runtime rollback backend.
 See [integration and verification details](../docs/LangChain_Integration.md).
 
-Chat uses non-thinking mode by default because tool selection and grounded
-summaries are latency-sensitive structured tasks. Planner, local-tool and
-answer latency plus prompt sizes are returned in `response.performance`.
+Chat uses non-thinking mode by default because each ReAct decision is a
+latency-sensitive structured tool-calling turn. Model/tool counts, final task
+status and tool traces are persisted with the run.
 
 The chat Agent also has on-demand external market tools:
 
@@ -247,7 +250,11 @@ inspect or remove it.
 - `GET /api/agents/chat/sessions/{session_id}` - restore messages and Agent response metadata
 - `PATCH /api/agents/chat/sessions/{session_id}` - rename a chat session
 - `DELETE /api/agents/chat/sessions/{session_id}` - permanently delete a chat session, messages, and run traces
-- `POST /api/agents/chat` - tool-grounded Agent chat and LLM/template explanations
+- `POST /api/agents/chat` - synchronous durable ReAct chat
+- `POST /api/agents/chat/stream` - SSE progress and final durable ReAct response
+- `GET /api/agents/chat/runs/{run_id}` - inspect owned run status
+- `GET /api/agents/chat/runs/{run_id}/stream` - read-only SSE reconnect
+- `POST /api/agents/chat/runs/{run_id}/cancel` - request cancellation
 - `GET /api/stocks/{symbol}/kline?days=5` - recent daily K-line bars
 - `GET /api/stocks/{symbol}/trading-day-kline?period=5` - after-close trading-day intraday K-line review
 
@@ -266,14 +273,14 @@ endpoint is intended for after-close review of the latest persisted trading day.
 
 ```bash
 cd backend
-python -m unittest discover -s tests
+python -m pytest tests -q -p no:cacheprovider
 ```
 
 ## Agent Evals
 
-Chat Eval V2 evaluates Query Understanding, raw Planner output, Tool Policy,
-frozen tool Execution, Grounding, Final Answer and Efficiency independently.
-The public Dev split has 89 cases; a private 40-case Holdout is injected with
+Chat Eval V2 retains the seven-stage historical report contract for deterministic
+fixture replay and stored-trace shadow checks. It does not run a separate
+production Planner/Answer pipeline. The public Dev split has 89 cases; a private 40-case Holdout is injected with
 `LIMITUPLAB_EVAL_HOLDOUT_PATH`.
 
 The retired 50-case Golden was reviewed item by item in
@@ -285,21 +292,23 @@ cd backend
 .\.venv\Scripts\python.exe scripts\run_agent_eval.py --dataset dev --mode offline --trials 1 --summary-only
 ```
 
-Offline mode replays deterministic plans and versioned tool facts. Raw Planner
-accuracy is N/A. Live mode invokes the real Planner and Answer model while keeping
-the tool facts frozen:
+Offline mode replays versioned tool facts; raw Planner accuracy is N/A. Production
+ReAct with a real model and frozen tools is evaluated by the separate live runner:
 
 ```powershell
 cd backend
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --dataset dev --mode live --sample-size 40 --trials 3 --seed night-1
+.\.venv\Scripts\python.exe scripts\run_agent_live_eval.py --case-id LIVE-SIMPLE-002 --trials 1
+.\.venv\Scripts\python.exe scripts\run_agent_live_eval.py --trials 3 --judge
 ```
 
-The full release command requires Dev + Holdout, three trials and an independent
-pinned Judge model:
+Private Holdout injection remains available for the replay gate. A complete ReAct
+release gate still requires a separately approved live suite and independent
+pinned Judge. The command below runs the combined offline replay only; the retired
+`--mode live` Planner/Answer path is no longer supported.
 
 ```powershell
 cd backend
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --dataset all --mode live --trials 3 --judge
+.\.venv\Scripts\python.exe scripts\run_agent_eval.py --dataset all --mode offline --trials 1 --judge
 ```
 
 Completed artifacts are written under `output/agent-eval/<run_id>/`. The API only
