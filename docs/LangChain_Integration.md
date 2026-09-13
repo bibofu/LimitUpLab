@@ -1,6 +1,6 @@
 # LangChain + LangGraph ReAct 集成
 
-> 当前版本：V1.4 / `react-runtime-v6` / `agent-tools-v2`
+> 当前版本：V1.4 / `react-runtime-v9` / `agent-tools-v2`
 > 代码基线：以 `v1.4.0` 标签指向的提交为准
 
 ## 当前生产链路
@@ -10,13 +10,15 @@
 ```text
 POST /api/agents/chat 或 /chat/stream
   -> react_chat.start：owner/session/message_id 隔离、限流、幂等 run
+  -> Input Security Reviewer：结构化语义判定，主动攻击拒绝、引用和审计允许
   -> agents.chat.answer_first_board_chat：唯一聊天入口
   -> react_runtime.runtime.GRAPH：Agent -> Policy -> Tools -> Observe -> Gate
   -> LangChain ChatOpenAI.bind_tools：保留 AIMessage / ToolMessage / tool_call_id
   -> StructuredTool / ToolGateway：类型化参数、profile、时态和调用预算校验
   -> AgentToolRegistry：执行结构化市场、评分、复盘和资讯工具
   -> EvidenceStore：保存完整结果，向模型返回有界预览和 evidence_id
-  -> finish：提交 status、answer、evidence_ids 和 missing
+  -> finish：提交 status、answer、evidence_ids、Claim Ledger 和 missing
+  -> Compliance Critic：独立结构化投资合规判定
   -> Journal：原子持久化回答、run、消息和调用结果
   -> SSE completed / 只读 reconnect / cancel
 ```
@@ -34,6 +36,7 @@ POST /api/agents/chat 或 /chat/stream
 | `agents/react_runtime/tools.py` | 消费类型化工具，执行 profile、时态、身份解析、调用和证据接入 |
 | `agents/react_runtime/evidence.py` | 请求级完整证据、预览、来源、缺失、截断和确定性计算 |
 | `agents/react_runtime/contracts.py` | `finish`、`update_task`、`read_evidence`、`compute_result` 类型契约及预算 |
+| `agents/react_runtime/compliance.py` | 独立语义合规 Critic；结构化返回交易指令、仓位、目标价、承诺和确定性预测违规 |
 | `agents/react_runtime/lifecycle.py` | SQLite run journal、checkpoint、call replay record 和取消标记 |
 | `routers/react_chat.py` | worker、同步等待、SSE、重连、取消和原子发布 |
 | `services/session_memory.py` | owner/session 隔离的滚动摘要；只用于上下文，不作为市场证据 |
@@ -66,10 +69,11 @@ LIMITUPLAB_LLM_TIMEOUT_SECONDS=30
 
 - 工具结果区分 `ok`、`empty`、`partial`、`error`；空结果不是异常，缺失或截断不能冒充完整集合。
 - 历史会话证据恢复后标记 `historical_reference=true`，不会因为再次计算自动变成当前事实。
-- `finish` 必须给出真实任务状态和用户交付缺口；服务端校验 evidence ID、requirements 和禁止交易表达。
+- `finish` 必须给出真实任务状态和用户交付缺口；每条事实或推断通过类型化 Claim Ledger 绑定本轮 evidence ID、路径和实际标量值。
+- 输入安全与最终投资合规分别使用独立强制 tool call 的结构化语义 Reviewer；失败时关闭，不通过补关键词正则扩展语义边界。
 - 外部网页、新闻和历史消息均视为不可信内容，不能修改工具权限或系统边界。
 - 系统只做研究解释，不输出买卖、仓位、目标价、收益承诺或确定性预测。
-- 当前已知缺口：开放式定性和因果声明尚未具备通用语义接地；当前确定性门禁主要覆盖实体、日期、时间和带单位数值。
+- Claim Ledger 让开放式定性和因果声明可追踪到明确证据字段；路径和值一致不等同于证明因果，相关语义质量仍需要离线 Judge 和真实 Bad Case 回归。
 
 ## 运行恢复
 
@@ -92,7 +96,7 @@ cd backend
 .\.venv\Scripts\python.exe scripts\run_agent_live_eval.py --trials 3 --judge
 ```
 
-离线 Chat Eval V2 保留七层历史报告格式，但 Planner 阶段为 N/A；它只能证明冻结 Query/工具事实、Grounding 和答案契约。真实 ReAct runner 记录原始模型决策、实际业务工具、任务终态、模型轮数、token 和可选 Judge。公开集、单题 smoke 和浏览器抽查都不能替代私有 Holdout、稳定性与成本发布门槛。
+离线 Chat Eval V2 保留历史报告格式，但自然语言 Query Contract 与 Planner 阶段为 N/A；它只能证明冻结工具事实、Grounding 和答案契约。真实 ReAct runner 记录输入安全判定、原始模型决策、实际业务工具、Claim Ledger、合规判定、任务终态、模型轮数、token 和可选 Judge。公开集、单题 smoke 和浏览器抽查都不能替代私有 Holdout、稳定性与成本发布门槛。
 
 V1.4 标记前完整后端回归为 616 项及 6 个子测试通过，0 失败/跳过；另有 3 条 LangGraph/websockets 依赖弃用警告。版本发布仍需运行标签工作流要求的 Windows/Linux 完整验收。
 

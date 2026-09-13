@@ -137,7 +137,7 @@ scoring_version
 
 默认 `LIMITUPLAB_AGENT_PROFILE=v1_close_review` 只暴露收盘后与历史研究工具；`remote_limit_up_pool` 和 `web_search` 只在 `extended` 研发 profile 开放。ToolGateway 对每一次调用重新校验 allowlist、JSON Schema、日期能力、单股票约束和空集合边界，未知或未开放工具即使由模型生成也不会执行。
 
-旧 Query Contract 仍为部分确定性工具参数和离线兼容评测提供共享枚举/解析函数，但它不再担任生产聊天的全局语义路由器。生产执行事实以 ReAct decision、ToolMessage、EvidenceStore 和最终 trace 为准。
+自然语言 Query Contract 编译器已经退役。生产工具参数只来自原生 tool call，并由共享类型、JSON Schema、ToolGateway 和实际方法签名共同校验；离线评测不再用另一套正则解析器重判用户问题。生产执行事实以 ReAct decision、ToolMessage、EvidenceStore 和最终 trace 为准。
 
 ### 2.1 Session Memory
 

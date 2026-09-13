@@ -814,3 +814,10 @@ empty、partial 或 error 时 Replan 新闻；股票名称提取同步覆盖 K�
 - 根因：多组关键词窗口只能判断词语是否靠近，不能区分“执行攻击指令”和“把攻击句作为研究对象”；会话记忆又重复运行同一正则，形成第二份语义判定。
 - 修复：移除输入正则分类器，新增独立、强制 tool call 的结构化 Input Security Reviewer，明确允许讨论、引用、审计和解释安全攻击，仅拒绝当前消息实际要求改变、泄露或绕过运行边界。Reviewer 异常或格式错误时失败关闭且不进入 ReAct 图。会话记忆不再重新解释正文，而是依据已持久化的 `stop_reason=input_policy|input_policy_error` 排除同一 run 的用户与助手消息；精确的输出泄漏签名仍作为非语义末端保护保留。运行版本升级为 `react-runtime-v9`。
 - 回归：覆盖主动覆盖请求在模型/工具执行前拒绝、引用式安全分析允许、Reviewer 故障不执行工具，以及拒绝 run 不进入滚动记忆。
+
+## BC-044：已退役 Query Contract 正则编译器继续形成第二套问题解释（2026-09-13）
+
+- 发现方式：生产调用关系审查。当前 ReAct 已使用原生 tool call 和共享 Schema，但 `query_contract.py`、`post_limit_query_contract.py` 仍保留整句日期、Top-N、板高、题材、窗口和阈值抽取；通用 builder 仅被旧离线评测/专属测试调用，post-limit builder 仅被测试调用。
+- 风险：同一参数同时存在“模型结构化参数”和“正则重新编译问法”两套解释。短日期年份、默认窗口和同义词表可独立漂移，新增问法又会诱导继续增加规则覆盖。
+- 修复：物理删除通用及 post-limit 自然语言 builder、识别器、抽取器、旧 Query Eval 模块和专属协议测试。`query_contract.py` 只保留生产实际消费的日期 ContextVar、市场/状态/排序类型与别名规范化；`PostLimitQueryContract` 只接受已经通过工具 Schema 的结构化参数。旧离线 Query 阶段改为 N/A，工具参数准确性继续由 Planner/Policy/Execution 阶段核对，数据集生成器不再从题面反向生成 expected query。
+- 回归：覆盖 ReAct 工具契约、post-limit 服务默认窗口与显式参数、离线评测阶段降级，以及源码中不存在旧 builder 调用。该清理不改变生产工具清单或业务筛选公式。
