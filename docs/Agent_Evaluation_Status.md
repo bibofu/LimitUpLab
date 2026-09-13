@@ -34,6 +34,10 @@ LLM-as-a-Judge 边界、稳定性、版本治理和发布门禁。
 当前已开始 M1：`backend/app/agent_eval` 提供 Case、World、结果、预算和 Manifest
 类型，以及 JSON 资产加载和跨文件引用校验；对应测试纳入现有 pytest 发现范围。
 Frozen Registry 已接入现有 ToolGateway，覆盖有效参数精确匹配、Profile 权限、日期锚定、
-标准化结果状态与来源错误回放，尚未使用真实市场数据或真实 LLM 运行评测。
-尚未创建正式评测题、真实录制、Runner、Evaluator 或质量基线，因此仍不能宣称已有
+标准化结果状态与来源错误回放。Record-Replay 已保存真实 ToolResult、标准化完整结果和
+模型可见证据，包含完整性校验及观测结构指纹；新增只读本地 `market_summary` 录制命令。
+2026-09-11 单日数据实录（58 条事件、40 条封板）通过七项回放一致性检查，产物仅在
+被忽略的 output 目录、仍待隐私/事实审核；尚未晋升为正式 World，未调用真实 LLM。
+此录制不是不可变历史时点数据，也不具有完整交易日历覆盖。
+尚未创建正式评测题、Runner、Evaluator 或质量基线，因此仍不能宣称已有
 可运行的正式 Agent 评测集。实施状态见 `backend/evals/README.md`。

@@ -52,6 +52,7 @@ class ObservationSpec(Contract):
     payload: dict[str, JsonValue] | list[JsonValue]
     summary: str
     source_errors: list[str] = Field(default_factory=list)
+    data_fresh: bool | None = None
 
 
 class RecordingSpec(Contract):
@@ -61,6 +62,7 @@ class RecordingSpec(Contract):
     observation: ObservationSpec
     origin: Literal["recorded", "derived", "synthetic"]
     provenance: Identifier
+    tool_result_input: dict[str, JsonValue] | None = None
 
 
 class WorldSpec(Contract):

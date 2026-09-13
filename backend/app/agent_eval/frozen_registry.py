@@ -118,14 +118,13 @@ class FrozenAgentToolRegistry:
                     raise FrozenFixtureError("no recording matches the effective tool arguments")
                 observation = recording.observation
                 payload = deepcopy(observation.payload)
-                if observation.source_errors:
-                    existing = payload.get("source_errors", [])
-                    payload["source_errors"] = list(dict.fromkeys([*existing, *observation.source_errors]))
                 traces.append(AgentToolTrace(
-                    name=call["name"], input=deepcopy(call["arguments"]),
+                    name=call["name"], input=deepcopy(recording.tool_result_input
+                        if recording.tool_result_input is not None else call["arguments"]),
                     output=payload, summary=observation.summary,
                     status="error" if observation.state == "error" else "success",
                     result=AgentToolOutcome(status=observation.state, payload=payload,
+                                            data_fresh=observation.data_fresh,
                                             source_errors=observation.source_errors),
                 ))
                 attempt.update(outcome="matched", recording_id=recording.id)

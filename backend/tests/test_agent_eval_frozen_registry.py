@@ -124,7 +124,7 @@ def test_canonical_outcome_survives_gateway_without_empty_reclassification(state
     assert actual == state
     assert result.trace().result.status == state
     if state in {"partial", "error"}:
-        assert payload["source_errors"] == ["test-source unavailable"]
+        assert payload == {"events": []}  # Preserve payload and outcome as separate layers.
         assert result.trace().result.source_errors == ["test-source unavailable"]
 
 
