@@ -84,8 +84,16 @@ class ToolGateway:
                 [{"name": name, "arguments": kwargs}], request=AgentChatRequest(session_id="react-frozen", message=""),
             )
             trace = execution["tool_results"][0]
+            # Frozen recordings are already canonical Gateway observations. Do not
+            # flatten ratings again or turn a recorded error/partial into empty.
+            outcome = trace.result
+            if outcome is None:
+                raise ValueError("Frozen tool result requires an explicit outcome")
             result = ToolResult(name=name, input=trace.input, output=trace.output, summary=trace.summary,
-                                status=trace.status, error=trace.error, result_status=trace.result.status if trace.result else None)
+                                trace_output=trace.output, status=trace.status, error=trace.error,
+                                result_status=outcome.status, data_fresh=outcome.data_fresh,
+                                source_errors=tuple(outcome.source_errors))
+            return result, trace.output, outcome.status
         else:
             result = self.structured[name].invoke(kwargs)
         payload = payload_of(result)

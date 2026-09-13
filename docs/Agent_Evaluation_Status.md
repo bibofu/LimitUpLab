@@ -33,5 +33,7 @@ LLM-as-a-Judge 边界、稳定性、版本治理和发布门禁。
 
 当前已开始 M1：`backend/app/agent_eval` 提供 Case、World、结果、预算和 Manifest
 类型，以及 JSON 资产加载和跨文件引用校验；对应测试纳入现有 pytest 发现范围。
+Frozen Registry 已接入现有 ToolGateway，覆盖有效参数精确匹配、Profile 权限、日期锚定、
+标准化结果状态与来源错误回放，尚未使用真实市场数据或真实 LLM 运行评测。
 尚未创建正式评测题、真实录制、Runner、Evaluator 或质量基线，因此仍不能宣称已有
 可运行的正式 Agent 评测集。实施状态见 `backend/evals/README.md`。
