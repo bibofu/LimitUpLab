@@ -301,7 +301,7 @@ sequenceDiagram
 - Controlled Conversation Context
 - Persistent Chat Sessions
 - Agent Run Observability
-- Deterministic + Live LLM Eval
+- Agent 评测体系待按当前 ReAct 设计重建
 - Champion/Challenger Policy Governance
 
 ## 项目结构
@@ -310,13 +310,13 @@ sequenceDiagram
 LimitUpLab/
 ├── backend/
 │   ├── app/
-│   │   ├── agents/          # ReAct runtime、工具/证据契约、评分、Review 与 Eval
+│   │   ├── agents/          # ReAct runtime、工具/证据契约、评分与 Review
 │   │   ├── collectors/      # 涨停、K 线、板块、指数和扩展数据采集
 │   │   ├── repositories/    # SQLite Repository
 │   │   ├── routers/         # FastAPI 路由
 │   │   └── services/        # 评分、检索、回测、Evaluation 和健康检查
-│   ├── scripts/             # 数据同步、回填、Eval 和启动脚本
-│   └── tests/               # 单元测试与 Agent Eval 数据集
+│   ├── scripts/             # 数据同步、回填和启动脚本
+│   └── tests/               # 单元测试
 ├── frontend/
 │   └── src/                 # React 工作台、独立 Agent 会话面板、API 类型和样式
 ├── scripts/                 # 项目级本地启动脚本
@@ -589,7 +589,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mo
 
 完整接口定义以 Swagger 为准。
 
-## 测试与 Agent Eval
+## 测试与 Agent 评测状态
 
 推荐从项目根目录运行统一离线验收。需要 Python 3.13、Node.js 24，并先安装依赖：
 
@@ -601,7 +601,7 @@ backend/.venv/Scripts/python.exe scripts/check_project.py
 
 Linux 使用对应虚拟环境的 `python scripts/check_project.py`。也可通过 `--scope backend` 或 `--scope frontend` 单独验收一侧。
 
-该入口依次运行完整 pytest、Chat Eval V2 的 89-case Dev 离线回放门禁、全部前端逻辑测试以及 TypeScript/Vite 生产构建。每次使用独立数据库和测试目录，关闭真实 LLM，并在 `output/validation/<运行标识>/` 保存各步骤日志、JUnit 和 `summary.json`。任一步失败都会使整体退出码非零，但其余独立检查仍会执行。它不替代浏览器端业务验收、真实模型评测、部署检查或压力测试。
+该入口依次运行完整 pytest、全部前端逻辑测试以及 TypeScript/Vite 生产构建。每次使用独立数据库和测试目录，关闭真实 LLM，并在 `output/validation/<运行标识>/` 保存各步骤日志、JUnit 和 `summary.json`。任一步失败都会使整体退出码非零，但其余独立检查仍会执行。它不替代浏览器端业务验收、真实模型评测、部署检查或压力测试。
 
 GitHub Actions 配置在 `.github/workflows/validate.yml`，对 PR、main 与 codex 分支推送运行 Windows/Linux 两套检查，使用相同验收入口，不需要行情或模型密钥。失败日志保留 7 天；测试数据库不上传。流水线文件进入远端仓库后才能实际触发，分支保护仍需在仓库设置中启用。
 
@@ -614,33 +614,9 @@ cd backend
 .\.venv\Scripts\python.exe -m pytest tests -q -p no:cacheprovider
 ```
 
-运行 Chat Eval V2 的公开 Dev 契约集：
+旧 Chat Eval V2、Live Behavioral Eval V1、冻结工具世界、迁移清单和题库型样本已于 2026-09-13 退役并删除。当前仓库没有正式 Agent 评测集，也没有可用于发布判定的 Agent 质量基线；统一检查入口不再运行旧离线 Eval，系统健康也不再执行旧 smoke case。
 
-```powershell
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --mode offline --summary-only
-```
-
-公开金标为 `backend/tests/fixtures/agent_chat_eval_dev_v2.json`，共 120 case；私有 40-case Holdout 通过 `LIMITUPLAB_EVAL_HOLDOUT_PATH` 注入。工具事实来自版本化 `agent_chat_eval_tool_fixture_v2.json`，不读取当前数据库或网络。原 50 题的逐题去向记录在 `agent_chat_eval_v1_migration.json`，冲突题不会直接进入 V2。完整契约见 [LimitUpLab Chat Eval V2](docs/Agent_Golden_Eval.md)。
-
-回放报告保留七层历史契约格式，离线 Planner 为 N/A；其结果仅验证冻结夹具的契约、接地和答案检查，不代表当前 ReAct 的 Policy 执行或真实模型能力。
-
-定向检查用例或分类：
-
-```powershell
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --case-filter CEV2-D001
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --case-filter limit_up_pool
-```
-
-生产 ReAct 真实模型 + 冻结工具世界验收：
-
-```powershell
-.\.venv\Scripts\python.exe scripts\run_agent_live_eval.py --case-id LIVE-SIMPLE-002 --trials 1
-.\.venv\Scripts\python.exe scripts\run_agent_live_eval.py --trials 3 --judge
-```
-
-旧 `run_agent_eval.py --mode live`（独立 Planner + Answer）已退役；`run_agent_eval.py` 只保留 offline 回放与 online-shadow。ReAct Live 报告写入 `output/agent-live-eval/`，记录原始决策、实际工具、任务终态和模型调用数。公开 Live 集不等同于私有 Holdout 发布验收，完整发布适配仍待完成，不能把旧 Planner 成绩当作 ReAct 成绩。
-
-`online-shadow` 只读已保存的 trace，不改变用户答案；历史报告仍可读取。回放报告写入 `output/agent-eval/<run_id>/`，`GET /api/agents/eval` 只读取最近一次完成报告，系统健康最多运行 12 条冻结 smoke case。离线回放不是生产工具执行或模型质量证明。
+旧评测 CLI 和历史报告兼容代码暂时保留，但在新方案确定前不得用来生成当前 Agent 的质量结论。状态与边界见 [Agent 评测状态](docs/Agent_Evaluation_Status.md)。
 
 前端生产构建：
 

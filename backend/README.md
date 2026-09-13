@@ -276,45 +276,17 @@ cd backend
 python -m pytest tests -q -p no:cacheprovider
 ```
 
-## Agent Evals
+## Agent evaluation status
 
-Chat Eval V2 retains the seven-stage historical report contract for deterministic
-fixture replay and stored-trace shadow checks. It does not run a separate
-production Planner/Answer pipeline. The public Dev split has 89 cases; a private 40-case Holdout is injected with
-`LIMITUPLAB_EVAL_HOLDOUT_PATH`.
+The former Chat Eval V2 and Live Behavioral Eval V1 datasets, frozen tool worlds,
+migration manifest, question-bank samples, and local baselines were retired on
+2026-09-13. The repository currently has no formal Agent evaluation dataset or
+release-quality baseline. The project validation command and system health check
+therefore do not run the old evaluation suites.
 
-The retired 50-case Golden was reviewed item by item in
-`tests/fixtures/agent_chat_eval_v1_migration.json`; date, fixture, scope and
-relation-evidence conflicts are rejected rather than silently copied into V2.
-
-```powershell
-cd backend
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --dataset dev --mode offline --trials 1 --summary-only
-```
-
-Offline mode replays versioned tool facts; raw Planner accuracy is N/A. Production
-ReAct with a real model and frozen tools is evaluated by the separate live runner:
-
-```powershell
-cd backend
-.\.venv\Scripts\python.exe scripts\run_agent_live_eval.py --case-id LIVE-SIMPLE-002 --trials 1
-.\.venv\Scripts\python.exe scripts\run_agent_live_eval.py --trials 3 --judge
-```
-
-Private Holdout injection remains available for the replay gate. A complete ReAct
-release gate still requires a separately approved live suite and independent
-pinned Judge. The command below runs the combined offline replay only; the retired
-`--mode live` Planner/Answer path is no longer supported.
-
-```powershell
-cd backend
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --dataset all --mode offline --trials 1 --judge
-```
-
-Completed artifacts are written under `output/agent-eval/<run_id>/`. The API only
-reads `latest.json`; it never starts an evaluation. Online shadow mode samples
-already persisted traces without rerunning or exposing the original question.
-See `docs/Agent_Golden_Eval.md` for schema, Judge settings, metrics and gates.
+Legacy evaluator and report-compatibility code remains temporarily available for
+the upcoming redesign, but its CLI entrypoints must not be used to claim current
+ReAct quality. See `docs/Agent_Evaluation_Status.md` for the current boundary.
 
 The chat Agent also exposes a general `limit_up_events` internal tool for
 same-day limit-up questions such as continued-board lists, board-height filters,

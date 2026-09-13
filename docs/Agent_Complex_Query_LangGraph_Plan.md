@@ -23,7 +23,7 @@ execute → observe → completion
 
 小范围真实模型 A/B（同一 fully frozen tool world，每 case 3 次）：基线报告中的 6 个目标 Replan case和 `LIVE-STRESS-002` 合计 0/21；Phase 2 后为 21/21。其中 18 个 trial 真正触发 Replan并全部成功，`replan_success_rate=100%`、`unnecessary_replan_rate=0%`；`LIVE-REPLAN-006` 保持 3/3、0 Replan。目标组平均工具调用 1.57→4.00、LLM 调用 1.14→1.86、token 2,779→5,016、延迟 1,210→2,347 ms；基线中多条请求在 Planner 前结束，因此成本增量同时包含“从未执行到完成执行”的必要成本。
 
-上述 21-trial 是实现阶段对内部 scenario 的广覆盖验证，不代表所有 scenario 都继续生产可路由；2026-09-12 定向接通后以本节列出的四个 Phase 2 规则为正式生产边界，最新验证见 `Agent_LangGraph_Phase2_Validation.md`。
+上述 21-trial 是实现阶段对内部 scenario 的历史验证，不代表所有 scenario 都继续生产可路由。相关旧评测集和专属验证文档已于 2026-09-13 退役；当前边界见 `Agent_Evaluation_Status.md`，当时的验证记录保留在 `code-quality-audit.md`。
 
 Partial 单候选失败另用现有 `LIVE-RECOVERY-004` 验收：首次 300750 error、600000 ok 后只重试 300750 一次，最终保留 600000 证据回答，3/3 通过；该 case 的合法预算同步明确为 `max_replans=1`。
 
