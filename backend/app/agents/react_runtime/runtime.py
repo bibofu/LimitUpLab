@@ -395,11 +395,13 @@ GRAPH = _graph()
 
 def run(request, registry, provider, history=None, memory=None, progress=None):
     runtime = Run(request, registry, provider, history or [], progress)
+    context_message_count = 0
     injection = assess_direct_prompt_injection(request.message)
     if injection.detected:
         runtime.answer, runtime.status, runtime.reason = "我可以协助查询有来源的股票研究事实，不能执行绕过系统边界的指令。", "refuse", "input_policy"
     else:
         history_messages, history_refs = prepare_history(request, history or [], runtime.evidence)
+        context_message_count = len(history_messages)
         context = {"anchor_date": current_query_reference_date().isoformat(),
                    "page_default_date": request.trade_date, "page_default_symbol": request.symbol,
                    "available_local_dates": sorted({str(e.trade_date) for e in registry.events}),
@@ -413,6 +415,7 @@ def run(request, registry, provider, history=None, memory=None, progress=None):
             GRAPH.invoke(initial, config={"configurable": {"run": runtime}, "recursion_limit": 60})
     runtime.trace("react_execution", {"version": VERSION, "model_calls": runtime.models, "tool_calls": runtime.tools,
                                        "task_status": runtime.status, "stop_reason": runtime.reason,
+                                       "context_message_count": context_message_count,
                                        "requirements": runtime.requirements, "evidence": runtime.evidence.records})
     return AgentChatResponse(
         session_id=request.session_id, intent="react_research", answer=runtime.answer,

@@ -1,5 +1,13 @@
 # Agent 应用质量审查
 
+## 2026-09-13：多轮上下文二次截断修复
+
+- 范围：修复会话记忆层最多交付 16 条、ReAct 层又截为 8 条的 P1；不修改记忆摘要刷新节奏、证据新鲜度边界、评分、数据管线或前端。
+- P1 已修（BC-038）：`prepare_history` 不再维护第二套消息数量窗口，完整接收会话记忆层选出的有界上下文；仍保留同会话/非错误消息过滤和 12000 字符预算。`react_execution` trace 记录实际 `context_message_count`，运行版本升级为 `react-runtime-v4`。
+- 回归：契约层固定完整 16 条及原顺序，运行时固定首轮 prompt 包含 system、16 条历史和当前问题；定向 **40 passed**。宿主隔离目录完整后端 **591 passed + 6 subtests passed**，0 failed、0 setup error、0 skipped，保留 LangGraph serializer 与 websockets 的 3 条既有弃用警告。沙箱内两次完整测试分别为 537 passed / 54 setup errors / 6 subtests passed，错误均为 pytest 临时目录 `WinError 5`，未计为通过；改在宿主隔离目录后重跑成功。
+- 真实 HTTP：本地 8001 服务重启为 PID 22544。Cookie 隔离会话连续执行 7 轮明确 `clarify` 的非市场追问，`react_execution.context_message_count` 依次为 0、2、4、6、8、10、12，第 6、7 轮越过旧 8 条上限且仍复述第一轮标识词 `CTX-KEEP-16`；全部响应为 `react-runtime-v4`。两次验收创建的测试会话均已通过 owner-scoped API 精确删除。第一次措辞验收有 5 轮进入 `validation_failed`，错误态消息按契约被过滤，最大有效上下文仅 6，故没有将该次结果误作修复证据。
+- 边界：字符预算仍可能按“最近消息优先、整条保留”舍弃超长旧消息，这是显式的 prompt 大小保护，不属于 16→8 的重复消息数裁剪。
+
 ## 2026-09-13：历史证据与本轮证据强制隔离
 
 - 范围：修复历史 evidence 与本轮 evidence 可混合通过最终门禁、历史 evidence 可把本轮 requirement 标成 `satisfied` 的 P1；不修改评分、数据管线、预测快照或前端。实现提交：`9fdadd5`。

@@ -69,6 +69,30 @@ def test_historical_reference_only_loaded_from_requested_session():
     assert refs[0]["evidence_scope"] == "conversation_history"
 
 
+def test_history_keeps_the_complete_upstream_context_window():
+    history = [
+        ChatSessionMessage(
+            message_id=f"m-{index}",
+            session_id="mine",
+            role="user" if index % 2 == 0 else "assistant",
+            content=f"context-{index}",
+            created_at=f"2026-09-12T00:{index:02d}:00Z",
+        )
+        for index in range(16)
+    ]
+
+    messages, refs = prepare_history(
+        AgentChatRequest(session_id="mine", message="继续上面的研究"),
+        history,
+        EvidenceStore(),
+    )
+
+    assert [message.content for message in messages] == [
+        f"context-{index}" for index in range(16)
+    ]
+    assert refs == []
+
+
 def test_empty_symbols_rejected_instead_of_unbounded_query():
     target = gateway(resolve_stock_identity=lambda value: (value, value))
     with pytest.raises(ValueError, match="Empty symbol set"):

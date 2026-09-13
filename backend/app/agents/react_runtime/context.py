@@ -12,7 +12,11 @@ def prepare_history(request, history, evidence):
     """Router supplies authenticated session messages; never accept arbitrary refs."""
     history = [m for m in history if m.session_id == request.session_id and m.status != "error"]
     messages, references, used = [], [], 0
-    for message in reversed(history[-8:]):
+    # The session-memory boundary has already selected the bounded raw window.
+    # Applying another message-count slice here used to shrink a valid 16-message
+    # window to 8 between memory refreshes. Keep the independent character budget
+    # as the final prompt-size guard, but do not silently redefine that window.
+    for message in reversed(history):
         text = message.content
         if used + len(text) > HISTORY_CHAR_BUDGET:
             # Keep whole messages, not a misleading half of an old answer.

@@ -772,3 +772,10 @@ empty、partial 或 error 时 Replan 新闻；股票名称提取同步覆盖 K�
 - 修复：证据 schema 升级为 `react-evidence-v3`，每条记录带服务端维护的 `evidence_scope=current_run|conversation_history`；历史恢复统一进入 context-only 域，任一含历史父项的派生结果继续属于历史域。EvidenceStore 的 `require_current` 成为 requirement 和最终答案的共同信任边界：任何状态的最终引用、任一本轮 satisfied requirement 只要包含历史 evidence ID 就拒绝，必须本轮重新查询；grounding 因而只接收本轮证据。运行版本升级为 `react-runtime-v3`。
 - 回归：覆盖旧 schema 历史恢复、显式 scope、左/右历史父项污染传播、本轮与历史混合引用、历史 requirement 伪满足，以及只保留本轮引用后的成功修复。
 - 边界：历史消息和有界 evidence preview 仍可帮助模型理解“上一轮”“这组”等指代，但不能直接证明最终事实；需要复述或比较旧事实时也必须按原日期在本轮重新查询。该修复不替代 BC-033/034 的开放式定性与因果 claim ledger。
+
+## BC-038：多轮上下文在 ReAct 层从 16 条二次截断为 8 条（2026-09-13）
+
+- 发现方式：阶段性代码审查。会话记忆层通过 `select_session_context_messages` 最多交付 16 条未摘要消息，但 ReAct 的 `prepare_history` 又独立取 `history[-8:]`；在滚动记忆每 8 条刷新一次的间隔内，上游合法交付的第 9–16 条消息会被静默丢弃。
+- 场景：记忆已摘要前 8 条后，会话新增 4 条但尚未达到下一次 8 条刷新阈值。上游会交付 12 条原始上下文，ReAct 实际只向模型注入最后 8 条，较早的约束、指代对象或用户纠正可能消失。
+- 修复：删除 ReAct 层独立的消息数量切片，以会话记忆层选出的窗口作为唯一消息数边界；`prepare_history` 仍执行同会话、非错误消息过滤和 12000 字符预算，避免取消 prompt 大小保护。运行 trace 新增实际 `context_message_count` 以便线上核对，版本升级为 `react-runtime-v4`。
+- 回归：契约测试覆盖完整 16 条窗口及顺序；运行时测试直接检查模型首轮收到 system、16 条历史消息和当前问题，防止再次出现 16→8 的隐式收缩。

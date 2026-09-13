@@ -84,8 +84,46 @@ def test_public_entry_defaults_to_react(monkeypatch):
             return call("finish", {"status": "refuse", "answer": "我可以提供研究事实，不能提供交易指令。"}, "f")
     response = answer_first_board_chat(AgentChatRequest(session_id="r", message="给我买卖指令"), [],
                                       llm_provider=Model(), tool_registry=registry())
-    assert response.generated_by == "react-runtime-v3"
+    assert response.generated_by == "react-runtime-v4"
     assert response.task_status == "refuse"
+
+
+def test_runtime_does_not_retruncate_upstream_history_from_sixteen_to_eight():
+    history = [
+        ChatSessionMessage(
+            message_id=f"history-{index}",
+            session_id="r",
+            role="user" if index % 2 == 0 else "assistant",
+            content=f"history-content-{index}",
+            created_at=datetime(2026, 9, 12, 0, index, tzinfo=timezone.utc),
+        )
+        for index in range(16)
+    ]
+
+    class Model:
+        def generate_messages(self, messages, tools, **kwargs):
+            contents = [message.content for message in messages]
+            assert contents[1:17] == [
+                f"history-content-{index}" for index in range(16)
+            ]
+            assert contents[17] == "继续上面的研究"
+            return call("finish", {
+                "status": "clarify",
+                "answer": "请明确要继续研究的指标。",
+            }, "finish")
+
+    response = run(
+        AgentChatRequest(session_id="r", message="继续上面的研究"),
+        registry(),
+        Model(),
+        history=history,
+    )
+
+    assert response.task_status == "clarify"
+    execution = next(
+        trace for trace in response.tool_results if trace.name == "react_execution"
+    )
+    assert execution.output["context_message_count"] == 16
 
 
 def test_evidence_page_is_not_silently_retruncated():

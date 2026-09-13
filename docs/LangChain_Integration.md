@@ -1,6 +1,6 @@
 # LangChain + LangGraph ReAct 集成
 
-> 当前版本：V1.4 / `react-runtime-v3`
+> 当前版本：V1.4 / `react-runtime-v4`
 > 代码基线：以 `v1.4.0` 标签指向的提交为准
 
 ## 当前生产链路
