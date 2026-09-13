@@ -48,6 +48,12 @@ def test_two_candidates_record_full_lists_not_preview(database, tmp_path):
         assert len(artifact.body.recording.observation.payload["events"]) == count
         assert len(artifact.body.evidence_view["rows"]) == 8
         assert world.recordings[0] == artifact.body.recording
+        expanded = load_capture(folder / "capture-limit100.json")
+        assert world.world_version == 2 and case.case_version == 2
+        assert world.recordings[1] == expanded.body.recording
+        assert expanded.body.recording.arguments["limit"] == 100
+        assert len(expanded.body.recording.observation.payload["events"]) == 25
+        assert expanded.body.recording.observation.payload["events"][:count] == artifact.body.recording.observation.payload["events"]
         assert case.status == "candidate"
         assert case.assertions[0].kind == "answer_matches_observation"
         review = json.loads((folder / "review.json").read_text(encoding="utf-8"))

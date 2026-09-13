@@ -87,10 +87,14 @@ def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240
                         max_wall_time_seconds=wall_seconds)
     request = AgentChatRequest(session_id=str(uuid4()), message_id=str(uuid4()),
                                message=case.conversation[0].content)
+    event_case = any(a.target == "answer.ordered_events" for a in case.assertions if a.evaluator == "fact")
+    extractor = extract_event_answer if event_case else extract_answer
+    verifier = verify_event_facts if event_case else verify_summary_facts
+    extractor_system = EVENT_EXTRACTOR_SYSTEM if event_case else EXTRACTOR_SYSTEM
     manifest = RunManifest(run_id=str(uuid4()), runtime_version=VERSION,
         tool_contract_version=TOOL_CONTRACT_VERSION, evidence_version=EVIDENCE_VERSION,
         evaluator_version="single-case-diagnostic-v1", model=getattr(provider, "model", "test-provider"),
-        prompt_digest=digest({"agent": runtime.SYSTEM, "extractor": EXTRACTOR_SYSTEM}),
+        prompt_digest=digest({"agent": runtime.SYSTEM, "extractor": extractor_system}),
         cases=[AssetRef(id=case.case_id, version=case.case_version)],
         world_digests={world.world_id: world_digest(world)}, budget=budget, worker_count=1)
     save(directory, "manifest.json", manifest.model_dump(mode="json"))
@@ -103,10 +107,6 @@ def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240
                for path in sorted(folder.glob("*.py"))}
     client = getattr(getattr(provider, "chat_model", None), "root_client", None)
     provider_host = urlsplit(str(getattr(client, "base_url", ""))).hostname
-    event_case = any(a.target == "answer.ordered_events" for a in case.assertions if a.evaluator == "fact")
-    extractor = extract_event_answer if event_case else extract_answer
-    verifier = verify_event_facts if event_case else verify_summary_facts
-    extractor_system = EVENT_EXTRACTOR_SYSTEM if event_case else EXTRACTOR_SYSTEM
     save(directory, "source.json", {"source_digest": digest(sources), "case_digest": digest(case.model_dump(mode="json")),
         "worker_pid": os.getpid(), "provider_host": provider_host,
         "extractor_prompt_digest": digest(extractor_system), "privacy_status": "unreviewed"})

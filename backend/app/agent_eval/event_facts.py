@@ -55,7 +55,8 @@ def _context(case, world, response, expected):
     _attempts(response)
     def matches(payload):
         return (isinstance(payload, dict) and payload.get("trade_date") == expected["trade_date"]
-                and [{"symbol": r["symbol"], "name": r["name"]} for r in payload.get("events", [])]
+                and [{"symbol": r["symbol"], "name": r["name"]}
+                     for r in payload.get("events", [])[:len(expected["ordered_members"])]]
                 == expected["ordered_members"])
     truth = [r.observation.payload for r in world.recordings if r.tool == "limit_up_events"
              and r.observation.state == "ok" and matches(r.observation.payload)]

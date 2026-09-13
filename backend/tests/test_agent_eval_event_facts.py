@@ -140,11 +140,38 @@ def test_extractor_is_answer_only_and_preserves_order(bundle):
     answer = bundle[2].answer
     class Provider:
         def generate_messages(self, messages, tools, **kwargs):
-            assert json.loads(messages[-1].content) == {"answer": answer}
+            assert json.loads(messages[-1].content)["answer"] == answer
             assert "expected" not in messages[-1].content
             return AIMessage(content="", tool_calls=[{"id": "extract", "name": "submit_event_list",
                 "args": {"trade_date": "2026-09-11", "members": [{"name": "样例2", "symbol": "600002"}],
-                         "additional_claims": [], "ambiguous": False}}])
+                         "additional_claim_line_ids": [], "ambiguous": False}}])
     result = extract_event_answer(Provider(), answer)
     assert result.members[0].symbol == "600002"
     assert not result.inventory_complete and not result.inventory_reviewers
+
+
+@pytest.mark.parametrize("line_ids,valid", [([1, 0, 1], True), ([9], False), ([2], False), ([-1], False)])
+def test_no_list_failure_claims_use_host_owned_lines(line_ids, valid):
+    answer = "无法返回名单。\n查询失败，不能确认股票。\n\n仅用于研究。"
+    class Provider:
+        def generate_messages(self, messages, tools, **kwargs):
+            return AIMessage(content="", tool_calls=[{"id": "extract", "name": "submit_event_list",
+                "args": {"trade_date": None, "members": [], "additional_claim_line_ids": line_ids,
+                         "ambiguous": True}}])
+    if not valid:
+        with pytest.raises(ValueError):
+            extract_event_answer(Provider(), answer)
+    else:
+        result = extract_event_answer(Provider(), answer)
+        assert result.members == [] and result.additional_claims == answer.splitlines()[:2]
+        assert result.extractor_version == "answer-only-event-list-v2"
+
+
+def test_larger_recorded_list_supports_top_n_not_reversed_prefix(bundle):
+    case, world, response, extraction = bundle
+    # Asking for the first two members of an observed three-member list is valid.
+    case.assertions[0].expected["ordered_members"] = case.assertions[0].expected["ordered_members"][:2]
+    extraction.members = extraction.members[:2]
+    assert verify_event_facts(*bundle).verdict == "pass"
+    case.assertions[0].expected["ordered_members"].reverse()
+    assert verify_event_facts(*bundle).verdict == "needs_review"
