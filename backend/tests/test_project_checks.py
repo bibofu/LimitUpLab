@@ -32,13 +32,7 @@ def test_missing_executable_is_a_failed_gate(tmp_path):
     assert report["checks"][0]["error"]
 
 
-# Regression scenario: backend gates use offline eval and report local paths.
-def test_backend_gates_use_offline_eval_and_report_local_paths(tmp_path):
+# Regression scenario: backend validation remains available while Agent eval is retired.
+def test_backend_gate_runs_pytest_without_retired_agent_eval(tmp_path):
     plan = checks.build_checks("backend", tmp_path)
-    assert [item.name for item in plan] == ["pytest", "eval-chat-v2"]
-    eval_command = plan[1].command
-    assert eval_command[eval_command.index("--dataset") + 1] == "dev"
-    assert eval_command[eval_command.index("--mode") + 1] == "offline"
-    for item in plan[1:]:
-        assert item.command[item.command.index("--mode") + 1] == "offline"
-        assert str(tmp_path) in item.command[-1]
+    assert [item.name for item in plan] == ["pytest"]

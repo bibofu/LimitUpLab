@@ -28,7 +28,7 @@ class Check:
     cwd: Path
 
 
-# Construct the backend test/evaluation and frontend test/build commands for the selected
+# Construct the backend and frontend test/build commands for the selected
 # acceptance scope.
 def build_checks(scope: str, output: Path) -> list[Check]:
     checks = []
@@ -37,11 +37,6 @@ def build_checks(scope: str, output: Path) -> list[Check]:
             sys.executable, "-m", "pytest", "tests", "-q", "-p", "no:cacheprovider",
             "--basetemp", str(output / "pytest-tmp"),
             "--junitxml", str(output / "pytest.xml"),
-        ], ROOT / "backend"))
-        checks.append(Check("eval-chat-v2", [
-            sys.executable, "scripts/run_agent_eval.py",
-            "--dataset", "dev", "--mode", "offline", "--trials", "1",
-            "--summary-only", "--output-root", str(output / "agent-eval"),
         ], ROOT / "backend"))
     if scope in {"all", "frontend"}:
         # Calling npm through Node avoids shell quoting and .cmd execution on Windows.

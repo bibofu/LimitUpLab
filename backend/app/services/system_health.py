@@ -8,8 +8,6 @@ from datetime import date, datetime, time, timedelta
 from urllib.parse import urlparse
 from zoneinfo import ZoneInfo
 
-from app.agents.chat_eval_dataset import load_dev_dataset
-from app.agents.chat_eval_runner_v2 import run_chat_eval_suite
 from app.config import env_bool
 from app.models import AgentSystemHealthResponse, LimitUpEvent
 from app.repositories import SQLiteFirstBoardRepository
@@ -17,8 +15,7 @@ from app.services.analysis import latest_trade_date
 from app.services.data_health import build_agent_data_health
 
 
-SYSTEM_HEALTH_VERSION = "agent-system-health-v3-chat-eval-smoke"
-EVAL_SMOKE_CASE_COUNT = 12
+SYSTEM_HEALTH_VERSION = "agent-system-health-v4-eval-retired"
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
@@ -44,18 +41,6 @@ def build_agent_system_health(
     eval_total: int | None = None
     eval_failed: int | None = None
     eval_passed: bool | None = None
-    if run_offline_eval:
-        report = run_chat_eval_suite(
-            load_dev_dataset().cases,
-            mode="offline",
-            trials=1,
-            sample_size=EVAL_SMOKE_CASE_COUNT,
-            seed="system-health-smoke-v1",
-        )
-        eval_total = int(report["case_count"])
-        eval_failed = int(report["failed_cases"])
-        eval_passed = eval_failed == 0
-
     llm_enabled = env_bool("LIMITUPLAB_LLM_ENABLED")
     llm_provider_configured = bool(
         os.getenv("DEEPSEEK_API_KEY", "").strip()
@@ -71,8 +56,8 @@ def build_agent_system_health(
         warnings.append("LLM is enabled but no API key is configured.")
     if proxy_warning:
         warnings.append(proxy_warning)
-    if eval_passed is False:
-        warnings.append("Offline Agent eval has failing cases.")
+    if run_offline_eval:
+        warnings.append("Agent evaluation dataset is retired; no evaluation was run.")
 
     status = _overall_status(
         data_health_status=data_health.status,
