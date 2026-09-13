@@ -43,5 +43,9 @@ Frozen Registry 已接入现有 ToolGateway，覆盖有效参数精确匹配、P
 轨迹/终态 Evaluator 已能检查工具选择、禁止尝试、关键参数和错误 complete；基于真实
 runtime trace 的脚本模型测试验证此链路。未实现的 Fact 等检查显式 needs_review，
 部分检查报告的 release_eligible 始终 false，不能当成正式 EvalResult 或质量基线。
-尚未创建正式评测题库、真实模型 Runner 或 Answer Fact Evaluator，因此仍不能宣称已有
-可运行的正式 Agent 评测集。下一步为事实验证与反误杀校准，详见 `backend/evals/README.md`。
+现已补充独立的审核声明清单/抽取契约、数量单位归一化及窄范围 Summary Fact Verifier。
+核验 World、本轮完整 Evidence 和实际可见 metadata/rows，报告声明清单覆盖率，
+零抽取、不确定和输入漂移明确 needs_review；附合成标注的反误杀契约校准测试。
+尚未实现通用中文自动抽取，也没有真实样本的双人复核校准结果；不把测试标注冒充审核。
+正式评测题库、真实模型 Runner 和完整 Answer Fact Evaluator 仍未完成，因此不能宣称已有
+可运行的正式 Agent 评测集。具体边界及下一步见 `backend/evals/README.md`。

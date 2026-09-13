@@ -1,7 +1,8 @@
 # Agent 评测资产
 
 当前完成 M1 的类型、加载层、Frozen Registry、单工具 Record-Replay、候选资产导出，
-以及轨迹/终态的部分确定性检查。正式题库、真实模型 Runner、Fact Evaluator 尚未实现。
+以及轨迹/终态检查、人工审核抽取接口与窄范围 Fact Verifier。正式题库、真实模型 Runner、
+通用中文事实抽取和完整 Fact Evaluator 尚未实现。
 
 可执行模型位于 `app/agent_eval/models.py`，加载与引用校验位于 `loader.py`。
 资产采用 UTF-8 JSON，可通过每个 Pydantic 模型的 `model_json_schema()` 导出规范。
@@ -120,5 +121,53 @@ payload、模型可见 Evidence View、原始调用参数和工具规范化后�
 每次使用新 session/message ID，禁止网络及数据库访问。这只能验证评测基础设施，不能
 证明真实模型或生产安全审查通过。默认 `check_project.py` 保持无密钥验收。
 
-下一步是 Answer Fact 的声明抽取/验证接口与反误杀校准样本；人工复核候选后才能晋升。
+## 审核抽取接口与 Summary Fact Verifier
+
+`facts.py` 把声明清单、声明抽取、单位归一化和证据核验分开。当前不自动抽取任意中文，
+也不调用 LLM。`Extraction` 是独立标注文件，必须绑定**实际返回答案**的 `digest(answer)`
+及逐字匹配的原文起止位置；不能给模型预填 expected_facts 再当作其回答声明。
+
+- `inventory`：独立审核的全部原子声明清单，每项包含 id、start/end、quote，及 numeric /
+  relational 标签；包含答案主动补充的事实，不只是题目要求的事实。
+- `claims`：抽取出来的实体、日期、指标、数字 token、单位和 certainty，与 inventory ID
+  一一关联。中文省略、并列、否定等语义由抽取/审核方确认，Verifier 不猜测。
+- `inventory_complete`、`inventory_reviewers`、`extraction_reviewers`：两项审核分别记录。
+  P0 各至少两个不同审核者，其他级别至少一个。代码不会自动填写真实审核记录；这些字段
+  是审计元数据而非身份认证，正式晋升仍须外部核实，不得仅填写名字绕过审核。
+- `origin=contract_test` 仅用于合成契约校准，不能据此声称真实样本经过人工复核。
+
+报告给出 Claim / Numeric / Entity-Date-Metric Coverage：分母分别为审核清单中全部 /
+numeric / relational 声明，分子为关联抽取记录数。它们衡量**清单覆盖**，不是事实通过率、
+抽取准确率或中文理解准确率。没有分母时为 null；零抽取或漏抽会保留 needs_review。
+清单本身是否漏标仍依赖独立审核，后续须用完整双标校准集测量这一误差。
+
+当前证据适配器只支持 `market_summary` 的涨停、首板、连板、未回封、跌停家数：
+
+1. 从版本匹配的 World 录制建立事实集合，不把手写 expected 当作唯一真值。
+2. 从 `react_execution.evidence` 取得本轮完整 Evidence，排除历史和不可用记录。
+3. 从 `react_observe` 读取模型实际看到的 metadata/rows；用生产 EvidenceStore 重建视图
+   交叉检查，记录支持路径。视图/完整数据/World 漂移先 needs_review，不误判为 Agent 编造。
+4. 逐条核验已审核声明，包括用户没有要求但回答主动添加的事实。世界里正确、当前没有
+   查询或没有可见证据的声明不能通过。实体/日期/指标/数值错误与单位维度错误显式 fail。
+5. 再检查 required facts 是否交付。expected 与 World 矛盾是标注问题，进入 needs_review。
+
+数字采用 Decimal，保留精度并区分数量、金额、百分比和百分点；支持显式的万/亿换算，
+不删除逗号或乱拼中文数字。不确定、约数、未知单位/指标进入 needs_review，当前不擅自
+设定“约”的容差。金额等单位的归一化测试不代表对应业务事实适配器已实现。
+当前未覆盖个股、窗口、集合派生、因果、缺失披露或完整 Compute Evidence 来源闭包。
+
+```powershell
+.venv/Scripts/python.exe -m app.agent_eval check-summary-facts --case ../output/agent-eval/candidates/local-summary/case.json --world ../output/agent-eval/candidates/local-summary/world.json --response ../output/agent-eval/response.json --extraction ../output/agent-eval/extraction.json
+```
+
+省略 extraction 会明确 needs_review，不能自动补出声明。报告 scope 为
+`reviewed_summary_numeric_claims`，release_eligible 恒 false，退出码 pass/fail/review 为
+0/1/2。这是独立的窄范围报告，`check-response` 的 Fact 断言仍不会被自动替换成通过。
+
+`tests/test_agent_eval_facts.py` 提供版本控制的 Verifier/Normalizer 校准种子：正常空格、
+表格、单位变体、约数、否定不确定、错误实体/日期/数量、额外声明、无工具接地、历史
+Evidence、可见路径漂移和漏抽。测试中的声明来自显式合成标注，不是自动抽取器产物；
+因此尚未测得自动抽取 FP/FN，也不能替代设计中的 120～180 条双人复核校准集。
+
+下一步需要确认抽取适配方式及真实标注审核，再扩充事实适配器、建立自动抽取校准。
 Runner、完整 Live 分支、Fault Injection 和完整发布判定在对应步骤补齐。
