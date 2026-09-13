@@ -1,5 +1,14 @@
 # Agent 应用质量审查
 
+## 2026-09-13：历史证据与本轮证据强制隔离
+
+- 范围：修复历史 evidence 与本轮 evidence 可混合通过最终门禁、历史 evidence 可把本轮 requirement 标成 `satisfied` 的 P1；不修改评分、数据管线、预测快照或前端。实现提交：`9fdadd5`。
+- P1 已修（BC-037）：证据 schema 升级为 `react-evidence-v3`，新增服务端维护的 `evidence_scope=current_run|conversation_history`。同会话历史恢复一律进入 context-only 域；任一历史父项会使派生结果继续属于历史域。EvidenceStore 的统一 `require_current` 边界同时保护 satisfied requirement 与全部最终状态的 evidence 引用，grounding 只接收本轮证据；需要复述旧事实时必须按原条件在本轮重新查询。运行版本升级为 `react-runtime-v3`。
+- 回归：证据域、上下文、运行时与 HTTP 定向 **88 passed**；完整后端 **589 passed**，0 failed、0 setup error、0 skipped，保留 LangGraph serializer 与 websockets 的 3 条既有弃用警告。定向测试第一次为 83 passed / 1 failed，失败原因是成功修复分支的夹具答案声明了夹具未提供的名称与“10日”字段，grounding 正确拒绝；收窄为夹具实际提供的代码、日期和涨幅后重跑通过，未把该次失败计为成功。
+- 真实 HTTP：Cookie 隔离会话 `chat_eefef3b208cd4538bdb29dd217964353`。第一轮查询 2026-09-11 涨停数量并完成；第二轮明确要求不重查、直接复用上一轮 evidence。第一次 answer check 以 `Final answers cannot use conversation-history evidence; refresh it in this run` 拒绝混合引用；模型随后重新调用 `market_event_pool`，最终只用 1 条 `current_run` 证据支持日期与 40 只计数，`task_status=complete`、`generated_by=react-runtime-v3`。第二轮 run：`run_990e8dde2f224f79b62b7d362f2fd439`。
+- 边界：历史消息及 preview 仍供指代理解，EvidenceStore 仍在同一请求对象中保存两个 scope，但所有能发布或完成任务的出口共享同一强制边界。开放式定性/因果声明的语义接地仍属于 BC-033/034，不因本修复关闭。
+- 检查：实现提交 204 行新增、27 行删除，低于单次 1000 行限制；提交前检查完整 diff、精确暂存和 `git diff --check`，未纳入用户的 `AGENTS.md` 修改、本地数据库、输出报告或 pytest 临时目录。
+
 ## 2026-09-13：ReAct 最终答案门禁绕过修复
 
 - 范围：修复普通模型文本自动包装为 `complete`、无证据 requirement 自报 `satisfied`、无证据研究回答、仅历史证据完成新研究请求，以及显式实体/日期/指标/数值与引用证据错配。生产运行版本由 `react-runtime-v1` 升级为 `react-runtime-v2`；没有修改评分、数据管线或历史预测。
