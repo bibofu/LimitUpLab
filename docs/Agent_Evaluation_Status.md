@@ -24,7 +24,12 @@ Plan-and-Execute 设计，无法充分评价当前 bounded ReAct 的 Observation
 历史里程碑和 `docs/code-quality-audit.md` 中的旧评测结果只记录当时事实，
 不代表当前版本验收状态。
 
-## 下一步
+## 新设计
 
-新评测集的目标、分层、数据世界、断言模型、Judge 边界、稳定性和发布门槛
-将在后续讨论中重新确定。新方案落地前，不恢复旧数据集或沿用旧通过阈值。
+新评测体系的长期设计已经确定，详见
+[`Agent_Evaluation_Design.md`](./Agent_Evaluation_Design.md)。该文档定义了分层模型、
+Offline/Live 固定容量、Frozen World、Case Schema、覆盖矩阵、确定性 Evaluator、
+LLM-as-a-Judge 边界、稳定性、版本治理和发布门禁。
+
+当前仅完成设计文档，尚未创建新评测数据、Runner、Evaluator 或质量基线，
+因此仓库仍不得宣称已有可运行的正式 Agent 评测集。
