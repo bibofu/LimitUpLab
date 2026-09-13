@@ -122,7 +122,7 @@ class LangChainChatProvider(LLMProvider):
                 client = self.chat_model.root_client.with_options(max_retries=0, timeout=timeout_seconds)
                 options.update(root_client=client, client=client.chat.completions)
             model = self.chat_model.model_copy(update=options)
-            choice = {"tool_choice": "finish"} if len(tools) == 1 and tools[0]["function"]["name"] == "finish" else {}
+            choice = {"tool_choice": tools[0]["function"]["name"]} if len(tools) == 1 else {}
             bound = model.bind_tools(tools, temperature=0, max_tokens=max_tokens, **choice) if tools else model.bind(
                 temperature=0, max_tokens=max_tokens,
             )

@@ -12,6 +12,8 @@ import uvicorn
 from fastapi import FastAPI, Request
 from langchain_core.messages import AIMessage
 
+from app.agents.react_runtime import runtime as runtime_module
+from app.agents.react_runtime.compliance import ComplianceReview
 from app.agents.react_runtime.lifecycle import Journal
 from app.agents.react_runtime.runtime import run
 from app.agents.tools import TOOL_SCHEMAS, ToolResult
@@ -20,6 +22,17 @@ from app.repositories import SQLiteChatSessionRepository
 from app.routers import agents, react_chat
 from app.security import current_owner_id
 from test_react_lifecycle import Model
+
+
+@pytest.fixture(autouse=True)
+def allow_compliance_review(monkeypatch):
+    monkeypatch.setattr(
+        runtime_module,
+        "review_answer",
+        lambda *args, **kwargs: ComplianceReview(
+            decision="allow", violations=[], reason="test fixture allows research answer",
+        ),
+    )
 
 
 @pytest.fixture(params=["react", "legacy", "task"])

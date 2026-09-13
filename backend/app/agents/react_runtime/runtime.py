@@ -16,6 +16,7 @@ from app.agents.react_runtime.contracts import (
     CONTROL_MODELS, Compute, Finish, MAX_CONCURRENCY, MAX_CONTROL_CALLS,
     MAX_MODEL_CALLS, MAX_TOOL_CALLS, ReadEvidence, VERSION,
 )
+from app.agents.react_runtime.compliance import review_answer
 from app.agents.react_runtime.evidence import EvidenceStore
 from app.agents.react_runtime.context import prepare_history
 from app.agents.react_runtime.lifecycle import CURRENT_CONTROL
@@ -69,7 +70,7 @@ class Run:
         self.gateway = ToolGateway(registry, self.evidence)
         self.started = perf_counter()
         self.deadline = self.started + float(os.getenv("LIMITUPLAB_REACT_DEADLINE_SECONDS", "120"))
-        self.models = self.tools = self.controls = self.repairs = 0
+        self.models = self.tools = self.controls = self.repairs = self.compliance_checks = 0
         self.traces, self.requirements, self.errors = [], [], []
         self.cache = {}
         self.answer, self.status, self.reason = "", "error", ""
@@ -83,7 +84,7 @@ class Run:
         if self.control is None:
             return
         snapshot = {key: getattr(self, key) for key in (
-            "models", "tools", "controls", "repairs", "requirements", "errors", "cache", "answer", "status", "reason",
+            "models", "tools", "controls", "repairs", "compliance_checks", "requirements", "errors", "cache", "answer", "status", "reason",
         )}
         snapshot["traces"] = [t.model_dump(mode="json") for t in self.traces]
         snapshot["evidence"] = self.evidence.records
@@ -283,11 +284,10 @@ class Run:
     def gate(self, state):
         if self.control and self.control.cancelled():
             return self.stop("cancelled")
-        from app.agents.react_runtime.safety import unsafe_answer
         try:
             final = Finish.model_validate(state["finish"])
-            if unsafe_answer(final.answer) or contains_prompt_leak(final.answer):
-                raise ValueError("Unsafe or internal content; answer research facts only")
+            if contains_prompt_leak(final.answer):
+                raise ValueError("Internal content detected; answer research facts only")
             cited = self.evidence.require_current(final.evidence_ids, "Final answers")
             if final.status in {"complete", "empty"} and not cited:
                 raise ValueError(f"{final.status} answers must cite evidence")
@@ -325,6 +325,19 @@ class Run:
                     )
                     if actual != expected or (not both_numbers and type(actual) is not type(expected)):
                         raise ValueError("Claim evidence value does not match the cited payload path")
+            self.compliance_checks += 1
+            remaining = self.deadline - perf_counter()
+            if remaining <= 0:
+                raise TimeoutError("Run deadline exceeded before compliance review")
+            review = review_answer(
+                self.provider,
+                user_message=self.request.message,
+                answer=final.answer,
+                timeout_seconds=min(20, remaining),
+            )
+            self.trace("react_compliance", review.model_dump(mode="json"))
+            if review.decision != "allow":
+                raise ValueError("Compliance review rejected the answer: " + ", ".join(review.violations))
             self.answer, self.status = final.answer, final.status
             self.reason = "answered"
             self.trace("react_answer_check", {
@@ -416,7 +429,8 @@ def run(request, registry, provider, history=None, memory=None, progress=None):
         initial = runtime.restore() or {"messages": messages, "done": False}
         if initial.get("resume_node") != END:
             GRAPH.invoke(initial, config={"configurable": {"run": runtime}, "recursion_limit": 60})
-    runtime.trace("react_execution", {"version": VERSION, "model_calls": runtime.models, "tool_calls": runtime.tools,
+    runtime.trace("react_execution", {"version": VERSION, "model_calls": runtime.models,
+                                       "compliance_checks": runtime.compliance_checks, "tool_calls": runtime.tools,
                                        "task_status": runtime.status, "stop_reason": runtime.reason,
                                        "tool_contract_version": TOOL_CONTRACT_VERSION,
                                        "context_message_count": context_message_count,

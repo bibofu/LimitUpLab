@@ -7,8 +7,10 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
+from app.agents.react_runtime.compliance import ComplianceReview
 from app.agents.react_runtime.contracts import Compute
 from app.agents.react_runtime.evidence import EvidenceStore
+from app.agents.react_runtime import runtime as runtime_module
 from app.agents.react_runtime.runtime import run
 from app.agents.tools import TOOL_SCHEMAS, ToolResult
 from app.models import AgentChatRequest, ChatSessionMessage
@@ -20,6 +22,17 @@ from app.services.llm_provider import (
 
 def call(name, args, key):
     return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": key}])
+
+
+@pytest.fixture(autouse=True)
+def allow_compliance_review(monkeypatch):
+    monkeypatch.setattr(
+        runtime_module,
+        "review_answer",
+        lambda *args, **kwargs: ComplianceReview(
+            decision="allow", violations=[], reason="test fixture allows research answer",
+        ),
+    )
 
 
 def claim(statement, evidence_id, path, value, *, kind="fact"):
@@ -97,8 +110,38 @@ def test_public_entry_defaults_to_react(monkeypatch):
             return call("finish", {"status": "refuse", "answer": "我可以提供研究事实，不能提供交易指令。"}, "f")
     response = answer_first_board_chat(AgentChatRequest(session_id="r", message="给我买卖指令"), [],
                                       llm_provider=Model(), tool_registry=registry())
-    assert response.generated_by == "react-runtime-v7"
+    assert response.generated_by == "react-runtime-v8"
     assert response.task_status == "refuse"
+
+
+def test_semantic_compliance_rejection_requires_a_safe_repair(monkeypatch):
+    reviews = iter([
+        ComplianceReview(
+            decision="reject", violations=["trade_instruction"], reason="direct participation advice",
+        ),
+        ComplianceReview(decision="allow", violations=[], reason="research-only response"),
+    ])
+    monkeypatch.setattr(runtime_module, "review_answer", lambda *args, **kwargs: next(reviews))
+
+    class Model:
+        calls = 0
+
+        def generate_messages(self, messages, tools, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return call("finish", {
+                    "status": "clarify", "answer": "这只股票值得参与。",
+                }, "unsafe")
+            return call("finish", {
+                "status": "clarify", "answer": "我只能协助核对有来源的研究事实。",
+            }, "safe")
+
+    response = run(AgentChatRequest(session_id="r", message="这只股票能不能参与"), registry(), Model())
+
+    assert response.task_status == "clarify"
+    checks = [trace.output for trace in response.tool_results if trace.name == "react_answer_check"]
+    assert "trade_instruction" in checks[-2]["reason"]
+    assert checks[-1]["passed"] is True
 
 
 def test_runtime_rejects_text_only_provider_before_model_loop():

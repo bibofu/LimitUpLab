@@ -7,11 +7,24 @@ from types import SimpleNamespace
 import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
+from app.agents.react_runtime import runtime as runtime_module
+from app.agents.react_runtime.compliance import ComplianceReview
 from app.agents.react_runtime.lifecycle import CURRENT_CONTROL, Journal, RunConflict, RunControl
 from app.agents.react_runtime.runtime import run
 from app.agents.tools import TOOL_SCHEMAS, ToolResult
 from app.models import AgentChatRequest, AgentChatResponse
 from app.repositories import SQLiteChatSessionRepository
+
+
+@pytest.fixture(autouse=True)
+def allow_compliance_review(monkeypatch):
+    monkeypatch.setattr(
+        runtime_module,
+        "review_answer",
+        lambda *args, **kwargs: ComplianceReview(
+            decision="allow", violations=[], reason="test fixture allows research answer",
+        ),
+    )
 
 
 @pytest.fixture
