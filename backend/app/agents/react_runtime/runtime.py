@@ -2,7 +2,6 @@
 
 import json
 import os
-import re
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from contextvars import copy_context
 from datetime import datetime, timezone
@@ -58,19 +57,6 @@ class State(TypedDict, total=False):
 
 # A process-wide bound prevents timed-out requests spawning unlimited new pools.
 TOOL_POOL = ThreadPoolExecutor(max_workers=MAX_CONCURRENCY, thread_name_prefix="react-tool")
-
-_EVIDENCE_FREE_COMPLETE_RE = re.compile(
-    r"^\s*(?:你?好|您好|嗨|hi|hello|谢谢|感谢|再见|"
-    r"你是谁|你能做什么|你有(?:什么|哪些)功能|怎么使用|如何使用|帮助)\s*[！!。.?？]*\s*$",
-    re.IGNORECASE,
-)
-_HISTORY_REFERENCE_RE = re.compile(r"上一轮|上次|前面|刚才|此前|之前|这组|该名单|上述")
-
-
-def _allows_evidence_free_complete(message: str) -> bool:
-    """Only narrow conversational requests may complete without research evidence."""
-
-    return bool(_EVIDENCE_FREE_COMPLETE_RE.fullmatch(message))
 
 
 def _grounding_traces(records):
@@ -315,17 +301,14 @@ class Run:
             if unsafe_answer(final.answer) or contains_prompt_leak(final.answer):
                 raise ValueError("Unsafe or internal content; answer research facts only")
             cited = [self.evidence.get(key) for key in dict.fromkeys(final.evidence_ids)]
-            if final.status == "empty" and not cited:
-                raise ValueError("Empty research answers must cite the empty result evidence")
-            if final.status == "complete" and not cited and not _allows_evidence_free_complete(self.request.message):
-                raise ValueError("Complete research answers must cite evidence")
+            if final.status in {"complete", "empty"} and not cited:
+                raise ValueError(f"{final.status} answers must cite evidence")
             if (
                 final.status in {"complete", "empty"}
                 and cited
                 and all(record.get("historical_reference") for record in cited)
-                and not _HISTORY_REFERENCE_RE.search(self.request.message)
             ):
-                raise ValueError("Historical references alone cannot complete a new research request")
+                raise ValueError("Historical references alone cannot complete a research request; refresh or return partial")
             if final.status == "complete" and (final.missing or any(r["status"] != "satisfied" for r in self.requirements)):
                 raise ValueError("Unfinished requirements must be disclosed as partial")
             requirement_evidence = {

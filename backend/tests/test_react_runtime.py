@@ -3,6 +3,7 @@
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
+import pytest
 from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.agents.react_runtime.contracts import Compute
@@ -97,7 +98,6 @@ def test_evidence_page_is_not_silently_retruncated():
 
 
 def test_kline_schema_matches_single_entity_invocation():
-    import pytest
     from app.agents.react_runtime.tools import ToolGateway
     gateway = ToolGateway(registry(), EvidenceStore())
     definition = next(d for d in gateway.definitions() if d["function"]["name"] == "stock_kline")
@@ -138,7 +138,7 @@ def test_plain_model_text_must_be_repaired_through_finish():
     assert checks[-1]["passed"] is True
 
 
-def test_complete_research_answer_requires_evidence_but_greeting_does_not():
+def test_complete_answer_requires_evidence_even_for_qualitative_claim():
     class ResearchModel:
         calls = 0
 
@@ -160,18 +160,36 @@ def test_complete_research_answer_requires_evidence_but_greeting_does_not():
         registry(),
         ResearchModel(),
     )
-    greeting = run(
-        AgentChatRequest(session_id="r", message="你好"),
+    assert research.task_status == "partial"
+
+
+@pytest.mark.parametrize("message", ["你好", "早上好", "在吗", "介绍下你自己", "hello there"])
+def test_evidence_free_complete_has_no_phrase_whitelist(message):
+    class Model:
+        calls = 0
+
+        def generate_messages(self, messages, tools, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return call("finish", {
+                    "status": "complete",
+                    "answer": "你好，我可以协助做收盘研究。",
+                }, "unsupported")
+            return call("finish", {
+                "status": "clarify",
+                "answer": "你好，请告诉我想了解的研究问题。",
+            }, "repaired")
+
+    response = run(
+        AgentChatRequest(session_id="r", message=message),
         registry(),
-        type("GreetingModel", (), {
-            "generate_messages": lambda self, *args, **kwargs: call(
-                "finish", {"status": "complete", "answer": "你好，我可以协助做收盘研究。"}, "hello"
-            )
-        })(),
+        Model(),
     )
 
-    assert research.task_status == "partial"
-    assert greeting.task_status == "complete"
+    assert response.task_status == "clarify"
+    checks = [trace.output for trace in response.tool_results if trace.name == "react_answer_check"]
+    assert checks[0]["passed"] is False
+    assert "must cite evidence" in checks[0]["reason"]
 
 
 def test_satisfied_requirement_must_bind_and_retain_evidence():
