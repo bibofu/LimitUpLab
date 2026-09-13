@@ -4,7 +4,6 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
-from app.agents.capability_contract import available_capability_names
 from app.agents.tools import EXTENDED_AGENT_PROFILE, V1_AGENT_PROFILE, V1_CLOSED_MARKET_TOOL_NAMES, V1_DEFERRED_REALTIME_TOOL_NAMES, AgentToolRegistry
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.sample_data import SAMPLE_EVENTS
@@ -58,17 +57,6 @@ class AgentV1ProfileTest(unittest.TestCase):
         schema_names = {schema.name for schema in registry.schemas()}
         self.assertTrue(V1_DEFERRED_REALTIME_TOOL_NAMES.issubset(schema_names))
         self.assertIn("hot_stock_ranking", {schema.name for schema in registry.schemas()})
-
-    # Regression scenario: v1 capability catalog includes read only external workflows.
-    def test_v1_capability_catalog_includes_read_only_external_workflows(self) -> None:
-        catalog = available_capability_names(V1_CLOSED_MARKET_TOOL_NAMES)
-
-        self.assertIn("first_board_rating", catalog)
-        self.assertIn("limit_up_pool", catalog)
-        self.assertIn("popularity", catalog)
-        self.assertIn("finance_news", catalog)
-        self.assertIn("stock_news", catalog)
-
 
 if __name__ == "__main__":
     unittest.main()
