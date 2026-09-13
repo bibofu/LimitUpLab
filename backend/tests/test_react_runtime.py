@@ -22,6 +22,14 @@ def call(name, args, key):
     return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": key}])
 
 
+def claim(statement, evidence_id, path, value, *, kind="fact"):
+    return {
+        "statement": statement,
+        "kind": kind,
+        "evidence": [{"evidence_id": evidence_id, "path": path, "value": value}],
+    }
+
+
 def registry(**methods):
     return SimpleNamespace(events=[], profile="test", schemas=lambda: TOOL_SCHEMAS,
                            is_enabled=lambda _: True, **methods)
@@ -47,7 +55,8 @@ def test_react_observes_error_and_selects_next_tool():
             import json
             evidence_id = json.loads(latest.content)["evidence_id"]
             return call("finish", {"status": "partial", "answer": "新闻查询失败；行情证据显示震荡。",
-                                   "evidence_ids": [evidence_id], "missing": ["新闻"]}, "f")
+                                   "evidence_ids": [evidence_id], "missing": ["新闻"],
+                                   "claims": [claim("行情证据显示震荡", evidence_id, ["trend"], "震荡")]}, "f")
     response = run(AgentChatRequest(session_id="r", message="新闻失败时继续查12日K线"),
                    registry(stock_news=news, stock_kline=kline), Model())
     assert response.task_status == "partial"
@@ -88,7 +97,7 @@ def test_public_entry_defaults_to_react(monkeypatch):
             return call("finish", {"status": "refuse", "answer": "我可以提供研究事实，不能提供交易指令。"}, "f")
     response = answer_first_board_chat(AgentChatRequest(session_id="r", message="给我买卖指令"), [],
                                       llm_provider=Model(), tool_registry=registry())
-    assert response.generated_by == "react-runtime-v6"
+    assert response.generated_by == "react-runtime-v7"
     assert response.task_status == "refuse"
 
 
@@ -277,7 +286,7 @@ def test_satisfied_requirement_must_bind_and_retain_evidence():
     assert response.tool_calls == []
 
 
-def test_grounding_rejects_wrong_metric_then_accepts_supported_repair():
+def test_claim_ledger_rejects_wrong_value_then_accepts_supported_repair():
     class Model:
         calls = 0
         evidence_id = ""
@@ -297,11 +306,23 @@ def test_grounding_rejects_wrong_metric_then_accepts_supported_repair():
                     "status": "complete",
                     "answer": "贵州茅台(600519)在2026-05-15的收益为9.9%。",
                     "evidence_ids": [self.evidence_id],
+                    "claims": [claim(
+                        "贵州茅台(600519)在2026-05-15的收益为9.9%",
+                        self.evidence_id,
+                        ["return_10d_pct"],
+                        9.9,
+                    )],
                 }, "wrong")
             return call("finish", {
                 "status": "complete",
                 "answer": "贵州茅台(600519)在2026-05-15的收益为1.2%。",
                 "evidence_ids": [self.evidence_id],
+                "claims": [claim(
+                    "贵州茅台(600519)在2026-05-15的收益为1.2%",
+                    self.evidence_id,
+                    ["return_10d_pct"],
+                    1.2,
+                )],
             }, "correct")
 
     def kline(symbol, days=20, end_date: date | None = None):
@@ -325,8 +346,8 @@ def test_grounding_rejects_wrong_metric_then_accepts_supported_repair():
 
     assert response.task_status == "complete"
     checks = [trace.output for trace in response.tool_results if trace.name == "react_answer_check"]
-    assert "9.9%" in checks[-2]["reason"]
-    assert checks[-1]["grounding"]["unsupported_claim_count"] == 0
+    assert "does not match" in checks[-2]["reason"]
+    assert checks[-1]["claim_ledger"]["claim_count"] == 1
 
 
 @pytest.mark.parametrize("submitted_status", ["complete", "partial", "empty", "clarify", "refuse"])
@@ -446,11 +467,23 @@ def test_current_evidence_cannot_smuggle_history_into_final_answer():
                     "status": "complete",
                     "answer": "600519截至2026-09-11上涨2.5%。",
                     "evidence_ids": [self.current_id, "ev_old"],
+                    "claims": [claim(
+                        "600519截至2026-09-11上涨2.5%",
+                        self.current_id,
+                        ["return_10d_pct"],
+                        2.5,
+                    )],
                 }, "mixed")
             return call("finish", {
                 "status": "complete",
                 "answer": "600519截至2026-09-11上涨2.5%。",
                 "evidence_ids": [self.current_id],
+                "claims": [claim(
+                    "600519截至2026-09-11上涨2.5%",
+                    self.current_id,
+                    ["return_10d_pct"],
+                    2.5,
+                )],
             }, "repaired")
 
     response = run(

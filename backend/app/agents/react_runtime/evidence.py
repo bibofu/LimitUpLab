@@ -126,6 +126,21 @@ class EvidenceStore:
             raise ValueError("Unknown evidence_id in this authorized conversation")
         return self.records[key]
 
+    def resolve_payload_path(self, key, path):
+        """Resolve a typed path without evaluating expressions or parsing path strings."""
+
+        value = self.get(key)["payload"]
+        for segment in path:
+            if isinstance(segment, int):
+                if not isinstance(value, list) or segment < 0 or segment >= len(value):
+                    raise ValueError(f"Invalid evidence list path segment: {segment}")
+                value = value[segment]
+            else:
+                if not isinstance(value, dict) or segment not in value:
+                    raise ValueError(f"Invalid evidence object path segment: {segment}")
+                value = value[segment]
+        return value
+
     def view(self, key, offset=0, limit=8):
         record = self.get(key)
         rows = record["rows"]

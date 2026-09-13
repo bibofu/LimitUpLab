@@ -39,6 +39,7 @@ SYSTEM = """你是LimitUpLab收盘研究助手。使用原生工具调用逐轮�
 禁止买卖指令、建议仓位、目标价、收益承诺或确定性预测；历史机构买卖事实可以解释。
 混合请求可拒绝交易建议部分并完成允许研究。歧义影响结果时澄清；工具不支持时明确说明。
 最终必须单独调用finish，输出可读中文答案、真实status、使用的evidence_ids及missing。
+回答中的每条市场事实和推断都必须写入claims；statement须原样出现在答案中，且绑定到本轮证据payload的精确类型化路径。
 不要展示内部工具名、原始JSON、思维链。答案只在服务端校验后发布。
 观察中的rows可能只是预览；需要完整名单时read_evidence展开或compute_result处理完整结果。
 所有工具名及参数都必须使用提供的Schema；工具是否存在以当前清单为准。"""
@@ -59,23 +60,6 @@ class State(TypedDict, total=False):
 
 # A process-wide bound prevents timed-out requests spawning unlimited new pools.
 TOOL_POOL = ThreadPoolExecutor(max_workers=MAX_CONCURRENCY, thread_name_prefix="react-tool")
-
-
-def _grounding_traces(records):
-    """Adapt only the evidence explicitly cited by finish to the grounding checker."""
-
-    return [
-        AgentToolTrace(
-            name=record["tool"],
-            output=record["payload"] if isinstance(record["payload"], dict) else {"items": record["payload"]},
-            summary=f"cited evidence {record['evidence_id']}",
-            result=AgentToolOutcome(
-                status=record["result_state"],
-                payload=record["payload"] if isinstance(record["payload"], dict) else {"items": record["payload"]},
-            ),
-        )
-        for record in records
-    ]
 
 
 class Run:
@@ -300,7 +284,6 @@ class Run:
         if self.control and self.control.cancelled():
             return self.stop("cancelled")
         from app.agents.react_runtime.safety import unsafe_answer
-        from app.agents.answer_grounding import evaluate_answer_grounding
         try:
             final = Finish.model_validate(state["finish"])
             if unsafe_answer(final.answer) or contains_prompt_leak(final.answer):
@@ -318,23 +301,40 @@ class Run:
             }
             if not requirement_evidence <= set(final.evidence_ids):
                 raise ValueError("Final answer must retain evidence for satisfied requirements")
-            grounding = evaluate_answer_grounding(
-                final.answer,
-                _grounding_traces(cited),
-                user_message=self.request.message,
-            )
-            if grounding.unsupported_claim_count:
-                unsupported = "、".join(
-                    claim.text for claim in grounding.claims if not claim.supported
-                )
-                raise ValueError("Unsupported answer claims: " + unsupported[:300])
+            if final.evidence_ids and not final.claims:
+                raise ValueError("Evidence-backed answers must provide a structured claim ledger")
+            cited_ids = set(final.evidence_ids)
+            for claim in final.claims:
+                if claim.statement not in final.answer:
+                    raise ValueError("Claim statement must appear verbatim in the final answer")
+                for binding in claim.evidence:
+                    if binding.evidence_id not in cited_ids:
+                        raise ValueError("Claim evidence must be retained in final evidence_ids")
+                    record = self.evidence.get(binding.evidence_id)
+                    if record.get("historical_reference"):
+                        raise ValueError("Claims cannot bind conversation-history evidence")
+                    actual = self.evidence.resolve_payload_path(binding.evidence_id, binding.path)
+                    if isinstance(actual, (dict, list)):
+                        raise ValueError("Claim evidence paths must resolve to scalar values")
+                    expected = binding.value
+                    both_numbers = (
+                        isinstance(actual, (int, float))
+                        and not isinstance(actual, bool)
+                        and isinstance(expected, (int, float))
+                        and not isinstance(expected, bool)
+                    )
+                    if actual != expected or (not both_numbers and type(actual) is not type(expected)):
+                        raise ValueError("Claim evidence value does not match the cited payload path")
             self.answer, self.status = final.answer, final.status
             self.reason = "answered"
             self.trace("react_answer_check", {
                 "passed": True,
                 "status": final.status,
                 "missing": final.missing,
-                "grounding": grounding.payload(),
+                "claim_ledger": {
+                    "claim_count": len(final.claims),
+                    "claims": [claim.model_dump(mode="json") for claim in final.claims],
+                },
             })
             return {"done": True}
         except Exception as error:
