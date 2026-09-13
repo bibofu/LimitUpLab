@@ -92,7 +92,7 @@ def prepare_event_candidates(database: Path, anchor: datetime, book_path: Path, 
                                        "calibrated ordered-list claim evaluator", "alternative valid tool arguments"],
                   "limitations": ["single recorded argument signature, not all valid routes",
                                   "observed single-session calendar, not an official trading calendar",
-                                  "production event view omits amount; do not demand invented amounts",
+                                  "full Evidence includes amount; trace summary is not the complete payload",
                                   "no real model execution or automatic answer-fact pass"]}
         assets.append((case, world, artifact, review))
     # Validate all prerequisites before creating the batch. Never overwrite earlier evidence.

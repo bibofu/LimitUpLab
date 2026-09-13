@@ -16,6 +16,8 @@ from langchain_core.messages import message_to_dict, messages_to_dict
 from app.agent_eval.evaluators import evaluate_trajectory_terminal
 from app.agent_eval.extractor import SYSTEM as EXTRACTOR_SYSTEM, extract_answer
 from app.agent_eval.facts import verify_summary_facts
+from app.agent_eval.event_extractor import SYSTEM as EVENT_EXTRACTOR_SYSTEM, extract_event_answer
+from app.agent_eval.event_facts import verify_event_facts
 from app.agent_eval.frozen_registry import FrozenAgentToolRegistry
 from app.agent_eval.loader import load_suite, world_digest
 from app.agent_eval.models import AssetRef, BudgetSpec, EvalResult, RunManifest
@@ -101,9 +103,13 @@ def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240
                for path in sorted(folder.glob("*.py"))}
     client = getattr(getattr(provider, "chat_model", None), "root_client", None)
     provider_host = urlsplit(str(getattr(client, "base_url", ""))).hostname
+    event_case = any(a.target == "answer.ordered_events" for a in case.assertions if a.evaluator == "fact")
+    extractor = extract_event_answer if event_case else extract_answer
+    verifier = verify_event_facts if event_case else verify_summary_facts
+    extractor_system = EVENT_EXTRACTOR_SYSTEM if event_case else EXTRACTOR_SYSTEM
     save(directory, "source.json", {"source_digest": digest(sources), "case_digest": digest(case.model_dump(mode="json")),
         "worker_pid": os.getpid(), "provider_host": provider_host,
-        "extractor_prompt_digest": digest(EXTRACTOR_SYSTEM), "privacy_status": "unreviewed"})
+        "extractor_prompt_digest": digest(extractor_system), "privacy_status": "unreviewed"})
     guarded = GuardedProvider(provider, directory, started + wall_seconds, budget)
     extraction_error = None
     with capture_llm_usage() as usage:
@@ -115,12 +121,12 @@ def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240
         save(directory, "trajectory.json", trajectory.model_dump(mode="json"))
         extraction = None
         try:
-            extraction = extract_answer(guarded, response.answer)
+            extraction = extractor(guarded, response.answer)
             save(directory, "extraction.json", extraction.model_dump(mode="json"))
         except Exception as error:
             extraction_error = type(error).__name__
             save(directory, "extraction-error.json", {"error_type": extraction_error})
-        facts = verify_summary_facts(case, world, response, extraction, diagnostic_unreviewed=True)
+        facts = verifier(case, world, response, extraction, diagnostic_unreviewed=True)
         save(directory, "facts.json", facts.model_dump(mode="json"))
     fact_ids = {a.id for a in case.assertions if a.evaluator == "fact"}
     trajectory_findings = [f for f in trajectory.findings if f.assertion_id not in fact_ids]

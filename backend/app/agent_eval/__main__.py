@@ -40,6 +40,10 @@ def main() -> int:
     fact.add_argument("--world", required=True, type=Path)
     fact.add_argument("--response", required=True, type=Path)
     fact.add_argument("--extraction", type=Path)
+    event_fact = commands.add_parser("check-event-facts")
+    for name in ("case", "world", "response"):
+        event_fact.add_argument("--" + name, required=True, type=Path)
+    event_fact.add_argument("--extraction", type=Path)
     run = commands.add_parser("run-offline")
     for name in ("case", "world", "output-dir"):
         run.add_argument("--" + name, required=True, type=Path)
@@ -69,6 +73,12 @@ def main() -> int:
         response = AgentChatResponse.model_validate_json(args.response.read_text(encoding="utf-8"))
         extraction = Extraction.model_validate_json(args.extraction.read_text(encoding="utf-8")) if args.extraction else None
         result = verify_summary_facts(load_case(args.case), load_world(args.world), response, extraction).model_dump(mode="json")
+        exit_code = {"pass": 0, "fail": 1, "needs_review": 2}[result["verdict"]]
+    elif args.command == "check-event-facts":
+        from app.agent_eval.event_facts import ListExtraction, verify_event_facts
+        response = AgentChatResponse.model_validate_json(args.response.read_text(encoding="utf-8"))
+        extraction = ListExtraction.model_validate_json(args.extraction.read_text(encoding="utf-8")) if args.extraction else None
+        result = verify_event_facts(load_case(args.case), load_world(args.world), response, extraction).model_dump(mode="json")
         exit_code = {"pass": 0, "fail": 1, "needs_review": 2}[result["verdict"]]
     elif args.command == "run-offline":
         from app.agent_eval.runner import run_offline
