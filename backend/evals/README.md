@@ -228,3 +228,11 @@ fixture_failure；运行停止于 Provider 错误标 provider_failure；抽取�
 
 下一步应围绕本次真实答案建立独立标注、扩充事实适配器和反误杀校准，再扩大 World/Case。
 批量 Runner、Live、Stability、Judge 和完整发布判定仍待建设。
+
+## 批量出题蓝图
+
+已新增 `blueprints/core40_live48.json`：40道Offline问题、30道Historical Live、12道
+Current Invariant、6道External Canary，均包含交付项、校验意图及数据/录制需求。
+蓝图不是可执行Case，也没有增加active题目数；既有市场汇总候选对应OFF-001，不重复计数。
+`blueprint-coverage` 根据生产目录生成逐工具/逐Profile矩阵，明确列出extended的24项
+正常路径计划缺口和未显式规划参数。详见 `blueprints/README.md` 的录制顺序与物化要求。

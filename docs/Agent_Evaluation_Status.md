@@ -55,3 +55,9 @@ Worker约8.69秒。Agent返回complete，主问题的日期和40家数量与证�
 正式评测题库、批量 Runner、经过校准的抽取器及完整 Answer Fact Evaluator 仍未完成，
 M1尚未达标。下一步应从真实回答出发建立独立标注和校准，再扩充资产。
 具体运行命令、边界及后续工作见 `backend/evals/README.md`。
+
+已完成40道Offline与48道Live（30历史/12当前/6外部）的具体问题蓝图及规划覆盖矩阵。
+88条蓝图保存在 `backend/evals/blueprints/core40_live48.json`，不是88个可执行Case；
+正式active题目仍为0，既有市场汇总候选属于OFF-001。数据、bindings、终态及断言物化
+尚待逐题完成。v1的24个工具已有正常主路径计划；extended除两个专属工具外的24个
+正常路径仍是明确缺口，不能借用v1覆盖代替。下一步从本地事件小批录制与真实回答校准开始。
