@@ -10,6 +10,7 @@ import httpx
 import pytest
 import uvicorn
 from fastapi import FastAPI, Request
+from langchain_core.messages import AIMessage
 
 from app.agents.react_runtime.lifecycle import Journal
 from app.agents.react_runtime.runtime import run
@@ -127,3 +128,53 @@ def test_cancel_interrupted_run_does_not_restart_model(http_server):
     result = client.get(f"/chat/runs/{key}").json()
     assert not result["active"] and result["response"]["task_status"] == "cancelled"
     assert state.calls == 0
+
+
+def test_http_never_publishes_plain_unsupported_market_answer(http_server):
+    client, _state = http_server
+    guarded_registry = SimpleNamespace(
+        events=[],
+        schemas=lambda: TOOL_SCHEMAS,
+        is_enabled=lambda _: True,
+    )
+
+    class PlainThenPartial:
+        calls = 0
+
+        def generate_messages(self, messages, tools, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return AIMessage(content="贵州茅台今天涨停，成交额100亿元。")
+            return AIMessage(content="", tool_calls=[{
+                "name": "finish",
+                "id": "finish",
+                "args": {
+                    "status": "partial",
+                    "answer": "没有取得行情证据，无法核验该结论。",
+                    "missing": ["今日行情"],
+                },
+            }])
+
+    agents.answer_first_board_chat = lambda request, **kwargs: run(
+        request,
+        guarded_registry,
+        PlainThenPartial(),
+        progress=kwargs.get("progress_callback"),
+    )
+    response = client.post("/chat", json={
+        "session_id": "finish-gate-http",
+        "message_id": "finish-gate-message",
+        "message": "查询贵州茅台今天行情",
+    })
+
+    assert response.status_code == 200
+    payload = response.json()
+    assert payload["task_status"] == "partial"
+    assert "100亿元" not in payload["answer"]
+    checks = [
+        trace["output"]
+        for trace in payload["tool_results"]
+        if trace["name"] == "react_answer_check"
+    ]
+    assert checks[0]["passed"] is False
+    assert checks[-1]["passed"] is True

@@ -2,6 +2,7 @@
 
 import json
 import os
+import re
 from concurrent.futures import ThreadPoolExecutor, wait, FIRST_COMPLETED
 from contextvars import copy_context
 from datetime import datetime, timezone
@@ -57,6 +58,36 @@ class State(TypedDict, total=False):
 
 # A process-wide bound prevents timed-out requests spawning unlimited new pools.
 TOOL_POOL = ThreadPoolExecutor(max_workers=MAX_CONCURRENCY, thread_name_prefix="react-tool")
+
+_EVIDENCE_FREE_COMPLETE_RE = re.compile(
+    r"^\s*(?:你?好|您好|嗨|hi|hello|谢谢|感谢|再见|"
+    r"你是谁|你能做什么|你有(?:什么|哪些)功能|怎么使用|如何使用|帮助)\s*[！!。.?？]*\s*$",
+    re.IGNORECASE,
+)
+_HISTORY_REFERENCE_RE = re.compile(r"上一轮|上次|前面|刚才|此前|之前|这组|该名单|上述")
+
+
+def _allows_evidence_free_complete(message: str) -> bool:
+    """Only narrow conversational requests may complete without research evidence."""
+
+    return bool(_EVIDENCE_FREE_COMPLETE_RE.fullmatch(message))
+
+
+def _grounding_traces(records):
+    """Adapt only the evidence explicitly cited by finish to the grounding checker."""
+
+    return [
+        AgentToolTrace(
+            name=record["tool"],
+            output=record["payload"] if isinstance(record["payload"], dict) else {"items": record["payload"]},
+            summary=f"cited evidence {record['evidence_id']}",
+            result=AgentToolOutcome(
+                status=record["result_state"],
+                payload=record["payload"] if isinstance(record["payload"], dict) else {"items": record["payload"]},
+            ),
+        )
+        for record in records
+    ]
 
 
 class Run:
@@ -127,11 +158,16 @@ class Run:
             messages = [*messages, response]
             if response.tool_calls:
                 return {"messages": messages, "pending": response.tool_calls, "finish": None}
-            # A plain response must still pass the same typed final-answer gate.
-            return {"messages": messages, "finish": {
-                "status": "complete", "answer": str(response.content),
-                "evidence_ids": list(self.evidence.records), "missing": [],
-            }, "pending": []}
+            reason = "Final answers must be submitted through the typed finish tool"
+            self.trace("react_answer_check", {"passed": False, "reason": reason})
+            if self.repairs >= 1:
+                return self.stop("validation_failed")
+            self.repairs += 1
+            return {
+                "messages": [*messages, HumanMessage(content="回答校验反馈：" + reason)],
+                "pending": [],
+                "finish": None,
+            }
         except Exception as error:
             self.trace("react_provider_error", {"round": self.models, "error_type": type(error).__name__}, status="error")
             self.errors.append("模型请求失败")
@@ -235,6 +271,15 @@ class Run:
                     old_ids = {r["id"] for r in self.requirements}
                     if not old_ids <= {r["id"] for r in args["requirements"]}:
                         raise ValueError("Cannot remove previously recorded requirements")
+                    for requirement in args["requirements"]:
+                        if requirement["status"] != "satisfied":
+                            continue
+                        if not requirement["evidence_ids"]:
+                            raise ValueError("Satisfied requirements must cite evidence")
+                        for key in requirement["evidence_ids"]:
+                            record = self.evidence.get(key)
+                            if record["result_state"] not in {"ok", "empty", "partial"}:
+                                raise ValueError("Satisfied requirements must cite usable evidence")
                     self.requirements = args["requirements"]
                     result = {"requirements": self.requirements}
                 elif name == "compute_result":
@@ -264,19 +309,51 @@ class Run:
         if self.control and self.control.cancelled():
             return self.stop("cancelled")
         from app.agents.react_runtime.safety import unsafe_answer
+        from app.agents.answer_grounding import evaluate_answer_grounding
         try:
             final = Finish.model_validate(state["finish"])
             if unsafe_answer(final.answer) or contains_prompt_leak(final.answer):
                 raise ValueError("Unsafe or internal content; answer research facts only")
-            for key in final.evidence_ids:
-                self.evidence.get(key)
-            if final.status in {"complete", "empty"} and self.tools and not final.evidence_ids:
-                raise ValueError("No evidence cited for researched answer")
+            cited = [self.evidence.get(key) for key in dict.fromkeys(final.evidence_ids)]
+            if final.status == "empty" and not cited:
+                raise ValueError("Empty research answers must cite the empty result evidence")
+            if final.status == "complete" and not cited and not _allows_evidence_free_complete(self.request.message):
+                raise ValueError("Complete research answers must cite evidence")
+            if (
+                final.status in {"complete", "empty"}
+                and cited
+                and all(record.get("historical_reference") for record in cited)
+                and not _HISTORY_REFERENCE_RE.search(self.request.message)
+            ):
+                raise ValueError("Historical references alone cannot complete a new research request")
             if final.status == "complete" and (final.missing or any(r["status"] != "satisfied" for r in self.requirements)):
                 raise ValueError("Unfinished requirements must be disclosed as partial")
+            requirement_evidence = {
+                key
+                for requirement in self.requirements
+                if requirement["status"] == "satisfied"
+                for key in requirement["evidence_ids"]
+            }
+            if not requirement_evidence <= set(final.evidence_ids):
+                raise ValueError("Final answer must retain evidence for satisfied requirements")
+            grounding = evaluate_answer_grounding(
+                final.answer,
+                _grounding_traces(cited),
+                user_message=self.request.message,
+            )
+            if grounding.unsupported_claim_count:
+                unsupported = "、".join(
+                    claim.text for claim in grounding.claims if not claim.supported
+                )
+                raise ValueError("Unsupported answer claims: " + unsupported[:300])
             self.answer, self.status = final.answer, final.status
             self.reason = "answered"
-            self.trace("react_answer_check", {"passed": True, "status": final.status, "missing": final.missing})
+            self.trace("react_answer_check", {
+                "passed": True,
+                "status": final.status,
+                "missing": final.missing,
+                "grounding": grounding.payload(),
+            })
             return {"done": True}
         except Exception as error:
             self.trace("react_answer_check", {"passed": False, "reason": str(error)})

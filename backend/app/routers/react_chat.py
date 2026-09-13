@@ -10,6 +10,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request
 from fastapi.responses import StreamingResponse
 
 from app.agents.react_runtime.lifecycle import CURRENT_CONTROL, Journal, RunConflict, RunControl
+from app.agents.react_runtime.contracts import VERSION
 from app.models import AgentChatResponse, ChatSessionMessage
 from app.repositories import SQLiteChatSessionRepository, SessionOwnershipError
 from app.security import current_owner_id
@@ -56,7 +57,7 @@ def start(request, http_request, owner_id):
         except Exception:
             journal.finish(run_id, owner_id, AgentChatResponse(
                 session_id=request.session_id, run_id=run_id, intent="react_research", answer="请求未能启动，请稍后重试。",
-                task_status="error", stop_reason="request_rejected", generated_by="react-runtime-v1",
+                task_status="error", stop_reason="request_rejected", generated_by=VERSION,
             ).model_dump(mode="json"))
             raise
         try:
@@ -97,7 +98,7 @@ def start(request, http_request, owner_id):
                 response = AgentChatResponse(
                     session_id=request.session_id, run_id=run_id, intent="react_research",
                     answer="本次研究执行失败，已保留运行记录。可以重试或缩小查询范围。",
-                    task_status="error", stop_reason="execution_error", generated_by="react-runtime-v1",
+                    task_status="error", stop_reason="execution_error", generated_by=VERSION,
                 )
             finally:
                 try:
@@ -121,7 +122,7 @@ def start(request, http_request, owner_id):
 
 def failed_response(row, reason):
     return AgentChatResponse(session_id=row["session_id"], run_id=row["run_id"], intent="react_research",
-        answer="本次研究未能完成，请稍后重试。", task_status="error", stop_reason=reason, generated_by="react-runtime-v1")
+        answer="本次研究未能完成，请稍后重试。", task_status="error", stop_reason=reason, generated_by=VERSION)
 
 
 def stream(journal, row, owner_id, after=0):
