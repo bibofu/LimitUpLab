@@ -284,9 +284,9 @@ migration manifest, question-bank samples, and local baselines were retired on
 release-quality baseline. The project validation command and system health check
 therefore do not run the old evaluation suites.
 
-Legacy evaluator and report-compatibility code remains temporarily available for
-the upcoming redesign, but its CLI entrypoints must not be used to claim current
-ReAct quality. See `docs/Agent_Evaluation_Status.md` for the current boundary.
+The legacy evaluators, CLIs, report API and health-check integration have also
+been removed. A future evaluation system will be designed independently of the
+deleted contracts. See `docs/Agent_Evaluation_Status.md` for the current boundary.
 
 The chat Agent also exposes a general `limit_up_events` internal tool for
 same-day limit-up questions such as continued-board lists, board-height filters,

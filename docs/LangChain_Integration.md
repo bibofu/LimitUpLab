@@ -73,7 +73,7 @@ LIMITUPLAB_LLM_TIMEOUT_SECONDS=30
 - 输入安全与最终投资合规分别使用独立强制 tool call 的结构化语义 Reviewer；失败时关闭，不通过补关键词正则扩展语义边界。
 - 外部网页、新闻和历史消息均视为不可信内容，不能修改工具权限或系统边界。
 - 系统只做研究解释，不输出买卖、仓位、目标价、收益承诺或确定性预测。
-- Claim Ledger 让开放式定性和因果声明可追踪到明确证据字段；路径和值一致不等同于证明因果，相关语义质量仍需要离线 Judge 和真实 Bad Case 回归。
+- Claim Ledger 让开放式定性和因果声明可追踪到明确证据字段；路径和值一致不等同于证明因果，相关语义质量仍需通过后续重新设计的验证体系和真实 Bad Case 检查。
 
 ## 运行恢复
 
@@ -81,22 +81,15 @@ LIMITUPLAB_LLM_TIMEOUT_SECONDS=30
 
 SSE GET 重连只读取事件和最终响应，不启动模型或工具。显式再次 POST 同一请求可以从保存的 checkpoint 恢复。取消是协作式的：不再启动新调用，但已经进入底层网络库的请求可能稍后结束。当前 worker 和锁是单进程设计，多 Uvicorn 进程部署前需要数据库租约或外部队列。
 
-## 评测与验证
+## 验证
 
 ```powershell
 # 完整离线项目验收
 backend/.venv/Scripts/python.exe scripts/check_project.py
 
-# 公开 89-case 冻结事实回放
-cd backend
-.\.venv\Scripts\python.exe scripts\run_agent_eval.py --dataset dev --mode offline --trials 1 --summary-only
-
-# 生产 ReAct + 真实模型 + 冻结工具世界
-.\.venv\Scripts\python.exe scripts\run_agent_live_eval.py --case-id LIVE-SIMPLE-002 --trials 1
-.\.venv\Scripts\python.exe scripts\run_agent_live_eval.py --trials 3 --judge
 ```
 
-离线 Chat Eval V2 保留历史报告格式，但自然语言 Query Contract 与 Planner 阶段为 N/A；它只能证明冻结工具事实、Grounding 和答案契约。真实 ReAct runner 记录输入安全判定、原始模型决策、实际业务工具、Claim Ledger、合规判定、任务终态、模型轮数、token 和可选 Judge。公开集、单题 smoke 和浏览器抽查都不能替代私有 Holdout、稳定性与成本发布门槛。
+旧 Agent 评测实现和数据均已删除。当前命令只验证代码、前端和构建，不代表真实模型行为或发布质量。
 
 V1.4 标记前完整后端回归为 616 项及 6 个子测试通过，0 失败/跳过；另有 3 条 LangGraph/websockets 依赖弃用警告。版本发布仍需运行标签工作流要求的 Windows/Linux 完整验收。
 

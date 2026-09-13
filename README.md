@@ -301,7 +301,6 @@ sequenceDiagram
 - Controlled Conversation Context
 - Persistent Chat Sessions
 - Agent Run Observability
-- Agent 评测体系待按当前 ReAct 设计重建
 - Champion/Challenger Policy Governance
 
 ## 项目结构
@@ -589,7 +588,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mo
 
 完整接口定义以 Swagger 为准。
 
-## 测试与 Agent 评测状态
+## 测试
 
 推荐从项目根目录运行统一离线验收。需要 Python 3.13、Node.js 24，并先安装依赖：
 
@@ -614,9 +613,9 @@ cd backend
 .\.venv\Scripts\python.exe -m pytest tests -q -p no:cacheprovider
 ```
 
-旧 Chat Eval V2、Live Behavioral Eval V1、冻结工具世界、迁移清单和题库型样本已于 2026-09-13 退役并删除。当前仓库没有正式 Agent 评测集，也没有可用于发布判定的 Agent 质量基线；统一检查入口不再运行旧离线 Eval，系统健康也不再执行旧 smoke case。
+旧 Agent 评测数据和实现已全部删除。当前仓库没有正式 Agent 评测集或发布质量基线，普通测试与构建不得解释为 Agent 行为评测。
 
-旧评测 CLI 和历史报告兼容代码暂时保留，但在新方案确定前不得用来生成当前 Agent 的质量结论。状态与边界见 [Agent 评测状态](docs/Agent_Evaluation_Status.md)。
+后续重新设计前不保留旧 Evaluator、CLI、API 或健康检查兼容层。状态见 [Agent 评测状态](docs/Agent_Evaluation_Status.md)。
 
 前端生产构建：
 
@@ -666,7 +665,7 @@ npm.cmd run build
 4. 修复 ReAct 类型化终态和输出关系门禁，持续扩充工具失败、日期截止点和多轮指代评测。
 5. V2 再为盘中板块、正式公告原文和更多策略建立独立数据契约与 Eval；需要横向扩容时迁移 PostgreSQL、Redis 限流和异步 Worker。
 
-当前版本边界见 [V1.4 阶段里程碑](./docs/V1.4_Milestone.md)，后续架构工作见 [ReAct 重构计划](./docs/agent-react-refactor-plan.md)。
+当前版本边界见 [V1.4 阶段里程碑](./docs/V1.4_Milestone.md)。
 
 ## 面试演示建议
 

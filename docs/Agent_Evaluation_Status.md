@@ -7,7 +7,9 @@
 - Chat Eval V2 公开 Dev、冻结工具事实和 V1 迁移清单；
 - Live Behavioral Eval V1 及其冻结工具世界；
 - 题库型评测样本、已生成的本地评测报告和旧基线产物；
-- 仅依赖上述固定数据集的回归测试与统一验收步骤。
+- Evaluator、Runner、Gate、Judge 校准、生成器和命令行入口；
+- `/api/agents/eval`、系统健康评测字段及仅依赖旧评测的测试；
+- 仅服务于旧方案的设计与验证文档。
 
 删除原因是这些资产主要反映旧 Query/Planner/Tool Policy 或过渡期
 Plan-and-Execute 设计，无法充分评价当前 bounded ReAct 的 Observation 后决策、
@@ -17,8 +19,7 @@ Plan-and-Execute 设计，无法充分评价当前 bounded ReAct 的 Observation
 
 当前仓库没有可用于宣称 Agent 质量、模型稳定性或发布通过的正式评测集。
 普通 pytest、前端测试和构建仍是代码回归检查，但不得称为 Agent 行为评测。
-旧评测 CLI、Evaluator 和历史报告兼容代码暂时保留，等待新方案确定后统一替换或删除；
-在此之前不应运行旧入口生成新的质量结论。
+旧评测代码和兼容入口不再保留。后续方案不得直接复用旧数据模型、通过阈值或报告结构。
 
 历史里程碑和 `docs/code-quality-audit.md` 中的旧评测结果只记录当时事实，
 不代表当前版本验收状态。

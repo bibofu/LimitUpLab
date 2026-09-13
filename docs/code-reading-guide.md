@@ -28,11 +28,8 @@ come from deterministic code and recorded data; the model plans and explains.
 10. `models.py`: builds user-visible metadata and retains compatibility for
     historical stored traces. `react_chat.py` persists the final response once.
 
-For evaluation, `chat_live_eval_runner.py` executes this production loop with
-frozen tools. `chat_eval_runner_v2.py` retains fixture replay, shadow and report
-reading; it no longer runs a separate Planner/Answer model pipeline. The deleted
-`eval_runner.py`, `tool_policy.py`, `tool_execution/` and old chat Prompt/template
-modules are not part of the current call graph.
+The previous Agent evaluation runners, frozen fixtures, gates and report API have
+been removed. They are not part of the current call graph.
 
 ## Follow the data behind an answer
 
@@ -42,11 +39,11 @@ modules are not part of the current call graph.
 | `repositories/` | Read/write SQLite records | Keys, transactions, ownership, immutable snapshots |
 | `services/` | Calculate and combine domain facts | Trading-day windows, denominators, eligibility, missing values |
 | `agents/first_board.py` | Filter candidates, build Facts and score | Exclusions versus missing data, policy version, confidence |
-| `agents/query_contract.py` | Shared event normalization plus legacy eval/compat parsing | Do not mistake its full parser for the production ReAct router |
+| `agents/query_contract.py` | Shared event normalization for domain tools | Do not mistake its full parser for the production ReAct router |
 | `post_limit_query_contract.py` | Interpret post-limit shape research | Anchor, cutoff, shape thresholds and statistical windows |
 | `agents/tools.py` | Expose domain operations to chat | Tool inputs, full output, compact trace, active profile |
 | `models.py` | Define API and stored data shapes | Optional fields, validators and uniform result states |
-| `backend/scripts/` | Run collection, backfill and evaluation workflows | Step order, restart behavior, reports and failure states |
+| `backend/scripts/` | Run collection and backfill workflows | Step order, restart behavior, reports and failure states |
 | `frontend/src/` | Fetch, format and render facts | State updates, stale requests, empty states and source links |
 | `backend/tests/`, `frontend/tests/` | Explain expected behavior with controlled cases | Regression scenario, fixtures and assertions |
 | `deploy/`, `scripts/` | Start, verify and deploy the system | Process ownership, locks, backups and recovery |
@@ -58,7 +55,7 @@ modules are not part of the current call graph.
 - **Trace**: the inspectable record of native model decisions, Policy allow/reject,
   tool inputs/outcomes, evidence references and the final answer check.
 - **Query contract**: a deterministic domain parameter contract used inside
-  specific tools or compatibility evaluation. Production chat semantics come
+  specific tools. Production chat semantics come
   from the ReAct message/tool loop rather than one global regex parser.
 - **Profile**: the configured set of capabilities/tools allowed for this Agent.
 - **Fallback**: an explicit source- or role-specific alternate path. The retired
