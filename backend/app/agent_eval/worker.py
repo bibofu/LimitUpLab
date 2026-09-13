@@ -1,0 +1,190 @@
+"""One explicit real-model case in a disposable process; no production persistence."""
+
+import argparse
+from dataclasses import asdict
+import json
+import os
+from pathlib import Path
+import sqlite3
+from time import perf_counter
+from uuid import uuid4
+from urllib.parse import urlsplit
+
+from fastapi.encoders import jsonable_encoder
+from langchain_core.messages import message_to_dict, messages_to_dict
+
+from app.agent_eval.evaluators import evaluate_trajectory_terminal
+from app.agent_eval.extractor import SYSTEM as EXTRACTOR_SYSTEM, extract_answer
+from app.agent_eval.facts import verify_summary_facts
+from app.agent_eval.frozen_registry import FrozenAgentToolRegistry
+from app.agent_eval.loader import load_suite, world_digest
+from app.agent_eval.models import AssetRef, BudgetSpec, EvalResult, RunManifest
+from app.agent_eval.recorder import digest
+from app.agents.react_runtime import runtime
+from app.agents.react_runtime.contracts import VERSION
+from app.agents.react_runtime.evidence import EVIDENCE_VERSION
+from app.agents.tools import TOOL_CONTRACT_VERSION
+from app.config import configure_runtime_environment
+from app.models import AgentChatRequest
+from app.services.llm_provider import LLMProvider, capture_llm_usage, get_llm_provider, require_react_provider
+
+
+def save(directory, name, value):
+    with (directory / name).open("x", encoding="utf-8") as handle:
+        json.dump(jsonable_encoder(value), handle, ensure_ascii=False, indent=2, allow_nan=False)
+
+
+class GuardedProvider(LLMProvider):
+    def __init__(self, provider, directory, deadline, budget):
+        self.provider, self.directory, self.deadline, self.budget = provider, directory, deadline, budget
+        self.calls = self.input_tokens = self.output_tokens = 0
+        self.token_usage_complete = True
+        self.budget_exhausted = False
+
+    def generate_messages(self, messages, tools, *, timeout_seconds=30, max_tokens=4096):
+        remaining = self.deadline - perf_counter()
+        if (remaining <= 0 or self.calls >= self.budget.max_model_calls
+                or self.input_tokens >= self.budget.max_input_tokens
+                or self.output_tokens >= self.budget.max_output_tokens):
+            self.budget_exhausted = True
+            raise TimeoutError("evaluation execution budget exhausted")
+        self.calls += 1
+        name = f"call-{self.calls:02d}"
+        save(self.directory, name + "-request.json", {"messages": messages_to_dict(messages), "tools": tools,
+             "timeout_seconds": min(timeout_seconds, remaining), "max_tokens": max_tokens})
+        try:
+            result = self.provider.generate_messages(messages, tools,
+                timeout_seconds=min(timeout_seconds, remaining),
+                max_tokens=min(max_tokens, self.budget.max_output_tokens - self.output_tokens))
+            save(self.directory, name + "-response.json", message_to_dict(result))
+            usage = result.usage_metadata or {}
+            if type(usage.get("input_tokens")) is int and type(usage.get("output_tokens")) is int:
+                self.input_tokens += usage["input_tokens"]
+                self.output_tokens += usage["output_tokens"]
+            else:
+                self.token_usage_complete = False
+            return result
+        except Exception as error:
+            self.token_usage_complete = False
+            save(self.directory, name + "-error.json", {"error_type": type(error).__name__})
+            raise
+
+
+def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240):
+    started = perf_counter()
+    cases, worlds = load_suite([case_path], [world_path])
+    case, world = cases[0], worlds[0]
+    if case.mode != "offline" or len(case.conversation) != 1:
+        raise ValueError("this worker supports a single-turn offline case only")
+    if case.status not in {"candidate", "active"}:
+        raise ValueError("case status is not runnable")
+    require_react_provider(provider)
+    registry = FrozenAgentToolRegistry(world)
+    budget = BudgetSpec(max_agent_runs=1, max_model_calls=16, max_input_tokens=2000000,
+                        max_output_tokens=100000, max_estimated_cost_usd=None,
+                        max_wall_time_seconds=wall_seconds)
+    request = AgentChatRequest(session_id=str(uuid4()), message_id=str(uuid4()),
+                               message=case.conversation[0].content)
+    manifest = RunManifest(run_id=str(uuid4()), runtime_version=VERSION,
+        tool_contract_version=TOOL_CONTRACT_VERSION, evidence_version=EVIDENCE_VERSION,
+        evaluator_version="single-case-diagnostic-v1", model=getattr(provider, "model", "test-provider"),
+        prompt_digest=digest({"agent": runtime.SYSTEM, "extractor": EXTRACTOR_SYSTEM}),
+        cases=[AssetRef(id=case.case_id, version=case.case_version)],
+        world_digests={world.world_id: world_digest(world)}, budget=budget, worker_count=1)
+    save(directory, "manifest.json", manifest.model_dump(mode="json"))
+    save(directory, "request.json", request.model_dump(mode="json"))
+    save(directory, "case.json", case.model_dump(mode="json"))
+    save(directory, "world.json", world.model_dump(mode="json"))
+    source_root = Path(__file__).resolve().parents[1]
+    sources = {str(path.relative_to(source_root)): path.read_text(encoding="utf-8")
+               for folder in [source_root / "agent_eval", source_root / "agents/react_runtime"]
+               for path in sorted(folder.glob("*.py"))}
+    client = getattr(getattr(provider, "chat_model", None), "root_client", None)
+    provider_host = urlsplit(str(getattr(client, "base_url", ""))).hostname
+    save(directory, "source.json", {"source_digest": digest(sources), "case_digest": digest(case.model_dump(mode="json")),
+        "worker_pid": os.getpid(), "provider_host": provider_host,
+        "extractor_prompt_digest": digest(EXTRACTOR_SYSTEM), "privacy_status": "unreviewed"})
+    guarded = GuardedProvider(provider, directory, started + wall_seconds, budget)
+    extraction_error = None
+    with capture_llm_usage() as usage:
+        with registry.anchored():
+            response = runtime.run(request, registry, guarded)
+        save(directory, "response.json", response.model_dump(mode="json"))
+        save(directory, "frozen-attempts.json", registry.attempts)
+        trajectory = evaluate_trajectory_terminal(case, response, profile=world.profile)
+        save(directory, "trajectory.json", trajectory.model_dump(mode="json"))
+        extraction = None
+        try:
+            extraction = extract_answer(guarded, response.answer)
+            save(directory, "extraction.json", extraction.model_dump(mode="json"))
+        except Exception as error:
+            extraction_error = type(error).__name__
+            save(directory, "extraction-error.json", {"error_type": extraction_error})
+        facts = verify_summary_facts(case, world, response, extraction, diagnostic_unreviewed=True)
+        save(directory, "facts.json", facts.model_dump(mode="json"))
+    fact_ids = {a.id for a in case.assertions if a.evaluator == "fact"}
+    trajectory_findings = [f for f in trajectory.findings if f.assertion_id not in fact_ids]
+    findings = trajectory_findings + facts.findings
+    trajectory_verdict = "fail" if any(f.verdict == "fail" for f in trajectory_findings) else (
+        "needs_review" if any(f.verdict == "needs_review" for f in trajectory_findings) else "pass")
+    cause = None
+    if guarded.budget_exhausted:
+        verdict, cause = "unscorable", "evaluator_failure"
+    elif any(attempt["outcome"] == "rejected" for attempt in registry.attempts):
+        verdict, cause = "unscorable", "fixture_failure"
+    elif response.stop_reason in {"provider_error", "input_policy_error"}:
+        verdict, cause = "unscorable", "provider_failure"
+    elif any(f.verdict == "fail" for f in trajectory.findings):
+        verdict, cause = "fail", "agent_failure"
+    else:
+        verdict = "needs_review"  # Uncalibrated extraction never establishes a release pass/fail.
+        if extraction_error:
+            cause = "evaluator_failure"
+    result = EvalResult(case=manifest.cases[0], run_id=manifest.run_id, verdict=verdict, primary_cause=cause,
+        findings=findings, model_calls=guarded.calls,
+        total_tokens=usage.total_tokens if usage.token_usage_complete else None,
+        elapsed_seconds=perf_counter() - started)
+    save(directory, "result.json", result.model_dump(mode="json"))
+    ledger = asdict(usage)
+    ledger.update(token_usage_complete=usage.token_usage_complete, guarded_calls=guarded.calls,
+                  estimated_cost_usd=None, pricing_status="not_configured")
+    save(directory, "usage.json", ledger)
+    summary = {"verdict": verdict, "primary_cause": cause, "release_eligible": False,
+               "model": manifest.model, "model_calls": guarded.calls, "total_tokens": result.total_tokens,
+               "trajectory": trajectory_verdict, "fact_diagnostic": facts.verdict,
+               "extraction_status": "uncalibrated", "case_status": case.status,
+               "budget_exhausted": guarded.budget_exhausted,
+               "agent_task_status": response.task_status, "elapsed_seconds": round(result.elapsed_seconds, 2)}
+    save(directory, "summary.json", summary)
+    return summary
+
+
+def main():
+    parser = argparse.ArgumentParser(description=__doc__)
+    for name in ("case", "world", "output-dir"):
+        parser.add_argument("--" + name, required=True, type=Path)
+    parser.add_argument("--wall-seconds", type=int, default=240)
+    parser.add_argument("--allow-llm", action="store_true", required=True)
+    args = parser.parse_args()
+    if not 1 <= args.wall_seconds <= 900:
+        parser.error("wall-seconds must be between 1 and 900")
+    try:
+        configure_runtime_environment()
+        # The child never initializes application repositories or the HTTP lease/journal path.
+        def forbid_database(*a, **k):
+            raise RuntimeError("database access is forbidden in offline evaluation worker")
+        sqlite3.connect = forbid_database
+        from app.agents.react_runtime.lifecycle import CURRENT_CONTROL
+        CURRENT_CONTROL.set(None)
+        summary = execute_case(args.case, args.world, args.output_dir, get_llm_provider(), wall_seconds=args.wall_seconds)
+        print(json.dumps(summary, ensure_ascii=False), flush=True)
+        return {"pass": 0, "fail": 1, "needs_review": 2, "unscorable": 3}[summary["verdict"]]
+    except Exception as error:
+        cause = "provider_failure" if type(error).__name__ == "NativeFunctionCallingUnavailable" else "evaluator_failure"
+        save(args.output_dir, "worker-error.json", {"error_type": type(error).__name__, "verdict": "unscorable", "primary_cause": cause})
+        print(json.dumps({"verdict": "unscorable", "error_type": type(error).__name__}), flush=True)
+        return 3
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

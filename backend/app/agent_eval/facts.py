@@ -67,10 +67,11 @@ class Extraction(Contract):
 class FactReport(Contract):
     verifier_version: Literal["summary-facts-v1"] = "summary-facts-v1"
     normalizer_version: Literal["decimal-units-v1"] = "decimal-units-v1"
-    scope: Literal["reviewed_summary_numeric_claims"] = "reviewed_summary_numeric_claims"
+    scope: Literal["reviewed_summary_numeric_claims", "provisional_summary_numeric_claims"] = "reviewed_summary_numeric_claims"
     case: AssetRef
     verdict: Literal["pass", "fail", "needs_review"]
     release_eligible: Literal[False] = False
+    extraction_status: Literal["reviewed", "unreviewed"] = "reviewed"
     claim_coverage: float | None = None
     numeric_coverage: float | None = None
     relation_coverage: float | None = None
@@ -180,18 +181,20 @@ def _fact_context(case, world, response):
 
 
 def verify_summary_facts(case: CaseSpec, world: WorldSpec, response: AgentChatResponse,
-                         extraction: Extraction | None) -> FactReport:
+                         extraction: Extraction | None, *, diagnostic_unreviewed: bool = False) -> FactReport:
     findings, support = [], {}
     coverage = numeric = relation = None
     try:
         if extraction is None:
-            raise ValueError("no reviewed extraction; automatic Chinese extraction is not implemented")
+            raise ValueError("no extraction artifact; use the explicit LLM runner or supply reviewed extraction")
         extraction = Extraction.model_validate_json(extraction.model_dump_json())
         if extraction.answer_digest != digest(response.answer):
             raise ValueError("extraction belongs to a different answer")
         required = 2 if case.severity == "P0" else 1
-        if (not extraction.inventory_complete or len(set(extraction.inventory_reviewers)) < required
-                or len(set(extraction.extraction_reviewers)) < required):
+        if diagnostic_unreviewed:
+            findings.append(finding("$calibration", "needs_review", "automatic extraction is uncalibrated; claim verdicts are provisional"))
+        elif (not extraction.inventory_complete or len(set(extraction.inventory_reviewers)) < required
+              or len(set(extraction.extraction_reviewers)) < required):
             raise ValueError("independent inventory/extraction review is incomplete")
         for slot in extraction.inventory:
             if slot.end <= slot.start or slot.end > len(response.answer) or response.answer[slot.start:slot.end] != slot.quote:
@@ -203,7 +206,9 @@ def verify_summary_facts(case: CaseSpec, world: WorldSpec, response: AgentChatRe
         numeric = ratio([s for s in extraction.inventory if s.numeric])
         relation = ratio([s for s in extraction.inventory if s.relational])
         if coverage != 1:
-            findings.append(finding("$extraction", "needs_review", "zero or incomplete independently inventoried claim coverage"))
+            detail = ("model-proposed inventory contains unextracted statements; independent coverage is unknown"
+                      if diagnostic_unreviewed else "zero or incomplete independently inventoried claim coverage")
+            findings.append(finding("$extraction", "needs_review", detail))
         truth, current, visible, paths = _fact_context(case, world, response)
         passed = set()
         for claim in extraction.claims:
@@ -219,7 +224,8 @@ def verify_summary_facts(case: CaseSpec, world: WorldSpec, response: AgentChatRe
                     elif identity not in current or identity not in visible:
                         verdict, detail = "fail", "world-correct claim lacks current visible evidence"
                     else:
-                        verdict, detail = "pass", "reviewed claim matches world, current evidence and visible facts"
+                        verdict, detail = "pass", ("model-proposed claim provisionally matches world, current and visible facts"
+                            if diagnostic_unreviewed else "reviewed claim matches world, current evidence and visible facts")
                         passed.add(identity)
                         support[claim.slot_id] = paths[identity]
                 except ValueError:
@@ -251,5 +257,9 @@ def verify_summary_facts(case: CaseSpec, world: WorldSpec, response: AgentChatRe
     verdict = "fail" if any(f.verdict == "fail" for f in findings) else (
         "needs_review" if any(f.verdict == "needs_review" for f in findings) else "pass")
     return FactReport(case=AssetRef(id=case.case_id, version=case.case_version), verdict=verdict,
-                      claim_coverage=coverage, numeric_coverage=numeric, relation_coverage=relation,
+                      scope="provisional_summary_numeric_claims" if diagnostic_unreviewed else "reviewed_summary_numeric_claims",
+                      extraction_status="unreviewed" if diagnostic_unreviewed else "reviewed",
+                      claim_coverage=None if diagnostic_unreviewed else coverage,
+                      numeric_coverage=None if diagnostic_unreviewed else numeric,
+                      relation_coverage=None if diagnostic_unreviewed else relation,
                       findings=findings, support_paths=support)

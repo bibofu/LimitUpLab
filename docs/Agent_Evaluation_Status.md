@@ -37,7 +37,7 @@ Frozen Registry 已接入现有 ToolGateway，覆盖有效参数精确匹配、P
 标准化结果状态与来源错误回放。Record-Replay 已保存真实 ToolResult、标准化完整结果和
 模型可见证据，包含完整性校验及观测结构指纹；新增只读本地 `market_summary` 录制命令。
 2026-09-11 单日数据实录（58 条事件、40 条封板）通过七项回放一致性检查，产物仅在
-被忽略的 output 目录、仍待隐私/事实审核；尚未晋升为正式 World，未调用真实 LLM。
+被忽略的 output 目录、未晋升为正式 World；该录制步骤未调用真实 LLM。
 此录制不是不可变历史时点数据，也不具有完整交易日历覆盖。
 现已由录制导出一个本地候选 World/Case，附来源与资产摘要、待审核清单，未自动晋升。
 轨迹/终态 Evaluator 已能检查工具选择、禁止尝试、关键参数和错误 complete；基于真实
@@ -46,6 +46,12 @@ runtime trace 的脚本模型测试验证此链路。未实现的 Fact 等检查
 现已补充独立的审核声明清单/抽取契约、数量单位归一化及窄范围 Summary Fact Verifier。
 核验 World、本轮完整 Evidence 和实际可见 metadata/rows，报告声明清单覆盖率，
 零抽取、不确定和输入漂移明确 needs_review；附合成标注的反误杀契约校准测试。
-尚未实现通用中文自动抽取，也没有真实样本的双人复核校准结果；不把测试标注冒充审核。
-正式评测题库、真实模型 Runner 和完整 Answer Fact Evaluator 仍未完成，因此不能宣称已有
-可运行的正式 Agent 评测集。具体边界及下一步见 `backend/evals/README.md`。
+现已接入单题隔离 Runner、真实 LLM 声明抽取和统一 EvalResult。2026-09-13 首次通过
+DeepSeek 运行完整链路（真实输入安全/Agent/回答合规/抽取），5次调用、23,841 Token，
+Worker约8.69秒。Agent返回complete，主问题的日期和40家数量与证据相符。
+由于模型主动补充的高度、比率、行业等尚未全面覆盖，且抽取未校准，总结果needs_review。
+原始报告位于本地忽略目录 `output/agent-eval/runs/real-summary-001`，未重跑或覆盖。
+自动抽取不冒充人工审核，独立覆盖率未知，不能仅凭这次结果建立质量基线。
+正式评测题库、批量 Runner、经过校准的抽取器及完整 Answer Fact Evaluator 仍未完成，
+M1尚未达标。下一步应从真实回答出发建立独立标注和校准，再扩充资产。
+具体运行命令、边界及后续工作见 `backend/evals/README.md`。

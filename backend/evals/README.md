@@ -1,8 +1,8 @@
 # Agent 评测资产
 
 当前完成 M1 的类型、加载层、Frozen Registry、单工具 Record-Replay、候选资产导出，
-以及轨迹/终态检查、人工审核抽取接口与窄范围 Fact Verifier。正式题库、真实模型 Runner、
-通用中文事实抽取和完整 Fact Evaluator 尚未实现。
+以及轨迹/终态检查、审核抽取接口与窄范围 Fact Verifier。单题隔离 Runner 和真实 LLM
+声明抽取已接通并实际运行；正式题库、经校准的自动抽取器和完整 Fact Evaluator 尚未完成。
 
 可执行模型位于 `app/agent_eval/models.py`，加载与引用校验位于 `loader.py`。
 资产采用 UTF-8 JSON，可通过每个 Pydantic 模型的 `model_json_schema()` 导出规范。
@@ -10,7 +10,8 @@
 
 - `CaseSpec`：Profile、用户交付项、断言意图、终态及版本化 World 引用。
 - `WorldSpec`：带时区的参考时间、独立的最新本地日期、明确覆盖范围的交易日历和录制。
-- `RunManifest`：版本、模型、资产摘要及显式正值预算。
+- `RunManifest`：版本、模型、资产摘要及显式预算。费用上限可显式为 null，表示已授权费用不限；
+  不等于用零代替未知费用，也不取消调用次数、Token 与时长边界。
 - `EvalResult`：失败与弃权不能被汇总成 Pass，未知 Token 保留为 null。
 
 所有测试中的市场数据均为标明来源的合成协议样本，不是正式 Golden 或市场事实。
@@ -123,8 +124,8 @@ payload、模型可见 Evidence View、原始调用参数和工具规范化后�
 
 ## 审核抽取接口与 Summary Fact Verifier
 
-`facts.py` 把声明清单、声明抽取、单位归一化和证据核验分开。当前不自动抽取任意中文，
-也不调用 LLM。`Extraction` 是独立标注文件，必须绑定**实际返回答案**的 `digest(answer)`
+`facts.py` 把声明清单、声明抽取、单位归一化和证据核验分开。本节的审核型核验入口不
+自行调用 LLM，真实自动抽取见下一节。`Extraction` 是独立标注文件，必须绑定**实际返回答案**的 `digest(answer)`
 及逐字匹配的原文起止位置；不能给模型预填 expected_facts 再当作其回答声明。
 
 - `inventory`：独立审核的全部原子声明清单，每项包含 id、start/end、quote，及 numeric /
@@ -169,5 +170,61 @@ numeric / relational 声明，分子为关联抽取记录数。它们衡量**清
 Evidence、可见路径漂移和漏抽。测试中的声明来自显式合成标注，不是自动抽取器产物；
 因此尚未测得自动抽取 FP/FN，也不能替代设计中的 120～180 条双人复核校准集。
 
-下一步需要确认抽取适配方式及真实标注审核，再扩充事实适配器、建立自动抽取校准。
-Runner、完整 Live 分支、Fault Injection 和完整发布判定在对应步骤补齐。
+## 单题真实 LLM 闭环（实验性）
+
+```powershell
+.venv/Scripts/python.exe -m app.agent_eval run-offline --case ../output/agent-eval/candidates/local-summary-step4/case.json --world ../output/agent-eval/candidates/local-summary-step4/world.json --output-dir ../output/agent-eval/runs/new-run --allow-llm --wall-seconds 240
+```
+
+这个命令会实际调用已配置的外部 LLM，必须确认目的地及数据外发授权。输入包括问题、
+Agent 系统提示、工具定义、冻结业务证据和生成答案；密钥仅用于认证，不放进提示或报告。
+默认 `check_project.py` 不调用此入口，仍强制关闭 LLM。
+
+- `runner.py` 创建一个独立子进程，`worker.py` 只支持单轮 Offline 的 candidate/active Case。
+  该进程有自己的 runtime TOOL_POOL，直接运行 runtime，不走生产 HTTP 限流租约和 journal；
+  显式清空 CURRENT_CONTROL，并禁止 sqlite3.connect。每次创建新 session/message/run ID。
+- 工具仍全部经过 Frozen Registry，不会因为没录制就回退真实工具。输入安全和回答合规
+  审查保留真实 Provider，不用测试替身；Agent 规划、审查、抽取全部计入调用账本。
+- 当前每次只运行 1 题，最多 16 次模型调用、200 万输入 Token、10 万输出 Token，默认
+  240 秒。费用不限（null）；时长范围 1～900 秒，父进程另留 15 秒启动/清理宽限。
+  Token 以实际返回 usage 计量，调用后记账、下一次调用前熔断；不是事前精确 Token 保证。
+  usage 不完整时保留未知，总调用数和时限仍有效，不将未知 Token 记为真实零消耗。
+- 无测试通过导向的自动重跑。子进程超时被终止，已产生的逐次请求/响应保留；不完整运行
+  返回 unscorable。输出目录存在就拒绝覆盖，避免覆盖失败样本。
+- 保存 manifest、输入资产副本及摘要、请求身份、源代码摘要、每次 Provider 请求/响应、
+  完整 AgentChatResponse、Frozen 匹配记录、抽取、分项核验、统一 EvalResult 和 usage。
+  数据只保存在被忽略的 output，privacy_status 为 unreviewed；不提交或自动上传报告。
+  没有价格配置时 estimated_cost_usd=null，不猜价格或将其写成0。
+
+`extractor.py` 使用真实模型和结构化工具调用遍历回答全文。它只收到答案和抽取规则，
+不接收 expected facts、World 或工具返回，避免把真值抄成答案声明。原文引用必须逐字
+存在，宿主确定偏移；重复片段通过 occurrence 定位，伪造引用直接报抽取错误并保留原输出。
+非数字、未知语义及不能解析的声明也必须留下项目，不能直接丢弃。
+
+自动抽取产生 `origin=model`、`inventory_complete=false`，不填写任何人工审核者。
+诊断 FactReport 使用 `provisional_summary_numeric_claims`，单条结果只代表在该抽取假设
+下的核验；独立 Claim/Numeric/Relation Coverage 全部为 null，不能拿模型自报清单当分母。
+必须建立独立标注校准集后，才能评价抽取漏报率及决定哪些结果可以自动裁决。
+
+统一结果替换轨迹报告中的 Fact 占位断言，并保留逐声明诊断。已知录制匹配失败优先标记
+fixture_failure；运行停止于 Provider 错误标 provider_failure；抽取协议失败标 evaluator_failure。
+预算/Worker 异常单独留原因。没有这些阻断时，确定的轨迹/终态失败可以判 Agent fail；
+未校准抽取的 pass/fail 仍不能独立决定整题通过或失败。release_eligible 始终 false。
+当前为有限归因规则，不代表设计中的完整根因分析已完成。
+
+### 首次真实运行记录
+
+2026-09-13，经用户确认使用 `api.deepseek.com` / `deepseek-v4-flash`，首次单题运行完成：
+
+- 本地目录：`output/agent-eval/runs/real-summary-001`，原始记录保持不变。
+- 5 次真实调用：输入安全 1 次、Agent 决策 2 次、回答合规 1 次、声明抽取 1 次。
+- 23,841 Token（输入 22,317，输出 1,524），Worker 内约 8.69 秒，未触及预算。
+- Agent 返回 complete，答出 2026-09-11 涨停40家；工具选择、禁止远端跌停参数、终态和
+  空 missing 的已实现检查通过，所要求的数量/日期关系在自动抽取假设下与证据相符。
+- 自动清单列出11项、结构化数值声明8项；不能把8/11当作独立校准覆盖率。附加的连板
+  高度、比率、行业等尚未全面核验，自动抽取也未经校准，统一结果为 needs_review。
+- 这次暴露的是覆盖范围和校准缺口，不应通过删去额外声明、放宽断言或改用脚本答案来
+  伪装通过。报告本身不是市场结论、模型稳定性结果或发布基线。
+
+下一步应围绕本次真实答案建立独立标注、扩充事实适配器和反误杀校准，再扩大 World/Case。
+批量 Runner、Live、Stability、Judge 和完整发布判定仍待建设。

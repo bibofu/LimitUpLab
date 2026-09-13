@@ -142,8 +142,11 @@ def test_budget_requires_explicit_positive_limits():
                 max_output_tokens=100, max_estimated_cost_usd=1, max_wall_time_seconds=30)
     assert BudgetSpec.model_validate(data).max_model_calls == 8
     for field in data:
-        with pytest.raises(ValidationError):
-            BudgetSpec.model_validate({**data, field: None})
+        if field == "max_estimated_cost_usd":
+            assert BudgetSpec.model_validate({**data, field: None}).max_estimated_cost_usd is None
+        else:
+            with pytest.raises(ValidationError):
+                BudgetSpec.model_validate({**data, field: None})
         with pytest.raises(ValidationError):
             BudgetSpec.model_validate({**data, field: 0})
 

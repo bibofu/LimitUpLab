@@ -1,4 +1,4 @@
-"""Explicit local recording CLI. No LLM or production HTTP requests."""
+"""Evaluation CLI; real LLM execution requires explicit run-offline --allow-llm."""
 
 import argparse
 from datetime import datetime
@@ -35,6 +35,11 @@ def main() -> int:
     fact.add_argument("--world", required=True, type=Path)
     fact.add_argument("--response", required=True, type=Path)
     fact.add_argument("--extraction", type=Path)
+    run = commands.add_parser("run-offline")
+    for name in ("case", "world", "output-dir"):
+        run.add_argument("--" + name, required=True, type=Path)
+    run.add_argument("--allow-llm", action="store_true", required=True)
+    run.add_argument("--wall-seconds", type=int, default=240)
     args = parser.parse_args()
     exit_code = 0
     if args.command == "record-local-summary":
@@ -49,11 +54,15 @@ def main() -> int:
         response = AgentChatResponse.model_validate_json(args.response.read_text(encoding="utf-8"))
         result = evaluate_trajectory_terminal(load_case(args.case), response, profile=args.profile).model_dump(mode="json")
         exit_code = {"pass": 0, "fail": 1, "needs_review": 2}[result["verdict"]]
-    else:
+    elif args.command == "check-summary-facts":
         response = AgentChatResponse.model_validate_json(args.response.read_text(encoding="utf-8"))
         extraction = Extraction.model_validate_json(args.extraction.read_text(encoding="utf-8")) if args.extraction else None
         result = verify_summary_facts(load_case(args.case), load_world(args.world), response, extraction).model_dump(mode="json")
         exit_code = {"pass": 0, "fail": 1, "needs_review": 2}[result["verdict"]]
+    else:
+        from app.agent_eval.runner import run_offline
+        result = run_offline(args.case, args.world, args.output_dir, wall_seconds=args.wall_seconds)
+        exit_code = {"pass": 0, "fail": 1, "needs_review": 2, "unscorable": 3}[result["verdict"]]
     print(json.dumps(result, ensure_ascii=False, indent=2))
     return exit_code
 

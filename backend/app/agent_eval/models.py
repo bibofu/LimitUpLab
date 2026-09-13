@@ -183,7 +183,8 @@ class BudgetSpec(Contract):
     max_model_calls: Annotated[int, Field(gt=0)]
     max_input_tokens: Annotated[int, Field(gt=0)]
     max_output_tokens: Annotated[int, Field(gt=0)]
-    max_estimated_cost_usd: Annotated[float, Field(gt=0)]
+    # Explicit null means user-authorized uncapped monetary spend, not missing usage.
+    max_estimated_cost_usd: Annotated[float, Field(gt=0)] | None
     max_wall_time_seconds: Annotated[int, Field(gt=0)]
 
 
