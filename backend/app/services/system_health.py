@@ -15,7 +15,7 @@ from app.services.analysis import latest_trade_date
 from app.services.data_health import build_agent_data_health
 
 
-SYSTEM_HEALTH_VERSION = "agent-system-health-v4-eval-retired"
+SYSTEM_HEALTH_VERSION = "agent-system-health-v5"
 CN_TZ = ZoneInfo("Asia/Shanghai")
 
 
@@ -23,7 +23,6 @@ def build_agent_system_health(
     events: list[LimitUpEvent],
     *,
     first_board_repository: SQLiteFirstBoardRepository | None = None,
-    run_offline_eval: bool = False,
 ) -> AgentSystemHealthResponse:
     """Build local runtime health status for development and demos."""
 
@@ -38,9 +37,6 @@ def build_agent_system_health(
         first_board_repository=first_board_repository or SQLiteFirstBoardRepository(),
         trade_date=latest_date or expected_date,
     )
-    eval_total: int | None = None
-    eval_failed: int | None = None
-    eval_passed: bool | None = None
     llm_enabled = env_bool("LIMITUPLAB_LLM_ENABLED")
     llm_provider_configured = bool(
         os.getenv("DEEPSEEK_API_KEY", "").strip()
@@ -56,15 +52,11 @@ def build_agent_system_health(
         warnings.append("LLM is enabled but no API key is configured.")
     if proxy_warning:
         warnings.append(proxy_warning)
-    if run_offline_eval:
-        warnings.append("Agent evaluation dataset is retired; no evaluation was run.")
-
     status = _overall_status(
         data_health_status=data_health.status,
         data_fresh=data_fresh,
         llm_enabled=llm_enabled,
         llm_provider_configured=llm_provider_configured,
-        offline_eval_passed=eval_passed,
     )
     return AgentSystemHealthResponse(
         status=status,
@@ -80,9 +72,6 @@ def build_agent_system_health(
         llm_model=os.getenv("LIMITUPLAB_LLM_MODEL") or None,
         proxy_configured=bool(_current_proxy()),
         proxy_warning=proxy_warning,
-        offline_eval_passed=eval_passed,
-        offline_eval_total=eval_total,
-        offline_eval_failed=eval_failed,
         data_health=data_health,
         warnings=warnings,
         generated_by=SYSTEM_HEALTH_VERSION,
@@ -133,22 +122,19 @@ def _proxy_warning() -> str | None:
         return f"Configured local proxy {parsed.hostname}:{parsed.port} is unreachable."
 
 
-# Combine data, model-configuration and offline-evaluation checks into the reported health state.
+# Combine data and model-configuration checks into the reported health state.
 def _overall_status(
     *,
     data_health_status: str,
     data_fresh: bool,
     llm_enabled: bool,
     llm_provider_configured: bool,
-    offline_eval_passed: bool | None,
 ) -> str:
     if data_health_status == "missing":
         return "missing"
     if llm_enabled and not llm_provider_configured:
         return "partial"
     if not data_fresh:
-        return "partial"
-    if offline_eval_passed is False:
         return "partial"
     if data_health_status == "partial":
         return "partial"

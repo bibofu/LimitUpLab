@@ -14,13 +14,11 @@ from fastapi.responses import StreamingResponse
 
 from app.agents import answer_first_board_chat, build_first_board_ratings, build_review_agent_report
 from app.agents.review_agent import enrich_review_position_labels
-from app.agents.chat_eval_runner_v2 import load_latest_completed_report
 from app.collectors import HithinkFinanceError
 from app.models import (
     AgentChatRequest,
     AgentChatResponse,
     AgentDataHealthResponse,
-    AgentEvalV2ReportResponse,
     AgentEvaluationResponse,
     AgentRun,
     AgentRunsResponse,
@@ -421,14 +419,12 @@ def get_agent_data_health(
 @router.get("/system-health", response_model=AgentSystemHealthResponse)
 def get_agent_system_health(
     _admin: Annotated[None, Depends(require_admin_access)],
-    run_offline_eval: bool = False,
 ) -> AgentSystemHealthResponse:
-    """Return local runtime health for data, LLM and Agent eval status."""
+    """Return local runtime health for data and LLM configuration."""
 
     return build_agent_system_health(
         events=get_limit_up_repository().list_events(),
         first_board_repository=SQLiteFirstBoardRepository(),
-        run_offline_eval=run_offline_eval,
     )
 
 
@@ -490,22 +486,6 @@ def get_daily_pipeline_status(
         recent=runs,
         generated_by="daily-close-loop-status-v1",
     )
-
-
-@router.get("/eval", response_model=AgentEvalV2ReportResponse)
-def get_agent_eval_report(
-    _admin: Annotated[None, Depends(require_admin_access)],
-) -> AgentEvalV2ReportResponse:
-    """Read the latest completed report; GET never starts a paid evaluation."""
-    try:
-        report = load_latest_completed_report()
-    except FileNotFoundError as error:
-        raise HTTPException(
-            status_code=404, detail="No completed Agent eval report is available."
-        ) from error
-    except ValueError as error:
-        raise HTTPException(status_code=409, detail=str(error)) from error
-    return AgentEvalV2ReportResponse.model_validate(report)
 
 
 @router.get(

@@ -1451,40 +1451,6 @@ class DailyReviewSnapshotsResponse(BaseModel):
     generated_by: str
 
 
-class AgentEvalV2ReportResponse(BaseModel):
-    """Last completed seven-stage Chat Eval artifact returned by the API."""
-
-    model_config = ConfigDict(extra="allow")
-
-    status: Literal["completed"]
-    run_id: str
-    dataset_version: str
-    mode: Literal["offline", "live", "online-shadow"]
-    judge_enabled: bool
-    case_count: int
-    trial_count: int
-    passed_cases: int
-    failed_cases: int
-    pass_at_1: float | None
-    stable_3_of_3_rate: float | None
-    provider_failure_rate: float | None
-    stage_metrics: dict[str, Any]
-    capability_metrics: dict[str, Any]
-    query_metrics: dict[str, Any]
-    planner_metrics: dict[str, Any]
-    policy_metrics: dict[str, Any]
-    execution_metrics: dict[str, Any]
-    grounding_metrics: dict[str, Any]
-    answer_metrics: dict[str, Any]
-    efficiency_metrics: dict[str, Any]
-    breakdowns: dict[str, Any]
-    results: list[dict[str, Any]] = Field(default_factory=list)
-    runner_version: str
-    fixture_snapshot_id: str | None = None
-    completed_at: datetime
-    release_gate: dict[str, Any] | None = None
-
-
 class ChatSessionMessage(BaseModel):
     """Persisted user or assistant message inside one chat session."""
 
@@ -2456,9 +2422,6 @@ class AgentSystemHealthResponse(BaseModel):
     llm_model: str | None = None
     proxy_configured: bool
     proxy_warning: str | None = None
-    offline_eval_passed: bool | None = None
-    offline_eval_total: int | None = None
-    offline_eval_failed: int | None = None
     data_health: AgentDataHealthResponse
     warnings: list[str] = Field(default_factory=list)
     generated_by: str

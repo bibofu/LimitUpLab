@@ -70,7 +70,6 @@ class AnonymousSessionSecurityTest(unittest.TestCase):
             "/data-health",
             "/system-health",
             "/daily-pipeline-status",
-            "/eval",
             "/prediction-quality-audit",
             "/factor-signal-diagnostic",
             "/runs",

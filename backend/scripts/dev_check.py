@@ -28,11 +28,6 @@ def main() -> None:
         help="Try to fetch expected after-close data when local data is stale.",
     )
     parser.add_argument(
-        "--skip-eval",
-        action="store_true",
-        help="Skip offline Agent eval for faster startup.",
-    )
-    parser.add_argument(
         "--json-output",
         default=str(BACKEND_ROOT / "data" / "dev_check_report.json"),
         help="Where to write the local health report.",
@@ -46,7 +41,6 @@ def main() -> None:
     before = build_agent_system_health(
         events=events,
         first_board_repository=first_board_repo,
-        run_offline_eval=not args.skip_eval,
     )
 
     update_report = None
@@ -76,7 +70,6 @@ def main() -> None:
     after = build_agent_system_health(
         events=limit_repo.list_events(),
         first_board_repository=first_board_repo,
-        run_offline_eval=not args.skip_eval,
     )
     report = {
         "before": before.model_dump(mode="json"),
@@ -115,8 +108,6 @@ def _summary(report: dict) -> dict:
         "data_update_recommended": after["data_update_recommended"],
         "llm_enabled": after["llm_enabled"],
         "llm_provider_configured": after["llm_provider_configured"],
-        "offline_eval_passed": after["offline_eval_passed"],
-        "offline_eval_failed": after["offline_eval_failed"],
         "data_health": after["data_health"]["status"],
         "update_attempted": update is not None,
         "update_error": update.get("error") if isinstance(update, dict) else None,

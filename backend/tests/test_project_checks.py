@@ -33,6 +33,6 @@ def test_missing_executable_is_a_failed_gate(tmp_path):
 
 
 # Regression scenario: backend validation remains available while Agent eval is retired.
-def test_backend_gate_runs_pytest_without_retired_agent_eval(tmp_path):
+def test_backend_gate_runs_pytest_only(tmp_path):
     plan = checks.build_checks("backend", tmp_path)
     assert [item.name for item in plan] == ["pytest"]
