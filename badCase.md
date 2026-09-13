@@ -779,3 +779,10 @@ empty、partial 或 error 时 Replan 新闻；股票名称提取同步覆盖 K�
 - 场景：记忆已摘要前 8 条后，会话新增 4 条但尚未达到下一次 8 条刷新阈值。上游会交付 12 条原始上下文，ReAct 实际只向模型注入最后 8 条，较早的约束、指代对象或用户纠正可能消失。
 - 修复：删除 ReAct 层独立的消息数量切片，以会话记忆层选出的窗口作为唯一消息数边界；`prepare_history` 仍执行同会话、非错误消息过滤和 12000 字符预算，避免取消 prompt 大小保护。运行 trace 新增实际 `context_message_count` 以便线上核对，版本升级为 `react-runtime-v4`。
 - 回归：契约测试覆盖完整 16 条窗口及顺序；运行时测试直接检查模型首轮收到 system、16 条历史消息和当前问题，防止再次出现 16→8 的隐式收缩。
+
+## BC-039：工具参数、执行签名与时态 Catalog 存在三份真相源（2026-09-13）
+
+- 发现方式：阶段性代码审查 A40。26 个工具的 JSON Schema、`AgentToolRegistry` 方法签名和 ReAct 时态/集合 Catalog 分开维护，`catalog.schemas()` 再通过反射与工具名特判修补差异；名称集合相等测试无法发现参数类型、必填字段或 adapter 漂移。
+- 已复现问题：`limit_up_events.result_mode` 对模型可见但执行前被丢弃；`stock_kline.symbol` 源 Schema 同时允许字符串和数组，运行时又改为字符串；`first_board_filter.trade_date`、`post_limit_path.symbol` 及四个区间工具的必填日期都依赖运行时补丁。
+- 修复：`AgentToolSchema` 统一保存参数、时态、日期、集合语义和 adapter，作为唯一公开契约；由它生成 strict Pydantic 参数模型及 LangChain `StructuredTool`，直接方法默认值自动派生进模型，模型 definitions、Policy 校验和实际执行共用同一类型化对象。直接 Python 实现启动时核对参数集合、必填项和类型，非直接适配显式声明，不再靠工具名猜测或修补 Schema。
+- 回归：覆盖 26 个契约与 Catalog 对象同一性、全部工具均为 Pydantic-backed `StructuredTool`、伪造参数漂移启动失败、已知四类错配消失、首板筛选和 post-limit adapter 可执行。契约版本升级为 `agent-tools-v2`，运行版本升级为 `react-runtime-v5`。

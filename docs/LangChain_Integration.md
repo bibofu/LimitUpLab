@@ -1,6 +1,6 @@
 # LangChain + LangGraph ReAct 集成
 
-> 当前版本：V1.4 / `react-runtime-v4`
+> 当前版本：V1.4 / `react-runtime-v5` / `agent-tools-v2`
 > 代码基线：以 `v1.4.0` 标签指向的提交为准
 
 ## 当前生产链路
@@ -13,7 +13,7 @@ POST /api/agents/chat 或 /chat/stream
   -> agents.chat.answer_first_board_chat：唯一聊天入口
   -> react_runtime.runtime.GRAPH：Agent -> Policy -> Tools -> Observe -> Gate
   -> LangChain ChatOpenAI.bind_tools：保留 AIMessage / ToolMessage / tool_call_id
-  -> ToolGateway：profile、Schema、时态、参数和调用预算校验
+  -> StructuredTool / ToolGateway：类型化参数、profile、时态和调用预算校验
   -> AgentToolRegistry：执行结构化市场、评分、复盘和资讯工具
   -> EvidenceStore：保存完整结果，向模型返回有界预览和 evidence_id
   -> finish：提交 status、answer、evidence_ids 和 missing
@@ -29,8 +29,9 @@ POST /api/agents/chat 或 /chat/stream
 | --- | --- |
 | `services/langchain_provider.py` | `ChatOpenAI.bind_tools`、消息调用、请求级 timeout/retry 配置、usage 归一 |
 | `agents/react_runtime/runtime.py` | 唯一 StateGraph、预算、节点路由、工具观察和最终门禁 |
-| `agents/react_runtime/tools.py` | 工具 Schema 校验、时态能力校验、身份解析和调用适配 |
-| `agents/react_runtime/catalog.py` | 每个工具经审查的历史/当前时态和集合字段 |
+| `agents/tools.py` | 26 个工具的唯一公开契约：参数 Schema、时态、集合语义和显式适配模式 |
+| `agents/react_runtime/catalog.py` | 从唯一契约生成严格 Pydantic 参数模型和 LangChain `StructuredTool`，启动时检查直接实现签名漂移 |
+| `agents/react_runtime/tools.py` | 消费类型化工具，执行 profile、时态、身份解析、调用和证据接入 |
 | `agents/react_runtime/evidence.py` | 请求级完整证据、预览、来源、缺失、截断和确定性计算 |
 | `agents/react_runtime/contracts.py` | `finish`、`update_task`、`read_evidence`、`compute_result` 类型契约及预算 |
 | `agents/react_runtime/lifecycle.py` | SQLite run journal、checkpoint、call replay record 和取消标记 |
@@ -68,7 +69,7 @@ LIMITUPLAB_LLM_TIMEOUT_SECONDS=30
 - `finish` 必须给出真实任务状态和用户交付缺口；服务端校验 evidence ID、requirements 和禁止交易表达。
 - 外部网页、新闻和历史消息均视为不可信内容，不能修改工具权限或系统边界。
 - 系统只做研究解释，不输出买卖、仓位、目标价、收益承诺或确定性预测。
-- 当前已知缺口：模型直接返回普通文本时仍可能被运行时包装为 complete；输出关系级门禁尚不能覆盖所有实体、日期和指标错配。V1.4 不把这些问题描述为已解决。
+- 当前已知缺口：开放式定性和因果声明尚未具备通用语义接地；当前确定性门禁主要覆盖实体、日期、时间和带单位数值。
 
 ## 运行恢复
 
@@ -99,6 +100,6 @@ V1.4 标记前完整后端回归为 616 项及 6 个子测试通过，0 失败/�
 
 > LimitUpLab 的聊天主链路不是“Planner 生成整张计划再由规则补工具”，而是 LangChain 原生 tool calling 驱动的 LangGraph 有界 ReAct。模型每轮根据用户问题和已有 ToolMessage 决定下一步；后端在每次调用前校验工具权限、参数和历史时点能力，完整结果进入带来源与缺失标记的 EvidenceStore，模型通过 evidence ID 读取或确定性计算。运行过程用 SQLite journal 做幂等、恢复、取消和原子发布。LLM 负责语义决策与解释，评分、集合计算和审计统计仍由确定性代码完成。
 
-同时需要诚实说明：工具 Schema 目前仍有多份定义，LangGraph 状态和 checkpoint 不是官方 checkpointer 范式，评分分箱仍有硬编码，类型化最终回答门禁也还有 plain-text 绕过缺口。V1.4 的价值是完成单一生产 ReAct 链路和删除旧执行债务，不是宣称 Agent 质量已经最终达标。
+同时需要诚实说明：工具公开契约已经收敛并派生为 LangChain `StructuredTool`，但 LangGraph 状态和 checkpoint 仍不是官方 checkpointer 范式，评分分箱仍有硬编码，开放式因果/定性回答也还缺少通用语义门禁。V1.4 的价值是持续收敛生产 ReAct 的执行债务，不是宣称 Agent 质量已经最终达标。
 
 官方参考：[LangGraph v1](https://docs.langchain.com/oss/python/releases/langgraph-v1)、[LangChain Tools / ToolNode](https://docs.langchain.com/oss/python/langchain/tools)、[LangGraph Persistence](https://docs.langchain.com/oss/python/langgraph/persistence)。

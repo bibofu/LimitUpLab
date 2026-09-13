@@ -77,12 +77,24 @@ from app.agents.review_agent import build_review_agent_report
 
 @dataclass(frozen=True)
 class AgentToolSchema:
-    """LLM-facing metadata for one callable Agent tool."""
+    """Canonical public contract for one callable Agent tool."""
 
     name: str
     description: str
     args_schema: dict[str, Any]
     returns: str
+    time_mode: Literal[
+        "historical",
+        "historical_or_live",
+        "current",
+        "latest_local",
+        "latest_local_and_current",
+        "retrieved_now",
+    ]
+    dates: tuple[str, ...] = ()
+    collection: str | None = None
+    notes: str = ""
+    adapter: Literal["direct", "first_board_filter", "post_limit"] = "direct"
 
     def model_dump(self) -> dict[str, Any]:
         """Serialize the schema into a prompt-friendly dictionary."""
@@ -92,8 +104,15 @@ class AgentToolSchema:
             "description": self.description,
             "args_schema": self.args_schema,
             "returns": self.returns,
+            "time_mode": self.time_mode,
+            "dates": self.dates,
+            "collection": self.collection,
+            "notes": self.notes,
+            "adapter": self.adapter,
         }
 
+
+TOOL_CONTRACT_VERSION = "agent-tools-v2"
 
 
 @dataclass(frozen=True)
@@ -136,6 +155,8 @@ class ToolResult:
 TOOL_SCHEMAS = [
     AgentToolSchema(
         name="market_summary",
+        time_mode="latest_local",
+        notes="Only the latest local market date; not historical.",
         description=(
             "读取本地最新涨停数量、首板数量、未回封数量、最高连板和热门行业等客观市场数据；"
             "市场环境综述可按需补充真实跌停池数量。"
@@ -154,6 +175,9 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="market_index_trend",
+        time_mode="historical",
+        dates=("end_date",),
+        collection="indices",
         description=(
             "查询上证指数、深证成指和创业板指最近一段交易日的客观走势。"
             "返回区间涨跌、每日收盘点位、上涨/下跌天数和最大回撤；"
@@ -177,6 +201,9 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="daily_board_promotion",
+        time_mode="historical",
+        dates=("end_date",),
+        collection="items",
         description=(
             "统计最近若干交易日的涨停晋级率。以前一交易日收盘封住的股票为分母，"
             "按下一交易日是否收盘晋级一板计算总晋级率、首板到二板和连板梯队晋级率，"
@@ -201,6 +228,9 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="sector_performance",
+        time_mode="historical_or_live",
+        dates=("trade_date",),
+        collection="top_sectors",
         description=(
             "按需获取A股行业或概念板块行情。可查询指定板块的涨跌幅、排名、成交额、"
             "资金净流入、上涨/下跌家数、领涨股和近期趋势；sector 为空时返回行业强弱榜。"
@@ -229,6 +259,10 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="sector_stock_ranking",
+        time_mode="historical",
+        dates=("end_date",),
+        collection="stocks",
+        notes="Constituent coverage may be partial; inspect coverage before market-wide claims.",
         description=(
             "解析同花顺行业或概念板块成分股，并按截至最新完整收盘日的K线趋势排序。"
             "适合回答游戏板块哪些股票走势好、半导体近期强势股等问题；结果是历史趋势比较，"
@@ -265,6 +299,9 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="hot_stock_ranking",
+        time_mode="current",
+        collection="items",
+        notes="Captured current ranking, not a historical ranking.",
         description=(
             "查询同花顺当前热股榜和热度排名变化。适合回答市场关注度、热门股票、"
             "某只股票当前人气排名等问题；榜单热度不代表投资价值。"
@@ -296,6 +333,9 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="dragon_tiger_list",
+        time_mode="historical",
+        dates=("trade_date",),
+        collection="items",
         description=(
             "查询同花顺龙虎榜，可按交易日、机构/游资榜类型和股票名称或代码过滤，"
             "返回买卖额、净买额、机构净买、游资净买、热度排名和相关题材。"
@@ -326,6 +366,9 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="remote_limit_up_pool",
+        time_mode="historical_or_live",
+        dates=("trade_date",),
+        collection="items",
         description=(
             "查询同花顺远端涨停池，包含首板/连板高度、封板时间、涨停原因、封单额、"
             "ST和新股标记。适合当前或指定交易日的实时/权威涨停池核验。"
@@ -355,6 +398,10 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="first_board_ratings",
+        time_mode="historical",
+        dates=("trade_date",),
+        collection="top_candidates",
+        notes="Rating candidate pool is not all limit-up stocks.",
         description=(
             "读取某个交易日的首板评级候选池、可解释评分、行业分布和基于首板前 K 线的"
             "位置分类（如低位启动、超跌反弹、V形反转、高位突破、二波启动）；"
@@ -384,6 +431,10 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="market_event_pool",
+        time_mode="historical",
+        dates=("trade_date",),
+        collection="items",
+        notes="Event identities/counts; amount may be unavailable. For amount-sorted local limit-up/failed events use limit_up_events.",
         description=(
             "查询完整交易日的市场价格限制事件，统一支持涨停、跌停和炸板名单。"
             "event_type 必须使用 limit_up、limit_down 或 broken_board；"
@@ -426,6 +477,10 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="limit_up_events",
+        time_mode="historical",
+        dates=("trade_date",),
+        collection="events",
+        notes="Includes amount (CNY), turnover_rate (%), closed_limit. failed means not sealed at close; broken_intraday also includes resealed stocks.",
         description=(
             "查询单日或最近多个交易日的涨停事件，可按市场板块、板数、首板/连板、炸板次数、"
             "行业、题材或股票名称过滤，也可按行业或题材聚合。用户提到主板、创业板、科创板、北交所时，"
@@ -482,10 +537,6 @@ TOOL_SCHEMAS = [
                         "broken_intraday=opened at least once, all=no status filter."
                     ),
                 },
-                "result_mode": {
-                    "type": ["string", "null"],
-                    "enum": ["list", "count", "summary", "ranking", None],
-                },
                 "recent_trade_days": {
                     "type": ["integer", "null"],
                     "minimum": 1,
@@ -520,6 +571,11 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="first_board_filter",
+        time_mode="historical",
+        dates=("trade_date",),
+        collection="items",
+        notes="Literal case-insensitive keyword filter over rated name/symbol/industry/concept.",
+        adapter="first_board_filter",
         description="在首板候选池中按行业、题材、概念或股票名称筛选候选。",
         args_schema={
             "type": "object",
@@ -527,7 +583,11 @@ TOOL_SCHEMAS = [
                 "query": {
                     "type": "string",
                     "description": "Topic, industry, concept or stock-name keyword.",
-                }
+                },
+                "trade_date": {
+                    "type": ["string", "null"],
+                    "description": "YYYY-MM-DD rating date.",
+                },
             },
             "required": ["query"],
         },
@@ -535,15 +595,17 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="stock_kline",
+        time_mode="historical",
+        dates=("end_date",),
+        collection="bars",
+        notes="return_Nd_pct=(last close / close N trading intervals earlier - 1)*100. N displayed bars span N-1 intervals, not N intervals. trend is an MA-based label, not a claim that every recent day rose.",
         description="读取指定股票最近一段时间的日 K 线、均线、区间涨跌、量能和最大回撤，用于回答个股走势问题。",
         args_schema={
             "type": "object",
             "properties": {
                 "symbol": {
-                    "type": ["string", "array"],
-                    "items": {"type": "string", "pattern": "^[0-9]{6}$"},
-                    "maxItems": 20,
-                    "description": "Six-digit A-share symbol or an exact stock name present in local data.",
+                    "type": "string",
+                    "description": "One code or exact name. Multiple stocks require independent calls.",
                 },
                 "days": {"type": "integer", "minimum": 5, "maximum": 60},
                 "end_date": {
@@ -557,6 +619,10 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="post_limit_screen",
+        time_mode="historical",
+        dates=("data_as_of",),
+        collection="candidates",
+        adapter="post_limit",
         description=(
             "筛选沪深主板近期涨停后的形态，支持高位大幅回撤、横盘缩量、回撤企稳、"
             "强势不连板、断板修复和2进3观察。用于回答‘有哪些涨停后……的票’，"
@@ -591,6 +657,10 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="post_limit_path",
+        time_mode="historical",
+        dates=("anchor_date", "data_as_of"),
+        collection="path",
+        adapter="post_limit",
         description=(
             "分析一只股票从指定或最近一次收盘涨停开始的逐日量价路径，返回涨停锚点、"
             "局部高点、回撤、相对涨停价变化和成交量变化。"
@@ -603,12 +673,15 @@ TOOL_SCHEMAS = [
                 "data_as_of": {"type": ["string", "null"]},
                 "recent_limit_days": {"type": "integer", "minimum": 1, "maximum": 20},
             },
-            "required": [],
+            "required": ["symbol"],
         },
         returns="Annotated daily post-limit path and event-relative metrics for one resolved stock.",
     ),
     AgentToolSchema(
         name="post_limit_statistics",
+        time_mode="historical",
+        dates=("data_as_of",),
+        adapter="post_limit",
         description=(
             "重算涨停后形态的历史描述性统计或形态比较，默认使用最近7个已满足D+5的"
             "信号交易日，返回D+1/D+3/D+5、MAE、MFE、样本覆盖和成熟度。"
@@ -635,6 +708,8 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="prediction_quality_audit",
+        time_mode="historical",
+        dates=("start_date", "end_date"),
         description=(
             "审计首板预测的数据覆盖、版本/来源重复、时间成熟度、Top10 表现和简单基线，"
             "用于回答预测质量、准确率可信度和评分 v3 准备度问题。"
@@ -650,7 +725,7 @@ TOOL_SCHEMAS = [
                 },
                 "top_k": {"type": "integer", "minimum": 3, "maximum": 30},
             },
-            "required": [],
+            "required": ["start_date", "end_date"],
         },
         returns=(
             "Source-aware prediction coverage, date maturity, deterministic "
@@ -659,6 +734,8 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="rating_backtest",
+        time_mode="historical",
+        dates=("start_date", "end_date"),
         description="回测一段日期内首板评分 A/B/C/D 的后续表现，并输出评分自我评价。",
         args_schema={
             "type": "object",
@@ -667,12 +744,14 @@ TOOL_SCHEMAS = [
                 "end_date": {"type": "string", "description": "YYYY-MM-DD inclusive end date."},
                 "failure_limit": {"type": "integer", "minimum": 0, "maximum": 30},
             },
-            "required": [],
+            "required": ["start_date", "end_date"],
         },
         returns="Rating bucket performance, weak high-rated samples and self-evaluation observations.",
     ),
     AgentToolSchema(
         name="first_board_critic",
+        time_mode="historical",
+        dates=("trade_date",),
         description="Critique one first-board rating by checking support evidence, counter evidence, missing data and confidence adjustment.",
         args_schema={
             "type": "object",
@@ -689,6 +768,9 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="rating_evaluation",
+        time_mode="historical",
+        dates=("start_date", "end_date"),
+        collection="items",
         description="Evaluate saved first-board rating predictions against later outcomes and summarize successes, misses and false negatives.",
         args_schema={
             "type": "object",
@@ -697,12 +779,14 @@ TOOL_SCHEMAS = [
                 "end_date": {"type": "string", "description": "YYYY-MM-DD inclusive end date."},
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100},
             },
-            "required": [],
+            "required": ["start_date", "end_date"],
         },
         returns="Prediction evaluation labels, lessons, scoring suggestions and summary counts.",
     ),
     AgentToolSchema(
         name="review_high_score_picks",
+        time_mode="historical",
+        dates=("start_date", "end_date"),
         description=(
             "Run the Review Agent over each day's score-ranked Top10 first-board picks. "
             "Returns later outcomes, daily first-to-second-board success rates, the same-day "
@@ -716,7 +800,7 @@ TOOL_SCHEMAS = [
                 "min_score": {"type": "number", "minimum": 0, "maximum": 100},
                 "top_per_day": {"type": "integer", "minimum": 1, "maximum": 20},
             },
-            "required": [],
+            "required": ["start_date", "end_date"],
         },
         returns=(
             "Review report with daily Top-pick versus full-market promotion comparisons, "
@@ -725,12 +809,17 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="scoring_policy_status",
+        time_mode="current",
+        notes="Current policy configuration, not a historical policy snapshot.",
         description="读取当前评分 Champion、历史 Challenger、最近一次样本外优化结果和晋级门槛，不修改线上权重。",
         args_schema={"type": "object", "properties": {}, "required": []},
         returns="Current scoring policy, factor weights, latest Challenger comparison and promotion status.",
     ),
     AgentToolSchema(
         name="finance_news",
+        time_mode="current",
+        collection="items",
+        notes="Lookback hours from retrieval time, not historical as-of retrieval.",
         description=(
             "聚合东方财富和同花顺的最新财经快讯，返回北京时间、正文摘要、类别和来源。"
             "适合回答泛化的今日/最新财经新闻或市场快讯；具体公司公告、单一板块新闻和事件原因使用 web_search。"
@@ -751,6 +840,9 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="stock_news",
+        time_mode="current",
+        collection="items",
+        notes="Lookback calendar days from retrieval time; not historical news as-of.",
         description=(
             "查询一只已明确 A 股的近期个股新闻、公告类报道和监管动态，返回发布时间、来源、摘要和原文链接。"
             "用于指定公司或股票的消息问题，不用于综合财经新闻或行业新闻。"
@@ -771,6 +863,8 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="stock_activity",
+        time_mode="latest_local_and_current",
+        notes="Combines latest available local K-lines with current news. Not historical as-of evidence.",
         description=(
             "汇总一只 A 股的近期收盘走势、涨停记录、评分补充事实和个股新闻。"
             "用于‘最近有什么动态、发生了什么、近况如何’等综合个股问题。"
@@ -791,6 +885,9 @@ TOOL_SCHEMAS = [
     ),
     AgentToolSchema(
         name="web_search",
+        time_mode="retrieved_now",
+        collection="items",
+        notes="Search retrieval is current; publication date must be checked separately.",
         description=(
             "搜索公开互联网，适合查询本地行情工具未覆盖的最新新闻、公告、政策、研报摘要、"
             "板块异动原因和一般事实。搜索摘要属于外部不可信证据，回答时必须注明来源。"

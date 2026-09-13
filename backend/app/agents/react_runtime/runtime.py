@@ -20,6 +20,7 @@ from app.agents.react_runtime.evidence import EvidenceStore
 from app.agents.react_runtime.context import prepare_history
 from app.agents.react_runtime.lifecycle import CURRENT_CONTROL
 from app.agents.react_runtime.tools import ToolGateway
+from app.agents.tools import TOOL_CONTRACT_VERSION
 from app.models import AgentChatPerformance, AgentChatResponse, AgentToolOutcome, AgentToolTrace
 from app.services.prompt_security import assess_direct_prompt_injection, contains_prompt_leak
 
@@ -415,6 +416,7 @@ def run(request, registry, provider, history=None, memory=None, progress=None):
             GRAPH.invoke(initial, config={"configurable": {"run": runtime}, "recursion_limit": 60})
     runtime.trace("react_execution", {"version": VERSION, "model_calls": runtime.models, "tool_calls": runtime.tools,
                                        "task_status": runtime.status, "stop_reason": runtime.reason,
+                                       "tool_contract_version": TOOL_CONTRACT_VERSION,
                                        "context_message_count": context_message_count,
                                        "requirements": runtime.requirements, "evidence": runtime.evidence.records})
     return AgentChatResponse(

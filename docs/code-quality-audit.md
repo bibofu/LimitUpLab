@@ -1,5 +1,15 @@
 # Agent 应用质量审查
 
+## 2026-09-13：工具契约单一真相源修复
+
+- 范围：修复 P2/A40 的参数 Schema、执行签名、时态/集合 Catalog 三轨维护；覆盖全部 26 个业务工具，不修改市场口径、评分、数据管线或前端。
+- P2 已修（BC-039）：`AgentToolSchema` 成为唯一公开契约，同时保存参数 Schema、时态、日期字段、集合字段、说明和显式 adapter。`catalog.py` 从该契约生成 strict Pydantic 输入模型与 LangChain `StructuredTool`；直接方法的默认值自动派生进类型化模型，模型 definitions、Policy 校验和实际调用共用同一对象，不再按工具名修补 required/schema。Python 方法签名只作为内部实现，启动时强制核对参数集合、必填项和基础类型；post-limit 与首板筛选的非直接调用通过契约 `adapter` 显式声明。
+- 已知漂移已清除：`limit_up_events.result_mode` 不再对模型暴露后静默丢弃；`stock_kline.symbol` 在源契约中就是单字符串；`first_board_filter.trade_date` 和 `post_limit_path.symbol` 直接写入源契约；四个日期区间工具直接声明起止日期必填。旧的手写 `tool_schema.py` 校验器已删除。工具契约版本为 `agent-tools-v2`，运行版本为 `react-runtime-v5`。
+- 回归：类型化契约、签名漂移、已知错配、直接工具、首板虚拟适配和 post-limit contract 适配均有固定测试；最终定向 **82 passed**，完整后端 **595 passed + 6 subtests passed**，0 failed、0 setup error、0 skipped，保留 3 条既有依赖弃用警告。
+- 真实 HTTP：最终代码在本地 8001 服务 PID 26884 运行；Cookie 隔离会话查询 2026-09-11 收盘涨停数量，实际通过类型化契约调用 `market_event_pool(result_mode=count)` 与 `limit_up_events(closed_only=true,event_status=closed)`，两项均为 `result_state=ok`，后者输入不存在已移除的 `result_mode`。最终返回 40 只、`task_status=complete`、`generated_by=react-runtime-v5`，执行 trace 为 `tool_contract_version=agent-tools-v2`。最终验收 run 为 `run_35048b400cb34cfc9e4589365b19df6b`；测试会话已通过 owner-scoped API 精确删除。此前同代码第一次请求为 `partial` 且未交付数字，第二次相同请求完成；该模型终态波动不影响契约调用证据，但未被隐去或计作一次性稳定性通过。
+- 失败记录：一次兼容测试因引用不存在的 `test_agent_tools.py` 而 0 项执行；另一次为 53 passed / 1 setup error，唯一错误是 Windows pytest 系统临时目录 `WinError 5`。两次均未计为通过，最终在宿主隔离 `--basetemp` 下完成全量验证。
+- 边界：工具实现仍是普通 Python 方法，自定义 EvidenceStore、调用日志和最终门禁没有迁移到标准 `ToolNode`；本次只解决公开工具契约漂移，不顺带处理 A39 的 LangGraph persistence 设计债。
+
 ## 2026-09-13：多轮上下文二次截断修复
 
 - 范围：修复会话记忆层最多交付 16 条、ReAct 层又截为 8 条的 P1；不修改记忆摘要刷新节奏、证据新鲜度边界、评分、数据管线或前端。
@@ -88,7 +98,7 @@
 - 证据：26 个工具的 JSON Schema 手写在 `agents/tools.py:136-811`，执行签名在同文件 `AgentToolRegistry` 方法中，时态/集合契约又手写在 `react_runtime/catalog.py:18-45`；`catalog.schemas()` 再用 `inspect.signature` 和名称特判修补 required/schema（`:48-75`）。扫描已发现 `limit_up_events.result_mode` 只存在于 Schema、执行前再被丢弃，三个 post-limit 工具还依赖专用 adapter 将扁平 Schema 转成 `PostLimitQueryContract`。
 - 现有保护：`test_every_existing_tool_has_reviewed_contract` 能保证名称集合相同，但不能保证参数类型、默认值、描述、adapter 和执行签名持续一致。
 - 建议：以 Pydantic args model + LangChain `BaseTool`/`StructuredTool` 为单一契约源；额外的金融时态和集合能力作为 tool metadata，由 Policy middleware/gateway 消费。保留自定义 ToolNode 也不需要保留三套 Schema。
-- 状态：未修复；新增或修改工具时最容易触发。
+- 状态：已于 BC-039 修复。参数、时态、集合与 adapter 收敛到 `AgentToolSchema`，并派生 strict Pydantic model / LangChain `StructuredTool`；实现签名漂移在启动期失败，不再运行时按名称修补。
 
 ### P2 / A41：旧 Query Understanding 仍作为公共 API 和评测口径存在，与生产 ReAct 语义形成双轨
 
