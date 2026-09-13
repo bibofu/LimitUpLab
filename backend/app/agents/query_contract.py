@@ -1,18 +1,11 @@
-"""Canonical query contracts for local price-limit event questions."""
+"""Shared typed values for structured Agent tool arguments."""
 
-from __future__ import annotations
-
-import re
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import asdict, dataclass
-from datetime import date, timedelta
-from typing import Any, Iterable, Iterator, Literal
+from datetime import date
+from typing import Iterator, Literal
 
 
-QUERY_CONTRACT_VERSION = "limit-up-query-v5"
-MARKET_EVENT_QUERY_CONTRACT_VERSION = "market-event-query-v1"
-QUERY_UNDERSTANDING_VERSION = "query-understanding-v1"
 _query_reference_date: ContextVar[date | None] = ContextVar(
     "query_reference_date", default=None
 )
@@ -20,7 +13,7 @@ _query_reference_date: ContextVar[date | None] = ContextVar(
 
 @contextmanager
 def query_reference_date_override(value: date) -> Iterator[None]:
-    """Anchor relative date wording inside one request or evaluation context."""
+    """Anchor request-scoped dates for production and reproducible evaluations."""
 
     token = _query_reference_date.set(value)
     try:
@@ -30,14 +23,12 @@ def query_reference_date_override(value: date) -> Iterator[None]:
 
 
 def current_query_reference_date() -> date:
-    """Return the request-scoped date used by relative-language parsing."""
-
     return _query_reference_date.get() or date.today()
+
 
 MarketSegment = Literal["main_board", "chinext", "star_market", "beijing"]
 EventStatus = Literal["closed", "failed", "broken_intraday", "all"]
 MarketEventType = Literal["limit_up", "limit_down", "broken_board"]
-ResultMode = Literal["list", "count", "summary", "ranking"]
 SortField = Literal[
     "board_height",
     "first_limit_time",
@@ -46,7 +37,6 @@ SortField = Literal[
     "break_count",
 ]
 SortOrder = Literal["asc", "desc"]
-LimitUpGroupBy = Literal["industry", "concept"]
 
 
 MARKET_SEGMENT_PREFIXES: dict[str, tuple[str, ...]] = {
@@ -62,862 +52,54 @@ MARKET_SEGMENT_LABELS = {
     "beijing": "北交所",
 }
 _MARKET_SEGMENT_ALIASES = {
-    "main": "main_board",
-    "main_board": "main_board",
-    "主板": "main_board",
-    "沪深主板": "main_board",
-    "chinext": "chinext",
-    "创业板": "chinext",
-    "star": "star_market",
-    "star_market": "star_market",
-    "科创板": "star_market",
-    "beijing": "beijing",
-    "北交所": "beijing",
-    "北证": "beijing",
+    "main": "main_board", "main_board": "main_board", "主板": "main_board", "沪深主板": "main_board",
+    "chinext": "chinext", "创业板": "chinext",
+    "star": "star_market", "star_market": "star_market", "科创板": "star_market",
+    "beijing": "beijing", "北交所": "beijing", "北证": "beijing",
 }
-
 _STATUS_ALIASES: dict[str, EventStatus] = {
-    "closed": "closed",
-    "封板": "closed",
-    "failed": "failed",
-    "broken": "failed",
-    "炸板": "failed",
-    "broken_intraday": "broken_intraday",
-    "opened": "broken_intraday",
-    "开板": "broken_intraday",
-    "all": "all",
-    "全部": "all",
+    "closed": "closed", "封板": "closed",
+    "failed": "failed", "broken": "failed", "炸板": "failed",
+    "broken_intraday": "broken_intraday", "opened": "broken_intraday", "开板": "broken_intraday",
+    "all": "all", "全部": "all",
 }
 _MARKET_EVENT_TYPE_ALIASES: dict[str, MarketEventType] = {
-    "limit_up": "limit_up",
-    "up_limit": "limit_up",
-    "涨停": "limit_up",
-    "limit_down": "limit_down",
-    "down_limit": "limit_down",
-    "跌停": "limit_down",
-    "broken_board": "broken_board",
-    "failed_limit_up": "broken_board",
-    "炸板": "broken_board",
+    "limit_up": "limit_up", "up_limit": "limit_up", "涨停": "limit_up",
+    "limit_down": "limit_down", "down_limit": "limit_down", "跌停": "limit_down",
+    "broken_board": "broken_board", "failed_limit_up": "broken_board", "炸板": "broken_board",
 }
-
 _SORT_ALIASES: dict[str, SortField] = {
-    "board_height": "board_height",
-    "height": "board_height",
-    "板数": "board_height",
-    "first_limit_time": "first_limit_time",
-    "seal_time": "first_limit_time",
-    "封板时间": "first_limit_time",
-    "amount": "amount",
-    "成交额": "amount",
-    "turnover_rate": "turnover_rate",
-    "换手率": "turnover_rate",
-    "break_count": "break_count",
-    "炸板次数": "break_count",
+    "board_height": "board_height", "height": "board_height", "板数": "board_height",
+    "first_limit_time": "first_limit_time", "seal_time": "first_limit_time", "封板时间": "first_limit_time",
+    "amount": "amount", "成交额": "amount",
+    "turnover_rate": "turnover_rate", "换手率": "turnover_rate",
+    "break_count": "break_count", "炸板次数": "break_count",
 }
-
-
-@dataclass(frozen=True)
-class LimitUpQueryContract:
-    """One validated interpretation shared by planner, policy and tool execution."""
-
-    version: str = QUERY_CONTRACT_VERSION
-    trade_date: date | None = None
-    board_height: int | None = None
-    min_board_height: int | None = None
-    highest_only: bool = False
-    market: MarketSegment | None = None
-    query: str | None = None
-    event_status: EventStatus = "closed"
-    recent_trade_days: int = 1
-    group_by: LimitUpGroupBy | None = None
-    result_mode: ResultMode = "list"
-    sort_by: SortField = "board_height"
-    sort_order: SortOrder = "desc"
-    limit: int = 30
-    exhaustive: bool = False
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize the contract for traces, prompts and eval assertions."""
-
-        payload = asdict(self)
-        payload["trade_date"] = self.trade_date.isoformat() if self.trade_date else None
-        return payload
-
-    def to_tool_arguments(self) -> dict[str, Any]:
-        """Return canonical arguments accepted by the limit-up event tool."""
-
-        return {
-            "trade_date": self.trade_date.isoformat() if self.trade_date else None,
-            "board_height": self.board_height,
-            "min_board_height": self.min_board_height,
-            "highest_only": self.highest_only,
-            "market": self.market,
-            "query": self.query,
-            "event_status": self.event_status,
-            "recent_trade_days": self.recent_trade_days,
-            "group_by": self.group_by,
-            "sort_by": self.sort_by,
-            "sort_order": self.sort_order,
-            "limit": self.limit,
-        }
-
-
-@dataclass(frozen=True)
-class MarketEventQueryContract:
-    """One strict, source-independent market event request."""
-
-    event_type: MarketEventType
-    version: str = MARKET_EVENT_QUERY_CONTRACT_VERSION
-    trade_date: date | None = None
-    market: MarketSegment | None = None
-    query: str | None = None
-    result_mode: ResultMode = "list"
-    limit: int = 30
-    exhaustive: bool = False
-
-    def to_dict(self) -> dict[str, Any]:
-        """Serialize the contract for traces and semantic validation."""
-
-        payload = asdict(self)
-        payload["trade_date"] = self.trade_date.isoformat() if self.trade_date else None
-        return payload
-
-    def to_tool_arguments(self) -> dict[str, Any]:
-        """Return canonical arguments accepted by the market event tool."""
-
-        return {
-            "event_type": self.event_type,
-            "trade_date": self.trade_date.isoformat() if self.trade_date else None,
-            "market": self.market,
-            "query": self.query,
-            "result_mode": self.result_mode,
-            "limit": self.limit,
-        }
-
-
-def build_market_event_query_contract(
-    message: str,
-    *,
-    request_trade_date: date | None = None,
-    planner_arguments: dict[str, Any] | None = None,
-) -> MarketEventQueryContract:
-    """Compile open user wording into one validated market-event request.
-
-    Explicit wording always wins. An unsupported planner event type is rejected
-    instead of being silently converted into a different market event.
-    """
-
-    planner = planner_arguments or {}
-    explicit_event_type = extract_market_event_type(message)
-    planner_event_type = normalize_market_event_type(planner.get("event_type"))
-    if explicit_event_type is not None:
-        event_type = explicit_event_type
-    elif planner_event_type is not None:
-        event_type = planner_event_type
-    else:
-        raw_event_type = str(planner.get("event_type") or "").strip()
-        if raw_event_type:
-            raise ValueError(f"Unsupported market event type: {raw_event_type}")
-        raise ValueError("A market event type is required")
-
-    explicit_market = extract_market_segment(message)
-    market = explicit_market or normalize_market_segment(planner.get("market"))
-    result_mode = extract_result_mode(message) or normalize_result_mode(
-        planner.get("result_mode")
-    )
-    exhaustive = looks_like_exhaustive_request(message)
-    limit = (
-        extract_result_limit(message)
-        or _bounded_int(planner.get("limit"), minimum=1, maximum=100)
-        or 30
-    )
-    if exhaustive or result_mode == "count":
-        limit = 100
-
-    return MarketEventQueryContract(
-        event_type=event_type,
-        trade_date=extract_trade_date(message) or request_trade_date,
-        market=market,
-        query=extract_topic_query(message) or _clean_query(planner.get("query")),
-        result_mode=result_mode or "list",
-        limit=max(1, min(limit, 100)),
-        exhaustive=exhaustive,
-    )
-
-
-def build_limit_up_query_contract(
-    message: str,
-    *,
-    request_trade_date: date | None = None,
-    planner_arguments: dict[str, Any] | None = None,
-) -> LimitUpQueryContract:
-    """Merge user text, page context and planner arguments into one contract.
-
-    Explicit user wording wins over planner guesses. Planner values remain useful for
-    open-ended topic filters that cannot be extracted safely from arbitrary Chinese.
-    """
-
-    planner = planner_arguments or {}
-    explicit_trade_date = extract_trade_date(message)
-    # Date selection is user-controlled. A planner must not turn an undated
-    # question into a stale historical query; None lets the tool use its latest data.
-    trade_date = explicit_trade_date or request_trade_date
-
-    explicit_board_height, explicit_min_board_height = extract_board_filters(message)
-    board_height = (
-        explicit_board_height
-        if explicit_board_height is not None
-        else _bounded_int(planner.get("board_height"), minimum=1, maximum=20)
-    )
-    min_board_height = (
-        explicit_min_board_height
-        if explicit_min_board_height is not None
-        else _bounded_int(planner.get("min_board_height"), minimum=1, maximum=20)
-    )
-    if board_height is not None:
-        # An exact height and a minimum-height range are alternative query scopes.
-        # Retaining both could make the planner's stale range narrow the request.
-        min_board_height = None
-
-    explicit_market = extract_market_segment(message)
-    market = explicit_market or normalize_market_segment(planner.get("market"))
-    query = extract_topic_query(message) or _clean_query(planner.get("query"))
-
-    explicit_status = extract_event_status(message)
-    # closed, failed and broken_intraday describe different event sets. In
-    # particular, an intraday break does not imply the stock failed to reseal by
-    # the close; the normalized status keeps that distinction in downstream tools.
-    event_status = explicit_status or normalize_event_status(
-        planner.get("event_status") or planner.get("status")
-    )
-    if event_status is None:
-        if _as_bool(planner.get("broken_only")):
-            event_status = "broken_intraday"
-        elif _as_bool(planner.get("closed_only")) is False:
-            event_status = "all"
-        else:
-            event_status = "closed"
-
-    sector_summary = looks_like_limit_up_sector_summary_question(message)
-    named_sector_list = looks_like_named_limit_up_sector_list_question(message)
-    if sector_summary:
-        # A distribution request describes the grouping dimension, not a topic
-        # keyword. Do not let a planner turn words such as "板块" into a filter.
-        query = None
-    result_mode = extract_result_mode(message) or normalize_result_mode(
-        planner.get("result_mode")
-    )
-    if sector_summary:
-        result_mode = "summary"
-    explicit_recent_trade_days = extract_recent_trade_days(message)
-    recent_named_sector_list = named_sector_list and (
-        explicit_recent_trade_days is not None
-        or any(term in message for term in ("近期", "最近", "近来"))
-    )
-    recent_trade_days = (
-        explicit_recent_trade_days or 7
-        if sector_summary or recent_named_sector_list
-        else _bounded_int(planner.get("recent_trade_days"), minimum=1, maximum=20)
-        or 1
-    )
-    group_by: LimitUpGroupBy | None = None
-    if sector_summary:
-        group_by = (
-            "industry"
-            if "行业" in message and not any(term in message for term in ("题材", "概念"))
-            else "concept"
-        )
-    elif planner.get("group_by") in {"industry", "concept"}:
-        group_by = planner["group_by"]
-    sort_by, sort_order = extract_sort(message)
-    sort_by = sort_by or normalize_sort_field(planner.get("sort_by")) or "board_height"
-    sort_order = (
-        sort_order
-        or normalize_sort_order(planner.get("sort_order"))
-        or _default_sort_order(sort_by)
-    )
-    exhaustive = looks_like_exhaustive_request(message) or named_sector_list
-    explicit_limit = extract_result_limit(message)
-    planner_limit = _bounded_int(planner.get("limit"), minimum=1, maximum=100)
-    limit = explicit_limit or planner_limit or 30
-    if exhaustive or result_mode == "count":
-        limit = 100
-
-    highest_only = "最高板" in message or _as_bool(planner.get("highest_only")) is True
-    if highest_only:
-        board_height = None
-        min_board_height = None
-        sort_by = "board_height"
-        sort_order = "desc"
-        result_mode = "ranking"
-
-    return LimitUpQueryContract(
-        trade_date=trade_date,
-        board_height=board_height,
-        min_board_height=min_board_height,
-        highest_only=highest_only,
-        market=market,
-        query=query,
-        event_status=event_status,
-        recent_trade_days=recent_trade_days,
-        group_by=group_by,
-        result_mode=result_mode or "list",
-        sort_by=sort_by,
-        sort_order=sort_order,
-        limit=max(1, min(limit, 100)),
-        exhaustive=exhaustive,
-    )
-
-
-def looks_like_limit_up_sector_summary_question(message: str) -> bool:
-    """Recognize requests to aggregate recent limit-up stocks by sector."""
-
-    compact = re.sub(r"[\s，。！？,.!?]", "", message)
-    has_limit_up = "涨停" in compact
-    has_sector = any(term in compact for term in ("板块", "行业", "题材", "概念"))
-    has_distribution = any(
-        term in compact
-        for term in (
-            "比较多",
-            "较多",
-            "最多",
-            "集中",
-            "分布",
-            "排名",
-            "排行",
-            "哪些板块",
-            "哪些行业",
-            "哪些题材",
-            "哪些概念",
-        )
-    )
-    return has_limit_up and has_sector and has_distribution
-
-
-def looks_like_named_limit_up_sector_list_question(message: str) -> bool:
-    """Recognize a named sector/theme request whose result should be stocks."""
-
-    compact = re.sub(r"[\s，。！？,.!?]", "", message)
-    if looks_like_limit_up_sector_summary_question(message):
-        return False
-    has_limit_up = "涨停" in compact
-    has_sector = any(term in compact for term in ("板块", "行业", "题材", "概念"))
-    wants_stocks = any(
-        term in compact
-        for term in ("哪些股票", "股票有哪些", "哪些票", "票有哪些", "名单", "列出")
-    )
-    return (
-        has_limit_up
-        and has_sector
-        and wants_stocks
-        and extract_topic_query(message) is not None
-    )
-
-
-def extract_recent_trade_days(message: str) -> int | None:
-    """Extract an explicit recent trading-day window from the user wording."""
-
-    match = re.search(r"(?:近|最近)\s*(\d{1,2})\s*个?交易日", message)
-    if not match:
-        return None
-    return max(1, min(int(match.group(1)), 20))
-
-
-def extract_trade_date(message: str) -> date | None:
-    """Extract a full or shorthand date from common Chinese expressions."""
-
-    normalized = message.strip()
-    full_match = re.search(r"(20\d{2})[-/.年](\d{1,2})[-/.月](\d{1,2})", normalized)
-    if full_match:
-        return _safe_date(*(int(part) for part in full_match.groups()))
-    short_match = re.search(r"(?<!\d)(\d{1,2})[./月](\d{1,2})(?:日|号)?", normalized)
-    if short_match:
-        month, day = (int(part) for part in short_match.groups())
-        return _safe_date(current_query_reference_date().year, month, day)
-    # Production keeps its established "latest complete local trade date"
-    # behavior for relative wording. Evaluations opt into an explicit anchor,
-    # making today/yesterday deterministic without changing live fallback rules.
-    reference = _query_reference_date.get()
-    if reference is not None:
-        if any(term in normalized for term in ("前一个交易日", "上一个交易日")):
-            return _previous_weekday(reference)
-        if any(term in normalized for term in ("昨天", "昨日")):
-            return _previous_weekday(reference)
-        if any(term in normalized for term in ("今天", "今日")):
-            return reference
-    return None
-
-
-def build_query_understanding_view(
-    message: str,
-    *,
-    request_trade_date: date | None = None,
-    request_symbol: str | None = None,
-    executed_contract: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Build the stable, evaluator-facing interpretation of one user message."""
-
-    observed = dict(executed_contract or {})
-    explicit_date = extract_trade_date(message)
-    board_height, min_board_height = extract_board_filters(message)
-    sort_by, sort_order = extract_sort(message)
-    extracted = {
-        "version": QUERY_UNDERSTANDING_VERSION,
-        "reference_date": current_query_reference_date().isoformat(),
-        "trade_date": (
-            explicit_date or request_trade_date
-        ).isoformat() if explicit_date or request_trade_date else None,
-        "symbol": request_symbol or _extract_stock_symbol(message),
-        "market": extract_market_segment(message),
-        "sector": extract_topic_query(message),
-        "recent_trade_days": extract_recent_trade_days(message),
-        "board_height": board_height,
-        "min_board_height": min_board_height,
-        "event_status": extract_event_status(message),
-        "event_type": extract_market_event_type(message),
-        "result_mode": extract_result_mode(message),
-        "sort_by": sort_by,
-        "sort_order": sort_order,
-        "limit": extract_result_limit(message),
-        "highest_only": True if "最高板" in message else None,
-        "exhaustive": True if looks_like_exhaustive_request(message) else None,
-        "context_reference": _extract_context_reference(message),
-    }
-    # The executed Query Contract includes inherited context and canonical defaults;
-    # explicit user fields remain the source of truth when both are present.
-    merged = {**extracted, **observed}
-    for key, value in extracted.items():
-        if value is not None and key not in {"version"}:
-            merged[key] = value
-    return {key: value for key, value in merged.items() if value is not None}
-
-
-def build_conversation_query_understanding_view(
-    user_messages: Iterable[str],
-    *,
-    request_trade_date: date | None = None,
-    request_symbol: str | None = None,
-    executed_contract: dict[str, Any] | None = None,
-) -> dict[str, Any]:
-    """Resolve explicit fields on the last turn and retain referenced context."""
-
-    messages = [message for message in user_messages if message.strip()]
-    if not messages:
-        return {}
-    retained: dict[str, Any] = {}
-    retained_keys = {
-        "trade_date",
-        "symbol",
-        "market",
-        "sector",
-        "recent_trade_days",
-        "board_height",
-        "min_board_height",
-        "event_status",
-        "event_type",
-        "sort_by",
-        "sort_order",
-        "limit",
-        "highest_only",
-        "exhaustive",
-    }
-    current: dict[str, Any] = {}
-    for index, message in enumerate(messages):
-        is_last = index == len(messages) - 1
-        current = build_query_understanding_view(
-            message,
-            request_trade_date=request_trade_date if is_last else None,
-            request_symbol=request_symbol if is_last else None,
-            executed_contract=executed_contract if is_last else None,
-        )
-        if index and current.get("context_reference"):
-            for key in retained_keys:
-                if key not in current and key in retained:
-                    current[key] = retained[key]
-        retained.update(
-            {key: value for key, value in current.items() if key in retained_keys}
-        )
-    return current
-
-
-def _extract_stock_symbol(message: str) -> str | None:
-    match = re.search(r"(?<!\d)([0368]\d{5})(?!\d)", message)
-    return match.group(1) if match else None
-
-
-def _extract_context_reference(message: str) -> str | None:
-    if any(term in message for term in ("同一天", "前一个交易日", "上一个交易日")):
-        return "previous_date"
-    if any(term in message for term in ("这些", "里面", "上述", "它们")):
-        return "previous_result_set"
-    if any(term in message for term in ("第一只", "第一名")):
-        return "previous_first_entity"
-    if any(term in message for term in ("这只", "这票", "它")):
-        return "previous_entity"
-    return None
-
-
-def _previous_weekday(value: date) -> date:
-    previous = value - timedelta(days=1)
-    while previous.weekday() >= 5:
-        previous -= timedelta(days=1)
-    return previous
-
-
-def extract_board_filters(message: str) -> tuple[int | None, int | None]:
-    """Extract exact board height or the lower bound for all continued boards."""
-
-    if "首板" in message or "一进二候选" in message:
-        return 1, None
-    numeric = re.search(r"(?<!\d)(\d{1,2})\s*(?:连)?板", message)
-    if numeric:
-        return int(numeric.group(1)), None
-    chinese_numbers = {
-        "一": 1,
-        "二": 2,
-        "两": 2,
-        "三": 3,
-        "四": 4,
-        "五": 5,
-        "六": 6,
-        "七": 7,
-        "八": 8,
-        "九": 9,
-        "十": 10,
-    }
-    for label, height in chinese_numbers.items():
-        if f"{label}板" in message or f"{label}连板" in message:
-            return height, None
-    if "连板" in message or "接力梯队" in message:
-        return None, 2
-    return None, None
-
-
-def extract_market_segment(message: str) -> MarketSegment | None:
-    """Extract an explicitly named A-share board segment."""
-
-    for terms, segment in (
-        (("创业板",), "chinext"),
-        (("科创板",), "star_market"),
-        (("北交所", "北证"), "beijing"),
-        (("沪深主板", "主板"), "main_board"),
-    ):
-        if any(term in message for term in terms):
-            return segment
-    return None
 
 
 def normalize_market_segment(value: object) -> MarketSegment | None:
-    """Normalize planner and user market aliases."""
-
     normalized = str(value or "").strip().lower()
     if not normalized or normalized == "all":
         return None
     return _MARKET_SEGMENT_ALIASES.get(normalized)  # type: ignore[return-value]
 
 
-def extract_market_event_type(message: str) -> MarketEventType | None:
-    """Recognize price-limit event semantics across common Chinese wording."""
-
-    compact = re.sub(r"[\s，。！？,.!?]", "", message).lower()
-    if "涨跌停" in compact or ("涨停" in compact and "跌停" in compact):
-        return None
-    limited_drop_stock_query = "跌幅限制" in compact and any(
-        term in compact for term in ("股票", "个股", "票", "名单", "几只", "多少只")
-    )
-    if "跌停" in compact or limited_drop_stock_query:
-        return "limit_down"
-    if any(term in compact for term in ("炸板", "未回封", "封板失败")):
-        return "broken_board"
-    if any(
-        term in compact
-        for term in ("涨停", "首板", "连板", "二板", "三板", "最高板")
-    ):
-        return "limit_up"
-    return None
-
-
-def looks_like_market_event_query(message: str) -> bool:
-    """Distinguish event-list requests from rules, causes and general explanations."""
-
-    compact = re.sub(r"[\s，。！？,.!?]", "", message).lower()
-    if extract_market_event_type(compact) is None:
-        return False
-    if any(
-        term in compact
-        for term in ("为什么", "原因", "制度", "规则", "什么意思", "怎么计算")
-    ):
-        return False
-    if any(
-        term in compact
-        for term in (
-            "哪些",
-            "有哪",
-            "名单",
-            "列出",
-            "列一下",
-            "几只",
-            "多少只",
-            "数量",
-            "统计",
-            "谁",
-        )
-    ):
-        return True
-    return compact in {
-        "跌停",
-        "今天跌停",
-        "今日跌停",
-        "最新跌停",
-        "跌停股",
-        "跌停票",
-    }
-
-
 def normalize_market_event_type(value: object) -> MarketEventType | None:
-    """Normalize a planner-provided event type without inventing a default."""
-
-    normalized = str(value or "").strip().lower()
-    return _MARKET_EVENT_TYPE_ALIASES.get(normalized)
-
-
-def extract_event_status(message: str) -> EventStatus | None:
-    """Distinguish closed boards, failed boards and intraday-opened boards."""
-
-    if any(term in message for term in ("涨停和炸板", "全部涨停事件", "所有涨停事件")):
-        return "all"
-    if any(term in message for term in ("炸板次数", "开板次数")):
-        return (
-            "closed"
-            if any(term in message for term in ("涨停", "首板", "连板"))
-            else "broken_intraday"
-        )
-    if any(term in message for term in ("炸板票", "炸板股", "炸板名单", "未封住", "封板失败")):
-        return "failed"
-    if message.strip().endswith("炸板") or "哪些炸板" in message:
-        return "failed"
-    if any(term in message for term in ("曾开板", "开过板", "炸过板", "盘中开板")):
-        return "broken_intraday"
-    if any(term in message for term in ("涨停", "首板", "连板", "二板", "三板", "最高板")):
-        return "closed"
-    return None
+    return _MARKET_EVENT_TYPE_ALIASES.get(str(value or "").strip().lower())
 
 
 def normalize_event_status(value: object) -> EventStatus | None:
-    """Normalize an LLM-provided event status."""
-
-    normalized = str(value or "").strip().lower()
-    return _STATUS_ALIASES.get(normalized)
-
-
-def extract_result_mode(message: str) -> ResultMode | None:
-    """Extract whether the user wants a list, count, summary or ranking."""
-
-    if any(term in message for term in ("多少", "有几只", "数量", "共几只", "一共几只")):
-        return "count"
-    if any(
-        term in message
-        for term in (
-            "主要板块", "行业分布", "题材分布", "分类", "概况", "总结",
-            "汇总", "统计", "复盘", "审计", "比较", "共性", "共同特征",
-            "整体市场", "市场环境",
-        )
-    ):
-        return "summary"
-    if re.search(r"(?:top\s*\d+|前\s*\d+|前几)", message, flags=re.IGNORECASE) or any(
-        term in message for term in ("最高", "最低", "最早", "最晚", "排序", "排名")
-    ):
-        return "ranking"
-    return "list"
-
-
-def normalize_result_mode(value: object) -> ResultMode | None:
-    """Normalize an LLM-provided result mode."""
-
-    normalized = str(value or "").strip().lower()
-    if normalized in {"list", "count", "summary", "ranking"}:
-        return normalized  # type: ignore[return-value]
-    return None
-
-
-def extract_sort(message: str) -> tuple[SortField | None, SortOrder | None]:
-    """Extract common event sorting requirements from Chinese wording."""
-
-    rules: tuple[tuple[tuple[str, ...], SortField, SortOrder], ...] = (
-        (("最早封板", "封板最早", "按封板时间升序"), "first_limit_time", "asc"),
-        (("最晚封板", "封板最晚", "按封板时间降序"), "first_limit_time", "desc"),
-        (("成交额最小", "成交额最低", "按成交额升序"), "amount", "asc"),
-        (("成交额最大", "成交额最高", "按成交额降序"), "amount", "desc"),
-        (("换手率最低", "按换手率升序"), "turnover_rate", "asc"),
-        (("换手率最高", "按换手率降序"), "turnover_rate", "desc"),
-        (("炸板次数最多", "开板次数最多"), "break_count", "desc"),
-        (("板数最高", "最高板"), "board_height", "desc"),
-    )
-    for terms, field, order in rules:
-        if any(term in message for term in terms):
-            return field, order
-    if "成交额" in message and any(
-        term in message.lower() for term in ("top", "前", "排名", "排序")
-    ):
-        return "amount", "desc"
-    if "换手率" in message and any(
-        term in message.lower() for term in ("top", "前", "排名", "排序")
-    ):
-        return "turnover_rate", "desc"
-    if "按成交额" in message:
-        return "amount", "desc"
-    if "按换手率" in message:
-        return "turnover_rate", "desc"
-    if "按封板时间" in message:
-        return "first_limit_time", "asc"
-    return None, None
+    return _STATUS_ALIASES.get(str(value or "").strip().lower())
 
 
 def normalize_sort_field(value: object) -> SortField | None:
-    """Normalize an LLM-provided sort field."""
-
-    normalized = str(value or "").strip().lower()
-    return _SORT_ALIASES.get(normalized)
+    return _SORT_ALIASES.get(str(value or "").strip().lower())
 
 
 def normalize_sort_order(value: object) -> SortOrder | None:
-    """Normalize an LLM-provided sort direction."""
-
     normalized = str(value or "").strip().lower()
     if normalized in {"asc", "ascending", "升序"}:
         return "asc"
     if normalized in {"desc", "descending", "降序"}:
         return "desc"
     return None
-
-
-def looks_like_exhaustive_request(message: str) -> bool:
-    """Return whether omission of any matching stock would make the answer wrong."""
-
-    return any(term in message for term in ("所有", "全部", "完整名单", "全名单", "都列出", "列出"))
-
-
-def extract_result_limit(message: str) -> int | None:
-    """Extract a bounded Top-N or list-size request."""
-
-    match = re.search(r"(?:top\s*|前\s*)(\d{1,3})", message, flags=re.IGNORECASE)
-    if match is None:
-        match = re.search(r"(?:列出|展示|给我)\s*(\d{1,3})\s*只", message)
-    if match is None:
-        return None
-    return max(1, min(int(match.group(1)), 100))
-
-
-def extract_topic_query(message: str) -> str | None:
-    """Extract conservative industry/concept terms; leave ambiguous text to the LLM."""
-
-    date_neutral = re.sub(
-        r"(?<!\d)\d{4}[-/.年]\d{1,2}[-/.月]\d{1,2}(?:日|号)?",
-        "",
-        message,
-    )
-    date_neutral = re.sub(
-        r"(?<!\d)\d{1,2}[./月]\d{1,2}(?:日|号)?",
-        "",
-        date_neutral,
-    )
-    compact = re.sub(r"\s+", "", date_neutral)
-    patterns = (
-        r"([A-Za-z0-9\u4e00-\u9fff]{1,12}?)(?:板块|行业|题材|概念)(?=今天|近期|近\d|哪些|表现|走势|成分|行情|中|里|的|涨跌|$)",
-        r"([A-Za-z0-9\u4e00-\u9fff]{1,12}?)成分股",
-        r"(?:票|股票|涨停股)(?:里|中|里面)([A-Za-z0-9\u4e00-\u9fff]{1,12}?)(?:相关|题材|概念|板块|行业)",
-        r"([A-Za-z0-9\u4e00-\u9fff]{1,12}?)(?:相关|题材|概念|板块|行业)(?:的)?(?:首板|涨停)",
-    )
-    stop_words = {
-        "哪些",
-        "什么",
-        "所有",
-        "全部",
-        "主要",
-        "今天",
-        "今日",
-        "最近",
-        "创业板",
-        "科创板",
-        "主板",
-        "那个",
-    }
-    for pattern in patterns:
-        match = re.search(pattern, compact, flags=re.IGNORECASE)
-        if match:
-            candidate = _clean_topic_candidate(match.group(1))
-            if candidate and candidate not in stop_words:
-                return candidate
-    return None
-
-
-def _clean_topic_candidate(value: str) -> str:
-    """Remove time/scope words captured before a named sector or theme."""
-
-    candidate = value.strip("的与和")
-    candidate = re.sub(r"^(?:并)?(?:比较|分析|查询|看看|看一下)", "", candidate)
-    candidate = re.sub(
-        r"^(?:(?:近|最近|过去)\d{1,2}个?交易日|近期|最近|近来|今天|今日|当前|本周)+",
-        "",
-        candidate,
-    )
-    return candidate.strip("的与和")
-
-
-# Trim the optional free-text query and normalize an empty value.
-def _clean_query(value: object) -> str | None:
-    normalized = str(value or "").strip()
-    return normalized[:32] if normalized else None
-
-
-# Parse an integer and constrain it to the permitted range using this boundary's invalid-input
-# fallback.
-# A None result represents the unavailable or inapplicable branch; callers must check it before
-# using the value.
-def _bounded_int(value: object, *, minimum: int, maximum: int) -> int | None:
-    try:
-        parsed = int(value)  # type: ignore[arg-type]
-    except (TypeError, ValueError):
-        return None
-    return max(minimum, min(parsed, maximum))
-
-
-# Interpret supported planner values as a boolean without relying on string truthiness.
-# A None result represents the unavailable or inapplicable branch; callers must check it before
-# using the value.
-def _as_bool(value: object) -> bool | None:
-    if isinstance(value, bool):
-        return value
-    normalized = str(value or "").strip().lower()
-    if normalized in {"1", "true", "yes", "on"}:
-        return True
-    if normalized in {"0", "false", "no", "off"}:
-        return False
-    return None
-
-
-# Parse an optional date argument before applying it to a query.
-# A None result represents the unavailable or inapplicable branch; callers must check it before
-# using the value.
-def _parse_date(value: object) -> date | None:
-    if isinstance(value, date):
-        return value
-    try:
-        return date.fromisoformat(str(value))
-    except (TypeError, ValueError):
-        return None
-
-
-# Construct a calendar date while handling invalid year/month/day combinations.
-# A None result represents the unavailable or inapplicable branch; callers must check it before
-# using the value.
-def _safe_date(year: int, month: int, day: int) -> date | None:
-    try:
-        return date(year, month, day)
-    except ValueError:
-        return None
-
-
-# Select the contract's default ordering for the requested sort field.
-def _default_sort_order(sort_by: SortField) -> SortOrder:
-    return "asc" if sort_by == "first_limit_time" else "desc"
