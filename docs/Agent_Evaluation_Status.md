@@ -39,5 +39,9 @@ Frozen Registry 已接入现有 ToolGateway，覆盖有效参数精确匹配、P
 2026-09-11 单日数据实录（58 条事件、40 条封板）通过七项回放一致性检查，产物仅在
 被忽略的 output 目录、仍待隐私/事实审核；尚未晋升为正式 World，未调用真实 LLM。
 此录制不是不可变历史时点数据，也不具有完整交易日历覆盖。
-尚未创建正式评测题、Runner、Evaluator 或质量基线，因此仍不能宣称已有
-可运行的正式 Agent 评测集。实施状态见 `backend/evals/README.md`。
+现已由录制导出一个本地候选 World/Case，附来源与资产摘要、待审核清单，未自动晋升。
+轨迹/终态 Evaluator 已能检查工具选择、禁止尝试、关键参数和错误 complete；基于真实
+runtime trace 的脚本模型测试验证此链路。未实现的 Fact 等检查显式 needs_review，
+部分检查报告的 release_eligible 始终 false，不能当成正式 EvalResult 或质量基线。
+尚未创建正式评测题库、真实模型 Runner 或 Answer Fact Evaluator，因此仍不能宣称已有
+可运行的正式 Agent 评测集。下一步为事实验证与反误杀校准，详见 `backend/evals/README.md`。

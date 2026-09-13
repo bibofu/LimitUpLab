@@ -7,6 +7,10 @@ from pathlib import Path
 
 from app.agent_eval.local_capture import record_local_summary
 from app.agent_eval.recorder import load_capture
+from app.agent_eval.candidates import save_summary_candidate
+from app.agent_eval.evaluators import evaluate_trajectory_terminal
+from app.agent_eval.loader import load_case
+from app.models import AgentChatResponse
 
 
 def main() -> int:
@@ -18,15 +22,29 @@ def main() -> int:
     record.add_argument("--output", required=True, type=Path)
     validate = commands.add_parser("validate-capture")
     validate.add_argument("path", type=Path)
+    candidate = commands.add_parser("prepare-summary-candidate")
+    candidate.add_argument("capture", type=Path)
+    candidate.add_argument("--output-dir", required=True, type=Path)
+    check = commands.add_parser("check-response")
+    check.add_argument("--case", required=True, type=Path)
+    check.add_argument("--response", required=True, type=Path)
+    check.add_argument("--profile", required=True, choices=["v1_close_review", "extended"])
     args = parser.parse_args()
+    exit_code = 0
     if args.command == "record-local-summary":
         result = record_local_summary(args.database, args.anchor, args.output)
-    else:
+    elif args.command == "validate-capture":
         artifact = load_capture(args.path)
         result = {"checksum_valid": True, "structure_digests_valid": True,
                   "privacy_status": artifact.body.privacy_status}
+    elif args.command == "prepare-summary-candidate":
+        result = save_summary_candidate(load_capture(args.capture), args.output_dir)
+    else:
+        response = AgentChatResponse.model_validate_json(args.response.read_text(encoding="utf-8"))
+        result = evaluate_trajectory_terminal(load_case(args.case), response, profile=args.profile).model_dump(mode="json")
+        exit_code = {"pass": 0, "fail": 1, "needs_review": 2}[result["verdict"]]
     print(json.dumps(result, ensure_ascii=False, indent=2))
-    return 0
+    return exit_code
 
 
 if __name__ == "__main__":

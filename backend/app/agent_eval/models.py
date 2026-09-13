@@ -163,6 +163,8 @@ class CaseSpec(Contract):
             if turn.role != "user" or requirement.source_text not in turn.content:
                 raise ValueError("requirement must cite original user text")
         assertion_ids = [assertion.id for assertion in self.assertions]
+        if any(key.startswith("$") for key in assertion_ids):
+            raise ValueError("assertion IDs starting with $ are reserved for evaluator checks")
         if len(assertion_ids) != len(set(assertion_ids)):
             raise ValueError("duplicate assertion ID")
         references = [assertion.requirement_id for assertion in self.assertions]
