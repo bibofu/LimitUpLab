@@ -31,5 +31,7 @@ Plan-and-Execute 设计，无法充分评价当前 bounded ReAct 的 Observation
 Offline/Live 固定容量、Frozen World、Case Schema、覆盖矩阵、确定性 Evaluator、
 LLM-as-a-Judge 边界、稳定性、版本治理和发布门禁。
 
-当前仅完成设计文档，尚未创建新评测数据、Runner、Evaluator 或质量基线，
-因此仓库仍不得宣称已有可运行的正式 Agent 评测集。
+当前已开始 M1：`backend/app/agent_eval` 提供 Case、World、结果、预算和 Manifest
+类型，以及 JSON 资产加载和跨文件引用校验；对应测试纳入现有 pytest 发现范围。
+尚未创建正式评测题、真实录制、Runner、Evaluator 或质量基线，因此仍不能宣称已有
+可运行的正式 Agent 评测集。实施状态见 `backend/evals/README.md`。
