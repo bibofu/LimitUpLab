@@ -476,3 +476,4 @@
 - 状态：当前没有正式 Agent 评测集、私有 Holdout、Judge 校准或批准基线。下一步先讨论新评测目标与契约，再恢复任何发布门禁。
 - 后续清理：旧 Evaluator、Runner、Gate、Judge、CLI、报告 API、健康检查字段、能力标签辅助代码及其专属测试已经物理删除；旧设计不再作为新方案兼容约束。
 - 最终验证：完整后端 538 通过、2 个子测试通过、0 失败/跳过，保留 3 条 LangGraph/websockets 依赖弃用警告；前端 15 项通过，生产构建成功并保留既有 664.04 kB 单 chunk 提醒。首次后端运行 537 通过、1 失败，失败仅因安全路由清单仍断言已删除的 `/eval`，同步清理该断言后完整重跑通过。
+- 隔离 HTTP：独立 Uvicorn 使用临时空库启动，`GET /api/agents/system-health` 返回 200 且不含 `offline_eval_*` 字段；`GET /api/agents/eval` 返回 404。服务已停止，临时数据库已删除。
