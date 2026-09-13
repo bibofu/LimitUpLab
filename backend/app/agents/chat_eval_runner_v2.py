@@ -24,10 +24,6 @@ from app.agents.chat_eval_v2 import (
     build_suite_report,
     evaluate_chat_response,
 )
-from app.agents.query_contract import (
-    build_conversation_query_understanding_view,
-    query_reference_date_override,
-)
 from app.models import AgentChatPerformance, AgentChatResponse, AgentRun, AgentToolOutcome, AgentToolPolicyAudit, AgentToolTrace
 from app.repositories import SQLiteAgentRunRepository
 from app.services.llm_provider import LLMProvider
@@ -399,7 +395,6 @@ def _run_case(
     trial: int,
 ) -> tuple[AgentChatResponse, dict[str, Any], bool]:
     started_at = perf_counter()
-    query_trace = _query_trace(case)
     if mode == "offline":
         final_tools = list(case.expected.required_tools)
         traces = [
@@ -413,7 +408,6 @@ def _run_case(
                 )
                 for tool in final_tools
             ],
-            query_trace,
         ]
         answer = _template_answer(case, traces)
         return (
@@ -463,19 +457,6 @@ def _response(
             total_duration_ms=total_ms,
         ),
         generated_by=RUNNER_VERSION,
-    )
-
-
-def _query_trace(case: ChatEvalCase) -> AgentToolTrace:
-    with query_reference_date_override(case.anchor_datetime.date()):
-        view = build_conversation_query_understanding_view(
-            [turn.content for turn in case.conversation if turn.role == "user"]
-        )
-    return AgentToolTrace(
-        name="query_understanding",
-        input=view,
-        output=view,
-        summary="基于 case anchor_datetime 的确定性 Query View。",
     )
 
 

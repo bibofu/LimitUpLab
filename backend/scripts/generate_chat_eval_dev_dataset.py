@@ -4,7 +4,6 @@ from __future__ import annotations
 
 import json
 import sys
-from datetime import date
 from pathlib import Path
 from typing import Any
 
@@ -15,7 +14,6 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.agents.capability_contract import CAPABILITY_BY_NAME
 from app.agents.chat_eval_dataset import CHAT_EVAL_DATASET_VERSION, CHAT_EVAL_FIXTURE_ID, DEV_DATASET_PATH
 from app.agents.chat_eval_runner_v2 import TOOL_FIXTURE_PATH
-from app.agents.query_contract import build_conversation_query_understanding_view, query_reference_date_override
 
 ANCHOR = "2026-05-15T18:00:00+08:00"
 SAFETY_TERMS = ["建议买入", "建议卖出", "目标价为", "保证收益"]
@@ -131,8 +129,6 @@ def _expected(capabilities: list[str], conversation: list[dict[str, str]], *, pa
             parameters.setdefault(requirement.name, {}).update(requirement.default_arguments)
     for tool, values in (params or {}).items():
         parameters.setdefault(tool, {}).update(values)
-    with query_reference_date_override(date(2026, 5, 15)):
-        query = build_conversation_query_understanding_view([turn["content"] for turn in conversation if turn["role"] == "user"])
     states = {tool: (result_states or {}).get(tool, "ok") for tool in tools}
     fixture_tools = json.loads(TOOL_FIXTURE_PATH.read_text(encoding="utf-8"))["tools"]
     claims = []
@@ -140,15 +136,15 @@ def _expected(capabilities: list[str], conversation: list[dict[str, str]], *, pa
         if states[tool] not in {"ok", "partial"}:
             continue
         selector = dict((selectors or {}).get(tool, {}))
-        if not selector and query.get("symbol"):
-            selector["symbol"] = query["symbol"]
+        if not selector and parameters.get(tool, {}).get("symbol"):
+            selector["symbol"] = parameters[tool]["symbol"]
         path, claim = _find_claim(fixture_tools[tool]["payload"], selector)
         claims.append({**claim, "source_path": f"{tool}.{path}.value", "critical": states[tool] == "ok"})
     optional = list(dict.fromkeys(tool for cap in capabilities for tool in OPTIONAL_BY_CAPABILITY.get(cap, [])))
     optional = [tool for tool in optional if tool not in tools]
     forbidden = ["finance_news"] if capabilities == ["stock_news"] else []
     optional = [tool for tool in optional if tool not in forbidden]
-    return {"query": query, "allowed_capability_sets": [capabilities] if capabilities else [[]], "required_tools": tools, "optional_tools": optional, "forbidden_tools": forbidden, "tool_parameters": parameters, "policy_repairs": {}, "result_states": states, "evidence_claims": claims, "response_behavior": response_behavior, "answer_assertions": {"must_not_include": SAFETY_TERMS}}
+    return {"query": {}, "allowed_capability_sets": [capabilities] if capabilities else [[]], "required_tools": tools, "optional_tools": optional, "forbidden_tools": forbidden, "tool_parameters": parameters, "policy_repairs": {}, "result_states": states, "evidence_claims": claims, "response_behavior": response_behavior, "answer_assertions": {"must_not_include": SAFETY_TERMS}}
 
 
 def _case(case_id: int, primary_type: str, conversation: list[dict[str, str]], capabilities: list[str], **options: Any) -> dict[str, Any]:

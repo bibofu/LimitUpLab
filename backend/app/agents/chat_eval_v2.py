@@ -332,6 +332,11 @@ def _evaluate_query(
     if not expected:
         return EvalStageResult(status="not_applicable")
     observed = _query_observation(traces)
+    if not observed:
+        return EvalStageResult(
+            status="not_applicable",
+            observed={"reason": "natural-language Query Contract parser retired; structured tool arguments are evaluated downstream"},
+        )
     failures = tuple(_subset_failures(expected, observed))
     total_fields = _leaf_count(expected)
     return EvalStageResult(
