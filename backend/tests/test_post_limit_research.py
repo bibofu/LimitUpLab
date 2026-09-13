@@ -3,10 +3,6 @@ import pytest
 
 from app.post_limit_query_contract import (
     PostLimitQueryContract,
-    build_post_limit_query_contract,
-    looks_like_post_limit_path_question,
-    looks_like_post_limit_question,
-    looks_like_post_limit_statistics_question,
 )
 from app.repositories.post_limit_repository import PostLimitDataset
 from app.repositories import SQLiteFirstBoardRepository
@@ -73,39 +69,6 @@ def _dataset():
     return PostLimitDataset(events, list(by_key.values()), dates, dates, date.fromisoformat(dates[-1]))
 
 
-# Regression scenario: query contract routes shapes and user numeric overrides.
-def test_query_contract_routes_shapes_and_user_numeric_overrides():
-    contract = build_post_limit_query_contract(
-        "2026-09-07近10日涨停后从高位回撤15%以上的2板票，题材为机器人，按回撤从高到低排序，前5只",
-        planner_arguments={
-            "recent_limit_days": 3, "min_peak_drawdown_pct": 5,
-            "board_height": 4, "query": "芯片", "sort_by": "volume_ratio",
-        },
-    )
-    assert looks_like_post_limit_question("有哪些涨停后从高位大幅回撤的票")
-    assert looks_like_post_limit_question("哪些涨停票从高点回撤了")
-    assert looks_like_post_limit_path_question("它涨停后怎么走的")
-    assert contract.shape == "high_drawdown"
-    assert contract.data_as_of == date(2026, 9, 7)
-    assert contract.recent_limit_days == 10
-    assert contract.min_peak_drawdown_pct == 15
-    assert contract.board_height == 2
-    assert contract.query == "机器人"
-    assert contract.sort_by == "peak_drawdown_pct" and contract.sort_order == "desc"
-    assert contract.limit == 5
-    assert build_post_limit_query_contract("量比低于0.6的横盘缩量票").max_volume_ratio == .6
-    stats = build_post_limit_query_contract("比较近7日横盘缩量和回撤企稳的历史表现")
-    assert looks_like_post_limit_statistics_question("统计高位回撤历史表现")
-    assert stats.mode == "statistics" and stats.statistics_days == 7
-    assert stats.shapes == ("volume_consolidation", "pullback_stabilizing")
-    assert build_post_limit_query_contract("按题材分组统计横盘缩量历史表现").group_by == "concept"
-    assert looks_like_post_limit_path_question("600001涨停后的逐日走势")
-    assert looks_like_post_limit_path_question("回撤样本涨停后的走势")
-    anchored_path = build_post_limit_query_contract("600001从9月1日涨停后怎么走，截至9月7日")
-    assert anchored_path.anchor_date == date(2026, 9, 1)
-    assert anchored_path.data_as_of == date(2026, 9, 7)
-
-
 # Regression scenario: post limit trace keeps all candidate names for stock links.
 def test_post_limit_trace_keeps_all_candidate_names_for_stock_links(
     monkeypatch,
@@ -122,9 +85,11 @@ def test_post_limit_trace_keeps_all_candidate_names_for_stock_links(
         events=[],
         first_board_repository=SQLiteFirstBoardRepository(tmp_path / "links.sqlite"),
     )
-    contract = build_post_limit_query_contract(
-        "近期涨停后回撤比较多的股票有哪些",
-        request_trade_date=date.fromisoformat(dataset.calendar[35]),
+    contract = PostLimitQueryContract(
+        shape="high_drawdown",
+        data_as_of=date.fromisoformat(dataset.calendar[35]),
+        exhaustive=True,
+        limit=100,
     )
 
     result = registry.post_limit_screen(contract)
@@ -156,19 +121,13 @@ def test_post_limit_trace_keeps_all_candidate_names_for_stock_links(
 
 # Regression scenario: premarket observation shapes default to seven event days.
 def test_premarket_observation_shapes_default_to_seven_event_days():
-    high_drawdown = build_post_limit_query_contract(
-        "有哪些涨停后从高位大幅回撤的票",
-        planner_arguments={"recent_limit_days": 5},
-    )
-    volume_consolidation = build_post_limit_query_contract("有哪些缩量整理的股票")
-    combined = build_post_limit_query_contract("筛选高位回撤和回撤企稳的股票")
-    other_shape = build_post_limit_query_contract(
-        "断板修复有哪些",
-        planner_arguments={"recent_limit_days": 5},
-    )
-    stock_path = build_post_limit_query_contract("600001涨停后的逐日走势")
+    high_drawdown = PostLimitQueryContract(shape="high_drawdown")
+    volume_consolidation = PostLimitQueryContract(shape="volume_consolidation")
+    combined = PostLimitQueryContract(shapes=("high_drawdown", "pullback_stabilizing"))
+    other_shape = PostLimitQueryContract(shape="broken_board_repair")
+    stock_path = PostLimitQueryContract(mode="path", shape="high_drawdown")
 
-    assert high_drawdown.version == "post-limit-query-v3"
+    assert high_drawdown.version == "post-limit-query-v4"
     assert high_drawdown.recent_limit_days == 7
     assert volume_consolidation.recent_limit_days == 7
     assert combined.recent_limit_days == 7
@@ -178,10 +137,7 @@ def test_premarket_observation_shapes_default_to_seven_event_days():
 
 # Regression scenario: explicit event window overrides seven day default.
 def test_explicit_event_window_overrides_seven_day_default():
-    contract = build_post_limit_query_contract(
-        "近10个交易日涨停后从高位回撤的股票",
-        planner_arguments={"recent_limit_days": 5},
-    )
+    contract = PostLimitQueryContract(shape="high_drawdown", recent_limit_days=10)
 
     assert contract.recent_limit_days == 10
 
@@ -246,10 +202,7 @@ def test_seven_day_agent_window_reports_a_sixth_day_event_gap(offset):
         [day for day in dataset.event_dates if day != missing_day],
         dataset.latest_data_date,
     )
-    contract = build_post_limit_query_contract(
-        "有哪些涨停后从高位大幅回撤的票",
-        request_trade_date=end,
-    )
+    contract = PostLimitQueryContract(shape="high_drawdown", data_as_of=end)
 
     result = build_post_limit_screen(changed, contract)
 
@@ -267,17 +220,21 @@ def test_direct_contract_and_statistics_use_seven_days(shape):
 
 
 # Regression scenario: other shapes ignore injected seven day capability default.
-@pytest.mark.parametrize("message", ["回撤企稳有哪些", "强势不连板有哪些", "断板修复有哪些", "2进3有哪些"])
-def test_other_shapes_ignore_injected_seven_day_capability_default(message):
-    assert build_post_limit_query_contract(message, planner_arguments={"recent_limit_days": 7}).recent_limit_days == 5
+@pytest.mark.parametrize("shape", ["pullback_stabilizing", "strong_nonconsecutive", "broken_board_repair", "second_to_third"])
+def test_other_shapes_keep_five_day_default(shape):
+    assert PostLimitQueryContract(shape=shape).recent_limit_days == 5
 
 
 # Regression scenario: statistics separates event lookback and signal day count.
 def test_statistics_separates_event_lookback_and_signal_day_count():
-    contract = build_post_limit_query_contract("统计近3个信号日、回看近10个交易日有收盘涨停的缩量整理历史表现")
+    contract = PostLimitQueryContract(
+        mode="statistics",
+        shape="volume_consolidation",
+        recent_limit_days=10,
+        statistics_days=3,
+    )
     assert contract.recent_limit_days == 10
     assert contract.statistics_days == 3
-    assert build_post_limit_query_contract("比较近7日横盘缩量和回撤企稳的历史表现").recent_limit_days == 7
 
 
 # Regression scenario: statistics discloses missing event windows.
