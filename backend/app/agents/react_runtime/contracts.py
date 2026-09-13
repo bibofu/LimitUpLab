@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-VERSION = "react-runtime-v9"
+VERSION = "react-runtime-v10"
 MAX_MODEL_CALLS = 8
 MAX_TOOL_CALLS = 8
 MAX_CONTROL_CALLS = 16
@@ -32,7 +32,7 @@ class EvidenceBinding(StrictModel):
     path: list[str | int] = Field(
         min_length=1,
         max_length=20,
-        description="Path from the cited evidence payload to the exact supporting value.",
+        description="Typed path from the cited evidence observation's metadata, rows, or stable status fields to the exact supporting value.",
     )
     value: str | int | float | bool | None = Field(
         description="Exact scalar value expected at path; the server verifies it.",
@@ -52,7 +52,7 @@ class Finish(StrictModel):
     claims: list[AnswerClaim] = Field(
         default_factory=list,
         max_length=50,
-        description="Every market fact or inference in answer, each bound to exact evidence paths.",
+        description="Every market fact or inference in answer, accurately summarized and bound to exact evidence paths.",
     )
     missing: list[str] = Field(default_factory=list, description="Only unmet USER-requested deliverables. Irrelevant missing source fields are caveats in the answer, not unfinished tasks.")
 

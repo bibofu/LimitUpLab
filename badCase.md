@@ -835,3 +835,10 @@ empty、partial 或 error 时 Replan 新闻；股票名称提取同步覆盖 K�
 - 根因：旧流式回答阶段退役后，配套分段缓冲器和自然语言句式替换没有同步删除；输出边界同时保留“校验前禁止泄漏”和“校验后重写正文”两套策略。
 - 修复：删除无生产消费者的流式 Sanitizer 及专属测试。最终输出只对公开契约中的精确内部标识执行字面量业务标签替换，不再识别或改写开放式句型；Prompt 泄漏仍在发布前 gate 失败关闭。
 - 回归：覆盖反引号和普通精确工具标识替换、trace 名称不变、全部注册工具都有业务标签，以及股票链接仍只来自结构化工具事实。
+
+## BC-047：Claim Ledger 可见路径与校验路径冲突导致正确答案失败（2026-09-13）
+
+- 发现方式：Chrome 真实问答回归。包括“查询2026-09-11的涨停数量”在内的简单问题中，业务工具正确返回 `matched_count=40`，模型也正确生成答案，但最终状态仍为 `partial/validation_failed`。
+- 根因：模型观察到的证据被包装为 `metadata` 和 `rows`，校验器却只接受原始 payload 路径；同时 gate 强制 claim statement 逐字出现在正文，空格或补充日期说明也会误判。第一次文本误判耗掉唯一修复机会，随后可见路径再次被拒绝。纯计数 payload 没有行集合，也被 `matched_count > len(rows)` 错判为来源截断。
+- 修复：EvidenceStore 同时解析原始 payload 路径和模型实际可见的 `metadata`/`rows`/稳定状态字段类型化路径；Claim Ledger 保留标量值、证据域和引用一致性校验，但 statement 改为结构化摘要，不再与展示正文做逐字耦合；`result_mode=count` 不再依据空的展示行集合推断截断。证据版本升级为 `react-evidence-v4`，运行版本升级为 `react-runtime-v10`。
+- 回归：覆盖真实的 count-only payload（含空 `items`）保持 `ok`、`metadata.matched_count`、`result_state` 与 `rows[0].symbol` 可解析，以及正文和 claim 仅格式不同仍能一次完成；错误标量值仍由原有测试拒绝。

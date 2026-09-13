@@ -118,8 +118,81 @@ def test_public_entry_defaults_to_react(monkeypatch):
             return call("finish", {"status": "refuse", "answer": "我可以提供研究事实，不能提供交易指令。"}, "f")
     response = answer_first_board_chat(AgentChatRequest(session_id="r", message="给我买卖指令"), [],
                                       llm_provider=Model(), tool_registry=registry())
-    assert response.generated_by == "react-runtime-v9"
+    assert response.generated_by == "react-runtime-v10"
     assert response.task_status == "refuse"
+
+
+def test_visible_evidence_paths_resolve_and_count_only_result_is_complete():
+    store = EvidenceStore()
+    count_id = store.add(
+        tool="market_event_pool",
+        state="ok",
+        arguments={"trade_date": "2026-09-11", "result_mode": "count"},
+        payload={
+            "trade_date": "2026-09-11",
+            "result_mode": "count",
+            "matched_count": 40,
+            "returned_count": 0,
+            "items": [],
+            "source": "local-limit-up-events",
+        },
+    )
+    rows_id = store.add(
+        tool="limit_up_events",
+        state="ok",
+        arguments={"trade_date": "2026-09-11"},
+        payload={"events": [{"symbol": "002790", "name": "瑞尔特", "board_count": 4}]},
+    )
+
+    assert store.view(count_id)["result_state"] == "ok"
+    assert store.resolve_payload_path(count_id, ["metadata", "matched_count"]) == 40
+    assert store.resolve_payload_path(count_id, ["result_state"]) == "ok"
+    assert store.resolve_payload_path(rows_id, ["rows", 0, "symbol"]) == "002790"
+
+
+def test_claim_summary_need_not_duplicate_answer_formatting():
+    class Model:
+        calls = 0
+
+        def generate_messages(self, messages, tools, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return call("stock_kline", {
+                    "symbol": "600519", "days": 10, "end_date": "2026-05-15"
+                }, "kline")
+            observation = json.loads([
+                message.content for message in messages
+                if isinstance(message, ToolMessage) and message.tool_call_id == "kline"
+            ][-1])
+            evidence_id = observation["evidence_id"]
+            return call("finish", {
+                "status": "complete",
+                "answer": "贵州茅台在该窗口的收益为 1.2%。",
+                "evidence_ids": [evidence_id],
+                "claims": [claim(
+                    "贵州茅台窗口收益为1.2%",
+                    evidence_id,
+                    ["metadata", "return_10d_pct"],
+                    1.2,
+                )],
+            }, "finish")
+
+    def kline(symbol, days=20, end_date: date | None = None):
+        return ToolResult(
+            name="stock_kline",
+            input={"symbol": symbol, "days": days, "end_date": end_date},
+            output={"symbol": symbol, "return_10d_pct": 1.2},
+            summary="行情证据",
+        )
+
+    response = run(
+        AgentChatRequest(session_id="r", message="查询贵州茅台十日收益"),
+        registry(stock_kline=kline),
+        Model(),
+    )
+
+    assert response.task_status == "complete"
+    assert response.stop_reason == "answered"
 
 
 def test_semantic_compliance_rejection_requires_a_safe_repair(monkeypatch):

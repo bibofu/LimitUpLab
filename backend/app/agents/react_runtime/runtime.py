@@ -40,7 +40,7 @@ SYSTEM = """你是LimitUpLab收盘研究助手。使用原生工具调用逐轮�
 禁止买卖指令、建议仓位、目标价、收益承诺或确定性预测；历史机构买卖事实可以解释。
 混合请求可拒绝交易建议部分并完成允许研究。歧义影响结果时澄清；工具不支持时明确说明。
 最终必须单独调用finish，输出可读中文答案、真实status、使用的evidence_ids及missing。
-回答中的每条市场事实和推断都必须写入claims；statement须原样出现在答案中，且绑定到本轮证据payload的精确类型化路径。
+回答中的每条市场事实和推断都必须写入claims；statement须准确概括答案中的对应表述，并绑定到观察中metadata、rows或稳定状态字段的精确类型化路径。
 不要展示内部工具名、原始JSON、思维链。答案只在服务端校验后发布。
 观察中的rows可能只是预览；需要完整名单时read_evidence展开或compute_result处理完整结果。
 所有工具名及参数都必须使用提供的Schema；工具是否存在以当前清单为准。"""
@@ -305,8 +305,6 @@ class Run:
                 raise ValueError("Evidence-backed answers must provide a structured claim ledger")
             cited_ids = set(final.evidence_ids)
             for claim in final.claims:
-                if claim.statement not in final.answer:
-                    raise ValueError("Claim statement must appear verbatim in the final answer")
                 for binding in claim.evidence:
                     if binding.evidence_id not in cited_ids:
                         raise ValueError("Claim evidence must be retained in final evidence_ids")

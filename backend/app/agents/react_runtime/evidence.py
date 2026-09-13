@@ -8,7 +8,7 @@ from uuid import uuid4
 from fastapi.encoders import jsonable_encoder
 
 COLLECTIONS = ("events", "top_candidates", "items", "stocks", "top_sectors", "bars", "candidates")
-EVIDENCE_VERSION = "react-evidence-v3"
+EVIDENCE_VERSION = "react-evidence-v4"
 CURRENT_SCOPE = "current_run"
 HISTORY_SCOPE = "conversation_history"
 
@@ -101,9 +101,12 @@ class EvidenceStore:
         key = "ev_" + uuid4().hex[:16]
         rows = rows_of(payload)
         metadata = payload if isinstance(payload, dict) else {}
+        has_row_collection = any(isinstance(metadata.get(name), list) for name in COLLECTIONS)
         # Source truncation is different from the small model preview page.
         truncated = bool(metadata.get("source_truncated") or metadata.get("truncated")) or (
-            tool != "compute_result" and isinstance(metadata.get("matched_count"), int)
+            tool != "compute_result" and has_row_collection
+            and metadata.get("result_mode") != "count"
+            and isinstance(metadata.get("matched_count"), int)
             and metadata["matched_count"] > len(rows)
         )
         source_missing = metadata.get("data_missing") or []
@@ -127,10 +130,29 @@ class EvidenceStore:
         return self.records[key]
 
     def resolve_payload_path(self, key, path):
-        """Resolve a typed path without evaluating expressions or parsing path strings."""
+        """Resolve raw payload paths and the metadata/rows paths shown to the model."""
 
-        value = self.get(key)["payload"]
-        for segment in path:
+        record = self.get(key)
+        segments = list(path)
+        value = record["payload"]
+        stable_observation_fields = {
+            "result_state": record["result_state"],
+            "row_count": len(record["rows"]),
+            "source_truncated": record.get("source_truncated", False),
+            "data_missing": record.get("data_missing", []),
+            "sources": record.get("sources", []),
+        }
+        if segments[0] in stable_observation_fields:
+            value = stable_observation_fields[segments[0]]
+            segments = segments[1:]
+        elif segments[0] == "metadata":
+            value = value if isinstance(value, dict) else {}
+            value = {name: item for name, item in value.items() if name not in COLLECTIONS}
+            segments = segments[1:]
+        elif segments[0] == "rows":
+            value = record["rows"]
+            segments = segments[1:]
+        for segment in segments:
             if isinstance(segment, int):
                 if not isinstance(value, list) or segment < 0 or segment >= len(value):
                     raise ValueError(f"Invalid evidence list path segment: {segment}")
