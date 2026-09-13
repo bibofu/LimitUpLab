@@ -1,5 +1,15 @@
 # Agent 应用质量审查
 
+## 2026-09-13：ReAct 最终答案门禁绕过修复
+
+- 范围：修复普通模型文本自动包装为 `complete`、无证据 requirement 自报 `satisfied`、无证据研究回答、仅历史证据完成新研究请求，以及显式实体/日期/指标/数值与引用证据错配。生产运行版本由 `react-runtime-v1` 升级为 `react-runtime-v2`；没有修改评分、数据管线或历史预测。
+- P1 已修（BC-036）：普通文本不再成为隐式终态，只允许一次类型化 `finish` 修复；删除自然语言“可无证据完成”正则白名单，`complete` 和 `empty` 与用户措辞无关，一律要求 evidence ID，无证据场景只能返回 `partial`、`clarify` 或 `refuse`；已满足 requirement 必须绑定可用 evidence ID，且最终 `finish` 继续保留这些 ID；仅历史 reference 不能完成请求；生产 gate 对最终声明引用的证据执行已有关系接地校验，不允许错误股票、日期或数值通过。实现提交：`f3b72e0`、`b7812dc`。
+- 真实 HTTP：新增 loopback FastAPI 回归，模型首轮直接输出“贵州茅台今天涨停，成交额100亿元”，API 不发布该文本，第二轮只交付 `partial` 与行情缺失说明；覆盖同步持久化后的最终响应，不以健康检查代替业务验收。
+- 验证：最终门禁与 ReAct HTTP 定向 **28 passed**；最终完整后端 **582 passed**，0 failed、0 setup error、0 skipped。保留 LangGraph serializer 和 websockets 的 3 条既有弃用警告。前端未修改，未运行前端测试或构建。
+- 评测边界：默认 Offline Dev CLI 因本地缺少未受 Git 跟踪的 `backend/tests/fixtures/agent_chat_eval_dev_v2.json` 返回 `configuration_error`，未计为通过；本次没有真实供应商模型、私有 Holdout 或 Judge 结果。
+- 剩余 P1：确定性 grounding 主要覆盖股票实体、日期、时间和带单位数值，尚不能证明“连续性弱”“因为复权”等开放式因果/定性解释，因此 BC-033/034 保持未修。会话上下文 16→8 空档、完整 memory payload 暴露和工具线程不可强制取消也不在本次范围。
+- 检查：两次源码提交均检查完整 diff、精确暂存和 `git diff --check`，分别为 374 行新增/19 行删除、34 行新增/33 行删除，均低于单次 1000 行限制；未纳入本地数据库、输出报告、测试临时目录或其他未跟踪文件。
+
 ## 2026-09-13：V1.4.0 标签部署失败与 SQLite 只读挂载修复
 
 - GitHub Actions run `34704996201` 的 Windows/Ubuntu 验收通过，生产任务在镜像构建完成后失败。服务器 journal `v1.4.0-20260913T002448.json` 为 `failed_before_switch`，未进入维护、停服务、备份或迁移阶段；公网 `/health` 仍为 200。
