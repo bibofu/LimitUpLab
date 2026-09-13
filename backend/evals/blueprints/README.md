@@ -76,5 +76,28 @@ Blueprint的`tools`只表示规划覆盖/录制依赖，`arguments`是某条可�
 Current Invariant 不增加当天固定值；Canary自然运行没有遇到超时/部分失败时，不得宣称
 已覆盖这些分支。受控故障演练应独立标记，不得伪装成真实第三方故障。
 
-本次未新增真实调用或抓取，也未补填正式审核者。下一步先处理本地事件组中的小批题，
-同时把首个真实回答纳入独立标注和校准，逐题完成数据、断言和运行闭环。
+## 本地事件首批材料化
+
+已增加 `prepare-local-event-candidates`，从同一只读 SQLite 会话窗口执行生产
+`limit_up_events`，分别录制 OFF-027 和 OFF-038；不复制不同参数之间的工具结果。
+
+```powershell
+.venv/Scripts/python.exe -m app.agent_eval prepare-local-event-candidates --database data/limituplab.sqlite --anchor 2026-09-11T18:00:00+08:00 --book evals/blueprints/core40_live48.json --output-dir ../output/agent-eval/candidates/local-events-batch1
+```
+
+目录已存在时应换新目录。每题保存 capture、case、world、review 四个文件，均为本地
+未审核资产，不提交包含实际数据的文件。真实录制结果：OFF-027 命中32只、返回10只；
+OFF-038 命中40只、返回20只；两题初始预览均为8行，record/replay均一致。
+
+两题均保留日期与有序代码/名称名单，不以无序集合检查替代排序检查。原始工具按成交额
+排序，但其事件展示行不含成交额；题目不额外要求回答金额。预期名单来自真实返回，
+仍需独立核验源数据过滤/排序，录制回放一致并不证明生产工具计算本身正确。
+
+当前累计材料化3道Offline候选（含OFF-001），不是3道正式通过题。新增两题尚未调用
+真实LLM；`answer_matches_observation` 集合断言尚未接入校准后的答案抽取/判定器，
+因此必须保留 `needs_review`，不得以终态为complete替代内容正确。单一参数签名World
+也尚未覆盖所有等价调用路线，未录制路径应归为fixture缺口，不能直接判Agent错。
+
+下一步接入有序名单抽取与独立校准，再做这两题真实Agent诊断。新录制包含个股明细和
+原始工具对象，外发前需明确新增数据范围，不能沿用此前只针对市场汇总的授权。
+交易日历仍只是观察到的单日，尚不支持相对交易日题；Live蓝图仍未材料化。

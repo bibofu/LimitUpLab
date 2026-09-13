@@ -35,6 +35,31 @@ def record_local_summary(database: Path, anchor: datetime, destination: Path) ->
         raise ValueError("anchor must be timezone-aware")
     if destination.exists():
         raise FileExistsError(destination)
+    day, rows, events = read_local_session(database, anchor)
+    registry = LocalSummaryRegistry(events)
+    artifact = capture_tool(
+        registry, tool="market_summary", arguments={"include_limit_down": False},
+        anchor_datetime=anchor, recording_id="local-market-summary-" + day.isoformat(),
+        provenance="production market_summary over read-only local market events",
+        source_manifest={"source": "local-sqlite-limit-up-events", "trade_date": day.isoformat(),
+                         "row_count": len(rows), "selected_rows_digest": digest(rows),
+                         "scope": "single-session capture; historical revisions not excluded"},
+    )
+    calendar = CalendarSpec(id="observed-single-session", version=1, start_date=day,
+                            end_date=day, trading_dates=[day])
+    report = verify_replay(artifact, calendar=calendar, latest_local_trade_date=day)
+    if not report["passed"]:
+        raise ValueError("record/replay mismatch: " + str(report["checks"]))
+    save_capture(artifact, destination)
+    return {**report, "trade_date": day.isoformat(), "source_rows": len(rows),
+            "limit_up_count": artifact.body.recording.observation.payload["limit_up_count"],
+            "privacy_status": artifact.body.privacy_status}
+
+
+def read_local_session(database: Path, anchor: datetime):
+    """Read one observed session, without opening a writable repository connection."""
+    if anchor.utcoffset() is None:
+        raise ValueError("anchor must be timezone-aware")
     day = anchor.astimezone(ZoneInfo("Asia/Shanghai")).date()
     # Read exactly the requested date. A missing date is not replaced with a sample or latest.
     with closing(sqlite3.connect(database.resolve().as_uri() + "?mode=ro", uri=True)) as connection:
@@ -47,21 +72,4 @@ def record_local_summary(database: Path, anchor: datetime, destination: Path) ->
         raise ValueError("no local events for anchor date; choose a verified data window")
     repository = SQLiteLimitUpRepository(database, seed_if_empty=False)
     events = [repository._event_from_row(row) for row in rows]
-    registry = LocalSummaryRegistry(events)
-    artifact = capture_tool(
-        registry, tool="market_summary", arguments={"include_limit_down": False},
-        anchor_datetime=anchor, recording_id="local-market-summary-" + day.isoformat(),
-        provenance="production market_summary over read-only local market events",
-        source_manifest={"source": "local-sqlite-limit-up-events", "trade_date": day.isoformat(),
-                         "row_count": len(rows), "selected_rows_digest": digest([dict(row) for row in rows]),
-                         "scope": "single-session capture; historical revisions not excluded"},
-    )
-    calendar = CalendarSpec(id="observed-single-session", version=1, start_date=day,
-                            end_date=day, trading_dates=[day])
-    report = verify_replay(artifact, calendar=calendar, latest_local_trade_date=day)
-    if not report["passed"]:
-        raise ValueError("record/replay mismatch: " + str(report["checks"]))
-    save_capture(artifact, destination)
-    return {**report, "trade_date": day.isoformat(), "source_rows": len(rows),
-            "limit_up_count": artifact.body.recording.observation.payload["limit_up_count"],
-            "privacy_status": artifact.body.privacy_status}
+    return day, [dict(row) for row in rows], events

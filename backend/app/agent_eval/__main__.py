@@ -22,6 +22,11 @@ def main() -> int:
     record.add_argument("--anchor", required=True, type=datetime.fromisoformat)
     record.add_argument("--output", required=True, type=Path)
     validate = commands.add_parser("validate-capture")
+    events = commands.add_parser("prepare-local-event-candidates")
+    events.add_argument("--database", required=True, type=Path)
+    events.add_argument("--anchor", required=True, type=datetime.fromisoformat)
+    events.add_argument("--book", required=True, type=Path)
+    events.add_argument("--output-dir", required=True, type=Path)
     validate.add_argument("path", type=Path)
     candidate = commands.add_parser("prepare-summary-candidate")
     candidate.add_argument("capture", type=Path)
@@ -47,6 +52,9 @@ def main() -> int:
     exit_code = 0
     if args.command == "record-local-summary":
         result = record_local_summary(args.database, args.anchor, args.output)
+    elif args.command == "prepare-local-event-candidates":
+        from app.agent_eval.event_candidates import prepare_event_candidates
+        result = prepare_event_candidates(args.database, args.anchor, args.book, args.output_dir)
     elif args.command == "validate-capture":
         artifact = load_capture(args.path)
         result = {"checksum_valid": True, "structure_digests_valid": True,
