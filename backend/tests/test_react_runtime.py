@@ -12,6 +12,10 @@ from app.agents.react_runtime.evidence import EvidenceStore
 from app.agents.react_runtime.runtime import run
 from app.agents.tools import TOOL_SCHEMAS, ToolResult
 from app.models import AgentChatRequest, ChatSessionMessage
+from app.services.llm_provider import (
+    NativeFunctionCallingUnavailable,
+    OpenAIChatCompletionsProvider,
+)
 
 
 def call(name, args, key):
@@ -84,8 +88,15 @@ def test_public_entry_defaults_to_react(monkeypatch):
             return call("finish", {"status": "refuse", "answer": "我可以提供研究事实，不能提供交易指令。"}, "f")
     response = answer_first_board_chat(AgentChatRequest(session_id="r", message="给我买卖指令"), [],
                                       llm_provider=Model(), tool_registry=registry())
-    assert response.generated_by == "react-runtime-v5"
+    assert response.generated_by == "react-runtime-v6"
     assert response.task_status == "refuse"
+
+
+def test_runtime_rejects_text_only_provider_before_model_loop():
+    provider = OpenAIChatCompletionsProvider(api_key="test-key")
+
+    with pytest.raises(NativeFunctionCallingUnavailable, match="cannot be used"):
+        run(AgentChatRequest(session_id="r", message="查询涨停事实"), registry(), provider)
 
 
 def test_runtime_does_not_retruncate_upstream_history_from_sixteen_to_eight():

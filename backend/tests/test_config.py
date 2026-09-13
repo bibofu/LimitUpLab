@@ -9,6 +9,7 @@ from app.config import (
     DEFAULT_CORS_ORIGINS,
     PROXY_ENV_NAMES,
     clear_unreachable_local_proxy,
+    configured_llm_backend,
     configured_cors_origins,
     configure_runtime_environment,
     hydrate_windows_environment,
@@ -155,6 +156,20 @@ class ConfigTest(unittest.TestCase):
         self.assertEqual(os.getenv("LIMITUPLAB_LLM_BASE_URL"), "https://api.deepseek.com")
         self.assertEqual(os.getenv("LIMITUPLAB_LLM_MODEL"), "deepseek-v4-flash")
         self.assertTrue(all(name not in os.environ for name in PROXY_ENV_NAMES))
+
+    # Regression scenario: the process cannot start with a text-only chat backend.
+    def test_runtime_configuration_rejects_requests_chat_backend(self) -> None:
+        env_path = self._test_dir / ".env"
+        env_path.write_text("LIMITUPLAB_LLM_BACKEND=requests\n", encoding="utf-8")
+        os.environ.pop("LIMITUPLAB_LLM_BACKEND", None)
+
+        with self.assertRaisesRegex(ValueError, "only langchain"):
+            configure_runtime_environment(env_path)
+
+    def test_configured_llm_backend_accepts_normalized_langchain(self) -> None:
+        os.environ["LIMITUPLAB_LLM_BACKEND"] = " LangChain "
+
+        self.assertEqual(configured_llm_backend(), "langchain")
 
     # Regression scenario: dead proxy cleanup leaves valid proxy untouched.
     @patch("app.config._proxy_endpoint_reachable", return_value=True)

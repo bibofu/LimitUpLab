@@ -60,10 +60,10 @@ DEEPSEEK_API_KEY=<your-api-key>
 The production chat backend uses LangChain messages and
 `ChatOpenAI.bind_tools`. A custom LangGraph `StateGraph` runs one bounded ReAct
 loop; `ToolGateway`, `EvidenceStore` and the SQLite run journal retain financial
-policy, provenance, idempotency and recovery control. Set
-`LIMITUPLAB_LLM_BACKEND=langchain` for chat. The legacy Requests provider remains
-available to isolated text/Judge callers but does not implement the conversational
-multi-tool protocol and is not a chat-runtime rollback backend.
+policy, provenance, idempotency and recovery control. The only valid configured
+backend is `LIMITUPLAB_LLM_BACKEND=langchain`; any other value fails during
+startup. The legacy Requests class remains available only through explicit
+construction and dependency injection for isolated text/Judge callers.
 See [integration and verification details](../docs/LangChain_Integration.md).
 
 Chat uses non-thinking mode by default because each ReAct decision is a

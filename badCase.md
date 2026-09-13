@@ -786,3 +786,10 @@ empty、partial 或 error 时 Replan 新闻；股票名称提取同步覆盖 K�
 - 已复现问题：`limit_up_events.result_mode` 对模型可见但执行前被丢弃；`stock_kline.symbol` 源 Schema 同时允许字符串和数组，运行时又改为字符串；`first_board_filter.trade_date`、`post_limit_path.symbol` 及四个区间工具的必填日期都依赖运行时补丁。
 - 修复：`AgentToolSchema` 统一保存参数、时态、日期、集合语义和 adapter，作为唯一公开契约；由它生成 strict Pydantic 参数模型及 LangChain `StructuredTool`，直接方法默认值自动派生进模型，模型 definitions、Policy 校验和实际执行共用同一类型化对象。直接 Python 实现启动时核对参数集合、必填项和类型，非直接适配显式声明，不再靠工具名猜测或修补 Schema。
 - 回归：覆盖 26 个契约与 Catalog 对象同一性、全部工具均为 Pydantic-backed `StructuredTool`、伪造参数漂移启动失败、已知四类错配消失、首板筛选和 post-limit adapter 可执行。契约版本升级为 `agent-tools-v2`，运行版本升级为 `react-runtime-v5`。
+
+## BC-040：Requests 文本 Provider 被配置为生产 ReAct 后端（2026-09-13）
+
+- 发现方式：阶段性代码审查 A36。`LIMITUPLAB_LLM_BACKEND=requests` 能通过配置校验并构造 `OpenAIChatCompletionsProvider`，但生产 ReAct 只调用它没有实现的 `generate_messages`；每轮都在发出网络请求前失败，连续两轮后返回 `provider_error`。
+- 根因：共享 Provider 工厂只校验后端名称，没有校验生产聊天所需的消息、多工具调用能力；旧 Requests 文本接口与当前 ReAct 接口被放在同一个可切换配置面。
+- 修复：全局生产配置只接受 `langchain`，错误值在环境加载/服务启动阶段直接拒绝；Requests 类继续保留给旧式文本或 Judge 消费者显式构造和注入，不再接受环境变量切换。ReAct 入口额外检查 Provider 是否真正覆盖 `generate_messages`，阻止显式误注入进入重试循环。运行版本升级为 `react-runtime-v6`。
+- 回归：覆盖 `.env` 中 Requests 启动失败、共享工厂拒绝 Requests、大小写规范化的 LangChain 配置、关闭 LLM 的合法路径，以及 Requests Provider 在 ReAct 首轮前被拒绝且不发出网络请求。

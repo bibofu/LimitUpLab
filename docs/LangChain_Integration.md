@@ -1,6 +1,6 @@
 # LangChain + LangGraph ReAct 集成
 
-> 当前版本：V1.4 / `react-runtime-v5` / `agent-tools-v2`
+> 当前版本：V1.4 / `react-runtime-v6` / `agent-tools-v2`
 > 代码基线：以 `v1.4.0` 标签指向的提交为准
 
 ## 当前生产链路
@@ -58,7 +58,7 @@ LIMITUPLAB_LLM_MAX_ATTEMPTS=2
 LIMITUPLAB_LLM_TIMEOUT_SECONDS=30
 ```
 
-`LIMITUPLAB_LLM_BACKEND=requests` 仍能构造旧 `OpenAIChatCompletionsProvider`，并被独立 Judge/文本调用复用，但它没有实现当前 ReAct 所需的 `generate_messages` 多工具消息协议，不能作为生产聊天回退。关闭 LLM 或缺少 API Key 时，确定性数据、评分、回测和独立 Explanation 功能仍可运行；聊天任务会返回明确失败状态，不会通过旧通用模板伪装成功。
+配置入口只接受 `LIMITUPLAB_LLM_BACKEND=langchain`，其他值会在服务启动时失败，不会进入 ReAct 后连续产生 provider error。旧 `OpenAIChatCompletionsProvider` 类仍保留给明确的文本/Judge 消费者直接构造和依赖注入，但不再能通过全局环境配置成为生产聊天 Provider；ReAct 入口还会按是否真正实现 `generate_messages` 做第二层能力校验。关闭 LLM 或缺少 API Key 时，确定性数据、评分、回测和独立 Explanation 功能仍可运行；聊天任务不会通过旧通用模板伪装成功。
 
 `AuditedChatOpenAI` 对兼容服务保留两项窄适配：将 SDK 的 `max_completion_tokens` 转回目标服务支持的 `max_tokens`；从流式 chunk 保存原始 usage。升级 `langchain-openai` 时必须运行线协议测试，不能只验证 import。
 

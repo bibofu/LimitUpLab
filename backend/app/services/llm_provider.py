@@ -13,7 +13,7 @@ from typing import Any, Callable
 
 import requests
 
-from app.config import env_bool
+from app.config import configured_llm_backend, env_bool
 
 
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
@@ -467,8 +467,20 @@ class OpenAIChatCompletionsProvider(LLMProvider):
         raise RuntimeError(f"LLM request failed: {last_error}")
 
 
+def require_react_provider(provider: LLMProvider) -> None:
+    """Reject providers that only inherit the unsupported message-tool protocol."""
+
+    implementation = getattr(type(provider), "generate_messages", None)
+    if implementation is None or implementation is LLMProvider.generate_messages:
+        raise NativeFunctionCallingUnavailable(
+            f"{type(provider).__name__} cannot be used by production ReAct chat"
+        )
+
+
 def get_llm_provider() -> LLMProvider:
-    """Create the configured LLM provider from environment variables."""
+    """Create the configured production ReAct provider from environment variables."""
+
+    configured_llm_backend()
 
     if not env_bool("LIMITUPLAB_LLM_ENABLED"):
         return DisabledLLMProvider()
@@ -486,9 +498,6 @@ def get_llm_provider() -> LLMProvider:
         or os.getenv("OPENAI_BASE_URL", DEFAULT_OPENAI_BASE_URL).strip()
     )
     timeout = _read_timeout_seconds()
-    backend = os.getenv("LIMITUPLAB_LLM_BACKEND", "langchain").strip().lower()
-    if backend not in {"langchain", "requests"}:
-        raise ValueError("LIMITUPLAB_LLM_BACKEND must be langchain or requests")
     provider_options = dict(
         api_key=api_key,
         model=model,
@@ -508,16 +517,9 @@ def get_llm_provider() -> LLMProvider:
             True,
         ),
     )
-    if backend == "langchain":
-        from app.services.langchain_provider import LangChainChatProvider
+    from app.services.langchain_provider import LangChainChatProvider
 
-        return LangChainChatProvider(**provider_options)
-    return OpenAIChatCompletionsProvider(
-        **provider_options,
-        retry_delay_seconds=_read_non_negative_float(
-            "LIMITUPLAB_LLM_RETRY_DELAY_SECONDS", DEFAULT_RETRY_DELAY_SECONDS,
-        ),
-    )
+    return LangChainChatProvider(**provider_options)
 
 
 # Read the configured LLM timeout with the implemented numeric fallback.
@@ -545,18 +547,6 @@ def _read_positive_int(name: str, default: int) -> int:
     except ValueError:
         return default
     return value if value > 0 else default
-
-
-# Read a nonnegative numeric LLM setting, using the declared default for invalid input.
-def _read_non_negative_float(name: str, default: float) -> float:
-    raw_value = os.getenv(name, "").strip()
-    if not raw_value:
-        return default
-    try:
-        value = float(raw_value)
-    except ValueError:
-        return default
-    return value if value >= 0 else default
 
 
 def _is_retryable_error(error: Exception) -> bool:

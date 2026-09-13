@@ -10,6 +10,7 @@ from urllib.parse import urlparse
 
 
 TRUE_VALUES = {"1", "true", "yes", "on"}
+REACT_LLM_BACKEND = "langchain"
 DEFAULT_CORS_ORIGINS = (
     "http://localhost:5173",
     "http://127.0.0.1:5173",
@@ -46,6 +47,7 @@ def configure_runtime_environment(path: str | Path | None = None) -> list[Path]:
     """Load local settings and make direct backend launches LLM-ready."""
 
     loaded_paths = load_local_env(path)
+    configured_llm_backend()
     hydrate_windows_environment(("DEEPSEEK_API_KEY", "OPENAI_API_KEY"))
     api_key = (
         os.getenv("DEEPSEEK_API_KEY", "").strip()
@@ -57,6 +59,18 @@ def configure_runtime_environment(path: str | Path | None = None) -> list[Path]:
         _set_default_if_blank("LIMITUPLAB_LLM_MODEL", "deepseek-v4-flash")
     clear_unreachable_local_proxy()
     return loaded_paths
+
+
+def configured_llm_backend() -> str:
+    """Validate the single provider backend supported by production ReAct chat."""
+
+    backend = os.getenv("LIMITUPLAB_LLM_BACKEND", REACT_LLM_BACKEND).strip().lower()
+    if backend != REACT_LLM_BACKEND:
+        raise ValueError(
+            "LIMITUPLAB_LLM_BACKEND supports only langchain for production ReAct chat; "
+            "legacy text providers must be constructed and injected explicitly"
+        )
+    return backend
 
 
 def env_bool(name: str, default: bool = False) -> bool:

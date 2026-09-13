@@ -22,6 +22,7 @@ from app.agents.react_runtime.lifecycle import CURRENT_CONTROL
 from app.agents.react_runtime.tools import ToolGateway
 from app.agents.tools import TOOL_CONTRACT_VERSION
 from app.models import AgentChatPerformance, AgentChatResponse, AgentToolOutcome, AgentToolTrace
+from app.services.llm_provider import require_react_provider
 from app.services.prompt_security import assess_direct_prompt_injection, contains_prompt_leak
 
 SYSTEM = """你是LimitUpLab收盘研究助手。使用原生工具调用逐轮解决问题。
@@ -124,6 +125,7 @@ class Run:
             return self.stop("cancelled")
         if self.models >= MAX_MODEL_CALLS or perf_counter() >= self.deadline:
             return self.stop("budget_exhausted")
+        require_react_provider(self.provider)
         self.models += 1
         self.save(state, "agent")
         if self.progress:

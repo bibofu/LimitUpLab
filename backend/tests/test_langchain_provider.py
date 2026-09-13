@@ -11,7 +11,6 @@ from app.services.llm_provider import (
     DisabledLLMProvider,
     NativeFunctionCallingError,
     NativeFunctionCallingUnavailable,
-    OpenAIChatCompletionsProvider,
     capture_llm_usage,
     get_llm_provider,
 )
@@ -294,16 +293,18 @@ def test_deepseek_final_content_chunk_preserves_usage():
     assert tracker.token_usage_complete
 
 
-# Regression scenario: default backend and explicit rollback.
-def test_default_backend_and_explicit_rollback(monkeypatch):
+# Regression scenario: production configuration exposes only the ReAct-capable backend.
+def test_default_backend_and_requests_rejection(monkeypatch):
     monkeypatch.setenv("LIMITUPLAB_LLM_ENABLED", "true")
     monkeypatch.setenv("DEEPSEEK_API_KEY", "test-key")
     monkeypatch.delenv("LIMITUPLAB_LLM_BACKEND", raising=False)
     assert isinstance(get_llm_provider(), LangChainChatProvider)
     monkeypatch.setenv("LIMITUPLAB_LLM_BACKEND", "requests")
-    assert isinstance(get_llm_provider(), OpenAIChatCompletionsProvider)
+    with pytest.raises(ValueError, match="only langchain"):
+        get_llm_provider()
     monkeypatch.setenv("LIMITUPLAB_LLM_BACKEND", "typo")
     with pytest.raises(ValueError, match="LIMITUPLAB_LLM_BACKEND"):
         get_llm_provider()
+    monkeypatch.setenv("LIMITUPLAB_LLM_BACKEND", "langchain")
     monkeypatch.setenv("LIMITUPLAB_LLM_ENABLED", "false")
     assert isinstance(get_llm_provider(), DisabledLLMProvider)

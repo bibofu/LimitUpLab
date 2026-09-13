@@ -1,5 +1,13 @@
 # Agent 应用质量审查
 
+## 2026-09-13：生产 ReAct Provider 配置边界修复
+
+- 范围：修复 P1/A36 中 Requests 文本 Provider 可被全局配置为生产 ReAct 后端的问题；不删除旧文本实现，不修改模型请求协议、市场工具、评分或前端。
+- P1 已修（BC-040）：`configure_runtime_environment` 和共享 Provider 工厂现在只接受 `LIMITUPLAB_LLM_BACKEND=langchain`，因此错误配置在启动阶段失败，不再等到聊天循环内连续产生两次 provider error。旧 `OpenAIChatCompletionsProvider` 只能由明确的文本/Judge 消费者直接构造和注入。
+- 纵深门禁：ReAct 入口按 `generate_messages` 是否被实现验证实际能力，不依赖 Provider 类名；显式注入 Requests Provider 也会在模型循环及网络请求前抛出 `NativeFunctionCallingUnavailable`。运行版本升级为 `react-runtime-v6`。
+- 回归：配置、Requests 文本实现、LangChain 线协议、ReAct 与 lifecycle 定向首次 **66 passed**；加入 lifecycle 后的沙箱复跑为 66 passed / 6 setup errors，错误来自 pytest 临时目录 `WinError 5`，未计为通过。完整后端第一次宿主运行 **597 passed / 1 failed + 6 subtests passed**，失败暴露“已取消任务先做 Provider 检查”的门禁位置问题；将能力检查移到首次模型调用前后，最终宿主完整回归 **598 passed + 6 subtests passed**，0 failed、0 setup error、0 skipped，保留 3 条既有依赖弃用警告。
+- 运行态：隔离设置 `LIMITUPLAB_LLM_BACKEND=requests` 后导入 `app.main`，进程在 `configure_runtime_environment` 明确抛出只支持 LangChain 的配置错误，退出码 1，未启动服务或发出模型请求。恢复正常配置并重启本地 8001 服务为 PID 25968；Cookie 隔离真实请求查询 2026-09-11 收盘涨停数量，返回 40 只、来源说明、`task_status=complete`、`generated_by=react-runtime-v6`，run 为 `run_b77d3877045e4f4094f24d263af1146c`；测试会话已通过 owner-scoped API 删除。
+
 ## 2026-09-13：工具契约单一真相源修复
 
 - 范围：修复 P2/A40 的参数 Schema、执行签名、时态/集合 Catalog 三轨维护；覆盖全部 26 个业务工具，不修改市场口径、评分、数据管线或前端。
@@ -69,7 +77,7 @@
 - 隔离复现：构造不联网的 Requests Provider 进入当前 `run()`，连续两轮 provider error 后得到 `task_status=error`、`stop_reason=provider_error`；没有发出网络请求。
 - 影响：配置表面合法、文档明确支持，实际会令所有聊天失败；同时保留两套模型协议增加测试和维护面。
 - 建议：二选一。若坚持纯 LangChain/LangGraph，删除 Requests 配置分支、回退文档及仅剩消费者；若确需灾备，给它实现并测试完整的消息/多工具调用协议，而不是旧的单次 function-call 接口。
-- 状态：未修复；下一次 Agent 配置或 Provider 改动前处理。
+- 状态：已于 2026-09-13 按 BC-040 修复；生产配置仅允许 LangChain，Requests 仅保留为显式文本依赖，ReAct 入口另有能力门禁。
 
 ### P1 / A37：普通模型文本绕过类型化 `finish` 与证据完成门禁
 
