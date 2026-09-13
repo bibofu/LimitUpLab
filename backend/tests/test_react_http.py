@@ -21,6 +21,7 @@ from app.models import AgentChatRequest
 from app.repositories import SQLiteChatSessionRepository
 from app.routers import agents, react_chat
 from app.security import current_owner_id
+from app.services.prompt_security import PromptInjectionAssessment
 from test_react_lifecycle import Model
 
 
@@ -31,6 +32,13 @@ def allow_compliance_review(monkeypatch):
         "review_answer",
         lambda *args, **kwargs: ComplianceReview(
             decision="allow", violations=[], reason="test fixture allows research answer",
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "review_input",
+        lambda *args, **kwargs: PromptInjectionAssessment(
+            decision="allow", signals=[], reason="test fixture allows normal input",
         ),
     )
 

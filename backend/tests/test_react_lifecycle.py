@@ -14,6 +14,7 @@ from app.agents.react_runtime.runtime import run
 from app.agents.tools import TOOL_SCHEMAS, ToolResult
 from app.models import AgentChatRequest, AgentChatResponse
 from app.repositories import SQLiteChatSessionRepository
+from app.services.prompt_security import PromptInjectionAssessment
 
 
 @pytest.fixture(autouse=True)
@@ -23,6 +24,13 @@ def allow_compliance_review(monkeypatch):
         "review_answer",
         lambda *args, **kwargs: ComplianceReview(
             decision="allow", violations=[], reason="test fixture allows research answer",
+        ),
+    )
+    monkeypatch.setattr(
+        runtime_module,
+        "review_input",
+        lambda *args, **kwargs: PromptInjectionAssessment(
+            decision="allow", signals=[], reason="test fixture allows normal input",
         ),
     )
 

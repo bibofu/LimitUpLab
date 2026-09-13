@@ -24,7 +24,7 @@ from app.agents.react_runtime.tools import ToolGateway
 from app.agents.tools import TOOL_CONTRACT_VERSION
 from app.models import AgentChatPerformance, AgentChatResponse, AgentToolOutcome, AgentToolTrace
 from app.services.llm_provider import require_react_provider
-from app.services.prompt_security import assess_direct_prompt_injection, contains_prompt_leak
+from app.services.prompt_security import contains_prompt_leak, review_input
 
 SYSTEM = """你是LimitUpLab收盘研究助手。使用原生工具调用逐轮解决问题。
 理解当前问题及上下文，决定当前可执行的一批工具；观察结果后再选择后续行动。
@@ -70,7 +70,7 @@ class Run:
         self.gateway = ToolGateway(registry, self.evidence)
         self.started = perf_counter()
         self.deadline = self.started + float(os.getenv("LIMITUPLAB_REACT_DEADLINE_SECONDS", "120"))
-        self.models = self.tools = self.controls = self.repairs = self.compliance_checks = 0
+        self.models = self.tools = self.controls = self.repairs = self.compliance_checks = self.input_security_checks = 0
         self.traces, self.requirements, self.errors = [], [], []
         self.cache = {}
         self.answer, self.status, self.reason = "", "error", ""
@@ -84,7 +84,7 @@ class Run:
         if self.control is None:
             return
         snapshot = {key: getattr(self, key) for key in (
-            "models", "tools", "controls", "repairs", "compliance_checks", "requirements", "errors", "cache", "answer", "status", "reason",
+            "models", "tools", "controls", "repairs", "compliance_checks", "input_security_checks", "requirements", "errors", "cache", "answer", "status", "reason",
         )}
         snapshot["traces"] = [t.model_dump(mode="json") for t in self.traces]
         snapshot["evidence"] = self.evidence.records
@@ -412,10 +412,24 @@ GRAPH = _graph()
 def run(request, registry, provider, history=None, memory=None, progress=None):
     runtime = Run(request, registry, provider, history or [], progress)
     context_message_count = 0
-    injection = assess_direct_prompt_injection(request.message)
-    if injection.detected:
+    try:
+        remaining = runtime.deadline - perf_counter()
+        if remaining <= 0:
+            raise TimeoutError("Run deadline exceeded before input security review")
+        input_review = review_input(
+            provider,
+            message=request.message,
+            timeout_seconds=min(15, remaining),
+        )
+        runtime.input_security_checks += 1
+        runtime.trace("react_input_security", input_review.model_dump(mode="json"))
+    except Exception as error:
+        runtime.trace("react_input_security", {"decision": "error", "error_type": type(error).__name__}, status="error")
+        runtime.answer, runtime.status, runtime.reason = "输入安全检查未完成，本次未执行数据查询，请稍后重试。", "error", "input_policy_error"
+        input_review = None
+    if input_review is not None and input_review.detected:
         runtime.answer, runtime.status, runtime.reason = "我可以协助查询有来源的股票研究事实，不能执行绕过系统边界的指令。", "refuse", "input_policy"
-    else:
+    elif input_review is not None:
         history_messages, history_refs = prepare_history(request, history or [], runtime.evidence)
         context_message_count = len(history_messages)
         context = {"anchor_date": current_query_reference_date().isoformat(),
@@ -430,6 +444,7 @@ def run(request, registry, provider, history=None, memory=None, progress=None):
         if initial.get("resume_node") != END:
             GRAPH.invoke(initial, config={"configurable": {"run": runtime}, "recursion_limit": 60})
     runtime.trace("react_execution", {"version": VERSION, "model_calls": runtime.models,
+                                       "input_security_checks": runtime.input_security_checks,
                                        "compliance_checks": runtime.compliance_checks, "tool_calls": runtime.tools,
                                        "task_status": runtime.status, "stop_reason": runtime.reason,
                                        "tool_contract_version": TOOL_CONTRACT_VERSION,
