@@ -66,6 +66,7 @@ def test_historical_reference_only_loaded_from_requested_session():
     old.session_id = "mine"
     messages, refs = prepare_history(AgentChatRequest(session_id="mine", message="这组"), [old], target)
     assert refs[0]["evidence_id"] == key and target.get(key)["historical_reference"]
+    assert refs[0]["evidence_scope"] == "conversation_history"
 
 
 def test_empty_symbols_rejected_instead_of_unbounded_query():

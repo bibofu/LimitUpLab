@@ -764,3 +764,11 @@ empty、partial 或 error 时 Replan 新闻；股票名称提取同步覆盖 K�
 - 修复：普通文本必须在一次受限修复中改用类型化 `finish`，重复违规进入 `validation_failed`；`complete` 和 `empty` 与用户措辞无关，均必须引用证据，不维护“可无证据完成”的自然语言白名单；已满足 requirement 必须绑定可用证据且最终回答继续保留；仅历史证据不能完成请求；最终正文只对其声明引用的证据执行关系接地，发现不支持的显式事实后只允许修正一次。无证据场景只能如实返回 `partial`、`clarify` 或 `refuse`。
 - 回归：覆盖普通文本不发布、纯定性事实无证据 complete、五种未预置的闲聊措辞、无证据 satisfied、错误收益率、历史证据冒充本轮事实和 loopback HTTP 最终响应。门禁版本升级为 `react-runtime-v2`。
 - 剩余边界：当前确定性关系接地器主要识别股票代码/名称组合、日期、时间和带单位数值，不能证明“连续性弱”“因为复权”等开放式因果或定性解释。因此 BC-033/034 不因本修复自动关闭，仍需后续 claim ledger 或语义关系门禁。
+
+## BC-037：历史证据可与一条本轮证据混合后绕过新鲜度门禁（2026-09-13）
+
+- 发现方式：复查 BC-036 的历史门禁。旧逻辑只在最终引用“全部都是历史证据”时拒绝，因此模型加入任意一条本轮证据后，历史 evidence ID 仍可进入最终 grounding；`update_task` 也能用历史 evidence ID 将本轮 requirement 标为 `satisfied`。
+- 根因：`historical_reference` 只是记录上的布尔提示，没有形成 EvidenceStore 的信任域；requirement、最终引用和 grounding 分别自行读取 ID，没有统一执行来源校验。
+- 修复：证据 schema 升级为 `react-evidence-v3`，每条记录带服务端维护的 `evidence_scope=current_run|conversation_history`；历史恢复统一进入 context-only 域，任一含历史父项的派生结果继续属于历史域。EvidenceStore 的 `require_current` 成为 requirement 和最终答案的共同信任边界：任何状态的最终引用、任一本轮 satisfied requirement 只要包含历史 evidence ID 就拒绝，必须本轮重新查询；grounding 因而只接收本轮证据。运行版本升级为 `react-runtime-v3`。
+- 回归：覆盖旧 schema 历史恢复、显式 scope、左/右历史父项污染传播、本轮与历史混合引用、历史 requirement 伪满足，以及只保留本轮引用后的成功修复。
+- 边界：历史消息和有界 evidence preview 仍可帮助模型理解“上一轮”“这组”等指代，但不能直接证明最终事实；需要复述或比较旧事实时也必须按原日期在本轮重新查询。该修复不替代 BC-033/034 的开放式定性与因果 claim ledger。

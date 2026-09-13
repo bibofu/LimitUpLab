@@ -1,8 +1,8 @@
 """Bounded conversation context and explicitly owner-scoped historical references."""
 
-from copy import deepcopy
-
 from langchain_core.messages import AIMessage, HumanMessage
+
+from app.agents.react_runtime.evidence import HISTORY_SCOPE
 
 HISTORY_CHAR_BUDGET = 12000
 MAX_HISTORY_EVIDENCE = 16
@@ -28,13 +28,11 @@ def prepare_history(request, history, evidence):
             for key, record in trace.get("output", {}).get("evidence", {}).items():
                 if len(references) >= MAX_HISTORY_EVIDENCE:
                     break
-                if key in evidence.records or record.get("historical_reference"):
+                if key in evidence.records or evidence.scope_of(record) == HISTORY_SCOPE:
                     continue
                 if record.get("result_state") not in {"ok", "empty", "partial"}:
                     continue
-                restored = deepcopy(record)
-                restored["historical_reference"] = True
-                evidence.records[key] = restored
+                evidence.restore_history(key, record)
                 view = evidence.view(key, limit=3)
                 references.append(view)
     return list(reversed(messages)), references

@@ -8,7 +8,9 @@ from uuid import uuid4
 from fastapi.encoders import jsonable_encoder
 
 COLLECTIONS = ("events", "top_candidates", "items", "stocks", "top_sectors", "bars", "candidates")
-EVIDENCE_VERSION = "react-evidence-v2"
+EVIDENCE_VERSION = "react-evidence-v3"
+CURRENT_SCOPE = "current_run"
+HISTORY_SCOPE = "conversation_history"
 
 
 def keyed_rows(rows, key):
@@ -69,6 +71,32 @@ class EvidenceStore:
     def __init__(self):
         self.records = {}
 
+    @staticmethod
+    def scope_of(record):
+        """Read old persisted records conservatively while keeping scope explicit."""
+        if record.get("historical_reference"):
+            return HISTORY_SCOPE
+        return record.get("evidence_scope", CURRENT_SCOPE)
+
+    def restore_history(self, key, record):
+        """Import an authenticated prior-turn record into the context-only scope."""
+        restored = deepcopy(record)
+        restored["evidence_id"] = key
+        restored["evidence_scope"] = HISTORY_SCOPE
+        restored["historical_reference"] = True
+        self.records[key] = restored
+
+    def require_current(self, keys, purpose):
+        """Resolve IDs and reject cross-turn evidence at a trust boundary."""
+        records = [self.get(key) for key in dict.fromkeys(keys)]
+        historical = [record["evidence_id"] for record in records if self.scope_of(record) != CURRENT_SCOPE]
+        if historical:
+            raise ValueError(f"{purpose} cannot use conversation-history evidence; refresh it in this run")
+        return records
+
+    def current_records(self):
+        return [record for record in self.records.values() if self.scope_of(record) == CURRENT_SCOPE]
+
     def add(self, *, tool, payload, state, arguments, sources=None):
         key = "ev_" + uuid4().hex[:16]
         rows = rows_of(payload)
@@ -84,7 +112,8 @@ class EvidenceStore:
         self.records[key] = {
             "evidence_id": key, "tool": tool, "payload": payload, "result_state": state,
             "schema_version": EVIDENCE_VERSION, "retrieved_at": datetime.now(timezone.utc).isoformat(),
-            "source_truncated": truncated, "data_missing": source_missing, "historical_reference": False,
+            "source_truncated": truncated, "data_missing": source_missing,
+            "evidence_scope": CURRENT_SCOPE, "historical_reference": False,
             "arguments": arguments, "sources": sources or (
                 payload.get("sources") or ([payload["source"]] if payload.get("source") else [])
                 if isinstance(payload, dict) else []
@@ -111,6 +140,7 @@ class EvidenceStore:
             "offset": offset, "truncated": offset + limit < len(rows), "sources": record["sources"],
             "source_truncated": record.get("source_truncated", False),
             "data_missing": record.get("data_missing", []),
+            "evidence_scope": self.scope_of(record),
             "historical_reference": record.get("historical_reference", False),
             "retrieved_at": record.get("retrieved_at"),
         }
@@ -193,5 +223,7 @@ class EvidenceStore:
             arguments=spec.model_dump(), sources=inputs,
         )
         # Computing an old set does not turn it into freshly fetched evidence.
-        self.records[key]["historical_reference"] = any(p.get("historical_reference") for p in parents)
+        historical = any(self.scope_of(parent) != CURRENT_SCOPE for parent in parents)
+        self.records[key]["evidence_scope"] = HISTORY_SCOPE if historical else CURRENT_SCOPE
+        self.records[key]["historical_reference"] = historical
         return key

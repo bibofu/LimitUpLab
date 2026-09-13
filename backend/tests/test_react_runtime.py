@@ -1,5 +1,6 @@
 """Behavioral graph tests: actual tool messages drive the next model decision."""
 
+import json
 from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
@@ -83,7 +84,7 @@ def test_public_entry_defaults_to_react(monkeypatch):
             return call("finish", {"status": "refuse", "answer": "我可以提供研究事实，不能提供交易指令。"}, "f")
     response = answer_first_board_chat(AgentChatRequest(session_id="r", message="给我买卖指令"), [],
                                       llm_provider=Model(), tool_registry=registry())
-    assert response.generated_by == "react-runtime-v2"
+    assert response.generated_by == "react-runtime-v3"
     assert response.task_status == "refuse"
 
 
@@ -279,7 +280,8 @@ def test_grounding_rejects_wrong_metric_then_accepts_supported_repair():
     assert checks[-1]["grounding"]["unsupported_claim_count"] == 0
 
 
-def test_historical_evidence_alone_cannot_complete_new_research():
+@pytest.mark.parametrize("submitted_status", ["complete", "partial", "empty", "clarify", "refuse"])
+def test_historical_evidence_cannot_enter_final_citations(submitted_status):
     old_evidence = {
         "evidence_id": "ev_old",
         "tool": "stock_kline",
@@ -320,7 +322,7 @@ def test_historical_evidence_alone_cannot_complete_new_research():
             self.calls += 1
             if self.calls == 1:
                 return call("finish", {
-                    "status": "complete",
+                    "status": submitted_status,
                     "answer": "贵州茅台(600519)今天上涨1.2%。",
                     "evidence_ids": ["ev_old"],
                 }, "stale")
@@ -339,4 +341,130 @@ def test_historical_evidence_alone_cannot_complete_new_research():
 
     assert response.task_status == "partial"
     checks = [trace.output for trace in response.tool_results if trace.name == "react_answer_check"]
-    assert "Historical references alone" in checks[-2]["reason"]
+    assert "conversation-history evidence" in checks[-2]["reason"]
+
+
+def test_current_evidence_cannot_smuggle_history_into_final_answer():
+    old_evidence = {
+        "evidence_id": "ev_old",
+        "tool": "stock_kline",
+        "payload": {"symbol": "600519", "end_date": "2026-05-15", "return_10d_pct": 1.2},
+        "result_state": "ok",
+        "schema_version": "react-evidence-v2",
+        "retrieved_at": "2026-05-15T00:00:00Z",
+        "source_truncated": False,
+        "data_missing": [],
+        "historical_reference": False,
+        "arguments": {"symbol": "600519", "end_date": "2026-05-15"},
+        "sources": ["fixture"],
+        "rows": [{"symbol": "600519", "return_10d_pct": 1.2}],
+    }
+    history = [ChatSessionMessage(
+        message_id="old",
+        session_id="r",
+        role="assistant",
+        content="上一轮行情",
+        metadata={"tool_results": [{"name": "react_execution", "output": {
+            "evidence": {"ev_old": old_evidence},
+        }}]},
+        created_at=datetime.now(timezone.utc),
+    )]
+
+    def kline(symbol, days=20, end_date=None):
+        return ToolResult(
+            name="stock_kline",
+            input={"symbol": symbol, "days": days, "end_date": end_date},
+            output={"symbol": symbol, "end_date": "2026-09-11", "return_10d_pct": 2.5},
+            summary="current run evidence",
+        )
+
+    class Model:
+        calls = 0
+        current_id = ""
+
+        def generate_messages(self, messages, tools, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return call("stock_kline", {
+                    "symbol": "600519", "days": 11, "end_date": "2026-09-11",
+                }, "current")
+            if self.calls == 2:
+                self.current_id = json.loads([
+                    message.content for message in messages
+                    if isinstance(message, ToolMessage) and message.tool_call_id == "current"
+                ][-1])["evidence_id"]
+                return call("finish", {
+                    "status": "complete",
+                    "answer": "600519截至2026-09-11上涨2.5%。",
+                    "evidence_ids": [self.current_id, "ev_old"],
+                }, "mixed")
+            return call("finish", {
+                "status": "complete",
+                "answer": "600519截至2026-09-11上涨2.5%。",
+                "evidence_ids": [self.current_id],
+            }, "repaired")
+
+    response = run(
+        AgentChatRequest(session_id="r", message="重新查询并与上一轮比较贵州茅台十日涨幅"),
+        registry(stock_kline=kline),
+        Model(),
+        history,
+    )
+
+    assert response.task_status == "complete"
+    checks = [trace.output for trace in response.tool_results if trace.name == "react_answer_check"]
+    assert "conversation-history evidence" in checks[-2]["reason"]
+    assert checks[-1]["passed"] is True
+
+
+def test_historical_evidence_cannot_satisfy_current_requirement():
+    old_evidence = {
+        "evidence_id": "ev_old",
+        "tool": "fixture",
+        "payload": {"items": [{"symbol": "600519"}]},
+        "result_state": "ok",
+        "schema_version": "react-evidence-v2",
+        "retrieved_at": "2026-05-15T00:00:00Z",
+        "source_truncated": False,
+        "data_missing": [],
+        "historical_reference": False,
+        "arguments": {},
+        "sources": ["fixture"],
+        "rows": [{"symbol": "600519"}],
+    }
+    history = [ChatSessionMessage(
+        message_id="old",
+        session_id="r",
+        role="assistant",
+        content="上一轮名单",
+        metadata={"tool_results": [{"name": "react_execution", "output": {
+            "evidence": {"ev_old": old_evidence},
+        }}]},
+        created_at=datetime.now(timezone.utc),
+    )]
+
+    class Model:
+        calls = 0
+
+        def generate_messages(self, messages, tools, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return call("update_task", {"requirements": [{
+                    "id": "current", "description": "查询当前行情", "source_text": "当前行情",
+                    "status": "satisfied", "evidence_ids": ["ev_old"],
+                }]}, "task")
+            assert any(
+                isinstance(message, ToolMessage)
+                and "conversation-history evidence" in str(message.content)
+                for message in messages
+            )
+            return call("finish", {
+                "status": "partial", "answer": "尚未取得本轮行情证据。", "missing": ["当前行情"],
+            }, "finish")
+
+    response = run(
+        AgentChatRequest(session_id="r", message="查询当前行情"), registry(), Model(), history,
+    )
+
+    assert response.task_status == "partial"
+    assert not response.tool_calls

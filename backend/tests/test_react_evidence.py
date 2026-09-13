@@ -3,7 +3,7 @@
 import pytest
 
 from app.agents.react_runtime.contracts import Compute
-from app.agents.react_runtime.evidence import EvidenceStore
+from app.agents.react_runtime.evidence import CURRENT_SCOPE, HISTORY_SCOPE, EvidenceStore
 
 
 def add(store, rows, **metadata):
@@ -44,6 +44,7 @@ def test_computation_cannot_refresh_historical_evidence(operation):
     fresh = add(store, [{"symbol": "000002"}])
     key = store.compute(Compute(evidence_id=old, operation=operation, other_id=fresh))
     assert store.view(key)["historical_reference"]
+    assert store.view(key)["evidence_scope"] == HISTORY_SCOPE
     next_key = store.compute(Compute(evidence_id=key))
     assert store.view(next_key)["historical_reference"]
 
@@ -55,6 +56,19 @@ def test_right_hand_history_taints_derived_set():
     store.get(old)["historical_reference"] = True
     key = store.compute(Compute(evidence_id=fresh, operation="difference", other_id=old))
     assert store.view(key)["historical_reference"]
+
+
+def test_current_scope_is_explicit_and_history_cannot_cross_trust_boundary():
+    store = EvidenceStore()
+    current = add(store, [{"symbol": "000001"}])
+    historical_record = dict(store.get(current))
+    store.restore_history("ev_history", historical_record)
+
+    assert store.view(current)["evidence_scope"] == CURRENT_SCOPE
+    assert store.view("ev_history")["evidence_scope"] == HISTORY_SCOPE
+    assert store.require_current([current], "Final answers")[0]["evidence_id"] == current
+    with pytest.raises(ValueError, match="conversation-history evidence"):
+        store.require_current([current, "ev_history"], "Final answers")
 
 
 @pytest.mark.parametrize(("operation", "expected"), [
