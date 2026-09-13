@@ -123,11 +123,7 @@ class Model:
         evidence = json.loads(observations[-1].content)
         evidence_id = evidence["evidence_id"]
         return native("finish", {"status": "partial", "answer": "已取得000001数据；来源缺失，研究尚未完成。",
-            "missing": ["完整来源"], "evidence_ids": [evidence_id], "claims": [{
-                "statement": "已取得000001数据", "kind": "fact", "evidence": [{
-                    "evidence_id": evidence_id, "path": ["items", 0, "symbol"], "value": "000001",
-                }],
-            }]}, "answer")
+            "missing": ["完整来源"], "evidence_ids": [evidence_id]}, "answer")
 
 
 def test_crash_between_tool_and_checkpoint_never_reexecutes_completed_call(journal):

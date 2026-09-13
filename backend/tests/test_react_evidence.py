@@ -58,7 +58,7 @@ def test_right_hand_history_taints_derived_set():
     assert store.view(key)["historical_reference"]
 
 
-def test_current_scope_is_explicit_and_history_cannot_cross_trust_boundary():
+def test_current_and_history_scopes_remain_visible_context_metadata():
     store = EvidenceStore()
     current = add(store, [{"symbol": "000001"}])
     historical_record = dict(store.get(current))
@@ -66,9 +66,6 @@ def test_current_scope_is_explicit_and_history_cannot_cross_trust_boundary():
 
     assert store.view(current)["evidence_scope"] == CURRENT_SCOPE
     assert store.view("ev_history")["evidence_scope"] == HISTORY_SCOPE
-    assert store.require_current([current], "Final answers")[0]["evidence_id"] == current
-    with pytest.raises(ValueError, match="conversation-history evidence"):
-        store.require_current([current, "ev_history"], "Final answers")
 
 
 @pytest.mark.parametrize(("operation", "expected"), [

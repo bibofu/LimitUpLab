@@ -151,7 +151,7 @@ def test_cancel_interrupted_run_does_not_restart_model(http_server):
     assert state.calls == 0
 
 
-def test_http_never_publishes_plain_unsupported_market_answer(http_server):
+def test_http_publishes_plain_model_answer_without_evidence_gate(http_server):
     client, _state = http_server
     guarded_registry = SimpleNamespace(
         events=[],
@@ -159,27 +159,17 @@ def test_http_never_publishes_plain_unsupported_market_answer(http_server):
         is_enabled=lambda _: True,
     )
 
-    class PlainThenPartial:
+    class PlainAnswer:
         calls = 0
 
         def generate_messages(self, messages, tools, **kwargs):
             self.calls += 1
-            if self.calls == 1:
-                return AIMessage(content="贵州茅台今天涨停，成交额100亿元。")
-            return AIMessage(content="", tool_calls=[{
-                "name": "finish",
-                "id": "finish",
-                "args": {
-                    "status": "partial",
-                    "answer": "没有取得行情证据，无法核验该结论。",
-                    "missing": ["今日行情"],
-                },
-            }])
+            return AIMessage(content="贵州茅台今天涨停，成交额100亿元。")
 
     agents.answer_first_board_chat = lambda request, **kwargs: run(
         request,
         guarded_registry,
-        PlainThenPartial(),
+        PlainAnswer(),
         progress=kwargs.get("progress_callback"),
     )
     response = client.post("/chat", json={
@@ -190,12 +180,11 @@ def test_http_never_publishes_plain_unsupported_market_answer(http_server):
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["task_status"] == "partial"
-    assert "100亿元" not in payload["answer"]
+    assert payload["task_status"] == "complete"
+    assert "100亿元" in payload["answer"]
     checks = [
         trace["output"]
         for trace in payload["tool_results"]
         if trace["name"] == "react_answer_check"
     ]
-    assert checks[0]["passed"] is False
-    assert checks[-1]["passed"] is True
+    assert checks == [{"passed": True, "status": "complete", "missing": []}]

@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-VERSION = "react-runtime-v10"
+VERSION = "react-runtime-v11"
 MAX_MODEL_CALLS = 8
 MAX_TOOL_CALLS = 8
 MAX_CONTROL_CALLS = 16
@@ -27,33 +27,14 @@ class UpdateTask(StrictModel):
     requirements: list[Requirement] = Field(min_length=1, max_length=20)
 
 
-class EvidenceBinding(StrictModel):
-    evidence_id: str
-    path: list[str | int] = Field(
-        min_length=1,
-        max_length=20,
-        description="Typed path from the cited evidence observation's metadata, rows, or stable status fields to the exact supporting value.",
-    )
-    value: str | int | float | bool | None = Field(
-        description="Exact scalar value expected at path; the server verifies it.",
-    )
-
-
-class AnswerClaim(StrictModel):
-    statement: str = Field(min_length=1, max_length=1000)
-    kind: Literal["fact", "inference"]
-    evidence: list[EvidenceBinding] = Field(min_length=1, max_length=8)
-
-
 class Finish(StrictModel):
+    # Older checkpoints may still contain the retired Claim Ledger. Ignore it so
+    # in-flight runs can finish after upgrading without exposing it in the schema.
+    model_config = ConfigDict(extra="ignore")
+
     status: Literal["complete", "partial", "empty", "clarify", "refuse"]
     answer: str = Field(min_length=1, max_length=16000)
     evidence_ids: list[str] = Field(default_factory=list)
-    claims: list[AnswerClaim] = Field(
-        default_factory=list,
-        max_length=50,
-        description="Every market fact or inference in answer, accurately summarized and bound to exact evidence paths.",
-    )
     missing: list[str] = Field(default_factory=list, description="Only unmet USER-requested deliverables. Irrelevant missing source fields are caveats in the answer, not unfinished tasks.")
 
 
@@ -86,7 +67,7 @@ class Compute(StrictModel):
 
 CONTROL_MODELS = {
     "update_task": (UpdateTask, "维护多项交付清单，不执行数据查询。不允许删除用户要求。"),
-    "finish": (Finish, "提交最终中文回答、任务状态、证据ID、逐条事实/推断的证据路径和未完成要求。每条市场事实或推断都必须列入claims；只能单独调用，等待数据返回后使用。"),
+    "finish": (Finish, "提交最终中文回答、任务状态、可选证据ID和未完成要求；只能单独调用，等待数据返回后使用。"),
     "read_evidence": (ReadEvidence, "展开本次会话已返回的证据；支持offset分页，不能猜证据ID。"),
     "compute_result": (Compute, "对证据rows确定性筛选、排序、名次切片、交并差集或分组聚合。offset=3,limit=3取第4至6名。字段必须来自实际rows。集合按key去重，重复成员保留左侧首条记录，不合并两侧指标；来源缺失、截断及历史引用标记沿计算链保留。"),
 }

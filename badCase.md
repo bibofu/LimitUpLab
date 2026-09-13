@@ -842,3 +842,10 @@ empty、partial 或 error 时 Replan 新闻；股票名称提取同步覆盖 K�
 - 根因：模型观察到的证据被包装为 `metadata` 和 `rows`，校验器却只接受原始 payload 路径；同时 gate 强制 claim statement 逐字出现在正文，空格或补充日期说明也会误判。第一次文本误判耗掉唯一修复机会，随后可见路径再次被拒绝。纯计数 payload 没有行集合，也被 `matched_count > len(rows)` 错判为来源截断。
 - 修复：EvidenceStore 同时解析原始 payload 路径和模型实际可见的 `metadata`/`rows`/稳定状态字段类型化路径；Claim Ledger 保留标量值、证据域和引用一致性校验，但 statement 改为结构化摘要，不再与展示正文做逐字耦合；`result_mode=count` 不再依据空的展示行集合推断截断。证据版本升级为 `react-evidence-v4`，运行版本升级为 `react-runtime-v10`。
 - 回归：覆盖真实的 count-only payload（含空 `items`）保持 `ok`、`metadata.matched_count`、`result_state` 与 `rows[0].symbol` 可解析，以及正文和 claim 仅格式不同仍能一次完成；错误标量值仍由原有测试拒绝。
+
+## BC-048：最终证据校验器持续误伤正常问答（2026-09-13）
+
+- 发现方式：修复 BC-047 后扩大审查生产拒绝分支与最近 300 次运行记录。最终 gate 仍会因无 evidence、历史 evidence、requirement 引用、missing/status 组合、Claim Ledger 路径或数值差异拒绝模型答案；普通文本回答还会因未调用 `finish` 被强制返工。这些条件共用一次修复预算，任意两个不一致即可把已有正确工具结果降级为 `validation_failed`。
+- 用户决策：移除最终答案的 Evidence/Claim Validator，优先保证 Agent 能交付工具查询后的正常回答。输入安全审查、Prompt 泄漏保护、投资合规 Critic、工具参数 Schema、工具调用预算和确定性 `compute_result` 仍然保留，不属于本次删除范围。
+- 修复：删除 Claim Ledger 类型和 finish schema 字段；删除 evidence ID、历史 scope、requirement、missing/status、路径、标量值之间的最终拒绝链；`update_task` 不再校验 evidence；模型直接返回普通文本时直接进入发布流程，不再因缺少类型化 `finish` 消耗修复次数。旧 checkpoint 中残留的 `claims` 字段兼容忽略。运行版本升级为 `react-runtime-v11`。
+- 回归：覆盖无 evidence 的 complete、普通文本直接完成、历史/未知 evidence ID 不触发拒绝、错误 claim 值不触发 gate、旧 claims 字段兼容忽略，以及安全和投资合规审查继续执行。

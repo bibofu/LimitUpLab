@@ -86,14 +86,6 @@ class EvidenceStore:
         restored["historical_reference"] = True
         self.records[key] = restored
 
-    def require_current(self, keys, purpose):
-        """Resolve IDs and reject cross-turn evidence at a trust boundary."""
-        records = [self.get(key) for key in dict.fromkeys(keys)]
-        historical = [record["evidence_id"] for record in records if self.scope_of(record) != CURRENT_SCOPE]
-        if historical:
-            raise ValueError(f"{purpose} cannot use conversation-history evidence; refresh it in this run")
-        return records
-
     def current_records(self):
         return [record for record in self.records.values() if self.scope_of(record) == CURRENT_SCOPE]
 
@@ -128,40 +120,6 @@ class EvidenceStore:
         if key not in self.records:
             raise ValueError("Unknown evidence_id in this authorized conversation")
         return self.records[key]
-
-    def resolve_payload_path(self, key, path):
-        """Resolve raw payload paths and the metadata/rows paths shown to the model."""
-
-        record = self.get(key)
-        segments = list(path)
-        value = record["payload"]
-        stable_observation_fields = {
-            "result_state": record["result_state"],
-            "row_count": len(record["rows"]),
-            "source_truncated": record.get("source_truncated", False),
-            "data_missing": record.get("data_missing", []),
-            "sources": record.get("sources", []),
-        }
-        if segments[0] in stable_observation_fields:
-            value = stable_observation_fields[segments[0]]
-            segments = segments[1:]
-        elif segments[0] == "metadata":
-            value = value if isinstance(value, dict) else {}
-            value = {name: item for name, item in value.items() if name not in COLLECTIONS}
-            segments = segments[1:]
-        elif segments[0] == "rows":
-            value = record["rows"]
-            segments = segments[1:]
-        for segment in segments:
-            if isinstance(segment, int):
-                if not isinstance(value, list) or segment < 0 or segment >= len(value):
-                    raise ValueError(f"Invalid evidence list path segment: {segment}")
-                value = value[segment]
-            else:
-                if not isinstance(value, dict) or segment not in value:
-                    raise ValueError(f"Invalid evidence object path segment: {segment}")
-                value = value[segment]
-        return value
 
     def view(self, key, offset=0, limit=8):
         record = self.get(key)

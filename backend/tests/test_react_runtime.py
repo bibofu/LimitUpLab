@@ -5,7 +5,7 @@ from datetime import date, datetime, timezone
 from types import SimpleNamespace
 
 import pytest
-from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
+from langchain_core.messages import AIMessage, ToolMessage
 
 from app.agents.react_runtime.compliance import ComplianceReview
 from app.agents.react_runtime.contracts import Compute
@@ -43,14 +43,6 @@ def allow_compliance_review(monkeypatch):
     )
 
 
-def claim(statement, evidence_id, path, value, *, kind="fact"):
-    return {
-        "statement": statement,
-        "kind": kind,
-        "evidence": [{"evidence_id": evidence_id, "path": path, "value": value}],
-    }
-
-
 def registry(**methods):
     return SimpleNamespace(events=[], profile="test", schemas=lambda: TOOL_SCHEMAS,
                            is_enabled=lambda _: True, **methods)
@@ -76,8 +68,7 @@ def test_react_observes_error_and_selects_next_tool():
             import json
             evidence_id = json.loads(latest.content)["evidence_id"]
             return call("finish", {"status": "partial", "answer": "新闻查询失败；行情证据显示震荡。",
-                                   "evidence_ids": [evidence_id], "missing": ["新闻"],
-                                   "claims": [claim("行情证据显示震荡", evidence_id, ["trend"], "震荡")]}, "f")
+                                   "evidence_ids": [evidence_id], "missing": ["新闻"]}, "f")
     response = run(AgentChatRequest(session_id="r", message="新闻失败时继续查12日K线"),
                    registry(stock_news=news, stock_kline=kline), Model())
     assert response.task_status == "partial"
@@ -118,11 +109,11 @@ def test_public_entry_defaults_to_react(monkeypatch):
             return call("finish", {"status": "refuse", "answer": "我可以提供研究事实，不能提供交易指令。"}, "f")
     response = answer_first_board_chat(AgentChatRequest(session_id="r", message="给我买卖指令"), [],
                                       llm_provider=Model(), tool_registry=registry())
-    assert response.generated_by == "react-runtime-v10"
+    assert response.generated_by == "react-runtime-v11"
     assert response.task_status == "refuse"
 
 
-def test_visible_evidence_paths_resolve_and_count_only_result_is_complete():
+def test_count_only_result_is_complete_without_display_rows():
     store = EvidenceStore()
     count_id = store.add(
         tool="market_event_pool",
@@ -137,20 +128,11 @@ def test_visible_evidence_paths_resolve_and_count_only_result_is_complete():
             "source": "local-limit-up-events",
         },
     )
-    rows_id = store.add(
-        tool="limit_up_events",
-        state="ok",
-        arguments={"trade_date": "2026-09-11"},
-        payload={"events": [{"symbol": "002790", "name": "瑞尔特", "board_count": 4}]},
-    )
 
     assert store.view(count_id)["result_state"] == "ok"
-    assert store.resolve_payload_path(count_id, ["metadata", "matched_count"]) == 40
-    assert store.resolve_payload_path(count_id, ["result_state"]) == "ok"
-    assert store.resolve_payload_path(rows_id, ["rows", 0, "symbol"]) == "002790"
 
 
-def test_claim_summary_need_not_duplicate_answer_formatting():
+def test_legacy_claim_field_is_ignored_after_validator_removal():
     class Model:
         calls = 0
 
@@ -169,12 +151,7 @@ def test_claim_summary_need_not_duplicate_answer_formatting():
                 "status": "complete",
                 "answer": "贵州茅台在该窗口的收益为 1.2%。",
                 "evidence_ids": [evidence_id],
-                "claims": [claim(
-                    "贵州茅台窗口收益为1.2%",
-                    evidence_id,
-                    ["metadata", "return_10d_pct"],
-                    1.2,
-                )],
+                "claims": [{"retired": True}],
             }, "finish")
 
     def kline(symbol, days=20, end_date: date | None = None):
@@ -334,24 +311,13 @@ def test_kline_schema_matches_single_entity_invocation():
         gateway.validate({"name": "stock_kline", "args": {"symbol": ["000001", "000002"]}})
 
 
-def test_plain_model_text_must_be_repaired_through_finish():
+def test_plain_model_text_is_published_without_finish_repair():
     class Model:
         calls = 0
 
         def generate_messages(self, messages, tools, **kwargs):
             self.calls += 1
-            if self.calls == 1:
-                return AIMessage(content="贵州茅台今天涨停，成交额100亿元。")
-            assert any(
-                isinstance(message, HumanMessage)
-                and "typed finish tool" in str(message.content)
-                for message in messages
-            )
-            return call("finish", {
-                "status": "partial",
-                "answer": "没有取得行情证据，无法核验该结论。",
-                "missing": ["今日行情"],
-            }, "finish")
+            return AIMessage(content="这是模型直接返回的研究回答。")
 
     response = run(
         AgentChatRequest(session_id="r", message="查询贵州茅台今天行情"),
@@ -359,14 +325,13 @@ def test_plain_model_text_must_be_repaired_through_finish():
         Model(),
     )
 
-    assert response.task_status == "partial"
+    assert response.task_status == "complete"
     assert response.stop_reason == "answered"
     checks = [trace.output for trace in response.tool_results if trace.name == "react_answer_check"]
-    assert checks[0]["passed"] is False
-    assert checks[-1]["passed"] is True
+    assert checks == [{"passed": True, "status": "complete", "missing": []}]
 
 
-def test_complete_answer_requires_evidence_even_for_qualitative_claim():
+def test_complete_answer_no_longer_requires_evidence():
     class ResearchModel:
         calls = 0
 
@@ -388,11 +353,12 @@ def test_complete_answer_requires_evidence_even_for_qualitative_claim():
         registry(),
         ResearchModel(),
     )
-    assert research.task_status == "partial"
+    assert research.task_status == "complete"
+    assert research.answer == "贵州茅台今天涨停。"
 
 
 @pytest.mark.parametrize("message", ["你好", "早上好", "在吗", "介绍下你自己", "hello there"])
-def test_evidence_free_complete_has_no_phrase_whitelist(message):
+def test_evidence_free_complete_is_not_rejected(message):
     class Model:
         calls = 0
 
@@ -414,13 +380,12 @@ def test_evidence_free_complete_has_no_phrase_whitelist(message):
         Model(),
     )
 
-    assert response.task_status == "clarify"
+    assert response.task_status == "complete"
     checks = [trace.output for trace in response.tool_results if trace.name == "react_answer_check"]
-    assert checks[0]["passed"] is False
-    assert "must cite evidence" in checks[0]["reason"]
+    assert checks == [{"passed": True, "status": "complete", "missing": []}]
 
 
-def test_satisfied_requirement_must_bind_and_retain_evidence():
+def test_satisfied_requirement_does_not_trigger_answer_validation():
     class Model:
         calls = 0
 
@@ -434,15 +399,9 @@ def test_satisfied_requirement_must_bind_and_retain_evidence():
                     "status": "satisfied",
                     "evidence_ids": [],
                 }]}, "task")
-            assert any(
-                isinstance(message, ToolMessage)
-                and "must cite evidence" in str(message.content)
-                for message in messages
-            )
             return call("finish", {
-                "status": "partial",
-                "answer": "行情证据尚未取得。",
-                "missing": ["今日行情"],
+                "status": "complete",
+                "answer": "任务状态由模型直接交付。",
             }, "finish")
 
     response = run(
@@ -451,11 +410,11 @@ def test_satisfied_requirement_must_bind_and_retain_evidence():
         Model(),
     )
 
-    assert response.task_status == "partial"
+    assert response.task_status == "complete"
     assert response.tool_calls == []
 
 
-def test_claim_ledger_rejects_wrong_value_then_accepts_supported_repair():
+def test_final_answer_is_not_rejected_by_evidence_value_comparison():
     class Model:
         calls = 0
         evidence_id = ""
@@ -466,33 +425,15 @@ def test_claim_ledger_rejects_wrong_value_then_accepts_supported_repair():
                 return call("stock_kline", {
                     "symbol": "600519", "days": 10, "end_date": "2026-05-15"
                 }, "kline")
-            if self.calls == 2:
-                import json
-                self.evidence_id = json.loads(
-                    [message for message in messages if isinstance(message, ToolMessage)][-1].content
-                )["evidence_id"]
-                return call("finish", {
-                    "status": "complete",
-                    "answer": "贵州茅台(600519)在2026-05-15的收益为9.9%。",
-                    "evidence_ids": [self.evidence_id],
-                    "claims": [claim(
-                        "贵州茅台(600519)在2026-05-15的收益为9.9%",
-                        self.evidence_id,
-                        ["return_10d_pct"],
-                        9.9,
-                    )],
-                }, "wrong")
+            import json
+            self.evidence_id = json.loads(
+                [message for message in messages if isinstance(message, ToolMessage)][-1].content
+            )["evidence_id"]
             return call("finish", {
                 "status": "complete",
-                "answer": "贵州茅台(600519)在2026-05-15的收益为1.2%。",
+                "answer": "贵州茅台(600519)在2026-05-15的收益为9.9%。",
                 "evidence_ids": [self.evidence_id],
-                "claims": [claim(
-                    "贵州茅台(600519)在2026-05-15的收益为1.2%",
-                    self.evidence_id,
-                    ["return_10d_pct"],
-                    1.2,
-                )],
-            }, "correct")
+            }, "finish")
 
     def kline(symbol, days=20, end_date: date | None = None):
         return ToolResult(
@@ -515,12 +456,12 @@ def test_claim_ledger_rejects_wrong_value_then_accepts_supported_repair():
 
     assert response.task_status == "complete"
     checks = [trace.output for trace in response.tool_results if trace.name == "react_answer_check"]
-    assert "does not match" in checks[-2]["reason"]
-    assert checks[-1]["claim_ledger"]["claim_count"] == 1
+    assert checks == [{"passed": True, "status": "complete", "missing": []}]
+    assert "9.9%" in response.answer
 
 
 @pytest.mark.parametrize("submitted_status", ["complete", "partial", "empty", "clarify", "refuse"])
-def test_historical_evidence_cannot_enter_final_citations(submitted_status):
+def test_historical_evidence_id_does_not_trigger_final_rejection(submitted_status):
     old_evidence = {
         "evidence_id": "ev_old",
         "tool": "stock_kline",
@@ -578,12 +519,12 @@ def test_historical_evidence_cannot_enter_final_citations(submitted_status):
         history,
     )
 
-    assert response.task_status == "partial"
+    assert response.task_status == submitted_status
     checks = [trace.output for trace in response.tool_results if trace.name == "react_answer_check"]
-    assert "conversation-history evidence" in checks[-2]["reason"]
+    assert checks == [{"passed": True, "status": submitted_status, "missing": []}]
 
 
-def test_current_evidence_cannot_smuggle_history_into_final_answer():
+def test_mixed_current_and_history_ids_do_not_trigger_final_rejection():
     old_evidence = {
         "evidence_id": "ev_old",
         "tool": "stock_kline",
@@ -636,23 +577,11 @@ def test_current_evidence_cannot_smuggle_history_into_final_answer():
                     "status": "complete",
                     "answer": "600519截至2026-09-11上涨2.5%。",
                     "evidence_ids": [self.current_id, "ev_old"],
-                    "claims": [claim(
-                        "600519截至2026-09-11上涨2.5%",
-                        self.current_id,
-                        ["return_10d_pct"],
-                        2.5,
-                    )],
                 }, "mixed")
             return call("finish", {
                 "status": "complete",
                 "answer": "600519截至2026-09-11上涨2.5%。",
                 "evidence_ids": [self.current_id],
-                "claims": [claim(
-                    "600519截至2026-09-11上涨2.5%",
-                    self.current_id,
-                    ["return_10d_pct"],
-                    2.5,
-                )],
             }, "repaired")
 
     response = run(
@@ -664,11 +593,10 @@ def test_current_evidence_cannot_smuggle_history_into_final_answer():
 
     assert response.task_status == "complete"
     checks = [trace.output for trace in response.tool_results if trace.name == "react_answer_check"]
-    assert "conversation-history evidence" in checks[-2]["reason"]
-    assert checks[-1]["passed"] is True
+    assert checks == [{"passed": True, "status": "complete", "missing": []}]
 
 
-def test_historical_evidence_cannot_satisfy_current_requirement():
+def test_historical_requirement_reference_does_not_trigger_answer_validation():
     old_evidence = {
         "evidence_id": "ev_old",
         "tool": "fixture",
@@ -704,18 +632,13 @@ def test_historical_evidence_cannot_satisfy_current_requirement():
                     "id": "current", "description": "查询当前行情", "source_text": "当前行情",
                     "status": "satisfied", "evidence_ids": ["ev_old"],
                 }]}, "task")
-            assert any(
-                isinstance(message, ToolMessage)
-                and "conversation-history evidence" in str(message.content)
-                for message in messages
-            )
             return call("finish", {
-                "status": "partial", "answer": "尚未取得本轮行情证据。", "missing": ["当前行情"],
+                "status": "complete", "answer": "任务状态由模型直接交付。",
             }, "finish")
 
     response = run(
         AgentChatRequest(session_id="r", message="查询当前行情"), registry(), Model(), history,
     )
 
-    assert response.task_status == "partial"
+    assert response.task_status == "complete"
     assert not response.tool_calls

@@ -39,8 +39,7 @@ SYSTEM = """你是LimitUpLab收盘研究助手。使用原生工具调用逐轮�
 只用工具实际证据写市场事实。标明来源与截止日、数据缺失和推断，不把相关性说成因果。
 禁止买卖指令、建议仓位、目标价、收益承诺或确定性预测；历史机构买卖事实可以解释。
 混合请求可拒绝交易建议部分并完成允许研究。歧义影响结果时澄清；工具不支持时明确说明。
-最终必须单独调用finish，输出可读中文答案、真实status、使用的evidence_ids及missing。
-回答中的每条市场事实和推断都必须写入claims；statement须准确概括答案中的对应表述，并绑定到观察中metadata、rows或稳定状态字段的精确类型化路径。
+最终优先单独调用finish，输出可读中文答案、真实status、可选的evidence_ids及missing。
 不要展示内部工具名、原始JSON、思维链。答案只在服务端校验后发布。
 观察中的rows可能只是预览；需要完整名单时read_evidence展开或compute_result处理完整结果。
 所有工具名及参数都必须使用提供的Schema；工具是否存在以当前清单为准。"""
@@ -132,16 +131,14 @@ class Run:
             messages = [*messages, response]
             if response.tool_calls:
                 return {"messages": messages, "pending": response.tool_calls, "finish": None}
-            reason = "Final answers must be submitted through the typed finish tool"
-            self.trace("react_answer_check", {"passed": False, "reason": reason})
-            if self.repairs >= 1:
-                return self.stop("validation_failed")
-            self.repairs += 1
-            return {
-                "messages": [*messages, HumanMessage(content="回答校验反馈：" + reason)],
-                "pending": [],
-                "finish": None,
-            }
+            answer = response.content.strip() if isinstance(response.content, str) else ""
+            if not answer:
+                raise ValueError("Model returned neither a tool call nor a text answer")
+            return {"messages": messages, "pending": [], "finish": {
+                "status": "complete", "answer": answer,
+                "evidence_ids": [record["evidence_id"] for record in self.evidence.current_records()],
+                "missing": [],
+            }}
         except Exception as error:
             self.trace("react_provider_error", {"round": self.models, "error_type": type(error).__name__}, status="error")
             self.errors.append("模型请求失败")
@@ -245,17 +242,6 @@ class Run:
                     old_ids = {r["id"] for r in self.requirements}
                     if not old_ids <= {r["id"] for r in args["requirements"]}:
                         raise ValueError("Cannot remove previously recorded requirements")
-                    for requirement in args["requirements"]:
-                        if requirement["status"] != "satisfied":
-                            continue
-                        if not requirement["evidence_ids"]:
-                            raise ValueError("Satisfied requirements must cite evidence")
-                        records = self.evidence.require_current(
-                            requirement["evidence_ids"], "Satisfied requirements"
-                        )
-                        for record in records:
-                            if record["result_state"] not in {"ok", "empty", "partial"}:
-                                raise ValueError("Satisfied requirements must cite usable evidence")
                     self.requirements = args["requirements"]
                     result = {"requirements": self.requirements}
                 elif name == "compute_result":
@@ -288,41 +274,6 @@ class Run:
             final = Finish.model_validate(state["finish"])
             if contains_prompt_leak(final.answer):
                 raise ValueError("Internal content detected; answer research facts only")
-            cited = self.evidence.require_current(final.evidence_ids, "Final answers")
-            if final.status in {"complete", "empty"} and not cited:
-                raise ValueError(f"{final.status} answers must cite evidence")
-            if final.status == "complete" and (final.missing or any(r["status"] != "satisfied" for r in self.requirements)):
-                raise ValueError("Unfinished requirements must be disclosed as partial")
-            requirement_evidence = {
-                key
-                for requirement in self.requirements
-                if requirement["status"] == "satisfied"
-                for key in requirement["evidence_ids"]
-            }
-            if not requirement_evidence <= set(final.evidence_ids):
-                raise ValueError("Final answer must retain evidence for satisfied requirements")
-            if final.evidence_ids and not final.claims:
-                raise ValueError("Evidence-backed answers must provide a structured claim ledger")
-            cited_ids = set(final.evidence_ids)
-            for claim in final.claims:
-                for binding in claim.evidence:
-                    if binding.evidence_id not in cited_ids:
-                        raise ValueError("Claim evidence must be retained in final evidence_ids")
-                    record = self.evidence.get(binding.evidence_id)
-                    if record.get("historical_reference"):
-                        raise ValueError("Claims cannot bind conversation-history evidence")
-                    actual = self.evidence.resolve_payload_path(binding.evidence_id, binding.path)
-                    if isinstance(actual, (dict, list)):
-                        raise ValueError("Claim evidence paths must resolve to scalar values")
-                    expected = binding.value
-                    both_numbers = (
-                        isinstance(actual, (int, float))
-                        and not isinstance(actual, bool)
-                        and isinstance(expected, (int, float))
-                        and not isinstance(expected, bool)
-                    )
-                    if actual != expected or (not both_numbers and type(actual) is not type(expected)):
-                        raise ValueError("Claim evidence value does not match the cited payload path")
             self.compliance_checks += 1
             remaining = self.deadline - perf_counter()
             if remaining <= 0:
@@ -342,10 +293,6 @@ class Run:
                 "passed": True,
                 "status": final.status,
                 "missing": final.missing,
-                "claim_ledger": {
-                    "claim_count": len(final.claims),
-                    "claims": [claim.model_dump(mode="json") for claim in final.claims],
-                },
             })
             return {"done": True}
         except Exception as error:
