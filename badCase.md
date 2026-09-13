@@ -821,3 +821,10 @@ empty、partial 或 error 时 Replan 新闻；股票名称提取同步覆盖 K�
 - 风险：同一参数同时存在“模型结构化参数”和“正则重新编译问法”两套解释。短日期年份、默认窗口和同义词表可独立漂移，新增问法又会诱导继续增加规则覆盖。
 - 修复：物理删除通用及 post-limit 自然语言 builder、识别器、抽取器、旧 Query Eval 模块和专属协议测试。`query_contract.py` 只保留生产实际消费的日期 ContextVar、市场/状态/排序类型与别名规范化；`PostLimitQueryContract` 只接受已经通过工具 Schema 的结构化参数。旧离线 Query 阶段改为 N/A，工具参数准确性继续由 Planner/Policy/Execution 阶段核对，数据集生成器不再从题面反向生成 expected query。
 - 回归：覆盖 ReAct 工具契约、post-limit 服务默认窗口与显式参数、离线评测阶段降级，以及源码中不存在旧 builder 调用。该清理不改变生产工具清单或业务筛选公式。
+
+## BC-045：会话记忆把任意六位数字保存为股票代码（2026-09-13）
+
+- 发现方式：正则使用审查。确定性 Memory fallback 对用户与助手正文直接执行六位数字扫描，订单号、样本编号等普通数字可能进入 `stock_symbols`，并在后续轮次作为长期上下文影响实体指代。
+- 根因：会话层绕过已经由工具事实生成的 `stock_mentions`，再次从自由文本猜实体；日期范围也通过正文格式扫描维护，形成未验证的上下文状态。
+- 修复：Memory fallback 只消费持久化消息 metadata 中的结构化 `stock_mentions`；代码必须满足 A 股市场前缀，日期必须通过 `date.fromisoformat`。普通正文中的六位数字和日期不再提升为实体状态。JSON 代码围栏改用明确的行边界处理，`session_memory.py` 不再依赖正则；Memory schema 升级为 `session-memory-v2`。
+- 回归：覆盖工具派生股票及交易日期进入记忆、订单号 `123456` 不进入股票列表、LLM 禁用 fallback、滚动窗口和提示注入 run 排除。

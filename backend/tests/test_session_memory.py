@@ -140,7 +140,12 @@ class SessionMemoryTest(unittest.TestCase):
             update={"content": "只看主板，排除高市值股票，关注600001"}
         )
         messages[1] = messages[1].model_copy(
-            update={"content": "600001 当前价格 99.99 元，今日排名第一"}
+            update={
+                "content": "600001 当前价格 99.99 元，今日排名第一",
+                "metadata": {"stock_mentions": [{
+                    "symbol": "600001", "name": "测试股票", "trade_date": "2026-09-01",
+                }]},
+            }
         )
 
         memory = refresh_session_memory(
@@ -157,6 +162,23 @@ class SessionMemoryTest(unittest.TestCase):
         self.assertIn("只看主板", memory.constraints[0])
         self.assertNotIn("99.99", memory.summary)
         self.assertNotIn("排名第一", memory.summary)
+
+    def test_deterministic_memory_ignores_unstructured_six_digit_numbers(self) -> None:
+        messages = _conversation_messages(self.session_id, count=16)
+        messages[0] = messages[0].model_copy(
+            update={"content": "订单号123456，关注测试过程"}
+        )
+
+        memory = refresh_session_memory(
+            session_id=self.session_id,
+            owner_id=self.owner_id,
+            messages=messages,
+            repository=self.memory_repository,
+            llm_provider=DisabledLLMProvider(),
+        )
+
+        self.assertIsNotNone(memory)
+        self.assertEqual(memory.stock_symbols, [])
 
     # Regression scenario: prompt injection turn is excluded from context and memory.
     def test_prompt_injection_turn_is_excluded_from_context_and_memory(self) -> None:

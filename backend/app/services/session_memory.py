@@ -4,10 +4,10 @@ from __future__ import annotations
 
 import json
 import os
-import re
-from datetime import datetime, timezone
+from datetime import date, datetime, timezone
 from typing import Any
 
+from app.agents.query_contract import MARKET_SEGMENT_PREFIXES
 from app.config import env_bool
 from app.models import ChatSessionMemory, ChatSessionMessage
 from app.repositories.chat_memory_repository import SQLiteChatMemoryRepository
@@ -19,13 +19,18 @@ from app.services.llm_provider import (
 )
 
 
-SESSION_MEMORY_VERSION = "session-memory-v1"
+SESSION_MEMORY_VERSION = "session-memory-v2"
 SESSION_MEMORY_FUNCTION_NAME = "update_session_memory"
 RECENT_MESSAGE_LIMIT = 8
 MAX_CONTEXT_MESSAGE_LIMIT = 16
 DEFAULT_REFRESH_INTERVAL = 8
 MAX_MEMORY_SUMMARY_CHARS = 800
 MAX_MEMORY_ITEM_CHARS = 160
+_A_SHARE_PREFIXES = tuple(
+    prefix
+    for prefixes in MARKET_SEGMENT_PREFIXES.values()
+    for prefix in prefixes
+)
 
 
 def prepare_session_context(
@@ -263,8 +268,12 @@ def _memory_function_parameters() -> dict[str, Any]:
 def _parse_memory_object(content: str) -> dict[str, Any]:
     text = content.strip()
     if text.startswith("```"):
-        text = re.sub(r"^```(?:json)?", "", text).strip()
-        text = re.sub(r"```$", "", text).strip()
+        lines = text.splitlines()
+        if lines and lines[0].strip().casefold() in {"```", "```json"}:
+            lines = lines[1:]
+        if lines and lines[-1].strip() == "```":
+            lines = lines[:-1]
+        text = "\n".join(lines).strip()
     parsed = json.loads(text)
     if not isinstance(parsed, dict):
         raise ValueError("Session memory response must be a JSON object")
@@ -346,10 +355,18 @@ def _deterministic_memory_draft(
     research_goal = existing.research_goal if existing else ""
     date_scope = existing.date_scope if existing else None
     for item in messages:
-        symbols.extend(re.findall(r"(?<!\d)\d{6}(?!\d)", item.content))
         for mention in item.metadata.get("stock_mentions", []) or []:
-            if isinstance(mention, dict) and mention.get("symbol"):
-                symbols.append(str(mention["symbol"]))
+            if not isinstance(mention, dict):
+                continue
+            symbol = str(mention.get("symbol") or "").strip()
+            if len(symbol) == 6 and symbol.isdigit() and symbol.startswith(_A_SHARE_PREFIXES):
+                symbols.append(symbol)
+            trade_date = mention.get("trade_date")
+            if isinstance(trade_date, str) and trade_date:
+                try:
+                    date_scope = date.fromisoformat(trade_date[:10]).isoformat()
+                except ValueError:
+                    pass
         if item.role != "user":
             continue
         compact = " ".join(item.content.split())
@@ -359,9 +376,6 @@ def _deterministic_memory_draft(
             for term in ("只看", "排除", "不要", "重点", "默认", "关注")
         ):
             constraints.append(compact[:MAX_MEMORY_ITEM_CHARS])
-        dates = re.findall(r"20\d{2}[-/.]\d{1,2}[-/.]\d{1,2}", compact)
-        if dates:
-            date_scope = dates[-1]
     symbols = _merge_unique(symbols, limit=20)
     topics = _merge_unique(topics, limit=16)
     constraints = _merge_unique(constraints, limit=16)
