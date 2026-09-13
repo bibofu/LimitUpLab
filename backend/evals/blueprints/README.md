@@ -175,3 +175,24 @@ World及本轮可见证据一致，trajectory检查通过。不是把之前的�
 方向”等推断，不能因名单正确就视为已验证。这些额外声明现已保留逐字原文供后续校准。
 下一步应利用这批成功实跑答案补充数值/额外声明校准，并并行于后续工作逐批材料化
 更多独立能力题；不再重复搭建同一单题链路，也不把两道题冒充40题或稳定性结论。
+
+## 执行过程诊断（不只看答案）
+
+新增 `check-process --case ... --response ... --output NEW.json`，可直接复核已有trace，
+无需再次调用LLM；新Worker自动保存 `process.json`，summary单列process_diagnostic。
+当前为独立诊断而非发布gate，不修改或覆盖之前的整题成绩。
+
+- 按trace顺序检查read_evidence/compute_result的源Evidence是否已在此前Observation出现，
+  同轮多个调用不假定后一个能读取前一个尚未观察到的结果。
+- 对无filters的select（原顺序或amount排序）独立重算排序/offset/limit，核对完整items，
+  不仅检查工具“成功”。其他计算操作保留needs_review，计算输出不一致先归为待复核，
+  不能未经归因就判Agent答案错误。
+- 从完整记录重建可见视图，核对日期/代码/名称的交付集合是否被看到；历史证据不充当本轮
+  可见数据。直接获得足量证据可以通过，不强迫调用分页/计算。
+- 报告调用尝试和重复签名数量；包含finish等控制调用。重复可能是合理重试或复用，
+  未经场景约束不自动判错。缺失/损坏trace转为needs_review。
+
+对 `real-events-off027-002`、`real-events-off038-002` 已分别生成
+`process-review-v1.json`。两题的先观察后依赖、独立select重算、目标集合可见性均通过；
+各4次调用尝试（含finish）、1次read、1次compute、0重复签名。此次没有新增模型调用，
+没有增加题目数量，也没有验证复杂异常恢复、多轮、权限与生命周期等尚未覆盖能力。

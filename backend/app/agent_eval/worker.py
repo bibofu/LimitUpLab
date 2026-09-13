@@ -14,6 +14,7 @@ from fastapi.encoders import jsonable_encoder
 from langchain_core.messages import message_to_dict, messages_to_dict
 
 from app.agent_eval.evaluators import evaluate_trajectory_terminal
+from app.agent_eval.process_checks import evaluate_process
 from app.agent_eval.extractor import SYSTEM as EXTRACTOR_SYSTEM, extract_answer
 from app.agent_eval.facts import verify_summary_facts
 from app.agent_eval.event_extractor import SYSTEM as EVENT_EXTRACTOR_SYSTEM, extract_event_answer
@@ -119,6 +120,8 @@ def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240
         save(directory, "frozen-attempts.json", registry.attempts)
         trajectory = evaluate_trajectory_terminal(case, response, profile=world.profile)
         save(directory, "trajectory.json", trajectory.model_dump(mode="json"))
+        process = evaluate_process(case, response)
+        save(directory, "process.json", process.model_dump(mode="json"))
         extraction = None
         try:
             extraction = extractor(guarded, response.answer)
@@ -158,6 +161,7 @@ def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240
     summary = {"verdict": verdict, "primary_cause": cause, "release_eligible": False,
                "model": manifest.model, "model_calls": guarded.calls, "total_tokens": result.total_tokens,
                "trajectory": trajectory_verdict, "fact_diagnostic": facts.verdict,
+               "process_diagnostic": process.verdict,
                "extraction_status": "uncalibrated", "case_status": case.status,
                "budget_exhausted": guarded.budget_exhausted,
                "agent_task_status": response.task_status, "elapsed_seconds": round(result.elapsed_seconds, 2)}

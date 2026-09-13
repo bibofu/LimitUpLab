@@ -35,6 +35,10 @@ def main() -> int:
     check.add_argument("--case", required=True, type=Path)
     check.add_argument("--response", required=True, type=Path)
     check.add_argument("--profile", required=True, choices=["v1_close_review", "extended"])
+    process = commands.add_parser("check-process")
+    process.add_argument("--case", required=True, type=Path)
+    process.add_argument("--response", required=True, type=Path)
+    process.add_argument("--output", type=Path)
     fact = commands.add_parser("check-summary-facts")
     fact.add_argument("--case", required=True, type=Path)
     fact.add_argument("--world", required=True, type=Path)
@@ -65,6 +69,14 @@ def main() -> int:
                   "privacy_status": artifact.body.privacy_status}
     elif args.command == "prepare-summary-candidate":
         result = save_summary_candidate(load_capture(args.capture), args.output_dir)
+    elif args.command == "check-process":
+        from app.agent_eval.process_checks import evaluate_process
+        response = AgentChatResponse.model_validate_json(args.response.read_text(encoding="utf-8"))
+        result = evaluate_process(load_case(args.case), response).model_dump(mode="json")
+        if args.output:
+            with args.output.open("x", encoding="utf-8") as handle:
+                json.dump(result, handle, ensure_ascii=False, indent=2)
+        exit_code = {"pass": 0, "fail": 1, "needs_review": 2}[result["verdict"]]
     elif args.command == "check-response":
         response = AgentChatResponse.model_validate_json(args.response.read_text(encoding="utf-8"))
         result = evaluate_trajectory_terminal(load_case(args.case), response, profile=args.profile).model_dump(mode="json")
