@@ -1,11 +1,4 @@
-"""Keep internal Agent implementation names out of user-visible text."""
-
-from __future__ import annotations
-
-import re
-from collections.abc import Callable
-
-from app.services.prompt_security import contains_prompt_leak
+"""Keep exact internal Agent implementation names out of user-visible text."""
 
 
 INTERNAL_TOOL_LABELS: dict[str, str] = {
@@ -43,26 +36,6 @@ INTERNAL_TOOL_LABELS: dict[str, str] = {
     "agent_plan": "问题分析过程",
 }
 
-_INTERNAL_NAME_PATTERN = "|".join(
-    re.escape(name)
-    for name in sorted(INTERNAL_TOOL_LABELS, key=len, reverse=True)
-)
-_TOOL_REFERENCE_PATTERNS = (
-    re.compile(
-        rf"(?:数据|信息|结果|结论|回答)?\s*"
-        rf"(?:来自|来源于|通过|使用(?:了)?|由)\s*"
-        rf"`?(?:{_INTERNAL_NAME_PATTERN})`?\s*"
-        rf"(?:工具|tool)(?:提供|返回|生成|查询)?",
-        flags=re.IGNORECASE,
-    ),
-    re.compile(
-        rf"`?(?:{_INTERNAL_NAME_PATTERN})`?\s*"
-        rf"(?:工具|tool)\s*(?:返回|提供|显示|查询到|生成)",
-        flags=re.IGNORECASE,
-    ),
-)
-
-
 def friendly_tool_label(tool_name: str) -> str:
     """Return a business-facing label without exposing an implementation key."""
 
@@ -70,63 +43,10 @@ def friendly_tool_label(tool_name: str) -> str:
 
 
 def sanitize_agent_answer(text: str) -> str:
-    """Remove internal tool references while preserving the answer's facts."""
+    """Replace exact implementation identifiers with stable business labels."""
 
     sanitized = text
-    for pattern in _TOOL_REFERENCE_PATTERNS:
-        sanitized = pattern.sub("依据本地结构化数据", sanitized)
     for internal_name, label in INTERNAL_TOOL_LABELS.items():
-        sanitized = re.sub(
-            rf"`?{re.escape(internal_name)}`?",
-            label,
-            sanitized,
-            flags=re.IGNORECASE,
-        )
-    sanitized = re.sub(
-        r"(?:依据本地结构化数据)\s*(?:工具|tool)",
-        "依据本地结构化数据",
-        sanitized,
-        flags=re.IGNORECASE,
-    )
+        sanitized = sanitized.replace(f"`{internal_name}`", label)
+        sanitized = sanitized.replace(internal_name, label)
     return sanitized
-
-
-class AgentAnswerStreamSanitizer:
-    """Sanitize complete clauses even when an LLM splits names across deltas."""
-
-    # Initialize AgentAnswerStreamSanitizer with the supplied dependencies and per-instance state.
-    def __init__(self, emit: Callable[[str], None]) -> None:
-        self.emit = emit
-        self.pending = ""
-        self.blocked = False
-
-    def feed(self, delta: str) -> None:
-        """Consume one raw model delta and emit only safe text."""
-
-        if self.blocked:
-            return
-        self.pending += delta
-        while match := re.search(r"[，,。！？；;\n]", self.pending):
-            boundary = match.end()
-            rendered = sanitize_agent_answer(self.pending[:boundary])
-            self.pending = self.pending[boundary:]
-            if contains_prompt_leak(rendered):
-                self.pending = ""
-                self.blocked = True
-                return
-            if rendered:
-                self.emit(rendered)
-
-    def flush(self) -> None:
-        """Emit the remaining safe tail after model streaming completes."""
-
-        if self.blocked:
-            self.pending = ""
-            return
-        rendered = sanitize_agent_answer(self.pending)
-        self.pending = ""
-        if contains_prompt_leak(rendered):
-            self.blocked = True
-            return
-        if rendered:
-            self.emit(rendered)

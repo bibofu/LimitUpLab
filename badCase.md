@@ -828,3 +828,10 @@ empty、partial 或 error 时 Replan 新闻；股票名称提取同步覆盖 K�
 - 根因：会话层绕过已经由工具事实生成的 `stock_mentions`，再次从自由文本猜实体；日期范围也通过正文格式扫描维护，形成未验证的上下文状态。
 - 修复：Memory fallback 只消费持久化消息 metadata 中的结构化 `stock_mentions`；代码必须满足 A 股市场前缀，日期必须通过 `date.fromisoformat`。普通正文中的六位数字和日期不再提升为实体状态。JSON 代码围栏改用明确的行边界处理，`session_memory.py` 不再依赖正则；Memory schema 升级为 `session-memory-v2`。
 - 回归：覆盖工具派生股票及交易日期进入记忆、订单号 `123456` 不进入股票列表、LLM 禁用 fallback、滚动窗口和提示注入 run 排除。
+
+## BC-046：未使用的流式 Sanitizer 与校验后正则改写长期保留（2026-09-13）
+
+- 发现方式：生产引用审查。`AgentAnswerStreamSanitizer` 只有单元测试消费者，当前 SSE 从不发布未校验 answer delta；最终 `AgentChatResponse` 仍通过多组正则改写内部工具名，发生在 Claim Ledger 和合规 gate 之后。
+- 根因：旧流式回答阶段退役后，配套分段缓冲器和自然语言句式替换没有同步删除；输出边界同时保留“校验前禁止泄漏”和“校验后重写正文”两套策略。
+- 修复：删除无生产消费者的流式 Sanitizer 及专属测试。最终输出只对公开契约中的精确内部标识执行字面量业务标签替换，不再识别或改写开放式句型；Prompt 泄漏仍在发布前 gate 失败关闭。
+- 回归：覆盖反引号和普通精确工具标识替换、trace 名称不变、全部注册工具都有业务标签，以及股票链接仍只来自结构化工具事实。

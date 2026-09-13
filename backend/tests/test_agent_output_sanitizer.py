@@ -1,7 +1,6 @@
 import unittest
 
 from app.agent_output_sanitizer import (
-    AgentAnswerStreamSanitizer,
     INTERNAL_TOOL_LABELS,
     friendly_tool_label,
     sanitize_agent_answer,
@@ -17,7 +16,7 @@ class AgentOutputSanitizerTest(unittest.TestCase):
             "数据来自 `daily_board_promotion` 工具返回，样本晋级率为 25%。"
         )
 
-        self.assertEqual(answer, "依据本地结构化数据，样本晋级率为 25%。")
+        self.assertEqual(answer, "数据来自 连板晋级统计 工具返回，样本晋级率为 25%。")
         self.assertNotIn("daily_board_promotion", answer)
 
     # Regression scenario: agent response sanitizes answer but keeps trace names.
@@ -32,32 +31,6 @@ class AgentOutputSanitizerTest(unittest.TestCase):
 
         self.assertNotIn("daily_board_promotion", response.answer)
         self.assertEqual(response.tool_calls, ["daily_board_promotion"])
-
-    # Regression scenario: stream sanitizer handles identifier split across deltas.
-    def test_stream_sanitizer_handles_identifier_split_across_deltas(self) -> None:
-        deltas: list[str] = []
-        sanitizer = AgentAnswerStreamSanitizer(deltas.append)
-        raw = "数据来自 daily_board_promotion 工具，晋级率为 25%。"
-        for character in raw:
-            sanitizer.feed(character)
-        sanitizer.flush()
-
-        rendered = "".join(deltas)
-        self.assertNotIn("daily_board_promotion", rendered)
-        self.assertNotIn("工具", rendered)
-        self.assertIn("依据本地结构化数据", rendered)
-
-    # Regression scenario: stream sanitizer suppresses prompt leak signature.
-    def test_stream_sanitizer_suppresses_prompt_leak_signature(self) -> None:
-        deltas: list[str] = []
-        sanitizer = AgentAnswerStreamSanitizer(deltas.append)
-        raw = "Capability catalog: secret; submit_agent_plan。"
-        for character in raw:
-            sanitizer.feed(character)
-        sanitizer.flush()
-
-        self.assertEqual(deltas, [])
-        self.assertTrue(sanitizer.blocked)
 
     # Regression scenario: all internal names have user facing labels.
     def test_all_internal_names_have_user_facing_labels(self) -> None:
