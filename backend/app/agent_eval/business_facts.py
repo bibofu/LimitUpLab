@@ -44,6 +44,26 @@ def _source_rows(world):
 
 def _truth(expected, world, source):
     day = expected["trade_date"]
+    if "row_selection" in expected:
+        from app.agent_eval.selection import complete_day, select_rows
+        return {}, select_rows(complete_day(world, day), expected["row_selection"])
+    if "selection" in expected:
+        rows=[r for (d,_),r in source.items() if d==day and r["closed_limit"]]
+        complete=[r.observation.payload for r in world.recordings if r.tool=="limit_up_events"
+                  and r.observation.payload.get("trade_date")==day
+                  and r.observation.payload.get("event_status")=="all"
+                  and not any(r.arguments.get(k) for k in ("query","market","board_height","highest_only"))
+                  and r.observation.payload.get("returned_count")==r.observation.payload.get("matched_count")]
+        if not complete:
+            raise ValueError("selection requires complete unfiltered baseline")
+        selection=expected["selection"]
+        if selection=={"market":"chinext","board_height":1}:
+            rows=[r for r in rows if r["symbol"].startswith(("300","301")) and r["board_height"]==1]
+        elif selection=={"broken_only":True}:
+            rows=[r for r in rows if r["break_count"]>0]
+        else:
+            raise ValueError("unsupported selection")
+        return {},rows
     # Require at least one demonstrably complete unfiltered closed-day recording.
     pools = [r.observation.payload for r in world.recordings if r.tool == "limit_up_events"
              and r.observation.state == "ok" and r.observation.payload.get("trade_date") == day
@@ -153,6 +173,8 @@ def verify_business_facts(case, world, response, extraction, *, diagnostic_unrev
             correct = correct and all(getattr(extraction,k) == v for k,v in scalars.items())
             if "members" in expected:
                 correct = correct and set(actual)==identities and len(actual)==len(identities)
+                if expected.get("ordered"):
+                    correct = correct and actual == [(m["symbol"], m["name"]) for m in members]
             grounded = all((expected["trade_date"],r["symbol"]) in visible for r in members)
             if "limit_up_count" in scalars:
                 grounded = any(v["metadata"].get("trade_date")==expected["trade_date"]

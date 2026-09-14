@@ -19,7 +19,8 @@ from app.agent_eval.extractor import SYSTEM as EXTRACTOR_SYSTEM, extract_answer
 from app.agent_eval.facts import verify_summary_facts
 from app.agent_eval.event_extractor import SYSTEM as EVENT_EXTRACTOR_SYSTEM, extract_event_answer
 from app.agent_eval.event_facts import verify_event_facts
-from app.agent_eval.business_facts import verify_business_facts
+from app.agent_eval.business_facts import BusinessReport, verify_business_facts
+from app.agent_eval.evaluators import finding
 from app.agent_eval.event_extractor import BUSINESS_SYSTEM, extract_business_answer
 from app.agent_eval.frozen_registry import FrozenAgentToolRegistry
 from app.agent_eval.loader import load_suite, world_digest
@@ -91,7 +92,7 @@ def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240
         save(directory, "live-baseline-check.json", {"passed":True,
             "checked_recordings":registry.baseline_checks,"baseline_digest":world_digest(world),
             "tool_execution":"production methods over readonly database snapshot",
-            "scope":"market_summary and limit_up_events only, not full-profile coverage"})
+            "scope":"local market_summary, limit_up_events, market_event_pool; not full-profile coverage"})
     else:
         registry = FrozenAgentToolRegistry(world)
     budget = BudgetSpec(max_agent_runs=1, max_model_calls=16, max_input_tokens=2000000,
@@ -137,13 +138,17 @@ def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240
         process = evaluate_process(case, response)
         save(directory, "process.json", process.model_dump(mode="json"))
         extraction = None
-        try:
-            extraction = extractor(guarded, response.answer)
-            save(directory, "extraction.json", extraction.model_dump(mode="json"))
-        except Exception as error:
-            extraction_error = type(error).__name__
-            save(directory, "extraction-error.json", {"error_type": extraction_error})
-        facts = verifier(case, world, response, extraction, diagnostic_unreviewed=True)
+        if any(a.evaluator == "fact" for a in case.assertions):
+            try:
+                extraction = extractor(guarded, response.answer)
+                save(directory, "extraction.json", extraction.model_dump(mode="json"))
+            except Exception as error:
+                extraction_error = type(error).__name__
+                save(directory, "extraction-error.json", {"error_type": extraction_error})
+            facts = verifier(case, world, response, extraction, diagnostic_unreviewed=True)
+        else:
+            facts = BusinessReport(case=manifest.cases[0], verdict="needs_review",
+                findings=[finding("$answer_semantics", "needs_review", "semantic rubric requires review; numeric extraction not applicable")])
         save(directory, "facts.json", facts.model_dump(mode="json"))
     fact_ids = {a.id for a in case.assertions if a.evaluator == "fact"}
     trajectory_findings = [f for f in trajectory.findings if f.assertion_id not in fact_ids]

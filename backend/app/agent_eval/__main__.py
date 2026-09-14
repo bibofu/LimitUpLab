@@ -17,6 +17,14 @@ from app.models import AgentChatResponse
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    dataset = commands.add_parser("build-dataset")
+    for name in ("recipe", "database", "output-dir"):
+        dataset.add_argument("--" + name, required=True, type=Path)
+    dataset_run = commands.add_parser("run-dataset")
+    for name in ("bundle", "database", "output-dir"):
+        dataset_run.add_argument("--" + name, required=True, type=Path)
+    dataset_run.add_argument("--allow-llm", required=True, action="store_true")
+    dataset_run.add_argument("--case-ids", nargs="+")
     record = commands.add_parser("record-local-summary")
     record.add_argument("--database", required=True, type=Path)
     record.add_argument("--anchor", required=True, type=datetime.fromisoformat)
@@ -55,6 +63,9 @@ def main() -> int:
     run.add_argument("--wall-seconds", type=int, default=240)
     blueprint = commands.add_parser("blueprint-coverage")
     batch = commands.add_parser("prepare-core-batch")
+    expansion = commands.add_parser("prepare-expansion")
+    for name in ("database","book","baseline","output-dir"):
+        expansion.add_argument("--"+name,required=True,type=Path)
     for name in ("database", "book", "output-dir"):
         batch.add_argument("--" + name, required=True, type=Path)
     live = commands.add_parser("run-live-historical")
@@ -78,7 +89,14 @@ def main() -> int:
     blueprint.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
     exit_code = 0
-    if args.command == "promote-highest":
+    if args.command == "build-dataset":
+        from app.agent_eval.dataset import build_dataset
+        result = build_dataset(args.recipe, args.database, args.output_dir)
+    elif args.command == "run-dataset":
+        from app.agent_eval.dataset import run_dataset
+        result = run_dataset(args.bundle, args.database, args.output_dir, case_ids=args.case_ids)
+        exit_code = 2 if any(r["verdict"] != "pass" for r in result["cases"]) else 0
+    elif args.command == "promote-highest":
         from app.agent_eval.highest_acceptance import promote_highest
         result = promote_highest(args.review_dir,args.approval,args.acceptance,args.output_dir)
     elif args.command == "accept-highest":
@@ -93,6 +111,9 @@ def main() -> int:
         from app.services.llm_provider import get_llm_provider
         configure_runtime_environment()
         result = review_business_run(args.run_dir,args.output_dir,get_llm_provider())
+    elif args.command == "prepare-expansion":
+        from app.agent_eval.core_batch import prepare_expansion
+        result = prepare_expansion(args.database,args.book,args.baseline,args.output_dir)
     elif args.command == "prepare-core-batch":
         from app.agent_eval.core_batch import prepare_core_batch
         result = prepare_core_batch(args.database, args.book, args.output_dir)
