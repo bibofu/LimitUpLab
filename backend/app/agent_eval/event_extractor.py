@@ -33,12 +33,12 @@ class ExtractedList(Contract):
 
 
 class ExtractedBusiness(ExtractedList):
-    max_board_height: int | None = Field(default=None, ge=0)
-    limit_up_count: int | None = Field(default=None, ge=0)
-    matched_count: int | None = Field(default=None, ge=0)
+    max_board_height: int | None = Field(default=None, ge=0, description="答案明确陈述的最高连板高度")
+    limit_up_count: int | None = Field(default=None, ge=0, description="答案明确陈述的不带板块、主题或其他筛选条件的全市场收盘涨停总数")
+    matched_count: int | None = Field(default=None, ge=0, description="答案明确陈述的带板块、主题或其他筛选条件后的匹配数量")
 
 
-BUSINESS_SYSTEM = SYSTEM + "\n最高连板高度填max_board_height，收盘涨停家数填limit_up_count，指定主题匹配数量填matched_count；正文明确没有匹配可填0。未明确的字段填null，不推算。这些核心值单独抽取，其余业务声明仍引用行号。"
+BUSINESS_SYSTEM = SYSTEM + "\n最高连板高度填max_board_height。仅不带板块、主题或其他筛选条件的全市场收盘涨停总数填limit_up_count；带市场板块（如科创板/创业板）、主题或其他条件的筛选结果数量填matched_count，正文明确没有匹配时填0。若同句同时出现筛选数量和全市场总数，分别填写，不互相覆盖。未明确的字段填null，不推算。这些核心值单独抽取，其余业务声明仍引用行号。"
 
 
 def extract_business_answer(provider, answer):
@@ -65,6 +65,6 @@ def extract_event_answer(provider, answer, *, business=False):
         raise ValueError("additional claim references missing/blank line")
     quotes = [lines[i] for i in sorted(set(parsed.additional_claim_line_ids))]
     model = BusinessExtraction if business else ListExtraction
-    return model(answer_digest=digest(answer), extractor_version="answer-only-business-v1" if business else "answer-only-event-list-v2",
+    return model(answer_digest=digest(answer), extractor_version="answer-only-business-v2" if business else "answer-only-event-list-v2",
         origin="model", quote=answer, start=0, additional_claims=quotes,
         **parsed.model_dump(exclude={"additional_claim_line_ids"}))

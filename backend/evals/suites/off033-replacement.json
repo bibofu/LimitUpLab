@@ -1,11 +1,15 @@
 {
-  "suite_id": "local30-off033-replacement", "version": 1, "case_version": 6,
+  "suite_id": "local30-off033-replacement", "version": 4, "case_version": 9,
   "scope": "Replacement proposal only; does not inherit approval of any existing case",
   "dates": ["2026-09-11"],
   "anchor_datetime": "2026-09-11T18:00:00+08:00",
   "additional_routes": [
     {"tool":"market_event_pool","arguments":{"event_type":"limit_up","trade_date":"2026-09-11","market":"star_market","result_mode":"list","limit":30}},
-    {"tool":"market_event_pool","arguments":{"event_type":"limit_up","trade_date":"2026-09-11","market":"star_market","result_mode":"list","limit":100}}
+    {"tool":"market_event_pool","arguments":{"event_type":"limit_up","trade_date":"2026-09-11","market":"star_market","result_mode":"list","limit":100}},
+    {"tool":"limit_up_events","arguments":{"trade_date":"2026-09-11","closed_only":true,"sort_by":"amount","sort_order":"desc","limit":100}},
+    {"tool":"limit_up_events","arguments":{"trade_date":"2026-09-11","market":"star_market","event_status":"all","limit":100}},
+    {"tool":"market_event_pool","arguments":{"event_type":"limit_up","trade_date":"2026-09-11","market":"star_market","result_mode":"summary"}},
+    {"tool":"limit_up_events","arguments":{"trade_date":"2026-09-11","query":"688","closed_only":true,"limit":100}}
   ],
   "cases": [
     {"id":"OFF-033","kind":"selection","day":"2026-09-11",

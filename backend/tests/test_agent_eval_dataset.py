@@ -14,6 +14,7 @@ from app.agent_eval.business_facts import BusinessExtraction, identity, verify_b
 from app.agent_eval.process_checks import independent_select
 from app.agent_eval.recorder import digest
 from app.agent_eval.core_batch import LocalResearchRegistry
+from app.agent_eval.approval import business_contract
 from app.agent_eval.historical_live import HistoricalLiveRegistry
 from app.agent_eval.frozen_registry import FrozenAgentToolRegistry
 from app.agents.react_runtime.evidence import EvidenceStore
@@ -32,6 +33,17 @@ def test_replacement_empty_prerequisite_is_independent_of_recording():
     row = {"trade_date": "2026-09-11", "symbol": "688001", "name": "合成", "closed_limit": True}
     with pytest.raises(ValueError, match="empty prerequisite"):
         expected_for(item, [row])
+
+
+def test_business_contract_excludes_asset_identity_but_not_reviewed_content(dataset):
+    _, target, _ = dataset
+    case = load_case(target / "OFF-010" / "case.json")
+    revised = case.model_copy(deep=True)
+    revised.case_version += 1
+    revised.world.version += 1
+    assert business_contract(case) == business_contract(revised)
+    revised.conversation[0].content += "改变问题"
+    assert business_contract(case) != business_contract(revised)
 
 
 @pytest.fixture(scope="module")

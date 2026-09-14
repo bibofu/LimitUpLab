@@ -29,6 +29,10 @@ def main() -> int:
     for name in ("bundle", "output-dir"):
         recheck.add_argument("--" + name, required=True, type=Path)
     recheck.add_argument("--runs", required=True, nargs="+", type=Path)
+    carry = commands.add_parser("carry-business-approval")
+    for name in ("source-bundle", "target-bundle", "approval", "output"):
+        carry.add_argument("--" + name, required=True, type=Path)
+    carry.add_argument("--case-id", required=True)
     record = commands.add_parser("record-local-summary")
     record.add_argument("--database", required=True, type=Path)
     record.add_argument("--anchor", required=True, type=datetime.fromisoformat)
@@ -86,6 +90,13 @@ def main() -> int:
         accept.add_argument("--"+name,required=True,type=Path)
     accept.add_argument("--database",type=Path)
     accept.add_argument("--allow-llm",action="store_true",required=True)
+    accept_empty_parser = commands.add_parser("accept-empty")
+    for name in ("bundle", "approval", "output-dir"):
+        accept_empty_parser.add_argument("--" + name, required=True, type=Path)
+    accept_empty_parser.add_argument("--allow-llm", action="store_true", required=True)
+    promote_empty_parser = commands.add_parser("promote-empty")
+    for name in ("bundle", "approval", "acceptance", "output-dir"):
+        promote_empty_parser.add_argument("--" + name, required=True, type=Path)
     promote = commands.add_parser("promote-highest")
     for name in ("review-dir","approval","acceptance","output-dir"):
         promote.add_argument("--"+name,required=True,type=Path)
@@ -104,6 +115,10 @@ def main() -> int:
         from app.agent_eval.dataset import recheck_dataset
         result = recheck_dataset(args.bundle, args.runs, args.output_dir)
         exit_code = 2
+    elif args.command == "carry-business-approval":
+        from app.agent_eval.approval import carry_business_approval
+        result = carry_business_approval(args.source_bundle, args.target_bundle, args.approval,
+                                         args.case_id, args.output)
     elif args.command == "promote-highest":
         from app.agent_eval.highest_acceptance import promote_highest
         result = promote_highest(args.review_dir,args.approval,args.acceptance,args.output_dir)
@@ -113,6 +128,15 @@ def main() -> int:
         from app.services.llm_provider import get_llm_provider
         configure_runtime_environment()
         result = accept_highest(args.review_dir,args.approval,args.output_dir,get_llm_provider(),database=args.database)
+    elif args.command == "accept-empty":
+        from app.agent_eval.empty_acceptance import accept_empty
+        from app.config import configure_runtime_environment
+        from app.services.llm_provider import get_llm_provider
+        configure_runtime_environment()
+        result = accept_empty(args.bundle, args.approval, args.output_dir, get_llm_provider())
+    elif args.command == "promote-empty":
+        from app.agent_eval.empty_acceptance import promote_empty
+        result = promote_empty(args.bundle, args.approval, args.acceptance, args.output_dir)
     elif args.command == "prepare-golden-review":
         from app.agent_eval.golden_review import review_business_run
         from app.config import configure_runtime_environment

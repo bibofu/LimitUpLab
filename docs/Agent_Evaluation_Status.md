@@ -23,30 +23,41 @@
   第三批LH-001、002、003、004及LH-031至036。用户逐题认可口径、标准事实与判分规则，
   绑定当前suite v3 / case v5及各自Case/World摘要；独立记录为数据包内的
   `user-review-20260914-batch01.json`、`user-review-20260914-batch02.json`、
-  `user-review-20260914-batch03.json`。第三批未扩展批准OFF-033或任何替代题。
+  `user-review-20260914-batch03.json`。OFF-033替代题使用独立审批与等价迁移记录。
 - 旧OFF-033 v5人工虚构主题题被否决，历史诊断pass不代表业务审核通过，原始资产与驳回记录保留。
   替代题为“2026-09-11科创板有哪些收盘涨停股票？请列出代码和名称，并注明数据日期。”
   原始行与真实工具均确认正常空结果；用户已明确认可替代题、标准事实和规则。
-  配方：`backend/evals/suites/off033-replacement.json`；资产：`output/agent-eval/datasets/off033-replacement-v1`，
+  配方：`backend/evals/suites/off033-replacement.json`；最初审批资产为`off033-replacement-v1`，
   case v6、51条录制，独立审批`user-review-20260914.json`绑定实际Case/World摘要，未继承旧题审批。
   空名单必须有当前可见、日期/市场/收盘口径一致的正常空结果支持，不能因成员集合为空而自动接地通过。
   复杂空结果路线尚无适配器时保持needs_review，不默认通过。
-- 替代题两次独立真实运行保存在`output/agent-eval/runs/off033-replacement-001`及`-002`。
+- 替代题前两次独立真实运行保存在`output/agent-eval/runs/off033-replacement-001`及`-002`。
   首次出现两次NativeFunctionCallingError，终态partial，归因provider_failure；第二次终态empty、
   核心事实及过程诊断pass，但尝试额外的全市场amount降序查询时缺录制，归因fixture_failure。
   两次均unscorable，合计15次模型调用、143,685 Token；保留失败，不挑选局部pass冒充整体通过。
-  待补录路线为limit_up_events(trade_date=2026-09-11, closed_only=true, sort_by=amount, sort_order=desc, limit=100)。
+  随后逐次把模型实际采用的合法交叉核验路线通过真实工具录制，失败报告均保留、World均新建版本而不覆写。
+- 当前资产`off033-replacement-v4`为suite v4 / case v9 / 55条录制。机器等价迁移只在问题、
+  requirements、assertions、终态、profile、mode、severity及capabilities完全不变时继承既有业务审批；
+  产物明确标注不是新的人审。第五次运行无fixture/provider错误，终态empty，轨迹及核心事实诊断pass；
+  总体仍needs_review，因为真实回答额外声明及完整语义质量不在核心合同审批范围。
+- 空结果抽取器首轮校准0/6，准确暴露出“科创板数量”误填为全市场数量的字段歧义；未把失败改写为通过。
+  明确全市场总数与带板块/主题/条件筛选数量的schema及提示后，第二轮6/6通过，四条真实录制路线均通过。
+  OFF-033 v9现已作为`output/agent-eval/golden/OFF-033-v9`的Active Golden，范围仅为genuine-empty核心要求；
+  release_eligible与answer_quality_approved仍为false。
 - 当前审核进度：30题已确认，业务审核无待办；旧题的否决不撤销，替代题独立计入。
   原suite.json保留生成时快照，以后续独立审核记录及本节为准。批准题仍需技术/抽取校准验收，
-  不自动晋升Active；OFF-035/036既有终态失败不因题目获认可而转为通过。
+  除已单独完成技术验收者外不自动晋升Active；OFF-035/036既有终态失败不因题目获认可而转为通过。
 - 不是30道已激活Golden，也不是28/30完整质量通过；当前认可的Offline题已补齐20道。
-  自动抽取、额外声明、语义遵循及校准仍有needs_review。旧OFF-010/LH-004 v1 Active及审批保持不变。
+  当前只有OFF-010 v1、LH-004 v1、OFF-033 v9三个限定核心合同的Active Golden；其余27题仍待技术验收。
+  自动抽取、额外声明、语义遵循及校准仍有needs_review。
 - 集中审核问题、事实和规则：`output/agent-eval/datasets/local30-v4/REVIEW.md`。
-  替代题见其独立包中的REVIEW.md。后续需补齐录制路线、技术/抽取校准验收再晋升；不得复制旧审批给修改后的题目。
+  替代题见其独立包中的REVIEW.md。后续继续对其余27题做技术/抽取校准验收；不得复制审批给业务合同有变化的题目。
 - 上轮定向测试42项通过；统一后端验收763 passed、3 warnings、2 subtests passed。
   验收报告：`output/validation/20260914T075129Z-f7e95643/summary.json`。
 - 替代题及空结果接地改动完成后，统一后端验收775 passed、3 warnings、2 subtests passed。
   报告：`output/validation/20260914T082306Z-6f69034c/summary.json`。这些契约测试不代替真实LLM质量验收。
+- 审批等价迁移、空结果抽取校准与限定晋升完成后，统一后端验收778 passed、3 warnings、
+  2 subtests passed；报告：`output/validation/20260914T094445Z-66c6d740/summary.json`。
 
 以下为首批建设流水，数量和最新状态以上面为准。
 
