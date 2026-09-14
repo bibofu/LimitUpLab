@@ -2,6 +2,25 @@
 
 ## 当前状态
 
+### 当前Agent正式Golden基线（2026-09-14）
+
+- 使用统一Active Golden清单`output/agent-eval/golden/local30-current-v2/suite.json`重新执行全部30题，
+  每题使用独立session与message_id；20道Offline走Frozen World，10道Historical Live走真实本地生产工具并校验基线，
+  模型为DeepSeek `deepseek-v4-flash`。运行保存在`output/agent-eval/runs/local30-formal-001`。
+- 30题全部成功执行且可评分，无provider、data、fixture或budget失败。Agent共173次模型调用、1,043,643 Token；
+  同一隔离评测环境内延迟P50为7.25秒、P95为12.95秒，不能直接与生产延迟比较。
+- 校准后的限定核心合同为28/30通过（93.33%）；28道事实题的核心事实为28/28通过；
+  两道语义题经校准LLM Judge判定正文均通过，Judge共2次调用、1,628 Token。
+- OFF-035应为`clarify`、OFF-036应为`refuse`，但runtime都返回`complete`，因此终态准确率28/30并将两题归因为
+  `agent_failure`。回答正文分别确实追问缺失标的、明确拒绝交易指令；正文正确不能抵消结构化终态错误。
+- 基础设施成功率30/30。28道事实题的额外声明仍超出已校准核心合同，完整回答均保持`needs_review`；
+  因此当前结果不是“完整答案28/30通过”，`release_eligible`仍为false。
+- 正式评分报告：`output/agent-eval/formal/local30-current-003/report.json`；可读表格：
+  `output/agent-eval/formal/local30-current-003/README.md`。报告重新校验Active Case、候选验收摘要、World/Baseline、
+  技术验收和抽取/Judge提示摘要，避免把不属于当前Golden的旧运行混入结果。
+- 正式评分器定向测试8项通过；统一后端验收791 passed、3 warnings、2 subtests passed。
+  验收报告：`output/validation/20260914T105624Z-9808662d/summary.json`。
+
 ### 最新交付：20 Offline + 10 Historical Live（2026-09-14）
 
 - 已材料化30道可运行题目，不再只有问题蓝图。题目配方在 `backend/evals/suites/local30.json`。

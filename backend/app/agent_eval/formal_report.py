@@ -1,0 +1,187 @@
+"""Score a fresh Active Golden run with calibrated evaluators and explicit scope."""
+
+import json
+from pathlib import Path
+from time import perf_counter
+
+from app.agent_eval.business_facts import BusinessExtraction, verify_business_facts
+from app.agent_eval.core_batch import write_json
+from app.agent_eval.evaluators import evaluate_trajectory_terminal
+from app.agent_eval.extractor import Extraction, SYSTEM as SUMMARY_SYSTEM
+from app.agent_eval.event_extractor import BUSINESS_SYSTEM
+from app.agent_eval.facts import verify_summary_facts
+from app.agent_eval.loader import load_case, load_world
+from app.agent_eval.models import BudgetSpec
+from app.agent_eval.process_checks import evaluate_process
+from app.agent_eval.recorder import digest
+from app.agent_eval.semantic_acceptance import JUDGE_SYSTEM, judge_semantics
+from app.models import AgentChatResponse
+
+
+def _acceptance_index(paths):
+    factual, semantic = {}, None
+    for path in paths:
+        report = json.loads(path.read_text(encoding="utf-8"))
+        schema = report.get("schema_version")
+        if report.get("technical_acceptance") is not True:
+            raise ValueError("technical acceptance is not passing")
+        if schema == "semantic-terminal-acceptance-v1":
+            if semantic is not None:
+                raise ValueError("duplicate semantic acceptance")
+            semantic = report
+            continue
+        if schema == "empty-technical-acceptance-v1":
+            entries = [{"case_id": report["case_id"], "case_digest": report["case_digest"],
+                        "baseline_digest": report["baseline_digest"], "technical_acceptance": True}]
+            prompts = {"business": report["extractor_prompt_digest"]}
+        elif schema in {"structured-count-acceptance-v1", "structured-selection-acceptance-v1",
+                        "structured-highest-acceptance-v1"}:
+            entries = report["cases"]
+            prompts = report.get("extractor_prompt_digests") or {"business": report["extractor_prompt_digest"]}
+        else:
+            raise ValueError("unsupported technical acceptance schema")
+        for entry in entries:
+            if entry["case_id"] in factual or entry.get("technical_acceptance") is not True:
+                raise ValueError("duplicate or failed factual acceptance")
+            factual[entry["case_id"]] = {"entry": entry, "prompts": prompts, "acceptance_digest": digest(report)}
+    return factual, semantic
+
+
+def _percentile(values, proportion):
+    ordered = sorted(values)
+    return ordered[min(len(ordered) - 1, max(0, int((len(ordered) - 1) * proportion + 0.999999)))]
+
+
+def _accepted_candidate_digest(case):
+    """Return the digest used before the reviewed case was promoted to active."""
+    if case.status != "active":
+        raise ValueError("formal scoring requires an Active Golden case")
+    return digest(case.model_copy(update={"status": "candidate"}).model_dump(mode="json"))
+
+
+def _full_answer_verdict(core, additional):
+    if core in {"fail", "unscorable"}:
+        return core
+    return "needs_review" if additional else core
+
+
+def score_formal_run(bundle: Path, run_root: Path, acceptance_paths: list[Path],
+                     destination: Path, provider):
+    from app.agent_eval.worker import GuardedProvider
+    from app.services.llm_provider import capture_llm_usage
+    if destination.exists():
+        raise FileExistsError(destination)
+    suite = json.loads((bundle / "suite.json").read_text(encoding="utf-8"))
+    batch = json.loads((run_root / "batch-results.json").read_text(encoding="utf-8"))
+    factual_acceptance, semantic_acceptance = _acceptance_index(acceptance_paths)
+    if len(batch.get("cases", [])) != len(suite["cases"]):
+        raise ValueError("formal run is incomplete")
+    batch_by_id = {item["id"]: item for item in batch["cases"]}
+    semantic_cases = [entry for entry in suite["cases"] if entry["id"] not in factual_acceptance]
+    if semantic_cases and (semantic_acceptance is None
+            or semantic_acceptance.get("judge_prompt_digest") != digest(JUDGE_SYSTEM)):
+        raise ValueError("semantic judge acceptance is missing or stale")
+    destination.mkdir(parents=True)
+    budget = BudgetSpec(max_agent_runs=1, max_model_calls=len(semantic_cases), max_input_tokens=100000,
+                        max_output_tokens=10000, max_wall_time_seconds=240, max_estimated_cost_usd=None)
+    guarded = GuardedProvider(provider, destination / "judge-calls", perf_counter() + 240, budget)
+    (destination / "judge-calls").mkdir()
+    results = []
+    with capture_llm_usage() as judge_usage:
+        for entry in suite["cases"]:
+            case_id, run = entry["id"], run_root / entry["id"]
+            case, world = load_case(bundle / entry["case"]), load_world(bundle / entry["baseline"])
+            if (digest(case.model_dump(mode="json")) != entry["case_digest"]
+                    or digest(world.model_dump(mode="json")) != entry["baseline_digest"]):
+                raise ValueError("Golden suite binding changed")
+            run_case = load_case(run / "case.json")
+            run_world = load_world(run / ("world.json" if case.mode == "offline" else "baseline.json"))
+            if (run_case.model_dump(mode="json") != case.model_dump(mode="json")
+                    or digest(run_world.model_dump(mode="json")) != entry["baseline_digest"]):
+                raise ValueError("run does not belong to the Active Golden asset")
+            response = AgentChatResponse.model_validate_json((run / "response.json").read_text(encoding="utf-8"))
+            trajectory, process = evaluate_trajectory_terminal(case, response, profile=case.profile), evaluate_process(case, response)
+            supervisor = batch_by_id[case_id]
+            accepted = factual_acceptance.get(case_id)
+            semantic = None
+            if accepted:
+                binding = accepted["entry"]
+                if (binding["case_digest"] != _accepted_candidate_digest(case)
+                        or binding["baseline_digest"] != entry["baseline_digest"]):
+                    raise ValueError("factual acceptance is stale")
+                business = any(item.target == "answer.business_contract" for item in case.assertions)
+                prompt = BUSINESS_SYSTEM if business else SUMMARY_SYSTEM
+                prompt_key = "business" if business else "summary"
+                if accepted["prompts"].get(prompt_key) != digest(prompt):
+                    raise ValueError("run extractor is no longer calibrated")
+                extraction_type = BusinessExtraction if business else Extraction
+                extraction = extraction_type.model_validate_json((run / "extraction.json").read_text(encoding="utf-8"))
+                verifier = verify_business_facts if business else verify_summary_facts
+                facts = verifier(case, world, response, extraction, diagnostic_unreviewed=True)
+                fact_verdict = next((item.verdict for item in facts.findings if item.assertion_id == "facts"), "needs_review")
+                additional = [item.model_dump(mode="json") for item in facts.findings
+                              if item.verdict == "needs_review" and item.assertion_id not in {"$calibration", "facts"}]
+            else:
+                facts, fact_verdict, additional = None, None, []
+                accepted_case = next((item for item in semantic_acceptance["cases"] if item["case_id"] == case_id), None)
+                if (not accepted_case or accepted_case["case_digest"] != _accepted_candidate_digest(case)
+                        or accepted_case["baseline_digest"] != entry["baseline_digest"]
+                        or accepted_case.get("technical_acceptance") is not True):
+                    raise ValueError("semantic case acceptance is stale")
+                rubric = next(item.expected for item in case.assertions if item.evaluator == "safety")
+                judgment = judge_semantics(guarded, case.conversation[-1].content, rubric, response.answer)
+                semantic = judgment.model_dump(mode="json")
+            delegated = {item.id for item in case.assertions if item.evaluator in {"fact", "safety"}}
+            deterministic = [item for item in trajectory.findings if item.assertion_id not in delegated]
+            terminal = next(item.verdict for item in trajectory.findings if item.assertion_id == "$terminal")
+            if supervisor["verdict"] == "unscorable":
+                core, cause = "unscorable", supervisor.get("primary_cause") or "evaluator_failure"
+            elif any(item.verdict == "fail" for item in deterministic) or process.verdict == "fail":
+                core, cause = "fail", "agent_failure"
+            elif accepted and fact_verdict == "fail":
+                core, cause = "fail", "agent_failure"
+            elif not accepted and semantic["verdict"] == "fail":
+                core, cause = "fail", "agent_failure"
+            elif (accepted and fact_verdict != "pass") or (not accepted and semantic["verdict"] != "pass"):
+                core, cause = "needs_review", "evaluator_failure"
+            else:
+                core, cause = "pass", None
+            full_answer = _full_answer_verdict(core, accepted and additional)
+            results.append({"case_id": case_id, "mode": case.mode, "core_contract_verdict": core,
+                            "full_answer_verdict": full_answer, "failure_cause": cause,
+                            "actual_terminal": response.task_status, "terminal_verdict": terminal,
+                            "fact_verdict": fact_verdict, "semantic_judgment": semantic,
+                            "process_verdict": process.verdict, "additional_review_items": additional,
+                            "agent_model_calls": supervisor.get("model_calls"), "agent_tokens": supervisor.get("total_tokens"),
+                            "elapsed_seconds": supervisor.get("elapsed_seconds")})
+    counts = {key: sum(item["core_contract_verdict"] == key for item in results)
+              for key in ("pass", "fail", "needs_review", "unscorable")}
+    factual = [item for item in results if item["fact_verdict"] is not None]
+    semantic = [item for item in results if item["semantic_judgment"] is not None]
+    elapsed = [item["elapsed_seconds"] for item in results]
+    report = {"schema_version": "formal-agent-baseline-v1", "suite_id": suite["suite_id"],
+              "run_root": str(run_root.resolve()), "model": batch["cases"][0].get("model"),
+              "case_count": len(results), "counts": counts,
+              "core_contract_pass_rate": counts["pass"] / len(results),
+              "terminal_accuracy": sum(item["terminal_verdict"] == "pass" for item in results) / len(results),
+              "factual_core_accuracy": sum(item["fact_verdict"] == "pass" for item in factual) / len(factual),
+              "semantic_answer_accuracy": sum(item["semantic_judgment"]["verdict"] == "pass" for item in semantic) / len(semantic),
+              "infrastructure_success_rate": sum(item["core_contract_verdict"] != "unscorable" for item in results) / len(results),
+              "full_answer_review_pending": sum(item["full_answer_verdict"] == "needs_review" for item in results),
+              "agent_model_calls": sum(item.get("model_calls") or 0 for item in batch["cases"]),
+              "agent_tokens": batch["total_tokens"], "judge_model_calls": guarded.calls,
+              "judge_tokens": judge_usage.total_tokens if judge_usage.token_usage_complete else None,
+              "latency_seconds": {"p50": _percentile(elapsed, .5), "p95": _percentile(elapsed, .95)},
+              "cases": results, "release_eligible": False,
+              "notes": ["core pass is scoped to the activated contract",
+                        "full-answer pass is withheld when additional claim inventory remains unreviewed"]}
+    write_json(destination / "report.json", report)
+    lines = ["# 当前Agent正式Golden基线", "", f"核心合同：{counts['pass']}/{len(results)}通过，"
+             f"{counts['fail']}失败，{counts['needs_review']}待复核，{counts['unscorable']}不可评分。", "",
+             "| Case | Mode | Core | Terminal | Facts/Judge | Full answer | Cause |", "| --- | --- | --- | --- | --- | --- | --- |"]
+    for item in results:
+        semantic_verdict = item["semantic_judgment"]["verdict"] if item["semantic_judgment"] else item["fact_verdict"]
+        lines.append(f"| {item['case_id']} | {item['mode']} | {item['core_contract_verdict']} | "
+                     f"{item['terminal_verdict']} | {semantic_verdict} | {item['full_answer_verdict']} | {item['failure_cause'] or '—'} |")
+    (destination / "README.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    return report
