@@ -15,6 +15,7 @@ from app.agent_eval.process_checks import independent_select
 from app.agent_eval.recorder import digest
 from app.agent_eval.core_batch import LocalResearchRegistry
 from app.agent_eval.approval import business_contract
+from app.agent_eval.batch_preflight import preflight_batch
 from app.agent_eval.historical_live import HistoricalLiveRegistry
 from app.agent_eval.frozen_registry import FrozenAgentToolRegistry
 from app.agents.react_runtime.evidence import EvidenceStore
@@ -44,6 +45,27 @@ def test_business_contract_excludes_asset_identity_but_not_reviewed_content(data
     assert business_contract(case) == business_contract(revised)
     revised.conversation[0].content += "改变问题"
     assert business_contract(case) != business_contract(revised)
+
+
+def test_batch_preflight_checks_real_asset_bindings_and_oracle(dataset, tmp_path):
+    _, target, _ = dataset
+    case = load_case(target / "OFF-001" / "case.json")
+    world = load_world(target / "world.json")
+    approval = {"reviewer": "user_in_current_conversation", "origin": "contract_test",
+        "approved_items": ["question_and_business_scope", "expected_business_facts", "scoring_rules"],
+        "cases": [{"case_id": case.case_id, "case_version": case.case_version,
+                   "case_digest": digest(case.model_dump(mode="json")),
+                   "baseline_digest": digest(world.model_dump(mode="json"))}]}
+    from app.agent_eval.core_batch import write_json
+    approval_path = tmp_path / "approval.json"
+    write_json(approval_path, approval)
+    report = preflight_batch(target, [approval_path], tmp_path / "preflight", case_ids=["OFF-001"])
+    assert report["passed"] and report["counts"] == {"count": 1} and report["model_calls"] == 0
+    approval["cases"][0]["case_digest"] = "stale"
+    stale = tmp_path / "stale.json"
+    write_json(stale, approval)
+    blocked = preflight_batch(target, [stale], tmp_path / "blocked", case_ids=["OFF-001"])
+    assert not blocked["passed"] and blocked["counts"] == {"blocked": 1}
 
 
 @pytest.fixture(scope="module")

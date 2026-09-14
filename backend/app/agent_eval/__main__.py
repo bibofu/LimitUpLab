@@ -33,6 +33,11 @@ def main() -> int:
     for name in ("source-bundle", "target-bundle", "approval", "output"):
         carry.add_argument("--" + name, required=True, type=Path)
     carry.add_argument("--case-id", required=True)
+    preflight = commands.add_parser("preflight-batch")
+    preflight.add_argument("--bundle", required=True, type=Path)
+    preflight.add_argument("--approvals", required=True, nargs="+", type=Path)
+    preflight.add_argument("--output-dir", required=True, type=Path)
+    preflight.add_argument("--case-ids", nargs="+")
     record = commands.add_parser("record-local-summary")
     record.add_argument("--database", required=True, type=Path)
     record.add_argument("--anchor", required=True, type=datetime.fromisoformat)
@@ -119,6 +124,9 @@ def main() -> int:
         from app.agent_eval.approval import carry_business_approval
         result = carry_business_approval(args.source_bundle, args.target_bundle, args.approval,
                                          args.case_id, args.output)
+    elif args.command == "preflight-batch":
+        from app.agent_eval.batch_preflight import preflight_batch
+        result = preflight_batch(args.bundle, args.approvals, args.output_dir, case_ids=args.case_ids)
     elif args.command == "promote-highest":
         from app.agent_eval.highest_acceptance import promote_highest
         result = promote_highest(args.review_dir,args.approval,args.acceptance,args.output_dir)

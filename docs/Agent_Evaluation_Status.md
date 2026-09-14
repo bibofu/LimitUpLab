@@ -58,6 +58,12 @@
   报告：`output/validation/20260914T082306Z-6f69034c/summary.json`。这些契约测试不代替真实LLM质量验收。
 - 审批等价迁移、空结果抽取校准与限定晋升完成后，统一后端验收778 passed、3 warnings、
   2 subtests passed；报告：`output/validation/20260914T094445Z-66c6d740/summary.json`。
+- 新增无LLM批量预检`preflight-batch`，同时核对用户审批摘要、Case/World版本、独立Oracle及通用适配器范围。
+  对`local30-v4`结果为：21道selection、4道count、2道highest、2道semantic_terminal通过预检；
+  旧OFF-033因没有获批而单独blocked，符合预期。报告位于`output/agent-eval/preflight/local30-v1/preflight.json`，
+  model_calls=0。该预检只说明可进入后续路线执行/抽取校准，不代表29题技术验收或回答质量已经通过。
+- 批量预检落地后统一后端验收781 passed、3 warnings、2 subtests passed；
+  报告：`output/validation/20260914T095025Z-c8d2662e/summary.json`。
 
 以下为首批建设流水，数量和最新状态以上面为准。
 
