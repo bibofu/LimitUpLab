@@ -16,6 +16,7 @@ from app.agent_eval.recorder import digest
 from app.agent_eval.core_batch import LocalResearchRegistry
 from app.agent_eval.approval import business_contract
 from app.agent_eval.batch_preflight import preflight_batch
+from app.agent_eval.structured_acceptance import count_samples, promote_count_batch
 from app.agent_eval.historical_live import HistoricalLiveRegistry
 from app.agent_eval.frozen_registry import FrozenAgentToolRegistry
 from app.agents.react_runtime.evidence import EvidenceStore
@@ -66,6 +67,43 @@ def test_batch_preflight_checks_real_asset_bindings_and_oracle(dataset, tmp_path
     write_json(stale, approval)
     blocked = preflight_batch(target, [stale], tmp_path / "blocked", case_ids=["OFF-001"])
     assert not blocked["passed"] and blocked["counts"] == {"blocked": 1}
+
+
+def test_count_promotion_revalidates_calibration_and_routes(dataset, tmp_path):
+    from app.agent_eval.event_extractor import BUSINESS_SYSTEM
+    from app.agent_eval.extractor import SYSTEM as SUMMARY_SYSTEM
+    from app.agent_eval.core_batch import write_json
+    _, target, _ = dataset
+    case, world = load_case(target / "OFF-001" / "case.json"), load_world(target / "world.json")
+    approval = {"reviewer": "user_in_current_conversation", "origin": "contract_test",
+        "approved_items": ["question_and_business_scope", "expected_business_facts", "scoring_rules"],
+        "cases": [{"case_id": case.case_id, "case_version": case.case_version,
+                   "case_digest": digest(case.model_dump(mode="json")),
+                   "baseline_digest": digest(world.model_dump(mode="json"))}]}
+    approval_path = tmp_path / "approval-count.json"
+    write_json(approval_path, approval)
+    day, count = case.assertions[0].expected["trade_date"], case.assertions[0].expected["limit_up_count"]
+    calibration = []
+    for name, answer, claims in count_samples(day, count):
+        label = {"claims": sorted(claims), "numeric_slots": len(claims), "numeric_claims": len(claims)}
+        calibration.append({"sample": name, "answer": answer, "label": label, "actual": label, "passed": True})
+    accepted = {"schema_version": "structured-count-acceptance-v1", "suite_id": "local30", "suite_version": 3,
+        "technical_acceptance": True,
+        "extractor_prompt_digests": {"summary": digest(SUMMARY_SYSTEM), "business": digest(BUSINESS_SYSTEM)},
+        "calibration": {f"summary:{day}:{count}": calibration},
+        "cases": [{"case_id": case.case_id, "technical_acceptance": True,
+                   "case_digest": digest(case.model_dump(mode="json")),
+                   "baseline_digest": digest(world.model_dump(mode="json")),
+                   "approval_digest": digest(approval), "calibration_key": f"summary:{day}:{count}",
+                   "routes": [{"tool": "market_summary", "arguments": {"include_limit_down": False}, "passed": True}]}]}
+    acceptance_path = tmp_path / "count-acceptance.json"
+    write_json(acceptance_path, accepted)
+    manifest = promote_count_batch(target, [approval_path], acceptance_path, tmp_path / "active-count")
+    assert manifest["status"] == "active" and manifest["cases"][0]["case_id"] == "OFF-001"
+    accepted["cases"][0]["routes"] = []
+    write_json(tmp_path / "tampered.json", accepted)
+    with pytest.raises(ValueError, match="route acceptance"):
+        promote_count_batch(target, [approval_path], tmp_path / "tampered.json", tmp_path / "rejected-count")
 
 
 @pytest.fixture(scope="module")

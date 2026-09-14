@@ -38,6 +38,19 @@ def main() -> int:
     preflight.add_argument("--approvals", required=True, nargs="+", type=Path)
     preflight.add_argument("--output-dir", required=True, type=Path)
     preflight.add_argument("--case-ids", nargs="+")
+    count_accept = commands.add_parser("accept-count-batch")
+    count_accept.add_argument("--bundle", required=True, type=Path)
+    count_accept.add_argument("--approvals", required=True, nargs="+", type=Path)
+    count_accept.add_argument("--preflight", required=True, type=Path)
+    count_accept.add_argument("--database", required=True, type=Path)
+    count_accept.add_argument("--output-dir", required=True, type=Path)
+    count_accept.add_argument("--case-ids", required=True, nargs="+")
+    count_accept.add_argument("--allow-llm", required=True, action="store_true")
+    count_promote = commands.add_parser("promote-count-batch")
+    count_promote.add_argument("--bundle", required=True, type=Path)
+    count_promote.add_argument("--approvals", required=True, nargs="+", type=Path)
+    count_promote.add_argument("--acceptance", required=True, type=Path)
+    count_promote.add_argument("--output-dir", required=True, type=Path)
     record = commands.add_parser("record-local-summary")
     record.add_argument("--database", required=True, type=Path)
     record.add_argument("--anchor", required=True, type=datetime.fromisoformat)
@@ -127,6 +140,16 @@ def main() -> int:
     elif args.command == "preflight-batch":
         from app.agent_eval.batch_preflight import preflight_batch
         result = preflight_batch(args.bundle, args.approvals, args.output_dir, case_ids=args.case_ids)
+    elif args.command == "accept-count-batch":
+        from app.agent_eval.structured_acceptance import accept_count_batch
+        from app.config import configure_runtime_environment
+        from app.services.llm_provider import get_llm_provider
+        configure_runtime_environment()
+        result = accept_count_batch(args.bundle, args.approvals, args.preflight, args.output_dir,
+                                    get_llm_provider(), args.database, args.case_ids)
+    elif args.command == "promote-count-batch":
+        from app.agent_eval.structured_acceptance import promote_count_batch
+        result = promote_count_batch(args.bundle, args.approvals, args.acceptance, args.output_dir)
     elif args.command == "promote-highest":
         from app.agent_eval.highest_acceptance import promote_highest
         result = promote_highest(args.review_dir,args.approval,args.acceptance,args.output_dir)

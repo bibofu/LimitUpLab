@@ -64,6 +64,15 @@
   model_calls=0。该预检只说明可进入后续路线执行/抽取校准，不代表29题技术验收或回答质量已经通过。
 - 批量预检落地后统一后端验收781 passed、3 warnings、2 subtests passed；
   报告：`output/validation/20260914T095025Z-c8d2662e/summary.json`。
+- 结构化批量验收先打通4道count：OFF-001、OFF-031、OFF-032、LH-031。Offline使用冻结录制路线，
+  Historical Live通过真实本地生产工具并先校验基线漂移；两组唯一抽取合同各含plain、空格/单位、约数、
+  错误数量、错误日期和多声明6种样例，共12次DeepSeek调用、14,018 Token，全部通过。
+  晋升器会重新校验审批、Case/World、提示摘要、校准标签与路线，篡改任一项即拒绝。
+  4题现位于`output/agent-eval/golden/local30-count-v1`，Active范围仅为数据日期与收盘涨停家数；
+  answer_quality_approved及release_eligible仍为false。当前限定核心合同Active Golden共7道，
+  其余23道已审批题待技术验收，其中21道selection、2道semantic_terminal。
+- count批量验收落地后统一后端验收783 passed、3 warnings、2 subtests passed；
+  报告：`output/validation/20260914T095815Z-12ee61d0/summary.json`。
 
 以下为首批建设流水，数量和最新状态以上面为准。
 
