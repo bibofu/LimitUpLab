@@ -73,22 +73,32 @@ class GuardedProvider(LLMProvider):
             raise
 
 
-def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240):
+def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240, live_database=None):
     started = perf_counter()
     cases, worlds = load_suite([case_path], [world_path])
     case, world = cases[0], worlds[0]
-    if case.mode != "offline" or len(case.conversation) != 1:
+    expected_mode = "live_historical" if live_database else "offline"
+    if case.mode != expected_mode or len(case.conversation) != 1:
         raise ValueError("this worker supports a single-turn offline case only")
     if case.status not in {"candidate", "active"}:
         raise ValueError("case status is not runnable")
     require_react_provider(provider)
-    registry = FrozenAgentToolRegistry(world)
+    if live_database:
+        from app.agent_eval.historical_live import HistoricalLiveRegistry
+        registry = HistoricalLiveRegistry(live_database, world)
+        save(directory, "live-baseline-check.json", {"passed":True,
+            "checked_recordings":registry.baseline_checks,"baseline_digest":world_digest(world),
+            "tool_execution":"production methods over readonly database snapshot",
+            "scope":"market_summary and limit_up_events only, not full-profile coverage"})
+    else:
+        registry = FrozenAgentToolRegistry(world)
     budget = BudgetSpec(max_agent_runs=1, max_model_calls=16, max_input_tokens=2000000,
                         max_output_tokens=100000, max_estimated_cost_usd=None,
                         max_wall_time_seconds=wall_seconds)
     request = AgentChatRequest(session_id=str(uuid4()), message_id=str(uuid4()),
                                message=case.conversation[0].content)
-    event_case = any(a.target == "answer.ordered_events" for a in case.assertions if a.evaluator == "fact")
+    event_case = any(a.target in {"answer.ordered_events", "answer.business_contract"}
+                     for a in case.assertions if a.evaluator == "fact")
     extractor = extract_event_answer if event_case else extract_answer
     verifier = verify_event_facts if event_case else verify_summary_facts
     extractor_system = EVENT_EXTRACTOR_SYSTEM if event_case else EXTRACTOR_SYSTEM
@@ -97,11 +107,11 @@ def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240
         evaluator_version="single-case-diagnostic-v1", model=getattr(provider, "model", "test-provider"),
         prompt_digest=digest({"agent": runtime.SYSTEM, "extractor": extractor_system}),
         cases=[AssetRef(id=case.case_id, version=case.case_version)],
-        world_digests={world.world_id: world_digest(world)}, budget=budget, worker_count=1)
+        world_digests={} if live_database else {world.world_id: world_digest(world)}, budget=budget, worker_count=1)
     save(directory, "manifest.json", manifest.model_dump(mode="json"))
     save(directory, "request.json", request.model_dump(mode="json"))
     save(directory, "case.json", case.model_dump(mode="json"))
-    save(directory, "world.json", world.model_dump(mode="json"))
+    save(directory, "baseline.json" if live_database else "world.json", world.model_dump(mode="json"))
     source_root = Path(__file__).resolve().parents[1]
     sources = {str(path.relative_to(source_root)): path.read_text(encoding="utf-8")
                for folder in [source_root / "agent_eval", source_root / "agents/react_runtime"]
@@ -175,22 +185,30 @@ def main():
         parser.add_argument("--" + name, required=True, type=Path)
     parser.add_argument("--wall-seconds", type=int, default=240)
     parser.add_argument("--allow-llm", action="store_true", required=True)
+    parser.add_argument("--live-database", type=Path)
     args = parser.parse_args()
     if not 1 <= args.wall_seconds <= 900:
         parser.error("wall-seconds must be between 1 and 900")
     try:
         configure_runtime_environment()
         # The child never initializes application repositories or the HTTP lease/journal path.
+        original_connect = sqlite3.connect
+        allowed_uri = args.live_database.resolve().as_uri() + "?mode=ro" if args.live_database else None
         def forbid_database(*a, **k):
+            if allowed_uri and a and a[0] == allowed_uri and k.get("uri") is True:
+                return original_connect(*a, **k)
             raise RuntimeError("database access is forbidden in offline evaluation worker")
         sqlite3.connect = forbid_database
         from app.agents.react_runtime.lifecycle import CURRENT_CONTROL
         CURRENT_CONTROL.set(None)
-        summary = execute_case(args.case, args.world, args.output_dir, get_llm_provider(), wall_seconds=args.wall_seconds)
+        summary = execute_case(args.case, args.world, args.output_dir, get_llm_provider(),
+                               wall_seconds=args.wall_seconds, live_database=args.live_database)
         print(json.dumps(summary, ensure_ascii=False), flush=True)
         return {"pass": 0, "fail": 1, "needs_review": 2, "unscorable": 3}[summary["verdict"]]
     except Exception as error:
         cause = "provider_failure" if type(error).__name__ == "NativeFunctionCallingUnavailable" else "evaluator_failure"
+        if type(error).__name__ == "HistoricalDataDrift":
+            cause = "data_failure"
         save(args.output_dir, "worker-error.json", {"error_type": type(error).__name__, "verdict": "unscorable", "primary_cause": cause})
         print(json.dumps({"verdict": "unscorable", "error_type": type(error).__name__}), flush=True)
         return 3

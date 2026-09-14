@@ -7,7 +7,8 @@ import subprocess
 import sys
 
 
-def run_offline(case: Path, world: Path, output_dir: Path, *, wall_seconds: int = 240) -> dict:
+def run_offline(case: Path, world: Path, output_dir: Path, *, wall_seconds: int = 240,
+                live_database: Path | None = None) -> dict:
     if not 1 <= wall_seconds <= 900:
         raise ValueError("wall_seconds must be between 1 and 900")
     case, world, output_dir = case.resolve(), world.resolve(), output_dir.resolve()
@@ -16,6 +17,8 @@ def run_offline(case: Path, world: Path, output_dir: Path, *, wall_seconds: int 
     output_dir.mkdir(parents=True, exist_ok=False)
     command = [sys.executable, "-m", "app.agent_eval.worker", "--case", str(case), "--world", str(world),
                "--output-dir", str(output_dir), "--wall-seconds", str(wall_seconds), "--allow-llm"]
+    if live_database:
+        command.extend(["--live-database", str(live_database.resolve())])
     flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     with (output_dir / "worker.log").open("x", encoding="utf-8") as log:
         process = subprocess.Popen(command, cwd=Path(__file__).resolve().parents[2],

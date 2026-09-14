@@ -196,3 +196,54 @@ World及本轮可见证据一致，trajectory检查通过。不是把之前的�
 `process-review-v1.json`。两题的先观察后依赖、独立select重算、目标集合可见性均通过；
 各4次调用尝试（含finish）、1次read、1次compute、0重复签名。此次没有新增模型调用，
 没有增加题目数量，也没有验证复杂异常恢复、多轮、权限与生命周期等尚未覆盖能力。
+
+## 第三批：5道Offline与首道Historical Live
+
+2026-09-14完成本地数据核验、29个实际工具参数组合的录制/回放、5道Offline材料化及
+首道Historical Live。当前累计8道Offline候选、1道受限Historical Live候选、0正式晋升。
+本批每题都有独立进程/新session的真实DeepSeek运行记录。
+
+| 题号 | 本批问题/事实边界 | 调用/Token | 实跑结论 |
+| --- | --- | --- | --- |
+| OFF-010 | 9月8日并列最高：3只4板 | 5 / 25759 | complete；needs_review |
+| OFF-028 | 9月8日科创板盘中开板：4只，其中1只回封 | 5 / 26677 | complete；needs_review，首次抽取异常 |
+| OFF-031 | 9月10日涨停35家，不用9月11日40家替代 | 6 / 34921 | complete；fixture_failure，不评分 |
+| OFF-032 | 9月13日周末锚点，最新本地日9月11日40家 | 5 / 23989 | complete；needs_review |
+| OFF-033 | 指定主题有效无匹配 | 9 / 94194 | complete；fixture_failure，不评分 |
+| LH-004 | 实际查询9月11日最高连板成员及高度 | 5 / 11282 | complete；基线检查通过，needs_review |
+
+OFF-010/028原蓝图日期9月11日没有所需并列/科创板开板样本，经用户明确批准绑定到
+9月8日。题目原蓝图保留、材料化日期调整写入review，不伪造9月11日样本。OFF-033
+为“有没有”的是非问句，候选暂允许complete/empty两种终态，最终语义口径仍需审核。
+
+材料化命令（backend目录）：
+
+```powershell
+.venv/Scripts/python.exe -m app.agent_eval prepare-core-batch --database data/limituplab.sqlite --book evals/blueprints/core40_live48.json --output-dir ../output/agent-eval/candidates/core-batch3
+```
+
+Offline用已有run-offline；Live使用：
+
+```powershell
+.venv/Scripts/python.exe -m app.agent_eval run-live-historical --case ../output/agent-eval/candidates/core-batch3/LH-004/case.json --baseline ../output/agent-eval/candidates/core-batch3/LH-004/baseline.json --database data/limituplab.sqlite --output-dir ../output/agent-eval/runs/core-batch3-LH-004-001 --allow-llm
+```
+
+路径已存在须换新路径。Live的Case不引用World；baseline.json沿用World结构作为预先
+版本化的历史对照数据，而不是运行时工具返回映射。Worker只允许对指定SQLite URI以
+mode=ro读数据，关闭连接后在隔离进程内执行真实工具方法，无execute_frozen_calls。
+基线预检会重新执行29个录制参数并比较完整payload/state；漂移归data_failure且不调用
+模型。该模式是本地历史数据快照上的真实工具测试，不是外部数据源Canary，也不证明
+生产HTTP租约、完整Profile或当前实时数据源可用。
+
+本批已知缺口必须保留：
+
+- OFF-031尝试market_event_pool历史计数；OFF-033尝试limit=50及market_event_pool，
+  均尚未录制。虽然随后用已有路线回答了问题，整体运行已被Fixture污染，不计质量分。
+- 首次运行通用业务题使用了旧summary数值抽取/校验路线，不适用于历史计数、并列高度、
+  无序成员与有效空结果。因此OFF-031/033原facts中的fail不能作为Agent事实错误；
+  OFF-028保留抽取错误。运行后已修正分派：这些business_contract使用行号式抽取并
+  对未实现的业务断言明确needs_review，不拿最新summary真值校验历史事件。原报告不覆盖，
+  后续新增运行或重新判定必须另存版本和来源摘要。
+- OFF-032主日期/数量可检查，但主动补充的“炸板/未回封39家”等口径尚需独立审核。
+- 本批事实标准已来源化，但除周末summary适配外，新增业务事实断言还没有完整自动判定；
+  不能把“可运行候选”说成已完成校准的Golden。下一步应补这几类断言和已知合法路线。

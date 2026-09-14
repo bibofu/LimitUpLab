@@ -79,6 +79,28 @@ def test_extractor_rejects_fabricated_quotes():
         extract_answer(Model(), ANSWER)
 
 
+def test_business_contract_does_not_misuse_latest_summary_truth(artifact, tmp_path):
+    from app.agent_eval.loader import load_case
+    assets, output = tmp_path / "assets", tmp_path / "run"
+    save_summary_candidate(artifact, assets)
+    case = load_case(assets / "case.json")
+    case.assertions[-1].target = "answer.business_contract"
+    case.assertions[-1].expected = {"trade_date":"2026-09-10","limit_up_count":35}
+    (assets / "case.json").write_text(case.model_dump_json(), encoding="utf-8")
+    class Provider(ScriptedProvider):
+        def generate_messages(self, messages, tools, **kwargs):
+            if tools[0]["function"]["name"] == "submit_event_list":
+                return AIMessage(content="", tool_calls=[{"id":"extract","name":"submit_event_list",
+                    "args":{"trade_date":"2026-09-10","members":[],
+                            "additional_claim_line_ids":[0],"ambiguous":False}}])
+            return super().generate_messages(messages, tools, **kwargs)
+    output.mkdir()
+    result = execute_case(assets / "case.json", assets / "world.json", output, Provider())
+    assert result["fact_diagnostic"] == "needs_review"
+    facts = json.loads((output / "facts.json").read_text(encoding="utf-8"))
+    assert not any(f["verdict"] == "fail" for f in facts["findings"])
+
+
 def test_call_budget_is_enforced_before_provider_call(tmp_path):
     budget = BudgetSpec(max_agent_runs=1, max_model_calls=1, max_input_tokens=100,
                         max_output_tokens=100, max_estimated_cost_usd=None, max_wall_time_seconds=10)
