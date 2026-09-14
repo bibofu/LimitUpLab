@@ -19,7 +19,12 @@
   `output/agent-eval/golden-review/OFF-010-v1/REVIEW.md`、`LH-004-v1/REVIEW.md`。
   新Business Fact Verifier支持最高高度/无序完整集合、历史计数、盘中开板成员和有效空值；
   两题已有回答经新抽取后核心业务断言通过，额外声明/人工校准仍待复核。
-  review.json绑定题目、baseline、回答摘要，审核人为空、approved=false，尚未晋升active。
+  原始review.json保持生成时状态，绑定题目、baseline、回答摘要，尚未晋升active。
+- 2026-09-14用户已明确确认OFF-010、LH-004的口径、标准事实（均已核实）和判分规则。
+  每份审核包新增不可覆盖原始材料的 `user-review-20260914.json`，绑定实际case/baseline摘要，
+  状态为business_contract_confirmed。该确认不扩展为原回答额外声明、抽取清单、校准或发布批准。
+  剩余技术事项由实现侧推进：可接受调用路线验证、抽取校准和最终晋升条件检查；
+  不再重复要求用户确认已批准的业务事实。
 - 三题都已有真实LLM运行。两道名单题先暴露参数录制缺口，再在Case/World v2下
   成功查询、读取证据、计算并完整交付；名单检查通过，额外声明与抽取校准仍待复核。
 - 新增过程诊断：读取/计算必须依赖先前Observation；独立重算无过滤的amount排序
