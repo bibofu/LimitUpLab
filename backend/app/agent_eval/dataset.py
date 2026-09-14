@@ -25,6 +25,8 @@ def load_recipe(path):
             raise ValueError("only offline and historical live are supported")
         if item["kind"] == "selection":
             select_rows([], item["selection"])
+        if "expected_empty" in item and (type(item["expected_empty"]) is not bool or item["kind"] != "selection"):
+            raise ValueError("expected_empty is a boolean selection prerequisite")
         if item["kind"] not in {"clarify", "refuse"} and item["day"] not in book["dates"]:
             raise ValueError("case day outside recorded sessions")
     return book
@@ -91,7 +93,11 @@ def expected_for(item, rows):
         expected["max_board_height"] = height
     else:
         selected = select_rows(day_rows, item["selection"])
-        if not selected or ("take" in item["selection"] and len(selected) != item["selection"]["take"]):
+        if item.get("expected_empty"):
+            if selected:
+                raise ValueError("expected empty prerequisite no longer holds")
+            expected["matched_count"] = 0
+        elif not selected or ("take" in item["selection"] and len(selected) != item["selection"]["take"]):
             raise ValueError("selection lacks required nonempty/top-N sample: " + item["id"])
         expected.update(row_selection=item["selection"], ordered="order_by" in item["selection"])
     expected["members"] = [{"symbol": r["symbol"], "name": r["name"]} for r in selected]
@@ -183,7 +189,9 @@ def build_dataset(recipe: Path, database: Path, destination: Path):
     weekend.anchor_datetime = datetime.fromisoformat("2026-09-13T18:00:00+08:00")
     FrozenAgentToolRegistry(weekend)
     write_json(destination / "world-weekend.json", weekend.model_dump(mode="json"))
-    entries, review = [], ["# Local30 批量审核", "", "20 Offline + 10 Historical Live。以下是待审核题目，不是已批准的 30 道 Active Golden。",
+    offline_count = sum(c["id"].startswith("OFF-") for c in book["cases"])
+    live_count = len(book["cases"]) - offline_count
+    entries, review = [], ["# " + book["suite_id"] + " 批量审核", "", f"{offline_count} Offline + {live_count} Historical Live。以下是待审核题目，不是已批准的 Active Golden。",
         "", "标准事实已由只读原始行独立计算，并与真实工具完整分区交叉核对；这不代替人工业务审核。",
         "", "逐题审核问题口径、标准事实、终态及判分规则。名单不要求固定调用顺序；允许完整取数后过滤。",
         "金额排序题检验顺序，其余名单检验完整集合、代码名称和日期。额外事实、澄清/拒答语义仍需审核。", ""]
@@ -201,7 +209,7 @@ def build_dataset(recipe: Path, database: Path, destination: Path):
                 "target": "answer" if kind == "summary" else "answer.business_contract", "expected": expected[key], "requirement_id": "delivery"})
         if kind == "summary":
             assertions.append({"id": "local-only", "evaluator": "trajectory", "kind": "argument_equals", "target": "market_summary.include_limit_down", "expected": False, "requirement_id": "delivery"})
-        terminal = [kind] if kind in {"clarify", "refuse"} else ["complete", "empty"] if kind == "empty" else ["complete"]
+        terminal = [kind] if kind in {"clarify", "refuse"} else ["complete", "empty"] if kind == "empty" or item.get("expected_empty") else ["complete"]
         case = CaseSpec.model_validate({"case_id": key, "case_version": book["case_version"], "profile": registry.profile,
             "mode": "live_historical" if is_live else "offline", "severity": "P1", "status": "candidate",
             "capabilities": item["capabilities"], "world": None if is_live else {"id": selected_world.world_id, "version": selected_world.world_version},

@@ -18,24 +18,35 @@
 - 最终选用的30份运行没有fixture_failure等不可评分项；首次6题的录制缺口仍在原报告中，未覆写。
   名称“远 望 谷”与“远望谷”在代码相同前提下允许空白差异；不采用正则覆盖或模糊股票匹配。
   计数支持market_event_pool元数据；计算后名单仅在独立select复算和先前证据依赖成立后作为可见支持。
-- 本批已有29题通过用户业务审核：19道Offline、10道Historical Live。
+- 本批已有30题通过用户业务审核：20道Offline、10道Historical Live（含单独批准的OFF-033替代题）。
   第一批OFF-001、010、027、028、031、032；第二批OFF-038、035、036及OFF-041至050；
   第三批LH-001、002、003、004及LH-031至036。用户逐题认可口径、标准事实与判分规则，
   绑定当前suite v3 / case v5及各自Case/World摘要；独立记录为数据包内的
   `user-review-20260914-batch01.json`、`user-review-20260914-batch02.json`、
   `user-review-20260914-batch03.json`。第三批未扩展批准OFF-033或任何替代题。
-- OFF-033的业务口径被用户明确否决，原话为“这个问题问的就莫名其妙”。当前人工虚构主题的
-  空结果问题不得晋升或计入业务已认可的Golden容量；需重新设计自然的空结果问题，核验后重新审核。
-  未批准替代题，未覆盖原始Case/World/运行结果。该题历史诊断pass不代表业务审核通过。
-- 当前审核进度：29题已确认、1题否决待重新设计；现有题目没有尚未给出业务意见的条目。
+- 旧OFF-033 v5人工虚构主题题被否决，历史诊断pass不代表业务审核通过，原始资产与驳回记录保留。
+  替代题为“2026-09-11科创板有哪些收盘涨停股票？请列出代码和名称，并注明数据日期。”
+  原始行与真实工具均确认正常空结果；用户已明确认可替代题、标准事实和规则。
+  配方：`backend/evals/suites/off033-replacement.json`；资产：`output/agent-eval/datasets/off033-replacement-v1`，
+  case v6、51条录制，独立审批`user-review-20260914.json`绑定实际Case/World摘要，未继承旧题审批。
+  空名单必须有当前可见、日期/市场/收盘口径一致的正常空结果支持，不能因成员集合为空而自动接地通过。
+  复杂空结果路线尚无适配器时保持needs_review，不默认通过。
+- 替代题两次独立真实运行保存在`output/agent-eval/runs/off033-replacement-001`及`-002`。
+  首次出现两次NativeFunctionCallingError，终态partial，归因provider_failure；第二次终态empty、
+  核心事实及过程诊断pass，但尝试额外的全市场amount降序查询时缺录制，归因fixture_failure。
+  两次均unscorable，合计15次模型调用、143,685 Token；保留失败，不挑选局部pass冒充整体通过。
+  待补录路线为limit_up_events(trade_date=2026-09-11, closed_only=true, sort_by=amount, sort_order=desc, limit=100)。
+- 当前审核进度：30题已确认，业务审核无待办；旧题的否决不撤销，替代题独立计入。
   原suite.json保留生成时快照，以后续独立审核记录及本节为准。批准题仍需技术/抽取校准验收，
   不自动晋升Active；OFF-035/036既有终态失败不因题目获认可而转为通过。
-- 不是30道已激活Golden，也不是28/30完整质量通过；当前认可的Offline题为19道，需补回1道。
+- 不是30道已激活Golden，也不是28/30完整质量通过；当前认可的Offline题已补齐20道。
   自动抽取、额外声明、语义遵循及校准仍有needs_review。旧OFF-010/LH-004 v1 Active及审批保持不变。
 - 集中审核问题、事实和规则：`output/agent-eval/datasets/local30-v4/REVIEW.md`。
-  后续需完成业务确认和相应技术/抽取校准验收，再晋升；不得复制旧审批给修改后的题目。
-- 本轮定向测试42项通过；最终统一后端验收763 passed、3 warnings、2 subtests passed。
+  替代题见其独立包中的REVIEW.md。后续需补齐录制路线、技术/抽取校准验收再晋升；不得复制旧审批给修改后的题目。
+- 上轮定向测试42项通过；统一后端验收763 passed、3 warnings、2 subtests passed。
   验收报告：`output/validation/20260914T075129Z-f7e95643/summary.json`。
+- 替代题及空结果接地改动完成后，统一后端验收775 passed、3 warnings、2 subtests passed。
+  报告：`output/validation/20260914T082306Z-6f69034c/summary.json`。这些契约测试不代替真实LLM质量验收。
 
 以下为首批建设流水，数量和最新状态以上面为准。
 

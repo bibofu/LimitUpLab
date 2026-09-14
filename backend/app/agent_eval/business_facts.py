@@ -20,7 +20,7 @@ class BusinessExtraction(ListExtraction):
 
 
 class BusinessReport(Contract):
-    verifier_version: Literal["business-facts-v2"] = "business-facts-v2"
+    verifier_version: Literal["business-facts-v3"] = "business-facts-v3"
     scope: Literal["required_business_facts"] = "required_business_facts"
     case: AssetRef
     verdict: Literal["pass", "fail", "needs_review"]
@@ -51,7 +51,8 @@ def _truth(expected, world, source):
     day = expected["trade_date"]
     if "row_selection" in expected:
         from app.agent_eval.selection import complete_day, select_rows
-        return {}, select_rows(complete_day(world, day), expected["row_selection"])
+        selected = select_rows(complete_day(world, day), expected["row_selection"])
+        return ({"matched_count": len(selected)} if "matched_count" in expected else {}), selected
     if "selection" in expected:
         rows=[r for (d,_),r in source.items() if d==day and r["closed_limit"]]
         complete=[r.observation.payload for r in world.recordings if r.tool=="limit_up_events"
@@ -102,6 +103,26 @@ def _truth(expected, world, source):
             raise ValueError("no complete intraday-break baseline")
         return {}, pools[0]["events"]
     raise ValueError("unsupported business assertion")
+
+
+def empty_selection_supported(expected, record, view):
+    """Empty membership is not evidence: require the exact visible market/status scope."""
+    selection = expected["row_selection"]
+    if set(selection) != {"closed_limit", "market"} or selection["closed_limit"] is not True:
+        return False  # More complex empty routes require a separately verified adapter.
+    payload, args, metadata = record["payload"], record["arguments"], view["metadata"]
+    if record["result_state"] != "empty" or payload.get("source_errors") or view.get("source_truncated"):
+        return False
+    if any(args.get(k) for k in ("query", "board_height", "min_board_height", "highest_only", "group_by", "broken_only")):
+        return False
+    if args.get("recent_trade_days", 1) != 1:
+        return False
+    correct_type = (record["tool"] == "limit_up_events" and metadata.get("event_status") == "closed") or (
+        record["tool"] == "market_event_pool" and metadata.get("event_type") == "limit_up")
+    return (correct_type and metadata.get("market") == selection["market"]
+        and metadata.get("trade_date") == expected["trade_date"]
+        and metadata.get("matched_count") == 0 and metadata.get("returned_count") == 0
+        and not payload.get("events") and not payload.get("items") and not view["rows"])
 
 
 def verify_business_facts(case, world, response, extraction, *, diagnostic_unreviewed=False):
@@ -198,13 +219,15 @@ def verify_business_facts(case, world, response, extraction, *, diagnostic_unrev
                 if expected.get("ordered"):
                     correct = correct and actual == [identity(m["symbol"], m["name"]) for m in members]
             grounded = all((expected["trade_date"],r["symbol"]) in visible for r in members)
+            if "row_selection" in expected and not members:
+                grounded = any(empty_selection_supported(expected, r, v) for r, v in usable)
             if "limit_up_count" in scalars:
                 grounded = any(v["metadata"].get("trade_date")==expected["trade_date"]
                     and (v["metadata"].get("event_status")=="closed" or
                          (r["tool"] == "market_event_pool" and v["metadata"].get("event_type") == "limit_up"))
                     and not any(r["arguments"].get(k) for k in ("query", "market", "board_height", "min_board_height", "highest_only"))
                     and v["metadata"].get("matched_count")==scalars["limit_up_count"] for r,v in usable)
-            if "matched_count" in scalars:
+            if "matched_count" in scalars and "row_selection" not in expected:
                 grounded = any(r["result_state"]=="empty" and r["arguments"].get("query")=="评测不存在主题"
                     and v["metadata"].get("trade_date")==expected["trade_date"] for r,v in usable)
             verdict = "fail" if not correct else "pass" if grounded else "needs_review"

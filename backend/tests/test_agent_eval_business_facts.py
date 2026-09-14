@@ -12,6 +12,27 @@ from test_agent_eval_core_batch import batch
 from test_agent_eval_checks import invoke
 
 
+@pytest.mark.parametrize("damage", [None, "wrong_day", "wrong_market", "query", "error", "source_error", "rows", "truncated", "wrong_type", "nonzero"])
+def test_empty_selection_requires_exact_usable_observation(damage):
+    from app.agent_eval.business_facts import empty_selection_supported
+    expected = {"trade_date": "2026-09-11", "row_selection": {"closed_limit": True, "market": "star_market"}}
+    record = {"tool": "limit_up_events", "result_state": "empty", "arguments": {}, "payload": {"events": []}}
+    view = {"metadata": {"trade_date": "2026-09-11", "market": "star_market", "event_status": "closed", "matched_count": 0, "returned_count": 0}, "rows": []}
+    if damage == "wrong_day": view["metadata"]["trade_date"] = "2026-09-10"
+    if damage == "wrong_market": view["metadata"]["market"] = "main_board"
+    if damage == "query": record["arguments"]["query"] = "other"
+    if damage == "error": record["result_state"] = "error"
+    if damage == "source_error": record["payload"]["source_errors"] = ["unavailable"]
+    if damage == "rows": view["rows"] = [{"symbol": "688001"}]
+    if damage == "truncated": view["source_truncated"] = True
+    if damage == "wrong_type": view["metadata"]["event_status"] = "failed"
+    if damage == "nonzero": view["metadata"]["matched_count"] = 1
+    assert empty_selection_supported(expected, record, view) is (damage is None)
+    record["tool"] = "market_event_pool"
+    view["metadata"]["event_type"] = "broken_board" if damage == "wrong_type" else "limit_up"
+    assert empty_selection_supported(expected, record, view) is (damage is None)
+
+
 @pytest.fixture
 def specimen(batch, monkeypatch):
     _, folder, _ = batch
@@ -63,6 +84,16 @@ def test_latest_count_cannot_replace_historical_count(specimen):
     values=specimen("OFF-031")
     values[-1].limit_up_count=3
     assert verify_business_facts(*values).verdict == "fail"
+
+
+def test_empty_members_do_not_vacuously_prove_market_scope(specimen, monkeypatch):
+    values = specimen("OFF-033")
+    values[0].assertions[0].expected["row_selection"] = {"closed_limit": True, "market": "star_market"}
+    # Isolate evidence grounding: the old query's empty observation cannot prove STAR emptiness.
+    monkeypatch.setattr("app.agent_eval.business_facts._truth", lambda *args: ({"matched_count": 0}, []))
+    report = verify_business_facts(*values)
+    assert report.verdict == "needs_review"
+    assert any(f.detail == "current evidence support not established" for f in report.findings)
 
 
 @pytest.mark.parametrize("damage",["world","hash","unreviewed","ambiguous","additional"])

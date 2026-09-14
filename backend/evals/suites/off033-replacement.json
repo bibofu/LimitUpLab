@@ -1,0 +1,16 @@
+{
+  "suite_id": "local30-off033-replacement", "version": 1, "case_version": 6,
+  "scope": "Replacement proposal only; does not inherit approval of any existing case",
+  "dates": ["2026-09-11"],
+  "anchor_datetime": "2026-09-11T18:00:00+08:00",
+  "additional_routes": [
+    {"tool":"market_event_pool","arguments":{"event_type":"limit_up","trade_date":"2026-09-11","market":"star_market","result_mode":"list","limit":30}},
+    {"tool":"market_event_pool","arguments":{"event_type":"limit_up","trade_date":"2026-09-11","market":"star_market","result_mode":"list","limit":100}}
+  ],
+  "cases": [
+    {"id":"OFF-033","kind":"selection","day":"2026-09-11",
+     "selection":{"closed_limit":true,"market":"star_market"},"expected_empty":true,
+     "question":"2026-09-11科创板有哪些收盘涨停股票？请列出代码和名称，并注明数据日期。",
+     "capabilities":["genuine_empty","market_filter","no_date_substitution"]}
+  ]
+}

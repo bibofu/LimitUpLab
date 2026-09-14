@@ -25,6 +25,15 @@ from app.services.sample_data import SAMPLE_EVENTS
 RECIPE = Path(__file__).resolve().parents[1] / "evals/suites/local30.json"
 
 
+def test_replacement_empty_prerequisite_is_independent_of_recording():
+    item = load_recipe(RECIPE.with_name("off033-replacement.json"))["cases"][0]
+    expected = expected_for(item, [])
+    assert expected["matched_count"] == 0 and expected["members"] == []
+    row = {"trade_date": "2026-09-11", "symbol": "688001", "name": "合成", "closed_limit": True}
+    with pytest.raises(ValueError, match="empty prerequisite"):
+        expected_for(item, [row])
+
+
 @pytest.fixture(scope="module")
 def dataset(tmp_path_factory):
     folder = tmp_path_factory.mktemp("local30")
