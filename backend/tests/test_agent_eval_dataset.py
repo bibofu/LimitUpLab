@@ -16,7 +16,8 @@ from app.agent_eval.recorder import digest
 from app.agent_eval.core_batch import LocalResearchRegistry
 from app.agent_eval.approval import business_contract
 from app.agent_eval.batch_preflight import preflight_batch
-from app.agent_eval.structured_acceptance import count_samples, promote_count_batch
+from app.agent_eval.structured_acceptance import (_canonical_members, _selection_args, count_samples,
+    promote_count_batch, promote_selection_batch, selection_samples)
 from app.agent_eval.historical_live import HistoricalLiveRegistry
 from app.agent_eval.frozen_registry import FrozenAgentToolRegistry
 from app.agents.react_runtime.evidence import EvidenceStore
@@ -104,6 +105,46 @@ def test_count_promotion_revalidates_calibration_and_routes(dataset, tmp_path):
     write_json(tmp_path / "tampered.json", accepted)
     with pytest.raises(ValueError, match="route acceptance"):
         promote_count_batch(target, [approval_path], tmp_path / "tampered.json", tmp_path / "rejected-count")
+
+
+def test_selection_promotion_revalidates_labels_and_route(dataset, tmp_path):
+    from app.agent_eval.event_extractor import BUSINESS_SYSTEM
+    from app.agent_eval.core_batch import write_json
+    _, target, _ = dataset
+    case, world = load_case(target / "OFF-042" / "case.json"), load_world(target / "world.json")
+    expected = case.assertions[0].expected
+    approval = {"reviewer": "user_in_current_conversation", "origin": "contract_test",
+        "approved_items": ["question_and_business_scope", "expected_business_facts", "scoring_rules"],
+        "cases": [{"case_id": case.case_id, "case_version": case.case_version,
+                   "case_digest": digest(case.model_dump(mode="json")),
+                   "baseline_digest": digest(world.model_dump(mode="json"))}]}
+    approval_path = tmp_path / "approval-selection.json"
+    write_json(approval_path, approval)
+    key = digest({"trade_date": expected["trade_date"], "members": _canonical_members(expected["members"]),
+                  "ordered": expected["ordered"]})
+    calibration = []
+    for name, answer, day, members in selection_samples(expected["trade_date"], expected["members"]):
+        label = {"trade_date": day, "members": members, "ambiguous": False}
+        calibration.append({"sample": name, "answer": answer, "label": label, "actual": label, "passed": True})
+    accepted = {"schema_version": "structured-selection-acceptance-v1", "suite_id": "local30", "suite_version": 3,
+        "technical_acceptance": True, "extractor_prompt_digest": digest(BUSINESS_SYSTEM),
+        "calibration": {key: calibration},
+        "cases": [{"case_id": case.case_id, "technical_acceptance": True,
+                   "case_digest": digest(case.model_dump(mode="json")),
+                   "baseline_digest": digest(world.model_dump(mode="json")),
+                   "approval_digest": digest(approval), "calibration_key": key,
+                   "route": {"tool": "limit_up_events", "arguments": _selection_args(expected),
+                             "passed": True, "source_count": len(expected["members"]),
+                             "selected_count": len(expected["members"])}}]}
+    acceptance_path = tmp_path / "selection-acceptance.json"
+    write_json(acceptance_path, accepted)
+    manifest = promote_selection_batch(target, [approval_path], acceptance_path, tmp_path / "active-selection")
+    assert manifest["status"] == "active" and manifest["cases"][0]["case_id"] == "OFF-042"
+    accepted["calibration"][key][0]["actual"]["members"] = []
+    write_json(tmp_path / "tampered-selection.json", accepted)
+    with pytest.raises(ValueError, match="calibration failed"):
+        promote_selection_batch(target, [approval_path], tmp_path / "tampered-selection.json",
+                                tmp_path / "rejected-selection")
 
 
 @pytest.fixture(scope="module")

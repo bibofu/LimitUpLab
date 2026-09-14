@@ -11,9 +11,11 @@ from app.agent_eval.extractor import SYSTEM as SUMMARY_SYSTEM, extract_answer
 from app.agent_eval.facts import normalize_number
 from app.agent_eval.frozen_registry import FrozenAgentToolRegistry
 from app.agent_eval.historical_live import HistoricalLiveRegistry
+from app.agent_eval.highest_acceptance import calibration_samples as highest_samples
 from app.agent_eval.loader import load_case
 from app.agent_eval.models import BudgetSpec
 from app.agent_eval.recorder import digest
+from app.agent_eval.selection import select_rows
 from app.agents.react_runtime.evidence import EvidenceStore
 from app.agents.react_runtime.tools import ToolGateway
 
@@ -238,5 +240,385 @@ def promote_count_batch(bundle: Path, approval_paths: list[Path], acceptance_pat
                 "release_eligible": False, "answer_quality_approved": False,
                 "limitations": ["additional statements and full-answer semantics require separate review",
                                 "Historical Live remains bounded to the recorded local data baseline"]}
+    write_json(destination / "manifest.json", manifest)
+    return manifest
+
+
+def _canonical_members(members):
+    return [{"symbol": member["symbol"], "name": "".join(member["name"].split())} for member in members]
+
+
+def _members_text(members):
+    return "、".join(f"{member['name']}（{member['symbol']}）" for member in members)
+
+
+def selection_samples(day, members):
+    """Each unique approved list gets formatting, order, omission, duplicate and date probes."""
+    members = _canonical_members(members)
+    other_day = "2026-09-10" if day != "2026-09-10" else "2026-09-11"
+    table = f"数据日期：{day}\n|代码|名称|\n|---|---|\n" + "\n".join(
+        f"|{member['symbol']}|{member['name']}|" for member in members)
+    variants = [
+        ("plain", f"{day}名单：{_members_text(members)}。", day, members),
+        ("table", table, day, members),
+        ("reverse", f"{day}名单：{_members_text(list(reversed(members)))}。", day, list(reversed(members))),
+        ("omission", f"{day}名单：{_members_text(members[:-1])}。", day, members[:-1]),
+        ("duplicate", f"{day}名单：{_members_text(members + members[:1])}。", day, members + members[:1]),
+        ("wrong_date", f"{other_day}名单：{_members_text(members)}。", other_day, members),
+    ]
+    return variants
+
+
+def _selection_args(expected):
+    selection, args = expected["row_selection"], {"trade_date": expected["trade_date"], "limit": 100}
+    for key in ("market", "board_height", "min_board_height"):
+        if key in selection:
+            args[key] = selection[key]
+    if "symbol" in selection:
+        args["query"] = selection["symbol"]
+    if selection.get("closed_limit") is False:
+        args["event_status"] = "failed"
+    elif selection.get("min_break_count", 0) > 0:
+        args["event_status"] = "broken_intraday"
+        if selection.get("closed_limit") is True:
+            args["closed_only"] = True
+    elif selection.get("closed_limit") is True:
+        args.update(event_status="closed", closed_only=True)
+    if "order_by" in selection:
+        args.update(sort_by=selection["order_by"],
+                    sort_order="desc" if selection.get("descending", True) else "asc")
+    return args
+
+
+def _execute_selection_route(case, world, database, cache):
+    key = (case.mode, digest(world.model_dump(mode="json")))
+    if key not in cache:
+        cache[key] = (HistoricalLiveRegistry(database, world) if case.mode == "live_historical"
+                      else FrozenAgentToolRegistry(world))
+    registry, expected = cache[key], case.assertions[0].expected
+    args = _selection_args(expected)
+    with registry.anchored():
+        gateway = ToolGateway(registry, EvidenceStore())
+        validated = gateway.validate({"name": "limit_up_events", "args": args})
+        _, payload, state = gateway.execute("limit_up_events", validated)
+    if state not in {"ok", "empty"} or payload.get("source_errors"):
+        raise ValueError(f"{case.case_id} selection route failed")
+    if payload.get("matched_count") != payload.get("returned_count"):
+        raise ValueError(f"{case.case_id} selection route is truncated")
+    selected = select_rows(payload.get("events", []), expected["row_selection"])
+    actual = _canonical_members(selected)
+    declared = _canonical_members(expected["members"])
+    if (actual != declared if expected.get("ordered") else set(map(digest, actual)) != set(map(digest, declared))):
+        raise ValueError(f"{case.case_id} direct route changes approved members")
+    return {"tool": "limit_up_events", "arguments": args, "passed": True,
+            "source_count": len(payload.get("events", [])), "selected_count": len(selected)}
+
+
+def accept_selection_batch(bundle: Path, approval_paths: list[Path], preflight_path: Path,
+                           destination: Path, provider, database: Path, case_ids: list[str]):
+    """Route-check every case and calibrate every unique approved member list once."""
+    from app.agent_eval.worker import GuardedProvider
+    from app.services.llm_provider import capture_llm_usage
+    if destination.exists():
+        raise FileExistsError(destination)
+    suite = json.loads((bundle / "suite.json").read_text(encoding="utf-8"))
+    entries = {item["id"]: item for item in suite["cases"]}
+    approvals = approval_index([json.loads(path.read_text(encoding="utf-8")) for path in approval_paths])
+    preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
+    preflight_cases = {item["case_id"]: item for item in preflight.get("cases", [])}
+    if (preflight.get("suite_id"), preflight.get("suite_version")) != (suite["suite_id"], suite["version"]):
+        raise ValueError("preflight belongs to another suite")
+    prepared, route_cache = [], {}
+    for case_id in case_ids:
+        if case_id not in entries or preflight_cases.get(case_id, {}).get("verdict") != "pass":
+            raise ValueError("case absent or not preflighted")
+        case, world = load_case(bundle / entries[case_id]["case"]), _baseline(bundle, entries[case_id])
+        approved = approvals.get(case_id)
+        binding = approved and approved["binding"]
+        if (not binding or binding.get("case_digest") != digest(case.model_dump(mode="json"))
+                or binding.get("baseline_digest") != digest(world.model_dump(mode="json"))
+                or _oracle(case, world)["category"] != "selection"):
+            raise ValueError("selection approval or oracle is stale")
+        expected = case.assertions[0].expected
+        route = _execute_selection_route(case, world, database, route_cache)
+        calibration_key = digest({"trade_date": expected["trade_date"],
+                                  "members": _canonical_members(expected["members"]),
+                                  "ordered": expected.get("ordered", False)})
+        prepared.append((case, world, approved, route, calibration_key, expected))
+    unique = {}
+    for *_, key, expected in prepared:
+        unique.setdefault(key, expected)
+    sample_total = sum(len(selection_samples(value["trade_date"], value["members"])) for value in unique.values())
+    destination.mkdir(parents=True)
+    budget = BudgetSpec(max_agent_runs=1, max_model_calls=sample_total, max_input_tokens=3000000,
+                        max_output_tokens=500000, max_wall_time_seconds=900, max_estimated_cost_usd=None)
+    guarded = GuardedProvider(provider, destination, perf_counter() + 900, budget)
+    calibration = {}
+    with capture_llm_usage() as usage:
+        for key, expected in unique.items():
+            results = []
+            for name, answer, label_day, label_members in selection_samples(expected["trade_date"], expected["members"]):
+                label = {"trade_date": label_day, "members": label_members, "ambiguous": False}
+                try:
+                    extracted = extract_business_answer(guarded, answer)
+                    actual = {"trade_date": extracted.trade_date.isoformat() if extracted.trade_date else None,
+                              "members": _canonical_members([member.model_dump() for member in extracted.members]),
+                              "ambiguous": extracted.ambiguous}
+                    results.append({"sample": name, "answer": answer, "label": label, "actual": actual,
+                                    "passed": actual == label, "extraction": extracted.model_dump(mode="json")})
+                except Exception as error:
+                    results.append({"sample": name, "answer": answer, "label": label, "passed": False,
+                                    "error_type": type(error).__name__})
+            calibration[key] = results
+    cases = []
+    for case, world, approved, route, key, _ in prepared:
+        cases.append({"case_id": case.case_id, "case_version": case.case_version,
+                      "case_digest": digest(case.model_dump(mode="json")),
+                      "baseline_digest": digest(world.model_dump(mode="json")),
+                      "approval_digest": approved["approval_digest"], "route": route,
+                      "calibration_key": key,
+                      "technical_acceptance": all(item["passed"] for item in calibration[key])})
+    report = {"schema_version": "structured-selection-acceptance-v1", "suite_id": suite["suite_id"],
+              "suite_version": suite["version"], "cases": cases, "calibration": calibration,
+              "extractor_prompt_digest": digest(BUSINESS_SYSTEM),
+              "label_origin": "deterministic variants and counterexamples derived from user-approved member lists",
+              "model": getattr(provider, "model", None), "model_calls": guarded.calls,
+              "total_tokens": usage.total_tokens if usage.token_usage_complete else None,
+              "technical_acceptance": all(item["technical_acceptance"] for item in cases),
+              "active_promotion": False, "release_eligible": False,
+              "limitations": ["member identity/date/order core requirements only", "additional claims are excluded"]}
+    write_json(destination / "acceptance.json", report)
+    return {key: report[key] for key in ("technical_acceptance", "model_calls", "total_tokens")}
+
+
+def promote_selection_batch(bundle: Path, approval_paths: list[Path], acceptance_path: Path, destination: Path):
+    """Activate only member identity/date/order contracts after batch calibration."""
+    if destination.exists():
+        raise FileExistsError(destination)
+    suite = json.loads((bundle / "suite.json").read_text(encoding="utf-8"))
+    entries = {item["id"]: item for item in suite["cases"]}
+    approvals = approval_index([json.loads(path.read_text(encoding="utf-8")) for path in approval_paths])
+    acceptance = json.loads(acceptance_path.read_text(encoding="utf-8"))
+    if (acceptance.get("schema_version") != "structured-selection-acceptance-v1"
+            or (acceptance.get("suite_id"), acceptance.get("suite_version")) != (suite["suite_id"], suite["version"])
+            or acceptance.get("technical_acceptance") is not True
+            or acceptance.get("extractor_prompt_digest") != digest(BUSINESS_SYSTEM)):
+        raise ValueError("selection technical acceptance is incomplete or stale")
+    expected_by_key, prepared = {}, []
+    for accepted in acceptance.get("cases", []):
+        case_id = accepted["case_id"]
+        if case_id not in entries or accepted.get("technical_acceptance") is not True:
+            raise ValueError("accepted selection case is absent or failed")
+        case, world = load_case(bundle / entries[case_id]["case"]), _baseline(bundle, entries[case_id])
+        approved, expected = approvals.get(case_id), case.assertions[0].expected
+        key = digest({"trade_date": expected["trade_date"], "members": _canonical_members(expected["members"]),
+                      "ordered": expected.get("ordered", False)})
+        if (not approved or _oracle(case, world)["category"] != "selection"
+                or accepted.get("case_digest") != digest(case.model_dump(mode="json"))
+                or accepted.get("baseline_digest") != digest(world.model_dump(mode="json"))
+                or accepted.get("approval_digest") != approved["approval_digest"]
+                or accepted.get("calibration_key") != key):
+            raise ValueError("selection case approval, oracle or asset binding is stale")
+        route = accepted.get("route", {})
+        if (route.get("tool") != "limit_up_events" or route.get("arguments") != _selection_args(expected)
+                or route.get("passed") is not True or route.get("selected_count") != len(expected["members"])
+                or type(route.get("source_count")) is not int or route["source_count"] < len(expected["members"])):
+            raise ValueError("selection route acceptance is missing or changed")
+        expected_by_key.setdefault(key, expected)
+        prepared.append((case, world, approved, key))
+    calibration = acceptance.get("calibration", {})
+    if set(calibration) != set(expected_by_key):
+        raise ValueError("selection calibration set does not match accepted contracts")
+    for key, expected in expected_by_key.items():
+        samples, results = selection_samples(expected["trade_date"], expected["members"]), calibration[key]
+        if len(samples) != len(results):
+            raise ValueError("selection calibration samples missing")
+        for result, (name, answer, day, members) in zip(results, samples):
+            label = {"trade_date": day, "members": members, "ambiguous": False}
+            if (result.get("sample") != name or result.get("answer") != answer
+                    or digest(result.get("label")) != digest(label) or digest(result.get("actual")) != digest(label)
+                    or result.get("passed") is not True):
+                raise ValueError("selection calibration failed or labels changed")
+    active_entries = []
+    for case, world, approved, key in prepared:
+        active = case.model_copy(update={"status": "active"})
+        folder = destination / case.case_id
+        folder.mkdir(parents=True)
+        write_json(folder / "case.json", active.model_dump(mode="json"))
+        write_json(folder / ("world.json" if case.mode == "offline" else "baseline.json"), world.model_dump(mode="json"))
+        active_entries.append({"case_id": case.case_id, "case_version": case.case_version, "mode": case.mode,
+                               "scope": "member identity, data date, completeness and declared order",
+                               "active_case_digest": digest(active.model_dump(mode="json")),
+                               "baseline_digest": digest(world.model_dump(mode="json")),
+                               "approval_digest": approved["approval_digest"], "calibration_key": key})
+    if not active_entries:
+        raise ValueError("selection acceptance contains no cases")
+    destination.mkdir(parents=True, exist_ok=True)
+    write_json(destination / "technical-acceptance.json", acceptance)
+    manifest = {"schema_version": "active-selection-golden-batch-v1", "suite_id": suite["suite_id"],
+                "suite_version": suite["version"], "status": "active", "scope": "selection core requirements",
+                "cases": active_entries, "acceptance_digest": digest(acceptance),
+                "release_eligible": False, "answer_quality_approved": False,
+                "limitations": ["additional statements and full-answer semantics require separate review",
+                                "Historical Live remains bounded to the recorded local data baseline"]}
+    write_json(destination / "manifest.json", manifest)
+    return manifest
+
+
+def _execute_highest_routes(case, world, database, cache):
+    key = (case.mode, digest(world.model_dump(mode="json")))
+    if key not in cache:
+        cache[key] = (HistoricalLiveRegistry(database, world) if case.mode == "live_historical"
+                      else FrozenAgentToolRegistry(world))
+    registry, expected, routes = cache[key], case.assertions[0].expected, []
+    identities = {digest(item) for item in _canonical_members(expected["members"])}
+    for highest, limit in ((True, 30), (True, 100), (False, 100)):
+        args = {"trade_date": expected["trade_date"], "limit": limit}
+        if highest:
+            args["highest_only"] = True
+        with registry.anchored():
+            gateway = ToolGateway(registry, EvidenceStore())
+            validated = gateway.validate({"name": "limit_up_events", "args": args})
+            _, payload, state = gateway.execute("limit_up_events", validated)
+        rows = payload.get("events", [])
+        if state != "ok" or payload.get("matched_count") != payload.get("returned_count") or not rows:
+            raise ValueError(f"{case.case_id} highest route is incomplete")
+        peak = max(row["board_height"] for row in rows)
+        members = {digest(item) for item in _canonical_members([row for row in rows if row["board_height"] == peak])}
+        if peak != expected["max_board_height"] or members != identities:
+            raise ValueError(f"{case.case_id} highest route changes approved facts")
+        routes.append({"tool": "limit_up_events", "arguments": args, "passed": True})
+    return routes
+
+
+def accept_highest_batch(bundle: Path, approval_paths: list[Path], preflight_path: Path,
+                         destination: Path, provider, database: Path, case_ids: list[str]):
+    from app.agent_eval.worker import GuardedProvider
+    from app.services.llm_provider import capture_llm_usage
+    if destination.exists():
+        raise FileExistsError(destination)
+    suite = json.loads((bundle / "suite.json").read_text(encoding="utf-8"))
+    entries = {item["id"]: item for item in suite["cases"]}
+    approvals = approval_index([json.loads(path.read_text(encoding="utf-8")) for path in approval_paths])
+    preflight = json.loads(preflight_path.read_text(encoding="utf-8"))
+    preflight_cases = {item["case_id"]: item for item in preflight.get("cases", [])}
+    prepared, route_cache = [], {}
+    for case_id in case_ids:
+        if case_id not in entries or preflight_cases.get(case_id, {}).get("verdict") != "pass":
+            raise ValueError("highest case absent or not preflighted")
+        case, world = load_case(bundle / entries[case_id]["case"]), _baseline(bundle, entries[case_id])
+        approved = approvals.get(case_id)
+        if (not approved or approved["binding"].get("case_digest") != digest(case.model_dump(mode="json"))
+                or approved["binding"].get("baseline_digest") != digest(world.model_dump(mode="json"))
+                or _oracle(case, world)["category"] != "highest"):
+            raise ValueError("highest approval or oracle is stale")
+        routes = _execute_highest_routes(case, world, database, route_cache)
+        key = digest(case.assertions[0].expected)
+        prepared.append((case, world, approved, routes, key, case.assertions[0].expected))
+    unique = {}
+    for *_, key, expected in prepared:
+        unique.setdefault(key, expected)
+    destination.mkdir(parents=True)
+    calls = sum(len(highest_samples(expected)) for expected in unique.values())
+    budget = BudgetSpec(max_agent_runs=1, max_model_calls=calls, max_input_tokens=500000,
+                        max_output_tokens=80000, max_wall_time_seconds=480, max_estimated_cost_usd=None)
+    guarded = GuardedProvider(provider, destination, perf_counter() + 480, budget)
+    calibration = {}
+    with capture_llm_usage() as usage:
+        for key, expected in unique.items():
+            results = []
+            for name, answer, label in highest_samples(expected):
+                normalized = {"trade_date": label["trade_date"], "max_board_height": label["max_board_height"],
+                              "members": _canonical_members(label["members"]), "ambiguous": False}
+                try:
+                    extracted = extract_business_answer(guarded, answer)
+                    actual = {"trade_date": extracted.trade_date.isoformat() if extracted.trade_date else None,
+                              "max_board_height": extracted.max_board_height,
+                              "members": _canonical_members([member.model_dump() for member in extracted.members]),
+                              "ambiguous": extracted.ambiguous}
+                    results.append({"sample": name, "answer": answer, "label": normalized, "actual": actual,
+                                    "passed": actual == normalized, "extraction": extracted.model_dump(mode="json")})
+                except Exception as error:
+                    results.append({"sample": name, "answer": answer, "label": normalized, "passed": False,
+                                    "error_type": type(error).__name__})
+            calibration[key] = results
+    cases = [{"case_id": case.case_id, "case_version": case.case_version,
+              "case_digest": digest(case.model_dump(mode="json")),
+              "baseline_digest": digest(world.model_dump(mode="json")),
+              "approval_digest": approved["approval_digest"], "routes": routes, "calibration_key": key,
+              "technical_acceptance": all(item["passed"] for item in calibration[key])}
+             for case, world, approved, routes, key, _ in prepared]
+    report = {"schema_version": "structured-highest-acceptance-v1", "suite_id": suite["suite_id"],
+              "suite_version": suite["version"], "cases": cases, "calibration": calibration,
+              "extractor_prompt_digest": digest(BUSINESS_SYSTEM),
+              "label_origin": "deterministic variants and counterexamples derived from user-approved highest facts",
+              "model": getattr(provider, "model", None), "model_calls": guarded.calls,
+              "total_tokens": usage.total_tokens if usage.token_usage_complete else None,
+              "technical_acceptance": all(item["technical_acceptance"] for item in cases),
+              "active_promotion": False, "release_eligible": False,
+              "limitations": ["highest height/member/date core requirements only", "additional claims are excluded"]}
+    write_json(destination / "acceptance.json", report)
+    return {key: report[key] for key in ("technical_acceptance", "model_calls", "total_tokens")}
+
+
+def promote_highest_batch(bundle: Path, approval_paths: list[Path], acceptance_path: Path, destination: Path):
+    if destination.exists():
+        raise FileExistsError(destination)
+    suite = json.loads((bundle / "suite.json").read_text(encoding="utf-8"))
+    entries = {item["id"]: item for item in suite["cases"]}
+    approvals = approval_index([json.loads(path.read_text(encoding="utf-8")) for path in approval_paths])
+    acceptance = json.loads(acceptance_path.read_text(encoding="utf-8"))
+    if (acceptance.get("schema_version") != "structured-highest-acceptance-v1"
+            or (acceptance.get("suite_id"), acceptance.get("suite_version")) != (suite["suite_id"], suite["version"])
+            or acceptance.get("technical_acceptance") is not True
+            or acceptance.get("extractor_prompt_digest") != digest(BUSINESS_SYSTEM)):
+        raise ValueError("highest technical acceptance is incomplete or stale")
+    calibration, active_entries = acceptance.get("calibration", {}), []
+    for accepted in acceptance.get("cases", []):
+        case_id = accepted["case_id"]
+        case, world = load_case(bundle / entries[case_id]["case"]), _baseline(bundle, entries[case_id])
+        approved, expected = approvals.get(case_id), case.assertions[0].expected
+        key = digest(expected)
+        if (not approved or accepted.get("technical_acceptance") is not True
+                or accepted.get("case_digest") != digest(case.model_dump(mode="json"))
+                or accepted.get("baseline_digest") != digest(world.model_dump(mode="json"))
+                or accepted.get("approval_digest") != approved["approval_digest"]
+                or accepted.get("calibration_key") != key or key not in calibration):
+            raise ValueError("highest case approval or binding is stale")
+        expected_routes = []
+        for highest, limit in ((True, 30), (True, 100), (False, 100)):
+            args = {"trade_date": expected["trade_date"], "limit": limit}
+            if highest:
+                args["highest_only"] = True
+            expected_routes.append({"tool": "limit_up_events", "arguments": args, "passed": True})
+        if accepted.get("routes") != expected_routes:
+            raise ValueError("highest route acceptance is missing or changed")
+        samples, results = highest_samples(expected), calibration[key]
+        if len(samples) != len(results):
+            raise ValueError("highest calibration samples missing")
+        for result, (name, answer, label) in zip(results, samples):
+            normalized = {"trade_date": label["trade_date"], "max_board_height": label["max_board_height"],
+                          "members": _canonical_members(label["members"]), "ambiguous": False}
+            if (result.get("sample") != name or result.get("answer") != answer
+                    or digest(result.get("label")) != digest(normalized)
+                    or digest(result.get("actual")) != digest(normalized) or result.get("passed") is not True):
+                raise ValueError("highest calibration failed or labels changed")
+        active = case.model_copy(update={"status": "active"})
+        folder = destination / case_id
+        folder.mkdir(parents=True)
+        write_json(folder / "case.json", active.model_dump(mode="json"))
+        write_json(folder / ("world.json" if case.mode == "offline" else "baseline.json"), world.model_dump(mode="json"))
+        active_entries.append({"case_id": case_id, "case_version": case.case_version, "mode": case.mode,
+                               "scope": "highest height, tied members and data date",
+                               "active_case_digest": digest(active.model_dump(mode="json")),
+                               "baseline_digest": accepted["baseline_digest"],
+                               "approval_digest": accepted["approval_digest"], "calibration_key": key})
+    destination.mkdir(parents=True, exist_ok=True)
+    write_json(destination / "technical-acceptance.json", acceptance)
+    manifest = {"schema_version": "active-highest-golden-batch-v1", "suite_id": suite["suite_id"],
+                "suite_version": suite["version"], "status": "active", "scope": "highest core requirements",
+                "cases": active_entries, "acceptance_digest": digest(acceptance),
+                "release_eligible": False, "answer_quality_approved": False,
+                "limitations": ["additional statements and full-answer semantics require separate review"]}
     write_json(destination / "manifest.json", manifest)
     return manifest

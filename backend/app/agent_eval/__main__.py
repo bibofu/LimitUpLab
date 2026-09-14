@@ -51,6 +51,48 @@ def main() -> int:
     count_promote.add_argument("--approvals", required=True, nargs="+", type=Path)
     count_promote.add_argument("--acceptance", required=True, type=Path)
     count_promote.add_argument("--output-dir", required=True, type=Path)
+    selection_accept = commands.add_parser("accept-selection-batch")
+    selection_accept.add_argument("--bundle", required=True, type=Path)
+    selection_accept.add_argument("--approvals", required=True, nargs="+", type=Path)
+    selection_accept.add_argument("--preflight", required=True, type=Path)
+    selection_accept.add_argument("--database", required=True, type=Path)
+    selection_accept.add_argument("--output-dir", required=True, type=Path)
+    selection_accept.add_argument("--case-ids", required=True, nargs="+")
+    selection_accept.add_argument("--allow-llm", required=True, action="store_true")
+    selection_promote = commands.add_parser("promote-selection-batch")
+    selection_promote.add_argument("--bundle", required=True, type=Path)
+    selection_promote.add_argument("--approvals", required=True, nargs="+", type=Path)
+    selection_promote.add_argument("--acceptance", required=True, type=Path)
+    selection_promote.add_argument("--output-dir", required=True, type=Path)
+    highest_accept = commands.add_parser("accept-highest-batch")
+    highest_accept.add_argument("--bundle", required=True, type=Path)
+    highest_accept.add_argument("--approvals", required=True, nargs="+", type=Path)
+    highest_accept.add_argument("--preflight", required=True, type=Path)
+    highest_accept.add_argument("--database", required=True, type=Path)
+    highest_accept.add_argument("--output-dir", required=True, type=Path)
+    highest_accept.add_argument("--case-ids", required=True, nargs="+")
+    highest_accept.add_argument("--allow-llm", required=True, action="store_true")
+    highest_promote = commands.add_parser("promote-highest-batch")
+    highest_promote.add_argument("--bundle", required=True, type=Path)
+    highest_promote.add_argument("--approvals", required=True, nargs="+", type=Path)
+    highest_promote.add_argument("--acceptance", required=True, type=Path)
+    highest_promote.add_argument("--output-dir", required=True, type=Path)
+    semantic_accept = commands.add_parser("accept-semantic-batch")
+    semantic_accept.add_argument("--bundle", required=True, type=Path)
+    semantic_accept.add_argument("--approvals", required=True, nargs="+", type=Path)
+    semantic_accept.add_argument("--preflight", required=True, type=Path)
+    semantic_accept.add_argument("--output-dir", required=True, type=Path)
+    semantic_accept.add_argument("--case-ids", required=True, nargs="+")
+    semantic_accept.add_argument("--allow-llm", required=True, action="store_true")
+    semantic_promote = commands.add_parser("promote-semantic-batch")
+    semantic_promote.add_argument("--bundle", required=True, type=Path)
+    semantic_promote.add_argument("--approvals", required=True, nargs="+", type=Path)
+    semantic_promote.add_argument("--acceptance", required=True, type=Path)
+    semantic_promote.add_argument("--output-dir", required=True, type=Path)
+    assemble = commands.add_parser("assemble-golden-suite")
+    assemble.add_argument("--sources", required=True, nargs="+", type=Path)
+    assemble.add_argument("--expected-bundles", required=True, nargs="+", type=Path)
+    assemble.add_argument("--output-dir", required=True, type=Path)
     record = commands.add_parser("record-local-summary")
     record.add_argument("--database", required=True, type=Path)
     record.add_argument("--anchor", required=True, type=datetime.fromisoformat)
@@ -150,6 +192,39 @@ def main() -> int:
     elif args.command == "promote-count-batch":
         from app.agent_eval.structured_acceptance import promote_count_batch
         result = promote_count_batch(args.bundle, args.approvals, args.acceptance, args.output_dir)
+    elif args.command == "accept-selection-batch":
+        from app.agent_eval.structured_acceptance import accept_selection_batch
+        from app.config import configure_runtime_environment
+        from app.services.llm_provider import get_llm_provider
+        configure_runtime_environment()
+        result = accept_selection_batch(args.bundle, args.approvals, args.preflight, args.output_dir,
+                                        get_llm_provider(), args.database, args.case_ids)
+    elif args.command == "promote-selection-batch":
+        from app.agent_eval.structured_acceptance import promote_selection_batch
+        result = promote_selection_batch(args.bundle, args.approvals, args.acceptance, args.output_dir)
+    elif args.command == "accept-highest-batch":
+        from app.agent_eval.structured_acceptance import accept_highest_batch
+        from app.config import configure_runtime_environment
+        from app.services.llm_provider import get_llm_provider
+        configure_runtime_environment()
+        result = accept_highest_batch(args.bundle, args.approvals, args.preflight, args.output_dir,
+                                      get_llm_provider(), args.database, args.case_ids)
+    elif args.command == "promote-highest-batch":
+        from app.agent_eval.structured_acceptance import promote_highest_batch
+        result = promote_highest_batch(args.bundle, args.approvals, args.acceptance, args.output_dir)
+    elif args.command == "accept-semantic-batch":
+        from app.agent_eval.semantic_acceptance import accept_semantic_batch
+        from app.config import configure_runtime_environment
+        from app.services.llm_provider import get_llm_provider
+        configure_runtime_environment()
+        result = accept_semantic_batch(args.bundle, args.approvals, args.preflight, args.output_dir,
+                                       get_llm_provider(), args.case_ids)
+    elif args.command == "promote-semantic-batch":
+        from app.agent_eval.semantic_acceptance import promote_semantic_batch
+        result = promote_semantic_batch(args.bundle, args.approvals, args.acceptance, args.output_dir)
+    elif args.command == "assemble-golden-suite":
+        from app.agent_eval.golden_suite import assemble_golden_suite
+        result = assemble_golden_suite(args.sources, args.expected_bundles, args.output_dir)
     elif args.command == "promote-highest":
         from app.agent_eval.highest_acceptance import promote_highest
         result = promote_highest(args.review_dir,args.approval,args.acceptance,args.output_dir)

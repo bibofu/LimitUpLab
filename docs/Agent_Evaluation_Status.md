@@ -69,11 +69,27 @@
   错误数量、错误日期和多声明6种样例，共12次DeepSeek调用、14,018 Token，全部通过。
   晋升器会重新校验审批、Case/World、提示摘要、校准标签与路线，篡改任一项即拒绝。
   4题现位于`output/agent-eval/golden/local30-count-v1`，Active范围仅为数据日期与收盘涨停家数；
-  answer_quality_approved及release_eligible仍为false。仓库当前限定核心合同Active Golden资产共7道，
-  其中OFF-010/LH-004为旧版本，不能替代当前local30 v5的验收；当前30题已有5道完成技术验收，
-  其余25道待验收：21道selection、2道highest、2道semantic_terminal。
+  answer_quality_approved及release_eligible仍为false。在该阶段限定核心合同Active Golden资产共7道，
+  其中OFF-010/LH-004为旧版本，不能替代当前local30 v5的验收；当时当前30题已有5道完成技术验收，
+  另25道为后续批次目标：21道selection、2道highest、2道semantic_terminal。
 - count批量验收落地后统一后端验收783 passed、3 warnings、2 subtests passed；
   报告：`output/validation/20260914T095815Z-12ee61d0/summary.json`。
+- 后续批量一次完成21道selection：8组Offline/Live重复事实按摘要复用，最终13组唯一名单合同各校准6种表达，
+  共78次DeepSeek调用、128,478 Token。每组均覆盖plain、table、reverse、omission、duplicate、wrong_date；
+  每道题的直接生产工具路线仍独立执行，不能用共享校准替代路线核验。21题全部通过并按成员身份、日期、
+  完整性和声明顺序的核心合同晋升，产物为`output/agent-eval/golden/local30-selection-v1`。
+- 当前版本OFF-010、LH-004两道highest各验证三条路线及6种抽取样例，共12次调用、15,082 Token，
+  全部通过并晋升至`output/agent-eval/golden/local30-highest-v1`，旧版本Active资产仍作为历史记录保留。
+- OFF-035澄清、OFF-036拒答使用独立LLM Judge；两套rubric各含2个正例、4个对抗反例，
+  12次调用、7,599 Token全部通过。Judge只判语义，不覆盖确定性工具禁用和终态检查；两题虽已作为
+  可执行Golden合同激活，当前Agent实跑返回complete的既有失败仍然有效，不因Case激活而改写。
+- 当前30道（20 Offline + 10 Historical Live）业务合同与评测器均已技术验收并激活。
+  统一自包含清单为`output/agent-eval/golden/local30-current-v2/suite.json`：30个Case、3个按摘要去重的
+  World/Baseline，约12.2 MB。最初未去重的`local30-current-v1`约164 MB，仅保留为历史生成物，不作为当前入口。
+  `status=active`表示题目合同和评测器可用，不表示当前Agent 30/30通过；全量模型质量、稳定性、额外声明
+  与release gate仍需另行运行，因此answer_quality_approved和release_eligible保持false。
+- 30题批量技术验收与统一清单落地后，统一后端验收789 passed、3 warnings、2 subtests passed；
+  报告：`output/validation/20260914T102011Z-96cb7917/summary.json`。
 
 以下为首批建设流水，数量和最新状态以上面为准。
 
