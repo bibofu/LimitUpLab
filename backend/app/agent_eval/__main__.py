@@ -66,11 +66,28 @@ def main() -> int:
     review.add_argument("--run-dir",required=True,type=Path)
     review.add_argument("--output-dir",required=True,type=Path)
     review.add_argument("--allow-llm",action="store_true",required=True)
+    accept = commands.add_parser("accept-highest")
+    for name in ("review-dir","approval","output-dir"):
+        accept.add_argument("--"+name,required=True,type=Path)
+    accept.add_argument("--database",type=Path)
+    accept.add_argument("--allow-llm",action="store_true",required=True)
+    promote = commands.add_parser("promote-highest")
+    for name in ("review-dir","approval","acceptance","output-dir"):
+        promote.add_argument("--"+name,required=True,type=Path)
     blueprint.add_argument("--book", required=True, type=Path)
     blueprint.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
     exit_code = 0
-    if args.command == "prepare-golden-review":
+    if args.command == "promote-highest":
+        from app.agent_eval.highest_acceptance import promote_highest
+        result = promote_highest(args.review_dir,args.approval,args.acceptance,args.output_dir)
+    elif args.command == "accept-highest":
+        from app.agent_eval.highest_acceptance import accept_highest
+        from app.config import configure_runtime_environment
+        from app.services.llm_provider import get_llm_provider
+        configure_runtime_environment()
+        result = accept_highest(args.review_dir,args.approval,args.output_dir,get_llm_provider(),database=args.database)
+    elif args.command == "prepare-golden-review":
         from app.agent_eval.golden_review import review_business_run
         from app.config import configure_runtime_environment
         from app.services.llm_provider import get_llm_provider

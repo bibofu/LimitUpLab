@@ -7,8 +7,9 @@
 以下“退役”说明描述旧体系，不表示新体系尚未启动。目前：
 
 - 长期设计：240 Offline、48 Live；已有40 Offline与48 Live具体问题蓝图。
-- 实际材料化：8道Offline候选（OFF-001、010、027、028、031、032、033、038），
-  1道受限本地Historical Live候选（LH-004），均已有真实运行；0道正式晋升。
+- 实际材料化：8道Offline资产（OFF-001、010、027、028、031、032、033、038），
+  1道受限本地Historical Live资产（LH-004），均已有真实运行。
+  OFF-010与LH-004已晋升为限定最高连板核心要求的active Golden；其余7道仍为候选。
 - 新批次路径 `output/agent-eval/candidates/core-batch3`，新增5道Offline和LH-004；
   OFF-010/028经用户批准改为9月8日，以覆盖真实并列最高和回封/未回封样本。
 - 本批6次实跑均返回complete，但OFF-031/033受未录制路线污染，判unscorable/fixture_failure；
@@ -19,12 +20,18 @@
   `output/agent-eval/golden-review/OFF-010-v1/REVIEW.md`、`LH-004-v1/REVIEW.md`。
   新Business Fact Verifier支持最高高度/无序完整集合、历史计数、盘中开板成员和有效空值；
   两题已有回答经新抽取后核心业务断言通过，额外声明/人工校准仍待复核。
-  原始review.json保持生成时状态，绑定题目、baseline、回答摘要，尚未晋升active。
+  原始review.json保持生成时状态，绑定题目、baseline、回答摘要；其后审批与晋升用新文件记录。
 - 2026-09-14用户已明确确认OFF-010、LH-004的口径、标准事实（均已核实）和判分规则。
   每份审核包新增不可覆盖原始材料的 `user-review-20260914.json`，绑定实际case/baseline摘要，
   状态为business_contract_confirmed。该确认不扩展为原回答额外声明、抽取清单、校准或发布批准。
   剩余技术事项由实现侧推进：可接受调用路线验证、抽取校准和最终晋升条件检查；
   不再重复要求用户确认已批准的业务事实。
+- 两题各3条技术路线验证通过，真实DeepSeek校准各6/6通过（总12调用、14002 Token）。
+  校准标签是已批准事实的确定性变体，不冒充人工标注；Live只有1名成员，其换序样例
+  与原序相同，不视为新增独立表达覆盖。校准范围不包括所有自由表述或额外业务声明。
+- 正式本地资产位于 `output/agent-eval/golden/OFF-010-v1` 和 `LH-004-v1`，包含active Case、
+  World/Live Baseline、业务审批、技术验收和晋升摘要。候选及历史运行保持不变。
+  active代表题目核心合同已验收，不代表任何一次回答全部正确；release_eligible仍false。
 - 三题都已有真实LLM运行。两道名单题先暴露参数录制缺口，再在Case/World v2下
   成功查询、读取证据、计算并完整交付；名单检查通过，额外声明与抽取校准仍待复核。
 - 新增过程诊断：读取/计算必须依赖先前Observation；独立重算无过滤的amount排序
