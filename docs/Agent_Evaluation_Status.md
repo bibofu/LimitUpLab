@@ -69,8 +69,9 @@
   错误数量、错误日期和多声明6种样例，共12次DeepSeek调用、14,018 Token，全部通过。
   晋升器会重新校验审批、Case/World、提示摘要、校准标签与路线，篡改任一项即拒绝。
   4题现位于`output/agent-eval/golden/local30-count-v1`，Active范围仅为数据日期与收盘涨停家数；
-  answer_quality_approved及release_eligible仍为false。当前限定核心合同Active Golden共7道，
-  其余23道已审批题待技术验收，其中21道selection、2道semantic_terminal。
+  answer_quality_approved及release_eligible仍为false。仓库当前限定核心合同Active Golden资产共7道，
+  其中OFF-010/LH-004为旧版本，不能替代当前local30 v5的验收；当前30题已有5道完成技术验收，
+  其余25道待验收：21道selection、2道highest、2道semantic_terminal。
 - count批量验收落地后统一后端验收783 passed、3 warnings、2 subtests passed；
   报告：`output/validation/20260914T095815Z-12ee61d0/summary.json`。
 
