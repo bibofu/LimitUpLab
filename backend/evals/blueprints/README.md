@@ -247,3 +247,30 @@ mode=ro读数据，关闭连接后在隔离进程内执行真实工具方法，�
 - OFF-032主日期/数量可检查，但主动补充的“炸板/未回封39家”等口径尚需独立审核。
 - 本批事实标准已来源化，但除周末summary适配外，新增业务事实断言还没有完整自动判定；
   不能把“可运行候选”说成已完成校准的Golden。下一步应补这几类断言和已知合法路线。
+
+## 首批Golden集中审核包
+
+新增business-facts-v1，不再把answer.business_contract全部视为未实现。当前检查：
+最高高度和完整无序并列集合、指定日计数、盘中开板成员、有效空匹配；先从完整baseline
+建立可复核标准，标准自身与baseline冲突时待复核，不判Agent错。检查本轮Evidence
+与baseline事件行、可见视图的一致性；LIVE不借用Offline世界引用作本轮证据。
+缺项、重复、错日期或错高度可明确判错。自动抽取与额外声明仍需要校准/独立审核，
+核心检查通过不是整题质量通过。当前需要reviewed代码/名称身份；不明确的名称表达待复核。
+
+本次优先收敛OFF-010（Offline）与LH-004（Historical Live），生成：
+
+- `output/agent-eval/golden-review/OFF-010-v1/REVIEW.md`
+- `output/agent-eval/golden-review/LH-004-v1/REVIEW.md`
+
+每份含问题、标准事实、判定合同、原始回答、自动诊断、审核清单和绑定摘要；附case、
+baseline、extraction、facts与review.json。没有生成虚假的审核人或active状态。
+现有回答分别消耗1次抽取调用（1905/1629 Token），核心最高高度及集合检查均pass，
+整题因额外声明与未审核抽取保留needs_review。没有重新运行Agent或修改旧报告。
+
+```powershell
+.venv/Scripts/python.exe -m app.agent_eval prepare-golden-review --run-dir ../output/agent-eval/runs/core-batch3-OFF-010-001 --output-dir ../output/agent-eval/golden-review/OFF-010-v1 --allow-llm
+```
+
+此命令目前仅用于最高连板合同的审核材料，目录已存在拒绝覆盖。审核人需独立确认
+需求、baseline事实、允许路线及校准；题目可晋升不取决于Agent本次是否答对。
+这两份材料尚未获人工批准；OFF-031/033的Fixture缺口未在本轮偷偷放宽或掩盖。

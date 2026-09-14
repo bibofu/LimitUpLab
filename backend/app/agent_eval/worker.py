@@ -19,6 +19,8 @@ from app.agent_eval.extractor import SYSTEM as EXTRACTOR_SYSTEM, extract_answer
 from app.agent_eval.facts import verify_summary_facts
 from app.agent_eval.event_extractor import SYSTEM as EVENT_EXTRACTOR_SYSTEM, extract_event_answer
 from app.agent_eval.event_facts import verify_event_facts
+from app.agent_eval.business_facts import verify_business_facts
+from app.agent_eval.event_extractor import BUSINESS_SYSTEM, extract_business_answer
 from app.agent_eval.frozen_registry import FrozenAgentToolRegistry
 from app.agent_eval.loader import load_suite, world_digest
 from app.agent_eval.models import AssetRef, BudgetSpec, EvalResult, RunManifest
@@ -102,6 +104,8 @@ def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240
     extractor = extract_event_answer if event_case else extract_answer
     verifier = verify_event_facts if event_case else verify_summary_facts
     extractor_system = EVENT_EXTRACTOR_SYSTEM if event_case else EXTRACTOR_SYSTEM
+    if any(a.target == "answer.business_contract" for a in case.assertions):
+        extractor, verifier, extractor_system = extract_business_answer, verify_business_facts, BUSINESS_SYSTEM
     manifest = RunManifest(run_id=str(uuid4()), runtime_version=VERSION,
         tool_contract_version=TOOL_CONTRACT_VERSION, evidence_version=EVIDENCE_VERSION,
         evaluator_version="single-case-diagnostic-v1", model=getattr(provider, "model", "test-provider"),

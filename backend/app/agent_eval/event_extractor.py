@@ -8,6 +8,7 @@ from pydantic import Field
 from typing import Annotated
 
 from app.agent_eval.event_facts import ListExtraction, Member
+from app.agent_eval.business_facts import BusinessExtraction
 from app.agent_eval.models import Contract
 from app.agent_eval.recorder import digest
 
@@ -31,24 +32,39 @@ class ExtractedList(Contract):
     ambiguous: bool
 
 
-def extract_event_answer(provider, answer):
+class ExtractedBusiness(ExtractedList):
+    max_board_height: int | None = Field(default=None, ge=0)
+    limit_up_count: int | None = Field(default=None, ge=0)
+    matched_count: int | None = Field(default=None, ge=0)
+
+
+BUSINESS_SYSTEM = SYSTEM + "\n最高连板高度填max_board_height，收盘涨停家数填limit_up_count，指定主题匹配数量填matched_count；正文明确没有匹配可填0。未明确的字段填null，不推算。这些核心值单独抽取，其余业务声明仍引用行号。"
+
+
+def extract_business_answer(provider, answer):
+    return extract_event_answer(provider, answer, business=True)
+
+
+def extract_event_answer(provider, answer, *, business=False):
     lines = answer.splitlines()
+    schema = ExtractedBusiness if business else ExtractedList
     tool = {"type": "function", "function": {"name": "submit_event_list",
             "description": "提交答案中实际出现的名单及其他业务声明。",
-            "parameters": ExtractedList.model_json_schema()}}
-    result = provider.generate_messages([SystemMessage(content=SYSTEM),
+            "parameters": schema.model_json_schema()}}
+    result = provider.generate_messages([SystemMessage(content=BUSINESS_SYSTEM if business else SYSTEM),
         HumanMessage(content=json.dumps({"answer": answer,
             "lines": [{"id": i, "text": line} for i, line in enumerate(lines)]}, ensure_ascii=False))], [tool],
         timeout_seconds=60, max_tokens=6000)
     if len(result.tool_calls) != 1 or result.tool_calls[0]["name"] != "submit_event_list":
         raise ValueError("extractor must submit one list")
-    parsed = ExtractedList.model_validate(result.tool_calls[0]["args"])
+    parsed = schema.model_validate(result.tool_calls[0]["args"])
     for member in parsed.members:
         if any(token and token not in answer for token in (member.symbol, member.name)):
             raise ValueError("extracted identity not present verbatim in answer")
     if any(i >= len(lines) or not lines[i].strip() for i in parsed.additional_claim_line_ids):
         raise ValueError("additional claim references missing/blank line")
     quotes = [lines[i] for i in sorted(set(parsed.additional_claim_line_ids))]
-    return ListExtraction(answer_digest=digest(answer), extractor_version="answer-only-event-list-v2",
+    model = BusinessExtraction if business else ListExtraction
+    return model(answer_digest=digest(answer), extractor_version="answer-only-business-v1" if business else "answer-only-event-list-v2",
         origin="model", quote=answer, start=0, additional_claims=quotes,
         **parsed.model_dump(exclude={"additional_claim_line_ids"}))

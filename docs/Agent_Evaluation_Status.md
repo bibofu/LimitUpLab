@@ -15,6 +15,11 @@
   其他4题needs_review。不能将complete、单项诊断或肉眼核对宣称为Golden通过。
 - LH-004使用只读源数据库加载的隔离内存快照、真实生产方法；基线漂移时在模型调用前中止。
   当前仅开放market_summary/limit_up_events，不是完整Profile或完整48题Live覆盖。
+- 收敛首批Golden：OFF-010与LH-004已生成集中审核包，路径为
+  `output/agent-eval/golden-review/OFF-010-v1/REVIEW.md`、`LH-004-v1/REVIEW.md`。
+  新Business Fact Verifier支持最高高度/无序完整集合、历史计数、盘中开板成员和有效空值；
+  两题已有回答经新抽取后核心业务断言通过，额外声明/人工校准仍待复核。
+  review.json绑定题目、baseline、回答摘要，审核人为空、approved=false，尚未晋升active。
 - 三题都已有真实LLM运行。两道名单题先暴露参数录制缺口，再在Case/World v2下
   成功查询、读取证据、计算并完整交付；名单检查通过，额外声明与抽取校准仍待复核。
 - 新增过程诊断：读取/计算必须依赖先前Observation；独立重算无过滤的amount排序

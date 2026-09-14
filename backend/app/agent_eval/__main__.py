@@ -62,11 +62,21 @@ def main() -> int:
         live.add_argument("--" + name, required=True, type=Path)
     live.add_argument("--allow-llm", action="store_true", required=True)
     live.add_argument("--wall-seconds", type=int, default=240)
+    review = commands.add_parser("prepare-golden-review")
+    review.add_argument("--run-dir",required=True,type=Path)
+    review.add_argument("--output-dir",required=True,type=Path)
+    review.add_argument("--allow-llm",action="store_true",required=True)
     blueprint.add_argument("--book", required=True, type=Path)
     blueprint.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
     exit_code = 0
-    if args.command == "prepare-core-batch":
+    if args.command == "prepare-golden-review":
+        from app.agent_eval.golden_review import review_business_run
+        from app.config import configure_runtime_environment
+        from app.services.llm_provider import get_llm_provider
+        configure_runtime_environment()
+        result = review_business_run(args.run_dir,args.output_dir,get_llm_provider())
+    elif args.command == "prepare-core-batch":
         from app.agent_eval.core_batch import prepare_core_batch
         result = prepare_core_batch(args.database, args.book, args.output_dir)
     elif args.command == "run-live-historical":
