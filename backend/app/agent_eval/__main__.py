@@ -25,6 +25,10 @@ def main() -> int:
         dataset_run.add_argument("--" + name, required=True, type=Path)
     dataset_run.add_argument("--allow-llm", required=True, action="store_true")
     dataset_run.add_argument("--case-ids", nargs="+")
+    recheck = commands.add_parser("recheck-dataset")
+    for name in ("bundle", "output-dir"):
+        recheck.add_argument("--" + name, required=True, type=Path)
+    recheck.add_argument("--runs", required=True, nargs="+", type=Path)
     record = commands.add_parser("record-local-summary")
     record.add_argument("--database", required=True, type=Path)
     record.add_argument("--anchor", required=True, type=datetime.fromisoformat)
@@ -96,6 +100,10 @@ def main() -> int:
         from app.agent_eval.dataset import run_dataset
         result = run_dataset(args.bundle, args.database, args.output_dir, case_ids=args.case_ids)
         exit_code = 2 if any(r["verdict"] != "pass" for r in result["cases"]) else 0
+    elif args.command == "recheck-dataset":
+        from app.agent_eval.dataset import recheck_dataset
+        result = recheck_dataset(args.bundle, args.runs, args.output_dir)
+        exit_code = 2
     elif args.command == "promote-highest":
         from app.agent_eval.highest_acceptance import promote_highest
         result = promote_highest(args.review_dir,args.approval,args.acceptance,args.output_dir)

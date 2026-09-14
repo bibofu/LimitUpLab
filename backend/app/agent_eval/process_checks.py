@@ -10,13 +10,45 @@ from pydantic import Field
 
 
 class ProcessReport(Contract):
-    evaluator_version: Literal["process-diagnostic-v1"] = "process-diagnostic-v1"
+    evaluator_version: Literal["process-diagnostic-v2"] = "process-diagnostic-v2"
     scope: Literal["dependencies_select_and_visible_delivery"] = "dependencies_select_and_visible_delivery"
     case: AssetRef
     verdict: Literal["pass", "fail", "needs_review"]
     release_eligible: Literal[False] = False
     findings: list[EvaluationFinding]
     metrics: dict[str, int] = Field(default_factory=dict)
+
+
+def independent_select(rows, args):
+    """Bounded equality/range filtering; unknown semantics abstain, never eval expressions."""
+    from operator import eq, ne, gt, ge, lt, le
+    operators = {"eq": eq, "ne": ne, "gt": gt, "ge": ge, "lt": lt, "le": le}
+    if args.get("operation") != "select" or args.get("other_id"):
+        raise ValueError("unsupported compute operation")
+    selected = list(rows)
+    for predicate in args.get("filters") or []:
+        field, op, value = predicate.get("field"), predicate.get("operator"), predicate.get("value")
+        if field not in {"closed_limit", "board_height", "break_count", "amount", "symbol"} or op not in operators:
+            raise ValueError("unsupported filter")
+        for row in selected:
+            actual = row.get(field)
+            if actual is None or type(actual) is not type(value) and not (
+                type(actual) in (int, float) and type(value) in (int, float)):
+                raise ValueError("incompatible filter types")
+            if op not in {"eq", "ne"} and (type(actual) not in (int, float) or type(value) not in (int, float)):
+                raise ValueError("range comparison requires numbers")
+        selected = [row for row in selected if operators[op](row[field], value)]
+    field = args.get("sort_by")
+    if field is not None:
+        if field not in {"amount", "board_height", "break_count", "symbol"}:
+            raise ValueError("unsupported sort")
+        if any(r.get(field) is None for r in selected):
+            raise ValueError("missing sort values")
+        selected.sort(key=lambda r: r[field], reverse=args.get("descending", True))
+    offset, limit = args.get("offset", 0), args.get("limit", 20)
+    if type(offset) is not int or type(limit) is not int or offset < 0 or limit < 1:
+        raise ValueError("unsupported select window")
+    return selected[offset:offset + limit], len(selected)
 
 
 def evaluate_process(case, response):
@@ -84,28 +116,26 @@ def evaluate_process(case, response):
                     args = record.get("arguments", {})
                     source = records.get(args.get("evidence_id"), {})
                     source_rows = source.get("payload", {}).get("events")
-                    if (args.get("operation") != "select" or args.get("filters") or source_rows is None
-                            or args.get("other_id") or args.get("sort_by") not in {None, "amount"}):
+                    if source_rows is None:
                         findings.append(finding("compute:" + call_id, "needs_review", "compute operation outside independent adapter"))
                         continue
                     if any(args.get(k) != value for k, value in call["args"].items()):
                         raise ValueError("computed record arguments disagree with model call")
-                    ordered = list(source_rows)
-                    if args.get("sort_by") == "amount":
-                        if any(type(r.get("amount")) not in (int, float) for r in ordered):
-                            raise ValueError("amount sort has missing/incompatible values")
-                        ordered.sort(key=lambda r: r["amount"], reverse=args.get("descending", True))
-                    offset, limit = args.get("offset", 0), args.get("limit", 20)
-                    if type(offset) is not int or type(limit) is not int or offset < 0 or limit < 1:
-                        raise ValueError("unsupported select window")
-                    expected = ordered[offset:offset + limit]
+                    try:
+                        expected, matched_count = independent_select(source_rows, args)
+                    except (ValueError, TypeError):
+                        findings.append(finding("compute:" + call_id, "needs_review", "compute operation outside independent adapter"))
+                        continue
                     payload = record.get("payload", {})
                     actual = payload.get("items")
                     if actual is None:
                         raise ValueError("computed select payload missing items")
                     computed += 1
-                    findings.append(finding("compute:" + call_id, "pass" if actual == expected else "needs_review",
-                        "independent select replay matches full result" if actual == expected
+                    matches = (actual == expected and payload.get("matched_count") == matched_count
+                               and payload.get("returned_count") == len(expected)
+                               and payload.get("source_evidence_ids") == [args.get("evidence_id")])
+                    findings.append(finding("compute:" + call_id, "pass" if matches else "needs_review",
+                        "independent select replay matches full result" if matches
                         else "runtime computation/trace differs from independent replay; not an answer failure"))
         if set(pending) != observed:
             raise ValueError("missing terminal observations")

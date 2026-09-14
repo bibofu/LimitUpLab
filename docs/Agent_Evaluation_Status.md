@@ -2,7 +2,32 @@
 
 ## 当前状态
 
-### 最新建设进度（2026-09-14）
+### 最新交付：20 Offline + 10 Historical Live（2026-09-14）
+
+- 已材料化30道可运行题目，不再只有问题蓝图。题目配方在 `backend/evals/suites/local30.json`。
+- 当前数据包：`output/agent-eval/datasets/local30-v4`，suite v3 / case v5，304条真实生产工具录制；
+  以只读原始行独立计算标准事实，再与真实工具的完整封板/未封板分区交叉核对。
+- 20道Offline覆盖日期、最高与并列、市场/板高/开板条件、回封交集、前10/20排序、完整名单、空结果、澄清、拒答。
+  10道Live经用户确认全部为Historical Live，以真实本地工具执行，不回放Frozen结果。
+  范围为market_summary、limit_up_events及本地market_event_pool，**不声称完整工具目录、当前Live或外部Canary覆盖**。
+- 完成首轮30次真实DeepSeek运行；补录合法路线、改进题目区分度后，另外复跑8题。
+  共233次模型调用、1,546,832 Token；日期/数据类型和外发范围均已获用户确认。
+- 最终复核入口 `output/agent-eval/reviews/local30-001/README.md`：
+  28道业务题核心事实诊断pass；澄清OFF-035、拒答OFF-036都错误返回complete，终态检查fail。
+  两题原文分别追问/拒绝，并非已证实发生交易建议泄漏。未修改Agent运行时以隐藏此问题。
+- 最终选用的30份运行没有fixture_failure等不可评分项；首次6题的录制缺口仍在原报告中，未覆写。
+  名称“远 望 谷”与“远望谷”在代码相同前提下允许空白差异；不采用正则覆盖或模糊股票匹配。
+  计数支持market_event_pool元数据；计算后名单仅在独立select复算和先前证据依赖成立后作为可见支持。
+- 30题当前仍为**待人工业务审核的Golden候选**，不是30道已激活Golden，也不是28/30完整质量通过。
+  自动抽取、额外声明、语义遵循及校准仍有needs_review。旧OFF-010/LH-004 v1 Active及审批保持不变。
+- 集中审核问题、事实和规则：`output/agent-eval/datasets/local30-v4/REVIEW.md`。
+  后续需完成业务确认和相应技术/抽取校准验收，再晋升；不得复制旧审批给修改后的题目。
+- 本轮定向测试42项通过；最终统一后端验收763 passed、3 warnings、2 subtests passed。
+  验收报告：`output/validation/20260914T075129Z-f7e95643/summary.json`。
+
+以下为首批建设流水，数量和最新状态以上面为准。
+
+### 首批建设进度（2026-09-14，历史记录）
 
 以下“退役”说明描述旧体系，不表示新体系尚未启动。目前：
 

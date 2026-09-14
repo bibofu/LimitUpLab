@@ -20,13 +20,18 @@ class BusinessExtraction(ListExtraction):
 
 
 class BusinessReport(Contract):
-    verifier_version: Literal["business-facts-v1"] = "business-facts-v1"
+    verifier_version: Literal["business-facts-v2"] = "business-facts-v2"
     scope: Literal["required_business_facts"] = "required_business_facts"
     case: AssetRef
     verdict: Literal["pass", "fail", "needs_review"]
     release_eligible: Literal[False] = False
     findings: list[EvaluationFinding]
     claim_coverage: float | None = None
+
+
+def identity(symbol, name):
+    # Only whitespace is presentation-equivalent. Codes and other characters stay exact.
+    return symbol, "".join(name.split()) if name is not None else None
 
 
 def _source_rows(world):
@@ -129,19 +134,35 @@ def verify_business_facts(case, world, response, extraction, *, diagnostic_unrev
         source = _source_rows(world)
         execution = next(t.output for t in response.tool_results if t.name == "react_execution")
         views = [v for t in response.tool_results if t.name == "react_observe" for v in t.output["results"]]
+        from app.agent_eval.process_checks import evaluate_process
+        process = evaluate_process(case, response)
+        checks = {f.assertion_id: f.verdict for f in process.findings}
+        verified_compute = {v.get("evidence_id") for v in views
+            if checks.get("compute:" + v.get("call_id", "")) == "pass"
+            and checks.get("dependency:" + v.get("call_id", "")) == "pass"
+            and "$process_trace" not in checks}
         visible, usable = {}, []
         for key, record in execution["evidence"].items():
-            if record.get("tool") != "limit_up_events" or record.get("evidence_scope") != CURRENT_SCOPE or record.get("historical_reference"):
+            tool = record.get("tool")
+            if tool not in {"limit_up_events", "market_event_pool", "compute_result"} or record.get("evidence_scope") != CURRENT_SCOPE or record.get("historical_reference"):
+                continue
+            if tool == "compute_result" and key not in verified_compute:
                 continue
             if record.get("schema_version") != EVIDENCE_VERSION or record.get("evidence_id") != key:
                 raise ValueError("invalid current evidence")
             payload = record["payload"]
-            if any(source.get((r["trade_date"],r["symbol"])) != r for r in payload.get("events", [])):
+            rows = payload.get("events", payload.get("items", []))
+            if tool != "market_event_pool" and any(source.get((r["trade_date"],r["symbol"])) != r for r in rows):
                 raise ValueError("current rows drifted from baseline")
+            if tool == "market_event_pool":
+                for row in rows:
+                    raw = source.get((payload.get("trade_date"), row.get("symbol")))
+                    if raw is None or any(raw.get(k) != row.get(k) for k in ("symbol", "name", "board_height", "closed_limit", "break_count")):
+                        raise ValueError("event-pool identity/values drifted from baseline")
             matching = [v for v in views if v.get("evidence_id") == key]
             for view in matching:
                 store = EvidenceStore()
-                eid = store.add(tool=record["tool"], payload=payload, state=record["result_state"],
+                eid = store.add(tool=tool, payload=payload, state=record["result_state"],
                                 arguments=record["arguments"],sources=record.get("sources"))
                 replay = store.view(eid, offset=view["offset"], limit=max(1,len(view["rows"])))
                 if any(replay[f] != view.get(f) for f in replay.keys()-{"evidence_id","retrieved_at"}):
@@ -149,7 +170,7 @@ def verify_business_facts(case, world, response, extraction, *, diagnostic_unrev
                 if record["result_state"] in {"ok","empty"}:
                     usable.append((record,view))
                     for row in view["rows"]:
-                        visible[(row["trade_date"],row["symbol"])] = row
+                        visible[(row.get("trade_date", payload.get("trade_date")),row["symbol"])] = row
         for assertion in case.assertions:
             if assertion.evaluator != "fact":
                 continue
@@ -166,20 +187,23 @@ def verify_business_facts(case, world, response, extraction, *, diagnostic_unrev
                 raise ValueError("expected membership contradicts baseline")
             if any("closed_limit" in r and next(m for m in members if m["symbol"]==r["symbol"])["closed_limit"] != r["closed_limit"] for r in expected_members):
                 raise ValueError("expected reclosure flag contradicts baseline")
-            actual = [(m.symbol,m.name) for m in extraction.members]
+            actual = [identity(m.symbol, m.name) for m in extraction.members]
             if any(not symbol or not name for symbol,name in actual):
                 raise ValueError("business membership requires reviewed code/name identities")
             correct = extraction.trade_date is not None and extraction.trade_date.isoformat() == expected["trade_date"]
             correct = correct and all(getattr(extraction,k) == v for k,v in scalars.items())
             if "members" in expected:
-                correct = correct and set(actual)==identities and len(actual)==len(identities)
+                canonical = {identity(symbol, name) for symbol, name in identities}
+                correct = correct and set(actual)==canonical and len(actual)==len(canonical)
                 if expected.get("ordered"):
-                    correct = correct and actual == [(m["symbol"], m["name"]) for m in members]
+                    correct = correct and actual == [identity(m["symbol"], m["name"]) for m in members]
             grounded = all((expected["trade_date"],r["symbol"]) in visible for r in members)
             if "limit_up_count" in scalars:
                 grounded = any(v["metadata"].get("trade_date")==expected["trade_date"]
-                    and v["metadata"].get("event_status")=="closed"
-                    and v["metadata"].get("matched_count")==scalars["limit_up_count"] for _,v in usable)
+                    and (v["metadata"].get("event_status")=="closed" or
+                         (r["tool"] == "market_event_pool" and v["metadata"].get("event_type") == "limit_up"))
+                    and not any(r["arguments"].get(k) for k in ("query", "market", "board_height", "min_board_height", "highest_only"))
+                    and v["metadata"].get("matched_count")==scalars["limit_up_count"] for r,v in usable)
             if "matched_count" in scalars:
                 grounded = any(r["result_state"]=="empty" and r["arguments"].get("query")=="评测不存在主题"
                     and v["metadata"].get("trade_date")==expected["trade_date"] for r,v in usable)

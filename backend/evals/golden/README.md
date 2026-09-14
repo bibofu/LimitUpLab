@@ -1,5 +1,9 @@
 # 本地 Golden 资产入口
 
+新增20 Offline + 10 Historical Live可运行候选的入口见 `backend/evals/suites/README.md`。
+集中审核在 `output/agent-eval/datasets/local30-v4/REVIEW.md`，实跑复核在
+`output/agent-eval/reviews/local30-001/README.md`。该批新版本未自动晋升，不覆盖下列已审批资产。
+
 2026-09-14首批完成：1道Offline、1道受限Historical Live。两题仅覆盖最高连板高度、
 完整并列成员及本轮证据支持，不代表整套Agent评测或全回答裁判已完成。
 

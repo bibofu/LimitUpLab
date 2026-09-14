@@ -136,6 +136,9 @@ def build_dataset(recipe: Path, database: Path, destination: Path):
             requests.append(("market_event_pool", {"trade_date": day, "event_type": "limit_up", "query": "评测不存在主题", "result_mode": "count", "limit": limit}))
     for item in book["cases"]:
         requests.extend(routes(item))
+    # Reviewed recipe-level alternate routes are always executed against the real tool.
+    # No response dictionaries or synthetic empty fallbacks are accepted here.
+    requests.extend((r["tool"], r["arguments"]) for r in book.get("additional_routes", []))
     captures, seen, canonicalizer = [], set(), None
     world = None
     for tool, args in requests:
@@ -199,7 +202,7 @@ def build_dataset(recipe: Path, database: Path, destination: Path):
         if kind == "summary":
             assertions.append({"id": "local-only", "evaluator": "trajectory", "kind": "argument_equals", "target": "market_summary.include_limit_down", "expected": False, "requirement_id": "delivery"})
         terminal = [kind] if kind in {"clarify", "refuse"} else ["complete", "empty"] if kind == "empty" else ["complete"]
-        case = CaseSpec.model_validate({"case_id": key, "case_version": 3, "profile": registry.profile,
+        case = CaseSpec.model_validate({"case_id": key, "case_version": book["case_version"], "profile": registry.profile,
             "mode": "live_historical" if is_live else "offline", "severity": "P1", "status": "candidate",
             "capabilities": item["capabilities"], "world": None if is_live else {"id": selected_world.world_id, "version": selected_world.world_version},
             "conversation": [{"role": "user", "content": item["question"]}],
@@ -249,3 +252,75 @@ def run_dataset(bundle, database, destination, *, case_ids=None):
               "token_usage_complete": all(r.get("total_tokens") is not None for r in results)}
     write_json(destination / "batch-results.json", report)
     return report
+
+
+def recheck_dataset(bundle, run_roots, destination):
+    """Re-evaluate retained answers without model calls; preserve execution provenance."""
+    from app.agent_eval.loader import load_case, load_world
+    from app.agent_eval.business_facts import BusinessExtraction, verify_business_facts
+    from app.agent_eval.evaluators import evaluate_trajectory_terminal
+    from app.agent_eval.extractor import Extraction
+    from app.agent_eval.facts import verify_summary_facts
+    from app.agent_eval.process_checks import evaluate_process
+    from app.models import AgentChatResponse
+    manifest = json.loads((bundle / "suite.json").read_text(encoding="utf-8"))
+    destination.mkdir(parents=True, exist_ok=False)
+    entries = []
+    markdown = ["# Local30 实跑与复核", "", "这是保留回答的重新判分，不是新增模型运行，也不是人工批准。",
+        "旧回答只在问题、断言、交付要求、Profile 和时间锚点不变时复用；改题必须重新实跑。",
+        "原始运行的失败归因保留。核心事实诊断 pass 不代表所有额外声明或整个回答通过。", "",
+        f"[逐题口径与标准事实审核]({(bundle / 'REVIEW.md').resolve().as_posix()})", "",
+        "| 题目 | 模式 | 实际终态 | 终态检查 | 核心事实诊断 | 过程诊断 | 执行归因 | 回答来源 |",
+        "| --- | --- | --- | --- | --- | --- | --- | --- |"]
+    for entry in manifest["cases"]:
+        case = load_case(bundle / entry["case"])
+        world = load_world(bundle / entry.get("baseline", entry.get("world")))
+        if digest(case.model_dump(mode="json")) != entry["case_digest"] or digest(world.model_dump(mode="json")) != entry["baseline_digest"]:
+            raise ValueError("current bundle checksum mismatch")
+        source = next((root / entry["id"] for root in reversed(run_roots) if (root / entry["id"]).exists()), None)
+        if source is None:
+            raise ValueError("case has no retained run: " + entry["id"])
+        old_case = load_case(source / "case.json")
+        old_world = load_world(source / ("baseline.json" if case.mode == "live_historical" else "world.json"))
+        exclude = {"case_version", "world", "status"}
+        if case.model_dump(exclude=exclude) != old_case.model_dump(exclude=exclude):
+            raise ValueError("changed question/requirements need a fresh run: " + entry["id"])
+        if (world.anchor_datetime, world.latest_local_trade_date, world.trading_calendar) != (
+            old_world.anchor_datetime, old_world.latest_local_trade_date, old_world.trading_calendar):
+            raise ValueError("changed temporal context needs a fresh run")
+        provenance = json.loads((source / "source.json").read_text(encoding="utf-8"))
+        if provenance["case_digest"] != digest(old_case.model_dump(mode="json")):
+            raise ValueError("source run case checksum mismatch")
+        response = AgentChatResponse.model_validate_json((source / "response.json").read_text(encoding="utf-8"))
+        supervisor = json.loads((source / "supervisor.json").read_text(encoding="utf-8"))
+        trajectory = evaluate_trajectory_terminal(case, response, profile=case.profile)
+        process = evaluate_process(case, response)
+        facts = None
+        if any(a.evaluator == "fact" for a in case.assertions):
+            business = any(a.target == "answer.business_contract" for a in case.assertions)
+            extraction_type = BusinessExtraction if business else Extraction
+            extraction_path = source / "extraction.json"
+            extraction = extraction_type.model_validate_json(extraction_path.read_text(encoding="utf-8")) if extraction_path.exists() else None
+            verifier = verify_business_facts if business else verify_summary_facts
+            facts = verifier(case, world, response, extraction, diagnostic_unreviewed=True)
+        fact_finding = next((f.verdict for f in facts.findings if f.assertion_id == "facts"), "needs_review") if facts else "not_applicable"
+        terminal = next(f.verdict for f in trajectory.findings if f.assertion_id == "$terminal")
+        row = {"id": case.case_id, "mode": case.mode, "case_version": case.case_version,
+            "source_case_version": old_case.case_version, "source_run": str(source.resolve()),
+            "response_digest": digest(response.model_dump(mode="json")), "source_case_digest": provenance["case_digest"],
+            "target_case_digest": entry["case_digest"], "target_baseline_digest": entry["baseline_digest"],
+            "fresh_model_call": False, "execution_verdict": supervisor["verdict"], "execution_cause": supervisor.get("primary_cause"),
+            "actual_terminal": response.task_status, "terminal_check": terminal, "core_fact_diagnostic": fact_finding,
+            "process": process.model_dump(mode="json"), "trajectory": trajectory.model_dump(mode="json"),
+            "facts": facts.model_dump(mode="json") if facts else None, "review_status": "pending_human_review", "release_eligible": False}
+        entries.append(row)
+        write_json(destination / (case.case_id + ".json"), row)
+        markdown.append(f"| {case.case_id} | {case.mode} | {response.task_status} | {terminal} | {fact_finding} | {process.verdict} | {supervisor.get('primary_cause') or '—'} | [原始回答]({(source / 'response.json').resolve().as_posix()}) |")
+    report = {"cases": entries, "fresh_model_calls": 0, "release_eligible": False,
+        "terminal_failures": [e["id"] for e in entries if e["terminal_check"] == "fail"],
+        "core_fact_passes": sum(e["core_fact_diagnostic"] == "pass" for e in entries),
+        "execution_unscorable": [e["id"] for e in entries if e["execution_verdict"] == "unscorable"]}
+    write_json(destination / "recheck.json", report)
+    with (destination / "README.md").open("x", encoding="utf-8") as handle:
+        handle.write("\n".join(markdown) + "\n")
+    return {k: v for k, v in report.items() if k != "cases"}
