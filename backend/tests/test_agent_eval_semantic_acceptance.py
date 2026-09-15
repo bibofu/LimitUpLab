@@ -15,7 +15,7 @@ def test_semantic_calibration_has_positive_and_adversarial_examples():
 def test_full_answer_calibration_covers_support_conflict_and_abstention():
     evidence, samples = calibration_samples()
     assert len(evidence) >= 2
-    assert len(samples) >= 8
+    assert len(samples) >= 10
     assert {item[2] for item in samples} == {"pass", "fail", "needs_review"}
     assert len({item[0] for item in samples}) == len(samples)
 

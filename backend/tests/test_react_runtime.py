@@ -109,7 +109,7 @@ def test_public_entry_defaults_to_react(monkeypatch):
             return call("finish", {"status": "refuse", "answer": "我可以提供研究事实，不能提供交易指令。"}, "f")
     response = answer_first_board_chat(AgentChatRequest(session_id="r", message="给我买卖指令"), [],
                                       llm_provider=Model(), tool_registry=registry())
-    assert response.generated_by == "react-runtime-v12"
+    assert response.generated_by == "react-runtime-v13"
     assert response.task_status == "refuse"
 
 
