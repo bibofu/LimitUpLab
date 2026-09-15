@@ -21,5 +21,7 @@ def test_active_case_maps_back_to_reviewed_candidate_digest():
 
 
 def test_full_answer_never_masks_a_core_failure():
-    assert _full_answer_verdict("fail", ["pending claim"]) == "fail"
-    assert _full_answer_verdict("pass", ["pending claim"]) == "needs_review"
+    assert _full_answer_verdict("fail", "pass") == "fail"
+    assert _full_answer_verdict("pass", "pass") == "pass"
+    assert _full_answer_verdict("pass", "fail") == "fail"
+    assert _full_answer_verdict("pass", "needs_review") == "needs_review"

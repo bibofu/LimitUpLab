@@ -89,6 +89,9 @@ def main() -> int:
     semantic_promote.add_argument("--approvals", required=True, nargs="+", type=Path)
     semantic_promote.add_argument("--acceptance", required=True, type=Path)
     semantic_promote.add_argument("--output-dir", required=True, type=Path)
+    full_answer_accept = commands.add_parser("accept-full-answer-judge")
+    full_answer_accept.add_argument("--output-dir", required=True, type=Path)
+    full_answer_accept.add_argument("--allow-llm", required=True, action="store_true")
     assemble = commands.add_parser("assemble-golden-suite")
     assemble.add_argument("--sources", required=True, nargs="+", type=Path)
     assemble.add_argument("--expected-bundles", required=True, nargs="+", type=Path)
@@ -228,6 +231,12 @@ def main() -> int:
     elif args.command == "promote-semantic-batch":
         from app.agent_eval.semantic_acceptance import promote_semantic_batch
         result = promote_semantic_batch(args.bundle, args.approvals, args.acceptance, args.output_dir)
+    elif args.command == "accept-full-answer-judge":
+        from app.agent_eval.full_answer_judge import accept_full_answer_judge
+        from app.config import configure_runtime_environment
+        from app.services.llm_provider import get_llm_provider
+        configure_runtime_environment()
+        result = accept_full_answer_judge(args.output_dir, get_llm_provider())
     elif args.command == "assemble-golden-suite":
         from app.agent_eval.golden_suite import assemble_golden_suite
         result = assemble_golden_suite(args.sources, args.expected_bundles, args.output_dir)

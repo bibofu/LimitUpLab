@@ -10,6 +10,7 @@ from app.agent_eval.evaluators import evaluate_trajectory_terminal
 from app.agent_eval.extractor import Extraction, SYSTEM as SUMMARY_SYSTEM
 from app.agent_eval.event_extractor import BUSINESS_SYSTEM
 from app.agent_eval.facts import verify_summary_facts
+from app.agent_eval.full_answer_judge import JUDGE_SYSTEM as FULL_ANSWER_SYSTEM, judge_full_answer, _visible_evidence
 from app.agent_eval.loader import load_case, load_world
 from app.agent_eval.models import BudgetSpec
 from app.agent_eval.process_checks import evaluate_process
@@ -19,7 +20,7 @@ from app.models import AgentChatResponse
 
 
 def _acceptance_index(paths):
-    factual, semantic = {}, None
+    factual, semantic, full_answer = {}, None, None
     for path in paths:
         report = json.loads(path.read_text(encoding="utf-8"))
         schema = report.get("schema_version")
@@ -29,6 +30,11 @@ def _acceptance_index(paths):
             if semantic is not None:
                 raise ValueError("duplicate semantic acceptance")
             semantic = report
+            continue
+        if schema == "full-answer-judge-acceptance-v1":
+            if full_answer is not None:
+                raise ValueError("duplicate full-answer judge acceptance")
+            full_answer = report
             continue
         if schema == "empty-technical-acceptance-v1":
             entries = [{"case_id": report["case_id"], "case_digest": report["case_digest"],
@@ -44,7 +50,7 @@ def _acceptance_index(paths):
             if entry["case_id"] in factual or entry.get("technical_acceptance") is not True:
                 raise ValueError("duplicate or failed factual acceptance")
             factual[entry["case_id"]] = {"entry": entry, "prompts": prompts, "acceptance_digest": digest(report)}
-    return factual, semantic
+    return factual, semantic, full_answer
 
 
 def _percentile(values, proportion):
@@ -59,10 +65,10 @@ def _accepted_candidate_digest(case):
     return digest(case.model_copy(update={"status": "candidate"}).model_dump(mode="json"))
 
 
-def _full_answer_verdict(core, additional):
+def _full_answer_verdict(core, judgment):
     if core in {"fail", "unscorable"}:
         return core
-    return "needs_review" if additional else core
+    return judgment
 
 
 def score_formal_run(bundle: Path, run_root: Path, acceptance_paths: list[Path],
@@ -73,7 +79,7 @@ def score_formal_run(bundle: Path, run_root: Path, acceptance_paths: list[Path],
         raise FileExistsError(destination)
     suite = json.loads((bundle / "suite.json").read_text(encoding="utf-8"))
     batch = json.loads((run_root / "batch-results.json").read_text(encoding="utf-8"))
-    factual_acceptance, semantic_acceptance = _acceptance_index(acceptance_paths)
+    factual_acceptance, semantic_acceptance, full_answer_acceptance = _acceptance_index(acceptance_paths)
     if len(batch.get("cases", [])) != len(suite["cases"]):
         raise ValueError("formal run is incomplete")
     batch_by_id = {item["id"]: item for item in batch["cases"]}
@@ -81,9 +87,13 @@ def score_formal_run(bundle: Path, run_root: Path, acceptance_paths: list[Path],
     if semantic_cases and (semantic_acceptance is None
             or semantic_acceptance.get("judge_prompt_digest") != digest(JUDGE_SYSTEM)):
         raise ValueError("semantic judge acceptance is missing or stale")
+    if (factual_acceptance and (full_answer_acceptance is None
+            or full_answer_acceptance.get("technical_acceptance") is not True
+            or full_answer_acceptance.get("judge_prompt_digest") != digest(FULL_ANSWER_SYSTEM))):
+        raise ValueError("full-answer judge acceptance is missing or stale")
     destination.mkdir(parents=True)
-    budget = BudgetSpec(max_agent_runs=1, max_model_calls=len(semantic_cases), max_input_tokens=100000,
-                        max_output_tokens=10000, max_wall_time_seconds=240, max_estimated_cost_usd=None)
+    budget = BudgetSpec(max_agent_runs=1, max_model_calls=len(suite["cases"]), max_input_tokens=3000000,
+                        max_output_tokens=120000, max_wall_time_seconds=600, max_estimated_cost_usd=None)
     guarded = GuardedProvider(provider, destination / "judge-calls", perf_counter() + 240, budget)
     (destination / "judge-calls").mkdir()
     results = []
@@ -103,7 +113,7 @@ def score_formal_run(bundle: Path, run_root: Path, acceptance_paths: list[Path],
             trajectory, process = evaluate_trajectory_terminal(case, response, profile=case.profile), evaluate_process(case, response)
             supervisor = batch_by_id[case_id]
             accepted = factual_acceptance.get(case_id)
-            semantic = None
+            semantic, full_judgment = None, None
             if accepted:
                 binding = accepted["entry"]
                 if (binding["case_digest"] != _accepted_candidate_digest(case)
@@ -121,6 +131,9 @@ def score_formal_run(bundle: Path, run_root: Path, acceptance_paths: list[Path],
                 fact_verdict = next((item.verdict for item in facts.findings if item.assertion_id == "facts"), "needs_review")
                 additional = [item.model_dump(mode="json") for item in facts.findings
                               if item.verdict == "needs_review" and item.assertion_id not in {"$calibration", "facts"}]
+                full_judgment = judge_full_answer(
+                    guarded, case.conversation[-1].content, response.answer, _visible_evidence(response),
+                ).model_dump(mode="json")
             else:
                 facts, fact_verdict, additional = None, None, []
                 accepted_case = next((item for item in semantic_acceptance["cases"] if item["case_id"] == case_id), None)
@@ -131,6 +144,7 @@ def score_formal_run(bundle: Path, run_root: Path, acceptance_paths: list[Path],
                 rubric = next(item.expected for item in case.assertions if item.evaluator == "safety")
                 judgment = judge_semantics(guarded, case.conversation[-1].content, rubric, response.answer)
                 semantic = judgment.model_dump(mode="json")
+                full_judgment = semantic
             delegated = {item.id for item in case.assertions if item.evaluator in {"fact", "safety"}}
             deterministic = [item for item in trajectory.findings if item.assertion_id not in delegated]
             terminal = next(item.verdict for item in trajectory.findings if item.assertion_id == "$terminal")
@@ -146,11 +160,13 @@ def score_formal_run(bundle: Path, run_root: Path, acceptance_paths: list[Path],
                 core, cause = "needs_review", "evaluator_failure"
             else:
                 core, cause = "pass", None
-            full_answer = _full_answer_verdict(core, accepted and additional)
+            full_answer = _full_answer_verdict(core, full_judgment["verdict"])
             results.append({"case_id": case_id, "mode": case.mode, "core_contract_verdict": core,
                             "full_answer_verdict": full_answer, "failure_cause": cause,
+                            "full_answer_failure_cause": "agent_failure" if full_answer == "fail" else None,
                             "actual_terminal": response.task_status, "terminal_verdict": terminal,
                             "fact_verdict": fact_verdict, "semantic_judgment": semantic,
+                            "full_answer_judgment": full_judgment,
                             "process_verdict": process.verdict, "additional_review_items": additional,
                             "agent_model_calls": supervisor.get("model_calls"), "agent_tokens": supervisor.get("total_tokens"),
                             "elapsed_seconds": supervisor.get("elapsed_seconds")})
@@ -159,7 +175,7 @@ def score_formal_run(bundle: Path, run_root: Path, acceptance_paths: list[Path],
     factual = [item for item in results if item["fact_verdict"] is not None]
     semantic = [item for item in results if item["semantic_judgment"] is not None]
     elapsed = [item["elapsed_seconds"] for item in results]
-    report = {"schema_version": "formal-agent-baseline-v1", "suite_id": suite["suite_id"],
+    report = {"schema_version": "formal-agent-baseline-v2", "suite_id": suite["suite_id"],
               "run_root": str(run_root.resolve()), "model": batch["cases"][0].get("model"),
               "case_count": len(results), "counts": counts,
               "core_contract_pass_rate": counts["pass"] / len(results),
@@ -167,14 +183,16 @@ def score_formal_run(bundle: Path, run_root: Path, acceptance_paths: list[Path],
               "factual_core_accuracy": sum(item["fact_verdict"] == "pass" for item in factual) / len(factual),
               "semantic_answer_accuracy": sum(item["semantic_judgment"]["verdict"] == "pass" for item in semantic) / len(semantic),
               "infrastructure_success_rate": sum(item["core_contract_verdict"] != "unscorable" for item in results) / len(results),
+              "full_answer_pass_rate": sum(item["full_answer_verdict"] == "pass" for item in results) / len(results),
+              "full_answer_failures": sum(item["full_answer_verdict"] == "fail" for item in results),
               "full_answer_review_pending": sum(item["full_answer_verdict"] == "needs_review" for item in results),
               "agent_model_calls": sum(item.get("model_calls") or 0 for item in batch["cases"]),
               "agent_tokens": batch["total_tokens"], "judge_model_calls": guarded.calls,
               "judge_tokens": judge_usage.total_tokens if judge_usage.token_usage_complete else None,
               "latency_seconds": {"p50": _percentile(elapsed, .5), "p95": _percentile(elapsed, .95)},
               "cases": results, "release_eligible": False,
-              "notes": ["core pass is scoped to the activated contract",
-                        "full-answer pass is withheld when additional claim inventory remains unreviewed"]}
+              "notes": ["core pass is scoped to the activated deterministic contract",
+                        "full-answer factual judgments use a separately calibrated judge and cannot override core failures"]}
     write_json(destination / "report.json", report)
     lines = ["# 当前Agent正式Golden基线", "", f"核心合同：{counts['pass']}/{len(results)}通过，"
              f"{counts['fail']}失败，{counts['needs_review']}待复核，{counts['unscorable']}不可评分。", "",
