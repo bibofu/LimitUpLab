@@ -71,6 +71,21 @@ def test_omitted_and_explicit_default_match_effective_production_default(argumen
     assert registry.attempts[0]["recording_id"] == "r"
 
 
+def test_limit_up_aliases_match_the_same_production_status_and_sort_defaults():
+    entry = recording("limit_up_events", {
+        "trade_date": "2026-09-11", "market": "chinext", "limit": 100,
+    }, payload={"trade_date": "2026-09-11", "events": [{"symbol": "300563"}]})
+    registry = FrozenAgentToolRegistry(world([entry]))
+
+    _, payload, state = invoke(registry, "limit_up_events", {
+        "trade_date": "2026-09-11", "market": "chinext", "closed_only": True,
+        "sort_by": "board_height", "sort_order": "desc", "limit": 100,
+    })
+
+    assert state == "ok" and payload["events"][0]["symbol"] == "300563"
+    assert registry.attempts[0]["recording_id"] == "r"
+
+
 def test_only_schema_nullable_parameters_accept_explicit_null():
     registry = FrozenAgentToolRegistry(world([recording("stock_kline", {"symbol": "000001"})]))
     assert invoke(registry, "stock_kline", {"symbol": "000001", "end_date": None})[2] == "ok"

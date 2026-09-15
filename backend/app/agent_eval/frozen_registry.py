@@ -51,6 +51,7 @@ class FrozenAgentToolRegistry:
         self._models = {name: arguments_model(item) for name, item in self._contracts.items()}
         self._gateway = ToolGateway(self, EvidenceStore())
         self._recordings: dict[str, RecordingSpec] = {}
+        self._semantic_recordings: dict[str, RecordingSpec] = {}
         self._attempts: list[dict] = []
         self._lock = Lock()
         with self.anchored():
@@ -68,6 +69,11 @@ class FrozenAgentToolRegistry:
                 if signature in self._recordings:
                     raise FrozenFixtureError("ambiguous recordings for the same effective arguments")
                 self._recordings[signature] = recording
+                semantic = self._signature(recording.tool, self._semantic_arguments(recording.tool, arguments))
+                previous = self._semantic_recordings.get(semantic)
+                if previous is not None and previous.observation != recording.observation:
+                    raise FrozenFixtureError("conflicting recordings for equivalent production arguments")
+                self._semantic_recordings.setdefault(semantic, recording)
 
     def schemas(self):
         return [item for item in TOOL_SCHEMAS if item.name in self.enabled_tool_names]
@@ -103,6 +109,27 @@ class FrozenAgentToolRegistry:
         return json.dumps([name, arguments], sort_keys=True, ensure_ascii=False,
                           separators=(",", ":"), allow_nan=False)
 
+    @staticmethod
+    def _semantic_arguments(name: str, arguments: dict) -> dict:
+        """Collapse public aliases only where the production method is behaviorally identical."""
+        effective = deepcopy(arguments)
+        if name != "limit_up_events":
+            return effective
+        status = effective.get("event_status")
+        if status is None:
+            status = "broken_intraday" if effective.get("broken_only") else (
+                "all" if effective.get("closed_only") is False else "closed"
+            )
+        effective.pop("broken_only", None)
+        effective.pop("closed_only", None)
+        effective["event_status"] = status
+        sort_by = effective.get("sort_by") or "board_height"
+        effective["sort_by"] = sort_by
+        effective["sort_order"] = effective.get("sort_order") or (
+            "asc" if sort_by == "first_limit_time" else "desc"
+        )
+        return effective
+
     def execute_frozen_calls(self, calls: list[dict], *, request: AgentChatRequest) -> dict:
         # Request is part of the Gateway protocol, never used as a lookup shortcut.
         traces = []
@@ -114,6 +141,9 @@ class FrozenAgentToolRegistry:
                     raise FrozenFixtureError("execute the Agent inside registry.anchored()")
                 arguments = self._arguments(call["name"], call["arguments"])
                 recording = self._recordings.get(self._signature(call["name"], arguments))
+                if recording is None:
+                    semantic = self._semantic_arguments(call["name"], arguments)
+                    recording = self._semantic_recordings.get(self._signature(call["name"], semantic))
                 if recording is None:
                     raise FrozenFixtureError("no recording matches the effective tool arguments")
                 observation = recording.observation

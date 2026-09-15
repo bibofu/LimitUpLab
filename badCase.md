@@ -856,3 +856,10 @@ empty、partial 或 error 时 Replan 新闻；股票名称提取同步覆盖 K�
 - 根因：ReAct 模型未调用 `finish` 而直接返回正文时，运行时绕过类型化终态协议并无条件构造 `status=complete`。因此正文语义无论是完成、澄清还是拒答都会丢失真实终态。
 - 修复：普通文本仅作为正文草稿保留，下一轮要求模型单独调用类型化 `finish` 并明确提交真实状态；后端不使用正文正则推断状态，也不针对评测题硬编码。运行版本升级为 `react-runtime-v12`。
 - 回归：同一条普通文本回退路径分别覆盖 `complete`、`clarify`、`refuse`，断言必须经过第二次结构化提交且最终状态与提交一致；输入安全、投资合规和最终正文校验继续执行。
+
+## BC-050：Frozen World 把生产等价的涨停状态参数误判为录制缺口（2026-09-15）
+
+- 发现方式：修复终态后首次重跑 Local30，OFF-042 已成功取得创业板首板证据，随后用省略 `board_height`、显式 `closed_only=true` 的同范围查询交叉核验。World 已录制省略 `closed_only` 的等价路线，但 Frozen Registry 返回 `FrozenFixtureError`，整题被标为 `fixture_failure`。
+- 根因：冻结匹配只比较公开参数的字面 canonical dict；生产 `limit_up_events` 会把省略状态和 `closed_only=true` 都归一为 `event_status=closed`，并为排序补 `board_height/desc`，冻结层没有复用这些行为等价关系。
+- 修复：保留精确签名优先匹配，另建立仅覆盖生产已定义别名与默认值的语义签名；统一 `closed_only`、`broken_only`、`event_status` 以及默认排序。只有等价签名的 Observation 完全相同时才允许复用，冲突录制在 World 初始化时失败，不用空结果兜底。
+- 回归：验证省略状态与显式收盘状态、默认排序与显式排序可命中同一真实录制；既有参数漂移、重复冲突、无录制工具和 Profile 拒绝测试继续通过。Frozen Registry 定向测试 20 项通过。
