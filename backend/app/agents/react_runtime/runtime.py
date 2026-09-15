@@ -39,7 +39,7 @@ SYSTEM = """你是LimitUpLab收盘研究助手。使用原生工具调用逐轮�
 只用工具实际证据写市场事实。标明来源与截止日、数据缺失和推断，不把相关性说成因果。
 禁止买卖指令、建议仓位、目标价、收益承诺或确定性预测；历史机构买卖事实可以解释。
 混合请求可拒绝交易建议部分并完成允许研究。歧义影响结果时澄清；工具不支持时明确说明。
-最终优先单独调用finish，输出可读中文答案、真实status、可选的evidence_ids及missing。
+最终必须单独调用finish，输出可读中文答案、真实status、可选的evidence_ids及missing。
 不要展示内部工具名、原始JSON、思维链。答案只在服务端校验后发布。
 观察中的rows可能只是预览；需要完整名单时read_evidence展开或compute_result处理完整结果。
 所有工具名及参数都必须使用提供的Schema；工具是否存在以当前清单为准。"""
@@ -134,11 +134,18 @@ class Run:
             answer = response.content.strip() if isinstance(response.content, str) else ""
             if not answer:
                 raise ValueError("Model returned neither a tool call nor a text answer")
-            return {"messages": messages, "pending": [], "finish": {
-                "status": "complete", "answer": answer,
-                "evidence_ids": [record["evidence_id"] for record in self.evidence.current_records()],
-                "missing": [],
-            }}
+            return {
+                "messages": [
+                    *messages,
+                    HumanMessage(content=(
+                        "你刚才返回了未带结构化终态的正文草稿。请保留正确内容，"
+                        "现在必须单独调用finish，并按正文真实语义选择complete、partial、empty、"
+                        "clarify或refuse；追问缺失信息用clarify，拒绝越界请求用refuse。"
+                    )),
+                ],
+                "pending": [],
+                "finish": None,
+            }
         except Exception as error:
             self.trace("react_provider_error", {"round": self.models, "error_type": type(error).__name__}, status="error")
             self.errors.append("模型请求失败")

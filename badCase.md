@@ -849,3 +849,10 @@ empty、partial 或 error 时 Replan 新闻；股票名称提取同步覆盖 K�
 - 用户决策：移除最终答案的 Evidence/Claim Validator，优先保证 Agent 能交付工具查询后的正常回答。输入安全审查、Prompt 泄漏保护、投资合规 Critic、工具参数 Schema、工具调用预算和确定性 `compute_result` 仍然保留，不属于本次删除范围。
 - 修复：删除 Claim Ledger 类型和 finish schema 字段；删除 evidence ID、历史 scope、requirement、missing/status、路径、标量值之间的最终拒绝链；`update_task` 不再校验 evidence；模型直接返回普通文本时直接进入发布流程，不再因缺少类型化 `finish` 消耗修复次数。旧 checkpoint 中残留的 `claims` 字段兼容忽略。运行版本升级为 `react-runtime-v11`。
 - 回归：覆盖无 evidence 的 complete、普通文本直接完成、历史/未知 evidence ID 不触发拒绝、错误 claim 值不触发 gate、旧 claims 字段兼容忽略，以及安全和投资合规审查继续执行。
+
+## BC-049：普通文本回退把澄清与拒答终态硬编码为 complete（2026-09-15）
+
+- 发现方式：Local30 正式基线中的 OFF-035 与 OFF-036。两条回答正文分别正确追问缺失股票、拒绝标的/仓位/收益承诺，但结构化 `task_status` 都是 `complete`，导致终态准确率只有 28/30。
+- 根因：ReAct 模型未调用 `finish` 而直接返回正文时，运行时绕过类型化终态协议并无条件构造 `status=complete`。因此正文语义无论是完成、澄清还是拒答都会丢失真实终态。
+- 修复：普通文本仅作为正文草稿保留，下一轮要求模型单独调用类型化 `finish` 并明确提交真实状态；后端不使用正文正则推断状态，也不针对评测题硬编码。运行版本升级为 `react-runtime-v12`。
+- 回归：同一条普通文本回退路径分别覆盖 `complete`、`clarify`、`refuse`，断言必须经过第二次结构化提交且最终状态与提交一致；输入安全、投资合规和最终正文校验继续执行。

@@ -109,7 +109,7 @@ def test_public_entry_defaults_to_react(monkeypatch):
             return call("finish", {"status": "refuse", "answer": "我可以提供研究事实，不能提供交易指令。"}, "f")
     response = answer_first_board_chat(AgentChatRequest(session_id="r", message="给我买卖指令"), [],
                                       llm_provider=Model(), tool_registry=registry())
-    assert response.generated_by == "react-runtime-v11"
+    assert response.generated_by == "react-runtime-v12"
     assert response.task_status == "refuse"
 
 
@@ -311,13 +311,20 @@ def test_kline_schema_matches_single_entity_invocation():
         gateway.validate({"name": "stock_kline", "args": {"symbol": ["000001", "000002"]}})
 
 
-def test_plain_model_text_is_published_without_finish_repair():
+@pytest.mark.parametrize("status", ["complete", "clarify", "refuse"])
+def test_plain_model_text_requires_typed_terminal_submission(status):
     class Model:
         calls = 0
 
         def generate_messages(self, messages, tools, **kwargs):
             self.calls += 1
-            return AIMessage(content="这是模型直接返回的研究回答。")
+            if self.calls == 1:
+                return AIMessage(content="这是模型直接返回的正文草稿。")
+            assert "必须单独调用finish" in messages[-1].content
+            return call("finish", {
+                "status": status,
+                "answer": "这是模型通过结构化终态提交的回答。",
+            }, "finish")
 
     response = run(
         AgentChatRequest(session_id="r", message="查询贵州茅台今天行情"),
@@ -325,10 +332,12 @@ def test_plain_model_text_is_published_without_finish_repair():
         Model(),
     )
 
-    assert response.task_status == "complete"
+    assert response.task_status == status
     assert response.stop_reason == "answered"
     checks = [trace.output for trace in response.tool_results if trace.name == "react_answer_check"]
-    assert checks == [{"passed": True, "status": "complete", "missing": []}]
+    assert checks == [{"passed": True, "status": status, "missing": []}]
+    execution = next(trace for trace in response.tool_results if trace.name == "react_execution")
+    assert execution.output["model_calls"] == 2
 
 
 def test_complete_answer_no_longer_requires_evidence():

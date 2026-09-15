@@ -21,7 +21,7 @@
 
 评测设计以当前唯一生产链路为基准：
 
-- 运行时版本：`react-runtime-v11`；
+- 运行时版本：`react-runtime-v12`；
 - 模式：有限预算的 bounded ReAct；
 - 模型根据每轮 Observation 动态选择工具或结束任务；
 - 系统提示要求业务事实来自当前工具 Evidence，但 Runtime 已移除最终答案的
@@ -321,7 +321,7 @@ severity: P0
 owner: agent-runtime
 introduced_in: eval-v1
 
-runtime_contract: react-runtime-v11
+runtime_contract: react-runtime-v12
 tool_contract: agent-tools-v2
 profile: v1_close_review
 world_id: normal_market_20260911
