@@ -21,6 +21,9 @@ ANSWER = "2026-09-11 的涨停家数见本轮查询。"
 class ScriptedProvider:
     model = "scripted-not-real"
 
+    def __init__(self):
+        self.draft_returned = False
+
     def generate_messages(self, messages, tools, **kwargs):
         if tools[0]["function"]["name"] == "submit_extraction":
             payload = json.loads(messages[-1].content)
@@ -28,8 +31,12 @@ class ScriptedProvider:
             return AIMessage(content="", tool_calls=[{"id": "x", "name": "submit_extraction", "args": {
                 "items": [{"quote": payload["answer"], "occurrence": 0, "numeric": False,
                            "relational": True, "claim": None}]}}])
-        if any(isinstance(m, ToolMessage) for m in messages):
+        if any(isinstance(m, ToolMessage) for m in messages) and not self.draft_returned:
+            self.draft_returned = True
             return AIMessage(content=ANSWER)
+        if self.draft_returned:
+            return AIMessage(content="", tool_calls=[{"id": "finish", "name": "finish",
+                "args": {"status": "complete", "answer": ANSWER}}])
         return AIMessage(content="", tool_calls=[{"id": "q", "name": "market_summary", "args": {}}])
 
 
@@ -39,7 +46,7 @@ def test_scripted_full_worker_preserves_artifacts_and_never_promotes_model_inven
     output.mkdir()
     report = execute_case(assets / "case.json", assets / "world.json", output, ScriptedProvider())
     assert report["verdict"] == "needs_review" and not report["release_eligible"]
-    assert report["model_calls"] == 3 and report["total_tokens"] is None
+    assert report["model_calls"] == 4 and report["total_tokens"] is None
     for name in ["manifest", "request", "case", "world", "source", "response", "extraction", "trajectory", "facts", "result", "usage", "summary"]:
         assert (output / (name + ".json")).is_file()
     extraction = json.loads((output / "extraction.json").read_text(encoding="utf-8"))
@@ -66,7 +73,7 @@ def test_extractor_failure_keeps_agent_response_and_raw_output(artifact, tmp_pat
     report = execute_case(assets / "case.json", assets / "world.json", output, Broken())
     assert report["primary_cause"] == "evaluator_failure"
     assert (output / "response.json").is_file() and (output / "extraction-error.json").is_file()
-    assert (output / "call-03-response.json").is_file()
+    assert (output / "call-04-response.json").is_file()
 
 
 def test_extractor_rejects_fabricated_quotes():

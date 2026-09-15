@@ -313,7 +313,8 @@ def test_pool_metadata_count_and_computed_rows_are_valid_evidence(dataset, monke
                     if self.count == 2:
                         args.update(operation="select", filters=[{"field": "break_count", "operator": "ge", "value": 1}])
                     return AIMessage(content="", tool_calls=[{"id": name, "name": name, "args": args}])
-                return AIMessage(content=answer)
+                return AIMessage(content="", tool_calls=[{"id": "finish", "name": "finish",
+                    "args": {"status": "complete", "answer": answer}}])
         registry = FrozenAgentToolRegistry(world)
         with registry.anchored():
             response = runtime.run(AgentChatRequest(session_id=str(uuid4()), message_id=str(uuid4()), message=case.conversation[0].content), registry, Provider())

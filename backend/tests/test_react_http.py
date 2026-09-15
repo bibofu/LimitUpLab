@@ -151,7 +151,7 @@ def test_cancel_interrupted_run_does_not_restart_model(http_server):
     assert state.calls == 0
 
 
-def test_http_publishes_plain_model_answer_without_evidence_gate(http_server):
+def test_http_publishes_plain_model_draft_after_typed_finish(http_server):
     client, _state = http_server
     guarded_registry = SimpleNamespace(
         events=[],
@@ -164,7 +164,11 @@ def test_http_publishes_plain_model_answer_without_evidence_gate(http_server):
 
         def generate_messages(self, messages, tools, **kwargs):
             self.calls += 1
-            return AIMessage(content="贵州茅台今天涨停，成交额100亿元。")
+            answer = "贵州茅台今天涨停，成交额100亿元。"
+            if self.calls == 1:
+                return AIMessage(content=answer)
+            return AIMessage(content="", tool_calls=[{"name": "finish", "id": "finish",
+                "args": {"status": "complete", "answer": answer}}])
 
     agents.answer_first_board_chat = lambda request, **kwargs: run(
         request,

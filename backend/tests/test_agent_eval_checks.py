@@ -57,7 +57,8 @@ def invoke(world, *, tool="market_summary", args=None, status="complete", missin
             views = [json.loads(m.content) for m in messages if isinstance(m, ToolMessage)]
             evidence_ids = [v["evidence_id"] for v in views if "evidence_id" in v]
             if answer is not None:
-                return AIMessage(content=answer)
+                return AIMessage(content="", tool_calls=[{"name": "finish", "id": "finish",
+                    "args": {"status": status, "answer": answer, "missing": missing or []}}])
             return AIMessage(content="", tool_calls=[{"name": "finish", "id": "finish",
                 "args": {"status": status, "answer": "本地研究查询已完成。", "missing": missing or [],
                          "evidence_ids": evidence_ids}}])

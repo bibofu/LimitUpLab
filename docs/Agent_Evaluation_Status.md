@@ -2,7 +2,26 @@
 
 ## 当前状态
 
-### 当前Agent正式Golden基线（2026-09-14）
+### Local30 P0 缺口已关闭（2026-09-15）
+
+- 基于统一Active Golden清单`output/agent-eval/golden/local30-current-v2/suite.json`，使用
+  `react-runtime-v13`和DeepSeek `deepseek-v4-flash`完成新的30题独立真实运行：
+  `output/agent-eval/runs/local30-p0-formal-003`。旧运行与失败报告均保留，未覆盖。
+- 核心合同30/30、终态30/30、事实核心28/28、语义回答2/2、基础设施30/30、完整答案30/30；
+  完整答案失败0、开放复核0。OFF-035正确返回`clarify`，OFF-036正确返回`refuse`。
+- Agent共179次模型调用、1,126,148 Token；完整答案/语义裁判共30次调用、172,660 Token；
+  隔离评测延迟P50为9.10秒、P95为13.58秒。裁判v4校准集10/10通过，明确区分并列的不同口径指标与
+  错误比例绑定；裁判只能补充完整答案事实检查，不能覆盖确定性核心失败。
+- LH-034曾暴露把源字段`计算机设`自行补成`计算机设备`的问题。运行时现只回答用户要求字段和必要口径，
+  原样使用证据字段，疑似脏数据显式说明；最终复跑只交付所需代码、名称及必要筛选口径。
+- 最终正式产物：`output/agent-eval/formal/local30-p0-final-001/report.json`；可读摘要为同目录
+  `README.md`；`manifest.json`绑定Golden、运行批次、全部验收件、裁判提示及report/README/diff摘要；
+  `diff.json`与`DIFF.md`对比上一正式基线`local30-current-003`。
+- 相比上一基线，核心合同和终态均由93.33%升至100%；完整答案由2题通过、28题待复核变为30/30通过，
+  OFF-035/036由核心及终态失败变为通过。该结论只适用于当前Local30的20 Offline + 10 Historical Live，
+  不代表长期240 Offline + 48 Live门禁已完成，因此`release_eligible`仍为false。
+
+### 上一Agent正式Golden基线（2026-09-14，历史）
 
 - 使用统一Active Golden清单`output/agent-eval/golden/local30-current-v2/suite.json`重新执行全部30题，
   每题使用独立session与message_id；20道Offline走Frozen World，10道Historical Live走真实本地生产工具并校验基线，
@@ -170,9 +189,9 @@ Plan-and-Execute 设计，无法充分评价当前 bounded ReAct 的 Observation
 
 ## 使用边界
 
-当前仓库没有可用于宣称 Agent 质量、模型稳定性或发布通过的正式评测集。
-普通 pytest、前端测试和构建仍是代码回归检查，但不得称为 Agent 行为评测。
-旧评测代码和兼容入口不再保留。后续方案不得直接复用旧数据模型、通过阈值或报告结构。
+当前仓库已有可回放的Local30正式Golden基线，但其范围仅为20 Offline + 10 Historical Live，
+不能据此宣称完整Agent能力、跨运行模型稳定性或发布门禁通过。普通pytest、前端测试和构建仍只是代码回归检查，
+不得称为Agent行为评测；长期240 Offline + 48 Live、Current Live、External Canary和三次稳定性面板仍待建设。
 
 历史里程碑和 `docs/code-quality-audit.md` 中的旧评测结果只记录当时事实，
 不代表当前版本验收状态。
