@@ -186,13 +186,6 @@ export interface FinanceNewsPage {
   items: FinanceNewsItem[];
 }
 
-export interface ContinuationStat {
-  board_height: number;
-  sample_size: number;
-  continued_count: number;
-  probability: number;
-}
-
 export interface BoardPromotionBucket {
   from_board_height: number;
   to_board_height: number;
@@ -228,21 +221,6 @@ export interface DailyBoardPromotionStat {
   promoted_stocks: BoardPromotionStock[];
 }
 
-export interface FailedRateStat {
-  board_height: number;
-  sample_size: number;
-  failed_count: number;
-  failed_rate: number;
-}
-
-export interface PostPerformanceStat {
-  board_height: number;
-  sample_size: number;
-  avg_next_open_pct: number;
-  avg_next_high_pct: number;
-  avg_next_close_pct: number;
-  avg_five_day_return_pct: number;
-}
 export interface FirstBoardFilterResult {
   symbol: string;
   name: string;
@@ -445,80 +423,6 @@ export interface RecommendationIntelligenceResponse {
   warnings: string[];
 }
 
-export interface PredictionQualityCohort {
-  dimension: "prediction_source" | "scoring_version";
-  value: string;
-  row_count: number;
-  unique_stock_date_count: number;
-  trade_date_count: number;
-  next_day_ready_count: number;
-  next_day_coverage_rate: number;
-}
-
-export interface PredictionDateCoverage {
-  trade_date: string;
-  candidate_count: number;
-  top_count: number;
-  next_day_ready_count: number;
-  three_day_ready_count: number;
-  next_day_coverage_rate: number;
-  three_day_coverage_rate: number;
-  next_day_mature: boolean;
-  three_day_mature: boolean;
-  status: "complete" | "partial" | "pending" | "not_mature";
-}
-
-export interface PredictionBenchmarkMetrics {
-  benchmark: string;
-  label: string;
-  trade_date_count: number;
-  sample_size: number;
-  avg_next_open_to_close_pct: number | null;
-  positive_rate: number | null;
-  promoted_to_second_board_rate: number | null;
-  large_loss_rate: number | null;
-  avg_three_day_open_to_close_pct: number | null;
-  avg_max_drawdown_from_next_open_3d: number | null;
-  excess_vs_ready_pool_pct: number | null;
-}
-
-export interface PredictionQualityPolicyStatus {
-  champion_version: string;
-  latest_challenger_version: string | null;
-  latest_optimizer_version: string | null;
-  promotion_eligible: boolean | null;
-  outcome_ready_trade_dates: number;
-  required_trade_dates: number;
-  readiness_rate: number;
-  gate_reasons: string[];
-}
-
-export interface PredictionQualityAuditResponse {
-  start_date: string;
-  end_date: string;
-  latest_trade_date: string;
-  audited_scoring_version: string;
-  top_k: number;
-  raw_prediction_rows: number;
-  audited_prediction_rows: number;
-  canonical_prediction_count: number;
-  cross_cohort_duplicate_rows: number;
-  data_as_of_violation_count: number;
-  prediction_trade_date_count: number;
-  next_day_mature_trade_date_count: number;
-  complete_next_day_trade_date_count: number;
-  next_day_outcome_coverage_rate: number;
-  three_day_outcome_coverage_rate: number;
-  cohorts: PredictionQualityCohort[];
-  date_coverage: PredictionDateCoverage[];
-  benchmarks: PredictionBenchmarkMetrics[];
-  policy_status: PredictionQualityPolicyStatus;
-  findings: string[];
-  recommendations: string[];
-  warnings: string[];
-  generated_by: string;
-}
-
 export interface ReviewAgentPick {
   time_cohort?: string;
   scoring_version?: string | null;
@@ -601,69 +505,6 @@ export interface ReviewAgentReportResponse {
   confidence: number;
   reviewed_picks: ReviewAgentPick[];
   tool_results: AgentToolTrace[];
-  warnings: string[];
-  generated_by: string;
-}
-
-export interface DailyReviewSnapshotSummary {
-  time_audit_status?: string;
-  as_of_date: string;
-  start_date: string;
-  sample_size: number;
-  outcome_ready_count: number;
-  top_pick_promotion_rate: number | null;
-  market_promotion_rate: number | null;
-  generated_by: string;
-  generated_at: string;
-}
-
-export interface DailyReviewSnapshotsResponse {
-  snapshots: DailyReviewSnapshotSummary[];
-  generated_by: string;
-}
-
-export interface ScoringErrorCase {
-  trade_date: string;
-  symbol: string;
-  name: string;
-  rank: number;
-  score: number;
-  promoted_to_second_board: boolean;
-  next_open_to_close_pct: number | null;
-  leading_factors: string[];
-}
-
-export interface ScoringFactorErrorDiagnostic {
-  factor_key: string;
-  factor_name: string;
-  false_positive_mean_score: number | null;
-  false_negative_mean_score: number | null;
-  false_negative_minus_false_positive: number | null;
-  ablation_top_promotion_rate: number | null;
-  ablation_delta: number | null;
-  recommendation: "increase" | "decrease" | "neutral";
-  evidence: string;
-}
-
-export interface ScoringErrorDiagnosticResponse {
-  start_date: string;
-  end_date: string;
-  scoring_version: string;
-  top_k: number;
-  trade_date_count: number;
-  pool_sample_size: number;
-  top_sample_size: number;
-  top_promoted_count: number;
-  top_promotion_rate: number | null;
-  market_promoted_count: number;
-  market_promotion_rate: number | null;
-  promotion_rate_delta: number | null;
-  false_positive_count: number;
-  false_negative_count: number;
-  false_positive_samples: ScoringErrorCase[];
-  false_negative_samples: ScoringErrorCase[];
-  factors: ScoringFactorErrorDiagnostic[];
-  findings: string[];
   warnings: string[];
   generated_by: string;
 }
@@ -761,132 +602,6 @@ export type AgentChatStreamEvent =
       event: "error";
       data: { message: string; run_id?: string };
     };
-
-export interface AgentRunSummary {
-  run_id: string;
-  session_id: string;
-  status: "success" | "error";
-  intent: string | null;
-  message: string;
-  answer_preview: string | null;
-  tool_calls: string[];
-  tool_results: AgentToolTrace[];
-  warnings: string[];
-  error_message: string | null;
-  started_at: string;
-  finished_at: string;
-  duration_ms: number;
-}
-
-export interface AgentRunsResponse {
-  runs: AgentRunSummary[];
-  generated_by: string;
-}
-
-export interface AgentDataHealthTopCandidate {
-  symbol: string;
-  name: string;
-  score: number;
-  rating: string;
-  feature_ready: boolean;
-  enrichment_ready: boolean;
-}
-
-export interface OutcomeCompletenessDate {
-  trade_date: string;
-  prediction_source: "live" | "historical_backtest";
-  candidate_count: number;
-  elapsed_post_trade_days: number;
-  d1_mature: boolean;
-  d1_expected_count: number;
-  d1_ready_count: number;
-  d1_missing_symbols: string[];
-  d3_mature: boolean;
-  d3_expected_count: number;
-  d3_ready_count: number;
-  d3_missing_symbols: string[];
-  d5_mature: boolean;
-  d5_expected_count: number;
-  d5_ready_count: number;
-  d5_missing_symbols: string[];
-  status: "complete" | "partial" | "pending";
-}
-
-export interface OutcomeCompletenessReport {
-  as_of_date: string | null;
-  status: "healthy" | "partial" | "missing" | "pending";
-  prediction_trade_date_count: number;
-  tracked_prediction_count: number;
-  d1_expected_count: number;
-  d1_ready_count: number;
-  d3_expected_count: number;
-  d3_ready_count: number;
-  d5_expected_count: number;
-  d5_ready_count: number;
-  missing_case_count: number;
-  dates: OutcomeCompletenessDate[];
-  warnings: string[];
-  generated_by: string;
-}
-
-export interface AgentDataHealthResponse {
-  trade_date: string | null;
-  status: "healthy" | "partial" | "missing";
-  raw_events_ready: boolean;
-  raw_event_count: number;
-  first_board_features_ready: boolean;
-  first_board_feature_count: number;
-  enrichment_ready: boolean;
-  enrichment_count: number;
-  top_candidates_checked: number;
-  top_candidates: AgentDataHealthTopCandidate[];
-  outcome_completeness: OutcomeCompletenessReport | null;
-  post_limit_pool_count: number;
-  post_limit_evaluable_count: number;
-  post_limit_coverage_ratio: number;
-  post_limit_missing_history_count: number;
-  post_limit_source_consistent_count: number;
-  post_limit_pending_symbol_count: number;
-  post_limit_missing_reasons: Record<string, number>;
-  warnings: string[];
-}
-
-export interface AgentSystemHealthResponse {
-  status: "healthy" | "partial" | "missing";
-  current_date: string;
-  current_time: string;
-  latest_local_trade_date: string | null;
-  expected_data_date: string | null;
-  data_fresh: boolean;
-  data_update_recommended: boolean;
-  data_update_reason: string;
-  llm_enabled: boolean;
-  llm_provider_configured: boolean;
-  llm_model: string | null;
-  proxy_configured: boolean;
-  proxy_warning: string | null;
-  data_health: AgentDataHealthResponse;
-  warnings: string[];
-  generated_by: string;
-}
-
-export interface DailyPipelineRun {
-  run_id: string;
-  trade_date: string;
-  trigger: "scheduled" | "manual" | "startup";
-  status: "running" | "success" | "partial" | "error" | "skipped";
-  attempt_count: number;
-  report: Record<string, unknown> | null;
-  error_message: string | null;
-  started_at: string;
-  finished_at: string | null;
-}
-
-export interface DailyPipelineStatusResponse {
-  latest: DailyPipelineRun | null;
-  recent: DailyPipelineRun[];
-  generated_by: string;
-}
 
 export interface AgentToolTrace {
   name: string;

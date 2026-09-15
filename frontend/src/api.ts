@@ -7,25 +7,17 @@ import type {
   ChatSessionDetail,
   ChatSessionsResponse,
   DailyBoardPromotionStat,
-  DailyReviewSnapshotsResponse,
   DragonTigerReviewResponse,
-  ContinuationStat,
-  FailedRateStat,
   FinanceNewsPage,
   FirstBoardRatingsResponse,
   LimitUpEvent,
   MarketSummary,
-  PostPerformanceStat,
   RecommendationIntelligenceResponse,
   ReviewAgentReportResponse,
-  ScoringErrorDiagnosticResponse,
-  StockCloseSnapshot,
   StockDetailMarketData,
   StockIntradayKLineBar,
   StockIntradayHistoryResponse,
-  StockKLineBar,
   StockNewsFacts,
-  StockPositionAssessment,
 } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
@@ -108,14 +100,6 @@ export function fetchDragonTigerReview(tradeDate?: string) {
 }
 
 /**
- * Fetch limit up events from the backend using the supplied query scope; return the typed
- * response promise.
- */
-export function fetchLimitUpEvents() {
-  return request<LimitUpEvent[]>("/api/limit-up/events");
-}
-
-/**
  * Fetch first board events from the backend using the supplied query scope; return the typed
  * response promise.
  */
@@ -148,14 +132,6 @@ export function fetchRecentLimitUpEvents(days = 7) {
 }
 
 /**
- * Fetch continuation stats from the backend using the supplied query scope; return the typed
- * response promise.
- */
-export function fetchContinuationStats() {
-  return request<ContinuationStat[]>("/api/analysis/continuation");
-}
-
-/**
  * Fetch daily board promotion from the backend using the supplied query scope; return the
  * typed response promise.
  */
@@ -166,35 +142,11 @@ export function fetchDailyBoardPromotion(days = 5) {
 }
 
 /**
- * Fetch failed rate stats from the backend using the supplied query scope; return the typed
- * response promise.
- */
-export function fetchFailedRateStats() {
-  return request<FailedRateStat[]>("/api/analysis/failed-rate");
-}
-
-/**
- * Fetch post performance stats from the backend using the supplied query scope; return the
- * typed response promise.
- */
-export function fetchPostPerformanceStats() {
-  return request<PostPerformanceStat[]>("/api/analysis/post-performance");
-}
-
-/**
  * Fetch stock event from the backend using the supplied query scope; return the typed response
  * promise.
  */
 export function fetchStockEvent(symbol: string) {
   return request<LimitUpEvent>(`/api/stocks/${symbol}/event`);
-}
-
-/**
- * Fetch stock kline from the backend using the supplied query scope; return the typed response
- * promise.
- */
-export function fetchStockKLine(symbol: string, days = 60) {
-  return dedupedGet<StockKLineBar[]>(`/api/stocks/${symbol}/kline?days=${days}`);
 }
 
 /**
@@ -225,24 +177,6 @@ export function fetchStockNews(symbol: string, name?: string, limit = 3) {
     params.set("name", name);
   }
   return request<StockNewsFacts>(`/api/stocks/${symbol}/news?${params.toString()}`);
-}
-
-/**
- * Fetch stock position from the backend using the supplied query scope; return the typed
- * response promise.
- */
-export function fetchStockPosition(symbol: string, tradeDate: string) {
-  return request<StockPositionAssessment>(
-    `/api/stocks/${symbol}/position?trade_date=${encodeURIComponent(tradeDate)}`,
-  );
-}
-
-/**
- * Fetch stock latest close from the backend using the supplied query scope; return the typed
- * response promise.
- */
-export function fetchStockLatestClose(symbol: string) {
-  return request<StockCloseSnapshot>(`/api/stocks/${symbol}/latest-close`);
 }
 
 /**
@@ -357,30 +291,6 @@ export function fetchReviewAgentReport(params?: {
 }
 
 /**
- * Fetch daily review snapshots from the backend using the supplied query scope; return the
- * typed response promise.
- */
-export function fetchDailyReviewSnapshots(limit = 20) {
-  return request<DailyReviewSnapshotsResponse>(
-    `/api/agents/review-snapshots?limit=${limit}`,
-  );
-}
-
-/**
- * Fetch scoring error diagnostic from the backend using the supplied query scope; return the
- * typed response promise.
- */
-export function fetchScoringErrorDiagnostic(endDate?: string, topK = 10) {
-  const query = new URLSearchParams({ top_k: String(topK) });
-  if (endDate) {
-    query.set("end_date", endDate);
-  }
-  return request<ScoringErrorDiagnosticResponse>(
-    `/api/agents/scoring-error-diagnostic?${query.toString()}`,
-  );
-}
-
-/**
  * Fetch chat sessions from the backend using the supplied query scope; return the typed
  * response promise.
  */
@@ -424,19 +334,6 @@ export function renameChatSession(sessionId: string, title: string) {
 export function deleteChatSession(sessionId: string) {
   return request<{ deleted: boolean }>(`/api/agents/chat/sessions/${sessionId}`, {
     method: "DELETE",
-  });
-}
-
-/**
- * Submit the non-streaming chat request and return the complete structured response.
- */
-export function sendAgentChatMessage(payload: AgentChatRequest) {
-  return request<AgentChatResponse>("/api/agents/chat", {
-    method: "POST",
-    headers: {
-      "Content-Type": "application/json",
-    },
-    body: JSON.stringify(payload),
   });
 }
 
