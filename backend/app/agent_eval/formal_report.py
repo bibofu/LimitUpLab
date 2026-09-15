@@ -261,26 +261,6 @@ def score_formal_run(bundle: Path, run_root: Path, acceptance_paths: list[Path],
               "notes": ["core pass is scoped to the activated deterministic contract",
                         "full-answer factual judgments use a separately calibrated judge and cannot override core failures"]}
     write_json(destination / "report.json", report)
-    runtime_versions = sorted({AgentChatResponse.model_validate_json(
-        (run_root / entry["id"] / "response.json").read_text(encoding="utf-8")).generated_by
-        for entry in suite["cases"]})
-    manifest = {
-        "schema_version": "formal-agent-run-manifest-v1",
-        "suite_id": suite["suite_id"],
-        "model": report["model"],
-        "case_count": len(results),
-        "runtime_versions": runtime_versions,
-        "judge_prompt_digests": {"semantic": digest(JUDGE_SYSTEM), "full_answer": digest(FULL_ANSWER_SYSTEM)},
-        "inputs": {
-            "suite": {"path": str(bundle.resolve()), "digest": digest(suite)},
-            "run": {"path": str(run_root.resolve()), "batch_digest": digest(batch)},
-            "acceptances": [{"path": str(path.resolve()),
-                             "digest": digest(json.loads(path.read_text(encoding="utf-8")))}
-                            for path in acceptance_paths],
-        },
-        "artifacts": {"report.json": digest(report)},
-    }
-    write_json(destination / "manifest.json", manifest)
     if previous_report is not None:
         previous = json.loads(previous_report.read_text(encoding="utf-8"))
         comparison = compare_formal_reports(previous, report)
@@ -296,4 +276,30 @@ def score_formal_run(bundle: Path, run_root: Path, acceptance_paths: list[Path],
         lines.append(f"| {item['case_id']} | {item['mode']} | {item['core_contract_verdict']} | "
                      f"{item['terminal_verdict']} | {semantic_verdict} | {item['full_answer_verdict']} | {item['failure_cause'] or '—'} |")
     (destination / "README.md").write_text("\n".join(lines) + "\n", encoding="utf-8")
+    runtime_versions = sorted({AgentChatResponse.model_validate_json(
+        (run_root / entry["id"] / "response.json").read_text(encoding="utf-8")).generated_by
+        for entry in suite["cases"]})
+    artifact_names = ["report.json", "README.md"]
+    if previous_report is not None:
+        artifact_names.extend(["diff.json", "DIFF.md"])
+    manifest = {
+        "schema_version": "formal-agent-run-manifest-v1",
+        "suite_id": suite["suite_id"],
+        "model": report["model"],
+        "case_count": len(results),
+        "runtime_versions": runtime_versions,
+        "judge_prompt_digests": {"semantic": digest(JUDGE_SYSTEM), "full_answer": digest(FULL_ANSWER_SYSTEM)},
+        "inputs": {
+            "suite": {"path": str(bundle.resolve()), "digest": digest(suite)},
+            "run": {"path": str(run_root.resolve()), "batch_digest": digest(batch)},
+            "acceptances": [{"path": str(path.resolve()),
+                             "digest": digest(json.loads(path.read_text(encoding="utf-8")))}
+                            for path in acceptance_paths],
+        },
+        "artifacts": {name: digest((json.loads((destination / name).read_text(encoding="utf-8"))
+                                     if name.endswith(".json") else
+                                     (destination / name).read_text(encoding="utf-8")))
+                      for name in artifact_names},
+    }
+    write_json(destination / "manifest.json", manifest)
     return report
