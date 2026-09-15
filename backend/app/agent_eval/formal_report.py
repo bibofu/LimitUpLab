@@ -71,8 +71,72 @@ def _full_answer_verdict(core, judgment):
     return judgment
 
 
+def _verdict_counts(report, field):
+    cases = report.get("cases", [])
+    return {verdict: sum(item.get(field) == verdict for item in cases)
+            for verdict in ("pass", "fail", "needs_review", "unscorable")}
+
+
+def compare_formal_reports(previous, current):
+    """Build a stable, machine-readable comparison across report schema versions."""
+    metrics = ("core_contract_pass_rate", "terminal_accuracy", "factual_core_accuracy",
+               "semantic_answer_accuracy", "infrastructure_success_rate", "full_answer_pass_rate")
+    previous_full = _verdict_counts(previous, "full_answer_verdict")
+    current_full = _verdict_counts(current, "full_answer_verdict")
+    previous_metrics = {name: previous.get(name) for name in metrics}
+    if previous_metrics["full_answer_pass_rate"] is None and previous.get("case_count"):
+        previous_metrics["full_answer_pass_rate"] = previous_full["pass"] / previous["case_count"]
+    current_metrics = {name: current.get(name) for name in metrics}
+    deltas = {name: (current_metrics[name] - previous_metrics[name]
+                     if current_metrics[name] is not None and previous_metrics[name] is not None else None)
+              for name in metrics}
+    before = {item["case_id"]: item for item in previous.get("cases", [])}
+    changes = []
+    for item in current.get("cases", []):
+        old = before.get(item["case_id"])
+        if old is None:
+            changes.append({"case_id": item["case_id"], "change": "added"})
+            continue
+        fields = {}
+        for field in ("core_contract_verdict", "terminal_verdict", "full_answer_verdict"):
+            if old.get(field) != item.get(field):
+                fields[field] = {"before": old.get(field), "after": item.get(field)}
+        if fields:
+            changes.append({"case_id": item["case_id"], "change": "changed", "fields": fields})
+    return {
+        "schema_version": "formal-agent-baseline-diff-v1",
+        "previous_schema_version": previous.get("schema_version"),
+        "current_schema_version": current.get("schema_version"),
+        "suite_id": current.get("suite_id"),
+        "case_count": current.get("case_count"),
+        "metrics": {name: {"before": previous_metrics[name], "after": current_metrics[name],
+                           "delta": deltas[name]} for name in metrics},
+        "core_counts": {"before": previous.get("counts"), "after": current.get("counts")},
+        "full_answer_counts": {"before": previous_full, "after": current_full},
+        "case_changes": changes,
+    }
+
+
+def _write_diff_markdown(path, comparison):
+    lines = ["# Local30 正式基线差异", "", "| 指标 | 旧基线 | 新基线 | 变化 |",
+             "| --- | ---: | ---: | ---: |"]
+    for name, values in comparison["metrics"].items():
+        before, after, delta = values["before"], values["after"], values["delta"]
+        fmt = lambda value: "—" if value is None else f"{value:.2%}"
+        lines.append(f"| {name} | {fmt(before)} | {fmt(after)} | {fmt(delta)} |")
+    lines.extend(["", "## Case 变化", ""])
+    if comparison["case_changes"]:
+        for item in comparison["case_changes"]:
+            details = ", ".join(f"{key}: {value['before']} → {value['after']}"
+                                for key, value in item.get("fields", {}).items())
+            lines.append(f"- {item['case_id']}: {details or item['change']}")
+    else:
+        lines.append("- 无终态或裁决变化。")
+    path.write_text("\n".join(lines) + "\n", encoding="utf-8")
+
+
 def score_formal_run(bundle: Path, run_root: Path, acceptance_paths: list[Path],
-                     destination: Path, provider):
+                     destination: Path, provider, previous_report: Path | None = None):
     from app.agent_eval.worker import GuardedProvider
     from app.services.llm_provider import capture_llm_usage
     if destination.exists():
@@ -167,7 +231,10 @@ def score_formal_run(bundle: Path, run_root: Path, acceptance_paths: list[Path],
                             "actual_terminal": response.task_status, "terminal_verdict": terminal,
                             "fact_verdict": fact_verdict, "semantic_judgment": semantic,
                             "full_answer_judgment": full_judgment,
-                            "process_verdict": process.verdict, "additional_review_items": additional,
+                            "process_verdict": process.verdict,
+                            "provisional_extraction_diagnostics": additional,
+                            "open_review_items": ([{"source": "full_answer_judge", "judgment": full_judgment}]
+                                                  if full_answer == "needs_review" else []),
                             "agent_model_calls": supervisor.get("model_calls"), "agent_tokens": supervisor.get("total_tokens"),
                             "elapsed_seconds": supervisor.get("elapsed_seconds")})
     counts = {key: sum(item["core_contract_verdict"] == key for item in results)
@@ -175,7 +242,7 @@ def score_formal_run(bundle: Path, run_root: Path, acceptance_paths: list[Path],
     factual = [item for item in results if item["fact_verdict"] is not None]
     semantic = [item for item in results if item["semantic_judgment"] is not None]
     elapsed = [item["elapsed_seconds"] for item in results]
-    report = {"schema_version": "formal-agent-baseline-v2", "suite_id": suite["suite_id"],
+    report = {"schema_version": "formal-agent-baseline-v3", "suite_id": suite["suite_id"],
               "run_root": str(run_root.resolve()), "model": batch["cases"][0].get("model"),
               "case_count": len(results), "counts": counts,
               "core_contract_pass_rate": counts["pass"] / len(results),
@@ -194,6 +261,33 @@ def score_formal_run(bundle: Path, run_root: Path, acceptance_paths: list[Path],
               "notes": ["core pass is scoped to the activated deterministic contract",
                         "full-answer factual judgments use a separately calibrated judge and cannot override core failures"]}
     write_json(destination / "report.json", report)
+    runtime_versions = sorted({AgentChatResponse.model_validate_json(
+        (run_root / entry["id"] / "response.json").read_text(encoding="utf-8")).generated_by
+        for entry in suite["cases"]})
+    manifest = {
+        "schema_version": "formal-agent-run-manifest-v1",
+        "suite_id": suite["suite_id"],
+        "model": report["model"],
+        "case_count": len(results),
+        "runtime_versions": runtime_versions,
+        "judge_prompt_digests": {"semantic": digest(JUDGE_SYSTEM), "full_answer": digest(FULL_ANSWER_SYSTEM)},
+        "inputs": {
+            "suite": {"path": str(bundle.resolve()), "digest": digest(suite)},
+            "run": {"path": str(run_root.resolve()), "batch_digest": digest(batch)},
+            "acceptances": [{"path": str(path.resolve()),
+                             "digest": digest(json.loads(path.read_text(encoding="utf-8")))}
+                            for path in acceptance_paths],
+        },
+        "artifacts": {"report.json": digest(report)},
+    }
+    write_json(destination / "manifest.json", manifest)
+    if previous_report is not None:
+        previous = json.loads(previous_report.read_text(encoding="utf-8"))
+        comparison = compare_formal_reports(previous, report)
+        comparison["previous_report"] = str(previous_report.resolve())
+        comparison["current_report"] = str((destination / "report.json").resolve())
+        write_json(destination / "diff.json", comparison)
+        _write_diff_markdown(destination / "DIFF.md", comparison)
     lines = ["# 当前Agent正式Golden基线", "", f"核心合同：{counts['pass']}/{len(results)}通过，"
              f"{counts['fail']}失败，{counts['needs_review']}待复核，{counts['unscorable']}不可评分。", "",
              "| Case | Mode | Core | Terminal | Facts/Judge | Full answer | Cause |", "| --- | --- | --- | --- | --- | --- | --- |"]

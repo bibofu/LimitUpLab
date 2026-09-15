@@ -101,6 +101,7 @@ def main() -> int:
     formal.add_argument("--run-root", required=True, type=Path)
     formal.add_argument("--acceptances", required=True, nargs="+", type=Path)
     formal.add_argument("--output-dir", required=True, type=Path)
+    formal.add_argument("--previous-report", type=Path)
     formal.add_argument("--allow-llm", required=True, action="store_true")
     record = commands.add_parser("record-local-summary")
     record.add_argument("--database", required=True, type=Path)
@@ -245,7 +246,8 @@ def main() -> int:
         from app.config import configure_runtime_environment
         from app.services.llm_provider import get_llm_provider
         configure_runtime_environment()
-        result = score_formal_run(args.bundle, args.run_root, args.acceptances, args.output_dir, get_llm_provider())
+        result = score_formal_run(args.bundle, args.run_root, args.acceptances, args.output_dir,
+                                  get_llm_provider(), previous_report=args.previous_report)
     elif args.command == "promote-highest":
         from app.agent_eval.highest_acceptance import promote_highest
         result = promote_highest(args.review_dir,args.approval,args.acceptance,args.output_dir)
