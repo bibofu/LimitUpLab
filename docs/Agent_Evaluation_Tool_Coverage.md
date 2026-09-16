@@ -107,6 +107,20 @@ Local30 保留为回归集；三轮全绿不作为继续搭建框架的前置条
 新合并Judge尚未校准，不能替代旧正式验收；总判定fail退出1，其余needs_review退出2。
 下一步是小规模校准误杀与漏判，而不是逐工具补Runner。
 
+合并Judge校准入口（不运行Agent）：
+
+```powershell
+.venv/Scripts/python.exe -m app.agent_eval calibrate-trace-judge --output-dir <新校准目录> --allow-judge
+```
+
+固定6个合成样例，与review-trace共用同一裁判调用和协议验证。保存样例、请求/响应、
+逐项裁决和报告，绑定提示、样例摘要及模型；已有目录拒绝覆盖。最多6次调用、180秒总预算，
+每次最多1800输出Token；预算在调用之间检查，不是精确账单上限。不自动重判或调整提示。
+报告分别计数false_fail（预期pass却判fail）、false_pass（预期fail却判pass）及弃判/未评，
+并给出分维度标签命中数。错误调用用量不完整时总Token为null，不计作零。
+标签是合成作者标注，六例只能定位明显误判，不代表总体误判率；即使全部命中，
+independent_acceptance和release_eligible仍为false，review-trace不会自动升级为已校准。
+
 每次只完成一个可审阅交付；每个任务先做无LLM验证，需要真实模型时限定场景与调用次数。
 遇到新问题先形成可复现诊断，不自动启动多轮全量Local30。
 

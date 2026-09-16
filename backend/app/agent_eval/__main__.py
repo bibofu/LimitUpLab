@@ -17,6 +17,9 @@ from app.models import AgentChatResponse
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    calibration = commands.add_parser("calibrate-trace-judge")
+    calibration.add_argument("--output-dir", required=True, type=Path)
+    calibration.add_argument("--allow-judge", action="store_true", required=True)
     trace_review = commands.add_parser("review-trace")
     trace_review.add_argument("--run-dir", required=True, type=Path)
     trace_review.add_argument("--output", required=True, type=Path)
@@ -202,7 +205,14 @@ def main() -> int:
     blueprint.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
     exit_code = 0
-    if args.command == "review-trace":
+    if args.command == "calibrate-trace-judge":
+        from app.agent_eval.trace_calibration import calibrate_trace_judge
+        from app.config import configure_runtime_environment
+        from app.services.llm_provider import get_llm_provider
+        configure_runtime_environment()
+        result = calibrate_trace_judge(args.output_dir, get_llm_provider())
+        exit_code = 0 if result["all_labels_matched"] else 2
+    elif args.command == "review-trace":
         from app.agent_eval.trace_review import review_trace
         from app.agent_eval.core_batch import write_json
         if args.output.exists():

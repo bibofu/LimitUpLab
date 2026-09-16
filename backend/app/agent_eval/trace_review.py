@@ -37,6 +37,31 @@ class TraceJudgment(Contract):
     boundary_safety: Dimension
 
 
+def judge_schema():
+    return {"type": "function", "function": {
+        "name": "submit_trace_review", "description": "提交三个维度的裁决",
+        "parameters": TraceJudgment.model_json_schema()}}
+
+
+def judge_packet(provider, packet):
+    """Shared production/calibration path: exactly one request, no retry."""
+    result = provider.generate_messages(
+        [SystemMessage(content=JUDGE_SYSTEM), HumanMessage(content=canonical_json(packet))],
+        [judge_schema()], timeout_seconds=45, max_tokens=1800)
+    if len(result.tool_calls) != 1 or result.tool_calls[0]["name"] != "submit_trace_review":
+        raise ValueError("expected exactly one trace judgment")
+    judgment = TraceJudgment.model_validate(result.tool_calls[0]["args"])
+    ids = {r["evidence_id"] for r in packet["evidence"]}
+    for dimension in judgment.model_dump().values():
+        if dimension["verdict"] == "fail" and not dimension["issue"].strip():
+            raise ValueError("failure must identify a concrete issue")
+        if not set(dimension["evidence_ids"]) <= ids:
+            raise ValueError("judge cited unknown evidence")
+        if dimension["verdict"] == "pass" and dimension["issue"].strip():
+            raise ValueError("passing judgment cannot contain an issue")
+    return judgment, result.usage_metadata or {}
+
+
 def review_trace(case, response, *, provider=None, max_input_chars=24000):
     if not 1000 <= max_input_chars <= 100000:
         raise ValueError("max_input_chars must be 1000..100000")
@@ -84,9 +109,7 @@ def review_trace(case, response, *, provider=None, max_input_chars=24000):
               "answer": response.answer, "task_status": response.task_status,
               "evidence": compact}
     payload = canonical_json(packet)
-    schema = {"type": "function", "function": {
-        "name": "submit_trace_review", "description": "提交三个维度的裁决",
-        "parameters": TraceJudgment.model_json_schema()}}
+    schema = judge_schema()
     input_chars = len(JUDGE_SYSTEM) + len(payload) + len(canonical_json(schema))
     report["judge"].update(input_chars=input_chars, max_input_chars=max_input_chars,
                            evidence_records=len(compact), duplicates_removed=len(evidence) - len(compact))
@@ -105,22 +128,8 @@ def review_trace(case, response, *, provider=None, max_input_chars=24000):
     report["judge"]["calls"] = 1
     report["judge"]["model"] = getattr(provider, "model", None)
     try:
-        result = provider.generate_messages(
-            [SystemMessage(content=JUDGE_SYSTEM), HumanMessage(content=payload)],
-            [schema], timeout_seconds=45, max_tokens=1800)
-        usage = result.usage_metadata or {}
+        judgment, usage = judge_packet(provider, packet)
         report["judge"]["tokens"] = usage.get("total_tokens")
-        if len(result.tool_calls) != 1 or result.tool_calls[0]["name"] != "submit_trace_review":
-            raise ValueError("expected exactly one trace judgment")
-        judgment = TraceJudgment.model_validate(result.tool_calls[0]["args"])
-        ids = {r["evidence_id"] for r in compact}
-        for dimension in judgment.model_dump().values():
-            if dimension["verdict"] == "fail" and not dimension["issue"].strip():
-                raise ValueError("failure must identify a concrete issue")
-            if not set(dimension["evidence_ids"]) <= ids:
-                raise ValueError("judge cited unknown evidence")
-            if dimension["verdict"] == "pass" and dimension["issue"].strip():
-                raise ValueError("passing judgment cannot contain an issue")
         report["dimensions"] = judgment.model_dump(mode="json")
         report["judge"]["status"] = "completed"
         # No overall pass before calibration or when unsupported assertions remain.
