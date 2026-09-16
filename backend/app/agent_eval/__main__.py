@@ -96,6 +96,10 @@ def main() -> int:
     assemble.add_argument("--sources", required=True, nargs="+", type=Path)
     assemble.add_argument("--expected-bundles", required=True, nargs="+", type=Path)
     assemble.add_argument("--output-dir", required=True, type=Path)
+    migrate = commands.add_parser("migrate-additive-world")
+    for name in ("source", "target-bundle", "acceptance", "output-dir", "acceptance-output-dir"):
+        migrate.add_argument("--" + name, required=True, type=Path)
+    migrate.add_argument("--case-id", required=True)
     formal = commands.add_parser("score-formal-run")
     formal.add_argument("--bundle", required=True, type=Path)
     formal.add_argument("--run-root", required=True, type=Path)
@@ -250,6 +254,10 @@ def main() -> int:
     elif args.command == "assemble-golden-suite":
         from app.agent_eval.golden_suite import assemble_golden_suite
         result = assemble_golden_suite(args.sources, args.expected_bundles, args.output_dir)
+    elif args.command == "migrate-additive-world":
+        from app.agent_eval.golden_suite import migrate_additive_world
+        result = migrate_additive_world(args.source, args.target_bundle, args.acceptance,
+                                        args.case_id, args.output_dir, args.acceptance_output_dir)
     elif args.command == "score-formal-run":
         from app.agent_eval.formal_report import score_formal_run
         from app.config import configure_runtime_environment

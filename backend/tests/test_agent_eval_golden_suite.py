@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from app.agent_eval.golden_suite import assemble_golden_suite
+from app.agent_eval.golden_suite import _additive_recording_diff, assemble_golden_suite
 from app.agent_eval.core_batch import write_json
 from app.agent_eval.recorder import digest
 
@@ -35,3 +35,24 @@ def test_golden_suite_validates_and_deduplicates_baselines(tmp_path, monkeypatch
     assert len(list((tmp_path / "result" / "baselines").glob("*.json"))) == 1
     saved = json.loads((tmp_path / "result" / "suite.json").read_text(encoding="utf-8"))
     assert saved["cases"][0]["baseline"].startswith("baselines/")
+
+
+def test_additive_world_diff_requires_preserved_observations_and_a_new_route():
+    class Recording:
+        def __init__(self, key, observation):
+            self.tool, self.arguments = "tool", {"key": key}
+            self.observation, self.tool_result_input = observation, None
+    class World:
+        def __init__(self, recordings):
+            self.recordings = recordings
+    class Registry:
+        @staticmethod
+        def _arguments(tool, arguments):
+            return arguments
+    registry = Registry()
+    old = World([Recording("old", {"value": 1})])
+    new = World([Recording("old", {"value": 1}), Recording("new", {"value": 2})])
+    preserved, added = _additive_recording_diff(old, new, registry, registry)
+    assert len(preserved) == 1 and len(added) == 1
+    with pytest.raises(ValueError, match="not a strict additive extension"):
+        _additive_recording_diff(old, World([Recording("old", {"value": 9})]), registry, registry)

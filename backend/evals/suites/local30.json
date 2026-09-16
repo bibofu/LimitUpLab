@@ -8,9 +8,11 @@
     {"tool":"market_event_pool","arguments":{"event_type":"broken_board","trade_date":"2026-09-08","market":"main_board","result_mode":"list","limit":100}},
     {"tool":"market_event_pool","arguments":{"event_type":"limit_up","trade_date":"2026-09-11","market":"main_board","result_mode":"list","limit":100}},
     {"tool":"market_event_pool","arguments":{"event_type":"limit_up","trade_date":"2026-09-11","market":"chinext","result_mode":"list","limit":100}},
+    {"tool":"market_event_pool","arguments":{"event_type":"limit_up","trade_date":"2026-09-08","market":"star_market","result_mode":"list","limit":100}},
     {"tool":"market_event_pool","arguments":{"event_type":"limit_up","trade_date":"2026-09-11","query":"002790","result_mode":"list","limit":30}},
     {"tool":"limit_up_events","arguments":{"trade_date":"2026-09-11","board_height":1,"market":"chinext","closed_only":true,"event_status":"all","limit":100}},
     {"tool":"limit_up_events","arguments":{"trade_date":"2026-09-11","market":"chinext","limit":100}},
+    {"tool":"limit_up_events","arguments":{"trade_date":"2026-09-08","market":"star_market","event_status":"all","limit":100}},
     {"tool":"limit_up_events","arguments":{"trade_date":"2026-09-11","min_board_height":2,"closed_only":true,"sort_by":"board_height","sort_order":"desc","limit":100}},
     {"tool":"limit_up_events","arguments":{"trade_date":"2026-09-11","min_board_height":2,"market":"main_board","closed_only":true,"sort_by":"board_height","sort_order":"desc","limit":100}},
     {"tool":"limit_up_events","arguments":{"trade_date":"2026-09-11","market":"main_board","broken_only":true,"event_status":"broken_intraday","limit":100}}
