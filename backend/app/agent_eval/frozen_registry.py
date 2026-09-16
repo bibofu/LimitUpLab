@@ -52,6 +52,7 @@ class FrozenAgentToolRegistry:
         self._gateway = ToolGateway(self, EvidenceStore())
         self._recordings: dict[str, RecordingSpec] = {}
         self._semantic_recordings: dict[str, RecordingSpec] = {}
+        self._policy_recordings = []
         self._attempts: list[dict] = []
         self._lock = Lock()
         with self.anchored():
@@ -73,6 +74,11 @@ class FrozenAgentToolRegistry:
                 if previous is not None and previous.observation != recording.observation:
                     raise FrozenFixtureError("conflicting recordings for equivalent production arguments")
                 self._semantic_recordings.setdefault(semantic, recording)
+                if recording.match_policy:
+                    if any(key not in arguments or arguments[key] != value
+                           for key, value in recording.match_policy.bindings.items()):
+                        raise FrozenFixtureError("policy binding differs from source recording")
+                    self._policy_recordings.append((recording, arguments))
 
     def schemas(self):
         return [item for item in TOOL_SCHEMAS if item.name in self.enabled_tool_names]
@@ -129,6 +135,37 @@ class FrozenAgentToolRegistry:
         )
         return effective
 
+    def _policy_match(self, name, arguments):
+        matches = []
+        for source, baseline in self._policy_recordings:
+            policy = source.match_policy
+            if source.tool != name or any(arguments.get(k) != v for k, v in policy.bindings.items()):
+                continue
+            if policy.kind == "search_terms":
+                if {k: v for k, v in arguments.items() if k != "query"} != {k: v for k, v in baseline.items() if k != "query"}:
+                    continue
+                query = "".join(c for c in arguments["query"] if not c.isspace() and c not in '\"“”\'')
+                if not query.startswith(policy.entity):
+                    continue
+                remaining, consumed = query[len(policy.entity):], []
+                while remaining:
+                    term = next((t for t in sorted(policy.terms, key=len, reverse=True) if remaining.startswith(t)), None)
+                    if term is None:
+                        break
+                    consumed.append(term)
+                    remaining = remaining[len(term):]
+                if remaining or "公告" not in consumed:
+                    continue
+            clone = source.model_copy(deep=True)
+            clone.arguments = arguments
+            clone.tool_result_input = None
+            if policy.kind == "search_terms":
+                clone.observation.payload["query"] = arguments["query"]
+            matches.append(clone)
+        if matches and any(r.observation != matches[0].observation for r in matches[1:]):
+            raise FrozenFixtureError("ambiguous scenario policy")
+        return matches[0] if matches else None
+
     def execute_frozen_calls(self, calls: list[dict], *, request: AgentChatRequest) -> dict:
         # Request is part of the Gateway protocol, never used as a lookup shortcut.
         traces, observations = [], []
@@ -144,8 +181,12 @@ class FrozenAgentToolRegistry:
                     semantic = self._semantic_arguments(call["name"], arguments)
                     recording = self._semantic_recordings.get(self._signature(call["name"], semantic))
                 if recording is None:
+                    recording = self._policy_match(call["name"], arguments)
+                if recording is None:
                     raise FrozenFixtureError("no recording matches the effective tool arguments")
                 observation = recording.observation
+                if recording.match_policy:
+                    attempt["match_policy"] = recording.match_policy.kind
                 payload = deepcopy(observation.payload)
                 # UI traces require objects; keep the native observation separately.
                 trace_payload = payload if isinstance(payload, dict) else {"items": payload}

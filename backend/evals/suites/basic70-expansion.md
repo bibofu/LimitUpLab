@@ -1,6 +1,14 @@
 # Basic70 Offline候选包
 
 `basic70-expansion.json`包含30个明确的合成场景，不是真实市场记录或已批准Golden。
+
+场景扩展由共享scenario_fixtures实现，不逐工具另建Runner：按Schema展开列表limit并真实截断行，
+聚合计数不随展示条数缩小；评级/过滤/质疑使用一致事实，按日评估之和等于区间总数。
+只有显式synthetic记录可以声明match_policy：search_terms限定实体前缀和公告词表，未知实体/日期/语义拒绝；
+source_error仅返回已声明的错误，要求实体范围或显式global_source，不允许成功数据通配。
+OFF-B021显式声明其他来源故障，并展开stock_activity窗口，故障补查仍得到error/partial，不能伪装成真实空集。
+旧录制不输出空match_policy字段，保持原Local30摘要兼容。辅助场景录制不增加答案必答字段。
+
 OFF-B001..023各覆盖一个原Local30未覆盖的工具；OFF-B024..030依次覆盖空结果、
 服务失败、滞后数据、来源注入、显式输出限制、覆盖率/胜率口径、多工具置信度对照。
 

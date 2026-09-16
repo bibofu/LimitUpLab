@@ -25,11 +25,15 @@ def check_values(payload, checks):
             raise ValueError("fixture contradicts independently declared expected value")
 
 
-def candidate_assets(item):
+def candidate_assets(item, catalog=None):
     version = item.get("version", 1)
     recordings = [{k: item[k] for k in ("tool", "arguments", "payload", "state", "checks")}]
     recordings.extend(item.get("additional_recordings", []))
-    names = {r["tool"] for r in recordings}
+    from app.agent_eval.scenario_fixtures import expand_scenario
+    if catalog is None:
+        catalog = {c["id"]: c for c in json.loads(DEFAULT_RECIPE.read_text(encoding="utf-8"))["cases"]}
+    world_records = expand_scenario(item, recordings, catalog)
+    names = {r["tool"] for r in world_records}
     known = {t.name for t in TOOL_SCHEMAS}
     if not names <= known:
         raise ValueError("unknown business tool")
@@ -42,11 +46,12 @@ def candidate_assets(item):
         "tool_contract_version": TOOL_CONTRACT_VERSION, "evidence_version": EVIDENCE_VERSION,
         "recordings": [{"id": item["id"] + f"-r{index}", "tool": r["tool"], "arguments": r["arguments"],
                         "origin": "synthetic", "provenance": "authored minimal contract fixture; not real market data",
+                        **({"match_policy": r["match_policy"]} if r.get("match_policy") else {}),
                         "observation": {"state": r["state"], "payload": r["payload"],
                                         "summary": "合成评测工具记录；依据结构化字段回答。",
                                         "source_errors": r["payload"].get("source_errors", [])
                                         if isinstance(r["payload"], dict) else []}}
-                       for index, r in enumerate(recordings)]})
+                       for index, r in enumerate(world_records)]})
     question = item["question"]
     case = CaseSpec.model_validate({
         "case_id": item["id"], "case_version": version, "profile": profile, "mode": "offline",
@@ -61,13 +66,13 @@ def candidate_assets(item):
                                      "reference_answer": item["reference_answer"],
                                      "negative_answer": item["negative_answer"],
                                      "grading": "Meaning and evidence support, not literal answer matching."}}],
-        "expected_terminal": {"allowed_status": [item["terminal"]],
+        "expected_terminal": {"allowed_status": item.get("allowed_terminals", [item["terminal"]]),
                               "missing_requirement_ids": ["delivery"] if item["terminal"] == "partial" else []}})
     return case, world, recordings
 
 
-def preflight_candidate(item):
-    case, world, records = candidate_assets(item)
+def preflight_candidate(item, catalog=None):
+    case, world, records = candidate_assets(item, catalog)
     registry = FrozenAgentToolRegistry(world)
     gateway = ToolGateway(registry, EvidenceStore())
     views = []
@@ -96,7 +101,8 @@ def build_basic70(destination: Path, recipe: Path = DEFAULT_RECIPE, base_suite: 
         raise ValueError("invalid candidate id")
     if destination.exists():
         raise FileExistsError(destination)
-    assets = [(item, *preflight_candidate(item)) for item in book["cases"]]
+    catalog = {item["id"]: item for item in book["cases"]}
+    assets = [(item, *preflight_candidate(item, catalog)) for item in book["cases"]]
     carried = []
     if base_suite:
         base = json.loads(base_suite.read_text(encoding="utf-8"))

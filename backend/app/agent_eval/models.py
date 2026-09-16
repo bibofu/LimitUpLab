@@ -4,7 +4,7 @@ from datetime import date, datetime
 from typing import Annotated, Literal
 from zoneinfo import ZoneInfo
 
-from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator
+from pydantic import BaseModel, ConfigDict, Field, JsonValue, model_validator, model_serializer
 
 
 Identifier = Annotated[str, Field(min_length=1)]
@@ -55,6 +55,14 @@ class ObservationSpec(Contract):
     data_fresh: bool | None = None
 
 
+class ReplayMatchPolicy(Contract):
+    kind: Literal["source_error", "search_terms"]
+    bindings: dict[str, JsonValue] = Field(default_factory=dict)
+    entity: str | None = None
+    terms: list[str] = Field(default_factory=list)
+    global_source: bool = False
+
+
 class RecordingSpec(Contract):
     id: Identifier
     tool: Identifier
@@ -63,6 +71,28 @@ class RecordingSpec(Contract):
     origin: Literal["recorded", "derived", "synthetic"]
     provenance: Identifier
     tool_result_input: dict[str, JsonValue] | None = None
+    match_policy: ReplayMatchPolicy | None = None
+
+    @model_serializer(mode="wrap")
+    def preserve_legacy_digest(self, handler):
+        value = handler(self)
+        if self.match_policy is None:
+            value.pop("match_policy", None)
+        return value
+
+    @model_validator(mode="after")
+    def validate_match_policy(self):
+        policy = self.match_policy
+        if policy:
+            if self.origin != "synthetic":
+                raise ValueError("flexible matching is only for explicitly synthetic scenarios")
+            if policy.kind == "source_error" and (self.observation.state != "error" or
+                    not (policy.bindings or policy.global_source)):
+                raise ValueError("source outage must be an error with explicit entity/scope bindings")
+            if policy.kind == "search_terms" and (self.tool != "web_search" or not policy.entity or
+                    "公告" not in policy.terms or any(not term for term in policy.terms)):
+                raise ValueError("search policy requires explicit entity and announcement lexicon")
+        return self
 
 
 class WorldSpec(Contract):

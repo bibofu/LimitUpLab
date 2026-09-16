@@ -5,6 +5,21 @@
 
 ## 方法与用量
 
+### 后续：合同/夹具专项复验
+
+2026-09-16修订16道Offline、3道Live，最新合并资产为 `output/agent-eval/basic70-runnable-005/suite.json`。
+首轮报告和下表保留原样，不以修订结果覆盖失败历史。专项复验001/002/003/004分别执行18/7/3/1次真实Agent，
+合计19道不同题、29次运行、166调用、988,007记录Token。目录为 `output/agent-eval/basic70-contract-recheck-001` 至004。
+原14道fixture_failure题按各题最新运行均已消除夹具阻断；其中OFF-B021在004才闭合故障补查路线。
+这不是40题重新整体验收，也不是多轮稳定性通过。部分运行仍有Judge协议错误/输入超限，needs_review不等于pass。
+原30题只做资产摘要兼容检查，未重跑真实模型；没有候选晋升。
+
+合同改动包括信号日而非交易日窗口、真实空评级池、单日审计范围；有限新闻与合成公告允许保守partial。
+夹具改动包括参数limit闭包、共享评级事实、每日统计分区、受限搜索改写，以及显式合成来源故障。
+辅助查询不会自动变成答案必须覆盖的额外内容，也不把完整夹具复制进Judge上下文。
+
+### 原始首轮
+
 - 资产：`output/agent-eval/basic70-runnable-001/suite.json`；执行前核对Case和World/baseline摘要。
 - 配置：deepseek-v4-flash；最多2个独立worker并行，每题90秒，沿用worker的16调用上限；不自动重跑Agent，不修改原始报告。
 - 首轮：40次真实Agent，241次记录调用，1,549,302 Token。调用包含Agent、安全检查和按需Judge，不是241个Agent任务。

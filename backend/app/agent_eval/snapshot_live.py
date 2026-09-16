@@ -99,8 +99,21 @@ def build_live_suite(readiness: Path, destination: Path, base_suite: Path | None
             tool_contract_version=body.tool_contract_version, evidence_version=body.evidence_version,
             recordings=[body.recording])
         question = entry["question"]
+        version = 1
+        if entry["id"] == "LH-B005":
+            question = f"截至{day}，统计沪深主板最近7个有信号且满足观察窗口要求的涨停后高位回撤信号日，报告实际信号日期范围、完整样本数、完整信号日数和样本质量；不是最近7根个股日K，不推断未来收益。"
+            version = 3
+        elif entry["id"] == "LH-B009":
+            question = f"审计{day}至{day}（仅当天）的Top10首板预测结果覆盖率及缺失，区分数据覆盖率与胜率；不扩展审计时间窗口，也不做个股分析。"
+            version = 2
+        payload = body.recording.observation.payload
+        business_empty = body.recording.observation.state == "empty" or (
+            entry["tool"] == "first_board_ratings" and isinstance(payload, dict)
+            and payload.get("candidates") == [] and payload.get("top_candidates") == [])
+        if entry["id"] == "LH-B006":
+            version = 2
         # Outcome/coverage is assessed against actual observations, not a fixed call route.
-        case = CaseSpec(case_id=entry["id"], case_version=1, profile=body.profile,
+        case = CaseSpec(case_id=entry["id"], case_version=version, profile=body.profile,
             mode="live_historical", severity="P1", status="candidate",
             capabilities=["local_snapshot_live", entry["tool"], "evidence_grounding"],
             conversation=[{"role": "user", "content": question}],
@@ -109,7 +122,7 @@ def build_live_suite(readiness: Path, destination: Path, base_suite: Path | None
                 "requirement_id": "delivery", "target": "answer.tool_contract", "expected": {
                     "rubric": question, "scope": "Use current-run evidence; distinguish missing, empty and service failure. No trading instructions.",
                     "baseline_tool": entry["tool"], "baseline_observation_digest": digest(body.recording.observation.model_dump(mode="json"))}}],
-            expected_terminal={"allowed_status": ["empty", "complete"] if body.recording.observation.state == "empty" else ["complete", "partial"]})
+            expected_terminal={"allowed_status": ["empty", "complete"] if business_empty else ["complete", "partial"]})
         assets.append((case, world))
     carried = []
     if base_suite:
