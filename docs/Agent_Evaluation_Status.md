@@ -2,6 +2,13 @@
 
 ## 当前状态
 
+### 框架优先推进（2026-09-16）
+
+- 后续按小任务补齐本地工具接入、通用评测器、LLM Judge及报告，问题逐步增加；Local30三轮全绿不再阻塞框架建设。
+- 已完成源码工具盘点：26个注册工具，16个本地优先评测入口，其中3个已有Local30覆盖、13个待接入；另10个为远端或混合依赖。
+- 完整工具矩阵、Judge缺口及下一步任务见[工具覆盖清单](Agent_Evaluation_Tool_Coverage.md)。本次只做静态盘点，未验证本地样本充足性，也未新增模型调用。
+- 最新Active Golden为`output/agent-eval/golden/local30-current-v6/suite.json`，运行时为`react-runtime-v14`；稳定面板代码已实现，但最新资产三轮正式稳定验收未完成。以下P0及建设流水为对应版本的历史结果。
+
 ### Local30 P0 缺口已关闭（2026-09-15）
 
 - 基于统一Active Golden清单`output/agent-eval/golden/local30-current-v2/suite.json`，使用
