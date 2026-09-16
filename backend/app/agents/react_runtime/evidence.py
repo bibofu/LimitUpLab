@@ -126,6 +126,12 @@ class EvidenceStore:
         rows = record["rows"]
         metadata = record["payload"] if isinstance(record["payload"], dict) else {}
         metadata = {k: v for k, v in metadata.items() if k not in COLLECTIONS}
+        if record["tool"] == "first_board_ratings":
+            metadata = {**metadata, "returned_candidate_count": len(rows), "count_scope": {
+                "universe_count": "筛选前涨停事件总体数量，不是入池候选数",
+                "returned_candidate_count": "本次返回候选数量；指定symbols时仅代表定向返回，不代表全池",
+                "symbols_filtered": bool(record["arguments"].get("symbols")),
+            }}
         return {
             "evidence_id": key, "tool": record["tool"], "result_state": record["result_state"],
             "arguments": record["arguments"], "metadata": compact(metadata, 4),

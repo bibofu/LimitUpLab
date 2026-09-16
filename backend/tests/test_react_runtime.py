@@ -109,8 +109,34 @@ def test_public_entry_defaults_to_react(monkeypatch):
             return call("finish", {"status": "refuse", "answer": "我可以提供研究事实，不能提供交易指令。"}, "f")
     response = answer_first_board_chat(AgentChatRequest(session_id="r", message="给我买卖指令"), [],
                                       llm_provider=Model(), tool_registry=registry())
-    assert response.generated_by == "react-runtime-v14"
+    assert response.generated_by == "react-runtime-v15"
     assert response.task_status == "refuse"
+
+
+def test_finish_table_is_rendered_before_compliance_and_publication(monkeypatch):
+    checked = []
+    def review(*args, **kwargs):
+        checked.append(kwargs["answer"])
+        return ComplianceReview(decision="allow", violations=[], reason="test")
+    monkeypatch.setattr(runtime_module, "review_answer", review)
+    def ratings(**args):
+        return ToolResult(name="first_board_ratings", input={}, summary="评级",
+                          output={"universe_count": 58, "candidates": [
+                              {"facts": {"symbol": "600001", "name": "甲"}, "score": 75}]})
+    class Model:
+        def generate_messages(self, messages, tools, **kwargs):
+            observations = [m for m in messages if isinstance(m, ToolMessage)]
+            if not observations:
+                return call("first_board_ratings", {}, "r")
+            key = json.loads(observations[-1].content)["evidence_id"]
+            return call("finish", {"status": "complete", "answer": "{{evidence_table}}", "table": {
+                "evidence_id": key, "columns": [{"field": "symbol", "label": "代码"},
+                                                 {"field": "score", "label": "评分"}]}}, "f")
+    response = run(AgentChatRequest(session_id="r", message="只列代码评分"),
+                   registry(first_board_ratings=ratings), Model())
+    assert response.task_status == "complete"
+    assert response.answer == "| 代码 | 评分 |\n| --- | --- |\n| 600001 | 75 |"
+    assert checked == [response.answer]
 
 
 def test_count_only_result_is_complete_without_display_rows():

@@ -2,6 +2,13 @@
 
 ## 当前状态
 
+### 生产回答专项修复：证据表格与计数口径（2026-09-16）
+
+- 运行时升级react-runtime-v15。finish.table按证据原始行确定性生成名单，不要求LLM逐行复制；渲染后仍执行合规审查。显式只列字段优先于一般日期/来源扩写。评级view区分筛选前总体、定向返回数量，不改业务数据/历史baseline。
+- 154项定向测试通过，覆盖83行完整输出、字段/历史/错误/截断保护、发布前合规、HTTP和生命周期及评测worker。
+- 真实复验 `output/agent-eval/basic70-answer-recheck-001` 四题：LH-B003全部83行所有输出单元格一致；OFF-B007严格三列；LH-B007正确区分58总体与空候选；LH-B006计数正确但额外K线解释仍待修。记录25调用、254,612 Token。
+- OFF-B007/LH-B007的Judge完成且三维pass；LH-B003/LH-B006因输入超限未评。均仍needs_review，不晋升。BC-064至067记录修复与新发现；下一步为缺失解释证据约束及Judge长证据/漏判校准。旧版本稳定性结果不得冒充v15稳定性。
+
 ### 评测合同与夹具修订完成（2026-09-16）
 
 - 本轮只改评测：16道Offline和3道Live的场景/题意/终态合同，未修改生产Agent。最新资产 `output/agent-eval/basic70-runnable-005/suite.json`，仍50 Offline+20 Historical Live；Active仍30，候选40，未晋升。

@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-VERSION = "react-runtime-v14"
+VERSION = "react-runtime-v15"
 MAX_MODEL_CALLS = 8
 MAX_TOOL_CALLS = 8
 MAX_CONTROL_CALLS = 16
@@ -27,6 +27,16 @@ class UpdateTask(StrictModel):
     requirements: list[Requirement] = Field(min_length=1, max_length=20)
 
 
+class EvidenceColumn(StrictModel):
+    field: str = Field(min_length=1, description="Exact scalar field in evidence rows; no expressions")
+    label: str = Field(min_length=1, max_length=40)
+
+
+class EvidenceTable(StrictModel):
+    evidence_id: str
+    columns: list[EvidenceColumn] = Field(min_length=1, max_length=12)
+
+
 class Finish(StrictModel):
     # Older checkpoints may still contain the retired Claim Ledger. Ignore it so
     # in-flight runs can finish after upgrading without exposing it in the schema.
@@ -34,6 +44,7 @@ class Finish(StrictModel):
 
     status: Literal["complete", "partial", "empty", "clarify", "refuse"]
     answer: str = Field(min_length=1, max_length=16000)
+    table: EvidenceTable | None = Field(default=None, description="For lists, render ALL rows of current evidence server-side. Put {{evidence_table}} exactly once in answer; select/filter/sort with compute_result first. Never transcribe rows into answer.")
     evidence_ids: list[str] = Field(default_factory=list)
     missing: list[str] = Field(default_factory=list, description="Only unmet USER-requested deliverables. Irrelevant missing source fields are caveats in the answer, not unfinished tasks.")
 

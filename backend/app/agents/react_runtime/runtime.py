@@ -18,6 +18,7 @@ from app.agents.react_runtime.contracts import (
 )
 from app.agents.react_runtime.compliance import review_answer
 from app.agents.react_runtime.evidence import EvidenceStore
+from app.agents.react_runtime.rendering import render_answer
 from app.agents.react_runtime.context import prepare_history
 from app.agents.react_runtime.lifecycle import CURRENT_CONTROL
 from app.agents.react_runtime.tools import ToolGateway
@@ -39,6 +40,9 @@ SYSTEM = """你是LimitUpLab收盘研究助手。使用原生工具调用逐轮�
 只用工具实际证据写市场事实。严格按最小充分原则回答：用户只问单一指标时，只给该指标、实际数据日期、必要口径和来源，不附加其他市场统计；名单题只给用户要求的字段。不得主动扩展行业、题材、金额等额外事实。
 证据字段必须原样使用；疑似截断、错字或异常值要明确标为数据质量问题，不得凭常识补全或修正。
 标明来源与截止日、数据缺失和推断，不把相关性说成因果；并列展示不同统计指标时分别写清名称和口径。
+用户明确“只列/仅输出”字段时，不添加标题、日期段、来源解释或总结；确有影响结论的数据缺失或安全边界才作必要说明。
+评级universe_count是筛选前事件总体，不是入池候选数；returned_candidate_count仅是本次返回候选数，指定symbols时不得冒充全池数量。
+名单一律通过finish.table声明证据ID和字段，在answer中放置一次{{evidence_table}}，由服务端输出原始行；禁止逐行手抄或补全名单。需要筛选、排序或TopN先compute_result，再引用所得证据。只列字段的答案仅放表格占位符。
 禁止买卖指令、建议仓位、目标价、收益承诺或确定性预测；历史机构买卖事实可以解释。
 混合请求可拒绝交易建议部分并完成允许研究。歧义影响结果时澄清；工具不支持时明确说明。
 最终必须单独调用finish，输出可读中文答案、真实status、可选的evidence_ids及missing。
@@ -281,6 +285,7 @@ class Run:
             return self.stop("cancelled")
         try:
             final = Finish.model_validate(state["finish"])
+            final.answer = render_answer(final, self.evidence)
             if contains_prompt_leak(final.answer):
                 raise ValueError("Internal content detected; answer research facts only")
             self.compliance_checks += 1
