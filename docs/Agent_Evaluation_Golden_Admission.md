@@ -1,6 +1,16 @@
 # Basic70 Golden准入清单（2026-09-16）
 
-## 本轮决定
+## 已执行用户批准
+
+用户随后明确批准：“好吧，我批准这34 题的晋升”。已按下表34个“准入”ID完成晋升，未包含6个“暂缓”ID。
+当前Active资产：`output/agent-eval/golden/basic64-current-v1/suite.json`，64题（45 Offline+19 Historical Live）。
+批准记录：同目录`approval.json`，绑定原候选Case版本/摘要与World摘要；批准摘要为
+`sha256:fc29f1c8d6586ea9ae48ddfb6b8ff150b66773751b40495065f21f0b839e24b8`。
+同目录`pending.json`保留LH-B006、OFF-B005/009/014/027/029六题引用。原30题Case不变、旧候选与运行结果不覆盖。
+64题重新加载并校验Case/World摘要通过，6项晋升专项测试通过；本次0模型调用。
+用户批准题目准入不等于批准当前Agent回答质量；Judge仍保留诊断限制。
+
+## 审批前建议（保留历史）
 
 建议先审签34题，暂缓6题。**这是Codex准入建议，不是用户签字，不自动修改Active状态。**
 当前仍30 Active；若用户批准本清单中的34题，目标为64题（45 Offline + 19 Historical Live），其余6题隔离。

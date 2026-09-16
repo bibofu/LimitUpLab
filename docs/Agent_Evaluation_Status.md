@@ -2,6 +2,13 @@
 
 ## 当前状态
 
+### 用户批准34题，Active Golden已达64题（2026-09-16）
+
+- 当前入口：`output/agent-eval/golden/basic64-current-v1/suite.json`。64 Active =45 Offline+19 Historical Live；新增34题，原30题资产不变。
+- 按用户明确批准的[34题清单](Agent_Evaluation_Golden_Admission.md)执行，approval.json绑定批准原文、候选摘要及证据摘要，不覆盖旧包。pending.json仅保留6题：OFF-B005/009/014/027/029和LH-B006。
+- 64题重新加载/摘要校验通过；6项专项回归通过，验证审批范围、过期摘要拒绝、旧资产保留及重复执行保护。本次0模型调用。
+- 这是题目准入，不是Agent 64题全通过；Judge仍为诊断，争议事实需复核。暂缓6题不进入Active套件。
+
 ### Golden准入收尾清单已形成（2026-09-16）
 
 - [逐题准入清单](Agent_Evaluation_Golden_Admission.md)：建议34题审签、暂缓6题；仍30 Active，未伪造用户批准。批准后目标64题（45 Offline+19 Live），不是等待Agent全答对才准入。
