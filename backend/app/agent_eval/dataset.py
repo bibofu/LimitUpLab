@@ -138,6 +138,13 @@ def build_dataset(recipe: Path, database: Path, destination: Path):
             for mode in ("count", "list"):
                 for limit in (30, 100):
                     requests.append(("market_event_pool", {"trade_date": day, "event_type": event_type, "result_mode": mode, "limit": limit}))
+        # Close the common market-comparison surface so a valid cross-check does not
+        # become fixture_failure merely because the planner chose count vs list.
+        for market in ("main_board", "chinext", "star_market"):
+            for mode in ("count", "list"):
+                for limit in (30, 100):
+                    requests.append(("market_event_pool", {"trade_date": day, "event_type": "limit_up",
+                                                            "market": market, "result_mode": mode, "limit": limit}))
         for limit in (30, 50, 100):
             requests.append(("market_event_pool", {"trade_date": day, "event_type": "limit_up", "query": "评测不存在主题", "result_mode": "count", "limit": limit}))
     for item in book["cases"]:

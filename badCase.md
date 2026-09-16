@@ -898,3 +898,10 @@ empty、partial 或 error 时 Replan 新闻；股票名称提取同步覆盖 K�
 - 根因：空集技术验收覆盖 list 的 limit 30/100 与另一个工具，却未录制同一公开工具的 count 模式。真实模型在多轮中偶发选择数量复核，冻结 World 对这条合法只读路线不完备。
 - 修复：新增科创板收盘涨停 count 的真实录制；additive World 迁移同时支持批量 selection acceptance 与单题 empty acceptance，并逐条重放既有验收路线后才迁移 baseline digest。失败轮次继续保留且不计入稳定面板。
 - 回归：新候选 World 必须包含全部旧录制且 Observation 不变；OFF-033 原有三条空集验收路线在新 World 全部成功。稳定计数在新 Active Golden 上重新开始。
+
+## BC-056：按单条失败路线补录仍遗漏相邻市场对照查询（2026-09-16）
+
+- 发现方式：OFF-033 补入科创板 count 后的下一轮实跑。模型依次完成科创板 list、`limit_up_events`、全市场 count、科创板 count 核对，随后查询创业板 count 作为非空对照；该合法查询未录制，再次触发 `fixture_failure`。
+- 根因：冻结数据集按已见轨迹追加个别 alternate route，未对公开工具的离散参数空间形成闭包；模型的合理交叉核验会在 `market × result_mode × limit` 组合间波动，逐条追补无法成为稳定基线。
+- 修复：数据集生成器对每个评测日期统一录制沪深主板、创业板、科创板的涨停 `count/list × limit 30/100` 完整组合；精简 OFF-033 World 仍只按显式清单迁入该题可能使用的 2026-09-11 市场对照路线，不把整套大 World 无审计复制进去。
+- 回归：候选数据集构建继续真实调用生产 Gateway 并执行 record/replay；迁移继续要求旧录制 Observation 不变、原验收路线全量重放。此前失败轮次保留且不进入最终三轮面板。
