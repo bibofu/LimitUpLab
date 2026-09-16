@@ -11,6 +11,21 @@ from app.agent_eval.trace_review import JUDGE_SYSTEM, TraceJudgment, judge_packe
 
 
 def calibration_samples(suite="core"):
+    if suite == "golden_admission":
+        samples = output_constraint_samples()
+        base = deepcopy(samples[0]["packet"])
+        base["conversation"] = [{"role": "user", "content": "说明首板评级池的候选数量。"}]
+        base["requirements"] = ["区分筛选前事件总体与入池候选数量"]
+        base["evidence"] = [{"evidence_id": "e1", "tool": "first_board_ratings", "arguments": {},
+            "result_state": "ok", "payload": {"universe_count": 58, "candidates": [
+                {"facts": {"symbol": "600001", "name": "样例甲"}, "score": 70}]}}]
+        for name, answer, expected in [
+            ("candidate_count_correct", "筛选前事件总体58条，入池候选1只。", "pass"),
+            ("universe_as_candidates", "首板评级候选池共58只。", "fail")]:
+            packet = deepcopy(base)
+            packet["answer"] = answer
+            samples.append({"id": name, "packet": packet, "expected": {"grounding": expected}})
+        return samples
     if suite == "compaction_pairs":
         return compaction_samples()
     if suite == "output_constraints":

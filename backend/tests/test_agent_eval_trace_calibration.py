@@ -80,6 +80,19 @@ def test_output_constraint_pairs_and_bounded_suite(tmp_path):
     assert report["metrics"]["task_completion"]["labeled"] == 4
 
 
+def test_golden_admission_scope_pairs_are_bounded_and_not_self_approval(tmp_path):
+    samples = calibration_samples("golden_admission")
+    assert len(samples) == 6
+    good, bad = samples[-2:]
+    assert good["packet"]["evidence"] == bad["packet"]["evidence"]
+    assert good["expected"]["grounding"] == "pass"
+    assert bad["expected"]["grounding"] == "fail"
+    report = calibrate_trace_judge(tmp_path / "admission", Provider(suite="golden_admission"),
+                                   suite="golden_admission")
+    assert report["all_labels_matched"] and report["model_calls"] == 6
+    assert not report["release_eligible"] and not report["independent_acceptance"]
+
+
 def test_invalid_suite_does_not_create_artifacts(tmp_path):
     output = tmp_path / "invalid"
     with pytest.raises(ValueError, match="unknown"):
