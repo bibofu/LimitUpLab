@@ -100,6 +100,7 @@ def main() -> int:
     for name in ("source", "target-bundle", "acceptance", "output-dir", "acceptance-output-dir"):
         migrate.add_argument("--" + name, required=True, type=Path)
     migrate.add_argument("--case-id", required=True)
+    migrate.add_argument("--add-route", required=True, nargs="+", type=json.loads)
     formal = commands.add_parser("score-formal-run")
     formal.add_argument("--bundle", required=True, type=Path)
     formal.add_argument("--run-root", required=True, type=Path)
@@ -257,7 +258,8 @@ def main() -> int:
     elif args.command == "migrate-additive-world":
         from app.agent_eval.golden_suite import migrate_additive_world
         result = migrate_additive_world(args.source, args.target_bundle, args.acceptance,
-                                        args.case_id, args.output_dir, args.acceptance_output_dir)
+                                        args.case_id, args.output_dir, args.acceptance_output_dir,
+                                        args.add_route)
     elif args.command == "score-formal-run":
         from app.agent_eval.formal_report import score_formal_run
         from app.config import configure_runtime_environment

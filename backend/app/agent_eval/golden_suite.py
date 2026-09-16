@@ -102,28 +102,33 @@ def assemble_golden_suite(sources: list[Path], expected_bundles: list[Path], des
 
 
 def migrate_additive_world(source: Path, target_bundle: Path, acceptance_path: Path,
-                           case_id: str, destination: Path, acceptance_destination: Path):
+                           case_id: str, destination: Path, acceptance_destination: Path,
+                           route_specs: list[dict]):
     """Replace one Active case World only after proving the new recordings are additive."""
     if destination.exists() or acceptance_destination.exists():
         raise FileExistsError(destination if destination.exists() else acceptance_destination)
     source_suite = json.loads((source / "suite.json").read_text(encoding="utf-8"))
     target_suite = json.loads((target_bundle / "suite.json").read_text(encoding="utf-8"))
     source_entries = {item["id"]: item for item in source_suite["cases"]}
-    target_entries = {item["id"]: item for item in target_suite["cases"]}
-    if source_suite.get("status") != "active" or case_id not in source_entries or case_id not in target_entries:
-        raise ValueError("migration requires the same case in an Active source and candidate target")
-    source_entry, target_entry = source_entries[case_id], target_entries[case_id]
+    if source_suite.get("status") != "active" or case_id not in source_entries or not route_specs:
+        raise ValueError("migration requires an Active source case and explicit additive routes")
+    source_entry = source_entries[case_id]
     active_case = load_case(source / source_entry["case"])
-    candidate_case = load_case(target_bundle / target_entry["case"])
-    if (active_case.status != "active" or candidate_case.status != "candidate"
-            or active_case.model_copy(update={"status": "candidate"}) != candidate_case):
+    candidate_case = active_case.model_copy(update={"status": "candidate"})
+    if active_case.status != "active":
         raise ValueError("additive World migration cannot change the reviewed case contract")
     old_world = load_world(source / source_entry["baseline"])
-    new_world = load_world(target_bundle / target_entry.get("world", target_entry.get("baseline")))
-    if (old_world.model_dump(mode="json", exclude={"recordings"})
-            != new_world.model_dump(mode="json", exclude={"recordings"})):
-        raise ValueError("additive World migration cannot change World metadata")
-    old_registry, new_registry = FrozenAgentToolRegistry(old_world), FrozenAgentToolRegistry(new_world)
+    recording_world = load_world(target_bundle / "world.json")
+    old_registry, recording_registry = FrozenAgentToolRegistry(old_world), FrozenAgentToolRegistry(recording_world)
+    available = _recording_index(recording_world, recording_registry)
+    additions = []
+    for position, spec in enumerate(route_specs, 1):
+        key = (spec["tool"], digest(recording_registry._arguments(spec["tool"], spec["arguments"])))
+        if key not in available:
+            raise ValueError(f"requested additive route is absent from recorded target: {position}")
+        additions.append(available[key].model_copy(update={"id": f"additive-route-{position:03d}"}))
+    new_world = old_world.model_copy(deep=True, update={"recordings": [*old_world.recordings, *additions]})
+    new_registry = FrozenAgentToolRegistry(new_world)
 
     old_records, added = _additive_recording_diff(old_world, new_world, old_registry, new_registry)
     acceptance = json.loads(acceptance_path.read_text(encoding="utf-8"))
