@@ -85,3 +85,17 @@ def test_invalid_suite_does_not_create_artifacts(tmp_path):
     with pytest.raises(ValueError, match="unknown"):
         calibrate_trace_judge(output, Provider(), suite="unknown")
     assert not output.exists()
+
+
+def test_compaction_pairs_share_labels_and_restore_exactly(tmp_path):
+    from app.agent_eval.evidence_compaction import restore
+
+    samples = calibration_samples("compaction_pairs")
+    for original, compact in zip(samples[::2], samples[1::2]):
+        assert restore(compact["packet"]) == original["packet"]
+        assert original["expected"] == compact["expected"]
+    report = calibrate_trace_judge(tmp_path / "pairs", Provider(suite="compaction_pairs"),
+                                   suite="compaction_pairs")
+    assert report["model_calls"] == 4
+    assert all(p["verdicts_equal"] and p["both_match_labels"] for p in report["paired_results"])
+    assert all(p["tokens_saved"] == 0 for p in report["paired_results"])

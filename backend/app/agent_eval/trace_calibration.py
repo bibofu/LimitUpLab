@@ -11,6 +11,8 @@ from app.agent_eval.trace_review import JUDGE_SYSTEM, TraceJudgment, judge_packe
 
 
 def calibration_samples(suite="core"):
+    if suite == "compaction_pairs":
+        return compaction_samples()
     if suite == "output_constraints":
         return output_constraint_samples()
     if suite != "core":
@@ -97,6 +99,57 @@ def summarize(rows):
     return metrics
 
 
+def compaction_samples():
+    from app.agent_eval.evidence_compaction import compact_packet
+
+    base = deepcopy(output_constraint_samples()[0]["packet"])
+    payload = base["evidence"][0]["payload"]
+    payload.update(matched_count=12, returned_count=12)
+    payload["events"] = [
+        {"symbol": f"000{i:03d}", "name": f"样例{i}", "trade_date": "2026-09-11",
+         "closed_limit": True, "board_height": 1, "amount": (13 - i) * 1000000,
+         "turnover_rate": None, "industry": "合成行业", "data_missing": ["turnover_rate"]}
+        for i in range(1, 13)
+    ]
+    question = "列出2026-09-11收盘涨停股成交额前三名，按成交额降序，只列代码名称。"
+    base["conversation"] = [{"role": "user", "content": question}]
+    base["requirements"] = [question]
+    passed = {key: "pass" for key in TraceJudgment.model_fields}
+    samples = []
+    for pair, answer, expected in [
+        ("correct_top3", "000001 样例1\n000002 样例2\n000003 样例3", passed),
+        ("wrong_member", "000001 样例1\n000002 样例2\n000004 样例4",
+         {"task_completion": "fail", "grounding": "fail", "boundary_safety": "pass"}),
+    ]:
+        original = deepcopy(base)
+        original["answer"] = answer
+        encoded, compaction = compact_packet(original)
+        if not compaction["applied"]:
+            raise ValueError("paired sample must exercise compaction")
+        for representation, packet in [("original", original), ("compact", encoded)]:
+            samples.append({"id": pair + "_" + representation, "pair": pair,
+                            "representation": representation, "packet": packet,
+                            "expected": dict(expected), "compaction": compaction})
+    return samples
+
+
+def paired_results(rows):
+    pairs = []
+    for name in sorted({r["pair"] for r in rows if "pair" in r}):
+        pair = {r["representation"]: r for r in rows if r.get("pair") == name}
+        original, compact = pair["original"], pair["compact"]
+        complete = all(r["status"] == "completed" for r in (original, compact))
+        old_tokens, new_tokens = original.get("tokens"), compact.get("tokens")
+        pairs.append({"pair": name, "both_completed": complete,
+                      "verdicts_equal": complete and original["actual"] == compact["actual"],
+                      "both_match_labels": complete and all(
+                          r["actual"] == r["expected"] for r in (original, compact)),
+                      "original_tokens": old_tokens, "compact_tokens": new_tokens,
+                      "tokens_saved": old_tokens - new_tokens
+                      if isinstance(old_tokens, int) and isinstance(new_tokens, int) else None})
+    return pairs
+
+
 def calibrate_trace_judge(destination: Path, provider, *, suite="core"):
     from app.agent_eval.worker import GuardedProvider
 
@@ -113,12 +166,20 @@ def calibrate_trace_judge(destination: Path, provider, *, suite="core"):
     rows = []
     for sample in samples:
         row = {"id": sample["id"], "expected": sample["expected"]}
+        system = JUDGE_SYSTEM
+        if "pair" in sample:
+            row.update(pair=sample["pair"], representation=sample["representation"])
+            if sample["representation"] == "compact":
+                from app.agent_eval.evidence_compaction import INSTRUCTION
+                system += "\n" + INSTRUCTION
+        row["prompt_digest"] = digest(system)
         if perf_counter() >= deadline or guarded.budget_exhausted:
             row["status"] = "budget_exhausted"
         else:
             try:
-                judgment, _ = judge_packet(guarded, sample["packet"])
+                judgment, usage = judge_packet(guarded, sample["packet"], system=system)
                 row.update(status="completed", judgment=judgment.model_dump(mode="json"),
+                           tokens=usage.get("total_tokens"),
                            actual={k: v["verdict"] for k, v in judgment.model_dump().items()})
             except Exception as error:
                 row.update(status="judge_error", error_type=type(error).__name__)
@@ -130,6 +191,7 @@ def calibrate_trace_judge(destination: Path, provider, *, suite="core"):
         "suite": suite,
         "prompt_digest": digest(JUDGE_SYSTEM), "samples_digest": digest(samples),
         "model": getattr(provider, "model", None), "metrics": metrics, "results": rows,
+        "paired_results": paired_results(rows),
         "all_labels_matched": all(m["matched"] == m["labeled"] for m in metrics.values()),
         "model_calls": guarded.calls,
         "total_tokens": guarded.input_tokens + guarded.output_tokens if guarded.token_usage_complete else None,

@@ -2,6 +2,15 @@
 
 ## 当前状态
 
+### Basic70目标与压缩对照结论（2026-09-16）
+
+- 当前Active资产逐项核对仍为20 Offline+10 Historical Live，证据涉及3/26工具；距离50+20尚缺30 Offline、10 Live和23个工具的代表覆盖。详见[Basic70实施清单](Agent_Evaluation_Basic70.md)，新增数量分配为23个缺口工具场景+7个共性边界Offline，以及10个Live。
+- 完成 `--suite compaction_pairs`：两个Top3合成正反例，各评原始/压缩一次，共4次调用、7555 Token；25项离线测试通过。
+- 正例原始1995、压缩1780 Token（节省10.8%），三维一致且符合标签。负例原始1999 Token，压缩响应1781 Token但协议校验失败：grounding给pass却列出错误声明，同时误将要求中的名称判为不应输出。失败请求/响应已保留，不自动重试。
+- 总用量包含失败协议响应；配对报告负例compact_tokens为null，因为未产生有效裁决，原始用量仍可查 `calls/call-04-response.json`。产物位于 `output/agent-eval/trace-compaction-pairs-001/`。
+- 压缩未通过配对验证，继续默认关闭，不影响原始证据路径；不声称故障一定由压缩引起，单次结果不能建立因果。后续不再以优化/微型校准阻塞Golden内容扩展。
+- 本轮没有新增Active Golden。下一批按Basic70优先实现5个统计/时序Offline候选，采用公共录制/回放与trace评测，不逐工具写Runner。
+
 ### 可选无损证据精简（2026-09-16）
 
 - `review-trace --compact-evidence`新增行表编码：仅将同字段对象列表表示为columns+values，不删列、不截行、不改变顺序或合并重复行；日期、单位、null、缺失和截断标记均保留。字段集合不同的行不强行对齐，编码保留键冲突时整包回退。
