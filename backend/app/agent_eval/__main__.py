@@ -17,6 +17,9 @@ from app.models import AgentChatResponse
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    coverage = commands.add_parser("preflight-tool-coverage")
+    coverage.add_argument("--registry", type=Path)
+    coverage.add_argument("--output", type=Path)
     dataset = commands.add_parser("build-dataset")
     for name in ("recipe", "database", "output-dir"):
         dataset.add_argument("--" + name, required=True, type=Path)
@@ -188,7 +191,13 @@ def main() -> int:
     blueprint.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
     exit_code = 0
-    if args.command == "build-dataset":
+    if args.command == "preflight-tool-coverage":
+        from app.agent_eval.tool_coverage import DEFAULT_REGISTRY, preflight_tool_coverage, write_coverage_report
+        result = preflight_tool_coverage(args.registry or DEFAULT_REGISTRY)
+        if args.output:
+            write_coverage_report(args.output, result)
+        exit_code = 0 if result["registration_valid"] else 2
+    elif args.command == "build-dataset":
         from app.agent_eval.dataset import build_dataset
         result = build_dataset(args.recipe, args.database, args.output_dir)
     elif args.command == "run-dataset":
