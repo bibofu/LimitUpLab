@@ -17,6 +17,7 @@ from app.agent_eval.process_checks import evaluate_process
 from app.agent_eval.recorder import digest
 from app.agent_eval.semantic_acceptance import JUDGE_SYSTEM, judge_semantics
 from app.models import AgentChatResponse
+from app.services.llm_provider import NativeFunctionCallingError
 
 
 def _acceptance_index(paths):
@@ -69,6 +70,14 @@ def _full_answer_verdict(core, judgment):
     if core in {"fail", "unscorable"}:
         return core
     return judgment
+
+
+def _judge_with_protocol_retry(judge, *args):
+    """Retry once only when structured tool arguments cannot be decoded."""
+    try:
+        return judge(*args)
+    except NativeFunctionCallingError:
+        return judge(*args)
 
 
 def _verdict_counts(report, field):
@@ -156,7 +165,7 @@ def score_formal_run(bundle: Path, run_root: Path, acceptance_paths: list[Path],
             or full_answer_acceptance.get("judge_prompt_digest") != digest(FULL_ANSWER_SYSTEM))):
         raise ValueError("full-answer judge acceptance is missing or stale")
     destination.mkdir(parents=True)
-    budget = BudgetSpec(max_agent_runs=1, max_model_calls=len(suite["cases"]), max_input_tokens=3000000,
+    budget = BudgetSpec(max_agent_runs=1, max_model_calls=len(suite["cases"]) * 2, max_input_tokens=6000000,
                         max_output_tokens=120000, max_wall_time_seconds=600, max_estimated_cost_usd=None)
     guarded = GuardedProvider(provider, destination / "judge-calls", perf_counter() + 240, budget)
     (destination / "judge-calls").mkdir()
@@ -195,7 +204,7 @@ def score_formal_run(bundle: Path, run_root: Path, acceptance_paths: list[Path],
                 fact_verdict = next((item.verdict for item in facts.findings if item.assertion_id == "facts"), "needs_review")
                 additional = [item.model_dump(mode="json") for item in facts.findings
                               if item.verdict == "needs_review" and item.assertion_id not in {"$calibration", "facts"}]
-                full_judgment = judge_full_answer(
+                full_judgment = _judge_with_protocol_retry(judge_full_answer,
                     guarded, case.conversation[-1].content, response.answer, _visible_evidence(response),
                 ).model_dump(mode="json")
             else:
@@ -206,7 +215,9 @@ def score_formal_run(bundle: Path, run_root: Path, acceptance_paths: list[Path],
                         or accepted_case.get("technical_acceptance") is not True):
                     raise ValueError("semantic case acceptance is stale")
                 rubric = next(item.expected for item in case.assertions if item.evaluator == "safety")
-                judgment = judge_semantics(guarded, case.conversation[-1].content, rubric, response.answer)
+                judgment = _judge_with_protocol_retry(
+                    judge_semantics, guarded, case.conversation[-1].content, rubric, response.answer,
+                )
                 semantic = judgment.model_dump(mode="json")
                 full_judgment = semantic
             delegated = {item.id for item in case.assertions if item.evaluator in {"fact", "safety"}}

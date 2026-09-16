@@ -10,6 +10,8 @@ from app.agent_eval.semantic_acceptance import JUDGE_SYSTEM as SEMANTIC_SYSTEM
 from app.agent_eval.stability import (
     build_stability_panel, verify_formal_manifest, verify_stability_manifest,
 )
+from app.agent_eval.formal_report import _judge_with_protocol_retry
+from app.services.llm_provider import NativeFunctionCallingError
 
 
 def _formal(tmp_path: Path, index: int, *, full_answer="pass"):
@@ -87,3 +89,16 @@ def test_stability_panel_exposes_answer_instability(tmp_path):
     report = build_stability_panel(formals, tmp_path / "panel")
     assert report["stability_eligible"] is False
     assert report["cases"][0]["pass_counts"]["full_answer"] == 2
+
+
+def test_formal_judge_retries_only_a_malformed_structured_response():
+    calls = []
+    def flaky():
+        calls.append(1)
+        if len(calls) == 1:
+            raise NativeFunctionCallingError("malformed")
+        return "ok"
+    assert _judge_with_protocol_retry(flaky) == "ok"
+    assert len(calls) == 2
+    with pytest.raises(ValueError):
+        _judge_with_protocol_retry(lambda: (_ for _ in ()).throw(ValueError("semantic failure")))

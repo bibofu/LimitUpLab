@@ -877,3 +877,10 @@ empty、partial 或 error 时 Replan 新闻；股票名称提取同步覆盖 K�
 - 根因：候选题主路线及常见默认参数已覆盖，但 recipe-level alternate routes 没有包含科创板在两个公开工具之间的交叉核验，也没有包含先取全部状态再按字段过滤的合法宽查询。冻结环境的封闭性因此把正常规划波动暴露为夹具缺口。
 - 修复：为 2026-09-08 科创板增加 `market_event_pool(limit_up/list)` 和 `limit_up_events(event_status=all)` 两条真实录制路线；新增严格的 additive World 迁移，只允许 Case 契约和 World 元数据不变、旧录制及 Observation 全量保留、新录制纯增加，并要求旧技术验收路线在新 World 中继续成功。失败的原始轮次保留，不计入新基线稳定性。
 - 回归：覆盖非增量变更拒绝、旧验收绑定迁移及新 Active Golden 单题 World 替换；新基线从零重新累计三轮，不混用迁移前结果。
+
+## BC-053：正式裁判单次结构化参数畸形导致整轮报告中断（2026-09-16）
+
+- 发现方式：迁移后 Local30 稳定性第 1 轮。30 个 Agent Case 全部完成且无基础设施失败，但完整答案裁判第 3 次调用返回无法解码的 tool arguments，`NativeFunctionCallingError` 直接中断整份正式报告。
+- 根因：正式裁判对 Provider 的偶发结构化协议解码失败没有受限恢复；报告是串行聚合，单次协议瞬断会丢失后续 27 题的裁决。该错误不同于有效裁决为 fail 或 needs_review，不应改变业务标签。
+- 修复：正式语义/完整答案裁判仅对 `NativeFunctionCallingError` 原题重试一次，GuardedProvider 继续逐次保存 request/response/error 并计入模型调用与 token；预算上限同步容纳最坏的一次重试。任何语义校验错误、有效 fail、第二次协议错误仍原样失败，不做多轮洗结果。
+- 回归：首轮协议畸形、次轮成功时返回结果且调用数为2；普通 `ValueError` 不重试。原始中断目录保留，正式稳定性报告使用明确的新目录生成。
