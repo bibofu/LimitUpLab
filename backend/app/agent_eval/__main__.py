@@ -103,6 +103,15 @@ def main() -> int:
     formal.add_argument("--output-dir", required=True, type=Path)
     formal.add_argument("--previous-report", type=Path)
     formal.add_argument("--allow-llm", required=True, action="store_true")
+    verify_formal = commands.add_parser("verify-formal-manifest")
+    verify_formal.add_argument("--manifest", required=True, type=Path)
+    verify_formal.add_argument("--artifacts-only", action="store_true")
+    stability = commands.add_parser("build-stability-panel")
+    stability.add_argument("--formal-dirs", required=True, nargs="+", type=Path)
+    stability.add_argument("--output-dir", required=True, type=Path)
+    stability.add_argument("--required-runs", type=int, default=3)
+    verify_stability = commands.add_parser("verify-stability-manifest")
+    verify_stability.add_argument("--manifest", required=True, type=Path)
     record = commands.add_parser("record-local-summary")
     record.add_argument("--database", required=True, type=Path)
     record.add_argument("--anchor", required=True, type=datetime.fromisoformat)
@@ -248,6 +257,16 @@ def main() -> int:
         configure_runtime_environment()
         result = score_formal_run(args.bundle, args.run_root, args.acceptances, args.output_dir,
                                   get_llm_provider(), previous_report=args.previous_report)
+    elif args.command == "verify-formal-manifest":
+        from app.agent_eval.stability import verify_formal_manifest
+        result = verify_formal_manifest(args.manifest, verify_inputs=not args.artifacts_only)
+    elif args.command == "build-stability-panel":
+        from app.agent_eval.stability import build_stability_panel
+        result = build_stability_panel(args.formal_dirs, args.output_dir, required_runs=args.required_runs)
+        exit_code = 0 if result["stability_eligible"] else 2
+    elif args.command == "verify-stability-manifest":
+        from app.agent_eval.stability import verify_stability_manifest
+        result = verify_stability_manifest(args.manifest)
     elif args.command == "promote-highest":
         from app.agent_eval.highest_acceptance import promote_highest
         result = promote_highest(args.review_dir,args.approval,args.acceptance,args.output_dir)
