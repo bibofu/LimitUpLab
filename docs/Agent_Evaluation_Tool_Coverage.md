@@ -84,6 +84,29 @@ Local30 保留为回归集；三轮全绿不作为继续搭建框架的前置条
 
 ## 后续拆分任务
 
+### 当前优先级调整：统一trace复评
+
+停止逐工具Runner扩建；以下原任务列表保留为历史拆分，不再依次执行。
+以任务完成、事实接地、边界安全和执行效率为核心，工具覆盖仅作诊断。
+已有工具只要产出兼容trace即可进入通用检查，不要求新增专用Runner。
+
+```powershell
+# 在backend目录；读取已有运行，不执行Agent，不调用模型
+.venv/Scripts/python.exe -m app.agent_eval review-trace --run-dir <已有单题运行目录> --output <新报告.json>
+# 需要实验性语义评分时显式追加 --allow-judge
+```
+
+输入为case.json和response.json，可选读取usage.json；输出父目录需存在，不覆盖旧报告。
+默认语义维度not_run。开启Judge后合并一次调用，不逐维收费、不自动重试。
+只传问题上下文、要求、答案及当前证据，去除完全重复的证据，不传全部执行决策和隐藏推理。
+不删除证据字段或列表行；包括prompt和工具schema在内最多24000字符，可用
+`--max-input-chars`调整至1000..100000。字符限额不是精确Token或费用承诺。
+硬失败、坏trace、超预算不调Judge；失败不能被Judge覆盖。Judge引用未知证据或协议错误记为judge_error。
+原运行Token可能包括答案提取，与新增Judge用量分开报告；缺失用量为null，不当作零。
+暂未做结果缓存；重复加`--allow-judge`会再次付费，默认离线复评则不收费。
+新合并Judge尚未校准，不能替代旧正式验收；总判定fail退出1，其余needs_review退出2。
+下一步是小规模校准误杀与漏判，而不是逐工具补Runner。
+
 每次只完成一个可审阅交付；每个任务先做无LLM验证，需要真实模型时限定场景与调用次数。
 遇到新问题先形成可复现诊断，不自动启动多轮全量Local30。
 

@@ -17,6 +17,11 @@ from app.models import AgentChatResponse
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    trace_review = commands.add_parser("review-trace")
+    trace_review.add_argument("--run-dir", required=True, type=Path)
+    trace_review.add_argument("--output", required=True, type=Path)
+    trace_review.add_argument("--allow-judge", action="store_true")
+    trace_review.add_argument("--max-input-chars", type=int, default=24000)
     promotion = commands.add_parser("record-local-promotion")
     promotion.add_argument("--database", required=True, type=Path)
     promotion.add_argument("--start-date", required=True, type=date.fromisoformat)
@@ -197,7 +202,27 @@ def main() -> int:
     blueprint.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
     exit_code = 0
-    if args.command == "record-local-promotion":
+    if args.command == "review-trace":
+        from app.agent_eval.trace_review import review_trace
+        from app.agent_eval.core_batch import write_json
+        if args.output.exists():
+            raise FileExistsError(args.output)
+        case = load_case(args.run_dir / "case.json")
+        response = AgentChatResponse.model_validate_json((args.run_dir / "response.json").read_text(encoding="utf-8"))
+        provider = None
+        if args.allow_judge:
+            from app.config import configure_runtime_environment
+            from app.services.llm_provider import get_llm_provider
+            configure_runtime_environment()
+            provider = get_llm_provider()
+        result = review_trace(case, response, provider=provider, max_input_chars=args.max_input_chars)
+        usage_path = args.run_dir / "usage.json"
+        result["efficiency"]["saved_run_usage"] = (
+            json.loads(usage_path.read_text(encoding="utf-8")) if usage_path.exists() else None)
+        result["efficiency"]["saved_run_usage_scope"] = "original worker, may include answer extraction; not new review cost"
+        write_json(args.output, result)
+        exit_code = 1 if result["verdict"] == "fail" else 2
+    elif args.command == "record-local-promotion":
         from app.agent_eval.local_promotion import record_local_promotion
         result = record_local_promotion(args.database, args.start_date, args.anchor, args.output, days=args.days)
         exit_code = 0 if result["data_readiness"] == "available" else 2
