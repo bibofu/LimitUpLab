@@ -2,6 +2,9 @@
 
 ## 目标和真实起点
 
+真实首轮验收已完成：40题全部执行，14题受夹具阻断，并发现终态/题意缺陷、真实回答错误和Judge漏判。
+未晋升新Golden，详见[逐题验收报告](Agent_Evaluation_Basic70_Acceptance.md)。以下可运行数量不代表质量通过。
+
 最新：`output/agent-eval/basic70-runnable-001/suite.json`已合并50 Offline + 20 Live可运行资产。
 新增10 Live已有标准Case/baseline及共享worker接入，10题真实工具＋脚本模型全链路通过；
 不是10题真实模型质量通过。Active仍为20 Offline + 10 Live，新增40题仍待验收。

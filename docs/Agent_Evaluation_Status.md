@@ -2,6 +2,14 @@
 
 ## 当前状态
 
+### 新增40题真实首轮验收完成，未通过整体准入（2026-09-16）
+
+- 用户授权后，deepseek-v4-flash完成40次真实Agent运行及4次保存trace的补评；共记录245调用、1,575,698 Token（失败服务未上报用量可能不在内）。旧30题未重跑，没有自动晋升。
+- 原始worker：24 needs_review、14 fixture_failure/unscorable、2 fail。原始Judge：21完成、3过长跳过、3协议失败、13硬失败跳过；补评4题均完成。原始失败不被补评覆盖，不能把Judge三维pass当Golden通过率。
+- Codex逐题复核分组：17题核心要求初核无明确阻塞，14夹具路线阻断，2终态合同错误/争议，2题意/覆盖缺陷，3明确回答错误，2缺失归因待核验。明确错误包括长名单补造、违反只列约束、总体样本数冒充候选数，后两项Judge漏判。
+- 完整方法、逐题结论和证据见[首轮验收报告](Agent_Evaluation_Basic70_Acceptance.md)。机器摘要：`output/agent-eval/basic70-acceptance-audit-001.json`；原始运行及补评分别在basic70-acceptance-001、basic70-acceptance-review-001。
+- 50+20是可运行资产数，不是已验收题数；Active仍30、候选40。下一步建议先修评测合同/夹具，再单独修生产Agent，待用户确认实施顺序。
+
 ### Basic70可运行候选集接通：50 Offline + 20 Live（2026-09-16）
 
 - 新增10个标准Live Case及版本化baseline，合并清单为 `output/agent-eval/basic70-runnable-001/suite.json`：50 Offline、20 Historical Live，工具资产并集仍26/26。新增40题仍为Candidate，原30 Active未改；不是70题Golden验收完成。
