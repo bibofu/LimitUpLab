@@ -127,28 +127,35 @@ def migrate_additive_world(source: Path, target_bundle: Path, acceptance_path: P
 
     old_records, added = _additive_recording_diff(old_world, new_world, old_registry, new_registry)
     acceptance = json.loads(acceptance_path.read_text(encoding="utf-8"))
-    accepted = next((item for item in acceptance.get("cases", []) if item["case_id"] == case_id), None)
+    batched = "cases" in acceptance
+    accepted = (next((item for item in acceptance.get("cases", []) if item["case_id"] == case_id), None)
+                if batched else acceptance if acceptance.get("case_id") == case_id else None)
     old_digest, new_digest = digest(old_world.model_dump(mode="json")), digest(new_world.model_dump(mode="json"))
     if (acceptance.get("technical_acceptance") is not True or not accepted
             or accepted.get("case_digest") != digest(candidate_case.model_dump(mode="json"))
             or accepted.get("baseline_digest") != old_digest):
         raise ValueError("technical acceptance is missing or stale")
-    route = accepted.get("route", {})
+    routes = [accepted["route"]] if "route" in accepted else accepted.get("routes", [])
+    if not routes:
+        raise ValueError("technical acceptance has no replayable route")
     with new_registry.anchored():
-        result = new_registry.execute_frozen_calls(
-            [{"name": route.get("tool"), "arguments": route.get("arguments", {})}], request=None,
-        )["tool_results"][0]
-    if result.status != "success":
+        results = new_registry.execute_frozen_calls(
+            [{"name": route["tool"], "arguments": route["arguments"]} for route in routes], request=None,
+        )["tool_results"]
+    if any(result.status != "success" for result in results):
         raise ValueError("previously accepted route no longer succeeds")
-    acceptance["cases"] = [{**item, "baseline_digest": new_digest} if item["case_id"] == case_id else item
-                           for item in acceptance["cases"]]
+    if batched:
+        acceptance["cases"] = [{**item, "baseline_digest": new_digest} if item["case_id"] == case_id else item
+                               for item in acceptance["cases"]]
+    else:
+        acceptance["baseline_digest"] = new_digest
     migration = {"schema_version": "additive-world-migration-v1", "case_id": case_id,
                  "source_suite_digest": digest(source_suite), "target_suite_digest": digest(target_suite),
                  "source_baseline_digest": old_digest, "target_baseline_digest": new_digest,
                  "preserved_recordings": len(old_records), "added_recordings": len(added),
                  "added_routes": [{"tool": tool, "arguments_digest": arguments_digest}
                                   for tool, arguments_digest in added],
-                 "case_contract_unchanged": True, "accepted_route_replayed": True}
+                 "case_contract_unchanged": True, "accepted_routes_replayed": len(routes)}
     acceptance["additive_world_migration"] = migration
     destination.mkdir(parents=True)
     (destination / "baselines").mkdir()

@@ -891,3 +891,10 @@ empty、partial 或 error 时 Replan 新闻；股票名称提取同步覆盖 K�
 - 根因：运行提示虽要求仅回答用户字段，但同时允许“必要口径”，模型把相邻市场综述误当成有用补充；不同指标的名称约束不足以稳定压过扩写倾向。
 - 修复：明确最小充分回答规则：单指标问题只输出该指标、实际数据日期、必要口径与来源，不附加其他市场统计；名单题只给用户要求字段。不是靠问题正则或 Case 特判裁剪答案。运行版本升级为 `react-runtime-v14`。
 - 回归：运行版本断言同步更新；新的 Local30 稳定性计数从该版本重新开始，旧轮次保留但不混入稳定面板。
+
+## BC-055：真实空集 Case 漏录同筛选条件的 count 路线（2026-09-16）
+
+- 发现方式：`react-runtime-v14` 稳定性第 3 轮。OFF-033 已通过 `market_event_pool(list)` 和 `limit_up_events` 两条证据确认 2026-09-11 科创板收盘涨停为空，随后用同工具同条件的 `result_mode=count` 复核时触发 `FrozenFixtureError`；回答事实与终态正确，但整题按 `fixture_failure` 不可评分。
+- 根因：空集技术验收覆盖 list 的 limit 30/100 与另一个工具，却未录制同一公开工具的 count 模式。真实模型在多轮中偶发选择数量复核，冻结 World 对这条合法只读路线不完备。
+- 修复：新增科创板收盘涨停 count 的真实录制；additive World 迁移同时支持批量 selection acceptance 与单题 empty acceptance，并逐条重放既有验收路线后才迁移 baseline digest。失败轮次继续保留且不计入稳定面板。
+- 回归：新候选 World 必须包含全部旧录制且 Observation 不变；OFF-033 原有三条空集验收路线在新 World 全部成功。稳定计数在新 Active Golden 上重新开始。
