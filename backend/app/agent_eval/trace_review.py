@@ -48,10 +48,10 @@ def judge_schema():
         "parameters": TraceJudgment.model_json_schema()}}
 
 
-def judge_packet(provider, packet):
+def judge_packet(provider, packet, *, system=JUDGE_SYSTEM):
     """Shared production/calibration path: exactly one request, no retry."""
     result = provider.generate_messages(
-        [SystemMessage(content=JUDGE_SYSTEM), HumanMessage(content=canonical_json(packet))],
+        [SystemMessage(content=system), HumanMessage(content=canonical_json(packet))],
         [judge_schema()], timeout_seconds=45, max_tokens=1800)
     if len(result.tool_calls) != 1 or result.tool_calls[0]["name"] != "submit_trace_review":
         raise ValueError("expected exactly one trace judgment")
@@ -67,7 +67,7 @@ def judge_packet(provider, packet):
     return judgment, result.usage_metadata or {}
 
 
-def review_trace(case, response, *, provider=None, max_input_chars=24000):
+def review_trace(case, response, *, provider=None, max_input_chars=24000, compact_evidence=False):
     if not 1000 <= max_input_chars <= 100000:
         raise ValueError("max_input_chars must be 1000..100000")
     trajectory = evaluate_trajectory_terminal(case, response, profile=case.profile)
@@ -113,9 +113,18 @@ def review_trace(case, response, *, provider=None, max_input_chars=24000):
               "assertions": [a.model_dump(mode="json") for a in case.assertions],
               "answer": response.answer, "task_status": response.task_status,
               "evidence": compact}
+    system = JUDGE_SYSTEM
+    report["judge"]["compaction"] = {"applied": False, "reason": "disabled"}
+    if compact_evidence:
+        from app.agent_eval.evidence_compaction import compact_packet, INSTRUCTION
+        packet, compaction = compact_packet(packet)
+        report["judge"]["compaction"] = compaction
+        if compaction["applied"]:
+            system += "\n" + INSTRUCTION
+    report["judge"]["prompt_digest"] = digest(system)
     payload = canonical_json(packet)
     schema = judge_schema()
-    input_chars = len(JUDGE_SYSTEM) + len(payload) + len(canonical_json(schema))
+    input_chars = len(system) + len(payload) + len(canonical_json(schema))
     report["judge"].update(input_chars=input_chars, max_input_chars=max_input_chars,
                            evidence_records=len(compact), duplicates_removed=len(evidence) - len(compact))
     if provider is None:
@@ -133,7 +142,7 @@ def review_trace(case, response, *, provider=None, max_input_chars=24000):
     report["judge"]["calls"] = 1
     report["judge"]["model"] = getattr(provider, "model", None)
     try:
-        judgment, usage = judge_packet(provider, packet)
+        judgment, usage = judge_packet(provider, packet, system=system)
         report["judge"]["tokens"] = usage.get("total_tokens")
         report["dimensions"] = judgment.model_dump(mode="json")
         report["judge"]["status"] = "completed"

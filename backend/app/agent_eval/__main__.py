@@ -25,6 +25,7 @@ def main() -> int:
     trace_review.add_argument("--run-dir", required=True, type=Path)
     trace_review.add_argument("--output", required=True, type=Path)
     trace_review.add_argument("--allow-judge", action="store_true")
+    trace_review.add_argument("--compact-evidence", action="store_true")
     trace_review.add_argument("--max-input-chars", type=int, default=24000)
     promotion = commands.add_parser("record-local-promotion")
     promotion.add_argument("--database", required=True, type=Path)
@@ -226,7 +227,8 @@ def main() -> int:
             from app.services.llm_provider import get_llm_provider
             configure_runtime_environment()
             provider = get_llm_provider()
-        result = review_trace(case, response, provider=provider, max_input_chars=args.max_input_chars)
+        result = review_trace(case, response, provider=provider, max_input_chars=args.max_input_chars,
+                              compact_evidence=args.compact_evidence)
         usage_path = args.run_dir / "usage.json"
         result["efficiency"]["saved_run_usage"] = (
             json.loads(usage_path.read_text(encoding="utf-8")) if usage_path.exists() else None)
