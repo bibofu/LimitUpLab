@@ -27,3 +27,16 @@ OFF-B001..023各覆盖一个原Local30未覆盖的工具；OFF-B024..030依次�
 回放匹配基于工具参数及生产默认值，未录制的调用显式失败；未来若真实Agent选择合理的
 不同参数，应扩充夹具路线并审阅，不能把未匹配伪装成空结果，亦不能仅靠限制提示强迫走固定路径。
 当前23个工具均有脚本模型的真实ReAct执行链测试（非真实模型正确率），并禁止业务网络/数据库访问。
+
+## 本地Live依赖预检
+
+```powershell
+.venv/Scripts/python.exe -m app.agent_eval.basic70_live --database data/limituplab.sqlite --output-dir ../output/agent-eval/basic70-live-readiness-003 --anchor 2026-09-11T18:00:00+08:00
+```
+
+输出目录必须不存在。源库使用只读SQLite backup；在副本执行10种真实工具，禁用网络/
+子进程回退，拒绝其他数据库及ATTACH。逐工具保存观察或失败，不调用模型。
+选择锚点日首板且本地至少20根日K覆盖到当日的标的；没有匹配标的时明确失败。
+report.json是依赖就绪报告，不是标准Live suite或Agent正确率；还需接入共享Live
+worker并补事实断言。副本允许工具自身初始化，可能含后续修订，不声称历史时点真值。
+策略查询明确为采集时状态。SQLite/录制/报告仅留在被忽略的output目录。

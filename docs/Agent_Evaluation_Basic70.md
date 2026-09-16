@@ -3,9 +3,11 @@
 ## 目标和真实起点
 
 更新：已实现30个新增Offline候选，见 `backend/evals/suites/basic70-expansion.json`。
-`output/agent-eval/basic70-candidates-002/suite.json`汇总50 Offline资产（20 Active+30 Candidate）
+`output/agent-eval/basic70-candidates-003/suite.json`汇总50 Offline资产（20 Active+30 Candidate）
 和10个既有Live，工具资产并集26/26。下表保留Active Golden口径，新候选不计入已批准数量。
-当前下一步是审阅候选、补10 Live和有界验收，不再停留在逐工具Runner建设。
+8道候选已修正生产字段/口径并升v2；10个新增Live场景已在数据库副本完成实工具预检，
+产物为 `output/agent-eval/basic70-live-readiness-003/report.json`。尚需接入Live worker、
+标准Case断言和有界验收，不能将预检录制计入已可执行或已批准Live数。
 
 目标是70个有明确判定依据的Golden场景，合计覆盖全部26个注册业务工具，
 不是26份专用Runner，也不是70个只有问句的占位符。
@@ -48,8 +50,9 @@ Live沿用项目现有Historical Live口径：真实工具执行，日期及数�
 不穷举参数。remote_limit_up_pool和web_search使用extended profile，不改变默认产品工具权限。
 外部工具Offline可用明确标记的合成合同夹具或可追溯录制，不伪称真实在线执行。
 
-新增10 Live建议：晋级统计1、K线/涨停后路径2、评级过滤1、审计/策略2、
-指数板块1、热榜/龙虎榜1、新闻/异动1、远端池/搜索1。组合题按真实任务需要组合，
+新增10 Live本轮选用本地可执行场景：晋级统计1、K线1、涨停后筛选/路径/统计3、
+评级/过滤/质疑3、审计/策略2。远端场景暂由Offline覆盖；外部Live留待后续扩充。
+此调整优先完成本地依赖验证，不宣称远端工具已有Live覆盖。组合题按真实任务需要组合，
 不是强制模型调用固定工具顺序；预检无数据时明确阻塞，不为了凑数改写为通过。
 
 ## Golden准入：少而准确

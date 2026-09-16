@@ -26,6 +26,7 @@ def check_values(payload, checks):
 
 
 def candidate_assets(item):
+    version = item.get("version", 1)
     recordings = [{k: item[k] for k in ("tool", "arguments", "payload", "state", "checks")}]
     recordings.extend(item.get("additional_recordings", []))
     names = {r["tool"] for r in recordings}
@@ -34,7 +35,7 @@ def candidate_assets(item):
         raise ValueError("unknown business tool")
     profile = "v1_close_review" if names <= V1_CLOSED_MARKET_TOOL_NAMES else "extended"
     world = WorldSpec.model_validate({
-        "world_id": item["id"] + "-synthetic", "world_version": 1, "profile": profile,
+        "world_id": item["id"] + "-synthetic", "world_version": version, "profile": profile,
         "anchor_datetime": "2026-09-11T18:00:00+08:00", "latest_local_trade_date": "2026-09-11",
         "trading_calendar": {"id": "synthetic-week", "version": 1, "start_date": "2026-09-07",
                              "end_date": "2026-09-11", "trading_dates": [f"2026-09-{day:02}" for day in range(7, 12)]},
@@ -48,9 +49,9 @@ def candidate_assets(item):
                        for index, r in enumerate(recordings)]})
     question = item["question"]
     case = CaseSpec.model_validate({
-        "case_id": item["id"], "case_version": 1, "profile": profile, "mode": "offline",
+        "case_id": item["id"], "case_version": version, "profile": profile, "mode": "offline",
         "severity": "P1", "status": "candidate", "capabilities": ["tool_contract", item["tool"], item["state"]],
-        "world": {"id": world.world_id, "version": 1},
+        "world": {"id": world.world_id, "version": version},
         "conversation": [{"role": "user", "content": question}],
         "expected_requirements": [{"id": "delivery", "description": question,
                                    "source_turn": 0, "source_text": question}],

@@ -41,6 +41,37 @@ def test_expansion_exactly_fills_tool_gaps():
     assert added | existing == {s.name for s in TOOL_SCHEMAS}
 
 
+def test_reviewed_fields_follow_production_models_and_versioning():
+    from app.models import DailyBoardPromotionStat, FirstBoardCriticResponse, WebSearchFacts
+    from app.agent_eval.basic70 import candidate_assets
+
+    for item in CASES:
+        case, world, records = candidate_assets(item)
+        assert case.case_version == case.world.version == world.world_version == item.get("version", 1)
+        for record in records:
+            payload = record["payload"]
+            if record["tool"] == "web_search":
+                WebSearchFacts.model_validate(payload)
+                assert "items" not in payload
+            elif record["tool"] == "first_board_critic":
+                FirstBoardCriticResponse.model_validate(payload)
+            elif record["tool"] == "daily_board_promotion":
+                for row in payload:
+                    stat = DailyBoardPromotionStat.model_validate(row)
+                    assert stat.promoted_count == len(stat.promoted_stocks)
+            elif record["tool"] == "first_board_ratings":
+                from app.models import FirstBoardRatingsResponse
+                from pydantic import TypeAdapter
+                field = FirstBoardRatingsResponse.model_fields["snapshot_source"]
+                TypeAdapter(field.annotation).validate_python(payload["snapshot_source"])
+                assert "prediction_source" not in payload
+                assert payload["candidates"][0]["facts"]["symbol"] == payload["top_candidates"][0]["symbol"]
+            elif record["tool"] == "post_limit_path":
+                from app.services.post_limit import _anchor_fact
+                anchor = payload["anchor"]
+                assert _anchor_fact({**anchor, "trade_date": anchor["anchor_date"]}) == anchor
+
+
 def test_build_loadable_assets_and_do_not_promote(tmp_path):
     output = tmp_path / "bundle"
     report = build_basic70(output)

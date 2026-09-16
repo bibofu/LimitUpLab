@@ -2,6 +2,15 @@
 
 ## 当前状态
 
+### Basic70契约修订及10个Live场景实工具预检（2026-09-16）
+
+- 修正8道Offline候选：晋级明细、路径anchor_date、统计窗口、评级snapshot_source及嵌套facts、Critic枚举、搜索results字段；受影响case/world升v2，旧产物不覆盖。新包为 `output/agent-eval/basic70-candidates-003/suite.json`。部分响应用生产Pydantic模型验证，其余仍是最小合同夹具。
+- 一个共享入口完成10种生产Gateway实工具预检：晋级、K线、涨停后筛选/路径/统计、评级/过滤/质疑、预测审计、策略状态。只读打开源SQLite并backup到副本；执行只允许副本数据库，拒绝ATTACH、网络连接与子进程回退。
+- `output/agent-eval/basic70-live-readiness-003/report.json`：10/10取得真实工具观察、0阻塞；评级过滤为空结果，保留empty。选样为2026-09-11首板且本地有20根日K的000636。先前失败批次保留。
+- **当前仍为50 Offline资产（20 Active+30 Candidate）和10个已接入Historical Live；另10个Live场景只完成问题、参数、实工具录制及依赖预检，不是已可执行的Live Agent用例。** Active Golden仍30。策略状态属于采集时状态，副本可能含后续修订，不能冒充历史时点存档。
+- 105项定向测试通过，包括生产字段、版本引用、数据库隔离/防ATTACH、失败留档及原有worker/录制回放。真实模型调用0。
+- 下一步：将这10个真实观察接入共享Live worker与标准Case断言，保留基线漂移检查，再做小预算验收；不再逐工具增加Runner。目前不能声称50+20 Golden已完成。
+
 ### Basic70首批内容已落地：30个新增Offline候选（2026-09-16）
 
 - 新增可版本化题目资产 `backend/evals/suites/basic70-expansion.json`，不是蓝图占位：23个缺口工具各1个主场景，另7个空/错误/滞后/注入/输出约束/统计口径/跨工具场景。每题有问题、参数、合成观察、字段断言、正反回答、期望终态。
