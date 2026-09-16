@@ -20,6 +20,7 @@ def main() -> int:
     calibration = commands.add_parser("calibrate-trace-judge")
     calibration.add_argument("--output-dir", required=True, type=Path)
     calibration.add_argument("--allow-judge", action="store_true", required=True)
+    calibration.add_argument("--suite", choices=["core", "output_constraints"], default="core")
     trace_review = commands.add_parser("review-trace")
     trace_review.add_argument("--run-dir", required=True, type=Path)
     trace_review.add_argument("--output", required=True, type=Path)
@@ -210,7 +211,7 @@ def main() -> int:
         from app.config import configure_runtime_environment
         from app.services.llm_provider import get_llm_provider
         configure_runtime_environment()
-        result = calibrate_trace_judge(args.output_dir, get_llm_provider())
+        result = calibrate_trace_judge(args.output_dir, get_llm_provider(), suite=args.suite)
         exit_code = 0 if result["all_labels_matched"] else 2
     elif args.command == "review-trace":
         from app.agent_eval.trace_review import review_trace

@@ -10,7 +10,11 @@ from app.agent_eval.recorder import digest
 from app.agent_eval.trace_review import JUDGE_SYSTEM, TraceJudgment, judge_packet
 
 
-def calibration_samples():
+def calibration_samples(suite="core"):
+    if suite == "output_constraints":
+        return output_constraint_samples()
+    if suite != "core":
+        raise ValueError("unknown calibration suite")
     packet = {
         "conversation": [{"role": "user", "content": "报告2026-09-11涨停家数和首板家数，仅做客观统计。"}],
         "requirements": ["报告指定日期涨停家数与首板家数"], "assertions": [],
@@ -43,6 +47,37 @@ def calibration_samples():
     return samples
 
 
+def output_constraint_samples():
+    strict = "列出2026-09-11收盘涨停股票，只列代码和名称，不要解释。"
+    packet = {
+        "conversation": [{"role": "user", "content": strict}],
+        "requirements": [strict], "assertions": [], "task_status": "complete",
+        "answer": "1. 000001 样例甲\n2. 000002 样例乙",
+        "evidence": [{"evidence_id": "e1", "tool": "limit_up_events", "arguments": {},
+                      "result_state": "ok", "sources": ["synthetic-local"],
+                      "payload": {"trade_date": "2026-09-11", "matched_count": 2,
+                                  "returned_count": 2, "source_truncated": False,
+                                  "events": [{"symbol": "000001", "name": "样例甲", "closed_limit": True},
+                                             {"symbol": "000002", "name": "样例乙", "closed_limit": True}]}}],
+    }
+    passed = {key: "pass" for key in TraceJudgment.model_fields}
+    samples = [{"id": "strict_list_only", "packet": deepcopy(packet), "expected": dict(passed)}]
+    extra = deepcopy(packet)
+    extra["answer"] += "\n当日共2只收盘涨停，来源为本地事件数据。"
+    samples.append({"id": "strict_extra_explanation", "packet": extra,
+                    "expected": {**passed, "task_completion": "fail"}})
+    ordinary = deepcopy(extra)
+    ordinary["conversation"][0]["content"] = "列出2026-09-11收盘涨停股票。"
+    ordinary["requirements"] = [ordinary["conversation"][0]["content"]]
+    samples.append({"id": "ordinary_extra_explanation", "packet": ordinary, "expected": dict(passed)})
+    missing = deepcopy(packet)
+    missing.update(task_status="partial", answer="本地该日期名单数据缺失，无法列出代码和名称。")
+    missing["evidence"][0].update(result_state="partial", payload={
+        "trade_date": "2026-09-11", "events": None, "data_missing": ["events"]})
+    samples.append({"id": "strict_necessary_missing_notice", "packet": missing, "expected": dict(passed)})
+    return samples
+
+
 def summarize(rows):
     metrics = {}
     for dimension in TraceJudgment.model_fields:
@@ -62,16 +97,16 @@ def summarize(rows):
     return metrics
 
 
-def calibrate_trace_judge(destination: Path, provider):
+def calibrate_trace_judge(destination: Path, provider, *, suite="core"):
     from app.agent_eval.worker import GuardedProvider
 
+    samples = calibration_samples(suite)
     destination.mkdir(parents=True, exist_ok=False)
     calls_dir = destination / "calls"
     calls_dir.mkdir()
-    samples = calibration_samples()
     write_json(destination / "samples.json", samples)
-    budget = BudgetSpec(max_agent_runs=1, max_model_calls=6, max_input_tokens=30000,
-                        max_output_tokens=10800, max_wall_time_seconds=180,
+    budget = BudgetSpec(max_agent_runs=1, max_model_calls=len(samples), max_input_tokens=30000,
+                        max_output_tokens=1800 * len(samples), max_wall_time_seconds=180,
                         max_estimated_cost_usd=None)
     deadline = perf_counter() + 180
     guarded = GuardedProvider(provider, calls_dir, deadline, budget)
@@ -92,6 +127,7 @@ def calibrate_trace_judge(destination: Path, provider):
     metrics = summarize(rows)
     report = {
         "schema_version": "trace-judge-calibration-v1", "label_origin": "synthetic_author_labels",
+        "suite": suite,
         "prompt_digest": digest(JUDGE_SYSTEM), "samples_digest": digest(samples),
         "model": getattr(provider, "model", None), "metrics": metrics, "results": rows,
         "all_labels_matched": all(m["matched"] == m["labeled"] for m in metrics.values()),
@@ -99,7 +135,7 @@ def calibrate_trace_judge(destination: Path, provider):
         "total_tokens": guarded.input_tokens + guarded.output_tokens if guarded.token_usage_complete else None,
         "token_usage_complete": guarded.token_usage_complete,
         "release_eligible": False, "independent_acceptance": False,
-        "limitations": ["Six synthetic examples are diagnostic, not population error-rate estimates.",
+        "limitations": ["Small synthetic sets are diagnostic, not population error-rate estimates.",
                         "No repeated attempts or automatic prompt tuning; failures retained.",
                         "Token budget is checked between requests, not a strict billed-token ceiling."],
     }
