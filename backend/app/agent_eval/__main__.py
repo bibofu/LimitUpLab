@@ -175,6 +175,7 @@ def main() -> int:
         run.add_argument("--" + name, required=True, type=Path)
     run.add_argument("--allow-llm", action="store_true", required=True)
     run.add_argument("--wall-seconds", type=int, default=240)
+    run.add_argument("--allow-judge", action="store_true")
     blueprint = commands.add_parser("blueprint-coverage")
     batch = commands.add_parser("prepare-core-batch")
     expansion = commands.add_parser("prepare-expansion")
@@ -187,6 +188,7 @@ def main() -> int:
         live.add_argument("--" + name, required=True, type=Path)
     live.add_argument("--allow-llm", action="store_true", required=True)
     live.add_argument("--wall-seconds", type=int, default=240)
+    live.add_argument("--allow-judge", action="store_true")
     review = commands.add_parser("prepare-golden-review")
     review.add_argument("--run-dir",required=True,type=Path)
     review.add_argument("--output-dir",required=True,type=Path)
@@ -373,7 +375,7 @@ def main() -> int:
     elif args.command == "run-live-historical":
         from app.agent_eval.runner import run_offline
         result = run_offline(args.case, args.baseline, args.output_dir,
-                            wall_seconds=args.wall_seconds, live_database=args.database)
+                            wall_seconds=args.wall_seconds, live_database=args.database, allow_judge=args.allow_judge)
         exit_code = {"pass":0,"fail":1,"needs_review":2,"unscorable":3}[result["verdict"]]
     elif args.command == "record-local-summary":
         result = record_local_summary(args.database, args.anchor, args.output)
@@ -411,7 +413,7 @@ def main() -> int:
         exit_code = {"pass": 0, "fail": 1, "needs_review": 2}[result["verdict"]]
     elif args.command == "run-offline":
         from app.agent_eval.runner import run_offline
-        result = run_offline(args.case, args.world, args.output_dir, wall_seconds=args.wall_seconds)
+        result = run_offline(args.case, args.world, args.output_dir, wall_seconds=args.wall_seconds, allow_judge=args.allow_judge)
         exit_code = {"pass": 0, "fail": 1, "needs_review": 2, "unscorable": 3}[result["verdict"]]
     else:
         from app.agent_eval.blueprints import coverage, load_blueprints, save_blueprint_report

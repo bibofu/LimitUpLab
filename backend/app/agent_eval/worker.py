@@ -76,23 +76,30 @@ class GuardedProvider(LLMProvider):
             raise
 
 
-def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240, live_database=None):
+def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240, live_database=None, allow_judge=False):
     started = perf_counter()
     cases, worlds = load_suite([case_path], [world_path])
     case, world = cases[0], worlds[0]
     expected_mode = "live_historical" if live_database else "offline"
     if case.mode != expected_mode or len(case.conversation) != 1:
-        raise ValueError("this worker supports a single-turn offline case only")
+        raise ValueError("worker requires a single-turn case matching offline/live execution mode")
     if case.status not in {"candidate", "active"}:
         raise ValueError("case status is not runnable")
     require_react_provider(provider)
     if live_database:
         from app.agent_eval.historical_live import HistoricalLiveRegistry
-        registry = HistoricalLiveRegistry(live_database, world)
+        if "local_snapshot_live" in case.capabilities:
+            from app.agent_eval.snapshot_live import SnapshotLiveRegistry
+            registry = SnapshotLiveRegistry(live_database, world, directory / "live.sqlite")
+        else:
+            registry = HistoricalLiveRegistry(live_database, world)
         save(directory, "live-baseline-check.json", {"passed":True,
             "checked_recordings":registry.baseline_checks,"baseline_digest":world_digest(world),
-            "tool_execution":"production methods over readonly database snapshot",
-            "scope":"local market_summary, limit_up_events, market_event_pool; not full-profile coverage"})
+            "tool_execution":"production methods over isolated local data",
+            "ignored_drift_fields": ["post_limit_screen.generated_at", "post_limit_path.generated_at",
+                                     "post_limit_statistics.generated_at"] if "local_snapshot_live" in case.capabilities else [],
+            "scope": sorted(registry.enabled_tool_names) if "local_snapshot_live" in case.capabilities
+                     else ["market_summary", "limit_up_events", "market_event_pool"]})
     else:
         registry = FrozenAgentToolRegistry(world)
     budget = BudgetSpec(max_agent_runs=1, max_model_calls=16, max_input_tokens=2000000,
@@ -128,6 +135,7 @@ def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240
         "extractor_prompt_digest": digest(extractor_system), "privacy_status": "unreviewed"})
     guarded = GuardedProvider(provider, directory, started + wall_seconds, budget)
     extraction_error = None
+    review = None
     with capture_llm_usage() as usage:
         with registry.anchored():
             response = runtime.run(request, registry, guarded)
@@ -139,9 +147,14 @@ def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240
         save(directory, "process.json", process.model_dump(mode="json"))
         extraction = None
         if any(a.target == "answer.tool_contract" for a in case.assertions):
-            facts = BusinessReport(case=manifest.cases[0], verdict="needs_review",
+            from app.agent_eval.trace_review import review_trace
+            review = review_trace(case, response, provider=guarded if allow_judge else None)
+            save(directory, "trace-review.json", review)
+            facts = BusinessReport(case=manifest.cases[0], verdict=review["verdict"],
                 findings=[finding("$tool_contract", "needs_review",
-                    "Generic tool contract: use review-trace; no market-summary extractor call.")])
+                    "See trace-review.json; semantic judgment is diagnostic, not Golden approval.")]
+                    + [finding("$judge_" + key, value["verdict"], value.get("issue") or value.get("rationale", ""))
+                       for key, value in review["dimensions"].items() if value["verdict"] != "not_run"])
         elif any(a.evaluator == "fact" for a in case.assertions):
             try:
                 extraction = extractor(guarded, response.answer)
@@ -187,6 +200,7 @@ def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240
                "process_diagnostic": process.verdict,
                "extraction_status": "uncalibrated", "case_status": case.status,
                "budget_exhausted": guarded.budget_exhausted,
+               "trace_review": None if review is None else {"verdict": review["verdict"], "judge": review["judge"]},
                "agent_task_status": response.task_status, "elapsed_seconds": round(result.elapsed_seconds, 2)}
     save(directory, "summary.json", summary)
     return summary
@@ -199,6 +213,7 @@ def main():
     parser.add_argument("--wall-seconds", type=int, default=240)
     parser.add_argument("--allow-llm", action="store_true", required=True)
     parser.add_argument("--live-database", type=Path)
+    parser.add_argument("--allow-judge", action="store_true")
     args = parser.parse_args()
     if not 1 <= args.wall_seconds <= 900:
         parser.error("wall-seconds must be between 1 and 900")
@@ -207,15 +222,19 @@ def main():
         # The child never initializes application repositories or the HTTP lease/journal path.
         original_connect = sqlite3.connect
         allowed_uri = args.live_database.resolve().as_uri() + "?mode=ro" if args.live_database else None
+        live_copy = (args.output_dir / "live.sqlite").resolve()
         def forbid_database(*a, **k):
             if allowed_uri and a and a[0] == allowed_uri and k.get("uri") is True:
+                return original_connect(*a, **k)
+            if allowed_uri and a and (str(a[0]) == live_copy.as_uri() + "?mode=ro" and k.get("uri") is True
+                    or not str(a[0]).startswith("file:") and Path(a[0]).resolve() == live_copy):
                 return original_connect(*a, **k)
             raise RuntimeError("database access is forbidden in offline evaluation worker")
         sqlite3.connect = forbid_database
         from app.agents.react_runtime.lifecycle import CURRENT_CONTROL
         CURRENT_CONTROL.set(None)
         summary = execute_case(args.case, args.world, args.output_dir, get_llm_provider(),
-                               wall_seconds=args.wall_seconds, live_database=args.live_database)
+                               wall_seconds=args.wall_seconds, live_database=args.live_database, allow_judge=args.allow_judge)
         print(json.dumps(summary, ensure_ascii=False), flush=True)
         return {"pass": 0, "fail": 1, "needs_review": 2, "unscorable": 3}[summary["verdict"]]
     except Exception as error:

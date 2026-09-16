@@ -8,7 +8,7 @@ import sys
 
 
 def run_offline(case: Path, world: Path, output_dir: Path, *, wall_seconds: int = 240,
-                live_database: Path | None = None) -> dict:
+                live_database: Path | None = None, allow_judge: bool = False) -> dict:
     if not 1 <= wall_seconds <= 900:
         raise ValueError("wall_seconds must be between 1 and 900")
     case, world, output_dir = case.resolve(), world.resolve(), output_dir.resolve()
@@ -19,6 +19,8 @@ def run_offline(case: Path, world: Path, output_dir: Path, *, wall_seconds: int 
                "--output-dir", str(output_dir), "--wall-seconds", str(wall_seconds), "--allow-llm"]
     if live_database:
         command.extend(["--live-database", str(live_database.resolve())])
+    if allow_judge:
+        command.append("--allow-judge")
     flags = subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0
     with (output_dir / "worker.log").open("x", encoding="utf-8") as log:
         process = subprocess.Popen(command, cwd=Path(__file__).resolve().parents[2],

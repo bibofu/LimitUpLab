@@ -2,6 +2,14 @@
 
 ## 当前状态
 
+### Basic70可运行候选集接通：50 Offline + 20 Live（2026-09-16）
+
+- 新增10个标准Live Case及版本化baseline，合并清单为 `output/agent-eval/basic70-runnable-001/suite.json`：50 Offline、20 Historical Live，工具资产并集仍26/26。新增40题仍为Candidate，原30 Active未改；不是70题Golden验收完成。
+- `SnapshotLiveRegistry`共享生产Gateway/工具实现，每次运行从只读基线库backup到独立live.sqlite，再执行真实工具检查基线。允许本地10工具的合法参数变化，不以录制参数查表返回答案；远端工具不开放。只豁免三个post_limit工具顶层generated_at，其他业务值和状态漂移在模型调用前阻断。
+- worker已识别local_snapshot_live用例，生成标准manifest/response/result、基线检查及trace-review。默认零额外Judge；run-offline及run-live-historical可显式--allow-judge，一次评三维，共享原调用/时间预算，超输入预算不截断证据、不自动重试。Judge仍是实验性诊断，不自动晋升或产生发布pass。
+- 88项定向回归通过，含10题真实本地工具＋脚本Agent完整worker、漂移阻断和脚本Judge协议。补测worker.main实际CLI数据库防护，避免只在函数测试中可用。真实LLM与真实Judge调用均0；不能把脚本回答计为质量通过。
+- 下一步不再补Runner：对新增候选做少量真实模型＋Judge的有界验收，修正暴露的内容/参数问题，再按审核流程晋升Golden。策略状态仍是采集时状态，副本不是历史时点原貌。
+
 ### Basic70契约修订及10个Live场景实工具预检（2026-09-16）
 
 - 修正8道Offline候选：晋级明细、路径anchor_date、统计窗口、评级snapshot_source及嵌套facts、Critic枚举、搜索results字段；受影响case/world升v2，旧产物不覆盖。新包为 `output/agent-eval/basic70-candidates-003/suite.json`。部分响应用生产Pydantic模型验证，其余仍是最小合同夹具。

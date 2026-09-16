@@ -1,5 +1,11 @@
 # Agent 问答 Bad Case 记录
 
+## BC-059：本地Live基线把生成时间变化误报为业务漂移（2026-09-16）
+
+- 发现：新增Live完整worker在调用模型前，post_limit_screen因每次生成的新generated_at与录制不等而被阻断；底层业务数据未变。
+- 修复：仅对post_limit_screen/path/statistics的顶层generated_at做明确比较豁免，不改生产输出、不忽略嵌套时间或data_as_of，检查报告记录豁免范围。
+- 回归：10道真实本地工具＋脚本模型完整链路通过；另验证业务观察篡改仍触发HistoricalDataDrift，其他工具同名字段仍参与比较。
+
 ## BC-058：Basic70合成工具观察与生产字段不一致（2026-09-16）
 
 - 发现：候选能通过自身字段断言和冻结回放，但web_search使用items而生产为results；评级来源、路径锚点及Critic枚举也有偏差，可能让正确Agent在错误夹具上被误判。

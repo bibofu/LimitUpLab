@@ -40,3 +40,24 @@ OFF-B001..023各覆盖一个原Local30未覆盖的工具；OFF-B024..030依次�
 report.json是依赖就绪报告，不是标准Live suite或Agent正确率；还需接入共享Live
 worker并补事实断言。副本允许工具自身初始化，可能含后续修订，不声称历史时点真值。
 策略查询明确为采集时状态。SQLite/录制/报告仅留在被忽略的output目录。
+
+## 生成并执行标准Live候选
+
+在backend目录生成70题合并清单（输出目录须不存在）：
+
+```powershell
+.venv/Scripts/python.exe -m app.agent_eval.snapshot_live --readiness ../output/agent-eval/basic70-live-readiness-003 --output-dir ../output/agent-eval/basic70-runnable-001 --base-suite ../output/agent-eval/basic70-candidates-003/suite.json
+```
+
+新增每题的case、baseline和live_database路径均在suite.json中。执行示例（会调用真实模型）：
+
+```powershell
+.venv/Scripts/python.exe -m app.agent_eval run-live-historical --case ../output/agent-eval/basic70-runnable-001/LH-B002/case.json --baseline ../output/agent-eval/basic70-runnable-001/LH-B002/baseline.json --database ../output/agent-eval/basic70-live-readiness-003/source-snapshot.sqlite --output-dir ../output/agent-eval/live-B002-run-001 --allow-llm --wall-seconds 60
+```
+
+可加--allow-judge：最多追加一次三维Judge，默认关闭；trace-review.json包含状态、预算跳过和诊断。
+用例未验收，结果needs_review退出码为2是预期，不可用脚本模型的执行成功替代语义验收。
+每次新建独立数据库副本，真实执行本地工具，不回放录制。基线比较仅忽略三个post_limit工具
+顶层generated_at，保留业务日期、嵌套时间、数值与缺失字段。远端工具不在此Live适配器范围。
+无LLM集成测试可设置LIMITUPLAB_EVAL_SMOKE_SUITE为合并清单绝对路径，运行
+tests/test_agent_eval_snapshot_live.py；未显式指定时跳过10项本地数据集成测试。

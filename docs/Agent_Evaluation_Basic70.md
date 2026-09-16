@@ -2,6 +2,12 @@
 
 ## 目标和真实起点
 
+最新：`output/agent-eval/basic70-runnable-001/suite.json`已合并50 Offline + 20 Live可运行资产。
+新增10 Live已有标准Case/baseline及共享worker接入，10题真实工具＋脚本模型全链路通过；
+不是10题真实模型质量通过。Active仍为20 Offline + 10 Live，新增40题仍待验收。
+worker默认生成trace-review，显式--allow-judge才追加至多一次三维评判。下一步做有界验收，
+不再逐工具扩建执行框架。以下保留此前起点与建设记录。
+
 更新：已实现30个新增Offline候选，见 `backend/evals/suites/basic70-expansion.json`。
 `output/agent-eval/basic70-candidates-003/suite.json`汇总50 Offline资产（20 Active+30 Candidate）
 和10个既有Live，工具资产并集26/26。下表保留Active Golden口径，新候选不计入已批准数量。
