@@ -1,7 +1,7 @@
 """Evaluation CLI; real LLM execution requires explicit run-offline --allow-llm."""
 
 import argparse
-from datetime import datetime
+from datetime import date, datetime
 import json
 from pathlib import Path
 
@@ -17,6 +17,12 @@ from app.models import AgentChatResponse
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    promotion = commands.add_parser("record-local-promotion")
+    promotion.add_argument("--database", required=True, type=Path)
+    promotion.add_argument("--start-date", required=True, type=date.fromisoformat)
+    promotion.add_argument("--anchor", required=True, type=datetime.fromisoformat)
+    promotion.add_argument("--output", required=True, type=Path)
+    promotion.add_argument("--days", type=int, default=5)
     coverage = commands.add_parser("preflight-tool-coverage")
     coverage.add_argument("--registry", type=Path)
     coverage.add_argument("--output", type=Path)
@@ -191,7 +197,11 @@ def main() -> int:
     blueprint.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
     exit_code = 0
-    if args.command == "preflight-tool-coverage":
+    if args.command == "record-local-promotion":
+        from app.agent_eval.local_promotion import record_local_promotion
+        result = record_local_promotion(args.database, args.start_date, args.anchor, args.output, days=args.days)
+        exit_code = 0 if result["data_readiness"] == "available" else 2
+    elif args.command == "preflight-tool-coverage":
         from app.agent_eval.tool_coverage import DEFAULT_REGISTRY, preflight_tool_coverage, write_coverage_report
         result = preflight_tool_coverage(args.registry or DEFAULT_REGISTRY)
         if args.output:

@@ -7,7 +7,8 @@
 - 后续按小任务补齐本地工具接入、通用评测器、LLM Judge及报告，问题逐步增加；Local30三轮全绿不再阻塞框架建设。
 - 已完成源码工具盘点：26个注册工具，16个本地优先评测入口，其中3个已有Local30覆盖、13个待接入；另10个为远端或混合依赖。
 - 已实现 `preflight-tool-coverage` 无LLM预检：26个工具全部登记，检查漏登、未知工具、重复及非法状态；登记合法不代表实际覆盖完成。未验证本地样本充足性，未新增模型调用。
-- 完整工具矩阵、Judge缺口及命令用法见[工具覆盖清单](Agent_Evaluation_Tool_Coverage.md)。下一步仅接入一个新增工具的隔离本地Runner。
+- 已接入首个新增工具 `daily_board_promotion` 的隔离本地Runner：只读事务快照、生产Gateway执行、原生列表输出及数据摘要；合成数据库定向测试验证无外网调用、源数据库不变及缺失日K显式保留。尚未完成真实样本验收、通用判分或Judge接入，因此登记仍为planned。
+- 完整工具矩阵、Judge缺口及命令用法见[工具覆盖清单](Agent_Evaluation_Tool_Coverage.md)。下一步先补该工具列表输出的录制/回放适配，不批量扩展工具。
 - 最新Active Golden为`output/agent-eval/golden/local30-current-v6/suite.json`，运行时为`react-runtime-v14`；稳定面板代码已实现，但最新资产三轮正式稳定验收未完成。以下P0及建设流水为对应版本的历史结果。
 
 ### Local30 P0 缺口已关闭（2026-09-15）

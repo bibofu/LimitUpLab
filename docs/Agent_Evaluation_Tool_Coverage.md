@@ -89,7 +89,7 @@ Local30 保留为回归集；三轮全绿不作为继续搭建框架的前置条
 
 1. 已完成：本清单，核对26个注册工具、16个本地优先入口及Judge缺口。
 2. 已完成：工具覆盖登记与无LLM预检入口。机器检查注册工具漏登、未知工具、重复登记及状态是否合法；不执行业务工具，不增加题目。
-3. 下一任务：本地Runner隔离。先接入一个新增工具的本地快照执行，验证零外部取数及生产数据不变，再按小批扩展。
+3. 首个本地Runner隔离已完成：`daily_board_promotion`。下一任务先补原生列表输出的录制/回放适配，再按小批扩展；目前不算正式题目或判分覆盖。
 4. 通用确定性评测器：按标量/集合/序列/统计/评级来源分小任务接入，未知断言显式弃判。
 5. Judge统一接口与校准：先协议、再逐维度校准，每次限定一个维度。
 6. 最小代表题：按工具逐项补齐，每项默认一个主场景；共性边界复用共享样例。
@@ -118,6 +118,25 @@ Local30 保留为回归集；三轮全绿不作为继续搭建框架的前置条
 `release_eligible=false` 和 `data_readiness=not_checked`。
 
 ## 源码核查入口
+
+### 首个隔离Runner
+
+在 `backend` 目录执行（路径和日期需替换为已核实的本地数据窗口）：
+
+```powershell
+.venv/Scripts/python.exe -m app.agent_eval record-local-promotion --database <local.sqlite> --start-date 2026-09-10 --anchor 2026-09-11T18:00:00+08:00 --days 5 --output <new-report.json>
+```
+
+输出父目录需存在，已有文件不会覆盖。只读事务读取指定窗口内事件及日K，关闭数据库后，
+通过生产Gateway在内存快照上执行；不初始化表、不远端补数、不调用模型。
+窗口最多366天，结果天数1到60。起始日需包含计算首个晋级日所需的前一交易日。
+无事件或表缺失直接报错；仅一天等无法计算的窗口输出insufficient并退出2。
+有统计项退出0仅表示执行完成，不表示数据完整或答案质量通过；缺失日K沿用生产工具的缺失字段。
+读取窗口不能证明交易日完整，也不能证明历史数据未被修订。
+
+产物为 `local-tool-execution-v1`，保留原生列表payload、trace、状态、输入行摘要和校验和，
+不是现有dict-only CaptureArtifact或Golden；隐私状态为unreviewed，不提交生成产物。
+当前验证仅用合成测试库，正式判分与Judge尚未接入，覆盖登记保持planned。
 
 - `backend/app/agents/tools.py`：26个工具契约、Profile、实现与数据依赖。
 - `backend/app/agents/react_runtime/tools.py`：包括first_board_filter的Gateway适配。
