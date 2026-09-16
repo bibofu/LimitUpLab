@@ -905,3 +905,10 @@ empty、partial 或 error 时 Replan 新闻；股票名称提取同步覆盖 K�
 - 根因：冻结数据集按已见轨迹追加个别 alternate route，未对公开工具的离散参数空间形成闭包；模型的合理交叉核验会在 `market × result_mode × limit` 组合间波动，逐条追补无法成为稳定基线。
 - 修复：数据集生成器对每个评测日期统一录制沪深主板、创业板、科创板的涨停 `count/list × limit 30/100` 完整组合；精简 OFF-033 World 仍只按显式清单迁入该题可能使用的 2026-09-11 市场对照路线，不把整套大 World 无审计复制进去。
 - 回归：候选数据集构建继续真实调用生产 Gateway 并执行 record/replay；迁移继续要求旧录制 Observation 不变、原验收路线全量重放。此前失败轮次保留且不进入最终三轮面板。
+
+## BC-057：连续 additive World 迁移复用 recording ID，资产写出后才加载失败（2026-09-16）
+
+- 发现方式：路线闭包迁移后的首轮实跑。OFF-033 Worker 在生成任何请求前以 Pydantic `ValidationError` 退出；检查发现前一次和本次迁移都从 `additive-route-001` 编号，World 中存在重复 recording ID。
+- 根因：迁移器用本批次位置生成 ID，只保证单次 additions 内唯一，没有对已有增量录制保持全局唯一；`model_copy(update=...)` 不重新执行 Pydantic validator，错误直到下次从 JSON 加载才暴露。
+- 修复：新增 recording ID 改为工具名与规范化参数摘要派生；拼装后立即通过 `WorldSpec.model_validate` 重新验证完整资产，再执行 Frozen 初始化与旧路线重放。失败资产保留但不用于正式轮次。
+- 回归：迁移写出前即拒绝重复 ID；合法连续迁移产生稳定唯一 ID，并能由标准 loader 重新加载。

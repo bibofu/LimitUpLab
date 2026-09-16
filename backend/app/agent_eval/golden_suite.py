@@ -6,6 +6,7 @@ from pathlib import Path
 from app.agent_eval.core_batch import write_json
 from app.agent_eval.frozen_registry import FrozenAgentToolRegistry
 from app.agent_eval.loader import load_case, load_world
+from app.agent_eval.models import WorldSpec
 from app.agent_eval.recorder import digest
 
 
@@ -126,8 +127,11 @@ def migrate_additive_world(source: Path, target_bundle: Path, acceptance_path: P
         key = (spec["tool"], digest(recording_registry._arguments(spec["tool"], spec["arguments"])))
         if key not in available:
             raise ValueError(f"requested additive route is absent from recorded target: {position}")
-        additions.append(available[key].model_copy(update={"id": f"additive-route-{position:03d}"}))
-    new_world = old_world.model_copy(deep=True, update={"recordings": [*old_world.recordings, *additions]})
+        suffix = digest({"tool": key[0], "arguments_digest": key[1]}).removeprefix("sha256:")[:12]
+        additions.append(available[key].model_copy(update={"id": f"additive-{suffix}"}))
+    new_world = WorldSpec.model_validate(old_world.model_copy(
+        deep=True, update={"recordings": [*old_world.recordings, *additions]},
+    ).model_dump(mode="json"))
     new_registry = FrozenAgentToolRegistry(new_world)
 
     old_records, added = _additive_recording_diff(old_world, new_world, old_registry, new_registry)
