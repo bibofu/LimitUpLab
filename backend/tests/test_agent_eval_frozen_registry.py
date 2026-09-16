@@ -169,8 +169,14 @@ def test_ambiguous_or_invalid_recordings_fail_during_setup():
         FrozenAgentToolRegistry(world(entries))
     with pytest.raises(FrozenFixtureError, match="invalid recording"):
         FrozenAgentToolRegistry(world([recording(arguments={"unknown": 1})]))
-    with pytest.raises(FrozenFixtureError, match="canonical object"):
-        FrozenAgentToolRegistry(world([recording(payload=[])]))
+
+
+@pytest.mark.parametrize("payload", [[], [{"trade_date": "2026-09-11", "probability": 0.5}]])
+def test_native_list_payloads_replay_without_wrapping(payload):
+    registry = FrozenAgentToolRegistry(world([recording("daily_board_promotion", payload=payload)]))
+    _, actual, state = invoke(registry, "daily_board_promotion")
+    assert actual == payload
+    assert state == "ok"
 
 
 def test_real_runtime_tool_threads_receive_anchor_and_record_both_calls():

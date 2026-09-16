@@ -2,6 +2,15 @@
 
 ## 当前状态
 
+### Basic70首批内容已落地：30个新增Offline候选（2026-09-16）
+
+- 新增可版本化题目资产 `backend/evals/suites/basic70-expansion.json`，不是蓝图占位：23个缺口工具各1个主场景，另7个空/错误/滞后/注入/输出约束/统计口径/跨工具场景。每题有问题、参数、合成观察、字段断言、正反回答、期望终态。
+- 新增 `build-basic70-candidates`，通过生产Gateway校验参数和冻结回放，校验字段预期及证据视图；原Local30引用的case/world摘要全部校验后保留原引用。已生成 `output/agent-eval/basic70-candidates-002/suite.json`。
+- 当前资产数：50 Offline（原有20 Active+新增30 Candidate）、10原有Historical Live；资产工具并集26/26。Active Golden仍30题、3个工具，新候选未擅自晋升，尚缺10 Live及候选审阅/真实有界验收。
+- 公共录制/回放已支持原生列表：UI trace仍为对象容器，Gateway观察保持原列表，不扩大生产业务工具范围。worker遇到新通用工具断言不再调用旧市场概览答案提取器；显式待语义复评，不静默通过。
+- 101项定向测试通过，包括30题契约回放、23工具实际ReAct链脚本模型测试、原生列表生产录制回放及既有worker回归。真实模型调用0、业务外网调用0；脚本模型只证明执行链可用，不证明Agent回答质量。
+- 新观察为最小合成合同夹具，不是完整生产输出Schema认证；需审阅合理替代参数路线、输出字段及参考答案，尤其不能以固定路线掩盖fixture failure。下一步优先完成内容审阅与缺少的10 Live，不再新增微型优化实验。
+
 ### Basic70目标与压缩对照结论（2026-09-16）
 
 - 当前Active资产逐项核对仍为20 Offline+10 Historical Live，证据涉及3/26工具；距离50+20尚缺30 Offline、10 Live和23个工具的代表覆盖。详见[Basic70实施清单](Agent_Evaluation_Basic70.md)，新增数量分配为23个缺口工具场景+7个共性边界Offline，以及10个Live。

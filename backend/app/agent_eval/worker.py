@@ -138,7 +138,11 @@ def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240
         process = evaluate_process(case, response)
         save(directory, "process.json", process.model_dump(mode="json"))
         extraction = None
-        if any(a.evaluator == "fact" for a in case.assertions):
+        if any(a.target == "answer.tool_contract" for a in case.assertions):
+            facts = BusinessReport(case=manifest.cases[0], verdict="needs_review",
+                findings=[finding("$tool_contract", "needs_review",
+                    "Generic tool contract: use review-trace; no market-summary extractor call.")])
+        elif any(a.evaluator == "fact" for a in case.assertions):
             try:
                 extraction = extractor(guarded, response.answer)
                 save(directory, "extraction.json", extraction.model_dump(mode="json"))

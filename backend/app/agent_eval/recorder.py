@@ -101,8 +101,8 @@ def capture_tool(registry, *, tool: str, arguments: dict, anchor_datetime: datet
     with query_reference_date_override(anchor_datetime.astimezone(ZoneInfo("Asia/Shanghai")).date()):
         validated = gateway.validate({"name": tool, "args": arguments})
         result, payload, state = gateway.execute(tool, validated)
-    if not isinstance(payload, dict):
-        raise FrozenFixtureError("Gateway observation must be a canonical object for replay")
+    if not isinstance(payload, (dict, list)):
+        raise FrozenFixtureError("Gateway observation must be an object or list for replay")
     # Capture input at Gateway boundary separately from any normalized ToolResult input.
     observation = ObservationSpec(state=state, payload=payload, summary=result.summary,
                                   data_fresh=result.data_fresh,

@@ -60,9 +60,8 @@ class FrozenAgentToolRegistry:
                     arguments = self._arguments(recording.tool, recording.arguments)
                 except ValueError as error:
                     raise FrozenFixtureError(f"invalid recording {recording.id}: {error}") from error
-                if not isinstance(recording.observation.payload, dict):
-                    raise FrozenFixtureError("record canonical object payloads, not raw lists")
-                errors = recording.observation.payload.get("source_errors", [])
+                errors = (recording.observation.payload.get("source_errors", [])
+                          if isinstance(recording.observation.payload, dict) else [])
                 if not isinstance(errors, list) or any(not isinstance(item, str) for item in errors):
                     raise FrozenFixtureError("source_errors must be a list of strings")
                 signature = self._signature(recording.tool, arguments)
@@ -132,7 +131,7 @@ class FrozenAgentToolRegistry:
 
     def execute_frozen_calls(self, calls: list[dict], *, request: AgentChatRequest) -> dict:
         # Request is part of the Gateway protocol, never used as a lookup shortcut.
-        traces = []
+        traces, observations = [], []
         for call in calls:
             attempt = {"name": call["name"], "arguments": deepcopy(call["arguments"]),
                        "reference_date": current_query_reference_date().isoformat()}
@@ -148,15 +147,18 @@ class FrozenAgentToolRegistry:
                     raise FrozenFixtureError("no recording matches the effective tool arguments")
                 observation = recording.observation
                 payload = deepcopy(observation.payload)
+                # UI traces require objects; keep the native observation separately.
+                trace_payload = payload if isinstance(payload, dict) else {"items": payload}
                 traces.append(AgentToolTrace(
                     name=call["name"], input=deepcopy(recording.tool_result_input
                         if recording.tool_result_input is not None else call["arguments"]),
-                    output=payload, summary=observation.summary,
+                    output=trace_payload, summary=observation.summary,
                     status="error" if observation.state == "error" else "success",
-                    result=AgentToolOutcome(status=observation.state, payload=payload,
+                    result=AgentToolOutcome(status=observation.state, payload=trace_payload,
                                             data_fresh=observation.data_fresh,
                                             source_errors=observation.source_errors),
                 ))
+                observations.append(payload)
                 attempt.update(outcome="matched", recording_id=recording.id)
             except Exception as error:
                 attempt.update(outcome="rejected", error_type=type(error).__name__)
@@ -164,4 +166,4 @@ class FrozenAgentToolRegistry:
             finally:
                 with self._lock:
                     self._attempts.append(attempt)
-        return {"tool_results": traces}
+        return {"tool_results": traces, "observation_payloads": observations}

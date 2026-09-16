@@ -2,6 +2,11 @@
 
 ## 目标和真实起点
 
+更新：已实现30个新增Offline候选，见 `backend/evals/suites/basic70-expansion.json`。
+`output/agent-eval/basic70-candidates-002/suite.json`汇总50 Offline资产（20 Active+30 Candidate）
+和10个既有Live，工具资产并集26/26。下表保留Active Golden口径，新候选不计入已批准数量。
+当前下一步是审阅候选、补10 Live和有界验收，不再停留在逐工具Runner建设。
+
 目标是70个有明确判定依据的Golden场景，合计覆盖全部26个注册业务工具，
 不是26份专用Runner，也不是70个只有问句的占位符。
 

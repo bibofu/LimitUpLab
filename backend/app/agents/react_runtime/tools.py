@@ -89,11 +89,12 @@ class ToolGateway:
             outcome = trace.result
             if outcome is None:
                 raise ValueError("Frozen tool result requires an explicit outcome")
-            result = ToolResult(name=name, input=trace.input, output=trace.output, summary=trace.summary,
+            payload = execution.get("observation_payloads", [trace.output])[0]
+            result = ToolResult(name=name, input=trace.input, output=payload, summary=trace.summary,
                                 trace_output=trace.output, status=trace.status, error=trace.error,
                                 result_status=outcome.status, data_fresh=outcome.data_fresh,
                                 source_errors=tuple(outcome.source_errors))
-            return result, trace.output, outcome.status
+            return result, payload, outcome.status
         else:
             result = self.structured[name].invoke(kwargs)
         payload = payload_of(result)

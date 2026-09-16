@@ -17,6 +17,9 @@ from app.models import AgentChatResponse
 def main() -> int:
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
+    basic = commands.add_parser("build-basic70-candidates")
+    basic.add_argument("--output-dir", required=True, type=Path)
+    basic.add_argument("--base-suite", type=Path)
     calibration = commands.add_parser("calibrate-trace-judge")
     calibration.add_argument("--output-dir", required=True, type=Path)
     calibration.add_argument("--allow-judge", action="store_true", required=True)
@@ -207,7 +210,10 @@ def main() -> int:
     blueprint.add_argument("--output-dir", type=Path)
     args = parser.parse_args()
     exit_code = 0
-    if args.command == "calibrate-trace-judge":
+    if args.command == "build-basic70-candidates":
+        from app.agent_eval.basic70 import build_basic70
+        result = build_basic70(args.output_dir, base_suite=args.base_suite)
+    elif args.command == "calibrate-trace-judge":
         from app.agent_eval.trace_calibration import calibrate_trace_judge
         from app.config import configure_runtime_environment
         from app.services.llm_provider import get_llm_provider
