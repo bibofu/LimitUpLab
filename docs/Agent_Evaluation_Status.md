@@ -2,6 +2,14 @@
 
 ## 当前状态
 
+### Golden64统一运行与诊断报告已接通（2026-09-17）
+
+- 新入口`run-golden`支持Active全量/选题运行，复用现有worker，兼容新旧合同；旧合同保留原提取，可选同一trace Judge。原Candidate入口与Local30正式认证链路不变。
+- 统一输出plan、逐题结果、JSON/Markdown报告；区分pass/fail/unscorable/needs_review，并同时报告判分覆盖率。诊断pass不等于发布认证，仍保留release_eligible=false。
+- 实际64题CLI零模型预检通过；脚本executor覆盖64题调度和45 Offline/19 Live路由。没有全量真实模型运行，也没有宣称v15稳定性通过。
+- 共享worker、Live、旧验收与trace回归45项通过；随后补充未启用Judge时确定性过程失败不能丢失的回归。
+- [运行说明](Agent_Evaluation_Golden_Run.md)。下一步仍是默认长证据预算策略及少量真实冒烟，本轮不扩题、不改生产Agent。
+
 ### 用户批准34题，Active Golden已达64题（2026-09-16）
 
 - 当前入口：`output/agent-eval/golden/basic64-current-v1/suite.json`。64 Active =45 Offline+19 Historical Live；新增34题，原30题资产不变。

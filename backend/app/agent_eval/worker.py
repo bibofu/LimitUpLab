@@ -167,6 +167,12 @@ def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240
             facts = BusinessReport(case=manifest.cases[0], verdict="needs_review",
                 findings=[finding("$answer_semantics", "needs_review", "semantic rubric requires review; numeric extraction not applicable")])
         save(directory, "facts.json", facts.model_dump(mode="json"))
+        # One shared optional trace Judge for legacy and tool-contract cases.
+        # Legacy fact extraction remains intact; no promotion of its provisional results.
+        if allow_judge and review is None:
+            from app.agent_eval.trace_review import review_trace
+            review = review_trace(case, response, provider=guarded)
+            save(directory, "trace-review.json", review)
     fact_ids = {a.id for a in case.assertions if a.evaluator == "fact"}
     trajectory_findings = [f for f in trajectory.findings if f.assertion_id not in fact_ids]
     findings = trajectory_findings + facts.findings
