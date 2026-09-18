@@ -122,7 +122,6 @@ def run_data_check(backend_python: Path, env: dict[str, str]) -> int:
             str(backend_python),
             "scripts/dev_check.py",
             "--ensure-data",
-            "--skip-eval",
         ],
         cwd=str(BACKEND),
         env=env,

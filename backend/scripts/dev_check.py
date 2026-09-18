@@ -6,6 +6,7 @@ import argparse
 import json
 import sys
 from dataclasses import asdict
+from datetime import date
 from pathlib import Path
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
@@ -14,8 +15,9 @@ if str(BACKEND_ROOT) not in sys.path:
 
 from app.config import hydrate_windows_environment
 from app.repositories import SQLiteFirstBoardRepository, SQLiteLimitUpRepository
+from app.services.recommendation_intelligence import refresh_recommendation_intelligence
 from app.services.system_health import build_agent_system_health
-from scripts.update_daily_data import run_daily_update
+from scripts.update_daily_data import DailyUpdateReport, run_daily_update
 
 
 def main() -> None:
@@ -44,6 +46,7 @@ def main() -> None:
     )
 
     update_report = None
+    recommendation_refresh = None
     if args.ensure_data and before.expected_data_date:
         should_import = before.data_update_recommended
         update_date = (
@@ -66,6 +69,19 @@ def main() -> None:
                 "trade_date": update_date.isoformat() if update_date else None,
                 "error": str(error),
             }
+        if isinstance(update_report, DailyUpdateReport):
+            try:
+                recommendation_refresh = refresh_recommendation_after_update(
+                    update_report=update_report,
+                    limit_up_repository=limit_repo,
+                    first_board_repository=first_board_repo,
+                )
+            except Exception as error:  # noqa: BLE001
+                recommendation_refresh = {
+                    "status": "error",
+                    "expected_base_date": update_report.trade_date,
+                    "error": str(error),
+                }
 
     after = build_agent_system_health(
         events=limit_repo.list_events(),
@@ -79,6 +95,7 @@ def main() -> None:
             if hasattr(update_report, "__dataclass_fields__")
             else update_report
         ),
+        "recommendation_refresh": recommendation_refresh,
     }
 
     output_path = Path(args.json_output)
@@ -86,8 +103,60 @@ def main() -> None:
     output_path.write_text(json.dumps(report, ensure_ascii=False, indent=2), encoding="utf-8")
     print(json.dumps(_summary(report), ensure_ascii=False, indent=2))
 
-    if after.status == "missing":
+    if after.status == "missing" or (
+        recommendation_refresh is not None
+        and recommendation_refresh.get("status") == "error"
+    ):
         raise SystemExit(1)
+
+
+def refresh_recommendation_after_update(
+    *,
+    update_report: DailyUpdateReport,
+    limit_up_repository: SQLiteLimitUpRepository,
+    first_board_repository: SQLiteFirstBoardRepository,
+    refresher=refresh_recommendation_intelligence,
+) -> dict[str, object]:
+    """Publish the recommendation draft as soon as close data is ready."""
+
+    health = update_report.health or {}
+    if not health.get("raw_events_ready") or not health.get(
+        "first_board_features_ready"
+    ):
+        return {
+            "status": "skipped",
+            "expected_base_date": update_report.trade_date,
+            "reason": "close data or first-board features are incomplete",
+        }
+
+    expected_base_date = date.fromisoformat(update_report.trade_date)
+    response = refresher(
+        limit_up_repository=limit_up_repository,
+        first_board_repository=first_board_repository,
+    )
+    if response.relay_base_date != expected_base_date:
+        actual_base_date = (
+            response.relay_base_date.isoformat()
+            if response.relay_base_date is not None
+            else "none"
+        )
+        raise RuntimeError(
+            "recommendation refresh did not advance to the updated close "
+            f"({actual_base_date} != {update_report.trade_date})"
+        )
+    return {
+        "status": response.status,
+        "refresh_id": response.refresh_id,
+        "stage": response.stage,
+        "relay_base_date": response.relay_base_date.isoformat(),
+        "target_trade_date": (
+            response.target_trade_date.isoformat()
+            if response.target_trade_date is not None
+            else None
+        ),
+        "refreshed_at": response.refreshed_at.isoformat(),
+        "item_count": len(response.items),
+    }
 
 
 def _apply_user_api_key() -> None:
@@ -111,6 +180,7 @@ def _summary(report: dict) -> dict:
         "data_health": after["data_health"]["status"],
         "update_attempted": update is not None,
         "update_error": update.get("error") if isinstance(update, dict) else None,
+        "recommendation_refresh": report["recommendation_refresh"],
         "warnings": after["warnings"][:8],
     }
 
