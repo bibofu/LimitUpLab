@@ -1,6 +1,7 @@
 """Durable ReAct HTTP/SSE transport; reconnect only reads, never reruns tools."""
 
 import json
+import math
 import threading
 import time
 from datetime import datetime, timezone
@@ -18,6 +19,9 @@ from app.security import current_owner_id
 router = APIRouter()
 _lock = threading.Lock()
 _workers: dict[str, threading.Thread] = {}
+MAX_ANSWER_CHUNKS = 48
+MIN_ANSWER_CHUNK_CHARS = 12
+ANSWER_CHUNK_INTERVAL_SECONDS = 0.025
 
 
 def owned(journal, run_id, owner_id):
@@ -125,6 +129,25 @@ def failed_response(row, reason):
         answer="本次研究未能完成，请稍后重试。", task_status="error", stop_reason=reason, generated_by=VERSION)
 
 
+def validated_answer_frames(response_json, *, interval=ANSWER_CHUNK_INTERVAL_SECONDS):
+    """Stream only a persisted final answer; reconnects reset and replay it safely."""
+    response = AgentChatResponse.model_validate_json(response_json)
+    answer = response.answer
+    yield "event: answer_start\ndata: " + json.dumps({
+        "run_id": response.run_id,
+        "answer_length": len(answer),
+    }, ensure_ascii=False) + "\n\n"
+    chunk_size = max(MIN_ANSWER_CHUNK_CHARS, math.ceil(len(answer) / MAX_ANSWER_CHUNKS))
+    for offset in range(0, len(answer), chunk_size):
+        yield "event: answer_delta\ndata: " + json.dumps({
+            "offset": offset,
+            "delta": answer[offset:offset + chunk_size],
+        }, ensure_ascii=False) + "\n\n"
+        if interval > 0 and offset + chunk_size < len(answer):
+            time.sleep(interval)
+    yield "event: completed\ndata: " + response_json + "\n\n"
+
+
 def stream(journal, row, owner_id, after=0):
     run_id = row["run_id"]
     def frames():
@@ -136,14 +159,14 @@ def stream(journal, row, owner_id, after=0):
                 cursor = event["seq"]
                 yield f"id: {cursor}\nevent: {event['event']}\ndata: {event['payload_json']}\n\n"
             if latest["response_json"]:
-                yield "event: completed\ndata: " + latest["response_json"] + "\n\n"
+                yield from validated_answer_frames(latest["response_json"])
                 return
             worker = _workers.get(run_id)
             if worker is None or not worker.is_alive():
                 # Completion may have committed since the first poll above.
                 finished = owned(journal, run_id, owner_id)["response_json"]
                 if finished:
-                    yield "event: completed\ndata: " + finished + "\n\n"
+                    yield from validated_answer_frames(finished)
                     return
                 yield "event: error\ndata: " + json.dumps({"run_id": run_id, "message": "运行已中断；重新提交同一请求可恢复，已完成工具不会重复执行。"}, ensure_ascii=False) + "\n\n"
                 return

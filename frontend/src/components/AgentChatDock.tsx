@@ -387,11 +387,33 @@ export function AgentChatDock({
           setStreamStage(event.data.stage);
           setStreamStatus(event.data.message);
         }
+        if (event.event === "answer_start") {
+          setStreamStage("answering");
+          setStreamStatus("正在输出已校验回答");
+          setMessages(current => {
+            const existing = current.findIndex(item => item.id === agentMessageId);
+            const draft: ChatMessage = {
+              id: agentMessageId, role: "agent", content: "", stockMentions: [],
+            };
+            if (existing < 0) return [...current, draft];
+            return current.map((item, index) => index === existing ? draft : item);
+          });
+        }
+        if (event.event === "answer_delta") {
+          setMessages(current => current.map(item => item.id === agentMessageId
+            ? { ...item, content: item.content.slice(0, event.data.offset) + event.data.delta }
+            : item));
+        }
       });
-      setMessages(current => [...current, {
-        id: agentMessageId, role: "agent", content: response.answer,
-        stockMentions: response.stock_mentions, ...responseMessageMetadata(response),
-      }]);
+      setMessages(current => {
+        const finalMessage: ChatMessage = {
+          id: agentMessageId, role: "agent", content: response.answer,
+          stockMentions: response.stock_mentions, ...responseMessageMetadata(response),
+        };
+        const existing = current.findIndex(item => item.id === agentMessageId);
+        if (existing < 0) return [...current, finalMessage];
+        return current.map((item, index) => index === existing ? finalMessage : item);
+      });
       failedRequest.current = null;
       setActiveRunId(null);
       setError(null);

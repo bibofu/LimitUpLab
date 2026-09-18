@@ -975,3 +975,10 @@ empty、partial 或 error 时 Replan 新闻；股票名称提取同步覆盖 K�
 - 根因：运行时把旧助手正文和旧 evidence 记录重新注入模型上下文；系统提示虽声明历史不是证据，但最终 gate 不要求研究回答引用本轮 evidence，零工具回答可以直接发布。
 - 修复：历史上下文只保留用户原话和由结构化 `stock_mentions` 提取的股票名称/代码，删除旧助手事实正文与历史 evidence 恢复；长期记忆传入运行时前去掉自由文本摘要，只保留研究目标、实体、主题、日期范围、用户约束和未决问题。输入审查同时分类 research/conversation；research 的 complete、partial、empty 终态必须引用当前运行产生的 evidence，任何未知或历史 evidence ID 都拒绝。未恢复逐值 Claim Validator，也未使用问题正则或答案改写。运行版本升级为 `react-runtime-v16`。
 - 回归：覆盖旧助手正文不进入 prompt、历史 evidence 不恢复、实体名称仍可用于指代、研究问题零工具回答被拒绝并修复、混合新旧 evidence 只能保留本轮 ID、寒暄允许无证据完成，以及输入分类结构化契约。
+
+## BC-069：SSE 只流式传进度，最终答案一次性出现（2026-09-18）
+
+- 发现方式：Agent 执行期间界面能更新规划和工具进度，但回答正文要等 `completed` 后一次性插入，长回答等待感明显。
+- 根因：ReAct 为避免发布未经过 evidence、合规和终态校验的草稿，前端主动忽略 `answer_delta`；持久化 SSE 也只发送 progress、heartbeat 和完整 completed。入口遗留的 answer callback 实际只在运行结束后回调整段正文，不是真正增量输出。
+- 修复：保持 gate 和原子持久化顺序不变；最终响应写入后，SSE 发送 `answer_start`，将已校验正文限制在最多 48 块内依次发送 `answer_delta`，最后仍以完整 `completed` 为权威终态。重连先重置再完整重放，前端按 offset 合并并在 completed 时覆盖为服务端最终对象，不展示任何未校验模型草稿。
+- 回归：覆盖 UTF-8/CRLF 分块解析、delta 顺序与正文拼接、completed 权威结果、持久化任务重放包含 start/delta/completed，以及前端构建。

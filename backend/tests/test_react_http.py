@@ -17,7 +17,7 @@ from app.agents.react_runtime.compliance import ComplianceReview
 from app.agents.react_runtime.lifecycle import Journal
 from app.agents.react_runtime.runtime import run
 from app.agents.tools import TOOL_SCHEMAS, ToolResult
-from app.models import AgentChatRequest
+from app.models import AgentChatRequest, AgentChatResponse
 from app.repositories import SQLiteChatSessionRepository
 from app.routers import agents, react_chat
 from app.security import current_owner_id
@@ -88,6 +88,31 @@ def http_server(tmp_path, monkeypatch, request):
 PAYLOAD = {"session_id": "http-s", "message_id": "http-m", "message": "查询热榜，缺失时说明缺口"}
 
 
+def test_validated_answer_chunking_is_bounded_and_completed_remains_authoritative():
+    answer = "研究结论" * 4000
+    response = AgentChatResponse(
+        session_id="chunk-session",
+        run_id="chunk-run",
+        intent="react_research",
+        answer=answer,
+        task_status="complete",
+        generated_by="test",
+    )
+    response_json = response.model_dump_json()
+    frames = list(react_chat.validated_answer_frames(response_json, interval=0))
+    delta_payloads = [
+        json.loads(frame.split("\ndata: ", 1)[1].rsplit("\n\n", 1)[0])
+        for frame in frames
+        if frame.startswith("event: answer_delta")
+    ]
+
+    assert frames[0].startswith("event: answer_start")
+    assert frames[-1] == "event: completed\ndata: " + response_json + "\n\n"
+    assert len(delta_payloads) <= react_chat.MAX_ANSWER_CHUNKS
+    assert "".join(item["delta"] for item in delta_payloads) == answer
+    assert [item["offset"] for item in delta_payloads] == sorted(item["offset"] for item in delta_payloads)
+
+
 def test_http_idempotency_reconnect_owner_and_delete(http_server):
     client, state = http_server
     response = client.post("/chat", json=PAYLOAD)
@@ -103,7 +128,9 @@ def test_http_idempotency_reconnect_owner_and_delete(http_server):
     assert client.post(f"/chat/runs/{key}/cancel", headers={"x-fixture-owner": "other"}).status_code == 404
     events = Journal().events(key, "owner")
     replay = client.get(f"/chat/runs/{key}/stream", params={"after": events[-1]["seq"]})
-    assert "event: completed" in replay.text and "event: progress" not in replay.text
+    assert "event: answer_start" in replay.text and "event: answer_delta" in replay.text
+    assert replay.text.index("event: answer_delta") < replay.text.index("event: completed")
+    assert "event: progress" not in replay.text
     assert '"task_status": "partial"' in replay.text or '"task_status":"partial"' in replay.text
     assert state.calls == 1
     assert client.delete("/chat/sessions/http-s").status_code == 200

@@ -14,14 +14,25 @@ function response(text: string, oneByte = false) {
   } }), { headers: { "X-Agent-Run-Id": "r" } });
 }
 
-test("split UTF-8 and CRLF frames preserve the validated partial answer", async () => {
+test("split UTF-8 and CRLF frames publish validated answer chunks before completion", async () => {
   const events: string[] = [];
+  const chunks: string[] = [];
   const result = await streamChat("", payload, event => events.push(event.event), async () => response(
-    frame("answer_delta", { delta: "unreviewed" }) + frame("completed", final), true,
+    frame("answer_start", { run_id: "r", answer_length: 6 })
+      + frame("answer_delta", { offset: 0, delta: "已校验" })
+      + frame("answer_delta", { offset: 3, delta: "回答" })
+      + frame("completed", final), true,
   ));
   assert.equal(result.answer, final.answer);
   assert.equal(result.task_status, "partial");
-  assert.ok(!events.includes("answer_delta"));
+  assert.deepEqual(events, ["accepted", "answer_start", "answer_delta", "answer_delta", "completed"]);
+  await streamChat("", payload, event => {
+    if (event.event === "answer_delta") chunks.push(event.data.delta);
+  }, async () => response(frame("answer_start", { run_id: "r", answer_length: 5 })
+    + frame("answer_delta", { offset: 0, delta: "缺少" })
+    + frame("answer_delta", { offset: 2, delta: "部分来源" })
+    + frame("completed", final)));
+  assert.equal(chunks.join(""), final.answer);
 });
 
 test("disconnect reconnects once with cursor through GET, never another POST", async () => {

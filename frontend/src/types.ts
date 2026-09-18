@@ -595,6 +595,14 @@ export type AgentChatStreamEvent =
       data: { stage: AgentChatStreamStage; message: string };
     }
   | {
+      event: "answer_start";
+      data: { run_id: string | null; answer_length: number };
+    }
+  | {
+      event: "answer_delta";
+      data: { offset: number; delta: string };
+    }
+  | {
       event: "completed";
       data: AgentChatResponse;
     }

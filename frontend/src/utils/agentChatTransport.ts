@@ -43,10 +43,10 @@ export async function streamChat(
       if (name === "error") throw new ServerStreamError(data.message || "任务已中断，可重试恢复");
       if (name === "accepted") runId = data.run_id;
       if (name === "completed") completed = data;
-      if (["accepted", "progress", "completed"].includes(name)) {
+      if (["accepted", "progress", "answer_start", "answer_delta", "completed"].includes(name)) {
         onEvent({ event: name, data } as AgentChatStreamEvent);
       }
-      // ReAct only publishes validated final answers; ignore any draft event.
+      // The server emits answer chunks only after the final response is validated and persisted.
       if (id !== undefined && Number.isSafeInteger(id) && id >= cursor) cursor = id;
     }
     try {
