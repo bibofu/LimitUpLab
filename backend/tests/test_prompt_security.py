@@ -1,4 +1,5 @@
 import unittest
+from datetime import date
 
 from langchain_core.messages import AIMessage
 
@@ -19,6 +20,43 @@ class Provider:
 
 
 class PromptSecurityTest(unittest.TestCase):
+    def test_structured_review_carries_current_date_and_standalone_scope(self) -> None:
+        assessment = review_input(
+            Provider({
+                "decision": "allow",
+                "signals": [],
+                "reason": "standalone current-market request",
+                "request_kind": "research",
+                "context_mode": "standalone",
+                "time_scope": "current",
+                "requested_date": "2026-09-18",
+            }),
+            message="今天龙虎榜的情况",
+            anchor_date=date(2026, 9, 18),
+            timeout_seconds=10,
+        )
+
+        self.assertEqual(assessment.context_mode, "standalone")
+        self.assertEqual(assessment.requested_date, date(2026, 9, 18))
+
+    def test_current_scope_uses_anchor_when_model_omits_repeated_date(self) -> None:
+        assessment = review_input(
+            Provider({
+                "decision": "allow",
+                "signals": [],
+                "reason": "current request",
+                "request_kind": "research",
+                "context_mode": "standalone",
+                "time_scope": "current",
+                "requested_date": None,
+            }),
+            message="总结今天的大盘",
+            anchor_date=date(2026, 9, 18),
+            timeout_seconds=10,
+        )
+
+        self.assertEqual(assessment.requested_date, date(2026, 9, 18))
+
     def test_structured_review_refuses_an_active_override_request(self) -> None:
         assessment = review_input(
             Provider({

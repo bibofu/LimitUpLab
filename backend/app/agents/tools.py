@@ -1046,15 +1046,19 @@ class AgentToolRegistry:
             "limit_up_count": summary.limit_up_count,
             "first_board_count": summary.first_board_count,
             "continued_board_count": summary.continued_board_count,
+            "intraday_opened_count": summary.failed_count,
+            "intraday_opened_rate": summary.failed_limit_up_rate,
             "unsealed_count": summary.unsealed_count,
             "unsealed_rate": summary.unsealed_rate,
             "limit_down_count": summary.limit_down_count,
             "limit_down_source": summary.limit_down_source,
             "max_board_height": summary.max_board_height,
             "hot_industries": summary.hot_industries[:5],
-            "hot_concepts": [
-                item.model_dump(mode="json") for item in summary.hot_concepts[:5]
-            ],
+            "hot_concepts": [{
+                "name": item.name,
+                "limit_up_count": item.limit_up_count,
+                "intraday_opened_count": item.failed_count,
+            } for item in summary.hot_concepts[:5]],
         }
         down_text = (
             f"，跌停{summary.limit_down_count}只"
@@ -1064,7 +1068,7 @@ class AgentToolRegistry:
         return ToolResult(
             name="market_summary",
             input={"include_limit_down": include_limit_down},
-            output=summary,
+            output=trace_output,
             summary=(
                 f"{summary.trade_date.isoformat()} 涨停{summary.limit_up_count}只，"
                 f"首板{summary.first_board_count}只，连板{summary.continued_board_count}只，"

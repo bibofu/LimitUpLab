@@ -41,6 +41,7 @@ def allow_compliance_review(monkeypatch):
         lambda *args, **kwargs: PromptInjectionAssessment(
             decision="allow", signals=[], reason="test fixture allows normal input",
             request_kind=("conversation" if kwargs["message"] in conversation_messages else "research"),
+            context_mode=("follow_up" if kwargs["message"] == "继续上面的研究" else "standalone"),
         ),
     )
 
@@ -111,7 +112,7 @@ def test_public_entry_defaults_to_react(monkeypatch):
             return call("finish", {"status": "refuse", "answer": "我可以提供研究事实，不能提供交易指令。"}, "f")
     response = answer_first_board_chat(AgentChatRequest(session_id="r", message="给我买卖指令"), [],
                                       llm_provider=Model(), tool_registry=registry())
-    assert response.generated_by == "react-runtime-v16"
+    assert response.generated_by == "react-runtime-v17"
     assert response.task_status == "refuse"
 
 
@@ -283,7 +284,7 @@ def test_runtime_rejects_text_only_provider_before_model_loop():
         run(AgentChatRequest(session_id="r", message="查询涨停事实"), registry(), provider)
 
 
-def test_runtime_does_not_retruncate_upstream_history_from_sixteen_to_eight():
+def test_runtime_does_not_reactivate_old_user_tasks_for_follow_up_without_entities():
     history = [
         ChatSessionMessage(
             message_id=f"history-{index}",
@@ -298,10 +299,8 @@ def test_runtime_does_not_retruncate_upstream_history_from_sixteen_to_eight():
     class Model:
         def generate_messages(self, messages, tools, **kwargs):
             contents = [message.content for message in messages]
-            assert contents[1:9] == [
-                f"history-content-{index}" for index in range(0, 16, 2)
-            ]
-            assert contents[9] == "继续上面的研究"
+            assert contents[1] == "继续上面的研究"
+            assert all("history-content" not in content for content in contents)
             return call("finish", {
                 "status": "clarify",
                 "answer": "请明确要继续研究的指标。",
@@ -318,7 +317,7 @@ def test_runtime_does_not_retruncate_upstream_history_from_sixteen_to_eight():
     execution = next(
         trace for trace in response.tool_results if trace.name == "react_execution"
     )
-    assert execution.output["context_message_count"] == 8
+    assert execution.output["context_message_count"] == 0
 
 
 def test_runtime_memory_excludes_free_text_summary_but_keeps_continuity_fields():
@@ -340,7 +339,7 @@ def test_runtime_memory_excludes_free_text_summary_but_keeps_continuity_fields()
         def generate_messages(self, messages, tools, **kwargs):
             system = messages[0].content
             assert "远东股份是当前热股第一名" not in system
-            assert '"stock_symbols": ["600869"]' in system
+            assert '"stock_symbols": ["600869"]' not in system
             assert '"constraints": ["只列名称"]' in system
             return call("finish", {
                 "status": "complete",

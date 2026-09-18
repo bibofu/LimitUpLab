@@ -53,6 +53,24 @@ class AgentChatTest(unittest.TestCase):
         with self.assertRaisesRegex(ValueError, "Cannot resolve stock identity"):
             registry.stock_kline("不存在股票")
 
+    def test_market_summary_exposes_unambiguous_opened_and_unsealed_metrics(self) -> None:
+        closed_after_open = self._make_event("000001", "甲", "行业", "题材").model_copy(
+            update={"break_count": 1}
+        )
+        stable = self._make_event("000002", "乙", "行业", "题材")
+        unsealed = self._make_event("000003", "丙", "行业", "题材").model_copy(
+            update={"break_count": 2, "closed_limit": False}
+        )
+
+        result = AgentToolRegistry(
+            events=[closed_after_open, stable, unsealed]
+        ).market_summary()
+
+        self.assertEqual(result.output["intraday_opened_count"], 2)
+        self.assertEqual(result.output["unsealed_count"], 1)
+        self.assertNotIn("failed_count", result.output)
+        self.assertNotIn("failed_limit_up_rate", result.output)
+
 
 if __name__ == "__main__":
     unittest.main()

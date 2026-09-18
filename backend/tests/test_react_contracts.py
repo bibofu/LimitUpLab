@@ -94,6 +94,37 @@ def test_asof_guard_does_not_replace_history_with_current():
         gateway().validate({"name": "hot_stock_ranking", "args": {"requested_as_of": "1990-01-01"}})
 
 
+def test_required_current_date_is_injected_into_dated_tools():
+    target = gateway()
+    target.required_date = date(2026, 9, 18)
+
+    arguments = target.validate({"name": "dragon_tiger_list", "args": {"limit": 30}})
+
+    assert arguments["trade_date"] == "2026-09-18"
+
+
+def test_provider_cannot_silently_fall_back_to_another_date():
+    def dragon_tiger_list(
+        trade_date=None,
+        board_type="all",
+        query=None,
+        limit=30,
+    ):
+        return ToolResult(
+            name="dragon_tiger_list",
+            input={"trade_date": trade_date},
+            output={"trade_date": "2026-09-17", "items": []},
+            summary="stale fixture",
+        )
+
+    target = gateway(dragon_tiger_list=dragon_tiger_list)
+    target.required_date = date(2026, 9, 18)
+    arguments = target.validate({"name": "dragon_tiger_list", "args": {}})
+
+    with pytest.raises(ValueError, match="requires 2026-09-18"):
+        target.execute("dragon_tiger_list", arguments)
+
+
 def test_first_board_filter_is_executable_not_virtual_capability():
     def ratings(trade_date=None):
         assert trade_date == date(2026, 5, 15)
@@ -148,17 +179,27 @@ def test_historical_reference_only_loaded_from_requested_session():
     }
     old = ChatSessionMessage(message_id="m", session_id="other", role="assistant", content="上一组", metadata=metadata, created_at="2026-09-12T00:00:00Z")
     target = EvidenceStore()
-    messages, refs = prepare_history(AgentChatRequest(session_id="mine", message="这组"), [old], target)
+    messages, refs = prepare_history(
+        AgentChatRequest(session_id="mine", message="这组"),
+        [old],
+        target,
+        include_entity_references=True,
+    )
     assert not messages and not refs and not target.records
     old.session_id = "mine"
-    messages, refs = prepare_history(AgentChatRequest(session_id="mine", message="这组"), [old], target)
+    messages, refs = prepare_history(
+        AgentChatRequest(session_id="mine", message="这组"),
+        [old],
+        target,
+        include_entity_references=True,
+    )
     assert refs == [{"symbol": "000001", "name": "平安银行"}]
     assert messages[0].content.startswith("历史助手消息中的实体指代")
     assert "上一组" not in messages[0].content
     assert not target.records
 
 
-def test_history_keeps_the_complete_upstream_context_window():
+def test_standalone_request_does_not_receive_old_user_tasks():
     history = [
         ChatSessionMessage(
             message_id=f"m-{index}",
@@ -171,14 +212,12 @@ def test_history_keeps_the_complete_upstream_context_window():
     ]
 
     messages, refs = prepare_history(
-        AgentChatRequest(session_id="mine", message="继续上面的研究"),
+        AgentChatRequest(session_id="mine", message="今天龙虎榜的情况"),
         history,
         EvidenceStore(),
     )
 
-    assert [message.content for message in messages] == [
-        f"context-{index}" for index in range(0, 16, 2)
-    ]
+    assert messages == []
     assert refs == []
 
 
