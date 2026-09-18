@@ -112,7 +112,7 @@ def test_public_entry_defaults_to_react(monkeypatch):
             return call("finish", {"status": "refuse", "answer": "我可以提供研究事实，不能提供交易指令。"}, "f")
     response = answer_first_board_chat(AgentChatRequest(session_id="r", message="给我买卖指令"), [],
                                       llm_provider=Model(), tool_registry=registry())
-    assert response.generated_by == "react-runtime-v17"
+    assert response.generated_by == "react-runtime-v19"
     assert response.task_status == "refuse"
 
 
@@ -159,6 +159,56 @@ def test_count_only_result_is_complete_without_display_rows():
     )
 
     assert store.view(count_id)["result_state"] == "ok"
+
+
+def test_summary_answer_is_repaired_for_length_and_completion_status():
+    class Model:
+        calls = 0
+
+        def generate_messages(self, messages, tools, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return call("market_summary", {}, "summary")
+            observation = json.loads([
+                message.content for message in messages
+                if isinstance(message, ToolMessage) and message.tool_call_id == "summary"
+            ][-1])
+            evidence_id = observation["evidence_id"]
+            if self.calls == 2:
+                return call("finish", {
+                    "status": "partial",
+                    "answer": "很长的摘要" * 180,
+                    "evidence_ids": [evidence_id],
+                    "missing": ["返回条数有上限"],
+                }, "too-long")
+            assert any(
+                "必须压缩到 800 字以内" in getattr(message, "content", "")
+                for message in messages
+            )
+            return call("finish", {
+                "status": "complete",
+                "answer": "2026-09-18 市场概况：涨停结构数据已取得，返回范围已注明。",
+                "evidence_ids": [evidence_id],
+            }, "repaired")
+
+    def market_summary(**args):
+        return ToolResult(
+            name="market_summary",
+            input={},
+            output={"trade_date": "2026-09-18", "limit_up_count": 78},
+            summary="市场概况证据",
+        )
+
+    model = Model()
+    response = run(
+        AgentChatRequest(session_id="r", message="总结今天的大盘"),
+        registry(market_summary=market_summary),
+        model,
+    )
+
+    assert model.calls == 3
+    assert response.task_status == "complete"
+    assert len(response.answer) <= 800
 
 
 def test_legacy_claim_field_is_ignored_after_validator_removal():

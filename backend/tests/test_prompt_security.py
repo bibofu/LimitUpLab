@@ -3,7 +3,7 @@ from datetime import date
 
 from langchain_core.messages import AIMessage
 
-from app.services.prompt_security import contains_prompt_leak, review_input
+from app.services.prompt_security import contains_prompt_leak, is_summary_request, review_input
 
 
 class Provider:
@@ -27,9 +27,6 @@ class PromptSecurityTest(unittest.TestCase):
                 "signals": [],
                 "reason": "standalone current-market request",
                 "request_kind": "research",
-                "context_mode": "standalone",
-                "time_scope": "current",
-                "requested_date": "2026-09-18",
             }),
             message="今天龙虎榜的情况",
             anchor_date=date(2026, 9, 18),
@@ -46,9 +43,6 @@ class PromptSecurityTest(unittest.TestCase):
                 "signals": [],
                 "reason": "current request",
                 "request_kind": "research",
-                "context_mode": "standalone",
-                "time_scope": "current",
-                "requested_date": None,
             }),
             message="总结今天的大盘",
             anchor_date=date(2026, 9, 18),
@@ -56,6 +50,38 @@ class PromptSecurityTest(unittest.TestCase):
         )
 
         self.assertEqual(assessment.requested_date, date(2026, 9, 18))
+
+    def test_request_scope_is_derived_without_expanding_provider_schema(self) -> None:
+        assessment = review_input(
+            Provider({
+                "decision": "allow",
+                "signals": [],
+                "reason": "follow-up research request",
+                "request_kind": "research",
+            }),
+            message="这些股票里谁的开板次数最多？",
+            anchor_date=date(2026, 9, 18),
+            timeout_seconds=10,
+        )
+
+        self.assertEqual(assessment.context_mode, "follow_up")
+        self.assertEqual(assessment.time_scope, "unspecified")
+
+    def test_explicit_iso_date_is_derived_locally(self) -> None:
+        assessment = review_input(
+            Provider({
+                "decision": "allow",
+                "signals": [],
+                "reason": "dated research request",
+                "request_kind": "research",
+            }),
+            message="总结2026-09-17的龙虎榜",
+            anchor_date=date(2026, 9, 18),
+            timeout_seconds=10,
+        )
+
+        self.assertEqual(assessment.time_scope, "explicit")
+        self.assertEqual(assessment.requested_date, date(2026, 9, 17))
 
     def test_structured_review_refuses_an_active_override_request(self) -> None:
         assessment = review_input(
@@ -96,6 +122,11 @@ class PromptSecurityTest(unittest.TestCase):
             )
         )
         self.assertFalse(contains_prompt_leak("这是基于收盘数据的首板复盘。"))
+
+    def test_summary_request_excludes_explicit_detail_requests(self) -> None:
+        self.assertTrue(is_summary_request("今天龙虎榜的情况"))
+        self.assertTrue(is_summary_request("总结今天的大盘"))
+        self.assertFalse(is_summary_request("给我今天龙虎榜的完整明细"))
 
 
 if __name__ == "__main__":
