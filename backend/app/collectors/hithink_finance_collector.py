@@ -181,6 +181,8 @@ class HithinkDragonTigerSnapshot:
     stock_count: int
     items: list[HithinkDragonTigerFact]
     source: str = HITHINK_SOURCE
+    matched_count: int | None = None
+    source_truncated: bool = False
 
 
 @dataclass(frozen=True)
@@ -555,7 +557,7 @@ class HithinkFinanceCollector:
         trade_date: date | None = None,
         board_type: str = "all",
         query: str | None = None,
-        limit: int = 100,
+        limit: int | None = None,
     ) -> HithinkDragonTigerSnapshot:
         """Return normalized Dragon-Tiger rows, optionally filtered by stock."""
 
@@ -604,7 +606,9 @@ class HithinkFinanceCollector:
             trade_date=response_date,
             board_type=board_type,
             stock_count=_integer(data.get("stock_count")) or len({item.symbol for item in items}),
-            items=items[: max(1, min(limit, 200))],
+            items=items if limit is None else items[:max(1, limit)],
+            matched_count=len(items),
+            source_truncated=limit is not None and len(items) > max(1, limit),
         )
 
     def collect_limit_up_pool(

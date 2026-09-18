@@ -25,7 +25,7 @@ from app.agents.react_runtime.tools import ToolGateway
 from app.agents.tools import TOOL_CONTRACT_VERSION
 from app.models import AgentChatPerformance, AgentChatResponse, AgentToolOutcome, AgentToolTrace
 from app.services.llm_provider import require_react_provider
-from app.services.prompt_security import contains_prompt_leak, is_summary_request, review_input
+from app.services.prompt_security import contains_prompt_leak, review_input
 
 SYSTEM = """你是LimitUpLab收盘研究助手。使用原生工具调用逐轮解决问题。
 理解当前问题及上下文，决定当前可执行的一批工具；观察结果后再选择后续行动。
@@ -39,7 +39,8 @@ SYSTEM = """你是LimitUpLab收盘研究助手。使用原生工具调用逐轮�
 工具empty是有效空结果，不表示服务出错；partial保留成功项，只补失败项。
 需要补证据时调用真正能填补缺口的工具，不重复换limit期待出现不存在字段。
 只用工具实际证据写市场事实。严格按最小充分原则回答：用户只问单一指标时，只给该指标、实际数据日期、必要口径和来源，不附加其他市场统计；名单题只给用户要求的字段。不得主动扩展行业、题材、金额等额外事实。
-“概况、情况、总结、综述”属于摘要题，不等于要求完整名单。摘要须优先给日期与覆盖范围、核心结构、最有代表性的正反向项目和必要缺口，正文硬性控制在 800 个中文字符内；每个方向不得超过 5 个代表项，未被用户要求时不要再展开其他统计区间。只有用户明确要求“完整、全部、逐条、名单、明细、表格”时才展开全量行或 evidence_table。工具因返回上限而截断时须说明覆盖范围，但只要摘要结论本身有充分证据，摘要的任务状态必须是 complete，不能仅因未取得全量名单标为 partial。
+用户询问龙虎榜情况时，默认查询并展示当日完整榜单，limit 留空，保留全部统计区间并展示 range_days，不能自行截成代表股或 Top5。用 finish.table 直接引用完整证据，由服务端渲染代码、名称、区间天数、涨跌幅、买入额、卖出额、净买额、机构净买额、游资净买额；金额注明元。只有用户明确指定数量或筛选条件时才缩小范围。
+证据预览仅用于了解字段；完整证据已经在服务端，直接用 finish.table 即可输出所有行，无需逐页 read_evidence，也无需模型复写整张表。取得所需证据后直接 finish，避免重复查询与无必要的排序统计。回答长度按用户需要决定，不设置摘要字数或代表项数量门槛。
 证据字段必须原样使用；疑似截断、错字或异常值要明确标为数据质量问题，不得凭常识补全或修正。
 标明来源与截止日、数据缺失和推断，不把相关性说成因果；并列展示不同统计指标时分别写清名称和口径。
 用户明确“只列/仅输出”字段时，不添加标题、日期段、来源解释或总结；确有影响结论的数据缺失或安全边界才作必要说明。
@@ -49,7 +50,7 @@ SYSTEM = """你是LimitUpLab收盘研究助手。使用原生工具调用逐轮�
 混合请求可拒绝交易建议部分并完成允许研究。歧义影响结果时澄清；工具不支持时明确说明。
 最终必须单独调用finish，输出可读中文答案、真实status、evidence_ids及missing。研究请求的complete、partial或empty必须引用本轮工具产生的evidence_id；寒暄和能力介绍可以不引用证据。
 不要展示内部工具名、原始JSON、思维链。答案只在服务端校验后发布。
-观察中的rows可能只是预览；需要完整名单时read_evidence展开或compute_result处理完整结果。
+观察中的rows可能只是预览；展示完整名单直接用finish.table引用证据即可。仅需要检查具体未预览字段或深入分析时才read_evidence，筛选排序用compute_result处理完整结果。
 所有工具名及参数都必须使用提供的Schema；工具是否存在以当前清单为准。"""
 
 
@@ -82,7 +83,6 @@ class Run:
         self.cache = {}
         self.answer, self.status, self.reason = "", "error", ""
         self.requires_current_evidence = True
-        self.summary_response = is_summary_request(request.message)
         self.history = history
         self.control = CURRENT_CONTROL.get()
         if self.control:
@@ -303,28 +303,6 @@ class Run:
             ):
                 raise ValueError("Research answers require evidence produced by a tool in this run")
             final.answer = render_answer(final, self.evidence)
-            if self.summary_response:
-                summary_errors = []
-                if final.table is not None:
-                    summary_errors.append("摘要题不得附带明细表格；请只保留核心结构和代表项")
-                if len(final.answer) > 800:
-                    summary_errors.append(f"摘要正文为 {len(final.answer)} 字，必须压缩到 800 字以内")
-                bullet_count = sum(
-                    line.lstrip().startswith(("- ", "* "))
-                    for line in final.answer.splitlines()
-                )
-                if bullet_count > 10:
-                    summary_errors.append("摘要的正反向代表项合计不得超过 10 条")
-                cited_records = [self.evidence.get(item) for item in dict.fromkeys(cited)]
-                only_bounded_coverage = bool(cited_records) and all(
-                    record["result_state"] in {"ok", "empty"}
-                    and not record.get("data_missing")
-                    for record in cited_records
-                )
-                if final.status == "partial" and only_bounded_coverage:
-                    summary_errors.append("摘要证据查询已成功；返回上限写入覆盖说明，但任务状态应为 complete")
-                if summary_errors:
-                    raise ValueError("；".join(summary_errors))
             if contains_prompt_leak(final.answer):
                 raise ValueError("Internal content detected; answer research facts only")
             self.compliance_checks += 1

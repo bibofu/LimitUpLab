@@ -150,6 +150,7 @@ export function AgentChatDock({
   const [editingTitle, setEditingTitle] = useState("");
   const initializedSessions = useRef(false);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
+  const followAnswerRef = useRef(true);
   const isConversationActive = sending || messages.length > 0;
 
   useEffect(/* Synchronize AgentChatDock with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
@@ -174,7 +175,7 @@ export function AgentChatDock({
 
   useEffect(/* Synchronize AgentChatDock with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
     const container = messagesContainerRef.current;
-    if (!container) {
+    if (!container || !followAnswerRef.current) {
       return;
     }
     const frame = window.requestAnimationFrame(/* Handle the callback from window.requestAnimationFrame within AgentChatDock. */ () => {
@@ -369,6 +370,7 @@ export function AgentChatDock({
       ...(current.some(item => item.id === userMessageId) ? [] : [userMessage]),
     ]);
     setMessage("");
+    followAnswerRef.current = true;
     setSending(true);
     setStreamStage("planning");
     setStreamStatus("正在理解问题并规划工具");
@@ -389,11 +391,11 @@ export function AgentChatDock({
         }
         if (event.event === "answer_start") {
           setStreamStage("answering");
-          setStreamStatus("正在输出已校验回答");
+          setStreamStatus("正在展示查询结果");
           setMessages(current => {
             const existing = current.findIndex(item => item.id === agentMessageId);
             const draft: ChatMessage = {
-              id: agentMessageId, role: "agent", content: "", stockMentions: [],
+              id: agentMessageId, role: "agent", content: "", stockMentions: event.data.stock_mentions ?? [],
             };
             if (existing < 0) return [...current, draft];
             return current.map((item, index) => index === existing ? draft : item);
@@ -401,7 +403,7 @@ export function AgentChatDock({
         }
         if (event.event === "answer_delta") {
           setMessages(current => current.map(item => item.id === agentMessageId
-            ? { ...item, content: item.content.slice(0, event.data.offset) + event.data.delta }
+            ? { ...item, content: Array.from(item.content).slice(0, event.data.offset).join("") + event.data.delta }
             : item));
         }
       });
@@ -570,6 +572,10 @@ export function AgentChatDock({
           aria-live="polite"
           className="agent-chat-messages"
           ref={messagesContainerRef}
+          onScroll={event => {
+            const element = event.currentTarget;
+            followAnswerRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 64;
+          }}
         >
           {messages.map(/* Transform each entry in messages into the result used by AgentChatDock. */ (item) => (
             <article

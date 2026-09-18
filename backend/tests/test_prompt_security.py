@@ -3,7 +3,7 @@ from datetime import date
 
 from langchain_core.messages import AIMessage
 
-from app.services.prompt_security import contains_prompt_leak, is_summary_request, review_input
+from app.services.prompt_security import contains_prompt_leak, review_input
 
 
 class Provider:
@@ -123,10 +123,6 @@ class PromptSecurityTest(unittest.TestCase):
         )
         self.assertFalse(contains_prompt_leak("这是基于收盘数据的首板复盘。"))
 
-    def test_summary_request_excludes_explicit_detail_requests(self) -> None:
-        self.assertTrue(is_summary_request("今天龙虎榜的情况"))
-        self.assertTrue(is_summary_request("总结今天的大盘"))
-        self.assertFalse(is_summary_request("给我今天龙虎榜的完整明细"))
 
 
 if __name__ == "__main__":

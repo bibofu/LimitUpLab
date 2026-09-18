@@ -156,15 +156,3 @@ def contains_prompt_leak(content: str) -> bool:
 
     normalized = unicodedata.normalize("NFKC", content or "").lower()
     return any(signature in normalized for signature in _PROMPT_LEAK_SIGNATURES)
-
-
-def is_summary_request(message: str) -> bool:
-    """Identify an overview request without treating explicit detail requests as summaries."""
-
-    normalized = unicodedata.normalize("NFKC", message or "").strip().lower()
-    detail_terms = ("完整", "全部", "逐条", "名单", "明细", "表格")
-    summary_terms = ("概况", "情况", "总结", "综述")
-    return (
-        not any(term in normalized for term in detail_terms)
-        and any(term in normalized for term in summary_terms)
-    )

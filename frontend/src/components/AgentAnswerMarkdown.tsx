@@ -1,3 +1,4 @@
+import { memo } from "react";
 import ReactMarkdown from "react-markdown";
 import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
@@ -24,7 +25,7 @@ const SKIPPED_NODE_TYPES = new Set([
  * Render Agent markdown and link only stock mentions grounded in the response metadata.
  * Existing links remain explicit navigation rather than guessed stock identities.
  */
-export function AgentAnswerMarkdown({
+export const AgentAnswerMarkdown = memo(function AgentAnswerMarkdown({
   content,
   stockMentions,
 }: {
@@ -52,7 +53,7 @@ export function AgentAnswerMarkdown({
       {content}
     </ReactMarkdown>
   );
-}
+});
 
 /**
  * Build the markdown-tree transformer that adds links for known stock mentions.

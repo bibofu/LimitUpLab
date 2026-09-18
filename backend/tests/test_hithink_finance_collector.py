@@ -372,6 +372,19 @@ class HithinkFinanceCollectorTest(unittest.TestCase):
         self.assertEqual(snapshot.items[0].organization_net_buy_amount, 167_141_952.47)
         self.assertEqual(snapshot.items[0].concepts, ["5G"])
 
+    def test_dragon_tiger_default_keeps_all_rows_and_explicit_limit_reports_truncation(self) -> None:
+        rows = [{"ticker": "600001", "name": "测试", "range_days": 1 if i % 2 else 3}
+                for i in range(210)]
+        collector = HithinkFinanceCollector(executable="hithink-finance", runner=FakeRunner(
+            {"ok": True, "data": {"trade_date": "2026-09-18", "stock_items": rows}}))
+        complete = collector.collect_dragon_tiger(trade_date=date(2026, 9, 18))
+        assert len(complete.items) == complete.matched_count == 210
+        assert not complete.source_truncated
+        limited = collector.collect_dragon_tiger(trade_date=date(2026, 9, 18), limit=30)
+        assert len(limited.items) == 30
+        assert limited.matched_count == 210
+        assert limited.source_truncated
+
     # Regression scenario: limit up pool uses shanghai midnight and normalizes height.
     def test_limit_up_pool_uses_shanghai_midnight_and_normalizes_height(self) -> None:
         runner = FakeRunner(

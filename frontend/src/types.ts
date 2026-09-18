@@ -596,7 +596,7 @@ export type AgentChatStreamEvent =
     }
   | {
       event: "answer_start";
-      data: { run_id: string | null; answer_length: number };
+      data: { run_id: string | null; answer_length: number; stock_mentions?: AgentStockMention[] };
     }
   | {
       event: "answer_delta";

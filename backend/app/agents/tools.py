@@ -338,7 +338,8 @@ TOOL_SCHEMAS = [
         collection="items",
         description=(
             "查询同花顺龙虎榜，可按交易日、机构/游资榜类型和股票名称或代码过滤，"
-            "返回买卖额、净买额、机构净买、游资净买、热度排名和相关题材。"
+            "返回买卖额、净买额、机构净买、游资净买、热度排名和相关题材。默认返回完整榜单，"
+            "询问龙虎榜情况时不要自行填写 limit；不同 range_days 必须保留，不按股票代码去重。"
         ),
         args_schema={
             "type": "object",
@@ -358,11 +359,12 @@ TOOL_SCHEMAS = [
                     "type": ["string", "null"],
                     "description": "Optional exact/partial stock name or six-digit symbol.",
                 },
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
+                "limit": {"type": ["integer", "null"], "minimum": 1, "maximum": 1000,
+                          "description": "Omit/null for the complete list; set only when the user requests a bounded list."},
             },
             "required": [],
         },
-        returns="Tonghuashun Dragon-Tiger List rows and capital-flow evidence.",
+        returns="Full Tonghuashun Dragon-Tiger List rows and capital-flow evidence; use finish.table directly without reading every preview page.",
     ),
     AgentToolSchema(
         name="remote_limit_up_pool",
@@ -1368,7 +1370,7 @@ class AgentToolRegistry:
         trade_date: date | None = None,
         board_type: str = "all",
         query: str | None = None,
-        limit: int = 30,
+        limit: int | None = None,
     ) -> ToolResult:
         """Return bounded Tonghuashun Dragon-Tiger capital-flow facts."""
 
@@ -1376,7 +1378,7 @@ class AgentToolRegistry:
             trade_date=trade_date,
             board_type=board_type,
             query=query,
-            limit=max(1, min(limit, 100)),
+            limit=limit,
         )
         items = [asdict(item) for item in snapshot.items]
         payload = {
@@ -1384,7 +1386,9 @@ class AgentToolRegistry:
             "trade_date": snapshot.trade_date.isoformat() if snapshot.trade_date else None,
             "board_type": snapshot.board_type,
             "stock_count": snapshot.stock_count,
-            "matched_count": len(items),
+            "matched_count": snapshot.matched_count if snapshot.matched_count is not None else len(items),
+            "returned_count": len(items),
+            "source_truncated": snapshot.source_truncated,
             "items": items,
         }
         names = "、".join(

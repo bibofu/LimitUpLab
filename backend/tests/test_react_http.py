@@ -113,6 +113,16 @@ def test_validated_answer_chunking_is_bounded_and_completed_remains_authoritativ
     assert [item["offset"] for item in delta_payloads] == sorted(item["offset"] for item in delta_payloads)
 
 
+def test_answer_chunks_preserve_table_rows_and_unicode():
+    answer = "龙虎榜📊\n\n|代码|名称|\n|---|---|\n" + "|600001|测试📊|\n" * 150
+    chunks = list(react_chat.answer_chunks(answer))
+    assert len(chunks) > 1
+    assert "".join(chunks) == answer
+    assert all(chunk.endswith("\n") for chunk in chunks)
+    assert all(not line or line.startswith("|") or line == "龙虎榜📊"
+               for chunk in chunks for line in chunk.splitlines())
+
+
 def test_http_idempotency_reconnect_owner_and_delete(http_server):
     client, state = http_server
     response = client.post("/chat", json=PAYLOAD)

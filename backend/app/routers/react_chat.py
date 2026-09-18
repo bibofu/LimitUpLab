@@ -20,7 +20,7 @@ router = APIRouter()
 _lock = threading.Lock()
 _workers: dict[str, threading.Thread] = {}
 MAX_ANSWER_CHUNKS = 48
-MIN_ANSWER_CHUNK_CHARS = 12
+MIN_ANSWER_CHUNK_CHARS = 160
 ANSWER_CHUNK_INTERVAL_SECONDS = 0.025
 
 
@@ -129,6 +129,19 @@ def failed_response(row, reason):
         answer="本次研究未能完成，请稍后重试。", task_status="error", stop_reason=reason, generated_by=VERSION)
 
 
+def answer_chunks(answer):
+    """Keep Markdown lines (especially table rows) intact during delivery."""
+    target = max(MIN_ANSWER_CHUNK_CHARS, math.ceil(len(answer) / MAX_ANSWER_CHUNKS))
+    pending = ""
+    for line in answer.splitlines(keepends=True):
+        pending += line
+        if len(pending) >= target:
+            yield pending
+            pending = ""
+    if pending:
+        yield pending
+
+
 def validated_answer_frames(response_json, *, interval=ANSWER_CHUNK_INTERVAL_SECONDS):
     """Stream only a persisted final answer; reconnects reset and replay it safely."""
     response = AgentChatResponse.model_validate_json(response_json)
@@ -136,14 +149,16 @@ def validated_answer_frames(response_json, *, interval=ANSWER_CHUNK_INTERVAL_SEC
     yield "event: answer_start\ndata: " + json.dumps({
         "run_id": response.run_id,
         "answer_length": len(answer),
+        "stock_mentions": [item.model_dump(mode="json") for item in response.stock_mentions],
     }, ensure_ascii=False) + "\n\n"
-    chunk_size = max(MIN_ANSWER_CHUNK_CHARS, math.ceil(len(answer) / MAX_ANSWER_CHUNKS))
-    for offset in range(0, len(answer), chunk_size):
+    offset = 0
+    for chunk in answer_chunks(answer):
         yield "event: answer_delta\ndata: " + json.dumps({
             "offset": offset,
-            "delta": answer[offset:offset + chunk_size],
+            "delta": chunk,
         }, ensure_ascii=False) + "\n\n"
-        if interval > 0 and offset + chunk_size < len(answer):
+        offset += len(chunk)
+        if interval > 0 and offset < len(answer):
             time.sleep(interval)
     yield "event: completed\ndata: " + response_json + "\n\n"
 

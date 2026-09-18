@@ -139,6 +139,7 @@ class EvidenceStore:
             # even when read_evidence explicitly requested thirty.
             "rows": [compact(row, 20) for row in rows[offset:offset + limit]], "row_count": len(rows),
             "offset": offset, "truncated": offset + limit < len(rows), "sources": record["sources"],
+            "display_hint": "rows仅为预览；finish.table可直接渲染该evidence_id的全部row_count行，无需逐页读取。完整性以source_truncated为准。",
             "source_truncated": record.get("source_truncated", False),
             "data_missing": record.get("data_missing", []),
             "evidence_scope": self.scope_of(record),
