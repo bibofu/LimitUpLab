@@ -30,7 +30,7 @@ def allow_compliance_review(monkeypatch):
         runtime_module,
         "review_input",
         lambda *args, **kwargs: PromptInjectionAssessment(
-            decision="allow", signals=[], reason="test fixture allows normal input",
+            decision="allow", signals=[], reason="test fixture allows normal input", request_kind="research",
         ),
     )
 

@@ -35,7 +35,7 @@ def no_external_calls(monkeypatch):
     monkeypatch.setattr(runtime, "review_answer", lambda *a, **k: ComplianceReview(
         decision="allow", violations=[], reason="scripted contract test only"))
     monkeypatch.setattr(runtime, "review_input", lambda *a, **k: PromptInjectionAssessment(
-        decision="allow", signals=[], reason="scripted contract test only"))
+        decision="allow", signals=[], reason="scripted contract test only", request_kind="conversation"))
 
 
 @pytest.fixture
@@ -58,7 +58,8 @@ def invoke(world, *, tool="market_summary", args=None, status="complete", missin
             evidence_ids = [v["evidence_id"] for v in views if "evidence_id" in v]
             if answer is not None:
                 return AIMessage(content="", tool_calls=[{"name": "finish", "id": "finish",
-                    "args": {"status": status, "answer": answer, "missing": missing or []}}])
+                    "args": {"status": status, "answer": answer, "missing": missing or [],
+                             "evidence_ids": evidence_ids}}])
             return AIMessage(content="", tool_calls=[{"name": "finish", "id": "finish",
                 "args": {"status": status, "answer": "本地研究查询已完成。", "missing": missing or [],
                          "evidence_ids": evidence_ids}}])

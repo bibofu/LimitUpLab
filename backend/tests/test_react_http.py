@@ -38,7 +38,7 @@ def allow_compliance_review(monkeypatch):
         runtime_module,
         "review_input",
         lambda *args, **kwargs: PromptInjectionAssessment(
-            decision="allow", signals=[], reason="test fixture allows normal input",
+            decision="allow", signals=[], reason="test fixture allows normal input", request_kind="research",
         ),
     )
 
@@ -167,8 +167,11 @@ def test_http_publishes_plain_model_draft_after_typed_finish(http_server):
             answer = "贵州茅台今天涨停，成交额100亿元。"
             if self.calls == 1:
                 return AIMessage(content=answer)
-            return AIMessage(content="", tool_calls=[{"name": "finish", "id": "finish",
-                "args": {"status": "complete", "answer": answer}}])
+            if self.calls == 2:
+                return AIMessage(content="", tool_calls=[{"name": "finish", "id": "finish",
+                    "args": {"status": "complete", "answer": answer}}])
+            return AIMessage(content="", tool_calls=[{"name": "finish", "id": "repair",
+                "args": {"status": "clarify", "answer": "本轮尚未取得行情证据。"}}])
 
     agents.answer_first_board_chat = lambda request, **kwargs: run(
         request,
@@ -184,11 +187,13 @@ def test_http_publishes_plain_model_draft_after_typed_finish(http_server):
 
     assert response.status_code == 200
     payload = response.json()
-    assert payload["task_status"] == "complete"
-    assert "100亿元" in payload["answer"]
+    assert payload["task_status"] == "clarify"
+    assert "尚未取得行情证据" in payload["answer"]
     checks = [
         trace["output"]
         for trace in payload["tool_results"]
         if trace["name"] == "react_answer_check"
     ]
-    assert checks == [{"passed": True, "status": "complete", "missing": []}]
+    assert checks[0]["passed"] is False
+    assert "require evidence" in checks[0]["reason"]
+    assert checks[1] == {"passed": True, "status": "clarify", "missing": []}

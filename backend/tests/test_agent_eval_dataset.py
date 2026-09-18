@@ -289,7 +289,7 @@ def test_pool_metadata_count_and_computed_rows_are_valid_evidence(dataset, monke
     from app.models import AgentChatRequest
     from uuid import uuid4
     monkeypatch.setattr(runtime, "review_answer", lambda *a, **k: ComplianceReview(decision="allow", violations=[], reason="synthetic"))
-    monkeypatch.setattr(runtime, "review_input", lambda *a, **k: PromptInjectionAssessment(decision="allow", signals=[], reason="synthetic"))
+    monkeypatch.setattr(runtime, "review_input", lambda *a, **k: PromptInjectionAssessment(decision="allow", signals=[], reason="synthetic", request_kind="conversation"))
     _, target, _ = dataset
     world = load_world(target / "world.json")
     answer = "合成契约回答，非真实市场结论。"

@@ -37,7 +37,7 @@ def test_empty_selection_requires_exact_usable_observation(damage):
 def specimen(batch, monkeypatch):
     _, folder, _ = batch
     monkeypatch.setattr(runtime,"review_answer",lambda *a,**k: ComplianceReview(decision="allow",violations=[],reason="test"))
-    monkeypatch.setattr(runtime,"review_input",lambda *a,**k: PromptInjectionAssessment(decision="allow",signals=[],reason="test"))
+    monkeypatch.setattr(runtime,"review_input",lambda *a,**k: PromptInjectionAssessment(decision="allow",signals=[],reason="test",request_kind="research"))
     def make(key):
         case = load_case(folder / key / "case.json")
         world = load_world(folder / key / ("baseline.json" if key=="LH-004" else "world.json"))

@@ -29,7 +29,7 @@ def scripted_safety(monkeypatch):
     monkeypatch.setattr(runtime, "review_answer", lambda *a, **k: ComplianceReview(
         decision="allow", violations=[], reason="scripted integration only"))
     monkeypatch.setattr(runtime, "review_input", lambda *a, **k: PromptInjectionAssessment(
-        decision="allow", signals=[], reason="scripted integration only"))
+        decision="allow", signals=[], reason="scripted integration only", request_kind="research"))
 
 
 SUITE = os.environ.get("LIMITUPLAB_EVAL_SMOKE_SUITE")

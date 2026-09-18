@@ -142,15 +142,20 @@ def test_partial_source_never_becomes_complete_set_difference():
 def test_historical_reference_only_loaded_from_requested_session():
     store = EvidenceStore()
     key = store.add(tool="fixture", payload={"items": [{"symbol": "000001"}]}, state="ok", arguments={})
-    metadata = {"tool_results": [{"name": "react_execution", "output": {"evidence": store.records}}]}
+    metadata = {
+        "stock_mentions": [{"symbol": "000001", "name": "平安银行", "trade_date": "2026-09-11"}],
+        "tool_results": [{"name": "react_execution", "output": {"evidence": store.records}}],
+    }
     old = ChatSessionMessage(message_id="m", session_id="other", role="assistant", content="上一组", metadata=metadata, created_at="2026-09-12T00:00:00Z")
     target = EvidenceStore()
     messages, refs = prepare_history(AgentChatRequest(session_id="mine", message="这组"), [old], target)
     assert not messages and not refs and not target.records
     old.session_id = "mine"
     messages, refs = prepare_history(AgentChatRequest(session_id="mine", message="这组"), [old], target)
-    assert refs[0]["evidence_id"] == key and target.get(key)["historical_reference"]
-    assert refs[0]["evidence_scope"] == "conversation_history"
+    assert refs == [{"symbol": "000001", "name": "平安银行"}]
+    assert messages[0].content.startswith("历史助手消息中的实体指代")
+    assert "上一组" not in messages[0].content
+    assert not target.records
 
 
 def test_history_keeps_the_complete_upstream_context_window():
@@ -172,7 +177,7 @@ def test_history_keeps_the_complete_upstream_context_window():
     )
 
     assert [message.content for message in messages] == [
-        f"context-{index}" for index in range(16)
+        f"context-{index}" for index in range(0, 16, 2)
     ]
     assert refs == []
 

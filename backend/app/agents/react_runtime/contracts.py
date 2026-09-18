@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-VERSION = "react-runtime-v15"
+VERSION = "react-runtime-v16"
 MAX_MODEL_CALLS = 8
 MAX_TOOL_CALLS = 8
 MAX_CONTROL_CALLS = 16

@@ -13,7 +13,7 @@ from app.agents.react_runtime.evidence import EvidenceStore
 from app.agents.react_runtime import runtime as runtime_module
 from app.agents.react_runtime.runtime import run
 from app.agents.tools import TOOL_SCHEMAS, ToolResult
-from app.models import AgentChatRequest, ChatSessionMessage
+from app.models import AgentChatRequest, ChatSessionMemory, ChatSessionMessage
 from app.services.llm_provider import (
     NativeFunctionCallingUnavailable,
     OpenAIChatCompletionsProvider,
@@ -34,11 +34,13 @@ def allow_compliance_review(monkeypatch):
             decision="allow", violations=[], reason="test fixture allows research answer",
         ),
     )
+    conversation_messages = {"你好", "早上好", "在吗", "介绍下你自己", "hello there"}
     monkeypatch.setattr(
         runtime_module,
         "review_input",
         lambda *args, **kwargs: PromptInjectionAssessment(
             decision="allow", signals=[], reason="test fixture allows normal input",
+            request_kind=("conversation" if kwargs["message"] in conversation_messages else "research"),
         ),
     )
 
@@ -109,7 +111,7 @@ def test_public_entry_defaults_to_react(monkeypatch):
             return call("finish", {"status": "refuse", "answer": "我可以提供研究事实，不能提供交易指令。"}, "f")
     response = answer_first_board_chat(AgentChatRequest(session_id="r", message="给我买卖指令"), [],
                                       llm_provider=Model(), tool_registry=registry())
-    assert response.generated_by == "react-runtime-v15"
+    assert response.generated_by == "react-runtime-v16"
     assert response.task_status == "refuse"
 
 
@@ -236,6 +238,7 @@ def test_semantic_input_security_refuses_before_the_react_graph(monkeypatch):
             decision="refuse",
             signals=["instruction_override"],
             reason="active instruction override",
+            request_kind="conversation",
         ),
     )
 
@@ -295,10 +298,10 @@ def test_runtime_does_not_retruncate_upstream_history_from_sixteen_to_eight():
     class Model:
         def generate_messages(self, messages, tools, **kwargs):
             contents = [message.content for message in messages]
-            assert contents[1:17] == [
-                f"history-content-{index}" for index in range(16)
+            assert contents[1:9] == [
+                f"history-content-{index}" for index in range(0, 16, 2)
             ]
-            assert contents[17] == "继续上面的研究"
+            assert contents[9] == "继续上面的研究"
             return call("finish", {
                 "status": "clarify",
                 "answer": "请明确要继续研究的指标。",
@@ -315,7 +318,43 @@ def test_runtime_does_not_retruncate_upstream_history_from_sixteen_to_eight():
     execution = next(
         trace for trace in response.tool_results if trace.name == "react_execution"
     )
-    assert execution.output["context_message_count"] == 16
+    assert execution.output["context_message_count"] == 8
+
+
+def test_runtime_memory_excludes_free_text_summary_but_keeps_continuity_fields():
+    now = datetime.now(timezone.utc)
+    memory = ChatSessionMemory(
+        session_id="r",
+        owner_id="owner",
+        memory_version="session-memory-v2",
+        summary="旧回答声称远东股份是当前热股第一名",
+        research_goal="跟踪关注股票",
+        stock_symbols=["600869"],
+        topics=["热股"],
+        constraints=["只列名称"],
+        created_at=now,
+        updated_at=now,
+    )
+
+    class Model:
+        def generate_messages(self, messages, tools, **kwargs):
+            system = messages[0].content
+            assert "远东股份是当前热股第一名" not in system
+            assert '"stock_symbols": ["600869"]' in system
+            assert '"constraints": ["只列名称"]' in system
+            return call("finish", {
+                "status": "complete",
+                "answer": "你好，我记得你的展示偏好。",
+            }, "finish")
+
+    response = run(
+        AgentChatRequest(session_id="r", message="你好"),
+        registry(),
+        Model(),
+        memory=memory,
+    )
+
+    assert response.task_status == "complete"
 
 
 def test_evidence_page_is_not_silently_retruncated():
@@ -353,7 +392,7 @@ def test_plain_model_text_requires_typed_terminal_submission(status):
             }, "finish")
 
     response = run(
-        AgentChatRequest(session_id="r", message="查询贵州茅台今天行情"),
+        AgentChatRequest(session_id="r", message="介绍下你自己"),
         registry(),
         Model(),
     )
@@ -366,7 +405,7 @@ def test_plain_model_text_requires_typed_terminal_submission(status):
     assert execution.output["model_calls"] == 2
 
 
-def test_complete_answer_no_longer_requires_evidence():
+def test_research_complete_requires_current_run_evidence():
     class ResearchModel:
         calls = 0
 
@@ -378,8 +417,8 @@ def test_complete_answer_no_longer_requires_evidence():
                     "answer": "贵州茅台今天涨停。",
                 }, "unsupported")
             return call("finish", {
-                "status": "partial",
-                "answer": "没有取得今日行情证据。",
+                "status": "clarify",
+                "answer": "没有取得本轮行情证据，请稍后重试。",
                 "missing": ["今日行情"],
             }, "repaired")
 
@@ -388,8 +427,11 @@ def test_complete_answer_no_longer_requires_evidence():
         registry(),
         ResearchModel(),
     )
-    assert research.task_status == "complete"
-    assert research.answer == "贵州茅台今天涨停。"
+    assert research.task_status == "clarify"
+    checks = [trace.output for trace in research.tool_results if trace.name == "react_answer_check"]
+    assert checks[0]["passed"] is False
+    assert "require evidence" in checks[0]["reason"]
+    assert checks[1]["passed"] is True
 
 
 @pytest.mark.parametrize("message", ["你好", "早上好", "在吗", "介绍下你自己", "hello there"])
@@ -420,7 +462,7 @@ def test_evidence_free_complete_is_not_rejected(message):
     assert checks == [{"passed": True, "status": "complete", "missing": []}]
 
 
-def test_satisfied_requirement_does_not_trigger_answer_validation():
+def test_satisfied_requirement_cannot_replace_current_evidence():
     class Model:
         calls = 0
 
@@ -434,10 +476,15 @@ def test_satisfied_requirement_does_not_trigger_answer_validation():
                     "status": "satisfied",
                     "evidence_ids": [],
                 }]}, "task")
+            if self.calls == 2:
+                return call("finish", {
+                    "status": "complete",
+                    "answer": "任务状态由模型直接交付。",
+                }, "finish")
             return call("finish", {
-                "status": "complete",
-                "answer": "任务状态由模型直接交付。",
-            }, "finish")
+                "status": "clarify",
+                "answer": "本轮尚未取得行情证据。",
+            }, "repair")
 
     response = run(
         AgentChatRequest(session_id="r", message="查询今日行情"),
@@ -445,7 +492,7 @@ def test_satisfied_requirement_does_not_trigger_answer_validation():
         Model(),
     )
 
-    assert response.task_status == "complete"
+    assert response.task_status == "clarify"
     assert response.tool_calls == []
 
 
@@ -495,8 +542,7 @@ def test_final_answer_is_not_rejected_by_evidence_value_comparison():
     assert "9.9%" in response.answer
 
 
-@pytest.mark.parametrize("submitted_status", ["complete", "partial", "empty", "clarify", "refuse"])
-def test_historical_evidence_id_does_not_trigger_final_rejection(submitted_status):
+def test_historical_evidence_id_is_rejected_from_final_answer():
     old_evidence = {
         "evidence_id": "ev_old",
         "tool": "stock_kline",
@@ -537,13 +583,13 @@ def test_historical_evidence_id_does_not_trigger_final_rejection(submitted_statu
             self.calls += 1
             if self.calls == 1:
                 return call("finish", {
-                    "status": submitted_status,
+                    "status": "complete",
                     "answer": "贵州茅台(600519)今天上涨1.2%。",
                     "evidence_ids": ["ev_old"],
                 }, "stale")
             return call("finish", {
-                "status": "partial",
-                "answer": "只有历史参考，尚未取得今天的行情证据。",
+                "status": "clarify",
+                "answer": "历史结果不能证明今天的行情，请稍后重试。",
                 "missing": ["今日行情"],
             }, "repaired")
 
@@ -554,12 +600,14 @@ def test_historical_evidence_id_does_not_trigger_final_rejection(submitted_statu
         history,
     )
 
-    assert response.task_status == submitted_status
+    assert response.task_status == "clarify"
     checks = [trace.output for trace in response.tool_results if trace.name == "react_answer_check"]
-    assert checks == [{"passed": True, "status": submitted_status, "missing": []}]
+    assert checks[0]["passed"] is False
+    assert "Unknown evidence_id" in checks[0]["reason"]
+    assert checks[1]["passed"] is True
 
 
-def test_mixed_current_and_history_ids_do_not_trigger_final_rejection():
+def test_mixed_current_and_history_ids_requires_repair_to_current_only():
     old_evidence = {
         "evidence_id": "ev_old",
         "tool": "stock_kline",
@@ -628,10 +676,12 @@ def test_mixed_current_and_history_ids_do_not_trigger_final_rejection():
 
     assert response.task_status == "complete"
     checks = [trace.output for trace in response.tool_results if trace.name == "react_answer_check"]
-    assert checks == [{"passed": True, "status": "complete", "missing": []}]
+    assert checks[0]["passed"] is False
+    assert "Unknown evidence_id" in checks[0]["reason"]
+    assert checks[1] == {"passed": True, "status": "complete", "missing": []}
 
 
-def test_historical_requirement_reference_does_not_trigger_answer_validation():
+def test_historical_requirement_reference_cannot_replace_current_evidence():
     old_evidence = {
         "evidence_id": "ev_old",
         "tool": "fixture",
@@ -667,13 +717,17 @@ def test_historical_requirement_reference_does_not_trigger_answer_validation():
                     "id": "current", "description": "查询当前行情", "source_text": "当前行情",
                     "status": "satisfied", "evidence_ids": ["ev_old"],
                 }]}, "task")
+            if self.calls == 2:
+                return call("finish", {
+                    "status": "complete", "answer": "任务状态由模型直接交付。",
+                }, "finish")
             return call("finish", {
-                "status": "complete", "answer": "任务状态由模型直接交付。",
-            }, "finish")
+                "status": "clarify", "answer": "本轮尚未取得行情证据。",
+            }, "repair")
 
     response = run(
         AgentChatRequest(session_id="r", message="查询当前行情"), registry(), Model(), history,
     )
 
-    assert response.task_status == "complete"
+    assert response.task_status == "clarify"
     assert not response.tool_calls
