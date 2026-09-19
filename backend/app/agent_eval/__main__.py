@@ -38,7 +38,8 @@ def main() -> int:
     trace_review.add_argument("--run-dir", required=True, type=Path)
     trace_review.add_argument("--output", required=True, type=Path)
     trace_review.add_argument("--allow-judge", action="store_true")
-    trace_review.add_argument("--compact-evidence", action="store_true")
+    trace_review.add_argument("--compact-evidence", action=argparse.BooleanOptionalAction, default=True,
+                              help="Try reversible evidence encoding by default; --no-compact-evidence disables it")
     trace_review.add_argument("--max-input-chars", type=int, default=24000)
     promotion = commands.add_parser("record-local-promotion")
     promotion.add_argument("--database", required=True, type=Path)

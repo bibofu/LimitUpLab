@@ -62,14 +62,42 @@ def test_nested_table_roundtrip():
     assert restore(encoded) == original
 
 
-def test_trace_preflight_is_opt_in_and_no_model_calls(bundle):
+def test_trace_preflight_compacts_by_default_without_model_calls(bundle):
     case, _, response, _ = bundle
-    ordinary = review_trace(case, response)
-    compact = review_trace(case, response, compact_evidence=True)
+    ordinary = review_trace(case, response, compact_evidence=False)
+    compact = review_trace(case, response)
     assert ordinary["judge"]["compaction"]["reason"] == "disabled"
     assert compact["judge"]["calls"] == 0
     assert compact["deterministic"] == ordinary["deterministic"]
     assert compact["judge"]["input_chars"] <= ordinary["judge"]["input_chars"]
+    assert compact["judge"]["original_input_chars"] == ordinary["judge"]["input_chars"]
+    assert compact["judge"]["chars_saved"] >= 0
+
+
+def test_default_compaction_can_fit_budget_without_retry_or_mutation(bundle):
+    case, _, response, _ = bundle
+    before = response.model_dump(mode="json")
+    raw = review_trace(case, response, compact_evidence=False)["judge"]["input_chars"]
+    encoded = review_trace(case, response)["judge"]["input_chars"]
+    assert encoded < raw
+    provider = Judge()
+    result = review_trace(case, response, provider=provider, max_input_chars=encoded)
+    assert result["judge"]["budget_decision"] == "within_budget"
+    assert result["judge"]["status"] == "completed" and provider.calls == 1
+    skipped = Judge()
+    result = review_trace(case, response, provider=skipped, max_input_chars=encoded - 1)
+    assert result["judge"]["excess_chars"] == 1 and skipped.calls == 0
+    assert result["judge"]["status"] == "input_budget_exceeded"
+    assert response.model_dump(mode="json") == before
+
+
+def test_dry_review_reports_budget_excess_without_provider(bundle):
+    case, _, response, _ = bundle
+    result = review_trace(case, response, max_input_chars=1000)
+    assert result["judge"]["status"] == "disabled"
+    assert result["judge"]["budget_decision"] == "exceeded"
+    assert result["judge"]["budget_unit"] == "characters_not_tokens"
+    assert result["judge"]["calls"] == 0
 
 
 def test_compacted_packet_reaches_judge_with_decoding_instructions(bundle):

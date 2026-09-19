@@ -80,6 +80,18 @@ def test_invalid_trace_not_sent_to_judge(bundle):
     assert provider.calls == 0
 
 
+def test_old_runtime_allows_budget_estimate_but_not_judgment(bundle):
+    case, _, response, _ = bundle
+    response = response.model_copy(deep=True)
+    execution = next(t for t in response.tool_results if t.name == "react_execution")
+    execution.output["version"] = "incompatible-runtime"
+    provider = Judge()
+    result = review_trace(case, response, provider=provider)
+    assert result["judge"]["status"] == "invalid_trace" and provider.calls == 0
+    assert result["judge"]["input_chars"] > 0
+    assert result["judge"]["budget_decision"] in {"within_budget", "exceeded"}
+
+
 def test_hard_failure_is_not_overridden(bundle):
     case, _, response, _ = bundle
     case = case.model_copy(deep=True)

@@ -38,8 +38,29 @@
 | not_run | 仅预检，未执行Agent |
 
 通过率分母仅为pass+fail，同时强制显示有效判分覆盖率，避免排除大量题后呈现虚高通过率。
-`release_eligible`保持false；现有Judge漏判问题和默认长证据预算策略并未在这次修改中解决。
+`release_eligible`保持false；现有Judge漏判问题不因统一运行入口而解决。
 CLI退出码：预检成功/全部诊断通过为0；有fail为1；无fail但有无法评分/待复核为2。
+
+## 默认Judge预算策略（2026-09-19）
+
+worker、统一Golden运行和保存trace复评默认尝试既有的可逆无损证据编码；只有包括解码说明后仍更短才采用。
+不删行、不删字段、不自动提高预算、不自动重试。默认上限仍为24,000字符（不是Token或模型上下文上限）。
+报告同时记录original_input_chars、input_chars、chars_saved、budget_decision、excess_chars和还原校验。
+超预算不调用Judge；未开启Judge时仍提供预算预检，status保持disabled。
+
+无需重跑Agent即可预检保存结果：
+
+```powershell
+.venv/Scripts/python.exe -m app.agent_eval review-trace --run-dir <已有运行目录> --output <新的报告.json>
+```
+
+显式添加`--allow-judge`才调用裁判；`--max-input-chars`可显式指定复评上限，`--no-compact-evidence`可禁用编码做对照。
+旧报告不覆盖。无损编码不是语义摘要；无收益或保留键冲突时保持原证据。
+运行时版本不兼容的历史trace仍拒绝评分，但可读取的证据会生成预算估算；不能把旧结果冒充当前版本验收。
+
+历史长证据零模型预检：LH-B003从146,227降至76,593字符，LH-B006从96,981降至79,037字符，均通过无损还原校验。
+两题仍超默认24,000预算，且历史运行时版本已不兼容，status=invalid_trace、budget_decision=exceeded、calls=0。
+记录位于`output/agent-eval/default-budget-20260919-LH-B003-v2.json`及对应LH-B006文件，不代表重新补评通过。
 
 ## 验证范围
 

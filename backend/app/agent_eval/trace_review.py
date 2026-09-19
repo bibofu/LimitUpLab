@@ -68,7 +68,7 @@ def judge_packet(provider, packet, *, system=JUDGE_SYSTEM):
     return judgment, result.usage_metadata or {}
 
 
-def review_trace(case, response, *, provider=None, max_input_chars=24000, compact_evidence=False):
+def review_trace(case, response, *, provider=None, max_input_chars=24000, compact_evidence=True):
     if not 1000 <= max_input_chars <= 100000:
         raise ValueError("max_input_chars must be 1000..100000")
     trajectory = evaluate_trajectory_terminal(case, response, profile=case.profile)
@@ -91,15 +91,21 @@ def review_trace(case, response, *, provider=None, max_input_chars=24000, compac
     hard_fail = any(f.verdict == "fail" for r in (trajectory, process) for f in r.findings)
     if hard_fail:
         report["verdict"] = "fail"
+    trace_invalid = False
     try:
         calls, policies = _attempts(response)
+    except (ValueError, KeyError, TypeError, AttributeError, StopIteration):
+        # Still estimate readable saved evidence, without authorizing incompatible traces.
+        trace_invalid = True
+        calls, policies = [], {}
+    try:
         evidence = _visible_evidence(response)
     except (ValueError, KeyError, TypeError, AttributeError, StopIteration):
         report["judge"]["status"] = "invalid_trace"
         return report
     report["efficiency"]["tool_attempt_counts"] = dict(Counter(c["name"] for c in calls))
     report["efficiency"]["policy_decisions"] = dict(Counter(policies.values()))
-    execution = next(t.output for t in response.tool_results if t.name == "react_execution")
+    execution = next((t.output for t in response.tool_results if t.name == "react_execution"), {})
     report["efficiency"]["agent_model_calls"] = execution.get("model_calls")
     report["efficiency"]["evidence_result_states"] = dict(Counter(r.get("result_state") for r in evidence))
     # Remove exact duplicate evidence only. Never omit rows, units, dates or missing markers.
@@ -115,6 +121,7 @@ def review_trace(case, response, *, provider=None, max_input_chars=24000, compac
               "answer": response.answer, "task_status": response.task_status,
               "evidence": compact}
     system = JUDGE_SYSTEM
+    original_input_chars = len(system) + len(canonical_json(packet)) + len(canonical_json(judge_schema()))
     report["judge"]["compaction"] = {"applied": False, "reason": "disabled"}
     if compact_evidence:
         from app.agent_eval.evidence_compaction import compact_packet, INSTRUCTION
@@ -127,7 +134,15 @@ def review_trace(case, response, *, provider=None, max_input_chars=24000, compac
     schema = judge_schema()
     input_chars = len(system) + len(payload) + len(canonical_json(schema))
     report["judge"].update(input_chars=input_chars, max_input_chars=max_input_chars,
+                           original_input_chars=original_input_chars,
+                           chars_saved=original_input_chars - input_chars,
+                           budget_unit="characters_not_tokens",
+                           budget_decision="within_budget" if input_chars <= max_input_chars else "exceeded",
+                           excess_chars=max(0, input_chars - max_input_chars),
                            evidence_records=len(compact), duplicates_removed=len(evidence) - len(compact))
+    if trace_invalid:
+        report["judge"]["status"] = "invalid_trace"
+        return report
     if provider is None:
         return report
     if hard_fail:
