@@ -12,7 +12,8 @@
 .venv/Scripts/python.exe -m app.agent_eval run-golden --suite ../output/agent-eval/golden/basic64-current-v1/suite.json --live-database ../output/agent-eval/basic70-live-readiness-003/source-snapshot.sqlite --output-dir ../output/agent-eval/golden64-preflight-next --dry-run
 ```
 
-预检校验Active身份、Case/World摘要、ID选择、模式及数据库文件存在，不调用LLM。
+预检校验Active身份、Case/World摘要、ID选择、模式、数据库文件存在，以及World与当前
+运行时工具/Evidence合同的兼容性；plan/report同时绑定运行时版本和Agent/Judge Prompt摘要，不调用LLM。
 实际运行前worker仍会验证Live基线漂移；预检成功不保证指定数据库与每题历史基线一致。
 新增Live优先使用suite内固定数据库路径，`--live-database`仅补充原Local30缺少的数据库引用。
 

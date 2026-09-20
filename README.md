@@ -617,8 +617,9 @@ cd backend
 本地可执行资产包括 Basic70（50 Offline + 20 Historical Live），其中 64 道题已通过题目合同审批并进入
 Active Golden（45 Offline + 19 Historical Live）。`run-golden` 支持统一预检、选题/全量运行和诊断报告。
 
-Active 只表示题目、事实和判分合同获准使用，不表示当前 Agent 已通过。Golden64 尚未在最新
-`react-runtime-v15` 上完成全量真实运行，Current Invariant、External Canary、最新三轮稳定性和发布门禁也未完成；
+Active 只表示题目、事实和判分合同获准使用，不表示当前 Agent 已通过。Golden64 已与当前代码合同
+`react-runtime-v20` / `agent-tools-v2` / `react-evidence-v4` 完成64题零模型兼容预检，但尚未完成全量真实运行；
+Current Invariant、External Canary、最新三轮稳定性和发布门禁也未完成；
 因此普通测试、构建、Golden 准入或单次诊断结果都不得解释为发布质量通过。最新边界和本地资产入口见
 [Agent 评测状态](docs/Agent_Evaluation_Status.md)与[Golden 运行说明](docs/Agent_Evaluation_Golden_Run.md)。
 
@@ -667,7 +668,7 @@ npm.cmd run build
 1. 滚动补齐 Top10 Outcome，将结果完整交易日从 14 个积累到至少 60 个。
 2. 持续观察 v3 Challenger 对现行评分、最早封板和固定随机基线的样本外优势。
 3. 完成 V1 Top10 不可变预测、D+1 晋级和 D+1 至 D+5 Outcome 的端到端验收。
-4. 先完成 `react-runtime-v15` 代表题兼容性冒烟，再执行 Golden64 全量真实评测和同版本三轮稳定性面板。
+4. 在明确授权评测数据外发后，完成 `react-runtime-v20` 代表题真实冒烟，再执行 Golden64 全量真实评测和同版本三轮稳定性面板。
 5. V2 再为盘中板块、正式公告原文和更多策略建立独立数据契约与 Eval；需要横向扩容时迁移 PostgreSQL、Redis 限流和异步 Worker。
 
 当前版本边界见 [V1.4 阶段里程碑](./docs/V1.4_Milestone.md)。

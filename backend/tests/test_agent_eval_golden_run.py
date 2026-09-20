@@ -3,9 +3,10 @@ from pathlib import Path
 
 import pytest
 
-from app.agent_eval.golden_run import classify, plan_suite, run_golden
+from app.agent_eval.golden_run import classify, current_contract, plan_suite, run_golden
 from app.agent_eval.admission import promote_approved
 from app.agent_eval.core_batch import write_json
+from app.agent_eval.recorder import digest
 from test_agent_eval_admission import source_suite
 from test_agent_eval_checks import artifact, no_external_calls
 
@@ -46,12 +47,32 @@ def test_dry_run_never_executes_or_overwrites(tmp_path):
     def forbidden(*args, **kwargs): raise AssertionError("unexpected model run")
     result = run_golden(suite, tmp_path / "dry", dry_run=True, executor=forbidden)
     assert result["counts"] == {"not_run": 2} and result["diagnostic_pass_rate"] is None
+    assert result["current_contract"] == current_contract()
+    plan = json.loads((tmp_path / "dry/plan.json").read_text(encoding="utf-8"))
+    assert plan["current_contract"] == current_contract()
     with pytest.raises(FileExistsError):
         run_golden(suite, tmp_path / "dry", dry_run=True)
     with pytest.raises(ValueError, match="allow-llm"):
         run_golden(suite, tmp_path / "unauthorized")
     with pytest.raises(ValueError, match="selection"):
         plan_suite(suite, ["missing"])
+
+
+def test_preflight_rejects_world_contract_drift(tmp_path):
+    suite = active(tmp_path)
+    book = json.loads(suite.read_text(encoding="utf-8"))
+    entry = book["cases"][0]
+    baseline = suite.parent / entry["baseline"]
+    world = json.loads(baseline.read_text(encoding="utf-8"))
+    world["tool_contract_version"] = "stale-tool-contract"
+    stale_baseline = baseline.with_name("stale-contract.json")
+    write_json(stale_baseline, world)
+    entry["baseline"] = str(stale_baseline.relative_to(suite.parent)).replace("\\", "/")
+    entry["baseline_digest"] = digest(world)
+    stale_suite = suite.with_name("stale-suite.json")
+    write_json(stale_suite, book)
+    with pytest.raises(ValueError, match="incompatible with current contracts"):
+        plan_suite(stale_suite)
 
 
 def test_batch_preserves_failure_and_reports_coverage(tmp_path):

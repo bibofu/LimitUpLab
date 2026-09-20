@@ -9,10 +9,26 @@ from app.agent_eval.core_batch import write_json
 from app.agent_eval.loader import load_case, load_world
 from app.agent_eval.recorder import digest
 from app.agent_eval.runner import run_offline
+from app.agent_eval.trace_review import JUDGE_SYSTEM
+from app.agents.react_runtime import runtime
+from app.agents.react_runtime.contracts import VERSION
+from app.agents.react_runtime.evidence import EVIDENCE_VERSION
+from app.agents.tools import TOOL_CONTRACT_VERSION
 
 
 def read_json(path):
     return json.loads(path.read_text(encoding="utf-8"))
+
+
+def current_contract():
+    """Bind every preflight/report to the code contracts it actually checked."""
+    return {
+        "runtime_version": VERSION,
+        "tool_contract_version": TOOL_CONTRACT_VERSION,
+        "evidence_version": EVIDENCE_VERSION,
+        "agent_prompt_digest": digest(runtime.SYSTEM),
+        "judge_prompt_digest": digest(JUDGE_SYSTEM),
+    }
 
 
 def plan_suite(suite, ids=None, live_database=None):
@@ -34,6 +50,14 @@ def plan_suite(suite, ids=None, live_database=None):
                 or digest(case.model_dump(mode="json")) != e["case_digest"]
                 or digest(world.model_dump(mode="json")) != e[field + "_digest"]):
             raise ValueError("stale Active asset: " + e["id"])
+        if (case.profile != world.profile
+                or world.tool_contract_version != TOOL_CONTRACT_VERSION
+                or world.evidence_version != EVIDENCE_VERSION):
+            raise ValueError("Active asset is incompatible with current contracts: " + e["id"])
+        if case.mode == "offline" and (
+                case.world is None
+                or (case.world.id, case.world.version) != (world.world_id, world.world_version)):
+            raise ValueError("Offline case references a different World: " + e["id"])
         if case.mode not in {"offline", "live_historical"}:
             raise ValueError("unsupported execution mode")
         database = e.get("live_database") or live_database
@@ -86,6 +110,7 @@ def run_golden(suite, output, *, ids=None, live_database=None, workers=2, wall_s
     output = Path(output).resolve()
     output.mkdir(parents=True, exist_ok=False)
     write_json(output / "plan.json", {"suite_digest": digest(book), "cases": plans,
+        "current_contract": current_contract(),
         "allow_judge": allow_judge, "dry_run": dry_run, "workers": workers,
         "wall_seconds_per_case": wall_seconds})
     def execute(plan):
@@ -119,6 +144,7 @@ def run_golden(suite, output, *, ids=None, live_database=None, workers=2, wall_s
     usages = [r.get("worker_summary", {}).get("total_tokens") for r in rows]
     report = {"schema_version": "golden-unified-run-v1", "suite_id": book["suite_id"],
         "suite_digest": digest(book), "case_count": len(rows), "dry_run": dry_run,
+        "current_contract": current_contract(),
         "execution_kind": "preflight" if dry_run else "injected_test_executor" if executor else "real_worker",
         "counts": counts, "scored_count": scored,
         "diagnostic_pass_rate": counts.get("pass", 0) / scored if scored else None,
@@ -128,7 +154,7 @@ def run_golden(suite, output, *, ids=None, live_database=None, workers=2, wall_s
         "cases": rows, "release_eligible": False,
         "limitations": ["Pass/fail is an explicit diagnostic judgment, not calibrated release certification.",
                         "Unscorable and needs_review are excluded from pass-rate denominator; coverage is reported separately.",
-                        "Preflight validates assets and database existence; worker validates Live baseline drift before model calls."]}
+                        "Preflight validates asset digests, current code contracts and database existence; worker validates Live baseline drift before model calls."]}
     write_json(output / "report.json", report)
     lines = ["# Golden统一运行报告", "", "诊断结果，不代表发布准入或稳定性通过。", "",
              f"题数：{len(rows)}；结果：{counts}；有效判分覆盖率：{report['scoring_coverage']:.1%}", "",

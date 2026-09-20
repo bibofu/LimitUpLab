@@ -13,14 +13,22 @@
 
 当前工程链路已经具备 Frozen Record-Replay、隔离 Offline/Historical Live Worker、确定性合同、
 事实/语义判分、正式报告、稳定性聚合和统一 `run-golden`。Local30 曾在旧运行时形成限定范围的
-30题正式基线；Golden64 已完成零模型预检和64题调度验证，但尚未在最新 `react-runtime-v15`
+30题正式基线；Golden64 已完成零模型预检和64题调度验证，但尚未在当前 `react-runtime-v20`
 上完成全量真实运行，也没有形成同版本三轮稳定性结论。
 
 当前所有正式/统一报告仍为 `release_eligible=false`。尚缺 Current Invariant、External Canary、
 充分人工校准的 Judge/Extractor、可移植的正式数据资产，以及把 P0、判分覆盖率、稳定性、Live、
-预算和失败归因汇总为 Release Manifest 的发布决策层。下一步顺序是：v15 代表题兼容性冒烟、
+预算和失败归因汇总为 Release Manifest 的发布决策层。下一步顺序是：v20 代表题真实冒烟、
 Golden64 全量真实运行、同版本 Stability Panel，再扩充 M2/M3 容量；不直接用旧 trace 或旧运行时
 成绩替代当前基线。
+
+### 当前代码合同预检已接入（2026-09-20）
+
+- `run-golden` 的 plan/report 现在绑定运行时、工具契约、Evidence 版本、Agent Prompt 摘要和 Judge Prompt 摘要；Active Case/World 即使自身摘要一致，只要与当前代码合同漂移也会在模型调用前拒绝。
+- 当前实际合同为 `react-runtime-v20`、`agent-tools-v2`、`react-evidence-v4`。此前顶部快照沿用的 v15 已纠正，后续不再凭手工文档判断“最新运行时”。
+- Golden64 的64题增强零模型预检全部通过，产物为 `output/agent-eval/golden64-v15-contract-preflight-001`；目录名保留首次执行时的原始命名，不因发现实际为v20而覆盖或重命名。
+- 本轮真实模型调用0。真实代表题运行会向已配置模型服务发送问题、冻结/Live证据和生成答案，必须在明确授权具体外发范围后执行；当前结果只证明资产与代码合同兼容，不证明Agent回答质量。
+- 39项Golden运行、trace review和无损Evidence定向回归通过；首次沙箱运行的5项临时目录权限错误保留为环境失败，不计为代码失败。
 
 ### Judge默认无损编码与预算预检已接入（2026-09-19）
 
