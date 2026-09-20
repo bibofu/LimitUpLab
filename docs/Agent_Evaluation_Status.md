@@ -2,6 +2,26 @@
 
 ## 当前状态
 
+### 当前快照（截至 2026-09-20）
+
+| 层级 | 当前规模 | 含义 |
+| --- | ---: | --- |
+| 规划蓝图 | 88 | 40 Offline、30 Historical Live、12 Current Invariant、6 External Canary；蓝图不等于可运行 Case |
+| 可运行 Basic70 | 70 | 50 Offline + 20 Historical Live，覆盖当前26个注册业务工具的资产并集 |
+| Active Golden | 64 | 45 Offline + 19 Historical Live；题目与判分合同已批准，不等于 Agent 通过 |
+| 暂缓准入 | 6 | 保留合同、Judge 漏判或内容争议，不为凑数自动晋升 |
+
+当前工程链路已经具备 Frozen Record-Replay、隔离 Offline/Historical Live Worker、确定性合同、
+事实/语义判分、正式报告、稳定性聚合和统一 `run-golden`。Local30 曾在旧运行时形成限定范围的
+30题正式基线；Golden64 已完成零模型预检和64题调度验证，但尚未在最新 `react-runtime-v15`
+上完成全量真实运行，也没有形成同版本三轮稳定性结论。
+
+当前所有正式/统一报告仍为 `release_eligible=false`。尚缺 Current Invariant、External Canary、
+充分人工校准的 Judge/Extractor、可移植的正式数据资产，以及把 P0、判分覆盖率、稳定性、Live、
+预算和失败归因汇总为 Release Manifest 的发布决策层。下一步顺序是：v15 代表题兼容性冒烟、
+Golden64 全量真实运行、同版本 Stability Panel，再扩充 M2/M3 容量；不直接用旧 trace 或旧运行时
+成绩替代当前基线。
+
 ### Judge默认无损编码与预算预检已接入（2026-09-19）
 
 - review_trace默认尝试无损编码，worker、run-golden和保存trace复评共享该策略；CLI保留显式禁用开关。短题无收益则原样保留，不增加裁判次数。
@@ -345,14 +365,16 @@ Plan-and-Execute 设计，无法充分评价当前 bounded ReAct 的 Observation
 历史里程碑和 `docs/code-quality-audit.md` 中的旧评测结果只记录当时事实，
 不代表当前版本验收状态。
 
-## 新设计
+## 历史建设起点（2026-09-13，保留记录）
+
+以下内容记录新体系从单题 M1 原型开始时的真实状态，不能覆盖本文顶部的当前快照。
 
 新评测体系的长期设计已经确定，详见
 [`Agent_Evaluation_Design.md`](./Agent_Evaluation_Design.md)。该文档定义了分层模型、
 Offline/Live 固定容量、Frozen World、Case Schema、覆盖矩阵、确定性 Evaluator、
 LLM-as-a-Judge 边界、稳定性、版本治理和发布门禁。
 
-当前已开始 M1：`backend/app/agent_eval` 提供 Case、World、结果、预算和 Manifest
+当时已开始 M1：`backend/app/agent_eval` 提供 Case、World、结果、预算和 Manifest
 类型，以及 JSON 资产加载和跨文件引用校验；对应测试纳入现有 pytest 发现范围。
 Frozen Registry 已接入现有 ToolGateway，覆盖有效参数精确匹配、Profile 权限、日期锚定、
 标准化结果状态与来源错误回放。Record-Replay 已保存真实 ToolResult、标准化完整结果和
@@ -373,12 +395,12 @@ Worker约8.69秒。Agent返回complete，主问题的日期和40家数量与证�
 由于模型主动补充的高度、比率、行业等尚未全面覆盖，且抽取未校准，总结果needs_review。
 原始报告位于本地忽略目录 `output/agent-eval/runs/real-summary-001`，未重跑或覆盖。
 自动抽取不冒充人工审核，独立覆盖率未知，不能仅凭这次结果建立质量基线。
-正式评测题库、批量 Runner、经过校准的抽取器及完整 Answer Fact Evaluator 仍未完成，
-M1尚未达标。下一步应从真实回答出发建立独立标注和校准，再扩充资产。
+当时正式评测题库、批量 Runner、经过校准的抽取器及完整 Answer Fact Evaluator 仍未完成，
+M1尚未达标。后续进展已记录在本文顶部的倒序建设流水中。
 具体运行命令、边界及后续工作见 `backend/evals/README.md`。
 
 已完成40道Offline与48道Live（30历史/12当前/6外部）的具体问题蓝图及规划覆盖矩阵。
 88条蓝图保存在 `backend/evals/blueprints/core40_live48.json`，不是88个可执行Case；
-正式active题目仍为0，既有市场汇总候选属于OFF-001。数据、bindings、终态及断言物化
+当时正式active题目仍为0，既有市场汇总候选属于OFF-001。数据、bindings、终态及断言物化
 尚待逐题完成。v1的24个工具已有正常主路径计划；extended除两个专属工具外的24个
 正常路径仍是明确缺口，不能借用v1覆盖代替。下一步从本地事件小批录制与真实回答校准开始。

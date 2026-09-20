@@ -28,8 +28,12 @@ come from deterministic code and recorded data; the model plans and explains.
 10. `models.py`: builds user-visible metadata and retains compatibility for
     historical stored traces. `react_chat.py` persists the final response once.
 
-The previous Agent evaluation runners, frozen fixtures, gates and report API have
-been removed. They are not part of the current call graph.
+The previous Planner/Policy-era evaluation system was removed and is not part of
+the current chat call graph. Its replacement lives in `backend/app/agent_eval`:
+`worker.py` runs isolated Offline or Historical Live cases, `frozen_registry.py`
+replays versioned observations, and `golden_run.py` coordinates Active suites.
+These evaluation paths are explicit CLI workflows; normal project validation
+does not call real models or imply release-quality approval.
 
 ## Follow the data behind an answer
 

@@ -278,15 +278,21 @@ python -m pytest tests -q -p no:cacheprovider
 
 ## Agent evaluation status
 
-The former Chat Eval V2 and Live Behavioral Eval V1 datasets, frozen tool worlds,
-migration manifest, question-bank samples, and local baselines were retired on
-2026-09-13. The repository currently has no formal Agent evaluation dataset or
-release-quality baseline. The project validation command and system health check
-therefore do not run the old evaluation suites.
+The former Chat Eval V2 and Live Behavioral Eval V1 assets were retired on
+2026-09-13 because they targeted the previous Query/Planner/Tool Policy stack.
+They remain deleted and are not part of the current runtime or project validation.
 
-The legacy evaluators, CLIs, report API and health-check integration have also
-been removed. A future evaluation system will be designed independently of the
-deleted contracts. See `docs/Agent_Evaluation_Status.md` for the current boundary.
+An independent evaluation system now lives in `app/agent_eval`. It provides
+versioned Case/World contracts, frozen record-replay, isolated Offline and
+Historical Live workers, deterministic checks, optional diagnostic judges,
+formal reports, stability aggregation, and the shared `run-golden` entry point.
+The current local Active Golden contains 64 approved contracts (45 Offline and
+19 Historical Live), but it has only passed zero-model dispatch preflight as a
+complete suite on the latest runtime. Active status is not an Agent pass result,
+and every report remains `release_eligible=false`. See
+[Agent evaluation status](../docs/Agent_Evaluation_Status.md) and
+[Golden execution](../docs/Agent_Evaluation_Golden_Run.md) for the current scope
+and commands.
 
 The chat Agent also exposes a general `limit_up_events` internal tool for
 same-day limit-up questions such as continued-board lists, board-height filters,

@@ -1,8 +1,14 @@
 # Agent 评测资产
 
-当前完成 M1 的类型、加载层、Frozen Registry、单工具 Record-Replay、候选资产导出，
-以及轨迹/终态检查、审核抽取接口与窄范围 Fact Verifier。单题隔离 Runner 和真实 LLM
-声明抽取已接通并实际运行；正式题库、经校准的自动抽取器和完整 Fact Evaluator 尚未完成。
+当前评测工程已从最初的单题 M1 原型扩展为可运行体系：具备类型与加载层、Frozen Registry、
+Record-Replay、隔离 Offline/Historical Live Worker、批量数据集构建与复核、确定性核心合同、
+声明抽取/事实核验、可选语义 Judge、正式报告、稳定性聚合和统一 `run-golden` 入口。
+
+当前本地资产包括 Basic70（50 Offline + 20 Historical Live）；其中 64 道已通过业务合同审批并进入
+Active Golden（45 Offline + 19 Historical Live），另 6 道暂缓。Active 表示题目与判分合同可用，
+不表示 Agent 已经答对。Golden64 目前只完成全套零模型预检，尚未在最新 `react-runtime-v15`
+上完成全量真实运行；Current Invariant、External Canary、同版本三轮稳定性和 Release Manifest
+仍待完成，所有统一报告继续保持 `release_eligible=false`。
 
 可执行模型位于 `app/agent_eval/models.py`，加载与引用校验位于 `loader.py`。
 资产采用 UTF-8 JSON，可通过每个 Pydantic 模型的 `model_json_schema()` 导出规范。
@@ -226,8 +232,9 @@ fixture_failure；运行停止于 Provider 错误标 provider_failure；抽取�
 - 这次暴露的是覆盖范围和校准缺口，不应通过删去额外声明、放宽断言或改用脚本答案来
   伪装通过。报告本身不是市场结论、模型稳定性结果或发布基线。
 
-下一步应围绕本次真实答案建立独立标注、扩充事实适配器和反误杀校准，再扩大 World/Case。
-批量 Runner、Live、Stability、Judge 和完整发布判定仍待建设。
+以上是 2026-09-13 的首次单题运行记录。当时暴露的独立标注、事实适配器和反误杀校准问题
+已推动后续 Local30、Basic70 和 Golden64 建设；该段不代表当前仍缺少批量 Runner 或 Judge。
+当前下一步以 [Agent 评测状态](../../docs/Agent_Evaluation_Status.md) 顶部快照为准。
 
 ## 批量出题蓝图
 

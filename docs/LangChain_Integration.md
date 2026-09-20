@@ -89,7 +89,9 @@ backend/.venv/Scripts/python.exe scripts/check_project.py
 
 ```
 
-旧 Agent 评测实现和数据均已删除。当前命令只验证代码、前端和构建，不代表真实模型行为或发布质量。
+面向旧 Planner/Policy 的评测实现和数据已经删除；新的 `app/agent_eval` 体系独立维护
+Active Golden、Frozen/Live 执行和诊断报告。当前项目验收命令仍只验证代码、前端和构建，
+不会自动调用真实模型，也不代表 Golden64、稳定性或发布质量通过。
 
 V1.4 标记前完整后端回归为 616 项及 6 个子测试通过，0 失败/跳过；另有 3 条 LangGraph/websockets 依赖弃用警告。版本发布仍需运行标签工作流要求的 Windows/Linux 完整验收。
 
