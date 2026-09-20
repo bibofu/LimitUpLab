@@ -618,7 +618,8 @@ cd backend
 Active Golden（45 Offline + 19 Historical Live）。`run-golden` 支持统一预检、选题/全量运行和诊断报告。
 
 Active 只表示题目、事实和判分合同获准使用，不表示当前 Agent 已通过。Golden64 已与当前代码合同
-`react-runtime-v20` / `agent-tools-v2` / `react-evidence-v4` 完成64题零模型兼容预检，但尚未完成全量真实运行；
+`react-runtime-v20` / `agent-tools-v2` / `react-evidence-v4` 完成64题静态合同预检；新增Live内容回放预检已确认
+旧Local30缺少匹配的历史SQLite快照，因此不能声称64题当前均可运行，也尚未完成全量真实运行；
 Current Invariant、External Canary、最新三轮稳定性和发布门禁也未完成；
 因此普通测试、构建、Golden 准入或单次诊断结果都不得解释为发布质量通过。最新边界和本地资产入口见
 [Agent 评测状态](docs/Agent_Evaluation_Status.md)与[Golden 运行说明](docs/Agent_Evaluation_Golden_Run.md)。

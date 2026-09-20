@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from app.agent_eval.core_batch import write_json
+from app.agent_eval.historical_live import HistoricalDataDrift
 from app.agent_eval.loader import load_case, load_world
 from app.agent_eval.recorder import digest
 from app.agent_eval.runner import run_offline
@@ -100,8 +101,29 @@ def classify(summary, review):
     return "needs_review", "ambiguous_judgment"
 
 
+def validate_live_baseline(plan, folder):
+    """Replay versioned Live observations without making any model call."""
+    if plan["mode"] == "offline":
+        return {"status": "not_applicable", "model_calls": 0}
+    case = load_case(Path(plan["case"]))
+    baseline = load_world(Path(plan["baseline"]))
+    database = Path(plan["live_database"])
+    folder.mkdir(parents=True, exist_ok=False)
+    if "local_snapshot_live" in case.capabilities:
+        from app.agent_eval.snapshot_live import SnapshotLiveRegistry
+        registry = SnapshotLiveRegistry(database, baseline, folder / "live.sqlite")
+        adapter = "snapshot_live"
+    else:
+        from app.agent_eval.historical_live import HistoricalLiveRegistry
+        registry = HistoricalLiveRegistry(database, baseline)
+        adapter = "historical_live"
+    return {"status": "compatible", "adapter": adapter,
+            "checked_recordings": list(registry.baseline_checks), "model_calls": 0}
+
+
 def run_golden(suite, output, *, ids=None, live_database=None, workers=2, wall_seconds=90,
-               allow_llm=False, allow_judge=False, dry_run=False, executor=None):
+               allow_llm=False, allow_judge=False, dry_run=False, executor=None,
+               baseline_validator=None):
     if not 1 <= workers <= 2 or not 1 <= wall_seconds <= 900:
         raise ValueError("workers must be 1..2 and wall_seconds 1..900")
     if not dry_run and not allow_llm:
@@ -135,7 +157,19 @@ def run_golden(suite, output, *, ids=None, live_database=None, workers=2, wall_s
         write_json(output / (plan["id"] + "-result.json"), row)
         return row
     if dry_run:
-        rows = [{**p, "verdict": "not_run", "cause": None} for p in plans]
+        validator = baseline_validator or validate_live_baseline
+        rows = []
+        for plan in plans:
+            try:
+                preflight = validator(plan, output / "live-preflight" / plan["id"])
+                row = {**plan, "verdict": "not_run", "cause": None, "preflight": preflight}
+            except Exception as error:
+                cause = "data_failure" if isinstance(error, HistoricalDataDrift) else "evaluator_failure"
+                row = {**plan, "verdict": "unscorable", "cause": cause,
+                       "error_type": type(error).__name__,
+                       "preflight": {"status": "blocked", "model_calls": 0}}
+            write_json(output / (plan["id"] + "-result.json"), row)
+            rows.append(row)
     else:
         with ThreadPoolExecutor(max_workers=workers) as pool:
             rows = list(pool.map(execute, plans))
@@ -154,7 +188,7 @@ def run_golden(suite, output, *, ids=None, live_database=None, workers=2, wall_s
         "cases": rows, "release_eligible": False,
         "limitations": ["Pass/fail is an explicit diagnostic judgment, not calibrated release certification.",
                         "Unscorable and needs_review are excluded from pass-rate denominator; coverage is reported separately.",
-                        "Preflight validates asset digests, current code contracts and database existence; worker validates Live baseline drift before model calls."]}
+                        "Preflight validates asset digests, current code contracts and replays Live baseline observations without model calls."]}
     write_json(output / "report.json", report)
     lines = ["# Golden统一运行报告", "", "诊断结果，不代表发布准入或稳定性通过。", "",
              f"题数：{len(rows)}；结果：{counts}；有效判分覆盖率：{report['scoring_coverage']:.1%}", "",

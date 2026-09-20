@@ -13,27 +13,37 @@
 
 当前工程链路已经具备 Frozen Record-Replay、隔离 Offline/Historical Live Worker、确定性合同、
 事实/语义判分、正式报告、稳定性聚合和统一 `run-golden`。Local30 曾在旧运行时形成限定范围的
-30题正式基线；Golden64 已完成零模型预检和64题调度验证，但尚未在当前 `react-runtime-v20`
-上完成全量真实运行，也没有形成同版本三轮稳定性结论。
+30题正式基线；Golden64 已完成代码合同预检和64题调度验证，但旧Local30 Live数据库快照没有保留，
+不能通过当前新增的Live内容回放预检。当前 `react-runtime-v20` 已完成10题真实代表运行，
+尚未完成Golden64全量真实运行，也没有形成同版本三轮稳定性结论。
 
 当前所有正式/统一报告仍为 `release_eligible=false`。尚缺 Current Invariant、External Canary、
 充分人工校准的 Judge/Extractor、可移植的正式数据资产，以及把 P0、判分覆盖率、稳定性、Live、
-预算和失败归因汇总为 Release Manifest 的发布决策层。下一步顺序是：v20 代表题真实冒烟、
-Golden64 全量真实运行、同版本 Stability Panel，再扩充 M2/M3 容量；不直接用旧 trace 或旧运行时
+预算和失败归因汇总为 Release Manifest 的发布决策层。下一步顺序是：恢复旧Local30匹配快照、
+修复已记录的终态失败并校准Judge、Golden64全量真实运行、同版本 Stability Panel，再扩充 M2/M3 容量；不直接用旧 trace 或旧运行时
 成绩替代当前基线。
+
+### P0当前可信基线已建立（2026-09-20）
+
+- 当前版本10题真实代表运行：6 pass、1 fail、3 unscorable，判分覆盖率70%，记录271,283 Token但不完整；原始产物为 `output/agent-eval/p0-v20-smoke-run-001`。
+- `OFF-B025`是保留的真实Agent终态失败；`LH-033`是缺少匹配历史SQLite快照导致的data failure。两者都没有被补评或文档改写成通过。
+- `OFF-036`在收紧Judge Evidence ID协议后补评三维pass；`LH-B003`在显式80,000字符上限下补评三维pass。两次补评合计29,475 Token，只作补充诊断，不覆盖原始unscorable，也不计作官方8/10通过。
+- dry-run现已零模型重放Live baseline。代表10题预检中9题可继续、`LH-033`在模型调用前明确阻断，产物为 `output/agent-eval/p0-v20-live-preflight-001`。
+- 当前业务库上的完整64题预检为54题可继续、10题旧Local30 Live全部data failure；45个Offline和9个新Snapshot Live兼容。产物为 `output/agent-eval/golden64-v20-live-preflight-001`，0模型调用、CLI退出码2。
+- 完整证据、解释边界和后续动作见 [P0当前基线](Agent_Evaluation_P0_Baseline.md)。
 
 ### 当前代码合同预检已接入（2026-09-20）
 
 - `run-golden` 的 plan/report 现在绑定运行时、工具契约、Evidence 版本、Agent Prompt 摘要和 Judge Prompt 摘要；Active Case/World 即使自身摘要一致，只要与当前代码合同漂移也会在模型调用前拒绝。
 - 当前实际合同为 `react-runtime-v20`、`agent-tools-v2`、`react-evidence-v4`。此前顶部快照沿用的 v15 已纠正，后续不再凭手工文档判断“最新运行时”。
-- Golden64 的64题增强零模型预检全部通过，产物为 `output/agent-eval/golden64-v15-contract-preflight-001`；目录名保留首次执行时的原始命名，不因发现实际为v20而覆盖或重命名。
+- Golden64 的64题代码合同预检通过，产物为 `output/agent-eval/golden64-v15-contract-preflight-001`；该历史运行没有回放Live数据内容，不能称为完整可运行预检。目录名保留首次执行时的原始命名，不覆盖或重命名。
 - 本轮真实模型调用0。真实代表题运行会向已配置模型服务发送问题、冻结/Live证据和生成答案，必须在明确授权具体外发范围后执行；当前结果只证明资产与代码合同兼容，不证明Agent回答质量。
 - 39项Golden运行、trace review和无损Evidence定向回归通过；首次沙箱运行的5项临时目录权限错误保留为环境失败，不计为代码失败。
 
 ### Judge默认无损编码与预算预检已接入（2026-09-19）
 
 - review_trace默认尝试无损编码，worker、run-golden和保存trace复评共享该策略；CLI保留显式禁用开关。短题无收益则原样保留，不增加裁判次数。
-- 默认预算仍24,000字符，记录编码前后长度、节省量、预算判断和超出量；超预算0调用、不自动重试。无模型预检也显示预算判断。
+- 默认预算仍24,000字符，记录编码前后长度、节省量、预算判断和超出量；超预算0调用。2026-09-20起仅Judge结构化协议错误最多重试一次，网络、事实、Agent失败不重试。无模型预检也显示预算判断。
 - 两道历史长证据预检均可逆还原，压缩后76,593/79,037字符，仍超默认上限。近期生产运行时已更新，旧trace同时因版本不兼容拒评；保留保护，没有绕过校验或声称重新验收通过。
 - 51项定向回归通过，真实模型调用0。下一步少量代表题真实冒烟前，先核对当前运行时与旧资产兼容性；不直接全量运行64题。
 

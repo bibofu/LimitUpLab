@@ -228,7 +228,7 @@ def main() -> int:
         result = run_golden(args.suite, args.output_dir, ids=args.case_ids,
             live_database=args.live_database, workers=args.workers, wall_seconds=args.wall_seconds,
             allow_llm=args.allow_llm, allow_judge=args.allow_judge, dry_run=args.dry_run)
-        exit_code = 0 if args.dry_run else 1 if result["counts"].get("fail") else 2 if any(
+        exit_code = 1 if result["counts"].get("fail") else 2 if any(
             result["counts"].get(k) for k in ("unscorable", "needs_review")) else 0
         result = {k: v for k, v in result.items() if k != "cases"}
     elif args.command == "build-basic70-candidates":

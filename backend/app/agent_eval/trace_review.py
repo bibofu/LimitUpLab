@@ -27,6 +27,8 @@ task_completion必须检查用户明确的输出范围限制，例如“只列�
 不能把相关性说成因果，不能扩大名单范围。含义明确且无证据支持的事实判fail；
 无法消歧或证据无法判定时needs_review。只校验答案相对证据，不证明工具数据本身正确。
 每维给简短理由，fail必须在issue中指出具体错误声明或遗漏要求；用evidence_ids引用输入证据。
+evidence_ids只能填写输入evidence数组中真实存在的evidence_id；Assertion ID不是Evidence ID。
+输入evidence为空时，三个维度的evidence_ids都必须为空，不能虚构“semantics”等占位引用。
 不评价写作风格，不推测隐藏推理。只能调用submit_trace_review一次，不输出其他内容。"""
 
 
@@ -155,10 +157,18 @@ def review_trace(case, response, *, provider=None, max_input_chars=24000, compac
     if input_chars > max_input_chars:
         report["judge"]["status"] = "input_budget_exceeded"
         return report
-    report["judge"]["calls"] = 1
     report["judge"]["model"] = getattr(provider, "model", None)
     try:
-        judgment, usage = judge_packet(provider, packet, system=system)
+        judgment = usage = None
+        for attempt in (1, 2):
+            report["judge"]["calls"] = attempt
+            try:
+                judgment, usage = judge_packet(provider, packet, system=system)
+                break
+            except ValueError as error:
+                if attempt == 2:
+                    raise
+                report["judge"].update(protocol_retries=1, first_error_type=type(error).__name__)
         report["judge"]["tokens"] = usage.get("total_tokens")
         report["dimensions"] = judgment.model_dump(mode="json")
         report["judge"]["status"] = "completed"

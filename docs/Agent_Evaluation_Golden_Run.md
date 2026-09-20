@@ -9,13 +9,15 @@
 在backend目录执行，输出目录必须不存在：
 
 ```powershell
-.venv/Scripts/python.exe -m app.agent_eval run-golden --suite ../output/agent-eval/golden/basic64-current-v1/suite.json --live-database ../output/agent-eval/basic70-live-readiness-003/source-snapshot.sqlite --output-dir ../output/agent-eval/golden64-preflight-next --dry-run
+.venv/Scripts/python.exe -m app.agent_eval run-golden --suite ../output/agent-eval/golden/basic64-current-v1/suite.json --live-database <匹配旧Local30录制的只读SQLite快照> --output-dir ../output/agent-eval/golden64-preflight-next --dry-run
 ```
 
 预检校验Active身份、Case/World摘要、ID选择、模式、数据库文件存在，以及World与当前
-运行时工具/Evidence合同的兼容性；plan/report同时绑定运行时版本和Agent/Judge Prompt摘要，不调用LLM。
-实际运行前worker仍会验证Live基线漂移；预检成功不保证指定数据库与每题历史基线一致。
+运行时工具/Evidence合同的兼容性；还会通过生产Tool Gateway重放每个Historical Live的版本化观察。
+plan/report同时绑定运行时版本和Agent/Judge Prompt摘要，全程不调用LLM。Live漂移记录为
+`unscorable/data_failure`并使CLI返回2；预检成功才表示指定数据库与所选题的历史baseline兼容。
 新增Live优先使用suite内固定数据库路径，`--live-database`仅补充原Local30缺少的数据库引用。
+当前仓库没有已知匹配旧Local30的快照；不能用Basic70新快照或当前业务库替代后宣称全64题可运行。
 
 ## 显式运行
 
@@ -45,7 +47,8 @@ CLI退出码：预检成功/全部诊断通过为0；有fail为1；无fail但有
 ## 默认Judge预算策略（2026-09-19）
 
 worker、统一Golden运行和保存trace复评默认尝试既有的可逆无损证据编码；只有包括解码说明后仍更短才采用。
-不删行、不删字段、不自动提高预算、不自动重试。默认上限仍为24,000字符（不是Token或模型上下文上限）。
+不删行、不删字段、不自动提高预算。默认上限仍为24,000字符（不是Token或模型上下文上限）。
+仅当Judge返回不能通过类型校验的结构化协议结果时最多重试一次；网络、事实、Agent失败和超预算均不重试。
 报告同时记录original_input_chars、input_chars、chars_saved、budget_decision、excess_chars和还原校验。
 超预算不调用Judge；未开启Judge时仍提供预算预检，status保持disabled。
 
@@ -65,6 +68,7 @@ worker、统一Golden运行和保存trace复评默认尝试既有的可逆无损
 
 ## 验证范围
 
-真实Golden64资产预检：`output/agent-eval/golden64-unified-preflight-001`，64题均not_run，0模型调用。
+历史Golden64合同预检：`output/agent-eval/golden64-unified-preflight-001`，64题均not_run，0模型调用；
+该产物生成于Live内容回放接入前，只证明当时的静态合同检查通过。
 脚本executor验证全部64题调度及19个Live路由，脚本成功不能当Agent正确率。
 额外回归执行共享worker、旧合同提取+Judge、10个本地Live工具隔离场景，以及错误优先级和报告持久化。

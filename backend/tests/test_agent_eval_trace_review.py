@@ -3,7 +3,7 @@ import json
 from langchain_core.messages import AIMessage
 import pytest
 
-from app.agent_eval.trace_review import review_trace
+from app.agent_eval.trace_review import JUDGE_SYSTEM, review_trace
 from test_agent_eval_checks import artifact, no_external_calls
 from test_agent_eval_event_facts import bundle
 
@@ -13,7 +13,8 @@ class Judge:
 
     def __init__(self, verdict="pass", broken=False):
         self.calls = 0
-        self.verdict, self.broken = verdict, broken
+        self.verdict = verdict
+        self.broken_attempts = 2 if broken is True else int(broken)
 
     def generate_messages(self, messages, tools, **kwargs):
         self.calls += 1
@@ -21,7 +22,7 @@ class Judge:
         packet = json.loads(messages[1].content)
         assert "evidence" in packet and "answer" in packet
         assert "react_decision" not in packet
-        if self.broken:
+        if self.calls <= self.broken_attempts:
             return AIMessage(content="invalid")
         dimension = {"verdict": self.verdict, "rationale": "test verdict",
                      "issue": "specific unsupported claim" if self.verdict == "fail" else "",
@@ -40,6 +41,11 @@ def test_zero_cost_default(bundle):
     assert report["verdict"] == "needs_review"
     assert report["efficiency"]["tool_attempt_counts"]
     assert all(d["verdict"] == "not_run" for d in report["dimensions"].values())
+
+
+def test_judge_contract_forbids_fake_evidence_ids():
+    assert "Assertion ID不是Evidence ID" in JUDGE_SYSTEM
+    assert "evidence为空时" in JUDGE_SYSTEM
 
 
 @pytest.mark.parametrize("verdict", ["pass", "fail", "needs_review"])
@@ -62,13 +68,23 @@ def test_budget_skips_without_truncating(bundle):
     assert provider.calls == 0
 
 
-def test_protocol_error_not_retried(bundle):
+def test_protocol_error_retries_once_then_stops(bundle):
     case, _, response, _ = bundle
     provider = Judge(broken=True)
     report = review_trace(case, response, provider=provider, max_input_chars=100000)
     assert report["judge"]["status"] == "judge_error"
-    assert provider.calls == 1
+    assert provider.calls == 2
     assert report["verdict"] == "needs_review"
+
+
+def test_protocol_retry_can_recover(bundle):
+    case, _, response, _ = bundle
+    provider = Judge(broken=1)
+    report = review_trace(case, response, provider=provider, max_input_chars=100000)
+    assert report["judge"]["status"] == "completed"
+    assert report["judge"]["calls"] == 2
+    assert report["judge"]["protocol_retries"] == 1
+    assert report["judge"]["first_error_type"] == "ValueError"
 
 
 def test_invalid_trace_not_sent_to_judge(bundle):

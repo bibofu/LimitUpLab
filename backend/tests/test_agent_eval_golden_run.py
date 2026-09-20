@@ -4,6 +4,7 @@ from pathlib import Path
 import pytest
 
 from app.agent_eval.golden_run import classify, current_contract, plan_suite, run_golden
+from app.agent_eval.historical_live import HistoricalDataDrift
 from app.agent_eval.admission import promote_approved
 from app.agent_eval.core_batch import write_json
 from app.agent_eval.recorder import digest
@@ -56,6 +57,23 @@ def test_dry_run_never_executes_or_overwrites(tmp_path):
         run_golden(suite, tmp_path / "unauthorized")
     with pytest.raises(ValueError, match="selection"):
         plan_suite(suite, ["missing"])
+
+
+def test_dry_run_surfaces_baseline_drift_without_model_execution(tmp_path):
+    suite = active(tmp_path)
+    calls = []
+    def drift(plan, folder):
+        calls.append(plan["id"])
+        if plan["id"] == "OFF-B002":
+            raise HistoricalDataDrift("scripted drift")
+        return {"status": "not_applicable", "model_calls": 0}
+    result = run_golden(suite, tmp_path / "drift", dry_run=True, baseline_validator=drift)
+    assert calls == ["OFF-B001", "OFF-B002"]
+    assert result["counts"] == {"not_run": 1, "unscorable": 1}
+    blocked = next(row for row in result["cases"] if row["id"] == "OFF-B002")
+    assert blocked["cause"] == "data_failure"
+    assert blocked["error_type"] == "HistoricalDataDrift"
+    assert blocked["preflight"] == {"status": "blocked", "model_calls": 0}
 
 
 def test_preflight_rejects_world_contract_drift(tmp_path):
