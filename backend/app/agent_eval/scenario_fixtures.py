@@ -11,6 +11,17 @@ MODELS = {s.name: arguments_model(s) for s in TOOL_SCHEMAS}
 LIST_FIELDS = {"post_limit_screen": "candidates", "sector_stock_ranking": "items",
                "dragon_tiger_list": "items", "finance_news": "items", "stock_news": "items",
                "remote_limit_up_pool": "items", "web_search": "results", "rating_evaluation": "evaluations"}
+MAX_REVIEWED_LIMIT = 100
+
+
+def integer_bounds(spec):
+    """Read one integer branch from a Pydantic schema, including nullable fields."""
+    branches = [spec, *spec.get("anyOf", [])]
+    bounded = [branch for branch in branches
+               if branch.get("type") == "integer" and "minimum" in branch and "maximum" in branch]
+    if len(bounded) != 1:
+        raise ValueError("limit field requires one bounded integer schema branch")
+    return bounded[0]["minimum"], bounded[0]["maximum"]
 
 
 def record_of(item):
@@ -74,10 +85,16 @@ def expand_scenario(item, records, catalog):
                 for key in ("limit", "news_limit"):
                     spec = model.model_json_schema()["properties"].get(key)
                     if spec:
-                        low, high = spec["minimum"], spec["maximum"]
-                        if not 1 <= low <= high <= 100:
+                        low, high = integer_bounds(spec)
+                        reviewed_high = min(high, MAX_REVIEWED_LIMIT)
+                        if not 1 <= low <= reviewed_high or high > 1000:
                             raise ValueError("unreviewed limit range")
-                        options[key] = range(low, high + 1)
+                        # Frozen scenarios deliberately cover only the reviewed window;
+                        # larger valid production limits remain a fixture rejection.
+                        values = list(range(low, reviewed_high + 1))
+                        if any(branch.get("type") == "null" for branch in spec.get("anyOf", [])):
+                            values.insert(0, None)
+                        options[key] = values
             if name == "web_search" and config.get("search_queries"):
                 options["query"] = list(dict.fromkeys([variant["arguments"]["query"], *config["search_queries"]]))
             if name == "finance_news" and config.get("news_queries"):
@@ -90,7 +107,7 @@ def expand_scenario(item, records, catalog):
                     key = LIST_FIELDS[name]
                     rows = payload[key]
                     limit = clone["arguments"]["limit"]
-                    payload[key] = rows[:limit]
+                    payload[key] = rows if limit is None else rows[:limit]
                     if "requested_limit" in payload:
                         payload["requested_limit"] = limit
                     if "returned_count" in payload:

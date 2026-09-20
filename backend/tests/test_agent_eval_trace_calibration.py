@@ -24,9 +24,10 @@ class Provider:
         dimensions = {}
         for key in TraceJudgment.model_fields:
             verdict = sample["expected"].get(key, "pass")
+            evidence_ids = [sample["packet"]["evidence"][0]["evidence_id"]] if sample["packet"]["evidence"] else []
             dimensions[key] = {"verdict": verdict, "rationale": "synthetic label",
                                "issue": "specific issue" if verdict == "fail" else "",
-                               "evidence_ids": ["e1"]}
+                               "evidence_ids": evidence_ids}
         return AIMessage(content="", tool_calls=[{"id": "j", "name": "submit_trace_review",
                                                   "args": dimensions}],
                          usage_metadata={"input_tokens": 100, "output_tokens": 20, "total_tokens": 120})
@@ -98,6 +99,24 @@ def test_invalid_suite_does_not_create_artifacts(tmp_path):
     with pytest.raises(ValueError, match="unknown"):
         calibrate_trace_judge(output, Provider(), suite="unknown")
     assert not output.exists()
+
+
+def test_p0_boundaries_cover_error_empty_and_evidence_free_refusal(tmp_path):
+    samples = calibration_samples("p0_boundaries")
+    assert len(samples) == 6
+    disclosed, hidden, empty, fabricated, omitted, refusal = samples
+    assert disclosed["packet"]["evidence"][0]["result_state"] == "error"
+    assert disclosed["expected"] == {key: "pass" for key in TraceJudgment.model_fields}
+    assert set(hidden["expected"].values()) == {"fail"}
+    assert empty["packet"]["evidence"][0]["result_state"] == "empty"
+    assert fabricated["expected"]["grounding"] == "fail"
+    assert omitted["expected"]["task_completion"] == "fail"
+    assert refusal["packet"]["evidence"] == []
+    report = calibrate_trace_judge(
+        tmp_path / "p0-boundaries", Provider(suite="p0_boundaries"), suite="p0_boundaries",
+    )
+    assert report["all_labels_matched"] and report["model_calls"] == 6
+    assert not report["release_eligible"] and not report["independent_acceptance"]
 
 
 def test_compaction_pairs_share_labels_and_restore_exactly(tmp_path):

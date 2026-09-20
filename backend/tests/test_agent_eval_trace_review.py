@@ -46,6 +46,9 @@ def test_zero_cost_default(bundle):
 def test_judge_contract_forbids_fake_evidence_ids():
     assert "Assertion ID不是Evidence ID" in JUDGE_SYSTEM
     assert "evidence为空时" in JUDGE_SYSTEM
+    assert "遗漏用户要求的结果原则上只影响task_completion" in JUDGE_SYSTEM
+    assert "result_state=empty是成功查询得到的业务空结果" in JUDGE_SYSTEM
+    assert "error、partial或data_missing" in JUDGE_SYSTEM
 
 
 @pytest.mark.parametrize("verdict", ["pass", "fail", "needs_review"])

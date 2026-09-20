@@ -4,6 +4,7 @@ from copy import deepcopy
 import pytest
 
 from app.agent_eval.basic70 import DEFAULT_RECIPE, candidate_assets
+from app.agent_eval.scenario_fixtures import integer_bounds
 from app.agent_eval.frozen_registry import FrozenAgentToolRegistry, FrozenFixtureError
 from app.agents.react_runtime.evidence import EvidenceStore
 from app.agents.react_runtime.tools import ToolGateway
@@ -11,6 +12,12 @@ from test_agent_eval_checks import no_external_calls
 
 
 CATALOG = {c["id"]: c for c in json.loads(DEFAULT_RECIPE.read_text(encoding="utf-8"))["cases"]}
+
+
+def test_nullable_integer_limit_schema_keeps_numeric_bounds():
+    assert integer_bounds({"anyOf": [
+        {"type": "integer", "minimum": 1, "maximum": 1000}, {"type": "null"},
+    ], "default": None}) == (1, 1000)
 
 
 def gateway(case_id):

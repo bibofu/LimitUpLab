@@ -33,7 +33,7 @@ def main() -> int:
     calibration = commands.add_parser("calibrate-trace-judge")
     calibration.add_argument("--output-dir", required=True, type=Path)
     calibration.add_argument("--allow-judge", action="store_true", required=True)
-    calibration.add_argument("--suite", choices=["core", "output_constraints", "compaction_pairs", "golden_admission"], default="core")
+    calibration.add_argument("--suite", choices=["core", "output_constraints", "compaction_pairs", "golden_admission", "p0_boundaries"], default="core")
     trace_review = commands.add_parser("review-trace")
     trace_review.add_argument("--run-dir", required=True, type=Path)
     trace_review.add_argument("--output", required=True, type=Path)

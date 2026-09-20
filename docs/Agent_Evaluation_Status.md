@@ -14,13 +14,14 @@
 当前工程链路已经具备 Frozen Record-Replay、隔离 Offline/Historical Live Worker、确定性合同、
 事实/语义判分、正式报告、稳定性聚合和统一 `run-golden`。Local30 曾在旧运行时形成限定范围的
 30题正式基线；Golden64 已完成代码合同预检和64题调度验证，但旧Local30 Live数据库快照没有保留，
-不能通过当前新增的Live内容回放预检。当前 `react-runtime-v20` 已完成10题真实代表运行，
+不能通过当前新增的Live内容回放预检。`react-runtime-v20` 已完成10题真实代表运行；当前代码已升为
+`react-runtime-v21`并完成失败终态定向复验，但Judge仍未校准，
 尚未完成Golden64全量真实运行，也没有形成同版本三轮稳定性结论。
 
 当前所有正式/统一报告仍为 `release_eligible=false`。尚缺 Current Invariant、External Canary、
 充分人工校准的 Judge/Extractor、可移植的正式数据资产，以及把 P0、判分覆盖率、稳定性、Live、
-预算和失败归因汇总为 Release Manifest 的发布决策层。下一步顺序是：恢复旧Local30匹配快照、
-修复已记录的终态失败并校准Judge、Golden64全量真实运行、同版本 Stability Panel，再扩充 M2/M3 容量；不直接用旧 trace 或旧运行时
+预算和失败归因汇总为 Release Manifest 的发布决策层。下一步顺序是：从仓库外恢复旧Local30匹配快照或人工批准替代版本、
+独立人工确认Judge标签并取得完整校准轮、Golden64全量真实运行、同版本 Stability Panel，再扩充 M2/M3 容量；不直接用旧 trace 或旧运行时
 成绩替代当前基线。
 
 ### P0当前可信基线已建立（2026-09-20）
@@ -30,12 +31,16 @@
 - `OFF-036`在收紧Judge Evidence ID协议后补评三维pass；`LH-B003`在显式80,000字符上限下补评三维pass。两次补评合计29,475 Token，只作补充诊断，不覆盖原始unscorable，也不计作官方8/10通过。
 - dry-run现已零模型重放Live baseline。代表10题预检中9题可继续、`LH-033`在模型调用前明确阻断，产物为 `output/agent-eval/p0-v20-live-preflight-001`。
 - 当前业务库上的完整64题预检为54题可继续、10题旧Local30 Live全部data failure；45个Offline和9个新Snapshot Live兼容。产物为 `output/agent-eval/golden64-v20-live-preflight-001`，0模型调用、CLI退出码2。
+- 工作区104个SQLite/DB候选只读回放后0个匹配旧Local30 baseline；不能用录制输出反向伪造历史Live库。v21完整预检结果仍为54可继续、10阻断，产物为 `output/agent-eval/golden64-v21-live-preflight-001`。
+- `OFF-B025`已在类型化gate修复并登记BC-075；v21真实复验1题pass、24,498 Token，产物为 `output/agent-eval/p0-v21-offb025-recheck-001`，原v20失败不改写。
+- 新增6个P0边界作者标注样本；两次真实Judge校准都只有3/6完成，其余Provider RuntimeError，且第二轮仍有维度误判/弃权。Judge保持`calibrated=false`，不以部分成功推进全量运行。
+- v21最终完整后端回归991 passed、10 skipped、3个第三方弃用warning、2个subtests passed；首次回归暴露的Basic70可空limit schema兼容和终态测试ID问题已修复，最终无失败。
 - 完整证据、解释边界和后续动作见 [P0当前基线](Agent_Evaluation_P0_Baseline.md)。
 
 ### 当前代码合同预检已接入（2026-09-20）
 
 - `run-golden` 的 plan/report 现在绑定运行时、工具契约、Evidence 版本、Agent Prompt 摘要和 Judge Prompt 摘要；Active Case/World 即使自身摘要一致，只要与当前代码合同漂移也会在模型调用前拒绝。
-- 当前实际合同为 `react-runtime-v20`、`agent-tools-v2`、`react-evidence-v4`。此前顶部快照沿用的 v15 已纠正，后续不再凭手工文档判断“最新运行时”。
+- 当前实际合同为 `react-runtime-v21`、`agent-tools-v2`、`react-evidence-v4`。此前顶部快照沿用的 v15 已纠正，后续不再凭手工文档判断“最新运行时”。
 - Golden64 的64题代码合同预检通过，产物为 `output/agent-eval/golden64-v15-contract-preflight-001`；该历史运行没有回放Live数据内容，不能称为完整可运行预检。目录名保留首次执行时的原始命名，不覆盖或重命名。
 - 本轮真实模型调用0。真实代表题运行会向已配置模型服务发送问题、冻结/Live证据和生成答案，必须在明确授权具体外发范围后执行；当前结果只证明资产与代码合同兼容，不证明Agent回答质量。
 - 39项Golden运行、trace review和无损Evidence定向回归通过；首次沙箱运行的5项临时目录权限错误保留为环境失败，不计为代码失败。

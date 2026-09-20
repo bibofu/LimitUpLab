@@ -296,12 +296,19 @@ class Run:
                 record = self.evidence.get(evidence_id)
                 if self.evidence.scope_of(record) != CURRENT_SCOPE:
                     raise ValueError("Final answer may cite current-run evidence only")
+            cited_records = [self.evidence.get(evidence_id) for evidence_id in dict.fromkeys(cited)]
             if (
                 self.requires_current_evidence
                 and final.status in {"complete", "partial", "empty"}
                 and not cited
             ):
                 raise ValueError("Research answers require evidence produced by a tool in this run")
+            if final.status == "empty":
+                states = {record["result_state"] for record in cited_records}
+                if "error" in states or "partial" in states:
+                    raise ValueError("Service error or partial evidence cannot finish as empty; use partial and report the missing deliverable")
+                if "empty" not in states:
+                    raise ValueError("Empty status requires current-run evidence with result_state=empty")
             final.answer = render_answer(final, self.evidence)
             if contains_prompt_leak(final.answer):
                 raise ValueError("Internal content detected; answer research facts only")

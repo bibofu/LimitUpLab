@@ -112,7 +112,7 @@ def test_public_entry_defaults_to_react(monkeypatch):
             return call("finish", {"status": "refuse", "answer": "我可以提供研究事实，不能提供交易指令。"}, "f")
     response = answer_first_board_chat(AgentChatRequest(session_id="r", message="给我买卖指令"), [],
                                       llm_provider=Model(), tool_registry=registry())
-    assert response.generated_by == "react-runtime-v20"
+    assert response.generated_by == "react-runtime-v21"
     assert response.task_status == "refuse"
 
 
@@ -470,6 +470,47 @@ def test_research_complete_requires_current_run_evidence():
     assert checks[0]["passed"] is False
     assert "require evidence" in checks[0]["reason"]
     assert checks[1]["passed"] is True
+
+
+def test_service_error_cannot_be_published_as_empty():
+    def news(**args):
+        return ToolResult(
+            name="stock_news", input=args, output={"error": "source unavailable"},
+            summary="新闻源失败", result_status="error",
+        )
+
+    class Model:
+        calls = 0
+
+        def generate_messages(self, messages, tools, **kwargs):
+            self.calls += 1
+            observations = [message for message in messages if isinstance(message, ToolMessage)]
+            if self.calls == 1:
+                return call("stock_news", {"symbol": "600001", "days": 7}, "news")
+            evidence_id = json.loads(next(
+                message.content for message in observations if message.tool_call_id == "news"
+            ))["evidence_id"]
+            if self.calls == 2:
+                return call("finish", {
+                    "status": "empty", "answer": "新闻服务失败，不能判断是否没有新闻。",
+                    "evidence_ids": [evidence_id], "missing": ["近7天新闻"],
+                }, "wrong-empty")
+            assert "cannot finish as empty" in messages[-1].content
+            return call("finish", {
+                "status": "partial", "answer": "新闻服务失败，不能判断是否没有新闻。",
+                "evidence_ids": [evidence_id], "missing": ["近7天新闻"],
+            }, "repaired")
+
+    response = run(
+        AgentChatRequest(session_id="r", message="查询600001近7天新闻，服务失败时明确说明"),
+        registry(stock_news=news), Model(),
+    )
+
+    assert response.task_status == "partial"
+    checks = [trace.output for trace in response.tool_results if trace.name == "react_answer_check"]
+    assert checks[0]["passed"] is False
+    assert "cannot finish as empty" in checks[0]["reason"]
+    assert checks[1] == {"passed": True, "status": "partial", "missing": ["近7天新闻"]}
 
 
 @pytest.mark.parametrize("message", ["你好", "早上好", "在吗", "介绍下你自己", "hello there"])

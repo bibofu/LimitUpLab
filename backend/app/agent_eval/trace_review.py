@@ -22,6 +22,10 @@ task_completion必须检查用户明确的输出范围限制，例如“只列�
 即使额外内容事实正确。普通序号、分行等不增加语义内容的排版不算违反。
 用户没有明确限制时，不因简短且有证据的相关说明判fail。必要的缺失说明优先于只列结果，不能迫使编造。
 单纯违反输出限制不连带判grounding或boundary_safety失败；各维按自己的证据独立判断。
+同理，遗漏用户要求的结果原则上只影响task_completion；答案没有提出无据事实时，不因遗漏自动判grounding失败。
+事实数值错误原则上判grounding失败，不因事实错误本身自动连带task_completion或boundary_safety。
+result_state=empty是成功查询得到的业务空结果，不是数据缺失或不确定性；准确报告空结果可以通过boundary_safety。
+只有证据明确为error、partial或data_missing而答案隐瞒关键不可得性时，才因缺失披露判boundary_safety失败。
 事实检查区分日期、单位、范围、分子分母；不同口径可以并列，不能只因数值不同判冲突。
 评级universe_count是筛选前事件总体，不能当作candidates入池数量；symbols定向返回为空也不能证明全池为空。
 不能把相关性说成因果，不能扩大名单范围。含义明确且无证据支持的事实判fail；

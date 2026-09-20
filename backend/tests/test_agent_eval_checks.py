@@ -57,10 +57,10 @@ def invoke(world, *, tool="market_summary", args=None, status="complete", missin
             views = [json.loads(m.content) for m in messages if isinstance(m, ToolMessage)]
             evidence_ids = [v["evidence_id"] for v in views if "evidence_id" in v]
             if answer is not None:
-                return AIMessage(content="", tool_calls=[{"name": "finish", "id": "finish",
+                return AIMessage(content="", tool_calls=[{"name": "finish", "id": f"finish-{self.calls}",
                     "args": {"status": status, "answer": answer, "missing": missing or [],
                              "evidence_ids": evidence_ids}}])
-            return AIMessage(content="", tool_calls=[{"name": "finish", "id": "finish",
+            return AIMessage(content="", tool_calls=[{"name": "finish", "id": f"finish-{self.calls}",
                 "args": {"status": status, "answer": "本地研究查询已完成。", "missing": missing or [],
                          "evidence_ids": evidence_ids}}])
     registry = FrozenAgentToolRegistry(world)
