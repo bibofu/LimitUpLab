@@ -25,7 +25,8 @@ def render_answer(final, store):
     record = store.get(final.table.evidence_id)
     if store.scope_of(record) != CURRENT_SCOPE or record["result_state"] not in {"ok", "partial", "empty"}:
         raise ValueError("Table requires usable current-run evidence")
-    if final.status == "complete" and record.get("source_truncated"):
+    if (final.status == "complete" and record.get("source_truncated")
+            and not store.complete_rank_scope(final.table.evidence_id)):
         raise ValueError("Truncated source cannot be delivered as a complete list")
     columns = final.table.columns
     if len({c.field for c in columns}) != len(columns):

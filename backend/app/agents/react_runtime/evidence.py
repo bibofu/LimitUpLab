@@ -70,6 +70,9 @@ class EvidenceStore:
 
     def __init__(self):
         self.records = {}
+        # Runtime-owned proofs, never accepted from a tool payload or restored history.
+        self._ranked_prefixes = {}
+        self._rank_scopes = {}
 
     @staticmethod
     def scope_of(record):
@@ -102,6 +105,30 @@ class EvidenceStore:
             and metadata["matched_count"] > len(rows)
         )
         source_missing = metadata.get("data_missing") or []
+        # This production tool sorts the entire filtered collection before taking
+        # its bounded prefix. Matching length alone is NOT proof of a ranking.
+        sort_by = metadata.get("sort_by")
+        direction = metadata.get("sort_order")
+        if (tool == "limit_up_events" and state == "ok" and truncated and rows
+                and not source_missing and metadata.get("data_fresh") is not False
+                and not metadata.get("source_errors")
+                and not metadata.get("source_truncated") and not metadata.get("truncated")
+                and not metadata.get("group_by") and metadata.get("recent_trade_days") == 1
+                and isinstance(metadata.get("trade_date"), str) and metadata["trade_date"]
+                and sort_by in {"amount", "board_height", "turnover_rate", "break_count"}
+                and direction in {"asc", "desc"}
+                and arguments.get("sort_by") == sort_by and arguments.get("sort_order") == direction
+                and metadata.get("returned_count") == len(rows)
+                and type(metadata.get("matched_count")) is int
+                and metadata["matched_count"] > len(rows)
+                and all(isinstance(r, dict) and type(r.get(sort_by)) in {int, float}
+                        and isfinite(r[sort_by]) and isinstance(r.get("symbol"), str)
+                        and r["symbol"] and r.get("trade_date") == metadata.get("trade_date") for r in rows)
+                and len({r["symbol"] for r in rows}) == len(rows)):
+            ordered = sorted(rows, key=lambda r: r["symbol"])
+            ordered.sort(key=lambda r: r[sort_by], reverse=direction == "desc")
+            if ordered == rows:
+                self._ranked_prefixes[key] = {"sort_by": sort_by, "descending": direction == "desc"}
         if state in {"ok", "empty"} and (source_missing or truncated or metadata.get("data_fresh") is False):
             state = "partial"
         self.records[key] = {
@@ -121,6 +148,14 @@ class EvidenceStore:
             raise ValueError("Unknown evidence_id in this authorized conversation")
         return self.records[key]
 
+    def complete_rank_scope(self, key):
+        """Only a current, explicitly selected ranked slice can waive list truncation."""
+        record = self.get(key)
+        if (self.scope_of(record) != CURRENT_SCOPE or record.get("data_missing")
+                or record["result_state"] not in {"ok", "partial", "empty"}):
+            return None
+        return deepcopy(self._rank_scopes.get(key))
+
     def view(self, key, offset=0, limit=8):
         record = self.get(key)
         rows = record["rows"]
@@ -132,7 +167,7 @@ class EvidenceStore:
                 "returned_candidate_count": "本次返回候选数量；指定symbols时仅代表定向返回，不代表全池",
                 "symbols_filtered": bool(record["arguments"].get("symbols")),
             }}
-        return {
+        view = {
             "evidence_id": key, "tool": record["tool"], "result_state": record["result_state"],
             "arguments": record["arguments"], "metadata": compact(metadata, 4),
             # Do not compact the outer page again: that used to return five rows
@@ -146,6 +181,10 @@ class EvidenceStore:
             "historical_reference": record.get("historical_reference", False),
             "retrieved_at": record.get("retrieved_at"),
         }
+        if self.complete_rank_scope(key):
+            view["complete_rank_scope"] = self.complete_rank_scope(key)
+            view["display_hint"] += " complete_rank_scope仅证明显式排名范围及其后续筛选完整，不代表全市场全集完整。"
+        return view
 
     def compute(self, spec):
         source = self.get(spec.evidence_id)
@@ -156,6 +195,16 @@ class EvidenceStore:
             raise ValueError("This evidence is not a row collection")
         inputs = [spec.evidence_id]
         parents = [source]
+        rank_scope = None
+        if spec.operation == "select" and self.scope_of(source) == CURRENT_SCOPE:
+            rank_scope = self.complete_rank_scope(spec.evidence_id)
+            prefix = self._ranked_prefixes.get(spec.evidence_id)
+            if (rank_scope is None and prefix and not source.get("data_missing")
+                    and not spec.filters and spec.sort_by == prefix["sort_by"]
+                    and spec.descending == prefix["descending"]
+                    and spec.offset + spec.limit <= len(rows)):
+                rank_scope = {"source_evidence_id": spec.evidence_id, **prefix,
+                              "offset": spec.offset, "limit": spec.limit}
         if spec.operation in {"intersection", "difference", "union"}:
             other = self.get(spec.other_id)
             if (other["result_state"] not in {"ok", "empty"} or source["result_state"] == "partial"
@@ -228,4 +277,7 @@ class EvidenceStore:
         historical = any(self.scope_of(parent) != CURRENT_SCOPE for parent in parents)
         self.records[key]["evidence_scope"] = HISTORY_SCOPE if historical else CURRENT_SCOPE
         self.records[key]["historical_reference"] = historical
+        if rank_scope and not historical:
+            self._rank_scopes[key] = rank_scope
+            self.records[key]["complete_rank_scope"] = deepcopy(rank_scope)
         return key
