@@ -2,13 +2,25 @@
 
 ## 当前状态
 
+### Dev10同版本真实运行完成（2026-09-22）
+
+- `output/agent-eval/dev10-v21-run-20260922-001`：同一v21/deepseek-v4-flash，10题各1次；
+  4 complete、3 partial、1 empty、1 clarify、1 refuse，终态全部符合合同。
+- 44次模型调用、274,446 Token且逐调用用量完整，Judge 0调用；无服务/夹具异常、无超时或预算耗尽。
+  全部自动结果仍为needs_review，不能写成10/10质量通过；四道修订题仍是candidate。
+- 本轮独立核对OFF-038的40行全集→20行计算→完整渲染结果一致；旧判分器仅检查预览可见性，
+  仍保留待复核，不扩建判分器。B026的“尚未入库”成因断言记BC-076待人工确认，未改Prompt。
+- 完整定向回归136 passed；原Golden64的64组Case/World摘要及四题原始recordings全部未变。
+- 人工复核材料为运行目录的 `HUMAN_REVIEW.md`，标签留空；下一步人工确认本批合同/答案，
+  技术工作转向最小两轮worker。详见[Dev10审阅清单](Agent_Evaluation_Dev10_Review.md)。
+
 ### Dev10四题合同已修订（2026-09-22）
 
 - B002/026/028升为v2，B030升为v4；补交付事实和正反例，保留原题意、原始payload及其余26题。
 - 复用既有grading字段与构建器，生成隔离候选包 `output/agent-eval/dev10-contracts-20260922-001`：
   4个修订candidate＋6个原Active引用；原Golden64不变，未新增人工批准或发布通过。
 - 70项定向测试通过、1项临时目录测试未选；实际四题构建与回放完成。未改Agent/Prompt。
-- 下一步首批10题按180秒/题、最多16次模型调用/题、各1次运行，不启用Judge；先确认首题服务可用。
+- 首批10题按180秒/题、最多16次模型调用/题、各1次运行，不启用Judge；现已完成，结果见上方。
   合同细节与外发边界见[Dev10审阅清单](Agent_Evaluation_Dev10_Review.md)。
 
 ### 首批Dev10技术审阅（2026-09-22）
