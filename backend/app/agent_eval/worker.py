@@ -92,14 +92,15 @@ def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240
             from app.agent_eval.snapshot_live import SnapshotLiveRegistry
             registry = SnapshotLiveRegistry(live_database, world, directory / "live.sqlite")
         else:
-            registry = HistoricalLiveRegistry(live_database, world)
+            registry = HistoricalLiveRegistry(live_database, world,
+                allow_limit_down="public_limit_down" in case.capabilities)
         save(directory, "live-baseline-check.json", {"passed":True,
             "checked_recordings":registry.baseline_checks,"baseline_digest":world_digest(world),
             "tool_execution":"production methods over isolated local data",
             "ignored_drift_fields": ["post_limit_screen.generated_at", "post_limit_path.generated_at",
                                      "post_limit_statistics.generated_at"] if "local_snapshot_live" in case.capabilities else [],
-            "scope": sorted(registry.enabled_tool_names) if "local_snapshot_live" in case.capabilities
-                     else ["market_summary", "limit_up_events", "market_event_pool"]})
+            "scope": sorted(registry.enabled_tool_names),
+            "public_limit_down_enabled": getattr(registry, "allow_limit_down", False)})
     else:
         registry = FrozenAgentToolRegistry(world)
     budget = BudgetSpec(max_agent_runs=1, max_model_calls=16, max_input_tokens=2000000,
