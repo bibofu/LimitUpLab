@@ -3,7 +3,26 @@
 2026-09-22。承接[真实场景题单](Agent_Evaluation_Real_Questions.md)，本轮只落实真实事件类问题，
 不新增 Eval Schema、平行Runner、Judge 或评分器。各阶段变更与验证边界按下文留档。
 
-## 最新进展：Q01原答获人审通过，转入最小两轮（2026-09-22）
+## 最新进展：M02人审已收回，M04完成失败定位与修复验证（2026-09-22）
+
+- M02原复核文件由bibo填写：题意认可，task_completion/grounding/boundary_safety均pass，意见“无”。
+  绑定原件、两轮响应、Case与基线哈希至`output/agent-eval/m04-two-turn-20260922-001/m02-user-review-binding.json`。
+  不重写原技术报告的历史待审状态，不推广到其他题；累计2份真实答案/会话获人审，正式Active迁移尚未执行。
+- 原M04草案以真实两日事件准备，独立SQL与生产工具核对主板收盘首板分别72/61只，62条既有基线通过。
+  v23一次诊断7次调用、23,058 Token，首轮72只完整交付；次轮丢条件、不查询而澄清，自动fail/agent_failure。
+- 根因不是worker没存历史：原答和metadata已完整传入。生产关键词路由误判standalone，且原上下文只保留实体，
+  无法承接筛选条件。BC-087留存原始失败，不改合同放行clarify、不预填assistant。
+- v24最小通用修复：既有安全/类型审查一并输出语义context_mode，移除关键词路由；仅follow_up引用最近同会话成功
+  业务工具输入作为条件参考，不注入旧任务/旧正文/结果/evidence_id；本轮显式条件优先，仍须本轮取证。
+- 修复后同题同基线同快照仅1次，8次调用、36,558 Token、0 Judge，两轮complete/answered，自动needs_review。
+  次轮实际以09-18、main_board、board_height=1、closed查询并交付61只；首轮72只及两轮1,114个显示单元格
+  与只读SQLite核对一致，时间HH:mm与HH:mm:ss按同一时刻比较。原件43/45份及源快照哈希未变。
+- 扩展回归696 passed、10 skipped、3项第三方弃用警告；修复及隔离保护见BC-088。无新框架或模型步骤，
+  当前日期识别仍沿用原路径，不声称解决所有日期问法、M01/M03或M05跨时点刷新。
+- 新复核材料：`output/agent-eval/m04-two-turn-v24-20260922-001/HUMAN_REVIEW.md`。题意及三维标签留空，
+  额外列、原始长小数与源字段简称保留给人审，不预先修饰答案；无新增Active或稳定性结论。
+
+## 前一阶段：Q01原答获人审通过，转入最小两轮（2026-09-22）
 
 - 已读取用户填写的Q01 v23 `HUMAN_REVIEW.md`：bibo/2026 09 22，三维均pass，意见“无”。
   绑定文件`output/agent-eval/m02-two-turn-20260922-001/q01-user-review-binding.json`保留原件及答案/Case/基线哈希。
