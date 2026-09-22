@@ -1829,6 +1829,7 @@ class AgentToolRegistry:
                     item["symbol"],
                 ),
             )
+            matched_count = len(items)
         else:
             status = "closed" if effective_type == "limit_up" else "failed"
             legacy_result = self.limit_up_events(
@@ -1853,8 +1854,10 @@ class AgentToolRegistry:
                 }
                 for event in legacy_result.output
             ]
+            # The event list is bounded, but its metadata counts the full
+            # filtered set. Preserve that count for both count and list modes.
+            matched_count = legacy_result.trace_output["matched_count"]
 
-        matched_count = len(items)
         visible_items = [] if result_mode == "count" else items[:effective_limit]
         labels = {
             "limit_up": "涨停",
