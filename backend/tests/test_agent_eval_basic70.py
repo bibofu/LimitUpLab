@@ -95,6 +95,98 @@ def test_expected_values_are_not_silently_regenerated():
         check_values({"count": True}, [{"path": ["count"], "equals": 1}])
 
 
+@pytest.mark.parametrize("case_id,version", [
+    ("OFF-B002", 2), ("OFF-B026", 2), ("OFF-B028", 2), ("OFF-B030", 4),
+])
+def test_dev10_revision_keeps_rubric_and_examples_in_candidate(case_id, version):
+    item = next(item for item in CASES if item["id"] == case_id)
+    case, world, report = preflight_candidate(item)
+    expected = case.assertions[0].expected
+    assert case.case_version == world.world_version == version
+    assert case.status == "candidate" and not report["answer_quality_verified"]
+    assert expected["grading"] == item["grading"]
+    assert expected["reference_answer"] == item["reference_answer"]
+    assert expected["negative_answer"] == item["negative_answer"]
+    assert "任务遗漏例" in expected["negative_answer"]
+    assert "task_completion" in expected["grading"]
+    assert "grounding" in expected["grading"]
+
+
+def test_dev10_kline_checks_cover_each_requested_close_and_actual_latest_price():
+    items = {item["id"]: item for item in CASES}
+    full = {tuple(c["path"]): c["equals"] for c in items["OFF-B002"]["checks"]}
+    assert [full[("bars", i, "trade_date")] for i in range(5)] == [
+        "2026-09-07", "2026-09-08", "2026-09-09", "2026-09-10", "2026-09-11",
+    ]
+    assert [full[("bars", i, "close")] for i in range(5)] == [10, 10.25, 10.5, 10.75, 11]
+    assert full[("return_5d_pct",)] is None
+    stale = {tuple(c["path"]): c["equals"] for c in items["OFF-B026"]["checks"]}
+    assert stale[("latest_close",)] == 10.75
+    assert stale[("data_as_of",)] == "2026-09-10"
+    assert stale[("data_fresh",)] is False
+
+
+def test_dev10_output_fields_are_distinct_from_background_score():
+    item = next(item for item in CASES if item["id"] == "OFF-B028")
+    assert item["checks"] == [
+        {"path": ["items", 0, "symbol"], "equals": "600001"},
+        {"path": ["items", 0, "name"], "equals": "样例甲"},
+    ]
+    assert item["payload"]["items"][0]["score"] == 70
+    assert item["reference_answer"] == "600001 样例甲"
+
+
+@pytest.mark.parametrize("case_id,path,bad_value", [
+    ("OFF-B002", ["bars", 2, "close"], 10.60),
+    ("OFF-B002", ["bars", 2, "trade_date"], "2026-09-12"),
+    ("OFF-B026", ["latest_close"], 10.80),
+    ("OFF-B028", ["items", 0, "name"], "样例乙"),
+    ("OFF-B030", ["top_candidates", 0, "confidence"], 0.7),
+])
+def test_dev10_new_checks_reject_wrong_fixture_values(case_id, path, bad_value):
+    item = deepcopy(next(item for item in CASES if item["id"] == case_id))
+    target = item["payload"]
+    for key in path[:-1]:
+        target = target[key]
+    target[path[-1]] = bad_value
+    with pytest.raises(ValueError, match="contradicts"):
+        preflight_candidate(item)
+
+
+def test_dev10_comparison_alternative_route_supplies_same_facts_without_ratings():
+    from app.agent_eval.frozen_registry import FrozenAgentToolRegistry
+    from app.agents.react_runtime.evidence import EvidenceStore
+    from app.agents.react_runtime.tools import ToolGateway
+
+    item = next(item for item in CASES if item["id"] == "OFF-B030")
+    case, world, _ = preflight_candidate(item)
+    registry = FrozenAgentToolRegistry(world)
+    gateway = ToolGateway(registry, EvidenceStore())
+    with registry.anchored():
+        _, filtered, state = gateway.execute("first_board_filter", gateway.validate({
+            "name": "first_board_filter", "args": {"query": "样例甲", "trade_date": "2026-09-11"}}))
+        assert state == "ok"
+        entity = filtered["items"][0]
+        assert (entity["symbol"], entity["score"], entity["confidence"]) == ("600001", 70, 0.6)
+        _, critic, state = gateway.execute("first_board_critic", gateway.validate({
+            "name": "first_board_critic", "args": {"symbol": entity["symbol"], "trade_date": "2026-09-11"}}))
+    assert state == "ok"
+    assert critic["symbol"] == entity["symbol"]
+    assert critic["trade_date"] == filtered["trade_date"]
+    assert (critic["original_confidence"], critic["suggested_confidence"]) == (0.6, 0.4)
+    assert "也允许first_board_filter＋first_board_critic" in case.assertions[0].expected["grading"]
+    # This checks fixture/rubric support, not an LLM judge's acceptance of that route.
+
+
+def test_unrevised_candidates_keep_default_grading():
+    from app.agent_eval.basic70 import candidate_assets
+    for item in CASES:
+        if "grading" not in item:
+            case, _, _ = candidate_assets(item)
+            assert case.assertions[0].expected["grading"] == (
+                "Meaning and evidence support, not literal answer matching.")
+
+
 def test_production_list_capture_roundtrips_without_object_coercion():
     from datetime import datetime
     from app.agent_eval.local_promotion import LocalPromotionRegistry

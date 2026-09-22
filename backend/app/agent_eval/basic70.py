@@ -65,7 +65,7 @@ def candidate_assets(item, catalog=None):
                         "expected": {"required_facts": [{"tool": r["tool"], "checks": r["checks"]} for r in recordings],
                                      "reference_answer": item["reference_answer"],
                                      "negative_answer": item["negative_answer"],
-                                     "grading": "Meaning and evidence support, not literal answer matching."}}],
+                                     "grading": item.get("grading", "Meaning and evidence support, not literal answer matching.")}}],
         "expected_terminal": {"allowed_status": item.get("allowed_terminals", [item["terminal"]]),
                               "missing_requirement_ids": ["delivery"] if item["terminal"] == "partial" else []}})
     return case, world, recordings
