@@ -112,7 +112,7 @@ def test_public_entry_defaults_to_react(monkeypatch):
             return call("finish", {"status": "refuse", "answer": "我可以提供研究事实，不能提供交易指令。"}, "f")
     response = answer_first_board_chat(AgentChatRequest(session_id="r", message="给我买卖指令"), [],
                                       llm_provider=Model(), tool_registry=registry())
-    assert response.generated_by == "react-runtime-v22"
+    assert response.generated_by == "react-runtime-v23"
     assert response.task_status == "refuse"
 
 
@@ -159,6 +159,48 @@ def test_count_only_result_is_complete_without_display_rows():
     )
 
     assert store.view(count_id)["result_state"] == "ok"
+
+
+@pytest.mark.parametrize("requires_list", [False, True])
+def test_repair_checks_scope_and_table_without_waiving_user_deliverables(requires_list):
+    """Synthetic protocol test; not a real evaluation case or proof of LLM quality."""
+    class Model:
+        calls = 0
+        def generate_messages(self, messages, tools, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                assert "可选补充不能升级为必交付任务" in messages[0].content
+                definition = next(t for t in tools if t["function"]["name"] == "finish")
+                description = definition["function"]["parameters"]["properties"]["table"]["description"]
+                assert "At most ONE" in description and "RETURNED" in description
+                return call("market_event_pool", {"event_type": "limit_up"}, "pool")
+            observation = next(json.loads(m.content) for m in messages
+                               if isinstance(m, ToolMessage) and m.tool_call_id == "pool")
+            key = observation["evidence_id"]
+            table = {"evidence_id": key, "columns": [{"field": "symbol", "label": "代码"}]}
+            if self.calls == 2:
+                return call("finish", {"status": "complete", "answer": "{{evidence_table}}\n{{evidence_table}}",
+                    "table": table, "evidence_ids": [key]}, "bad")
+            feedback = messages[-1].content
+            assert "Use exactly one" in feedback and "不要只修改第一处报错" in feedback
+            assert "截断全集不能声明complete" in feedback and "不能删除用户明确要求" in feedback
+            if requires_list:
+                return call("finish", {"status": "partial", "answer": "只返回2行，尚缺1行，不能称为完整名单。\n{{evidence_table}}",
+                    "table": table, "evidence_ids": [key], "missing": ["完整名单尚缺1行"]}, "fixed")
+            return call("finish", {"status": "complete", "answer": "命中3条，依据截断前的matched_count。",
+                "evidence_ids": [key], "missing": []}, "fixed")
+    def pool(**kwargs):
+        return ToolResult(name="market_event_pool", input=kwargs, summary="synthetic protocol fixture",
+            output={"matched_count": 3, "returned_count": 2,
+                    "items": [{"symbol": "protocol-1"}, {"symbol": "protocol-2"}]})
+    model = Model()
+    response = run(AgentChatRequest(session_id="r", message="列出完整名单" if requires_list else "只问命中数量"),
+                   registry(market_event_pool=pool), model)
+    assert model.calls == 3 and response.stop_reason == "answered"
+    assert response.task_status == ("partial" if requires_list else "complete")
+    assert ("| protocol-1 |" in response.answer) == requires_list
+    checks = [t.output for t in response.tool_results if t.name == "react_answer_check"]
+    assert [c["passed"] for c in checks] == [False, True]
 
 
 def test_long_answer_is_published_without_style_repair():
