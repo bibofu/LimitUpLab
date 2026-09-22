@@ -2,6 +2,20 @@
 
 ## 当前状态
 
+### 近期执行优先级（2026-09-22）
+
+停止继续扩建Eval framework。接下来按以下顺序推进：
+
+1. 将真正完成逐题人工复核的Active扩到30～40题，优先覆盖事实、动态两步、条件分支、错误恢复、多工具比较、Evidence compute、歧义、拒答和输出约束；
+2. 在现有worker上补最小两轮真实Agent执行，覆盖previous entity/result set、pronoun、日期修改和旧证据刷新；
+3. 冻结Active Dev 30题与Private Holdout 10～15题，避免所有题被反复用于调Prompt；
+4. 对关键Case执行3 trials并报告pass@1、3/3、2/3、0/3；
+5. 用20～30个先经人工标注的真实Answer校准Judge，再决定是否进入release gate。
+
+当前Golden64仅表示合同准入库存，不等于64题都完成当前版本人工答案复核。后续同时报告
+`contract-admitted`和`reviewed Active`，不再用前者代替后者。详细批次与停止项见
+[近期执行优先级](Agent_Evaluation_Execution_Priority.md)。
+
 ### 当前快照（截至 2026-09-20）
 
 | 层级 | 当前规模 | 含义 |
@@ -18,11 +32,9 @@
 `react-runtime-v21`并完成失败终态定向复验，但Judge仍未校准，
 尚未完成Golden64全量真实运行，也没有形成同版本三轮稳定性结论。
 
-当前所有正式/统一报告仍为 `release_eligible=false`。尚缺 Current Invariant、External Canary、
-充分人工校准的 Judge/Extractor、可移植的正式数据资产，以及把 P0、判分覆盖率、稳定性、Live、
-预算和失败归因汇总为 Release Manifest 的发布决策层。下一步顺序是：从仓库外恢复旧Local30匹配快照或人工批准替代版本、
-独立人工确认Judge标签并取得完整校准轮、Golden64全量真实运行、同版本 Stability Panel，再扩充 M2/M3 容量；不直接用旧 trace 或旧运行时
-成绩替代当前基线。
+当前所有正式/统一报告仍为 `release_eligible=false`。旧Local30快照、Current Invariant、External Canary和
+Release Manifest继续保留为缺口，但不再优先于 reviewed Active、Multi-turn、Dev/Holdout、关键题稳定性和
+20～30个真实Answer的人工Judge校准；不直接用旧trace、旧运行时或合同准入数量替代当前质量基线。
 
 ### P0当前可信基线已建立（2026-09-20）
 

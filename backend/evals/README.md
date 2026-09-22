@@ -6,10 +6,15 @@ Record-Replay、隔离 Offline/Historical Live Worker、批量数据集构建与
 
 当前本地资产包括 Basic70（50 Offline + 20 Historical Live）；其中 64 道已通过业务合同审批并进入
 Active Golden（45 Offline + 19 Historical Live），另 6 道暂缓。Active 表示题目与判分合同可用，
-不表示 Agent 已经答对。Golden64 已与当前 `react-runtime-v20` / `agent-tools-v2` /
-`react-evidence-v4` 完成全套零模型兼容预检，尚未在该运行时
-上完成全量真实运行；Current Invariant、External Canary、同版本三轮稳定性和 Release Manifest
+不表示 Agent 已经答对。Golden64 已与当前 `react-runtime-v21` / `agent-tools-v2` /
+`react-evidence-v4` 完成静态合同预检；Live内容回放为54题可继续、10题旧Local30数据阻断，尚未在该运行时
+完成全量真实运行；Current Invariant、External Canary、同版本三轮稳定性和 Release Manifest
 仍待完成，所有统一报告继续保持 `release_eligible=false`。
+
+2026-09-22起暂停扩建评测框架。Golden64在新口径下属于`contract-admitted`库存；近期目标是从中选择并补充
+真正逐题复核的30～40个`reviewed Active`，同时在现有worker上补最小两轮真实Agent执行。随后冻结
+Active Dev 30题与Private Holdout 10～15题，再做关键题三轮稳定性和20～30个真实Answer的人工Judge校准。
+具体顺序见 [近期执行优先级](../../docs/Agent_Evaluation_Execution_Priority.md)。
 
 可执行模型位于 `app/agent_eval/models.py`，加载与引用校验位于 `loader.py`。
 资产采用 UTF-8 JSON，可通过每个 Pydantic 模型的 `model_json_schema()` 导出规范。

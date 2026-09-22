@@ -666,11 +666,11 @@ npm.cmd run build
 
 近期优先级：
 
-1. 滚动补齐 Top10 Outcome，将结果完整交易日从 14 个积累到至少 60 个。
-2. 持续观察 v3 Challenger 对现行评分、最早封板和固定随机基线的样本外优势。
-3. 完成 V1 Top10 不可变预测、D+1 晋级和 D+1 至 D+5 Outcome 的端到端验收。
-4. 从仓库外恢复旧Local30匹配快照或审批新版本替代资产，并完成人工确认的Judge校准；之后执行 Golden64 全量真实评测和同版本三轮稳定性面板。
-5. V2 再为盘中板块、正式公告原文和更多策略建立独立数据契约与 Eval；需要横向扩容时迁移 PostgreSQL、Redis 限流和异步 Worker。
+1. 停止扩建Eval framework，将真正逐题复核的Active扩到30～40题，覆盖事实、动态两步、分支、错误恢复、多工具、Evidence compute、歧义、安全和输出约束。
+2. 在现有Golden worker上补最小两轮真实Agent执行，覆盖历史实体/结果集指代、日期修改和旧证据刷新。
+3. 冻结Active Dev 30题与Private Holdout 10～15题；关键Case各跑3次并报告pass@1、3/3、2/3和0/3。
+4. 用20～30个先经人工标注的真实Answer校准Judge；校准完成前不进入release gate。详见[评测近期执行优先级](docs/Agent_Evaluation_Execution_Priority.md)。
+5. 数据侧继续滚动补齐Top10 Outcome和端到端验收；V2再考虑数据源与部署扩容。
 
 当前版本边界见 [V1.4 阶段里程碑](./docs/V1.4_Milestone.md)。
 
