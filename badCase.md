@@ -1036,3 +1036,16 @@ empty、partial 或 error 时 Replan 新闻；股票名称提取同步覆盖 K�
   不写成已确认失败或已修复。日期、价格和partial终态本身符合合同。
 - 后续：人工确认措辞边界后再决定是否做通用修复；可接受表达是“当前结果未覆盖09-11，原因未提供”。
   本轮不改Agent/Prompt、不加问题正则或字符串覆盖，也不重跑该题挑选更好答案。
+
+## BC-077：市场事件池先截断再计数，103只涨停被返回为100（2026-09-22，已复现待修复）
+
+- 发现方式：真实Dev6准备时，在同一只读本地事件集合上直接调用生产工具；没有运行LLM，也没有人工Answer失败标签。
+- 真实依据：2026-09-21原始128条触板事件中103只收盘封板；独立SQL与market_summary均为103。
+  limit_up_events(event_status=closed, limit=100)明确返回matched_count=103、returned_count=100。
+  market_event_pool(event_type=limit_up, result_mode=count, limit=100)却返回matched_count=100。
+- 根因：market_event_pool内部先调用limit_up_events(limit=100)，再用截断后的items长度作为matched_count。
+  小集合未暴露此问题；list模式也丢失真实全集命中数，count模式不应继承列表上限。
+- 状态：原始错误录制和正确来源均保留于`output/agent-eval/real-dev6-preparation-20260922-001/bundle/`。
+  Q01暂停进入质量基线但不删题；后续任何题依赖该错误计数均须分离工具/数据归因，不能自动记为Agent失败。
+- 后续：修复生产工具完整计数与截断语义，回归超过100条、小集合、count/list等模式；重录新World并保留旧问题记录。
+  本轮仅记录，不改工具、不放宽真值、不使用Prompt或问题字符串特例。
