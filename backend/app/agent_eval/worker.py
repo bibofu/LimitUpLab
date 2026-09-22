@@ -2,6 +2,7 @@
 
 import argparse
 from dataclasses import asdict
+from datetime import datetime, timezone
 import json
 import os
 from pathlib import Path
@@ -31,7 +32,8 @@ from app.agents.react_runtime.contracts import VERSION
 from app.agents.react_runtime.evidence import EVIDENCE_VERSION
 from app.agents.tools import TOOL_CONTRACT_VERSION
 from app.config import configure_runtime_environment
-from app.models import AgentChatRequest
+from app.models import AgentChatRequest, ChatSessionMessage
+from app.services.session_memory import prepare_session_context
 from app.services.llm_provider import LLMProvider, capture_llm_usage, get_llm_provider, require_react_provider
 
 
@@ -76,13 +78,32 @@ class GuardedProvider(LLMProvider):
             raise
 
 
+class SessionMemory:
+    """Ephemeral persistence for the production context service; no user DB access."""
+    def __init__(self):
+        self.value = None
+
+    def get_memory(self, session_id, *, owner_id):
+        return self.value
+
+    def save_memory(self, value):
+        self.value = value
+        return value
+
+
 def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240, live_database=None, allow_judge=False):
     started = perf_counter()
     cases, worlds = load_suite([case_path], [world_path])
     case, world = cases[0], worlds[0]
     expected_mode = "live_historical" if live_database else "offline"
-    if case.mode != expected_mode or len(case.conversation) != 1:
-        raise ValueError("worker requires a single-turn case matching offline/live execution mode")
+    turns = len(case.conversation)
+    if (case.mode != expected_mode or turns not in {1, 2}
+            or any(turn.role != "user" for turn in case.conversation)):
+        raise ValueError("worker requires one or two real user turns matching offline/live mode; no preset assistant history")
+    if turns == 2 and any(r.source_turn != 1 for r in case.expected_requirements):
+        raise ValueError("two-turn diagnostic contracts must evaluate the final user turn; first response is retained for review")
+    if turns == 2 and allow_judge:
+        raise ValueError("two-turn Judge is not enabled; review actual per-turn context manually")
     if case.status not in {"candidate", "active"}:
         raise ValueError("case status is not runnable")
     require_react_provider(provider)
@@ -103,11 +124,11 @@ def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240
             "public_limit_down_enabled": getattr(registry, "allow_limit_down", False)})
     else:
         registry = FrozenAgentToolRegistry(world)
-    budget = BudgetSpec(max_agent_runs=1, max_model_calls=16, max_input_tokens=2000000,
+    budget = BudgetSpec(max_agent_runs=turns, max_model_calls=16 * turns, max_input_tokens=2000000,
                         max_output_tokens=100000, max_estimated_cost_usd=None,
                         max_wall_time_seconds=wall_seconds)
     request = AgentChatRequest(session_id=str(uuid4()), message_id=str(uuid4()),
-                               message=case.conversation[0].content)
+                               message=case.conversation[-1].content)
     event_case = any(a.target in {"answer.ordered_events", "answer.business_contract"}
                      for a in case.assertions if a.evaluator == "fact")
     extractor = extract_event_answer if event_case else extract_answer
@@ -137,11 +158,68 @@ def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240
     guarded = GuardedProvider(provider, directory, started + wall_seconds, budget)
     extraction_error = None
     review = None
+    turn_reports = []
+    prior_failure = None
     with capture_llm_usage() as usage:
-        with registry.anchored():
-            response = runtime.run(request, registry, guarded)
+        history, memory_repository = [], SessionMemory()
+        for index, turn in enumerate(case.conversation, 1):
+            turn_request = request if index == turns else AgentChatRequest(
+                session_id=request.session_id, message_id=str(uuid4()), message=turn.content)
+            if turns == 2:
+                turn_dir = directory / f"turn-{index:02d}"
+                turn_dir.mkdir()
+                context, memory = prepare_session_context(session_id=request.session_id,
+                    owner_id="evaluation-isolated", messages=history, repository=memory_repository,
+                    llm_provider=guarded)
+                save(turn_dir, "request.json", turn_request.model_dump(mode="json"))
+                save(turn_dir, "context-before.json", {"messages": [m.model_dump(mode="json") for m in context],
+                    "memory": memory.model_dump(mode="json") if memory else None})
+            else:
+                context, memory = [], None
+            start_calls, start_input, start_output = guarded.calls, guarded.input_tokens, guarded.output_tokens
+            with registry.anchored():
+                response = (runtime.run(turn_request, registry, guarded, history=context, memory=memory)
+                            if turns == 2 else runtime.run(turn_request, registry, guarded))
+            if turns == 2:
+                save(turn_dir, "response.json", response.model_dump(mode="json"))
+                # Match production message persistence: real answer + full response metadata.
+                now = datetime.now(timezone.utc)
+                history.extend([
+                    ChatSessionMessage(message_id=turn_request.message_id, session_id=request.session_id,
+                        role="user", content=turn.content, created_at=now),
+                    ChatSessionMessage(message_id=str(uuid4()), session_id=request.session_id, role="assistant",
+                        content=response.answer, status="error" if response.task_status == "error" else "success",
+                        metadata=response.model_dump(mode="json"), created_at=now),
+                ])
+                save(turn_dir, "session-after.json", {"session_id": request.session_id,
+                    "messages": [m.model_dump(mode="json") for m in history],
+                    "memory": memory_repository.value.model_dump(mode="json") if memory_repository.value else None})
+                report = {"turn": index, "task_status": response.task_status, "stop_reason": response.stop_reason,
+                    "model_calls": guarded.calls - start_calls, "first_call": start_calls + 1,
+                    "last_call": guarded.calls, "input_tokens": guarded.input_tokens - start_input,
+                    "output_tokens": guarded.output_tokens - start_output, "token_usage_complete": guarded.token_usage_complete}
+                save(turn_dir, "summary.json", report)
+                turn_reports.append(report)
+                save(directory, f"conversation-progress-{index:02d}.json", {"turns": turn_reports,
+                    "scoring_scope": "final turn only; earlier answers require separate human review"})
+                if response.stop_reason in {"provider_error", "input_policy_error", "budget_exhausted"} or response.task_status in {"error", "cancelled"}:
+                    prior_failure = "provider_failure" if response.stop_reason in {"provider_error", "input_policy_error"} else "evaluator_failure"
+                    break
         save(directory, "response.json", response.model_dump(mode="json"))
         save(directory, "frozen-attempts.json", registry.attempts)
+        if turns == 2 and len(turn_reports) < turns:
+            # Do not grade a failed first answer against the unexecuted second question.
+            ledger = asdict(usage)
+            ledger.update(token_usage_complete=usage.token_usage_complete, guarded_calls=guarded.calls)
+            save(directory, "usage.json", ledger)
+            summary = {"verdict": "unscorable", "primary_cause": prior_failure,
+                "release_eligible": False, "model": manifest.model, "model_calls": guarded.calls,
+                "total_tokens": usage.total_tokens if usage.token_usage_complete else None,
+                "turns": turn_reports, "completed_turns": len(turn_reports), "evaluated_turn": None,
+                "agent_task_status": response.task_status, "budget_exhausted": guarded.budget_exhausted,
+                "scoring_scope": "not evaluated: conversation stopped before final turn"}
+            save(directory, "summary.json", summary)
+            return summary
         trajectory = evaluate_trajectory_terminal(case, response, profile=world.profile)
         save(directory, "trajectory.json", trajectory.model_dump(mode="json"))
         process = evaluate_process(case, response)
@@ -180,7 +258,9 @@ def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240
     trajectory_verdict = "fail" if any(f.verdict == "fail" for f in trajectory_findings) else (
         "needs_review" if any(f.verdict == "needs_review" for f in trajectory_findings) else "pass")
     cause = None
-    if guarded.budget_exhausted:
+    if prior_failure:
+        verdict, cause = "unscorable", prior_failure
+    elif guarded.budget_exhausted:
         verdict, cause = "unscorable", "evaluator_failure"
     elif any(attempt["outcome"] == "rejected" for attempt in registry.attempts):
         verdict, cause = "unscorable", "fixture_failure"
@@ -209,6 +289,9 @@ def execute_case(case_path, world_path, directory, provider, *, wall_seconds=240
                "budget_exhausted": guarded.budget_exhausted,
                "trace_review": None if review is None else {"verdict": review["verdict"], "judge": review["judge"]},
                "agent_task_status": response.task_status, "elapsed_seconds": round(result.elapsed_seconds, 2)}
+    if turns == 2:
+        summary.update(turns=turn_reports, completed_turns=len(turn_reports),
+                       scoring_scope="final turn only; no inferred whole-conversation quality approval")
     save(directory, "summary.json", summary)
     return summary
 
