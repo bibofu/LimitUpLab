@@ -3,7 +3,43 @@
 2026-09-22。承接[真实场景题单](Agent_Evaluation_Real_Questions.md)，本轮只落实真实事件类问题，
 不新增 Eval Schema、Runner、Judge 或评分器，不修改 Agent/Prompt。
 
-## 最新进展：6题获认可、计数修复与v2重录完成
+## 最新进展：授权后的首轮真实运行完成
+
+用户已明确授权向`api.deepseek.com`的`deepseek-v4-flash`发送本批题目、系统提示与冻结市场证据。
+重新核对配置后，6题各运行1次，使用既有隔离worker，并发2、每题180秒/16次模型调用上限，不启用Judge、不自动重跑。
+运行目录：`output/agent-eval/real-dev6-v2-run-20260922-001/`。
+
+- 同一react-runtime-v21、Case/World v2，共33次模型调用、294,613 Token；逐调用用量与各题账本逐项相等。
+- 4 complete、2 partial；自动结果为4 needs_review、1 fail、1 unscorable，没有新增Active或完整质量通过声明。
+- 未出现Provider失败、超时或调用预算耗尽。Judge为0调用；离线诊断包的字符预算提示不属于本次Judge运行失败。
+- Case/World与审批绑定摘要一致；核对和材料整理前后，所有原始运行文件摘要保持不变。
+
+| 题目 | 实际结果 | 技术核对与下一项 |
+| --- | --- | --- |
+| Q01 | partial / unscorable，fixture_failure | 7次未录制参数调用、4种签名；先补真实录制/来源条件，不能把结果当Agent质量失败 |
+| Q02 | complete / needs_review | 完整首板82行→金额Top10→代码名称表格，10只成员、顺序和仅两列输出一致；待答案人审 |
+| Q03 | complete / needs_review | 完整25只及附加表格字段一致，但“两个独立来源”不成立，两个工具共用本地事件库；记BC-080待答案人审 |
+| Q04 | complete / needs_review | 两日66只/13只真实池取交集，13只最终名单及附加09-18字段一致；13/66约19.7%正确；待答案人审 |
+| Q08 | partial / fail，agent_failure | 两条路线均已算出正确13只，但发布校验两次拦截，最终只交付降级文案；根因定位为运行时截断语义，记BC-079，不能归咎LLM算错 |
+| Q10 | complete / needs_review | 未封板、代码、日期、14:18与开板1次均有当前证据支持；待答案人审 |
+
+Q01缺录制签名：`market_summary(include_limit_down=true)`、09-21按industry分组的limit_up_events(limit=100)、
+`daily_board_promotion(days=1,end_date=09-21)`、未显式limit（默认30）的broken_board/count事件池。
+这些是FrozenFixtureError，不是已观测到真实外部服务故障。已有include_limit_down=false不能冒充true的录制；
+需要远端跌停的路线须另核数据访问范围和真实来源。其余可先只读实录，再生成新World，不能合成错误输出兜底。
+
+Q08的直接工具Top20与独立全市场排序完全一致，两份13行计算结果也匹配已认可合同，
+但`source_truncated`从全市场103条向有界Top20及派生集合传播，rendering直接拒绝complete表格。
+原始自动归因保留；技术根因指向生产证据/渲染层的任务范围完整性，而非评测器或模型算错。
+下一步应优先处理这一运行时问题并补回归：只有能证明排序前缀覆盖用户范围时才允许交付，不能一律忽略截断，
+也不能只凭“返回数等于limit”断言完整，更不能以问题字符串特例放行。本轮不改源代码、不重跑刷分。
+
+人工入口为运行目录`HUMAN_REVIEW.md`，其中逐题保存实际回答和空白答案标签；Q01长答单独链接完整100行原文。
+每题`ANSWER.md`与response.json.answer逐字相等。已认可的题目合同不重复询问；技术核对不代替人工标签。
+Q01不进入普通质量分母；Q08内部拟答不是实际成功交付；Q03来源独立性声明不能因名单正确而被忽略。
+完成本批答案复核与必要修复后，再继续多轮，不扩建评测框架。
+
+## 前一阶段：6题获认可、计数修复与v2重录完成（历史记录）
 
 用户已在首版REVIEW.md中对6题全部填写“认可”，审核人为bibo、日期2026-09-22。
 本轮读取并保留原件，认可范围为问题、标准事实及判分口径，不包含尚不存在的真实回答质量。
