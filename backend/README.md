@@ -70,6 +70,14 @@ Chat uses non-thinking mode by default because each ReAct decision is a
 latency-sensitive structured tool-calling turn. Model/tool counts, final task
 status and tool traces are persisted with the run.
 
+Chat streams the model's `finish.answer` text while generation is still in
+progress. SSE `answer_start` declares a provisional revision; `answer_delta`
+uses Unicode code-point offsets. Validation failure withdraws that draft via
+`answer_reset`, and `completed` supplies the authoritative persisted response.
+Tool arguments and reasoning are not displayed. Evidence tables are rendered
+from stored rows when their declaration is complete. Active GET reconnects read
+events after the cursor; completed reconnects return only the final response.
+
 The chat Agent also has on-demand external market tools:
 
 - `market_index_trend` fetches date-aligned 2-20 trading-day performance for
@@ -251,7 +259,7 @@ inspect or remove it.
 - `PATCH /api/agents/chat/sessions/{session_id}` - rename a chat session
 - `DELETE /api/agents/chat/sessions/{session_id}` - permanently delete a chat session, messages, and run traces
 - `POST /api/agents/chat` - synchronous durable ReAct chat
-- `POST /api/agents/chat/stream` - SSE progress and final durable ReAct response
+- `POST /api/agents/chat/stream` - live answer deltas, progress and final durable ReAct response
 - `GET /api/agents/chat/runs/{run_id}` - inspect owned run status
 - `GET /api/agents/chat/runs/{run_id}/stream` - read-only SSE reconnect
 - `POST /api/agents/chat/runs/{run_id}/cancel` - request cancellation

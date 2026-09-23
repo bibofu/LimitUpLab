@@ -44,6 +44,7 @@ interface ChatMessage {
   status?: "success" | "error";
   suggestedQuestions?: string[];
   taskLabel?: string;
+  provisional?: boolean;
 }
 
 const ACTIVE_CHAT_SESSION_STORAGE_KEY = "limituplab.activeChatSession";
@@ -341,7 +342,7 @@ export function AgentChatDock({
     }
   }
 
-  /** Preserve the exact request on transport failure; show only validated answers. */
+  /** Preserve the exact request on failure; live drafts are replaced by the final result. */
   async function sendMessage(prompt?: string) {
     const trimmed = (prompt ?? message).trim();
     if (!trimmed || sending || sessionLoading || !sessionId) {
@@ -380,10 +381,12 @@ export function AgentChatDock({
       setCancelRequested(false);
     }
     const agentMessageId = `agent-${userMessageId}`;
+    setMessages(current => current.filter(item => item.id !== agentMessageId));
     let stockMentions: AgentStockMention[] = [];
     const answerBuffer = createAgentAnswerBuffer(content => {
       setMessages(current => {
-        const draft: ChatMessage = { id: agentMessageId, role: "agent", content, stockMentions };
+        if (!content) return current.filter(item => item.id !== agentMessageId);
+        const draft: ChatMessage = { id: agentMessageId, role: "agent", content, stockMentions, provisional: true };
         return current.some(item => item.id === agentMessageId)
           ? current.map(item => item.id === agentMessageId ? draft : item)
           : [...current, draft];
@@ -400,12 +403,17 @@ export function AgentChatDock({
         }
         if (event.event === "answer_start") {
           setStreamStage("answering");
-          setStreamStatus("回答已就绪，正在接收结果");
+          setStreamStatus("正在生成回答");
           stockMentions = event.data.stock_mentions ?? [];
-          answerBuffer.reset(messages.find(item => item.id === agentMessageId)?.content);
+          answerBuffer.start(event.data.revision);
         }
         if (event.event === "answer_delta") {
           answerBuffer.append(event.data.offset, event.data.delta);
+        }
+        if (event.event === "answer_reset") {
+          answerBuffer.reset();
+          setStreamStage("checking");
+          setStreamStatus(event.data.message);
         }
       });
       answerBuffer.dispose();
@@ -423,10 +431,8 @@ export function AgentChatDock({
       setError(null);
       void refreshChatSessions();
     } catch (caught) {
-      answerBuffer.flush();
-      setMessages(current => current.map(item => item.id === agentMessageId
-        ? { ...item, status: "error", taskLabel: "连接中断，回答尚未接收完整" }
-        : item));
+      answerBuffer.dispose();
+      setMessages(current => current.filter(item => item.id !== agentMessageId));
       const errorMessage = caught instanceof Error ? caught.message : "Agent 回答失败";
       setError(errorMessage);
       setFailedPrompt(trimmed);
@@ -593,7 +599,9 @@ export function AgentChatDock({
             >
               {item.role === "agent" ? (
                 <div className="chat-markdown">
-                  {item.taskLabel ? <small className="chat-task-status">{item.taskLabel}</small> : null}
+                  {item.provisional || item.taskLabel ? <small className="chat-task-status">
+                    {item.provisional ? (streamStage === "checking" ? "校验中" : "生成中，待校验") : item.taskLabel}
+                  </small> : null}
                   <AgentAnswerMarkdown
                     content={item.content}
                     stockMentions={item.stockMentions}

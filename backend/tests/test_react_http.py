@@ -88,42 +88,88 @@ def http_server(tmp_path, monkeypatch, request):
 PAYLOAD = {"session_id": "http-s", "message_id": "http-m", "message": "查询热榜，缺失时说明缺口"}
 
 
-def test_validated_answer_chunking_is_bounded_and_completed_remains_authoritative(monkeypatch):
-    def unexpected_sleep(_seconds):
-        pytest.fail("Validated output must not add an artificial delivery delay")
-    monkeypatch.setattr(time, "sleep", unexpected_sleep)
-    answer = "研究结论" * 4000
-    response = AgentChatResponse(
-        session_id="chunk-session",
-        run_id="chunk-run",
-        intent="react_research",
-        answer=answer,
-        task_status="complete",
-        generated_by="test",
-    )
-    response_json = response.model_dump_json()
-    frames = list(react_chat.validated_answer_frames(response_json))
-    delta_payloads = [
-        json.loads(frame.split("\ndata: ", 1)[1].rsplit("\n\n", 1)[0])
-        for frame in frames
-        if frame.startswith("event: answer_delta")
-    ]
+def test_live_answer_arrives_over_http_before_generation_finishes(http_server, monkeypatch):
+    client, state = http_server
+    finish = threading.Event()
+    def answer(request, answer_event_callback, **kwargs):
+        state.calls += 1
+        answer_event_callback("answer_start", {"revision": 1, "answer_length": None, "provisional": True})
+        answer_event_callback("answer_delta", {"offset": 0, "delta": "实时📊"})
+        state.entered.set()
+        assert state.release.wait(10)
+        answer_event_callback("answer_delta", {"offset": 3, "delta": "回答"})
+        assert finish.wait(10)
+        return AgentChatResponse(session_id=request.session_id, intent="react_research", answer="实时📊回答",
+                                 task_status="complete", generated_by="test")
+    monkeypatch.setattr(agents, "answer_first_board_chat", answer)
+    try:
+        with client.stream("POST", "/chat/stream", json=PAYLOAD) as response:
+            run_id = response.headers["x-agent-run-id"]
+            received, cursor = [], 0
+            for line in response.iter_lines():
+                received.append(line)
+                if line.startswith("id:"):
+                    cursor = int(line[3:])
+                if line.startswith("data:") and "实时📊" in line:
+                    break
+            assert state.entered.wait(5)
+            assert not state.release.is_set()
+            assert Journal().get(run_id, "owner")["response_json"] is None
+            assert "event: completed" not in received
+            assert cursor > 0
+        with client.stream("GET", f"/chat/runs/{run_id}/stream?after={cursor}") as response:
+            state.release.set()
+            lines, received = response.iter_lines(), []
+            for line in lines:
+                received.append(line)
+                if line.startswith("data:") and json.loads(line[5:]).get("offset") == 3:
+                    break
+            assert "event: answer_start" not in received
+            assert not any("实时📊" in line for line in received)
+            assert Journal().get(run_id, "owner")["response_json"] is None
+            finish.set()
+            received.extend(lines)
+    finally:
+        state.release.set()
+        finish.set()
+    assert "event: completed" in received
+    replay = client.get(f"/chat/runs/{run_id}/stream")
+    assert "event: completed" in replay.text
+    assert "event: answer_start" not in replay.text and "event: answer_delta" not in replay.text
+    assert state.calls == 1
 
-    assert frames[0].startswith("event: answer_start")
-    assert frames[-1] == "event: completed\ndata: " + response_json + "\n\n"
-    assert 1 < len(delta_payloads) <= react_chat.MAX_ANSWER_CHUNKS
-    assert "".join(item["delta"] for item in delta_payloads) == answer
-    assert [item["offset"] for item in delta_payloads] == sorted(item["offset"] for item in delta_payloads)
 
-
-def test_answer_chunks_preserve_table_rows_and_unicode():
-    answer = "龙虎榜📊\n\n|代码|名称|\n|---|---|\n" + "|600001|测试📊|\n" * 150
-    chunks = list(react_chat.answer_chunks(answer))
-    assert len(chunks) > 1
-    assert "".join(chunks) == answer
-    assert all(chunk.endswith("\n") for chunk in chunks)
-    assert all(not line or line.startswith("|") or line == "龙虎榜📊"
-               for chunk in chunks for line in chunk.splitlines())
+def test_explicit_post_resume_uses_a_new_durable_answer_revision(http_server, monkeypatch):
+    client, state = http_server
+    SQLiteChatSessionRepository().ensure_session("http-s", owner_id="owner")
+    journal = Journal()
+    row, _ = journal.create(AgentChatRequest(**PAYLOAD), "owner")
+    journal.event(row["run_id"], "answer_start", {"revision": 3})
+    journal.event(row["run_id"], "answer_delta", {"offset": 0, "delta": "旧草稿"})
+    def prepare(**kwargs):
+        state.entered.set()
+        assert state.release.wait(10)
+        return [], None
+    monkeypatch.setattr(agents, "prepare_session_context", prepare)
+    def answer(request, answer_event_callback, **kwargs):
+        answer_event_callback("answer_start", {"revision": 1, "answer_length": None, "provisional": True})
+        answer_event_callback("answer_delta", {"offset": 0, "delta": "恢复回答"})
+        return AgentChatResponse(session_id=request.session_id, intent="react_research", answer="恢复回答",
+                                 task_status="complete", generated_by="test")
+    monkeypatch.setattr(agents, "answer_first_board_chat", answer)
+    with client.stream("POST", "/chat/stream", json=PAYLOAD) as response:
+        lines = response.iter_lines()
+        for line in lines:
+            if line == "event: answer_reset":
+                break
+        assert state.entered.wait(5)
+        assert not state.release.is_set()
+        assert journal.get(row["run_id"], "owner")["response_json"] is None
+        state.release.set()
+        assert any("恢复回答" in line for line in lines)
+    revisions = [json.loads(event["payload_json"])["revision"] for event in journal.events(row["run_id"], "owner")
+                 if event["event"] == "answer_start"]
+    assert revisions == [3, 4]
 
 
 def test_stream_wakeup_preserves_updates_between_poll_and_wait(monkeypatch):
@@ -160,6 +206,7 @@ def test_progress_arrives_before_blocking_input_review_and_final_answer(http_ser
         )
     monkeypatch.setattr(runtime_module, "review_input", review)
     with client.stream("POST", "/chat/stream", json=PAYLOAD) as response:
+        run_id = response.headers["x-agent-run-id"]
         lines = response.iter_lines()
         received = []
         for line in lines:
@@ -172,9 +219,10 @@ def test_progress_arrives_before_blocking_input_review_and_final_answer(http_ser
         state.release.set()
         received.extend(lines)
     text = "\n".join(received)
-    assert text.index("正在整理结果并校验回答") < text.index("正在保存研究结果")
-    assert text.index("正在保存研究结果") < text.index("event: answer_start")
-    assert text.index("event: answer_start") < text.index("event: completed")
+    assert "event: completed" in text
+    progress = [json.loads(event["payload_json"])["message"] for event in Journal().events(run_id, "owner")
+                if event["event"] == "progress"]
+    assert progress.index("正在整理结果并校验回答") < progress.index("正在保存研究结果")
 
 
 def test_http_idempotency_reconnect_owner_and_delete(http_server):
@@ -192,8 +240,8 @@ def test_http_idempotency_reconnect_owner_and_delete(http_server):
     assert client.post(f"/chat/runs/{key}/cancel", headers={"x-fixture-owner": "other"}).status_code == 404
     events = Journal().events(key, "owner")
     replay = client.get(f"/chat/runs/{key}/stream", params={"after": events[-1]["seq"]})
-    assert "event: answer_start" in replay.text and "event: answer_delta" in replay.text
-    assert replay.text.index("event: answer_delta") < replay.text.index("event: completed")
+    assert "event: answer_start" not in replay.text and "event: answer_delta" not in replay.text
+    assert "event: completed" in replay.text
     assert "event: progress" not in replay.text
     assert '"task_status": "partial"' in replay.text or '"task_status":"partial"' in replay.text
     assert state.calls == 1

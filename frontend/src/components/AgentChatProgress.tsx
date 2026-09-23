@@ -8,7 +8,7 @@ const STAGE_LABELS: Record<AgentChatStreamStage, string> = {
   planning: "分析问题",
   tools: "查询数据",
   checking: "核对回答",
-  answering: "显示结果",
+  answering: "生成回答",
 };
 
 /** Keep the running clock independent of the conversation/Markdown render tree. */

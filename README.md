@@ -264,6 +264,14 @@ sequenceDiagram
     Tools-->>Evidence: 完整结构化结果与来源
     Evidence-->>Graph: ToolMessage 有界预览
     Graph->>Graph: 继续行动或单独调用 finish
+    loop 模型生成 finish.answer 期间
+        Graph->>Journal: 保存 answer_start / answer_delta
+        Journal-->>UI: 立即显示生成中正文
+    end
+    opt 校验失败后修正
+        Graph->>Journal: answer_reset 撤回草稿
+        Journal-->>UI: 清除旧草稿，接收新 revision
+    end
     Graph->>Journal: 校验并原子保存最终回答
     Journal-->>UI: SSE completed；断线按 cursor 重连
 ```

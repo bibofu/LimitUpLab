@@ -39,14 +39,15 @@ export async function streamChat(
         else if (line.startsWith("id:")) id = Number(line.slice(3).trim());
       }
       if (!lines.length) return;
+      if (id !== undefined && Number.isSafeInteger(id) && id <= cursor) return;
       const data = JSON.parse(lines.join("\n"));
       if (name === "error") throw new ServerStreamError(data.message || "任务已中断，可重试恢复");
       if (name === "accepted") runId = data.run_id;
       if (name === "completed") completed = data;
-      if (["accepted", "progress", "answer_start", "answer_delta", "completed"].includes(name)) {
+      if (["accepted", "progress", "answer_start", "answer_delta", "answer_reset", "completed"].includes(name)) {
         onEvent({ event: name, data } as AgentChatStreamEvent);
       }
-      // The server emits answer chunks only after the final response is validated and persisted.
+      // Advance only after the consumer has successfully applied a durable event.
       if (id !== undefined && Number.isSafeInteger(id) && id >= cursor) cursor = id;
     }
     try {

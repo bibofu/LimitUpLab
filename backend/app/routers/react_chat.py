@@ -1,7 +1,6 @@
 """Durable ReAct HTTP/SSE transport; reconnect only reads, never reruns tools."""
 
 import json
-import math
 import threading
 from datetime import datetime, timezone
 from typing import Annotated
@@ -20,8 +19,6 @@ _lock = threading.Lock()
 _workers: dict[str, threading.Thread] = {}
 _updates = threading.Condition()
 _update_revision = 0
-MAX_ANSWER_CHUNKS = 48
-MIN_ANSWER_CHUNK_CHARS = 160
 
 
 def notify_streams():
@@ -96,6 +93,15 @@ def start(request, http_request, owner_id):
                 journal.event(run_id, "progress", {"stage": stage, "message": message})
                 notify_streams()
             try:
+                prior_revision = max((json.loads(event["payload_json"]).get("revision", 0)
+                    for event in journal.events(run_id, owner_id) if event["event"] == "answer_start"), default=0)
+                def answer_event(event, payload):
+                    if event == "answer_start":
+                        payload = {**payload, "run_id": run_id, "revision": prior_revision + payload["revision"]}
+                    journal.event(run_id, event, payload)
+                    notify_streams()
+                if prior_revision:
+                    answer_event("answer_reset", {"message": "正在重新整理回答"})
                 progress("preparing", "正在准备会话与研究数据")
                 with agents.capture_llm_usage() as tracker:
                     context, memory = agents.prepare_session_context(
@@ -107,6 +113,7 @@ def start(request, http_request, owner_id):
                         repository=agents.SQLiteFirstBoardRepository(), conversation_messages=context,
                         session_memory=memory,
                         progress_callback=progress,
+                        answer_event_callback=answer_event,
                     )
                 response.run_id = run_id
             except Exception as error:
@@ -119,7 +126,7 @@ def start(request, http_request, owner_id):
             finally:
                 try:
                     if response is not None:
-                        # Persist before publishing any final answer. Message id is
+                        # Persist the authoritative answer before publishing completed. Message id is
                         # stable across crash recovery and repeated submissions.
                         progress("checking", "正在保存研究结果")
                         response = AgentChatResponse.model_validate(journal.finish(run_id, owner_id, response.model_dump(mode="json")))
@@ -144,47 +151,6 @@ def failed_response(row, reason):
         answer="本次研究未能完成，请稍后重试。", task_status="error", stop_reason=reason, generated_by=VERSION)
 
 
-def answer_chunks(answer):
-    """Bound prose chunks while keeping Markdown table rows intact."""
-    target = max(MIN_ANSWER_CHUNK_CHARS, math.ceil(len(answer) / MAX_ANSWER_CHUNKS))
-    pending = ""
-    for line in answer.splitlines(keepends=True):
-        if line.lstrip().startswith("|"):
-            pending += line
-            if len(pending) >= target:
-                yield pending
-                pending = ""
-            continue
-        while line:
-            available = target - len(pending)
-            pending += line[:available]
-            line = line[available:]
-            if len(pending) >= target:
-                yield pending
-                pending = ""
-    if pending:
-        yield pending
-
-
-def validated_answer_frames(response_json):
-    """Stream only a persisted final answer; reconnects reset and replay it safely."""
-    response = AgentChatResponse.model_validate_json(response_json)
-    answer = response.answer
-    yield "event: answer_start\ndata: " + json.dumps({
-        "run_id": response.run_id,
-        "answer_length": len(answer),
-        "stock_mentions": [item.model_dump(mode="json") for item in response.stock_mentions],
-    }, ensure_ascii=False) + "\n\n"
-    offset = 0
-    for chunk in answer_chunks(answer):
-        yield "event: answer_delta\ndata: " + json.dumps({
-            "offset": offset,
-            "delta": chunk,
-        }, ensure_ascii=False) + "\n\n"
-        offset += len(chunk)
-    yield "event: completed\ndata: " + response_json + "\n\n"
-
-
 def stream(journal, row, owner_id, after=0):
     run_id = row["run_id"]
     def frames():
@@ -194,19 +160,20 @@ def stream(journal, row, owner_id, after=0):
             with _updates:
                 revision = _update_revision
             latest = owned(journal, run_id, owner_id)
+            if latest["response_json"]:
+                # Completed reconnects skip withdrawn drafts and publish only the authoritative answer.
+                yield "event: completed\ndata: " + latest["response_json"] + "\n\n"
+                return
             for event in journal.events(run_id, owner_id, cursor):
                 cursor = event["seq"]
                 yield f"id: {cursor}\nevent: {event['event']}\ndata: {event['payload_json']}\n\n"
-            if latest["response_json"]:
-                yield from validated_answer_frames(latest["response_json"])
-                return
             worker = _workers.get(run_id)
             if worker is None or not worker.is_alive():
                 # Completion may have committed since the first poll above.
                 finished = owned(journal, run_id, owner_id)["response_json"]
                 if finished:
-                    yield from validated_answer_frames(finished)
-                    return
+                    # Re-read completion on the next poll.
+                    continue
                 yield "event: error\ndata: " + json.dumps({"run_id": run_id, "message": "运行已中断；重新提交同一请求可恢复，已完成工具不会重复执行。"}, ensure_ascii=False) + "\n\n"
                 return
             yield ": heartbeat\n\n"

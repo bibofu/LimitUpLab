@@ -596,11 +596,15 @@ export type AgentChatStreamEvent =
     }
   | {
       event: "answer_start";
-      data: { run_id: string | null; answer_length: number; stock_mentions?: AgentStockMention[] };
+      data: { run_id: string | null; answer_length: number | null; revision: number; provisional: boolean; stock_mentions?: AgentStockMention[] };
     }
   | {
       event: "answer_delta";
       data: { offset: number; delta: string };
+    }
+  | {
+      event: "answer_reset";
+      data: { message: string };
     }
   | {
       event: "completed";
