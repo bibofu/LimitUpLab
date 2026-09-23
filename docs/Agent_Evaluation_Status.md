@@ -14,6 +14,7 @@
 - 用户明确认可[28份当前版本答案的逐题三维复核](../output/agent-eval/real-golden-admission-20260923-001/ANSWER_REVIEW_RESULT.md)：20通过、8不通过。
   本批答案标签与原答/题目摘要已绑定并保存为`backend/evals/suites/real-dev28-user-reviewed-answer-labels.json`；运行器原27个needs_review保持不变。
 - 已对其中10道关键题各取得三次同版真实回答并获用户确认：[稳定性验收](../output/agent-eval/real-golden-admission-20260923-001/STABILITY_RESULT.md)为4题3/3、2题2/3、4题0/3；绑定见`backend/evals/suites/real-dev28-stability-user-reviewed.json`。这不是全部28题的稳定率；Q09/Q23暂缓。
+- 23份已有人审标签的单轮答案做Judge对照：[逐份核对](../output/agent-eval/real-dev28-judge-calibration-20260923-001/REPORT.md)中22份完成、1份调用错误；18/22一致，但5份人工失败仅识别1份。Judge未达发布门禁要求，不覆盖人工标签；未改Agent、Judge提示或题目标准。
 
 ### 建设已转为批量题目入库，不再边设计边修Agent（2026-09-22）
 
