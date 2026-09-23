@@ -16,6 +16,7 @@
   "question_design_digest": "sha256:58efdcadf8632ddae4302e2b9872bf39a44400e9b1aeb87df42d323ff99fa58e",
   "answer_labels": "backend/evals/suites/real-dev28-user-reviewed-answer-labels.json",
   "answer_approval_digest": "sha256:774cb32364da8e56a1e57567feb84432ca54067771f96365740b09f937beb3ff",
+  "stability_labels": "backend/evals/suites/real-dev28-stability-user-reviewed.json",
   "approved_but_execution_blocked": ["Q09", "Q23"],
   "assets_committed": false,
   "release_eligible": false,
