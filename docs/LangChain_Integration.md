@@ -61,7 +61,7 @@ LIMITUPLAB_LLM_MAX_ATTEMPTS=2
 LIMITUPLAB_LLM_TIMEOUT_SECONDS=30
 ```
 
-配置入口只接受 `LIMITUPLAB_LLM_BACKEND=langchain`，其他值会在服务启动时失败，不会进入 ReAct 后连续产生 provider error。旧 `OpenAIChatCompletionsProvider` 类仍保留给明确的文本/Judge 消费者直接构造和依赖注入，但不再能通过全局环境配置成为生产聊天 Provider；ReAct 入口还会按是否真正实现 `generate_messages` 做第二层能力校验。关闭 LLM 或缺少 API Key 时，确定性数据、评分、回测和独立 Explanation 功能仍可运行；聊天任务不会通过旧通用模板伪装成功。
+配置入口只接受 `LIMITUPLAB_LLM_BACKEND=langchain`，其他值会在服务启动时失败，不会进入 ReAct 后连续产生 provider error。旧 `OpenAIChatCompletionsProvider` 类仍保留给明确的文本 消费者直接构造和依赖注入，但不再能通过全局环境配置成为生产聊天 Provider；ReAct 入口还会按是否真正实现 `generate_messages` 做第二层能力校验。关闭 LLM 或缺少 API Key 时，确定性数据、评分、回测和独立 Explanation 功能仍可运行；聊天任务不会通过旧通用模板伪装成功。
 
 `AuditedChatOpenAI` 对兼容服务保留两项窄适配：将 SDK 的 `max_completion_tokens` 转回目标服务支持的 `max_tokens`；从流式 chunk 保存原始 usage。升级 `langchain-openai` 时必须运行线协议测试，不能只验证 import。
 
@@ -89,9 +89,7 @@ backend/.venv/Scripts/python.exe scripts/check_project.py
 
 ```
 
-面向旧 Planner/Policy 的评测实现和数据已经删除；新的 `app/agent_eval` 体系独立维护
-Active Golden、Frozen/Live 执行和诊断报告。当前项目验收命令仍只验证代码、前端和构建，
-不会自动调用真实模型，也不代表 Golden64、稳定性或发布质量通过。
+项目验收命令验证代码、前端和构建，不会自动调用真实模型。
 
 V1.4 标记前完整后端回归为 616 项及 6 个子测试通过，0 失败/跳过；另有 3 条 LangGraph/websockets 依赖弃用警告。版本发布仍需运行标签工作流要求的 Windows/Linux 完整验收。
 

@@ -63,7 +63,7 @@ loop; `ToolGateway`, `EvidenceStore` and the SQLite run journal retain financial
 policy, provenance, idempotency and recovery control. The only valid configured
 backend is `LIMITUPLAB_LLM_BACKEND=langchain`; any other value fails during
 startup. The legacy Requests class remains available only through explicit
-construction and dependency injection for isolated text/Judge callers.
+construction and dependency injection for isolated text callers.
 See [integration and verification details](../docs/LangChain_Integration.md).
 
 Chat uses non-thinking mode by default because each ReAct decision is a
@@ -276,29 +276,9 @@ cd backend
 python -m pytest tests -q -p no:cacheprovider
 ```
 
-## Agent evaluation status
-
-The former Chat Eval V2 and Live Behavioral Eval V1 assets were retired on
-2026-09-13 because they targeted the previous Query/Planner/Tool Policy stack.
-They remain deleted and are not part of the current runtime or project validation.
-
-An independent evaluation system now lives in `app/agent_eval`. It provides
-versioned Case/World contracts, frozen record-replay, isolated Offline and
-Historical Live workers, deterministic checks, optional diagnostic judges,
-formal reports, stability aggregation, and the shared `run-golden` entry point.
-The current baseline is Real Dev28: 24 single-turn and 4 two-turn cases, with
-7 Offline and 21 Historical Live executions. The saved v24 answers have 20 human
-passes and 8 failures; 10 selected cases also have three-trial human reviews.
-Judge calibration exposed false passes, so judging remains diagnostic.
-Local30, Basic70 and Golden64 are historical assets, not additional current cases.
-See the [evaluation guide and roadmap](../docs/Agent_Evaluation_Guide.md) and
-[current evidence ledger](../docs/Agent_Evaluation_Real_Golden.md). The guide also
-documents local data dependencies and the unified preflight capability-flag issue.
-Active admission does not imply answer correctness or release eligibility.
+## Limit-up queries
 
 The chat Agent also exposes a general `limit_up_events` internal tool for
 same-day limit-up questions such as continued-board lists, board-height filters,
 intraday-broken limit-up events, and topic/industry filters. This keeps broad
 limit-up questions from being incorrectly routed through first-board-only tools.
-
-

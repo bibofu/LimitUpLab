@@ -30,7 +30,7 @@ chmod 600 .env.production
 - 填入新的 `DEEPSEEK_API_KEY`。
 - 填入 `HITHINK_FINANCE_API_KEY`；不把凭据写入镜像或 Git。
 - 使用 `openssl rand -hex 32` 生成 `LIMITUPLAB_SESSION_SECRET`。生产环境缺少足够长度的密钥时，后端会拒绝启动。
-- 再生成一个不同的 `LIMITUPLAB_ADMIN_KEY`，用于内部诊断、评测、运行轨迹和评分策略管理接口。
+- 再生成一个不同的 `LIMITUPLAB_ADMIN_KEY`，用于内部诊断、运行轨迹和评分策略管理接口。
 - 没有同花顺凭据时可设置 `INSTALL_HITHINK_FINANCE=false`，相关工具会按现有逻辑降级或明确报错。
 
 浏览器首次访问时会得到签名的 HttpOnly 匿名访客 Cookie。会话、消息和 Agent 运行记录均按该匿名身份隔离；清除浏览器 Cookie 后会成为新的匿名用户，无法继续访问原会话。
@@ -42,7 +42,7 @@ curl --fail -H "X-LimitUpLab-Admin-Key: $LIMITUPLAB_ADMIN_KEY" \
   https://你的域名/api/agents/system-health
 ```
 
-评分策略、数据健康、系统健康、日更状态、离线评测、预测审计、因子诊断和 Agent 运行轨迹均属于管理员接口。生产环境同时关闭 FastAPI 的 `/docs`、`/redoc` 和 `/openapi.json`。
+评分策略、数据健康、系统健康、日更状态、预测审计、因子诊断和 Agent 运行轨迹均属于管理员接口。生产环境同时关闭 FastAPI 的 `/docs`、`/redoc` 和 `/openapi.json`。
 
 ## 2. 构建并启动应用
 

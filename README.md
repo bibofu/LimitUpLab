@@ -28,7 +28,7 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 - Champion/Challenger 评分策略注册与受约束影子优化
 - 来源感知的预测质量审计、确定性基线和多目标评分 v3
 - 每日连板晋级率、首板到二板率和各板高梯队统计
-- 数据健康、Agent 运行轨迹、缓存和离线回归评测
+- 数据健康、Agent 运行轨迹和缓存
 - 盘前推荐页并列提供“一进二接力”“缩量整理”“高位回撤”三个入口，后两者支持固定条件筛选、历史日期查看和缺失原因解释，并独立于一进二前向统计，见 [第一版说明](docs/Consolidation_Strategy_V1.md)
 
 当前代码基线：
@@ -96,7 +96,7 @@ scoring_version
 
 ### 2. Tool-Using Chat Agent
 
-模型层由 LangChain `ChatOpenAI.bind_tools` 承接，LangGraph 自定义 `StateGraph` 在同一个有界循环中完成思考、行动、观察和最终回答。业务参数、工具权限、证据裁剪、确定性计算与最终状态仍由后端控制。当前生产 ReAct 只支持 LangChain 消息工具调用后端；Requests Provider 保留给独立文本/Judge 调用，不是聊天运行时回退。实现边界见 [LangChain + LangGraph 集成](docs/LangChain_Integration.md)。
+模型层由 LangChain `ChatOpenAI.bind_tools` 承接，LangGraph 自定义 `StateGraph` 在同一个有界循环中完成思考、行动、观察和最终回答。业务参数、工具权限、证据裁剪、确定性计算与最终状态仍由后端控制。当前生产 ReAct 只支持 LangChain 消息工具调用后端；Requests Provider 保留给独立文本调用，不是聊天运行时回退。实现边界见 [LangChain + LangGraph 集成](docs/LangChain_Integration.md)。
 
 正常问答主链路是：
 
@@ -137,7 +137,7 @@ scoring_version
 
 默认 `LIMITUPLAB_AGENT_PROFILE=v1_close_review` 只暴露收盘后与历史研究工具；`remote_limit_up_pool` 和 `web_search` 只在 `extended` 研发 profile 开放。ToolGateway 对每一次调用重新校验 allowlist、JSON Schema、日期能力、单股票约束和空集合边界，未知或未开放工具即使由模型生成也不会执行。
 
-自然语言 Query Contract 编译器已经退役。生产工具参数只来自原生 tool call，并由共享类型、JSON Schema、ToolGateway 和实际方法签名共同校验；离线评测不再用另一套正则解析器重判用户问题。生产执行事实以 ReAct decision、ToolMessage、EvidenceStore 和最终 trace 为准。
+自然语言 Query Contract 编译器已经退役。生产工具参数只来自原生 tool call，并由共享类型、JSON Schema、ToolGateway 和实际方法签名共同校验。生产执行事实以 ReAct decision、ToolMessage、EvidenceStore 和最终 trace 为准。
 
 ### 2.1 Session Memory
 
@@ -206,7 +206,7 @@ Outcome 完整性检查严格按本地市场交易日对齐 D+1、D+3 和 D+5。
 - Tool trace 保存每轮原生 decision、Policy allow/reject、工具参数、结果状态、证据引用和最终校验
 - 请求级 EvidenceStore 保存完整工具结果，模型消息只携带有界预览；SQLite journal 保存运行 checkpoint 与调用结果
 - `/api/agents/data-health` 检查评分、预测追踪和 Outcome 所需数据
-- `/api/agents/system-health` 检查数据新鲜度、LLM、代理和 Eval 状态
+- `/api/agents/system-health` 检查数据新鲜度、LLM 和代理状态
 - LLM 不可用或连续调用失败时返回明确 error/partial，不使用已退役的通用聊天模板伪装成功
 - 工具失败时返回明确错误，不允许模型补造数字
 - 匿名访客按分钟、按日限额，同一访客单并发，并设置单进程全局并发上限；超限统一返回 `429` 和 `Retry-After`
@@ -600,7 +600,7 @@ backend/.venv/Scripts/python.exe scripts/check_project.py
 
 Linux 使用对应虚拟环境的 `python scripts/check_project.py`。也可通过 `--scope backend` 或 `--scope frontend` 单独验收一侧。
 
-该入口依次运行完整 pytest、全部前端逻辑测试以及 TypeScript/Vite 生产构建。每次使用独立数据库和测试目录，关闭真实 LLM，并在 `output/validation/<运行标识>/` 保存各步骤日志、JUnit 和 `summary.json`。任一步失败都会使整体退出码非零，但其余独立检查仍会执行。它不替代浏览器端业务验收、真实模型评测、部署检查或压力测试。
+该入口依次运行完整 pytest、全部前端逻辑测试以及 TypeScript/Vite 生产构建。每次使用独立数据库和测试目录，关闭真实 LLM，并在 `output/validation/<运行标识>/` 保存各步骤日志、JUnit 和 `summary.json`。任一步失败都会使整体退出码非零，但其余独立检查仍会执行。它不替代浏览器端业务验收、部署检查或压力测试。
 
 GitHub Actions 配置在 `.github/workflows/validate.yml`，对 PR、main 与 codex 分支推送运行 Windows/Linux 两套检查，使用相同验收入口，不需要行情或模型密钥。失败日志保留 7 天；测试数据库不上传。流水线文件进入远端仓库后才能实际触发，分支保护仍需在仓库设置中启用。
 
@@ -612,16 +612,6 @@ ReAct 执行与证据契约见 [LangChain + LangGraph 集成](docs/LangChain_Int
 cd backend
 .\.venv\Scripts\python.exe -m pytest tests -q -p no:cacheprovider
 ```
-
-当前问答评测以真实Dev28为基线：30题设计已获认可，28题Active（24单轮＋4两轮），
-Q09/Q23历史新闻题暂缓。固定`react-runtime-v24`的28份有效答案人审为20通过、8不通过；
-其中10题完成三次稳定性复核。Judge对照已暴露漏判，暂不用于自动验收或发布门禁。
-
-先看[评测集导航与后续计划](docs/Agent_Evaluation_Guide.md)，再按需查看
-[当前建设清单](docs/Agent_Evaluation_Real_Golden.md)。该导航说明题目、数据、运行与审核文件的关系，
-并区分工程测试、Agent问答评测和首板预测效果复盘。Local30、Basic70、Golden64保留为历史资产，
-不与当前Dev28累加。真实数据包在本地`output/`，Git准入索引不能单独复现；
-统一预检仍有14题能力开关传递问题，详见导航，不能将其报错当成Agent失败。
 
 前端生产构建：
 
@@ -665,11 +655,8 @@ npm.cmd run build
 
 近期优先级：
 
-1. 固定现有真实Dev28和文件入口，独立修复统一预检参数问题，补全本地资产恢复说明。
-2. 在用户明确要求的独立修复阶段，优先处理价格口径、预测来源解释、消歧和额外陈述问题；题目与真值保持独立。
-3. 按变更风险运行相关Dev题，阶段结束做全套比较及关键题稳定性验证；从真实需求积累独立Private Holdout，不将公开题改名充数。
-4. Judge继续辅助诊断，后续独立改进并验证失败识别能力，不以整体一致率作为发布依据。详见[评测后续计划](docs/Agent_Evaluation_Guide.md#6-结合项目目标的后续顺序)。
-5. 数据侧继续滚动补齐Top10 Outcome和端到端验收；V2再考虑数据源与部署扩容。
+1. 持续核对价格口径、预测来源解释、多轮消歧和额外陈述的证据边界。
+2. 数据侧继续滚动补齐 Top10 Outcome 和端到端验收；V2 再考虑数据源与部署扩容。
 
 当前版本边界见 [V1.4 阶段里程碑](./docs/V1.4_Milestone.md)。
 
