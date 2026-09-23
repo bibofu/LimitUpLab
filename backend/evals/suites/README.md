@@ -1,4 +1,16 @@
-# Local30：20 Offline + 10 Historical Live
+# 评测套件入口
+
+## 当前真实 Golden Dev（2026-09-23）
+
+当前28题Active入口在本地`output/agent-eval/real-golden-admission-20260923-001/active-dev28-final/suite.json`。
+仓库保留`real-dev28-active-index.json`准入索引、`real-dev30-design.json`题目设计、
+`real-dev28-user-reviewed-answer-labels.json`逐题人审标签摘要。28题当前答案为20通过、8不通过；
+答案失败不取消题目准入。Q09/Q23题目已认可，因历史新闻执行绑定阻断，暂不在可运行28题中。
+Case/World录制及只读数据库均在被忽略的本地`output`，索引不是可运行数据包。
+统一dry-run现有`public_limit_down`传递限制，14道Historical Live会在预检误报`unscorable`；
+不将其记作Agent或题目失败。具体绑定和限制见`docs/Agent_Evaluation_Real_Golden.md`。
+
+## 历史 Local30：20 Offline + 10 Historical Live
 
 题目入口是 `local30.json`，不是新增一题就新增一个 Python 生成器。每题定义问题、能力标签、
 日期和独立选择口径；通用构建器生成现有 CaseSpec、实际工具录制、标准事实、摘要和批量审核单。

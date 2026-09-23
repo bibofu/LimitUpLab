@@ -40,13 +40,29 @@
   `REVIEW_BATCH.md`保留bibo/2026-09-23认可原文，未覆盖；每题`case.json`/`reference.json`与`source-evidence-v2.json`继续留存。
 - 本轮收录根：`output/agent-eval/real-golden-admission-20260923-001/`。
   **当前唯一Active入口为`active-dev28-final/suite.json`**；中间19/28题套件仅留作过程证据，不叠加计数。
+- 仓库中的`backend/evals/suites/real-dev28-active-index.json`固定这28题的Active Dev身份、套件/设计/人审摘要和本地入口；
+  它是准入索引，不包含被忽略的Case、World、录制或数据库，不能单独当作可运行套件。
 - 审批与完整性：`approval-bindings.json`、`approval-carry-proof.json`、`m03-revision-ledger.json`、`protection-manifest.json`。
 - 真实执行：`run-dev19/`、`run-bound9/`、`run-m03-fixture-v3/`，原始响应、工具记录、两轮上下文及成本均保留。
 - 汇总：`RESULTS.md`、`completion-summary.json`；助手语义抽查见`ASSISTANT_AUDIT.md`，不冒充人工标签。
 - 人工答案标签：`ANSWER_REVIEW_RESULT.md`、`answer-quality-approval.json`；覆盖本轮全部28份有效回答，包含20通过和8不通过。
 - 新绑定：`output/agent-eval/real-golden-bindings-20260923-001/`中`bundle/`为7题现有SnapshotLive绑定，
   `mixed-bundle/`为Q05/M03真实事件与价格录制，`mixed-bundle-v2/`仅补M03缺失录制；均有合同不变证明。
-- 生成报告、审核原件、真实数据库仍不提交Git；Git只保存题目设计、脱敏的人工答案标签摘要及本进度说明。
+- 生成报告、审核原件、真实数据库仍不提交Git；Git只保存题目设计、Active准入索引、脱敏的人工答案标签摘要及本进度说明。
+
+## 本轮准入核对（2026-09-23）
+
+- 将28题Active套件、30题已认可设计和28份用户确认答案标签逐题交叉核对：题号唯一，题面一致，Case/Baseline摘要与套件一致；
+  仅Q09/Q23因历史新闻执行绑定阻断未进入可运行Active。20题答对和8题答错都保留在Active Dev，不以答题表现筛题。
+- 零模型统一`run-golden --dry-run`产物为`output/agent-eval/real-golden-dev28-preflight-20260923-001/`：
+  14题`not_run`（预检通过）、14题`unscorable`。后14题均含`public_limit_down`能力及`market_summary`录制，
+  命中统一预检未传该能力开关的既有限制；已对LH-R01取到明确的`historical run has not enabled public limit-down collection`异常。
+  这是预检路径阻断，不覆盖前述28题真实运行，也不记为14题Agent失败或题目失败；未在评测设计阶段修改运行框架。
+- 对这14题另按现有真实worker已使用的`allow_limit_down=True`参数，直接调用只读`HistoricalLiveRegistry`重放其基线；
+  14题均完成匹配，每题核对62条录制（重复引用同一基线，不算868条独立证据），0次模型调用。
+  这补证本地Live数据兼容性，但不把统一dry-run原报错改写成通过，也不等于发布预检通过。
+- 要复现完整28题须保留本地忽略提交的资产及只读数据，并使用既有实际worker路径；单靠Git索引不能在新机器运行。
+  当前准入是可信的本地Active Dev基线，不是可移植发布包、稳定性成绩或release gate。
 
 ## 题目覆盖
 
