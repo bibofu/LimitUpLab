@@ -1,6 +1,7 @@
 """Exercise real LangChain/OpenAI serialization against a local mock transport."""
 
 import json
+from asyncio import CancelledError
 from contextlib import contextmanager
 
 import httpx
@@ -17,6 +18,143 @@ from app.services.llm_provider import (
 
 
 USAGE = {"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16}
+
+
+class NativeToolStream(httpx.SyncByteStream):
+    """Yield actual SSE frames, with an observation between provider chunks."""
+
+    def __init__(self, fragments, *, checkpoint=None, failure=None, usage=USAGE):
+        self.fragments = fragments
+        self.checkpoint = checkpoint
+        self.failure = failure
+        self.usage = usage
+        self.closed = False
+        self.reached_usage = False
+
+    def __iter__(self):
+        for index, fragment in enumerate(self.fragments):
+            call = {"index": 0, "function": {"arguments": fragment}}
+            if index == 0:
+                call.update(id="call-1", type="function")
+                call["function"]["name"] = "finish"
+            event = {
+                "id": "chat-test", "object": "chat.completion.chunk", "created": 1,
+                "model": "test-model", "choices": [{
+                    "index": 0, "delta": {"tool_calls": [call]}, "finish_reason": None,
+                }],
+            }
+            frame = f"data: {json.dumps(event, ensure_ascii=False)}\n\n".encode()
+            # Real transport chunks may split the bytes of a UTF-8 character.
+            for offset in range(0, len(frame), 7):
+                yield frame[offset:offset + 7]
+            if self.checkpoint:
+                self.checkpoint(index)
+            if self.failure:
+                raise self.failure
+        self.reached_usage = True
+        yield sse(usage=self.usage, chunks=()).encode()
+
+    def close(self):
+        self.closed = True
+
+
+def test_react_native_stream_delivers_chunks_before_completion_and_merges_arguments():
+    from langchain_core.messages import AIMessage, AIMessageChunk, HumanMessage
+
+    chunks = []
+    payloads = []
+
+    def checkpoint(index):
+        assert len(chunks) == index + 1
+        assert not body.closed and not body.reached_usage
+
+    body = NativeToolStream(
+        ('{"answer":"第一', '行\\n\\u', '6da8\\ud83d', '\\ude80"}'),
+        checkpoint=checkpoint,
+    )
+
+    def handle(request):
+        assert request.extensions["timeout"]["read"] == 3
+        payloads.append(json.loads(request.content))
+        return httpx.Response(200, stream=body, headers={"content-type": "text/event-stream"})
+
+    definitions = [{"type": "function", "function": {
+        "name": "finish", "description": "Finish", "parameters": {"type": "object"},
+    }}]
+    with provider_for(handle, retries=2) as provider, capture_llm_usage() as tracker:
+        result = provider.generate_messages(
+            [HumanMessage(content="研究")], definitions, timeout_seconds=3,
+            on_chunk=chunks.append,
+        )
+        assert provider.chat_model.root_client.max_retries == 2
+    assert type(result) is AIMessage
+    assert all(isinstance(chunk, AIMessageChunk) for chunk in chunks)
+    assert result.tool_calls == [{
+        "name": "finish", "args": {"answer": "第一行\n涨🚀"},
+        "id": "call-1", "type": "tool_call",
+    }]
+    assert body.closed and body.reached_usage and len(payloads) == 1
+    assert payloads[0]["stream"] is True
+    assert payloads[0]["stream_options"] == {"include_usage": True}
+    assert payloads[0]["tool_choice"]["function"]["name"] == "finish"
+    assert tracker.call_count == tracker.measured_call_count == 1
+    assert tracker.failed_call_count == 0 and tracker.token_usage_complete
+    assert (tracker.prompt_tokens, tracker.completion_tokens, tracker.total_tokens) == (12, 4, 16)
+
+
+@pytest.mark.parametrize("usage", [None, {}, {"prompt_tokens": 12}])
+def test_react_native_stream_preserves_missing_usage(usage):
+    body = NativeToolStream(('{}',), usage=usage)
+    with provider_for(lambda _: httpx.Response(200, stream=body)) as provider:
+        with capture_llm_usage() as tracker:
+            provider.generate_messages([], [], on_chunk=lambda _: None)
+    assert body.closed and not tracker.token_usage_complete
+    assert tracker.call_count == 1 and tracker.measured_call_count == 0
+
+
+@pytest.mark.parametrize("failure", [RuntimeError("cancel callback"), CancelledError()])
+def test_react_native_stream_callback_cancellation_closes_connection(failure):
+    body = NativeToolStream(('{"answer":"首块', '"}'))
+    chunks = []
+
+    def on_chunk(chunk):
+        chunks.append(chunk)
+        raise failure
+
+    with provider_for(lambda _: httpx.Response(200, stream=body)) as provider:
+        with capture_llm_usage() as tracker, pytest.raises(type(failure)):
+            provider.generate_messages([], [], on_chunk=on_chunk)
+    assert len(chunks) == 1 and body.closed and not body.reached_usage
+    assert tracker.call_count == tracker.failed_call_count == 1
+    assert tracker.measured_call_count == 0
+
+
+def test_react_native_stream_read_failure_closes_connection_without_retry():
+    body = NativeToolStream(('{"answer":"首块',), failure=httpx.ReadError("stream interrupted"))
+    requests = []
+    chunks = []
+
+    def handle(request):
+        requests.append(request)
+        return httpx.Response(200, stream=body)
+
+    with provider_for(handle, retries=2) as provider:
+        with capture_llm_usage() as tracker, pytest.raises(httpx.ReadError):
+            provider.generate_messages([], [], on_chunk=chunks.append)
+    assert len(chunks) == len(requests) == 1 and body.closed
+    assert tracker.call_count == tracker.failed_call_count == 1
+    assert tracker.measured_call_count == 0
+
+
+@pytest.mark.parametrize("arguments", ['{"answer":"truncated', '[]', 'broken JSON'])
+def test_react_native_stream_rejects_incomplete_tool_arguments_after_counting_usage(arguments):
+    body = NativeToolStream((arguments,))
+    with provider_for(lambda _: httpx.Response(200, stream=body)) as provider:
+        with capture_llm_usage() as tracker, pytest.raises(NativeFunctionCallingError):
+            provider.generate_messages([], [], on_chunk=lambda _: None)
+    assert body.closed
+    assert tracker.call_count == tracker.measured_call_count == tracker.failed_call_count == 1
+    assert tracker.total_tokens == 16
 
 
 def test_react_message_request_bounds_sdk_retry_and_timeout():

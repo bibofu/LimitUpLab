@@ -6,7 +6,7 @@ import json
 from time import perf_counter
 from typing import Any, Callable
 
-from langchain_core.messages import AIMessage, BaseMessage
+from langchain_core.messages import AIMessage, AIMessageChunk, BaseMessage, message_chunk_to_message
 from langchain_core.prompts import ChatPromptTemplate
 from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
@@ -106,8 +106,11 @@ class LangChainChatProvider(LLMProvider):
             self._answer_model(system_prompt), system_prompt, user_prompt,
         )
 
-    def generate_messages(self, messages, tools, *, timeout_seconds=30, max_tokens=4096):
-        """Preserve AI/Tool messages and count every physical model attempt."""
+    def generate_messages(
+        self, messages, tools, *, timeout_seconds=30, max_tokens=4096,
+        on_chunk: Callable[[AIMessageChunk], None] | None = None,
+    ):
+        """Preserve tool messages and optionally report native chunks as they arrive."""
         tracker = _usage_tracker.get()
         if tracker:
             tracker.begin_call(self.model)
@@ -132,11 +135,27 @@ class LangChainChatProvider(LLMProvider):
             bound = model.bind_tools(tools, temperature=0, max_tokens=max_tokens, **choice) if tools else model.bind(
                 temperature=0, max_tokens=max_tokens,
             )
-            message = bound.invoke(messages, config={"run_name": "react_decision"})
+            streamed_message = None
+            stream_usage = None
+            if on_chunk is None:
+                message = bound.invoke(messages, config={"run_name": "react_decision"})
+            else:
+                stream = bound.stream(messages, config={"run_name": "react_decision"})
+                try:
+                    for chunk in stream:
+                        if not isinstance(chunk, AIMessageChunk):
+                            raise NativeFunctionCallingError("Expected an AIMessageChunk")
+                        streamed_message = chunk if streamed_message is None else streamed_message + chunk
+                        if isinstance(chunk.response_metadata.get("token_usage"), dict):
+                            stream_usage = chunk.response_metadata["token_usage"]
+                        on_chunk(chunk)
+                finally:
+                    stream.close()
+                message = message_chunk_to_message(streamed_message)
             if not isinstance(message, AIMessage):
                 raise NativeFunctionCallingError("Expected an AIMessage")
             usage = message.usage_metadata or {}
-            raw = message.response_metadata.get("token_usage")
+            raw = stream_usage if on_chunk is not None else message.response_metadata.get("token_usage")
             tokens = _parse_token_usage(raw) if raw else (
                 usage.get("input_tokens"), usage.get("output_tokens"), usage.get("total_tokens"),
             )
@@ -147,13 +166,23 @@ class LangChainChatProvider(LLMProvider):
             )
             if tracker:
                 tracker.complete_call(result)
+            if streamed_message is not None:
+                # LangChain accepts partial JSON while accumulating chunks. At EOF
+                # require complete arguments before any tool is executable.
+                for call in streamed_message.tool_call_chunks:
+                    try:
+                        arguments = json.loads(call.get("args") or "")
+                    except (TypeError, ValueError) as error:
+                        raise NativeFunctionCallingError("Malformed tool arguments") from error
+                    if not isinstance(arguments, dict):
+                        raise NativeFunctionCallingError("Malformed tool arguments")
             if message.invalid_tool_calls:
                 raise NativeFunctionCallingError("Malformed tool arguments")
             ids = [call.get("id") for call in message.tool_calls]
             if any(not value for value in ids) or len(ids) != len(set(ids)):
                 raise NativeFunctionCallingError("Missing or duplicate tool_call_id")
             return message
-        except Exception as error:
+        except BaseException as error:
             if tracker:
                 tracker.fail_call()
             if isinstance(error, APIError):

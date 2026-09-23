@@ -17,6 +17,8 @@ from app.agents.react_runtime.contracts import (
     MAX_MODEL_CALLS, MAX_TOOL_CALLS, ReadEvidence, VERSION,
 )
 from app.agents.react_runtime.compliance import review_answer
+from app.agents.react_runtime.answer_delivery import AnswerDelivery
+from app.agents.react_runtime.answer_stream import FinishAnswerStream
 from app.agents.react_runtime.evidence import CURRENT_SCOPE, EvidenceStore
 from app.agents.react_runtime.rendering import render_answer
 from app.agents.react_runtime.context import prepare_history, prepare_query_reference
@@ -51,7 +53,7 @@ finish.table是单个对象，整篇回答最多一张证据表；未交付名�
 禁止买卖指令、建议仓位、目标价、收益承诺或确定性预测；历史机构买卖事实可以解释。
 混合请求可拒绝交易建议部分并完成允许研究。歧义影响结果时澄清；工具不支持时明确说明。
 最终必须单独调用finish，输出可读中文答案、真实status、evidence_ids及missing。研究请求的complete、partial或empty必须引用本轮工具产生的evidence_id；寒暄和能力介绍可以不引用证据。
-不要展示内部工具名、原始JSON、思维链。答案只在服务端校验后发布。
+不要展示内部工具名、原始JSON、思维链。finish.answer会实时显示给用户，必须从首句起遵守事实和研究边界；完成后服务端仍会校验。
 观察中的rows可能只是预览；finish.table渲染服务端已有行，是否覆盖用户要求仍须核对source_truncated、data_missing及范围证明。仅需要检查具体未预览字段或深入分析时才read_evidence，筛选排序用compute_result处理已有结果。
 所有工具名及参数都必须使用提供的Schema；工具是否存在以当前清单为准。"""
 
@@ -74,8 +76,9 @@ TOOL_POOL = ThreadPoolExecutor(max_workers=MAX_CONCURRENCY, thread_name_prefix="
 
 
 class Run:
-    def __init__(self, request, registry, provider, history, progress):
+    def __init__(self, request, registry, provider, history, progress, answer_event=None):
         self.request, self.provider, self.progress = request, provider, progress
+        self.delivery = AnswerDelivery(answer_event)
         self.evidence = EvidenceStore()
         self.gateway = ToolGateway(registry, self.evidence)
         self.started = perf_counter()
@@ -134,13 +137,22 @@ class Run:
         if finish_only:
             messages = [*messages, HumanMessage(content="查询预算即将结束。现在必须单独调用finish，交付已取得事实并明确缺口；不得继续查询。")]
         try:
+            decoder = FinishAnswerStream(self.delivery.feed, self.delivery.reset)
+            def on_chunk(chunk):
+                if (self.control and self.control.cancelled()) or perf_counter() >= self.deadline:
+                    raise InterruptedError("Run cancelled or deadline exceeded")
+                decoder.feed(chunk.tool_call_chunks)
+            stream_options = {"on_chunk": on_chunk} if self.delivery.emit else {}
             response = self.provider.generate_messages(
                 messages, definitions,
                 timeout_seconds=max(1, min(35, self.deadline - perf_counter())), max_tokens=4096,
+                **stream_options,
             )
             self.trace("react_decision", {"round": self.models, "tool_calls": response.tool_calls,
                                          "usage": response.usage_metadata or {}})
             messages = [*messages, response]
+            if len(response.tool_calls) != 1 or response.tool_calls[0]["name"] != "finish":
+                self.delivery.reset()
             if response.tool_calls:
                 return {"messages": messages, "pending": response.tool_calls, "finish": None}
             answer = response.content.strip() if isinstance(response.content, str) else ""
@@ -159,6 +171,11 @@ class Run:
                 "finish": None,
             }
         except Exception as error:
+            self.delivery.reset()
+            if self.control and self.control.cancelled():
+                return self.stop("cancelled")
+            if perf_counter() >= self.deadline:
+                return self.stop("budget_exhausted")
             self.trace("react_provider_error", {"round": self.models, "error_type": type(error).__name__}, status="error")
             self.errors.append("模型请求失败")
             if len(self.errors) >= 2:
@@ -190,6 +207,8 @@ class Run:
                 ready.append({**call, "args": args, "signature": signature})
                 self.trace("react_policy", {"call_id": call["id"], "decision": "allow", "arguments": args})
             except Exception as error:
+                if call["name"] == "finish":
+                    self.delivery.reset()
                 observations.append((call, {"execution_status": "rejected", "error": str(error)}))
                 self.trace("react_policy", {"call_id": call["id"], "decision": "reject", "reason": str(error)})
         return {"pending": ready, "observations": observations}
@@ -326,6 +345,7 @@ class Run:
             final.answer = render_answer(final, self.evidence)
             if contains_prompt_leak(final.answer):
                 raise ValueError("Internal content detected; answer research facts only")
+            self.delivery.render(final.answer)
             self.compliance_checks += 1
             remaining = self.deadline - perf_counter()
             if remaining <= 0:
@@ -339,6 +359,8 @@ class Run:
             self.trace("react_compliance", review.model_dump(mode="json"))
             if review.decision != "allow":
                 raise ValueError("Compliance review rejected the answer: " + ", ".join(review.violations))
+            if self.control and self.control.cancelled():
+                return self.stop("cancelled")
             self.answer, self.status = final.answer, final.status
             self.reason = "answered"
             self.trace("react_answer_check", {
@@ -348,6 +370,7 @@ class Run:
             })
             return {"done": True}
         except Exception as error:
+            self.delivery.reset()
             self.trace("react_answer_check", {"passed": False, "reason": str(error)})
             if self.repairs >= 1:
                 return self.stop("validation_failed")
@@ -360,6 +383,7 @@ class Run:
             ))], "finish": None}
 
     def stop(self, reason):
+        self.delivery.reset()
         self.reason = reason
         current = self.evidence.current_records()
         self.status = "partial" if current else "error"
@@ -411,8 +435,8 @@ def _graph():
 GRAPH = _graph()
 
 
-def run(request, registry, provider, history=None, memory=None, progress=None):
-    runtime = Run(request, registry, provider, history or [], progress)
+def run(request, registry, provider, history=None, memory=None, progress=None, answer_event=None):
+    runtime = Run(request, registry, provider, history or [], progress, answer_event)
     context_message_count = 0
     if progress:
         progress("preparing", "正在检查请求与研究范围")
