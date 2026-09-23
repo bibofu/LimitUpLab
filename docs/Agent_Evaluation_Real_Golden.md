@@ -9,7 +9,7 @@
 | 人工认可题目、需求、参考依据和判分合同 | 30 | 26道单轮、4道两轮；bibo认可剩余23题，无例外，均为公开Dev |
 | 正式Active题目合同 | 28 | 本轮由7增至28；不以Agent答对为前提，不重复计算版本或轮次 |
 | 待题目审核 | 0 | 原批量审核无需重填；题目认可不等于认可Agent答案 |
-| 已有人审通过的历史答案/会话 | 2 | 仅Q01 v23、M02原答；本轮新答案人审批准数为0 |
+| 当前版本答案/会话人工验收 | 20通过、8不通过 | 28份当前回答均已逐题确认；旧Q01 v23、M02答案标签另存，不叠加计数 |
 | 固定当前Agent版本实际运行 | 28 | react-runtime-v24，4个真实两轮均验证相同session且真实首轮答案逐字保留 |
 | 题目已认可、执行绑定阻断 | 2 | Q09/Q23历史新闻；不伪造历史时钟、新闻响应或缺口，不计入可运行Active |
 
@@ -22,13 +22,15 @@
 
 - 首次28题：26个`needs_review`、1个确定性`fail`、1个夹具`unscorable`。
 - M03首次失败因缺少风华高科正常事件查询录制。保留原失败，补真实生产输出后只验证一次；当前资产版本合计27个`needs_review`、1个`fail`。
-- `needs_review`不是通过：没有调用Judge，没有新增人工答案标签，不报告准确率、pass@1或稳定率。
+- 运行器的`needs_review`不是通过：本轮未调用Judge。之后用户逐题确认当前28份答案为20通过、8不通过；
+  这是单份有效答案的人审结果20/28（71.4%），不叫pass@1、稳定率或发布准入。
 - Q26的`fail`是消歧终态标为`complete`而非合同要求的`clarify`；不能将它写成股票事实已核验错误。
 - 助手抽查另发现Q05/M01价格口径披露、Q11/Q12评分阶段/版本解释、M03单数代词消歧问题；仅记录，不修Agent。
   M03补齐夹具后所有查询命中，但仍直接回答两只股票而未先澄清，不能因机器未判fail便认定答案通过。
-- 已对28份当前版本原答逐题形成[答案复核建议](../output/agent-eval/real-golden-admission-20260923-001/ANSWER_REVIEW_BATCH.md)：
-  助手建议20题通过、8题不通过，逐题附三维判断、关键依据及原答链接。28个原答链接与题号已逐一核对。
-  这是待用户一次性确认的建议，不是人工标签；正式运行文件中27个`needs_review`仍保持原样，不能直接报告20/28为通过率。
+- 已对28份当前版本原答逐题形成[答案复核材料](../output/agent-eval/real-golden-admission-20260923-001/ANSWER_REVIEW_BATCH.md)，
+  并获用户明确认可“20过、8不过”。[验收结果](../output/agent-eval/real-golden-admission-20260923-001/ANSWER_REVIEW_RESULT.md)
+  与`answer-quality-approval.json`逐题绑定原答及证据摘要；仓库保存无原答的
+  `backend/evals/suites/real-dev28-user-reviewed-answer-labels.json`。正式运行器原诊断仍保持27个`needs_review`、1个`fail`，不被静默改写。
 
 ## 资产和唯一审核入口
 
@@ -41,9 +43,10 @@
 - 审批与完整性：`approval-bindings.json`、`approval-carry-proof.json`、`m03-revision-ledger.json`、`protection-manifest.json`。
 - 真实执行：`run-dev19/`、`run-bound9/`、`run-m03-fixture-v3/`，原始响应、工具记录、两轮上下文及成本均保留。
 - 汇总：`RESULTS.md`、`completion-summary.json`；助手语义抽查见`ASSISTANT_AUDIT.md`，不冒充人工标签。
+- 人工答案标签：`ANSWER_REVIEW_RESULT.md`、`answer-quality-approval.json`；覆盖本轮全部28份有效回答，包含20通过和8不通过。
 - 新绑定：`output/agent-eval/real-golden-bindings-20260923-001/`中`bundle/`为7题现有SnapshotLive绑定，
   `mixed-bundle/`为Q05/M03真实事件与价格录制，`mixed-bundle-v2/`仅补M03缺失录制；均有合同不变证明。
-- 生成报告、审核原件、真实数据库仍不提交Git；Git只保存纯题目设计及本进度说明。
+- 生成报告、审核原件、真实数据库仍不提交Git；Git只保存题目设计、脱敏的人工答案标签摘要及本进度说明。
 
 ## 题目覆盖
 

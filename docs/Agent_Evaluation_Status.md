@@ -8,11 +8,11 @@
 - 正式Active从7增至28；Q09/Q23虽已认可，但历史新闻执行受现有工具能力限制，保留阻断，不凑数入库。
 - 固定react-runtime-v24运行28题，首次26 needs_review/1 fail/1夹具unscorable；M03只补真实录制后验证1次，当前资产口径27 needs_review/1 fail。
   原夹具失败保留，不当Agent事实错误；29次尝试不是29道题，也不是三轮稳定性。4个真实两轮均验证上下文逐字继承。
-- 175次模型调用、0 Judge，记录1,210,783 tokens；无新增人工答案标签，27 needs_review不是27通过，历史人审通过仍仅原2份答案。
+- 175次模型调用、0 Judge，记录1,210,783 tokens；运行器原27个needs_review不是自动通过。用户随后逐题确认本轮答案20通过、8不通过；旧版2份人审标签不叠加计数。
 - 145个backend/app文件哈希未变，未改Agent、提示或评测框架；价格口径、评分阶段解释、消歧问题只记录，不修改判分适配答案。
 - 当前套件：`output/agent-eval/real-golden-admission-20260923-001/active-dev28-final/suite.json`；同目录`RESULTS.md`为运行汇总。
-- 28份当前版本答案已另制逐题三维复核建议：助手建议20通过、8不通过，参见[答案复核建议](../output/agent-eval/real-golden-admission-20260923-001/ANSWER_REVIEW_BATCH.md)。
-  这不代填用户人工标签；运行器原有27个needs_review保持不变，待用户一次性确认或指出例外后才能形成正式答案验收结果。
+- 用户明确认可[28份当前版本答案的逐题三维复核](../output/agent-eval/real-golden-admission-20260923-001/ANSWER_REVIEW_RESULT.md)：20通过、8不通过。
+  本批答案标签与原答/题目摘要已绑定并保存为`backend/evals/suites/real-dev28-user-reviewed-answer-labels.json`；运行器原27个needs_review保持不变。
 
 ### 建设已转为批量题目入库，不再边设计边修Agent（2026-09-22）
 
