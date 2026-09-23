@@ -86,25 +86,7 @@ class ToolGateway:
     def execute(self, name, args):
         kwargs = dict(args)
         kwargs.pop("requested_as_of", None)
-        if callable(getattr(self.registry, "execute_frozen_calls", None)):
-            from app.models import AgentChatRequest
-            execution = self.registry.execute_frozen_calls(
-                [{"name": name, "arguments": kwargs}], request=AgentChatRequest(session_id="react-frozen", message=""),
-            )
-            trace = execution["tool_results"][0]
-            # Frozen recordings are already canonical Gateway observations. Do not
-            # flatten ratings again or turn a recorded error/partial into empty.
-            outcome = trace.result
-            if outcome is None:
-                raise ValueError("Frozen tool result requires an explicit outcome")
-            payload = execution.get("observation_payloads", [trace.output])[0]
-            result = ToolResult(name=name, input=trace.input, output=payload, summary=trace.summary,
-                                trace_output=trace.output, status=trace.status, error=trace.error,
-                                result_status=outcome.status, data_fresh=outcome.data_fresh,
-                                source_errors=tuple(outcome.source_errors))
-            return result, payload, outcome.status
-        else:
-            result = self.structured[name].invoke(kwargs)
+        result = self.structured[name].invoke(kwargs)
         payload = payload_of(result)
         if not isinstance(payload, (dict, list)):
             raise ValueError("Invalid tool output: expected structured facts")

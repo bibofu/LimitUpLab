@@ -1,29 +1,11 @@
 """Shared typed values for structured Agent tool arguments."""
 
-from contextlib import contextmanager
-from contextvars import ContextVar
 from datetime import date
-from typing import Iterator, Literal
-
-
-_query_reference_date: ContextVar[date | None] = ContextVar(
-    "query_reference_date", default=None
-)
-
-
-@contextmanager
-def query_reference_date_override(value: date) -> Iterator[None]:
-    """Anchor request-scoped dates for production and reproducible evaluations."""
-
-    token = _query_reference_date.set(value)
-    try:
-        yield
-    finally:
-        _query_reference_date.reset(token)
+from typing import Literal
 
 
 def current_query_reference_date() -> date:
-    return _query_reference_date.get() or date.today()
+    return date.today()
 
 
 MarketSegment = Literal["main_board", "chinext", "star_market", "beijing"]
