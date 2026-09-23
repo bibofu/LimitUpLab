@@ -11,6 +11,8 @@
 - 175次模型调用、0 Judge，记录1,210,783 tokens；无新增人工答案标签，27 needs_review不是27通过，历史人审通过仍仅原2份答案。
 - 145个backend/app文件哈希未变，未改Agent、提示或评测框架；价格口径、评分阶段解释、消歧问题只记录，不修改判分适配答案。
 - 当前套件：`output/agent-eval/real-golden-admission-20260923-001/active-dev28-final/suite.json`；同目录`RESULTS.md`为运行汇总。
+- 28份当前版本答案已另制逐题三维复核建议：助手建议20通过、8不通过，参见[答案复核建议](../output/agent-eval/real-golden-admission-20260923-001/ANSWER_REVIEW_BATCH.md)。
+  这不代填用户人工标签；运行器原有27个needs_review保持不变，待用户一次性确认或指出例外后才能形成正式答案验收结果。
 
 ### 建设已转为批量题目入库，不再边设计边修Agent（2026-09-22）
 
