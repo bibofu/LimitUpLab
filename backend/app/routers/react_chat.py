@@ -3,7 +3,6 @@
 import json
 import math
 import threading
-import time
 from datetime import datetime, timezone
 from typing import Annotated
 
@@ -19,9 +18,18 @@ from app.security import current_owner_id
 router = APIRouter()
 _lock = threading.Lock()
 _workers: dict[str, threading.Thread] = {}
+_updates = threading.Condition()
+_update_revision = 0
 MAX_ANSWER_CHUNKS = 48
 MIN_ANSWER_CHUNK_CHARS = 160
-ANSWER_CHUNK_INTERVAL_SECONDS = 0.025
+
+
+def notify_streams():
+    """Wake local readers after committed changes; polling remains a fallback."""
+    global _update_revision
+    with _updates:
+        _update_revision += 1
+        _updates.notify_all()
 
 
 def owned(journal, run_id, owner_id):
@@ -84,7 +92,11 @@ def start(request, http_request, owner_id):
             tracker = response = failure = None
             control = RunControl(journal, row)
             token = CURRENT_CONTROL.set(control)
+            def progress(stage, message):
+                journal.event(run_id, "progress", {"stage": stage, "message": message})
+                notify_streams()
             try:
+                progress("preparing", "正在准备会话与研究数据")
                 with agents.capture_llm_usage() as tracker:
                     context, memory = agents.prepare_session_context(
                         session_id=request.session_id, owner_id=owner_id, messages=history,
@@ -94,7 +106,7 @@ def start(request, http_request, owner_id):
                         request=request, events=agents.get_limit_up_repository().list_events(),
                         repository=agents.SQLiteFirstBoardRepository(), conversation_messages=context,
                         session_memory=memory,
-                        progress_callback=lambda stage, message: journal.event(run_id, "progress", {"stage": stage, "message": message}),
+                        progress_callback=progress,
                     )
                 response.run_id = run_id
             except Exception as error:
@@ -109,7 +121,9 @@ def start(request, http_request, owner_id):
                     if response is not None:
                         # Persist before publishing any final answer. Message id is
                         # stable across crash recovery and repeated submissions.
+                        progress("checking", "正在保存研究结果")
                         response = AgentChatResponse.model_validate(journal.finish(run_id, owner_id, response.model_dump(mode="json")))
+                        notify_streams()
                 finally:
                     try:
                         agents._finish_agent_request(usage_repository, usage_record, tracker, response=response, error=failure)
@@ -118,6 +132,7 @@ def start(request, http_request, owner_id):
                         CURRENT_CONTROL.reset(token)
                         with _lock:
                             _workers.pop(run_id, None)
+                        notify_streams()
         thread = threading.Thread(target=worker, daemon=True, name="react-" + run_id)
         _workers[run_id] = thread
         thread.start()
@@ -130,19 +145,28 @@ def failed_response(row, reason):
 
 
 def answer_chunks(answer):
-    """Keep Markdown lines (especially table rows) intact during delivery."""
+    """Bound prose chunks while keeping Markdown table rows intact."""
     target = max(MIN_ANSWER_CHUNK_CHARS, math.ceil(len(answer) / MAX_ANSWER_CHUNKS))
     pending = ""
     for line in answer.splitlines(keepends=True):
-        pending += line
-        if len(pending) >= target:
-            yield pending
-            pending = ""
+        if line.lstrip().startswith("|"):
+            pending += line
+            if len(pending) >= target:
+                yield pending
+                pending = ""
+            continue
+        while line:
+            available = target - len(pending)
+            pending += line[:available]
+            line = line[available:]
+            if len(pending) >= target:
+                yield pending
+                pending = ""
     if pending:
         yield pending
 
 
-def validated_answer_frames(response_json, *, interval=ANSWER_CHUNK_INTERVAL_SECONDS):
+def validated_answer_frames(response_json):
     """Stream only a persisted final answer; reconnects reset and replay it safely."""
     response = AgentChatResponse.model_validate_json(response_json)
     answer = response.answer
@@ -158,8 +182,6 @@ def validated_answer_frames(response_json, *, interval=ANSWER_CHUNK_INTERVAL_SEC
             "delta": chunk,
         }, ensure_ascii=False) + "\n\n"
         offset += len(chunk)
-        if interval > 0 and offset < len(answer):
-            time.sleep(interval)
     yield "event: completed\ndata: " + response_json + "\n\n"
 
 
@@ -169,6 +191,8 @@ def stream(journal, row, owner_id, after=0):
         cursor = after
         yield "event: accepted\ndata: " + json.dumps({"run_id": run_id, "session_id": row["session_id"]}) + "\n\n"
         while True:
+            with _updates:
+                revision = _update_revision
             latest = owned(journal, run_id, owner_id)
             for event in journal.events(run_id, owner_id, cursor):
                 cursor = event["seq"]
@@ -186,7 +210,8 @@ def stream(journal, row, owner_id, after=0):
                 yield "event: error\ndata: " + json.dumps({"run_id": run_id, "message": "运行已中断；重新提交同一请求可恢复，已完成工具不会重复执行。"}, ensure_ascii=False) + "\n\n"
                 return
             yield ": heartbeat\n\n"
-            time.sleep(.5)
+            with _updates:
+                _updates.wait_for(lambda: _update_revision != revision, timeout=.5)
     return StreamingResponse(frames(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "X-Agent-Run-Id": run_id})
 
 
@@ -228,4 +253,5 @@ def cancel(run_id: str, owner_id: Annotated[str, Depends(current_owner_id)]):
         thread = _workers.get(run_id)
         if row["active"] and (thread is None or not thread.is_alive()):
             journal.finish(run_id, owner_id, failed_response(row, "cancelled").model_dump(mode="json"))
+        notify_streams()
     return {"run_id": run_id, "cancel_requested": bool(row["active"] or row["cancelled"])}

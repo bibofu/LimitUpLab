@@ -1,4 +1,5 @@
 import {
+  ArrowDown,
   Check,
   LoaderCircle,
   MessageCircle,
@@ -31,6 +32,8 @@ import type {
   ChatSessionSummary,
 } from "../types";
 import { AgentAnswerMarkdown } from "./AgentAnswerMarkdown";
+import { AgentChatProgress } from "./AgentChatProgress";
+import { createAgentAnswerBuffer } from "../utils/agentAnswerBuffer";
 import { taskStatusLabel } from "../utils/agentChatTransport";
 
 interface ChatMessage {
@@ -133,9 +136,9 @@ export function AgentChatDock({
 
   const [message, setMessage] = useState("");
   const [sending, setSending] = useState(false);
-  const [elapsedMs, setElapsedMs] = useState(0);
-  const [streamStage, setStreamStage] = useState<AgentChatStreamStage>("planning");
-  const [streamStatus, setStreamStatus] = useState("正在理解问题并规划工具");
+  const runStartedAt = useRef(0);
+  const [streamStage, setStreamStage] = useState<AgentChatStreamStage>("preparing");
+  const [streamStatus, setStreamStatus] = useState("正在连接研究助手");
   const [error, setError] = useState<string | null>(null);
   const [failedPrompt, setFailedPrompt] = useState<string | null>(null);
   const failedRequest = useRef<AgentChatRequest | null>(null);
@@ -151,6 +154,8 @@ export function AgentChatDock({
   const initializedSessions = useRef(false);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const followAnswerRef = useRef(true);
+  const [showLatest, setShowLatest] = useState(false);
+  const answerBufferRef = useRef<ReturnType<typeof createAgentAnswerBuffer> | null>(null);
   const isConversationActive = sending || messages.length > 0;
 
   useEffect(/* Synchronize AgentChatDock with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
@@ -161,17 +166,7 @@ export function AgentChatDock({
     void initializeChatSessions();
   }, []);
 
-  useEffect(/* Synchronize AgentChatDock with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
-    if (!sending) {
-      setElapsedMs(0);
-      return undefined;
-    }
-    const startedAt = Date.now();
-    const timer = window.setInterval(/* Handle the callback from window.setInterval within AgentChatDock. */ () => {
-      setElapsedMs(Date.now() - startedAt);
-    }, 100);
-    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => window.clearInterval(timer);
-  }, [sending]);
+  useEffect(() => () => answerBufferRef.current?.dispose(), []);
 
   useEffect(/* Synchronize AgentChatDock with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
     const container = messagesContainerRef.current;
@@ -182,12 +177,14 @@ export function AgentChatDock({
       container.scrollTop = container.scrollHeight;
     });
     return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => window.cancelAnimationFrame(frame);
-  }, [messages, sending]);
+  }, [messages, sending, streamStatus]);
 
   /**
    * Replace the active conversation with the fetched detail and remember its ID for reloads.
    */
   function applyChatSession(detail: ChatSessionDetail) {
+    followAnswerRef.current = true;
+    setShowLatest(false);
     setSessionId(detail.session_id);
     window.localStorage.setItem(ACTIVE_CHAT_SESSION_STORAGE_KEY, detail.session_id);
     setMessages(detail.messages.map(restoredChatMessage));
@@ -371,16 +368,28 @@ export function AgentChatDock({
     ]);
     setMessage("");
     followAnswerRef.current = true;
+    setShowLatest(false);
+    runStartedAt.current = Date.now();
     setSending(true);
-    setStreamStage("planning");
-    setStreamStatus("正在理解问题并规划工具");
+    setStreamStage("preparing");
+    setStreamStatus("正在连接研究助手");
     setError(null);
     setFailedPrompt(null);
     if (!retry) {
       setActiveRunId(null);
       setCancelRequested(false);
     }
-    const agentMessageId = `agent-${Date.now()}`;
+    const agentMessageId = `agent-${userMessageId}`;
+    let stockMentions: AgentStockMention[] = [];
+    const answerBuffer = createAgentAnswerBuffer(content => {
+      setMessages(current => {
+        const draft: ChatMessage = { id: agentMessageId, role: "agent", content, stockMentions };
+        return current.some(item => item.id === agentMessageId)
+          ? current.map(item => item.id === agentMessageId ? draft : item)
+          : [...current, draft];
+      });
+    });
+    answerBufferRef.current = answerBuffer;
 
     try {
       const response = await streamAgentChatMessage(payload, event => {
@@ -391,22 +400,15 @@ export function AgentChatDock({
         }
         if (event.event === "answer_start") {
           setStreamStage("answering");
-          setStreamStatus("正在展示查询结果");
-          setMessages(current => {
-            const existing = current.findIndex(item => item.id === agentMessageId);
-            const draft: ChatMessage = {
-              id: agentMessageId, role: "agent", content: "", stockMentions: event.data.stock_mentions ?? [],
-            };
-            if (existing < 0) return [...current, draft];
-            return current.map((item, index) => index === existing ? draft : item);
-          });
+          setStreamStatus("回答已就绪，正在接收结果");
+          stockMentions = event.data.stock_mentions ?? [];
+          answerBuffer.reset(messages.find(item => item.id === agentMessageId)?.content);
         }
         if (event.event === "answer_delta") {
-          setMessages(current => current.map(item => item.id === agentMessageId
-            ? { ...item, content: Array.from(item.content).slice(0, event.data.offset).join("") + event.data.delta }
-            : item));
+          answerBuffer.append(event.data.offset, event.data.delta);
         }
       });
+      answerBuffer.dispose();
       setMessages(current => {
         const finalMessage: ChatMessage = {
           id: agentMessageId, role: "agent", content: response.answer,
@@ -421,11 +423,17 @@ export function AgentChatDock({
       setError(null);
       void refreshChatSessions();
     } catch (caught) {
+      answerBuffer.flush();
+      setMessages(current => current.map(item => item.id === agentMessageId
+        ? { ...item, status: "error", taskLabel: "连接中断，回答尚未接收完整" }
+        : item));
       const errorMessage = caught instanceof Error ? caught.message : "Agent 回答失败";
       setError(errorMessage);
       setFailedPrompt(trimmed);
       failedRequest.current = payload;
     } finally {
+      answerBuffer.dispose();
+      answerBufferRef.current = null;
       setSending(false);
     }
   }
@@ -569,12 +577,13 @@ export function AgentChatDock({
         </header>
 
         <div
-          aria-live="polite"
+          aria-label="对话消息"
           className="agent-chat-messages"
           ref={messagesContainerRef}
           onScroll={event => {
             const element = event.currentTarget;
             followAnswerRef.current = element.scrollHeight - element.scrollTop - element.clientHeight < 64;
+            setShowLatest(!followAnswerRef.current);
           }}
         >
           {messages.map(/* Transform each entry in messages into the result used by AgentChatDock. */ (item) => (
@@ -596,16 +605,7 @@ export function AgentChatDock({
             </article>
           ))}
           {sending ? (
-            <div className="chat-progress" role="status">
-              <LoaderCircle aria-hidden="true" size={18} />
-              <div>
-                <strong>
-                  {streamStage === "answering" ? "Agent 输出中" : "Agent 执行中"}
-                  {" · "}{(elapsedMs / 1000).toFixed(1)}s
-                </strong>
-                <span>{streamStatus}</span>
-              </div>
-            </div>
+            <AgentChatProgress stage={streamStage} message={streamStatus} startedAt={runStartedAt.current} />
           ) : null}
           {error ? (
             <div className="chat-state error chat-retry-state">
@@ -618,6 +618,17 @@ export function AgentChatDock({
             </div>
           ) : null}
         </div>
+
+        {showLatest ? (
+          <button className="chat-scroll-latest" type="button" onClick={() => {
+            followAnswerRef.current = true;
+            setShowLatest(false);
+            const container = messagesContainerRef.current;
+            if (container) container.scrollTop = container.scrollHeight;
+          }}>
+            <ArrowDown aria-hidden="true" size={14} />回到最新消息
+          </button>
+        ) : null}
 
         <div className="agent-chat-prompts">
           {promptSuggestions.slice(0, 3).map(/* Transform each entry in promptSuggestions.slice(0, 3) into the result used by AgentChatDock. */ (prompt) => (

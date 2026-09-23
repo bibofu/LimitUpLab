@@ -34,6 +34,57 @@ def test_react_message_request_bounds_sdk_retry_and_timeout():
     assert len(calls) == 1 and tracker.failed_call_count == 1
 
 
+@pytest.mark.parametrize(("tool_count", "extra_body", "expected_choice"), [
+    (2, {"thinking": {"type": "disabled"}}, "required"),
+    (1, {"thinking": {"type": "disabled"}}, "named"),
+    (0, {"thinking": {"type": "disabled"}}, None),
+    (2, {"thinking": {"type": "enabled"}}, None),
+    (2, {"thinking": {"type": "auto"}}, None),
+    (2, {"thinking": None}, None),
+    (2, {}, None),
+    (2, None, None),
+    (1, {"thinking": {"type": "enabled"}}, "named"),
+    (0, {"thinking": {"type": "enabled"}}, None),
+])
+def test_react_tool_choice_matches_wire_thinking_mode_and_counts_once(
+    tool_count, extra_body, expected_choice,
+):
+    from langchain_core.messages import HumanMessage
+
+    payloads = []
+    definitions = [{"type": "function", "function": {
+        "name": name, "description": name,
+        "parameters": {"type": "object", "properties": {}},
+    }} for name in ("finish", "lookup")][:tool_count]
+
+    def handle(request):
+        payloads.append(json.loads(request.content))
+        message = tool_message("finish", "{}") if definitions else None
+        return httpx.Response(200, json=completion(message))
+
+    with provider_for(handle) as provider, capture_llm_usage() as tracker:
+        provider.chat_model.extra_body = extra_body
+        result = provider.generate_messages([HumanMessage(content="研究")], definitions)
+
+    assert len(payloads) == 1
+    payload = payloads[0]
+    if expected_choice == "named":
+        assert payload["tool_choice"] == {"type": "function", "function": {"name": "finish"}}
+    elif expected_choice is None:
+        assert "tool_choice" not in payload
+    else:
+        assert payload["tool_choice"] == expected_choice
+    if definitions:
+        assert len(payload["tools"]) == tool_count
+        assert result.tool_calls[0]["name"] == "finish"
+    else:
+        assert "tools" not in payload and result.content == "依据数据回答。"
+    assert payload.get("thinking") == (extra_body or {}).get("thinking")
+    assert tracker.call_count == tracker.measured_call_count == 1
+    assert tracker.failed_call_count == 0 and tracker.token_usage_complete
+    assert (tracker.prompt_tokens, tracker.completion_tokens, tracker.total_tokens) == (12, 4, 16)
+
+
 # Prepare the completion fixture or observation used by the surrounding regression scenario.
 def completion(message=None, usage=USAGE):
     return {

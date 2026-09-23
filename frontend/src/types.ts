@@ -583,7 +583,7 @@ export interface AgentChatPerformance {
   answer_prompt_chars: number;
 }
 
-export type AgentChatStreamStage = "planning" | "tools" | "answering";
+export type AgentChatStreamStage = "preparing" | "planning" | "tools" | "checking" | "answering";
 
 export type AgentChatStreamEvent =
   | {

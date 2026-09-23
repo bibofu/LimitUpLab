@@ -88,7 +88,10 @@ def http_server(tmp_path, monkeypatch, request):
 PAYLOAD = {"session_id": "http-s", "message_id": "http-m", "message": "查询热榜，缺失时说明缺口"}
 
 
-def test_validated_answer_chunking_is_bounded_and_completed_remains_authoritative():
+def test_validated_answer_chunking_is_bounded_and_completed_remains_authoritative(monkeypatch):
+    def unexpected_sleep(_seconds):
+        pytest.fail("Validated output must not add an artificial delivery delay")
+    monkeypatch.setattr(time, "sleep", unexpected_sleep)
     answer = "研究结论" * 4000
     response = AgentChatResponse(
         session_id="chunk-session",
@@ -99,7 +102,7 @@ def test_validated_answer_chunking_is_bounded_and_completed_remains_authoritativ
         generated_by="test",
     )
     response_json = response.model_dump_json()
-    frames = list(react_chat.validated_answer_frames(response_json, interval=0))
+    frames = list(react_chat.validated_answer_frames(response_json))
     delta_payloads = [
         json.loads(frame.split("\ndata: ", 1)[1].rsplit("\n\n", 1)[0])
         for frame in frames
@@ -108,7 +111,7 @@ def test_validated_answer_chunking_is_bounded_and_completed_remains_authoritativ
 
     assert frames[0].startswith("event: answer_start")
     assert frames[-1] == "event: completed\ndata: " + response_json + "\n\n"
-    assert len(delta_payloads) <= react_chat.MAX_ANSWER_CHUNKS
+    assert 1 < len(delta_payloads) <= react_chat.MAX_ANSWER_CHUNKS
     assert "".join(item["delta"] for item in delta_payloads) == answer
     assert [item["offset"] for item in delta_payloads] == sorted(item["offset"] for item in delta_payloads)
 
@@ -121,6 +124,57 @@ def test_answer_chunks_preserve_table_rows_and_unicode():
     assert all(chunk.endswith("\n") for chunk in chunks)
     assert all(not line or line.startswith("|") or line == "龙虎榜📊"
                for chunk in chunks for line in chunk.splitlines())
+
+
+def test_stream_wakeup_preserves_updates_between_poll_and_wait(monkeypatch):
+    """A commit after polling but before waiting must not incur the poll delay."""
+    async def read_frames():
+        journal = SimpleNamespace(
+            get=lambda *_: {"response_json": None},
+            events=lambda *_: [],
+        )
+        worker = SimpleNamespace(is_alive=lambda: True)
+        monkeypatch.setitem(react_chat._workers, "wakeup-run", worker)
+        response = react_chat.stream(journal, {"run_id": "wakeup-run", "session_id": "s"}, "owner")
+        frames = response.body_iterator
+        assert "event: accepted" in await anext(frames)
+        assert "heartbeat" in await anext(frames)
+        # This models the exact gap after DB polling, before Condition.wait_for.
+        react_chat.notify_streams()
+        def unexpected_wait(_timeout=None):
+            pytest.fail("A committed update was missed before the condition wait")
+        monkeypatch.setattr(react_chat._updates, "wait", unexpected_wait)
+        assert "heartbeat" in await anext(frames)
+        await frames.aclose()
+    import asyncio
+    asyncio.run(read_frames())
+
+
+def test_progress_arrives_before_blocking_input_review_and_final_answer(http_server, monkeypatch):
+    client, state = http_server
+    def review(*_args, **_kwargs):
+        state.entered.set()
+        assert state.release.wait(10)
+        return PromptInjectionAssessment(
+            decision="allow", signals=[], reason="fixture", request_kind="research",
+        )
+    monkeypatch.setattr(runtime_module, "review_input", review)
+    with client.stream("POST", "/chat/stream", json=PAYLOAD) as response:
+        lines = response.iter_lines()
+        received = []
+        for line in lines:
+            received.append(line)
+            if "正在检查请求与研究范围" in line:
+                break
+        assert state.entered.wait(5)
+        assert "event: answer_start" not in received
+        assert any("正在准备会话与研究数据" in line for line in received)
+        state.release.set()
+        received.extend(lines)
+    text = "\n".join(received)
+    assert text.index("正在整理结果并校验回答") < text.index("正在保存研究结果")
+    assert text.index("正在保存研究结果") < text.index("event: answer_start")
+    assert text.index("event: answer_start") < text.index("event: completed")
 
 
 def test_http_idempotency_reconnect_owner_and_delete(http_server):

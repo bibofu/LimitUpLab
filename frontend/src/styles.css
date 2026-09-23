@@ -1156,6 +1156,7 @@ td span {
 .chat-markdown table {
   display: block;
   width: 100%;
+  min-width: 0;
   margin: 10px 0;
   overflow-x: auto;
   border-collapse: collapse;
@@ -1217,6 +1218,28 @@ td span {
 .chat-progress strong {
   color: #374151;
   font-size: 13px;
+}
+
+.chat-progress-heading {
+  display: flex;
+  align-items: baseline;
+  gap: 12px;
+}
+
+.chat-scroll-latest {
+  display: flex;
+  align-items: center;
+  justify-self: center;
+  gap: 5px;
+  margin: 4px auto;
+  padding: 5px 12px;
+  border: 1px solid #e3e8ef;
+  border-radius: 16px;
+  background: #ffffff;
+  color: #526071;
+  font: inherit;
+  font-size: 12px;
+  cursor: pointer;
 }
 
 .chat-progress span {

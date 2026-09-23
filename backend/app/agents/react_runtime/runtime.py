@@ -218,6 +218,8 @@ class Run:
         if business:
             if self.progress:
                 self.progress("tools", f"正在执行 {len(business)} 项数据查询")
+            completed_count = 0
+            failed_count = 0
             pending = {TOOL_POOL.submit(copy_context().run, execute, call): call for call in business}
             while pending:
                 if perf_counter() >= self.deadline or (self.control and self.control.cancelled()):
@@ -234,6 +236,14 @@ class Run:
                         _, result = future.result()
                     except Exception as error:
                         result = {"execution_status": "failed", "result_state": "error", "error_type": type(error).__name__}
+                    completed_count += 1
+                    if not result.get("ok") or result.get("status") in {"error", "partial"}:
+                        failed_count += 1
+                    if self.progress:
+                        message = f"数据查询已返回 {completed_count}/{len(business)} 项"
+                        if failed_count:
+                            message += f"，其中 {failed_count} 项存在缺口"
+                        self.progress("tools", message)
                     if not result.get("ok"):
                         observations.append((call, result))
                         self.trace(call["name"], result, input=call["args"], status="error")
@@ -289,6 +299,8 @@ class Run:
     def gate(self, state):
         if self.control and self.control.cancelled():
             return self.stop("cancelled")
+        if self.progress:
+            self.progress("checking", "正在整理结果并校验回答")
         try:
             final = Finish.model_validate(state["finish"])
             cited = list(final.evidence_ids)
@@ -402,6 +414,8 @@ GRAPH = _graph()
 def run(request, registry, provider, history=None, memory=None, progress=None):
     runtime = Run(request, registry, provider, history or [], progress)
     context_message_count = 0
+    if progress:
+        progress("preparing", "正在检查请求与研究范围")
     try:
         remaining = runtime.deadline - perf_counter()
         if remaining <= 0:

@@ -51,6 +51,45 @@ def registry(**methods):
                            is_enabled=lambda _: True, **methods)
 
 
+def test_progress_covers_checks_and_actual_query_completions(monkeypatch):
+    updates = []
+    def review_input(*_args, **_kwargs):
+        assert updates[-1] == ("preparing", "正在检查请求与研究范围")
+        return PromptInjectionAssessment(
+            decision="allow", signals=[], reason="fixture", request_kind="research",
+        )
+    def review_answer(*_args, **_kwargs):
+        assert updates[-1] == ("checking", "正在整理结果并校验回答")
+        return ComplianceReview(decision="allow", violations=[], reason="fixture")
+    monkeypatch.setattr(runtime_module, "review_input", review_input)
+    monkeypatch.setattr(runtime_module, "review_answer", review_answer)
+    def news(**args):
+        raise ValueError("internal error details")
+    def kline(**args):
+        return ToolResult(name="stock_kline", input=args, summary="fixture", output={"symbol": "000001"})
+    class Model:
+        def generate_messages(self, messages, tools, **kwargs):
+            observations = [m for m in messages if isinstance(m, ToolMessage)]
+            if not observations:
+                return AIMessage(content="", tool_calls=[
+                    {"name": "stock_news", "args": {"symbol": "000001"}, "id": "news"},
+                    {"name": "stock_kline", "args": {"symbol": "000001"}, "id": "kline"},
+                ])
+            observation = next(json.loads(m.content) for m in observations if m.tool_call_id == "kline")
+            return call("finish", {"status": "partial", "answer": "行情已取得，新闻查询未完成。",
+                                  "evidence_ids": [observation["evidence_id"]], "missing": ["新闻"]}, "finish")
+    result = run(AgentChatRequest(session_id="progress", message="查询行情与新闻"),
+                 registry(stock_news=news, stock_kline=kline), Model(),
+                 progress=lambda stage, message: updates.append((stage, message)))
+    assert result.task_status == "partial"
+    tool_updates = [message for stage, message in updates if stage == "tools"]
+    assert tool_updates[0] == "正在执行 2 项数据查询"
+    assert tool_updates[1].startswith("数据查询已返回 1/2 项")
+    assert tool_updates[2] == "数据查询已返回 2/2 项，其中 1 项存在缺口"
+    assert len(tool_updates) == 3
+    assert all("000001" not in message and "internal error" not in message for _, message in updates)
+
+
 def test_react_observes_error_and_selects_next_tool():
     def news(**args):
         raise ValueError("source unavailable")
@@ -112,7 +151,7 @@ def test_public_entry_defaults_to_react(monkeypatch):
             return call("finish", {"status": "refuse", "answer": "我可以提供研究事实，不能提供交易指令。"}, "f")
     response = answer_first_board_chat(AgentChatRequest(session_id="r", message="给我买卖指令"), [],
                                       llm_provider=Model(), tool_registry=registry())
-    assert response.generated_by == "react-runtime-v24"
+    assert response.generated_by == "react-runtime-v25"
     assert response.task_status == "refuse"
 
 

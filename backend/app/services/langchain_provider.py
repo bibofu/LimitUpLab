@@ -123,6 +123,12 @@ class LangChainChatProvider(LLMProvider):
                 options.update(root_client=client, client=client.chat.completions)
             model = self.chat_model.model_copy(update=options)
             choice = {"tool_choice": tools[0]["function"]["name"]} if len(tools) == 1 else {}
+            thinking = (model.extra_body or {}).get("thinking")
+            # ReAct needs a structured tool decision, so avoid generating a bare
+            # answer that the runtime must request again as finish arguments.
+            # Required tool choice is unsupported by DeepSeek thinking mode.
+            if len(tools) > 1 and isinstance(thinking, dict) and thinking.get("type") == "disabled":
+                choice = {"tool_choice": "required"}
             bound = model.bind_tools(tools, temperature=0, max_tokens=max_tokens, **choice) if tools else model.bind(
                 temperature=0, max_tokens=max_tokens,
             )
