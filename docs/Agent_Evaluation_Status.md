@@ -2,6 +2,16 @@
 
 ## 当前状态
 
+### 30题已获人工认可，28题Active并完成同版实跑（2026-09-23）
+
+- bibo批量认可剩余23题、无例外；原审核文件不改，题目审核待办为0。当前建设详情见[真实Golden建设清单](Agent_Evaluation_Real_Golden.md)。
+- 正式Active从7增至28；Q09/Q23虽已认可，但历史新闻执行受现有工具能力限制，保留阻断，不凑数入库。
+- 固定react-runtime-v24运行28题，首次26 needs_review/1 fail/1夹具unscorable；M03只补真实录制后验证1次，当前资产口径27 needs_review/1 fail。
+  原夹具失败保留，不当Agent事实错误；29次尝试不是29道题，也不是三轮稳定性。4个真实两轮均验证上下文逐字继承。
+- 175次模型调用、0 Judge，记录1,210,783 tokens；无新增人工答案标签，27 needs_review不是27通过，历史人审通过仍仅原2份答案。
+- 145个backend/app文件哈希未变，未改Agent、提示或评测框架；价格口径、评分阶段解释、消歧问题只记录，不修改判分适配答案。
+- 当前套件：`output/agent-eval/real-golden-admission-20260923-001/active-dev28-final/suite.json`；同目录`RESULTS.md`为运行汇总。
+
 ### 建设已转为批量题目入库，不再边设计边修Agent（2026-09-22）
 
 - 当前统一入口为[真实Golden建设清单](Agent_Evaluation_Real_Golden.md)，旧阶段条目保留历史，不再多处重复更新。
