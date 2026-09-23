@@ -613,16 +613,15 @@ cd backend
 .\.venv\Scripts\python.exe -m pytest tests -q -p no:cacheprovider
 ```
 
-2026-09-13 退役的是面向旧 Query/Planner/Tool Policy 的评测体系；当前已经建立独立的新评测系统。
-本地可执行资产包括 Basic70（50 Offline + 20 Historical Live），其中 64 道题已通过题目合同审批并进入
-Active Golden（45 Offline + 19 Historical Live）。`run-golden` 支持统一预检、选题/全量运行和诊断报告。
+当前问答评测以真实Dev28为基线：30题设计已获认可，28题Active（24单轮＋4两轮），
+Q09/Q23历史新闻题暂缓。固定`react-runtime-v24`的28份有效答案人审为20通过、8不通过；
+其中10题完成三次稳定性复核。Judge对照已暴露漏判，暂不用于自动验收或发布门禁。
 
-Active 只表示题目、事实和判分合同获准使用，不表示当前 Agent 已通过。Golden64 已与当前代码合同
-`react-runtime-v21` / `agent-tools-v2` / `react-evidence-v4` 完成64题静态合同预检；新增Live内容回放预检已确认
-旧Local30缺少匹配的历史SQLite快照，因此不能声称64题当前均可运行，也尚未完成全量真实运行；
-Current Invariant、External Canary、最新三轮稳定性和发布门禁也未完成；
-因此普通测试、构建、Golden 准入或单次诊断结果都不得解释为发布质量通过。最新边界和本地资产入口见
-[Agent 评测状态](docs/Agent_Evaluation_Status.md)与[Golden 运行说明](docs/Agent_Evaluation_Golden_Run.md)。
+先看[评测集导航与后续计划](docs/Agent_Evaluation_Guide.md)，再按需查看
+[当前建设清单](docs/Agent_Evaluation_Real_Golden.md)。该导航说明题目、数据、运行与审核文件的关系，
+并区分工程测试、Agent问答评测和首板预测效果复盘。Local30、Basic70、Golden64保留为历史资产，
+不与当前Dev28累加。真实数据包在本地`output/`，Git准入索引不能单独复现；
+统一预检仍有14题能力开关传递问题，详见导航，不能将其报错当成Agent失败。
 
 前端生产构建：
 
@@ -666,10 +665,10 @@ npm.cmd run build
 
 近期优先级：
 
-1. 停止扩建Eval framework，将真正逐题复核的Active扩到30～40题，覆盖事实、动态两步、分支、错误恢复、多工具、Evidence compute、歧义、安全和输出约束。
-2. 在现有Golden worker上补最小两轮真实Agent执行，覆盖历史实体/结果集指代、日期修改和旧证据刷新。
-3. 冻结Active Dev 30题与Private Holdout 10～15题；关键Case各跑3次并报告pass@1、3/3、2/3和0/3。
-4. 用20～30个先经人工标注的真实Answer校准Judge；校准完成前不进入release gate。详见[评测近期执行优先级](docs/Agent_Evaluation_Execution_Priority.md)。
+1. 固定现有真实Dev28和文件入口，独立修复统一预检参数问题，补全本地资产恢复说明。
+2. 在用户明确要求的独立修复阶段，优先处理价格口径、预测来源解释、消歧和额外陈述问题；题目与真值保持独立。
+3. 按变更风险运行相关Dev题，阶段结束做全套比较及关键题稳定性验证；从真实需求积累独立Private Holdout，不将公开题改名充数。
+4. Judge继续辅助诊断，后续独立改进并验证失败识别能力，不以整体一致率作为发布依据。详见[评测后续计划](docs/Agent_Evaluation_Guide.md#6-结合项目目标的后续顺序)。
 5. 数据侧继续滚动补齐Top10 Outcome和端到端验收；V2再考虑数据源与部署扩容。
 
 当前版本边界见 [V1.4 阶段里程碑](./docs/V1.4_Milestone.md)。

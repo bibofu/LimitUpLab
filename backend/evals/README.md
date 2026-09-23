@@ -1,5 +1,14 @@
 # Agent 评测资产
 
+先看[评测集导航与后续计划](../../docs/Agent_Evaluation_Guide.md)：它解释当前文件关系、运行路径、历史目录和后续顺序。
+当前使用真实Dev28：7 Offline＋21 Historical Live，24单轮＋4两轮，已有人审20通过/8不通过及10题三次稳定性结果。
+唯一Active入口由[suites/real-dev28-active-index.json](suites/real-dev28-active-index.json)指向本地套件；
+最新证据集中在[真实Golden建设清单](../../docs/Agent_Evaluation_Real_Golden.md)。Judge仍仅作辅助诊断。
+
+以下保留各时期的工程实现记录，文中的“当前”“下一步”按当时日期理解；Basic70/Golden64不再代表当前真实Dev题数。
+
+## 历史实现与使用记录
+
 当前评测工程已从最初的单题 M1 原型扩展为可运行体系：具备类型与加载层、Frozen Registry、
 Record-Replay、隔离 Offline/Historical Live Worker、批量数据集构建与复核、确定性核心合同、
 声明抽取/事实核验、可选语义 Judge、正式报告、稳定性聚合和统一 `run-golden` 入口。

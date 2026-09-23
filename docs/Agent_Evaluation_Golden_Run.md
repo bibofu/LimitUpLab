@@ -1,5 +1,7 @@
 # Golden统一运行与报告
 
+当前入口说明（2026-09-23）：[评测集导航](Agent_Evaluation_Guide.md)定位真实Dev28及其活动依赖。下文Golden64命令和运行结论保留为历史技术说明，不能直接作为当前28题的完整复现流程。当前`run-golden --dry-run`对14道Historical Live题缺少能力开关传递，而实际worker会传递；该阻断及真实运行证据见[建设清单](Agent_Evaluation_Real_Golden.md)。Judge尚不用于自动验收。
+
 新增共享入口`python -m app.agent_eval run-golden`，支持Active套件的全量/选题执行。
 复用现有子进程worker：旧合同保留原事实提取，新合同保留工具合同；显式开启Judge时两者都生成同一三维trace-review。
 不修改Candidate验收入口，不覆盖Local30既有正式报告，不将未校准Judge包装成发布认证。

@@ -286,13 +286,15 @@ An independent evaluation system now lives in `app/agent_eval`. It provides
 versioned Case/World contracts, frozen record-replay, isolated Offline and
 Historical Live workers, deterministic checks, optional diagnostic judges,
 formal reports, stability aggregation, and the shared `run-golden` entry point.
-The current local Active Golden contains 64 approved contracts (45 Offline and
-19 Historical Live), but it has only passed zero-model dispatch preflight as a
-complete suite on the latest runtime. Active status is not an Agent pass result,
-and every report remains `release_eligible=false`. See
-[Agent evaluation status](../docs/Agent_Evaluation_Status.md) and
-[Golden execution](../docs/Agent_Evaluation_Golden_Run.md) for the current scope
-and commands.
+The current baseline is Real Dev28: 24 single-turn and 4 two-turn cases, with
+7 Offline and 21 Historical Live executions. The saved v24 answers have 20 human
+passes and 8 failures; 10 selected cases also have three-trial human reviews.
+Judge calibration exposed false passes, so judging remains diagnostic.
+Local30, Basic70 and Golden64 are historical assets, not additional current cases.
+See the [evaluation guide and roadmap](../docs/Agent_Evaluation_Guide.md) and
+[current evidence ledger](../docs/Agent_Evaluation_Real_Golden.md). The guide also
+documents local data dependencies and the unified preflight capability-flag issue.
+Active admission does not imply answer correctness or release eligibility.
 
 The chat Agent also exposes a general `limit_up_events` internal tool for
 same-day limit-up questions such as continued-board lists, board-height filters,

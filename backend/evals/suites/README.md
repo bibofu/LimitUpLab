@@ -1,5 +1,7 @@
 # 评测套件入口
 
+文件关系、三种执行路径和后续计划统一见[评测集导航](../../../docs/Agent_Evaluation_Guide.md)。
+
 ## 当前真实 Golden Dev（2026-09-23）
 
 当前28题Active入口在本地`output/agent-eval/real-golden-admission-20260923-001/active-dev28-final/suite.json`。
