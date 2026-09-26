@@ -2,7 +2,7 @@
 from math import isfinite
 from typing import Any, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, Field, model_validator
 
 from app.agent_output_sanitizer import sanitize_agent_answer
 

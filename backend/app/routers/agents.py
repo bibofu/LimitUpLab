@@ -29,7 +29,6 @@ from app.models import (
     AgentToolTrace,
     ChatSessionCreateRequest,
     ChatSessionDetail,
-    ChatSessionMessage,
     ChatSessionsResponse,
     ChatSessionUpdateRequest,
     DailyPipelineStatusResponse,
@@ -57,7 +56,6 @@ from app.repositories import (
     SQLiteReviewSnapshotRepository,
     SQLiteRecommendationIntelligenceRepository,
     SQLiteScoringPolicyRepository,
-    SessionOwnershipError,
     get_limit_up_repository,
 )
 from app.services.data_health import build_agent_data_health

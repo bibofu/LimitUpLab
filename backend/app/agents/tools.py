@@ -1,6 +1,5 @@
 """Tool registry and schemas for the first-board Agent."""
 
-import json
 import os
 import re
 from dataclasses import asdict, dataclass, field
@@ -1009,7 +1008,7 @@ class AgentToolRegistry:
 
     @property
     def enabled_tool_names(self) -> frozenset[str]:
-        """Return tool names available to Planner, policy and execution."""
+        """Return tool names available to the ReAct tool gateway."""
 
         if self.profile == EXTENDED_AGENT_PROFILE:
             return frozenset(schema.name for schema in TOOL_SCHEMAS)
@@ -2818,38 +2817,4 @@ def compact_first_board_position_groups(
                 key=lambda item: (-item.score, item.facts.symbol),
             )
         ],
-    }
-
-
-def compact_prediction_quality_audit(
-    response: PredictionQualityAuditResponse,
-) -> dict[str, Any]:
-    """Trim per-date details before placing an audit report in an LLM prompt."""
-
-    return {
-        "start_date": response.start_date.isoformat(),
-        "end_date": response.end_date.isoformat(),
-        "audited_scoring_version": response.audited_scoring_version,
-        "top_k": response.top_k,
-        "raw_prediction_rows": response.raw_prediction_rows,
-        "canonical_prediction_count": response.canonical_prediction_count,
-        "cross_cohort_duplicate_rows": response.cross_cohort_duplicate_rows,
-        "data_as_of_violation_count": response.data_as_of_violation_count,
-        "prediction_trade_date_count": response.prediction_trade_date_count,
-        "next_day_mature_trade_date_count": (
-            response.next_day_mature_trade_date_count
-        ),
-        "complete_next_day_trade_date_count": (
-            response.complete_next_day_trade_date_count
-        ),
-        "next_day_outcome_coverage_rate": response.next_day_outcome_coverage_rate,
-        "three_day_outcome_coverage_rate": response.three_day_outcome_coverage_rate,
-        "cohorts": [item.model_dump(mode="json") for item in response.cohorts],
-        "benchmarks": [
-            item.model_dump(mode="json") for item in response.benchmarks
-        ],
-        "policy_status": response.policy_status.model_dump(mode="json"),
-        "findings": response.findings,
-        "recommendations": response.recommendations,
-        "warnings": response.warnings,
     }
