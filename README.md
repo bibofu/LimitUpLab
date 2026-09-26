@@ -10,7 +10,9 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 ## 项目状态
 
-当前里程碑为 **V1.4（最新修订 `v1.4.1`，架构基线 `v1.4.0`）**，详见 [V1.4 阶段里程碑](docs/V1.4_Milestone.md)。这一版完成聊天执行链路收敛：生产入口统一为 LangChain 原生工具调用与 LangGraph 自定义 StateGraph 的有界 ReAct 循环，旧 Planner/Capability/Policy/模板执行器、Task DAG 和 Complex Graph 已退出生产调用图。`v1.4.1` 修复标签部署时 SQLite WAL/SHM 无法在只读 Docker volume 打开的阻断问题。
+当前代码以 **LangChain 原生工具调用 + LangGraph 有界 ReAct** 为聊天主链路，支持持久化运行、原生 `finish.answer` 流式正文、可撤回草稿和服务端证据表。旧 Planner/Capability/Policy/模板执行器、Task DAG、Complex Graph 和 Claim Ledger 已退出生产调用图。现行实现见 [LangChain + LangGraph 集成](docs/LangChain_Integration.md)。
+
+[V1.4 阶段里程碑](docs/V1.4_Milestone.md) 记录 `v1.4.0` 架构基线和 `v1.4.1` SQLite 部署修复，属于历史发布记录；当前工作树的行为、版本及测试结果以源码和当次验收为准。
 
 盘前推荐继续并列提供一进二接力、缩量整理和高位回撤；一进二区分收盘基线、盘前终选及历史样本，后两类形态观察不混入一进二前向统计。集合竞价和面向未涨停股票的首板挖掘仍保持退役。
 
@@ -20,8 +22,7 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 - 真实涨停、炸板、K 线、板块、人气和龙虎榜数据流水线
 - 首板候选池过滤、结构化 Facts、规则评分和置信度
-- 每日 Top10 推荐快照及 D+1 至 D+5 走势追踪
-- LangChain 原生工具调用、LangGraph 有界 ReAct、证据引用与可恢复 SSE 任务
+- LangChain 原生工具调用、LangGraph 有界 ReAct、证据表与可恢复 SSE 流式回答
 - 可恢复的多会话对话、滚动 Session Memory 和受控上下文
 - Explanation、Critic、Review、Evaluation 等轻量 Agent 角色
 - 每日 Top10 预测快照、D+1 至 D+5 走势追踪、1进2全市场对照和不可变每日复盘快照
@@ -36,7 +37,6 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 | 项目 | 状态 |
 | --- | --- |
 | 后端自动化测试 | 统一验收入口生成当次测试数量、结果和 JUnit 报告 |
-| 后端回归 | V1.4.1 标记前 617 项及 6 个子测试通过 |
 | 本地数据健康检查 | 已实现 |
 | LLM 流式问答 | 已实现 |
 | Agent 限流与成本审计 | 单访客/IP/全局限制、真实 token 账本已实现 |
@@ -103,12 +103,14 @@ scoring_version
 ```text
 用户问题
   -> Durable Run 创建任务、绑定 owner/session/message_id
-  -> ReAct Agent 根据当前消息和历史上下文选择一批原生工具调用
+  -> Input Reviewer 判断请求类型、追问范围和明确日期
+  -> ReAct Agent 根据当前问题及受控上下文选择一批原生工具调用
   -> ToolGateway 校验 profile、Schema、日期能力和参数边界
   -> 工具并发执行，完整结果进入 EvidenceStore，模型只接收有界预览
-  -> 模型观察 ToolMessage，按需继续查询、读取/计算证据或调用 finish
-  -> Answer Gate 校验状态、证据 ID、缺失项与安全边界
-  -> SQLite 原子保存回答，SSE 返回进度和 completed；断线只读重连
+  -> 模型观察 ToolMessage，按需继续查询、读取/计算证据或单独调用 finish
+  -> 原生 finish.answer 增量显示为待校验草稿；名单由服务端渲染证据表
+  -> Answer Gate 校验证据范围、表格和状态，独立 Critic 检查投资合规
+  -> 校验失败撤回草稿并允许一次修复；最终回答原子保存后发布 completed
 ```
 
 当前主要工具：
@@ -137,13 +139,15 @@ scoring_version
 
 默认 `LIMITUPLAB_AGENT_PROFILE=v1_close_review` 只暴露收盘后与历史研究工具；`remote_limit_up_pool` 和 `web_search` 只在 `extended` 研发 profile 开放。ToolGateway 对每一次调用重新校验 allowlist、JSON Schema、日期能力、单股票约束和空集合边界，未知或未开放工具即使由模型生成也不会执行。
 
-自然语言 Query Contract 编译器已经退役。生产工具参数只来自原生 tool call，并由共享类型、JSON Schema、ToolGateway 和实际方法签名共同校验。生产执行事实以 ReAct decision、ToolMessage、EvidenceStore 和最终 trace 为准。
+自然语言 Query Contract 编译器已经退役。业务查询由原生 tool call 发起；Input Reviewer 解析本轮明确日期，ToolGateway 用它补齐调用中省略的单日期字段或 `requested_as_of`，再校验类型、时态及返回日期。生产执行事实以 ReAct decision、ToolMessage、EvidenceStore 和最终 trace 为准。
+
+名单通过 `finish.table` 声明本轮证据及字段，由服务端输出实际返回的行。预览省略与数据源截断分别记录，返回行数不能自动代表全市场完整名单；当前每条回答最多一张证据表。开放式解释仍需结合原始证据审阅，证据引用本身不能证明因果关系。
 
 ### 2.1 Session Memory
 
-长对话不只依赖固定截断。系统保留 SQLite 滚动记忆，并把受预算限制的历史原始消息交给 ReAct；历史回答中的证据可以作为明确标记的 `historical_reference` 恢复，但不能自动冒充本轮行情事实。
+系统在 SQLite 保留原始会话和滚动记忆，但生产 ReAct 默认不重放历史原文或历史回答证据。Input Reviewer 识别为 `follow_up` 时，才提取历史股票名称/代码与上一轮实际工具参数，用于理解省略条件；本轮明确条件优先，事实必须重新查询。
 
-Memory 按 `owner_id + session_id` 隔离，使用 `last_message_id` 作为增量游标，随会话永久删除。记忆只用于对话连续性，不能作为股价、新闻、评分、排名或市场状态的证据；所有时效性事实仍必须重新调用工具。当前实现是会话级 Memory，不会跨会话建立用户画像。
+Memory 按 `owner_id + session_id` 隔离，使用 `last_message_id` 作为增量游标，随会话永久删除。默认只向模型提供偏好约束；追问时再补充研究目标、股票、题材、日期范围和未解问题。这些字段都不能作为市场证据或自动继承为本轮待办，也不会跨会话建立用户画像。
 
 ### 3. 轻量 Multi-Agent 角色
 
@@ -195,14 +199,15 @@ Outcome 完整性检查严格按本地市场交易日对齐 D+1、D+3 和 D+5。
 
 `/api/agents/scoring-error-diagnostic` 从结果完整日期中识别 Top10 高分误选和 Top10 之外的晋级漏选，并对 14 个评分因子逐一做排序消融。诊断只提出“观察上调、观察下调或暂不调整”的影子假设；样本不足、Outcome 不完整或未通过 walk-forward 门槛时不会改写 Champion。
 
-截至 2026-08-22 的本地审计中，v3 已生成 3 个测试日不重叠的样本外折，但只有 14 个 Outcome 结果日，因此仍保持影子状态。当前评分 Top10 尚未优于最早封板基线，页面会如实展示这一结论和数据覆盖缺口。
+策略是否满足晋级门槛，应查看当前预测质量审计和策略状态响应。历史里程碑中的样本数与基线结论只适用于对应审计日期，不能代替当前数据覆盖检查。
 
 ### 5. 可观测与可降级
 
 - `agent_runs` 保存每次 Agent 执行状态、输入、输出、错误和耗时
 - `agent_usage_events` 保存已接受和被拒绝的请求、真实 token、显式价格下的估算成本及耗时
 - `chat_sessions`、`chat_messages` 和 `chat_session_memories` 保存会话、原始消息与滚动记忆，支持新建、恢复、重命名和永久删除
-- SSE 断线后按 `run_id + event cursor` 只读重连；同一 `message_id` 可恢复中断 checkpoint，已完成工具不会主动重放
+- SSE 正文以 `answer_start / answer_delta / answer_reset` 管理待校验版本，`completed` 替换为已持久化的最终结果
+- SSE 断线后按 `run_id + event cursor` 只读重连，已完成任务直接返回最终结果；再次 POST 同一请求可恢复中断 checkpoint，已完成工具不会主动重放
 - Tool trace 保存每轮原生 decision、Policy allow/reject、工具参数、结果状态、证据引用和最终校验
 - 请求级 EvidenceStore 保存完整工具结果，模型消息只携带有界预览；SQLite journal 保存运行 checkpoint 与调用结果
 - `/api/agents/data-health` 检查评分、预测追踪和 Outcome 所需数据
@@ -328,7 +333,7 @@ LimitUpLab/
 │   └── src/                 # React 工作台、独立 Agent 会话面板、API 类型和样式
 ├── scripts/                 # 项目级本地启动脚本
 └── docs/
-    ├── V1.4_Milestone.md    # 当前版本边界、验证与遗留项
+    ├── V1.4_Milestone.md    # V1.4 历史发布边界与验证记录
     ├── LangChain_Integration.md # 当前 ReAct 架构说明
     └── code-quality-audit.md # 阶段性代码质量审查
 ```
@@ -610,6 +615,8 @@ Linux 使用对应虚拟环境的 `python scripts/check_project.py`。也可通�
 
 该入口依次运行完整 pytest、全部前端逻辑测试以及 TypeScript/Vite 生产构建。每次使用独立数据库和测试目录，关闭真实 LLM，并在 `output/validation/<运行标识>/` 保存各步骤日志、JUnit 和 `summary.json`。任一步失败都会使整体退出码非零，但其余独立检查仍会执行。它不替代浏览器端业务验收、部署检查或压力测试。
 
+旧聊天评测框架已退役；离线回归不代表真实模型回答质量或稳定性已验收。预测结果复盘使用的 Evaluation Agent 和 `rating_evaluation` 仍保留，两者用途不同。
+
 GitHub Actions 配置在 `.github/workflows/validate.yml`，对 PR、main 与 codex 分支推送运行 Windows/Linux 两套检查，使用相同验收入口，不需要行情或模型密钥。失败日志保留 7 天；测试数据库不上传。流水线文件进入远端仓库后才能实际触发，分支保护仍需在仓库设置中启用。
 
 ReAct 执行与证据契约见 [LangChain + LangGraph 集成](docs/LangChain_Integration.md) 和 [代码阅读指南](docs/code-reading-guide.md)。以下单项命令仍可用于定位失败。
@@ -651,10 +658,9 @@ npm.cmd run build
 
 ## 当前限制
 
-- 评分 v3 工程闭环已完成，但仍缺至少 60 个结果完整交易日的可靠样本外验证。
-- 当前审计只有 8 个 Top10 次日 Outcome 完整日，覆盖率仍需要持续补齐。
-- 当前预测准确性不高，不能宣称系统已经实现稳定选股。
-- 生产 ReAct 已覆盖现有工具目录，但工具 Schema、执行签名和时态 Catalog 仍有多处定义，需要继续收敛为单一类型化契约。
+- 评分 v3 的晋级需要至少 60 个结果完整交易日及可靠样本外验证；覆盖情况以当前审计为准。
+- 尚未建立可支持稳定预测结论的验证证据。
+- 业务工具已由统一公开契约生成类型化 Schema；LangGraph 状态、checkpoint 和进程内运行锁仍由项目代码维护。
 - 个股资讯已接入东方财富结构化搜索并持久化缓存；正式公告原文仍需补充交易所或巨潮资讯专用数据源。
 - 当前限流适用于单 Uvicorn 进程；异步 Worker、跨实例 Redis 限流和上游 LLM 主动取消尚未完成。
 - 用户系统、PostgreSQL、Redis 和多实例部署尚未完成；当前 Docker 配置适用于单机公开 Demo。标签触发的自动验证、备份与部署见 [自动部署说明](deploy/Tag_Deployment.md)。
@@ -666,7 +672,7 @@ npm.cmd run build
 1. 持续核对价格口径、预测来源解释、多轮消歧和额外陈述的证据边界。
 2. 数据侧继续滚动补齐 Top10 Outcome 和端到端验收；V2 再考虑数据源与部署扩容。
 
-当前版本边界见 [V1.4 阶段里程碑](./docs/V1.4_Milestone.md)。
+当前实现边界见 [LangChain + LangGraph 集成](docs/LangChain_Integration.md)，历史发布边界见 [V1.4 阶段里程碑](docs/V1.4_Milestone.md)。
 
 ## 面试演示建议
 

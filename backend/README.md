@@ -53,7 +53,7 @@ LIMITUPLAB_LLM_BACKEND=langchain
 LIMITUPLAB_LLM_BASE_URL=https://api.deepseek.com
 LIMITUPLAB_LLM_MODEL=deepseek-v4-flash
 LIMITUPLAB_LLM_THINKING_ENABLED=false
-LIMITUPLAB_LLM_PLANNER_MAX_TOKENS=320
+LIMITUPLAB_LLM_NATIVE_FUNCTION_CALLING=true
 DEEPSEEK_API_KEY=<your-api-key>
 ```
 
@@ -78,13 +78,15 @@ Tool arguments and reasoning are not displayed. Evidence tables are rendered
 from stored rows when their declaration is complete. Active GET reconnects read
 events after the cursor; completed reconnects return only the final response.
 
-The chat Agent also has on-demand external market tools:
+The default `v1_close_review` profile includes on-demand structured market
+tools. `web_search` and `remote_limit_up_pool` require the `extended` development
+profile; every invocation is checked by `ToolGateway`.
 
 - `market_index_trend` fetches date-aligned 2-20 trading-day performance for
   the Shanghai Composite, Shenzhen Component and ChiNext Index.
 - `sector_performance` fetches industry-sector ranking, change, breadth,
   turnover, fund flow, leader and recent trend through AKShare providers.
-- `web_search` retrieves sanitized public search-result titles, URLs and
+- `web_search` (extended only) retrieves sanitized public search-result titles, URLs and
   snippets. It uses no-key providers with fallback and treats every snippet as
   untrusted external evidence.
 
@@ -246,7 +248,7 @@ inspect or remove it.
 - `GET /api/agents/scoring-policies` - active Champion and recent scoring policy versions
 - `POST /api/agents/scoring-policies/optimize` - constrained walk-forward Challenger generation; shadow mode by default
 - `GET /api/agents/data-health` - Agent raw-data, feature and enrichment health
-- `GET /api/agents/system-health` - local runtime health for data freshness, LLM configuration and eval status
+- `GET /api/agents/system-health` - local data freshness, LLM configuration and proxy health
 - `GET /api/agents/daily-pipeline-status` - recent automated daily close-loop runs
 - `GET /api/agents/rating-backtest` - entry-open return, drawdown and promotion metrics by rating bucket
 - `GET /api/agents/prediction-quality-audit` - source/version-aware prediction coverage and deterministic baseline audit
@@ -268,21 +270,37 @@ inspect or remove it.
 
 ## Data Sources
 
-Current collectors use AKShare-backed sources:
+Current collectors combine the official Tonghuashun CLI, AKShare and public
+provider interfaces:
 
-- 东方财富涨停池 and 炸板池 for limit-up events
-- Index daily data for market snapshots
-- Tencent/Sina historical K-line sources for stock daily and trading-day review charts
+- Tonghuashun daily K-lines, quote snapshots, popularity and Dragon Tiger data
+- Eastmoney limit-up and failed-limit-up pools, plus enrichment fallback sources
+- Index daily data and industry-sector performance
+- Tencent/Sina and Eastmoney K-line sources for fallback and trading-day review charts
 
 The product is not designed for live intraday monitoring. The trading-day K-line
 endpoint is intended for after-close review of the latest persisted trading day.
 
 ## Tests
 
+From the project root, use the shared offline acceptance runner after installing
+`backend/requirements-dev.txt` and the frontend dependencies:
+
+```powershell
+backend/.venv/Scripts/python.exe scripts/check_project.py
+```
+
+It writes logs, JUnit and `summary.json` under `output/validation/<run>/`.
+For an isolated backend regression run:
+
 ```bash
 cd backend
 python -m pytest tests -q -p no:cacheprovider
 ```
+
+The former chat evaluation framework has been retired. These checks do not call
+a live model or establish answer quality. The separate prediction Evaluation
+Agent and `rating_evaluation` still review recorded prediction outcomes.
 
 ## Limit-up queries
 
