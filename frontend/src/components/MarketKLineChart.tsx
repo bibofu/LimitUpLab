@@ -382,8 +382,8 @@ export function MarketKLineChart({
               <span>价格 <b className={directionClass}>{formatPrice(displayedBar?.close)}</b></span>
               <span>涨幅 <b className={directionClass}>{formatPercent(changePct)}</b></span>
               <span>均价 <b>{formatPrice(intradayAverage ?? undefined)}</b></span>
-              <span>成交量 <b>{formatVolume(displayedBar?.volume)}</b></span>
-              <span>成交额 <b>{formatAmount(displayedBar?.amount)}</b></span>
+              <span>成交量 <b>{formatQuantity(displayedBar?.volume)}</b></span>
+              <span>成交额 <b>{formatQuantity(displayedBar?.amount, "元")}</b></span>
             </>
           )}
         </div>
@@ -404,7 +404,7 @@ export function MarketKLineChart({
                 0% 昨收 {formatPrice(intradayReferencePrice)}
               </span>
             ) : null}
-            <span>VOL {formatVolume(displayedBar?.volume)}</span>
+            <span>VOL {formatQuantity(displayedBar?.volume)}</span>
           </div>
         )}
       </div>
@@ -600,9 +600,10 @@ function formatVolumeRatio(value: number | null): string {
 }
 
 /**
- * Choose readable units for a chart volume value.
+ * Share volume/amount scaling; only unscaled amounts carry a currency suffix.
+ * Missing values keep the unavailable label without a unit.
  */
-function formatVolume(value: number | undefined): string {
+function formatQuantity(value: number | undefined, unit = ""): string {
   if (value === undefined) {
     return "--";
   }
@@ -612,22 +613,5 @@ function formatVolume(value: number | undefined): string {
   if (value >= 10_000) {
     return `${(value / 10_000).toFixed(1)}万`;
   }
-  return value.toFixed(0);
-}
-
-/**
- * Choose readable chart amount units, retaining an explicit unavailable display for missing
- * values.
- */
-function formatAmount(value: number | undefined): string {
-  if (value === undefined) {
-    return "--";
-  }
-  if (value >= 100_000_000) {
-    return `${(value / 100_000_000).toFixed(2)}亿`;
-  }
-  if (value >= 10_000) {
-    return `${(value / 10_000).toFixed(1)}万`;
-  }
-  return `${value.toFixed(0)}元`;
+  return `${value.toFixed(0)}${unit}`;
 }
