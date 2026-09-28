@@ -1,16 +1,25 @@
-# Agent Chat Golden 评测设计与执行步骤
+# Agent Chat Golden 评测设计与执行步骤（v1.1）
 
 ## 目标和验收边界
 
 评测对象是模型与现有 Agent 执行链路的组合：理解用户请求、调用工具、继承上下文、组织证据并交付回答。
 
-第一版包含 60 个场景：30 个单轮、20 个多轮、10 个异常或安全场景。每个场景可以包含多个用户回合，一个场景重复执行多次称为多个 trial。题目数、用户回合数、模型调用数分别统计。
+当前套件版本为 `agent-golden-v1.1`，语义裁判版本为 `golden-judge-v4`。套件包含 60 个场景：30 个单轮、20 个多轮、10 个异常或安全场景。每个场景可以包含多个用户回合，一个场景重复执行多次称为多个 trial。题目数、用户回合数、模型调用数分别统计。
 
 用例由 Agent 根据项目规范、既有 Bad Case 和代码审查整理，尚未经过用户或领域专家逐条签署。合成数据不是实际行情；模型裁判结果也不等于人工复核结果。
 
-当前实现覆盖八个工具入口：`limit_up_events`、`market_event_pool`、`market_summary`、`first_board_ratings`、`first_board_filter`、`stock_kline`、`stock_news`、`hot_stock_ranking`。完整生产工具目录仍对模型可见。未实现 fixture 的工具会记录评测覆盖缺口并阻止计为通过。
+当前固定环境覆盖 12 个工具入口：
 
-本轮不修改生产 Agent 来迎合题目。现有 Agent 的已知问题可以在报告中失败；评测建设完成与被测 Agent 全部通过是两项不同验收。
+| 数据范围 | 工具 |
+| --- | --- |
+| 事件与市场统计 | `limit_up_events`、`market_event_pool`、`market_summary`、`remote_limit_up_pool` |
+| 首板评级与过滤 | `first_board_ratings`、`first_board_filter` |
+| 个股价格与研究资料 | `stock_kline`、`stock_news`、`stock_activity`、`web_search` |
+| 人气与龙虎榜 | `hot_stock_ranking`、`dragon_tiger_list` |
+
+完整生产 `extended` 工具目录和真实 Schema 仍对模型可见。未实现 fixture 的工具会记录覆盖缺口，结果标记为 `harness_error`，不能计为通过。
+
+评测基础设施与生产 Agent 修复分别追踪版本。先冻结评测口径，建立修复前基线，再验证通用 Agent 修复；失败题保留原有标准答案，不为通过评测而放宽要求。评测建设完成与被测 Agent 全部通过是两项不同验收。
 
 ## 第一步：明确每道题究竟要交付什么
 
@@ -91,6 +100,10 @@
 
 固定工具按实际参数查询，不能无论模型传什么都返回标准答案。纯事件筛选调用现有生产实现，从而把实际筛选行为纳入被测范围；标准答案独立写出，不调用同一个筛选函数生成。
 
+本地事件、事件池和远端涨停池使用同一日期的合成股票全集；允许不同合法取数路径得到相同完整封板集合，并与市场统计一致。ST、新股过滤的边界样本只在工具单测中注入，不改变 60 题默认世界。跨来源集合一致性由独立测试检查。
+
+远端涨停池保留生产包装层的过滤行为，上游替换为内存快照。异动工具组合合成 K 线、近期事件、人气和新闻；`days` 按生产语义控制新闻窗口。网页检索查询固定合成资料，链接使用 `example.invalid`；龙虎榜保留同股同日的单日榜与三日榜记录，并按日期、查询词、机构和游资参数过滤。这些工具均不访问外网。
+
 K线采用合成的工作日日历，不能用来证明真实交易日历正确。评级分数是 fixture 事实，不能用来证明生产评分策略正确。
 
 故障通过独立 variant 注入：empty、partial、error、truncated、stale、injection。错误结果和有效空结果必须分开。
@@ -131,6 +144,14 @@ K线采用合成的工作日日历，不能用来证明真实交易日历正确�
 8. 裁判缺少结论、重复编号或无法判断时，不能默认通过。
 
 名单和表格评分独立解析实际 Markdown 输出，再与 golden 行及证据比对；不能调用生产 renderer 生成“预期答案”后自证一致。未知列标题或不可验证结构保留复核状态，避免凭关键词正则猜测。
+
+### 必需事实与交付格式分开计分
+
+`expected_values` 是评分器检查项，使用契约已有的 `columns`、`rows` 和 `ordered`，不是新增的契约字段。评分器按用户必需列投影实际表格，再核对预期值；表格列声明必须可解析、无歧义且包含全部必需列。
+
+例如，用户只要代码和名称，回答多加日期列，但三只股票均正确：必需值的 `expected_values` 可以通过，交付维度的 `table_fields`、`expected_rows` 仍会失败，整个任务不能通过。若必需列缺失或结构不可判定，事实检查保留未知；若必需数值从 1.2 改成 9.9，事实检查失败。
+
+`table_evidence_values` 另行核对展示单元格与实际证据，防止投影检查遗漏额外列中的错误。这里的事实维度只覆盖结构化值，自由正文仍进入语义判断。
 
 产出：`grading.py` 与 mutation tests。
 
@@ -187,7 +208,35 @@ K线采用合成的工作日日历，不能用来证明真实交易日历正确�
 
 当前可选裁判使用配置模型的独立请求，不继承被测 Agent 的系统提示或思维过程。输入包含题目、明确验收标准、合成证据、最终回答和曾展示草稿。每条标准必须返回唯一编号、通过/失败/不确定及具体理由。
 
-相同模型的独立请求仍可能具有相关偏差，因此结果标记为未人工校准。裁判不能覆盖确定性失败。缺少裁判时，相关项目保留 review；不会把“未检查”写成“通过”。
+各条标准独立判定。来源标注错误不能自动连带判错本来正确的日期、对象和数值；事实错误也不能自动归类为交易指令。对要求覆盖所有可见版本的标准，已经展示后撤回的错误草稿仍须判定，最终修正不能抹去历史展示。
+
+### 来源等价与裁判校准
+
+裁判输入包含评分器维护的 `source_equivalence`。当证据中实际出现 `synthetic-golden-world-v1` 时，原始来源 ID 和“合成评测数据”“合成研究资料”“合成离线数据”等等价表述均可满足来源要求；用户明确要求原文时除外。映射只依据实际证据中的来源建立，不能把未知来源或虚构真实行情提供商认定为等价。
+
+校准集包含 12 个独立诊断场景，直接检查裁判，不运行生产 Agent。命令从仓库根目录执行：
+
+```powershell
+# 检查诊断集，不调用模型
+backend/.venv/Scripts/python.exe backend/scripts/run_judge_calibration.py --mode validate
+
+# 每个诊断场景执行两次，最多 24 次裁判请求
+backend/.venv/Scripts/python.exe backend/scripts/run_judge_calibration.py --mode live --trials 2 --max-model-calls 24 --output output/golden/judge-calibration-new.json
+```
+
+此处 `--output` 是 JSON 文件路径，必须使用新路径，已有文件不会覆盖。调用上限为 1 至 50；预算不足、结构错误和未知判定均保留，不能默认通过。校准命令不支持按场景筛选；定向诊断通过 `run_calibration(..., cases=...)` 执行。
+
+2026-09-28 已保留以下诊断记录，模型均为 `deepseek-v4-flash`：
+
+| 裁判版本 | 整个诊断回合与预期一致 | 发现的问题与限制 |
+| --- | --- | --- |
+| v2 | 22/24（12 场景 × 2 次） | 两次来源错误诊断都拒绝了不相关来源，但错误地连带否定了独立的正确事实标准。 |
+| v3 | 21/24（12 场景 × 2 次） | 两次结构返回错误（`ValidationError`、`ValueError`）；一次因最终答案已修正，而漏判曾展示后撤回的错误数值。 |
+| v4 | 2/2（两个场景各一次） | 仅定向复测原始来源 ID 和撤回错误数值；不能代表完整 12 场景重复校准通过。 |
+
+原始记录位于 `output/golden/judge-calibration-v2-20260928.json`、`judge-calibration-v3-20260928.json` 和 `judge-calibration-v4-targeted-20260928.json`。表中分母是场景执行次数，不是逐条标准数；未知和异常仍留在分母中。预期标签由评测作者定义，以上是合成诊断一致性，尚未经过人工逐条签核。
+
+相同模型的独立请求仍可能具有相关偏差，因此结果保留 `judge_human_calibrated=false`。语义得分不是人工签核，裁判不能覆盖确定性失败。缺少裁判时，相关项目保留 review；不会把“未检查”写成“通过”。
 
 产出：`judge.py`、逐条判定、原文依据、裁判用量。
 
@@ -197,7 +246,7 @@ K线采用合成的工作日日历，不能用来证明真实交易日历正确�
 
 第一轮使用核心场景检查评测环境是否存在缺口，包括 Schema 漂移、fixture 缺字段、错误 oracle 和错误判分。修复的是评测基础设施，不以修改期望答案来隐藏 Agent 失败。
 
-环境稳定后运行完整集，每个场景先一次，建立初始基线。后续发布验收对关键场景重复三次，记录每次结果和三次全通过的场景数。
+环境稳定后运行完整集，每个场景先一次，建立初始基线。一次 trial 可以包含多轮对话；“单轮场景”和“只运行一次”是两个概念。一次运行只能记录当次表现，不能证明稳定性。后续发布验收对关键场景重复三次，记录每次结果和三次全通过的场景数；三次结果仍不构成统计保证。
 
 第一次完整运行包含保留集时，会消耗这批题目的独立验证价值。后续针对报告改进时使用开发集；正式发布前应补充由其他维护者保管的保留场景。
 
@@ -230,7 +279,14 @@ backend/.venv/Scripts/python.exe backend/scripts/run_agent_golden.py --mode live
 
 报告同时保留每轮检查，不因最终 trial 标签而隐藏已经发现的错误。
 
-汇总指标：首次尝试通过率、全部尝试通过率、按类别通过率、完整重复场景数、所有尝试均通过的场景数、耗时分位数和可测 token 用量。失败、复核和环境错误不会被悄悄删除出分母。
+汇总指标：首次尝试通过率、全部尝试通过率、按类别通过率、完整重复场景数、所有尝试均通过的场景数、耗时分位数和可测 token 用量。`completed_cases` 要求该场景全部计划 trial 已完成；`all_trials_passed_cases` 进一步要求它们全部通过。失败、复核和环境错误不会被悄悄删除出分母。
+
+JSON 报告同时提供 `by_family` 和 `by_dimension`：
+
+- `by_family`：按场景语义家族统计 trial 数、四种结果数量和通过率。记忆家族是完整任务场景，不能单独解释为记忆组件准确率。
+- `by_dimension`：按 `facts`、`delivery`、`evidence`、`task_state`、`tool_use`、`safety`、`semantic` 等维度汇总。每个用户回合在每个被检查的维度只计一次：任一失败则 fail；否则有未知则 review；全部通过才 pass。环境缺口计为 harness_error；未检查的维度不算通过。
+
+Markdown 报告展示逐 trial 结果和维度表，家族明细保留在 JSON 中。事实维度用于结构化值，正文真实性仍依赖语义裁判和人工复核；整体通过率不能代替分维度检查。
 
 记录：数据与代码hash、提交号、模型与依赖版本、时钟、输入、输出、工具轨迹、证据、流式草稿、摘要状态、判分理由、Agent与裁判用量。API Key和环境文件不进入报告。
 
@@ -249,6 +305,20 @@ backend/.venv/Scripts/python.exe backend/scripts/run_agent_golden.py --mode live
 7. 记录代码、题目和评分器版本，审阅变化是否改善真实能力。
 
 新增场景不要求增加新的 Agent 角色。统计代码继续确定性计算；记忆测试关注状态是否正确继承；解释质量由证据和任务约束验收。
+
+### 使用同一评测口径比较修复前后
+
+两个报告都完整结束后，使用配对比较命令。以下路径是示例，需替换为实际完整报告：
+
+```powershell
+backend/.venv/Scripts/python.exe backend/scripts/compare_agent_golden.py output/golden/before/report.json output/golden/after/report.json --output output/golden/comparison.json --fail-on-regression
+```
+
+CLI 必须核对一致的 `suite_version`、`dataset_hash`、`evaluator_hash`、`trials`、`case_ids`、`model`、`provider`、`judge`、`judge_human_calibrated`、`effective_model_configuration`、`profile`、`react_deadline_seconds` 和 `libraries`。两边都必须包含全部且仅包含计划中的完整 trial，各回合和 oracle 定义也须一致；不完整记录、重复记录或指纹缺失会被拒绝。
+
+`production_hash`、总体 `code_hash` 和提交号允许变化，以便比较生产 Agent 修复。固定世界、评分器或裁判规则变化会改变 `evaluator_hash`，需要重新建立基线，不能将新旧评测口径之间的差异归因于 Agent 改善。
+
+比较结果保留所有结果标签变化：旧 pass 变成其他结果记为回退；旧非 pass 变成 pass 记为改善。`--fail-on-regression` 在出现回退时返回非零退出码。配对结果只是观测变化，仍需查看逐轮证据、评分理由和重复试验，不构成因果或统计保证。本节不预填尚未完成的基线结果。
 
 ## 完成定义
 
