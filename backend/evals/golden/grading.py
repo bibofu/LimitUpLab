@@ -28,6 +28,14 @@ LABELS = {
     "net_buy_amount": {"净买额", "净买额(元)", "净买额（元）"},
     "buy_amount": {"买入额", "买入额(元)", "买入额（元）"},
     "sell_amount": {"卖出额", "卖出额(元)", "卖出额（元）"},
+    "industry": {"行业", "所属行业", "行业名称"},
+    "concept": {"概念", "题材", "所属概念", "概念板块"},
+    "first_limit_time": {"首次封板时间", "首次涨停时间", "首封时间", "首次封板", "first seal time"},
+    "last_limit_time": {"最后封板时间", "最后涨停时间", "末次封板时间", "最后封板", "last seal time"},
+    "seal_count": {"封板次数", "封板计数", "seal count"},
+    "closed_limit": {"收盘封板", "收盘是否封板", "是否收盘涨停"},
+    "rating": {"评级", "评级等级"}, "confidence": {"置信度"},
+    "return_10d_pct": {"10日收益率", "十日收益率", "10日收益率(%)", "10日收益率（%）"},
 }
 
 
@@ -318,6 +326,16 @@ def grade_turn(expect: Expectation, response: AgentChatResponse, events: list[di
             if expect.rows is not None:
                 match = rows == expect.rows if expect.ordered else Counter(map(tuple, rows)) == Counter(map(tuple, expect.rows))
                 add("expected_rows", match, expected=expect.rows, actual=rows)
+                if (valid and all(isinstance(field, str) for field in fields)
+                        and len(fields) == len(set(fields)) and len(header) == len(fields)
+                        and set(expect.columns) <= set(fields)):
+                    projected = [[row[fields.index(field)] for field in expect.columns] for row in rows]
+                    values_match = projected == expect.rows if expect.ordered else Counter(map(tuple, projected)) == Counter(map(tuple, expect.rows))
+                    add("expected_values", values_match, "Compare required fields independently of extra delivered columns", expect.rows, projected)
+                else:
+                    add("expected_values", None, "Required fields lack a unique valid structured column mapping")
+    if expect.rows is not None and not any(check.name == "expected_values" for check in checks):
+        add("expected_values", None, "No uniquely declared table to verify required field values")
     if expect.table_only:
         add("table_only", len(parsed) == 1 and not outside, actual=outside)
     add("no_placeholder", "{{evidence_table}}" not in response.answer)
@@ -332,7 +350,8 @@ def grade_turn(expect: Expectation, response: AgentChatResponse, events: list[di
                 add("visible_table_only", allowed, "Already displayed text counts even after withdrawal", actual=draft)
     judgements = judgements or []
     valid = [j for j in judgements if isinstance(j, dict) and type(j.get("index")) is int
-             and type(j.get("passed")) is bool and isinstance(j.get("reason"), str) and j["reason"].strip()]
+             and "passed" in j and (type(j["passed"]) is bool or j["passed"] is None)
+             and isinstance(j.get("reason"), str) and j["reason"].strip()]
     indexes = [j["index"] for j in valid]
     if expect.semantic_checks:
         coverage = len(valid) == len(judgements) and sorted(indexes) == list(range(len(expect.semantic_checks)))
@@ -340,7 +359,7 @@ def grade_turn(expect: Expectation, response: AgentChatResponse, events: list[di
     for index, criterion in enumerate(expect.semantic_checks):
         matches = [j for j in valid if j["index"] == index]
         judgement = matches[0] if len(matches) == 1 else None
-        rejected = [j["reason"] for j in matches if not j["passed"]]
+        rejected = [j["reason"] for j in matches if j["passed"] is False]
         add(f"semantic_{index}", False if rejected else judgement["passed"] if judgement else None,
             "; ".join(rejected) if rejected else judgement["reason"] if judgement else "No unique valid judgement supplied", expected=criterion)
     return checks

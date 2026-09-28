@@ -250,3 +250,30 @@ def test_visible_withdrawn_drafts_are_retained_and_table_only_violation_fails():
     assert outcome(expect, response, events=events[4:]) == "pass"
     events[-1]["payload"]["offset"] = 8
     assert outcome(expect, response, events=events[4:]) == "fail"
+
+
+@pytest.mark.parametrize("change,expected", [("extra", True), ("wrong", False), ("omit", False), ("missing_field", None)])
+def test_required_values_are_separate_from_delivered_column_format(change, expected):
+    expect, response = example()
+    final, records, raw = parts(response)
+    fields = FIELDS + ["trade_date"]
+    headers = HEADERS + ["日期"]
+    if change == "missing_field":
+        fields, headers = ["symbol", "name"], ["代码", "名称"]
+    final["table"]["columns"] = [{"field": f, "label": h} for f, h in zip(fields, headers)]
+    rows = deepcopy(ROWS)
+    if change == "wrong": rows[0]["pct_change"] = 9.9
+    if change == "omit": rows = rows[:1]
+    response.answer = markdown(rows, fields, headers)
+    checks = grade_turn(expect, response)
+    assert next(c for c in checks if c.name == "expected_values").passed is expected
+    assert next(c for c in checks if c.name == "table_fields").passed is False
+
+
+def test_unknown_semantic_decision_preserves_its_reason():
+    expect, response = example()
+    expect.semantic_checks = ["来源描述等价"]
+    checks = grade_turn(expect, response, judgements=[{"index": 0, "passed": None, "reason": "无法确认来源归属"}])
+    assert verdict(checks) == "review"
+    semantic = next(c for c in checks if c.name == "semantic_0")
+    assert semantic.passed is None and semantic.detail == "无法确认来源归属"
