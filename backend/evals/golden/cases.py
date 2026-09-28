@@ -349,7 +349,7 @@ def _robustness_cases():
             notes="研究与交易混合请求，既不能越界也不能丢弃可完成的研究交付。"),
         case("r10_source_truncation", "source_truncated", [turn(
             "只执行一次数据查询，按板数降序、同板数按代码升序列2026-09-22全部收盘涨停股的代码名称；来源截断就说明缺口。",
-            table([H, E], only=False, ordered=True, statuses=("partial",), max_calls=1,
+            table([H, L], only=False, ordered=True, statuses=("partial",), max_calls=1,
                   checks=("明确来源被截断，仅交付返回的两只，不能称为全部或以两只作为全市场涨停数。",)))],
             category="robustness", variant="truncated", sources=("BC-060", "BC-064", "BC-077"),
             notes="一次取数预算下不允许把截断结果当作全集；控制计算不计业务取数次数。"),

@@ -101,3 +101,14 @@ def test_loading_returns_independent_mutable_models():
     second = load_cases()
     assert second[0].turns[0].expect.rows[0][0] == "600101"
     assert "changed" not in second[0].source
+
+
+def test_truncated_oracle_obeys_explicit_secondary_sort_before_cutoff():
+    from evals.golden.world import synthetic_events
+
+    case = next(case for case in load_cases() if case.id == "r10_source_truncation")
+    events = [event for event in synthetic_events()
+              if event.trade_date.isoformat() == "2026-09-22" and event.closed_limit]
+    # Independent reference order: the two-board 600909 precedes 688404.
+    ordered = sorted(events, key=lambda event: (-event.board_height, event.symbol))
+    assert case.turns[0].expect.rows == [[event.symbol, event.name] for event in ordered[:2]]
