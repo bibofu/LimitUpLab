@@ -42,6 +42,8 @@ jobs:
       - name: Install frontend dependencies
         working-directory: frontend
         run: npm ci
+      - name: Validate golden case contracts without model calls
+        run: python backend/scripts/run_agent_golden.py --mode validate
       - name: Run shared acceptance gates
         run: python scripts/check_project.py
       - name: Preserve verification reports

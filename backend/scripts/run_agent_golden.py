@@ -30,6 +30,11 @@ def code_fingerprint():
     return digest({path.relative_to(ROOT).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest() for path in files})
 
 
+def tree_fingerprint(directory):
+    return digest({path.relative_to(ROOT).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
+                   for path in sorted(directory.rglob("*.py"))})
+
+
 def provider_configuration(provider):
     """Hash effective settings; never serialize keys, raw endpoints or URL credentials."""
     model = getattr(provider, "chat_model", None)
@@ -121,6 +126,8 @@ def main(argv=None):
         commit = None
     manifest = {"suite_version": SUITE_VERSION, "dataset_hash": digest([c.model_dump() for c in cases]),
         "code_hash": code_fingerprint(), "git_commit": commit, "trials": args.trials,
+        "evaluator_hash": tree_fingerprint(BACKEND / "evals"),
+        "production_hash": tree_fingerprint(BACKEND / "app"),
         "case_ids": [c.id for c in cases], "model": getattr(provider, "model", type(provider).__name__),
         "provider": type(provider).__name__, "judge": args.judge, "judge_human_calibrated": False,
         "effective_model_configuration": provider_configuration(provider),
