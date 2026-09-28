@@ -9,8 +9,8 @@ import pytest
 
 from evals.golden.contracts import Case, Expectation, Turn
 from evals.golden.judge import judge_turn
-from evals.golden.reporting import summarize
-from evals.golden.runner import Budget, BudgetedProvider, BudgetExceeded, run_case
+from evals.golden.reporting import record_trial, summarize
+from evals.golden.runner import Budget, BudgetedProvider, BudgetExceeded, run_case, without_sdk_retries
 
 
 def call(name, args):
@@ -111,6 +111,8 @@ def test_harness_budget_exhaustion_is_not_model_failure(tmp_path):
     result = run_case(example_case(), trial=1, directory=tmp_path, provider=provider)
     assert result["verdict"] == "harness_error"
     assert "budget exhausted" in result["error"]
+    assert result["completed"] is False
+    assert result["stop_reason"] == "model_call_budget"
 
 
 def test_judge_requires_complete_unique_indices():
@@ -123,13 +125,178 @@ def test_judge_requires_complete_unique_indices():
         judge_turn(MissingJudge(), user="hello", expectations=[], response=response, drafts=[])
 
 
-def test_validate_cli_never_loads_model(monkeypatch, capsys):
+def cli_module():
     path = Path(__file__).resolve().parents[1] / "scripts/run_agent_golden.py"
     spec = importlib.util.spec_from_file_location("golden_cli", path)
     module = importlib.util.module_from_spec(spec)
     spec.loader.exec_module(module)
+    return module
+
+
+def test_validate_cli_never_loads_model(monkeypatch, capsys):
+    module = cli_module()
     monkeypatch.setattr("app.services.llm_provider.get_llm_provider", lambda: pytest.fail("No model in validation"))
     assert module.main(["--mode", "validate"]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["cases"] == 60
     assert report["smoke_cases"] == 12
+
+
+def test_budget_interrupted_trial_resumes_without_double_counting(tmp_path, monkeypatch):
+    module = cli_module()
+    case = example_case()
+    case.category = "multi"
+    case.turns.append(case.turns[0].model_copy(deep=True))
+    observed_reservations = []
+    class CheckingModel(ScriptedModel):
+        def generate_messages(self, *args, **kwargs):
+            saved = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+            observed_reservations.append(saved["model_calls_used"])
+            return super().generate_messages(*args, **kwargs)
+    monkeypatch.setattr(module, "load_cases", lambda: [case])
+    monkeypatch.setattr(module, "code_fingerprint", lambda: "fixed-test-code")
+    monkeypatch.setattr("app.config.configure_runtime_environment", lambda: None)
+    monkeypatch.setattr("app.services.llm_provider.get_llm_provider", CheckingModel)
+    arguments = ["--mode", "live", "--case", case.id, "--judge", "model", "--output", str(tmp_path)]
+    assert module.main([*arguments, "--max-model-calls", "5"]) == 2
+    first = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert first["results"][0]["turns"][0]["verdict"] == "pass"
+    assert first["results"][0]["completed"] is False
+    assert first["summary"]["execution_complete"] is False
+    assert first["summary"]["fully_repeated_cases"] == 0
+    assert first["model_calls_used"] == 5
+    assert module.main([*arguments, "--resume", "--max-model-calls", "30"]) == 0
+    resumed = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert len(resumed["results"]) == 1
+    assert resumed["results"][0]["completed"] is True
+    assert len(resumed["results"][0]["turns"]) == 2
+    assert len(resumed["attempt_history"]) == 1
+    assert resumed["attempt_history"][0]["verdict"] == "harness_error"
+    assert resumed["summary"]["attempted_trials"] == 1
+    assert resumed["summary"]["recorded_attempts"] == 2
+    assert resumed["summary"]["execution_complete"] is True
+    assert resumed["model_calls_used"] == 15
+    assert observed_reservations == list(range(1, 16))
+    assert len(list((tmp_path / "sessions").glob("*/session.sqlite"))) == 2
+    assert module.main([*arguments, "--resume", "--max-model-calls", "30"]) == 0
+    assert observed_reservations == list(range(1, 16))  # A completed trial is never paid for again.
+
+
+def test_effective_settings_are_hashed_and_sdk_retries_disabled():
+    from copy import copy
+    from types import SimpleNamespace
+    class Client:
+        def __init__(self, retries):
+            self.max_retries = retries
+            self.base_url = "https://private-user:private-password@example.invalid/v1?token=private-token"
+            self.timeout = 31
+            self.chat = SimpleNamespace(completions=object())
+        def with_options(self, **kwargs):
+            clone = copy(self)
+            clone.__dict__.update(kwargs)
+            return clone
+    class Model(SimpleNamespace):
+        def model_copy(self, update):
+            clone = copy(self)
+            clone.__dict__.update(update)
+            return clone
+    model = Model(root_client=Client(3), root_async_client=Client(3), max_retries=3,
+                  openai_api_base="https://private-user:private-password@example.invalid/v1",
+                  extra_body={"thinking": {"type": "disabled"}}, request_timeout=31)
+    original = SimpleNamespace(model="fixture", chat_model=model, planner_max_tokens=1024,
+                               native_function_calling_enabled=True, api_key="private-api-key")
+    configured = without_sdk_retries(original)
+    assert original.chat_model.max_retries == 3
+    assert original.chat_model.root_client.max_retries == 3
+    assert configured.chat_model.max_retries == 0
+    assert configured.chat_model.root_client.max_retries == 0
+    assert configured.chat_model.root_async_client.max_retries == 0
+    module = cli_module()
+    initial = module.provider_configuration(configured)
+    serialized = json.dumps(initial)
+    assert not any(secret in serialized for secret in (
+        "private-user", "private-password", "private-token", "private-api-key", "example.invalid",
+    ))
+    configured.api_key = "rotated-api-key"
+    assert module.provider_configuration(configured) == initial
+    configured.chat_model.extra_body = {"thinking": {"type": "enabled"}}
+    assert module.provider_configuration(configured) != initial
+    thinking = module.provider_configuration(configured)
+    configured.chat_model.root_client.base_url = "https://different-endpoint.invalid/v1"
+    assert module.provider_configuration(configured) != thinking
+
+
+def test_resume_rejects_changed_effective_configuration(tmp_path, monkeypatch):
+    module = cli_module()
+    case = example_case()
+    configuration = {"settings_sha256": "thinking-disabled"}
+    monkeypatch.setattr(module, "load_cases", lambda: [case])
+    monkeypatch.setattr(module, "code_fingerprint", lambda: "fixed-test-code")
+    monkeypatch.setattr(module, "provider_configuration", lambda _: dict(configuration))
+    monkeypatch.setattr("app.config.configure_runtime_environment", lambda: None)
+    monkeypatch.setattr("app.services.llm_provider.get_llm_provider", ScriptedModel)
+    arguments = ["--mode", "live", "--case", case.id, "--judge", "model", "--output", str(tmp_path)]
+    assert module.main(arguments) == 0
+    configuration["settings_sha256"] = "thinking-enabled"
+    with pytest.raises(SystemExit) as error:
+        module.main([*arguments, "--resume"])
+    assert error.value.code == 2
+
+
+def test_configuration_hash_includes_direct_provider_request_options():
+    from app.services.llm_provider import OpenAIChatCompletionsProvider
+    module = cli_module()
+    # Legacy text-provider attributes are hashed without enabling it for ReAct.
+    provider = OpenAIChatCompletionsProvider(api_key="private-fixture-key",
+        base_url="https://user:password@fixture.invalid/v1", thinking_enabled=False)
+    previous = module.provider_configuration(provider)
+    for attribute, value in (("thinking_enabled", True), ("timeout_seconds", 47),
+                             ("planner_max_tokens", 765), ("max_attempts", 4),
+                             ("base_url", "https://another.invalid/v1")):
+        setattr(provider, attribute, value)
+        current = module.provider_configuration(provider)
+        assert current != previous, attribute
+        previous = current
+    assert "private-fixture-key" not in json.dumps(previous)
+    assert "fixture.invalid" not in json.dumps(previous)
+
+
+def test_memory_function_call_makes_one_http_attempt_after_rate_limit():
+    import httpx
+    from app.services.langchain_provider import AuditedChatOpenAI, LangChainChatProvider
+    requests = []
+    def limited(request):
+        requests.append(request)
+        return httpx.Response(429, json={"error": {"message": "synthetic rate limit",
+            "type": "rate_limit_error", "code": "rate_limit_exceeded"}})
+    with httpx.Client(transport=httpx.MockTransport(limited)) as client:
+        chat = AuditedChatOpenAI(model="fixture", api_key="synthetic-key",
+            base_url="https://fixture.invalid/v1", max_retries=2, http_client=client)
+        provider = LangChainChatProvider(api_key="synthetic-key", model="fixture",
+            base_url="https://fixture.invalid/v1", timeout_seconds=1, planner_max_tokens=128,
+            thinking_enabled=False, max_attempts=3, native_function_calling_enabled=True,
+            chat_model=chat)
+        configured = without_sdk_retries(provider)
+        with pytest.raises(RuntimeError, match="RateLimitError"):
+            configured.generate_function_call("system", "memory fixture", function_name="memory",
+                function_description="fixture", parameters={"type": "object", "properties": {}})
+    assert len(requests) == 1
+
+
+def test_incomplete_attempt_history_does_not_inflate_rates_or_drop_usage():
+    interrupted = {"case_id": "a", "trial": 1, "category": "multi", "verdict": "harness_error",
+                   "completed": False, "duration_seconds": 2, "turns": [{"agent_usage": {"total_tokens": 10}}]}
+    finished = {**interrupted, "completed": True, "verdict": "pass",
+                "turns": [{"agent_usage": {"total_tokens": 20}}]}
+    report = {"results": [interrupted]}
+    assert summarize(report["results"], planned_trials=1, planned_cases=1)["execution_complete"] is False
+    record_trial(report, finished)
+    summary = summarize(report["results"], planned_trials=1, planned_cases=1,
+                        attempt_history=report["attempt_history"])
+    assert summary["attempted_trials"] == 1
+    assert summary["trial_pass_rate"] == 1
+    assert summary["agent_tokens"] == 30
+    with pytest.raises(ValueError, match="completed"):
+        record_trial(report, finished)
+    with pytest.raises(ValueError, match="Duplicate"):
+        summarize([finished, finished], planned_trials=1)

@@ -1,6 +1,7 @@
 """Real-model evaluation with persistent isolated sessions and a frozen market world."""
 
 from contextlib import ExitStack
+from copy import copy
 from dataclasses import asdict
 from datetime import datetime, timedelta, timezone
 import json
@@ -25,15 +26,35 @@ class BudgetExceeded(RuntimeError):
 
 
 class Budget:
-    def __init__(self, maximum, used=0):
+    def __init__(self, maximum, used=0, on_take=None):
         self.maximum, self.used = maximum, used
         self.denied = 0
+        self.on_take = on_take
 
     def take(self):
         if self.used >= self.maximum:
             self.denied += 1
             raise BudgetExceeded("Evaluation model-call budget exhausted")
         self.used += 1
+        # Reserve durably before making a billable request, including interrupted trials.
+        if self.on_take is not None:
+            self.on_take(self.used)
+
+
+def without_sdk_retries(provider):
+    """Copy the evaluation provider so memory/text calls cannot retry invisibly."""
+    model = getattr(provider, "chat_model", None)
+    if model is None:
+        return provider  # Scripted protocol fixtures have no network client.
+    options = {"max_retries": 0}
+    for root_name, client_name in (("root_client", "client"), ("root_async_client", "async_client")):
+        root = getattr(model, root_name, None)
+        if root is not None:
+            configured = root.with_options(max_retries=0)
+            options.update({root_name: configured, client_name: configured.chat.completions})
+    configured = copy(provider)
+    configured.chat_model = model.model_copy(update=options)
+    return configured
 
 
 class BudgetedProvider:
@@ -169,10 +190,14 @@ def run_case(case, *, trial, directory, provider, judge_provider=None):
     if unsupported:
         trial_verdict = "harness_error"
         error = "Fixture coverage gap: " + ", ".join(unsupported)
-    if budget and budget.denied > denied_before:
+    budget_exhausted = bool(budget and budget.denied > denied_before)
+    if budget_exhausted:
         trial_verdict = "harness_error"
         error = "Evaluation model-call budget exhausted; this is not an Agent capability score"
     return {"case_id": case.id, "trial": trial, "category": case.category, "family": case.family,
         "split": case.split, "tags": case.tags, "definition": case.model_dump(), "verdict": trial_verdict,
         "turns": results, "error": error, "unsupported_tools": unsupported,
+        "completed": len(results) == len(case.turns) and not budget_exhausted,
+        "planned_turns": len(case.turns), "session_directory": str(work),
+        "stop_reason": "model_call_budget" if budget_exhausted else "execution_error" if error else "finished",
         "duration_seconds": round(perf_counter() - started, 3)}
