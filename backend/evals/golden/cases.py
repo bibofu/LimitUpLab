@@ -91,9 +91,9 @@ def _single_cases():
             table([B, E, L]))], sources=("BC-015",),
             notes="同时约束开板次数大于零与收盘封住，不能返回未回封。"),
         case("s10_industry", "sector_filter", [turn(
-            "2026-09-22机械行业中收盘封住涨停的股票，只输出代码和名称。", table([B, G]))],
+            "2026-09-22机械行业中收盘封住涨停的股票，只输出代码和名称。", table([B]))],
             smoke=True, sources=("BC-004", "BC-006", "BC-016"),
-            notes="行业字段过滤，名称不能代替行业归属。"),
+            notes="行业字段过滤；岭南精工在合成世界属于半导体，不能根据名称猜成机械行业。"),
         case("s11_concept", "sector_filter", [turn(
             "2026-09-22人工智能概念中收盘涨停的股票，只输出代码和名称。", table([A, C]))],
             sources=("BC-006", "BC-016"), notes="概念筛选跨行业、跨市场。"),
@@ -165,8 +165,8 @@ def _single_cases():
                   "不扩展评级、行业排行或具体个股名单。", dates=(D,)))],
             sources=("BC-054", "BC-077", "BC-078"), notes="单指标问题测试最小充分回答和总体口径。"),
         case("s27_semiconductor_first", "sector_filter", [turn(
-            "2026-09-22半导体行业首板且收盘封住的股票，仅代码和名称。", table([A]))],
-            sources=("BC-004", "BC-006"), notes="行业与板数交集，排除同业二板青岚芯片。"),
+            "2026-09-22半导体行业首板且收盘封住的股票，仅代码和名称。", table([A, G]))],
+            sources=("BC-004", "BC-006"), notes="行业与板数交集，排除同业二板青岚芯片，保留北交所首板岭南精工。"),
         case("s28_star_first_empty", "empty_subset", [turn(
             "2026-09-22科创板首板并且收盘封住的有哪些？",
             prose("该条件下没有匹配股票。", "不能说科创板当日没有涨停股。",
@@ -178,7 +178,7 @@ def _single_cases():
         case("s30_three_condition_intersection", "set_composition", [turn(
             "当前热榜前5名中同时属于2026-09-22半导体行业首板封板股的，仅代码名称。",
             table([A]))], holdout=True, sources=("BC-021", "BC-025"),
-            notes="三项条件缺一都会多返回股票，测试多交付条件保留。"),
+            notes="漏热榜范围会多出岭南精工，漏首板会多出青岚芯片，漏行业会多出北辰制造和星河软件。"),
     ]
 
 
@@ -235,9 +235,9 @@ def _multi_cases():
                  table([[*A, "0"], [*B, "1"]], columns=["symbol", "name", "break_count"])),
         ], category="multi", sources=("BC-010", "BC-026"), notes="它们指最终两只，不能扩大成全评级池。"),
         case("m10_narrow_prior_set", "entity_reference", [
-            turn("2026-09-22半导体行业收盘涨停股，只列代码名称。", table([A, E])),
-            turn("其中首板的留下，仍只列代码名称。", table([A])),
-        ], category="multi", sources=("BC-006", "BC-087"), notes="在已有行业集合上加条件。"),
+            turn("2026-09-22半导体行业收盘涨停股，只列代码名称。", table([A, E, G])),
+            turn("其中首板的留下，仍只列代码名称。", table([A, G])),
+        ], category="multi", sources=("BC-006", "BC-087"), notes="在已有行业集合上加首板条件，仍须保留北交所的岭南精工。"),
         case("m11_new_stock_topic", "topic_switch", [
             turn("2026-09-22主板首板封板股，仅代码名称。", table(MAIN_FIRST)),
             turn("换个问题：星河软件截至2026-09-22的10日收益率是多少？",

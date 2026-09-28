@@ -199,3 +199,43 @@ def test_registry_rejects_unknown_names_dates_and_arguments():
         execute(target, "limit_up_events", invented=True)
     with pytest.raises(AttributeError):
         target.production_database
+
+
+def test_three_condition_intersection_detects_each_omitted_constraint():
+    target = registry()
+    # Read the raw frozen facts: these reference sets do not reuse the query
+    # implementation or derive their expected members from the case oracle.
+    sealed = [event for event in target.events
+              if event.trade_date == date(2026, 9, 22) and event.closed_limit]
+    first = {event.symbol for event in sealed if event.board_height == 1}
+    industry = {event.symbol for event in sealed if event.industry == "半导体"}
+    _, payload, _ = execute(target, "hot_stock_ranking", limit=5)
+    hot = {row["symbol"] for row in payload["items"]}
+    assert hot == {"000202", "600101", "300303", "688404", "600606"}
+    complete = hot & first & industry
+    assert complete == {"600101"}
+    omissions = {
+        "hot": (first & industry, {"600101", "830505"}),
+        "first": (hot & industry, {"600101", "688404"}),
+        "industry": (hot & first, {"600101", "000202", "300303"}),
+    }
+    for name, (actual, expected) in omissions.items():
+        assert actual == expected, name
+        assert complete < actual, name
+
+
+def test_industry_change_updates_all_affected_manual_oracles():
+    from evals.golden.cases import load_cases
+
+    cases = {case.id: case for case in load_cases()}
+    assert cases["s10_industry"].turns[0].expect.rows == [["000202", "北辰制造"]]
+    assert cases["s27_semiconductor_first"].turns[0].expect.rows == [
+        ["600101", "华岳科技"], ["830505", "岭南精工"],
+    ]
+    assert cases["m10_narrow_prior_set"].turns[0].expect.rows == [
+        ["600101", "华岳科技"], ["688404", "青岚芯片"], ["830505", "岭南精工"],
+    ]
+    assert cases["m10_narrow_prior_set"].turns[1].expect.rows == [
+        ["600101", "华岳科技"], ["830505", "岭南精工"],
+    ]
+    assert cases["s30_three_condition_intersection"].turns[0].expect.rows == [["600101", "华岳科技"]]
