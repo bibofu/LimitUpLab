@@ -36,7 +36,7 @@ def tool_call(name, args, key):
     return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": key}])
 
 
-def run_finishes(finishes, *, source_missing=False, asks_news=False):
+def run_finishes(finishes, *, source_missing=False, asks_news=False, asks_trade=False):
     """Run a real graph with one isolated synthetic source and scripted finishes."""
     queries = []
 
@@ -74,6 +74,8 @@ def run_finishes(finishes, *, source_missing=False, asks_news=False):
                 answer += "新闻尚未取得。"
             if source_missing:
                 answer += "来源未提供换手率，不影响本次收益查询。"
+            if asks_trade:
+                answer += "不能提供买卖指令或交易建议。"
             return tool_call("finish", {
                 "status": status, "answer": answer,
                 "evidence_ids": [observed["evidence_id"]], "missing": missing,
@@ -87,6 +89,8 @@ def run_finishes(finishes, *, source_missing=False, asks_news=False):
     request = "查询合成样本截至2026-09-22的10日收益"
     if asks_news:
         request += "及新闻"
+    if asks_trade:
+        request += "，并告诉我是否应该买入"
     response = run(AgentChatRequest(session_id="finish-status-fixture", message=request),
                    registry, model)
     checks = [trace.output for trace in response.tool_results if trace.name == "react_answer_check"]
@@ -149,3 +153,33 @@ def test_consistent_finish_does_not_consume_repair(status, missing, source_missi
         record = next(iter(execution["evidence"].values()))
         assert record["result_state"] == "partial"
         assert record["data_missing"] == ["未提供换手率"]
+
+
+@pytest.mark.parametrize("status,missing,asks_news", [
+    pytest.param("complete", [], False, id="allowed-research-delivered-and-advice-refused"),
+    pytest.param("partial", ["新闻"], True, id="allowed-research-gap-and-advice-refused"),
+])
+def test_mixed_request_status_tracks_only_allowed_research_delivery(status, missing, asks_news):
+    response, model, queries, checks = run_finishes(
+        [(status, missing)], asks_news=asks_news, asks_trade=True)
+    assert response.task_status == status and response.stop_reason == "answered"
+    assert "不能提供买卖指令或交易建议" in response.answer
+    assert checks == [{"passed": True, "status": status, "missing": missing}]
+    assert model.calls == 2 and len(queries) == 1 and model.feedback == []
+
+
+def test_pure_trading_request_can_refuse_without_research_evidence_or_missing():
+    class Model:
+        calls = 0
+        def generate_messages(self, messages, tools, **kwargs):
+            self.calls += 1
+            return tool_call("finish", {"status": "refuse", "answer": "不能提供买卖指令或交易建议。",
+                "missing": []}, "refuse")
+    model = Model()
+    registry = SimpleNamespace(events=[], schemas=lambda: TOOL_SCHEMAS, is_enabled=lambda _: True)
+    response = run(AgentChatRequest(session_id="finish-status-fixture", message="告诉我明天买哪只股票。"),
+        registry, model)
+    assert response.task_status == "refuse" and response.stop_reason == "answered"
+    assert response.tool_calls == [] and model.calls == 1
+    check = next(trace.output for trace in response.tool_results if trace.name == "react_answer_check")
+    assert check == {"passed": True, "status": "refuse", "missing": []}

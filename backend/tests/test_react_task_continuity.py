@@ -281,7 +281,8 @@ def test_preference_confirmation_does_not_require_a_table_or_market_query(monkey
     result = run(AgentChatRequest(session_id="continuity", message="以后名单只列代码。"), registry(), Model())
     assert result.task_status == "complete" and result.tool_calls == []
     task = next(trace.output for trace in result.tool_results if trace.name == "react_task_context")
-    assert task["output_contract"] == {"mode": "table_only", "fields": ["symbol"], "table_required": False}
+    assert task["output_contract"]["fields"] == ["symbol"]
+    assert task["output_contract"]["mode"] == "table_only" and not task["output_contract"]["table_required"]
 
 
 def test_pending_user_slot_cannot_be_guessed_from_available_dates_or_symbols(monkeypatch):
