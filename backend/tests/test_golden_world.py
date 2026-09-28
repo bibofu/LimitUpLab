@@ -4,13 +4,15 @@ from datetime import date
 from inspect import signature
 import socket
 import sqlite3
+import subprocess
 
 import pytest
 
 from app.agents.react_runtime.evidence import EvidenceStore
 from app.agents.react_runtime.tools import ToolGateway
 from app.agents.tools import AgentToolRegistry, TOOL_SCHEMAS
-from app.models import FirstBoardRatingsResponse, StockKLineFacts, StockNewsFacts
+from app.collectors.hithink_finance_collector import HithinkFinanceCollector, HithinkLimitUpFact
+from app.models import FirstBoardRatingsResponse, StockActivityFacts, StockKLineFacts, StockNewsFacts, WebSearchFacts
 from evals.golden.contracts import Case, Expectation, Turn
 from evals.golden.world import (
     DATES, SOURCE, SUPPORTED_TOOLS, FixtureCoverageGap, FrozenRegistry,
@@ -24,6 +26,8 @@ def no_production_io(monkeypatch):
     monkeypatch.setattr(socket.socket, "connect", forbidden)
     monkeypatch.setattr(socket, "create_connection", forbidden)
     monkeypatch.setattr(sqlite3, "connect", forbidden)
+    monkeypatch.setattr(subprocess, "run", forbidden)
+    monkeypatch.setattr(HithinkFinanceCollector, "_invoke", forbidden)
     monkeypatch.setattr(AgentToolRegistry, "__init__", forbidden)
 
 
@@ -48,6 +52,10 @@ CALLS = [
     ("stock_kline", {"symbol": "华岳科技", "end_date": "2026-09-22", "days": 20}),
     ("stock_news", {"symbol": "600101"}),
     ("hot_stock_ranking", {"limit": 5}),
+    ("remote_limit_up_pool", {"trade_date": "2026-09-22", "limit": 100}),
+    ("stock_activity", {"symbol": "华岳科技"}),
+    ("web_search", {"query": "华岳科技 股票"}),
+    ("dragon_tiger_list", {"trade_date": "2026-09-22"}),
 ]
 
 
@@ -153,7 +161,7 @@ def test_kline_metrics_match_generated_intervals_and_news_are_synthetic():
 def test_empty_and_error_variants_preserve_real_execution_boundary(name, arguments):
     _, payload, state = execute(registry("empty"), name, **arguments)
     assert state == "empty"
-    for key in ("events", "items", "candidates", "bars", "top_candidates"):
+    for key in ("events", "items", "candidates", "bars", "top_candidates", "results", "recent_limit_up_events"):
         if key in payload:
             assert payload[key] == []
     with pytest.raises(RuntimeError, match="Synthetic provider failure"):
@@ -239,3 +247,157 @@ def test_industry_change_updates_all_affected_manual_oracles():
         ["600101", "华岳科技"], ["830505", "岭南精工"],
     ]
     assert cases["s30_three_condition_intersection"].turns[0].expect.rows == [["600101", "华岳科技"]]
+
+
+def test_remote_pool_uses_real_filters_and_dated_event_universe():
+    target = registry()
+    _, payload, _ = execute(target, "remote_limit_up_pool", board_height=1)
+    assert payload["upstream_total"] == 8
+    assert [row["symbol"] for row in payload["items"]] == [
+        "600101", "000202", "300303", "830505", "000910"]
+    _, payload, _ = execute(target, "remote_limit_up_pool", board_height=1, query="人工智能", limit=1)
+    assert [row["symbol"] for row in payload["items"]] == ["600101"]
+    _, payload, _ = execute(target, "remote_limit_up_pool", trade_date="2026-09-18", board_height=1)
+    assert len(payload["items"]) == 7 and payload["trade_date"] == "2026-09-18"
+    assert all(row["board_height"] == 1 for row in payload["items"])
+
+
+@pytest.mark.parametrize("exclude_st", [False, True])
+@pytest.mark.parametrize("exclude_new", [False, True])
+def test_st_and_new_filters_use_test_only_upstream_rows(exclude_st, exclude_new):
+    class BoundaryRegistry(FrozenRegistry):
+        def _remote_pool_rows(self, target):
+            rows = super()._remote_pool_rows(target)
+            for symbol, name, st, new in [("600111", "ST合成材料", True, False),
+                                           ("688112", "合成新芯", False, True)]:
+                rows.append(HithinkLimitUpFact(
+                    symbol=symbol, thscode=self._thscode(symbol), name=name,
+                    is_st=st, is_new=new, last_price=None, change_pct=None,
+                    limit_up_time="09:45:00", limit_up_reason="仅用于过滤器单测的上游样本",
+                    board_height=1, board_height_text="1板", seal_amount=100_000, max_seal_amount=200_000))
+            return rows
+
+    target = BoundaryRegistry(registry().case)
+    _, payload, _ = execute(target, "remote_limit_up_pool", exclude_st=exclude_st, exclude_new=exclude_new)
+    symbols = {row["symbol"] for row in payload["items"]}
+    assert ("600111" in symbols) is not exclude_st
+    assert ("688112" in symbols) is not exclude_new
+    assert payload["upstream_total"] == 10
+    assert len(symbols) == 10 - int(exclude_st) - int(exclude_new)
+
+
+@pytest.mark.parametrize("day", ["2026-09-18", "2026-09-21", "2026-09-22"])
+@pytest.mark.parametrize("exclude_st,exclude_new", [(False, False), (True, False), (False, True), (True, True)])
+def test_default_market_sources_have_identical_complete_stock_sets(day, exclude_st, exclude_new):
+    target = registry()
+    _, remote, _ = execute(target, "remote_limit_up_pool", trade_date=day,
+                            exclude_st=exclude_st, exclude_new=exclude_new, limit=100)
+    _, local, _ = execute(target, "limit_up_events", trade_date=day, event_status="closed", limit=100)
+    _, events, _ = execute(target, "market_event_pool", trade_date=day, event_type="limit_up", limit=100)
+    remote_set = {row["symbol"] for row in remote["items"]}
+    assert remote_set == {row["symbol"] for row in local["events"]}
+    assert remote_set == {row["symbol"] for row in events["items"]}
+    assert len(remote_set) == remote["upstream_total"] == local["matched_count"] == events["matched_count"]
+    assert {"600111", "688112"}.isdisjoint(target._names)
+    if day == "2026-09-22":
+        _, summary, _ = execute(target, "market_summary")
+        assert summary["limit_up_count"] == len(remote_set) == 8
+
+
+def test_dragon_tiger_keeps_distinct_intervals_and_honors_board_query_date_limit():
+    target = registry()
+    _, payload, _ = execute(target, "dragon_tiger_list")
+    assert payload["stock_count"] == 4 and payload["matched_count"] == 5
+    assert {(row["symbol"], row["range_days"]) for row in payload["items"]} == {
+        ("600101", 1), ("600101", 3), ("000202", 1), ("688404", 1), ("600606", 1)}
+    assert all(row["buy_amount"] - row["sell_amount"] == row["net_buy_amount"] for row in payload["items"])
+    _, institution, _ = execute(target, "dragon_tiger_list", board_type="org")
+    assert {row["symbol"] for row in institution["items"]} == {"600101", "688404", "600606"}
+    _, hot_money, _ = execute(target, "dragon_tiger_list", board_type="hot_money")
+    assert {(row["symbol"], row["range_days"]) for row in hot_money["items"]} == {
+        ("600101", 3), ("000202", 1), ("688404", 1)}
+    _, historical, _ = execute(target, "dragon_tiger_list", trade_date="2026-09-18", query="华岳")
+    assert [(row["symbol"], row["range_days"]) for row in historical["items"]] == [("600101", 1)]
+    result, limited, state = execute(target, "dragon_tiger_list", query="600101", limit=1)
+    assert limited["matched_count"] == 2 and limited["returned_count"] == 1 and limited["source_truncated"]
+    store = EvidenceStore()
+    key = store.add(tool=result.name, payload=limited, state=state, arguments=result.input)
+    assert store.get(key)["result_state"] == "partial"
+
+
+def test_stock_activity_assembles_the_named_stock_with_production_window_semantics():
+    target = registry()
+    result, payload, _ = execute(target, "stock_activity", symbol="华岳科技", days=1, news_limit=1)
+    StockActivityFacts.model_validate(result.output)
+    assert payload["symbol"] == "600101" and payload["data_as_of"] == "2026-09-22"
+    assert payload["kline"]["requested_days"] == 20
+    assert payload["kline"]["return_10d_pct"] == 1.2
+    assert payload["news"]["window_days"] == 1 and len(payload["news"]["items"]) == 1
+    # In production, days controls the news window; recent events are the latest five records.
+    assert [row["trade_date"] for row in payload["recent_limit_up_events"]] == [
+        "2026-09-22", "2026-09-21", "2026-09-18"]
+    assert payload["rating_context"]["popularity_rank"] == 2
+    _, other, _ = execute(target, "stock_activity", symbol="000202", days=7)
+    assert other["symbol"] == "000202" and other["news"]["window_days"] == 7
+    assert other["rating_context"]["popularity_rank"] == 1
+    _, empty, state = execute(registry("empty"), "stock_activity", symbol="600101")
+    assert state == "empty" and empty["kline"] is None
+    assert empty["rating_context"] == {} and empty["news"]["items"] == []
+
+
+def test_web_search_queries_fixed_documents_without_inventing_an_answer():
+    target = registry()
+    result, payload, _ = execute(target, "web_search", query="  华岳科技   股票  ", limit=2)
+    WebSearchFacts.model_validate(result.output)
+    assert payload["query"] == "华岳科技 股票" and payload["provider"] == SOURCE
+    assert [row["url"] for row in payload["results"]] == [
+        "https://example.invalid/golden/600101/2026-09-22",
+        "https://example.invalid/golden/600101/2026-09-21"]
+    _, historical, _ = execute(target, "web_search", query="华岳科技 2026-09-18 公告")
+    assert len(historical["results"]) == 1 and "2026-09-18" in historical["results"][0]["snippet"]
+    _, sector, _ = execute(target, "web_search", query="半导体 2026-09-22 新闻", limit=8)
+    assert {row["url"].split("/")[-2] for row in sector["results"]} == {"600101", "688404", "830505"}
+    _, unknown, state = execute(target, "web_search", query="未收录的不存在公司")
+    assert state == "empty" and unknown["results"] == []
+    _, missing_date, state = execute(target, "web_search", query="华岳科技 2026-09-20 公告")
+    assert state == "empty" and missing_date["results"] == []
+
+
+@pytest.mark.parametrize("name,arguments,collection", [
+    ("remote_limit_up_pool", {}, "items"), ("dragon_tiger_list", {}, "items"),
+    ("stock_activity", {"symbol": "600101"}, "recent_limit_up_events"),
+    ("web_search", {"query": "华岳科技 股票"}, "results"),
+])
+@pytest.mark.parametrize("variant", ["partial", "truncated", "stale"])
+def test_added_tools_propagate_source_failure_metadata(name, arguments, collection, variant):
+    result, payload, state = execute(registry(variant), name, **arguments)
+    assert state == "partial" and payload["source"] == SOURCE
+    if variant == "partial":
+        assert payload["data_missing"] and payload[collection]
+    elif variant == "truncated":
+        assert payload["source_truncated"] and len(payload[collection]) == 2
+    else:
+        assert payload["data_fresh"] is False
+        if "trade_date" in payload:
+            assert payload["trade_date"] == "2026-09-21"
+        else:
+            assert payload["fetched_at"].startswith("2026-09-21")
+        if name == "stock_activity":
+            assert payload["data_as_of"] == "2026-09-21"
+            assert all(row["trade_date"] <= "2026-09-21" for row in payload[collection])
+        if name == "web_search":
+            assert all("2026-09-22" not in row["snippet"] for row in payload[collection])
+
+
+@pytest.mark.parametrize("name", ["remote_limit_up_pool", "dragon_tiger_list"])
+def test_added_dated_tools_never_relabel_stale_sources(name):
+    with pytest.raises(ValueError, match="requires 2026-09-22"):
+        execute(registry("stale"), name, trade_date="2026-09-22")
+
+
+def test_web_and_activity_injection_stays_in_untrusted_source_fields():
+    _, web, _ = execute(registry("injection"), "web_search", query="华岳科技 股票")
+    assert "SYNTHETIC_INJECTION_CANARY" in web["results"][0]["snippet"]
+    _, activity, _ = execute(registry("injection"), "stock_activity", symbol="600101")
+    assert "SYNTHETIC_INJECTION_CANARY" in activity["news"]["items"][0]["summary"]
+    assert activity["kline"]["return_10d_pct"] == 1.2
