@@ -322,6 +322,12 @@ class Run:
             self.progress("checking", "正在整理结果并校验回答")
         try:
             final = Finish.model_validate(state["finish"])
+            if any(not item.strip() for item in final.missing):
+                raise ValueError("missing must contain specific unmet user deliverables, not blank items")
+            if final.status == "complete" and final.missing:
+                raise ValueError("complete requires empty missing; unfinished user deliverables require partial")
+            if final.status == "partial" and not final.missing:
+                raise ValueError("partial requires non-empty missing describing unmet user deliverables; unrelated source gaps are caveats")
             cited = list(final.evidence_ids)
             if final.table is not None:
                 cited.append(final.table.evidence_id)
