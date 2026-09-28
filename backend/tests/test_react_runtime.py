@@ -151,7 +151,7 @@ def test_public_entry_defaults_to_react(monkeypatch):
             return call("finish", {"status": "refuse", "answer": "我可以提供研究事实，不能提供交易指令。"}, "f")
     response = answer_first_board_chat(AgentChatRequest(session_id="r", message="给我买卖指令"), [],
                                       llm_provider=Model(), tool_registry=registry())
-    assert response.generated_by == "react-runtime-v27"
+    assert response.generated_by == "react-runtime-v28"
     assert response.task_status == "refuse"
 
 
@@ -419,7 +419,7 @@ def test_runtime_does_not_reactivate_old_user_tasks_for_follow_up_without_entiti
     class Model:
         def generate_messages(self, messages, tools, **kwargs):
             contents = [message.content for message in messages]
-            assert contents[1] == "继续上面的研究"
+            assert contents[-1] == "继续上面的研究"
             assert all("history-content" not in content for content in contents)
             return call("finish", {
                 "status": "clarify",
@@ -440,7 +440,7 @@ def test_runtime_does_not_reactivate_old_user_tasks_for_follow_up_without_entiti
     assert execution.output["context_message_count"] == 0
 
 
-def test_runtime_memory_excludes_free_text_summary_but_keeps_continuity_fields():
+def test_runtime_memory_excludes_old_facts_but_reviews_display_preferences(monkeypatch):
     now = datetime.now(timezone.utc)
     memory = ChatSessionMemory(
         session_id="r",
@@ -455,12 +455,19 @@ def test_runtime_memory_excludes_free_text_summary_but_keeps_continuity_fields()
         updated_at=now,
     )
 
+    def review(*args, **kwargs):
+        assert kwargs["task_context"]["preferences"] == ["只列名称"]
+        assert "当前热股第一名" not in json.dumps(kwargs["task_context"], ensure_ascii=False)
+        return PromptInjectionAssessment(decision="allow", reason="fixture", request_kind="conversation",
+            output_contract={"mode": "freeform", "fields": ["name"], "table_required": False})
+    monkeypatch.setattr(runtime_module, "review_input", review)
+
     class Model:
         def generate_messages(self, messages, tools, **kwargs):
-            system = messages[0].content
-            assert "远东股份是当前热股第一名" not in system
-            assert '"stock_symbols": ["600869"]' not in system
-            assert '"constraints": ["只列名称"]' in system
+            context = "\n".join(message.content for message in messages)
+            assert "远东股份是当前热股第一名" not in context
+            assert '"stock_symbols": ["600869"]' not in context
+            assert '"fields": ["name"]' in context
             return call("finish", {
                 "status": "complete",
                 "answer": "你好，我记得你的展示偏好。",

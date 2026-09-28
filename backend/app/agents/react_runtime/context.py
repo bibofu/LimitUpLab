@@ -4,8 +4,63 @@ import json
 
 from langchain_core.messages import AIMessage
 
+from app.agents.react_runtime.task_contract import TaskInterpretation
+
 HISTORY_CHAR_BUDGET = 12000
 MAX_ENTITY_REFERENCES = 32
+
+
+def prepare_task_context(request, history, memory=None):
+    """Bound user intent/preferences and the latest clarification, never market facts."""
+    scoped = [m for m in history if m.session_id == request.session_id and m.status != "error"]
+    context = {"recent_user_intents": [], "preferences": [], "omitted_oversized_context": False}
+
+    def add(key, value):
+        candidate = {**context, key: value}
+        if len(json.dumps(candidate, ensure_ascii=False)) <= HISTORY_CHAR_BUDGET:
+            context[key] = value
+        else:
+            context["omitted_oversized_context"] = True
+
+    # Keep whole constraints rather than cutting away negation or conditions.
+    if memory is not None and memory.session_id == request.session_id:
+        for constraint in memory.constraints[-12:]:
+            if len(constraint) <= 500:
+                add("preferences", [*context["preferences"], constraint])
+            else:
+                context["omitted_oversized_context"] = True
+        reference = {}
+        for field in ("research_goal", "stock_symbols", "topics", "date_scope", "unresolved_questions"):
+            value = getattr(memory, field)
+            if not value:
+                continue
+            if len(json.dumps(value, ensure_ascii=False)) <= 1200 and (not isinstance(value, list) or len(value) <= 16):
+                reference[field] = value
+            else:
+                context["omitted_oversized_context"] = True
+        add("memory_reference", reference)
+    latest = next((m for m in reversed(scoped) if m.role == "assistant"), None)
+    if latest is not None:
+        for trace in reversed((latest.metadata or {}).get("tool_results", [])):
+            if isinstance(trace, dict) and trace.get("name") == "react_task_context":
+                try:
+                    task = TaskInterpretation.model_validate(trace.get("output"))
+                    add("previous_task", task.model_dump(mode="json"))
+                except ValueError:
+                    context["omitted_oversized_context"] = True
+                break
+        if (latest.metadata or {}).get("task_status") == "clarify":
+            if len(latest.content) <= 2000:
+                add("clarification", latest.content)
+            else:
+                context["omitted_oversized_context"] = True
+    intents = [m.content for m in scoped if m.role == "user"][-4:]
+    for intent in reversed(intents):
+        if len(intent) <= 2400:
+            add("recent_user_intents", [intent, *context["recent_user_intents"]])
+        else:
+            context["omitted_oversized_context"] = True
+    return context
 
 
 def prepare_query_reference(request, history, tool_names):
