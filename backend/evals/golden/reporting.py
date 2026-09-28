@@ -10,7 +10,7 @@ def digest(value):
     return hashlib.sha256(json.dumps(value, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
 
 
-def summarize(results, *, planned_trials):
+def summarize(results, *, planned_trials, planned_cases=None):
     counts = Counter(item["verdict"] for item in results)
     by_case, by_category = defaultdict(list), defaultdict(list)
     for item in results:
@@ -24,6 +24,8 @@ def summarize(results, *, planned_trials):
     tokens = [turn.get("agent_usage", {}).get("total_tokens") for item in results for turn in item["turns"]]
     return {
         "attempted_trials": len(results), "verdict_counts": dict(counts),
+        "planned_trials": planned_cases * planned_trials if planned_cases is not None else None,
+        "execution_complete": len(results) == planned_cases * planned_trials if planned_cases is not None else None,
         "first_attempt_pass_rate": rate(first_attempts), "trial_pass_rate": rate(results),
         "fully_repeated_cases": len(complete_cases),
         "all_trials_passed_cases": sum(all(item["verdict"] == "pass" for item in items) for items in complete_cases),
@@ -38,7 +40,8 @@ def summarize(results, *, planned_trials):
 def save_report(report, directory):
     directory = Path(directory)
     directory.mkdir(parents=True, exist_ok=True)
-    report["summary"] = summarize(report["results"], planned_trials=report["manifest"]["trials"])
+    report["summary"] = summarize(report["results"], planned_trials=report["manifest"]["trials"],
+                                  planned_cases=len(report["manifest"]["case_ids"]))
     target = directory / "report.json"
     temporary = directory / "report.json.tmp"
     temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2, default=str), encoding="utf-8")
@@ -46,7 +49,7 @@ def save_report(report, directory):
     summary = report["summary"]
     lines = ["# Agent golden evaluation", "", f"Mode: `{report['mode']}`. Synthetic market fixtures only.", "",
              "Model-judged results have not been calibrated by a human reviewer. This is not real-market accuracy.", "",
-             f"Attempted trials: {summary['attempted_trials']}; verdicts: `{summary['verdict_counts']}`.",
+             f"Attempted trials: {summary['attempted_trials']}/{summary['planned_trials']}; verdicts: `{summary['verdict_counts']}`.",
              f"First-attempt pass rate: {summary['first_attempt_pass_rate']}; all-attempt pass rate: {summary['trial_pass_rate']}.",
              f"Complete repeated cases: {summary['fully_repeated_cases']}; all attempts passed: {summary['all_trials_passed_cases']}.", "",
              "| Case | Trial | Verdict | Seconds | Failed or unresolved checks |", "|---|---:|---|---:|---|"]

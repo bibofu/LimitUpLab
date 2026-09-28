@@ -97,11 +97,20 @@ def test_report_counts_review_errors_and_incomplete_repeats():
                {"case_id": "a", "category": "multi", "trial": 2, "verdict": "fail", "duration_seconds": 2, "turns": []},
                {"case_id": "b", "category": "single", "trial": 1, "verdict": "review", "duration_seconds": 3, "turns": []},
                {"case_id": "c", "category": "single", "trial": 1, "verdict": "harness_error", "duration_seconds": 4, "turns": []}]
-    summary = summarize(results, planned_trials=2)
+    summary = summarize(results, planned_trials=2, planned_cases=3)
     assert summary["trial_pass_rate"] == .25
     assert summary["fully_repeated_cases"] == 1
     assert summary["all_trials_passed_cases"] == 0
     assert summary["agent_tokens"] is None
+    assert summary["execution_complete"] is False
+    assert summary["planned_trials"] == 6
+
+
+def test_harness_budget_exhaustion_is_not_model_failure(tmp_path):
+    provider = BudgetedProvider(ScriptedModel(), Budget(1))
+    result = run_case(example_case(), trial=1, directory=tmp_path, provider=provider)
+    assert result["verdict"] == "harness_error"
+    assert "budget exhausted" in result["error"]
 
 
 def test_judge_requires_complete_unique_indices():

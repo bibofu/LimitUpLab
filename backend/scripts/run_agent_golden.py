@@ -133,6 +133,7 @@ def main(argv=None):
                 report["model_calls_used"] = budget.used
                 save_report(report, output)
                 print(f"[{result['verdict']}] {case.id} trial={trial} {result['duration_seconds']}s calls={budget.used}", flush=True)
+        report.pop("stop_reason", None)
     except KeyboardInterrupt:
         report["stop_reason"] = "interrupted"
         return 2

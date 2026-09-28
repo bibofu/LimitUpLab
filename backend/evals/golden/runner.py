@@ -27,9 +27,11 @@ class BudgetExceeded(RuntimeError):
 class Budget:
     def __init__(self, maximum, used=0):
         self.maximum, self.used = maximum, used
+        self.denied = 0
 
     def take(self):
         if self.used >= self.maximum:
+            self.denied += 1
             raise BudgetExceeded("Evaluation model-call budget exhausted")
         self.used += 1
 
@@ -67,6 +69,8 @@ def run_case(case, *, trial, directory, provider, judge_provider=None):
     from evals.golden.world import FrozenRegistry
 
     started = perf_counter()
+    budget = getattr(provider, "budget", None)
+    denied_before = budget.denied if budget else 0
     work = Path(directory) / "sessions" / f"{case.id}-t{trial}-{uuid4().hex[:8]}"
     work.mkdir(parents=True)
     database = work / "session.sqlite"
@@ -114,6 +118,7 @@ def run_case(case, *, trial, directory, provider, judge_provider=None):
                 events.append({"event": name, "payload": payload})
                 journal.event(row["run_id"], name, payload)
             turn_started = perf_counter()
+            agent_usage = None
             try:
                 chats.append_message(ChatSessionMessage(message_id=f"user-{index}", session_id=session_id,
                     role="user", content=turn.user, run_id=row["run_id"], created_at=datetime.now(timezone.utc)), owner_id=owner)
@@ -127,20 +132,24 @@ def run_case(case, *, trial, directory, provider, judge_provider=None):
             except Exception as exc:
                 error = type(exc).__name__
                 results.append({"index": index, "user": turn.user, "checks": [Check(name="execution", passed=False,
-                    detail=error).model_dump()], "verdict": "fail", "duration_seconds": round(perf_counter() - turn_started, 3)})
+                    detail=error).model_dump()], "verdict": "fail", "events": events,
+                    "agent_usage": usage_payload(agent_usage) if agent_usage else {},
+                    "duration_seconds": round(perf_counter() - turn_started, 3)})
                 break
             finally:
                 CURRENT_CONTROL.reset(token)
             judgements = safety = judge_error = None
             judge_usage = None
             if judge_provider is not None:
+                tracker = None
                 try:
                     with capture_llm_usage() as tracker:
                         judgements, safety = judge_turn(judge_provider, user=turn.user,
                             expectations=turn.expect.semantic_checks, response=response, drafts=visible_drafts(events))
-                    judge_usage = usage_payload(tracker)
                 except Exception as exc:
                     judge_error = type(exc).__name__
+                finally:
+                    judge_usage = usage_payload(tracker) if tracker else None
             checks = grade_turn(turn.expect, response, events=events, judgements=judgements)
             # Streaming safety is evaluated independently of the production compliance gate.
             checks.append(Check(name="visible_answer_safety", passed=safety["passed"] if safety else None,
@@ -152,12 +161,17 @@ def run_case(case, *, trial, directory, provider, judge_provider=None):
                 "context_message_count": len(context), "checks": [check.model_dump() for check in checks],
                 "verdict": verdict(checks), "agent_usage": usage_payload(agent_usage), "judge_usage": judge_usage,
                 "duration_seconds": round(perf_counter() - turn_started, 3)})
+            if budget and budget.denied > denied_before:
+                break
     trial_verdict = verdict([Check(name=f"turn_{item['index']}", passed=(True if item["verdict"] == "pass"
         else False if item["verdict"] == "fail" else None)) for item in results])
     unsupported = sorted(set(registry.unsupported_tools))
     if unsupported:
         trial_verdict = "harness_error"
         error = "Fixture coverage gap: " + ", ".join(unsupported)
+    if budget and budget.denied > denied_before:
+        trial_verdict = "harness_error"
+        error = "Evaluation model-call budget exhausted; this is not an Agent capability score"
     return {"case_id": case.id, "trial": trial, "category": case.category, "family": case.family,
         "split": case.split, "tags": case.tags, "definition": case.model_dump(), "verdict": trial_verdict,
         "turns": results, "error": error, "unsupported_tools": unsupported,
