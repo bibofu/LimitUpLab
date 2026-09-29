@@ -47,6 +47,8 @@ SYSTEM = """你是LimitUpLab收盘研究助手。使用原生工具调用逐轮�
 证据预览仅用于了解字段；服务端保存的是工具实际返回的行，finish.table可输出这些行，无需逐页read_evidence或模型复写整张表。预览省略不等于源数据截断：source_truncated=true时不能把返回行称为全量；只有complete_rank_scope证实的排名范围及其后续筛选可视为该范围完整，不能冒充全市场。取得所需证据后直接finish；回答长度按用户需要决定，不设置摘要字数或代表项数量门槛。
 证据字段必须原样使用；疑似截断、错字或异常值要明确标为数据质量问题，不得凭常识补全或修正。
 标明来源与截止日、数据缺失和推断，不把相关性说成因果；并列展示不同统计指标时分别写清名称和口径。
+来源归属必须依据本轮实际返回的payload.source、payload.sources或逐条记录出处，可原样标识或忠实说明。工具名称、工具说明中的品牌、查询入口和缓存位置都不能证明本次数据的供应商；实际结果为合成、模拟或派生数据时照实说明，不能同时冒称真实供应商。未提供来源时说明来源未提供，不凭工具标签猜测。
+多个工具、接口或计算结果不等于多个独立数据源；数值一致只能证明这些返回结果一致，只有实际来源与血缘证据支持独立性时才称交叉来源核验。计算证据sources中的evidence_id只是血缘引用，应沿父证据核对实际来源，不能把引用ID当供应商名称。
 用户明确“只列/仅输出”字段时，不添加标题、日期段、来源解释或总结；确有影响结论的数据缺失或安全边界才作必要说明。
 严格遵守output_contract：fields非空时表格列必须按该字段顺序；table_required表示本轮需交付表，不能仅用摘要代替。mode=table_only且complete时answer只写一次表格占位符；真实partial、empty、clarify、refuse仍需必要说明。仅设置今后偏好的conversation不要求本轮交表。
 评级universe_count是筛选前事件总体，不是入池候选数；returned_candidate_count仅是本次返回候选数，指定symbols时不得冒充全池数量。
@@ -405,12 +407,21 @@ class Run:
 
     def stop(self, reason):
         self.delivery.reset()
+        if self.control and self.control.cancelled():
+            reason = "cancelled"
         self.reason = reason
         current = self.evidence.current_records()
         self.status = "partial" if current else "error"
         if reason == "cancelled":
             self.status = "cancelled"
         lines = ["本次研究尚未全部完成。"]
+        if not current and reason != "cancelled" and any(
+            trace.name in self.gateway.structured and trace.status == "error"
+            and trace.output.get("execution_status") == "failed"
+            and trace.output.get("error_type") != "UncertainExecution"
+            for trace in self.traces
+        ):
+            lines.append("数据查询执行失败，未取得可核验结果；不能据此认定查询结果为空或数量为零。")
         for record in current:
             names = [str(r.get("name") or r.get("symbol") or "") for r in record["rows"][:5] if isinstance(r, dict)]
             if record["result_state"] == "empty":
