@@ -62,6 +62,43 @@ def test_real_runtime_journal_and_independent_grader(tmp_path):
     assert len(list((tmp_path / "sessions").glob("*/session.sqlite"))) == 1
 
 
+def test_runtime_metadata_is_captured_from_real_prompt_and_passed_to_each_judge_phase(tmp_path):
+    class RecordingJudge(ScriptedModel):
+        def __init__(self):
+            self.payloads = []
+
+        def generate_messages(self, messages, tools, **kwargs):
+            self.payloads.append(json.loads(messages[-1].content))
+            return super().generate_messages(messages, tools, **kwargs)
+
+    case = example_case()
+    case.turns[0].page_date = "2026-09-21"
+    case.turns[0].expect.semantic_checks = ["最终应交付名单。"]
+    judge = RecordingJudge()
+    result = run_case(case, trial=1, directory=tmp_path, provider=ScriptedModel(), judge_provider=judge)
+    turn = result["turns"][0]
+    assert result["verdict"] == "pass", turn["checks"]
+    metadata = turn["runtime_metadata"]
+    assert len(metadata) == 1 and turn["runtime_metadata_errors"] == []
+    assert metadata[0]["context"] == {"anchor_date": "2026-09-22", "page_default_date": "2026-09-21",
+        "page_default_symbol": None, "available_local_dates": ["2026-09-18", "2026-09-21", "2026-09-22"]}
+    assert len(judge.payloads) == 2
+    assert all(payload["trusted_runtime_metadata"] == metadata for payload in judge.payloads)
+
+
+def test_input_refusal_has_no_fabricated_runtime_snapshot(tmp_path):
+    class RefusalModel(ScriptedModel):
+        def generate_messages(self, messages, tools, **kwargs):
+            if len(tools) == 1 and tools[0]["function"]["name"] == "submit_input_security_review":
+                return call("submit_input_security_review", {"decision": "refuse", "signals": ["instruction_override"],
+                    "reason": "scripted input refusal", "request_kind": "research", "context_mode": "standalone"})
+            return super().generate_messages(messages, tools, **kwargs)
+    result = run_case(example_case(), trial=1, directory=tmp_path, provider=RefusalModel())
+    turn = result["turns"][0]
+    assert turn["response"]["task_status"] == "refuse"
+    assert turn["runtime_metadata"] == [] and turn["runtime_metadata_errors"] == []
+
+
 def test_missing_judge_is_review_not_pass(tmp_path):
     result = run_case(example_case(), trial=1, directory=tmp_path, provider=ScriptedModel())
     assert result["verdict"] == "review"

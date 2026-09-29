@@ -19,6 +19,7 @@ from app.services.llm_provider import capture_llm_usage
 from app.services.session_memory import prepare_session_context
 from evals.golden.contracts import Check, verdict
 from evals.golden.judge import judge_turn
+from evals.golden.runtime_metadata import RuntimeMetadataCapture
 
 
 class BudgetExceeded(RuntimeError):
@@ -140,6 +141,7 @@ def run_case(case, *, trial, directory, provider, judge_provider=None):
                 journal.event(row["run_id"], name, payload)
             turn_started = perf_counter()
             agent_usage = None
+            runtime_metadata = RuntimeMetadataCapture(provider)
             try:
                 chats.append_message(ChatSessionMessage(message_id=f"user-{index}", session_id=session_id,
                     role="user", content=turn.user, run_id=row["run_id"], created_at=datetime.now(timezone.utc)), owner_id=owner)
@@ -147,13 +149,15 @@ def run_case(case, *, trial, directory, provider, judge_provider=None):
                     context, memory = prepare_session_context(session_id=session_id, owner_id=owner,
                         messages=session.messages, repository=memories, llm_provider=provider)
                     response = answer_first_board_chat(request=request, events=registry.events,
-                        conversation_messages=context, session_memory=memory, llm_provider=provider,
+                        conversation_messages=context, session_memory=memory, llm_provider=runtime_metadata,
                         tool_registry=registry, answer_event_callback=event)
                 response = AgentChatResponse.model_validate(journal.finish(row["run_id"], owner, response.model_dump(mode="json")))
             except Exception as exc:
                 error = type(exc).__name__
                 results.append({"index": index, "user": turn.user, "checks": [Check(name="execution", passed=False,
                     detail=error).model_dump()], "verdict": "fail", "events": events,
+                    "runtime_metadata": runtime_metadata.snapshots,
+                    "runtime_metadata_errors": runtime_metadata.errors,
                     "agent_usage": usage_payload(agent_usage) if agent_usage else {},
                     "duration_seconds": round(perf_counter() - turn_started, 3)})
                 break
@@ -167,7 +171,8 @@ def run_case(case, *, trial, directory, provider, judge_provider=None):
                 try:
                     with capture_llm_usage() as tracker:
                         review = judge_turn(judge_provider, user=turn.user,
-                            expectations=turn.expect.semantic_checks, response=response, drafts=visible_drafts(events))
+                            expectations=turn.expect.semantic_checks, response=response, drafts=visible_drafts(events),
+                            runtime_metadata=runtime_metadata.snapshots)
                         judgements, safety = review.judgements, review.safety
                         source, factual, judge_errors = review.source, review.factual, review.errors
                         judge_error = "; ".join(f"{phase}:{kind}" for phase, kind in judge_errors.items()) or None
@@ -190,6 +195,8 @@ def run_case(case, *, trial, directory, provider, judge_provider=None):
                 "expected": turn.expect.model_dump(), "response": response.model_dump(mode="json"),
                 "events": events, "judgements": judgements, "safety_judgement": safety, "judge_error": judge_error,
                 "source_judgement": source, "factual_judgement": factual, "judge_errors": judge_errors,
+                "runtime_metadata": runtime_metadata.snapshots,
+                "runtime_metadata_errors": runtime_metadata.errors,
                 "memory_before": memory.model_dump(mode="json") if memory else None,
                 "context_message_count": len(context), "checks": [check.model_dump() for check in checks],
                 "verdict": verdict(checks), "agent_usage": usage_payload(agent_usage), "judge_usage": judge_usage,
