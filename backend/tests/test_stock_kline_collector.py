@@ -1,9 +1,16 @@
 ﻿import unittest
+import os
+from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime
 from unittest.mock import patch
 
+import pandas as pd
+import requests
+
 from app.collectors.stock_kline_collector import (
     _aggregate_intraday_rows,
+    _fetch_akshare_frame,
+    _load_akshare_frame,
     _normalize_stock_symbol,
     _parse_sina_intraday_payload,
     _parse_tencent_spot_line,
@@ -14,11 +21,12 @@ from app.collectors.stock_kline_collector import (
     _parse_datetime,
 )
 from app.models import StockIntradayKLineBar, StockKLineBar
+from app.collectors.process_timeout import run_in_killable_process
 
 
 class StockKLineCollectorTest(unittest.TestCase):
     # Regression scenario: daily collector includes end date and excludes later rows.
-    @patch("app.collectors.stock_kline_collector.ak.stock_zh_a_hist_tx")
+    @patch("app.collectors.stock_kline_collector._load_akshare_frame")
     def test_daily_collector_includes_end_date_and_excludes_later_rows(self, history) -> None:
         class Frame:
             # Prepare the to dict fixture or observation used by the surrounding regression
@@ -49,6 +57,88 @@ class StockKLineCollectorTest(unittest.TestCase):
             [date(2026, 8, 17), date(2026, 8, 18)],
         )
         self.assertEqual(history.call_args.kwargs["end_date"], "20260819")
+        self.assertEqual(history.call_args.args, ("stock_zh_a_hist_tx",))
+
+    def test_akshare_loader_uses_isolated_worker_with_configured_timeout(self) -> None:
+        with patch.dict(os.environ, {"LIMITUPLAB_AKSHARE_KLINE_TIMEOUT_SECONDS": "12.5"}), patch(
+            "app.collectors.stock_kline_collector.run_in_killable_process",
+        ) as run:
+            _load_akshare_frame("stock_zh_a_hist_tx", symbol="sz002365", adjust="")
+        run.assert_called_once_with(
+            _fetch_akshare_frame, "stock_zh_a_hist_tx", {"symbol": "sz002365", "adjust": ""},
+            timeout_seconds=12.5,
+        )
+
+    def test_akshare_loader_defaults_to_thirty_seconds(self) -> None:
+        with patch.dict(os.environ, {}, clear=True), patch(
+            "app.collectors.stock_kline_collector.run_in_killable_process",
+        ) as run:
+            _load_akshare_frame("stock_zh_a_hist_tx", symbol="sz002365")
+        self.assertEqual(run.call_args.kwargs, {"timeout_seconds": 30.0})
+
+    def test_invalid_timeout_config_cannot_disable_deadline(self) -> None:
+        for timeout in ("invalid", "0", "-1", "nan", "inf"):
+            with self.subTest(timeout=timeout), patch.dict(
+                os.environ, {"LIMITUPLAB_AKSHARE_KLINE_TIMEOUT_SECONDS": timeout},
+            ), self.assertRaises(ValueError):
+                _load_akshare_frame("stock_zh_a_hist_tx", symbol="sz002365")
+
+    def test_akshare_timeouts_propagate_to_callers(self) -> None:
+        with patch(
+            "app.collectors.stock_kline_collector._load_akshare_frame",
+            side_effect=TimeoutError("Provider call timed out after 30 seconds"),
+        ), patch(
+            "app.collectors.stock_kline_collector._collect_intraday_rows_from_sina",
+            return_value=[],
+        ):
+            with self.assertRaises(TimeoutError):
+                collect_stock_kline("002365", end_date=date(2026, 9, 23))
+            with self.assertRaises(TimeoutError):
+                collect_stock_intraday_kline("002365", date(2026, 9, 23))
+
+    def test_parent_thread_never_holds_proxy_lock_for_akshare_calls(self) -> None:
+        with patch(
+            "app.collectors.stock_kline_collector.without_proxy",
+            side_effect=AssertionError("parent must not acquire proxy environment lock"),
+        ), patch(
+            "app.collectors.stock_kline_collector._load_akshare_frame",
+            return_value=pd.DataFrame(),
+        ), patch(
+            "app.collectors.stock_kline_collector._collect_intraday_rows_from_sina",
+            return_value=[],
+        ):
+            self.assertEqual(collect_stock_kline("002365"), [])
+            self.assertEqual(collect_stock_intraday_kline("002365", date(2026, 9, 23)), [])
+
+    def test_isolated_calls_can_run_from_multiple_warmup_threads(self) -> None:
+        with ThreadPoolExecutor(max_workers=2) as executor:
+            calls = [executor.submit(run_in_killable_process, abs, value, timeout_seconds=20)
+                     for value in (-1, -2)]
+            self.assertEqual([call.result(timeout=25) for call in calls], [1, 2])
+
+    def test_eastmoney_fallback_filters_date_and_preserves_aggregation(self) -> None:
+        frame = pd.DataFrame([
+            {"时间": timestamp, "开盘": 10, "收盘": 11, "最高": 12, "最低": 9,
+             "成交量": 100, "成交额": 1_000}
+            for timestamp in ("2026-09-22 15:00:00", "2026-09-23 09:31:00", "2026-09-23 09:32:00")
+        ])
+        for sina_failure in (False, True):
+            with self.subTest(sina_failure=sina_failure), patch(
+                "app.collectors.stock_kline_collector._collect_intraday_rows_from_sina",
+                return_value=[],
+                side_effect=requests.Timeout("Sina timeout") if sina_failure else None,
+            ), patch(
+                "app.collectors.stock_kline_collector._load_akshare_frame",
+                return_value=frame,
+            ) as load:
+                bars = collect_stock_intraday_kline("002365", date(2026, 9, 23), period=5)
+            load.assert_called_once_with(
+                "stock_zh_a_hist_pre_min_em", symbol="002365", start_time="09:30:00", end_time="15:00:00",
+            )
+            self.assertEqual(len(bars), 1)
+            self.assertEqual(bars[0].timestamp, datetime(2026, 9, 23, 9, 32))
+            self.assertEqual(bars[0].volume, 200)
+            self.assertEqual(bars[0].amount, 2_000)
 
     # Regression scenario: normalize stock symbol.
     def test_normalize_stock_symbol(self) -> None:
@@ -102,12 +192,13 @@ class StockKLineCollectorTest(unittest.TestCase):
         with patch(
             "app.collectors.stock_kline_collector.requests.Session",
             return_value=session,
-        ):
+        ), patch("app.collectors.stock_kline_collector._load_akshare_frame") as fallback:
             bars = collect_stock_intraday_kline(
                 "002328",
                 trade_date=date(2026, 8, 31),
                 period=1,
             )
+        fallback.assert_not_called()
 
         self.assertFalse(session.trust_env)
         self.assertEqual(session.timeout, 8)

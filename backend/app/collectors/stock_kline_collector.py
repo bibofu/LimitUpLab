@@ -1,6 +1,7 @@
 ﻿"""AKShare-backed stock K-line collectors for after-close review pages."""
 
 import json
+import os
 from datetime import date, datetime, timedelta
 from typing import Any
 
@@ -9,6 +10,21 @@ import requests
 
 from app.models import StockCloseSnapshot, StockIntradayKLineBar, StockKLineBar
 from app.collectors.network import without_proxy
+from app.collectors.process_timeout import run_in_killable_process
+
+
+def _fetch_akshare_frame(api_name: str, kwargs: dict[str, Any]) -> Any:
+    """Run provider work and proxy changes only in the isolated worker."""
+
+    with without_proxy():
+        return getattr(ak, api_name)(**kwargs)
+
+
+def _load_akshare_frame(api_name: str, **kwargs: Any) -> Any:
+    timeout = float(os.environ.get("LIMITUPLAB_AKSHARE_KLINE_TIMEOUT_SECONDS", "30"))
+    return run_in_killable_process(
+        _fetch_akshare_frame, api_name, kwargs, timeout_seconds=timeout,
+    )
 
 
 def collect_stock_kline(
@@ -22,14 +38,14 @@ def collect_stock_kline(
     target_end_date = end_date or date.today()
     start_date = target_end_date - timedelta(days=max(days * 3, 15))
 
-    with without_proxy():
-        frame = ak.stock_zh_a_hist_tx(
-            symbol=normalized_symbol,
-            start_date=start_date.strftime("%Y%m%d"),
-            # Tencent treats end_date as an exclusive boundary.
-            end_date=(target_end_date + timedelta(days=1)).strftime("%Y%m%d"),
-            adjust="",
-        )
+    frame = _load_akshare_frame(
+        "stock_zh_a_hist_tx",
+        symbol=normalized_symbol,
+        start_date=start_date.strftime("%Y%m%d"),
+        # Tencent treats end_date as an exclusive boundary.
+        end_date=(target_end_date + timedelta(days=1)).strftime("%Y%m%d"),
+        adjust="",
+    )
 
     rows = [
         row
@@ -152,12 +168,12 @@ def collect_stock_intraday_kline(
         return rows
 
     eastmoney_symbol = normalized_symbol.removeprefix("sh").removeprefix("sz")
-    with without_proxy():
-        frame = ak.stock_zh_a_hist_pre_min_em(
-            symbol=eastmoney_symbol,
-            start_time="09:30:00",
-            end_time="15:00:00",
-        )
+    frame = _load_akshare_frame(
+        "stock_zh_a_hist_pre_min_em",
+        symbol=eastmoney_symbol,
+        start_time="09:30:00",
+        end_time="15:00:00",
+    )
 
     rows = [
         row
