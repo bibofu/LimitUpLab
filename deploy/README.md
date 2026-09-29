@@ -121,6 +121,31 @@ docker compose --env-file .env.production logs --tail=100 backend frontend
 
 ## 5. 更新、备份与回滚
 
+### 日更超时与漏日恢复
+
+生产任务统一通过 `/usr/local/lib/limituplab/job.py` 执行。该入口持有发布共享锁，
+日更默认最多运行 3600 秒，备份最多运行 900 秒。超时后停止本次任务的唯一命名容器，
+确认退出后再释放锁；如果无法确认退出，则写入维护标记并要求人工恢复。
+任务日志包含容器名、时间上限和退出码，超时退出码为 124。
+
+涨停池、炸板池分别在独立子进程中采集，默认每池 60 秒；可通过
+`LIMITUPLAB_AKSHARE_POOL_TIMEOUT_SECONDS` 设置有限正数。超时会终止并回收子进程，
+错误保留在 `source_errors` 中。即使已有缓存足够生成评级，采集失败仍会将日更标记为
+`partial`，避免误报成功。生产容器内的临时文件锁位于 `/tmp`，跨任务互斥由宿主机共享锁保证。
+
+漏日需要按真实交易日历逐日补齐，不能只补最新一天。先确认没有遗留运行容器并创建
+SQLite 一致性备份，再按日期执行，例如：
+
+```bash
+sudo python3 /usr/local/lib/limituplab/job.py daily-update --date 20260923 --max-attempts 1
+sudo python3 /usr/local/lib/limituplab/job.py backup
+```
+
+`--date` 仅选择历史目标日期，不改变真实执行时间。历史补跑保存为 `historical_backtest`，
+不能补成 live；已经错过开盘截止时间的盘前终选也不能事后生成。检查数据库最新日期、
+日更报告和既有预测快照是否保持不变，不能只凭 `/health` 返回正常判断恢复成功。
+修改 `job.py` 后，需要单独审查并更新服务器上 root 所有的安装副本；普通镜像发布不会覆盖它。
+
 推荐使用 [标签自动部署流程](Tag_Deployment.md)：推送新的 `vX.Y.Z` 标签，
 Windows / Ubuntu 验证全部通过后自动备份并上线。下面的手动更新命令仅适用于
 尚未启用自动部署的旧安装；启用后不要绕开共享锁直接更新容器。
