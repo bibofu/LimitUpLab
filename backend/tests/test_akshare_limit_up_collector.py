@@ -1,9 +1,13 @@
 ﻿import unittest
+import os
 from datetime import date, time
 from unittest.mock import MagicMock, patch
 
 from app.collectors.akshare_limit_up_collector import (
+    _collect_closed_limit_up_events,
     _collect_failed_limit_up_events,
+    _fetch_pool_frame,
+    _load_pool_frame,
     _parse_hhmmss,
     collect_limit_up_events,
     parse_akshare_trade_date,
@@ -46,7 +50,7 @@ class AKShareLimitUpCollectorTest(unittest.TestCase):
         ]
 
         with patch(
-            "app.collectors.akshare_limit_up_collector.ak.stock_zt_pool_zbgc_em",
+            "app.collectors.akshare_limit_up_collector._load_pool_frame",
             return_value=frame,
         ):
             events = _collect_failed_limit_up_events(date(2026, 8, 25), "20260825")
@@ -121,6 +125,63 @@ class AKShareLimitUpCollectorTest(unittest.TestCase):
         self.assertFalse(failed.data_fresh)
         self.assertEqual(failed.payload, [])
         self.assertEqual(len(failed.source_errors), 2)
+
+    def test_both_pool_loaders_use_isolated_provider_calls(self) -> None:
+        frame = MagicMock()
+        frame.iterrows.return_value = []
+        with patch(
+            "app.collectors.akshare_limit_up_collector.run_in_killable_process",
+            return_value=frame,
+        ) as run, patch.dict(os.environ, {"LIMITUPLAB_AKSHARE_POOL_TIMEOUT_SECONDS": "12.5"}):
+            _collect_closed_limit_up_events(date(2026, 9, 23), "20260923")
+            _collect_failed_limit_up_events(date(2026, 9, 23), "20260923")
+        self.assertEqual(run.call_count, 2)
+        self.assertEqual(run.call_args_list[0].args, (_fetch_pool_frame, "stock_zt_pool_em", "20260923"))
+        self.assertEqual(run.call_args_list[1].args, (_fetch_pool_frame, "stock_zt_pool_zbgc_em", "20260923"))
+        self.assertTrue(all(call.kwargs == {"timeout_seconds": 12.5} for call in run.call_args_list))
+
+    def test_timeout_preserves_the_other_pool_and_names_failed_source(self) -> None:
+        frame = MagicMock()
+        frame.iterrows.return_value = [(0, {
+            "代码": "002172", "名称": "测试股票", "首次封板时间": "093406",
+            "最后封板时间": "093406", "炸板次数": 1, "连板数": 1,
+            "成交额": 100_000_000, "换手率": 5, "所属行业": "测试",
+        })]
+        for failed_first in (True, False):
+            results = [TimeoutError("Provider call timed out after 60 seconds"), frame]
+            if not failed_first:
+                results.reverse()
+            with self.subTest(failed_first=failed_first), patch(
+                "app.collectors.akshare_limit_up_collector._load_pool_frame",
+                side_effect=results,
+            ):
+                result = collect_limit_up_events("20260923")
+            self.assertEqual(result.status, "partial")
+            self.assertTrue(result.data_fresh)
+            self.assertEqual(len(result.payload), 1)
+            self.assertEqual(result.payload[0].closed_limit, not failed_first)
+            source = "closed_limit_pool" if failed_first else "failed_limit_pool"
+            self.assertEqual(result.source_errors, (
+                f"akshare.{source}: Provider call timed out after 60 seconds",
+            ))
+
+    def test_invalid_config_is_explicit_source_failure(self) -> None:
+        for timeout in ("invalid", "0", "-1", "nan", "inf"):
+            with self.subTest(timeout=timeout), patch.dict(
+                os.environ, {"LIMITUPLAB_AKSHARE_POOL_TIMEOUT_SECONDS": timeout},
+            ):
+                result = collect_limit_up_events("20260923")
+            self.assertEqual(result.status, "error")
+            self.assertFalse(result.data_fresh)
+            self.assertEqual(result.payload, [])
+            self.assertEqual(len(result.source_errors), 2)
+
+    def test_pool_timeout_defaults_to_sixty_seconds(self) -> None:
+        with patch.dict(os.environ, {}, clear=True), patch(
+            "app.collectors.akshare_limit_up_collector.run_in_killable_process",
+        ) as run:
+            _load_pool_frame("stock_zt_pool_em", "20260923")
+        self.assertEqual(run.call_args.kwargs, {"timeout_seconds": 60.0})
 
 
 if __name__ == "__main__":

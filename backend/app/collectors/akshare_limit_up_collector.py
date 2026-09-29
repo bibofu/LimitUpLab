@@ -8,12 +8,14 @@ then added only when they are not already present for the same date and symbol.
 from dataclasses import dataclass
 from datetime import date, time
 from math import isnan
+import os
 from typing import Any, Literal
 
 import akshare as ak
 
 from app.models import LimitUpEvent
 from app.collectors.network import without_proxy
+from app.collectors.process_timeout import run_in_killable_process
 
 
 @dataclass(frozen=True)
@@ -42,19 +44,18 @@ def collect_limit_up_events(trade_date: str) -> LimitUpCollectionResult:
 
     source_errors: list[str] = []
     successful_sources = 0
-    with without_proxy():
-        try:
-            closed_events = _collect_closed_limit_up_events(parsed_date, trade_date)
-            successful_sources += 1
-        except Exception as error:  # noqa: BLE001 - preserve cross-source partial data
-            closed_events = []
-            source_errors.append(f"akshare.closed_limit_pool: {error}")
-        try:
-            failed_events = _collect_failed_limit_up_events(parsed_date, trade_date)
-            successful_sources += 1
-        except Exception as error:  # noqa: BLE001 - preserve cross-source partial data
-            failed_events = []
-            source_errors.append(f"akshare.failed_limit_pool: {error}")
+    try:
+        closed_events = _collect_closed_limit_up_events(parsed_date, trade_date)
+        successful_sources += 1
+    except Exception as error:  # noqa: BLE001 - preserve cross-source partial data
+        closed_events = []
+        source_errors.append(f"akshare.closed_limit_pool: {error}")
+    try:
+        failed_events = _collect_failed_limit_up_events(parsed_date, trade_date)
+        successful_sources += 1
+    except Exception as error:  # noqa: BLE001 - preserve cross-source partial data
+        failed_events = []
+        source_errors.append(f"akshare.failed_limit_pool: {error}")
 
     for event in closed_events:
         events_by_key[(event.trade_date, event.symbol)] = event
@@ -89,10 +90,24 @@ def collect_limit_up_events(trade_date: str) -> LimitUpCollectionResult:
     )
 
 
+def _fetch_pool_frame(pool_name: str, trade_date: str) -> Any:
+    """Execute only in the isolated worker, including proxy environment changes."""
+
+    with without_proxy():
+        return getattr(ak, pool_name)(date=trade_date)
+
+
+def _load_pool_frame(pool_name: str, trade_date: str) -> Any:
+    timeout = float(os.environ.get("LIMITUPLAB_AKSHARE_POOL_TIMEOUT_SECONDS", "60"))
+    return run_in_killable_process(
+        _fetch_pool_frame, pool_name, trade_date, timeout_seconds=timeout,
+    )
+
+
 def _collect_closed_limit_up_events(parsed_date: date, trade_date: str) -> list[LimitUpEvent]:
     """Collect stocks that closed at limit-up from Eastmoney's limit-up pool."""
 
-    frame = ak.stock_zt_pool_em(date=trade_date)
+    frame = _load_pool_frame("stock_zt_pool_em", trade_date)
     events: list[LimitUpEvent] = []
 
     for _, row in frame.iterrows():
@@ -127,7 +142,7 @@ def _collect_closed_limit_up_events(parsed_date: date, trade_date: str) -> list[
 def _collect_failed_limit_up_events(parsed_date: date, trade_date: str) -> list[LimitUpEvent]:
     """Collect stocks from Eastmoney's failed/open-board observation pool."""
 
-    frame = ak.stock_zt_pool_zbgc_em(date=trade_date)
+    frame = _load_pool_frame("stock_zt_pool_zbgc_em", trade_date)
     events: list[LimitUpEvent] = []
 
     for _, row in frame.iterrows():
