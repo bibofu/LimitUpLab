@@ -31,6 +31,9 @@ class ScriptedModel:
             payload = json.loads(messages[-1].content)
             return call(only, {"checks": [{"index": index, "passed": True, "reason": "scripted fixture"}
                                          for index in range(len(payload["requirements"]))]})
+        if only == "submit_golden_visible_audit":
+            return call(only, {key: {"passed": True, "reason": "scripted fixture",
+                "surface_id": None, "quote": None} for key in ("safety", "source", "factual")})
         observations = [json.loads(message.content) for message in messages if isinstance(message, ToolMessage)]
         if not observations:
             return call("limit_up_events", {"trade_date": "2026-09-22", "market": "main_board",
@@ -63,6 +66,49 @@ def test_missing_judge_is_review_not_pass(tmp_path):
     result = run_case(example_case(), trial=1, directory=tmp_path, provider=ScriptedModel())
     assert result["verdict"] == "review"
     assert result["turns"][0]["checks"][-1]["name"] == "visible_answer_safety"
+
+
+@pytest.mark.parametrize("source_verdict, expected", [(False, "fail"), (None, "review")])
+def test_source_audit_applies_without_per_case_semantic_checks(tmp_path, source_verdict, expected):
+    class SourceJudge(ScriptedModel):
+        def generate_messages(self, messages, tools, **kwargs):
+            if len(tools) == 1 and tools[0]["function"]["name"] == "submit_golden_visible_audit":
+                payload = json.loads(messages[-1].content)
+                final = next(s for s in payload["surfaces"] if s["surface_id"] == "final")
+                decisions = {key: {"passed": True, "reason": "protocol fixture", "surface_id": None,
+                    "quote": None} for key in ("safety", "source", "factual")}
+                decisions["source"].update(passed=source_verdict, reason="Scripted source-only finding",
+                    surface_id="final", quote=final["text"].splitlines()[0])
+                return call("submit_golden_visible_audit", decisions)
+            return super().generate_messages(messages, tools, **kwargs)
+    result = run_case(example_case(), trial=1, directory=tmp_path,
+                      provider=ScriptedModel(), judge_provider=SourceJudge())
+    turn = result["turns"][0]
+    assert result["verdict"] == expected
+    assert turn["source_judgement"]["passed"] is source_verdict
+    assert turn["factual_judgement"]["passed"] is True
+    checks = {c["name"]: c["passed"] for c in turn["checks"]}
+    assert checks["expected_values"] and checks["table_evidence_values"]
+    assert checks["visible_source_attribution"] is source_verdict
+
+
+def test_delivery_judge_error_does_not_erase_independent_audit_or_hard_fail(tmp_path):
+    class BrokenDelivery(ScriptedModel):
+        def generate_messages(self, messages, tools, **kwargs):
+            if len(tools) == 1 and tools[0]["function"]["name"] == "submit_golden_judgements":
+                raise ValueError("private-provider-error-text")
+            return super().generate_messages(messages, tools, **kwargs)
+    case = example_case()
+    case.turns[0].expect.semantic_checks = ["Deliver the required list."]
+    case.turns[0].expect.rows = [["999999", "independent wrong-row diagnostic"]]
+    result = run_case(case, trial=1, directory=tmp_path,
+                      provider=ScriptedModel(), judge_provider=BrokenDelivery())
+    turn = result["turns"][0]
+    assert result["verdict"] == "fail"  # Unknown semantic judgement cannot overwrite hard failure.
+    assert turn["judge_errors"] == {"final_delivery": "ValueError"}
+    assert turn["judgements"] is None and turn["safety_judgement"]["passed"]
+    assert turn["factual_judgement"]["passed"] and turn["source_judgement"]["passed"]
+    assert "private-provider-error-text" not in json.dumps(result)
 
 
 def test_sessions_are_persisted_and_isolated(tmp_path):
@@ -121,8 +167,11 @@ def test_judge_requires_complete_unique_indices():
             return call("submit_golden_judgements", {"checks": []})
     from app.models import AgentChatResponse
     response = AgentChatResponse(session_id="test", intent="test", answer="hello", generated_by="fixture")
-    with pytest.raises(ValueError, match="indices"):
-        judge_turn(MissingJudge(), user="hello", expectations=[], response=response, drafts=[])
+    review = judge_turn(MissingJudge(), user="hello", expectations=["Answer the greeting"],
+                        response=response, drafts=[])
+    assert review.judgements is None
+    assert review.errors["final_delivery"] == "ValueError"
+    assert review.safety is None and review.source is None and review.factual is None
 
 
 def cli_module():

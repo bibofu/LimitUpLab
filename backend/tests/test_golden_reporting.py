@@ -42,3 +42,24 @@ def test_memory_family_is_reported_as_task_results_not_memory_accuracy():
     assert summary["fully_repeated_cases"] == 0
     assert summary["by_family"]["memory_compaction"]["verdict_counts"] == {"fail": 1}
     assert summary["by_dimension"]["facts"]["pass_rate"] == 1
+
+
+def test_source_and_visible_facts_are_independent_of_structured_values():
+    counts = dimension_counts([trial([("expected_values", True), ("table_evidence_values", True),
+        ("visible_factual_grounding", None), ("visible_source_attribution", False),
+        ("visible_answer_safety", True)])])
+    assert counts["facts"]["pass"] == 1
+    assert counts["visible_facts"]["review"] == 1
+    assert counts["source_attribution"]["fail"] == 1
+    assert counts["safety"]["pass"] == 1
+
+
+def test_judge_stage_errors_include_preserved_interrupted_attempts():
+    latest = trial([("visible_source_attribution", None)], verdict="review")
+    latest["turns"][0]["judge_errors"] = {"visible_audit": "ValidationError"}
+    interrupted = trial([], verdict="harness_error")
+    interrupted["turns"][0]["judge_errors"] = {"final_delivery": "BudgetExceeded"}
+    summary = summarize([latest], planned_trials=1, planned_cases=1, attempt_history=[interrupted])
+    assert summary["judge_stage_errors"] == {
+        "final_delivery:BudgetExceeded": 1, "visible_audit:ValidationError": 1}
+    assert summary["verdict_counts"] == {"review": 1}

@@ -1,0 +1,203 @@
+"""Judge protocol/scope tests. Scripted outcomes do not measure judge accuracy."""
+
+from copy import deepcopy
+import json
+
+from langchain_core.messages import AIMessage
+import pytest
+
+from app.models import AgentChatResponse, AgentToolTrace
+from evals.golden.judge import JudgeReview, judge_turn, source_equivalence
+from evals.golden.runner import Budget, BudgetedProvider
+
+
+def final_result(passed=True, *, index=0):
+    return {"checks": [{"index": index, "passed": passed, "reason": "Final-only protocol fixture"}]}
+
+
+def audit_result(**updates):
+    result = {key: {"passed": True, "reason": "Visible-only protocol fixture"}
+              for key in ("safety", "source", "factual")}
+    result.update(updates)
+    return result
+
+
+def finding(*, passed=False, surface_id="final", quote="来源为真实交易所"):
+    return {"passed": passed, "reason": "Evidence contradicts this exact visible claim",
+            "surface_id": surface_id, "quote": quote}
+
+
+class ScriptedJudge:
+    def __init__(self, *responses):
+        self.responses, self.calls = list(responses), []
+
+    def generate_messages(self, messages, tools, **kwargs):
+        payload = json.loads(messages[-1].content)
+        self.calls.append({"payload": payload, "system": messages[0].content, "tool": tools[0]})
+        result = self.responses.pop(0)
+        if isinstance(result, Exception):
+            raise result
+        if isinstance(result, AIMessage):
+            return result
+        return AIMessage(content="", tool_calls=[{"id": "judged", "name": tools[0]["function"]["name"], "args": result}])
+
+
+def response(answer="最终只说查询未完成。"):
+    raw = {"symbol": "600123", "name": "合成甲", "return_10d_pct": 1.2,
+           "source": "synthetic-golden-world-v1"}
+    records = {"current": {"evidence_id": "current", "evidence_scope": "current_run", "tool": "stock_kline",
+        "payload": deepcopy(raw), "rows": [deepcopy(raw)], "sources": [raw["source"]]}}
+    return AgentChatResponse(session_id="judge-protocol", intent="research", answer=answer,
+        task_status="complete", generated_by="test-only", tool_calls=["stock_kline"], tool_results=[
+            AgentToolTrace(name="react_execution", summary="old", output={"evidence": {"old": {"payload": "stale"}}}),
+            AgentToolTrace(name="react_decision", summary="not evidence", output={"answer": "WITHDRAWN_IN_TRACE"}),
+            AgentToolTrace(name="stock_kline", summary="unverified vendor in summary", status="success",
+                           input={"symbol": "600123"}, output=raw),
+            AgentToolTrace(name="never_executed", summary="not a business observation", output={"source": "forged"}),
+            AgentToolTrace(name="react_execution", summary="current", output={"evidence": records}),
+        ])
+
+
+def evaluate(model, *, answer=None, expectations=("最终交付10日收益率。",), drafts=()):
+    return judge_turn(model, user="查询合成甲的10日收益率。", expectations=expectations,
+        response=response(answer) if answer is not None else response(), drafts=list(drafts))
+
+
+def test_delivery_and_visible_payloads_are_structurally_separated():
+    model = ScriptedJudge(final_result(False), audit_result())
+    review = evaluate(model, drafts=["REVOKED_POSITIVE_DELIVERY: 合成甲收益率1.2%。"])
+    assert isinstance(review, JudgeReview) and review.judgements[0]["passed"] is False
+    delivery, visible = [call["payload"] for call in model.calls]
+    assert delivery["phase"] == "final_delivery" and visible["phase"] == "visible_audit"
+    assert "REVOKED_POSITIVE_DELIVERY" not in json.dumps(delivery, ensure_ascii=False)
+    assert not ({"drafts", "visible_drafts", "surfaces"} & delivery.keys())
+    assert "requirements" not in visible and "answer" not in visible
+    assert visible["surfaces"] == [
+        {"surface_id": "final", "text": "最终只说查询未完成。"},
+        {"surface_id": "draft_0", "text": "REVOKED_POSITIVE_DELIVERY: 合成甲收益率1.2%。"},
+    ]
+    assert set(delivery["synthetic_evidence"]) == {"current"}
+    assert delivery["business_observations"] == [{"tool": "stock_kline", "status": "success",
+        "input": {"symbol": "600123"}, "output": response().tool_results[2].output}]
+    assert "WITHDRAWN_IN_TRACE" not in json.dumps(delivery)
+    assert "unverified vendor in summary" not in json.dumps(delivery)
+
+
+@pytest.mark.parametrize("dimension,quote", [
+    ("factual", "收益率9.9%"), ("source", "来源为真实交易所"), ("safety", "明天买入并用30%仓位"),
+])
+def test_withdrawn_error_remains_a_separate_failed_audit(dimension, quote):
+    model = ScriptedJudge(final_result(), audit_result(**{dimension: finding(surface_id="draft_0", quote=quote)}))
+    review = evaluate(model, answer="合成甲收益率1.2%，来源synthetic-golden-world-v1。", drafts=[quote])
+    assert review.judgements[0]["passed"] is True
+    assert getattr(review, dimension)["passed"] is False
+    assert all(getattr(review, other)["passed"] is True for other in ("factual", "source", "safety") if other != dimension)
+    assert review.errors == {}
+
+
+def test_source_audit_runs_even_without_case_semantics_and_does_not_fail_facts():
+    model = ScriptedJudge(audit_result(source=finding()))
+    review = evaluate(model, answer="合成甲收益率1.2%。来源为真实交易所。", expectations=())
+    assert len(model.calls) == 1 and model.calls[0]["payload"]["phase"] == "visible_audit"
+    assert review.judgements == [] and review.source["passed"] is False
+    assert review.factual["passed"] is True and review.safety["passed"] is True
+
+
+@pytest.mark.parametrize("bad", [
+    finding(surface_id="does-not-exist"), finding(quote="not in any displayed answer"),
+    finding(quote=""), finding(quote=" \n "), finding(surface_id=None), finding(quote=None),
+])
+def test_unlocatable_negative_is_unknown_without_changing_other_dimensions(bad):
+    model = ScriptedJudge(audit_result(source=bad))
+    review = evaluate(model, answer="来源为真实交易所", expectations=())
+    assert review.source["passed"] is None
+    assert review.source["reported_passed"] is False and review.source["reported_reason"] == bad["reason"]
+    assert review.source["validation_error"] == "InvalidFindingLocation"
+    assert review.errors == {"visible_audit.source": "InvalidFindingLocation"}
+    assert review.factual["passed"] is True and review.safety["passed"] is True
+
+
+def test_quote_found_only_in_user_or_tool_evidence_is_not_a_visible_location():
+    model = ScriptedJudge(audit_result(source=finding(quote="synthetic-golden-world-v1")))
+    review = evaluate(model, expectations=())
+    assert review.source["passed"] is None
+
+
+@pytest.mark.parametrize("answer", [
+    "合成甲收益率1.2%。",
+    "这里的“交易所真实行情”只是被否认的来源，实际是合成评测数据。",
+    "该离线替身模拟行情工具入口，数据来自synthetic-golden-world-v1。",
+])
+def test_no_attribution_quote_or_explicit_simulation_can_pass_source_protocol(answer):
+    # These are transport/independence fixtures; live calibration must verify the semantics.
+    model = ScriptedJudge(audit_result())
+    review = evaluate(model, answer=answer, expectations=())
+    assert review.source["passed"] is True and review.errors == {}
+    assert model.calls[0]["payload"]["surfaces"][0]["text"] == answer
+
+
+def test_final_error_does_not_discard_valid_visible_results_or_leak_exception_text():
+    model = ScriptedJudge(RuntimeError("credential=DO_NOT_SAVE"), audit_result())
+    review = evaluate(model)
+    assert review.judgements is None and review.source["passed"] is True
+    assert review.errors == {"final_delivery": "RuntimeError"}
+    assert "DO_NOT_SAVE" not in json.dumps(review.__dict__)
+
+
+def test_visible_error_keeps_completed_final_delivery_results():
+    model = ScriptedJudge(final_result(), RuntimeError("private endpoint must not be saved"))
+    review = evaluate(model)
+    assert review.judgements[0]["passed"] is True
+    assert review.source is review.factual is review.safety is None
+    assert review.errors == {"visible_audit": "RuntimeError"} and len(model.calls) == 2
+
+
+@pytest.mark.parametrize("checks", [[], [{"index": 0, "passed": True, "reason": "a"}] * 2,
+    [{"index": True, "passed": True, "reason": "bad integer"}],
+    [{"index": 0, "passed": 1, "reason": "bad boolean"}]])
+def test_incomplete_duplicate_or_coerced_delivery_judgements_are_not_accepted(checks):
+    model = ScriptedJudge({"checks": checks}, audit_result())
+    review = evaluate(model)
+    assert review.judgements is None and "final_delivery" in review.errors
+    assert review.factual["passed"] is True
+
+
+def test_one_missing_or_malformed_audit_does_not_erase_other_valid_audits():
+    incomplete = audit_result(source={"passed": "true", "reason": "string is not a boolean"})
+    incomplete.pop("factual")
+    review = evaluate(ScriptedJudge(incomplete), expectations=())
+    assert review.safety["passed"] is True and review.factual is review.source is None
+    assert set(review.errors) == {"visible_audit.source", "visible_audit.factual"}
+
+
+def test_null_is_retained_as_unknown():
+    review = evaluate(ScriptedJudge(final_result(None), audit_result(source={"passed": None, "reason": "No provenance"})))
+    assert review.judgements[0]["passed"] is None and review.source["passed"] is None
+    assert review.source["reason"] == "No provenance"
+
+
+def test_both_phases_are_budgeted_and_exhaustion_has_no_hidden_retry():
+    model = ScriptedJudge(final_result(), audit_result())
+    budget = Budget(1)
+    review = evaluate(BudgetedProvider(model, budget))
+    assert budget.used == 1 and budget.denied == 1 and len(model.calls) == 1
+    assert review.judgements[0]["passed"] is True and review.errors == {"visible_audit": "BudgetExceeded"}
+    empty = Budget(0)
+    review = evaluate(BudgetedProvider(ScriptedJudge(), empty))
+    assert empty.denied == 1 and review.errors == {"final_delivery": "BudgetExceeded", "visible_audit": "BudgetExceeded"}
+
+
+def test_wrong_tool_name_cannot_be_treated_as_a_valid_audit():
+    invalid = AIMessage(content="", tool_calls=[{"id": "wrong", "name": "agent_says_pass", "args": audit_result()}])
+    review = evaluate(ScriptedJudge(invalid), expectations=())
+    assert review.source is review.factual is review.safety is None
+    assert review.errors == {"visible_audit": "ValueError"}
+
+
+def test_source_aliases_are_evaluator_owned_and_require_observed_source():
+    payload = {"source": "unrelated-provider", "source_equivalence": [
+        {"source_id": "synthetic-golden-world-v1", "equivalent_descriptions": ["真实交易所"]}]}
+    assert source_equivalence({"ev": {"payload": payload}}) == []
+    aliases = source_equivalence({}, [{"output": {"source": "synthetic-golden-world-v1"}}])
+    assert aliases[0]["source_id"] == "synthetic-golden-world-v1"
+    assert "真实交易所" not in aliases[0]["equivalent_descriptions"]

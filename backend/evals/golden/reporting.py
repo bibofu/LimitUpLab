@@ -41,6 +41,8 @@ def summarize(results, *, planned_trials, planned_cases=None, attempt_history=()
     first_attempts = [item for item in results if item["trial"] == 1]
     durations = sorted(item["duration_seconds"] for item in results)
     attempts = [*attempt_history, *results]
+    judge_errors = Counter(f"{phase}:{kind}" for item in attempts for turn in item["turns"]
+                           for phase, kind in (turn.get("judge_errors") or {}).items())
     tokens = [turn.get("agent_usage", {}).get("total_tokens") for item in attempts for turn in item["turns"]]
     completed_trials = sum(item.get("completed", True) for item in results)
     return {
@@ -60,6 +62,7 @@ def summarize(results, *, planned_trials, planned_cases=None, attempt_history=()
         "p50_seconds": durations[(len(durations) - 1) // 2] if durations else None,
         "p95_seconds": durations[max(0, (len(durations) * 95 + 99) // 100 - 1)] if durations else None,
         "agent_tokens": sum(tokens) if tokens and all(value is not None for value in tokens) else None,
+        "judge_stage_errors": dict(judge_errors),
         "note": "Rates use one latest result per trial; interrupted attempts remain in attempt_history and usage. Pass includes uncalibrated model judgements. Review and harness errors never count as passes.",
     }
 
@@ -79,6 +82,7 @@ def save_report(report, directory):
              "Model-judged results have not been calibrated by a human reviewer. This is not real-market accuracy.", "",
              f"Attempted trials: {summary['attempted_trials']}/{summary['planned_trials']}; verdicts: `{summary['verdict_counts']}`.",
              f"Completed trials: {summary['completed_trials']}; preserved interrupted attempts: {summary['superseded_attempts']}.",
+             f"Judge stage errors (including interrupted attempts): `{summary['judge_stage_errors']}`.",
              f"First-attempt pass rate: {summary['first_attempt_pass_rate']}; all-attempt pass rate: {summary['trial_pass_rate']}.",
              f"Cases completing all {report['manifest']['trials']} planned trial(s): {summary['completed_cases']}; passing every planned trial: {summary['all_trials_passed_cases']}.",
              "A single trial does not establish repeatability.", "",
@@ -88,7 +92,7 @@ def save_report(report, directory):
         if result.get("error"):
             failed.append(result["error"])
         lines.append(f"| {result['case_id']} | {result['trial']} | {result['verdict']} | {result['duration_seconds']} | {', '.join(failed).replace('|', '/')} |")
-    lines.extend(["", "## Check dimensions", "", "Each evaluated turn contributes once per dimension. Missing dimensions are not evaluated; fixture gaps are not passes. Facts here cover structured values, while prose remains in semantic judging.", "",
+    lines.extend(["", "## Check dimensions", "", "Each evaluated turn contributes once per dimension. Missing dimensions are not evaluated; fixture gaps are not passes. facts covers structured values; visible_facts, source_attribution and safety audit all displayed revisions. Semantic delivery checks inspect only the final answer.", "",
                   "| Dimension | Turns | Pass | Fail | Review | Harness error |",
                   "|---|---:|---:|---:|---:|---:|"])
     for name, counts in summary["by_dimension"].items():

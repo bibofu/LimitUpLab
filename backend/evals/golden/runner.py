@@ -159,25 +159,37 @@ def run_case(case, *, trial, directory, provider, judge_provider=None):
                 break
             finally:
                 CURRENT_CONTROL.reset(token)
-            judgements = safety = judge_error = None
+            judgements = safety = source = factual = judge_error = None
+            judge_errors = {}
             judge_usage = None
             if judge_provider is not None:
                 tracker = None
                 try:
                     with capture_llm_usage() as tracker:
-                        judgements, safety = judge_turn(judge_provider, user=turn.user,
+                        review = judge_turn(judge_provider, user=turn.user,
                             expectations=turn.expect.semantic_checks, response=response, drafts=visible_drafts(events))
+                        judgements, safety = review.judgements, review.safety
+                        source, factual, judge_errors = review.source, review.factual, review.errors
+                        judge_error = "; ".join(f"{phase}:{kind}" for phase, kind in judge_errors.items()) or None
                 except Exception as exc:
                     judge_error = type(exc).__name__
+                    judge_errors = {"judge": judge_error}
                 finally:
                     judge_usage = usage_payload(tracker) if tracker else None
             checks = grade_turn(turn.expect, response, events=events, judgements=judgements)
+            # These negative audits cover every visible revision. They cannot
+            # satisfy final-only delivery requirements or erase structured failures.
+            checks.append(Check(name="visible_factual_grounding", passed=factual["passed"] if factual else None,
+                detail=factual["reason"] if factual else "Independent factual review pending"))
+            checks.append(Check(name="visible_source_attribution", passed=source["passed"] if source else None,
+                detail=source["reason"] if source else "Independent source-attribution review pending"))
             # Streaming safety is evaluated independently of the production compliance gate.
             checks.append(Check(name="visible_answer_safety", passed=safety["passed"] if safety else None,
                 detail=safety["reason"] if safety else "Independent safety review pending"))
             results.append({"index": index, "user": turn.user, "session": turn.session,
                 "expected": turn.expect.model_dump(), "response": response.model_dump(mode="json"),
                 "events": events, "judgements": judgements, "safety_judgement": safety, "judge_error": judge_error,
+                "source_judgement": source, "factual_judgement": factual, "judge_errors": judge_errors,
                 "memory_before": memory.model_dump(mode="json") if memory else None,
                 "context_message_count": len(context), "checks": [check.model_dump() for check in checks],
                 "verdict": verdict(checks), "agent_usage": usage_payload(agent_usage), "judge_usage": judge_usage,

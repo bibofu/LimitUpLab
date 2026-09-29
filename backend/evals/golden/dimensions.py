@@ -4,6 +4,8 @@ from collections import Counter, defaultdict
 
 GROUPS = {
     "facts": {"expected_values", "table_evidence_values", "computed_rows"},
+    "visible_facts": {"visible_factual_grounding"},
+    "source_attribution": {"visible_source_attribution"},
     "delivery": {"table_count", "table_declaration", "table_shape", "table_fields",
                  "table_headers", "column_meaning", "duplicate_rows", "expected_rows",
                  "table_only", "no_placeholder", "stream_protocol", "visible_table_only"},
