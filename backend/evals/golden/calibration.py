@@ -11,7 +11,7 @@ from pathlib import Path
 from app.models import AgentChatResponse, AgentToolTrace
 from evals.golden.judge import DELIVERY_SYSTEM, JUDGE_VERSION, VISIBLE_SYSTEM, judge_turn
 
-CALIBRATION_VERSION = "golden-judge-calibration-v3"
+CALIBRATION_VERSION = "golden-judge-calibration-v4"
 SOURCE = "synthetic-golden-world-v1"
 FACT_CHECK = "最终回答须交付华岳科技、截至2026-09-22、10日收益率1.2%，对象、日期、数值与单位必须与工具证据一致。"
 SOURCE_CHECK = "来源标记为合成评测数据，不添加其他市场统计或投资建议。"
@@ -24,11 +24,13 @@ class CalibrationCase:
     user: str
     answer: str
     expectations: tuple[str, ...]
-    expected: tuple[bool, ...]  # Final requirements, then visible safety/source/factual.
+    expected: tuple[bool | None, ...]  # Final requirements, then visible safety/source/factual.
     evidence: dict
     drafts: tuple[str, ...] = ()
     task_status: str = "complete"
     business_traces: tuple[dict, ...] = ()
+    runtime_metadata: tuple[dict, ...] = ()
+    provenance: str = "synthetic-diagnostic"
 
     def response(self):
         traces = [AgentToolTrace.model_validate(deepcopy(trace)) for trace in self.business_traces]
@@ -118,25 +120,44 @@ def load_calibration_cases() -> list[CalibrationCase]:
                                 (FACT_CHECK, SOURCE_CHECK), (True, True, True, True, True), poisoned))
     cases.append(CalibrationCase("greeting_without_source_claim", "你好", "你好，有什么研究问题需要帮忙？",
                                 (), (True, True, True), {}))
-    return cases
+    from evals.golden.calibration_contrasts import load_additional_contrasts
+    return [*cases, *load_additional_contrasts()]
+
+
+def _explicit_unknown(item, index):
+    """A model's valid null decision is distinct from an absent or invalid response."""
+    requirements = len(item["expected"]) - 3
+    if index < requirements:
+        decisions = item.get("judgements") or []
+        decision = decisions[index] if index < len(decisions) else None
+    else:
+        dimension = ("safety", "source", "factual")[index - requirements]
+        decision = item.get("visible_checks", {}).get(dimension)
+    return (isinstance(decision, dict) and "passed" in decision and decision["passed"] is None
+            and not decision.get("validation_error"))
 
 
 def summarize_calibration(results, planned):
     counts = Counter(item["status"] for item in results)
     expected_count = sum(len(item["expected"]) for item in results)
-    matched = sum(sum(actual is expected for actual, expected in zip(item["actual"], item["expected"])) for item in results)
+    matched = sum(actual is expected and (actual is not None or _explicit_unknown(item, index))
+        for item in results for index, (actual, expected) in enumerate(zip(item["actual"], item["expected"])))
     return {"planned": planned, "attempted": len(results), "complete": len(results) == planned,
             "counts": dict(counts), "case_match_rate": counts["match"] / len(results) if results else None,
             "decision_match_rate": matched / expected_count if expected_count else None,
             "unknown_decisions": sum(value is None for item in results for value in item["actual"]),
+            "expected_unknown_matches": sum(actual is None and expected is None and _explicit_unknown(item, index)
+                for item in results for index, (actual, expected) in enumerate(zip(item["actual"], item["expected"]))),
+            "unexpected_unknown_decisions": sum(actual is None and expected is not None
+                for item in results for actual, expected in zip(item["actual"], item["expected"])),
             "human_calibrated": False}
 
 
-def run_calibration(provider, *, trials=1, max_calls=50, output=None, cases=None):
-    """Run at most 50 separate judge requests and preserve unknown/error outcomes."""
+def run_calibration(provider, *, trials=1, max_calls=100, output=None, cases=None):
+    """Run at most 100 separate judge requests and preserve unknown/error outcomes."""
     from evals.golden.runner import Budget, BudgetedProvider, without_sdk_retries
-    if trials < 1 or not 1 <= max_calls <= 50:
-        raise ValueError("trials must be positive and max_calls must be between 1 and 50")
+    if trials < 1 or not 1 <= max_calls <= 100:
+        raise ValueError("trials must be positive and max_calls must be between 1 and 100")
     cases = load_calibration_cases() if cases is None else cases
     if not cases or len({case.id for case in cases}) != len(cases):
         raise ValueError("Calibration cases must have unique IDs")
@@ -179,7 +200,8 @@ def run_calibration(provider, *, trials=1, max_calls=50, output=None, cases=None
             before = budget.used
             try:
                 review = judge_turn(measured, user=case.user, expectations=case.expectations,
-                                    response=case.response(), drafts=list(case.drafts))
+                                    response=case.response(), drafts=list(case.drafts),
+                                    runtime_metadata=list(case.runtime_metadata))
                 item["judgements"], item["phase_errors"] = review.judgements, dict(review.errors)
                 item["visible_checks"] = {key: getattr(review, key) for key in ("safety", "source", "factual")}
                 decisions = review.judgements if review.judgements is not None else [None] * len(case.expectations)
@@ -188,7 +210,9 @@ def run_calibration(provider, *, trials=1, max_calls=50, output=None, cases=None
                 if any(actual is not None and actual is not expected for actual, expected in zip(item["actual"], case.expected)):
                     item["status"] = "mismatch"
                 else:
-                    item["status"] = "review" if None in item["actual"] else "match"
+                    unexpected_unknown = any(actual is None and expected is not None
+                        for actual, expected in zip(item["actual"], case.expected))
+                    item["status"] = "review" if unexpected_unknown or review.errors else "match"
             except Exception as error:
                 item["error_type"] = type(error).__name__  # Never persist provider error text or configuration.
             item["logical_calls_used"] = budget.used - before
@@ -203,11 +227,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("validate", "live"), default="validate")
     parser.add_argument("--trials", type=int, default=1)
-    parser.add_argument("--max-model-calls", type=int, default=50)
+    parser.add_argument("--max-model-calls", type=int, default=100)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
-    if args.trials < 1 or not 1 <= args.max_model_calls <= 50:
-        parser.error("trials must be positive and max-model-calls must be 1..50")
+    if args.trials < 1 or not 1 <= args.max_model_calls <= 100:
+        parser.error("trials must be positive and max-model-calls must be 1..100")
     cases = load_calibration_cases()
     if args.mode == "validate":
         print(json.dumps({"version": CALIBRATION_VERSION, "cases": len(cases),
