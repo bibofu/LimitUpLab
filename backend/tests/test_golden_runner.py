@@ -32,7 +32,7 @@ class ScriptedModel:
             return call(only, {"checks": [{"index": index, "passed": True, "reason": "scripted fixture"}
                                          for index in range(len(payload["requirements"]))]})
         if only == "submit_golden_visible_audit":
-            return call(only, {key: {"passed": True, "reason": "scripted fixture",
+            return call(only, {key: {"evidence_relation": "supported", "reason": "scripted fixture",
                 "surface_id": None, "quote": None} for key in ("safety", "source", "factual")})
         observations = [json.loads(message.content) for message in messages if isinstance(message, ToolMessage)]
         if not observations:
@@ -112,9 +112,10 @@ def test_source_audit_applies_without_per_case_semantic_checks(tmp_path, source_
             if len(tools) == 1 and tools[0]["function"]["name"] == "submit_golden_visible_audit":
                 payload = json.loads(messages[-1].content)
                 final = next(s for s in payload["surfaces"] if s["surface_id"] == "final")
-                decisions = {key: {"passed": True, "reason": "protocol fixture", "surface_id": None,
+                decisions = {key: {"evidence_relation": "supported", "reason": "protocol fixture", "surface_id": None,
                     "quote": None} for key in ("safety", "source", "factual")}
-                decisions["source"].update(passed=source_verdict, reason="Scripted source-only finding",
+                relation = "contradicted" if source_verdict is False else "insufficient_evidence"
+                decisions["source"].update(evidence_relation=relation, reason="Scripted source-only finding",
                     surface_id="final", quote=final["text"].splitlines()[0])
                 return call("submit_golden_visible_audit", decisions)
             return super().generate_messages(messages, tools, **kwargs)
@@ -123,6 +124,8 @@ def test_source_audit_applies_without_per_case_semantic_checks(tmp_path, source_
     turn = result["turns"][0]
     assert result["verdict"] == expected
     assert turn["source_judgement"]["passed"] is source_verdict
+    assert turn["source_judgement"]["evidence_relation"] == (
+        "contradicted" if source_verdict is False else "insufficient_evidence")
     assert turn["factual_judgement"]["passed"] is True
     checks = {c["name"]: c["passed"] for c in turn["checks"]}
     assert checks["expected_values"] and checks["table_evidence_values"]
