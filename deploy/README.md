@@ -133,6 +133,10 @@ docker compose --env-file .env.production logs --tail=100 backend frontend
 错误保留在 `source_errors` 中。即使已有缓存足够生成评级，采集失败仍会将日更标记为
 `partial`，避免误报成功。生产容器内的临时文件锁位于 `/tmp`，跨任务互斥由宿主机共享锁保证。
 
+腾讯日线和东财分时回退也采用独立子进程，默认 60 秒，可通过
+`LIMITUPLAB_AKSHARE_KLINE_TIMEOUT_SECONDS` 调整。新浪分时优先接口保留原有 8 秒请求超时。
+60 秒默认值为恢复中观察到的约 52 秒慢响应留出余量，同时限制失去响应的调用。
+
 漏日需要按真实交易日历逐日补齐，不能只补最新一天。先确认没有遗留运行容器并创建
 SQLite 一致性备份，再按日期执行，例如：
 

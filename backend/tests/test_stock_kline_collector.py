@@ -69,12 +69,12 @@ class StockKLineCollectorTest(unittest.TestCase):
             timeout_seconds=12.5,
         )
 
-    def test_akshare_loader_defaults_to_thirty_seconds(self) -> None:
+    def test_akshare_loader_defaults_to_sixty_seconds(self) -> None:
         with patch.dict(os.environ, {}, clear=True), patch(
             "app.collectors.stock_kline_collector.run_in_killable_process",
         ) as run:
             _load_akshare_frame("stock_zh_a_hist_tx", symbol="sz002365")
-        self.assertEqual(run.call_args.kwargs, {"timeout_seconds": 30.0})
+        self.assertEqual(run.call_args.kwargs, {"timeout_seconds": 60.0})
 
     def test_invalid_timeout_config_cannot_disable_deadline(self) -> None:
         for timeout in ("invalid", "0", "-1", "nan", "inf"):

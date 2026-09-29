@@ -21,7 +21,7 @@ def _fetch_akshare_frame(api_name: str, kwargs: dict[str, Any]) -> Any:
 
 
 def _load_akshare_frame(api_name: str, **kwargs: Any) -> Any:
-    timeout = float(os.environ.get("LIMITUPLAB_AKSHARE_KLINE_TIMEOUT_SECONDS", "30"))
+    timeout = float(os.environ.get("LIMITUPLAB_AKSHARE_KLINE_TIMEOUT_SECONDS", "60"))
     return run_in_killable_process(
         _fetch_akshare_frame, api_name, kwargs, timeout_seconds=timeout,
     )
