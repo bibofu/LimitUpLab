@@ -246,6 +246,29 @@ def test_null_is_retained_as_unknown():
     assert review.source["reason"] == "No provenance"
 
 
+@pytest.mark.parametrize("dimension,reason", [
+    ("source", "未提供血缘，无法证明来源相互独立。"),
+    ("factual", "筛选声明缺乏证据支持，无法核对是否实际执行。"),
+])
+def test_negative_wording_in_reason_does_not_convert_unknown_to_false(dimension, reason):
+    # Preserve structured decisions; do not infer truth from words in a model explanation.
+    model = ScriptedJudge(audit_result(**{dimension: {"passed": None, "reason": reason}}))
+    review = evaluate(model, expectations=())
+    assert getattr(review, dimension)["passed"] is None
+    assert getattr(review, dimension)["reason"] == reason and review.errors == {}
+
+
+def test_correct_source_identifier_inside_negative_quote_does_not_discard_finding():
+    # The script tests quote preservation, not whether a real model identifies this attribution.
+    claim = "来源：品牌行情工具（synthetic-golden-world-v1）"
+    model = ScriptedJudge(final_result(False), audit_result(source=finding(quote=claim)))
+    review = evaluate(model, answer=f"合成甲收益率1.2%。{claim}。", expectations=("如实说明来源。",))
+    assert review.judgements[0]["passed"] is False and review.source["passed"] is False
+    assert review.source["quote"] == claim
+    assert review.factual["passed"] is True and review.safety["passed"] is True
+    assert review.errors == {}
+
+
 def test_both_phases_are_budgeted_and_exhaustion_has_no_hidden_retry():
     model = ScriptedJudge(final_result(), audit_result())
     budget = Budget(1)
