@@ -15,7 +15,8 @@ from evals.golden.judge import JUDGE_VERSION, judge_turn, source_equivalence
 
 
 def visible(*values, quote="来源", surface_id="final"):
-    return {key: {"passed": value, "reason": "Scripted protocol fixture",
+    relations = {True: "supported", False: "contradicted", None: "insufficient_evidence"}
+    return {key: {"evidence_relation": relations[value], "reason": "Scripted protocol fixture",
                   "surface_id": surface_id if value is False else None,
                   "quote": quote if value is False else None}
             for key, value in zip(("safety", "source", "factual"), values or (True, True, True))}
@@ -73,6 +74,10 @@ def test_full_scripted_suite_maps_all_phases_without_live_requests():
     assert report["summary"]["expected_unknown_matches"] == 4
     assert report["summary"]["unexpected_unknown_decisions"] == 0
     assert not provider.actions
+    relations = {True: "supported", False: "contradicted", None: "insufficient_evidence"}
+    for item in report["results"]:
+        for decision in item["visible_checks"].values():
+            assert decision["evidence_relation"] == relations[decision["passed"]]
 
 
 def test_source_claims_and_final_delivery_have_independent_contrasts():
