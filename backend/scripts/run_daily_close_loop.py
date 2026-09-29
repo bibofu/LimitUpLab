@@ -479,6 +479,10 @@ def _incomplete_reasons(
     live_eligible: bool,
 ) -> list[str]:
     reasons: list[str] = []
+    if report.akshare_status in {"partial", "error"}:
+        source_details = "; ".join(report.akshare_source_errors)
+        reason = f"raw limit-up collection is {report.akshare_status}"
+        reasons.append(f"{reason}: {source_details}" if source_details else reason)
     health = report.health
     if not health.get("raw_events_ready"):
         reasons.append("raw limit-up events are missing")

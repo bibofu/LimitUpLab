@@ -299,6 +299,78 @@ class DailyCloseLoopTest(unittest.TestCase):
         self.assertEqual(delays, [2])
         self.assertEqual(execution.run.attempt_count, 2)
 
+    # Healthy cached rows must not hide failure of the current raw collection.
+    def test_failed_raw_collection_stays_partial_despite_healthy_cached_data(self) -> None:
+        target_date = date(2026, 8, 21)
+        source_error = "akshare.closed_limit_pool: request timed out after 30s"
+
+        for source_status in ("partial", "error"):
+            with self.subTest(source_status=source_status):
+                report = self._complete_report(target_date, live_count=10)
+                report.akshare_status = source_status
+                report.akshare_source_errors = [source_error]
+                execution = self._execute(
+                    requested_date=target_date,
+                    now=datetime(2026, 8, 21, 16, 10, tzinfo=CN_TZ),
+                    max_attempts=2,
+                    update_runner=lambda **_kwargs: report,
+                    sleep_fn=lambda _seconds: None,
+                    force=True,
+                )
+
+                self.assertEqual(execution.status, "partial")
+                self.assertEqual(execution.exit_code, 2)
+                self.assertEqual(execution.run.attempt_count, 2)
+                self.assertIn(source_error, execution.run.error_message)
+                self.assertTrue(self.alert_path.exists())
+                persisted = self.run_repository.latest_for_date(target_date)
+                self.assertEqual(persisted.status, "partial")
+                self.assertEqual(
+                    persisted.report["pipeline"]["akshare_status"], source_status
+                )
+
+    def test_partial_raw_collection_is_retried_until_source_recovers(self) -> None:
+        target_date = date(2026, 8, 21)
+        calls = 0
+
+        def recovering_update(**_kwargs) -> DailyUpdateReport:
+            nonlocal calls
+            calls += 1
+            report = self._complete_report(target_date, live_count=10)
+            report.akshare_status = "partial" if calls == 1 else "ok"
+            if calls == 1:
+                report.akshare_source_errors = ["akshare.failed_limit_pool: timeout"]
+            return report
+
+        execution = self._execute(
+            requested_date=target_date,
+            now=datetime(2026, 8, 21, 16, 10, tzinfo=CN_TZ),
+            max_attempts=2,
+            update_runner=recovering_update,
+            sleep_fn=lambda _seconds: None,
+        )
+
+        self.assertEqual(execution.status, "success")
+        self.assertEqual(calls, 2)
+        self.assertEqual(execution.run.attempt_count, 2)
+        self.assertFalse(self.alert_path.exists())
+
+    def test_skip_import_without_collection_status_can_complete(self) -> None:
+        target_date = date(2026, 8, 21)
+        report = self._complete_report(target_date, live_count=10)
+        self.assertIsNone(report.akshare_status)
+
+        execution = self._execute(
+            requested_date=target_date,
+            now=datetime(2026, 8, 21, 16, 10, tzinfo=CN_TZ),
+            skip_import=True,
+            update_runner=lambda **_kwargs: report,
+        )
+
+        self.assertEqual(execution.status, "success")
+        self.assertEqual(execution.exit_code, 0)
+        self.assertFalse(self.alert_path.exists())
+
     # Regression scenario: review snapshot failure marks pipeline partial.
     def test_review_snapshot_failure_marks_pipeline_partial(self) -> None:
         target_date = date(2026, 8, 21)
