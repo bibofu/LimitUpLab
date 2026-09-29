@@ -249,6 +249,18 @@ backend/.venv/Scripts/python.exe backend/scripts/run_judge_calibration.py --mode
 
 原始记录位于 `output/golden/judge-calibration-v2-20260928.json`、`judge-calibration-v3-20260928.json` 和 `judge-calibration-v4-targeted-20260928.json`。表中分母是场景执行次数，不是逐条标准数；未知和异常仍留在分母中。预期标签由评测作者定义，以上是合成诊断一致性，尚未经过人工逐条签核。
 
+2026-09-29 两阶段裁判的完整诊断记录如下，模型仍为 `deepseek-v4-flash`：
+
+| 裁判 / 诊断集版本 | 场景匹配 | 判项匹配 | 真实请求 | 结果 |
+| --- | --- | --- | --- | --- |
+| v5 / calibration-v2 | 16/25 | 107/116 | 48 | 8 个来源判项错误要求中文翻译或混入其他条件；1 个无事实断言判为未知。 |
+| v6 / calibration-v3，第一轮 | 24/25 | 115/116 | 48 | 最终来源判项漏掉工具标签冒充供应商；独立可见来源审查正确拒绝该回答。 |
+| v6 / calibration-v3，第二轮 | 24/25 | 115/116 | 48 | 同一最终来源判项仍有分歧；独立可见来源审查仍正确拒绝。 |
+
+文件分别为 `judge-calibration-v5-round1-20260929.json`、`judge-calibration-v6-round1-20260929.json` 和 `judge-calibration-v6-round2-20260929.json`，均位于 `output/golden/`。v6 明确原始来源 ID 与等价描述择一即可、只按本条标准判分，以及无事实断言与无法核实断言的区别。calibration-v3 将两条工具故障对照改成真实运行形态：空 evidence 加脱敏业务失败记录；没有添加推测的超时或日期回退原因。两轮均保留全部结果，没有选择性重跑失败项。
+
+v6 两轮合计 48/50 场景、230/232 判项匹配，无未知项。剩余的阶段分歧仍存在，不能把整体拦截成功称为每个判项均准确。判分理由也可能不够准确；正式基线需继续复核失败与抽样通过项。以上仍不代表人工校准或真实行情准确率。
+
 相同模型的独立请求仍可能具有相关偏差，因此结果保留 `judge_human_calibrated=false`。语义得分不是人工签核，裁判不能覆盖确定性失败。缺少裁判时，相关项目保留 review；不会把“未检查”写成“通过”。
 
 产出：`judge.py`、逐条判定、原文依据、裁判用量。
