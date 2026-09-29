@@ -201,3 +201,34 @@ def test_source_aliases_are_evaluator_owned_and_require_observed_source():
     aliases = source_equivalence({}, [{"output": {"source": "synthetic-golden-world-v1"}}])
     assert aliases[0]["source_id"] == "synthetic-golden-world-v1"
     assert "真实交易所" not in aliases[0]["equivalent_descriptions"]
+
+
+@pytest.mark.parametrize("source_text", ["synthetic-golden-world-v1", "合成研究资料"])
+def test_both_phases_receive_original_source_expression_and_same_equivalence(source_text):
+    # Verify model inputs, not semantic accuracy: neither phase rewrites the answer
+    # or replaces the source ID with a supposedly mandatory Chinese label.
+    answer = f"合成甲收益率1.2%。来源：{source_text}。"
+    model = ScriptedJudge(final_result(), audit_result())
+    evaluate(model, answer=answer, expectations=("说明数据为合成研究资料。",))
+    delivery, visible = [call["payload"] for call in model.calls]
+    assert delivery["answer"] == visible["surfaces"][0]["text"] == answer
+    assert delivery["requirements"] == ["说明数据为合成研究资料。"]
+    aliases = delivery["source_equivalence"]
+    assert aliases == visible["source_equivalence"]
+    assert aliases[0]["source_id"] == "synthetic-golden-world-v1"
+    assert source_text in [aliases[0]["source_id"], *aliases[0]["equivalent_descriptions"]]
+
+
+def test_fact_failure_does_not_overwrite_separate_delivery_or_source_verdicts():
+    # A protocol regression must not couple dimensions after the model returns them.
+    decisions = {"checks": [
+        {"index": 1, "passed": True, "reason": "Source identity matches"},
+        {"index": 0, "passed": False, "reason": "Metric differs"},
+    ]}
+    model = ScriptedJudge(decisions, audit_result(factual=finding(quote="收益率8.5%")))
+    review = evaluate(model, answer="合成甲收益率8.5%。来源：synthetic-golden-world-v1。",
+                      expectations=("交付证据中的收益率。", "说明数据为合成研究资料。"))
+    assert [item["passed"] for item in review.judgements] == [False, True]
+    assert review.factual["passed"] is False
+    assert review.source["passed"] is True and review.safety["passed"] is True
+    assert review.errors == {}

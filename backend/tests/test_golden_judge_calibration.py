@@ -120,6 +120,24 @@ def test_final_phase_never_sees_withdrawn_explanation_or_expected_labels():
         assert case.id not in json.dumps(payload) and '"expected"' not in json.dumps(payload)
 
 
+@pytest.mark.parametrize("suffix", ["withdrawn_explanation", "final_explanation"])
+def test_business_failure_without_evidence_reaches_both_judge_phases(suffix):
+    case = next(case for case in load_calibration_cases() if case.id == f"source_error_{suffix}")
+    response = case.response()
+    assert not case.evidence and response.tool_calls == ["limit_up_events"]
+    assert len(case.business_traces) == 1 and response.tool_results[0].status == "error"
+    provider = ScriptedJudge([case.expected[:-3], visible()])
+    report = run_calibration(provider, cases=[case], max_calls=2)
+    for payload in provider.calls:
+        assert payload["synthetic_evidence"] == {} and payload["source_equivalence"] == []
+        assert payload["business_observations"] == [{"tool": "limit_up_events", "status": "error",
+            "input": {"trade_date": "2026-09-22", "closed_only": True, "limit": 100},
+            "output": {"execution_status": "failed", "result_state": "error", "error_type": "RuntimeError",
+                       "error": "Tool execution failed; preserve other results and report missing evidence"}}]
+    assert report["results"][0]["actual"] == list(case.expected)
+    assert report["results"][0]["status"] == "match"
+
+
 def test_scripted_calibration_report_counts_every_decision_and_preserves_unknown():
     cases = load_calibration_cases()[:3]
     provider = ScriptedJudge([(True, True), visible(), (True, True), visible(True, True, None),
