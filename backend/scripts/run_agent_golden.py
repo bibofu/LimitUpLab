@@ -83,6 +83,8 @@ def main(argv=None):
     parser.add_argument("--smoke", action="store_true")
     parser.add_argument("--split", choices=("all", "development", "holdout"), default="all")
     parser.add_argument("--category", choices=("single", "multi", "robustness"))
+    parser.add_argument("--profile", choices=("v1_close_review", "extended"), default="v1_close_review",
+                        help="Use the production tool allowlist; run profiles in separate report directories")
     parser.add_argument("--trials", type=int, default=1)
     parser.add_argument("--max-model-calls", type=int, default=600, help="Shared bound for Agent, memory and judge calls")
     parser.add_argument("--judge", choices=("none", "model"), default="none",
@@ -105,7 +107,11 @@ def main(argv=None):
     if not cases:
         parser.error("No cases match the selection")
     if args.mode == "validate":
-        print(json.dumps(validate_cases(cases), ensure_ascii=False, indent=2))
+        from evals.golden.world import FrozenRegistry, SUPPORTED_TOOLS
+        enabled = FrozenRegistry(cases[0], profile=args.profile).enabled_tool_names
+        print(json.dumps({**validate_cases(cases), "profile": args.profile,
+            "enabled_tools": sorted(enabled), "fixture_tools": sorted(enabled & SUPPORTED_TOOLS),
+            "uncovered_tools": sorted(enabled - SUPPORTED_TOOLS)}, ensure_ascii=False, indent=2))
         return 0
 
     from app.config import configure_runtime_environment
@@ -131,7 +137,7 @@ def main(argv=None):
         "case_ids": [c.id for c in cases], "model": getattr(provider, "model", type(provider).__name__),
         "provider": type(provider).__name__, "judge": args.judge, "judge_human_calibrated": False,
         "effective_model_configuration": provider_configuration(provider),
-        "profile": "extended", "react_deadline_seconds": os.getenv("LIMITUPLAB_REACT_DEADLINE_SECONDS", "120"),
+        "profile": args.profile, "react_deadline_seconds": os.getenv("LIMITUPLAB_REACT_DEADLINE_SECONDS", "120"),
         "libraries": {name: version(name) for name in ("langchain-core", "langchain-openai", "langgraph", "pydantic")}}
     report_path = output / "report.json"
     if args.resume:
@@ -164,7 +170,7 @@ def main(argv=None):
                     return 2
                 print(f"[start] {case.id} trial={trial}", flush=True)
                 result = run_case(case, trial=trial, directory=output, provider=measured,
-                                  judge_provider=measured if args.judge == "model" else None)
+                                  judge_provider=measured if args.judge == "model" else None, profile=args.profile)
                 record_trial(report, result)
                 report["model_calls_used"] = budget.used
                 save_report(report, output)

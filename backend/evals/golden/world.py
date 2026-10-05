@@ -8,12 +8,13 @@ visible and raise a coverage gap instead of silently reaching production service
 from copy import deepcopy
 from datetime import date, datetime, time, timedelta
 from inspect import signature
+from statistics import mean
 from threading import Lock
 from types import SimpleNamespace
 from typing import get_type_hints
 
 from app.agents.query_contract import MARKET_SEGMENT_PREFIXES, normalize_market_segment
-from app.agents.tools import AgentToolRegistry, TOOL_SCHEMAS, ToolResult
+from app.agents.tools import AgentToolRegistry, TOOL_SCHEMAS, ToolResult, resolve_agent_profile
 from app.collectors.hithink_finance_collector import (
     HithinkDragonTigerFact, HithinkDragonTigerSnapshot,
     HithinkLimitUpFact, HithinkLimitUpPoolSnapshot,
@@ -46,7 +47,34 @@ SUPPORTED_TOOLS = frozenset({
     "limit_up_events", "market_event_pool", "market_summary", "first_board_ratings",
     "first_board_filter", "stock_kline", "stock_news", "hot_stock_ranking",
     "remote_limit_up_pool", "stock_activity", "web_search", "dragon_tiger_list",
+    "market_index_trend",
 })
+# Explicit artificial observations: prices share one dated history across queries.
+KLINE_RETURNS = dict(zip((row[0] for row in STOCKS), (1.2, 3.6, -2.4, .6, -1.8, 2.4, -3.0, 4.8, -.6, 1.8)))
+INDEX_CLOSES = (
+    ("上证指数", "000001.SH", (3200, 3232, 3216, 3248, 3264)),
+    ("深证成指", "399001.SZ", (10000, 9900, 9950, 9850, 9800)),
+    ("创业板指", "399006.SZ", (2000, 2020, 2010, 1990, 2020)),
+)
+
+
+def synthetic_history_dates() -> list[date]:
+    """A fixed weekday calendar for synthetic bars, not an exchange calendar."""
+    days = []
+    cursor = DATES[-1]
+    while len(days) < 65:
+        if cursor.weekday() < 5:
+            days.append(cursor)
+        cursor -= timedelta(days=1)
+    return list(reversed(days))
+
+
+def maximum_drawdown(closes: list[float], precision: int) -> float:
+    peak, drawdown = closes[0], 0.0
+    for close in closes:
+        peak = max(peak, close)
+        drawdown = min(drawdown, (close - peak) / peak * 100)
+    return round(drawdown, precision)
 
 
 class FixtureCoverageGap(RuntimeError):
@@ -79,10 +107,9 @@ def synthetic_events() -> list[LimitUpEvent]:
 
 
 class FrozenRegistry:
-    profile = "extended"
-
-    def __init__(self, case: Case):
+    def __init__(self, case: Case, profile: str = "extended"):
         self.case = case
+        self.profile = resolve_agent_profile(profile)
         self.clock = datetime.fromisoformat(case.clock)
         self.events = synthetic_events()
         self.unsupported_tools: list[str] = []
@@ -90,14 +117,14 @@ class FrozenRegistry:
         self._names = {row[0]: row[1] for row in STOCKS}
 
     def schemas(self):
-        return list(TOOL_SCHEMAS)
+        return AgentToolRegistry.schemas(self)
 
     def is_enabled(self, name):
-        return any(schema.name == name for schema in TOOL_SCHEMAS)
+        return AgentToolRegistry.is_enabled(self, name)
 
     @property
     def enabled_tool_names(self):
-        return frozenset(schema.name for schema in TOOL_SCHEMAS)
+        return AgentToolRegistry.enabled_tool_names.fget(self)
 
     def __getattr__(self, name):
         if not any(schema.name == name for schema in TOOL_SCHEMAS):
@@ -239,13 +266,56 @@ class FrozenRegistry:
         return self._result("market_summary", {"include_limit_down": include_limit_down},
                             payload, empty=not rows)
 
+    def market_index_trend(self, *, days: int = 5, end_date: date | None = None) -> ToolResult:
+        target = self._date(end_date)
+        days = max(2, min(days, 20))
+        history_dates = synthetic_history_dates()
+        indices = []
+        for name, symbol, recent_closes in INDEX_CLOSES:
+            history = [recent_closes[0]] * (len(history_dates) - 5) + list(recent_closes)
+            selected = [(day, close) for day, close in zip(history_dates, history) if day <= target][-days:]
+            points = [{"trade_date": day.isoformat(), "close": close,
+                       "change_pct": None if i == 0 else round((close - selected[i - 1][1]) / selected[i - 1][1] * 100, 2)}
+                      for i, (day, close) in enumerate(selected)]
+            closes = [point["close"] for point in points]
+            changes = [point["change_pct"] for point in points[1:]]
+            indices.append({"name": name, "symbol": symbol,
+                            "start_date": points[0]["trade_date"], "end_date": target.isoformat(),
+                            "start_close": closes[0], "end_close": closes[-1],
+                            "return_pct": round((closes[-1] - closes[0]) / closes[0] * 100, 2),
+                            "max_drawdown_pct": maximum_drawdown(closes, 2),
+                            "positive_days": sum(change > 0 for change in changes),
+                            "negative_days": sum(change < 0 for change in changes),
+                            "points": points, "source": SOURCE})
+        payload = {"requested_days": days, "requested_end_date": (end_date or DATES[-1]).isoformat(),
+                   "data_as_of": target.isoformat(), "data_fresh": target == (end_date or DATES[-1]),
+                   "indices": indices}
+        return self._result("market_index_trend", {"days": days, "end_date": (end_date or DATES[-1]).isoformat()},
+                            payload, "indices")
+
     def first_board_ratings(
         self, trade_date: date | None = None, symbols: list[str] | None = None,
     ) -> ToolResult:
         target = self._date(trade_date)
         universe = self._events_on(target)
-        selected = [event for event in universe if event.closed_limit and event.board_height == 1
-                    and event.symbol in SCORES and (symbols is None or event.symbol in symbols)]
+        eligible, filtered_out = [], []
+        for event in universe:
+            reasons = []
+            missing = []
+            if not event.closed_limit:
+                reasons.append("收盘未封住")
+            if event.board_height != 1:
+                reasons.append("非首板")
+            if event.symbol not in SCORES:
+                reasons.append("未配置合成评级分数")
+                missing.append("synthetic_rating_score")
+            if reasons:
+                filtered_out.append({"symbol": event.symbol, "name": event.name, "included": False,
+                                     "excluded_reasons": reasons, "data_missing": missing})
+            else:
+                eligible.append(event)
+        requested_symbols = list(dict.fromkeys(symbols or []))[:20]
+        selected = [event for event in eligible if not requested_symbols or event.symbol in requested_symbols]
         selected.sort(key=lambda event: (-SCORES[event.symbol], event.symbol))
         sealed = [event for event in universe if event.closed_limit]
         candidates = [{"facts": {**event.model_dump(mode="json"),
@@ -262,7 +332,13 @@ class FrozenRegistry:
                        "risks": ["合成数据，不代表真实股票。"]} for event in selected]
         payload = {"trade_date": target.isoformat(), "data_as_of": target.isoformat(),
                    "snapshot_source": "calculated", "scoring_version": SOURCE,
-                   "generated_by": SOURCE, "filtered_out": [],
+                   "generated_by": SOURCE, "filtered_out": filtered_out,
+                   "filter_policy": "合成资格：收盘封住、首板、已配置合成评级分数；不是生产完整过滤策略。",
+                   "field_semantics": {
+                       "universe_count": "当日筛选前全部涨停事件数，包含非首板和未回封事件。",
+                       "filtered_out": "全体当日事件中未满足合成资格的排除明细，不是已入池后的再次过滤阶段。",
+                       "symbols": "仅限制返回候选；不改变universe_count或filtered_out，不构成资格排除。",
+                   },
                    "universe_count": len(universe), "candidates": candidates,
                    "matched_count": len(candidates), "returned_count": len(candidates)}
         return self._result("first_board_ratings", {"trade_date": target.isoformat(), "symbols": symbols},
@@ -287,28 +363,41 @@ class FrozenRegistry:
     def stock_kline(self, symbol: str, days: int = 20, end_date: date | None = None) -> ToolResult:
         symbol, name = self.resolve_stock_identity(symbol)
         target = self._date(end_date)
-        trading_days = []
-        cursor = target
-        while len(trading_days) < 61:
-            if cursor.weekday() < 5:
-                trading_days.append(cursor)
-            cursor -= timedelta(days=1)
-        trading_days.reverse()
-        closes = [100 * 1.012 ** (index / 10) for index in range(61)]
-        bars = [{"trade_date": day.isoformat(), "open": round(close, 6),
-                 "close": round(close, 6), "high": round(close, 6), "low": round(close, 6),
-                 "volume": 1000, "amount": round(close * 1000, 6), "source": SOURCE}
-                for day, close in zip(trading_days, closes)][-days:]
+        trading_days = synthetic_history_dates()
+        base = 100 + 10 * list(self._names).index(symbol)
+        history = []
+        for index, day in enumerate(trading_days):
+            offset = index - len(trading_days) + 1
+            progress = (max(0, offset + 10) + max(0, offset + 2)) / 12
+            close = round(base * (1 + KLINE_RETURNS[symbol] * progress / 100), 6)
+            if day <= target:
+                history.append({"trade_date": day.isoformat(), "open": close,
+                                "close": close, "high": close, "low": close,
+                                "volume": 1000, "amount": round(close * 1000, 6), "source": SOURCE})
+        days = max(1, min(days, 60))
+        bars = history[-days:]
+        closes = [bar["close"] for bar in history]
+        averages = {f"ma{period}": round(mean(closes[-period:]), 3) for period in (5, 10, 20)}
+        trend = "oscillating"
+        if closes[-1] >= averages["ma5"] >= averages["ma10"] >= averages["ma20"]:
+            trend = "rising"
+        elif closes[-1] <= averages["ma5"] <= averages["ma10"] <= averages["ma20"]:
+            trend = "falling"
+        peak, drawdown = bars[0]["high"], 0.0
+        for bar in bars:
+            peak = max(peak, bar["high"])
+            drawdown = min(drawdown, (bar["low"] / peak - 1) * 100)
         payload = {"symbol": symbol, "name": name, "requested_days": days,
                    "requested_end_date": (end_date or DATES[-1]).isoformat(),
-                   "data_as_of": target.isoformat(), "data_fresh": True,
-                   "trend": "rising", "latest_close": round(closes[-1], 6),
-                   "max_drawdown_pct": 0.0, "bars": bars}
+                   "data_as_of": target.isoformat(), "data_fresh": target == (end_date or DATES[-1]),
+                   "trend": trend,
+                   "latest_close": closes[-1], **averages, "volume_ratio_5d": 1.0,
+                   "max_drawdown_pct": round(drawdown, 3), "bars": bars}
         for periods in (5, 10, 20):
-            payload[f"return_{periods}d_pct"] = round((closes[-1] / closes[-1 - periods] - 1) * 100, 6)
+            payload[f"return_{periods}d_pct"] = round((closes[-1] / closes[-1 - periods] - 1) * 100, 3)
         if self.case.variant == "empty":
             payload = {key: value for key, value in payload.items()
-                       if key not in {"latest_close", "max_drawdown_pct", "trend"}
+                       if key not in {"latest_close", "max_drawdown_pct", "trend", "ma5", "ma10", "ma20", "volume_ratio_5d"}
                        and not key.startswith("return_")}
         return self._result("stock_kline", {"symbol": symbol, "days": days,
                             "end_date": (end_date or DATES[-1]).isoformat()}, payload, "bars")

@@ -3,15 +3,17 @@
 from collections import Counter, defaultdict
 
 from evals.golden.cases import load_cases
-from evals.golden.contracts import Case
+from evals.golden.contracts import Case, SUITE_VERSION
 
 
 def test_case_counts_ids_and_smoke_distribution():
     cases = load_cases()
-    assert len(cases) == 60
-    assert len({case.id for case in cases}) == 60
+    assert SUITE_VERSION == "agent-golden-v1.6"
+    assert len(cases) == 61
+    assert len({case.id for case in cases}) == 61
+    assert sum(len(case.turns) for case in cases) == 84
     assert Counter(case.category for case in cases) == {
-        "single": 30, "multi": 20, "robustness": 10,
+        "single": 31, "multi": 20, "robustness": 10,
     }
     smoke = [case for case in cases if case.smoke]
     assert len(smoke) == 12
@@ -79,6 +81,18 @@ def test_multi_cases_exercise_summary_trigger_and_session_boundaries():
     assert any(len({turn.session for turn in case.turns}) > 1 for case in cases)
     assert any(turn.expect.statuses == ["clarify"] for case in cases
                if case.category == "multi" for turn in case.turns)
+
+
+def test_scalar_oracles_distinguish_objects_and_dates_with_literal_answers():
+    cases = {case.id: case for case in load_cases()}
+    assert cases["s24_scalar_return"].turns[0].expect.semantic_checks[0] == (
+        "华岳科技截至2026-09-22的10日收益率为1.2%。")
+    historical = cases["s31_scalar_historical_return"].turns[0].expect
+    assert historical.evidence_dates == ["2026-09-21"]
+    assert historical.semantic_checks[0] == (
+        "华岳科技截至2026-09-21的10日收益率为1.0%，不能复用9月22日的1.2%。")
+    assert cases["m11_new_stock_topic"].turns[1].expect.semantic_checks[0] == "回答星河软件10日收益率-2.4%。"
+    assert cases["m14_correct_identity"].turns[1].expect.semantic_checks[0] == "对象改为星河软件，10日收益率为-2.4%。"
 
 
 def test_robustness_variants_do_not_accept_false_completion():

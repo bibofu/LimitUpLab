@@ -27,6 +27,16 @@ MAIN_FIRST = [A, B, M]
 MAIN_PREVIOUS = [A, B, L]
 ALL_CLOSED = [A, B, C, E, G, H, L, M]
 ALL_FIRST = [A, B, C, G, M]
+RATING_EXISTENCE_SCOPE = "只回答该股票该日是否有首板评级记录，不展开其他股票名单、评级列表或额外统计。"
+FILTER_ASSERTION_CHECK = (
+    "如回答额外声称已剔除ST或新股，须与实际工具入参、明确筛选语义和执行记录一致；"
+    "明确未执行应判不符，筛选证据不足应保留未知，不能由数量正确或结果恰好无ST/新股推断已筛选。"
+    "未作此类断言即可满足本条，不要求主动讨论ST或新股。"
+)
+SOURCE_INDEPENDENCE_CHECK = (
+    "如回答声称来源独立或独立交叉验证，须有上游血缘证据；工具入口或source_id不同不证明上游独立。"
+    "证据明确共享上游应判不符，血缘未知应保留未知；未声称上游独立即可满足本条。"
+)
 
 
 def table(rows, *, columns=None, dates=(D,), ordered=False, only=True,
@@ -125,6 +135,7 @@ def _single_cases():
         case("s18_absent_rating", "rating_scope", [turn(
             "青岚芯片在2026-09-22的首板评级是什么？只回答是否有评级记录。",
             prose("明确青岚芯片没有该日首板评级记录。",
+                  RATING_EXISTENCE_SCOPE,
                   "不能由评级缺失推断该股票当日未涨停或K线异常。", statuses=("empty",), dates=(D,)))],
             sources=("BC-013", "BC-020", "BC-067"),
             notes="定向评级为空不能扩成全池，也不能编造缺失原因。"),
@@ -179,6 +190,11 @@ def _single_cases():
             "当前热榜前5名中同时属于2026-09-22半导体行业首板封板股的，仅代码名称。",
             table([A]))], holdout=True, sources=("BC-021", "BC-025"),
             notes="漏热榜范围会多出岭南精工，漏首板会多出青岚芯片，漏行业会多出北辰制造和星河软件。"),
+        case("s31_scalar_historical_return", "scalar_grounding", [turn(
+            "华岳科技截至2026-09-21的10日收益率是多少？只回答该指标、日期与来源。",
+            prose("华岳科技截至2026-09-21的10日收益率为1.0%，不能复用9月22日的1.2%。",
+                  "来源标记为合成评测数据，不添加其他市场统计或投资建议。", dates=(P,)))],
+            sources=("BC-010", "BC-030", "BC-034"), notes="同一股票不同日期采用不同字面标准答案，暴露旧日与最新指标混用。"),
     ]
 
 
@@ -241,7 +257,7 @@ def _multi_cases():
         case("m11_new_stock_topic", "topic_switch", [
             turn("2026-09-22主板首板封板股，仅代码名称。", table(MAIN_FIRST)),
             turn("换个问题：星河软件截至2026-09-22的10日收益率是多少？",
-                 prose("回答星河软件10日收益率1.2%。", "不继续罗列或补查上一轮主板名单。", dates=(D,))),
+                 prose("回答星河软件10日收益率-2.4%。", "不继续罗列或补查上一轮主板名单。", dates=(D,))),
         ], category="multi", holdout=True, sources=("BC-071",), notes="新任务对象不属于旧市场条件，必须解除旧限定。"),
         case("m12_new_failed_topic", "topic_switch", [
             turn("2026-09-22主板首板封板股，仅代码名称。", table(MAIN_FIRST)),
@@ -257,8 +273,8 @@ def _multi_cases():
             turn("查询华岳科技截至2026-09-22的10日收益率。",
                  prose("华岳科技10日收益率1.2%。", dates=(D,))),
             turn("刚才名字说错了，改成星河软件，指标和日期不变。",
-                 prose("对象改为星河软件，10日收益率为1.2%。", "不能将华岳科技证据作为星河软件的证据。", dates=(D,))),
-        ], category="multi", sources=("BC-010", "BC-026"), notes="相同数值不能掩盖股票对象绑定错误。"),
+                 prose("对象改为星河软件，10日收益率为-2.4%。", "不能将华岳科技证据作为星河软件的证据。", dates=(D,))),
+        ], category="multi", sources=("BC-010", "BC-026"), notes="不同股票采用不同指标值，暴露只改名称而复用旧对象指标的错误。"),
         case("m15_old_date_to_current", "current_refresh", [
             turn("2026-09-18主板首板收盘封板股，只列代码名称。", table([A, B, H, J, M], dates=(F,))),
             turn("今天同样条件呢？仍只列代码名称。", table(MAIN_FIRST)),
@@ -272,8 +288,10 @@ def _multi_cases():
             notes="24条种子消息超过摘要触发阈值；远端偏好要保留，显式更新要覆盖。"),
         case("m17_memory_is_not_fact", "memory_compaction", [
             turn("之前数字已经过时，重新查2026-09-22收盘涨停数量。",
-                 prose("当前查询收盘涨停数量是8，不得复用历史助手声称的999。", dates=(D,))),
-            turn("同日只看沪深主板，数量呢？", prose("沪深主板收盘涨停数量是5。", dates=(D,))),
+                 prose("当前查询收盘涨停数量是8，不得复用历史助手声称的999。",
+                       FILTER_ASSERTION_CHECK, SOURCE_INDEPENDENCE_CHECK, dates=(D,))),
+            turn("同日只看沪深主板，数量呢？", prose("沪深主板收盘涨停数量是5。",
+                 FILTER_ASSERTION_CHECK, SOURCE_INDEPENDENCE_CHECK, dates=(D,))),
         ], category="multi", sources=("BC-037", "BC-038", "BC-068"),
             seed_messages=_long_history("记录旧研究：2026-09-18收盘涨停数量。", "旧回答声称收盘涨停999只，这条数值尚未核验。"),
             notes="摘要中的历史助手数值不是本轮市场证据。"),

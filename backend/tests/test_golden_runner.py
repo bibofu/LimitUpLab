@@ -86,6 +86,41 @@ def test_runtime_metadata_is_captured_from_real_prompt_and_passed_to_each_judge_
     assert all(payload["trusted_runtime_metadata"] == metadata for payload in judge.payloads)
 
 
+def test_actual_rating_count_scope_reaches_both_judge_phases(tmp_path):
+    from evals.golden.cases import load_cases
+
+    class RatingModel(ScriptedModel):
+        def generate_messages(self, messages, tools, **kwargs):
+            names = {item["function"]["name"] for item in tools}
+            if "finish" not in names:
+                return super().generate_messages(messages, tools, **kwargs)
+            observations = [json.loads(message.content) for message in messages if isinstance(message, ToolMessage)]
+            if not observations:
+                return call("first_board_ratings", {"trade_date": "2026-09-22"})
+            return call("finish", {"status": "complete", "answer": "输入事件总体10条，本次返回候选4只。",
+                                   "evidence_ids": [observations[-1]["evidence_id"]]})
+
+    class RecordingJudge(ScriptedModel):
+        def __init__(self):
+            self.payloads = []
+
+        def generate_messages(self, messages, tools, **kwargs):
+            self.payloads.append(json.loads(messages[-1].content))
+            return super().generate_messages(messages, tools, **kwargs)
+
+    case = next(case for case in load_cases() if case.id == "s19_rating_denominators")
+    judge = RecordingJudge()
+    result = run_case(case, trial=1, directory=tmp_path, provider=RatingModel(), judge_provider=judge)
+    assert result["verdict"] == "pass"
+    assert len(judge.payloads) == 2
+    for payload in judge.payloads:
+        views = [item for item in payload["trusted_runtime_metadata"] if item["origin"] == "agent_evidence_view"]
+        assert len(views) == 1
+        assert views[0]["metadata"]["returned_candidate_count"] == 4
+        assert views[0]["metadata"]["count_scope"]["symbols_filtered"] is False
+        assert views[0]["evidence_id"] in payload["synthetic_evidence"]
+
+
 def test_input_refusal_has_no_fabricated_runtime_snapshot(tmp_path):
     class RefusalModel(ScriptedModel):
         def generate_messages(self, messages, tools, **kwargs):
@@ -150,6 +185,8 @@ def test_delivery_judge_error_does_not_erase_independent_audit_or_hard_fail(tmp_
     turn = result["turns"][0]
     assert result["verdict"] == "fail"  # Unknown semantic judgement cannot overwrite hard failure.
     assert turn["judge_errors"] == {"final_delivery": "ValueError"}
+    assert turn["judge_diagnostics"]["final_delivery"] == {"failure_category": "request"}
+    assert turn["judge_diagnostics"]["visible_audit"]["tool_call_count"] == 1
     assert turn["judgements"] is None and turn["safety_judgement"]["passed"]
     assert turn["factual_judgement"]["passed"] and turn["source_judgement"]["passed"]
     assert "private-provider-error-text" not in json.dumps(result)
@@ -231,8 +268,41 @@ def test_validate_cli_never_loads_model(monkeypatch, capsys):
     monkeypatch.setattr("app.services.llm_provider.get_llm_provider", lambda: pytest.fail("No model in validation"))
     assert module.main(["--mode", "validate"]) == 0
     report = json.loads(capsys.readouterr().out)
-    assert report["cases"] == 60
+    assert report["cases"] == 61
     assert report["smoke_cases"] == 12
+    assert report["profile"] == "v1_close_review"
+    assert "remote_limit_up_pool" not in report["enabled_tools"]
+    assert "market_index_trend" in report["fixture_tools"]
+
+
+def test_validate_extended_profile_keeps_full_catalog_and_explicit_fixture_gaps(monkeypatch, capsys):
+    module = cli_module()
+    monkeypatch.setattr("app.services.llm_provider.get_llm_provider", lambda: pytest.fail("No model in validation"))
+    assert module.main(["--mode", "validate", "--profile", "extended"]) == 0
+    report = json.loads(capsys.readouterr().out)
+    assert report["profile"] == "extended"
+    assert "remote_limit_up_pool" in report["fixture_tools"]
+    assert "web_search" in report["fixture_tools"]
+    assert "rating_evaluation" in report["uncovered_tools"]
+
+
+@pytest.mark.parametrize("profile,allowed", [("v1_close_review", False), ("extended", True)])
+def test_runner_exposes_selected_profile_to_actual_agent_calls(tmp_path, profile, allowed):
+    class ProfileModel(ScriptedModel):
+        observed = []
+
+        def generate_messages(self, messages, tools, **kwargs):
+            names = {item["function"]["name"] for item in tools}
+            if "limit_up_events" in names:
+                self.observed.append(names)
+            return super().generate_messages(messages, tools, **kwargs)
+    model = ProfileModel()
+    model.observed = []
+    result = run_case(example_case(), trial=1, directory=tmp_path, provider=model,
+                      judge_provider=ScriptedModel(), profile=profile)
+    assert result["verdict"] == "pass"
+    assert model.observed
+    assert all(("remote_limit_up_pool" in names) is allowed for names in model.observed)
 
 
 def test_budget_interrupted_trial_resumes_without_double_counting(tmp_path, monkeypatch):
@@ -333,6 +403,21 @@ def test_resume_rejects_changed_effective_configuration(tmp_path, monkeypatch):
     configuration["settings_sha256"] = "thinking-enabled"
     with pytest.raises(SystemExit) as error:
         module.main([*arguments, "--resume"])
+    assert error.value.code == 2
+
+
+def test_resume_rejects_changed_profile(tmp_path, monkeypatch):
+    module = cli_module()
+    case = example_case()
+    monkeypatch.setattr(module, "load_cases", lambda: [case])
+    monkeypatch.setattr("app.config.configure_runtime_environment", lambda: None)
+    monkeypatch.setattr("app.services.llm_provider.get_llm_provider", ScriptedModel)
+    arguments = ["--mode", "live", "--case", case.id, "--judge", "model", "--output", str(tmp_path)]
+    assert module.main(arguments) == 0
+    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert report["manifest"]["profile"] == "v1_close_review"
+    with pytest.raises(SystemExit) as error:
+        module.main([*arguments, "--resume", "--profile", "extended"])
     assert error.value.code == 2
 
 

@@ -85,7 +85,7 @@ def usage_payload(tracker):
     return result
 
 
-def run_case(case, *, trial, directory, provider, judge_provider=None):
+def run_case(case, *, trial, directory, provider, judge_provider=None, profile="v1_close_review"):
     # Import late so validation does not require model credentials or construct registries.
     from evals.golden.grading import grade_turn, visible_drafts
     from evals.golden.world import FrozenRegistry
@@ -102,7 +102,7 @@ def run_case(case, *, trial, directory, provider, judge_provider=None):
     journal = Journal(database)
     anchor = datetime.fromisoformat(case.clock).date()
     results, initialized = [], set()
-    registry = FrozenRegistry(case)
+    registry = FrozenRegistry(case, profile=profile)
     error = None
     with ExitStack() as stack:
         # Each invocation is sequential and isolated; never run this harness in a live server.
@@ -165,6 +165,7 @@ def run_case(case, *, trial, directory, provider, judge_provider=None):
                 CURRENT_CONTROL.reset(token)
             judgements = safety = source = factual = judge_error = None
             judge_errors = {}
+            judge_diagnostics = {}
             judge_usage = None
             if judge_provider is not None:
                 tracker = None
@@ -175,6 +176,7 @@ def run_case(case, *, trial, directory, provider, judge_provider=None):
                             runtime_metadata=runtime_metadata.snapshots)
                         judgements, safety = review.judgements, review.safety
                         source, factual, judge_errors = review.source, review.factual, review.errors
+                        judge_diagnostics = review.diagnostics
                         judge_error = "; ".join(f"{phase}:{kind}" for phase, kind in judge_errors.items()) or None
                 except Exception as exc:
                     judge_error = type(exc).__name__
@@ -195,6 +197,7 @@ def run_case(case, *, trial, directory, provider, judge_provider=None):
                 "expected": turn.expect.model_dump(), "response": response.model_dump(mode="json"),
                 "events": events, "judgements": judgements, "safety_judgement": safety, "judge_error": judge_error,
                 "source_judgement": source, "factual_judgement": factual, "judge_errors": judge_errors,
+                "judge_diagnostics": judge_diagnostics,
                 "runtime_metadata": runtime_metadata.snapshots,
                 "runtime_metadata_errors": runtime_metadata.errors,
                 "memory_before": memory.model_dump(mode="json") if memory else None,
