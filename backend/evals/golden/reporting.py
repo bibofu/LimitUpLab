@@ -6,6 +6,7 @@ import json
 from pathlib import Path
 
 from evals.golden.dimensions import dimension_counts
+from evals.golden.protocol_metrics import protocol_metrics
 
 
 def digest(value):
@@ -63,6 +64,8 @@ def summarize(results, *, planned_trials, planned_cases=None, attempt_history=()
         "p95_seconds": durations[max(0, (len(durations) * 95 + 99) // 100 - 1)] if durations else None,
         "agent_tokens": sum(tokens) if tokens and all(value is not None for value in tokens) else None,
         "judge_stage_errors": dict(judge_errors),
+        **protocol_metrics([turn for item in attempts for turn in item["turns"]],
+                           errors_key="judge_errors", diagnostics_key="judge_diagnostics"),
         "note": "Rates use one latest result per trial; interrupted attempts remain in attempt_history and usage. Pass includes uncalibrated model judgements. Review and harness errors never count as passes.",
     }
 
@@ -83,6 +86,8 @@ def save_report(report, directory):
              f"Attempted trials: {summary['attempted_trials']}/{summary['planned_trials']}; verdicts: `{summary['verdict_counts']}`.",
              f"Completed trials: {summary['completed_trials']}; preserved interrupted attempts: {summary['superseded_attempts']}.",
              f"Judge stage errors (including interrupted attempts): `{summary['judge_stage_errors']}`.",
+             f"Whole-phase protocol failures: {summary['judge_phase_protocol_error_count']}; phase-call rate: {summary['judge_phase_protocol_error_rate']}; dimension/check errors: {summary['judge_dimension_error_count']}.",
+             f"Phase calls affected by protocol errors (including per-dimension schema failures, once per call): {summary['judge_protocol_affected_phase_count']}; rate: {summary['judge_protocol_affected_phase_rate']}.",
              f"First-attempt pass rate: {summary['first_attempt_pass_rate']}; all-attempt pass rate: {summary['trial_pass_rate']}.",
              f"Cases completing all {report['manifest']['trials']} planned trial(s): {summary['completed_cases']}; passing every planned trial: {summary['all_trials_passed_cases']}.",
              "A single trial does not establish repeatability.", "",

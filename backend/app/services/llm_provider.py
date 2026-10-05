@@ -49,6 +49,11 @@ class NativeFunctionCallingUnavailable(RuntimeError):
 class NativeFunctionCallingError(RuntimeError):
     """Raised when a native function-call response violates its contract."""
 
+    def __init__(self, message="", *, diagnostics=None):
+        super().__init__(message)
+        from app.services.protocol_diagnostics import safe_protocol_metadata
+        self.diagnostics = safe_protocol_metadata(diagnostics)
+
 
 @dataclass
 class LLMUsageTracker:

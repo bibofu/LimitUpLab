@@ -10,8 +10,9 @@ from pathlib import Path
 
 from app.models import AgentChatResponse, AgentToolTrace
 from evals.golden.judge import DELIVERY_SYSTEM, JUDGE_VERSION, VISIBLE_SYSTEM, judge_turn
+from evals.golden.protocol_metrics import protocol_metrics
 
-CALIBRATION_VERSION = "golden-judge-calibration-v5"
+CALIBRATION_VERSION = "golden-judge-calibration-v6"
 SOURCE = "synthetic-golden-world-v1"
 FACT_CHECK = "最终回答须交付华岳科技、截至2026-09-22、10日收益率1.2%，对象、日期、数值与单位必须与工具证据一致。"
 SOURCE_CHECK = "来源标记为合成评测数据，不添加其他市场统计或投资建议。"
@@ -122,7 +123,8 @@ def load_calibration_cases() -> list[CalibrationCase]:
                                 (), (True, True, True), {}))
     from evals.golden.calibration_contrasts import load_additional_contrasts
     from evals.golden.calibration_criteria_contrasts import load_criteria_contrasts
-    return [*cases, *load_additional_contrasts(), *load_criteria_contrasts()]
+    from evals.golden.calibration_scope_contrasts import load_scope_contrasts
+    return [*cases, *load_additional_contrasts(), *load_criteria_contrasts(), *load_scope_contrasts()]
 
 
 def _explicit_unknown(item, index):
@@ -151,14 +153,15 @@ def summarize_calibration(results, planned):
                 for item in results for index, (actual, expected) in enumerate(zip(item["actual"], item["expected"]))),
             "unexpected_unknown_decisions": sum(actual is None and expected is not None
                 for item in results for actual, expected in zip(item["actual"], item["expected"])),
-            "human_calibrated": False}
+            "human_calibrated": False,
+            **protocol_metrics(results, errors_key="phase_errors", diagnostics_key="phase_diagnostics")}
 
 
-def run_calibration(provider, *, trials=1, max_calls=100, output=None, cases=None):
-    """Run at most 100 separate judge requests and preserve unknown/error outcomes."""
+def run_calibration(provider, *, trials=1, max_calls=120, output=None, cases=None):
+    """Run at most 120 separate judge requests and preserve unknown/error outcomes."""
     from evals.golden.runner import Budget, BudgetedProvider, without_sdk_retries
-    if trials < 1 or not 1 <= max_calls <= 100:
-        raise ValueError("trials must be positive and max_calls must be between 1 and 100")
+    if trials < 1 or not 1 <= max_calls <= 120:
+        raise ValueError("trials must be positive and max_calls must be between 1 and 120")
     cases = load_calibration_cases() if cases is None else cases
     if not cases or len({case.id for case in cases}) != len(cases):
         raise ValueError("Calibration cases must have unique IDs")
@@ -197,13 +200,14 @@ def run_calibration(provider, *, trials=1, max_calls=100, output=None, cases=Non
                 return report
             item = {"id": case.id, "trial": trial, "input": asdict(case), "expected": list(case.expected),
                     "actual": [None] * len(case.expected), "judgements": None, "visible_checks": {},
-                    "phase_errors": {}, "status": "error", "logical_calls_used": 0}
+                    "phase_errors": {}, "phase_diagnostics": {}, "status": "error", "logical_calls_used": 0}
             before = budget.used
             try:
                 review = judge_turn(measured, user=case.user, expectations=case.expectations,
                                     response=case.response(), drafts=list(case.drafts),
                                     runtime_metadata=list(case.runtime_metadata))
                 item["judgements"], item["phase_errors"] = review.judgements, dict(review.errors)
+                item["phase_diagnostics"] = review.diagnostics
                 item["visible_checks"] = {key: getattr(review, key) for key in ("safety", "source", "factual")}
                 decisions = review.judgements if review.judgements is not None else [None] * len(case.expectations)
                 item["actual"] = [entry["passed"] if entry is not None else None
@@ -228,11 +232,11 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("validate", "live"), default="validate")
     parser.add_argument("--trials", type=int, default=1)
-    parser.add_argument("--max-model-calls", type=int, default=100)
+    parser.add_argument("--max-model-calls", type=int, default=120)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
-    if args.trials < 1 or not 1 <= args.max_model_calls <= 100:
-        parser.error("trials must be positive and max-model-calls must be 1..100")
+    if args.trials < 1 or not 1 <= args.max_model_calls <= 120:
+        parser.error("trials must be positive and max-model-calls must be 1..120")
     cases = load_calibration_cases()
     if args.mode == "validate":
         print(json.dumps({"version": CALIBRATION_VERSION, "cases": len(cases),

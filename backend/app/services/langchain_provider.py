@@ -12,6 +12,8 @@ from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
 from openai import APIError
 
+from app.services.protocol_diagnostics import response_diagnostics
+
 from app.services.llm_provider import (
     LLMProvider,
     LLMResult,
@@ -144,16 +146,18 @@ class LangChainChatProvider(LLMProvider):
                 try:
                     for chunk in stream:
                         if not isinstance(chunk, AIMessageChunk):
-                            raise NativeFunctionCallingError("Expected an AIMessageChunk")
+                            raise NativeFunctionCallingError("Expected an AIMessageChunk", diagnostics=
+                                response_diagnostics(chunk, failure_category="response_type"))
                         streamed_message = chunk if streamed_message is None else streamed_message + chunk
                         if isinstance(chunk.response_metadata.get("token_usage"), dict):
                             stream_usage = chunk.response_metadata["token_usage"]
                         on_chunk(chunk)
                 finally:
                     stream.close()
-                message = message_chunk_to_message(streamed_message)
+                message = message_chunk_to_message(streamed_message) if streamed_message is not None else None
             if not isinstance(message, AIMessage):
-                raise NativeFunctionCallingError("Expected an AIMessage")
+                raise NativeFunctionCallingError("Expected an AIMessage", diagnostics=
+                    response_diagnostics(message, failure_category="response_type"))
             usage = message.usage_metadata or {}
             raw = stream_usage if on_chunk is not None else message.response_metadata.get("token_usage")
             tokens = _parse_token_usage(raw) if raw else (
@@ -173,14 +177,18 @@ class LangChainChatProvider(LLMProvider):
                     try:
                         arguments = json.loads(call.get("args") or "")
                     except (TypeError, ValueError) as error:
-                        raise NativeFunctionCallingError("Malformed tool arguments") from error
+                        raise NativeFunctionCallingError("Malformed tool arguments", diagnostics=
+                            response_diagnostics(streamed_message, failure_category="tool_arguments")) from error
                     if not isinstance(arguments, dict):
-                        raise NativeFunctionCallingError("Malformed tool arguments")
+                        raise NativeFunctionCallingError("Malformed tool arguments", diagnostics=
+                            response_diagnostics(streamed_message, failure_category="tool_arguments"))
             if message.invalid_tool_calls:
-                raise NativeFunctionCallingError("Malformed tool arguments")
+                raise NativeFunctionCallingError("Malformed tool arguments", diagnostics=
+                    response_diagnostics(message, failure_category="tool_arguments"))
             ids = [call.get("id") for call in message.tool_calls]
             if any(not value for value in ids) or len(ids) != len(set(ids)):
-                raise NativeFunctionCallingError("Missing or duplicate tool_call_id")
+                raise NativeFunctionCallingError("Missing or duplicate tool_call_id", diagnostics=
+                    response_diagnostics(message, failure_category="tool_ids"))
             return message
         except BaseException as error:
             if tracker:
@@ -322,6 +330,7 @@ def _function_arguments(message: AIMessage, function_name: str) -> str:
         or not isinstance(calls[0]["args"], dict)
     ):
         raise NativeFunctionCallingError(
-            f"LLM did not return exactly one valid {function_name} function call"
+            f"LLM did not return exactly one valid {function_name} function call", diagnostics=
+            response_diagnostics(message, expected_tool=function_name, failure_category="tool_selection"),
         )
     return json.dumps(calls[0]["args"], ensure_ascii=False, separators=(",", ":"))

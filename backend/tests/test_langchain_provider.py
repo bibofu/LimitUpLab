@@ -345,6 +345,36 @@ def test_invalid_function_call_fails_and_is_counted(message):
     assert not tracker.token_usage_complete
 
 
+@pytest.mark.parametrize(("arguments", "category"), [
+    ('{"private_argument":"SECRET_CANARY', "unterminated_string"),
+    ('{"private_argument":', "unexpected_end"), ("SECRET_CANARY", "syntax"),
+])
+def test_native_protocol_diagnostics_preserve_structure_without_response_text(arguments, category):
+    payload = completion(tool_message(arguments=arguments))
+    payload["choices"][0]["finish_reason"] = "length"
+    payload["choices"][0]["message"]["content"] = "SECRET_CANARY"
+    with provider_for(lambda _: httpx.Response(200, json=payload)) as provider:
+        with pytest.raises(NativeFunctionCallingError) as caught:
+            provider.generate_messages([], [])
+    diagnostic = caught.value.diagnostics
+    assert diagnostic["finish_reason"] == "length" and diagnostic["response_kind"] == "ai_message"
+    assert diagnostic["tool_call_count"] == 0 and diagnostic["invalid_tool_call_count"] == 1
+    assert diagnostic["tool_id_status"] == "valid"
+    assert diagnostic["arguments"][0]["json_failure"] == category
+    serialized = json.dumps(diagnostic)
+    assert "SECRET_CANARY" not in serialized and "private_argument" not in serialized and "call-1" not in serialized
+
+
+def test_native_protocol_diagnostics_retain_duplicate_id_status_without_id_values():
+    message = tool_message(arguments="{}")
+    message["tool_calls"] *= 2
+    with provider_for(lambda _: httpx.Response(200, json=completion(message))) as provider:
+        with pytest.raises(NativeFunctionCallingError) as caught:
+            provider.generate_messages([], [])
+    assert caught.value.diagnostics["tool_id_status"] == "duplicate"
+    assert caught.value.diagnostics["tool_call_count"] == 2
+
+
 # Regression scenario: missing usage is never invented.
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("usage", [USAGE, None, {"prompt_tokens": 12}, {}])

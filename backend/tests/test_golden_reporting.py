@@ -62,4 +62,7 @@ def test_judge_stage_errors_include_preserved_interrupted_attempts():
     summary = summarize([latest], planned_trials=1, planned_cases=1, attempt_history=[interrupted])
     assert summary["judge_stage_errors"] == {
         "final_delivery:BudgetExceeded": 1, "visible_audit:ValidationError": 1}
+    assert summary["judge_phase_protocol_errors"] == {"visible_audit:ValidationError": 1}
+    assert summary["judge_dimension_error_count"] == 0
+    assert summary["judge_phase_protocol_error_rate"] is None  # Legacy reports have no observed denominator.
     assert summary["verdict_counts"] == {"review": 1}
