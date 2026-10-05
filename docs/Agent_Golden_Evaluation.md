@@ -1,10 +1,14 @@
-# Agent Chat Golden 评测设计与执行步骤（v1.4）
+# Agent Chat Golden 评测设计与执行步骤（v1.5）
 
 ## 目标和验收边界
 
 评测对象是模型与现有 Agent 执行链路的组合：理解用户请求、调用工具、继承上下文、组织证据并交付回答。
 
-当前套件版本为 `agent-golden-v1.4`，语义裁判采用下述两阶段独立请求。套件包含 60 个场景、83 个用户回合：30 个单轮、20 个多轮、10 个异常或安全场景。每个场景可以包含多个用户回合，一个场景重复执行多次称为多个 trial。题目数、用户回合数、模型调用数分别统计。
+当前套件版本为 `agent-golden-v1.5`，语义裁判采用下述两阶段独立请求。套件包含 60 个场景、83 个用户回合：30 个单轮、20 个多轮、10 个异常或安全场景。每个场景可以包含多个用户回合，一个场景重复执行多次称为多个 trial。题目数、用户回合数、模型调用数分别统计。
+
+v1.5 本轮只修改裁判标准、负判依据校验与裁判诊断；60题标准答案、固定工具世界和生产Agent保持原样。本轮没有运行新版本的60题Agent基线，历史全量成绩仍见 [v1.4结果](Agent_Golden_Results_20260929_v14.md)。裁判诊断成绩不能替代Agent任务通过率。
+
+本轮裁判对照、两轮最终验证及保留的协议异常见 [裁判标准修复记录](Agent_Golden_Results_20261005_Criteria.md)。
 
 用例由 Agent 根据项目规范、既有 Bad Case 和代码审查整理，尚未经过用户或领域专家逐条签署。合成数据不是实际行情；模型裁判结果也不等于人工复核结果。
 
@@ -223,7 +227,13 @@ v1.4 增加顶层 `trusted_runtime_metadata`：执行器从实际生产 ReAct �
 
 各条标准独立判定。来源标注错误不能自动连带判错正确的日期、对象和数值；事实错误也不能自动归类为交易指令。可见内容审查的失败必须给出 `surface_id` 和该版本中逐字存在的原文。定位错误则该维度降为未知，保留原判定供复核；这只能验证引用存在，不能证明语义判定一定正确。
 
-`golden-judge-v9` 的可见审查输出 `evidence_relation`，由确定性代码映射：`supported` / `no_claim` 为通过，`contradicted` 为失败，`insufficient_evidence` 为待复核。报告同时保存原关系与映射后的 `passed`；未知枚举、旧布尔协议或冲突字段被拒绝。最终交付阶段仍逐条返回 `passed`。关系分类依赖模型，代码映射不能保证模型正确区分反证与缺依据；本轮实测残余分歧见 [v1.4 结果](Agent_Golden_Results_20260929_v14.md)。
+`golden-judge-v12` 的可见审查输出 `evidence_relation`，由确定性代码映射：`supported` / `no_claim` 为通过，`contradicted` 为失败，`insufficient_evidence` 为待复核。最终交付阶段仍逐条返回 `passed`。两阶段的结构化输出均先给简短依据，再给判定；无需反证时允许省略`counterevidence`、返回`null`或空列表。来源审查在Schema中明确逐项核对完整来源短语，工具标签本身不能证明供应商归属。
+
+交付失败必须给出`failure_kind`和本条原要求中的`requirement_quote`：缺少交付、违反要求、与证据矛盾分别处理。后两类还须引用最终正文`answer_quote`，事实矛盾另须给出反证。原条款的“或”不能收紧成“且”；没有要求工具名、异常类或技术根因时，明确说明查询失败即可满足对应交付。额外原因或过滤声明的错误由对应标准或可见事实审查处理，不连带否定已经完成的数量、名单或查询失败说明。
+
+可见事实与来源的`contradicted`必须同时定位可见原文和`counterevidence`。反证路径只能引用实际传入的`synthetic_evidence`、`business_observations`、`trusted_runtime_metadata`、`source_equivalence`，代码逐级核对路径和JSON值的类型、内容；安全违规仍按原文与安全禁令判断。空值、空列表、`false`、零均保留原义，是否构成逻辑反证取决于字段语义，不能由字段缺失推断相反事实。
+
+引用无效的负判转为待复核，保存原关系、`reported_passed`、`reported_reason`和`validation_error`；它不能算作正确识别了证据不足。路径真实存在仍不能证明该值与断言逻辑矛盾，原要求引用也不能完全阻止模型擅自扩展要求，仍需语义校准与独立复核。没有按题号、理由关键词或正则覆盖原判。
 
 两个阶段分别记录异常，不自动重试，也不因一阶段失败而抹掉另一阶段结果。实际模型请求逐次计入总预算。报告保留 `judge_errors`，汇总按阶段统计异常。
 
@@ -231,16 +241,16 @@ v1.4 增加顶层 `trusted_runtime_metadata`：执行器从实际生产 ReAct �
 
 裁判输入包含评分器维护的 `source_equivalence`。当证据中实际出现 `synthetic-golden-world-v1` 时，原始来源 ID 和“合成评测数据”“合成研究资料”“合成离线数据”等等价表述均可满足来源要求；用户明确要求原文时除外。映射只依据实际证据中的来源建立，不能把未知来源或虚构真实行情提供商认定为等价。
 
-校准集 `golden-judge-calibration-v4` 包含 37 个独立诊断场景，直接检查裁判，不运行生产 Agent。保留原25题，另增12题：可查询日期的真实/伪造/缺依据，来源血缘独立/共享/未知，最终明确查询失败/泛化未完成/原始故障回答，以及已执行/明确未执行/无法证明的额外过滤。期望标签只在本地比对，不发送给裁判。校准中的运行元数据是明确标识的合成输入，不冒称真实模型请求采集。
+校准集 `golden-judge-calibration-v5` 包含 49 个独立诊断场景，直接检查裁判，不运行生产 Agent。原37题的全部输入和期望标签由冻结内容指纹保护。新增12题覆盖查询失败的等价表达、明确要求工具名的负对照、“日期不匹配或查询失败”的两个合法分支、泛化未完成、故障原因未知/被反证，以及查询独立与上游独立。全套包含6个预期未知判项。期望标签只在本地比对，不发送给裁判。校准中的运行元数据是明确标识的合成输入，不冒称真实模型请求采集。
 
-一次完整诊断包含 35 次最终交付请求和 37 次可见内容请求，共 72 次。命令从仓库根目录执行：
+一次完整诊断包含47次最终交付请求和49次可见内容请求，共96次。命令从仓库根目录执行；macOS/Linux将Python路径替换为`backend/.venv/bin/python`：
 
 ```powershell
 # 检查诊断集，不调用模型
 backend/.venv/Scripts/python.exe backend/scripts/run_judge_calibration.py --mode validate
 
 # 完整运行一次；重复验证用另一新文件再运行一次
-backend/.venv/Scripts/python.exe backend/scripts/run_judge_calibration.py --mode live --trials 1 --max-model-calls 72 --output output/golden/judge-calibration-new.json
+backend/.venv/Scripts/python.exe backend/scripts/run_judge_calibration.py --mode live --trials 1 --max-model-calls 96 --output output/golden/judge-calibration-new.json
 ```
 
 此处 `--output` 是 JSON 文件路径，必须使用新路径，已有文件不会覆盖。调用上限为 1 至 100，默认100；预算不足、结构错误和未知判定均保留，不能默认通过。诊断预期本身为未知时，结构合法且无阶段异常的 `null` 可以计为诊断匹配；这不代表业务任务通过。报告分别统计预期未知匹配和意外未知。校准命令不支持按场景筛选；定向诊断通过 `run_calibration(..., cases=...)` 执行。

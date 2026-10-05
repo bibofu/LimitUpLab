@@ -4,7 +4,7 @@ from typing import Any, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-SUITE_VERSION = "agent-golden-v1.4"
+SUITE_VERSION = "agent-golden-v1.5"
 
 
 class StrictModel(BaseModel):

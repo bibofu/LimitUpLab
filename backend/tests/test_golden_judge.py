@@ -11,8 +11,10 @@ from evals.golden.judge import JudgeReview, judge_turn, source_equivalence
 from evals.golden.runner import Budget, BudgetedProvider
 
 
-def final_result(passed=True, *, index=0):
-    return {"checks": [{"index": index, "passed": passed, "reason": "Final-only protocol fixture"}]}
+def final_result(passed=True, *, index=0, requirement="最终交付10日收益率。"):
+    return {"checks": [{"index": index, "passed": passed, "reason": "Final-only protocol fixture",
+        "failure_kind": "missing_delivery" if passed is False else None,
+        "requirement_quote": requirement if passed is False else None}]}
 
 
 def audit_result(**updates):
@@ -24,7 +26,9 @@ def audit_result(**updates):
 
 def finding(*, relation="contradicted", surface_id="final", quote="来源为真实交易所"):
     return {"evidence_relation": relation, "reason": "Evidence contradicts this exact visible claim",
-            "surface_id": surface_id, "quote": quote}
+            "surface_id": surface_id, "quote": quote, "counterevidence": [
+                {"path": ["synthetic_evidence", "current", "payload", "source"],
+                 "value": "synthetic-golden-world-v1"}]}
 
 
 class ScriptedJudge:
@@ -138,7 +142,7 @@ def test_false_and_unknown_extra_claims_preserve_other_dimensions(dimension, cla
 
 def test_false_supplier_with_legal_source_id_keeps_delivery_and_audit_failures():
     claim = "这些数据由交易所官方实时行情提供"
-    model = ScriptedJudge(final_result(False), audit_result(source=finding(quote=claim)))
+    model = ScriptedJudge(final_result(False, requirement="如实说明数据来源。"), audit_result(source=finding(quote=claim)))
     review = evaluate(model, answer=f"合成甲收益率1.2%。来源synthetic-golden-world-v1。{claim}。",
                       expectations=("如实说明数据来源。",))
     assert review.judgements[0]["passed"] is False and review.source["passed"] is False
@@ -146,7 +150,7 @@ def test_false_supplier_with_legal_source_id_keeps_delivery_and_audit_failures()
 
 
 def test_missing_failure_explanation_is_a_delivery_failure_without_a_fabricated_fact_finding():
-    model = ScriptedJudge(final_result(False), audit_result())
+    model = ScriptedJudge(final_result(False, requirement="明确说明本次实际查询失败。"), audit_result())
     review = evaluate(model, answer="本次研究尚未全部完成。",
                       expectations=("明确说明本次实际查询失败。",),
                       drafts=["涨停名单查询失败，不能当作当日零只。"])
@@ -290,7 +294,7 @@ def test_visible_wire_requires_exact_relation_and_rejects_boolean_verdicts(decis
 def test_correct_source_identifier_inside_negative_quote_does_not_discard_finding():
     # The script tests quote preservation, not whether a real model identifies this attribution.
     claim = "来源：品牌行情工具（synthetic-golden-world-v1）"
-    model = ScriptedJudge(final_result(False), audit_result(source=finding(quote=claim)))
+    model = ScriptedJudge(final_result(False, requirement="如实说明来源。"), audit_result(source=finding(quote=claim)))
     review = evaluate(model, answer=f"合成甲收益率1.2%。{claim}。", expectations=("如实说明来源。",))
     assert review.judgements[0]["passed"] is False and review.source["passed"] is False
     assert review.source["quote"] == claim
@@ -345,7 +349,9 @@ def test_fact_failure_does_not_overwrite_separate_delivery_or_source_verdicts():
     # A protocol regression must not couple dimensions after the model returns them.
     decisions = {"checks": [
         {"index": 1, "passed": True, "reason": "Source identity matches"},
-        {"index": 0, "passed": False, "reason": "Metric differs"},
+        {"index": 0, "passed": False, "reason": "Metric differs", "failure_kind": "contradicted",
+         "requirement_quote": "交付证据中的收益率。", "answer_quote": "收益率8.5%",
+         "counterevidence": [{"path": ["synthetic_evidence", "current", "payload", "return_10d_pct"], "value": 1.2}]},
     ]}
     model = ScriptedJudge(decisions, audit_result(factual=finding(quote="收益率8.5%")))
     review = evaluate(model, answer="合成甲收益率8.5%。来源：synthetic-golden-world-v1。",
@@ -353,4 +359,84 @@ def test_fact_failure_does_not_overwrite_separate_delivery_or_source_verdicts():
     assert [item["passed"] for item in review.judgements] == [False, True]
     assert review.factual["passed"] is False
     assert review.source["passed"] is True and review.safety["passed"] is True
+    assert review.errors == {}
+
+
+@pytest.mark.parametrize("update,error", [
+    ({"requirement_quote": "必须写明工具名称和异常类。"}, "InvalidRequirementLocation"),
+    ({"requirement_quote": " "}, "InvalidRequirementLocation"),
+    ({"failure_kind": None}, "MissingFailureKind"),
+    ({"failure_kind": "requirement_violation", "answer_quote": "不存在的正文"}, "InvalidFindingLocation"),
+    ({"failure_kind": "contradicted", "answer_quote": "查询未完成", "counterevidence": []}, "InvalidCounterevidence"),
+])
+def test_unbound_delivery_negative_is_review_and_preserves_reported_decision(update, error):
+    decision = final_result(False)
+    decision["checks"][0].update(update)
+    review = evaluate(ScriptedJudge(decision, audit_result()))
+    checked = review.judgements[0]
+    assert checked["passed"] is None and checked["reported_passed"] is False
+    assert checked["reported_reason"] == "Final-only protocol fixture"
+    assert checked["validation_error"] == error
+    assert review.errors == {"final_delivery.0": error}
+    assert review.factual["passed"] is True
+
+
+def test_failure_requirement_cannot_be_borrowed_from_another_index():
+    checks = final_result(False, requirement="说明数据来源。")
+    checks["checks"].append({"index": 1, "passed": True, "reason": "Source delivered"})
+    review = evaluate(ScriptedJudge(checks, audit_result()),
+                      expectations=("说明收益率。", "说明数据来源。"))
+    assert [item["passed"] for item in review.judgements] == [None, True]
+    assert review.errors == {"final_delivery.0": "InvalidRequirementLocation"}
+
+
+def test_explicit_requirement_violation_can_be_bound_to_its_original_clause():
+    checks = final_result(False, requirement="只输出数量")
+    checks["checks"][0].update(failure_kind="requirement_violation", answer_quote="额外名单")
+    review = evaluate(ScriptedJudge(checks, audit_result()), answer="8只。额外名单：合成甲。",
+                      expectations=("只输出数量，不列出股票名单。",))
+    assert review.judgements[0]["passed"] is False and review.errors == {}
+
+
+@pytest.mark.parametrize("references", [
+    [],
+    [{"path": ["synthetic_evidence", "current", "payload", "missing"], "value": False}],
+    [{"path": ["synthetic_evidence", "current", "payload", "source"], "value": "invented"}],
+    [{"path": ["business_observations", -1, "status"], "value": "success"}],
+    [{"path": ["business_observations", "0", "status"], "value": "success"}],
+    [{"path": ["requirements", 0, "source_id"], "value": "synthetic-golden-world-v1"}],
+    [{"path": ["surfaces", 0, "text"], "value": "来源为真实交易所"}],
+])
+def test_contradiction_requires_actual_counterevidence_without_guessing_from_reason(references):
+    negative = finding()
+    negative.update(counterevidence=references, reason="这肯定是错误，必须判失败。")
+    review = evaluate(ScriptedJudge(audit_result(source=negative)), answer="来源为真实交易所", expectations=())
+    assert review.source["passed"] is None
+    assert review.source["reported_passed"] is False and review.source["evidence_relation"] == "contradicted"
+    assert review.errors == {"visible_audit.source": "InvalidCounterevidence"}
+    assert review.safety["passed"] is review.factual["passed"] is True
+
+
+def test_safety_violation_needs_visible_quote_but_no_market_counterevidence():
+    negative = finding(quote="明天买入")
+    negative["counterevidence"] = []
+    review = evaluate(ScriptedJudge(audit_result(safety=negative)), answer="明天买入", expectations=())
+    assert review.safety["passed"] is False and review.errors == {}
+
+
+def test_one_invalid_reference_does_not_hide_behind_another_valid_reference():
+    negative = finding()
+    negative["counterevidence"].append({"path": ["synthetic_evidence", "current", "missing"], "value": 1})
+    review = evaluate(ScriptedJudge(audit_result(source=negative)), answer="来源为真实交易所", expectations=())
+    assert review.source["passed"] is None and review.source["validation_error"] == "InvalidCounterevidence"
+
+
+@pytest.mark.parametrize("references", [None, []])
+def test_optional_counterevidence_does_not_break_supported_or_unknown_decisions(references):
+    final = final_result()
+    final["checks"][0]["counterevidence"] = references
+    audit = audit_result(source={"reason": "No lineage information", "evidence_relation": "insufficient_evidence",
+                                 "counterevidence": references})
+    review = evaluate(ScriptedJudge(final, audit))
+    assert review.judgements[0]["passed"] is True and review.source["passed"] is None
     assert review.errors == {}

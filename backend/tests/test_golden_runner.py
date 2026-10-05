@@ -117,6 +117,10 @@ def test_source_audit_applies_without_per_case_semantic_checks(tmp_path, source_
                 relation = "contradicted" if source_verdict is False else "insufficient_evidence"
                 decisions["source"].update(evidence_relation=relation, reason="Scripted source-only finding",
                     surface_id="final", quote=final["text"].splitlines()[0])
+                # Transport fixture only; a real judge must also establish logical relevance.
+                evidence_id, record = next(iter(payload["synthetic_evidence"].items()))
+                decisions["source"]["counterevidence"] = [{
+                    "path": ["synthetic_evidence", evidence_id, "sources"], "value": record["sources"]}]
                 return call("submit_golden_visible_audit", decisions)
             return super().generate_messages(messages, tools, **kwargs)
     result = run_case(example_case(), trial=1, directory=tmp_path,

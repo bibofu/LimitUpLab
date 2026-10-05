@@ -1,6 +1,7 @@
 """Calibration harness protocol tests; scripted judgements are not model accuracy."""
 
 import json
+from copy import deepcopy
 from dataclasses import replace
 from pathlib import Path
 from uuid import uuid4
@@ -35,15 +36,39 @@ class ScriptedJudge:
         action = self.actions.pop(0)
         if isinstance(action, Exception):
             raise action
-        args = action if isinstance(action, dict) else {"checks": [
-            {"index": index, "passed": value, "reason": "Scripted protocol fixture"}
+        args = deepcopy(action) if isinstance(action, dict) else {"checks": [
+            {"index": index, "passed": value, "reason": "Scripted protocol fixture",
+             "failure_kind": "missing_delivery" if value is False else None,
+             "requirement_quote": payload["requirements"][index] if value is False else None}
             for index, value in enumerate(action)]}
+        # Supply real input locations for protocol tests only. This scripted
+        # mapping does not assert that the cited field logically refutes a claim.
+        if payload["phase"] == "visible_audit":
+            def first_leaf(value, path):
+                if isinstance(value, dict):
+                    for key, item in value.items():
+                        found = first_leaf(item, [*path, key])
+                        if found:
+                            return found
+                elif isinstance(value, list):
+                    for index, item in enumerate(value):
+                        found = first_leaf(item, [*path, index])
+                        if found:
+                            return found
+                elif len(path) >= 3:
+                    return {"path": path, "value": value}
+            reference = next((ref for root in ("synthetic_evidence", "business_observations", "trusted_runtime_metadata")
+                              if (ref := first_leaf(payload[root], [root]))), None)
+            for dimension in ("source", "factual"):
+                check = args.get(dimension, {})
+                if check.get("evidence_relation") == "contradicted" and reference:
+                    check.setdefault("counterevidence", [reference])
         return AIMessage(content="", tool_calls=[{"name": tools[0]["function"]["name"], "id": "judge", "args": args}])
 
 
 def test_calibration_contrasts_and_original_source_preserve_facts():
     cases = {case.id: case for case in load_calibration_cases()}
-    assert len(cases) == 37
+    assert len(cases) == 49
     positive = cases["source_original_id"]
     assert "synthetic-golden-world-v1" in positive.answer and positive.expected == (True,) * 5
     for key in ("source_chinese_equivalent", "source_chinese_paraphrase"):
@@ -56,7 +81,7 @@ def test_calibration_contrasts_and_original_source_preserve_facts():
     assert cases["historical_transactions"].expected == (True,) * 4
     assert cases["explicit_trade_instructions"].expected == (False, True, True)
     assert all(len(case.expected) == len(case.expectations) + 3 for case in cases.values())
-    assert sum(1 + bool(case.expectations) for case in cases.values()) == 72
+    assert sum(1 + bool(case.expectations) for case in cases.values()) == 96
 
 
 def test_full_scripted_suite_maps_all_phases_without_live_requests():
@@ -69,9 +94,9 @@ def test_full_scripted_suite_maps_all_phases_without_live_requests():
             surface_id="draft_0" if case.drafts else "final"))
     provider = ScriptedJudge(actions)
     report = run_calibration(provider)
-    assert report["summary"]["complete"] and report["summary"]["counts"] == {"match": 37}
-    assert report["logical_calls_used"] == len(provider.calls) == 72
-    assert report["summary"]["expected_unknown_matches"] == 4
+    assert report["summary"]["complete"] and report["summary"]["counts"] == {"match": 49}
+    assert report["logical_calls_used"] == len(provider.calls) == 96
+    assert report["summary"]["expected_unknown_matches"] == 6
     assert report["summary"]["unexpected_unknown_decisions"] == 0
     assert not provider.actions
     relations = {True: "supported", False: "contradicted", None: "insufficient_evidence"}
@@ -165,8 +190,8 @@ def test_calibration_budget_stops_without_hidden_extra_requests():
     provider = ScriptedJudge([cases[0].expected[:-3]])
     report = run_calibration(provider, trials=2, max_calls=1)
     assert len(provider.calls) == 1 and report["logical_calls_used"] == 1
-    assert report["summary"]["planned"] == 74 and not report["summary"]["complete"]
-    assert report["planned_logical_calls"] == 144
+    assert report["summary"]["planned"] == 98 and not report["summary"]["complete"]
+    assert report["planned_logical_calls"] == 192
     assert report["stop_reason"] == "model_call_budget"
     assert report["results"][0]["actual"] == [True, True, None, None, None]
     assert report["results"][0]["phase_errors"] == {"visible_audit": "BudgetExceeded"}
@@ -261,8 +286,8 @@ def test_validate_cli_does_not_construct_model(monkeypatch, capsys):
     monkeypatch.setattr("app.services.llm_provider.get_llm_provider", lambda: pytest.fail("No live provider in validate"))
     assert main(["--mode", "validate"]) == 0
     result = json.loads(capsys.readouterr().out)
-    assert result["cases"] == 37 and result["model_calls"] == 0
-    assert result["planned_logical_calls"] == 72
+    assert result["cases"] == 49 and result["model_calls"] == 0
+    assert result["planned_logical_calls"] == 96
 
 
 def test_original_25_diagnostics_remain_first_and_unchanged_in_scope():
@@ -361,6 +386,19 @@ def test_provider_failure_is_not_a_successfully_predicted_unknown():
     assert report["results"][0]["phase_errors"] == {"final_delivery": "RuntimeError"}
     assert report["summary"]["decision_match_rate"] == 3 / 4
     assert report["summary"]["expected_unknown_matches"] == 1
+
+
+def test_invalid_counterevidence_cannot_count_as_correct_expected_unknown():
+    case = next(case for case in load_calibration_cases() if case.id == "additional_filters_unknown")
+    audit = visible(True, True, False, quote=case.answer)
+    audit["factual"]["counterevidence"] = []
+    report = run_calibration(ScriptedJudge([(True,), audit]), cases=[case], max_calls=2)
+    item = report["results"][0]
+    assert item["actual"] == list(case.expected)
+    assert item["phase_errors"] == {"visible_audit.factual": "InvalidCounterevidence"}
+    assert item["visible_checks"]["factual"]["reported_passed"] is False
+    assert item["status"] == "review" and report["summary"]["expected_unknown_matches"] == 0
+    assert report["summary"]["decision_match_rate"] == 3 / 4
 
 
 @pytest.mark.parametrize("budget", [0, 101])

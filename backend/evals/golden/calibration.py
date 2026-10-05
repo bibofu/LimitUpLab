@@ -11,7 +11,7 @@ from pathlib import Path
 from app.models import AgentChatResponse, AgentToolTrace
 from evals.golden.judge import DELIVERY_SYSTEM, JUDGE_VERSION, VISIBLE_SYSTEM, judge_turn
 
-CALIBRATION_VERSION = "golden-judge-calibration-v4"
+CALIBRATION_VERSION = "golden-judge-calibration-v5"
 SOURCE = "synthetic-golden-world-v1"
 FACT_CHECK = "最终回答须交付华岳科技、截至2026-09-22、10日收益率1.2%，对象、日期、数值与单位必须与工具证据一致。"
 SOURCE_CHECK = "来源标记为合成评测数据，不添加其他市场统计或投资建议。"
@@ -121,7 +121,8 @@ def load_calibration_cases() -> list[CalibrationCase]:
     cases.append(CalibrationCase("greeting_without_source_claim", "你好", "你好，有什么研究问题需要帮忙？",
                                 (), (True, True, True), {}))
     from evals.golden.calibration_contrasts import load_additional_contrasts
-    return [*cases, *load_additional_contrasts()]
+    from evals.golden.calibration_criteria_contrasts import load_criteria_contrasts
+    return [*cases, *load_additional_contrasts(), *load_criteria_contrasts()]
 
 
 def _explicit_unknown(item, index):
