@@ -175,8 +175,8 @@ def main(argv=None):
                 report["model_calls_used"] = budget.used
                 save_report(report, output)
                 print(f"[{result['verdict']}] {case.id} trial={trial} {result['duration_seconds']}s calls={budget.used}", flush=True)
-                if result.get("stop_reason") == "model_call_budget":
-                    report["stop_reason"] = "model_call_budget"
+                if result.get("stop_reason") in {"model_call_budget", "budget_persistence_error"}:
+                    report["stop_reason"] = result["stop_reason"]
                     return 2
         report.pop("stop_reason", None)
     except KeyboardInterrupt:

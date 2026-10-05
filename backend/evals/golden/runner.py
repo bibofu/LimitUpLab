@@ -16,6 +16,7 @@ from app.models import AgentChatRequest, AgentChatResponse, ChatSessionMemory, C
 from app.repositories.chat_memory_repository import SQLiteChatMemoryRepository
 from app.repositories.chat_session_repository import SQLiteChatSessionRepository
 from app.services.llm_provider import capture_llm_usage
+from app.services.execution_diagnostics import exception_diagnostics, mark_execution_origin
 from app.services.session_memory import prepare_session_context
 from evals.golden.contracts import Check, verdict
 from evals.golden.judge import judge_turn
@@ -26,20 +27,38 @@ class BudgetExceeded(RuntimeError):
     pass
 
 
+class BudgetPersistenceError(RuntimeError):
+    """Reservation persistence failed; no provider may be entered on this budget."""
+
+
 class Budget:
     def __init__(self, maximum, used=0, on_take=None):
         self.maximum, self.used = maximum, used
         self.denied = 0
         self.on_take = on_take
+        self.persistence_diagnostics = None
 
     def take(self):
+        if self.persistence_diagnostics is not None:
+            error = BudgetPersistenceError("Evaluation budget persistence previously failed")
+            mark_execution_origin(error, origin="budget_persistence", provider_entered=False)
+            raise error
         if self.used >= self.maximum:
             self.denied += 1
             raise BudgetExceeded("Evaluation model-call budget exhausted")
         self.used += 1
         # Reserve durably before making a billable request, including interrupted trials.
         if self.on_take is not None:
-            self.on_take(self.used)
+            try:
+                self.on_take(self.used)
+            except Exception as cause:
+                # The callback may have replaced JSON before a later write failed.
+                # Keep the conservative reservation and latch the failure; never replay it.
+                error = BudgetPersistenceError("Evaluation budget reservation could not be persisted")
+                mark_execution_origin(error, origin="budget_persistence", provider_entered=False)
+                error.__cause__ = cause
+                self.persistence_diagnostics = exception_diagnostics(error, stage="budget_reservation")
+                raise error from cause
 
 
 def without_sdk_retries(provider):
@@ -66,16 +85,21 @@ class BudgetedProvider:
         self.model = getattr(provider, "model", type(provider).__name__)
 
     def generate_messages(self, *args, **kwargs):
-        self.budget.take()
-        return self.provider.generate_messages(*args, **kwargs)
+        return self._invoke("generate_messages", *args, **kwargs)
 
     def generate_function_call(self, *args, **kwargs):
-        self.budget.take()
-        return self.provider.generate_function_call(*args, **kwargs)
+        return self._invoke("generate_function_call", *args, **kwargs)
 
     def generate(self, *args, **kwargs):
+        return self._invoke("generate", *args, **kwargs)
+
+    def _invoke(self, method, *args, **kwargs):
         self.budget.take()
-        return self.provider.generate(*args, **kwargs)
+        try:
+            return getattr(self.provider, method)(*args, **kwargs)
+        except Exception as error:
+            mark_execution_origin(error, origin="provider_invocation", provider_entered=True)
+            raise
 
 
 def usage_payload(tracker):
@@ -92,6 +116,12 @@ def run_case(case, *, trial, directory, provider, judge_provider=None, profile="
 
     started = perf_counter()
     budget = getattr(provider, "budget", None)
+    budgets = []
+    for item in (budget, getattr(judge_provider, "budget", None)):
+        if item is not None and all(item is not previous for previous in budgets):
+            budgets.append(item)
+    def persistence_failures():
+        return [item.persistence_diagnostics for item in budgets if item.persistence_diagnostics is not None]
     denied_before = budget.denied if budget else 0
     work = Path(directory) / "sessions" / f"{case.id}-t{trial}-{uuid4().hex[:8]}"
     work.mkdir(parents=True)
@@ -142,15 +172,18 @@ def run_case(case, *, trial, directory, provider, judge_provider=None, profile="
             turn_started = perf_counter()
             agent_usage = None
             runtime_metadata = RuntimeMetadataCapture(provider)
+            execution_stage = "session_context"
             try:
                 chats.append_message(ChatSessionMessage(message_id=f"user-{index}", session_id=session_id,
                     role="user", content=turn.user, run_id=row["run_id"], created_at=datetime.now(timezone.utc)), owner_id=owner)
                 with capture_llm_usage() as agent_usage:
                     context, memory = prepare_session_context(session_id=session_id, owner_id=owner,
                         messages=session.messages, repository=memories, llm_provider=provider)
+                    execution_stage = "agent_execution"
                     response = answer_first_board_chat(request=request, events=registry.events,
                         conversation_messages=context, session_memory=memory, llm_provider=runtime_metadata,
                         tool_registry=registry, answer_event_callback=event)
+                execution_stage = "journal_finish"
                 response = AgentChatResponse.model_validate(journal.finish(row["run_id"], owner, response.model_dump(mode="json")))
             except Exception as exc:
                 error = type(exc).__name__
@@ -158,6 +191,7 @@ def run_case(case, *, trial, directory, provider, judge_provider=None, profile="
                     detail=error).model_dump()], "verdict": "fail", "events": events,
                     "runtime_metadata": runtime_metadata.snapshots,
                     "runtime_metadata_errors": runtime_metadata.errors,
+                    "execution_diagnostics": exception_diagnostics(exc, stage=execution_stage),
                     "agent_usage": usage_payload(agent_usage) if agent_usage else {},
                     "duration_seconds": round(perf_counter() - turn_started, 3)})
                 break
@@ -167,7 +201,7 @@ def run_case(case, *, trial, directory, provider, judge_provider=None, profile="
             judge_errors = {}
             judge_diagnostics = {}
             judge_usage = None
-            if judge_provider is not None:
+            if judge_provider is not None and not persistence_failures():
                 tracker = None
                 try:
                     with capture_llm_usage() as tracker:
@@ -204,7 +238,7 @@ def run_case(case, *, trial, directory, provider, judge_provider=None, profile="
                 "context_message_count": len(context), "checks": [check.model_dump() for check in checks],
                 "verdict": verdict(checks), "agent_usage": usage_payload(agent_usage), "judge_usage": judge_usage,
                 "duration_seconds": round(perf_counter() - turn_started, 3)})
-            if budget and budget.denied > denied_before:
+            if persistence_failures() or budget and budget.denied > denied_before:
                 break
     trial_verdict = verdict([Check(name=f"turn_{item['index']}", passed=(True if item["verdict"] == "pass"
         else False if item["verdict"] == "fail" else None)) for item in results])
@@ -216,10 +250,18 @@ def run_case(case, *, trial, directory, provider, judge_provider=None, profile="
     if budget_exhausted:
         trial_verdict = "harness_error"
         error = "Evaluation model-call budget exhausted; this is not an Agent capability score"
+    persistence_diagnostics = persistence_failures()
+    if persistence_diagnostics:
+        trial_verdict = "harness_error"
+        error = "Evaluation budget persistence failed before provider invocation"
+        if results:
+            results[-1]["verdict"] = "harness_error"
     return {"case_id": case.id, "trial": trial, "category": case.category, "family": case.family,
         "split": case.split, "tags": case.tags, "definition": case.model_dump(), "verdict": trial_verdict,
         "turns": results, "error": error, "unsupported_tools": unsupported,
-        "completed": len(results) == len(case.turns) and not budget_exhausted,
+        "completed": len(results) == len(case.turns) and not budget_exhausted and not persistence_diagnostics,
+        "budget_persistence_diagnostics": persistence_diagnostics,
         "planned_turns": len(case.turns), "session_directory": str(work),
-        "stop_reason": "model_call_budget" if budget_exhausted else "execution_error" if error else "finished",
+        "stop_reason": "budget_persistence_error" if persistence_diagnostics else
+            "model_call_budget" if budget_exhausted else "execution_error" if error else "finished",
         "duration_seconds": round(perf_counter() - started, 3)}

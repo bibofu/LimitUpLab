@@ -242,6 +242,28 @@ def test_harness_budget_exhaustion_is_not_model_failure(tmp_path):
     assert result["stop_reason"] == "model_call_budget"
 
 
+def test_cli_stops_after_budget_persistence_error_without_starting_next_case(tmp_path, monkeypatch):
+    module = cli_module()
+    cases = [example_case(), example_case().model_copy(update={"id": "later_fixture"})]
+    monkeypatch.setattr(module, "load_cases", lambda: cases)
+    monkeypatch.setattr("app.config.configure_runtime_environment", lambda: None)
+    monkeypatch.setattr("app.services.llm_provider.get_llm_provider", ScriptedModel)
+    original_save, failures = module.save_report, []
+    def fail_first_reservation(report, directory):
+        if report["model_calls_used"] == 1 and not report["results"] and not failures:
+            failures.append(True)
+            raise PermissionError(13, "PRIVATE_PERSISTENCE_ERROR", "PRIVATE_REPORT_PATH")
+        return original_save(report, directory)
+    monkeypatch.setattr(module, "save_report", fail_first_reservation)
+    assert module.main(["--mode", "live", "--judge", "model", "--output", str(tmp_path)]) == 2
+    report = json.loads((tmp_path / "report.json").read_text(encoding="utf-8"))
+    assert report["stop_reason"] == "budget_persistence_error"
+    assert report["model_calls_used"] == 1 and len(report["results"]) == 1
+    assert report["results"][0]["verdict"] == "harness_error"
+    assert not report["results"][0]["completed"]
+    assert "PRIVATE" not in json.dumps(report)
+
+
 def test_judge_requires_complete_unique_indices():
     class MissingJudge:
         def generate_messages(self, *args, **kwargs):

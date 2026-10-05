@@ -80,10 +80,25 @@ def _rating_views(messages):
                 or count != view["row_count"] or not isinstance(key, str) or not 1 <= len(key) <= 128
                 or view.get("evidence_scope") != "current_run" or view.get("historical_reference") is not False):
             continue
+        retained = {"returned_candidate_count": count, "count_scope": scope}
+        if type(view.get("source_truncated")) is bool:
+            retained["source_truncated"] = view["source_truncated"]
+        exclusions = metadata.get("filtered_out")
+        # EvidenceStore.view compacts this known metadata list to four rows and
+        # a structural omission marker. Record what was seen, not a claim that
+        # the upstream source is incomplete, nor arbitrary payload instructions.
+        if isinstance(exclusions, list) and len(exclusions) == 5:
+            marker = exclusions[-1]
+            if (isinstance(marker, dict) and set(marker) == {"truncated_items"}
+                    and type(marker["truncated_items"]) is int and marker["truncated_items"] > 0
+                    and all(isinstance(row, dict) and row.get("included") is False
+                            and "truncated_items" not in row for row in exclusions[:-1])):
+                retained["preview_omissions"] = [{"path": ["metadata", "filtered_out"],
+                    "visible_items": 4, "omitted_items": marker["truncated_items"]}]
         snapshots.append({"origin": "agent_evidence_view",
             "tool_message_sha256": hashlib.sha256(message.content.encode("utf-8")).hexdigest(),
             "evidence_id": key, "tool": "first_board_ratings",
-            "metadata": {"returned_candidate_count": count, "count_scope": scope}})
+            "metadata": retained})
     return snapshots
 
 

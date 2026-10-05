@@ -12,7 +12,7 @@ from app.models import AgentChatResponse, AgentToolTrace
 from evals.golden.judge import DELIVERY_SYSTEM, JUDGE_VERSION, VISIBLE_SYSTEM, judge_turn
 from evals.golden.protocol_metrics import protocol_metrics
 
-CALIBRATION_VERSION = "golden-judge-calibration-v6"
+CALIBRATION_VERSION = "golden-judge-calibration-v7"
 SOURCE = "synthetic-golden-world-v1"
 FACT_CHECK = "最终回答须交付华岳科技、截至2026-09-22、10日收益率1.2%，对象、日期、数值与单位必须与工具证据一致。"
 SOURCE_CHECK = "来源标记为合成评测数据，不添加其他市场统计或投资建议。"
@@ -124,7 +124,9 @@ def load_calibration_cases() -> list[CalibrationCase]:
     from evals.golden.calibration_contrasts import load_additional_contrasts
     from evals.golden.calibration_criteria_contrasts import load_criteria_contrasts
     from evals.golden.calibration_scope_contrasts import load_scope_contrasts
-    return [*cases, *load_additional_contrasts(), *load_criteria_contrasts(), *load_scope_contrasts()]
+    from evals.golden.calibration_preview_contrasts import load_preview_contrasts
+    return [*cases, *load_additional_contrasts(), *load_criteria_contrasts(), *load_scope_contrasts(),
+            *load_preview_contrasts()]
 
 
 def _explicit_unknown(item, index):
@@ -221,10 +223,16 @@ def run_calibration(provider, *, trials=1, max_calls=120, output=None, cases=Non
             except Exception as error:
                 item["error_type"] = type(error).__name__  # Never persist provider error text or configuration.
             item["logical_calls_used"] = budget.used - before
+            if budget.persistence_diagnostics is not None:
+                item["status"] = "harness_error"
+                item["budget_persistence_diagnostics"] = budget.persistence_diagnostics
+                report["stop_reason"] = "budget_persistence_error"
             report["results"].append(item)
             if budget.denied:
                 report["stop_reason"] = "model_call_budget"
             save()
+            if budget.persistence_diagnostics is not None:
+                return report
     return report
 
 

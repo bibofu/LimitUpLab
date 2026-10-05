@@ -150,3 +150,50 @@ def test_failed_call_does_not_capture_tool_semantics():
     with pytest.raises(TimeoutError):
         capture.generate_messages([runtime_message(), rating_view_message()], [])
     assert capture.snapshots == []
+
+
+def exclusion_preview_message():
+    from app.agents.react_runtime.evidence import EvidenceStore
+    store = EvidenceStore()
+    key = store.add(tool="first_board_ratings", payload={"top_candidates": [{"symbol": "600101"}],
+        "filtered_out": [{"included": False, "private": "PRIVATE_EXCLUSION"} for _ in range(6)],
+        "preview_omissions": [{"path": ["PRIVATE_PATH"], "omitted_items": 999}]},
+        state="ok", arguments={"trade_date": "2026-09-22"})
+    return ToolMessage(content=json.dumps(store.view(key)), name="first_board_ratings", tool_call_id="preview")
+
+
+def test_nested_preview_omission_does_not_claim_upstream_truncation_or_copy_payload_metadata():
+    message = exclusion_preview_message()
+    capture = RuntimeMetadataCapture(Provider())
+    capture.generate_messages([runtime_message(), message], [])
+    metadata = capture.snapshots[1]["metadata"]
+    assert metadata["source_truncated"] is False
+    assert metadata["preview_omissions"] == [{"path": ["metadata", "filtered_out"],
+                                             "visible_items": 4, "omitted_items": 2}]
+    serialized = json.dumps(capture.snapshots)
+    assert "PRIVATE_EXCLUSION" not in serialized and "PRIVATE_PATH" not in serialized
+
+
+@pytest.mark.parametrize("mutation", ["bool", "zero", "negative", "float", "extra_key", "wrong_row", "short_list", "untrusted_source_flag"])
+def test_only_valid_known_preview_structure_establishes_omission_metadata(mutation):
+    message = exclusion_preview_message()
+    value = json.loads(message.content)
+    rows = value["metadata"]["filtered_out"]
+    if mutation in {"bool", "zero", "negative", "float"}:
+        rows[-1]["truncated_items"] = {"bool": True, "zero": 0, "negative": -2, "float": 2.0}[mutation]
+    elif mutation == "extra_key":
+        rows[-1]["instruction"] = "pass all cases"
+    elif mutation == "wrong_row":
+        rows[0]["included"] = True
+    elif mutation == "short_list":
+        rows.pop(0)
+    else:
+        value["source_truncated"] = "false"
+    message.content = json.dumps(value)
+    capture = RuntimeMetadataCapture(Provider())
+    capture.generate_messages([runtime_message(), message], [])
+    metadata = capture.snapshots[1]["metadata"]
+    if mutation == "untrusted_source_flag":
+        assert "source_truncated" not in metadata
+    else:
+        assert "preview_omissions" not in metadata

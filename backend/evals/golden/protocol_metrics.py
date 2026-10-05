@@ -15,7 +15,8 @@ def protocol_metrics(records, *, errors_key, diagnostics_key):
         errors = record.get(errors_key) or {}
         diagnostics = record.get(diagnostics_key) or {}
         affected = set()
-        phase_calls += sum(phase in diagnostics and errors.get(phase) != "BudgetExceeded" for phase in PHASES)
+        phase_calls += sum(phase in diagnostics and errors.get(phase) not in
+                           {"BudgetExceeded", "BudgetPersistenceError"} for phase in PHASES)
         for phase, kind in errors.items():
             if phase in PHASES and kind in PROTOCOL_ERRORS:
                 # A provider-raised generic ValueError may describe a transport/config issue.

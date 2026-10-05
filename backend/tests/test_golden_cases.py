@@ -8,7 +8,7 @@ from evals.golden.contracts import Case, SUITE_VERSION
 
 def test_case_counts_ids_and_smoke_distribution():
     cases = load_cases()
-    assert SUITE_VERSION == "agent-golden-v1.6"
+    assert SUITE_VERSION == "agent-golden-v1.7"
     assert len(cases) == 61
     assert len({case.id for case in cases}) == 61
     assert sum(len(case.turns) for case in cases) == 84
@@ -106,6 +106,17 @@ def test_robustness_variants_do_not_accept_false_completion():
         assert "empty" not in cases[id_].turns[0].expect.statuses
     assert cases["r01_valid_empty"].turns[0].expect.statuses == ["empty"]
     assert cases["r06_user_override"].turns[0].expect.max_tool_calls == 0
+
+
+def test_supported_absence_completes_existence_question_but_empty_lists_remain_empty():
+    cases = {case.id: case for case in load_cases()}
+    existence = cases["s18_absent_rating"].turns[0].expect
+    assert existence.statuses == ["complete"] and existence.require_evidence
+    assert existence.evidence_dates == ["2026-09-22"]
+    assert len(existence.semantic_checks) == 3
+    for name in ("s28_star_first_empty", "r01_valid_empty"):
+        expected = cases[name].turns[0].expect
+        assert expected.statuses == ["empty"] and expected.require_evidence
 
 
 def test_loading_returns_independent_mutable_models():

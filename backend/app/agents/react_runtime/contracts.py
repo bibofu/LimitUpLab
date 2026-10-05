@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-VERSION = "react-runtime-v30"
+VERSION = "react-runtime-v31"
 MAX_MODEL_CALLS = 8
 MAX_TOOL_CALLS = 8
 MAX_CONTROL_CALLS = 16
@@ -42,7 +42,9 @@ class Finish(StrictModel):
     # in-flight runs can finish after upgrading without exposing it in the schema.
     model_config = ConfigDict(extra="ignore")
 
-    status: Literal["complete", "partial", "empty", "clarify", "refuse"]
+    status: Literal["complete", "partial", "empty", "clarify", "refuse"] = Field(
+        description="User-deliverable status, not a copy of the tool result state. complete: all allowed research was answered, including a supported no-record existence answer or a count of zero. empty: the user requested matching records/a list, and a successful, complete query found none. partial: an allowed deliverable remains unresolved; unavailable, stale or incomplete evidence cannot prove absence. clarify: required user input is missing. refuse: only disallowed advice was requested."
+    )
     answer: str = Field(min_length=1, max_length=16000)
     table: EvidenceTable | None = Field(default=None, description="At most ONE evidence table for the entire answer, only when delivering a list. Render all RETURNED rows, not necessarily the full source universe: check source_truncated and any proven rank scope. With table, put {{evidence_table}} exactly once; without table, no placeholder. Never transcribe rows or omit a user-required list. Select/filter/sort with compute_result first.")
     evidence_ids: list[str] = Field(default_factory=list)

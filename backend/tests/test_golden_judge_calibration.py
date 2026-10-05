@@ -68,7 +68,7 @@ class ScriptedJudge:
 
 def test_calibration_contrasts_and_original_source_preserve_facts():
     cases = {case.id: case for case in load_calibration_cases()}
-    assert len(cases) == 55
+    assert len(cases) == 61
     positive = cases["source_original_id"]
     assert "synthetic-golden-world-v1" in positive.answer and positive.expected == (True,) * 5
     for key in ("source_chinese_equivalent", "source_chinese_paraphrase"):
@@ -81,7 +81,7 @@ def test_calibration_contrasts_and_original_source_preserve_facts():
     assert cases["historical_transactions"].expected == (True,) * 4
     assert cases["explicit_trade_instructions"].expected == (False, True, True)
     assert all(len(case.expected) == len(case.expectations) + 3 for case in cases.values())
-    assert sum(1 + bool(case.expectations) for case in cases.values()) == 108
+    assert sum(1 + bool(case.expectations) for case in cases.values()) == 120
 
 
 def test_full_scripted_suite_maps_all_phases_without_live_requests():
@@ -94,9 +94,9 @@ def test_full_scripted_suite_maps_all_phases_without_live_requests():
             surface_id="draft_0" if case.drafts else "final"))
     provider = ScriptedJudge(actions)
     report = run_calibration(provider)
-    assert report["summary"]["complete"] and report["summary"]["counts"] == {"match": 55}
-    assert report["logical_calls_used"] == len(provider.calls) == 108
-    assert report["summary"]["expected_unknown_matches"] == 8
+    assert report["summary"]["complete"] and report["summary"]["counts"] == {"match": 61}
+    assert report["logical_calls_used"] == len(provider.calls) == 120
+    assert report["summary"]["expected_unknown_matches"] == 10
     assert report["summary"]["unexpected_unknown_decisions"] == 0
     assert not provider.actions
     relations = {True: "supported", False: "contradicted", None: "insufficient_evidence"}
@@ -190,8 +190,8 @@ def test_calibration_budget_stops_without_hidden_extra_requests():
     provider = ScriptedJudge([cases[0].expected[:-3]])
     report = run_calibration(provider, trials=2, max_calls=1)
     assert len(provider.calls) == 1 and report["logical_calls_used"] == 1
-    assert report["summary"]["planned"] == 110 and not report["summary"]["complete"]
-    assert report["planned_logical_calls"] == 216
+    assert report["summary"]["planned"] == 122 and not report["summary"]["complete"]
+    assert report["planned_logical_calls"] == 240
     assert report["stop_reason"] == "model_call_budget"
     assert report["results"][0]["actual"] == [True, True, None, None, None]
     assert report["results"][0]["phase_errors"] == {"visible_audit": "BudgetExceeded"}
@@ -290,8 +290,8 @@ def test_validate_cli_does_not_construct_model(monkeypatch, capsys):
     monkeypatch.setattr("app.services.llm_provider.get_llm_provider", lambda: pytest.fail("No live provider in validate"))
     assert main(["--mode", "validate"]) == 0
     result = json.loads(capsys.readouterr().out)
-    assert result["cases"] == 55 and result["model_calls"] == 0
-    assert result["planned_logical_calls"] == 108
+    assert result["cases"] == 61 and result["model_calls"] == 0
+    assert result["planned_logical_calls"] == 120
 
 
 def test_original_25_diagnostics_remain_first_and_unchanged_in_scope():
