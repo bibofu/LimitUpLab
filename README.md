@@ -617,6 +617,8 @@ Linux 使用对应虚拟环境的 `python scripts/check_project.py`。也可通�
 
 旧聊天评测框架已退役；离线回归不代表真实模型回答质量或稳定性已验收。预测结果复盘使用的 Evaluation Agent 和 `rating_evaluation` 仍保留，两者用途不同。
 
+现行聊天回归使用 [Agent Golden 评测](docs/Agent_Golden_Evaluation.md)：v1.6 包含 61 个场景、84 个回合，支持生产默认与扩展工具 profile。协议诊断、模拟环境及答案契约的本轮实施状态见 [v1.6 记录](docs/Agent_Golden_v16_Implementation.md)；新版本真实模型校准及 Agent 基线尚未执行。
+
 GitHub Actions 配置在 `.github/workflows/validate.yml`，对 PR、main 与 codex 分支推送运行 Windows/Linux 两套检查，使用相同验收入口，不需要行情或模型密钥。失败日志保留 7 天；测试数据库不上传。流水线文件进入远端仓库后才能实际触发，分支保护仍需在仓库设置中启用。
 
 ReAct 执行与证据契约见 [LangChain + LangGraph 集成](docs/LangChain_Integration.md) 和 [代码阅读指南](docs/code-reading-guide.md)。以下单项命令仍可用于定位失败。
