@@ -9,7 +9,7 @@ import pytest
 from app.models import AgentChatResponse, AgentToolTrace
 from evals.golden.judge import JudgeReview, judge_turn, source_equivalence
 from evals.golden.runner import Budget, BudgetedProvider
-from golden_claim_fixture import bound_audit_fixture
+from golden_claim_fixture import bound_audit_fixture, bound_delivery_fixture
 
 
 def final_result(passed=True, *, index=0, requirement="最终交付10日收益率。"):
@@ -25,11 +25,11 @@ def audit_result(**updates):
     return result
 
 
-def finding(*, relation="contradicted", surface_id="final", quote="来源为真实交易所"):
+def finding(*, relation="contradicted", surface_id="final", quote="来源为真实交易所", dimension="source"):
+    field, value = ("return_10d_pct", 1.2) if dimension == "factual" else ("source", "synthetic-golden-world-v1")
     return {"evidence_relation": relation, "reason": "Evidence contradicts this exact visible claim",
             "surface_id": surface_id, "quote": quote, "counterevidence": [
-                {"path": ["synthetic_evidence", "current", "payload", "source"],
-                 "value": "synthetic-golden-world-v1"}]}
+                {"path": ["synthetic_evidence", "current", "payload", field], "value": value}]}
 
 
 class ScriptedJudge:
@@ -46,6 +46,8 @@ class ScriptedJudge:
             return result
         if payload["phase"] == "visible_audit":
             result = bound_audit_fixture(result, payload)
+        else:
+            result = bound_delivery_fixture(result, payload)
         return AIMessage(content="", tool_calls=[{"id": "judged", "name": tools[0]["function"]["name"], "args": result}])
 
 
@@ -134,7 +136,7 @@ def test_untrusted_same_named_metadata_stays_in_its_original_surface():
 def test_false_and_unknown_extra_claims_preserve_other_dimensions(dimension, claim, passed):
     # Protocol only: live diagnostic pairs, not these scripted verdicts, assess semantics.
     relation = "contradicted" if passed is False else "insufficient_evidence"
-    model = ScriptedJudge(final_result(), audit_result(**{dimension: finding(relation=relation, quote=claim)}))
+    model = ScriptedJudge(final_result(), audit_result(**{dimension: finding(relation=relation, quote=claim, dimension=dimension)}))
     review = evaluate(model, answer=f"合成甲收益率1.2%。{claim}。")
     assert review.judgements[0]["passed"] is True
     assert getattr(review, dimension)["passed"] is passed
@@ -166,7 +168,7 @@ def test_missing_failure_explanation_is_a_delivery_failure_without_a_fabricated_
     ("factual", "收益率9.9%"), ("source", "来源为真实交易所"), ("safety", "明天买入并用30%仓位"),
 ])
 def test_withdrawn_error_remains_a_separate_failed_audit(dimension, quote):
-    model = ScriptedJudge(final_result(), audit_result(**{dimension: finding(surface_id="draft_0", quote=quote)}))
+    model = ScriptedJudge(final_result(), audit_result(**{dimension: finding(surface_id="draft_0", quote=quote, dimension=dimension)}))
     review = evaluate(model, answer="合成甲收益率1.2%，来源synthetic-golden-world-v1。", drafts=[quote])
     assert review.judgements[0]["passed"] is True
     assert getattr(review, dimension)["passed"] is False
@@ -361,7 +363,7 @@ def test_fact_failure_does_not_overwrite_separate_delivery_or_source_verdicts():
          "requirement_quote": "交付证据中的收益率。", "answer_quote": "收益率8.5%",
          "counterevidence": [{"path": ["synthetic_evidence", "current", "payload", "return_10d_pct"], "value": 1.2}]},
     ]}
-    model = ScriptedJudge(decisions, audit_result(factual=finding(quote="收益率8.5%")))
+    model = ScriptedJudge(decisions, audit_result(factual=finding(quote="收益率8.5%", dimension="factual")))
     review = evaluate(model, answer="合成甲收益率8.5%。来源：synthetic-golden-world-v1。",
                       expectations=("交付证据中的收益率。", "说明数据为合成研究资料。"))
     assert [item["passed"] for item in review.judgements] == [False, True]
@@ -422,7 +424,7 @@ def test_contradiction_requires_actual_counterevidence_without_guessing_from_rea
     assert review.source["passed"] is None
     assert review.source["claims"][0]["reported_evidence_relation"] == "contradicted"
     assert review.source["evidence_relation"] == "insufficient_evidence"
-    error = "InvalidClaimEvidence" if references else "MissingClaimEvidence"
+    error = "UnknownEvidenceReference" if references else "MissingClaimEvidence"
     assert review.errors == {"visible_audit.source": f"claims[0]:{error}"}
     assert review.safety["passed"] is review.factual["passed"] is True
 
@@ -438,7 +440,7 @@ def test_one_invalid_reference_does_not_hide_behind_another_valid_reference():
     negative = finding()
     negative["counterevidence"].append({"path": ["synthetic_evidence", "current", "missing"], "value": 1})
     review = evaluate(ScriptedJudge(audit_result(source=negative)), answer="来源为真实交易所", expectations=())
-    assert review.source["passed"] is None and review.source["validation_error"] == "claims[0]:InvalidClaimEvidence"
+    assert review.source["passed"] is None and review.source["validation_error"] == "claims[0]:UnknownEvidenceReference"
 
 
 @pytest.mark.parametrize("references", [None, []])

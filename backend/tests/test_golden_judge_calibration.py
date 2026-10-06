@@ -62,13 +62,19 @@ class ScriptedJudge:
             # Query-status-only fixtures fall back to their runtime observations.
             reference = next((ref for key, record in payload["synthetic_evidence"].items()
                 if (ref := first_leaf(record.get("payload", {}), ["synthetic_evidence", key, "payload"]))), None)
-            reference = reference or next((ref for root in ("business_observations", "trusted_runtime_metadata")
-                              if (ref := first_leaf(payload[root], [root]))), None)
+            runtime_ref = next((ref for index, item in enumerate(payload["trusted_runtime_metadata"])
+                if (ref := first_leaf(item.get("context", {}), ["trusted_runtime_metadata", index, "context"]))), None)
+            reference = reference or runtime_ref or first_leaf(payload["business_observations"], ["business_observations"])
+            source_ref = first_leaf(payload["source_equivalence"], ["source_equivalence"])
+            source_ref = source_ref or next(({"path": ["synthetic_evidence", key, "payload", "source"],
+                "value": record["payload"]["source"]} for key, record in payload["synthetic_evidence"].items()
+                if isinstance(record.get("payload"), dict) and "source" in record["payload"]), None)
             for dimension in ("source", "factual"):
                 check = args.get(dimension, {})
-                if check.get("evidence_relation") == "contradicted" and reference:
-                    check.setdefault("counterevidence", [reference])
-                    if dimension == "factual" and reference["path"][0] != "synthetic_evidence":
+                selected = source_ref if dimension == "source" else reference
+                if check.get("evidence_relation") == "contradicted" and selected:
+                    check.setdefault("counterevidence", [selected])
+                    if dimension == "factual" and selected["path"][0] != "synthetic_evidence":
                         check["fixture_target"] = "query_status"
             args = bound_audit_fixture(args, payload)
         return AIMessage(content="", tool_calls=[{"name": tools[0]["function"]["name"], "id": "judge", "args": args}])

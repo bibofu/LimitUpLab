@@ -67,6 +67,6 @@ def delivery_finding_error(check, requirement, answer, payload):
 
 
 def retain_unverified_finding(check, error):
-    """Keep the model's negative decision auditable; an invalid negative is not a pass."""
-    check.update(passed=None, reported_passed=False, reported_reason=check["reason"],
-                 validation_error=error, reason=f"Judge negative finding failed citation validation: {error}")
+    """Keep the original verdict auditable when a submitted citation is invalid."""
+    check.update(passed=None, reported_passed=check["passed"], reported_reason=check["reason"],
+                 validation_error=error, reason=f"Judge finding failed citation validation: {error}")
