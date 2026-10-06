@@ -36,7 +36,12 @@ def evaluate(*responses):
 
 
 def audit():
-    return {key: {"evidence_relation": "no_claim", "reason": "No claim"} for key in ("safety", "source", "factual")}
+    return {key: {"claims": [], "reason": "No claim"} for key in ("safety", "source", "factual")}
+
+
+def invalid_claim(*, target="source_attribution", relation="PRIVATE_RELATION"):
+    return {"surface_id": "final", "quote": "PRIVATE_ANSWER", "target": target,
+            "evidence_relation": relation, "evidence": []}
 
 
 def test_schema_errors_have_safe_paths_and_codes_but_never_inputs_messages_or_extra_keys():
@@ -57,12 +62,13 @@ def test_provider_metadata_and_partial_dimension_failure_are_retained_independen
         "finish_reason": "length", "failure_category": "tool_arguments", "tool_call_count": 0,
         "invalid_tool_call_count": 1, "response_kind": "ai_message", "private": "PRIVATE_VALUE"})
     visible = audit()
-    visible["source"]["evidence_relation"] = "PRIVATE_RELATION"
+    visible["source"]["claims"] = [invalid_claim()]
     review = evaluate(error, visible)
     assert review.errors == {"final_delivery": "NativeFunctionCallingError", "visible_audit.source": "ValidationError"}
     assert review.diagnostics["final_delivery"]["finish_reason"] == "length"
     assert review.diagnostics["visible_audit.source"]["schema_errors"] == [
-        {"path": ["evidence_relation"], "type": "literal_error"}]
+        {"path": ["claims", 0, "evidence_relation"], "type": "literal_error",
+         "input_shape": {"shape": "string", "size": len("PRIVATE_RELATION")}}]
     assert review.source is None and review.factual["passed"] is True
     assert "PRIVATE" not in json.dumps(review.diagnostics)
     metrics = protocol_metrics([{"errors": review.errors, "diagnostics": review.diagnostics}],
@@ -75,8 +81,9 @@ def test_provider_metadata_and_partial_dimension_failure_are_retained_independen
 
 def test_three_dimension_schema_failures_affect_one_phase_call():
     review = evaluate({"checks": [{"index": 0, "passed": True, "reason": "Delivered"}]},
-                      {key: {"evidence_relation": "invalid", "reason": "Invalid enum"}
-                       for key in ("safety", "source", "factual")})
+                      {key: {"claims": [invalid_claim(target=target, relation="invalid")], "reason": "Invalid enum"}
+                       for key, target in (("safety", "safety"), ("source", "source_attribution"),
+                                           ("factual", "world_fact"))})
     metrics = protocol_metrics([{"errors": review.errors, "diagnostics": review.diagnostics}],
                                errors_key="errors", diagnostics_key="diagnostics")
     assert metrics["judge_phase_protocol_error_count"] == 0

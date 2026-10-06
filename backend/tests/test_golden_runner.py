@@ -11,6 +11,7 @@ from evals.golden.contracts import Case, Expectation, Turn
 from evals.golden.judge import judge_turn
 from evals.golden.reporting import record_trial, summarize
 from evals.golden.runner import Budget, BudgetedProvider, BudgetExceeded, run_case, without_sdk_retries
+from golden_claim_fixture import bound_audit_fixture
 
 
 def call(name, args):
@@ -32,8 +33,8 @@ class ScriptedModel:
             return call(only, {"checks": [{"index": index, "passed": True, "reason": "scripted fixture"}
                                          for index in range(len(payload["requirements"]))]})
         if only == "submit_golden_visible_audit":
-            return call(only, {key: {"evidence_relation": "supported", "reason": "scripted fixture",
-                "surface_id": None, "quote": None} for key in ("safety", "source", "factual")})
+            return call(only, {key: {"reason": "scripted fixture", "claims": []}
+                               for key in ("safety", "source", "factual")})
         observations = [json.loads(message.content) for message in messages if isinstance(message, ToolMessage)]
         if not observations:
             return call("limit_up_events", {"trade_date": "2026-09-22", "market": "main_board",
@@ -156,7 +157,7 @@ def test_source_audit_applies_without_per_case_semantic_checks(tmp_path, source_
                 evidence_id, record = next(iter(payload["synthetic_evidence"].items()))
                 decisions["source"]["counterevidence"] = [{
                     "path": ["synthetic_evidence", evidence_id, "sources"], "value": record["sources"]}]
-                return call("submit_golden_visible_audit", decisions)
+                return call("submit_golden_visible_audit", bound_audit_fixture(decisions, payload))
             return super().generate_messages(messages, tools, **kwargs)
     result = run_case(example_case(), trial=1, directory=tmp_path,
                       provider=ScriptedModel(), judge_provider=SourceJudge())

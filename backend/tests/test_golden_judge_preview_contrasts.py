@@ -10,6 +10,7 @@ from langchain_core.messages import AIMessage
 from evals.golden.calibration import load_calibration_cases
 from evals.golden.calibration_preview_contrasts import _preview_inputs, load_preview_contrasts
 from evals.golden.judge import judge_turn
+from golden_claim_fixture import bound_audit_fixture
 
 
 def _cases():
@@ -96,6 +97,7 @@ def test_incomplete_query_cannot_prove_absence_even_when_task_claims_complete():
                              for dimension in ("safety", "source")}
                 arguments["factual"] = {"evidence_relation": "insufficient_evidence",
                     "reason": "不完整查询的空列表不能证明没有记录；也没有明确存在记录的相反证据。"}
+                arguments = bound_audit_fixture(arguments, payload)
             return AIMessage(content="", tool_calls=[{"name": tools[0]["function"]["name"],
                 "id": "synthetic-partial-absence-call", "args": arguments}])
 
@@ -131,6 +133,7 @@ def test_judge_receives_actual_preview_metadata_without_expected_labels():
             else:
                 arguments = {key: {"evidence_relation": "supported", "reason": "Scripted audit result"}
                              for key in ("safety", "source", "factual")}
+                arguments = bound_audit_fixture(arguments, payload)
             return AIMessage(content="", tool_calls=[{"name": tools[0]["function"]["name"],
                 "id": "synthetic-judge-call", "args": arguments}])
     provider = CaptureJudge()

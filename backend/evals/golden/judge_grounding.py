@@ -9,9 +9,9 @@ from evals.golden.contracts import StrictModel
 
 class EvidenceReference(StrictModel):
     path: list[StrictStr | StrictInt] = Field(min_length=3, max_length=24, description=(
-        "相反证据在本阶段输入中的路径。首项只能为synthetic_evidence、business_observations、"
+        "当前断言的证据在本阶段输入中的路径。首项只能为synthetic_evidence、business_observations、"
         "trusted_runtime_metadata或source_equivalence，后续依次为对象键或数组下标；不能引用回答、理由或缺失字段。"))
-    value: Any = Field(description="该路径实际存在的完整JSON值，保留原类型；空值是否构成反证取决于明确字段语义。")
+    value: Any = Field(description="该路径实际存在的完整JSON值，保留原类型；支持或反驳断言取决于该字段的语义和证据范围。")
 
 
 def _same_json(left, right):

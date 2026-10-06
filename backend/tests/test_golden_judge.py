@@ -9,6 +9,7 @@ import pytest
 from app.models import AgentChatResponse, AgentToolTrace
 from evals.golden.judge import JudgeReview, judge_turn, source_equivalence
 from evals.golden.runner import Budget, BudgetedProvider
+from golden_claim_fixture import bound_audit_fixture
 
 
 def final_result(passed=True, *, index=0, requirement="最终交付10日收益率。"):
@@ -43,6 +44,8 @@ class ScriptedJudge:
             raise result
         if isinstance(result, AIMessage):
             return result
+        if payload["phase"] == "visible_audit":
+            result = bound_audit_fixture(result, payload)
         return AIMessage(content="", tool_calls=[{"id": "judged", "name": tools[0]["function"]["name"], "args": result}])
 
 
@@ -186,11 +189,16 @@ def test_source_audit_runs_even_without_case_semantics_and_does_not_fail_facts()
 def test_unlocatable_negative_is_unknown_without_changing_other_dimensions(bad):
     model = ScriptedJudge(audit_result(source=bad))
     review = evaluate(model, answer="来源为真实交易所", expectations=())
-    assert review.source["passed"] is None
-    assert review.source["evidence_relation"] == "contradicted"
-    assert review.source["reported_passed"] is False and review.source["reported_reason"] == bad["reason"]
-    assert review.source["validation_error"] == "InvalidFindingLocation"
-    assert review.errors == {"visible_audit.source": "InvalidFindingLocation"}
+    if bad["quote"] in (None, "") or bad["surface_id"] is None:
+        assert review.source is None
+        assert review.errors == {"visible_audit.source": "ValidationError"}
+    else:
+        assert review.source["passed"] is None
+        assert review.source["evidence_relation"] == "insufficient_evidence"
+        assert review.source["claims"][0]["reported_evidence_relation"] == "contradicted"
+        assert review.source["reason"] == bad["reason"]
+        assert review.source["validation_error"] == "claims[0]:InvalidClaimLocation"
+        assert review.errors == {"visible_audit.source": "claims[0]:InvalidClaimLocation"}
     assert review.factual["passed"] is True and review.safety["passed"] is True
 
 
@@ -412,8 +420,10 @@ def test_contradiction_requires_actual_counterevidence_without_guessing_from_rea
     negative.update(counterevidence=references, reason="这肯定是错误，必须判失败。")
     review = evaluate(ScriptedJudge(audit_result(source=negative)), answer="来源为真实交易所", expectations=())
     assert review.source["passed"] is None
-    assert review.source["reported_passed"] is False and review.source["evidence_relation"] == "contradicted"
-    assert review.errors == {"visible_audit.source": "InvalidCounterevidence"}
+    assert review.source["claims"][0]["reported_evidence_relation"] == "contradicted"
+    assert review.source["evidence_relation"] == "insufficient_evidence"
+    error = "InvalidClaimEvidence" if references else "MissingClaimEvidence"
+    assert review.errors == {"visible_audit.source": f"claims[0]:{error}"}
     assert review.safety["passed"] is review.factual["passed"] is True
 
 
@@ -428,7 +438,7 @@ def test_one_invalid_reference_does_not_hide_behind_another_valid_reference():
     negative = finding()
     negative["counterevidence"].append({"path": ["synthetic_evidence", "current", "missing"], "value": 1})
     review = evaluate(ScriptedJudge(audit_result(source=negative)), answer="来源为真实交易所", expectations=())
-    assert review.source["passed"] is None and review.source["validation_error"] == "InvalidCounterevidence"
+    assert review.source["passed"] is None and review.source["validation_error"] == "claims[0]:InvalidClaimEvidence"
 
 
 @pytest.mark.parametrize("references", [None, []])

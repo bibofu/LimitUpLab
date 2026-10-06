@@ -13,6 +13,7 @@ from evals.golden import calibration
 from evals.golden.calibration import load_calibration_cases, main, run_calibration
 from evals.golden.grading import _label
 from evals.golden.judge import JUDGE_VERSION, judge_turn, source_equivalence
+from golden_claim_fixture import bound_audit_fixture
 
 
 def visible(*values, quote="来源", surface_id="final"):
@@ -57,12 +58,19 @@ class ScriptedJudge:
                             return found
                 elif len(path) >= 3:
                     return {"path": path, "value": value}
-            reference = next((ref for root in ("synthetic_evidence", "business_observations", "trusted_runtime_metadata")
+            # Prefer actual business payload values over envelope identifiers.
+            # Query-status-only fixtures fall back to their runtime observations.
+            reference = next((ref for key, record in payload["synthetic_evidence"].items()
+                if (ref := first_leaf(record.get("payload", {}), ["synthetic_evidence", key, "payload"]))), None)
+            reference = reference or next((ref for root in ("business_observations", "trusted_runtime_metadata")
                               if (ref := first_leaf(payload[root], [root]))), None)
             for dimension in ("source", "factual"):
                 check = args.get(dimension, {})
                 if check.get("evidence_relation") == "contradicted" and reference:
                     check.setdefault("counterevidence", [reference])
+                    if dimension == "factual" and reference["path"][0] != "synthetic_evidence":
+                        check["fixture_target"] = "query_status"
+            args = bound_audit_fixture(args, payload)
         return AIMessage(content="", tool_calls=[{"name": tools[0]["function"]["name"], "id": "judge", "args": args}])
 
 
@@ -102,7 +110,9 @@ def test_full_scripted_suite_maps_all_phases_without_live_requests():
     relations = {True: "supported", False: "contradicted", None: "insufficient_evidence"}
     for item in report["results"]:
         for decision in item["visible_checks"].values():
-            assert decision["evidence_relation"] == relations[decision["passed"]]
+            expected_relation = relations[decision["passed"]]
+            assert decision["evidence_relation"] in ({"supported", "no_claim"}
+                if expected_relation == "supported" else {expected_relation})
 
 
 def test_source_claims_and_final_delivery_have_independent_contrasts():
@@ -264,7 +274,7 @@ def test_invalid_visible_finding_remains_unknown_with_diagnostic():
     report = run_calibration(provider, cases=load_calibration_cases()[:1], max_calls=2)
     item = report["results"][0]
     assert item["actual"] == [True, True, True, None, True]
-    assert item["phase_errors"] == {"visible_audit.source": "InvalidFindingLocation"}
+    assert item["phase_errors"] == {"visible_audit.source": "claims[0]:InvalidClaimLocation"}
     assert item["status"] == "review"
 
 
@@ -399,10 +409,10 @@ def test_invalid_counterevidence_cannot_count_as_correct_expected_unknown():
     report = run_calibration(ScriptedJudge([(True,), audit]), cases=[case], max_calls=2)
     item = report["results"][0]
     assert item["actual"] == list(case.expected)
-    assert item["phase_errors"] == {"visible_audit.factual": "InvalidCounterevidence"}
+    assert item["phase_errors"] == {"visible_audit.factual": "claims[0]:MissingClaimEvidence"}
     assert report["summary"]["judge_dimension_error_count"] == 1
     assert report["summary"]["judge_phase_protocol_error_count"] == 0
-    assert item["visible_checks"]["factual"]["reported_passed"] is False
+    assert item["visible_checks"]["factual"]["claims"][0]["reported_evidence_relation"] == "contradicted"
     assert item["status"] == "review" and report["summary"]["expected_unknown_matches"] == 0
     assert report["summary"]["decision_match_rate"] == 3 / 4
 

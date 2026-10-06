@@ -46,7 +46,7 @@ class Provider:
         self.calls.append(self.chat_model)
         if self.callback:
             self.callback(self)
-        finding = {"reason": "No claims in greeting", "evidence_relation": "no_claim"}
+        finding = {"reason": "No claims in greeting", "claims": []}
         return AIMessage(content="", tool_calls=[{"name": "submit_golden_visible_audit", "id": "audit",
                           "args": {key: dict(finding) for key in ("factual", "source", "safety")}}])
 
