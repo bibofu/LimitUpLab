@@ -5,12 +5,9 @@ from __future__ import annotations
 import argparse
 from collections import Counter
 from datetime import datetime, timezone
-import hashlib
-from importlib.metadata import version
 import json
 import os
 from pathlib import Path
-import subprocess
 import sys
 from uuid import uuid4
 
@@ -22,40 +19,10 @@ if str(BACKEND) not in sys.path:
 from evals.golden.cases import load_cases
 from evals.golden.contracts import SUITE_VERSION
 from evals.golden.reporting import digest, record_trial, save_report
-
-
-def code_fingerprint():
-    files = [*sorted((BACKEND / "app").rglob("*.py")), *sorted((BACKEND / "evals").rglob("*.py")),
-             Path(__file__), BACKEND / "requirements.txt"]
-    return digest({path.relative_to(ROOT).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest() for path in files})
-
-
-def tree_fingerprint(directory):
-    return digest({path.relative_to(ROOT).as_posix(): hashlib.sha256(path.read_bytes()).hexdigest()
-                   for path in sorted(directory.rglob("*.py"))})
-
-
-def provider_configuration(provider):
-    """Hash effective settings; never serialize keys, raw endpoints or URL credentials."""
-    model = getattr(provider, "chat_model", None)
-    settings = {name: getattr(model, name, None) for name in (
-        "openai_api_base", "request_timeout", "temperature", "max_tokens", "top_p",
-        "frequency_penalty", "presence_penalty", "seed", "reasoning_effort",
-        "extra_body", "model_kwargs", "max_retries", "use_responses_api",
-    )}
-    settings["provider_options"] = {name: getattr(provider, name, None) for name in (
-        "base_url", "thinking_enabled", "timeout_seconds", "planner_max_tokens",
-        "max_tokens", "answer_max_tokens", "max_attempts", "retry_delay_seconds",
-        "native_function_calling_enabled",
-    )}
-    root = getattr(model, "root_client", None)
-    settings.update(endpoint=str(getattr(root, "base_url", "")),
-                    sdk_timeout=str(getattr(root, "timeout", "")),
-                    sdk_retries=getattr(root, "max_retries", None),
-                    planner_max_tokens=getattr(provider, "planner_max_tokens", None),
-                    native_function_calling_enabled=getattr(provider, "native_function_calling_enabled", None))
-    return {"settings_sha256": digest(settings), "sdk_retries": 0,
-            "budget_unit": "logical provider calls; SDK retries disabled; reservations persisted before calls"}
+from evals.golden.manifest import (
+    code_fingerprint, git_commit, library_versions, provider_configuration,
+    require_disabled_sdk_retries, tree_fingerprint,
+)
 
 
 def validate_cases(cases):
@@ -123,22 +90,18 @@ def main(argv=None):
     if isinstance(provider, DisabledLLMProvider):
         parser.error("No enabled model provider; configure backend/.env or process environment. No credentials are printed.")
     provider = without_sdk_retries(provider)
+    require_disabled_sdk_retries(provider)
     run_id = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%SZ") + "-" + uuid4().hex[:8]
     output = (args.output or ROOT / "output/golden" / run_id).resolve()
-    try:
-        commit = subprocess.check_output(["git", "-c", f"safe.directory={ROOT.as_posix()}", "rev-parse", "HEAD"],
-                                         cwd=ROOT, text=True, stderr=subprocess.DEVNULL).strip()
-    except (OSError, subprocess.CalledProcessError):
-        commit = None
     manifest = {"suite_version": SUITE_VERSION, "dataset_hash": digest([c.model_dump() for c in cases]),
-        "code_hash": code_fingerprint(), "git_commit": commit, "trials": args.trials,
+        "code_hash": code_fingerprint(), "git_commit": git_commit(), "trials": args.trials,
         "evaluator_hash": tree_fingerprint(BACKEND / "evals"),
         "production_hash": tree_fingerprint(BACKEND / "app"),
         "case_ids": [c.id for c in cases], "model": getattr(provider, "model", type(provider).__name__),
         "provider": type(provider).__name__, "judge": args.judge, "judge_human_calibrated": False,
         "effective_model_configuration": provider_configuration(provider),
         "profile": args.profile, "react_deadline_seconds": os.getenv("LIMITUPLAB_REACT_DEADLINE_SECONDS", "120"),
-        "libraries": {name: version(name) for name in ("langchain-core", "langchain-openai", "langgraph", "pydantic")}}
+        "libraries": library_versions()}
     report_path = output / "report.json"
     if args.resume:
         report = json.loads(report_path.read_text(encoding="utf-8"))

@@ -11,6 +11,11 @@ from pathlib import Path
 from app.models import AgentChatResponse, AgentToolTrace
 from evals.golden.judge import DELIVERY_SYSTEM, JUDGE_VERSION, VISIBLE_SYSTEM, judge_turn
 from evals.golden.protocol_metrics import protocol_metrics
+from evals.golden.manifest import (
+    BACKEND, code_fingerprint, git_commit, library_versions, require_disabled_sdk_retries,
+    run_identity, tree_fingerprint,
+)
+from evals.golden.reporting import digest
 
 CALIBRATION_VERSION = "golden-judge-calibration-v7"
 SOURCE = "synthetic-golden-world-v1"
@@ -172,7 +177,18 @@ def run_calibration(provider, *, trials=1, max_calls=120, output=None, cases=Non
     path = Path(output) if output else None
     if path is not None and path.exists():
         raise FileExistsError("Use a new output path to preserve earlier calibration results")
-    report = {"version": CALIBRATION_VERSION, "judge_version": JUDGE_VERSION,
+    provider = without_sdk_retries(provider)
+    configuration = require_disabled_sdk_retries(provider)
+    identity = run_identity()
+    manifest = {**identity, "scope": "judge-calibration", "calibration_version": CALIBRATION_VERSION,
+                "judge_version": JUDGE_VERSION, "dataset_hash": digest([asdict(case) for case in cases]),
+                "case_ids": [case.id for case in cases], "trials": trials, "max_logical_calls": max_calls,
+                "code_hash": code_fingerprint(), "git_commit": git_commit(),
+                "production_hash": tree_fingerprint(BACKEND / "app"),
+                "evaluator_hash": tree_fingerprint(BACKEND / "evals"),
+                "provider": type(provider).__name__, "model": getattr(provider, "model", type(provider).__name__),
+                "effective_model_configuration": configuration, "libraries": library_versions()}
+    report = {**identity, "manifest": manifest, "version": CALIBRATION_VERSION, "judge_version": JUDGE_VERSION,
               "judge_prompt_hash": hashlib.sha256(json.dumps(
                   {"final": DELIVERY_SYSTEM, "visible": VISIBLE_SYSTEM}, ensure_ascii=False, sort_keys=True).encode()).hexdigest(),
               "model": getattr(provider, "model", type(provider).__name__),
@@ -192,7 +208,7 @@ def run_calibration(provider, *, trials=1, max_calls=120, output=None, cases=Non
         report["logical_calls_used"] = count
         save()  # Reserve before a request so interruption cannot hide its cost.
     budget = Budget(max_calls, on_take=reserve)
-    measured = BudgetedProvider(without_sdk_retries(provider), budget)
+    measured = BudgetedProvider(provider, budget)
     save()
     for trial in range(1, trials + 1):
         for case in cases:
