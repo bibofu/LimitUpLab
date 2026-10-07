@@ -617,7 +617,7 @@ Linux 使用对应虚拟环境的 `python scripts/check_project.py`。也可通�
 
 旧聊天评测框架已退役；离线回归不代表真实模型回答质量或稳定性已验收。预测结果复盘使用的 Evaluation Agent 和 `rating_evaluation` 仍保留，两者用途不同。
 
-现行聊天回归使用 [Agent Golden 评测](docs/Agent_Golden_Evaluation.md)：v1.7 包含 61 个场景、84 个回合，支持生产默认与扩展工具 profile。重复候选基线见 [v1.7 记录](docs/Agent_Golden_v17_Reliability.md)，最近真实诊断见 [v15 验证](docs/Agent_Golden_Judge_v15_Reliability.md)。最新 [v16 裁判修复](docs/Agent_Golden_Judge_v16_Protocol.md)改用引用ID并细化证据边界，726项离线测试通过，尚未追加真实模型验证。裁判可靠性与独立人工签核尚未验收，生成报告保留本地。
+现行聊天回归使用 [Agent Golden 评测](docs/Agent_Golden_Evaluation.md)：v1.7 包含 61 个场景、84 个回合，支持生产默认与扩展工具 profile。[v16 裁判实现与验证](docs/Agent_Golden_Judge_v16_Protocol.md)已完成全量Agent基线（52通过、1失败、8待复核）、两轮独立裁判诊断（52/61、43/61题匹配）及8项真人抽样标注。726项离线测试通过；引用用途错误和两项金标签边界仍待处理，裁判可靠性与全量人工签核未通过，生成报告保留本地。
 
 GitHub Actions 配置在 `.github/workflows/validate.yml`，对 PR、main 与 codex 分支推送运行 Windows/Linux 两套检查，使用相同验收入口，不需要行情或模型密钥。失败日志保留 7 天；测试数据库不上传。流水线文件进入远端仓库后才能实际触发，分支保护仍需在仓库设置中启用。
 
