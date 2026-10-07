@@ -1,7 +1,7 @@
 # LangChain + LangGraph ReAct 集成
 
-> 当前源码标识：`react-runtime-v26` / `agent-tools-v2`
-> 本文描述工作树实现；V1.4 标签的历史发布范围见 [阶段里程碑](V1.4_Milestone.md)。
+> 当前源码标识：`react-runtime-v31` / `agent-tools-v2` / `react-evidence-v4`
+> 本文描述工作树实现；当前阶段工作与验证见 [V1.5 里程碑](V1.5_Milestone.md)，历史 V1.4 发布范围见 [V1.4 里程碑](V1.4_Milestone.md)。
 
 ## 当前生产链路
 
@@ -38,6 +38,7 @@ POST /api/agents/chat 或 /chat/stream
 | `agents/react_runtime/tools.py` | 消费类型化工具，执行 profile、时态、身份解析、调用和证据接入 |
 | `agents/react_runtime/evidence.py` | 请求级完整证据、预览、来源、缺失、截断和确定性计算 |
 | `agents/react_runtime/contracts.py` | `finish`、`update_task`、`read_evidence`、`compute_result` 类型契约及预算 |
+| `agents/react_runtime/task_contract.py`、`display_fields.py` | 当前任务、待补信息和输出契约；将明确展示字段映射到证据字段并保留未解析要求 |
 | `agents/react_runtime/answer_stream.py` | 增量解析单个 `finish` 调用的顶层 `answer`，不展示其他参数或并行调用 |
 | `agents/react_runtime/answer_delivery.py` | 管理待校验正文、revision、撤回和表格占位符缓冲 |
 | `agents/react_runtime/rendering.py` | 从本轮证据渲染单张表格，检查字段、行数、截断与范围 |
@@ -115,12 +116,12 @@ backend/.venv/Scripts/python.exe scripts/check_project.py
 
 项目验收命令验证代码、前端和构建，不会自动调用真实模型；当次数量、退出码和日志保存在 `output/validation/<运行标识>/`，不使用历史标签的测试数代表当前验收。
 
-流式协议重点参考后端的 `test_langchain_provider.py`、`test_react_answer_stream.py`、`test_react_live_answer.py`、`test_react_http.py`，以及前端的聊天传输和答案缓冲测试。旧聊天评测框架已退役，离线契约回归不等同于真实模型质量验收；预测 Outcome 的 Evaluation Agent 仍保留。
+流式协议重点参考后端的 `test_langchain_provider.py`、`test_react_answer_stream.py`、`test_react_live_answer.py`、`test_react_http.py`，以及前端的聊天传输和答案缓冲测试。旧聊天评测框架已退役；当前 [Golden 评测](Agent_Golden_Evaluation.md) 在隔离的合成工具环境中运行生产 Agent，并独立检查交付和可见回答。完整 Agent 基线与裁判专项诊断分开统计，离线契约回归不等同于真实模型质量验收；预测 Outcome 的 Evaluation Agent 仍保留。
 
 ## 面试讲法
 
 > LimitUpLab 的聊天主链路不是“Planner 生成整张计划再由规则补工具”，而是 LangChain 原生 tool calling 驱动的 LangGraph 有界 ReAct。模型每轮根据用户问题和已有 ToolMessage 决定下一步；后端在每次调用前校验工具权限、参数和历史时点能力，完整结果进入带来源与缺失标记的 EvidenceStore，模型通过 evidence ID 读取或确定性计算。运行过程用 SQLite journal 做幂等、恢复、取消和原子发布。LLM 负责语义决策与解释，评分、集合计算和审计统计仍由确定性代码完成。
 
-同时需要诚实说明：工具公开契约已经收敛并派生为 LangChain `StructuredTool`，但 LangGraph 状态和 checkpoint 仍不是官方 checkpointer 范式，评分分箱仍有硬编码，开放式因果/定性回答也还缺少通用语义门禁。V1.4 的价值是持续收敛生产 ReAct 的执行债务，不是宣称 Agent 质量已经最终达标。
+同时需要诚实说明：工具公开契约已经收敛并派生为 LangChain `StructuredTool`，但 LangGraph 状态和 checkpoint 仍不是官方 checkpointer 范式，评分分箱仍有硬编码，开放式因果/定性回答也还缺少通用语义门禁。V1.5 已建立可重复的 Golden 粗评和独立裁判诊断，仍有 Agent 失败场景与裁判语义误判，具体结果和下一步见 [阶段里程碑](V1.5_Milestone.md)。
 
 官方参考：[LangGraph v1](https://docs.langchain.com/oss/python/releases/langgraph-v1)、[LangChain Tools / ToolNode](https://docs.langchain.com/oss/python/langchain/tools)、[LangGraph Persistence](https://docs.langchain.com/oss/python/langgraph/persistence)。

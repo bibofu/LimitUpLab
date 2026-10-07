@@ -12,11 +12,11 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 当前代码以 **LangChain 原生工具调用 + LangGraph 有界 ReAct** 为聊天主链路，支持持久化运行、原生 `finish.answer` 流式正文、可撤回草稿和服务端证据表。旧 Planner/Capability/Policy/模板执行器、Task DAG、Complex Graph 和 Claim Ledger 已退出生产调用图。现行实现见 [LangChain + LangGraph 集成](docs/LangChain_Integration.md)。
 
-[V1.4 阶段里程碑](docs/V1.4_Milestone.md) 记录 `v1.4.0` 架构基线和 `v1.4.1` SQLite 部署修复，属于历史发布记录；当前工作树的行为、版本及测试结果以源码和当次验收为准。
+当前阶段为 **V1.5：ReAct 交付与证据契约完善、Golden 粗评基线建立**。[V1.5 阶段里程碑](docs/V1.5_Milestone.md) 汇总 `v1.5.0` 的工作、验证结果、限制和下一步。Golden 已能辅助定位 Agent 问题，裁判可靠性验收仍未通过；自动结果需要保留待复核项。
 
 盘前推荐继续并列提供一进二接力、缩量整理和高位回撤；一进二区分收盘基线、盘前终选及历史样本，后两类形态观察不混入一进二前向统计。集合竞价和面向未涨停股票的首板挖掘仍保持退役。
 
-历史版本：[V1.0](docs/V1_Milestone.md) 是首个首板复盘基线，[V1.1](docs/V1.1_Milestone.md) 记录集合竞价实验，[V1.2](docs/V1.2_Milestone.md) 记录工程收敛与会话记忆，[V1.3](docs/V1.3_Milestone.md) 记录盘前多策略与发布基线。历史实现由对应 Git 标签保留，现行预测与复盘口径以 [预测时间契约](docs/Prediction_Time_Contract.md) 为准。
+历史版本：[V1.0](docs/V1_Milestone.md) 是首个首板复盘基线，[V1.1](docs/V1.1_Milestone.md) 记录集合竞价实验，[V1.2](docs/V1.2_Milestone.md) 记录工程收敛与会话记忆，[V1.3](docs/V1.3_Milestone.md) 记录盘前多策略与发布基线，[V1.4](docs/V1.4_Milestone.md) 记录单一 ReAct 架构和 SQLite 部署修复。历史实现由对应 Git 标签保留，现行预测与复盘口径以 [预测时间契约](docs/Prediction_Time_Contract.md) 为准。
 
 当前版本已经具备可本地运行和单机部署的完整 MVP：
 
@@ -30,6 +30,7 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 - 来源感知的预测质量审计、确定性基线和多目标评分 v3
 - 每日连板晋级率、首板到二板率和各板高梯队统计
 - 数据健康、Agent 运行轨迹和缓存
+- Golden 问答粗评：61 场景、84 回合，冻结合成环境、确定性检查与独立模型裁判
 - 盘前推荐页并列提供“一进二接力”“缩量整理”“高位回撤”三个入口，后两者支持固定条件筛选、历史日期查看和缺失原因解释，并独立于一进二前向统计，见 [第一版说明](docs/Consolidation_Strategy_V1.md)
 
 当前代码基线：
@@ -40,6 +41,7 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 | 本地数据健康检查 | 已实现 |
 | LLM 流式问答 | 已实现 |
 | Agent 限流与成本审计 | 单访客/IP/全局限制、真实 token 账本已实现 |
+| Golden 评测 | 可运行主要场景粗评；部分工具未覆盖，裁判边界仍需人工复核 |
 | 评分 v3 工程实现 | 已完成，影子验证中 |
 | 单机生产部署基线 | Docker、Nginx、HTTPS、持久化卷、备份和日更任务已部署 |
 
@@ -328,11 +330,13 @@ LimitUpLab/
 │   │   ├── routers/         # FastAPI 路由
 │   │   └── services/        # 评分、检索、回测、Evaluation 和健康检查
 │   ├── scripts/             # 数据同步、回填和启动脚本
+│   ├── evals/golden/        # 隔离评测、固定世界、用例与独立裁判
 │   └── tests/               # 单元测试
 ├── frontend/
 │   └── src/                 # React 工作台、独立 Agent 会话面板、API 类型和样式
 ├── scripts/                 # 项目级本地启动脚本
 └── docs/
+    ├── V1.5_Milestone.md    # 当前阶段工作、验证、限制与下一步
     ├── V1.4_Milestone.md    # V1.4 历史发布边界与验证记录
     ├── LangChain_Integration.md # 当前 ReAct 架构说明
     └── code-quality-audit.md # 阶段性代码质量审查
@@ -617,9 +621,9 @@ Linux 使用对应虚拟环境的 `python scripts/check_project.py`。也可通�
 
 旧聊天评测框架已退役；离线回归不代表真实模型回答质量或稳定性已验收。预测结果复盘使用的 Evaluation Agent 和 `rating_evaluation` 仍保留，两者用途不同。
 
-现行聊天回归使用 [Agent Golden 评测](docs/Agent_Golden_Evaluation.md)：v1.7 包含 61 个场景、84 个回合，支持生产默认与扩展工具 profile。历史[v16验证](docs/Agent_Golden_Judge_v16_Protocol.md)完成全量Agent基线（52通过、1失败、8待复核）及8项真人抽样标注。当前[v17修复与实测](docs/Agent_Golden_Judge_v17_Repair.md)通过768项离线测试，并完成两轮真实裁判复验：共同264判项分别匹配259/255项，引用用途错误从旧版31条降至14条；仍有语义误判，可靠性与全量人工签核未通过。生成报告保留本地。
+现行聊天回归使用 [Agent Golden 评测](docs/Agent_Golden_Evaluation.md)：v1.7 包含 61 个场景、84 个回合，支持生产默认与扩展工具 profile。历史[v16验证](docs/Agent_Golden_Judge_v16_Protocol.md)完成全量Agent基线（52通过、1失败、8待复核）及8项真人抽样标注。当前[v17修复与实测](docs/Agent_Golden_Judge_v17_Repair.md)通过768项专项离线测试，并完成两轮真实裁判复验：共同264判项分别匹配259/255项，引用用途错误从旧版31条降至14条；仍有语义误判，可靠性与全量人工签核未通过。最新完整项目离线验收见 [V1.5 里程碑](docs/V1.5_Milestone.md)，生成报告保留本地。
 
-GitHub Actions 配置在 `.github/workflows/validate.yml`，对 PR、main 与 codex 分支推送运行 Windows/Linux 两套检查，使用相同验收入口，不需要行情或模型密钥。失败日志保留 7 天；测试数据库不上传。流水线文件进入远端仓库后才能实际触发，分支保护仍需在仓库设置中启用。
+GitHub Actions 配置在 `.github/workflows/validate.yml`，对 PR、main、codex 分支及 `v*` 标签推送运行 Windows/Linux 两套检查，使用相同验收入口，不需要行情或模型密钥。标签检查通过后触发生产部署，流程见 [标签自动部署说明](deploy/Tag_Deployment.md)。失败日志保留 7 天；测试数据库不上传，分支保护需在仓库设置中配置。
 
 ReAct 执行与证据契约见 [LangChain + LangGraph 集成](docs/LangChain_Integration.md) 和 [代码阅读指南](docs/code-reading-guide.md)。以下单项命令仍可用于定位失败。
 
@@ -671,10 +675,11 @@ npm.cmd run build
 
 近期优先级：
 
-1. 持续核对价格口径、预测来源解释、多轮消歧和额外陈述的证据边界。
-2. 数据侧继续滚动补齐 Top10 Outcome 和端到端验收；V2 再考虑数据源与部署扩容。
+1. 修复 Golden 已暴露的 Agent 问题：存在性回答额外展开名单（s18），以及所有来源失败后的诚实收尾与重复查询（r03）。
+2. 使用冻结 Golden 跑相关场景和邻近回归，再建立新版本完整基线；裁判待复核项单列人工检查，继续核对日期、来源与额外陈述的证据边界。
+3. 数据侧继续滚动补齐 Top10 Outcome 和端到端验收；V2 再考虑数据源与部署扩容。
 
-当前实现边界见 [LangChain + LangGraph 集成](docs/LangChain_Integration.md)，历史发布边界见 [V1.4 阶段里程碑](docs/V1.4_Milestone.md)。
+当前阶段总结见 [V1.5 阶段里程碑](docs/V1.5_Milestone.md)，实现边界见 [LangChain + LangGraph 集成](docs/LangChain_Integration.md)。
 
 ## 面试演示建议
 

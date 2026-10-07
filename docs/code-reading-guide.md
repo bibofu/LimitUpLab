@@ -27,6 +27,8 @@ come from deterministic code and recorded data; the model plans and explains.
    validates and dispatches calls. The old `tool_schema.py` has been removed.
 8. `react_runtime/contracts.py` and `evidence.py`: define control tools,
    controlled computation, full result references and provenance.
+   `task_contract.py` and `display_fields.py` preserve the interpreted task,
+   pending slots, explicit output fields and unresolved display requirements.
 9. `react_runtime/context.py`: provides no history by default. For a classified
    follow-up, it extracts entity names/codes and the last answer's actual tool
    arguments, without replaying old tasks, prose or evidence. `runtime.py` passes
@@ -55,6 +57,7 @@ come from deterministic code and recorded data; the model plans and explains.
 | `backend/scripts/` | Run collection and backfill workflows | Step order, restart behavior, reports and failure states |
 | `frontend/src/` | Fetch, format and render facts | State updates, stale requests, empty states and source links |
 | `backend/tests/`, `frontend/tests/` | Explain expected behavior with controlled cases | Regression scenario, fixtures and assertions |
+| `backend/evals/golden/` | Run the production Agent against a frozen synthetic world | Independent expected answers, budgets, provenance, judge references and review states |
 | `deploy/`, `scripts/` | Start, verify and deploy the system | Process ownership, locks, backups and recovery |
 
 ## Terms used in function comments
@@ -88,9 +91,12 @@ come from deterministic code and recorded data; the model plans and explains.
 - **Test double / fixture**: controlled data or a replacement dependency used by
   a test. A passing fixture test is not a claim about a live provider's accuracy.
 
-The former chat evaluation framework and Claim Ledger are retired. Follow the
-current runtime tests and `badCase.md` for regression history; the separate
-prediction Evaluation Agent still classifies recorded market outcomes.
+The former chat evaluation framework and Claim Ledger are retired. The current
+[Golden suite](Agent_Golden_Evaluation.md) runs separately under
+`backend/evals/golden/`; distinguish full Agent runs from judge-only diagnostics.
+Follow the runtime tests and `badCase.md` for regression history, and the
+[V1.5 milestone](V1.5_Milestone.md) for verified results and remaining limits.
+The separate prediction Evaluation Agent still classifies recorded market outcomes.
 
 ## Reading a function
 
