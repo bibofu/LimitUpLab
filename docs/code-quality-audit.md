@@ -1,5 +1,13 @@
 # Agent 应用质量审查
 
+## 2026-10-07：CI 流中断测试与 OpenAI SDK 版本修复
+
+- 故障：[main 第 52 次运行](https://github.com/bibofu/LimitUpLab/actions/runs/37590942360) 和 [v1.5.0 第 51 次运行](https://github.com/bibofu/LimitUpLab/actions/runs/37590942111) 的 Windows / Ubuntu 后端均为 1,591 passed、2 failed；前端测试和构建通过。标签部署因验证失败被跳过。
+- 根因：本机使用 `openai==3.11.0`，CI 安装了未固定的传递依赖 `openai==3.26.0`。新版 SDK 将注入的 `httpx.ReadError` 包装成 `APIConnectionError`，LangChain 再包装为其子类，Provider 按既有逻辑返回保留 cause 的脱敏 `RuntimeError`；两项测试只接受裸 `ReadError`，因而提前失败。
+- 修复：在后端依赖中显式固定 `openai==3.26.0`。两项断流测试接受原始异常实例，或要求外层为脱敏 `RuntimeError`、显式 cause 链仅含 `APIConnectionError` 子类且最终指向同一个注入异常实例。继续核对只执行一次请求、只输出一次片段、关闭连接，以及失败计数和缺失 token usage。
+- 范围：本次修改 SDK 版本约束和测试异常契约；生产 Provider 的异常处理、重试与流式清理逻辑沿用既有实现。仅固定 OpenAI SDK，不宣称锁定了全部传递依赖。
+- 验证：现有 `openai==3.11.0` 环境下 Provider 47 项通过；新建独立 Python 3.13.14 环境并从 `requirements-dev.txt` 安装后，确认 `openai==3.26.0`、`langchain-openai==1.6.2`，`pip check` 通过。共享验收后端 **1,593 passed、22 subtests passed**，前端 **24/24** 及生产构建通过；Golden **61 场景、84 回合**清单验证通过。保留 3 条依赖弃用警告及既有 bundle 大小提示。本地原件为 `output/validation/20261007T082514Z-eda8b429/`，真实模型调用为 0；GitHub 双平台结果以修复提交对应的 Actions 运行记录为准。
+
 ## 2026-10-07：V1.5 工作总结入口
 
 `v1.5.0` 代码基线为 `ce36c1b`，运行版本为 `react-runtime-v31` / `agent-tools-v2` / `react-evidence-v4`。当前工作、验证范围和优先级见 [V1.5 里程碑](V1.5_Milestone.md)；下方审查记录保留各自日期和版本，不将历史问题或测试数量覆盖为当前结论。
