@@ -1,5 +1,13 @@
 # Agent 应用质量审查
 
+## 2026-10-07：v1.5.1 生产发布验收
+
+- 发布版本：`v1.5.1`，精确提交 `98387d60fbeb5136a6e0dce8c1687a17c91612f5`；[Actions 第 54 次运行](https://github.com/bibofu/LimitUpLab/actions/runs/37595491186) 的 Windows / Ubuntu 验证通过，第二次部署尝试成功。保留 `v1.5.0` 原标签。
+- 首次失败发生在切换前：Docker Hub 的 `nginx:1.27-alpine` 镜像元数据请求 TLS 握手超时，服务器记录 `failed_before_switch`，旧容器健康且维护模式关闭。只重跑失败的部署任务，未改动标签或跳过验收。
+- 服务器验收：生产 Git HEAD、三个服务镜像及 `current.json` 均对应发布提交；journal `v1.5.1-20261007T164925.json` 状态为 `success`；专属备份 `limituplab-20261007-165003.sqlite` 存在，大小 246,710,272 字节。前后端容器 healthy，刷新 worker 在运行，维护标记已移除。
+- 公网验收：北京时间 16:51 后，`/health` 返回 200 / `status=ok`，盘前推荐页面正常加载；一进二、缩量整理、高位回撤三个接口均返回 200。当前数据日期为 2026-09-30；一进二为 `partial / missed_cutoff`，另外两个策略为 `ready`，但保留 `missing_history20` 和 `mixed_or_missing_source`。发布成功不表示数据缺口已补齐，本次未额外触发数据刷新或真实模型评测。
+- 本地验收原件：`output/deployment/v1.5.1/public-verification.json`、`server-verification.json` 和发布成功截图；生成文件不提交 Git。
+
 ## 2026-10-07：CI 流中断测试与 OpenAI SDK 版本修复
 
 - 故障：[main 第 52 次运行](https://github.com/bibofu/LimitUpLab/actions/runs/37590942360) 和 [v1.5.0 第 51 次运行](https://github.com/bibofu/LimitUpLab/actions/runs/37590942111) 的 Windows / Ubuntu 后端均为 1,591 passed、2 failed；前端测试和构建通过。标签部署因验证失败被跳过。
