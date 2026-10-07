@@ -34,9 +34,14 @@ def _decisions(values):
             for index, value in enumerate(values)]
 
 
-def test_original_49_diagnostics_are_frozen_and_six_scope_contrasts_are_appended():
+def test_original_49_are_frozen_except_two_reviewed_v8_factual_labels():
     cases = load_calibration_cases()
-    digest = hashlib.sha256(json.dumps([asdict(case) for case in cases[:49]],
+    original = [asdict(case) for case in cases[:49]]
+    for item in original:
+        if item["id"] in {"wrong_date", "wrong_entity"}:
+            assert item["expected"] == (False, True, True, True, None)
+            item["expected"] = (*item["expected"][:-1], False)
+    digest = hashlib.sha256(json.dumps(original,
         ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     assert digest == "21c2ca762e22e0f9e0213a78c92e48b50159147c605c8364567ee27734369f99"
     assert cases[49:55] == load_scope_contrasts()

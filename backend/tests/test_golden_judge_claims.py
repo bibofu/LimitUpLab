@@ -550,3 +550,90 @@ def test_selecting_empty_rows_keeps_source_payload_incompleteness(payload, field
     payload["synthetic_evidence"]["empty"]["payload"][field] = value
     rows = reference(payload, "synthetic_evidence", "empty", "rows")
     assert validate(claim(rows), payload) == "IncompleteEmptyCollectionIsNotWorldAbsence"
+
+
+@pytest.mark.parametrize("root", ["synthetic_evidence", "business_observations"])
+@pytest.mark.parametrize("relation", ["supported", "contradicted"])
+@pytest.mark.parametrize("field,value,role", [
+    ("requested_date", "2026-09-22", "query_scope_proof"),
+    ("data_as_of", "2026-09-21", "query_scope_proof"),
+    ("failure_stage", "local_parameter_validation", "query_status_proof"),
+    ("network_request_sent", False, "query_status_proof"),
+    ("http_status", None, "query_status_proof"),
+])
+def test_specific_result_context_is_query_evidence(payload, root, relation, field, value, role):
+    path = (root, "known", "payload") if root == "synthetic_evidence" else (root, 0, "output")
+    output = payload[root][path[1]][path[2]]
+    output[field] = value
+    cited = reference(payload, *path, field)
+    # Capability validates a selected location, not the model's prose verdict.
+    binding = claim(cited, target="query_status", relation=relation)
+    result = aggregate_claims([binding], dimension="factual", surfaces=SURFACES, payload=payload)
+    assert result["passed"] is (relation == "supported")
+    assert result["claims"][0]["evidence_validation"] == [
+        {"index": 0, "role": role, "validation_error": None}]
+    assert result["claims"][0]["reported_evidence_relation"] == relation
+    assert validate(claim(cited, target="source_attribution"), payload, "source") == "SourceAttributionRequiresSourceEvidence"
+    # The actual response date remains a concrete fact; request/failed-query
+    # metadata alone cannot prove a business fact.
+    expected = None if field == "data_as_of" else "AvailabilityIsNotWorldFact"
+    assert validate(claim(cited), payload) == expected
+
+
+@pytest.mark.parametrize("field", ["requested_date", "data_as_of", "failure_stage", "network_request_sent", "http_status"])
+@pytest.mark.parametrize("wrapper", ["row", "nested"])
+def test_result_context_names_inside_business_objects_do_not_prove_query_status(payload, field, wrapper):
+    output = payload["synthetic_evidence"]["known"]["payload"]
+    if wrapper == "row":
+        output["items"] = [{field: "a business value"}]
+        tail = ("items", 0, field)
+    else:
+        output["details"] = {field: "a business value"}
+        tail = ("details", field)
+    cited = reference(payload, "synthetic_evidence", "known", "payload", *tail)
+    assert validate(claim(cited, target="query_status"), payload) == "QueryStatusRequiresQueryEvidence"
+
+
+def test_structured_failure_proof_survives_failed_source_but_does_not_prove_world_facts(payload):
+    observation = payload["business_observations"][0]
+    observation.update(status="error", output={"result_state": "error",
+        "failure_stage": "local_parameter_validation", "network_request_sent": False,
+        "http_status": None, "error": "Local parameter validation failed before any network request"})
+    refs = [reference(payload, "business_observations", 0, "output", field)
+            for field in ("failure_stage", "network_request_sent", "http_status", "error")]
+    binding = claim(*refs, target="query_status", relation="contradicted")
+    assert validate(binding, payload) is None
+    assert validate(claim(*refs, relation="contradicted"), payload) == "FailedSourceIsNotWorldFact"
+
+
+def test_query_context_does_not_erase_an_unrelated_business_reference(payload):
+    output = payload["synthetic_evidence"]["known"]["payload"]
+    output.update(requested_date="2026-09-22", return_10d_pct=1.2)
+    refs = [reference(payload, "synthetic_evidence", "known", "payload", field)
+            for field in ("requested_date", "return_10d_pct")]
+    binding = claim(*refs, target="query_status")
+    original = deepcopy(binding)
+    result = aggregate_claims([binding], dimension="factual", surfaces=SURFACES, payload=payload)
+    assert result["passed"] is None
+    assert result["validation_errors"] == ["claims[0]:QueryStatusRequiresQueryEvidence"]
+    assert result["claims"][0]["evidence"] == refs
+    assert result["claims"][0]["reported_evidence_relation"] == "supported"
+    assert binding == original
+
+
+def test_returned_count_and_collection_are_query_response_proof_but_preview_is_observed_view(payload):
+    refs = [reference(payload, "business_observations", 0, "output", field) for field in ("count", "candidates")]
+    assert validate(claim(*refs, target="query_status"), payload) is None
+    assert validate(claim(*refs, target="source_attribution"), payload, "source") == "SourceAttributionRequiresSourceEvidence"
+    preview = reference(payload, "trusted_runtime_metadata", 0, "metadata", "preview_omissions", 0, "omitted_items")
+    assert validate(claim(preview, target="input_view"), payload) is None
+    assert validate(claim(preview, target="query_status"), payload) == "QueryStatusRequiresQueryEvidence"
+    assert validate(claim(preview), payload) == "AvailabilityIsNotWorldFact"
+
+
+def test_tool_label_is_not_proof_of_execution_or_supplier_identity(payload):
+    output = payload["synthetic_evidence"]["known"]["payload"]
+    output.update(tool_label="display name", synthetic=True)
+    refs = [reference(payload, "synthetic_evidence", "known", "payload", field) for field in ("tool_label", "synthetic")]
+    assert validate(claim(*refs, target="query_status"), payload, "source") == "QueryStatusRequiresQueryEvidence"
+    assert validate(claim(*refs, target="source_attribution"), payload, "source") == "SourceAttributionRequiresSourceEvidence"

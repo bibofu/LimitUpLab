@@ -9,6 +9,7 @@ import pytest
 from app.models import AgentChatResponse, AgentToolTrace
 from evals.golden.calibration import load_calibration_cases, run_calibration
 from evals.golden.judge import Judgements, VisibleAudit, judge_turn, source_equivalence
+from evals.golden.judge_claims import DIMENSION_TARGETS
 from evals.golden.judge_schema import inline_local_refs
 from golden_claim_fixture import catalog_entries
 
@@ -206,6 +207,50 @@ def assert_reference_schema(schema):
 @pytest.mark.parametrize("model", [Judgements, VisibleAudit])
 def test_reference_wire_schema_has_only_the_identifier(model):
     assert_reference_schema(inline_local_refs(model.model_json_schema()))
+
+
+def test_wire_targets_match_the_per_dimension_validator_contract():
+    wire = inline_local_refs(VisibleAudit.model_json_schema())
+    for dimension, allowed in DIMENSION_TARGETS.items():
+        target = wire["properties"][dimension]["properties"]["claims"]["items"]["properties"]["target"]
+        assert set(target.get("enum", [target.get("const")])) == allowed
+
+
+@pytest.mark.parametrize("dimension,target", [
+    ("factual", "source_attribution"), ("source", "world_fact"), ("safety", "query_status"),
+])
+def test_out_of_dimension_raw_claim_is_preserved_even_when_wire_schema_forbids_it(dimension, target):
+    # A provider may ignore its narrowed schema. Keep the original claim for
+    # diagnosis instead of moving it, discarding it or converting it to success.
+    finding = claim([], "insufficient_evidence")
+    finding["target"] = target
+    submitted = audit()
+    submitted[dimension]["claims"] = [finding]
+    result = evaluate(RawJudge(submitted))
+    check = getattr(result, dimension)
+    assert check["passed"] is None
+    assert check["validation_error"] == "claims[0]:ClaimTargetDimensionMismatch"
+    retained = check["claims"][0]
+    assert retained["target"] == target
+    assert retained["reported_evidence_relation"] == "insufficient_evidence"
+    assert retained["validated_evidence_relation"] is None
+    assert all(getattr(result, other)["passed"] is True for other in DIMENSION_TARGETS if other != dimension)
+
+
+def test_separate_number_and_source_findings_do_not_contaminate_each_other():
+    def submitted(payload):
+        source_ref = ref(payload, "synthetic_evidence", "sample", "payload", "source")
+        source_claim = {"surface_id": "final", "quote": "来源为unverified-provider-v99",
+            "target": "source_attribution", "evidence_relation": "contradicted", "evidence": [source_ref]}
+        factual_claim = claim([ref(payload, "synthetic_evidence", "sample", "payload", "count")], "supported")
+        result = audit(factual_claim)
+        result["source"]["claims"] = [source_claim]
+        return result
+    candidate = response(9)
+    candidate.answer += "来源为unverified-provider-v99。"
+    result = evaluate(RawJudge(submitted), candidate=candidate)
+    assert result.factual["passed"] is True and result.source["passed"] is False
+    assert not result.errors
 
 
 def test_source_identity_contract_is_registry_owned_and_not_tool_self_attested():

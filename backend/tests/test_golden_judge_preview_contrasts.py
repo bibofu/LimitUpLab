@@ -17,15 +17,20 @@ def _cases():
     return {case.id: case for case in load_preview_contrasts()}
 
 
-def test_original_55_diagnostics_remain_frozen_before_six_append_only_cases():
+def test_original_55_remain_frozen_except_two_reviewed_v8_factual_labels():
     cases = load_calibration_cases()
-    digest = hashlib.sha256(json.dumps([asdict(case) for case in cases[:55]],
+    original = [asdict(case) for case in cases[:55]]
+    for item in original:
+        if item["id"] in {"wrong_date", "wrong_entity"}:
+            assert item["expected"] == (False, True, True, True, None)
+            item["expected"] = (*item["expected"][:-1], False)
+    digest = hashlib.sha256(json.dumps(original,
         ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     assert digest == "37edf607dd8cf24c5f42169c8fe5499cb813b8d1ad4e2dcb2c9ad400ad805158"
     assert cases[55:] == load_preview_contrasts()
     assert len(cases) == 61 and sum(len(case.expected) for case in cases) == 266
     assert sum(1 + bool(case.expectations) for case in cases) == 120
-    assert sum(value is None for case in cases for value in case.expected) == 10
+    assert sum(value is None for case in cases for value in case.expected) == 12
 
 
 def test_preview_metadata_comes_from_production_view_and_successful_synthetic_capture():

@@ -43,6 +43,10 @@ SOURCE_FIELDS = {"source", "sources", "lineage"}
 ROW_FIELDS = {"rows", "events", "items", "candidates", "top_candidates", "stocks", "bars", "top_sectors", "filtered_out"}
 RUNTIME_CONTEXT_FIELDS = {"anchor_date", "page_default_date", "page_default_symbol", "available_local_dates"}
 QUERY_COUNT_FIELDS = {"count", "returned_count", "matched_count", "returned_candidate_count", "universe_count"}
+# These top-level result fields describe the request/response, not arbitrary
+# business values sharing a field name inside a row or a nested object.
+QUERY_RESULT_SCOPE_FIELDS = {"requested_date"}
+QUERY_FAILURE_FIELDS = {"failure_stage", "network_request_sent", "http_status"}
 
 
 def _invalid_state(container):
@@ -69,12 +73,12 @@ def _mixed_value_error(value):
     return next((error for child in children if (error := _mixed_value_error(child))), None)
 
 
-def _payload_capability(tail):
+def _payload_capability(tail, *, result_envelope=True):
     if not tail:
         return "result_envelope"
     field = tail[0]
     if field in ROW_FIELDS and len(tail) >= 3 and type(tail[1]) is int:
-        return _payload_capability(tail[2:])
+        return _payload_capability(tail[2:], result_envelope=False)
     if field in ROW_FIELDS and len(tail) == 1:
         return "returned_collection"
     if field in SOURCE_FIELDS:
@@ -83,6 +87,15 @@ def _payload_capability(tail):
         return "source_context"
     if field == "tool_label":
         return "tool_context"
+    if result_envelope and len(tail) == 1:
+        if field in QUERY_RESULT_SCOPE_FIELDS:
+            return "query_scope_proof"
+        if field in QUERY_FAILURE_FIELDS:
+            return "query_status_proof"
+        if field == "data_as_of":
+            # Also remains usable as a concrete date in a business fact. A
+            # requested date alone cannot establish that business fact's date.
+            return "response_date"
     if field in AVAILABILITY_FIELDS:
         return "query_status_proof"
     if field in {"count_scope", "field_semantics", "filter_policy", "filter_audit", "metric_definitions"}:
@@ -165,6 +178,8 @@ def _capability_role(target, capability):
     if target == "query_status":
         if capability in {"execution_proof", "query_scope_proof", "query_status_proof", "query_semantics"}:
             return capability, True, None
+        if capability == "response_date":
+            return "query_scope_proof", True, None
         if capability in {"returned_collection", "response_count"}:
             return "query_response_proof", True, None
         if capability in {"source_proof", "source_context", "tool_context"}:
@@ -175,7 +190,7 @@ def _capability_role(target, capability):
             return capability, True, None
         if capability == "source_context":
             return "auxiliary_source_context", False, None
-        if capability in {"execution_proof", "query_scope_proof", "query_status_proof", "tool_context"}:
+        if capability in {"execution_proof", "query_scope_proof", "query_status_proof", "response_date", "tool_context"}:
             return "auxiliary_query_context", False, None
         return "rejected", False, "SourceAttributionRequiresSourceEvidence"
     return "cited_evidence", False, None

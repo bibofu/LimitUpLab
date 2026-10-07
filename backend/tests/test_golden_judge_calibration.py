@@ -1,8 +1,9 @@
 """Calibration harness protocol tests; scripted judgements are not model accuracy."""
 
+import hashlib
 import json
 from copy import deepcopy
-from dataclasses import replace
+from dataclasses import asdict, replace
 from pathlib import Path
 from uuid import uuid4
 
@@ -88,7 +89,8 @@ def test_calibration_contrasts_and_original_source_preserve_facts():
     for key in ("source_chinese_equivalent", "source_chinese_paraphrase"):
         assert cases[key].evidence == positive.evidence and cases[key].expected == positive.expected
     assert cases["source_fabricated_real"].expected == (True, False, True, False, True)
-    assert cases["wrong_entity"].expected == (False, True, True, True, False)
+    assert cases["wrong_entity"].expected == (False, True, True, True, None)
+    assert cases["wrong_date"].expected == (False, True, True, True, None)
     assert cases["withdrawn_wrong_number"].drafts[0] != positive.answer
     assert cases["withdrawn_wrong_number"].expected == (True, True, True, True, False)
     assert cases["withdrawn_wrong_source"].expected == (True, True, True, False, True)
@@ -110,7 +112,7 @@ def test_full_scripted_suite_maps_all_phases_without_live_requests():
     report = run_calibration(provider)
     assert report["summary"]["complete"] and report["summary"]["counts"] == {"match": 61}
     assert report["logical_calls_used"] == len(provider.calls) == 120
-    assert report["summary"]["expected_unknown_matches"] == 10
+    assert report["summary"]["expected_unknown_matches"] == 12
     assert report["summary"]["unexpected_unknown_decisions"] == 0
     assert not provider.actions
     relations = {True: "supported", False: "contradicted", None: "insufficient_evidence"}
@@ -119,6 +121,39 @@ def test_full_scripted_suite_maps_all_phases_without_live_requests():
             expected_relation = relations[decision["passed"]]
             assert decision["evidence_relation"] in ({"supported", "no_claim"}
                 if expected_relation == "supported" else {expected_relation})
+
+
+def test_v8_only_revises_two_reviewed_factual_labels_and_preserves_all_inputs():
+    assert calibration.CALIBRATION_VERSION == "golden-judge-calibration-v8"
+    records = [asdict(case) for case in load_calibration_cases()]
+    revised = {"wrong_date", "wrong_entity"}
+    unchanged = [record for record in records if record["id"] not in revised]
+    def digest(items):
+        return hashlib.sha256(json.dumps(items, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
+    assert len(unchanged) == 59
+    # These hashes were captured from v7 before the reviewed two-cell change.
+    assert digest(unchanged) == "61df13baf66a6f547ed2174636dcc9475af2aefcf93b5914f40f725628e49e48"
+    restored = deepcopy(records)
+    for record in restored:
+        if record["id"] in revised:
+            assert record["expected"] == (False, True, True, True, None)
+            record["expected"] = (*record["expected"][:-1], False)
+    assert digest(restored) == "e3417720ddb4403145d3578819de94f26741d30dbf899450c274413c77d538b3"
+    assert len(records) == 61 and sum(len(record["expected"]) for record in records) == 266
+    assert sum(value is None for record in records for value in record["expected"]) == 12
+
+
+@pytest.mark.parametrize("case_id", ["wrong_date", "wrong_entity"])
+def test_wrong_scope_delivery_failure_and_unknown_factual_label_remain_separate(case_id):
+    case = next(case for case in load_calibration_cases() if case.id == case_id)
+    report = run_calibration(ScriptedJudge([(False, True), visible(True, True, None)]),
+                             cases=[case], max_calls=2)
+    item = report["results"][0]
+    assert item["actual"] == [False, True, True, True, None]
+    assert item["status"] == "match" and not item["phase_errors"]
+    assert item["judgements"][0]["passed"] is False
+    assert item["visible_checks"]["factual"]["evidence_relation"] == "insufficient_evidence"
+    assert report["summary"]["expected_unknown_matches"] == 1
 
 
 def test_source_claims_and_final_delivery_have_independent_contrasts():

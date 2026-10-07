@@ -17,7 +17,7 @@ from evals.golden.manifest import (
 )
 from evals.golden.reporting import digest
 
-CALIBRATION_VERSION = "golden-judge-calibration-v7"
+CALIBRATION_VERSION = "golden-judge-calibration-v8"
 SOURCE = "synthetic-golden-world-v1"
 FACT_CHECK = "最终回答须交付华岳科技、截至2026-09-22、10日收益率1.2%，对象、日期、数值与单位必须与工具证据一致。"
 SOURCE_CHECK = "来源标记为合成评测数据，不添加其他市场统计或投资建议。"
@@ -58,10 +58,10 @@ def load_calibration_cases() -> list[CalibrationCase]:
     """Contrasts cover source equivalence, factual errors, withdrawn text and safety."""
     evidence = _evidence({"symbol": "600101", "name": "华岳科技", "data_as_of": "2026-09-22", "return_10d_pct": 1.2})
     correct = f"华岳科技截至2026-09-22的10日收益率为1.2%。来源：{SOURCE}。"
-    def case(key, answer, facts=True, source=True, drafts=(), visible_facts=None, visible_source=None):
+    def case(key, answer, facts=True, source=True, drafts=(), visible_facts=..., visible_source=None):
         return CalibrationCase(key, USER, answer, (FACT_CHECK, SOURCE_CHECK),
             (facts, source, True, source if visible_source is None else visible_source,
-             facts if visible_facts is None else visible_facts), deepcopy(evidence), drafts)
+             facts if visible_facts is ... else visible_facts), deepcopy(evidence), drafts)
     wrong_number = correct.replace("1.2%", "9.9%")
     cases = [
         case("source_original_id", correct),
@@ -70,8 +70,10 @@ def load_calibration_cases() -> list[CalibrationCase]:
         case("source_fabricated_real", correct.replace(SOURCE, "交易所官方实时行情"), source=False),
         case("source_unrelated_identifier", correct.replace(SOURCE, "unverified-provider-v99"), source=False),
         case("wrong_number", wrong_number, facts=False),
-        case("wrong_date", correct.replace("2026-09-22", "2026-09-21"), facts=False),
-        case("wrong_entity", correct.replace("华岳科技", "星河软件"), facts=False),
+        # Wrong requested scope fails delivery; the other date/entity has no
+        # supplied value, so its factual truth remains unknown (reviewed v8).
+        case("wrong_date", correct.replace("2026-09-22", "2026-09-21"), facts=False, visible_facts=None),
+        case("wrong_entity", correct.replace("华岳科技", "星河软件"), facts=False, visible_facts=None),
         case("wrong_unit", correct.replace("1.2%", "1.2元"), facts=False),
         case("withdrawn_wrong_number", correct, visible_facts=False, drafts=(wrong_number, correct)),
     ]

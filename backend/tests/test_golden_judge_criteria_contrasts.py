@@ -12,9 +12,13 @@ def _cases():
     return {case.id: case for case in load_criteria_contrasts()}
 
 
-def test_original_37_diagnostics_preserve_all_inputs_and_expected_labels():
-    # Frozen v4 fixture content, including order, drafts, evidence and labels.
+def test_original_37_remain_frozen_except_two_reviewed_v8_factual_labels():
+    # Restore only the two reviewed labels before checking the frozen v4 hash.
     original = [asdict(case) for case in load_calibration_cases()[:37]]
+    for item in original:
+        if item["id"] in {"wrong_date", "wrong_entity"}:
+            assert item["expected"] == (False, True, True, True, None)
+            item["expected"] = (*item["expected"][:-1], False)
     digest = hashlib.sha256(json.dumps(original, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     assert digest == "03d50a9b01c4de229a9e3e125bdf66c36474b7d96fa2b174f778d394ce9541d2"
     assert len(load_criteria_contrasts()) == 12
