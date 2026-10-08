@@ -580,6 +580,14 @@ class DailyBoardPromotionStat(BaseModel):
     first_board_opening_missing_symbols: list[str] = Field(default_factory=list)
 
 
+class DailyBoardPromotionReport(BaseModel):
+    """Promotion observations and explicit calendar/data coverage limits."""
+
+    items: list[DailyBoardPromotionStat] = Field(default_factory=list)
+    latest_event_date: date | None = None
+    warnings: list[str] = Field(default_factory=list)
+
+
 class FailedRateStat(BaseModel):
     """Intraday break-rate bucket grouped by board height."""
 

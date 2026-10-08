@@ -2,6 +2,7 @@ import unittest
 from datetime import date, datetime, timezone
 
 from app.agents.review_agent import (
+    REVIEW_AGENT_VERSION,
     _build_feature_comparison,
     _build_promotion_comparisons,
     _review_position_label,
@@ -57,10 +58,11 @@ class ReviewAgentTest(unittest.TestCase):
             end_date=date(2026, 5, 15),
             min_score=70,
             provider=provider,
+            trade_dates=(),
         )
 
         self.assertEqual(len(provider.calls), 2)
-        self.assertEqual(report.generated_by, "review-agent-tool-use-v5-position-label")
+        self.assertEqual(report.generated_by, REVIEW_AGENT_VERSION)
         self.assertEqual(report.confidence, 0.77)
         self.assertTrue(report.main_findings)
         self.assertEqual(
@@ -231,6 +233,7 @@ class ReviewAgentTest(unittest.TestCase):
             events=events,
             picks=picks,
             end_date=next_date,
+            trade_dates=(base_date, next_date),
         )
 
         self.assertEqual(len(comparisons), 1)

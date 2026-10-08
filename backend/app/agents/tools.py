@@ -48,11 +48,11 @@ from app.repositories import (
     SQLiteStockNewsRepository,
 )
 from app.services.analysis import (
-    calculate_daily_board_promotion,
     enrich_board_promotion_openings,
     events_for_date,
     summarize_market,
 )
+from app.services.daily_promotion import build_daily_promotion_report
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.finance_news import collect_finance_news
 from app.services.first_board_critic import build_first_board_critic
@@ -1120,11 +1120,12 @@ class AgentToolRegistry:
     ) -> ToolResult:
         """Return empirical daily board-promotion rates from local close data."""
 
-        stats: list[DailyBoardPromotionStat] = calculate_daily_board_promotion(
+        report = build_daily_promotion_report(
             self.events,
             days=max(1, min(days, 60)),
             end_date=end_date,
         )
+        stats: list[DailyBoardPromotionStat] = report.items
         promoted_symbols = sorted(
             {
                 stock.symbol
@@ -1141,6 +1142,8 @@ class AgentToolRegistry:
             "requested_days": days,
             "end_date": end_date.isoformat() if end_date else None,
             "observed_days": len(stats),
+            "latest_event_date": report.latest_event_date.isoformat() if report.latest_event_date else None,
+            "data_missing": report.warnings,
             "items": [item.model_dump(mode="json") for item in stats],
         }
         latest = stats[-1] if stats else None
@@ -1158,8 +1161,9 @@ class AgentToolRegistry:
                 "end_date": end_date.isoformat() if end_date else None,
             },
             output=stats,
-            summary=summary,
+            summary=summary + (" " + "；".join(report.warnings) if report.warnings else ""),
             trace_output=trace_output,
+            result_status="partial" if report.warnings else ("ok" if stats else "empty"),
         )
 
     def sector_performance(

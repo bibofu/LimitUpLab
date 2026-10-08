@@ -221,6 +221,12 @@ export interface DailyBoardPromotionStat {
   promoted_stocks: BoardPromotionStock[];
 }
 
+export interface DailyBoardPromotionReport {
+  items: DailyBoardPromotionStat[];
+  latest_event_date: string | null;
+  warnings: string[];
+}
+
 export interface FirstBoardFilterResult {
   symbol: string;
   name: string;

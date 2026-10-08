@@ -6,7 +6,7 @@ import type {
   AgentChatStreamEvent,
   ChatSessionDetail,
   ChatSessionsResponse,
-  DailyBoardPromotionStat,
+  DailyBoardPromotionReport,
   DragonTigerReviewResponse,
   FinanceNewsPage,
   FirstBoardRatingsResponse,
@@ -136,8 +136,8 @@ export function fetchRecentLimitUpEvents(days = 7) {
  * typed response promise.
  */
 export function fetchDailyBoardPromotion(days = 5) {
-  return request<DailyBoardPromotionStat[]>(
-    `/api/analysis/daily-promotion?days=${days}`,
+  return request<DailyBoardPromotionReport>(
+    `/api/analysis/daily-promotion-report?days=${days}`,
   );
 }
 

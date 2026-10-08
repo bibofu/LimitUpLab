@@ -69,7 +69,7 @@ import {
   fetchStockTradingDayKLine,
 } from "./api";
 import type {
-  DailyBoardPromotionStat,
+  DailyBoardPromotionReport,
   FirstBoardRating,
   FirstBoardRatingsResponse,
   FinanceNewsPage,
@@ -104,7 +104,7 @@ interface DashboardData {
   failed: LimitUpEvent[];
   recent: LimitUpEvent[];
   firstBoardRatings: FirstBoardRatingsResponse;
-  dailyBoardPromotion: DailyBoardPromotionStat[];
+  dailyBoardPromotion: DailyBoardPromotionReport;
 }
 
 const viewMeta: Record<ViewKey, { title: string; eyebrow: string }> = {

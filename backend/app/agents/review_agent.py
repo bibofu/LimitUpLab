@@ -8,7 +8,7 @@ from dataclasses import dataclass
 from datetime import date
 from statistics import median
 from app.services.prediction_time import assess_prediction_time
-from typing import Any
+from typing import Any, Iterable
 
 from app.models import (
     AgentEvaluationItem,
@@ -24,9 +24,14 @@ from app.repositories import SQLiteFirstBoardRepository
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.llm_provider import LLMProvider, get_llm_provider
 from app.services.outcome_completeness import build_top10_outcome_completeness
+from app.services.promotion_calendar import (
+    PromotionCalendar,
+    adjacent_trade_date_pairs,
+    load_promotion_calendar,
+)
 
 
-REVIEW_AGENT_VERSION = "review-agent-tool-use-v5-position-label"
+REVIEW_AGENT_VERSION = "review-agent-tool-use-v6-trading-calendar"
 
 
 @dataclass(frozen=True)
@@ -67,6 +72,7 @@ class ReviewAgentToolbox:
         min_score: float,
         top_per_day: int,
         follow_days: int,
+        trade_dates: Iterable[date] | None = None,
     ):
         self.events = events
         self.repository = repository
@@ -77,6 +83,17 @@ class ReviewAgentToolbox:
         self.follow_days = follow_days
         self._evaluations: list[AgentEvaluationItem] | None = None
         self._predictions: dict[str, AgentPrediction] | None = None
+        if trade_dates is not None:
+            self.promotion_calendar = PromotionCalendar(tuple(sorted(set(trade_dates))), ())
+        else:
+            observed_dates = sorted({
+                event.trade_date for event in events
+                if start_date <= event.trade_date <= end_date
+            })
+            self.promotion_calendar = (
+                load_promotion_calendar(observed_dates[0], observed_dates[-1])
+                if observed_dates else PromotionCalendar((), ("复盘区间没有可确认的行情交易日。",))
+            )
 
     def daily_high_score_picks(self) -> ReviewToolResult:
         """Return daily top-scored prediction snapshots in the period."""
@@ -149,8 +166,10 @@ class ReviewAgentToolbox:
             events=self.events,
             picks=self._high_score_evaluations(),
             end_date=self.end_date,
+            trade_dates=self.promotion_calendar.trade_dates,
         )
         aggregate = _aggregate_promotion_comparisons(comparisons)
+        warnings = self.promotion_warnings(comparisons)
         return ReviewToolResult(
             name="compare_top10_market_promotion",
             input={
@@ -160,6 +179,8 @@ class ReviewAgentToolbox:
             },
             output={
                 **aggregate,
+                "complete": not warnings,
+                "data_missing": warnings,
                 "daily_comparisons": [
                     item.model_dump(mode="json") for item in comparisons
                 ],
@@ -169,6 +190,28 @@ class ReviewAgentToolbox:
                 f"market first boards across {aggregate['promotion_ready_date_count']} ready dates."
             ),
         )
+
+    def promotion_warnings(self, comparisons: list[ReviewPromotionComparison]) -> list[str]:
+        """Explain unavailable comparisons without replacing missing outcomes with zero rates."""
+
+        warnings = [f"1进2晋级日历：{warning}" for warning in self.promotion_calendar.warnings]
+        observed_dates = {event.trade_date for event in self.events if event.trade_date <= self.end_date}
+        for item in comparisons:
+            if item.outcome_ready:
+                continue
+            if item.trade_date >= self.end_date and item.trade_date in observed_dates:
+                # A cohort formed at the cutoff naturally awaits a future close.
+                continue
+            if item.trade_date not in observed_dates:
+                reason = "基准日行情事件缺失"
+            elif item.next_trade_date is None:
+                reason = "交易日历未提供可确认的下一交易日"
+            elif item.next_trade_date > self.end_date:
+                reason = f"下一交易日 {item.next_trade_date} 超出本次复盘截至日期"
+            else:
+                reason = f"缺少下一交易日 {item.next_trade_date} 的行情事件，未跨过缺失日计算"
+            warnings.append(f"1进2：{item.trade_date} {reason}，晋级结果未就绪。")
+        return list(dict.fromkeys(warnings))
 
     def prediction_for(self, prediction_id: str) -> AgentPrediction | None:
         """Return the immutable prediction snapshot used by one evaluation."""
@@ -250,6 +293,7 @@ def build_review_agent_report(
     top_per_day: int = 10,
     follow_days: int = 5,
     provider: LLMProvider | None = None,
+    trade_dates: Iterable[date] | None = None,
 ) -> ReviewAgentReportResponse:
     """Run the Review Agent with LLM-planned tools and return a structured report."""
 
@@ -262,6 +306,7 @@ def build_review_agent_report(
         min_score=min_score,
         top_per_day=top_per_day,
         follow_days=follow_days,
+        trade_dates=trade_dates,
     )
     active_provider = provider or get_llm_provider()
     tool_names = _plan_review_tools(active_provider, start_date, end_date, min_score)
@@ -272,7 +317,9 @@ def build_review_agent_report(
         events=events,
         picks=picks,
         end_date=end_date,
+        trade_dates=toolbox.promotion_calendar.trade_dates,
     )
+    promotion_warnings = toolbox.promotion_warnings(promotion_comparisons)
     feature_comparison = toolbox.feature_comparison()
     excluded_time_count = sum(not assess_prediction_time(p).research_eligible
                               for p in toolbox._prediction_lookup().values())
@@ -291,6 +338,7 @@ def build_review_agent_report(
         warnings=[
             "LLM review unavailable; deterministic fallback generated from tool facts.",
             *completeness.warnings,
+            *promotion_warnings,
         ],
         feature_comparison=feature_comparison,
         promotion_comparisons=promotion_comparisons,
@@ -312,6 +360,7 @@ def build_review_agent_report(
             promotion_comparisons=promotion_comparisons,
         )
         report.warnings.extend(completeness.warnings)
+        report.warnings.extend(promotion_warnings)
         report.excluded_time_prediction_count = excluded_time_count
         return report
     except Exception as error:
@@ -524,6 +573,7 @@ def _build_promotion_comparisons(
     events: list[LimitUpEvent],
     picks: list[AgentEvaluationItem] | list[ReviewAgentPick],
     end_date: date,
+    trade_dates: Iterable[date] = (),
 ) -> list[ReviewPromotionComparison]:
     """Build daily Top-pick and full-market first-to-second comparisons."""
 
@@ -531,11 +581,7 @@ def _build_promotion_comparisons(
     for event in events:
         if event.trade_date <= end_date:
             events_by_date.setdefault(event.trade_date, {})[event.symbol] = event
-    available_dates = sorted(events_by_date)
-    next_dates = {
-        trade_date: available_dates[index + 1]
-        for index, trade_date in enumerate(available_dates[:-1])
-    }
+    next_dates = dict(adjacent_trade_date_pairs(trade_dates))
     picks_by_date: dict[date, list[AgentEvaluationItem | ReviewAgentPick]] = {}
     for pick in picks:
         picks_by_date.setdefault(pick.trade_date, []).append(pick)
@@ -552,7 +598,9 @@ def _build_promotion_comparisons(
         next_trade_date = next_dates.get(trade_date)
         outcome_ready = bool(
             next_trade_date
-            and 1 <= (next_trade_date - trade_date).days <= 4
+            and next_trade_date <= end_date
+            and base_events
+            and next_trade_date in events_by_date
         )
         if not outcome_ready or next_trade_date is None:
             comparisons.append(

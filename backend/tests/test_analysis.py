@@ -153,7 +153,8 @@ class AnalysisTest(unittest.TestCase):
             event("000003", date(2026, 8, 24), 4),
         ]
 
-        stats = calculate_daily_board_promotion(events, days=10)
+        calendar = [date(2026, 7, 1), date(2026, 7, 2), date(2026, 8, 20), date(2026, 8, 21), date(2026, 8, 24)]
+        stats = calculate_daily_board_promotion(events, days=10, trade_dates=calendar)
 
         self.assertEqual(len(stats), 2)
         first, latest = stats
@@ -181,7 +182,7 @@ class AnalysisTest(unittest.TestCase):
             ["000003", "000001", "000002"],
         )
         self.assertEqual(
-            calculate_daily_board_promotion(events, days=1),
+            calculate_daily_board_promotion(events, days=1, trade_dates=calendar),
             [latest],
         )
 

@@ -13,7 +13,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query, Request, Response,
 from fastapi.responses import StreamingResponse
 
 from app.agents import answer_first_board_chat, build_first_board_ratings, build_review_agent_report
-from app.agents.review_agent import enrich_review_position_labels
+from app.agents.review_agent import REVIEW_AGENT_VERSION, enrich_review_position_labels
 from app.collectors import HithinkFinanceError
 from app.models import (
     AgentChatRequest,
@@ -697,7 +697,15 @@ def get_review_agent_report(
         snapshot_prediction_dates = {
             item.trade_date for item in snapshot.report.reviewed_picks
         } if snapshot is not None else set()
-        if snapshot is not None and required_tracking_dates.issubset(snapshot_prediction_dates):
+        if (
+            snapshot is not None
+            and snapshot.report.generated_by == REVIEW_AGENT_VERSION
+            and required_tracking_dates.issubset(snapshot_prediction_dates)
+            and not any(
+                not item.outcome_ready and item.trade_date < resolved_end
+                for item in snapshot.report.promotion_comparisons
+            )
+        ):
             return enrich_review_position_labels(snapshot.report, first_board_repository)
     if start_date is None:
         resolved_start = available_dates[max(0, end_index - 5)]

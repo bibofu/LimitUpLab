@@ -15,7 +15,7 @@ import {
   fetchReviewAgentReport,
 } from "../api";
 import type {
-  DailyBoardPromotionStat,
+  DailyBoardPromotionReport,
   DragonTigerReviewResponse,
   ReviewAgentPick,
   ReviewAgentReportResponse,
@@ -34,7 +34,7 @@ import { displayRelayPositionLabel } from "../relayRanking";
 import { Panel } from "./Panel";
 
 interface ReviewDashboardProps {
-  dailyBoardPromotion: DailyBoardPromotionStat[];
+  dailyBoardPromotion: DailyBoardPromotionReport;
   latestTradeDate: string;
 }
 
@@ -48,7 +48,7 @@ export function ReviewDashboard({
   return (
     <>
       <HighScoreReviewPanel latestTradeDate={latestTradeDate} />
-      <DailyBoardPromotionPanel stats={dailyBoardPromotion} />
+      <DailyBoardPromotionPanel report={dailyBoardPromotion} />
       <DragonTigerReviewPanel tradeDate={latestTradeDate} />
     </>
   );
@@ -239,27 +239,34 @@ function DragonTigerReviewPanel({ tradeDate }: { tradeDate: string }) {
 /**
  * Display daily board-promotion counts, denominators and observed successful stocks.
  */
-function DailyBoardPromotionPanel({ stats }: { stats: DailyBoardPromotionStat[] }) {
+function DailyBoardPromotionPanel({ report }: { report: DailyBoardPromotionReport }) {
   /** Let users inspect five daily promotion cohorts and their successful stocks. */
 
-  const recentStats = useMemo(/* Derive recentStats from the listed dependencies, reusing it until those dependencies change. */ () => stats.slice(-5), [stats]);
+  const recentStats = useMemo(() => report.items.slice(-5), [report.items]);
   const displayStats = useMemo(/* Derive displayStats from the listed dependencies, reusing it until those dependencies change. */ () => [...recentStats].reverse(), [recentStats]);
   const latestDate = recentStats[recentStats.length - 1]?.trade_date ?? "";
-  const [selectedDate, setSelectedDate] = useState(latestDate);
+  // Null follows new data; an explicit historical selection stays selected.
+  const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
   useEffect(/* Synchronize DailyBoardPromotionPanel with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
-    if (!recentStats.some(/* Check whether at least one entry satisfies this condition. */ (item) => item.trade_date === selectedDate)) {
-      setSelectedDate(latestDate);
+    if (selectedDate !== null && !recentStats.some((item) => item.trade_date === selectedDate)) {
+      setSelectedDate(null);
     }
-  }, [latestDate, recentStats, selectedDate]);
+  }, [recentStats, selectedDate]);
 
-  const selectedIndex = recentStats.findIndex(/* Locate the entry matching the active identity/time used by DailyBoardPromotionPanel. */ (item) => item.trade_date === selectedDate);
-  const selected = recentStats[selectedIndex] ?? recentStats[recentStats.length - 1];
+  const requestedIndex = recentStats.findIndex((item) => item.trade_date === selectedDate);
+  const selectedIndex = requestedIndex >= 0 ? requestedIndex : recentStats.length - 1;
+  const selected = recentStats[selectedIndex];
   const previous = selectedIndex > 0 ? recentStats[selectedIndex - 1] : undefined;
+  const dataNotice = report.latest_event_date && (!latestDate || report.latest_event_date > latestDate)
+    ? `最新事件数据日：${report.latest_event_date}；${latestDate ? `最新可计算晋级统计日：${latestDate}` : "暂无可计算的晋级统计"}。`
+    : null;
+  const notices = [...new Set([dataNotice, ...report.warnings].filter((item): item is string => Boolean(item)))];
   if (!selected) {
     return (
       <section className="promotion-section">
         <Panel title="每日连板晋级率" icon={<GitBranch size={18} />}>
+          <PromotionWarnings warnings={notices} />
           <div className="empty-state">相邻交易日收盘数据不足，暂时无法计算晋级率。</div>
         </Panel>
       </section>
@@ -270,6 +277,7 @@ function DailyBoardPromotionPanel({ stats }: { stats: DailyBoardPromotionStat[] 
   return (
     <section className="promotion-section">
       <Panel title="每日连板晋级率" icon={<GitBranch size={18} />}>
+        <PromotionWarnings warnings={notices} />
         <div className="promotion-panel">
           <div className="promotion-latest">
             <div>
@@ -292,7 +300,7 @@ function DailyBoardPromotionPanel({ stats }: { stats: DailyBoardPromotionStat[] 
                 <em>{selected.continued_board_promoted_count}/{selected.continued_board_sample_size}</em>
               </span>
               <span>
-                <small>较前一日</small>
+                <small>较上一统计日</small>
                 <b className={(change ?? 0) >= 0 ? "positive" : "negative"}>
                   {change === null ? "暂无" : `${formatSigned(change * 100, 1)} 个百分点`}
                 </b>
@@ -308,7 +316,7 @@ function DailyBoardPromotionPanel({ stats }: { stats: DailyBoardPromotionStat[] 
                 className={`promotion-day ${item.trade_date === selected.trade_date ? "active" : ""}`}
                 key={item.trade_date}
                 aria-pressed={item.trade_date === selected.trade_date}
-                onClick={/* Handle onClick for this control in DailyBoardPromotionPanel. */ () => setSelectedDate(item.trade_date)}
+                onClick={() => setSelectedDate(item.trade_date === latestDate ? null : item.trade_date)}
               >
                 <div>
                   <time dateTime={item.trade_date}>{item.trade_date.slice(5)}</time>
@@ -361,6 +369,15 @@ function DailyBoardPromotionPanel({ stats }: { stats: DailyBoardPromotionStat[] 
   );
 }
 
+function PromotionWarnings({ warnings }: { warnings: string[] }) {
+  if (warnings.length === 0) return null;
+  return (
+    <div className="review-agent-error" role="status">
+      {warnings.map((warning) => <p key={warning}>{warning}</p>)}
+    </div>
+  );
+}
+
 /**
  * Coordinate historical high-score review loading and the resulting cohort/stock explanations.
  */
@@ -398,7 +415,7 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
           || current === REVIEW_MISS_SELECTION
         )
           ? current
-          : trackDates[0] ?? REVIEW_SUCCESS_SELECTION
+          : null
       ));
     } catch (caught) {
       setError(caught instanceof Error ? caught.message : "Review Agent 复盘失败");
@@ -408,6 +425,9 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
   }
 
   const reviewedPicks = report?.reviewed_picks ?? [];
+  const promotionWarnings = [...new Set((report?.warnings ?? []).filter(
+    (warning) => warning.includes("晋级") || warning.includes("1进2"),
+  ))];
   const reviewDates = groupReviewPicksByDate(reviewedPicks);
   const trackDates = report ? buildReviewTrackDates(reviewDates, report.end_date) : [];
   const trackedSampleSize = trackDates.reduce(
@@ -473,6 +493,7 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
         </div>
 
         {error ? <p className="review-agent-error">{error}</p> : null}
+        <PromotionWarnings warnings={promotionWarnings} />
 
         <div className="review-date-cutoff">
           <span>复盘截止日</span>
@@ -526,7 +547,7 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
               failedPatterns={report.failed_patterns}
               failedPicks={failedPicks}
               groupedPicks={reviewDates}
-              onSelect={setActiveReviewSelection}
+              onSelect={(selection) => setActiveReviewSelection(selection === trackDates[0] ? null : selection)}
               picks={selectedPicks}
               promotionComparisons={promotionComparisons}
               successfulPatterns={report.successful_patterns}

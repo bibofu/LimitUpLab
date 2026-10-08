@@ -6,9 +6,12 @@ test and reusable for future agent/reporting features.
 """
 
 from collections import Counter, defaultdict
+from collections.abc import Iterable
 from datetime import date
 from statistics import mean
 from typing import Optional
+
+from app.services.promotion_calendar import adjacent_trade_date_pairs
 
 from app.models import (
     BoardPromotionBucket,
@@ -196,28 +199,36 @@ def calculate_daily_board_promotion(
     events: list[LimitUpEvent],
     days: int = 5,
     end_date: date | None = None,
+    *,
+    trade_dates: Iterable[date] = (),
 ) -> list[DailyBoardPromotionStat]:
-    """Calculate promotion rates for each adjacent pair of local trading dates.
+    """Calculate promotion rates for verified adjacent exchange trading dates.
 
     The previous date's stocks that closed at limit-up form the denominator. A
     stock is promoted only when it also closes at limit-up on the next observed
-    trading date with its board height increased by exactly one. Pairs separated
-    by more than four calendar days are skipped because local history may have a
-    data gap that cannot be distinguished from a long exchange holiday.
+    trading date with its board height increased by exactly one. An explicit
+    calendar is required: missing sessions must never be bridged as holidays.
     """
 
     if days <= 0:
         return []
     grouped: dict[date, dict[str, LimitUpEvent]] = defaultdict(dict)
     for event in events:
+        if end_date is not None and event.trade_date > end_date:
+            continue
+        grouped.setdefault(event.trade_date, {})
         if event.closed_limit:
             grouped[event.trade_date][event.symbol] = event
 
-    trade_dates = sorted(grouped)
+    observed_dates = sorted(grouped)
+    if not observed_dates:
+        return []
+    calendar_dates = sorted({day for day in trade_dates if day <= observed_dates[-1]})
+    verified_pairs = adjacent_trade_date_pairs(calendar_dates)
+    requested_dates = set(calendar_dates[-days:])
     daily_stats: list[DailyBoardPromotionStat] = []
-    for previous_date, trade_date in zip(trade_dates, trade_dates[1:]):
-        calendar_gap = (trade_date - previous_date).days
-        if calendar_gap < 1 or calendar_gap > 4:
+    for previous_date, trade_date in zip(observed_dates, observed_dates[1:]):
+        if trade_date not in requested_dates or (previous_date, trade_date) not in verified_pairs:
             continue
         previous_events = list(grouped[previous_date].values())
         current_events = grouped[trade_date]

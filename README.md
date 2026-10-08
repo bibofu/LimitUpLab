@@ -601,11 +601,14 @@ powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mo
 | `POST` | `/api/agents/chat/stream` | SSE 流式 Agent 问答 |
 | `GET` | `/api/limit-up/events` | 涨停事件查询 |
 | `GET` | `/api/analysis/daily-promotion` | 每日连板晋级率与板高分层统计 |
+| `GET` | `/api/analysis/daily-promotion-report` | 晋级率、最新事件日期及交易日历/收盘数据缺口 |
 | `GET` | `/api/stocks/{symbol}/kline` | 个股日 K 线 |
 | `GET` | `/api/stocks/{symbol}/market-data` | 个股详情聚合行情、最新收盘和位置判断 |
 | `GET` | `/api/stocks/{symbol}/intraday-history` | 最近 2-10 个交易日的分钟分时，默认五日一分钟周期 |
 
 完整接口定义以 Swagger 为准。
+
+每日连板晋级率和高分票 1 进 2 对照均按交易日历确认相邻交易日，正常跨长假可以计算；若中间交易日的收盘事件缺失，则不跨过该日推算。日历不可用时明确提示缺口，不按自然日间隔或工作日猜测。复盘页同时展示最新事件日期和可计算统计日期；旧版复盘快照保留原件，读取时按新版口径重新计算响应，不覆盖历史预测或复盘记录。
 
 ## 测试
 

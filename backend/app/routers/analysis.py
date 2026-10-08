@@ -6,6 +6,7 @@ from fastapi import APIRouter, Query
 
 from app.models import (
     ContinuationStat,
+    DailyBoardPromotionReport,
     DailyBoardPromotionStat,
     FailedRateStat,
     PostPerformanceStat,
@@ -13,10 +14,10 @@ from app.models import (
 from app.repositories import get_limit_up_repository
 from app.services.analysis import (
     calculate_continuation,
-    calculate_daily_board_promotion,
     calculate_failed_rates,
     calculate_post_performance,
 )
+from app.services.daily_promotion import build_daily_promotion_report
 
 router = APIRouter()
 
@@ -35,10 +36,21 @@ def get_daily_board_promotion(
 ) -> list[DailyBoardPromotionStat]:
     """Return recent daily board-promotion rates from persisted close data."""
 
-    return calculate_daily_board_promotion(
+    return build_daily_promotion_report(
         get_limit_up_repository().list_events(),
         days=days,
         end_date=end_date,
+    ).items
+
+
+@router.get("/daily-promotion-report", response_model=DailyBoardPromotionReport)
+def get_daily_board_promotion_report(
+    days: int = Query(default=5, ge=1, le=60),
+    end_date: date | None = None,
+) -> DailyBoardPromotionReport:
+    """Return promotion rates together with explicit calendar/data gaps."""
+    return build_daily_promotion_report(
+        get_limit_up_repository().list_events(), days=days, end_date=end_date,
     )
 
 
