@@ -63,6 +63,10 @@ DragonTigerCollector = Callable[[date], dict[str, DragonTigerFact]]
 PopularityCollector = Callable[[], dict[str, PopularityFact]]
 
 
+class RecommendationCalendarUnavailableError(RuntimeError):
+    """An unverified target was recorded; the refresh worker may retry safely."""
+
+
 @dataclass(frozen=True)
 class _BaseCandidate:
     strategy: str
@@ -128,11 +132,19 @@ def refresh_recommendation_intelligence(
             warnings=[*warnings, "交易日历不可用，目标交易日未确认；未采集新证据或固化候选。", str(error)],
         )
         intelligence_repo.save(unverified)
-        return unverified
+        raise RecommendationCalendarUnavailableError(str(error)) from error
     # Calendar IO can cross the market-open cutoff. Recheck the clock before
     # deciding whether fresh market/news evidence may still be collected.
     refreshed_at = _as_shanghai(now or datetime.now(SHANGHAI_TZ))
     previous = intelligence_repo.get_latest()
+    persisted_final = intelligence_repo.get_final(target_trade_date.isoformat()) if target_trade_date else None
+    if persisted_final is not None:
+        validate_final_response(persisted_final)
+        if persisted_final.relay_base_date != relay_date:
+            raise RuntimeError("Stored recommendation final does not match the current base trading date.")
+        if previous != persisted_final:
+            intelligence_repo.save(persisted_final)
+        return persisted_final
     same_basis = _matches_recommendation_basis(
         previous,
         target_trade_date=target_trade_date,

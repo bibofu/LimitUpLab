@@ -1,5 +1,6 @@
 """Offline calendar and restart-boundary regressions for recommendation drafts."""
 
+import json
 from datetime import date, datetime
 from types import SimpleNamespace
 from unittest.mock import Mock
@@ -9,6 +10,7 @@ import pytest
 from app.models import RecommendationIntelligenceItem, RecommendationIntelligenceResponse, StockNewsFacts
 from app.repositories import SQLiteFirstBoardRepository, SQLiteRecommendationIntelligenceRepository
 from app.services import recommendation_intelligence as service
+from scripts import run_recommendation_refresh_loop as worker
 
 
 BASE = date(2026, 9, 30)
@@ -91,9 +93,10 @@ def test_unverified_calendar_records_unknown_target_and_preserves_history(isolat
                        else {"return_value": calendar_result}))
     monkeypatch.setattr(service, "collect_a_share_trade_dates", calendar)
 
-    response = refresh(datetime.fromisoformat("2026-10-08T10:00:00+08:00"))
+    with pytest.raises(service.RecommendationCalendarUnavailableError):
+        refresh(datetime.fromisoformat("2026-10-08T10:00:00+08:00"))
 
-    assert repository.get_latest() == response
+    response = repository.get_latest()
     assert response.target_trade_date is None
     assert response.relay_base_date == BASE and response.stage == "draft"
     assert response.status == "partial" and response.items == [] and response.finalized_at is None
@@ -168,10 +171,72 @@ def test_calendar_failure_never_overwrites_immutable_final(isolated_refresh, mon
     assert repository.save_final(previous)
     monkeypatch.setattr(service, "collect_a_share_trade_dates", Mock(side_effect=RuntimeError("offline")))
 
-    response = refresh(datetime.fromisoformat("2026-10-08T10:00:00+08:00"))
-
-    assert response.target_trade_date is None and response.stage == "draft"
+    with pytest.raises(service.RecommendationCalendarUnavailableError):
+        refresh(datetime.fromisoformat("2026-10-08T10:00:00+08:00"))
+    assert repository.get_latest().target_trade_date is None
+    assert repository.get_latest().stage == "draft"
     assert repository.get_final(TARGET.isoformat()) == previous
+    collector.assert_not_called()
+
+
+def test_calendar_recovery_restores_existing_final_after_open(isolated_refresh, monkeypatch):
+    repository, refresh, collector = isolated_refresh
+    previous = snapshot(stage="final")
+    assert repository.save_final(previous)
+    calendar = Mock(side_effect=[RuntimeError("temporary calendar failure"), [BASE, TARGET]])
+    monkeypatch.setattr(service, "collect_a_share_trade_dates", calendar)
+    now = datetime.fromisoformat("2026-10-08T10:00:00+08:00")
+
+    with pytest.raises(service.RecommendationCalendarUnavailableError):
+        refresh(now)
+    assert repository.get_latest().target_trade_date is None
+
+    response = refresh(now)
+
+    assert response == previous and response.stage == "final"
+    assert repository.get_latest() == previous
+    assert repository.get_final(TARGET.isoformat()) == previous
+    assert calendar.call_count == 2
+    collector.assert_not_called()
+
+
+def test_worker_retries_temporary_calendar_failure_after_recording_unknown(isolated_refresh, monkeypatch):
+    repository, refresh, collector = isolated_refresh
+    repository.save(snapshot(with_items=True))
+    calendar = Mock(side_effect=[RuntimeError("temporary calendar failure"), [BASE, TARGET]])
+    monkeypatch.setattr(service, "collect_a_share_trade_dates", calendar)
+    monkeypatch.setattr(worker, "refresh_recommendation_intelligence", lambda **_kwargs: refresh(
+        datetime.fromisoformat("2026-10-08T10:00:00+08:00"),
+    ))
+    observed_targets = []
+    sleep = Mock(side_effect=lambda _seconds: observed_targets.append(repository.get_latest().target_trade_date))
+    monkeypatch.setattr(worker.time, "sleep", sleep)
+    finalize = Mock(side_effect=AssertionError("must not finalize after market open"))
+    monkeypatch.setattr(worker, "finalize_recommendation_intelligence", finalize)
+    report_path = repository.database_path.parent / "refresh.json"
+
+    assert worker._run_refresh_with_retries(1440, report_path) is None
+
+    assert observed_targets == [None]
+    assert calendar.call_count == 2
+    sleep.assert_called_once_with(5)
+    report = json.loads(report_path.read_text(encoding="utf-8"))
+    assert report["target_trade_date"] == TARGET.isoformat() and report["stage"] == "missed_cutoff"
+    finalize.assert_not_called()
+    collector.assert_not_called()
+
+
+def test_recovery_does_not_restore_invalid_final_metadata(isolated_refresh, monkeypatch):
+    repository, refresh, collector = isolated_refresh
+    previous = snapshot()
+    repository.save(previous)
+    invalid = snapshot(stage="final").model_copy(update={"prediction_provenance": {}})
+    monkeypatch.setattr(repository, "get_final", Mock(return_value=invalid))
+
+    with pytest.raises(ValueError, match="Invalid final prediction time"):
+        refresh(datetime.fromisoformat("2026-10-08T10:00:00+08:00"))
+
+    assert repository.get_latest() == previous
     collector.assert_not_called()
 
 
