@@ -3,6 +3,7 @@ import os
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
+from unittest.mock import patch
 from uuid import uuid4
 from zoneinfo import ZoneInfo
 
@@ -13,9 +14,9 @@ from app.services.recommendation_intelligence import (
 
 from scripts.run_recommendation_refresh_loop import (
     RefreshLoopLock,
-    _inside_premarket_catch_up_window,
     _seconds_until_next_premarket_refresh,
 )
+from scripts import run_recommendation_refresh_loop as worker
 
 
 class RecommendationRefreshLoopTest(unittest.TestCase):
@@ -39,18 +40,28 @@ class RecommendationRefreshLoopTest(unittest.TestCase):
             15 * 60 * 60 + 17.5 * 60,
         )
 
-    # Regression scenario: worker restart only catches up before market open.
-    def test_worker_restart_only_catches_up_before_market_open(self) -> None:
-        self.assertTrue(
-            _inside_premarket_catch_up_window(
-                datetime.fromisoformat("2026-09-03T08:15:00+08:00")
-            )
-        )
-        self.assertFalse(
-            _inside_premarket_catch_up_window(
-                datetime.fromisoformat("2026-09-03T09:30:00+08:00")
-            )
-        )
+    def test_worker_reconciles_state_before_first_scheduled_wait(self) -> None:
+        observed = []
+
+        def reconcile(*_args):
+            observed.append("reconcile")
+
+        def stop_at_wait(_seconds):
+            observed.append("wait")
+            raise StopIteration("one worker iteration")
+
+        with patch.object(worker, "configure_runtime_environment"), patch.object(
+            worker.sys, "argv", ["run_recommendation_refresh_loop.py"],
+        ), patch.object(worker, "RefreshLoopLock") as lock, patch.object(
+            worker, "_run_refresh_with_retries", side_effect=reconcile,
+        ), patch.object(worker, "_seconds_until_next_premarket_refresh", return_value=60), patch.object(
+            worker.time, "sleep", side_effect=stop_at_wait,
+        ):
+            with self.assertRaises(StopIteration):
+                worker.main()
+            lock.return_value.__enter__.return_value.touch.assert_called_once()
+
+        self.assertEqual(observed, ["reconcile", "wait"])
 
     # Regression scenario: target day finalization starts at 0800.
     def test_target_day_finalization_starts_at_0800(self) -> None:

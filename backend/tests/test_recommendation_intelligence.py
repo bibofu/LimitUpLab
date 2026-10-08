@@ -57,6 +57,9 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         with patch(
             "app.services.recommendation_intelligence._load_base_candidates",
             return_value=([candidate], date(2026, 8, 31), []),
+        ), patch(
+            "app.services.recommendation_intelligence.collect_a_share_trade_dates",
+            return_value=[date(2026, 8, 31), date(2026, 9, 1)],
         ):
             # The inline callback supplies the fixture value or replacement behavior used by this
             # test; it is evaluated only when the code under test calls it.
@@ -101,6 +104,9 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         with patch(
             "app.services.recommendation_intelligence._load_base_candidates",
             return_value=([candidate], base_date, []),
+        ), patch(
+            "app.services.recommendation_intelligence.collect_a_share_trade_dates",
+            return_value=[base_date, target_date],
         ):
             # The inline callback supplies the fixture value or replacement behavior used by this
             # test; it is evaluated only when the code under test calls it.
@@ -196,10 +202,19 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         self.snapshot_repo.save(missed)
 
         self.assertEqual(self.snapshot_repo.get_latest(), missed)
+        displayed = self.snapshot_repo.get_latest_displayable()
         self.assertEqual(
-            self.snapshot_repo.get_latest_displayable(),
-            available,
+            displayed.model_dump(exclude={"display_context"}),
+            available.model_dump(exclude={"display_context"}),
         )
+        self.assertEqual(displayed.display_context.model_dump(), {
+            "is_history_fallback": True,
+            "latest_target_trade_date": missed.target_trade_date,
+            "latest_stage": "missed_cutoff",
+            "latest_refreshed_at": missed.refreshed_at,
+            "latest_warnings": missed.warnings,
+        })
+        self.assertEqual(self.snapshot_repo.get_latest(), missed)
 
 
 if __name__ == "__main__":

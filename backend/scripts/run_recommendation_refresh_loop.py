@@ -29,7 +29,6 @@ DEFAULT_LOCK_PATH = BACKEND_ROOT / "data" / "recommendation_refresh.lock"
 DEFAULT_REPORT_PATH = BACKEND_ROOT / "data" / "recommendation_refresh_latest.json"
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 PREMARKET_REFRESH_TIME = datetime_time(8, 0)
-MARKET_OPEN_TIME = datetime_time(9, 30)
 WORKER_STALE_AFTER = timedelta(hours=30)
 
 
@@ -115,7 +114,9 @@ def main() -> int:
         return 0
 
     with RefreshLoopLock(args.lock_path, stale_after=WORKER_STALE_AFTER) as lock:
-        run_immediately = _inside_premarket_catch_up_window()
+        # Reconcile persisted state on every start. The refresh service enforces
+        # the target day's cutoff before collecting new evidence.
+        run_immediately = True
         while True:
             if not run_immediately:
                 time.sleep(_seconds_until_next_premarket_refresh())
@@ -192,13 +193,6 @@ def _seconds_until_next_premarket_refresh(now: datetime | None = None) -> float:
     if current >= scheduled:
         scheduled += timedelta(days=1)
     return max(1.0, (scheduled - current).total_seconds())
-
-
-def _inside_premarket_catch_up_window(now: datetime | None = None) -> bool:
-    """Catch up after a worker restart, but never collect evidence after market open."""
-
-    current = (now or datetime.now(SHANGHAI_TZ)).astimezone(SHANGHAI_TZ)
-    return PREMARKET_REFRESH_TIME <= current.time() < MARKET_OPEN_TIME
 
 
 # Read the process identity stored in a refresh-loop lock; invalid lock content returns None.

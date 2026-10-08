@@ -116,9 +116,22 @@ def refresh_recommendation_intelligence(
         limit_up_repository=limit_repo,
         first_board_repository=first_repo,
     )
-    target_trade_date = _target_trade_date(
-        base_trade_date=relay_date,
-    )
+    try:
+        target_trade_date = _target_trade_date(base_trade_date=relay_date)
+    except RuntimeError as error:
+        unverified = RecommendationIntelligenceResponse(
+            refresh_id=f"recommendation_calendar_unverified_{uuid4().hex}",
+            refreshed_at=_as_shanghai(now or datetime.now(SHANGHAI_TZ)),
+            interval_minutes=max(5, min(interval_minutes, 1440)),
+            relay_base_date=relay_date, target_trade_date=None,
+            stage="draft", status="partial", items=[],
+            warnings=[*warnings, "交易日历不可用，目标交易日未确认；未采集新证据或固化候选。", str(error)],
+        )
+        intelligence_repo.save(unverified)
+        return unverified
+    # Calendar IO can cross the market-open cutoff. Recheck the clock before
+    # deciding whether fresh market/news evidence may still be collected.
+    refreshed_at = _as_shanghai(now or datetime.now(SHANGHAI_TZ))
     previous = intelligence_repo.get_latest()
     same_basis = _matches_recommendation_basis(
         previous,
@@ -949,13 +962,20 @@ def _target_trade_date(
     *,
     base_trade_date: date | None,
 ) -> date | None:
-    """Return the next weekday target for the relay draft."""
+    """Resolve the next verified trading day without guessing through holidays."""
 
     if base_trade_date is None:
         return None
-    target = base_trade_date + timedelta(days=1)
-    while target.weekday() >= 5:
-        target += timedelta(days=1)
+    calendar_end = base_trade_date + timedelta(days=45)
+    try:
+        calendar = sorted(set(collect_a_share_trade_dates(base_trade_date, calendar_end)))
+    except Exception as error:
+        raise RuntimeError("Recommendation target trading calendar is unavailable.") from error
+    if base_trade_date not in calendar:
+        raise RuntimeError("Recommendation target trading calendar does not include the base date.")
+    target = next((day for day in calendar if base_trade_date < day <= calendar_end), None)
+    if target is None:
+        raise RuntimeError("Recommendation target trading calendar has no verified next trading day.")
     return target
 
 
