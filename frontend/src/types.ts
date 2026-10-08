@@ -421,6 +421,13 @@ export interface RecommendationIntelligenceResponse {
   relay_base_date: string | null;
   items: RecommendationIntelligenceItem[];
   warnings: string[];
+  display_context?: {
+    is_history_fallback: boolean;
+    latest_target_trade_date: string | null;
+    latest_stage: "draft" | "final" | "missed_cutoff";
+    latest_refreshed_at: string;
+    latest_warnings?: string[];
+  } | null;
 }
 
 export interface ReviewAgentPick {

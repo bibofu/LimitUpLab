@@ -51,6 +51,7 @@ import {
   rankedRelayCandidates,
   sortFirstBoardByRelayRanking,
 } from "./relayRanking";
+import { formatSnapshotTime, recommendationSnapshotView } from "./recommendationSnapshot";
 import {
   fetchContinuedBoardEvents,
   fetchDailyBoardPromotion,
@@ -399,6 +400,13 @@ function PremarketStrategyWorkspace() {
     loading: intelligenceLoading,
     error: intelligenceError,
   } = useRecommendationIntelligence();
+  const [snapshotNow, setSnapshotNow] = useState(() => new Date());
+  useEffect(() => {
+    // Advance cutoff labels even when a refresh fails or returns the same snapshot.
+    const timer = window.setInterval(() => setSnapshotNow(new Date()), 15 * 1000);
+    return () => window.clearInterval(timer);
+  }, []);
+  const snapshot = intelligence ? recommendationSnapshotView(intelligence, snapshotNow) : null;
 
   const strategyCandidates = latestRelayCandidates(
     intelligence?.items ?? [],
@@ -448,7 +456,7 @@ function PremarketStrategyWorkspace() {
           message="正在读取统一的盘前排名与证据"
           state="loading"
         />
-      ) : !intelligence ? (
+      ) : !intelligence || !snapshot ? (
         <PremarketRankingStatePanel
           message={intelligenceError ?? "盘前动态榜暂不可用"}
           state="error"
@@ -456,14 +464,13 @@ function PremarketStrategyWorkspace() {
       ) : draftCandidates.length > 0 ? (
         <RecommendationDraftPanel
           candidates={draftCandidates}
-          intelligence={intelligence}
+          snapshot={snapshot}
+          refreshError={intelligenceError}
         />
-      ) : intelligence.stage === "missed_cutoff" ? (
-        <PremarketCutoffMissedPanel intelligence={intelligence} />
       ) : (
-        <PremarketRankingStatePanel
-          message="当前目标交易日没有可展示的盘前候选"
-          state="empty"
+        <PremarketEmptySnapshotPanel
+          snapshot={snapshot}
+          refreshError={intelligenceError}
         />
       )}
     </section>
@@ -497,36 +504,58 @@ function PremarketRankingStatePanel({
 }
 
 /**
- * Explain why the publication cutoff was missed and expose the available research state.
+ * Keep empty results' target date, publication state and data warnings visible.
  */
-function PremarketCutoffMissedPanel({
-  intelligence,
+function PremarketEmptySnapshotPanel({
+  snapshot,
+  refreshError,
 }: {
-  intelligence: RecommendationIntelligenceResponse;
+  snapshot: ReturnType<typeof recommendationSnapshotView>;
+  refreshError: string | null;
 }) {
-  const targetLabel = intelligence.target_trade_date ?? "今日";
-  const lastSafeRefresh = intelligence.items.length > 0
-    ? new Date(intelligence.refreshed_at).toLocaleTimeString("zh-CN", {
-        hour: "2-digit",
-        minute: "2-digit",
-      })
-    : null;
   return (
     <Panel
       title="一进二接力"
       icon={<ShieldAlert size={18} />}
     >
-      <div className="discovery-state discovery-state-error">
-        <ShieldAlert size={20} />
-        <div>
-          <strong>{targetLabel} 盘前榜未在开盘前固化</strong>
-          <span>
-            已停止排名更新，不会使用开盘后数据补算盘前结果。
-            {lastSafeRefresh ? ` 最后一版盘前草稿更新于 ${lastSafeRefresh}，未作为正式 Top10 发布。` : ""}
-          </span>
-        </div>
+      <div className="rating-summary-panel recommendation-draft-panel">
+        <strong>{snapshot.title} · {snapshot.targetLabel}</strong>
+        <RecommendationSnapshotDetails snapshot={snapshot} refreshError={refreshError} />
+        <p className="discovery-disclaimer">该快照没有可展示的盘前候选。</p>
       </div>
     </Panel>
+  );
+}
+
+function RecommendationSnapshotDetails({
+  snapshot,
+  refreshError,
+}: {
+  snapshot: ReturnType<typeof recommendationSnapshotView>;
+  refreshError: string | null;
+}) {
+  return (
+    <div className="recommendation-snapshot-details">
+      <div className="recommendation-snapshot-metadata">
+        <span>候选基准日：{snapshot.baseLabel}</span>
+        <span>快照更新：{snapshot.refreshedLabel}</span>
+        {snapshot.finalizedLabel ? <span>固化时间：{snapshot.finalizedLabel}</span> : null}
+      </div>
+      {snapshot.notices.length > 0 ? (
+        <div className="recommendation-snapshot-notice" role="status">
+          {snapshot.notices.map((notice) => <p key={notice}>{notice}</p>)}
+        </div>
+      ) : null}
+      {refreshError ? (
+        <p className="recommendation-snapshot-notice" role="alert">刷新失败，保留上次快照：{refreshError}</p>
+      ) : null}
+      {snapshot.warnings.length > 0 ? (
+        <details className="recommendation-snapshot-warnings" open>
+          <summary>数据提示（{snapshot.warnings.length}）</summary>
+          <ul>{snapshot.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul>
+        </details>
+      ) : null}
+    </div>
   );
 }
 
@@ -575,31 +604,13 @@ function useRecommendationIntelligence() {
  */
 function RecommendationDraftPanel({
   candidates,
-  intelligence,
+  snapshot,
+  refreshError,
 }: {
   candidates: RecommendationIntelligenceItem[];
-  intelligence: RecommendationIntelligenceResponse;
+  snapshot: ReturnType<typeof recommendationSnapshotView>;
+  refreshError: string | null;
 }) {
-  const targetLabel = intelligence.target_trade_date
-    ? `${intelligence.target_trade_date} 目标日`
-    : "下一交易日";
-  const snapshotCopy = intelligence.stage === "missed_cutoff"
-    ? {
-        subtitle: "展示开盘前最后一次可用快照；未使用开盘后数据补算",
-        timePrefix: "最新盘前快照 · ",
-        disclaimer: "开盘前服务未完成固化，当前展示最近一次盘前快照；该快照不是正式 Top10，且未使用开盘后信息补算。",
-      }
-    : intelligence.stage === "final"
-      ? {
-          subtitle: "收盘综合分固化基线，盘后按公告、龙虎榜与人气变化做有界修正",
-          timePrefix: "开盘前已固化 · ",
-          disclaimer: "该排序已于目标交易日开盘前固化，供盘后复盘使用。",
-        }
-      : {
-          subtitle: "展示最新可用盘前快照，按收盘后新增信息做有界修正",
-          timePrefix: "快照更新 · ",
-          disclaimer: "当前展示最新可用的盘前研究快照；开盘后停止更新，只有开盘前固化的 Top10 才进入复盘。",
-        };
   return (
     <Panel
       title="一进二接力"
@@ -609,16 +620,13 @@ function RecommendationDraftPanel({
         <div className="recommendation-draft-header">
           <div>
             <strong>
-              {intelligence.stage === "final" ? "盘前固化候选" : "最新候选快照"}
-              {` Top${candidates.length} · ${targetLabel}`}
+              {snapshot.title}
+              {` Top${candidates.length} · ${snapshot.targetLabel}`}
             </strong>
-            <span>{snapshotCopy.subtitle}</span>
+            <span>基于收盘综合分与盘后新增信息的研究排序</span>
           </div>
-          <span className="recommendation-draft-time">
-            {snapshotCopy.timePrefix}
-            {new Date(intelligence.finalized_at ?? intelligence.refreshed_at).toLocaleTimeString("zh-CN", { hour: "2-digit", minute: "2-digit" })}
-          </span>
         </div>
+        <RecommendationSnapshotDetails snapshot={snapshot} refreshError={refreshError} />
         <div className="rating-top-list">
           {candidates.map(/* Transform each entry in candidates into the result used by RecommendationDraftPanel. */ (candidate) => {
             return (
@@ -670,7 +678,7 @@ function RecommendationDraftPanel({
           })}
         </div>
         <p className="discovery-disclaimer">
-          {snapshotCopy.disclaimer}
+          {snapshot.disclaimer}
         </p>
       </div>
     </Panel>
@@ -935,10 +943,7 @@ function FirstBoardPoolView({
         <div className="pool-ranking-status">
           <strong>动态一进二 Top10 已同步</strong>
           <span>
-            {new Date(intelligence.refreshed_at).toLocaleTimeString("zh-CN", {
-              hour: "2-digit",
-              minute: "2-digit",
-            })}
+            {formatSnapshotTime(intelligence.refreshed_at)}
             更新；前 10 名与盘前推荐一致
           </span>
         </div>
