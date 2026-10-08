@@ -69,7 +69,8 @@ export function recommendationSnapshotView(snapshot: Snapshot, now: Date) {
   }
   const warnings = [...new Set([
     ...(fallback ? context?.latest_warnings ?? [] : []), ...snapshot.warnings,
-  ].filter((warning) => warning.trim().length > 0))];
+  ].filter((warning) => warning.trim().length > 0
+    && !warning.trim().startsWith("龙虎榜刷新失败：")))];
 
   return {
     title, targetLabel, historical, draftExpired, notices, warnings,
