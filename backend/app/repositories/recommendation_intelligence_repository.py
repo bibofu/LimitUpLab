@@ -7,7 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from app.database import connect, initialize_database
-from app.models import RecommendationIntelligenceResponse
+from app.models import RecommendationDisplayContext, RecommendationIntelligenceResponse
 from app.services.prediction_time import validate_final_response
 
 
@@ -96,7 +96,7 @@ class SQLiteRecommendationIntelligenceRepository:
                     response.refresh_id,
                     response.refreshed_at.isoformat(),
                     response.status,
-                    response.model_dump_json(),
+                    response.model_dump_json(exclude={"display_context"}),
                 ),
             )
             connection.commit()
@@ -165,6 +165,16 @@ class SQLiteRecommendationIntelligenceRepository:
                 row["response_json"]
             )
             if response.items:
+                if current is not None:
+                    return response.model_copy(update={
+                        "display_context": RecommendationDisplayContext(
+                            is_history_fallback=True,
+                            latest_target_trade_date=current.target_trade_date,
+                            latest_stage=current.stage,
+                            latest_refreshed_at=current.refreshed_at,
+                            latest_warnings=current.warnings,
+                        ),
+                    })
                 return response
         return current
 
@@ -184,7 +194,7 @@ class SQLiteRecommendationIntelligenceRepository:
                 (
                     response.target_trade_date.isoformat(),
                     (response.finalized_at or response.refreshed_at).isoformat(),
-                    response.model_dump_json(),
+                    response.model_dump_json(exclude={"display_context"}),
                 ),
             )
             connection.commit()

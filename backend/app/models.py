@@ -333,6 +333,16 @@ class RecommendationIntelligenceItem(BaseModel):
         return value
 
 
+class RecommendationDisplayContext(BaseModel):
+    """Describe the latest refresh when showing an older candidate snapshot."""
+
+    is_history_fallback: bool
+    latest_target_trade_date: date | None
+    latest_stage: Literal["draft", "final", "missed_cutoff"]
+    latest_refreshed_at: datetime
+    latest_warnings: list[str] = Field(default_factory=list)
+
+
 class RecommendationIntelligenceResponse(BaseModel):
     """Current draft, pre-open final, or explicit missed-cutoff state."""
 
@@ -350,6 +360,7 @@ class RecommendationIntelligenceResponse(BaseModel):
     relay_base_date: date | None = None
     items: list[RecommendationIntelligenceItem] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
+    display_context: RecommendationDisplayContext | None = None
 
 
 class StockKLineBar(BaseModel):
