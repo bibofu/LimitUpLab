@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createResourceLoader, type ResourceState } from "../src/utils/asyncResource.ts";
-import { requestJson } from "../src/utils/jsonRequest.ts";
+import { DASHBOARD_TIMEOUT_MS, GET_TIMEOUT_MS, requestJson } from "../src/utils/jsonRequest.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -93,4 +93,19 @@ test("POST remains independent of the read timeout and errors retain backend det
   response.resolve(Response.json({ saved: true }));
   assert.deepEqual(await mutation, { saved: true });
   await assert.rejects(requestJson("/data", {}, async () => Response.json({ detail: "请稍后重试" }, { status: 429 })), /请稍后重试/);
+});
+
+test("dashboard reads use a short budget while ordinary market/review reads keep 120 seconds", async t => {
+  const scheduled: number[] = [];
+  const original = globalThis.setTimeout;
+  t.mock.method(globalThis, "setTimeout", (callback: () => void, delay: number) => {
+    scheduled.push(delay);
+    return original(callback, delay);
+  });
+  const fetcher: typeof fetch = async () => Response.json({ ok: true });
+  await requestJson("/api/market/overview", {}, fetcher, DASHBOARD_TIMEOUT_MS);
+  await requestJson("/api/stocks/600001/market-data", {}, fetcher);
+  await requestJson("/api/agents/chat", { method: "POST" }, fetcher);
+  assert.deepEqual(scheduled, [20_000, 120_000]);
+  assert.equal(GET_TIMEOUT_MS, 120_000);
 });

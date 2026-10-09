@@ -7,7 +7,7 @@ import {
   ShieldAlert,
   TrendingUp,
 } from "lucide-react";
-import { useEffect, useMemo, useState } from "react";
+import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
 import {
@@ -34,8 +34,9 @@ import { displayRelayPositionLabel } from "../relayRanking";
 import { Panel } from "./Panel";
 
 interface ReviewDashboardProps {
-  dailyBoardPromotion: DailyBoardPromotionReport;
-  latestTradeDate: string;
+  dailyBoardPromotion: DailyBoardPromotionReport | null;
+  promotionState?: ReactNode;
+  latestTradeDate?: string;
 }
 
 /**
@@ -43,13 +44,15 @@ interface ReviewDashboardProps {
  */
 export function ReviewDashboard({
   dailyBoardPromotion,
+  promotionState,
   latestTradeDate,
 }: ReviewDashboardProps) {
   return (
     <>
-      <HighScoreReviewPanel latestTradeDate={latestTradeDate} />
-      <DailyBoardPromotionPanel report={dailyBoardPromotion} />
-      <DragonTigerReviewPanel tradeDate={latestTradeDate} />
+      {latestTradeDate ? <HighScoreReviewPanel key={latestTradeDate} latestTradeDate={latestTradeDate} />
+        : <div className="resource-notice" role="status">复盘日期尚未确认，请刷新本地事件数据。</div>}
+      {dailyBoardPromotion ? <DailyBoardPromotionPanel report={dailyBoardPromotion} /> : promotionState}
+      {latestTradeDate ? <DragonTigerReviewPanel key={latestTradeDate} tradeDate={latestTradeDate} /> : null}
     </>
   );
 }

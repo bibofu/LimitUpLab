@@ -33,6 +33,10 @@ import { AgentChatDock } from "./components/AgentChatDock";
 import { ConsolidationPanel } from "./components/ConsolidationPanel";
 import { Panel } from "./components/Panel";
 import { ReviewDashboard } from "./components/ReviewDashboard";
+import { ResourceNotice, ResourceSection, useResource } from "./components/ResourceSection";
+import type { ResourceState } from "./utils/asyncResource";
+import { latestEventDate, matchingRatings } from "./utils/dashboardData";
+import { DASHBOARD_TIMEOUT_MS } from "./utils/jsonRequest";
 import {
   formatAmount,
   formatNetAmount,
@@ -69,7 +73,6 @@ import {
   fetchStockTradingDayKLine,
 } from "./api";
 import type {
-  DailyBoardPromotionReport,
   FirstBoardRating,
   FirstBoardRatingsResponse,
   FinanceNewsPage,
@@ -97,15 +100,10 @@ import {
 type ViewKey = "overview" | "recommendation" | "review" | "pool" | "first" | "continued" | "failed" | "recent";
 type StockListViewKey = "first" | "continued" | "failed";
 
-interface DashboardData {
-  summary: MarketSummary;
-  firstBoard: LimitUpEvent[];
-  continuedBoard: LimitUpEvent[];
-  failed: LimitUpEvent[];
-  recent: LimitUpEvent[];
-  firstBoardRatings: FirstBoardRatingsResponse;
-  dailyBoardPromotion: DailyBoardPromotionReport;
-}
+type LoadedResource<T> = ResourceState<T> & { reload: () => void };
+const loadRecentEvents = (signal: AbortSignal) => fetchRecentLimitUpEvents(7, signal);
+const loadRatings = (signal: AbortSignal) => fetchFirstBoardRatings(undefined, false, signal, DASHBOARD_TIMEOUT_MS);
+const loadPromotion = (signal: AbortSignal) => fetchDailyBoardPromotion(5, signal);
 
 const viewMeta: Record<ViewKey, { title: string; eyebrow: string }> = {
   overview: { title: "短线市场概况", eyebrow: "Overview" },
@@ -154,74 +152,26 @@ const agentWorkspaceHiddenPaths = new Set([
   "/review",
 ]);
 
-/**
- * Load the dashboard datasets and route between the market, review and stock-detail
- * workspaces. The initial Promise.all batch shares one loading/error state and must complete
- * before the combined data is displayed.
- */
+/** Publish each section independently; a slow provider never hides navigation or local facts. */
 export function App() {
-  const [data, setData] = useState<DashboardData | null>(null);
-  const [error, setError] = useState<string | null>(null);
-  const [loading, setLoading] = useState(true);
+  const summary = useResource(fetchMarketSummary);
+  const firstBoard = useResource(fetchFirstBoardEvents);
+  const continuedBoard = useResource(fetchContinuedBoardEvents);
+  const failed = useResource(fetchFailedLimitUpEvents);
+  const recent = useResource(loadRecentEvents);
+  const firstBoardRatings = useResource(loadRatings);
+  const dailyBoardPromotion = useResource(loadPromotion);
+  const pools = { firstBoard, continuedBoard, failed, recent };
+  const dateCandidates = [summary.data?.trade_date, firstBoardRatings.data?.trade_date,
+    dailyBoardPromotion.data?.latest_event_date, ...Object.values(pools).map(pool => latestEventDate(pool.data))];
+  const latestTradeDate = dateCandidates.filter((value): value is string => Boolean(value)).sort().pop();
   const location = useLocation();
   const activeView = routeToView[location.pathname] ?? "overview";
 
-  /** Load the dashboard summary and the list data needed by every route. */
-  async function loadDashboard() {
-    setLoading(true);
-    setError(null);
-
-    try {
-      const [
-        summary,
-        firstBoard,
-        continuedBoard,
-        failed,
-        recent,
-        firstBoardRatings,
-        dailyBoardPromotion,
-      ] = await Promise.all([
-        fetchMarketSummary(),
-        fetchFirstBoardEvents(),
-        fetchContinuedBoardEvents(),
-        fetchFailedLimitUpEvents(),
-        fetchRecentLimitUpEvents(7),
-        fetchFirstBoardRatings(),
-        fetchDailyBoardPromotion(5),
-      ]);
-
-      setData({
-        summary,
-        firstBoard,
-        continuedBoard,
-        failed,
-        recent,
-        firstBoardRatings,
-        dailyBoardPromotion,
-      });
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "加载数据失败");
-    } finally {
-      setLoading(false);
+  function loadDashboard() {
+    for (const resource of [summary, ...Object.values(pools), firstBoardRatings, dailyBoardPromotion]) {
+      void resource.reload();
     }
-  }
-
-  useEffect(/* Synchronize App with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
-    void loadDashboard();
-  }, []);
-
-  if (loading) {
-    return <ShellState label="正在加载 LimitUpLab 数据..." />;
-  }
-
-  if (error || !data) {
-    return (
-      <ShellState
-        label="数据加载失败"
-        detail={error ?? "请确认后端服务已经启动"}
-        onRetry={loadDashboard}
-      />
-    );
   }
 
   const isStockDetail = location.pathname.startsWith("/stocks/")
@@ -265,8 +215,8 @@ export function App() {
           <div className="data-as-of">
             <i aria-hidden="true" />
             <span>
-              <small>数据日期</small>
-              <strong>{data.summary.trade_date}</strong>
+              <small>已载入最新日期 · 各区独立标注</small>
+              <strong>{latestTradeDate ?? "日期待确认"}</strong>
             </span>
           </div>
           <button
@@ -291,12 +241,17 @@ export function App() {
       ) : null}
 
       {activeView === "overview" && !isStockDetail ? (
-        <MarketSnapshot summary={data.summary} />
+        <>
+          <ResourceSection label="市场概览" resource={summary}>
+            {value => <MarketSnapshot summary={value} />}
+          </ResourceSection>
+          {!summary.data ? <LimitUpPool pools={pools} /> : null}
+        </>
       ) : null}
 
       {showAgentWorkspace ? (
         <AgentChatDock
-          tradeDate={data.summary.trade_date}
+          tradeDate={latestTradeDate ?? ""}
         />
       ) : null}
 
@@ -310,20 +265,21 @@ export function App() {
           path="/review"
           element={
             <ReviewDashboard
-              dailyBoardPromotion={data.dailyBoardPromotion}
-              latestTradeDate={data.summary.trade_date}
+              dailyBoardPromotion={dailyBoardPromotion.data}
+              promotionState={<ResourceNotice label="晋级统计" loading={dailyBoardPromotion.loading} error={dailyBoardPromotion.error} retry={dailyBoardPromotion.reload} />}
+              latestTradeDate={latestTradeDate}
             />
           }
         />
-        <Route path="/stocks/limit-up-pool" element={<LimitUpPool data={data} />} />
-        <Route path="/stocks/first-board" element={<DetailView view="first" data={data} />} />
+        <Route path="/stocks/limit-up-pool" element={<LimitUpPool pools={pools} />} />
+        <Route path="/stocks/first-board" element={<DetailView view="first" eventsResource={firstBoard} ratingsResource={firstBoardRatings} />} />
         <Route
           path="/stocks/continued-board"
-          element={<DetailView view="continued" data={data} />}
+          element={<DetailView view="continued" eventsResource={continuedBoard} ratingsResource={firstBoardRatings} />}
         />
-        <Route path="/stocks/failed" element={<DetailView view="failed" data={data} />} />
-        <Route path="/stocks/recent-limit-up" element={<RecentLimitUp events={data.recent} />} />
-        <Route path="/stocks/:symbol" element={<StockDetail data={data} />} />
+        <Route path="/stocks/failed" element={<DetailView view="failed" eventsResource={failed} ratingsResource={firstBoardRatings} />} />
+        <Route path="/stocks/recent-limit-up" element={<ResourceSection label="近期涨停" resource={recent}>{events => <RecentLimitUp events={events} />}</ResourceSection>} />
+        <Route path="/stocks/:symbol" element={<StockDetail latestTradeDate={latestTradeDate} ratings={firstBoardRatings.data} />} />
         <Route path="*" element={<Navigate to="/" replace />} />
       </Routes>
     </main>
@@ -881,28 +837,21 @@ function recommendationIntelligenceFor(
 /**
  * Choose the dashboard detail panel corresponding to the active view.
  */
-function DetailView({ view, data }: { view: StockListViewKey; data: DashboardData }) {
-  /** Render one of the latest-day stock list views. */
-
-  const eventsByView: Record<StockListViewKey, LimitUpEvent[]> = {
-    first: data.firstBoard,
-    continued: data.continuedBoard,
-    failed: data.failed,
-  };
-
-  if (view === "first") {
-    return (
-      <FirstBoardPoolView
-        events={data.firstBoard}
-        initialRatings={data.firstBoardRatings}
-      />
-    );
-  }
-
+function DetailView({ view, eventsResource, ratingsResource }: {
+  view: StockListViewKey; eventsResource: LoadedResource<LimitUpEvent[]>;
+  ratingsResource: LoadedResource<FirstBoardRatingsResponse>;
+}) {
   return (
-    <Panel title={viewMeta[view].title} icon={detailIcon(view)}>
-      <StockTable events={eventsByView[view]} variant={view} />
-    </Panel>
+    <ResourceSection label={viewMeta[view].title} resource={eventsResource}>
+      {events => view === "first" ? <>
+        {!ratingsResource.data ? <ResourceNotice label="首板评级" loading={ratingsResource.loading} error={ratingsResource.error} retry={ratingsResource.reload} /> : null}
+        {ratingsResource.data && events.length > 0 && !matchingRatings(events, ratingsResource.data) ?
+          <div className="resource-notice" role="status">评级数据日 {ratingsResource.data.trade_date} 与名单日期不同，未合并评分。</div> : null}
+        <FirstBoardPoolView events={events} initialRatings={matchingRatings(events, ratingsResource.data)} />
+      </> : <Panel title={viewMeta[view].title} icon={detailIcon(view)}>
+        <StockTable events={events} variant={view} />
+      </Panel>}
+    </ResourceSection>
   );
 }
 
@@ -914,7 +863,7 @@ function FirstBoardPoolView({
   initialRatings,
 }: {
   events: LimitUpEvent[];
-  initialRatings: FirstBoardRatingsResponse;
+  initialRatings?: FirstBoardRatingsResponse;
 }) {
   const [ratings, setRatings] = useState(initialRatings);
   const { intelligence } = useRecommendationIntelligence();
@@ -926,16 +875,17 @@ function FirstBoardPoolView({
 
   useEffect(/* Synchronize FirstBoardPoolView with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
     let active = true;
+    setRatings(initialRatings);
     if (!tradeDate) return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => { active = false; };
     void fetchFirstBoardRatings(tradeDate, true)
       .then(/* Apply the resolved asynchronous result to the current view state. */ (response) => {
-        if (active) setRatings(response);
+        if (active) setRatings(matchingRatings(events, response));
       })
       .catch(/* Handle this asynchronous failure using the enclosing view's error/fallback state. */ () => {
         // Keep persisted prediction scores as a partial ordering fallback.
       });
     return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => { active = false; };
-  }, [tradeDate]);
+  }, [tradeDate, initialRatings]);
 
   return (
     <Panel title="首板票" icon={detailIcon("first")}>
@@ -950,7 +900,7 @@ function FirstBoardPoolView({
       ) : null}
       <StockTable
         events={events}
-        ratings={ratings}
+        ratings={matchingRatings(events, ratings)}
         relayRanking={relayRanking}
         variant="first"
       />
@@ -1055,35 +1005,39 @@ function RecentLimitUp({ events }: { events: LimitUpEvent[] }) {
 /**
  * Render the selected event pool and the stock table for its available rows.
  */
-function LimitUpPool({ data }: { data: DashboardData }) {
+function LimitUpPool({ pools }: { pools: Record<"firstBoard" | "continuedBoard" | "failed" | "recent", LoadedResource<LimitUpEvent[]>> }) {
   /** Group the four limit-up datasets behind one focused navigation page. */
 
   const entries = [
     {
       to: "/stocks/first-board",
       label: "首板",
-      count: `${data.firstBoard.length} 只`,
+      resource: pools.firstBoard,
+      unit: "只",
       description: "查看当日首次涨停股票与 Agent 评分",
       icon: <Flame size={18} />,
     },
     {
       to: "/stocks/continued-board",
       label: "连板",
-      count: `${data.continuedBoard.length} 只`,
+      resource: pools.continuedBoard,
+      unit: "只",
       description: "查看当日二板及以上连板梯队",
       icon: <Layers3 size={18} />,
     },
     {
       to: "/stocks/failed",
       label: "炸板",
-      count: `${data.failed.length} 只`,
+      resource: pools.failed,
+      unit: "只",
       description: "查看盘中触板但未能封住的股票",
       icon: <ShieldAlert size={18} />,
     },
     {
       to: "/stocks/recent-limit-up",
       label: "近七个交易日涨停票",
-      count: `${data.recent.length} 条`,
+      resource: pools.recent,
+      unit: "条",
       description: "按交易日回看最近七个交易日涨停记录",
       icon: <TrendingUp size={18} />,
     },
@@ -1092,12 +1046,17 @@ function LimitUpPool({ data }: { data: DashboardData }) {
   return (
     <nav className="overview-grid" aria-label="涨停池分类">
       {entries.map(/* Transform each entry in entries into the result used by LimitUpPool. */ (entry) => (
-        <Link className="entry-card" key={entry.to} to={entry.to}>
-          <div className="metric-icon" aria-hidden="true">{entry.icon}</div>
-          <span>{entry.label}</span>
-          <strong>{entry.count}</strong>
-          <p>{entry.description}</p>
-        </Link>
+        <div className="entry-card resource-entry-card" key={entry.to}>
+          <Link className="entry-card-link" to={entry.to}>
+            <div className="metric-icon" aria-hidden="true">{entry.icon}</div>
+            <span>{entry.label}</span>
+            <strong>{entry.resource.data !== null ? `${entry.resource.data.length} ${entry.unit}` : "—"}</strong>
+            <p>{entry.description}</p>
+          </Link>
+          {entry.resource.data !== null ? <small>
+            {latestEventDate(entry.resource.data) ? `数据日 ${latestEventDate(entry.resource.data)}` : "查询结果为空，日期未返回"}
+          </small> : <ResourceNotice label={entry.label} loading={entry.resource.loading} error={entry.resource.error} retry={entry.resource.reload} />}
+        </div>
       ))}
     </nav>
   );
@@ -1235,7 +1194,7 @@ function StockTable({
  * Load a stock's event, rating, news and market data and coordinate daily/intraday chart
  * views. Separate request state preserves useful evidence when one optional source fails.
  */
-function StockDetail({ data }: { data: DashboardData }) {
+function StockDetail({ latestTradeDate, ratings }: { latestTradeDate?: string; ratings: FirstBoardRatingsResponse | null }) {
   /** Render one stock's event facts together with daily and intraday K-lines. */
 
   const { symbol = "" } = useParams();
@@ -1267,8 +1226,8 @@ function StockDetail({ data }: { data: DashboardData }) {
   const tradingDayCacheKeyRef = useRef("");
   const fiveDayCacheKeyRef = useRef("");
   const resolvedTradeDate = stockEvent?.trade_date
-    ?? data.summary.trade_date;
-  const marketTradeDate = data.summary.trade_date;
+    ?? latestTradeDate;
+  const marketTradeDate = latestTradeDate;
   const currentIntelligence = recommendationIntelligenceFor(
     intelligence,
     "relay",
@@ -1387,7 +1346,7 @@ function StockDetail({ data }: { data: DashboardData }) {
   }, [marketTradeDate, symbol]);
 
   useEffect(/* Synchronize StockDetail with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
-    if (chartMode !== "intraday" || stockEventLoading) {
+    if (chartMode !== "intraday" || stockEventLoading || !marketTradeDate) {
       return;
     }
     const tradeDate = marketTradeDate;
@@ -1421,7 +1380,7 @@ function StockDetail({ data }: { data: DashboardData }) {
   }, [chartMode, marketTradeDate, stockEventLoading, symbol]);
 
   useEffect(/* Synchronize StockDetail with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
-    if (chartMode !== "intraday5d" || stockEventLoading) {
+    if (chartMode !== "intraday5d" || stockEventLoading || !marketTradeDate) {
       return;
     }
     const cacheKey = `${symbol}:${marketTradeDate}:5:1`;
@@ -1458,8 +1417,8 @@ function StockDetail({ data }: { data: DashboardData }) {
       return;
     }
     const tradeDate = resolvedTradeDate;
-    const cachedRating = stockEvent && data.firstBoardRatings.trade_date === tradeDate
-      ? data.firstBoardRatings.candidates.find(
+    const cachedRating = stockEvent && ratings && ratings.trade_date === tradeDate
+      ? ratings.candidates.find(
           /* Locate the entry matching the active identity/time used by StockDetail. */ (rating) => rating.facts.symbol === symbol,
         ) ?? null
       : null;
@@ -1486,7 +1445,7 @@ function StockDetail({ data }: { data: DashboardData }) {
       active = false;
     };
   }, [
-    data.firstBoardRatings,
+    ratings,
     resolvedTradeDate,
     stockEvent?.trade_date,
     stockEventLoading,
@@ -1516,7 +1475,7 @@ function StockDetail({ data }: { data: DashboardData }) {
     <div className="stock-detail">
       <section className="stock-hero">
         <div>
-          <p className="eyebrow">行情截至 {marketTradeDate}</p>
+          <p className="eyebrow">{marketTradeDate ? `本地事件最新日期 ${marketTradeDate}，行情日期见下方` : "行情日期待确认"}</p>
           <h2>{stockEvent?.name || linkedStockName || symbol}</h2>
           <span>{symbol}</span>
         </div>
@@ -1598,6 +1557,8 @@ function StockDetail({ data }: { data: DashboardData }) {
                 mode="daily"
               />
             )
+          ) : !marketTradeDate ? (
+            <div className="chart-state">交易日期尚未确认，请刷新本地事件数据。</div>
           ) : chartMode === "intraday" && tradingDayLoading ? (
             <div className="chart-state">正在加载交易日走势...</div>
           ) : chartMode === "intraday" && tradingDayError ? (

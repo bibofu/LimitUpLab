@@ -4975,3 +4975,34 @@ td span {
     grid-row: 1 / 3;
   }
 }
+.resource-notice {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  padding: 14px;
+  margin: 10px 0;
+  border: 1px solid var(--border, #dce3ec);
+  border-radius: 8px;
+  font-size: 13px;
+}
+
+.resource-notice > span {
+  flex: 1;
+  overflow-wrap: anywhere;
+}
+
+.entry-card-link {
+  display: grid;
+  grid-template-columns: 34px minmax(0, 1fr) auto;
+  align-items: center;
+  gap: 4px 12px;
+  color: inherit;
+  text-decoration: none;
+}
+
+.overview-grid .resource-entry-card { display: block; }
+.entry-card-link > span, .entry-card-link > p { grid-column: 2; }
+.entry-card-link > strong { grid-column: 3; grid-row: 1 / 3; margin: 0; font-size: 24px; }
+.resource-entry-card > small { display: block; margin-top: 8px; color: #64748b; }
+.resource-entry-card .resource-notice { padding: 8px 0 0; border: 0; margin-bottom: 0; }
+.resource-entry-card .resource-notice strong { display: inline; margin: 0; font-size: inherit; }

@@ -1,5 +1,5 @@
 import { streamChat } from "./utils/agentChatTransport";
-import { requestJson } from "./utils/jsonRequest";
+import { DASHBOARD_TIMEOUT_MS, GET_TIMEOUT_MS, requestJson } from "./utils/jsonRequest";
 import type { ConsolidationPool } from "./consolidation";
 import type {
   AgentChatRequest,
@@ -29,8 +29,8 @@ const resolvedGetRequests = new Map<
 >();
 
 /** Fetch JSON from the backend and surface non-2xx responses as errors. */
-async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  return requestJson<T>(`${API_BASE_URL}${path}`, init);
+async function request<T>(path: string, init?: RequestInit, timeoutMs = GET_TIMEOUT_MS): Promise<T> {
+  return requestJson<T>(`${API_BASE_URL}${path}`, init, fetch, timeoutMs);
 }
 
 /** Reuse identical in-flight GETs, including React StrictMode development mounts. */
@@ -69,7 +69,7 @@ async function cachedGet<T>(path: string, ttlMs: number): Promise<T> {
  * response promise.
  */
 export function fetchMarketSummary(signal?: AbortSignal) {
-  return request<MarketSummary>("/api/market/overview", { signal });
+  return request<MarketSummary>("/api/market/overview", { signal }, DASHBOARD_TIMEOUT_MS);
 }
 
 /**
@@ -95,7 +95,7 @@ export function fetchDragonTigerReview(tradeDate?: string) {
  * response promise.
  */
 export function fetchFirstBoardEvents(signal?: AbortSignal) {
-  return request<LimitUpEvent[]>("/api/limit-up/first-board", { signal });
+  return request<LimitUpEvent[]>("/api/limit-up/first-board", { signal }, DASHBOARD_TIMEOUT_MS);
 }
 
 /**
@@ -103,7 +103,7 @@ export function fetchFirstBoardEvents(signal?: AbortSignal) {
  * typed response promise.
  */
 export function fetchContinuedBoardEvents(signal?: AbortSignal) {
-  return request<LimitUpEvent[]>("/api/limit-up/continued-board", { signal });
+  return request<LimitUpEvent[]>("/api/limit-up/continued-board", { signal }, DASHBOARD_TIMEOUT_MS);
 }
 
 /**
@@ -111,7 +111,7 @@ export function fetchContinuedBoardEvents(signal?: AbortSignal) {
  * typed response promise.
  */
 export function fetchFailedLimitUpEvents(signal?: AbortSignal) {
-  return request<LimitUpEvent[]>("/api/limit-up/failed", { signal });
+  return request<LimitUpEvent[]>("/api/limit-up/failed", { signal }, DASHBOARD_TIMEOUT_MS);
 }
 
 /**
@@ -119,7 +119,7 @@ export function fetchFailedLimitUpEvents(signal?: AbortSignal) {
  * typed response promise.
  */
 export function fetchRecentLimitUpEvents(days = 7, signal?: AbortSignal) {
-  return request<LimitUpEvent[]>(`/api/limit-up/recent?days=${days}`, { signal });
+  return request<LimitUpEvent[]>(`/api/limit-up/recent?days=${days}`, { signal }, DASHBOARD_TIMEOUT_MS);
 }
 
 /**
@@ -130,6 +130,7 @@ export function fetchDailyBoardPromotion(days = 5, signal?: AbortSignal) {
   return request<DailyBoardPromotionReport>(
     `/api/analysis/daily-promotion-report?days=${days}`,
     { signal },
+    DASHBOARD_TIMEOUT_MS,
   );
 }
 
@@ -217,12 +218,12 @@ export function fetchStockIntradayHistory(
  * Fetch first board ratings from the backend using the supplied query scope; return the typed
  * response promise.
  */
-export function fetchFirstBoardRatings(tradeDate?: string, fullPool = false, signal?: AbortSignal) {
+export function fetchFirstBoardRatings(tradeDate?: string, fullPool = false, signal?: AbortSignal, timeoutMs = GET_TIMEOUT_MS) {
   const params = new URLSearchParams();
   if (tradeDate) params.set("trade_date", tradeDate);
   if (fullPool) params.set("full_pool", "true");
   const query = params.size > 0 ? `?${params.toString()}` : "";
-  return request<FirstBoardRatingsResponse>(`/api/agents/first-board-ratings${query}`, { signal });
+  return request<FirstBoardRatingsResponse>(`/api/agents/first-board-ratings${query}`, { signal }, timeoutMs);
 }
 
 /**

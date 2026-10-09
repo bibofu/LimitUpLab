@@ -1,4 +1,5 @@
-export const GET_TIMEOUT_MS = 20_000;
+export const GET_TIMEOUT_MS = 120_000;
+export const DASHBOARD_TIMEOUT_MS = 20_000;
 
 /** Bound reads, including the response body, without changing mutation or SSE budgets. */
 export async function requestJson<T>(
