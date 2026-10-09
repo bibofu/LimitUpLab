@@ -54,6 +54,51 @@ test("refresh aborts the old request and ignores its late success or failure", a
   }
 });
 
+test("opt-in refresh retains verified data through waiting and failure until recovery", async () => {
+  const states: ResourceState<string>[] = [];
+  let next = deferred<string>();
+  const loader = createResourceLoader(() => next.promise, value => states.push(value), true);
+  const first = loader.reload();
+  assert.equal(states.at(-1)?.data, null);
+  next.resolve("2026-10-08");
+  await first;
+  next = deferred<string>();
+  const refresh = loader.reload();
+  assert.deepEqual(states.at(-1), { data: "2026-10-08", loading: true, error: null });
+  next.reject(new Error("upstream timeout"));
+  await refresh;
+  assert.deepEqual(states.at(-1), { data: "2026-10-08", loading: false, error: "upstream timeout" });
+  const superseded = deferred<string>();
+  next = superseded;
+  const oldRun = loader.reload();
+  next = deferred<string>();
+  const recovery = loader.reload();
+  next.resolve("2026-10-09");
+  await recovery;
+  superseded.resolve("obsolete");
+  await oldRun;
+  next = deferred<string>();
+  const verifyRetained = loader.reload();
+  assert.deepEqual(states.at(-1), { data: "2026-10-09", loading: true, error: null });
+  next.resolve("2026-10-09");
+  await verifyRetained;
+});
+
+test("other resources still clear data when refreshing so unrelated views do not silently retain stale facts", async () => {
+  const states: ResourceState<string>[] = [];
+  let next = deferred<string>();
+  const loader = createResourceLoader(() => next.promise, value => states.push(value));
+  const first = loader.reload();
+  next.resolve("2026-10-08");
+  await first;
+  next = deferred<string>();
+  const refresh = loader.reload();
+  assert.deepEqual(states.at(-1), { data: null, loading: true, error: null });
+  next.reject(new Error("timeout"));
+  await refresh;
+  assert.equal(states.at(-1)?.data, null);
+});
+
 test("GET timeout aborts a hanging body and the resource can retry successfully", async () => {
   let signal: AbortSignal | undefined;
   const fetcher: typeof fetch = async (_url, init) => {

@@ -45,16 +45,50 @@ function renderApp(path: string, states: unknown[]) {
   return renderToStaticMarkup(createElement(MemoryRouter, { initialEntries: [path] }, createElement(App)));
 }
 
-test("the real App keeps navigation, Agent and loaded local counts visible while providers hang", () => {
+test("the homepage keeps its market slots and Agent without transient pool cards while providers hang", () => {
   const html = renderApp("/", [pending, ready([event]), unavailable, pending, ready([]), pending, unavailable]);
   assert.ok(html.includes('aria-label="主导航"'));
   assert.ok(html.includes("Agent 会话可用"));
   assert.ok(html.includes("市场概览"));
-  assert.ok(html.includes("正在加载"));
+  assert.ok(html.includes("市场概览加载中"));
+  assert.ok(html.includes('class="market-snapshot"'));
+  assert.ok(html.includes('aria-label="涨停概览"'));
+  assert.ok(html.includes('href="/stocks/first-board"'));
+  assert.ok(html.includes('aria-busy="true"'));
+  assert.ok(!html.includes('aria-label="涨停池分类"'));
+  assert.ok(!html.includes(">0<"));
+});
+
+test("market error and recovery keep the same slots and expose a local retry", () => {
+  const states = [ready([event]), pending, pending, pending, pending, pending];
+  const failed = renderApp("/", [unavailable, ...states]);
+  const summary = { trade_date: "2026-10-08", indices: [], max_board_height: 4, first_board_count: 20, continued_board_count: 5 };
+  const loaded = renderApp("/", [ready(summary), ...states]);
+  for (const html of [failed, loaded]) {
+    assert.ok(html.includes('class="market-snapshot"'));
+    assert.ok(html.includes('aria-label="涨停概览"'));
+    assert.equal(html.split("<article>").length - 1, 3);
+    assert.ok(!html.includes('aria-label="涨停池分类"'));
+  }
+  assert.ok(failed.includes("市场概览暂不可用"));
+  assert.ok(failed.includes('aria-label="重新加载市场概览"'));
+  assert.ok(loaded.includes('dateTime="2026-10-08"'));
+  assert.ok(loaded.includes("指数暂不可用"));
+  const refreshing = renderApp("/", [{ ...ready(summary), loading: true }, ...states]);
+  assert.ok(refreshing.includes("更新中 · "));
+  assert.ok(refreshing.includes('dateTime="2026-10-08"'));
+  assert.ok(refreshing.includes(">20<"));
+  const stale = renderApp("/", [{ ...ready(summary), error: "请求超时" }, ...states]);
+  assert.ok(stale.includes("更新失败 · 保留数据 "));
+  assert.ok(stale.includes('dateTime="2026-10-08"'));
+  assert.ok(stale.includes('aria-label="重新加载市场概览"'));
+});
+
+test("the pool route still exposes each independently loaded local count", () => {
+  const html = renderApp("/stocks/limit-up-pool", [pending, ready([event]), unavailable, pending, ready([]), pending, unavailable]);
+  assert.ok(html.includes('aria-label="涨停池分类"'));
   assert.ok(html.includes("1 只"));
   assert.ok(html.includes("数据日 2026-10-09"));
-  assert.ok(html.includes("数据请求超时，请重试"));
-  assert.ok(!html.includes("0 只"));
   assert.ok(html.includes('aria-label="重新加载连板"'));
 });
 

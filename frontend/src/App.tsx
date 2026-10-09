@@ -154,7 +154,7 @@ const agentWorkspaceHiddenPaths = new Set([
 
 /** Publish each section independently; a slow provider never hides navigation or local facts. */
 export function App() {
-  const summary = useResource(fetchMarketSummary);
+  const summary = useResource(fetchMarketSummary, true);
   const firstBoard = useResource(fetchFirstBoardEvents);
   const continuedBoard = useResource(fetchContinuedBoardEvents);
   const failed = useResource(fetchFailedLimitUpEvents);
@@ -241,12 +241,7 @@ export function App() {
       ) : null}
 
       {activeView === "overview" && !isStockDetail ? (
-        <>
-          <ResourceSection label="市场概览" resource={summary}>
-            {value => <MarketSnapshot summary={value} />}
-          </ResourceSection>
-          {!summary.data ? <LimitUpPool pools={pools} /> : null}
-        </>
+        <MarketSnapshot resource={summary} />
       ) : null}
 
       {showAgentWorkspace ? (
@@ -289,39 +284,50 @@ export function App() {
 /**
  * Render the current market summary and its compact counts from backend facts.
  */
-function MarketSnapshot({ summary }: { summary: MarketSummary }) {
+function MarketSnapshot({ resource }: { resource: LoadedResource<MarketSummary> }) {
+  const { data: summary, loading, error, reload } = resource;
+  const status = loading ? (summary ? "更新中 · " : "市场概览加载中")
+    : error ? (summary ? "更新失败 · 保留数据 " : "市场概览暂不可用")
+      : summary?.indices.length === 0 ? "指数暂不可用 · " : null;
+  // Keep the same slots through loading, retries and missing upstream index data.
+  const indices = summary?.indices.length ? summary.indices : [
+    { symbol: "000001.SH", name: "上证指数", close: null, change_pct: null },
+    { symbol: "399001.SZ", name: "深证成指", close: null, change_pct: null },
+    { symbol: "399006.SZ", name: "创业板指", close: null, change_pct: null },
+  ];
   return (
-    <section className="market-snapshot">
+    <section aria-label="市场概览" aria-busy={loading} className="market-snapshot">
       <div className="market-snapshot-indices">
-        <time className="market-snapshot-date" dateTime={summary.trade_date}>
-          {summary.trade_date}
-        </time>
-        {summary.indices.map(/* Transform each entry in summary.indices into the result used by MarketSnapshot. */ (index) => (
+        <div className="market-snapshot-date" role="status">
+          {status ? <span title={error ?? undefined}>{status}</span> : null}
+          {summary ? <time dateTime={summary.trade_date}>{summary.trade_date}</time> : null}
+          {error && !loading ? <button type="button" onClick={reload} aria-label="重新加载市场概览">重试</button> : null}
+        </div>
+        {indices.map(index => (
           <article key={index.symbol}>
             <span>{index.name}</span>
             <div>
-              <strong>{index.close.toFixed(2)}</strong>
-              <b className={index.change_pct >= 0 ? "positive" : "negative"}>
-                {formatSigned(index.change_pct, 2)}%
+              <strong>{index.close === null ? "—" : index.close.toFixed(2)}</strong>
+              <b className={index.change_pct === null ? undefined : index.change_pct >= 0 ? "positive" : "negative"}>
+                {index.change_pct === null ? "—" : `${formatSigned(index.change_pct, 2)}%`}
               </b>
             </div>
           </article>
         ))}
-        {summary.indices.length === 0 ? <span>指数数据暂不可用</span> : null}
       </div>
 
-      <nav aria-label="今日涨停概览" className="market-snapshot-entries">
+      <nav aria-label="涨停概览" className="market-snapshot-entries">
         <div className="market-snapshot-ceiling">
           <span>最高连板</span>
-          <strong>{summary.max_board_height}<small>板</small></strong>
+          <strong>{summary?.max_board_height ?? "—"}<small>板</small></strong>
         </div>
         <Link to="/stocks/first-board">
           <span><Flame size={15} />首板</span>
-          <strong>{summary.first_board_count}<small>只</small></strong>
+          <strong>{summary?.first_board_count ?? "—"}<small>只</small></strong>
         </Link>
         <Link to="/stocks/continued-board">
           <span><Layers3 size={15} />连板</span>
-          <strong>{summary.continued_board_count}<small>只</small></strong>
+          <strong>{summary?.continued_board_count ?? "—"}<small>只</small></strong>
         </Link>
       </nav>
     </section>

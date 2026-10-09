@@ -269,11 +269,36 @@ td span {
 }
 
 .market-snapshot-date {
+  display: flex;
+  justify-content: flex-end;
+  align-items: center;
+  gap: 6px;
   grid-column: 1 / -1;
+  min-height: 14px;
   margin: 0 12px 4px 0;
   text-align: right;
   color: #788597;
   font-size: 10px;
+  line-height: 14px;
+}
+
+.market-snapshot .market-snapshot-date > span {
+  min-width: 0;
+  font-size: inherit;
+}
+
+.market-snapshot-date time {
+  flex-shrink: 0;
+}
+
+.market-snapshot-date button {
+  flex-shrink: 0;
+  padding: 0;
+  border: 0;
+  background: none;
+  color: #b83232;
+  font: inherit;
+  cursor: pointer;
 }
 
 .market-snapshot-indices article {

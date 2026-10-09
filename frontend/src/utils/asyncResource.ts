@@ -10,8 +10,10 @@ export const emptyResource = <T>(): ResourceState<T> => ({ data: null, loading: 
 export function createResourceLoader<T>(
   fetchValue: (signal: AbortSignal) => Promise<T>,
   publish: (state: ResourceState<T>) => void,
+  keepPreviousData = false,
 ) {
   let generation = 0;
+  let previousData: T | null = null;
   let controller: AbortController | undefined;
   const cancel = () => {
     generation++;
@@ -22,13 +24,16 @@ export function createResourceLoader<T>(
     const current = generation;
     controller = new AbortController();
     const signal = controller.signal;
-    publish(emptyResource());
+    publish({ data: previousData, loading: true, error: null });
     try {
       const data = await fetchValue(signal);
-      if (current === generation) publish({ data, loading: false, error: null });
+      if (current === generation) {
+        if (keepPreviousData) previousData = data;
+        publish({ data, loading: false, error: null });
+      }
     } catch (error) {
       if (current === generation) publish({
-        data: null, loading: false,
+        data: previousData, loading: false,
         error: error instanceof Error ? error.message : "数据暂不可用，请重试",
       });
     }
