@@ -137,6 +137,17 @@ docker compose --env-file .env.production logs --tail=100 backend frontend
 `LIMITUPLAB_AKSHARE_KLINE_TIMEOUT_SECONDS` 调整。新浪分时优先接口保留原有 8 秒请求超时。
 60 秒默认值为恢复中观察到的约 52 秒慢响应留出余量，同时限制失去响应的调用。
 
+首页指数和晋级统计使用独立的采集预算：`LIMITUPLAB_MARKET_INDEX_TIMEOUT_SECONDS`
+默认 10 秒，覆盖三个指数及全部来源回退；`LIMITUPLAB_TRADING_CALENDAR_TIMEOUT_SECONDS`
+默认 8 秒，覆盖一次完整交易日历读取。预算包含子进程启动和序列化，超时后终止并回收
+子进程，清理最多另用约 4 秒。配置必须为有限正数。代理环境锁只在子进程内持有；父进程
+缓存成功结果并合并并发查询，失败不缓存、不使用过期数据。指数超时保留本地市场统计，
+日历超时明确提示晋级率暂不可计算。整个指数批次超时后不保证继续尝试其他来源。
+
+首页各数据区独立加载、显示实际数据日并支持局部重试；首页请求包含响应正文的预算为
+20 秒，其他普通 GET 为 120 秒，聊天 POST/SSE 沿用原策略。详情见
+[2026-10-09 首页持续加载事故](incidents/2026-10-09-homepage-stall.md)。
+
 漏日需要按真实交易日历逐日补齐，不能只补最新一天。先确认没有遗留运行容器并创建
 SQLite 一致性备份，再按日期执行，例如：
 
