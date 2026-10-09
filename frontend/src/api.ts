@@ -1,4 +1,5 @@
 import { streamChat } from "./utils/agentChatTransport";
+import { requestJson } from "./utils/jsonRequest";
 import type { ConsolidationPool } from "./consolidation";
 import type {
   AgentChatRequest,
@@ -29,17 +30,7 @@ const resolvedGetRequests = new Map<
 
 /** Fetch JSON from the backend and surface non-2xx responses as errors. */
 async function request<T>(path: string, init?: RequestInit): Promise<T> {
-  const response = await fetch(`${API_BASE_URL}${path}`, {
-    // The session cookie lets the server isolate history, memory and quotas by owner.
-    credentials: "include",
-    ...init,
-  });
-
-  if (!response.ok) {
-    throw new Error(await responseErrorMessage(response, "请求失败"));
-  }
-
-  return response.json() as Promise<T>;
+  return requestJson<T>(`${API_BASE_URL}${path}`, init);
 }
 
 /** Reuse identical in-flight GETs, including React StrictMode development mounts. */
@@ -77,8 +68,8 @@ async function cachedGet<T>(path: string, ttlMs: number): Promise<T> {
  * Fetch market summary from the backend using the supplied query scope; return the typed
  * response promise.
  */
-export function fetchMarketSummary() {
-  return request<MarketSummary>("/api/market/overview");
+export function fetchMarketSummary(signal?: AbortSignal) {
+  return request<MarketSummary>("/api/market/overview", { signal });
 }
 
 /**
@@ -103,41 +94,42 @@ export function fetchDragonTigerReview(tradeDate?: string) {
  * Fetch first board events from the backend using the supplied query scope; return the typed
  * response promise.
  */
-export function fetchFirstBoardEvents() {
-  return request<LimitUpEvent[]>("/api/limit-up/first-board");
+export function fetchFirstBoardEvents(signal?: AbortSignal) {
+  return request<LimitUpEvent[]>("/api/limit-up/first-board", { signal });
 }
 
 /**
  * Fetch continued board events from the backend using the supplied query scope; return the
  * typed response promise.
  */
-export function fetchContinuedBoardEvents() {
-  return request<LimitUpEvent[]>("/api/limit-up/continued-board");
+export function fetchContinuedBoardEvents(signal?: AbortSignal) {
+  return request<LimitUpEvent[]>("/api/limit-up/continued-board", { signal });
 }
 
 /**
  * Fetch failed limit up events from the backend using the supplied query scope; return the
  * typed response promise.
  */
-export function fetchFailedLimitUpEvents() {
-  return request<LimitUpEvent[]>("/api/limit-up/failed");
+export function fetchFailedLimitUpEvents(signal?: AbortSignal) {
+  return request<LimitUpEvent[]>("/api/limit-up/failed", { signal });
 }
 
 /**
  * Fetch recent limit up events from the backend using the supplied query scope; return the
  * typed response promise.
  */
-export function fetchRecentLimitUpEvents(days = 7) {
-  return request<LimitUpEvent[]>(`/api/limit-up/recent?days=${days}`);
+export function fetchRecentLimitUpEvents(days = 7, signal?: AbortSignal) {
+  return request<LimitUpEvent[]>(`/api/limit-up/recent?days=${days}`, { signal });
 }
 
 /**
  * Fetch daily board promotion from the backend using the supplied query scope; return the
  * typed response promise.
  */
-export function fetchDailyBoardPromotion(days = 5) {
+export function fetchDailyBoardPromotion(days = 5, signal?: AbortSignal) {
   return request<DailyBoardPromotionReport>(
     `/api/analysis/daily-promotion-report?days=${days}`,
+    { signal },
   );
 }
 
@@ -225,12 +217,12 @@ export function fetchStockIntradayHistory(
  * Fetch first board ratings from the backend using the supplied query scope; return the typed
  * response promise.
  */
-export function fetchFirstBoardRatings(tradeDate?: string, fullPool = false) {
+export function fetchFirstBoardRatings(tradeDate?: string, fullPool = false, signal?: AbortSignal) {
   const params = new URLSearchParams();
   if (tradeDate) params.set("trade_date", tradeDate);
   if (fullPool) params.set("full_pool", "true");
   const query = params.size > 0 ? `?${params.toString()}` : "";
-  return request<FirstBoardRatingsResponse>(`/api/agents/first-board-ratings${query}`);
+  return request<FirstBoardRatingsResponse>(`/api/agents/first-board-ratings${query}`, { signal });
 }
 
 /**
@@ -354,18 +346,3 @@ export function cancelAgentChatRun(runId: string) {
   );
 }
 
-/** Prefer a safe backend detail such as the user-facing 429 explanation. */
-async function responseErrorMessage(
-  response: Response,
-  fallback: string,
-): Promise<string> {
-  try {
-    const payload = (await response.json()) as { detail?: unknown };
-    if (typeof payload.detail === "string" && payload.detail.trim()) {
-      return payload.detail.trim();
-    }
-  } catch {
-    // Non-JSON gateway errors fall through to the status-based message.
-  }
-  return `${fallback}（${response.status} ${response.statusText}）`;
-}
