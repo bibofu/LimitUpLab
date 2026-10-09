@@ -1,12 +1,17 @@
 """AKShare-backed market index snapshots for dashboard context."""
 
+from concurrent.futures import Future
 from datetime import date, datetime, timedelta
-from typing import Any
+from math import isfinite
+import os
+from threading import Lock
+from typing import Any, Callable
 
 import akshare as ak
 import requests
 
 from app.collectors.network import without_proxy
+from app.collectors.process_timeout import run_in_killable_process
 from app.models import (
     MarketIndexSnapshot,
     MarketIndexTrendFacts,
@@ -24,17 +29,62 @@ INDEX_SPECS = (
 _CACHE_TTL = timedelta(minutes=15)
 _cache: dict[date | None, tuple[datetime, list[MarketIndexSnapshot]]] = {}
 _trend_cache: dict[tuple[int, date], tuple[datetime, MarketIndexTrendFacts]] = {}
+_lock = Lock()
+_inflight: dict[tuple[str, object], Future] = {}
+_MAX_CACHE_ENTRIES = 64
+_MAX_INFLIGHT_COLLECTIONS = 2
+
+
+def _cached_collection(
+    kind: str, key: object, cache: dict, worker: Callable[..., Any], *args: Any,
+) -> Any:
+    """Coalesce requests and apply one deadline to the complete provider batch."""
+    timeout = float(os.getenv("LIMITUPLAB_MARKET_INDEX_TIMEOUT_SECONDS", "10"))
+    if not isfinite(timeout) or timeout <= 0:
+        raise ValueError("Market index timeout must be finite and greater than zero")
+    flight_key = (kind, key)
+    with _lock:
+        cached = cache.get(key)
+        if cached and datetime.now() - cached[0] < _CACHE_TTL:
+            return cached[1]
+        cache.pop(key, None)
+        pending = _inflight.get(flight_key)
+        owner = pending is None
+        if pending is None:
+            if len(_inflight) >= _MAX_INFLIGHT_COLLECTIONS:
+                raise RuntimeError("Market index collection is busy; retry later")
+            pending = Future()
+            _inflight[flight_key] = pending
+    if not owner:
+        # Allow the worker's bounded terminate/kill cleanup, never wait forever.
+        return pending.result(timeout=timeout + 5)
+    try:
+        result = run_in_killable_process(worker, *args, timeout_seconds=timeout)
+        with _lock:
+            cache[key] = (datetime.now(), result)
+            while len(cache) > _MAX_CACHE_ENTRIES:
+                cache.pop(next(iter(cache)))
+        pending.set_result(result)
+        return result
+    except BaseException as error:
+        pending.set_exception(error)
+        raise
+    finally:
+        with _lock:
+            _inflight.pop(flight_key, None)
 
 
 def collect_market_indices(trade_date: date | None = None) -> list[MarketIndexSnapshot]:
     """Collect major index snapshots, cached briefly by requested trade date."""
 
-    cached = _cache.get(trade_date)
-    now = datetime.now()
-    if cached and now - cached[0] < _CACHE_TTL:
-        return cached[1]
+    return _cached_collection(
+        "snapshot", trade_date, _cache, _collect_market_indices, trade_date,
+    )
 
-    indices = [
+
+def _collect_market_indices(trade_date: date | None) -> list[MarketIndexSnapshot]:
+    """Run the complete snapshot/fallback batch only in the provider process."""
+    return [
         _collect_market_index(
             name=name,
             display_symbol=display_symbol,
@@ -43,8 +93,6 @@ def collect_market_indices(trade_date: date | None = None) -> list[MarketIndexSn
         )
         for name, display_symbol, akshare_symbol in INDEX_SPECS
     ]
-    _cache[trade_date] = (now, indices)
-    return indices
 
 
 def collect_market_index_trends(
@@ -57,10 +105,16 @@ def collect_market_index_trends(
     requested_days = max(2, min(days, 20))
     requested_end_date = end_date or date.today()
     cache_key = (requested_days, requested_end_date)
-    cached = _trend_cache.get(cache_key)
-    now = datetime.now()
-    if cached and now - cached[0] < _CACHE_TTL:
-        return cached[1]
+    return _cached_collection(
+        "trend", cache_key, _trend_cache, _collect_market_index_trends,
+        requested_days, requested_end_date,
+    )
+
+
+def _collect_market_index_trends(
+    requested_days: int, requested_end_date: date,
+) -> MarketIndexTrendFacts:
+    """Run the complete trend/fallback batch only in the provider process."""
 
     indices = [
         _collect_market_index_trend(
@@ -72,15 +126,13 @@ def collect_market_index_trends(
         )
         for name, display_symbol, akshare_symbol in INDEX_SPECS
     ]
-    response = MarketIndexTrendFacts(
+    return MarketIndexTrendFacts(
         requested_days=requested_days,
         requested_end_date=requested_end_date,
         data_as_of=min(item.end_date for item in indices),
         data_fresh=all(item.end_date == requested_end_date for item in indices),
         indices=indices,
     )
-    _trend_cache[cache_key] = (now, response)
-    return response
 
 
 def _collect_market_index_trend(

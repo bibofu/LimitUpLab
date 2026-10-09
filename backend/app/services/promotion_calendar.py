@@ -10,7 +10,10 @@ from threading import Lock
 from time import monotonic
 from typing import Iterable
 
-from app.collectors.trading_calendar_collector import collect_a_share_trade_dates
+from app.collectors.trading_calendar_collector import (
+    calendar_timeout_seconds,
+    collect_a_share_trade_dates,
+)
 
 
 @dataclass(frozen=True)
@@ -67,7 +70,10 @@ def load_promotion_calendar(start_date: date, end_date: date) -> PromotionCalend
             pending = Future()
             _inflight[key] = pending
     if not owner:
-        return pending.result()
+        try:
+            return pending.result(timeout=calendar_timeout_seconds() + 5)
+        except (TimeoutError, ValueError):
+            return PromotionCalendar((), ("交易日历读取超时，无法确认相邻交易日；相关晋级率暂不计算。",))
 
     try:
         result = _fetch_calendar(start_date, end_date)
