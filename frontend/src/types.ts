@@ -513,12 +513,79 @@ export interface ReviewFeatureSummary {
   cards: ReviewFeatureCard[];
 }
 
+export interface ReviewBucketStat {
+  label: string;
+  positive_count: number;
+  negative_count: number;
+  sample_size: number;
+  positive_rate: number | null;
+  baseline_rate: number | null;
+  delta_pp: number | null;
+}
+
+export interface ReviewFeatureBreakdown {
+  key: string;
+  label: string;
+  positive_summary: string;
+  negative_summary: string;
+  positive_detail: string;
+  negative_detail: string;
+  positive_valid_count: number;
+  negative_valid_count: number;
+  buckets: ReviewBucketStat[];
+}
+
+export interface ReviewFeatureStudy {
+  positive_count: number;
+  negative_count: number;
+  excluded_count: number;
+  basis: string;
+  baseline_rate: number | null;
+  features: ReviewFeatureBreakdown[];
+  signals: string[];
+}
+
+export interface ReviewLeaderExample {
+  symbol: string;
+  name: string;
+  first_board_date: string | null;
+  max_board_height: number;
+  latest_date: string;
+  status: string;
+  data_missing: string[];
+  position_label: string | null;
+  float_market_cap: number | null;
+  first_limit_time: string | null;
+  break_count: number | null;
+  turnover_rate: number | null;
+}
+
+export interface ReviewFeatureResearch {
+  candidate: ReviewFeatureStudy;
+  market: ReviewFeatureStudy;
+  market_start_date: string;
+  market_end_date: string;
+  market_leaders: ReviewLeaderExample[];
+  market_detected_count: number;
+  market_matched_count: number;
+  notes: string[];
+  cross_checks?: string[];
+}
+
+export interface ReviewInsight {
+  scope: "candidate" | "market" | "synthesis";
+  title: string;
+  detail: string;
+}
+
 export interface ReviewAgentReportResponse {
   generation_mode?: "llm" | "deterministic" | "legacy";
   llm_model?: string | null;
   generation_note?: string | null;
   feature_summary?: ReviewFeatureSummary | null;
   summary_headline?: string | null;
+  feature_research?: ReviewFeatureResearch | null;
+  summary_insights?: ReviewInsight[];
   excluded_time_prediction_count?: number;
   time_cohort_counts?: Record<string, number>;
   time_audit_status?: string;

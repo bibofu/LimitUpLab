@@ -313,7 +313,9 @@ function compile(path: string, imports: Record<string, unknown> = {}, exports = 
   new Function("require", "module", "exports", compiled)((id: string) => imports[id] ?? require(id.startsWith(".") ? `${id}.ts` : id), module, module.exports);
   return module.exports;
 }
-const summary = compile("../src/components/ReviewSummary.tsx");
+const comparison = compile("../src/components/ResearchComparison.tsx");
+const leaders = compile("../src/components/MarketLeaderReview.tsx", { "./ResearchComparison": comparison });
+const summary = compile("../src/components/ReviewSummary.tsx", { "./ResearchComparison": comparison, "./MarketLeaderReview": leaders });
 const renderSummary = (value: ReviewAgentReportResponse, summaryStatus: ReviewSummaryStatus = "ready", error: string | null = null) => (
   renderToStaticMarkup(createElement(summary.ReviewSummary, { report: value, summaryStatus, error, onRegenerate() {} }))
 );
@@ -362,7 +364,7 @@ test("initial generation and refreshed idle states never show a baseline or prev
     assert.ok(!html.includes("规则回退"));
     assert.ok(!html.includes("查看原因"));
     assert.equal(html.split('class="review-feature-card"').length - 1, 3);
-    assert.ok(html.includes(status === "generating" ? "正在整理一句话解读" : "可基于下方特征生成一句话解读"));
+    assert.ok(html.includes(status === "generating" ? "正在整理本期解读" : "本地事实已就绪"));
     assert.equal(html.includes('aria-busy="true"'), status === "generating");
     assert.equal(html.includes("disabled"), status === "generating");
   }
@@ -402,7 +404,7 @@ test("missing feature data preserves three explicit placeholders without fabrica
   } }), "ready");
   assert.ok(html.includes("样本不足"));
   assert.ok(html.includes("有效 1/12 个样本"));
-  assert.ok(html.includes("暂无简短解读"));
+  assert.ok(html.includes("本期结论尚未齐备"));
 });
 
 test("collapsed scope preserves checked forward eligibility counts without inventing zeros for legacy reports", () => {
