@@ -67,7 +67,8 @@ come from deterministic code and recorded data; the model plans and explains.
 | `backend/evals/golden/` | Run the production Agent against a frozen synthetic world | Independent expected answers, budgets, provenance, judge references and review states |
 | `deploy/`, `scripts/` | Start, verify and deploy the system | Process ownership, locks, backups and recovery |
 
-For the workbench, `frontend/src/App.tsx` owns routing and page orchestration.
+For the workbench, `frontend/src/App.tsx` owns routing and page orchestration;
+`pages/PremarketPage.tsx` owns the URL-selected premarket strategy workspace.
 `components/StockResearchPanels.tsx` renders stock position and rating details;
 `components/RecommendationNewsBoard.tsx` renders intelligence cards, while
 `hooks/useRecommendationIntelligence.ts` owns their refresh state. The
