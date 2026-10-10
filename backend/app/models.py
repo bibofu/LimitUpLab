@@ -1412,6 +1412,9 @@ class ReviewPromotionComparison(BaseModel):
 class ReviewAgentReportResponse(BaseModel):
     """LLM tool-driven review report for high-score first-board picks."""
 
+    generation_mode: Literal["llm", "deterministic", "legacy"] = "legacy"
+    llm_model: str | None = None
+    generation_note: str | None = None
     start_date: date
     end_date: date
     sample_size: int

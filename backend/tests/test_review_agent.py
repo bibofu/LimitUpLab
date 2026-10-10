@@ -1,5 +1,6 @@
 import unittest
 from datetime import date, datetime, timezone
+from langchain_core.messages import AIMessage
 
 from app.agents.review_agent import (
     REVIEW_AGENT_VERSION,
@@ -17,6 +18,12 @@ class FakeReviewLLMProvider(LLMProvider):
     # Prepare the init fixture or observation used by the surrounding regression scenario.
     def __init__(self) -> None:
         self.calls: list[tuple[str, str]] = []
+
+    def generate_messages(self, messages, tools, **kwargs):
+        return AIMessage(content="", tool_calls=[{
+            "id": "review-check", "name": "submit_compliance_review",
+            "args": {"decision": "allow", "violations": [], "reason": "仅做研究解释"},
+        }])
 
     # Build the LLMResult fixture used by the surrounding regression scenario.
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:

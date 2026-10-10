@@ -22,7 +22,9 @@ from app.models import (
 )
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.evaluation_agent import build_agent_evaluation
-from app.services.llm_provider import LLMProvider, get_llm_provider
+from app.services.llm_provider import DisabledLLMProvider, LLMProvider, get_llm_provider
+from app.agents.review_narrative import ReviewNarrative, authoritative_review_facts
+from app.agents.react_runtime.compliance import review_answer
 from app.services.outcome_completeness import build_top10_outcome_completeness
 from app.services.promotion_calendar import (
     PromotionCalendar,
@@ -83,6 +85,7 @@ class ReviewAgentToolbox:
         self.follow_days = follow_days
         self._evaluations: list[AgentEvaluationItem] | None = None
         self._predictions: dict[str, AgentPrediction] | None = None
+        self.evaluation_scope: dict[str, Any] = {"candidate_limit": 500}
         if trade_dates is not None:
             self.promotion_calendar = PromotionCalendar(tuple(sorted(set(trade_dates))), ())
         else:
@@ -265,6 +268,11 @@ class ReviewAgentToolbox:
                 limit=500,
                 include_time_invalid_live=True,
             )
+            self.evaluation_scope.update({
+                "canonical_prediction_count": response.prediction_count,
+                "returned_evaluation_count": len(response.evaluations),
+                "candidates_truncated": response.prediction_count > len(response.evaluations),
+            })
             by_date: dict[date, list[AgentEvaluationItem]] = {}
             for item in response.evaluations:
                 if item.score < self.min_score:
@@ -335,21 +343,42 @@ def build_review_agent_report(
         end_date=end_date,
         picks=picks,
         tool_results=[result.trace() for result in tool_results],
-        warnings=[
-            "LLM review unavailable; deterministic fallback generated from tool facts.",
-            *completeness.warnings,
-            *promotion_warnings,
-        ],
+        warnings=[*completeness.warnings, *promotion_warnings],
         feature_comparison=feature_comparison,
         promotion_comparisons=promotion_comparisons,
         excluded_time_count=excluded_time_count,
     )
+    if toolbox.evaluation_scope.get("candidates_truncated"):
+        fallback.warnings.append("上游评估候选已截断为最多500条，本报告只描述入选样本，不代表完整区间或全市场。")
+    fallback.warnings.extend(
+        f"复盘工具 {result.name} 未完成，相关结论需保留。"
+        for result in tool_results if result.status != "success"
+    )
+    if isinstance(active_provider, DisabledLLMProvider):
+        fallback.generation_note = "本次未启用 LLM 或模型配置不可用，展示基于本地事实的规则总结。"
+        return fallback
+    facts["authoritative_review"] = authoritative_review_facts(
+        fallback, picks, feature_comparison, toolbox.evaluation_scope,
+    )
     try:
-        content = active_provider.generate(
+        result = active_provider.generate(
             _review_report_system_prompt(),
             _review_report_user_prompt(start_date, end_date, min_score, facts),
-        ).content
-        payload = _extract_json_object(content)
+        )
+        payload = ReviewNarrative.model_validate(_extract_json_object(result.content)).model_dump()
+        try:
+            compliance = review_answer(
+                active_provider,
+                user_message=f"解释 {start_date} 至 {end_date} 的首板复盘，不提供交易建议。",
+                answer=json.dumps(payload, ensure_ascii=False),
+                timeout_seconds=20,
+            )
+        except Exception:
+            fallback.generation_note = "LLM 总结的研究边界检查未完成，已回退到基于本地事实的规则总结。"
+            return fallback
+        if compliance.decision != "allow":
+            fallback.generation_note = "LLM 总结未通过研究边界检查，已回退到基于本地事实的规则总结。"
+            return fallback
         report = _report_from_payload(
             payload=payload,
             start_date=start_date,
@@ -359,12 +388,17 @@ def build_review_agent_report(
             feature_comparison=feature_comparison,
             promotion_comparisons=promotion_comparisons,
         )
-        report.warnings.extend(completeness.warnings)
-        report.warnings.extend(promotion_warnings)
+        report.warnings = fallback.warnings
         report.excluded_time_prediction_count = excluded_time_count
+        report.generation_mode = "llm"
+        report.llm_model = result.model
+        report.generation_note = "LLM 基于本次复盘事实补充解释与待验证假设，统计、评分和晋级结果仍由确定性代码计算。"
         return report
-    except Exception as error:
-        fallback.warnings.append(f"Review LLM unavailable: {error}")
+    except (ValueError, TypeError):
+        fallback.generation_note = "LLM 未返回有效且有解释内容的总结，已回退到基于本地事实的规则总结。"
+        return fallback
+    except Exception:
+        fallback.generation_note = "LLM 总结请求失败，已回退到基于本地事实的规则总结。"
         return fallback
 
 
@@ -382,6 +416,8 @@ def _plan_review_tools(
         "compare_top10_market_promotion",
         "compare_success_failure_features",
     ]
+    if isinstance(provider, DisabledLLMProvider):
+        return available
     try:
         result = provider.generate(
             "You are a Review Agent planner. Return JSON only.",
@@ -770,6 +806,8 @@ def _fallback_report(
         tool_results=tool_results,
         warnings=report_warnings,
         generated_by=REVIEW_AGENT_VERSION,
+        generation_mode="deterministic",
+        generation_note="基于本地结构化事实生成规则总结。",
     )
 
 
@@ -811,7 +849,7 @@ def _report_from_payload(
         market_promotion_rate=fallback.market_promotion_rate,
         promotion_rate_delta=fallback.promotion_rate_delta,
         promotion_comparisons=fallback.promotion_comparisons,
-        main_findings=_string_list(payload.get("main_findings")) or fallback.main_findings,
+        main_findings=[*fallback.main_findings, *_string_list(payload.get("main_findings"))],
         successful_patterns=_merge_texts(
             fallback.successful_patterns,
             _string_list(payload.get("successful_patterns")),
@@ -828,7 +866,7 @@ def _report_from_payload(
             fallback.adjustment_suggestions,
             _string_list(payload.get("adjustment_suggestions")),
         ),
-        confidence=float(payload.get("confidence") or fallback.confidence),
+        confidence=payload.get("confidence", fallback.confidence),
         reviewed_picks=picks[:100],
         tool_results=tool_results,
         warnings=fallback.warnings,
@@ -845,6 +883,12 @@ def _review_report_system_prompt() -> str:
         "with stock-selection traits such as dominant themes, industries and float "
         "market-cap distribution before discussing seal structure or outcomes. "
         "Return JSON only. "
+        "Write substantive Chinese findings and at least one explanatory pattern, bias, "
+        "or research adjustment; when evidence is insufficient, explain the specific limitation. "
+        "The authoritative_review facts are mandatory even when selected tool details "
+        "are incomplete. Respect cohort definitions, missing data and truncation. Do not "
+        "invent statistics, treat correlations as causes, or alter scores and promotion results. "
+        "Adjustments are hypotheses for later validation, never automatic strategy changes. "
         "Do not give buy/sell advice, target prices, positions, or return promises."
     )
 
@@ -1258,7 +1302,7 @@ def _string_list(value: Any) -> list[str]:
 
 # Merge report text lists while removing repeated entries.
 def _merge_texts(primary: list[str], secondary: list[str]) -> list[str]:
-    return _top_texts([*primary, *secondary])
+    return list(dict.fromkeys([*primary, *secondary]))
 
 
 # Select the most frequent text entries for a bounded report section.

@@ -688,7 +688,8 @@ def get_review_agent_report(
     required_tracking_dates = set(available_dates[max(0, end_index - 5):end_index])
     first_board_repository = SQLiteFirstBoardRepository()
     if (
-        start_date is None
+        not use_llm
+        and start_date is None
         and min_score == 0
         and top_per_day == 10
         and follow_days == 5
