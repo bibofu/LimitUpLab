@@ -36,6 +36,7 @@
 .digest-strip-metric + .digest-strip-metric { margin-top: 7px; padding-top: 6px; border-top: 1px solid #e3e8ef; }
 .digest-strip-value { display: flex; gap: 3px 8px; flex-wrap: wrap; margin-top: 6px; }
 .digest-strip-value > span { flex: 1; min-width: 50%; overflow-wrap: anywhere; }
+.digest-opening-ties > span { flex-basis: 100%; min-width: 0; }
 .digest-strip-value > b { font-size: 13px; font-weight: 500; }
 .digest-strip-value > i { width: 100%; height: 3px; background: #e4e9f0; }
 .digest-strip-value > i > i { display: block; height: 100%; background: var(--digest-color); opacity: .7; }

@@ -83,15 +83,18 @@ function LeadingBucket({ distribution, compare = false }: { distribution: Digest
   const bucket = buckets[0];
   const inline = distribution.key === "industry";
   const opening = distribution.key === "next_open_pct";
-  const tiedCount = bucket ? buckets.filter(item => item.count === bucket.count).length : 0;
-  const rank = tiedCount > 1 ? opening ? `并列最多之一（${tiedCount}档）` : "并列最多" : bucket ? "占比最多" : "";
+  const tied = bucket ? buckets.filter(item => item.count === bucket.count) : [];
+  const openingTies = opening && tied.length > 1;
+  const rank = tied.length > 1 ? opening ? `并列最多（${tied.length}档）` : "并列最多" : bucket ? "占比最多" : "";
+  const share = bucket && (!openingTies || tied.every(item => item.share === bucket.share)) ? bucket.share : null;
   return <div className={`digest-strip-metric${inline ? " digest-strip-inline" : ""}`}>
     <strong>{opening ? "次日开盘" : distribution.label}{rank ? <em>{rank}</em> : null}</strong>
-    {bucket ? <div className="digest-strip-value">
-      <span>{bucket.label}</span><b>{bucket.count}/{distribution.valid_count}{bucket.share === null ? "" : ` · ${percent(bucket.share)}`}</b>
-      {bucket.share === null || inline ? null : <i aria-hidden="true"><i style={{ width: `${Math.max(0, Math.min(1, bucket.share)) * 100}%` }} /></i>}
+    {bucket ? <div className={`digest-strip-value${openingTies ? " digest-opening-ties" : ""}`}>
+      <span>{openingTies ? tied.map(item => item.label).join(" / ") : bucket.label}</span><b>{openingTies ? "各 " : ""}{bucket.count}/{distribution.valid_count}{share === null ? "" : ` · ${percent(share)}`}</b>
+      {share === null || inline ? null : <i aria-hidden="true"><i style={{ width: `${Math.max(0, Math.min(1, share)) * 100}%` }} /></i>}
     </div> : <span className="digest-empty">暂无有效数据</span>}
-    {opening && compare && bucket ? <small className="digest-opening-baseline">该档全部候选 {openingBucket(bucket.baseline_count, distribution.baseline_valid_count, bucket.baseline_share)}</small> : null}
+    {opening && compare && bucket ? <small className="digest-opening-baseline">{openingTies ? "候选对照见完整分布"
+      : <>该档全部候选 {openingBucket(bucket.baseline_count, distribution.baseline_valid_count, bucket.baseline_share)}</>}</small> : null}
     <small>有效 {distribution.valid_count}/{distribution.total_count}{opening ? " · 相对首板收盘" : ""}</small>
   </div>;
 }

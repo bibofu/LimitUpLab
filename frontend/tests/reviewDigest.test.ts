@@ -133,14 +133,49 @@ test("next-day card shows its leading bucket and independent baseline while all 
   assert.ok(!html.includes('class="digest-evidence" open'));
 });
 
-test("a tied leading opening is marked as one of all tied buckets and compares that exact bucket", () => {
+test("all tied leading openings retain source order and separate candidate comparisons in closed evidence", () => {
   const digest = reviewDigest();
   const distribution = openingDistribution();
   distribution.buckets = distribution.buckets.map((bucket, index) => ({ ...bucket, count: [3, 3, 1, 1, 0][index], share: [0.375, 0.375, 0.125, 0.125, 0][index] }));
   digest.excellent.distributions = [distribution];
-  const card = nextOpeningCard(excellentPart(render(digest)));
-  for (const text of ["并列最多之一（2档）", "低开", "3/8 · 37.5%", "该档全部候选 10/40 · 25.0%"]) assert.ok(card.includes(text), text);
-  for (const text of ["平开", "20/40", "6/8", "75.0%", "集中", "占比最多"]) assert.ok(!card.includes(text), text);
+  const html = excellentPart(render(digest));
+  const card = nextOpeningCard(html);
+  for (const text of ["并列最多（2档）", "低开 / 平开", "各 3/8 · 37.5%", "候选对照见完整分布"]) assert.ok(card.includes(text), text);
+  for (const text of ["高开0–3%", "高开≥7%", "该档全部候选", "10/40", "1/40", "6/8", "75.0%", "集中", "占比最多", "之一"]) assert.ok(!card.includes(text), text);
+  const evidence = html.slice(html.indexOf('<details class="digest-evidence">'));
+  assert.ok(evidence.includes('<th scope="row">低开</th><td>3/8 · 37.5%</td><td>10/40 · 25.0%</td>'));
+  assert.ok(evidence.includes('<th scope="row">平开</th><td>3/8 · 37.5%</td><td>1/40 · 2.5%</td>'));
+  assert.ok(!html.includes('class="digest-evidence" open'));
+});
+
+test("three-way and five-way opening ties show every positive bucket without summing their counts", () => {
+  for (const counts of [[2, 2, 2, 1, 1], [2, 2, 2, 2, 2]]) {
+    const digest = reviewDigest();
+    const valid = counts.reduce((total, count) => total + count, 0);
+    const distribution = openingDistribution({ valid_count: valid });
+    distribution.buckets = distribution.buckets.map((bucket, index) => ({ ...bucket, count: counts[index], share: counts[index] / valid }));
+    digest.excellent.distributions = [distribution];
+    const card = nextOpeningCard(excellentPart(render(digest)));
+    const tied = distribution.buckets.filter(bucket => bucket.count === 2);
+    assert.ok(card.includes(`并列最多（${tied.length}档）`));
+    assert.ok(card.includes(tied.map(bucket => bucket.label).join(" / ")));
+    assert.ok(card.includes(`各 2/${valid} · ${(2 / valid * 100).toFixed(1)}%`));
+    assert.ok(!card.includes(`各 ${tied.length * 2}/${valid}`));
+    assert.ok(!card.includes("100.0%"));
+    assert.ok(!card.includes("<table"));
+  }
+});
+
+test("tied opening shares are omitted when any share is missing or inconsistent", () => {
+  for (const secondShare of [null, 0.25]) {
+    const digest = reviewDigest();
+    const distribution = openingDistribution();
+    distribution.buckets = distribution.buckets.map((bucket, index) => ({ ...bucket, count: [3, 3, 1, 1, 0][index], share: [0.375, secondShare, 0.125, 0.125, 0][index] }));
+    digest.excellent.distributions = [distribution];
+    const card = nextOpeningCard(excellentPart(render(digest)));
+    for (const text of ["并列最多（2档）", "低开 / 平开", "各 3/8", "候选对照见完整分布"]) assert.ok(card.includes(text), text);
+    for (const text of ["37.5%", "25.0%", "高开≥7%", 'style="width']) assert.ok(!card.includes(text), text);
+  }
 });
 
 test("unknown opening shares are not recomputed and unavailable baselines never become zero percent", () => {
@@ -174,13 +209,14 @@ test("leader opening cards never present candidate baselines even if the respons
 test("next-day buckets with no effective samples show unknown instead of zero denominators", () => {
   const digest = reviewDigest();
   const opening = { key: "next_open_pct", label: "次日开盘", valid_count: 0, total_count: 10, baseline_valid_count: 0, baseline_total_count: 50, note: "待补齐",
-    buckets: [{ label: "低开", count: 0, share: null, baseline_count: 0, baseline_share: null }] };
+    buckets: ["低开", "平开"].map(label => ({ label, count: 0, share: null, baseline_count: 0, baseline_share: null })) };
   digest.excellent.distributions = [opening];
   let html = excellentPart(render(digest));
   const card = nextOpeningCard(html);
   assert.ok(card.includes("暂无有效数据"));
   assert.ok(!card.includes("低开"));
   assert.ok(!card.includes("占比最多"));
+  assert.ok(!card.includes("并列最多"));
   assert.ok(html.includes("有效 0/10"));
   assert.ok(html.includes("全部候选有效 0/50"));
   assert.ok(html.includes("<td>待核验</td>"));
