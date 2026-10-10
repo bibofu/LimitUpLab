@@ -135,6 +135,39 @@ def test_valid_end_of_day_time_does_not_round_to_24_hours():
     assert feature(result, "first_limit_minutes").positive_summary == "23:59"
 
 
+def test_numeric_summary_values_preserve_units_and_unrounded_statistics():
+    positive = [
+        {"float_market_cap": cap * 1e8, "first_limit_minutes": first, "turnover_rate": turn,
+         "position_label": "低位", "break_count": 0}
+        for cap, first, turn in zip([10.1, 20.2, 99], [565, 590, 601], [2.1, 4.25, 20])
+    ]
+    negative = [{"float_market_cap": 30e8, "first_limit_minutes": 610, "turnover_rate": 8}] * 3
+    result = study(positive, negative)
+    cap = feature(result, "float_market_cap")
+    first = feature(result, "first_limit_minutes")
+    turnover = feature(result, "turnover_rate")
+    assert (cap.positive_value, cap.negative_value) == pytest.approx((20.2, 30))
+    assert (first.positive_value, first.negative_value) == pytest.approx((1756 / 3, 610))
+    assert (turnover.positive_value, turnover.negative_value) == pytest.approx((4.25, 8))
+    for key in ("position_label", "break_count"):
+        assert feature(result, key).positive_value is None
+        assert feature(result, key).negative_value is None
+
+
+def test_numeric_summary_values_require_three_valid_samples_per_field_and_group():
+    positive = [{"float_market_cap": 20e8, "first_limit_minutes": 590, "turnover_rate": 4}] * 2 + [
+        {"float_market_cap": 30e8, "first_limit_minutes": float("nan"), "turnover_rate": 0},
+    ]
+    negative = [{"first_limit_minutes": 600, "turnover_rate": 8}] * 3
+    result = study(positive, negative)
+    assert feature(result, "float_market_cap").positive_value == 20
+    assert feature(result, "float_market_cap").negative_value is None
+    assert feature(result, "first_limit_minutes").positive_value is None
+    assert feature(result, "first_limit_minutes").negative_value == 600
+    assert feature(result, "turnover_rate").positive_value is None
+    assert feature(result, "turnover_rate").negative_value == 8
+
+
 def test_small_groups_keep_counts_but_hide_summary_and_interpretation():
     positive = [{"position_label": "低位", "break_count": 0}] * 2
     negative = [{"position_label": "低位", "break_count": 0}] * 4

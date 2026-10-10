@@ -25,6 +25,8 @@ class ReviewFeatureBreakdown(BaseModel):
     negative_detail: str
     positive_valid_count: int
     negative_valid_count: int
+    positive_value: float | None = None
+    negative_value: float | None = None
     buckets: list[ReviewBucketStat] = Field(default_factory=list)
 
 
@@ -61,6 +63,7 @@ class ReviewFeatureResearch(BaseModel):
     market_leaders: list[ReviewLeaderExample] = Field(default_factory=list)
     market_detected_count: int = 0
     market_matched_count: int = 0
+    cross_checks: list[str] = Field(default_factory=list)
     notes: list[str] = Field(default_factory=list)
 
 

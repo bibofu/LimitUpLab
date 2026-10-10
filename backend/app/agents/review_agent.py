@@ -42,7 +42,7 @@ from app.services.promotion_calendar import (
 )
 
 
-REVIEW_AGENT_VERSION = "review-agent-tool-use-v11-outcome-feature-research"
+REVIEW_AGENT_VERSION = "review-agent-tool-use-v12-checked-feature-directions"
 
 
 @dataclass(frozen=True)
@@ -962,6 +962,9 @@ def _review_report_system_prompt() -> str:
         "title为直白结论(2–28字)，detail每条80–160字、最多180字符，包含结论、1至2个关键对比和必要限制。"
         "candidate要同时说明较好组与较差组的特征差异；market解释3板组的首板特征，并对照未达3板组；"
         "synthesis明确两套样本哪些线索一致、哪些不一致，给出下一轮复盘应重点核对的2项特征。"
+        "综合段必须先读feature_research.cross_checks的确定性方向核对；逐项按该结果描述，"
+        "标题和正文必须一致。若市值、首封、换手均相反，应直说目前没有统一画像，不能写成方向一致。"
+        "不要把‘两组都出现某特征’当成相对各自对照组的方向一致；不要比较两组正例的绝对值后宣称共性。"
         "优先首板位置、市值、首封，再结合炸板和换手；不要机械复述全部表格或只写泛泛风险提示。"
         "特征buckets的positive_rate是具有该特征的已观察样本中正例占比，baseline_rate仅是该字段"
         "有效样本基准；不同字段、两类样本和不同窗口不能混用分母。null比例表示不足，不能补0或自行计算。"

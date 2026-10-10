@@ -8,7 +8,7 @@ import pytest
 
 from app.agents.review_agent import _review_feature_profile
 from app.agents.review_feature_study import build_feature_study
-from app.agents.review_research import build_feature_research, deterministic_research_insights
+from app.agents.review_research import build_feature_research, compare_study_directions, deterministic_research_insights
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.sample_data import SAMPLE_EVENTS
 
@@ -85,3 +85,18 @@ def test_candidate_collector_sentinels_do_not_become_early_seal_or_position_evid
         assert feature.positive_valid_count == feature.negative_valid_count == 0
         assert feature.positive_summary == "样本不足"
         assert all(bucket.positive_rate is None for bucket in feature.buckets)
+
+
+def test_cross_checks_compare_directions_against_each_own_control_without_parsing_text():
+    def group(cap, seal, turnover):
+        return [{"float_market_cap": cap * 100_000_000, "first_limit_minutes": seal, "turnover_rate": turnover}] * 3
+    selected = build_feature_study(group(44, 598, 5.8), group(36, 592, 5.2), excluded_count=0, basis="候选", positive_outcome="正收益")
+    market = build_feature_study(group(43, 618, 4.7), group(59, 659, 7), excluded_count=0, basis="市场", positive_outcome="达到3板")
+    # User-facing strings can change without changing the checked numeric directions.
+    selected.features[1].positive_summary = "非数值展示文案"
+    checks = compare_study_directions(selected, market)
+    assert len(checks) == 3 and all("方向相反" in item for item in checks)
+    assert "较差组更大" in checks[0] and "未达3板组更小" in checks[0]
+    assert "较差组更晚" in checks[1] and "未达3板组更早" in checks[1]
+    market.features[1].positive_value = None
+    assert "数据不足" in compare_study_directions(selected, market)[0]

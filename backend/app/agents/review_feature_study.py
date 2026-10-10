@@ -59,6 +59,8 @@ def build_feature_study(
             negative_detail=summaries[1][1],
             positive_valid_count=len(groups[0]),
             negative_valid_count=len(groups[1]),
+            positive_value=_group_value(groups[0], key),
+            negative_value=_group_value(groups[1], key),
             buckets=_bucket_stats(groups[0], groups[1], key),
         ))
     positive_count, negative_count = len(positive_profiles), len(negative_profiles)
@@ -117,6 +119,17 @@ def _clock(minutes: float) -> str:
     # Rounding a valid 23:59 value must not produce an impossible 24:00 clock.
     rounded = min(1439, int(minutes + .5))
     return f"{rounded // 60:02d}:{rounded % 60:02d}"
+
+
+def _group_value(values: list, key: str) -> float | None:
+    """Expose unrounded cap (100M CNY), time (minutes), or turnover (%) only."""
+    if len(values) < MIN_GROUP_SIZE:
+        return None
+    if key == "first_limit_minutes":
+        return float(mean(values))
+    if key in {"float_market_cap", "turnover_rate"}:
+        return float(median(values))
+    return None
 
 
 def _group_summary(values: list, key: str, sample_size: int) -> tuple[str, str]:
