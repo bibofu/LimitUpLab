@@ -5,6 +5,10 @@ import { createReviewReportResource } from "../utils/reviewReportResource";
 // The page uses a fixed Top10 / D+5 scope; each cutoff date has its own state and request.
 const reviews = createReviewReportResource(fetchReviewAgentReport);
 
+export function refreshReviewFacts() {
+  return reviews.refreshFacts();
+}
+
 export function useReviewReport(endDate: string) {
   const subscribe = useCallback((listener: () => void) => reviews.subscribe(endDate, listener), [endDate]);
   const snapshot = useCallback(() => reviews.getState(endDate), [endDate]);

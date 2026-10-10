@@ -831,10 +831,13 @@ function ReviewPostBars({
   bars: ReviewAgentPick["post_bars"];
   expectedCount: number;
 }) {
+  const barsByDay = new Map(bars.map((bar, index) => [
+    bar.trading_day_offset === undefined ? index : bar.trading_day_offset, bar,
+  ]));
   return (
     <div className="review-post-bars">
       {Array.from({ length: 6 }, /* Handle the callback from Array.from within ReviewPostBars. */ (_, index) => {
-        const bar = bars[index];
+        const bar = barsByDay.get(index);
         const label = index === 0 ? "首板" : `D+${index}`;
         if (!bar) {
           const cacheMissing = index < expectedCount;

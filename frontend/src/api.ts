@@ -259,6 +259,7 @@ export function fetchReviewAgentReport(params?: {
   top_per_day?: number;
   follow_days?: number;
   use_llm?: boolean;
+  refresh_facts?: boolean;
 }) {
   const query = new URLSearchParams();
   if (params?.start_date) {
@@ -278,6 +279,9 @@ export function fetchReviewAgentReport(params?: {
   }
   if (params?.use_llm !== undefined) {
     query.set("use_llm", params.use_llm ? "true" : "false");
+  }
+  if (params?.refresh_facts !== undefined) {
+    query.set("refresh_facts", params.refresh_facts ? "true" : "false");
   }
   const suffix = query.toString() ? `?${query.toString()}` : "";
   return request<ReviewAgentReportResponse>(`/api/agents/review-report${suffix}`);

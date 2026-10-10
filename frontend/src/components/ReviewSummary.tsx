@@ -13,6 +13,8 @@ export function ReviewSummary({ report, generating, error, onRegenerate }: Revie
   const source = mode === "llm" ? "LLM 生成" : mode === "deterministic" ? "规则回退" : "历史来源未标识";
   const sections = [
     ["主要发现", report.main_findings],
+    ["首板至观察日收盘：正收益组特征", report.successful_patterns],
+    ["首板至观察日收盘：负收益组特征", report.failed_patterns],
     ["评分偏差观察", report.scoring_bias],
     ["待验证的调整假设", report.adjustment_suggestions],
   ] as const;
@@ -30,6 +32,7 @@ export function ReviewSummary({ report, generating, error, onRegenerate }: Revie
         </button>
       </div>
       <p>默认启用模型总结；仅用于复盘观察和提出待验证假设，不会自动修改评分、权重或预测记录。</p>
+      <p>正负收益组按首板至观察日收盘表现划分，与次日开盘至收盘的成功、失败评价标签不同，不能混用分母。</p>
       {generating ? <p role="status">正在生成模型总结，统计与追踪仍可查看；下方保留已有总结。</p> : null}
       {error ? <p className="review-agent-error" role="alert">{error}；已保留现有统计和总结，可手动重试。</p> : null}
       {report.generation_note ? <p>{report.generation_note}</p> : null}

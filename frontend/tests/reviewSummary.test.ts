@@ -149,6 +149,96 @@ test("failed fact loading has a manual retry and never initiates a model without
   assert.equal(resource.getState(day).error, null);
 });
 
+test("refreshing facts invalidates an in-flight model without automatically paying for another", async () => {
+  for (const fails of [false, true]) {
+    const oldModel = deferred<ReviewAgentReportResponse>();
+    const refreshedFacts = report({ sample_size: 15, main_findings: ["新事实"] });
+    const calls: Array<{ use_llm: boolean; refresh_facts?: boolean }> = [];
+    const resource = createReviewReportResource(async params => {
+      calls.push(params);
+      if (params.use_llm && calls.length === 2) return oldModel.promise;
+      return params.refresh_facts ? refreshedFacts : report({ generation_mode: params.use_llm ? "llm" : "deterministic" });
+    });
+    resource.subscribe(day, () => {});
+    const original = resource.load(day);
+    await flush();
+    assert.equal(resource.getState(day).generating, true);
+    await resource.refreshFacts();
+    assert.equal(resource.getState(day).report, refreshedFacts);
+    if (fails) oldModel.reject(new Error("旧请求错误"));
+    else oldModel.resolve(report({ sample_size: 10, generation_mode: "llm", main_findings: ["旧模型总结"] }));
+    await original;
+    await resource.load(day);
+    assert.equal(resource.getState(day).report, refreshedFacts);
+    assert.equal(resource.getState(day).summaryError, null);
+    assert.equal(resource.getState(day).generating, false);
+    assert.deepEqual(calls.map(value => [value.use_llm, value.refresh_facts]), [[false, undefined], [true, undefined], [false, true]]);
+    await resource.regenerate(day);
+    assert.equal(calls.length, 4);
+    assert.equal(resource.getState(day).report?.generation_mode, "llm");
+  }
+});
+
+test("refresh discards inactive cached reports and refetches them without repeating model work on return", async () => {
+  const calls: Array<{ use_llm: boolean; refresh_facts?: boolean }> = [];
+  const resource = createReviewReportResource(async params => {
+    calls.push(params);
+    return report({ generation_mode: params.use_llm ? "llm" : "deterministic", sample_size: params.refresh_facts ? 20 : 10 });
+  });
+  const stop = resource.subscribe(day, () => {});
+  await resource.load(day);
+  stop();
+  await resource.refreshFacts();
+  assert.equal(calls.length, 2);
+  assert.equal(resource.getState(day).report, null);
+  resource.subscribe(day, () => {});
+  await resource.load(day);
+  await resource.load(day);
+  assert.equal(calls.length, 3);
+  assert.deepEqual(calls[2], { end_date: day, top_per_day: 10, follow_days: 5, use_llm: false, refresh_facts: true });
+  assert.equal(resource.getState(day).report?.sample_size, 20);
+});
+
+test("refresh supersedes an unfinished initial fact load and its late errors", async () => {
+  for (const fails of [false, true]) {
+    const oldFacts = deferred<ReviewAgentReportResponse>();
+    const calls: boolean[] = [];
+    const fresh = report({ sample_size: 30 });
+    const resource = createReviewReportResource(async params => {
+      calls.push(params.use_llm);
+      return params.refresh_facts ? fresh : oldFacts.promise;
+    });
+    resource.subscribe(day, () => {});
+    const initial = resource.load(day);
+    await resource.refreshFacts();
+    if (fails) oldFacts.reject(new Error("旧事实请求错误"));
+    else oldFacts.resolve(report());
+    await initial;
+    assert.equal(resource.getState(day).report, fresh);
+    assert.equal(resource.getState(day).error, null);
+    assert.deepEqual(calls, [false, false]);
+  }
+});
+
+test("failed fact refresh removes the stale narrative and retries fresh facts without a model call", async () => {
+  let refreshAttempts = 0;
+  let modelCalls = 0;
+  const resource = createReviewReportResource(async params => {
+    if (params.use_llm) modelCalls++;
+    if (params.refresh_facts && ++refreshAttempts === 1) throw new Error("刷新暂不可用");
+    return report({ generation_mode: params.use_llm ? "llm" : "deterministic" });
+  });
+  resource.subscribe(day, () => {});
+  await resource.load(day);
+  await resource.refreshFacts();
+  assert.equal(resource.getState(day).report, null);
+  assert.equal(resource.getState(day).error, "刷新暂不可用");
+  await resource.load(day, true);
+  assert.equal(refreshAttempts, 2);
+  assert.equal(modelCalls, 1);
+  assert.equal(resource.getState(day).report?.generation_mode, "deterministic");
+});
+
 function compile(path: string, imports: Record<string, unknown> = {}, exports = "") {
   const url = new URL(path, import.meta.url);
   const require = createRequire(url);
@@ -177,6 +267,37 @@ test("the actual summary shows provenance, all evidence sections, fallback detai
   assert.ok(renderSummary(report({ generation_mode: "legacy" })).includes("历史来源未标识"));
   const pending = renderSummary(report(), true);
   for (const value of ['aria-busy="true"', "disabled", "生成中", "统计与追踪仍可查看", "样本中晋级较集中"]) assert.ok(pending.includes(value));
+});
+
+test("model patterns appended after rule profiles remain visible with explicit grouping semantics", () => {
+  const html = renderSummary(report({
+    successful_patterns: ["规则画像一", "规则画像二", "规则画像三", "模型正收益组解释"],
+    failed_patterns: ["规则画像甲", "规则画像乙", "规则画像丙", "模型负收益组解释"],
+  }));
+  for (const value of ["模型正收益组解释", "模型负收益组解释", "首板至观察日收盘：正收益组特征", "首板至观察日收盘：负收益组特征", "不能混用分母"]) {
+    assert.ok(html.includes(value));
+  }
+});
+
+test("post bars retain actual trading-day gaps and only legacy bars fall back to array order", () => {
+  const dashboard = compile("../src/components/ReviewDashboard.tsx", {
+    "../api": {}, "./ReviewSummary": summary, "../hooks/useReviewReport": {}, "./Panel": {},
+  }, "\nexport { ReviewPostBars };");
+  const bar = { trade_date: day, open: 10, high: 10, low: 10, close: 10, change_pct: 0, return_from_base_pct: 0 };
+  const html = renderToStaticMarkup(createElement(dashboard.ReviewPostBars, {
+    expectedCount: 3,
+    bars: [{ ...bar, trading_day_offset: 0 }, { ...bar, trade_date: "2026-10-13", trading_day_offset: 2, return_from_base_pct: 20 }],
+  }));
+  assert.ok(html.includes("<small>D+1</small><strong>缺缓存</strong>"));
+  assert.ok(html.includes("<small>D+2</small><strong>+20.0%</strong>"));
+  const legacy = renderToStaticMarkup(createElement(dashboard.ReviewPostBars, {
+    expectedCount: 2, bars: [bar, { ...bar, trade_date: "2026-10-12", return_from_base_pct: 10 }],
+  }));
+  assert.ok(legacy.includes("<small>D+1</small><strong>+10.0%</strong>"));
+  const unknown = renderToStaticMarkup(createElement(dashboard.ReviewPostBars, {
+    expectedCount: 2, bars: [bar, { ...bar, trading_day_offset: null, return_from_base_pct: 10 }],
+  }));
+  assert.ok(unknown.includes("<small>D+1</small><strong>缺缓存</strong>"));
 });
 
 test("the actual review panel retains deterministic statistics and tracking while the model is pending or failed", () => {

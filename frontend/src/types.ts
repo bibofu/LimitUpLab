@@ -469,6 +469,7 @@ export interface ReviewAgentPick {
 }
 
 export interface ReviewAgentPostBar {
+  trading_day_offset?: number | null;
   trade_date: string;
   open: number;
   high: number;

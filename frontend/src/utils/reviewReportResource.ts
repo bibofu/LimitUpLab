@@ -13,12 +13,15 @@ type FetchReview = (params: {
   top_per_day: number;
   follow_days: number;
   use_llm: boolean;
+  refresh_facts?: boolean;
 }) => Promise<ReviewAgentReportResponse>;
 
 interface Entry {
   state: ReviewReportState;
   listeners: Set<() => void>;
   attemptedSummary: boolean;
+  revision: number;
+  refreshFacts: boolean;
 }
 
 /** Share work across StrictMode and route remounts; only an explicit retry repeats a model call. */
@@ -39,6 +42,8 @@ export function createReviewReportResource(fetchReview: FetchReview) {
         state: { report: null, loading: false, error: null, generating: false, summaryError: null },
         listeners: new Set(),
         attemptedSummary: false,
+        revision: 0,
+        refreshFacts: false,
       };
       entries.set(endDate, entry);
     }
@@ -48,22 +53,52 @@ export function createReviewReportResource(fetchReview: FetchReview) {
     entry.state = { ...entry.state, ...patch };
     entry.listeners.forEach(listener => listener());
   };
-  const request = (endDate: string, useLlm: boolean) => fetchReview({
+  const request = (endDate: string, useLlm: boolean, refreshFacts = false) => fetchReview({
     end_date: endDate, top_per_day: 10, follow_days: 5, use_llm: useLlm,
+    ...(refreshFacts ? { refresh_facts: true } : {}),
   });
   const generate = async (endDate: string, entry: Entry, retry = false) => {
     if (!entry.state.report || entry.state.loading || entry.state.generating) return;
     if (entry.attemptedSummary && !retry) return;
     entry.attemptedSummary = true;
+    const revision = entry.revision;
     publish(entry, { generating: true, summaryError: null });
     try {
       const report = await request(endDate, true);
+      if (revision !== entry.revision) return;
       // Adopt facts and narrative together, since outcomes may have been backfilled in between.
       publish(entry, { report, generating: false });
     } catch (error) {
+      if (revision !== entry.revision) return;
       publish(entry, {
         generating: false,
         summaryError: error instanceof Error ? error.message : "复盘总结生成失败，请重试",
+      });
+    }
+  };
+
+  const load = async (endDate: string, retry = false) => {
+    const entry = entryFor(endDate);
+    if (entry.state.loading) return;
+    if (entry.state.report) {
+      await generate(endDate, entry);
+      return;
+    }
+    if (entry.state.error && !retry) return;
+    const revision = entry.revision;
+    publish(entry, { loading: true, error: null });
+    try {
+      const report = await request(endDate, false, entry.refreshFacts);
+      if (revision !== entry.revision) return;
+      entry.refreshFacts = false;
+      publish(entry, { report, loading: false });
+      // Leaving before local facts arrive should not initiate a paid request.
+      if (entry.listeners.size) await generate(endDate, entry);
+    } catch (error) {
+      if (revision !== entry.revision) return;
+      publish(entry, {
+        loading: false,
+        error: error instanceof Error ? error.message : "复盘数据加载失败，请重试",
       });
     }
   };
@@ -75,26 +110,18 @@ export function createReviewReportResource(fetchReview: FetchReview) {
       entry.listeners.add(listener);
       return () => { entry.listeners.delete(listener); };
     },
-    async load(endDate: string, retry = false) {
-      const entry = entryFor(endDate);
-      if (entry.state.loading) return;
-      if (entry.state.report) {
-        await generate(endDate, entry);
-        return;
+    load,
+    async refreshFacts() {
+      const pending: Promise<void>[] = [];
+      for (const [endDate, entry] of [...entries]) {
+        // Invalidate old model/fact requests together, including inactive dates.
+        entry.revision++;
+        entry.attemptedSummary = true;
+        entry.refreshFacts = true;
+        publish(entry, { report: null, loading: false, error: null, generating: false, summaryError: null });
+        if (entry.listeners.size) pending.push(load(endDate));
       }
-      if (entry.state.error && !retry) return;
-      publish(entry, { loading: true, error: null });
-      try {
-        const report = await request(endDate, false);
-        publish(entry, { report, loading: false });
-        // Leaving before local facts arrive should not initiate a paid request.
-        if (entry.listeners.size) await generate(endDate, entry);
-      } catch (error) {
-        publish(entry, {
-          loading: false,
-          error: error instanceof Error ? error.message : "复盘数据加载失败，请重试",
-        });
-      }
+      await Promise.all(pending);
     },
     regenerate: (endDate: string) => generate(endDate, entryFor(endDate), true),
   };

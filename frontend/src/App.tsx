@@ -29,6 +29,7 @@ import { AgentChatDock } from "./components/AgentChatDock";
 import { Panel } from "./components/Panel";
 import { PremarketPage } from "./pages/PremarketPage";
 import { recommendationIntelligenceFor, useRecommendationIntelligence } from "./hooks/useRecommendationIntelligence";
+import { refreshReviewFacts } from "./hooks/useReviewReport";
 import { FirstBoardRatingDetail, StockPositionPanel } from "./components/StockResearchPanels";
 import { ReviewDashboard } from "./components/ReviewDashboard";
 import { ResourceNotice, ResourceSection, useResource } from "./components/ResourceSection";
@@ -154,6 +155,7 @@ export function App() {
   const activeView = routeToView[location.pathname] ?? "overview";
 
   function loadDashboard() {
+    void refreshReviewFacts();
     for (const resource of [summary, ...Object.values(pools), firstBoardRatings, dailyBoardPromotion]) {
       void resource.reload();
     }

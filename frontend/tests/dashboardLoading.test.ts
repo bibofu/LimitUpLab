@@ -3,6 +3,7 @@ import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import test from "node:test";
 import { createElement } from "react";
+import * as jsxRuntime from "react/jsx-runtime";
 import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import ts from "typescript";
@@ -46,7 +47,7 @@ const premarket = compile("../src/pages/PremarketPage.tsx", {
   "../hooks/useRecommendationIntelligence": recommendationIntelligence,
 });
 
-function renderApp(path: string, states: unknown[]) {
+function renderApp(path: string, states: unknown[], overrides: Record<string, unknown> = {}) {
   let cursor = 0;
   const { App } = compile("../src/App.tsx", {
     "./api": {},
@@ -57,10 +58,31 @@ function renderApp(path: string, states: unknown[]) {
     "./components/StockResearchPanels": stockResearch,
     "./pages/PremarketPage": premarket,
     "./hooks/useRecommendationIntelligence": recommendationIntelligence,
+    "./hooks/useReviewReport": reviewReport,
     "./components/MarketKLineChart": {},
+    ...overrides,
   });
   return renderToStaticMarkup(createElement(MemoryRouter, { initialEntries: [path] }, createElement(App)));
 }
+
+test("the actual refresh-all control refreshes review facts as well as dashboard resources", () => {
+  let refreshReviewCalls = 0;
+  let otherRefreshCalls = 0;
+  let clickRefresh: (() => void) | undefined;
+  const observe = (factory: (...args: any[]) => unknown) => (...args: any[]) => {
+    const props = args[1];
+    if (props?.["aria-label"] === "刷新全部数据") clickRefresh = props.onClick;
+    return factory(...args);
+  };
+  renderApp("/", Array(7).fill({ ...pending, reload() { otherRefreshCalls++; } }), {
+    "./hooks/useReviewReport": { refreshReviewFacts() { refreshReviewCalls++; } },
+    "react/jsx-runtime": { ...jsxRuntime, jsx: observe(jsxRuntime.jsx), jsxs: observe(jsxRuntime.jsxs) },
+  });
+  assert.ok(clickRefresh);
+  clickRefresh();
+  assert.equal(refreshReviewCalls, 1);
+  assert.equal(otherRefreshCalls, 7);
+});
 
 test("the homepage keeps its market slots and Agent without transient pool cards while providers hang", () => {
   const html = renderApp("/", [pending, ready([event]), unavailable, pending, ready([]), pending, unavailable]);
