@@ -1410,12 +1410,39 @@ class ReviewPromotionComparison(BaseModel):
     promotion_rate_delta: float | None = None
 
 
+class ReviewFeatureValue(BaseModel):
+    """One group's observed feature value and its own denominator."""
+
+    text: str
+    detail: str = ""
+    valid_count: int = Field(ge=0)
+    sample_size: int = Field(ge=0)
+
+
+class ReviewFeatureCard(BaseModel):
+    """A deterministic comparison between positive and negative tracked returns."""
+
+    key: Literal["position", "market_cap", "first_seal"]
+    label: str
+    positive: ReviewFeatureValue
+    negative: ReviewFeatureValue
+    observation: str
+
+
+class ReviewFeatureSummary(BaseModel):
+    positive_count: int = Field(ge=0)
+    negative_count: int = Field(ge=0)
+    cards: list[ReviewFeatureCard] = Field(default_factory=list)
+
+
 class ReviewAgentReportResponse(BaseModel):
     """LLM tool-driven review report for high-score first-board picks."""
 
     generation_mode: Literal["llm", "deterministic", "legacy"] = "legacy"
     llm_model: str | None = None
     generation_note: str | None = None
+    feature_summary: ReviewFeatureSummary | None = None
+    summary_headline: str | None = None
     start_date: date
     end_date: date
     sample_size: int
