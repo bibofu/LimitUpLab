@@ -1,6 +1,6 @@
 # LimitUpLab 项目实现与 Agent 开发面试准备
 
-更新日期：2026-10-10。面向 Agent／LLM 应用开发岗位，源码整体核对基线为 `a6ef29b`，复盘总结与相关索引更新至 `fd30d0f`。本文描述已实现能力；历史评测、故障与发布记录保留各自日期，不能代替当前线上验收。
+更新日期：2026-10-10。面向 Agent／LLM 应用开发岗位，源码整体核对基线为 `a6ef29b`，复盘总结与相关索引更新至 `5e4021f`。本文描述已实现能力；历史评测、故障与发布记录保留各自日期，不能代替当前线上验收。
 
 LimitUpLab 是面向 A 股收盘后研究的工作台：先采集、保存和计算市场事实，再让 Agent 调用受控工具完成查询、解释与追问，最后通过不可变预测记录和后续结果复盘形成闭环。项目的主要价值是把 Agent 的语义决策与可审计的数据工程连接起来。评分有效性仍在验证，系统不输出买卖、仓位、目标价、收益承诺或确定性预测。
 
@@ -462,11 +462,9 @@ D+1、D+3、D+5 按预期市场日期精确匹配，不用“下一根有数据�
 
 优秀、较差两组的特征基准是这 5 日的**全部候选**，包含普通表现与收盘数据不足的候选；各字段分别排除自身缺失值。这比较的是“本组具有某特征的占比”与“全部候选具有该特征的占比”，不是“具有该特征后成功的概率”。同一 T 下各批次观察天数仍不同，不能把这个描述性分类当作统一持有期的回测。
 
-`review_digest_profiles.py` 计算位置、行业、题材、市值、首次封板时间、龙虎榜、炸板次数和换手率 8 项首板分布，另外独立统计首板次日开盘。题材按每条记录去重，但一条记录可以属于多个题材，因此占比合计可能超过 100%。候选观察要求该维本组及基准各至少 3 条有效记录、具体特征在本组至少出现 3 次，且占比绝对差至少 10 个百分点；这是摘要筛选门槛，不是统计显著性检验。每维最多生成一条观察，候选默认选择最多 3 个不同维度，数据不足或差异不突出时保留说明。
+`review_digest_profiles.py` 计算位置、行业、题材、市值、首次封板时间、炸板次数和换手率 7 项首板分布，另外独立统计首板次日开盘。题材按每条记录去重，但一条记录可以属于多个题材，因此占比合计可能超过 100%。候选观察要求该维本组及基准各至少 3 条有效记录、具体特征在本组至少出现 3 次，且占比绝对差至少 10 个百分点；这是摘要筛选门槛，不是统计显著性检验。每维最多生成一条观察，候选默认选择最多 3 个不同维度，数据不足或差异不突出时保留说明。
 
 三组都按实际日历中首板后紧邻的交易日，计算开盘价相对首板收盘价的涨跌。精确日期的开盘或基准价缺失、冲突、非法时保留缺口，不能用更晚一根 K 线替代；已知日期仍可展示，尚未到达次日则不读取未来。分档为低开、平开、高开 0–3%、3–7%、≥7%，平开独立，3%与7%用 Decimal 价格比保留准确边界。这是后续承接表现，不能当成首板时已知的筛选特征。
-
-龙虎榜只读首板精确日期的预测事实或本地 enrichment 正例，明确上榜且具备有效来源才确认；旧的默认 `False` 没有完整采集证据，仍按待核验处理。界面以全组为分母分别显示确认上榜、确认未上榜、待核验；覆盖不完整时不计算上榜率或模型差异观察。榜单附注和来源在个股证据中展开；附注的历史来源包含题材说明与上榜原因，不统一冒充监管上榜触发条件。首板当日披露不等于封板瞬间已知，已有金额可能来自多日榜单且丢失区间信息，因此不当作当日单日资金净流入。
 
 高标组没有负例基准，仅展示已有样本的首板画像，并增加二板首次封板、炸板次数、换手率和形态；其次日开盘即该轮二板开盘，与候选共用算法。完整且合法的二板 OHLC 全相等时记为“一字板”，否则记为“有价格波动”，缺行情时不猜形态。默认最多 5 条观察；有符合条件的次日开盘观察时保留它，另选最多 2 条首板和 2 条二板观察，二板优先形态及首封。这些是事后高标怎样晋级的事实，不能对已经达到三板的赢家组计算一个必然为 100% 的 1 进 2 成功率，也不强制与候选组归纳一致或相反方向。
 
@@ -723,7 +721,7 @@ GET reconnect 只读 journal，不启动新任务；前端使用已知 run ID �
 | Outcome 与策略怎样验证 | [outcome_completeness.py](../backend/app/services/outcome_completeness.py)、[prediction_quality_audit.py](../backend/app/services/prediction_quality_audit.py)、[scoring_policy_optimizer.py](../backend/app/services/scoring_policy_optimizer.py) |
 | 四段复盘的日期、阈值与特征分母如何确定 | [review_digest.py](../backend/app/agents/review_digest.py)、[review_digest_profiles.py](../backend/app/agents/review_digest_profiles.py)、[review_digest_models.py](../backend/app/review_digest_models.py) |
 | 高标怎样回溯同轮首板与二板 | [review_digest_leaders.py](../backend/app/agents/review_digest_leaders.py)、[review_market_leaders.py](../backend/app/agents/review_market_leaders.py) |
-| 次日开盘与首板龙虎榜如何核验 | [review_digest_prices.py](../backend/app/agents/review_digest_prices.py)、[review_digest_dragon_tiger.py](../backend/app/agents/review_digest_dragon_tiger.py) |
+| 次日开盘如何按精确交易日核验 | [review_digest_prices.py](../backend/app/agents/review_digest_prices.py) |
 | 模型怎样只选择预计算证据 | [review_agent.py](../backend/app/agents/review_agent.py)、[review_narrative.py](../backend/app/agents/review_narrative.py) |
 | 四段展示与模型加载状态如何分离 | [ReviewDigest.tsx](../frontend/src/components/ReviewDigest.tsx)、[ReviewSummary.tsx](../frontend/src/components/ReviewSummary.tsx)、[reviewReportResource.ts](../frontend/src/utils/reviewReportResource.ts) |
 | Golden 的标准答案与裁判 | [cases.py](../backend/evals/golden/cases.py)、[world.py](../backend/evals/golden/world.py)、[grading.py](../backend/evals/golden/grading.py)、[judge.py](../backend/evals/golden/judge.py) |
