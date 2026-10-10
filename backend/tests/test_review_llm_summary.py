@@ -21,6 +21,7 @@ from app.services.sample_data import SAMPLE_EVENTS
 
 BASE, END = date(2026, 9, 29), date(2026, 9, 30)
 VALID = {
+    "headline": "本批样本较少，首板位置、市值与首封时间的差异暂不足以判断。",
     "main_findings": ["样本观察期较短，暂不足以判断评分体系长期有效。"],
     "successful_patterns": ["成功组需继续积累同口径样本，再检验题材结构的解释力。"],
     "confidence": 0.6,
@@ -107,10 +108,12 @@ def build(provider):
 
 def test_llm_gets_authoritative_facts_even_when_planner_omits_comparison_tools():
     provider = ReviewProvider({**VALID, "sample_size": 999, "success_count": 999,
-                               "top_pick_promotion_rate": 0.99})
+                               "top_pick_promotion_rate": 0.99,
+                               "feature_summary": {"positive_count": 999}})
     report = build(provider)
     assert report.generation_mode == "llm"
     assert report.llm_model == "offline-review-model"
+    assert report.summary_headline == VALID["headline"]
     assert len(provider.calls) == 2 and len(provider.checks) == 1
     assert [trace.name for trace in report.tool_results] == ["daily_high_score_picks"]
     facts = json.loads(provider.calls[-1][1])["tool_facts"]["authoritative_review"]
@@ -124,6 +127,9 @@ def test_llm_gets_authoritative_facts_even_when_planner_omits_comparison_tools()
     assert facts["sampling_limits"]["tool_detail_limit"] == 20
     assert facts["sampling_limits"]["response_pick_limit"] == 100
     assert facts["feature_comparison"]["main_findings"]
+    assert report.feature_summary.model_dump(mode="json") == facts["feature_comparison"]["feature_summary"]
+    assert report.feature_summary.positive_count == 1
+    assert [card.key for card in report.feature_summary.cards] == ["position", "market_cap", "first_seal"]
     assert facts["deterministic_report"]["promotion_comparisons"]
     assert "三日走势尚未完整缓存" in facts["deterministic_report"]["warnings"]
     assert "次日开盘至收盘" in facts["comparison_basis"]["report_counts"]
@@ -137,7 +143,8 @@ def test_llm_gets_authoritative_facts_even_when_planner_omits_comparison_tools()
 
 @pytest.mark.parametrize("payload", [
     {}, {"main_findings": []}, {**VALID, "main_findings": ["   "]},
-    {**VALID, "main_findings": [42]}, {**VALID, "successful_patterns": []},
+    {**VALID, "main_findings": [42]}, {**VALID, "headline": "   "},
+    {**VALID, "headline": "特征" * 51}, {**VALID, "headline": 42},
     {**VALID, "confidence": 2}, {**VALID, "confidence": float("nan")},
     {**VALID, "confidence": True}, "not json",
 ])
@@ -151,6 +158,15 @@ def test_invalid_or_empty_narrative_explicitly_falls_back(payload):
     assert provider.checks == []
 
 
+def test_one_short_headline_is_enough_and_prompt_does_not_request_long_sections():
+    provider = ReviewProvider({"headline": VALID["headline"], "confidence": 0.6})
+    report = build(provider)
+    assert report.generation_mode == "llm"
+    assert report.summary_headline == VALID["headline"]
+    shape = json.loads(provider.calls[-1][1])["required_json_shape"]
+    assert set(shape) == {"headline", "confidence"}
+
+
 @pytest.mark.parametrize("compliance,expected", [
     ("reject", "未通过"), (RuntimeError("unavailable"), "未完成"), ("malformed", "未完成"),
 ])
@@ -158,6 +174,7 @@ def test_compliance_rejection_or_failure_discards_model_text(compliance, expecte
     provider = ReviewProvider({**VALID, "main_findings": ["建议明日买入该股并加仓到五成仓位。"]}, compliance=compliance)
     report = build(provider)
     assert report.generation_mode == "deterministic"
+    assert report.summary_headline is None
     assert "研究边界检查" in report.generation_note and expected in report.generation_note
     assert all("五成仓位" not in text for text in report.main_findings)
 
@@ -223,10 +240,12 @@ def test_api_llm_request_rebuilds_without_mutating_daily_snapshot(mode, use_llm,
 def test_legacy_report_json_remains_readable():
     payload = build(DisabledLLMProvider()).model_dump(mode="json", exclude={
         "generation_mode", "llm_model", "generation_note",
+        "feature_summary", "summary_headline",
     })
     restored = ReviewAgentReportResponse.model_validate_json(json.dumps(payload))
     assert restored.generation_mode == "legacy"
     assert restored.llm_model is None and restored.generation_note is None
+    assert restored.feature_summary is None and restored.summary_headline is None
     assert restored.generated_by == REVIEW_AGENT_VERSION
 
 

@@ -186,6 +186,7 @@ class CapturingProvider(LLMProvider):
         else:
             self.report_input = json.loads(user_prompt)
             content = json.dumps({
+                "headline": "截至当日的后续行情尚未就绪，暂时不能比较首板特征。",
                 "main_findings": ["截至当日的后续行情尚未就绪，暂时不能评价兑现。"],
                 "adjustment_suggestions": ["补齐截至日内的必要行情后再作描述性比较。"],
                 "confidence": 0.5,

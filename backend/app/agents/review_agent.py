@@ -25,6 +25,7 @@ from app.repositories import SQLiteFirstBoardRepository
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.llm_provider import DisabledLLMProvider, LLMProvider, get_llm_provider
 from app.agents.review_narrative import ReviewNarrative, authoritative_review_facts
+from app.agents.review_features import build_review_feature_summary
 from app.agents.react_runtime.compliance import review_answer
 from app.services.outcome_completeness import build_top10_outcome_completeness
 from app.services.review_as_of import (
@@ -39,7 +40,7 @@ from app.services.promotion_calendar import (
 )
 
 
-REVIEW_AGENT_VERSION = "review-agent-tool-use-v9-forward-scope"
+REVIEW_AGENT_VERSION = "review-agent-tool-use-v10-compact-features"
 
 
 @dataclass(frozen=True)
@@ -471,7 +472,7 @@ def build_review_agent_report(
         report.excluded_time_prediction_count = excluded_time_count
         report.generation_mode = "llm"
         report.llm_model = result.model
-        report.generation_note = "LLM 基于本次复盘事实补充解释与待验证假设，统计、评分和晋级结果仍由确定性代码计算。"
+        report.generation_note = "LLM 根据本次真实特征对比生成简短解读，统计仍由确定性代码计算。"
         return report
     except (ValueError, TypeError):
         fallback.generation_note = "LLM 未返回有效且有解释内容的总结，已回退到基于本地事实的规则总结。"
@@ -846,6 +847,7 @@ def _fallback_report(
         pending_count=len(pending),
         **promotion_summary,
         promotion_comparisons=promotion_items,
+        feature_summary=comparison.get("feature_summary"),
         main_findings=[
             f"高分首板样本 {len(picks)} 只，其中 {len(ready)} 只有后续走势可复盘。",
             f"成功 {len(successes)} 只，失败 {len(failures)} 只，待观察 {len(pending)} 只。",
@@ -910,6 +912,8 @@ def _report_from_payload(
         market_promotion_rate=fallback.market_promotion_rate,
         promotion_rate_delta=fallback.promotion_rate_delta,
         promotion_comparisons=fallback.promotion_comparisons,
+        feature_summary=fallback.feature_summary,
+        summary_headline=payload.get("headline"),
         main_findings=[*fallback.main_findings, *_string_list(payload.get("main_findings"))],
         successful_patterns=_merge_texts(
             fallback.successful_patterns,
@@ -938,23 +942,15 @@ def _report_from_payload(
 # Define the review writer's evidence requirements and research-only output boundary.
 def _review_report_system_prompt() -> str:
     return (
-        "You are LimitUpLab's Review Agent. Use only tool facts. "
-        "Review high-score first-board picks, explain what worked and failed, "
-        "and suggest scoring taste adjustments. Lead each success/failure summary "
-        "with stock-selection traits such as dominant themes, industries and float "
-        "market-cap distribution before discussing seal structure or outcomes. "
-        "Return JSON only. "
-        "Write substantive Chinese findings and at least one explanatory pattern, bias, "
-        "or research adjustment; when evidence is insufficient, explain the specific limitation. "
-        "The authoritative_review facts are mandatory even when selected tool details "
-        "are incomplete. Respect cohort definitions, missing data and truncation. Do not "
-        "invent statistics, treat correlations as causes, or alter scores and promotion results. "
-        "Use authoritative_review.forward_validation.eligible_sample_count verbatim for "
-        "forward-validation eligibility. Never infer that count by subtracting backtests "
-        "from total samples or treating prediction_source=live as sufficient. If zero, "
-        "explicitly say this cohort has no eligible premarket forward-validation samples. "
-        "Adjustments are hypotheses for later validation, never automatic strategy changes. "
-        "Do not give buy/sell advice, target prices, positions, or return promises."
+        "你是复盘解读助手。只根据 authoritative_review.feature_comparison.feature_summary "
+        "的三项结构化对比，用一句自然中文说明本期哪些特征在表现较好样本中更常见。"
+        "只返回JSON：headline和confidence。headline控制在60个汉字左右，最多100字符。"
+        "优先首板位置，其次流通市值和首次封板时间；挑最有区分度的特征，不重复表内全部数字。"
+        "市值区间重叠、封板时间反向或样本不足时保留关键限制；不足时直接说明不能判断。"
+        "两组按首板至观察日收盘涨跌分组，不是次日评价标签。组内位置占比不是该位置股票的胜率。"
+        "这是本批描述性观察，不能写成选股规律、因果或未来预测。不要输出字段路径、英文标签、"
+        "评分调参方案、长报告、买卖、仓位、目标价或收益承诺。前向验证资格以forward_validation为准，"
+        "收盘基线和历史补算不能当盘前前向验证；页面会单独说明样本口径，无需在headline重复。"
     )
 
 
@@ -971,11 +967,7 @@ def _review_report_user_prompt(
             "min_score": min_score,
             "tool_facts": facts,
             "required_json_shape": {
-                "main_findings": ["string"],
-                "successful_patterns": ["string"],
-                "failed_patterns": ["string"],
-                "scoring_bias": ["string"],
-                "adjustment_suggestions": ["string"],
+                "headline": "一句简短的特征解读，最多100字符",
                 "confidence": 0.0,
             },
         },
@@ -1057,6 +1049,7 @@ def _build_feature_comparison(
     result: dict[str, Any] = {
         "success_count": len(success),
         "failed_count": len(failed),
+        "feature_summary": build_review_feature_summary(success, failed).model_dump(mode="json"),
         "main_findings": [],
         "successful_patterns": [],
         "failed_patterns": [],

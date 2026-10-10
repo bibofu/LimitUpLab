@@ -3,7 +3,7 @@
 from collections import Counter
 from typing import Annotated, Any
 
-from pydantic import BaseModel, Field, StringConstraints, model_validator
+from pydantic import BaseModel, Field, StringConstraints
 
 from app.models import ReviewAgentPick, ReviewAgentReportResponse
 
@@ -14,21 +14,17 @@ ReviewSentence = Annotated[
 
 
 class ReviewNarrative(BaseModel):
-    """A usable finding plus analysis; empty JSON is not a generated review."""
+    """A bounded, user-facing interpretation of deterministic feature comparisons."""
 
-    main_findings: list[ReviewSentence] = Field(min_length=1, max_length=8)
+    headline: Annotated[
+        str, StringConstraints(strict=True, strip_whitespace=True, min_length=8, max_length=100)
+    ]
+    main_findings: list[ReviewSentence] = Field(default_factory=list, max_length=8)
     successful_patterns: list[ReviewSentence] = Field(default_factory=list, max_length=8)
     failed_patterns: list[ReviewSentence] = Field(default_factory=list, max_length=8)
     scoring_bias: list[ReviewSentence] = Field(default_factory=list, max_length=8)
     adjustment_suggestions: list[ReviewSentence] = Field(default_factory=list, max_length=8)
     confidence: float = Field(ge=0, le=1, allow_inf_nan=False, strict=True)
-
-    @model_validator(mode="after")
-    def require_analysis(self):
-        if not any((self.successful_patterns, self.failed_patterns,
-                    self.scoring_bias, self.adjustment_suggestions)):
-            raise ValueError("Review requires explanatory analysis or explicit limitations")
-        return self
 
 
 def authoritative_review_facts(

@@ -42,7 +42,8 @@ class FakeReviewLLMProvider(LLMProvider):
             )
         return LLMResult(
             content=(
-                '{"main_findings":["高分首板样本需要持续追踪兑现率"],'
+                '{"headline":"首板特征需要更多同口径样本才能比较。",'
+                '"main_findings":["高分首板样本需要持续追踪兑现率"],'
                 '"successful_patterns":["成功样本通常有更强后续高点"],'
                 '"failed_patterns":["失败样本需要复盘市场环境和题材持续性"],'
                 '"scoring_bias":["可能高估了首封时间"],'
