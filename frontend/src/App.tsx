@@ -1,7 +1,6 @@
 ﻿import {
   BarChart3,
   ChevronDown,
-  ChevronLeft,
   ChevronRight,
   ExternalLink,
   Flame,
@@ -32,6 +31,8 @@ import {
 import { AgentChatDock } from "./components/AgentChatDock";
 import { ConsolidationPanel } from "./components/ConsolidationPanel";
 import { Panel } from "./components/Panel";
+import { RecommendationNewsBoard } from "./components/RecommendationNewsBoard";
+import { recommendationIntelligenceFor, useRecommendationIntelligence } from "./hooks/useRecommendationIntelligence";
 import { FirstBoardRatingDetail, StockPositionPanel } from "./components/StockResearchPanels";
 import { ReviewDashboard } from "./components/ReviewDashboard";
 import { ResourceNotice, ResourceSection, useResource } from "./components/ResourceSection";
@@ -58,8 +59,6 @@ import {
   fetchContinuedBoardEvents,
   fetchDailyBoardPromotion,
   fetchFirstBoardRatings,
-  fetchFinanceNews,
-  fetchRecommendationIntelligence,
   fetchFailedLimitUpEvents,
   fetchFirstBoardEvents,
   fetchMarketSummary,
@@ -73,12 +72,9 @@ import {
 import type {
   FirstBoardRating,
   FirstBoardRatingsResponse,
-  FinanceNewsPage,
-  FinanceNewsItem,
   LimitUpEvent,
   MarketSummary,
   RecommendationIntelligenceItem,
-  RecommendationIntelligenceResponse,
   StockCloseSnapshot,
   StockIntradayHistoryResponse,
   StockIntradayKLineBar,
@@ -520,45 +516,6 @@ function RecommendationSnapshotDetails({
 }
 
 /**
- * Load and refresh candidate intelligence while keeping loading, failure and current-result
- * state together.
- */
-function useRecommendationIntelligence() {
-  const [intelligence, setIntelligence] = useState<RecommendationIntelligenceResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(/* Synchronize useRecommendationIntelligence with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
-    let active = true;
-    const refresh = /* Reload this panel's source data and update its success/error state for the next render. */ () => {
-      void fetchRecommendationIntelligence()
-        .then(/* Apply the resolved asynchronous result to the current view state. */ (response) => {
-          if (active) {
-            setIntelligence(response);
-            setError(null);
-          }
-        })
-        .catch(/* Handle this asynchronous failure using the enclosing view's error/fallback state. */ (caught: unknown) => {
-          if (active) {
-            setError(caught instanceof Error ? caught.message : "盘前动态榜加载失败");
-          }
-        })
-        .finally(/* Release request state after either success or failure. */ () => {
-          if (active) setLoading(false);
-        });
-    };
-    refresh();
-    const timer = window.setInterval(refresh, 60 * 1000);
-    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, []);
-
-  return { intelligence, loading, error };
-}
-
-/**
  * Render candidate intelligence with its draft/final provenance, evidence adjustments and
  * missing-data explanations.
  */
@@ -643,199 +600,6 @@ function RecommendationDraftPanel({
       </div>
     </Panel>
   );
-}
-
-interface RecommendationNewsViewItem {
-  key: string;
-  title: string;
-  summary: string;
-  publishedAt: string;
-  source: string;
-  url: string;
-  category: string;
-}
-
-/**
- * Show paginated research news with its fetch state and source links.
- */
-function RecommendationNewsBoard() {
-  /** Paginate the factual 24-hour market feed without involving the LLM. */
-
-  const [page, setPage] = useState(1);
-  const [news, setNews] = useState<FinanceNewsPage | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [failed, setFailed] = useState(false);
-
-  useEffect(/* Synchronize RecommendationNewsBoard with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
-    let active = true;
-    const refresh = /* Reload this panel's source data and update its success/error state for the next render. */ (showLoading: boolean) => {
-      if (showLoading) setLoading(true);
-      void fetchFinanceNews(page)
-        .then(/* Apply the resolved asynchronous result to the current view state. */ (response) => {
-          if (!active) return;
-          setNews(response);
-          setFailed(false);
-          setPage(response.page);
-        })
-        .catch(/* Handle this asynchronous failure using the enclosing view's error/fallback state. */ () => {
-          if (active) setFailed(true);
-        })
-        .finally(/* Release request state after either success or failure. */ () => {
-          if (active) setLoading(false);
-        });
-    };
-    refresh(true);
-    const timer = window.setInterval(/* Handle the callback from window.setInterval within RecommendationNewsBoard. */ () => refresh(false), 5 * 60 * 1000);
-    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, [page]);
-
-  const visibleNews = useMemo(
-    /* Derive visibleNews from the listed dependencies, reusing it until those dependencies change. */ () => (news?.items ?? []).map(marketNewsViewItem),
-    [news],
-  );
-  const pageNumbers = news ? paginationWindow(news.page, news.total_pages) : [];
-
-  return (
-    <section className="recommendation-news-board" aria-label="盘前实时新闻">
-      <header className="recommendation-news-header">
-        <div>
-          <Newspaper size={18} />
-          <span>
-            <strong>实时新闻</strong>
-            <small>
-              {news
-                ? `近 24 小时 · ${news.sources.join(" · ")} · 共 ${news.total} 条`
-                : "近 24 小时 · 5 分钟自动更新"}
-            </small>
-          </span>
-        </div>
-        <span className="recommendation-news-refresh">5 分钟自动更新</span>
-      </header>
-      {loading && !news ? (
-        <div className="recommendation-news-state">
-          <LoaderCircle className="state-spinner" size={18} />
-          正在获取最新新闻...
-        </div>
-      ) : null}
-      {failed ? (
-        <div className="recommendation-news-state">财经快讯暂时没有加载成功。</div>
-      ) : null}
-      {!loading && !failed && visibleNews.length === 0 ? (
-        <div className="recommendation-news-state">
-          近 24 小时没有获取到市场快讯。
-        </div>
-      ) : null}
-      {visibleNews.length > 0 ? (
-        <div className="recommendation-news-list">
-          {visibleNews.map(/* Transform each entry in visibleNews into the result used by RecommendationNewsBoard. */ (item) => (
-            <article className="recommendation-news-item" key={item.key}>
-              <time dateTime={item.publishedAt}>{formatRecommendationNewsTime(item.publishedAt)}</time>
-              <div className="recommendation-news-body">
-                <a href={item.url} target="_blank" rel="noreferrer">
-                  <strong>{item.title}</strong>
-                  <ExternalLink size={13} aria-hidden="true" />
-                </a>
-                <span>{item.source} · {item.category}</span>
-              </div>
-            </article>
-          ))}
-        </div>
-      ) : null}
-      {news && news.total_pages > 1 ? (
-        <footer className="recommendation-news-pagination" aria-label="市场快讯分页">
-          <span>第 {news.page} / {news.total_pages} 页</span>
-          <div>
-            <button
-              aria-label="上一页"
-              disabled={news.page <= 1}
-              onClick={/* Handle onClick for this control in RecommendationNewsBoard. */ () => setPage(/* Compute page from the latest React state to avoid overwriting intervening updates. */ (value) => Math.max(1, value - 1))}
-              title="上一页"
-              type="button"
-            >
-              <ChevronLeft size={15} />
-            </button>
-            {pageNumbers.map(/* Transform each entry in pageNumbers into the result used by RecommendationNewsBoard. */ (pageNumber) => (
-              <button
-                aria-current={pageNumber === news.page ? "page" : undefined}
-                className={pageNumber === news.page ? "active" : undefined}
-                key={pageNumber}
-                onClick={/* Handle onClick for this control in RecommendationNewsBoard. */ () => setPage(pageNumber)}
-                type="button"
-              >
-                {pageNumber}
-              </button>
-            ))}
-            <button
-              aria-label="下一页"
-              disabled={news.page >= news.total_pages}
-              onClick={/* Handle onClick for this control in RecommendationNewsBoard. */ () => setPage(/* Compute page from the latest React state to avoid overwriting intervening updates. */ (value) => Math.min(news.total_pages, value + 1))}
-              title="下一页"
-              type="button"
-            >
-              <ChevronRight size={15} />
-            </button>
-          </div>
-        </footer>
-      ) : null}
-    </section>
-  );
-}
-
-/**
- * Convert a market-news record into the common news-board display shape.
- */
-function marketNewsViewItem(item: FinanceNewsItem): RecommendationNewsViewItem {
-  return {
-    key: `${item.source}-${item.url}-${item.published_at}`,
-    title: item.title,
-    summary: item.summary,
-    publishedAt: item.published_at,
-    source: item.source,
-    url: item.url,
-    category: item.category,
-  };
-}
-
-/**
- * Choose the bounded range of page numbers around the current page.
- */
-function paginationWindow(current: number, total: number): number[] {
-  const visible = Math.min(5, total);
-  const start = Math.max(1, Math.min(current - 2, total - visible + 1));
-  return Array.from({ length: visible }, /* Handle the callback from Array.from within paginationWindow. */ (_, index) => start + index);
-}
-
-/**
- * Render the publication time used by the intelligence news board.
- */
-function formatRecommendationNewsTime(value: string): string {
-  const parsed = new Date(value);
-  if (Number.isNaN(parsed.getTime())) return value.slice(5, 16).replace("T", " ");
-  const now = new Date();
-  const sameDay = parsed.toDateString() === now.toDateString();
-  return new Intl.DateTimeFormat("zh-CN", {
-    month: sameDay ? undefined : "2-digit",
-    day: sameDay ? undefined : "2-digit",
-    hour: "2-digit",
-    minute: "2-digit",
-    hour12: false,
-  }).format(parsed);
-}
-
-/**
- * Find the current intelligence item for the requested stock identity.
- */
-function recommendationIntelligenceFor(
-  response: RecommendationIntelligenceResponse | null,
-  strategy: "relay",
-  symbol: string,
-) {
-  return response?.items.find(
-    /* Locate the entry matching the active identity/time used by recommendationIntelligenceFor. */ (item) => item.strategy === strategy && item.symbol === symbol,
-  ) ?? null;
 }
 
 /**

@@ -31,6 +31,8 @@ const sections = compile("../src/components/ResourceSection.tsx", {
 });
 const review = compile("../src/components/ReviewDashboard.tsx", { "../api": {}, "./Panel": panel });
 const stockResearch = compile("../src/components/StockResearchPanels.tsx", { "./Panel": panel });
+const recommendationNews = compile("../src/components/RecommendationNewsBoard.tsx", { "../api": {} });
+const recommendationIntelligence = compile("../src/hooks/useRecommendationIntelligence.ts", { "../api": {} });
 
 function renderApp(path: string, states: unknown[]) {
   let cursor = 0;
@@ -41,6 +43,8 @@ function renderApp(path: string, states: unknown[]) {
     "./components/AgentChatDock": { AgentChatDock: () => createElement("aside", null, "Agent 会话可用") },
     "./components/ReviewDashboard": review,
     "./components/StockResearchPanels": stockResearch,
+    "./components/RecommendationNewsBoard": recommendationNews,
+    "./hooks/useRecommendationIntelligence": recommendationIntelligence,
     "./components/ConsolidationPanel": {},
     "./components/MarketKLineChart": {},
   });
