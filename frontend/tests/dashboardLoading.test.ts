@@ -30,6 +30,7 @@ const sections = compile("../src/components/ResourceSection.tsx", {
   "../utils/asyncResource": await import("../src/utils/asyncResource.ts"),
 });
 const review = compile("../src/components/ReviewDashboard.tsx", { "../api": {}, "./Panel": panel });
+const stockResearch = compile("../src/components/StockResearchPanels.tsx", { "./Panel": panel });
 
 function renderApp(path: string, states: unknown[]) {
   let cursor = 0;
@@ -39,6 +40,7 @@ function renderApp(path: string, states: unknown[]) {
     "./components/Panel": panel,
     "./components/AgentChatDock": { AgentChatDock: () => createElement("aside", null, "Agent 会话可用") },
     "./components/ReviewDashboard": review,
+    "./components/StockResearchPanels": stockResearch,
     "./components/ConsolidationPanel": {},
     "./components/MarketKLineChart": {},
   });
