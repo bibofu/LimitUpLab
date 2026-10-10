@@ -7,7 +7,9 @@ from uuid import uuid4
 
 from pydantic import ValidationError
 
+from app.collectors.first_board_enrichment_collector import DragonTigerFact, PopularityFact
 from app.models import (
+    RecommendationFinancialReport,
     RecommendationIntelligenceItem,
     RecommendationIntelligenceResponse,
     StockNewsFacts,
@@ -20,6 +22,9 @@ from app.repositories import (
 )
 from app.services.recommendation_intelligence import (
     _BaseCandidate,
+    _CandidateEvidence,
+    _CandidateRefreshContext,
+    _build_candidate_item,
     refresh_recommendation_intelligence,
 )
 
@@ -234,6 +239,78 @@ class RecommendationIntelligenceTest(unittest.TestCase):
             "最新季度财报不可用", "最新龙虎榜刷新不可用", "最新人气榜刷新不可用",
         ])
         self.assertIn("1 只股票的新闻或财报刷新发生错误，已保留可用缓存。", response.warnings)
+
+    def test_dynamic_cap_keeps_component_scores_and_their_explanations(self) -> None:
+        base_date = date(2026, 8, 31)
+        cutoff = datetime.fromisoformat("2026-08-31T15:00:00+08:00")
+        now = datetime.fromisoformat("2026-09-01T08:05:00+08:00")
+        candidate = _BaseCandidate(
+            "relay", base_date, "600001", "样本", "行业", None, 1, 80,
+            amount=100_000_000, popularity_baseline_ready=True,
+            popularity_rank=100, popularity_snapshot_at=cutoff,
+        )
+        news = StockNewsFacts(
+            symbol=candidate.symbol, name=candidate.name, fetched_at=now,
+            window_days=7, cache_status="fresh", items=[StockNewsItem(
+                symbol=candidate.symbol, name=candidate.name, title="中标新项目",
+                summary="", published_at=now, fetched_at=now, source="fixture",
+                url="https://example.test/news", item_type="announcement", relevance_score=1,
+            )],
+        )
+        report = RecommendationFinancialReport(
+            fiscal_year=2026, fiscal_period="H1", report_date=now.date(),
+            period_end=date(2026, 6, 30), net_profit_yoy_pct=60, fetched_at=now,
+        )
+        context = _CandidateRefreshContext(
+            refreshed_at=now, quote_by_symbol={}, quote_captured_at=None,
+            dragon_tiger_by_symbol={candidate.symbol: DragonTigerFact(
+                candidate.symbol, None, None, 6_000_000, None, None, "fixture",
+            )}, dragon_tiger_ready=True,
+            popularity_by_symbol={candidate.symbol: PopularityFact(candidate.symbol, 10, None, now)},
+            popularity_captured_at=now, popularity_ready=True,
+        )
+
+        item = _build_candidate_item(candidate, _CandidateEvidence(news, report, []), None, context)
+
+        self.assertEqual((item.news_adjustment, item.financial_adjustment,
+                          item.dragon_tiger_adjustment, item.popularity_adjustment), (3, 3, 2, 2))
+        self.assertEqual((item.rule_score, item.base_score, item.dynamic_adjustment, item.draft_score),
+                         (80, 80, 6, 86))
+        self.assertEqual(item.facts_cutoff_at, cutoff)
+        self.assertEqual(item.popularity_rank_change, 90)
+        self.assertEqual(item.close_information_reasons, [])
+        self.assertEqual(len(item.update_reasons), 5)
+        self.assertEqual(item.update_reasons[-1], "盘后动态修正受 ±6 分约束，原始合计 +10 分")
+
+    def test_dragon_tiger_hot_rank_precedes_stale_popularity_without_scoring_failed_feed(self) -> None:
+        base_date = date(2026, 8, 31)
+        previous_at = datetime.fromisoformat("2026-08-31T16:00:00+08:00")
+        now = datetime.fromisoformat("2026-09-01T08:05:00+08:00")
+        candidate = _BaseCandidate(
+            "relay", base_date, "600001", "样本", "行业", None, 1, 80,
+            popularity_baseline_ready=True, popularity_rank=100, popularity_snapshot_at=previous_at,
+        )
+        previous = RecommendationIntelligenceItem(
+            base_trade_date=base_date, symbol=candidate.symbol, name=candidate.name,
+            rank=1, base_score=80, refreshed_at=previous_at, popularity_rank=12,
+            popularity_snapshot_at=previous_at, popularity_source="previous-popularity",
+        )
+        context = _CandidateRefreshContext(
+            refreshed_at=now, quote_by_symbol={}, quote_captured_at=None,
+            dragon_tiger_by_symbol={candidate.symbol: DragonTigerFact(
+                candidate.symbol, None, None, 0, None, None, "new-dragon-tiger", hot_rank=8,
+            )}, dragon_tiger_ready=True, popularity_by_symbol={},
+            popularity_captured_at=None, popularity_ready=False,
+        )
+
+        item = _build_candidate_item(candidate, _CandidateEvidence(None, None, []), previous, context)
+
+        self.assertEqual((item.popularity_rank, item.popularity_snapshot_at), (8, now))
+        self.assertEqual(item.popularity_source, "new-dragon-tiger-dragon-tiger")
+        self.assertEqual(item.popularity_adjustment, 0)
+        self.assertIsNone(item.popularity_rank_change)
+        self.assertIn("最新人气榜刷新不可用", item.data_missing)
+        self.assertEqual((previous.popularity_rank, previous.popularity_snapshot_at), (12, previous_at))
 
     # Regression scenario: discovery item is rejected by public model.
     def test_discovery_item_is_rejected_by_public_model(self) -> None:
