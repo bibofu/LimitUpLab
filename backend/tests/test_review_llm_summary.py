@@ -154,6 +154,20 @@ def test_narrative_references_cannot_change_facts_or_cross_groups():
         apply_review_narrative(digest, ReviewNarrative.model_validate(payload))
 
 
+def test_narrative_keeps_available_next_opening_evidence_in_the_selected_summary():
+    digest = build(DisabledLLMProvider()).review_digest
+    position = DigestObservation(id="excellent:position", dimension="position_label", text="位置证据", support_count=3, sample_size=4)
+    opening = DigestObservation(id="excellent:opening", dimension="next_open_pct", text="次日开盘证据", support_count=3, sample_size=4)
+    digest.excellent.observations = [position, opening]
+    payload = json.loads(json.dumps(VALID))
+    payload["sections"][0]["observation_ids"] = [position.id]
+    with pytest.raises(ValueError, match="next-opening"):
+        apply_review_narrative(digest, ReviewNarrative.model_validate(payload))
+    payload["sections"][0]["observation_ids"].append(opening.id)
+    result = apply_review_narrative(digest, ReviewNarrative.model_validate(payload))
+    assert opening.id in result.excellent.selected_observation_ids
+
+
 @pytest.mark.parametrize("compliance,expected", [("reject", "未通过"), (RuntimeError("unavailable"), "未完成"), ("malformed", "未完成")])
 def test_compliance_failure_discards_model_text(compliance, expected):
     provider = ReviewProvider(compliance=compliance)

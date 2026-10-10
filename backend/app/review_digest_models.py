@@ -48,6 +48,11 @@ class DigestStock(BaseModel):
     first_limit_time: str | None = None
     break_count: int | None = None
     turnover_rate: float | None = None
+    next_trade_date: date | None = None
+    next_open_pct: float | None = None
+    first_dragon_tiger_on_list: bool | None = None
+    first_dragon_tiger_source: str | None = None
+    first_dragon_tiger_reason: str | None = None
     max_board_height: int | None = None
     second_board_date: date | None = None
     second_open_pct: float | None = None
@@ -89,7 +94,7 @@ class DigestOverview(BaseModel):
 
 
 class ReviewDigest(BaseModel):
-    version: str = "four-part-v1"
+    version: str = "four-part-v2"
     as_of_date: date
     candidate_dates: list[date] = Field(default_factory=list)
     market_dates: list[date] = Field(default_factory=list)

@@ -74,6 +74,7 @@ def test_existing_high_board_before_window_is_included_but_expired_episode_is_no
     assert stock.industry == "首板行业" and stock.concepts == ["题材乙", "题材甲"]
     assert stock.float_market_cap == 3e9 and stock.position_label == "低位启动首板"
     assert stock.second_board_date == D[1] and stock.second_open_pct == pytest.approx(5)
+    assert stock.next_trade_date == D[1] and stock.next_open_pct == stock.second_open_pct
     assert "首板日在本期观察窗外" not in stock.data_missing
     assert len(repo.bar_calls) == 1 and repo.snapshot_calls == [D[0]]
     assert any("窗口前已达三板" in note for note in notes)
@@ -92,6 +93,7 @@ def test_exact_second_day_and_cutoff_prevent_later_bars_events_or_snapshots_from
     stock, = stocks
     assert stock.max_board_height == 3 and stock.second_board_date == D[1]
     assert stock.second_open_pct is None and stock.second_board_shape is None
+    assert stock.next_trade_date == D[1] and stock.next_open_pct is None
     assert stock.float_market_cap is None
     assert any("二板开盘K线缺失" in item for item in stock.data_missing)
 
@@ -130,6 +132,7 @@ def test_unknown_anchor_does_not_guess_first_or_second_features_or_claim_source_
     stock, = build([event(D[0]), event(D[2], height=3)], repository=repo)[0]
     assert stock.first_board_date is stock.second_board_date is stock.max_board_height is None
     assert stock.industry is stock.float_market_cap is stock.second_open_pct is None
+    assert stock.next_trade_date is None and stock.next_open_pct is None
     assert repo.bar_calls == repo.snapshot_calls == []
     assert any("来源报3板" in item for item in stock.data_missing)
 
@@ -185,6 +188,7 @@ def test_conflicting_exact_day_bars_are_not_used_for_open_gap_or_shape():
     repo = Repository(bars=[bar(D[0]), bar(D[1]), bar(D[1], open=10.5)])
     stock, = build(chain(), repository=repo)[0]
     assert stock.second_open_pct is None and stock.second_board_shape is None
+    assert stock.next_open_pct is None
     assert any("K线记录冲突" in item for item in stock.data_missing)
 
 
@@ -215,3 +219,23 @@ def test_event_outside_verified_calendar_does_not_create_an_extra_window_session
     stocks, notes = build([event(date(2026, 9, 12), height=3)], end=D[7])
     assert stocks == []
     assert any("未列入已核验交易日历" in note for note in notes)
+
+
+@pytest.mark.parametrize("opened,expected", [(10, 0), (10.3, 3), (10.7, 7)])
+@pytest.mark.parametrize("calendar", [
+    [date(2026, 9, day) for day in (11, 14, 15)],
+    [date(2026, 9, 30), date(2026, 10, 8), date(2026, 10, 9)],
+])
+def test_leader_next_open_and_legacy_second_open_share_exact_calendar_and_decimal_values(opened, expected, calendar):
+    events = [event(day, height=index + 1) for index, day in enumerate(calendar)]
+    repo = Repository(bars=[bar(calendar[0]), bar(calendar[1], open=opened), bar(calendar[2], open=20)])
+    stock, = build(events, repository=repo, end=calendar[-1], calendar=calendar)[0]
+    assert stock.next_trade_date == stock.second_board_date == calendar[1]
+    assert stock.next_open_pct == stock.second_open_pct == expected
+
+
+def test_leader_conflicting_first_close_cannot_supply_next_open_return():
+    repo = Repository(bars=[bar(D[0]), bar(D[0], close=9), bar(D[1], open=10.3)])
+    stock, = build(chain(), repository=repo)[0]
+    assert stock.next_trade_date == D[1]
+    assert stock.next_open_pct is None and stock.second_open_pct is None

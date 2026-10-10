@@ -6,7 +6,9 @@ from decimal import Decimal
 from typing import Iterable
 
 from app.agents.review_digest_leaders import build_digest_leaders
+from app.agents.review_digest_dragon_tiger import attach_first_board_dragon_tiger
 from app.agents.review_digest_profiles import build_digest_group
+from app.agents.review_digest_prices import exact_price, next_open_fact
 from app.agents.review_market_leaders import _finite, _position
 from app.review_digest_models import DigestOverview, DigestStock, ReviewDigest
 
@@ -39,6 +41,7 @@ def build_review_digest(*, picks, predictions, promotion_comparisons, events,
     leaders, market_notes = build_digest_leaders(
         events=events, repository=repository, end_date=end_date, trade_dates=calendar,
     )
+    attach_first_board_dragon_tiger(candidates + leaders, repository, predictions)
     overview = build_digest_overview(
         promotion_comparisons, candidate_dates, len(candidates),
         len(excellent), len(weak), len(ordinary), len(missing),
@@ -96,20 +99,16 @@ def _clock(value):
     return parsed.strftime("%H:%M") if parsed != time(0) else None
 
 
-def _close_for(bars, day):
-    values = [bar.close for bar in bars if bar.trade_date == day]
-    if not values or any(_finite(value, positive=True) is None for value in values):
-        return None
-    return values[0] if len(set(values)) == 1 else None
-
-
 def candidate_stock(pick, prediction, bars, calendar, end_date) -> DigestStock:
     facts = prediction.facts_json if prediction else {}
     enrichment = facts.get("enrichment")
     enrichment = enrichment if isinstance(enrichment, dict) else {}
-    first = _close_for(bars, pick.trade_date)
-    last = _close_for(bars, end_date)
-    missing = []
+    first = exact_price(bars, symbol=pick.symbol, day=pick.trade_date, field="close")
+    last = exact_price(bars, symbol=pick.symbol, day=end_date, field="close")
+    next_day, next_open, missing = next_open_fact(
+        bars=bars, symbol=pick.symbol, first_board_date=pick.trade_date,
+        trade_dates=calendar, end_date=end_date,
+    )
     if first is None:
         missing.append("首板日收盘价缺失或冲突")
     if last is None:
@@ -125,6 +124,7 @@ def candidate_stock(pick, prediction, bars, calendar, end_date) -> DigestStock:
         symbol=pick.symbol, name=pick.name, first_board_date=pick.trade_date,
         observed_days=calendar.index(end_date) - calendar.index(pick.trade_date) if ready else None,
         first_close=first, cutoff_close=last, return_pct=change,
+        next_trade_date=next_day, next_open_pct=next_open,
         position_label=_position(enrichment) or _position({"position": facts.get("position")}),
         industry=_text(facts.get("industry")), concepts=concept_labels(facts.get("concept")),
         float_market_cap=_finite(enrichment.get("float_market_cap"), positive=True),

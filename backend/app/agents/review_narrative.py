@@ -42,6 +42,9 @@ def apply_review_narrative(digest: ReviewDigest, narrative: ReviewNarrative) -> 
             continue
         if not selected:
             raise ValueError("Narrative has no supporting observations")
+        if any(item.dimension == "next_open_pct" for item in lookup.values()):
+            if not any(lookup[key].dimension == "next_open_pct" for key in selected):
+                raise ValueError("Review must include available next-opening evidence")
         if section.scope == "leaders" and any(item.dimension.startswith("second_") for item in lookup.values()):
             if not any(lookup[key].dimension.startswith("second_") for key in selected):
                 raise ValueError("Leader review must include available second-board evidence")

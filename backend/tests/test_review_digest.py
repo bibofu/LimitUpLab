@@ -27,8 +27,8 @@ def prediction():
                        "float_market_cap": 4e9, "float_market_cap_source": "derived_from_amount_and_turnover"}})
 
 
-def bar(day, close, symbol="600001"):
-    return Obj(symbol=symbol, trade_date=day, close=close)
+def bar(day, close, symbol="600001", **extra):
+    return Obj(symbol=symbol, trade_date=day, close=close, **extra)
 
 
 def test_provider_concept_separators_count_individual_deduplicated_themes():
@@ -69,6 +69,7 @@ def test_digest_excludes_cutoff_and_older_batch_deduplicates_and_keeps_calendar_
     picks = [pick(DAYS[0], "old"), pick(), pick(), pick(DAYS[-2], "weak"), pick(DAYS[-1], "today")]
     predictions = {(item.trade_date, item.symbol): prediction() for item in picks}
     repo = Mock()
+    repo.list_enrichment_for_date.return_value = []
     repo.list_daily_bars_for_symbols.return_value = [bar(DAYS[1], 10), bar(DAYS[-1], 10.98),
         bar(DAYS[-2], 10, "weak"), bar(DAYS[-1], 9.4, "weak")]
     with patch("app.agents.review_digest.build_digest_leaders", return_value=([], [])):
@@ -119,3 +120,60 @@ def test_unknown_position_and_midnight_sentinel_are_missing():
     stock = candidate_stock(pick(), pred, [bar(DAYS[1], 10), bar(DAYS[-1], 11)], DAYS, DAYS[-1])
     assert stock.position_label is None and stock.first_limit_time is None
     assert performance_group(stock) == "excellent"
+
+
+@pytest.mark.parametrize("opened,expected", [(10, 0), (10.3, 3), (10.7, 7), (9.9, -1)])
+def test_candidate_next_open_is_decimal_exact_and_not_a_second_board_claim(opened, expected):
+    observed = [bar(DAYS[1], 10), bar(DAYS[2], 11, open=opened), bar(DAYS[-1], 12)]
+    stock = candidate_stock(pick(), prediction(), observed, DAYS, DAYS[-1])
+    assert stock.next_trade_date == DAYS[2] and stock.next_open_pct == expected
+    assert stock.second_board_date is None and stock.second_open_pct is None
+
+
+@pytest.mark.parametrize("base,next_day", [
+    (date(2026, 9, 11), date(2026, 9, 14)),
+    (date(2026, 9, 30), date(2026, 10, 8)),
+])
+def test_candidate_next_open_uses_exchange_adjacency_across_weekend_and_holiday(base, next_day):
+    stock = candidate_stock(pick(base), prediction(), [bar(base, 10), bar(next_day, 11, open=10.3)],
+                            [base, next_day], next_day)
+    assert stock.next_trade_date == next_day and stock.next_open_pct == 3
+
+
+@pytest.mark.parametrize("kind", ["missing_open", "later_bar", "conflicting_open", "missing_base", "conflicting_base", "wrong_symbol"])
+def test_candidate_next_open_never_substitutes_later_or_conflicting_prices(kind):
+    base, next_day, later = DAYS[1:4]
+    observed = [bar(base, 10), bar(next_day, 11, open=10.3), bar(later, 12, open=10.7)]
+    if kind == "missing_open":
+        observed[1] = bar(next_day, 11)
+    elif kind == "later_bar":
+        observed.pop(1)
+    elif kind == "conflicting_open":
+        observed.append(bar(next_day, 11, open=10.4))
+    elif kind == "missing_base":
+        observed.pop(0)
+    elif kind == "conflicting_base":
+        observed.append(bar(base, 9))
+    else:
+        observed[1] = bar(next_day, 11, symbol="600002", open=10.3)
+    stock = candidate_stock(pick(), prediction(), observed, DAYS, later)
+    assert stock.next_trade_date == next_day and stock.next_open_pct is None
+    assert any("次日" in item for item in stock.data_missing)
+
+
+@pytest.mark.parametrize("opened", [None, 0, -1, True, float("nan"), float("inf")])
+def test_invalid_next_open_is_missing_not_zero(opened):
+    stock = candidate_stock(pick(), prediction(), [bar(DAYS[1], 10), bar(DAYS[2], 11, open=opened)], DAYS, DAYS[2])
+    assert stock.next_open_pct is None
+
+
+@pytest.mark.parametrize("calendar,cutoff", [(DAYS, DAYS[1]), ([], DAYS[2]), (DAYS[2:], DAYS[2])])
+def test_candidate_next_open_does_not_peek_beyond_cutoff_or_infer_unknown_calendar(calendar, cutoff):
+    stock = candidate_stock(pick(), prediction(), [bar(DAYS[1], 10), bar(DAYS[2], 11, open=10.3)], calendar, cutoff)
+    assert stock.next_trade_date is None and stock.next_open_pct is None
+
+
+def test_identical_duplicate_price_records_keep_known_next_open():
+    observed = [bar(DAYS[1], 10), bar(DAYS[2], 11, open=10.3), bar(DAYS[2], 11, open=10.3)]
+    stock = candidate_stock(pick(), prediction(), observed, DAYS, DAYS[2])
+    assert stock.next_open_pct == 3

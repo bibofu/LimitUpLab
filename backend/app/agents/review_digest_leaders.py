@@ -5,6 +5,7 @@ from datetime import time
 from types import SimpleNamespace
 
 from app.agents.review_market_leaders import _build_profiles, _finite, _leader_episodes
+from app.agents.review_digest_prices import next_open_fact
 from app.review_digest_models import DigestStock
 
 
@@ -93,10 +94,8 @@ def _clock(value):
 
 def _second_board(stock, first_bar, second_bar, second):
     stock.first_close = _finite(getattr(first_bar, "close", None), positive=True)
-    opened = _finite(getattr(second_bar, "open", None), positive=True)
-    if stock.first_close is not None and opened is not None:
-        stock.second_open_pct = (opened / stock.first_close - 1) * 100
-    else:
+    stock.second_open_pct = stock.next_open_pct
+    if stock.second_open_pct is None:
         stock.data_missing.append("首板收盘或二板开盘K线缺失，无法计算二板开盘涨幅")
     stock.second_limit_time = _clock(second.first_limit_time)
     breaks = _finite(second.break_count)
@@ -171,6 +170,12 @@ def build_digest_leaders(*, events, repository, end_date, trade_dates) -> tuple[
             second_day = calendar[indices[anchor] + 1]
             second = by_case[(second_day, symbol)]
             stock.second_board_date = second_day
+            exact_bars = [bar for key in ((anchor, symbol), (second_day, symbol)) if (bar := bars.get(key)) is not None]
+            stock.next_trade_date, stock.next_open_pct, next_missing = next_open_fact(
+                bars=exact_bars, symbol=symbol, first_board_date=anchor,
+                trade_dates=calendar, end_date=end_date,
+            )
+            stock.data_missing.extend(next_missing)
             _second_board(stock, bars.get((anchor, symbol)), bars.get((second_day, symbol)), second)
             for day in (anchor, second_day):
                 if (day, symbol) in bar_conflicts:

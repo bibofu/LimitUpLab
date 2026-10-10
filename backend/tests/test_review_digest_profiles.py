@@ -31,7 +31,7 @@ def test_candidate_shares_are_group_composition_against_all_candidates():
     assert "6/8条（75.0%）" in group.observations[0].text
     assert "6/20条（30.0%）" in group.observations[0].text
     assert "高45.0个百分点" in group.observations[0].text
-    assert group.summary == "下面几项首板特征与全部候选的分布存在差异。"
+    assert group.summary == "下面几项特征与全部候选的分布存在差异。"
     assert "成功" not in group.summary
 
 
@@ -63,7 +63,7 @@ def test_multilabel_concepts_are_deduplicated_per_record():
      {"<30亿元": 1, "30–60亿元": 1, "60–100亿元": 1, "≥100亿元": 1}),
     ("break_count", [0, 1, 2, 10], {"0次": 1, "1次": 1, "≥2次": 2}),
     ("turnover_rate", [.01, 5, 10, 20], {"<5%": 1, "5–10%": 1, "10–20%": 1, "≥20%": 1}),
-    ("second_open_pct", [-.1, 0, 2.99, 3, 6.99, 7], {"低开": 1, "0–3%": 2, "3–7%": 2, "≥7%": 1}),
+    ("next_open_pct", [-.1, 0, 2.99, 3, 6.99, 7], {"低开": 1, "平开": 1, "高开0–3%": 1, "高开3–7%": 2, "高开≥7%": 1}),
     ("second_break_count", [0, 1, 2], {"0次": 1, "1次": 1, "≥2次": 1}),
     ("second_turnover_rate", [4.99, 5, 10, 20], {"<5%": 1, "5–10%": 1, "10–20%": 1, "≥20%": 1}),
 ])
@@ -144,8 +144,8 @@ def complete_stock(**overrides):
 
 def test_leader_selection_has_three_first_board_and_two_second_board_dimensions():
     group = build_digest_group("leaders", [complete_stock()] * 4)
-    assert len(group.observations) == 10
-    assert len(set(item.id for item in group.observations)) == 10
+    assert len(group.observations) == 11
+    assert len(set(item.id for item in group.observations)) == 11
     selected = [item for item in group.observations if item.id in group.selected_observation_ids]
     assert [item.dimension for item in selected] == ["position_label", "industry", "concepts", "second_board_shape", "second_limit_time"]
     assert all(item.id in {obs.id for obs in group.observations} for item in selected)
@@ -173,3 +173,50 @@ def test_candidate_default_selection_is_cross_dimension_priority_and_input_stabl
     assert [item.dimension for item in group.observations[:3]] == ["position_label", "industry", "concepts"]
     assert len(group.selected_observation_ids) == 3
     assert all(not item.key.startswith("second_") for item in group.distributions)
+
+
+def test_next_opening_comparison_keeps_zero_and_uses_its_own_valid_denominator():
+    rows = [stock(next_open_pct=7)] * 3 + [stock(next_open_pct=0), stock()]
+    baseline = rows + [stock(next_open_pct=-2)] * 5
+    group = build_digest_group("excellent", rows, baseline)
+    item = distribution(group, "next_open_pct")
+    assert (item.valid_count, item.total_count, item.baseline_valid_count) == (4, 5, 9)
+    assert counts(group, "next_open_pct")["平开"] == 1
+    observed = next(obs for obs in group.observations if obs.dimension == "next_open_pct")
+    assert "3/4条（75.0%）" in observed.text and "3/9条（33.3%）" in observed.text
+    assert observed.id in group.selected_observation_ids
+    assert any("不能当作首板时已知" in note for note in group.notes)
+
+
+def test_leader_selection_preserves_next_opening_and_second_board_without_truncating_ids():
+    group = build_digest_group("leaders", [complete_stock(next_open_pct=7, first_dragon_tiger_on_list=True)] * 4)
+    lookup = {item.id: item.dimension for item in group.observations}
+    selected = [lookup[key] for key in group.selected_observation_ids]
+    assert len(selected) == 5
+    assert "next_open_pct" in selected and "second_board_shape" in selected
+    assert "second_limit_time" in selected
+    assert all(item.key != "second_open_pct" for item in group.distributions)
+
+
+def test_dragon_tiger_unknown_is_neither_unlisted_nor_a_false_full_group_rate():
+    rows = [stock(first_dragon_tiger_on_list=True)] * 3 + [stock()] * 7
+    group = build_digest_group("excellent", rows, rows * 2)
+    item = distribution(group, "first_dragon_tiger_on_list")
+    assert (item.valid_count, item.total_count) == (3, 10)
+    assert counts(group, item.key) == {"已上榜": 3, "未上榜": 0}
+    assert all(bucket.share is None and bucket.baseline_share is None for bucket in item.buckets)
+    assert not any(obs.dimension == item.key for obs in group.observations)
+    assert "待核验" in item.note
+
+
+def test_dragon_tiger_observations_require_complete_group_and_baseline_coverage():
+    listed, unlisted = stock(first_dragon_tiger_on_list=True), stock(first_dragon_tiger_on_list=False)
+    rows = [listed] * 3 + [unlisted]
+    baseline = rows + [unlisted] * 4
+    group = build_digest_group("weak", rows, baseline)
+    item = distribution(group, "first_dragon_tiger_on_list")
+    assert counts(group, item.key) == {"已上榜": 3, "未上榜": 1}
+    assert item.buckets[0].share == .75 and item.buckets[0].baseline_share == .375
+    assert any(obs.dimension == item.key for obs in group.observations)
+    incomplete = build_digest_group("weak", rows, baseline + [stock()])
+    assert not any(obs.dimension == item.key for obs in incomplete.observations)
