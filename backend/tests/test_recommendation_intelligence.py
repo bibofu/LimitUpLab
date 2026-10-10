@@ -2,7 +2,7 @@ import unittest
 from datetime import date, datetime, timezone
 from pathlib import Path
 from types import SimpleNamespace
-from unittest.mock import patch
+from unittest.mock import Mock, patch
 from uuid import uuid4
 
 from pydantic import ValidationError
@@ -11,6 +11,7 @@ from app.models import (
     RecommendationIntelligenceItem,
     RecommendationIntelligenceResponse,
     StockNewsFacts,
+    StockNewsItem,
 )
 from app.repositories import (
     SQLiteFirstBoardRepository,
@@ -122,6 +123,117 @@ class RecommendationIntelligenceTest(unittest.TestCase):
 
         self.assertEqual(response.refresh_id, "close-draft")
         self.assertEqual(response.refreshed_at, close_time)
+
+    def test_refresh_keeps_base_ranks_when_post_close_news_changes_draft_order(self) -> None:
+        base_date = date(2026, 8, 31)
+        now = datetime.fromisoformat("2026-09-01T08:05:00+08:00")
+        candidates = [
+            _BaseCandidate("relay", base_date, symbol, symbol, "行业", None, rank, 80)
+            for rank, symbol in enumerate(("600001", "600002", "600003"), start=1)
+        ]
+        publications = {
+            "600001": ["2026-08-31T14:00:00+08:00"],
+            "600002": ["2026-08-31T16:00:00+08:00"],
+            "600003": ["2026-08-31T16:00:00+08:00", "2026-08-31T17:00:00+08:00"],
+        }
+        news = {
+            symbol: StockNewsFacts(
+                symbol=symbol, name=symbol, fetched_at=now,
+                window_days=7, cache_status="fresh", items=[
+                    StockNewsItem(
+                        symbol=symbol, name=symbol, title=f"中标项目{index}",
+                        summary="", published_at=datetime.fromisoformat(published),
+                        source="fixture", url=f"https://example.test/{symbol}/{index}",
+                        item_type="announcement", relevance_score=1, fetched_at=now,
+                    )
+                    for index, published in enumerate(timestamps)
+                ],
+            )
+            for symbol, timestamps in publications.items()
+        }
+        with patch(
+            "app.services.recommendation_intelligence._load_base_candidates",
+            return_value=(list(reversed(candidates)), base_date, []),
+        ), patch(
+            "app.services.recommendation_intelligence.collect_a_share_trade_dates",
+            return_value=[base_date, now.date()],
+        ):
+            response = refresh_recommendation_intelligence(
+                now=now, max_workers=1, limit_up_repository=self.limit_repo,
+                first_board_repository=self.first_repo, snapshot_repository=self.snapshot_repo,
+                quote_collector=lambda _symbols: SimpleNamespace(items=[], captured_at=now),
+                news_collector=lambda symbol, _name: news[symbol],
+                financial_collector=lambda _symbol: [],
+                dragon_tiger_collector=lambda _date: {}, popularity_collector=lambda: {},
+            )
+
+        self.assertEqual([item.symbol for item in response.items], ["600003", "600001", "600002"])
+        self.assertEqual([
+            (item.rule_rank, item.base_rank, item.rank, item.rule_score, item.base_score,
+             item.draft_score, item.close_information_adjustment, item.dynamic_adjustment)
+            for item in response.items
+        ], [
+            (3, 3, 1, 80, 80, 86, 0, 6),
+            (1, 1, 2, 80, 83, 83, 3, 0),
+            (2, 2, 3, 80, 80, 83, 0, 3),
+        ])
+        self.assertEqual(self.snapshot_repo.get_latest(), response)
+        self.assertEqual([candidate.rank for candidate in candidates], [1, 2, 3])
+
+    def test_refresh_preserves_stale_market_facts_without_scoring_failed_sources(self) -> None:
+        base_date = date(2026, 8, 31)
+        captured_at = datetime.fromisoformat("2026-08-31T16:00:00+08:00")
+        now = datetime.fromisoformat("2026-09-01T08:05:00+08:00")
+        candidate = _BaseCandidate(
+            "relay", base_date, "600001", "样本", "行业", None, 1, 80,
+            amount=100_000_000, popularity_baseline_ready=True, popularity_rank=80,
+            popularity_snapshot_at=captured_at,
+        )
+        previous_item = RecommendationIntelligenceItem(
+            base_trade_date=base_date, symbol=candidate.symbol, name=candidate.name,
+            rank=1, base_score=80, current_price=12.5, change_pct=2.5, turnover=100_000_000,
+            quote_captured_at=captured_at, refreshed_at=captured_at,
+            dragon_tiger_on_list=True, dragon_tiger_net_buy_amount=6_000_000,
+            dragon_tiger_source="stored-dragon-tiger", popularity_rank=10,
+            popularity_rank_change=70, popularity_snapshot_at=captured_at,
+            popularity_source="stored-popularity",
+        )
+        previous = RecommendationIntelligenceResponse(
+            refresh_id="previous", refreshed_at=captured_at, interval_minutes=1440,
+            relay_base_date=base_date, target_trade_date=now.date(), status="complete",
+            items=[previous_item],
+        )
+        self.snapshot_repo.save(previous)
+        failed_collector = Mock(side_effect=RuntimeError("offline"))
+        with patch(
+            "app.services.recommendation_intelligence._load_base_candidates",
+            return_value=([candidate], base_date, []),
+        ), patch(
+            "app.services.recommendation_intelligence.collect_a_share_trade_dates",
+            return_value=[base_date, now.date()],
+        ):
+            response = refresh_recommendation_intelligence(
+                now=now, max_workers=1, limit_up_repository=self.limit_repo,
+                first_board_repository=self.first_repo, snapshot_repository=self.snapshot_repo,
+                quote_collector=failed_collector, news_collector=failed_collector,
+                financial_collector=lambda _symbol: [],
+                dragon_tiger_collector=failed_collector, popularity_collector=failed_collector,
+            )
+
+        item = response.items[0]
+        self.assertEqual(response.status, "partial")
+        self.assertEqual((item.current_price, item.change_pct, item.turnover), (12.5, 2.5, 100_000_000))
+        self.assertEqual(item.quote_captured_at, captured_at)
+        self.assertEqual((item.popularity_rank, item.popularity_snapshot_at), (10, captured_at))
+        self.assertEqual(item.popularity_source, "stored-popularity")
+        self.assertEqual(item.dragon_tiger_net_buy_amount, 6_000_000)
+        self.assertEqual(item.dragon_tiger_source, "stored-dragon-tiger")
+        self.assertEqual((item.dragon_tiger_adjustment, item.popularity_adjustment, item.draft_score), (0, 0, 80))
+        self.assertEqual(item.data_missing, [
+            "新闻刷新失败：offline", "财报源未返回季度利润表", "最新行情不可用", "最近 7 日无直接相关新闻",
+            "最新季度财报不可用", "最新龙虎榜刷新不可用", "最新人气榜刷新不可用",
+        ])
+        self.assertIn("1 只股票的新闻或财报刷新发生错误，已保留可用缓存。", response.warnings)
 
     # Regression scenario: discovery item is rejected by public model.
     def test_discovery_item_is_rejected_by_public_model(self) -> None:

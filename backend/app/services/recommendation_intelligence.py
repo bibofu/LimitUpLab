@@ -22,6 +22,7 @@ from app.collectors.hithink_finance_collector import (
     HithinkFinanceCollector,
     HithinkIncomeStatementFact,
     HithinkMarketSnapshot,
+    HithinkMarketSnapshotFact,
 )
 from app.models import (
     AgentPrediction,
@@ -92,6 +93,20 @@ class _CandidateEvidence:
     news: StockNewsFacts | None
     financial_report: RecommendationFinancialReport | None
     errors: list[str]
+
+
+@dataclass(frozen=True)
+class _CandidateRefreshContext:
+    """Captured market results and readiness shared by candidate calculations."""
+
+    refreshed_at: datetime
+    quote_by_symbol: dict[str, HithinkMarketSnapshotFact]
+    quote_captured_at: datetime | None
+    dragon_tiger_by_symbol: dict[str, DragonTigerFact]
+    dragon_tiger_ready: bool
+    popularity_by_symbol: dict[str, PopularityFact]
+    popularity_captured_at: datetime | None
+    popularity_ready: bool
 
 
 def refresh_recommendation_intelligence(
@@ -280,10 +295,19 @@ def refresh_recommendation_intelligence(
         max_workers=max_workers,
     )
 
+    context = _CandidateRefreshContext(
+        refreshed_at=refreshed_at,
+        quote_by_symbol=quote_by_symbol,
+        quote_captured_at=quote_captured_at,
+        dragon_tiger_by_symbol=dragon_tiger_by_symbol,
+        dragon_tiger_ready=dragon_tiger_ready,
+        popularity_by_symbol=popularity_by_symbol,
+        popularity_captured_at=popularity_captured_at,
+        popularity_ready=popularity_ready,
+    )
     items: list[RecommendationIntelligenceItem] = []
     provider_error_count = 0
     for candidate in candidates:
-        quote = quote_by_symbol.get(candidate.symbol)
         previous_item = previous_items.get(
             (candidate.strategy, candidate.base_trade_date, candidate.symbol)
         )
@@ -291,234 +315,278 @@ def refresh_recommendation_intelligence(
             candidate.symbol,
             _CandidateEvidence(None, None, ["情报刷新未返回结果"]),
         )
-        missing = list(evidence.errors)
-        if quote is None:
-            missing.append("最新行情不可用")
-        if evidence.news is None or not evidence.news.items:
-            missing.append("最近 7 日无直接相关新闻")
-        if evidence.financial_report is None:
-            missing.append("最新季度财报不可用")
         if evidence.errors:
             provider_error_count += 1
-        facts_cutoff_at = _market_close(candidate.base_trade_date)
-        if candidate.strategy == "relay":
-            current_dragon_tiger = dragon_tiger_by_symbol.get(candidate.symbol)
-            current_popularity = popularity_by_symbol.get(candidate.symbol)
-            if current_dragon_tiger is None and previous_item is not None:
-                if previous_item.dragon_tiger_on_list:
-                    current_dragon_tiger = DragonTigerFact(
-                        symbol=candidate.symbol,
-                        buy_amount=None,
-                        sell_amount=None,
-                        net_buy_amount=previous_item.dragon_tiger_net_buy_amount,
-                        float_market_cap=None,
-                        reason=None,
-                        source=previous_item.dragon_tiger_source or "previous-refresh",
-                    )
-            if (
-                current_popularity is None
-                and current_dragon_tiger is not None
-                and current_dragon_tiger.hot_rank is not None
-            ):
-                current_popularity = PopularityFact(
-                    symbol=candidate.symbol,
-                    rank=current_dragon_tiger.hot_rank,
-                    rank_change=None,
-                    captured_at=refreshed_at,
-                    source=f"{current_dragon_tiger.source}-dragon-tiger",
-                )
-            if (
-                current_popularity is None
-                and not popularity_ready
-                and previous_item is not None
-                and previous_item.popularity_rank is not None
-            ):
-                current_popularity = PopularityFact(
-                    symbol=candidate.symbol,
-                    rank=previous_item.popularity_rank,
-                    rank_change=previous_item.popularity_rank_change,
-                    captured_at=(
-                        previous_item.popularity_snapshot_at
-                        or previous_item.refreshed_at
-                    ),
-                    source=previous_item.popularity_source or "previous-refresh",
-                )
-            if not dragon_tiger_ready:
-                missing.append("最新龙虎榜刷新不可用")
-            if not popularity_ready:
-                missing.append("最新人气榜刷新不可用")
-            elif not candidate.popularity_baseline_ready:
-                missing.append("收盘人气基线不可用")
-            close_news_adjustment, close_news_reasons = _news_adjustment(
-                evidence.news,
-                refreshed_at=facts_cutoff_at,
-                published_at_or_before=facts_cutoff_at,
-            )
-            news_adjustment, news_reasons = _news_adjustment(
-                evidence.news,
-                refreshed_at=refreshed_at,
-                published_after=facts_cutoff_at,
-            )
-            (
-                close_financial_adjustment,
-                close_financial_reasons,
-                financial_adjustment,
-                financial_reasons,
-            ) = _split_financial_adjustment(
-                evidence.financial_report,
-                base_trade_date=candidate.base_trade_date,
-                refreshed_at=refreshed_at,
-            )
-            close_information_adjustment = round(
-                close_news_adjustment + close_financial_adjustment,
-                1,
-            )
-            close_information_reasons = [
-                *(f"收盘前已知：{reason}" for reason in close_news_reasons),
-                *(
-                    f"收盘前已知：{reason}"
-                    for reason in close_financial_reasons
-                ),
-            ]
-            dragon_tiger_adjustment, dragon_tiger_reasons = (
-                _dragon_tiger_adjustment(candidate, current_dragon_tiger)
-                if dragon_tiger_ready
-                else (0.0, [])
-            )
-            (
-                popularity_adjustment,
-                popularity_reasons,
-                popularity_rank_change,
-            ) = (
-                _popularity_adjustment(
-                    candidate,
-                    current_popularity,
-                    captured_at=popularity_captured_at,
-                )
-                if popularity_ready
-                else (0.0, [], None)
-            )
-            update_reasons = [
-                *(f"收盘后新增：{reason}" for reason in news_reasons),
-                *(
-                    f"收盘后新增：{reason}"
-                    for reason in financial_reasons
-                ),
-                *(f"收盘后新增：{reason}" for reason in dragon_tiger_reasons),
-                *(f"人气变化：{reason}" for reason in popularity_reasons),
-            ]
-            raw_dynamic_adjustment = round(
-                news_adjustment
-                + financial_adjustment
-                + dragon_tiger_adjustment
-                + popularity_adjustment,
-                1,
-            )
-            dynamic_adjustment = _bounded_adjustment(
-                raw_dynamic_adjustment,
-                limit=MAX_RELAY_DYNAMIC_ADJUSTMENT,
-            )
-            if dynamic_adjustment != raw_dynamic_adjustment:
-                update_reasons.append(
-                    "盘后动态修正受 ±"
-                    f"{MAX_RELAY_DYNAMIC_ADJUSTMENT:g} 分约束，"
-                    f"原始合计 {raw_dynamic_adjustment:+g} 分"
-                )
-        base_score = _bounded_score(
-            candidate.base_score + close_information_adjustment
+        items.append(_build_candidate_item(candidate, evidence, previous_item, context))
+    ranked_items = _rank_relay_items(items)
+    if provider_error_count:
+        warnings.append(
+            f"{provider_error_count} 只股票的新闻或财报刷新发生错误，已保留可用缓存。"
         )
-        items.append(
-            RecommendationIntelligenceItem(
-                strategy=candidate.strategy,
-                base_trade_date=candidate.base_trade_date,
+    response = RecommendationIntelligenceResponse(
+        refresh_id=f"recommendation_{uuid4().hex}",
+        refreshed_at=refreshed_at,
+        interval_minutes=max(5, min(interval_minutes, 1440)),
+        target_trade_date=target_trade_date,
+        relay_pool_size=sum(item.strategy == "relay" for item in ranked_items),
+        relay_display_limit=RELAY_DISPLAY_LIMIT,
+        popularity_coverage_count=len(popularity_by_symbol),
+        status="partial" if warnings else "complete",
+        relay_base_date=relay_date,
+        items=ranked_items,
+        warnings=warnings,
+    )
+    intelligence_repo.save(response)
+    return response
+
+
+def _build_candidate_item(
+    candidate: _BaseCandidate,
+    evidence: _CandidateEvidence,
+    previous_item: RecommendationIntelligenceItem | None,
+    context: _CandidateRefreshContext,
+) -> RecommendationIntelligenceItem:
+    """Combine one candidate's captured facts without collecting or saving data."""
+
+    quote = context.quote_by_symbol.get(candidate.symbol)
+    refreshed_at = context.refreshed_at
+    quote_captured_at = context.quote_captured_at
+    dragon_tiger_by_symbol = context.dragon_tiger_by_symbol
+    dragon_tiger_ready = context.dragon_tiger_ready
+    popularity_by_symbol = context.popularity_by_symbol
+    popularity_captured_at = context.popularity_captured_at
+    popularity_ready = context.popularity_ready
+    missing = list(evidence.errors)
+    if quote is None:
+        missing.append("最新行情不可用")
+    if evidence.news is None or not evidence.news.items:
+        missing.append("最近 7 日无直接相关新闻")
+    if evidence.financial_report is None:
+        missing.append("最新季度财报不可用")
+    facts_cutoff_at = _market_close(candidate.base_trade_date)
+    if candidate.strategy == "relay":
+        current_dragon_tiger = dragon_tiger_by_symbol.get(candidate.symbol)
+        current_popularity = popularity_by_symbol.get(candidate.symbol)
+        if current_dragon_tiger is None and previous_item is not None:
+            if previous_item.dragon_tiger_on_list:
+                current_dragon_tiger = DragonTigerFact(
+                    symbol=candidate.symbol,
+                    buy_amount=None,
+                    sell_amount=None,
+                    net_buy_amount=previous_item.dragon_tiger_net_buy_amount,
+                    float_market_cap=None,
+                    reason=None,
+                    source=previous_item.dragon_tiger_source or "previous-refresh",
+                )
+        if (
+            current_popularity is None
+            and current_dragon_tiger is not None
+            and current_dragon_tiger.hot_rank is not None
+        ):
+            current_popularity = PopularityFact(
                 symbol=candidate.symbol,
-                name=candidate.name,
-                sector=candidate.sector,
-                position_label=candidate.position_label,
-                rule_rank=candidate.rank,
-                rule_score=candidate.base_score,
-                base_rank=candidate.rank,
-                rank=candidate.rank,
-                base_score=base_score,
-                draft_score=_bounded_score(
-                    base_score + dynamic_adjustment
-                ),
-                facts_cutoff_at=facts_cutoff_at,
-                close_information_adjustment=close_information_adjustment,
-                close_information_reasons=close_information_reasons,
-                news_adjustment=news_adjustment,
-                financial_adjustment=financial_adjustment,
-                dragon_tiger_adjustment=dragon_tiger_adjustment,
-                popularity_adjustment=popularity_adjustment,
-                dynamic_adjustment=dynamic_adjustment,
-                dragon_tiger_on_list=(
-                    current_dragon_tiger is not None
-                    or candidate.dragon_tiger_on_list
-                    if candidate.strategy == "relay"
-                    else False
-                ),
-                dragon_tiger_is_new=(
-                    current_dragon_tiger is not None
-                    and not candidate.dragon_tiger_on_list
-                    if candidate.strategy == "relay"
-                    else False
-                ),
-                dragon_tiger_net_buy_amount=(
-                    current_dragon_tiger.net_buy_amount
-                    if current_dragon_tiger
-                    else candidate.dragon_tiger_net_buy_amount
-                ),
-                dragon_tiger_source=(
-                    current_dragon_tiger.source
-                    if current_dragon_tiger
-                    else candidate.dragon_tiger_source
-                ),
-                popularity_base_rank=(
-                    candidate.popularity_rank
-                ),
-                popularity_rank=(
-                    current_popularity.rank if current_popularity else None
-                ),
-                popularity_rank_change=popularity_rank_change,
-                popularity_snapshot_at=(
-                    current_popularity.captured_at
-                    if current_popularity
-                    else popularity_captured_at
-                    if candidate.strategy == "relay"
-                    else None
-                ),
-                popularity_source=(
-                    current_popularity.source
-                    if current_popularity
-                    else candidate.popularity_source
-                ),
-                update_reasons=update_reasons,
-                current_price=(
-                    quote.last_price
-                    if quote
-                    else previous_item.current_price if previous_item else None
-                ),
-                change_pct=(
-                    quote.change_pct
-                    if quote
-                    else previous_item.change_pct if previous_item else None
-                ),
-                turnover=(
-                    quote.turnover
-                    if quote
-                    else previous_item.turnover if previous_item else None
-                ),
-                quote_captured_at=(
-                    quote_captured_at
-                    if quote
-                    else previous_item.quote_captured_at if previous_item else None
-                ),
-                latest_news=evidence.news.items[:3] if evidence.news else [],
-                financial_report=evidence.financial_report,
-                refreshed_at=refreshed_at,
-                data_missing=list(dict.fromkeys(missing)),
+                rank=current_dragon_tiger.hot_rank,
+                rank_change=None,
+                captured_at=refreshed_at,
+                source=f"{current_dragon_tiger.source}-dragon-tiger",
             )
+        if (
+            current_popularity is None
+            and not popularity_ready
+            and previous_item is not None
+            and previous_item.popularity_rank is not None
+        ):
+            current_popularity = PopularityFact(
+                symbol=candidate.symbol,
+                rank=previous_item.popularity_rank,
+                rank_change=previous_item.popularity_rank_change,
+                captured_at=(
+                    previous_item.popularity_snapshot_at
+                    or previous_item.refreshed_at
+                ),
+                source=previous_item.popularity_source or "previous-refresh",
+            )
+        if not dragon_tiger_ready:
+            missing.append("最新龙虎榜刷新不可用")
+        if not popularity_ready:
+            missing.append("最新人气榜刷新不可用")
+        elif not candidate.popularity_baseline_ready:
+            missing.append("收盘人气基线不可用")
+        close_news_adjustment, close_news_reasons = _news_adjustment(
+            evidence.news,
+            refreshed_at=facts_cutoff_at,
+            published_at_or_before=facts_cutoff_at,
         )
+        news_adjustment, news_reasons = _news_adjustment(
+            evidence.news,
+            refreshed_at=refreshed_at,
+            published_after=facts_cutoff_at,
+        )
+        (
+            close_financial_adjustment,
+            close_financial_reasons,
+            financial_adjustment,
+            financial_reasons,
+        ) = _split_financial_adjustment(
+            evidence.financial_report,
+            base_trade_date=candidate.base_trade_date,
+            refreshed_at=refreshed_at,
+        )
+        close_information_adjustment = round(
+            close_news_adjustment + close_financial_adjustment,
+            1,
+        )
+        close_information_reasons = [
+            *(f"收盘前已知：{reason}" for reason in close_news_reasons),
+            *(
+                f"收盘前已知：{reason}"
+                for reason in close_financial_reasons
+            ),
+        ]
+        dragon_tiger_adjustment, dragon_tiger_reasons = (
+            _dragon_tiger_adjustment(candidate, current_dragon_tiger)
+            if dragon_tiger_ready
+            else (0.0, [])
+        )
+        (
+            popularity_adjustment,
+            popularity_reasons,
+            popularity_rank_change,
+        ) = (
+            _popularity_adjustment(
+                candidate,
+                current_popularity,
+                captured_at=popularity_captured_at,
+            )
+            if popularity_ready
+            else (0.0, [], None)
+        )
+        update_reasons = [
+            *(f"收盘后新增：{reason}" for reason in news_reasons),
+            *(
+                f"收盘后新增：{reason}"
+                for reason in financial_reasons
+            ),
+            *(f"收盘后新增：{reason}" for reason in dragon_tiger_reasons),
+            *(f"人气变化：{reason}" for reason in popularity_reasons),
+        ]
+        raw_dynamic_adjustment = round(
+            news_adjustment
+            + financial_adjustment
+            + dragon_tiger_adjustment
+            + popularity_adjustment,
+            1,
+        )
+        dynamic_adjustment = _bounded_adjustment(
+            raw_dynamic_adjustment,
+            limit=MAX_RELAY_DYNAMIC_ADJUSTMENT,
+        )
+        if dynamic_adjustment != raw_dynamic_adjustment:
+            update_reasons.append(
+                "盘后动态修正受 ±"
+                f"{MAX_RELAY_DYNAMIC_ADJUSTMENT:g} 分约束，"
+                f"原始合计 {raw_dynamic_adjustment:+g} 分"
+            )
+    base_score = _bounded_score(
+        candidate.base_score + close_information_adjustment
+    )
+    return RecommendationIntelligenceItem(
+        strategy=candidate.strategy,
+        base_trade_date=candidate.base_trade_date,
+        symbol=candidate.symbol,
+        name=candidate.name,
+        sector=candidate.sector,
+        position_label=candidate.position_label,
+        rule_rank=candidate.rank,
+        rule_score=candidate.base_score,
+        base_rank=candidate.rank,
+        rank=candidate.rank,
+        base_score=base_score,
+        draft_score=_bounded_score(
+            base_score + dynamic_adjustment
+        ),
+        facts_cutoff_at=facts_cutoff_at,
+        close_information_adjustment=close_information_adjustment,
+        close_information_reasons=close_information_reasons,
+        news_adjustment=news_adjustment,
+        financial_adjustment=financial_adjustment,
+        dragon_tiger_adjustment=dragon_tiger_adjustment,
+        popularity_adjustment=popularity_adjustment,
+        dynamic_adjustment=dynamic_adjustment,
+        dragon_tiger_on_list=(
+            current_dragon_tiger is not None
+            or candidate.dragon_tiger_on_list
+            if candidate.strategy == "relay"
+            else False
+        ),
+        dragon_tiger_is_new=(
+            current_dragon_tiger is not None
+            and not candidate.dragon_tiger_on_list
+            if candidate.strategy == "relay"
+            else False
+        ),
+        dragon_tiger_net_buy_amount=(
+            current_dragon_tiger.net_buy_amount
+            if current_dragon_tiger
+            else candidate.dragon_tiger_net_buy_amount
+        ),
+        dragon_tiger_source=(
+            current_dragon_tiger.source
+            if current_dragon_tiger
+            else candidate.dragon_tiger_source
+        ),
+        popularity_base_rank=(
+            candidate.popularity_rank
+        ),
+        popularity_rank=(
+            current_popularity.rank if current_popularity else None
+        ),
+        popularity_rank_change=popularity_rank_change,
+        popularity_snapshot_at=(
+            current_popularity.captured_at
+            if current_popularity
+            else popularity_captured_at
+            if candidate.strategy == "relay"
+            else None
+        ),
+        popularity_source=(
+            current_popularity.source
+            if current_popularity
+            else candidate.popularity_source
+        ),
+        update_reasons=update_reasons,
+        current_price=(
+            quote.last_price
+            if quote
+            else previous_item.current_price if previous_item else None
+        ),
+        change_pct=(
+            quote.change_pct
+            if quote
+            else previous_item.change_pct if previous_item else None
+        ),
+        turnover=(
+            quote.turnover
+            if quote
+            else previous_item.turnover if previous_item else None
+        ),
+        quote_captured_at=(
+            quote_captured_at
+            if quote
+            else previous_item.quote_captured_at if previous_item else None
+        ),
+        latest_news=evidence.news.items[:3] if evidence.news else [],
+        financial_report=evidence.financial_report,
+        refreshed_at=refreshed_at,
+        data_missing=list(dict.fromkeys(missing)),
+    )
+
+
+def _rank_relay_items(
+    items: list[RecommendationIntelligenceItem],
+) -> list[RecommendationIntelligenceItem]:
+    """Assign base and draft ranks with the established stable tie breakers."""
+
     base_ranked_items: list[RecommendationIntelligenceItem] = []
     for strategy in ("relay",):
         # The key compares base score (negated for descending order), then rule rank, then symbol.
@@ -542,25 +610,7 @@ def refresh_recommendation_intelligence(
             item.model_copy(update={"rank": index})
             for index, item in enumerate(strategy_items, start=1)
         )
-    if provider_error_count:
-        warnings.append(
-            f"{provider_error_count} 只股票的新闻或财报刷新发生错误，已保留可用缓存。"
-        )
-    response = RecommendationIntelligenceResponse(
-        refresh_id=f"recommendation_{uuid4().hex}",
-        refreshed_at=refreshed_at,
-        interval_minutes=max(5, min(interval_minutes, 1440)),
-        target_trade_date=target_trade_date,
-        relay_pool_size=sum(item.strategy == "relay" for item in ranked_items),
-        relay_display_limit=RELAY_DISPLAY_LIMIT,
-        popularity_coverage_count=len(popularity_by_symbol),
-        status="partial" if warnings else "complete",
-        relay_base_date=relay_date,
-        items=ranked_items,
-        warnings=warnings,
-    )
-    intelligence_repo.save(response)
-    return response
+    return ranked_items
 
 
 def should_finalize_recommendation_intelligence(
