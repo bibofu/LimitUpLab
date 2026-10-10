@@ -30,9 +30,8 @@ const panel = { Panel: ({ title, children }: any) => createElement("section", nu
 const sections = compile("../src/components/ResourceSection.tsx", {
   "../utils/asyncResource": await import("../src/utils/asyncResource.ts"),
 });
-const reviewComparison = compile("../src/components/ResearchComparison.tsx");
-const reviewLeaders = compile("../src/components/MarketLeaderReview.tsx", { "./ResearchComparison": reviewComparison });
-const reviewSummary = compile("../src/components/ReviewSummary.tsx", { "./ResearchComparison": reviewComparison, "./MarketLeaderReview": reviewLeaders });
+const reviewDigest = compile("../src/components/ReviewDigest.tsx");
+const reviewSummary = compile("../src/components/ReviewSummary.tsx", { "./ReviewDigest": reviewDigest });
 const reviewReport = compile("../src/hooks/useReviewReport.ts", { "../api": {} });
 const review = compile("../src/components/ReviewDashboard.tsx", {
   "../api": {}, "./Panel": panel,

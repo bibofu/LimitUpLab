@@ -4,10 +4,12 @@ import { createRequire } from "node:module";
 import test from "node:test";
 import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
+import { MemoryRouter } from "react-router-dom";
 import ts from "typescript";
 import { createReviewReportResource } from "../src/utils/reviewReportResource.ts";
 import type { ReviewReportState, ReviewSummaryStatus } from "../src/utils/reviewReportResource.ts";
 import type { ReviewAgentReportResponse } from "../src/types.ts";
+import { reviewDigest } from "./reviewDigestFixture.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -313,76 +315,53 @@ function compile(path: string, imports: Record<string, unknown> = {}, exports = 
   new Function("require", "module", "exports", compiled)((id: string) => imports[id] ?? require(id.startsWith(".") ? `${id}.ts` : id), module, module.exports);
   return module.exports;
 }
-const comparison = compile("../src/components/ResearchComparison.tsx");
-const leaders = compile("../src/components/MarketLeaderReview.tsx", { "./ResearchComparison": comparison });
-const summary = compile("../src/components/ReviewSummary.tsx", { "./ResearchComparison": comparison, "./MarketLeaderReview": leaders });
+const digest = compile("../src/components/ReviewDigest.tsx");
+const summary = compile("../src/components/ReviewSummary.tsx", { "./ReviewDigest": digest });
 const renderSummary = (value: ReviewAgentReportResponse, summaryStatus: ReviewSummaryStatus = "ready", error: string | null = null) => (
-  renderToStaticMarkup(createElement(summary.ReviewSummary, { report: value, summaryStatus, error, onRegenerate() {} }))
+  renderToStaticMarkup(createElement(MemoryRouter, null, createElement(summary.ReviewSummary, { report: value, summaryStatus, error, onRegenerate() {} })))
 );
 
-const featureSummary: NonNullable<ReviewAgentReportResponse["feature_summary"]> = {
-  positive_count: 12, negative_count: 18,
-  cards: [
-    {
-      key: "position", label: "首板位置",
-      positive: { text: "低位启动首板 · 50.0%", detail: "6/12 个有效位置样本", valid_count: 12, sample_size: 12 },
-      negative: { text: "低位启动首板 · 33.3%", detail: "6/18 个有效位置样本", valid_count: 18, sample_size: 18 },
-      observation: "正收益组该位置占比更高，这是组内占比，不是胜率。",
-    },
-    {
-      key: "market_cap", label: "流通市值（中位数）",
-      positive: { text: "42.0 亿元", detail: "中间50%：20–60 亿元", valid_count: 10, sample_size: 12 },
-      negative: { text: "80.0 亿元", detail: "中间50%：50–110 亿元", valid_count: 16, sample_size: 18 },
-      observation: "正收益组中位市值偏小，中间50%区间重叠。",
-    },
-    {
-      key: "first_seal", label: "首次封板时间（均值）",
-      positive: { text: "09:45", detail: "平均首次封板时间", valid_count: 12, sample_size: 12 },
-      negative: { text: "10:12", detail: "平均首次封板时间", valid_count: 18, sample_size: 18 },
-      observation: "正收益组平均首封早约27分钟，不代表优劣。",
-    },
-  ],
-};
-
-test("ready summary shows only a short model interpretation and three deterministic comparisons", () => {
+test("ready summary renders the new digest and never revives old findings", () => {
   const html = renderSummary(report({
-    generation_mode: "llm", llm_model: "mock-model", feature_summary: featureSummary,
-    summary_headline: "两组的市值分布仍有重叠，需要更多样本检验差异。",
+    generation_mode: "llm", llm_model: "mock-model", review_digest: reviewDigest(),
   }));
-  for (const value of ["LLM 解读 · mock-model", "一句话解读", "重新生成", "两组的市值分布仍有重叠", "42.0 亿元", "09:45", "有效 10/12 个样本", "正收益组 12 个样本", "负收益组 18 个样本"]) assert.ok(html.includes(value));
-  assert.equal(html.split('class="review-feature-card"').length - 1, 3);
+  for (const value of ["LLM 解读 · mock-model", "AI解读", "重新生成", "整体表现", "优秀候选", "较差候选", "市场三板及以上", "42.0 亿元", "09:45"]) assert.ok(html.includes(value), value);
   for (const value of ["样本中晋级较集中", "成功特征", "失败特征", "高分样本有偏差", "扩大样本后验证"]) assert.ok(!html.includes(value));
   assert.ok(html.includes('<details class="review-summary-scope"><summary>样本口径与数据说明</summary>'));
-  assert.ok(html.includes("不是胜率或因果结论"));
+  assert.ok(html.includes("不是未来概率或因果结论"));
 });
 
 test("initial generation and refreshed idle states never show a baseline or previous failure note", () => {
-  const base = report({ feature_summary: featureSummary, generation_note: "本次未启用 LLM，使用规则回退。" });
+  const base = report({ review_digest: reviewDigest(), generation_note: "本次未启用 LLM，使用规则回退。" });
   for (const status of ["generating", "idle"] as const) {
     const html = renderSummary(base, status);
     assert.ok(!html.includes("未启用 LLM"));
     assert.ok(!html.includes("规则回退"));
     assert.ok(!html.includes("查看原因"));
-    assert.equal(html.split('class="review-feature-card"').length - 1, 3);
+    assert.ok(html.includes("优秀候选"));
+    assert.ok(html.includes("本地说明"));
+    assert.ok(!html.includes("AI解读"));
     assert.ok(html.includes(status === "generating" ? "正在整理本期解读" : "本地事实已就绪"));
     assert.equal(html.includes('aria-busy="true"'), status === "generating");
     assert.equal(html.includes("disabled"), status === "generating");
   }
 });
 
-test("regeneration retains comparison cards and marks the old headline without showing its old note", () => {
+test("regeneration retains evidence and labels the previous model summary without its stale failure note", () => {
+  const previous = reviewDigest();
+  previous.excellent.summary = "上轮有限样本观察。";
   const html = renderSummary(report({
-    generation_mode: "llm", feature_summary: featureSummary, summary_headline: "上轮有限样本观察。", generation_note: "上轮原因不应当作本轮错误",
+    generation_mode: "llm", review_digest: previous, generation_note: "上轮原因不应当作本轮错误",
   }), "generating");
-  assert.ok(html.includes("上次解读："));
+  assert.ok(html.includes("上次AI解读"));
   assert.ok(html.includes("上轮有限样本观察。"));
   assert.ok(!html.includes("上轮原因不应当作本轮错误"));
   assert.ok(html.includes("42.0 亿元"));
 });
 
 test("only actual fallback or errors expose a short failure status with collapsible current reasons", () => {
-  const fallback = renderSummary(report({ feature_summary: featureSummary, generation_note: "模型返回无效，已使用本地统计。" }), "fallback");
-  assert.ok(fallback.includes("本次使用本地统计"));
+  const fallback = renderSummary(report({ review_digest: reviewDigest(), generation_note: "模型返回无效，已使用本地统计。" }), "fallback");
+  assert.ok(fallback.includes("本次使用本地事实"));
   assert.ok(fallback.includes('<details class="review-summary-reason"><summary>查看原因</summary>'));
   assert.ok(fallback.includes("模型返回无效"));
   assert.ok(fallback.includes("重试解读"));
@@ -392,19 +371,14 @@ test("only actual fallback or errors expose a short failure status with collapsi
   assert.ok(!error.includes("过期未启用说明"));
 });
 
-test("missing feature data preserves three explicit placeholders without fabricating comparisons", () => {
-  for (const feature_summary of [undefined, null, { positive_count: 0, negative_count: 0, cards: [] }]) {
-    const html = renderSummary(report({ feature_summary }), "idle");
-    assert.equal(html.split('class="review-feature-card"').length - 1, 3);
-    for (const label of ["首板位置", "流通市值（中位数）", "首次封板时间（均值）", "暂无数据", "该特征尚无可用统计"]) assert.ok(html.includes(label));
+test("legacy responses ask for a refreshed digest instead of showing old cards or conclusions", () => {
+  for (const review_digest of [undefined, null]) {
+    const old = { ...report({ review_digest }), summary_headline: "旧模型结论不再展示", feature_summary: { cards: [{ label: "旧特征卡" }] } };
+    const html = renderSummary(old, "idle");
+    assert.ok(html.includes("新报告待刷新"));
+    for (const label of ["旧模型结论不再展示", "旧特征卡", "review-feature-card", "research-contrast-table"]) assert.ok(!html.includes(label));
     assert.ok(!html.includes("0.0%"));
   }
-  const html = renderSummary(report({ feature_summary: {
-    ...featureSummary, cards: [{ ...featureSummary.cards[0], positive: { text: "样本不足", detail: "有效 1/12 个样本，至少需 3 个", valid_count: 1, sample_size: 12 } }],
-  } }), "ready");
-  assert.ok(html.includes("样本不足"));
-  assert.ok(html.includes("有效 1/12 个样本"));
-  assert.ok(html.includes("本期结论尚未齐备"));
 });
 
 test("collapsed scope preserves checked forward eligibility counts without inventing zeros for legacy reports", () => {
@@ -444,11 +418,11 @@ test("the actual review panel retains deterministic statistics and tracking whil
   for (const [generating, summaryError] of [[true, null], [false, "模型超时"]] as const) {
     const dashboard = compile("../src/components/ReviewDashboard.tsx", {
       "../api": {}, "./ReviewSummary": summary,
-      "../hooks/useReviewReport": { useReviewReport: () => ({ report: report({ feature_summary: featureSummary }), loading: false, error: null, generating, summaryStatus: generating ? "generating" : "error", summaryError, retry() {}, regenerate() {} }) },
+      "../hooks/useReviewReport": { useReviewReport: () => ({ report: report({ sample_size: 60, review_digest: reviewDigest() }), loading: false, error: null, generating, summaryStatus: generating ? "generating" : "error", summaryError, retry() {}, regenerate() {} }) },
       "./Panel": { Panel: ({ children }: any) => createElement("section", null, children) },
     }, "\nexport { HighScoreReviewPanel };");
-    const html = renderToStaticMarkup(createElement(dashboard.HighScoreReviewPanel, { latestTradeDate: day }));
-    for (const value of ["Top10 1进2", "同期全部首板", "daily-top-review", "复盘总结", "42.0 亿元", "五日追踪样本", "复盘候选共 10 只"]) assert.ok(html.includes(value));
+    const html = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(dashboard.HighScoreReviewPanel, { latestTradeDate: day })));
+    for (const value of ["Top10 1进2", "同期全部首板", "daily-top-review", "复盘总结", "42.0 亿元", "五日追踪样本", "复盘候选共 50 只", "完整追踪报告（60 条）"]) assert.ok(html.includes(value), value);
     assert.ok(html.includes(generating ? "生成中" : "模型超时"));
   }
 });
