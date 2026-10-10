@@ -33,6 +33,11 @@ export interface DigestStock {
   return_pct: number | null;
   first_close: number | null;
   cutoff_close: number | null;
+  next_trade_date?: string | null;
+  next_open_pct?: number | null;
+  first_dragon_tiger_on_list?: boolean | null;
+  first_dragon_tiger_source?: string | null;
+  first_dragon_tiger_reason?: string | null;
   position_label: string | null;
   industry: string | null;
   concepts: string[];

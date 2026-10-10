@@ -41,6 +41,23 @@
 .digest-strip-value > i > i { display: block; height: 100%; background: var(--digest-color); opacity: .7; }
 .digest-strip-metric > small { display: block; margin-top: 7px; color: #758196; font-size: 12px; }
 .digest-strip-inline > small { margin-top: 3px; }
+.digest-followup-band { display: grid; grid-template-columns: minmax(0, 1.5fr) minmax(0, 1fr); gap: 14px; margin-top: 14px; }
+.digest-followup-band > section { min-width: 0; padding: 10px 12px; border: 1px solid #e2e8ef; border-radius: 4px; }
+.digest-band-heading { display: flex; align-items: baseline; gap: 5px 10px; flex-wrap: wrap; }
+.digest-band-heading h4 { margin: 0; font-size: 14px; color: #40546c; }
+.digest-band-heading > span { font-size: 12px; color: #758196; }
+.review-summary p.digest-band-coverage,
+.review-summary p.digest-band-note { font-size: 12px; color: #758196; margin-top: 5px; }
+.digest-next-open table { width: 100%; min-width: 0; max-width: 100%; table-layout: fixed; border-collapse: collapse; margin-top: 7px; font-size: 13px; }
+.digest-next-open th,
+.digest-next-open td { min-width: 0; white-space: normal; overflow-wrap: anywhere; text-align: left; padding: 4px; border-bottom: 1px solid #edf0f4; }
+.digest-next-open th { font-weight: 500; color: #63758b; }
+.digest-dragon-tiger dl { margin: 10px 0; }
+.digest-dragon-tiger dl > div { display: flex; justify-content: space-between; gap: 10px; margin: 8px 0; }
+.digest-dragon-tiger dt { color: #63758b; font-size: 13px; }
+.digest-dragon-tiger dd { margin: 0; color: #324b68; font-weight: 600; }
+.digest-stock-followup { margin-top: 10px; padding-top: 2px; border-top: 1px solid #e6ebf1; overflow-wrap: anywhere; }
+.digest-stock-followup small { color: #7a889b; font-size: 12px; }
 .review-summary p.digest-note { margin-top: 10px; font-size: 13px; color: #876c37; }
 .digest-more-notes { margin-top: 7px; color: #708198; font-size: 13px; }
 .digest-more-notes ul { padding-left: 18px; }
@@ -49,7 +66,7 @@
 .digest-distribution { margin-top: 15px; }
 .digest-distribution h4,
 .digest-second-board h4 { margin: 0; font-size: 14px; color: #40546c; }
-.digest-distribution table { table-layout: fixed; border-collapse: collapse; width: 100%; margin-top: 8px; font-size: 13px; }
+.digest-distribution table { table-layout: fixed; border-collapse: collapse; width: 100%; min-width: 0; max-width: 100%; margin-top: 8px; font-size: 13px; }
 .digest-distribution th,
 .digest-distribution td { white-space: normal; overflow-wrap: anywhere; padding: 7px 8px; border-bottom: 1px solid #e5ebf1; text-align: left; }
 .digest-distribution th:first-child { width: 30%; }
@@ -66,6 +83,9 @@
 .digest-empty { color: #7a889b; }
 @media (max-width: 899px) {
   .digest-feature-strips { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+}
+@media (max-width: 700px) {
+  .digest-followup-band { grid-template-columns: 1fr; }
 }
 @media (max-width: 600px) {
   .review-summary.digest-summary { padding: 14px; }

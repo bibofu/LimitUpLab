@@ -97,7 +97,84 @@ test("leader evidence separates first and second boards and preserves actual zer
   assert.ok(!html.includes("已观察"));
   assert.ok(html.includes('<summary>完整特征分布</summary>'));
   assert.ok(html.includes('<thead><tr><th>特征</th><th>本组</th></tr></thead>'));
-  for (const text of ["全集", "全部候选", "基准", "未提供"]) assert.ok(!html.includes(text), text);
+  const distribution = html.slice(html.indexOf('<details class="digest-evidence">'), html.indexOf('<details class="digest-evidence digest-stocks">'));
+  for (const text of ["全集", "全部候选", "基准", "未提供"]) assert.ok(!distribution.includes(text), text);
+});
+
+test("next-day openings show all five source buckets and field-specific candidate baseline", () => {
+  const digest = reviewDigest();
+  digest.excellent.distributions.push({
+    key: "next_open_pct", label: "次日开盘", valid_count: 8, total_count: 10, baseline_valid_count: 40, baseline_total_count: 50, note: "按相邻真实交易日开盘计算。",
+    buckets: ["低开", "平开", "高开0–3%", "高开3–7%", "高开≥7%"].map((label, index) => ({
+      label, count: [2, 1, 3, 1, 1][index], share: [0.25, 0.125, 0.375, 0.125, 0.125][index],
+      baseline_count: [10, 1, 20, 4, 5][index], baseline_share: [0.25, 0.025, 0.5, 0.1, 0.125][index],
+    })),
+  });
+  digest.excellent.observations.push({ id: "next", dimension: "next_open_pct", text: "次日有 2/8 的有效样本低开。", support_count: 2, sample_size: 8 });
+  digest.excellent.selected_observation_ids = ["next"];
+  const html = excellentPart(render(digest));
+  const band = html.slice(html.indexOf('class="digest-followup-band"'), html.indexOf('<details class="digest-more-notes">'));
+  for (const text of ["次日开盘", "相对首板收盘", "有效 8/10", "全部候选有效 40/50", "低开", "平开", "高开0–3%", "高开3–7%", "高开≥7%", "2/8 · 25.0%", "20/40 · 50.0%"]) assert.ok(band.includes(text), text);
+  assert.ok(html.includes('class="digest-stage">次日</span><span>次日有 2/8'));
+  assert.ok(!band.includes("二板"));
+  assert.ok(!band.includes("<details"));
+});
+
+test("dragon-tiger evidence uses whole-group denominators and never turns partial coverage into 100 percent", () => {
+  const digest = reviewDigest();
+  digest.excellent.distributions.push({
+    key: "first_dragon_tiger_on_list", label: "首板龙虎榜", valid_count: 1, total_count: 10, baseline_valid_count: 2, baseline_total_count: 50, note: "缺失未作未上榜。",
+    buckets: [
+      { label: "已上榜", count: 1, share: 1, baseline_count: 2, baseline_share: 1 },
+      { label: "未上榜", count: 0, share: 0, baseline_count: 0, baseline_share: 0 },
+    ],
+  });
+  const html = excellentPart(render(digest));
+  for (const text of ["已确认上榜</dt><dd>1/10", "已确认未上榜</dt><dd>0/10", "待核验</dt><dd>9/10", "未查到不等于未上榜", "覆盖未全，不计算上榜率", ">1/10</td>", ">2/50</td>"]) assert.ok(html.includes(text), text);
+  assert.ok(!html.includes("100.0%"));
+  assert.ok(!html.includes(">1/1</td>"));
+});
+
+test("next-day buckets with no effective samples show unknown instead of zero denominators", () => {
+  const digest = reviewDigest();
+  const opening = { key: "next_open_pct", label: "次日开盘", valid_count: 0, total_count: 10, baseline_valid_count: 0, baseline_total_count: 50, note: "待补齐",
+    buckets: [{ label: "低开", count: 0, share: null, baseline_count: 0, baseline_share: null }] };
+  digest.excellent.distributions = [opening];
+  let html = excellentPart(render(digest));
+  assert.ok(html.includes("有效 0/10"));
+  assert.ok(html.includes("全部候选有效 0/50"));
+  assert.ok(html.includes("<td>待核验</td>"));
+  assert.ok(!html.includes("0/0"));
+  digest.excellent.sample_size = 0;
+  opening.total_count = 0;
+  opening.baseline_total_count = 0;
+  html = excellentPart(render(digest));
+  assert.ok(html.includes("本组暂无样本"));
+  assert.ok(html.includes("全部候选暂无样本"));
+  assert.ok(!html.includes("0/0"));
+});
+
+test("legacy optional fields stay unknown and the follow-up band is visible for all three groups", () => {
+  const html = render();
+  assert.equal(html.split('class="digest-followup-band"').length - 1, 3);
+  for (const text of ["有效样本待核验", "已确认上榜</dt><dd>0/10", "已确认未上榜</dt><dd>0/10", "待核验</dt><dd>10/10", "日期待核验", "涨幅缺失", "来源：未提供"]) assert.ok(html.includes(text), text);
+  assert.ok(!html.includes("undefined"));
+  assert.ok(!html.includes("NaN"));
+});
+
+test("stock follow-up evidence preserves zero open, real source and reason, and avoids duplicate leader opening", () => {
+  const digest = reviewDigest();
+  Object.assign(digest.excellent.stocks[0], { next_trade_date: "2026-10-08", next_open_pct: 0, first_dragon_tiger_on_list: true, first_dragon_tiger_source: "测试来源A", first_dragon_tiger_reason: "首板当日涨幅偏离值" });
+  Object.assign(digest.leaders.stocks[0], { next_trade_date: "2026-10-08", next_open_pct: 3.6, first_dragon_tiger_on_list: null });
+  const html = render(digest);
+  const candidate = excellentPart(html);
+  for (const text of ["次日开盘</b> 2026-10-08 · 0.0%", "相对首板收盘", "已确认上榜 · 来源：测试来源A", "榜单附注：首板当日涨幅偏离值"]) assert.ok(candidate.includes(text), text);
+  const leaders = html.slice(html.indexOf('class="digest-portrait digest-leaders"'));
+  assert.equal(leaders.split("+3.6%").length - 1, 1);
+  assert.ok(leaders.includes("次日开盘</b> 2026-10-08 · +3.6%"));
+  assert.ok(leaders.includes("二板 2026-10-08"));
+  assert.ok(!leaders.includes("<dt>开盘涨幅</dt>"));
+  assert.ok(leaders.includes("首板龙虎榜</b> 待核验 · 来源：未提供"));
 });
 
 test("four compact tiles include industry with theme and label tied or low top shares without implying concentration", () => {
