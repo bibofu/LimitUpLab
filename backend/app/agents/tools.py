@@ -1,13 +1,17 @@
 """Tool registry and schemas for the first-board Agent."""
 
 import os
-import re
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
 from typing import Any, Literal
 
 from app.agents.first_board import build_first_board_ratings
+from app.agents.event_query import (
+    filter_limit_up_events,
+    group_limit_up_events,
+    sort_limit_up_events as _sort_limit_up_events,
+)
 from app.agents.query_contract import (
     MARKET_SEGMENT_LABELS,
     MARKET_SEGMENT_PREFIXES,
@@ -907,29 +911,6 @@ TOOL_SCHEMAS = [
         returns="Search result titles, URLs, source domains, snippets and retrieval time.",
     ),
 ]
-
-
-def _sort_limit_up_events(
-    events: list[LimitUpEvent],
-    *,
-    sort_by: str,
-    sort_order: str,
-) -> list[LimitUpEvent]:
-    """Sort event rows deterministically while preserving a symbol tie-breaker."""
-
-    # The inline predicate/value callback is evaluated by the surrounding operation for each
-    # supplied item.
-    key_getters = {
-        "board_height": lambda event: event.board_height,
-        "first_limit_time": lambda event: event.first_limit_time,
-        "amount": lambda event: event.amount,
-        "turnover_rate": lambda event: event.turnover_rate,
-        "break_count": lambda event: event.break_count,
-    }
-    key_getter = key_getters.get(sort_by, key_getters["board_height"])
-    # The key compares symbol.
-    ordered = sorted(events, key=lambda event: event.symbol)
-    return sorted(ordered, key=key_getter, reverse=sort_order == "desc")
 
 
 V1_AGENT_PROFILE = "v1_close_review"
@@ -1941,41 +1922,15 @@ class AgentToolRegistry:
             else:
                 effective_status = "closed"
         effective_closed_only = effective_status == "closed"
-        if board_height is not None:
-            target_events = [
-                event for event in target_events if event.board_height == board_height
-            ]
-        if min_board_height is not None:
-            target_events = [
-                event for event in target_events if event.board_height >= min_board_height
-            ]
-        if effective_market is not None:
-            prefixes = MARKET_SEGMENT_PREFIXES[effective_market]
-            target_events = [
-                event for event in target_events if event.symbol.startswith(prefixes)
-            ]
-        if effective_status == "failed":
-            target_events = [event for event in target_events if not event.closed_limit]
-        elif effective_status == "broken_intraday":
-            target_events = [event for event in target_events if event.break_count > 0]
-        elif effective_status == "closed":
-            target_events = [event for event in target_events if event.closed_limit]
-        if query:
-            normalized_query = query.strip().lower()
-            target_events = [
-                event
-                for event in target_events
-                if normalized_query in event.symbol.lower()
-                or normalized_query in event.name.lower()
-                or normalized_query in event.industry.lower()
-                or normalized_query in event.concept.lower()
-            ]
-
-        if highest_only and target_events:
-            max_height = max(event.board_height for event in target_events)
-            target_events = [
-                event for event in target_events if event.board_height == max_height
-            ]
+        target_events = filter_limit_up_events(
+            target_events,
+            board_height=board_height,
+            min_board_height=min_board_height,
+            market=effective_market,
+            event_status=effective_status,
+            query=query,
+            highest_only=highest_only,
+        )
 
         effective_sort_by = normalize_sort_field(sort_by) or "board_height"
         effective_sort_order = normalize_sort_order(sort_order) or (
@@ -1988,54 +1943,9 @@ class AgentToolRegistry:
         )
         matched_count = len(target_events)
         unique_stock_count = len({event.symbol for event in target_events})
-        sector_summary: list[dict[str, Any]] = []
-        unclassified_event_count = 0
-        if group_by in {"industry", "concept"}:
-            grouped: dict[str, list[LimitUpEvent]] = {}
-            for event in target_events:
-                raw_label = str(getattr(event, group_by) or "").strip()
-                labels = (
-                    [raw_label]
-                    if group_by == "industry" and raw_label
-                    else [
-                        item.strip()
-                        for item in re.split(r"[+＋、,，;/；|]", raw_label)
-                        if item.strip()
-                    ]
-                )
-                if not labels:
-                    unclassified_event_count += 1
-                    continue
-                for label in dict.fromkeys(labels):
-                    grouped.setdefault(label, []).append(event)
-            for label, group_events in grouped.items():
-                stocks_by_symbol = {
-                    event.symbol: event.name for event in group_events
-                }
-                sector_summary.append(
-                    {
-                        "sector_name": label,
-                        "unique_stock_count": len(stocks_by_symbol),
-                        "limit_up_event_count": len(group_events),
-                        "trade_day_count": len(
-                            {event.trade_date for event in group_events}
-                        ),
-                        "stocks": [
-                            {"symbol": symbol, "name": name}
-                            for symbol, name in sorted(stocks_by_symbol.items())
-                        ],
-                    }
-                )
-            # The key compares unique stock count (negated for descending order), then limit up
-            # event count (negated for descending order), then sector name.
-            sector_summary.sort(
-                key=lambda item: (
-                    -item["unique_stock_count"],
-                    -item["limit_up_event_count"],
-                    item["sector_name"],
-                )
-            )
-            sector_summary = sector_summary[: max(1, min(limit, 100))]
+        sector_summary, unclassified_event_count = group_limit_up_events(
+            target_events, group_by=group_by, limit=limit,
+        )
         target_events = target_events[: max(1, min(limit, 100))]
         if selected_dates:
             trade_date_text = selected_dates[-1].isoformat()
