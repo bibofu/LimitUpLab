@@ -54,6 +54,8 @@ def repository():
     repo = Mock(spec=SQLiteFirstBoardRepository)
     repo.list_predictions_between.return_value = []
     repo.list_post_bars.return_value = []
+    repo.list_enrichment_for_date.return_value = []
+    repo.list_daily_bars_for_symbols.return_value = []
     return repo
 
 

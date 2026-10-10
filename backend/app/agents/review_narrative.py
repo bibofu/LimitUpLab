@@ -3,9 +3,10 @@
 from collections import Counter
 from typing import Annotated, Any
 
-from pydantic import BaseModel, Field, StringConstraints
+from pydantic import BaseModel, Field, StringConstraints, model_validator
 
 from app.models import ReviewAgentPick, ReviewAgentReportResponse
+from app.review_research_models import ReviewInsight
 
 
 ReviewSentence = Annotated[
@@ -19,12 +20,19 @@ class ReviewNarrative(BaseModel):
     headline: Annotated[
         str, StringConstraints(strict=True, strip_whitespace=True, min_length=8, max_length=100)
     ]
+    insights: list[ReviewInsight] = Field(min_length=3, max_length=3)
     main_findings: list[ReviewSentence] = Field(default_factory=list, max_length=8)
     successful_patterns: list[ReviewSentence] = Field(default_factory=list, max_length=8)
     failed_patterns: list[ReviewSentence] = Field(default_factory=list, max_length=8)
     scoring_bias: list[ReviewSentence] = Field(default_factory=list, max_length=8)
     adjustment_suggestions: list[ReviewSentence] = Field(default_factory=list, max_length=8)
     confidence: float = Field(ge=0, le=1, allow_inf_nan=False, strict=True)
+
+    @model_validator(mode="after")
+    def require_distinct_scopes(self):
+        if {item.scope for item in self.insights} != {"candidate", "market", "synthesis"}:
+            raise ValueError("Review insights must cover candidates, market leaders, and synthesis")
+        return self
 
 
 def authoritative_review_facts(

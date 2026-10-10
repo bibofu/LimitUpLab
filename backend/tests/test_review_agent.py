@@ -43,6 +43,10 @@ class FakeReviewLLMProvider(LLMProvider):
         return LLMResult(
             content=(
                 '{"headline":"首板特征需要更多同口径样本才能比较。",'
+                '"insights":['
+                '{"scope":"candidate","title":"候选观察","detail":"候选表现仍需更完整的有效样本进行对比。"},'
+                '{"scope":"market","title":"市场观察","detail":"市场高标需要回溯首板当日的数据进行对比。"},'
+                '{"scope":"synthesis","title":"后续观察","detail":"后续样本需要核对相同首板特征是否重复出现。"}],'
                 '"main_findings":["高分首板样本需要持续追踪兑现率"],'
                 '"successful_patterns":["成功样本通常有更强后续高点"],'
                 '"failed_patterns":["失败样本需要复盘市场环境和题材持续性"],'

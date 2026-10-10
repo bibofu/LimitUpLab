@@ -22,6 +22,10 @@ from app.services.sample_data import SAMPLE_EVENTS
 BASE, END = date(2026, 9, 29), date(2026, 9, 30)
 VALID = {
     "headline": "本批样本较少，首板位置、市值与首封时间的差异暂不足以判断。",
+    "insights": [
+        {"scope": scope, "title": title, "detail": "当前样本数量有限，需要结合各项有效分母对照，暂不能推断未来走强概率。"}
+        for scope, title in [("candidate", "候选特征观察"), ("market", "全市场高标观察"), ("synthesis", "后续核对重点")]
+    ],
     "main_findings": ["样本观察期较短，暂不足以判断评分体系长期有效。"],
     "successful_patterns": ["成功组需继续积累同口径样本，再检验题材结构的解释力。"],
     "confidence": 0.6,
@@ -59,6 +63,8 @@ class ReviewProvider(LLMProvider):
 
 def repository():
     repo = Mock(spec=SQLiteFirstBoardRepository)
+    repo.list_enrichment_for_date.return_value = []
+    repo.list_daily_bars_for_symbols.return_value = []
     repo.list_predictions_between.return_value = [AgentPrediction(
         prediction_id=f"test-{index}", trade_date=BASE, symbol=f"00000{index + 1}",
         name="研究样本", score=90, rating="A", confidence=0.8,
@@ -109,11 +115,13 @@ def build(provider):
 def test_llm_gets_authoritative_facts_even_when_planner_omits_comparison_tools():
     provider = ReviewProvider({**VALID, "sample_size": 999, "success_count": 999,
                                "top_pick_promotion_rate": 0.99,
-                               "feature_summary": {"positive_count": 999}})
+                               "feature_summary": {"positive_count": 999},
+                               "feature_research": {"candidate": {"positive_count": 999}}})
     report = build(provider)
     assert report.generation_mode == "llm"
     assert report.llm_model == "offline-review-model"
     assert report.summary_headline == VALID["headline"]
+    assert [item.scope for item in report.summary_insights] == ["candidate", "market", "synthesis"]
     assert len(provider.calls) == 2 and len(provider.checks) == 1
     assert [trace.name for trace in report.tool_results] == ["daily_high_score_picks"]
     facts = json.loads(provider.calls[-1][1])["tool_facts"]["authoritative_review"]
@@ -129,6 +137,9 @@ def test_llm_gets_authoritative_facts_even_when_planner_omits_comparison_tools()
     assert facts["feature_comparison"]["main_findings"]
     assert report.feature_summary.model_dump(mode="json") == facts["feature_comparison"]["feature_summary"]
     assert report.feature_summary.positive_count == 1
+    assert report.feature_research.candidate.positive_count == 1
+    assert report.feature_research.model_dump(mode="json") == facts["deterministic_report"]["feature_research"]
+    assert report.feature_research.market.positive_count == 0
     assert [card.key for card in report.feature_summary.cards] == ["position", "market_cap", "first_seal"]
     assert facts["deterministic_report"]["promotion_comparisons"]
     assert "三日走势尚未完整缓存" in facts["deterministic_report"]["warnings"]
@@ -145,6 +156,8 @@ def test_llm_gets_authoritative_facts_even_when_planner_omits_comparison_tools()
     {}, {"main_findings": []}, {**VALID, "main_findings": ["   "]},
     {**VALID, "main_findings": [42]}, {**VALID, "headline": "   "},
     {**VALID, "headline": "特征" * 51}, {**VALID, "headline": 42},
+    {**VALID, "insights": []}, {**VALID, "insights": [VALID["insights"][0]] * 3},
+    {**VALID, "insights": [{**item, "detail": "空" * 181} for item in VALID["insights"]]},
     {**VALID, "confidence": 2}, {**VALID, "confidence": float("nan")},
     {**VALID, "confidence": True}, "not json",
 ])
@@ -158,13 +171,14 @@ def test_invalid_or_empty_narrative_explicitly_falls_back(payload):
     assert provider.checks == []
 
 
-def test_one_short_headline_is_enough_and_prompt_does_not_request_long_sections():
-    provider = ReviewProvider({"headline": VALID["headline"], "confidence": 0.6})
+def test_narrative_requires_three_distinct_evidence_sections_without_legacy_long_lists():
+    provider = ReviewProvider({"headline": VALID["headline"], "insights": VALID["insights"], "confidence": 0.6})
     report = build(provider)
     assert report.generation_mode == "llm"
     assert report.summary_headline == VALID["headline"]
     shape = json.loads(provider.calls[-1][1])["required_json_shape"]
-    assert set(shape) == {"headline", "confidence"}
+    assert set(shape) == {"headline", "insights", "confidence"}
+    assert [item["scope"] for item in shape["insights"]] == ["candidate", "market", "synthesis"]
 
 
 @pytest.mark.parametrize("compliance,expected", [
@@ -241,11 +255,13 @@ def test_legacy_report_json_remains_readable():
     payload = build(DisabledLLMProvider()).model_dump(mode="json", exclude={
         "generation_mode", "llm_model", "generation_note",
         "feature_summary", "summary_headline",
+        "feature_research", "summary_insights",
     })
     restored = ReviewAgentReportResponse.model_validate_json(json.dumps(payload))
     assert restored.generation_mode == "legacy"
     assert restored.llm_model is None and restored.generation_note is None
     assert restored.feature_summary is None and restored.summary_headline is None
+    assert restored.feature_research is None and restored.summary_insights == []
     assert restored.generated_by == REVIEW_AGENT_VERSION
 
 

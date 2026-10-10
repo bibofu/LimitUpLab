@@ -187,6 +187,10 @@ class CapturingProvider(LLMProvider):
             self.report_input = json.loads(user_prompt)
             content = json.dumps({
                 "headline": "截至当日的后续行情尚未就绪，暂时不能比较首板特征。",
+                "insights": [
+                    {"scope": scope, "title": "本期观察", "detail": "截至当日可用数据不足，暂时无法比较样本特征。"}
+                    for scope in ("candidate", "market", "synthesis")
+                ],
                 "main_findings": ["截至当日的后续行情尚未就绪，暂时不能评价兑现。"],
                 "adjustment_suggestions": ["补齐截至日内的必要行情后再作描述性比较。"],
                 "confidence": 0.5,
@@ -206,6 +210,8 @@ def test_model_tool_facts_and_report_use_cutoff_results_instead_of_saved_future_
     repo = Mock(spec=SQLiteFirstBoardRepository)
     repo.list_predictions_between.return_value = [saved_prediction]
     repo.list_post_bars.return_value = bars()
+    repo.list_enrichment_for_date.return_value = []
+    repo.list_daily_bars_for_symbols.return_value = []
     monkeypatch.setattr("app.agents.review_agent.build_agent_evaluation", lambda **kwargs: SimpleNamespace(
         prediction_count=1, evaluations=[future_evaluation],
     ))

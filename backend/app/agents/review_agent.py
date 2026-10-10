@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from collections import Counter
 from dataclasses import dataclass
-from datetime import date
+from datetime import date, time
 from statistics import median
 from app.services.prediction_time import assess_prediction_time
 from typing import Any, Iterable
@@ -26,6 +26,8 @@ from app.services.evaluation_agent import build_agent_evaluation
 from app.services.llm_provider import DisabledLLMProvider, LLMProvider, get_llm_provider
 from app.agents.review_narrative import ReviewNarrative, authoritative_review_facts
 from app.agents.review_features import build_review_feature_summary
+from app.agents.review_feature_study import build_feature_study
+from app.agents.review_research import build_feature_research, deterministic_research_insights
 from app.agents.react_runtime.compliance import review_answer
 from app.services.outcome_completeness import build_top10_outcome_completeness
 from app.services.review_as_of import (
@@ -40,7 +42,7 @@ from app.services.promotion_calendar import (
 )
 
 
-REVIEW_AGENT_VERSION = "review-agent-tool-use-v10-compact-features"
+REVIEW_AGENT_VERSION = "review-agent-tool-use-v11-outcome-feature-research"
 
 
 @dataclass(frozen=True)
@@ -99,7 +101,7 @@ class ReviewAgentToolbox:
         else:
             observed_dates = sorted({
                 event.trade_date for event in events
-                if start_date <= event.trade_date <= end_date
+                if event.trade_date <= end_date
             })
             self.promotion_calendar = (
                 load_promotion_calendar(observed_dates[0], observed_dates[-1])
@@ -428,6 +430,13 @@ def build_review_agent_report(
         promotion_comparisons=promotion_comparisons,
         excluded_time_count=excluded_time_count,
     )
+    research = build_feature_research(
+        candidate_study=feature_comparison["candidate_study"], events=events,
+        repository=active_repository, end_date=end_date,
+        trade_dates=toolbox.promotion_calendar.trade_dates,
+    )
+    fallback.feature_research = research
+    fallback.summary_insights = deterministic_research_insights(research)
     if toolbox.evaluation_scope.get("candidates_truncated"):
         fallback.warnings.append("上游评估未返回完整区间候选，本报告只描述入选样本，不代表完整区间或全市场。")
     fallback.warnings.extend(
@@ -469,10 +478,11 @@ def build_review_agent_report(
             promotion_comparisons=promotion_comparisons,
         )
         report.warnings = fallback.warnings
+        report.feature_research = research
         report.excluded_time_prediction_count = excluded_time_count
         report.generation_mode = "llm"
         report.llm_model = result.model
-        report.generation_note = "LLM 根据本次真实特征对比生成简短解读，统计仍由确定性代码计算。"
+        report.generation_note = "LLM 根据候选表现与全市场高标的首板事实生成解读，特征统计和分组比例由代码计算。"
         return report
     except (ValueError, TypeError):
         fallback.generation_note = "LLM 未返回有效且有解释内容的总结，已回退到基于本地事实的规则总结。"
@@ -641,11 +651,12 @@ def _review_position_label(prediction: AgentPrediction | None) -> str | None:
     primary = position.get("primary")
     if not isinstance(primary, dict):
         return None
+    if primary.get("regime") == "unclassified":
+        return None
     label = primary.get("label")
     if not isinstance(label, str):
         return None
-    normalized = label.strip()
-    return normalized or None
+    return _category(label)
 
 
 def _post_bars_for_pick(
@@ -914,6 +925,7 @@ def _report_from_payload(
         promotion_comparisons=fallback.promotion_comparisons,
         feature_summary=fallback.feature_summary,
         summary_headline=payload.get("headline"),
+        summary_insights=payload.get("insights", []),
         main_findings=[*fallback.main_findings, *_string_list(payload.get("main_findings"))],
         successful_patterns=_merge_texts(
             fallback.successful_patterns,
@@ -942,16 +954,23 @@ def _report_from_payload(
 # Define the review writer's evidence requirements and research-only output boundary.
 def _review_report_system_prompt() -> str:
     return (
-        "你是复盘解读助手。只根据 authoritative_review.feature_comparison.feature_summary "
-        "的三项结构化对比，用一句自然中文说明本期哪些特征在表现较好样本中更常见。"
-        "只返回JSON：headline和confidence。headline控制在60个汉字左右，最多100字符。"
-        "优先首板位置，其次流通市值和首次封板时间；挑最有区分度的特征，不重复表内全部数字。"
-        "市值区间重叠或样本不足时保留关键限制；不足时直接说明不能判断。"
-        "如提到首封时间，直接说哪组更早或更晚，不用‘反向’等含糊术语，也不假定越早越好。"
-        "两组按首板至观察日收盘涨跌分组，不是次日评价标签。组内位置占比不是该位置股票的胜率。"
-        "这是本批描述性观察，不能写成选股规律、因果或未来预测。不要输出字段路径、英文标签、"
-        "评分调参方案、长报告、买卖、仓位、目标价或收益承诺。前向验证资格以forward_validation为准，"
-        "收盘基线和历史补算不能当盘前前向验证；页面会单独说明样本口径，无需在headline重复。"
+        "你是首板复盘研究助手。目标是帮助用户理解：候选中表现好和不好的票首板时有什么差异，"
+        "全市场后来连到3板以上的票首板时有什么特征，哪些线索值得在后续样本继续核对。"
+        "唯一统计依据是authoritative_review.deterministic_report.feature_research，不能自行补数字。"
+        "只返回JSON：headline、insights、confidence。headline用一句话点出本期重点，最多100字符。"
+        "insights必须恰好3项，scope分别为candidate、market、synthesis，各有title和detail。"
+        "title为直白结论(2–28字)，detail每条80–160字、最多180字符，包含结论、1至2个关键对比和必要限制。"
+        "candidate要同时说明较好组与较差组的特征差异；market解释3板组的首板特征，并对照未达3板组；"
+        "synthesis明确两套样本哪些线索一致、哪些不一致，给出下一轮复盘应重点核对的2项特征。"
+        "优先首板位置、市值、首封，再结合炸板和换手；不要机械复述全部表格或只写泛泛风险提示。"
+        "特征buckets的positive_rate是具有该特征的已观察样本中正例占比，baseline_rate仅是该字段"
+        "有效样本基准；不同字段、两类样本和不同窗口不能混用分母。null比例表示不足，不能补0或自行计算。"
+        "候选正负是首板后累计涨跌，观察长度可能不同；市场正例是同轮连续1→2→3板，未达3板不等于亏损。"
+        "本批比例不是未来概率，不能用赢家组内占比替代条件比例。小样本或单边缺失不声称明显、稳定或显著。"
+        "首板字段缺失须承认，严禁使用股票成为高标之后的位置市值替代；代表股只能解释已追溯案例。"
+        "方向分歧、区间重叠应明确，不能强行给统一结论；如提及首封直接说哪组更早或更晚，不用反向等含糊词。"
+        "禁止因果保证、买卖、仓位、目标价和收益承诺，不自动调评分。前向资格只按forward_validation，"
+        "收盘基线和补算不是盘前验证。数据与窗口不足时给出具体缺口，避免泛化为选股规则。"
     )
 
 
@@ -969,6 +988,10 @@ def _review_report_user_prompt(
             "tool_facts": facts,
             "required_json_shape": {
                 "headline": "一句简短的特征解读，最多100字符",
+                "insights": [
+                    {"scope": scope, "title": "这一组的核心结论", "detail": "用80至160字结合实际数字解释特征差异与限制"}
+                    for scope in ("candidate", "market", "synthesis")
+                ],
                 "confidence": 0.0,
             },
         },
@@ -1051,6 +1074,11 @@ def _build_feature_comparison(
         "success_count": len(success),
         "failed_count": len(failed),
         "feature_summary": build_review_feature_summary(success, failed).model_dump(mode="json"),
+        "candidate_study": build_feature_study(
+            success, failed, excluded_count=len(evaluations) - len(profiles),
+            basis="候选按追踪窗口内首板至最新可用收盘的累计涨跌分组，各样本观察长度可能不同；持平、缺基准或无后续行情不入组。",
+            positive_outcome="正收益",
+        ).model_dump(mode="json"),
         "main_findings": [],
         "successful_patterns": [],
         "failed_patterns": [],
@@ -1132,12 +1160,6 @@ def _review_feature_profile(
     enrichment = facts.get("enrichment")
     if not isinstance(enrichment, dict):
         enrichment = {}
-    position = enrichment.get("position")
-    if not isinstance(position, dict):
-        position = {}
-    primary_position = position.get("primary")
-    if not isinstance(primary_position, dict):
-        primary_position = {}
     return {
         "label": group_label,
         "score": prediction.score,
@@ -1147,7 +1169,7 @@ def _review_feature_profile(
         "turnover_rate": _number(facts.get("turnover_rate")),
         "industry": _category(facts.get("industry")),
         "concept": _category(facts.get("concept")),
-        "position_label": _category(primary_position.get("label")),
+        "position_label": _review_position_label(prediction),
         "industry_limit_up_count": _number(
             facts.get("same_industry_limit_up_count")
         ),
@@ -1334,10 +1356,10 @@ def _outcome_pattern(
 # A None result represents the unavailable or inapplicable branch; callers must check it before
 # using the value.
 def _time_to_minutes(value: Any) -> float | None:
-    text = str(value or "")
     try:
-        hours, minutes = text.split(":", maxsplit=2)[:2]
-        return float(int(hours) * 60 + int(minutes))
+        parsed = time.fromisoformat(str(value or ""))
+        # Collectors use midnight as a missing-time sentinel, not an early seal.
+        return None if parsed == time(0) else float(parsed.hour * 60 + parsed.minute)
     except (TypeError, ValueError):
         return None
 
@@ -1368,7 +1390,7 @@ def _category(value: Any) -> str | None:
     text = str(value or "").strip()
     if not text or text.lower() in {"none", "null", "unknown"}:
         return None
-    if text in {"-", "--", "未知", "未分类", "其他"}:
+    if text in {"-", "--", "未知", "未分类", "其他", "结构不明", "数据不足"}:
         return None
     return text
 
