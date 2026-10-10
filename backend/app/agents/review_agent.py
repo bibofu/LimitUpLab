@@ -42,7 +42,7 @@ from app.services.promotion_calendar import (
 )
 
 
-REVIEW_AGENT_VERSION = "review-agent-tool-use-v13-readable-feature-directions"
+REVIEW_AGENT_VERSION = "review-agent-tool-use-v14-bound-feature-labels"
 
 
 @dataclass(frozen=True)
@@ -967,6 +967,8 @@ def _review_report_system_prompt() -> str:
         "不要把‘两组都出现某特征’当成相对各自对照组的方向一致；不要比较两组正例的绝对值后宣称共性。"
         "面向用户只写自然语言，不输出cross_checks等字段名；市场组称‘3板组/未达3板组’，不能称正负收益组。"
         "方向核对只覆盖市值、首封、换手三项，不能泛化成所有首板特征均相反。"
+        "引用位置分布时必须把类别全名与其同一组占比成对核对：只用该scope对应features的summary/detail，"
+        "不能把中位平台突破改称高位突破，不能借用其他组、工具或个案的标签。找不到对应原值就省略该断言。"
         "优先首板位置、市值、首封，再结合炸板和换手；不要机械复述全部表格或只写泛泛风险提示。"
         "特征buckets的positive_rate是具有该特征的已观察样本中正例占比，baseline_rate仅是该字段"
         "有效样本基准；不同字段、两类样本和不同窗口不能混用分母。null比例表示不足，不能补0或自行计算。"
