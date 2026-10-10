@@ -510,14 +510,11 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
 
             <DailyTopReview
               activeSelection={selectedReviewSelection}
-              adjustmentSuggestions={report.adjustment_suggestions}
-              failedPatterns={report.failed_patterns}
               failedPicks={failedPicks}
               groupedPicks={reviewDates}
               onSelect={(selection) => setActiveReviewSelection(selection === trackDates[0] ? null : selection)}
               picks={selectedPicks}
               promotionComparisons={promotionComparisons}
-              successfulPatterns={report.successful_patterns}
               successfulPicks={successfulPicks}
               trackDates={trackDates}
             />
@@ -541,33 +538,26 @@ const REVIEW_MISS_SELECTION = "review-miss";
  */
 function DailyTopReview({
   activeSelection,
-  adjustmentSuggestions,
-  failedPatterns,
   failedPicks,
   groupedPicks,
   onSelect,
   picks,
   promotionComparisons,
-  successfulPatterns,
   successfulPicks,
   trackDates,
 }: {
   activeSelection: string;
-  adjustmentSuggestions: string[];
-  failedPatterns: string[];
   failedPicks: ReviewAgentPick[];
   groupedPicks: Record<string, ReviewAgentPick[]>;
   onSelect: (selection: string) => void;
   picks: ReviewAgentPick[];
   promotionComparisons: Record<string, ReviewPromotionComparison>;
-  successfulPatterns: string[];
   successfulPicks: ReviewAgentPick[];
   trackDates: string[];
 }) {
   const isSuccessView = activeSelection === REVIEW_SUCCESS_SELECTION;
   const isMissView = activeSelection === REVIEW_MISS_SELECTION;
   const isPerformanceView = isSuccessView || isMissView;
-  const activePatterns = isSuccessView ? successfulPatterns : isMissView ? failedPatterns : [];
   const title = isSuccessView ? "表现较好" : isMissView ? "表现较差" : activeSelection;
   const description = isSuccessView
     ? `共 ${successfulPicks.length} 只，按首板至最新收盘收益率从高到低展示前 10 只`
@@ -659,18 +649,6 @@ function DailyTopReview({
               <em>{promotionComparison.next_trade_date ?? "下一交易日待确认"}</em>
             </span>
           </div>
-        ) : null}
-
-        {isPerformanceView && activePatterns.length > 0 ? (
-          <details className={`review-pattern-summary ${isSuccessView ? "summary-success" : "summary-miss"}`}>
-            <summary>{isSuccessView ? "查看正收益组历史画像" : "查看负收益组历史画像"}</summary>
-            <ul>
-              {activePatterns.slice(0, 3).map(/* Transform each entry in activePatterns.slice(0, 3) into the result used by DailyTopReview. */ (pattern) => <li key={pattern}>{pattern}</li>)}
-            </ul>
-            {isMissView && adjustmentSuggestions.length > 0 ? (
-              <p><b>待验证的评分假设：</b>{adjustmentSuggestions[0]}</p>
-            ) : null}
-          </details>
         ) : null}
 
         <ReviewPickTable

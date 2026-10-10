@@ -1352,52 +1352,6 @@ td span {
   font-size: 20px;
 }
 
-.review-pattern-summary {
-  display: grid;
-  gap: 8px;
-  padding: 12px 14px;
-  border: 1px solid #e9edf2;
-  border-radius: 8px;
-  background: #f9fafb;
-}
-
-.review-pattern-summary > strong {
-  color: #202938;
-  font-size: 14px;
-}
-
-.review-pattern-summary ul {
-  display: grid;
-  gap: 5px;
-  margin: 0;
-  padding-left: 18px;
-  color: #526071;
-  font-size: 13px;
-  line-height: 1.55;
-}
-
-.review-pattern-summary li:first-child {
-  color: #202938;
-  font-weight: 700;
-}
-
-.review-pattern-summary p {
-  margin: 0;
-  color: #526071;
-  font-size: 13px;
-  line-height: 1.55;
-}
-
-.review-pattern-summary.summary-success {
-  border-color: #abefc6;
-  background: #f6fef9;
-}
-
-.review-pattern-summary.summary-miss {
-  border-color: #fecdca;
-  background: #fff7f5;
-}
-
 .review-agent-empty {
   display: grid;
   gap: 4px;
