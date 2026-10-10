@@ -6,6 +6,7 @@ import { createElement } from "react";
 import { renderToStaticMarkup } from "react-dom/server";
 import ts from "typescript";
 import { createReviewReportResource } from "../src/utils/reviewReportResource.ts";
+import type { ReviewReportState } from "../src/utils/reviewReportResource.ts";
 import type { ReviewAgentReportResponse } from "../src/types.ts";
 
 function deferred<T>() {
@@ -34,6 +35,7 @@ test("facts publish before the model; duplicate mounts share both requests and a
   const base = deferred<ReviewAgentReportResponse>();
   const model = deferred<ReviewAgentReportResponse>();
   const calls: unknown[] = [];
+  const published: ReviewReportState[] = [];
   const resource = createReviewReportResource(params => {
     calls.push(params);
     return params.use_llm ? model.promise : base.promise;
@@ -41,7 +43,7 @@ test("facts publish before the model; duplicate mounts share both requests and a
   const stop = resource.subscribe(day, () => {});
   const first = resource.load(day);
   stop();
-  resource.subscribe(day, () => {});
+  resource.subscribe(day, () => { published.push(resource.getState(day)); });
   await resource.load(day);
   assert.equal(calls.length, 1);
   const facts = report();
@@ -50,6 +52,8 @@ test("facts publish before the model; duplicate mounts share both requests and a
   assert.equal(resource.getState(day).report, facts);
   assert.equal(resource.getState(day).loading, false);
   assert.equal(resource.getState(day).generating, true);
+  assert.equal(resource.getState(day).summaryStatus, "generating");
+  assert.ok(published.filter(state => state.report === facts).every(state => state.summaryStatus === "generating"));
   await resource.load(day);
   await resource.regenerate(day);
   assert.deepEqual(calls, [false, true].map(use_llm => ({ end_date: day, top_per_day: 10, follow_days: 5, use_llm })));
@@ -57,6 +61,7 @@ test("facts publish before the model; duplicate mounts share both requests and a
   model.resolve(refreshed);
   await first;
   assert.equal(resource.getState(day).report, refreshed);
+  assert.equal(resource.getState(day).summaryStatus, "ready");
   await resource.load(day);
   assert.equal(calls.length, 2);
 });
@@ -72,17 +77,70 @@ test("generation failure preserves the report and is retried only by an explicit
   resource.subscribe(day, () => {});
   await resource.load(day);
   assert.equal(resource.getState(day).summaryError, "模型请求超时");
+  assert.equal(resource.getState(day).summaryStatus, "error");
   assert.equal(resource.getState(day).report?.sample_size, 10);
   await resource.load(day);
   assert.equal(modelCalls, 1);
   const pending = resource.regenerate(day);
   await resource.regenerate(day);
   assert.equal(modelCalls, 2);
+  assert.equal(resource.getState(day).summaryStatus, "generating");
   assert.equal(resource.getState(day).report?.sample_size, 10);
   retry.resolve(report({ generation_note: "模型不可用，使用规则总结" }));
   await pending;
   assert.equal(resource.getState(day).summaryError, null);
   assert.equal(resource.getState(day).report?.generation_mode, "deterministic");
+  assert.equal(resource.getState(day).summaryStatus, "fallback");
+});
+
+test("initial rule notes are published only with generating, and a real model fallback has its own stage", async () => {
+  const pending = deferred<ReviewAgentReportResponse>();
+  const baseline = report({ generation_note: "本次未启用 LLM，展示规则总结。" });
+  const published: ReviewReportState[] = [];
+  const resource = createReviewReportResource(async params => params.use_llm ? pending.promise : baseline);
+  resource.subscribe(day, () => { published.push(resource.getState(day)); });
+  const task = resource.load(day);
+  await flush();
+  const withFacts = published.filter(state => state.report !== null);
+  assert.equal(withFacts.length, 1);
+  assert.equal(withFacts[0].summaryStatus, "generating");
+  assert.equal(withFacts[0].summaryError, null);
+  pending.resolve(report({ generation_note: "LLM 请求失败，已回退规则总结。" }));
+  await task;
+  assert.equal(resource.getState(day).summaryStatus, "fallback");
+  assert.equal(resource.getState(day).report?.generation_note, "LLM 请求失败，已回退规则总结。");
+});
+
+test("regeneration keeps the previous model report while exposing the current request stage", async () => {
+  const old = report({ generation_mode: "llm", generation_note: "旧模型生成说明" });
+  const pending = deferred<ReviewAgentReportResponse>();
+  let calls = 0;
+  const resource = createReviewReportResource(async params => {
+    if (!params.use_llm) return report();
+    return ++calls === 1 ? old : pending.promise;
+  });
+  resource.subscribe(day, () => {});
+  await resource.load(day);
+  assert.equal(resource.getState(day).summaryStatus, "ready");
+  const task = resource.regenerate(day);
+  assert.equal(resource.getState(day).summaryStatus, "generating");
+  assert.equal(resource.getState(day).summaryError, null);
+  assert.equal(resource.getState(day).report, old);
+  pending.reject(new Error("本次模型超时"));
+  await task;
+  assert.equal(resource.getState(day).summaryStatus, "error");
+  assert.equal(resource.getState(day).summaryError, "本次模型超时");
+  assert.equal(resource.getState(day).report, old);
+});
+
+test("unidentified model results are errors rather than a claimed successful summary or rule fallback", async () => {
+  for (const generation_mode of ["legacy", undefined] as const) {
+    const resource = createReviewReportResource(async () => report({ generation_mode }));
+    resource.subscribe(day, () => {});
+    await resource.load(day);
+    assert.equal(resource.getState(day).summaryStatus, "error");
+    assert.equal(resource.getState(day).summaryError, "模型总结来源未确认，请重试。");
+  }
 });
 
 test("late responses or errors after a date switch never publish into the new date", async () => {
@@ -127,6 +185,7 @@ test("leaving before facts arrive does not start a model call; returning resumes
   base.resolve(report());
   await load;
   assert.equal(modelCalls, 0);
+  assert.equal(resource.getState(day).summaryStatus, "idle");
   resource.subscribe(day, () => {});
   await resource.load(day);
   assert.equal(modelCalls, 1);
@@ -165,6 +224,7 @@ test("refreshing facts invalidates an in-flight model without automatically payi
     assert.equal(resource.getState(day).generating, true);
     await resource.refreshFacts();
     assert.equal(resource.getState(day).report, refreshedFacts);
+    assert.equal(resource.getState(day).summaryStatus, "idle");
     if (fails) oldModel.reject(new Error("旧请求错误"));
     else oldModel.resolve(report({ sample_size: 10, generation_mode: "llm", main_findings: ["旧模型总结"] }));
     await original;
@@ -172,6 +232,7 @@ test("refreshing facts invalidates an in-flight model without automatically payi
     assert.equal(resource.getState(day).report, refreshedFacts);
     assert.equal(resource.getState(day).summaryError, null);
     assert.equal(resource.getState(day).generating, false);
+    assert.equal(resource.getState(day).summaryStatus, "idle");
     assert.deepEqual(calls.map(value => [value.use_llm, value.refresh_facts]), [[false, undefined], [true, undefined], [false, true]]);
     await resource.regenerate(day);
     assert.equal(calls.length, 4);
@@ -191,12 +252,14 @@ test("refresh discards inactive cached reports and refetches them without repeat
   await resource.refreshFacts();
   assert.equal(calls.length, 2);
   assert.equal(resource.getState(day).report, null);
+  assert.equal(resource.getState(day).summaryStatus, "idle");
   resource.subscribe(day, () => {});
   await resource.load(day);
   await resource.load(day);
   assert.equal(calls.length, 3);
   assert.deepEqual(calls[2], { end_date: day, top_per_day: 10, follow_days: 5, use_llm: false, refresh_facts: true });
   assert.equal(resource.getState(day).report?.sample_size, 20);
+  assert.equal(resource.getState(day).summaryStatus, "idle");
 });
 
 test("refresh supersedes an unfinished initial fact load and its late errors", async () => {
@@ -237,6 +300,7 @@ test("failed fact refresh removes the stale narrative and retries fresh facts wi
   assert.equal(refreshAttempts, 2);
   assert.equal(modelCalls, 1);
   assert.equal(resource.getState(day).report?.generation_mode, "deterministic");
+  assert.equal(resource.getState(day).summaryStatus, "idle");
 });
 
 function compile(path: string, imports: Record<string, unknown> = {}, exports = "") {

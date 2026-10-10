@@ -1,11 +1,14 @@
 import type { ReviewAgentReportResponse } from "../types";
 
+export type ReviewSummaryStatus = "idle" | "generating" | "ready" | "fallback" | "error";
+
 export interface ReviewReportState {
   report: ReviewAgentReportResponse | null;
   loading: boolean;
   error: string | null;
   generating: boolean;
   summaryError: string | null;
+  summaryStatus: ReviewSummaryStatus;
 }
 
 type FetchReview = (params: {
@@ -39,7 +42,7 @@ export function createReviewReportResource(fetchReview: FetchReview) {
         }
       }
       entry = {
-        state: { report: null, loading: false, error: null, generating: false, summaryError: null },
+        state: { report: null, loading: false, error: null, generating: false, summaryError: null, summaryStatus: "idle" },
         listeners: new Set(),
         attemptedSummary: false,
         revision: 0,
@@ -57,21 +60,29 @@ export function createReviewReportResource(fetchReview: FetchReview) {
     end_date: endDate, top_per_day: 10, follow_days: 5, use_llm: useLlm,
     ...(refreshFacts ? { refresh_facts: true } : {}),
   });
-  const generate = async (endDate: string, entry: Entry, retry = false) => {
-    if (!entry.state.report || entry.state.loading || entry.state.generating) return;
+  const generate = async (endDate: string, entry: Entry, retry = false, facts?: ReviewAgentReportResponse) => {
+    const currentReport = facts ?? entry.state.report;
+    if (!currentReport || (!facts && entry.state.loading) || entry.state.generating) return;
     if (entry.attemptedSummary && !retry) return;
     entry.attemptedSummary = true;
     const revision = entry.revision;
-    publish(entry, { generating: true, summaryError: null });
+    // Publish initial facts and the pending summary together: rule data is not a failed model call.
+    publish(entry, { report: currentReport, loading: false, generating: true, summaryError: null, summaryStatus: "generating" });
     try {
       const report = await request(endDate, true);
       if (revision !== entry.revision) return;
       // Adopt facts and narrative together, since outcomes may have been backfilled in between.
-      publish(entry, { report, generating: false });
+      const summaryStatus = report.generation_mode === "llm" ? "ready"
+        : report.generation_mode === "deterministic" ? "fallback" : "error";
+      publish(entry, {
+        report, generating: false, summaryStatus,
+        summaryError: summaryStatus === "error" ? "模型总结来源未确认，请重试。" : null,
+      });
     } catch (error) {
       if (revision !== entry.revision) return;
       publish(entry, {
         generating: false,
+        summaryStatus: "error",
         summaryError: error instanceof Error ? error.message : "复盘总结生成失败，请重试",
       });
     }
@@ -91,9 +102,12 @@ export function createReviewReportResource(fetchReview: FetchReview) {
       const report = await request(endDate, false, entry.refreshFacts);
       if (revision !== entry.revision) return;
       entry.refreshFacts = false;
-      publish(entry, { report, loading: false });
       // Leaving before local facts arrive should not initiate a paid request.
-      if (entry.listeners.size) await generate(endDate, entry);
+      if (entry.listeners.size && !entry.attemptedSummary) {
+        await generate(endDate, entry, false, report);
+      } else {
+        publish(entry, { report, loading: false, summaryStatus: "idle" });
+      }
     } catch (error) {
       if (revision !== entry.revision) return;
       publish(entry, {
@@ -118,7 +132,7 @@ export function createReviewReportResource(fetchReview: FetchReview) {
         entry.revision++;
         entry.attemptedSummary = true;
         entry.refreshFacts = true;
-        publish(entry, { report: null, loading: false, error: null, generating: false, summaryError: null });
+        publish(entry, { report: null, loading: false, error: null, generating: false, summaryError: null, summaryStatus: "idle" });
         if (entry.listeners.size) pending.push(load(endDate));
       }
       await Promise.all(pending);

@@ -1,6 +1,7 @@
 import { useCallback, useEffect, useSyncExternalStore } from "react";
 import { fetchReviewAgentReport } from "../api";
 import { createReviewReportResource } from "../utils/reviewReportResource";
+export type { ReviewSummaryStatus } from "../utils/reviewReportResource";
 
 // The page uses a fixed Top10 / D+5 scope; each cutoff date has its own state and request.
 const reviews = createReviewReportResource(fetchReviewAgentReport);
