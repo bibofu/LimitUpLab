@@ -51,8 +51,7 @@ function DigestPortrait({ group, number, title, threshold, dates, summarySource 
         {leaders || item.dimension.startsWith("next_") ? <span className="digest-stage">{item.dimension.startsWith("next_") ? "次日" : item.dimension.startsWith("second_") ? "二板" : "首板"}</span> : null}
         <span>{item.text}</span>
       </li>)}</ul> : <p className="digest-empty">特征证据尚不足，暂不概括画像。</p>}
-    {group.sample_size > 0 ? <CompactDistributions distributions={group.distributions} /> : null}
-    <NextOpenDistribution group={group} />
+    {group.sample_size > 0 ? <CompactDistributions group={group} /> : null}
     {group.notes.length ? <details className="digest-more-notes"><summary>数据说明 · {group.notes.length} 条</summary><ul>{group.notes.map((note, index) => <li key={index}>{note}</li>)}</ul></details> : null}
     <DistributionEvidence distributions={group.distributions} leaders={leaders} />
     <StockEvidence stocks={group.stocks} leaders={leaders} />
@@ -61,42 +60,39 @@ function DigestPortrait({ group, number, title, threshold, dates, summarySource 
 
 function NextOpenDistribution({ group }: { group: DigestGroup }) {
   const opening = group.distributions.find(item => item.key === "next_open_pct");
-  const baseline = group.scope !== "leaders" && opening?.baseline_valid_count != null;
-  return <section className="digest-next-open" aria-label="次日开盘">
-      <div className="digest-next-open-heading"><h4>次日开盘</h4><span>相对首板收盘</span></div>
-      <p className="digest-next-open-coverage">{!group.sample_size ? "本组暂无样本" : opening ? `有效 ${opening.valid_count}/${group.sample_size}` : "有效样本待核验"}{baseline ? opening!.baseline_total_count === 0 ? " · 全部候选暂无样本" : ` · 全部候选有效 ${opening!.baseline_valid_count}/${opening!.baseline_total_count ?? "未提供"}` : ""}</p>
-      {opening?.buckets.length ? <table><thead><tr><th>开盘分档</th><th>本组</th>{baseline ? <th>全部候选</th> : null}</tr></thead><tbody>
-        {opening.buckets.map(bucket => <tr key={bucket.label}><th scope="row">{bucket.label}</th>
-          <td>{openingBucket(bucket.count, opening.valid_count, bucket.share)}</td>
-          {baseline ? <td>{openingBucket(bucket.baseline_count, opening.baseline_valid_count, bucket.baseline_share)}</td> : null}
-        </tr>)}
-      </tbody></table> : <p className="digest-empty">{group.sample_size ? "次日开盘数据待补齐。" : "本组暂无样本。"}</p>}
-    </section>;
+  return <section className="digest-feature-strip digest-next-open" aria-label="次日开盘">
+    {opening ? <LeadingBucket distribution={opening} compare={group.scope !== "leaders"} />
+      : <div className="digest-strip-metric"><strong>次日开盘</strong><span className="digest-empty">有效样本待核验</span></div>}
+  </section>;
 }
 
-function CompactDistributions({ distributions }: { distributions: DigestDistribution[] }) {
+function CompactDistributions({ group }: { group: DigestGroup }) {
   const preferred = [["position_label"], ["concepts", "industry"], ["float_market_cap"], ["first_limit_time"]];
   const chosen = preferred.flatMap(keys => {
-    const metrics = keys.flatMap(key => distributions.find(item => item.key === key) ?? []);
+    const metrics = keys.flatMap(key => group.distributions.find(item => item.key === key) ?? []);
     return metrics.length ? [metrics] : [];
   });
-  return <div className="digest-feature-strips" aria-label="主要首板特征分布">{chosen.map(metrics =>
+  return <div className="digest-feature-strips" aria-label="首板特征与次日开盘">{chosen.map(metrics =>
     <div className="digest-feature-strip" key={metrics[0].key}>{metrics.map(distribution => <LeadingBucket key={distribution.key} distribution={distribution} />)}</div>
-  )}</div>;
+  )}<NextOpenDistribution group={group} /></div>;
 }
 
-function LeadingBucket({ distribution }: { distribution: DigestDistribution }) {
-  const buckets = [...distribution.buckets].filter(item => item.count > 0).sort((left, right) => right.count - left.count);
+function LeadingBucket({ distribution, compare = false }: { distribution: DigestDistribution; compare?: boolean }) {
+  const buckets = distribution.valid_count > 0
+    ? [...distribution.buckets].filter(item => item.count > 0).sort((left, right) => right.count - left.count) : [];
   const bucket = buckets[0];
   const inline = distribution.key === "industry";
-  const rank = bucket ? buckets[1]?.count === bucket.count ? "并列最多" : "占比最多" : "";
+  const opening = distribution.key === "next_open_pct";
+  const tiedCount = bucket ? buckets.filter(item => item.count === bucket.count).length : 0;
+  const rank = tiedCount > 1 ? opening ? `并列最多之一（${tiedCount}档）` : "并列最多" : bucket ? "占比最多" : "";
   return <div className={`digest-strip-metric${inline ? " digest-strip-inline" : ""}`}>
-    <strong>{distribution.label}{rank ? <em>{rank}</em> : null}</strong>
+    <strong>{opening ? "次日开盘" : distribution.label}{rank ? <em>{rank}</em> : null}</strong>
     {bucket ? <div className="digest-strip-value">
       <span>{bucket.label}</span><b>{bucket.count}/{distribution.valid_count}{bucket.share === null ? "" : ` · ${percent(bucket.share)}`}</b>
       {bucket.share === null || inline ? null : <i aria-hidden="true"><i style={{ width: `${Math.max(0, Math.min(1, bucket.share)) * 100}%` }} /></i>}
     </div> : <span className="digest-empty">暂无有效数据</span>}
-    <small>有效 {distribution.valid_count}/{distribution.total_count}</small>
+    {opening && compare && bucket ? <small className="digest-opening-baseline">该档全部候选 {openingBucket(bucket.baseline_count, distribution.baseline_valid_count, bucket.baseline_share)}</small> : null}
+    <small>有效 {distribution.valid_count}/{distribution.total_count}{opening ? " · 相对首板收盘" : ""}</small>
   </div>;
 }
 

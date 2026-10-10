@@ -7,6 +7,7 @@ import { renderToStaticMarkup } from "react-dom/server";
 import { MemoryRouter } from "react-router-dom";
 import ts from "typescript";
 import { reviewDigest } from "./reviewDigestFixture.ts";
+import type { DigestDistribution } from "../src/reviewDigestTypes.ts";
 
 const url = new URL("../src/components/ReviewDigest.tsx", import.meta.url);
 const require = createRequire(url);
@@ -18,6 +19,18 @@ new Function("require", "module", "exports", compiled)(require, module, module.e
 const render = (digest = reviewDigest()) => renderToStaticMarkup(createElement(MemoryRouter, null,
   createElement(module.exports.ReviewDigestContent, { digest, summarySource: "AI解读" })));
 const excellentPart = (html: string) => html.slice(html.indexOf('class="digest-portrait digest-excellent"'), html.indexOf('class="digest-portrait digest-weak"'));
+const nextOpeningCard = (html: string) => {
+  const start = html.indexOf('class="digest-feature-strip digest-next-open"');
+  assert.ok(start >= 0, "next-day opening belongs to the compact feature row");
+  return html.slice(start, html.indexOf("<details", start));
+};
+const openingDistribution = (patch: Partial<DigestDistribution> = {}): DigestDistribution => ({
+  key: "next_open_pct", label: "次日开盘", valid_count: 8, total_count: 10, baseline_valid_count: 40, baseline_total_count: 50, note: "按相邻真实交易日开盘计算。",
+  buckets: ["低开", "平开", "高开0–3%", "高开3–7%", "高开≥7%"].map((label, index) => ({
+    label, count: [2, 1, 3, 1, 1][index], share: [0.25, 0.125, 0.375, 0.125, 0.125][index],
+    baseline_count: [10, 1, 20, 4, 5][index], baseline_share: [0.25, 0.025, 0.5, 0.1, 0.125][index],
+  })), ...patch,
+});
 
 test("digest preserves the authoritative headline, four-part order and separate five-day windows", () => {
   const digest = reviewDigest();
@@ -47,7 +60,7 @@ test("full distributions and baseline denominators are available only in a close
   const evidenceStart = html.indexOf('<details class="digest-evidence"><summary>完整特征分布 · 与全部候选对照</summary>');
   assert.ok(evidenceStart > 0);
   const preview = html.slice(0, evidenceStart);
-  assert.ok(preview.includes('aria-label="主要首板特征分布"'));
+  assert.ok(preview.includes('aria-label="首板特征与次日开盘"'));
   assert.ok(preview.includes("5/8 · 62.5%"));
   assert.ok(!preview.includes("<table>"));
   assert.ok(!preview.includes("其他位置"));
@@ -77,6 +90,8 @@ test("small and empty groups never invent percentages or a completed AI explanat
   assert.ok(html.includes("没有符合条件的可观察样本"));
   assert.ok(!html.includes("无样本时不应展示的旧模型解释"));
   assert.ok(!html.includes("AI解读"));
+  assert.ok(!html.includes('class="digest-feature-strips"'));
+  assert.ok(!html.includes('aria-label="次日开盘"'));
 });
 
 test("candidate stock evidence exposes dates, observed days, returns and original first-board fields", () => {
@@ -101,23 +116,59 @@ test("leader evidence separates first and second boards and preserves actual zer
   for (const text of ["全集", "全部候选", "基准", "未提供"]) assert.ok(!distribution.includes(text), text);
 });
 
-test("next-day openings show all five source buckets and field-specific candidate baseline", () => {
+test("next-day card shows its leading bucket and independent baseline while all five buckets stay in closed evidence", () => {
   const digest = reviewDigest();
-  digest.excellent.distributions.push({
-    key: "next_open_pct", label: "次日开盘", valid_count: 8, total_count: 10, baseline_valid_count: 40, baseline_total_count: 50, note: "按相邻真实交易日开盘计算。",
-    buckets: ["低开", "平开", "高开0–3%", "高开3–7%", "高开≥7%"].map((label, index) => ({
-      label, count: [2, 1, 3, 1, 1][index], share: [0.25, 0.125, 0.375, 0.125, 0.125][index],
-      baseline_count: [10, 1, 20, 4, 5][index], baseline_share: [0.25, 0.025, 0.5, 0.1, 0.125][index],
-    })),
-  });
+  digest.excellent.distributions.push(openingDistribution());
   digest.excellent.observations.push({ id: "next", dimension: "next_open_pct", text: "次日有 2/8 的有效样本低开。", support_count: 2, sample_size: 8 });
   digest.excellent.selected_observation_ids = ["next"];
   const html = excellentPart(render(digest));
-  const opening = html.slice(html.indexOf('class="digest-next-open"'), html.indexOf('<details class="digest-more-notes">'));
-  for (const text of ["次日开盘", "相对首板收盘", "有效 8/10", "全部候选有效 40/50", "低开", "平开", "高开0–3%", "高开3–7%", "高开≥7%", "2/8 · 25.0%", "20/40 · 50.0%"]) assert.ok(opening.includes(text), text);
+  const card = nextOpeningCard(html);
+  for (const text of ["次日开盘", "占比最多", "高开0–3%", "3/8 · 37.5%", "该档全部候选 20/40 · 50.0%", "有效 8/10 · 相对首板收盘"]) assert.ok(card.includes(text), text);
+  for (const text of ["低开", "平开", "高开3–7%", "高开≥7%", "3/10", "20/50", "<table", "<details"]) assert.ok(!card.includes(text), text);
   assert.ok(html.includes('class="digest-stage">次日</span><span>次日有 2/8'));
-  assert.ok(!opening.includes("二板"));
-  assert.ok(!opening.includes("<details"));
+  const evidenceStart = html.indexOf('<details class="digest-evidence">');
+  assert.ok(!html.slice(0, evidenceStart).includes("<table"));
+  const evidence = html.slice(evidenceStart);
+  for (const text of ["低开", "平开", "高开0–3%", "高开3–7%", "高开≥7%", "2/8 · 25.0%", "20/40 · 50.0%", "全部候选有效 40/50"]) assert.ok(evidence.includes(text), text);
+  assert.ok(!html.includes('class="digest-evidence" open'));
+});
+
+test("a tied leading opening is marked as one of all tied buckets and compares that exact bucket", () => {
+  const digest = reviewDigest();
+  const distribution = openingDistribution();
+  distribution.buckets = distribution.buckets.map((bucket, index) => ({ ...bucket, count: [3, 3, 1, 1, 0][index], share: [0.375, 0.375, 0.125, 0.125, 0][index] }));
+  digest.excellent.distributions = [distribution];
+  const card = nextOpeningCard(excellentPart(render(digest)));
+  for (const text of ["并列最多之一（2档）", "低开", "3/8 · 37.5%", "该档全部候选 10/40 · 25.0%"]) assert.ok(card.includes(text), text);
+  for (const text of ["平开", "20/40", "6/8", "75.0%", "集中", "占比最多"]) assert.ok(!card.includes(text), text);
+});
+
+test("unknown opening shares are not recomputed and unavailable baselines never become zero percent", () => {
+  const digest = reviewDigest();
+  const distribution = openingDistribution();
+  distribution.buckets = distribution.buckets.map(bucket => ({ ...bucket, share: null, baseline_share: null }));
+  digest.excellent.distributions = [distribution];
+  let card = nextOpeningCard(excellentPart(render(digest)));
+  assert.ok(card.includes("3/8"));
+  assert.ok(card.includes("该档全部候选 20/40"));
+  for (const text of ["37.5%", "50.0%", 'style="width']) assert.ok(!card.includes(text), text);
+  for (const valid of [0, null]) {
+    distribution.baseline_valid_count = valid;
+    distribution.buckets = distribution.buckets.map(bucket => ({ ...bucket, baseline_count: valid }));
+    card = nextOpeningCard(excellentPart(render(digest)));
+    for (const text of ["0/0", "0.0%", "/null", "undefined"]) assert.ok(!card.includes(text), text);
+    if (card.includes("该档全部候选")) assert.ok(card.includes("待核验"));
+  }
+});
+
+test("leader opening cards never present candidate baselines even if the response carries them", () => {
+  const digest = reviewDigest();
+  digest.leaders.distributions.push(openingDistribution());
+  const html = render(digest);
+  const card = nextOpeningCard(html.slice(html.indexOf('class="digest-portrait digest-leaders"')));
+  for (const text of ["高开0–3%", "3/8 · 37.5%", "有效 8/10"]) assert.ok(card.includes(text), text);
+  assert.ok(!card.includes("全部候选"));
+  assert.ok(!card.includes("20/40"));
 });
 
 test("next-day buckets with no effective samples show unknown instead of zero denominators", () => {
@@ -126,6 +177,10 @@ test("next-day buckets with no effective samples show unknown instead of zero de
     buckets: [{ label: "低开", count: 0, share: null, baseline_count: 0, baseline_share: null }] };
   digest.excellent.distributions = [opening];
   let html = excellentPart(render(digest));
+  const card = nextOpeningCard(html);
+  assert.ok(card.includes("暂无有效数据"));
+  assert.ok(!card.includes("低开"));
+  assert.ok(!card.includes("占比最多"));
   assert.ok(html.includes("有效 0/10"));
   assert.ok(html.includes("全部候选有效 0/50"));
   assert.ok(html.includes("<td>待核验</td>"));
@@ -134,14 +189,15 @@ test("next-day buckets with no effective samples show unknown instead of zero de
   opening.total_count = 0;
   opening.baseline_total_count = 0;
   html = excellentPart(render(digest));
+  assert.ok(!html.includes('class="digest-feature-strips"'));
   assert.ok(html.includes("本组暂无样本"));
   assert.ok(html.includes("全部候选暂无样本"));
   assert.ok(!html.includes("0/0"));
 });
 
-test("legacy optional fields stay unknown and standalone next-day openings remain visible for all three groups", () => {
+test("legacy optional fields stay unknown and a compact opening placeholder remains in all nonempty groups", () => {
   const html = render();
-  assert.equal(html.split('<section class="digest-next-open" aria-label="次日开盘">').length - 1, 3);
+  assert.equal(html.split('class="digest-feature-strip digest-next-open"').length - 1, 3);
   for (const text of ["有效样本待核验", "日期待核验", "涨幅缺失"]) assert.ok(html.includes(text), text);
   assert.ok(!html.includes("龙虎榜"));
   assert.ok(!html.includes("undefined"));
@@ -162,7 +218,7 @@ test("stock next-day evidence preserves dates and zero open while avoiding dupli
   assert.ok(!leaders.includes("<dt>开盘涨幅</dt>"));
 });
 
-test("four compact tiles include industry with theme and label tied or low top shares without implying concentration", () => {
+test("five peer tiles include industry with theme and next-day outcome without implying concentration", () => {
   const digest = reviewDigest();
   const base = digest.excellent.distributions[0];
   const bucket = (label: string, count: number) => ({ label, count, share: count / 10, baseline_count: null, baseline_share: null });
@@ -171,12 +227,15 @@ test("four compact tiles include industry with theme and label tied or low top s
     { ...base, key: "industry", label: "首板行业", valid_count: 10, buckets: [bucket("行业甲", 4), bucket("行业乙", 3), bucket("行业丙", 3)] },
     { ...base, key: "float_market_cap", label: "首板流通市值" },
     { ...base, key: "first_limit_time", label: "首板首次封板时间" },
+    openingDistribution(),
   );
   digest.excellent.notes = ["各特征分别统计，不表示共同出现。", "题材可有多个标签。"];
   const html = excellentPart(render(digest));
   const preview = html.slice(0, html.indexOf('<details class="digest-more-notes">'));
   assert.equal(preview.split('class="digest-feature-strip"').length - 1, 4);
-  for (const text of ["首板题材", "题材甲", "2/10 · 20.0%", "并列最多", "首板行业", "行业甲", "4/10 · 40.0%", "占比最多"]) assert.ok(preview.includes(text), text);
+  assert.equal(preview.split('class="digest-feature-strip digest-next-open"').length - 1, 1);
+  assert.ok(preview.indexOf("首板首次封板时间") < preview.indexOf('aria-label="次日开盘"'));
+  for (const text of ["首板题材", "题材甲", "2/10 · 20.0%", "并列最多", "首板行业", "行业甲", "4/10 · 40.0%", "占比最多", "次日开盘"]) assert.ok(preview.includes(text), text);
   assert.ok(!preview.includes("集中"));
   assert.ok(!preview.includes("各特征分别统计"));
   assert.ok(html.includes('<details class="digest-more-notes"><summary>数据说明 · 2 条</summary>'));
