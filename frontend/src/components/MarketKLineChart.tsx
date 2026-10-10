@@ -66,13 +66,13 @@ export function MarketKLineChart({
   const chartRef = useRef<IChartApi | null>(null);
   const [activeBar, setActiveBar] = useState<MarketCandleBar | null>(null);
   const orderedBars = useMemo(
-    /* Derive orderedBars from the listed dependencies, reusing it until those dependencies change. */ () => [...bars].sort(/* Compare two entries using the explicit tie-break order for MarketKLineChart. */ (left, right) => chartTimeKey(left.time).localeCompare(chartTimeKey(right.time))),
+    () => [...bars].sort((left, right) => chartTimeKey(left.time).localeCompare(chartTimeKey(right.time))),
     [bars],
   );
   const latestBar = orderedBars[orderedBars.length - 1] ?? null;
   const displayedBar = activeBar ?? latestBar;
   const displayedIndex = displayedBar
-    ? orderedBars.findIndex(/* Locate the entry matching the active identity/time used by MarketKLineChart. */ (item) => chartTimeKey(item.time) === chartTimeKey(displayedBar.time))
+    ? orderedBars.findIndex((item) => chartTimeKey(item.time) === chartTimeKey(displayedBar.time))
     : -1;
   const isIntraday = mode !== "daily";
   const intradayReferencePrice = isIntraday && referencePrice && referencePrice > 0
@@ -88,32 +88,32 @@ export function MarketKLineChart({
       ? ((displayedBar.close / comparisonPrice) - 1) * 100
       : null;
   const intradayAverages = useMemo(
-    /* Derive intradayAverages from the listed dependencies, reusing it until those dependencies change. */ () => intradayAverageValues(orderedBars, mode === "intraday5d"),
+    () => intradayAverageValues(orderedBars, mode === "intraday5d"),
     [mode, orderedBars],
   );
   const intradayAverage = isIntraday && displayedIndex >= 0
     ? intradayAverages[displayedIndex]
     : null;
   const barsByTime = useMemo(
-    /* Derive barsByTime from the listed dependencies, reusing it until those dependencies change. */ () => new Map(orderedBars.map(/* Transform each entry in orderedBars into the result used by MarketKLineChart. */ (bar) => [chartTimeKey(bar.time), bar])),
+    () => new Map(orderedBars.map((bar) => [chartTimeKey(bar.time), bar])),
     [orderedBars],
   );
   const movingAverages = useMemo(
-    /* Derive movingAverages from the listed dependencies, reusing it until those dependencies change. */ () => movingAverageReadout(orderedBars, displayedIndex),
+    () => movingAverageReadout(orderedBars, displayedIndex),
     [displayedIndex, orderedBars],
   );
   const volumeRatios = useMemo(
-    /* Derive volumeRatios from the listed dependencies, reusing it until those dependencies change. */ () => rollingVolumeRatios(orderedBars, 5),
+    () => rollingVolumeRatios(orderedBars, 5),
     [orderedBars],
   );
   const displayedVolumeRatio =
     displayedIndex >= 0 ? volumeRatios[displayedIndex] : null;
 
-  useEffect(/* Synchronize MarketKLineChart with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
+  useEffect(() => {
     setActiveBar(null);
   }, [bars, mode]);
 
-  useEffect(/* Synchronize MarketKLineChart with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
+  useEffect(() => {
     const container = chartContainerRef.current;
     if (!container || orderedBars.length === 0) {
       return undefined;
@@ -196,7 +196,7 @@ export function MarketKLineChart({
         lastValueVisible: true,
         priceFormat: { type: "price", precision: 2, minMove: 0.01 },
       });
-      const candleData: CandlestickData<Time>[] = orderedBars.map(/* Transform each entry in orderedBars into the result used by MarketKLineChart. */ (bar) => ({
+      const candleData: CandlestickData<Time>[] = orderedBars.map((bar) => ({
         time: toChartTime(bar.time),
         open: bar.open,
         high: bar.high,
@@ -236,7 +236,7 @@ export function MarketKLineChart({
             }
           : { type: "price", precision: 2, minMove: 0.01 },
       });
-      priceSeries.setData(orderedBars.map(/* Transform each entry in orderedBars into the result used by MarketKLineChart. */ (bar) => ({
+      priceSeries.setData(orderedBars.map((bar) => ({
         time: toChartTime(bar.time),
         value: bar.close,
       })));
@@ -303,7 +303,7 @@ export function MarketKLineChart({
       1,
     );
     const secondaryData: HistogramData<Time>[] = mode === "daily"
-      ? orderedBars.flatMap(/* Handle the callback from orderedBars.flatMap within MarketKLineChart. */ (bar, index) => {
+      ? orderedBars.flatMap((bar, index) => {
           const ratio = volumeRatios[index];
           if (ratio === null) {
             return [];
@@ -314,7 +314,7 @@ export function MarketKLineChart({
             color: ratio >= 1 ? `${UP_COLOR}b3` : `${DOWN_COLOR}b3`,
           }];
         })
-      : orderedBars.map(/* Transform each entry in orderedBars into the result used by MarketKLineChart. */ (bar) => ({
+      : orderedBars.map((bar) => ({
           time: toChartTime(bar.time),
           value: bar.volume,
           color: bar.close >= bar.open ? `${UP_COLOR}b3` : `${DOWN_COLOR}b3`,
@@ -337,11 +337,11 @@ export function MarketKLineChart({
     chart.timeScale().fitContent();
     container.dataset.renderMs = (performance.now() - renderStartedAt).toFixed(2);
     container.dataset.pointCount = String(orderedBars.length);
-    const paintFrame = requestAnimationFrame(/* Handle the callback from requestAnimationFrame within MarketKLineChart. */ () => {
+    const paintFrame = requestAnimationFrame(() => {
       container.dataset.paintMs = (performance.now() - renderStartedAt).toFixed(2);
     });
 
-    chart.subscribeCrosshairMove(/* Handle the callback from chart.subscribeCrosshairMove within MarketKLineChart. */ (param) => {
+    chart.subscribeCrosshairMove((param) => {
       if (!param.time || !param.point || param.point.x < 0 || param.point.y < 0) {
         setActiveBar(null);
         return;
@@ -350,7 +350,7 @@ export function MarketKLineChart({
       setActiveBar(barsByTime.get(key) ?? null);
     });
 
-    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => {
+    return () => {
       cancelAnimationFrame(paintFrame);
       // Disposal releases the old canvas and subscriptions when chart inputs change.
       chartRef.current = null;
@@ -389,7 +389,7 @@ export function MarketKLineChart({
         </div>
         {mode === "daily" ? (
           <div className="market-kline-ma" aria-label="移动平均线">
-            {movingAverages.map(/* Transform each entry in movingAverages into the result used by MarketKLineChart. */ (item) => (
+            {movingAverages.map((item) => (
               <span key={item.window} style={{ color: item.color }}>
                 MA{item.window} {item.value === null ? "--" : item.value.toFixed(2)}
               </span>
@@ -417,12 +417,12 @@ export function MarketKLineChart({
  * Build the closing-price moving-average series, omitting points without a full window.
  */
 function movingAverageLine(bars: MarketCandleBar[], window: number): LineData<Time>[] {
-  return bars.flatMap(/* Handle the callback from bars.flatMap within movingAverageLine. */ (bar, index) => {
+  return bars.flatMap((bar, index) => {
     if (index + 1 < window) {
       return [];
     }
     const values = bars.slice(index + 1 - window, index + 1);
-    const value = values.reduce(/* Accumulate the entries into the derived value used by movingAverageLine. */ (total, item) => total + item.close, 0) / window;
+    const value = values.reduce((total, item) => total + item.close, 0) / window;
     return [{ time: toChartTime(bar.time), value: Number(value.toFixed(3)) }];
   });
 }
@@ -437,7 +437,7 @@ function intradayAverageValues(
   let totalAmount = 0;
   let totalVolume = 0;
   let activeSession: string | undefined;
-  return bars.map(/* Transform each entry in bars into the result used by intradayAverageValues. */ (bar) => {
+  return bars.map((bar) => {
     if (resetBySession && bar.session !== activeSession) {
       activeSession = bar.session;
       totalAmount = 0;
@@ -459,7 +459,7 @@ function intradayAverageLine(
   bars: MarketCandleBar[],
   averages: Array<number | null>,
 ): LineData<Time>[] {
-  return bars.flatMap(/* Handle the callback from bars.flatMap within intradayAverageLine. */ (bar, index) => {
+  return bars.flatMap((bar, index) => {
     const value = averages[index];
     return value === null ? [] : [{ time: toChartTime(bar.time), value }];
   });
@@ -473,12 +473,12 @@ function intradayPriceBounds(
   referencePrice: number | null,
   averages: Array<number | null>,
 ): { low: number; high: number } {
-  const averageValues = averages.filter(/* Keep only entries satisfying this predicate for intradayPriceBounds. */ (value): value is number => value !== null);
-  const prices = [...bars.map(/* Transform each entry in bars into the result used by intradayPriceBounds. */ (bar) => bar.close), ...averageValues];
+  const averageValues = averages.filter((value): value is number => value !== null);
+  const prices = [...bars.map((bar) => bar.close), ...averageValues];
   const reference = referencePrice ?? bars[0]?.open ?? prices[0] ?? 1;
   const halfRange = Math.max(
     reference * 0.015,
-    ...prices.map(/* Transform each entry in prices into the result used by intradayPriceBounds. */ (price) => Math.abs(price - reference)),
+    ...prices.map((price) => Math.abs(price - reference)),
   );
   return {
     low: reference - halfRange,
@@ -493,12 +493,12 @@ function movingAverageReadout(
   bars: MarketCandleBar[],
   selectedIndex: number,
 ): MovingAverageValue[] {
-  return MA_CONFIG.map(/* Transform each entry in MA_CONFIG into the result used by movingAverageReadout. */ (config) => {
+  return MA_CONFIG.map((config) => {
     if (selectedIndex + 1 < config.window) {
       return { ...config, value: null };
     }
     const values = bars.slice(selectedIndex + 1 - config.window, selectedIndex + 1);
-    const value = values.reduce(/* Accumulate the entries into the derived value used by movingAverageReadout. */ (total, item) => total + item.close, 0) / config.window;
+    const value = values.reduce((total, item) => total + item.close, 0) / config.window;
     return { ...config, value };
   });
 }
@@ -510,13 +510,13 @@ function rollingVolumeRatios(
   bars: MarketCandleBar[],
   window: number,
 ): Array<number | null> {
-  return bars.map(/* Transform each entry in bars into the result used by rollingVolumeRatios. */ (bar, index) => {
+  return bars.map((bar, index) => {
     if (index < window) {
       return null;
     }
     const baseline = bars
       .slice(index - window, index)
-      .reduce(/* Accumulate the entries into the derived value used by rollingVolumeRatios. */ (total, item) => total + item.volume, 0) / window;
+      .reduce((total, item) => total + item.volume, 0) / window;
     if (baseline <= 0) {
       return null;
     }

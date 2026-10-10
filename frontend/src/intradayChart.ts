@@ -12,7 +12,7 @@ export function toIntradayCandleBars(
   bars: StockIntradayKLineBar[],
   options?: { session?: string; referencePrice?: number | null },
 ): MarketCandleBar[] {
-  return bars.map(/* Transform each entry in bars into the result used by toIntradayCandleBars. */ (bar) => ({
+  return bars.map((bar) => ({
     time: Math.floor(new Date(bar.timestamp).getTime() / 1000),
     label: bar.timestamp.slice(5, 16).replace("T", " "),
     open: bar.open,
@@ -36,7 +36,7 @@ export function toFiveDayIntradayCandleBars(
   if (!history) {
     return [];
   }
-  return history.days.flatMap(/* Handle the callback from history.days.flatMap within toFiveDayIntradayCandleBars. */ (day) =>
+  return history.days.flatMap((day) =>
     toIntradayCandleBars(day.bars, {
       session: day.trade_date,
       referencePrice: day.previous_close,

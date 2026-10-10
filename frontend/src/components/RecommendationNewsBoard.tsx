@@ -91,7 +91,7 @@ export function RecommendationNewsBoard() {
       ) : null}
       {visibleNews.length > 0 ? (
         <div className="recommendation-news-list">
-          {visibleNews.map(/* Transform each entry in visibleNews into the result used by RecommendationNewsBoard. */ (item) => (
+          {visibleNews.map((item) => (
             <article className="recommendation-news-item" key={item.key}>
               <time dateTime={item.publishedAt}>{formatRecommendationNewsTime(item.publishedAt)}</time>
               <div className="recommendation-news-body">
@@ -112,18 +112,18 @@ export function RecommendationNewsBoard() {
             <button
               aria-label="上一页"
               disabled={news.page <= 1}
-              onClick={/* Handle onClick for this control in RecommendationNewsBoard. */ () => setPage(/* Compute page from the latest React state to avoid overwriting intervening updates. */ (value) => Math.max(1, value - 1))}
+              onClick={() => setPage((value) => Math.max(1, value - 1))}
               title="上一页"
               type="button"
             >
               <ChevronLeft size={15} />
             </button>
-            {pageNumbers.map(/* Transform each entry in pageNumbers into the result used by RecommendationNewsBoard. */ (pageNumber) => (
+            {pageNumbers.map((pageNumber) => (
               <button
                 aria-current={pageNumber === news.page ? "page" : undefined}
                 className={pageNumber === news.page ? "active" : undefined}
                 key={pageNumber}
-                onClick={/* Handle onClick for this control in RecommendationNewsBoard. */ () => setPage(pageNumber)}
+                onClick={() => setPage(pageNumber)}
                 type="button"
               >
                 {pageNumber}
@@ -132,7 +132,7 @@ export function RecommendationNewsBoard() {
             <button
               aria-label="下一页"
               disabled={news.page >= news.total_pages}
-              onClick={/* Handle onClick for this control in RecommendationNewsBoard. */ () => setPage(/* Compute page from the latest React state to avoid overwriting intervening updates. */ (value) => Math.min(news.total_pages, value + 1))}
+              onClick={() => setPage((value) => Math.min(news.total_pages, value + 1))}
               title="下一页"
               type="button"
             >
@@ -168,7 +168,7 @@ function marketNewsViewItem(item: FinanceNewsItem): RecommendationNewsViewItem {
 function paginationWindow(current: number, total: number): number[] {
   const visible = Math.min(5, total);
   const start = Math.max(1, Math.min(current - 2, total - visible + 1));
-  return Array.from({ length: visible }, /* Handle the callback from Array.from within paginationWindow. */ (_, index) => start + index);
+  return Array.from({ length: visible }, (_, index) => start + index);
 }
 
 

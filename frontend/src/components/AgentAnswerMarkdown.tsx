@@ -64,8 +64,8 @@ function remarkStockLinks({
   stockMentions?: AgentStockMention[];
 }) {
   const mentions = [...stockMentions]
-    .filter(/* Keep only entries satisfying this predicate for remarkStockLinks. */ (item) => item.name && /^\d{6}$/.test(item.symbol))
-    .sort(/* Compare two entries using the explicit tie-break order for remarkStockLinks. */ (left, right) => right.name.length - left.name.length);
+    .filter((item) => item.name && /^\d{6}$/.test(item.symbol))
+    .sort((left, right) => right.name.length - left.name.length);
 
   return /* Transform the markdown tree when the remark pipeline invokes this plugin. */ (tree: MarkdownNode) => {
     if (mentions.length > 0) {

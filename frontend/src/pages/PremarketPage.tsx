@@ -235,7 +235,7 @@ function RecommendationDraftPanel({
         </div>
         <RecommendationSnapshotDetails snapshot={snapshot} refreshError={refreshError} />
         <div className="rating-top-list">
-          {candidates.map(/* Transform each entry in candidates into the result used by RecommendationDraftPanel. */ (candidate) => {
+          {candidates.map((candidate) => {
             return (
             <Link
               className="rating-top-card"
@@ -265,13 +265,13 @@ function RecommendationDraftPanel({
               {candidate.update_reasons.length > 0 ? (
                 <section className="rating-top-reasons">
                   <strong>收盘后新增信息</strong>
-                  <ul>{candidate.update_reasons.slice(0, 3).map(/* Transform each entry in candidate.update_reasons.slice(0, 3) into the result used by RecommendationDraftPanel. */ (reason) => <li key={reason}>{reason}</li>)}</ul>
+                  <ul>{candidate.update_reasons.slice(0, 3).map((reason) => <li key={reason}>{reason}</li>)}</ul>
                 </section>
               ) : null}
               {candidate.close_information_reasons.length > 0 ? (
                 <section className="rating-top-reasons">
                   <strong>收盘综合分已纳入</strong>
-                  <ul>{candidate.close_information_reasons.slice(0, 2).map(/* Transform each entry in candidate.close_information_reasons.slice(0, 2) into the result used by RecommendationDraftPanel. */ (reason) => <li key={reason}>{reason}</li>)}</ul>
+                  <ul>{candidate.close_information_reasons.slice(0, 2).map((reason) => <li key={reason}>{reason}</li>)}</ul>
                 </section>
               ) : null}
               {candidate.latest_news[0] ? (

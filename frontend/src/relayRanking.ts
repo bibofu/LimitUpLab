@@ -39,12 +39,12 @@ export function rankedRelayCandidates<T extends RelayRankingItem>(
   if (!tradeDate) return [];
   const ranked = items
     .filter(
-      /* Keep only entries satisfying this predicate for rankedRelayCandidates. */ (item) =>
+      (item) =>
         item.strategy === "relay"
         && item.base_trade_date === tradeDate
         && isRelayCandidateSymbol(item.symbol),
     )
-    .sort(/* Compare two entries using the explicit tie-break order for rankedRelayCandidates. */ (left, right) => left.rank - right.rank || left.symbol.localeCompare(right.symbol));
+    .sort((left, right) => left.rank - right.rank || left.symbol.localeCompare(right.symbol));
   return limit === undefined ? ranked : ranked.slice(0, Math.max(0, limit));
 }
 
@@ -55,7 +55,7 @@ export function latestRelayCandidates<T extends RelayRankingItem>(
   items: readonly T[],
   limit?: number,
 ) {
-  const latestTradeDate = items.reduce<string | undefined>(/* Accumulate the entries into the derived value used by latestRelayCandidates. */ (latest, item) => {
+  const latestTradeDate = items.reduce<string | undefined>((latest, item) => {
     if (item.strategy !== "relay" || !isRelayCandidateSymbol(item.symbol)) return latest;
     return latest === undefined || item.base_trade_date > latest
       ? item.base_trade_date
@@ -73,8 +73,8 @@ export function sortFirstBoardByRelayRanking<T extends FirstBoardSortableEvent>(
   relayRanking: readonly RelayRankingItem[],
   ratingScores: ReadonlyMap<string, number>,
 ) {
-  const dynamicRank = new Map(relayRanking.map(/* Transform each entry in relayRanking into the result used by sortFirstBoardByRelayRanking. */ (item) => [item.symbol, item.rank]));
-  return [...events].sort(/* Compare two entries using the explicit tie-break order for sortFirstBoardByRelayRanking. */ (left, right) => {
+  const dynamicRank = new Map(relayRanking.map((item) => [item.symbol, item.rank]));
+  return [...events].sort((left, right) => {
     const leftRank = dynamicRank.get(left.symbol);
     const rightRank = dynamicRank.get(right.symbol);
     if (leftRank !== undefined && rightRank !== undefined) return leftRank - rightRank;

@@ -181,9 +181,9 @@ export function App() {
         </Link>
 
         <nav aria-label="主导航" className="primary-navigation">
-          {primaryNavigation.map(/* Transform each entry in primaryNavigation into the result used by App. */ (item) => (
+          {primaryNavigation.map((item) => (
             <NavLink
-              className={/* Handle className for this control in App. */ ({ isActive }) => (
+              className={({ isActive }) => (
                 isActive
                 || (item.to === "/stocks/limit-up-pool" && stockListPaths.has(location.pathname))
                   ? "active"
@@ -360,18 +360,18 @@ function FirstBoardPoolView({
     tradeDate,
   );
 
-  useEffect(/* Synchronize FirstBoardPoolView with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
+  useEffect(() => {
     let active = true;
     setRatings(initialRatings);
-    if (!tradeDate) return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => { active = false; };
+    if (!tradeDate) return () => { active = false; };
     void fetchFirstBoardRatings(tradeDate, true)
-      .then(/* Apply the resolved asynchronous result to the current view state. */ (response) => {
+      .then((response) => {
         if (active) setRatings(matchingRatings(events, response));
       })
-      .catch(/* Handle this asynchronous failure using the enclosing view's error/fallback state. */ () => {
+      .catch(() => {
         // Keep persisted prediction scores as a partial ordering fallback.
       });
-    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => { active = false; };
+    return () => { active = false; };
   }, [tradeDate, initialRatings]);
 
   return (
@@ -401,15 +401,15 @@ function FirstBoardPoolView({
 function RecentLimitUp({ events }: { events: LimitUpEvent[] }) {
   /** Group recent events by persisted trading date for review. */
 
-  const dateGroups = useMemo(/* Derive dateGroups from the listed dependencies, reusing it until those dependencies change. */ () => {
-    const grouped = events.reduce<Record<string, LimitUpEvent[]>>(/* Accumulate the entries into the derived value used by RecentLimitUp. */ (groups, event) => {
+  const dateGroups = useMemo(() => {
+    const grouped = events.reduce<Record<string, LimitUpEvent[]>>((groups, event) => {
       groups[event.trade_date] = groups[event.trade_date] ?? [];
       groups[event.trade_date].push(event);
       return groups;
     }, {});
-    return Object.entries(grouped).sort(/* Compare two entries using the explicit tie-break order for RecentLimitUp. */ ([left], [right]) => right.localeCompare(left));
+    return Object.entries(grouped).sort(([left], [right]) => right.localeCompare(left));
   }, [events]);
-  const [expandedDates, setExpandedDates] = useState<string[]>(/* Handle the callback from useState within RecentLimitUp. */ () => (
+  const [expandedDates, setExpandedDates] = useState<string[]>(() => (
     dateGroups[0] ? [dateGroups[0][0]] : []
   ));
   const allExpanded = expandedDates.length === dateGroups.length;
@@ -418,9 +418,9 @@ function RecentLimitUp({ events }: { events: LimitUpEvent[] }) {
    * Toggle the expanded state of one date group without changing other groups.
    */
   function toggleDate(tradeDate: string) {
-    setExpandedDates(/* Compute expanded dates from the latest React state to avoid overwriting intervening updates. */ (current) => (
+    setExpandedDates((current) => (
       current.includes(tradeDate)
-        ? current.filter(/* Keep only entries satisfying this predicate for toggleDate. */ (item) => item !== tradeDate)
+        ? current.filter((item) => item !== tradeDate)
         : [...current, tradeDate]
     ));
   }
@@ -435,24 +435,24 @@ function RecentLimitUp({ events }: { events: LimitUpEvent[] }) {
         <div className="recent-groups-actions">
           <button
             type="button"
-            onClick={/* Handle onClick for this control in RecentLimitUp. */ () => setExpandedDates(dateGroups.map(/* Transform each entry in dateGroups into the result used by RecentLimitUp. */ ([date]) => date))}
+            onClick={() => setExpandedDates(dateGroups.map(([date]) => date))}
             disabled={allExpanded}
           >
             <ChevronDown size={16} aria-hidden="true" />
             全部展开
           </button>
-          <button type="button" onClick={/* Handle onClick for this control in RecentLimitUp. */ () => setExpandedDates([])} disabled={expandedDates.length === 0}>
+          <button type="button" onClick={() => setExpandedDates([])} disabled={expandedDates.length === 0}>
             <Minus size={16} aria-hidden="true" />
             全部收起
           </button>
         </div>
       </div>
 
-      {dateGroups.map(/* Transform each entry in dateGroups into the result used by RecentLimitUp. */ ([tradeDate, items], index) => {
+      {dateGroups.map(([tradeDate, items], index) => {
         const expanded = expandedDates.includes(tradeDate);
-        const firstBoardCount = items.filter(/* Keep only entries satisfying this predicate for RecentLimitUp. */ (item) => item.board_height === 1).length;
+        const firstBoardCount = items.filter((item) => item.board_height === 1).length;
         const continuedBoardCount = items.length - firstBoardCount;
-        const maxBoardHeight = Math.max(...items.map(/* Transform each entry in items into the result used by RecentLimitUp. */ (item) => item.board_height));
+        const maxBoardHeight = Math.max(...items.map((item) => item.board_height));
         const contentId = `recent-limit-up-${tradeDate}`;
         return (
           <section className={`recent-date-group ${expanded ? "expanded" : ""}`} key={tradeDate}>
@@ -461,7 +461,7 @@ function RecentLimitUp({ events }: { events: LimitUpEvent[] }) {
               aria-expanded={expanded}
               className="recent-date-toggle"
               type="button"
-              onClick={/* Handle onClick for this control in RecentLimitUp. */ () => toggleDate(tradeDate)}
+              onClick={() => toggleDate(tradeDate)}
             >
               <span className="recent-date-primary">
                 {expanded
@@ -532,7 +532,7 @@ function LimitUpPool({ pools }: { pools: Record<"firstBoard" | "continuedBoard" 
 
   return (
     <nav className="overview-grid" aria-label="涨停池分类">
-      {entries.map(/* Transform each entry in entries into the result used by LimitUpPool. */ (entry) => (
+      {entries.map((entry) => (
         <div className="entry-card resource-entry-card" key={entry.to}>
           <Link className="entry-card-link" to={entry.to}>
             <div className="metric-icon" aria-hidden="true">{entry.icon}</div>
@@ -567,16 +567,16 @@ function StockTable({
 
   const navigate = useNavigate();
   const ratingBySymbol = new Map(
-    (ratings?.candidates ?? []).map(/* Transform each entry in (ratings?.candidates ?? []) into the result used by StockTable. */ (item) => [item.facts.symbol, item]),
+    (ratings?.candidates ?? []).map((item) => [item.facts.symbol, item]),
   );
   const filteredBySymbol = new Map(
-    (ratings?.filtered_out ?? []).map(/* Transform each entry in (ratings?.filtered_out ?? []) into the result used by StockTable. */ (item) => [item.symbol, item]),
+    (ratings?.filtered_out ?? []).map((item) => [item.symbol, item]),
   );
   const dynamicBySymbol = new Map(
-    relayRanking.map(/* Transform each entry in relayRanking into the result used by StockTable. */ (item) => [item.symbol, item]),
+    relayRanking.map((item) => [item.symbol, item]),
   );
   const ratingScores = new Map(
-    (ratings?.candidates ?? []).map(/* Transform each entry in (ratings?.candidates ?? []) into the result used by StockTable. */ (item) => [item.facts.symbol, item.score]),
+    (ratings?.candidates ?? []).map((item) => [item.facts.symbol, item.score]),
   );
   const visibleEvents = variant === "first"
     ? sortFirstBoardByRelayRanking(events, relayRanking, ratingScores)
@@ -609,7 +609,7 @@ function StockTable({
           </tr>
         </thead>
         <tbody>
-          {visibleEvents.map(/* Transform each entry in visibleEvents into the result used by StockTable. */ (event) => {
+          {visibleEvents.map((event) => {
             const rating = ratingBySymbol.get(event.symbol);
             const filtered = filteredBySymbol.get(event.symbol);
             const dynamic = dynamicBySymbol.get(event.symbol);
@@ -620,8 +620,8 @@ function StockTable({
             <tr
               className="stock-row"
               key={`${event.trade_date}-${event.symbol}`}
-              onClick={/* Handle onClick for this control in StockTable. */ () => openStock(event.symbol)}
-              onKeyDown={/* Handle onKeyDown for this control in StockTable. */ (keyboardEvent) => {
+              onClick={() => openStock(event.symbol)}
+              onKeyDown={(keyboardEvent) => {
                 if (keyboardEvent.key === "Enter" || keyboardEvent.key === " ") {
                   keyboardEvent.preventDefault();
                   openStock(event.symbol);
@@ -721,18 +721,18 @@ function StockDetail({ latestTradeDate, ratings }: { latestTradeDate?: string; r
     symbol,
   );
 
-  useEffect(/* Synchronize StockDetail with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
+  useEffect(() => {
     let active = true;
     setStockEvent(null);
     setStockEventLoading(true);
     setStockEventError(null);
     fetchStockEvent(symbol)
-      .then(/* Apply the resolved asynchronous result to the current view state. */ (event) => {
+      .then((event) => {
         if (active) {
           setStockEvent(event);
         }
       })
-      .catch(/* Handle this asynchronous failure using the enclosing view's error/fallback state. */ (caught) => {
+      .catch((caught) => {
         if (active) {
           setStockEventError(caught instanceof Error ? caught.message : "加载涨停事件失败");
         }
@@ -742,12 +742,12 @@ function StockDetail({ latestTradeDate, ratings }: { latestTradeDate?: string; r
           setStockEventLoading(false);
         }
       });
-    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => {
+    return () => {
       active = false;
     };
   }, [symbol]);
 
-  useEffect(/* Synchronize StockDetail with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
+  useEffect(() => {
     if (stockEventLoading) {
       return;
     }
@@ -755,12 +755,12 @@ function StockDetail({ latestTradeDate, ratings }: { latestTradeDate?: string; r
     setStockNews(null);
     setStockNewsLoading(true);
     fetchStockNews(symbol, stockEvent?.name || linkedStockName || undefined, 3)
-      .then(/* Apply the resolved asynchronous result to the current view state. */ (news) => {
+      .then((news) => {
         if (active) {
           setStockNews(news);
         }
       })
-      .catch(/* Handle this asynchronous failure using the enclosing view's error/fallback state. */ () => {
+      .catch(() => {
         if (active) {
           setStockNews(null);
         }
@@ -770,12 +770,12 @@ function StockDetail({ latestTradeDate, ratings }: { latestTradeDate?: string; r
           setStockNewsLoading(false);
         }
       });
-    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => {
+    return () => {
       active = false;
     };
   }, [linkedStockName, stockEvent?.name, stockEventLoading, symbol]);
 
-  useEffect(/* Synchronize StockDetail with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
+  useEffect(() => {
     if (stockEventLoading) {
       return;
     }
@@ -791,14 +791,14 @@ function StockDetail({ latestTradeDate, ratings }: { latestTradeDate?: string; r
     setPositionLoading(Boolean(stockEvent));
     setPositionError(null);
     fetchStockMarketData(symbol, 60, stockEvent?.trade_date)
-      .then(/* Apply the resolved asynchronous result to the current view state. */ (marketData) => {
+      .then((marketData) => {
         if (active) {
           setKline(marketData.kline);
           setLatestClose(marketData.latest_close);
           setPosition(marketData.position);
         }
       })
-      .catch(/* Handle this asynchronous failure using the enclosing view's error/fallback state. */ (caught) => {
+      .catch((caught) => {
         if (active) {
           const message = caught instanceof Error ? caught.message : "加载个股行情失败";
           setKlineError(message);
@@ -816,12 +816,12 @@ function StockDetail({ latestTradeDate, ratings }: { latestTradeDate?: string; r
         }
       });
 
-    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => {
+    return () => {
       active = false;
     };
   }, [marketTradeDate, stockEvent?.trade_date, stockEventLoading, symbol]);
 
-  useEffect(/* Synchronize StockDetail with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
+  useEffect(() => {
     setTradingDayKline([]);
     setTradingDayError(null);
     setTradingDayLoading(false);
@@ -832,7 +832,7 @@ function StockDetail({ latestTradeDate, ratings }: { latestTradeDate?: string; r
     fiveDayCacheKeyRef.current = "";
   }, [marketTradeDate, symbol]);
 
-  useEffect(/* Synchronize StockDetail with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
+  useEffect(() => {
     if (chartMode !== "intraday" || stockEventLoading || !marketTradeDate) {
       return;
     }
@@ -845,13 +845,13 @@ function StockDetail({ latestTradeDate, ratings }: { latestTradeDate?: string; r
     setTradingDayLoading(true);
     setTradingDayError(null);
     fetchStockTradingDayKLine(symbol, 1, tradeDate)
-      .then(/* Apply the resolved asynchronous result to the current view state. */ (bars) => {
+      .then((bars) => {
         if (active) {
           setTradingDayKline(bars);
           tradingDayCacheKeyRef.current = cacheKey;
         }
       })
-      .catch(/* Handle this asynchronous failure using the enclosing view's error/fallback state. */ (caught) => {
+      .catch((caught) => {
         if (active) {
           setTradingDayError(caught instanceof Error ? caught.message : "加载交易日走势失败");
         }
@@ -861,12 +861,12 @@ function StockDetail({ latestTradeDate, ratings }: { latestTradeDate?: string; r
           setTradingDayLoading(false);
         }
       });
-    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => {
+    return () => {
       active = false;
     };
   }, [chartMode, marketTradeDate, stockEventLoading, symbol]);
 
-  useEffect(/* Synchronize StockDetail with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
+  useEffect(() => {
     if (chartMode !== "intraday5d" || stockEventLoading || !marketTradeDate) {
       return;
     }
@@ -878,13 +878,13 @@ function StockDetail({ latestTradeDate, ratings }: { latestTradeDate?: string; r
     setFiveDayLoading(true);
     setFiveDayError(null);
     fetchStockIntradayHistory(symbol, 5, 1, marketTradeDate)
-      .then(/* Apply the resolved asynchronous result to the current view state. */ (history) => {
+      .then((history) => {
         if (active) {
           setFiveDayKline(history);
           fiveDayCacheKeyRef.current = cacheKey;
         }
       })
-      .catch(/* Handle this asynchronous failure using the enclosing view's error/fallback state. */ (caught) => {
+      .catch((caught) => {
         if (active) {
           setFiveDayError(caught instanceof Error ? caught.message : "加载五日分时失败");
         }
@@ -894,19 +894,19 @@ function StockDetail({ latestTradeDate, ratings }: { latestTradeDate?: string; r
           setFiveDayLoading(false);
         }
       });
-    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => {
+    return () => {
       active = false;
     };
   }, [chartMode, marketTradeDate, stockEventLoading, symbol]);
 
-  useEffect(/* Synchronize StockDetail with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
+  useEffect(() => {
     if (stockEventLoading) {
       return;
     }
     const tradeDate = resolvedTradeDate;
     const cachedRating = stockEvent && ratings && ratings.trade_date === tradeDate
       ? ratings.candidates.find(
-          /* Locate the entry matching the active identity/time used by StockDetail. */ (rating) => rating.facts.symbol === symbol,
+          (rating) => rating.facts.symbol === symbol,
         ) ?? null
       : null;
     setFirstBoardRating(cachedRating);
@@ -915,20 +915,20 @@ function StockDetail({ latestTradeDate, ratings }: { latestTradeDate?: string; r
     }
     let active = true;
     fetchFirstBoardRatings(tradeDate, true)
-      .then(/* Apply the resolved asynchronous result to the current view state. */ (ratings) => {
+      .then((ratings) => {
         if (active) {
           setFirstBoardRating(
-            ratings.candidates.find(/* Locate the entry matching the active identity/time used by StockDetail. */ (rating) => rating.facts.symbol === symbol) ?? null,
+            ratings.candidates.find((rating) => rating.facts.symbol === symbol) ?? null,
           );
         }
       })
-      .catch(/* Handle this asynchronous failure using the enclosing view's error/fallback state. */ () => {
+      .catch(() => {
         if (active && !cachedRating) {
           setFirstBoardRating(null);
         }
       });
 
-    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => {
+    return () => {
       active = false;
     };
   }, [
@@ -939,18 +939,18 @@ function StockDetail({ latestTradeDate, ratings }: { latestTradeDate?: string; r
     symbol,
   ]);
 
-  const intradayReferencePrice = useMemo(/* Derive intradayReferencePrice from the listed dependencies, reusing it until those dependencies change. */ () => {
+  const intradayReferencePrice = useMemo(() => {
     const eventIndex = kline.findIndex(
-      /* Locate the entry matching the active identity/time used by StockDetail. */ (bar) => bar.trade_date === marketTradeDate,
+      (bar) => bar.trade_date === marketTradeDate,
     );
     return eventIndex > 0 ? kline[eventIndex - 1].close : null;
   }, [kline, marketTradeDate]);
   const fiveDayChartBars = useMemo(
-    /* Derive fiveDayChartBars from the listed dependencies, reusing it until those dependencies change. */ () => toFiveDayIntradayCandleBars(fiveDayKline),
+    () => toFiveDayIntradayCandleBars(fiveDayKline),
     [fiveDayKline],
   );
   const fiveDayReferencePrice = useMemo(
-    /* Derive fiveDayReferencePrice from the listed dependencies, reusing it until those dependencies change. */ () => fiveDayKline?.days.find(/* Locate the entry matching the active identity/time used by StockDetail. */ (day) => day.bars.length > 0)?.previous_close ?? null,
+    () => fiveDayKline?.days.find((day) => day.bars.length > 0)?.previous_close ?? null,
     [fiveDayKline],
   );
 
@@ -1011,21 +1011,21 @@ function StockDetail({ latestTradeDate, ratings }: { latestTradeDate?: string; r
               <button
                 type="button"
                 aria-pressed={chartMode === "daily"}
-                onClick={/* Handle onClick for this control in StockDetail. */ () => setChartMode("daily")}
+                onClick={() => setChartMode("daily")}
               >
                 日 K · 60日
               </button>
               <button
                 type="button"
                 aria-pressed={chartMode === "intraday"}
-                onClick={/* Handle onClick for this control in StockDetail. */ () => setChartMode("intraday")}
+                onClick={() => setChartMode("intraday")}
               >
                 分时
               </button>
               <button
                 type="button"
                 aria-pressed={chartMode === "intraday5d"}
-                onClick={/* Handle onClick for this control in StockDetail. */ () => setChartMode("intraday5d")}
+                onClick={() => setChartMode("intraday5d")}
               >
                 五日
               </button>
@@ -1128,7 +1128,7 @@ function StockNewsPanel({
         <div className="stock-news-loading">正在获取个股资讯...</div>
       ) : (
         <div className="stock-news-list">
-          {news?.items.slice(0, 3).map(/* Transform each entry in news?.items.slice(0, 3) into the result used by StockNewsPanel. */ (item) => (
+          {news?.items.slice(0, 3).map((item) => (
             <a
               className="stock-news-item"
               href={item.url}
@@ -1231,7 +1231,7 @@ function Fact({ label, value }: { label: string; value: string }) {
 function toDailyCandleBars(bars: StockKLineBar[]): MarketCandleBar[] {
   /** Convert API daily K-line bars into chart-friendly candle bars. */
 
-  return bars.map(/* Transform each entry in bars into the result used by toDailyCandleBars. */ (bar) => ({
+  return bars.map((bar) => ({
     time: bar.trade_date,
     label: bar.trade_date,
     open: bar.open,

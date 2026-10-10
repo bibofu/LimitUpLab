@@ -57,7 +57,7 @@ export function FirstBoardRatingDetail({
 }) {
   /** Render explainable first-board score details for the selected stock. */
 
-  const scoreBreakdown = rating.score_breakdown.map(/* Transform each entry in rating.score_breakdown into the result used by FirstBoardRatingDetail. */ (item) => {
+  const scoreBreakdown = rating.score_breakdown.map((item) => {
     if (item.name === "龙虎榜资金" && intelligence) {
       return {
         ...item,
@@ -76,8 +76,8 @@ export function FirstBoardRatingDetail({
     }
     return item;
   });
-  const boardPatternScore = scoreBreakdown.find(/* Locate the entry matching the active identity/time used by FirstBoardRatingDetail. */ (item) => item.name === "上板形态");
-  const marketCapScore = scoreBreakdown.find(/* Locate the entry matching the active identity/time used by FirstBoardRatingDetail. */ (item) => item.name === "市值偏好");
+  const boardPatternScore = scoreBreakdown.find((item) => item.name === "上板形态");
+  const marketCapScore = scoreBreakdown.find((item) => item.name === "市值偏好");
   const floatMarketCap = rating.facts.enrichment?.float_market_cap;
   const dragonTigerOnList = intelligence?.dragon_tiger_on_list
     ?? rating.facts.enrichment?.dragon_tiger_on_list
@@ -175,7 +175,7 @@ export function FirstBoardRatingDetail({
         <div className="rating-detail-section">
           <h3>评分项</h3>
           <div className="score-breakdown-list">
-            {scoreBreakdown.map(/* Transform each entry in scoreBreakdown into the result used by FirstBoardRatingDetail. */ (item) => (
+            {scoreBreakdown.map((item) => (
               <div className="score-breakdown-item" key={item.name}>
                 <div>
                   <strong>{item.name}</strong>
@@ -218,14 +218,14 @@ function StockPositionDetail({
         <b>匹配度 {position.primary.score.toFixed(0)}</b>
       </header>
       <div className="stock-position-tags">
-        {position.tags.map(/* Transform each entry in position.tags into the result used by StockPositionDetail. */ (tag) => <span key={tag}>{tag}</span>)}
+        {position.tags.map((tag) => <span key={tag}>{tag}</span>)}
       </div>
       <ul>
-        {position.evidence.map(/* Transform each entry in position.evidence into the result used by StockPositionDetail. */ (item) => <li key={item}>{item}</li>)}
+        {position.evidence.map((item) => <li key={item}>{item}</li>)}
       </ul>
       {position.alternatives.length > 0 ? (
         <small>
-          次选：{position.alternatives.map(/* Transform each entry in position.alternatives into the result used by StockPositionDetail. */ (item) => `${item.label} ${item.score.toFixed(0)}`).join("；")}
+          次选：{position.alternatives.map((item) => `${item.label} ${item.score.toFixed(0)}`).join("；")}
         </small>
       ) : null}
     </section>
@@ -249,7 +249,7 @@ function TagSection({
     <div className="rating-detail-section">
       <h3>{title}</h3>
       <div className="tag-list">
-        {items.map(/* Transform each entry in items into the result used by TagSection. */ (item) => (
+        {items.map((item) => (
           <span className={`detail-tag tag-${tone}`} key={item}>{item}</span>
         ))}
       </div>

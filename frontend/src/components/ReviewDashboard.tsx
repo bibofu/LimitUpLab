@@ -69,33 +69,33 @@ function DragonTigerReviewPanel({ tradeDate }: { tradeDate: string }) {
   const [reloadToken, setReloadToken] = useState(0);
   const [error, setError] = useState<string | null>(null);
 
-  useEffect(/* Synchronize DragonTigerReviewPanel with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
+  useEffect(() => {
     let active = true;
     setData(null);
     setError(null);
     void fetchDragonTigerReview(tradeDate)
-      .then(/* Apply the resolved asynchronous result to the current view state. */ (response) => {
+      .then((response) => {
         if (active) {
           setData(response);
         }
       })
-      .catch(/* Handle this asynchronous failure using the enclosing view's error/fallback state. */ () => {
+      .catch(() => {
         if (active) {
           setError("龙虎榜数据暂时没有加载成功");
         }
       });
-    return /* Release or invalidate the enclosing effect's work when dependencies change or the view unmounts. */ () => {
+    return () => {
       active = false;
     };
   }, [reloadToken, tradeDate]);
 
-  const filteredItems = useMemo(/* Derive filteredItems from the listed dependencies, reusing it until those dependencies change. */ () => {
+  const filteredItems = useMemo(() => {
     const items = data?.items ?? [];
     if (filter === "organization") {
-      return items.filter(/* Keep only entries satisfying this predicate for DragonTigerReviewPanel. */ (item) => item.organization_net_buy_amount !== null);
+      return items.filter((item) => item.organization_net_buy_amount !== null);
     }
     if (filter === "hot_money") {
-      return items.filter(/* Keep only entries satisfying this predicate for DragonTigerReviewPanel. */ (item) => item.hot_money_net_buy_amount !== null);
+      return items.filter((item) => item.hot_money_net_buy_amount !== null);
     }
     return items;
   }, [data, filter]);
@@ -120,14 +120,14 @@ function DragonTigerReviewPanel({ tradeDate }: { tradeDate: string }) {
               ["all", "全部"],
               ["organization", "机构"],
               ["hot_money", "游资"],
-            ] as const).map(/* Transform each entry in collection into the result used by DragonTigerReviewPanel. */ ([value, label]) => (
+            ] as const).map(([value, label]) => (
               <button
                 type="button"
                 role="tab"
                 aria-selected={filter === value}
                 className={filter === value ? "active" : ""}
                 key={value}
-                onClick={/* Handle onClick for this control in DragonTigerReviewPanel. */ () => selectFilter(value)}
+                onClick={() => selectFilter(value)}
               >
                 {label}
               </button>
@@ -144,7 +144,7 @@ function DragonTigerReviewPanel({ tradeDate }: { tradeDate: string }) {
         {error ? (
           <div className="dragon-tiger-state">
             <span>{error}</span>
-            <button type="button" onClick={/* Handle onClick for this control in DragonTigerReviewPanel. */ () => setReloadToken(/* Compute reload token from the latest React state to avoid overwriting intervening updates. */ (value) => value + 1)}>
+            <button type="button" onClick={() => setReloadToken((value) => value + 1)}>
               <RefreshCcw size={15} />
               重试
             </button>
@@ -175,7 +175,7 @@ function DragonTigerReviewPanel({ tradeDate }: { tradeDate: string }) {
                       </tr>
                     </thead>
                     <tbody>
-                      {visibleItems.map(/* Transform each entry in visibleItems into the result used by DragonTigerReviewPanel. */ (item) => {
+                      {visibleItems.map((item) => {
                         const stockIdentity = (
                           <>
                             <strong>{item.name}</strong>
@@ -221,7 +221,7 @@ function DragonTigerReviewPanel({ tradeDate }: { tradeDate: string }) {
                 </div>
                 {filteredItems.length > 20 ? (
                   <div className="dragon-tiger-expand">
-                    <button type="button" onClick={/* Handle onClick for this control in DragonTigerReviewPanel. */ () => setExpanded(/* Compute expanded from the latest React state to avoid overwriting intervening updates. */ (value) => !value)}>
+                    <button type="button" onClick={() => setExpanded((value) => !value)}>
                       {expanded ? "收起榜单" : `查看全部 ${filteredItems.length} 只`}
                     </button>
                   </div>
@@ -244,12 +244,12 @@ function DailyBoardPromotionPanel({ report }: { report: DailyBoardPromotionRepor
   /** Let users inspect five daily promotion cohorts and their successful stocks. */
 
   const recentStats = useMemo(() => report.items.slice(-5), [report.items]);
-  const displayStats = useMemo(/* Derive displayStats from the listed dependencies, reusing it until those dependencies change. */ () => [...recentStats].reverse(), [recentStats]);
+  const displayStats = useMemo(() => [...recentStats].reverse(), [recentStats]);
   const latestDate = recentStats[recentStats.length - 1]?.trade_date ?? "";
   // Null follows new data; an explicit historical selection stays selected.
   const [selectedDate, setSelectedDate] = useState<string | null>(null);
 
-  useEffect(/* Synchronize DailyBoardPromotionPanel with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
+  useEffect(() => {
     if (selectedDate !== null && !recentStats.some((item) => item.trade_date === selectedDate)) {
       setSelectedDate(null);
     }
@@ -311,7 +311,7 @@ function DailyBoardPromotionPanel({ report }: { report: DailyBoardPromotionRepor
           </div>
 
           <div className="promotion-history" aria-label="近5个交易日晋级率">
-            {displayStats.map(/* Transform each entry in displayStats into the result used by DailyBoardPromotionPanel. */ (item) => (
+            {displayStats.map((item) => (
               <button
                 type="button"
                 className={`promotion-day ${item.trade_date === selected.trade_date ? "active" : ""}`}
@@ -343,7 +343,7 @@ function DailyBoardPromotionPanel({ report }: { report: DailyBoardPromotionRepor
             </div>
             {selected.promoted_stocks.length > 0 ? (
               <div className="promotion-stock-list">
-                {selected.promoted_stocks.map(/* Transform each entry in selected.promoted_stocks into the result used by DailyBoardPromotionPanel. */ (stock) => (
+                {selected.promoted_stocks.map((stock) => (
                   <Link
                     className="promotion-stock-row"
                     to={stockDetailPath(stock.symbol)}
@@ -393,33 +393,33 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
   const reviewDates = groupReviewPicksByDate(reviewedPicks);
   const trackDates = report ? buildReviewTrackDates(reviewDates, report.end_date) : [];
   const trackedSampleSize = trackDates.reduce(
-    /* Accumulate the entries into the derived value used by HighScoreReviewPanel. */ (total, tradeDate) => total + (reviewDates[tradeDate]?.length ?? 0),
+    (total, tradeDate) => total + (reviewDates[tradeDate]?.length ?? 0),
     0,
   );
   const trackedPendingCount = trackDates.reduce(
-    /* Accumulate the entries into the derived value used by HighScoreReviewPanel. */ (total, tradeDate) => total + (reviewDates[tradeDate] ?? []).filter(/* Keep only entries satisfying this predicate for HighScoreReviewPanel. */ (item) => !item.outcome_ready).length,
+    (total, tradeDate) => total + (reviewDates[tradeDate] ?? []).filter((item) => !item.outcome_ready).length,
     0,
   );
   const trackedReadyCount = trackedSampleSize - trackedPendingCount;
   const trackedSuccessCount = trackDates.reduce(
-    /* Accumulate the entries into the derived value used by HighScoreReviewPanel. */ (total, tradeDate) => total + (reviewDates[tradeDate] ?? []).filter(
-      /* Keep only entries satisfying this predicate for HighScoreReviewPanel. */ (item) => (latestTrackedReturn(item) ?? 0) > 0,
+    (total, tradeDate) => total + (reviewDates[tradeDate] ?? []).filter(
+      (item) => (latestTrackedReturn(item) ?? 0) > 0,
     ).length,
     0,
   );
   const trackedSuccessRate = trackedReadyCount > 0 ? trackedSuccessCount / trackedReadyCount : null;
   const promotionComparisons = (report?.promotion_comparisons ?? []).reduce<
     Record<string, ReviewPromotionComparison>
-  >(/* Accumulate the entries into the derived value used by HighScoreReviewPanel. */ (items, item) => {
+  >((items, item) => {
     items[item.trade_date] = item;
     return items;
   }, {});
   const successfulPicks = sortReviewPicksForSummary(
-    reviewedPicks.filter(/* Keep only entries satisfying this predicate for HighScoreReviewPanel. */ (item) => (latestTrackedReturn(item) ?? 0) > 0),
+    reviewedPicks.filter((item) => (latestTrackedReturn(item) ?? 0) > 0),
     "desc",
   );
   const failedPicks = sortReviewPicksForSummary(
-    reviewedPicks.filter(/* Keep only entries satisfying this predicate for HighScoreReviewPanel. */ (item) => (latestTrackedReturn(item) ?? 0) < 0),
+    reviewedPicks.filter((item) => (latestTrackedReturn(item) ?? 0) < 0),
     "asc",
   );
   const selectedReviewSelection = activeReviewSelection && (
@@ -570,16 +570,16 @@ function DailyTopReview({
   return (
     <div className="daily-top-review">
       <div className="daily-top-cards">
-        {trackDates.map(/* Transform each entry in trackDates into the result used by DailyTopReview. */ (tradeDate) => {
+        {trackDates.map((tradeDate) => {
           const dailyPicks = groupedPicks[tradeDate] ?? [];
-          const readyCount = dailyPicks.filter(/* Keep only entries satisfying this predicate for DailyTopReview. */ (item) => item.post_bar_cache_complete).length;
+          const readyCount = dailyPicks.filter((item) => item.post_bar_cache_complete).length;
           const promotion = promotionComparisons[tradeDate];
           return (
           <button
             className={tradeDate === activeSelection ? "active" : ""}
             key={tradeDate}
             type="button"
-            onClick={/* Handle onClick for this control in DailyTopReview. */ () => onSelect(tradeDate)}
+            onClick={() => onSelect(tradeDate)}
           >
             <span>{tradeDate}</span>
             <strong>Top10 追踪</strong>
@@ -595,7 +595,7 @@ function DailyTopReview({
         <button
           className={`review-outcome-option outcome-success ${isSuccessView ? "active" : ""}`}
           type="button"
-          onClick={/* Handle onClick for this control in DailyTopReview. */ () => onSelect(REVIEW_SUCCESS_SELECTION)}
+          onClick={() => onSelect(REVIEW_SUCCESS_SELECTION)}
         >
           <span>跨日期复盘</span>
           <strong className="review-outcome-label"><TrendingUp size={16} />表现较好</strong>
@@ -605,7 +605,7 @@ function DailyTopReview({
         <button
           className={`review-outcome-option outcome-miss ${isMissView ? "active" : ""}`}
           type="button"
-          onClick={/* Handle onClick for this control in DailyTopReview. */ () => onSelect(REVIEW_MISS_SELECTION)}
+          onClick={() => onSelect(REVIEW_MISS_SELECTION)}
         >
           <span>跨日期复盘</span>
           <strong className="review-outcome-label"><ShieldAlert size={16} />表现较差</strong>
@@ -622,7 +622,7 @@ function DailyTopReview({
               <span>{description}</span>
             </div>
             <span>
-              {visiblePicks.filter(/* Keep only entries satisfying this predicate for DailyTopReview. */ (item) => item.post_bar_cache_complete).length} / {visiblePicks.length} 缓存已同步
+              {visiblePicks.filter((item) => item.post_bar_cache_complete).length} / {visiblePicks.length} 缓存已同步
             </span>
           </div>
         ) : null}
@@ -666,10 +666,10 @@ function DailyTopReview({
  * Group historical picks by prediction date for dated review sections.
  */
 function groupReviewPicksByDate(picks: ReviewAgentPick[]) {
-  return picks.reduce<Record<string, ReviewAgentPick[]>>(/* Accumulate the entries into the derived value used by groupReviewPicksByDate. */ (groups, pick) => {
+  return picks.reduce<Record<string, ReviewAgentPick[]>>((groups, pick) => {
     groups[pick.trade_date] = groups[pick.trade_date] ?? [];
     groups[pick.trade_date].push(pick);
-    groups[pick.trade_date].sort(/* Compare two entries using the explicit tie-break order for groupReviewPicksByDate. */ (left, right) => right.score - left.score);
+    groups[pick.trade_date].sort((left, right) => right.score - left.score);
     return groups;
   }, {});
 }
@@ -679,7 +679,7 @@ function groupReviewPicksByDate(picks: ReviewAgentPick[]) {
  */
 function latestTrackedReturn(pick: ReviewAgentPick) {
   const latestBar = pick.post_bars.reduce<ReviewAgentPick["post_bars"][number] | null>(
-    /* Accumulate the entries into the derived value used by latestTrackedReturn. */ (latest, bar) => (
+    (latest, bar) => (
       bar.return_from_base_pct !== null && (!latest || bar.trade_date > latest.trade_date)
         ? bar
         : latest
@@ -696,7 +696,7 @@ function sortReviewPicksForSummary(
   picks: ReviewAgentPick[],
   direction: "asc" | "desc",
 ) {
-  return [...picks].sort(/* Compare two entries using the explicit tie-break order for sortReviewPicksForSummary. */ (left, right) => {
+  return [...picks].sort((left, right) => {
     const leftReturn = latestTrackedReturn(left);
     const rightReturn = latestTrackedReturn(right);
     if (leftReturn === null && rightReturn !== null) return 1;
@@ -720,7 +720,7 @@ function buildReviewTrackDates(
   latestTradeDate: string,
 ) {
   return Object.keys(groupedPicks)
-    .filter(/* Keep only entries satisfying this predicate for buildReviewTrackDates. */ (tradeDate) => tradeDate < latestTradeDate)
+    .filter((tradeDate) => tradeDate < latestTradeDate)
     .sort()
     .reverse()
     .slice(0, 5);
@@ -755,7 +755,7 @@ function ReviewPickTable({
         {showLatestReturn ? <span>首板至今</span> : null}
         <span>走势追踪</span>
       </div>
-      {visible.map(/* Transform each entry in visible into the result used by ReviewPickTable. */ (pick) => (
+      {visible.map((pick) => (
         <Link
           className={`review-pick-row pick-${pick.evaluation_label} ${showLatestReturn ? "with-latest-return" : ""}`}
           key={`${pick.trade_date}-${pick.symbol}`}
@@ -815,7 +815,7 @@ function ReviewPostBars({
   ]));
   return (
     <div className="review-post-bars">
-      {Array.from({ length: 6 }, /* Handle the callback from Array.from within ReviewPostBars. */ (_, index) => {
+      {Array.from({ length: 6 }, (_, index) => {
         const bar = barsByDay.get(index);
         const label = index === 0 ? "首板" : `D+${index}`;
         if (!bar) {
