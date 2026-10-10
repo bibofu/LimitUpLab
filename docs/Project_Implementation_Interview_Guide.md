@@ -1,6 +1,6 @@
 # LimitUpLab 项目实现与 Agent 开发面试准备
 
-更新日期：2026-10-10。面向 Agent／LLM 应用开发岗位，源码核对基线为 `a6ef29b`。本文描述该基线的实际实现；历史评测、故障与发布记录保留各自日期，不能代替当前线上验收。
+更新日期：2026-10-10。面向 Agent／LLM 应用开发岗位，源码整体核对基线为 `a6ef29b`，复盘总结与相关索引更新至 `bd0cf87`。本文描述已实现能力；历史评测、故障与发布记录保留各自日期，不能代替当前线上验收。
 
 LimitUpLab 是面向 A 股收盘后研究的工作台：先采集、保存和计算市场事实，再让 Agent 调用受控工具完成查询、解释与追问，最后通过不可变预测记录和后续结果复盘形成闭环。项目的主要价值是把 Agent 的语义决策与可审计的数据工程连接起来。评分有效性仍在验证，系统不输出买卖、仓位、目标价、收益承诺或确定性预测。
 
@@ -449,34 +449,34 @@ D+1、D+3、D+5 按预期市场日期精确匹配，不用“下一根有数据�
 
 复盘页先获取确定性报告，显示统计和逐日追踪，再自动请求 LLM 总结。页面内相同截止日期共享请求和结果，避免 React StrictMode 或组件重新挂载重复调用；自动生成失败后保留现有报告，用户可以手动重试。全局刷新重新获取事实并使旧模型总结失效，避免新统计配旧结论；再次调用模型由用户主动触发。刷新整个页面会重新请求，不具备跨浏览器、跨进程的模型缓存。
 
-现行页面先展示候选、全市场和综合观察三段结论，再展示两套样本的五项特征对照：首板位置、流通市值、首次封板时间、炸板次数和换手率。候选按首板至截至日内、追踪窗口中最新可用收盘的累计涨跌分组；全市场以近 20 个真实交易日的本地首板为起点，对照同轮连续 1→2→3 板与未达到 3 板的样本。市场未达 3 板不等于负收益，候选观察长度也可能不同，不能把两套结果混作同一标签。
+当前总结使用 `review_digest`，页面按整体表现、优秀候选、较差候选、市场三板及以上排列。整体段由代码生成，其余三段各展示一句简短解释和可核对的证据行；主要首板分布直接显示，完整分布、个股事实与缺失说明可展开。没有符合条件的样本时显示空状态，不强行归纳画像。
 
-`feature_research` 保存确定性对照，`summary_insights` 恰好包含 `candidate`、`market`、`synthesis` 三种观点，每段正文最多 180 字符；确定性首包也有三段结论。旧 `feature_summary` 与最多 100 字符的 `summary_headline` 保留兼容，已不是新页面的主要展示。前端区分待生成、生成中、完成、回退和请求失败；初始规则事实不代表 LLM 失败，因此不会提前显示“未启用”，重新生成期间则保留并标识上次解读。
+设截至交易日为 T，四段的统计口径如下：
 
-| 层次 | 处理方式 | 页面价值 |
+| 页面段落 | 样本与计算 | 必须保留的边界 |
 | --- | --- | --- |
-| 事实计算 | Python 读取预测快照、截至日 K 线、涨停事件和真实交易日历，计算候选评价、五项特征、1 进 2 对照及全市场连续 3 板样本 | 数字、样本资格和分母不由模型生成 |
-| 工具规划 | LLM 从四个受控复盘工具中选择；失败时使用完整工具集合 | 沿用 Review Agent 的工具规划能力 |
-| 总结生成 | 固定提供完整入选汇总、双样本五项特征和跨样本方向核对，要求三段有数字支持的观点 | 解释候选差异、市场高标画像及两者共性或分歧 |
-| 校验与回退 | Pydantic 校验三种观点、长度与有限置信度，再独立进行研究边界检查 | 失败保留确定性结论和对照，明确原因；成功标识 AI 归纳 |
+| 整体表现 | 取 T 之前 5 个交易日的历史每日 Top10 候选；在候选和同期全部首板的 1 进 2 结果均就绪的日期上汇总晋级率、领先天数与相对表现最佳日期 | 汇总率用累计晋级数除以累计样本数，不是每日比例的简单平均；缺失日期不以更早批次补位 |
+| 优秀候选 | 首板日收盘至 T 日精确收盘的累计涨幅 ≥9.8% | 使用价格的十进制阈值比较，不按展示后四舍五入的涨幅判组 |
+| 较差候选 | 同一价格基准下累计涨幅 <−5% | −5% 本身属于普通组；缺任一精确日期收盘、价格冲突或日历未确认时不分入优劣组 |
+| 市场三板及以上 | 含 T 在内最近 5 个交易日出现过三板及以上的全部本地连板轮次，包括窗口前已达三板者；回溯该轮首板和二板 | 首板可以在窗口外，同股不同轮次分别计数；缺日、冲突或锚点未核验时保留缺口，不伪造首板和二板事实 |
 
-位置和炸板展示组内分布；市值、换手展示中位数及中间 50% 区间，首封时间展示均值。单组某字段少于 3 条有效值时，该组不输出统计摘要。条件比例则回答“具有这项特征的已观察样本，多少累计正收益或达到 3 板”，分母只含该字段有效且结果已知的样本；分桶不足 5 条时比例为 `null`，保留计数而不补零。每桶与同一字段有效样本基准比较百分点差，不能用赢家组内特征占比代替条件比例。页面默认展示样本最多的分桶，其余可展开；候选条件比例、位置和炸板完整分布也可展开核对。
+优秀、较差两组的特征基准是这 5 日的**全部候选**，包含普通表现与收盘数据不足的候选；各字段分别排除自身缺失值。这比较的是“本组具有某特征的占比”与“全部候选具有该特征的占比”，不是“具有该特征后成功的概率”。同一 T 下各批次观察天数仍不同，不能把这个描述性分类当作统一持有期的回测。
 
-`cross_checks` 针对市值中位数、平均首封时间和换手率中位数，用 `positive_value`、`negative_value` 的未格式化数值比较各自正反组；差值按分钟或一位小数判断，输出方向一致、相反或接近显示精度。它避免从两组正例的绝对值相近直接推断“方向一致”，并为模型标题和正文提供同一份方向依据。缺任一组统计值就明确不能比较；这一步不依赖解析中文展示文本，也不等于已经逐句验证模型的最终解释。
+`review_digest_profiles.py` 计算位置、行业、题材、市值、首次封板时间、炸板次数和换手率 7 项首板分布。题材按每条记录去重，但一条记录可以属于多个题材，因此占比合计可能超过 100%。候选观察要求该维本组及基准各至少 3 条有效记录、具体特征在本组至少出现 3 次，且占比绝对差至少 10 个百分点；这是摘要筛选门槛，不是统计显著性检验。每维最多生成一条观察，候选默认选择最多 3 个不同维度，数据不足或差异不突出时保留说明。
 
-工具逐股预览最多 20 条，响应明细最多 100 条，完整入选集合的统计另行提供，不能把预览当作全集。次日开盘至收盘的评价标签、首板至观察日收盘的正负分组、1 进 2 晋级率与全市场 3 板比例是不同口径；提示词和事实包明确区分，避免混用分母或把历史补算当作前向预测。
+高标组没有负例基准，仅展示已有样本的首板画像，并增加二板开盘涨幅、首次封板、炸板次数、换手率和形态。二板开盘涨幅以首板收盘为基准；完整且合法的二板 OHLC 全相等时记为“一字板”，否则记为“有价格波动”，缺行情时不猜形态。默认选择最多 3 条首板观察和 2 条二板观察，二板优先形态及首封或开盘。这些是事后高标怎样晋级的事实，不能对已经达到三板的赢家组计算一个必然为 100% 的 1 进 2 成功率，也不强制与候选组归纳一致或相反方向。
 
-全市场对照按日历核验首板后的 D+1 二板、D+2 三板：未到观察日、整日事件缺失或板高矛盾进入未判定集合。高标个股另回溯首板与整段连板链；窗外首板不入同期比例，无法核验的板高只标来源报数，已确认 3 板但后续缺日时只展示已核验最高板。这里的“全市场”仍受本地采集覆盖约束：某日有事件记录不证明该日每只股票都已采全，缺个股封板记录可能被按未连续晋级处理。
+首板字段仍使用该轮首板日数据，不能借用成为高标后的市值或位置。缺位置快照时可用截至首板日、至少 21 根本地 K 线重算，并标明历史长度与未复权行情的限制；市值只沿用精确日期快照，已有成交额/换手率派生值明确标为估计值。这里的市场范围仍受本地采集覆盖约束。缺失覆盖和来源说明随分布与个股证据保留，不用零值掩盖缺口。
 
-首板特征使用当日数据，不以成为高标后的市值、位置替代。缺少位置快照时可用截至首板日、至少 21 根本地 K 线重算，并说明这不是当时保存的分类，短历史与未复权行情仍有限制；市值只沿用首板精确日期快照，不新增估算补缺。已有快照若由成交额/换手率派生，报告标明是估计值；缺来源也不能默认视为实测市值。上述缺口会影响各字段的有效分母，不能仅凭总样本数判断证据是否充分。
+LLM 仍先从四个受控复盘工具中规划所需工具，失败时回到完整工具集合；总结阶段固定获得独立于规划结果构建的 `review_digest`。模型返回恰好三项 `sections`，`scope` 为 `excellent`、`weak`、`leaders`，每组只写一句不超过 100 字符的定性 `summary`，并选择本组预计算的 `observation_ids`。数字、分母、分组、证据原文和整体 `overview.headline` 均由代码保留，前端根据 ID 显示原始证据，避免模型再抄写一遍数字。
 
-模型事实另含 `forward_validation.eligible_sample_count`，仅计算满足时间契约的 `premarket_final`；收盘基线即使标为 `prediction_source=live` 也不具备此资格。页面同时区分五日追踪样本和整个复盘候选数量，各特征指标给出有效与缺失样本数。2026-10-10 的本地核验中，60 条由 50 条收盘基线和 10 条历史补算组成，合格盘前前向样本为 0，不能据此证明现行盘前策略已通过前向验证。
+Pydantic 校验分组、长度和有限置信度，`apply_review_narrative` 再拒绝跨组、未知、重复或超量 ID；有可用证据时不能返回空引用，高标有二板观察时至少引用一条。空组或无观察组保持代码生成的说明，不接受模型补造画像。随后再执行独立研究边界检查，任何失败都保留确定性报告。这证明引用属于允许的证据集合，**不等于逐句证明短总结的语义被证据充分支持**；多个单维分布也不能拼成同一批股票同时具备的组合特征。
 
-历史复盘读取时按截止日期重新计算局部 Outcome，不复用未来已回填的标签与收益；日历或关键行情缺失时保留待观察状态。版本标记阻止旧口径复盘快照被直接复用，原始预测、旧快照和全局 Outcome 记录仍保留。
+前端区分事实就绪、生成中、完成、回退和请求失败；初始规则报告不代表模型失败，不提前显示“未启用”。重新生成时保留并标识上次解读，失败原因可以展开。旧快照没有新摘要时显示“新报告待刷新”。完整追踪报告与五日摘要的数量分别说明，只有通过时间契约的 `premarket_final` 具有盘前终选前向验证资格，收盘基线和历史补算不计入。
 
-模型的价值是把两套确定性对照整理为可读观点，解释差异与分歧，并让引用的比例回到分桶和代表股核验；它不能覆盖原统计、自动调整评分权重或直接提升预测准确率。组间差异、条件比例和方向核对都只是本期描述，不是因果或未来概率；小样本、不同观察时长、采集缺失和不同板块涨跌幅限制仍会影响解释。格式校验和研究边界检查不等于逐句事实证明，结论仍需后续独立样本检验。
+历史复盘仍按截至日重算局部 Outcome，新摘要另外精确匹配首板日与 T 日收盘，不复用未来已回填的标签，也不以更早缓存价代替缺失的 T 日收盘。版本守卫阻止旧口径快照被直接复用，原始预测、旧复盘正文和全局 Outcome 不因本次读取而改写。
 
-面试中可以说明：一次正常生成通常包含工具规划、总结、研究边界检查三次逻辑模型调用，底层重试另计。该实现以可读解释换取额外延迟与成本，采用先显示事实、后台生成总结和页面内请求去重控制体验。相比聊天 ReAct 的多轮工具循环，这是一条有界的专用复盘流程。
+面试中可以概括为：代码先决定哪些事实可以进入摘要，LLM 再从允许的观察里挑重点并写短解释。一次正常生成通常包含工具规划、总结、研究边界检查三次逻辑模型调用，底层重试另计；这是有界的专用复盘流程，不会自动调整评分权重，也不能把本期画像当成预测能力已经提升的证据。
 
 ### Champion 与 Challenger
 
@@ -677,7 +677,7 @@ GET reconnect 只读 journal，不启动新任务；前端使用已知 run ID �
 
 ### 27 confidence 能否当预测概率
 
-不能，当前是规则型数据支持分。若要变成概率，需要定义事件、在独立样本外校准并报告校准误差，不能只把规则分缩放到 0 至 1。复盘里的条件比例也不同于预测概率：例如某特征有 13/19 个样本累计上涨，只描述这批观察，不证明下一只的上涨概率是 68.4%；还要区分字段有效分母、观察时长和独立验证。
+不能，当前是规则型数据支持分。若要变成概率，需要定义事件、在独立样本外校准并报告校准误差，不能只把规则分缩放到 0 至 1。复盘画像里的组内占比也不是结果概率：例如优秀组有 6/8 个有效样本属于某题材，不表示该题材股票有 75% 会表现优秀。还要区分字段有效分母、观察时长和独立验证。
 
 ### 28 Champion Challenger 算自动学习吗
 
@@ -717,8 +717,10 @@ GET reconnect 只读 journal，不启动新任务；前端使用已知 run ID �
 | Facts 和评分怎样计算 | [first_board.py](../backend/app/agents/first_board.py)、[first_board_features.py](../backend/app/services/first_board_features.py)、[scoring_policy.py](../backend/app/services/scoring_policy.py) |
 | 预测时间与不可变如何保证 | [prediction_time.py](../backend/app/services/prediction_time.py)、[first_board_repository.py](../backend/app/repositories/first_board_repository.py)、[recommendation_intelligence_repository.py](../backend/app/repositories/recommendation_intelligence_repository.py) |
 | Outcome 与策略怎样验证 | [outcome_completeness.py](../backend/app/services/outcome_completeness.py)、[prediction_quality_audit.py](../backend/app/services/prediction_quality_audit.py)、[scoring_policy_optimizer.py](../backend/app/services/scoring_policy_optimizer.py) |
-| 复盘双样本与条件比例如何计算 | [review_feature_study.py](../backend/app/agents/review_feature_study.py)、[review_market_leaders.py](../backend/app/agents/review_market_leaders.py)、[review_research.py](../backend/app/agents/review_research.py) |
-| 复盘模型与加载状态如何隔离 | [review_agent.py](../backend/app/agents/review_agent.py)、[review_narrative.py](../backend/app/agents/review_narrative.py)、[reviewReportResource.ts](../frontend/src/utils/reviewReportResource.ts)、[ReviewSummary.tsx](../frontend/src/components/ReviewSummary.tsx) |
+| 四段复盘的日期、阈值与特征分母如何确定 | [review_digest.py](../backend/app/agents/review_digest.py)、[review_digest_profiles.py](../backend/app/agents/review_digest_profiles.py)、[review_digest_models.py](../backend/app/review_digest_models.py) |
+| 高标怎样回溯同轮首板与二板 | [review_digest_leaders.py](../backend/app/agents/review_digest_leaders.py)、[review_market_leaders.py](../backend/app/agents/review_market_leaders.py) |
+| 模型怎样只选择预计算证据 | [review_agent.py](../backend/app/agents/review_agent.py)、[review_narrative.py](../backend/app/agents/review_narrative.py) |
+| 四段展示与模型加载状态如何分离 | [ReviewDigest.tsx](../frontend/src/components/ReviewDigest.tsx)、[ReviewSummary.tsx](../frontend/src/components/ReviewSummary.tsx)、[reviewReportResource.ts](../frontend/src/utils/reviewReportResource.ts) |
 | Golden 的标准答案与裁判 | [cases.py](../backend/evals/golden/cases.py)、[world.py](../backend/evals/golden/world.py)、[grading.py](../backend/evals/golden/grading.py)、[judge.py](../backend/evals/golden/judge.py) |
 | 单机与身份边界 | [database.py](../backend/app/database.py)、[security.py](../backend/app/security.py)、[docker-compose.yml](../docker-compose.yml) |
 | 当前整体设计与历史变迁 | [LangChain 集成](LangChain_Integration.md)、[代码阅读指南](code-reading-guide.md)、[V1.5 里程碑](V1.5_Milestone.md)、[预测时间契约](Prediction_Time_Contract.md) |
@@ -731,6 +733,8 @@ backend/.venv/Scripts/python.exe backend/scripts/run_agent_golden.py --mode vali
 ```
 
 按面试问题阅读代表性测试比背总数量更有用：`test_react_contracts.py` 看工具协议，`test_react_evidence.py` 和 `test_react_evidence_rendering.py` 看证据与表格，`test_react_answer_stream.py` 看增量解析，`test_react_http.py` 看 HTTP 生命周期，`test_prediction_time.py` 看时间边界，`test_golden_grading.py` 看评分器如何识别错误。前端对应聊天传输、答案缓冲与局部加载测试。
+
+复盘可顺着 `test_review_digest.py` 核对 T 前五日、精确收盘和阈值边界，`test_review_digest_profiles.py` 核对独立分母、题材去重与观察选择，`test_review_digest_leaders.py` 核对窗外首板、同股多轮、二板事实和冲突缺失，再由 `test_review_llm_summary.py` 检查引用校验与回退、`test_review_as_of.py` 检查历史截至日隔离。
 
 ## 十九 演示与面试前准备
 
