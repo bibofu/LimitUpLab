@@ -5,6 +5,7 @@ from typing import Any, Literal
 from pydantic import BaseModel, Field, model_validator
 
 from app.agent_output_sanitizer import sanitize_agent_answer
+from app.review_digest_models import ReviewDigest
 from app.review_research_models import ReviewFeatureResearch, ReviewInsight
 from app.agent_evidence_cards import (
     build_agent_evidence_cards,
@@ -1442,6 +1443,7 @@ class ReviewAgentReportResponse(BaseModel):
     generation_mode: Literal["llm", "deterministic", "legacy"] = "legacy"
     llm_model: str | None = None
     generation_note: str | None = None
+    review_digest: ReviewDigest | None = None
     feature_summary: ReviewFeatureSummary | None = None
     feature_research: ReviewFeatureResearch | None = None
     summary_insights: list[ReviewInsight] = Field(default_factory=list)
