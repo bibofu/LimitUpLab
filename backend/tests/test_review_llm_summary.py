@@ -11,7 +11,7 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
 from app.agents.review_agent import REVIEW_AGENT_VERSION, build_review_agent_report
-from app.models import AgentEvaluationItem, DailyReviewSnapshot, ReviewAgentReportResponse
+from app.models import AgentEvaluationItem, AgentPrediction, DailyReviewSnapshot, ReviewAgentReportResponse, StockDailyBar
 from app.repositories import SQLiteFirstBoardRepository
 from app.routers.agents import router
 from app.services.llm_provider import DisabledLLMProvider, LLMProvider, LLMResult
@@ -57,15 +57,28 @@ class ReviewProvider(LLMProvider):
 
 def repository():
     repo = Mock(spec=SQLiteFirstBoardRepository)
-    repo.list_predictions_between.return_value = []
-    repo.list_post_bars.return_value = []
+    repo.list_predictions_between.return_value = [AgentPrediction(
+        prediction_id=f"test-{index}", trade_date=BASE, symbol=f"00000{index + 1}",
+        name="研究样本", score=90, rating="A", confidence=0.8,
+        scoring_version="test", prediction_source="historical_backtest", data_as_of=BASE,
+        facts_json={}, reasons=[], risks=[], created_at=datetime(2026, 9, 29, tzinfo=timezone.utc),
+    ) for index in range(3)]
+    def post_bars(symbol, base_date, **kwargs):
+        close = {"000001": 11, "000002": 9, "000003": 10}[symbol]
+        return [StockDailyBar(
+            symbol=symbol, trade_date=day, open=10, high=12, low=8, close=price,
+            volume=100, amount=1000, source="test", created_at=datetime(2026, 9, 30, tzinfo=timezone.utc),
+        ) for day, price in [(BASE, 10), (END, close)]]
+    repo.list_post_bars.side_effect = post_bars
     return repo
 
 
 def events():
     return [SAMPLE_EVENTS[2].model_copy(update={
-        "trade_date": day, "symbol": "000001", "board_height": height, "closed_limit": True,
-    }) for day, height in [(BASE, 1), (END, 2)]]
+        "trade_date": day, "symbol": symbol, "board_height": height, "closed_limit": True,
+    }) for day, symbol, height in [
+        (BASE, "000001", 1), (BASE, "000002", 1), (BASE, "000003", 1), (END, "000001", 2),
+    ]]
 
 
 def build(provider):
@@ -109,7 +122,7 @@ def test_llm_gets_authoritative_facts_even_when_planner_omits_comparison_tools()
     assert facts["deterministic_report"]["promotion_comparisons"]
     assert "三日走势尚未完整缓存" in facts["deterministic_report"]["warnings"]
     assert "次日开盘至收盘" in facts["comparison_basis"]["report_counts"]
-    assert "首板至最新" in facts["comparison_basis"]["feature_groups"]
+    assert "首板至复盘截至日内最新" in facts["comparison_basis"]["feature_groups"]
     assert (report.sample_size, report.success_count, report.failed_count, report.pending_count) == (3, 1, 1, 0)
     assert report.top_pick_promotion_rate == 0.3333
     assert report.main_findings[0].startswith("高分首板样本 3")

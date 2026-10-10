@@ -19,6 +19,7 @@ from app.models import (
     ReviewAgentPick,
     ReviewAgentReportResponse,
     ReviewPromotionComparison,
+    StockDailyBar,
 )
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.evaluation_agent import build_agent_evaluation
@@ -26,6 +27,7 @@ from app.services.llm_provider import DisabledLLMProvider, LLMProvider, get_llm_
 from app.agents.review_narrative import ReviewNarrative, authoritative_review_facts
 from app.agents.react_runtime.compliance import review_answer
 from app.services.outcome_completeness import build_top10_outcome_completeness
+from app.services.review_as_of import build_review_post_bars, evaluate_review_prediction_as_of
 from app.services.promotion_calendar import (
     PromotionCalendar,
     adjacent_trade_date_pairs,
@@ -33,7 +35,7 @@ from app.services.promotion_calendar import (
 )
 
 
-REVIEW_AGENT_VERSION = "review-agent-tool-use-v6-trading-calendar"
+REVIEW_AGENT_VERSION = "review-agent-tool-use-v7-asof"
 
 
 @dataclass(frozen=True)
@@ -85,7 +87,8 @@ class ReviewAgentToolbox:
         self.follow_days = follow_days
         self._evaluations: list[AgentEvaluationItem] | None = None
         self._predictions: dict[str, AgentPrediction] | None = None
-        self.evaluation_scope: dict[str, Any] = {"candidate_limit": 500}
+        self._post_bars: dict[tuple[str, date], list[StockDailyBar]] = {}
+        self.evaluation_scope: dict[str, Any] = {"as_of_date": end_date.isoformat()}
         if trade_dates is not None:
             self.promotion_calendar = PromotionCalendar(tuple(sorted(set(trade_dates))), ())
         else:
@@ -221,6 +224,19 @@ class ReviewAgentToolbox:
 
         return self._prediction_lookup().get(prediction_id)
 
+    def post_bars_for(self, symbol: str, base_date: date) -> list[StockDailyBar]:
+        """Reuse one cutoff-bound observation set for evaluation and display."""
+
+        key = (symbol, base_date)
+        if key not in self._post_bars:
+            self._post_bars[key] = [
+                bar for bar in self.repository.list_post_bars(
+                    symbol, base_date, limit=max(self.follow_days, 3) + 1,
+                )
+                if bar.trade_date <= self.end_date
+            ]
+        return self._post_bars[key]
+
     def feature_comparison(self) -> dict[str, Any]:
         """Compare features using first-board-to-latest-close performance groups."""
 
@@ -260,24 +276,44 @@ class ReviewAgentToolbox:
     # Select evaluations belonging to the review's high-score cohort.
     def _high_score_evaluations(self) -> list[AgentEvaluationItem]:
         if self._evaluations is None:
+            predictions = self._prediction_lookup()
+            # The generic evaluation orders by outcome labels. Fetch every
+            # canonical candidate before replacing those labels at this cutoff.
+            candidate_limit = len(predictions)
             response = build_agent_evaluation(
                 events=self.events,
                 start_date=self.start_date,
                 end_date=self.end_date,
                 first_board_repository=self.repository,
-                limit=500,
+                limit=candidate_limit,
                 include_time_invalid_live=True,
             )
             self.evaluation_scope.update({
+                "candidate_limit": candidate_limit,
                 "canonical_prediction_count": response.prediction_count,
                 "returned_evaluation_count": len(response.evaluations),
                 "candidates_truncated": response.prediction_count > len(response.evaluations),
             })
+            events_by_case = {
+                (event.trade_date, event.symbol): event for event in self.events
+                if event.trade_date <= self.end_date
+            }
             by_date: dict[date, list[AgentEvaluationItem]] = {}
             for item in response.evaluations:
                 if item.score < self.min_score:
                     continue
-                by_date.setdefault(item.trade_date, []).append(item)
+                prediction = predictions.get(item.prediction_id)
+                if prediction is None:
+                    continue
+                as_of_item = evaluate_review_prediction_as_of(
+                    prediction,
+                    event=events_by_case.get((item.trade_date, item.symbol)),
+                    bars=self.post_bars_for(item.symbol, item.trade_date),
+                    events=self.events,
+                    trade_dates=self.promotion_calendar.trade_dates,
+                    as_of_date=self.end_date,
+                )
+                by_date.setdefault(item.trade_date, []).append(as_of_item)
             selected: list[AgentEvaluationItem] = []
             for trade_date in sorted(by_date):
                 # The key compares score (negated for descending order), then confidence (negated
@@ -349,7 +385,7 @@ def build_review_agent_report(
         excluded_time_count=excluded_time_count,
     )
     if toolbox.evaluation_scope.get("candidates_truncated"):
-        fallback.warnings.append("上游评估候选已截断为最多500条，本报告只描述入选样本，不代表完整区间或全市场。")
+        fallback.warnings.append("上游评估未返回完整区间候选，本报告只描述入选样本，不代表完整区间或全市场。")
     fallback.warnings.extend(
         f"复盘工具 {result.name} 未完成，相关结论需保留。"
         for result in tool_results if result.status != "success"
@@ -580,28 +616,13 @@ def _post_bars_for_pick(
 ) -> list[ReviewAgentPostBar]:
     """Return cached base-day plus follow-up bars for a reviewed pick."""
 
-    bars = toolbox.repository.list_post_bars(
-        item.symbol,
-        item.trade_date,
-        limit=max(toolbox.follow_days, 0) + 1,
+    return build_review_post_bars(
+        toolbox.post_bars_for(item.symbol, item.trade_date),
+        symbol=item.symbol,
+        base_date=item.trade_date,
+        as_of_date=toolbox.end_date,
+        follow_days=toolbox.follow_days,
     )
-    base_close = bars[0].close if bars else None
-    return [
-        ReviewAgentPostBar(
-            trade_date=bar.trade_date,
-            open=bar.open,
-            high=bar.high,
-            low=bar.low,
-            close=bar.close,
-            change_pct=bar.change_pct,
-            return_from_base_pct=(
-                ((bar.close - base_close) / base_close) * 100
-                if base_close
-                else None
-            ),
-        )
-        for bar in bars
-    ]
 
 
 def _build_promotion_comparisons(

@@ -50,8 +50,8 @@ def authoritative_review_facts(
         "incomplete_post_bar_count": sum(not item.post_bar_cache_complete for item in picks),
         "feature_comparison": feature_comparison,
         "comparison_basis": {
-            "report_counts": "按持久化预测的 evaluation_label 统计：A/B评级次日开盘至收盘为正/负分别记success/miss，零收益为partial；低评级另记false_negative/avoid_success，不能并入失败或待观察。",
-            "feature_groups": "按首板至最新已缓存收盘的收益正负分组；零收益、不足两根K线或缺失快照不入特征组。",
+            "report_counts": "保留持久化预测的评分，仅使用复盘截至日内行情重算 evaluation_label：A/B评级次日开盘至收盘为正/负分别记success/miss，零收益为partial；低评级另记false_negative/avoid_success，不能并入失败或待观察。次日未到或必要行情/日历缺失时为pending。",
+            "feature_groups": "按首板至复盘截至日内最新已缓存收盘的收益正负分组，并受follow_days窗口约束；零收益、不足两根K线或缺失首板基准价不入特征组。",
             "promotion": "仅统计交易日历中紧邻下一交易日且行情就绪的1进2对照；未就绪不等于失败。",
             "inference": "分组和来源不同，不能混用分母；描述性差异不代表因果，也不能将历史补算当成前向预测。",
         },
@@ -62,6 +62,6 @@ def authoritative_review_facts(
             "response_pick_limit": 100,
             "response_picks_truncated": len(picks) > 100,
             "selected_cohort_size": len(picks),
-            "note": "总体计数及特征使用完整入选集合；工具明细仅前20条，返回明细最多100条。上游评估最多500条，不可外推为全市场。",
+            "note": "总体计数及特征使用完整入选集合；上游按该区间持久化预测总数设置候选上限，先按截至日重算再选每日TopN；工具明细仅前20条，返回明细最多100条，不可外推为全市场。",
         },
     }

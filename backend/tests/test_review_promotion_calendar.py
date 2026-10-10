@@ -199,6 +199,7 @@ def stored_report(version, *, pending=False):
 
 @pytest.mark.parametrize("version,pending,recompute", [
     ("review-agent-tool-use-v5-position-label", False, True),
+    ("review-agent-tool-use-v6-trading-calendar", False, True),
     (REVIEW_AGENT_VERSION, False, False),
     (REVIEW_AGENT_VERSION, True, True),
 ])
