@@ -26,7 +26,6 @@ SHAPE_LABELS: dict[PostLimitShape, str] = {
     "broken_board_repair": "断板修复",
     "second_to_third": "2进3观察",
 }
-ALL_SHAPES = tuple(SHAPE_LABELS)
 RULES = {
     "high_drawdown": "距最近涨停1–4日；最新收盘较涨停日至观察日前一日的最高价回撤至少10%。",
     "volume_consolidation": "距最近涨停2–4日；区间幅度不超过8%；收盘较涨停收盘−10%至+8%；量比不超过0.75。",

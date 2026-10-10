@@ -17,15 +17,6 @@ class LimitUpRepository(Protocol):
         """Return limit-up events available to the analysis layer."""
 
 
-class SampleLimitUpRepository:
-    """In-memory repository used as a lightweight development fallback."""
-
-    def list_events(self) -> list[LimitUpEvent]:
-        """Return bundled sample events without mutating them."""
-
-        return list(SAMPLE_EVENTS)
-
-
 class SQLiteLimitUpRepository:
     """SQLite-backed repository for persisted limit-up events."""
 

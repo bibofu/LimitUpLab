@@ -97,19 +97,6 @@ def collect_stock_spot_klines(
 
 
 
-def collect_stock_close_snapshot(
-    symbol: str,
-    end_date: date | None = None,
-) -> StockCloseSnapshot:
-    """Collect the latest available close snapshot from recent daily K-line bars."""
-
-    bars = collect_stock_kline(symbol=symbol, days=2, end_date=end_date)
-    return build_stock_close_snapshot(
-        symbol=symbol,
-        bars=bars,
-        source="akshare.stock_zh_a_hist_tx",
-    )
-
 def build_stock_close_snapshot(
     symbol: str,
     bars: list[StockKLineBar],

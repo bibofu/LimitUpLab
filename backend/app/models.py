@@ -7,11 +7,6 @@ from pydantic import BaseModel, Field, model_validator
 from app.agent_output_sanitizer import sanitize_agent_answer
 
 
-RESEARCH_DISCLAIMER = (
-    "仅用于数据研究与复盘，不构成投资建议、交易指令或收益承诺。"
-)
-
-
 class LimitUpEvent(BaseModel):
     """One stock's daily limit-up or failed limit-up event."""
 

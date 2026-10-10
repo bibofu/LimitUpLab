@@ -42,7 +42,6 @@ from app.collectors.hithink_finance_collector import (
     HithinkStockHistory,
 )
 from app.collectors.stock_kline_collector import (
-    collect_stock_close_snapshot,
     collect_stock_intraday_kline,
     collect_stock_kline,
     collect_stock_spot_klines,
@@ -64,7 +63,6 @@ __all__ = [
     "collect_sector_history",
     "collect_sector_spot",
     "collect_recent_listing_dates",
-    "collect_stock_close_snapshot",
     "collect_stock_intraday_kline",
     "collect_stock_kline",
     "collect_stock_spot_klines",

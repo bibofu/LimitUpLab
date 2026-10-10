@@ -23,7 +23,6 @@ from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepo
 from app.services.analysis import events_for_date, latest_trade_date, summarize_market
 from app.services.limit_up_reason import count_reason_peers
 from app.services.scoring_policy import (
-    DEFAULT_SCORING_POLICY_VERSION,
     FACTOR_KEYS_BY_NAME,
     REASON_AWARE_POLICY_PREFIX,
     rating_for_score,
@@ -32,7 +31,6 @@ from app.services.scoring_policy import (
 
 
 MIN_AMOUNT = 50_000_000
-FIRST_BOARD_AGENT_VERSION = DEFAULT_SCORING_POLICY_VERSION
 
 
 def build_first_board_ratings(

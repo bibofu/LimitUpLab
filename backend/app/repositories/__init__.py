@@ -10,7 +10,6 @@ from app.repositories.daily_pipeline_repository import SQLiteDailyPipelineReposi
 from app.repositories.first_board_repository import SQLiteFirstBoardRepository
 from app.repositories.limit_up_repository import (
     LimitUpRepository,
-    SampleLimitUpRepository,
     SQLiteLimitUpRepository,
     get_limit_up_repository,
 )
@@ -23,7 +22,6 @@ from app.repositories.stock_news_repository import SQLiteStockNewsRepository
 
 __all__ = [
     "LimitUpRepository",
-    "SampleLimitUpRepository",
     "SQLiteAgentCacheRepository",
     "SQLiteAgentRunRepository",
     "SQLiteAgentUsageRepository",

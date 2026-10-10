@@ -8,7 +8,6 @@ from app.models import FirstBoardRating
 from app.services.llm_provider import LLMProvider, get_llm_provider
 
 
-EXPLANATION_VERSION = "first-board-explanation-v2"
 FORBIDDEN_TERMS = ("买入", "卖出", "仓位", "目标价", "收益承诺")
 SAFETY_BOUNDARY = "不构成买卖建议"
 
