@@ -1,4 +1,4 @@
-"""Typed evidence for candidate contrasts and market first-board follow-through."""
+"""Typed review evidence, independent of Agent package initialization."""
 
 from datetime import date
 from typing import Annotated, Literal
