@@ -58,6 +58,53 @@ test("an empty observation pool shows the six nearest rejected stocks", /* Regre
   );
 });
 
+test("drawdown candidates use descending drawdown with stable ties without mutating the pool", () => {
+  const candidates = [
+    { symbol: "600004", state: "new", confirmed_date: "2026-10-09", drawdown_pct: 12 },
+    { symbol: "600003", state: "watching", confirmed_date: "2026-10-08", drawdown_pct: 20 },
+    { symbol: "600002", state: "watching", confirmed_date: "2026-10-07", drawdown_pct: 20 },
+    { symbol: "600006", state: "new", drawdown_pct: null },
+    { symbol: "600005", state: "new", drawdown_pct: null },
+  ];
+  const pool = {
+    strategy: "drawdown",
+    candidates,
+    evaluated_stocks: [{ symbol: "600001", state: "rejected", drawdown_pct: 9 }],
+  } as ConsolidationPool;
+  const original = structuredClone(candidates);
+
+  assert.deepEqual(observationDisplayStocks(pool, 1).map((stock) => stock.symbol), [
+    "600002", "600003", "600004", "600005", "600006",
+  ]);
+  assert.deepEqual(candidates, original);
+  assert.deepEqual(
+    observationDisplayStocks({ ...pool, strategy: "consolidation" }),
+    original,
+  );
+});
+
+test("drawdown fallback sorts signed values before limiting and keeps missing values last", () => {
+  const evaluated = [
+    { symbol: "600001", drawdown_pct: -12 },
+    { symbol: "600002", drawdown_pct: 0 },
+    { symbol: "600003", drawdown_pct: -2 },
+    { symbol: "600005", drawdown_pct: null },
+    { symbol: "600004", drawdown_pct: null },
+    { symbol: "600006", drawdown_pct: 9 },
+  ].map((stock) => ({ ...stock, state: "rejected", failed_conditions: ["drawdown_below_10pct"] }));
+  const pool = { strategy: "drawdown", candidates: [], evaluated_stocks: evaluated } as ConsolidationPool;
+  const original = structuredClone(evaluated);
+
+  assert.deepEqual(observationDisplayStocks(pool, 3).map((stock) => stock.symbol), [
+    "600006", "600002", "600003",
+  ]);
+  assert.deepEqual(observationDisplayStocks(pool).map((stock) => stock.symbol), [
+    "600006", "600002", "600003", "600001", "600004", "600005",
+  ]);
+  assert.deepEqual(observationDisplayStocks(pool, 0), []);
+  assert.deepEqual(evaluated, original);
+});
+
 test("consolidation near matches prioritize fewer failed rules, then threshold distance", /* Regression scenario: consolidation near matches prioritize fewer failed rules, then threshold distance. */ () => {
   const pool = {
     strategy: "consolidation",

@@ -77,7 +77,17 @@ export function ConsolidationPanel({ strategy }: { strategy: ObservationStrategy
               </p>}
               {pool.candidates.length === 0 && <div className="discovery-state"><strong>暂无符合条件的候选</strong><p>{displayStocks.length > 0 ? `以下展示最接近条件的 ${displayStocks.length} 只股票，均未入选正式观察池。` : consolidationEmptyMessage(pool)}</p></div>}
               {displayStocks.length > 0 && <>
-                <div><strong>{showingNearMatches ? "接近条件" : "符合条件股票"} · {displayStocks.length} 只</strong><p className="consolidation-note">{showingNearMatches ? "按未通过条件数量和超出阈值的距离排序；以下股票仍不符合全部条件。" : `仅展示同时满足全部${isDrawdown ? "高位回撤" : "缩量整理"}条件的股票。`}</p></div>
+                <div>
+                  <strong>{showingNearMatches ? "接近条件" : "符合条件股票"} · {displayStocks.length} 只</strong>
+                  <p className="consolidation-note">
+                    {isDrawdown && "按高点回撤幅度从高到低排序。"}
+                    {showingNearMatches
+                      ? isDrawdown
+                        ? "以下股票仍不符合全部条件。"
+                        : "按未通过条件数量和超出阈值的距离排序；以下股票仍不符合全部条件。"
+                      : `仅展示同时满足全部${isDrawdown ? "高位回撤" : "缩量整理"}条件的股票。`}
+                  </p>
+                </div>
                 <div className="consolidation-grid">
                   {displayStocks.map(/* Transform each entry in displayStocks into the result used by ConsolidationPanel. */ (candidate) => <article className="consolidation-card" key={candidate.symbol}>
                     <header><Link to={stockDetailPath(candidate.symbol, candidate.name)}>{candidate.name} <small>{candidate.symbol}</small></Link><span className={candidate.state === "rejected" ? "consolidation-badge-rejected" : "consolidation-badge-qualified"}>{showingNearMatches ? "接近条件" : candidate.state === "new" ? "首次符合" : "持续观察"}</span></header>

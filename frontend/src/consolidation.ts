@@ -93,37 +93,44 @@ export function consolidationEmptyMessage(pool: ConsolidationPool): string {
 
 /**
  * Show qualifying candidates first. If none qualify, select a bounded set of rejected
- * observations closest to the rules for inspection; they remain rejected observations.
+ * observations. Drawdown stocks use descending drawdown; consolidation examples use
+ * distance from the rules. Rejected observations remain outside the candidate pool.
  */
 export function observationDisplayStocks(
   pool: ConsolidationPool,
   fallbackLimit = 6,
 ): ConsolidationEvaluation[] {
-  if (pool.candidates.length > 0) return pool.candidates;
+  if (pool.candidates.length > 0) {
+    return pool.strategy === "drawdown"
+      ? [...pool.candidates].sort(compareDrawdown)
+      : pool.candidates;
+  }
   return [...pool.evaluated_stocks]
-    .filter(/* Keep only entries satisfying this predicate for observationDisplayStocks. */ (stock) => stock.state === "rejected")
-    .sort(/* Compare two entries using the explicit tie-break order for observationDisplayStocks. */ (left, right) => (
+    .filter((stock) => stock.state === "rejected")
+    .sort((left, right) => pool.strategy === "drawdown" ? compareDrawdown(left, right) : (
       left.failed_conditions.length - right.failed_conditions.length
-      || observationThresholdDistance(left, pool.strategy)
-        - observationThresholdDistance(right, pool.strategy)
+      || consolidationThresholdDistance(left) - consolidationThresholdDistance(right)
       || left.symbol.localeCompare(right.symbol)
     ))
     .slice(0, Math.max(0, fallbackLimit));
 }
 
 /**
- * Measure normalized distance from the displayed strategy thresholds for ordering rejected
- * examples.
+ * Keep missing drawdown behind all measured values, including negative drawdown.
  */
-function observationThresholdDistance(
-  stock: ConsolidationEvaluation,
-  strategy: ObservationStrategy,
+function compareDrawdown(
+  left: ConsolidationEvaluation,
+  right: ConsolidationEvaluation,
 ): number {
-  if (strategy === "drawdown") {
-    return stock.drawdown_pct === null
-      ? Number.POSITIVE_INFINITY
-      : Math.max(0, 10 - stock.drawdown_pct) / 10;
-  }
+  const leftDrawdown = left.drawdown_pct ?? Number.NEGATIVE_INFINITY;
+  const rightDrawdown = right.drawdown_pct ?? Number.NEGATIVE_INFINITY;
+  return leftDrawdown === rightDrawdown
+    ? left.symbol.localeCompare(right.symbol)
+    : rightDrawdown - leftDrawdown;
+}
+
+/** Measure normalized distance from consolidation thresholds for rejected examples. */
+function consolidationThresholdDistance(stock: ConsolidationEvaluation): number {
   const rangeGap = Math.max(0, stock.range_pct - 8) / 8;
   const closeGap = stock.anchor_change_pct < -10
     ? (-10 - stock.anchor_change_pct) / 10
