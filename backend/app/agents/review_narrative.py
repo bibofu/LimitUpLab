@@ -51,8 +51,9 @@ def authoritative_review_facts(
         "feature_comparison": feature_comparison,
         "comparison_basis": {
             "report_counts": "保留持久化预测的评分，仅使用复盘截至日内行情重算 evaluation_label：A/B评级次日开盘至收盘为正/负分别记success/miss，零收益为partial；低评级另记false_negative/avoid_success，不能并入失败或待观察。次日未到或必要行情/日历缺失时为pending。",
-            "feature_groups": "按首板至复盘截至日内最新已缓存收盘的收益正负分组，并受follow_days窗口约束；零收益、不足两根K线或缺失首板基准价不入特征组。",
-            "promotion": "仅统计交易日历中紧邻下一交易日且行情就绪的1进2对照；未就绪不等于失败。",
+            "feature_groups": "按首板至复盘截至日内最新已缓存收盘的收益正负分组，并受真实交易日follow_days窗口约束；有洞行情保留真实日期位置并标不完整，不能把D+2当成D+1；零收益、不足两根K线或缺失首板基准价不入特征组。",
+            "promotion": "仅统计交易日历中紧邻下一交易日且事件行情就绪的1进2对照；pick_outcomes的promotion_outcome_ready独立于OHLC的outcome_ready，未知晋级为null。特征组晋级指标还要求该样本OHLC就绪，未就绪不等于失败。",
+            "metric_samples": "feature_comparison.metrics.sample_counts逐字段提供valid_count和missing_count；均值和晋级率只使用各自有效样本，不以组总数代替分母。",
             "inference": "分组和来源不同，不能混用分母；描述性差异不代表因果，也不能将历史补算当成前向预测。",
         },
         "sampling_limits": {

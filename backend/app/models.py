@@ -1386,6 +1386,7 @@ class ReviewAgentPostBar(BaseModel):
     """One cached daily bar after a reviewed first-board pick."""
 
     trade_date: date
+    trading_day_offset: int | None = Field(default=None, ge=0)
     open: float
     high: float
     low: float

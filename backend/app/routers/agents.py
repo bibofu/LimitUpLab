@@ -676,7 +676,7 @@ def get_review_agent_report(
     top_per_day: int = Query(default=10, ge=1, le=20),
     follow_days: int = Query(default=5, ge=1, le=10),
     use_llm: bool = Query(default=True),
-    refresh_facts: bool = Query(default=False),
+    refresh_facts: bool = False,
 ) -> ReviewAgentReportResponse:
     """Return Review Agent tracking for recent daily top first-board picks."""
 

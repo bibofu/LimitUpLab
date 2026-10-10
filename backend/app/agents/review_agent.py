@@ -27,7 +27,11 @@ from app.services.llm_provider import DisabledLLMProvider, LLMProvider, get_llm_
 from app.agents.review_narrative import ReviewNarrative, authoritative_review_facts
 from app.agents.react_runtime.compliance import review_answer
 from app.services.outcome_completeness import build_top10_outcome_completeness
-from app.services.review_as_of import build_review_post_bars, evaluate_review_prediction_as_of
+from app.services.review_as_of import (
+    build_review_post_bars,
+    evaluate_review_prediction_as_of,
+    review_window_dates,
+)
 from app.services.promotion_calendar import (
     PromotionCalendar,
     adjacent_trade_date_pairs,
@@ -35,7 +39,7 @@ from app.services.promotion_calendar import (
 )
 
 
-REVIEW_AGENT_VERSION = "review-agent-tool-use-v7-asof"
+REVIEW_AGENT_VERSION = "review-agent-tool-use-v8-observation-window"
 
 
 @dataclass(frozen=True)
@@ -125,6 +129,7 @@ class ReviewAgentToolbox:
 
         picks = self._high_score_evaluations()
         ready = [item for item in picks if item.outcome_ready]
+        promotions = self.promotion_results()
         return ReviewToolResult(
             name="pick_outcomes",
             input={
@@ -140,7 +145,16 @@ class ReviewAgentToolbox:
                 "success_count": sum(1 for item in picks if item.evaluation_label == "success"),
                 "failed_count": sum(1 for item in picks if item.evaluation_label == "miss"),
                 "pending_count": sum(1 for item in picks if item.evaluation_label == "pending"),
-                "outcomes": [_outcome_summary(item) for item in picks[:20]],
+                "promotion_ready_count": len(promotions),
+                "promotion_unknown_count": len(picks) - len(promotions),
+                "outcomes": [
+                    {
+                        **_outcome_summary(item),
+                        "promotion_outcome_ready": item.prediction_id in promotions,
+                        "promoted_to_second_board": promotions.get(item.prediction_id),
+                    }
+                    for item in picks[:20]
+                ],
             },
             summary=f"Reviewed outcomes for {len(picks)} picks; {len(ready)} are ready.",
         )
@@ -254,12 +268,41 @@ class ReviewAgentToolbox:
                 "success" if latest_return > 0 else "miss"
             )
             tracked_returns[item.prediction_id] = latest_return
+        ohlc_ready_ids = {item.prediction_id for item in evaluations if item.outcome_ready}
+        promotion_results = {
+            key: value for key, value in self.promotion_results().items()
+            if key in ohlc_ready_ids
+        }
         return _build_feature_comparison(
             evaluations,
             self._prediction_lookup(),
             group_labels=performance_groups,
             tracked_returns=tracked_returns,
+            promotion_results=promotion_results,
         )
+
+    def promotion_results(self) -> dict[str, bool]:
+        """Expose known promotion outcomes independently of OHLC readiness."""
+
+        evaluations = self._high_score_evaluations()
+        ready_next_dates = {
+            item.trade_date: item.next_trade_date
+            for item in _build_promotion_comparisons(
+                events=self.events, picks=evaluations, end_date=self.end_date,
+                trade_dates=self.promotion_calendar.trade_dates,
+            )
+            if item.outcome_ready
+        }
+        observed_events = {(item.trade_date, item.symbol): item for item in self.events}
+        promotion_results: dict[str, bool] = {}
+        for item in evaluations:
+            if item.trade_date not in ready_next_dates:
+                continue
+            next_event = observed_events.get((ready_next_dates[item.trade_date], item.symbol))
+            promotion_results[item.prediction_id] = bool(
+                next_event and next_event.closed_limit and next_event.board_height == 2
+            )
+        return promotion_results
 
     # Index saved predictions by their identifying fields for outcome matching.
     def _prediction_lookup(self) -> dict[str, AgentPrediction]:
@@ -514,7 +557,10 @@ def _review_picks_from_toolbox(toolbox: ReviewAgentToolbox) -> list[ReviewAgentP
     for item in toolbox._high_score_evaluations():
         prediction = toolbox.prediction_for(item.prediction_id)
         post_bars = _post_bars_for_pick(toolbox, item)
-        expected_count = _expected_post_bar_count(toolbox, item.trade_date)
+        expected_dates = review_window_dates(
+            toolbox.promotion_calendar.trade_dates, base_date=item.trade_date,
+            as_of_date=toolbox.end_date, follow_days=toolbox.follow_days,
+        )
         picks.append(
             ReviewAgentPick(
                 trade_date=item.trade_date,
@@ -544,8 +590,10 @@ def _review_picks_from_toolbox(toolbox: ReviewAgentToolbox) -> list[ReviewAgentP
                 reasons=list(prediction.reasons) if prediction else [item.lesson],
                 risks=list(prediction.risks) if prediction else [item.scoring_suggestion],
                 post_bars=post_bars,
-                expected_post_bar_count=expected_count,
-                post_bar_cache_complete=len(post_bars) >= expected_count,
+                expected_post_bar_count=len(expected_dates),
+                post_bar_cache_complete=bool(expected_dates) and set(expected_dates).issubset(
+                    bar.trade_date for bar in post_bars
+                ),
             )
         )
     return picks
@@ -599,17 +647,6 @@ def _review_position_label(prediction: AgentPrediction | None) -> str | None:
     return normalized or None
 
 
-def _expected_post_bar_count(toolbox: ReviewAgentToolbox, trade_date: date) -> int:
-    """Return base day plus currently elapsed follow-up trading days."""
-
-    available_dates = {
-        event.trade_date
-        for event in toolbox.events
-        if trade_date <= event.trade_date <= toolbox.end_date
-    }
-    return min(max(toolbox.follow_days, 0) + 1, len(available_dates))
-
-
 def _post_bars_for_pick(
     toolbox: ReviewAgentToolbox,
     item: AgentEvaluationItem,
@@ -622,6 +659,7 @@ def _post_bars_for_pick(
         base_date=item.trade_date,
         as_of_date=toolbox.end_date,
         follow_days=toolbox.follow_days,
+        trade_dates=toolbox.promotion_calendar.trade_dates,
     )
 
 
@@ -978,6 +1016,7 @@ def _build_feature_comparison(
     *,
     group_labels: dict[str, str] | None = None,
     tracked_returns: dict[str, float] | None = None,
+    promotion_results: dict[str, bool] | None = None,
 ) -> dict[str, Any]:
     """Build descriptive statistics for the selected performance grouping."""
 
@@ -997,11 +1036,18 @@ def _build_feature_comparison(
                 predictions.get(item.prediction_id),
                 group_label=resolved_labels[item.prediction_id],
                 tracked_return=resolved_returns.get(item.prediction_id),
+                promotion=(
+                    promotion_results.get(item.prediction_id)
+                    if promotion_results is not None
+                    else item.promoted_to_second_board if item.outcome_ready else None
+                ),
             )
         )
     ]
     success = [item for item in profiles if item["label"] == "success"]
     failed = [item for item in profiles if item["label"] == "miss"]
+    success_counts = _profile_sample_counts(success)
+    failed_counts = _profile_sample_counts(failed)
     result: dict[str, Any] = {
         "success_count": len(success),
         "failed_count": len(failed),
@@ -1010,6 +1056,7 @@ def _build_feature_comparison(
         "failed_patterns": [],
         "scoring_bias": [],
         "adjustment_suggestions": [],
+        "metrics": {"sample_counts": {"success": success_counts, "failed": failed_counts}},
     }
     if len(success) < 3 or len(failed) < 3:
         result["main_findings"] = [
@@ -1021,7 +1068,7 @@ def _build_feature_comparison(
     failed_avg = _profile_averages(failed)
     result["main_findings"] = [
         f"以下对比基于成功组 {len(success)} 只、失败组 {len(failed)} 只，"
-        "属于近期样本的描述性统计，不代表稳定因果。"
+        "各指标仅使用自身有效数据，分母可能不同；属于近期样本的描述性统计，不代表稳定因果。"
     ]
 
     success_selection = _selection_profile_pattern(success)
@@ -1031,22 +1078,22 @@ def _build_feature_comparison(
     if failed_selection:
         result["failed_patterns"].append(f"选股画像：{failed_selection}。")
 
-    seal_success = _seal_pattern("成功组", success_avg)
-    seal_failed = _seal_pattern("失败组", failed_avg)
+    seal_success = _seal_pattern("成功组", success_avg, success_counts)
+    seal_failed = _seal_pattern("失败组", failed_avg, failed_counts)
     if seal_success and seal_failed:
         result["successful_patterns"].append(f"封板结构：{seal_success}。")
         result["failed_patterns"].append(f"封板结构：{seal_failed}。")
 
-    structure_success = _structure_pattern("成功组", success_avg)
-    structure_failed = _structure_pattern("失败组", failed_avg)
+    structure_success = _structure_pattern("成功组", success_avg, success_counts)
+    structure_failed = _structure_pattern("失败组", failed_avg, failed_counts)
     if structure_success and structure_failed:
         result["successful_patterns"].append(
             f"趋势与扩散：{structure_success}。"
         )
         result["failed_patterns"].append(f"趋势与扩散：{structure_failed}。")
 
-    outcome_success = _outcome_pattern("成功组", success_avg)
-    outcome_failed = _outcome_pattern("失败组", failed_avg)
+    outcome_success = _outcome_pattern("成功组", success_avg, success_counts)
+    outcome_failed = _outcome_pattern("失败组", failed_avg, failed_counts)
     if outcome_success and outcome_failed:
         result["successful_patterns"].append(f"后续兑现：{outcome_success}。")
         result["failed_patterns"].append(f"风险表现：{outcome_failed}。")
@@ -1055,7 +1102,8 @@ def _build_feature_comparison(
     failed_score = failed_avg.get("score")
     if success_score is not None and failed_score is not None:
         result["scoring_bias"].append(
-            f"成功组平均评分 {success_score:.1f}，失败组 {failed_score:.1f}；"
+            f"成功组平均评分 {success_score:.1f}{_sample_note(success_counts, 'score')}，"
+            f"失败组 {failed_score:.1f}{_sample_note(failed_counts, 'score')}；"
             "两组都进入每日 Top10，说明现有总分仍需增强对结构差异的区分。"
         )
     result["adjustment_suggestions"] = [
@@ -1063,7 +1111,7 @@ def _build_feature_comparison(
         "通过滚动样本外评估后再调整权重。",
         "对多项特征同时弱于近期成功组的候选降低置信度，避免用单一阈值直接下结论。",
     ]
-    result["metrics"] = {"success": success_avg, "failed": failed_avg}
+    result["metrics"].update({"success": success_avg, "failed": failed_avg})
     return result
 
 
@@ -1076,6 +1124,7 @@ def _review_feature_profile(
     *,
     group_label: str,
     tracked_return: float | None,
+    promotion: bool | None,
 ) -> dict[str, Any] | None:
     if prediction is None:
         return None
@@ -1106,7 +1155,7 @@ def _review_feature_profile(
         "return_20d_pct": _number(enrichment.get("return_20d_pct")),
         "volume_ratio_5d": _number(enrichment.get("volume_ratio_5d")),
         "popularity_rank": _number(enrichment.get("popularity_rank")),
-        "promotion": 1.0 if evaluation.promoted_to_second_board else 0.0,
+        "promotion": float(promotion) if promotion is not None else None,
         "next_open_to_close_pct": evaluation.next_open_to_close_pct,
         "tracked_return_pct": tracked_return,
         "max_drawdown_from_next_open_3d": (
@@ -1133,6 +1182,25 @@ def _profile_averages(profiles: list[dict[str, Any]]) -> dict[str, float]:
         if len(values) >= 2:
             averages[key] = sum(values) / len(values)
     return averages
+
+
+def _profile_sample_counts(profiles: list[dict[str, Any]]) -> dict[str, dict[str, int]]:
+    """Retain every field's denominator, including fields missing for the whole group."""
+
+    keys = {key for profile in profiles for key in profile if key != "label"}
+    return {
+        key: {
+            "valid_count": sum(item.get(key) is not None for item in profiles),
+            "missing_count": sum(item.get(key) is None for item in profiles),
+        }
+        for key in sorted(keys)
+    }
+
+
+def _sample_note(counts: dict[str, dict[str, int]], key: str) -> str:
+    field = counts[key]
+    valid = field["valid_count"]
+    return f"（有效{valid}/{valid + field['missing_count']}只）"
 
 
 def _selection_profile_pattern(profiles: list[dict[str, Any]]) -> str | None:
@@ -1167,8 +1235,7 @@ def _selection_profile_pattern(profiles: list[dict[str, Any]]) -> str | None:
             cap_text += f"，中间 50% 位于 {lower:.1f}-{upper:.1f} 亿元"
         else:
             cap_text += f"，范围 {market_caps[0]:.1f}-{market_caps[-1]:.1f} 亿元"
-        if len(market_caps) < len(profiles):
-            cap_text += f"（{len(market_caps)}/{len(profiles)} 只有市值数据）"
+        cap_text += f"（有效{len(market_caps)}/{len(profiles)}只）"
         parts.append(cap_text)
     else:
         parts.append("流通市值数据不足")
@@ -1190,13 +1257,14 @@ def _top_categories(
         return ""
     counts = Counter(values)
     # The key compares 1 (negated for descending order), then 0.
-    return "、".join(
+    categories = "、".join(
         f"{name} {count}只"
         for name, count in sorted(
             counts.items(),
             key=lambda item: (-item[1], item[0]),
         )[:limit]
     )
+    return f"{categories}（有效{len(values)}/{len(profiles)}只）"
 
 
 def _percentile(values: list[float], ratio: float) -> float:
@@ -1212,51 +1280,54 @@ def _percentile(values: list[float], ratio: float) -> float:
 # Classify the recorded sealing behavior for historical review.
 # A None result represents the unavailable or inapplicable branch; callers must check it before
 # using the value.
-def _seal_pattern(label: str, averages: dict[str, float]) -> str | None:
+def _seal_pattern(
+    label: str, averages: dict[str, float], counts: dict[str, dict[str, int]],
+) -> str | None:
     first_limit = averages.get("first_limit_minutes")
     break_count = averages.get("break_count")
     if first_limit is None or break_count is None:
         return None
     return (
-        f"{label}平均首封约 {_format_minutes(first_limit)}，"
-        f"平均炸板 {break_count:.2f} 次"
+        f"{label}平均首封约 {_format_minutes(first_limit)}{_sample_note(counts, 'first_limit_minutes')}，"
+        f"平均炸板 {break_count:.2f} 次{_sample_note(counts, 'break_count')}"
     )
 
 
 # Classify the recorded price-structure features for historical review.
 # A None result represents the unavailable or inapplicable branch; callers must check it before
 # using the value.
-def _structure_pattern(label: str, averages: dict[str, float]) -> str | None:
+def _structure_pattern(
+    label: str, averages: dict[str, float], counts: dict[str, dict[str, int]],
+) -> str | None:
     industry_count = averages.get("industry_limit_up_count")
     return_20d = averages.get("return_20d_pct")
     volume_ratio = averages.get("volume_ratio_5d")
     if industry_count is None or return_20d is None or volume_ratio is None:
         return None
     return (
-        f"{label}同行业涨停平均 {industry_count:.1f} 只、"
-        f"近 20 日涨幅 {return_20d:+.1f}%、5 日量比 {volume_ratio:.2f}"
+        f"{label}同行业涨停平均 {industry_count:.1f} 只{_sample_note(counts, 'industry_limit_up_count')}、"
+        f"近 20 日涨幅 {return_20d:+.1f}%{_sample_note(counts, 'return_20d_pct')}、"
+        f"5 日量比 {volume_ratio:.2f}{_sample_note(counts, 'volume_ratio_5d')}"
     )
 
 
 # Label the observed outcome pattern for the review report.
 # A None result represents the unavailable or inapplicable branch; callers must check it before
 # using the value.
-def _outcome_pattern(label: str, averages: dict[str, float]) -> str | None:
-    promotion = averages.get("promotion")
-    next_return = averages.get("next_open_to_close_pct")
-    tracked_return = averages.get("tracked_return_pct")
-    drawdown = averages.get("max_drawdown_from_next_open_3d")
-    if promotion is None or next_return is None or drawdown is None:
-        return None
-    tracked_text = (
-        f"首板至最新收盘平均 {tracked_return:+.2f}%、"
-        if tracked_return is not None
-        else ""
+def _outcome_pattern(
+    label: str, averages: dict[str, float], counts: dict[str, dict[str, int]],
+) -> str | None:
+    descriptions = (
+        ("tracked_return_pct", "首板至最新收盘平均", "+.2f", "%"),
+        ("promotion", "晋级率", ".1%", ""),
+        ("next_open_to_close_pct", "次日开盘至收盘平均", "+.2f", "%"),
+        ("max_drawdown_from_next_open_3d", "三日最大回撤平均", "+.2f", "%"),
     )
-    return (
-        f"{label}{tracked_text}晋级率 {promotion:.1%}、次日开盘至收盘平均 "
-        f"{next_return:+.2f}%、三日最大回撤平均 {drawdown:+.2f}%"
-    )
+    parts = [
+        f"{text} {averages[key]:{format_spec}}{suffix}{_sample_note(counts, key)}"
+        for key, text, format_spec, suffix in descriptions if key in averages
+    ]
+    return f"{label}{'、'.join(parts)}" if parts else None
 
 
 # Convert a clock value into minutes for aggregation and ordering.

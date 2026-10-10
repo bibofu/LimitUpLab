@@ -8,7 +8,12 @@ from unittest.mock import Mock
 import pytest
 from langchain_core.messages import AIMessage
 
-from app.agents.review_agent import ReviewAgentToolbox, build_review_agent_report
+from app.agents.review_agent import (
+    ReviewAgentToolbox,
+    _build_feature_comparison,
+    _review_picks_from_toolbox,
+    build_review_agent_report,
+)
 from app.models import AgentPrediction, StockDailyBar
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.evaluation_agent import _evaluate_prediction
@@ -154,6 +159,7 @@ def test_stale_continuation_flag_cannot_prove_promotion_without_next_day_event()
 def test_display_bars_stop_at_the_same_cutoff_and_keep_the_original_anchor():
     result = build_review_post_bars(
         list(reversed(bars())), symbol=SYMBOL, base_date=BASE, as_of_date=D1, follow_days=5,
+        trade_dates=CALENDAR,
     )
 
     assert [bar.trade_date for bar in result] == [BASE, D1]
@@ -163,6 +169,7 @@ def test_display_bars_stop_at_the_same_cutoff_and_keep_the_original_anchor():
 def test_missing_base_bar_never_turns_a_later_close_into_the_return_anchor():
     result = build_review_post_bars(
         bars()[1:], symbol=SYMBOL, base_date=BASE, as_of_date=D3, follow_days=5,
+        trade_dates=CALENDAR,
     )
 
     assert [bar.trade_date for bar in result] == [D1, D2, D3]
@@ -221,6 +228,8 @@ def test_model_tool_facts_and_report_use_cutoff_results_instead_of_saved_future_
     assert outcome_facts["success_count"] == 0
     assert outcome_facts["pending_count"] == 1
     assert outcome_facts["outcomes"][0]["three_day_close_pct"] is None
+    assert outcome_facts["outcomes"][0]["promoted_to_second_board"] is None
+    assert outcome_facts["outcomes"][0]["promotion_outcome_ready"] is False
     authority = provider.report_input["tool_facts"]["authoritative_review"]
     assert authority["evaluation_label_counts"] == {"pending": 1}
     assert authority["sampling_limits"]["as_of_date"] == BASE.isoformat()
@@ -262,3 +271,114 @@ def test_daily_selection_does_not_drop_a_top_score_after_future_label_ordered_50
     assert selected.score == 99
     assert selected.evaluation_label == "pending"
     assert toolbox.evaluation_scope["candidates_truncated"] is False
+
+
+def test_missing_d1_cannot_extend_a_one_day_window_to_d2():
+    result = build_review_post_bars(
+        [bar for bar in bars() if bar.trade_date != D1], symbol=SYMBOL,
+        base_date=BASE, as_of_date=D3, follow_days=1, trade_dates=CALENDAR,
+    )
+    assert [bar.trade_date for bar in result] == [BASE]
+    assert [bar.trading_day_offset for bar in result] == [0]
+
+
+def test_known_later_observation_keeps_its_calendar_slot_across_a_gap():
+    result = build_review_post_bars(
+        [bar for bar in bars() if bar.trade_date != D1], symbol=SYMBOL,
+        base_date=BASE, as_of_date=D3, follow_days=2, trade_dates=CALENDAR,
+    )
+    assert [bar.trade_date for bar in result] == [BASE, D2]
+    assert [bar.trading_day_offset for bar in result] == [0, 2]
+    assert result[-1].return_from_base_pct == pytest.approx(30)
+
+
+def review_toolbox(*, observed_bars=None, observed_events=None, calendar=CALENDAR, follow_days=5):
+    repo = Mock(spec=SQLiteFirstBoardRepository)
+    repo.list_predictions_between.return_value = [prediction()]
+    repo.list_post_bars.return_value = bars() if observed_bars is None else observed_bars
+    toolbox = ReviewAgentToolbox(
+        events=[event()] if observed_events is None else observed_events,
+        repository=repo, start_date=BASE, end_date=D3, min_score=0,
+        top_per_day=10, follow_days=follow_days, trade_dates=calendar,
+    )
+    toolbox._evaluations = [evaluate(D3, observed_bars=observed_bars, calendar=calendar)]
+    return toolbox
+
+
+def test_missing_market_event_day_does_not_shrink_expected_bar_calendar():
+    toolbox = review_toolbox(
+        observed_bars=[bar for bar in bars() if bar.trade_date in {BASE, D2}],
+        observed_events=[event(), event(D2)], follow_days=2,
+    )
+    pick, = _review_picks_from_toolbox(toolbox)
+    assert pick.expected_post_bar_count == 3
+    assert pick.post_bar_cache_complete is False
+    assert [bar.trading_day_offset for bar in pick.post_bars] == [0, 2]
+
+
+def test_unknown_calendar_never_claims_complete_cache_or_assigns_followup_slots():
+    pick, = _review_picks_from_toolbox(review_toolbox(calendar=()))
+    assert pick.expected_post_bar_count == 0
+    assert pick.post_bar_cache_complete is False
+    assert [bar.trade_date for bar in pick.post_bars] == [BASE]
+    assert pick.post_bars[0].trading_day_offset == 0
+
+
+@pytest.mark.parametrize("missing", ["next_bar", "next_events"])
+def test_unknown_promotion_never_enters_feature_denominator_or_false_tool_fact(missing):
+    observed = [bar for bar in bars() if missing != "next_bar" or bar.trade_date != D1]
+    toolbox = review_toolbox(observed_bars=observed, observed_events=[event()])
+    comparison = toolbox.feature_comparison()
+    assert comparison["failed_count"] == 1
+    assert comparison["metrics"]["sample_counts"]["failed"]["promotion"] == {
+        "valid_count": 0, "missing_count": 1,
+    }
+    facts = toolbox.pick_outcomes().output
+    assert facts["promotion_unknown_count"] == 1
+    assert facts["outcomes"][0]["promotion_outcome_ready"] is False
+    assert facts["outcomes"][0]["promoted_to_second_board"] is None
+
+
+def test_independently_known_promotion_is_visible_but_pending_ohlc_stays_out_of_feature_rate():
+    toolbox = review_toolbox(
+        observed_bars=[bar for bar in bars() if bar.trade_date != D1],
+        observed_events=[event(), event(D1, height=2)],
+    )
+    facts = toolbox.pick_outcomes().output["outcomes"][0]
+    assert facts["outcome_ready"] is False
+    assert facts["promotion_outcome_ready"] is True
+    assert facts["promoted_to_second_board"] is True
+    counts = toolbox.feature_comparison()["metrics"]["sample_counts"]["failed"]["promotion"]
+    assert counts == {"valid_count": 0, "missing_count": 1}
+
+
+def test_metric_denominators_exclude_missing_values_and_are_disclosed_in_text():
+    predictions = {}
+    evaluations = []
+    group_labels = {}
+    tracked_returns = {}
+    promotions = {}
+    for index in range(6):
+        key = f"metric-{index}"
+        predictions[key] = prediction().model_copy(update={"prediction_id": key})
+        evaluations.append(evaluate(D3).model_copy(update={
+            "prediction_id": key,
+            "max_drawdown_from_next_open_3d": None if index % 3 == 2 else -10,
+        }))
+        group_labels[key] = "success" if index < 3 else "miss"
+        tracked_returns[key] = 10 if index < 3 else -10
+        if index % 3 != 2:
+            promotions[key] = index % 3 == 0
+    comparison = _build_feature_comparison(
+        evaluations, predictions, group_labels=group_labels,
+        tracked_returns=tracked_returns, promotion_results=promotions,
+    )
+    for group in ("success", "failed"):
+        metrics = comparison["metrics"]
+        assert metrics[group]["promotion"] == 0.5
+        assert metrics["sample_counts"][group]["promotion"] == {"valid_count": 2, "missing_count": 1}
+        assert metrics["sample_counts"][group]["max_drawdown_from_next_open_3d"] == {"valid_count": 2, "missing_count": 1}
+        assert metrics["sample_counts"][group]["return_20d_pct"] == {"valid_count": 0, "missing_count": 3}
+    patterns = " ".join(comparison["successful_patterns"])
+    assert "晋级率 50.0%（有效2/3只）" in patterns
+    assert "三日最大回撤平均 -10.00%（有效2/3只）" in patterns
