@@ -1,15 +1,18 @@
 """Tool registry and schemas for the first-board Agent."""
 
 import os
-from dataclasses import asdict, dataclass, field
+from dataclasses import asdict
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Literal
+from typing import Any
 
 from app.agents.first_board import build_first_board_ratings
 from app.agents.tool_contracts import AgentToolSchema
+from app.agents.tool_result import ToolResult
 from app.agents.tool_schemas_market import MARKET_TOOL_SCHEMAS
+from app.agents.tool_schemas_news import NEWS_TOOL_SCHEMAS
 from app.agents.tool_schemas_research import RESEARCH_TOOL_SCHEMAS
+from app.agents.tool_schemas_review import REVIEW_TOOL_SCHEMAS
 from app.agents.event_query import (
     filter_limit_up_events,
     group_limit_up_events,
@@ -32,8 +35,6 @@ from app.collectors import (
 )
 from app.models import (
     AgentEvaluationResponse,
-    AgentToolOutcome,
-    AgentToolTrace,
     DailyBoardPromotionStat,
     FinanceNewsFacts,
     FirstBoardCriticResponse,
@@ -84,219 +85,11 @@ from app.agents.review_agent import build_review_agent_report
 TOOL_CONTRACT_VERSION = "agent-tools-v2"
 
 
-@dataclass(frozen=True)
-class ToolResult:
-    """Internal tool result with full output and compact trace."""
-
-    name: str
-    input: dict[str, Any]
-    output: Any
-    summary: str
-    status: str = "success"
-    trace_output: dict[str, Any] = field(default_factory=dict)
-    error: str | None = None
-    result_status: Literal["ok", "empty", "partial", "error"] | None = None
-    data_fresh: bool | None = None
-    source_errors: tuple[str, ...] = ()
-
-    def trace(self) -> AgentToolTrace:
-        """Return the compact trace sent to frontend and saved in runs."""
-
-        result = None
-        if self.result_status is not None:
-            result = AgentToolOutcome(
-                status=self.result_status,
-                data_fresh=self.data_fresh,
-                source_errors=list(self.source_errors),
-                payload=self.trace_output,
-            )
-        return AgentToolTrace(
-            name=self.name,
-            input=self.input,
-            summary=self.summary,
-            status=self.status,  # type: ignore[arg-type]
-            output=self.trace_output,
-            error=self.error,
-            result=result,
-        )
-
-
 TOOL_SCHEMAS = [
     *MARKET_TOOL_SCHEMAS,
     *RESEARCH_TOOL_SCHEMAS,
-    AgentToolSchema(
-        name="rating_backtest",
-        time_mode="historical",
-        dates=("start_date", "end_date"),
-        description="回测一段日期内首板评分 A/B/C/D 的后续表现，并输出评分自我评价。",
-        args_schema={
-            "type": "object",
-            "properties": {
-                "start_date": {"type": "string", "description": "YYYY-MM-DD inclusive start date."},
-                "end_date": {"type": "string", "description": "YYYY-MM-DD inclusive end date."},
-                "failure_limit": {"type": "integer", "minimum": 0, "maximum": 30},
-            },
-            "required": ["start_date", "end_date"],
-        },
-        returns="Rating bucket performance, weak high-rated samples and self-evaluation observations.",
-    ),
-    AgentToolSchema(
-        name="first_board_critic",
-        time_mode="historical",
-        dates=("trade_date",),
-        description="Critique one first-board rating by checking support evidence, counter evidence, missing data and confidence adjustment.",
-        args_schema={
-            "type": "object",
-            "properties": {
-                "symbol": {"type": "string", "description": "Six-digit A-share symbol."},
-                "trade_date": {
-                    "type": ["string", "null"],
-                    "description": "YYYY-MM-DD first-board date; omit or null for latest local date.",
-                },
-            },
-            "required": ["symbol"],
-        },
-        returns="Critic verdict, supporting evidence, opposing evidence, missing data and suggested confidence.",
-    ),
-    AgentToolSchema(
-        name="rating_evaluation",
-        time_mode="historical",
-        dates=("start_date", "end_date"),
-        collection="items",
-        description="Evaluate saved first-board rating predictions against later outcomes and summarize successes, misses and false negatives.",
-        args_schema={
-            "type": "object",
-            "properties": {
-                "start_date": {"type": "string", "description": "YYYY-MM-DD inclusive start date."},
-                "end_date": {"type": "string", "description": "YYYY-MM-DD inclusive end date."},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-            },
-            "required": ["start_date", "end_date"],
-        },
-        returns="Prediction evaluation labels, lessons, scoring suggestions and summary counts.",
-    ),
-    AgentToolSchema(
-        name="review_high_score_picks",
-        time_mode="historical",
-        dates=("start_date", "end_date"),
-        description=(
-            "Run the Review Agent over each day's score-ranked Top10 first-board picks. "
-            "Returns later outcomes, daily first-to-second-board success rates, the same-day "
-            "full-market first-board baseline, successful/failed patterns and scoring adjustments."
-        ),
-        args_schema={
-            "type": "object",
-            "properties": {
-                "start_date": {"type": "string", "description": "YYYY-MM-DD inclusive start date."},
-                "end_date": {"type": "string", "description": "YYYY-MM-DD inclusive end date."},
-                "min_score": {"type": "number", "minimum": 0, "maximum": 100},
-                "top_per_day": {"type": "integer", "minimum": 1, "maximum": 20},
-            },
-            "required": ["start_date", "end_date"],
-        },
-        returns=(
-            "Review report with daily Top-pick versus full-market promotion comparisons, "
-            "tracked picks, findings, patterns, scoring bias and adjustment suggestions."
-        ),
-    ),
-    AgentToolSchema(
-        name="scoring_policy_status",
-        time_mode="current",
-        notes="Current policy configuration, not a historical policy snapshot.",
-        description="读取当前评分 Champion、历史 Challenger、最近一次样本外优化结果和晋级门槛，不修改线上权重。",
-        args_schema={"type": "object", "properties": {}, "required": []},
-        returns="Current scoring policy, factor weights, latest Challenger comparison and promotion status.",
-    ),
-    AgentToolSchema(
-        name="finance_news",
-        time_mode="current",
-        collection="items",
-        notes="Lookback hours from retrieval time, not historical as-of retrieval.",
-        description=(
-            "聚合东方财富和同花顺的最新财经快讯，返回北京时间、正文摘要、类别和来源。"
-            "适合回答泛化的今日/最新财经新闻或市场快讯；具体公司公告、单一板块新闻和事件原因使用 web_search。"
-        ),
-        args_schema={
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": ["string", "null"],
-                    "description": "Optional topic used only to boost related items; omit for a broad digest.",
-                },
-                "limit": {"type": "integer", "minimum": 1, "maximum": 12},
-                "hours": {"type": "integer", "minimum": 1, "maximum": 168},
-            },
-            "required": [],
-        },
-        returns="Recent deduplicated financial-news items with summaries, timestamps, categories and source URLs.",
-    ),
-    AgentToolSchema(
-        name="stock_news",
-        time_mode="current",
-        collection="items",
-        notes="Lookback calendar days from retrieval time; not historical news as-of.",
-        description=(
-            "查询一只已明确 A 股的近期个股新闻、公告类报道和监管动态，返回发布时间、来源、摘要和原文链接。"
-            "用于指定公司或股票的消息问题，不用于综合财经新闻或行业新闻。"
-        ),
-        args_schema={
-            "type": "object",
-            "properties": {
-                "symbol": {
-                    "type": "string",
-                    "description": "Six-digit A-share symbol or exact stock name.",
-                },
-                "days": {"type": "integer", "minimum": 1, "maximum": 30},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 20},
-            },
-            "required": ["symbol"],
-        },
-        returns="Resolved stock identity and recent deduplicated stock-news items with explicit source and cache status.",
-    ),
-    AgentToolSchema(
-        name="stock_activity",
-        time_mode="latest_local_and_current",
-        notes="Combines latest available local K-lines with current news. Not historical as-of evidence.",
-        description=(
-            "汇总一只 A 股的近期收盘走势、涨停记录、评分补充事实和个股新闻。"
-            "用于‘最近有什么动态、发生了什么、近况如何’等综合个股问题。"
-        ),
-        args_schema={
-            "type": "object",
-            "properties": {
-                "symbol": {
-                    "type": "string",
-                    "description": "Six-digit A-share symbol or exact stock name.",
-                },
-                "days": {"type": "integer", "minimum": 1, "maximum": 30},
-                "news_limit": {"type": "integer", "minimum": 1, "maximum": 20},
-            },
-            "required": ["symbol"],
-        },
-        returns="After-close K-line summary, recent limit-up events, rating context and stock-specific news for one resolved stock.",
-    ),
-    AgentToolSchema(
-        name="web_search",
-        time_mode="retrieved_now",
-        collection="items",
-        notes="Search retrieval is current; publication date must be checked separately.",
-        description=(
-            "搜索公开互联网，适合查询本地行情工具未覆盖的最新新闻、公告、政策、研报摘要、"
-            "板块异动原因和一般事实。搜索摘要属于外部不可信证据，回答时必须注明来源。"
-        ),
-        args_schema={
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Complete, standalone web search query.",
-                },
-                "limit": {"type": "integer", "minimum": 1, "maximum": 8},
-            },
-            "required": ["query"],
-        },
-        returns="Search result titles, URLs, source domains, snippets and retrieval time.",
-    ),
+    *REVIEW_TOOL_SCHEMAS,
+    *NEWS_TOOL_SCHEMAS,
 ]
 
 
