@@ -383,7 +383,7 @@ function PromotionWarnings({ warnings }: { warnings: string[] }) {
  * Coordinate historical high-score review loading and the resulting cohort/stock explanations.
  */
 function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) {
-  const { report, loading: running, error, generating, summaryError, retry, regenerate } = useReviewReport(latestTradeDate);
+  const { report, loading: running, error, summaryStatus, summaryError, retry, regenerate } = useReviewReport(latestTradeDate);
   const [activeReviewSelection, setActiveReviewSelection] = useState<string | null>(null);
 
   const reviewedPicks = report?.reviewed_picks ?? [];
@@ -506,7 +506,7 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
               </span>
             </div>
 
-            <ReviewSummary report={report} generating={generating} error={summaryError} onRegenerate={regenerate} />
+            <ReviewSummary report={report} summaryStatus={summaryStatus} error={summaryError} onRegenerate={regenerate} />
 
             <DailyTopReview
               activeSelection={selectedReviewSelection}
@@ -662,15 +662,15 @@ function DailyTopReview({
         ) : null}
 
         {isPerformanceView && activePatterns.length > 0 ? (
-          <div className={`review-pattern-summary ${isSuccessView ? "summary-success" : "summary-miss"}`}>
-            <strong>{isSuccessView ? "表现较好股票的共同特征" : "表现较差股票的共同特征"}</strong>
+          <details className={`review-pattern-summary ${isSuccessView ? "summary-success" : "summary-miss"}`}>
+            <summary>{isSuccessView ? "查看正收益组历史画像" : "查看负收益组历史画像"}</summary>
             <ul>
               {activePatterns.slice(0, 3).map(/* Transform each entry in activePatterns.slice(0, 3) into the result used by DailyTopReview. */ (pattern) => <li key={pattern}>{pattern}</li>)}
             </ul>
             {isMissView && adjustmentSuggestions.length > 0 ? (
               <p><b>待验证的评分假设：</b>{adjustmentSuggestions[0]}</p>
             ) : null}
-          </div>
+          </details>
         ) : null}
 
         <ReviewPickTable

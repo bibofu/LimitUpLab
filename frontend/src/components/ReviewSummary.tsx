@@ -1,50 +1,106 @@
 import { LoaderCircle, RefreshCcw } from "lucide-react";
-import type { ReviewAgentReportResponse } from "../types";
+import type { ReviewSummaryStatus } from "../hooks/useReviewReport";
+import type { ReviewAgentReportResponse, ReviewFeatureCard } from "../types";
 
 interface ReviewSummaryProps {
   report: ReviewAgentReportResponse;
-  generating: boolean;
+  summaryStatus: ReviewSummaryStatus;
   error: string | null;
   onRegenerate: () => void;
 }
 
-export function ReviewSummary({ report, generating, error, onRegenerate }: ReviewSummaryProps) {
-  const mode = report.generation_mode ?? "legacy";
-  const source = mode === "llm" ? "LLM 生成" : mode === "deterministic" ? "规则回退" : "历史来源未标识";
-  const sections = [
-    ["主要发现", report.main_findings],
-    ["首板至观察日收盘：正收益组特征", report.successful_patterns],
-    ["首板至观察日收盘：负收益组特征", report.failed_patterns],
-    ["评分偏差观察", report.scoring_bias],
-    ["待验证的调整假设", report.adjustment_suggestions],
-  ] as const;
+const FEATURES = [
+  ["position", "首板位置"],
+  ["market_cap", "流通市值（中位数）"],
+  ["first_seal", "首次封板时间（均值）"],
+] as const;
+
+export function ReviewSummary({ report, summaryStatus, error, onRegenerate }: ReviewSummaryProps) {
+  const generating = summaryStatus === "generating";
+  const failed = summaryStatus === "fallback" || summaryStatus === "error";
+  const headline = report.summary_headline?.trim();
+  const features = report.feature_summary;
+  const cohortCount = (key: string) => {
+    const count = report.time_cohort_counts?.[key];
+    return count !== undefined ? `${count} 个` : report.time_audit_status === "checked" ? "0 个" : "未核验";
+  };
+  const statusText = {
+    idle: "特征已就绪", generating: "正在生成解读", ready: "LLM 解读",
+    fallback: "本次使用本地统计", error: "解读请求失败",
+  }[summaryStatus];
+  // A baseline or previous report's note is never the outcome of the active request.
+  const failureReason = summaryStatus === "error" ? error
+    : summaryStatus === "fallback" ? report.generation_note : null;
+  const buttonText = generating ? "生成中…" : failed ? "重试解读"
+    : summaryStatus === "ready" ? "重新生成" : "生成解读";
+  const notice = generating ? "正在整理一句话解读，特征对比已可查看。"
+    : summaryStatus === "idle" ? "可基于下方特征生成一句话解读。"
+      : failed ? "本次解读未完成，特征统计仍可查看。"
+        : !headline ? "暂无简短解读，可重新生成。" : null;
 
   return (
     <section className="review-summary" aria-label="复盘总结" aria-busy={generating}>
       <div className="review-summary-heading">
         <div>
           <strong>复盘总结</strong>
-          <span>{source}{mode === "llm" && report.llm_model ? ` · ${report.llm_model}` : ""}</span>
+          <span>{statusText}{summaryStatus === "ready" && report.llm_model ? ` · ${report.llm_model}` : ""}</span>
         </div>
         <button type="button" disabled={generating} onClick={onRegenerate}>
           {generating ? <LoaderCircle size={14} className="state-spinner" /> : <RefreshCcw size={14} />}
-          {generating ? "生成中…" : error || mode !== "llm" ? "重试模型总结" : "重新生成"}
+          {buttonText}
         </button>
       </div>
-      <p>默认启用模型总结；仅用于复盘观察和提出待验证假设，不会自动修改评分、权重或预测记录。</p>
-      <p>正负收益组按首板至观察日收盘表现划分，与次日开盘至收盘的成功、失败评价标签不同，不能混用分母。</p>
-      {generating ? <p role="status">正在生成模型总结，统计与追踪仍可查看；下方保留已有总结。</p> : null}
-      {error ? <p className="review-agent-error" role="alert">{error}；已保留现有统计和总结，可手动重试。</p> : null}
-      {report.generation_note ? <p>{report.generation_note}</p> : null}
-      <div className="review-summary-sections">
-        {sections.map(([title, items]) => (
-          <div key={title}>
-            <h3>{title}</h3>
-            {items.length ? <ul>{items.map((item, index) => <li key={`${index}-${item}`}>{item}</li>)}</ul>
-              : <p>暂无可核验结论。</p>}
-          </div>
+      {notice ? <p className={failed ? "review-agent-error" : undefined} role={failed ? "alert" : "status"}>{notice}</p> : null}
+      {headline && (summaryStatus === "ready" || generating) ? (
+        <p className="review-summary-headline"><b>{generating ? "上次解读：" : "一句话解读："}</b>{headline}</p>
+      ) : null}
+      {failed && failureReason ? (
+        <details className="review-summary-reason"><summary>查看原因</summary><p>{failureReason}</p></details>
+      ) : null}
+      <p className="review-feature-counts">
+        {features ? `正收益组 ${features.positive_count} 个样本 · 负收益组 ${features.negative_count} 个样本` : "特征分组数据尚未齐备"}
+      </p>
+      <div className="review-feature-cards">
+        {FEATURES.map(([key, label]) => (
+          <FeatureCard key={key} label={label} card={features?.cards.find(card => card.key === key)} />
         ))}
       </div>
+      <details className="review-summary-scope">
+        <summary>样本口径与数据说明</summary>
+        <p>现行盘前终选前向资格样本：{cohortCount("premarket_final")}；
+          收盘基线：{cohortCount("close_baseline")}；旧版收盘：{cohortCount("legacy_close")}；历史补算：{cohortCount("historical_backtest")}。
+          收盘及补算样本不计作现行盘前终选的前向验证。</p>
+        <p>按首板至 {report.end_date} 内最新可用收盘的涨跌分为正、负收益组，零收益和无法观察的样本不入组。
+          这是组内特征对比，不是胜率或因果结论，与次日开盘至收盘的评价标签口径不同。</p>
+        <p>每项特征分别排除缺失数据，任一组有效样本少于 3 个时不作对比。统计由本地代码计算，LLM 只补充解读，不会修改评分或预测记录。</p>
+        {report.warnings.length ? <ul>{report.warnings.map((warning, index) => <li key={`${index}-${warning}`}>{warning}</li>)}</ul> : null}
+      </details>
     </section>
+  );
+}
+
+function FeatureCard({ label, card }: { label: string; card?: ReviewFeatureCard }) {
+  const groups = [
+    ["正收益组", card?.positive],
+    ["负收益组", card?.negative],
+  ] as const;
+
+  return (
+    <article className="review-feature-card" aria-label={label}>
+      <h3>{label}</h3>
+      <dl>
+        {groups.map(([group, value]) => (
+          <div key={group}>
+            <dt>{group}</dt>
+            <dd>
+              <strong>{value?.text || "暂无数据"}</strong>
+              {value ? <small>有效 {value.valid_count}/{value.sample_size} 个样本</small> : null}
+              {value?.detail ? <small>{value.detail}</small> : null}
+            </dd>
+          </div>
+        ))}
+      </dl>
+      <p>{card?.observation || "该特征尚无可用统计。"}</p>
+    </article>
   );
 }

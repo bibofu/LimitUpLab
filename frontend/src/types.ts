@@ -492,10 +492,33 @@ export interface ReviewPromotionComparison {
   promotion_rate_delta: number | null;
 }
 
+export interface ReviewFeatureValue {
+  text: string;
+  detail: string;
+  valid_count: number;
+  sample_size: number;
+}
+
+export interface ReviewFeatureCard {
+  key: "position" | "market_cap" | "first_seal";
+  label: string;
+  positive: ReviewFeatureValue;
+  negative: ReviewFeatureValue;
+  observation: string;
+}
+
+export interface ReviewFeatureSummary {
+  positive_count: number;
+  negative_count: number;
+  cards: ReviewFeatureCard[];
+}
+
 export interface ReviewAgentReportResponse {
   generation_mode?: "llm" | "deterministic" | "legacy";
   llm_model?: string | null;
   generation_note?: string | null;
+  feature_summary?: ReviewFeatureSummary | null;
+  summary_headline?: string | null;
   excluded_time_prediction_count?: number;
   time_cohort_counts?: Record<string, number>;
   time_audit_status?: string;
