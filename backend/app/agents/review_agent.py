@@ -39,7 +39,7 @@ from app.services.promotion_calendar import (
 )
 
 
-REVIEW_AGENT_VERSION = "review-agent-tool-use-v8-observation-window"
+REVIEW_AGENT_VERSION = "review-agent-tool-use-v9-forward-scope"
 
 
 @dataclass(frozen=True)
@@ -849,6 +849,8 @@ def _fallback_report(
         main_findings=[
             f"高分首板样本 {len(picks)} 只，其中 {len(ready)} 只有后续走势可复盘。",
             f"成功 {len(successes)} 只，失败 {len(failures)} 只，待观察 {len(pending)} 只。",
+            f"其余评价 {len(picks) - len(successes) - len(failures) - len(pending)} 只（持平或低评级分类），不并入失败或待观察。",
+            f"本组具有现行盘前终选前向验证资格的样本 {sum(item.time_cohort == 'premarket_final' for item in picks)} 只；收盘基线和历史补算均不计作该口径的前向验证。",
             *promotion_finding,
             *comparison_findings,
         ],
@@ -947,6 +949,10 @@ def _review_report_system_prompt() -> str:
         "The authoritative_review facts are mandatory even when selected tool details "
         "are incomplete. Respect cohort definitions, missing data and truncation. Do not "
         "invent statistics, treat correlations as causes, or alter scores and promotion results. "
+        "Use authoritative_review.forward_validation.eligible_sample_count verbatim for "
+        "forward-validation eligibility. Never infer that count by subtracting backtests "
+        "from total samples or treating prediction_source=live as sufficient. If zero, "
+        "explicitly say this cohort has no eligible premarket forward-validation samples. "
         "Adjustments are hypotheses for later validation, never automatic strategy changes. "
         "Do not give buy/sell advice, target prices, positions, or return promises."
     )

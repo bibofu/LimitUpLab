@@ -47,6 +47,11 @@ def authoritative_review_facts(
         "outcome_ready_count": sum(item.outcome_ready for item in picks),
         "evaluation_label_counts": dict(Counter(item.evaluation_label for item in picks)),
         "prediction_source_counts": dict(Counter(item.prediction_source for item in picks)),
+        "forward_validation": {
+            "eligible_sample_count": sum(item.time_cohort == "premarket_final" for item in picks),
+            "cohort_counts": report.time_cohort_counts,
+            "definition": "只有通过预测时间契约的premarket_final才具有现行盘前终选前向验证资格；close_baseline、legacy_close、historical_backtest等都不计入。不能用总样本减历史补算推断前向数量，prediction_source=live本身不证明前向资格。",
+        },
         "incomplete_post_bar_count": sum(not item.post_bar_cache_complete for item in picks),
         "feature_comparison": feature_comparison,
         "comparison_basis": {

@@ -474,8 +474,9 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
           <>
             <div className="review-agent-metrics">
               <span>
-                <small>样本</small>
+                <small>五日追踪样本</small>
                 <strong>{trackedSampleSize}</strong>
+                <em>复盘候选共 {report.sample_size} 只</em>
               </span>
               <span>
                 <small>日期卡片</small>

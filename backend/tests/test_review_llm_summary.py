@@ -11,6 +11,7 @@ from fastapi.testclient import TestClient
 from langchain_core.messages import AIMessage
 
 from app.agents.review_agent import REVIEW_AGENT_VERSION, build_review_agent_report
+from app.agents.review_narrative import authoritative_review_facts
 from app.models import AgentEvaluationItem, AgentPrediction, DailyReviewSnapshot, ReviewAgentReportResponse, StockDailyBar
 from app.repositories import SQLiteFirstBoardRepository
 from app.routers.agents import router
@@ -115,6 +116,10 @@ def test_llm_gets_authoritative_facts_even_when_planner_omits_comparison_tools()
     facts = json.loads(provider.calls[-1][1])["tool_facts"]["authoritative_review"]
     assert facts["evaluation_label_counts"] == {"success": 1, "miss": 1, "partial": 1}
     assert facts["prediction_source_counts"] == {"historical_backtest": 3}
+    assert facts["forward_validation"]["eligible_sample_count"] == 0
+    assert facts["forward_validation"]["cohort_counts"] == {"historical_backtest": 3}
+    assert any("前向验证资格的样本 0 只" in line for line in report.main_findings)
+    assert any("其余评价 1 只" in line for line in report.main_findings)
     assert facts["sampling_limits"]["candidates_truncated"] is True
     assert facts["sampling_limits"]["tool_detail_limit"] == 20
     assert facts["sampling_limits"]["response_pick_limit"] == 100
@@ -223,3 +228,14 @@ def test_legacy_report_json_remains_readable():
     assert restored.generation_mode == "legacy"
     assert restored.llm_model is None and restored.generation_note is None
     assert restored.generated_by == REVIEW_AGENT_VERSION
+
+
+@pytest.mark.parametrize("cohort,expected", [("close_baseline", 0), ("premarket_final", 3)])
+def test_live_source_alone_does_not_prove_forward_validation_eligibility(cohort, expected):
+    report = build(DisabledLLMProvider())
+    picks = [pick.model_copy(update={"prediction_source": "live", "time_cohort": cohort})
+             for pick in report.reviewed_picks]
+    report = report.model_copy(update={"time_cohort_counts": {cohort: len(picks)}})
+    facts = authoritative_review_facts(report, picks, {}, {})
+    assert facts["prediction_source_counts"] == {"live": 3}
+    assert facts["forward_validation"]["eligible_sample_count"] == expected

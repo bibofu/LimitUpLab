@@ -308,7 +308,7 @@ test("the actual review panel retains deterministic statistics and tracking whil
       "./Panel": { Panel: ({ children }: any) => createElement("section", null, children) },
     }, "\nexport { HighScoreReviewPanel };");
     const html = renderToStaticMarkup(createElement(dashboard.HighScoreReviewPanel, { latestTradeDate: day }));
-    for (const value of ["Top10 1进2", "同期全部首板", "daily-top-review", "复盘总结", "样本中晋级较集中"]) assert.ok(html.includes(value));
+    for (const value of ["Top10 1进2", "同期全部首板", "daily-top-review", "复盘总结", "样本中晋级较集中", "五日追踪样本", "复盘候选共 10 只"]) assert.ok(html.includes(value));
     assert.ok(html.includes(generating ? "生成中" : "模型超时"));
   }
 });
