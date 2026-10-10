@@ -1,6 +1,7 @@
 """Health checks for Agent data dependencies."""
 
 from collections import Counter
+from dataclasses import dataclass
 from datetime import date
 
 from app.agents.first_board import build_first_board_ratings
@@ -8,12 +9,29 @@ from app.models import (
     AgentDataHealthResponse,
     AgentDataHealthTopCandidate,
     LimitUpEvent,
+    StockDailyBar,
 )
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.analysis import latest_trade_date
 from app.services.outcome_completeness import build_top10_outcome_completeness
 from app.services.daily_bar_source import daily_bar_source_family
 from app.post_limit_query_contract import PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS
+
+
+@dataclass(frozen=True)
+class _PostLimitCacheHealth:
+    pool_count: int
+    evaluable_count: int
+    source_consistent_count: int
+    missing_reasons: dict[str, int]
+
+    @property
+    def coverage_ratio(self) -> float:
+        return round(self.evaluable_count / self.pool_count, 4) if self.pool_count else 1.0
+
+    @property
+    def pending_count(self) -> int:
+        return self.pool_count - self.evaluable_count
 
 
 def build_agent_data_health(
@@ -101,46 +119,11 @@ def build_agent_data_health(
     )
     if outcome_completeness.status in {"partial", "missing"}:
         warnings.extend(outcome_completeness.warnings)
-    recent_dates = sorted(
-        {event.trade_date for event in events if event.trade_date <= target_date}
-    )[-PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS:]
-    expected_dates = set(sorted({event.trade_date for event in events if event.trade_date <= target_date})[-20:])
-    post_limit_symbols = sorted({
-        event.symbol
-        for event in events
-        if event.trade_date in recent_dates and event.closed_limit
-        and event.symbol.startswith(("000", "001", "002", "003", "600", "601", "603", "605"))
-        and "ST" not in event.name.upper() and "退" not in event.name
-    })
-    cached_post_limit_bars = repository.list_daily_bars_for_symbols(
-        post_limit_symbols, end_date=target_date
-    )
-    cached_by_symbol: dict[str, list] = {}
-    for bar in cached_post_limit_bars:
-        cached_by_symbol.setdefault(bar.symbol, []).append(bar)
-    post_limit_evaluable = 0
-    post_limit_source_consistent = 0
-    post_limit_missing_reasons: Counter[str] = Counter()
-    for symbol in post_limit_symbols:
-        bars = cached_by_symbol.get(symbol, [])
-        by_date = {bar.trade_date: bar for bar in bars}
-        if len(expected_dates) < 20 or not expected_dates <= set(by_date):
-            post_limit_missing_reasons["missing_history20"] += 1
-            continue
-        sources = {daily_bar_source_family(by_date[item].source) for item in expected_dates}
-        if len(sources) != 1 or not next(iter(sources), None):
-            post_limit_missing_reasons["mixed_or_missing_source"] += 1
-            continue
-        post_limit_source_consistent += 1
-        post_limit_evaluable += 1
-    post_limit_coverage = (
-        round(post_limit_evaluable / len(post_limit_symbols), 4)
-        if post_limit_symbols else 1.0
-    )
-    if post_limit_coverage < 1:
+    post_limit = _post_limit_cache_health(events, repository, target_date)
+    if post_limit.coverage_ratio < 1:
         warnings.append(
             "Recent post-limit research cache coverage is "
-            f"{post_limit_evaluable}/{len(post_limit_symbols)}."
+            f"{post_limit.evaluable_count}/{post_limit.pool_count}."
         )
 
     status = _overall_status(
@@ -161,14 +144,57 @@ def build_agent_data_health(
         top_candidates_checked=len(candidate_health),
         top_candidates=candidate_health,
         outcome_completeness=outcome_completeness,
-        post_limit_pool_count=len(post_limit_symbols),
-        post_limit_evaluable_count=post_limit_evaluable,
-        post_limit_coverage_ratio=post_limit_coverage,
-        post_limit_missing_history_count=post_limit_missing_reasons["missing_history20"],
-        post_limit_source_consistent_count=post_limit_source_consistent,
-        post_limit_pending_symbol_count=len(post_limit_symbols) - post_limit_evaluable,
-        post_limit_missing_reasons=dict(sorted(post_limit_missing_reasons.items())),
+        post_limit_pool_count=post_limit.pool_count,
+        post_limit_evaluable_count=post_limit.evaluable_count,
+        post_limit_coverage_ratio=post_limit.coverage_ratio,
+        post_limit_missing_history_count=post_limit.missing_reasons.get("missing_history20", 0),
+        post_limit_source_consistent_count=post_limit.source_consistent_count,
+        post_limit_pending_symbol_count=post_limit.pending_count,
+        post_limit_missing_reasons=post_limit.missing_reasons,
         warnings=warnings,
+    )
+
+
+def _post_limit_cache_health(
+    events: list[LimitUpEvent],
+    repository: SQLiteFirstBoardRepository,
+    target_date: date,
+) -> _PostLimitCacheHealth:
+    """Check recent research candidates against complete, consistent daily-bar history."""
+
+    trade_dates = sorted({event.trade_date for event in events if event.trade_date <= target_date})
+    recent_dates = trade_dates[-PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS:]
+    expected_dates = set(trade_dates[-20:])
+    symbols = sorted({
+        event.symbol
+        for event in events
+        if event.trade_date in recent_dates and event.closed_limit
+        and event.symbol.startswith(("000", "001", "002", "003", "600", "601", "603", "605"))
+        and "ST" not in event.name.upper() and "退" not in event.name
+    })
+    cached_by_symbol: dict[str, list[StockDailyBar]] = {}
+    for bar in repository.list_daily_bars_for_symbols(symbols, end_date=target_date):
+        cached_by_symbol.setdefault(bar.symbol, []).append(bar)
+
+    evaluable_count = 0
+    source_consistent_count = 0
+    missing_reasons: Counter[str] = Counter()
+    for symbol in symbols:
+        by_date = {bar.trade_date: bar for bar in cached_by_symbol.get(symbol, [])}
+        if len(expected_dates) < 20 or not expected_dates <= set(by_date):
+            missing_reasons["missing_history20"] += 1
+            continue
+        sources = {daily_bar_source_family(by_date[item].source) for item in expected_dates}
+        if len(sources) != 1 or not next(iter(sources), None):
+            missing_reasons["mixed_or_missing_source"] += 1
+            continue
+        source_consistent_count += 1
+        evaluable_count += 1
+    return _PostLimitCacheHealth(
+        pool_count=len(symbols),
+        evaluable_count=evaluable_count,
+        source_consistent_count=source_consistent_count,
+        missing_reasons=dict(sorted(missing_reasons.items())),
     )
 
 
