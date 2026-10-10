@@ -186,13 +186,10 @@ class CapturingProvider(LLMProvider):
         else:
             self.report_input = json.loads(user_prompt)
             content = json.dumps({
-                "headline": "截至当日的后续行情尚未就绪，暂时不能比较首板特征。",
-                "insights": [
-                    {"scope": scope, "title": "本期观察", "detail": "截至当日可用数据不足，暂时无法比较样本特征。"}
-                    for scope in ("candidate", "market", "synthesis")
+                "sections": [
+                    {"scope": scope, "summary": "截至当日有效样本不足，暂时无法比较样本特征。", "observation_ids": []}
+                    for scope in ("excellent", "weak", "leaders")
                 ],
-                "main_findings": ["截至当日的后续行情尚未就绪，暂时不能评价兑现。"],
-                "adjustment_suggestions": ["补齐截至日内的必要行情后再作描述性比较。"],
                 "confidence": 0.5,
             }, ensure_ascii=False)
         return LLMResult(content=content, provider="test", model="as-of-capture")
@@ -204,14 +201,15 @@ class CapturingProvider(LLMProvider):
         }])
 
 
-def test_model_tool_facts_and_report_use_cutoff_results_instead_of_saved_future_labels(monkeypatch):
+@pytest.mark.parametrize("cutoff", [BASE, D1])
+def test_model_digest_and_report_use_cutoff_results_instead_of_saved_future_labels(monkeypatch, cutoff):
     saved_prediction = prediction()
     future_evaluation = evaluate(D3)
     repo = Mock(spec=SQLiteFirstBoardRepository)
     repo.list_predictions_between.return_value = [saved_prediction]
     repo.list_post_bars.return_value = bars()
     repo.list_enrichment_for_date.return_value = []
-    repo.list_daily_bars_for_symbols.return_value = []
+    repo.list_daily_bars_for_symbols.return_value = bars()
     monkeypatch.setattr("app.agents.review_agent.build_agent_evaluation", lambda **kwargs: SimpleNamespace(
         prediction_count=1, evaluations=[future_evaluation],
     ))
@@ -220,28 +218,37 @@ def test_model_tool_facts_and_report_use_cutoff_results_instead_of_saved_future_
     provider = CapturingProvider()
     report = build_review_agent_report(
         events=[event(continued=True), event(D1, height=2), event(D3, height=2)],
-        start_date=BASE, end_date=BASE, repository=repo, provider=provider,
+        start_date=BASE, end_date=cutoff, repository=repo, provider=provider,
         trade_dates=CALENDAR,
     )
 
     assert report.generation_mode == "llm"
-    assert (report.success_count, report.failed_count, report.pending_count) == (0, 0, 1)
+    expected_counts = (0, 0, 1) if cutoff == BASE else (1, 0, 0)
+    assert (report.success_count, report.failed_count, report.pending_count) == expected_counts
     reviewed, = report.reviewed_picks
-    assert [bar.trade_date for bar in reviewed.post_bars] == [BASE]
-    assert reviewed.next_open_to_close_pct is None
+    assert [bar.trade_date for bar in reviewed.post_bars] == [day for day in CALENDAR if day <= cutoff]
+    if cutoff == BASE:
+        assert reviewed.next_open_to_close_pct is None
+    else:
+        assert reviewed.next_open_to_close_pct == pytest.approx(9.09)
     assert reviewed.three_day_close_pct is None
-    assert reviewed.promoted_to_second_board is False
-    outcome_facts = provider.report_input["tool_facts"]["pick_outcomes"]
-    assert outcome_facts["success_count"] == 0
-    assert outcome_facts["pending_count"] == 1
-    assert outcome_facts["outcomes"][0]["three_day_close_pct"] is None
-    assert outcome_facts["outcomes"][0]["promoted_to_second_board"] is None
-    assert outcome_facts["outcomes"][0]["promotion_outcome_ready"] is False
-    authority = provider.report_input["tool_facts"]["authoritative_review"]
-    assert authority["evaluation_label_counts"] == {"pending": 1}
-    assert authority["sampling_limits"]["as_of_date"] == BASE.isoformat()
-    assert "500" not in authority["sampling_limits"]["note"]
-    assert "截至日" in authority["comparison_basis"]["feature_groups"]
+    assert reviewed.promoted_to_second_board is (cutoff == D1)
+    assert "tool_facts" not in provider.report_input
+    authority = provider.report_input["authoritative_review"]
+    digest_facts = authority["review_digest"]
+    assert authority["sampling_limits"]["as_of_date"] == cutoff.isoformat()
+    assert digest_facts["as_of_date"] == cutoff.isoformat()
+    assert digest_facts["overview"] == report.review_digest.overview.model_dump(mode="json")
+    assert digest_facts["candidate_dates"] == ([] if cutoff == BASE else [BASE.isoformat()])
+    assert digest_facts["overview"]["candidate_count"] == (0 if cutoff == BASE else 1)
+    assert all("stocks" not in digest_facts[scope] for scope in ("excellent", "weak", "leaders"))
+    assert D2.isoformat() not in json.dumps(authority)
+    assert D3.isoformat() not in json.dumps(authority)
+    if cutoff == D1:
+        excellent, = report.review_digest.excellent.stocks
+        assert excellent.return_pct == pytest.approx(20)
+        assert excellent.cutoff_close == 12
+        assert report.review_digest.weak.stocks == []
     assert future_evaluation.evaluation_label == "success"
     assert future_evaluation.three_day_close_pct == -10
     repo.upsert_outcomes.assert_not_called()

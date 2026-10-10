@@ -1,3 +1,4 @@
+import json
 import unittest
 from datetime import date, datetime, timezone
 from langchain_core.messages import AIMessage
@@ -41,19 +42,13 @@ class FakeReviewLLMProvider(LLMProvider):
                 provider="fake",
             )
         return LLMResult(
-            content=(
-                '{"headline":"首板特征需要更多同口径样本才能比较。",'
-                '"insights":['
-                '{"scope":"candidate","title":"候选观察","detail":"候选表现仍需更完整的有效样本进行对比。"},'
-                '{"scope":"market","title":"市场观察","detail":"市场高标需要回溯首板当日的数据进行对比。"},'
-                '{"scope":"synthesis","title":"后续观察","detail":"后续样本需要核对相同首板特征是否重复出现。"}],'
-                '"main_findings":["高分首板样本需要持续追踪兑现率"],'
-                '"successful_patterns":["成功样本通常有更强后续高点"],'
-                '"failed_patterns":["失败样本需要复盘市场环境和题材持续性"],'
-                '"scoring_bias":["可能高估了首封时间"],'
-                '"adjustment_suggestions":["降低弱市场环境下的置信度"],'
-                '"confidence":0.77}'
-            ),
+            content=json.dumps({
+                "sections": [
+                    {"scope": scope, "summary": "当前有效样本不足，需要补齐事实后再比较。", "observation_ids": []}
+                    for scope in ("excellent", "weak", "leaders")
+                ],
+                "confidence": 0.77,
+            }, ensure_ascii=False),
             model="fake-review",
             provider="fake",
         )
@@ -75,8 +70,16 @@ class ReviewAgentTest(unittest.TestCase):
 
         self.assertEqual(len(provider.calls), 2)
         self.assertEqual(report.generated_by, REVIEW_AGENT_VERSION)
+        self.assertEqual(report.generation_mode, "llm")
         self.assertEqual(report.confidence, 0.77)
         self.assertTrue(report.main_findings)
+        narrative_input = json.loads(provider.calls[-1][1])
+        self.assertNotIn("tool_facts", narrative_input)
+        self.assertEqual(narrative_input["authoritative_review"]["review_digest"]["as_of_date"], "2026-05-15")
+        self.assertEqual(
+            [section["scope"] for section in narrative_input["required_json_shape"]["sections"]],
+            ["excellent", "weak", "leaders"],
+        )
         self.assertEqual(
             [trace.name for trace in report.tool_results],
             [

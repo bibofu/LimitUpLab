@@ -24,10 +24,9 @@ from app.models import (
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.llm_provider import DisabledLLMProvider, LLMProvider, get_llm_provider
-from app.agents.review_narrative import ReviewNarrative, authoritative_review_facts
+from app.agents.review_narrative import ReviewNarrative, apply_review_narrative, authoritative_review_facts
 from app.agents.review_features import build_review_feature_summary
-from app.agents.review_feature_study import build_feature_study
-from app.agents.review_research import build_feature_research, deterministic_research_insights
+from app.agents.review_digest import build_review_digest
 from app.agents.react_runtime.compliance import review_answer
 from app.services.outcome_completeness import build_top10_outcome_completeness
 from app.services.review_as_of import (
@@ -42,7 +41,7 @@ from app.services.promotion_calendar import (
 )
 
 
-REVIEW_AGENT_VERSION = "review-agent-tool-use-v14-bound-feature-labels"
+REVIEW_AGENT_VERSION = "review-agent-tool-use-v15-four-part-digest"
 
 
 @dataclass(frozen=True)
@@ -430,13 +429,15 @@ def build_review_agent_report(
         promotion_comparisons=promotion_comparisons,
         excluded_time_count=excluded_time_count,
     )
-    research = build_feature_research(
-        candidate_study=feature_comparison["candidate_study"], events=events,
+    fallback.review_digest = build_review_digest(
+        picks=picks, predictions={
+            (item.trade_date, item.symbol): toolbox.prediction_for(item.prediction_id)
+            for item in toolbox._high_score_evaluations()
+        },
+        promotion_comparisons=promotion_comparisons, events=events,
         repository=active_repository, end_date=end_date,
         trade_dates=toolbox.promotion_calendar.trade_dates,
     )
-    fallback.feature_research = research
-    fallback.summary_insights = deterministic_research_insights(research)
     if toolbox.evaluation_scope.get("candidates_truncated"):
         fallback.warnings.append("上游评估未返回完整区间候选，本报告只描述入选样本，不代表完整区间或全市场。")
     fallback.warnings.extend(
@@ -454,12 +455,13 @@ def build_review_agent_report(
             _review_report_system_prompt(),
             _review_report_user_prompt(start_date, end_date, min_score, facts),
         )
-        payload = ReviewNarrative.model_validate(_extract_json_object(result.content)).model_dump()
+        narrative = ReviewNarrative.model_validate(_extract_json_object(result.content))
+        interpreted_digest = apply_review_narrative(fallback.review_digest, narrative)
         try:
             compliance = review_answer(
                 active_provider,
                 user_message=f"解释 {start_date} 至 {end_date} 的首板复盘，不提供交易建议。",
-                answer=json.dumps(payload, ensure_ascii=False),
+                answer=narrative.model_dump_json(),
                 timeout_seconds=20,
             )
         except Exception:
@@ -468,21 +470,13 @@ def build_review_agent_report(
         if compliance.decision != "allow":
             fallback.generation_note = "LLM 总结未通过研究边界检查，已回退到基于本地事实的规则总结。"
             return fallback
-        report = _report_from_payload(
-            payload=payload,
-            start_date=start_date,
-            end_date=end_date,
-            picks=picks,
-            tool_results=[result.trace() for result in tool_results],
-            feature_comparison=feature_comparison,
-            promotion_comparisons=promotion_comparisons,
-        )
-        report.warnings = fallback.warnings
-        report.feature_research = research
+        report = fallback.model_copy(deep=True)
+        report.review_digest = interpreted_digest
+        report.confidence = narrative.confidence
         report.excluded_time_prediction_count = excluded_time_count
         report.generation_mode = "llm"
         report.llm_model = result.model
-        report.generation_note = "LLM 根据候选表现与全市场高标的首板事实生成解读，特征统计和分组比例由代码计算。"
+        report.generation_note = "LLM 根据已核验的观察提炼画像；整体晋级总结、分组与证据数字均由代码生成。"
         return report
     except (ValueError, TypeError):
         fallback.generation_note = "LLM 未返回有效且有解释内容的总结，已回退到基于本地事实的规则总结。"
@@ -885,125 +879,36 @@ def _fallback_report(
     )
 
 
-# Convert an LLM report payload into the validated review response, retaining supplied evidence.
-def _report_from_payload(
-    *,
-    payload: dict[str, Any],
-    start_date: date,
-    end_date: date,
-    picks: list[ReviewAgentPick],
-    tool_results: list[AgentToolTrace],
-    feature_comparison: dict[str, Any] | None = None,
-    promotion_comparisons: list[ReviewPromotionComparison] | None = None,
-) -> ReviewAgentReportResponse:
-    fallback = _fallback_report(
-        start_date=start_date,
-        end_date=end_date,
-        picks=picks,
-        tool_results=tool_results,
-        warnings=[],
-        feature_comparison=feature_comparison,
-        promotion_comparisons=promotion_comparisons,
-    )
-    return ReviewAgentReportResponse(
-        start_date=start_date,
-        end_date=end_date,
-        sample_size=len(picks),
-        time_cohort_counts=fallback.time_cohort_counts,
-        time_audit_status="checked",
-        success_count=sum(1 for item in picks if item.evaluation_label == "success"),
-        failed_count=sum(1 for item in picks if item.evaluation_label == "miss"),
-        pending_count=sum(1 for item in picks if item.evaluation_label == "pending"),
-        promotion_ready_date_count=fallback.promotion_ready_date_count,
-        top_pick_promotion_sample_size=fallback.top_pick_promotion_sample_size,
-        top_pick_promoted_count=fallback.top_pick_promoted_count,
-        top_pick_promotion_rate=fallback.top_pick_promotion_rate,
-        market_promotion_sample_size=fallback.market_promotion_sample_size,
-        market_promoted_count=fallback.market_promoted_count,
-        market_promotion_rate=fallback.market_promotion_rate,
-        promotion_rate_delta=fallback.promotion_rate_delta,
-        promotion_comparisons=fallback.promotion_comparisons,
-        feature_summary=fallback.feature_summary,
-        summary_headline=payload.get("headline"),
-        summary_insights=payload.get("insights", []),
-        main_findings=[*fallback.main_findings, *_string_list(payload.get("main_findings"))],
-        successful_patterns=_merge_texts(
-            fallback.successful_patterns,
-            _string_list(payload.get("successful_patterns")),
-        ),
-        failed_patterns=_merge_texts(
-            fallback.failed_patterns,
-            _string_list(payload.get("failed_patterns")),
-        ),
-        scoring_bias=_merge_texts(
-            fallback.scoring_bias,
-            _string_list(payload.get("scoring_bias")),
-        ),
-        adjustment_suggestions=_merge_texts(
-            fallback.adjustment_suggestions,
-            _string_list(payload.get("adjustment_suggestions")),
-        ),
-        confidence=payload.get("confidence", fallback.confidence),
-        reviewed_picks=picks[:100],
-        tool_results=tool_results,
-        warnings=fallback.warnings,
-        generated_by=REVIEW_AGENT_VERSION,
-    )
-
-
-# Define the review writer's evidence requirements and research-only output boundary.
+# The model selects evidence; all displayed numeric observations stay deterministic.
 def _review_report_system_prompt() -> str:
     return (
-        "你是首板复盘研究助手。目标是帮助用户理解：候选中表现好和不好的票首板时有什么差异，"
-        "全市场后来连到3板以上的票首板时有什么特征，哪些线索值得在后续样本继续核对。"
-        "唯一统计依据是authoritative_review.deterministic_report.feature_research，不能自行补数字。"
-        "只返回JSON：headline、insights、confidence。headline用一句话点出本期重点，最多100字符。"
-        "insights必须恰好3项，scope分别为candidate、market、synthesis，各有title和detail。"
-        "title为直白结论(2–28字)，detail每条80–160字、最多180字符，包含结论、1至2个关键对比和必要限制。"
-        "candidate要同时说明较好组与较差组的特征差异；market解释3板组的首板特征，并对照未达3板组；"
-        "synthesis明确两套样本哪些线索一致、哪些不一致，给出下一轮复盘应重点核对的2项特征。"
-        "综合段必须先读feature_research.cross_checks的确定性方向核对；逐项按该结果描述，"
-        "标题和正文必须一致。若市值、首封、换手均相反，应直说目前没有统一画像，不能写成方向一致。"
-        "不要把‘两组都出现某特征’当成相对各自对照组的方向一致；不要比较两组正例的绝对值后宣称共性。"
-        "面向用户只写自然语言，不输出cross_checks等字段名；市场组称‘3板组/未达3板组’，不能称正负收益组。"
-        "方向核对只覆盖市值、首封、换手三项，不能泛化成所有首板特征均相反。"
-        "引用位置分布时必须把类别全名与其同一组占比成对核对：只用该scope对应features的summary/detail，"
-        "不能把中位平台突破改称高位突破，不能借用其他组、工具或个案的标签。找不到对应原值就省略该断言。"
-        "优先首板位置、市值、首封，再结合炸板和换手；不要机械复述全部表格或只写泛泛风险提示。"
-        "特征buckets的positive_rate是具有该特征的已观察样本中正例占比，baseline_rate仅是该字段"
-        "有效样本基准；不同字段、两类样本和不同窗口不能混用分母。null比例表示不足，不能补0或自行计算。"
-        "候选正负是首板后累计涨跌，观察长度可能不同；市场正例是同轮连续1→2→3板，未达3板不等于亏损。"
-        "本批比例不是未来概率，不能用赢家组内占比替代条件比例。小样本或单边缺失不声称明显、稳定或显著。"
-        "首板字段缺失须承认，严禁使用股票成为高标之后的位置市值替代；代表股只能解释已追溯案例。"
-        "方向分歧、区间重叠应明确，不能强行给统一结论；如提及首封直接说哪组更早或更晚，不用反向等含糊词。"
-        "禁止因果保证、买卖、仓位、目标价和收益承诺，不自动调评分。前向资格只按forward_validation，"
-        "收盘基线和补算不是盘前验证。数据与窗口不足时给出具体缺口，避免泛化为选股规则。"
+        "你是首板复盘研究助手。页面分为整体表现、优秀候选、较差候选、市场高标四部分。"
+        "整体晋级总结已由代码生成，不得重写。只返回JSON sections和confidence。"
+        "sections恰好三项scope为excellent、weak、leaders；每项有summary和observation_ids。"
+        "summary用一句30至80字的直白中文提炼已选择观察，最多100字符；不复述数字，具体数字由证据行展示。"
+        "observation_ids只能选本组observations里的原始id，不得改写或引用另一组。"
+        "优秀和较差组各选最多3条不同维度的重点；市场高标最多5条，兼顾首板和二板，"
+        "有second_维度证据时必须选至少一条。不能只追求最高比例，要考虑支持样本和有效分母。"
+        "无观察可选或组为空时返回空id列表，summary说明样本或差异不足；不得补造共性。"
+        "优秀定义是截止日收盘比首板收盘上涨至少9.8%，较差是下跌超过5%；候选观察天数可能不同。"
+        "候选画像对照全部候选；高标只是近5日出现过3板及以上的同轮首板及二板画像，没有对照时不能称更优。"
+        "二板只描述当日如何晋级，不能用已成为高标的样本声称1进2概率高。"
+        "题材、位置及其比例必须来自同组同字段，不要把多个单维分布拼成同一批股票的组合特征。"
+        "不生成选股规则、买卖建议、仓位、目标价、收益承诺或因果结论；历史样本比例不是未来概率。"
+        "首板缺失、派生市值及少量样本应保留限制。不要提内部字段名，不强制比较两套样本的方向。"
     )
 
 
-# Package historical picks and evaluation facts for the review writer.
-def _review_report_user_prompt(
-    start_date: date,
-    end_date: date,
-    min_score: float,
-    facts: dict[str, Any],
-) -> str:
-    return json.dumps(
-        {
-            "period": [start_date.isoformat(), end_date.isoformat()],
-            "min_score": min_score,
-            "tool_facts": facts,
-            "required_json_shape": {
-                "headline": "一句简短的特征解读，最多100字符",
-                "insights": [
-                    {"scope": scope, "title": "这一组的核心结论", "detail": "用80至160字结合实际数字解释特征差异与限制"}
-                    for scope in ("candidate", "market", "synthesis")
-                ],
-                "confidence": 0.0,
-            },
+def _review_report_user_prompt(start_date, end_date, min_score, facts) -> str:
+    return json.dumps({
+        "period": [start_date.isoformat(), end_date.isoformat()],
+        "authoritative_review": facts["authoritative_review"],
+        "required_json_shape": {
+            "sections": [{"scope": scope, "summary": "一句由所选观察支持的定性解释",
+                          "observation_ids": []} for scope in ("excellent", "weak", "leaders")],
+            "confidence": 0.0,
         },
-        ensure_ascii=False,
-    )
+    }, ensure_ascii=False)
 
 
 # Reduce a saved prediction to the fields needed by the review report.
@@ -1081,11 +986,6 @@ def _build_feature_comparison(
         "success_count": len(success),
         "failed_count": len(failed),
         "feature_summary": build_review_feature_summary(success, failed).model_dump(mode="json"),
-        "candidate_study": build_feature_study(
-            success, failed, excluded_count=len(evaluations) - len(profiles),
-            basis="候选按追踪窗口内首板至最新可用收盘的累计涨跌分组，各样本观察长度可能不同；持平、缺基准或无后续行情不入组。",
-            positive_outcome="正收益",
-        ).model_dump(mode="json"),
         "main_findings": [],
         "successful_patterns": [],
         "failed_patterns": [],
@@ -1422,8 +1322,6 @@ def _string_list(value: Any) -> list[str]:
 
 
 # Merge report text lists while removing repeated entries.
-def _merge_texts(primary: list[str], secondary: list[str]) -> list[str]:
-    return list(dict.fromkeys([*primary, *secondary]))
 
 
 # Select the most frequent text entries for a bounded report section.
