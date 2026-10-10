@@ -159,6 +159,28 @@ def test_conflicting_high_event_keeps_existing_verified_episode_without_inflatin
     assert any("冲突" in note for note in notes)
 
 
+@pytest.mark.parametrize("has_verified_anchor", [False, True])
+@pytest.mark.parametrize("reverse", [False, True])
+def test_conflicting_three_and_four_board_reports_count_one_case(has_verified_anchor, reverse):
+    reports = [event(D[3], height=3), event(D[3], height=4)]
+    events = (chain() if has_verified_anchor else []) + reports
+    if reverse:
+        events.reverse()
+    stock, = build(events)[0]
+    assert stock.first_board_date == (D[0] if has_verified_anchor else None)
+    assert stock.max_board_height == (3 if has_verified_anchor else None)
+    assert stock.second_board_date == (D[1] if has_verified_anchor else None)
+    assert any("来源报3板未核验" in item for item in stock.data_missing)
+    assert any("来源报4板未核验" in item for item in stock.data_missing)
+
+
+def test_conflicting_height_aliases_do_not_duplicate_a_later_unresolved_case():
+    events = [event(D[2], height=3), event(D[2], height=4), event(D[3], height=4)]
+    stock, = build(events)[0]
+    assert stock.first_board_date is None and stock.max_board_height is None
+    assert any("事件记录冲突" in item for item in stock.data_missing)
+
+
 def test_conflicting_exact_day_bars_are_not_used_for_open_gap_or_shape():
     repo = Repository(bars=[bar(D[0]), bar(D[1]), bar(D[1], open=10.5)])
     stock, = build(chain(), repository=repo)[0]

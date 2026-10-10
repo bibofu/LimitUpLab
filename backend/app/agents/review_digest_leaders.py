@@ -42,16 +42,36 @@ def _episodes(by_case, conflicts, calendar, indices, end_date):
     for (day, symbol), rows in sorted(conflicts.items()):
         if day not in calendar[-5:]:
             continue
-        for row in rows:
-            if not row.closed_limit or row.board_height < 3:
-                continue
-            key = _episode_key(symbol, day, row.board_height, calendar, indices)
-            entry = keyed.setdefault(key, {
-                "symbol": symbol, "name": row.name, "first_board_date": None,
-                "max_board_height": row.board_height, "latest_date": day, "data_missing": [],
-            })
+        reported = sorted((row for row in rows if row.closed_limit and row.board_height >= 3),
+                          key=lambda row: (row.board_height, row.name))
+        if not reported:
+            continue
+        possible_keys = {_episode_key(symbol, day, row.board_height, calendar, indices) for row in reported}
+        matches = {id(keyed[key]): keyed[key] for key in possible_keys if key in keyed}
+        verified = [entry for entry in matches.values() if entry["first_board_date"] is not None]
+        if len(verified) == 1:
+            entry = verified[0]
+        elif not verified and matches:
+            entry = min(matches.values(), key=lambda item: (item["latest_date"], item["max_board_height"]))
+            entry["data_missing"] = [missing for item in matches.values() for missing in item["data_missing"]]
+            entry["max_board_height"] = max(item["max_board_height"] for item in matches.values())
+            keyed = {key: entry if id(value) in matches else value for key, value in keyed.items()}
+        else:
+            entry = {
+                "symbol": symbol, "name": reported[0].name, "first_board_date": None,
+                "max_board_height": reported[-1].board_height, "latest_date": day, "data_missing": [],
+            }
+            keyed[(symbol, ("conflict", day))] = entry
+        if entry["first_board_date"] is None:
+            # Alternative source heights are aliases of one uncertain case, not distinct cycles.
+            entry["max_board_height"] = max(entry["max_board_height"], reported[-1].board_height)
+            entry["latest_date"] = max(entry["latest_date"], day)
+            for key in possible_keys:
+                if key not in keyed or keyed[key]["first_board_date"] is None:
+                    keyed[key] = entry
+        for row in reported:
             entry["data_missing"].append(f"{day} 事件记录冲突，来源报{row.board_height}板未核验")
-    return list(keyed.values())
+    return list({id(entry): entry for entry in keyed.values()}.values())
 
 
 def _text(value):

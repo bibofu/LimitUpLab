@@ -41,7 +41,7 @@ from app.services.promotion_calendar import (
 )
 
 
-REVIEW_AGENT_VERSION = "review-agent-tool-use-v15-four-part-digest"
+REVIEW_AGENT_VERSION = "review-agent-tool-use-v16-four-part-digest"
 
 
 @dataclass(frozen=True)
@@ -894,6 +894,8 @@ def _review_report_system_prompt() -> str:
         "候选画像对照全部候选；高标只是近5日出现过3板及以上的同轮首板及二板画像，没有对照时不能称更优。"
         "二板只描述当日如何晋级，不能用已成为高标的样本声称1进2概率高。"
         "题材、位置及其比例必须来自同组同字段，不要把多个单维分布拼成同一批股票的组合特征。"
+        "高标没有基准组，不能写相对集中；占比不足一半不能写多数、普遍或集中，只能说有哪些分布。"
+        "例如二板形态与封板时间分别统计，要写成两项观察，不要写多数为某形态且在某时间封板。"
         "不生成选股规则、买卖建议、仓位、目标价、收益承诺或因果结论；历史样本比例不是未来概率。"
         "首板缺失、派生市值及少量样本应保留限制。不要提内部字段名，不强制比较两套样本的方向。"
     )

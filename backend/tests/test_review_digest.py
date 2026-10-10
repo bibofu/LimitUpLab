@@ -7,7 +7,7 @@ from unittest.mock import Mock, patch
 import pytest
 
 from app.agents.review_digest import (
-    build_digest_overview, build_review_digest, candidate_stock, performance_group,
+    build_digest_overview, build_review_digest, candidate_stock, concept_labels, performance_group,
 )
 from app.models import ReviewPromotionComparison
 from app.review_digest_models import DigestStock
@@ -29,6 +29,11 @@ def prediction():
 
 def bar(day, close, symbol="600001"):
     return Obj(symbol=symbol, trade_date=day, close=close)
+
+
+def test_provider_concept_separators_count_individual_deduplicated_themes():
+    assert concept_labels("固态电池+新能源;固态电池，汽车、未知|软件") == ["固态电池", "新能源", "汽车", "软件"]
+    assert concept_labels(None) == []
 
 
 @pytest.mark.parametrize("last,expected", [(10.98, "excellent"), (10.97999, "ordinary"), (11, "excellent"),

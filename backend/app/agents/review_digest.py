@@ -83,7 +83,7 @@ def concept_labels(value) -> list[str]:
     if not isinstance(value, str):
         return []
     pieces = [value]
-    for separator in (";", "；", "、", "|", ",", "，"):
+    for separator in (";", "；", "、", "|", ",", "，", "+"):
         pieces = [part for piece in pieces for part in piece.split(separator)]
     return list(dict.fromkeys(label for piece in pieces if (label := _text(piece))))
 
