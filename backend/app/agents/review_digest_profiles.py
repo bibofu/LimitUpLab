@@ -13,7 +13,6 @@ from app.review_digest_models import (
 _FIRST = (
     ("position_label", "首板位置"), ("industry", "首板行业"), ("concepts", "首板题材"),
     ("float_market_cap", "首板流通市值"), ("first_limit_time", "首板首次封板时间"),
-    ("first_dragon_tiger_on_list", "首板当天龙虎榜"),
     ("break_count", "首板炸板次数"), ("turnover_rate", "首板换手率"),
 )
 _NEXT = (("next_open_pct", "首板次日开盘涨幅"),)
@@ -82,7 +81,6 @@ def build_digest_group(
         "题材为多标签，每条首板记录的相同题材只计一次，各桶占比合计可能超过100%。",
         "样本按首板记录统计，同一股票不同轮次分别计入。",
         "次日指首板后的下一交易日，开盘涨幅以首板收盘为基准；这是后续表现，不能当作首板时已知特征。",
-        "龙虎榜按首板当日披露记录核验；没有记录不等于已确认未上榜，未知不纳入上榜率比较。",
     ]
     if scope == "leaders":
         notes.append("高标组仅描述已有样本，不代表特征优势或未来成功概率；二板仅使用有记录的事实。")
@@ -139,8 +137,6 @@ def _time_bucket(value: object) -> str | None:
 
 def _labels(stock: DigestStock, key: str) -> list[str]:
     value = getattr(stock, key)
-    if key == "first_dragon_tiger_on_list":
-        return ["已上榜" if value else "未上榜"] if isinstance(value, bool) else []
     if key == "next_open_pct":
         number = _number(value)
         if number is None:
@@ -183,9 +179,7 @@ def _distribution(key: str, label: str, stocks: list[DigestStock], baseline: lis
     counts, valid = _counts(stocks, key)
     baseline_counts, baseline_valid = _counts(baseline, key) if baseline is not None else (Counter(), None)
     base_key = _base_key(key)
-    if key == "first_dragon_tiger_on_list":
-        labels = ("已上榜", "未上榜")
-    elif key == "next_open_pct":
+    if key == "next_open_pct":
         labels = _OPEN_LABELS
     elif key in {"first_limit_time", "second_limit_time"}:
         labels = _TIME_LABELS
@@ -193,20 +187,16 @@ def _distribution(key: str, label: str, stocks: list[DigestStock], baseline: lis
         labels = [item[1] for item in _NUMERIC_BUCKETS[base_key]]
     else:
         labels = sorted(counts.keys() | baseline_counts.keys(), key=lambda item: (-counts[item], item))
-    share_ready = bool(valid) and (key != "first_dragon_tiger_on_list" or valid == len(stocks))
-    baseline_ready = bool(baseline_valid) and (key != "first_dragon_tiger_on_list" or baseline_valid == len(baseline))
     buckets = [DigestBucket(
-        label=item, count=counts[item], share=counts[item] / valid if share_ready else None,
+        label=item, count=counts[item], share=counts[item] / valid if valid else None,
         baseline_count=baseline_counts[item] if baseline is not None else None,
-        baseline_share=baseline_counts[item] / baseline_valid if baseline_ready else None,
+        baseline_share=baseline_counts[item] / baseline_valid if baseline_valid else None,
     ) for item in labels]
     note = f"本组有效{valid}/{len(stocks)}条，缺失{len(stocks) - valid}条。"
     if baseline is not None:
         note += f"全部候选有效{baseline_valid}/{len(baseline)}条，缺失{len(baseline) - baseline_valid}条。"
     if key == "concepts":
         note += "题材多标签，占比合计可能超过100%。"
-    if key == "first_dragon_tiger_on_list":
-        note += "缺失为待核验，不能作未上榜；覆盖不完整时不归纳上榜率差异。"
     if key == "next_open_pct":
         note += "平开单独计；高开0–3%不含0和3%，高开3–7%含3%不含7%。"
     return DigestDistribution(
@@ -217,11 +207,6 @@ def _distribution(key: str, label: str, stocks: list[DigestStock], baseline: lis
 
 
 def _observation(scope: str, distribution: DigestDistribution) -> DigestObservation | None:
-    if distribution.key == "first_dragon_tiger_on_list":
-        if distribution.valid_count != distribution.total_count:
-            return None
-        if scope != "leaders" and distribution.baseline_valid_count != distribution.baseline_total_count:
-            return None
     if distribution.valid_count < 3:
         return None
     supported = [bucket for bucket in distribution.buckets if bucket.count >= 3]

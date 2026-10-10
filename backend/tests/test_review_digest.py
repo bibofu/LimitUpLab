@@ -83,6 +83,7 @@ def test_digest_excludes_cutoff_and_older_batch_deduplicates_and_keeps_calendar_
     assert any("当日成交额/换手率推算" in note for note in digest.notes)
     assert digest.excellent.distributions[0].baseline_total_count == 2
     assert repo.list_daily_bars_for_symbols.call_args.kwargs["end_date"] == DAYS[-1]
+    repo.list_enrichment_for_date.assert_not_called()
 
 
 def comparison(day, candidate_k, candidate_n, market_k, market_n, ready=True):

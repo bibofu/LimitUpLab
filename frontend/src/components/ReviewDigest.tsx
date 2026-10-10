@@ -52,40 +52,26 @@ function DigestPortrait({ group, number, title, threshold, dates, summarySource 
         <span>{item.text}</span>
       </li>)}</ul> : <p className="digest-empty">特征证据尚不足，暂不概括画像。</p>}
     {group.sample_size > 0 ? <CompactDistributions distributions={group.distributions} /> : null}
-    <FollowupBand group={group} />
+    <NextOpenDistribution group={group} />
     {group.notes.length ? <details className="digest-more-notes"><summary>数据说明 · {group.notes.length} 条</summary><ul>{group.notes.map((note, index) => <li key={index}>{note}</li>)}</ul></details> : null}
     <DistributionEvidence distributions={group.distributions} leaders={leaders} />
     <StockEvidence stocks={group.stocks} leaders={leaders} />
   </section>;
 }
 
-function FollowupBand({ group }: { group: DigestGroup }) {
+function NextOpenDistribution({ group }: { group: DigestGroup }) {
   const opening = group.distributions.find(item => item.key === "next_open_pct");
-  const dragon = group.distributions.find(item => item.key === "first_dragon_tiger_on_list");
   const baseline = group.scope !== "leaders" && opening?.baseline_valid_count != null;
-  const listed = dragon ? dragon.buckets.find(item => item.label === "已上榜")?.count ?? 0
-    : group.stocks.filter(item => item.first_dragon_tiger_on_list === true).length;
-  const unlisted = dragon ? dragon.buckets.find(item => item.label === "未上榜")?.count ?? 0
-    : group.stocks.filter(item => item.first_dragon_tiger_on_list === false).length;
-  const unknown = Math.max(0, group.sample_size - listed - unlisted);
-  return <div className="digest-followup-band" aria-label="次日开盘与首板龙虎榜">
-    <section className="digest-next-open" aria-label="次日开盘">
-      <div className="digest-band-heading"><h4>次日开盘</h4><span>相对首板收盘</span></div>
-      <p className="digest-band-coverage">{!group.sample_size ? "本组暂无样本" : opening ? `有效 ${opening.valid_count}/${group.sample_size}` : "有效样本待核验"}{baseline ? opening!.baseline_total_count === 0 ? " · 全部候选暂无样本" : ` · 全部候选有效 ${opening!.baseline_valid_count}/${opening!.baseline_total_count ?? "未提供"}` : ""}</p>
+  return <section className="digest-next-open" aria-label="次日开盘">
+      <div className="digest-next-open-heading"><h4>次日开盘</h4><span>相对首板收盘</span></div>
+      <p className="digest-next-open-coverage">{!group.sample_size ? "本组暂无样本" : opening ? `有效 ${opening.valid_count}/${group.sample_size}` : "有效样本待核验"}{baseline ? opening!.baseline_total_count === 0 ? " · 全部候选暂无样本" : ` · 全部候选有效 ${opening!.baseline_valid_count}/${opening!.baseline_total_count ?? "未提供"}` : ""}</p>
       {opening?.buckets.length ? <table><thead><tr><th>开盘分档</th><th>本组</th>{baseline ? <th>全部候选</th> : null}</tr></thead><tbody>
         {opening.buckets.map(bucket => <tr key={bucket.label}><th scope="row">{bucket.label}</th>
           <td>{openingBucket(bucket.count, opening.valid_count, bucket.share)}</td>
           {baseline ? <td>{openingBucket(bucket.baseline_count, opening.baseline_valid_count, bucket.baseline_share)}</td> : null}
         </tr>)}
       </tbody></table> : <p className="digest-empty">{group.sample_size ? "次日开盘数据待补齐。" : "本组暂无样本。"}</p>}
-    </section>
-    <section className="digest-dragon-tiger" aria-label="首板龙虎榜">
-      <div className="digest-band-heading"><h4>首板龙虎榜</h4><span>以本组全部样本为分母</span></div>
-      {group.sample_size ? <dl>{[["已确认上榜", listed], ["已确认未上榜", unlisted], ["待核验", unknown]].map(([label, count]) => <div key={label}><dt>{label}</dt><dd>{count}/{group.sample_size}</dd></div>)}</dl>
-        : <p className="digest-empty">本组暂无样本。</p>}
-      <p className="digest-band-note">未查到不等于未上榜{unknown > 0 ? "；覆盖未全，不计算上榜率。" : "。"}</p>
-    </section>
-  </div>;
+    </section>;
 }
 
 function CompactDistributions({ distributions }: { distributions: DigestDistribution[] }) {
@@ -118,19 +104,15 @@ function DistributionEvidence({ distributions, leaders }: { distributions: Diges
   return <details className="digest-evidence"><summary>{leaders ? "完整特征分布" : "完整特征分布 · 与全部候选对照"}</summary>
     {distributions.length ? distributions.map(distribution => {
       const baseline = !leaders && distribution.baseline_valid_count !== null;
-      const dragon = distribution.key === "first_dragon_tiger_on_list";
-      const groupCovered = distribution.valid_count === distribution.total_count;
-      const baselineCovered = distribution.baseline_valid_count === distribution.baseline_total_count;
       return <section className="digest-distribution" key={distribution.key}>
       <h4>{distribution.label}</h4>
       <p>{distribution.total_count ? `本组有效 ${distribution.valid_count}/${distribution.total_count}` : "本组暂无样本"}{baseline ? distribution.baseline_total_count === 0 ? "；全部候选暂无样本" : `；全部候选有效 ${distribution.baseline_valid_count}/${distribution.baseline_total_count ?? "未提供"}` : ""}。</p>
       <table><thead><tr><th>特征</th><th>本组</th>{baseline ? <th>全部候选</th> : null}</tr></thead><tbody>
         {distribution.buckets.map(bucket => <tr key={bucket.label}><th scope="row">{bucket.label}</th>
-          <td>{distribution.key === "next_open_pct" ? openingBucket(bucket.count, distribution.valid_count, bucket.share) : <>{bucket.count}/{dragon ? distribution.total_count : distribution.valid_count}{bucket.share === null ? dragon ? "" : " · 比例不足" : !dragon || groupCovered ? ` · ${percent(bucket.share)}` : ""}</>}</td>
-          {baseline ? <td>{distribution.key === "next_open_pct" ? openingBucket(bucket.baseline_count, distribution.baseline_valid_count, bucket.baseline_share) : <>{bucket.baseline_count === null ? "未提供" : `${bucket.baseline_count}/${dragon ? distribution.baseline_total_count : distribution.baseline_valid_count}`}{bucket.baseline_share === null || (dragon && !baselineCovered) ? "" : ` · ${percent(bucket.baseline_share)}`}</>}</td> : null}
+          <td>{distribution.key === "next_open_pct" ? openingBucket(bucket.count, distribution.valid_count, bucket.share) : <>{bucket.count}/{distribution.valid_count} · {percent(bucket.share)}</>}</td>
+          {baseline ? <td>{distribution.key === "next_open_pct" ? openingBucket(bucket.baseline_count, distribution.baseline_valid_count, bucket.baseline_share) : <>{bucket.baseline_count === null ? "未提供" : `${bucket.baseline_count}/${distribution.baseline_valid_count}`}{bucket.baseline_share === null ? "" : ` · ${percent(bucket.baseline_share)}`}</>}</td> : null}
         </tr>)}
       </tbody></table>
-      {dragon ? <p>上榜、未上榜数量均以全部样本为分母；覆盖未全的一侧不计算上榜率，未查到不等于未上榜。</p> : null}
       {distribution.note ? <p>{distribution.note}</p> : null}
     </section>;
     }) : <p>暂无可用特征分布。</p>}
@@ -155,8 +137,6 @@ function StockEvidence({ stocks, leaders }: { stocks: DigestStock[]; leaders: bo
       </dl>
       <div className="digest-stock-followup">
         <p><b>次日开盘</b> {stock.next_trade_date ?? "日期待核验"} · {stock.next_open_pct == null ? "涨幅缺失" : signed(stock.next_open_pct)} <small>相对首板收盘</small></p>
-        <p><b>首板龙虎榜</b> {stock.first_dragon_tiger_on_list === true ? "已确认上榜" : stock.first_dragon_tiger_on_list === false ? "已确认未上榜" : "待核验"} · 来源：{stock.first_dragon_tiger_source || "未提供"}</p>
-        {stock.first_dragon_tiger_reason ? <p>榜单附注：{stock.first_dragon_tiger_reason}</p> : null}
       </div>
       {leaders ? <div className="digest-second-board"><h4>二板 {stock.second_board_date ?? "待核验"}</h4><dl className="digest-stock-fields">
         {stock.next_trade_date === stock.second_board_date && stock.next_open_pct != null && stock.next_open_pct === stock.second_open_pct ? null : <StockField label="开盘涨幅" value={signed(stock.second_open_pct)} />}

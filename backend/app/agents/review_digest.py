@@ -6,7 +6,6 @@ from decimal import Decimal
 from typing import Iterable
 
 from app.agents.review_digest_leaders import build_digest_leaders
-from app.agents.review_digest_dragon_tiger import attach_first_board_dragon_tiger
 from app.agents.review_digest_profiles import build_digest_group
 from app.agents.review_digest_prices import exact_price, next_open_fact
 from app.agents.review_market_leaders import _finite, _position
@@ -41,7 +40,6 @@ def build_review_digest(*, picks, predictions, promotion_comparisons, events,
     leaders, market_notes = build_digest_leaders(
         events=events, repository=repository, end_date=end_date, trade_dates=calendar,
     )
-    attach_first_board_dragon_tiger(candidates + leaders, repository, predictions)
     overview = build_digest_overview(
         promotion_comparisons, candidate_dates, len(candidates),
         len(excellent), len(weak), len(ordinary), len(missing),
