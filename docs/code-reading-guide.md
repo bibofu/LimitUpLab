@@ -23,8 +23,10 @@ come from deterministic code and recorded data; the model plans and explains.
    performs model decisions, Policy checks, tool calls, observation and final
    validation. Model/tool/deadline limits bound the same loop.
 7. `react_runtime/catalog.py` derives strict Pydantic arguments and LangChain
-   tools from the public contracts in `agents/tools.py`; `react_runtime/tools.py`
-   validates and dispatches calls. The old `tool_schema.py` has been removed.
+   tools from the public registry in `agents/tools.py`. Contracts live in
+   `tool_schemas_market.py`, `tool_schemas_research.py`, `tool_schemas_review.py`
+   and `tool_schemas_news.py`, using the shared `tool_contracts.py` type;
+   `react_runtime/tools.py` validates and dispatches calls.
 8. `react_runtime/contracts.py` and `evidence.py`: define control tools,
    controlled computation, full result references and provenance.
    `task_contract.py` and `display_fields.py` preserve the interpreted task,
@@ -39,8 +41,11 @@ come from deterministic code and recorded data; the model plans and explains.
     receive native tool-call chunks and decode only `finish.answer` for display.
     `answer_delivery.py` manages provisional revisions; `rendering.py` fills
     the declared evidence table before the final compliance review.
-11. `models.py`: builds user-visible metadata and retains compatibility for
-    historical stored traces. `react_chat.py` persists the final response once.
+11. `models.py`: defines response types and normalizes historical stored traces.
+    `agent_presentation.py` derives grounded stock links and follow-up questions;
+    `agent_evidence_cards.py` builds evidence cards and legacy policy summaries.
+    The existing public builders remain importable from `models.py`.
+    `react_chat.py` persists the final response once.
 
 ## Follow the data behind an answer
 
@@ -53,12 +58,22 @@ come from deterministic code and recorded data; the model plans and explains.
 | `agents/query_contract.py` | Shared argument types and event normalization | The natural-language query compiler has been retired |
 | `post_limit_query_contract.py` | Interpret post-limit shape research | Anchor, cutoff, shape thresholds and statistical windows |
 | `agents/tools.py` | Expose domain operations to chat | Tool inputs, full output, compact trace, active profile |
+| `agents/event_query.py` | Filter, sort and group local events | Stable ordering, event scope and count before display limits |
+| `agents/tool_result.py` | Convert domain results to traces | Full output, normalized outcome and compact summaries |
 | `models.py` | Define API and stored data shapes | Optional fields, validators and uniform result states |
 | `backend/scripts/` | Run collection and backfill workflows | Step order, restart behavior, reports and failure states |
 | `frontend/src/` | Fetch, format and render facts | State updates, stale requests, empty states and source links |
 | `backend/tests/`, `frontend/tests/` | Explain expected behavior with controlled cases | Regression scenario, fixtures and assertions |
 | `backend/evals/golden/` | Run the production Agent against a frozen synthetic world | Independent expected answers, budgets, provenance, judge references and review states |
 | `deploy/`, `scripts/` | Start, verify and deploy the system | Process ownership, locks, backups and recovery |
+
+For the workbench, `frontend/src/App.tsx` owns routing and page orchestration.
+`components/StockResearchPanels.tsx` renders stock position and rating details;
+`components/RecommendationNewsBoard.tsx` renders intelligence cards, while
+`hooks/useRecommendationIntelligence.ts` owns their refresh state. The
+recommendation service separates collection and persistence from per-candidate
+calculation and ranking so time boundaries and source failures can be tested
+through the public refresh entry.
 
 ## Terms used in function comments
 

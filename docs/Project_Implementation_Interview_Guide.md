@@ -121,7 +121,7 @@ flowchart TD
 | --- | --- | --- |
 | 接口与鉴权 | `backend/app/routers`、`security.py` | HTTP 参数、owner 隔离、SSE、管理接口保护 |
 | Agent 编排 | `backend/app/agents/react_runtime` | 决策、调用前校验、证据、交付、运行日志 |
-| 工具契约 | `backend/app/agents/tools.py` | 工具名称、参数、时间能力、集合语义和业务适配 |
+| 工具契约 | `backend/app/agents/tools.py`、`tool_schemas_*.py` | 按领域组织契约，经统一注册表暴露工具名称、参数、时间能力、集合语义和业务适配 |
 | 业务服务 | `backend/app/services`、`agents/first_board.py` | 特征、评分、研究、复盘、记忆与模型适配 |
 | 持久化 | `backend/app/repositories`、`database.py` | SQLite 访问、快照、运行记录、usage 与缓存 |
 | 数据源 | `backend/app/collectors` | 同花顺、AKShare 等来源的超时、标准化和缺失处理 |
@@ -243,7 +243,9 @@ flowchart LR
 
 ### 公开工具契约只有一个来源
 
-`agents/tools.py` 定义 26 个业务工具的公开契约，包含参数 Schema、时间能力、日期字段、集合语义及适配模式。`react_runtime/catalog.py` 由该契约生成 Pydantic 参数模型和 LangChain `StructuredTool`，并检查直接实现的方法签名是否漂移。
+26 个业务工具的公开契约分别定义在 `agents/tool_schemas_market.py`、`tool_schemas_research.py`、`tool_schemas_review.py`、`tool_schemas_news.py`，使用 `tool_contracts.py` 中的共享类型，由 `agents/tools.py` 统一导出。契约包含参数 Schema、时间能力、日期字段、集合语义及适配模式。`react_runtime/catalog.py` 由该契约生成 Pydantic 参数模型和 LangChain `StructuredTool`，并检查直接实现的方法签名是否漂移。
+
+这里的“唯一来源”指同一工具只有一份契约定义，并不要求所有定义堆在一个文件。按领域拆分后，注册表保留原顺序和对象引用，现有调用方的导入路径不变；修改某个工具仍只需修改所属领域的一份契约。这也是面试中解释重构取舍的具体例子。
 
 默认 `v1_close_review` profile 暴露 24 个业务工具；`remote_limit_up_pool` 和 `web_search` 仅在 `extended` 研发 profile 中开放。此外有 4 个运行时控制工具，不能把它们与 26 个业务工具混计。
 
@@ -672,7 +674,8 @@ GET reconnect 只读 journal，不启动新任务；前端使用已知 run ID �
 | --- | --- |
 | 一次聊天从哪里进入 | [chat.py](../backend/app/agents/chat.py)、[react_chat.py](../backend/app/routers/react_chat.py) |
 | 图、预算、修复与停止如何控制 | [runtime.py](../backend/app/agents/react_runtime/runtime.py)、[contracts.py](../backend/app/agents/react_runtime/contracts.py) |
-| 工具如何定义与校验 | [工具注册表](../backend/app/agents/tools.py)、[catalog.py](../backend/app/agents/react_runtime/catalog.py)、[ToolGateway](../backend/app/agents/react_runtime/tools.py) |
+| 工具如何定义与校验 | [工具注册表](../backend/app/agents/tools.py)、[契约类型](../backend/app/agents/tool_contracts.py)、[研究契约示例](../backend/app/agents/tool_schemas_research.py)、[catalog.py](../backend/app/agents/react_runtime/catalog.py)、[ToolGateway](../backend/app/agents/react_runtime/tools.py) |
+| 展示逻辑如何与数据模型分离 | [models.py](../backend/app/models.py)、[agent_presentation.py](../backend/app/agent_presentation.py)、[agent_evidence_cards.py](../backend/app/agent_evidence_cards.py) |
 | 证据怎样保存、计算与交付 | [evidence.py](../backend/app/agents/react_runtime/evidence.py)、[rendering.py](../backend/app/agents/react_runtime/rendering.py)、[task_contract.py](../backend/app/agents/react_runtime/task_contract.py) |
 | 上下文和记忆有什么区别 | [context.py](../backend/app/agents/react_runtime/context.py)、[session_memory.py](../backend/app/services/session_memory.py) |
 | 原生 tool calling 与安全审查 | [langchain_provider.py](../backend/app/services/langchain_provider.py)、[prompt_security.py](../backend/app/services/prompt_security.py)、[compliance.py](../backend/app/agents/react_runtime/compliance.py) |

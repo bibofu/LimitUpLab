@@ -33,7 +33,7 @@ POST /api/agents/chat 或 /chat/stream
 | --- | --- |
 | `services/langchain_provider.py` | `ChatOpenAI.bind_tools`、原生消息流、完整工具参数校验、请求级 timeout/retry 配置、usage 归一 |
 | `agents/react_runtime/runtime.py` | 唯一 StateGraph、预算、节点路由、工具观察和最终门禁 |
-| `agents/tools.py` | 26 个工具的唯一公开契约：参数 Schema、时态、集合语义和显式适配模式 |
+| `agents/tools.py`、`agents/tool_schemas_*.py` | 26 个工具的唯一公开注册表；契约按市场、研究、复盘、资讯分文件，包含参数 Schema、时态、集合语义和显式适配模式 |
 | `agents/react_runtime/catalog.py` | 从唯一契约生成严格 Pydantic 参数模型和 LangChain `StructuredTool`，启动时检查直接实现签名漂移 |
 | `agents/react_runtime/tools.py` | 消费类型化工具，执行 profile、时态、身份解析、调用和证据接入 |
 | `agents/react_runtime/evidence.py` | 请求级完整证据、预览、来源、缺失、截断和确定性计算 |
