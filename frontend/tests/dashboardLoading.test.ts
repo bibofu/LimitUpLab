@@ -33,6 +33,13 @@ const review = compile("../src/components/ReviewDashboard.tsx", { "../api": {}, 
 const stockResearch = compile("../src/components/StockResearchPanels.tsx", { "./Panel": panel });
 const recommendationNews = compile("../src/components/RecommendationNewsBoard.tsx", { "../api": {} });
 const recommendationIntelligence = compile("../src/hooks/useRecommendationIntelligence.ts", { "../api": {} });
+const consolidation = compile("../src/components/ConsolidationPanel.tsx", { "../api": {}, "./Panel": panel });
+const premarket = compile("../src/pages/PremarketPage.tsx", {
+  "../components/ConsolidationPanel": consolidation,
+  "../components/Panel": panel,
+  "../components/RecommendationNewsBoard": recommendationNews,
+  "../hooks/useRecommendationIntelligence": recommendationIntelligence,
+});
 
 function renderApp(path: string, states: unknown[]) {
   let cursor = 0;
@@ -43,9 +50,8 @@ function renderApp(path: string, states: unknown[]) {
     "./components/AgentChatDock": { AgentChatDock: () => createElement("aside", null, "Agent 会话可用") },
     "./components/ReviewDashboard": review,
     "./components/StockResearchPanels": stockResearch,
-    "./components/RecommendationNewsBoard": recommendationNews,
+    "./pages/PremarketPage": premarket,
     "./hooks/useRecommendationIntelligence": recommendationIntelligence,
-    "./components/ConsolidationPanel": {},
     "./components/MarketKLineChart": {},
   });
   return renderToStaticMarkup(createElement(MemoryRouter, { initialEntries: [path] }, createElement(App)));
@@ -63,6 +69,18 @@ test("the homepage keeps its market slots and Agent without transient pool cards
   assert.ok(html.includes('aria-busy="true"'));
   assert.ok(!html.includes('aria-label="涨停池分类"'));
   assert.ok(!html.includes(">0<"));
+});
+
+test("the extracted premarket page preserves news and all URL-selected strategy panels", () => {
+  for (const strategy of ["relay", "consolidation", "drawdown"]) {
+    const html = renderApp(`/recommendations?strategy=${strategy}`, Array(7).fill(pending));
+    assert.ok(html.includes('aria-label="盘前实时新闻"'));
+    assert.ok(html.includes('aria-label="盘前策略"'));
+    assert.equal(html.split('aria-selected="true"').length - 1, 1);
+    assert.ok(html.includes(strategy === "relay"
+      ? "正在读取统一的盘前排名与证据"
+      : `id="${strategy}-panel"`));
+  }
 });
 
 test("market error and recovery keep the same slots and expose a local retry", () => {
