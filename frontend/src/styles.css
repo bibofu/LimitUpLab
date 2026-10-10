@@ -1081,6 +1081,76 @@ td span {
   color: #b83232;
 }
 
+.review-summary {
+  padding: 16px;
+  border: 1px solid #e9edf2;
+  border-radius: 8px;
+  background: #f8fafc;
+}
+
+.review-summary-heading,
+.review-summary-heading > div,
+.review-summary-heading button {
+  display: flex;
+  align-items: center;
+  gap: 10px;
+  flex-wrap: wrap;
+}
+
+.review-summary-heading {
+  justify-content: space-between;
+}
+
+.review-summary-heading span,
+.review-summary p {
+  color: #667489;
+  font-size: 12px;
+  line-height: 1.6;
+}
+
+.review-summary p {
+  margin: 8px 0 0;
+}
+
+.review-summary p.review-agent-error {
+  color: #b83232;
+}
+
+.review-summary-heading button {
+  padding: 6px 10px;
+  border: 1px solid #dce2ea;
+  border-radius: 6px;
+  background: #fff;
+  color: #344256;
+  font-size: 12px;
+}
+
+.review-summary-heading button:disabled {
+  cursor: wait;
+  opacity: 0.6;
+}
+
+.review-summary-sections {
+  display: grid;
+  grid-template-columns: repeat(auto-fit, minmax(min(220px, 100%), 1fr));
+  gap: 16px;
+  margin-top: 12px;
+}
+
+.review-summary-sections h3 {
+  margin: 0 0 6px;
+  font-size: 13px;
+}
+
+.review-summary-sections ul {
+  margin: 0;
+  padding-left: 18px;
+  color: #344256;
+  font-size: 13px;
+  line-height: 1.7;
+  overflow-wrap: anywhere;
+}
+
 .review-date-cutoff {
   display: flex;
   align-items: center;

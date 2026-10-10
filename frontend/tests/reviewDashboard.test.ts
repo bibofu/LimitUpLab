@@ -18,6 +18,7 @@ const compiled = ts.transpileModule(`${source}\nexport { DailyBoardPromotionPane
 const module = { exports: {} as Record<string, unknown> };
 new Function("require", "module", "exports", compiled)((id: string) => {
   if (id === "../api") return {};
+  if (id === "../hooks/useReviewReport" || id === "./ReviewSummary") return {};
   if (id === "../dashboardFormatters") return require("../src/dashboardFormatters.ts");
   if (id === "../relayRanking") return require("../src/relayRanking.ts");
   if (id === "./Panel") return {

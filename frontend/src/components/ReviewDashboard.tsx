@@ -10,15 +10,12 @@ import {
 import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { Link } from "react-router-dom";
 
-import {
-  fetchDragonTigerReview,
-  fetchReviewAgentReport,
-} from "../api";
+import { fetchDragonTigerReview } from "../api";
+import { useReviewReport } from "../hooks/useReviewReport";
 import type {
   DailyBoardPromotionReport,
   DragonTigerReviewResponse,
   ReviewAgentPick,
-  ReviewAgentReportResponse,
   ReviewPromotionComparison,
 } from "../types";
 import {
@@ -32,6 +29,7 @@ import {
 } from "../dashboardFormatters";
 import { displayRelayPositionLabel } from "../relayRanking";
 import { Panel } from "./Panel";
+import { ReviewSummary } from "./ReviewSummary";
 
 interface ReviewDashboardProps {
   dailyBoardPromotion: DailyBoardPromotionReport | null;
@@ -385,47 +383,8 @@ function PromotionWarnings({ warnings }: { warnings: string[] }) {
  * Coordinate historical high-score review loading and the resulting cohort/stock explanations.
  */
 function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) {
-  const [report, setReport] = useState<ReviewAgentReportResponse | null>(null);
-  const [running, setRunning] = useState(false);
-  const [error, setError] = useState<string | null>(null);
+  const { report, loading: running, error, generating, summaryError, retry, regenerate } = useReviewReport(latestTradeDate);
   const [activeReviewSelection, setActiveReviewSelection] = useState<string | null>(null);
-
-  useEffect(/* Synchronize HighScoreReviewPanel with its current dependencies; any returned callback releases this effect's resources or invalidates stale work. */ () => {
-    void loadReview(latestTradeDate);
-  }, [latestTradeDate]);
-
-  /**
-   * Fetch the historical review for the selected interval and update the panel's loading/error
-   * state.
-   */
-  async function loadReview(endDate: string) {
-    setRunning(true);
-    setError(null);
-    try {
-      const response = await fetchReviewAgentReport({
-        end_date: endDate,
-        top_per_day: 10,
-        follow_days: 5,
-        use_llm: false,
-      });
-      setReport(response);
-      const grouped = groupReviewPicksByDate(response.reviewed_picks);
-      const trackDates = buildReviewTrackDates(grouped, response.end_date);
-      setActiveReviewSelection(/* Compute active review selection from the latest React state to avoid overwriting intervening updates. */ (current) => (
-        current && (
-          trackDates.includes(current)
-          || current === REVIEW_SUCCESS_SELECTION
-          || current === REVIEW_MISS_SELECTION
-        )
-          ? current
-          : null
-      ));
-    } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "Review Agent 复盘失败");
-    } finally {
-      setRunning(false);
-    }
-  }
 
   const reviewedPicks = report?.reviewed_picks ?? [];
   const promotionWarnings = [...new Set((report?.warnings ?? []).filter(
@@ -495,7 +454,9 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
           </div>
         </div>
 
-        {error ? <p className="review-agent-error">{error}</p> : null}
+        {error ? <div className="review-agent-error" role="alert">
+          <p>{error}</p><button type="button" onClick={retry}>重试复盘数据</button>
+        </div> : null}
         <PromotionWarnings warnings={promotionWarnings} />
 
         <div className="review-date-cutoff">
@@ -543,6 +504,8 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
                 <strong>{trackedSuccessRate === null ? "暂无" : formatPercent(trackedSuccessRate)}</strong>
               </span>
             </div>
+
+            <ReviewSummary report={report} generating={generating} error={summaryError} onRegenerate={regenerate} />
 
             <DailyTopReview
               activeSelection={selectedReviewSelection}
@@ -704,7 +667,7 @@ function DailyTopReview({
               {activePatterns.slice(0, 3).map(/* Transform each entry in activePatterns.slice(0, 3) into the result used by DailyTopReview. */ (pattern) => <li key={pattern}>{pattern}</li>)}
             </ul>
             {isMissView && adjustmentSuggestions.length > 0 ? (
-              <p><b>评分改进：</b>{adjustmentSuggestions[0]}</p>
+              <p><b>待验证的评分假设：</b>{adjustmentSuggestions[0]}</p>
             ) : null}
           </div>
         ) : null}

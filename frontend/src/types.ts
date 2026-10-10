@@ -492,6 +492,9 @@ export interface ReviewPromotionComparison {
 }
 
 export interface ReviewAgentReportResponse {
+  generation_mode?: "llm" | "deterministic" | "legacy";
+  llm_model?: string | null;
+  generation_note?: string | null;
   excluded_time_prediction_count?: number;
   time_cohort_counts?: Record<string, number>;
   time_audit_status?: string;
