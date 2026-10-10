@@ -171,7 +171,8 @@ def test_disabled_provider_skips_model_and_failure_is_explicit_without_error_lea
 
 @pytest.mark.parametrize("mode", ["legacy", "deterministic", "llm"])
 @pytest.mark.parametrize("use_llm", [False, True])
-def test_api_llm_request_rebuilds_without_mutating_daily_snapshot(mode, use_llm):
+@pytest.mark.parametrize("refresh_facts", [False, True])
+def test_api_llm_request_rebuilds_without_mutating_daily_snapshot(mode, use_llm, refresh_facts):
     stored = build(DisabledLLMProvider()).model_copy(update={"generation_mode": mode})
     original = DailyReviewSnapshot(
         as_of_date=END, start_date=BASE, report=stored,
@@ -182,7 +183,10 @@ def test_api_llm_request_rebuilds_without_mutating_daily_snapshot(mode, use_llm)
     snapshots.get_snapshot.return_value = original
     market = Mock()
     market.list_events.return_value = events()
-    generated = stored.model_copy(update={"generation_mode": "llm", "llm_model": "offline-model"})
+    generated = stored.model_copy(update={
+        "generation_mode": "llm" if use_llm else "deterministic",
+        "llm_model": "offline-model" if use_llm else None,
+    })
     app = FastAPI()
     app.include_router(router, prefix="/agents")
     with (
@@ -192,15 +196,20 @@ def test_api_llm_request_rebuilds_without_mutating_daily_snapshot(mode, use_llm)
         patch("app.routers.agents.build_review_agent_report", return_value=generated) as generate,
         TestClient(app) as client,
     ):
-        response = client.get("/agents/review-report", params={"use_llm": str(use_llm).lower()})
+        response = client.get("/agents/review-report", params={
+            "use_llm": str(use_llm).lower(), "refresh_facts": str(refresh_facts).lower(),
+        })
     assert response.status_code == 200
     assert original.model_dump_json() == before
     snapshots.save_snapshot.assert_not_called()
-    if use_llm:
+    if use_llm or refresh_facts:
         generate.assert_called_once()
-        assert generate.call_args.kwargs["provider"] is None
+        if use_llm:
+            assert generate.call_args.kwargs["provider"] is None
+        else:
+            assert isinstance(generate.call_args.kwargs["provider"], DisabledLLMProvider)
         snapshots.get_snapshot.assert_not_called()
-        assert response.json()["generation_mode"] == "llm"
+        assert response.json()["generation_mode"] == ("llm" if use_llm else "deterministic")
     else:
         generate.assert_not_called()
         assert response.json()["generation_mode"] == mode

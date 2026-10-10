@@ -676,6 +676,7 @@ def get_review_agent_report(
     top_per_day: int = Query(default=10, ge=1, le=20),
     follow_days: int = Query(default=5, ge=1, le=10),
     use_llm: bool = Query(default=True),
+    refresh_facts: bool = Query(default=False),
 ) -> ReviewAgentReportResponse:
     """Return Review Agent tracking for recent daily top first-board picks."""
 
@@ -689,6 +690,7 @@ def get_review_agent_report(
     first_board_repository = SQLiteFirstBoardRepository()
     if (
         not use_llm
+        and not refresh_facts
         and start_date is None
         and min_score == 0
         and top_per_day == 10
