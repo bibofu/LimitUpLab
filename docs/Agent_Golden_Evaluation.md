@@ -1,12 +1,12 @@
 # Agent Chat Golden 评测设计与执行步骤（v1.7）
 
-产品 `v1.5.0` 的阶段总结和下一步见 [V1.5 里程碑](V1.5_Milestone.md)。产品标签、主套件 v1.7、Judge v17 和诊断集 v8 分别版本化；当前可用于辅助粗评，仍需复核裁判的未知、来源和调用边界。
+产品 `v1.5.0` 的阶段总结和下一步见 [V1.5 里程碑](V1.5_Milestone.md)。产品标签、主套件 v1.7、Judge v18 和诊断集 v8 分别版本化；当前可用于辅助粗评，仍需复核裁判的未知、来源和调用边界。
 
 ## 目标和验收边界
 
 评测对象是模型与现有 Agent 执行链路的组合：理解用户请求、调用工具、继承上下文、组织证据并交付回答。
 
-当前套件版本为 `agent-golden-v1.7`，语义裁判实现为 `golden-judge-v17`（已完成两轮真实模型复验，较v16改善，可靠性验收仍未通过），采用下述两阶段独立请求。套件包含 61 个场景、84 个用户回合：31 个单轮、20 个多轮、10 个异常或安全场景。每个场景可以包含多个用户回合，一个场景重复执行多次称为多个 trial。题目数、用户回合数、模型调用数分别统计。
+当前套件版本为 `agent-golden-v1.7`，语义裁判实现为 `golden-judge-v18`，采用下述两阶段独立请求。[v18修复与复验](Agent_Golden_Judge_v18_Repair.md)记录协议结构、失败引用用途与固定输出重评；可靠性验收仍未通过。套件包含 61 个场景、84 个用户回合：31 个单轮、20 个多轮、10 个异常或安全场景。每个场景可以包含多个用户回合，一个场景重复执行多次称为多个 trial。题目数、用户回合数、模型调用数分别统计。
 
 v1.6 已完成一轮本地实测，原件保留在 output/golden/local-v16-20261005-7fcebdaa/。v1.7 根据轨迹补充实际预览省略依据，区分查询动作与来源独立性；统一存在性问题的交付状态，增加输入检查脱敏定位及预算持久化失败归因。固定世界、契约与裁判输入的版本变化不能直接当作能力提升。历史全量成绩仍见 [v1.4结果](Agent_Golden_Results_20260929_v14.md)。
 
@@ -257,6 +257,8 @@ v16为已知合成来源附加评测器拥有的identity_contract，明确其非
 
 v17对结果顶层requested_date/data_as_of及明确故障字段赋予查询用途，行内或嵌套同名业务字段不获得执行证明权限。输出Schema按维度限制target；来源、查询状态、实际预览和业务事实按原子断言分别核对。缺参数或执行记录保留未知，不能改称缺交付绕过；同一对象/日期/指标的明确相反值才是事实反证。这些规则与离线校验不能代替真实模型可靠性验证。
 
+v18进一步要求一次原生调用提交完整的嵌套审计对象；只合并逐字相同的可见正文并保留全部展示位置，不同及已纠正的错误草稿仍独立审查。length终止、多调用和非法Schema均不接受。运行时完整失败包络中的顶层business_result_available=false，须有实际error观测才可作为query_status证据；不能证明市场零记录。无法排除遗漏属于知识缺口，具体额外记录、实际数量和预测仍须业务事实证据，不按关键词改类。
+
 一次完整诊断包含59次最终交付请求和61次可见内容请求，共120次。命令从仓库根目录执行；macOS/Linux将Python路径替换为`backend/.venv/bin/python`：
 
 ```powershell
@@ -326,6 +328,19 @@ backend/.venv/Scripts/python.exe backend/scripts/run_agent_golden.py --mode live
 `--mode validate --profile v1_close_review` 与 `--mode validate --profile extended` 分别输出工具白名单、模拟覆盖与缺口，不调用模型。主套件完整运行现在是 61 题；旧 60 题成绩保留其原版本。
 
 裁判诊断为 `golden-judge-calibration-v8`：61 个场景、266 个判项，每轮计划 120 次逻辑调用，默认及最大预算 120。两轮应分别指定输出文件执行；相对v7仅两格人工确认的事实标签改变，全部输入与其他判项由冻结指纹保护。实际模型结果与人工签核状态分别记录，不能把脚本校验或模型复核当成人工校准。
+
+### 只重评既有 Agent 输出
+
+修改裁判后，可用独立入口固定旧答案和证据，只重新调用Judge。默认validate不初始化模型，校验完整源报告、当前case/oracle与数据集指纹；源报告必须包含全部计划trial与回合。
+
+```powershell
+backend/.venv/Scripts/python.exe backend/scripts/replay_agent_golden_judge.py --input output/golden/<原运行>/report.json
+backend/.venv/Scripts/python.exe backend/scripts/replay_agent_golden_judge.py --mode live --input output/golden/<原运行>/report.json --output output/golden/<新重评目录> --max-model-calls 120
+```
+
+省略`--turn`时重评全部回合；可重复指定`--turn case_id:trial:turn_index`，其中trial从1开始、turn_index从0开始，选取项必须存在且唯一。子集重评分别统计回合与完整覆盖的原trial，不能冒充整套结果。禁止覆盖既存输出目录，不提供隐式续跑。
+
+重评报告保留原generation_manifest、旧判分及usage，另存judge_manifest、新Judge用量、源文件SHA和每回合输入SHA。载入模型时若正文或判分字段被转换，模型请求前就停止；结束后完整性校验成功才标记完成。新Agent调用数固定为0。原判不是人工gold；新evaluator的判定不能由同配置比较器伪装成Agent能力提升，仍需独立诊断和完整Golden。
 
 ## 第九步：生成能定位问题的报告
 

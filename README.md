@@ -628,9 +628,11 @@ Linux 使用对应虚拟环境的 `python scripts/check_project.py`。也可通�
 
 现行聊天回归使用 [Agent Golden 评测](docs/Agent_Golden_Evaluation.md)：v1.7 包含 61 个场景、84 个回合，支持生产默认与扩展工具 profile。历史[v16验证](docs/Agent_Golden_Judge_v16_Protocol.md)完成全量 Agent 基线（52通过、1失败、8待复核）及8项真人抽样标注；[v17裁判修复与实测](docs/Agent_Golden_Judge_v17_Repair.md)改善了引用用途判定，但可靠性与全量人工签核仍未通过。
 
-最新 [r02 / s13 / r10 修复与对比](docs/Agent_Golden_Results_20261012_protocol_topn_recovery.md)记录协议反馈、TopN 数量门禁及受限部分恢复。九个相关场景各三次的同配置复验，由 **20通过、4失败、3待复核 → 22通过、0失败、5待复核**；s13、r10 均三次通过，Agent 协议异常调用由3次降为0次。新增待复核项包含 Judge 协议失败和引用类型争议，保持原判。新增48项回归，完整离线验收为后端1,952项及22个subtests、前端94项和生产构建通过；原始生成报告只保留本地。
+最新 [Judge v18 修复与完整复验](docs/Agent_Golden_Judge_v18_Repair.md)处理上一轮五项待复核：固定旧答案、证据和草稿，仅新增42次Judge调用，九场景27 trials由 **22通过/5待复核 → 27通过**，30回合全部通过且原通过项无退化。新增104项离线回归，记录BC-134至BC-137；最终验收为后端2,056项及22个subtests、前端94项和生产构建通过。
 
-上一轮 [s18 / r03 修复与对比](docs/Agent_Golden_Results_20261012_s18_r03.md)包含最近一次完整61场景、84回合基线：**50通过、3失败、8待复核**。本轮九场景复验不能代替新的全量基线，整体质量验收仍未通过。
+新完整 Golden 已完成61场景、84回合：**52通过、0失败、9待复核**，s18/s13/r02/r03/r10均通过。旧完整基线为50/3/8；生产由v33变v34、裁判由v17变v18，不能把总分变化单独归因于Judge。仍有5项原通过场景转为待复核，包括一次遗漏source/safety审计维度；独立裁判诊断为55/61场景、261/266判项匹配，可靠性验收仍未通过。原始报告保持原判并留在本地。
+
+此前的 [r02 / s13 / r10](docs/Agent_Golden_Results_20261012_protocol_topn_recovery.md)与 [s18 / r03](docs/Agent_Golden_Results_20261012_s18_r03.md)记录生产修复及历史比较；新Judge没有回填旧成绩。
 
 GitHub Actions 配置在 `.github/workflows/validate.yml`，对 PR、main、codex 分支及 `v*` 标签推送运行 Windows/Linux 两套检查，使用相同验收入口，不需要行情或模型密钥。标签检查通过后触发生产部署，流程见 [标签自动部署说明](deploy/Tag_Deployment.md)。失败日志保留 7 天；测试数据库不上传，分支保护需在仓库设置中配置。
 
@@ -684,8 +686,8 @@ npm.cmd run build
 
 近期优先级：
 
-1. s18/r03 及 [r02/s13/r10](docs/Agent_Golden_Results_20261012_protocol_topn_recovery.md)已完成本轮修复与定向复验；继续扩大数量/排名窗口的语义样本，观察协议异常重现，之后建立新的全量基线。部分恢复保留失败状态，本轮真实模型未触发恢复分支，不能仅以离线测试证明线上稳定性。
-2. 单独复核 Judge 的查询状态、来源和缺口说明引用，保留待复核项；补充更广的直接回答语义与多轮契约切换验证，不把离线门禁测试当作模型准确率。
+1. [Judge v18](docs/Agent_Golden_Judge_v18_Repair.md)已完成五项目标重评和新的全量基线；下一步处理必填审计维度遗漏、引用粒度，以及零调用/会话边界/工具默认语义的可引用证据，复核剩余9项，不直接改判。
+2. 继续扩大TopN、排名窗口和多轮契约切换的语义样本；保留异常恢复的失败状态。本轮完整模型运行未触发恢复分支，不能以离线门禁测试或一次通过证明稳定性。
 3. 数据侧继续滚动补齐 Top10 Outcome 和端到端验收；V2 再考虑数据源与部署扩容。
 
 当前阶段总结见 [V1.5 阶段里程碑](docs/V1.5_Milestone.md)，实现边界见 [LangChain + LangGraph 集成](docs/LangChain_Integration.md)。
