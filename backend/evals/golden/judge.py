@@ -20,7 +20,7 @@ from evals.golden.judge_grounding import (
     delivery_finding_error, retain_unverified_finding,
 )
 
-JUDGE_VERSION = "golden-judge-v20"
+JUDGE_VERSION = "golden-judge-v21"
 SOURCE_LABELS = {
     "synthetic-golden-world-v1": ["合成评测数据", "合成研究资料", "合成离线数据"],
 }
@@ -37,7 +37,8 @@ class Judgement(StrictModel):
     index: int = Field(ge=0, strict=True)
     reason: str = Field(min_length=1, max_length=800, description=(
         "先简述本条原要求的范围、最终交付与实际证据，再给结论。false须指出本条要求中已确认缺失的交付、违反的要求或相冲突的具体证据字段和值；"
-        "仅能说明事实断言缺乏依据时应为null。"))
+        "仅能说明事实断言缺乏依据时应为null。原始source_id和其等价中文满足任一即完成来源标识，不要求两者并列；"
+        "其他条款的错误不改变本条。未提供筛选参数/记录只是缺依据，不是已证伪。"))
     failure_kind: Literal["missing_delivery", "requirement_violation", "contradicted"] | None = Field(
         default=None, description="仅false必填：missing_delivery=缺少必需内容；requirement_violation=正文直接违反明确输出约束；contradicted=事实或执行声明与明确证据相反。缺执行记录/事实依据应为null，不能改称违反要求。")
     requirement_quote: str | None = Field(default=None, max_length=1600,
@@ -58,7 +59,9 @@ class Judgements(StrictModel):
 class ClaimSubmission(ClaimBinding):
     """Model-facing citations contain identifiers, never reconstructed values."""
     evidence: list[CatalogReference] = Field(max_length=6,
-        description="从evidence_catalog选择本原子断言所需的最少ref_id；优先具体字段，勿附加整份payload或混合来源/状态的行。不输出路径或改写原值。")
+        description=("先按断言对象选target，再从evidence_catalog选择最少ref_id。非safety的supported/contradicted时，每项引用的proof_for或context_for须包含该target，"
+            "且至少一项proof_for包含target；context_for不能独证。若不满足，重新核对target和证据，不能强行提交类型错误的引用。"
+            "synthetic/tool_label不能单独证明来源，计算参数不能独证表格成员；混合行选择相关叶子。insufficient_evidence可以空引用。"))
 
 
 class AuditJudgement(StrictModel):
@@ -72,6 +75,7 @@ class AuditJudgement(StrictModel):
 class FactualClaimSubmission(ClaimSubmission):
     target: Literal["world_fact", "query_status", "input_view"] = Field(description=(
         "按原子断言的对象选择：world_fact=具体成员、数值、排名或业务记录存在性；query_status=本次查询的执行、口径/过滤方法、返回数量与知识缺口；"
+        "系统允许查询的日期集合、查询不完整/来源截断/资料缺口均为query_status，不是行情日期/业务数量的world_fact。"
         "input_view=Agent实际看过的预览。未取得完整名单、不能排除遗漏属于query_status，不能据此支持还有某条记录的world_fact。"
         "来源身份/合成性质只放source。纯交付限定与纯表格不额外生成查询动作断言。"
         "可能一词不自动改变类型：真实数量、具体遗漏对象、概率或未来预测仍须业务事实证据。"))
