@@ -628,7 +628,9 @@ Linux 使用对应虚拟环境的 `python scripts/check_project.py`。也可通�
 
 现行聊天回归使用 [Agent Golden 评测](docs/Agent_Golden_Evaluation.md)：v1.7 包含 61 个场景、84 个回合，支持生产默认与扩展工具 profile。历史[v16验证](docs/Agent_Golden_Judge_v16_Protocol.md)完成全量 Agent 基线（52通过、1失败、8待复核）及8项真人抽样标注；[v17裁判修复与实测](docs/Agent_Golden_Judge_v17_Repair.md)改善了引用用途判定，但可靠性与全量人工签核仍未通过。
 
-最新 [s18 / r03 修复与对比](docs/Agent_Golden_Results_20261012_s18_r03.md)记录同配置三次定向复验和 v33 完整 Golden 基线：s18 三次均通过，r03 三次均能以 partial 正常收尾、业务工具调用由每次6次降为2次。完整61场景、84回合为 **50通过、3失败、8待复核**；仍有交付问题和裁判边界，不能宣称整体回归通过。完整离线验收为后端1,904项及22个subtests、前端94项和生产构建通过；原始生成报告只保留本地。
+最新 [r02 / s13 / r10 修复与对比](docs/Agent_Golden_Results_20261012_protocol_topn_recovery.md)记录协议反馈、TopN 数量门禁及受限部分恢复。九个相关场景各三次的同配置复验，由 **20通过、4失败、3待复核 → 22通过、0失败、5待复核**；s13、r10 均三次通过，Agent 协议异常调用由3次降为0次。新增待复核项包含 Judge 协议失败和引用类型争议，保持原判。新增48项回归，完整离线验收为后端1,952项及22个subtests、前端94项和生产构建通过；原始生成报告只保留本地。
+
+上一轮 [s18 / r03 修复与对比](docs/Agent_Golden_Results_20261012_s18_r03.md)包含最近一次完整61场景、84回合基线：**50通过、3失败、8待复核**。本轮九场景复验不能代替新的全量基线，整体质量验收仍未通过。
 
 GitHub Actions 配置在 `.github/workflows/validate.yml`，对 PR、main、codex 分支及 `v*` 标签推送运行 Windows/Linux 两套检查，使用相同验收入口，不需要行情或模型密钥。标签检查通过后触发生产部署，流程见 [标签自动部署说明](deploy/Tag_Deployment.md)。失败日志保留 7 天；测试数据库不上传，分支保护需在仓库设置中配置。
 
@@ -682,7 +684,7 @@ npm.cmd run build
 
 近期优先级：
 
-1. s18 直接回答范围和 r03 失败证据收尾已完成修复及复验；继续处理[新基线](docs/Agent_Golden_Results_20261012_s18_r03.md)暴露的模型工具调用协议异常、部分/截断数据的失败收尾和 TopN 交付数量。
+1. s18/r03 及 [r02/s13/r10](docs/Agent_Golden_Results_20261012_protocol_topn_recovery.md)已完成本轮修复与定向复验；继续扩大数量/排名窗口的语义样本，观察协议异常重现，之后建立新的全量基线。部分恢复保留失败状态，本轮真实模型未触发恢复分支，不能仅以离线测试证明线上稳定性。
 2. 单独复核 Judge 的查询状态、来源和缺口说明引用，保留待复核项；补充更广的直接回答语义与多轮契约切换验证，不把离线门禁测试当作模型准确率。
 3. 数据侧继续滚动补齐 Top10 Outcome 和端到端验收；V2 再考虑数据源与部署扩容。
 

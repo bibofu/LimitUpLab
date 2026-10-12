@@ -1,6 +1,6 @@
 # LangChain + LangGraph ReAct 集成
 
-> 当前源码标识：`react-runtime-v31` / `agent-tools-v2` / `react-evidence-v4`
+> 当前源码标识：`react-runtime-v34` / `agent-tools-v2` / `react-evidence-v4`
 > 本文描述工作树实现；当前阶段工作与验证见 [V1.5 里程碑](V1.5_Milestone.md)，历史 V1.4 发布范围见 [V1.4 里程碑](V1.4_Milestone.md)。
 
 ## 当前生产链路
@@ -42,6 +42,7 @@ POST /api/agents/chat 或 /chat/stream
 | `agents/react_runtime/answer_stream.py` | 增量解析单个 `finish` 调用的顶层 `answer`，不展示其他参数或并行调用 |
 | `agents/react_runtime/answer_delivery.py` | 管理待校验正文、revision、撤回和表格占位符缓冲 |
 | `agents/react_runtime/rendering.py` | 从本轮证据渲染单张表格，检查字段、行数、截断与范围 |
+| `agents/react_runtime/partial_delivery.py` | 累计模型失败触发 provider_error 后构造受限的部分交付候选，仍由运行时执行证据和合规校验 |
 | `agents/react_runtime/compliance.py` | 独立语义合规 Critic；结构化返回交易指令、仓位、目标价、承诺和确定性预测违规 |
 | `agents/react_runtime/lifecycle.py` | SQLite run journal、checkpoint、call replay record 和取消标记 |
 | `routers/react_chat.py` | worker、同步等待、SSE、重连、取消和原子发布 |
@@ -71,6 +72,8 @@ LIMITUPLAB_LLM_TIMEOUT_SECONDS=30
 
 `AuditedChatOpenAI` 对兼容服务保留两项窄适配：将 SDK 的 `max_completion_tokens` 转回目标服务支持的 `max_tokens`；从流式 chunk 保存原始 usage。升级 `langchain-openai` 时必须运行线协议测试，不能只验证 import。
 
+原生工具参数必须是合法 JSON；`finish.missing` 明确为字符串数组。首次原生协议异常后，既有修复机会会收到安全的格式反馈，并保留当前证据。Provider 不修补非法参数，运行时不增加重试预算；错误 trace 只记录白名单结构诊断，不保存原参数或异常正文。
+
 ## 证据、状态与安全边界
 
 - 工具结果区分 `ok`、`empty`、`partial`、`error`；空结果不是异常，缺失或截断不能冒充完整集合。
@@ -81,6 +84,7 @@ LIMITUPLAB_LLM_TIMEOUT_SECONDS=30
 - 已确认的工具异常形成无业务行的错误证据，可引用以说明 `partial` 缺口，不能计算、交表或证明完整成功。取消、执行结果未知和 journal 持久化异常不构造确定失败证据；同一运行中后续相同参数的确定失败可复用，工具显式返回 partial 时可补查，独立查询仍可继续。
 - 有无、计数、单指标请求可使用 `prose_only`，只回答所问结果及必要口径与缺口；本轮明确要求名单或解释时重新解释契约。门禁拒绝额外表格，正文语义范围仍需模型遵循约束和真实评测，不通过正则裁剪实现。
 - 名单通过 `finish.table` 指定证据和字段，并在正文放置一次 `{{evidence_table}}`。服务端输出实际返回的行，最多一张表、12 列、1000 行；无表时不允许残留占位符。源数据截断且无完整排名范围证明时，不能把该表声明为 `complete`。
+- 本轮明确 TopN 或排名窗口由 Input Reviewer 写入 `output_contract.row_selection`；交付门禁检查完整证据行数不超过 `limit`，超限拒绝后由模型通过 `compute_result` 选取，服务端不静默截表。完整集合不足 N 可如实交付；该门禁不证明排序、`offset` 或成员正确，也不能通过降低业务查询 limit 绕过来源截断检查。
 - Claim Ledger 已退役，旧 checkpoint 的 `claims` 字段仅兼容忽略。当前 gate 不对每句正文做标量绑定校验；证据引用和表格约束不能证明开放式解释或因果关系。
 - 输入安全与最终投资合规分别使用独立强制 tool call 的结构化语义 Reviewer；失败时关闭，不通过补关键词正则扩展语义边界。
 - 外部网页、新闻和历史消息均视为不可信内容，不能修改工具权限或系统边界。
@@ -109,6 +113,8 @@ SSE GET 重连只读取事件和最终响应，不启动模型或工具。运行
 
 取消是协作式的：不再启动新调用，但已经进入底层网络库的请求可能稍后结束。当前 worker 和锁是单进程设计，多 Uvicorn 进程部署前需要数据库租约或外部队列。
 
+累计两次模型调用失败触发 `provider_error` 时，只有本轮唯一可用数据集、明确展示字段、没有待澄清输入且未被标记为过期的表格任务可尝试保留数据；带 `row_selection` 的任务不自动交表。这里沿用 `data_fresh` 标志，没有额外 TTL 检查。恢复候选经过证据渲染、交付和独立合规审核，并在审核前后检查取消与 deadline。最终状态仍为 `partial / provider_error`，明确范围与完整性尚未核验；`react_fallback_delivery` 单独记录 `origin=runtime`，不伪造模型 finish 或正常完成。审核失败后不再通过通用兜底回显被拒绝的单元格。
+
 ## 验证
 
 ```powershell
@@ -119,6 +125,8 @@ backend/.venv/Scripts/python.exe scripts/check_project.py
 项目验收命令验证代码、前端和构建，不会自动调用真实模型；当次数量、退出码和日志保存在 `output/validation/<运行标识>/`，不使用历史标签的测试数代表当前验收。
 
 流式协议重点参考后端的 `test_langchain_provider.py`、`test_react_answer_stream.py`、`test_react_live_answer.py`、`test_react_http.py`，以及前端的聊天传输和答案缓冲测试。旧聊天评测框架已退役；当前 [Golden 评测](Agent_Golden_Evaluation.md) 在隔离的合成工具环境中运行生产 Agent，并独立检查交付和可见回答。完整 Agent 基线与裁判专项诊断分开统计，离线契约回归不等同于真实模型质量验收；预测 Outcome 的 Evaluation Agent 仍保留。
+
+数量契约与失败恢复的专项回归见 `test_react_row_selection.py`、`test_react_protocol_recovery.py`；真实模型前后对照见 [r02 / s13 / r10 复验](Agent_Golden_Results_20261012_protocol_topn_recovery.md)。
 
 ## 面试讲法
 
