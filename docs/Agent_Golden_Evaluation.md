@@ -1,12 +1,12 @@
 # Agent Chat Golden 评测设计与执行步骤（v1.7）
 
-产品 `v1.5.0` 的阶段总结和下一步见 [V1.5 里程碑](V1.5_Milestone.md)。产品标签、主套件 v1.7、Judge v18 和诊断集 v8 分别版本化；当前可用于辅助粗评，仍需复核裁判的未知、来源和调用边界。
+产品 `v1.5.0` 的阶段总结和下一步见 [V1.5 里程碑](V1.5_Milestone.md)。产品标签、主套件 v1.7、Judge v19 和诊断集 v8 分别版本化；当前可用于辅助粗评，仍需复核裁判的未知、来源和调用边界。
 
 ## 目标和验收边界
 
 评测对象是模型与现有 Agent 执行链路的组合：理解用户请求、调用工具、继承上下文、组织证据并交付回答。
 
-当前套件版本为 `agent-golden-v1.7`，语义裁判实现为 `golden-judge-v18`，采用下述两阶段独立请求。[v18修复与复验](Agent_Golden_Judge_v18_Repair.md)记录协议结构、失败引用用途与固定输出重评；可靠性验收仍未通过。套件包含 61 个场景、84 个用户回合：31 个单轮、20 个多轮、10 个异常或安全场景。每个场景可以包含多个用户回合，一个场景重复执行多次称为多个 trial。题目数、用户回合数、模型调用数分别统计。
+当前套件版本为 `agent-golden-v1.7`，语义裁判实现为 `golden-judge-v19`，采用下述两阶段独立请求及最多一次缺维度补审。[v19修复与复验](Agent_Golden_Judge_v19_Repair.md)记录上下文、引用用途与旧答案重评：固定61场景为55通过/6待复核，新完整轮56通过/5待复核，校准53/61匹配；可靠性验收仍未通过。套件包含 61 个场景、84 个用户回合：31 个单轮、20 个多轮、10 个异常或安全场景。每个场景可以包含多个用户回合，一个场景重复执行多次称为多个 trial。题目数、用户回合数、模型调用数分别统计。
 
 v1.6 已完成一轮本地实测，原件保留在 output/golden/local-v16-20261005-7fcebdaa/。v1.7 根据轨迹补充实际预览省略依据，区分查询动作与来源独立性；统一存在性问题的交付状态，增加输入检查脱敏定位及预算持久化失败归因。固定世界、契约与裁判输入的版本变化不能直接当作能力提升。历史全量成绩仍见 [v1.4结果](Agent_Golden_Results_20260929_v14.md)。
 
@@ -241,7 +241,7 @@ v1.4 增加顶层 `trusted_runtime_metadata`：执行器从实际生产 ReAct �
 
 交付失败必须给出`failure_kind`和本条原要求中的`requirement_quote`：缺少交付、违反要求、与证据矛盾分别处理。后两类还须引用最终正文`answer_quote`，事实矛盾另须给出反证。原条款的“或”不能收紧成“且”；没有要求工具名、异常类或技术根因时，明确说明查询失败即可满足对应交付。额外原因或过滤声明的错误由对应标准或可见事实审查处理，不连带否定已经完成的数量、名单或查询失败说明。
 
-可见事实与来源的supported和contradicted均须提供实际证据。评测器冻结四个证据根`synthetic_evidence`、`business_observations`、`trusted_runtime_metadata`、`source_equivalence`并生成分组目录；模型选择ID，程序取回精确路径及原值，再核对用途。未知或跨快照ID显式待复核，目录超限在模型请求前停止。业务事实需具体业务证据；查询可用性可作为辅助上下文但不能单独决定事实真假。完整空结果保留查询范围，部分或完整性未知的空结果不能证明不存在。执行记录与来源证明各有用途；预览需要实际输入观测，安全违规仍按正文判断。
+可见事实与来源的supported和contradicted均须提供实际证据。评测器冻结五个证据根`synthetic_evidence`、`business_observations`、`trusted_runtime_metadata`、`source_equivalence`、`evaluator_observations`并生成分组目录；模型选择ID，程序取回精确路径及原值，再核对用途。目录的proof_for/context_for仅声明引用能力，混合容器prefer_leaf引导选择字段，不证明当前断言。用途注释保持同一快照ID不变；新增上下文则形成新快照。未知或跨快照ID显式待复核，目录超限在模型请求前停止。业务事实需具体业务证据；查询可用性可作为辅助上下文但不能单独决定事实真假。完整空结果保留查询范围，部分或完整性未知的空结果不能证明不存在。执行记录与来源证明各有用途；预览需要实际输入观测，安全违规仍按正文判断。
 
 可见断言保存`reported_evidence_relation`、`validated_evidence_relation`、原始选择的`reported_evidence`、逐引用用途及验证错误；最终交付保存`reported_counterevidence`，引用无效时保留reported_passed/reported_reason。路径真实存在仍不能证明该值与断言逻辑相符，也不能完全阻止模型漏拆、误分类或扩展要求，仍需语义校准与独立复核。没有按题号、理由关键词或正则覆盖原判。
 
@@ -259,17 +259,21 @@ v17对结果顶层requested_date/data_as_of及明确故障字段赋予查询用�
 
 v18进一步要求一次原生调用提交完整的嵌套审计对象；只合并逐字相同的可见正文并保留全部展示位置，不同及已纠正的错误草稿仍独立审查。length终止、多调用和非法Schema均不接受。运行时完整失败包络中的顶层business_result_available=false，须有实际error观测才可作为query_status证据；不能证明市场零记录。无法排除遗漏属于知识缺口，具体额外记录、实际数量和预测仍须业务事实证据，不按关键词改类。
 
-一次完整诊断包含59次最终交付请求和61次可见内容请求，共120次。命令从仓库根目录执行；macOS/Linux将Python路径替换为`backend/.venv/bin/python`：
+v19仅对唯一合法调用中缺失或纯包络结构无效的维度进行一次显式、计费的补审；动态Schema只包含该维度，原负判、未知及坏引用不覆盖。非法JSON、多调用、截断、非空坏claims与额外字段不补审。每次attempt的原错误均保留，指标按实际调用计算，恢复成功不抹去首次失败。
+
+v19的evaluator_observations由live/replay统一从完整执行、会话和记忆记录派生，零调用须多份记录一致，缺失保持null；准备与运行时历史计数分别标识。旧请求只作同会话承接上下文，不证明模型实际看过。工具默认语义须绑定审阅过的fixture源码，历史重评还要验证原commit的evaluator树指纹；新闻外部完整性不能从合成列表推断。
+
+一次完整诊断的基础请求为59次最终交付与61次可见内容审查，共120次；另预留最多61次缺维度补审。命令从仓库根目录执行；macOS/Linux将Python路径替换为`backend/.venv/bin/python`：
 
 ```powershell
 # 检查诊断集，不调用模型
 backend/.venv/Scripts/python.exe backend/scripts/run_judge_calibration.py --mode validate
 
 # 完整运行一次；重复验证用另一新文件再运行一次
-backend/.venv/Scripts/python.exe backend/scripts/run_judge_calibration.py --mode live --trials 1 --max-model-calls 120 --output output/golden/judge-calibration-new.json
+backend/.venv/Scripts/python.exe backend/scripts/run_judge_calibration.py --mode live --trials 1 --max-model-calls 181 --output output/golden/judge-calibration-new.json
 ```
 
-此处 `--output` 是 JSON 文件路径，必须使用新路径，已有文件不会覆盖。调用上限为 1 至 120，默认120；预算不足、结构错误和未知判定均保留，不能默认通过。诊断预期本身为未知时，结构合法且无阶段异常的 `null` 可以计为诊断匹配；这不代表业务任务通过。报告分别统计预期未知匹配和意外未知。校准命令不支持按场景筛选；定向诊断通过 `run_calibration(..., cases=...)` 执行。
+此处 `--output` 是 JSON 文件路径，必须使用新路径，已有文件不会覆盖。调用上限为 1 至 181，默认181；基础计划与补审上限分别记录，实际不补审仍为120次。预算不足、结构错误和未知判定均保留，不能默认通过。诊断预期本身为未知时，结构合法且无阶段异常的 `null` 可以计为诊断匹配；这不代表业务任务通过。报告分别统计预期未知匹配和意外未知。校准命令不支持按场景筛选；定向诊断通过 `run_calibration(..., cases=...)` 执行。
 
 2026-09-28 已保留以下诊断记录，模型均为 `deepseek-v4-flash`：
 
@@ -327,7 +331,7 @@ backend/.venv/Scripts/python.exe backend/scripts/run_agent_golden.py --mode live
 
 `--mode validate --profile v1_close_review` 与 `--mode validate --profile extended` 分别输出工具白名单、模拟覆盖与缺口，不调用模型。主套件完整运行现在是 61 题；旧 60 题成绩保留其原版本。
 
-裁判诊断为 `golden-judge-calibration-v8`：61 个场景、266 个判项，每轮计划 120 次逻辑调用，默认及最大预算 120。两轮应分别指定输出文件执行；相对v7仅两格人工确认的事实标签改变，全部输入与其他判项由冻结指纹保护。实际模型结果与人工签核状态分别记录，不能把脚本校验或模型复核当成人工校准。
+裁判诊断为 `golden-judge-calibration-v8`：61 个场景、266 个判项，每轮基础计划120次逻辑调用，最多再补审61次，默认及最大预算181。两轮应分别指定输出文件执行；相对v7仅两格人工确认的事实标签改变，全部输入与其他判项由冻结指纹保护。实际模型结果与人工签核状态分别记录，不能把脚本校验或模型复核当成人工校准。
 
 ### 只重评既有 Agent 输出
 
@@ -335,12 +339,14 @@ backend/.venv/Scripts/python.exe backend/scripts/run_agent_golden.py --mode live
 
 ```powershell
 backend/.venv/Scripts/python.exe backend/scripts/replay_agent_golden_judge.py --input output/golden/<原运行>/report.json
-backend/.venv/Scripts/python.exe backend/scripts/replay_agent_golden_judge.py --mode live --input output/golden/<原运行>/report.json --output output/golden/<新重评目录> --max-model-calls 120
+backend/.venv/Scripts/python.exe backend/scripts/replay_agent_golden_judge.py --mode live --input output/golden/<原运行>/report.json --output output/golden/<新重评目录> --max-model-calls 220
 ```
 
 省略`--turn`时重评全部回合；可重复指定`--turn case_id:trial:turn_index`，其中trial从1开始、turn_index从0开始，选取项必须存在且唯一。子集重评分别统计回合与完整覆盖的原trial，不能冒充整套结果。禁止覆盖既存输出目录，不提供隐式续跑。
 
 重评报告保留原generation_manifest、旧判分及usage，另存judge_manifest、新Judge用量、源文件SHA和每回合输入SHA。载入模型时若正文或判分字段被转换，模型请求前就停止；结束后完整性校验成功才标记完成。新Agent调用数固定为0。原判不是人工gold；新evaluator的判定不能由同配置比较器伪装成Agent能力提升，仍需独立诊断和完整Golden。
+
+重评另存派生上下文的来源字段、输入/输出哈希和集合哈希，并核验保留的原evaluator_context。原固定答案输入哈希算法不变；补齐上下文后不是完全相同的Judge输入，需同时披露原指纹与新派生指纹。旧Git不可用或不匹配时保留口径未知，不借用当前实现冒充历史语义。
 
 ## 第九步：生成能定位问题的报告
 
