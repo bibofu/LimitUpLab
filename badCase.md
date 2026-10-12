@@ -1421,3 +1421,6 @@ empty、partial 或 error 时 Replan 新闻；股票名称提取同步覆盖 K�
 - 冻结 `366feb4` 的完整 v8 校准保留为 `output/golden/judge-v20-calibration-20261012/`：61题全部完成，50 match / 4 mismatch / 7 review，255/266判断槽匹配。BC-142至BC-144涉及的四项v19退化恢复，但出现可查询日期当world、synthetic标志单独证明来源、lineage误作调用证据、合法source_id被追加中文要求等新错误；不将局部改善宣称整体成功，也未在此版本继续消耗84回合重评预算。
 - v21在Schema与阶段规则就近明确引用用途检查：按原句确定target后，非safety的确定关系要求每项引用均有对应proof/context资格且至少一项直接proof；用途有效仍不等于语义蕴含。unknown可空引用，safety按正文审查，不能为寻找可用引用篡改target或省略断言。
 - 原始source_id与等价中文满足其一；可查询日期/来源完整性是查询状态，调用动作引用本轮执行字段，synthetic/tool_label只辅助来源归属。缺筛选参数不当成明确false。原v20结果完整保留；再次校准使用未改动的全部61题及标签，不筛掉失败题、不覆盖旧结果。
+- v21完整校准为52 match / 4 mismatch / 5 review，257/266判项匹配，仍低于v19的53/61、258/266。四个目标题恢复三项，品牌来源的final/source不一致仍在；另有历史统计分类、来源血缘、synthetic单独证明来源、缺参数判false和来源ID误归world等新退化，不将此条标成整体已修复。
+- 固定同一61场景/84个旧答案由55通过/6待复核变为57通过/4待复核，s19、s20恢复，v19原通过项无新增退化；另一批5个旧review回合恢复s25、m04首轮、r09，保留s26、r05。r05专项仍把来源身份归world_fact，并把不能证明外部完备性的元数据用于supported，自动结果保留review，语义风险单独记录。
+- BC-142至BC-145新增27项回归，950项Golden相关测试通过；五类query_semantics的旧校验放行、新校验拒绝由零模型固定对照确认。完整数字与原件指纹见[Judge v21验证](docs/Agent_Golden_Judge_v21_Validation.md)。本轮没有新Agent调用或新完整Golden；校准总分未改善，可靠性验收仍未通过。

@@ -628,9 +628,11 @@ Linux 使用对应虚拟环境的 `python scripts/check_project.py`。也可通�
 
 现行聊天回归使用 [Agent Golden 评测](docs/Agent_Golden_Evaluation.md)：v1.7 包含 61 个场景、84 个回合，支持生产默认与扩展工具 profile。历史[v16验证](docs/Agent_Golden_Judge_v16_Protocol.md)完成全量 Agent 基线（52通过、1失败、8待复核）及8项真人抽样标注；[v17裁判修复与实测](docs/Agent_Golden_Judge_v17_Repair.md)改善了引用用途判定，但可靠性与全量人工签核仍未通过。
 
-最新 [Judge v19 修复与完整复验](docs/Agent_Golden_Judge_v19_Repair.md)处理上一轮九项待复核：补充一次有界缺维度审计、引用用途目录、可追溯的零调用/会话上下文和版本化工具口径。新增122项回归与BC-138至BC-141；完整离线验收后端2,173项及22个subtests、前端94项和构建通过，最后5项计算来源边界加入后923项Golden相关测试全部通过。
+最新 [Judge v20 / v21 固定验证](docs/Agent_Golden_Judge_v21_Validation.md)分离交付要求与可见断言审查，调整断言分类和证据选择顺序，并修复查询口径元数据可独立证明业务事实的校验漏洞。新增27项回归与BC-142至BC-145，950项Golden相关测试通过。本轮只重评旧答案与校准集，未运行新的完整Golden。
 
-固定上一轮全部61场景/84个旧答案、只新增111次Judge调用，结果为 **52通过/9待复核 → 55通过/6待复核**；原9项恢复5项，另2项旧通过退化。新完整Golden为 **56通过、0失败、5待复核**，s13/s18/r02/r03/r10均通过；原9项恢复6项，剩s25/s26/r05及新增m04/r09。独立校准由55/61降至53/61匹配（258/266判项），保留退化；没有改标签或回填原判，Judge可靠性验收仍未通过。
+同一61场景/84个旧答案由v19的 **55通过/6待复核 → 57通过/4待复核**，s19、s20恢复，原v19通过回合无新增退化；另一批5个旧review回合恢复3个、保留2个。校准却由 **53/61 → 52/61** 匹配，整体改善门槛未通过。v20中间失败结果50/61同样保留；不能把固定答案的分数变化说成生产Agent能力提升。
+
+最近一次完整Agent Golden仍是 [Judge v19完整轮](docs/Agent_Golden_Judge_v19_Repair.md)：**56通过、0失败、5待复核**，s13/s18/r02/r03/r10均通过，s25/s26/m04/r05/r09待复核。没有改校准标签或回填历史原判，Judge可靠性与全量人工签核仍未通过。
 
 此前的 [r02 / s13 / r10](docs/Agent_Golden_Results_20261012_protocol_topn_recovery.md)与 [s18 / r03](docs/Agent_Golden_Results_20261012_s18_r03.md)记录生产修复及历史比较；新Judge没有回填旧成绩。
 
@@ -686,7 +688,7 @@ npm.cmd run build
 
 近期优先级：
 
-1. [Judge v19](docs/Agent_Golden_Judge_v19_Repair.md)已完成九项复核、固定旧答案重评和新全量基线；下一步优先处理来源/查询方法/事实的target分类、仅参数作业务证明、错误ref_id，以及校准中的要求范围扩张与未知误判。保留五项新全量review和校准退化，不直接改判。
+1. [Judge v21固定验证](docs/Agent_Golden_Judge_v21_Validation.md)确认局部分类改善，但校准仍退化；先处理来源身份、血缘、同对象证据与unknown边界，再决定是否恢复完整Golden。保留固定答案review和校准退化，不直接改判或只选择较高分结果。
 2. 继续扩大TopN、排名窗口和多轮契约切换的语义样本；保留异常恢复的失败状态。本轮完整模型运行未触发恢复分支，不能以离线门禁测试或一次通过证明稳定性。
 3. 数据侧继续滚动补齐 Top10 Outcome 和端到端验收；V2 再考虑数据源与部署扩容。
 
