@@ -42,11 +42,12 @@ def assert_stream_read_failure(error, injected_failure, *, message_prefix):
 class NativeToolStream(httpx.SyncByteStream):
     """Yield actual SSE frames, with an observation between provider chunks."""
 
-    def __init__(self, fragments, *, checkpoint=None, failure=None, usage=USAGE):
+    def __init__(self, fragments, *, checkpoint=None, failure=None, usage=USAGE, finish_reason=None):
         self.fragments = fragments
         self.checkpoint = checkpoint
         self.failure = failure
         self.usage = usage
+        self.finish_reason = finish_reason
         self.closed = False
         self.reached_usage = False
 
@@ -71,6 +72,13 @@ class NativeToolStream(httpx.SyncByteStream):
             if self.failure:
                 raise self.failure
         self.reached_usage = True
+        if self.finish_reason is not None:
+            yield ("data: " + json.dumps({
+                "id": "chat-test", "object": "chat.completion.chunk", "created": 1,
+                "model": "test-model", "choices": [{
+                    "index": 0, "delta": {}, "finish_reason": self.finish_reason,
+                }],
+            }) + "\n\n").encode()
         yield sse(usage=self.usage, chunks=()).encode()
 
     def close(self):
@@ -177,6 +185,58 @@ def test_react_native_stream_rejects_incomplete_tool_arguments_after_counting_us
     assert body.closed
     assert tracker.call_count == tracker.measured_call_count == tracker.failed_call_count == 1
     assert tracker.total_tokens == 16
+
+
+@pytest.mark.parametrize("streaming", [False, True])
+@pytest.mark.parametrize("valid_missing", [False, True])
+def test_finish_missing_requires_valid_json_on_the_wire_without_provider_repair(streaming, valid_missing):
+    # The captured synthetic failure was an unquoted missing value, not stream
+    # corruption: the provider must reject it and let the runtime request repair.
+    missing = "2026-01-01 synthetic gap SECRET_CANARY"
+    arguments = (
+        '{"status":"partial","answer":"Synthetic query is incomplete.",'
+        '"evidence_ids":["ev-fixture"],"missing":'
+        + (json.dumps([missing]) if valid_missing else missing) + "}"
+    )
+    split = arguments.index('"missing"') + len('"missing":')
+    body = NativeToolStream(
+        (arguments[:split], arguments[split:split + 5], arguments[split + 5:]),
+        finish_reason="tool_calls",
+    )
+    requests, chunks = [], []
+
+    def handle(request):
+        requests.append(request)
+        if streaming:
+            return httpx.Response(200, stream=body, headers={"content-type": "text/event-stream"})
+        payload = completion(tool_message("finish", arguments))
+        payload["choices"][0]["finish_reason"] = "tool_calls"
+        return httpx.Response(200, json=payload)
+
+    with provider_for(handle, retries=2) as provider, capture_llm_usage() as tracker:
+        options = {"on_chunk": chunks.append} if streaming else {}
+        if valid_missing:
+            result = provider.generate_messages([], [], **options)
+            assert result.tool_calls[0]["args"]["missing"] == [missing]
+        else:
+            with pytest.raises(NativeFunctionCallingError) as caught:
+                provider.generate_messages([], [], **options)
+            diagnostic = caught.value.diagnostics
+            assert diagnostic["finish_reason"] == "tool_calls"
+            assert diagnostic["tool_id_status"] == "valid"
+            assert diagnostic["invalid_tool_call_count"] == 1
+            assert diagnostic["arguments"][0]["json_failure"] == "syntax"
+            serialized = json.dumps(diagnostic)
+            assert "SECRET_CANARY" not in serialized and "2026-01-01" not in serialized
+        assert provider.chat_model.root_client.max_retries == 2
+    assert len(requests) == 1
+    assert tracker.call_count == tracker.measured_call_count == 1
+    assert tracker.failed_call_count == (0 if valid_missing else 1)
+    assert tracker.token_usage_complete and tracker.total_tokens == USAGE["total_tokens"]
+    if streaming:
+        assert body.closed and body.reached_usage
+        received = "".join(call["args"] or "" for chunk in chunks for call in chunk.tool_call_chunks)
+        assert received == arguments
 
 
 def test_react_message_request_bounds_sdk_retry_and_timeout():

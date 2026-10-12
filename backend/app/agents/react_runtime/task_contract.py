@@ -34,6 +34,26 @@ class FieldResolution(BaseModel):
     reason: str = "no_explicit_fields"
 
 
+class RowSelection(BaseModel):
+    """User-requested final table bound; not a business-tool query limit."""
+    model_config = ConfigDict(extra="forbid")
+
+    requested: str = Field(min_length=1, max_length=240,
+        description="The user's explicit row-count or rank-window requirement, preserving its meaning.")
+    limit: int = Field(gt=0, strict=True,
+        description="Maximum final table rows, not a required minimum. A complete smaller collection or a genuine partial result may contain fewer rows.")
+    offset: int = Field(default=0, ge=0, strict=True,
+        description="Zero-based start of the requested rank window: ranks 4 through 6 use offset=3, limit=3. Retains intent; a row-count check alone does not prove rank membership.")
+
+
+ROW_SELECTION_DESCRIPTION = (
+    "Explicit final-table row bound for THIS turn, otherwise null. Top N, at most N, or N rows use "
+    "offset=0 and limit=N; ranks m through n use offset=m-1 and limit=n-m+1. Do not derive this "
+    "from a metric value, time window, board height, tool query limit, or a preference only for future "
+    "answers. Per-group limits and requests to include all ties are not a global table-row bound."
+)
+
+
 class OutputContract(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -44,6 +64,7 @@ class OutputContract(BaseModel):
     field_resolution: FieldResolution = Field(default_factory=FieldResolution)
     table_required: bool = Field(default=False,
         description="A table is a deliverable for THIS turn, not merely a preference for future answers.")
+    row_selection: RowSelection | None = Field(default=None, description=ROW_SELECTION_DESCRIPTION)
 
     @model_validator(mode="after")
     def resolve_fields(self):
@@ -86,6 +107,7 @@ class ReviewOutputContract(BaseModel):
         description="Every explicitly requested display field, in order. Query subjects or metrics alone are not display-field requests; a direct existence/count/metric answer normally leaves this empty. Include unknown requested fields with field=null; never omit an item or list only a known subset.")
     table_required: bool = Field(default=False,
         description="True only when the current turn requires a table; false for prose_only and future display preferences.")
+    row_selection: RowSelection | None = Field(default=None, description=ROW_SELECTION_DESCRIPTION)
 
 
 class TaskInterpretation(BaseModel):
@@ -98,13 +120,24 @@ class TaskInterpretation(BaseModel):
     output_contract: OutputContract = Field(default_factory=OutputContract)
 
 
-def validate_delivery(final, interpretation):
+def validate_delivery(final, interpretation, store=None):
     """Reject a draft; never silently remove model text or change its columns."""
     contract = interpretation.output_contract
     if interpretation.pending_slots and final.status not in {"clarify", "refuse"}:
         raise ValueError("Required user input is unresolved; clarify: " + ", ".join(interpretation.pending_slots))
     if contract.mode == "prose_only" and final.table is not None:
         raise ValueError("A prose-only answer cannot include an evidence table; deliver only the requested direct answer and necessary scope or missing-data clarification")
+    if final.table is not None and contract.row_selection is not None:
+        if store is None:
+            raise ValueError("Table row-count validation requires the current evidence store")
+        row_count = len(store.get(final.table.evidence_id)["rows"])
+        limit = contract.row_selection.limit
+        if row_count > limit:
+            raise ValueError(
+                f"Table row count {row_count} exceeds the requested maximum {limit}; "
+                "select the requested subset with compute_result before submitting, without "
+                "silently truncating the source or dropping other requested conditions"
+            )
     if final.table is not None and contract.fields:
         actual = [column.field for column in final.table.columns]
         if actual != contract.fields:

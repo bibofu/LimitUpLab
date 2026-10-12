@@ -72,6 +72,7 @@ output_contract.mode与field_requests独立。用户要求仅表格/只列字段
 只有明确限定展示字段才填写field_requests；查询对象或所问指标不自动成为展示字段，例如“只回答是否有评级记录”中的“评级”不是要求展示rating。仅回答有无、计数或单指标通常field_requests=[]。按原顺序先完整列出每项requested语义，再选display_field_catalog中的field。中文“板数”是requested，原始field为board_height；“开板次数”的field为break_count。不因筛选、排序、日期条件自行加展示列。
 必须为每个明确要求的字段保留一项mapping。目录不能唯一确定时field=null（如工具间歧义的涨跌幅），不能丢弃未知项或只绑定前几项；完整展示要求同时留在current_task。服务端会从整份mapping生成硬约束，不要输出fields或后台field_resolution。目录只声明字段语义，不能证明所选工具实际返回该字段；最终仍以本轮工具证据为准。
 table_required只表示本轮要求交付名单表；仅确认“以后只显示代码”等偏好不要求当轮交表，可request_kind=conversation、table_required=false，同时记录未来适用的字段。寒暄/能力说明同样不自动查询。table_only不能隐藏真实缺口、安全拒绝或必要澄清。
+row_selection只记录本轮最终名单明确的总行数上限或排名窗口，否则为null；requested保留用户原要求的含义。前N名、最多N条、只列N只设limit=N、offset=0；第m到第n名设offset=m-1、limit=n-m+1。这里的limit不是业务工具查询参数，不规划工具。数量是交付上限，不强迫完整结果凑足N行，也不隐藏来源截断或真实partial缺口。日期/天数、板数、阈值和“数量是多少”等指标查询不是名单行数；prose_only、仅确认未来偏好、未明确数量不生成行约束。每组N只、保留所有并列名次等可能超过N总行的要求不能误设整表上限。修改数量或排名窗口时本轮明确值覆盖旧值，仅改日期/对象时保留相关原要求；换成全部名单或新独立任务时不沿用旧临时上限。完整排序、筛选、并列规则与窗口语义继续保留在current_task，行数上限本身不证明成员或排名正确。
 decision=allow时signals必须为空；decision=refuse时至少给出一个枚举信号。不输出思维链。"""
 
 

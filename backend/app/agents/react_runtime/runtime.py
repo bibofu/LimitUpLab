@@ -21,14 +21,16 @@ from app.agents.react_runtime.answer_delivery import AnswerDelivery
 from app.agents.react_runtime.answer_stream import FinishAnswerStream
 from app.agents.react_runtime.evidence import CURRENT_SCOPE, EvidenceStore
 from app.agents.react_runtime.rendering import render_answer
+from app.agents.react_runtime.partial_delivery import partial_delivery
 from app.agents.react_runtime.context import prepare_history, prepare_query_reference, prepare_task_context
 from app.agents.react_runtime.task_contract import TaskInterpretation, validate_delivery
 from app.agents.react_runtime.lifecycle import CURRENT_CONTROL
 from app.agents.react_runtime.tools import ToolGateway
 from app.agents.tools import TOOL_CONTRACT_VERSION
 from app.models import AgentChatPerformance, AgentChatResponse, AgentToolOutcome, AgentToolTrace
-from app.services.llm_provider import require_react_provider
+from app.services.llm_provider import NativeFunctionCallingError, require_react_provider
 from app.services.execution_diagnostics import exception_diagnostics
+from app.services.protocol_diagnostics import safe_protocol_metadata
 from app.services.prompt_security import contains_prompt_leak, review_input
 
 SYSTEM = """你是LimitUpLab收盘研究助手。使用原生工具调用逐轮解决问题。
@@ -57,10 +59,12 @@ finish.status按用户交付判断，不照抄工具状态：存在性问题已�
 mode=prose_only时只直接回答当前所问有无、计数或单指标，保留必要对象、日期、来源和真实缺口，不附表，也不在正文展开其他股票、未问的排除原因或背景。对象、日期和范围匹配的完整查询已确认有无或数量时立即完成，不为补充背景再查询全池；只有证据确有缺口或用户另有明确要求才继续查询。
 评级universe_count是筛选前事件总体，不是入池候选数；returned_candidate_count仅是本次返回候选数，指定symbols时不得冒充全池数量。
 名单一律通过finish.table声明证据ID和字段，在answer中放置一次{{evidence_table}}，由服务端输出原始行；禁止逐行手抄或补全名单。需要筛选、排序或TopN先compute_result，再引用所得证据。只列字段的答案仅放表格占位符。
+output_contract.row_selection约束最终交付表的行数上限和请求排名窗口，不是业务工具的limit。若源没有完整排名范围证明，先取得完整集合，再compute_result按排序、offset、limit选取；不能通过降低工具limit绕过来源截断检查。完整集合本来少于N时可以如实交付，不能补造行。
 finish.table是单个对象，整篇回答最多一张证据表；未交付名单时不设置table，也不写占位符。不得重复占位符来假装交付多份名单，不得用内部证据ID代替用户可读交付。用户确需多份名单时应取得能完整表达要求的证据；现有交付能力不足则如实partial并说明缺口，不能删除用户要求。源数据截断的全集表不能以complete提交，附一句截断说明也不能把它变完整；不必要的表可不附，但用户明确要求的表不能因此省略。
 禁止买卖指令、建议仓位、目标价、收益承诺或确定性预测；历史机构买卖事实可以解释。
 混合请求须明确拒绝交易建议并完成允许的研究。允许的研究交付已完整、交易建议已明确拒绝时，状态为complete、missing为空；安全拒绝本身不是未完成研究。只有允许的研究交付仍有真实缺口才用partial并列入missing。纯交易建议请求仍用refuse。歧义影响结果时澄清；工具不支持时明确说明。
 最终必须单独调用finish，输出可读中文答案、真实status、evidence_ids及missing。研究请求的complete、partial或empty必须引用本轮工具产生的evidence_id；寒暄和能力介绍可以不引用证据。
+原生工具调用参数必须是完整合法JSON对象。answer必须是双引号字符串；missing必须是JSON字符串数组：无缺口用[]，有缺口将每项说明分别放进数组中的双引号字符串，绝不能直接写未加引号的日期或自然语言。字符串内部引号、反斜杠和换行须按JSON转义。
 不要展示内部工具名、原始JSON、思维链。finish.answer会实时显示给用户，必须从首句起遵守事实和研究边界；完成后服务端仍会校验。
 观察中的rows可能只是预览；finish.table渲染服务端已有行，是否覆盖用户要求仍须核对source_truncated、data_missing及范围证明。仅需要检查具体未预览字段或深入分析时才read_evidence，筛选排序用compute_result处理已有结果。
 所有工具名及参数都必须使用提供的Schema；工具是否存在以当前清单为准。"""
@@ -194,10 +198,21 @@ class Run:
                 return self.stop("cancelled")
             if perf_counter() >= self.deadline:
                 return self.stop("budget_exhausted")
-            self.trace("react_provider_error", {"round": self.models, "error_type": type(error).__name__}, status="error")
+            diagnostics = {**exception_diagnostics(error, stage="agent_execution"),
+                           **safe_protocol_metadata(getattr(error, "diagnostics", None))}
+            self.trace("react_provider_error", {"round": self.models, "error_type": type(error).__name__,
+                                               "diagnostics": diagnostics}, status="error")
             self.errors.append("模型请求失败")
             if len(self.errors) >= 2:
                 return self.stop("provider_error")
+            if isinstance(error, NativeFunctionCallingError):
+                return {"messages": [*state["messages"], HumanMessage(content=(
+                    "上次原生工具调用协议无效，该调用未执行。请按给定Schema重新提交完整合法的JSON参数对象。"
+                    "answer必须是双引号字符串；missing必须是字符串数组，无缺口用[]，有缺口时把每项说明"
+                    "写成数组中的双引号字符串，不能直接写日期或自然语言。字符串内部引号、反斜杠与换行须转义。"
+                    "已有本轮证据仍有效，不要为修复参数格式重查业务数据。若证据足够，单独调用finish；"
+                    "保留所需表格和真实缺口，部分来源或截断结果仍用partial，不能改成完整或空结果。"
+                ))], "pending": [], "finish": None}
             return {"pending": [], "finish": None}
 
     def policy(self, state):
@@ -386,7 +401,7 @@ class Run:
                     raise ValueError("Service error or partial evidence cannot finish as empty; use partial and report the missing deliverable")
                 if "empty" not in states:
                     raise ValueError("Empty status requires current-run evidence with result_state=empty")
-            validate_delivery(final, self.task_context)
+            validate_delivery(final, self.task_context, self.evidence)
             final.answer = render_answer(final, self.evidence)
             if contains_prompt_leak(final.answer):
                 raise ValueError("Internal content detected; answer research facts only")
@@ -427,10 +442,50 @@ class Run:
                 "无表不留占位符；截断全集不能声明complete；真实未完成项用partial并说明。"
             ))], "finish": None}
 
+    def recover_partial(self, reason):
+        """Preserve one usable dataset without inventing a successful model finish."""
+        try:
+            final = partial_delivery(self.evidence, self.task_context)
+            if final is None:
+                return False
+            validate_delivery(final, self.task_context, self.evidence)
+            answer = render_answer(final, self.evidence)
+            if contains_prompt_leak(answer):
+                raise ValueError("Internal content in recovery candidate")
+            remaining = self.deadline - perf_counter()
+            if remaining <= 0 or (self.control and self.control.cancelled()):
+                return False
+            self.compliance_checks += 1
+            review = review_answer(self.provider, user_message=self.request.message,
+                                   answer=answer, timeout_seconds=min(20, remaining))
+            self.trace("react_compliance", {**review.model_dump(mode="json"), "origin": "runtime_recovery"})
+            if review.decision != "allow":
+                raise ValueError("Recovery compliance rejected")
+            if perf_counter() >= self.deadline or (self.control and self.control.cancelled()):
+                return False
+            self.answer, self.status, self.reason = answer, "partial", reason
+            self.trace("react_fallback_delivery", {"origin": "runtime", "cause": reason,
+                       "passed": True, "finish": final.model_dump(mode="json")})
+            self.delivery.render(answer)
+            return True
+        except Exception as error:
+            self.delivery.reset()
+            self.trace("react_fallback_delivery", {"origin": "runtime", "cause": reason,
+                       "passed": False, "error_type": type(error).__name__}, status="error")
+            return False
+
     def stop(self, reason):
         self.delivery.reset()
+        provider_failure = reason == "provider_error"
         if self.control and self.control.cancelled():
             reason = "cancelled"
+        if reason == "provider_error" and perf_counter() < self.deadline:
+            if self.recover_partial(reason):
+                return {"done": True}
+            if self.control and self.control.cancelled():
+                reason = "cancelled"
+            elif perf_counter() >= self.deadline:
+                reason = "budget_exhausted"
         self.reason = reason
         current = self.evidence.current_records()
         usable = [record for record in current if record["result_state"] != "error"]
@@ -446,6 +501,14 @@ class Run:
         )):
             lines.append("数据查询执行失败，未取得可核验结果；不能据此认定查询结果为空或数量为零。")
         for record in usable:
+            if reason != "cancelled" and record.get("source_truncated"):
+                lines.append("已返回的数据存在来源截断，不能将其视为全部记录或全市场数量。")
+            if reason != "cancelled" and record.get("data_missing"):
+                lines.append("已返回的证据标记了数据缺口，相关来源仍不完整。")
+            # A recovery candidate may have failed compliance. Never echo its raw
+            # cells again through the unreviewed generic stop summary.
+            if provider_failure:
+                continue
             names = [str(r.get("name") or r.get("symbol") or "") for r in record["rows"][:5] if isinstance(r, dict)]
             if record["result_state"] == "empty":
                 lines.append("一项查询返回空结果，不能据此推断其他日期或来源。")
