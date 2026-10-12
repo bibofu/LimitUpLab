@@ -87,6 +87,10 @@ def _payload_capability(tail, *, result_envelope=True):
         return "source_context"
     if field == "tool_label":
         return "tool_context"
+    if result_envelope and field == "business_result_available":
+        # Runtime failure metadata is not a self-attesting business value,
+        # including malformed children where a boolean should have been.
+        return "unverified_query_status"
     if result_envelope and len(tail) == 1:
         if field in QUERY_RESULT_SCOPE_FIELDS:
             return "query_scope_proof"
@@ -107,9 +111,40 @@ def _payload_capability(tail, *, result_envelope=True):
     return "business_value"
 
 
+def _confirmed_failure_availability(reference, payload):
+    """Recognize the runtime-owned failure wrapper, never a same-named row value."""
+    path = reference["path"]
+    if len(path) != 4 or path[-1] != "business_result_available" or reference["value"] is not False:
+        return False
+    if path[0] == "business_observations" and path[2] == "output":
+        observation = payload["business_observations"][path[1]]
+        if not isinstance(observation, dict) or observation.get("status") != "error":
+            return False
+        output = observation.get("output")
+    elif path[0] == "synthetic_evidence" and path[2] == "payload":
+        record = payload["synthetic_evidence"][path[1]]
+        if (not isinstance(record, dict) or record.get("evidence_scope") != "current_run"
+                or record.get("historical_reference") is not False or record.get("result_state") != "error"):
+            return False
+        if not any(isinstance(observed, dict) and observed.get("status") == "error"
+                   and _linked_record(observed, payload) is record
+                   for observed in payload.get("business_observations", [])):
+            return False
+        output = record.get("payload")
+    else:
+        return False
+    return (isinstance(output, dict) and output.get("execution_status") == "failed"
+        and output.get("result_state") == "error" and output.get("business_result_available") is False
+        and isinstance(output.get("error_type"), str) and bool(output["error_type"])
+        and output["error_type"] != "UncertainExecution" and output.get("items") == []
+        and output.get("data_missing") == ["tool_execution_failed"])
+
+
 def _reference_capability(reference, payload):
     """Classify structured locations; never classify the quoted natural language."""
     path = reference["path"]
+    if _confirmed_failure_availability(reference, payload):
+        return "query_status_proof"
     if path[0] == "source_equivalence":
         return "source_proof"
     if path[0] == "business_observations":
@@ -255,7 +290,7 @@ def _world_reference_error(reference, payload):
         return "InvalidEvidenceState"
     if any(_failed_execution(item) for item in envelopes):
         return "FailedSourceIsNotWorldFact"
-    if capability in {"query_scope_proof", "query_status_proof"}:
+    if capability in {"query_scope_proof", "query_status_proof", "unverified_query_status"}:
         return "AvailabilityIsNotWorldFact"
     # Citing the whole mixed envelope must not launder status/data_missing into
     # a truth value. Cite its actual rows or a concrete business field instead.
