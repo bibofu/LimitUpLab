@@ -100,6 +100,26 @@ def test_one_complete_nested_audit_is_accepted_on_real_wire():
         assert set(child["required"]) == {"reason", "claims"}
 
 
+def test_factual_only_call_preserves_missing_dimensions_as_review():
+    # Live m20 returned one legal call but omitted source and safety entirely.
+    from evals.golden.protocol_metrics import protocol_metrics
+
+    review, _, usage = evaluate_wire([call({"factual": audit()["factual"]})])
+    assert review.factual["passed"] is True
+    assert review.source is review.safety is None
+    assert review.errors == {"visible_audit.source": "ValidationError",
+                             "visible_audit.safety": "ValidationError"}
+    assert usage.call_count == 1 and usage.failed_call_count == 0
+    for dimension in ("source", "safety"):
+        errors = review.diagnostics[f"visible_audit.{dimension}"]["schema_errors"]
+        assert errors == [{"path": [], "type": "model_type", "input_shape": {"shape": "null"}}]
+    metrics = protocol_metrics([{"errors": review.errors, "diagnostics": review.diagnostics}],
+                               errors_key="errors", diagnostics_key="diagnostics")
+    assert metrics["judge_phase_protocol_error_count"] == 0
+    assert metrics["judge_protocol_affected_phase_count"] == 1
+    assert metrics["judge_dimension_error_count"] == 2
+
+
 def test_surface_grouping_is_exact_ordered_and_preserves_every_original_location():
     from evals.golden.judge_surfaces import prepare_visible_surfaces
 
