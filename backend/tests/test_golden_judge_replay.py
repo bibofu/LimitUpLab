@@ -3,6 +3,8 @@
 from copy import deepcopy
 import hashlib
 import json
+from pathlib import Path
+import sys
 
 from langchain_core.messages import AIMessage
 import pytest
@@ -283,3 +285,82 @@ def test_final_integrity_failure_is_durable_and_never_claims_complete(source_fix
     assert report["summary"]["completed_turns"] == 1
     assert all(not snapshot["summary"]["execution_complete"] for snapshot in snapshots)
     assert snapshots[-1] == report
+
+
+@pytest.mark.parametrize("winerror", [5, 32, 33, None])
+def test_atomic_replace_retries_only_windows_lock_denials(tmp_path, monkeypatch, winerror):
+    temporary, target = tmp_path / "report.json.tmp", tmp_path / "report.json"
+    temporary.write_text("new", encoding="utf-8")
+    target.write_text("old", encoding="utf-8")
+    replace, attempts, delays = Path.replace, [], []
+    def locked(path, destination):
+        attempts.append(path)
+        assert target.read_text(encoding="utf-8") == "old"
+        if len(attempts) < 3:
+            error = PermissionError("controlled denial")
+            error.winerror = winerror
+            raise error
+        return replace(path, destination)
+    monkeypatch.setattr(Path, "replace", locked)
+    monkeypatch.setattr(replay.time, "sleep", delays.append)
+    if winerror is None:
+        with pytest.raises(PermissionError):
+            replay._replace_report(temporary, target)
+        assert len(attempts) == 1 and not delays
+        assert target.read_text(encoding="utf-8") == "old"
+    else:
+        replay._replace_report(temporary, target)
+        assert len(attempts) == 3 and delays == [0.02, 0.04]
+        assert target.read_text(encoding="utf-8") == "new" and not temporary.exists()
+
+
+def test_permanent_replace_denial_preserves_report_and_blocks_model(source_fixture, tmp_path, monkeypatch):
+    replace, denied, delays = Path.replace, [], []
+    def deny_existing(path, target):
+        if Path(target).exists():
+            denied.append(path)
+            error = PermissionError("controlled permanent denial")
+            error.winerror = 5
+            raise error
+        return replace(path, target)
+    monkeypatch.setattr(Path, "replace", deny_existing)
+    monkeypatch.setattr(replay.time, "sleep", delays.append)
+    model, output = Judge(), tmp_path / "permanent-denial"
+    with pytest.raises(PermissionError):
+        replay.replay_report(source_fixture[0], output, model)
+    saved = json.loads((output / "report.json").read_text(encoding="utf-8"))
+    assert not saved["summary"]["execution_complete"] and saved["logical_calls_used"] == 0
+    assert not model.payloads
+    assert len(denied) == 12 and len(delays) == 10  # Reservation, then failure-state save; both bounded.
+
+
+@pytest.mark.skipif(sys.platform != "win32", reason="Windows delete-sharing semantics")
+def test_atomic_replace_recovers_after_real_windows_reader_closes(tmp_path, monkeypatch):
+    import ctypes
+    from ctypes import wintypes
+    temporary, target = tmp_path / "report.json.tmp", tmp_path / "report.json"
+    temporary.write_text("new", encoding="utf-8")
+    target.write_text("old", encoding="utf-8")
+    kernel = ctypes.WinDLL("kernel32", use_last_error=True)
+    kernel.CreateFileW.argtypes = [wintypes.LPCWSTR, wintypes.DWORD, wintypes.DWORD, wintypes.LPVOID,
+                                  wintypes.DWORD, wintypes.DWORD, wintypes.HANDLE]
+    kernel.CreateFileW.restype = wintypes.HANDLE
+    kernel.CloseHandle.argtypes = [wintypes.HANDLE]
+    handle = kernel.CreateFileW(str(target), 0x80000000, 3, None, 3, 0, None)
+    assert handle != ctypes.c_void_p(-1).value, ctypes.get_last_error()
+    delays = []
+    def release(delay):
+        nonlocal handle
+        delays.append(delay)
+        assert target.read_text(encoding="utf-8") == "old"
+        if handle is not None:
+            assert kernel.CloseHandle(handle)
+            handle = None
+    monkeypatch.setattr(replay.time, "sleep", release)
+    try:
+        replay._replace_report(temporary, target)
+    finally:
+        if handle is not None:
+            kernel.CloseHandle(handle)
+    assert delays and len(delays) <= 5
+    assert target.read_text(encoding="utf-8") == "new" and not temporary.exists()

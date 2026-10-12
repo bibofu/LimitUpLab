@@ -5,6 +5,7 @@ from copy import deepcopy
 import hashlib
 import json
 from pathlib import Path
+import time
 
 from app.models import AgentChatResponse
 from app.services.llm_provider import capture_llm_usage
@@ -134,11 +135,24 @@ def summarize_replay(report):
             **protocol_metrics(report["results"], errors_key="judge_errors", diagnostics_key="judge_diagnostics")}
 
 
+def _replace_report(temporary, target):
+    # Our writer is closed. Windows readers without FILE_SHARE_DELETE can still
+    # briefly deny replacement; keep the old report intact and retry only rename.
+    for attempt in range(6):
+        try:
+            temporary.replace(target)
+            return
+        except PermissionError as error:
+            if getattr(error, "winerror", None) not in {5, 32, 33} or attempt == 5:
+                raise
+            time.sleep(0.02 * 2 ** attempt)
+
+
 def _save(report, output):
     report["summary"] = summarize_replay(report)
     temporary = output / "report.json.tmp"
     temporary.write_text(json.dumps(report, ensure_ascii=False, indent=2) + "\n", encoding="utf-8")
-    temporary.replace(output / "report.json")
+    _replace_report(temporary, output / "report.json")
 
 
 def replay_report(source, output, provider, *, max_calls=120, selected_turns=None, cases=None):
