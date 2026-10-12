@@ -12,6 +12,8 @@ from pydantic import Field, ValidationError
 
 from evals.golden.contracts import StrictModel
 from evals.golden.judge_grounding import EvidenceReference, _same_json, contains_quote, valid_counterevidence
+from evals.golden.judge_result_metadata import result_reference_capability
+from evals.golden.judge_context import evaluator_reference_capability
 
 
 ClaimTarget = Literal["world_fact", "query_status", "input_view", "source_attribution", "safety"]
@@ -143,8 +145,14 @@ def _confirmed_failure_availability(reference, payload):
 def _reference_capability(reference, payload):
     """Classify structured locations; never classify the quoted natural language."""
     path = reference["path"]
+    evaluator_role = evaluator_reference_capability(reference, payload)
+    if evaluator_role is not None:
+        return evaluator_role
     if _confirmed_failure_availability(reference, payload):
         return "query_status_proof"
+    result_role = result_reference_capability(reference, payload)
+    if result_role is not None:
+        return result_role
     if path[0] == "source_equivalence":
         return "source_proof"
     if path[0] == "business_observations":
@@ -211,7 +219,8 @@ def _empty_scope(reference, payload):
 def _capability_role(target, capability):
     """Allowed structural roles, not a claim that the citation entails prose."""
     if target == "query_status":
-        if capability in {"execution_proof", "query_scope_proof", "query_status_proof", "query_semantics"}:
+        if capability in {"execution_proof", "query_scope_proof", "query_status_proof", "query_semantics",
+                          "computation_proof", "cache_status_proof"}:
             return capability, True, None
         if capability == "response_date":
             return "query_scope_proof", True, None
@@ -219,13 +228,16 @@ def _capability_role(target, capability):
             return "query_response_proof", True, None
         if capability in {"source_proof", "source_context", "tool_context"}:
             return "auxiliary_source_context", False, None
+        if capability == "evaluation_context":
+            return "auxiliary_evaluation_context", False, None
         return "rejected", False, "QueryStatusRequiresQueryEvidence"
     if target == "source_attribution":
         if capability == "source_proof":
             return capability, True, None
         if capability == "source_context":
             return "auxiliary_source_context", False, None
-        if capability in {"execution_proof", "query_scope_proof", "query_status_proof", "response_date", "tool_context"}:
+        if capability in {"execution_proof", "query_scope_proof", "query_status_proof", "response_date", "tool_context",
+                          "computation_proof", "cache_status_proof"}:
             return "auxiliary_query_context", False, None
         return "rejected", False, "SourceAttributionRequiresSourceEvidence"
     return "cited_evidence", False, None
@@ -242,6 +254,8 @@ def _input_view_reference(reference, payload):
 
 def _world_reference_error(reference, payload):
     path, value = reference["path"], reference["value"]
+    if path[0] == "evaluator_observations":
+        return "AvailabilityIsNotWorldFact"
     record, container, tail = {}, {}, []
     capability = _reference_capability(reference, payload)
     if capability in {"source_proof", "source_context"}:
@@ -290,7 +304,8 @@ def _world_reference_error(reference, payload):
         return "InvalidEvidenceState"
     if any(_failed_execution(item) for item in envelopes):
         return "FailedSourceIsNotWorldFact"
-    if capability in {"query_scope_proof", "query_status_proof", "unverified_query_status"}:
+    if capability in {"query_scope_proof", "query_status_proof", "unverified_query_status",
+                      "computation_proof", "cache_status_proof"}:
         return "AvailabilityIsNotWorldFact"
     # Citing the whole mixed envelope must not launder status/data_missing into
     # a truth value. Cite its actual rows or a concrete business field instead.
@@ -361,7 +376,9 @@ def _validate_binding(claim, *, dimension, surfaces, payload):
             elif error == "AvailabilityIsNotWorldFact":
                 # A real query-status field may contextualize a cited business
                 # value. It never counts as the truth-bearing proof itself.
-                role, error = "auxiliary_availability_context", None
+                role = ("auxiliary_computation_context" if _reference_capability(reference, payload) == "computation_proof"
+                        else "auxiliary_availability_context")
+                error = None
         elif target in {"query_status", "source_attribution"}:
             role, is_proof, error = _capability_role(target, _reference_capability(reference, payload))
             proofs += int(is_proof)
@@ -385,6 +402,29 @@ def _validate_binding(claim, *, dimension, surfaces, payload):
 def validate_claim_binding(claim, *, dimension, surfaces, payload):
     """Return one stable validation error, or None; never infer a prose verdict."""
     return _validate_binding(claim, dimension=dimension, surfaces=surfaces, payload=payload)[0]
+
+
+def reference_usage(reference, payload):
+    """Explain citation roles without accepting, rewriting, or proving a claim."""
+    if not valid_counterevidence([reference], payload):
+        return {"proof_for": [], "context_for": [], "prefer_leaf": isinstance(reference["value"], (dict, list))}
+    capability = _reference_capability(reference, payload)
+    proof, context = [], []
+    world_error = _world_reference_error(reference, payload)
+    if world_error is None:
+        proof.append("world_fact")
+    elif world_error == "AvailabilityIsNotWorldFact":
+        context.append("world_fact")
+    for target in ("query_status", "source_attribution"):
+        _, is_proof, error = _capability_role(target, capability)
+        if error is None:
+            (proof if is_proof else context).append(target)
+    if _input_view_reference(reference, payload):
+        proof.append("input_view")
+    usage = {"proof_for": proof, "context_for": context}
+    if isinstance(reference["value"], (dict, list)) and world_error is not None:
+        usage["prefer_leaf"] = True
+    return usage
 
 
 def aggregate_claims(claims, *, dimension, surfaces, payload, reference_errors=None, reported_references=None):

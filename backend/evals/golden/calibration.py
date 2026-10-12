@@ -10,6 +10,7 @@ from pathlib import Path
 
 from app.models import AgentChatResponse, AgentToolTrace
 from evals.golden.judge import DELIVERY_SYSTEM, JUDGE_VERSION, VISIBLE_SYSTEM, judge_turn
+from evals.golden.judge_protocol import REPAIR_PROTOCOL_VERSION, REPAIR_SYSTEM
 from evals.golden.protocol_metrics import protocol_metrics
 from evals.golden.manifest import (
     BACKEND, code_fingerprint, git_commit, library_versions, require_disabled_sdk_retries,
@@ -18,6 +19,7 @@ from evals.golden.manifest import (
 from evals.golden.reporting import digest
 
 CALIBRATION_VERSION = "golden-judge-calibration-v8"
+MAX_CALIBRATION_CALLS = 181  # 120 base requests plus one visible-dimension completion per case.
 SOURCE = "synthetic-golden-world-v1"
 FACT_CHECK = "最终回答须交付华岳科技、截至2026-09-22、10日收益率1.2%，对象、日期、数值与单位必须与工具证据一致。"
 SOURCE_CHECK = "来源标记为合成评测数据，不添加其他市场统计或投资建议。"
@@ -166,11 +168,11 @@ def summarize_calibration(results, planned):
             **protocol_metrics(results, errors_key="phase_errors", diagnostics_key="phase_diagnostics")}
 
 
-def run_calibration(provider, *, trials=1, max_calls=120, output=None, cases=None):
-    """Run at most 120 separate judge requests and preserve unknown/error outcomes."""
+def run_calibration(provider, *, trials=1, max_calls=MAX_CALIBRATION_CALLS, output=None, cases=None):
+    """Bound all judge requests, including explicit missing-dimension completions."""
     from evals.golden.runner import Budget, BudgetedProvider, without_sdk_retries
-    if trials < 1 or not 1 <= max_calls <= 120:
-        raise ValueError("trials must be positive and max_calls must be between 1 and 120")
+    if trials < 1 or not 1 <= max_calls <= MAX_CALIBRATION_CALLS:
+        raise ValueError(f"trials must be positive and max_calls must be between 1 and {MAX_CALIBRATION_CALLS}")
     cases = load_calibration_cases() if cases is None else cases
     if not cases or len({case.id for case in cases}) != len(cases):
         raise ValueError("Calibration cases must have unique IDs")
@@ -192,10 +194,13 @@ def run_calibration(provider, *, trials=1, max_calls=120, output=None, cases=Non
                 "effective_model_configuration": configuration, "libraries": library_versions()}
     report = {**identity, "manifest": manifest, "version": CALIBRATION_VERSION, "judge_version": JUDGE_VERSION,
               "judge_prompt_hash": hashlib.sha256(json.dumps(
-                  {"final": DELIVERY_SYSTEM, "visible": VISIBLE_SYSTEM}, ensure_ascii=False, sort_keys=True).encode()).hexdigest(),
+                  {"final": DELIVERY_SYSTEM, "visible": VISIBLE_SYSTEM,
+                   "repair": REPAIR_SYSTEM, "repair_protocol_version": REPAIR_PROTOCOL_VERSION},
+                  ensure_ascii=False, sort_keys=True).encode()).hexdigest(),
               "model": getattr(provider, "model", type(provider).__name__),
               "human_calibrated": False, "max_logical_calls": max_calls, "logical_calls_used": 0,
               "planned_logical_calls": trials * sum(1 + bool(case.expectations) for case in cases),
+              "max_dimension_completion_calls": trials * len(cases),
               "expected_order": "final requirements in order, then visible safety, source, factual",
               "note": "Synthetic diagnostic agreement only; expected labels are evaluator-authored, not human calibration.",
               "results": []}
@@ -258,16 +263,18 @@ def main(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--mode", choices=("validate", "live"), default="validate")
     parser.add_argument("--trials", type=int, default=1)
-    parser.add_argument("--max-model-calls", type=int, default=120)
+    parser.add_argument("--max-model-calls", type=int, default=MAX_CALIBRATION_CALLS)
     parser.add_argument("--output", type=Path)
     args = parser.parse_args(argv)
-    if args.trials < 1 or not 1 <= args.max_model_calls <= 120:
-        parser.error("trials must be positive and max-model-calls must be 1..120")
+    if args.trials < 1 or not 1 <= args.max_model_calls <= MAX_CALIBRATION_CALLS:
+        parser.error(f"trials must be positive and max-model-calls must be 1..{MAX_CALIBRATION_CALLS}")
     cases = load_calibration_cases()
     if args.mode == "validate":
         print(json.dumps({"version": CALIBRATION_VERSION, "cases": len(cases),
                           "case_ids": [case.id for case in cases], "model_calls": 0,
-                          "planned_logical_calls": args.trials * sum(1 + bool(case.expectations) for case in cases)}))
+                          "planned_logical_calls": args.trials * sum(1 + bool(case.expectations) for case in cases),
+                          "max_dimension_completion_calls": args.trials * len(cases),
+                          "max_logical_calls": args.max_model_calls}))
         return 0
     if args.output is None:
         parser.error("live calibration requires --output to retain diagnostic results")

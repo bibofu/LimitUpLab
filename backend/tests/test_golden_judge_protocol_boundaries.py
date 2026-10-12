@@ -26,7 +26,8 @@ def call(arguments, index=0):
         "name": TOOL, "arguments": arguments if isinstance(arguments, str) else json.dumps(arguments)}}
 
 
-def evaluate_wire(calls, *, finish_reason="tool_calls", answer="研究暂停。", drafts=()):
+def evaluate_wire(calls, *, finish_reason="tool_calls", answer="研究暂停。", drafts=(), max_calls=5,
+                  expected_denials=0):
     requests = []
     packet = completion({"role": "assistant", "content": None, "tool_calls": calls})
     packet["choices"][0]["finish_reason"] = finish_reason
@@ -35,14 +36,14 @@ def evaluate_wire(calls, *, finish_reason="tool_calls", answer="研究暂停。"
         requests.append(json.loads(request.content))
         return httpx.Response(200, json=packet)
 
-    budget = Budget(5)
+    budget = Budget(max_calls)
     with provider_for(handle, retries=2) as provider, capture_llm_usage() as usage:
         review = judge_turn(BudgetedProvider(provider, budget), user="研究请求", expectations=(),
             response=AgentChatResponse(session_id="protocol", intent="research", answer=answer,
                                        generated_by="test-only"), drafts=drafts)
         assert provider.chat_model.root_client.max_retries == 2
     assert len(requests) == budget.used == usage.call_count == usage.measured_call_count == 1
-    assert budget.denied == 0 and usage.token_usage_complete
+    assert budget.denied == expected_denials and usage.token_usage_complete
     assert usage.total_tokens == 16
     assert requests[0]["tool_choice"] == {"type": "function", "function": {"name": TOOL}}
     assert requests[0]["max_tokens"] == 4800
@@ -104,11 +105,12 @@ def test_factual_only_call_preserves_missing_dimensions_as_review():
     # Live m20 returned one legal call but omitted source and safety entirely.
     from evals.golden.protocol_metrics import protocol_metrics
 
-    review, _, usage = evaluate_wire([call({"factual": audit()["factual"]})])
+    review, _, usage = evaluate_wire([call({"factual": audit()["factual"]})], max_calls=1, expected_denials=1)
     assert review.factual["passed"] is True
     assert review.source is review.safety is None
     assert review.errors == {"visible_audit.source": "ValidationError",
-                             "visible_audit.safety": "ValidationError"}
+                             "visible_audit.safety": "ValidationError",
+                             "visible_audit.repair": "BudgetExceeded"}
     assert usage.call_count == 1 and usage.failed_call_count == 0
     for dimension in ("source", "safety"):
         errors = review.diagnostics[f"visible_audit.{dimension}"]["schema_errors"]

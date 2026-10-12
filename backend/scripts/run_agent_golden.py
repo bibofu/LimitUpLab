@@ -84,6 +84,8 @@ def main(argv=None):
     from app.config import configure_runtime_environment
     from app.services.llm_provider import DisabledLLMProvider, get_llm_provider
     from evals.golden.runner import Budget, BudgetedProvider, run_case, without_sdk_retries
+    from evals.golden.judge import DELIVERY_SYSTEM, JUDGE_VERSION, VISIBLE_SYSTEM
+    from evals.golden.judge_protocol import REPAIR_PROTOCOL_VERSION, REPAIR_SYSTEM
 
     configure_runtime_environment()
     provider = get_llm_provider()
@@ -99,6 +101,9 @@ def main(argv=None):
         "production_hash": tree_fingerprint(BACKEND / "app"),
         "case_ids": [c.id for c in cases], "model": getattr(provider, "model", type(provider).__name__),
         "provider": type(provider).__name__, "judge": args.judge, "judge_human_calibrated": False,
+        "judge_version": JUDGE_VERSION if args.judge == "model" else None,
+        "judge_prompt_hash": digest({"final": DELIVERY_SYSTEM, "visible": VISIBLE_SYSTEM,
+            "repair": REPAIR_SYSTEM, "repair_protocol_version": REPAIR_PROTOCOL_VERSION}) if args.judge == "model" else None,
         "effective_model_configuration": provider_configuration(provider),
         "profile": args.profile, "react_deadline_seconds": os.getenv("LIMITUPLAB_REACT_DEADLINE_SECONDS", "120"),
         "libraries": library_versions()}

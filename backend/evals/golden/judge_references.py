@@ -1,6 +1,6 @@
 """Server-owned, snapshot-scoped references; valid locations do not prove claims.
 
-Only four evidence roots enter the catalog. IDs bind the entire canonical snapshot
+Only evaluator-approved evidence roots enter the catalog. IDs bind the canonical snapshot
 and an existing path, so equal snapshots share IDs and changed snapshots do not.
 No model-supplied path or value is accepted. Limits fail explicitly, never truncate.
 """
@@ -18,7 +18,8 @@ from pydantic import Field, StrictStr
 from evals.golden.contracts import StrictModel
 
 
-ROOTS = ("synthetic_evidence", "business_observations", "trusted_runtime_metadata", "source_equivalence")
+ROOTS = ("synthetic_evidence", "business_observations", "trusted_runtime_metadata", "source_equivalence",
+         "evaluator_observations")
 
 
 class CatalogReference(StrictModel):
@@ -54,6 +55,7 @@ def _wire_entries(paths):
 class EvidenceCatalog:
     _snapshot: bytes
     _paths: Mapping[str, tuple[str | int, ...]]
+    _max_wire_bytes: int = 2 * 1024 * 1024
 
     @classmethod
     def from_payload(cls, payload, *, max_entries=8192, max_depth=24, max_bytes=2 * 1024 * 1024):
@@ -112,15 +114,32 @@ class EvidenceCatalog:
             wire_bytes += len(chunk.encode("utf-8"))
             if wire_bytes > max_bytes:
                 raise ReferenceResolutionError("CatalogLimitExceeded")
-        return cls(snapshot, MappingProxyType(references))
+        return cls(snapshot, MappingProxyType(references), max_bytes)
 
-    def wire_entries(self):
+    def wire_entries(self, *, include_usage=False):
         """Each group's prefix + [entry.key] is its exact existing evidence path.
 
         Grouped parents avoid repeating long paths; every container/leaf remains
         addressable. The model selects only ref_id, never key or prefix.
         """
-        return _wire_entries(self._paths)
+        groups = _wire_entries(self._paths)
+        if not include_usage:
+            return groups
+        from evals.golden.judge_claims import reference_usage
+        snapshot = json.loads(self._snapshot)
+        for group in groups:
+            for entry in group["entries"]:
+                path = [*group["prefix"], entry["key"]]
+                value = snapshot
+                for part in path:
+                    value = value[part]
+                entry.update(reference_usage({"path": path, "value": value}, snapshot))
+        wire_bytes = 0
+        for chunk in json.JSONEncoder(ensure_ascii=False).iterencode(groups):
+            wire_bytes += len(chunk.encode("utf-8"))
+            if wire_bytes > self._max_wire_bytes:
+                raise ReferenceResolutionError("CatalogLimitExceeded")
+        return groups
 
     def resolve(self, references):
         """Return fresh exact values, or one stable error retaining JSON wire refs.

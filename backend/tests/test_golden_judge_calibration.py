@@ -112,6 +112,8 @@ def test_full_scripted_suite_maps_all_phases_without_live_requests():
     report = run_calibration(provider)
     assert report["summary"]["complete"] and report["summary"]["counts"] == {"match": 61}
     assert report["logical_calls_used"] == len(provider.calls) == 120
+    assert report["max_logical_calls"] == 181
+    assert report["max_dimension_completion_calls"] == 61
     assert report["summary"]["expected_unknown_matches"] == 12
     assert report["summary"]["unexpected_unknown_decisions"] == 0
     assert not provider.actions
@@ -248,7 +250,7 @@ def test_calibration_budget_stops_without_hidden_extra_requests():
     assert report["results"][0]["phase_errors"] == {"visible_audit": "BudgetExceeded"}
     assert report["results"][0]["status"] == "review"
     with pytest.raises(ValueError):
-        run_calibration(provider, max_calls=121)
+        run_calibration(provider, max_calls=182)
 
 
 def test_budget_between_cases_preserves_completed_case():
@@ -291,8 +293,12 @@ def test_error_text_is_never_saved_as_provider_configuration():
     assert report["logical_calls_used"] == 2
     assert report["results"][0]["actual"] == [None] * 5
     assert set(report["results"][0]["phase_errors"].values()) == {"RuntimeError"}
-    assert report["results"][0]["phase_diagnostics"] == {
-        "final_delivery": {"failure_category": "request"}, "visible_audit": {"failure_category": "request"}}
+    diagnostics = report["results"][0]["phase_diagnostics"]
+    assert diagnostics["final_delivery"] == {"failure_category": "request"}
+    assert diagnostics["visible_audit"]["failure_category"] == "request"
+    attempts = diagnostics["visible_audit"]["attempts"]
+    assert len(attempts) == 1 and attempts[0]["errors"] == {"visible_audit": "RuntimeError"}
+    assert report["summary"]["judge_schema_repair_call_count"] == 0
     assert report["summary"]["judge_phase_call_count"] == 2
     assert report["summary"]["judge_phase_protocol_error_count"] == 0
     assert "example-secret" not in json.dumps(report)
@@ -319,7 +325,7 @@ def test_invalid_visible_finding_remains_unknown_with_diagnostic():
     assert item["status"] == "review"
 
 
-@pytest.mark.parametrize("constant", ["DELIVERY_SYSTEM", "VISIBLE_SYSTEM"])
+@pytest.mark.parametrize("constant", ["DELIVERY_SYSTEM", "VISIBLE_SYSTEM", "REPAIR_SYSTEM", "REPAIR_PROTOCOL_VERSION"])
 def test_prompt_hash_covers_each_phase(monkeypatch, constant):
     def run():
         return run_calibration(ScriptedJudge([(True, True), visible()]),
@@ -458,7 +464,7 @@ def test_invalid_counterevidence_cannot_count_as_correct_expected_unknown():
     assert report["summary"]["decision_match_rate"] == 3 / 4
 
 
-@pytest.mark.parametrize("budget", [0, 121])
+@pytest.mark.parametrize("budget", [0, 182])
 def test_calibration_cli_rejects_out_of_range_budget_before_model(budget, monkeypatch):
     monkeypatch.setattr("app.services.llm_provider.get_llm_provider", lambda: pytest.fail("Unexpected model"))
     with pytest.raises(SystemExit):

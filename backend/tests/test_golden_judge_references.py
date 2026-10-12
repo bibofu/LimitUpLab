@@ -37,7 +37,7 @@ def test_only_existing_paths_in_four_roots_are_indexed_at_valid_depth():
     entries = expanded(catalog)
     assert all(set(group) == {"prefix", "entries"} for group in catalog.wire_entries())
     assert all(set(entry) == {"ref_id", "key"} for group in catalog.wire_entries() for entry in group["entries"])
-    assert {item["path"][0] for item in entries} == set(references.ROOTS)
+    assert {item["path"][0] for item in entries} == set(references.ROOTS) - {"evaluator_observations"}
     assert all(3 <= len(item["path"]) <= 24 and set(item) == {"ref_id", "path"} for item in entries)
     assert all(type(part) in (str, int) for item in entries for part in item["path"])
     assert valid_counterevidence(catalog.resolve([{"ref_id": item["ref_id"]} for item in entries]), payload)

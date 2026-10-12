@@ -10,7 +10,7 @@ from evals.golden.contracts import StrictModel
 class EvidenceReference(StrictModel):
     path: list[StrictStr | StrictInt] = Field(min_length=3, max_length=24, description=(
         "当前断言的证据在本阶段输入中的路径。首项只能为synthetic_evidence、business_observations、"
-        "trusted_runtime_metadata或source_equivalence，后续依次为对象键或数组下标；不能引用回答、理由或缺失字段。"))
+        "trusted_runtime_metadata、source_equivalence或evaluator_observations，后续依次为对象键或数组下标；不能引用回答、理由或缺失字段。"))
     value: Any = Field(description="该路径实际存在的完整JSON值，保留原类型；支持或反驳断言取决于该字段的语义和证据范围。")
 
 
@@ -29,7 +29,8 @@ def valid_counterevidence(references, payload):
     """Existence and value checks only; logical relevance still needs calibration."""
     if not references:
         return False
-    roots = {"synthetic_evidence", "business_observations", "trusted_runtime_metadata", "source_equivalence"}
+    roots = {"synthetic_evidence", "business_observations", "trusted_runtime_metadata", "source_equivalence",
+             "evaluator_observations"}
     for reference in references:
         path = reference["path"]
         if path[0] not in roots:
@@ -44,6 +45,11 @@ def valid_counterevidence(references, payload):
                 return False
         if not _same_json(value, reference["value"]):
             return False
+        if path[0] == "evaluator_observations":
+            from evals.golden.judge_context import evaluator_reference_capability
+            if evaluator_reference_capability(reference, payload) not in {
+                    "query_status_proof", "query_scope_proof", "evaluation_context"}:
+                return False
     return True
 
 

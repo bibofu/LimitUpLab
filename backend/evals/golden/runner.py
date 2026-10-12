@@ -21,6 +21,8 @@ from app.services.session_memory import prepare_session_context
 from evals.golden.contracts import Check, verdict
 from evals.golden.judge import judge_turn
 from evals.golden.runtime_metadata import RuntimeMetadataCapture
+from evals.golden.judge_context import build_judge_context
+from evals.golden.runtime_context import current_fixture_binding
 
 
 class BudgetExceeded(RuntimeError):
@@ -133,6 +135,7 @@ def run_case(case, *, trial, directory, provider, judge_provider=None, profile="
     anchor = datetime.fromisoformat(case.clock).date()
     results, initialized = [], set()
     registry = FrozenRegistry(case, profile=profile)
+    fixture_binding = current_fixture_binding(registry)
     error = None
     with ExitStack() as stack:
         # Each invocation is sequential and isolated; never run this harness in a live server.
@@ -201,13 +204,20 @@ def run_case(case, *, trial, directory, provider, judge_provider=None, profile="
             judge_errors = {}
             judge_diagnostics = {}
             judge_usage = None
+            context_snapshot = {"index": index, "user": turn.user, "session": turn.session,
+                "response": response.model_dump(mode="json"), "runtime_metadata": runtime_metadata.snapshots,
+                "memory_before": memory.model_dump(mode="json") if memory else None,
+                "context_message_count": len(context)}
+            evaluator_context = build_judge_context(context_snapshot, prior_turns=results,
+                                                     fixture_binding=fixture_binding)
             if judge_provider is not None and not persistence_failures():
                 tracker = None
                 try:
                     with capture_llm_usage() as tracker:
                         review = judge_turn(judge_provider, user=turn.user,
                             expectations=turn.expect.semantic_checks, response=response, drafts=visible_drafts(events),
-                            runtime_metadata=runtime_metadata.snapshots)
+                            runtime_metadata=runtime_metadata.snapshots,
+                            evaluator_context=evaluator_context["observations"])
                         judgements, safety = review.judgements, review.safety
                         source, factual, judge_errors = review.source, review.factual, review.errors
                         judge_diagnostics = review.diagnostics
@@ -234,6 +244,7 @@ def run_case(case, *, trial, directory, provider, judge_provider=None, profile="
                 "judge_diagnostics": judge_diagnostics,
                 "runtime_metadata": runtime_metadata.snapshots,
                 "runtime_metadata_errors": runtime_metadata.errors,
+                "evaluator_context": evaluator_context,
                 "memory_before": memory.model_dump(mode="json") if memory else None,
                 "context_message_count": len(context), "checks": [check.model_dump() for check in checks],
                 "verdict": verdict(checks), "agent_usage": usage_payload(agent_usage), "judge_usage": judge_usage,

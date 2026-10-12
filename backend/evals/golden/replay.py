@@ -14,6 +14,7 @@ from evals.golden.comparison import _index
 from evals.golden.contracts import Case, Check, Expectation, verdict
 from evals.golden.grading import grade_turn, visible_drafts
 from evals.golden.judge import DELIVERY_SYSTEM, JUDGE_VERSION, VISIBLE_SYSTEM, judge_turn
+from evals.golden.judge_protocol import REPAIR_PROTOCOL_VERSION, REPAIR_SYSTEM
 from evals.golden.manifest import (
     BACKEND, code_fingerprint, git_commit, library_versions, require_disabled_sdk_retries,
     run_identity, tree_fingerprint,
@@ -21,6 +22,8 @@ from evals.golden.manifest import (
 from evals.golden.protocol_metrics import protocol_metrics
 from evals.golden.reporting import digest
 from evals.golden.runner import Budget, BudgetedProvider, usage_payload, without_sdk_retries
+from evals.golden.judge_context import CONTEXT_VERSION, build_judge_context, context_sources
+from evals.golden.runtime_context import historical_fixture_binding
 
 REPLAY_VERSION = "golden-judge-replay-v1"
 
@@ -59,6 +62,7 @@ def load_replay(source, *, selected_turns=None, cases=None):
     current = {case.id: case.model_dump(mode="json")
                for case in (load_cases() if cases is None else cases)}
     definitions, inputs = {}, []
+    fixture_binding = historical_fixture_binding(manifest)
     for (case_id, trial), result in indexed.items():
         definition = result["definition"]
         _require(Case.model_validate(definition).model_dump(mode="json") == definition,
@@ -85,10 +89,14 @@ def load_replay(source, *, selected_turns=None, cases=None):
             _require(turn["verdict"] == verdict([Check.model_validate(c) for c in turn["checks"]]),
                      "Source verdict disagrees with saved checks")
             fixed = _fixed_input(turn)
+            derived = build_judge_context(turn, prior_turns=result["turns"][:index], fixture_binding=fixture_binding)
             inputs.append({"key": [case_id, trial, index], "input_sha256": digest(fixed),
                            "source_trial_verdict": result["verdict"],
                            "source_trial_turns": len(definition["turns"]),
-                           "source_turn": deepcopy(turn)})
+                           "source_turn": deepcopy(turn), "derived_context": derived,
+                           "derived_context_sha256": digest(derived),
+                           "context_turn_sha256": digest(context_sources(turn, ())["turn"]),
+                           "original_evaluator_context_sha256": digest(turn.get("evaluator_context"))})
     _require(inputs, "Source contains no replayable turns")
     _require(digest([definitions[key] for key in manifest["case_ids"]]) == manifest["dataset_hash"],
              "Source dataset hash mismatch")
@@ -100,7 +108,9 @@ def load_replay(source, *, selected_turns=None, cases=None):
         inputs = [item for item in inputs if tuple(item["key"]) in set(selected)]
     return {"source_path": str(source), "source_sha256": hashlib.sha256(raw).hexdigest(),
             "generation_manifest": deepcopy(manifest), "source_summary": deepcopy(original.get("summary")),
-            "inputs": inputs, "fixed_inputs_sha256": digest([
+            "inputs": inputs, "derived_inputs_sha256": digest([
+                {"key": i["key"], "sha256": i["derived_context_sha256"]} for i in inputs]),
+            "fixed_inputs_sha256": digest([
                 {"key": item["key"], "input_sha256": item["input_sha256"]} for item in inputs])}
 
 
@@ -166,14 +176,16 @@ def replay_report(source, output, provider, *, max_calls=120, selected_turns=Non
     report = {"mode": "judge-replay", "version": REPLAY_VERSION, **run_identity(),
         "source": {key: value for key, value in loaded.items() if key != "inputs"},
         "inputs": loaded["inputs"], "judge_manifest": {
+            "evaluator_context_version": CONTEXT_VERSION,
             "judge_version": JUDGE_VERSION, "git_commit": git_commit(), "code_hash": code_fingerprint(),
             "evaluator_hash": tree_fingerprint(BACKEND / "evals"),
             "current_production_hash": tree_fingerprint(BACKEND / "app"),
-            "judge_prompt_hash": digest({"final": DELIVERY_SYSTEM, "visible": VISIBLE_SYSTEM}),
+            "judge_prompt_hash": digest({"final": DELIVERY_SYSTEM, "visible": VISIBLE_SYSTEM,
+                "repair": REPAIR_SYSTEM, "repair_protocol_version": REPAIR_PROTOCOL_VERSION}),
             "provider": type(provider).__name__, "model": getattr(provider, "model", type(provider).__name__),
             "effective_model_configuration": configuration, "libraries": library_versions()},
         "max_logical_calls": max_calls, "logical_calls_used": 0, "results": [], "integrity_verified": False,
-        "note": "Judge-only replay, no new Agent execution or human labels. Source judgements are historical "
+        "note": "Same recorded Agent answers with additional derived evaluator context; no new Agent execution or human labels. Source judgements are historical "
                 "observations, not ground truth. Evaluator changes are not matched-setting Agent comparisons."}
     output.mkdir(parents=True, exist_ok=False)
     _save(report, output)
@@ -200,7 +212,8 @@ def replay_report(source, output, provider, *, max_calls=120, selected_turns=Non
                         expectations=turn["expected"]["semantic_checks"],
                         response=response.model_copy(deep=True),
                         drafts=visible_drafts(deepcopy(turn["events"])),
-                        runtime_metadata=deepcopy(turn["runtime_metadata"]))
+                        runtime_metadata=deepcopy(turn["runtime_metadata"]),
+                        evaluator_context=deepcopy(source_item["derived_context"]["observations"]))
                 item.update(judgements=review.judgements, judge_errors=review.errors,
                             judge_diagnostics=review.diagnostics)
                 checks = grade_turn(Expectation.model_validate(turn["expected"]),
@@ -242,6 +255,13 @@ def replay_report(source, output, provider, *, max_calls=120, selected_turns=Non
               or digest([{"key": i["key"], "input_sha256": i["input_sha256"]} for i in report["inputs"]])
               != loaded["fixed_inputs_sha256"]):
             integrity_error = "input_changed"
+        elif (any(digest(i["derived_context"]) != i["derived_context_sha256"]
+                  or digest(context_sources(i["source_turn"], ())["turn"]) != i["context_turn_sha256"]
+                  or digest(i["source_turn"].get("evaluator_context")) != i["original_evaluator_context_sha256"]
+                  for i in report["inputs"])
+              or digest([{"key": i["key"], "sha256": i["derived_context_sha256"]} for i in report["inputs"]])
+              != loaded["derived_inputs_sha256"]):
+            integrity_error = "derived_context_changed"
     except Exception as error:
         integrity_error = "integrity_error"
         report["integrity_error_type"] = type(error).__name__

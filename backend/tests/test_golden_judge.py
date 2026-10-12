@@ -252,9 +252,13 @@ def test_incomplete_duplicate_or_coerced_delivery_judgements_are_not_accepted(ch
 def test_one_missing_or_malformed_audit_does_not_erase_other_valid_audits():
     incomplete = audit_result(source={"evidence_relation": "true", "reason": "invalid relation"})
     incomplete.pop("factual")
-    review = evaluate(ScriptedJudge(incomplete), expectations=())
+    supplement = AIMessage(content="", tool_calls=[{"id": "repair", "name": "submit_golden_visible_audit",
+                                                    "args": {"factual": None}}])
+    model = ScriptedJudge(incomplete, supplement)
+    review = evaluate(model, expectations=())
     assert review.safety["passed"] is True and review.factual is review.source is None
     assert set(review.errors) == {"visible_audit.source", "visible_audit.factual"}
+    assert len(model.calls) == 2
 
 
 def test_null_is_retained_as_unknown():
