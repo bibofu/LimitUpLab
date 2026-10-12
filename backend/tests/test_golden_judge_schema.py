@@ -34,6 +34,17 @@ def test_reference_sibling_description_and_falsy_schema_values_are_preserved():
         "type": "object", "additionalProperties": False, "description": "local meaning"}
 
 
+@pytest.mark.parametrize("dimension", ["factual", "source", "safety"])
+def test_claim_wire_orders_citations_before_relation_without_weakening_required_fields(dimension):
+    claim = inline_local_refs(VisibleAudit.model_json_schema())["properties"][dimension]["properties"]["claims"]["items"]
+    fields = list(claim["properties"])
+    assert fields.index("target") < fields.index("evidence") < fields.index("evidence_relation")
+    assert set(claim["required"]) == {"surface_id", "quote", "target", "evidence", "evidence_relation"}
+    assert claim["additionalProperties"] is False
+    assert set(claim["properties"]["evidence_relation"]["enum"]) == {
+        "supported", "contradicted", "insufficient_evidence"}
+
+
 @pytest.mark.parametrize("schema", [
     {"$ref": "https://example.invalid/schema"},
     {"$ref": "#/$defs/absent"},

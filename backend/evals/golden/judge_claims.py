@@ -25,9 +25,11 @@ class ClaimBinding(StrictModel):
     quote: str = Field(min_length=1, max_length=1200,
         description="One atomic assertion quoted verbatim from this surface; split independent assertions.")
     target: ClaimTarget
-    evidence_relation: ClaimRelation
     evidence: list[EvidenceReference] = Field(max_length=6,
         description="Actual paths and exact values supporting or contradicting this assertion. Missing proof is not counterevidence.")
+    evidence_relation: ClaimRelation = Field(description=(
+        "先选证据再判断关系：supported需要同一断言对象的直接依据；contradicted需要同一实体、日期、指标、范围的相反证据。"
+        "其他实体/日期的值、partial空结果、缺参数或缺字段仅表示insufficient_evidence，不能当反证。"))
 
 
 # These are structural fields in evaluator-owned records and known tool-result
@@ -304,7 +306,7 @@ def _world_reference_error(reference, payload):
         return "InvalidEvidenceState"
     if any(_failed_execution(item) for item in envelopes):
         return "FailedSourceIsNotWorldFact"
-    if capability in {"query_scope_proof", "query_status_proof", "unverified_query_status",
+    if capability in {"query_scope_proof", "query_status_proof", "query_semantics", "unverified_query_status",
                       "computation_proof", "cache_status_proof"}:
         return "AvailabilityIsNotWorldFact"
     # Citing the whole mixed envelope must not launder status/data_missing into
