@@ -93,7 +93,7 @@ class ToolGateway:
         self._assert_requested_dates(name, args, payload)
         trace = result.trace()
         state = trace.result.status if trace.result else ("error" if trace.status == "error" else "ok")
-        if name == "limit_up_events" and not payload.get("events"):
+        if name == "limit_up_events" and state == "ok" and not payload.get("events"):
             state = "empty"
         return result, payload, state
 

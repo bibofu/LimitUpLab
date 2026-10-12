@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field
 
-VERSION = "react-runtime-v31"
+VERSION = "react-runtime-v32"
 MAX_MODEL_CALLS = 8
 MAX_TOOL_CALLS = 8
 MAX_CONTROL_CALLS = 16
@@ -47,7 +47,7 @@ class Finish(StrictModel):
     )
     answer: str = Field(min_length=1, max_length=16000)
     table: EvidenceTable | None = Field(default=None, description="At most ONE evidence table for the entire answer, only when delivering a list. Render all RETURNED rows, not necessarily the full source universe: check source_truncated and any proven rank scope. With table, put {{evidence_table}} exactly once; without table, no placeholder. Never transcribe rows or omit a user-required list. Select/filter/sort with compute_result first.")
-    evidence_ids: list[str] = Field(default_factory=list)
+    evidence_ids: list[str] = Field(default_factory=list, description="Current-run evidence IDs. Error evidence can support only a truthful partial failure explanation, never market values, a count of zero or absence. Do not query unrelated data merely to obtain an ID.")
     missing: list[str] = Field(default_factory=list, description="Only specific unmet ALLOWED research deliverables; never blank items. Explicitly refused trading advice is not missing research: when the allowed research is delivered, use complete with an empty list. partial requires a real allowed-research gap. Pure trading-advice refusal uses refuse. Irrelevant missing source fields are caveats, not unfinished tasks.")
 
 

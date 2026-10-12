@@ -7,6 +7,16 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 from app.agents.react_runtime.display_fields import DISPLAY_FIELD_CATALOG
 
 
+OutputMode = Literal["freeform", "table_only", "prose_only"]
+OUTPUT_MODE_DESCRIPTION = (
+    "freeform permits the requested explanation and table; table_only delivers only requested table fields. "
+    "prose_only delivers only the requested existence answer, count, or single metric, with necessary "
+    "object, date, source, uncertainty or missing-data clarification. No tables, other objects, "
+    "unrequested reasons or background, including lists written as prose. Query subjects and metrics "
+    "are not automatically requested display fields."
+)
+
+
 class FieldRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
@@ -27,7 +37,7 @@ class FieldResolution(BaseModel):
 class OutputContract(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["freeform", "table_only"] = "freeform"
+    mode: OutputMode = Field(default="freeform", description=OUTPUT_MODE_DESCRIPTION)
     field_requests: list[FieldRequest] = Field(default_factory=list, max_length=12)
     fields: list[str] = Field(default_factory=list, max_length=12,
         description="Backend-derived hard fields; also accepts legacy checkpoints without field_requests.")
@@ -71,10 +81,11 @@ class ReviewOutputContract(BaseModel):
     """LLM wire schema has one mapping list and no backend diagnostics/fields."""
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["freeform", "table_only"] = "freeform"
+    mode: OutputMode = Field(default="freeform", description=OUTPUT_MODE_DESCRIPTION)
     field_requests: list[ReviewFieldRequest] = Field(default_factory=list, max_length=12,
-        description="Every explicitly requested display field, in order. Include unknown fields with field=null; never omit an item or list only a known subset.")
-    table_required: bool = False
+        description="Every explicitly requested display field, in order. Query subjects or metrics alone are not display-field requests; a direct existence/count/metric answer normally leaves this empty. Include unknown requested fields with field=null; never omit an item or list only a known subset.")
+    table_required: bool = Field(default=False,
+        description="True only when the current turn requires a table; false for prose_only and future display preferences.")
 
 
 class TaskInterpretation(BaseModel):
@@ -92,6 +103,8 @@ def validate_delivery(final, interpretation):
     contract = interpretation.output_contract
     if interpretation.pending_slots and final.status not in {"clarify", "refuse"}:
         raise ValueError("Required user input is unresolved; clarify: " + ", ".join(interpretation.pending_slots))
+    if contract.mode == "prose_only" and final.table is not None:
+        raise ValueError("A prose-only answer cannot include an evidence table; deliver only the requested direct answer and necessary scope or missing-data clarification")
     if final.table is not None and contract.fields:
         actual = [column.field for column in final.table.columns]
         if actual != contract.fields:

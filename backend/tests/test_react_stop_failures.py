@@ -88,7 +88,11 @@ def test_graph_stop_preserves_business_failure_after_both_finish_attempts_fail(f
     assert len(failures) == 1 and failures[0].output["execution_status"] == "failed"
     assert SECRET not in json.dumps(failures[0].model_dump())
     execution = next(t.output for t in response.tool_results if t.name == "react_execution")
-    assert execution["evidence"] == {}
+    records = list(execution["evidence"].values())
+    assert len(records) == 1 and records[0]["result_state"] == "error"
+    assert records[0]["rows"] == []
+    assert records[0]["arguments"] == ARGS
+    assert SECRET not in json.dumps(records)
     assert_query_failure_disclosed(response.answer)
 
 
