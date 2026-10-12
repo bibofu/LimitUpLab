@@ -289,17 +289,19 @@ class Run:
                             message += f"，其中 {failed_count} 项存在缺口"
                         self.progress("tools", message)
                     if not result.get("ok"):
+                        trace_payload = result
                         if (result.get("execution_status") == "failed"
                                 and result.get("error_type") != "UncertainExecution"):
                             # Cite an observed failure without fabricating market rows,
                             # provider provenance or an actual returned data date.
+                            trace_payload = {**result, "items": [], "business_result_available": False,
+                                             "data_missing": ["tool_execution_failed"]}
                             key = self.evidence.add(tool=call["name"], state="error", arguments=call["args"],
-                                payload={**result, "items": [], "business_result_available": False,
-                                         "data_missing": ["tool_execution_failed"]})
+                                                    payload=trace_payload)
                             self.cache[call["signature"]] = key
                             result = {**result, **self.evidence.view(key)}
                         observations.append((call, result))
-                        self.trace(call["name"], result, input=call["args"], status="error")
+                        self.trace(call["name"], trace_payload, input=call["args"], status="error")
                         continue
                     payload, status = result["payload"], result["status"]
                     key = self.evidence.add(tool=call["name"], payload=payload, state=status, arguments=result["input"])

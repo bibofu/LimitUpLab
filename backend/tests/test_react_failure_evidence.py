@@ -17,6 +17,8 @@ from app.agents.tools import TOOL_SCHEMAS, ToolResult
 from app.models import AgentChatRequest
 from app.repositories import SQLiteChatSessionRepository
 from app.services.prompt_security import PromptInjectionAssessment
+from evals.golden.contracts import Expectation
+from evals.golden.grading import grade_turn
 
 
 SECRET = "private-credential@internal.example.invalid"
@@ -82,6 +84,11 @@ def test_exception_evidence_allows_truthful_partial_without_repair_or_secret_lea
     assert record["data_missing"] == ["tool_execution_failed"]
     assert SECRET not in json.dumps(response.model_dump(), ensure_ascii=False)
     assert len([trace for trace in response.tool_results if trace.name == "react_answer_check"]) == 1
+    trace = next(trace for trace in response.tool_results if trace.name == "stock_news")
+    assert trace.output == record["payload"]
+    checks = grade_turn(Expectation(statuses=["partial"], require_evidence=False), response)
+    original_payload = [check for check in checks if check.name == "original_tool_payload"]
+    assert len(original_payload) == 1 and original_payload[0].passed is True
     store = EvidenceStore()
     store.records = run["evidence"]
     with pytest.raises(ValueError):
@@ -145,24 +152,38 @@ def test_exact_failed_queries_are_reused_but_partial_queries_can_recover(initial
     assert response.stop_reason == "answered"
 
 
-def test_failed_query_does_not_prevent_an_independent_successful_query():
+@pytest.mark.parametrize("failure_count", [1, 2])
+def test_failed_queries_do_not_prevent_an_independent_successful_query(failure_count):
+    queried = []
+
+    def news(**kwargs):
+        queried.append(kwargs["symbol"])
+        return failing_news(**kwargs)
+
     def kline(**kwargs):
+        queried.append(kwargs["symbol"])
         return ToolResult(name="stock_kline", input=kwargs, summary="fixture", result_status="ok",
-                          output={"symbol": "600101", "trend": "震荡", "source": "offline-fixture"})
+                          output={"symbol": "600103", "trend": "震荡", "source": "offline-fixture"})
 
     class Model:
         def generate_messages(self, messages, tools, **kwargs):
             results = observations(messages)
-            if not results:
-                return native("stock_news", ARGS, "news")
-            if len(results) == 1:
-                assert results[0]["result_state"] == "error"
-                return native("stock_kline", ARGS, "kline")
+            if len(results) < failure_count:
+                return native("stock_news", {"symbol": "60010" + str(len(results) + 1)},
+                              "news-" + str(len(results)))
+            if len(results) == failure_count:
+                assert all(result["result_state"] == "error" for result in results)
+                assert "stock_kline" in {tool["function"]["name"] for tool in tools}
+                return native("stock_kline", {"symbol": "600103"}, "kline")
             return native("finish", {**partial(results[-1]["evidence_id"]),
-                "answer": "行情显示震荡；新闻查询失败，新闻部分仍未完成。"}, "finish")
+                "answer": "样本丙行情显示震荡；其他对象的新闻查询失败，新闻部分仍未完成。"}, "finish")
 
-    response = runtime.run(request(), registry(stock_news=failing_news, stock_kline=kline), Model())
+    independent_request = request().model_copy(update={
+        "message": "分别查样本甲600101和样本乙600102的新闻，再查样本丙600103的行情，失败项明确说明。"})
+    response = runtime.run(independent_request, registry(stock_news=news, stock_kline=kline), Model())
     assert response.task_status == "partial" and response.stop_reason == "answered"
+    assert len(queried) == failure_count + 1 and queried[-1] == "600103"
+    assert execution(response)["tool_calls"] == failure_count + 1
     assert {record["result_state"] for record in execution(response)["evidence"].values()} == {"ok", "error"}
 
 

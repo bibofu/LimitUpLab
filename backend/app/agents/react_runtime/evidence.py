@@ -181,6 +181,13 @@ class EvidenceStore:
             "historical_reference": record.get("historical_reference", False),
             "retrieved_at": record.get("retrieved_at"),
         }
+        if record["result_state"] == "error":
+            view["display_hint"] = (
+                "这是可引用的查询失败记录，不是行情结果；不能交表、计算、证明零或无记录，也不展示内部证据ID。"
+                "当前查询已无法交付，下一步应直接finish(status=partial)，引用本ID并说明用户所需结果未取得。"
+                "无需穷尽工具、改日期/limit或查询别的统计来证明失败。只有用户另有独立交付，"
+                "或已明确掌握可补原缺口的独立备用来源时才继续；不要把不同工具名猜成备用来源。"
+            )
         if self.complete_rank_scope(key):
             view["complete_rank_scope"] = self.complete_rank_scope(key)
             view["display_hint"] += " complete_rank_scope仅证明显式排名范围及其后续筛选完整，不代表全市场全集完整。"
