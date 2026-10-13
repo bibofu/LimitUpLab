@@ -54,7 +54,11 @@ def prepare_task_context(request, history, memory=None):
                 add("clarification", latest.content)
             else:
                 context["omitted_oversized_context"] = True
-    intents = [m.content for m in scoped if m.role == "user"][-4:]
+    # Session memory already selects the unsummarized window. A second four-turn
+    # cutoff loses durable preferences before the summary refresh threshold.
+    # Admit whole intents newest first under the shared budget, then retain their
+    # chronological order so a later correction can override an earlier request.
+    intents = [m.content for m in scoped if m.role == "user"]
     for intent in reversed(intents):
         if len(intent) <= 2400:
             add("recent_user_intents", [intent, *context["recent_user_intents"]])

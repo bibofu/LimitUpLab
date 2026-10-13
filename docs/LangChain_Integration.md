@@ -1,6 +1,6 @@
 # LangChain + LangGraph ReAct 集成
 
-> 当前源码标识：`react-runtime-v34` / `agent-tools-v2` / `react-evidence-v4`
+> 当前源码标识：`react-runtime-v35` / `agent-tools-v2` / `react-evidence-v4`
 > 本文描述工作树实现；当前阶段工作与验证见 [V1.5 里程碑](V1.5_Milestone.md)，历史 V1.4 发布范围见 [V1.4 里程碑](V1.4_Milestone.md)。
 
 ## 当前生产链路
@@ -79,6 +79,7 @@ LIMITUPLAB_LLM_TIMEOUT_SECONDS=30
 - 工具结果区分 `ok`、`empty`、`partial`、`error`；空结果不是异常，缺失或截断不能冒充完整集合。
 - 默认不向 ReAct 重放历史原文或答案证据。仅在 Input Reviewer 判定为 `follow_up` 时，`context.py` 提取历史实体名称/代码及上一轮实际工具参数用于消歧，所有事实仍需本轮重新查询。
 - Memory 默认只传偏好约束；追问时再传研究目标、股票、题材、日期范围和未解问题，均不能作为事实或自动继承的任务。EvidenceStore 的历史域兼容检查仍保留，历史引用及其派生结果不能进入最终引用。
+- 输入审查保留现有会话窗口内尚未压缩的用户要求，不再额外缩短为四轮，避免滚动记忆更新前丢失长期偏好。仍按字符预算保留完整条目、优先近期要求，超预算显式标记；历史意图只供语义审查，当前要求覆盖旧偏好，旧市场回答不进入事实证据。
 - 工具由原生 tool call 选择。Input Reviewer 的 `requested_date` 成为 `required_date`，只补齐调用中缺省的单日期字段或 `requested_as_of`，再按工具能力及实际返回日期校验；不会补造额外查询。
 - 最终回答必须单独调用 `finish`，给出真实状态和用户交付缺口。研究请求的 `complete / partial / empty` 必须引用本轮证据；`empty` 需要真实空结果，工具失败或部分证据不能伪装为空。
 - 已确认的工具异常形成无业务行的错误证据，可引用以说明 `partial` 缺口，不能计算、交表或证明完整成功。取消、执行结果未知和 journal 持久化异常不构造确定失败证据；同一运行中后续相同参数的确定失败可复用，工具显式返回 partial 时可补查，独立查询仍可继续。

@@ -21,6 +21,7 @@ from app.agents.react_runtime.task_contract import validate_delivery
 from app.agents.tools import TOOL_SCHEMAS, ToolResult
 from app.models import AgentChatRequest, ChatSessionMemory, ChatSessionMessage
 from app.services.prompt_security import PromptInjectionAssessment
+from app.services.session_memory import prepare_session_context
 
 
 @pytest.fixture(autouse=True)
@@ -258,6 +259,63 @@ def test_only_same_session_structured_memory_reaches_semantic_review():
     assert "HISTORICAL_MARKET_SUMMARY_88412" not in json.dumps(current.security_prompts)
     assert "OLD_PENDING_RESEARCH" not in json.dumps(current.agent_prompts)
     assert "000987" not in json.dumps(current.agent_prompts)
+
+
+@pytest.mark.parametrize("turn_count", [5, 7, 8, 10])
+def test_unsummarized_preferences_reach_review_before_and_between_memory_refreshes(monkeypatch, turn_count):
+    monkeypatch.setenv("LIMITUPLAB_SESSION_MEMORY_ENABLED", "true")
+    monkeypatch.setenv("LIMITUPLAB_SESSION_MEMORY_REFRESH_MESSAGES", "8")
+    preference = "以后每轮用简洁中文，最多三句话。"
+    history = []
+    for index in range(turn_count):
+        history.extend(previous_turn(preference if index == 0 else f"查询对象{index}的研究数据。",
+                                     clarification="HISTORICAL_FACT_DO_NOT_REPLAY"))
+        for offset, message in enumerate(history[-2:]):
+            message.message_id = f"turn-{index}-{offset}"
+        history[-1].metadata = {}
+
+    # With an existing summary the same gap recurs between summary refreshes.
+    existing = None
+    if turn_count >= 8:
+        existing = memory()
+        existing.last_message_id = history[5].message_id
+        history[6].content = preference
+
+    class Repository:
+        def get_memory(self, *_args, **_kwargs):
+            return existing
+
+        def save_memory(self, _memory):
+            raise AssertionError("The refresh threshold has not been reached")
+
+    raw, saved = prepare_session_context(session_id="continuity", owner_id="test-owner",
+        messages=history, repository=Repository(), llm_provider=object())
+    assert saved is existing
+    model = probe(raw, "查询新的市场概况。", context_mode="standalone", memory=saved)
+    payload = json.loads(model.security_prompts[0][-1][1])["task_context"]
+    assert preference in payload["recent_user_intents"]
+    assert "HISTORICAL_FACT_DO_NOT_REPLAY" not in json.dumps(model.security_prompts + model.agent_prompts)
+    assert "查询对象" not in json.dumps(model.agent_prompts, ensure_ascii=False)
+
+
+def test_intent_window_keeps_latest_override_and_whole_constraints_under_budget():
+    request = AgentChatRequest(session_id="continuity", message="新问题。")
+    history = []
+    for index in range(10):
+        history.extend(previous_turn(f"用户要求{index}：" + "保留完整条件" * 350))
+    history[-2].content = "取消之前的三句话限制，这次详细解释。"
+    history.extend(previous_turn("FOREIGN_USER_PREFERENCE", session="foreign"))
+    failed = previous_turn("FAILED_USER_PREFERENCE")[0]
+    failed.status = "error"
+    history.append(failed)
+    context = prepare_task_context(request, history)
+    intents = context["recent_user_intents"]
+    assert intents[-1] == "取消之前的三句话限制，这次详细解释。"
+    assert context["omitted_oversized_context"]
+    assert len(json.dumps(context, ensure_ascii=False)) <= HISTORY_CHAR_BUDGET
+    assert all(intent in [message.content for message in history] for intent in intents)
+    assert "FOREIGN_USER_PREFERENCE" not in intents and "FAILED_USER_PREFERENCE" not in intents
+    assert intents == [message.content for message in history if message.content in intents]
 
 
 def test_review_receives_trusted_anchor_and_separate_page_defaults(monkeypatch):
