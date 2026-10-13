@@ -1,6 +1,5 @@
-import { useEffect, useState } from "react";
-
-import { fetchRecommendationIntelligence } from "../api";
+import { recommendationSnapshot } from "../utils/marketSnapshots";
+import { usePublicSnapshot } from "./usePublicSnapshot";
 import type { RecommendationIntelligenceResponse } from "../types";
 
 
@@ -9,38 +8,8 @@ import type { RecommendationIntelligenceResponse } from "../types";
  * state together.
  */
 export function useRecommendationIntelligence() {
-  const [intelligence, setIntelligence] = useState<RecommendationIntelligenceResponse | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
-
-  useEffect(() => {
-    let active = true;
-    const refresh = () => {
-      void fetchRecommendationIntelligence()
-        .then((response) => {
-          if (active) {
-            setIntelligence(response);
-            setError(null);
-          }
-        })
-        .catch((caught: unknown) => {
-          if (active) {
-            setError(caught instanceof Error ? caught.message : "盘前动态榜加载失败");
-          }
-        })
-        .finally(() => {
-          if (active) setLoading(false);
-        });
-    };
-    refresh();
-    const timer = window.setInterval(refresh, 60 * 1000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, []);
-
-  return { intelligence, loading, error };
+  const state = usePublicSnapshot(recommendationSnapshot, true, 60_000);
+  return { ...state, intelligence: state.data };
 }
 
 

@@ -2,14 +2,16 @@ import { useEffect, useMemo, useState, type ReactNode } from "react";
 import { LoaderCircle, RefreshCcw } from "lucide-react";
 import { createResourceLoader, emptyResource, type ResourceState } from "../utils/asyncResource";
 
-export function useResource<T>(fetchValue: (signal: AbortSignal) => Promise<T>, keepPreviousData = false) {
+export function useResource<T>(fetchValue: (signal: AbortSignal) => Promise<T>, keepPreviousData = false, enabled = true) {
   const [state, setState] = useState<ResourceState<T>>(emptyResource);
   const loader = useMemo(() => createResourceLoader(fetchValue, setState, keepPreviousData), [fetchValue, keepPreviousData]);
   useEffect(() => {
-    void loader.reload();
+    loader.setEnabled(enabled);
+    if (enabled) void loader.reload();
     return loader.cancel;
-  }, [loader]);
-  return { ...state, reload: loader.reload };
+  }, [loader, enabled]);
+  return enabled ? { ...state, reload: loader.reload }
+    : { data: null, loading: false, error: null, reload: loader.reload };
 }
 
 export function ResourceNotice({ label, loading, error, retry }: {

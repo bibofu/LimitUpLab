@@ -30,6 +30,7 @@ import { Panel } from "./components/Panel";
 import { PremarketPage } from "./pages/PremarketPage";
 import { recommendationIntelligenceFor, useRecommendationIntelligence } from "./hooks/useRecommendationIntelligence";
 import { refreshReviewFacts } from "./hooks/useReviewReport";
+import { refreshRecommendationSnapshots, useMarketSummary } from "./hooks/useMarketSummary";
 import { FirstBoardRatingDetail, StockPositionPanel } from "./components/StockResearchPanels";
 import { ReviewDashboard } from "./components/ReviewDashboard";
 import { ResourceNotice, ResourceSection, useResource } from "./components/ResourceSection";
@@ -57,7 +58,6 @@ import {
   fetchFirstBoardRatings,
   fetchFailedLimitUpEvents,
   fetchFirstBoardEvents,
-  fetchMarketSummary,
   fetchRecentLimitUpEvents,
   fetchStockEvent,
   fetchStockIntradayHistory,
@@ -140,29 +140,49 @@ const agentWorkspaceHiddenPaths = new Set([
 
 /** Publish each section independently; a slow provider never hides navigation or local facts. */
 export function App() {
-  const summary = useResource(fetchMarketSummary, true);
-  const firstBoard = useResource(fetchFirstBoardEvents);
-  const continuedBoard = useResource(fetchContinuedBoardEvents);
-  const failed = useResource(fetchFailedLimitUpEvents);
-  const recent = useResource(loadRecentEvents);
-  const firstBoardRatings = useResource(loadRatings);
-  const dailyBoardPromotion = useResource(loadPromotion);
-  const pools = { firstBoard, continuedBoard, failed, recent };
-  const dateCandidates = [summary.data?.trade_date, firstBoardRatings.data?.trade_date,
-    dailyBoardPromotion.data?.latest_event_date, ...Object.values(pools).map(pool => latestEventDate(pool.data))];
-  const latestTradeDate = dateCandidates.filter((value): value is string => Boolean(value)).sort().pop();
   const location = useLocation();
   const activeView = routeToView[location.pathname] ?? "overview";
+  const isStockDetail = location.pathname.startsWith("/stocks/")
+    && !stockListPaths.has(location.pathname);
+  const isOverview = activeView === "overview" && !isStockDetail;
+  // Load only visible sections and the local dates required by review/detail.
+  const enabled = {
+    firstBoard: ["pool", "first", "review"].includes(activeView) && !isStockDetail,
+    continuedBoard: ["pool", "continued"].includes(activeView) && !isStockDetail,
+    failed: ["pool", "failed"].includes(activeView) && !isStockDetail,
+    recent: ["pool", "recent"].includes(activeView) && !isStockDetail,
+    ratings: activeView === "first" || isStockDetail,
+    promotion: activeView === "review" && !isStockDetail,
+  };
+  const summary = useMarketSummary({ enabled: isOverview });
+  const firstBoard = useResource(fetchFirstBoardEvents, false, enabled.firstBoard);
+  const continuedBoard = useResource(fetchContinuedBoardEvents, false, enabled.continuedBoard);
+  const failed = useResource(fetchFailedLimitUpEvents, false, enabled.failed);
+  const recent = useResource(loadRecentEvents, false, enabled.recent);
+  const firstBoardRatings = useResource(loadRatings, false, enabled.ratings);
+  const dailyBoardPromotion = useResource(loadPromotion, false, enabled.promotion);
+  const pools = { firstBoard, continuedBoard, failed, recent };
+  const dateCandidates = [isOverview ? summary.data?.trade_date : undefined, firstBoardRatings.data?.trade_date,
+    dailyBoardPromotion.data?.latest_event_date, ...Object.values(pools).map(pool => latestEventDate(pool.data))];
+  const latestTradeDate = dateCandidates.filter((value): value is string => Boolean(value)).sort().pop();
 
   function loadDashboard() {
-    void refreshReviewFacts();
-    for (const resource of [summary, ...Object.values(pools), firstBoardRatings, dailyBoardPromotion]) {
-      void resource.reload();
+    if (activeView === "review") void refreshReviewFacts();
+    if (activeView === "recommendation") void refreshRecommendationSnapshots();
+    const resources = [
+      { enabled: isOverview, resource: summary },
+      { enabled: enabled.firstBoard, resource: firstBoard },
+      { enabled: enabled.continuedBoard, resource: continuedBoard },
+      { enabled: enabled.failed, resource: failed },
+      { enabled: enabled.recent, resource: recent },
+      { enabled: enabled.ratings, resource: firstBoardRatings },
+      { enabled: enabled.promotion, resource: dailyBoardPromotion },
+    ];
+    for (const item of resources) {
+      if (item.enabled) void item.resource.reload();
     }
   }
 
-  const isStockDetail = location.pathname.startsWith("/stocks/")
-    && !stockListPaths.has(location.pathname);
   const showAgentWorkspace = !isStockDetail
     && !agentWorkspaceHiddenPaths.has(location.pathname);
   const activeMeta = isStockDetail
@@ -202,12 +222,12 @@ export function App() {
           <div className="data-as-of">
             <i aria-hidden="true" />
             <span>
-              <small>已载入最新日期 · 各区独立标注</small>
-              <strong>{latestTradeDate ?? "日期待确认"}</strong>
+              <small>已载入数据日期</small>
+              <strong>{latestTradeDate ?? "各区独立标注"}</strong>
             </span>
           </div>
           <button
-            aria-label="刷新全部数据"
+            aria-label="刷新当前页面数据"
             className="icon-button"
             onClick={loadDashboard}
             title="刷新数据"
@@ -233,7 +253,7 @@ export function App() {
 
       {showAgentWorkspace ? (
         <AgentChatDock
-          tradeDate={latestTradeDate ?? ""}
+          tradeDate={isOverview && !summary.fromCache ? summary.data?.trade_date ?? "" : ""}
         />
       ) : null}
 
@@ -271,11 +291,12 @@ export function App() {
 /**
  * Render the current market summary and its compact counts from backend facts.
  */
-function MarketSnapshot({ resource }: { resource: LoadedResource<MarketSummary> }) {
+function MarketSnapshot({ resource }: { resource: LoadedResource<MarketSummary> & { fromCache?: boolean } }) {
   const { data: summary, loading, error, reload } = resource;
-  const status = loading ? (summary ? "更新中 · " : "市场概览加载中")
+  const status = loading ? (summary ? (resource.fromCache ? "上次结果 · 更新中 · " : "更新中 · ") : "市场概览加载中")
     : error ? (summary ? "更新失败 · 保留数据 " : "市场概览暂不可用")
-      : summary?.indices.length === 0 ? "指数暂不可用 · " : null;
+      : resource.fromCache ? "上次结果 · 待更新 · "
+        : summary?.indices.length === 0 ? "指数暂不可用 · " : null;
   // Keep the same slots through loading, retries and missing upstream index data.
   const indices = summary?.indices.length ? summary.indices : [
     { symbol: "000001.SH", name: "上证指数", close: null, change_pct: null },

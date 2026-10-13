@@ -10,6 +10,43 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
+test("disabled route resources never read until activated, including manual refresh", async () => {
+  let calls = 0;
+  const states: ResourceState<string>[] = [];
+  const loader = createResourceLoader(async () => {
+    calls++;
+    return "local facts";
+  }, state => states.push(state), false, false);
+  await loader.reload();
+  await loader.reload();
+  assert.equal(calls, 0);
+  assert.equal(states.length, 0);
+  loader.setEnabled(true);
+  await loader.reload();
+  assert.equal(calls, 1);
+  assert.equal(states.at(-1)?.data, "local facts");
+});
+
+test("leaving a route cancels its read and a late response cannot replace a later visit", async () => {
+  const old = deferred<string>();
+  const states: ResourceState<string>[] = [];
+  const signals: AbortSignal[] = [];
+  const loader = createResourceLoader(signal => {
+    signals.push(signal);
+    return signals.length === 1 ? old.promise : Promise.resolve("new visit facts");
+  }, state => states.push(state));
+  const firstVisit = loader.reload();
+  loader.setEnabled(false);
+  assert.equal(signals[0].aborted, true);
+  await loader.reload();
+  assert.equal(signals.length, 1);
+  loader.setEnabled(true);
+  await loader.reload();
+  old.resolve("previous visit facts");
+  await firstVisit;
+  assert.equal(states.at(-1)?.data, "new visit facts");
+});
+
 test("a pending index and failed calendar do not withhold available local events", async () => {
   const states = new Map<string, ResourceState<unknown>>();
   const pending = deferred<string>();

@@ -11,7 +11,9 @@ export function createResourceLoader<T>(
   fetchValue: (signal: AbortSignal) => Promise<T>,
   publish: (state: ResourceState<T>) => void,
   keepPreviousData = false,
+  initiallyEnabled = true,
 ) {
+  let enabled = initiallyEnabled;
   let generation = 0;
   let previousData: T | null = null;
   let controller: AbortController | undefined;
@@ -20,6 +22,7 @@ export function createResourceLoader<T>(
     controller?.abort();
   };
   const reload = async () => {
+    if (!enabled) return;
     cancel();
     const current = generation;
     controller = new AbortController();
@@ -38,5 +41,9 @@ export function createResourceLoader<T>(
       });
     }
   };
-  return { reload, cancel };
+  const setEnabled = (next: boolean) => {
+    enabled = next;
+    if (!enabled) cancel();
+  };
+  return { reload, cancel, setEnabled };
 }

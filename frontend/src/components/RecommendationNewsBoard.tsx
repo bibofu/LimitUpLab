@@ -1,8 +1,9 @@
 import { ChevronLeft, ChevronRight, ExternalLink, LoaderCircle, Newspaper } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
-import { fetchFinanceNews } from "../api";
-import type { FinanceNewsItem, FinanceNewsPage } from "../types";
+import { useFinanceNews } from "../hooks/useFinanceNews";
+import { formatSnapshotTime } from "../recommendationSnapshot";
+import type { FinanceNewsItem } from "../types";
 
 
 interface RecommendationNewsViewItem {
@@ -23,35 +24,11 @@ export function RecommendationNewsBoard() {
   /** Paginate the factual 24-hour market feed without involving the LLM. */
 
   const [page, setPage] = useState(1);
-  const [news, setNews] = useState<FinanceNewsPage | null>(null);
-  const [loading, setLoading] = useState(true);
-  const [failed, setFailed] = useState(false);
+  const { news, loading, error, fromCache, reload } = useFinanceNews(page);
 
   useEffect(() => {
-    let active = true;
-    const refresh = (showLoading: boolean) => {
-      if (showLoading) setLoading(true);
-      void fetchFinanceNews(page)
-        .then((response) => {
-          if (!active) return;
-          setNews(response);
-          setFailed(false);
-          setPage(response.page);
-        })
-        .catch(() => {
-          if (active) setFailed(true);
-        })
-        .finally(() => {
-          if (active) setLoading(false);
-        });
-    };
-    refresh(true);
-    const timer = window.setInterval(() => refresh(false), 5 * 60 * 1000);
-    return () => {
-      active = false;
-      window.clearInterval(timer);
-    };
-  }, [page]);
+    if (news && !loading && news.page !== page) setPage(news.page);
+  }, [news, loading, page]);
 
   const visibleNews = useMemo(
     () => (news?.items ?? []).map(marketNewsViewItem),
@@ -73,7 +50,9 @@ export function RecommendationNewsBoard() {
             </small>
           </span>
         </div>
-        <span className="recommendation-news-refresh">5 分钟自动更新</span>
+        <span className="recommendation-news-refresh" role="status">
+          {fromCache ? (loading ? "上次结果 · 更新中" : "上次结果") : "5 分钟自动更新"}
+        </span>
       </header>
       {loading && !news ? (
         <div className="recommendation-news-state">
@@ -81,10 +60,16 @@ export function RecommendationNewsBoard() {
           正在获取最新新闻...
         </div>
       ) : null}
-      {failed ? (
-        <div className="recommendation-news-state">财经快讯暂时没有加载成功。</div>
+      {error ? (
+        <div className="recommendation-news-state" role="status">
+          {news ? "更新失败，保留上次新闻快照。" : "财经快讯暂时没有加载成功。"}
+          <button type="button" onClick={() => void reload()}>重新加载新闻</button>
+        </div>
       ) : null}
-      {!loading && !failed && visibleNews.length === 0 ? (
+      {fromCache && news ? (
+        <div className="recommendation-news-state">上次来源抓取：{formatSnapshotTime(news.fetched_at)}；近24小时范围以该次抓取为准。</div>
+      ) : null}
+      {!loading && !error && visibleNews.length === 0 ? (
         <div className="recommendation-news-state">
           近 24 小时没有获取到市场快讯。
         </div>

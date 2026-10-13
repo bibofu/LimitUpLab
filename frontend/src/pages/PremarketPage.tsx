@@ -41,6 +41,8 @@ function PremarketStrategyWorkspace() {
     intelligence,
     loading: intelligenceLoading,
     error: intelligenceError,
+    fromCache,
+    reload,
   } = useRecommendationIntelligence();
   const [snapshotNow, setSnapshotNow] = useState(() => new Date());
   useEffect(() => {
@@ -93,7 +95,16 @@ function PremarketStrategyWorkspace() {
           <TrendingDown size={16} />高位回撤
         </button>
       </div>
-      {mode !== "relay" ? <ConsolidationPanel strategy={mode} /> : intelligenceLoading ? (
+      {mode === "relay" && intelligence && fromCache && intelligenceLoading ? (
+        <div className="resource-notice" role="status">显示上次候选快照，正在检查更新；候选所属日期和固化状态以下方标注为准。</div>
+      ) : null}
+      {mode === "relay" && intelligenceError ? (
+        <div className="resource-notice" role="status">
+          <span>{intelligence ? "候选快照更新失败，保留上次结果。" : "候选快照暂不可用。"}</span>
+          <button type="button" onClick={() => void reload()}>重新加载候选</button>
+        </div>
+      ) : null}
+      {mode !== "relay" ? <ConsolidationPanel strategy={mode} /> : intelligenceLoading && !intelligence ? (
         <PremarketRankingStatePanel
           message="正在读取统一的盘前排名与证据"
           state="loading"
