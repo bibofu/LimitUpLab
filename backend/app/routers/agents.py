@@ -789,6 +789,34 @@ def list_chat_sessions(
     )
 
 
+class ChatSessionBootstrapResponse(ChatSessionsResponse):
+    """Owner-verified history and selected conversation from one read-only request."""
+
+    selected_session: ChatSessionDetail | None = None
+
+
+@router.get("/chat/bootstrap", response_model=ChatSessionBootstrapResponse)
+def bootstrap_chat_sessions(
+    response: Response,
+    owner_id: Annotated[str, Depends(current_owner_id)],
+    session_id: str | None = Query(default=None, max_length=100),
+    limit: int = Query(default=30, ge=1, le=100),
+) -> ChatSessionBootstrapResponse:
+    """Restore history without a second HTTP request or creating an empty session."""
+
+    response.headers["Cache-Control"] = "private, no-store"
+    repository = SQLiteChatSessionRepository()
+    sessions = repository.list_sessions(owner_id=owner_id, limit=limit)
+    selected = repository.get_session(session_id, owner_id=owner_id) if session_id else None
+    if selected is None and sessions:
+        selected = repository.get_session(sessions[0].session_id, owner_id=owner_id)
+    return ChatSessionBootstrapResponse(
+        sessions=sessions,
+        selected_session=selected,
+        generated_by=CHAT_SESSIONS_VERSION,
+    )
+
+
 @router.get("/chat/sessions/{session_id}", response_model=ChatSessionDetail)
 def get_chat_session(
     session_id: str,

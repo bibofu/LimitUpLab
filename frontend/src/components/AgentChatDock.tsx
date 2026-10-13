@@ -17,6 +17,7 @@ import {
   cancelAgentChatRun,
   createChatSession,
   deleteChatSession,
+  fetchChatBootstrap,
   fetchChatSession,
   fetchChatSessions,
   renameChatSession,
@@ -222,15 +223,17 @@ export function AgentChatDock({
     setSessionLoading(true);
     setSessionError(null);
     try {
-      const response = await fetchChatSessions();
+      const savedSessionId = readActiveChatSession(() => window.localStorage.getItem(ACTIVE_CHAT_SESSION_STORAGE_KEY));
+      const response = await fetchChatBootstrap(savedSessionId);
       setSessions(response.sessions);
-      if (response.sessions.length > 0) {
-        const savedSessionId = readActiveChatSession(() => window.localStorage.getItem(ACTIVE_CHAT_SESSION_STORAGE_KEY));
-        const targetSession = response.sessions.find(
-          (item) => item.session_id === savedSessionId,
-        ) ?? response.sessions[0];
-        const detail = await fetchChatSession(targetSession.session_id);
+      if (response.selected_session) {
+        const detail = response.selected_session;
+        if (!response.sessions.some(item => item.session_id === detail.session_id)) {
+          setSessions([detail, ...response.sessions]);
+        }
         applyChatSession(detail);
+      } else if (response.sessions.length > 0) {
+        throw new Error("所选会话已发生变化，请重新加载会话");
       } else {
         const created = await createChatSession();
         setSessions([created]);

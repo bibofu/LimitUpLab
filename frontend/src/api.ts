@@ -295,6 +295,14 @@ export function fetchChatSessions(limit = 30) {
   return request<ChatSessionsResponse>(`/api/agents/chat/sessions?limit=${limit}`);
 }
 
+/** Restore owner-verified history and its active conversation in one request. */
+export function fetchChatBootstrap(sessionId?: string | null) {
+  const query = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
+  return request<ChatSessionsResponse & { selected_session: ChatSessionDetail | null }>(
+    `/api/agents/chat/bootstrap${query}`, { cache: "no-store" },
+  );
+}
+
 /**
  * Fetch chat session from the backend using the supplied query scope; return the typed
  * response promise.

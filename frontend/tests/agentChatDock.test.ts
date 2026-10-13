@@ -22,10 +22,11 @@ function deferred<T>() {
   return { promise, resolve, reject };
 }
 
-function mount(t: TestContext, overrides: Record<string, any> = {}) {
+function mount(t: TestContext, overrides: Record<string, any> = {}, savedSessionId?: string) {
   const values: any[] = [];
   const effects: (() => unknown)[] = [];
   const storage = new Map<string, string>();
+  if (savedSessionId) storage.set("limituplab.activeChatSession", savedSessionId);
   const globals: Record<string, unknown> = {
     window: { localStorage: { getItem: (key: string) => storage.get(key), setItem: (key: string, value: string) => storage.set(key, value) }, confirm: () => true },
     requestAnimationFrame: () => 1,
@@ -64,6 +65,11 @@ function mount(t: TestContext, overrides: Record<string, any> = {}) {
     streamAgentChatMessage: async () => final,
     ...overrides,
   };
+  if (!api.fetchChatBootstrap) api.fetchChatBootstrap = async (savedId?: string) => {
+    const response = await api.fetchChatSessions();
+    const target = response.sessions.find((item: any) => item.session_id === savedId) ?? response.sessions[0];
+    return { ...response, selected_session: target ? await api.fetchChatSession(target.session_id) : null };
+  };
   const imports: Record<string, any> = {
     react: hooks, "../api": api, "../utils/agentChatInteraction": interaction,
     "../utils/agentChatTransport": transport, "../utils/agentAnswerBuffer": answerBuffer,
@@ -100,6 +106,52 @@ function mount(t: TestContext, overrides: Record<string, any> = {}) {
     submit() { this.find(node => node.type === "form" && node.props.className === "agent-chat-input").onSubmit({ preventDefault() {} }); },
   };
 }
+
+test("reload restores verified history with one bootstrap call and no list/detail waterfall", async t => {
+  const pending = deferred<any>();
+  const calls: string[] = [];
+  const saved = { ...session("saved"), messages: [{
+    message_id: "old-message", role: "assistant", content: "已验证的历史回答", status: "success", metadata: {},
+  }] };
+  const app = mount(t, {
+    fetchChatBootstrap: (savedId: string) => { calls.push(`bootstrap:${savedId}`); return pending.promise; },
+    fetchChatSessions: () => { throw new Error("unexpected list request"); },
+    fetchChatSession: () => { throw new Error("unexpected detail request"); },
+    createChatSession: () => { throw new Error("unexpected create request"); },
+  }, "saved");
+  assert.equal(app.input().disabled, true);
+  assert.equal(app.has(node => node.props.content === "已验证的历史回答"), false);
+  pending.resolve({ sessions: [session("saved")], selected_session: saved });
+  await app.settle();
+  assert.deepEqual(calls, ["bootstrap:saved"]);
+  assert.equal(app.input().disabled, false);
+  assert.equal(app.has(node => node.props.content === "已验证的历史回答"), true);
+});
+
+test("a stale saved ID accepts only the owner-verified selection returned by bootstrap", async t => {
+  const app = mount(t, {
+    fetchChatBootstrap: async () => ({ sessions: [session("current-owner")], selected_session: session("current-owner") }),
+    fetchChatSession: () => { throw new Error("must not fetch the stale saved ID"); },
+  }, "previous-owner");
+  await app.settle();
+  assert.equal(app.input().disabled, false);
+  assert.equal(app.has(node => node.type === "strong" && node.props.children === "会话 current-owner"), true);
+  assert.equal(app.has(node => node.type === "strong" && node.props.children === "会话 previous-owner"), false);
+});
+
+test("first visit creates a conversation only after the identity bootstrap has completed", async t => {
+  const pending = deferred<any>();
+  let created = 0;
+  const app = mount(t, {
+    fetchChatBootstrap: () => pending.promise,
+    createChatSession: async () => { created++; return session("new"); },
+  });
+  assert.equal(created, 0);
+  pending.resolve({ sessions: [], selected_session: null });
+  await app.settle();
+  assert.equal(created, 1);
+  assert.equal(app.input().disabled, false);
+});
 
 test("initial load failure offers a working recovery control without reloading the page", async t => {
   let reads = 0;
