@@ -1,4 +1,5 @@
 import { streamChat } from "./utils/agentChatTransport";
+import { loadChatBootstrap } from "./utils/chatBootstrap";
 import { DASHBOARD_TIMEOUT_MS, GET_TIMEOUT_MS, requestJson } from "./utils/jsonRequest";
 import type { ConsolidationPool } from "./consolidation";
 import type {
@@ -298,10 +299,7 @@ export function fetchChatSessions(limit = 30) {
 
 /** Restore owner-verified history and its active conversation in one request. */
 export function fetchChatBootstrap(sessionId?: string | null) {
-  const query = sessionId ? `?session_id=${encodeURIComponent(sessionId)}` : "";
-  return request<ChatSessionsResponse & { selected_session: ChatSessionDetail | null }>(
-    `/api/agents/chat/bootstrap${query}`, { cache: "no-store" },
-  );
+  return loadChatBootstrap(request, sessionId);
 }
 
 /**

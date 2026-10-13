@@ -6,6 +6,7 @@ import ts from "typescript";
 import * as interaction from "../src/utils/agentChatInteraction.ts";
 import * as transport from "../src/utils/agentChatTransport.ts";
 import * as answerBuffer from "../src/utils/agentAnswerBuffer.ts";
+import * as jsonRequest from "../src/utils/jsonRequest.ts";
 
 // Drive the real component's event handlers and async state without a browser dependency.
 const require = createRequire(import.meta.url);
@@ -73,6 +74,7 @@ function mount(t: TestContext, overrides: Record<string, any> = {}, savedSession
   const imports: Record<string, any> = {
     react: hooks, "../api": api, "../utils/agentChatInteraction": interaction,
     "../utils/agentChatTransport": transport, "../utils/agentAnswerBuffer": answerBuffer,
+    "../utils/jsonRequest": jsonRequest,
     "./AgentAnswerMarkdown": { AgentAnswerMarkdown: () => null },
     "./AgentChatProgress": { AgentChatProgress: () => null },
   };
@@ -126,7 +128,65 @@ test("reload restores verified history with one bootstrap call and no list/detai
   assert.deepEqual(calls, ["bootstrap:saved"]);
   assert.equal(app.input().disabled, false);
   assert.equal(app.has(node => node.props.content === "已验证的历史回答"), true);
+  assert.equal(app.has(node => node.props["aria-label"] === "新会话提示"), false);
 });
+
+test("verified empty conversations show a restrained invitation and accept input", async t => {
+  const app = mount(t);
+  assert.equal(app.has(node => node.props["aria-label"] === "新会话提示"), false);
+  await app.settle();
+  assert.equal(app.has(node => node.type === "strong" && node.props.children === "开始一段研究对话"), true);
+  assert.equal(app.input().disabled, false);
+  app.type("研究最近的首板结构");
+  assert.equal(app.find(node => node.props["aria-label"] === "发送问题").disabled, false);
+  app.submit();
+  app.render();
+  assert.equal(app.has(node => node.props["aria-label"] === "新会话提示"), false);
+  await app.settle();
+});
+
+test("a missing chat service displays a Chinese retry message without implying an empty history", async t => {
+  let calls = 0;
+  const app = mount(t, {
+    fetchChatBootstrap: async () => {
+      if (++calls === 1) return jsonRequest.requestJson("/bootstrap", {}, async () => (
+        Response.json({ detail: "Not Found" }, { status: 404 })
+      ));
+      return { sessions: [session("restored")], selected_session: session("restored") };
+    },
+  });
+  await app.settle();
+  assert.equal(app.has(node => node.type === "span" && node.props.children === "会话服务暂不可用，请重新加载会话。"), true);
+  assert.equal(app.has(node => node.props.children === "Not Found"), false);
+  assert.equal(app.has(node => node.props["aria-label"] === "新会话提示"), false);
+  assert.equal(app.input().disabled, true);
+  const retry = app.find(node => node.type === "button" && Array.isArray(node.props.children) && node.props.children.includes("重新加载会话"));
+  assert.equal(retry.disabled, false);
+  retry.onClick();
+  await app.settle();
+  assert.equal(calls, 2);
+  assert.equal(app.input().disabled, false);
+  assert.equal(app.has(node => node.props.role === "alert"), false);
+  assert.equal(app.has(node => node.props["aria-label"] === "新会话提示"), true);
+});
+
+for (const [status, message] of [
+  [403, "暂时无法访问这段会话，请重新加载会话。"],
+  [429, "会话请求较多，请稍后重试。"],
+  [503, "会话服务暂时异常，请稍后重试。"],
+] as const) {
+  test(`session errors use structured HTTP ${status} even when all server messages are identical`, async t => {
+    const app = mount(t, {
+      fetchChatBootstrap: () => jsonRequest.requestJson("/bootstrap", {}, async () => (
+        Response.json({ detail: "Not Found" }, { status })
+      )),
+    });
+    await app.settle();
+    assert.equal(app.has(node => node.type === "span" && node.props.children === message), true);
+    assert.equal(app.has(node => node.props.children === "Not Found"), false);
+    assert.equal(app.has(node => node.props["aria-label"] === "新会话提示"), false);
+  });
+}
 
 test("a stale saved ID accepts only the owner-verified selection returned by bootstrap", async t => {
   const app = mount(t, {

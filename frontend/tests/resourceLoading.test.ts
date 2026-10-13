@@ -1,7 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
 import { createResourceLoader, type ResourceState } from "../src/utils/asyncResource.ts";
-import { DASHBOARD_TIMEOUT_MS, GET_TIMEOUT_MS, requestJson } from "../src/utils/jsonRequest.ts";
+import { DASHBOARD_TIMEOUT_MS, GET_TIMEOUT_MS, HttpResponseError, requestJson } from "../src/utils/jsonRequest.ts";
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -190,4 +190,38 @@ test("dashboard reads use a short budget while ordinary market/review reads keep
   await requestJson("/api/agents/chat", { method: "POST" }, fetcher);
   assert.deepEqual(scheduled, [20_000, 120_000]);
   assert.equal(GET_TIMEOUT_MS, 120_000);
+});
+
+test("JSON HTTP errors retain structured status and the existing backend detail", async () => {
+  await assert.rejects(requestJson("/data", {}, async () => Response.json(
+    { detail: "  请求暂不可用  " }, { status: 404, statusText: "Not Found" },
+  )), (error: unknown) => {
+    assert.ok(error instanceof HttpResponseError);
+    assert.equal(error.status, 404);
+    assert.equal(error.message, "请求暂不可用");
+    return true;
+  });
+});
+
+test("HTML HTTP errors retain status without exposing gateway HTML in the message", async () => {
+  await assert.rejects(requestJson("/data", {}, async () => new Response(
+    "<html><script>gateway diagnostics</script></html>",
+    { status: 502, statusText: "Bad Gateway", headers: { "Content-Type": "text/html" } },
+  )), (error: unknown) => {
+    assert.ok(error instanceof HttpResponseError);
+    assert.equal(error.status, 502);
+    assert.equal(error.message, "请求失败（502 Bad Gateway）");
+    assert.ok(!error.message.includes("<html>"));
+    assert.ok(!error.message.includes("gateway diagnostics"));
+    return true;
+  });
+});
+
+test("network failures remain non-HTTP errors and preserve their original identity", async () => {
+  const networkError = new TypeError("Failed to fetch");
+  await assert.rejects(requestJson("/data", {}, async () => { throw networkError; }), (error: unknown) => {
+    assert.equal(error, networkError);
+    assert.ok(!(error instanceof HttpResponseError));
+    return true;
+  });
 });

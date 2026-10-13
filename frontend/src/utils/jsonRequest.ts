@@ -1,6 +1,17 @@
 export const GET_TIMEOUT_MS = 120_000;
 export const DASHBOARD_TIMEOUT_MS = 20_000;
 
+/** Preserve HTTP status for endpoint compatibility without parsing display text. */
+export class HttpResponseError extends Error {
+  status: number;
+
+  constructor(status: number, message: string) {
+    super(message);
+    this.name = "HttpResponseError";
+    this.status = status;
+  }
+}
+
 /** Bound reads, including the response body, without changing mutation or SSE budgets. */
 export async function requestJson<T>(
   url: string,
@@ -32,7 +43,7 @@ export async function requestJson<T>(
           const payload = await response.json() as { detail?: unknown };
           if (typeof payload.detail === "string" && payload.detail.trim()) message = payload.detail.trim();
         } catch { /* Gateway HTML must not appear in the application. */ }
-        throw new Error(message);
+        throw new HttpResponseError(response.status, message);
       }
       return await response.json() as T;
     };

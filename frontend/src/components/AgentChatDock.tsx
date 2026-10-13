@@ -36,6 +36,7 @@ import { AgentAnswerMarkdown } from "./AgentAnswerMarkdown";
 import { AgentChatProgress } from "./AgentChatProgress";
 import { createAgentAnswerBuffer } from "../utils/agentAnswerBuffer";
 import { taskStatusLabel } from "../utils/agentChatTransport";
+import { HttpResponseError } from "../utils/jsonRequest";
 import {
   createChatOperationLock,
   draftAfterChatSubmit,
@@ -56,6 +57,25 @@ interface ChatMessage {
 }
 
 const ACTIVE_CHAT_SESSION_STORAGE_KEY = "limituplab.activeChatSession";
+
+/** Keep HTTP diagnostics out of the conversation while retaining a useful recovery action. */
+function sessionErrorMessage(error: unknown, fallback: string): string {
+  if (error instanceof HttpResponseError) {
+    if (error.status === 404 || error.status === 405) {
+      return "会话服务暂不可用，请重新加载会话。";
+    }
+    if (error.status === 401 || error.status === 403) {
+      return "暂时无法访问这段会话，请重新加载会话。";
+    }
+    if (error.status === 429) {
+      return "会话请求较多，请稍后重试。";
+    }
+    if (error.status >= 500) {
+      return "会话服务暂时异常，请稍后重试。";
+    }
+  }
+  return `${fallback}，请稍后重试。`;
+}
 
 /**
  * Convert a persisted message and its metadata back into the chat UI representation.
@@ -241,7 +261,7 @@ export function AgentChatDock({
       }
     } catch (caught) {
       setSessionError({
-        message: caught instanceof Error ? caught.message : "会话加载失败",
+        message: sessionErrorMessage(caught, "会话加载失败"),
         retry: initializeChatSessions,
       });
     } finally {
@@ -279,7 +299,7 @@ export function AgentChatDock({
       setEditingSessionId(null);
     } catch (caught) {
       setSessionError({
-        message: caught instanceof Error ? caught.message : "会话恢复失败",
+        message: sessionErrorMessage(caught, "会话恢复失败"),
         retry: () => openChatSession(targetSessionId),
       });
     } finally {
@@ -305,7 +325,7 @@ export function AgentChatDock({
       setEditingSessionId(null);
     } catch (caught) {
       setSessionError({
-        message: caught instanceof Error ? caught.message : "新建会话失败",
+        message: sessionErrorMessage(caught, "新建会话失败"),
         retry: initializeChatSessions,
       });
     } finally {
@@ -329,7 +349,7 @@ export function AgentChatDock({
       )));
       setEditingSessionId(null);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "会话重命名失败");
+      setError(sessionErrorMessage(caught, "会话重命名失败"));
     }
   }
 
@@ -376,7 +396,7 @@ export function AgentChatDock({
       setEditingSessionId(null);
     } catch (caught) {
       setSessionError({
-        message: caught instanceof Error ? caught.message : "会话删除失败",
+        message: sessionErrorMessage(caught, "会话删除失败"),
         retry: initializeChatSessions,
       });
     } finally {
@@ -492,7 +512,7 @@ export function AgentChatDock({
         ? (response.task_status === "cancelled" ? "任务已取消，可重新提问。" : "本次研究未完成，可重新提问。")
         : null);
       void refreshChatSessions().catch(caught => setSessionError({
-        message: caught instanceof Error ? caught.message : "会话列表更新失败",
+        message: sessionErrorMessage(caught, "会话列表更新失败"),
         retry: initializeChatSessions,
       }));
     } catch (caught) {
@@ -674,12 +694,18 @@ export function AgentChatDock({
                 const retry = sessionError.retry;
                 setSessionError(null);
                 void retry().catch(caught => setSessionError({
-                  message: caught instanceof Error ? caught.message : "会话加载失败",
+                  message: sessionErrorMessage(caught, "会话加载失败"),
                   retry,
                 }));
               }} type="button">
                 <RefreshCcw aria-hidden="true" size={13} />重新加载会话
               </button>
+            </div>
+          ) : null}
+          {sessionId && messages.length === 0 && !sending && !sessionLoading && !sessionError && !error ? (
+            <div className="chat-state" role="status" aria-label="新会话提示">
+              <strong>开始一段研究对话</strong>
+              <p>可以输入问题，或选择下方示例问题。</p>
             </div>
           ) : null}
           {messages.map((item) => (
