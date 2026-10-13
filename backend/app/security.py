@@ -216,7 +216,8 @@ def _cookie_value(raw_cookie: str, name: str) -> str | None:
 def _should_issue_visitor_cookie(scope: dict[str, Any]) -> bool:
     """Limit identity initialization to requests that actually use ownership."""
 
-    return str(scope.get("path", "")).startswith(_VISITOR_COOKIE_PATH_PREFIX)
+    path = str(scope.get("path", ""))
+    return path.startswith(_VISITOR_COOKIE_PATH_PREFIX) or path == "/api/agents/review-overview/stream"
 
 
 def _request_uses_https(scope: dict[str, Any]) -> bool:

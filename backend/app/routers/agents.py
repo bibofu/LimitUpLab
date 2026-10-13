@@ -88,9 +88,11 @@ from app.services.system_health import build_agent_system_health
 from app.security import current_owner_id, require_admin_access
 
 from app.routers.react_chat import router as react_chat_router
+from app.routers.review_overview import router as review_overview_router
 
 router = APIRouter()
 router.include_router(react_chat_router)
+router.include_router(review_overview_router)
 ResponseModel = TypeVar("ResponseModel")
 STRUCTURED_CACHE_TTL_MINUTES = 10
 CHAT_SESSIONS_VERSION = "chat-sessions-v1"
