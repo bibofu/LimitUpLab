@@ -154,7 +154,7 @@ test("the homepage keeps its market slots and Agent without transient pool cards
   assert.ok(html.includes('aria-label="主导航"'));
   assert.ok(html.includes("Agent 会话可用"));
   assert.ok(html.includes("市场概览"));
-  assert.ok(html.includes("市场概览加载中"));
+  assert.ok(!html.includes("市场概览加载中"));
   assert.ok(html.includes('class="market-snapshot"'));
   assert.ok(html.includes('aria-label="涨停概览"'));
   assert.ok(html.includes('href="/stocks/first-board"'));
@@ -180,7 +180,8 @@ test("a saved market date remains visible but cannot become the Agent default be
     assert.ok(html.includes('dateTime="2026-10-08"'));
     assert.ok(html.includes(">20<"));
     assert.equal(agentDate, state.fromCache ? "" : "2026-10-08");
-    if (state.loading) assert.ok(html.includes("上次结果 · 更新中"));
+    assert.ok(!html.includes("更新中"));
+    assert.ok(!html.includes("待更新"));
   }
 });
 
@@ -191,8 +192,10 @@ test("the extracted premarket page preserves news and all URL-selected strategy 
     assert.ok(html.includes('aria-label="盘前策略"'));
     assert.equal(html.split('aria-selected="true"').length - 1, 1);
     assert.ok(html.includes(strategy === "relay"
-      ? "正在读取统一的盘前排名与证据"
+      ? "一进二接力"
       : `id="${strategy}-panel"`));
+    assert.ok(!html.includes("正在读取统一的盘前排名与证据"));
+    assert.ok(!html.includes("正在获取最新新闻"));
   }
 });
 
@@ -212,13 +215,26 @@ test("market error and recovery keep the same slots and expose a local retry", (
   assert.ok(loaded.includes('dateTime="2026-10-08"'));
   assert.ok(loaded.includes("指数暂不可用"));
   const refreshing = renderApp("/", [{ ...ready(summary), loading: true }, ...states]);
-  assert.ok(refreshing.includes("更新中 · "));
+  assert.ok(!refreshing.includes("更新中"));
   assert.ok(refreshing.includes('dateTime="2026-10-08"'));
   assert.ok(refreshing.includes(">20<"));
   const stale = renderApp("/", [{ ...ready(summary), error: "请求超时" }, ...states]);
   assert.ok(stale.includes("更新失败 · 保留数据 "));
   assert.ok(stale.includes('dateTime="2026-10-08"'));
   assert.ok(stale.includes('aria-label="重新加载市场概览"'));
+});
+
+test("ready, cached and refreshing market results render identically with their original date", () => {
+  const summary = { trade_date: "2026-10-08", indices: [{ symbol: "000001.SH", name: "上证指数", close: 1000, change_pct: 0 }],
+    max_board_height: 4, first_board_count: 20, continued_board_count: 5 };
+  const render = (loading: boolean, fromCache: boolean) => renderApp("/", [
+    { ...ready(summary), loading, fromCache }, ...Array(6).fill(pending),
+  ]);
+  const html = render(false, false);
+  assert.equal(render(true, true), html);
+  assert.equal(render(false, true), html);
+  assert.ok(html.includes('dateTime="2026-10-08"'));
+  assert.ok(html.includes("1000.00"));
 });
 
 test("the pool route still exposes each independently loaded local count", () => {
@@ -287,16 +303,17 @@ test("cached news remains readable with its source cutoff during background refr
     const html = renderToStaticMarkup(createElement(RecommendationNewsBoard));
     assert.ok(html.includes("已保存的市场快讯"));
     assert.ok(html.includes("测试资讯来源"));
-    assert.ok(html.includes("上次来源抓取：2026-10-12 18:30:00（上海时间）"));
-    assert.ok(html.includes("近24小时范围以该次抓取为准"));
+    assert.ok(html.includes("来源抓取：2026-10-12 18:30:00（上海时间）"));
+    assert.ok(html.includes("近 24 小时（以来源抓取为截止）"));
     assert.ok(!html.includes("正在获取最新新闻..."));
     if (failed) {
-      assert.ok(html.includes("更新失败，保留上次新闻快照"));
+      assert.ok(html.includes("新闻更新失败"));
       assert.ok(clickRetry);
       clickRetry();
       assert.equal(retries, 1);
     } else {
-      assert.ok(html.includes("上次结果 · 更新中"));
+      assert.ok(!html.includes("更新中"));
+      assert.ok(!html.includes("state-spinner"));
       assert.equal(clickRetry, undefined);
     }
   }
@@ -339,12 +356,13 @@ test("the real premarket page keeps cached candidates and their target date whil
     assert.ok(html.includes("固化时间：2026-10-13 09:25:00（上海时间）"));
     assert.ok(!html.includes("正在读取统一的盘前排名与证据"));
     if (failed) {
-      assert.ok(html.includes("候选快照更新失败，保留上次结果"));
+      assert.ok(html.includes("候选快照更新失败"));
       assert.ok(clickRetry);
       clickRetry();
       assert.equal(retries, 1);
     } else {
-      assert.ok(html.includes("显示上次候选快照，正在检查更新"));
+      assert.ok(!html.includes("正在检查更新"));
+      assert.ok(!html.includes("state-spinner"));
       assert.equal(clickRetry, undefined);
     }
   }

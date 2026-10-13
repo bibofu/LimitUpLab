@@ -17,26 +17,53 @@ import { Panel } from "./Panel";
  * gaps.
  */
 export function ConsolidationPanel({ strategy }: { strategy: ObservationStrategy }) {
-  const [pool, setPool] = useState<ConsolidationPool | null>(null);
+  const [pools, setPools] = useState(new Map<string, ConsolidationPool>());
   const isDrawdown = strategy === "drawdown";
   const [asOf, setAsOf] = useState("");
   const [revision, setRevision] = useState(0);
-  const [loading, setLoading] = useState(true);
-  const [error, setError] = useState<string | null>(null);
+  const queryKey = `${strategy}:${asOf}`;
+  const [request, setRequest] = useState<{ key: string; loading: boolean; error: string | null }>({
+    key: queryKey, loading: true, error: null,
+  });
+  // The render-time key guard also covers the render before the new effect starts.
+  const pool = pools.get(queryKey) ?? null;
+  const loading = request.key !== queryKey || request.loading;
+  const error = request.key === queryKey ? request.error : null;
+  const availableDates = [...new Set([
+    asOf,
+    ...[...pools.values()].filter(item => item.strategy === strategy).flatMap(item => item.available_dates),
+  ].filter(Boolean))].sort((left, right) => right.localeCompare(left));
   const displayStocks = pool ? observationDisplayStocks(pool) : [];
   const showingNearMatches = Boolean(
     pool && pool.candidates.length === 0 && displayStocks.length > 0,
   );
   useEffect(() => {
     let active = true;
-    setLoading(true);
-    setError(null);
+    setRequest({ key: queryKey, loading: true, error: null });
     void fetchConsolidationPool(asOf || undefined, strategy)
-      .then((response) => { if (active) setPool(response); })
-      .catch((caught: unknown) => { if (active) setError(caught instanceof Error ? caught.message : "观察池加载失败"); })
-      .finally(/* Release request state after either success or failure. */ () => { if (active) setLoading(false); });
+      .then((response) => {
+        if (!active) return;
+        const undatedDataGap = response.status === "data_missing" && response.data_as_of === null;
+        if (response.strategy !== strategy || (asOf && response.data_as_of !== asOf && !undatedDataGap)) {
+          throw new Error("返回的观察池与所选策略或日期不一致");
+        }
+        setPools(current => {
+          const next = new Map(current);
+          next.delete(queryKey);
+          next.set(queryKey, response);
+          if (next.size > 12) next.delete(next.keys().next().value!);
+          return next;
+        });
+        setRequest({ key: queryKey, loading: false, error: null });
+      })
+      .catch((caught: unknown) => {
+        if (active) setRequest({
+          key: queryKey, loading: false,
+          error: caught instanceof Error ? caught.message : "观察池暂不可用",
+        });
+      });
     return () => { active = false; };
-  }, [asOf, revision, strategy]);
+  }, [asOf, revision, strategy, queryKey]);
 
   return (
     <div role="tabpanel" id={`${strategy}-panel`} aria-label={isDrawdown ? "高位回撤" : "缩量整理"}>
@@ -51,13 +78,12 @@ export function ConsolidationPanel({ strategy }: { strategy: ObservationStrategy
             <label>截至交易日
               <select aria-label={`${isDrawdown ? "高位回撤" : "缩量整理"}截至交易日`} value={asOf} onChange={(event) => setAsOf(event.target.value)}>
                 <option value="">最新收盘</option>
-                {(pool?.available_dates ?? []).map((day) => <option value={day} key={day}>{day}</option>)}
+                {availableDates.map((day) => <option value={day} key={day}>{day}</option>)}
               </select>
             </label>
           </div>
-          {loading || (!error && pool && pool.strategy !== strategy) ? <p role="status">正在核对近期涨停与量价指标…</p>
-            : error ? <p role="alert" className="consolidation-warning">{error}，可点击刷新重试。</p>
-            : pool ? <>
+          {error ? <p role="alert" className="consolidation-warning">{error}，可点击刷新重试。</p> : null}
+          {pool ? <>
               <div className="consolidation-meta">
                 <span>数据截至 <strong>{pool.data_as_of ?? "暂无"}</strong></span>
                 <span>近期涨停池 {pool.pool_count} 只</span>
@@ -65,7 +91,8 @@ export function ConsolidationPanel({ strategy }: { strategy: ObservationStrategy
                 <span>符合 {pool.candidates.length} 只</span>
               </div>
               <p className="consolidation-note">
-                {pool.data_as_of !== pool.latest_data_date ? "正在查看历史日期重算结果。" : "基于最新本地收盘数据重算，供下一交易日盘前观察。"}
+                {pool.data_as_of === null ? "当前缺少可核验的收盘数据。"
+                  : pool.data_as_of !== pool.latest_data_date ? "正在查看历史日期重算结果。" : "基于最新本地收盘数据重算，供下一交易日盘前观察。"}
                 首次确认按历史行情推算；“持续观察”不计作新的首次信号。当前为研究版观察池。
               </p>
               <details className="consolidation-rules" open>
@@ -114,7 +141,7 @@ export function ConsolidationPanel({ strategy }: { strategy: ObservationStrategy
                 </div></>}
               {Object.keys(pool.exclusions).length > 0 && <details className="consolidation-rules"><summary>未入选及数据不足原因</summary><ul>{Object.entries(pool.exclusions).map(([reason, count]) => <li key={reason}>{consolidationReason(reason)}：{count} 只</li>)}</ul><p>每只股票只记录首个未通过条件。</p></details>}
               <details className="consolidation-rules"><summary>研究口径与限制</summary><ul>{pool.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul><p>规则版本 {pool.strategy_version} · 计算时间 {new Date(pool.generated_at).toLocaleString("zh-CN")}</p></details>
-            </> : null}
+            </> : <div aria-hidden="true" style={{ minHeight: 180 }} />}
         </div>
       </Panel>
     </div>

@@ -1,4 +1,4 @@
-import { BarChart3, Layers3, LineChart, LoaderCircle, MapPin, ShieldAlert, TrendingDown } from "lucide-react";
+import { BarChart3, Layers3, LineChart, MapPin, ShieldAlert, TrendingDown } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
@@ -39,9 +39,7 @@ function PremarketStrategyWorkspace() {
   };
   const {
     intelligence,
-    loading: intelligenceLoading,
     error: intelligenceError,
-    fromCache,
     reload,
   } = useRecommendationIntelligence();
   const [snapshotNow, setSnapshotNow] = useState(() => new Date());
@@ -95,35 +93,22 @@ function PremarketStrategyWorkspace() {
           <TrendingDown size={16} />高位回撤
         </button>
       </div>
-      {mode === "relay" && intelligence && fromCache && intelligenceLoading ? (
-        <div className="resource-notice" role="status">显示上次候选快照，正在检查更新；候选所属日期和固化状态以下方标注为准。</div>
-      ) : null}
       {mode === "relay" && intelligenceError ? (
-        <div className="resource-notice" role="status">
-          <span>{intelligence ? "候选快照更新失败，保留上次结果。" : "候选快照暂不可用。"}</span>
+        <div className="resource-refresh-status" role="status" title={intelligenceError}>
+          <span>{intelligence ? "候选快照更新失败" : "候选快照暂不可用"}</span>
           <button type="button" onClick={() => void reload()}>重新加载候选</button>
         </div>
       ) : null}
-      {mode !== "relay" ? <ConsolidationPanel strategy={mode} /> : intelligenceLoading && !intelligence ? (
-        <PremarketRankingStatePanel
-          message="正在读取统一的盘前排名与证据"
-          state="loading"
-        />
-      ) : !intelligence || !snapshot ? (
-        <PremarketRankingStatePanel
-          message={intelligenceError ?? "盘前动态榜暂不可用"}
-          state="error"
-        />
+      {mode !== "relay" ? <ConsolidationPanel strategy={mode} /> : !intelligence || !snapshot ? (
+        <PremarketRankingPlaceholder />
       ) : draftCandidates.length > 0 ? (
         <RecommendationDraftPanel
           candidates={draftCandidates}
           snapshot={snapshot}
-          refreshError={intelligenceError}
         />
       ) : (
         <PremarketEmptySnapshotPanel
           snapshot={snapshot}
-          refreshError={intelligenceError}
         />
       )}
     </section>
@@ -132,27 +117,15 @@ function PremarketStrategyWorkspace() {
 
 
 /**
- * Explain the current ranking's data/publication state before presenting candidate rows.
+ * Reserve the first result area without presenting an unknown result as an empty snapshot.
  */
-function PremarketRankingStatePanel({
-  message,
-  state,
-}: {
-  message: string;
-  state: "loading" | "error" | "empty";
-}) {
-  const icon = state === "error"
-    ? <ShieldAlert size={20} />
-    : <LoaderCircle className={state === "loading" ? "spin" : undefined} size={20} />;
+function PremarketRankingPlaceholder() {
   return (
     <Panel
       title="一进二接力"
       icon={<BarChart3 size={18} />}
     >
-      <div className={`discovery-state${state === "error" ? " discovery-state-error" : ""}`}>
-        {icon}
-        <span>{message}</span>
-      </div>
+      <div className="discovery-state" aria-hidden="true">—</div>
     </Panel>
   );
 }
@@ -163,10 +136,8 @@ function PremarketRankingStatePanel({
  */
 function PremarketEmptySnapshotPanel({
   snapshot,
-  refreshError,
 }: {
   snapshot: ReturnType<typeof recommendationSnapshotView>;
-  refreshError: string | null;
 }) {
   return (
     <Panel
@@ -175,7 +146,7 @@ function PremarketEmptySnapshotPanel({
     >
       <div className="rating-summary-panel recommendation-draft-panel">
         <strong>{snapshot.title} · {snapshot.targetLabel}</strong>
-        <RecommendationSnapshotDetails snapshot={snapshot} refreshError={refreshError} />
+        <RecommendationSnapshotDetails snapshot={snapshot} />
         <p className="discovery-disclaimer">该快照没有可展示的盘前候选。</p>
       </div>
     </Panel>
@@ -185,10 +156,8 @@ function PremarketEmptySnapshotPanel({
 
 function RecommendationSnapshotDetails({
   snapshot,
-  refreshError,
 }: {
   snapshot: ReturnType<typeof recommendationSnapshotView>;
-  refreshError: string | null;
 }) {
   return (
     <div className="recommendation-snapshot-details">
@@ -201,9 +170,6 @@ function RecommendationSnapshotDetails({
         <div className="recommendation-snapshot-notice" role="status">
           {snapshot.notices.map((notice) => <p key={notice}>{notice}</p>)}
         </div>
-      ) : null}
-      {refreshError ? (
-        <p className="recommendation-snapshot-notice" role="alert">刷新失败，保留上次快照：{refreshError}</p>
       ) : null}
       {snapshot.warnings.length > 0 ? (
         <details className="recommendation-snapshot-warnings" open>
@@ -223,11 +189,9 @@ function RecommendationSnapshotDetails({
 function RecommendationDraftPanel({
   candidates,
   snapshot,
-  refreshError,
 }: {
   candidates: RecommendationIntelligenceItem[];
   snapshot: ReturnType<typeof recommendationSnapshotView>;
-  refreshError: string | null;
 }) {
   return (
     <Panel
@@ -244,7 +208,7 @@ function RecommendationDraftPanel({
             <span>基于收盘综合分与盘后新增信息的研究排序</span>
           </div>
         </div>
-        <RecommendationSnapshotDetails snapshot={snapshot} refreshError={refreshError} />
+        <RecommendationSnapshotDetails snapshot={snapshot} />
         <div className="rating-top-list">
           {candidates.map((candidate) => {
             return (

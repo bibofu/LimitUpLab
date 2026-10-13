@@ -293,10 +293,8 @@ export function App() {
  */
 function MarketSnapshot({ resource }: { resource: LoadedResource<MarketSummary> & { fromCache?: boolean } }) {
   const { data: summary, loading, error, reload } = resource;
-  const status = loading ? (summary ? (resource.fromCache ? "上次结果 · 更新中 · " : "更新中 · ") : "市场概览加载中")
-    : error ? (summary ? "更新失败 · 保留数据 " : "市场概览暂不可用")
-      : resource.fromCache ? "上次结果 · 待更新 · "
-        : summary?.indices.length === 0 ? "指数暂不可用 · " : null;
+  const status = error && !loading ? (summary ? "更新失败 · 保留数据 " : "市场概览暂不可用")
+    : summary?.indices.length === 0 ? "指数暂不可用 · " : null;
   // Keep the same slots through loading, retries and missing upstream index data.
   const indices = summary?.indices.length ? summary.indices : [
     { symbol: "000001.SH", name: "上证指数", close: null, change_pct: null },
@@ -304,7 +302,7 @@ function MarketSnapshot({ resource }: { resource: LoadedResource<MarketSummary> 
     { symbol: "399006.SZ", name: "创业板指", close: null, change_pct: null },
   ];
   return (
-    <section aria-label="市场概览" aria-busy={loading} className="market-snapshot">
+    <section aria-label="市场概览" aria-busy={loading && !summary} className="market-snapshot">
       <div className="market-snapshot-indices">
         <div className="market-snapshot-date" role="status">
           {status ? <span title={error ?? undefined}>{status}</span> : null}

@@ -1,4 +1,4 @@
-import { ChevronLeft, ChevronRight, ExternalLink, LoaderCircle, Newspaper } from "lucide-react";
+import { ChevronLeft, ChevronRight, ExternalLink, Newspaper } from "lucide-react";
 import { useEffect, useMemo, useState } from "react";
 
 import { useFinanceNews } from "../hooks/useFinanceNews";
@@ -24,7 +24,7 @@ export function RecommendationNewsBoard() {
   /** Paginate the factual 24-hour market feed without involving the LLM. */
 
   const [page, setPage] = useState(1);
-  const { news, loading, error, fromCache, reload } = useFinanceNews(page);
+  const { news, loading, error, reload } = useFinanceNews(page);
 
   useEffect(() => {
     if (news && !loading && news.page !== page) setPage(news.page);
@@ -45,33 +45,27 @@ export function RecommendationNewsBoard() {
             <strong>实时新闻</strong>
             <small>
               {news
-                ? `近 24 小时 · ${news.sources.join(" · ")} · 共 ${news.total} 条`
-                : "近 24 小时 · 5 分钟自动更新"}
+                ? `近 24 小时（以来源抓取为截止） · ${news.sources.join(" · ")} · 共 ${news.total} 条`
+                : "近 24 小时（以来源抓取为截止）"}
             </small>
           </span>
         </div>
-        <span className="recommendation-news-refresh" role="status">
-          {fromCache ? (loading ? "上次结果 · 更新中" : "上次结果") : "5 分钟自动更新"}
+        <span className="recommendation-news-refresh">
+          来源抓取：{news ? formatSnapshotTime(news.fetched_at) : "—"}
         </span>
       </header>
-      {loading && !news ? (
-        <div className="recommendation-news-state">
-          <LoaderCircle className="state-spinner" size={18} />
-          正在获取最新新闻...
-        </div>
+      {!news && !error ? (
+        <div className="recommendation-news-state" aria-hidden="true">—</div>
       ) : null}
       {error ? (
-        <div className="recommendation-news-state" role="status">
-          {news ? "更新失败，保留上次新闻快照。" : "财经快讯暂时没有加载成功。"}
+        <div className="resource-refresh-status" role="status" title={error}>
+          {news ? "新闻更新失败" : "新闻暂不可用"}
           <button type="button" onClick={() => void reload()}>重新加载新闻</button>
         </div>
       ) : null}
-      {fromCache && news ? (
-        <div className="recommendation-news-state">上次来源抓取：{formatSnapshotTime(news.fetched_at)}；近24小时范围以该次抓取为准。</div>
-      ) : null}
-      {!loading && !error && visibleNews.length === 0 ? (
+      {news && visibleNews.length === 0 ? (
         <div className="recommendation-news-state">
-          近 24 小时没有获取到市场快讯。
+          该次抓取的近 24 小时范围内没有市场快讯。
         </div>
       ) : null}
       {visibleNews.length > 0 ? (
