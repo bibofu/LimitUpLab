@@ -34,9 +34,9 @@ export function ReviewSummary({ report, summaryStatus, error, onRegenerate }: Re
     : summaryStatus === "idle" && digest ? "本地事实已就绪，可生成本期画像解读。"
       : failed ? "本次解读未完成，已核对的事实仍可查看。" : null;
 
-  return <section className="review-summary digest-summary" aria-label="复盘总结" aria-busy={generating}>
+  return <section className="review-summary digest-summary" aria-label="候选与高标画像" aria-busy={generating}>
     <div className="review-summary-heading">
-      <div><strong>复盘总结</strong><span>{digest ? statusText : "新报告待刷新"}{digest && summaryStatus === "ready" && report.llm_model ? ` · ${report.llm_model}` : ""}</span></div>
+      <div><strong>候选与高标画像</strong><span>{digest ? statusText : "新报告待刷新"}{digest && summaryStatus === "ready" && report.llm_model ? ` · ${report.llm_model}` : ""}</span></div>
       <button type="button" disabled={generating} onClick={onRegenerate}>
         {generating ? <LoaderCircle size={14} className="state-spinner" /> : <RefreshCcw size={14} />}{buttonText}
       </button>
@@ -44,9 +44,10 @@ export function ReviewSummary({ report, summaryStatus, error, onRegenerate }: Re
     {notice ? <p className={failed ? "review-agent-error" : undefined} role={failed ? "alert" : "status"}>{notice}</p> : null}
     {failed && failureReason ? <details className="review-summary-reason"><summary>查看原因</summary><p>{failureReason}</p></details> : null}
     {digest ? <ReviewDigestContent digest={digest} summarySource={summarySource} />
-      : <p>新报告待刷新：请刷新全部数据，或重新生成解读，获取当前窗口的四段复盘。</p>}
+      : <p>新报告待刷新：请刷新全部数据，或重新生成解读，获取当前窗口的三组画像。</p>}
     <details className="review-summary-scope">
       <summary>样本口径与数据说明</summary>
+      {digest ? <p>候选 {digest.overview.candidate_count} 个；优秀 {digest.overview.excellent_count} 个，较差 {digest.overview.weak_count} 个，普通 {digest.overview.ordinary_count} 个，缺失或未观察 {digest.overview.unobserved_count} 个。</p> : null}
       <p>本摘要的优秀候选上涨 ≥9.8%，较差候选下跌超过 5%；普通组与无法观察的样本分别保留。
         累计涨跌从首板收盘计算至截至日，观察天数可能不同；这是历史描述，不是未来概率或因果结论。</p>
       {digest?.notes.length ? <ul>{digest.notes.map((note, index) => <li key={index}>{note}</li>)}</ul> : null}

@@ -30,6 +30,7 @@ import {
 import { displayRelayPositionLabel } from "../relayRanking";
 import { Panel } from "./Panel";
 import { ReviewSummary } from "./ReviewSummary";
+import { ReviewOverview } from "./ReviewOverview";
 
 interface ReviewDashboardProps {
   dailyBoardPromotion: DailyBoardPromotionReport | null;
@@ -47,10 +48,11 @@ export function ReviewDashboard({
 }: ReviewDashboardProps) {
   return (
     <>
-      {latestTradeDate ? <HighScoreReviewPanel key={latestTradeDate} latestTradeDate={latestTradeDate} />
+      {latestTradeDate ? <ReviewOverview key={`overview-${latestTradeDate}`} endDate={latestTradeDate} /> : null}
+      {latestTradeDate ? <HighScoreReviewPanel key={`tracking-${latestTradeDate}`} latestTradeDate={latestTradeDate} />
         : <div className="resource-notice" role="status">复盘日期尚未确认，请刷新本地事件数据。</div>}
       {dailyBoardPromotion ? <DailyBoardPromotionPanel report={dailyBoardPromotion} /> : promotionState}
-      {latestTradeDate ? <DragonTigerReviewPanel key={latestTradeDate} tradeDate={latestTradeDate} /> : null}
+      {latestTradeDate ? <DragonTigerReviewPanel key={`dragon-tiger-${latestTradeDate}`} tradeDate={latestTradeDate} /> : null}
     </>
   );
 }

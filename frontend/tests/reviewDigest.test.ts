@@ -32,14 +32,15 @@ const openingDistribution = (patch: Partial<DigestDistribution> = {}): DigestDis
   })), ...patch,
 });
 
-test("digest preserves the authoritative headline, four-part order and separate five-day windows", () => {
+test("portraits omit the replaced overview and preserve three groups with separate five-day windows", () => {
   const digest = reviewDigest();
   const html = render(digest);
-  assert.ok(html.includes(digest.overview.headline));
-  const positions = ["整体表现", "优秀候选", "较差候选", "市场三板及以上"].map(label => html.indexOf(`aria-label="${label}"`));
+  assert.ok(!html.includes(digest.overview.headline));
+  assert.ok(!html.includes('aria-label="整体表现"'));
+  const positions = ["优秀候选", "较差候选", "市场三板及以上"].map(label => html.indexOf(`aria-label="${label}"`));
   assert.ok(positions.every(position => position >= 0));
   assert.deepEqual([...positions].sort((left, right) => left - right), positions);
-  for (const text of ["候选 <b>50", "优秀 <b>10", "较差 <b>10", "普通 <b>26", "缺失 / 未观察 <b>4", "上涨 ≥9.8%", "下跌超过 5%", "2026-09-25 — 2026-10-08", "2026-09-28 — 2026-10-09", "含截至日近 5 个交易日"]) assert.ok(html.includes(text), text);
+  for (const text of ["上涨 ≥9.8%", "下跌超过 5%", "2026-09-25 — 2026-10-08", "2026-09-28 — 2026-10-09", "含截至日近 5 个交易日"]) assert.ok(html.includes(text), text);
   assert.ok(html.includes('digest-portrait digest-excellent'));
   assert.ok(html.includes('digest-portrait digest-weak'));
 });

@@ -325,7 +325,8 @@ test("ready summary renders the new digest and never revives old findings", () =
   const html = renderSummary(report({
     generation_mode: "llm", llm_model: "mock-model", review_digest: reviewDigest(),
   }));
-  for (const value of ["LLM 解读 · mock-model", "AI解读", "重新生成", "整体表现", "优秀候选", "较差候选", "市场三板及以上", "42.0 亿元", "09:45"]) assert.ok(html.includes(value), value);
+  for (const value of ["LLM 解读 · mock-model", "AI解读", "重新生成", "候选与高标画像", "优秀候选", "较差候选", "市场三板及以上", "42.0 亿元", "09:45"]) assert.ok(html.includes(value), value);
+  assert.ok(!html.includes("整体表现"));
   for (const value of ["样本中晋级较集中", "成功特征", "失败特征", "高分样本有偏差", "扩大样本后验证"]) assert.ok(!html.includes(value));
   assert.ok(html.includes('<details class="review-summary-scope"><summary>样本口径与数据说明</summary>'));
   assert.ok(html.includes("不是未来概率或因果结论"));
@@ -395,7 +396,7 @@ test("collapsed scope preserves checked forward eligibility counts without inven
 
 test("post bars retain actual trading-day gaps and only legacy bars fall back to array order", () => {
   const dashboard = compile("../src/components/ReviewDashboard.tsx", {
-    "../api": {}, "./ReviewSummary": summary, "../hooks/useReviewReport": {}, "./Panel": {},
+    "../api": {}, "./ReviewSummary": summary, "./ReviewOverview": {}, "../hooks/useReviewReport": {}, "./Panel": {},
   }, "\nexport { ReviewPostBars };");
   const bar = { trade_date: day, open: 10, high: 10, low: 10, close: 10, change_pct: 0, return_from_base_pct: 0 };
   const html = renderToStaticMarkup(createElement(dashboard.ReviewPostBars, {
@@ -417,12 +418,12 @@ test("post bars retain actual trading-day gaps and only legacy bars fall back to
 test("the actual review panel retains deterministic statistics and tracking while the model is pending or failed", () => {
   for (const [generating, summaryError] of [[true, null], [false, "模型超时"]] as const) {
     const dashboard = compile("../src/components/ReviewDashboard.tsx", {
-      "../api": {}, "./ReviewSummary": summary,
+      "../api": {}, "./ReviewSummary": summary, "./ReviewOverview": {},
       "../hooks/useReviewReport": { useReviewReport: () => ({ report: report({ sample_size: 60, review_digest: reviewDigest() }), loading: false, error: null, generating, summaryStatus: generating ? "generating" : "error", summaryError, retry() {}, regenerate() {} }) },
       "./Panel": { Panel: ({ children }: any) => createElement("section", null, children) },
     }, "\nexport { HighScoreReviewPanel };");
     const html = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(dashboard.HighScoreReviewPanel, { latestTradeDate: day })));
-    for (const value of ["Top10 1进2", "同期全部首板", "daily-top-review", "复盘总结", "42.0 亿元", "五日追踪样本", "复盘候选共 50 只", "完整追踪报告（60 条）"]) assert.ok(html.includes(value), value);
+    for (const value of ["Top10 1进2", "同期全部首板", "daily-top-review", "候选与高标画像", "42.0 亿元", "五日追踪样本", "复盘候选共 50 只", "完整追踪报告（60 条）"]) assert.ok(html.includes(value), value);
     assert.ok(html.includes(generating ? "生成中" : "模型超时"));
   }
 });

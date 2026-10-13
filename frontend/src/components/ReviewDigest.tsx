@@ -9,26 +9,10 @@ const openingBucket = (count: number | null, total: number | null, share: number
   ? "待核验" : `${count}/${total}${share === null ? "" : ` · ${percent(share)}`}`;
 
 export function ReviewDigestContent({ digest, summarySource }: { digest: ReviewDigest; summarySource: string }) {
-  const overview = digest.overview;
   return <div className="review-digest">
-    <section className="digest-overview" aria-label="整体表现">
-      <h3><span>01</span> 整体表现 <small>截至 {digest.as_of_date}</small></h3>
-      <p className="digest-headline">{overview.headline}</p>
-      <div className="digest-counts" aria-label="候选分组数量">
-        <span>候选 <b>{overview.candidate_count}</b></span>
-        <span className="digest-up">优秀 <b>{overview.excellent_count}</b></span>
-        <span className="digest-down">较差 <b>{overview.weak_count}</b></span>
-        <span>普通 <b>{overview.ordinary_count}</b></span>
-        <span>缺失 / 未观察 <b>{overview.unobserved_count}</b></span>
-      </div>
-      <details className="digest-overview-evidence"><summary>核对整体晋级数据</summary>
-        <p>候选 {overview.candidate_promoted}/{overview.candidate_promotion_total} · {percent(overview.candidate_promotion_rate)}；全市场 {overview.market_promoted}/{overview.market_promotion_total} · {percent(overview.market_promotion_rate)}。</p>
-        <p>可比 {overview.comparable_days} 日，其中领先 {overview.outperform_days} 日；最佳日期：{overview.best_date ?? "暂无可比日期"}。</p>
-      </details>
-    </section>
-    <DigestPortrait group={digest.excellent} number="02" title="优秀候选" threshold="上涨 ≥9.8%" dates={digest.candidate_dates} summarySource={summarySource} />
-    <DigestPortrait group={digest.weak} number="03" title="较差候选" threshold="下跌超过 5%" dates={digest.candidate_dates} summarySource={summarySource} />
-    <DigestPortrait group={digest.leaders} number="04" title="市场三板及以上" threshold="首板 + 二板画像" dates={digest.market_dates} summarySource={summarySource} />
+    <DigestPortrait group={digest.excellent} number="01" title="优秀候选" threshold="上涨 ≥9.8%" dates={digest.candidate_dates} summarySource={summarySource} />
+    <DigestPortrait group={digest.weak} number="02" title="较差候选" threshold="下跌超过 5%" dates={digest.candidate_dates} summarySource={summarySource} />
+    <DigestPortrait group={digest.leaders} number="03" title="市场三板及以上" threshold="首板 + 二板画像" dates={digest.market_dates} summarySource={summarySource} />
   </div>;
 }
 

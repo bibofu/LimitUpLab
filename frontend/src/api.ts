@@ -1,4 +1,5 @@
 import { streamChat } from "./utils/agentChatTransport";
+import { streamReviewOverview, type ReviewOverviewEvent } from "./utils/reviewOverviewStream";
 import { loadChatBootstrap } from "./utils/chatBootstrap";
 import { DASHBOARD_TIMEOUT_MS, GET_TIMEOUT_MS, requestJson } from "./utils/jsonRequest";
 import type { ConsolidationPool } from "./consolidation";
@@ -254,6 +255,10 @@ export function fetchFinanceNews(page = 1, pageSize = 10) {
  * Fetch review agent report from the backend using the supplied query scope; return the typed
  * response promise.
  */
+export function streamReviewOverviewSummary(endDate: string, onEvent: (event: ReviewOverviewEvent) => void, signal: AbortSignal) {
+  return streamReviewOverview(API_BASE_URL, endDate, onEvent, signal);
+}
+
 export function fetchReviewAgentReport(params?: {
   start_date?: string;
   end_date?: string;

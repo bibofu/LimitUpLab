@@ -35,7 +35,7 @@ const reviewSummary = compile("../src/components/ReviewSummary.tsx", { "./Review
 const reviewReport = compile("../src/hooks/useReviewReport.ts", { "../api": {} });
 const review = compile("../src/components/ReviewDashboard.tsx", {
   "../api": {}, "./Panel": panel,
-  "./ReviewSummary": reviewSummary, "../hooks/useReviewReport": reviewReport,
+  "./ReviewSummary": reviewSummary, "./ReviewOverview": { ReviewOverview: () => null }, "../hooks/useReviewReport": reviewReport,
 });
 const stockResearch = compile("../src/components/StockResearchPanels.tsx", { "./Panel": panel });
 const recommendationNews = compile("../src/components/RecommendationNewsBoard.tsx", {
