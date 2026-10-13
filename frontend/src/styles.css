@@ -989,12 +989,12 @@ td span {
 
 .agent-chat-input textarea {
   min-width: 0;
-  min-height: 64px;
-  max-height: 200px;
-  resize: vertical;
-  padding: 10px 12px;
+  min-height: 42px;
+  max-height: 160px;
+  resize: none;
+  padding: 10px 14px;
   border: 1px solid #d0d5dd;
-  border-radius: 8px;
+  border-radius: 21px;
   color: #202938;
   font: inherit;
   line-height: 1.5;
@@ -1004,12 +1004,6 @@ td span {
   border-color: #dc5656;
   outline: none;
   box-shadow: 0 0 0 3px rgb(240 68 56 / 12%);
-}
-
-.chat-input-help {
-  grid-column: 1 / -1;
-  color: #667489;
-  font-size: 11px;
 }
 
 .agent-chat-prompts {

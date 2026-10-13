@@ -109,6 +109,24 @@ function mount(t: TestContext, overrides: Record<string, any> = {}, savedSession
   };
 }
 
+test("the compact composer grows with the draft and shrinks after clearing without a help row", async t => {
+  const app = mount(t);
+  await app.settle();
+  assert.equal(app.input().rows, 1);
+  assert.equal(app.input()["aria-describedby"], undefined);
+  assert.equal(app.has(node => node.props.className === "chat-input-help"), false);
+  const input = { style: { height: "" }, scrollHeight: 88 };
+  app.input().ref.current = input;
+  app.type("第一行\n第二行\n第三行");
+  assert.equal(input.style.height, "90px");
+  input.scrollHeight = 240;
+  app.type("更长的多行草稿");
+  assert.equal(input.style.height, "160px");
+  input.scrollHeight = 40;
+  app.type("");
+  assert.equal(input.style.height, "42px");
+});
+
 test("reload restores verified history with one bootstrap call and no list/detail waterfall", async t => {
   const pending = deferred<any>();
   const calls: string[] = [];

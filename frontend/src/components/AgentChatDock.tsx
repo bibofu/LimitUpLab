@@ -206,6 +206,13 @@ export function AgentChatDock({
   useEffect(() => () => answerBufferRef.current?.dispose(), []);
 
   useEffect(() => {
+    const input = inputRef.current;
+    if (!input) return;
+    input.style.height = "auto";
+    input.style.height = `${Math.min(input.scrollHeight + 2, 160)}px`;
+  }, [message]);
+
+  useEffect(() => {
     const container = messagesContainerRef.current;
     if (!container || !followAnswerRef.current) {
       return;
@@ -776,9 +783,8 @@ export function AgentChatDock({
         >
           <textarea
             aria-label="研究问题"
-            aria-describedby="agent-chat-input-help"
             ref={inputRef}
-            rows={2}
+            rows={1}
             disabled={sessionLoading || !sessionId}
             value={message}
             onChange={(event) => {
@@ -810,9 +816,6 @@ export function AgentChatDock({
               <Send size={17} />
             </button>
           )}
-          <small className="chat-input-help" id="agent-chat-input-help">
-            Enter 发送 · Shift+Enter 换行{sending ? " · 可先编辑下一条问题" : ""}
-          </small>
         </form>
       </section>
       </div>
