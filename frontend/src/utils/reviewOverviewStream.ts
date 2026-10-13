@@ -6,7 +6,7 @@ export interface ReviewOverviewResult {
 
 export type ReviewOverviewEvent =
   | { event: "delta"; data: { text: string } }
-  | { event: "progress" | "checking"; data: { message: string } };
+  | { event: "progress" | "checking" | "reset"; data: { message: string } };
 
 /** Decode real SSE chunks, including split UTF-8 and CRLF; never retry a paid request. */
 export async function streamReviewOverview(
@@ -44,7 +44,8 @@ export async function streamReviewOverview(
       draftSize += data.text.length;
       if (draftSize > 1800) throw new Error("总结内容异常，请重试。");
       onEvent({ event, data });
-    } else if ((event === "progress" || event === "checking") && typeof data.message === "string") {
+    } else if ((event === "progress" || event === "checking" || event === "reset") && typeof data.message === "string") {
+      if (event === "reset") draftSize = 0;
       onEvent({ event, data });
     }
   }

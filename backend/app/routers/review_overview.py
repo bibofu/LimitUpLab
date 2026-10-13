@@ -12,7 +12,7 @@ from fastapi.responses import StreamingResponse
 from pydantic import BaseModel, ConfigDict
 
 from app.agents.review_agent import build_review_agent_report
-from app.agents.review_overview import build_overview_facts, generate_overview
+from app.agents.review_overview import OverviewValidationError, build_overview_facts, generate_overview
 from app.repositories import SQLiteFirstBoardRepository, get_limit_up_repository
 from app.security import current_owner_id
 from app.services.llm_provider import DisabledLLMProvider, capture_llm_usage, get_llm_provider
@@ -70,7 +70,7 @@ def stream_review_overview(
                 facts["notes"].extend(calendar.warnings)
                 generate_overview(facts=facts, provider=provider, emit=emit, stopped=stopped.is_set)
         except Exception as error:
-            failure = RuntimeError(type(error).__name__)
+            failure = RuntimeError(str(error) if isinstance(error, OverviewValidationError) else type(error).__name__)
             queue.put(("error", {"message": "本次总结未完成或未通过核验，请重新生成。"}))
         finally:
             try:

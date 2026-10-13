@@ -52,6 +52,19 @@ test("disconnect, server rejection and wrong-date completion fail without an aut
   }
 });
 
+test("an SSE length rewrite clears the old draft and streams only its replacement", async () => {
+  const resource = createReviewOverviewResource((endDate, emit, signal) => streamReviewOverview("", endDate, emit, signal,
+    async () => response(frame("delta", { text: "超出篇幅的旧稿" }) + frame("reset", { message: "正在调整篇幅" })
+      + frame("delta", { text: "精简后正文" }) + frame("completed", result))));
+  const texts: string[] = [];
+  resource.subscribe(() => texts.push(resource.getState().text));
+  await resource.generate(date);
+  assert.ok(texts.includes("超出篇幅的旧稿"));
+  assert.ok(texts.includes("精简后正文"));
+  assert.ok(!texts.includes("超出篇幅的旧稿精简后正文"));
+  assert.equal(resource.getState().text, result.text);
+});
+
 test("resource starts only on demand, streams once, then permits a fresh generation", async () => {
   const pending = deferred<typeof result>();
   let calls = 0;

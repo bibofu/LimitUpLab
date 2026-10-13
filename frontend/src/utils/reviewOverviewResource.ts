@@ -38,6 +38,7 @@ export function createReviewOverviewResource(stream: Stream) {
         const result = await stream(endDate, event => {
           if (ownRevision !== revision) return;
           if (event.event === "delta") publish({ text: state.text + event.data.text });
+          if (event.event === "reset") publish({ status: "generating", text: "" });
           if (event.event === "checking") publish({ status: "checking" });
         }, controller.signal);
         if (ownRevision !== revision) return;
