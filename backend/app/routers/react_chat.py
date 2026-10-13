@@ -47,7 +47,7 @@ def start(request, http_request, owner_id):
     journal = Journal()
     with _lock:
         try:
-            row, _ = journal.create(request, owner_id)
+            row, fresh = journal.create(request, owner_id)
         except RunConflict as error:
             raise HTTPException(409, str(error)) from error
         except KeyError as error:
@@ -64,10 +64,11 @@ def start(request, http_request, owner_id):
                 run_id=run_id, started_at=datetime.now(timezone.utc),
             )
         except Exception:
-            journal.finish(run_id, owner_id, AgentChatResponse(
-                session_id=request.session_id, run_id=run_id, intent="react_research", answer="请求未能启动，请稍后重试。",
-                task_status="error", stop_reason="request_rejected", generated_by=VERSION,
-            ).model_dump(mode="json"))
+            # Admission failures are retryable, not completed chat answers. Keep
+            # an existing checkpoint intact, and release a brand-new reservation
+            # so it cannot strand the conversation behind an unknown active run.
+            if fresh:
+                journal.discard_unstarted(run_id, owner_id)
             raise
         try:
             chats.append_message(ChatSessionMessage(
@@ -76,13 +77,14 @@ def start(request, http_request, owner_id):
             ), owner_id=owner_id)
         except Exception as error:
             try:
-                journal.finish(run_id, owner_id, failed_response(row, "message_persistence_failed").model_dump(mode="json"))
+                if fresh:
+                    journal.discard_unstarted(run_id, owner_id)
             finally:
                 try:
                     agents._finish_agent_request(usage_repository, usage_record, None, error=error)
                 finally:
                     lease.release()
-            raise
+            raise HTTPException(503, "消息暂未能保存，请重试原请求。") from error
         history = [m for m in session.messages if m.created_at < started_at]
 
         def worker():
@@ -140,9 +142,18 @@ def start(request, http_request, owner_id):
                         with _lock:
                             _workers.pop(run_id, None)
                         notify_streams()
-        thread = threading.Thread(target=worker, daemon=True, name="react-" + run_id)
-        _workers[run_id] = thread
-        thread.start()
+        try:
+            thread = threading.Thread(target=worker, daemon=True, name="react-" + run_id)
+            _workers[run_id] = thread
+            thread.start()
+        except Exception as error:
+            _workers.pop(run_id, None)
+            try:
+                agents._finish_agent_request(usage_repository, usage_record, None, error=error)
+            finally:
+                lease.release()
+                notify_streams()
+            raise HTTPException(503, "任务暂未能启动，请重试原请求以恢复。") from error
     return journal, row
 
 

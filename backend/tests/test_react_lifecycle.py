@@ -83,6 +83,38 @@ def test_finalization_atomic_immutable_and_task_status_distinct(journal):
     assert not journal.get(key, "owner")["active"]
 
 
+@pytest.mark.parametrize("protected", ["owner", "checkpoint", "event", "call", "message", "finished"])
+def test_discard_unstarted_preserves_owned_or_recoverable_work(journal, protected):
+    row, _ = journal.create(request(), "owner")
+    key = row["run_id"]
+    if protected == "checkpoint":
+        journal.checkpoint(key, "owner", {"state": "saved"})
+    elif protected == "event":
+        journal.event(key, "progress", {"message": "query"})
+    elif protected == "call":
+        journal.begin_call(key, {"id": "c", "name": "test", "args": {}})
+    elif protected == "message":
+        from app.models import ChatSessionMessage
+        SQLiteChatSessionRepository(journal.database_path).append_message(
+            ChatSessionMessage(message_id="user_" + key, session_id="s", role="user", content="研究事实",
+                               run_id=key, created_at=row["started_at"]),
+            owner_id="owner",
+        )
+    elif protected == "finished":
+        journal.finish(key, "owner", final())
+    assert not journal.discard_unstarted(key, "other" if protected == "owner" else "owner")
+    assert journal.get(key, "owner")
+
+
+def test_discard_unstarted_releases_message_key_and_session(journal):
+    row, _ = journal.create(request(), "owner")
+    assert journal.discard_unstarted(row["run_id"], "owner")
+    with pytest.raises(KeyError):
+        journal.get(row["run_id"], "owner")
+    replacement, fresh = journal.create(request(), "owner")
+    assert fresh and replacement["run_id"] != row["run_id"]
+
+
 def test_cancel_wins_finalization_and_session_deletion_cascades(journal):
     row, _ = journal.create(request(), "owner")
     key = row["run_id"]

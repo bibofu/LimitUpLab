@@ -89,6 +89,19 @@ class Journal:
                 raise KeyError("Run not found")
             return dict(row)
 
+    def discard_unstarted(self, run_id, owner_id):
+        """Release a rejected reservation without deleting recoverable work."""
+        with self.connection() as db:
+            deleted = db.execute("""
+                DELETE FROM react_runs
+                WHERE run_id=? AND owner_id=? AND active=1 AND cancelled=0
+                  AND checkpoint_json IS NULL AND response_json IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM react_events WHERE run_id=react_runs.run_id)
+                  AND NOT EXISTS (SELECT 1 FROM react_calls WHERE run_id=react_runs.run_id)
+                  AND NOT EXISTS (SELECT 1 FROM chat_messages WHERE run_id=react_runs.run_id)
+            """, (run_id, owner_id))
+            return deleted.rowcount == 1
+
     def event(self, run_id, event, payload):
         with self.connection() as db:
             db.execute("INSERT INTO react_events(run_id,event,payload_json) VALUES(?,?,?)", (run_id, event, encode(payload)))

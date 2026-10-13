@@ -9,7 +9,7 @@ from types import SimpleNamespace
 import httpx
 import pytest
 import uvicorn
-from fastapi import FastAPI, Request
+from fastapi import FastAPI, HTTPException, Request
 from langchain_core.messages import AIMessage
 
 from app.agents.react_runtime import runtime as runtime_module
@@ -86,6 +86,76 @@ def http_server(tmp_path, monkeypatch, request):
 
 
 PAYLOAD = {"session_id": "http-s", "message_id": "http-m", "message": "查询热榜，缺失时说明缺口"}
+
+
+def test_rejected_start_does_not_poison_retry_or_create_a_chat_answer(http_server, monkeypatch):
+    client, state = http_server
+    begin = agents._begin_agent_request
+    def rejected(*args, **kwargs):
+        raise HTTPException(429, "请求较多，请稍后重试", headers={"Retry-After": "2"})
+    monkeypatch.setattr(agents, "_begin_agent_request", rejected)
+    rejected_response = client.post("/chat/stream", json=PAYLOAD)
+    assert rejected_response.status_code == 429
+    assert rejected_response.headers["retry-after"] == "2"
+    assert state.calls == 0
+    assert not SQLiteChatSessionRepository().get_session("http-s", owner_id="owner").messages
+    with Journal().connection() as db:
+        assert db.execute("SELECT count(*) FROM react_runs").fetchone()[0] == 0
+    monkeypatch.setattr(agents, "_begin_agent_request", begin)
+    result = client.post("/chat", json=PAYLOAD).json()
+    assert result["task_status"] == "partial" and state.calls == 1
+    assert client.post("/chat", json=PAYLOAD).json() == result
+    messages = SQLiteChatSessionRepository().get_session("http-s", owner_id="owner").messages
+    assert [message.role for message in messages] == ["user", "assistant"]
+
+
+def test_rejected_resume_preserves_checkpoint_and_completed_tools(http_server, monkeypatch):
+    client, state = http_server
+    SQLiteChatSessionRepository().ensure_session("http-s", owner_id="owner")
+    journal = Journal()
+    row, _ = journal.create(AgentChatRequest(**PAYLOAD), "owner")
+    run_id = row["run_id"]
+    checkpoint = {"saved": "research progress"}
+    journal.checkpoint(run_id, "owner", checkpoint)
+    call = {"id": "saved-tool", "name": "fixture", "args": {}}
+    journal.begin_call(run_id, call)
+    journal.finish_call(run_id, call["id"], {"ok": True})
+    def rejected(*args, **kwargs):
+        raise HTTPException(429, "请求较多，请稍后重试")
+    monkeypatch.setattr(agents, "_begin_agent_request", rejected)
+    assert client.post("/chat", json=PAYLOAD).status_code == 429
+    restored = journal.get(run_id, "owner")
+    assert restored["active"] and restored["response_json"] is None
+    assert json.loads(restored["checkpoint_json"]) == checkpoint
+    assert journal.begin_call(run_id, call) == {"ok": True}
+    assert not SQLiteChatSessionRepository().get_session("http-s", owner_id="owner").messages
+    assert state.calls == 0
+
+
+@pytest.mark.parametrize("failure_stage", ["message", "thread"])
+def test_start_failure_releases_lease_and_allows_original_request_retry(http_server, monkeypatch, failure_stage):
+    client, state = http_server
+    releases, finished = [], []
+    monkeypatch.setattr(agents, "_begin_agent_request", lambda *a, **kw: (
+        SimpleNamespace(release=lambda: releases.append(True)), None, None,
+    ))
+    monkeypatch.setattr(agents, "_finish_agent_request", lambda *a, **kw: finished.append(kw))
+    target = SQLiteChatSessionRepository if failure_stage == "message" else threading.Thread
+    method = "append_message" if failure_stage == "message" else "start"
+    original = getattr(target, method)
+    def fail(*args, **kwargs):
+        if failure_stage == "thread" and not args[0].name.startswith("react-"):
+            return original(*args, **kwargs)
+        raise RuntimeError("fixture startup unavailable")
+    monkeypatch.setattr(target, method, fail)
+    assert client.post("/chat", json=PAYLOAD).status_code == 503
+    assert len(releases) == 1 and len(finished) == 1 and finished[0]["error"]
+    assert not react_chat._workers and state.calls == 0
+    monkeypatch.setattr(target, method, original)
+    result = client.post("/chat", json=PAYLOAD).json()
+    assert result["task_status"] == "partial" and state.calls == 1
+    messages = SQLiteChatSessionRepository().get_session("http-s", owner_id="owner").messages
+    assert [message.role for message in messages] == ["user", "assistant"]
 
 
 def test_live_answer_arrives_over_http_before_generation_finishes(http_server, monkeypatch):
