@@ -31,7 +31,22 @@ export function ResourceNotice({ label, loading, error, retry }: {
 export function ResourceSection<T>({ label, resource, children }: {
   label: string; resource: ResourceState<T> & { reload: () => void }; children: (data: T) => ReactNode;
 }) {
-  return resource.data !== null ? children(resource.data) : (
+  return resource.data !== null ? <>
+    <div className="resource-refresh-status" role="status">
+      {resource.loading || resource.error ? <>
+        {resource.loading ? <LoaderCircle aria-hidden="true" size={14} /> : null}
+        <span title={resource.error ?? undefined}>
+          {label}：{resource.loading ? "正在更新，显示上次结果" : "更新失败，保留上次结果"}
+        </span>
+        {resource.error && !resource.loading ? (
+          <button className="icon-button compact" type="button" onClick={resource.reload} aria-label={`重新加载${label}`}>
+            <RefreshCcw size={14} />
+          </button>
+        ) : null}
+      </> : null}
+    </div>
+    {children(resource.data)}
+  </> : (
     <ResourceNotice label={label} loading={resource.loading} error={resource.error} retry={resource.reload} />
   );
 }

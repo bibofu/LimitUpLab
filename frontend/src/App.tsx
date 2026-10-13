@@ -155,10 +155,10 @@ export function App() {
     promotion: activeView === "review" && !isStockDetail,
   };
   const summary = useMarketSummary({ enabled: isOverview });
-  const firstBoard = useResource(fetchFirstBoardEvents, false, enabled.firstBoard);
-  const continuedBoard = useResource(fetchContinuedBoardEvents, false, enabled.continuedBoard);
-  const failed = useResource(fetchFailedLimitUpEvents, false, enabled.failed);
-  const recent = useResource(loadRecentEvents, false, enabled.recent);
+  const firstBoard = useResource(fetchFirstBoardEvents, true, enabled.firstBoard);
+  const continuedBoard = useResource(fetchContinuedBoardEvents, true, enabled.continuedBoard);
+  const failed = useResource(fetchFailedLimitUpEvents, true, enabled.failed);
+  const recent = useResource(loadRecentEvents, true, enabled.recent);
   const firstBoardRatings = useResource(loadRatings, false, enabled.ratings);
   const dailyBoardPromotion = useResource(loadPromotion, false, enabled.promotion);
   const pools = { firstBoard, continuedBoard, failed, recent };
@@ -561,9 +561,26 @@ function LimitUpPool({ pools }: { pools: Record<"firstBoard" | "continuedBoard" 
             <strong>{entry.resource.data !== null ? `${entry.resource.data.length} ${entry.unit}` : "—"}</strong>
             <p>{entry.description}</p>
           </Link>
-          {entry.resource.data !== null ? <small>
-            {latestEventDate(entry.resource.data) ? `数据日 ${latestEventDate(entry.resource.data)}` : "查询结果为空，日期未返回"}
-          </small> : <ResourceNotice label={entry.label} loading={entry.resource.loading} error={entry.resource.error} retry={entry.resource.reload} />}
+          <div className="resource-entry-status" role="status" aria-busy={entry.resource.loading}>
+            <span className="resource-entry-date">
+              {entry.resource.data !== null
+                ? latestEventDate(entry.resource.data) ? `数据日 ${latestEventDate(entry.resource.data)}` : "查询结果为空，日期未返回"
+                : "数据日期待确认"}
+            </span>
+            <span className="resource-entry-update" title={entry.resource.error ?? undefined}>
+              {entry.resource.loading ? <>
+                <LoaderCircle aria-hidden="true" className="state-spinner" size={13} />
+                {entry.resource.data !== null ? "正在更新，显示上次结果" : "正在加载"}
+              </> : entry.resource.error
+                ? entry.resource.data !== null ? "更新失败，保留上次结果" : "加载失败，请重试"
+                : null}
+            </span>
+            {entry.resource.error && !entry.resource.loading ? (
+              <button className="icon-button compact" type="button" onClick={entry.resource.reload} aria-label={`重新加载${entry.label}`}>
+                <RefreshCcw aria-hidden="true" size={13} />
+              </button>
+            ) : null}
+          </div>
         </div>
       ))}
     </nav>

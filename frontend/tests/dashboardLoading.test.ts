@@ -349,3 +349,68 @@ test("the real premarket page keeps cached candidates and their target date whil
     }
   }
 });
+
+test("pool reads retain previous results consistently across route activation", () => {
+  const retained: boolean[] = [];
+  renderApp("/stocks/limit-up-pool", Array(7).fill(pending), {
+    "./components/ResourceSection": {
+      ...sections,
+      useResource: (_fetch: unknown, keepPrevious: boolean) => {
+        retained.push(keepPrevious);
+        return pending;
+      },
+    },
+  });
+  assert.deepEqual(retained.slice(0, 4), [true, true, true, true]);
+});
+
+test("pool cards keep counts and their original date while updating or after failure", () => {
+  for (const failed of [false, true]) {
+    let retries = 0;
+    let clickRetry: (() => void) | undefined;
+    const first = { ...ready([event]), loading: !failed,
+      error: failed ? "upstream temporarily unavailable" : null, reload() { retries++; } };
+    const observe = (factory: (...args: any[]) => unknown) => (...args: any[]) => {
+      if (args[1]?.["aria-label"] === "重新加载首板") clickRetry = args[1].onClick;
+      return factory(...args);
+    };
+    const html = renderApp("/stocks/limit-up-pool", [pending, first, ready([]), ready([]), ready([]), pending, pending], {
+      "react/jsx-runtime": { ...jsxRuntime, jsx: observe(jsxRuntime.jsx), jsxs: observe(jsxRuntime.jsxs) },
+    });
+    assert.ok(html.includes("1 只"));
+    assert.ok(html.includes("数据日 2026-10-09"));
+    assert.equal(html.split('class="resource-entry-status"').length - 1, 4);
+    assert.ok(!html.includes('class="resource-notice"'));
+    if (failed) {
+      assert.ok(html.includes("更新失败，保留上次结果"));
+      assert.ok(clickRetry);
+      clickRetry();
+      assert.equal(retries, 1);
+    } else {
+      assert.ok(html.includes("正在更新，显示上次结果"));
+      assert.equal(clickRetry, undefined);
+    }
+  }
+});
+
+test("pool first load reserves the same status slots without fabricated zero counts or retry buttons", () => {
+  const html = renderApp("/stocks/limit-up-pool", Array(7).fill(pending));
+  assert.equal(html.split('class="resource-entry-status"').length - 1, 4);
+  assert.equal(html.split(">—</strong>").length - 1, 4);
+  assert.equal(html.split("数据日期待确认").length - 1, 4);
+  assert.ok(html.includes("正在加载"));
+  assert.ok(!html.includes("0 只"));
+  assert.ok(!html.includes("0 条"));
+  assert.ok(!html.includes('aria-label="重新加载首板"'));
+  assert.ok(!html.includes('aria-label="重新加载连板"'));
+});
+
+test("valid empty pools show zero with an explicit missing date in the stable status slot", () => {
+  const html = renderApp("/stocks/limit-up-pool", [pending, ready([]), ready([]), ready([]), ready([]), pending, pending]);
+  assert.equal(html.split('class="resource-entry-status"').length - 1, 4);
+  assert.equal(html.split("查询结果为空，日期未返回").length - 1, 4);
+  assert.equal(html.split("0 只").length - 1, 3);
+  assert.equal(html.split("0 条").length - 1, 1);
+  assert.ok(!html.includes("正在加载"));
+  assert.ok(!html.includes("加载失败"));
+});

@@ -47,6 +47,36 @@ test("leaving a route cancels its read and a late response cannot replace a late
   assert.equal(states.at(-1)?.data, "new visit facts");
 });
 
+test("returning to a loaded pool keeps its counts through refresh failure and ignores an abandoned read", async () => {
+  const states: ResourceState<string[]>[] = [];
+  let next = deferred<string[]>();
+  const loader = createResourceLoader(() => next.promise, state => states.push(state), true);
+  const first = loader.reload();
+  next.resolve(["2026-10-13:stock-a"]);
+  await first;
+  const afterInitial = states.length;
+  next = deferred<string[]>();
+  const abandoned = next;
+  const oldRead = loader.reload();
+  loader.setEnabled(false);
+  await loader.reload();
+  next = deferred<string[]>();
+  loader.setEnabled(true);
+  const returned = loader.reload();
+  assert.deepEqual(states.at(-1), { data: ["2026-10-13:stock-a"], loading: true, error: null });
+  abandoned.resolve(["wrong abandoned data"]);
+  await oldRead;
+  next.reject(new Error("请求超时"));
+  await returned;
+  assert.deepEqual(states.at(-1), { data: ["2026-10-13:stock-a"], loading: false, error: "请求超时" });
+  assert.ok(states.slice(afterInitial).every(state => state.data?.[0] === "2026-10-13:stock-a"));
+  next = deferred<string[]>();
+  const retried = loader.reload();
+  next.resolve([]);
+  await retried;
+  assert.deepEqual(states.at(-1), { data: [], loading: false, error: null }, "a verified empty result replaces old rows");
+});
+
 test("a pending index and failed calendar do not withhold available local events", async () => {
   const states = new Map<string, ResourceState<unknown>>();
   const pending = deferred<string>();
