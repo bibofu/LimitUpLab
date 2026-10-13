@@ -204,7 +204,7 @@ def get_market_overview() -> MarketSummary:
 def _build_latest_market_summary() -> MarketSummary:
     """Build the shared payload, tolerating unavailable index data."""
 
-    events = get_limit_up_repository().list_events()
+    events = get_limit_up_repository().list_latest_events()
     trade_date = latest_trade_date(events)
     try:
         indices = collect_market_indices(trade_date)

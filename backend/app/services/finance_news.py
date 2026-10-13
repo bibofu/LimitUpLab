@@ -7,7 +7,7 @@ import os
 import re
 import threading
 from collections.abc import Callable, Mapping
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from datetime import datetime, timedelta
 from urllib.parse import urljoin, urlparse
 from zoneinfo import ZoneInfo
@@ -23,6 +23,8 @@ _SHANGHAI = ZoneInfo("Asia/Shanghai")
 _CACHE_TTL = timedelta(minutes=5)
 _cache: dict[tuple[str, int, int], tuple[datetime, FinanceNewsFacts]] = {}
 _cache_lock = threading.Lock()
+_inflight: dict[tuple[str, int, int], Future[FinanceNewsFacts]] = {}
+_MAX_CACHE_ENTRIES = 64
 _USER_AGENT = (
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
     "AppleWebKit/537.36 Chrome/124.0 Safari/537.36"
@@ -108,12 +110,47 @@ def collect_finance_news(
     bounded_limit = max(1, min(int(limit), 2000))
     bounded_hours = max(1, min(int(hours), 168))
     current_time = _as_shanghai_time(now or datetime.now(_SHANGHAI))
+    if loaders is not None:
+        return _collect_finance_news(normalized_query, bounded_limit, bounded_hours, current_time, loaders)
+
     cache_key = (normalized_query or "", bounded_limit, bounded_hours)
-    if loaders is None:
+    with _cache_lock:
+        cached = _cache.get(cache_key)
+        if cached and timedelta(0) <= current_time - cached[0] < _CACHE_TTL:
+            return cached[1]
+        pending = _inflight.get(cache_key)
+        owner = pending is None
+        if pending is None:
+            pending = Future()
+            _inflight[cache_key] = pending
+    if not owner:
+        # Concurrent page mounts share the same refresh; failures remain errors,
+        # and the next request can retry without extending data freshness.
+        return pending.result()
+    try:
+        facts = _collect_finance_news(normalized_query, bounded_limit, bounded_hours, current_time, None)
         with _cache_lock:
-            cached = _cache.get(cache_key)
-            if cached and current_time - cached[0] < _CACHE_TTL:
-                return cached[1]
+            _cache[cache_key] = (current_time, facts)
+            while len(_cache) > _MAX_CACHE_ENTRIES:
+                _cache.pop(next(iter(_cache)))
+        pending.set_result(facts)
+        return facts
+    except BaseException as error:
+        pending.set_exception(error)
+        raise
+    finally:
+        with _cache_lock:
+            _inflight.pop(cache_key, None)
+
+
+def _collect_finance_news(
+    normalized_query: str | None,
+    bounded_limit: int,
+    bounded_hours: int,
+    current_time: datetime,
+    loaders: Mapping[str, NewsLoader] | None,
+) -> FinanceNewsFacts:
+    """Fetch one uncached provider batch for the requested query and window."""
 
     earliest = current_time - timedelta(hours=bounded_hours)
     deep_scan = bounded_limit > 200
@@ -170,9 +207,6 @@ def collect_finance_news(
         sources=successful_sources,
         items=ranked[:bounded_limit],
     )
-    if loaders is None:
-        with _cache_lock:
-            _cache[cache_key] = (current_time, facts)
     return facts
 
 

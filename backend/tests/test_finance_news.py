@@ -1,13 +1,75 @@
 import unittest
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import datetime, timedelta
+from threading import Event
 from unittest.mock import patch
 from zoneinfo import ZoneInfo
 
 from fastapi import HTTPException
+import pytest
 
 from app.models import FinanceNewsItem
 from app.routers.market import _include_market_news, get_finance_news
 from app.services.finance_news import collect_finance_news
+from app.services import finance_news
+
+
+@pytest.mark.parametrize("source_failure", [False, True])
+def test_concurrent_news_refresh_is_shared_and_failures_can_retry(monkeypatch, source_failure):
+    now = datetime(2026, 10, 13, 17, 0, tzinfo=ZoneInfo("Asia/Shanghai"))
+    entered, joined, release = Event(), Event(), Event()
+    calls = []
+    fail = source_failure
+    item = FinanceNewsItem(
+        title="A股最新市场消息", summary="沪深市场消息。", published_at=now,
+        source="东方财富", url="https://example.com/market", category="A股", relevance_score=4,
+    )
+    class JoinedFuture(Future):
+        def result(self, timeout=None):
+            joined.set()
+            return super().result(timeout)
+    def eastmoney(**kwargs):
+        calls.append("eastmoney")
+        entered.set()
+        assert release.wait(5)
+        if fail:
+            raise RuntimeError("source unavailable")
+        return [item]
+    def tonghuashun(**kwargs):
+        calls.append("tonghuashun")
+        if fail:
+            raise RuntimeError("source unavailable")
+        return [item]
+    monkeypatch.setattr(finance_news, "_cache", {})
+    monkeypatch.setattr(finance_news, "_inflight", {})
+    monkeypatch.setattr(finance_news, "Future", JoinedFuture)
+    monkeypatch.setattr(finance_news, "_load_eastmoney", eastmoney)
+    monkeypatch.setattr(finance_news, "_load_tonghuashun", tonghuashun)
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        first = executor.submit(collect_finance_news, limit=2000, hours=24, now=now)
+        try:
+            assert entered.wait(5)
+            second = executor.submit(collect_finance_news, limit=2000, hours=24, now=now)
+            assert joined.wait(5)
+        finally:
+            release.set()
+        if source_failure:
+            for pending in (first, second):
+                with pytest.raises(RuntimeError, match="collection failed"):
+                    pending.result(timeout=5)
+            assert not finance_news._cache
+        else:
+            assert first.result(timeout=5) is second.result(timeout=5)
+    assert sorted(calls) == ["eastmoney", "tonghuashun"]
+    assert not finance_news._inflight
+    fail = False
+    result = collect_finance_news(limit=2000, hours=24, now=now)
+    cached = collect_finance_news(limit=2000, hours=24, now=now + timedelta(minutes=4))
+    assert cached is result and cached.fetched_at == now
+    assert len(calls) == (4 if source_failure else 2)
+    refreshed = collect_finance_news(limit=2000, hours=24, now=now + timedelta(minutes=6))
+    assert refreshed.fetched_at == now + timedelta(minutes=6)
+    assert len(calls) == (6 if source_failure else 4)
 
 
 class FinanceNewsTest(unittest.TestCase):

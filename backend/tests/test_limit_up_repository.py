@@ -35,6 +35,29 @@ def temporary_database_path():
 
 
 class SQLiteLimitUpRepositoryTest(unittest.TestCase):
+    def test_latest_events_match_history_filter_and_follow_new_writes(self) -> None:
+        with temporary_database_path() as database_path:
+            repository = SQLiteLimitUpRepository(database_path=database_path)
+            self.assertEqual(repository.list_latest_events(), [])
+            repository.replace_events(SAMPLE_EVENTS)
+            history = repository.list_events()
+            latest_date = max(event.trade_date for event in history)
+            expected = [event for event in history if event.trade_date == latest_date]
+            self.assertEqual(repository.list_latest_events(), expected)
+            updated = expected[0].model_copy(update={"name": "已更新"})
+            repository.upsert_events([updated])
+            self.assertEqual(repository.list_latest_events()[0].name, "已更新")
+            repository.delete_events_for_date(latest_date)
+            self.assertTrue(all(event.trade_date < latest_date for event in repository.list_latest_events()))
+
+    def test_latest_events_preserve_sample_bootstrap(self) -> None:
+        with temporary_database_path() as database_path:
+            repository = SQLiteLimitUpRepository(database_path=database_path, seed_if_empty=True)
+            events = repository.list_latest_events()
+            latest_date = max(event.trade_date for event in SAMPLE_EVENTS)
+            self.assertEqual({event.trade_date for event in events}, {latest_date})
+            self.assertEqual(len(events), sum(event.trade_date == latest_date for event in SAMPLE_EVENTS))
+
     # Regression scenario: replace and list events.
     def test_replace_and_list_events(self) -> None:
         with temporary_database_path() as database_path:

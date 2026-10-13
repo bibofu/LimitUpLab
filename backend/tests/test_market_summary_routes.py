@@ -14,7 +14,7 @@ from app.services.sample_data import SAMPLE_EVENTS
 def test_summary_and_overview_preserve_the_same_contract(monkeypatch, scenario):
     events = [] if scenario == "empty_events" else SAMPLE_EVENTS
     repository = Mock()
-    repository.list_events.return_value = events
+    repository.list_latest_events.return_value = events
     # The inline callback supplies the fixture value or replacement behavior used by this test; it
     # is evaluated only when the code under test calls it.
     monkeypatch.setattr(market, "get_limit_up_repository", lambda: repository)
@@ -45,4 +45,5 @@ def test_summary_and_overview_preserve_the_same_contract(monkeypatch, scenario):
         for endpoint in endpoints:
             assert endpoint().model_dump(mode="json") == expected
         assert collector.call_args_list == [call(latest_trade_date(events))] * 2
-    assert repository.list_events.call_count == 2
+    assert repository.list_latest_events.call_count == 2
+    repository.list_events.assert_not_called()

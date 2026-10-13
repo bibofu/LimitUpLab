@@ -16,6 +16,9 @@ class LimitUpRepository(Protocol):
     def list_events(self) -> list[LimitUpEvent]:
         """Return limit-up events available to the analysis layer."""
 
+    def list_latest_events(self) -> list[LimitUpEvent]:
+        """Return only the newest persisted trading day's events."""
+
 
 class SQLiteLimitUpRepository:
     """SQLite-backed repository for persisted limit-up events."""
@@ -33,14 +36,28 @@ class SQLiteLimitUpRepository:
     def list_events(self) -> list[LimitUpEvent]:
         """Load all persisted events ordered newest and strongest first."""
 
+        return self._list_events(latest_only=False)
+
+    def list_latest_events(self) -> list[LimitUpEvent]:
+        """Use the trade-date index without materializing the full history."""
+
+        return self._list_events(latest_only=True)
+
+    def _list_events(self, *, latest_only: bool) -> list[LimitUpEvent]:
+        """Read events from one consistent SQLite query."""
+
         connection = connect(self.database_path)
         try:
             initialize_database(connection)
             if self.seed_if_empty and self._count_events(connection) == 0:
                 self.replace_events(SAMPLE_EVENTS, connection=connection)
 
+            date_filter = (
+                "WHERE trade_date = (SELECT MAX(trade_date) FROM limit_up_events)"
+                if latest_only else ""
+            )
             rows = connection.execute(
-                """
+                f"""
                 SELECT
                     symbol,
                     name,
@@ -62,6 +79,7 @@ class SQLiteLimitUpRepository:
                     five_day_return_pct,
                     continued_next_day
                 FROM limit_up_events
+                {date_filter}
                 ORDER BY trade_date DESC, board_height DESC, first_limit_time DESC
                 """
             ).fetchall()
