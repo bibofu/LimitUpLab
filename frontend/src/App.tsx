@@ -561,18 +561,15 @@ function LimitUpPool({ pools }: { pools: Record<"firstBoard" | "continuedBoard" 
             <strong>{entry.resource.data !== null ? `${entry.resource.data.length} ${entry.unit}` : "—"}</strong>
             <p>{entry.description}</p>
           </Link>
-          <div className="resource-entry-status" role="status" aria-busy={entry.resource.loading}>
+          <div className="resource-entry-status">
             <span className="resource-entry-date">
               {entry.resource.data !== null
                 ? latestEventDate(entry.resource.data) ? `数据日 ${latestEventDate(entry.resource.data)}` : "查询结果为空，日期未返回"
-                : "数据日期待确认"}
+                : null}
             </span>
             <span className="resource-entry-update" title={entry.resource.error ?? undefined}>
-              {entry.resource.loading ? <>
-                <LoaderCircle aria-hidden="true" className="state-spinner" size={13} />
-                {entry.resource.data !== null ? "正在更新，显示上次结果" : "正在加载"}
-              </> : entry.resource.error
-                ? entry.resource.data !== null ? "更新失败，保留上次结果" : "加载失败，请重试"
+              {entry.resource.error && !entry.resource.loading
+                ? entry.resource.data !== null ? "更新失败" : "暂不可用"
                 : null}
             </span>
             {entry.resource.error && !entry.resource.loading ? (

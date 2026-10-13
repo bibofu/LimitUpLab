@@ -364,7 +364,7 @@ test("pool reads retain previous results consistently across route activation", 
   assert.deepEqual(retained.slice(0, 4), [true, true, true, true]);
 });
 
-test("pool cards keep counts and their original date while updating or after failure", () => {
+test("pool cards quietly keep counts and their original date while updating, with a retry only on failure", () => {
   for (const failed of [false, true]) {
     let retries = 0;
     let clickRetry: (() => void) | undefined;
@@ -381,24 +381,28 @@ test("pool cards keep counts and their original date while updating or after fai
     assert.ok(html.includes("数据日 2026-10-09"));
     assert.equal(html.split('class="resource-entry-status"').length - 1, 4);
     assert.ok(!html.includes('class="resource-notice"'));
+    assert.ok(!html.includes("正在加载"));
+    assert.ok(!html.includes("正在更新"));
+    assert.ok(!html.includes("state-spinner"));
     if (failed) {
-      assert.ok(html.includes("更新失败，保留上次结果"));
+      assert.ok(html.includes("更新失败"));
       assert.ok(clickRetry);
       clickRetry();
       assert.equal(retries, 1);
     } else {
-      assert.ok(html.includes("正在更新，显示上次结果"));
       assert.equal(clickRetry, undefined);
     }
   }
 });
 
-test("pool first load reserves the same status slots without fabricated zero counts or retry buttons", () => {
+test("pool first load stays quiet without fabricated counts, dates or progress indicators", () => {
   const html = renderApp("/stocks/limit-up-pool", Array(7).fill(pending));
   assert.equal(html.split('class="resource-entry-status"').length - 1, 4);
   assert.equal(html.split(">—</strong>").length - 1, 4);
-  assert.equal(html.split("数据日期待确认").length - 1, 4);
-  assert.ok(html.includes("正在加载"));
+  assert.ok(!html.includes("数据日期待确认"));
+  assert.ok(!html.includes("正在加载"));
+  assert.ok(!html.includes("正在更新"));
+  assert.ok(!html.includes("state-spinner"));
   assert.ok(!html.includes("0 只"));
   assert.ok(!html.includes("0 条"));
   assert.ok(!html.includes('aria-label="重新加载首板"'));
