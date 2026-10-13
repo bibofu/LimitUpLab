@@ -125,6 +125,7 @@ def test_llm_gets_single_authoritative_digest_even_when_planner_omits_tools():
 @pytest.mark.parametrize("payload", [
     {}, {"sections": []}, {**VALID, "sections": [VALID["sections"][0]] * 3},
     {**VALID, "sections": [{**item, "summary": "空" * 101} for item in VALID["sections"]]},
+    {**VALID, "sections": [{**item, "summary": "next_open_pct缺失，暂时无法比较。"} for item in VALID["sections"]]},
     {**VALID, "sections": [{**item, "observation_ids": ["invented"]} for item in VALID["sections"]]},
     {**VALID, "confidence": 2}, {**VALID, "confidence": float("nan")}, {**VALID, "confidence": True}, "not json",
 ])

@@ -137,3 +137,30 @@ def test_table_placeholder_never_streams_and_rendered_evidence_fills_in_place():
     delivery.render(answer)
     assert visible(events) == answer
     assert len([name for name, _ in events if name == "answer_start"]) == 1
+
+
+@pytest.mark.parametrize("streaming", [True, False])
+def test_raw_fields_trigger_one_rewrite_instead_of_becoming_final_or_streamed_answer(streaming):
+    class FieldModel(Model):
+        def generate_messages(self, messages, tools, *, on_chunk=None, **kwargs):
+            self.calls += 1
+            answer = ("指标包括break_count与next_open_pct。" if self.calls == 1
+                      else "可以查看盘中炸板次数与次日开盘涨幅。")
+            if self.calls == 2:
+                assert "natural Chinese" in messages[-1].content
+            args = {"status": "complete", "answer": answer}
+            if on_chunk:
+                for part in ['{"answer":"指标包括break_', 'count与next_open_pct。"}'] if self.calls == 1 else [json.dumps(args, ensure_ascii=False)]:
+                    on_chunk(AIMessageChunk(content="", tool_call_chunks=[{
+                        "index": 0, "name": "finish" if 'answer' in part else None,
+                        "id": str(self.calls), "args": part}]))
+            return AIMessage(content="", tool_calls=[{"name": "finish", "id": str(self.calls), "args": args}])
+    events, provider = [], FieldModel()
+    if streaming:
+        response = execute(provider, events)
+    else:
+        registry = SimpleNamespace(events=[], schemas=lambda: TOOL_SCHEMAS, is_enabled=lambda _: True)
+        response = runtime.run(AgentChatRequest(session_id="plain", message="你好"), registry, provider)
+    assert response.task_status == "complete" and provider.calls == 2
+    assert response.answer == "可以查看盘中炸板次数与次日开盘涨幅。"
+    assert "break_" not in visible(events) and "next_open_pct" not in visible(events)

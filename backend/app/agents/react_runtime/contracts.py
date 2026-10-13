@@ -29,7 +29,7 @@ class UpdateTask(StrictModel):
 
 class EvidenceColumn(StrictModel):
     field: str = Field(min_length=1, description="Exact scalar field in evidence rows; no expressions")
-    label: str = Field(min_length=1, max_length=40)
+    label: str = Field(min_length=1, max_length=40, description="User-readable Chinese column title, never a raw field name")
 
 
 class EvidenceTable(StrictModel):

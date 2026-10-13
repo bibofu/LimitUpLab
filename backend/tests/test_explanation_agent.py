@@ -28,6 +28,14 @@ class BrokenLLMProvider(LLMProvider):
 
 
 class ExplanationAgentTest(unittest.TestCase):
+    def test_field_leak_uses_readable_facts_template(self) -> None:
+        rating = build_first_board_ratings(SAMPLE_EVENTS).candidates[0]
+        result = explain_first_board_rating(rating, FakeLLMProvider("break_count=0，next_open_pct暂缺。"))
+        self.assertEqual(result.source, "template")
+        self.assertNotIn("break_count", result.answer)
+        self.assertNotIn("next_open_pct", result.answer)
+        self.assertIn(rating.facts.symbol, result.answer)
+
     # Regression scenario: falls back to template when llm unavailable.
     def test_falls_back_to_template_when_llm_unavailable(self) -> None:
         rating = build_first_board_ratings(SAMPLE_EVENTS).candidates[0]

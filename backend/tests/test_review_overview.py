@@ -140,6 +140,18 @@ def test_stopped_request_does_not_call_the_model():
     assert not provider.prompts
 
 
+def test_internal_fields_are_rewritten_without_leaking_to_summary_stream():
+    class FieldProvider(Provider):
+        def stream_generate(self, system, user, on_delta):
+            self.text = ("break_count=0，next_open_pct缺失。" + TEXT)[:360] if not self.prompts else TEXT
+            return super().stream_generate(system, user, on_delta)
+    provider, events = FieldProvider(), []
+    generate_overview(facts=facts(), provider=provider, emit=lambda name, data: events.append((name, data)))
+    assert provider.prompts[1][1]["required_correction"]["code"] == "public_language"
+    assert len(provider.checks) == 1 and events[-1][1]["text"] == TEXT
+    assert not any("break_count" in data.get("text", "") for name, data in events if name == "delta")
+
+
 def test_length_rewrite_is_bounded_withdraws_previous_draft_and_keeps_facts():
     class RewriteProvider(Provider):
         def stream_generate(self, system, user, on_delta):

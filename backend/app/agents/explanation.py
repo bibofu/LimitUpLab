@@ -5,6 +5,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 
 from app.models import FirstBoardRating
+from app.agents.user_language import PUBLIC_LANGUAGE, field_names, field_mentions
 from app.services.llm_provider import LLMProvider, get_llm_provider
 
 
@@ -34,6 +35,8 @@ def explain_first_board_rating(
 
     try:
         result = active_provider.generate(system_prompt, user_prompt)
+        if field_mentions(result.content, field_names(rating.model_dump())):
+            return _template_result(rating, warning="生成的解释不够易读，已使用基于事实的中文说明。")
         if _contains_forbidden_terms(result.content):
             return _template_result(
                 rating,
@@ -89,7 +92,7 @@ def _build_system_prompt() -> str:
         "Use only the provided structured facts. Do not invent market data, news, "
         "fund flow, fundamentals, target prices, position sizing, or trading orders. "
         "Explain the score, supporting evidence, risks, and data limits. "
-        "Write in Chinese. Always say the analysis is not investment advice."
+        "Write in Chinese. Always say the analysis is not investment advice.\n" + PUBLIC_LANGUAGE
     )
 
 

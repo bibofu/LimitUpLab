@@ -26,6 +26,7 @@ from app.agents.react_runtime.context import prepare_history, prepare_query_refe
 from app.agents.react_runtime.task_contract import TaskInterpretation, validate_delivery
 from app.agents.react_runtime.lifecycle import CURRENT_CONTROL
 from app.agents.react_runtime.tools import ToolGateway
+from app.agents.user_language import PUBLIC_LANGUAGE, field_names, validate_public_text
 from app.agents.tools import TOOL_CONTRACT_VERSION
 from app.models import AgentChatPerformance, AgentChatResponse, AgentToolOutcome, AgentToolTrace
 from app.services.llm_provider import NativeFunctionCallingError, require_react_provider
@@ -50,7 +51,7 @@ finish.status按用户交付判断，不照抄工具状态：存在性问题已�
 先按用户实际要求判断完成范围。复盘、解释或统计请求不自动包含全量个股名单；可选补充不能升级为必交付任务，也不能因无关明细缺口否定已完成的统计。反之，用户明确要求的名单、字段或比较不得省略，不能以摘要替代。
 用户询问龙虎榜情况时，默认查询并展示当日完整榜单，limit 留空，保留全部统计区间并展示 range_days，不能自行截成代表股或 Top5。用 finish.table 直接引用完整证据，由服务端渲染代码、名称、区间天数、涨跌幅、买入额、卖出额、净买额、机构净买额、游资净买额；金额注明元。只有用户明确指定数量或筛选条件时才缩小范围。
 证据预览仅用于了解字段；服务端保存的是工具实际返回的行，finish.table可输出这些行，无需逐页read_evidence或模型复写整张表。预览省略不等于源数据截断：source_truncated=true时不能把返回行称为全量；只有complete_rank_scope证实的排名范围及其后续筛选可视为该范围完整，不能冒充全市场。取得所需证据后直接finish；回答长度按用户需要决定，不设置摘要字数或代表项数量门槛。
-证据字段必须原样使用；疑似截断、错字或异常值要明确标为数据质量问题，不得凭常识补全或修正。
+工具参数与证据取值必须原样使用，展示时以中文解释指标含义；疑似截断、错字或异常值要明确标为数据质量问题，不得凭常识补全或修正。
 标明来源与截止日、数据缺失和推断，不把相关性说成因果；并列展示不同统计指标时分别写清名称和口径。
 来源归属必须依据本轮实际返回的payload.source、payload.sources或逐条记录出处，可原样标识或忠实说明。工具名称、工具说明中的品牌、查询入口和缓存位置都不能证明本次数据的供应商；实际结果为合成、模拟或派生数据时照实说明，不能同时冒称真实供应商。未提供来源时说明来源未提供，不凭工具标签猜测。
 多个工具、接口或计算结果不等于多个独立数据源；数值一致只能证明这些返回结果一致，只有实际来源与血缘证据支持独立性时才称交叉来源核验。计算证据sources中的evidence_id只是血缘引用，应沿父证据核对实际来源，不能把引用ID当供应商名称。
@@ -67,7 +68,7 @@ finish.table是单个对象，整篇回答最多一张证据表；未交付名�
 原生工具调用参数必须是完整合法JSON对象。answer必须是双引号字符串；missing必须是JSON字符串数组：无缺口用[]，有缺口将每项说明分别放进数组中的双引号字符串，绝不能直接写未加引号的日期或自然语言。字符串内部引号、反斜杠和换行须按JSON转义。
 不要展示内部工具名、原始JSON、思维链。finish.answer会实时显示给用户，必须从首句起遵守事实和研究边界；完成后服务端仍会校验。
 观察中的rows可能只是预览；finish.table渲染服务端已有行，是否覆盖用户要求仍须核对source_truncated、data_missing及范围证明。仅需要检查具体未预览字段或深入分析时才read_evidence，筛选排序用compute_result处理已有结果。
-所有工具名及参数都必须使用提供的Schema；工具是否存在以当前清单为准。"""
+所有工具名及参数都必须使用提供的Schema；工具是否存在以当前清单为准。""" + "\n" + PUBLIC_LANGUAGE
 
 
 def dump(value):
@@ -158,6 +159,7 @@ class Run:
         try:
             # Strict table drafts are withheld until the presentation gate passes.
             # Ordinary prose keeps its provisional stream (BC-091).
+            self.delivery.field_names.update(field_names(self.evidence.current_records()))
             publish = self.delivery.feed if self.task_context.output_contract.mode != "table_only" else lambda delta: None
             decoder = FinishAnswerStream(publish, self.delivery.reset)
             def on_chunk(chunk):
@@ -403,6 +405,9 @@ class Run:
                     raise ValueError("Empty status requires current-run evidence with result_state=empty")
             validate_delivery(final, self.task_context, self.evidence)
             final.answer = render_answer(final, self.evidence)
+            validate_public_text(final.answer, self.delivery.field_names)
+            for missing in final.missing:
+                validate_public_text(missing, self.delivery.field_names)
             if contains_prompt_leak(final.answer):
                 raise ValueError("Internal content detected; answer research facts only")
             self.delivery.render(final.answer)
@@ -450,6 +455,7 @@ class Run:
                 return False
             validate_delivery(final, self.task_context, self.evidence)
             answer = render_answer(final, self.evidence)
+            validate_public_text(answer, self.delivery.field_names)
             if contains_prompt_leak(answer):
                 raise ValueError("Internal content in recovery candidate")
             remaining = self.deadline - perf_counter()

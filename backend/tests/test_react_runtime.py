@@ -226,7 +226,7 @@ def test_repair_checks_scope_and_table_without_waiving_user_deliverables(require
             if requires_list:
                 return call("finish", {"status": "partial", "answer": "只返回2行，尚缺1行，不能称为完整名单。\n{{evidence_table}}",
                     "table": table, "evidence_ids": [key], "missing": ["完整名单尚缺1行"]}, "fixed")
-            return call("finish", {"status": "complete", "answer": "命中3条，依据截断前的matched_count。",
+            return call("finish", {"status": "complete", "answer": "命中3条，依据来源返回的完整匹配数量。",
                 "evidence_ids": [key], "missing": []}, "fixed")
     def pool(**kwargs):
         return ToolResult(name="market_event_pool", input=kwargs, summary="synthetic protocol fixture",

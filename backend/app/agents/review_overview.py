@@ -13,6 +13,7 @@ from pydantic import BaseModel, ConfigDict, Field
 from app.agents.review_digest import candidate_stock
 from app.agents.review_digest_leaders import _unique_rows
 from app.agents.review_digest_profiles import _labels, build_digest_group
+from app.agents.user_language import PUBLIC_LANGUAGE, PublicTextStream, field_names, field_mentions
 from app.review_digest_models import DigestStock
 from app.services.daily_promotion import build_daily_promotion_report
 from app.services.promotion_calendar import adjacent_trade_date_pairs
@@ -225,6 +226,7 @@ def focused_overview_facts(facts):
 def generate_overview(*, facts, provider, emit, stopped=lambda: False):
     """Stream provisional prose, then publish only a grounded, reviewed final result."""
     facts = focused_overview_facts(facts)
+    names = field_names(facts)
     def check_active():
         if stopped():
             raise RuntimeError("Overview request cancelled")
@@ -238,19 +240,29 @@ def generate_overview(*, facts, provider, emit, stopped=lambda: False):
         draft_chars += len(text)
         if draft_chars > 1800:
             raise ValueError("Overview exceeds its bounded output size")
-        emit("delta", {"text": text})
+        visible = public_stream.feed(text)
+        if visible:
+            emit("delta", {"text": visible})
 
     user_prompt = json.dumps({"facts": facts, "writing_angle": choice(ANGLES),
                               "edition": uuid4().hex}, ensure_ascii=False)
     for attempt in range(2):
         check_active()
         draft_chars = 0
-        result = provider.stream_generate(SYSTEM, user_prompt, delta)
+        public_stream = PublicTextStream(names)
+        result = provider.stream_generate(SYSTEM + "\n" + PUBLIC_LANGUAGE, user_prompt, delta)
         check_active()
         content = result.content.strip()
         length = len("".join(content.split()))
         problem = {"code": "length", "characters": length}
-        if 300 <= length <= 400:
+        leaked_fields = field_mentions(content, names)
+        if leaked_fields:
+            problem = {"code": "public_language", "fields": sorted(leaked_fields),
+                       "reason": "将内部字段含义写成自然中文，保留数值、日期与缺失情况，不输出英文键名。"}
+        elif 300 <= length <= 400:
+            tail = public_stream.finish()
+            if tail:
+                emit("delta", {"text": tail})
             emit("checking", {"message": "正在核对事实与总结内容"})
             # The check enumerates all candidate dimensions; code enforces the maximum.
             review = provider.generate_messages(

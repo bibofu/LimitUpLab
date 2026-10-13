@@ -29,6 +29,8 @@ def render_answer(final, store):
             and not store.complete_rank_scope(final.table.evidence_id)):
         raise ValueError("Truncated source cannot be delivered as a complete list")
     columns = final.table.columns
+    if any(column.field.isascii() and column.label.strip() == column.field for column in columns):
+        raise ValueError("Table labels must use readable Chinese meanings, not raw field names")
     if len({c.field for c in columns}) != len(columns):
         raise ValueError("Duplicate table columns")
     rows = record["rows"]

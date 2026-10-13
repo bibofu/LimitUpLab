@@ -6,6 +6,7 @@ from typing import Annotated, Literal
 from pydantic import BaseModel, Field, StringConstraints, model_validator
 
 from app.review_digest_models import ReviewDigest
+from app.agents.user_language import field_names, validate_public_text
 
 
 class ReviewSectionNarrative(BaseModel):
@@ -28,7 +29,9 @@ class ReviewNarrative(BaseModel):
 def apply_review_narrative(digest: ReviewDigest, narrative: ReviewNarrative) -> ReviewDigest:
     """Reject invented/cross-group IDs; the model never writes evidence or counts."""
     result = digest.model_copy(deep=True)
+    names = field_names(digest.model_dump())
     for section in narrative.sections:
+        validate_public_text(section.summary, names)
         group = getattr(result, section.scope)
         lookup = {observation.id: observation for observation in group.observations}
         selected = section.observation_ids

@@ -149,7 +149,8 @@ def test_unresolved_field_contract_does_not_create_missing_evidence_fields():
     evidence_id = store.add(tool="synthetic", state="ok", arguments={}, payload={
         "items": [{"symbol": "600123", "name": "回归甲"}]})
     final = Finish(status="complete", answer="{{evidence_table}}", table={"evidence_id": evidence_id,
-        "columns": [{"field": field, "label": field} for field in ["symbol", "name", "board_height"]]})
+        "columns": [{"field": field, "label": label} for field, label in
+                    [("symbol", "代码"), ("name", "名称"), ("board_height", "板数")]]})
     validate_delivery(final, TaskInterpretation(current_task=TASK,
         output_contract={"mode": "table_only", "fields": [], "table_required": True}))
     with pytest.raises(ValueError, match="Table field missing"):

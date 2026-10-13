@@ -25,6 +25,7 @@ from app.repositories import SQLiteFirstBoardRepository
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.llm_provider import DisabledLLMProvider, LLMProvider, get_llm_provider
 from app.agents.review_narrative import ReviewNarrative, apply_review_narrative, authoritative_review_facts
+from app.agents.user_language import PUBLIC_LANGUAGE
 from app.agents.review_features import build_review_feature_summary
 from app.agents.review_digest import build_review_digest
 from app.agents.react_runtime.compliance import review_answer
@@ -900,6 +901,7 @@ def _review_report_system_prompt() -> str:
         "例如二板形态与封板时间分别统计，要写成两项观察，不要写多数为某形态且在某时间封板。"
         "不生成选股规则、买卖建议、仓位、目标价、收益承诺或因果结论；历史样本比例不是未来概率。"
         "首板缺失、派生市值及少量样本应保留限制。不要提内部字段名，不强制比较两套样本的方向。"
+        + "\n" + PUBLIC_LANGUAGE
     )
 
 

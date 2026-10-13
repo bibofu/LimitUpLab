@@ -1,6 +1,7 @@
 """Deliver provisional answer text while retaining an authoritative final gate."""
 
 from app.services.prompt_security import contains_prompt_leak
+from app.agents.user_language import BASE_FIELDS, PublicTextStream, validate_public_text
 
 
 class AnswerDelivery:
@@ -10,6 +11,8 @@ class AnswerDelivery:
         self.started = False
         self.text = self.pending = ""
         self.blocked = False
+        self.field_names = set(BASE_FIELDS)
+        self.public_stream = PublicTextStream(self.field_names)
 
     def append(self, delta):
         if not self.emit or not delta:
@@ -28,6 +31,7 @@ class AnswerDelivery:
     def feed(self, delta):
         if not self.emit or self.blocked:
             return
+        delta = self.public_stream.feed(delta)
         self.pending += delta
         if contains_prompt_leak(self.text + self.pending):
             self.reset()
@@ -50,6 +54,7 @@ class AnswerDelivery:
 
     def render(self, answer):
         """Fill deterministic table content before the final semantic review."""
+        validate_public_text(answer, self.field_names)
         if not answer.startswith(self.text):
             self.reset()
         self.append(answer[len(self.text):])
@@ -61,3 +66,4 @@ class AnswerDelivery:
         self.started = False
         self.text = self.pending = ""
         self.blocked = False
+        self.public_stream = PublicTextStream(self.field_names)
