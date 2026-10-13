@@ -35,6 +35,13 @@ import { AgentAnswerMarkdown } from "./AgentAnswerMarkdown";
 import { AgentChatProgress } from "./AgentChatProgress";
 import { createAgentAnswerBuffer } from "../utils/agentAnswerBuffer";
 import { taskStatusLabel } from "../utils/agentChatTransport";
+import {
+  createChatOperationLock,
+  draftAfterChatSubmit,
+  readActiveChatSession,
+  rememberActiveChatSession,
+  shouldSubmitChatKey,
+} from "../utils/agentChatInteraction";
 
 interface ChatMessage {
   id: string;
@@ -149,10 +156,18 @@ export function AgentChatDock({
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
+  const [sessionError, setSessionError] = useState<{
+    message: string;
+    retry: () => Promise<void>;
+  } | null>(null);
   const [sessionPanelOpen, setSessionPanelOpen] = useState(false);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const initializedSessions = useRef(false);
+  const operationLock = useRef(createChatOperationLock());
+  const drafts = useRef(new Map<string, string>());
+  const composing = useRef(false);
+  const inputRef = useRef<HTMLTextAreaElement>(null);
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const followAnswerRef = useRef(true);
   const [showLatest, setShowLatest] = useState(false);
@@ -187,7 +202,8 @@ export function AgentChatDock({
     followAnswerRef.current = true;
     setShowLatest(false);
     setSessionId(detail.session_id);
-    window.localStorage.setItem(ACTIVE_CHAT_SESSION_STORAGE_KEY, detail.session_id);
+    rememberActiveChatSession(() => window.localStorage.setItem(ACTIVE_CHAT_SESSION_STORAGE_KEY, detail.session_id));
+    setMessage(drafts.current.get(detail.session_id) ?? "");
     setMessages(detail.messages.map(restoredChatMessage));
     setError(null);
     setFailedPrompt(null);
@@ -201,16 +217,19 @@ export function AgentChatDock({
    * usable session.
    */
   async function initializeChatSessions() {
+    const release = operationLock.current.acquire();
+    if (!release) return;
     setSessionLoading(true);
+    setSessionError(null);
     try {
       const response = await fetchChatSessions();
+      setSessions(response.sessions);
       if (response.sessions.length > 0) {
-        const savedSessionId = window.localStorage.getItem(ACTIVE_CHAT_SESSION_STORAGE_KEY);
+        const savedSessionId = readActiveChatSession(() => window.localStorage.getItem(ACTIVE_CHAT_SESSION_STORAGE_KEY));
         const targetSession = response.sessions.find(
           (item) => item.session_id === savedSessionId,
         ) ?? response.sessions[0];
         const detail = await fetchChatSession(targetSession.session_id);
-        setSessions(response.sessions);
         applyChatSession(detail);
       } else {
         const created = await createChatSession();
@@ -218,8 +237,12 @@ export function AgentChatDock({
         applyChatSession(created);
       }
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "会话加载失败");
+      setSessionError({
+        message: caught instanceof Error ? caught.message : "会话加载失败",
+        retry: initializeChatSessions,
+      });
     } finally {
+      release();
       setSessionLoading(false);
     }
   }
@@ -237,19 +260,27 @@ export function AgentChatDock({
    * Load the chosen conversation while preventing a switch during an active submission.
    */
   async function openChatSession(targetSessionId: string) {
-    if (sending || targetSessionId === sessionId) {
+    if (sending || sessionLoading) return;
+    if (targetSessionId === sessionId) {
       setSessionPanelOpen(false);
       return;
     }
+    const release = operationLock.current.acquire();
+    if (!release) return;
     setSessionLoading(true);
+    setSessionError(null);
     try {
       const detail = await fetchChatSession(targetSessionId);
       applyChatSession(detail);
       setSessionPanelOpen(false);
       setEditingSessionId(null);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "会话恢复失败");
+      setSessionError({
+        message: caught instanceof Error ? caught.message : "会话恢复失败",
+        retry: () => openChatSession(targetSessionId),
+      });
     } finally {
+      release();
       setSessionLoading(false);
     }
   }
@@ -258,10 +289,11 @@ export function AgentChatDock({
    * Create and select a new server-backed conversation.
    */
   async function startNewChatSession() {
-    if (sending) {
-      return;
-    }
+    if (sending || sessionLoading) return;
+    const release = operationLock.current.acquire();
+    if (!release) return;
     setSessionLoading(true);
+    setSessionError(null);
     try {
       const created = await createChatSession();
       setSessions((current) => [created, ...current]);
@@ -269,8 +301,12 @@ export function AgentChatDock({
       setSessionPanelOpen(false);
       setEditingSessionId(null);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "新建会话失败");
+      setSessionError({
+        message: caught instanceof Error ? caught.message : "新建会话失败",
+        retry: initializeChatSessions,
+      });
     } finally {
+      release();
       setSessionLoading(false);
     }
   }
@@ -298,7 +334,7 @@ export function AgentChatDock({
    * Delete the selected conversation and select or create a replacement when it was active.
    */
   async function deleteSession(targetSessionId: string) {
-    if (sending) {
+    if (sending || sessionLoading) {
       return;
     }
     const targetSession = sessions.find((item) => item.session_id === targetSessionId);
@@ -308,9 +344,21 @@ export function AgentChatDock({
     if (!confirmed) {
       return;
     }
+    const release = operationLock.current.acquire();
+    if (!release) return;
     setSessionLoading(true);
+    setSessionError(null);
     try {
       await deleteChatSession(targetSessionId);
+      drafts.current.delete(targetSessionId);
+      if (targetSessionId === sessionId) {
+        setSessionId(null);
+        setMessages([]);
+        setMessage("");
+        setError(null);
+        setFailedPrompt(null);
+        failedRequest.current = null;
+      }
       const remaining = await refreshChatSessions();
       if (targetSessionId === sessionId) {
         if (remaining.length > 0) {
@@ -324,8 +372,12 @@ export function AgentChatDock({
       }
       setEditingSessionId(null);
     } catch (caught) {
-      setError(caught instanceof Error ? caught.message : "会话删除失败");
+      setSessionError({
+        message: caught instanceof Error ? caught.message : "会话删除失败",
+        retry: initializeChatSessions,
+      });
     } finally {
+      release();
       setSessionLoading(false);
     }
   }
@@ -348,6 +400,8 @@ export function AgentChatDock({
     if (!trimmed || sending || sessionLoading || !sessionId) {
       return;
     }
+    const release = operationLock.current.acquire();
+    if (!release) return;
 
     const retry = failedRequest.current?.session_id === sessionId && failedRequest.current.message === trimmed
       ? failedRequest.current : null;
@@ -367,7 +421,10 @@ export function AgentChatDock({
       ...current,
       ...(current.some(item => item.id === userMessageId) ? [] : [userMessage]),
     ]);
-    setMessage("");
+    const nextDraft = draftAfterChatSubmit(message, prompt);
+    setMessage(nextDraft);
+    drafts.current.set(sessionId, nextDraft);
+    inputRef.current?.focus();
     followAnswerRef.current = true;
     setShowLatest(false);
     runStartedAt.current = Date.now();
@@ -376,10 +433,8 @@ export function AgentChatDock({
     setStreamStatus("正在连接研究助手");
     setError(null);
     setFailedPrompt(null);
-    if (!retry) {
-      setActiveRunId(null);
-      setCancelRequested(false);
-    }
+    setActiveRunId(null);
+    setCancelRequested(false);
     const agentMessageId = `agent-${userMessageId}`;
     setMessages(current => current.filter(item => item.id !== agentMessageId));
     let stockMentions: AgentStockMention[] = [];
@@ -428,8 +483,15 @@ export function AgentChatDock({
       });
       failedRequest.current = null;
       setActiveRunId(null);
-      setError(null);
-      void refreshChatSessions();
+      const canRestart = response.task_status === "error" || response.task_status === "cancelled";
+      setFailedPrompt(canRestart ? trimmed : null);
+      setError(canRestart
+        ? (response.task_status === "cancelled" ? "任务已取消，可重新提问。" : "本次研究未完成，可重新提问。")
+        : null);
+      void refreshChatSessions().catch(caught => setSessionError({
+        message: caught instanceof Error ? caught.message : "会话列表更新失败",
+        retry: initializeChatSessions,
+      }));
     } catch (caught) {
       answerBuffer.dispose();
       setMessages(current => current.filter(item => item.id !== agentMessageId));
@@ -440,6 +502,9 @@ export function AgentChatDock({
     } finally {
       answerBuffer.dispose();
       answerBufferRef.current = null;
+      setActiveRunId(null);
+      setCancelRequested(false);
+      release();
       setSending(false);
     }
   }
@@ -518,7 +583,7 @@ export function AgentChatDock({
                   <>
                     <button
                       className="chat-session-select"
-                      disabled={sending}
+                      disabled={sending || sessionLoading}
                       onClick={() => void openChatSession(session.session_id)}
                       type="button"
                     >
@@ -532,6 +597,7 @@ export function AgentChatDock({
                       {session.session_id === sessionId ? (
                         <button
                           aria-label="重命名当前会话"
+                          disabled={sending || sessionLoading}
                           onClick={() => {
                             setEditingSessionId(session.session_id);
                             setEditingTitle(session.title);
@@ -592,6 +658,27 @@ export function AgentChatDock({
             setShowLatest(!followAnswerRef.current);
           }}
         >
+          {sessionLoading ? (
+            <div className="chat-session-loading" role="status">
+              <LoaderCircle aria-hidden="true" size={16} />
+              <span>正在加载会话</span>
+            </div>
+          ) : null}
+          {sessionError ? (
+            <div className="chat-state error chat-retry-state" role="alert">
+              <span>{sessionError.message}</span>
+              <button disabled={sending || sessionLoading} onClick={() => {
+                const retry = sessionError.retry;
+                setSessionError(null);
+                void retry().catch(caught => setSessionError({
+                  message: caught instanceof Error ? caught.message : "会话加载失败",
+                  retry,
+                }));
+              }} type="button">
+                <RefreshCcw aria-hidden="true" size={13} />重新加载会话
+              </button>
+            </div>
+          ) : null}
           {messages.map((item) => (
             <article
               className={`chat-message chat-${item.role} ${item.status === "error" ? "chat-error" : ""}`}
@@ -616,11 +703,11 @@ export function AgentChatDock({
             <AgentChatProgress stage={streamStage} message={streamStatus} startedAt={runStartedAt.current} />
           ) : null}
           {error ? (
-            <div className="chat-state error chat-retry-state">
+            <div className="chat-state error chat-retry-state" role="alert">
               <span>{error}</span>
               {failedPrompt ? (
                 <button disabled={sending || sessionLoading} onClick={() => void sendMessage(failedPrompt)} type="button">
-                  <RefreshCcw aria-hidden="true" size={13} />重试上一个问题
+                  <RefreshCcw aria-hidden="true" size={13} />{failedRequest.current ? "重试上一个问题" : "重新提问"}
                 </button>
               ) : null}
             </div>
@@ -658,13 +745,28 @@ export function AgentChatDock({
             void sendMessage();
           }}
         >
-          <input
+          <textarea
+            aria-label="研究问题"
+            aria-describedby="agent-chat-input-help"
+            ref={inputRef}
+            rows={2}
             disabled={sessionLoading || !sessionId}
             value={message}
-            onChange={(event) => setMessage(event.target.value)}
+            onChange={(event) => {
+              setMessage(event.target.value);
+              if (sessionId) drafts.current.set(sessionId, event.target.value);
+            }}
+            onCompositionStart={() => { composing.current = true; }}
+            onCompositionEnd={() => { composing.current = false; }}
+            onKeyDown={(event) => {
+              if (shouldSubmitChatKey(event.nativeEvent, composing.current)) {
+                event.preventDefault();
+                void sendMessage();
+              }
+            }}
             placeholder={symbol ? "问当前股票评分、风险或走势" : "问今日涨停、评分或风险"}
           />
-          {activeRunId ? (
+          {sending && activeRunId ? (
             <button className="chat-cancel" type="button" disabled={cancelRequested} onClick={() => void cancelCurrentRun()}>
               {cancelRequested ? "正在取消" : "取消任务"}
             </button>
@@ -679,6 +781,9 @@ export function AgentChatDock({
               <Send size={17} />
             </button>
           )}
+          <small className="chat-input-help" id="agent-chat-input-help">
+            Enter 发送 · Shift+Enter 换行{sending ? " · 可先编辑下一条问题" : ""}
+          </small>
         </form>
       </section>
       </div>
