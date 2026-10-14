@@ -1,6 +1,7 @@
-import { fetchFinanceNews, fetchMarketSummary, fetchRecommendationIntelligence, PUBLIC_DATA_SCOPE } from "../api";
+import { fetchFinanceNews, fetchLatestFinanceNews, fetchMarketSummary, fetchRecommendationIntelligence, PUBLIC_DATA_SCOPE } from "../api";
 import type { FinanceNewsPage, MarketSummary, RecommendationIntelligenceResponse } from "../types";
 import { createPublicSnapshot } from "./publicSnapshot";
+import { createLatestNewsSnapshot } from "./latestNewsSnapshot";
 
 const scope = PUBLIC_DATA_SCOPE;
 const record = (value: unknown): value is Record<string, any> => value !== null && typeof value === "object" && !Array.isArray(value);
@@ -34,6 +35,22 @@ export const recommendationSnapshot = createPublicSnapshot<RecommendationIntelli
 });
 
 const newsPages = new Map<number, ReturnType<typeof createPublicSnapshot<FinanceNewsPage>>>();
+const validNews = (value: unknown): value is FinanceNewsPage => record(value) && typeof value.fetched_at === "string"
+  && strings(value.sources) && [value.page, value.total, value.total_pages].every(numeric)
+  && value.page > 0 && Array.isArray(value.items)
+  && (value.refreshing === undefined || typeof value.refreshing === "boolean")
+  && (value.stale === undefined || typeof value.stale === "boolean")
+  && (value.refresh_error === undefined || nullableString(value.refresh_error))
+  && value.items.every(item => record(item)
+    && [item.title, item.summary, item.published_at, item.source, item.url, item.category].every(field => typeof field === "string"));
+
+export const latestFinanceNewsSnapshot = createLatestNewsSnapshot({
+  key: `${scope}:finance-news:latest:size=10`,
+  legacyKey: `${scope}:finance-news:page=1:size=10`,
+  fetchValue: fetchLatestFinanceNews,
+  valid: (value): value is FinanceNewsPage => validNews(value) && value.page === 1 && value.total_pages === 1,
+});
+
 export function financeNewsSnapshot(page: number) {
   let resource = newsPages.get(page);
   if (!resource) {
@@ -48,11 +65,7 @@ export function financeNewsSnapshot(page: number) {
       maxAgeMs: 15 * 60_000,
       // Only the landing page persists across reloads; other pages stay bounded in memory.
       ...(page === 1 ? {} : { storage: () => null }),
-      valid: (value): value is FinanceNewsPage => record(value) && typeof value.fetched_at === "string"
-        && strings(value.sources) && [value.page, value.total, value.total_pages].every(numeric)
-        && value.page > 0 && value.page <= page && Array.isArray(value.items)
-        && value.items.every(item => record(item)
-          && [item.title, item.summary, item.published_at, item.source, item.url, item.category].every(field => typeof field === "string")),
+      valid: (value): value is FinanceNewsPage => validNews(value) && value.page <= page,
     });
     if (newsPages.size >= 10) newsPages.delete(newsPages.keys().next().value!);
     newsPages.set(page, resource);
@@ -62,5 +75,6 @@ export function financeNewsSnapshot(page: number) {
 
 export async function refreshRecommendationSnapshots() {
   await Promise.all([recommendationSnapshot.refresh(true),
+    ...(latestFinanceNewsSnapshot.isObserved() ? [latestFinanceNewsSnapshot.refresh(true)] : []),
     ...[...newsPages.values()].filter(resource => resource.isObserved()).map(resource => resource.refresh(true))]);
 }

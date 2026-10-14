@@ -304,7 +304,7 @@ test("cached news remains readable with its source cutoff during background refr
     assert.ok(html.includes("已保存的市场快讯"));
     assert.ok(html.includes("测试资讯来源"));
     assert.ok(html.includes("来源抓取：2026-10-12 18:30:00（上海时间）"));
-    assert.ok(html.includes("近 24 小时（以来源抓取为截止）"));
+    assert.ok(html.includes("最近一批快讯"));
     assert.ok(!html.includes("正在获取最新新闻..."));
     if (failed) {
       assert.ok(html.includes("新闻更新失败"));
@@ -312,7 +312,7 @@ test("cached news remains readable with its source cutoff during background refr
       clickRetry();
       assert.equal(retries, 1);
     } else {
-      assert.ok(!html.includes("更新中"));
+      assert.ok(html.includes("显示上次快讯，正在更新"));
       assert.ok(!html.includes("state-spinner"));
       assert.equal(clickRetry, undefined);
     }

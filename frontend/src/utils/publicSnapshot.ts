@@ -13,6 +13,7 @@ export function createPublicSnapshot<T>({
   key, fetchValue, valid, maxAgeMs, freshForMs = 30_000,
   storage = () => typeof window === "undefined" ? null : window.localStorage,
   now = Date.now,
+  retain = () => true,
 }: {
   key: string;
   fetchValue: () => Promise<T>;
@@ -21,6 +22,7 @@ export function createPublicSnapshot<T>({
   freshForMs?: number;
   storage?: () => SnapshotStorage | null;
   now?: () => number;
+  retain?: (value: T) => boolean;
 }) {
   const storageKey = `limituplab.public-snapshot.v1:${key}`;
   const listeners = new Set<() => void>();
@@ -46,7 +48,7 @@ export function createPublicSnapshot<T>({
         }
       } catch { /* Storage and invalid old snapshots must never block a network read. */ }
     }
-    if (state.savedAt !== null && !unexpired(state.savedAt)) {
+    if (state.savedAt !== null && (!unexpired(state.savedAt) || (state.data !== null && !retain(state.data)))) {
       state = { ...empty(), loading: state.loading, error: state.error };
     }
     return state;

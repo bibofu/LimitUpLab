@@ -2838,6 +2838,28 @@ a.entry-card {
   font-size: 13px;
 }
 
+.recommendation-news-navigation,
+.recommendation-news-status {
+  display: flex;
+  align-items: center;
+  justify-content: space-between;
+  flex-wrap: wrap;
+  gap: 8px;
+  padding: 9px 14px;
+  color: #667489;
+  font-size: 12px;
+}
+
+.recommendation-news-navigation button,
+.recommendation-news-status button {
+  border: 1px solid #d0d5dd;
+  border-radius: 5px;
+  padding: 5px 9px;
+  background: #fff;
+  color: #344054;
+  cursor: pointer;
+}
+
 .recommendation-news-pagination {
   display: flex;
   align-items: center;

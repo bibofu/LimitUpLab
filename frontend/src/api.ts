@@ -251,6 +251,11 @@ export function fetchFinanceNews(page = 1, pageSize = 10) {
   return request<FinanceNewsPage>(`/api/market/news?${params.toString()}`);
 }
 
+/** Fetch the latest small batch independently of the full 24-hour archive. */
+export function fetchLatestFinanceNews(pageSize = 10) {
+  return request<FinanceNewsPage>(`/api/market/news/latest?page_size=${pageSize}`, undefined, DASHBOARD_TIMEOUT_MS);
+}
+
 /**
  * Fetch review agent report from the backend using the supplied query scope; return the typed
  * response promise.

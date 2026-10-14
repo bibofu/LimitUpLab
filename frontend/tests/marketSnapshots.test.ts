@@ -11,7 +11,9 @@ function load(fetchFinanceNews: (page: number) => Promise<unknown>) {
   } }).outputText;
   const module = { exports: {} as any };
   new Function("require", "module", "exports", compiled)((name: string) => name === "./publicSnapshot"
-    ? snapshots : { PUBLIC_DATA_SCOPE: "tests", fetchFinanceNews,
+    ? snapshots : name === "./latestNewsSnapshot"
+      ? { createLatestNewsSnapshot: (options: any) => snapshots.createPublicSnapshot({ ...options, maxAgeMs: 604800000 }) }
+      : { PUBLIC_DATA_SCOPE: "tests", fetchFinanceNews, fetchLatestFinanceNews: () => fetchFinanceNews(0),
       fetchMarketSummary: async () => ({}),
       fetchRecommendationIntelligence: async () => ({ stage: "draft", refreshed_at: "2026-10-13T17:00:00+08:00",
         target_trade_date: "2026-10-14", relay_base_date: "2026-10-13", finalized_at: null,
@@ -61,4 +63,23 @@ test("a late page response stays with its own page resource", async () => {
   await pending;
   assert.equal(second.read().data.page, 2);
   assert.equal(first.read().data.page, 1);
+});
+
+test("latest and historical page one have separate resources and refresh only the visible feed", async () => {
+  const calls: number[] = [];
+  const resources = load(async (page: number) => {
+    calls.push(page);
+    return { ...pageData(1), total_pages: page === 0 ? 1 : 3, total: page === 0 ? 10 : 30 };
+  });
+  const latest = resources.latestFinanceNewsSnapshot;
+  const history = resources.financeNewsSnapshot(1);
+  await latest.refresh();
+  await history.refresh();
+  assert.equal(latest.read().data.total, 10);
+  assert.equal(history.read().data.total, 30);
+  calls.length = 0;
+  const stop = latest.subscribe(() => {});
+  await resources.refreshRecommendationSnapshots();
+  assert.deepEqual(calls, [0]);
+  stop();
 });

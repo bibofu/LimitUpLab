@@ -62,30 +62,32 @@ function render(kind: "news" | "premarket", state: Record<string, unknown>) {
   };
 }
 
-test("news metadata and content are identical across cached background reads", () => {
+test("latest news keeps source cutoff and content visible while describing the refresh", () => {
   const ready = render("news", { news }).html;
-  for (const state of [{ loading: true }, { loading: true, fromCache: true }, { fromCache: true }]) {
-    assert.equal(render("news", { news, ...state }).html, ready);
+  for (const state of [{ loading: true }, { loading: true, fromCache: true }, { news: { ...news, refreshing: true, stale: true } }]) {
+    const updating = render("news", { news, ...state }).html;
+    assert.ok(updating.includes("已保存的市场快讯"));
+    assert.ok(updating.includes("来源抓取：2026-10-12 18:30:00（上海时间）"));
+    assert.ok(updating.includes("显示上次快讯，正在更新"));
   }
   assert.ok(ready.includes("来源抓取：2026-10-12 18:30:00（上海时间）"));
-  assert.ok(ready.includes("近 24 小时（以来源抓取为截止）"));
+  assert.ok(ready.includes("最近一批快讯"));
+  assert.ok(ready.includes("展示 1 条"));
+  assert.ok(ready.includes("查看近24小时新闻"));
+  assert.ok(!ready.includes("共 1 条"));
   assert.ok(ready.includes("已保存的市场快讯"));
-  assert.ok(!ready.includes("更新中"));
-  assert.ok(!ready.includes("自动更新"));
-  assert.ok(!ready.includes("state-spinner"));
 });
 
-test("unknown news is a quiet placeholder and a verified empty result remains visible during refresh", () => {
+test("unknown latest news has an explicit loading state and verified empty results stay distinct", () => {
   const unknown = render("news", { news: null, loading: true }).html;
   assert.ok(unknown.includes("来源抓取：—"));
   assert.ok(!unknown.includes("没有市场快讯"));
   assert.ok(!unknown.includes("共 0 条"));
-  assert.ok(!unknown.includes("正在"));
-  assert.ok(!unknown.includes("state-spinner"));
+  assert.ok(unknown.includes("正在获取最新快讯"));
   const empty = { ...news, total: 0, items: [] };
   const ready = render("news", { news: empty }).html;
-  assert.equal(render("news", { news: empty, loading: true, fromCache: true }).html, ready);
-  assert.ok(ready.includes("该次抓取的近 24 小时范围内没有市场快讯"));
+  assert.ok(render("news", { news: empty, loading: true, fromCache: true }).html.includes("该次抓取没有最新快讯"));
+  assert.ok(ready.includes("该次抓取没有最新快讯"));
 });
 
 test("news errors retain dated content and expose a working retry", () => {
@@ -98,6 +100,67 @@ test("news errors retain dated content and expose a working retry", () => {
   result.retry();
   assert.equal(retries, 1);
   assert.ok(render("news", { news: null, error: "request failed" }).html.includes("新闻暂不可用"));
+});
+
+test("server refresh failures and bounded polling keep old news with retry feedback", () => {
+  const failed = render("news", { news: { ...news, stale: true, refreshing: false, refresh_error: "upstream error" } });
+  assert.ok(failed.html.includes("新闻更新失败，继续显示上次快讯"));
+  assert.ok(failed.html.includes("已保存的市场快讯"));
+  assert.ok(!failed.html.includes("upstream error"));
+  assert.ok(failed.retry);
+  const waiting = render("news", { news: { ...news, refreshing: true }, waitingTooLong: true });
+  assert.ok(waiting.html.includes("更新时间较长，继续显示上次快讯"));
+  assert.ok(waiting.retry);
+});
+
+test("the news board starts with latest, opens independent history pages, and returns to latest", () => {
+  const slots: unknown[] = [];
+  let cursor = 0;
+  const requests: [number, string][] = [];
+  let buttons = new Map<string, () => void>();
+  const observe = (factory: (...args: any[]) => unknown) => (...args: any[]) => {
+    if (args[0] === "button") buttons.set(String(args[1]?.children), args[1]?.onClick);
+    return factory(...args);
+  };
+  const { RecommendationNewsBoard } = compile("../src/components/RecommendationNewsBoard.tsx", {
+    react: {
+      useState(initial: unknown) {
+        const slot = cursor++;
+        if (!(slot in slots)) slots[slot] = initial;
+        return [slots[slot], (next: any) => { slots[slot] = typeof next === "function" ? next(slots[slot]) : next; }];
+      },
+      useEffect() {},
+      useMemo: (factory: () => unknown) => factory(),
+    },
+    "../hooks/useFinanceNews": { useFinanceNews(page: number, mode: string) {
+      requests.push([page, mode]);
+      return { news: { ...news, page, total_pages: mode === "history" ? 3 : 1,
+        total: mode === "history" ? 30 : 1,
+        items: [{ ...news.items[0], title: mode === "history" ? `历史第${page}页` : "最新标题" }] },
+      loading: false, error: null, reload() {} };
+    } },
+    "react/jsx-runtime": { ...jsxRuntime, jsx: observe(jsxRuntime.jsx), jsxs: observe(jsxRuntime.jsxs) },
+  });
+  const renderBoard = () => {
+    cursor = 0; buttons = new Map();
+    return renderToStaticMarkup(RecommendationNewsBoard());
+  };
+  let html = renderBoard();
+  assert.ok(html.includes("最新标题"));
+  assert.ok(!html.includes("市场快讯分页"));
+  buttons.get("查看近24小时新闻")!();
+  html = renderBoard();
+  assert.ok(html.includes("历史第1页"));
+  assert.ok(html.includes("近 24 小时（以来源抓取为截止）"));
+  assert.ok(html.includes("共 30 条"));
+  buttons.get("2")!();
+  html = renderBoard();
+  assert.ok(html.includes("历史第2页"));
+  buttons.get("返回最新")!();
+  html = renderBoard();
+  assert.ok(html.includes("最新标题"));
+  assert.ok(!html.includes("历史第2页"));
+  assert.deepEqual(requests, [[1, "latest"], [1, "history"], [2, "history"], [1, "latest"]]);
 });
 
 test("candidate cards and snapshot dates are identical across cached background reads", () => {

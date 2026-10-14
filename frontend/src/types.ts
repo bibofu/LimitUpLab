@@ -186,6 +186,9 @@ export interface FinanceNewsPage {
   total: number;
   total_pages: number;
   items: FinanceNewsItem[];
+  refreshing?: boolean;
+  stale?: boolean;
+  refresh_error?: string | null;
 }
 
 export interface BoardPromotionBucket {
