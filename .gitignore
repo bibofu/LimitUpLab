@@ -61,3 +61,6 @@ frontend/*.log
 .env.*
 !.env.example
 !.env.production.example
+
+# Local job search materials
+/workPre/
