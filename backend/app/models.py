@@ -226,6 +226,9 @@ class FinanceNewsPage(BaseModel):
     total: int
     total_pages: int
     items: list[FinanceNewsItem] = Field(default_factory=list)
+    refreshing: bool = False
+    stale: bool = False
+    refresh_error: str | None = None
 
 
 class StockNewsItem(BaseModel):

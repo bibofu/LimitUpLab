@@ -19,6 +19,7 @@ from app.repositories import get_limit_up_repository
 from app.services.analysis import latest_trade_date, summarize_market
 from app.services.dragon_tiger_review import load_dragon_tiger_review
 from app.services.finance_news import collect_finance_news
+from app.services.finance_news_latest import get_latest_news
 
 router = APIRouter()
 
@@ -134,6 +135,26 @@ _FOREIGN_NEWS_TERMS = (
     "纽约金",
     "布伦特原油",
 )
+
+
+@router.get("/news/latest", response_model=FinanceNewsPage)
+def get_latest_finance_news(
+    page_size: int = Query(default=10, ge=5, le=20),
+) -> FinanceNewsPage:
+    """Deliver a dated latest batch; full-window pagination is a separate request."""
+    try:
+        facts, refreshing, stale, refresh_error = get_latest_news()
+    except Exception as exc:
+        raise HTTPException(status_code=502, detail="最新快讯暂不可用，请稍后重试。") from exc
+    ordered = sorted(
+        (item for item in facts.items if _include_market_news(item)),
+        key=lambda item: item.published_at, reverse=True,
+    )[:page_size]
+    return FinanceNewsPage(
+        fetched_at=facts.fetched_at, sources=facts.sources,
+        page=1, page_size=page_size, total=len(ordered), total_pages=1, items=ordered,
+        refreshing=refreshing, stale=stale, refresh_error=refresh_error,
+    )
 
 
 @router.get("/news", response_model=FinanceNewsPage)
