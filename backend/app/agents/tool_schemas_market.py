@@ -112,7 +112,7 @@ MARKET_TOOL_SCHEMAS = [
         name="sector_stock_ranking",
         time_mode="historical",
         dates=("end_date",),
-        collection="stocks",
+        collection="items",
         notes="Constituent coverage may be partial; inspect coverage before market-wide claims.",
         description=(
             "解析同花顺行业或概念板块成分股，并按截至最新完整收盘日的K线趋势排序。"

@@ -40,7 +40,7 @@ def request():
 
 
 def payload(**updates):
-    return {"items": deepcopy(ROWS), "source": "synthetic-recovery", "trade_date": "2026-09-22",
+    return {"events": deepcopy(ROWS), "source": "synthetic-recovery", "trade_date": "2026-09-22",
             "source_truncated": True, "matched_count": 8, "returned_count": 2, **updates}
 
 
@@ -133,7 +133,7 @@ def test_uncertain_or_ineligible_recovery_never_publishes_a_table(monkeypatch, b
     target, key = prepared_run()
     reason = "provider_error"
     if boundary == "ambiguous":
-        target.evidence.add(tool="stock_news", payload=payload(), state="ok", arguments={})
+        target.evidence.add(tool="stock_news", payload={"items": deepcopy(ROWS)}, state="ok", arguments={})
     elif boundary == "historical":
         target.evidence.restore_history(key, target.evidence.records[key])
     elif boundary == "stale":

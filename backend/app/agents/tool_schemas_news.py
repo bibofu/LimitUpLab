@@ -75,7 +75,7 @@ NEWS_TOOL_SCHEMAS = [
     AgentToolSchema(
         name="web_search",
         time_mode="retrieved_now",
-        collection="items",
+        collection="results",
         notes="Search retrieval is current; publication date must be checked separately.",
         description=(
             "搜索公开互联网，适合查询本地行情工具未覆盖的最新新闻、公告、政策、研报摘要、"

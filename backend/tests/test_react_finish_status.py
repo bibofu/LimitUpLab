@@ -48,6 +48,7 @@ def run_finishes(finishes, *, source_missing=False, asks_news=False, asks_trade=
                 "symbol": symbol, "name": "合成样本", "data_as_of": "2026-09-22",
                 "return_10d_pct": 1.2, "source": "synthetic-finish-status-fixture",
                 "data_missing": ["未提供换手率"] if source_missing else [],
+                "bars": [{"trade_date": "2026-09-22", "close": 10.12}],
             },
         )
 

@@ -42,7 +42,7 @@ REVIEW_TOOL_SCHEMAS = [
         name="rating_evaluation",
         time_mode="historical",
         dates=("start_date", "end_date"),
-        collection="items",
+        collection="evaluations",
         description="Evaluate saved first-board rating predictions against later outcomes and summarize successes, misses and false negatives.",
         args_schema={
             "type": "object",

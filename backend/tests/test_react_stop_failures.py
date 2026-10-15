@@ -66,7 +66,8 @@ def test_graph_stop_preserves_business_failure_after_both_finish_attempts_fail(f
             raise RuntimeError("upstream failed with " + SECRET)
         return ToolResult(name="stock_kline", input=ARGS, summary="stale fixture " + SECRET,
                           output={"symbol": symbol, "data_as_of": "2026-09-21",
-                                  "return_10d_pct": 1.2, "source": "offline-stop-fixture"})
+                                  "return_10d_pct": 1.2, "source": "offline-stop-fixture",
+                                  "bars": [{"trade_date": "2026-09-21", "close": 10.12}]})
 
     class Model:
         calls = 0
@@ -165,7 +166,7 @@ def test_restored_failure_and_historical_evidence_do_not_hide_current_query_fail
 @pytest.mark.parametrize("result_state", ["ok", "empty", "partial"])
 def test_restored_failure_then_valid_result_preserves_existing_fallback_and_evidence(result_state):
     rows = [] if result_state == "empty" else [{"symbol": "600101", "name": "新返回合成对象"}]
-    payload = {"items": rows, "data_as_of": "2026-09-22", "source": "offline-stop-fixture",
+    payload = {"bars": rows, "data_as_of": "2026-09-22", "source": "offline-stop-fixture",
                "data_missing": ["部分来源未返回"] if result_state == "partial" else []}
     executed = []
 

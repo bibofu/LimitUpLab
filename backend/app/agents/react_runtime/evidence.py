@@ -6,8 +6,25 @@ from math import isfinite
 from uuid import uuid4
 
 from fastapi.encoders import jsonable_encoder
+from app.agents.react_runtime.selection_provenance import row_selection_matches
 
-COLLECTIONS = ("events", "top_candidates", "items", "stocks", "top_sectors", "bars", "candidates")
+from app.agents.tool_schemas_market import MARKET_TOOL_SCHEMAS
+from app.agents.tool_schemas_news import NEWS_TOOL_SCHEMAS
+from app.agents.tool_schemas_research import RESEARCH_TOOL_SCHEMAS
+from app.agents.tool_schemas_review import REVIEW_TOOL_SCHEMAS
+
+TOOL_COLLECTIONS = {
+    contract.name: contract.collection
+    for contract in (*MARKET_TOOL_SCHEMAS, *NEWS_TOOL_SCHEMAS,
+                     *RESEARCH_TOOL_SCHEMAS, *REVIEW_TOOL_SCHEMAS)
+    if contract.collection
+} | {"compute_result": "items"}
+# Legacy/unregistered evidence keeps its previous generic collection behavior.
+# Declared tools always select their own contract, regardless of payload order.
+COLLECTIONS = tuple(dict.fromkeys((
+    "events", "top_candidates", "items", "stocks", "top_sectors", "bars", "candidates",
+    *TOOL_COLLECTIONS.values(),
+)))
 EVIDENCE_VERSION = "react-evidence-v4"
 CURRENT_SCOPE = "current_run"
 HISTORY_SCOPE = "conversation_history"
@@ -40,29 +57,53 @@ def compact(value, limit=8):
 def payload_of(result):
     raw = jsonable_encoder(result.output)
     trace = jsonable_encoder(result.trace_output)
-    if result.name == "limit_up_events" and isinstance(raw, list):
-        return {**trace, "events": raw}
+    collection = TOOL_COLLECTIONS.get(result.name)
+    if isinstance(raw, list) and collection:
+        raw = {**trace, collection: raw}
+    outcome = result.trace().result
+    if outcome is not None and outcome.status == "error":
+        return raw if isinstance(raw, (dict, list)) else trace
     if result.name == "first_board_ratings" and isinstance(raw, dict):
-        return {**raw, "top_candidates": [
+        candidates = raw.get("candidates")
+        if not isinstance(candidates, list) or any(
+            not isinstance(item, dict) or not isinstance(item.get("facts", {}), dict)
+            for item in candidates
+        ):
+            raise ValueError("Invalid first_board_ratings collection: candidates must be object rows")
+        raw = {**raw, "top_candidates": [
             {**item.get("facts", {}), **{k: v for k, v in item.items() if k != "facts"}}
-            for item in raw.get("candidates", [])
+            for item in candidates
         ]}
     if result.name == "stock_kline" and isinstance(raw, dict):
-        return {**raw, "metric_definitions": {
+        raw = {**raw, "metric_definitions": {
             "return_Nd_pct": "(close[t] / close[t-N] - 1)*100; N trading intervals, N+1 closes. Displayed N bars have N-1 intervals. Not an adjustment explanation.",
             "trend": "Moving-average alignment label; not consecutive daily increases.",
             "max_drawdown_pct": "Peak-to-subsequent-trough in displayed bars, percent.",
         }}
-    return raw if isinstance(raw, (dict, list)) else trace
+    payload = raw if isinstance(raw, (dict, list)) else trace
+    # Validate inside ToolGateway.execute so malformed output follows the normal
+    # execution-failure path, instead of escaping while evidence is being stored.
+    if collection:
+        rows_of(payload, tool=result.name)
+    return payload
 
 
-def rows_of(payload):
+def rows_of(payload, *, tool=None):
+    collection = TOOL_COLLECTIONS.get(tool)
     if isinstance(payload, list):
-        return payload
-    for key in COLLECTIONS:
-        if isinstance(payload.get(key), list):
-            return payload[key]
-    return [payload] if payload else []
+        rows = payload
+    elif collection:
+        if not isinstance(payload, dict) or not isinstance(payload.get(collection), list):
+            raise ValueError(f"Invalid {tool} collection: {collection} must be an array")
+        rows = payload[collection]
+    else:
+        for key in COLLECTIONS:
+            if isinstance(payload.get(key), list):
+                return payload[key]
+        return [payload] if payload else []
+    if collection and any(not isinstance(row, dict) for row in rows):
+        raise ValueError(f"Invalid {tool} collection: {collection} must contain object rows")
+    return rows
 
 
 class EvidenceStore:
@@ -73,6 +114,29 @@ class EvidenceStore:
         # Runtime-owned proofs, never accepted from a tool payload or restored history.
         self._ranked_prefixes = {}
         self._rank_scopes = {}
+        self._selections = {}
+
+    def checkpoint(self):
+        """Persist runtime-owned proofs separately from untrusted tool payloads."""
+        return deepcopy({"records": self.records, "ranked_prefixes": self._ranked_prefixes,
+                         "rank_scopes": self._rank_scopes, "selections": self._selections})
+
+    def restore_checkpoint(self, snapshot):
+        # Legacy checkpoints contained records only. Never recover their proof
+        # claims from tool metadata or from historical conversation evidence.
+        if "records" not in snapshot:
+            self.records = deepcopy(snapshot)
+            self._ranked_prefixes, self._rank_scopes, self._selections = {}, {}, {}
+            return
+        self.records = deepcopy(snapshot["records"])
+        for attribute, field in (("_ranked_prefixes", "ranked_prefixes"),
+                                 ("_rank_scopes", "rank_scopes"), ("_selections", "selections")):
+            setattr(self, attribute, {key: deepcopy(value) for key, value in snapshot.get(field, {}).items()
+                                     if key in self.records and self.scope_of(self.records[key]) == CURRENT_SCOPE})
+
+    def row_selection_matches(self, key, *, offset, limit, sort_by=None, descending=None):
+        return row_selection_matches(self, key, offset=offset, limit=limit,
+                                     sort_by=sort_by, descending=descending)
 
     @staticmethod
     def scope_of(record):
@@ -94,9 +158,11 @@ class EvidenceStore:
 
     def add(self, *, tool, payload, state, arguments, sources=None):
         key = "ev_" + uuid4().hex[:16]
-        rows = rows_of(payload)
+        rows = [] if state == "error" else rows_of(payload, tool=tool)
         metadata = payload if isinstance(payload, dict) else {}
-        has_row_collection = any(isinstance(metadata.get(name), list) for name in COLLECTIONS)
+        collection = TOOL_COLLECTIONS.get(tool)
+        has_row_collection = (isinstance(metadata.get(collection), list) if collection
+                              else any(isinstance(metadata.get(name), list) for name in COLLECTIONS))
         # Source truncation is different from the small model preview page.
         truncated = bool(metadata.get("source_truncated") or metadata.get("truncated")) or (
             tool != "compute_result" and has_row_collection
@@ -287,4 +353,9 @@ class EvidenceStore:
         if rank_scope and not historical:
             self._rank_scopes[key] = rank_scope
             self.records[key]["complete_rank_scope"] = deepcopy(rank_scope)
+        if not historical:
+            self._selections[key] = {"source": spec.evidence_id, "operation": spec.operation,
+                                     "offset": spec.offset, "limit": spec.limit, "total": total,
+                                     "sort_by": spec.sort_by, "descending": spec.descending,
+                                     "filtered": bool(spec.filters)}
         return key

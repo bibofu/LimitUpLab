@@ -162,8 +162,8 @@ def test_post_limit_adapter_is_declared_and_invoked_through_structured_tool():
 
 def test_partial_source_never_becomes_complete_set_difference():
     store = EvidenceStore()
-    a = store.add(tool="limit_up_events", payload={"items": [{"symbol": "000001"}], "matched_count": 20}, state="ok", arguments={})
-    b = store.add(tool="limit_up_events", payload={"items": []}, state="empty", arguments={})
+    a = store.add(tool="limit_up_events", payload={"events": [{"symbol": "000001"}], "matched_count": 20}, state="ok", arguments={})
+    b = store.add(tool="limit_up_events", payload={"events": []}, state="empty", arguments={})
     with pytest.raises(ValueError, match="complete source sets"):
         store.compute(Compute(evidence_id=a, other_id=b, operation="difference"))
     derived = store.compute(Compute(evidence_id=a, operation="aggregate"))
