@@ -91,12 +91,15 @@ def _partial_absence_case():
         "candidates": [], "data_missing": ["定向评级记录查询不完整，无法确认有无评级记录"],
         "source": SOURCE, "synthetic": True}
     arguments = {"trade_date": "2026-09-22", "symbols": ["SYNTHETIC_SAMPLE_E"]}
-    store = EvidenceStore()
-    generated_key = store.add(tool="first_board_ratings", payload=deepcopy(payload), state="partial",
-                              arguments=deepcopy(arguments))
-    record = store.records.pop(generated_key)
     key = "ev_synthetic_partial_absence"
-    record.update(evidence_id=key, retrieved_at="2026-09-22T18:00:00+08:00")
+    # Freeze this legacy calibration record instead of re-ingesting its old
+    # candidates shape through today's top_candidates collection contract.
+    # Its facts, metadata and expected labels remain byte-for-byte equivalent.
+    record = {"evidence_id": key, "tool": "first_board_ratings", "payload": deepcopy(payload),
+        "result_state": "partial", "schema_version": "react-evidence-v4",
+        "retrieved_at": "2026-09-22T18:00:00+08:00", "source_truncated": False,
+        "data_missing": deepcopy(payload["data_missing"]), "evidence_scope": "current_run",
+        "historical_reference": False, "arguments": deepcopy(arguments), "sources": [SOURCE], "rows": []}
     trace = {"name": "first_board_ratings", "status": "success", "summary": "Synthetic incomplete rating query",
              "input": deepcopy(arguments), "output": deepcopy(payload)}
     return CalibrationCase("absence_claim_partial_source",

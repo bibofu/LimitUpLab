@@ -13,7 +13,7 @@ from app.agents.react_runtime.rendering import render_answer
 from app.agents.react_runtime.runtime import Run
 from app.agents.react_runtime.task_contract import TaskInterpretation, validate_delivery
 from app.agents.tools import TOOL_SCHEMAS
-from app.models import AgentChatRequest, FirstBoardRating, LimitUpEvent
+from app.models import AgentChatRequest, FirstBoardRating, LimitUpEvent, MarketIndexTrendItem
 from app.services.prompt_security import review_input
 
 
@@ -31,6 +31,7 @@ class Reviewer:
         return AIMessage(content="", tool_calls=[{"name": "submit_input_security_review", "id": "review",
             "args": {"decision": "allow", "signals": [], "reason": "scripted semantic interpretation",
                 "request_kind": "research", "context_mode": "standalone", "current_task": TASK,
+                "date_scope": {"mode": "unspecified"},
                 "output_contract": contract}}])
 
 
@@ -76,7 +77,7 @@ def test_review_schema_offers_trusted_raw_field_enum_instead_of_unbounded_string
 
 
 def test_catalog_fields_are_scalars_in_the_declared_production_models():
-    models = {model.__name__: model for model in (LimitUpEvent, FirstBoardRating)}
+    models = {model.__name__: model for model in (LimitUpEvent, FirstBoardRating, MarketIndexTrendItem)}
     for key, entry in DISPLAY_FIELD_CATALOG.items():
         declaration = models[entry["model"]].model_json_schema()["properties"][key]
         assert declaration.get("type") in {"string", "integer", "number", "boolean"}
@@ -129,9 +130,10 @@ def test_old_checkpoint_unknown_field_cannot_poison_recovered_delivery():
     assert restored_again.output_contract.fields == []
     assert any(record["proposed_fields"] == old_task["output_contract"]["fields"] and record.get("reason")
                for record in resolution_records(restored_again.model_dump(mode="json")))
-    validate_delivery(Finish(status="complete", answer="{{evidence_table}}", table={"evidence_id": "test",
-        "columns": [{"field": field, "label": field} for field in ["symbol", "name", "board_height"]]}),
-        runtime.task_context)
+    with pytest.raises(ValueError, match="fields remain unresolved"):
+        validate_delivery(Finish(status="complete", answer="{{evidence_table}}", table={"evidence_id": "test",
+            "columns": [{"field": field, "label": field} for field in ["symbol", "name", "board_height"]]}),
+            runtime.task_context)
 
 
 def test_backend_does_not_trust_a_model_claim_that_unknown_fields_are_resolved():

@@ -163,7 +163,8 @@ def test_failed_queries_do_not_prevent_an_independent_successful_query(failure_c
     def kline(**kwargs):
         queried.append(kwargs["symbol"])
         return ToolResult(name="stock_kline", input=kwargs, summary="fixture", result_status="ok",
-                          output={"symbol": "600103", "trend": "震荡", "source": "offline-fixture"})
+                          output={"symbol": "600103", "trend": "震荡", "source": "offline-fixture",
+                                  "bars": [{"trade_date": "2026-09-22", "close": 10.0}]})
 
     class Model:
         def generate_messages(self, messages, tools, **kwargs):
@@ -204,7 +205,7 @@ def test_failure_journal_replay_and_checkpoint_restore_do_not_repeat_query(tmp_p
 
     class CrashingControl(RunControl):
         def save(self, payload):
-            if payload["runtime"]["evidence"] and payload["state"]["resume_node"] == checkpoint_boundary:
+            if payload["runtime"]["evidence"]["records"] and payload["state"]["resume_node"] == checkpoint_boundary:
                 raise Crash()
             super().save(payload)
 

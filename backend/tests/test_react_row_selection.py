@@ -99,12 +99,11 @@ def test_existing_complete_rank_scope_still_works_with_requested_window():
     assert len(answer.splitlines()) == 5
 
 
-def test_window_intent_is_retained_without_claiming_row_count_proves_membership():
+def test_matching_row_count_cannot_substitute_for_requested_rank_window():
     store, key = evidence(3)
     interpretation = task(3, offset=3)
-    validate_delivery(table(key), interpretation, store)
-    # This gate checks cardinality only. Selecting the correct ranks remains the
-    # tool/computation contract and the semantic/Golden evaluation's responsibility.
+    with pytest.raises(ValueError, match="does not prove the requested row window"):
+        validate_delivery(table(key), interpretation, store)
     assert interpretation.output_contract.row_selection.offset == 3
 
 
@@ -146,6 +145,7 @@ class Reviewer:
         return call("submit_input_security_review", {
             "decision": "allow", "signals": [], "reason": "scripted semantic contract",
             "request_kind": "research", "context_mode": "follow_up", "current_task": self.current_task,
+            "date_scope": {"mode": "unspecified"},
             "output_contract": {"mode": self.mode, "row_selection": self.selection,
                                 "table_required": self.mode != "prose_only"},
         }, "review")
@@ -170,7 +170,7 @@ def test_current_semantic_selection_replaces_prior_constraint_without_losing_con
     prior = reviewer.input_payload["task_context"]["previous_task"]["output_contract"]["row_selection"]
     assert prior["limit"] == 2
     actual = assessment.output_contract.row_selection
-    assert (actual.model_dump() if actual else None) == selection
+    assert (actual.model_dump(exclude_none=True) if actual else None) == selection
     assert assessment.output_contract.mode == mode
     node = reviewer.schema["properties"]["output_contract"]
     while "$ref" in node:

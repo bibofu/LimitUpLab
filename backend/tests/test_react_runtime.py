@@ -66,7 +66,8 @@ def test_progress_covers_checks_and_actual_query_completions(monkeypatch):
     def news(**args):
         raise ValueError("internal error details")
     def kline(**args):
-        return ToolResult(name="stock_kline", input=args, summary="fixture", output={"symbol": "000001"})
+        return ToolResult(name="stock_kline", input=args, summary="fixture",
+                          output={"symbol": "000001", "bars": [{"trade_date": "2026-09-22", "close": 10.0}]})
     class Model:
         def generate_messages(self, messages, tools, **kwargs):
             observations = [m for m in messages if isinstance(m, ToolMessage)]
@@ -96,7 +97,8 @@ def test_react_observes_error_and_selects_next_tool():
     def kline(symbol, days=20, end_date: date | None = None):
         assert days == 12 and end_date == date(2026, 5, 15)
         return ToolResult(name="stock_kline", input={"symbol": symbol},
-                          output={"symbol": symbol, "trend": "震荡"}, summary="行情证据")
+                          output={"symbol": symbol, "trend": "震荡",
+                                  "bars": [{"trade_date": "2026-05-15", "close": 10.0}]}, summary="行情证据")
     class Model:
         calls = 0
         def generate_messages(self, messages, tools, **kwargs):
@@ -151,7 +153,7 @@ def test_public_entry_defaults_to_react(monkeypatch):
             return call("finish", {"status": "refuse", "answer": "我可以提供研究事实，不能提供交易指令。"}, "f")
     response = answer_first_board_chat(AgentChatRequest(session_id="r", message="给我买卖指令"), [],
                                       llm_provider=Model(), tool_registry=registry())
-    assert response.generated_by == "react-runtime-v36"
+    assert response.generated_by == "react-runtime-v37"
     assert response.task_status == "refuse"
 
 
@@ -307,7 +309,8 @@ def test_legacy_claim_field_is_ignored_after_validator_removal():
         return ToolResult(
             name="stock_kline",
             input={"symbol": symbol, "days": days, "end_date": end_date},
-            output={"symbol": symbol, "return_10d_pct": 1.2},
+            output={"symbol": symbol, "return_10d_pct": 1.2,
+                    "bars": [{"trade_date": "2026-05-15", "close": 10.12}]},
             summary="行情证据",
         )
 
@@ -693,6 +696,7 @@ def test_final_answer_is_not_rejected_by_evidence_value_comparison():
                 "name": "贵州茅台",
                 "end_date": end_date.isoformat(),
                 "return_10d_pct": 1.2,
+                "bars": [{"trade_date": end_date.isoformat(), "close": 10.12}],
             },
             summary="行情证据",
         )
@@ -804,7 +808,8 @@ def test_mixed_current_and_history_ids_requires_repair_to_current_only():
         return ToolResult(
             name="stock_kline",
             input={"symbol": symbol, "days": days, "end_date": end_date},
-            output={"symbol": symbol, "end_date": "2026-09-11", "return_10d_pct": 2.5},
+            output={"symbol": symbol, "end_date": "2026-09-11", "return_10d_pct": 2.5,
+                    "bars": [{"trade_date": "2026-09-11", "close": 10.25}]},
             summary="current run evidence",
         )
 
