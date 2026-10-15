@@ -30,6 +30,7 @@ export async function streamChat(
     let buffer = "";
     let completed: AgentChatResponse | null = null;
     function consume(record: string) {
+      if (completed) return;
       let name = "message";
       let id: number | undefined;
       const lines: string[] = [];
@@ -44,10 +45,11 @@ export async function streamChat(
       if (name === "error") throw new ServerStreamError(data.message || "任务已中断，可重试恢复");
       if (name === "accepted") runId = data.run_id;
       if (name === "completed") completed = data;
-      if (["accepted", "progress", "answer_start", "answer_delta", "answer_reset", "completed"].includes(name)) {
+      if (["accepted", "progress", "completed"].includes(name)) {
         onEvent({ event: name, data } as AgentChatStreamEvent);
       }
-      // Advance only after the consumer has successfully applied a durable event.
+      // Old servers/replays may include candidate-answer events. Consume their IDs
+      // without exposing drafts, so read-only reconnection still resumes correctly.
       if (id !== undefined && Number.isSafeInteger(id) && id >= cursor) cursor = id;
     }
     try {

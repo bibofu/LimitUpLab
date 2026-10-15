@@ -1,6 +1,6 @@
 # LangChain + LangGraph ReAct 集成
 
-> 当前源码标识：`react-runtime-v37` / `agent-tools-v2` / `react-evidence-v4`
+> 当前源码标识：`react-runtime-v38` / `agent-tools-v2` / `react-evidence-v4`
 > 本文描述工作树实现；当前阶段工作与验证见 [V1.5 里程碑](V1.5_Milestone.md)，历史 V1.4 发布范围见 [V1.4 里程碑](V1.4_Milestone.md)。
 
 ## 当前生产链路
@@ -18,11 +18,11 @@ POST /api/agents/chat 或 /chat/stream
   -> AgentToolRegistry：执行结构化市场、评分、复盘和资讯工具
   -> EvidenceStore：保存完整结果，向模型返回有界预览和 evidence_id
   -> finish：提交 status、answer、可选 table、evidence_ids 和 missing
-  -> 原生 answer chunks：持久化待校验草稿，SSE 实时传给前端
+  -> 候选正文保留在服务端，SSE progress 实时传递查询与校验进度
   -> Answer Gate：本轮证据与状态检查、服务端表格渲染
   -> Compliance Critic：独立结构化投资合规判定
-  -> Journal：原子持久化最终回答、run 和消息
-  -> SSE completed / 只读 reconnect / cancel
+  -> Journal.finish：原子持久化最终回答、run 和消息
+  -> SSE completed 一次发布正式答案 / 只读 reconnect / cancel
 ```
 
 模型每轮可以同时调用互相独立的工具；依赖上一步名单或状态的动作必须等待对应 ToolMessage。集合筛选、排序、交并差和聚合由受限 `compute_result` 完成，不允许模型执行任意 Python、SQL 或表达式。完整行保存在 EvidenceStore：深入分析可通过 `read_evidence` 分页读取，名单交付则直接引用 `finish.table`，无需模型逐行重写或读完所有分页。
@@ -39,8 +39,6 @@ POST /api/agents/chat 或 /chat/stream
 | `agents/react_runtime/evidence.py` | 请求级完整证据、预览、来源、缺失、截断和确定性计算 |
 | `agents/react_runtime/contracts.py` | `finish`、`update_task`、`read_evidence`、`compute_result` 类型契约及预算 |
 | `agents/react_runtime/task_contract.py`、`display_fields.py` | 当前任务、待补信息和输出契约；将明确展示字段映射到证据字段并保留未解析要求 |
-| `agents/react_runtime/answer_stream.py` | 增量解析单个 `finish` 调用的顶层 `answer`，不展示其他参数或并行调用 |
-| `agents/react_runtime/answer_delivery.py` | 管理待校验正文、revision、撤回和表格占位符缓冲 |
 | `agents/react_runtime/rendering.py` | 从本轮证据渲染单张表格，检查字段、行数、截断与范围 |
 | `agents/react_runtime/partial_delivery.py` | 累计模型失败触发 provider_error 后构造受限的部分交付候选，仍由运行时执行证据和合规校验 |
 | `agents/react_runtime/compliance.py` | 独立语义合规 Critic；结构化返回交易指令、仓位、目标价、承诺和确定性预测违规 |
@@ -96,26 +94,23 @@ LIMITUPLAB_LLM_TIMEOUT_SECONDS=30
 - 外部网页、新闻和历史消息均视为不可信内容，不能修改工具权限或系统边界。
 - 系统只做研究解释，不输出买卖、仓位、目标价、收益承诺或确定性预测。
 
-## 正文流式交付
+## 实时进度与正式答案交付
 
-`LangChainChatProvider.generate_messages` 使用原生 `AIMessageChunk`。运行时只解码单个 `finish` 调用的顶层 `answer`，完整 JSON 参数在流结束后才允许执行；普通文本、工具参数和思维过程不直接展示。
+`LangChainChatProvider.generate_messages` 继续使用原生 `AIMessageChunk`，用于收集完整工具调用并及时检查取消和截止时间。候选 `finish.answer` 留在服务端；完整 JSON 参数到齐后才执行结构、证据、展示和独立合规校验。普通文本、未校验正文、工具参数和思维过程不直接展示。
 
 | SSE 事件 | 语义 |
 | --- | --- |
 | `accepted` | 返回 `run_id` 和会话标识 |
 | `progress` | 更新准备、规划、查询、校验等阶段 |
-| `answer_start` | 开始一个递增 revision，标记 `provisional=true` |
-| `answer_delta` | 按 Unicode 码点 offset 追加正文 |
-| `answer_reset` | 撤回当前草稿，等待新的 revision 或最终结果 |
-| `completed` | 返回已原子持久化的权威响应，替换临时正文 |
+| `completed` | `Journal.finish` 原子保存后返回正式响应，一次展示正文、表格和消息元数据 |
 
-表格占位符及其后正文先缓冲，待完整声明通过确定性渲染后接入草稿，避免暴露占位符或打乱顺序。正文显示时仍待最终投资合规校验；校验失败会撤回并给模型一次修复机会，取消、超时或调用失败也会清理草稿。前端 `agentAnswerBuffer.ts` 校验偏移和重复片段，并按动画帧合并显示。
+服务端根据完整 `finish.table` 声明渲染表格，候选答案在校验失败后可内部修复一次，期间前端继续展示进度。HTTP 层仅在 `Journal.finish` 保存成功后发布 `completed`；保存失败不发布正文。前端使用同一消息容器一次接收正式答案，不再播放打字动画或替换待校验草稿。旧 `answer_start / answer_delta / answer_reset` 不再向聊天界面转发，公共聊天入口的旧答案回调参数仅保留签名兼容。
 
 ## 运行恢复
 
 每次请求以 `owner_id + session_id + message_id` 建立 durable run。同一请求重复提交会复用已有运行；不同内容复用同一 message ID 会返回冲突。每个 tool call 以 `run_id + call_id + signature` 记录，已知成功结果可恢复，执行结果不确定的远端调用不会自动重发。
 
-SSE GET 重连只读取事件和最终响应，不启动模型或工具。运行中从 `after` 游标继续读持久化事件；已完成的运行只返回最终回答，不重播被撤回草稿。前端断线后自动尝试一次 GET 重连。显式再次 POST 同一请求可以从保存的 checkpoint 恢复，清理旧草稿并延续 revision 编号。
+SSE GET 重连只读取事件和最终响应，不启动模型或工具。运行中从 `after` 游标继续读进度事件，旧 journal 中的草稿事件也会被过滤；已完成的运行只返回已保存的最终响应。前端断线后自动尝试一次 GET 重连。显式再次 POST 同一请求可以从保存的 checkpoint 恢复，正式答案仍等待原子保存后发布。
 
 取消是协作式的：不再启动新调用，但已经进入底层网络库的请求可能稍后结束。当前 worker 和锁是单进程设计，多 Uvicorn 进程部署前需要数据库租约或外部队列。
 
@@ -130,7 +125,7 @@ backend/.venv/Scripts/python.exe scripts/check_project.py
 
 项目验收命令验证代码、前端和构建，不会自动调用真实模型；当次数量、退出码和日志保存在 `output/validation/<运行标识>/`，不使用历史标签的测试数代表当前验收。
 
-流式协议重点参考后端的 `test_langchain_provider.py`、`test_react_answer_stream.py`、`test_react_live_answer.py`、`test_react_http.py`，以及前端的聊天传输和答案缓冲测试。旧聊天评测框架已退役；当前 [Golden 评测](Agent_Golden_Evaluation.md) 在隔离的合成工具环境中运行生产 Agent，并独立检查交付和可见回答。完整 Agent 基线与裁判专项诊断分开统计，离线契约回归不等同于真实模型质量验收；预测 Outcome 的 Evaluation Agent 仍保留。
+交付协议重点参考后端的 `test_langchain_provider.py`、`test_react_live_answer.py`、`test_react_http.py`、`test_agent_chat.py`，以及前端的聊天传输和最终答案展示测试，覆盖候选不外发、校验修复、保存失败和重连。旧聊天评测框架已退役；当前 [Golden 评测](Agent_Golden_Evaluation.md) 在隔离的合成工具环境中运行生产 Agent，并独立检查交付和可见回答；历史报告中已展示过的草稿继续保留审计。完整 Agent 基线与裁判专项诊断分开统计，离线契约回归不等同于真实模型质量验收；预测 Outcome 的 Evaluation Agent 仍保留。
 
 数量契约与失败恢复的专项回归见 `test_react_row_selection.py`、`test_react_protocol_recovery.py`；真实模型前后对照见 [r02 / s13 / r10 复验](Agent_Golden_Results_20261012_protocol_topn_recovery.md)。
 

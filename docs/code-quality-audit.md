@@ -147,7 +147,7 @@
 
 - 聊天运行版本为 `react-runtime-v26`：LangChain 原生工具调用驱动有界 StateGraph；业务参数由 `AgentToolSchema`、派生类型和 ToolGateway 校验。
 - 最终出口为类型化 `finish`。名单通过 `finish.table` 引用证据，由服务端渲染；校验本轮证据范围、结果状态与表格边界后，独立语义合规审查决定是否接受回答。旧 Claim Ledger 和聊天评测系统已退役，不能继续宣称逐条开放文本事实均经过自动接地证明。
-- `finish.answer` 可在模型返回完整工具参数前输出临时文本；SSE 保存 `answer_start`、`answer_delta`、`answer_reset`，失败或取消时撤回当前修订，`completed` 携带持久化的权威结果。前端按事件游标、修订号和文本偏移处理重连。
+- 正文交付已于 2026-10-15 改为实时进度与单次正式发布：候选 `finish.answer` 在服务端渲染、校验和必要时修复，`Journal.finish` 原子保存后仅通过 `completed` 一次交付正文、表格及元数据。重连按事件游标读取进度并过滤旧草稿事件，已完成任务复用保存的最终响应。
 - 会话原始消息与滚动记忆继续存储。当前 ReAct 通过受控上下文保留追问所需的实体指代和最近一轮实际工具参数；历史任务、回答数值和 evidence ID 不直接恢复为当前事实。
 - 聊天评测退役不影响业务侧 `rating_evaluation`、预测质量审计、评分策略优化或 pytest 回归。
 

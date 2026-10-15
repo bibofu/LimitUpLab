@@ -14,25 +14,30 @@ function response(text: string, oneByte = false) {
   } }), { headers: { "X-Agent-Run-Id": "r" } });
 }
 
-test("split UTF-8 and CRLF frames publish provisional answer chunks before completion", async () => {
+test("split UTF-8 and CRLF frames hide legacy candidates and publish only the final response", async () => {
   const events: string[] = [];
-  const chunks: string[] = [];
   const result = await streamChat("", payload, event => events.push(event.event), async () => response(
     frame("answer_start", { run_id: "r", answer_length: null, revision: 1, provisional: true })
       + frame("answer_delta", { offset: 0, delta: "生成中" })
       + frame("answer_delta", { offset: 3, delta: "回答" })
+      + frame("answer_reset", { message: "重新整理回答" })
+      + frame("progress", { stage: "checking", message: "核对结果" })
       + frame("completed", final), true,
   ));
   assert.equal(result.answer, final.answer);
   assert.equal(result.task_status, "partial");
-  assert.deepEqual(events, ["accepted", "answer_start", "answer_delta", "answer_delta", "completed"]);
-  await streamChat("", payload, event => {
-    if (event.event === "answer_delta") chunks.push(event.data.delta);
-  }, async () => response(frame("answer_start", { run_id: "r", answer_length: null, revision: 1, provisional: true })
-    + frame("answer_delta", { offset: 0, delta: "缺少" })
-    + frame("answer_delta", { offset: 2, delta: "部分来源" })
-    + frame("completed", final)));
-  assert.equal(chunks.join(""), final.answer);
+  assert.deepEqual(events, ["accepted", "progress", "completed"]);
+});
+
+test("the first completed frame is terminal even when duplicate completion or error follows", async () => {
+  const events: string[] = [];
+  const result = await streamChat("", payload, event => events.push(event.event), async () => response(
+    frame("completed", final)
+    + frame("completed", { ...final, answer: "重复结果" })
+    + frame("error", { message: "过期事件" }),
+  ));
+  assert.equal(result.answer, final.answer);
+  assert.deepEqual(events, ["accepted", "completed"]);
 });
 
 test("disconnect reconnects once with cursor through GET, never another POST", async () => {
@@ -48,6 +53,22 @@ test("disconnect reconnects once with cursor through GET, never another POST", a
     { url: "/api/agents/chat/stream", method: "POST" },
     { url: "/api/agents/chat/runs/r/stream?after=7", method: "GET" },
   ]);
+});
+
+test("ignored legacy drafts advance the replay cursor and never reach the UI after reconnect", async () => {
+  const events: string[] = [];
+  const urls: string[] = [];
+  await streamChat("", payload, event => events.push(event.event), async url => {
+    urls.push(String(url));
+    return urls.length === 1
+      ? response("id: 8\r\n" + frame("answer_start", { revision: 1 })
+        + "id: 9\r\n" + frame("answer_delta", { offset: 0, delta: "不能展示" })
+        + "id: 10\r\n" + frame("answer_reset", { message: "重写" }))
+      : response("id: 9\r\n" + frame("answer_delta", { offset: 0, delta: "重复草稿" })
+        + "id: 11\r\n" + frame("completed", final));
+  });
+  assert.ok(urls[1].endsWith("?after=10"));
+  assert.deepEqual(events, ["accepted", "progress", "accepted", "completed"]);
 });
 
 test("second disconnect fails without an unbounded retry", async () => {

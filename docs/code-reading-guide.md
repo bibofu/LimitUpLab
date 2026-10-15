@@ -7,12 +7,12 @@ come from deterministic code and recorded data; the model plans and explains.
 ## Start with one user question
 
 1. `frontend/src/components/AgentChatDock.tsx`: sends the question and session
-   context, displays a provisional live answer and progress, then replaces the
-   draft with the persisted `completed` response.
+   context, displays live progress, then presents the persisted `completed`
+   response with its table and metadata in one message.
 2. `frontend/src/utils/agentChatTransport.ts`: parses SSE, reconnects once with
    the event cursor, and preserves request identity for an in-page retry.
-   `agentAnswerBuffer.ts` handles revisions, resets, Unicode offsets and
-   duplicate chunks without losing the draft during a read-only reconnect.
+   Legacy draft events are ignored; reconnects reuse progress or the persisted
+   final response without replaying candidate text.
 3. `backend/app/routers/react_chat.py`: owns authenticated request admission,
    workers, cancellation, reconnect and atomic completion persistence.
 4. `backend/app/agents/react_runtime/lifecycle.py`: stores run identity,
@@ -37,10 +37,10 @@ come from deterministic code and recorded data; the model plans and explains.
    memory constraints by default and adds research context only for follow-ups.
    `tools.py` fills an omitted date from the input review's `requested_date`,
    then checks tool date support and the actual response date.
-10. `services/langchain_provider.py` and `react_runtime/answer_stream.py`:
-    receive native tool-call chunks and decode only `finish.answer` for display.
-    `answer_delivery.py` manages provisional revisions; `rendering.py` fills
-    the declared evidence table before the final compliance review.
+10. `services/langchain_provider.py`: receives native tool-call chunks while
+    the runtime checks cancellation and deadlines. `rendering.py` fills the
+    declared evidence table before the final compliance review; candidate
+    answers remain internal until `Journal.finish` commits the response.
 11. `models.py`: defines response types and normalizes historical stored traces.
     `agent_presentation.py` derives grounded stock links and follow-up questions;
     `agent_evidence_cards.py` builds evidence cards and legacy policy summaries.
@@ -82,9 +82,10 @@ through the public refresh entry.
   by the answer writer. Facts are distinct from the conversation summary.
 - **Trace**: the inspectable record of native model decisions, Policy allow/reject,
   tool inputs/outcomes, evidence references and the final answer check.
-- **Provisional answer**: live text that may be withdrawn by `answer_reset`.
-  Only `completed` is the persisted final response; a completed reconnect skips
-  draft events entirely.
+- **Final answer delivery**: progress is streamed while candidate answers are
+  validated and repaired internally. Only `completed`, emitted after
+  `Journal.finish` commits, publishes answer text and metadata. Reconnects skip
+  legacy draft events and reuse the persisted response.
 - **Evidence table**: a single table rendered from stored current-run rows via
   `finish.table`. Preview omission and source truncation are distinct; returned
   rows are not automatically the complete market universe.

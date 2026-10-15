@@ -111,8 +111,8 @@ flowchart TD
     E --> R
     R --> V[交付门禁与合规 Critic]
     V --> J[SQLite Journal 原子发布]
-    J --> U
-    R -. 待校验草稿 SSE .-> U
+    J -->|已保存的 completed 响应| U
+    R -. 实时 progress .-> U
 ```
 
 前端通过 FastAPI 查询确定性业务接口，也通过聊天接口发起持久化 Agent 任务。聊天与页面复用业务服务及数据仓库，使“页面看到的名单”和“Agent 查询的名单”有共同来源。数据更新由独立脚本和任务驱动，不依靠用户每问一句就重建全部市场数据。
@@ -126,7 +126,7 @@ flowchart TD
 | 持久化 | `backend/app/repositories`、`database.py` | SQLite 访问、快照、运行记录、usage 与缓存 |
 | 数据源 | `backend/app/collectors` | 同花顺、AKShare 等来源的超时、标准化和缺失处理 |
 | 评测 | `backend/evals/golden`、`backend/tests` | 合成世界、验收契约、裁判和回归 |
-| 前端 | `frontend/src` | 工作台、局部资源状态、图表、会话和草稿缓冲 |
+| 前端 | `frontend/src` | 工作台、局部资源状态、图表、会话、实时进度和正式答案展示 |
 
 仓库使用 Python 3.13、FastAPI、Pydantic、SQLite 和 pytest；前端使用 React 19、TypeScript、Vite、React Router、lightweight-charts 与 react-markdown。核对基线锁定的后端依赖包含 `langchain-core==1.6.2`、`langchain-openai==1.6.2`、`langgraph==1.0.5` 和 `openai==3.26.0`，这是仓库依赖版本，不是对这些库最新版本的说明。
 
@@ -352,24 +352,21 @@ Reviewer 使用有界近期用户意图、偏好、上一任务及澄清信息�
 
 新闻、网页、历史消息和工具返回中的自然语言都是不可信数据，不能修改权限或系统指令。模型审查仍可能误判，因此最终能力边界要落在执行层，不能只写“请忽略恶意指令”的提示词。
 
-当前普通流式草稿可能在最终合规审查前已被用户看到，后续撤回无法抹去这一事实。更严格的使用场景可以考虑延迟展示至审查通过，但会增加首字延迟；当前评测因此同时审查最终答案和已经展示过的草稿。
+当前候选答案在服务端完成结构、证据和独立合规校验，必要修复也在内部进行；前端只展示实时进度，正文等待校验与持久化完成后一次发布。代价是正文出现得更晚。历史评测中已经展示过的草稿仍需保留审计，不能因当前交付方式改变而删除旧记录。
 
 ## 十一 流式回答与持久化运行
 
-### 真正流式的是 finish.answer
+### 进度实时，正式正文一次交付
 
-`LangChainChatProvider.generate_messages` 接收原生 `AIMessageChunk`。`answer_stream.py` 增量解码单个 `finish` 调用顶层的 `answer`，完整工具 JSON 参数仍要等流结束并通过验证后才执行。普通模型文本、其他工具参数与内部推理不直接展示。
+`LangChainChatProvider.generate_messages` 接收原生 `AIMessageChunk`，保留模型流读取及取消、截止时间检查。完整工具 JSON 参数到齐后才执行验证；候选 `finish.answer`、普通模型文本、其他工具参数与内部推理均不提前展示。
 
 | SSE 事件 | 前后端约定 |
 | --- | --- |
 | `accepted` | 返回 run 与会话标识 |
 | `progress` | 展示准备、规划、查询、检查等阶段 |
-| `answer_start` | 开始新的 revision，正文标为 provisional |
-| `answer_delta` | 按 Unicode 码点 offset 追加正文 |
-| `answer_reset` | 撤回当前草稿 |
-| `completed` | 返回已持久化权威响应，替换临时正文 |
+| `completed` | `Journal.finish` 提交后，一次交付正式正文、表格和消息元数据 |
 
-前端 `agentAnswerBuffer.ts` 处理 revision、重复片段和偏移，按动画帧合并显示。表格占位符及后续正文先缓冲，待服务端渲染后接入；严格 table_only 草稿暂缓到展示约束检查通过。普通正文保留 provisional 流，若最终校验失败则撤回并允许一次修复。
+服务端先根据完整声明渲染证据表格，再完成展示约束和合规校验，失败时允许一次内部修复。HTTP 层等待 `Journal.finish` 保存成功后发布正式响应；保存失败不发布正文。前端在同一消息容器一次展示答案与股票链接，不再逐字播放或替换临时草稿。旧答案增量事件与旧回调参数不能绕过这个发布边界。
 
 ### 为什么 SSE 之外还需要 Journal
 
@@ -381,9 +378,9 @@ Reviewer 使用有界近期用户意图、偏好、上一任务及澄清信息�
 | 同 message_id 使用不同请求内容 | 返回冲突，避免把旧结果套给新问题 |
 | 同会话已有活动任务 | 通过会话活动运行约束防止重叠执行 |
 | GET 重连 | 只读已有事件与最终结果，不启动模型或工具 |
-| 运行中重连 | 从 `after` 游标继续读取持久化事件 |
-| 已完成运行重连 | 返回最终响应，不重播已撤回草稿 |
-| 显式重复 POST 恢复 | 利用保存的 checkpoint，清理旧草稿并延续 revision |
+| 运行中重连 | 从 `after` 游标继续读取进度事件，过滤旧 journal 的草稿事件 |
+| 已完成运行重连 | 复用已保存的最终响应，不重播答案生成过程 |
+| 显式重复 POST 恢复 | 利用保存的 checkpoint，最终响应仍在原子保存后发布 |
 | 已登记调用但结果未保存 | 标记 `UncertainExecution`，不盲目重发远端请求 |
 
 工具调用以 run、call ID 和参数 signature 记录，已知完成结果可回放；同一运行的相同业务调用还可复用已获得的 ok/empty 证据，partial 不按完整成功缓存。最终聊天消息、运行记录与 `react_runs.response_json` 在同一事务中保存；提交后，SSE 读取已持久化响应并生成 `completed`，该事件本身不写入 `react_events`。
@@ -392,7 +389,7 @@ Reviewer 使用有界近期用户意图、偏好、上一任务及澄清信息�
 
 这不是分布式 exactly-once。请求幂等、工具结果复用、数据库原子提交分别解决不同问题；外部工具已经执行而结果尚未落库的窗口仍存在。GET 重连不会自动恢复中断计算，恢复需显式重新提交同一请求，且仍受最初运行的总时间预算约束。
 
-worker、线程池和部分锁属于单进程设计。取消是协作式的，可以阻止新调用并清理交付草稿，已经进入底层网络库的请求可能稍后结束。多进程、多实例部署需要额外的租约、队列和共享协调机制。
+worker、线程池和部分锁属于单进程设计。取消是协作式的，可以阻止新调用；`Journal.finish` 会在原子提交时优先保存取消结果，已经进入底层网络库的请求可能稍后结束。多进程、多实例部署需要额外的租约、队列和共享协调机制。
 
 ## 十二 调用预算 成本与失败处理
 
@@ -563,7 +560,7 @@ Docker Compose 管理后端、前端、推荐刷新及日更任务，数据落�
 | 自建 durable journal | 精确控制幂等、证据与发布语义 | 与图状态生命周期耦合较多 | 评估框架持久化迁移及恢复等价性 |
 | 有界证据预览 | 减少上下文体积和抄写错误 | 模型可能误读范围 | 优先把用户交付绑定到结构化证据 |
 | 服务端证据表 | 名单值可逐项对应证据 | 单表限制，开放正文仍需检查 | 扩展有类型的多交付契约需同步评测 |
-| provisional 流式显示 | 更早显示正文 | 审查失败前内容可能已曝光 | 按风险场景选择延迟发布策略 |
+| 实时进度与校验后单次交付 | 候选修复不打断阅读，正式正文与元数据同步展示 | 正文需要等待校验和保存 | 根据实际延迟评估可独立校验的分块发布 |
 | SQLite 单机 | 部署简单，事务与快照易管理 | 写并发和进程协调受限 | 需求成立后引入共享队列、租约及数据库迁移 |
 | 独立模型裁判 | 补足规则难覆盖的语义检查 | 裁判可能系统性误判 | 新盲测、人工校准、重复性与不确定性报告 |
 
@@ -655,7 +652,7 @@ GET reconnect 只读 journal，不启动新任务；前端使用已知 run ID �
 
 ### 21 合规检查在最后 之前流出的错误怎么办
 
-当前普通正文是可撤回草稿，通过 reset 清理，但用户可能已看到。Golden 也检查展示过的文本。若场景要求审查前零暴露，应改成审查后发布或更严格的分段审批，需要接受延迟成本，不能把撤回说成从未展示。
+当前候选正文在服务端校验和修复，前端实时展示查询与检查进度。只有 `Journal.finish` 保存成功后，`completed` 才发布正式答案；旧草稿事件在重连时也会被过滤。这会增加正文等待时间，但避免用户先读到随后撤回的候选。Golden 继续保留历史运行中实际展示过的文本审计。
 
 ### 22 empty partial complete 怎么区分
 
@@ -714,8 +711,8 @@ GET reconnect 只读 journal，不启动新任务；前端使用已知 run ID �
 | 证据怎样保存、计算与交付 | [evidence.py](../backend/app/agents/react_runtime/evidence.py)、[rendering.py](../backend/app/agents/react_runtime/rendering.py)、[task_contract.py](../backend/app/agents/react_runtime/task_contract.py) |
 | 上下文和记忆有什么区别 | [context.py](../backend/app/agents/react_runtime/context.py)、[session_memory.py](../backend/app/services/session_memory.py) |
 | 原生 tool calling 与安全审查 | [langchain_provider.py](../backend/app/services/langchain_provider.py)、[prompt_security.py](../backend/app/services/prompt_security.py)、[compliance.py](../backend/app/agents/react_runtime/compliance.py) |
-| SSE 草稿和恢复怎么做 | [answer_stream.py](../backend/app/agents/react_runtime/answer_stream.py)、[answer_delivery.py](../backend/app/agents/react_runtime/answer_delivery.py)、[lifecycle.py](../backend/app/agents/react_runtime/lifecycle.py) |
-| 前端怎样处理重连与重复片段 | [agentChatTransport.ts](../frontend/src/utils/agentChatTransport.ts)、[agentAnswerBuffer.ts](../frontend/src/utils/agentAnswerBuffer.ts)、[AgentChatDock.tsx](../frontend/src/components/AgentChatDock.tsx) |
+| SSE 进度、原子发布和恢复怎么做 | [react_chat.py](../backend/app/routers/react_chat.py)、[lifecycle.py](../backend/app/agents/react_runtime/lifecycle.py) |
+| 前端怎样处理重连与正式答案 | [agentChatTransport.ts](../frontend/src/utils/agentChatTransport.ts)、[AgentChatDock.tsx](../frontend/src/components/AgentChatDock.tsx) |
 | Facts 和评分怎样计算 | [first_board.py](../backend/app/agents/first_board.py)、[first_board_features.py](../backend/app/services/first_board_features.py)、[scoring_policy.py](../backend/app/services/scoring_policy.py) |
 | 预测时间与不可变如何保证 | [prediction_time.py](../backend/app/services/prediction_time.py)、[first_board_repository.py](../backend/app/repositories/first_board_repository.py)、[recommendation_intelligence_repository.py](../backend/app/repositories/recommendation_intelligence_repository.py) |
 | Outcome 与策略怎样验证 | [outcome_completeness.py](../backend/app/services/outcome_completeness.py)、[prediction_quality_audit.py](../backend/app/services/prediction_quality_audit.py)、[scoring_policy_optimizer.py](../backend/app/services/scoring_policy_optimizer.py) |

@@ -2,14 +2,27 @@ import assert from "node:assert/strict";
 import { readFileSync } from "node:fs";
 import { createRequire } from "node:module";
 import test, { type TestContext } from "node:test";
+import { createElement } from "react";
+import { renderToStaticMarkup } from "react-dom/server";
+import ReactMarkdown from "react-markdown";
+import { MemoryRouter } from "react-router-dom";
+import remarkGfm from "remark-gfm";
 import ts from "typescript";
 import * as interaction from "../src/utils/agentChatInteraction.ts";
 import * as transport from "../src/utils/agentChatTransport.ts";
-import * as answerBuffer from "../src/utils/agentAnswerBuffer.ts";
 import * as jsonRequest from "../src/utils/jsonRequest.ts";
 
 // Drive the real component's event handlers and async state without a browser dependency.
 const require = createRequire(import.meta.url);
+const markdownModule = { exports: {} as any };
+const markdownCompiled = ts.transpileModule(readFileSync(new URL("../src/components/AgentAnswerMarkdown.tsx", import.meta.url), "utf8"), {
+  compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2020, esModuleInterop: true },
+}).outputText;
+new Function("require", "module", "exports", markdownCompiled)((id: string) => {
+  if (id === "react-markdown") return ReactMarkdown;
+  if (id === "remark-gfm") return remarkGfm;
+  return require(id);
+}, markdownModule, markdownModule.exports);
 const compiled = ts.transpileModule(readFileSync(new URL("../src/components/AgentChatDock.tsx", import.meta.url), "utf8"), {
   compilerOptions: { module: ts.ModuleKind.CommonJS, jsx: ts.JsxEmit.ReactJSX, target: ts.ScriptTarget.ES2020 },
 }).outputText;
@@ -73,9 +86,9 @@ function mount(t: TestContext, overrides: Record<string, any> = {}, savedSession
   };
   const imports: Record<string, any> = {
     react: hooks, "../api": api, "../utils/agentChatInteraction": interaction,
-    "../utils/agentChatTransport": transport, "../utils/agentAnswerBuffer": answerBuffer,
+    "../utils/agentChatTransport": transport,
     "../utils/jsonRequest": jsonRequest,
-    "./AgentAnswerMarkdown": { AgentAnswerMarkdown: () => null },
+    "./AgentAnswerMarkdown": markdownModule.exports,
     "./AgentChatProgress": { AgentChatProgress: () => null },
   };
   const module = { exports: {} as any };
@@ -103,6 +116,8 @@ function mount(t: TestContext, overrides: Record<string, any> = {}, savedSession
       return node.props;
     },
     has(predicate: (node: any) => boolean) { return nodes.some(predicate); },
+    answers() { return nodes.filter(node => node.type === markdownModule.exports.AgentAnswerMarkdown); },
+    answerHtml() { return renderToStaticMarkup(createElement(MemoryRouter, {}, ...this.answers())); },
     input() { return this.find(node => node.type === "textarea"); },
     type(value: string) { this.input().onChange({ target: { value } }); render(); },
     submit() { this.find(node => node.type === "form" && node.props.className === "agent-chat-input").onSubmit({ preventDefault() {} }); },
@@ -377,3 +392,127 @@ test("a deleted active session cannot receive questions when replacement loading
   assert.equal(app.input().disabled, false);
   assert.equal(app.has(node => node.type === "strong" && node.props.children === "会话 b"), true);
 });
+
+function liveStream() {
+  let controller!: ReadableStreamDefaultController<Uint8Array>;
+  const response = new Response(new ReadableStream<Uint8Array>({ start(value) { controller = value; } }), {
+    headers: { "X-Agent-Run-Id": "run-live" },
+  });
+  return {
+    response,
+    send(id: number, event: string, data: unknown) {
+      controller.enqueue(new TextEncoder().encode(`id: ${id}\nevent: ${event}\ndata: ${JSON.stringify(data)}\n\n`));
+    },
+    close() { controller.close(); },
+  };
+}
+
+const hotRankingResponse = {
+  ...final, run_id: "run-live", session_id: "a",
+  answer: "已核对热股榜。\n\n| 排名 | 代码 | 名称 |\n| --- | --- | --- |\n| 1 | 600101 | 样例科技 |\n\n榜单仅反映关注度。",
+  stock_mentions: [{ name: "样例科技", symbol: "600101", trade_date: "2026-10-15" }],
+};
+
+test("real SSE keeps candidate prose private and publishes one complete table with stock links", async t => {
+  const stream = liveStream();
+  const app = mount(t, {
+    streamAgentChatMessage: (payload: any, onEvent: any) => transport.streamChat("", payload, onEvent, async () => stream.response),
+  });
+  await app.settle();
+  app.type("当前的热门股票有哪些");
+  app.submit();
+  stream.send(1, "answer_start", { revision: 1, provisional: true });
+  stream.send(2, "answer_delta", { offset: 0, delta: "未经校验的引言" });
+  stream.send(3, "progress", { stage: "checking", message: "正在核对榜单和来源" });
+  await app.settle();
+  assert.equal(app.answers().length, 0);
+  assert.equal(app.has(node => node.props.stage === "checking" && node.props.message === "正在核对榜单和来源"), true);
+  assert.equal(app.has(node => node.props.className === "chat-cancel"), true);
+  stream.send(4, "answer_reset", { message: "重新整理" });
+  stream.send(5, "answer_start", { revision: 2, provisional: true });
+  stream.send(6, "answer_delta", { offset: 0, delta: hotRankingResponse.answer });
+  await app.settle();
+  assert.equal(app.answers().length, 0, "even a complete candidate stays private until completed");
+  stream.send(7, "completed", hotRankingResponse);
+  stream.send(8, "completed", hotRankingResponse);
+  await app.settle();
+  assert.equal(app.answers().length, 1);
+  assert.equal(app.has(node => node.props.className === "chat-task-status" && node.props.children === "研究已完成"), true);
+  const html = app.answerHtml();
+  assert.equal(html.split("<table>").length - 1, 1);
+  assert.equal(html.split("<tr>").length - 1, 2);
+  assert.ok(html.includes('<a href="/stocks/600101?'));
+  assert.ok(html.includes("trade_date=2026-10-15"));
+  assert.ok(html.includes(">样例科技</a>"));
+  assert.ok(!html.includes("未经校验的引言"));
+  assert.equal(app.has(node => node.props.stage === "checking"), false);
+});
+
+test("SSE reconnection consumes legacy draft IDs and delivers one final message without replaying drafts", async t => {
+  const first = liveStream();
+  const second = liveStream();
+  const calls: { url: string; method: string }[] = [];
+  const app = mount(t, {
+    streamAgentChatMessage: (payload: any, onEvent: any) => transport.streamChat("", payload, onEvent, async (url, init) => {
+      calls.push({ url: String(url), method: init?.method ?? "GET" });
+      return calls.length === 1 ? first.response : second.response;
+    }),
+  });
+  await app.settle();
+  app.type("当前的热门股票有哪些");
+  app.submit();
+  first.send(4, "answer_delta", { offset: 0, delta: "断线前的草稿" });
+  first.close();
+  await app.settle();
+  assert.equal(app.answers().length, 0);
+  assert.deepEqual(calls, [
+    { url: "/api/agents/chat/stream", method: "POST" },
+    { url: "/api/agents/chat/runs/run-live/stream?after=4", method: "GET" },
+  ]);
+  second.send(4, "answer_delta", { offset: 0, delta: "重放草稿" });
+  second.send(5, "answer_delta", { offset: 6, delta: "接续草稿" });
+  second.send(6, "progress", { stage: "checking", message: "正在核对最终结果" });
+  await app.settle();
+  assert.equal(app.answers().length, 0);
+  second.send(7, "completed", hotRankingResponse);
+  await app.settle();
+  assert.equal(app.answers().length, 1);
+  assert.equal(app.answers()[0].props.content, hotRankingResponse.answer);
+});
+
+for (const failure of ["server-error", "disconnect", "cancelled"] as const) {
+  test(`real SSE ${failure} leaves no candidate answer visible`, async t => {
+    const stream = liveStream();
+    let calls = 0;
+    const app = mount(t, {
+      cancelAgentChatRun: async () => {
+        stream.send(4, "completed", { ...final, answer: "本次任务已取消。", task_status: "cancelled" });
+      },
+      streamAgentChatMessage: (payload: any, onEvent: any) => transport.streamChat("", payload, onEvent, async () => {
+        calls++;
+        return calls === 1 ? stream.response : new Response("");
+      }),
+    });
+    await app.settle();
+    app.type("当前的热门股票有哪些");
+    app.submit();
+    stream.send(1, "answer_start", { revision: 1, provisional: true });
+    stream.send(2, "answer_delta", { offset: 0, delta: "不能显示的候选榜单" });
+    stream.send(3, "progress", { stage: "tools", message: "正在查询数据" });
+    await app.settle();
+    assert.equal(app.answers().length, 0);
+    if (failure === "cancelled") app.find(node => node.props.className === "chat-cancel").onClick();
+    else if (failure === "server-error") stream.send(4, "error", { message: "任务中断，请重试恢复" });
+    else stream.close();
+    await app.settle();
+    assert.ok(!app.answerHtml().includes("不能显示的候选榜单"));
+    assert.equal(app.has(node => node.props.className === "chat-cancel"), false);
+    assert.equal(app.answers().length, failure === "cancelled" ? 1 : 0);
+    assert.equal(app.has(node => node.props.role === "alert"), true);
+    assert.equal(calls, failure === "disconnect" ? 2 : 1);
+    if (failure === "cancelled") {
+      assert.equal(app.answers()[0].props.content, "本次任务已取消。");
+      assert.equal(app.has(node => node.props.className === "chat-task-status" && node.props.children === "已取消"), true);
+    }
+  });
+}

@@ -618,18 +618,6 @@ export type AgentChatStreamEvent =
       data: { stage: AgentChatStreamStage; message: string };
     }
   | {
-      event: "answer_start";
-      data: { run_id: string | null; answer_length: number | null; revision: number; provisional: boolean; stock_mentions?: AgentStockMention[] };
-    }
-  | {
-      event: "answer_delta";
-      data: { offset: number; delta: string };
-    }
-  | {
-      event: "answer_reset";
-      data: { message: string };
-    }
-  | {
       event: "completed";
       data: AgentChatResponse;
     }

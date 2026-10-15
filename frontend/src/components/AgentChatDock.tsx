@@ -34,7 +34,6 @@ import type {
 } from "../types";
 import { AgentAnswerMarkdown } from "./AgentAnswerMarkdown";
 import { AgentChatProgress } from "./AgentChatProgress";
-import { createAgentAnswerBuffer } from "../utils/agentAnswerBuffer";
 import { taskStatusLabel } from "../utils/agentChatTransport";
 import { HttpResponseError } from "../utils/jsonRequest";
 import {
@@ -53,7 +52,6 @@ interface ChatMessage {
   status?: "success" | "error";
   suggestedQuestions?: string[];
   taskLabel?: string;
-  provisional?: boolean;
 }
 
 const ACTIVE_CHAT_SESSION_STORAGE_KEY = "limituplab.activeChatSession";
@@ -192,7 +190,6 @@ export function AgentChatDock({
   const messagesContainerRef = useRef<HTMLDivElement>(null);
   const followAnswerRef = useRef(true);
   const [showLatest, setShowLatest] = useState(false);
-  const answerBufferRef = useRef<ReturnType<typeof createAgentAnswerBuffer> | null>(null);
   const isConversationActive = sending || messages.length > 0;
 
   useEffect(() => {
@@ -202,8 +199,6 @@ export function AgentChatDock({
     initializedSessions.current = true;
     void initializeChatSessions();
   }, []);
-
-  useEffect(() => () => answerBufferRef.current?.dispose(), []);
 
   useEffect(() => {
     const input = inputRef.current;
@@ -424,7 +419,7 @@ export function AgentChatDock({
     }
   }
 
-  /** Preserve the exact request on failure; live drafts are replaced by the final result. */
+  /** Preserve failed requests for retry; publish the verified response exactly once. */
   async function sendMessage(prompt?: string) {
     const trimmed = (prompt ?? message).trim();
     if (!trimmed || sending || sessionLoading || !sessionId) {
@@ -467,18 +462,6 @@ export function AgentChatDock({
     setCancelRequested(false);
     const agentMessageId = `agent-${userMessageId}`;
     setMessages(current => current.filter(item => item.id !== agentMessageId));
-    let stockMentions: AgentStockMention[] = [];
-    const answerBuffer = createAgentAnswerBuffer(content => {
-      setMessages(current => {
-        if (!content) return current.filter(item => item.id !== agentMessageId);
-        const draft: ChatMessage = { id: agentMessageId, role: "agent", content, stockMentions, provisional: true };
-        return current.some(item => item.id === agentMessageId)
-          ? current.map(item => item.id === agentMessageId ? draft : item)
-          : [...current, draft];
-      });
-    });
-    answerBufferRef.current = answerBuffer;
-
     try {
       const response = await streamAgentChatMessage(payload, event => {
         if (event.event === "accepted") setActiveRunId(event.data.run_id);
@@ -486,22 +469,7 @@ export function AgentChatDock({
           setStreamStage(event.data.stage);
           setStreamStatus(event.data.message);
         }
-        if (event.event === "answer_start") {
-          setStreamStage("answering");
-          setStreamStatus("正在生成回答");
-          stockMentions = event.data.stock_mentions ?? [];
-          answerBuffer.start(event.data.revision);
-        }
-        if (event.event === "answer_delta") {
-          answerBuffer.append(event.data.offset, event.data.delta);
-        }
-        if (event.event === "answer_reset") {
-          answerBuffer.reset();
-          setStreamStage("checking");
-          setStreamStatus(event.data.message);
-        }
       });
-      answerBuffer.dispose();
       setMessages(current => {
         const finalMessage: ChatMessage = {
           id: agentMessageId, role: "agent", content: response.answer,
@@ -523,15 +491,11 @@ export function AgentChatDock({
         retry: initializeChatSessions,
       }));
     } catch (caught) {
-      answerBuffer.dispose();
-      setMessages(current => current.filter(item => item.id !== agentMessageId));
       const errorMessage = caught instanceof Error ? caught.message : "Agent 回答失败";
       setError(errorMessage);
       setFailedPrompt(trimmed);
       failedRequest.current = payload;
     } finally {
-      answerBuffer.dispose();
-      answerBufferRef.current = null;
       setActiveRunId(null);
       setCancelRequested(false);
       release();
@@ -722,8 +686,8 @@ export function AgentChatDock({
             >
               {item.role === "agent" ? (
                 <div className="chat-markdown">
-                  {item.provisional || item.taskLabel ? <small className="chat-task-status">
-                    {item.provisional ? (streamStage === "checking" ? "校验中" : "生成中，待校验") : item.taskLabel}
+                  {item.taskLabel ? <small className="chat-task-status">
+                    {item.taskLabel}
                   </small> : null}
                   <AgentAnswerMarkdown
                     content={item.content}

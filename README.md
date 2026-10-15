@@ -10,7 +10,7 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 ## 项目状态
 
-当前代码以 **LangChain 原生工具调用 + LangGraph 有界 ReAct** 为聊天主链路，支持持久化运行、原生 `finish.answer` 流式正文、可撤回草稿和服务端证据表。旧 Planner/Capability/Policy/模板执行器、Task DAG、Complex Graph 和 Claim Ledger 已退出生产调用图。现行实现见 [LangChain + LangGraph 集成](docs/LangChain_Integration.md)。
+当前代码以 **LangChain 原生工具调用 + LangGraph 有界 ReAct** 为聊天主链路，支持持久化运行、实时进度、校验并保存后一次发布正式答案和服务端证据表。旧 Planner/Capability/Policy/模板执行器、Task DAG、Complex Graph 和 Claim Ledger 已退出生产调用图。现行实现见 [LangChain + LangGraph 集成](docs/LangChain_Integration.md)。
 
 当前阶段为 **V1.5：ReAct 交付与证据契约完善、Golden 粗评基线建立**。[V1.5 阶段里程碑](docs/V1.5_Milestone.md) 汇总 `v1.5.0` 的工作、验证结果、限制和下一步。Golden 已能辅助定位 Agent 问题，裁判可靠性验收仍未通过；自动结果需要保留待复核项。
 
@@ -110,9 +110,9 @@ scoring_version
   -> ToolGateway 校验 profile、Schema、日期能力和参数边界
   -> 工具并发执行，完整结果进入 EvidenceStore，模型只接收有界预览
   -> 模型观察 ToolMessage，按需继续查询、读取/计算证据或单独调用 finish
-  -> 原生 finish.answer 增量显示为待校验草稿；名单由服务端渲染证据表
+  -> 候选 finish.answer 留在服务端；名单由服务端渲染证据表，前端继续显示进度
   -> Answer Gate 校验证据范围、表格和状态，独立 Critic 检查投资合规
-  -> 校验失败撤回草稿并允许一次修复；最终回答原子保存后发布 completed
+  -> 校验失败允许一次内部修复；Journal.finish 原子保存后通过 completed 一次发布正式答案
 ```
 
 当前主要工具：
@@ -208,8 +208,8 @@ Outcome 完整性检查严格按本地市场交易日对齐 D+1、D+3 和 D+5。
 - `agent_runs` 保存每次 Agent 执行状态、输入、输出、错误和耗时
 - `agent_usage_events` 保存已接受和被拒绝的请求、真实 token、显式价格下的估算成本及耗时
 - `chat_sessions`、`chat_messages` 和 `chat_session_memories` 保存会话、原始消息与滚动记忆，支持新建、恢复、重命名和永久删除
-- SSE 正文以 `answer_start / answer_delta / answer_reset` 管理待校验版本，`completed` 替换为已持久化的最终结果
-- SSE 断线后按 `run_id + event cursor` 只读重连，已完成任务直接返回最终结果；再次 POST 同一请求可恢复中断 checkpoint，已完成工具不会主动重放
+- SSE 通过 `progress` 实时显示查询与校验进度；候选答案在服务端完成校验和必要修复，`Journal.finish` 原子保存后，仅通过 `completed` 一次交付正式正文、表格和消息元数据
+- SSE 断线后按 `run_id + event cursor` 只读重连，过滤历史草稿事件，已完成任务直接返回已保存结果；再次 POST 同一请求可恢复中断 checkpoint，已完成工具不会主动重放
 - Tool trace 保存每轮原生 decision、Policy allow/reject、工具参数、结果状态、证据引用和最终校验
 - 请求级 EvidenceStore 保存完整工具结果，模型消息只携带有界预览；SQLite journal 保存运行 checkpoint 与调用结果
 - `/api/agents/data-health` 检查评分、预测追踪和 Outcome 所需数据
@@ -240,7 +240,8 @@ flowchart LR
     M --> N[Sector / Web Search]
     M --> O[Critic / Review / Evaluation]
     M --> P[Observe + Finish Gate]
-    P --> I
+    P --> J
+    S -->|Persisted completed| I
 
     G --> Q[Outcome Backfill]
     Q --> O
@@ -271,16 +272,19 @@ sequenceDiagram
     Tools-->>Evidence: 完整结构化结果与来源
     Evidence-->>Graph: ToolMessage 有界预览
     Graph->>Graph: 继续行动或单独调用 finish
-    loop 模型生成 finish.answer 期间
-        Graph->>Journal: 保存 answer_start / answer_delta
-        Journal-->>UI: 立即显示生成中正文
+    loop 查询、生成与校验期间
+        Graph-->>API: progress 阶段信息
+        API->>Journal: 保存进度事件
+        API-->>UI: SSE progress
     end
+    Graph->>Graph: 渲染候选答案并完成结构、证据和合规校验
     opt 校验失败后修正
-        Graph->>Journal: answer_reset 撤回草稿
-        Journal-->>UI: 清除旧草稿，接收新 revision
+        Graph->>Graph: 内部修复一次并重新校验
     end
-    Graph->>Journal: 校验并原子保存最终回答
-    Journal-->>UI: SSE completed；断线按 cursor 重连
+    Graph-->>API: 正式响应
+    API->>Journal: Journal.finish 原子保存最终回答
+    Journal-->>API: 已提交响应
+    API-->>UI: SSE completed；一次展示正文、表格与元数据
 ```
 
 ## 技术栈
