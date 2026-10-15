@@ -44,7 +44,7 @@ Agent 的 K 线收益证据按起止日期、首尾价格及交易间隔数成�
 | `agents/react_runtime/tools.py` | 消费类型化工具，执行 profile、时态、身份解析、调用和证据接入 |
 | `agents/react_runtime/evidence.py` | 请求级完整证据、预览、来源、缺失、截断和确定性计算 |
 | `agents/react_runtime/contracts.py` | `finish`、`update_task`、`read_evidence`、`compute_result` 类型契约及预算 |
-| `agents/react_runtime/task_contract.py`、`display_fields.py` | 当前任务、待补信息和输出契约；将明确展示字段映射到证据字段并保留未解析要求 |
+| `agents/react_runtime/task_contract.py`、`display_fields.py` | 当前任务、待补信息和输出契约；内容要求与表格逐行列分开保存，列映射保留未解析要求 |
 | `agents/react_runtime/rendering.py` | 从本轮证据渲染单张表格，检查字段、行数、截断与范围 |
 | `agents/react_runtime/partial_delivery.py` | 累计模型失败触发 provider_error 后构造受限的部分交付候选，仍由运行时执行证据和合规校验 |
 | `agents/react_runtime/compliance.py` | 独立语义合规 Critic；结构化返回交易指令、仓位、目标价、承诺和确定性预测违规 |
@@ -83,7 +83,8 @@ LIMITUPLAB_LLM_TIMEOUT_SECONDS=30
 - 工具结果区分 `ok`、`empty`、`partial`、`error`；空结果不是异常，缺失或截断不能冒充完整集合。
 - 业务证据行按工具契约的 `collection` 提取，指数使用 `indices`、网页检索使用 `results`、评级评估使用 `evaluations`。声明集合缺失、类型错误或含非对象行进入工具失败链路；失败证据没有可交付的业务行，不能伪装成有效空集合。
 - 输入审查必须返回结构化 `date_scope`，统一解析单日、多日、区间以及事件日/观察截止日；不再由消息关键词或首个 ISO 日期覆盖。工具网关补齐单日空参数并拒绝冲突，多日明确选择合同内日期，区间保留合理子窗口；日期合同随 checkpoint 保存。当前新闻与最近收盘行情等混合时点按各来源实际日期展示，不将不同日期角色强行等同。
-- `update_task` 已登记要求的 ID、说明和原文不可删除或改写；研究项标记 `satisfied` 必须引用本轮可用证据，仍有 pending/unavailable 时不得 `complete`。明确展示字段未解析时也不能完整交付。行数相同不能替代排名窗口正确：最终表格核对 offset、limit 及显式排序，计算来源证明沿祖先链检查并随 checkpoint 保存。
+- `output_contract.content_requirements` 保存统计、概况、比较、解释等自然语言内容义务；`field_requests` 只绑定表格/名单的逐行列。多指标正文不生成列约束，名单外的总数也不作为重复行列。内容列表随输入审查、运行上下文和 checkpoint 保留，指导本轮证据查询与回答；它不是内容已经满足或事实正确的证明。未知明确列仍保留未解析状态，不能转成内容义务绕过检查。
+- `update_task` 已登记要求的 ID、说明和原文不可删除或改写；研究项标记 `satisfied` 必须引用本轮可用证据，仍有 pending/unavailable 时不得 `complete`。明确要求的表格列未解析时也不能完整交付。行数相同不能替代排名窗口正确：最终表格核对 offset、limit 及显式排序，计算来源证明沿祖先链检查并随 checkpoint 保存。
 - 这些确定性门禁检查已登记要求、证据引用和输出合同，并不等同于证明所有自然语言要求已被模型识别或所有正文事实均正确。指数区间涨幅等目录字段仅说明含义，实际可用性仍以返回证据为准；未知或含糊字段保留未绑定状态。
 - 默认不向 ReAct 重放历史原文或答案证据。仅在 Input Reviewer 判定为 `follow_up` 时，`context.py` 提取历史实体名称/代码及上一轮实际工具参数用于消歧，所有事实仍需本轮重新查询。
 - Memory 默认只传偏好约束；追问时再传研究目标、股票、题材、日期范围和未解问题，均不能作为事实或自动继承的任务。EvidenceStore 的历史域兼容检查仍保留，历史引用及其派生结果不能进入最终引用。

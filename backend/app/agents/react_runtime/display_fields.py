@@ -1,8 +1,9 @@
-"""Reviewed scalar display fields; a catalog entry never proves row availability.
+"""Reviewed table-row columns; a catalog entry never proves row availability.
 
 Descriptions guide semantic matching, not keyword substitutions. The catalog
-covers the scalar row contracts of supported research tools; it is not a list
-of observed values. Unknown metrics and genuinely ambiguous meanings stay unbound.
+covers scalar row columns, not the universe of answerable summary metrics or
+content requirements. Unknown requested columns and ambiguous column meanings
+stay unbound; content requirements are recorded separately in the task contract.
 """
 
 DISPLAY_FIELD_CATALOG = {

@@ -1,8 +1,8 @@
 """Semantic task interpretation and deterministic presentation validation."""
 
-from typing import Literal
+from typing import Annotated, Literal
 
-from pydantic import BaseModel, ConfigDict, Field, model_validator
+from pydantic import BaseModel, ConfigDict, Field, StringConstraints, model_validator
 
 from app.agents.react_runtime.contracts import UpdateTask
 from app.agents.react_runtime.display_fields import DISPLAY_FIELD_CATALOG
@@ -11,18 +11,27 @@ from app.agents.react_runtime.display_fields import DISPLAY_FIELD_CATALOG
 OutputMode = Literal["freeform", "table_only", "prose_only"]
 OUTPUT_MODE_DESCRIPTION = (
     "freeform permits the requested explanation and table; table_only delivers only requested table fields. "
-    "prose_only delivers only the requested existence answer, count, or single metric, with necessary "
+    "prose_only directly answers the requested existence questions, counts, or set of metrics, with necessary "
     "object, date, source, uncertainty or missing-data clarification. No tables, other objects, "
     "unrequested reasons or background, including lists written as prose. Query subjects and metrics "
     "are not automatically requested display fields."
 )
+CONTENT_REQUIREMENTS_DESCRIPTION = (
+    "Non-column deliverables explicitly requested this turn: counts, summary metrics, comparisons, "
+    "explanations, or data-gap reporting. Preserve each requested meaning and scope as natural language, "
+    "without a catalog field mapping. A list plus its total has row fields in field_requests and the total "
+    "here. Keep unknown requested meanings here too; clarify genuinely ambiguous user input through "
+    "pending_slots, and require evidence or an explicit limitation before claiming fulfillment. "
+    "These are obligations, not claims that the answer is already verified."
+)
+ContentRequirement = Annotated[str, StringConstraints(strip_whitespace=True, min_length=1, max_length=240)]
 
 
 class FieldRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     requested: str = Field(min_length=1, max_length=120,
-        description="One user-requested display field, preserving its original meaning and order.")
+        description="One explicitly requested table/list row column, preserving its meaning and order; not a separate summary or total.")
     field: str | None = Field(default=None,
         description="Exact catalog field, or null when unknown or ambiguous. Never omit the requested item.")
 
@@ -64,6 +73,8 @@ class OutputContract(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     mode: OutputMode = Field(default="freeform", description=OUTPUT_MODE_DESCRIPTION)
+    content_requirements: list[ContentRequirement] = Field(default_factory=list, max_length=12,
+        description=CONTENT_REQUIREMENTS_DESCRIPTION)
     field_requests: list[FieldRequest] = Field(default_factory=list, max_length=12)
     fields: list[str] = Field(default_factory=list, max_length=12,
         description="Backend-derived hard fields; also accepts legacy checkpoints without field_requests.")
@@ -76,7 +87,8 @@ class OutputContract(BaseModel):
     def resolve_fields(self):
         # Only actual requests or legacy fields can establish a hard constraint.
         # A model-supplied diagnostic is never authority to resolve fields.
-        # Persist the legacy request origin even when a field cannot be resolved.
+        # Persist legacy column requests even when a field cannot be resolved.
+        # Content requirements never reclassify or erase existing field bindings.
         if not self.field_requests and self.fields:
             self.field_requests = [FieldRequest(requested=field, field=field) for field in self.fields]
         active = bool(self.field_requests or self.fields)
@@ -108,12 +120,14 @@ class ReviewFieldRequest(FieldRequest):
 
 
 class ReviewOutputContract(BaseModel):
-    """LLM wire schema has one mapping list and no backend diagnostics/fields."""
+    """Separate content obligations from column mappings on the review wire."""
     model_config = ConfigDict(extra="forbid")
 
     mode: OutputMode = Field(default="freeform", description=OUTPUT_MODE_DESCRIPTION)
+    content_requirements: list[ContentRequirement] = Field(default_factory=list, max_length=12,
+        description=CONTENT_REQUIREMENTS_DESCRIPTION)
     field_requests: list[ReviewFieldRequest] = Field(default_factory=list, max_length=12,
-        description="Every explicitly requested display field, in order. Query subjects or metrics alone are not display-field requests; a direct existence/count/metric answer normally leaves this empty. Include unknown requested fields with field=null; never omit an item or list only a known subset.")
+        description="Only explicitly requested table/list row columns, in order. Put separate counts, summary metrics and explanations in content_requirements, even when a table is also requested. Direct prose answers normally leave this empty. Include unknown requested columns with field=null; never omit or move them to content_requirements to avoid a binding failure.")
     table_required: bool = Field(default=False,
         description="True only when the current turn requires a table; false for prose_only and future display preferences.")
     row_selection: RowSelection | None = Field(default=None, description=ROW_SELECTION_DESCRIPTION)
