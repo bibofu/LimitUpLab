@@ -2,7 +2,7 @@
 
 import os
 from dataclasses import asdict
-from datetime import date, datetime, timedelta, timezone
+from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from typing import Any
 
@@ -21,6 +21,7 @@ from app.agents.event_query import (
 from app.agents.query_contract import (
     MARKET_SEGMENT_LABELS,
     MARKET_SEGMENT_PREFIXES,
+    current_query_reference_time,
     normalize_market_event_type,
     normalize_event_status,
     normalize_market_segment,
@@ -69,6 +70,7 @@ from app.services.rating_backtest import build_rating_backtest
 from app.services.sector_performance import build_sector_performance
 from app.services.sector_stock_ranking import build_sector_stock_ranking
 from app.services.stock_kline import build_stock_kline_facts
+from app.agents.kline_presentation import kline_agent_view
 from app.post_limit_query_contract import PostLimitQueryContract
 from app.repositories.post_limit_repository import load_post_limit_dataset
 from app.services.post_limit import (
@@ -946,13 +948,56 @@ class AgentToolRegistry:
             raise ValueError(f"Unsupported market event type: {event_type}")
         if result_mode not in {"list", "count", "summary", "ranking"}:
             raise ValueError(f"Unsupported market event result mode: {result_mode}")
+        reference_time = current_query_reference_time()
         target_date = trade_date or max(
             (event.trade_date for event in self.events),
-            default=date.today(),
+            default=reference_time.date(),
         )
         effective_market = normalize_market_segment(market)
         effective_limit = max(1, min(limit, 100))
         source = "local-limit-up-events"
+
+        # A completed-day question cannot treat an unobserved future session
+        # as a verified zero. The 15:30 cutoff matches daily consolidation.
+        unavailable_reason = None
+        if target_date > reference_time.date():
+            unavailable_reason = "requested_date_in_future"
+        elif target_date == reference_time.date():
+            if reference_time.time() < time(15, 0):
+                unavailable_reason = "market_not_closed"
+            elif reference_time.time() < time(15, 30):
+                unavailable_reason = "closing_data_pending"
+        if unavailable_reason is not None:
+            payload = {
+                "trade_date": target_date.isoformat(),
+                "event_type": effective_type,
+                "market": effective_market,
+                "query": query,
+                "result_mode": result_mode,
+                "matched_count": None,
+                "returned_count": 0,
+                "items": [],
+                "availability": unavailable_reason,
+                "checked_at": reference_time.isoformat(),
+                "data_missing": [unavailable_reason],
+                "complete": False,
+                "source": "completed-day-availability",
+            }
+            return ToolResult(
+                name="market_event_pool",
+                input={
+                    "event_type": effective_type,
+                    "trade_date": target_date.isoformat(),
+                    "market": effective_market,
+                    "query": query,
+                    "result_mode": result_mode,
+                    "limit": effective_limit,
+                },
+                output=payload,
+                trace_output=payload,
+                result_status="partial",
+                summary=f"{target_date.isoformat()} 收盘事件数据尚不可用，数量未知：{unavailable_reason}。",
+            )
 
         if effective_type == "limit_down":
             snapshot = collect_limit_down_pool(target_date)
@@ -1087,6 +1132,8 @@ class AgentToolRegistry:
         selected_dates = available_dates[-effective_recent_days:]
         if effective_recent_days == 1:
             target_events = events_for_date(self.events, trade_date)
+            if trade_date is not None:
+                selected_dates = [trade_date] if trade_date in available_dates else []
         else:
             selected_date_set = set(selected_dates)
             target_events = [
@@ -1127,7 +1174,9 @@ class AgentToolRegistry:
             target_events, group_by=group_by, limit=limit,
         )
         target_events = target_events[: max(1, min(limit, 100))]
-        if selected_dates:
+        if effective_recent_days == 1 and trade_date is not None:
+            trade_date_text = trade_date.isoformat()
+        elif selected_dates:
             trade_date_text = selected_dates[-1].isoformat()
         elif trade_date is not None:
             trade_date_text = trade_date.isoformat()
@@ -1221,6 +1270,7 @@ class AgentToolRegistry:
             end_date=resolved_end_date,
             repository=self.first_board_repository,
         )
+        scoped_returns = kline_agent_view(response.model_dump(mode="json"))
         trace_output = {
             "symbol": response.symbol,
             "requested_days": response.requested_days,
@@ -1229,9 +1279,8 @@ class AgentToolRegistry:
             "data_fresh": response.data_fresh,
             "trend": response.trend,
             "latest_close": response.latest_close,
-            "return_5d_pct": response.return_5d_pct,
-            "return_10d_pct": response.return_10d_pct,
-            "return_20d_pct": response.return_20d_pct,
+            "display_window_return": scoped_returns["display_window_return"],
+            "return_windows": scoped_returns["return_windows"],
             "bar_count": len(response.bars),
         }
         return ToolResult(
@@ -1244,8 +1293,8 @@ class AgentToolRegistry:
             output=response,
             summary=(
                 f"{resolved_symbol} K-line through {response.data_as_of.isoformat()}: "
-                f"trend={response.trend}, close={response.latest_close}, "
-                f"5d={response.return_5d_pct}."
+                f"trend={response.trend}, close={response.latest_close}; "
+                f"displayed observations={len(response.bars)}. Return scopes are in display_window_return/return_windows."
             ),
             trace_output=trace_output,
         )

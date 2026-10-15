@@ -1,11 +1,17 @@
 """Shared typed values for structured Agent tool arguments."""
 
-from datetime import date
+from datetime import date, datetime
 from typing import Literal
+from zoneinfo import ZoneInfo
+
+
+def current_query_reference_time() -> datetime:
+    """Use the exchange timezone even when the server runs outside China."""
+    return datetime.now(ZoneInfo("Asia/Shanghai"))
 
 
 def current_query_reference_date() -> date:
-    return date.today()
+    return current_query_reference_time().date()
 
 
 MarketSegment = Literal["main_board", "chinext", "star_market", "beijing"]

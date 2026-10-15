@@ -1,9 +1,25 @@
 """Semantic query dates shared by input review and deterministic tool policy."""
 
-from datetime import date
-from typing import Literal
+from datetime import date, timedelta
+from typing import Callable, Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
+
+
+class TradingDayComparison(BaseModel):
+    """An additional comparison observation, not a guessed calendar date."""
+
+    model_config = ConfigDict(extra="forbid")
+
+    anchor_date: date = Field(description="The explicitly requested observation being compared; it must also be in dates.")
+    offset: int = Field(ge=-20, le=20, strict=True,
+        description="Nonzero exchange-session offset: previous trading day=-1, next trading day=1. Not a historical lookback window.")
+
+    @model_validator(mode="after")
+    def nonzero(self):
+        if self.offset == 0:
+            raise ValueError("Trading-day comparison offset must be nonzero")
+        return self
 
 
 class DateScope(BaseModel):
@@ -18,6 +34,8 @@ class DateScope(BaseModel):
     end_date: date | None = None
     observation_cutoff: date | None = Field(default=None,
         description="An explicitly requested cutoff for observing events' later outcomes. Never infer it by adding calendar days to a trading-day horizon.")
+    trading_day_comparisons: list[TradingDayComparison] = Field(default_factory=list, max_length=8,
+        description="Additional observations explicitly requested relative to a listed date, e.g. comparison with its previous trading day. Do not guess these dates or add them to dates; the server resolves exchange sessions. Empty for lookback calculations, event outcomes, negated or superseded comparisons.")
 
     @model_validator(mode="after")
     def consistent(self):
@@ -33,6 +51,11 @@ class DateScope(BaseModel):
                 raise ValueError("Date range start must not follow its end")
         elif self.dates or self.start_date is not None or self.end_date is not None:
             raise ValueError("Unspecified date scope cannot contain dates")
+        if self.trading_day_comparisons:
+            if self.mode != "dates" or self.basis != "observation":
+                raise ValueError("Trading-day comparisons require discrete observation dates")
+            if any(item.anchor_date not in self.dates for item in self.trading_day_comparisons):
+                raise ValueError("Comparison anchor must be a requested observation date")
         if self.observation_cutoff is not None:
             if self.basis != "event":
                 raise ValueError("A separate observation cutoff requires event-date semantics")
@@ -40,6 +63,36 @@ class DateScope(BaseModel):
             if latest is not None and self.observation_cutoff < latest:
                 raise ValueError("Observation cutoff cannot precede the requested events")
         return self
+
+    def resolve_comparisons(self, calendar: Callable[[date, date], list[date]]) -> tuple["DateScope", list[str]]:
+        """Resolve only declared comparisons using verified exchange sessions."""
+        if not self.trading_day_comparisons:
+            return self, []
+        anchors = [item.anchor_date for item in self.trading_day_comparisons]
+        # The window is a bounded calendar lookup, never an assumed trading-day
+        # conversion. Insufficient coverage is a real missing-data condition.
+        try:
+            days = calendar(min(anchors) - timedelta(days=90), max(anchors) + timedelta(days=90))
+            if any(type(day) is not date for day in days):
+                raise ValueError("Invalid exchange-calendar entry")
+            days = sorted(set(days))
+        except Exception:
+            days = []
+        resolved, missing = list(self.dates), []
+        for item in self.trading_day_comparisons:
+            candidates = [day for day in days if (day < item.anchor_date if item.offset < 0 else day > item.anchor_date)]
+            if not days or not days[0] <= item.anchor_date <= days[-1] or len(candidates) < abs(item.offset):
+                direction = "前" if item.offset < 0 else "后"
+                missing.append(f"交易日历暂不可用或覆盖不足，无法确认{item.anchor_date.isoformat()}的{direction}{abs(item.offset)}个交易日比较日期。")
+                continue
+            selected = candidates[item.offset] if item.offset < 0 else candidates[item.offset - 1]
+            if selected not in resolved:
+                if len(resolved) >= 16:
+                    missing.append("本轮比较日期过多，无法解析全部比较日期；请缩小日期范围。")
+                    continue
+                resolved.append(selected)
+        scope = self.model_copy(update={"dates": resolved})
+        return scope, missing
 
     @property
     def single_date(self) -> date | None:

@@ -5,6 +5,7 @@ from types import SimpleNamespace
 
 import pytest
 from langchain_core.messages import AIMessage
+from pydantic import TypeAdapter
 
 from app.agents.react_runtime.contracts import Finish
 from app.agents.react_runtime.display_fields import DISPLAY_FIELD_CATALOG
@@ -13,7 +14,8 @@ from app.agents.react_runtime.rendering import render_answer
 from app.agents.react_runtime.runtime import Run
 from app.agents.react_runtime.task_contract import TaskInterpretation, validate_delivery
 from app.agents.tools import TOOL_SCHEMAS
-from app.models import AgentChatRequest, FirstBoardRating, LimitUpEvent, MarketIndexTrendItem
+from app.collectors.hithink_finance_collector import HithinkHotStockFact
+from app.models import AgentChatRequest, FirstBoardRating, LimitUpEvent, MarketIndexTrendItem, StockKLineBar
 from app.services.prompt_security import review_input
 
 
@@ -77,10 +79,13 @@ def test_review_schema_offers_trusted_raw_field_enum_instead_of_unbounded_string
 
 
 def test_catalog_fields_are_scalars_in_the_declared_production_models():
-    models = {model.__name__: model for model in (LimitUpEvent, FirstBoardRating, MarketIndexTrendItem)}
+    models = {model.__name__: model for model in
+              (LimitUpEvent, FirstBoardRating, MarketIndexTrendItem, StockKLineBar, HithinkHotStockFact)}
     for key, entry in DISPLAY_FIELD_CATALOG.items():
-        declaration = models[entry["model"]].model_json_schema()["properties"][key]
-        assert declaration.get("type") in {"string", "integer", "number", "boolean"}
+        declaration = TypeAdapter(models[entry["model"]]).json_schema()["properties"][key]
+        types = {item.get("type") for item in declaration.get("anyOf", [declaration])}
+        assert types <= {"string", "integer", "number", "boolean", "null"}
+        assert types - {"null"}
         assert entry["meaning"] and entry["tools"]
 
 

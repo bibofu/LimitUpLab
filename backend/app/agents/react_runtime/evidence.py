@@ -6,6 +6,7 @@ from math import isfinite
 from uuid import uuid4
 
 from fastapi.encoders import jsonable_encoder
+from app.agents.kline_presentation import kline_agent_view
 from app.agents.react_runtime.selection_provenance import row_selection_matches
 
 from app.agents.tool_schemas_market import MARKET_TOOL_SCHEMAS
@@ -75,8 +76,11 @@ def payload_of(result):
             for item in candidates
         ]}
     if result.name == "stock_kline" and isinstance(raw, dict):
-        raw = {**raw, "metric_definitions": {
-            "return_Nd_pct": "(close[t] / close[t-N] - 1)*100; N trading intervals, N+1 closes. Displayed N bars have N-1 intervals. Not an adjustment explanation.",
+        raw = {**kline_agent_view(raw), "metric_definitions": {
+            "change_pct": "Provider daily percentage only; null when unavailable. Do not replace with unadjusted close-to-close changes, especially on ex-right dates.",
+            "close_to_close_pct": "(close / previous_close - 1)*100 using known unadjusted prices; comparison date is previous_trade_date. A price-change statistic, not the provider/ex-right daily change_pct.",
+            "display_window_return": "Return over the displayed bars only, with explicit first/last date and close. N observations contain N-1 observed intervals; this does not prove calendar completeness.",
+            "return_windows": "Only windows backed by visible first/last closes. Each entry states observations and observed_intervals. Missing observations require a longer query; never infer a start date from an unscoped percentage.",
             "trend": "Moving-average alignment label; not consecutive daily increases.",
             "max_drawdown_pct": "Peak-to-subsequent-trough in displayed bars, percent.",
         }}

@@ -172,7 +172,8 @@ def test_kline_metrics_match_generated_intervals_and_news_are_synthetic():
     target = registry()
     result, payload, _ = execute(target, "stock_kline", symbol="600101", days=20)
     StockKLineFacts.model_validate(result.output)
-    assert len(payload["bars"]) == 20 and payload["return_10d_pct"] == 1.2
+    assert len(payload["bars"]) == 20 and result.output["return_10d_pct"] == 1.2
+    assert next(item for item in payload["return_windows"] if item["observed_intervals"] == 10)["return_pct"] == 1.2
     closes = [bar["close"] for bar in payload["bars"]]
     assert (closes[-1] / closes[-11] - 1) * 100 == pytest.approx(1.2, abs=0.00001)
     assert all(bar["source"] == SOURCE for bar in payload["bars"])
@@ -438,8 +439,8 @@ def test_web_and_activity_injection_stays_in_untrusted_source_fields():
     ("300303", "2026-09-22", -2.4, 117.12, "falling"),
 ])
 def test_kline_discriminates_object_and_date_with_independent_scalar_labels(symbol, day, expected_return, expected_close, trend):
-    _, payload, _ = execute(registry(), "stock_kline", symbol=symbol, end_date=day, days=20)
-    assert payload["return_10d_pct"] == expected_return
+    result, payload, _ = execute(registry(), "stock_kline", symbol=symbol, end_date=day, days=20)
+    assert result.output["return_10d_pct"] == expected_return
     assert payload["latest_close"] == expected_close and payload["trend"] == trend
     assert payload["data_as_of"] == day and payload["bars"][-1]["trade_date"] == day
     if trend == "rising":
@@ -451,14 +452,15 @@ def test_kline_discriminates_object_and_date_with_independent_scalar_labels(symb
 
 def test_historical_kline_queries_preserve_overlapping_observations_and_interval_metrics():
     target = registry()
-    _, full, _ = execute(target, "stock_kline", symbol="300303", days=60)
-    _, short, _ = execute(target, "stock_kline", symbol="300303", end_date="2026-09-21", days=5)
+    full_result, full, _ = execute(target, "stock_kline", symbol="300303", days=60)
+    short_result, short, _ = execute(target, "stock_kline", symbol="300303", end_date="2026-09-21", days=5)
     dated = {bar["trade_date"]: bar for bar in full["bars"]}
     assert all(bar == dated[bar["trade_date"]] for bar in short["bars"])
     closes = [bar["close"] for bar in full["bars"]]
     for periods in (5, 10, 20):
-        assert full[f"return_{periods}d_pct"] == round((closes[-1] / closes[-1 - periods] - 1) * 100, 3)
-    assert short["return_10d_pct"] == -2.0  # may use more history than the five displayed bars
+        assert full_result.output[f"return_{periods}d_pct"] == round((closes[-1] / closes[-1 - periods] - 1) * 100, 3)
+    assert short_result.output["return_10d_pct"] == -2.0  # public metric may use hidden history
+    assert "return_10d_pct" not in short and short["return_windows"] == []
 
 
 @pytest.mark.parametrize("symbol", ["600101", "000202", "300303"])
@@ -476,17 +478,27 @@ def test_kline_public_metrics_match_production_service_on_identical_bars(monkeyp
     monkeypatch.setattr(stock_kline, "_cached_bars", lambda *args: bars)
     expected = stock_kline.build_stock_kline_facts(
         symbol=symbol, days=days, end_date=date.fromisoformat(day), repository=SimpleNamespace())
-    _, payload, _ = execute(target, "stock_kline", symbol=symbol, end_date=day, days=days)
-    assert StockKLineFacts.model_validate(payload) == expected
+    result, payload, _ = execute(target, "stock_kline", symbol=symbol, end_date=day, days=days)
+    # Frozen observations predate daily-percentage provenance. Compare every
+    # original field, without changing frozen inputs/answers or inventing source
+    # percentages. New source/missing-data behavior has independent fixtures in
+    # test_stock_kline_daily_change and test_react_common_field_catalog.
+    additions = {"change_pct", "previous_close", "previous_trade_date", "change_pct_basis", "close_to_close_pct"}
+    assert all(additions.isdisjoint(bar) for bar in payload["bars"])
+    legacy_shape = {"data_missing": True, "bars": {"__all__": additions}}
+    assert (StockKLineFacts.model_validate(result.output).model_dump(exclude=legacy_shape)
+            == expected.model_dump(exclude=legacy_shape))
 
 
 def test_kline_precision_and_drawdown_have_independent_reference_values():
-    _, rising, _ = execute(registry(), "stock_kline", symbol="600101", days=20)
+    result, _, _ = execute(registry(), "stock_kline", symbol="600101", days=20)
+    rising = result.output
     assert {key: rising[key] for key in ("return_5d_pct", "return_10d_pct", "ma5", "ma10", "ma20", "max_drawdown_pct")} == {
         "return_5d_pct": .697, "return_10d_pct": 1.2, "ma5": 100.86,
         "ma10": 100.58, "ma20": 100.29, "max_drawdown_pct": 0.0,
     }
-    _, falling, _ = execute(registry(), "stock_kline", symbol="300303", days=5)
+    result, _, _ = execute(registry(), "stock_kline", symbol="300303", days=5)
+    falling = result.output
     assert falling["return_5d_pct"] == -1.414
     assert falling["max_drawdown_pct"] == -1.215  # displayed five bars, not the complete history
 
@@ -524,7 +536,11 @@ def test_index_metrics_match_production_normalizer_on_identical_points(day, days
             name=item.name, display_symbol=item.symbol,
             rows=[{"date": point.trade_date, "close": point.close} for point in item.points],
             requested_end_date=date.fromisoformat(day), days=days, source=SOURCE)
-        assert item == expected
+        # The frozen index contract contains all daily points but no redundant
+        # latest-day scalar. Preserve that contract and compare all its fields;
+        # daily versus interval returns are independently checked elsewhere.
+        assert item.model_dump(exclude={"change_pct"}) == expected.model_dump(exclude={"change_pct"})
+    assert all("change_pct" not in item for item in payload["indices"])
 
 
 @pytest.mark.parametrize("variant", ["partial", "truncated", "stale", "empty"])

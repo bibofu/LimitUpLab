@@ -132,7 +132,8 @@ def test_index_catalog_only_declares_actual_scalar_fields_and_keeps_return_scope
     properties = MarketIndexTrendItem.model_json_schema()["properties"]
     for field, entry in DISPLAY_FIELD_CATALOG.items():
         if "market_index_trend" in entry["tools"]:
-            assert properties[field]["type"] in {"string", "number", "integer", "boolean"}
+            types = {item.get("type") for item in properties[field].get("anyOf", [properties[field]])}
+            assert types <= {"string", "number", "integer", "boolean", "null"}
     assert "points" not in DISPLAY_FIELD_CATALOG
-    assert "change_pct" not in DISPLAY_FIELD_CATALOG
+    assert "不是窗口区间涨跌幅" in DISPLAY_FIELD_CATALOG["change_pct"]["meaning"]
     assert "不是单日涨跌幅" in DISPLAY_FIELD_CATALOG["return_pct"]["meaning"]

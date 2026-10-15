@@ -70,6 +70,8 @@ class MarketIndexTrendItem(BaseModel):
     end_date: date
     start_close: float
     end_close: float
+    change_pct: float | None = Field(default=None,
+        description="Latest trading day's close-to-previous-close change, percent; not the window return.")
     return_pct: float
     max_drawdown_pct: float
     positive_days: int
@@ -382,6 +384,12 @@ class StockKLineBar(BaseModel):
     volume: float
     amount: float = 0
     source: str = "unknown"
+    change_pct: float | None = None
+    previous_close: float | None = None
+    previous_trade_date: date | None = None
+    change_pct_basis: Literal["source"] | None = None
+    close_to_close_pct: float | None = Field(default=None,
+        description="Unadjusted close-to-close price change, not the provider daily percentage on ex-right dates.")
 
 
 class StockKLineFacts(BaseModel):
@@ -404,6 +412,7 @@ class StockKLineFacts(BaseModel):
     max_drawdown_pct: float | None = None
     sources: list[str] = Field(default_factory=list)
     bars: list[StockKLineBar] = Field(default_factory=list)
+    data_missing: list[str] = Field(default_factory=list)
 
 
 class StockActivityFacts(BaseModel):

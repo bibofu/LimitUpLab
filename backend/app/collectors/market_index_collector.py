@@ -390,6 +390,7 @@ def _trend_from_rows(
         end_date=points[-1].trade_date,
         start_close=start_close,
         end_close=end_close,
+        change_pct=points[-1].change_pct,
         return_pct=return_pct,
         max_drawdown_pct=_close_max_drawdown_pct(closes),
         positive_days=sum(value > 0 for value in daily_changes),

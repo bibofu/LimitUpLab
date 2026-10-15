@@ -6,6 +6,7 @@ import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
 from datetime import date, datetime, timezone
+from math import isfinite
 from statistics import mean
 from time import monotonic
 
@@ -334,7 +335,8 @@ def build_stock_kline_facts(
     """Load K-line bars and derive compact facts suitable for an LLM answer."""
 
     requested_days = max(1, min(days, 60))
-    analysis_days = max(requested_days, 21)
+    # Keep the first displayed day's comparison close outside the visible window.
+    analysis_days = max(requested_days + 1, 21)
     active_repository = repository or SQLiteFirstBoardRepository()
     analysis_bars = load_stock_kline_bars(
         symbol=symbol,
@@ -344,7 +346,7 @@ def build_stock_kline_facts(
         history_collector=history_collector,
         spot_collector=spot_collector,
     )
-    display_bars = analysis_bars[-requested_days:]
+    display_bars = _daily_change_bars(analysis_bars)[-requested_days:]
     persisted = _cached_bars(active_repository, symbol, end_date)
     source_by_date = {item.trade_date: item.source for item in persisted}
     latest = analysis_bars[-1]
@@ -376,7 +378,37 @@ def build_stock_kline_facts(
             }
         ),
         bars=display_bars,
+        data_missing=[f"{bar.trade_date.isoformat()} change_pct: 来源未提供当日涨跌幅；未用未复权收盘价变动率替代"
+                      for bar in display_bars if bar.change_pct is None],
     )
+
+
+def _daily_change_bars(bars: list[StockKLineBar]) -> list[StockKLineBar]:
+    """Keep provider daily percentages separate from unadjusted price changes.
+
+    The comparison date and close stay in the returned row so this calculation
+    can be audited. Unknown/adjusted source combinations never get guessed rates.
+    """
+    unadjusted_sources = {
+        "hithink-finance.market.history.none", "hithink-finance.market.snapshot",
+        "akshare.stock_zh_a_hist_tx", "tencent.qt.gtimg.cn",
+    }
+    result = []
+    for index, bar in enumerate(bars):
+        source_change = bar.change_pct if bar.change_pct is not None and isfinite(bar.change_pct) else None
+        updates = {"change_pct": source_change, "change_pct_basis": "source" if source_change is not None else None,
+                   "close_to_close_pct": None, "previous_close": None, "previous_trade_date": None}
+        previous = bars[index - 1] if index else None
+        comparable = (previous is not None and previous.trade_date < bar.trade_date
+                      and previous.source in unadjusted_sources and bar.source in unadjusted_sources
+                      and isfinite(previous.close) and previous.close > 0 and isfinite(bar.close))
+        if comparable:
+            updates.update({
+                "close_to_close_pct": round((bar.close / previous.close - 1) * 100, 3),
+                "previous_close": previous.close, "previous_trade_date": previous.trade_date,
+            })
+        result.append(bar.model_copy(update=updates))
+    return result
 
 
 # Read cached stock bars through the requested end date.
@@ -461,7 +493,7 @@ def _to_daily_bar(symbol: str, bar: StockKLineBar) -> StockDailyBar:
         close=bar.close,
         volume=bar.volume,
         amount=bar.amount,
-        change_pct=None,
+        change_pct=bar.change_pct,
         source=bar.source,
         created_at=datetime.now(timezone.utc),
     )
@@ -478,6 +510,7 @@ def _to_kline_bar(bar: StockDailyBar) -> StockKLineBar:
         volume=bar.volume,
         amount=bar.amount,
         source=bar.source,
+        change_pct=bar.change_pct,
     )
 
 

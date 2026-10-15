@@ -119,6 +119,7 @@ class MarketDataProvider:
                     volume=item.volume / _SHARES_PER_HAND,
                     amount=item.turnover or 0,
                     source=HITHINK_SNAPSHOT_SOURCE,
+                    change_pct=item.change_pct,
                 )
             missing = [symbol for symbol in normalized if symbol not in bars]
             if missing:
