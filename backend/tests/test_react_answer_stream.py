@@ -100,3 +100,15 @@ def test_callback_cancellation_propagates(invalidate):
             stream.invalidate()
         else:
             stream.feed([chunk('{"answer":"hello', "finish")])
+
+
+@pytest.mark.parametrize("width", [1, 2, 7, 1000])
+def test_json_is_decoded_once_and_preserves_intentional_literal_newlines(width):
+    answer = '真实换行：\n路径 C:\\new\\reports；字面量 \\n；代码 `print("\\n")`。'
+    document = json.dumps({"answer": answer}, ensure_ascii=False)
+    deltas = []
+    stream = FinishAnswerStream(deltas.append)
+    for offset in range(0, len(document), width):
+        stream.feed([chunk(document[offset:offset + width], "finish" if offset == 0 else None)])
+    assert "".join(deltas) == answer
+    assert not stream.disabled

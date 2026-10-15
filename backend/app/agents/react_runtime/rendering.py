@@ -6,12 +6,56 @@ from math import isfinite
 from app.agents.react_runtime.evidence import CURRENT_SCOPE
 
 
-def cell(value):
+RANK_TREND_LABELS = {"up": "上升", "down": "下降", "flat": "持平"}
+
+
+def cell(value, *, field=None):
     if value is None:
         return "缺失"
     if type(value) not in (str, int, float, bool) or (type(value) is float and not isfinite(value)):
         raise ValueError("Table fields must be finite scalar values")
+    if field == "rank_trend":
+        value = RANK_TREND_LABELS.get(value, f"未识别（{value}）")
     return escape(str(value)).replace("|", "&#124;").replace("\r", " ").replace("\n", " ")
+
+
+def table_prose(answer, marker):
+    """Require an unindented, unfenced marker without reinterpreting escapes."""
+    before, _, after = answer.partition(marker)
+    leading = before.rsplit("\n", 1)[-1]
+    trailing = after.split("\n", 1)[0]
+    if leading or trailing.strip(" \t\r"):
+        raise ValueError(
+            "Table placeholder must occupy its own unindented Markdown line. "
+            "Use actual newlines after JSON decoding, not literal backslash-n text; "
+            "serialize the answer only once and put blank lines around the placeholder."
+        )
+
+    # A standalone line inside a fenced code block still renders as code. Track
+    # Markdown fence lengths so a shorter or mismatched closer cannot hide it.
+    fence, fence_size = None, 0
+    for line in before.splitlines():
+        content = line.lstrip(" ")
+        if len(line) - len(content) > 3 or not content.startswith(("```", "~~~")):
+            continue
+        char = content[0]
+        size = len(content) - len(content.lstrip(char))
+        tail = content[size:]
+        if fence is None:
+            if char != "`" or "`" not in tail:
+                fence, fence_size = char, size
+        elif char == fence and size >= fence_size and not tail.strip():
+            fence, fence_size = None, 0
+    if fence is not None:
+        raise ValueError("Table placeholder must be outside Markdown code fences")
+    before_lines = before.splitlines(keepends=True)
+    after_lines = after.splitlines(keepends=True)
+    while before_lines and not before_lines[-1].strip(" \t\r\n"):
+        before_lines.pop()
+    while after_lines and not after_lines[0].strip(" \t\r\n"):
+        after_lines.pop(0)
+    # Keep content indentation and trailing spaces: they carry Markdown meaning.
+    return "".join(before_lines).rstrip("\r\n"), "".join(after_lines)
 
 
 def render_answer(final, store):
@@ -22,6 +66,7 @@ def render_answer(final, store):
         return final.answer
     if final.answer.count(marker) != 1:
         raise ValueError("Use exactly one {{evidence_table}} placeholder")
+    before, after = table_prose(final.answer, marker)
     record = store.get(final.table.evidence_id)
     if store.scope_of(record) != CURRENT_SCOPE or record["result_state"] not in {"ok", "partial", "empty"}:
         raise ValueError("Table requires usable current-run evidence")
@@ -41,8 +86,8 @@ def render_answer(final, store):
     for row in rows:
         if not isinstance(row, dict) or any(c.field not in row for c in columns):
             raise ValueError("Table field missing; use exact evidence row fields")
-        lines.append("| " + " | ".join(cell(row[c.field]) for c in columns) + " |")
-    answer = final.answer.replace(marker, "\n".join(lines))
+        lines.append("| " + " | ".join(cell(row[c.field], field=c.field) for c in columns) + " |")
+    answer = "\n\n".join(part for part in (before, "\n".join(lines), after) if part)
     if len(answer) > 60000:
         raise ValueError("Rendered answer exceeds delivery budget")
     return answer

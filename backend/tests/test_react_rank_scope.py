@@ -38,7 +38,7 @@ def test_explicit_rank_then_filter_is_complete_only_within_that_scope():
         {"field": "board_height", "operator": "eq", "value": 1}], limit=20))
     expected = [r for r in payload["events"][:20] if r["board_height"] == 1]
     assert store.get(filtered)["rows"] == expected
-    assert render_answer(final(filtered), store).splitlines()[3:] == [f'| {r["symbol"]} |' for r in expected]
+    assert render_answer(final(filtered), store).splitlines()[4:] == [f'| {r["symbol"]} |' for r in expected]
     for key in (root, ranked, filtered):
         assert store.view(key)["source_truncated"]  # Full universe remains incomplete.
         assert store.view(key)["result_state"] == "partial"

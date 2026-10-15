@@ -6,13 +6,13 @@ from types import SimpleNamespace
 
 import httpx
 import pytest
-from langchain_core.messages import AIMessage, AIMessageChunk
+from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
 from app.agents.react_runtime import runtime
 from app.agents.react_runtime.answer_delivery import AnswerDelivery
 from app.agents.react_runtime.compliance import ComplianceReview
 from app.agents.react_runtime.lifecycle import CURRENT_CONTROL
-from app.agents.tools import TOOL_SCHEMAS
+from app.agents.tools import TOOL_SCHEMAS, ToolResult
 from app.models import AgentChatRequest
 from app.services.prompt_security import PromptInjectionAssessment
 from test_langchain_provider import provider_for
@@ -164,3 +164,65 @@ def test_raw_fields_trigger_one_rewrite_instead_of_becoming_final_or_streamed_an
     assert response.task_status == "complete" and provider.calls == 2
     assert response.answer == "可以查看盘中炸板次数与次日开盘涨幅。"
     assert "break_" not in visible(events) and "next_open_pct" not in visible(events)
+
+
+@pytest.mark.parametrize("repair", [True, False])
+def test_malformed_hot_ranking_table_is_retracted_and_gets_only_one_repair(repair):
+    events, tool_calls = [], []
+    raw_rows = [{"symbol": "600101", "name": "样例科技", "rank_trend": "flat"}]
+
+    def ranking(**arguments):
+        tool_calls.append(arguments)
+        return ToolResult(name="hot_stock_ranking", input=arguments, summary="合成热股榜",
+                          output={"items": raw_rows, "source": "synthetic test fixture"})
+
+    class RankingModel:
+        calls = 0
+
+        def generate_messages(self, messages, tools, *, on_chunk=None, **kwargs):
+            self.calls += 1
+            if self.calls == 1:
+                return AIMessage(content="", tool_calls=[{
+                    "name": "hot_stock_ranking", "args": {"limit": 1}, "id": "ranking",
+                }])
+            key = next(json.loads(m.content)["evidence_id"] for m in messages
+                       if isinstance(m, ToolMessage) and m.tool_call_id == "ranking")
+            if self.calls == 3:
+                assert "Table placeholder" in messages[-1].content
+            separator = "\n\n" if self.calls == 3 and repair else r"\n\n"
+            args = {"status": "complete", "answer": separator.join([
+                "以下为合成榜单。", "{{evidence_table}}", "说明：仅反映关注度。",
+            ]), "evidence_ids": [key], "table": {"evidence_id": key, "columns": [
+                {"field": "name", "label": "股票名称"}, {"field": "rank_trend", "label": "排名趋势"},
+            ]}}
+            if on_chunk:
+                on_chunk(AIMessageChunk(content="", tool_call_chunks=[{
+                    "index": 0, "name": "finish", "id": str(self.calls),
+                    "args": json.dumps(args, ensure_ascii=False),
+                }]))
+            return AIMessage(content="", tool_calls=[{"name": "finish", "id": str(self.calls), "args": args}])
+
+    registry = SimpleNamespace(events=[], schemas=lambda: TOOL_SCHEMAS, is_enabled=lambda _: True,
+                               hot_stock_ranking=ranking)
+    model = RankingModel()
+    result = runtime.run(AgentChatRequest(session_id="ranking-format", message="当前的热门股票有哪些"),
+                         registry, model, answer_event=lambda name, data: events.append((name, data)))
+    assert model.calls == 3 and len(tool_calls) == 1
+    assert raw_rows[0]["rank_trend"] == "flat"
+    assert any(name == "answer_reset" for name, _ in events)
+    current_text = ""
+    for name, data in events:
+        if name == "answer_reset":
+            current_text = ""
+        elif name == "answer_delta":
+            current_text += data["delta"]
+    if repair:
+        assert result.task_status == "complete"
+        assert current_text == result.answer
+        assert "\n\n| 股票名称 | 排名趋势 |\n" in result.answer
+        assert "| 样例科技 | 持平 |\n\n说明：仅反映关注度。" in result.answer
+        assert r"\n" not in result.answer
+    else:
+        assert result.task_status == "partial" and result.stop_reason == "validation_failed"
+        assert not current_text
+        assert "| 股票名称" not in visible(events)
