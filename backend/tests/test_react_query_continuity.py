@@ -69,7 +69,7 @@ def test_semantic_scope_is_used_without_keyword_override(message, scope):
             assert 'context_mode' in tools[0]['function']['parameters']['required']
             return reply('submit_input_security_review', {'decision': 'allow', 'signals': [],
                 'reason': 'scripted semantic decision, not model accuracy evidence',
-                'request_kind': 'research', 'context_mode': scope})
+                'request_kind': 'research', 'context_mode': scope, 'date_scope': {'mode': 'unspecified'}})
     from datetime import date
     result = review_input(Model(), message=message, timeout_seconds=10, anchor_date=date(2026, 9, 22))
     assert result.context_mode == scope
@@ -101,7 +101,8 @@ def test_runtime_routes_query_reference_and_refreshes_changed_date(monkeypatch, 
         def generate_messages(self, messages, tools, **kwargs):
             if tools[0]['function']['name'] == 'submit_input_security_review':
                 return reply('submit_input_security_review', {'decision': 'allow', 'signals': [],
-                    'reason': 'scripted review', 'request_kind': 'research', 'context_mode': scope})
+                    'reason': 'scripted review', 'request_kind': 'research', 'context_mode': scope,
+                    'date_scope': {'mode': 'dates', 'dates': ['2026-09-18']}})
             observations = [json.loads(m.content) for m in messages if isinstance(m, ToolMessage)]
             if not observations:
                 text = '\n'.join(m.content for m in messages[1:])

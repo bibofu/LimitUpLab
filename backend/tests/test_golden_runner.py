@@ -25,7 +25,8 @@ class ScriptedModel:
         only = tools[0]["function"]["name"] if len(tools) == 1 else None
         if only == "submit_input_security_review":
             return call(only, {"decision": "allow", "signals": [], "reason": "scripted fixture",
-                              "request_kind": "research", "context_mode": "standalone"})
+                              "request_kind": "research", "context_mode": "standalone",
+                              "date_scope": {"mode": "unspecified"}})
         if only == "submit_compliance_review":
             return call(only, {"decision": "allow", "violations": [], "reason": "scripted fixture"})
         if only == "submit_golden_judgements":
@@ -127,7 +128,8 @@ def test_input_refusal_has_no_fabricated_runtime_snapshot(tmp_path):
         def generate_messages(self, messages, tools, **kwargs):
             if len(tools) == 1 and tools[0]["function"]["name"] == "submit_input_security_review":
                 return call("submit_input_security_review", {"decision": "refuse", "signals": ["instruction_override"],
-                    "reason": "scripted input refusal", "request_kind": "research", "context_mode": "standalone"})
+                    "reason": "scripted input refusal", "request_kind": "research", "context_mode": "standalone",
+                    "date_scope": {"mode": "unspecified"}})
             return super().generate_messages(messages, tools, **kwargs)
     result = run_case(example_case(), trial=1, directory=tmp_path, provider=RefusalModel())
     turn = result["turns"][0]

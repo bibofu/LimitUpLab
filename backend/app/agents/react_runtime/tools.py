@@ -12,12 +12,13 @@ from app.agents.tools import ToolResult
 from app.post_limit_query_contract import PostLimitQueryContract
 from app.agents.react_runtime.contracts import CONTROL_MODELS
 from app.agents.react_runtime.evidence import payload_of
+from app.agents.react_runtime.date_scope import DateScope
 
 
 class ToolGateway:
     def __init__(self, registry, evidence):
         self.registry, self.evidence = registry, evidence
-        self.required_date: date | None = None
+        self.date_scope = DateScope()
         self.contracts = {contract.name: contract for contract in registry.schemas()}
         self.structured = structured_tools(registry, self._invoke)
         self.schemas = {
@@ -27,6 +28,15 @@ class ToolGateway:
             }
             for name, tool in self.structured.items()
         }
+
+    @property
+    def required_date(self) -> date | None:
+        """Compatibility for old single-date checkpoints."""
+        return self.date_scope.single_date
+
+    @required_date.setter
+    def required_date(self, value: date | None):
+        self.date_scope = DateScope(mode="dates", dates=[value]) if value else DateScope()
 
     def definitions(self):
         definitions = []
@@ -52,12 +62,22 @@ class ToolGateway:
         if not isinstance(args, dict):
             raise ValueError("Arguments must be an object")
         contract = self.contracts[name]
-        if self.required_date is not None:
-            required_date = self.required_date.isoformat()
-            if contract.time_mode in CURRENT_TIME_MODES:
-                args.setdefault("requested_as_of", required_date)
-            elif len(contract.dates) == 1:
-                args.setdefault(contract.dates[0], required_date)
+        date_fields = (("requested_as_of",) if contract.time_mode in CURRENT_TIME_MODES
+                       else contract.dates)
+        if self.date_scope.basis == "event" and contract.adapter == "post_limit":
+            if name != "post_limit_path" and self.date_scope.mode != "unspecified":
+                raise ValueError("This post-limit tool cannot constrain the requested event dates; use an event-aware query")
+            args = self.date_scope.bind(("anchor_date",), args) if name == "post_limit_path" else args
+            args = self._bind_observation_cutoff(("data_as_of",), args)
+        elif self.date_scope.basis == "event" and contract.time_mode in CURRENT_TIME_MODES and self.date_scope.observation_cutoff:
+            args = self._bind_observation_cutoff(date_fields, args)
+        elif self.date_scope.basis == "event" and contract.dates == ("end_date",):
+            # Event dates select the cohort, not the end of the following K-line
+            # window. Without an explicit cutoff, the model must select a real
+            # observation window; never invent a future trading-day endpoint.
+            args = self._bind_observation_cutoff(date_fields, args)
+        else:
+            args = self.date_scope.bind(date_fields, args)
         if name == "stock_kline" and not isinstance(args.get("symbol"), str):
             raise ValueError("symbol must be one stock; issue independent calls for multiple stocks")
         required = self.contracts[name].args_schema.get("required", [])
@@ -83,6 +103,12 @@ class ToolGateway:
                 raise ValueError(f"This tool cannot serve that historical scope; supported as-of: {effective}")
         return args
 
+    def _bind_observation_cutoff(self, fields, args):
+        cutoff = self.date_scope.observation_cutoff
+        if cutoff is None:
+            return args
+        return DateScope(mode="dates", dates=[cutoff]).bind(fields, args)
+
     def execute(self, name, args):
         kwargs = dict(args)
         kwargs.pop("requested_as_of", None)
@@ -102,18 +128,32 @@ class ToolGateway:
 
         if not isinstance(payload, dict):
             return
-        for field in self.contracts[name].dates:
+        fields = self.contracts[name].dates
+        if self.contracts[name].time_mode in CURRENT_TIME_MODES:
+            fields = (*fields, "requested_as_of")
+        for field in fields:
             expected = args.get(field)
             if not expected:
                 continue
             actual_keys = [field]
             if field == "end_date":
                 actual_keys = ["data_as_of", "end_date"]
-            actual = next((payload.get(key) for key in actual_keys if payload.get(key)), None)
-            if actual is not None and str(actual) != str(expected):
-                raise ValueError(
-                    f"Tool returned {actual} but the request requires {expected}"
-                )
+            elif field == "trade_date" and name == "sector_performance":
+                # Sector snapshots expose the requested observation day under
+                # data_as_of; other tools may use it for a distinct cutoff.
+                actual_keys = ["trade_date", "data_as_of"]
+            elif field == "requested_as_of":
+                # stock_activity deliberately combines current news and the
+                # latest available local close. Its data_as_of dates the K-lines,
+                # not the whole current retrieval (e.g. before today's close).
+                actual_keys = ([] if self.contracts[name].time_mode == "latest_local_and_current"
+                               else ["data_as_of", "trade_date"])
+            for key in actual_keys:
+                actual = payload.get(key)
+                if actual is not None and str(actual) != str(expected):
+                    raise ValueError(
+                        f"Tool returned {actual} but the request requires {expected}"
+                    )
 
     def _invoke(self, name, **kwargs):
         # Generated models use None to represent omitted optional fields;

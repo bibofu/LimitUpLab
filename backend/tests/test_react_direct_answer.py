@@ -42,6 +42,7 @@ class DirectAnswerModel:
             return call("submit_input_security_review", {
                 "decision": "allow", "signals": [], "reason": "scripted direct-answer scope",
                 "request_kind": "research", "context_mode": "standalone",
+                "date_scope": {"mode": "unspecified"},
                 "current_task": self.question,
                 "output_contract": {"mode": "prose_only", "field_requests": [], "table_required": False},
             }, "review")

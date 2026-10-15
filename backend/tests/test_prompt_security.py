@@ -8,7 +8,7 @@ from app.services.prompt_security import contains_prompt_leak, review_input
 
 class Provider:
     def __init__(self, args):
-        self.args = args
+        self.args = {"date_scope": {"mode": "unspecified"}, **args}
 
     def generate_messages(self, messages, tools, **kwargs):
         assert len(tools) == 1
@@ -28,6 +28,7 @@ class PromptSecurityTest(unittest.TestCase):
                 "reason": "standalone current-market request",
                 "request_kind": "research",
                 "context_mode": "standalone",
+                "date_scope": {"mode": "dates", "dates": ["2026-09-18"]},
             }),
             message="今天龙虎榜的情况",
             anchor_date=date(2026, 9, 18),
@@ -45,6 +46,7 @@ class PromptSecurityTest(unittest.TestCase):
                 "reason": "current request",
                 "request_kind": "research",
                 "context_mode": "standalone",
+                "date_scope": {"mode": "dates", "dates": ["2026-09-18"]},
             }),
             message="总结今天的大盘",
             anchor_date=date(2026, 9, 18),
@@ -70,7 +72,7 @@ class PromptSecurityTest(unittest.TestCase):
         self.assertEqual(assessment.context_mode, "follow_up")
         self.assertEqual(assessment.time_scope, "unspecified")
 
-    def test_explicit_iso_date_is_derived_locally(self) -> None:
+    def test_explicit_iso_date_comes_from_semantic_review(self) -> None:
         assessment = review_input(
             Provider({
                 "decision": "allow",
@@ -78,6 +80,7 @@ class PromptSecurityTest(unittest.TestCase):
                 "reason": "dated research request",
                 "request_kind": "research",
                 "context_mode": "standalone",
+                "date_scope": {"mode": "dates", "dates": ["2026-09-17"]},
             }),
             message="总结2026-09-17的龙虎榜",
             anchor_date=date(2026, 9, 18),

@@ -67,7 +67,8 @@ class PromptProbe:
             self.security_prompts.append(prompt)
             return call("submit_input_security_review", {
                 "decision": "allow", "signals": [], "reason": "offline protocol fixture",
-                "request_kind": "research", "context_mode": self.context_mode}, "review")
+                "request_kind": "research", "context_mode": self.context_mode,
+                "date_scope": {"mode": "unspecified"}}, "review")
         self.agent_prompts.append(prompt)
         return call("finish", {"status": "clarify", "answer": "请补充查询条件。"}, "finish")
 
@@ -428,6 +429,7 @@ def test_compressed_memory_can_resolve_follow_up_but_never_enters_react_directly
                 task = "查询000987最近10个交易日表现。" if scope == "follow_up" else "查询新的市场概况。"
                 return call("submit_input_security_review", {"decision": "allow", "signals": [],
                     "reason": "scripted interpretation", "request_kind": "research", "context_mode": scope,
+                    "date_scope": {"mode": "unspecified"},
                     "current_task": task + "用简洁中文回答，仅使用本地来源。"}, "review")
             return super().generate_messages(messages, tools, **kwargs)
     model = Model(scope)
