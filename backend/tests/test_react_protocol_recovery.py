@@ -98,7 +98,7 @@ def test_protocol_repair_reuses_evidence_and_exhaustion_preserves_audited_partia
     assert response.task_status == "partial"
     assert response.stop_reason == ("answered" if recover else "provider_error")
     assert "600101" in response.answer and "000202" in response.answer and "截断" in response.answer
-    assert "待撤回草稿" not in response.answer and any(e[0] == "answer_reset" for e in events)
+    assert "待撤回草稿" not in response.answer and events == []
     assert SECRET not in json.dumps(response.model_dump(mode="json"), ensure_ascii=False)
     errors = [t.output for t in response.tool_results if t.name == "react_provider_error"]
     assert len(errors) == (1 if recover else 2)

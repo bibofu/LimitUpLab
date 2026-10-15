@@ -59,7 +59,9 @@ def test_real_runtime_journal_and_independent_grader(tmp_path):
     assert result["verdict"] == "pass", result["turns"][0]["checks"]
     turn = result["turns"][0]
     assert turn["response"]["run_id"].startswith("run_")
-    assert any(event["event"] == "answer_delta" for event in turn["events"])
+    assert any(event["event"] == "progress" for event in turn["events"])
+    assert all(event["event"] in {"progress", "completed"} for event in turn["events"])
+    assert [event["payload"] for event in turn["events"] if event["event"] == "completed"] == [turn["response"]]
     assert turn["response"]["generated_by"].startswith("react-runtime-")
     assert len(list((tmp_path / "sessions").glob("*/session.sqlite"))) == 1
 

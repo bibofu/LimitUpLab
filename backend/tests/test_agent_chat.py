@@ -1,11 +1,39 @@
 import unittest
 from datetime import date, time
+from unittest.mock import Mock, patch
 
+from app.agents.chat import answer_first_board_chat
 from app.agents.tools import AgentToolRegistry
-from app.models import LimitUpEvent
+from app.models import AgentChatRequest, AgentChatResponse, LimitUpEvent
 
 
 class AgentChatTest(unittest.TestCase):
+    def test_answer_callbacks_cannot_bypass_durable_final_delivery(self) -> None:
+        request = AgentChatRequest(session_id="delivery-session", message="查询热门股票")
+        response = AgentChatResponse(
+            session_id=request.session_id, intent="react_research", answer="已核对的研究结果。",
+            task_status="complete", generated_by="test",
+        )
+        delta_callback, event_callback, progress_callback = Mock(), Mock(), Mock()
+
+        def execute(_request, _registry, _provider, _history, _memory, progress, answer_event=None):
+            if answer_event:
+                answer_event("answer_delta", {"offset": 0, "delta": "候选答案"})
+            progress("checking", "正在核对研究结果")
+            return response
+
+        with patch("app.agents.react_runtime.runtime.run", side_effect=execute):
+            result = answer_first_board_chat(
+                request=request, events=[], tool_registry=Mock(), llm_provider=Mock(),
+                progress_callback=progress_callback, answer_delta_callback=delta_callback,
+                answer_event_callback=event_callback,
+            )
+
+        self.assertIs(result, response)
+        progress_callback.assert_called_once_with("checking", "正在核对研究结果")
+        delta_callback.assert_not_called()
+        event_callback.assert_not_called()
+
     # Build the LimitUpEvent fixture used by the surrounding regression scenario.
     def _make_event(
         self,

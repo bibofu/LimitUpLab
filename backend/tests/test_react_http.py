@@ -158,18 +158,23 @@ def test_start_failure_releases_lease_and_allows_original_request_retry(http_ser
     assert [message.role for message in messages] == ["user", "assistant"]
 
 
-def test_live_answer_arrives_over_http_before_generation_finishes(http_server, monkeypatch):
+def test_only_progress_is_public_until_the_final_answer_is_saved(http_server, monkeypatch):
     client, state = http_server
-    finish = threading.Event()
-    def answer(request, answer_event_callback, **kwargs):
+    saving, finish = threading.Event(), threading.Event()
+    original_finish = Journal.finish
+    final_text = "研究名单如下。\n\n| 代码 | 名称 |\n| --- | --- |\n| 000001 | 平安银行 |"
+    def save(journal, *args):
+        saving.set()
+        assert finish.wait(10)
+        return original_finish(journal, *args)
+    monkeypatch.setattr(Journal, "finish", save)
+    def answer(request, progress_callback, **kwargs):
         state.calls += 1
-        answer_event_callback("answer_start", {"revision": 1, "answer_length": None, "provisional": True})
-        answer_event_callback("answer_delta", {"offset": 0, "delta": "实时📊"})
+        progress_callback("answering", "正在生成回答")
         state.entered.set()
         assert state.release.wait(10)
-        answer_event_callback("answer_delta", {"offset": 3, "delta": "回答"})
-        assert finish.wait(10)
-        return AgentChatResponse(session_id=request.session_id, intent="react_research", answer="实时📊回答",
+        return AgentChatResponse(session_id=request.session_id, intent="react_research", answer=final_text,
+                                 stock_mentions=[{"symbol": "000001", "name": "平安银行"}],
                                  task_status="complete", generated_by="test")
     monkeypatch.setattr(agents, "answer_first_board_chat", answer)
     try:
@@ -180,66 +185,136 @@ def test_live_answer_arrives_over_http_before_generation_finishes(http_server, m
                 received.append(line)
                 if line.startswith("id:"):
                     cursor = int(line[3:])
-                if line.startswith("data:") and "实时📊" in line:
+                if line.startswith("data:") and "正在生成回答" in line:
                     break
             assert state.entered.wait(5)
             assert not state.release.is_set()
             assert Journal().get(run_id, "owner")["response_json"] is None
             assert "event: completed" not in received
+            assert not any("answer_" in line or "平安银行" in line for line in received)
             assert cursor > 0
         with client.stream("GET", f"/chat/runs/{run_id}/stream?after={cursor}") as response:
             state.release.set()
             lines, received = response.iter_lines(), []
             for line in lines:
                 received.append(line)
-                if line.startswith("data:") and json.loads(line[5:]).get("offset") == 3:
+                if line.startswith("data:") and "正在保存研究结果" in line:
                     break
-            assert "event: answer_start" not in received
-            assert not any("实时📊" in line for line in received)
+            assert saving.wait(5)
+            assert not any("answer_" in line or "平安银行" in line for line in received)
             assert Journal().get(run_id, "owner")["response_json"] is None
             finish.set()
             received.extend(lines)
     finally:
         state.release.set()
         finish.set()
-    assert "event: completed" in received
+    assert received.count("event: completed") == 1
+    final = next(json.loads(line[5:]) for line in received if line.startswith("data:") and '"answer"' in line)
+    assert final["answer"] == final_text
+    assert final["stock_mentions"][0]["symbol"] == "000001"
+    assert final == json.loads(Journal().get(run_id, "owner")["response_json"])
+    assert all(event["event"] == "progress" for event in Journal().events(run_id, "owner"))
     replay = client.get(f"/chat/runs/{run_id}/stream")
     assert "event: completed" in replay.text
     assert "event: answer_start" not in replay.text and "event: answer_delta" not in replay.text
     assert state.calls == 1
 
 
-def test_explicit_post_resume_uses_a_new_durable_answer_revision(http_server, monkeypatch):
+def test_explicit_resume_never_replays_old_persisted_drafts(http_server, monkeypatch):
     client, state = http_server
     SQLiteChatSessionRepository().ensure_session("http-s", owner_id="owner")
     journal = Journal()
     row, _ = journal.create(AgentChatRequest(**PAYLOAD), "owner")
     journal.event(row["run_id"], "answer_start", {"revision": 3})
     journal.event(row["run_id"], "answer_delta", {"offset": 0, "delta": "旧草稿"})
+    journal.event(row["run_id"], "answer_reset", {"message": "旧撤回"})
     def prepare(**kwargs):
         state.entered.set()
         assert state.release.wait(10)
         return [], None
     monkeypatch.setattr(agents, "prepare_session_context", prepare)
-    def answer(request, answer_event_callback, **kwargs):
-        answer_event_callback("answer_start", {"revision": 1, "answer_length": None, "provisional": True})
-        answer_event_callback("answer_delta", {"offset": 0, "delta": "恢复回答"})
+    def answer(request, **kwargs):
+        state.calls += 1
         return AgentChatResponse(session_id=request.session_id, intent="react_research", answer="恢复回答",
                                  task_status="complete", generated_by="test")
     monkeypatch.setattr(agents, "answer_first_board_chat", answer)
     with client.stream("POST", "/chat/stream", json=PAYLOAD) as response:
         lines = response.iter_lines()
+        received, cursor = [], 0
         for line in lines:
-            if line == "event: answer_reset":
+            received.append(line)
+            if line.startswith("id:"):
+                cursor = int(line[3:])
+            if "正在准备会话与研究数据" in line:
                 break
         assert state.entered.wait(5)
         assert not state.release.is_set()
         assert journal.get(row["run_id"], "owner")["response_json"] is None
+        assert not any("answer_" in line or "旧草稿" in line or "旧撤回" in line for line in received)
+    with client.stream("GET", f"/chat/runs/{row['run_id']}/stream?after={cursor}") as response:
         state.release.set()
-        assert any("恢复回答" in line for line in lines)
+        replay = response.read().decode()
+        assert "恢复回答" in replay and replay.count("event: completed") == 1
+        assert "旧草稿" not in replay and "event: answer_" not in replay
     revisions = [json.loads(event["payload_json"])["revision"] for event in journal.events(row["run_id"], "owner")
                  if event["event"] == "answer_start"]
-    assert revisions == [3, 4]
+    assert revisions == [3] and state.calls == 1
+
+
+def test_save_failure_never_publishes_candidate_and_original_request_can_resume(http_server, monkeypatch):
+    client, state = http_server
+    original_finish = Journal.finish
+    recorded = []
+    def answer(request, **kwargs):
+        state.calls += 1
+        return AgentChatResponse(session_id=request.session_id, intent="react_research", answer="仅保存后可见的正文",
+                                 task_status="complete", generated_by="test")
+    def unavailable(*args, **kwargs):
+        raise OSError("fixture storage unavailable")
+    monkeypatch.setattr(agents, "answer_first_board_chat", answer)
+    monkeypatch.setattr(agents, "_finish_agent_request", lambda *a, **kw: recorded.append(kw))
+    monkeypatch.setattr(Journal, "finish", unavailable)
+    failed = client.post("/chat/stream", json=PAYLOAD)
+    run_id = failed.headers["x-agent-run-id"]
+    assert "event: error" in failed.text and "event: completed" not in failed.text
+    assert "仅保存后可见的正文" not in failed.text and "event: answer_" not in failed.text
+    assert Journal().get(run_id, "owner")["response_json"] is None
+    assert [m.role for m in SQLiteChatSessionRepository().get_session("http-s", owner_id="owner").messages] == ["user"]
+    assert recorded[-1]["error"] is not None and recorded[-1]["response"] is None
+    monkeypatch.setattr(Journal, "finish", original_finish)
+    result = client.post("/chat", json=PAYLOAD).json()
+    assert result["run_id"] == run_id and result["answer"] == "仅保存后可见的正文"
+    assert client.post("/chat", json=PAYLOAD).json() == result and state.calls == 2
+
+
+def test_cancel_during_save_publishes_only_the_committed_cancelled_result(http_server, monkeypatch):
+    client, state = http_server
+    original_finish = Journal.finish
+    def save(journal, *args):
+        state.entered.set()
+        assert state.release.wait(10)
+        return original_finish(journal, *args)
+    def answer(request, **kwargs):
+        return AgentChatResponse(session_id=request.session_id, intent="react_research", answer="不应显示的候选结论",
+                                 task_status="complete", generated_by="test")
+    monkeypatch.setattr(agents, "answer_first_board_chat", answer)
+    monkeypatch.setattr(Journal, "finish", save)
+    with client.stream("POST", "/chat/stream", json=PAYLOAD) as response:
+        run_id = response.headers["x-agent-run-id"]
+        lines, received = response.iter_lines(), []
+        for line in lines:
+            received.append(line)
+            if "正在保存研究结果" in line:
+                break
+        assert state.entered.wait(5)
+        assert client.post(f"/chat/runs/{run_id}/cancel").status_code == 200
+        state.release.set()
+        received.extend(lines)
+    assert received.count("event: completed") == 1
+    assert not any("不应显示的候选结论" in line or "event: answer_" in line for line in received)
+    result = json.loads(Journal().get(run_id, "owner")["response_json"])
+    assert result["task_status"] == "cancelled"
+    assert result["answer"] == "任务已取消，未继续生成研究结论。"
 
 
 def test_stream_wakeup_preserves_updates_between_poll_and_wait(monkeypatch):

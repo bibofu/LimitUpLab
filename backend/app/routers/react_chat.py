@@ -95,15 +95,6 @@ def start(request, http_request, owner_id):
                 journal.event(run_id, "progress", {"stage": stage, "message": message})
                 notify_streams()
             try:
-                prior_revision = max((json.loads(event["payload_json"]).get("revision", 0)
-                    for event in journal.events(run_id, owner_id) if event["event"] == "answer_start"), default=0)
-                def answer_event(event, payload):
-                    if event == "answer_start":
-                        payload = {**payload, "run_id": run_id, "revision": prior_revision + payload["revision"]}
-                    journal.event(run_id, event, payload)
-                    notify_streams()
-                if prior_revision:
-                    answer_event("answer_reset", {"message": "正在重新整理回答"})
                 progress("preparing", "正在准备会话与研究数据")
                 with agents.capture_llm_usage() as tracker:
                     context, memory = agents.prepare_session_context(
@@ -115,7 +106,6 @@ def start(request, http_request, owner_id):
                         repository=agents.SQLiteFirstBoardRepository(), conversation_messages=context,
                         session_memory=memory,
                         progress_callback=progress,
-                        answer_event_callback=answer_event,
                     )
                 response.run_id = run_id
             except Exception as error:
@@ -133,6 +123,11 @@ def start(request, http_request, owner_id):
                         progress("checking", "正在保存研究结果")
                         response = AgentChatResponse.model_validate(journal.finish(run_id, owner_id, response.model_dump(mode="json")))
                         notify_streams()
+                except Exception as error:
+                    # Saving is part of delivery: leave the checkpoint recoverable
+                    # and let the stream report interruption, never publish a candidate.
+                    failure = RuntimeError(type(error).__name__)
+                    response = None
                 finally:
                     try:
                         agents._finish_agent_request(usage_repository, usage_record, tracker, response=response, error=failure)
@@ -177,7 +172,10 @@ def stream(journal, row, owner_id, after=0):
                 return
             for event in journal.events(run_id, owner_id, cursor):
                 cursor = event["seq"]
-                yield f"id: {cursor}\nevent: {event['event']}\ndata: {event['payload_json']}\n\n"
+                # Old interrupted runs may contain draft events. Advance the
+                # cursor without replaying them; only committed answers are public.
+                if event["event"] == "progress":
+                    yield f"id: {cursor}\nevent: progress\ndata: {event['payload_json']}\n\n"
             worker = _workers.get(run_id)
             if worker is None or not worker.is_alive():
                 # Completion may have committed since the first poll above.

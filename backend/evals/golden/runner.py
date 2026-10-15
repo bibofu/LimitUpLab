@@ -185,9 +185,12 @@ def run_case(case, *, trial, directory, provider, judge_provider=None, profile="
                     execution_stage = "agent_execution"
                     response = answer_first_board_chat(request=request, events=registry.events,
                         conversation_messages=context, session_memory=memory, llm_provider=runtime_metadata,
-                        tool_registry=registry, answer_event_callback=event)
+                        tool_registry=registry,
+                        progress_callback=lambda stage, message: event("progress", {"stage": stage, "message": message}))
                 execution_stage = "journal_finish"
                 response = AgentChatResponse.model_validate(journal.finish(row["run_id"], owner, response.model_dump(mode="json")))
+                # Match HTTP delivery: only the committed response is public.
+                events.append({"event": "completed", "payload": response.model_dump(mode="json")})
             except Exception as exc:
                 error = type(exc).__name__
                 results.append({"index": index, "user": turn.user, "checks": [Check(name="execution", passed=False,

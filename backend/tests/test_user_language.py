@@ -4,7 +4,6 @@ from types import SimpleNamespace
 import pytest
 
 from app.agents.user_language import PublicTextStream, field_names, field_mentions, validate_public_text
-from app.agents.react_runtime.answer_delivery import AnswerDelivery
 from app.agents.react_runtime.contracts import Finish
 from app.agents.react_runtime.rendering import render_answer
 
@@ -37,19 +36,11 @@ def test_evidence_field_discovery_does_not_treat_prose_values_as_field_names():
     validate_public_text("example_company", names)
 
 
-def test_answer_delivery_hides_field_draft_and_accepts_repaired_chinese_revision():
-    events = []
-    delivery = AnswerDelivery(lambda name, payload: events.append((name, payload)))
-    for chunk in ["已核对。break_", "count=0，next_", "open_pct缺失。"]:
-        delivery.feed(chunk)
-    assert "".join(p["delta"] for n, p in events if n == "answer_delta") == "已核对。"
+def test_candidate_requires_readable_chinese_before_final_delivery():
     with pytest.raises(ValueError):
-        delivery.render("已核对。break_count=0，next_open_pct缺失。")
-    delivery.reset()
+        validate_public_text("已核对。break_count=0，next_open_pct缺失。")
     answer = "盘中未炸板，次日开盘涨幅缺失。"
-    delivery.feed(answer)
-    delivery.render(answer)
-    assert delivery.text == answer
+    validate_public_text(answer)
 
 
 def test_table_keeps_exact_evidence_field_and_value_but_requires_readable_title():

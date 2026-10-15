@@ -1,4 +1,4 @@
-"""Exercise incremental model output through the real ReAct answer boundary."""
+"""Candidate prose stays internal until the final validated response is returned."""
 
 import json
 from datetime import datetime, timezone
@@ -9,7 +9,6 @@ import pytest
 from langchain_core.messages import AIMessage, AIMessageChunk, ToolMessage
 
 from app.agents.react_runtime import runtime
-from app.agents.react_runtime.answer_delivery import AnswerDelivery
 from app.agents.react_runtime.compliance import ComplianceReview
 from app.agents.react_runtime.lifecycle import CURRENT_CONTROL
 from app.agents.tools import TOOL_SCHEMAS, ToolResult
@@ -32,10 +31,6 @@ def execute(provider, events):
                        answer_event=lambda name, payload: events.append((name, payload)))
 
 
-def visible(events):
-    return "".join(data["delta"] for name, data in events if name == "answer_delta")
-
-
 def native_frame(delta, finish_reason=None):
     return ("data: " + json.dumps({
         "id": "live", "object": "chat.completion.chunk", "created": 1, "model": "test-model",
@@ -43,7 +38,7 @@ def native_frame(delta, finish_reason=None):
     }, ensure_ascii=False) + "\n\n").encode()
 
 
-def test_native_finish_text_arrives_before_model_eof_and_compliance(monkeypatch):
+def test_native_finish_chunks_remain_private_through_eof_and_compliance(monkeypatch):
     events, states = [], []
     class Stream(httpx.SyncByteStream):
         def __iter__(self):
@@ -51,15 +46,15 @@ def test_native_finish_text_arrives_before_model_eof_and_compliance(monkeypatch)
                 "index": 0, "id": "finish-1", "type": "function",
                 "function": {"name": "finish", "arguments": '{"status":"complete","answer":"第一段📊'},
             }]})
-            # The SDK cannot read the tail until the visible answer has arrived.
-            assert visible(events) == "第一段📊"
-            states.append("first_text_before_eof")
+            assert events == []
+            states.append("private_chunk_before_eof")
             yield native_frame({"tool_calls": [{"index": 0, "function": {"arguments": '，后续内容。"}'}}]}, "tool_calls")
             yield b"data: [DONE]\n\n"
         def close(self):
             states.append("closed")
     def review(*a, **kw):
-        assert visible(events) == "第一段📊，后续内容。"
+        assert events == []
+        assert kw["answer"] == "第一段📊，后续内容。"
         states.append("review")
         return ComplianceReview(decision="allow", violations=[], reason="fixture")
     monkeypatch.setattr(runtime, "review_answer", review)
@@ -68,11 +63,10 @@ def test_native_finish_text_arrives_before_model_eof_and_compliance(monkeypatch)
         return httpx.Response(200, headers={"content-type": "text/event-stream"}, stream=Stream())
     with provider_for(handle) as provider:
         result = execute(provider, events)
-    assert states.index("first_text_before_eof") < states.index("review")
+    assert states.index("private_chunk_before_eof") < states.index("review")
     assert "closed" in states
-    assert result.answer == visible(events) and result.task_status == "complete"
-    assert events[0][1]["provisional"] is True
-    assert "private" not in visible(events)
+    assert result.answer == "第一段📊，后续内容。" and result.task_status == "complete"
+    assert events == [], "Only the HTTP persistence boundary may publish the final response"
 
 
 class Model:
@@ -89,9 +83,10 @@ class Model:
         return AIMessage(content="", tool_calls=[{"name": "finish", "id": str(self.calls), "args": args}])
 
 
-def test_rejected_draft_is_retracted_before_repaired_revision(monkeypatch):
+def test_compliance_rejection_and_repair_never_publish_candidate_revisions(monkeypatch):
     events = []
     def review(*a, **kw):
+        assert events == []
         reject = kw["answer"] == "第1版回答"
         return ComplianceReview(decision="reject" if reject else "allow",
             violations=["deterministic_prediction"] if reject else [], reason="fixture")
@@ -99,21 +94,21 @@ def test_rejected_draft_is_retracted_before_repaired_revision(monkeypatch):
     model = Model()
     result = execute(model, events)
     assert model.calls == 2 and result.answer == "第2版回答"
-    assert [name for name, _ in events] == [
-        "answer_start", "answer_delta", "answer_reset", "answer_start", "answer_delta"]
-    assert [data["revision"] for name, data in events if name == "answer_start"] == [1, 2]
+    assert events == []
 
 
-def test_cancellation_during_model_stream_closes_and_retracts_draft():
-    events, closed = [], []
+def test_cancellation_during_model_stream_closes_without_publishing_candidates():
+    events, closed, cancelled = [], [], []
     control = SimpleNamespace(row={"started_at": datetime.now(timezone.utc).isoformat()},
-                              save=lambda _: None, cancelled=lambda: bool(events))
+                              save=lambda _: None, cancelled=lambda: bool(cancelled))
     class CancelModel(Model):
         def generate_messages(self, *a, on_chunk, **kw):
             try:
                 on_chunk(AIMessageChunk(content="", tool_call_chunks=[{
                     "index": 0, "name": "finish", "id": "f", "args": '{"answer":"生成中',
                 }]))
+                assert events == []
+                cancelled.append(True)
                 on_chunk(AIMessageChunk(content="", tool_call_chunks=[]))
                 pytest.fail("Cancellation must stop generation before another chunk")
             finally:
@@ -124,23 +119,33 @@ def test_cancellation_during_model_stream_closes_and_retracts_draft():
     finally:
         CURRENT_CONTROL.reset(token)
     assert result.task_status == "cancelled" and closed
-    assert events[-1][0] == "answer_reset"
+    assert events == []
 
 
-def test_table_placeholder_never_streams_and_rendered_evidence_fills_in_place():
-    events = []
-    delivery = AnswerDelivery(lambda name, payload: events.append((name, payload)))
-    for text in ["已取得资料。\n{", "{evidence_", "table}}", "\n以上为资料。"]:
-        delivery.feed(text)
-    assert visible(events) == "已取得资料。\n"
-    answer = "已取得资料。\n|代码|\n|---|\n|000001|\n以上为资料。"
-    delivery.render(answer)
-    assert visible(events) == answer
-    assert len([name for name, _ in events if name == "answer_start"]) == 1
+@pytest.mark.parametrize("with_callback", [True, False])
+def test_native_chunks_enforce_deadline_even_without_answer_callback(monkeypatch, with_callback):
+    events, closed = [], []
+    clock = [100.0]
+    monkeypatch.setattr(runtime, "perf_counter", lambda: clock[0])
+    class ExpiringModel(Model):
+        def generate_messages(self, *a, on_chunk, **kw):
+            try:
+                on_chunk(AIMessageChunk(content="", tool_call_chunks=[]))
+                clock[0] += 1000
+                on_chunk(AIMessageChunk(content="", tool_call_chunks=[]))
+                pytest.fail("The native stream must stop when the run deadline is exceeded")
+            finally:
+                closed.append(True)
+    registry = SimpleNamespace(events=[], schemas=lambda: TOOL_SCHEMAS, is_enabled=lambda _: True)
+    result = runtime.run(AgentChatRequest(session_id="deadline", message="你好"), registry,
+                         ExpiringModel(), answer_event=(lambda name, data: events.append((name, data)))
+                         if with_callback else None)
+    assert closed and result.stop_reason == "budget_exhausted"
+    assert events == []
 
 
-@pytest.mark.parametrize("streaming", [True, False])
-def test_raw_fields_trigger_one_rewrite_instead_of_becoming_final_or_streamed_answer(streaming):
+@pytest.mark.parametrize("with_callback", [True, False])
+def test_raw_fields_trigger_one_rewrite_without_publishing_invalid_text(with_callback):
     class FieldModel(Model):
         def generate_messages(self, messages, tools, *, on_chunk=None, **kwargs):
             self.calls += 1
@@ -156,20 +161,28 @@ def test_raw_fields_trigger_one_rewrite_instead_of_becoming_final_or_streamed_an
                         "id": str(self.calls), "args": part}]))
             return AIMessage(content="", tool_calls=[{"name": "finish", "id": str(self.calls), "args": args}])
     events, provider = [], FieldModel()
-    if streaming:
+    if with_callback:
         response = execute(provider, events)
     else:
         registry = SimpleNamespace(events=[], schemas=lambda: TOOL_SCHEMAS, is_enabled=lambda _: True)
         response = runtime.run(AgentChatRequest(session_id="plain", message="你好"), registry, provider)
     assert response.task_status == "complete" and provider.calls == 2
     assert response.answer == "可以查看盘中炸板次数与次日开盘涨幅。"
-    assert "break_" not in visible(events) and "next_open_pct" not in visible(events)
+    assert events == []
 
 
 @pytest.mark.parametrize("repair", [True, False])
-def test_malformed_hot_ranking_table_is_retracted_and_gets_only_one_repair(repair):
-    events, tool_calls = [], []
+def test_malformed_hot_ranking_table_stays_private_and_gets_only_one_repair(monkeypatch, repair):
+    events, tool_calls, reviewed = [], [], []
     raw_rows = [{"symbol": "600101", "name": "样例科技", "rank_trend": "flat"}]
+
+    def review(*a, **kw):
+        assert events == [], "Even the fully rendered table is private during compliance review"
+        assert "| 样例科技 | 持平 |" in kw["answer"]
+        reviewed.append(kw["answer"])
+        return ComplianceReview(decision="allow", violations=[], reason="fixture")
+
+    monkeypatch.setattr(runtime, "review_answer", review)
 
     def ranking(**arguments):
         tool_calls.append(arguments)
@@ -209,20 +222,14 @@ def test_malformed_hot_ranking_table_is_retracted_and_gets_only_one_repair(repai
                          registry, model, answer_event=lambda name, data: events.append((name, data)))
     assert model.calls == 3 and len(tool_calls) == 1
     assert raw_rows[0]["rank_trend"] == "flat"
-    assert any(name == "answer_reset" for name, _ in events)
-    current_text = ""
-    for name, data in events:
-        if name == "answer_reset":
-            current_text = ""
-        elif name == "answer_delta":
-            current_text += data["delta"]
+    assert events == []
     if repair:
         assert result.task_status == "complete"
-        assert current_text == result.answer
+        assert reviewed == [result.answer]
         assert "\n\n| 股票名称 | 排名趋势 |\n" in result.answer
         assert "| 样例科技 | 持平 |\n\n说明：仅反映关注度。" in result.answer
         assert r"\n" not in result.answer
     else:
         assert result.task_status == "partial" and result.stop_reason == "validation_failed"
-        assert not current_text
-        assert "| 股票名称" not in visible(events)
+        assert reviewed == []
+        assert "| 股票名称" not in result.answer

@@ -17,8 +17,6 @@ from app.agents.react_runtime.contracts import (
     MAX_MODEL_CALLS, MAX_TOOL_CALLS, ReadEvidence, VERSION,
 )
 from app.agents.react_runtime.compliance import review_answer
-from app.agents.react_runtime.answer_delivery import AnswerDelivery
-from app.agents.react_runtime.answer_stream import FinishAnswerStream
 from app.agents.react_runtime.evidence import CURRENT_SCOPE, EvidenceStore
 from app.agents.react_runtime.date_scope import DateScope
 from app.agents.react_runtime.rendering import render_answer
@@ -72,7 +70,7 @@ finish.table是单个对象，整篇回答最多一张证据表；未交付名�
 混合请求须明确拒绝交易建议并完成允许的研究。允许的研究交付已完整、交易建议已明确拒绝时，状态为complete、missing为空；安全拒绝本身不是未完成研究。只有允许的研究交付仍有真实缺口才用partial并列入missing。纯交易建议请求仍用refuse。歧义影响结果时澄清；工具不支持时明确说明。
 最终必须单独调用finish，输出可读中文答案、真实status、evidence_ids及missing。研究请求的complete、partial或empty必须引用本轮工具产生的evidence_id；寒暄和能力介绍可以不引用证据。
 原生工具调用参数必须是完整合法JSON对象。answer必须是双引号字符串；missing必须是JSON字符串数组：无缺口用[]，有缺口将每项说明分别放进数组中的双引号字符串，绝不能直接写未加引号的日期或自然语言。字符串内部引号、反斜杠和换行须按JSON转义。
-不要展示内部工具名、原始JSON、思维链。finish.answer会实时显示给用户，必须从首句起遵守事实和研究边界；完成后服务端仍会校验。
+不要展示内部工具名、原始JSON、思维链。finish.answer是待校验的候选答案，须完整遵守事实和研究边界；服务端完成校验和保存后统一发布正式结果。
 观察中的rows可能只是预览；finish.table渲染服务端已有行，是否覆盖用户要求仍须核对source_truncated、data_missing及范围证明。仅需要检查具体未预览字段或深入分析时才read_evidence，筛选排序用compute_result处理已有结果。
 所有工具名及参数都必须使用提供的Schema；工具是否存在以当前清单为准。""" + "\n" + PUBLIC_LANGUAGE
 
@@ -97,7 +95,9 @@ TOOL_POOL = ThreadPoolExecutor(max_workers=MAX_CONCURRENCY, thread_name_prefix="
 class Run:
     def __init__(self, request, registry, provider, history, progress, answer_event=None):
         self.request, self.provider, self.progress = request, provider, progress
-        self.delivery = AnswerDelivery(answer_event)
+        # Keep answer_event accepted for existing callers. Only the HTTP layer
+        # publishes the final response, after validation and durable persistence.
+        self.field_names = field_names([])
         self.evidence = EvidenceStore()
         self.gateway = ToolGateway(registry, self.evidence)
         self.started = perf_counter()
@@ -165,26 +165,19 @@ class Run:
         if finish_only:
             messages = [*messages, HumanMessage(content="查询预算即将结束。现在必须单独调用finish，交付已取得事实并明确缺口；不得继续查询。")]
         try:
-            # Strict table drafts are withheld until the presentation gate passes.
-            # Ordinary prose keeps its provisional stream (BC-091).
-            self.delivery.field_names.update(field_names(self.evidence.current_records()))
-            publish = self.delivery.feed if self.task_context.output_contract.mode != "table_only" else lambda delta: None
-            decoder = FinishAnswerStream(publish, self.delivery.reset)
             def on_chunk(chunk):
+                # Retain native streaming for cancellation and deadline checks;
+                # partial function-call arguments are never public answer text.
                 if (self.control and self.control.cancelled()) or perf_counter() >= self.deadline:
                     raise InterruptedError("Run cancelled or deadline exceeded")
-                decoder.feed(chunk.tool_call_chunks)
-            stream_options = {"on_chunk": on_chunk} if self.delivery.emit else {}
             response = self.provider.generate_messages(
                 messages, definitions,
                 timeout_seconds=max(1, min(35, self.deadline - perf_counter())), max_tokens=4096,
-                **stream_options,
+                on_chunk=on_chunk,
             )
             self.trace("react_decision", {"round": self.models, "tool_calls": response.tool_calls,
                                          "usage": response.usage_metadata or {}})
             messages = [*messages, response]
-            if len(response.tool_calls) != 1 or response.tool_calls[0]["name"] != "finish":
-                self.delivery.reset()
             if response.tool_calls:
                 return {"messages": messages, "pending": response.tool_calls, "finish": None}
             answer = response.content.strip() if isinstance(response.content, str) else ""
@@ -203,7 +196,6 @@ class Run:
                 "finish": None,
             }
         except Exception as error:
-            self.delivery.reset()
             if self.control and self.control.cancelled():
                 return self.stop("cancelled")
             if perf_counter() >= self.deadline:
@@ -252,8 +244,6 @@ class Run:
                 ready.append({**call, "args": args, "signature": signature})
                 self.trace("react_policy", {"call_id": call["id"], "decision": "allow", "arguments": args})
             except Exception as error:
-                if call["name"] == "finish":
-                    self.delivery.reset()
                 observations.append((call, {"execution_status": "rejected", "error": str(error)}))
                 self.trace("react_policy", {"call_id": call["id"], "decision": "reject", "reason": str(error)})
         return {"pending": ready, "observations": observations}
@@ -415,12 +405,12 @@ class Run:
                                   requires_current_evidence=self.requires_current_evidence)
             validate_delivery(final, self.task_context, self.evidence)
             final.answer = render_answer(final, self.evidence)
-            validate_public_text(final.answer, self.delivery.field_names)
+            self.field_names.update(field_names(self.evidence.current_records()))
+            validate_public_text(final.answer, self.field_names)
             for missing in final.missing:
-                validate_public_text(missing, self.delivery.field_names)
+                validate_public_text(missing, self.field_names)
             if contains_prompt_leak(final.answer):
                 raise ValueError("Internal content detected; answer research facts only")
-            self.delivery.render(final.answer)
             self.compliance_checks += 1
             remaining = self.deadline - perf_counter()
             if remaining <= 0:
@@ -445,7 +435,6 @@ class Run:
             })
             return {"done": True}
         except Exception as error:
-            self.delivery.reset()
             self.trace("react_answer_check", {"passed": False, "reason": str(error)})
             if self.repairs >= 1:
                 return self.stop("validation_failed")
@@ -467,7 +456,8 @@ class Run:
                                   requires_current_evidence=self.requires_current_evidence)
             validate_delivery(final, self.task_context, self.evidence)
             answer = render_answer(final, self.evidence)
-            validate_public_text(answer, self.delivery.field_names)
+            self.field_names.update(field_names(self.evidence.current_records()))
+            validate_public_text(answer, self.field_names)
             if contains_prompt_leak(answer):
                 raise ValueError("Internal content in recovery candidate")
             remaining = self.deadline - perf_counter()
@@ -484,16 +474,13 @@ class Run:
             self.answer, self.status, self.reason = answer, "partial", reason
             self.trace("react_fallback_delivery", {"origin": "runtime", "cause": reason,
                        "passed": True, "finish": final.model_dump(mode="json")})
-            self.delivery.render(answer)
             return True
         except Exception as error:
-            self.delivery.reset()
             self.trace("react_fallback_delivery", {"origin": "runtime", "cause": reason,
                        "passed": False, "error_type": type(error).__name__}, status="error")
             return False
 
     def stop(self, reason):
-        self.delivery.reset()
         provider_failure = reason == "provider_error"
         if self.control and self.control.cancelled():
             reason = "cancelled"
@@ -572,6 +559,7 @@ GRAPH = _graph()
 
 
 def run(request, registry, provider, history=None, memory=None, progress=None, answer_event=None):
+    """Return a validated result; the compatible answer_event argument stays silent."""
     runtime = Run(request, registry, provider, history or [], progress, answer_event)
     context_message_count = 0
     if progress:

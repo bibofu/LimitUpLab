@@ -23,12 +23,11 @@ def answer_first_board_chat(
 ) -> AgentChatResponse:
     """Execute the single ReAct runtime for every chat request."""
     from app.agents.react_runtime.runtime import run
-    response = run(
+    # Legacy answer callbacks remain accepted for caller compatibility, but must
+    # not publish text before the HTTP transport has committed Journal.finish.
+    # Progress stays live; the returned response is the sole answer handoff.
+    return run(
         request, tool_registry or AgentToolRegistry(
             events=events, first_board_repository=repository or SQLiteFirstBoardRepository(),
         ), llm_provider or get_llm_provider(), conversation_messages, session_memory, progress_callback,
-        answer_event=answer_event_callback,
     )
-    if answer_delta_callback:
-        answer_delta_callback(response.answer)
-    return response

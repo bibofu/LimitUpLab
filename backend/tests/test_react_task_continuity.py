@@ -212,18 +212,17 @@ def test_output_contract_violation_uses_one_repair_instead_of_accepting_or_silen
     assert response.answer == (("研究名单如下。\n\n" if mode == "freeform" else "") + TABLE)
 
 
-def test_table_only_invalid_prose_is_never_published_even_if_later_reset(monkeypatch):
+def test_table_only_invalid_prose_is_never_published(monkeypatch):
     _, _, events, before_return = run_table_protocol(monkeypatch, damage="prose")
     assert before_return == [], "Constrained answers must wait for contract validation"
-    published = "".join(payload.get("delta", "") for kind, payload in events if kind == "answer_delta")
-    assert "不应发布的额外标题" not in published
+    assert events == []
 
 
-def test_valid_table_only_answer_is_rendered_once(monkeypatch):
+def test_valid_table_only_answer_is_returned_without_runtime_publication(monkeypatch):
     response, model, events, before_return = run_table_protocol(monkeypatch)
     assert model.answers == 1 and response.answer == TABLE
     assert before_return == []
-    assert "".join(payload["delta"] for kind, payload in events if kind == "answer_delta") == TABLE
+    assert events == []
 
 
 def test_table_only_does_not_hide_real_partial_delivery_gap(monkeypatch):
@@ -232,11 +231,10 @@ def test_table_only_does_not_hide_real_partial_delivery_gap(monkeypatch):
     assert response.answer == TABLE + "\n\n另一个来源未返回，其余名单尚未核实。"
 
 
-def test_freeform_keeps_realtime_prose_and_still_limits_table_fields(monkeypatch):
-    response, model, _, before_return = run_table_protocol(monkeypatch, mode="freeform")
+def test_freeform_returns_complete_prose_and_table_without_candidate_events(monkeypatch):
+    response, model, events, before_return = run_table_protocol(monkeypatch, mode="freeform")
     assert model.answers == 1 and response.answer == "研究名单如下。\n\n" + TABLE
-    assert any(kind == "answer_delta" and payload["delta"] == "研究名单如下。\n\n"
-               for kind, payload in before_return), "Preserve the BC-091 ordinary prose stream"
+    assert before_return == [] and events == []
 
 
 def memory(session="continuity"):

@@ -192,6 +192,5 @@ def test_equal_row_count_with_wrong_rank_offset_is_rejected_then_recomputed():
     assert response.answer.splitlines()[2:] == [f'| {row["symbol"]} | {row["name"]} |' for row in ROWS[3:]]
     assert next(record for record in execution(response)["evidence"].values()
                 if record["tool"] == "limit_up_events")["rows"] == ROWS
-    published = "".join(payload["delta"] for name, payload in events if name == "answer_delta")
-    assert published == response.answer
-    assert all(row["symbol"] not in published for row in ROWS[:3])
+    assert events == [], "Invalid and repaired ranking windows remain private until persistence"
+    assert all(row["symbol"] not in response.answer for row in ROWS[:3])

@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
 
-VERSION = "react-runtime-v37"
+VERSION = "react-runtime-v38"
 MAX_MODEL_CALLS = 8
 MAX_TOOL_CALLS = 8
 MAX_CONTROL_CALLS = 16
@@ -67,7 +67,7 @@ class Finish(StrictModel):
         description="User-deliverable status, not a copy of the tool result state. complete: all allowed research was answered, including a supported no-record existence answer or a count of zero. empty: the user requested matching records/a list, and a successful, complete query found none. partial: an allowed deliverable remains unresolved; unavailable, stale or incomplete evidence cannot prove absence. clarify: required user input is missing. refuse: only disallowed advice was requested."
     )
     answer: str = Field(min_length=1, max_length=16000,
-        description="User-visible Chinese Markdown. Serialize as a JSON string exactly once: after JSON decoding paragraph breaks must be actual newlines, not literal backslash-n characters. Keep intentional backslashes in code or paths unchanged.")
+        description="Candidate Chinese Markdown, published only after validation and persistence. Serialize as a JSON string exactly once: after JSON decoding paragraph breaks must be actual newlines, not literal backslash-n characters. Keep intentional backslashes in code or paths unchanged.")
     table: EvidenceTable | None = Field(default=None, description="At most ONE evidence table for the entire answer, only when delivering a list. Render all RETURNED rows, not necessarily the full source universe: check source_truncated and any proven rank scope. With table, put {{evidence_table}} exactly once on its own unindented line outside code fences, with blank lines separating surrounding prose; without table, no placeholder. Never transcribe rows or omit a user-required list. Select/filter/sort with compute_result first.")
     evidence_ids: list[str] = Field(default_factory=list, description="Current-run evidence IDs. Error evidence can support only a truthful partial failure explanation, never market values, a count of zero or absence. Do not query unrelated data merely to obtain an ID.")
     missing: list[str] = Field(default_factory=list, description="A JSON ARRAY of quoted strings, never bare prose, a date/number or a single string. Use [] for no gaps, otherwise one quoted string per gap inside square brackets. Only specific unmet ALLOWED research deliverables; never blank items. Explicitly refused trading advice is not missing research: when the allowed research is delivered, use complete with an empty list. partial requires a real allowed-research gap. Pure trading-advice refusal uses refuse. Irrelevant missing source fields are caveats, not unfinished tasks.")
