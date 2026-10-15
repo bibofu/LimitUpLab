@@ -10,6 +10,7 @@ import ReactMarkdown from "react-markdown";
 import { MemoryRouter } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 import ts from "typescript";
+import * as verifiedReveal from "../src/utils/verifiedAnswerReveal.ts";
 
 // Exercise the actual component and Markdown plugins, not the chat dock's render stub.
 const require = createRequire(import.meta.url);
@@ -25,6 +26,7 @@ const componentModule = { exports: {} as any };
 new Function("require", "module", "exports", compiled)((id: string) => {
   if (id === "react-markdown") return ReactMarkdown;
   if (id === "remark-gfm") return remarkGfm;
+  if (id === "../utils/verifiedAnswerReveal") return verifiedReveal;
   return require(id);
 }, componentModule, componentModule.exports);
 const { AgentAnswerMarkdown } = componentModule.exports;

@@ -11,7 +11,7 @@ import {
   Trash2,
   X,
 } from "lucide-react";
-import { useEffect, useRef, useState } from "react";
+import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   cancelAgentChatRun,
@@ -172,6 +172,7 @@ export function AgentChatDock({
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [cancelRequested, setCancelRequested] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
+  const [revealingMessageId, setRevealingMessageId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
   const [sessionLoading, setSessionLoading] = useState(true);
@@ -218,10 +219,16 @@ export function AgentChatDock({
     return () => window.cancelAnimationFrame(frame);
   }, [messages, sending, streamStatus]);
 
+  const followRevealedAnswer = useCallback(() => {
+    const container = messagesContainerRef.current;
+    if (container && followAnswerRef.current) container.scrollTop = container.scrollHeight;
+  }, []);
+
   /**
    * Replace the active conversation with the fetched detail and remember its ID for reloads.
    */
   function applyChatSession(detail: ChatSessionDetail) {
+    setRevealingMessageId(null);
     followAnswerRef.current = true;
     setShowLatest(false);
     setSessionId(detail.session_id);
@@ -292,6 +299,7 @@ export function AgentChatDock({
     }
     const release = operationLock.current.acquire();
     if (!release) return;
+    setRevealingMessageId(null);
     setSessionLoading(true);
     setSessionError(null);
     try {
@@ -317,6 +325,7 @@ export function AgentChatDock({
     if (sending || sessionLoading) return;
     const release = operationLock.current.acquire();
     if (!release) return;
+    setRevealingMessageId(null);
     setSessionLoading(true);
     setSessionError(null);
     try {
@@ -427,6 +436,7 @@ export function AgentChatDock({
     }
     const release = operationLock.current.acquire();
     if (!release) return;
+    setRevealingMessageId(null);
 
     const retry = failedRequest.current?.session_id === sessionId && failedRequest.current.message === trimmed
       ? failedRequest.current : null;
@@ -482,6 +492,7 @@ export function AgentChatDock({
       failedRequest.current = null;
       setActiveRunId(null);
       const canRestart = response.task_status === "error" || response.task_status === "cancelled";
+      setRevealingMessageId(canRestart ? null : agentMessageId);
       setFailedPrompt(canRestart ? trimmed : null);
       setError(canRestart
         ? (response.task_status === "cancelled" ? "任务已取消，可重新提问。" : "本次研究未完成，可重新提问。")
@@ -692,6 +703,8 @@ export function AgentChatDock({
                   <AgentAnswerMarkdown
                     content={item.content}
                     stockMentions={item.stockMentions}
+                    animate={revealingMessageId === item.id}
+                    onRevealProgress={followRevealedAnswer}
                   />
                 </div>
               ) : (

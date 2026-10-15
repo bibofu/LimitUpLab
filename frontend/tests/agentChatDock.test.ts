@@ -11,6 +11,7 @@ import ts from "typescript";
 import * as interaction from "../src/utils/agentChatInteraction.ts";
 import * as transport from "../src/utils/agentChatTransport.ts";
 import * as jsonRequest from "../src/utils/jsonRequest.ts";
+import * as verifiedReveal from "../src/utils/verifiedAnswerReveal.ts";
 
 // Drive the real component's event handlers and async state without a browser dependency.
 const require = createRequire(import.meta.url);
@@ -21,6 +22,7 @@ const markdownCompiled = ts.transpileModule(readFileSync(new URL("../src/compone
 new Function("require", "module", "exports", markdownCompiled)((id: string) => {
   if (id === "react-markdown") return ReactMarkdown;
   if (id === "remark-gfm") return remarkGfm;
+  if (id === "../utils/verifiedAnswerReveal") return verifiedReveal;
   return require(id);
 }, markdownModule, markdownModule.exports);
 const compiled = ts.transpileModule(readFileSync(new URL("../src/components/AgentChatDock.tsx", import.meta.url), "utf8"), {
@@ -65,6 +67,11 @@ function mount(t: TestContext, overrides: Record<string, any> = {}, savedSession
       const index = cursor++;
       if (!(index in values)) values[index] = { current: initial };
       return values[index];
+    },
+    useCallback(callback: (...args: any[]) => any, deps: unknown[]) {
+      const index = cursor++;
+      if (!(index in values) || deps.some((value, position) => value !== values[index].deps[position])) values[index] = { callback, deps };
+      return values[index].callback;
     },
     useEffect(effect: () => unknown, deps: unknown[]) {
       const index = cursor++;
@@ -117,7 +124,10 @@ function mount(t: TestContext, overrides: Record<string, any> = {}, savedSession
     },
     has(predicate: (node: any) => boolean) { return nodes.some(predicate); },
     answers() { return nodes.filter(node => node.type === markdownModule.exports.AgentAnswerMarkdown); },
-    answerHtml() { return renderToStaticMarkup(createElement(MemoryRouter, {}, ...this.answers())); },
+    answerHtml() {
+      return renderToStaticMarkup(createElement(MemoryRouter, {}, ...this.answers().map(node =>
+        createElement(node.type, { ...node.props, animate: false }))));
+    },
     input() { return this.find(node => node.type === "textarea"); },
     type(value: string) { this.input().onChange({ target: { value } }); render(); },
     submit() { this.find(node => node.type === "form" && node.props.className === "agent-chat-input").onSubmit({ preventDefault() {} }); },
@@ -161,6 +171,7 @@ test("reload restores verified history with one bootstrap call and no list/detai
   assert.deepEqual(calls, ["bootstrap:saved"]);
   assert.equal(app.input().disabled, false);
   assert.equal(app.has(node => node.props.content === "已验证的历史回答"), true);
+  assert.equal(app.answers()[0].props.animate, false);
   assert.equal(app.has(node => node.props["aria-label"] === "新会话提示"), false);
 });
 
@@ -437,6 +448,7 @@ test("real SSE keeps candidate prose private and publishes one complete table wi
   stream.send(8, "completed", hotRankingResponse);
   await app.settle();
   assert.equal(app.answers().length, 1);
+  assert.equal(app.answers()[0].props.animate, true);
   assert.equal(app.has(node => node.props.className === "chat-task-status" && node.props.children === "研究已完成"), true);
   const html = app.answerHtml();
   assert.equal(html.split("<table>").length - 1, 1);
@@ -512,7 +524,66 @@ for (const failure of ["server-error", "disconnect", "cancelled"] as const) {
     assert.equal(calls, failure === "disconnect" ? 2 : 1);
     if (failure === "cancelled") {
       assert.equal(app.answers()[0].props.content, "本次任务已取消。");
+      assert.equal(app.answers()[0].props.animate, false);
       assert.equal(app.has(node => node.props.className === "chat-task-status" && node.props.children === "已取消"), true);
     }
   });
 }
+
+test("starting a new question finishes the prior reveal without changing its complete source", async t => {
+  const pending = deferred<any>();
+  let calls = 0;
+  const app = mount(t, { streamAgentChatMessage: async () => ++calls === 1 ? hotRankingResponse : pending.promise });
+  await app.settle();
+  app.type("第一条问题");
+  app.submit();
+  await app.settle();
+  assert.equal(app.answers()[0].props.animate, true);
+  app.type("下一条问题");
+  app.submit();
+  app.render();
+  assert.equal(app.answers()[0].props.animate, false);
+  assert.equal(app.answers()[0].props.content, hotRankingResponse.answer);
+  pending.resolve(final);
+  await app.settle();
+});
+
+test("session switching ends a current reveal immediately even while the session read is pending", async t => {
+  const pending = deferred<any>();
+  const app = mount(t, {
+    streamAgentChatMessage: async () => hotRankingResponse,
+    fetchChatSession: async (id: string) => id === "b" ? pending.promise : session(id),
+  });
+  await app.settle();
+  app.type("第一条问题");
+  app.submit();
+  await app.settle();
+  assert.equal(app.answers()[0].props.animate, true);
+  app.find(node => node.type === "button" && node.props.className === "chat-session-select" && node.props.children[0].props.children[0].props.children === "会话 b").onClick();
+  app.render();
+  assert.equal(app.answers()[0].props.animate, false);
+  pending.resolve({ ...session("b"), messages: [{ message_id: "saved", role: "assistant", content: hotRankingResponse.answer, metadata: {}, status: "success" }] });
+  await app.settle();
+  assert.equal(app.answers()[0].props.animate, false);
+});
+
+test("reveal height updates follow the bottom only until the reader scrolls away", async t => {
+  const app = mount(t, { streamAgentChatMessage: async () => hotRankingResponse });
+  await app.settle();
+  app.type("第一条问题");
+  app.submit();
+  await app.settle();
+  const revealProgress = app.answers()[0].props.onRevealProgress;
+  app.type("下一条未发送的问题");
+  assert.equal(app.answers()[0].props.onRevealProgress, revealProgress, "typing must not invalidate memoized historical answers");
+  const container = { scrollTop: 0, scrollHeight: 1000, clientHeight: 300 };
+  const messages = app.find(node => node.props["aria-label"] === "对话消息");
+  messages.ref.current = container;
+  app.answers()[0].props.onRevealProgress();
+  assert.equal(container.scrollTop, 1000);
+  container.scrollTop = 200;
+  messages.onScroll({ currentTarget: container });
+  container.scrollHeight = 1400;
+  app.answers()[0].props.onRevealProgress();
+  assert.equal(container.scrollTop, 200);
+});

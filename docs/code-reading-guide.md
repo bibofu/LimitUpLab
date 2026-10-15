@@ -8,7 +8,9 @@ come from deterministic code and recorded data; the model plans and explains.
 
 1. `frontend/src/components/AgentChatDock.tsx`: sends the question and session
    context, displays live progress, then presents the persisted `completed`
-   response with its table and metadata in one message.
+   response with its table and metadata in one message. `AgentAnswerMarkdown`
+   progressively reveals only newly received answers from the complete parsed
+   Markdown tree; table rows and links stay intact. History is shown in full.
 2. `frontend/src/utils/agentChatTransport.ts`: parses SSE, reconnects once with
    the event cursor, and preserves request identity for an in-page retry.
    Legacy draft events are ignored; reconnects reuse progress or the persisted
@@ -85,7 +87,9 @@ through the public refresh entry.
 - **Final answer delivery**: progress is streamed while candidate answers are
   validated and repaired internally. Only `completed`, emitted after
   `Journal.finish` commits, publishes answer text and metadata. Reconnects skip
-  legacy draft events and reuse the persisted response.
+  legacy draft events and reuse the persisted response. The frontend reveals
+  this same final answer progressively without changing stored content;
+  this presentation step does not reduce generation or validation latency.
 - **Evidence table**: a single table rendered from stored current-run rows via
   `finish.table`. Preview omission and source truncation are distinct; returned
   rows are not automatically the complete market universe.

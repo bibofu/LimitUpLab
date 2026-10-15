@@ -1,9 +1,10 @@
-import { memo } from "react";
-import ReactMarkdown from "react-markdown";
+import { memo, useEffect, useRef, useState } from "react";
+import ReactMarkdown, { type Components } from "react-markdown";
 import { Link } from "react-router-dom";
 import remarkGfm from "remark-gfm";
 
 import type { AgentStockMention } from "../types";
+import { revealVerifiedTree, type RevealNode } from "../utils/verifiedAnswerReveal";
 
 interface MarkdownNode {
   type: string;
@@ -21,6 +22,16 @@ const SKIPPED_NODE_TYPES = new Set([
   "linkReference",
 ]);
 
+const MARKDOWN_COMPONENTS: Components = {
+  a: ({ children, href, title }) => (
+    href?.startsWith("/stocks/") ? (
+      <Link title={title} to={href}>{children}</Link>
+    ) : (
+      <a href={href} rel="noreferrer" target="_blank" title={title}>{children}</a>
+    )
+  ),
+};
+
 /**
  * Render Agent markdown and link only stock mentions grounded in the response metadata.
  * Existing links remain explicit navigation rather than guessed stock identities.
@@ -28,32 +39,93 @@ const SKIPPED_NODE_TYPES = new Set([
 export const AgentAnswerMarkdown = memo(function AgentAnswerMarkdown({
   content,
   stockMentions,
+  animate = false,
+  onRevealProgress,
 }: {
   content: string;
   stockMentions: AgentStockMention[];
+  animate?: boolean;
+  onRevealProgress?: () => void;
 }) {
+  const [revealed, setRevealed] = useState({ content, units: 1 });
+  const plan = useRef({ total: 0 });
+  const revealProgress = useRef(onRevealProgress);
+  revealProgress.current = onRevealProgress;
+  const finishReveal = useRef<() => void>(() => {});
+  const reducedMotion = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
+  const canAnimate = animate && content.length <= 20000 && content.split("\n").length <= 400;
+  const visibleUnits = !canAnimate || reducedMotion ? Infinity : revealed.content === content ? revealed.units : 1;
+  const revealing = Number.isFinite(visibleUnits);
+
+  useEffect(() => {
+    const media = window.matchMedia?.("(prefers-reduced-motion: reduce)");
+    if (!canAnimate || media?.matches || plan.current.total <= 1) {
+      setRevealed({ content, units: Infinity });
+      return;
+    }
+    const total = plan.current.total;
+    const duration = Math.min(2400, Math.max(210, (total - 1) * 70));
+    const started = performance.now();
+    let lastUpdate = started;
+    let frame = 0;
+    let active = true;
+    setRevealed({ content, units: 1 });
+    const finish = () => {
+      active = false;
+      window.cancelAnimationFrame(frame);
+      setRevealed({ content, units: Infinity });
+    };
+    finishReveal.current = finish;
+    const tick = (now: number) => {
+      if (!active) return;
+      if (now - started >= duration) {
+        finish();
+        return;
+      }
+      if (now - lastUpdate >= 70) {
+        lastUpdate = now;
+        setRevealed({ content, units: 1 + Math.floor((total - 1) * (now - started) / duration) });
+      }
+      frame = window.requestAnimationFrame(tick);
+    };
+    const onMotionChange = () => { if (media?.matches) finish(); };
+    media?.addEventListener("change", onMotionChange);
+    frame = window.requestAnimationFrame(tick);
+    return () => {
+      active = false;
+      window.cancelAnimationFrame(frame);
+      media?.removeEventListener("change", onMotionChange);
+      finishReveal.current = () => {};
+    };
+  }, [canAnimate, content]);
+
+  useEffect(() => { revealProgress.current?.(); }, [visibleUnits]);
+
   return (
+    <>
     <ReactMarkdown
-      components={{
-        a: /* Render markdown links through the application's internal/external navigation handling. */ ({ children, href, title }) => (
-          href?.startsWith("/stocks/") ? (
-            <Link title={title} to={href}>{children}</Link>
-          ) : (
-            <a href={href} rel="noreferrer" target="_blank" title={title}>
-              {children}
-            </a>
-          )
-        ),
-      }}
+      components={MARKDOWN_COMPONENTS}
       remarkPlugins={[
         remarkGfm,
         [remarkStockLinks, { stockMentions }],
       ]}
+      rehypePlugins={[[rehypeVerifiedReveal, { visibleUnits, plan }]]}
     >
       {content}
     </ReactMarkdown>
+    {revealing ? (
+      <button className="chat-reveal-all" type="button" onClick={() => finishReveal.current()}>
+        立即显示全部
+      </button>
+    ) : null}
+    </>
   );
 });
+
+/** Parse the complete approved Markdown first, then reveal stable rendered nodes. */
+function rehypeVerifiedReveal({ visibleUnits, plan }: { visibleUnits: number; plan: { current: { total: number } } }) {
+  return (tree: RevealNode) => { plan.current.total = revealVerifiedTree(tree, visibleUnits); };
+}
 
 /**
  * Build the markdown-tree transformer that adds links for known stock mentions.
