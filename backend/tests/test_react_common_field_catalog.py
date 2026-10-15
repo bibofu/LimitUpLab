@@ -83,7 +83,7 @@ def test_popularity_fields_retain_provider_rank_after_collection_operations(oper
     assert "| 6 | 600006 | 样本6 | 2 | 上升 |" in answer
 
 
-def test_index_daily_change_is_not_window_return_and_both_bind_explicitly():
+def test_index_daily_change_is_not_window_return_in_actual_evidence():
     item = _trend_from_rows(name="样本指数", display_symbol="000001", requested_end_date=date(2026, 9, 18),
         days=3, source="synthetic-index", rows=[{"date": "2026-09-16", "close": 100},
         {"date": "2026-09-17", "close": 110}, {"date": "2026-09-18", "close": 99}])
@@ -91,8 +91,11 @@ def test_index_daily_change_is_not_window_return_and_both_bind_explicitly():
     store = EvidenceStore()
     key = store.add(tool="market_index_trend", state="ok", arguments={},
                     payload={"indices": [item.model_dump(mode="json")]})
-    answer = deliver([("name", "指数"), ("end_close", "收盘点位"), ("change_pct", "当日涨跌幅"),
-        ("return_pct", "区间涨跌幅")], store, key, question="列出指数今天收盘点位、当日涨跌幅及近3日区间涨跌幅。")
+    final = Finish(status="complete", answer="{{evidence_table}}", evidence_ids=[key], table={
+        "evidence_id": key, "columns": [{"field": field, "label": label} for field, label in [
+            ("name", "指数"), ("end_close", "收盘点位"), ("change_pct", "当日涨跌幅"),
+            ("return_pct", "区间涨跌幅")]]})
+    answer = render_answer(final, store)
     assert "| 样本指数 | 99.0 | -10.0 | -1.0 |" in answer
 
 
@@ -113,9 +116,9 @@ def test_catalog_entry_does_not_make_an_absent_evidence_column_available():
         deliver([("close", "收盘价")], store, key, question="只列收盘价。")
 
 
-def test_unknown_requested_metric_is_still_blocked_after_catalog_expansion():
+def test_unknown_requested_metric_remains_unresolved_after_catalog_expansion():
     task = review_input(Reviewer([("name", "名称"), (None, "未定义的自创收益")]),
                         message="只列名称和未定义的自创收益。", timeout_seconds=5)
     assert task.output_contract.field_resolution.status == "unresolved"
-    with pytest.raises(ValueError, match="fields remain unresolved"):
-        validate_delivery(Finish(status="complete", answer="完成"), task)
+    assert task.output_contract.fields == []
+    assert task.output_contract.field_requests[-1].field is None

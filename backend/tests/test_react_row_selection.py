@@ -99,11 +99,11 @@ def test_existing_complete_rank_scope_still_works_with_requested_window():
     assert len(answer.splitlines()) == 5
 
 
-def test_matching_row_count_cannot_substitute_for_requested_rank_window():
+def test_window_intent_is_retained_without_claiming_row_count_proves_membership():
     store, key = evidence(3)
     interpretation = task(3, offset=3)
-    with pytest.raises(ValueError, match="does not prove the requested row window"):
-        validate_delivery(table(key), interpretation, store)
+    validate_delivery(table(key), interpretation, store)
+    # Cardinality alone does not establish semantic rank membership.
     assert interpretation.output_contract.row_selection.offset == 3
 
 
@@ -170,7 +170,7 @@ def test_current_semantic_selection_replaces_prior_constraint_without_losing_con
     prior = reviewer.input_payload["task_context"]["previous_task"]["output_contract"]["row_selection"]
     assert prior["limit"] == 2
     actual = assessment.output_contract.row_selection
-    assert (actual.model_dump(exclude_none=True) if actual else None) == selection
+    assert (actual.model_dump() if actual else None) == selection
     assert assessment.output_contract.mode == mode
     node = reviewer.schema["properties"]["output_contract"]
     while "$ref" in node:

@@ -205,7 +205,7 @@ def test_failure_journal_replay_and_checkpoint_restore_do_not_repeat_query(tmp_p
 
     class CrashingControl(RunControl):
         def save(self, payload):
-            if payload["runtime"]["evidence"]["records"] and payload["state"]["resume_node"] == checkpoint_boundary:
+            if payload["runtime"]["evidence"] and payload["state"]["resume_node"] == checkpoint_boundary:
                 raise Crash()
             super().save(payload)
 

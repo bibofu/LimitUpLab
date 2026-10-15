@@ -225,42 +225,36 @@ def test_unspecified_scope_keeps_normal_tool_defaults():
     assert target({"mode": "unspecified"}).validate({"name": "stock_kline", "args": {"symbol": "600001"}}) == {"symbol": "600001"}
 
 
-@pytest.mark.parametrize("scope", [
-    SINGLE, COMPARE, RANGE,
-    {**SINGLE, "basis": "event", "observation_cutoff": "2026-09-30"},
-])
-def test_checkpoint_restores_entire_semantic_date_scope(scope):
+@pytest.mark.parametrize("required", [None, date(2026, 9, 18)])
+def test_checkpoint_preserves_only_the_single_required_observation_date(required):
     request = AgentChatRequest(session_id="date-checkpoint", message="继续研究。")
-    registry = target(scope).registry
+    registry = target(SINGLE).registry
     original = Run(request, registry, object(), [], None)
-    original.gateway.date_scope = DateScope.model_validate(scope)
+    original.gateway.required_date = required
     snapshots = []
     original.control = SimpleNamespace(save=snapshots.append)
     original.save({"messages": [], "done": False}, "agent")
-    assert snapshots[0]["runtime"]["date_scope"] == original.gateway.date_scope.model_dump(mode="json")
+    assert "date_scope" not in snapshots[0]["runtime"]
+    assert snapshots[0]["runtime"]["required_date"] == (required.isoformat() if required else None)
     restored = Run(request, registry, object(), [], None)
     restored.control = SimpleNamespace(row={"checkpoint_json": json.dumps(snapshots[0])})
     assert restored.restore()["resume_node"] == "agent"
-    assert restored.gateway.date_scope == original.gateway.date_scope
+    assert restored.gateway.required_date == required
 
 
-@pytest.mark.parametrize("legacy_only", [False, True])
-def test_checkpoint_legacy_date_is_only_used_when_structured_scope_is_absent(legacy_only):
+@pytest.mark.parametrize("scope,expected", [
+    (SINGLE, date(2026, 9, 18)), (COMPARE, None), (RANGE, None),
+    ({**SINGLE, "basis": "event", "observation_cutoff": "2026-09-30"}, None),
+])
+def test_old_checkpoint_scope_does_not_restore_multidate_or_event_enforcement(scope, expected):
     request = AgentChatRequest(session_id="legacy-date", message="继续研究。")
-    registry = target(COMPARE).registry
-    original = Run(request, registry, object(), [], None)
-    original.gateway.date_scope = DateScope.model_validate(COMPARE)
-    snapshots = []
-    original.control = SimpleNamespace(save=snapshots.append)
-    original.save({"messages": [], "done": False}, "agent")
-    snapshots[0]["runtime"]["required_date"] = "2026-09-10"
-    if legacy_only:
-        snapshots[0]["runtime"].pop("date_scope")
+    registry = target(scope).registry
+    snapshot = {"runtime": {"date_scope": scope}, "state": {"messages": [], "resume_node": "agent"}}
     restored = Run(request, registry, object(), [], None)
-    restored.control = SimpleNamespace(row={"checkpoint_json": json.dumps(snapshots[0])})
+    restored.control = SimpleNamespace(row={"checkpoint_json": json.dumps(snapshot)})
     restored.restore()
-    expected = DateScope(mode="dates", dates=[date(2026, 9, 10)]) if legacy_only else original.gateway.date_scope
-    assert restored.gateway.date_scope == expected
+    assert restored.gateway.required_date == expected
+    assert restored.gateway.date_scope.mode == ("dates" if expected else "unspecified")
 
 
 @pytest.mark.parametrize("scope", [

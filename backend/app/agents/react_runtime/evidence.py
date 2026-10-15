@@ -7,7 +7,6 @@ from uuid import uuid4
 
 from fastapi.encoders import jsonable_encoder
 from app.agents.kline_presentation import kline_agent_view
-from app.agents.react_runtime.selection_provenance import row_selection_matches
 
 from app.agents.tool_schemas_market import MARKET_TOOL_SCHEMAS
 from app.agents.tool_schemas_news import NEWS_TOOL_SCHEMAS
@@ -118,29 +117,6 @@ class EvidenceStore:
         # Runtime-owned proofs, never accepted from a tool payload or restored history.
         self._ranked_prefixes = {}
         self._rank_scopes = {}
-        self._selections = {}
-
-    def checkpoint(self):
-        """Persist runtime-owned proofs separately from untrusted tool payloads."""
-        return deepcopy({"records": self.records, "ranked_prefixes": self._ranked_prefixes,
-                         "rank_scopes": self._rank_scopes, "selections": self._selections})
-
-    def restore_checkpoint(self, snapshot):
-        # Legacy checkpoints contained records only. Never recover their proof
-        # claims from tool metadata or from historical conversation evidence.
-        if "records" not in snapshot:
-            self.records = deepcopy(snapshot)
-            self._ranked_prefixes, self._rank_scopes, self._selections = {}, {}, {}
-            return
-        self.records = deepcopy(snapshot["records"])
-        for attribute, field in (("_ranked_prefixes", "ranked_prefixes"),
-                                 ("_rank_scopes", "rank_scopes"), ("_selections", "selections")):
-            setattr(self, attribute, {key: deepcopy(value) for key, value in snapshot.get(field, {}).items()
-                                     if key in self.records and self.scope_of(self.records[key]) == CURRENT_SCOPE})
-
-    def row_selection_matches(self, key, *, offset, limit, sort_by=None, descending=None):
-        return row_selection_matches(self, key, offset=offset, limit=limit,
-                                     sort_by=sort_by, descending=descending)
 
     @staticmethod
     def scope_of(record):
@@ -357,9 +333,4 @@ class EvidenceStore:
         if rank_scope and not historical:
             self._rank_scopes[key] = rank_scope
             self.records[key]["complete_rank_scope"] = deepcopy(rank_scope)
-        if not historical:
-            self._selections[key] = {"source": spec.evidence_id, "operation": spec.operation,
-                                     "offset": spec.offset, "limit": spec.limit, "total": total,
-                                     "sort_by": spec.sort_by, "descending": spec.descending,
-                                     "filtered": bool(spec.filters)}
         return key

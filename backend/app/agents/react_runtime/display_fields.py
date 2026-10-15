@@ -1,9 +1,9 @@
 """Reviewed table-row columns; a catalog entry never proves row availability.
 
 Descriptions guide semantic matching, not keyword substitutions. The catalog
-covers scalar row columns, not the universe of answerable summary metrics or
-content requirements. Unknown requested columns and ambiguous column meanings
-stay unbound; content requirements are recorded separately in the task contract.
+covers scalar row columns, not all answerable summary metrics. Unknown columns
+stay unbound; the current task retains the complete request and actual tool
+evidence determines which fields can be delivered.
 """
 
 DISPLAY_FIELD_CATALOG = {
@@ -33,30 +33,6 @@ DISPLAY_FIELD_CATALOG.update({
     }.items()
 })
 
-# Shared identity fields keep their stock meanings and also identify index rows.
-for key, meaning in {"symbol": "股票代码或指数代码，按当前查询对象区分",
-                     "name": "股票名称或指数名称，按当前查询对象区分"}.items():
-    DISPLAY_FIELD_CATALOG[key]["meaning"] = meaning
-    DISPLAY_FIELD_CATALOG[key]["tools"].append("market_index_trend")
-
-DISPLAY_FIELD_CATALOG.update({
-    key: {"meaning": meaning, "model": "MarketIndexTrendItem", "tools": ["market_index_trend"]}
-    for key, meaning in {
-        "start_date": "指数所选走势窗口的起始交易日",
-        "end_date": "指数所选走势窗口的截止交易日",
-        "start_close": "指数窗口起始交易日收盘点位，点",
-        "end_close": "指数窗口截止交易日收盘点位，点；查询指定当日指数收盘点位时使用此字段",
-        "return_pct": (
-            "指定指数在所选窗口内的区间涨跌幅，百分比，按(末日收盘/首日收盘-1)*100计算；"
-            "不是单日涨跌幅。未明确对象或窗口的泛称涨跌幅不能自动绑定此字段"
-        ),
-        "max_drawdown_pct": "指数所选窗口内按收盘点位计算的最大回撤，非正百分比",
-        "positive_days": "指数所选窗口内相邻收盘上涨的交易日数量，不是连续上涨天数",
-        "negative_days": "指数所选窗口内相邻收盘下跌的交易日数量，不是连续下跌天数",
-        "source": "该条指数走势记录实际返回的数据来源标识",
-    }.items()
-})
-
 # Rankings are first-class evidence, including through select/intersection.
 # These fields come from the normalized provider row, not an inferred ordering.
 DISPLAY_FIELD_CATALOG.update({
@@ -76,10 +52,11 @@ DISPLAY_FIELD_CATALOG.update({
     key: {"meaning": meaning, "model": "StockKLineBar", "tools": ["stock_kline"]}
     for key, meaning in {
         "open": "个股该交易日开盘价，元，沿用工具返回的价格口径",
-        "close": "个股该交易日收盘价，元，沿用工具返回的价格口径；指数收盘点位使用end_close",
+        "close": "个股该交易日收盘价，元，沿用工具返回的价格口径",
         "high": "个股该交易日最高价，元",
         "low": "个股该交易日最低价，元",
         "volume": "个股该交易日成交量，沿用工具返回的计量单位，不等同于成交金额",
+        "source": "该条个股日K线记录实际返回的数据来源标识",
         "change_pct": (
             "单日涨跌幅，百分比：stock_kline使用每个交易日来源返回的原始日涨跌幅；"
             "market_index_trend为截止交易日相对上一交易日的指数点位变化。"
@@ -93,7 +70,6 @@ DISPLAY_FIELD_CATALOG.update({
     }.items()
 })
 DISPLAY_FIELD_CATALOG["change_pct"]["tools"].append("market_index_trend")
-for key in ("trade_date", "amount", "source"):
+for key in ("trade_date", "amount"):
     DISPLAY_FIELD_CATALOG[key]["tools"].append("stock_kline")
 DISPLAY_FIELD_CATALOG["trade_date"]["meaning"] = "涨停事件或个股日K线记录对应的交易日期"
-DISPLAY_FIELD_CATALOG["source"]["meaning"] = "该条指数走势或个股日K线记录实际返回的数据来源标识"

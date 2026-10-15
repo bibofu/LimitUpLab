@@ -135,10 +135,9 @@ def test_old_checkpoint_unknown_field_cannot_poison_recovered_delivery():
     assert restored_again.output_contract.fields == []
     assert any(record["proposed_fields"] == old_task["output_contract"]["fields"] and record.get("reason")
                for record in resolution_records(restored_again.model_dump(mode="json")))
-    with pytest.raises(ValueError, match="fields remain unresolved"):
-        validate_delivery(Finish(status="complete", answer="{{evidence_table}}", table={"evidence_id": "test",
-            "columns": [{"field": field, "label": field} for field in ["symbol", "name", "board_height"]]}),
-            runtime.task_context)
+    validate_delivery(Finish(status="complete", answer="{{evidence_table}}", table={"evidence_id": "test",
+        "columns": [{"field": field, "label": field} for field in ["symbol", "name", "board_height"]]}),
+        runtime.task_context)
 
 
 def test_backend_does_not_trust_a_model_claim_that_unknown_fields_are_resolved():

@@ -2,7 +2,7 @@
 
 from typing import Literal
 
-from pydantic import BaseModel, ConfigDict, Field, field_validator, model_validator
+from pydantic import BaseModel, ConfigDict, Field
 
 VERSION = "react-runtime-v39"
 MAX_MODEL_CALLS = 8
@@ -16,36 +16,15 @@ class StrictModel(BaseModel):
 
 
 class Requirement(StrictModel):
-    id: str = Field(min_length=1)
-    description: str = Field(min_length=1)
-    source_text: str = Field(min_length=1)
+    id: str
+    description: str
+    source_text: str
     status: Literal["pending", "satisfied", "unavailable"] = "pending"
     evidence_ids: list[str] = Field(default_factory=list)
-
-    @field_validator("id", "description", "source_text")
-    @classmethod
-    def nonblank_text(cls, value):
-        if not value.strip():
-            raise ValueError("Requirement identity and source text must not be blank")
-        return value
-
-    @field_validator("evidence_ids")
-    @classmethod
-    def nonblank_evidence_ids(cls, values):
-        if any(not value.strip() for value in values):
-            raise ValueError("Requirement evidence IDs must not be blank")
-        return values
 
 
 class UpdateTask(StrictModel):
     requirements: list[Requirement] = Field(min_length=1, max_length=20)
-
-    @model_validator(mode="after")
-    def unique_ids(self):
-        ids = [item.id for item in self.requirements]
-        if len(ids) != len(set(ids)):
-            raise ValueError("Requirement IDs must be unique")
-        return self
 
 
 class EvidenceColumn(StrictModel):
