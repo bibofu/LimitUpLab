@@ -1,6 +1,6 @@
-"""AKShare-backed market index snapshots for dashboard context."""
+"""Tonghuashun-first market indices with date-aligned provider fallbacks."""
 
-from concurrent.futures import Future
+from concurrent.futures import Future, ThreadPoolExecutor
 from datetime import date, datetime, timedelta
 from math import isfinite
 import os
@@ -10,6 +10,7 @@ from typing import Any, Callable
 import akshare as ak
 import requests
 
+from app.collectors.hithink_finance_collector import HithinkFinanceCollector
 from app.collectors.network import without_proxy
 from app.collectors.process_timeout import run_in_killable_process
 from app.models import (
@@ -39,7 +40,7 @@ def _cached_collection(
     kind: str, key: object, cache: dict, worker: Callable[..., Any], *args: Any,
 ) -> Any:
     """Coalesce requests and apply one deadline to the complete provider batch."""
-    timeout = float(os.getenv("LIMITUPLAB_MARKET_INDEX_TIMEOUT_SECONDS", "10"))
+    timeout = float(os.getenv("LIMITUPLAB_MARKET_INDEX_TIMEOUT_SECONDS", "30"))
     if not isfinite(timeout) or timeout <= 0:
         raise ValueError("Market index timeout must be finite and greater than zero")
     flight_key = (kind, key)
@@ -84,15 +85,12 @@ def collect_market_indices(trade_date: date | None = None) -> list[MarketIndexSn
 
 def _collect_market_indices(trade_date: date | None) -> list[MarketIndexSnapshot]:
     """Run the complete snapshot/fallback batch only in the provider process."""
-    return [
-        _collect_market_index(
-            name=name,
-            display_symbol=display_symbol,
-            akshare_symbol=akshare_symbol,
-            trade_date=trade_date,
-        )
-        for name, display_symbol, akshare_symbol in INDEX_SPECS
-    ]
+    with ThreadPoolExecutor(max_workers=len(INDEX_SPECS)) as pool:
+        futures = [
+            pool.submit(_collect_market_index, *spec, trade_date)
+            for spec in INDEX_SPECS
+        ]
+        return [future.result() for future in futures]
 
 
 def collect_market_index_trends(
@@ -116,16 +114,19 @@ def _collect_market_index_trends(
 ) -> MarketIndexTrendFacts:
     """Run the complete trend/fallback batch only in the provider process."""
 
-    indices = [
-        _collect_market_index_trend(
-            name=name,
-            display_symbol=display_symbol,
-            akshare_symbol=akshare_symbol,
-            days=requested_days,
-            end_date=requested_end_date,
-        )
-        for name, display_symbol, akshare_symbol in INDEX_SPECS
-    ]
+    with ThreadPoolExecutor(max_workers=len(INDEX_SPECS)) as pool:
+        futures = [
+            pool.submit(
+                _collect_market_index_trend,
+                name=name,
+                display_symbol=display_symbol,
+                akshare_symbol=akshare_symbol,
+                days=requested_days,
+                end_date=requested_end_date,
+            )
+            for name, display_symbol, akshare_symbol in INDEX_SPECS
+        ]
+        indices = [future.result() for future in futures]
     return MarketIndexTrendFacts(
         requested_days=requested_days,
         requested_end_date=requested_end_date,
@@ -147,6 +148,7 @@ def _collect_market_index_trend(
 
     errors: list[str] = []
     providers = (
+        ("hithink-finance.index.history", _hithink_rows),
         ("tencent_index_daily_spot", _tencent_rows),
         ("eastmoney_index_daily", _eastmoney_rows),
         ("sina_index_daily", _sina_rows),
@@ -178,6 +180,7 @@ def _collect_market_index(
 
     errors: list[str] = []
     providers = (
+        ("hithink-finance.index.history", _hithink_rows),
         ("tencent_index_daily_spot", _tencent_rows),
         ("eastmoney_index_daily", _eastmoney_rows),
         ("sina_index_daily", _sina_rows),
@@ -198,6 +201,26 @@ def _collect_market_index(
         f"unable to collect date-aligned index data for {display_symbol}: "
         + "; ".join(errors)
     )
+
+
+def _hithink_rows(
+    akshare_symbol: str,
+    trade_date: date | None,
+) -> list[dict[str, Any]]:
+    """Bound concurrent CLI calls to leave time for the fallback providers."""
+    batch_timeout = float(os.getenv("LIMITUPLAB_MARKET_INDEX_TIMEOUT_SECONDS", "30"))
+    if not isfinite(batch_timeout) or batch_timeout <= 0:
+        raise ValueError("Market index timeout must be finite and greater than zero")
+    collector = HithinkFinanceCollector()
+    collector.timeout_seconds = min(collector.timeout_seconds, batch_timeout / 2)
+    thscode = next(
+        display for _, display, symbol in INDEX_SPECS if symbol == akshare_symbol
+    )
+    end_date = trade_date or date.today()
+    history = collector.collect_index_history(
+        thscode, start_date=end_date - timedelta(days=60), end_date=end_date,
+    )
+    return [{"date": item.trade_date, "close": item.close} for item in history.items]
 
 
 def _eastmoney_rows(

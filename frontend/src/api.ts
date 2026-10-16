@@ -24,6 +24,8 @@ import type {
 } from "./types";
 
 const API_BASE_URL = import.meta.env.VITE_API_BASE_URL ?? "";
+// Allow the 30-second provider batch and bounded process cleanup to finish.
+const MARKET_PROVIDER_TIMEOUT_MS = 40_000;
 export const PUBLIC_DATA_SCOPE = API_BASE_URL || "same-origin";
 const inflightGetRequests = new Map<string, Promise<unknown>>();
 const resolvedGetRequests = new Map<
@@ -72,7 +74,7 @@ async function cachedGet<T>(path: string, ttlMs: number): Promise<T> {
  * response promise.
  */
 export function fetchMarketSummary(signal?: AbortSignal) {
-  return request<MarketSummary>("/api/market/overview", { signal }, DASHBOARD_TIMEOUT_MS);
+  return request<MarketSummary>("/api/market/overview", { signal }, MARKET_PROVIDER_TIMEOUT_MS);
 }
 
 /**
@@ -133,7 +135,7 @@ export function fetchDailyBoardPromotion(days = 5, signal?: AbortSignal) {
   return request<DailyBoardPromotionReport>(
     `/api/analysis/daily-promotion-report?days=${days}`,
     { signal },
-    DASHBOARD_TIMEOUT_MS,
+    MARKET_PROVIDER_TIMEOUT_MS,
   );
 }
 

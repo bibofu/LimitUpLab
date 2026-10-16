@@ -10,6 +10,11 @@ import pytest
 from app.collectors import trading_calendar_collector as calendar
 
 
+@pytest.fixture(autouse=True)
+def offline_cli(monkeypatch):
+    monkeypatch.setattr(calendar, "HithinkFinanceCollector", Mock(side_effect=RuntimeError("offline CLI")))
+
+
 def test_child_fetch_normalizes_full_calendar(monkeypatch):
     monkeypatch.setattr(calendar, "without_proxy", nullcontext)
     monkeypatch.setattr(calendar.ak, "tool_trade_date_hist_sina", Mock(return_value=pd.DataFrame({

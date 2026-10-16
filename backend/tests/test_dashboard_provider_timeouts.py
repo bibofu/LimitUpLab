@@ -49,7 +49,7 @@ def test_index_snapshot_and_trend_each_have_one_whole_batch_deadline(monkeypatch
     assert run.call_count == 2
     assert run.call_args_list[0].args == (indices._collect_market_indices, END)
     assert run.call_args_list[1].args == (indices._collect_market_index_trends, 20, END)
-    assert all(call.kwargs == {"timeout_seconds": 10.0} for call in run.call_args_list)
+    assert all(call.kwargs == {"timeout_seconds": 30.0} for call in run.call_args_list)
 
 
 def test_calendar_full_history_uses_one_worker_and_filters_requested_range(monkeypatch):
@@ -57,7 +57,7 @@ def test_calendar_full_history_uses_one_worker_and_filters_requested_range(monke
     monkeypatch.setattr(calendar, "run_in_killable_process", run)
     assert calendar.collect_a_share_trade_dates(START, END) == [START, END]
     assert calendar.collect_a_share_trade_dates(END, END) == [END]
-    run.assert_called_once_with(calendar._fetch_trade_dates, timeout_seconds=8.0)
+    run.assert_called_once_with(calendar._fetch_trade_dates, START, END, 30.0, timeout_seconds=30.0)
 
 
 @pytest.mark.parametrize("kind", ["indices", "calendar"])
@@ -191,5 +191,5 @@ def test_promotion_waiter_returns_explicit_missing_after_deadline(monkeypatch):
     assert not result.trade_dates
     assert "超时" in result.warnings[0]
     assert "private" not in result.warnings[0]
-    pending.result.assert_called_once_with(timeout=13.0)
+    pending.result.assert_called_once_with(timeout=35.0)
     assert promotion_calendar._inflight[key] is pending

@@ -9,6 +9,14 @@ from app.collectors.market_index_collector import (
 
 
 class MarketIndexCollectorTest(unittest.TestCase):
+    def setUp(self) -> None:
+        cli = patch(
+            "app.collectors.market_index_collector._hithink_rows",
+            side_effect=RuntimeError("offline CLI"),
+        )
+        cli.start()
+        self.addCleanup(cli.stop)
+
     # Prepare the rows fixture or observation used by the surrounding regression scenario.
     @staticmethod
     def _rows(*dates_and_closes: tuple[str, float]) -> list[dict[str, object]]:
