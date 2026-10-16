@@ -241,6 +241,21 @@ class HithinkLimitBreakPoolSnapshot:
     source: str = HITHINK_SOURCE
 
 
+@dataclass(frozen=True)
+class HithinkLimitDownFact:
+    symbol: str
+    thscode: str
+    name: str
+    change_pct: float | None
+
+
+@dataclass(frozen=True)
+class HithinkLimitDownPoolSnapshot:
+    trade_date: date
+    items: list[HithinkLimitDownFact]
+    source: str = HITHINK_SOURCE
+
+
 class HithinkFinanceCollector:
     """Invoke the official CLI and normalize selected special-data responses."""
 
@@ -320,25 +335,32 @@ class HithinkFinanceCollector:
         self,
         thscodes: Sequence[str],
     ) -> HithinkMarketSnapshot:
-        """Return current quote facts for an explicit bounded stock list."""
+        """Return all requested quotes in batches within the CLI's 100-code limit."""
 
         normalized_codes = list(
             dict.fromkeys(code.strip() for code in thscodes if code.strip())
-        )[:100]
+        )
         if not normalized_codes:
             return HithinkMarketSnapshot(
                 captured_at=datetime.now(timezone.utc),
                 items=[],
             )
-        envelope = self._invoke(
-            "market",
-            "snapshot",
-            "--thscodes",
-            ",".join(normalized_codes),
-            "--limit",
-            str(len(normalized_codes)),
+        batches: list[HithinkMarketSnapshot] = []
+        for offset in range(0, len(normalized_codes), 100):
+            batch = normalized_codes[offset : offset + 100]
+            envelope = self._invoke(
+                "market", "snapshot", "--thscodes", ",".join(batch),
+                "--limit", str(len(batch)),
+            )
+            snapshot = _market_snapshot_from_data(_dict(envelope.get("data")))
+            if batches and snapshot.captured_at.astimezone(SHANGHAI_TIMEZONE).date() != batches[0].captured_at.astimezone(SHANGHAI_TIMEZONE).date():
+                raise HithinkFinanceError("market snapshot batches span different dates")
+            batches.append(snapshot)
+        return HithinkMarketSnapshot(
+            captured_at=batches[-1].captured_at,
+            items=[item for batch in batches for item in batch.items],
+            total=sum(len(batch.items) for batch in batches),
         )
-        return _market_snapshot_from_data(_dict(envelope.get("data")))
 
     def collect_stock_history(
         self,
@@ -454,16 +476,70 @@ class HithinkFinanceCollector:
         if category not in {"industry", "cn_concept"}:
             raise ValueError("category must be industry or cn_concept")
         envelope = self._invoke("index", "catalog", "--tag", category)
-        return [
+        rows = _complete_items(envelope, "index catalog")
+        items = [
             HithinkIndexCatalogFact(
                 thscode=str(row.get("thscode") or ""),
                 name=str(row.get("name") or "").strip(),
                 category=category,
             )
-            for row in _list(_dict(envelope.get("data")).get("item"))
+            for row in rows
             if str(row.get("thscode") or "").strip()
             and str(row.get("name") or "").strip()
         ]
+        if len(items) != len(rows) or len({item.thscode for item in items}) != len(items):
+            raise HithinkFinanceError("index catalog: missing identity or duplicate code")
+        return items
+
+    def collect_index_history(
+        self, thscode: str, *, start_date: date, end_date: date,
+    ) -> HithinkStockHistory:
+        """Return inclusive index daily bars; indexes have no adjustment parameter."""
+
+        if start_date > end_date:
+            raise ValueError("start_date must not be after end_date")
+        normalized_code = thscode.strip().upper()
+        envelope = self._invoke(
+            "index", "history", "--thscode", normalized_code,
+            "--start-ms", str(_shanghai_midnight_ms(start_date)),
+            "--end-ms", str(_shanghai_midnight_ms(end_date + timedelta(days=1))),
+        )
+        items: list[HithinkDailyBarFact] = []
+        seen: set[date] = set()
+        for row in _complete_items(envelope, "index history"):
+            trade_date = _shanghai_timestamp_date(row.get("date_ms"))
+            if trade_date is None:
+                raise HithinkFinanceError("index history: invalid date")
+            if not start_date <= trade_date <= end_date:
+                continue
+            values = [_number(row.get(field)) for field in (
+                "open_price", "high_price", "low_price", "close_price", "volume", "turnover",
+            )]
+            if trade_date in seen or any(value is None or not math.isfinite(value) for value in values):
+                raise HithinkFinanceError("index history: duplicate date or missing/invalid OHLCV")
+            seen.add(trade_date)
+            items.append(HithinkDailyBarFact(trade_date, *values))
+        return HithinkStockHistory(
+            thscode=normalized_code, start_date=start_date, end_date=end_date,
+            adjustment="none", items=sorted(items, key=lambda item: item.trade_date),
+        )
+
+    def collect_trading_calendar(self) -> list[date]:
+        """Return the CLI's fixed recent-year window, never synthesize future sessions."""
+
+        envelope = self._invoke("market", "calendar")
+        result: set[date] = set()
+        for row in _complete_items(envelope, "trading calendar"):
+            trade_date = _shanghai_timestamp_date(row.get("date_ms"))
+            readable = _date(row.get("date"))
+            if trade_date is None or (row.get("date") is not None and readable != trade_date):
+                raise HithinkFinanceError("trading calendar: invalid or conflicting date")
+            if trade_date in result:
+                raise HithinkFinanceError("trading calendar: duplicate date")
+            result.add(trade_date)
+        if not result:
+            raise HithinkFinanceError("trading calendar: empty response")
+        return sorted(result)
 
     def collect_index_snapshots(
         self,
@@ -486,7 +562,7 @@ class HithinkFinanceCollector:
                 ",".join(item.thscode for item in batch),
             )
             by_code = {item.thscode: item for item in batch}
-            for row in _list(_dict(envelope.get("data")).get("item")):
+            for row in _complete_items(envelope, "index snapshot"):
                 thscode = str(row.get("thscode") or "")
                 catalog = by_code.get(thscode)
                 if catalog is None:
@@ -720,6 +796,18 @@ class HithinkFinanceCollector:
             items=[_limit_break_fact(row) for row in rows],
         )
 
+    def collect_all_limit_down_pool(self, *, trade_date: date) -> HithinkLimitDownPoolSnapshot:
+        """Require every page of the closed limit-down pool before using its membership."""
+
+        rows = self._collect_all_event_rows("limit-down-pool", trade_date)
+        return HithinkLimitDownPoolSnapshot(
+            trade_date=trade_date,
+            items=[HithinkLimitDownFact(
+                symbol=_symbol(row), thscode=str(row.get("thscode") or ""),
+                name=str(row["name"]), change_pct=_number(row.get("price_change_ratio_pct")),
+            ) for row in rows],
+        )
+
     def _collect_all_event_rows(self, pool: str, trade_date: date) -> list[dict[str, Any]]:
         """Reject partial/malformed snapshots so the caller can use another source."""
 
@@ -727,11 +815,15 @@ class HithinkFinanceCollector:
         seen: set[str] = set()
         expected_total: int | None = None
         page_size = 200
+        sort_field = {
+            "limit-up-pool": "limit_up_time", "limit-break-pool": "open_times",
+            "limit-down-pool": "last_limit_time",
+        }[pool]
         for page in range(1, 51):  # A bounded 10,000-row ceiling exceeds the A-share universe.
             envelope = self._invoke(
                 "special", pool, "--date-ms", str(_shanghai_midnight_ms(trade_date)),
                 "--page", str(page), "--size", str(page_size),
-                "--sort-field", "limit_up_time" if pool == "limit-up-pool" else "open_times",
+                "--sort-field", sort_field,
                 "--sort-dir", "asc",
             )
             data = _dict(envelope.get("data"))
@@ -799,6 +891,20 @@ class HithinkFinanceCollector:
                 retryable=bool(error_payload.get("retryable")),
             )
         return envelope
+
+
+def _complete_items(envelope: dict[str, Any], label: str) -> list[dict[str, Any]]:
+    """Reject truncated or malformed non-paginated responses at the provider boundary."""
+
+    data = _dict(envelope.get("data"))
+    rows = data.get("item")
+    if (
+        not isinstance(rows, list) or any(not isinstance(row, dict) for row in rows)
+        or _dict(envelope.get("meta")).get("truncated") is True
+        or (data.get("count") is not None and _pool_integer(data["count"]) != len(rows))
+    ):
+        raise HithinkFinanceError(f"{label}: incomplete or malformed response")
+    return rows
 
 
 def _limit_up_fact(row: dict[str, Any]) -> HithinkLimitUpFact:
