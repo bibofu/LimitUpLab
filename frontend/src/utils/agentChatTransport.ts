@@ -90,7 +90,7 @@ export async function streamChat(
 }
 
 const LABELS: Record<string, string> = {
-  complete: "研究已完成", partial: "部分完成", empty: "查询结果为空", clarify: "待补充条件",
+  complete: "研究已完成", partial: "查询已结束", empty: "查询结果为空", clarify: "待补充条件",
   refuse: "请求超出研究范围", error: "执行失败", cancelled: "已取消",
 };
 

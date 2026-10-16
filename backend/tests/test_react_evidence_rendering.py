@@ -52,7 +52,7 @@ def test_table_escapes_markup_and_keeps_missing_values_explicit():
                               {"symbol": "600002", "name": None}])
     answer = render_answer(final, store)
     assert "<script>" not in answer and "&#124;" in answer
-    assert answer.endswith("| 600002 | 缺失 |")
+    assert answer.endswith("| 600002 | 数据未成功获取 |")
 
 
 def test_existing_prose_finish_is_backward_compatible():
@@ -112,7 +112,7 @@ def test_table_boundaries_preserve_prose_spaces_and_following_code_indent(separa
 
 
 @pytest.mark.parametrize("value,label", [
-    ("up", "上升"), ("down", "下降"), ("flat", "持平"), (None, "缺失"),
+    ("up", "上升"), ("down", "下降"), ("flat", "持平"), (None, "数据未成功获取"),
     ("sideways", "未识别（sideways）"), (0, "未识别（0）"),
     ("<new>|other", "未识别（&lt;new&gt;&#124;other）"),
 ])

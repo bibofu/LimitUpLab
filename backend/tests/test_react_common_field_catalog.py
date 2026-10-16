@@ -107,7 +107,7 @@ def test_stock_daily_price_and_nullable_percentage_bind_without_inventing_values
         "bars": [bar.model_dump(mode="json")], "data_missing": ["previous close unavailable"]})
     answer = deliver([("trade_date", "日期"), ("close", "收盘价"), ("change_pct", "涨跌幅"),
         ("amount", "成交额")], store, key, question="逐日列出日期、收盘价、涨跌幅和成交额。")
-    assert "| 2026-09-18 | 9.5 | 缺失 | 95000.0 |" in answer
+    assert "| 2026-09-18 | 9.5 | 数据未成功获取 | 95000.0 |" in answer
 
 
 def test_catalog_entry_does_not_make_an_absent_evidence_column_available():

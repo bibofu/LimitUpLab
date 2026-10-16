@@ -87,7 +87,7 @@ test("server interruption is shown without retrying or spending another model ca
 });
 
 test("unknown and historical execution status are not labelled complete", () => {
-  assert.equal(taskStatusLabel("partial"), "部分完成");
+  assert.equal(taskStatusLabel("partial"), "查询已结束");
   assert.equal(taskStatusLabel("cancelled"), "已取消");
   assert.equal(taskStatusLabel("error"), "执行失败");
   assert.equal(taskStatusLabel("success"), undefined);

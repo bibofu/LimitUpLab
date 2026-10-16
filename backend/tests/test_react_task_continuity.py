@@ -228,7 +228,7 @@ def test_valid_table_only_answer_is_returned_without_runtime_publication(monkeyp
 def test_table_only_does_not_hide_real_partial_delivery_gap(monkeypatch):
     response, model, _, _ = run_table_protocol(monkeypatch, partial=True)
     assert model.answers == 1 and response.task_status == "partial"
-    assert response.answer == TABLE + "\n\n另一个来源未返回，其余名单尚未核实。"
+    assert response.answer == TABLE + "\n\n另一个来源未返回，其余名单尚未核实。\n\n数据未成功获取：\n- 另一来源名单"
 
 
 def test_freeform_returns_complete_prose_and_table_without_candidate_events(monkeypatch):

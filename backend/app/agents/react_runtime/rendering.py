@@ -4,14 +4,15 @@ from html import escape
 from math import isfinite
 
 from app.agents.react_runtime.evidence import CURRENT_SCOPE
+from app.agents.react_runtime.display_fields import DISPLAY_FIELD_CATALOG, presentation_aliases
 
 
 RANK_TREND_LABELS = {"up": "上升", "down": "下降", "flat": "持平"}
 
 
-def cell(value, *, field=None):
+def cell(value, *, field=None, missing_label="缺失"):
     if value is None:
-        return "缺失"
+        return missing_label
     if type(value) not in (str, int, float, bool) or (type(value) is float and not isfinite(value)):
         raise ValueError("Table fields must be finite scalar values")
     if field == "rank_trend":
@@ -58,7 +59,7 @@ def table_prose(answer, marker):
     return "".join(before_lines).rstrip("\r\n"), "".join(after_lines)
 
 
-def render_answer(final, store):
+def render_answer(final, store, output_contract=None):
     marker = "{{evidence_table}}"
     if final.table is None:
         if marker in final.answer:
@@ -83,10 +84,20 @@ def render_answer(final, store):
         raise ValueError("Table exceeds 1000 rows; select an explicit range and disclose the limit")
     lines = ["| " + " | ".join(cell(c.label) for c in columns) + " |",
              "| " + " | ".join("---" for _ in columns) + " |"]
+    requested_fields = set(output_contract.fields) if output_contract else set()
+    aliases = presentation_aliases(record, store)
+    missing_fields = set(DISPLAY_FIELD_CATALOG) | requested_fields | set(aliases.values())
     for row in rows:
-        if not isinstance(row, dict) or any(c.field not in row for c in columns):
+        if not isinstance(row, dict):
             raise ValueError("Table field missing; use exact evidence row fields")
-        lines.append("| " + " | ".join(cell(row[c.field], field=c.field) for c in columns) + " |")
+        fields = [c.field if c.field in row else aliases.get(c.field, c.field) for c in columns]
+        absent = [field for field in fields if field not in row]
+        if absent and (final.status != "partial" or not final.missing or any(
+            field not in missing_fields for field in absent
+        )):
+            raise ValueError("Table field missing; use exact evidence row fields, or retain requested missing columns with partial and an explicit missing explanation")
+        lines.append("| " + " | ".join(cell(row.get(field), field=c.field,
+            missing_label="数据未成功获取") for c, field in zip(columns, fields)) + " |")
     answer = "\n\n".join(part for part in (before, "\n".join(lines), after) if part)
     if len(answer) > 60000:
         raise ValueError("Rendered answer exceeds delivery budget")

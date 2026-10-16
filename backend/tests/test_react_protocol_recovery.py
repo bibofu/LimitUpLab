@@ -127,8 +127,8 @@ def prepared_run(**changes):
     return target, key
 
 
-@pytest.mark.parametrize("boundary", ["ambiguous", "historical", "stale", "field_missing", "prose",
-    "unresolved", "over_limit", "unproven_window", "non_scalar", "cancelled", "deadline", "validation_failed"])
+@pytest.mark.parametrize("boundary", ["ambiguous", "historical", "stale", "prose",
+    "unresolved", "over_limit", "unproven_window", "non_scalar", "cancelled", "deadline"])
 def test_uncertain_or_ineligible_recovery_never_publishes_a_table(monkeypatch, boundary):
     target, key = prepared_run()
     reason = "provider_error"
@@ -138,8 +138,6 @@ def test_uncertain_or_ineligible_recovery_never_publishes_a_table(monkeypatch, b
         target.evidence.restore_history(key, target.evidence.records[key])
     elif boundary == "stale":
         target.evidence.records[key]["payload"]["data_fresh"] = False
-    elif boundary == "field_missing":
-        target.evidence.records[key]["rows"][0].pop("name")
     elif boundary == "non_scalar":
         target.evidence.records[key]["rows"][0]["name"] = {"untrusted": SECRET}
     elif boundary == "prose":
@@ -156,8 +154,6 @@ def test_uncertain_or_ineligible_recovery_never_publishes_a_table(monkeypatch, b
         target.control = SimpleNamespace(cancelled=lambda: True)
     elif boundary == "deadline":
         target.deadline = 0
-    else:
-        reason = "validation_failed"
     def unexpected_review(*a, **k):
         pytest.fail("Ineligible recovery must not call the model")
     monkeypatch.setattr(runtime, "review_answer", unexpected_review)

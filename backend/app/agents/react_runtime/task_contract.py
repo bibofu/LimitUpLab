@@ -4,7 +4,7 @@ from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.agents.react_runtime.display_fields import DISPLAY_FIELD_CATALOG
+from app.agents.react_runtime.display_fields import DISPLAY_FIELD_CATALOG, presentation_aliases
 
 
 OutputMode = Literal["freeform", "table_only", "prose_only"]
@@ -153,7 +153,12 @@ def validate_delivery(final, interpretation, store=None):
             )
     if final.table is not None and contract.fields:
         actual = [column.field for column in final.table.columns]
-        if actual != contract.fields:
+        aliases = presentation_aliases(store.get(final.table.evidence_id), store) if store else {}
+        matches = len(actual) == len(contract.fields) and all(
+            field in {requested, aliases.get(requested, requested)}
+            for field, requested in zip(actual, contract.fields)
+        )
+        if not matches:
             raise ValueError(f"Table fields must match the requested order exactly: {contract.fields}; got {actual}")
     if contract.table_required and final.status == "complete" and final.table is None:
         raise ValueError("The current task requires an evidence table; a prose summary cannot complete it")

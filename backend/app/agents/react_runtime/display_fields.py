@@ -73,3 +73,20 @@ DISPLAY_FIELD_CATALOG["change_pct"]["tools"].append("market_index_trend")
 for key in ("trade_date", "amount"):
     DISPLAY_FIELD_CATALOG[key]["tools"].append("stock_kline")
 DISPLAY_FIELD_CATALOG["trade_date"]["meaning"] = "涨停事件或个股日K线记录对应的交易日期"
+
+
+def presentation_aliases(record, store):
+    """Bind presentation meanings to actual fields for the declared source only.
+
+    An index summary's end value/date is its latest close/date, whereas its
+    start value and interval return must never substitute for those fields.
+    Computed selections retain the same meanings through their evidence lineage.
+    """
+    if record["tool"] == "market_index_trend":
+        return {"close": "end_close", "trade_date": "end_date"}
+    if record["tool"] != "compute_result":
+        return {}
+    parents = [store.get(key) for key in record.get("sources", [])
+               if isinstance(key, str) and key in store.records]
+    aliases = [presentation_aliases(parent, store) for parent in parents]
+    return aliases[0] if aliases and all(item == aliases[0] for item in aliases) else {}
