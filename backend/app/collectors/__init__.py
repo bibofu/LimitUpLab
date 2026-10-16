@@ -1,8 +1,8 @@
 ﻿from app.collectors.akshare_limit_up_collector import (
     LimitUpCollectionResult,
-    collect_limit_up_events,
     parse_akshare_trade_date,
 )
+from app.collectors.preferred_limit_up_collector import collect_limit_up_events
 from app.collectors.market_index_collector import (
     collect_market_indices,
     collect_market_index_trends,
@@ -35,6 +35,8 @@ from app.collectors.hithink_finance_collector import (
     HithinkFinanceError,
     HithinkHotStockFact,
     HithinkHotStockSnapshot,
+    HithinkLimitBreakFact,
+    HithinkLimitBreakPoolSnapshot,
     HithinkLimitUpFact,
     HithinkLimitUpPoolSnapshot,
     HithinkMarketSnapshot,
@@ -77,6 +79,8 @@ __all__ = [
     "HithinkFinanceError",
     "HithinkHotStockFact",
     "HithinkHotStockSnapshot",
+    "HithinkLimitBreakFact",
+    "HithinkLimitBreakPoolSnapshot",
     "HithinkLimitUpFact",
     "HithinkLimitUpPoolSnapshot",
     "HithinkMarketSnapshot",

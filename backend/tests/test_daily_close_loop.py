@@ -371,6 +371,17 @@ class DailyCloseLoopTest(unittest.TestCase):
         self.assertEqual(execution.exit_code, 0)
         self.assertFalse(self.alert_path.exists())
 
+    def test_incomplete_preferred_pools_cannot_publish_recommendation(self) -> None:
+        from scripts.run_daily_close_loop import _recommendation_refresh_ready
+
+        report = self._complete_report(date(2026, 8, 21), live_count=10)
+        for status in ("partial", "error"):
+            report.collection_status = status
+            report.akshare_status = "ok"
+            self.assertFalse(_recommendation_refresh_ready(report, live_eligible=True))
+        report.collection_status = "ok"
+        self.assertTrue(_recommendation_refresh_ready(report, live_eligible=True))
+
     # Regression scenario: review snapshot failure marks pipeline partial.
     def test_review_snapshot_failure_marks_pipeline_partial(self) -> None:
         target_date = date(2026, 8, 21)

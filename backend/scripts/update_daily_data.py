@@ -73,6 +73,11 @@ class DailyUpdateReport:
     """Summary of one daily data update run."""
 
     trade_date: str
+    collection_status: str | None = None
+    collection_data_fresh: bool | None = None
+    collection_sources: dict[str, str] = field(default_factory=dict)
+    collection_errors: list[str] = field(default_factory=list)
+    # Retained as compatibility aliases for existing report readers.
     akshare_status: str | None = None
     akshare_data_fresh: bool | None = None
     akshare_source_errors: list[str] = field(default_factory=list)
@@ -160,7 +165,7 @@ def main() -> None:
     parser.add_argument(
         "--skip-import",
         action="store_true",
-        help="Skip AkShare limit-up import and only refresh derived data.",
+        help="Skip preferred-source limit-up import and only refresh derived data.",
     )
     parser.add_argument(
         "--skip-enrichment",
@@ -225,22 +230,28 @@ def run_daily_update(
     # failed provider request must not trigger the same replacement behavior.
     if not skip_import:
         collection = collect_limit_up_events(trade_date.strftime("%Y%m%d"))
+        report.collection_status = collection.status
+        report.collection_data_fresh = collection.data_fresh
+        report.collection_sources = dict(collection.pool_sources)
+        report.collection_errors = list(collection.source_errors)
         report.akshare_status = collection.status
         report.akshare_data_fresh = collection.data_fresh
         report.akshare_source_errors = list(collection.source_errors)
         report.warnings.extend(collection.source_errors)
+        report.warnings.extend(collection.source_warnings)
         imported_events = collection.payload
+        report.hithink_reason_enriched_count = collection.reason_enriched_count
         try:
-            remote_snapshot = (
-                remote_limit_up_collector(trade_date)
-                if remote_limit_up_collector is not None
-                else collect_hithink_limit_up_snapshot(trade_date)
-            )
-            report.hithink_limit_up_count = remote_snapshot.total
-            report.hithink_limit_up_source = remote_snapshot.source
-            imported_events, report.hithink_reason_enriched_count = (
-                merge_limit_up_reasons(imported_events, remote_snapshot)
-            )
+            remote_snapshot = collection.hithink_limit_up_snapshot
+            if remote_limit_up_collector is not None:
+                remote_snapshot = remote_limit_up_collector(trade_date)
+            elif not collection.pool_sources:
+                remote_snapshot = collect_hithink_limit_up_snapshot(trade_date)
+            if remote_snapshot is not None:
+                report.hithink_limit_up_count = remote_snapshot.total
+                report.hithink_limit_up_source = remote_snapshot.source
+                imported_events, enriched_count = merge_limit_up_reasons(imported_events, remote_snapshot)
+                report.hithink_reason_enriched_count += enriched_count
         except Exception as error:  # noqa: BLE001
             report.warnings.append(f"Tonghuashun limit-up verification: {error}")
         if replace_date and collection.status in {"ok", "empty"}:
@@ -256,7 +267,7 @@ def run_daily_update(
             if report.limit_up_count_difference:
                 report.warnings.append(
                     "Limit-up source count mismatch: "
-                    f"AkShare closed={report.closed_limit_events}, "
+                    f"Imported closed={report.closed_limit_events}, "
                     f"Tonghuashun={remote_snapshot.total}."
                 )
 
@@ -357,8 +368,11 @@ def run_daily_update(
     )[:6]
     latest_available_date = max(event.trade_date for event in events)
     is_latest_available_date = trade_date == latest_available_date
+    raw_complete = report.collection_status not in {"partial", "error"}
+    if not raw_complete:
+        report.warnings.append("Incomplete raw pools: target-date prediction snapshots deferred")
     should_persist_live = (
-        is_latest_available_date and persist_live_prediction is not False
+        raw_complete and is_latest_available_date and persist_live_prediction is not False
         and not provenance_errors(base_date=trade_date, data_as_of=trade_date,
                                   created_at=now or datetime.now(CN_TZ), provenance=close_provenance())
     )
@@ -371,6 +385,7 @@ def run_daily_update(
         if item < trade_date
         or (
             item == trade_date
+            and raw_complete
             and not should_persist_live
             and not target_has_live_prediction
         )
@@ -542,12 +557,8 @@ def collect_hithink_limit_up_snapshot(
 ) -> HithinkLimitUpPoolSnapshot:
     """Fetch the complete bounded Tonghuashun limit-up pool for source audit."""
 
-    return HithinkFinanceCollector().collect_limit_up_pool(
+    return HithinkFinanceCollector().collect_all_limit_up_pool(
         trade_date=trade_date,
-        page=1,
-        size=200,
-        sort_field="limit_up_time",
-        sort_direction="asc",
     )
 
 

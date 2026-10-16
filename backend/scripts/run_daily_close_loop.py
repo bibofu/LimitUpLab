@@ -479,9 +479,10 @@ def _incomplete_reasons(
     live_eligible: bool,
 ) -> list[str]:
     reasons: list[str] = []
-    if report.akshare_status in {"partial", "error"}:
-        source_details = "; ".join(report.akshare_source_errors)
-        reason = f"raw limit-up collection is {report.akshare_status}"
+    collection_status = report.collection_status or report.akshare_status
+    if collection_status in {"partial", "error"}:
+        source_details = "; ".join(report.collection_errors or report.akshare_source_errors)
+        reason = f"raw limit-up collection is {collection_status}"
         reasons.append(f"{reason}: {source_details}" if source_details else reason)
     health = report.health
     if not health.get("raw_events_ready"):
@@ -539,6 +540,8 @@ def _recommendation_refresh_ready(
     """Only publish a new recommendation basis after today's close data is ready."""
 
     if not live_eligible:
+        return False
+    if (report.collection_status or report.akshare_status) in {"partial", "error"}:
         return False
     health = report.health
     if not health.get("raw_events_ready") or not health.get(

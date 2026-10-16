@@ -5,9 +5,9 @@ shape. Closed limit-up events are imported first; failed/open-board events are
 then added only when they are not already present for the same date and symbol.
 """
 
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from datetime import date, time
-from math import isnan
+from math import isfinite, isnan
 import os
 from typing import Any, Literal
 
@@ -16,16 +16,21 @@ import akshare as ak
 from app.models import LimitUpEvent
 from app.collectors.network import without_proxy
 from app.collectors.process_timeout import run_in_killable_process
+from app.collectors.hithink_finance_collector import HithinkLimitUpPoolSnapshot
 
 
 @dataclass(frozen=True)
 class LimitUpCollectionResult:
-    """Explicit result for the two-source AKShare limit-up collection."""
+    """Pool completeness plus diagnostics shared by raw and preferred collectors."""
 
     status: Literal["ok", "empty", "partial", "error"]
     data_fresh: bool | None
     source_errors: tuple[str, ...]
     payload: list[LimitUpEvent]
+    pool_sources: dict[str, str] = field(default_factory=dict)
+    source_warnings: tuple[str, ...] = ()
+    hithink_limit_up_snapshot: HithinkLimitUpPoolSnapshot | None = None
+    reason_enriched_count: int = 0
 
 
 def parse_akshare_trade_date(value: str) -> date:
@@ -104,13 +109,17 @@ def _load_pool_frame(pool_name: str, trade_date: str) -> Any:
     )
 
 
-def _collect_closed_limit_up_events(parsed_date: date, trade_date: str) -> list[LimitUpEvent]:
+def _collect_closed_limit_up_events(
+    parsed_date: date, trade_date: str, *, strict: bool = False,
+) -> list[LimitUpEvent]:
     """Collect stocks that closed at limit-up from Eastmoney's limit-up pool."""
 
     frame = _load_pool_frame("stock_zt_pool_em", trade_date)
     events: list[LimitUpEvent] = []
 
     for _, row in frame.iterrows():
+        if strict:
+            _validate_pool_row(row, closed_limit=True)
         break_count = _safe_int(row["炸板次数"])
         events.append(
             LimitUpEvent(
@@ -139,13 +148,17 @@ def _collect_closed_limit_up_events(parsed_date: date, trade_date: str) -> list[
     return events
 
 
-def _collect_failed_limit_up_events(parsed_date: date, trade_date: str) -> list[LimitUpEvent]:
+def _collect_failed_limit_up_events(
+    parsed_date: date, trade_date: str, *, strict: bool = False,
+) -> list[LimitUpEvent]:
     """Collect stocks from Eastmoney's failed/open-board observation pool."""
 
     frame = _load_pool_frame("stock_zt_pool_zbgc_em", trade_date)
     events: list[LimitUpEvent] = []
 
     for _, row in frame.iterrows():
+        if strict:
+            _validate_pool_row(row, closed_limit=False)
         break_count = _safe_int(row["炸板次数"])
         first_limit_time = _parse_hhmmss(row["首次封板时间"])
         events.append(
@@ -175,6 +188,30 @@ def _collect_failed_limit_up_events(parsed_date: date, trade_date: str) -> list[
         )
 
     return events
+
+
+def _validate_pool_row(row: Any, *, closed_limit: bool) -> None:
+    """Reject missing scoring inputs before legacy numeric defaults can hide them."""
+
+    symbol = str(row.get("代码", ""))
+    if len(symbol) != 6 or not symbol.isascii() or not symbol.isdigit():
+        raise ValueError("invalid Eastmoney pool symbol")
+    for key in ("名称", "所属行业"):
+        if str(row.get(key, "")).strip().lower() in {"", "none", "nan", "<na>"}:
+            raise ValueError(f"{symbol}: missing {key}")
+    for key in ("首次封板时间", "最后封板时间") if closed_limit else ("首次封板时间",):
+        if _parse_hhmmss(row.get(key)) == time(0, 0):
+            raise ValueError(f"{symbol}: missing or invalid {key}")
+    for key in ("炸板次数", "成交额", "换手率", "连板数") if closed_limit else (
+        "炸板次数", "成交额", "换手率",
+    ):
+        value = float(row.get(key))
+        if not isfinite(value) or value < 0:
+            raise ValueError(f"{symbol}: missing or invalid {key}")
+        if key in {"炸板次数", "连板数"} and not value.is_integer():
+            raise ValueError(f"{symbol}: non-integer {key}")
+        if key == "连板数" and value < 1:
+            raise ValueError(f"{symbol}: invalid board height")
 
 
 def _parse_hhmmss(value: Any) -> time:

@@ -1,4 +1,4 @@
-"""Import real limit-up events from AKShare into the local SQLite database."""
+"""Import preferred-source events; retain the legacy filename for existing jobs."""
 
 import argparse
 import sys
@@ -13,10 +13,10 @@ from app.repositories import SQLiteLimitUpRepository
 
 
 def main() -> None:
-    """Parse CLI options, collect AKShare events, and upsert them into SQLite."""
+    """Collect THS pools with Eastmoney supplements/fallback and upsert SQLite."""
 
     parser = argparse.ArgumentParser(
-        description="Import A-share limit-up events from AKShare into SQLite.",
+        description="Import A-share limit-up events with Tonghuashun preferred.",
     )
     parser.add_argument("--date", required=True, help="Trading date in YYYYMMDD format.")
     parser.add_argument(
@@ -43,7 +43,8 @@ def main() -> None:
         f"({closed_count} closed, {failed_count} failed) "
         f"for {args.date} into {get_database_path()}"
     )
-    for source_error in collection.source_errors:
+    print(f"Pool sources: {collection.pool_sources}")
+    for source_error in (*collection.source_errors, *collection.source_warnings):
         print(f"Warning: {source_error}")
 
 

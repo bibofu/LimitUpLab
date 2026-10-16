@@ -367,6 +367,52 @@ class DailyUpdatePipelineTest(unittest.TestCase):
         finally:
             self._cleanup_database(database_path)
 
+    @patch("scripts.update_daily_data.collect_limit_up_events")
+    @patch("scripts.update_daily_data.collect_hithink_limit_up_snapshot")
+    def test_preferred_collection_reuses_snapshot_and_defers_incomplete_predictions(
+        self, remote_probe, collect_events,
+    ) -> None:
+        database_path = self._database_path()
+        trade_date = date(2026, 8, 21)
+        event = self._make_event("002491", "通鼎互联", trade_date)
+        snapshot = HithinkLimitUpPoolSnapshot(
+            trade_date=trade_date, page=1, page_size=200, total=1, items=[],
+        )
+        sources = {"closed_limit_pool": "hithink-finance+akshare-eastmoney.fields"}
+        try:
+            limit_repo = SQLiteLimitUpRepository(database_path=database_path, seed_if_empty=False)
+            first_repo = SQLiteFirstBoardRepository(database_path=database_path)
+            kwargs = dict(
+                trade_date=trade_date, top_targets=1, max_tracked_kline_fetches=0,
+                max_post_limit_kline_fetches=0, refresh_enrichment=False,
+                limit_up_repository=limit_repo, first_board_repository=first_repo,
+                post_bar_collector=lambda *_args: [], replace_date=True,
+                now=datetime(2026, 8, 21, 8, 10, tzinfo=timezone.utc),
+            )
+            for status in ("partial", "error"):
+                collect_events.return_value = LimitUpCollectionResult(
+                    status=status, data_fresh=True, source_errors=("missing supplement",),
+                    payload=[event], pool_sources=sources,
+                    hithink_limit_up_snapshot=snapshot, reason_enriched_count=1,
+                )
+                report = run_daily_update(**kwargs)
+                self.assertEqual(report.collection_status, status)
+                self.assertEqual(report.collection_sources, sources)
+                self.assertEqual(report.hithink_limit_up_count, 1)
+                self.assertEqual(report.hithink_reason_enriched_count, 1)
+                self.assertEqual(first_repo.list_predictions_between(trade_date, trade_date), [])
+                self.assertIsNone(first_repo.get_live_prediction_snapshot(trade_date))
+            collect_events.return_value = LimitUpCollectionResult(
+                status="ok", data_fresh=True, source_errors=(), payload=[event],
+                pool_sources=sources, hithink_limit_up_snapshot=snapshot,
+            )
+            report = run_daily_update(**kwargs)
+            self.assertEqual(report.persisted_live_predictions, 1)
+            self.assertIsNotNone(first_repo.get_live_prediction_snapshot(trade_date))
+            remote_probe.assert_not_called()
+        finally:
+            self._cleanup_database(database_path)
+
     # Regression scenario: post bar collection includes as of date.
     @patch("scripts.update_daily_data.collect_stock_kline")
     def test_post_bar_collection_includes_as_of_date(self, collect_kline) -> None:

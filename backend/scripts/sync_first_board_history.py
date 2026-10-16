@@ -1,7 +1,7 @@
 ﻿"""Build local first-board history tables for scoring and backtesting.
 
 The script can either derive features from already-local limit-up events or
-fetch recent Eastmoney/AKShare limit-up pools before deriving features.
+fetch recent Tonghuashun-preferred limit-up pools before deriving features.
 """
 
 import argparse
@@ -53,7 +53,7 @@ def main() -> None:
     parser.add_argument(
         "--skip-existing",
         action="store_true",
-        help="Skip AKShare fetches for dates that already exist locally.",
+        help="Skip preferred-source pool fetches for dates that already exist locally.",
     )
     parser.add_argument(
         "--with-kline",
@@ -159,7 +159,7 @@ def _fetch_recent_limit_up_events(
         trade_date_text = current_date.strftime("%Y%m%d")
         try:
             collection = collect_limit_up_events(trade_date_text)
-        except Exception as error:  # AKShare raises provider-specific exceptions.
+        except Exception as error:  # Providers raise source-specific exceptions.
             print(f"Skipped {trade_date_text}: {error}")
             continue
 
@@ -182,6 +182,9 @@ def _fetch_recent_limit_up_events(
             else ""
         )
         print(f"Imported {len(events)} events for {trade_date_text}{suffix}")
+        print(f"Pool sources: {collection.pool_sources}")
+        for warning in collection.source_warnings:
+            print(f"Warning: {warning}")
 
         if len(set(imported_dates)) >= days:
             break

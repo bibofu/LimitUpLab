@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import json
+import math
 import os
 import shutil
 import subprocess
@@ -213,6 +214,30 @@ class HithinkLimitUpPoolSnapshot:
     page_size: int
     total: int
     items: list[HithinkLimitUpFact]
+    source: str = HITHINK_SOURCE
+
+
+@dataclass(frozen=True)
+class HithinkLimitBreakFact:
+    """One stock which hit limit-up and subsequently opened its board."""
+
+    symbol: str
+    thscode: str
+    name: str
+    break_count: int | None
+    amount: float | None
+    turnover_rate: float | None
+
+
+@dataclass(frozen=True)
+class HithinkLimitBreakPoolSnapshot:
+    """Normalized page or complete Tonghuashun limit-break pool."""
+
+    trade_date: date | None
+    page: int
+    page_size: int
+    total: int
+    items: list[HithinkLimitBreakFact]
     source: str = HITHINK_SOURCE
 
 
@@ -646,21 +671,7 @@ class HithinkFinanceCollector:
         data = _dict(envelope.get("data"))
         rows = _list(data.get("item"))
         items = [
-            HithinkLimitUpFact(
-                symbol=_symbol(row),
-                thscode=str(row.get("thscode") or ""),
-                name=str(row.get("name") or ""),
-                is_st=bool(row.get("is_st")),
-                is_new=bool(row.get("is_new")),
-                last_price=_number(row.get("last_price")),
-                change_pct=_number(row.get("price_change_ratio_pct")),
-                limit_up_time=_text(row.get("limit_up_time")),
-                limit_up_reason=_text(row.get("limit_up_reason")),
-                board_height=_integer(row.get("continue_day_cnt")) or 1,
-                board_height_text=_text(row.get("continue_day_text")),
-                seal_amount=_number(row.get("seal_money")),
-                max_seal_amount=_number(row.get("max_seal_money")),
-            )
+            _limit_up_fact(row)
             for row in rows
             if _symbol(row)
         ]
@@ -672,6 +683,84 @@ class HithinkFinanceCollector:
             total=_integer(pagination.get("total")) or len(items),
             items=items,
         )
+
+    def collect_limit_break_pool(
+        self, *, trade_date: date | None = None, page: int = 1, size: int = 100,
+    ) -> HithinkLimitBreakPoolSnapshot:
+        """Return one normalized limit-break pool page."""
+
+        page, size = max(1, page), max(1, min(size, 200))
+        arguments = ["special", "limit-break-pool", "--page", str(page), "--size", str(size)]
+        if trade_date is not None:
+            arguments.extend(["--date-ms", str(_shanghai_midnight_ms(trade_date))])
+        data = _dict(self._invoke(*arguments).get("data"))
+        items = [_limit_break_fact(row) for row in _list(data.get("item")) if _symbol(row)]
+        pagination = _dict(data.get("pagination"))
+        return HithinkLimitBreakPoolSnapshot(
+            trade_date=trade_date, page=_integer(pagination.get("page")) or page,
+            page_size=_integer(pagination.get("size")) or size,
+            total=_integer(pagination.get("total")) or len(items), items=items,
+        )
+
+    def collect_all_limit_up_pool(self, *, trade_date: date) -> HithinkLimitUpPoolSnapshot:
+        """Require a complete, internally consistent pool before returning rows."""
+
+        rows = self._collect_all_event_rows("limit-up-pool", trade_date)
+        return HithinkLimitUpPoolSnapshot(
+            trade_date=trade_date, page=1, page_size=200, total=len(rows),
+            items=[_limit_up_fact(row) for row in rows],
+        )
+
+    def collect_all_limit_break_pool(self, *, trade_date: date) -> HithinkLimitBreakPoolSnapshot:
+        """Require a complete, internally consistent limit-break pool."""
+
+        rows = self._collect_all_event_rows("limit-break-pool", trade_date)
+        return HithinkLimitBreakPoolSnapshot(
+            trade_date=trade_date, page=1, page_size=200, total=len(rows),
+            items=[_limit_break_fact(row) for row in rows],
+        )
+
+    def _collect_all_event_rows(self, pool: str, trade_date: date) -> list[dict[str, Any]]:
+        """Reject partial/malformed snapshots so the caller can use another source."""
+
+        rows: list[dict[str, Any]] = []
+        seen: set[str] = set()
+        expected_total: int | None = None
+        page_size = 200
+        for page in range(1, 51):  # A bounded 10,000-row ceiling exceeds the A-share universe.
+            envelope = self._invoke(
+                "special", pool, "--date-ms", str(_shanghai_midnight_ms(trade_date)),
+                "--page", str(page), "--size", str(page_size),
+                "--sort-field", "limit_up_time" if pool == "limit-up-pool" else "open_times",
+                "--sort-dir", "asc",
+            )
+            data = _dict(envelope.get("data"))
+            pagination = _dict(data.get("pagination"))
+            total = _pool_integer(pagination.get("total"))
+            if (
+                _pool_integer(pagination.get("page")) != page
+                or _pool_integer(pagination.get("size")) != page_size
+                or total is None or not 0 <= total <= 10_000
+                or (expected_total is not None and total != expected_total)
+                or _dict(envelope.get("meta")).get("truncated") is True
+            ):
+                raise HithinkFinanceError(f"{pool}: invalid or inconsistent pagination")
+            expected_total = total
+            # timestamp is the readiness timestamp, not the requested trading day.
+            if data.get("trade_date") is not None and _date(data["trade_date"]) != trade_date:
+                raise HithinkFinanceError(f"{pool}: unexpected trade date")
+            page_rows = data.get("item")
+            if not isinstance(page_rows, list) or len(page_rows) != min(page_size, total - len(rows)):
+                raise HithinkFinanceError(f"{pool}: incomplete or oversized page {page}")
+            for row in page_rows:
+                symbol = _validate_event_row(row, require_height=pool == "limit-up-pool")
+                if symbol in seen:
+                    raise HithinkFinanceError(f"{pool}: duplicate symbol {symbol}")
+                seen.add(symbol)
+                rows.append(row)
+            if len(rows) == total:
+                return rows
+        raise HithinkFinanceError(f"{pool}: pagination exceeded the safety limit")
 
     def _invoke(self, *arguments: str) -> dict[str, Any]:
         """Run one CLI command and require a successful JSON envelope."""
@@ -710,6 +799,66 @@ class HithinkFinanceCollector:
                 retryable=bool(error_payload.get("retryable")),
             )
         return envelope
+
+
+def _limit_up_fact(row: dict[str, Any]) -> HithinkLimitUpFact:
+    return HithinkLimitUpFact(
+        symbol=_symbol(row), thscode=str(row.get("thscode") or ""),
+        name=str(row.get("name") or ""), is_st=bool(row.get("is_st")),
+        is_new=bool(row.get("is_new")), last_price=_number(row.get("last_price")),
+        change_pct=_number(row.get("price_change_ratio_pct")),
+        limit_up_time=_text(row.get("limit_up_time")),
+        limit_up_reason=_text(row.get("limit_up_reason")),
+        board_height=_integer(row.get("continue_day_cnt")) or 1,
+        board_height_text=_text(row.get("continue_day_text")),
+        seal_amount=_number(row.get("seal_money")),
+        max_seal_amount=_number(row.get("max_seal_money")),
+    )
+
+
+def _limit_break_fact(row: dict[str, Any]) -> HithinkLimitBreakFact:
+    return HithinkLimitBreakFact(
+        symbol=_symbol(row), thscode=str(row.get("thscode") or ""),
+        name=str(row.get("name") or ""), break_count=_integer(row.get("open_times")),
+        amount=_number(row.get("turnover")), turnover_rate=_number(row.get("turnover_ratio_pct")),
+    )
+
+
+def _pool_integer(value: object) -> int | None:
+    """Do not coerce booleans or fractional pagination/count values into integers."""
+
+    if isinstance(value, int) and not isinstance(value, bool):
+        return value
+    if isinstance(value, str) and value.isascii() and value.isdecimal():
+        return int(value)
+    return None
+
+
+def _validate_event_row(row: object, *, require_height: bool) -> str:
+    if not isinstance(row, dict):
+        raise HithinkFinanceError("event pool: non-object row")
+    symbol = _symbol(row)
+    ticker, thscode = row.get("ticker"), row.get("thscode")
+    if (
+        not symbol or not symbol.isascii()
+        or (ticker is not None and str(ticker).strip() != symbol)
+        or (thscode is not None and thscode not in {f"{symbol}.SH", f"{symbol}.SZ", f"{symbol}.BJ"})
+        or not isinstance(row.get("name"), str) or not row["name"].strip()
+    ):
+        raise HithinkFinanceError("event pool: invalid stock identity or missing name")
+    if require_height and (_pool_integer(row.get("continue_day_cnt")) or 0) < 1:
+        raise HithinkFinanceError("event pool: missing or invalid board height")
+    if not require_height and row.get("open_times") is not None:
+        count = _pool_integer(row["open_times"])
+        if count is None or count < 0:
+            raise HithinkFinanceError("event pool: invalid break count")
+    for field in ("last_price", "price_change_ratio_pct", "seal_money", "max_seal_money", "turnover", "turnover_ratio_pct"):
+        value = row.get(field)
+        if value is not None:
+            number = _number(value)
+            if isinstance(value, bool) or number is None or not math.isfinite(number):
+                raise HithinkFinanceError(f"event pool: invalid numeric field {field}")
+    return symbol
 
 
 def _market_snapshot_from_data(data: dict[str, Any]) -> HithinkMarketSnapshot:
