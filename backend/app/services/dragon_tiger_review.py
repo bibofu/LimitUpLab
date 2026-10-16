@@ -10,7 +10,9 @@ from time import monotonic
 from app.collectors.hithink_finance_collector import (
     HithinkDragonTigerFact,
     HithinkDragonTigerSnapshot,
-    HithinkFinanceCollector,
+)
+from app.collectors.first_board_enrichment_collector import (
+    collect_preferred_dragon_tiger_snapshot,
 )
 from app.models import (
     DragonTigerReviewItem,
@@ -51,7 +53,7 @@ def load_dragon_tiger_review(
         if cached is not None and now - cached[0] < _CACHE_TTL_SECONDS:
             response = cached[1]
         else:
-            snapshot = HithinkFinanceCollector().collect_dragon_tiger(
+            snapshot = collect_preferred_dragon_tiger_snapshot(
                 trade_date=trade_date,
                 board_type="all",
                 limit=200,

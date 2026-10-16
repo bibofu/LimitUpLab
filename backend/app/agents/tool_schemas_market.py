@@ -154,7 +154,8 @@ MARKET_TOOL_SCHEMAS = [
         collection="items",
         notes="Captured current ranking, not a historical ranking.",
         description=(
-            "查询同花顺当前热股榜和热度排名变化。适合回答市场关注度、热门股票、"
+            "优先查询同花顺当前热股榜，日榜不可用时回退东方财富当前榜并标明来源。"
+            "适合回答市场关注度、热门股票、"
             "某只股票当前人气排名等问题；榜单热度不代表投资价值。"
         ),
         args_schema={
@@ -170,7 +171,10 @@ MARKET_TOOL_SCHEMAS = [
                     "type": "string",
                     "enum": ["auto", "tonghuashun", "eastmoney"],
                     "description": (
-                        "auto uses Tonghuashun up to Top30 and Eastmoney for Top31-100."
+                        "auto prefers Tonghuashun for every requested size; "
+                        "if its day ranking is unavailable, falls back to the "
+                        "Eastmoney current ranking without mixing provider ranks. "
+                        "A short Tonghuashun ranking is returned as incomplete."
                     ),
                 },
                 "enrich_performance": {
@@ -180,7 +184,7 @@ MARKET_TOOL_SCHEMAS = [
             },
             "required": [],
         },
-        returns="Tonghuashun hot-stock rank, heat, rank change and capture time.",
+        returns="Provider-labeled popularity rank, available heat/rank change and capture time.",
     ),
     AgentToolSchema(
         name="dragon_tiger_list",
@@ -188,7 +192,8 @@ MARKET_TOOL_SCHEMAS = [
         dates=("trade_date",),
         collection="items",
         description=(
-            "查询同花顺龙虎榜，可按交易日、机构/游资榜类型和股票名称或代码过滤，"
+            "优先查询同花顺龙虎榜；明确交易日的全部榜不可用时回退东方财富。"
+            "可按交易日、机构/游资榜类型和股票名称或代码过滤，"
             "返回买卖额、净买额、机构净买、游资净买、热度排名和相关题材。默认返回完整榜单，"
             "询问龙虎榜情况时不要自行填写 limit；不同 range_days 必须保留，不按股票代码去重。"
         ),

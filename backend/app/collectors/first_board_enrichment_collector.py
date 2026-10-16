@@ -13,7 +13,11 @@ import requests
 from app.collectors.network import without_proxy
 
 if TYPE_CHECKING:
-    from app.collectors.hithink_finance_collector import HithinkDragonTigerFact
+    from app.collectors.hithink_finance_collector import (
+        HithinkDragonTigerFact,
+        HithinkDragonTigerSnapshot,
+        HithinkFinanceCollector,
+    )
 
 
 @dataclass(frozen=True)
@@ -28,6 +32,8 @@ class DragonTigerFact:
     reason: str | None
     source: str = "eastmoney"
     hot_rank: int | None = None
+    name: str = ""
+    change_pct: float | None = None
 
 
 @dataclass(frozen=True)
@@ -119,12 +125,79 @@ def collect_preferred_popularity() -> dict[str, PopularityFact]:
     return collect_eastmoney_popularity()
 
 
+def collect_preferred_dragon_tiger_snapshot(
+    *,
+    trade_date: date | None = None,
+    board_type: str = "all",
+    query: str | None = None,
+    limit: int | None = None,
+    collector: HithinkFinanceCollector | None = None,
+) -> HithinkDragonTigerSnapshot:
+    """Fall back only when the requested dated all-board query is equivalent."""
+
+    from app.collectors.hithink_finance_collector import (
+        HithinkDragonTigerFact,
+        HithinkDragonTigerSnapshot,
+        HithinkFinanceCollector,
+    )
+
+    try:
+        snapshot = (collector or HithinkFinanceCollector()).collect_dragon_tiger(
+            trade_date=trade_date, board_type=board_type, query=query, limit=limit,
+        )
+        if trade_date and snapshot.trade_date != trade_date:
+            raise ValueError("Dragon-Tiger response date does not match the request")
+        return snapshot
+    except Exception:  # noqa: BLE001
+        if trade_date is None or board_type != "all":
+            raise
+
+    frame = _fetch_eastmoney_dragon_tiger_frame(trade_date)
+    normalized_query = (query or "").strip().lower()
+    items: list[HithinkDragonTigerFact] = []
+    symbols: set[str] = set()
+    for row in frame.to_dict("records"):
+        raw_symbol = str(row.get("代码") or "").strip()
+        if not raw_symbol or not raw_symbol.isascii() or not raw_symbol.isdigit() or len(raw_symbol) > 6:
+            continue
+        symbol = raw_symbol.zfill(6)
+        if symbol == "000000":
+            continue
+        symbols.add(symbol)
+        name = _optional_text(row.get("名称")) or ""
+        if normalized_query and normalized_query not in symbol and normalized_query not in name.lower():
+            continue
+        items.append(HithinkDragonTigerFact(
+            symbol=symbol,
+            thscode="",  # The fallback does not return a canonical THS identifier.
+            name=name,
+            change_pct=_optional_float(row.get("涨跌幅")),
+            buy_amount=_optional_float(row.get("龙虎榜买入额")),
+            sell_amount=_optional_float(row.get("龙虎榜卖出额")),
+            net_buy_amount=_optional_float(row.get("龙虎榜净买额")),
+            net_rate=None,
+            organization_net_buy_amount=None,
+            hot_money_net_buy_amount=None,
+            hot_rank=None,
+            range_days=None,
+            limit_reason=_optional_text(row.get("上榜原因")),
+            concepts=[],
+        ))
+    return HithinkDragonTigerSnapshot(
+        trade_date=trade_date,
+        board_type="all",
+        stock_count=len(symbols),
+        items=items if limit is None else items[:max(1, limit)],
+        source="eastmoney",
+        matched_count=len(items),
+        source_truncated=limit is not None and len(items) > max(1, limit),
+    )
+
+
 def collect_dragon_tiger_facts(trade_date: date) -> dict[str, DragonTigerFact]:
     """Collect representative Dragon-Tiger List rows for one trading day."""
 
-    value = trade_date.strftime("%Y%m%d")
-    with without_proxy():
-        frame = ak.stock_lhb_detail_em(start_date=value, end_date=value)
+    frame = _fetch_eastmoney_dragon_tiger_frame(trade_date)
     if frame.empty:
         return {}
 
@@ -140,8 +213,16 @@ def collect_dragon_tiger_facts(trade_date: date) -> dict[str, DragonTigerFact]:
             net_buy_amount=_optional_float(representative.get("龙虎榜净买额")),
             float_market_cap=_optional_float(representative.get("流通市值")),
             reason=_optional_text(representative.get("上榜原因")),
+            name=_optional_text(representative.get("名称")) or "",
+            change_pct=_optional_float(representative.get("涨跌幅")),
         )
     return facts
+
+
+def _fetch_eastmoney_dragon_tiger_frame(trade_date: date) -> pd.DataFrame:
+    value = trade_date.strftime("%Y%m%d")
+    with without_proxy():
+        return ak.stock_lhb_detail_em(start_date=value, end_date=value)
 
 
 def collect_eastmoney_popularity() -> dict[str, PopularityFact]:
@@ -173,7 +254,11 @@ def collect_eastmoney_hot_stock_ranking(
     """Collect a named, current Eastmoney popularity ranking up to Top100."""
 
     captured_at, rows = _fetch_eastmoney_popularity_rows()
-    names = name_resolver()
+    try:
+        names = name_resolver()
+    except Exception:  # noqa: BLE001
+        # A missing primary-provider directory must not disable the fallback.
+        names = {}
     items: list[PopularityRankingItem] = []
     for row in rows:
         raw_symbol = str(row.get("sc") or "")

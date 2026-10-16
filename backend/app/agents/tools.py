@@ -34,6 +34,9 @@ from app.collectors import (
     collect_limit_down_pool,
     collect_market_index_trends,
 )
+from app.collectors.first_board_enrichment_collector import (
+    collect_preferred_dragon_tiger_snapshot,
+)
 from app.models import (
     AgentEvaluationResponse,
     DailyBoardPromotionStat,
@@ -446,18 +449,23 @@ class AgentToolRegistry:
 
         requested_limit = max(1, min(limit, 100))
         normalized_source = source if source in {"auto", "tonghuashun", "eastmoney"} else "auto"
-        use_eastmoney = normalized_source == "eastmoney" or (
-            normalized_source == "auto" and requested_limit > 30
-        )
-        if use_eastmoney:
+        snapshot = None
+        if normalized_source != "eastmoney":
+            try:
+                snapshot = self.hithink_collector.collect_hot_stocks(
+                    period=period,
+                    limit=requested_limit,
+                )
+            except Exception:  # noqa: BLE001
+                if normalized_source != "auto" or period != "day":
+                    raise
+        if normalized_source == "eastmoney" or (
+            normalized_source == "auto" and period == "day"
+            and (snapshot is None or not snapshot.items)
+        ):
             snapshot = collect_eastmoney_hot_stock_ranking(
                 limit=requested_limit,
                 name_resolver=self.hithink_collector.collect_a_share_symbol_names,
-            )
-        else:
-            snapshot = self.hithink_collector.collect_hot_stocks(
-                period=period,
-                limit=min(requested_limit, 30),
             )
         quote_facts: dict[str, Any] = {}
         quote_captured_at: datetime | None = None
@@ -538,13 +546,14 @@ class AgentToolRegistry:
         query: str | None = None,
         limit: int | None = None,
     ) -> ToolResult:
-        """Return bounded Tonghuashun Dragon-Tiger capital-flow facts."""
+        """Return THS-first Dragon-Tiger facts with a dated all-board fallback."""
 
-        snapshot = self.hithink_collector.collect_dragon_tiger(
+        snapshot = collect_preferred_dragon_tiger_snapshot(
             trade_date=trade_date,
             board_type=board_type,
             query=query,
             limit=limit,
+            collector=self.hithink_collector,
         )
         items = [asdict(item) for item in snapshot.items]
         payload = {
@@ -571,7 +580,9 @@ class AgentToolRegistry:
             },
             output=payload,
             summary=(
-                f"{payload['trade_date'] or '最新'} 同花顺龙虎榜命中 {len(items)} 条"
+                f"{payload['trade_date'] or '最新'} "
+                f"{'东方财富' if snapshot.source == 'eastmoney' else '同花顺'}"
+                f"龙虎榜命中 {len(items)} 条"
                 f"{f'：{names}' if names else '。'}"
             ),
             trace_output=payload,
