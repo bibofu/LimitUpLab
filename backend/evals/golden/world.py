@@ -508,9 +508,13 @@ class FrozenRegistry:
             target, board_type, stock_count, rows if limit is None else rows[:limit],
             source=SOURCE, matched_count=len(rows), source_truncated=limit is not None and len(rows) > limit)
         facade = SimpleNamespace(hithink_collector=SimpleNamespace(collect_dragon_tiger=lambda **_: snapshot))
+        # Serialize the frozen snapshot at its actual date. Passing the user's
+        # date here could activate the production provider fallback before the
+        # deliberately stale evidence reaches ToolGateway's date validation.
         raw = AgentToolRegistry.dragon_tiger_list(
-            facade, trade_date=trade_date, board_type=board_type, query=query, limit=limit)
-        return self._result(raw.name, raw.input, raw.output, "items", not rows)
+            facade, trade_date=target, board_type=board_type, query=query, limit=limit)
+        arguments = {**raw.input, "trade_date": trade_date.isoformat() if trade_date else None}
+        return self._result(raw.name, arguments, raw.output, "items", not rows)
 
     def stock_activity(self, symbol: str, days: int = 7, news_limit: int = 8) -> ToolResult:
         symbol, name = self.resolve_stock_identity(symbol)

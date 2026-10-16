@@ -50,6 +50,18 @@ def test_explicit_rank_then_filter_is_complete_only_within_that_scope():
         render_answer(final(root), store)
 
 
+def test_omitted_limit_does_not_turn_truncated_source_into_an_explicit_rank_scope():
+    payload, args = source_fixture()
+    store = EvidenceStore()
+    root = store.add(tool="limit_up_events", payload=payload, state="ok", arguments=args)
+    selected = store.compute(Compute(evidence_id=root, sort_by="amount"))
+    assert len(store.get(selected)["rows"]) == len(payload["events"])
+    assert store.get(selected)["source_truncated"]
+    assert store.complete_rank_scope(selected) is None
+    with pytest.raises(ValueError, match="Truncated"):
+        render_answer(final(selected), store)
+
+
 @pytest.mark.parametrize("direction", ["asc", "desc"])
 def test_offset_and_ties_preserve_production_symbol_tie_breaker(direction):
     payload, args = source_fixture(direction=direction)

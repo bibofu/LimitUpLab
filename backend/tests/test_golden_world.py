@@ -423,6 +423,24 @@ def test_added_dated_tools_never_relabel_stale_sources(name):
         execute(registry("stale"), name, trade_date="2026-09-22")
 
 
+@pytest.mark.parametrize("board_type", ["all", "org", "hot_money"])
+@pytest.mark.parametrize("requested", [None, date(2026, 9, 22)])
+def test_stale_dragon_tiger_fixture_keeps_request_and_evidence_dates_offline(monkeypatch, board_type, requested):
+    from app.collectors import first_board_enrichment_collector
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("Frozen evidence must not invoke a production fallback")
+
+    monkeypatch.setattr(first_board_enrichment_collector, "_fetch_eastmoney_dragon_tiger_frame", forbidden)
+    result = registry("stale").dragon_tiger_list(trade_date=requested, board_type=board_type)
+    assert result.input["trade_date"] == (requested.isoformat() if requested else None)
+    assert result.input["board_type"] == board_type
+    assert result.output["trade_date"] == "2026-09-21"
+    assert result.output["source"] == SOURCE
+    assert result.output["data_fresh"] is False
+    assert result.output["items"] and result.result_status == "partial"
+
+
 def test_web_and_activity_injection_stays_in_untrusted_source_fields():
     _, web, _ = execute(registry("injection"), "web_search", query="华岳科技 股票")
     assert "SYNTHETIC_INJECTION_CANARY" in web["results"][0]["snippet"]

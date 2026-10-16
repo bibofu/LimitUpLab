@@ -73,7 +73,8 @@ class Compute(StrictModel):
     sort_by: str | None = None
     descending: bool = True
     offset: int = Field(default=0, ge=0)
-    limit: int = Field(default=20, ge=1, le=100)
+    limit: int | None = Field(default=None, ge=1, le=100,
+        description="Omit or null to retain the full computed evidence. Set a limit only for an explicit requested row/rank window; evidence previews are independently paginated.")
     group_by: str | None = None
     metric: str | None = None
     aggregate: Literal["count", "sum", "mean", "min", "max"] = "count"
@@ -83,5 +84,5 @@ CONTROL_MODELS = {
     "update_task": (UpdateTask, "维护多项交付清单，不执行数据查询。不允许删除用户要求。"),
     "finish": (Finish, "提交最终中文回答、任务状态、可选证据ID和未完成要求；只能单独调用，等待数据返回后使用。"),
     "read_evidence": (ReadEvidence, "展开本次会话已返回的证据；支持offset分页，不能猜证据ID。"),
-    "compute_result": (Compute, "对证据rows确定性筛选、排序、名次切片、交并差集或分组聚合。offset=3,limit=3取第4至6名。字段必须来自实际rows。集合按key去重，重复成员保留左侧首条记录，不合并两侧指标；来源缺失、截断及历史引用标记沿计算链保留。"),
+    "compute_result": (Compute, "对证据rows确定性筛选、排序、名次切片、交并差集或分组聚合。省略limit或设null保留完整计算结果，预览分页不裁剪证据；只为明确数量或排名窗口设置limit，offset=3,limit=3取第4至6名。字段必须来自实际rows。集合按key去重，重复成员保留左侧首条记录，不合并两侧指标；来源缺失、截断及历史引用标记沿计算链保留。"),
 }

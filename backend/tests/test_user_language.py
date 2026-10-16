@@ -1,10 +1,9 @@
 """Field names stay internal across prose, streaming, and evidence tables."""
-from types import SimpleNamespace
-
 import pytest
 
 from app.agents.user_language import PublicTextStream, field_names, field_mentions, validate_public_text
 from app.agents.react_runtime.contracts import Finish
+from app.agents.react_runtime.evidence import EvidenceStore
 from app.agents.react_runtime.rendering import render_answer
 
 
@@ -44,17 +43,15 @@ def test_candidate_requires_readable_chinese_before_final_delivery():
 
 
 def test_table_keeps_exact_evidence_field_and_value_but_requires_readable_title():
-    record = {"result_state": "ok", "rows": [{"break_count": 0, "next_open_pct": None}]}
-    store = SimpleNamespace(get=lambda _: record, scope_of=lambda _: "current_run")
-    # Use the canonical scope value, independent of the test's prose labels.
-    from app.agents.react_runtime.evidence import CURRENT_SCOPE
-    store.scope_of = lambda _: CURRENT_SCOPE
+    store = EvidenceStore()
+    evidence_id = store.add(tool="limit_up_events", state="ok", arguments={}, payload={
+        "events": [{"break_count": 0, "next_open_pct": None}]})
     final = Finish(status="complete", answer="{{evidence_table}}", table={
-        "evidence_id": "e1", "columns": [{"field": "break_count", "label": "break_count"}]})
+        "evidence_id": evidence_id, "columns": [{"field": "break_count", "label": "break_count"}]})
     with pytest.raises(ValueError, match="labels"):
         render_answer(final, store)
     final.table.columns[0].label = "炸板次数"
     assert "| 0 |" in render_answer(final, store)
     final.table.columns[0].field = "next_open_pct"
     final.table.columns[0].label = "次日开盘涨幅"
-    assert "| 缺失 |" in render_answer(final, store)
+    assert "| 数据未成功获取 |" in render_answer(final, store)

@@ -255,7 +255,7 @@ class EvidenceStore:
             if (rank_scope is None and prefix and not source.get("data_missing")
                     and not spec.filters and spec.sort_by == prefix["sort_by"]
                     and spec.descending == prefix["descending"]
-                    and spec.offset + spec.limit <= len(rows)):
+                    and spec.limit is not None and spec.offset + spec.limit <= len(rows)):
                 rank_scope = {"source_evidence_id": spec.evidence_id, **prefix,
                               "offset": spec.offset, "limit": spec.limit}
         if spec.operation in {"intersection", "difference", "union"}:
@@ -311,7 +311,10 @@ class EvidenceStore:
                 raise ValueError(f"Sort field missing: {spec.sort_by}")
             rows.sort(key=lambda row: row[spec.sort_by], reverse=spec.descending)
         total = len(rows)
-        selected = rows[spec.offset:spec.offset + spec.limit]
+        # Provider previews are paginated by view(); never silently discard
+        # evidence merely because the model omitted a final row window.
+        effective_limit = spec.limit if spec.limit is not None else max(0, total - spec.offset)
+        selected = rows[spec.offset:spec.offset + effective_limit]
         derived_state = "partial" if any(p.get("source_truncated") or p["result_state"] == "partial" for p in parents) else "ok" if selected else "empty"
         missing = []
         for parent in parents:
