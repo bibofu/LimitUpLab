@@ -14,7 +14,7 @@ from app.agents.react_runtime.rendering import render_answer
 from app.agents.react_runtime.runtime import Run
 from app.agents.react_runtime.task_contract import TaskInterpretation, validate_delivery
 from app.agents.tools import TOOL_SCHEMAS
-from app.collectors.hithink_finance_collector import HithinkHotStockFact
+from app.collectors.hithink_finance_collector import HithinkHotStockFact, HithinkLimitUpFact
 from app.models import AgentChatRequest, FirstBoardRating, LimitUpEvent, MarketIndexTrendItem, StockKLineBar
 from app.services.prompt_security import review_input
 
@@ -80,7 +80,8 @@ def test_review_schema_offers_trusted_raw_field_enum_instead_of_unbounded_string
 
 def test_catalog_fields_are_scalars_in_the_declared_production_models():
     models = {model.__name__: model for model in
-              (LimitUpEvent, FirstBoardRating, MarketIndexTrendItem, StockKLineBar, HithinkHotStockFact)}
+              (LimitUpEvent, FirstBoardRating, MarketIndexTrendItem, StockKLineBar, HithinkHotStockFact,
+               HithinkLimitUpFact)}
     for key, entry in DISPLAY_FIELD_CATALOG.items():
         declaration = TypeAdapter(models[entry["model"]]).json_schema()["properties"][key]
         types = {item.get("type") for item in declaration.get("anyOf", [declaration])}
@@ -164,12 +165,13 @@ def test_unresolved_field_contract_does_not_create_missing_evidence_fields():
 
 
 @pytest.mark.parametrize("unbound", [None, "板数", "not_a_real_field", "symbol"])
-def test_mapping_preserves_unbound_third_request_without_locking_valid_prefix(unbound):
+def test_mapping_preserves_known_columns_and_unbound_third_request(unbound):
     mappings = [{"requested": "代码", "field": "symbol"}, {"requested": "名称", "field": "name"},
                 {"requested": "板数", "field": unbound}]
     assessment = review_input(Reviewer(mappings=mappings), message=TASK, timeout_seconds=10)
     assert assessment.current_task == TASK
-    assert assessment.output_contract.fields == []
+    assert assessment.output_contract.fields == ["symbol", "name", "unavailable_requested_3"]
+    assert assessment.output_contract.unavailable_fields == {"unavailable_requested_3": "板数"}
     assert [item.model_dump() for item in assessment.output_contract.field_requests] == mappings
     audit = assessment.output_contract.field_resolution
     assert audit.status == "unresolved" and audit.proposed_fields == ["symbol", "name", unbound]

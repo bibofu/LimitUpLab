@@ -66,6 +66,13 @@ class OutputContract(BaseModel):
         description="A table is a deliverable for THIS turn, not merely a preference for future answers.")
     row_selection: RowSelection | None = Field(default=None, description=ROW_SELECTION_DESCRIPTION)
 
+    @property
+    def unavailable_fields(self):
+        """Unbound requested columns have identities, never invented evidence values."""
+        return {field: item.requested
+                for index, (field, item) in enumerate(zip(self.fields, self.field_requests), start=1)
+                if field == f"unavailable_requested_{index}"}
+
     @model_validator(mode="before")
     @classmethod
     def read_previous_contract(cls, value):
@@ -98,7 +105,18 @@ class OutputContract(BaseModel):
             reason, status = "saved_proposal_is_not_a_binding", "unresolved"
         else:
             reason, status = "all_requested_fields_bound", "resolved"
-        self.fields = list(proposed) if status == "resolved" else []
+        if self.field_requests:
+            # One unsupported column must not erase the remaining column contract.
+            # Reserved identities are presentation slots, not provider row keys.
+            seen = set()
+            self.fields = []
+            for index, item in enumerate(self.field_requests, start=1):
+                field = item.field
+                self.fields.append(field if field in DISPLAY_FIELD_CATALOG and field not in seen
+                                   else f"unavailable_requested_{index}")
+                seen.add(field)
+        else:
+            self.fields = list(proposed) if status == "resolved" else []
         self.field_resolution = FieldResolution(status=status, proposed_fields=proposed, reason=reason)
         return self
 
@@ -160,6 +178,10 @@ def validate_delivery(final, interpretation, store=None):
         )
         if not matches:
             raise ValueError(f"Table fields must match the requested order exactly: {contract.fields}; got {actual}")
+        for column in final.table.columns:
+            label = contract.unavailable_fields.get(column.field)
+            if label is not None and column.label != label[:40]:
+                raise ValueError("Unavailable columns must preserve their original requested labels")
     if contract.table_required and final.status == "complete" and final.table is None:
         raise ValueError("The current task requires an evidence table; a prose summary cannot complete it")
     if contract.mode == "table_only" and final.status == "complete" and final.table is not None:

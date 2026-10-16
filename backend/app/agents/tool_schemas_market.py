@@ -152,11 +152,17 @@ MARKET_TOOL_SCHEMAS = [
         name="hot_stock_ranking",
         time_mode="current",
         collection="items",
-        notes="Captured current ranking, not a historical ranking.",
+        notes=(
+            "Captured current ranking, not a historical ranking. Provider rank_change has an "
+            "unconfirmed comparison time; neither rank_change nor rank_trend can substitute "
+            "for previous_trade_day_rank_change."
+        ),
         description=(
             "优先查询同花顺当前热股榜，日榜不可用时回退东方财富当前榜并标明来源。"
             "适合回答市场关注度、热门股票、"
             "某只股票当前人气排名等问题；榜单热度不代表投资价值。"
+            "rank_change和rank_trend沿用来源变化口径，不能视为相较上一交易日变化；"
+            "未查询历史基准时previous_trade_day_rank_change为null。"
         ),
         args_schema={
             "type": "object",
@@ -184,7 +190,11 @@ MARKET_TOOL_SCHEMAS = [
             },
             "required": [],
         },
-        returns="Provider-labeled popularity rank, available heat/rank change and capture time.",
+        returns=(
+            "Provider-labeled current popularity rank, available heat/source-defined rank_change "
+            "and capture time; null previous_trade_day_rank/previous_trade_day_rank_change "
+            "with explicit metric definitions when the historical baseline was not obtained."
+        ),
     ),
     AgentToolSchema(
         name="dragon_tiger_list",

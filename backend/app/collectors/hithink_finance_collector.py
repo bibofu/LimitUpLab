@@ -45,6 +45,8 @@ class HithinkHotStockFact:
     heat: int | None
     rank_change: int | None
     rank_trend: str | None
+    previous_trade_day_rank: int | None = None
+    previous_trade_day_rank_change: int | None = None
 
 
 @dataclass(frozen=True)

@@ -43,10 +43,20 @@ DISPLAY_FIELD_CATALOG.update({
         "heat": "所选数据源返回的人气热度值，不是价格或收益；源未提供时为缺失",
         "rank_change": "所选数据源返回的人气排名变化值，沿用来源的比较时点和符号口径；不是股价涨跌幅",
         "rank_trend": "所选数据源返回的人气排名趋势，up上升、down下降、flat持平；不是股价走势",
+        "previous_trade_day_rank": "上一交易日的人气排名；只有实际取得该交易日同来源榜单才有值，当前快照无法证明时必须缺失",
+        "previous_trade_day_rank_change": "相较上一交易日的人气排名变化；必须有同来源上一交易日基准，不等于来源自带且比较时点不明的rank_change，未知时为缺失而非0",
     }.items()
 })
 for key in ("symbol", "name"):
     DISPLAY_FIELD_CATALOG[key]["tools"].append("hot_stock_ranking")
+
+DISPLAY_FIELD_CATALOG.update({
+    key: {"meaning": meaning, "model": "HithinkLimitUpFact", "tools": ["remote_limit_up_pool"]}
+    for key, meaning in {
+        "seal_amount": "封单金额，元；不是当日成交额amount，缺失时不得用成交额代替",
+        "limit_up_reason": "来源提供的涨停原因；不是行业industry或概念标签concept，缺失时不得用行业/题材冒充原因",
+    }.items()
+})
 
 DISPLAY_FIELD_CATALOG.update({
     key: {"meaning": meaning, "model": "StockKLineBar", "tools": ["stock_kline"]}

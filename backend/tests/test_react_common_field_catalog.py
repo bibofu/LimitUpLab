@@ -120,5 +120,5 @@ def test_unknown_requested_metric_remains_unresolved_after_catalog_expansion():
     task = review_input(Reviewer([("name", "名称"), (None, "未定义的自创收益")]),
                         message="只列名称和未定义的自创收益。", timeout_seconds=5)
     assert task.output_contract.field_resolution.status == "unresolved"
-    assert task.output_contract.fields == []
+    assert task.output_contract.fields == ["name", "unavailable_requested_2"]
     assert task.output_contract.field_requests[-1].field is None

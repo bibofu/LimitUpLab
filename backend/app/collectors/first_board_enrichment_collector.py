@@ -279,8 +279,9 @@ def collect_eastmoney_hot_stock_ranking(
                 heat=None,
                 rank_change=rank_change,
                 rank_trend=(
-                    "up" if rank_change and rank_change > 0
-                    else "down" if rank_change and rank_change < 0
+                    None if rank_change is None
+                    else "up" if rank_change > 0
+                    else "down" if rank_change < 0
                     else "flat"
                 ),
             )

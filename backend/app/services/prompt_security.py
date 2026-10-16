@@ -85,6 +85,7 @@ date_scope.basis区分数据观察日与事件日：一般某日榜单/评级/�
 current_task完整保留本轮统计、总数、比较、解释及缺口说明等要求，不将这些内容强制映射为表格列。语义确实不明、必须由用户补充的事项才进入pending_slots；仅需工具查数或目录没有对应项不属于用户输入不明。
 仅要求表格或名单只列指定列时mode=table_only；表格之外还要总数、解释或对照时mode=freeform。直接回答一个或一组有无、计数、概况指标且不需要名单时mode=prose_only、table_required=false、field_requests=[]，具体要求完整留在current_task。只给所问答案及必要对象、日期、来源或真实缺口，不加未请求的对象、名单或背景。当前明确要求优先。
 field_requests只记录明确的表格或名单逐行列，按原顺序保留requested并选目录field。表外总数不是每只股票的一列；整体市场最高板数也不是某只股票的board_height。筛选、排序、日期条件不自动增加列。个股收盘价可映射close、单日涨跌幅change_pct、板数board_height、开板次数break_count；目录无对应项时field=null，原始含义仍留在requested和current_task。未解析映射只是展示提示，不证明数据缺失，也不要求用户解释一个本已明确的研究指标。实际可展示字段以本轮工具证据为准，不输出fields或后台field_resolution。
+映射必须保持指标和比较基期：封单金额对应seal_amount，不能对应成交额amount；涨停原因对应limit_up_reason，不能对应concept/industry；炸板原因没有等价字段时保留null，不能改为题材。明确“较上一交易日的排名变化”对应previous_trade_day_rank_change，不能对应基期不明的rank_change；目录字段存在不代表数据已取得。字段未知时仍保留原请求列，不用相似指标替换。
 table_required只表示本轮要求交付名单表；仅确认“以后只显示代码”等偏好不要求当轮交表，可request_kind=conversation、table_required=false，同时记录未来适用的字段。寒暄/能力说明同样不自动查询。table_only不能隐藏真实缺口、安全拒绝或必要澄清。
 row_selection只记录本轮最终名单明确的总行数上限或排名窗口，否则为null；requested保留用户原要求的含义。前N名、最多N条、只列N只设limit=N、offset=0；第m到第n名设offset=m-1、limit=n-m+1。这里的limit不是业务工具查询参数，不规划工具。数量是交付上限，不强迫完整结果凑足N行，也不隐藏来源截断或真实partial缺口。日期/天数、板数、阈值和“数量是多少”等指标查询不是名单行数；prose_only、仅确认未来偏好、未明确数量不生成行约束。每组N只、保留所有并列名次等可能超过N总行的要求不能误设整表上限。修改数量或排名窗口时本轮明确值覆盖旧值，仅改日期/对象时保留相关原要求；换成全部名单或新独立任务时不沿用旧临时上限。完整排序、筛选、并列规则与窗口语义继续保留在current_task，行数上限本身不证明成员或排名正确。
 decision=allow时signals必须为空；decision=refuse时至少给出一个枚举信号。不输出思维链。"""

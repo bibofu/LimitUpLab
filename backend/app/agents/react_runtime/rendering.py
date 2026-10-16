@@ -85,6 +85,11 @@ def render_answer(final, store, output_contract=None):
     lines = ["| " + " | ".join(cell(c.label) for c in columns) + " |",
              "| " + " | ".join("---" for _ in columns) + " |"]
     requested_fields = set(output_contract.fields) if output_contract else set()
+    unavailable = output_contract.unavailable_fields if output_contract else {}
+    if any(column.field in unavailable for column in columns) and (
+        final.status != "partial" or not final.missing
+    ):
+        raise ValueError("Unbound requested columns require partial with an explicit missing explanation")
     aliases = presentation_aliases(record, store)
     missing_fields = set(DISPLAY_FIELD_CATALOG) | requested_fields | set(aliases.values())
     for row in rows:
@@ -96,7 +101,7 @@ def render_answer(final, store, output_contract=None):
             field not in missing_fields for field in absent
         )):
             raise ValueError("Table field missing; use exact evidence row fields, or retain requested missing columns with partial and an explicit missing explanation")
-        lines.append("| " + " | ".join(cell(row.get(field), field=c.field,
+        lines.append("| " + " | ".join(cell(None if c.field in unavailable else row.get(field), field=c.field,
             missing_label="数据未成功获取") for c, field in zip(columns, fields)) + " |")
     answer = "\n\n".join(part for part in (before, "\n".join(lines), after) if part)
     if len(answer) > 60000:

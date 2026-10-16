@@ -486,6 +486,12 @@ class AgentToolRegistry:
             quote = quote_facts.get(item.symbol)
             serialized.update(
                 {
+                    # A source's intraday/current change is not a comparison
+                    # against the previous trading day's matching snapshot.
+                    # Keep real source zeros; expose the unqueried baseline
+                    # separately so it can never be rendered as a zero change.
+                    "previous_trade_day_rank": None,
+                    "previous_trade_day_rank_change": None,
                     "last_price": quote.last_price if quote else None,
                     "change_pct": quote.change_pct if quote else None,
                     "turnover_yi": (
@@ -513,6 +519,29 @@ class AgentToolRegistry:
             "data_fresh": age_seconds <= 900,
             "age_seconds": age_seconds,
             "period": getattr(snapshot, "period", "current"),
+            "rank_change_reference": "provider_defined",
+            "rank_change_comparison_date": None,
+            "previous_trade_day": None,
+            "metric_definitions": {
+                "rank_change": (
+                    "来源直接返回的排名变化，比较时点和日期未确认；"
+                    "保留来源的真实0，但不能解释为相较上一交易日持平。"
+                ),
+                "rank_trend": (
+                    "来源变化口径下的排名趋势；比较时点未确认，不能用于判断相较上一交易日升降。"
+                ),
+                "previous_trade_day_rank": (
+                    "同一来源上一交易日的可比排名；本工具仅查询当前快照，未获取该基准。"
+                ),
+                "previous_trade_day_rank_change": (
+                    "同一来源上一交易日排名减去当前排名；"
+                    "没有取得上一交易日可比排名时为null，不得用rank_change替代或填0。"
+                ),
+            },
+            "field_availability": {
+                "previous_trade_day_rank": "数据未成功获取：未取得上一交易日可比排名",
+                "previous_trade_day_rank_change": "数据未成功获取：缺少上一交易日排名基准",
+            },
             "requested_count": requested_limit,
             "count": len(items),
             "complete": len(items) >= requested_limit,
@@ -608,7 +637,7 @@ class AgentToolRegistry:
             sort_direction="asc",
         )
         normalized_query = (query or "").strip().lower()
-        items = [
+        filtered = [
             item
             for item in snapshot.items
             if (board_height is None or item.board_height == board_height)
@@ -620,13 +649,20 @@ class AgentToolRegistry:
                 or normalized_query in item.name.lower()
                 or normalized_query in (item.limit_up_reason or "").lower()
             )
-        ][: max(1, min(limit, 100))]
+        ]
+        items = filtered[: max(1, min(limit, 100))]
         serialized = [asdict(item) for item in items]
+        upstream_complete = snapshot.page == 1 and snapshot.total <= len(snapshot.items)
+        matched_count = len(filtered) if upstream_complete else None
+        source_truncated = not upstream_complete or len(items) < len(filtered)
         payload = {
             "source": snapshot.source,
             "trade_date": snapshot.trade_date.isoformat() if snapshot.trade_date else None,
             "upstream_total": snapshot.total,
-            "matched_count": len(serialized),
+            "matched_count": matched_count,
+            "returned_count": len(serialized),
+            "source_truncated": source_truncated,
+            "complete": not source_truncated,
             "board_height": board_height,
             "items": serialized,
         }
@@ -635,6 +671,11 @@ class AgentToolRegistry:
             for item in items[:5]
         )
         board_text = f"{board_height}板" if board_height else "涨停"
+        match_summary = (
+            f"{board_text}筛选共匹配 {matched_count} 只"
+            if matched_count is not None
+            else f"已返回页内{board_text}筛选匹配 {len(filtered)} 只，完整匹配总数未获取"
+        )
         return ToolResult(
             name="remote_limit_up_pool",
             input={
@@ -646,8 +687,9 @@ class AgentToolRegistry:
                 "limit": limit,
             },
             output=payload,
+            result_status="partial" if source_truncated else "ok" if items else "empty",
             summary=(
-                f"同花顺{board_text}池共 {snapshot.total} 只，筛选后 {len(items)} 只"
+                f"同花顺涨停池上游共 {snapshot.total} 只，{match_summary}；本次返回 {len(items)} 只"
                 f"{f'：{names}' if names else '。'}"
             ),
             trace_output=payload,
