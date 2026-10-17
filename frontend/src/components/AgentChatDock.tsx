@@ -541,13 +541,7 @@ export function AgentChatDock({
 
   const activeSession = sessions.find((item) => item.session_id === sessionId);
   const latestAgentMessage = [...messages].reverse().find((item) => item.role === "agent");
-  const promptSuggestions = latestAgentMessage?.suggestedQuestions?.length
-    ? latestAgentMessage.suggestedQuestions
-    : [
-        "总结今天的市场情况",
-        "今天哪些股票首板涨停",
-        "最近有哪些财经新闻",
-      ];
+  const promptSuggestions = latestAgentMessage?.suggestedQuestions ?? [];
 
   return (
     <div className="agent-chat-dock">
@@ -708,7 +702,7 @@ export function AgentChatDock({
           {sessionId && messages.length === 0 && !sending && !sessionLoading && !sessionError && !error ? (
             <div className="chat-state" role="status" aria-label="新会话提示">
               <strong>开始一段研究对话</strong>
-              <p>可以输入问题，或选择下方示例问题。</p>
+              <p>在下方输入问题，开始研究。</p>
             </div>
           ) : null}
           {messages.map((item) => (
@@ -765,7 +759,7 @@ export function AgentChatDock({
           </button>
         ) : null}
 
-        <div className="agent-chat-prompts">
+        {promptSuggestions.length > 0 ? <div className="agent-chat-prompts">
           {promptSuggestions.slice(0, 3).map((prompt) => (
             <button
               disabled={sending || sessionLoading || !sessionId}
@@ -776,7 +770,7 @@ export function AgentChatDock({
               {prompt}
             </button>
           ))}
-        </div>
+        </div> : null}
 
         <form
           className="agent-chat-input"
@@ -803,7 +797,7 @@ export function AgentChatDock({
                 void sendMessage();
               }
             }}
-            placeholder="问今日涨停情况、个股详情"
+            placeholder="问今日市场情况、个股详情等"
           />
           {sending && activeRunId ? (
             <button className="chat-cancel" type="button" disabled={cancelRequested} onClick={() => void cancelCurrentRun()}>

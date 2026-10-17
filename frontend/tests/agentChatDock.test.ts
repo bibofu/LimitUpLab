@@ -184,6 +184,8 @@ test("verified empty conversations show a restrained invitation and accept input
   assert.equal(app.has(node => node.props["aria-label"] === "新会话提示"), false);
   await app.settle();
   assert.equal(app.has(node => node.type === "strong" && node.props.children === "开始一段研究对话"), true);
+  assert.equal(app.has(node => node.props.className === "agent-chat-prompts"), false);
+  assert.equal(app.input().placeholder, "问今日市场情况、个股详情等");
   assert.equal(app.input().disabled, false);
   app.type("研究最近的首板结构");
   assert.equal(app.find(node => node.props["aria-label"] === "发送问题").disabled, false);
@@ -406,13 +408,18 @@ test("suggested questions keep an unsent draft and failed sidebar refresh keeps 
       if (++reads > 1) throw new Error("会话列表暂不可用");
       return { sessions: [session("a")] };
     },
+    fetchChatSession: async (id: string) => ({ ...session(id), messages: [{
+      message_id: "old-message", role: "assistant", content: "已验证的历史回答", status: "success",
+      metadata: { suggested_questions: ["这个结果有哪些数据缺口？"] },
+    }] }),
     streamAgentChatMessage: async (payload: any) => { requests.push(payload); return final; },
   });
   await app.settle();
   app.type("另一个尚未发送的问题");
-  app.find(node => node.type === "button" && node.props.children === "总结今天的市场情况").onClick();
+  app.find(node => node.type === "button" && node.props.children === "这个结果有哪些数据缺口？").onClick();
   await app.settle();
-  assert.equal(requests[0].message, "总结今天的市场情况");
+  assert.equal(requests[0].message, "这个结果有哪些数据缺口？");
+  assert.equal(app.has(node => node.props.className === "agent-chat-prompts"), false);
   assert.equal(app.input().value, "另一个尚未发送的问题");
   assert.equal(app.has(node => node.props.content === "研究回答"), true);
   assert.equal(app.has(node => node.type === "button" && Array.isArray(node.props.children) && node.props.children.includes("重试上一个问题")), false);
