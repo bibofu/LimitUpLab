@@ -28,6 +28,7 @@ import {
 import { AgentChatDock } from "./components/AgentChatDock";
 import { Panel } from "./components/Panel";
 import { PremarketPage } from "./pages/PremarketPage";
+import { QualityReviewPage } from "./pages/QualityReviewPage";
 import { recommendationIntelligenceFor, useRecommendationIntelligence } from "./hooks/useRecommendationIntelligence";
 import { refreshReviewFacts } from "./hooks/useReviewReport";
 import { refreshRecommendationSnapshots, useMarketSummary } from "./hooks/useMarketSummary";
@@ -129,6 +130,7 @@ const primaryNavigation = [
 ];
 
 const agentWorkspaceHiddenPaths = new Set([
+  "/admin/quality",
   "/stocks/first-board",
   "/stocks/continued-board",
   "/stocks/failed",
@@ -144,7 +146,7 @@ export function App() {
   const activeView = routeToView[location.pathname] ?? "overview";
   const isStockDetail = location.pathname.startsWith("/stocks/")
     && !stockListPaths.has(location.pathname);
-  const isOverview = activeView === "overview" && !isStockDetail;
+  const isOverview = activeView === "overview" && !isStockDetail && location.pathname !== "/admin/quality";
   // Load only visible sections and the local dates required by review/detail.
   const enabled = {
     firstBoard: ["pool", "first", "review"].includes(activeView) && !isStockDetail,
@@ -219,6 +221,7 @@ export function App() {
         </nav>
 
         <div className="app-header-actions">
+          <Link to="/admin/quality">质量审核</Link>
           <div className="data-as-of">
             <i aria-hidden="true" />
             <span>
@@ -247,7 +250,7 @@ export function App() {
         </section>
       ) : null}
 
-      {activeView === "overview" && !isStockDetail ? (
+      {isOverview ? (
         <MarketSnapshot resource={summary} />
       ) : null}
 
@@ -258,6 +261,7 @@ export function App() {
       ) : null}
 
       <Routes>
+        <Route path="/admin/quality" element={<QualityReviewPage />} />
         <Route path="/" element={null} />
         <Route
           path="/recommendations"

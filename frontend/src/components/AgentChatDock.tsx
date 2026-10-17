@@ -178,6 +178,7 @@ export function AgentChatDock({
   const failedRequest = useRef<AgentChatRequest | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [cancelRequested, setCancelRequested] = useState(false);
+  const userCancelledRun = useRef<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [revealingMessageId, setRevealingMessageId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
@@ -429,6 +430,7 @@ export function AgentChatDock({
 
   async function cancelCurrentRun() {
     if (!activeRunId || cancelRequested) return;
+    userCancelledRun.current = activeRunId;
     setCancelRequested(true);
     try {
       await cancelAgentChatRun(activeRunId);
@@ -482,10 +484,15 @@ export function AgentChatDock({
     setActiveRunId(null);
     setCancelRequested(false);
     const agentMessageId = `agent-${userMessageId}`;
+    userCancelledRun.current = null;
+    let submittedRunId: string | null = null;
     setMessages(current => current.filter(item => item.id !== agentMessageId));
     try {
       const response = await streamAgentChatMessage(payload, event => {
-        if (event.event === "accepted") setActiveRunId(event.data.run_id);
+        if (event.event === "accepted") {
+          submittedRunId = event.data.run_id;
+          setActiveRunId(event.data.run_id);
+        }
         if (event.event === "progress") {
           setStreamStage(event.data.stage);
           setStreamStatus(event.data.message);
@@ -517,6 +524,9 @@ export function AgentChatDock({
         retry: initializeChatSessions,
       }));
     } catch (caught) {
+      if (submittedRunId && userCancelledRun.current !== submittedRunId) {
+        void qualityApi.delivery(submittedRunId, "interrupted", null).catch(() => {});
+      }
       const errorMessage = caught instanceof Error ? caught.message : "Agent 回答失败";
       setError(errorMessage);
       setFailedPrompt(trimmed);

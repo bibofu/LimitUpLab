@@ -15,12 +15,17 @@ test("quality transport scopes credentials to stable encoded run IDs and writes 
   await client.feedback("run/a", quality.emptyFeedback());
   await client.session("session/a");
   await client.delivery("run/a", "displayed", "digest");
+  const restored = { vote: "down" as const, reasons: ["incomplete" as const], comment: "补充原因", run_id: "run/a", owner_id: "owner", created_at: "server-time" };
+  await client.feedback("run/a", restored);
+  await client.delivery("active/run", "interrupted", null);
   assert.equal(calls[0].url, "/api/agents/chat/runs/run%2Fa/feedback");
   assert.equal(calls[0].init.credentials, "include");
   assert.equal(calls[0].init.method, "PUT");
   assert.deepEqual(JSON.parse(calls[0].init.body as string), { vote: null, reasons: [], comment: "" });
   assert.equal(calls[1].url, "/api/agents/chat/sessions/session%2Fa/quality");
   assert.deepEqual(JSON.parse(calls[2].init.body as string), { event: "displayed", answer_hash: "digest" });
+  assert.deepEqual(JSON.parse(calls[3].init.body as string), { vote: "down", reasons: ["incomplete"], comment: "补充原因" }, "server-owned feedback metadata must never be echoed into the strict write contract");
+  assert.deepEqual(JSON.parse(calls[4].init.body as string), { event: "interrupted", answer_hash: null });
 });
 
 test("answer fingerprints preserve UTF-8 content and whitespace", async () => {

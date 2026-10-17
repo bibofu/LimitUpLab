@@ -46,8 +46,13 @@ export function createQualityClient(request: QualityRequest) {
     session: (id: string, signal?: AbortSignal) => request<SessionQuality>(
       `/api/agents/chat/sessions/${encodeURIComponent(id)}/quality`, { signal }),
     feedback: (id: string, value: AnswerFeedbackValue) => request<{ feedback: AnswerFeedbackValue }>(
-      `${runPath(id)}/feedback`, { method: "PUT", headers: { "Content-Type": "application/json" }, body: JSON.stringify(value) }),
-    delivery: (id: string, event: "received" | "displayed" | "interrupted", hash: string) => request<unknown>(
-      `${runPath(id)}/delivery`, { method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event, answer_hash: hash }) }),
+      `${runPath(id)}/feedback`, { method: "PUT", headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ vote: value.vote, reasons: value.reasons, comment: value.comment }) }),
+    delivery: (id: string, ...receipt: [event: "received" | "displayed", hash: string] | [event: "interrupted", hash: string | null]) => {
+      const [event, hash] = receipt;
+      return request<unknown>(`${runPath(id)}/delivery`, {
+        method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ event, answer_hash: hash }),
+      });
+    },
   };
 }

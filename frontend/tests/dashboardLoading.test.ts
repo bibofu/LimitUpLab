@@ -73,6 +73,7 @@ function renderApp(path: string, states: unknown[], overrides: Record<string, un
     "./components/ReviewDashboard": review,
     "./components/StockResearchPanels": stockResearch,
     "./pages/PremarketPage": premarket,
+    "./pages/QualityReviewPage": { QualityReviewPage: () => createElement("section", null, "回答质量审核") },
     "./hooks/useRecommendationIntelligence": recommendationIntelligence,
     "./hooks/useReviewReport": reviewReport,
     "./components/MarketKLineChart": {},
@@ -106,6 +107,7 @@ test("routes activate only their visible resources and necessary date dependenci
   const routes: [string, boolean[]][] = [
     ["/", [true, false, false, false, false, false, false]],
     ["/recommendations", [false, false, false, false, false, false, false]],
+    ["/admin/quality", [false, false, false, false, false, false, false]],
     ["/stocks/limit-up-pool", [false, true, true, true, true, false, false]],
     ["/stocks/first-board", [false, true, false, false, false, true, false]],
     ["/stocks/continued-board", [false, false, true, false, false, false, false]],
