@@ -221,7 +221,6 @@ export function App() {
         </nav>
 
         <div className="app-header-actions">
-          <Link to="/admin/quality">质量审核</Link>
           <div className="data-as-of">
             <i aria-hidden="true" />
             <span>
