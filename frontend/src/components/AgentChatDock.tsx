@@ -807,7 +807,7 @@ export function AgentChatDock({
                 void sendMessage();
               }
             }}
-            placeholder={symbol ? "问当前股票评分、风险或走势" : "问今日涨停、评分或风险"}
+            placeholder="问今日涨停、个股详情"
           />
           {sending && activeRunId ? (
             <button className="chat-cancel" type="button" disabled={cancelRequested} onClick={() => void cancelCurrentRun()}>
