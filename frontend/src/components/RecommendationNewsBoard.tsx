@@ -21,15 +21,14 @@ interface RecommendationNewsViewItem {
  * Show paginated research news with its fetch state and source links.
  */
 export function RecommendationNewsBoard() {
-  const [mode, setMode] = useState<"latest" | "history">("history");
   const [page, setPage] = useState(1);
-  const { news, loading, error, reload, waitingTooLong } = useFinanceNews(page, mode);
+  const { news, loading, error, reload, waitingTooLong } = useFinanceNews(page, "history");
   const refreshError = error || news?.refresh_error;
   const updating = !refreshError && !waitingTooLong && (loading || news?.refreshing);
 
   useEffect(() => {
-    if (mode === "history" && news && !loading && news.page !== page) setPage(news.page);
-  }, [news, loading, page, mode]);
+    if (news && !loading && news.page !== page) setPage(news.page);
+  }, [news, loading, page]);
 
   const visibleNews = useMemo(
     () => (news?.items ?? []).map(marketNewsViewItem),
@@ -45,10 +44,8 @@ export function RecommendationNewsBoard() {
           <span>
             <strong>实时新闻</strong>
             <small>
-              {mode === "latest"
-                ? news ? `最近一批快讯 · ${news.sources.join(" · ")} · 展示 ${visibleNews.length} 条` : "最近一批快讯"
-                : news ? `近 24 小时（以来源抓取为截止） · ${news.sources.join(" · ")} · 共 ${news.total} 条`
-                  : "近 24 小时（以来源抓取为截止）"}
+              {news ? `近 24 小时（以来源抓取为截止） · ${news.sources.join(" · ")} · 共 ${news.total} 条`
+                : "近 24 小时（以来源抓取为截止）"}
             </small>
           </span>
         </div>
@@ -56,15 +53,9 @@ export function RecommendationNewsBoard() {
           来源抓取：{news ? formatSnapshotTime(news.fetched_at) : "—"}
         </span>
       </header>
-      <div className="recommendation-news-navigation">
-        <span>{mode === "latest" ? "最新快讯" : "近 24 小时新闻"}</span>
-        <button type="button" onClick={() => { setMode(mode === "latest" ? "history" : "latest"); setPage(1); }}>
-          {mode === "latest" ? "查看近24小时新闻" : "查看最新快讯"}
-        </button>
-      </div>
       {!news && !refreshError ? (
         <div className="recommendation-news-state" role="status">
-          {mode === "latest" ? "正在获取最新快讯" : "正在获取近24小时新闻"}
+          正在获取近24小时新闻
         </div>
       ) : null}
       {refreshError ? (
@@ -81,7 +72,7 @@ export function RecommendationNewsBoard() {
       ) : null}
       {news && visibleNews.length === 0 ? (
         <div className="recommendation-news-state">
-          {mode === "latest" ? "该次抓取没有最新快讯。" : "该次抓取的近 24 小时范围内没有市场快讯。"}
+          该次抓取的近 24 小时范围内没有市场快讯。
         </div>
       ) : null}
       {visibleNews.length > 0 ? (
@@ -100,7 +91,7 @@ export function RecommendationNewsBoard() {
           ))}
         </div>
       ) : null}
-      {mode === "history" && news && news.total_pages > 1 ? (
+      {news && news.total_pages > 1 ? (
         <footer className="recommendation-news-pagination" aria-label="市场快讯分页">
           <span>第 {news.page} / {news.total_pages} 页</span>
           <div>

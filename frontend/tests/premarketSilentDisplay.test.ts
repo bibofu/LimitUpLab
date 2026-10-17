@@ -73,7 +73,8 @@ test("24-hour news keeps source cutoff and content visible while describing the 
   assert.ok(ready.includes("来源抓取：2026-10-12 18:30:00（上海时间）"));
   assert.ok(ready.includes("近 24 小时（以来源抓取为截止）"));
   assert.ok(ready.includes("共 1 条"));
-  assert.ok(ready.includes("查看最新快讯"));
+  assert.ok(!ready.includes("查看最新快讯"));
+  assert.ok(!ready.includes("recommendation-news-navigation"));
   assert.ok(!ready.includes("最近一批快讯"));
   assert.ok(ready.includes("已保存的市场快讯"));
 });
@@ -113,7 +114,7 @@ test("server refresh failures and bounded polling keep old news with retry feedb
   assert.ok(waiting.retry);
 });
 
-test("the news board starts with 24-hour pagination and keeps the optional latest batch independent", () => {
+test("the news board keeps every page in the 24-hour feed without a latest-batch switch", () => {
   const slots: unknown[] = [];
   let cursor = 0;
   const requests: [number, string][] = [];
@@ -159,16 +160,13 @@ test("the news board starts with 24-hour pagination and keeps the optional lates
   buttons.get("上一页")!();
   html = renderBoard();
   assert.ok(html.includes("历史第2页"));
-  buttons.get("查看最新快讯")!();
-  html = renderBoard();
-  assert.ok(html.includes("最新标题"));
-  assert.ok(!html.includes("历史第2页"));
-  assert.ok(!html.includes("市场快讯分页"));
-  buttons.get("查看近24小时新闻")!();
+  assert.equal(buttons.has("查看最新快讯"), false);
+  assert.equal(buttons.has("查看近24小时新闻"), false);
+  buttons.get("1")!();
   html = renderBoard();
   assert.ok(html.includes("历史第1页"));
   assert.ok(html.includes("市场快讯分页"));
-  assert.deepEqual(requests, [[1, "history"], [2, "history"], [3, "history"], [2, "history"], [1, "latest"], [1, "history"]]);
+  assert.deepEqual(requests, [[1, "history"], [2, "history"], [3, "history"], [2, "history"], [1, "history"]]);
 });
 
 test("candidate cards and snapshot dates are identical across cached background reads", () => {

@@ -2829,7 +2829,6 @@ a.entry-card {
   font-size: 13px;
 }
 
-.recommendation-news-navigation,
 .recommendation-news-status {
   display: flex;
   align-items: center;
@@ -2841,7 +2840,6 @@ a.entry-card {
   font-size: 12px;
 }
 
-.recommendation-news-navigation button,
 .recommendation-news-status button {
   border: 1px solid #d0d5dd;
   border-radius: 5px;
