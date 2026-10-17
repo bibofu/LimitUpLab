@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-labelledby="title">
+  <title id="title">LimitUpLab · 五个一字板 · 红色方头</title>
+  <g fill="#C93F3F">
+    <rect x="2.5" y="24.5" width="7" height="3" rx="0.5"/>
+    <rect x="7.5" y="19.5" width="7" height="3" rx="0.5"/>
+    <rect x="12.5" y="14.5" width="7" height="3" rx="0.5"/>
+    <rect x="17.5" y="9.5" width="7" height="3" rx="0.5"/>
+    <rect x="22.5" y="4.5" width="7" height="3" rx="0.5"/>
+  </g>
+</svg>

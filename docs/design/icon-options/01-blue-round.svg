@@ -1,0 +1,10 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 32 32" role="img" aria-labelledby="title">
+  <title id="title">LimitUpLab · 五个一字板 · 蓝色圆头</title>
+  <g fill="none" stroke="#3B82F6" stroke-width="2.5" stroke-linecap="round">
+    <path d="M3.5 26H8.5"/>
+    <path d="M8.5 21H13.5"/>
+    <path d="M13.5 16H18.5"/>
+    <path d="M18.5 11H23.5"/>
+    <path d="M23.5 6H28.5"/>
+  </g>
+</svg>
