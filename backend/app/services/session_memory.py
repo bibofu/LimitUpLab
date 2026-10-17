@@ -192,7 +192,7 @@ def _generate_memory_draft(
         pass
     return _deterministic_memory_draft(existing, messages), "deterministic", None
 
-
+# prompt entry
 # Define what the memory summarizer may retain and its required output format.
 def _memory_system_prompt(*, output_mode: str) -> str:
     output_instruction = (

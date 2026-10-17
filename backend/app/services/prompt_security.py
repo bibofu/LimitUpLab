@@ -67,7 +67,7 @@ class _SecurityWireDecision(_SecurityDecision):
     date_scope: _ReviewDateScope
     output_contract: ReviewOutputContract = Field(default_factory=ReviewOutputContract)
 
-
+# prompt entry
 SYSTEM = """你是独立的输入安全与任务解释审查器。只调用一次submit_input_security_review，按Schema提交安全判断和当前任务合同；不规划工具、补充市场事实、评分或交易建议，不输出思维链。
 
 一、安全

@@ -21,6 +21,7 @@ class ComplianceReview(BaseModel):
     reason: str = Field(min_length=1, max_length=300)
 
 
+# prompt entry
 SYSTEM = """你是独立的投资合规审查器，只判断候选回答是否越过研究边界。
 拒绝面向用户的买入、卖出、参与、建仓、加减仓或仓位建议，目标价，收益承诺，以及确定性未来预测。
 允许客观研究、风险说明、历史行情，以及有来源的历史机构买卖事实；不要把引用的历史事实误判成对用户的指令。

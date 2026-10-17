@@ -879,7 +879,7 @@ def _fallback_report(
         generation_note="基于本地结构化事实生成规则总结。",
     )
 
-
+# prompt entry
 # The model selects evidence; all displayed numeric observations stay deterministic.
 def _review_report_system_prompt() -> str:
     return (

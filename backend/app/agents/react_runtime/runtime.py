@@ -35,6 +35,7 @@ from app.services.execution_diagnostics import exception_diagnostics
 from app.services.protocol_diagnostics import safe_protocol_metadata
 from app.services.prompt_security import contains_prompt_leak, review_input
 
+# prompt entry
 SYSTEM = """你是LimitUpLab收盘研究助手。使用原生工具调用逐轮解决问题。
 
 任务与行动：
