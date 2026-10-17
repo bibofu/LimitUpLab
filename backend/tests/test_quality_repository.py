@@ -7,7 +7,7 @@ import pytest
 from app.agents.react_runtime.lifecycle import Journal
 from app.models import AgentChatRequest
 from app.quality_models import QualityConflict
-from app.quality_schema import answer_hash, enqueue_completed
+from app.quality_schema import DETECTOR_VERSION, answer_hash, enqueue_completed
 from app.repositories.chat_session_repository import SQLiteChatSessionRepository
 from app.repositories.quality_repository import QualityRepository
 
@@ -132,7 +132,7 @@ def test_lease_recovery_stale_workers_and_finite_retries(store):
 def test_signal_dedup_new_detector_and_session_deletion_cascade(store):
     repo, journal, chats = store
     run_id, response = finish(store)
-    signal = {"source": "deterministic", "code": "missing", "severity": "high", "summary": "缺失线索", "evidence": {}, "detector_version": "deterministic-v1"}
+    signal = {"source": "deterministic", "code": "missing", "severity": "high", "summary": "缺失线索", "evidence": {}, "detector_version": DETECTOR_VERSION}
     downvote(repo, run_id)
     job = repo.claim_job("worker")
     repo.complete_job(job, [signal, signal])
@@ -140,9 +140,9 @@ def test_signal_dedup_new_detector_and_session_deletion_cascade(store):
     assert len(repo.case_detail(case_id)["signals"]) == 2
     with repo.connection() as db:
         row = db.execute("SELECT * FROM react_runs WHERE run_id=?", (run_id,)).fetchone()
-        enqueue_completed(db, row, response, "deterministic-v2")
+        enqueue_completed(db, row, response, "deterministic-future")
         db.execute("INSERT INTO quality_trace_snapshots(run_id,stage,captured_at,payload_json) VALUES(?,?,?,?)", (run_id, "model_input", "2026-10-17", '{}'))
-    assert repo.claim_job("new-version")["detector_version"] == "deterministic-v2"
+    assert repo.claim_job("new-version", evaluator_version="deterministic-future")["detector_version"] == "deterministic-future"
     assert chats.delete_session("session", owner_id="owner")
     with journal.connection() as db:
         for table in ("quality_feedback", "quality_delivery", "quality_cases", "quality_signals", "quality_reviews", "quality_jobs", "quality_trace_snapshots"):

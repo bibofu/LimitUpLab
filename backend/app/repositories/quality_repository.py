@@ -3,12 +3,12 @@
 from contextlib import contextmanager
 import json
 from pathlib import Path
-import time
 from uuid import uuid4
 
 from app.database import connect
 from app.quality_models import DeliveryInput, DetectionSignal, FeedbackInput, QualityConflict, ReviewInput
-from app.quality_schema import DETECTOR_VERSION, answer_hash, encode, enqueue_completed, now
+from app.quality_schema import DETECTOR_VERSION, answer_hash, encode, now
+from app.repositories.quality_evaluation_repository import EvaluationRepositoryMixin
 from app.services.quality_trace import scrub_private_data
 
 
@@ -38,7 +38,7 @@ def statuses(row, response, case_status):
     return {"execution_status": execution, "task_status": task_status, "quality_status": quality}
 
 
-class QualityRepository:
+class QualityRepository(EvaluationRepositoryMixin):
     def __init__(self, path=None):
         from app.agents.react_runtime.lifecycle import Journal
         self.path = Path(path) if path else None
@@ -61,7 +61,7 @@ class QualityRepository:
             raise QualityConflict("回答尚未完成，暂不能提交反馈或交付回执")
         return row, json.loads(row["response_json"])
 
-    def _signal(self, db, run_id, response, signal):
+    def _signal(self, db, run_id, response, signal, *, evaluation_key=""):
         signal = DetectionSignal.model_validate(signal).model_dump()
         case = db.execute("SELECT * FROM quality_cases WHERE run_id=?", (run_id,)).fetchone()
         stamp = now()
@@ -77,13 +77,14 @@ class QualityRepository:
         else:
             case_id = case["case_id"]
         inserted = db.execute("""INSERT OR IGNORE INTO quality_signals
-            (signal_id,case_id,source,code,severity,summary,evidence_json,detector_version,answer_hash,created_at)
-            VALUES(?,?,?,?,?,?,?,?,?,?)""", ("sig_" + uuid4().hex, case_id, signal["source"], signal["code"],
+            (signal_id,case_id,source,code,severity,summary,evidence_json,detector_version,answer_hash,created_at,evaluation_key)
+            VALUES(?,?,?,?,?,?,?,?,?,?,?)""", ("sig_" + uuid4().hex, case_id, signal["source"], signal["code"],
             signal["severity"], scrub_private_data(signal["summary"]), encode(scrub_private_data(signal["evidence"])), signal["detector_version"],
-            answer_hash(response), stamp)).rowcount
+            answer_hash(response), stamp, evaluation_key)).rowcount
         if inserted:
             db.execute("UPDATE quality_cases SET updated_at=? WHERE case_id=?", (stamp, case_id))
-            if case and case["status"] == "pending" and SEVERITIES[signal["severity"]] > SEVERITIES[case["severity"]]:
+            reviewed = db.execute("SELECT 1 FROM quality_reviews WHERE case_id=? LIMIT 1", (case_id,)).fetchone()
+            if case and not reviewed and case["status"] == "pending" and SEVERITIES[signal["severity"]] > SEVERITIES[case["severity"]]:
                 db.execute("UPDATE quality_cases SET severity=?,revision=revision+1 WHERE case_id=?", (signal["severity"], case_id))
         return case_id
 
@@ -193,7 +194,14 @@ class QualityRepository:
             feedback = db.execute("SELECT * FROM quality_feedback WHERE run_id=?", (case["run_id"],)).fetchone()
             run["feedback"] = decoded(feedback, ["reasons"]) if feedback else None
             run["delivery_status"] = self._delivery_status(db, case["run_id"], answer_hash(run["response"]))
-            return scrub_private_data({"case": dict(case), "run": run, "trace_snapshots": run.pop("trace_snapshots"),
+            last_review = db.execute("SELECT max(created_at) FROM quality_reviews WHERE case_id=?", (case_id,)).fetchone()[0]
+            new_signals = bool(last_review and db.execute("SELECT 1 FROM quality_signals WHERE case_id=? AND created_at>? LIMIT 1", (case_id, last_review)).fetchone())
+            from app.repositories.quality_evaluation_repository import _unpack
+            evaluations = [_unpack(r) for r in db.execute("SELECT * FROM quality_evaluations WHERE run_id=? ORDER BY started_at DESC LIMIT 20", (case["run_id"],))]
+            evaluation_count = db.execute("SELECT count(*) FROM quality_evaluations WHERE run_id=?", (case["run_id"],)).fetchone()[0]
+            return scrub_private_data({"case": {**dict(case), "has_new_signals_since_review": new_signals},
+                "has_new_signals_since_review": new_signals, "evaluations": {"items": evaluations, "total": evaluation_count},
+                "run": run, "trace_snapshots": run.pop("trace_snapshots"),
                 "signals": [decoded(r, ["evidence"]) for r in db.execute("SELECT * FROM quality_signals WHERE case_id=? ORDER BY created_at", (case_id,))],
                 "reviews": [decoded(r, ["changes"]) for r in db.execute("SELECT * FROM quality_reviews WHERE case_id=? ORDER BY revision", (case_id,))]})
 
@@ -237,68 +245,3 @@ class QualityRepository:
                 VALUES(?,?,?,?,?,?,?,?,?)""", ("review_" + uuid4().hex, case_id, actor_id, row["status"], status,
                 revision, data["note"].strip(), encode(changes), stamp))
         return self.case_detail(case_id)
-
-    def backfill_jobs(self, limit=100):
-        with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
-            rows = db.execute("""SELECT r.* FROM react_runs r WHERE r.response_json IS NOT NULL
-                AND NOT EXISTS(SELECT 1 FROM quality_jobs j WHERE j.run_id=r.run_id AND j.detector_version=?)
-                ORDER BY r.started_at LIMIT ?""", (DETECTOR_VERSION, max(1, min(limit, 1000)))).fetchall()
-            return sum(enqueue_completed(db, row, json.loads(row["response_json"])) for row in rows)
-
-    def claim_job(self, worker_id, lease_seconds=60):
-        with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
-            clock, stamp = time.time(), now()
-            db.execute("""UPDATE quality_jobs SET status='dead',last_error='Worker lease expired after final attempt',updated_at=?
-                WHERE status='running' AND lease_until<=? AND attempts>=max_attempts""", (stamp, clock))
-            job = db.execute("""SELECT * FROM quality_jobs WHERE attempts<max_attempts AND
-                ((status='pending' AND available_at<=?) OR (status='running' AND lease_until<=?))
-                ORDER BY available_at,id LIMIT 1""", (clock, clock)).fetchone()
-            if job is None:
-                return None
-            token = uuid4().hex
-            db.execute("""UPDATE quality_jobs SET status='running',attempts=attempts+1,lease_token=?,
-                lease_until=?,worker_id=?,updated_at=? WHERE id=?""", (token, clock + max(1, min(lease_seconds, 600)), worker_id, stamp, job["id"]))
-            claimed = dict(db.execute("SELECT * FROM quality_jobs WHERE id=?", (job["id"],)).fetchone())
-            run = db.execute("SELECT * FROM react_runs WHERE run_id=?", (job["run_id"],)).fetchone()
-            return {**self._run_material(db, run), **claimed}
-
-    def _owned_job(self, db, job):
-        row = db.execute("SELECT * FROM quality_jobs WHERE id=? AND status='running' AND lease_token=? AND lease_until>?",
-                         (job["id"], job["lease_token"], time.time())).fetchone()
-        if row is None:
-            raise QualityConflict("Quality job lease has expired or changed")
-        return row
-
-    def complete_job(self, job, signals):
-        signals = [DetectionSignal.model_validate(s).model_dump() for s in signals]
-        with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
-            row = self._owned_job(db, job)
-            run = db.execute("SELECT response_json FROM react_runs WHERE run_id=?", (row["run_id"],)).fetchone()
-            response = json.loads(run["response_json"])
-            if answer_hash(response) != row["answer_hash"]:
-                raise QualityConflict("Completed answer identity changed")
-            for signal in signals:
-                if signal["detector_version"] != row["detector_version"]:
-                    raise ValueError("Signal detector version differs from job")
-                self._signal(db, row["run_id"], response, signal)
-            db.execute("UPDATE quality_jobs SET status='done',lease_token=NULL,lease_until=NULL,last_error=NULL,updated_at=? WHERE id=?", (now(), row["id"]))
-        return {"status": "done", "signal_count": len(signals)}
-
-    def fail_job(self, job, error):
-        with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
-            row = self._owned_job(db, job)
-            status = "dead" if row["attempts"] >= row["max_attempts"] else "pending"
-            db.execute("""UPDATE quality_jobs SET status=?,available_at=?,lease_token=NULL,lease_until=NULL,
-                last_error=?,updated_at=? WHERE id=?""", (status, time.time() + min(60, 2 ** row["attempts"]), scrub_private_data(str(error)[:1000]), now(), row["id"]))
-            return {"status": status, "attempts": row["attempts"]}
-
-    def job_health(self):
-        with self.connection() as db:
-            counts = {state: 0 for state in ("pending", "running", "done", "dead")}
-            counts.update({r[0]: r[1] for r in db.execute("SELECT status,count(*) FROM quality_jobs GROUP BY status")})
-            return {"counts": counts, "failed": [dict(r) for r in db.execute("""SELECT id,run_id,attempts,last_error,updated_at
-                FROM quality_jobs WHERE status='dead' ORDER BY updated_at DESC LIMIT 20""")]}
