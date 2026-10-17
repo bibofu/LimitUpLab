@@ -137,9 +137,8 @@ for (const retryAction of [null, "提交", "重试"]) {
     resolve({ feedback: calls.at(-1) }); await app.settle();
     assert.equal(app.has(node => node.type === "fieldset"), false);
     assert.equal(button("点踩")["aria-pressed"], true);
-    button("补充原因").onClick(); app.render();
-    assert.equal(comment().value, "漏了第二问");
-    assert.equal(reason().checked, true);
+    const actions = app.find(node => node.props.className === "answer-feedback-actions");
+    assert.deepEqual(actions.children.map((node: any) => node.props["aria-label"]), ["点赞", "点踩"]);
     app.unmount();
   });
 }

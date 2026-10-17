@@ -61,7 +61,6 @@ export function AnswerFeedback({ runId, initial, ready }: {
       <button type="button" aria-label="点踩" disabled={!ready || pending} aria-pressed={saved.vote === "down"} onClick={() => vote("down")}>
         <ThumbsDown size={13} aria-hidden="true" />
       </button>
-      {saved.vote === "down" && !expanded ? <button type="button" onClick={() => setExpanded(true)}>补充原因</button> : null}
     </div>
     {expanded ? <fieldset disabled={pending || !ready}>
       <legend>哪里有问题？原因和说明均可跳过</legend>
