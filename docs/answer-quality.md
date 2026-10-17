@@ -1,13 +1,14 @@
 # 回答反馈与人工质量审核
 
-本阶段提供点赞点踩、固定证据包、确定性评审、正常样本抽查和人工审核。当前检测器为 `deterministic-v2`。机器结论和人工结论独立保存；LLM Judge、回归材料导出暂未接入。
+本阶段提供点赞点踩、固定证据包、确定性评审、管理员手动 LLM Judge 和人工审核。检测器分别为 `deterministic-v2`、`llm-judge-v1`。机器结论和人工结论独立保存；Judge 自动抽样和回归材料导出暂未接入。
 
 ## 使用入口
 
 - 聊天回答底部：点赞 / 点踩图标。可改票、撤销，点踩后可选原因及补充说明（最多 1000 字），点击「提交」保存。提交成功自动收起原因面板并保留点踩选中，失败保留面板及内容。刷新会话恢复已有反馈。
 - 顶部「质量审核」进入 `/admin/quality`。使用既有 `LIMITUPLAB_ADMIN_KEY` 登录；密钥只放在页面内存，不进入 URL、本地存储或前端构建产物。
 - 审核页支持状态、来源、严重程度、症状和运行版本筛选。选择案例后查看问题、上下文、正式答案、工具结果、模型输入视图、交付记录与审核历史。
-- 案例详情新增「确定性评审报告」：查看每次尝试的执行状态、逐项结论、证据路径和未知原因。最近人工审核之后出现新信号时显示提示，原审核状态和修订号不会被机器改写。
+- 案例详情的「机器评审报告」展示确定性检查和语义评审：查看每次尝试的执行状态、逐项结论、证据路径和未知原因。最近人工审核之后出现新信号时显示提示，原审核状态和修订号不会被机器改写。
+- 在案例详情点击「发起语义评审」；没有案例时，在页面上方输入回答的 `run_id`，点击「查看运行评审」后手动发起。前端最多自动观察 20 次，之后使用「刷新评审状态」读取结果；刷新不会新增模型调用。
 - 当前鉴权是共享管理员密钥，审计身份记作 `admin`；负责人是分派字段，不代表独立身份认证。
 
 ## 启动检测 worker
@@ -26,6 +27,14 @@
 
 Docker Compose 已增加 `quality-worker` 服务，与后端共用同一 SQLite 数据卷。部署时一并构建、启动该服务。审核页的「处理一批检测任务」每批手动运行最多 20 个确定性任务，API 单次上限为 50 个，不调用模型。
 
+语义评审使用独立进程；本地另开终端执行，或启动 Compose 的 `quality-judge-worker` 服务：
+
+```powershell
+.\backend\.venv\Scripts\python.exe backend/scripts/run_quality_judge_worker.py --interval 5
+```
+
+支持 `--once --limit 5`。Judge worker 只领取管理员已创建的任务，不扫描历史、不自动抽样；点赞点踩、确定性失败和 unknown 均不会自动触发模型。升级前备份数据库并停止旧质量 worker，随后一起更新后端和两个 worker。
+
 从 v1 升级时先停止旧 worker，再启动新版后端和 worker；不支持旧二进制持续轮询新任务表。迁移在事务内完成，重复初始化安全；迁移失败整体回滚。旧任务和案例保留，旧未完成任务标记为 `superseded`，旧租约失效。旧版没有完整评审报告的记录明确标为 `skipped/unknown`，不会补造历史通过结论。
 
 | 配置 | 默认值 | 含义 |
@@ -35,7 +44,7 @@ Docker Compose 已增加 `quality-worker` 服务，与后端共用同一 SQLite 
 | `LIMITUPLAB_QUALITY_EVALUATION_TIMEOUT_SECONDS` | `30` | 确定性评审时间预算，范围 1～300 秒 |
 | `LIMITUPLAB_BUILD_REVISION` | 空 | 可选发布提交号或标签；同时保存应用源码指纹 |
 
-抽样由运行 ID 和检测器版本生成稳定桶值，配置在入队时固定。改变环境变量不会自动重评已经排队或完成的运行；管理员可显式用新抽样比例创建新任务。查看队列中待处理、执行中、已完成、失败待查数量，可判断 worker 是否在工作。
+上述抽样仅用于确定性检查的正常样本线索，由运行 ID 和检测器版本生成稳定桶值，配置在入队时固定。改变环境变量不会自动重评已经排队或完成的运行；管理员可显式用新抽样比例创建新任务。查看队列中待处理、执行中、已完成、失败待查数量，可判断 worker 是否在工作。
 
 ## 状态与审核
 
@@ -83,7 +92,35 @@ Docker Compose 已增加 `quality-worker` 服务，与后端共用同一 SQLite 
 
 worker 按任务类型和检测器版本领取，按类型、版本、配置摘要和包 ID 幂等去重。租约定期续期，完成事务再次验证 token 和过期时间；每次失败均有独立 unknown 报告，最多重试三次。时间预算在规则间和重放循环中检查，属于协作式超时，并非强制终止任意第三方代码的进程隔离。
 
-预留 `llm_judge` 任务类型及 `quality_budget_usage/quality_budget_reservations` 原子预算接口；当前无 Judge worker、无 Judge 入队 HTTP 接口，也不调用评审模型，模型调用和 token 用量为零。未来 Judge 需要独立接入预算、模型执行和输出校验。
+`llm_judge` 使用同一任务、冻结证据和不可变报告体系，新增 `quality_judge_calls` 逐次调用账本，接入 `quality_budget_usage/quality_budget_reservations` 原子预算；确定性任务仍保持模型调用和 token 用量为零。
+
+## LLM Judge 与人工闭环
+
+Judge 分别判断意图与交付、事实接地、来源归属、投资表达边界，逐维给出 `pass/fail/unknown`，不输出总分。盲评输入包含用户问题、有限上下文、正式答案、执行和工具证据；不输入点赞点踩、规则结论、人工结论或其他评审结果。送审内容脱敏、限长，省略和缺口显式记录。
+
+负面发现必须引用服务端生成的证据 ID；答案原句和用户要求必须逐字匹配。服务端校验引用存在、原文匹配及引用类型，拒绝模型自行编造路径和值。引用有效只证明记录可以定位，不能证明模型的语义判断正确；证据不足应为 unknown，不应当作已证伪。没有相关断言、合理拒答或如实说明缺失数据可以通过相应维度。
+
+一次评审默认调用一次模型，结构化输出不合格最多修复一次；引用校验失败不会通过格式修复更改语义结论。超时、调用失败、无法解析和无效引用保存 error/unknown，不生成负面案例。SDK 重试关闭；队列重试、协议修复均受到同一任务的调用总上限控制。报告保存实际输入、模型、版本与提示词/协议摘要、引用定位、调用用量及执行耗时。
+
+有效的 fail 生成来源为 `llm_judge` 的疑似信号，按运行聚合到待复核案例；pass/unknown 只留下报告。管理员先核对原问题、答案原句和证据，再选择确认、非缺陷或证据不足。确认后的流程仍为已确认 → 修复中 → 待验证 → 已关闭，并填写症状、根因、修复版本和审核说明。新机器报告只追加信号，不改变人工状态、修订号或当前审核草稿；已有关闭案例不会自动重开。
+
+| Judge 配置 | 默认值 | 含义 |
+|---|---|---|
+| `LIMITUPLAB_QUALITY_JUDGE_ENABLED` | `true` | 总开关；无密钥时也不可用；关闭后不接新任务、不领取待执行任务，不撤销已发出的调用 |
+| `LIMITUPLAB_QUALITY_JUDGE_API_KEY` | 空 | 空时复用当前 DeepSeek/OpenAI 密钥，不存入任务和报告 |
+| `LIMITUPLAB_QUALITY_JUDGE_MODEL` / `BASE_URL` | 空 | 空时复用现有模型和服务地址；完整变量名均带 `LIMITUPLAB_QUALITY_JUDGE_` 前缀 |
+| `LIMITUPLAB_QUALITY_JUDGE_TIMEOUT_SECONDS` | `35` | 单次请求超时秒数 |
+| `LIMITUPLAB_QUALITY_JUDGE_MAX_INPUT_CHARS` | `60000` | 送审输入字符预算，超限显式省略或跳过 |
+| `LIMITUPLAB_QUALITY_JUDGE_MAX_OUTPUT_TOKENS` | `4800` | 单次模型输出上限 |
+| `LIMITUPLAB_QUALITY_JUDGE_MAX_CALLS_PER_JOB` | `2` | 跨任务重试累计的模型调用上限，包含格式修复 |
+| `LIMITUPLAB_QUALITY_JUDGE_DAILY_CALL_LIMIT` | `50` | UTC 日调用预留上限；耗尽后延期到下一 UTC 日 |
+| `LIMITUPLAB_QUALITY_JUDGE_MAX_CONCURRENCY` | `1` | 共享数据库上全局并发上限 |
+
+入队固定配置、模型与协议摘要，相同证据包和配置重复点击返回已有任务，不重复计费。模型或协议改变时旧任务不能使用新配置偷偷执行，需要管理员显式创建新配置任务。已耗尽重试的相同任务不会因再次点击而重置。预算延期会产生独立报告，恢复后重新开始一次尝试，不从格式修复中间状态续跑。
+
+调用前原子预留额度；预留后进程崩溃也不退还，避免重复调用超过预算。供应商未返回 token 时用量为未知，不能按零成本计算；调用次数限制不等于精确金额预算。租约失效后禁止提交报告；超时后迟到的结果可补充调用审计，不覆盖报告。网络故障下无法保证供应商绝对只执行一次。
+
+`backend/evals/quality_judge/samples.json` 提供 12 条工程合成诊断样本，development/holdout 各 6 条，涵盖数字冲突、来源、漏答、多轮、拒答、缺失及提示注入。显式调用 `evals.quality_judge.calibrate.run_calibration()` 返回诊断结果，最多 24 次调用；生产 worker 不读取样本。样本标记 `human_calibrated=false`，不能当成人工校准或生产准确率；可另传有明确来源的人工标注集。holdout 执行后不得据其结果调提示词。
 
 ## 管理 API
 
@@ -91,12 +128,15 @@ worker 按任务类型和检测器版本领取，按类型、版本、配置摘�
 
 | 方法与路径 | 用途 |
 |---|---|
-| `GET /api/admin/quality/evaluations` | 全部尝试，可按 `verdict`、`execution_status` 筛选，包含未生成案例的运行 |
+| `GET /api/admin/quality/evaluations` | 全部尝试，可按 `verdict`、`execution_status`、`evaluator_kind` 筛选，包含未生成案例的运行 |
 | `GET /api/admin/quality/runs/{run_id}/evaluations` | 某轮运行的评审历史 |
 | `GET /api/admin/quality/bundles/{bundle_id}` | 读取脱敏后的固定证据包 |
 | `POST /api/admin/quality/runs/{run_id}/evaluations` | 显式入队当前确定性版本，可传 `normal_sample_rate`、`bundle_id`；相同配置返回已有任务 |
+| `GET /api/admin/quality/judge/config` | 查看 Judge 是否可用、手动模式、模型和调用上限，不返回密钥 |
+| `POST /api/admin/quality/runs/{run_id}/judge` | 手动入队，可传 `bundle_id`；配置由服务端决定，HTTP 请求不调用模型 |
+| `GET /api/admin/quality/runs/{run_id}/quality-jobs` | 查看运行的任务状态、延期时间及调用汇总 |
 
-历史列表支持 `limit/offset`。前端本阶段在案例详情提供报告只读展示；全量报告、包读取及显式重评通过上述 API 操作。
+报告历史列表支持 `limit/offset`；运行任务入口返回最近 50 条。前端在案例详情和运行 ID 查询入口展示最近报告，全量报告、包读取及确定性显式重评通过上述 API 操作。
 
 ## 隐私和生命周期
 
@@ -111,3 +151,7 @@ worker 清理过期的附加诊断快照；固定包随会话保留，不受诊�
 测试覆盖反馈归属、冻结与哈希、诊断失败隔离、历史迁移与回滚、并发初始化、三态检查、同包重试、租约恢复、预算竞争、信号与报告原子提交、保留人工审核和删除级联。前端覆盖提交字段白名单、会话切换、回执绑定及审核转换，并执行生产构建。实际验收使用隔离数据库和真实 Agent；测试报告与数据库只保留在忽略目录，不作为线上质量统计。
 
 2026-10-17 验收：819 项相关后端回归通过，最后边界修正后 114 项质量专项通过；230 项前端测试与生产构建通过。真实三个简单问题均 complete/answered，固定证据、输入关联、后到回执独立保存、同包幂等和人工审核关闭通过。现有依赖弃用及前端包体积提示仍存在。
+
+同日 Judge 阶段最终验收：888 项相关后端测试、239 项前端测试与生产构建通过；Compose YAML 校验通过，本机未安装 Docker CLI，未运行容器构建。最终代码上的三个真实简单问答均 complete/answered，手动触发的三个 Judge 均成功执行，结论为两项 pass、一项 unknown。隔离合成数字冲突经真实模型检出，再由脚本调用管理员审核接口完成四次状态转换至 closed；不冒充真实人工标注。回归另覆盖关闭后新报告不重开、超时用量未知、全局预算、租约和一次格式修复的双调用账本。
+
+真实模型 `deepseek-v4-flash` 的 12 条合成诊断消耗 12 次调用：10 条返回有效评审，2 条因非法发现类型或非逐字引用被拒绝为 error/unknown；有效报告的 24 个预设维度比较有 23 个一致，1 个把缺证据误判为矛盾。这是工程诊断结果，不是准确率结论；该语义误判尚未消除，必须人工复核。原始记录在忽略的 `backend/tmp/judge-calibration-live.json`，未调优已执行的 holdout。实际问答和审核接口报告分别位于 `backend/tmp/judge-live-report.json`、`backend/tmp/judge-case-closure-live.json`，不纳入线上统计。
