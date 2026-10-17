@@ -1759,3 +1759,9 @@ empty、partial 或 error 时 Replan 新闻；股票名称提取同步覆盖 K�
 - 独立复核保留局限：正文未展开高标窗口的具体日期，但没有将其误称为候选同窗；核验器reason有个别分子分母写反，正文数值已按原facts及每日明细重新核算，不把核验理由当算式证据。本轮未扩展到核验Prompt修改。
 - 三个Prompt相关现有回归245 passed，1条既有依赖弃用警告；AST核对除三个SYSTEM值外源码未变。真实问答7题（6 complete、1安全refuse）及复盘1项完成，原始记录为 `output/validation/prompt-text-slim-host-20261017/live-063038-51dcbb/report.json`，回归日志为 `output/validation/prompt-text-tests-20261017.log`。验证脚本、数据库及报告不提交。
 - 实际模型调用首次被自动审批拒绝，未执行；用户随后明确授权向api.deepseek.com发送本次Prompt、验证问题及必要市场事实，重新审批通过后才运行上述验证。
+
+## BC-195：Agent 对话框标题栏显示多余上下文标签（2026-10-17）
+
+- 用户要求删除右上角“2026-10-16 全市场首板”。移除日期与范围标签容器及专用样式，包含个股代码分支；保留历史会话按钮和请求中的日期、股票及页面上下文。
+- 本地浏览器确认标题栏不再显示该标签；32项会话组件及交互测试通过，TypeScript/Vite生产构建通过，保留既有bundle体积提醒。
+- 本地实际接口连续完成三个简单问题：10月16日收盘封板、首板封板、炸板未回封数量，均为complete/answered，分别回答59、52、49只。运行记录依次为 `run_a5e153628d5a46acb72e5c46b5057f85`、`run_95a56f96a4d449c88aaa6bdb9b1d6fd2`、`run_3cf3d2827f1f4282b7fce119311cf89d`；完整响应保留于忽略目录 `output/validation/chat-header-ui-20261017.json`，不提交本地报告。

@@ -685,28 +685,6 @@ td span {
   color: #202938;
 }
 
-.agent-chat-context {
-  display: flex;
-  flex-wrap: wrap;
-  gap: 8px;
-}
-
-.agent-chat-context {
-  justify-content: flex-end;
-}
-
-.agent-chat-context span {
-  display: inline-flex;
-  align-items: center;
-  min-height: 24px;
-  padding: 0 8px;
-  border-radius: 8px;
-  background: #f2f4f7;
-  color: #526071;
-  font-size: 12px;
-  font-weight: 700;
-}
-
 .agent-chat-messages {
   display: grid;
   align-content: start;
@@ -3633,10 +3611,6 @@ td span {
     align-items: flex-start;
   }
 
-  .agent-chat-context {
-    justify-content: flex-start;
-  }
-
   .agent-chat-header-actions {
     width: 100%;
     justify-content: space-between;
@@ -3764,10 +3738,6 @@ td span {
   .agent-chat-panel header {
     align-items: flex-start;
     flex-direction: column;
-  }
-
-  .agent-chat-context {
-    justify-content: flex-start;
   }
 
   .panel > header {

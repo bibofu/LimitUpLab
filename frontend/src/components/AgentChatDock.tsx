@@ -671,10 +671,6 @@ export function AgentChatDock({
             >
               <PanelLeft size={16} />
             </button>
-            <div className="agent-chat-context">
-              <span>{tradeDate}</span>
-              {symbol ? <span>{symbol}</span> : <span>全市场首板</span>}
-            </div>
           </div>
         </header>
 
