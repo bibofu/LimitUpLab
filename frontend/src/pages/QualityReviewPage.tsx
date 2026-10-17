@@ -1,6 +1,7 @@
 import { useEffect, useRef, useState } from "react";
 import { qualityRequest } from "../qualityApi";
 import { HttpResponseError } from "../utils/jsonRequest";
+import { ManualRunJudge, QualityJudgePanel } from "../components/QualityJudgePanel";
 import {
   caseStatuses, createAdminQualityClient, emptyCaseFilters, reviewDraft, reviewTransitions, severities, validateReview,
   type CaseDetail, type CaseFilters, type CaseReview, type CaseStatus, type JobHealth, type QualityCase, type Severity,
@@ -13,7 +14,7 @@ function failure(error: unknown) {
   return error instanceof Error && error.name !== "AbortError" ? error.message : "请求未完成，请重试。";
 }
 const textValue = (value: unknown) => typeof value === "string" ? value : "未记录";
-const sourceLabel = (value: string) => ({ feedback: "用户反馈", deterministic: "规则检测", delivery: "交付回执", normal_sample: "正常样本抽查" }[value] ?? value);
+const sourceLabel = (value: string) => ({ feedback: "用户反馈", deterministic: "规则检测", llm_judge: "LLM Judge", delivery: "交付回执", normal_sample: "正常样本抽查" }[value] ?? value);
 const deliveryLabel = (value: string) => ({ unknown: "未知", received: "客户端已接收", displayed: "客户端已展示", interrupted: "客户端报告中断" }[value] ?? value);
 const timeLabel = (value: string) => new Date(value).toLocaleString("zh-CN", { hour12: false });
 
@@ -89,6 +90,14 @@ function QualityWorkspace({ adminKey, onLogout }: { adminKey: string; onLogout: 
     catch (error) { setJobError(failure(error)); }
     finally { processor.current = false; setProcessing(false); }
   }
+  async function refreshEvidence(caseId: string) {
+    setRefresh(value => value + 1);
+    try {
+      const result = await api.detail(caseId);
+      // Keep the review form's original revision and draft; a concurrent edit is still guarded on save.
+      if (active.current === caseId) setDetail(current => current?.case.case_id === caseId ? { ...result, case: current.case } : current);
+    } catch { /* A report remains visible; explicit case reload can retry without discarding a draft. */ }
+  }
   const filter = (name: keyof CaseFilters, value: string) => setFilters(current => ({ ...current, [name]: value }));
   return <section className="quality-page">
     <header className="quality-heading"><div><h1>回答质量审核</h1><p>检测信号与用户反馈均为待复核线索，审核结论独立保存。</p></div><button type="button" onClick={onLogout}>退出审核</button></header>
@@ -99,9 +108,10 @@ function QualityWorkspace({ adminKey, onLogout }: { adminKey: string; onLogout: 
       {jobError ? <p role="alert">{jobError}<button type="button" onClick={() => setRefresh(value => value + 1)}>重试</button></p> : null}
       {jobs?.failed.length ? <details><summary>失败任务详情（{jobs.failed.length}）</summary><pre>{JSON.stringify(jobs.failed, null, 2)}</pre></details> : null}
     </section>
+    <ManualRunJudge api={api} onCompleted={() => setRefresh(value => value + 1)} />
     <form className="quality-filters" onSubmit={event => { event.preventDefault(); setOffset(0); setQuery({ ...filters }); }}>
       <label>状态<select value={filters.status} onChange={event => filter("status", event.target.value)}><option value="">全部</option>{Object.entries(caseStatuses).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
-      <label>来源<select value={filters.source} onChange={event => filter("source", event.target.value)}><option value="">全部</option>{["feedback", "deterministic", "delivery", "normal_sample"].map(value => <option key={value} value={value}>{sourceLabel(value)}</option>)}</select></label>
+      <label>来源<select value={filters.source} onChange={event => filter("source", event.target.value)}><option value="">全部</option>{["feedback", "deterministic", "llm_judge", "delivery", "normal_sample"].map(value => <option key={value} value={value}>{sourceLabel(value)}</option>)}</select></label>
       <label>严重程度<select value={filters.severity} onChange={event => filter("severity", event.target.value)}><option value="">全部</option>{Object.entries(severities).map(([value, label]) => <option key={value} value={value}>{label}</option>)}</select></label>
       <label>症状<input value={filters.symptom} onChange={event => filter("symptom", event.target.value)} placeholder="精确匹配" /></label>
       <label>运行版本<input value={filters.version} onChange={event => filter("version", event.target.value)} placeholder="精确匹配" /></label>
@@ -123,6 +133,7 @@ function QualityWorkspace({ adminKey, onLogout }: { adminKey: string; onLogout: 
       <section className="quality-case-detail" aria-label="案例证据与审核">
         {!selected ? <p>选择一条线索，核对原始回答、执行证据和审核历史。</p> : detailError ? <p role="alert">{detailError}<button type="button" onClick={() => setDetailReload(value => value + 1)}>重新加载案例</button></p> : detail?.case.case_id === selected ? <>
           <CaseEvidence detail={detail} />
+          <QualityJudgePanel key={detail.case.run_id} api={api} runId={detail.case.run_id} onCompleted={() => void refreshEvidence(detail.case.case_id)} />
           <QualityCaseReviewForm key={`${selected}:${detail.case.revision}`} item={detail.case} save={draft => api.review(selected, draft)} reload={() => setDetailReload(value => value + 1)} onSaved={result => {
             if (active.current === result.case.case_id) setDetail(result);
             setRefresh(value => value + 1);
@@ -154,18 +165,6 @@ function CaseEvidence({ detail }: { detail: CaseDetail }) {
       <JsonEvidence label="查看定位证据" value={signal.evidence} />
     </article>)}
     {detail.has_new_signals_since_review ? <p>上次人工审核后新增了检测信号，请结合新证据决定是否重新复核。</p> : null}
-    <h3>确定性评审报告（{detail.evaluations?.total ?? 0}）</h3>
-    <p>通过仅代表所列检查范围；未知表示材料不足或不适用。评审执行失败不代表回答错误。</p>
-    {detail.evaluations?.items.map(evaluation => <article className="quality-signal" key={evaluation.evaluation_id}>
-      <strong>{evaluation.verdict ? ({ pass: "检查通过", fail: "发现明确不一致", unknown: "检查范围未完全确认" })[evaluation.verdict] : "评审尚未完成"}</strong>
-      <small>评审执行：{({ running: "执行中", succeeded: "完成", error: "失败", skipped: "跳过" })[evaluation.execution_status]} · {evaluation.evaluator_version}</small>
-      <small>证据包：{evaluation.bundle_id ?? "历史任务未留存"}</small>
-      {evaluation.report?.checks?.map(check => <p key={check.check_id}>
-        {({ pass: "通过", fail: "失败", unknown: "未知" })[check.verdict] ?? check.verdict} · {check.summary}
-        {check.unknown_reason ? `（${check.unknown_reason}）` : ""}
-      </p>)}
-      <JsonEvidence label="检查定位与执行详情" value={evaluation.report} />
-    </article>)}
     <h3>执行与模型证据</h3>
     <JsonEvidence label="请求与解析条件" value={run.request} />
     <JsonEvidence label="工具调用结果" value={run.calls} />

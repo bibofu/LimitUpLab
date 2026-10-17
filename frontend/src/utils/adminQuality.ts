@@ -34,10 +34,20 @@ export interface CaseDetail {
 }
 
 export interface EvaluationRecord {
-  evaluation_id: string; bundle_id: string | null; evaluator_version: string;
+  evaluation_id: string; bundle_id: string | null; evaluator_version: string; evaluator_kind?: string;
   execution_status: "running" | "succeeded" | "error" | "skipped"; verdict: "pass" | "fail" | "unknown" | null;
-  report: { checks?: { check_id: string; verdict: "pass" | "fail" | "unknown"; summary: string; unknown_reason?: string | null; evidence: unknown }[]; metadata?: unknown } | null;
+  report: { checks?: { check_id: string; dimension?: string; verdict: "pass" | "fail" | "unknown"; summary: string; unknown_reason?: string | null; evidence: unknown }[]; metadata?: unknown } | null;
 }
+export type EvaluationHistory = { items: EvaluationRecord[]; total: number };
+export interface JudgeConfig {
+  enabled: boolean; manual_only: true; model: string; max_calls_per_job: number;
+  daily_call_limit: number; max_concurrency: number; reason?: string | null;
+}
+export interface QualityRunJob {
+  id: string; job_kind: string; status: "pending" | "running" | "done" | "dead" | "superseded";
+  attempts: number; available_at: number | string; last_error: string | null; updated_at: string;
+}
+export type QualityRunJobs = { items: QualityRunJob[]; total: number };
 export type CaseFilters = { status: string; source: string; severity: string; symptom: string; version: string };
 export const emptyCaseFilters = (): CaseFilters => ({ status: "", source: "", severity: "", symptom: "", version: "" });
 export interface CaseReview {
@@ -64,8 +74,15 @@ export function createAdminQualityClient(request: QualityRequest, adminKey: stri
     }),
     jobs: (signal?: AbortSignal) => call<JobHealth>("/jobs", { signal }),
     process: () => call<{ processed: number; succeeded: number; failed: number }>("/process?limit=20", { method: "POST" }),
+    judgeConfig: (signal?: AbortSignal) => call<JudgeConfig>("/judge/config", { signal }),
+    judge: (id: string, signal?: AbortSignal) => call<{ created: boolean; job_id: string; bundle_id: string }>(`/runs/${encodeURIComponent(id)}/judge`, {
+      method: "POST", headers: { "Content-Type": "application/json" }, body: "{}", signal,
+    }),
+    evaluations: (id: string, signal?: AbortSignal) => call<EvaluationHistory>(`/runs/${encodeURIComponent(id)}/evaluations`, { signal }),
+    runJobs: (id: string, signal?: AbortSignal) => call<QualityRunJobs>(`/runs/${encodeURIComponent(id)}/quality-jobs`, { signal }),
   };
 }
+export type AdminQualityClient = ReturnType<typeof createAdminQualityClient>;
 
 export function reviewDraft(item: QualityCase): CaseReview {
   return { status: item.status, expected_revision: item.revision, note: "", symptom: item.symptom,

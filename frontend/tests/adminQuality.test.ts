@@ -13,6 +13,8 @@ test("all admin operations send the in-memory key as a header, preserve filters 
   await client.detail("case/one");
   await client.review("case/one", { status: "confirmed", expected_revision: 3, note: "证据已核对", symptom: "漏答", root_cause: "", assignee: "", fix_version: "", duplicate_of: null, severity: "medium" });
   await client.jobs(); await client.process();
+  await client.judgeConfig(); await client.judge("run/one");
+  await client.evaluations("run/one"); await client.runJobs("run/one");
   for (const call of calls) {
     assert.equal(new Headers(call.init.headers).get("X-LimitUpLab-Admin-Key"), "test-ephemeral-key");
     assert.ok(!call.path.includes("test-ephemeral-key"));
@@ -22,6 +24,11 @@ test("all admin operations send the in-memory key as a header, preserve filters 
   assert.equal(calls[1].path, "/api/admin/quality/cases/case%2Fone");
   assert.equal(JSON.parse(calls[2].init.body as string).expected_revision, 3);
   assert.equal(calls[2].init.method, "PATCH");
+  assert.equal(calls[6].path, "/api/admin/quality/runs/run%2Fone/judge");
+  assert.equal(calls[6].init.method, "POST");
+  assert.equal(calls[6].init.body, "{}");
+  assert.equal(calls[7].path, "/api/admin/quality/runs/run%2Fone/evaluations");
+  assert.equal(calls[8].path, "/api/admin/quality/runs/run%2Fone/quality-jobs");
 });
 
 test("review transitions require confirmation before closure and allow reopening", () => {
@@ -43,7 +50,7 @@ test("the actual review form preserves the draft after a revision conflict and b
     useEffect() { cursor++; },
   };
   const require = createRequire(import.meta.url), module = { exports: {} as any };
-  const imports = { react: hooks, "../utils/adminQuality": admin, "../utils/jsonRequest": json, "../qualityApi": {}, "../qualityAdmin.css": {} };
+  const imports = { react: hooks, "../utils/adminQuality": admin, "../utils/jsonRequest": json, "../qualityApi": {}, "../qualityAdmin.css": {}, "../components/QualityJudgePanel": {} };
   new Function("require", "module", "exports", code)((id: string) => imports[id] ?? require(id), module, module.exports);
   const calls: admin.CaseReview[] = []; let reject!: (error: Error) => void, saved = 0;
   const props = {
