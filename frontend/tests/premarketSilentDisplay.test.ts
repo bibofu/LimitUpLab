@@ -62,7 +62,7 @@ function render(kind: "news" | "premarket", state: Record<string, unknown>) {
   };
 }
 
-test("latest news keeps source cutoff and content visible while describing the refresh", () => {
+test("24-hour news keeps source cutoff and content visible while describing the refresh", () => {
   const ready = render("news", { news }).html;
   for (const state of [{ loading: true }, { loading: true, fromCache: true }, { news: { ...news, refreshing: true, stale: true } }]) {
     const updating = render("news", { news, ...state }).html;
@@ -71,23 +71,23 @@ test("latest news keeps source cutoff and content visible while describing the r
     assert.ok(updating.includes("显示上次快讯，正在更新"));
   }
   assert.ok(ready.includes("来源抓取：2026-10-12 18:30:00（上海时间）"));
-  assert.ok(ready.includes("最近一批快讯"));
-  assert.ok(ready.includes("展示 1 条"));
-  assert.ok(ready.includes("查看近24小时新闻"));
-  assert.ok(!ready.includes("共 1 条"));
+  assert.ok(ready.includes("近 24 小时（以来源抓取为截止）"));
+  assert.ok(ready.includes("共 1 条"));
+  assert.ok(ready.includes("查看最新快讯"));
+  assert.ok(!ready.includes("最近一批快讯"));
   assert.ok(ready.includes("已保存的市场快讯"));
 });
 
-test("unknown latest news has an explicit loading state and verified empty results stay distinct", () => {
+test("unknown 24-hour news has an explicit loading state and verified empty results stay distinct", () => {
   const unknown = render("news", { news: null, loading: true }).html;
   assert.ok(unknown.includes("来源抓取：—"));
   assert.ok(!unknown.includes("没有市场快讯"));
   assert.ok(!unknown.includes("共 0 条"));
-  assert.ok(unknown.includes("正在获取最新快讯"));
+  assert.ok(unknown.includes("正在获取近24小时新闻"));
   const empty = { ...news, total: 0, items: [] };
   const ready = render("news", { news: empty }).html;
-  assert.ok(render("news", { news: empty, loading: true, fromCache: true }).html.includes("该次抓取没有最新快讯"));
-  assert.ok(ready.includes("该次抓取没有最新快讯"));
+  assert.ok(render("news", { news: empty, loading: true, fromCache: true }).html.includes("该次抓取的近 24 小时范围内没有市场快讯"));
+  assert.ok(ready.includes("该次抓取的近 24 小时范围内没有市场快讯"));
 });
 
 test("news errors retain dated content and expose a working retry", () => {
@@ -113,13 +113,13 @@ test("server refresh failures and bounded polling keep old news with retry feedb
   assert.ok(waiting.retry);
 });
 
-test("the news board starts with latest, opens independent history pages, and returns to latest", () => {
+test("the news board starts with 24-hour pagination and keeps the optional latest batch independent", () => {
   const slots: unknown[] = [];
   let cursor = 0;
   const requests: [number, string][] = [];
   let buttons = new Map<string, () => void>();
   const observe = (factory: (...args: any[]) => unknown) => (...args: any[]) => {
-    if (args[0] === "button") buttons.set(String(args[1]?.children), args[1]?.onClick);
+    if (args[0] === "button") buttons.set(String(args[1]?.["aria-label"] ?? args[1]?.children), args[1]?.onClick);
     return factory(...args);
   };
   const { RecommendationNewsBoard } = compile("../src/components/RecommendationNewsBoard.tsx", {
@@ -146,21 +146,29 @@ test("the news board starts with latest, opens independent history pages, and re
     return renderToStaticMarkup(RecommendationNewsBoard());
   };
   let html = renderBoard();
+  assert.ok(html.includes("历史第1页"));
+  assert.ok(html.includes("近 24 小时（以来源抓取为截止）"));
+  assert.ok(html.includes("共 30 条"));
+  assert.ok(html.includes("市场快讯分页"));
+  buttons.get("2")!();
+  html = renderBoard();
+  assert.ok(html.includes("历史第2页"));
+  buttons.get("下一页")!();
+  html = renderBoard();
+  assert.ok(html.includes("历史第3页"));
+  buttons.get("上一页")!();
+  html = renderBoard();
+  assert.ok(html.includes("历史第2页"));
+  buttons.get("查看最新快讯")!();
+  html = renderBoard();
   assert.ok(html.includes("最新标题"));
+  assert.ok(!html.includes("历史第2页"));
   assert.ok(!html.includes("市场快讯分页"));
   buttons.get("查看近24小时新闻")!();
   html = renderBoard();
   assert.ok(html.includes("历史第1页"));
-  assert.ok(html.includes("近 24 小时（以来源抓取为截止）"));
-  assert.ok(html.includes("共 30 条"));
-  buttons.get("2")!();
-  html = renderBoard();
-  assert.ok(html.includes("历史第2页"));
-  buttons.get("返回最新")!();
-  html = renderBoard();
-  assert.ok(html.includes("最新标题"));
-  assert.ok(!html.includes("历史第2页"));
-  assert.deepEqual(requests, [[1, "latest"], [1, "history"], [2, "history"], [1, "latest"]]);
+  assert.ok(html.includes("市场快讯分页"));
+  assert.deepEqual(requests, [[1, "history"], [2, "history"], [3, "history"], [2, "history"], [1, "latest"], [1, "history"]]);
 });
 
 test("candidate cards and snapshot dates are identical across cached background reads", () => {

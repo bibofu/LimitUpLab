@@ -21,7 +21,7 @@ interface RecommendationNewsViewItem {
  * Show paginated research news with its fetch state and source links.
  */
 export function RecommendationNewsBoard() {
-  const [mode, setMode] = useState<"latest" | "history">("latest");
+  const [mode, setMode] = useState<"latest" | "history">("history");
   const [page, setPage] = useState(1);
   const { news, loading, error, reload, waitingTooLong } = useFinanceNews(page, mode);
   const refreshError = error || news?.refresh_error;
@@ -59,7 +59,7 @@ export function RecommendationNewsBoard() {
       <div className="recommendation-news-navigation">
         <span>{mode === "latest" ? "最新快讯" : "近 24 小时新闻"}</span>
         <button type="button" onClick={() => { setMode(mode === "latest" ? "history" : "latest"); setPage(1); }}>
-          {mode === "latest" ? "查看近24小时新闻" : "返回最新"}
+          {mode === "latest" ? "查看近24小时新闻" : "查看最新快讯"}
         </button>
       </div>
       {!news && !refreshError ? (
