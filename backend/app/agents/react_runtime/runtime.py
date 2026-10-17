@@ -7,11 +7,12 @@ from contextvars import copy_context
 from datetime import datetime, timezone
 from time import perf_counter
 from typing import TypedDict
+from uuid import uuid4
 
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage, messages_from_dict, messages_to_dict
 from langgraph.graph import END, START, StateGraph
 
-from app.services.quality_trace import record_snapshot, provenance, visible_messages
+from app.services.quality_trace import record_snapshot, provenance, rendering_snapshot, visible_messages
 
 from app.agents.query_contract import current_query_reference_date
 from app.agents.react_runtime.contracts import (
@@ -178,7 +179,9 @@ class Run:
             messages = [*messages, HumanMessage(content="查询预算即将结束。现在必须单独调用finish，交付已取得事实并明确缺口；不得继续查询。")]
         try:
             call_started = perf_counter()
+            model_call_id = "model_" + uuid4().hex
             record_snapshot(self.control, "model_input", {
+                "model_call_id": model_call_id,
                 "round": self.models, "status": "attempted", "messages": visible_messages(messages),
                 "tool_definitions": definitions, "max_tokens": 4096,
             })
@@ -193,6 +196,7 @@ class Run:
                 on_chunk=on_chunk,
             )
             record_snapshot(self.control, "model_output", {
+                "model_call_id": model_call_id,
                 "round": self.models, "status": "returned", "content": response.content,
                 "tool_calls": response.tool_calls, "usage": response.usage_metadata or {},
                 "duration_ms": round((perf_counter() - call_started) * 1000),
@@ -219,6 +223,7 @@ class Run:
             }
         except Exception as error:
             record_snapshot(self.control, "model_error", {
+                "model_call_id": model_call_id,
                 "round": self.models, "error_type": type(error).__name__,
                 "duration_ms": round((perf_counter() - call_started) * 1000),
             })
@@ -431,6 +436,7 @@ class Run:
                 if "empty" not in states:
                     raise ValueError("Empty status requires current-run evidence with result_state=empty")
             validate_delivery(final, self.task_context, self.evidence)
+            render_input = final.model_copy(deep=True)
             final.answer = render_answer(final, self.evidence, self.task_context.output_contract)
             if final.status == "partial":
                 final.answer += "\n\n数据未成功获取：\n" + "\n".join("- " + item for item in final.missing)
@@ -457,6 +463,8 @@ class Run:
                 return self.stop("cancelled")
             self.answer, self.status = final.answer, final.status
             self.reason = "answered"
+            record_snapshot(self.control, "answer_rendering", lambda: rendering_snapshot(
+                render_input, self.evidence, self.task_context.output_contract, final.answer, origin="gate"))
             self.trace("react_answer_check", {
                 "passed": True,
                 "status": final.status,
@@ -500,6 +508,8 @@ class Run:
             if perf_counter() >= self.deadline or (self.control and self.control.cancelled()):
                 return False
             self.answer, self.status, self.reason = answer, "partial", reason
+            record_snapshot(self.control, "answer_rendering", lambda: rendering_snapshot(
+                final, self.evidence, self.task_context.output_contract, answer, origin="runtime_recovery"))
             self.trace("react_fallback_delivery", {"origin": "runtime", "cause": reason,
                        "passed": True, "finish": final.model_dump(mode="json")})
             return True

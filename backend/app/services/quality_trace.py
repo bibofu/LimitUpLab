@@ -37,7 +37,8 @@ def scrub_private_data(value):
             if item.lstrip().startswith(("{", "[")):
                 try:
                     parsed = json.loads(item)
-                    return json.dumps(visit(parsed, depth + 1), ensure_ascii=False)
+                    cleaned = visit(parsed, depth + 1)
+                    return item if cleaned == parsed else json.dumps(cleaned, ensure_ascii=False)
                 except (ValueError, RecursionError):
                     pass
             return item
@@ -82,7 +83,32 @@ def source_fingerprint():
     return digest.hexdigest()
 
 
+@lru_cache(maxsize=1)
+def component_fingerprints():
+    """Fingerprint replay code plus its local dependencies, never just the entry point."""
+    root = Path(__file__).resolve().parents[1]
+    shared = ["agents/react_runtime/evidence.py", "agents/react_runtime/contracts.py",
+              "agents/kline_presentation.py", "agents/tool_schemas_market.py",
+              "agents/tool_schemas_news.py", "agents/tool_schemas_research.py", "agents/tool_schemas_review.py"]
+    components = {"compute_sha256": shared,
+                  "renderer_sha256": shared + ["agents/react_runtime/rendering.py",
+                      "agents/react_runtime/display_fields.py", "agents/react_runtime/task_contract.py"]}
+    result = {}
+    for name, paths in components.items():
+        digest = hashlib.sha256()
+        try:
+            for relative in sorted(paths):
+                digest.update(relative.encode())
+                digest.update((root / relative).read_bytes())
+            result[name] = digest.hexdigest()
+        except OSError:
+            result[name] = None
+    return result
+
+
 def provenance(provider, system_prompt, tool_contract_version):
+    from app.agents.react_runtime.contracts import VERSION
+    from app.agents.react_runtime.evidence import EVIDENCE_VERSION
     chat_model = getattr(provider, "chat_model", None)
     missing = ["scoring_version: consult individual tool evidence"]
     try:
@@ -98,9 +124,21 @@ def provenance(provider, system_prompt, tool_contract_version):
         "base_temperature": getattr(chat_model, "temperature", None),
         "prompt_sha256": hashlib.sha256(system_prompt.encode()).hexdigest(),
         "tool_contract_version": tool_contract_version,
+        "runtime_version": VERSION,
+        "evidence_version": EVIDENCE_VERSION,
+        **component_fingerprints(),
         "scoring_version": None,
         "missing": missing,
     }
+
+
+def rendering_snapshot(final, store, output_contract, rendered_answer, *, origin):
+    return {"finish_input": final.model_dump(mode="json"),
+            "output_contract": output_contract.model_dump(mode="json"),
+            "rendered_answer": rendered_answer, "origin": origin,
+            "renderer_sha256": component_fingerprints()["renderer_sha256"],
+            "evidence_rank_scopes": store._rank_scopes,
+            "evidence_ranked_prefixes": store._ranked_prefixes}
 
 
 def record_snapshot(control, stage, payload):
