@@ -72,6 +72,7 @@ function harness(file: string, imports: Record<string, unknown>, entry: string, 
   }
   render();
   return { render, get result() { return result; }, update(next: any) { props = next; render(); },
+    has(predicate: (node: any) => boolean) { return nodes.some(predicate); },
     find(predicate: (node: any) => boolean) { const node = nodes.find(predicate); assert.ok(node); return node.props; },
     async settle() { await new Promise(resolve => setImmediate(resolve)); render(); },
     unmount() { cleanups.forEach(cleanup => cleanup()); },
@@ -102,6 +103,46 @@ test("feedback restores, blocks duplicate clicks, preserves failure retry and to
   assert.equal(up()["aria-pressed"], false); assert.equal(calls[2].vote, null);
   app.unmount();
 });
+
+for (const retryAction of [null, "提交", "重试"]) {
+  test(`reason submission collapses only on success and preserves the downvote (${retryAction ?? "first attempt"})`, async () => {
+    const calls: quality.AnswerFeedbackValue[] = [];
+    let resolve!: (value: any) => void;
+    let reject!: (value: Error) => void;
+    const app = harness("../src/components/AnswerFeedback.tsx", {
+      "../utils/agentQuality": quality,
+      "../qualityApi": { qualityApi: { feedback: (_: string, value: quality.AnswerFeedbackValue) => {
+        calls.push(value); return new Promise((yes, no) => { resolve = yes; reject = no; });
+      } } },
+    }, "AnswerFeedback", { runId: "r", initial: null, ready: true });
+    const button = (label: string) => app.find(node => node.type === "button"
+      && (node.props["aria-label"] === label || node.props.children === label));
+    const comment = () => app.find(node => node.type === "textarea");
+    const reason = () => app.find(node => node.type === "label" && node.props.children?.[1] === "漏答").children[0].props;
+    button("点踩").onClick(); resolve({ feedback: calls[0] }); await app.settle();
+    assert.ok(app.has(node => node.type === "fieldset"), "voting must leave reasons open for editing");
+    assert.equal(button("点踩")["aria-pressed"], true);
+    reason().onChange(); comment().onChange({ target: { value: "漏了第二问" } }); app.render();
+    button("提交").onClick(); app.render();
+    assert.equal(app.find(node => node.type === "fieldset").disabled, true, "keep the panel visible while awaiting a response");
+    if (retryAction) {
+      reject(new Error("offline")); await app.settle();
+      assert.equal(app.find(node => node.type === "fieldset").disabled, false);
+      assert.equal(comment().value, "漏了第二问");
+      assert.equal(reason().checked, true);
+      assert.equal(button("点踩")["aria-pressed"], true);
+      button(retryAction).onClick(); app.render();
+    }
+    assert.deepEqual(calls.at(-1), { vote: "down", reasons: ["incomplete"], comment: "漏了第二问" });
+    resolve({ feedback: calls.at(-1) }); await app.settle();
+    assert.equal(app.has(node => node.type === "fieldset"), false);
+    assert.equal(button("点踩")["aria-pressed"], true);
+    button("补充原因").onClick(); app.render();
+    assert.equal(comment().value, "漏了第二问");
+    assert.equal(reason().checked, true);
+    app.unmount();
+  });
+}
 
 test("session quality ignores a slow response from a previously selected session", async () => {
   const responses = new Map<string, (value: unknown) => void>();

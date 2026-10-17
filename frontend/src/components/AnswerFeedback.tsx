@@ -15,7 +15,7 @@ export function AnswerFeedback({ runId, initial, ready }: {
   const [expanded, setExpanded] = useState(false);
   const [pending, setPending] = useState(false);
   const [error, setError] = useState(false);
-  const [retry, setRetry] = useState<AnswerFeedbackValue | null>(null);
+  const [retry, setRetry] = useState<{ value: AnswerFeedbackValue; closeOnSuccess: boolean } | null>(null);
   const touched = useRef(false);
   const submitting = useRef(false);
   const mounted = useRef(true);
@@ -28,7 +28,7 @@ export function AnswerFeedback({ runId, initial, ready }: {
     }
   }, [initial, ready]);
 
-  async function save(value: AnswerFeedbackValue) {
+  async function save(value: AnswerFeedbackValue, closeOnSuccess = false) {
     if (submitting.current) return;
     submitting.current = true;
     touched.current = true;
@@ -36,9 +36,12 @@ export function AnswerFeedback({ runId, initial, ready }: {
     setError(false);
     try {
       const result = await writer.current(value);
-      if (result && mounted.current) { setSaved(result); setDraft(result); setRetry(null); }
+      if (result && mounted.current) {
+        setSaved(result); setDraft(result); setRetry(null);
+        if (closeOnSuccess) setExpanded(false);
+      }
     } catch {
-      if (mounted.current) { setError(true); setRetry(value); }
+      if (mounted.current) { setError(true); setRetry({ value, closeOnSuccess }); }
     } finally { submitting.current = false; if (mounted.current) setPending(false); }
   }
   function vote(value: Exclude<FeedbackVote, null>) {
@@ -69,10 +72,10 @@ export function AnswerFeedback({ runId, initial, ready }: {
       <textarea aria-label="反馈补充说明" maxLength={1000} rows={2} value={draft.comment}
         onChange={event => setDraft(current => ({ ...current, comment: event.target.value }))} placeholder="可补充期望的回答或问题位置，请勿填写敏感信息" />
       <div className="answer-feedback-actions">
-        <button type="button" onClick={() => void save({ ...draft, vote: "down" })}>提交</button>
+        <button type="button" onClick={() => void save({ ...draft, vote: "down" }, true)}>提交</button>
         <button type="button" onClick={() => setExpanded(false)}>收起</button>
       </div>
     </fieldset> : null}
-    {error ? <div role="alert">反馈保存失败，内容已保留。<button disabled={pending} type="button" onClick={() => retry && void save(retry)}>重试</button></div> : null}
+    {error ? <div role="alert">反馈保存失败，内容已保留。<button disabled={pending} type="button" onClick={() => retry && void save(retry.value, retry.closeOnSuccess)}>重试</button></div> : null}
   </div>;
 }
