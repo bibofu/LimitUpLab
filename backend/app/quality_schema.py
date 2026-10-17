@@ -174,6 +174,16 @@ def initialize_evaluation_schema(db):
         reservation_key TEXT NOT NULL, job_kind TEXT NOT NULL, period TEXT NOT NULL,
         metric TEXT NOT NULL, units INTEGER NOT NULL, created_at TEXT NOT NULL,
         PRIMARY KEY(job_id,attempt,reservation_key))""")
+    db.execute("""CREATE TABLE IF NOT EXISTS quality_judge_calls (
+        call_id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES quality_jobs(id) ON DELETE CASCADE,
+        evaluation_id TEXT NOT NULL REFERENCES quality_evaluations(evaluation_id) ON DELETE CASCADE,
+        attempt INTEGER NOT NULL, call_key TEXT NOT NULL, period TEXT NOT NULL,
+        phase TEXT NOT NULL, request_hash TEXT, status TEXT NOT NULL DEFAULT 'reserved',
+        timeout_seconds REAL NOT NULL, expires_at REAL NOT NULL, reserved_at TEXT NOT NULL,
+        started_at TEXT, finished_at TEXT, settled_at TEXT, error_type TEXT,
+        late_status TEXT, late_error_type TEXT, prompt_tokens INTEGER, completion_tokens INTEGER,
+        total_tokens INTEGER, duration_ms REAL, UNIQUE(job_id,call_key))""")
+    db.execute("CREATE INDEX IF NOT EXISTS quality_judge_calls_active ON quality_judge_calls(status,expires_at)")
     db.execute("""CREATE TRIGGER IF NOT EXISTS quality_bundles_no_update BEFORE UPDATE ON quality_evidence_bundles
         BEGIN SELECT RAISE(ABORT, 'Evidence bundle is immutable'); END""")
     db.execute("""CREATE TRIGGER IF NOT EXISTS quality_evaluations_terminal_no_update BEFORE UPDATE ON quality_evaluations

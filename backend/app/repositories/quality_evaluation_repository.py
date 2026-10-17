@@ -57,7 +57,7 @@ class EvaluationRepositoryMixin:
                 "execution_status": "error", "verdict": "unknown", "checks": [],
                 "metadata": {"error_type": reason, "model_calls": 0 if job["job_kind"] == "deterministic" else None}}
 
-    def claim_job(self, worker_id, lease_seconds=60, *, job_kind="deterministic", evaluator_version=None):
+    def claim_job(self, worker_id, lease_seconds=60, *, job_kind="deterministic", evaluator_version=None, max_concurrency=1):
         if job_kind not in {"deterministic", "llm_judge"}:
             raise ValueError("Unsupported evaluator kind")
         evaluator_version = evaluator_version or (DETECTOR_VERSION if job_kind == "deterministic" else None)
@@ -73,6 +73,10 @@ class EvaluationRepositoryMixin:
                 db.execute("""UPDATE quality_jobs SET status=?,lease_token=NULL,lease_until=NULL,
                     last_error='LeaseExpired',updated_at=? WHERE id=?""",
                     ("dead" if job["attempts"] >= job["max_attempts"] else "pending", stamp, job["id"]))
+            if job_kind == "llm_judge":
+                from app.repositories.quality_judge_repository import judge_capacity_available
+                if not judge_capacity_available(db, max_concurrency):
+                    return None
             job = db.execute("""SELECT * FROM quality_jobs WHERE job_kind=? AND detector_version=?
                 AND bundle_id IS NOT NULL AND status='pending' AND attempts<max_attempts AND available_at<=?
                 ORDER BY available_at,id LIMIT 1""", (job_kind, evaluator_version, clock)).fetchone()
@@ -178,9 +182,9 @@ class EvaluationRepositoryMixin:
                 ORDER BY started_at DESC,evaluation_id DESC LIMIT ? OFFSET ?""", (run_id, max(1, min(limit, 100)), max(0, offset)))
             return scrub_private_data({"items": [_unpack(row) for row in rows], "total": total})
 
-    def list_evaluations(self, *, verdict=None, execution_status=None, limit=20, offset=0):
+    def list_evaluations(self, *, verdict=None, execution_status=None, evaluator_kind=None, limit=20, offset=0):
         clauses, params = [], []
-        for column, value in (("verdict", verdict), ("execution_status", execution_status)):
+        for column, value in (("verdict", verdict), ("execution_status", execution_status), ("evaluator_kind", evaluator_kind)):
             if value:
                 clauses.append(f"{column}=?")
                 params.append(value)

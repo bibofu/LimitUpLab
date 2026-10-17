@@ -143,7 +143,7 @@ def test_atomic_quota_idempotency_and_session_delete_does_not_refund(store):
     repo.complete_job(deterministic, [], report(deterministic))
     for number in range(2):
         repo.enqueue_evaluation(run_id, job_kind="llm_judge", evaluator_version="contract-only", config={"n": number})
-    jobs = [repo.claim_job(str(n), job_kind="llm_judge", evaluator_version="contract-only") for n in range(2)]
+    jobs = [repo.claim_job(str(n), job_kind="llm_judge", evaluator_version="contract-only", max_concurrency=2) for n in range(2)]
     def reserve(job):
         try:
             return repo.reserve_budget(job, "call-1", units=1, limit=1, period="2026-10-17")

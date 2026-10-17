@@ -9,6 +9,7 @@ from app.database import connect
 from app.quality_models import DeliveryInput, DetectionSignal, FeedbackInput, QualityConflict, ReviewInput
 from app.quality_schema import DETECTOR_VERSION, answer_hash, encode, now
 from app.repositories.quality_evaluation_repository import EvaluationRepositoryMixin
+from app.repositories.quality_judge_repository import JudgeRepositoryMixin
 from app.services.quality_trace import scrub_private_data
 
 
@@ -38,7 +39,7 @@ def statuses(row, response, case_status):
     return {"execution_status": execution, "task_status": task_status, "quality_status": quality}
 
 
-class QualityRepository(EvaluationRepositoryMixin):
+class QualityRepository(JudgeRepositoryMixin, EvaluationRepositoryMixin):
     def __init__(self, path=None):
         from app.agents.react_runtime.lifecycle import Journal
         self.path = Path(path) if path else None
