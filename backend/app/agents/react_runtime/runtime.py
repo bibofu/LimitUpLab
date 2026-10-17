@@ -11,6 +11,8 @@ from typing import TypedDict
 from langchain_core.messages import HumanMessage, SystemMessage, ToolMessage, messages_from_dict, messages_to_dict
 from langgraph.graph import END, START, StateGraph
 
+from app.services.quality_trace import record_snapshot, provenance, visible_messages
+
 from app.agents.query_contract import current_query_reference_date
 from app.agents.react_runtime.contracts import (
     CONTROL_MODELS, Compute, Finish, MAX_CONCURRENCY, MAX_CONTROL_CALLS,
@@ -118,6 +120,7 @@ class Run:
         if self.control:
             elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(self.control.row["started_at"])).total_seconds()
             self.deadline -= max(0, elapsed)
+            record_snapshot(self.control, "provenance", provenance(provider, SYSTEM, TOOL_CONTRACT_VERSION))
 
     def save(self, state, next_node):
         if self.control is None:
@@ -174,6 +177,11 @@ class Run:
         if finish_only:
             messages = [*messages, HumanMessage(content="查询预算即将结束。现在必须单独调用finish，交付已取得事实并明确缺口；不得继续查询。")]
         try:
+            call_started = perf_counter()
+            record_snapshot(self.control, "model_input", {
+                "round": self.models, "status": "attempted", "messages": visible_messages(messages),
+                "tool_definitions": definitions, "max_tokens": 4096,
+            })
             def on_chunk(chunk):
                 # Retain native streaming for cancellation and deadline checks;
                 # partial function-call arguments are never public answer text.
@@ -184,6 +192,11 @@ class Run:
                 timeout_seconds=max(1, min(35, self.deadline - perf_counter())), max_tokens=4096,
                 on_chunk=on_chunk,
             )
+            record_snapshot(self.control, "model_output", {
+                "round": self.models, "status": "returned", "content": response.content,
+                "tool_calls": response.tool_calls, "usage": response.usage_metadata or {},
+                "duration_ms": round((perf_counter() - call_started) * 1000),
+            })
             self.trace("react_decision", {"round": self.models, "tool_calls": response.tool_calls,
                                          "usage": response.usage_metadata or {}})
             messages = [*messages, response]
@@ -205,6 +218,10 @@ class Run:
                 "finish": None,
             }
         except Exception as error:
+            record_snapshot(self.control, "model_error", {
+                "round": self.models, "error_type": type(error).__name__,
+                "duration_ms": round((perf_counter() - call_started) * 1000),
+            })
             if self.control and self.control.cancelled():
                 return self.stop("cancelled")
             if perf_counter() >= self.deadline:

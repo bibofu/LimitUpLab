@@ -9,6 +9,7 @@ import sqlite3
 from uuid import uuid4
 
 from app.database import connect, initialize_database
+from app.quality_schema import initialize_quality_schema, enqueue_completed
 
 CURRENT_CONTROL = ContextVar("react_run_control", default=None)
 
@@ -49,6 +50,7 @@ class Journal:
                     FOREIGN KEY(run_id) REFERENCES react_runs(run_id) ON DELETE CASCADE
                 );
             """)
+            initialize_quality_schema(db)
 
     @contextmanager
     def connection(self):
@@ -140,6 +142,7 @@ class Journal:
                 response["answer"], status, run_id, serialized, now))
             db.execute("UPDATE chat_sessions SET updated_at=? WHERE session_id=? AND owner_id=?", (now, row["session_id"], owner_id))
             db.execute("UPDATE react_runs SET response_json=?,active=0 WHERE run_id=? AND owner_id=?", (serialized, run_id, owner_id))
+            enqueue_completed(db, row, response)
             return response
 
     def cancel(self, run_id, owner_id):
@@ -180,7 +183,15 @@ class RunControl:
         self.journal.checkpoint(self.row["run_id"], self.row["owner_id"], payload)
 
     def begin_call(self, call):
-        return self.journal.begin_call(self.row["run_id"], call)
+        from app.services.quality_trace import record_snapshot
+        previous = self.journal.begin_call(self.row["run_id"], call)
+        record_snapshot(self, "tool_start", {
+            "call_id": call["id"], "name": call["name"], "arguments": call["args"],
+            "state": "replayed" if previous is not None else "reserved",
+        })
+        return previous
 
     def finish_call(self, call_id, result):
         self.journal.finish_call(self.row["run_id"], call_id, result)
+        from app.services.quality_trace import record_snapshot
+        record_snapshot(self, "tool_end", {"call_id": call_id, "result": result})
