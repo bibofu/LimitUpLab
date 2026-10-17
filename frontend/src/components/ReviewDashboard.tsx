@@ -52,6 +52,7 @@ export function ReviewDashboard({
       {latestTradeDate ? <HighScoreReviewPanel key={`tracking-${latestTradeDate}`} latestTradeDate={latestTradeDate} />
         : <div className="resource-notice" role="status">复盘日期尚未确认，请刷新本地事件数据。</div>}
       {dailyBoardPromotion ? <DailyBoardPromotionPanel report={dailyBoardPromotion} /> : promotionState}
+      {latestTradeDate ? <ReviewProfilesPanel key={`profiles-${latestTradeDate}`} latestTradeDate={latestTradeDate} /> : null}
       {latestTradeDate ? <DragonTigerReviewPanel key={`dragon-tiger-${latestTradeDate}`} tradeDate={latestTradeDate} /> : null}
     </>
   );
@@ -381,11 +382,17 @@ function PromotionWarnings({ warnings }: { warnings: string[] }) {
   );
 }
 
-/**
- * Coordinate historical high-score review loading and the resulting cohort/stock explanations.
- */
+/** Display cohort profiles independently of the daily Top10 tracking cards. */
+function ReviewProfilesPanel({ latestTradeDate }: { latestTradeDate: string }) {
+  const { report, summaryStatus, summaryError, regenerate } = useReviewReport(latestTradeDate);
+  return report
+    ? <ReviewSummary report={report} summaryStatus={summaryStatus} error={summaryError} onRegenerate={regenerate} />
+    : null;
+}
+
+/** Coordinate historical high-score review loading and daily stock tracking. */
 function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) {
-  const { report, loading: running, error, summaryStatus, summaryError, retry, regenerate } = useReviewReport(latestTradeDate);
+  const { report, loading: running, error, retry } = useReviewReport(latestTradeDate);
   const [activeReviewSelection, setActiveReviewSelection] = useState<string | null>(null);
 
   const reviewedPicks = report?.reviewed_picks ?? [];
@@ -507,8 +514,6 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
                 <strong>{trackedSuccessRate === null ? "暂无" : formatPercent(trackedSuccessRate)}</strong>
               </span>
             </div>
-
-            <ReviewSummary report={report} summaryStatus={summaryStatus} error={summaryError} onRegenerate={regenerate} />
 
             <DailyTopReview
               activeSelection={selectedReviewSelection}

@@ -415,15 +415,26 @@ test("post bars retain actual trading-day gaps and only legacy bars fall back to
   assert.ok(unknown.includes("<small>D+1</small><strong>缺缓存</strong>"));
 });
 
-test("the actual review panel retains deterministic statistics and tracking while the model is pending or failed", () => {
+test("profiles stay below daily promotion and outside the complete tracking panel while the model is pending or failed", () => {
   for (const [generating, summaryError] of [[true, null], [false, "模型超时"]] as const) {
     const dashboard = compile("../src/components/ReviewDashboard.tsx", {
-      "../api": {}, "./ReviewSummary": summary, "./ReviewOverview": {},
+      "../api": {}, "./ReviewSummary": summary, "./ReviewOverview": { ReviewOverview: () => null },
       "../hooks/useReviewReport": { useReviewReport: () => ({ report: report({ sample_size: 60, review_digest: reviewDigest() }), loading: false, error: null, generating, summaryStatus: generating ? "generating" : "error", summaryError, retry() {}, regenerate() {} }) },
-      "./Panel": { Panel: ({ children }: any) => createElement("section", null, children) },
+      "./Panel": { Panel: ({ title, children }: any) => createElement("section", null, createElement("h2", null, title), children) },
     }, "\nexport { HighScoreReviewPanel };");
-    const html = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(dashboard.HighScoreReviewPanel, { latestTradeDate: day })));
-    for (const value of ["Top10 1进2", "同期全部首板", "daily-top-review", "候选与高标画像", "42.0 亿元", "五日追踪样本", "复盘候选共 50 只", "完整追踪报告（60 条）"]) assert.ok(html.includes(value), value);
+    const tracking = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(dashboard.HighScoreReviewPanel, { latestTradeDate: day })));
+    for (const value of ["Top10 1进2", "同期全部首板", "daily-top-review", "五日追踪样本", "复盘候选共 50 只"]) assert.ok(tracking.includes(value), value);
+    assert.ok(!tracking.includes("候选与高标画像"));
+    const html = renderToStaticMarkup(createElement(MemoryRouter, null, createElement(dashboard.ReviewDashboard, {
+      latestTradeDate: day, dailyBoardPromotion: { items: [], warnings: [] },
+    })));
+    for (const value of ["候选与高标画像", "42.0 亿元", "完整追踪报告（60 条）"]) assert.ok(html.includes(value), value);
+    const promotion = html.indexOf("每日连板晋级率");
+    const profiles = html.indexOf('aria-label="候选与高标画像"');
+    assert.ok(html.indexOf("daily-top-review") < promotion);
+    assert.ok(promotion < profiles);
+    assert.ok(profiles < html.indexOf('class="dragon-tiger-section"'));
+    assert.equal(html.split('aria-label="候选与高标画像"').length - 1, 1);
     assert.ok(html.includes(generating ? "生成中" : "模型超时"));
   }
 });
