@@ -34,6 +34,10 @@ import type {
 } from "../types";
 import { AgentAnswerMarkdown } from "./AgentAnswerMarkdown";
 import { AgentChatProgress } from "./AgentChatProgress";
+import { AnswerFeedback } from "./AnswerFeedback";
+import { useAnswerDelivery, useAnswerQuality } from "../hooks/useAnswerQuality";
+import { qualityApi } from "../qualityApi";
+import { answerHash } from "../utils/agentQuality";
 import { taskStatusLabel } from "../utils/agentChatTransport";
 import { HttpResponseError } from "../utils/jsonRequest";
 import {
@@ -46,6 +50,7 @@ import {
 
 interface ChatMessage {
   id: string;
+  runId?: string | null;
   role: "user" | "agent";
   content: string;
   stockMentions: AgentStockMention[];
@@ -81,6 +86,7 @@ function sessionErrorMessage(error: unknown, fallback: string): string {
 function restoredChatMessage(message: ChatSessionMessage): ChatMessage {
   return {
     id: message.message_id,
+    runId: message.run_id,
     role: message.role === "assistant" ? "agent" : "user",
     content: message.content,
     stockMentions: stockMentionsFromMetadata(message.metadata),
@@ -95,6 +101,7 @@ function restoredChatMessage(message: ChatSessionMessage): ChatMessage {
  */
 function responseMessageMetadata(response: AgentChatResponse): Partial<ChatMessage> {
   return {
+    runId: response.run_id,
     stockMentions: response.stock_mentions,
     suggestedQuestions: response.suggested_questions,
     status: response.task_status === "error" ? "error" : "success",
@@ -175,6 +182,9 @@ export function AgentChatDock({
   const [revealingMessageId, setRevealingMessageId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
   const [sessionId, setSessionId] = useState<string | null>(null);
+  const [qualityRevision, setQualityRevision] = useState(0);
+  const quality = useAnswerQuality(sessionId, qualityRevision);
+  const acknowledgeDisplay = useAnswerDelivery();
   const [sessionLoading, setSessionLoading] = useState(true);
   const [sessionError, setSessionError] = useState<{
     message: string;
@@ -232,6 +242,7 @@ export function AgentChatDock({
     followAnswerRef.current = true;
     setShowLatest(false);
     setSessionId(detail.session_id);
+    setQualityRevision(value => value + 1);
     rememberActiveChatSession(() => window.localStorage.setItem(ACTIVE_CHAT_SESSION_STORAGE_KEY, detail.session_id));
     setMessage(drafts.current.get(detail.session_id) ?? "");
     setMessages(detail.messages.map(restoredChatMessage));
@@ -480,6 +491,9 @@ export function AgentChatDock({
           setStreamStatus(event.data.message);
         }
       });
+      if (response.run_id) {
+        void answerHash(response.answer).then(hash => hash && qualityApi.delivery(response.run_id!, "received", hash)).catch(() => {});
+      }
       setMessages(current => {
         const finalMessage: ChatMessage = {
           id: agentMessageId, role: "agent", content: response.answer,
@@ -490,6 +504,7 @@ export function AgentChatDock({
         return current.map((item, index) => index === existing ? finalMessage : item);
       });
       failedRequest.current = null;
+      setQualityRevision(value => value + 1);
       setActiveRunId(null);
       const canRestart = response.task_status === "error" || response.task_status === "cancelled";
       setRevealingMessageId(canRestart ? null : agentMessageId);
@@ -705,13 +720,19 @@ export function AgentChatDock({
                     stockMentions={item.stockMentions}
                     animate={revealingMessageId === item.id}
                     onRevealProgress={followRevealedAnswer}
+                    onRevealComplete={() => { if (item.runId) void acknowledgeDisplay(item.runId, item.content); }}
                   />
+                  {item.runId ? <AnswerFeedback key={item.runId} runId={item.runId}
+                    initial={quality.runs[item.runId]?.feedback} ready={quality.ready} /> : null}
                 </div>
               ) : (
                 <p>{item.content}</p>
               )}
             </article>
           ))}
+          {quality.error ? <div className="chat-state" role="status">
+            回答反馈暂未载入。<button type="button" onClick={quality.retry}>重新加载反馈</button>
+          </div> : null}
           {sending ? (
             <AgentChatProgress stage={streamStage} message={streamStatus} startedAt={runStartedAt.current} />
           ) : null}

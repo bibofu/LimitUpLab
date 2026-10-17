@@ -41,16 +41,20 @@ export const AgentAnswerMarkdown = memo(function AgentAnswerMarkdown({
   stockMentions,
   animate = false,
   onRevealProgress,
+  onRevealComplete,
 }: {
   content: string;
   stockMentions: AgentStockMention[];
   animate?: boolean;
   onRevealProgress?: () => void;
+  onRevealComplete?: () => void;
 }) {
   const [revealed, setRevealed] = useState({ content, units: 1 });
   const plan = useRef({ total: 0 });
   const revealProgress = useRef(onRevealProgress);
   revealProgress.current = onRevealProgress;
+  const revealComplete = useRef(onRevealComplete);
+  revealComplete.current = onRevealComplete;
   const finishReveal = useRef<() => void>(() => {});
   const reducedMotion = typeof window !== "undefined" && window.matchMedia?.("(prefers-reduced-motion: reduce)").matches;
   const canAnimate = animate && content.length <= 20000 && content.split("\n").length <= 400;
@@ -100,6 +104,7 @@ export const AgentAnswerMarkdown = memo(function AgentAnswerMarkdown({
   }, [canAnimate, content]);
 
   useEffect(() => { revealProgress.current?.(); }, [visibleUnits]);
+  useEffect(() => { if (!revealing) revealComplete.current?.(); }, [revealing, content]);
 
   return (
     <>

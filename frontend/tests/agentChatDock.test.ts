@@ -97,6 +97,10 @@ function mount(t: TestContext, overrides: Record<string, any> = {}, savedSession
     "../utils/jsonRequest": jsonRequest,
     "./AgentAnswerMarkdown": markdownModule.exports,
     "./AgentChatProgress": { AgentChatProgress: () => null },
+    "./AnswerFeedback": { AnswerFeedback: () => null },
+    "../hooks/useAnswerQuality": { useAnswerQuality: () => ({ runs: {}, ready: true, error: false }), useAnswerDelivery: () => () => {} },
+    "../qualityApi": { qualityApi: { delivery: async () => {} } },
+    "../utils/agentQuality": { answerHash: async () => null },
   };
   const module = { exports: {} as any };
   new Function("require", "module", "exports", compiled)((id: string) => imports[id] ?? require(id), module, module.exports);

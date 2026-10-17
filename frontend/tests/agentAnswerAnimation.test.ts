@@ -43,6 +43,7 @@ function mount(t: TestContext, content: string, options: { animate?: boolean; re
   let cursor = 0;
   let dirty = false;
   let updates = 0;
+  let completions = 0;
   const hooks = {
     ...React,
     memo: (component: any) => component,
@@ -75,7 +76,7 @@ function mount(t: TestContext, content: string, options: { animate?: boolean; re
   };
   const module = { exports: {} as any };
   new Function("require", "module", "exports", compiled)((id: string) => imports[id] ?? require(id), module, module.exports);
-  let props = { content, stockMentions: [{ symbol: "600101", name: "样例科技", trade_date: "2026-10-15" }], animate: options.animate ?? true, onRevealProgress: () => { updates++; } };
+  let props = { content, stockMentions: [{ symbol: "600101", name: "样例科技", trade_date: "2026-10-15" }], animate: options.animate ?? true, onRevealProgress: () => { updates++; }, onRevealComplete: () => { completions++; } };
   let tree: any;
   let html = "";
   function render() {
@@ -93,6 +94,7 @@ function mount(t: TestContext, content: string, options: { animate?: boolean; re
   return {
     get html() { return html; },
     get updates() { return updates; },
+    get completions() { return completions; },
     get linkRenderer() { return tree.props.children[0].props.components.a; },
     get scheduled() { return frames.size; },
     advance(milliseconds: number) {
@@ -117,6 +119,7 @@ function mount(t: TestContext, content: string, options: { animate?: boolean; re
 test("new approved prose grows monotonically and completes within the display budget without callback resets", t => {
   const text = "已经核对的研究结果。".repeat(100);
   const app = mount(t, text);
+  assert.equal(app.completions, 0, "a partially revealed answer cannot acknowledge complete display");
   assert.ok(app.html.includes("立即显示全部"));
   assert.ok(!app.html.includes(text));
   let previous = app.html.split("</p>")[0];
@@ -131,6 +134,7 @@ test("new approved prose grows monotonically and completes within the display bu
   assert.ok(app.html.includes(text));
   assert.ok(!app.html.includes("立即显示全部"));
   assert.equal(app.scheduled, 0);
+  assert.equal(app.completions, 1, "the full committed answer acknowledges display once");
 });
 
 test("tables reveal whole rows with grounded links and show-all stops the pending animation", t => {
