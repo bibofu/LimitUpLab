@@ -78,7 +78,6 @@ button {
   line-height: 1.1;
 }
 
-.app-brand small,
 .data-as-of small {
   color: #667489;
   font-size: 11px;
@@ -3559,7 +3558,6 @@ td span {
     grid-row: 1;
   }
 
-  .app-brand small,
   .data-as-of small {
     display: none;
   }

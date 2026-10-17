@@ -198,7 +198,6 @@ export function App() {
           <span className="app-brand-mark"><Flame aria-hidden="true" size={19} /></span>
           <span>
             <strong>LimitUpLab</strong>
-            <small>首板研究 Agent</small>
           </span>
         </Link>
 
