@@ -52,14 +52,14 @@ export function AnswerFeedback({ runId, initial, ready }: {
   }
   return <div className="answer-feedback" aria-label="回答反馈">
     <div className="answer-feedback-actions">
-      <button type="button" disabled={!ready || pending} aria-pressed={saved.vote === "up"} onClick={() => vote("up")}>
-        <ThumbsUp size={13} />有帮助
+      <button type="button" aria-label="点赞" disabled={!ready || pending} aria-pressed={saved.vote === "up"} onClick={() => vote("up")}>
+        <ThumbsUp size={13} aria-hidden="true" />
       </button>
-      <button type="button" disabled={!ready || pending} aria-pressed={saved.vote === "down"} onClick={() => vote("down")}>
-        <ThumbsDown size={13} />有问题
+      <button type="button" aria-label="点踩" disabled={!ready || pending} aria-pressed={saved.vote === "down"} onClick={() => vote("down")}>
+        <ThumbsDown size={13} aria-hidden="true" />
       </button>
       {saved.vote === "down" && !expanded ? <button type="button" onClick={() => setExpanded(true)}>补充原因</button> : null}
-      <span role="status">{pending ? "正在保存…" : saved.vote ? "已记录反馈" : ""}</span>
+      {pending ? <span role="status">正在保存…</span> : null}
     </div>
     {expanded ? <fieldset disabled={pending || !ready}>
       <legend>哪里有问题？原因和说明均可跳过</legend>
@@ -69,7 +69,7 @@ export function AnswerFeedback({ runId, initial, ready }: {
       <textarea aria-label="反馈补充说明" maxLength={1000} rows={2} value={draft.comment}
         onChange={event => setDraft(current => ({ ...current, comment: event.target.value }))} placeholder="可补充期望的回答或问题位置，请勿填写敏感信息" />
       <div className="answer-feedback-actions">
-        <button type="button" onClick={() => void save({ ...draft, vote: "down" })}>保存原因</button>
+        <button type="button" onClick={() => void save({ ...draft, vote: "down" })}>提交</button>
         <button type="button" onClick={() => setExpanded(false)}>收起</button>
       </div>
     </fieldset> : null}

@@ -88,7 +88,7 @@ test("feedback restores, blocks duplicate clicks, preserves failure retry and to
       calls.push(value); return new Promise((yes, no) => { resolve = yes; reject = no; });
     } } },
   }, "AnswerFeedback", { runId: "r", initial: { vote: "down", reasons: ["incomplete"], comment: "漏了第二问" }, ready: true });
-  const up = () => app.find(node => node.type === "button" && node.props.children?.[1] === "有帮助");
+  const up = () => app.find(node => node.type === "button" && node.props["aria-label"] === "点赞");
   assert.equal(up()["aria-pressed"], false);
   up().onClick(); up().onClick(); app.render();
   assert.equal(calls.length, 1); assert.equal(up().disabled, true);
