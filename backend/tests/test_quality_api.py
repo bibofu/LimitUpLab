@@ -159,6 +159,7 @@ def test_worker_durable_backfill_recovery_and_no_duplicate_cases(env, monkeypatc
     client, repo, run_id, _ = env
     with repo.connection() as db:
         db.execute("DELETE FROM quality_jobs")  # Simulate a pre-migration finalized run.
+        db.execute("DELETE FROM quality_evidence_bundles")
         db.execute("UPDATE react_runs SET response_json=json_set(response_json,'$.task_status','error') WHERE run_id=?", (run_id,))
     result = quality_detection.process_pending(repo)
     assert result["backfilled"] == 1 and result["succeeded"] == 1
@@ -170,13 +171,70 @@ def test_worker_durable_backfill_recovery_and_no_duplicate_cases(env, monkeypatc
 
 
 def test_worker_records_sanitized_failure_for_retry(env, monkeypatch):
-    _, repo, _, _ = env
+    _, repo, run_id, _ = env
     def fail(*_, **__):
         raise RuntimeError("private prompt must not enter error log")
-    monkeypatch.setattr(quality_detection, "detect_run", fail)
+    from app.services import quality_evaluation
+    monkeypatch.setattr(quality_evaluation, "evaluate_bundle", fail)
     result = quality_detection.process_pending(repo)
     assert result["failed"] == 1
     with repo.connection() as db:
         row = db.execute("SELECT status,last_error,attempts FROM quality_jobs").fetchone()
     assert dict(row) == {"status": "pending", "last_error": "RuntimeError", "attempts": 1}
     assert repo.list_cases()["total"] == 0
+    item = repo.evaluation_history(run_id)["items"][0]
+    assert item["execution_status"] == "error" and item["verdict"] == "unknown"
+    assert item["report"]["metadata"]["error_type"] == "RuntimeError"
+
+
+def test_worker_timeout_retains_frozen_evidence_for_retry_without_failing_answer(env, monkeypatch):
+    _, repo, run_id, _ = env
+    from app.services import quality_evaluation
+
+    def timed_out(bundle, *, deadline):
+        assert deadline > 0 and bundle["manifest"]["schema_version"] == "quality-evidence-v1"
+        raise TimeoutError("stop pure computation")
+
+    monkeypatch.setattr(quality_evaluation, "evaluate_bundle", timed_out)
+    assert quality_detection.process_pending(repo)["failed"] == 1
+    report = repo.evaluation_history(run_id)["items"][0]
+    assert report["execution_status"] == "error" and report["verdict"] == "unknown"
+    assert report["report"]["metadata"]["error_type"] == "TimeoutError"
+    assert repo.get_bundle(report["bundle_id"])["response"]["task_status"] == "complete"
+    assert repo.job_health()["counts"]["pending"] == 1
+    assert repo.list_cases()["total"] == 0
+
+
+def test_evaluation_reports_include_unknown_coverage_without_creating_a_case(env):
+    client, repo, run_id, _ = env
+    history_url = f"/api/admin/quality/runs/{run_id}/evaluations"
+    assert client.get(history_url).status_code == 401
+    assert client.get("/api/admin/quality/evaluations").status_code == 401
+    result = quality_detection.process_pending(repo)
+    assert result["succeeded"] == 1
+    reports = client.get(history_url, headers=ADMIN).json()
+    assert reports["total"] == 1
+    item = reports["items"][0]
+    assert item["execution_status"] == "succeeded"
+    assert item["verdict"] == "unknown"  # The fixture has no final checkpoint.
+    assert item["report"]["checks"]
+    assert item["report"]["metadata"]["model_calls"] == 0
+    assert repo.list_cases()["total"] == 0
+    bundle_url = f"/api/admin/quality/bundles/{item['bundle_id']}"
+    assert client.get(bundle_url).status_code == 401
+    frozen = client.get(bundle_url, headers=ADMIN)
+    assert frozen.status_code == 200
+    assert client.get("/api/admin/quality/evaluations?verdict=unknown", headers=ADMIN).json()["total"] == 1
+    assert client.get("/api/admin/quality/evaluations?verdict=invalid", headers=ADMIN).status_code == 422
+    same = client.post(history_url, headers=ADMIN, json={})
+    assert same.status_code == 200 and same.json()["created"] is False
+    resampled = client.post(history_url, headers=ADMIN, json={"normal_sample_rate": 1})
+    assert resampled.status_code == 200 and resampled.json()["created"] is True
+    assert resampled.json()["bundle_id"] == item["bundle_id"]
+    assert client.post(history_url, headers=ADMIN, json={"job_kind": "judge"}).status_code == 422
+    assert quality_detection.process_pending(repo)["succeeded"] == 1
+    assert repo.list_cases(source="normal_sample")["total"] == 1
+    assert client.get(bundle_url, headers=ADMIN).json() == frozen.json()
+    SQLiteChatSessionRepository(repo.path).delete_session("session", owner_id=OWNER)
+    assert client.get(history_url, headers=ADMIN).status_code == 404
+    assert client.get(bundle_url, headers=ADMIN).status_code == 404

@@ -153,6 +153,19 @@ function CaseEvidence({ detail }: { detail: CaseDetail }) {
       <strong>{signal.summary}</strong><small>{sourceLabel(signal.source)} · {signal.code} · {signal.detector_version} · {severities[signal.severity]}</small>
       <JsonEvidence label="查看定位证据" value={signal.evidence} />
     </article>)}
+    {detail.has_new_signals_since_review ? <p>上次人工审核后新增了检测信号，请结合新证据决定是否重新复核。</p> : null}
+    <h3>确定性评审报告（{detail.evaluations?.total ?? 0}）</h3>
+    <p>通过仅代表所列检查范围；未知表示材料不足或不适用。评审执行失败不代表回答错误。</p>
+    {detail.evaluations?.items.map(evaluation => <article className="quality-signal" key={evaluation.evaluation_id}>
+      <strong>{evaluation.verdict ? ({ pass: "检查通过", fail: "发现明确不一致", unknown: "检查范围未完全确认" })[evaluation.verdict] : "评审尚未完成"}</strong>
+      <small>评审执行：{({ running: "执行中", succeeded: "完成", error: "失败", skipped: "跳过" })[evaluation.execution_status]} · {evaluation.evaluator_version}</small>
+      <small>证据包：{evaluation.bundle_id ?? "历史任务未留存"}</small>
+      {evaluation.report?.checks?.map(check => <p key={check.check_id}>
+        {({ pass: "通过", fail: "失败", unknown: "未知" })[check.verdict] ?? check.verdict} · {check.summary}
+        {check.unknown_reason ? `（${check.unknown_reason}）` : ""}
+      </p>)}
+      <JsonEvidence label="检查定位与执行详情" value={evaluation.report} />
+    </article>)}
     <h3>执行与模型证据</h3>
     <JsonEvidence label="请求与解析条件" value={run.request} />
     <JsonEvidence label="工具调用结果" value={run.calls} />

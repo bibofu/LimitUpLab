@@ -22,6 +22,8 @@ export interface QualityCase {
 }
 export interface CaseDetail {
   case: QualityCase;
+  evaluations?: { items: EvaluationRecord[]; total: number };
+  has_new_signals_since_review?: boolean;
   signals: { signal_id: string; source: string; code: string; severity: Severity; summary: string; evidence: unknown; detector_version: string; created_at: string }[];
   reviews: { actor_id: string; from_status: CaseStatus; to_status: CaseStatus; revision: number; note: string; changes: unknown; created_at: string }[];
   run: {
@@ -29,6 +31,12 @@ export interface CaseDetail {
     execution_status?: string; delivery_status: string; delivery_events: unknown; context: unknown; feedback: AnswerFeedbackValue | null;
   };
   trace_snapshots: { id: number; stage: string; captured_at: string; payload: unknown }[];
+}
+
+export interface EvaluationRecord {
+  evaluation_id: string; bundle_id: string | null; evaluator_version: string;
+  execution_status: "running" | "succeeded" | "error" | "skipped"; verdict: "pass" | "fail" | "unknown" | null;
+  report: { checks?: { check_id: string; verdict: "pass" | "fail" | "unknown"; summary: string; unknown_reason?: string | null; evidence: unknown }[]; metadata?: unknown } | null;
 }
 export type CaseFilters = { status: string; source: string; severity: string; symptom: string; version: string };
 export const emptyCaseFilters = (): CaseFilters => ({ status: "", source: "", severity: "", symptom: "", version: "" });

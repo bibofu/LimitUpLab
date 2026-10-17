@@ -3,9 +3,8 @@
 import hashlib
 import math
 import os
-from uuid import uuid4
 
-from app.quality_models import DetectionSignal, QualityConflict
+from app.quality_models import DetectionSignal
 from app.quality_schema import DETECTOR_VERSION, answer_hash
 
 
@@ -133,34 +132,6 @@ def _check_rows(evidence, references):
 
 
 def process_pending(repository=None, *, limit=20, stop_event=None):
-    """Backfill, claim with a lease, and commit candidates atomically per job."""
-    from app.repositories.quality_repository import QualityRepository
-    from app.services.quality_trace import prune_trace_snapshots
-
-    if not 1 <= limit <= 50:
-        raise ValueError("limit must be between 1 and 50")
-    rate, days = sample_rate(), retention_days()
-    repository = repository or QualityRepository()
-    result = {"processed": 0, "succeeded": 0, "failed": 0,
-              "backfilled": repository.backfill_jobs(limit=max(100, limit)), "pruned": 0}
-    worker = "quality-" + uuid4().hex
-    for _ in range(limit):
-        if stop_event is not None and stop_event.is_set():
-            break
-        job = repository.claim_job(worker, lease_seconds=60)
-        if job is None:
-            break
-        result["processed"] += 1
-        try:
-            repository.complete_job(job, detect_run(job, rate=rate))
-            result["succeeded"] += 1
-        except Exception as error:
-            # Persist only the error class; exception strings can contain user data.
-            try:
-                repository.fail_job(job, type(error).__name__)
-            except QualityConflict:
-                pass  # The expired lease is now owned by another worker.
-            result["failed"] += 1
-    with repository.connection() as db:
-        result["pruned"] = prune_trace_snapshots(db, retention_days=days)
-    return result
+    """Stable worker entry point; v2 persists every assessment, not only signals."""
+    from app.services.quality_evaluation import process_evaluations
+    return process_evaluations(repository, limit=limit, stop_event=stop_event)
