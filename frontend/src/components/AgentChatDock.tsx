@@ -544,9 +544,9 @@ export function AgentChatDock({
   const promptSuggestions = latestAgentMessage?.suggestedQuestions?.length
     ? latestAgentMessage.suggestedQuestions
     : [
-        "总结最新交易日的首板结构",
-        "最新一进二 Top10 的主要风险有哪些？",
-        "复盘最近 5 个交易日的一进二晋级率",
+        "总结今天的市场情况",
+        "今天哪些股票首板涨停",
+        "最近有哪些财经新闻",
       ];
 
   return (

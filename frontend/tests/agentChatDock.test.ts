@@ -410,9 +410,9 @@ test("suggested questions keep an unsent draft and failed sidebar refresh keeps 
   });
   await app.settle();
   app.type("另一个尚未发送的问题");
-  app.find(node => node.type === "button" && node.props.children === "总结最新交易日的首板结构").onClick();
+  app.find(node => node.type === "button" && node.props.children === "总结今天的市场情况").onClick();
   await app.settle();
-  assert.equal(requests[0].message, "总结最新交易日的首板结构");
+  assert.equal(requests[0].message, "总结今天的市场情况");
   assert.equal(app.input().value, "另一个尚未发送的问题");
   assert.equal(app.has(node => node.props.content === "研究回答"), true);
   assert.equal(app.has(node => node.type === "button" && Array.isArray(node.props.children) && node.props.children.includes("重试上一个问题")), false);

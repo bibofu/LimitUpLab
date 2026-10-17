@@ -60,7 +60,7 @@ test("Enter sends, while Shift+Enter and IME confirmation preserve the draft", (
 
 test("recommendation and retry buttons preserve a different unsent multiline question", () => {
   const draft = "查看昨日首板\n补充数据缺失情况";
-  assert.equal(draftAfterChatSubmit(draft, "总结最新交易日的首板结构"), draft);
+  assert.equal(draftAfterChatSubmit(draft, "总结今天的市场情况"), draft);
   assert.equal(draftAfterChatSubmit(draft, "重试的问题"), draft);
   assert.equal(draftAfterChatSubmit(draft), "");
 });
