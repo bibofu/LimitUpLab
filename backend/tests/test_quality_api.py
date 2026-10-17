@@ -73,6 +73,56 @@ def test_delivery_hash_and_later_success_do_not_claim_user_reading(env):
     assert len(detail["run"]["delivery_events"]) == 3
 
 
+def test_active_run_accepts_owned_interruption_and_defers_case_until_completion(env):
+    client, repo, _, response = env
+    journal = Journal(repo.path)
+    run, _ = journal.create(AgentChatRequest(session_id="session", message_id="active", message="研究请求"), OWNER)
+    run_id = run["run_id"]
+    url = f"/api/agents/chat/runs/{run_id}/delivery"
+    for event in ("received", "displayed"):
+        assert client.post(url, json={"event": event}).status_code == 422
+    assert client.post(url, json={"event": "interrupted", "answer_hash": "0" * 64}).status_code == 409
+    client.cookies.set(SESSION_COOKIE_NAME, sign_visitor_owner_id(OTHER))
+    assert client.post(url, json={"event": "interrupted"}).status_code == 404
+    client.cookies.set(SESSION_COOKIE_NAME, sign_visitor_owner_id(OWNER))
+    for _ in range(2):
+        saved = client.post(url, json={"event": "interrupted", "answer_hash": None})
+        assert saved.status_code == 200
+        assert saved.json()["delivery_status"] == "interrupted"
+    state = client.get("/api/agents/chat/sessions/session/quality").json()["runs"][run_id]
+    assert state["answer_hash"] is None and state["delivery_status"] == "interrupted"
+    assert repo.list_cases()["total"] == 0
+    final = journal.finish(run_id, OWNER, response)
+    quality_detection.process_pending(repo)
+    case = repo.list_cases()["items"][0]
+    assert case["status"] == "pending" and case["severity"] == "low"
+    detail = repo.case_detail(case["case_id"])
+    assert len(detail["signals"]) == 1 and detail["signals"][0]["evidence"]["status"] == "unknown"
+    assert len(detail["run"]["delivery_events"]) == 1
+    assert detail["run"]["delivery_events"][0]["answer_hash"] == ""
+    displayed = client.post(url, json={"event": "displayed", "answer_hash": answer_hash(final)})
+    assert displayed.json()["delivery_status"] == "displayed"
+    assert repo.case_detail(case["case_id"])["run"]["delivery_status"] == "displayed"
+
+
+def test_delivery_recovery_before_worker_avoids_new_candidate_and_bad_hash(env):
+    client, repo, run_id, response = env
+    url = f"/api/agents/chat/runs/{run_id}/delivery"
+    assert client.post(url, json={"event": "displayed", "answer_hash": answer_hash(response)}).status_code == 200
+    assert client.post(url, json={"event": "interrupted", "answer_hash": "0" * 64}).status_code == 409
+    assert client.post(url, json={"event": "interrupted"}).json()["delivery_status"] == "displayed"
+    quality_detection.process_pending(repo)
+    assert repo.list_cases()["total"] == 0
+
+
+def test_completed_interruption_immediate_and_background_signal_are_deduplicated(env):
+    client, repo, run_id, _ = env
+    assert client.post(f"/api/agents/chat/runs/{run_id}/delivery", json={"event": "interrupted"}).status_code == 200
+    quality_detection.process_pending(repo)
+    case = repo.list_cases()["items"][0]
+    assert len(repo.case_detail(case["case_id"])["signals"]) == 1
+
+
 def test_admin_review_requires_key_and_enforces_auditable_transitions(env):
     client, repo, run_id, _ = env
     client.put(f"/api/agents/chat/runs/{run_id}/feedback", json={"vote": "down"})

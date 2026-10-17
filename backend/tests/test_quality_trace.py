@@ -65,3 +65,32 @@ def test_diagnostic_storage_failure_is_not_an_agent_failure(caplog):
     assert "quality_snapshot_failed" in caplog.text
     assert "never-log-this" not in caplog.text
     assert scrub_private_data({"total_tokens": 100}) == {"total_tokens": 100}
+
+
+def test_provenance_failure_is_explicit_and_lazy_payload_is_guarded(monkeypatch, caplog):
+    from app.services import quality_trace
+    def unavailable():
+        raise PermissionError("private filesystem path")
+    monkeypatch.setattr(quality_trace, "source_fingerprint", unavailable)
+    metadata = quality_trace.provenance(SimpleNamespace(), "prompt", "tools-v1")
+    assert metadata["code_sha256"] is None
+    assert "code_sha256: source files unavailable" in metadata["missing"]
+    record_snapshot(SimpleNamespace(), "provenance", unavailable)
+    assert "PermissionError" in caplog.text and "private filesystem path" not in caplog.text
+
+
+def test_actual_native_parameters_are_distinct_from_base_configuration(monkeypatch):
+    from app.services import quality_trace
+    from test_langchain_provider import provider_for, completion
+    import httpx
+    snapshots = []
+    monkeypatch.setattr(quality_trace, "record_snapshot", lambda control, stage, payload: snapshots.append((stage, payload)))
+    def handle(request):
+        payload = json.loads(request.content)
+        assert payload["temperature"] == 0
+        return httpx.Response(200, json=completion({"role": "assistant", "content": "hello"}))
+    with provider_for(handle) as provider:
+        result = provider.generate_messages([HumanMessage(content="hello")], [])
+        assert result.content == "hello"
+    assert snapshots and snapshots[0][0] == "model_parameters"
+    assert snapshots[0][1]["temperature"] == 0

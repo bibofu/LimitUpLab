@@ -137,6 +137,13 @@ class LangChainChatProvider(LLMProvider):
             bound = model.bind_tools(tools, temperature=0, max_tokens=max_tokens, **choice) if tools else model.bind(
                 temperature=0, max_tokens=max_tokens,
             )
+            from app.agents.react_runtime.lifecycle import CURRENT_CONTROL
+            from app.services.quality_trace import record_snapshot
+            record_snapshot(CURRENT_CONTROL.get(), "model_parameters", {
+                "model": self.model, "temperature": 0, "max_tokens": max_tokens,
+                "timeout_seconds": timeout_seconds, "max_retries": 0,
+                "tool_choice": choice.get("tool_choice"),
+            })
             streamed_message = None
             stream_usage = None
             if on_chunk is None:

@@ -30,7 +30,13 @@ class FeedbackInput(BaseModel):
 class DeliveryInput(BaseModel):
     model_config = ConfigDict(extra="forbid")
     event: Literal["received", "displayed", "interrupted"]
-    answer_hash: str = Field(min_length=64, max_length=64)
+    answer_hash: str | None = Field(default=None, min_length=64, max_length=64)
+
+    @model_validator(mode="after")
+    def require_answer_identity(self):
+        if self.event != "interrupted" and self.answer_hash is None:
+            raise ValueError("Received and displayed receipts require an answer hash")
+        return self
 
 
 class ReviewInput(BaseModel):

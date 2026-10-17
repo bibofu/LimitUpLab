@@ -103,7 +103,8 @@ class QualityRepository:
             return decoded(db.execute("SELECT * FROM quality_feedback WHERE run_id=?", (run_id,)).fetchone(), ["reasons"])
 
     def _delivery_status(self, db, run_id, digest):
-        events = {r[0] for r in db.execute("SELECT event FROM quality_delivery WHERE run_id=? AND answer_hash=?", (run_id, digest))}
+        events = {r[0] for r in db.execute("""SELECT event FROM quality_delivery WHERE run_id=?
+            AND (answer_hash=? OR (answer_hash='' AND event='interrupted'))""", (run_id, digest))}
         return next((state for state in ("displayed", "received", "interrupted") if state in events), "unknown")
 
     def session_state(self, session_id, owner_id):
@@ -122,16 +123,27 @@ class QualityRepository:
         data = DeliveryInput(event=event, answer_hash=answer_hash)
         with self.connection() as db:
             db.execute("BEGIN IMMEDIATE")
-            _, response = self._owned_run(db, run_id, owner_id)
+            row = db.execute("SELECT * FROM react_runs WHERE run_id=? AND owner_id=?", (run_id, owner_id)).fetchone()
+            if row is None:
+                raise KeyError("Run not found")
+            response = json.loads(row["response_json"]) if row["response_json"] else None
             from app.quality_schema import answer_hash as digest_of
-            if data.answer_hash != digest_of(response):
+            digest = digest_of(response) if response else None
+            if data.answer_hash is not None and data.answer_hash != digest:
                 raise QualityConflict("回执与已保存的答案版本不匹配")
+            # Before completion, the client knows only the accepted run identity.
+            # Empty hash is reserved internally for its transport interruption.
             db.execute("INSERT OR IGNORE INTO quality_delivery(run_id,answer_hash,event,created_at) VALUES(?,?,?,?)",
-                       (run_id, data.answer_hash, data.event, now()))
-            if event == "interrupted":
+                       (run_id, data.answer_hash or "", data.event, now()))
+            delivery_status = self._delivery_status(db, run_id, digest)
+            if (event == "interrupted" and response and response.get("task_status") != "cancelled"
+                    and delivery_status == "interrupted"):
                 self._signal(db, run_id, response, {"source": "delivery", "code": "interrupted", "severity": "low",
-                    "summary": "客户端报告回答交付中断，需结合后续回执复核", "evidence": {"event": event}, "detector_version": "delivery-v1"})
-            return {"run_id": run_id, "answer_hash": data.answer_hash, "delivery_status": self._delivery_status(db, run_id, data.answer_hash)}
+                    "summary": "客户端报告回答交付中断，需结合后续回执复核", "evidence": {
+                        "event": event, "status": "unknown", "quality_verdict": "unknown",
+                        "scope": "answer" if data.answer_hash else "run",
+                    }, "detector_version": DETECTOR_VERSION})
+            return {"run_id": run_id, "answer_hash": data.answer_hash, "delivery_status": delivery_status}
 
     def list_cases(self, *, status=None, source=None, severity=None, symptom=None, version=None, limit=50, offset=0):
         conditions, params = [], []
@@ -165,6 +177,7 @@ class QualityRepository:
         run = decoded(row, ["request", "response", "checkpoint"])
         run["calls"] = [decoded(r, ["result"]) for r in db.execute("SELECT * FROM react_calls WHERE run_id=? ORDER BY rowid", (row["run_id"],))]
         run["trace_snapshots"] = [decoded(r, ["payload"]) for r in db.execute("SELECT * FROM quality_trace_snapshots WHERE run_id=? ORDER BY id", (row["run_id"],))]
+        run["delivery_events"] = [dict(r) for r in db.execute("SELECT * FROM quality_delivery WHERE run_id=? ORDER BY created_at", (row["run_id"],))]
         return run
 
     def case_detail(self, case_id):
@@ -179,7 +192,6 @@ class QualityRepository:
                 WHERE session_id=? AND created_at<=? ORDER BY created_at DESC,rowid DESC LIMIT 30""", (row["session_id"], row["started_at"]))][::-1]
             feedback = db.execute("SELECT * FROM quality_feedback WHERE run_id=?", (case["run_id"],)).fetchone()
             run["feedback"] = decoded(feedback, ["reasons"]) if feedback else None
-            run["delivery_events"] = [dict(r) for r in db.execute("SELECT * FROM quality_delivery WHERE run_id=? ORDER BY created_at", (case["run_id"],))]
             run["delivery_status"] = self._delivery_status(db, case["run_id"], answer_hash(run["response"]))
             return scrub_private_data({"case": dict(case), "run": run, "trace_snapshots": run.pop("trace_snapshots"),
                 "signals": [decoded(r, ["evidence"]) for r in db.execute("SELECT * FROM quality_signals WHERE case_id=? ORDER BY created_at", (case_id,))],

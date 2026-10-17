@@ -120,7 +120,7 @@ class Run:
         if self.control:
             elapsed = (datetime.now(timezone.utc) - datetime.fromisoformat(self.control.row["started_at"])).total_seconds()
             self.deadline -= max(0, elapsed)
-            record_snapshot(self.control, "provenance", provenance(provider, SYSTEM, TOOL_CONTRACT_VERSION))
+            record_snapshot(self.control, "provenance", lambda: provenance(provider, SYSTEM, TOOL_CONTRACT_VERSION))
 
     def save(self, state, next_node):
         if self.control is None:

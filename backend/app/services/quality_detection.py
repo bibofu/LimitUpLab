@@ -6,7 +6,7 @@ import os
 from uuid import uuid4
 
 from app.quality_models import DetectionSignal, QualityConflict
-from app.quality_schema import DETECTOR_VERSION
+from app.quality_schema import DETECTOR_VERSION, answer_hash
 
 
 def sample_rate():
@@ -46,6 +46,19 @@ def detect_run(job, *, rate=None):
             "status": "unknown", "path": "response.task_status", "task_status": status,
             "stop_reason": response.get("stop_reason"), "quality_verdict": "unknown",
         }, severity="low"))
+
+    digest = answer_hash(response) if response else None
+    delivery_events = job.get("delivery_events") or []
+    acknowledged = digest is not None and any(
+        event.get("answer_hash") == digest and event.get("event") in {"received", "displayed"}
+        for event in delivery_events)
+    interrupted = [event for event in delivery_events if event.get("event") == "interrupted"
+                   and event.get("answer_hash") in {"", digest}]
+    if interrupted and not acknowledged and status != "cancelled":
+        signals.append(_signal("interrupted", "客户端报告交付中断，尚无对应答案的接收或展示回执。", {
+            "status": "unknown", "quality_verdict": "unknown", "path": "delivery_events",
+            "events": interrupted,
+        }, severity="low", source="delivery"))
 
     checkpoint = job.get("checkpoint") or {}
     runtime, state = checkpoint.get("runtime", {}), checkpoint.get("state", {})

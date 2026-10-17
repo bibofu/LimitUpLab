@@ -7,6 +7,7 @@ from pathlib import Path
 import pytest
 
 from app.services import quality_detection as detection
+from app.quality_schema import answer_hash
 
 
 def job(status="complete", *, final=None, evidence=None):
@@ -23,6 +24,31 @@ def test_recovered_failure_does_not_mark_answer_bad():
                                        {"name": "replacement", "status": "success"}]
     run["calls"] = [{"result": {"result_state": "error"}}, {"result": {"result_state": "ok"}}]
     assert detection.detect_run(run, rate=0) == []
+
+
+def test_transport_interruption_without_answer_is_only_unknown_candidate():
+    run = {"run_id": "active", "response": None, "delivery_events": [{"event": "interrupted", "answer_hash": ""}]}
+    signals = detection.detect_run(run, rate=0)
+    assert len(signals) == 1
+    assert signals[0]["source"] == "delivery"
+    assert signals[0]["severity"] == "low"
+    assert signals[0]["evidence"]["quality_verdict"] == "unknown"
+
+
+@pytest.mark.parametrize("receipt", ["received", "displayed"])
+def test_final_receipt_supersedes_run_scoped_interruption(receipt):
+    run = job()
+    run["delivery_events"] = [{"event": "interrupted", "answer_hash": ""},
+                              {"event": receipt, "answer_hash": answer_hash(run["response"])}]
+    assert detection.detect_run(run, rate=0) == []
+    run["delivery_events"][1]["answer_hash"] = "stale-version"
+    assert detection.detect_run(run, rate=0)[0]["code"] == "interrupted"
+
+
+def test_known_user_cancellation_is_not_a_transport_defect():
+    run = job("cancelled")
+    run["delivery_events"] = [{"event": "interrupted", "answer_hash": ""}]
+    assert [signal["code"] for signal in detection.detect_run(run, rate=0)] == ["incomplete_run"]
 
 
 @pytest.mark.parametrize("status,code,check", [

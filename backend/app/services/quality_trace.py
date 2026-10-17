@@ -84,16 +84,22 @@ def source_fingerprint():
 
 def provenance(provider, system_prompt, tool_contract_version):
     chat_model = getattr(provider, "chat_model", None)
+    missing = ["scoring_version: consult individual tool evidence"]
+    try:
+        fingerprint = source_fingerprint()
+    except OSError:
+        fingerprint = None
+        missing.append("code_sha256: source files unavailable")
     return {
-        "code_sha256": source_fingerprint(),
+        "code_sha256": fingerprint,
         "build_revision": os.getenv("LIMITUPLAB_BUILD_REVISION") or None,
         "model": getattr(provider, "model", None),
         "provider": type(provider).__name__,
-        "temperature": getattr(chat_model, "temperature", None),
+        "base_temperature": getattr(chat_model, "temperature", None),
         "prompt_sha256": hashlib.sha256(system_prompt.encode()).hexdigest(),
         "tool_contract_version": tool_contract_version,
         "scoring_version": None,
-        "missing": ["scoring_version: consult individual tool evidence"],
+        "missing": missing,
     }
 
 
@@ -102,7 +108,7 @@ def record_snapshot(control, stage, payload):
     if control is None:
         return
     try:
-        serialized = bounded_snapshot(payload)
+        serialized = bounded_snapshot(payload() if callable(payload) else payload)
         with control.journal.connection() as db:
             db.execute("INSERT INTO quality_trace_snapshots(run_id,stage,captured_at,payload_json) VALUES(?,?,?,?)",
                        (control.row["run_id"], stage, datetime.now(timezone.utc).isoformat(), serialized))
