@@ -4,7 +4,7 @@ from copy import deepcopy
 
 from app.agents.react_runtime.contracts import Compute, Finish
 from app.agents.react_runtime.evidence import EVIDENCE_VERSION, EvidenceStore
-from app.agents.react_runtime.rendering import render_answer
+from app.agents.react_runtime.rendering import append_missing_details, render_answer
 from app.agents.react_runtime.task_contract import OutputContract
 from app.services.quality_check_support import EVIDENCE_PATH, ancestry, budget, gaps, result, unknown
 from app.services.quality_trace import component_fingerprints
@@ -108,7 +108,7 @@ def rendering_check(bundle, records, deadline=None):
         store.records = deepcopy({key: records[key] for key in lineage})
         expected = render_answer(final, store, OutputContract.model_validate(snapshot["output_contract"]))
         if snapshot["origin"] == "gate" and final.status == "partial":
-            expected += "\n\n数据未成功获取：\n" + "\n".join("- " + item for item in final.missing)
+            expected = append_missing_details(expected, final.missing)
         budget(deadline)
     except (ValueError, TypeError, KeyError, RecursionError) as error:
         detail["error_type"] = type(error).__name__

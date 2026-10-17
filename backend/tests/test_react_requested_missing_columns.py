@@ -7,6 +7,7 @@ import pytest
 from app.agents.react_runtime.contracts import Compute, Finish
 from app.agents.react_runtime.evidence import EvidenceStore
 from app.agents.react_runtime.rendering import render_answer
+from app.agents.react_runtime.partial_delivery import partial_delivery
 from app.agents.react_runtime.task_contract import TaskInterpretation, validate_delivery
 
 
@@ -32,7 +33,7 @@ def test_unknown_column_retains_known_columns_and_cannot_read_provider_collision
     before = deepcopy(store.records)
     final = candidate(key, task)
     validate_delivery(final, task, store)
-    assert "| 000011 | 数据未成功获取 | 2 |" in render_answer(final, store, task.output_contract)
+    assert "| 000011 | 展示映射未支持 | 2 |" in render_answer(final, store, task.output_contract)
     assert store.records == before
     restored = TaskInterpretation.model_validate(task.model_dump())
     assert restored.output_contract == task.output_contract
@@ -69,6 +70,23 @@ def test_duplicate_unknown_labels_keep_distinct_stable_slots():
     assert task.output_contract.fields == ["symbol", "unavailable_requested_2", "unavailable_requested_3"]
     assert task.output_contract.unavailable_fields == {
         "unavailable_requested_2": "未取得指标", "unavailable_requested_3": "未取得指标"}
+
+
+def test_unmapped_presentation_and_absent_source_value_have_distinct_explanations():
+    task = task_for([("symbol", "代码"), (None, "未定义指标"), ("seal_amount", "封单金额")])
+    store = EvidenceStore()
+    key = store.add(tool="limit_up_events", state="ok", arguments={}, payload={"events": [
+        {"symbol": "000011", "unavailable_requested_2": 123},
+    ]})
+    before = deepcopy(store.records)
+    final = partial_delivery(store, task, key)
+    assert final is not None
+    validate_delivery(final, task, store)
+    answer = render_answer(final, store, task.output_contract)
+    assert "| 000011 | 展示映射未支持 | 数据未成功获取 |" in answer
+    assert "未定义指标：展示映射未支持，不能据此判断来源是否有数据。" in final.missing
+    assert "封单金额：数据未成功获取。" in final.missing
+    assert "123" not in answer and store.records == before
 
 
 @pytest.mark.parametrize("field,wrong", [("seal_amount", "amount"), ("limit_up_reason", "concept")])

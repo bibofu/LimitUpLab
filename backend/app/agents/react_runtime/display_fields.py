@@ -84,6 +84,23 @@ for key in ("trade_date", "amount"):
     DISPLAY_FIELD_CATALOG[key]["tools"].append("stock_kline")
 DISPLAY_FIELD_CATALOG["trade_date"]["meaning"] = "涨停事件或个股日K线记录对应的交易日期"
 
+# These are normalized provider fields, not inferred synonyms or derived values.
+DISPLAY_FIELD_CATALOG.update({
+    key: {"meaning": meaning, "model": "HithinkDragonTigerFact", "tools": ["dragon_tiger_list"]}
+    for key, meaning in {
+        "range_days": "该条龙虎榜记录的统计区间天数；同股不同区间须分别保留，来源未提供时缺失",
+        "buy_amount": "该条龙虎榜记录统计区间内的买入金额，元",
+        "sell_amount": "该条龙虎榜记录统计区间内的卖出金额，元",
+        "net_buy_amount": "该条龙虎榜记录统计区间内的净买入金额，元；不是成交额或股价涨跌幅",
+        "organization_net_buy_amount": "该条龙虎榜记录的机构净买入金额，元；来源未提供时缺失，不等于全部净买入额",
+        "hot_money_net_buy_amount": "该条龙虎榜记录的游资净买入金额，元；来源未提供时缺失，不等于机构净买入额",
+    }.items()
+})
+for key in ("symbol", "name"):
+    DISPLAY_FIELD_CATALOG[key]["tools"].append("dragon_tiger_list")
+
+UNMAPPED_COLUMN_LABEL = "展示映射未支持"
+
 
 def presentation_aliases(record, store):
     """Bind presentation meanings to actual fields for the declared source only.

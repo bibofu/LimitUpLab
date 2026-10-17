@@ -62,7 +62,7 @@ def table_material(*, computed=False, status="complete", origin="gate"):
     contract = OutputContract()
     answer = render_answer(final, store, contract)
     if status == "partial" and origin == "gate":
-        answer += "\n\n数据未成功获取：\n- 独立研究字段未取得"
+        answer += "\n\n未完成项：\n- 独立研究字段未取得"
     value = material(store=store, final=final.model_dump(), status=status)
     value["response"]["answer"] = value["checkpoint"]["runtime"]["answer"] = value["assistant_messages"][0]["content"] = answer
     value["diagnostic_snapshots"].append({"id": 2, "stage": "answer_rendering", "omissions": [],

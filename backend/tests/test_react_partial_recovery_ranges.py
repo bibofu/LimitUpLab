@@ -70,7 +70,7 @@ def test_q4_recovers_verified_total_and_five_rows_with_both_missing_columns():
     assert "999" not in answer and "无关计数" not in answer
     assert "| 代码 | 名称 | 收盘涨跌幅 | 炸板次数 | 首次触及涨停时间 | 炸板原因 |" in answer
     for symbol, name, breaks, first in FIRST_FIVE:
-        assert f"| {symbol} | {name} | 数据未成功获取 | {breaks} | {first} | 数据未成功获取 |" in answer
+        assert f"| {symbol} | {name} | 数据未成功获取 | {breaks} | {first} | 展示映射未支持 |" in answer
     assert final.evidence_ids == [selected]
     assert final.table.evidence_id == selected
     assert store.records == before

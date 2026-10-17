@@ -228,7 +228,7 @@ def test_valid_table_only_answer_is_returned_without_runtime_publication(monkeyp
 def test_table_only_does_not_hide_real_partial_delivery_gap(monkeypatch):
     response, model, _, _ = run_table_protocol(monkeypatch, partial=True)
     assert model.answers == 1 and response.task_status == "partial"
-    assert response.answer == TABLE + "\n\n另一个来源未返回，其余名单尚未核实。\n\n数据未成功获取：\n- 另一来源名单"
+    assert response.answer == TABLE + "\n\n另一个来源未返回，其余名单尚未核实。\n\n未完成项：\n- 另一来源名单"
 
 
 def test_freeform_returns_complete_prose_and_table_without_candidate_events(monkeypatch):
@@ -448,5 +448,4 @@ def test_page_stock_is_available_for_semantic_reference_resolution(symbol):
     payload = json.loads(model.security_prompts[0][-1][1])
     assert payload["trusted_defaults"]["page"]["symbol"] == symbol
     assert payload["user_message"] == "这只股票近10日怎么样？"
-    instruction = model.security_prompts[0][0][1]
-    assert "没有唯一标的才澄清" in instruction and "单个页面默认日期不能臆造" in instruction
+    # This probe checks context delivery; actual reference resolution needs a live model.

@@ -140,7 +140,7 @@ def test_direct_scope_preserves_real_missing_evidence_explanation():
                               answer=answer, status="partial", missing=["确认该对象当日是否有评级记录"])
     response, _ = run_direct(model, source_state="partial")
     assert response.task_status == "partial" and response.stop_reason == "answered"
-    assert response.answer == answer + "\n\n数据未成功获取：\n- 确认该对象当日是否有评级记录"
+    assert response.answer == answer + "\n\n未完成项：\n- 确认该对象当日是否有评级记录"
     assert model.answers == 1
 
 

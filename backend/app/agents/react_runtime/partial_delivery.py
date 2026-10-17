@@ -5,7 +5,7 @@ This is runtime recovery, never a substitute for a successful model finish.
 from copy import deepcopy
 
 from app.agents.react_runtime.contracts import Compute, EvidenceColumn, EvidenceTable, Finish
-from app.agents.react_runtime.display_fields import DISPLAY_FIELD_CATALOG, presentation_aliases
+from app.agents.react_runtime.display_fields import DISPLAY_FIELD_CATALOG, UNMAPPED_COLUMN_LABEL, presentation_aliases
 from app.agents.react_runtime.evidence import CURRENT_SCOPE, EvidenceStore
 
 
@@ -117,8 +117,11 @@ def partial_delivery(store, task, evidence_id=None):
     columns = [EvidenceColumn(field=field, label=unavailable.get(requested, requested_labels.get(requested,
         labels.get(requested, DISPLAY_FIELD_CATALOG.get(requested, {}).get("meaning", requested))))[:40])
         for requested, field in zip(contract.fields, fields)]
-    absent_labels = [column.label for column in columns
-                     if column.field in unavailable or any(row.get(column.field) is None for row in rows)]
+    unmapped_labels = [column.label for column in columns if column.field in unavailable]
+    if unmapped_labels:
+        missing.append("、".join(unmapped_labels) + "：" + UNMAPPED_COLUMN_LABEL + "，不能据此判断来源是否有数据。")
+    absent_labels = [column.label for column in columns if column.field not in unavailable
+                     and any(row.get(column.field) is None for row in rows)]
     if absent_labels:
         missing.append("、".join(absent_labels) + "：数据未成功获取。")
     if record.get("source_truncated"):
@@ -139,7 +142,7 @@ def partial_delivery(store, task, evidence_id=None):
                        else "本次返回未提供可直接展示的来源标识。")
     scope_note = (f"本轮筛选范围内共{selection_total}条，展示{len(rows)}条。\n\n"
                   if selection_total is not None else "")
-    answer = (scope_note + "以下为本轮已获取的数据；未获取的字段已在表中注明。\n\n"
+    answer = (scope_note + "以下为本轮已获取的数据；未支持的展示列与未获取的数据已分别注明。\n\n"
               "{{evidence_table}}\n\n" + source_note + "\n\n缺口说明：" + " ".join(missing))
     return Finish(
         status="partial", answer=answer, evidence_ids=[record["evidence_id"]],

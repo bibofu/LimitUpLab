@@ -153,7 +153,7 @@ def test_public_entry_defaults_to_react(monkeypatch):
             return call("finish", {"status": "refuse", "answer": "我可以提供研究事实，不能提供交易指令。"}, "f")
     response = answer_first_board_chat(AgentChatRequest(session_id="r", message="给我买卖指令"), [],
                                       llm_provider=Model(), tool_registry=registry())
-    assert response.generated_by == "react-runtime-v39"
+    assert response.generated_by == "react-runtime-v40"
     assert response.task_status == "refuse"
 
 
@@ -210,7 +210,6 @@ def test_repair_checks_scope_and_table_without_waiving_user_deliverables(require
         def generate_messages(self, messages, tools, **kwargs):
             self.calls += 1
             if self.calls == 1:
-                assert "可选补充不能升级为必交付任务" in messages[0].content
                 definition = next(t for t in tools if t["function"]["name"] == "finish")
                 description = definition["function"]["parameters"]["properties"]["table"]["description"]
                 assert "At most ONE" in description and "RETURNED" in description

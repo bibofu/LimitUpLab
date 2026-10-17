@@ -204,8 +204,10 @@ MARKET_TOOL_SCHEMAS = [
         description=(
             "优先查询同花顺龙虎榜；明确交易日的全部榜不可用时回退东方财富。"
             "可按交易日、机构/游资榜类型和股票名称或代码过滤，"
-            "返回买卖额、净买额、机构净买、游资净买、热度排名和相关题材。默认返回完整榜单，"
-            "询问龙虎榜情况时不要自行填写 limit；不同 range_days 必须保留，不按股票代码去重。"
+            "返回买卖额、净买额、机构净买、游资净买、热度排名和相关题材。默认返回完整榜单；"
+            "查询全榜或汇总统计时 limit 留空，不同 range_days 保留，不按股票代码去重。"
+            "回答范围以用户要求为准：指标或概览不自动附名单；请求名单且未指定列时，"
+            "默认展示代码、名称、区间天数、涨跌幅、买入额、卖出额、净买额、机构净买额、游资净买额，金额单位为元。"
         ),
         args_schema={
             "type": "object",
@@ -230,7 +232,7 @@ MARKET_TOOL_SCHEMAS = [
             },
             "required": [],
         },
-        returns="Full Tonghuashun Dragon-Tiger List rows and capital-flow evidence; use finish.table directly without reading every preview page.",
+        returns="Provider-labeled Dragon-Tiger List rows and capital-flow evidence. For requested lists use finish.table; for requested statistics aggregate the relevant complete scope with compute_result.",
     ),
     AgentToolSchema(
         name="remote_limit_up_pool",

@@ -4,10 +4,15 @@ from html import escape
 from math import isfinite
 
 from app.agents.react_runtime.evidence import CURRENT_SCOPE
-from app.agents.react_runtime.display_fields import DISPLAY_FIELD_CATALOG, presentation_aliases
+from app.agents.react_runtime.display_fields import DISPLAY_FIELD_CATALOG, UNMAPPED_COLUMN_LABEL, presentation_aliases
 
 
 RANK_TREND_LABELS = {"up": "上升", "down": "下降", "flat": "持平"}
+
+
+def append_missing_details(answer, missing):
+    """Gaps may concern unsupported presentation or delivery, not only data fetching."""
+    return answer + "\n\n未完成项：\n" + "\n".join("- " + item for item in missing)
 
 
 def cell(value, *, field=None, missing_label="缺失"):
@@ -102,7 +107,8 @@ def render_answer(final, store, output_contract=None):
         )):
             raise ValueError("Table field missing; use exact evidence row fields, or retain requested missing columns with partial and an explicit missing explanation")
         lines.append("| " + " | ".join(cell(None if c.field in unavailable else row.get(field), field=c.field,
-            missing_label="数据未成功获取") for c, field in zip(columns, fields)) + " |")
+            missing_label=UNMAPPED_COLUMN_LABEL if c.field in unavailable else "数据未成功获取")
+            for c, field in zip(columns, fields)) + " |")
     answer = "\n\n".join(part for part in (before, "\n".join(lines), after) if part)
     if len(answer) > 60000:
         raise ValueError("Rendered answer exceeds delivery budget")

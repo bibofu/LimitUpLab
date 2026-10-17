@@ -122,3 +122,17 @@ def test_unknown_requested_metric_remains_unresolved_after_catalog_expansion():
     assert task.output_contract.field_resolution.status == "unresolved"
     assert task.output_contract.fields == ["name", "unavailable_requested_2"]
     assert task.output_contract.field_requests[-1].field is None
+
+
+def test_dragon_tiger_requested_fields_keep_real_zero_and_separate_intervals():
+    store = EvidenceStore()
+    key = store.add(tool="dragon_tiger_list", state="ok", arguments={}, payload={"items": [
+        {"symbol": "600001", "range_days": 1, "buy_amount": 100, "sell_amount": 100, "net_buy_amount": 0},
+        {"symbol": "600001", "range_days": 3, "buy_amount": 400, "sell_amount": 100, "net_buy_amount": 300},
+    ]})
+    answer = deliver([("symbol", "代码"), ("range_days", "区间天数"),
+        ("buy_amount", "买入额"), ("sell_amount", "卖出额"), ("net_buy_amount", "净买额")],
+        store, key, question="龙虎榜只列代码、区间天数、买入额、卖出额、净买额。")
+    assert "| 600001 | 1 | 100 | 100 | 0 |" in answer
+    assert "| 600001 | 3 | 400 | 100 | 300 |" in answer
+    assert "未支持" not in answer and "未成功获取" not in answer
