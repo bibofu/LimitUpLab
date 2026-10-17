@@ -195,7 +195,7 @@ export function App() {
     <main className="app-shell">
       <header className="app-header">
         <Link aria-label="返回市场概况" className="app-brand" to="/">
-          <span className="app-brand-mark"><Flame aria-hidden="true" size={19} /></span>
+          <img alt="" aria-hidden="true" className="app-brand-mark" height={36} src="/favicon.svg" width={36} />
           <span>
             <strong>LimitUpLab</strong>
           </span>

@@ -56,14 +56,10 @@ button {
 }
 
 .app-brand-mark {
-  display: inline-flex;
-  align-items: center;
-  justify-content: center;
+  display: block;
+  flex-shrink: 0;
   width: 36px;
   height: 36px;
-  border-radius: 8px;
-  background: #c93f3f;
-  color: #ffffff;
 }
 
 .app-brand > span:last-child,
