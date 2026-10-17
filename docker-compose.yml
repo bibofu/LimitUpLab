@@ -75,6 +75,29 @@ services:
       - --report-path
       - /app/data/recommendation_refresh_latest.json
 
+  quality-worker:
+    image: limituplab-backend:${LIMITUPLAB_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        INSTALL_HITHINK_FINANCE: ${INSTALL_HITHINK_FINANCE:-true}
+    restart: unless-stopped
+    init: true
+    env_file:
+      - .env.production
+    environment:
+      LIMITUPLAB_DATABASE_PATH: /app/data/limituplab.sqlite
+      TZ: Asia/Shanghai
+    volumes:
+      - limituplab-data:/app/data
+    depends_on:
+      backend:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    command: ["python", "scripts/run_quality_worker.py", "--interval", "10"]
+
   daily-update:
     image: limituplab-backend:${LIMITUPLAB_IMAGE_TAG:-local}
     build:
