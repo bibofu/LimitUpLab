@@ -10,6 +10,7 @@ from app.quality_evaluation_models import EVALUATOR_VERSION, Verdict
 from app.repositories.quality_repository import QualityRepository
 from app.security import current_owner_id, require_admin_access
 from app.services.quality_detection import process_pending
+from app.services.quality_judge_config import judge_configuration, judge_status
 
 
 router = APIRouter()
@@ -90,8 +91,10 @@ class ReevaluationInput(BaseModel):
 @admin.get("/evaluations")
 def evaluations(repo: Repository, verdict: Verdict | None = None,
                 execution_status: Literal["running", "succeeded", "error", "skipped"] | None = None,
+                evaluator_kind: Literal["deterministic", "llm_judge"] | None = None,
                 limit: int = Query(20, ge=1, le=100), offset: int = Query(0, ge=0)):
-    return repo.list_evaluations(verdict=verdict, execution_status=execution_status, limit=limit, offset=offset)
+    return repo.list_evaluations(verdict=verdict, execution_status=execution_status,
+                                 evaluator_kind=evaluator_kind, limit=limit, offset=offset)
 
 
 @admin.get("/runs/{run_id}/evaluations")
@@ -110,6 +113,33 @@ def enqueue_evaluation(run_id: str, body: ReevaluationInput, repo: Repository):
 @admin.get("/bundles/{bundle_id}")
 def evidence_bundle(bundle_id: str, repo: Repository):
     return _call(repo.get_bundle, bundle_id)
+
+
+class JudgeRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    bundle_id: str | None = Field(default=None, min_length=1, max_length=100)
+
+
+@admin.get("/judge/config")
+def judge_config():
+    return judge_status()
+
+
+@admin.post("/runs/{run_id}/judge")
+def enqueue_judge(run_id: str, body: JudgeRequest, repo: Repository):
+    from app.quality_judge_models import JUDGE_VERSION
+    status = judge_status()
+    if not status["enabled"]:
+        raise HTTPException(503, status["reason"])
+    # No automatic caller: this route is protected by the administrator router.
+    config = judge_configuration().model_dump(mode="json")
+    return _call(repo.enqueue_evaluation, run_id, job_kind="llm_judge", evaluator_version=JUDGE_VERSION,
+                 config=config, bundle_id=body.bundle_id)
+
+
+@admin.get("/runs/{run_id}/quality-jobs")
+def run_jobs(run_id: str, repo: Repository):
+    return _call(repo.job_history, run_id)
 
 
 router.include_router(admin)
