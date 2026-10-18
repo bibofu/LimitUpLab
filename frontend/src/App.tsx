@@ -229,7 +229,7 @@ export function App() {
             target="_blank"
             title="GitHub 项目仓库"
           >
-            <Github size={22} aria-hidden="true" />
+            <Github size={20} aria-hidden="true" />
           </a>
           <div className="data-as-of">
             <i aria-hidden="true" />
@@ -245,7 +245,7 @@ export function App() {
             title="刷新数据"
             type="button"
           >
-            <RefreshCcw size={22} />
+            <RefreshCcw size={20} />
           </button>
         </div>
       </header>
