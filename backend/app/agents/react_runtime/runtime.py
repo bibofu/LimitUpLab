@@ -603,10 +603,14 @@ def run(request, registry, provider, history=None, memory=None, progress=None, a
             task_context=task_context,
             page_defaults={"trade_date": request.trade_date, "symbol": request.symbol},
         )
-        runtime.input_security_checks += 1
+        runtime.input_security_checks += input_review.review_attempts
         runtime.trace("react_input_security", input_review.model_dump(mode="json"))
     except Exception as error:
+        review_attempts = getattr(error, "input_review_attempts", 0)
+        if type(review_attempts) is int and 0 <= review_attempts <= 2:
+            runtime.input_security_checks += review_attempts
         runtime.trace("react_input_security", {"decision": "error", "error_type": type(error).__name__,
+            "review_attempts": runtime.input_security_checks,
             "diagnostics": exception_diagnostics(error, stage=input_stage)}, status="error")
         runtime.answer, runtime.status, runtime.reason = "输入检查与任务解析未完成，本次未执行数据查询，请稍后重试。", "error", "input_policy_error"
         input_review = None

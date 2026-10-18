@@ -25,13 +25,16 @@ class TradingDayComparison(BaseModel):
 class DateScope(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
-    mode: Literal["unspecified", "dates", "range"] = "unspecified"
+    mode: Literal["unspecified", "dates", "range"] = Field(default="unspecified",
+        description="unspecified has no dates or endpoints; dates has one or more explicit dates and no endpoints; range requires BOTH explicit endpoints and no discrete dates. A past-N-trading-days calculation is not a date range: keep N in current_task, using dates for an explicit as-of date, otherwise unspecified. Never guess the window's start date.")
     basis: Literal["observation", "event"] = Field(default="observation",
         description="observation: dates describe data snapshots/as-of queries. event: dates select an anchor event or cohort whose subsequent outcome is being studied, not the outcome cutoff.")
     dates: list[date] = Field(default_factory=list, max_length=16,
         description="Requested dates in the declared basis: observation dates or event dates. One date for a single day; all comparison dates for a multi-day task. Not every historical bar used for a calculation.")
-    start_date: date | None = None
-    end_date: date | None = None
+    start_date: date | None = Field(default=None,
+        description="Required only for range, together with end_date; null otherwise. Not an inferred lookback start.")
+    end_date: date | None = Field(default=None,
+        description="Required only for range, together with start_date; null otherwise. A lone as-of date belongs in dates.")
     observation_cutoff: date | None = Field(default=None,
         description="An explicitly requested cutoff for observing events' later outcomes. Never infer it by adding calendar days to a trading-day horizon.")
     trading_day_comparisons: list[TradingDayComparison] = Field(default_factory=list, max_length=8,
