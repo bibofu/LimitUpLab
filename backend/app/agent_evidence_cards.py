@@ -27,6 +27,7 @@ def _evidence_title_kind(tool_name: str) -> tuple[str, str]:
         "first_board_ratings": ("首板候选池与评分", "candidate_pool"),
         "market_event_pool": ("市场事件查询", "limit_up_events"),
         "limit_up_events": ("涨停事件查询", "limit_up_events"),
+        "recent_limit_up_returns": ("近期涨停候选区间涨幅", "candidate_pool"),
         "post_limit_screen": ("涨停后形态筛选", "candidate_pool"),
         "post_limit_path": ("涨停后逐日走势", "tool"),
         "post_limit_statistics": ("涨停后历史统计", "evaluation"),

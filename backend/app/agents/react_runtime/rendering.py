@@ -22,6 +22,8 @@ def cell(value, *, field=None, missing_label="缺失"):
         raise ValueError("Table fields must be finite scalar values")
     if field == "rank_trend":
         value = RANK_TREND_LABELS.get(value, f"未识别（{value}）")
+    if field == "return_pct" and type(value) in (int, float):
+        value = round(value, 4)  # Display only; evidence keeps full threshold precision.
     return escape(str(value)).replace("|", "&#124;").replace("\r", " ").replace("\n", " ")
 
 

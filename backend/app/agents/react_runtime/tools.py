@@ -62,6 +62,8 @@ class ToolGateway:
         if not isinstance(args, dict):
             raise ValueError("Arguments must be an object")
         contract = self.contracts[name]
+        if name == "recent_limit_up_returns" and self.date_scope.basis == "event" and self.date_scope.mode != "unspecified":
+            raise ValueError("This rolling-cohort tool cannot constrain explicit event dates; use an event-aware query")
         date_fields = (("requested_as_of",) if contract.time_mode in CURRENT_TIME_MODES
                        else contract.dates)
         if self.date_scope.basis == "event" and contract.adapter == "post_limit":

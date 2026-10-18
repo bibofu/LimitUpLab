@@ -99,6 +99,22 @@ DISPLAY_FIELD_CATALOG.update({
 for key in ("symbol", "name"):
     DISPLAY_FIELD_CATALOG[key]["tools"].append("dragon_tiger_list")
 
+DISPLAY_FIELD_CATALOG.update({
+    key: {"meaning": meaning, "model": "RecentLimitUpReturn", "tools": ["recent_limit_up_returns"]}
+    for key, meaning in {
+        "return_pct": "明确基准日至截止日的区间累计收盘价涨跌幅，百分比；不是单日涨跌幅。必须保留工具价格口径和窗口，未复权价格变化不等于复权收益",
+        "start_date": "区间涨幅的基准收盘日期；近N交易日计算时为窗口第一日前一交易日",
+        "end_date": "区间涨幅的截止收盘日期",
+        "start_close": "区间涨幅的基准收盘价，元",
+        "end_close": "区间涨幅的截止收盘价，元",
+        "window_start_date": "累计涨幅窗口第一个交易日，区别于其前一交易日的基准日期",
+        "last_limit_date": "候选范围内最近一次已记录的收盘涨停日期",
+        "limit_up_count": "候选范围内已记录的收盘涨停交易日数，不是连续板数",
+    }.items()
+})
+for key in ("symbol", "name"):
+    DISPLAY_FIELD_CATALOG[key]["tools"].append("recent_limit_up_returns")
+
 UNMAPPED_COLUMN_LABEL = "展示映射未支持"
 
 

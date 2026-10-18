@@ -202,6 +202,36 @@ RESEARCH_TOOL_SCHEMAS = [
         returns="Matched first-board candidates for the query.",
     ),
     AgentToolSchema(
+        name="recent_limit_up_returns",
+        time_mode="historical",
+        dates=("end_date",),
+        collection="items",
+        description=(
+            "批量计算本地近期收盘涨停候选池每只股票的近N个交易日收盘价累计涨幅。"
+            "候选期默认近7个本地交易日，完整去重后计算，不受涨停名单100条或逐股调用次数限制。"
+            "用于近期股票累计涨幅/跌幅筛选和排名；未指定股票池时可提供此明确标注范围的本地结果，"
+            "不能将任意行业的小样本当作全部可用候选，也不能声称这是全市场名单。"
+        ),
+        notes=(
+            "All computable candidates are returned; use compute_result to filter return_pct and sort, "
+            "without a limit unless requested. N intervals require N+1 shared daily closes. "
+            "Preserve cohort scope, price basis and missing coverage in the answer."
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "end_date": {"type": ["string", "null"],
+                             "description": "YYYY-MM-DD as-of close; omit for latest local event date."},
+                "recent_trade_days": {"type": "integer", "minimum": 1, "maximum": 20,
+                                      "description": "Candidate event lookback, default 7; distinct from return horizon."},
+                "return_trade_days": {"type": "integer", "minimum": 1, "maximum": 60,
+                                      "description": "Number of trading-day return intervals, default 5, needing N+1 closes."},
+            },
+            "required": [],
+        },
+        returns="All calculable stock rows, explicit price windows, local cohort/calendar coverage and missing candidates.",
+    ),
+    AgentToolSchema(
         name="stock_kline",
         time_mode="historical",
         dates=("end_date",),

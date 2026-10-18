@@ -73,6 +73,7 @@ from app.services.rating_backtest import build_rating_backtest
 from app.services.sector_performance import build_sector_performance
 from app.services.sector_stock_ranking import build_sector_stock_ranking
 from app.services.stock_kline import build_stock_kline_facts
+from app.services.recent_limit_up_returns import build_recent_limit_up_returns
 from app.agents.kline_presentation import kline_agent_view
 from app.post_limit_query_contract import PostLimitQueryContract
 from app.repositories.post_limit_repository import load_post_limit_dataset
@@ -117,6 +118,7 @@ V1_CLOSED_MARKET_TOOL_NAMES = frozenset(
         "limit_up_events",
         "first_board_filter",
         "stock_kline",
+        "recent_limit_up_returns",
         "post_limit_screen",
         "post_limit_path",
         "post_limit_statistics",
@@ -1299,6 +1301,30 @@ class AgentToolRegistry:
                 f"{f'：{names}' if names else '。'}"
             ),
             trace_output=trace_output,
+        )
+
+    def recent_limit_up_returns(
+        self,
+        end_date: date | None = None,
+        recent_trade_days: int = 7,
+        return_trade_days: int = 5,
+    ) -> ToolResult:
+        """Compute the full local event cohort before model-side selection."""
+
+        cutoff = end_date or max((event.trade_date for event in self.events), default=None)
+        payload = build_recent_limit_up_returns(
+            load_post_limit_dataset(cutoff, database_path=self.first_board_repository.database_path),
+            end_date=cutoff, recent_trade_days=recent_trade_days,
+            return_trade_days=return_trade_days,
+        )
+        return ToolResult(
+            name="recent_limit_up_returns",
+            input={"end_date": cutoff.isoformat() if cutoff else None,
+                   "recent_trade_days": recent_trade_days, "return_trade_days": return_trade_days},
+            output=payload, trace_output=payload, result_status=payload["status"],
+            summary=(f"近{recent_trade_days}个本地交易日已记录的收盘涨停候选共{payload['candidate_count']}只，"
+                     f"{payload['analyzed_count']}只可计算{return_trade_days}个交易日收盘价涨幅，"
+                     f"{payload['missing_count']}只数据不完整；范围不代表全市场。"),
         )
 
     def stock_kline(
