@@ -636,4 +636,25 @@ test("reveal height updates follow the bottom only until the reader scrolls away
   container.scrollHeight = 1400;
   app.answers()[0].props.onRevealProgress();
   assert.equal(container.scrollTop, 200);
+  app.render();
+  assert.equal(app.has(node => node.props.className === "chat-scroll-latest"), true);
+
+  container.scrollTop = container.scrollHeight - container.clientHeight - 63;
+  messages.onScroll({ currentTarget: container });
+  app.render();
+  assert.equal(app.has(node => node.props.className === "chat-scroll-latest"), false);
+  container.scrollHeight = 1600;
+  app.answers()[0].props.onRevealProgress();
+  assert.equal(container.scrollTop, 1600, "returning near the bottom resumes following new content");
+
+  container.scrollTop = 200;
+  messages.onScroll({ currentTarget: container });
+  app.render();
+  const viewport = app.find(node => node.props.className === "agent-chat-viewport");
+  assert.equal(viewport.children[0].props["aria-label"], "对话消息");
+  assert.equal(viewport.children[1].props.className, "chat-scroll-latest", "the control stays with the message viewport rather than adding a composer row");
+  app.find(node => node.props.className === "chat-scroll-latest").onClick();
+  app.render();
+  assert.equal(container.scrollTop, 1600);
+  assert.equal(app.has(node => node.props.className === "chat-scroll-latest"), false);
 });

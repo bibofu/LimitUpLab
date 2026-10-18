@@ -680,6 +680,7 @@ export function AgentChatDock({
           </div>
         </header>
 
+        <div className="agent-chat-viewport">
         <div
           aria-label="对话消息"
           className="agent-chat-messages"
@@ -770,6 +771,7 @@ export function AgentChatDock({
             <ArrowDown aria-hidden="true" size={14} />回到最新消息
           </button>
         ) : null}
+        </div>
 
         {promptSuggestions.length > 0 ? <div className="agent-chat-prompts">
           {promptSuggestions.slice(0, 3).map((prompt) => (
