@@ -60,6 +60,12 @@ interface ChatMessage {
 }
 
 const ACTIVE_CHAT_SESSION_STORAGE_KEY = "limituplab.activeChatSession";
+const DEFAULT_PROMPT_SUGGESTIONS = ["最新的财经新闻", "市场最高标是哪个", "最新的龙虎榜情况"];
+const SAVED_DEFAULT_PROMPT_SUGGESTIONS = [
+  "按板块归纳最新首板候选",
+  "这些候选的共同风险和数据缺口有哪些？",
+  "复盘最近 5 个交易日的一进二晋级率",
+];
 
 /** Keep HTTP diagnostics out of the conversation while retaining a useful recovery action. */
 function sessionErrorMessage(error: unknown, fallback: string): string {
@@ -541,7 +547,12 @@ export function AgentChatDock({
 
   const activeSession = sessions.find((item) => item.session_id === sessionId);
   const latestAgentMessage = [...messages].reverse().find((item) => item.role === "agent");
-  const promptSuggestions = latestAgentMessage?.suggestedQuestions ?? [];
+  const savedSuggestions = latestAgentMessage?.suggestedQuestions ?? [];
+  // Refresh the saved generic defaults without replacing contextual follow-ups.
+  const promptSuggestions = savedSuggestions.length === SAVED_DEFAULT_PROMPT_SUGGESTIONS.length
+    && savedSuggestions.every((prompt, index) => prompt === SAVED_DEFAULT_PROMPT_SUGGESTIONS[index])
+    ? DEFAULT_PROMPT_SUGGESTIONS
+    : savedSuggestions;
 
   return (
     <div className="agent-chat-dock">

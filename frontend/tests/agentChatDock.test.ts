@@ -400,7 +400,7 @@ for (const taskStatus of ["error", "cancelled"]) {
   });
 }
 
-test("suggested questions keep an unsent draft and failed sidebar refresh keeps the completed answer", async t => {
+test("updated default questions send their displayed text and preserve drafts and completed answers", async t => {
   const requests: any[] = [];
   let reads = 0;
   const app = mount(t, {
@@ -410,15 +410,20 @@ test("suggested questions keep an unsent draft and failed sidebar refresh keeps 
     },
     fetchChatSession: async (id: string) => ({ ...session(id), messages: [{
       message_id: "old-message", role: "assistant", content: "已验证的历史回答", status: "success",
-      metadata: { suggested_questions: ["这个结果有哪些数据缺口？"] },
+      metadata: { suggested_questions: [
+        "按板块归纳最新首板候选", "这些候选的共同风险和数据缺口有哪些？", "复盘最近 5 个交易日的一进二晋级率",
+      ] },
     }] }),
     streamAgentChatMessage: async (payload: any) => { requests.push(payload); return final; },
   });
   await app.settle();
+  for (const prompt of ["最新的财经新闻", "市场最高标是哪个", "最新的龙虎榜情况"]) {
+    assert.equal(app.has(node => node.type === "button" && node.props.children === prompt), true);
+  }
   app.type("另一个尚未发送的问题");
-  app.find(node => node.type === "button" && node.props.children === "这个结果有哪些数据缺口？").onClick();
+  app.find(node => node.type === "button" && node.props.children === "最新的财经新闻").onClick();
   await app.settle();
-  assert.equal(requests[0].message, "这个结果有哪些数据缺口？");
+  assert.equal(requests[0].message, "最新的财经新闻");
   assert.equal(app.has(node => node.props.className === "agent-chat-prompts"), false);
   assert.equal(app.input().value, "另一个尚未发送的问题");
   assert.equal(app.has(node => node.props.content === "研究回答"), true);
