@@ -1,22 +1,28 @@
 # LimitUpLab
 
-基于真实 A 股涨停数据的可解释首板评级与复盘 Agent。
+基于真实 A 股收盘数据的复盘 Agent（主要针对近期发生涨停的股票）。
 
 在线访问：[LimitUpLab · limitupagent.xyz](https://limitupagent.xyz/)
 
-LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中筛选合格首板，构建结构化事实，生成可解释评分，并通过 LLM Agent 回答用户对市场、板块、个股和历史表现的追问。
+LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最近新闻，热门股票，大盘走势，龙虎榜等。同时针对近期发生涨停的股票，提供首板质量评分，涨停后回撤等策略。
 
 > 本项目用于数据研究、Agent 工程实践和求职展示，不构成任何投资建议。系统不提供买入、卖出、仓位、目标价或收益承诺。
+
+
+
+## 项目背景
+
+当前市场上缺乏比较专业、好用的复盘Agent工具，比较主流的如同花顺问财，通达信智能体等，个人使用体验一般（主观）。同时股票的特征（许多结构化数据）也很适合使用Agent来进行分析、归纳、总结，且目前具有同花顺金融API，akshare等开源数据源。因此，做一个股票分析Agent项目既能够学些Agent开发中常见的技术栈（Langchain，Langgraph，工具调用，上下文管理，Agent评测等），也有机会给股民提供一个高效的A股复盘工具，最终上线成为一个成功的产品。
+
+一句话总结，这个项目的核心不是让 LLM 直接预测股票，而是让 LLM 在确定性数据和工具之上完成规划、解释、追问、批判和复盘。
+
+
 
 ## 项目状态
 
 当前代码以 **LangChain 原生工具调用 + LangGraph 有界 ReAct** 为聊天主链路，支持持久化运行、实时进度、校验并保存后渐进展示正式答案和服务端证据表。旧 Planner/Capability/Policy/模板执行器、Task DAG、Complex Graph 和 Claim Ledger 已退出生产调用图。现行实现见 [LangChain + LangGraph 集成](docs/LangChain_Integration.md)。
 
 当前阶段为 **V1.5：ReAct 交付与证据契约完善、Golden 粗评基线建立**。[V1.5 阶段里程碑](docs/V1.5_Milestone.md) 汇总 `v1.5.0` 的工作、验证结果、限制和下一步。Golden 已能辅助定位 Agent 问题，裁判可靠性验收仍未通过；自动结果需要保留待复核项。
-
-盘前推荐继续并列提供一进二接力、缩量整理和高位回撤；一进二区分收盘基线、盘前终选及历史样本，后两类形态观察不混入一进二前向统计。集合竞价和面向未涨停股票的首板挖掘仍保持退役。
-
-历史版本：[V1.0](docs/V1_Milestone.md) 是首个首板复盘基线，[V1.1](docs/V1.1_Milestone.md) 记录集合竞价实验，[V1.2](docs/V1.2_Milestone.md) 记录工程收敛与会话记忆，[V1.3](docs/V1.3_Milestone.md) 记录盘前多策略与发布基线，[V1.4](docs/V1.4_Milestone.md) 记录单一 ReAct 架构和 SQLite 部署修复。历史实现由对应 Git 标签保留，现行预测与复盘口径以 [预测时间契约](docs/Prediction_Time_Contract.md) 为准。
 
 当前版本已经具备可本地运行和单机部署的完整 MVP：
 
@@ -26,7 +32,6 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 - 可恢复的多会话对话、滚动 Session Memory 和受控上下文
 - Explanation、Critic、Review、Evaluation 等轻量 Agent 角色
 - 每日 Top10 预测快照、D+1 至 D+5 走势追踪、1进2全市场对照和不可变每日复盘快照
-- Champion/Challenger 评分策略注册与受约束影子优化
 - 来源感知的预测质量审计、确定性基线和多目标评分 v3
 - 每日连板晋级率、首板到二板率和各板高梯队统计
 - 数据健康、Agent 运行轨迹和缓存
@@ -47,56 +52,13 @@ LimitUpLab 面向收盘后的短线研究场景：系统从当日涨停股票中
 
 评分结果目前仍处于研究和验证阶段。项目已经形成完整的数据与评价闭环，但尚未证明可以稳定预测次日表现。
 
-## 为什么做这个项目
 
-传统涨停看板通常只展示行情，普通股票聊天机器人则容易脱离数据泛泛而谈。LimitUpLab 尝试解决两者之间的问题：
-
-```text
-真实数据
-  -> 首板候选过滤
-  -> 可解释评分
-  -> 不可变 Top10 预测快照
-  -> LLM 工具调用问答
-  -> Critic 质疑
-  -> 结果回填
-  -> Evaluation 复盘
-  -> 评分策略改进建议
-```
-
-这个项目的核心不是让 LLM 直接预测股票，而是让 LLM 在确定性数据和工具之上完成规划、解释、追问、批判和复盘。
 
 ## 核心能力
 
-### 1. Facts-first 首板评分
+整个项目可以看做由两部分组成，其中一部分为Tool-Using Chat Agent，另一部分为股票新闻、个股行情等看板。这两部分内容相互支撑，相互印证。
 
-系统先构建结构化事实，再由版本化评分策略计算分数。LLM 不参与原始分数计算，因此每个结论都可以测试和回放。
-
-候选池默认：
-
-- 只保留收盘封住的首板股票
-- 一进二接力排除 ST、北交所、科创板和创业板
-- 排除新股与次新股
-- 排除成交额过小样本
-- 缺失字段显式写入 `data_missing` 并降低置信度
-
-当前评分策略包含 14 类输入：首封时间、上板形态、封板稳定性、封板次数、换手率、成交额、行业热度、市场环境、涨停前 K 线结构、板块接力、市值偏好、近期股性、龙虎榜和人气快照。
-
-每只候选都会返回：
-
-```text
-score
-rating
-confidence
-score_breakdown
-reasons
-risks
-data_missing
-scoring_version
-```
-
-其中 `score` 表示候选强度，`confidence` 表示当前数据对该评分的支持程度，两者不会混为一谈。
-
-### 2. Tool-Using Chat Agent
+### Tool-Using Chat Agent
 
 模型层由 LangChain `ChatOpenAI.bind_tools` 承接，LangGraph 自定义 `StateGraph` 在同一个有界循环中完成思考、行动、观察和最终回答。业务参数、工具权限、证据裁剪、确定性计算与最终状态仍由后端控制。当前生产 ReAct 只支持 LangChain 消息工具调用后端；Requests Provider 保留给独立文本调用，不是聊天运行时回退。实现边界见 [LangChain + LangGraph 集成](docs/LangChain_Integration.md)。
 
@@ -145,78 +107,32 @@ scoring_version
 
 名单通过 `finish.table` 声明本轮证据及字段，由服务端输出实际返回的行。预览省略与数据源截断分别记录，返回行数不能自动代表全市场完整名单；当前每条回答最多一张证据表。开放式解释仍需结合原始证据审阅，证据引用本身不能证明因果关系。
 
-### 2.1 Session Memory
+
 
 系统在 SQLite 保留原始会话和滚动记忆，但生产 ReAct 默认不重放历史原文或历史回答证据。Input Reviewer 识别为 `follow_up` 时，才提取历史股票名称/代码与上一轮实际工具参数，用于理解省略条件；本轮明确条件优先，事实必须重新查询。
 
 Memory 按 `owner_id + session_id` 隔离，使用 `last_message_id` 作为增量游标，随会话永久删除。默认只向模型提供偏好约束；追问时再补充研究目标、股票、题材、日期范围和未解问题。这些字段都不能作为市场证据或自动继承为本轮待办，也不会跨会话建立用户画像。
 
-### 3. 轻量 Multi-Agent 角色
 
-项目采用有边界的角色编排，不让多个 LLM 无约束地互相讨论。
 
-| 角色 | 职责 | 是否直接使用 LLM |
-| --- | --- | --- |
-| Coordinator / Chat Agent | 理解问题、规划工具、组织回答 | 是 |
-| Facts Builder | 从数据库构建结构化事实 | 否 |
-| Rating Engine | 计算评分、评级和置信度 | 否 |
-| Explanation Agent | 基于 Facts 解释评分与风险 | 是，可降级 |
-| Critic Agent | 查找反向证据和数据缺口 | 结构化规则为主 |
-| Review Agent | 追踪每日 Top10 后续走势及1进2全市场对照 | 可选 LLM 总结 |
-| Evaluation Agent | 对历史预测分类并生成经验教训 | 结构化结果为主 |
+### 行情信息看板
 
-每个角色都有结构化输入输出，可以独立测试、缓存、追踪和回放。
+从这个系统的可用性上来说，只有Agent chat是远远不够的。配合上个股详情、龙虎榜、最近新闻等看板才能构成一个高效的复盘系统。这个项目中，主要有以下几个信息看板：
 
-### 4. 自我评价与受控改进
+1. 近24小时新闻，数据源来自同花顺和东方财富
+2. 最新的龙虎榜
+3. 近期市场涨停板近期情况
+4. 每一天发生涨停的股票情况
 
-系统每天保存不可变的评分预测快照，并在后续交易日回填：
+除去以上部分，这个项目还做了策略选股的追踪。具体来说，在每天收盘之后，筛选出符合以下三个策略的股票，并进行展示
 
-- 次日开盘、最高、最低和收盘表现
-- 是否晋级二板
-- 以次日开盘为基准的收益和回撤
-- 三日表现和 D+1 至 D+5 K 线
+1. 当天首次涨停的股票，按照涨停强度，筛选出10个较好的股票（同时在第二天开盘前，根据收盘后的情况动态调整）
+2. 近7天发生过涨停，近期处于缩量震荡的股票
+3. 近7天发生过涨停，然后大幅回撤的股票
 
-Evaluation Agent 将历史预测标记为 `success`、`partial`、`miss`、`avoid_success` 或 `false_negative`，并生成评分因子改进建议。
+与此同时，系统也会重点记录每天首板中top10的股票在后续的走势，并给出走势看板，特征分析等
 
-每日收盘 Top10 作为独立的 `close_baseline` 研究批次保存，普通日更不能覆盖。下一交易日 08:00 至 09:30 前的合法终选可以接替活动批次；原收盘快照及逐股记录先完整归档，归档、批次切换和终选写入同一事务。现行前向评价只接受 `premarket_final`，旧版收盘、收盘基线和历史补算按阶段及评分版本分别研究。`live` 兼容标签本身不代表前向资格，详见[预测时间契约](docs/Prediction_Time_Contract.md)。
 
-Outcome 完整性检查严格按本地市场交易日对齐 D+1、D+3 和 D+5。缺少某一交易日 K 线时不会使用下一根可用 K 线替代；缺失股票会进入日更报告、数据健康和 Review 告警，并在 20 个交易日重试窗口内继续追补。
-
-评分策略采用 Champion/Challenger 管理：
-
-- 因子权重具有明确版本
-- 训练、验证和测试按交易日期顺序执行扩展窗口 walk-forward，测试日不重叠
-- 以 Top10 相对同期全部首板的一进二提升为主目标，次日收益、大跌率和三日回撤作为保护约束
-- 因子相关性按交易日去中心化后计算，减少不同市场环境造成的截面偏差
-- 单次权重变化受到限制
-- Challenger 默认只在影子模式运行
-- Challenger 必须同时优于现行策略，并接受最早封板、固定随机和 Outcome 可用候选池基线审计
-- 只有至少 60 个结果日、足够的样本外折和 Top10 样本且无关键风险退化时，显式批准后才能启用
-
-这不是无约束的“模型自动学习”。当前系统只生成和验证候选策略，不会因为一次复盘就自动修改线上规则。
-
-`/api/agents/prediction-quality-audit` 会先按 `live / historical_backtest` 和评分版本拆分预测，再按交易日选择完整批次；未成熟、Outcome 待回填和完整样本分开统计，避免把未来尚不存在的结果算成失败，也避免把历史重算样本混入真实当日 Top10。
-
-`/api/agents/factor-signal-diagnostic` 提供独立的快速证伪诊断：单因子按交易日计算横截面 IC，并使用日期级符号翻转检验和 Bonferroni 校正；分位比较保留同分样本；联合 Lasso 使用按交易日留一的样本外预测和日期块 bootstrap。该报告只输出“当前未发现可复现信号”或“信号需要继续验证”，不会把小样本下的未显著误写成“因子已被证明为噪声”。
-
-`/api/agents/scoring-error-diagnostic` 从结果完整日期中识别 Top10 高分误选和 Top10 之外的晋级漏选，并对 14 个评分因子逐一做排序消融。诊断只提出“观察上调、观察下调或暂不调整”的影子假设；样本不足、Outcome 不完整或未通过 walk-forward 门槛时不会改写 Champion。
-
-策略是否满足晋级门槛，应查看当前预测质量审计和策略状态响应。历史里程碑中的样本数与基线结论只适用于对应审计日期，不能代替当前数据覆盖检查。
-
-### 5. 可观测与可降级
-
-- `agent_runs` 保存每次 Agent 执行状态、输入、输出、错误和耗时
-- `agent_usage_events` 保存已接受和被拒绝的请求、真实 token、显式价格下的估算成本及耗时
-- `chat_sessions`、`chat_messages` 和 `chat_session_memories` 保存会话、原始消息与滚动记忆，支持新建、恢复、重命名和永久删除
-- SSE 通过 `progress` 实时显示查询与校验进度；候选答案在服务端完成校验和必要修复，`Journal.finish` 原子保存后，仅通过 `completed` 一次交付正式正文、表格和消息元数据。前端渐进展开这一份答案，表格按完整行出现，可立即显示全部；历史消息直接完整显示
-- SSE 断线后按 `run_id + event cursor` 只读重连，过滤历史草稿事件，已完成任务直接返回已保存结果；再次 POST 同一请求可恢复中断 checkpoint，已完成工具不会主动重放
-- Tool trace 保存每轮原生 decision、Policy allow/reject、工具参数、结果状态、证据引用和最终校验
-- 请求级 EvidenceStore 保存完整工具结果，模型消息只携带有界预览；SQLite journal 保存运行 checkpoint 与调用结果
-- `/api/agents/data-health` 检查评分、预测追踪和 Outcome 所需数据
-- `/api/agents/system-health` 检查数据新鲜度、LLM 和代理状态
-- LLM 不可用或连续调用失败时返回明确 error/partial，不使用已退役的通用聊天模板伪装成功
-- 工具失败时返回明确错误，不允许模型补造数字
-- 匿名访客按分钟、按日限额，同一访客单并发，并设置单进程全局并发上限；超限统一返回 `429` 和 `Retry-After`
 
 ## 系统架构
 
@@ -485,26 +401,7 @@ npm.cmd run dev -- --host 127.0.0.1 --port 5173
 
 macOS / Linux 将 Python 和 npm 命令替换为对应虚拟环境命令即可。
 
-### 8. 香港服务器 Docker 部署
 
-仓库已提供面向单机公开 Demo 的生产部署基线：
-
-- `backend/Dockerfile`：FastAPI、Python 数据依赖和可选同花顺 CLI
-- `frontend/Dockerfile`：React 生产构建与容器内 Nginx
-- `docker-compose.yml`：健康检查、自动重启、SQLite 命名卷、日更 Job 和每日 08:00 推荐固化服务
-- `deploy/nginx/`：同域 API 反代、SPA 路由和 SSE 流式配置
-- `.env.production.example`：不含真实密钥的生产环境模板
-
-服务器上执行：
-
-```bash
-cp .env.production.example .env.production
-docker compose --env-file .env.production build
-docker compose --env-file .env.production up -d
-curl --fail http://127.0.0.1:8080/health
-```
-
-完整的域名、HTTPS、定时任务、数据迁移、备份和回滚步骤见 [`deploy/README.md`](./deploy/README.md)。当前配置有意保持单个 Uvicorn worker，以匹配 SQLite 单机阶段；正式多实例并发前应迁移 PostgreSQL 和 Redis。
 
 ## 每日数据更新
 
@@ -679,36 +576,3 @@ npm.cmd run build
 - 日 K 统一使用未复权价格；同花顺历史行情成交量由“股”标准化为“手”，来源和成交额随行持久化。
 - Web 搜索内容被视为外部不可信证据，只用于解释增强，不直接决定评分。
 - SQLite 适合本地 MVP，不代表正式多用户网站的最终存储方案。
-
-## 当前限制
-
-- 评分 v3 的晋级需要至少 60 个结果完整交易日及可靠样本外验证；覆盖情况以当前审计为准。
-- 尚未建立可支持稳定预测结论的验证证据。
-- 业务工具已由统一公开契约生成类型化 Schema；LangGraph 状态、checkpoint 和进程内运行锁仍由项目代码维护。
-- 个股资讯已接入东方财富结构化搜索并持久化缓存；正式公告原文仍需补充交易所或巨潮资讯专用数据源。
-- 当前限流适用于单 Uvicorn 进程；异步 Worker、跨实例 Redis 限流和上游 LLM 主动取消尚未完成。
-- 用户系统、PostgreSQL、Redis 和多实例部署尚未完成；当前 Docker 配置适用于单机公开 Demo。标签触发的自动验证、备份与部署见 [自动部署说明](deploy/Tag_Deployment.md)。
-
-## Roadmap
-
-近期优先级：
-
-1. [Judge v21固定验证](docs/Agent_Golden_Judge_v21_Validation.md)确认局部分类改善，但校准仍退化；先处理来源身份、血缘、同对象证据与unknown边界，再决定是否恢复完整Golden。保留固定答案review和校准退化，不直接改判或只选择较高分结果。
-2. 继续扩大TopN、排名窗口和多轮契约切换的语义样本；保留异常恢复的失败状态。本轮完整模型运行未触发恢复分支，不能以离线门禁测试或一次通过证明稳定性。
-3. 数据侧继续滚动补齐 Top10 Outcome 和端到端验收；V2 再考虑数据源与部署扩容。
-
-当前阶段总结见 [V1.5 阶段里程碑](docs/V1.5_Milestone.md)，实现边界见 [LangChain + LangGraph 集成](docs/LangChain_Integration.md)。
-
-## 面试演示建议
-
-一条完整演示链路约 3 至 5 分钟：
-
-1. 展示系统健康状态和最新交易日。
-2. 查看当日首板评级 Top10 和评分拆解。
-3. 打开一个候选，查看封板事实、K 线、当前位置和 Critic 复核。
-4. 在 Agent 中询问“为什么这只股票评分高，有哪些反向风险”。
-5. 展开工具轨迹，说明 ReAct decision、Policy Gateway、Evidence ID 和最终门禁。
-6. 查看过去五个交易日 Top10 的后续走势与 Evaluation 结果。
-7. 展示 Champion/Challenger 未自动晋级的原因，说明系统如何避免无约束自我修改。
-
-LimitUpLab 的重点不是功能数量，而是把数据、评分、检索、对话、自检、结果回填和受控改进连接成一条可以验证的 Agent 工程链路。

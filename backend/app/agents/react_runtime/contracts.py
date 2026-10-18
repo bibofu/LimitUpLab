@@ -8,7 +8,7 @@ VERSION = "react-runtime-v40"
 MAX_MODEL_CALLS = 8
 MAX_TOOL_CALLS = 8
 MAX_CONTROL_CALLS = 16
-MAX_CONCURRENCY = 3
+MAX_CONCURRENCY = 3  # 工具执行并发
 
 
 class StrictModel(BaseModel):
