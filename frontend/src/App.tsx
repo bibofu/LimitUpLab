@@ -124,7 +124,7 @@ const stockListPaths = new Set([
 
 const primaryNavigation = [
   { to: "/", label: "首页", end: true },
-  { to: "/recommendations", label: "盘前推荐", end: true },
+  { to: "/recommendations", label: "盘前", end: true },
   { to: "/review", label: "复盘", end: true },
   { to: "/stocks/limit-up-pool", label: "涨停池", end: true },
 ];
