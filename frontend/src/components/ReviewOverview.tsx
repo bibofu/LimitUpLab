@@ -14,9 +14,9 @@ export function ReviewOverview({ endDate }: { endDate: string }) {
   const pending = state.status === "generating" || state.status === "checking";
   const label = state.status === "checking" ? "正在核验…" : pending ? "生成中…"
     : state.status === "ready" ? "重新生成" : state.status === "error" ? "重试生成" : "生成复盘总结";
-  return <section className="review-overview" aria-label="复盘总结" aria-busy={pending}>
+  return <section className="review-overview" aria-label="AI短线总结" aria-busy={pending}>
     <div className="review-overview-heading">
-      <div><h2>复盘总结</h2><span>截至 {endDate} · 市场延续 / 候选晋级 / 三板以上</span></div>
+      <div><h2>AI短线总结</h2><span>截至 {endDate} · 市场延续 / 候选晋级 / 三板以上</span></div>
       <button type="button" disabled={pending || loading || !report} onClick={() => void resource.generate(endDate)}>
         {pending ? <LoaderCircle size={15} className="state-spinner" />
           : state.status === "ready" ? <RefreshCcw size={15} /> : <Sparkles size={15} />}{label}
