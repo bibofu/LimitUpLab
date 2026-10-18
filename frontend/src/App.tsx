@@ -223,13 +223,13 @@ export function App() {
         <div className="app-header-actions">
           <a
             aria-label="在新标签页打开 LimitUpLab GitHub 仓库"
-            className="icon-button"
+            className="icon-button github-link"
             href="https://github.com/bibofu/LimitUpLab"
             rel="noopener noreferrer"
             target="_blank"
             title="GitHub 项目仓库"
           >
-            <Github size={18} aria-hidden="true" />
+            <Github size={22} aria-hidden="true" />
           </a>
           <div className="data-as-of">
             <i aria-hidden="true" />
@@ -245,7 +245,7 @@ export function App() {
             title="刷新数据"
             type="button"
           >
-            <RefreshCcw size={18} />
+            <RefreshCcw size={22} />
           </button>
         </div>
       </header>

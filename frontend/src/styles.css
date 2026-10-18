@@ -238,6 +238,10 @@ h1 {
   color: #b83232;
 }
 
+.app-header-actions > .github-link {
+  margin-right: 8px;
+}
+
 .market-snapshot {
   display: grid;
   grid-template-columns: minmax(390px, 1.35fr) minmax(300px, 1fr);
