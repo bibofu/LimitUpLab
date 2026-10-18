@@ -2625,16 +2625,18 @@ a.entry-card {
 .premarket-strategy-toolbar {
   display: flex;
   align-items: center;
-  flex-wrap: wrap;
-  gap: 12px 20px;
+  justify-content: space-between;
+  gap: 20px;
   min-width: 0;
 }
 
 .premarket-strategy-disclaimer {
-  margin: 0;
+  min-width: 0;
+  margin: 0 0 0 auto;
   color: #758196;
   font-size: 12px;
   line-height: 1.6;
+  text-align: right;
 }
 
 .strategy-switch {
