@@ -68,6 +68,25 @@ const SAVED_DEFAULT_PROMPT_SUGGESTIONS = [
   "复盘最近 5 个交易日的一进二晋级率",
 ];
 
+/** Refresh known saved defaults without rewriting answers or custom follow-ups. */
+function currentPromptSuggestions(message: ChatMessage | undefined): string[] {
+  const saved = message?.suggestedQuestions ?? [];
+  const matches = (questions: string[]) => questions.length === saved.length
+    && questions.every((question, index) => question === saved[index]);
+  if (message?.stockMentions.length === 1) {
+    const stock = message.stockMentions[0];
+    const subject = `${stock.name}（${stock.symbol}）`;
+    const rating = `${subject}的评分依据是什么？`;
+    const risk = `${subject}的主要风险和数据缺口是什么？`;
+    const trend = `${subject}最近 20 个交易日走势如何？`;
+    const generic = SAVED_DEFAULT_PROMPT_SUGGESTIONS[0];
+    if ([[rating, risk, trend], [risk, trend, generic], [rating, trend, generic]].some(matches)) {
+      return [`${subject}的近期走势如何？`];
+    }
+  }
+  return matches(SAVED_DEFAULT_PROMPT_SUGGESTIONS) ? DEFAULT_PROMPT_SUGGESTIONS : saved;
+}
+
 /** Keep HTTP diagnostics out of the conversation while retaining a useful recovery action. */
 function sessionErrorMessage(error: unknown, fallback: string): string {
   if (error instanceof HttpResponseError) {
@@ -548,12 +567,7 @@ export function AgentChatDock({
 
   const activeSession = sessions.find((item) => item.session_id === sessionId);
   const latestAgentMessage = [...messages].reverse().find((item) => item.role === "agent");
-  const savedSuggestions = latestAgentMessage?.suggestedQuestions ?? [];
-  // Refresh the saved generic defaults without replacing contextual follow-ups.
-  const promptSuggestions = savedSuggestions.length === SAVED_DEFAULT_PROMPT_SUGGESTIONS.length
-    && savedSuggestions.every((prompt, index) => prompt === SAVED_DEFAULT_PROMPT_SUGGESTIONS[index])
-    ? DEFAULT_PROMPT_SUGGESTIONS
-    : savedSuggestions;
+  const promptSuggestions = currentPromptSuggestions(latestAgentMessage);
 
   return (
     <div className="agent-chat-dock">

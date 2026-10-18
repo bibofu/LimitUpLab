@@ -90,11 +90,7 @@ def build_agent_suggested_questions(
     if len(stock_mentions) == 1:
         stock = stock_mentions[0]
         subject = f"{stock.name}（{stock.symbol}）"
-        if intent not in {"rating_explain", "llm_explanation"}:
-            suggestions.append(f"{subject}的评分依据是什么？")
-        if intent != "risk_summary":
-            suggestions.append(f"{subject}的主要风险和数据缺口是什么？")
-        suggestions.append(f"{subject}最近 20 个交易日走势如何？")
+        return [f"{subject}的近期走势如何？"]
 
     intent_suggestions: dict[str, tuple[str, ...]] = {
         "greeting": (

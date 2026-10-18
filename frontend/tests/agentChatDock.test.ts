@@ -435,6 +435,43 @@ test("updated default questions send their displayed text and preserve drafts an
   assert.equal(app.find(node => node.props["aria-label"] === "发送问题").disabled, false);
 });
 
+const stockSuggestionSubject = "中电鑫龙（002298）";
+const oldRatingQuestion = `${stockSuggestionSubject}的评分依据是什么？`;
+const oldRiskQuestion = `${stockSuggestionSubject}的主要风险和数据缺口是什么？`;
+const oldTrendQuestion = `${stockSuggestionSubject}最近 20 个交易日走势如何？`;
+const recentTrendQuestion = `${stockSuggestionSubject}的近期走势如何？`;
+const customStockQuestions = [`${stockSuggestionSubject}近期成交量如何变化？`, "对比同板块历史表现"];
+for (const [label, savedQuestions, expectedQuestions] of [
+  ["all stock defaults", [oldRatingQuestion, oldRiskQuestion, oldTrendQuestion], [recentTrendQuestion]],
+  ["rating follow-ups", [oldRiskQuestion, oldTrendQuestion, "按板块归纳最新首板候选"], [recentTrendQuestion]],
+  ["risk follow-ups", [oldRatingQuestion, oldTrendQuestion, "按板块归纳最新首板候选"], [recentTrendQuestion]],
+  ["custom stock follow-ups", customStockQuestions, customStockQuestions],
+] as const) {
+  test(`restored ${label} preserve the intended questions and submit without losing drafts`, async t => {
+    const requests: any[] = [];
+    const app = mount(t, {
+      fetchChatSession: async (id: string) => ({ ...session(id), messages: [{
+        message_id: "stock-history", role: "assistant", content: "中电鑫龙历史研究回答", status: "success",
+        metadata: {
+          stock_mentions: [{ name: "中电鑫龙", symbol: "002298", trade_date: "2026-10-16" }],
+          suggested_questions: savedQuestions,
+        },
+      }] }),
+      streamAgentChatMessage: async (payload: any) => { requests.push(payload); return final; },
+    });
+    await app.settle();
+    const prompts = app.find(node => node.props.className === "agent-chat-prompts").children;
+    assert.deepEqual(prompts.map((node: any) => node.props.children), expectedQuestions);
+    app.type("保留这条尚未发送的草稿");
+    app.find(node => node.type === "button" && node.props.children === expectedQuestions[0]).onClick();
+    await app.settle();
+    assert.equal(requests.length, 1);
+    assert.equal(requests[0].message, expectedQuestions[0]);
+    assert.equal(app.input().value, "保留这条尚未发送的草稿");
+    assert.equal(app.has(node => node.props.content === "中电鑫龙历史研究回答"), true);
+  });
+}
+
 test("a deleted active session cannot receive questions when replacement loading fails", async t => {
   let deleted = false;
   let failReplacement = true;

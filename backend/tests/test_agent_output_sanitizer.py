@@ -109,12 +109,7 @@ class AgentOutputSanitizerTest(unittest.TestCase):
             generated_by="test",
         )
 
-        self.assertEqual(len(response.suggested_questions), 3)
-        self.assertNotIn("评分依据", response.suggested_questions[0])
-        self.assertTrue(
-            any("中电鑫龙（002298）" in item for item in response.suggested_questions)
-        )
-        self.assertTrue(any("主要风险" in item for item in response.suggested_questions))
+        self.assertEqual(response.suggested_questions, ["中电鑫龙（002298）的近期走势如何？"])
 
     # Regression scenario: agent response preserves explicit follow ups.
     def test_agent_response_preserves_explicit_follow_ups(self) -> None:
