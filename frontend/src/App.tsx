@@ -239,7 +239,7 @@ export function App() {
         </div>
       </header>
 
-      {(activeView !== "overview" && activeView !== "recommendation") || isStockDetail ? (
+      {!["overview", "recommendation", "review", "pool"].includes(activeView) || isStockDetail ? (
         <section className="topbar">
           <div>
             <p className="eyebrow">{activeMeta.eyebrow}</p>
