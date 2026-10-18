@@ -897,6 +897,11 @@ td span {
 
 .chat-user {
   justify-self: end;
+  width: fit-content;
+  max-width: min(1120px, 100%);
+  min-width: 0;
+  padding-right: 32px;
+  overflow-wrap: anywhere;
   border-color: #fedbd6;
   background: #fff7f5;
 }
