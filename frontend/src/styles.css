@@ -226,6 +226,18 @@ h1 {
   outline-offset: 2px;
 }
 
+.app-header-actions > .icon-button {
+  border: 0;
+  background: transparent;
+  box-shadow: none;
+  transform: none;
+  transition: color 160ms ease;
+}
+
+.app-header-actions > .icon-button:hover {
+  color: #b83232;
+}
+
 .market-snapshot {
   display: grid;
   grid-template-columns: minmax(390px, 1.35fr) minmax(300px, 1fr);
