@@ -223,7 +223,7 @@ export function App() {
           <div className="data-as-of">
             <i aria-hidden="true" />
             <span>
-              <small>已载入数据日期</small>
+              <small>最新数据日期</small>
               <strong>{latestTradeDate ?? "各区独立标注"}</strong>
             </span>
           </div>
