@@ -1028,28 +1028,12 @@ td span {
   gap: 14px;
 }
 
-.review-agent-hero {
-  display: flex;
-  align-items: center;
-  justify-content: space-between;
-  gap: 16px;
-  padding: 16px;
-  border: 1px solid #e9edf2;
-  border-radius: 8px;
-  background: #f8fafc;
-}
-
 .review-agent-error,
 .review-agent-empty p {
   margin: 0;
   color: #667489;
   font-size: 13px;
   line-height: 1.5;
-}
-
-.review-agent-hero strong {
-  color: #202938;
-  font-size: 22px;
 }
 
 

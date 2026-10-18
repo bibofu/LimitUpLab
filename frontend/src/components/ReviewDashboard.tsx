@@ -434,14 +434,6 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
   return (
     <Panel title="首板追踪" icon={<TrendingUp size={18} />}>
       <div className="review-agent-panel">
-        <div className="review-agent-hero">
-          <strong>
-            {report
-              ? `${report.start_date} 至 ${report.end_date}`
-              : `截至 ${latestTradeDate}`}
-          </strong>
-        </div>
-
         {error ? <div className="review-agent-error" role="alert">
           <p>{error}</p><button type="button" onClick={retry}>重试复盘数据</button>
         </div> : null}
