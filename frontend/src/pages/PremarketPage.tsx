@@ -1,9 +1,8 @@
-import { BarChart3, Layers3, LineChart, MapPin, ShieldAlert, TrendingDown } from "lucide-react";
+import { Layers3, LineChart, MapPin, TrendingDown } from "lucide-react";
 import { useEffect, useState } from "react";
 import { Link, useSearchParams } from "react-router-dom";
 
 import { ConsolidationPanel } from "../components/ConsolidationPanel";
-import { Panel } from "../components/Panel";
 import { RecommendationNewsBoard } from "../components/RecommendationNewsBoard";
 import { premarketStrategyFromParam, type PremarketStrategy } from "../consolidation";
 import { stockDetailPath } from "../dashboardFormatters";
@@ -71,7 +70,7 @@ function PremarketStrategyWorkspace() {
             type="button"
           >
             <Layers3 size={16} />
-            一进二接力
+            一进二
           </button>
           <button
             aria-selected={mode === "consolidation"}
@@ -124,12 +123,9 @@ function PremarketStrategyWorkspace() {
  */
 function PremarketRankingPlaceholder() {
   return (
-    <Panel
-      title="一进二接力"
-      icon={<BarChart3 size={18} />}
-    >
+    <section aria-label="一进二" className="panel">
       <div className="discovery-state" aria-hidden="true">—</div>
-    </Panel>
+    </section>
   );
 }
 
@@ -143,16 +139,13 @@ function PremarketEmptySnapshotPanel({
   snapshot: ReturnType<typeof recommendationSnapshotView>;
 }) {
   return (
-    <Panel
-      title="一进二接力"
-      icon={<ShieldAlert size={18} />}
-    >
+    <section aria-label="一进二" className="panel">
       <div className="rating-summary-panel recommendation-draft-panel">
         <strong>{snapshot.title} · {snapshot.targetLabel}</strong>
         <RecommendationSnapshotDetails snapshot={snapshot} />
         <p className="discovery-disclaimer">该快照没有可展示的盘前候选。</p>
       </div>
-    </Panel>
+    </section>
   );
 }
 
@@ -197,10 +190,7 @@ function RecommendationDraftPanel({
   snapshot: ReturnType<typeof recommendationSnapshotView>;
 }) {
   return (
-    <Panel
-      title="一进二接力"
-      icon={<BarChart3 size={18} />}
-    >
+    <section aria-label="一进二" className="panel">
       <div className="rating-summary-panel recommendation-draft-panel">
         <div className="recommendation-draft-header">
           <div>
@@ -266,6 +256,6 @@ function RecommendationDraftPanel({
           {snapshot.disclaimer}
         </p>
       </div>
-    </Panel>
+    </section>
   );
 }

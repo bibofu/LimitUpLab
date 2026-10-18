@@ -194,7 +194,7 @@ test("the extracted premarket page preserves news and all URL-selected strategy 
     assert.ok(html.includes('aria-label="盘前策略"'));
     assert.equal(html.split('aria-selected="true"').length - 1, 1);
     assert.ok(html.includes(strategy === "relay"
-      ? "一进二接力"
+      ? 'aria-label="一进二"'
       : `id="${strategy}-panel"`));
     assert.ok(!html.includes("正在读取统一的盘前排名与证据"));
     assert.ok(!html.includes("正在获取最新新闻"));
