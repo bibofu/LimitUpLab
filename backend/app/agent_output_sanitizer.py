@@ -18,6 +18,7 @@ INTERNAL_TOOL_LABELS: dict[str, str] = {
     "first_board_filter": "首板筛选结果",
     "market_event_pool": "市场事件名单",
     "limit_up_events": "涨停事件数据",
+    "recent_limit_up_returns": "近期涨停候选区间涨幅",
     "stock_kline": "个股行情",
     "post_limit_screen": "涨停后形态筛选",
     "post_limit_path": "涨停后逐日走势",
