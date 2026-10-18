@@ -2699,6 +2699,7 @@ a.entry-card {
 
 .consolidation-content { display: grid; gap: 16px; padding: 20px; }
 .consolidation-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
+.consolidation-heading-actions { display: flex; align-items: center; flex-wrap: wrap; gap: 12px; }
 .consolidation-heading p { margin: 6px 0 0; color: #667489; font-size: 15px; }
 .consolidation-heading label { display: flex; align-items: center; gap: 8px; font-size: 15px; }
 .consolidation-heading select { padding: 7px; border: 1px solid #d0d5dd; border-radius: 6px; background: white; color: #374151; }

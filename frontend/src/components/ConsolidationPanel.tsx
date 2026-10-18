@@ -1,5 +1,5 @@
 import { useEffect, useState } from "react";
-import { Layers3, RefreshCcw } from "lucide-react";
+import { RefreshCcw } from "lucide-react";
 import { Link } from "react-router-dom";
 import { fetchConsolidationPool } from "../api";
 import {
@@ -10,7 +10,6 @@ import {
   type ObservationStrategy,
 } from "../consolidation";
 import { stockDetailPath } from "../dashboardFormatters";
-import { Panel } from "./Panel";
 
 /**
  * Render the selected observation strategy's candidates, rejected examples, rules and data
@@ -66,21 +65,21 @@ export function ConsolidationPanel({ strategy }: { strategy: ObservationStrategy
   }, [asOf, revision, strategy, queryKey]);
 
   return (
-    <div role="tabpanel" id={`${strategy}-panel`} aria-label={isDrawdown ? "高位回撤" : "缩量整理"}>
-      <Panel title={isDrawdown ? "高位回撤" : "缩量整理"} icon={<Layers3 size={18} />} actions={
-        <button type="button" className="consolidation-refresh" disabled={loading} onClick={() => setRevision((value) => value + 1)}>
-          <RefreshCcw size={14} />刷新
-        </button>
-      }>
+    <section className="panel" role="tabpanel" id={`${strategy}-panel`} aria-label={isDrawdown ? "高位回撤" : "缩量整理"}>
         <div className="consolidation-content">
           <div className="consolidation-heading">
             <div><strong>{isDrawdown ? "高位回撤观察池" : "缩量整理观察池"}</strong><p>{isDrawdown ? "观察近期涨停股从局部高点回落的幅度，尚未要求止跌确认。回撤为负表示收盘高于此前参考高点。" : "观察股票涨停后的价格与成交量变化。"}</p></div>
-            <label>截至交易日
-              <select aria-label={`${isDrawdown ? "高位回撤" : "缩量整理"}截至交易日`} value={asOf} onChange={(event) => setAsOf(event.target.value)}>
-                <option value="">最新收盘</option>
-                {availableDates.map((day) => <option value={day} key={day}>{day}</option>)}
-              </select>
-            </label>
+            <div className="consolidation-heading-actions">
+              <label>截至交易日
+                <select aria-label={`${isDrawdown ? "高位回撤" : "缩量整理"}截至交易日`} value={asOf} onChange={(event) => setAsOf(event.target.value)}>
+                  <option value="">最新收盘</option>
+                  {availableDates.map((day) => <option value={day} key={day}>{day}</option>)}
+                </select>
+              </label>
+              <button type="button" className="consolidation-refresh" disabled={loading} onClick={() => setRevision((value) => value + 1)}>
+                <RefreshCcw size={14} />刷新
+              </button>
+            </div>
           </div>
           {error ? <p role="alert" className="consolidation-warning">{error}，可点击刷新重试。</p> : null}
           {pool ? <>
@@ -143,7 +142,6 @@ export function ConsolidationPanel({ strategy }: { strategy: ObservationStrategy
               <details className="consolidation-rules"><summary>研究口径与限制</summary><ul>{pool.warnings.map((warning) => <li key={warning}>{warning}</li>)}</ul><p>规则版本 {pool.strategy_version} · 计算时间 {new Date(pool.generated_at).toLocaleString("zh-CN")}</p></details>
             </> : <div aria-hidden="true" style={{ minHeight: 180 }} />}
         </div>
-      </Panel>
-    </div>
+    </section>
   );
 }
