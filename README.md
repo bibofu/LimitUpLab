@@ -2,7 +2,7 @@
 
 基于真实 A 股收盘数据的复盘 Agent（主要针对近期发生涨停的股票）。
 
-在线访问：[LimitUpLab · limitupagent.xyz](https://limitupagent.xyz/)
+在线访问：[LimitUpLab · limituplab.tech](https://limituplab.tech/)
 
 LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最近新闻，热门股票，大盘走势，龙虎榜等。同时针对近期发生涨停的股票，提供首板质量评分，涨停后回撤等策略。
 

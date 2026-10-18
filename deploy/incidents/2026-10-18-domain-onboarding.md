@@ -5,7 +5,7 @@
 `limituplab.tech` 的根域名 A 记录已指向 `118.193.34.72`，访问仍返回 404。
 本次 DNS 查询未返回 AAAA、CAA 记录。
 
-宿主机 `/etc/nginx/sites-available/limituplab` 仅配置旧域名 `limitupagent.xyz`。
+宿主机 `/etc/nginx/sites-available/limituplab` 仅配置旧域名。
 新域名请求落入 80 端口默认站点，由 Certbot 生成的 `return 404` 返回错误。
 DNS 解析生效后，仍需配置对应的 Nginx 虚拟主机与 HTTPS 证书。
 

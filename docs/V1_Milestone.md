@@ -5,7 +5,7 @@
 > 里程碑标签：`v1.0.0`
 >
 > V1 收尾代码基线：`5435d5c`
-> 线上地址：<https://limitupagent.xyz/>
+> 当前线上地址：<https://limituplab.tech/>
 
 ## 1. 里程碑说明
 

@@ -14,7 +14,7 @@ git push origin v1.3.1
 
 ## 一次性配置
 
-目标为 `ubuntu@118.193.34.72`，生产仓库 `/opt/LimitUpLab`，公网域名 `limitupagent.xyz`。
+目标为 `ubuntu@118.193.34.72`，生产仓库 `/opt/LimitUpLab`，公网域名 `limituplab.tech`。
 
 1. 生成专用 Ed25519 密钥，注释必须为 `limituplab-actions-deploy`。私钥只保存在本机安全目录和仓库 Actions Secret `DEPLOY_SSH_KEY`；不要使用个人管理密钥，不要提交密钥。
 2. 通过既有可信 SSH 通道核验服务器主机公钥。`production_known_hosts` 固定该公钥，主机密钥变化时应人工核验并更新，不能关闭验证或临时信任 `ssh-keyscan` 的未核验结果。
