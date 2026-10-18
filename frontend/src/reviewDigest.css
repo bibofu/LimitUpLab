@@ -1,5 +1,5 @@
 .review-summary.digest-summary { background: #fff; padding: 18px; font-size: 14px; line-height: 1.65; }
-.review-overview { padding: 20px; background: #fff; border: 1px solid #e1e8f0; border-radius: 8px; }
+.review-overview { margin-bottom: 16px; padding: 20px; background: #fff; border: 1px solid #e1e8f0; border-radius: 8px; }
 .review-overview-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
 .review-overview-heading h2 { margin: 0 0 5px; color: #25364a; font-size: 18px; }
 .review-overview-heading span, .review-overview-status, .review-overview-hint { color: #758196; font-size: 12px; }
