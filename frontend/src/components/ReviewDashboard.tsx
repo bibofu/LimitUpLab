@@ -22,7 +22,6 @@ import {
   formatEmpiricalRate,
   formatNetAmount,
   formatOptionalPercent,
-  formatPercent,
   formatSigned,
   numberTone,
   stockDetailPath,
@@ -405,18 +404,6 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
     (total, tradeDate) => total + (reviewDates[tradeDate]?.length ?? 0),
     0,
   );
-  const trackedPendingCount = trackDates.reduce(
-    (total, tradeDate) => total + (reviewDates[tradeDate] ?? []).filter((item) => !item.outcome_ready).length,
-    0,
-  );
-  const trackedReadyCount = trackedSampleSize - trackedPendingCount;
-  const trackedSuccessCount = trackDates.reduce(
-    (total, tradeDate) => total + (reviewDates[tradeDate] ?? []).filter(
-      (item) => (latestTrackedReturn(item) ?? 0) > 0,
-    ).length,
-    0,
-  );
-  const trackedSuccessRate = trackedReadyCount > 0 ? trackedSuccessCount / trackedReadyCount : null;
   const promotionComparisons = (report?.promotion_comparisons ?? []).reduce<
     Record<string, ReviewPromotionComparison>
   >((items, item) => {
@@ -468,12 +455,6 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
         </div> : null}
         <PromotionWarnings warnings={promotionWarnings} />
 
-        <div className="review-date-cutoff">
-          <span>复盘截止日</span>
-          <time dateTime={latestTradeDate}>{latestTradeDate}</time>
-          <em>最新交易日</em>
-        </div>
-
         {running && !report ? (
           <div className="review-agent-empty">
             <strong>正在加载过去 5 个交易日 Top10 追踪</strong>
@@ -508,10 +489,6 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
                     ? "暂无"
                     : `${formatSigned(report.promotion_rate_delta * 100, 1)} 个百分点`}
                 </strong>
-              </span>
-              <span>
-                <small>收益兑现率</small>
-                <strong>{trackedSuccessRate === null ? "暂无" : formatPercent(trackedSuccessRate)}</strong>
               </span>
             </div>
 
@@ -822,11 +799,12 @@ function ReviewPostBars({
   ]));
   return (
     <div className="review-post-bars">
-      {Array.from({ length: 6 }, (_, index) => {
-        const bar = barsByDay.get(index);
-        const label = index === 0 ? "首板" : `D+${index}`;
+      {Array.from({ length: 5 }, (_, index) => {
+        const offset = index + 1;
+        const bar = barsByDay.get(offset);
+        const label = `D+${offset}`;
         if (!bar) {
-          const cacheMissing = index < expectedCount;
+          const cacheMissing = offset < expectedCount;
           return (
             <span
               className={cacheMissing ? "cache-missing" : "awaiting-close"}

@@ -1135,31 +1135,9 @@ td span {
   overflow-wrap: anywhere;
 }
 
-.review-date-cutoff {
-  display: flex;
-  align-items: center;
-  justify-content: flex-end;
-  gap: 9px;
-  color: #667489;
-  font-size: 12px;
-  font-weight: 700;
-}
-
-.review-date-cutoff time {
-  color: #202938;
-  font-size: 13px;
-  font-weight: 700;
-}
-
-.review-date-cutoff em {
-  color: #788597;
-  font-style: normal;
-  font-weight: 600;
-}
-
 .review-agent-metrics {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 10px;
 }
 
@@ -1457,7 +1435,7 @@ td span {
 
 .review-post-bars {
   display: grid;
-  grid-template-columns: repeat(6, minmax(0, 1fr));
+  grid-template-columns: repeat(5, minmax(0, 1fr));
   gap: 5px;
 }
 
@@ -3692,12 +3670,6 @@ td span {
 
   .review-agent-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
-  }
-
-  .review-date-cutoff {
-    align-items: flex-start;
-    justify-content: flex-start;
-    flex-wrap: wrap;
   }
 
   .daily-top-cards button,

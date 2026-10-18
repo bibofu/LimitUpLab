@@ -149,5 +149,7 @@ test("date-specific Top10 still shows promotion denominators and dated tracking 
   const html = renderDailyTop({ activeSelection: tradeDate, picks, groupedPicks: { [tradeDate]: picks }, trackDates: [tradeDate],
     successfulPicks: picks, failedPicks: [], promotionComparisons: { [tradeDate]: promotion }, onSelect: () => {} });
   for (const text of [tradeDate, "Top10 追踪", "1进2 3/10 · 全部 4/20", "预测 Top10 1进2", "当天全部首板 1进2", "30.0%", "20.0%", "+10.0 个百分点", "2026-10-08", "测试题材", "追踪样本2", "已晋级二板", "D+1", "D+5"]) assert.ok(html.includes(text), text);
-  for (const text of ["首板至今", "review-pattern-summary", "旧正收益画像", "旧负收益画像", "旧评分假设"]) assert.ok(!html.includes(text), text);
+  assert.ok(html.includes("<small>D+1</small><strong>+10.0%</strong>"), "D+1 keeps its actual return after hiding the baseline column");
+  assert.ok(html.includes("<small>D+2</small><strong>待收盘</strong>"), "future trading days keep their original offsets");
+  for (const text of ["<small>首板</small>", "首板至今", "review-pattern-summary", "旧正收益画像", "旧负收益画像", "旧评分假设"]) assert.ok(!html.includes(text), text);
 });
