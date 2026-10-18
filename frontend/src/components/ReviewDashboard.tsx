@@ -432,22 +432,14 @@ function HighScoreReviewPanel({ latestTradeDate }: { latestTradeDate: string }) 
       : reviewDates[selectedReviewSelection] ?? [];
 
   return (
-    <Panel title="高分票追踪复盘" icon={<TrendingUp size={18} />}>
+    <Panel title="首板追踪" icon={<TrendingUp size={18} />}>
       <div className="review-agent-panel">
         <div className="review-agent-hero">
-          <div>
-            <span>High Score Review</span>
-            <strong>
-              {report
-                ? `${report.start_date} 至 ${report.end_date}`
-                : `截至 ${latestTradeDate}`}
-            </strong>
-            <p>
-              {report
-                ? `过去 5 个交易日，每天一个卡片；点进去看当日 Top10 到 ${report.end_date} 收盘的走势。`
-                : "自动加载过去 5 个交易日的每日 Top10 评分票，点击日期卡片查看到最新收盘的兑现情况。"}
-            </p>
-          </div>
+          <strong>
+            {report
+              ? `${report.start_date} 至 ${report.end_date}`
+              : `截至 ${latestTradeDate}`}
+          </strong>
         </div>
 
         {error ? <div className="review-agent-error" role="alert">

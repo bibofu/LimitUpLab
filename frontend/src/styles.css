@@ -1039,13 +1039,6 @@ td span {
   background: #f8fafc;
 }
 
-.review-agent-hero > div:first-child {
-  display: grid;
-  gap: 5px;
-}
-
-.review-agent-hero span,
-.review-agent-hero p,
 .review-agent-error,
 .review-agent-empty p {
   margin: 0;
@@ -1184,6 +1177,7 @@ td span {
 
 .daily-top-cards button {
   display: grid;
+  flex-grow: 1;
   gap: 3px;
   min-width: 172px;
   padding: 10px 12px;
