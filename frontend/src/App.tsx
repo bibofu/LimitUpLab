@@ -3,6 +3,7 @@
   ChevronRight,
   ExternalLink,
   Flame,
+  Github,
   Layers3,
   LineChart,
   LoaderCircle,
@@ -220,6 +221,16 @@ export function App() {
         </nav>
 
         <div className="app-header-actions">
+          <a
+            aria-label="在新标签页打开 LimitUpLab GitHub 仓库"
+            className="icon-button"
+            href="https://github.com/bibofu/LimitUpLab"
+            rel="noopener noreferrer"
+            target="_blank"
+            title="GitHub 项目仓库"
+          >
+            <Github size={18} aria-hidden="true" />
+          </a>
           <div className="data-as-of">
             <i aria-hidden="true" />
             <span>
