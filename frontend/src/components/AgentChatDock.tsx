@@ -660,6 +660,7 @@ export function AgentChatDock({
           </div>
         </aside>
 
+        <div className="agent-chat-conversation">
         <section className={`agent-chat-panel ${isConversationActive ? "is-active" : "is-idle"}`}>
         <header>
           <div>
@@ -827,6 +828,8 @@ export function AgentChatDock({
           )}
         </form>
       </section>
+        <p className="agent-chat-disclaimer">内容由AI生成， 仅用于学习研究， 不构成任何投资建议</p>
+        </div>
       </div>
     </div>
   );

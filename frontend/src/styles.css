@@ -646,6 +646,19 @@ td span {
   animation: chat-progress-spin 0.9s linear infinite;
 }
 
+.agent-chat-conversation {
+  min-width: 0;
+}
+
+.agent-chat-disclaimer {
+  margin: 8px 0 0;
+  padding: 0 12px;
+  color: #758196;
+  font-size: 12px;
+  line-height: 1.6;
+  text-align: center;
+}
+
 .agent-chat-panel {
   display: grid;
   min-width: 0;
