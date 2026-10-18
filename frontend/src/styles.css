@@ -1023,6 +1023,20 @@ td span {
   opacity: 0.55;
 }
 
+.review-dashboard {
+  display: grid;
+  grid-template-columns: minmax(0, 1fr);
+  gap: 16px;
+}
+
+.review-dashboard > * {
+  min-width: 0;
+}
+
+.review-dashboard > .resource-notice {
+  margin: 0;
+}
+
 .review-agent-panel {
   display: grid;
   gap: 14px;
@@ -1047,13 +1061,9 @@ td span {
 
 .review-summary {
   padding: 16px;
-  border: 1px solid #e9edf2;
-  border-radius: 8px;
-  background: #f8fafc;
 }
 
 .review-summary-heading,
-.review-summary-heading > div,
 .review-summary-heading button {
   display: flex;
   align-items: center;
@@ -1062,7 +1072,7 @@ td span {
 }
 
 .review-summary-heading {
-  justify-content: space-between;
+  justify-content: flex-end;
 }
 
 .review-summary-heading span,
@@ -2068,14 +2078,6 @@ a.entry-card {
   margin-bottom: 0;
   font-size: 13px;
   line-height: 1.5;
-}
-
-.promotion-section {
-  margin-bottom: 18px;
-}
-
-.dragon-tiger-section {
-  margin-bottom: 18px;
 }
 
 .dragon-tiger-filters {

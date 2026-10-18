@@ -1,7 +1,8 @@
-import { LoaderCircle, RefreshCcw } from "lucide-react";
+import { ChartNoAxesCombined, LoaderCircle, RefreshCcw } from "lucide-react";
 import type { ReviewSummaryStatus } from "../hooks/useReviewReport";
 import type { ReviewAgentReportResponse } from "../types";
 import { ReviewDigestContent } from "./ReviewDigest";
+import { Panel } from "./Panel";
 
 interface ReviewSummaryProps {
   report: ReviewAgentReportResponse;
@@ -34,30 +35,35 @@ export function ReviewSummary({ report, summaryStatus, error, onRegenerate }: Re
     : summaryStatus === "idle" && digest ? "本地事实已就绪，可生成本期画像解读。"
       : failed ? "本次解读未完成，已核对的事实仍可查看。" : null;
 
-  return <section className="review-summary digest-summary" aria-label="候选与高标画像" aria-busy={generating}>
-    <div className="review-summary-heading">
-      <div><strong>候选与高标画像</strong><span>{digest ? statusText : "新报告待刷新"}{digest && summaryStatus === "ready" && report.llm_model ? ` · ${report.llm_model}` : ""}</span></div>
-      <button type="button" disabled={generating} onClick={onRegenerate}>
-        {generating ? <LoaderCircle size={14} className="state-spinner" /> : <RefreshCcw size={14} />}{buttonText}
-      </button>
-    </div>
-    {notice ? <p className={failed ? "review-agent-error" : undefined} role={failed ? "alert" : "status"}>{notice}</p> : null}
-    {failed && failureReason ? <details className="review-summary-reason"><summary>查看原因</summary><p>{failureReason}</p></details> : null}
-    {digest ? <ReviewDigestContent digest={digest} summarySource={summarySource} />
-      : <p>新报告待刷新：请刷新全部数据，或重新生成解读，获取当前窗口的三组画像。</p>}
-    <details className="review-summary-scope">
-      <summary>样本口径与数据说明</summary>
-      {digest ? <p>候选 {digest.overview.candidate_count} 个；优秀 {digest.overview.excellent_count} 个，较差 {digest.overview.weak_count} 个，普通 {digest.overview.ordinary_count} 个，缺失或未观察 {digest.overview.unobserved_count} 个。</p> : null}
-      <p>本摘要的优秀候选上涨 ≥9.8%，较差候选下跌超过 5%；普通组与无法观察的样本分别保留。
-        累计涨跌从首板收盘计算至截至日，观察天数可能不同；这是历史描述，不是未来概率或因果结论。</p>
-      {digest?.notes.length ? <ul>{digest.notes.map((note, index) => <li key={index}>{note}</li>)}</ul> : null}
-      <p>以下时间资格数量属于完整追踪报告（{report.sample_size} 条），可能与本摘要的候选窗口不同。
-        现行盘前终选前向资格样本：{cohortCount("premarket_final")}；收盘基线：{cohortCount("close_baseline")}；
-        旧版收盘：{cohortCount("legacy_close")}；历史补算：{cohortCount("historical_backtest")}。
-        收盘及补算样本不计作现行盘前终选的前向验证。</p>
-      <p>分布以各字段有效样本为分母，缺失不补零；候选画像与全部候选对照，市场高标仅描述本组。
-        数字、样本资格和证据由本地代码生成，LLM 仅解释并选择证据，不改评分或预测记录。</p>
-      {report.warnings.length ? <ul>{report.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul> : null}
-    </details>
+  return <section className="review-profiles-section" aria-label="候选与高标画像" aria-busy={generating}>
+    <Panel title="候选与高标画像" icon={<ChartNoAxesCombined size={18} />} actions={(
+      <div className="review-summary-heading">
+        <span>{digest ? statusText : "新报告待刷新"}{digest && summaryStatus === "ready" && report.llm_model ? ` · ${report.llm_model}` : ""}</span>
+        <button type="button" disabled={generating} onClick={onRegenerate}>
+          {generating ? <LoaderCircle size={14} className="state-spinner" /> : <RefreshCcw size={14} />}{buttonText}
+        </button>
+      </div>
+    )}>
+      <div className="review-summary digest-summary">
+        {notice ? <p className={failed ? "review-agent-error" : undefined} role={failed ? "alert" : "status"}>{notice}</p> : null}
+        {failed && failureReason ? <details className="review-summary-reason"><summary>查看原因</summary><p>{failureReason}</p></details> : null}
+        {digest ? <ReviewDigestContent digest={digest} summarySource={summarySource} />
+          : <p>新报告待刷新：请刷新全部数据，或重新生成解读，获取当前窗口的三组画像。</p>}
+        <details className="review-summary-scope">
+          <summary>样本口径与数据说明</summary>
+          {digest ? <p>候选 {digest.overview.candidate_count} 个；优秀 {digest.overview.excellent_count} 个，较差 {digest.overview.weak_count} 个，普通 {digest.overview.ordinary_count} 个，缺失或未观察 {digest.overview.unobserved_count} 个。</p> : null}
+          <p>本摘要的优秀候选上涨 ≥9.8%，较差候选下跌超过 5%；普通组与无法观察的样本分别保留。
+            累计涨跌从首板收盘计算至截至日，观察天数可能不同；这是历史描述，不是未来概率或因果结论。</p>
+          {digest?.notes.length ? <ul>{digest.notes.map((note, index) => <li key={index}>{note}</li>)}</ul> : null}
+          <p>以下时间资格数量属于完整追踪报告（{report.sample_size} 条），可能与本摘要的候选窗口不同。
+            现行盘前终选前向资格样本：{cohortCount("premarket_final")}；收盘基线：{cohortCount("close_baseline")}；
+            旧版收盘：{cohortCount("legacy_close")}；历史补算：{cohortCount("historical_backtest")}。
+            收盘及补算样本不计作现行盘前终选的前向验证。</p>
+          <p>分布以各字段有效样本为分母，缺失不补零；候选画像与全部候选对照，市场高标仅描述本组。
+            数字、样本资格和证据由本地代码生成，LLM 仅解释并选择证据，不改评分或预测记录。</p>
+          {report.warnings.length ? <ul>{report.warnings.map((warning, index) => <li key={index}>{warning}</li>)}</ul> : null}
+        </details>
+      </div>
+    </Panel>
   </section>;
 }

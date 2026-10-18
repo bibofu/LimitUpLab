@@ -1,5 +1,5 @@
 .review-summary.digest-summary { background: #fff; padding: 18px; font-size: 14px; line-height: 1.65; }
-.review-overview { margin-bottom: 16px; padding: 20px; background: #fff; border: 1px solid #e1e8f0; border-radius: 8px; }
+.review-overview { padding: 20px; background: #fff; border: 1px solid #e1e8f0; border-radius: 8px; }
 .review-overview-heading { display: flex; justify-content: space-between; align-items: center; gap: 16px; flex-wrap: wrap; }
 .review-overview-heading h2 { margin: 0 0 5px; color: #25364a; font-size: 18px; }
 .review-overview-heading span, .review-overview-status, .review-overview-hint { color: #758196; font-size: 12px; }
@@ -11,11 +11,10 @@
 .review-overview-prose > :first-child { margin-top: 0; }
 .review-overview-prose > :last-child { margin-bottom: 0; }
 .review-summary.digest-summary p { font-size: 14px; color: #4b5d71; }
-.digest-summary .review-summary-heading span,
-.digest-summary .review-summary-heading button,
+.review-summary-heading span,
+.review-summary-heading button,
 .digest-summary .review-summary-scope,
 .digest-summary .review-summary-reason { font-size: 13px; }
-.digest-summary .review-summary-heading > div > strong { font-size: 16px; }
 .digest-overview { padding: 18px 0; }
 .review-digest h3 { margin: 0; display: flex; align-items: baseline; flex-wrap: wrap; gap: 7px; font-size: 17px; line-height: 1.6; color: #25364a; }
 .review-digest h3 > span { font-size: 13px; color: #8592a2; font-weight: 500; }

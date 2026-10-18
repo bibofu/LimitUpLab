@@ -31,7 +31,7 @@ const sections = compile("../src/components/ResourceSection.tsx", {
   "../utils/asyncResource": await import("../src/utils/asyncResource.ts"),
 });
 const reviewDigest = compile("../src/components/ReviewDigest.tsx");
-const reviewSummary = compile("../src/components/ReviewSummary.tsx", { "./ReviewDigest": reviewDigest });
+const reviewSummary = compile("../src/components/ReviewSummary.tsx", { "./ReviewDigest": reviewDigest, "./Panel": compile("../src/components/Panel.tsx") });
 const reviewReport = compile("../src/hooks/useReviewReport.ts", { "../api": {} });
 const review = compile("../src/components/ReviewDashboard.tsx", {
   "../api": {}, "./Panel": panel,

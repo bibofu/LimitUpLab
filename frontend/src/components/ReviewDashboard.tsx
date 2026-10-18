@@ -46,14 +46,14 @@ export function ReviewDashboard({
   latestTradeDate,
 }: ReviewDashboardProps) {
   return (
-    <>
+    <div className="review-dashboard">
       {latestTradeDate ? <ReviewOverview key={`overview-${latestTradeDate}`} endDate={latestTradeDate} /> : null}
       {latestTradeDate ? <HighScoreReviewPanel key={`tracking-${latestTradeDate}`} latestTradeDate={latestTradeDate} />
         : <div className="resource-notice" role="status">复盘日期尚未确认，请刷新本地事件数据。</div>}
       {dailyBoardPromotion ? <DailyBoardPromotionPanel report={dailyBoardPromotion} /> : promotionState}
       {latestTradeDate ? <ReviewProfilesPanel key={`profiles-${latestTradeDate}`} latestTradeDate={latestTradeDate} /> : null}
       {latestTradeDate ? <DragonTigerReviewPanel key={`dragon-tiger-${latestTradeDate}`} tradeDate={latestTradeDate} /> : null}
-    </>
+    </div>
   );
 }
 

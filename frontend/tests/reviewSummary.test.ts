@@ -316,7 +316,7 @@ function compile(path: string, imports: Record<string, unknown> = {}, exports = 
   return module.exports;
 }
 const digest = compile("../src/components/ReviewDigest.tsx");
-const summary = compile("../src/components/ReviewSummary.tsx", { "./ReviewDigest": digest });
+const summary = compile("../src/components/ReviewSummary.tsx", { "./ReviewDigest": digest, "./Panel": compile("../src/components/Panel.tsx") });
 const renderSummary = (value: ReviewAgentReportResponse, summaryStatus: ReviewSummaryStatus = "ready", error: string | null = null) => (
   renderToStaticMarkup(createElement(MemoryRouter, null, createElement(summary.ReviewSummary, { report: value, summaryStatus, error, onRegenerate() {} })))
 );
