@@ -120,6 +120,11 @@ class SectorPerformanceFacts(BaseModel):
     trade_date: date
     data_as_of: date
     data_fresh: bool
+    previous_trade_date: date | None = None
+    covered_sector_count: int | None = None
+    ranking_complete: bool | None = None
+    ranking_universe: str | None = None
+    data_missing: list[str] = Field(default_factory=list)
     rank: int | None = None
     sector_count: int
     change_pct: float | None = None

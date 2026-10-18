@@ -341,22 +341,14 @@ class AgentToolRegistry:
     ) -> ToolResult:
         """Return on-demand sector ranking, breadth and trend facts."""
 
-        response: SectorPerformanceFacts = build_sector_performance(
-            sector=sector,
-            trade_date=trade_date,
-        )
         latest_local_date = max(
             (item.trade_date for item in self.events),
             default=None,
         )
-        if trade_date is None and latest_local_date and response.data_as_of > latest_local_date:
-            response = response.model_copy(
-                update={
-                    "trade_date": latest_local_date,
-                    "data_as_of": latest_local_date,
-                    "data_fresh": True,
-                }
-            )
+        response: SectorPerformanceFacts = build_sector_performance(
+            sector=sector,
+            trade_date=trade_date or latest_local_date,
+        )
         trace_output = response.model_dump(mode="json")
         if response.matched_sectors:
             matches = "、".join(
@@ -385,7 +377,11 @@ class AgentToolRegistry:
                 f"{item.sector_name}({item.change_pct:+.2f}%)"
                 for item in response.top_sectors[:3]
             )
-            summary = f"{response.data_as_of.isoformat()} 行业强弱榜：{leaders}。"
+            summary = (
+                f"{response.data_as_of.isoformat()} 行业强弱榜：{leaders}。"
+                if leaders else
+                f"{response.trade_date.isoformat()} 行业强弱榜未完整取得，详见数据缺口。"
+            )
         return ToolResult(
             name="sector_performance",
             input={
@@ -395,6 +391,8 @@ class AgentToolRegistry:
             output=response,
             summary=summary,
             trace_output=trace_output,
+            result_status="partial" if response.data_missing or not response.data_fresh else "ok",
+            data_fresh=response.data_fresh,
         )
 
     def sector_stock_ranking(

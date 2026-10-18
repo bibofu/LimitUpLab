@@ -85,6 +85,10 @@ MARKET_TOOL_SCHEMAS = [
         description=(
             "按需获取A股行业或概念板块行情。可查询指定板块的涨跌幅、排名、成交额、"
             "资金净流入、上涨/下跌家数、领涨股和近期趋势；sector 为空时返回行业强弱榜。"
+            "有日期的行业强弱榜按本次取得的行业指数目录核对目标日及前交易日收盘，完整覆盖才返回涨跌前5。"
+            "仅询问当日行业表现或强弱时，日期匹配的完整榜单已足够回答；未要求多日趋势、资金或成分股时，不逐一补查入榜行业。"
+            "ranking_complete=false时说明本次排名缺口，其他日期或任意行业抽样不能替代该日完整排名。"
+            "Top/Bottom摘要不能证明全市场普涨普跌或板块内部上涨广度，不推断未提供的资金流向、行业分类隶属和领涨股。"
         ),
         args_schema={
             "type": "object",
@@ -98,14 +102,16 @@ MARKET_TOOL_SCHEMAS = [
                 },
                 "trade_date": {
                     "type": ["string", "null"],
-                    "description": "YYYY-MM-DD; omit or null for the latest live snapshot.",
+                    "description": "YYYY-MM-DD; omit/null to use the latest complete local trading day. Only when no local date exists is an undated current snapshot used.",
                 },
             },
             "required": [],
         },
         returns=(
             "Sector change, market rank, breadth, turnover, fund flow, leader, "
-            "5/20-day returns and top/bottom sector rankings."
+            "5/20-day returns where available. Dated overall rankings provide top/bottom five, "
+            "previous_trade_date and explicit coverage; ranking_universe describes the current catalog, "
+            "not reconstructed historical membership. Historical breadth/flow/leader fields may be unavailable."
         ),
     ),
     AgentToolSchema(

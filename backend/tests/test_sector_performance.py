@@ -1,7 +1,12 @@
 import unittest
+from dataclasses import replace
 from datetime import date, timedelta
+from types import SimpleNamespace
+from unittest.mock import Mock, patch
 
-from app.collectors.sector_collector import SectorDailyRow, SectorSpotRow
+from app.agents.tools import AgentToolRegistry
+from app.collectors.sector_collector import SectorDailyRow, SectorRankingSnapshot, SectorSpotRow
+from app.models import SectorPerformanceFacts
 from app.services.sector_performance import build_sector_performance
 
 
@@ -71,7 +76,6 @@ class SectorPerformanceTest(unittest.TestCase):
         # The inline callback supplies the fixture value or replacement behavior used by this
         # test; it is evaluated only when the code under test calls it.
         response = build_sector_performance(
-            trade_date=self.today,
             spot_collector=lambda: self.spot_rows,
             history_collector=lambda _name, _start, _end: [],
         )
@@ -79,6 +83,87 @@ class SectorPerformanceTest(unittest.TestCase):
         self.assertIsNone(response.sector_name)
         self.assertEqual(response.top_sectors[0].sector_name, "厨卫电器")
         self.assertEqual(response.bottom_sectors[0].sector_name, "半导体")
+
+    def test_dated_ranking_uses_complete_history_without_live_snapshot_or_named_probes(self) -> None:
+        target = date(2026, 10, 16)
+        historical_rows = [replace(row, source="dated-history") for row in self.spot_rows]
+        ranking = Mock(return_value=SectorRankingSnapshot(
+            target, date(2026, 10, 15), historical_rows, 2, [],
+        ))
+        spot, history = Mock(), Mock()
+        response = build_sector_performance(
+            trade_date=target, ranking_collector=ranking,
+            spot_collector=spot, history_collector=history,
+        )
+        ranking.assert_called_once_with(target)
+        spot.assert_not_called()
+        history.assert_not_called()
+        self.assertTrue(response.data_fresh)
+        self.assertTrue(response.ranking_complete)
+        self.assertEqual(response.data_as_of, target)
+        self.assertEqual(response.previous_trade_date, date(2026, 10, 15))
+        self.assertEqual(response.covered_sector_count, 2)
+        self.assertEqual(response.top_sectors[0].sector_name, "厨卫电器")
+        self.assertEqual(response.sources, ["dated-history"])
+
+    def test_partial_history_cannot_present_subset_as_global_leaderboard(self) -> None:
+        target = date(2026, 10, 16)
+        response = build_sector_performance(
+            trade_date=target,
+            ranking_collector=lambda _: SectorRankingSnapshot(
+                target, date(2026, 10, 15), self.spot_rows[:1], 2,
+                ["sector_history_coverage:1/2"],
+            ),
+        )
+        self.assertFalse(response.data_fresh)
+        self.assertFalse(response.ranking_complete)
+        self.assertEqual(response.covered_sector_count, 1)
+        self.assertEqual(response.sector_count, 2)
+        self.assertEqual(response.top_sectors, [])
+        self.assertEqual(response.bottom_sectors, [])
+        self.assertIn("sector_history_coverage:1/2", response.data_missing)
+
+    def test_named_historical_sector_without_history_is_explicitly_missing(self) -> None:
+        response = build_sector_performance(
+            "半导体", trade_date=self.today - timedelta(days=2),
+            spot_collector=lambda: self.spot_rows, history_collector=lambda *_: [],
+        )
+        self.assertFalse(response.data_fresh)
+        self.assertIsNone(response.change_pct)
+        self.assertIsNone(response.rank)
+        self.assertEqual(response.top_sectors, [])
+        self.assertIn("sector_history_unavailable", response.data_missing)
+
+    def test_agent_resolves_latest_local_date_before_loading_sector_evidence(self) -> None:
+        target = date(2026, 10, 16)
+        registry = AgentToolRegistry(
+            [SimpleNamespace(trade_date=target), SimpleNamespace(trade_date=date(2026, 10, 15))],
+            first_board_repository=object(), hithink_collector=object(),
+        )
+        facts = SectorPerformanceFacts(
+            trade_date=target, data_as_of=target, data_fresh=True, sector_count=2,
+            covered_sector_count=2, ranking_complete=True,
+        )
+        with patch("app.agents.tools.build_sector_performance", return_value=facts) as build:
+            result = registry.sector_performance()
+        build.assert_called_once_with(sector=None, trade_date=target)
+        self.assertEqual(result.result_status, "ok")
+        self.assertEqual(result.output.data_as_of, target)
+
+    def test_agent_keeps_incomplete_sector_result_partial(self) -> None:
+        target = date(2026, 10, 16)
+        registry = AgentToolRegistry([], first_board_repository=object(), hithink_collector=object())
+        facts = SectorPerformanceFacts(
+            trade_date=target, data_as_of=target, data_fresh=False, sector_count=2,
+            covered_sector_count=1, ranking_complete=False,
+            data_missing=["sector_history_coverage:1/2"],
+        )
+        with patch("app.agents.tools.build_sector_performance", return_value=facts):
+            result = registry.sector_performance(trade_date=target)
+        self.assertEqual(result.result_status, "partial")
+        self.assertFalse(result.data_fresh)
+        self.assertEqual(result.trace().result.status, "partial")
+        self.assertEqual(result.trace_output["data_missing"], ["sector_history_coverage:1/2"])
 
     # Regression scenario: military alias returns all matching industry subsectors.
     def test_military_alias_returns_all_matching_industry_subsectors(self) -> None:

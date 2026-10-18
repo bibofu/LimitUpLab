@@ -4,10 +4,11 @@ from __future__ import annotations
 
 import os
 import threading
-from concurrent.futures import ThreadPoolExecutor, as_completed
+from concurrent.futures import Future, ThreadPoolExecutor, as_completed
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta
 from math import isfinite
+from time import monotonic
 from typing import Any
 
 import akshare as ak
@@ -48,6 +49,21 @@ class SectorDailyRow:
     source: str
 
 
+@dataclass(frozen=True)
+class SectorRankingSnapshot:
+    """A dated industry universe with explicit coverage of one trading session."""
+
+    trade_date: date
+    previous_trade_date: date | None
+    rows: list[SectorSpotRow]
+    sector_count: int
+    data_missing: list[str]
+
+    @property
+    def complete(self) -> bool:
+        return bool(self.rows) and len(self.rows) == self.sector_count and not self.data_missing
+
+
 _SPOT_CACHE_TTL = timedelta(minutes=5)
 _HISTORY_CACHE_TTL = timedelta(minutes=15)
 _CATALOG_CACHE_TTL = timedelta(hours=24)
@@ -55,6 +71,10 @@ _CLI_SNAPSHOT_TIMEOUT_SECONDS = 60
 _CLI_BATCH_SIZE = 100
 _CLI_MAX_WORKERS = 4
 _INDUSTRY_SUPPLEMENT_TIMEOUT_SECONDS = 5
+_HISTORY_RANKING_TIMEOUT_SECONDS = 30
+_HISTORY_RANKING_POOL = ThreadPoolExecutor(max_workers=8)
+_ranking_cache: dict[date, tuple[datetime, SectorRankingSnapshot]] = {}
+_ranking_pending: dict[date, Future] = {}
 _catalog_cache: dict[str, tuple[datetime, list[HithinkIndexCatalogFact]]] = {}
 _spot_cache: tuple[datetime, list[SectorSpotRow]] | None = None
 _concept_spot_cache: tuple[datetime, list[SectorSpotRow]] | None = None
@@ -65,6 +85,135 @@ _concept_history_cache: dict[
     tuple[str, date, date], tuple[datetime, list[SectorDailyRow]]
 ] = {}
 _cache_lock = threading.Lock()
+
+
+def collect_sector_ranking(trade_date: date) -> SectorRankingSnapshot:
+    """Share a bounded, date-verified historical ranking across concurrent requests."""
+
+    now = datetime.now()
+    with _cache_lock:
+        cached = _ranking_cache.get(trade_date)
+        if cached:
+            ttl = _HISTORY_CACHE_TTL if cached[1].complete else timedelta(seconds=30)
+            if now - cached[0] < ttl:
+                return replace(cached[1], rows=list(cached[1].rows), data_missing=list(cached[1].data_missing))
+        pending = _ranking_pending.get(trade_date)
+        owner = pending is None
+        if owner:
+            pending = Future()
+            _ranking_pending[trade_date] = pending
+    if owner:
+        try:
+            result = _collect_historical_ranking(trade_date)
+        except Exception as error:  # noqa: BLE001
+            result = SectorRankingSnapshot(
+                trade_date, None, [], 0,
+                [f"sector_history_ranking_unavailable:{type(error).__name__}"],
+            )
+        with _cache_lock:
+            _ranking_cache[trade_date] = (datetime.now(), result)
+            while len(_ranking_cache) > 16:
+                _ranking_cache.pop(next(iter(_ranking_cache)))
+            _ranking_pending.pop(trade_date, None)
+        pending.set_result(result)
+    result = pending.result(timeout=_HISTORY_RANKING_TIMEOUT_SECONDS + 1)
+    return replace(result, rows=list(result.rows), data_missing=list(result.data_missing))
+
+
+def _collect_historical_ranking(trade_date: date) -> SectorRankingSnapshot:
+    deadline = monotonic() + _HISTORY_RANKING_TIMEOUT_SECONDS
+    collector = HithinkFinanceCollector(timeout_seconds=min(10, _HISTORY_RANKING_TIMEOUT_SECONDS))
+    indexes = _hithink_catalog(collector, "industry")
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        return SectorRankingSnapshot(trade_date, None, [], len(indexes), ["sector_history_timeout"])
+    collector.timeout_seconds = min(10, remaining)
+    try:
+        calendar = sorted(set(collector.collect_trading_calendar()))
+    except Exception as error:  # noqa: BLE001
+        return SectorRankingSnapshot(
+            trade_date, None, [], len(indexes),
+            [f"sector_history_calendar_unavailable:{type(error).__name__}"],
+        )
+    earlier = [day for day in calendar if day < trade_date]
+    if trade_date not in calendar or not earlier:
+        return SectorRankingSnapshot(
+            trade_date, None, [], len(indexes), ["sector_history_trading_dates_unavailable"],
+        )
+    previous_date = earlier[-1]
+    remaining = deadline - monotonic()
+    if remaining <= 0:
+        return SectorRankingSnapshot(trade_date, previous_date, [], len(indexes), ["sector_history_timeout"])
+    rows: list[SectorSpotRow] = []
+    missing: list[str] = []
+    outstanding = indexes
+    for _attempt in range(2):
+        remaining = deadline - monotonic()
+        if remaining <= 0:
+            missing.append("sector_history_timeout")
+            break
+        collector.timeout_seconds = min(10, remaining)
+        futures = {
+            _HISTORY_RANKING_POOL.submit(
+                _historical_ranking_row, collector, item, previous_date, trade_date, deadline,
+            ): item
+            for item in outstanding
+        }
+        outstanding = []
+        try:
+            for future in as_completed(futures, timeout=max(0, deadline - monotonic())):
+                try:
+                    row = future.result()
+                except Exception:  # noqa: BLE001
+                    row = None
+                if row is None:
+                    outstanding.append(futures[future])
+                else:
+                    rows.append(row)
+        except TimeoutError:
+            missing.append("sector_history_timeout")
+            break
+        finally:
+            for future in futures:
+                future.cancel()
+        # Retry only missing indices once, without discarding successful rows or
+        # granting another time budget. Missing data never becomes a zero return.
+        if not outstanding:
+            break
+    if len(rows) != len(indexes):
+        missing.append(f"sector_history_coverage:{len(rows)}/{len(indexes)}")
+    ordered = sorted(rows, key=lambda item: (-item.change_pct, item.sector_name))
+    return SectorRankingSnapshot(
+        trade_date, previous_date,
+        [replace(row, rank=rank) for rank, row in enumerate(ordered, 1)],
+        len(indexes), missing,
+    )
+
+
+def _historical_ranking_row(
+    collector: HithinkFinanceCollector,
+    index: HithinkIndexCatalogFact,
+    previous_date: date,
+    trade_date: date,
+    deadline: float,
+) -> SectorSpotRow | None:
+    if monotonic() >= deadline:
+        return None
+    history = collector.collect_index_history(index.thscode, start_date=previous_date, end_date=trade_date)
+    by_day = {bar.trade_date: bar for bar in history.items}
+    previous, current = by_day.get(previous_date), by_day.get(trade_date)
+    if previous is None or current is None or len(by_day) != len(history.items):
+        return None
+    if any(not isfinite(bar.close) or bar.close <= 0 for bar in (previous, current)):
+        return None
+    return SectorSpotRow(
+        sector_name=index.name, rank=0,
+        change_pct=_change_pct(current.close, previous.close),
+        amount_yi=current.turnover / 100_000_000 if isfinite(current.turnover) else None,
+        net_inflow_yi=None, up_count=None, down_count=None,
+        leader_name=None, leader_price=None, leader_change_pct=None,
+        source="hithink-finance.index.history.industry",
+    )
 
 
 def collect_sector_spot() -> list[SectorSpotRow]:

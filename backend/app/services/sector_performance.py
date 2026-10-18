@@ -7,10 +7,12 @@ from datetime import date, timedelta
 
 from app.collectors.sector_collector import (
     SectorDailyRow,
+    SectorRankingSnapshot,
     SectorSpotRow,
     collect_concept_history,
     collect_concept_spot,
     collect_sector_history,
+    collect_sector_ranking,
     collect_sector_spot,
 )
 from app.models import (
@@ -22,6 +24,7 @@ from app.models import (
 
 SpotCollector = Callable[[], list[SectorSpotRow]]
 HistoryCollector = Callable[[str, date, date], list[SectorDailyRow]]
+RankingCollector = Callable[[date], SectorRankingSnapshot]
 
 _INDUSTRY_GROUP_ALIASES = {
     "军工": ("军工装备", "军工电子"),
@@ -46,10 +49,13 @@ def build_sector_performance(
     history_collector: HistoryCollector = collect_sector_history,
     concept_spot_collector: SpotCollector = collect_concept_spot,
     concept_history_collector: HistoryCollector = collect_concept_history,
+    ranking_collector: RankingCollector = collect_sector_ranking,
 ) -> SectorPerformanceFacts:
     """Return latest industry/concept ranking and optional named-sector facts."""
 
     target_date = trade_date or date.today()
+    if not sector and trade_date is not None:
+        return _build_historical_ranking(target_date, ranking_collector)
     # The key compares rank.
     spot_rows = sorted(spot_collector(), key=lambda item: item.rank)
     if not spot_rows:
@@ -133,6 +139,14 @@ def build_sector_performance(
     )
     if history_error is not None:
         sources.append("sector-history-unavailable")
+    data_missing: list[str] = []
+    if not current_snapshot:
+        if matched_sectors:
+            data_missing.append("industry_group_historical_ranking_unavailable")
+        elif latest_history is None:
+            data_missing.append("sector_history_unavailable")
+        elif latest_history.trade_date != target_date:
+            data_missing.append("sector_history_requested_date_unavailable")
 
     return SectorPerformanceFacts(
         requested_sector=sector,
@@ -141,7 +155,7 @@ def build_sector_performance(
         trade_date=target_date,
         data_as_of=data_as_of,
         data_fresh=(
-            current_snapshot or data_as_of == target_date
+            current_snapshot or (latest_history is not None and data_as_of == target_date)
         ) if not matched_sectors else current_snapshot,
         rank=selected.rank if selected and current_snapshot else None,
         sector_count=len(spot_rows),
@@ -181,6 +195,30 @@ def build_sector_performance(
             for item in history[-20:]
         ],
         sources=sources,
+        data_missing=data_missing,
+    )
+
+
+def _build_historical_ranking(
+    target_date: date, collector: RankingCollector,
+) -> SectorPerformanceFacts:
+    snapshot = collector(target_date)
+    if snapshot.trade_date != target_date:
+        raise ValueError("historical sector ranking returned a different trading date")
+    complete = snapshot.complete
+    missing = list(snapshot.data_missing)
+    if not complete and not missing:
+        missing.append(f"sector_history_coverage:{len(snapshot.rows)}/{snapshot.sector_count}")
+    return SectorPerformanceFacts(
+        trade_date=target_date, data_as_of=target_date, data_fresh=complete,
+        previous_trade_date=snapshot.previous_trade_date,
+        sector_count=snapshot.sector_count, covered_sector_count=len(snapshot.rows),
+        ranking_complete=complete,
+        ranking_universe="本次取得的同花顺行业指数目录；核对指定日期价格，不代表已复原历史行业分类或成分股。",
+        top_sectors=[_ranking_item(row) for row in snapshot.rows[:5]] if complete else [],
+        bottom_sectors=[_ranking_item(row) for row in snapshot.rows[-5:][::-1]] if complete else [],
+        sources=list(dict.fromkeys(row.source for row in snapshot.rows)),
+        data_missing=missing,
     )
 
 
@@ -301,6 +339,7 @@ def _build_history_only_concept(
             for item in history[-20:]
         ],
         sources=sources,
+        data_missing=([] if latest.trade_date == target_date else ["sector_history_requested_date_unavailable"]),
     )
 
 
