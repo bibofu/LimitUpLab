@@ -18,7 +18,7 @@ html {
 
 body {
   margin: 0;
-  min-width: 320px;
+  min-width: 0;
 }
 
 button {
@@ -26,9 +26,9 @@ button {
 }
 
 .app-shell {
-  width: min(1480px, 100%);
+  width: 100%;
   margin: 0 auto;
-  padding: 0 28px 32px;
+  padding: 0 32px 32px;
 }
 
 .app-header {
@@ -39,9 +39,9 @@ button {
   grid-template-columns: auto minmax(0, 1fr) auto;
   gap: 24px;
   align-items: center;
-  min-height: 70px;
-  margin: 0 -28px 22px;
-  padding: 10px 28px;
+  min-height: 78px;
+  margin: 0 -32px 24px;
+  padding: 12px 32px;
   border-bottom: 1px solid #e3e8ef;
   background: rgb(255 255 255 / 96%);
   box-shadow: 0 1px 2px rgb(16 24 40 / 4%);
@@ -70,13 +70,13 @@ button {
 
 .app-brand strong {
   color: #202938;
-  font-size: 15px;
+  font-size: 18px;
   line-height: 1.1;
 }
 
 .data-as-of small {
   color: #667489;
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .primary-navigation {
@@ -92,11 +92,11 @@ button {
 .primary-navigation a {
   display: inline-flex;
   align-items: center;
-  min-height: 34px;
-  padding: 0 12px;
+  min-height: 38px;
+  padding: 0 16px;
   border-radius: 6px;
   color: #526071;
-  font-size: 13px;
+  font-size: 16px;
   font-weight: 700;
   text-decoration: none;
   white-space: nowrap;
@@ -137,7 +137,7 @@ button {
 
 .data-as-of strong {
   color: #374151;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .topbar {
@@ -289,8 +289,8 @@ td span {
   margin: 0 12px 4px 0;
   text-align: right;
   color: #788597;
-  font-size: 10px;
-  line-height: 14px;
+  font-size: 12px;
+  line-height: 16px;
 }
 
 .market-snapshot .market-snapshot-date > span {
@@ -333,7 +333,7 @@ td span {
 
 .market-snapshot-indices span {
   overflow: hidden;
-  font-size: 12px;
+  font-size: 14px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -346,12 +346,12 @@ td span {
 
 .market-snapshot-indices strong {
   color: #202938;
-  font-size: 18px;
+  font-size: 22px;
   line-height: 1;
 }
 
 .market-snapshot-indices b {
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1;
 }
 
@@ -395,13 +395,13 @@ td span {
   display: flex;
   align-items: center;
   gap: 5px;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .market-snapshot-ceiling strong,
 .market-snapshot-entries strong {
   color: #202938;
-  font-size: 22px;
+  font-size: 26px;
   line-height: 1;
 }
 
@@ -413,7 +413,7 @@ td span {
 .market-snapshot-entries small {
   margin-left: 3px;
   color: #667489;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 700;
 }
 
@@ -466,8 +466,8 @@ td span {
 
 .agent-chat-workspace {
   display: grid;
-  grid-template-columns: 240px minmax(0, 1fr);
-  gap: 12px;
+  grid-template-columns: 280px minmax(0, 1fr);
+  gap: 16px;
   align-items: start;
 }
 
@@ -499,7 +499,7 @@ td span {
 
 .chat-session-sidebar > header strong {
   color: #202938;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .chat-session-sidebar > header small {
@@ -571,13 +571,13 @@ td span {
 
 .chat-session-select strong {
   color: #374151;
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .chat-session-select time,
 .chat-session-select small {
   color: #667489;
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .chat-session-select time {
@@ -707,6 +707,7 @@ td span {
 
 .agent-chat-panel header strong {
   color: #202938;
+  font-size: 18px;
 }
 
 .agent-chat-viewport {
@@ -721,6 +722,8 @@ td span {
   min-height: 390px;
   max-height: 480px;
   overflow-y: auto;
+  overscroll-behavior-y: contain;
+  overflow-anchor: none;
   padding: 16px;
   background: #fcfcfd;
 }
@@ -728,11 +731,12 @@ td span {
 .chat-message {
   display: grid;
   gap: 8px;
-  width: min(760px, 100%);
-  padding: 12px;
+  width: min(1120px, 100%);
+  padding: 16px;
   border: 1px solid #e9edf2;
   border-radius: 8px;
   background: #ffffff;
+  font-size: 17px;
 }
 
 .chat-message > p {
@@ -746,7 +750,7 @@ td span {
   min-width: 0;
   overflow-wrap: anywhere;
   color: #374151;
-  line-height: 1.65;
+  line-height: 1.7;
 }
 
 .chat-task-status {
@@ -796,15 +800,15 @@ td span {
 }
 
 .chat-markdown h1 {
-  font-size: 18px;
+  font-size: 22px;
 }
 
 .chat-markdown h2 {
-  font-size: 16px;
+  font-size: 20px;
 }
 
 .chat-markdown h3 {
-  font-size: 14px;
+  font-size: 18px;
 }
 
 .chat-markdown p {
@@ -841,7 +845,7 @@ td span {
   border-radius: 4px;
   background: #f9fafb;
   color: #b83232;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .chat-markdown pre {
@@ -867,7 +871,7 @@ td span {
   margin: 10px 0;
   overflow-x: auto;
   border-collapse: collapse;
-  font-size: 12px;
+  font-size: 15px;
   white-space: nowrap;
 }
 
@@ -875,6 +879,7 @@ td span {
 .chat-markdown td {
   padding: 7px 9px;
   border: 1px solid #e3e8ef;
+  font-size: inherit;
   text-align: left;
 }
 
@@ -1048,7 +1053,7 @@ td span {
   background: #f9fafb;
   color: #526071;
   cursor: pointer;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
 }
 
@@ -1178,7 +1183,7 @@ td span {
 
 .review-agent-metrics small {
   color: #667489;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
 }
 
@@ -1186,12 +1191,12 @@ td span {
   min-width: 0;
   overflow-wrap: anywhere;
   color: #202938;
-  font-size: 20px;
+  font-size: 24px;
 }
 
 .review-agent-metrics em {
   color: #667489;
-  font-size: 11px;
+  font-size: 13px;
   font-style: normal;
 }
 
@@ -1230,7 +1235,7 @@ td span {
 
 .daily-top-cards span,
 .daily-top-cards small {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
 }
 
@@ -1239,12 +1244,12 @@ td span {
 }
 
 .daily-top-cards strong {
-  font-size: 15px;
+  font-size: 17px;
 }
 
 .daily-top-cards b {
   color: #202938;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .daily-top-cards button.review-outcome-option {
@@ -1335,13 +1340,13 @@ td span {
 .review-promotion-comparison small,
 .review-promotion-comparison em {
   color: #667489;
-  font-size: 11px;
+  font-size: 13px;
   font-style: normal;
 }
 
 .review-promotion-comparison strong {
   color: #202938;
-  font-size: 20px;
+  font-size: 24px;
 }
 
 .review-agent-empty {
@@ -1360,7 +1365,8 @@ td span {
 
 .review-pick-table {
   display: grid;
-  overflow: hidden;
+  grid-template-columns: minmax(0, 1fr);
+  overflow-x: auto;
   border: 1px solid #e9edf2;
   border-radius: 8px;
   background: #ffffff;
@@ -1369,17 +1375,18 @@ td span {
 .review-pick-table-head,
 .review-pick-row {
   display: grid;
-  grid-template-columns: 1fr 1.2fr 0.72fr minmax(260px, 1.8fr);
+  grid-template-columns: minmax(0, 1fr) minmax(0, 1.2fr) minmax(0, 0.72fr) minmax(340px, 1.8fr);
   gap: 10px;
   align-items: center;
   min-height: 54px;
+  min-width: 960px;
   padding: 9px 12px;
 }
 
 .review-pick-concept {
   overflow: hidden;
   color: #374151;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.45;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -1387,13 +1394,13 @@ td span {
 
 .review-pick-table-head.with-latest-return,
 .review-pick-row.with-latest-return {
-  grid-template-columns: 1.15fr 0.72fr 0.72fr 0.8fr minmax(260px, 1.8fr);
+  grid-template-columns: minmax(0, 1.15fr) minmax(0, 0.72fr) minmax(0, 0.72fr) minmax(0, 0.8fr) minmax(340px, 1.8fr);
 }
 
 .review-pick-table-head {
   background: #f9fafb;
   color: #667489;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
 }
 
@@ -1401,7 +1408,7 @@ td span {
   border-top: 1px solid #e9edf2;
   color: #526071;
   text-decoration: none;
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .review-pick-row:hover {
@@ -1417,7 +1424,7 @@ td span {
 
 .review-pick-row small {
   color: #667489;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 700;
 }
 
@@ -1425,7 +1432,7 @@ td span {
   min-width: 0;
   overflow-wrap: anywhere;
   color: #667489;
-  font-size: 11px;
+  font-size: 13px;
   font-weight: 500;
 }
 
@@ -1479,13 +1486,13 @@ td span {
 
 .review-post-bars small {
   color: #667489;
-  font-size: 10px;
+  font-size: 12px;
   font-weight: 700;
 }
 
 .review-post-bars strong {
   color: inherit;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .review-post-bars .positive {
@@ -2101,7 +2108,7 @@ a.entry-card {
 
 .entry-card span {
   display: block;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
 }
 
@@ -2115,7 +2122,7 @@ a.entry-card {
 
 .entry-card p {
   margin-bottom: 0;
-  font-size: 13px;
+  font-size: 14px;
   line-height: 1.5;
 }
 
@@ -2178,12 +2185,12 @@ a.entry-card {
 .dragon-tiger-stock small,
 .dragon-tiger-reason small {
   color: #667489;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .dragon-tiger-metrics strong {
   color: #202938;
-  font-size: 18px;
+  font-size: 22px;
 }
 
 .dragon-tiger-metrics strong.positive {
@@ -2325,7 +2332,7 @@ a.entry-card {
 }
 
 .promotion-latest > div:first-child > span {
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
 }
 
@@ -2336,7 +2343,7 @@ a.entry-card {
 }
 
 .promotion-latest > div:first-child > small {
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.5;
 }
 
@@ -2357,7 +2364,7 @@ a.entry-card {
 .promotion-cohort-summary small,
 .promotion-cohort-summary em {
   color: #667489;
-  font-size: 11px;
+  font-size: 13px;
   font-style: normal;
 }
 
@@ -2419,18 +2426,18 @@ a.entry-card {
 
 .promotion-day time {
   color: #526071;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
 }
 
 .promotion-day strong {
   color: #202938;
-  font-size: 17px;
+  font-size: 20px;
 }
 
 .promotion-day small {
   overflow-wrap: anywhere;
-  font-size: 11px;
+  font-size: 13px;
   line-height: 1.45;
 }
 
@@ -2469,7 +2476,7 @@ a.entry-card {
 
 .promotion-success-heading strong {
   color: #202938;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .promotion-success-heading small {
@@ -2518,7 +2525,7 @@ a.entry-card {
 .promotion-stock-row strong {
   overflow: hidden;
   color: #202938;
-  font-size: 14px;
+  font-size: 16px;
   text-overflow: ellipsis;
   white-space: nowrap;
 }
@@ -2527,7 +2534,7 @@ a.entry-card {
 .promotion-stock-row em {
   overflow: hidden;
   color: #667489;
-  font-size: 11px;
+  font-size: 13px;
   font-style: normal;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2535,7 +2542,7 @@ a.entry-card {
 
 .promotion-stock-row > span {
   color: #b83232;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
 }
 
@@ -2580,7 +2587,7 @@ a.entry-card {
 
 .rating-score-context {
   color: #667489;
-  font-size: 12px;
+  font-size: 14px;
   white-space: nowrap;
 }
 
@@ -2672,7 +2679,7 @@ a.entry-card {
   background: transparent;
   color: #526071;
   font: inherit;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 700;
   cursor: pointer;
 }
@@ -2685,28 +2692,28 @@ a.entry-card {
 
 .consolidation-content { display: grid; gap: 16px; padding: 20px; }
 .consolidation-heading { display: flex; justify-content: space-between; align-items: flex-start; gap: 16px; flex-wrap: wrap; }
-.consolidation-heading p { margin: 6px 0 0; color: #667489; font-size: 13px; }
-.consolidation-heading label { display: flex; align-items: center; gap: 8px; font-size: 13px; }
+.consolidation-heading p { margin: 6px 0 0; color: #667489; font-size: 15px; }
+.consolidation-heading label { display: flex; align-items: center; gap: 8px; font-size: 15px; }
 .consolidation-heading select { padding: 7px; border: 1px solid #d0d5dd; border-radius: 6px; background: white; color: #374151; }
 .consolidation-refresh { display: inline-flex; gap: 6px; align-items: center; padding: 6px 10px; border: 1px solid #d0d5dd; border-radius: 6px; background: white; cursor: pointer; }
 .consolidation-refresh:disabled { opacity: .5; cursor: wait; }
-.consolidation-meta { display: flex; flex-wrap: wrap; gap: 12px 24px; padding: 12px 0; border-block: 1px solid #e9edf2; font-size: 13px; }
-.consolidation-note { margin: 0; color: #667489; font-size: 12px; line-height: 1.7; }
-.consolidation-warning { margin: 0; color: #92400e; font-size: 13px; line-height: 1.7; }
-.consolidation-rules { font-size: 13px; line-height: 1.8; }
+.consolidation-meta { display: flex; flex-wrap: wrap; gap: 12px 24px; padding: 12px 0; border-block: 1px solid #e9edf2; font-size: 15px; }
+.consolidation-note { margin: 0; color: #667489; font-size: 13px; line-height: 1.7; }
+.consolidation-warning { margin: 0; color: #92400e; font-size: 15px; line-height: 1.7; }
+.consolidation-rules { font-size: 15px; line-height: 1.8; }
 .consolidation-rules summary, .consolidation-card summary { cursor: pointer; font-weight: 600; color: #374151; }
 .consolidation-rules ul { margin-block: 8px; padding-left: 22px; }
 .consolidation-grid { display: grid; grid-template-columns: repeat(auto-fit, minmax(min(100%, 360px), 1fr)); gap: 16px; }
-.consolidation-card { border: 1px solid #e3e8ef; border-radius: 8px; padding: 16px; display: grid; gap: 12px; min-width: 0; font-size: 13px; line-height: 1.7; }
+.consolidation-card { border: 1px solid #e3e8ef; border-radius: 8px; padding: 16px; display: grid; gap: 12px; min-width: 0; font-size: 15px; line-height: 1.7; }
 .consolidation-card > header { display: flex; justify-content: space-between; flex-wrap: wrap; gap: 8px; padding: 0; }
-.consolidation-card > header a { color: #202938; text-decoration: none; font-weight: 700; font-size: 16px; }
+.consolidation-card > header a { color: #202938; text-decoration: none; font-weight: 700; font-size: 18px; }
 .consolidation-card > header a:hover { text-decoration: underline; }
-.consolidation-card small { color: #667489; font-size: 12px; font-weight: 400; }
-.consolidation-card header > span { color: #526071; font-size: 12px; }
+.consolidation-card small { color: #667489; font-size: 13px; font-weight: 400; }
+.consolidation-card header > span { color: #526071; font-size: 13px; }
 .consolidation-card header > span.consolidation-badge-rejected { color: #92400e; background: #fffbeb; padding: 2px 8px; border-radius: 4px; }
 .consolidation-card header > span.consolidation-badge-qualified { color: #175cd3; background: #eff8ff; padding: 2px 8px; border-radius: 4px; }
 .consolidation-card dl { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; margin: 0; }
-.consolidation-card dt { color: #667489; font-size: 12px; }
+.consolidation-card dt { color: #667489; font-size: 13px; }
 .consolidation-card dd { margin: 3px 0 0; font-weight: 600; }
 .consolidation-card p { margin: 0; overflow-wrap: anywhere; }
 .consolidation-card ul { padding-left: 18px; }
@@ -2749,12 +2756,12 @@ a.entry-card {
 
 .recommendation-news-header strong {
   color: #202938;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .recommendation-news-header small {
   color: #667489;
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .recommendation-news-refresh {
@@ -2785,7 +2792,7 @@ a.entry-card {
 
 .recommendation-news-item time {
   color: #788597;
-  font-size: 11px;
+  font-size: 13px;
   font-variant-numeric: tabular-nums;
 }
 
@@ -2807,7 +2814,7 @@ a.entry-card {
 .recommendation-news-body a strong {
   overflow: hidden;
   color: inherit;
-  font-size: 13px;
+  font-size: 15px;
   font-weight: 600;
   text-overflow: ellipsis;
   white-space: nowrap;
@@ -2825,7 +2832,7 @@ a.entry-card {
 
 .recommendation-news-body > span {
   color: #788597;
-  font-size: 11px;
+  font-size: 13px;
 }
 
 .recommendation-news-state {
@@ -2992,7 +2999,8 @@ a.entry-card {
 }
 
 .rating-top-card header {
-  display: flex;
+  display: grid;
+  grid-template-columns: minmax(0, 1fr) auto;
   align-items: flex-start;
   justify-content: space-between;
   gap: 10px;
@@ -3007,7 +3015,7 @@ a.entry-card {
 .rating-top-card header span,
 .rating-top-card small {
   color: #667489;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.45;
 }
 
@@ -3015,7 +3023,7 @@ a.entry-card {
   min-width: 0;
   overflow-wrap: anywhere;
   color: #202938;
-  font-size: 17px;
+  font-size: 18px;
 }
 
 .rating-top-score {
@@ -3026,8 +3034,14 @@ a.entry-card {
 
 .rating-top-score b {
   color: #b83232;
-  font-size: 22px;
+  font-size: 24px;
   line-height: 1;
+}
+
+.rating-top-score .rating-score-context {
+  max-width: 100px;
+  white-space: normal;
+  text-align: right;
 }
 
 .rating-position-label {
@@ -3036,7 +3050,7 @@ a.entry-card {
   gap: 6px;
   min-width: 0;
   color: #667489;
-  font-size: 12px;
+  font-size: 14px;
 }
 
 .rating-position-label svg {
@@ -3048,7 +3062,7 @@ a.entry-card {
   min-width: 0;
   overflow-wrap: anywhere;
   color: #202938;
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .rating-position-label.is-missing,
@@ -3072,7 +3086,7 @@ a.entry-card {
 
 .rating-top-reasons strong {
   color: #202938;
-  font-size: 13px;
+  font-size: 15px;
 }
 
 .rating-top-reasons ul {
@@ -3081,7 +3095,7 @@ a.entry-card {
   margin: 0;
   padding-left: 16px;
   color: #374151;
-  font-size: 12px;
+  font-size: 14px;
   line-height: 1.5;
 }
 
@@ -3142,7 +3156,7 @@ a.entry-card {
 .panel h2 {
   margin-bottom: 0;
   color: #202938;
-  font-size: 17px;
+  font-size: 20px;
   letter-spacing: 0;
 }
 
@@ -3177,7 +3191,7 @@ a.entry-card {
 
 .recent-groups-toolbar strong {
   color: #202938;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .recent-groups-toolbar span {
@@ -3256,7 +3270,7 @@ a.entry-card {
 
 .recent-date-primary strong {
   color: #202938;
-  font-size: 15px;
+  font-size: 17px;
 }
 
 .recent-date-primary em {
@@ -3278,7 +3292,7 @@ a.entry-card {
 
 .recent-date-summary b {
   color: #b83232;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 .recent-date-summary small {
@@ -3343,7 +3357,7 @@ a.entry-card {
 
 .stock-position-cell strong {
   color: #202938;
-  font-size: 12px;
+  font-size: 14px;
   white-space: nowrap;
 }
 
@@ -3368,14 +3382,14 @@ td {
 
 th {
   color: #526071;
-  font-size: 12px;
+  font-size: 14px;
   font-weight: 700;
   background: #f9fafb;
 }
 
 td {
   color: #374151;
-  font-size: 14px;
+  font-size: 16px;
 }
 
 td strong,
@@ -3436,6 +3450,12 @@ td span {
   color: #667489;
 }
 
+@media (max-width: 1599px) {
+  .rating-top-list {
+    grid-template-columns: repeat(3, minmax(0, 1fr));
+  }
+}
+
 @media (max-width: 1080px) {
   .market-snapshot {
     grid-template-columns: minmax(0, 1.35fr) minmax(300px, 1fr);
@@ -3447,8 +3467,21 @@ td span {
     grid-template-columns: repeat(2, minmax(0, 1fr));
   }
 
-  .promotion-latest {
+  .promotion-latest,
+  .promotion-stock-list {
     grid-template-columns: 1fr;
+  }
+
+  .promotion-stock-row:nth-child(odd) {
+    border-right: 0;
+  }
+
+  .market-snapshot-indices article > div {
+    flex-wrap: wrap;
+  }
+
+  .agent-chat-workspace {
+    grid-template-columns: 240px minmax(0, 1fr);
   }
 
   .review-agent-metrics {
@@ -3461,6 +3494,27 @@ td span {
 }
 
 @media (max-width: 860px) {
+  .app-header {
+    grid-template-columns: minmax(0, 1fr) auto;
+    gap: 8px 12px;
+  }
+
+  .app-brand {
+    grid-column: 1;
+    grid-row: 1;
+  }
+
+  .app-header-actions {
+    grid-column: 2;
+    grid-row: 1;
+  }
+
+  .primary-navigation {
+    grid-column: 1 / -1;
+    grid-row: 2;
+    justify-self: stretch;
+  }
+
   .market-snapshot {
     grid-template-columns: 1fr;
   }
@@ -3543,7 +3597,7 @@ td span {
   }
 
   .market-snapshot-indices strong {
-    font-size: 16px;
+    font-size: 18px;
   }
 
   .app-shell {
@@ -3706,6 +3760,10 @@ td span {
 
   .review-agent-metrics {
     grid-template-columns: repeat(2, minmax(0, 1fr));
+  }
+
+  .review-agent-metrics > span:last-child:nth-child(odd) {
+    grid-column: 1 / -1;
   }
 
   .daily-top-cards button,
