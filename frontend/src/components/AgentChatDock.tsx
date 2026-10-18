@@ -8,6 +8,7 @@ import {
   Plus,
   RefreshCcw,
   Send,
+  Square,
   Trash2,
   X,
 } from "lucide-react";
@@ -814,8 +815,18 @@ export function AgentChatDock({
             placeholder="问今日市场情况、个股详情等"
           />
           {sending && activeRunId ? (
-            <button className="chat-cancel" type="button" disabled={cancelRequested} onClick={() => void cancelCurrentRun()}>
-              {cancelRequested ? "正在取消" : "取消任务"}
+            <button
+              aria-label={cancelRequested ? "正在取消任务" : "取消任务"}
+              aria-busy={cancelRequested}
+              className="icon-button chat-cancel"
+              title={cancelRequested ? "正在取消任务" : "取消任务"}
+              type="button"
+              disabled={cancelRequested}
+              onClick={() => void cancelCurrentRun()}
+            >
+              {cancelRequested
+                ? <LoaderCircle aria-hidden="true" className="chat-cancel-spinner" size={18} />
+                : <Square aria-hidden="true" fill="currentColor" size={18} strokeWidth={0} />}
             </button>
           ) : (
             <button

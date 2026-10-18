@@ -316,7 +316,7 @@ test("stream failure restores send, retries the original request, and preserves 
   app.type("第一个问题");
   app.submit();
   await app.settle();
-  assert.equal(app.has(node => node.props.className === "chat-cancel"), false);
+  assert.equal(app.has(node => node.props.className === "icon-button chat-cancel"), false);
   app.type("下一条\n尚未发送");
   assert.equal(app.find(node => node.props["aria-label"] === "发送问题").disabled, false);
   app.find(node => node.type === "button" && Array.isArray(node.props.children) && node.props.children.includes("重试上一个问题")).onClick();
@@ -357,7 +357,11 @@ test("user cancellation is not reported as a transport interruption", async t =>
     cancelAgentChatRun: async () => { pending.reject(new Error("cancelled stream")); },
   });
   await app.settle(); app.type("可取消的问题"); app.submit(); await app.settle();
-  app.find(node => node.props.className === "chat-cancel").onClick(); await app.settle();
+  const cancel = app.find(node => node.props["aria-label"] === "取消任务");
+  assert.equal(cancel.type, "button");
+  assert.equal(cancel.title, "取消任务");
+  assert.equal(cancel.children.props["aria-hidden"], "true");
+  cancel.onClick(); await app.settle();
   assert.deepEqual(receipts, []);
 });
 
@@ -488,7 +492,7 @@ test("real SSE keeps candidate prose private and publishes one complete table wi
   await app.settle();
   assert.equal(app.answers().length, 0);
   assert.equal(app.has(node => node.props.stage === "checking" && node.props.message === "正在核对榜单和来源"), true);
-  assert.equal(app.has(node => node.props.className === "chat-cancel"), true);
+  assert.equal(app.has(node => node.props.className === "icon-button chat-cancel"), true);
   stream.send(4, "answer_reset", { message: "重新整理" });
   stream.send(5, "answer_start", { revision: 2, provisional: true });
   stream.send(6, "answer_delta", { offset: 0, delta: hotRankingResponse.answer });
@@ -563,12 +567,12 @@ for (const failure of ["server-error", "disconnect", "cancelled"] as const) {
     stream.send(3, "progress", { stage: "tools", message: "正在查询数据" });
     await app.settle();
     assert.equal(app.answers().length, 0);
-    if (failure === "cancelled") app.find(node => node.props.className === "chat-cancel").onClick();
+    if (failure === "cancelled") app.find(node => node.props["aria-label"] === "取消任务").onClick();
     else if (failure === "server-error") stream.send(4, "error", { message: "任务中断，请重试恢复" });
     else stream.close();
     await app.settle();
     assert.ok(!app.answerHtml().includes("不能显示的候选榜单"));
-    assert.equal(app.has(node => node.props.className === "chat-cancel"), false);
+    assert.equal(app.has(node => node.props.className === "icon-button chat-cancel"), false);
     assert.equal(app.answers().length, failure === "cancelled" ? 1 : 0);
     assert.equal(app.has(node => node.props.role === "alert"), true);
     assert.equal(calls, failure === "disconnect" ? 2 : 1);

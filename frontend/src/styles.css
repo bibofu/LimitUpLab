@@ -774,12 +774,15 @@ td span {
 }
 
 .chat-cancel {
-  padding: 0 12px;
-  border: 1px solid #d0d5dd;
-  border-radius: 8px;
-  background: #ffffff;
-  color: #374151;
-  font: inherit;
+  padding: 0;
+}
+
+.chat-cancel:disabled {
+  cursor: wait;
+}
+
+.chat-cancel-spinner {
+  animation: chat-progress-spin 1s linear infinite;
 }
 
 .chat-markdown > :first-child {
@@ -1017,11 +1020,15 @@ td span {
 .agent-chat-input {
   display: grid;
   grid-template-columns: minmax(0, 1fr) auto;
-  align-items: end;
+  align-items: center;
   gap: 10px;
   padding: 12px;
   border-top: 1px solid #e9edf2;
   background: #ffffff;
+}
+
+.agent-chat-input > .icon-button {
+  transform: none;
 }
 
 .agent-chat-input textarea {
