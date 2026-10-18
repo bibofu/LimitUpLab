@@ -336,6 +336,10 @@ def test_dragon_tiger_keeps_distinct_intervals_and_honors_board_query_date_limit
     target = registry()
     _, payload, _ = execute(target, "dragon_tiger_list")
     assert payload["stock_count"] == 4 and payload["matched_count"] == 5
+    assert payload["overview"]["record_count"] == 5
+    assert payload["overview"]["distinct_stock_count"] == 4
+    assert payload["overview"]["windows"]["1"]["record_count"] == 4
+    assert {row["trade_date"] for row in payload["items"]} == {payload["trade_date"]}
     assert {(row["symbol"], row["range_days"]) for row in payload["items"]} == {
         ("600101", 1), ("600101", 3), ("000202", 1), ("688404", 1), ("600606", 1)}
     assert all(row["buy_amount"] - row["sell_amount"] == row["net_buy_amount"] for row in payload["items"])
@@ -348,6 +352,8 @@ def test_dragon_tiger_keeps_distinct_intervals_and_honors_board_query_date_limit
     assert [(row["symbol"], row["range_days"]) for row in historical["items"]] == [("600101", 1)]
     result, limited, state = execute(target, "dragon_tiger_list", query="600101", limit=1)
     assert limited["matched_count"] == 2 and limited["returned_count"] == 1 and limited["source_truncated"]
+    assert not limited["overview"]["complete_matching_query"]
+    assert limited["overview"]["query"] == "600101"
     store = EvidenceStore()
     key = store.add(tool=result.name, payload=limited, state=state, arguments=result.input)
     assert store.get(key)["result_state"] == "partial"

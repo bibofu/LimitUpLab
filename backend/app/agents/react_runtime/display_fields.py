@@ -82,7 +82,8 @@ DISPLAY_FIELD_CATALOG.update({
 DISPLAY_FIELD_CATALOG["change_pct"]["tools"].append("market_index_trend")
 for key in ("trade_date", "amount"):
     DISPLAY_FIELD_CATALOG[key]["tools"].append("stock_kline")
-DISPLAY_FIELD_CATALOG["trade_date"]["meaning"] = "涨停事件或个股日K线记录对应的交易日期"
+DISPLAY_FIELD_CATALOG["trade_date"]["meaning"] = "涨停事件或个股日K线的交易日期，或龙虎榜披露/榜单日期；龙虎榜统计区间天数另见range_days"
+DISPLAY_FIELD_CATALOG["trade_date"]["tools"].append("dragon_tiger_list")
 
 # These are normalized provider fields, not inferred synonyms or derived values.
 DISPLAY_FIELD_CATALOG.update({

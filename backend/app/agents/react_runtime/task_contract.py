@@ -135,7 +135,7 @@ class ReviewOutputContract(BaseModel):
 
     mode: OutputMode = Field(default="freeform", description=OUTPUT_MODE_DESCRIPTION)
     field_requests: list[ReviewFieldRequest] = Field(default_factory=list, max_length=12,
-        description="Explicit table/list columns in order. Keep separate counts, summary metrics and explanations in current_task, not here. Include unknown requested columns with field=null; mappings guide presentation and never prove tool data availability.")
+        description="Only user-explicit table/list columns or applicable inherited column preferences, in order; empty when none exist. Never design columns for an open-ended overview or infer them from the topic/date. Keep separate counts, summary metrics and explanations in current_task. Include unknown requested columns with field=null; mappings never prove data availability.")
     table_required: bool = Field(default=False,
         description="True only when the current turn requires a table; false for prose_only and future display preferences.")
     row_selection: RowSelection | None = Field(default=None, description=ROW_SELECTION_DESCRIPTION)

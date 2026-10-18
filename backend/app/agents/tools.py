@@ -7,6 +7,7 @@ from pathlib import Path
 from typing import Any
 
 from app.agents.first_board import build_first_board_ratings
+from app.agents.dragon_tiger_summary import build_dragon_tiger_overview
 from app.agents.tool_contracts import AgentToolSchema
 from app.agents.tool_result import ToolResult
 from app.agents.tool_schemas_market import MARKET_TOOL_SCHEMAS
@@ -584,10 +585,11 @@ class AgentToolRegistry:
             limit=limit,
             collector=self.hithink_collector,
         )
-        items = [asdict(item) for item in snapshot.items]
+        snapshot_date = snapshot.trade_date.isoformat() if snapshot.trade_date else None
+        items = [{**asdict(item), "trade_date": snapshot_date} for item in snapshot.items]
         payload = {
             "source": snapshot.source,
-            "trade_date": snapshot.trade_date.isoformat() if snapshot.trade_date else None,
+            "trade_date": snapshot_date,
             "board_type": snapshot.board_type,
             "stock_count": snapshot.stock_count,
             "matched_count": snapshot.matched_count if snapshot.matched_count is not None else len(items),
@@ -595,6 +597,7 @@ class AgentToolRegistry:
             "source_truncated": snapshot.source_truncated,
             "items": items,
         }
+        payload["overview"] = build_dragon_tiger_overview(payload, query=query)
         names = "、".join(
             f"{item.name}({item.symbol})"
             for item in snapshot.items[:5]

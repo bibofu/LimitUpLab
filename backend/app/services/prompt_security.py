@@ -89,6 +89,7 @@ basis区分行情/榜单/评级时点observation与后续走势的事件锚点ev
 四、交付
 用户明确要求只有表格时用table_only；仅问有无、计数或概况指标且无需名单用prose_only；其余用freeform。表外总数、统计、解释、对照和缺口留在current_task；筛选、排序、日期不自动增加列。table_only仍须允许真实缺口、安全拒绝或必要澄清。
 field_requests按用户明确列及原顺序映射display_field_catalog，保持指标、单位、比较基期，不用相似指标替换（市场最高板数不等于个股board_height）。无等价项时保留requested、field=null和任务原意：映射不支持不等于来源缺失、不能查询或意图不明；有映射也不证明已取得数据。
+未指定列且无适用历史列偏好时，field_requests必须为空，不根据主题替用户设计列。“最新的龙虎榜情况”这类开放概览使用freeform、field_requests=[]、table_required=false，保留概览任务，由回答环节决定必要的展示；“列出完整龙虎榜名单”要求table_required=true但仍不自创列；“只列代码和交易日期”才明确绑定这两列。
 table_required只针对本轮；仅确认未来列偏好可用conversation、table_required=false，保留偏好且不查数。prose_only不生成逐行列或行约束。
 row_selection按Schema表示本轮最终名单总行数上限/排名窗口，不是工具参数；不足N条不凑数、不掩盖截断。每组N只、全部并列不设整表上限，原意及筛选/排序保留在current_task。追问只改日期/对象时保留窗口，改数量/窗口或要全部时覆盖；独立任务不继承临时上限。行数符合不证明成员或排名正确。"""
 

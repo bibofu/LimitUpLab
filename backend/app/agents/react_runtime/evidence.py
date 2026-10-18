@@ -227,6 +227,16 @@ class EvidenceStore:
             "historical_reference": record.get("historical_reference", False),
             "retrieved_at": record.get("retrieved_at"),
         }
+        if record["tool"] == "dragon_tiger_list" and "overview" in metadata:
+            # Each deterministic ranking is bounded to five records. Preserve
+            # its last row so the model need not re-read/recompute that ranking.
+            view["metadata"]["overview"] = compact(metadata["overview"], 5)
+        if record["tool"] == "sector_performance" and metadata.get("ranking_complete") is False:
+            view["display_hint"] = (
+                "本次指定交易日的行业排名覆盖不足，工具已在总预算内尝试取齐；空榜没有可翻页补出的排名。"
+                "直接引用本证据说明该日排名缺口并finish(status=partial)。其他日期或任意个别行业样本不能"
+                "补齐当日全目录排名，不为此改日期、抽样或read_evidence；仅继续用户另有明确要求的独立交付。"
+            )
         if record["result_state"] == "error":
             view["display_hint"] = (
                 "这是可引用的查询失败记录，不是行情结果；不能交表、计算、证明零或无记录，也不展示内部证据ID。"
