@@ -61,37 +61,40 @@ function PremarketStrategyWorkspace() {
 
   return (
     <section className="premarket-workspace">
-      <div aria-label="盘前策略" className="strategy-switch" role="tablist">
-        <button
-          aria-selected={mode === "relay"}
-          className={mode === "relay" ? "active" : undefined}
-          onClick={() => setMode("relay")}
-          role="tab"
-          type="button"
-        >
-          <Layers3 size={16} />
-          一进二接力
-        </button>
-        <button
-          aria-selected={mode === "consolidation"}
-          aria-controls="consolidation-panel"
-          className={mode === "consolidation" ? "active" : undefined}
-          onClick={() => setMode("consolidation")}
-          role="tab"
-          type="button"
-        >
-          <LineChart size={16} />缩量整理
-        </button>
-        <button
-          aria-selected={mode === "drawdown"}
-          aria-controls="drawdown-panel"
-          className={mode === "drawdown" ? "active" : undefined}
-          onClick={() => setMode("drawdown")}
-          role="tab"
-          type="button"
-        >
-          <TrendingDown size={16} />高位回撤
-        </button>
+      <div className="premarket-strategy-toolbar">
+        <div aria-label="盘前策略" className="strategy-switch" role="tablist">
+          <button
+            aria-selected={mode === "relay"}
+            className={mode === "relay" ? "active" : undefined}
+            onClick={() => setMode("relay")}
+            role="tab"
+            type="button"
+          >
+            <Layers3 size={16} />
+            一进二接力
+          </button>
+          <button
+            aria-selected={mode === "consolidation"}
+            aria-controls="consolidation-panel"
+            className={mode === "consolidation" ? "active" : undefined}
+            onClick={() => setMode("consolidation")}
+            role="tab"
+            type="button"
+          >
+            <LineChart size={16} />缩量整理
+          </button>
+          <button
+            aria-selected={mode === "drawdown"}
+            aria-controls="drawdown-panel"
+            className={mode === "drawdown" ? "active" : undefined}
+            onClick={() => setMode("drawdown")}
+            role="tab"
+            type="button"
+          >
+            <TrendingDown size={16} />高位回撤
+          </button>
+        </div>
+        <p className="premarket-strategy-disclaimer">根据特定规则筛选而来，仅用于研究学习，不构成投资建议</p>
       </div>
       {mode === "relay" && intelligenceError ? (
         <div className="resource-refresh-status" role="status" title={intelligenceError}>
