@@ -903,6 +903,8 @@ td span {
 
 .chat-agent {
   justify-self: start;
+  width: 90%;
+  min-width: 0;
 }
 
 .chat-state {
