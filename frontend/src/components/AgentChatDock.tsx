@@ -762,13 +762,13 @@ export function AgentChatDock({
         </div>
 
         {showLatest ? (
-          <button className="chat-scroll-latest" type="button" onClick={() => {
+          <button aria-label="回到最新消息" className="chat-scroll-latest" title="回到最新消息" type="button" onClick={() => {
             followAnswerRef.current = true;
             setShowLatest(false);
             const container = messagesContainerRef.current;
             if (container) container.scrollTop = container.scrollHeight;
           }}>
-            <ArrowDown aria-hidden="true" size={14} />回到最新消息
+            <ArrowDown aria-hidden="true" size={18} />
           </button>
         ) : null}
         </div>
