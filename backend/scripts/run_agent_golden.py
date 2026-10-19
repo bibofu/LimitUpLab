@@ -86,8 +86,13 @@ def main(argv=None):
     from evals.golden.runner import Budget, BudgetedProvider, run_case, without_sdk_retries
     from evals.golden.judge import DELIVERY_SYSTEM, JUDGE_VERSION, VISIBLE_SYSTEM
     from evals.golden.judge_protocol import REPAIR_PROTOCOL_VERSION, REPAIR_SYSTEM
+    from evals.golden.storage import configured_evaluation_storage, EvaluationStorageError
 
     configure_runtime_environment()
+    try:
+        storage = configured_evaluation_storage()
+    except EvaluationStorageError as error:
+        parser.error(str(error))
     provider = get_llm_provider()
     if isinstance(provider, DisabledLLMProvider):
         parser.error("No enabled model provider; configure backend/.env or process environment. No credentials are printed.")
@@ -106,7 +111,7 @@ def main(argv=None):
             "repair": REPAIR_SYSTEM, "repair_protocol_version": REPAIR_PROTOCOL_VERSION}) if args.judge == "model" else None,
         "effective_model_configuration": provider_configuration(provider),
         "profile": args.profile, "react_deadline_seconds": os.getenv("LIMITUPLAB_REACT_DEADLINE_SECONDS", "120"),
-        "libraries": library_versions()}
+        "libraries": library_versions(), "storage": storage.manifest()}
     report_path = output / "report.json"
     if args.resume:
         report = json.loads(report_path.read_text(encoding="utf-8"))

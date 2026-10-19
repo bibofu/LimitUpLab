@@ -23,6 +23,7 @@ from evals.golden.judge import judge_turn
 from evals.golden.runtime_metadata import RuntimeMetadataCapture
 from evals.golden.judge_context import build_judge_context
 from evals.golden.runtime_context import current_fixture_binding
+from evals.golden.storage import configured_evaluation_storage, isolated_session_storage
 
 
 class BudgetExceeded(RuntimeError):
@@ -116,6 +117,7 @@ def run_case(case, *, trial, directory, provider, judge_provider=None, profile="
     from evals.golden.grading import grade_turn, visible_drafts
     from evals.golden.world import FrozenRegistry
 
+    storage_configuration = configured_evaluation_storage()
     started = perf_counter()
     budget = getattr(provider, "budget", None)
     budgets = []
@@ -127,25 +129,22 @@ def run_case(case, *, trial, directory, provider, judge_provider=None, profile="
     denied_before = budget.denied if budget else 0
     work = Path(directory) / "sessions" / f"{case.id}-t{trial}-{uuid4().hex[:8]}"
     work.mkdir(parents=True)
-    database = work / "session.sqlite"
     owner = "golden_owner"
-    chats = SQLiteChatSessionRepository(database)
-    memories = SQLiteChatMemoryRepository(database)
-    journal = Journal(database)
     anchor = datetime.fromisoformat(case.clock).date()
     results, initialized = [], set()
     registry = FrozenRegistry(case, profile=profile)
     fixture_binding = current_fixture_binding(registry)
     error = None
     with ExitStack() as stack:
+        database, storage_metadata = stack.enter_context(isolated_session_storage(work, storage_configuration))
+        chats = SQLiteChatSessionRepository(database)
+        memories = SQLiteChatMemoryRepository(database)
+        journal = Journal(database)
         # Each invocation is sequential and isolated; never run this harness in a live server.
         for target in ("app.agents.query_contract.current_query_reference_date",
                        "app.agents.react_runtime.runtime.current_query_reference_date",
                        "app.agents.react_runtime.tools.current_query_reference_date"):
             stack.enter_context(patch(target, return_value=anchor))
-        stack.enter_context(patch.dict("os.environ", {"LIMITUPLAB_DATABASE_PATH": str(database),
-                                                    "LIMITUPLAB_SESSION_MEMORY_ENABLED": "true",
-                                                    "LIMITUPLAB_SESSION_MEMORY_REFRESH_MESSAGES": "8"}))
         for index, turn in enumerate(case.turns):
             session_id = f"golden-{case.id}-t{trial}-{turn.session}"
             session = chats.ensure_session(session_id, owner_id=owner)
@@ -275,7 +274,7 @@ def run_case(case, *, trial, directory, provider, judge_provider=None, profile="
         "turns": results, "error": error, "unsupported_tools": unsupported,
         "completed": len(results) == len(case.turns) and not budget_exhausted and not persistence_diagnostics,
         "budget_persistence_diagnostics": persistence_diagnostics,
-        "planned_turns": len(case.turns), "session_directory": str(work),
+        "planned_turns": len(case.turns), "session_directory": str(work), "storage": storage_metadata,
         "stop_reason": "budget_persistence_error" if persistence_diagnostics else
             "model_call_budget" if budget_exhausted else "execution_error" if error else "finished",
         "duration_seconds": round(perf_counter() - started, 3)}
