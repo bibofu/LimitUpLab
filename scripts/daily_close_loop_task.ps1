@@ -9,7 +9,7 @@ $ErrorActionPreference = "Stop"
 $ProjectRoot = Split-Path -Parent $PSScriptRoot
 $BackendRoot = Join-Path $ProjectRoot "backend"
 $Python = Join-Path $BackendRoot ".venv\Scripts\python.exe"
-$Runner = Join-Path $BackendRoot "scripts\run_daily_close_loop.py"
+$Runner = Join-Path $BackendRoot "scripts\run_scheduled_close_loop.py"
 
 if ($Mode -eq "Uninstall") {
     Unregister-ScheduledTask -TaskName $TaskName -Confirm:$false -ErrorAction SilentlyContinue
