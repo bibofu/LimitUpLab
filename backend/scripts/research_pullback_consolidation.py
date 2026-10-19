@@ -16,6 +16,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
+from app.config import load_local_env
 from app.database import connect_readonly
 
 KEYS = ['consolidation', 'mild_raw', 'mild_stable', 'deep_raw', 'deep_repair']
@@ -232,10 +233,15 @@ def analyze(directory,db):
     return payload
 
 
-if __name__=='__main__':
+def main() -> None:
+    load_local_env()
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--input',type=Path,default=Path('output/research/limit-up-paths-20260907'))
     parser.add_argument('--db',type=Path,default=None,
                         help='Explicit SQLite file; otherwise use the configured database backend')
     args=parser.parse_args()
     analyze(args.input,args.db)
+
+
+if __name__=='__main__':
+    main()

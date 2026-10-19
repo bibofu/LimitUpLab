@@ -204,9 +204,15 @@ def analyze(directory, db):
     return payload
 
 
-if __name__ == '__main__':
+def main() -> None:
+    focus.load_local_env()
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--input',type=Path,default=Path('output/research/limit-up-paths-20260907'))
-    parser.add_argument('--db',type=Path,default=Path('backend/data/limituplab.sqlite'))
+    parser.add_argument('--db',type=Path,default=None,
+                        help='Explicit SQLite archive; otherwise use the configured database backend')
     args=parser.parse_args()
     analyze(args.input,args.db)
+
+
+if __name__ == '__main__':
+    main()
