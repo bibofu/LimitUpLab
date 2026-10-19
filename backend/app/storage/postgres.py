@@ -206,6 +206,12 @@ class PostgresConnection:
         assert_job_owner(self)
 
     def execute(self, sql, parameters=()):
+        leading = _leading_command(sql)
+        if self._readonly:
+            if leading not in {"SELECT", "WITH", "EXPLAIN", "SHOW"}:
+                raise PermissionError("Read-only SQL connection")
+            if not self.in_transaction:
+                self._db.execute("BEGIN ISOLATION LEVEL REPEATABLE READ READ ONLY")
         control = " ".join(sql.strip().rstrip(";").split()).upper()
         if control in {"COMMIT", "COMMIT WORK", "COMMIT TRANSACTION", "END", "END WORK", "END TRANSACTION"}:
             if parameters:
@@ -217,7 +223,6 @@ class PostgresConnection:
                 raise ValueError("Transaction control takes no parameters")
             self.rollback()
             return Result(self._db.cursor())
-        leading = _leading_command(sql)
         if leading in {"COMMIT", "END", "ABORT"} or (leading == "ROLLBACK" and not control.startswith(
                 ("ROLLBACK TO ", "ROLLBACK WORK TO ", "ROLLBACK TRANSACTION TO "))):
             raise ValueError("Use commit() or rollback() for transaction control")
@@ -226,10 +231,8 @@ class PostgresConnection:
             raise ValueError("SQLite-specific SQL must be explicitly adapted")
         # Unknown/CTE/comment-prefixed statements conservatively open a write
         # transaction too; they must never silently bypass locking/autocommit.
-        if command not in {"SELECT", "EXPLAIN", "SHOW", "SET", "BEGIN", "COMMIT", "ROLLBACK", "RELEASE"}:
+        if not self._readonly and command not in {"SELECT", "EXPLAIN", "SHOW", "SET", "BEGIN", "COMMIT", "ROLLBACK", "RELEASE"}:
             self.begin_write()
-        if self._readonly and command not in {"SELECT", "WITH", "EXPLAIN"}:
-            raise PermissionError("Read-only SQL connection")
         if parameters:
             statement, count = bind_qmarks(sql)
             bound = _parameters(parameters)

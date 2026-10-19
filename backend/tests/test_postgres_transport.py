@@ -100,3 +100,28 @@ def test_postgres_escaped_string_and_sql_transaction_controls(postgresql_databas
         assert [row[0] for row in db.execute("SELECT name FROM runtime_leases")] == ["sql-committed"]
     finally:
         db.close()
+
+
+def test_readonly_ctes_and_comments_keep_database_write_protection(postgresql_database):
+    from psycopg.errors import ReadOnlySqlTransaction
+    reader = connect_readonly()
+    try:
+        assert reader.execute("WITH value AS (SELECT 7 AS n) SELECT n FROM value").fetchone()[0] == 7
+        assert reader.execute("/* read /* nested comment */ */ SELECT ?", (9,)).fetchone()[0] == 9
+        assert reader.execute("-- leading comment\nSELECT 11").fetchone()[0] == 11
+        write_cte = """WITH changed AS (
+            INSERT INTO runtime_leases VALUES ('readonly-cte','x',1,1) RETURNING name
+        ) SELECT name FROM changed"""
+        with pytest.raises(ReadOnlySqlTransaction):
+            reader.execute(write_cte)
+        reader.rollback()
+        # Explicitly ending a snapshot must not make the next CTE writable.
+        with pytest.raises(ReadOnlySqlTransaction):
+            reader.execute(write_cte)
+    finally:
+        reader.close()
+    db = connect()
+    try:
+        assert db.execute("SELECT 1 FROM runtime_leases WHERE name='readonly-cte'").fetchone() is None
+    finally:
+        db.close()
