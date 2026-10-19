@@ -2,9 +2,7 @@
 
 import argparse
 from contextlib import closing
-from datetime import datetime, timezone
 import json
-import os
 import sys
 from pathlib import Path
 
@@ -15,7 +13,7 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.config import load_local_env
 from app.database import begin_write, connect, connect_readonly, get_database_path, initialize_database, is_postgres
 from app.services.prediction_time_audit import audit_prediction_times
-from scripts.backup_database import create_backup
+from scripts.backup_database import create_configured_backup
 
 
 def run_audit(database=None, *, apply=False, backup_directory=None):
@@ -26,16 +24,10 @@ def run_audit(database=None, *, apply=False, backup_directory=None):
             report = audit_prediction_times(reader)
             report.update(backup=None, database_backend="postgresql" if postgres else "sqlite")
             return report
-    if postgres:
-        from scripts.postgres_admin import backup_database, connection_environment
-        _, environment = connection_environment(os.environ["LIMITUPLAB_DATABASE_URL"])
-        directory = backup_directory or BACKEND_ROOT / "data/backups/prediction-time"
-        stamp = datetime.now(timezone.utc).strftime("%Y%m%dT%H%M%S%fZ")
-        backup = backup_database(directory / f"prediction-time-{stamp}.dump", environment)
-    else:
-        path = database or get_database_path()
-        saved = create_backup(path, backup_directory or path.parent / "backups/prediction-time")
-        backup = {"backup": str(saved)}
+    directory = backup_directory or (
+        BACKEND_ROOT / "data/backups/prediction-time" if postgres
+        else (database or get_database_path()).parent / "backups/prediction-time")
+    backup = create_configured_backup(directory, database=database)
     with closing(connect(database)) as connection, connection:
         initialize_database(connection)
         begin_write(connection)
