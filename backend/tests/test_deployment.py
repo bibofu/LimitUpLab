@@ -1,9 +1,12 @@
 """Offline release safety tests; no Docker, SSH or production data required."""
 from datetime import datetime
+from contextlib import redirect_stdout
 import importlib.util
+import io
 import json
 from pathlib import Path
 import sys
+from types import SimpleNamespace
 import urllib.error
 from unittest.mock import Mock
 from zoneinfo import ZoneInfo
@@ -253,3 +256,181 @@ def test_probe_distinguishes_missing_snapshot_from_broken_reader(tmp_path, monke
     else:
         with pytest.raises(urllib.error.HTTPError):
             item.probe()
+
+
+@pytest.mark.parametrize("marker,current,expected", [
+    (None, None, "sqlite"),
+    (None, {"sha": "legacy"}, "sqlite"),
+    ({"engine": "sqlite"}, {"engine": "sqlite"}, "sqlite"),
+    ({"engine": "postgresql"}, {"engine": "postgresql"}, "postgresql"),
+])
+def test_database_mode_keeps_explicit_selection(tmp_path, monkeypatch, marker, current, expected):
+    monkeypatch.setattr(release, "STATE", tmp_path)
+    if marker is not None:
+        (tmp_path / "database.json").write_text(json.dumps(marker))
+    if current is not None:
+        (tmp_path / "current.json").write_text(json.dumps(current))
+    assert release.database_mode() == expected
+
+
+@pytest.mark.parametrize("marker,current", [
+    (None, {"engine": "postgresql"}),
+    ({"engine": "sqlite"}, {"engine": "postgresql"}),
+    ({"engine": "postgresql"}, {"engine": "sqlite"}),
+    ({}, None),
+    ({"engine": "unknown"}, None),
+    (None, {"engine": "unknown"}),
+])
+def test_database_mode_cannot_silently_revert_to_sqlite(tmp_path, monkeypatch, marker, current):
+    monkeypatch.setattr(release, "STATE", tmp_path)
+    if marker is not None:
+        (tmp_path / "database.json").write_text(json.dumps(marker))
+    if current is not None:
+        (tmp_path / "current.json").write_text(json.dumps(current))
+    with pytest.raises(RuntimeError):
+        release.database_mode()
+
+
+@pytest.mark.parametrize("configured,running,code", [
+    ("postgresql", "sqlite", 0), ("sqlite", "postgresql", 0), ("postgresql", "", 1),
+])
+def test_runtime_mode_mismatch_blocks_release(monkeypatch, tmp_path, configured, running, code):
+    monkeypatch.setattr(release, "REPO", tmp_path)
+    runner = Mock(return_value=SimpleNamespace(returncode=code, stdout=running, stderr="private error"))
+    monkeypatch.setattr(release.subprocess, "run", runner)
+    with pytest.raises(RuntimeError, match="cannot be verified") as error:
+        release.assert_runtime_database_mode(configured)
+    assert "private error" not in str(error.value)
+    assert runner.call_args.args[0][:4] == ["docker", "exec", "limituplab-backend-1", "python"]
+
+
+def test_runtime_mode_returns_only_engine(monkeypatch, tmp_path):
+    monkeypatch.setattr(release, "REPO", tmp_path)
+    runner = Mock(return_value=SimpleNamespace(returncode=0, stdout="postgresql\n"))
+    monkeypatch.setattr(release.subprocess, "run", runner)
+    release.assert_runtime_database_mode("postgresql")
+    code = runner.call_args.args[0][-1]
+    monkeypatch.setenv("LIMITUPLAB_DATABASE_URL", "postgresql+psycopg://private:password@internal/db")
+    output = io.StringIO()
+    with redirect_stdout(output):
+        exec(code)
+    assert output.getvalue() == "postgresql\n"
+
+
+@pytest.fixture
+def postgres_release(tmp_path, monkeypatch):
+    monkeypatch.setattr(release, "STATE", tmp_path)
+    monkeypatch.setattr(release, "REPO", tmp_path)
+    (tmp_path / "releases").mkdir()
+    (tmp_path / ".env.postgresql").touch()
+    (tmp_path / "docker-compose.postgresql.yml").touch()
+    item = release.Deployment("v1.6.1", "a" * 40)
+    item.mode = "postgresql"
+    item.previous = {"sha": "b" * 40, "path": str(tmp_path), "engine": "postgresql",
+                     "backend": "old-back", "frontend": "old-front"}
+    return item
+
+
+def test_postgres_compose_pins_migration_image_and_explicit_configuration(postgres_release):
+    item = postgres_release
+    item.run = Mock(return_value="captured")
+    assert item.compose(item.previous, "run", "--no-deps", "backend", capture=True) == "captured"
+    args = item.run.call_args.args
+    assert str(release.REPO / ".env.production") in args
+    assert str(release.REPO / ".env.postgresql") in args
+    assert str(release.REPO / "docker-compose.postgresql.yml") in args
+    override = json.loads((release.STATE / "releases" / ("b" * 40 + "-images.json")).read_text())
+    assert override["services"]["postgres-migrate"]["image"] == "old-back"
+    assert item.run.call_args.kwargs["capture"] is True
+
+
+@pytest.mark.parametrize("missing", [".env.postgresql", "docker-compose.postgresql.yml"])
+def test_postgres_compose_missing_configuration_fails_closed(postgres_release, missing):
+    (release.REPO / missing).unlink()
+    with pytest.raises(RuntimeError):
+        release.compose_arguments(release.REPO, "postgresql")
+
+
+def test_release_never_automatically_crosses_database_engines(postgres_release):
+    postgres_release.run = Mock()
+    with pytest.raises(RuntimeError, match="cross-database"):
+        postgres_release.compose({**postgres_release.previous, "engine": "sqlite"}, "up", "-d")
+    postgres_release.run.assert_not_called()
+
+
+def test_postgres_schema_fingerprint_ignores_only_random_dump_restriction_tokens(postgres_release, monkeypatch):
+    admin = Mock()
+    admin.connection_environment.return_value = ("private-url", {})
+    sql = Mock()
+    sql.create_engine.return_value.connect.return_value.execute.return_value.scalars.return_value = ["revision"]
+    monkeypatch.setitem(sys.modules, "scripts.postgres_admin", admin)
+    monkeypatch.setitem(sys.modules, "sqlalchemy", sql)
+    monkeypatch.setenv("LIMITUPLAB_DATABASE_URL", "private-url")
+
+    def run_schema(_release, *args, **kwargs):
+        assert args[:3] == ("run", "--rm", "--no-deps")
+        assert kwargs["capture"] is True
+        output = io.StringIO()
+        with redirect_stdout(output):
+            exec(args[-1])
+        return output.getvalue()
+
+    postgres_release.compose = run_schema
+    hashes = []
+    for token, table in (("one", "first"), ("two", "first"), ("three", "changed")):
+        admin.client.return_value.stdout = (
+            f"\\restrict {token}\nCREATE TABLE {table} (id bigint);\n\\unrestrict {token}\n"
+        ).encode()
+        result = postgres_release.schema()
+        assert result["engine"] == "postgresql" and result["version"] == ["revision"]
+        hashes.append(result["hash"])
+    assert hashes[0] == hashes[1]
+    assert hashes[1] != hashes[2]
+    assert admin.client.call_args.args[0] == ["pg_dump", "--schema-only", "--no-owner", "--no-privileges"]
+
+
+def test_postgres_release_backup_is_verified_and_separate_from_daily_retention(postgres_release):
+    item = postgres_release
+    path = f"/backups/deployments/{item.journal.stem}/postgresql.dump"
+    item.compose = Mock(return_value=json.dumps({"backup": path, "sha256": "a" * 64, "archive_readable": True}))
+    item.backup()
+    assert item.record["backup"] == path.replace("/backups/", "/var/backups/limituplab/")
+    assert item.record["backup_sha256"] == "a" * 64
+    args = item.compose.call_args.args
+    assert "scripts/postgres_admin.py" in args and "backup" in args
+    assert "scripts/backup_database.py" not in args
+
+
+@pytest.mark.parametrize("result", [
+    {}, {"archive_readable": False}, {"backup": "/wrong/path", "archive_readable": True, "sha256": "a" * 64},
+])
+def test_postgres_release_rejects_unverified_backup(postgres_release, result):
+    postgres_release.compose = Mock(return_value=json.dumps(result))
+    with pytest.raises(RuntimeError, match="verified archive"):
+        postgres_release.backup()
+
+
+@pytest.mark.parametrize("body", [
+    {"status": "ok", "database": "sqlite"}, {"status": "unready", "database": "postgresql"},
+])
+def test_postgres_probe_requires_actual_database_readiness(postgres_release, body):
+    postgres_release.run = Mock(return_value=json.dumps(body))
+    with pytest.raises(RuntimeError, match="confirm PostgreSQL"):
+        postgres_release.probe()
+
+
+def test_postgres_schema_change_forbids_automatic_rollback(deployment):
+    deployment.mode = "postgresql"
+    deployment.previous["engine"] = "postgresql"
+    deployment.prepare.return_value["engine"] = "postgresql"
+    deployment.schema.side_effect = [
+        {"engine": "postgresql", "version": ["old"], "hash": "one"},
+        {"engine": "postgresql", "version": ["old"], "hash": "one"},
+        {"engine": "postgresql", "version": ["new"], "hash": "two"},
+    ]
+    deployment.probe.side_effect = RuntimeError("readiness failed")
+    with pytest.raises(RuntimeError):
+        deployment.execute()
+    assert deployment.record["status"] == "manual_recovery_required"
+    assert release.MAINTENANCE.exists()
+    deployment.restore_local_tags.assert_not_called()

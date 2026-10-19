@@ -1,7 +1,8 @@
 # PostgreSQL deployment and recovery
 
-The default `docker-compose.yml` and existing SQLite release tooling remain
-available. PostgreSQL is an explicit overlay and uses a separate named volume.
+The default `docker-compose.yml` and SQLite release mode remain available.
+PostgreSQL is an explicit overlay and uses a separate named volume. The reviewed
+release and scheduled-job helpers support both modes with an explicit server marker.
 This runbook prepares shared persistence; load-balancer behavior and rolling
 multi-instance deployment still require their own acceptance test.
 
@@ -69,9 +70,27 @@ docker compose --env-file .env.postgresql -f docker-compose.yml -f docker-compos
 docker compose --env-file .env.postgresql -f docker-compose.yml -f docker-compose.postgresql.yml up -d recommendation-refresh quality-worker quality-judge-worker
 ```
 
-The existing `deploy/release.py` remains the SQLite release path. Do not run it
-against a PostgreSQL deployment: use this overlay and the PostgreSQL commands
-until a separate PostgreSQL release orchestrator has been accepted.
+Install the reviewed `deploy/release.py` and `deploy/job.py` before changing the
+production database mode. These root-owned helpers are not automatically replaced
+by a tag deployment. Hold `/var/lock/limituplab-release.lock` and retain the
+maintenance marker throughout the first cutover; stop all configured database
+writers, including any optional quality workers.
+
+After import and single-instance acceptance, write
+`/var/lib/limituplab-deploy/database.json` as `{"engine":"postgresql"}` and set
+the active `current.json` record's `engine` to `postgresql` under that same lock.
+Keep the real PostgreSQL settings in `/opt/LimitUpLab/.env.postgresql` with
+restricted permissions. The release helpers always load both `.env.production`
+and `.env.postgresql` plus the PostgreSQL overlay in this mode. Missing settings,
+an unsupported release, a conflicting marker or a different running backend
+engine blocks the operation instead of falling back to SQLite.
+
+Subsequent tag deployments pin `postgres-migrate` to the release's backend image,
+take a verified deployment-specific PostgreSQL archive, compare schema hashes
+and Alembic revisions, and require `/ready` to confirm PostgreSQL. Only an
+unchanged schema and the same engine permit automatic application rollback.
+The release command does not perform the first SQLite data import or reverse a
+database cutover. See [tag deployment](Tag_Deployment.md) for the release gates.
 
 ## Back up and prove recovery
 

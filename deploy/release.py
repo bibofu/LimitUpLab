@@ -26,6 +26,53 @@ MAINTENANCE = REPO / ".maintenance"
 SERVICES = ("backend", "frontend", "recommendation-refresh", "daily-update")
 
 
+def database_mode() -> str:
+    """Read the explicit operator selection without reading connection secrets."""
+    marker = STATE / "database.json"
+    current = STATE / "current.json"
+    selected = json.loads(marker.read_text(encoding="utf-8")) if marker.exists() else {}
+    active = json.loads(current.read_text(encoding="utf-8")) if current.exists() else {}
+    mode = selected.get("engine", "sqlite")
+    recorded = active.get("engine")
+    if (marker.exists() and "engine" not in selected) or mode not in {"sqlite", "postgresql"}:
+        raise RuntimeError("Invalid explicit production database mode")
+    if recorded is not None and recorded not in {"sqlite", "postgresql"}:
+        raise RuntimeError("Invalid recorded production database mode")
+    if recorded is not None and recorded != mode:
+        raise RuntimeError("Production database marker and current release disagree; operator recovery required")
+    return mode
+
+
+def compose_arguments(path: Path, mode: str) -> list[str]:
+    """Keep releases and scheduled jobs on the same explicitly selected database."""
+    if mode not in {"sqlite", "postgresql"}:
+        raise RuntimeError("Unknown production database mode")
+    args = ["docker", "compose", "--project-name", "limituplab", "--project-directory", str(path),
+            "--env-file", str(REPO / ".env.production")]
+    if mode == "postgresql":
+        if not (REPO / ".env.postgresql").is_file():
+            raise RuntimeError("PostgreSQL configuration is missing; SQLite fallback is forbidden")
+        if not (path / "docker-compose.postgresql.yml").is_file():
+            raise RuntimeError("Release does not support the configured PostgreSQL deployment")
+        args += ["--env-file", str(REPO / ".env.postgresql")]
+    args += ["-f", str(path / "docker-compose.yml")]
+    if mode == "postgresql":
+        args += ["-f", str(path / "docker-compose.postgresql.yml")]
+    return args
+
+
+def assert_runtime_database_mode(mode: str) -> None:
+    """Inspect only the backend's engine name; never return its connection URL."""
+    code = ("import os; u=os.environ.get('LIMITUPLAB_DATABASE_URL','').strip(); "
+            "print('postgresql' if u.startswith(('postgresql://','postgresql+psycopg://')) "
+            "else 'sqlite' if not u else 'invalid')")
+    result = subprocess.run(["docker", "exec", "limituplab-backend-1", "python", "-c", code],
+                            cwd=REPO, text=True, stdout=subprocess.PIPE, stderr=subprocess.PIPE,
+                            timeout=30, check=False)
+    if result.returncode or result.stdout.strip() != mode:
+        raise RuntimeError("Running backend database differs from deployment mode or cannot be verified")
+
+
 # Accept only the deployment command's exact tag/SHA format and return the validated pair.
 def parse_request(command: str) -> tuple[str, str]:
     match = re.fullmatch(r"deploy (v[0-9]+\.[0-9]+\.[0-9]+) ([0-9a-f]{40})", command)
@@ -81,6 +128,7 @@ class Deployment:
         self.previous_schema: dict | None = None
         self.maintenance = False
         self.promoted = False
+        self.mode = "sqlite"
 
     # Update the in-memory release state and persist it to the deployment journal.
     def status(self, status: str, **details) -> None:
@@ -123,17 +171,19 @@ class Deployment:
         return path
 
     # Run Docker Compose against the selected release and its pinned image override.
-    def compose(self, release: dict, *args: str, timeout: int = 600) -> str:
+    def compose(self, release: dict, *args: str, timeout: int = 600, capture: bool = False) -> str:
         path = Path(release["path"])
+        mode = release.get("engine", self.mode)
+        if mode != self.mode:
+            raise RuntimeError("Automatic cross-database release or rollback is forbidden")
         override = STATE / "releases" / f"{release['sha']}-images.json"
+        services = (*SERVICES, "postgres-migrate") if mode == "postgresql" else SERVICES
         write_json(override, {"services": {
             service: {"image": release["frontend"] if service == "frontend" else release["backend"]}
-            for service in SERVICES
+            for service in services
         }})
-        return self.run("docker", "compose", "--project-name", "limituplab",
-                        "--project-directory", str(path), "--env-file", str(REPO / ".env.production"),
-                        "-f", str(path / "docker-compose.yml"), "-f", str(override),
-                        *args, timeout=timeout)
+        return self.run(*compose_arguments(path, mode), "-f", str(override),
+                        *args, timeout=timeout, capture=capture)
 
     # Validate the release source and prepare its images before entering the service-switch phase.
     def prepare(self) -> dict:
@@ -159,13 +209,17 @@ class Deployment:
         self.git("merge-base", "--is-ancestor", self.sha, "origin/main")
         old_sha = self.git("rev-parse", "HEAD")
         self.git("merge-base", "--is-ancestor", old_sha, self.sha)
-        self.previous = {"sha": old_sha, "path": str(self.worktree(old_sha))}
+        self.mode = database_mode()
+        assert_runtime_database_mode(self.mode)
+        self.record["engine"] = self.mode
+        self.previous = {"sha": old_sha, "path": str(self.worktree(old_sha)), "engine": self.mode}
+        compose_arguments(Path(self.previous["path"]), self.mode)
         for service in ("backend", "frontend"):
             image = self.run("docker", "inspect", f"limituplab-{service}-1", "--format", "{{.Image}}", capture=True)
             previous_tag = f"limituplab-{service}:rollback-{old_sha}"
             self.run("docker", "tag", image, previous_tag)
             self.previous[service] = previous_tag
-        target = {"sha": self.sha, "path": str(self.worktree(self.sha)),
+        target = {"sha": self.sha, "path": str(self.worktree(self.sha)), "engine": self.mode,
                   "backend": f"limituplab-backend:{self.sha}", "frontend": f"limituplab-frontend:{self.sha}"}
         self.status("building", previous=self.previous, target=target)
         self.compose(target, "build", "backend", "frontend", timeout=2400)
@@ -182,6 +236,22 @@ class Deployment:
 
     # Read the current database schema version and hash using a read-only container mount.
     def schema(self) -> dict:
+        if self.mode == "postgresql":
+            code = (
+                "import os,json,hashlib,sqlalchemy as sa; "
+                "from scripts.postgres_admin import connection_environment,client; "
+                "u,e=connection_environment(os.environ['LIMITUPLAB_DATABASE_URL']); "
+                "d=client(['pg_dump','--schema-only','--no-owner','--no-privileges'],e).stdout.decode('utf-8'); "
+                "d='\\n'.join(line for line in d.splitlines() "
+                "if not line.startswith(('\\\\restrict ','\\\\unrestrict '))); "
+                "engine=sa.create_engine(u,hide_parameters=True); "
+                "c=engine.connect(); "
+                "v=list(c.execute(sa.text('SELECT version_num FROM alembic_version ORDER BY version_num')).scalars()); "
+                "c.close();engine.dispose(); "
+                "print(json.dumps({'engine':'postgresql','version':v,'hash':hashlib.sha256(d.encode()).hexdigest()}))"
+            )
+            return json.loads(self.compose(self.previous, "run", "--rm", "--no-deps", "backend",
+                                           "python", "-c", code, capture=True))
         code = (
             "import sqlite3,json,hashlib; "
             "c=sqlite3.connect('file:/app/data/limituplab.sqlite?mode=ro',uri=True); "
@@ -200,6 +270,18 @@ class Deployment:
     def backup(self) -> None:
         # Deployment snapshots live outside the rolling daily backup retention set.
         directory = f"/backups/deployments/{self.journal.stem}"
+        if self.mode == "postgresql":
+            output = self.compose(self.previous, "run", "--rm", "--no-deps", "-v",
+                                  "/var/backups/limituplab:/backups", "backend", "python",
+                                  "scripts/postgres_admin.py", "backup", "--output", f"{directory}/postgresql.dump",
+                                  capture=True)
+            result = json.loads(output)
+            if (result.get("backup") != f"{directory}/postgresql.dump"
+                    or result.get("archive_readable") is not True or len(result.get("sha256", "")) != 64):
+                raise RuntimeError("PostgreSQL backup did not report a verified archive")
+            self.status("backed_up", backup=result["backup"].replace("/backups/", "/var/backups/limituplab/", 1),
+                        backup_sha256=result["sha256"], previous_schema=self.previous_schema)
+            return
         # backup_database.py opens the source with mode=ro; the writable Docker mount is required
         # only for SQLite's WAL/SHM coordination files.
         output = self.run("docker", "run", "--rm", "--network", "none",
@@ -216,6 +298,13 @@ class Deployment:
     # Verify the switched service's HTTP routes and expected payload shapes before accepting the
     # release.
     def probe(self) -> None:
+        if self.mode == "postgresql":
+            code = ("import urllib.request; "
+                    "print(urllib.request.urlopen('http://127.0.0.1:8001/ready',timeout=10).read().decode())")
+            ready = json.loads(self.run("docker", "exec", "limituplab-backend-1", "python", "-c", code,
+                                       capture=True, timeout=30))
+            if ready.get("status") != "ok" or ready.get("database") != "postgresql":
+                raise RuntimeError("Backend readiness did not confirm PostgreSQL")
         for route in ("/health", "/", "/recommendations?strategy=relay",
                       "/recommendations?strategy=consolidation", "/recommendations?strategy=drawdown",
                       "/api/agents/recommendation-intelligence",
