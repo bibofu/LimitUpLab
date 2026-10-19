@@ -10,13 +10,18 @@ import pytest
 
 from app.agents.react_runtime.lifecycle import Journal
 from app.database import connect, connect_readonly, initialize_database
-from app.models import AgentChatRequest, AgentPrediction, ChatSessionMessage
+from app.models import AgentChatRequest, AgentPrediction, ChatSessionMessage, StockDailyBar
 from app.quality_models import QualityConflict
 from app.repositories.chat_session_repository import SQLiteChatSessionRepository, SessionOwnershipError
 from app.repositories.first_board_repository import SQLiteFirstBoardRepository
+from app.repositories.limit_up_repository import SQLiteLimitUpRepository
+from app.repositories.consolidation_repository import load_consolidation_pool
+from app.repositories.post_limit_repository import load_post_limit_dataset
+from app.repositories.quality_judge_repository import JudgeBudgetExceeded
 from app.repositories.quality_repository import QualityRepository
 from app.repositories.scoring_policy_repository import SQLiteScoringPolicyRepository
 from app.services.scoring_policy import build_default_scoring_policy
+from app.services.sample_data import SAMPLE_EVENTS
 
 
 @pytest.fixture(params=["sqlite", "postgresql"])
@@ -166,6 +171,36 @@ def test_budget_is_atomic_across_independent_repository_instances(completed, sto
         assert db.execute("SELECT count(*) FROM quality_budget_reservations").fetchone()[0] == 1
 
 
+def test_judge_call_daily_quota_is_shared_and_audited(completed, storage):
+    repo, run_id, _ = completed
+    for number in range(2):
+        repo.enqueue_evaluation(run_id, job_kind="llm_judge", evaluator_version="judge-contract", config={"n": number})
+    jobs = [repo.claim_job(str(number), job_kind="llm_judge", evaluator_version="judge-contract", max_concurrency=2)
+            for number in range(2)]
+    barrier = Barrier(2)
+
+    def reserve(job):
+        independent = QualityRepository(storage)
+        barrier.wait(timeout=10)
+        try:
+            return independent.reserve_judge_call(job, "first", daily_limit=1, job_limit=1, max_concurrency=2)
+        except JudgeBudgetExceeded as error:
+            return error.reason
+
+    with ThreadPoolExecutor(max_workers=2) as executor:
+        results = list(executor.map(reserve, jobs))
+    assert results.count("daily_limit") == 1
+    index = next(index for index, result in enumerate(results) if isinstance(result, dict))
+    call = results[index]
+    repo.start_judge_call(jobs[index], call["call_id"])
+    repo.finish_judge_call(call["call_id"], status="succeeded", usage={"total_tokens": 5})
+    history = repo.judge_call_history(jobs[index]["id"])["items"]
+    assert len(history) == 1 and history[0]["status"] == "succeeded"
+    assert history[0]["total_tokens"] == 5
+    with repo.connection() as db:
+        assert db.execute("SELECT reserved_units FROM quality_budget_usage WHERE job_kind='llm_judge'").fetchone()[0] == 1
+
+
 def test_diagnostic_sql_failure_does_not_rollback_final_answer(storage, monkeypatch):
     from app.services import quality_evidence
 
@@ -225,3 +260,26 @@ def test_readonly_repository_connection_rejects_writes(storage):
         with pytest.raises(Exception):
             db.execute("DELETE FROM chat_sessions WHERE session_id=?", ("retained",))
     assert chats.get_session("retained") is not None
+
+
+def test_research_readers_use_the_selected_database_and_date_cutoff(storage):
+    observed = date(2026, 10, 16)
+    later = date(2026, 10, 19)
+    event = SAMPLE_EVENTS[0].model_copy(update={"trade_date": observed, "closed_limit": True})
+    SQLiteLimitUpRepository(storage).upsert_events([event])
+    bars = [StockDailyBar(
+        symbol=event.symbol, trade_date=day, open=10, high=10.5, low=9.5, close=10, volume=100,
+        amount=1000, source="synthetic-test-unadjusted", created_at=datetime(2026, 10, 19, 8, tzinfo=timezone.utc),
+    ) for day in (observed, later)]
+    first_board = SQLiteFirstBoardRepository(storage)
+    first_board.upsert_daily_bars(bars)
+    selected = load_post_limit_dataset(observed, database_path=storage)
+    assert selected.calendar == [observed.isoformat()]
+    assert selected.event_dates == [observed.isoformat()]
+    assert selected.events[0]["symbol"] == event.symbol
+    assert selected.bars[0]["close"] == 10
+    assert selected.latest_data_date == later
+    assert first_board.list_daily_bars_for_symbols([event.symbol], end_date=observed) == bars[:1]
+    pool = load_consolidation_pool(observed, datetime(2026, 10, 19, 8, tzinfo=timezone.utc), database_path=storage)
+    assert pool.latest_data_date == later
+    assert pool.available_dates == [later, observed]
