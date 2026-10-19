@@ -1,4 +1,4 @@
-"""In-process rate and concurrency limits for public Agent requests."""
+"""Agent admission configuration and an explicit in-memory test implementation."""
 
 from __future__ import annotations
 
@@ -257,4 +257,8 @@ def _non_negative_float(name: str, default: float) -> float:
     return value if value >= 0 else default
 
 
-agent_rate_limiter = AgentRateLimiter()
+from app.services.shared_agent_rate_limit import DatabaseAgentRateLimiter
+
+
+# Production admission is database-backed so quotas survive process boundaries.
+agent_rate_limiter = DatabaseAgentRateLimiter()
