@@ -19,6 +19,12 @@ COPY --from=node-runtime /usr/local/lib/node_modules /usr/local/lib/node_modules
 
 RUN apt-get update \
     && apt-get install -y --no-install-recommends ca-certificates curl tzdata \
+    && curl --fail --silent --show-error https://www.postgresql.org/media/keys/ACCC4CF8.asc \
+         -o /usr/share/keyrings/postgresql.asc \
+    && echo 'deb [signed-by=/usr/share/keyrings/postgresql.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main' \
+         > /etc/apt/sources.list.d/postgresql.list \
+    && apt-get update \
+    && apt-get install -y --no-install-recommends postgresql-client-17 \
     && if [ "$INSTALL_HITHINK_FINANCE" = "true" ]; then \
          ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
          && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \
@@ -34,6 +40,8 @@ RUN python -m pip install --upgrade pip \
 
 COPY backend/app ./app
 COPY backend/scripts ./scripts
+COPY backend/alembic.ini ./alembic.ini
+COPY backend/migrations ./migrations
 
 RUN useradd --create-home --uid 10001 limituplab \
     && mkdir -p /app/data \

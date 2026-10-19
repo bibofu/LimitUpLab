@@ -1,0 +1,80 @@
+# Opt in with -f docker-compose.yml -f docker-compose.postgresql.yml.
+# The original limituplab-data volume and SQLite database remain retained.
+x-postgres-environment: &postgres-environment
+  LIMITUPLAB_DATABASE_URL: ${LIMITUPLAB_DATABASE_URL:?Set the PostgreSQL application URL}
+  LIMITUPLAB_DB_POOL_SIZE: ${LIMITUPLAB_DB_POOL_SIZE:-5}
+  LIMITUPLAB_DB_MAX_OVERFLOW: ${LIMITUPLAB_DB_MAX_OVERFLOW:-5}
+
+x-postgres-dependencies: &postgres-dependencies
+  postgres:
+    condition: service_healthy
+  postgres-migrate:
+    condition: service_completed_successfully
+
+services:
+  postgres:
+    image: postgres:17-bookworm
+    restart: unless-stopped
+    environment:
+      POSTGRES_DB: ${POSTGRES_DB:-limituplab}
+      POSTGRES_USER: ${POSTGRES_USER:-limituplab}
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a unique PostgreSQL password}
+    volumes:
+      - limituplab-postgres:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
+      interval: 5s
+      timeout: 3s
+      retries: 20
+    stop_grace_period: 60s
+
+  postgres-migrate:
+    image: limituplab-backend:${LIMITUPLAB_IMAGE_TAG:-local}
+    build:
+      context: .
+      dockerfile: backend/Dockerfile
+      args:
+        INSTALL_HITHINK_FINANCE: ${INSTALL_HITHINK_FINANCE:-true}
+    restart: "no"
+    environment:
+      <<: *postgres-environment
+    depends_on:
+      postgres:
+        condition: service_healthy
+    healthcheck:
+      disable: true
+    command: ["python", "-m", "alembic", "-c", "alembic.ini", "upgrade", "head"]
+
+  backend:
+    environment:
+      <<: *postgres-environment
+    depends_on:
+      <<: *postgres-dependencies
+
+  recommendation-refresh:
+    environment:
+      <<: *postgres-environment
+    depends_on:
+      <<: *postgres-dependencies
+
+  quality-worker:
+    environment:
+      <<: *postgres-environment
+    depends_on:
+      <<: *postgres-dependencies
+
+  quality-judge-worker:
+    environment:
+      <<: *postgres-environment
+    depends_on:
+      <<: *postgres-dependencies
+
+  daily-update:
+    environment:
+      <<: *postgres-environment
+    depends_on:
+      <<: *postgres-dependencies
+
+volumes:
+  limituplab-postgres:
+    name: limituplab-postgres
