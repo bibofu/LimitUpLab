@@ -36,6 +36,10 @@ class DatabaseRequestLease:
         if self.lost.is_set() or row is None or row[0] <= database_now(db):
             raise LeaseLost("Global Agent execution slot expired")
 
+    def ensure_active(self):
+        with self.store.connection() as db:
+            self.assert_current(db)
+
     def release(self):
         self.stopped.set()
         if self.thread.ident is not None:

@@ -45,6 +45,7 @@ def stream_review_overview(
     def emit(event, data):
         if stopped.is_set():
             raise RuntimeError("Overview stream closed")
+        lease.ensure_active()
         queue.put((event, data))
 
     def worker():

@@ -70,6 +70,11 @@ class AgentRequestLease:
         if self._enabled:
             self._limiter.release(self._owner_id)
 
+    def ensure_active(self) -> None:
+        """The disabled/local adapter retains the same publication contract."""
+        if self._released:
+            raise RuntimeError("Agent request lease was released")
+
 
 class AgentRateLimiter:
     """Thread-safe fixed-window request limiter plus concurrency guard."""
