@@ -14,7 +14,7 @@ from alembic.runtime.migration import MigrationContext
 
 
 BASELINE_REVISION = "0001_postgresql_baseline"
-HEAD_REVISION = "0002_runtime_coordination"
+HEAD_REVISION = "0003_single_champion"
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -74,6 +74,8 @@ def add_coordination_metadata(result: sa.MetaData) -> None:
 
 metadata = baseline_metadata()
 add_coordination_metadata(metadata)
+sa.Index("one_champion_policy", metadata.tables["scoring_policies"].c.status,
+         unique=True, postgresql_where=sa.text("status = 'champion'"))
 
 
 def assert_schema_current(engine_or_connection) -> None:
