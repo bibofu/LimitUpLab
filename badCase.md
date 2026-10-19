@@ -1878,3 +1878,16 @@ empty、partial 或 error 时 Replan 新闻；股票名称提取同步覆盖 K�
 - 2026-10-19 使用迁移后的独立 PostgreSQL 18.6 演练库，通过实际 FastAPI 路由、真实配置的模型和工具完成三次新会话；未替换模型、工具或鉴权。2026-10-16 收盘涨停数量为59，最高11板为新华传媒600825，代码升序前三首板为000099、000420、000573；数量、代码、名称和概念与数据库逐项核对一致。
 - 三问均为 `complete/answered`，耗时7.781、5.398、8.255秒；SSE完成、持久化响应和GET重连响应一致。run依次为 `run_33335eba46224ee996f1464651b1871c`、`run_c64601b05654491f84ab2a4e34bd5b4a`、`run_ddd083785595445c950dc1d411b2dc57`，报告保存在忽略目录 `output/pg-agent-smoke-report.json`。这三问验证正常问答链路，租约故障边界由上述专门契约覆盖，不将其描述为实际多容器故障演练。
 - 最终后端全套3,111项测试和22项子测试通过，含真实PostgreSQL契约与SQLite兼容回归；前端243项通过，TypeScript/Vite构建通过。日志 `output/pg-migration-final-pytest.log`、`output/pg-migration-frontend-tests.log`。保留3条已有后端依赖弃用提醒和前端较大chunk提醒。未切换生产，原SQLite保留。
+
+## BC-211：PostgreSQL 切换遗漏研究入口和质量工单聚合（2026-10-19）
+
+- 全功能核查发现两项研究 CLI 默认把旧 SQLite 路径传给共享连接，另一个未加载本地配置；质量工单列表的 `group_concat` 在实际 PostgreSQL 上报 `UndefinedFunction`。网页日更成功不能证明这些旁路已完成迁移。
+- 研究入口默认加载配置并使用 PostgreSQL，保留冻结输入指纹；质量工单采用明确的数据库方言聚合，不正则覆盖 SQL。同步补齐通用备份、预测时间审计、退役清理和样例导入；退役表缺失时不清空当前推荐，样例导入不默认覆盖已有事件。
+- 新增测试在禁止 `sqlite3.connect`、默认 SQLite 文件不存在的条件下验证研究完整链路、质量列表及实际 HTTP。全后端3,257项、22项子测试，前端243项与构建通过。测试使用独立 PostgreSQL 临时 schema，未执行真实数据清理。
+- 最后真实模型三问为2026-10-19收盘涨停数量、最高连板及代码名称、前三只首板及概念，均complete、持久化及SSE重放一致，耗时8.708、5.461、8.549秒；run为 `run_7aad4fc29998457ea3848e625a83e390`、`run_15350defc6fe474fbe8f6ed6e2df4ad6`、`run_60987fcab01246589d618dfad66d3e85`。SQLite连接尝试数为0，原文件SHA未变，报告 `output/postgresql-no-sqlite-live-20261019.json`。
+
+## BC-212：Golden 固定 SQLite 存储与继承 PostgreSQL 配置混用（2026-10-19）
+
+- 代码审查发现 Golden 每 case 固定创建 `session.sqlite`，但进程仍继承业务 PostgreSQL URL，显式路径仓储与其他默认连接可能分属不同数据库；未将这一代码风险描述为已发生的数据污染。
+- 新增独立评测 PostgreSQL URL和每case/trial随机schema；评测与业务数据库名称必须不同，避免主机别名绕过隔离。业务选择PG却缺评测配置时直接报错，不回退SQLite；不含凭据的存储元数据写入manifest与session目录。无PG的离线兼容评测显式清空普通数据库URL。
+- 测试覆盖无SQLite连接、跨case隔离、同库/别名拒绝、配置缺失和异常脱敏；回归入口清空真实评测配置。真实模型 `s01_main_first` 在独立本地PG评测库完整完成，5次调用、0个SQLite文件，未运行模型裁判，故裁判项仍为review，不宣称Golden精度提升。实际业务三问及完整回归同BC-211。

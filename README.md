@@ -26,6 +26,8 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 
 当前 Windows 工作区和远程单实例生产环境均已正式切换至 PostgreSQL，原 SQLite 文件和备份保留，不再接收正常业务的新写入。生产版本为 `v1.6.1`，最新数据导入、实际读写、Agent 三问、重启持久化及备份恢复均已通过，见 [生产切换验收](deploy/incidents/2026-10-19-postgresql-cutover.md) 和 [本地切换验收](docs/Local_PostgreSQL_Cutover.md)。其他工作区未配置 `LIMITUPLAB_DATABASE_URL` 时仍可使用 SQLite。操作方式见 [本地手册](deploy/local-postgresql.md) 与 [生产部署恢复手册](deploy/postgresql.md)；多实例部署尚未验收。
 
+后续已补齐离线研究、维护备份、质量工单及 Golden 评测的 PostgreSQL 路径，并通过禁止 SQLite 连接的验证，见 [SQLite 依赖清理验收](docs/PostgreSQL_Independence.md)。这批补齐代码尚未另发生产标签，不能与上述 `v1.6.1` 的服务器状态混同。
+
 当前版本已经具备可本地运行和单机部署的完整 MVP：
 
 - 真实涨停、炸板、K 线、板块、人气和龙虎榜数据流水线
