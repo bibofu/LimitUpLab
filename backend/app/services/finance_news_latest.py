@@ -121,8 +121,18 @@ class LatestFinanceNewsStore:
                 raise ValueError("unusable latest-news result")
             with self._lock:
                 if self._snapshot is not None and facts.fetched_at < self._snapshot.fetched_at:
-                    raise ValueError("latest-news result would regress the snapshot")
-            self._write_snapshot(facts)
+                    if self.database_url:
+                        facts = self._snapshot.model_copy(deep=True)
+                    else:
+                        raise ValueError("latest-news result would regress the snapshot")
+            from app.services.shared_news_snapshot import SnapshotSuperseded
+            try:
+                self._write_snapshot(facts)
+            except SnapshotSuperseded:
+                newer = self._read_snapshot(self._clock())
+                if newer is None or newer.fetched_at < facts.fetched_at:
+                    raise
+                facts = newer
             with self._lock:
                 self._snapshot = facts
                 self._refresh_error = None

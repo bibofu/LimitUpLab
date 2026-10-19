@@ -8,6 +8,10 @@ from app.models import FinanceNewsFacts
 KEY = "system:finance-news-latest"
 
 
+class SnapshotSuperseded(ValueError):
+    """Another instance already saved a newer snapshot."""
+
+
 def read_snapshot(url):
     with closing(connect(database_url=url)) as db:
         initialize_database(db)
@@ -29,4 +33,4 @@ def write_snapshot(url, facts):
             WHERE excluded.created_at >= agent_cache.created_at""",
             (KEY, "latest-news", raw, (stamp + timedelta(days=7)).isoformat(), stamp.isoformat()))
         if not result.rowcount:
-            raise ValueError("Latest-news snapshot would regress shared data")
+            raise SnapshotSuperseded("Latest-news snapshot would regress shared data")
