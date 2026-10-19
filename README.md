@@ -24,7 +24,7 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 
 当前阶段为 **V1.5：ReAct 交付与证据契约完善、Golden 粗评基线建立**。[V1.5 阶段里程碑](docs/V1.5_Milestone.md) 汇总 `v1.5.0` 的工作、验证结果、限制和下一步。Golden 已能辅助定位 Agent 问题，裁判可靠性验收仍未通过；自动结果需要保留待复核项。
 
-PostgreSQL 迁移已实现，本次 Windows 工作区已完成本地单实例正式切换，原 SQLite 文件保留。其他工作区未配置 `LIMITUPLAB_DATABASE_URL` 时仍可使用 SQLite。最新数据导入、实际读写、Agent 三问和重启恢复结果见 [本地切换验收](docs/Local_PostgreSQL_Cutover.md)，启动方式见 [本地 PostgreSQL 操作手册](deploy/local-postgresql.md)。远程生产切换另按 [部署与恢复手册](deploy/postgresql.md) 验收。
+当前 Windows 工作区和远程单实例生产环境均已正式切换至 PostgreSQL，原 SQLite 文件和备份保留，不再接收正常业务的新写入。生产版本为 `v1.6.1`，最新数据导入、实际读写、Agent 三问、重启持久化及备份恢复均已通过，见 [生产切换验收](deploy/incidents/2026-10-19-postgresql-cutover.md) 和 [本地切换验收](docs/Local_PostgreSQL_Cutover.md)。其他工作区未配置 `LIMITUPLAB_DATABASE_URL` 时仍可使用 SQLite。操作方式见 [本地手册](deploy/local-postgresql.md) 与 [生产部署恢复手册](deploy/postgresql.md)；多实例部署尚未验收。
 
 当前版本已经具备可本地运行和单机部署的完整 MVP：
 
@@ -141,7 +141,7 @@ Memory 按 `owner_id + session_id` 隔离，使用 `last_message_id` 作为增�
 ```mermaid
 flowchart LR
     A[AKShare / Tonghuashun / Eastmoney / CNInfo / Tencent / Sina] --> B[Daily Data Pipeline]
-    B --> C[(SQLite)]
+    B --> C[(PostgreSQL / SQLite compatibility)]
 
     C --> D[Facts Builder]
     D --> E[Rating Engine]
@@ -213,7 +213,7 @@ sequenceDiagram
 - Python 3.13
 - FastAPI + Uvicorn
 - Pydantic
-- SQLite
+- PostgreSQL 18 + SQLAlchemy / psycopg 3；保留 SQLite 兼容
 - AKShare
 - Requests + BeautifulSoup
 - LangChain Core + LangChain OpenAI（消息、原生工具绑定和模型适配）
@@ -249,7 +249,7 @@ LimitUpLab/
 │   ├── app/
 │   │   ├── agents/          # ReAct runtime、工具/证据契约、评分与 Review
 │   │   ├── collectors/      # 涨停、K 线、板块、指数和扩展数据采集
-│   │   ├── repositories/    # SQLite Repository
+│   │   ├── repositories/    # PostgreSQL / SQLite Repository
 │   │   ├── routers/         # FastAPI 路由
 │   │   └── services/        # 评分、检索、回测、Evaluation 和健康检查
 │   ├── scripts/             # 数据同步、回填和启动脚本
@@ -355,7 +355,7 @@ hithink-finance auth login
 hithink-finance symbol search --q 600519 --limit 1 --format json
 ```
 
-业务读取仍以项目 SQLite 快照为先；缺少日线或当日收盘时统一经过 MarketDataProvider 调用 CLI，固定使用 `adjust=none`，并把 CLI 的“股”转换为项目统一的“手”。CLI 不可用或请求失败时，日线和收盘快照显式回退腾讯行情并保留真实来源；分钟 K 继续使用新浪、东方财富。V1 Agent 不暴露同花顺实时工具；这些工具仅在 `extended` 研发配置中用于 V2 开发，请求失败时会明确返回错误，不会伪造结果。
+业务读取仍以项目所选数据库中的快照为先；缺少日线或当日收盘时统一经过 MarketDataProvider 调用 CLI，固定使用 `adjust=none`，并把 CLI 的“股”转换为项目统一的“手”。CLI 不可用或请求失败时，日线和收盘快照显式回退腾讯行情并保留真实来源；分钟 K 继续使用新浪、东方财富。V1 Agent 不暴露同花顺实时工具；这些工具仅在 `extended` 研发配置中用于 V2 开发，请求失败时会明确返回错误，不会伪造结果。
 
 ### 5. 安装前端
 
@@ -475,7 +475,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mo
 powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mode Uninstall
 ```
 
-每次执行都会写入 SQLite 审计记录。最新报告保存在 `backend/data/daily_close_loop_latest.json`，部分完成或失败时额外生成 `backend/data/daily_close_loop_alert.json`；前端系统状态条和 `GET /api/agents/daily-pipeline-status` 可查看最近运行结果。
+每次执行都会向所选数据库写入审计记录。最新报告保存在 `backend/data/daily_close_loop_latest.json`，部分完成或失败时额外生成 `backend/data/daily_close_loop_alert.json`；前端系统状态条和 `GET /api/agents/daily-pipeline-status` 可查看最近运行结果。
 
 ## 常用 API
 
@@ -577,4 +577,4 @@ npm.cmd run build
 - 历史人气和龙虎榜时点数据无法在所有日期完整重建。
 - 日 K 统一使用未复权价格；同花顺历史行情成交量由“股”标准化为“手”，来源和成交额随行持久化。
 - Web 搜索内容被视为外部不可信证据，只用于解释增强，不直接决定评分。
-- SQLite 适合本地 MVP，不代表正式多用户网站的最终存储方案。
+- 生产采用 PostgreSQL 单实例应用部署；SQLite 兼容仍保留，多 API 副本与并发吞吐需要独立验收。

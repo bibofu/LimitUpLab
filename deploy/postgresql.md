@@ -6,12 +6,20 @@ release and scheduled-job helpers support both modes with an explicit server mar
 This runbook prepares shared persistence; load-balancer behavior and rolling
 multi-instance deployment still require their own acceptance test.
 
+The production single-instance cutover completed on 2026-10-19 with `v1.6.1`.
+See the [acceptance record](incidents/2026-10-19-postgresql-cutover.md) for the
+actual import, retained SQLite, restart, restore and scheduled-backup evidence.
+
 ## Prepare the target
 
 1. Keep the real `.env.production` settings, including one shared session secret
    and admin key for every API instance. Copy `.env.postgresql.example` to
-   `.env.postgresql`, generate a unique database password, and set the matching
-   `LIMITUPLAB_DATABASE_URL`. URL-encode reserved characters in the URL password.
+   `.env.postgresql`. For production, override its single-account example:
+   set `POSTGRES_USER=limituplab_admin` with a unique bootstrap password, and
+   point `LIMITUPLAB_DATABASE_URL` at the separate `limituplab` application role
+   with a different password. URL-encode reserved characters in the URL password.
+   The official image creates `POSTGRES_USER` as a superuser; do not use that
+   bootstrap role for application requests. Keep real files mode `0600`.
 2. Build the backend image. It includes PostgreSQL 18 clients, Alembic migrations
    and the independent `scripts/postgres_admin.py` command.
 3. Start only the database and schema migration service while preparing import.
@@ -19,6 +27,28 @@ multi-instance deployment still require their own acceptance test.
 ```sh
 docker compose --env-file .env.postgresql -f docker-compose.yml -f docker-compose.postgresql.yml build backend
 docker compose --env-file .env.postgresql -f docker-compose.yml -f docker-compose.postgresql.yml up -d postgres
+```
+
+For a new empty target, open `psql` as the bootstrap administrator before running
+the migration service:
+
+```sh
+docker compose --env-file .env.postgresql -f docker-compose.yml -f docker-compose.postgresql.yml exec postgres \
+  psql -X -U limituplab_admin -d postgres
+```
+
+```sql
+CREATE ROLE limituplab LOGIN NOSUPERUSER NOCREATEDB NOCREATEROLE NOREPLICATION NOBYPASSRLS;
+ALTER DATABASE limituplab OWNER TO limituplab;
+\password limituplab
+```
+
+The interactive password prompt avoids embedding a real password in shell or
+SQL history. Set the application URL to this role/password, exit `psql`, then
+run the migration service. These role-creation steps are for first provisioning;
+do not repeat them against an existing deployment without inspecting its roles.
+
+```sh
 docker compose --env-file .env.postgresql -f docker-compose.yml -f docker-compose.postgresql.yml run --rm postgres-migrate
 ```
 
@@ -58,6 +88,11 @@ docker compose --env-file .env.postgresql -f docker-compose.yml -f docker-compos
   --retain-legacy-table user_identities --retain-legacy-table users
 ```
 
+Inventory the actual source first. The production source also retained
+`first_board_discovery_snapshots`; its six retired records were explicitly
+acknowledged with another `--retain-legacy-table` argument and remain in SQLite.
+Do not blindly acknowledge an unexpected table without checking its role.
+
 4. Review the report. Every imported table must be `verified`; legacy records are
    explicitly retained in the original SQLite file. Reusing a populated target
    or an existing report path is rejected.
@@ -67,8 +102,12 @@ docker compose --env-file .env.postgresql -f docker-compose.yml -f docker-compos
 
 ```sh
 docker compose --env-file .env.postgresql -f docker-compose.yml -f docker-compose.postgresql.yml up -d backend frontend
-docker compose --env-file .env.postgresql -f docker-compose.yml -f docker-compose.postgresql.yml up -d recommendation-refresh quality-worker quality-judge-worker
+docker compose --env-file .env.postgresql -f docker-compose.yml -f docker-compose.postgresql.yml up -d recommendation-refresh
 ```
+
+`quality-worker` and `quality-judge-worker` are optional model-evaluation services.
+Enable them only when explicitly included in the deployment scope and configured;
+the `v1.6.1` production cutover did not start them.
 
 Install the reviewed `deploy/release.py` and `deploy/job.py` before changing the
 production database mode. These root-owned helpers are not automatically replaced
