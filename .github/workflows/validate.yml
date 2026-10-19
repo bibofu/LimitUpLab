@@ -87,18 +87,9 @@ jobs:
           cache-dependency-path: backend/requirements*.txt
       - name: Install backend dependencies
         run: python -m pip install -r backend/requirements-dev.txt
-      - name: Verify real PostgreSQL contracts and shared execution
+      - name: Verify all backend tests including real PostgreSQL contracts
         working-directory: backend
-        run: >-
-          python -m pytest -q
-          tests/test_postgres_transport.py
-          tests/test_postgresql_schema.py
-          tests/test_postgresql_migration.py
-          tests/test_postgres_admin.py
-          tests/test_repository_database_contracts.py
-          tests/test_runtime_coordination.py
-          tests/test_react_shared_execution.py
-          tests/test_react_http.py
+        run: python -m pytest -q
 
   deploy:
     name: Deploy tagged production release

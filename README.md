@@ -24,6 +24,8 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 
 当前阶段为 **V1.5：ReAct 交付与证据契约完善、Golden 粗评基线建立**。[V1.5 阶段里程碑](docs/V1.5_Milestone.md) 汇总 `v1.5.0` 的工作、验证结果、限制和下一步。Golden 已能辅助定位 Agent 问题，裁判可靠性验收仍未通过；自动结果需要保留待复核项。
 
+PostgreSQL 迁移和多实例共享状态基础已实现，原 SQLite 数据及默认运行方式继续保留。设置 `LIMITUPLAB_DATABASE_URL` 可选择 PostgreSQL；正式切换前需要完成部署环境验收。本地全量导入、备份恢复、真实 Agent 三问及双库回归结果见 [实施状态](docs/PostgreSQL_Migration_Plan.md)，操作步骤见 [PostgreSQL 部署与恢复](deploy/postgresql.md)。
+
 当前版本已经具备可本地运行和单机部署的完整 MVP：
 
 - 真实涨停、炸板、K 线、板块、人气和龙虎榜数据流水线
@@ -109,7 +111,7 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 
 
 
-系统在 SQLite 保留原始会话和滚动记忆，但生产 ReAct 默认不重放历史原文或历史回答证据。Input Reviewer 识别为 `follow_up` 时，才提取历史股票名称/代码与上一轮实际工具参数，用于理解省略条件；本轮明确条件优先，事实必须重新查询。
+系统在所选数据库（默认 SQLite，可配置 PostgreSQL）保留原始会话和滚动记忆，但生产 ReAct 默认不重放历史原文或历史回答证据。Input Reviewer 识别为 `follow_up` 时，才提取历史股票名称/代码与上一轮实际工具参数，用于理解省略条件；本轮明确条件优先，事实必须重新查询。
 
 Memory 按 `owner_id + session_id` 隔离，使用 `last_message_id` 作为增量游标，随会话永久删除。默认只向模型提供偏好约束；追问时再补充研究目标、股票、题材、日期范围和未解问题。这些字段都不能作为市场证据或自动继承为本轮待办，也不会跨会话建立用户画像。
 
