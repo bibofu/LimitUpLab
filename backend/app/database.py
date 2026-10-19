@@ -67,9 +67,15 @@ def get_database_path() -> Path:
     return DEFAULT_DATABASE_PATH
 
 
-def connect(database_path: Path | None = None) -> sqlite3.Connection:
+def connect(database_path: Path | None = None, *, database_url: str | None = None) -> sqlite3.Connection:
     """Open one consistently configured, concurrent-safe SQLite connection."""
 
+    if database_path is not None and database_url is not None:
+        raise ValueError("Choose a database path or URL, not both")
+    url = database_url if database_url is not None else os.getenv("LIMITUPLAB_DATABASE_URL", "").strip()
+    if database_path is None and url:
+        from app.storage.postgres import PostgresConnection
+        return PostgresConnection(url)
     path = database_path or get_database_path()
     path.parent.mkdir(parents=True, exist_ok=True)
     busy_timeout_ms = _bounded_int(
@@ -122,9 +128,66 @@ def connect(database_path: Path | None = None) -> sqlite3.Connection:
     return connection
 
 
+def is_postgres(connection) -> bool:
+    return getattr(connection, "dialect", None) == "postgresql"
+
+
+def begin_write(connection, scope: str = "write") -> None:
+    """Protect existing read-modify-write contracts on either backend."""
+    if is_postgres(connection):
+        connection.begin_write(scope)
+    elif not connection.in_transaction:
+        connection.execute("BEGIN IMMEDIATE")
+
+
+def table_exists(connection, name: str) -> bool:
+    if is_postgres(connection):
+        return connection.execute(
+            "SELECT 1 FROM information_schema.tables WHERE table_schema=current_schema() AND table_name=?",
+            (name,),
+        ).fetchone() is not None
+    return connection.execute(
+        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,),
+    ).fetchone() is not None
+
+
+def is_integrity_error(error) -> bool:
+    if isinstance(error, sqlite3.IntegrityError):
+        return True
+    try:
+        from psycopg import IntegrityError
+        return isinstance(error, IntegrityError)
+    except ImportError:
+        return False
+
+
+def connect_readonly(database_path: Path | None = None):
+    """Open a consistent read snapshot; missing SQLite files stay missing."""
+    if database_path is None and os.getenv("LIMITUPLAB_DATABASE_URL", "").strip():
+        from app.storage.postgres import PostgresConnection
+        return PostgresConnection(readonly=True)
+    path = Path(database_path or get_database_path()).resolve()
+    if not path.is_file():
+        raise FileNotFoundError(path)
+    connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
+    connection.row_factory = sqlite3.Row
+    connection.execute("PRAGMA query_only=ON")
+    connection.execute("BEGIN")
+    return connection
+
+
 def initialize_database(connection: sqlite3.Connection) -> None:
     """Apply the schema once using a serialized, cross-process write transaction."""
 
+    if is_postgres(connection):
+        from app.storage.schema import HEAD_REVISION
+        if getattr(connection, "_schema_checked", False):
+            return
+        versions = connection.execute("SELECT version_num FROM alembic_version").fetchall()
+        if [row[0] for row in versions] != [HEAD_REVISION]:
+            raise RuntimeError("PostgreSQL schema is not current; run Alembic upgrade head")
+        connection._schema_checked = True
+        return
     if _database_schema_version(connection) >= CURRENT_SCHEMA_VERSION:
         return
 
