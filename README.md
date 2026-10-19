@@ -24,7 +24,7 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 
 当前阶段为 **V1.5：ReAct 交付与证据契约完善、Golden 粗评基线建立**。[V1.5 阶段里程碑](docs/V1.5_Milestone.md) 汇总 `v1.5.0` 的工作、验证结果、限制和下一步。Golden 已能辅助定位 Agent 问题，裁判可靠性验收仍未通过；自动结果需要保留待复核项。
 
-PostgreSQL 迁移和多实例共享状态基础已实现，原 SQLite 数据及默认运行方式继续保留。设置 `LIMITUPLAB_DATABASE_URL` 可选择 PostgreSQL；正式切换前需要完成部署环境验收。本地全量导入、备份恢复、真实 Agent 三问及双库回归结果见 [实施状态](docs/PostgreSQL_Migration_Plan.md)，操作步骤见 [PostgreSQL 部署与恢复](deploy/postgresql.md)。
+PostgreSQL 迁移已实现，本次 Windows 工作区已完成本地单实例正式切换，原 SQLite 文件保留。其他工作区未配置 `LIMITUPLAB_DATABASE_URL` 时仍可使用 SQLite。最新数据导入、实际读写、Agent 三问和重启恢复结果见 [本地切换验收](docs/Local_PostgreSQL_Cutover.md)，启动方式见 [本地 PostgreSQL 操作手册](deploy/local-postgresql.md)。远程生产切换另按 [部署与恢复手册](deploy/postgresql.md) 验收。
 
 当前版本已经具备可本地运行和单机部署的完整 MVP：
 
