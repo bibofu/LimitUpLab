@@ -23,6 +23,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
+from app.config import load_local_env
 from app.repositories import SQLiteFirstBoardRepository, SQLiteLimitUpRepository
 from app.services.factor_signal_diagnostic import build_factor_signal_diagnostic
 
@@ -41,6 +42,7 @@ def _configure_utf8_stdout() -> None:
 def main() -> None:
     """Run the factor-signal diagnostic and print/save the report."""
 
+    load_local_env()
     _configure_utf8_stdout()
     parser = argparse.ArgumentParser(
         description="Falsify the 14 first-board scoring factors against next-day outcomes.",

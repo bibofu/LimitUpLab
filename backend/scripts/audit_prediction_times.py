@@ -12,6 +12,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
+from app.config import load_local_env
 from app.database import begin_write, connect, connect_readonly, get_database_path, initialize_database, is_postgres
 from app.services.prediction_time_audit import audit_prediction_times
 from scripts.backup_database import create_backup
@@ -47,6 +48,7 @@ def run_audit(database=None, *, apply=False, backup_directory=None):
 
 # Parse audit options and report prediction timing/provenance from the selected database.
 def main() -> None:
+    load_local_env()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--database", "--db", type=Path, default=None,
                         help="Explicit SQLite file; otherwise use the configured database backend")

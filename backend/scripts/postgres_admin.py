@@ -109,6 +109,8 @@ def restore_database(archive, engine, environment):
 
 
 def main():
+    from app.config import load_local_env
+    load_local_env()
     parser = argparse.ArgumentParser(description=__doc__)
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("status")

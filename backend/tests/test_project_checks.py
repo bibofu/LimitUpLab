@@ -36,3 +36,21 @@ def test_missing_executable_is_a_failed_gate(tmp_path):
 def test_backend_gate_runs_pytest_only(tmp_path):
     plan = checks.build_checks("backend", tmp_path)
     assert [item.name for item in plan] == ["pytest"]
+
+
+def test_acceptance_runner_does_not_inherit_active_database(tmp_path, monkeypatch):
+    monkeypatch.setattr(checks, "ROOT", tmp_path)
+    monkeypatch.setenv("LIMITUPLAB_DATABASE_URL", "postgresql://local:secret@localhost/live")
+    monkeypatch.setenv("LIMITUPLAB_ENV_FILE", str(tmp_path / "live.env"))
+    monkeypatch.setattr(sys, "argv", ["check_project.py", "--scope", "backend"])
+    captured = {}
+
+    def capture_environment(plan, output, env, timeout):
+        captured.update(env)
+        return {"passed": True}
+
+    monkeypatch.setattr(checks, "run_checks", capture_environment)
+    assert checks.main() == 0
+    assert captured["LIMITUPLAB_DATABASE_URL"] == ""
+    assert not Path(captured["LIMITUPLAB_ENV_FILE"]).exists()
+    assert Path(captured["LIMITUPLAB_DATABASE_PATH"]).is_relative_to(tmp_path / "output/validation")

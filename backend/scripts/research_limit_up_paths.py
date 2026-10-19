@@ -24,6 +24,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
+from app.config import load_local_env
 from app.database import connect_readonly, get_database_path, is_postgres
 
 RULES = {
@@ -368,7 +369,8 @@ def analyze(db, start, output):
     return payload
 
 
-if __name__ == "__main__":
+def main() -> None:
+    load_local_env()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--db", type=Path, default=None,
                         help="Explicit SQLite file; otherwise use the configured database backend")
@@ -376,3 +378,7 @@ if __name__ == "__main__":
     parser.add_argument("--output", type=Path, default=Path("output/research/limit-up-paths-20260907"))
     args = parser.parse_args()
     analyze(args.db, args.start, args.output)
+
+
+if __name__ == "__main__":
+    main()

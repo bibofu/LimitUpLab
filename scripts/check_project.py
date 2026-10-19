@@ -108,6 +108,8 @@ def main() -> int:
     test_tmp.mkdir()
     env = {**os.environ, "PYTHONUTF8": "1", "LIMITUPLAB_LLM_ENABLED": "false",
            "LIMITUPLAB_ENVIRONMENT": "development",
+           "LIMITUPLAB_ENV_FILE": str(output / "offline-only.env"),
+           "LIMITUPLAB_DATABASE_URL": "",
            "LIMITUPLAB_DATABASE_PATH": str(output / "validation.sqlite"),
            "LIMITUPLAB_TEST_TMP": str(test_tmp), "TMP": str(test_tmp), "TEMP": str(test_tmp)}
     print(f"Report directory: {output}", flush=True)

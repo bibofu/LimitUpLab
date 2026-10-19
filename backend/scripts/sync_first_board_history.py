@@ -13,6 +13,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.collectors import collect_limit_up_events
+from app.config import configure_runtime_environment
 from app.models import LimitUpEvent, StockDailyBar
 from app.repositories import SQLiteFirstBoardRepository, SQLiteLimitUpRepository
 from app.services.market_data_provider import collect_preferred_stock_kline as collect_stock_kline
@@ -25,6 +26,7 @@ from app.services.first_board_features import (
 def main() -> None:
     """Parse CLI args and sync derived first-board history tables."""
 
+    configure_runtime_environment()
     parser = argparse.ArgumentParser(
         description="Build local first-board features and post-board outcomes.",
     )

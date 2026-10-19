@@ -20,6 +20,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.agents.first_board import MIN_AMOUNT, build_first_board_ratings
+from app.config import configure_runtime_environment
 from app.collectors import (
     HithinkFinanceCollector,
     HithinkLimitUpPoolSnapshot,
@@ -131,6 +132,7 @@ class DailyUpdateReport:
 def main() -> None:
     """Parse CLI arguments and run the daily pipeline."""
 
+    configure_runtime_environment()
     parser = argparse.ArgumentParser(
         description="Update raw and derived first-board Agent data for one day.",
     )

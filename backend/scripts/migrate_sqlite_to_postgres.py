@@ -10,11 +10,13 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 import sqlalchemy as sa
 
+from app.config import load_local_env
 from app.storage.migration import MigrationError, migrate_sqlite
 from app.storage.schema import upgrade_schema
 
 
 def main():
+    load_local_env()
     parser = argparse.ArgumentParser(description=__doc__)
     parser.add_argument("--source", type=Path, required=True)
     parser.add_argument("--report", type=Path, required=True)

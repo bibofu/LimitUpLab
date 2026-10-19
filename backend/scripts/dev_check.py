@@ -13,7 +13,7 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
-from app.config import hydrate_windows_environment
+from app.config import configure_runtime_environment
 from app.repositories import SQLiteFirstBoardRepository, SQLiteLimitUpRepository
 from app.services.recommendation_intelligence import refresh_recommendation_intelligence
 from app.services.system_health import build_agent_system_health
@@ -23,6 +23,7 @@ from scripts.update_daily_data import DailyUpdateReport, run_daily_update
 def main() -> None:
     """Run development checks and optionally refresh data before startup."""
 
+    configure_runtime_environment()
     parser = argparse.ArgumentParser(description="Check local LimitUpLab runtime health.")
     parser.add_argument(
         "--ensure-data",
@@ -36,7 +37,6 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    _apply_user_api_key()
     limit_repo = SQLiteLimitUpRepository(seed_if_empty=False)
     first_board_repo = SQLiteFirstBoardRepository()
     events = limit_repo.list_events()
@@ -157,12 +157,6 @@ def refresh_recommendation_after_update(
         "refreshed_at": response.refreshed_at.isoformat(),
         "item_count": len(response.items),
     }
-
-
-def _apply_user_api_key() -> None:
-    """Mirror user/machine API keys into process env for local checks."""
-
-    hydrate_windows_environment(("DEEPSEEK_API_KEY", "OPENAI_API_KEY"))
 
 
 # Aggregate stored usage over the requested interval and optional owner scope.

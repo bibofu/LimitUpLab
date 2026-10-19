@@ -1,10 +1,26 @@
 """Real PostgreSQL integration fixtures; each test owns a disposable schema."""
 
 import os
+from pathlib import Path
+from tempfile import TemporaryDirectory
 from uuid import uuid4
 import pytest
 from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
+
+
+# Test collection imports app.main, which loads runtime settings immediately.
+# Isolate before importing any test module so a developer's active PostgreSQL
+# database and retained SQLite file cannot become the default test database.
+_scratch_root = Path(os.getenv("LIMITUPLAB_TEST_TMP", Path(__file__).resolve().parents[1] / "tmp"))
+_scratch_root.mkdir(parents=True, exist_ok=True)
+_test_environment = TemporaryDirectory(prefix="pytest-runtime-", dir=_scratch_root,
+                                       ignore_cleanup_errors=True)
+_test_root = Path(_test_environment.name)
+os.environ["LIMITUPLAB_ENV_FILE"] = str(_test_root / "offline-only.env")
+os.environ["LIMITUPLAB_DATABASE_URL"] = ""
+os.environ["LIMITUPLAB_DATABASE_PATH"] = str(_test_root / "default.sqlite")
+os.environ["LIMITUPLAB_LLM_ENABLED"] = "false"
 
 
 @pytest.fixture
