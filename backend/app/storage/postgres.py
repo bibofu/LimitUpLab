@@ -170,12 +170,16 @@ class PostgresConnection:
         key = int.from_bytes(hashlib.sha256(b"limituplab:write").digest()[:8], "big", signed=True)
         self._db.execute("SELECT pg_advisory_xact_lock(%s)", (key,))
         self._write_locked = True
+        from app.storage.job_context import assert_job_owner
+        assert_job_owner(self)
 
     def execute(self, sql, parameters=()):
         command = sql.lstrip().split(None, 1)[0].upper()
         if command in {"PRAGMA", "REPLACE"} or sql.strip().upper() == "BEGIN IMMEDIATE":
             raise ValueError("SQLite-specific SQL must be explicitly adapted")
-        if command in {"INSERT", "UPDATE", "DELETE"}:
+        # Unknown/CTE/comment-prefixed statements conservatively open a write
+        # transaction too; they must never silently bypass locking/autocommit.
+        if command not in {"SELECT", "EXPLAIN", "SHOW", "SET", "BEGIN", "COMMIT", "ROLLBACK", "RELEASE"}:
             self.begin_write()
         if self._readonly and command not in {"SELECT", "WITH", "EXPLAIN"}:
             raise PermissionError("Read-only SQL connection")
@@ -203,6 +207,9 @@ class PostgresConnection:
         return Result(cursor)
 
     def commit(self):
+        if self._write_locked:
+            from app.storage.job_context import assert_job_owner
+            assert_job_owner(self)
         self._db.commit()
         self._write_locked = False
 

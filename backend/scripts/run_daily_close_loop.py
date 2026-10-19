@@ -89,6 +89,14 @@ class DailyCloseLoopLock:
 
     # Acquire ownership of the process lock before allowing the guarded loop to run.
     def __enter__(self) -> DailyCloseLoopLock:
+        if os.getenv("LIMITUPLAB_DATABASE_URL", "").strip():
+            from app.storage.job_context import SharedJobLock
+            self._shared = SharedJobLock("daily-close-loop")
+            try:
+                self._shared.__enter__()
+            except RuntimeError as error:
+                raise DailyCloseLoopAlreadyRunning(str(error)) from error
+            return self
         self.path.parent.mkdir(parents=True, exist_ok=True)
         self._remove_stale_lock()
         payload = json.dumps(
@@ -115,6 +123,9 @@ class DailyCloseLoopLock:
     # Remove the lock only if this instance acquired it, including when the guarded work raised an
     # exception.
     def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
+        if getattr(self, "_shared", None) is not None:
+            self._shared.__exit__(_exc_type, _exc_value, _traceback)
+            return
         if self._owned:
             self.path.unlink(missing_ok=True)
             self._owned = False

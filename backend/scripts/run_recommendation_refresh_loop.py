@@ -43,6 +43,11 @@ class RefreshLoopLock:
 
     # Acquire ownership of the process lock before allowing the guarded loop to run.
     def __enter__(self) -> RefreshLoopLock:
+        if os.getenv("LIMITUPLAB_DATABASE_URL", "").strip():
+            from app.storage.job_context import SharedJobLock
+            self._shared = SharedJobLock("recommendation-refresh")
+            self._shared.__enter__()
+            return self
         self.path.parent.mkdir(parents=True, exist_ok=True)
         if self.path.exists():
             lock_pid = _read_lock_pid(self.path)
@@ -75,12 +80,18 @@ class RefreshLoopLock:
 
     # Refresh the modification time of the lock owned by this loop as a liveness signal.
     def touch(self) -> None:
+        if getattr(self, "_shared", None) is not None:
+            self._shared.touch()
+            return
         if self._owned:
             self.path.touch()
 
     # Remove the lock only if this instance acquired it, including when the guarded work raised an
     # exception.
     def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
+        if getattr(self, "_shared", None) is not None:
+            self._shared.__exit__(_exc_type, _exc_value, _traceback)
+            return
         if self._owned:
             self.path.unlink(missing_ok=True)
             self._owned = False
@@ -110,7 +121,8 @@ def main() -> int:
     interval = max(5, min(args.interval_minutes, 1440))
 
     if args.once:
-        _run_refresh(interval, args.report_path)
+        with RefreshLoopLock(args.lock_path, stale_after=WORKER_STALE_AFTER):
+            _run_refresh(interval, args.report_path)
         return 0
 
     with RefreshLoopLock(args.lock_path, stale_after=WORKER_STALE_AFTER) as lock:

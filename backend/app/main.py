@@ -1,4 +1,6 @@
-from fastapi import FastAPI
+from contextlib import asynccontextmanager, closing
+import os
+from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import configure_runtime_environment, configured_cors_origins
@@ -16,7 +18,17 @@ validate_session_security()
 validate_admin_security()
 
 
+@asynccontextmanager
+async def lifespan(application):
+    if os.getenv("LIMITUPLAB_DATABASE_URL", "").strip():
+        from app.database import connect, initialize_database
+        with closing(connect()) as db:
+            initialize_database(db)
+    yield
+
+
 app = FastAPI(
+    lifespan=lifespan,
     title="LimitUpLab API",
     description="Research APIs for A-share limit-up events and first-board evaluation.",
     version="0.1.0",
@@ -39,6 +51,24 @@ app.add_middleware(AnonymousVisitorMiddleware)
 @app.get("/health")
 def health() -> dict[str, str]:
     return {"status": "ok"}
+
+
+@app.get("/ready")
+def ready() -> dict[str, str]:
+    """Verify storage/schema readiness without creating or migrating data."""
+    from app.database import CURRENT_SCHEMA_VERSION, connect_readonly, initialize_database, is_postgres
+    try:
+        with closing(connect_readonly()) as db:
+            if is_postgres(db):
+                initialize_database(db)
+                backend = "postgresql"
+            else:
+                if db.execute("PRAGMA user_version").fetchone()[0] < CURRENT_SCHEMA_VERSION:
+                    raise RuntimeError("Schema requires migration")
+                backend = "sqlite"
+        return {"status": "ok", "database": backend}
+    except Exception as error:
+        raise HTTPException(503, "Database is not ready") from error
 
 
 app.include_router(market.router, prefix="/api/market", tags=["market"])

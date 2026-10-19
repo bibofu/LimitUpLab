@@ -59,6 +59,7 @@ class LatestFinanceNewsStore:
         clock: Callable[[], datetime] = _now,
     ) -> None:
         self.path = path if path is not None else get_database_path().with_name("finance_news_latest.json")
+        self.database_url = os.getenv("LIMITUPLAB_DATABASE_URL", "").strip() if path is None else ""
         self._loader = loader or (lambda: _load_latest(clock()))
         self._clock = clock
         self._lock = threading.Lock()
@@ -72,7 +73,7 @@ class LatestFinanceNewsStore:
         """Return facts, refreshing, stale and a safe refresh error, in that order."""
         now = self._clock()
         with self._lock:
-            if not self._loaded:
+            if not self._loaded or self.database_url:
                 self._snapshot = self._read_snapshot(now)
                 self._loaded = True
             if self._snapshot is not None and not self._usable(self._snapshot, now):
@@ -157,6 +158,10 @@ class LatestFinanceNewsStore:
 
     def _read_snapshot(self, now: datetime) -> FinanceNewsFacts | None:
         try:
+            if self.database_url:
+                from app.services.shared_news_snapshot import read_snapshot
+                facts = read_snapshot(self.database_url)
+                return facts if facts is not None and self._usable(facts, now) else None
             with self.path.open("rb") as source:
                 raw = source.read(MAX_SNAPSHOT_BYTES + 1)
             if len(raw) > MAX_SNAPSHOT_BYTES:
@@ -167,6 +172,10 @@ class LatestFinanceNewsStore:
             return None
 
     def _write_snapshot(self, facts: FinanceNewsFacts) -> None:
+        if self.database_url:
+            from app.services.shared_news_snapshot import write_snapshot
+            write_snapshot(self.database_url, facts)
+            return
         temporary_path: Path | None = None
         try:
             raw = facts.model_dump_json().encode("utf-8")
@@ -201,8 +210,9 @@ def get_latest_news() -> NewsReadResult:
     """Lazily create the process store after runtime configuration is loaded."""
     global _store
     path = get_database_path().with_name("finance_news_latest.json")
+    database_url = os.getenv("LIMITUPLAB_DATABASE_URL", "").strip()
     with _store_lock:
-        if _store is None or _store.path != path:
-            _store = LatestFinanceNewsStore(path=path)
+        if _store is None or _store.path != path or _store.database_url != database_url:
+            _store = LatestFinanceNewsStore(path=None if database_url else path)
         store = _store
     return store.read()
