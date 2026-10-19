@@ -1,15 +1,22 @@
 """Focused frozen-cohort comparison; descriptive research, no production signals."""
 import argparse
+from contextlib import closing
 import csv
 import hashlib
 import json
 import math
-import sqlite3
+import sys
 from collections import defaultdict
 from pathlib import Path
 from statistics import mean, median
 
 import numpy as np
+
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from app.database import connect_readonly
 
 KEYS = ['consolidation', 'mild_raw', 'mild_stable', 'deep_raw', 'deep_repair']
 
@@ -112,10 +119,7 @@ def price_box(window):
 # Load only bars belonging to the previously recorded research snapshot and cutoff.
 def load_frozen_bars(db, original):
     # Verify the exact original snapshot fingerprint before adding any features.
-    with sqlite3.connect(db.resolve().as_uri()+'?mode=ro',uri=True) as c:
-        c.row_factory=sqlite3.Row
-        c.execute('PRAGMA query_only=ON')
-        c.execute('BEGIN')
+    with closing(connect_readonly(db)) as c, c:
         inputs=[[dict(r) for r in c.execute(q)] for q in original['queries']]
     digest=hashlib.sha256(json.dumps(inputs,sort_keys=True,ensure_ascii=True).encode()).hexdigest()
     if digest!=original['input_sha256']:
@@ -221,7 +225,7 @@ def analyze(directory,db):
             '温和回撤的265个完整首次信号中127个年龄为1，横盘则全部年龄≥2。只筛选首次信号年龄≥2是不同子样本，并不等于把原信号延迟一天；对应结果保存在JSON的age2plus_first_signals_only。', '',
             '形态价格范围存在结构差异：横盘收盘相对锚点为-5%至+8%，温和回撤为-8%至-3%，深回撤为-25%至-10%。因此横盘与深回撤无法在2个百分点回撤距离内匹配；不应把未匹配均值之差全归因于缩量。','',
             '缓存偏向曾被系统跟踪的股票，横盘完整样本少，后段只有2个。未复权、混合采集路径和成交量单位风险沿用原报告；同来源标签不保证量单位完全一致。未核验分钟成交与跌停退出；费用是假设。全部比较属于事后探索，没有新建live策略或宣称最优参数。','',
-            '来源：本地冻结CSV与只读SQLite，输入指纹 '+original['input_sha256']+'。完整条件见report.md，成本情景见positive_rates.md，机器可复核结果见pullback_vs_consolidation.json。', '',
+            '来源：本地冻结CSV与配置数据库的只读快照，输入指纹 '+original['input_sha256']+'。完整条件见report.md，成本情景见positive_rates.md，机器可复核结果见pullback_vs_consolidation.json。', '',
             '机制参考：[Chen等，Daily Price Limits and Destructive Market Behavior](https://www.princeton.edu/~wxiong/papers/PriceLimit.pdf)。旧样本同时显示短期延续与更长期反转，不构成本次形态有效的证据。']
     (directory/'pullback_vs_consolidation.md').write_text('\n'.join(lines)+'\n',encoding='utf-8')
     print(json.dumps(payload,ensure_ascii=True))
@@ -231,6 +235,7 @@ def analyze(directory,db):
 if __name__=='__main__':
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--input',type=Path,default=Path('output/research/limit-up-paths-20260907'))
-    parser.add_argument('--db',type=Path,default=Path('backend/data/limituplab.sqlite'))
+    parser.add_argument('--db',type=Path,default=None,
+                        help='Explicit SQLite file; otherwise use the configured database backend')
     args=parser.parse_args()
     analyze(args.input,args.db)

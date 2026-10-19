@@ -7,17 +7,24 @@ Definitions are fixed in RULES and classify(); there is no parameter search.
 from __future__ import annotations
 
 import argparse
+from contextlib import closing
 import csv
 import hashlib
 import json
 import math
-import sqlite3
+import sys
 from collections import Counter, defaultdict
 from datetime import datetime, timezone
 from pathlib import Path
 from statistics import mean, median
 
 import numpy as np
+
+BACKEND_ROOT = Path(__file__).resolve().parents[1]
+if str(BACKEND_ROOT) not in sys.path:
+    sys.path.insert(0, str(BACKEND_ROOT))
+
+from app.database import connect_readonly, get_database_path, is_postgres
 
 RULES = {
     "first_board": "1进2参照：T日收盘涨停、板高1、前一交易日未收盘涨停。",
@@ -243,10 +250,8 @@ def nonoverlap(rows, calendar):
 def analyze(db, start, output):
     query_events = "SELECT * FROM limit_up_events ORDER BY trade_date,symbol"
     query_bars = "SELECT symbol,trade_date,open,high,low,close,volume,source FROM stock_daily_bars ORDER BY trade_date,symbol"
-    with sqlite3.connect(db.resolve().as_uri() + "?mode=ro", uri=True) as con:
-        con.row_factory = sqlite3.Row
-        con.execute("PRAGMA query_only=ON")
-        con.execute("BEGIN")
+    with closing(connect_readonly(db)) as con, con:
+        postgres = is_postgres(con)
         event_rows = [dict(r) for r in con.execute(query_events)]
         bar_rows = [dict(r) for r in con.execute(query_bars)]
     events = {(r["symbol"], r["trade_date"]): r for r in event_rows}
@@ -334,7 +339,9 @@ def analyze(db, start, output):
         left = {(r["symbol"], r["anchor_date"]) for r in signals if r["strategy"] == x}
         overlap[x] = {y: len(left & {(r["symbol"], r["anchor_date"]) for r in signals if r["strategy"] == y}) for y in RULES}
     payload = {"generated_at": datetime.now(timezone.utc).isoformat(), "kind": "historical_exploration_not_live",
-               "database_path": str(db.resolve()), "input_sha256": hashlib.sha256(json.dumps([event_rows, bar_rows], sort_keys=True, ensure_ascii=True).encode()).hexdigest(),
+               "database_backend": "postgresql" if postgres else "sqlite",
+               "database_path": None if postgres else str((db or get_database_path()).resolve()),
+               "input_sha256": hashlib.sha256(json.dumps([event_rows, bar_rows], sort_keys=True, ensure_ascii=True).encode()).hexdigest(),
                "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                "queries": [query_events, query_bars], "rules": RULES,
                "inventory": {"event_rows": len(event_rows), "event_symbols": len({r["symbol"] for r in event_rows}),
@@ -363,7 +370,8 @@ def analyze(db, start, output):
 
 if __name__ == "__main__":
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", type=Path, default=Path("backend/data/limituplab.sqlite"))
+    parser.add_argument("--db", type=Path, default=None,
+                        help="Explicit SQLite file; otherwise use the configured database backend")
     parser.add_argument("--start", default="2026-07-20")
     parser.add_argument("--output", type=Path, default=Path("output/research/limit-up-paths-20260907"))
     args = parser.parse_args()
