@@ -10,7 +10,7 @@ from app.quality_models import DeliveryInput, DetectionSignal, FeedbackInput, Qu
 from app.quality_schema import DETECTOR_VERSION, answer_hash, encode, now
 from app.repositories.quality_evaluation_repository import EvaluationRepositoryMixin
 from app.repositories.quality_judge_repository import JudgeRepositoryMixin
-from app.repositories.storage_sql import insertion_order
+from app.repositories.storage_sql import distinct_text_list, insertion_order
 from app.services.quality_trace import scrub_private_data
 
 
@@ -160,8 +160,8 @@ class QualityRepository(JudgeRepositoryMixin, EvaluationRepositoryMixin):
         where = " WHERE " + " AND ".join(conditions) if conditions else ""
         with self.connection() as db:
             total = db.execute("SELECT count(*) FROM quality_cases c" + where, params).fetchone()[0]
-            rows = db.execute("""SELECT c.*,r.started_at,r.request_json,r.response_json,r.active,r.cancelled,
-                (SELECT group_concat(DISTINCT source) FROM quality_signals s WHERE s.case_id=c.case_id) AS sources,
+            rows = db.execute(f"""SELECT c.*,r.started_at,r.request_json,r.response_json,r.active,r.cancelled,
+                (SELECT {distinct_text_list(db, 'source')} FROM quality_signals s WHERE s.case_id=c.case_id) AS sources,
                 (SELECT count(*) FROM quality_signals s WHERE s.case_id=c.case_id) AS signal_count
                 FROM quality_cases c JOIN react_runs r ON r.run_id=c.run_id""" + where +
                 " ORDER BY c.updated_at DESC,c.case_id LIMIT ? OFFSET ?", (*params, max(1, min(limit, 100)), max(0, offset)))

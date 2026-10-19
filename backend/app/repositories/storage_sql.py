@@ -18,6 +18,13 @@ def timestamp_value(db, expression):
     return f"julianday({expression})"
 
 
+def distinct_text_list(db, expression):
+    """Aggregate distinct text using each backend's native comma separator."""
+    if is_postgres(db):
+        return f"string_agg(DISTINCT {expression}, ',')"
+    return f"group_concat(DISTINCT {expression})"
+
+
 def database_clock(db):
     """Use one authoritative clock for leases shared across PostgreSQL workers."""
     if is_postgres(db):
