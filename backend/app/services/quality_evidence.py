@@ -6,6 +6,7 @@ import hashlib
 import json
 import math
 
+from app.repositories.storage_sql import insertion_order, timestamp_value
 from app.services.quality_trace import scrub_private_data
 
 
@@ -46,7 +47,7 @@ def capture_evidence_bundle(db, run_row, response, *, capture_mode="completion")
     if identity is None:
         raise KeyError("Run session owner mismatch")
     calls = []
-    for call in db.execute("SELECT * FROM react_calls WHERE run_id=? ORDER BY rowid", (row["run_id"],)):
+    for call in db.execute(f"SELECT * FROM react_calls WHERE run_id=? ORDER BY {insertion_order(db)}", (row["run_id"],)):
         call = dict(call)
         path = "/calls/" + str(len(calls))
         signature = _decode(call.get("signature"), path + "/signature", missing, expected=list)
@@ -70,14 +71,14 @@ def capture_evidence_bundle(db, run_row, response, *, capture_mode="completion")
     def message(record):
         # Metadata can duplicate provider traces. Content/run association is sufficient here.
         return {key: record[key] for key in ("message_id", "run_id", "role", "content", "status", "created_at")}
-    assistant = [message(record) for record in db.execute("""SELECT * FROM chat_messages
-        WHERE session_id=? AND run_id=? AND role='assistant' ORDER BY rowid""",
+    assistant = [message(record) for record in db.execute(f"""SELECT * FROM chat_messages
+        WHERE session_id=? AND run_id=? AND role='assistant' ORDER BY {insertion_order(db)}""",
         (row["session_id"], row["run_id"]))]
-    context = [message(record) for record in db.execute("""SELECT m.* FROM chat_messages m
+    context = [message(record) for record in db.execute(f"""SELECT m.* FROM chat_messages m
         LEFT JOIN react_runs r ON r.run_id=m.run_id
-        WHERE m.session_id=? AND julianday(m.created_at)<julianday(?)
+        WHERE m.session_id=? AND {timestamp_value(db, 'm.created_at')}<{timestamp_value(db, '?')}
           AND (m.run_id IS NULL OR (m.run_id<>? AND r.owner_id=? AND r.session_id=m.session_id))
-        ORDER BY julianday(m.created_at),m.rowid""",
+        ORDER BY {timestamp_value(db, 'm.created_at')},{insertion_order(db, 'm')}""",
         (row["session_id"], row["started_at"], row["run_id"], row["owner_id"]))]
     material = {"run_id": row["run_id"], "session_id": row["session_id"], "started_at": row["started_at"],
                 "request": _decode(row.get("request_json"), "/request", missing),

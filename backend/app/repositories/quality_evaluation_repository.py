@@ -1,11 +1,12 @@
 """Immutable evaluation attempts over frozen evidence, with leased work and quotas."""
 
 import json
-import time
 from uuid import uuid4
 
+from app.database import begin_write
 from app.quality_models import DetectionSignal, QualityConflict
 from app.quality_schema import DETECTOR_VERSION, answer_hash, canonical_hash, default_config, encode, enqueue_completed, now
+from app.repositories.storage_sql import database_clock
 from app.services.quality_trace import scrub_private_data
 
 
@@ -24,7 +25,7 @@ class EvaluationRepositoryMixin:
 
     def enqueue_evaluation(self, run_id, *, job_kind="deterministic", evaluator_version=DETECTOR_VERSION, config=None, bundle_id=None):
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            begin_write(db)
             row = db.execute("SELECT * FROM react_runs WHERE run_id=? AND response_json IS NOT NULL", (run_id,)).fetchone()
             if row is None:
                 raise KeyError("Completed run not found")
@@ -38,7 +39,7 @@ class EvaluationRepositoryMixin:
 
     def backfill_jobs(self, limit=100):
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            begin_write(db)
             rows = db.execute("""SELECT r.* FROM react_runs r WHERE r.response_json IS NOT NULL
                 AND NOT EXISTS(SELECT 1 FROM quality_jobs j WHERE j.run_id=r.run_id
                     AND j.job_kind='deterministic' AND j.detector_version=?)
@@ -64,8 +65,8 @@ class EvaluationRepositoryMixin:
         if evaluator_version is None:
             raise ValueError("A non-deterministic worker must select its evaluator version")
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
-            clock, stamp = time.time(), now()
+            begin_write(db)
+            clock, stamp = database_clock(db), now()
             expired = db.execute("""SELECT * FROM quality_jobs WHERE job_kind=? AND detector_version=?
                 AND status='running' AND lease_until<=?""", (job_kind, evaluator_version, clock)).fetchall()
             for job in expired:
@@ -104,16 +105,16 @@ class EvaluationRepositoryMixin:
 
     def _owned_job(self, db, job):
         row = db.execute("SELECT * FROM quality_jobs WHERE id=? AND status='running' AND lease_token=? AND lease_until>?",
-                         (job["id"], job["lease_token"], time.time())).fetchone()
+                         (job["id"], job["lease_token"], database_clock(db))).fetchone()
         if row is None:
             raise QualityConflict("Quality job lease has expired or changed")
         return row
 
     def renew_job(self, job, lease_seconds=60):
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            begin_write(db)
             row = self._owned_job(db, job)
-            until = time.time() + max(1, min(lease_seconds, 600))
+            until = database_clock(db) + max(1, min(lease_seconds, 600))
             db.execute("UPDATE quality_jobs SET lease_until=?,updated_at=? WHERE id=?", (until, now(), row["id"]))
             return {"lease_until": until}
 
@@ -127,7 +128,7 @@ class EvaluationRepositoryMixin:
         if report["execution_status"] != "succeeded" and signals:
             raise ValueError("Unsuccessful assessments cannot publish signals")
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            begin_write(db)
             row = self._owned_job(db, job)
             if report["evaluator_kind"] != row["job_kind"] or report["evaluator_version"] != row["detector_version"]:
                 raise ValueError("Report evaluator differs from leased job")
@@ -152,7 +153,7 @@ class EvaluationRepositoryMixin:
     def fail_job(self, job, error, report=None):
         from app.quality_evaluation_models import EvaluationReport
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            begin_write(db)
             row = self._owned_job(db, job)
             error_type = scrub_private_data(error if isinstance(error, str) else type(error).__name__)[:1000]
             report = EvaluationReport.model_validate(report or self._error_report(row, error_type)).model_dump(mode="json")
@@ -162,7 +163,7 @@ class EvaluationRepositoryMixin:
             self._end_attempt(db, row, report, error_type)
             status = "dead" if row["attempts"] >= row["max_attempts"] else "pending"
             db.execute("""UPDATE quality_jobs SET status=?,available_at=?,lease_token=NULL,lease_until=NULL,
-                last_error=?,updated_at=? WHERE id=?""", (status, time.time() + min(60, 2 ** row["attempts"]), error_type, now(), row["id"]))
+                last_error=?,updated_at=? WHERE id=?""", (status, database_clock(db) + min(60, 2 ** row["attempts"]), error_type, now(), row["id"]))
             evaluation = db.execute("SELECT evaluation_id FROM quality_evaluations WHERE job_id=? AND attempt=?", (row["id"], row["attempts"])).fetchone()[0]
             return {"status": status, "attempts": row["attempts"], "evaluation_id": evaluation}
 
@@ -201,7 +202,7 @@ class EvaluationRepositoryMixin:
         if not all(isinstance(item, str) and 0 < len(item) <= 100 for item in (reservation_key, period, metric)):
             raise ValueError("Budget identifiers must be nonempty bounded strings")
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            begin_write(db)
             row = self._owned_job(db, job)
             if row["job_kind"] == "deterministic" and units:
                 raise ValueError("Deterministic evaluation reserves zero model budget")
@@ -211,7 +212,7 @@ class EvaluationRepositoryMixin:
                 if (old["units"], old["period"], old["metric"]) != (units, period, metric):
                     raise QualityConflict("Budget reservation identity reused with different parameters")
                 return dict(old)
-            db.execute("INSERT OR IGNORE INTO quality_budget_usage(job_kind,period,metric) VALUES(?,?,?)", (row["job_kind"], period, metric))
+            db.execute("INSERT INTO quality_budget_usage(job_kind,period,metric) VALUES(?,?,?) ON CONFLICT DO NOTHING", (row["job_kind"], period, metric))
             updated = db.execute("""UPDATE quality_budget_usage SET reserved_units=reserved_units+?
                 WHERE job_kind=? AND period=? AND metric=? AND reserved_units+?<=?""", (units, row["job_kind"], period, metric, units, limit)).rowcount
             if not updated:

@@ -9,6 +9,7 @@ from collections import Counter, defaultdict
 from datetime import datetime, time, timezone
 from types import SimpleNamespace
 
+from app.database import is_postgres
 from app.services.prediction_time import CN_TZ, assess_prediction_time
 
 
@@ -19,7 +20,8 @@ def content_hash(value: str) -> str:
 
 def audit_prediction_times(connection: sqlite3.Connection, *, apply: bool = False) -> dict:
     """Annotate original artifacts; never rewrite predictions or saved reports."""
-    connection.row_factory = sqlite3.Row
+    if not is_postgres(connection):
+        connection.row_factory = sqlite3.Row
     batches = defaultdict(list)
     for row in connection.execute("SELECT * FROM agent_predictions"):
         item = dict(row)
@@ -71,9 +73,10 @@ def audit_prediction_times(connection: sqlite3.Connection, *, apply: bool = Fals
     if apply:
         now = datetime.now(timezone.utc).isoformat()
         connection.executemany("""
-            INSERT OR IGNORE INTO prediction_time_audits
+            INSERT INTO prediction_time_audits
             (artifact_type, artifact_key, content_hash, verdict_json, audited_at)
             VALUES (?, ?, ?, ?, ?)
+            ON CONFLICT DO NOTHING
         """, [(kind, key, digest, json.dumps(verdict, ensure_ascii=False), now)
               for kind, key, digest, verdict in annotations])
     return {

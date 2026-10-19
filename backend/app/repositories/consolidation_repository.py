@@ -1,10 +1,10 @@
 """Read-only, bounded loading for the consolidation observation pool."""
 from datetime import date, datetime
+from contextlib import closing
 from pathlib import Path
-import sqlite3
 
 from app.consolidation_models import ConsolidationPool, ObservationStrategy
-from app.database import get_database_path
+from app.database import connect_readonly
 from app.post_limit_query_contract import PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS
 from app.services.consolidation import (
     completed_date_limit,
@@ -17,16 +17,14 @@ from app.services.consolidation import (
 def load_consolidation_pool(as_of: date | None, now: datetime,
                             database_path: Path | None = None,
                             strategy: ObservationStrategy = "consolidation") -> ConsolidationPool:
-    path = database_path or get_database_path()
-    if not path.exists():
-        return observation_pool(now, strategy, data_missing=["local_database"])
     limit = completed_date_limit(now)
     if as_of is not None and as_of > limit:
         raise ValueError("只能查询已结束交易日，当前交易日须在 15:30 后查询。")
-    with sqlite3.connect(path.resolve().as_uri()+"?mode=ro", uri=True) as conn:
-        conn.row_factory = sqlite3.Row
-        conn.execute("PRAGMA query_only=ON")
-        conn.execute("BEGIN")
+    try:
+        conn = connect_readonly(database_path)
+    except FileNotFoundError:
+        return observation_pool(now, strategy, data_missing=["local_database"])
+    with closing(conn), conn:
         available = [r[0] for r in conn.execute(
             "SELECT DISTINCT trade_date FROM stock_daily_bars WHERE trade_date <= ? ORDER BY trade_date DESC LIMIT 60", (limit.isoformat(),))]
         if not available:

@@ -2,11 +2,12 @@
 
 from datetime import datetime, timedelta, timezone
 import math
-import time
 from uuid import uuid4
 
+from app.database import begin_write
 from app.quality_models import QualityConflict
 from app.quality_schema import now
+from app.repositories.storage_sql import database_clock
 from app.services.quality_trace import scrub_private_data
 
 
@@ -26,7 +27,7 @@ def _expire_calls(db):
     # later provider response can enrich the call audit without changing reports.
     db.execute("""UPDATE quality_judge_calls SET status='unknown',
         error_type='CallDeadlineExceeded',finished_at=?
-        WHERE status IN ('reserved','started') AND expires_at<=?""", (now(), time.time()))
+        WHERE status IN ('reserved','started') AND expires_at<=?""", (now(), database_clock(db)))
 
 
 def judge_capacity_available(db, limit):
@@ -34,8 +35,8 @@ def judge_capacity_available(db, limit):
     _expire_calls(db)
     count = db.execute("""SELECT count(*) FROM (
         SELECT id FROM quality_jobs WHERE job_kind='llm_judge' AND status='running' AND lease_until>?
-        UNION SELECT job_id FROM quality_judge_calls WHERE status IN ('reserved','started'))""",
-        (time.time(),)).fetchone()[0]
+        UNION SELECT job_id FROM quality_judge_calls WHERE status IN ('reserved','started')) AS active_jobs""",
+        (database_clock(db),)).fetchone()[0]
     return count < limit
 
 
@@ -55,7 +56,7 @@ class JudgeRepositoryMixin:
         if isinstance(timeout_seconds, bool) or not isinstance(timeout_seconds, (int, float)) or not math.isfinite(timeout_seconds) or not 1 <= timeout_seconds <= 600:
             raise ValueError("timeout_seconds must be finite and between 1 and 600")
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            begin_write(db)
             row = self._owned_job(db, job)
             if row["job_kind"] != "llm_judge":
                 raise ValueError("Only Judge jobs can reserve a model call")
@@ -68,8 +69,9 @@ class JudgeRepositoryMixin:
             active = db.execute("SELECT count(*) FROM quality_judge_calls WHERE status IN ('reserved','started')").fetchone()[0]
             if active >= max_concurrency:
                 raise JudgeBudgetExceeded("concurrency_limit")
-            period = datetime.now(timezone.utc).date().isoformat()
-            db.execute("INSERT OR IGNORE INTO quality_budget_usage(job_kind,period,metric) VALUES('llm_judge',?,'model_calls')", (period,))
+            clock = database_clock(db)
+            period = datetime.fromtimestamp(clock, timezone.utc).date().isoformat()
+            db.execute("INSERT INTO quality_budget_usage(job_kind,period,metric) VALUES('llm_judge',?,'model_calls') ON CONFLICT DO NOTHING", (period,))
             updated = db.execute("""UPDATE quality_budget_usage SET reserved_units=reserved_units+1
                 WHERE job_kind='llm_judge' AND period=? AND metric='model_calls' AND reserved_units<?""",
                 (period, daily_limit)).rowcount
@@ -83,19 +85,19 @@ class JudgeRepositoryMixin:
             db.execute("""INSERT INTO quality_judge_calls(call_id,job_id,evaluation_id,attempt,call_key,period,
                 phase,request_hash,timeout_seconds,expires_at,reserved_at) VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                 (call_id, row["id"], evaluation[0], row["attempts"], call_key, period, scrub_private_data(phase),
-                 request_hash, timeout_seconds, time.time() + timeout_seconds + 5, stamp))
+                 request_hash, timeout_seconds, clock + timeout_seconds + 5, stamp))
             db.execute("""INSERT INTO quality_budget_reservations(job_id,attempt,reservation_key,job_kind,period,metric,units,created_at)
                 VALUES(?,?,?,'llm_judge',?,'model_calls',1,?)""", (row["id"], row["attempts"], call_id, period, stamp))
             return dict(db.execute("SELECT * FROM quality_judge_calls WHERE call_id=?", (call_id,)).fetchone())
 
     def start_judge_call(self, job, call_id):
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            begin_write(db)
             row = self._owned_job(db, job)
             _expire_calls(db)
             changed = db.execute("""UPDATE quality_judge_calls SET status='started',started_at=?,
                 expires_at=?+timeout_seconds+5 WHERE call_id=? AND job_id=? AND attempt=? AND status='reserved'""",
-                (now(), time.time(), call_id, row["id"], row["attempts"])).rowcount
+                (now(), database_clock(db), call_id, row["id"], row["attempts"])).rowcount
             if not changed:
                 raise QualityConflict("Judge call cannot be started or was already issued")
             return dict(db.execute("SELECT * FROM quality_judge_calls WHERE call_id=?", (call_id,)).fetchone())
@@ -113,7 +115,7 @@ class JudgeRepositoryMixin:
             raise ValueError("duration_ms must be finite and nonnegative")
         error_type = str(scrub_private_data(error_type))[:200] if error_type is not None else None
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            begin_write(db)
             row = db.execute("SELECT * FROM quality_judge_calls WHERE call_id=?", (call_id,)).fetchone()
             if row is None:
                 return {"recorded": False, "reason": "deleted"}
@@ -136,7 +138,7 @@ class JudgeRepositoryMixin:
         if metadata is not None and not isinstance(metadata, dict):
             raise ValueError("Judge deferral metadata must be an object")
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            begin_write(db)
             row = self._owned_job(db, job)
             if row["job_kind"] != "llm_judge":
                 raise ValueError("Only Judge jobs can be deferred")
@@ -146,8 +148,9 @@ class JudgeRepositoryMixin:
                     "SELECT count(*) FROM quality_judge_calls WHERE job_id=? AND attempt=?",
                     (row["id"], row["attempts"])).fetchone()[0]}}
             self._end_attempt(db, row, report, reason)
-            tomorrow = datetime.now(timezone.utc).date() + timedelta(days=1)
-            available_at = datetime.combine(tomorrow, datetime.min.time(), timezone.utc).timestamp() if reason == "daily_limit" else time.time() + 5
+            clock = database_clock(db)
+            tomorrow = datetime.fromtimestamp(clock, timezone.utc).date() + timedelta(days=1)
+            available_at = datetime.combine(tomorrow, datetime.min.time(), timezone.utc).timestamp() if reason == "daily_limit" else clock + 5
             status = "dead" if reason == "job_limit" else "pending"
             db.execute("""UPDATE quality_jobs SET status=?,available_at=?,max_attempts=max_attempts+?,
                 lease_token=NULL,lease_until=NULL,last_error=?,updated_at=? WHERE id=?""",
@@ -157,14 +160,14 @@ class JudgeRepositoryMixin:
 
     def judge_call_history(self, job_id):
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            begin_write(db)
             _expire_calls(db)
             return {"items": [dict(row) for row in db.execute(
                 "SELECT * FROM quality_judge_calls WHERE job_id=? ORDER BY reserved_at,call_id", (job_id,))]}
 
     def job_history(self, run_id, *, limit=50, offset=0):
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            begin_write(db)
             _expire_calls(db)
             if not db.execute("SELECT 1 FROM react_runs WHERE run_id=?", (run_id,)).fetchone():
                 raise KeyError("Run not found")

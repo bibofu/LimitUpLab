@@ -3,11 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+from contextlib import closing
 from datetime import date
 from pathlib import Path
-import sqlite3
 
-from app.database import get_database_path
+from app.database import connect_readonly
 
 
 @dataclass(frozen=True)
@@ -26,13 +26,11 @@ def load_post_limit_dataset(
 ) -> PostLimitDataset:
     """Load one consistent local snapshot without writing or remote fallback."""
 
-    path = database_path or get_database_path()
-    if not path.exists():
+    try:
+        connection = connect_readonly(database_path)
+    except FileNotFoundError:
         return PostLimitDataset([], [], [], [], None)
-    with sqlite3.connect(path.resolve().as_uri() + "?mode=ro", uri=True) as connection:
-        connection.row_factory = sqlite3.Row
-        connection.execute("PRAGMA query_only=ON")
-        connection.execute("BEGIN")
+    with closing(connection), connection:
         latest = connection.execute(
             "SELECT MAX(trade_date) FROM stock_daily_bars"
         ).fetchone()[0]

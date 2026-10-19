@@ -6,7 +6,7 @@ import json
 from pathlib import Path
 from typing import Any
 
-from app.database import connect, initialize_database
+from app.database import begin_write, connect, initialize_database
 from app.models import RecommendationDisplayContext, RecommendationIntelligenceResponse
 from app.services.prediction_time import validate_final_response
 
@@ -45,6 +45,7 @@ class SQLiteRecommendationIntelligenceRepository:
         connection = connect(self.database_path)
         try:
             initialize_database(connection)
+            begin_write(connection)
             current_row = connection.execute(
                 "SELECT response_json FROM recommendation_intelligence_current WHERE slot = 1"
             ).fetchone()
@@ -61,9 +62,10 @@ class SQLiteRecommendationIntelligenceRepository:
             ):
                 connection.execute(
                     """
-                    INSERT OR IGNORE INTO recommendation_intelligence_snapshots (
+                    INSERT INTO recommendation_intelligence_snapshots (
                         refresh_id, refreshed_at, status, response_json
                     ) VALUES (?, ?, ?, ?)
+                    ON CONFLICT DO NOTHING
                     """,
                     (
                         previous.refresh_id,
@@ -154,7 +156,7 @@ class SQLiteRecommendationIntelligenceRepository:
                     UNION ALL
                     SELECT response_json, finalized_at AS snapshot_at
                     FROM recommendation_prediction_finals
-                )
+                ) AS snapshots
                 ORDER BY snapshot_at DESC
                 """
             ).fetchall()
@@ -187,9 +189,10 @@ class SQLiteRecommendationIntelligenceRepository:
             initialize_database(connection)
             cursor = connection.execute(
                 """
-                INSERT OR IGNORE INTO recommendation_prediction_finals (
+                INSERT INTO recommendation_prediction_finals (
                     target_trade_date, finalized_at, response_json
                 ) VALUES (?, ?, ?)
+                ON CONFLICT DO NOTHING
                 """,
                 (
                     response.target_trade_date.isoformat(),

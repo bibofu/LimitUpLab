@@ -6,7 +6,7 @@ import json
 from datetime import date, datetime, timezone
 from pathlib import Path
 
-from app.database import connect, initialize_database
+from app.database import begin_write, connect, initialize_database
 from app.models import ScoringPolicy, ScoringPolicyOptimizationResponse
 from app.services.scoring_policy import (
     LEGACY_DEFAULT_POLICY_VERSIONS,
@@ -55,6 +55,12 @@ class SQLiteScoringPolicyRepository:
         connection = connect(self.database_path)
         try:
             initialize_database(connection)
+            begin_write(connection)
+            if policy.status == "champion":
+                connection.execute(
+                    "UPDATE scoring_policies SET status='archived' WHERE status='champion' AND version<>?",
+                    (policy.version,),
+                )
             connection.execute(
                 """
                 INSERT INTO scoring_policies (
@@ -143,7 +149,7 @@ class SQLiteScoringPolicyRepository:
         connection = connect(self.database_path)
         try:
             initialize_database(connection)
-            connection.execute("BEGIN IMMEDIATE")
+            begin_write(connection)
             row = connection.execute(
                 "SELECT * FROM scoring_policies WHERE version = ?",
                 (version,),

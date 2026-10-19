@@ -1,4 +1,4 @@
-"""SQLite persistence for resumable Agent chat sessions and messages."""
+"""Persistence for resumable Agent chat sessions and messages."""
 
 import json
 import sqlite3
@@ -6,7 +6,8 @@ from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from app.database import connect, initialize_database
+from app.database import begin_write, connect, initialize_database, table_exists
+from app.repositories.storage_sql import insertion_order
 from app.models import (
     AgentToolTrace,
     ChatSessionDetail,
@@ -46,6 +47,7 @@ class SQLiteChatSessionRepository:
         connection = connect(self.database_path)
         try:
             initialize_database(connection)
+            begin_write(connection)
             existing = connection.execute(
                 "SELECT owner_id FROM chat_sessions WHERE session_id = ?",
                 (resolved_session_id,),
@@ -54,10 +56,11 @@ class SQLiteChatSessionRepository:
                 raise SessionOwnershipError("Chat session belongs to another visitor.")
             connection.execute(
                 """
-                INSERT OR IGNORE INTO chat_sessions (
+                INSERT INTO chat_sessions (
                     session_id, owner_id, title, created_at, updated_at, archived_at
                 )
                 VALUES (?, ?, ?, ?, ?, NULL)
+                ON CONFLICT DO NOTHING
                 """,
                 (
                     resolved_session_id,
@@ -105,7 +108,7 @@ class SQLiteChatSessionRepository:
         try:
             initialize_database(connection)
             rows = connection.execute(
-                """
+                f"""
                 SELECT
                     session.*,
                     (
@@ -117,7 +120,7 @@ class SQLiteChatSessionRepository:
                         SELECT message.content
                         FROM chat_messages AS message
                         WHERE message.session_id = session.session_id
-                        ORDER BY message.created_at DESC, message.rowid DESC
+                        ORDER BY message.created_at DESC, {insertion_order(connection, 'message')} DESC
                         LIMIT 1
                     ) AS last_message_preview
                 FROM chat_sessions AS session
@@ -144,7 +147,7 @@ class SQLiteChatSessionRepository:
         try:
             initialize_database(connection)
             row = connection.execute(
-                """
+                f"""
                 SELECT
                     session.*,
                     (
@@ -156,7 +159,7 @@ class SQLiteChatSessionRepository:
                         SELECT message.content
                         FROM chat_messages AS message
                         WHERE message.session_id = session.session_id
-                        ORDER BY message.created_at DESC, message.rowid DESC
+                        ORDER BY message.created_at DESC, {insertion_order(connection, 'message')} DESC
                         LIMIT 1
                     ) AS last_message_preview
                 FROM chat_sessions AS session
@@ -169,15 +172,15 @@ class SQLiteChatSessionRepository:
             if row is None:
                 return None
             message_rows = connection.execute(
-                """
+                f"""
                 SELECT *
                 FROM (
-                    SELECT chat_messages.*, rowid AS message_rowid
+                    SELECT chat_messages.*, {insertion_order(connection)} AS message_rowid
                     FROM chat_messages
                     WHERE session_id = ?
-                    ORDER BY created_at DESC, rowid DESC
+                    ORDER BY created_at DESC, {insertion_order(connection)} DESC
                     LIMIT ?
-                )
+                ) AS recent_messages
                 ORDER BY created_at ASC, message_rowid ASC
                 """,
                 (session_id, max(1, min(message_limit, 200))),
@@ -205,13 +208,25 @@ class SQLiteChatSessionRepository:
         connection = connect(self.database_path)
         try:
             initialize_database(connection)
+            begin_write(connection)
+            identity = connection.execute(
+                "SELECT owner_id FROM chat_sessions WHERE session_id=?", (message.session_id,),
+            ).fetchone()
+            if identity is None or identity["owner_id"] != owner_id:
+                raise SessionOwnershipError("Chat session changed before message persistence.")
+            existing = connection.execute(
+                "SELECT session_id FROM chat_messages WHERE message_id=?", (message.message_id,),
+            ).fetchone()
+            if existing is not None and existing["session_id"] != message.session_id:
+                raise SessionOwnershipError("Message identity belongs to another session.")
             connection.execute(
                 """
-                INSERT OR IGNORE INTO chat_messages (
+                INSERT INTO chat_messages (
                     message_id, session_id, role, content, status,
                     run_id, metadata_json, created_at
                 )
                 VALUES (?, ?, ?, ?, ?, ?, ?, ?)
+                ON CONFLICT DO NOTHING
                 """,
                 (
                     message.message_id,
@@ -298,8 +313,8 @@ class SQLiteChatSessionRepository:
         try:
             initialize_database(connection)
             # Serialize deletion with ReAct creation, not just a router precheck.
-            connection.execute("BEGIN IMMEDIATE")
-            if connection.execute("SELECT 1 FROM sqlite_master WHERE type='table' AND name='react_runs'").fetchone():
+            begin_write(connection)
+            if table_exists(connection, "react_runs"):
                 active = connection.execute("SELECT 1 FROM react_runs WHERE session_id=? AND owner_id=? AND active=1", (session_id, owner_id)).fetchone()
                 if active:
                     from app.agents.react_runtime.lifecycle import RunConflict

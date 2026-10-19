@@ -5,7 +5,9 @@ import hashlib
 import json
 import math
 import os
-import time
+
+from app.database import begin_write, initialize_database, is_postgres
+from app.repositories.storage_sql import database_clock
 
 
 DETECTOR_VERSION = "deterministic-v2"
@@ -25,8 +27,11 @@ def answer_hash(response):
 
 def initialize_quality_schema(db):
     """Use individual statements to preserve a caller's active transaction."""
+    if is_postgres(db):
+        initialize_database(db)
+        return
     if not db.in_transaction:
-        db.execute("BEGIN IMMEDIATE")
+        begin_write(db)
     statements = [
         """CREATE TABLE IF NOT EXISTS quality_feedback (
             run_id TEXT PRIMARY KEY REFERENCES react_runs(run_id) ON DELETE CASCADE,
@@ -108,6 +113,9 @@ def default_config():
 
 def initialize_evaluation_schema(db):
     """Upgrade the v1 outbox atomically, preserving historical job identities."""
+    if is_postgres(db):
+        initialize_database(db)
+        return
     db.execute("""CREATE TABLE IF NOT EXISTS quality_evidence_bundles (
         bundle_id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES react_runs(run_id) ON DELETE CASCADE,
         answer_hash TEXT NOT NULL, content_hash TEXT NOT NULL, capture_mode TEXT NOT NULL,
@@ -191,6 +199,10 @@ def initialize_evaluation_schema(db):
 
 
 def freeze_bundle(db, run_row, response, *, capture_mode="completion"):
+    begin_write(db)
+    # A PostgreSQL statement failure aborts its transaction until rolled back.
+    # Optional diagnostic capture must never poison final-answer persistence.
+    db.execute("SAVEPOINT quality_evidence_capture")
     try:
         from app.services.quality_evidence import capture_evidence_bundle
         bundle = capture_evidence_bundle(db, run_row, response, capture_mode=capture_mode)
@@ -200,7 +212,10 @@ def freeze_bundle(db, run_row, response, *, capture_mode="completion"):
         if digest != bundle["manifest"]["material_hash"]:
             raise ValueError("Evidence bundle content hash mismatch")
         serialized = encode(bundle)
+        db.execute("RELEASE SAVEPOINT quality_evidence_capture")
     except Exception as error:
+        db.execute("ROLLBACK TO SAVEPOINT quality_evidence_capture")
+        db.execute("RELEASE SAVEPOINT quality_evidence_capture")
         # Diagnostic collection is optional; never lose an otherwise valid answer.
         # A failed scrubber must not force us to persist raw user/provider payloads.
         bundle = {"run_id": run_row["run_id"], **{key: None for key in (
@@ -214,8 +229,9 @@ def freeze_bundle(db, run_row, response, *, capture_mode="completion"):
         bundle["manifest"].update(material_hash=digest, captured_at=now())
         serialized = encode(bundle)
     bundle_id = "bundle_" + digest
-    db.execute("""INSERT OR IGNORE INTO quality_evidence_bundles
-        (bundle_id,run_id,answer_hash,content_hash,capture_mode,payload_json,created_at) VALUES(?,?,?,?,?,?,?)""",
+    db.execute("""INSERT INTO quality_evidence_bundles
+        (bundle_id,run_id,answer_hash,content_hash,capture_mode,payload_json,created_at) VALUES(?,?,?,?,?,?,?)
+        ON CONFLICT DO NOTHING""",
         (bundle_id, run_row["run_id"], answer_hash(response), digest, capture_mode, serialized, now()))
     return bundle_id
 
@@ -234,7 +250,7 @@ def enqueue_completed(db, run_row, response, detector_version=DETECTOR_VERSION, 
         raise ValueError("Evidence bundle does not belong to this completed answer")
     key = canonical_hash([job_kind, detector_version, config_hash, bundle_id])
     stamp = now()
-    return db.execute("""INSERT OR IGNORE INTO quality_jobs
+    return db.execute("""INSERT INTO quality_jobs
         (id,run_id,answer_hash,detector_version,job_kind,config_hash,config_json,bundle_id,available_at,created_at,updated_at)
-        VALUES(?,?,?,?,?,?,?,?,?,?,?)""", (key, run_row["run_id"], answer_hash(response), detector_version,
-        job_kind, config_hash, encode(config), bundle_id, time.time(), stamp, stamp)).rowcount
+        VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING""", (key, run_row["run_id"], answer_hash(response), detector_version,
+        job_kind, config_hash, encode(config), bundle_id, database_clock(db), stamp, stamp)).rowcount

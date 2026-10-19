@@ -8,7 +8,7 @@ from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable
 
-from app.database import connect, initialize_database
+from app.database import begin_write, connect, initialize_database
 from app.services.prediction_time import assess_prediction_time, close_provenance, provenance_errors
 from app.models import (
     AgentPrediction,
@@ -547,8 +547,7 @@ class SQLiteFirstBoardRepository:
         connection = connect(self.database_path)
         try:
             initialize_database(connection)
-            before = connection.total_changes
-            connection.executemany(
+            cursor = connection.executemany(
                 """
                 INSERT INTO agent_predictions (
                     prediction_id, trade_date, symbol, name, score, rating,
@@ -560,7 +559,7 @@ class SQLiteFirstBoardRepository:
                 """,
                 [self._prediction_to_record(item) for item in predictions],
             )
-            inserted = connection.total_changes - before
+            inserted = cursor.rowcount
             connection.commit()
             return inserted
         finally:
@@ -605,7 +604,7 @@ class SQLiteFirstBoardRepository:
         connection = connect(self.database_path)
         try:
             initialize_database(connection)
-            connection.execute("BEGIN IMMEDIATE")
+            begin_write(connection)
             if final_response_json is not None:
                 existing_final = connection.execute(
                     "SELECT 1 FROM recommendation_prediction_finals WHERE target_trade_date = ?",
@@ -637,9 +636,10 @@ class SQLiteFirstBoardRepository:
                     (trade_date.isoformat(),),
                 ).fetchall()
                 connection.execute("""
-                    INSERT OR IGNORE INTO prediction_snapshot_archive
+                    INSERT INTO prediction_snapshot_archive
                     (snapshot_id, trade_date, snapshot_record_json, prediction_rows_json, archived_at)
                     VALUES (?, ?, ?, ?, ?)
+                    ON CONFLICT DO NOTHING
                 """, (existing["snapshot_id"], trade_date.isoformat(),
                       json.dumps(dict(existing), ensure_ascii=False),
                       json.dumps([dict(row) for row in original_rows], ensure_ascii=False),

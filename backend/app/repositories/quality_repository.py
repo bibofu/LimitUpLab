@@ -5,11 +5,12 @@ import json
 from pathlib import Path
 from uuid import uuid4
 
-from app.database import connect
+from app.database import begin_write, connect
 from app.quality_models import DeliveryInput, DetectionSignal, FeedbackInput, QualityConflict, ReviewInput
 from app.quality_schema import DETECTOR_VERSION, answer_hash, encode, now
 from app.repositories.quality_evaluation_repository import EvaluationRepositoryMixin
 from app.repositories.quality_judge_repository import JudgeRepositoryMixin
+from app.repositories.storage_sql import insertion_order
 from app.services.quality_trace import scrub_private_data
 
 
@@ -77,9 +78,9 @@ class QualityRepository(JudgeRepositoryMixin, EvaluationRepositoryMixin):
                 VALUES(?,?,?,?,?,?)""", (case_id, run_id, signal["severity"], version, stamp, stamp))
         else:
             case_id = case["case_id"]
-        inserted = db.execute("""INSERT OR IGNORE INTO quality_signals
+        inserted = db.execute("""INSERT INTO quality_signals
             (signal_id,case_id,source,code,severity,summary,evidence_json,detector_version,answer_hash,created_at,evaluation_key)
-            VALUES(?,?,?,?,?,?,?,?,?,?,?)""", ("sig_" + uuid4().hex, case_id, signal["source"], signal["code"],
+            VALUES(?,?,?,?,?,?,?,?,?,?,?) ON CONFLICT DO NOTHING""", ("sig_" + uuid4().hex, case_id, signal["source"], signal["code"],
             signal["severity"], scrub_private_data(signal["summary"]), encode(scrub_private_data(signal["evidence"])), signal["detector_version"],
             answer_hash(response), stamp, evaluation_key)).rowcount
         if inserted:
@@ -92,7 +93,7 @@ class QualityRepository(JudgeRepositoryMixin, EvaluationRepositoryMixin):
     def save_feedback(self, run_id, owner_id, payload):
         data = scrub_private_data(FeedbackInput.model_validate(payload).model_dump())
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            begin_write(db)
             _, response = self._owned_run(db, run_id, owner_id)
             stamp = now()
             db.execute("""INSERT INTO quality_feedback(run_id,owner_id,vote,reasons_json,comment,created_at,updated_at)
@@ -124,7 +125,7 @@ class QualityRepository(JudgeRepositoryMixin, EvaluationRepositoryMixin):
     def record_delivery(self, run_id, owner_id, event, answer_hash):
         data = DeliveryInput(event=event, answer_hash=answer_hash)
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            begin_write(db)
             row = db.execute("SELECT * FROM react_runs WHERE run_id=? AND owner_id=?", (run_id, owner_id)).fetchone()
             if row is None:
                 raise KeyError("Run not found")
@@ -135,7 +136,7 @@ class QualityRepository(JudgeRepositoryMixin, EvaluationRepositoryMixin):
                 raise QualityConflict("回执与已保存的答案版本不匹配")
             # Before completion, the client knows only the accepted run identity.
             # Empty hash is reserved internally for its transport interruption.
-            db.execute("INSERT OR IGNORE INTO quality_delivery(run_id,answer_hash,event,created_at) VALUES(?,?,?,?)",
+            db.execute("INSERT INTO quality_delivery(run_id,answer_hash,event,created_at) VALUES(?,?,?,?) ON CONFLICT DO NOTHING",
                        (run_id, data.answer_hash or "", data.event, now()))
             delivery_status = self._delivery_status(db, run_id, digest)
             if (event == "interrupted" and response and response.get("task_status") != "cancelled"
@@ -177,7 +178,7 @@ class QualityRepository(JudgeRepositoryMixin, EvaluationRepositoryMixin):
 
     def _run_material(self, db, row):
         run = decoded(row, ["request", "response", "checkpoint"])
-        run["calls"] = [decoded(r, ["result"]) for r in db.execute("SELECT * FROM react_calls WHERE run_id=? ORDER BY rowid", (row["run_id"],))]
+        run["calls"] = [decoded(r, ["result"]) for r in db.execute(f"SELECT * FROM react_calls WHERE run_id=? ORDER BY {insertion_order(db)}", (row["run_id"],))]
         run["trace_snapshots"] = [decoded(r, ["payload"]) for r in db.execute("SELECT * FROM quality_trace_snapshots WHERE run_id=? ORDER BY id", (row["run_id"],))]
         run["delivery_events"] = [dict(r) for r in db.execute("SELECT * FROM quality_delivery WHERE run_id=? ORDER BY created_at", (row["run_id"],))]
         return run
@@ -190,8 +191,8 @@ class QualityRepository(JudgeRepositoryMixin, EvaluationRepositoryMixin):
             row = db.execute("SELECT * FROM react_runs WHERE run_id=?", (case["run_id"],)).fetchone()
             run = self._run_material(db, row)
             run.update(statuses(row, run["response"], case["status"]))
-            run["context"] = [dict(r) for r in db.execute("""SELECT role,content,created_at FROM chat_messages
-                WHERE session_id=? AND created_at<=? ORDER BY created_at DESC,rowid DESC LIMIT 30""", (row["session_id"], row["started_at"]))][::-1]
+            run["context"] = [dict(r) for r in db.execute(f"""SELECT role,content,created_at FROM chat_messages
+                WHERE session_id=? AND created_at<=? ORDER BY created_at DESC,{insertion_order(db)} DESC LIMIT 30""", (row["session_id"], row["started_at"]))][::-1]
             feedback = db.execute("SELECT * FROM quality_feedback WHERE run_id=?", (case["run_id"],)).fetchone()
             run["feedback"] = decoded(feedback, ["reasons"]) if feedback else None
             run["delivery_status"] = self._delivery_status(db, case["run_id"], answer_hash(run["response"]))
@@ -215,7 +216,7 @@ class QualityRepository(JudgeRepositoryMixin, EvaluationRepositoryMixin):
         if not data["note"].strip():
             raise ValueError("审核说明不能为空")
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            begin_write(db)
             row = db.execute("SELECT * FROM quality_cases WHERE case_id=?", (case_id,)).fetchone()
             if row is None:
                 raise KeyError("Case not found")
