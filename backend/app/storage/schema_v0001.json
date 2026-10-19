@@ -1,0 +1,330 @@
+{
+  "agent_cache": {
+    "columns": [["cache_key", "TEXT", true, null], ["scope", "TEXT", true, null], ["payload_json", "TEXT", true, null], ["expires_at", "TEXT", true, null], ["created_at", "TEXT", true, null]],
+    "primary_key": ["cache_key"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": [["idx_agent_cache_scope_expires", ["scope", "expires_at"], false, null]]
+  },
+  "agent_live_prediction_snapshots": {
+    "columns": [["trade_date", "TEXT", true, null], ["snapshot_id", "TEXT", true, null], ["scoring_version", "TEXT", true, null], ["data_as_of", "TEXT", true, null], ["top_limit", "INTEGER", true, null], ["prediction_count", "INTEGER", true, null], ["snapshot_json", "TEXT", true, null], ["content_hash", "TEXT", true, null], ["created_at", "TEXT", true, null]],
+    "primary_key": ["trade_date"],
+    "identity": [],
+    "unique": [["snapshot_id"]],
+    "foreign_keys": [],
+    "indexes": []
+  },
+  "agent_predictions": {
+    "columns": [["prediction_id", "TEXT", true, null], ["trade_date", "TEXT", true, null], ["symbol", "TEXT", true, null], ["name", "TEXT", true, null], ["score", "REAL", true, null], ["rating", "TEXT", true, null], ["confidence", "REAL", true, null], ["scoring_version", "TEXT", true, null], ["prediction_source", "TEXT", true, null], ["data_as_of", "TEXT", true, null], ["facts_json", "TEXT", true, null], ["reasons_json", "TEXT", true, null], ["risks_json", "TEXT", true, null], ["created_at", "TEXT", true, null], ["provenance_json", "TEXT", true, "'{}'"]],
+    "primary_key": ["prediction_id"],
+    "identity": [],
+    "unique": [["trade_date", "symbol", "scoring_version", "prediction_source"]],
+    "foreign_keys": [],
+    "indexes": [["idx_agent_predictions_symbol_date", ["symbol", "trade_date"], false, null], ["idx_agent_predictions_date", ["trade_date"], false, null]]
+  },
+  "agent_runs": {
+    "columns": [["run_id", "TEXT", true, null], ["session_id", "TEXT", true, null], ["run_type", "TEXT", true, null], ["status", "TEXT", true, null], ["intent", "TEXT", false, null], ["tool_calls_json", "TEXT", true, null], ["input_json", "TEXT", true, null], ["output_json", "TEXT", false, null], ["error_message", "TEXT", false, null], ["started_at", "TEXT", true, null], ["finished_at", "TEXT", true, null]],
+    "primary_key": ["run_id"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": [["idx_agent_runs_session_started", ["session_id", "started_at"], false, null]]
+  },
+  "agent_usage_events": {
+    "columns": [["usage_id", "TEXT", true, null], ["run_id", "TEXT", false, null], ["session_id", "TEXT", true, null], ["owner_id", "TEXT", true, null], ["ip_hash", "TEXT", true, null], ["status", "TEXT", true, null], ["model", "TEXT", false, null], ["llm_call_count", "INTEGER", true, "0"], ["failed_llm_call_count", "INTEGER", true, "0"], ["prompt_tokens", "INTEGER", false, null], ["completion_tokens", "INTEGER", false, null], ["total_tokens", "INTEGER", false, null], ["token_usage_complete", "INTEGER", true, "0"], ["planner_prompt_chars", "INTEGER", true, "0"], ["answer_prompt_chars", "INTEGER", true, "0"], ["answer_chars", "INTEGER", true, "0"], ["estimated_cost_usd", "REAL", true, "0"], ["started_at", "TEXT", true, null], ["finished_at", "TEXT", false, null], ["duration_ms", "INTEGER", false, null], ["error_message", "TEXT", false, null]],
+    "primary_key": ["usage_id"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": [["idx_agent_usage_started", ["started_at"], false, null], ["idx_agent_usage_owner_started", ["owner_id", "started_at"], false, null]]
+  },
+  "chat_messages": {
+    "columns": [["message_id", "TEXT", true, null], ["session_id", "TEXT", true, null], ["role", "TEXT", true, null], ["content", "TEXT", true, null], ["status", "TEXT", true, null], ["run_id", "TEXT", false, null], ["metadata_json", "TEXT", true, null], ["created_at", "TEXT", true, null], ["legacy_order", "INTEGER", true, null]],
+    "primary_key": ["message_id"],
+    "identity": ["legacy_order"],
+    "unique": [],
+    "foreign_keys": [[["session_id"], "chat_sessions", ["session_id"], "NO ACTION"]],
+    "indexes": [["idx_chat_messages_session_created", ["session_id", "created_at"], false, null], ["idx_chat_messages_legacy_order", ["legacy_order"], true, null]]
+  },
+  "chat_session_memories": {
+    "columns": [["session_id", "TEXT", true, null], ["owner_id", "TEXT", true, null], ["memory_version", "TEXT", true, null], ["summary", "TEXT", true, null], ["research_goal", "TEXT", true, null], ["stock_symbols_json", "TEXT", true, null], ["topics_json", "TEXT", true, null], ["date_scope", "TEXT", false, null], ["constraints_json", "TEXT", true, null], ["unresolved_questions_json", "TEXT", true, null], ["summarized_message_count", "INTEGER", true, null], ["last_message_id", "TEXT", false, null], ["generation_mode", "TEXT", true, null], ["model", "TEXT", false, null], ["created_at", "TEXT", true, null], ["updated_at", "TEXT", true, null]],
+    "primary_key": ["session_id"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [[["session_id"], "chat_sessions", ["session_id"], "NO ACTION"]],
+    "indexes": [["idx_chat_session_memories_owner_updated", ["owner_id", "updated_at"], false, null]]
+  },
+  "chat_sessions": {
+    "columns": [["session_id", "TEXT", true, null], ["owner_id", "TEXT", true, null], ["title", "TEXT", true, null], ["created_at", "TEXT", true, null], ["updated_at", "TEXT", true, null], ["archived_at", "TEXT", false, null]],
+    "primary_key": ["session_id"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": [["idx_chat_sessions_owner_updated", ["owner_id", "archived_at", "updated_at"], false, null]]
+  },
+  "daily_pipeline_runs": {
+    "columns": [["run_id", "TEXT", true, null], ["trade_date", "TEXT", true, null], ["trigger", "TEXT", true, null], ["status", "TEXT", true, null], ["attempt_count", "INTEGER", true, null], ["report_json", "TEXT", false, null], ["error_message", "TEXT", false, null], ["started_at", "TEXT", true, null], ["finished_at", "TEXT", false, null]],
+    "primary_key": ["run_id"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": [["idx_daily_pipeline_runs_date_status", ["trade_date", "status"], false, null], ["idx_daily_pipeline_runs_started", ["started_at"], false, null]]
+  },
+  "daily_review_snapshots": {
+    "columns": [["as_of_date", "TEXT", true, null], ["start_date", "TEXT", true, null], ["report_json", "TEXT", true, null], ["generated_by", "TEXT", true, null], ["generated_at", "TEXT", true, null]],
+    "primary_key": ["as_of_date"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": [["idx_daily_review_snapshots_generated", ["generated_at"], false, null]]
+  },
+  "first_board_enrichment_snapshots": {
+    "columns": [["trade_date", "TEXT", true, null], ["symbol", "TEXT", true, null], ["kline_bar_count", "INTEGER", true, null], ["return_5d_pct", "REAL", false, null], ["return_20d_pct", "REAL", false, null], ["return_60d_pct", "REAL", false, null], ["distance_20d_high_pct", "REAL", false, null], ["distance_60d_high_pct", "REAL", false, null], ["volume_ratio_5d", "REAL", false, null], ["volatility_20d", "REAL", false, null], ["close_above_ma20", "INTEGER", false, null], ["ma_alignment", "TEXT", true, null], ["listing_date", "TEXT", false, null], ["listing_age_days", "INTEGER", false, null], ["float_market_cap", "REAL", false, null], ["float_market_cap_source", "TEXT", false, null], ["recent_limit_up_count_20d", "INTEGER", true, null], ["recent_limit_up_count_60d", "INTEGER", true, null], ["industry_first_board_count", "INTEGER", true, null], ["industry_continued_board_count", "INTEGER", true, null], ["industry_failed_count", "INTEGER", true, null], ["industry_max_board_height", "INTEGER", true, null], ["industry_first_limit_rank", "INTEGER", false, null], ["previous_first_board_promotion_rate", "REAL", false, null], ["market_first_board_seal_rate", "REAL", false, null], ["dragon_tiger_on_list", "INTEGER", true, null], ["dragon_tiger_net_buy_amount", "REAL", false, null], ["dragon_tiger_buy_amount", "REAL", false, null], ["dragon_tiger_sell_amount", "REAL", false, null], ["dragon_tiger_reason", "TEXT", false, null], ["dragon_tiger_source", "TEXT", false, null], ["popularity_rank", "INTEGER", false, null], ["popularity_rank_change", "INTEGER", false, null], ["popularity_snapshot_at", "TEXT", false, null], ["popularity_source", "TEXT", false, null], ["position_json", "TEXT", false, null], ["data_missing_json", "TEXT", true, null], ["feature_version", "TEXT", true, null], ["created_at", "TEXT", true, null]],
+    "primary_key": ["trade_date", "symbol"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": [["idx_first_board_enrichment_symbol_date", ["symbol", "trade_date"], false, null]]
+  },
+  "first_board_features": {
+    "columns": [["trade_date", "TEXT", true, null], ["symbol", "TEXT", true, null], ["name", "TEXT", true, null], ["first_limit_minutes", "INTEGER", true, null], ["first_limit_bucket", "TEXT", true, null], ["break_count", "INTEGER", true, null], ["seal_count", "INTEGER", true, null], ["turnover_rate", "REAL", true, null], ["turnover_bucket", "TEXT", true, null], ["amount", "REAL", true, null], ["amount_log", "REAL", true, null], ["amount_bucket", "TEXT", true, null], ["industry", "TEXT", true, null], ["concept", "TEXT", true, null], ["same_industry_limit_up_count", "INTEGER", true, null], ["same_concept_limit_up_count", "INTEGER", true, null], ["market_limit_up_count", "INTEGER", true, null], ["market_first_board_count", "INTEGER", true, null], ["market_failed_limit_up_rate", "REAL", true, null], ["market_failed_rate_bucket", "TEXT", true, null], ["market_max_board_height", "INTEGER", true, null], ["closed_limit", "INTEGER", true, null], ["feature_version", "TEXT", true, null], ["created_at", "TEXT", true, null]],
+    "primary_key": ["trade_date", "symbol"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": [["idx_first_board_features_symbol_date", ["symbol", "trade_date"], false, null], ["idx_first_board_features_recall", ["first_limit_bucket", "break_count", "turnover_bucket", "amount_bucket", "market_failed_rate_bucket"], false, null], ["idx_first_board_features_date", ["trade_date"], false, null]]
+  },
+  "first_board_outcomes": {
+    "columns": [["base_trade_date", "TEXT", true, null], ["symbol", "TEXT", true, null], ["next_trade_date", "TEXT", false, null], ["next_open_pct", "REAL", false, null], ["next_high_pct", "REAL", false, null], ["next_close_pct", "REAL", false, null], ["next_open_to_high_pct", "REAL", false, null], ["next_open_to_low_pct", "REAL", false, null], ["next_open_to_close_pct", "REAL", false, null], ["three_day_high_pct", "REAL", false, null], ["three_day_close_pct", "REAL", false, null], ["max_drawdown_3d", "REAL", false, null], ["three_day_open_to_high_pct", "REAL", false, null], ["three_day_open_to_close_pct", "REAL", false, null], ["max_drawdown_from_next_open_3d", "REAL", false, null], ["promoted_to_second_board", "INTEGER", true, null], ["next_day_ready", "INTEGER", true, "0"], ["three_day_ready", "INTEGER", true, "0"], ["outcome_ready", "INTEGER", true, null], ["outcome_version", "TEXT", true, null], ["created_at", "TEXT", true, null]],
+    "primary_key": ["base_trade_date", "symbol"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": [["idx_first_board_outcomes_symbol_date", ["symbol", "base_trade_date"], false, null]]
+  },
+  "limit_up_events": {
+    "columns": [["symbol", "TEXT", true, null], ["name", "TEXT", true, null], ["trade_date", "TEXT", true, null], ["first_limit_time", "TEXT", true, null], ["last_limit_time", "TEXT", true, null], ["seal_count", "INTEGER", true, null], ["break_count", "INTEGER", true, null], ["closed_limit", "INTEGER", true, null], ["board_height", "INTEGER", true, null], ["amount", "REAL", true, null], ["turnover_rate", "REAL", true, null], ["industry", "TEXT", true, null], ["concept", "TEXT", true, null], ["next_open_pct", "REAL", true, null], ["next_high_pct", "REAL", true, null], ["next_close_pct", "REAL", true, null], ["three_day_return_pct", "REAL", true, null], ["five_day_return_pct", "REAL", true, null], ["continued_next_day", "INTEGER", true, null]],
+    "primary_key": ["trade_date", "symbol"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": [["idx_limit_up_events_trade_date", ["trade_date"], false, null]]
+  },
+  "prediction_snapshot_archive": {
+    "columns": [["snapshot_id", "TEXT", true, null], ["trade_date", "TEXT", true, null], ["snapshot_record_json", "TEXT", true, null], ["prediction_rows_json", "TEXT", true, null], ["archived_at", "TEXT", true, null]],
+    "primary_key": ["snapshot_id"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": []
+  },
+  "prediction_time_audits": {
+    "columns": [["artifact_type", "TEXT", true, null], ["artifact_key", "TEXT", true, null], ["content_hash", "TEXT", true, null], ["verdict_json", "TEXT", true, null], ["audited_at", "TEXT", true, null]],
+    "primary_key": ["artifact_type", "artifact_key", "content_hash"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": []
+  },
+  "quality_budget_reservations": {
+    "columns": [["job_id", "TEXT", true, null], ["attempt", "INTEGER", true, null], ["reservation_key", "TEXT", true, null], ["job_kind", "TEXT", true, null], ["period", "TEXT", true, null], ["metric", "TEXT", true, null], ["units", "INTEGER", true, null], ["created_at", "TEXT", true, null]],
+    "primary_key": ["job_id", "attempt", "reservation_key"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [[["job_id"], "quality_jobs", ["id"], "CASCADE"]],
+    "indexes": []
+  },
+  "quality_budget_usage": {
+    "columns": [["job_kind", "TEXT", true, null], ["period", "TEXT", true, null], ["metric", "TEXT", true, null], ["reserved_units", "INTEGER", true, "0"]],
+    "primary_key": ["job_kind", "period", "metric"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": []
+  },
+  "quality_cases": {
+    "columns": [["case_id", "TEXT", true, null], ["run_id", "TEXT", true, null], ["status", "TEXT", true, "'pending'"], ["severity", "TEXT", true, null], ["symptom", "TEXT", true, "''"], ["root_cause", "TEXT", true, "''"], ["assignee", "TEXT", true, "''"], ["fix_version", "TEXT", true, "''"], ["duplicate_of", "TEXT", false, null], ["version", "TEXT", true, null], ["revision", "INTEGER", true, "0"], ["created_at", "TEXT", true, null], ["updated_at", "TEXT", true, null]],
+    "primary_key": ["case_id"],
+    "identity": [],
+    "unique": [["run_id"]],
+    "foreign_keys": [[["duplicate_of"], "quality_cases", ["case_id"], "SET NULL"], [["run_id"], "react_runs", ["run_id"], "CASCADE"]],
+    "indexes": [["quality_cases_status", ["status", "updated_at"], false, null]]
+  },
+  "quality_delivery": {
+    "columns": [["run_id", "TEXT", true, null], ["answer_hash", "TEXT", true, null], ["event", "TEXT", true, null], ["created_at", "TEXT", true, null]],
+    "primary_key": ["run_id", "answer_hash", "event"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [[["run_id"], "react_runs", ["run_id"], "CASCADE"]],
+    "indexes": []
+  },
+  "quality_evaluations": {
+    "columns": [["evaluation_id", "TEXT", true, null], ["job_id", "TEXT", true, null], ["run_id", "TEXT", true, null], ["bundle_id", "TEXT", false, null], ["attempt", "INTEGER", true, null], ["evaluator_kind", "TEXT", true, null], ["evaluator_version", "TEXT", true, null], ["config_hash", "TEXT", true, null], ["answer_hash", "TEXT", true, null], ["execution_status", "TEXT", true, null], ["verdict", "TEXT", true, "'unknown'"], ["report_json", "TEXT", false, null], ["error_type", "TEXT", false, null], ["started_at", "TEXT", true, null], ["finished_at", "TEXT", false, null]],
+    "primary_key": ["evaluation_id"],
+    "identity": [],
+    "unique": [["job_id", "attempt"]],
+    "foreign_keys": [[["bundle_id"], "quality_evidence_bundles", ["bundle_id"], "CASCADE"], [["run_id"], "react_runs", ["run_id"], "CASCADE"], [["job_id"], "quality_jobs", ["id"], "CASCADE"]],
+    "indexes": [["quality_evaluations_run", ["run_id", "started_at"], false, null]]
+  },
+  "quality_evidence_bundles": {
+    "columns": [["bundle_id", "TEXT", true, null], ["run_id", "TEXT", true, null], ["answer_hash", "TEXT", true, null], ["content_hash", "TEXT", true, null], ["capture_mode", "TEXT", true, null], ["payload_json", "TEXT", true, null], ["created_at", "TEXT", true, null]],
+    "primary_key": ["bundle_id"],
+    "identity": [],
+    "unique": [["run_id", "content_hash"]],
+    "foreign_keys": [[["run_id"], "react_runs", ["run_id"], "CASCADE"]],
+    "indexes": []
+  },
+  "quality_feedback": {
+    "columns": [["run_id", "TEXT", true, null], ["owner_id", "TEXT", true, null], ["vote", "TEXT", false, null], ["reasons_json", "TEXT", true, null], ["comment", "TEXT", true, null], ["created_at", "TEXT", true, null], ["updated_at", "TEXT", true, null]],
+    "primary_key": ["run_id"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [[["run_id"], "react_runs", ["run_id"], "CASCADE"]],
+    "indexes": []
+  },
+  "quality_jobs": {
+    "columns": [["id", "TEXT", true, null], ["run_id", "TEXT", true, null], ["answer_hash", "TEXT", true, null], ["detector_version", "TEXT", true, null], ["job_kind", "TEXT", true, "'deterministic'"], ["config_hash", "TEXT", true, null], ["config_json", "TEXT", true, null], ["bundle_id", "TEXT", false, null], ["status", "TEXT", true, "'pending'"], ["attempts", "INTEGER", true, "0"], ["max_attempts", "INTEGER", true, "3"], ["available_at", "REAL", true, null], ["lease_token", "TEXT", false, null], ["lease_until", "REAL", false, null], ["worker_id", "TEXT", false, null], ["last_error", "TEXT", false, null], ["created_at", "TEXT", true, null], ["updated_at", "TEXT", true, null]],
+    "primary_key": ["id"],
+    "identity": [],
+    "unique": [["job_kind", "detector_version", "config_hash", "bundle_id"]],
+    "foreign_keys": [[["bundle_id"], "quality_evidence_bundles", ["bundle_id"], "CASCADE"], [["run_id"], "react_runs", ["run_id"], "CASCADE"]],
+    "indexes": [["quality_jobs_ready", ["job_kind", "status", "available_at"], false, null]]
+  },
+  "quality_judge_calls": {
+    "columns": [["call_id", "TEXT", true, null], ["job_id", "TEXT", true, null], ["evaluation_id", "TEXT", true, null], ["attempt", "INTEGER", true, null], ["call_key", "TEXT", true, null], ["period", "TEXT", true, null], ["phase", "TEXT", true, null], ["request_hash", "TEXT", false, null], ["status", "TEXT", true, "'reserved'"], ["timeout_seconds", "REAL", true, null], ["expires_at", "REAL", true, null], ["reserved_at", "TEXT", true, null], ["started_at", "TEXT", false, null], ["finished_at", "TEXT", false, null], ["settled_at", "TEXT", false, null], ["error_type", "TEXT", false, null], ["late_status", "TEXT", false, null], ["late_error_type", "TEXT", false, null], ["prompt_tokens", "INTEGER", false, null], ["completion_tokens", "INTEGER", false, null], ["total_tokens", "INTEGER", false, null], ["duration_ms", "REAL", false, null]],
+    "primary_key": ["call_id"],
+    "identity": [],
+    "unique": [["job_id", "call_key"]],
+    "foreign_keys": [[["evaluation_id"], "quality_evaluations", ["evaluation_id"], "CASCADE"], [["job_id"], "quality_jobs", ["id"], "CASCADE"]],
+    "indexes": [["quality_judge_calls_active", ["status", "expires_at"], false, null]]
+  },
+  "quality_reviews": {
+    "columns": [["review_id", "TEXT", true, null], ["case_id", "TEXT", true, null], ["actor_id", "TEXT", true, null], ["from_status", "TEXT", true, null], ["to_status", "TEXT", true, null], ["revision", "INTEGER", true, null], ["note", "TEXT", true, null], ["changes_json", "TEXT", true, null], ["created_at", "TEXT", true, null]],
+    "primary_key": ["review_id"],
+    "identity": [],
+    "unique": [["case_id", "revision"]],
+    "foreign_keys": [[["case_id"], "quality_cases", ["case_id"], "CASCADE"]],
+    "indexes": []
+  },
+  "quality_signals": {
+    "columns": [["signal_id", "TEXT", true, null], ["case_id", "TEXT", true, null], ["source", "TEXT", true, null], ["code", "TEXT", true, null], ["severity", "TEXT", true, null], ["summary", "TEXT", true, null], ["evidence_json", "TEXT", true, null], ["detector_version", "TEXT", true, null], ["answer_hash", "TEXT", true, null], ["created_at", "TEXT", true, null], ["evaluation_key", "TEXT", true, "''"]],
+    "primary_key": ["signal_id"],
+    "identity": [],
+    "unique": [["case_id", "source", "code", "detector_version", "answer_hash", "evaluation_key"]],
+    "foreign_keys": [[["case_id"], "quality_cases", ["case_id"], "CASCADE"]],
+    "indexes": []
+  },
+  "quality_trace_snapshots": {
+    "columns": [["id", "INTEGER", true, null], ["run_id", "TEXT", true, null], ["stage", "TEXT", true, null], ["captured_at", "TEXT", true, null], ["payload_json", "TEXT", true, null]],
+    "primary_key": ["id"],
+    "identity": ["id"],
+    "unique": [],
+    "foreign_keys": [[["run_id"], "react_runs", ["run_id"], "CASCADE"]],
+    "indexes": [["quality_trace_run", ["run_id", "id"], false, null]]
+  },
+  "react_calls": {
+    "columns": [["run_id", "TEXT", true, null], ["call_id", "TEXT", true, null], ["signature", "TEXT", true, null], ["result_json", "TEXT", false, null], ["legacy_order", "INTEGER", true, null]],
+    "primary_key": ["run_id", "call_id"],
+    "identity": ["legacy_order"],
+    "unique": [],
+    "foreign_keys": [[["run_id"], "react_runs", ["run_id"], "CASCADE"]],
+    "indexes": [["idx_react_calls_legacy_order", ["legacy_order"], true, null]]
+  },
+  "react_events": {
+    "columns": [["seq", "INTEGER", true, null], ["run_id", "TEXT", true, null], ["event", "TEXT", true, null], ["payload_json", "TEXT", true, null]],
+    "primary_key": ["seq"],
+    "identity": ["seq"],
+    "unique": [],
+    "foreign_keys": [[["run_id"], "react_runs", ["run_id"], "CASCADE"]],
+    "indexes": []
+  },
+  "react_runs": {
+    "columns": [["run_id", "TEXT", true, null], ["owner_id", "TEXT", true, null], ["session_id", "TEXT", true, null], ["message_key", "TEXT", true, null], ["request_json", "TEXT", true, null], ["request_hash", "TEXT", true, null], ["active", "INTEGER", true, "1"], ["cancelled", "INTEGER", true, "0"], ["started_at", "TEXT", true, null], ["checkpoint_json", "TEXT", false, null], ["response_json", "TEXT", false, null]],
+    "primary_key": ["run_id"],
+    "identity": [],
+    "unique": [["owner_id", "session_id", "message_key"]],
+    "foreign_keys": [[["session_id"], "chat_sessions", ["session_id"], "CASCADE"]],
+    "indexes": [["react_active_session", ["owner_id", "session_id"], true, "active = 1"]]
+  },
+  "recommendation_intelligence_changes": {
+    "columns": [["change_id", "INTEGER", true, null], ["refresh_id", "TEXT", true, null], ["changed_at", "TEXT", true, null], ["strategy", "TEXT", true, null], ["base_trade_date", "TEXT", true, null], ["symbol", "TEXT", true, null], ["changes_json", "TEXT", true, null]],
+    "primary_key": ["change_id"],
+    "identity": ["change_id"],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": [["idx_recommendation_changes_symbol_time", ["strategy", "base_trade_date", "symbol", "changed_at"], false, null]]
+  },
+  "recommendation_intelligence_current": {
+    "columns": [["slot", "INTEGER", true, null], ["refresh_id", "TEXT", true, null], ["refreshed_at", "TEXT", true, null], ["status", "TEXT", true, null], ["response_json", "TEXT", true, null]],
+    "primary_key": ["slot"],
+    "identity": ["slot"],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": []
+  },
+  "recommendation_intelligence_snapshots": {
+    "columns": [["refresh_id", "TEXT", true, null], ["refreshed_at", "TEXT", true, null], ["status", "TEXT", true, null], ["response_json", "TEXT", true, null]],
+    "primary_key": ["refresh_id"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": [["idx_recommendation_intelligence_refreshed", ["refreshed_at"], false, null]]
+  },
+  "recommendation_prediction_finals": {
+    "columns": [["target_trade_date", "TEXT", true, null], ["finalized_at", "TEXT", true, null], ["response_json", "TEXT", true, null]],
+    "primary_key": ["target_trade_date"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": []
+  },
+  "scoring_policies": {
+    "columns": [["version", "TEXT", true, null], ["parent_version", "TEXT", false, null], ["status", "TEXT", true, null], ["factor_weights_json", "TEXT", true, null], ["source", "TEXT", true, null], ["rationale_json", "TEXT", true, null], ["training_start_date", "TEXT", false, null], ["training_end_date", "TEXT", false, null], ["created_at", "TEXT", true, null], ["activated_at", "TEXT", false, null]],
+    "primary_key": ["version"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": [["idx_scoring_policies_status_created", ["status", "created_at"], false, null]]
+  },
+  "scoring_policy_runs": {
+    "columns": [["run_id", "TEXT", true, null], ["champion_version", "TEXT", true, null], ["challenger_version", "TEXT", true, null], ["promotion_eligible", "INTEGER", true, null], ["activated", "INTEGER", true, null], ["report_json", "TEXT", true, null], ["created_at", "TEXT", true, null]],
+    "primary_key": ["run_id"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": [["idx_scoring_policy_runs_created", ["created_at"], false, null]]
+  },
+  "stock_daily_bars": {
+    "columns": [["symbol", "TEXT", true, null], ["trade_date", "TEXT", true, null], ["open", "REAL", true, null], ["high", "REAL", true, null], ["low", "REAL", true, null], ["close", "REAL", true, null], ["volume", "REAL", true, null], ["amount", "REAL", true, null], ["change_pct", "REAL", false, null], ["source", "TEXT", true, null], ["created_at", "TEXT", true, null]],
+    "primary_key": ["symbol", "trade_date"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": [["idx_stock_daily_bars_symbol_date", ["symbol", "trade_date"], false, null]]
+  },
+  "stock_intraday_bars": {
+    "columns": [["symbol", "TEXT", true, null], ["trade_date", "TEXT", true, null], ["period_minutes", "INTEGER", true, null], ["timestamp", "TEXT", true, null], ["open", "REAL", true, null], ["high", "REAL", true, null], ["low", "REAL", true, null], ["close", "REAL", true, null], ["volume", "REAL", true, null], ["amount", "REAL", true, null], ["source", "TEXT", true, null], ["created_at", "TEXT", true, null]],
+    "primary_key": ["symbol", "trade_date", "period_minutes", "timestamp"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": [["idx_stock_intraday_bars_lookup", ["symbol", "trade_date", "period_minutes", "timestamp"], false, null]]
+  },
+  "stock_news_items": {
+    "columns": [["item_id", "TEXT", true, null], ["symbol", "TEXT", true, null], ["name", "TEXT", true, null], ["title", "TEXT", true, null], ["summary", "TEXT", true, null], ["published_at", "TEXT", true, null], ["source", "TEXT", true, null], ["url", "TEXT", true, null], ["item_type", "TEXT", true, null], ["relevance_score", "REAL", true, null], ["fetched_at", "TEXT", true, null]],
+    "primary_key": ["item_id"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": [["idx_stock_news_symbol_published", ["symbol", "published_at"], false, null]]
+  },
+  "stock_news_sync_state": {
+    "columns": [["symbol", "TEXT", true, null], ["source", "TEXT", true, null], ["last_attempt_at", "TEXT", true, null], ["last_success_at", "TEXT", false, null], ["error_message", "TEXT", false, null]],
+    "primary_key": ["symbol", "source"],
+    "identity": [],
+    "unique": [],
+    "foreign_keys": [],
+    "indexes": []
+  }
+}
