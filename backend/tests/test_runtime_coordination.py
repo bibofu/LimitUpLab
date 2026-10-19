@@ -1,6 +1,8 @@
 """Run against both retained SQLite and a migrated PostgreSQL test database."""
 
 from concurrent.futures import ThreadPoolExecutor
+import multiprocessing
+import os
 import threading
 import time
 from uuid import uuid4
@@ -8,7 +10,7 @@ from uuid import uuid4
 import pytest
 
 from app.database import begin_write
-from app.services.runtime_coordination import LeaseLost, LeaseStore, database_now
+from app.services.runtime_coordination import ExecutionLease, LeaseLost, LeaseStore, database_now
 
 
 @pytest.fixture(params=["sqlite", "postgresql"])
@@ -99,4 +101,25 @@ def test_expired_owner_cannot_resurrect_itself(lease_store):
         begin_write(db)
         with pytest.raises(LeaseLost):
             lease_store.assert_current(db, name, lease)
+
+
+def _claim_in_process(arguments):
+    path, url, name = arguments
+    if url:
+        os.environ["LIMITUPLAB_DATABASE_URL"] = url
+    store = LeaseStore(path)
+    lease = store.claim(name)
+    return (lease.token, lease.fence) if lease is not None else None
+
+
+def test_claim_is_exclusive_across_processes(lease_store):
+    """Independent interpreters cannot rely on the router or connection's locks."""
+    name = "process:" + uuid4().hex
+    arguments = (lease_store.database_path, lease_store.database_url, name)
+    with multiprocessing.get_context("spawn").Pool(4) as processes:
+        results = processes.map(_claim_in_process, [arguments] * 4)
+    winners = [result for result in results if result is not None]
+    assert len(winners) == 1
+    token, fence = winners[0]
+    ExecutionLease(lease_store, name, token, fence, 60).release()
 
