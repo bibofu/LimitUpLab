@@ -5,6 +5,7 @@ from __future__ import annotations
 import threading
 from collections.abc import Callable
 from concurrent.futures import ThreadPoolExecutor
+from contextvars import copy_context
 from datetime import date, datetime, timezone
 from math import isfinite
 from statistics import mean
@@ -147,7 +148,8 @@ def load_stock_intraday_history(
         )
 
     with ThreadPoolExecutor(max_workers=min(5, len(requested_dates))) as executor:
-        loaded = list(executor.map(load_day, requested_dates))
+        pending = [executor.submit(copy_context().run, load_day, day) for day in requested_dates]
+        loaded = [future.result() for future in pending]
 
     missing_dates = [item.trade_date for item in loaded if item.status != "complete"]
     available_dates = [item.trade_date for item in loaded if item.bars]

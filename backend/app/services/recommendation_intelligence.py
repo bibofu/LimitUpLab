@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 from dataclasses import dataclass
 from datetime import date, datetime, time, timedelta, timezone
 from typing import Callable, Sequence
@@ -1311,6 +1312,7 @@ def _collect_candidate_evidence(
     with ThreadPoolExecutor(max_workers=max(1, min(max_workers, 10))) as executor:
         futures = {
             executor.submit(
+                copy_context().run,
                 _load_candidate_evidence,
                 candidate,
                 refreshed_at=refreshed_at,

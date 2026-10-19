@@ -10,6 +10,7 @@ import argparse
 import json
 import sys
 from concurrent.futures import ThreadPoolExecutor, as_completed
+from contextvars import copy_context
 from dataclasses import asdict, dataclass, field
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -527,7 +528,7 @@ def warm_latest_intraday_cache(
         )
 
     with ThreadPoolExecutor(max_workers=max(1, min(max_workers, 12))) as executor:
-        futures = {executor.submit(warm, symbol): symbol for symbol in symbols}
+        futures = {executor.submit(copy_context().run, warm, symbol): symbol for symbol in symbols}
         for future in as_completed(futures):
             symbol = futures[future]
             try:

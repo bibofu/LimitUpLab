@@ -2,6 +2,7 @@
 
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
+from types import SimpleNamespace
 import pytest
 from fastapi.testclient import TestClient
 from app.database import begin_write, connect
@@ -59,3 +60,54 @@ def test_readiness_error_does_not_leak_paths_or_create_sqlite(tmp_path, monkeypa
         result = client.get("/ready")
     assert result.status_code == 503
     assert "private" not in result.text and not path.exists()
+
+
+@pytest.mark.parametrize("operation", ["intraday_warmup", "intraday_history", "candidate_evidence"])
+def test_background_thread_workers_preserve_expired_job_fencing(postgresql_database, operation):
+    from app.services.stock_kline import load_stock_intraday_history
+    from app.services.recommendation_intelligence import _collect_candidate_evidence
+    from scripts.update_daily_data import warm_latest_intraday_cache
+    day = datetime.now(timezone.utc).date()
+    observed = []
+
+    def stale_collector(*args, **kwargs):
+        observed.append(ACTIVE_JOB.get())
+        with closing(connect()) as db, db:
+            db.execute("INSERT INTO runtime_leases VALUES ('stale-thread-write','old',1,1)")
+        return []
+
+    with SharedJobLock("thread-fencing") as owner:
+        token = ACTIVE_JOB.set(None)
+        try:
+            with closing(connect()) as db, db:
+                db.execute("UPDATE runtime_leases SET expires_at=0 WHERE name=?", (owner.lease.name,))
+        finally:
+            ACTIVE_JOB.reset(token)
+        if operation == "intraday_warmup":
+            warm_latest_intraday_cache(events=[SimpleNamespace(trade_date=day, symbol="000001")],
+                                       trade_date=day, repository=None, loader=stale_collector)
+        elif operation == "intraday_history":
+            load_stock_intraday_history(symbol="000001", trade_dates=[day], period=1,
+                                        daily_bars=[], collector=stale_collector)
+        else:
+            _collect_candidate_evidence([SimpleNamespace(symbol="000001", name="fixture")],
+                refreshed_at=datetime.now(timezone.utc), previous_financials={}, previous_news={},
+                news_collector=stale_collector, financial_collector=lambda _: [], max_workers=1)
+        assert observed == [owner.lease]
+    with closing(connect()) as db:
+        assert db.execute("SELECT 1 FROM runtime_leases WHERE name='stale-thread-write'").fetchone() is None
+
+
+def test_sql_commit_cannot_bypass_job_fencing(postgresql_database, monkeypatch):
+    from app.services import runtime_coordination
+    with SharedJobLock("sql-commit-fencing"):
+        with closing(connect()) as db:
+            db.execute("INSERT INTO runtime_leases VALUES ('expired-commit','old',1,1)")
+            now = runtime_coordination.database_now(db)
+            with monkeypatch.context() as patcher:
+                patcher.setattr(runtime_coordination, "database_now", lambda _: now + 120)
+                with pytest.raises(LeaseLost):
+                    db.execute("COMMIT WORK;")
+            db.execute("ROLLBACK;")
+            assert not db.in_transaction
+            assert db.execute("SELECT 1 FROM runtime_leases WHERE name='expired-commit'").fetchone() is None

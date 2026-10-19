@@ -23,6 +23,12 @@ def test_row_keeps_numeric_named_and_mapping_access():
     assert dict(row) == {"id": 7, "name": "测试"}
 
 
+def test_escaped_postgres_strings_keep_literal_question_marks():
+    compiled, count = bind_qmarks(r"SELECT E'it\'s ? 50%', ?, e'\\?', '?' ")
+    assert count == 1
+    assert compiled == r"SELECT E'it\'s ? 50%%', %s, e'\\?', '?' "
+
+
 def test_explicit_sqlite_path_wins_over_postgres_environment(tmp_path, monkeypatch):
     monkeypatch.setenv("LIMITUPLAB_DATABASE_URL", "postgresql://unreachable.invalid/test")
     db = connect(tmp_path / "isolated.sqlite")
@@ -76,3 +82,21 @@ def test_engine_transactions_are_not_autocommit_after_adapter_checkout(postgresq
             raise RuntimeError("abort")
     with engine.connect() as connection:
         assert connection.exec_driver_sql("SELECT count(*) FROM runtime_leases").scalar() == 0
+
+
+def test_postgres_escaped_string_and_sql_transaction_controls(postgresql_database):
+    db = connect()
+    try:
+        assert tuple(db.execute(r"SELECT E'it\'s ? 50%', ?", (7,)).fetchone()) == ("it's ? 50%", 7)
+        db.execute("INSERT INTO runtime_leases VALUES ('rolled-back','x',1,1)")
+        for statement in ("COMMIT AND CHAIN", "/* outer /* nested */ */ COMMIT", "COMMIT; SELECT 1"):
+            with pytest.raises(ValueError, match="transaction control"):
+                db.execute(statement)
+        db.execute("ROLLBACK;")
+        assert not db.in_transaction and not db._write_locked
+        db.execute("INSERT INTO runtime_leases VALUES ('sql-committed','x',1,1)")
+        db.execute("COMMIT TRANSACTION;")
+        assert not db.in_transaction and not db._write_locked
+        assert [row[0] for row in db.execute("SELECT name FROM runtime_leases")] == ["sql-committed"]
+    finally:
+        db.close()

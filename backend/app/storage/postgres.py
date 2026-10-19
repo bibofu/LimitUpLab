@@ -46,7 +46,7 @@ def dispose_engines():
 def bind_qmarks(sql):
     """Lex strings, quoted names, dollar literals and nested SQL comments."""
     output, count, index = [], 0, 0
-    quote, dollar, block = None, None, 0
+    quote, dollar, block, escaped_string = None, None, 0, False
     while index < len(sql):
         char, pair = sql[index], sql[index:index + 2]
         if dollar:
@@ -65,6 +65,9 @@ def bind_qmarks(sql):
             continue
         if quote:
             output.append(char); index += 1
+            if escaped_string and char == "\\" and index < len(sql):
+                output.append(sql[index]); index += 1
+                continue
             if char == quote:
                 if index < len(sql) and sql[index] == quote:
                     output.append(quote); index += 1
@@ -78,6 +81,8 @@ def bind_qmarks(sql):
         if pair == "/*":
             block = 1; output.append(pair); index += 2; continue
         if char in {"'", '"'}:
+            escaped_string = (char == "'" and index > 0 and sql[index - 1] in "eE"
+                              and (index == 1 or not (sql[index - 2].isalnum() or sql[index - 2] in "_$")))
             quote = char; output.append(char); index += 1; continue
         if char == "$":
             end = sql.find("$", index + 1)
@@ -97,6 +102,33 @@ def bind_qmarks(sql):
 def _parameters(values):
     return tuple(int(v) if isinstance(v, bool) else v.isoformat()
                  if isinstance(v, (date, datetime)) else v for v in values)
+
+
+def _leading_command(sql):
+    """Read the first keyword without letting comments hide transaction control."""
+    position = 0
+    while position < len(sql):
+        if sql[position].isspace():
+            position += 1
+        elif sql.startswith("--", position):
+            newline = sql.find("\n", position + 2)
+            position = len(sql) if newline < 0 else newline + 1
+        elif sql.startswith("/*", position):
+            position += 2
+            depth = 1
+            while position < len(sql) and depth:
+                pair = sql[position:position + 2]
+                if pair in {"/*", "*/"}:
+                    depth += 1 if pair == "/*" else -1
+                    position += 2
+                else:
+                    position += 1
+        else:
+            end = position
+            while end < len(sql) and (sql[end].isalpha() or sql[end] == "_"):
+                end += 1
+            return sql[position:end].upper()
+    return ""
 
 
 class Record:
@@ -174,6 +206,21 @@ class PostgresConnection:
         assert_job_owner(self)
 
     def execute(self, sql, parameters=()):
+        control = " ".join(sql.strip().rstrip(";").split()).upper()
+        if control in {"COMMIT", "COMMIT WORK", "COMMIT TRANSACTION", "END", "END WORK", "END TRANSACTION"}:
+            if parameters:
+                raise ValueError("Transaction control takes no parameters")
+            self.commit()
+            return Result(self._db.cursor())
+        if control in {"ROLLBACK", "ROLLBACK WORK", "ROLLBACK TRANSACTION", "ABORT", "ABORT WORK", "ABORT TRANSACTION"}:
+            if parameters:
+                raise ValueError("Transaction control takes no parameters")
+            self.rollback()
+            return Result(self._db.cursor())
+        leading = _leading_command(sql)
+        if leading in {"COMMIT", "END", "ABORT"} or (leading == "ROLLBACK" and not control.startswith(
+                ("ROLLBACK TO ", "ROLLBACK WORK TO ", "ROLLBACK TRANSACTION TO "))):
+            raise ValueError("Use commit() or rollback() for transaction control")
         command = sql.lstrip().split(None, 1)[0].upper()
         if command in {"PRAGMA", "REPLACE"} or sql.strip().upper() == "BEGIN IMMEDIATE":
             raise ValueError("SQLite-specific SQL must be explicitly adapted")
