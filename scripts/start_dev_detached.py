@@ -11,8 +11,12 @@ import urllib.request
 import argparse
 import json
 import socket
-import winreg
 from pathlib import Path
+
+try:
+    import winreg
+except ImportError:
+    winreg = None
 
 
 ROOT = Path(__file__).resolve().parents[1]
@@ -44,12 +48,21 @@ def main() -> int:
         return 1
 
     env = build_env()
+    if run_database_check(backend_python, env) != 0:
+        print("Database startup failed; backend/frontend startup aborted.", file=sys.stderr)
+        return 1
+    expected_database = "postgresql" if env.get("LIMITUPLAB_DATABASE_URL", "").strip() else "sqlite"
+    backend_status = probe("http://127.0.0.1:8001/ready", timeout=1,
+                           expected_database=expected_database)
+    if not backend_status and probe("http://127.0.0.1:8001/health", timeout=1):
+        print("Existing backend is not ready for the selected database; stop it before restarting.",
+              file=sys.stderr)
+        return 1
     if not args.skip_data_check:
         check_result = run_data_check(backend_python, env)
         if check_result != 0:
             print("Data freshness check failed; continuing startup. See backend/data/dev_check_report.json.")
 
-    backend_status = probe("http://127.0.0.1:8001/health", timeout=1)
     frontend_status = probe("http://127.0.0.1:5173/", timeout=1)
 
     if not backend_status:
@@ -90,7 +103,12 @@ def main() -> int:
             env=env,
         )
 
-    if not refresh_worker_running():
+    try:
+        refresh_running = refresh_worker_running(backend_python, env)
+    except RuntimeError as error:
+        print(str(error), file=sys.stderr)
+        return 1
+    if not refresh_running:
         spawn_detached(
             [
                 str(backend_python),
@@ -102,7 +120,8 @@ def main() -> int:
             env=env,
         )
 
-    backend_ok = wait_for("http://127.0.0.1:8001/health", seconds=12)
+    backend_ok = wait_for("http://127.0.0.1:8001/ready", seconds=12,
+                          expected_database=expected_database)
     frontend_ok = wait_for("http://127.0.0.1:5173/", seconds=12)
 
     print(f"Backend  http://127.0.0.1:8001  {'OK' if backend_ok else 'FAILED'}")
@@ -111,6 +130,14 @@ def main() -> int:
     print(f"Frontend log: {FRONTEND_LOG}")
     print(f"Recommendation refresh log: {REFRESH_LOG}")
     return 0 if backend_ok and frontend_ok else 1
+
+
+def run_database_check(backend_python: Path, env: dict[str, str]) -> int:
+    """Ensure the selected database is ready before any read/write startup checks."""
+    return subprocess.run(
+        [str(backend_python), "scripts/local_postgresql.py", "ensure"],
+        cwd=str(BACKEND), env=env, timeout=60,
+    ).returncode
 
 
 def run_data_check(backend_python: Path, env: dict[str, str]) -> int:
@@ -133,9 +160,19 @@ def run_data_check(backend_python: Path, env: dict[str, str]) -> int:
     return result.returncode
 
 
-def refresh_worker_running() -> bool:
+def refresh_worker_running(backend_python: Path, env: dict[str, str]) -> bool:
     """Treat the daily 08:00 refresh worker lock as active."""
 
+    if env.get("LIMITUPLAB_DATABASE_URL", "").strip():
+        result = subprocess.run(
+            [str(backend_python), "-c",
+             "import sys; from app.services.runtime_coordination import LeaseStore; "
+             "sys.exit(0 if LeaseStore().live('job:recommendation-refresh') else 3)"],
+            cwd=str(BACKEND), env=env, capture_output=True, timeout=20,
+        )
+        if result.returncode not in {0, 3}:
+            raise RuntimeError("Cannot check PostgreSQL refresh worker lease; startup aborted")
+        return result.returncode == 0
     return worker_lock_active(REFRESH_LOCK, stale_after_seconds=30 * 60 * 60)
 
 
@@ -177,6 +214,11 @@ def process_exists(pid: int) -> bool:
 def build_env() -> dict[str, str]:
     """Build a clean process environment and avoid Path/PATH duplicate failures."""
 
+    if str(BACKEND) not in sys.path:
+        sys.path.insert(0, str(BACKEND))
+    from app.config import configure_runtime_environment
+    configure_runtime_environment()
+
     env: dict[str, str] = {}
     for key, value in os.environ.items():
         normalized = "PATH" if key.lower() == "path" else key
@@ -189,9 +231,9 @@ def build_env() -> dict[str, str]:
     api_key = env.get("DEEPSEEK_API_KEY") or read_windows_env("DEEPSEEK_API_KEY")
     if api_key:
         env["DEEPSEEK_API_KEY"] = api_key
-        env["LIMITUPLAB_LLM_ENABLED"] = "true"
-        env["LIMITUPLAB_LLM_BASE_URL"] = "https://api.deepseek.com"
-        env["LIMITUPLAB_LLM_MODEL"] = "deepseek-v4-flash"
+        env.setdefault("LIMITUPLAB_LLM_ENABLED", "true")
+        env.setdefault("LIMITUPLAB_LLM_BASE_URL", "https://api.deepseek.com")
+        env.setdefault("LIMITUPLAB_LLM_MODEL", "deepseek-v4-flash")
         env.setdefault("LIMITUPLAB_LLM_TIMEOUT_SECONDS", "15")
     else:
         env.setdefault("LIMITUPLAB_LLM_ENABLED", "false")
@@ -221,6 +263,8 @@ def auto_detect_local_proxy() -> str:
 def read_windows_env(name: str) -> str:
     """Read a user or machine environment variable from the Windows registry."""
 
+    if winreg is None:
+        return ""
     for hive, subkey in (
         (winreg.HKEY_CURRENT_USER, "Environment"),
         (
@@ -268,24 +312,28 @@ def spawn_detached(
     )
 
 
-def wait_for(url: str, seconds: int) -> bool:
+def wait_for(url: str, seconds: int, *, expected_database: str | None = None) -> bool:
     """Poll a local URL for a few seconds."""
 
     deadline = time.time() + seconds
     while time.time() < deadline:
-        if probe(url, timeout=1):
+        if probe(url, timeout=1, expected_database=expected_database):
             return True
         time.sleep(0.5)
     return False
 
 
-def probe(url: str, timeout: float) -> bool:
+def probe(url: str, timeout: float, *, expected_database: str | None = None) -> bool:
     """Return whether a local URL responds with a 2xx/3xx status."""
 
     try:
         with urllib.request.urlopen(url, timeout=timeout) as response:
+            if expected_database is not None:
+                payload = json.load(response)
+                return (response.status == 200 and isinstance(payload, dict) and payload.get("status") == "ok"
+                        and payload.get("database") == expected_database)
             return 200 <= response.status < 400
-    except (urllib.error.URLError, TimeoutError, OSError):
+    except (urllib.error.URLError, TimeoutError, OSError, ValueError):
         return False
 
 

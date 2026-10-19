@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import subprocess
 import sys
+import tempfile
 
 BACKEND = Path(__file__).resolve().parents[1]
 ROOT = BACKEND.parent
@@ -58,12 +59,17 @@ def local_cluster(url, env, *, root: Path = ROOT) -> LocalCluster | None:
 
 def run_ctl(cluster: LocalCluster, *args: str) -> subprocess.CompletedProcess:
     """Hide server helpers and keep credentials out of argv and diagnostics."""
-    return subprocess.run(
-        [str(cluster.pg_ctl), "-D", str(cluster.data_dir), *args],
-        stdin=subprocess.DEVNULL, capture_output=True, text=True,
-        encoding="utf-8", errors="replace", timeout=40,
-        creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
-    )
+    # Windows postmaster descendants can inherit pipe handles. Waiting for pipe
+    # EOF would then block until the server exits, despite pg_ctl already exiting.
+    with tempfile.TemporaryFile(dir=cluster.data_dir.parent) as output:
+        result = subprocess.run(
+            [str(cluster.pg_ctl), "-D", str(cluster.data_dir), *args],
+            stdin=subprocess.DEVNULL, stdout=output, stderr=output, timeout=40,
+            creationflags=subprocess.CREATE_NO_WINDOW if os.name == "nt" else 0,
+        )
+        output.seek(0)
+        result.stdout = output.read(65536).decode("utf-8", errors="replace")
+        return result
 
 
 def validate_running_cluster(cluster: LocalCluster) -> None:

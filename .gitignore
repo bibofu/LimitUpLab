@@ -41,6 +41,7 @@ backend/data/*.lock
 backend/data/backups/
 backend/data/pytest-*/
 output/
+.local/
 tmp/
 backend/tmp/
 .workbuddy/
@@ -63,6 +64,7 @@ frontend/*.log
 !.env.example
 !.env.production.example
 !.env.postgresql.example
+!.env.local-postgresql.example
 
 # Local job search materials
 /workPre/

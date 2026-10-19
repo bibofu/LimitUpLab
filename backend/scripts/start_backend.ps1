@@ -79,6 +79,11 @@ if (-not (Test-Path $python)) {
     throw "Virtualenv not found: $python"
 }
 
+& $python scripts/local_postgresql.py ensure
+if ($LASTEXITCODE -ne 0) {
+    throw "Configured database is not ready. Backend startup aborted."
+}
+
 $args = @("-m", "uvicorn", "app.main:app", "--host", $HostAddress, "--port", "$Port")
 if ($Reload) {
     $args += "--reload"

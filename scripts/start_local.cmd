@@ -28,7 +28,17 @@ if defined LIMITUPLAB_PROXY_URL (
   set all_proxy=%LIMITUPLAB_PROXY_URL%
 )
 
-echo [1/3] Checking data freshness and local Agent health...
+echo [1/4] Checking configured PostgreSQL readiness...
+pushd "%BACKEND%"
+".venv\Scripts\python.exe" scripts\local_postgresql.py ensure
+if errorlevel 1 (
+  echo Database startup failed. Backend/frontend startup aborted.
+  popd
+  exit /b 1
+)
+popd
+
+echo [2/4] Checking data freshness and local Agent health...
 pushd "%BACKEND%"
 ".venv\Scripts\python.exe" scripts\dev_check.py --ensure-data
 if errorlevel 1 (
@@ -38,10 +48,10 @@ if errorlevel 1 (
 )
 popd
 
-echo [2/3] Starting backend on http://127.0.0.1:8001 ...
+echo [3/4] Starting backend on http://127.0.0.1:8001 ...
 start "LimitUpLab Backend" cmd /k "cd /d ""%BACKEND%"" && scripts\start_backend.cmd -Port 8001"
 
-echo [3/3] Starting frontend on http://127.0.0.1:5173 ...
+echo [4/4] Starting frontend on http://127.0.0.1:5173 ...
 start "LimitUpLab Frontend" cmd /k "cd /d ""%FRONTEND%"" && npm.cmd run dev -- --host 127.0.0.1 --port 5173"
 
 echo.
