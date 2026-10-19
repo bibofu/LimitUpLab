@@ -112,4 +112,3 @@ def test_expired_slot_cannot_publish_or_release_replacement(lease_store, monkeyp
     finally:
         old.release()
         current.release()
-

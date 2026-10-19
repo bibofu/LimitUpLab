@@ -119,4 +119,3 @@ def test_remote_cancel_finalizes_expired_run_without_model(shared_run, monkeypat
     react_chat.cancel(row["run_id"], owner)
     result = journal.get(row["run_id"], owner)
     assert not result["active"] and json.loads(result["response_json"])["task_status"] == "cancelled"
-

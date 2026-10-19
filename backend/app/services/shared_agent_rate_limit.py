@@ -139,4 +139,3 @@ class DatabaseAgentRateLimiter:
             leases = list(self._leases.values())
         for lease in leases:
             lease.release()
-

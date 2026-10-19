@@ -122,4 +122,3 @@ def test_claim_is_exclusive_across_processes(lease_store):
     assert len(winners) == 1
     token, fence = winners[0]
     ExecutionLease(lease_store, name, token, fence, 60).release()
-

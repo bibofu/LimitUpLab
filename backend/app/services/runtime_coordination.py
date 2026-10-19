@@ -151,4 +151,3 @@ class ExecutionLease:
         if self.thread is not None:
             self.thread.join(timeout=2)
         self.store.release(self)
-
