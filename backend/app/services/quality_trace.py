@@ -148,6 +148,8 @@ def record_snapshot(control, stage, payload):
     try:
         serialized = bounded_snapshot(payload() if callable(payload) else payload)
         with control.journal.connection() as db:
+            if getattr(control, "execution", None) is not None:
+                control.journal.begin_execution_write(db, control.row["run_id"])
             db.execute("INSERT INTO quality_trace_snapshots(run_id,stage,captured_at,payload_json) VALUES(?,?,?,?)",
                        (control.row["run_id"], stage, datetime.now(timezone.utc).isoformat(), serialized))
     except Exception as error:

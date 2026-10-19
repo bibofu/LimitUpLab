@@ -1,15 +1,15 @@
-"""SQLite run journal: scoped idempotency, checkpoints and call replay records."""
+"""Durable run journal with scoped idempotency and fenced execution writes."""
 
 from contextlib import contextmanager
 from contextvars import ContextVar
 from datetime import datetime, timezone
 import hashlib
 import json
-import sqlite3
 from uuid import uuid4
 
-from app.database import connect, initialize_database
+from app.database import begin_write, connect, initialize_database, is_integrity_error, is_postgres
 from app.quality_schema import initialize_quality_schema, enqueue_completed
+from app.services.runtime_coordination import LeaseLost, LeaseStore
 
 CURRENT_CONTROL = ContextVar("react_run_control", default=None)
 
@@ -25,8 +25,12 @@ class RunConflict(ValueError):
 class Journal:
     def __init__(self, database_path=None):
         self.database_path = database_path
+        self.leases = LeaseStore(database_path)
         with self.connection() as db:
             initialize_database(db)
+            if is_postgres(db):
+                # PostgreSQL schema changes are applied by Alembic before startup.
+                return
             db.executescript("""
                 CREATE TABLE IF NOT EXISTS react_runs (
                     run_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, session_id TEXT NOT NULL,
@@ -66,7 +70,7 @@ class Journal:
         fingerprint = hashlib.sha256(encode(payload).encode()).hexdigest()
         key = request.message_id or uuid4().hex
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            begin_write(db)
             existing = db.execute("SELECT * FROM react_runs WHERE owner_id=? AND session_id=? AND message_key=?",
                                   (owner_id, request.session_id, key)).fetchone()
             if existing:
@@ -80,7 +84,9 @@ class Journal:
             try:
                 db.execute("INSERT INTO react_runs(run_id,owner_id,session_id,message_key,request_json,request_hash,started_at) VALUES(?,?,?,?,?,?,?)",
                            (run_id, owner_id, request.session_id, key, encode(payload), fingerprint, datetime.now(timezone.utc).isoformat()))
-            except sqlite3.IntegrityError as error:
+            except Exception as error:
+                if not is_integrity_error(error):
+                    raise
                 raise RunConflict("该会话已有任务执行中，请等待或取消后再发送") from error
             return dict(db.execute("SELECT * FROM react_runs WHERE run_id=?", (run_id,)).fetchone()), True
 
@@ -91,9 +97,14 @@ class Journal:
                 raise KeyError("Run not found")
             return dict(row)
 
-    def discard_unstarted(self, run_id, owner_id):
+    def discard_unstarted(self, run_id, owner_id, execution=None):
         """Release a rejected reservation without deleting recoverable work."""
         with self.connection() as db:
+            begin_write(db)
+            try:
+                self.leases.assert_current(db, "react:" + run_id, execution)
+            except LeaseLost:
+                return False
             deleted = db.execute("""
                 DELETE FROM react_runs
                 WHERE run_id=? AND owner_id=? AND active=1 AND cancelled=0
@@ -104,8 +115,28 @@ class Journal:
             """, (run_id, owner_id))
             return deleted.rowcount == 1
 
+    def claim(self, run_id):
+        return self.leases.claim("react:" + run_id)
+
+    def executing(self, run_id):
+        return self.leases.live("react:" + run_id)
+
+    def assert_execution(self, db, run_id):
+        control = CURRENT_CONTROL.get()
+        execution = (getattr(control, "execution", None)
+                     if control is not None and control.row["run_id"] == run_id else None)
+        self.leases.assert_current(db, "react:" + run_id, execution)
+        admission = getattr(control, "admission", None)
+        if admission is not None and hasattr(admission, "assert_current"):
+            admission.assert_current(db)
+
+    def begin_execution_write(self, db, run_id):
+        begin_write(db)
+        self.assert_execution(db, run_id)
+
     def event(self, run_id, event, payload):
         with self.connection() as db:
+            self.begin_execution_write(db, run_id)
             db.execute("INSERT INTO react_events(run_id,event,payload_json) VALUES(?,?,?)", (run_id, event, encode(payload)))
 
     def events(self, run_id, owner_id, after=0):
@@ -115,17 +146,19 @@ class Journal:
 
     def checkpoint(self, run_id, owner_id, payload):
         with self.connection() as db:
+            self.begin_execution_write(db, run_id)
             db.execute("UPDATE react_runs SET checkpoint_json=? WHERE run_id=? AND owner_id=? AND active=1", (encode(payload), run_id, owner_id))
 
     def finish(self, run_id, owner_id, response):
         """Publish one immutable answer, chat message and run in one transaction."""
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            begin_write(db)
             row = db.execute("SELECT * FROM react_runs WHERE run_id=? AND owner_id=?", (run_id, owner_id)).fetchone()
             if row is None:
                 raise KeyError("Run not found")
             if row["response_json"]:
                 return json.loads(row["response_json"])
+            self.assert_execution(db, run_id)
             response = {**response, "run_id": run_id, "session_id": row["session_id"]}
             if row["cancelled"]:
                 response.update(task_status="cancelled", stop_reason="cancelled", answer="任务已取消，未继续生成研究结论。")
@@ -148,12 +181,13 @@ class Journal:
     def cancel(self, run_id, owner_id):
         self.get(run_id, owner_id)
         with self.connection() as db:
+            begin_write(db)
             db.execute("UPDATE react_runs SET cancelled=1 WHERE run_id=? AND owner_id=? AND active=1", (run_id, owner_id))
 
     def begin_call(self, run_id, call):
         signature = encode([call["name"], sorted(call["args"].items())])
         with self.connection() as db:
-            db.execute("BEGIN IMMEDIATE")
+            begin_write(db)
             old = db.execute("SELECT * FROM react_calls WHERE run_id=? AND call_id=?", (run_id, call["id"])).fetchone()
             if old:
                 if old["signature"] != signature:
@@ -162,21 +196,30 @@ class Journal:
                     "error": "Previous execution outcome is unknown; not automatically repeated",
                     "error_type": "UncertainExecution", "result_state": "error", "execution_status": "failed",
                 }
+            self.assert_execution(db, run_id)
             db.execute("INSERT INTO react_calls(run_id,call_id,signature) VALUES(?,?,?)", (run_id, call["id"], signature))
         return None
 
     def finish_call(self, run_id, call_id, result):
         with self.connection() as db:
+            self.begin_execution_write(db, run_id)
             db.execute("UPDATE react_calls SET result_json=? WHERE run_id=? AND call_id=?", (encode(result), run_id, call_id))
 
 class RunControl:
-    def __init__(self, journal, row):
+    def __init__(self, journal, row, execution=None, admission=None):
         self.journal, self.row = journal, row
+        self.execution = execution
+        self.admission = admission
 
     def cancelled(self):
         try:
+            if self.execution is not None:
+                with self.journal.connection() as db:
+                    self.journal.leases.assert_current(db, "react:" + self.row["run_id"], self.execution)
+                    if self.admission is not None and hasattr(self.admission, "assert_current"):
+                        self.admission.assert_current(db)
             return bool(self.journal.get(self.row["run_id"], self.row["owner_id"])["cancelled"])
-        except KeyError:
+        except (KeyError, LeaseLost):
             return True
 
     def save(self, payload):

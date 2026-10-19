@@ -323,6 +323,7 @@ def test_stream_wakeup_preserves_updates_between_poll_and_wait(monkeypatch):
         journal = SimpleNamespace(
             get=lambda *_: {"response_json": None},
             events=lambda *_: [],
+            executing=lambda *_: True,
         )
         worker = SimpleNamespace(is_alive=lambda: True)
         monkeypatch.setitem(react_chat._workers, "wakeup-run", worker)

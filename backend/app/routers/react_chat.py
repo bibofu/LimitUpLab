@@ -53,12 +53,21 @@ def start(request, http_request, owner_id):
         except KeyError as error:
             raise HTTPException(404, "Chat session not found") from error
         run_id = row["run_id"]
-        if not row["active"] or (_workers.get(run_id) and _workers[run_id].is_alive()):
+        if not row["active"]:
+            return journal, row
+        execution = journal.claim(run_id)
+        if execution is None:
+            return journal, row
+        # A remote worker may have finished after create() returned its snapshot.
+        row = journal.get(run_id, owner_id)
+        if not row["active"]:
+            execution.release()
             return journal, row
         # Explicit POST of the same request may resume a saved checkpoint after
         # worker loss. GET/reconnect never starts a worker or pays for a model.
         started_at = datetime.fromisoformat(row["started_at"])
         try:
+            execution.start_heartbeat()
             lease, usage_repository, usage_record = agents._begin_agent_request(
                 http_request, owner_id=owner_id, session_id=request.session_id,
                 run_id=run_id, started_at=datetime.now(timezone.utc),
@@ -67,8 +76,11 @@ def start(request, http_request, owner_id):
             # Admission failures are retryable, not completed chat answers. Keep
             # an existing checkpoint intact, and release a brand-new reservation
             # so it cannot strand the conversation behind an unknown active run.
-            if fresh:
-                journal.discard_unstarted(run_id, owner_id)
+            try:
+                if fresh:
+                    journal.discard_unstarted(run_id, owner_id, execution)
+            finally:
+                execution.release()
             raise
         try:
             chats.append_message(ChatSessionMessage(
@@ -78,18 +90,21 @@ def start(request, http_request, owner_id):
         except Exception as error:
             try:
                 if fresh:
-                    journal.discard_unstarted(run_id, owner_id)
+                    journal.discard_unstarted(run_id, owner_id, execution)
             finally:
                 try:
                     agents._finish_agent_request(usage_repository, usage_record, None, error=error)
                 finally:
-                    lease.release()
+                    try:
+                        lease.release()
+                    finally:
+                        execution.release()
             raise HTTPException(503, "消息暂未能保存，请重试原请求。") from error
         history = [m for m in session.messages if m.created_at < started_at]
 
         def worker():
             tracker = response = failure = None
-            control = RunControl(journal, row)
+            control = RunControl(journal, row, execution, lease)
             token = CURRENT_CONTROL.set(control)
             def progress(stage, message):
                 journal.event(run_id, "progress", {"stage": stage, "message": message})
@@ -132,11 +147,17 @@ def start(request, http_request, owner_id):
                     try:
                         agents._finish_agent_request(usage_repository, usage_record, tracker, response=response, error=failure)
                     finally:
-                        lease.release()
-                        CURRENT_CONTROL.reset(token)
-                        with _lock:
-                            _workers.pop(run_id, None)
-                        notify_streams()
+                        try:
+                            try:
+                                lease.release()
+                            finally:
+                                execution.release()
+                        finally:
+                            CURRENT_CONTROL.reset(token)
+                            with _lock:
+                                if _workers.get(run_id) is threading.current_thread():
+                                    _workers.pop(run_id, None)
+                            notify_streams()
         try:
             thread = threading.Thread(target=worker, daemon=True, name="react-" + run_id)
             _workers[run_id] = thread
@@ -146,8 +167,13 @@ def start(request, http_request, owner_id):
             try:
                 agents._finish_agent_request(usage_repository, usage_record, None, error=error)
             finally:
-                lease.release()
-                notify_streams()
+                try:
+                    try:
+                        lease.release()
+                    finally:
+                        execution.release()
+                finally:
+                    notify_streams()
             raise HTTPException(503, "任务暂未能启动，请重试原请求以恢复。") from error
     return journal, row
 
@@ -176,8 +202,7 @@ def stream(journal, row, owner_id, after=0):
                 # cursor without replaying them; only committed answers are public.
                 if event["event"] == "progress":
                     yield f"id: {cursor}\nevent: progress\ndata: {event['payload_json']}\n\n"
-            worker = _workers.get(run_id)
-            if worker is None or not worker.is_alive():
+            if not journal.executing(run_id):
                 # Completion may have committed since the first poll above.
                 finished = owned(journal, run_id, owner_id)["response_json"]
                 if finished:
@@ -196,21 +221,21 @@ def synchronous(journal, row, owner_id):
         latest = owned(journal, row["run_id"], owner_id)
         if latest["response_json"]:
             return AgentChatResponse.model_validate_json(latest["response_json"])
-        thread = _workers.get(row["run_id"])
-        if thread is None or not thread.is_alive():
+        if not journal.executing(row["run_id"]):
             finished = owned(journal, row["run_id"], owner_id)["response_json"]
             if finished:
                 return AgentChatResponse.model_validate_json(finished)
             raise HTTPException(503, "Run interrupted; resubmit the same message_id to recover")
-        thread.join(.5)
+        with _updates:
+            _updates.wait(timeout=.5)
 
 
 @router.get("/chat/runs/{run_id}")
 def get_run(run_id: str, owner_id: Annotated[str, Depends(current_owner_id)]):
-    row = owned(Journal(), run_id, owner_id)
-    thread = _workers.get(run_id)
+    journal = Journal()
+    row = owned(journal, run_id, owner_id)
     return {"run_id": run_id, "active": bool(row["active"]), "cancel_requested": bool(row["cancelled"]),
-            "interrupted": bool(row["active"] and (thread is None or not thread.is_alive())),
+            "interrupted": bool(row["active"] and not journal.executing(run_id)),
             "response": json.loads(row["response_json"]) if row["response_json"] else None}
 
 
@@ -226,8 +251,13 @@ def cancel(run_id: str, owner_id: Annotated[str, Depends(current_owner_id)]):
     with _lock:
         row = owned(journal, run_id, owner_id)
         journal.cancel(run_id, owner_id)
-        thread = _workers.get(run_id)
-        if row["active"] and (thread is None or not thread.is_alive()):
-            journal.finish(run_id, owner_id, failed_response(row, "cancelled").model_dump(mode="json"))
+        execution = journal.claim(run_id) if row["active"] else None
+        if execution is not None:
+            token = CURRENT_CONTROL.set(RunControl(journal, row, execution))
+            try:
+                journal.finish(run_id, owner_id, failed_response(row, "cancelled").model_dump(mode="json"))
+            finally:
+                CURRENT_CONTROL.reset(token)
+                execution.release()
         notify_streams()
     return {"run_id": run_id, "cancel_requested": bool(row["active"] or row["cancelled"])}
