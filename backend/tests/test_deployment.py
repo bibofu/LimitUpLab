@@ -9,6 +9,7 @@ from unittest.mock import Mock
 from zoneinfo import ZoneInfo
 
 import pytest
+import yaml
 
 ROOT = Path(__file__).resolve().parents[2]
 spec = importlib.util.spec_from_file_location("deployment_release", ROOT / "deploy/release.py")
@@ -169,12 +170,28 @@ def test_shared_lock_rejects_conflicting_job(tmp_path, monkeypatch):
 # Regression scenario: workflow gates production on matrix success and tag push.
 def test_workflow_gates_production_on_matrix_success_and_tag_push():
     text = (ROOT / ".github/workflows/validate.yml").read_text()
+    workflow = yaml.safe_load(text)
     assert 'tags: ["v*"]' in text
-    assert "needs: validate" in text
+    assert set(workflow["jobs"]["deploy"]["needs"]) == {"validate", "postgresql"}
+    assert workflow["jobs"]["postgresql"]["services"]["postgres"]["image"] == "postgres:18-bookworm"
     assert "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in text
     assert "group: limituplab-production\n      cancel-in-progress: false" in text
     assert "DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}" in text
     assert "--ff-only" in (ROOT / "deploy/release.py").read_text()
+
+
+def test_postgresql_overlay_keeps_sqlite_volume_and_waits_for_schema():
+    base = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
+    overlay = yaml.safe_load((ROOT / "docker-compose.postgresql.yml").read_text())
+    postgres = overlay["services"]["postgres"]
+    assert postgres["image"] == "postgres:18-bookworm"
+    assert postgres["volumes"] == ["limituplab-postgres:/var/lib/postgresql"]
+    assert "ports" not in postgres
+    assert "limituplab-data:/app/data" in base["services"]["backend"]["volumes"]
+    for name in ("backend", "recommendation-refresh", "quality-worker", "quality-judge-worker", "daily-update"):
+        dependency = overlay["services"][name]["depends_on"]
+        assert dependency["postgres"]["condition"] == "service_healthy"
+        assert dependency["postgres-migrate"]["condition"] == "service_completed_successfully"
 
 
 # Regression scenario: SQLite mode=ro still needs a writable volume for WAL/SHM coordination.

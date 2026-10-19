@@ -11,7 +11,7 @@ multi-instance deployment still require their own acceptance test.
    and admin key for every API instance. Copy `.env.postgresql.example` to
    `.env.postgresql`, generate a unique database password, and set the matching
    `LIMITUPLAB_DATABASE_URL`. URL-encode reserved characters in the URL password.
-2. Build the backend image. It includes PostgreSQL 17 clients, Alembic migrations
+2. Build the backend image. It includes PostgreSQL 18 clients, Alembic migrations
    and the independent `scripts/postgres_admin.py` command.
 3. Start only the database and schema migration service while preparing import.
 
@@ -25,6 +25,11 @@ PostgreSQL is not exposed on a host port. The `limituplab-postgres` volume store
 its data; the existing `limituplab-data` volume, original SQLite database and
 SQLite backup files remain intact. Never use `docker compose down -v` during
 migration or recovery.
+
+PostgreSQL 18's official image stores data under `/var/lib/postgresql/18/docker`,
+so the volume is mounted at `/var/lib/postgresql`, following the
+[official image layout](https://hub.docker.com/_/postgres).
+Runtime, CI service and backup clients use the same major version.
 
 The overlay runs Alembic as a one-shot service before application processes. The
 upgrade entry point serializes competing deploy-time migrations. Requests only

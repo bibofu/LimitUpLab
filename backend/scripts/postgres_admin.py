@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -50,7 +51,12 @@ def file_hash(path):
 
 
 def client(command, environment, *, output=None):
-    result = subprocess.run(command, env=environment, stdout=output or subprocess.PIPE,
+    executable = shutil.which(command[0], path=environment.get("PATH"))
+    if executable is None:
+        raise AdminError(f"Required PostgreSQL client is unavailable: {command[0]}")
+    # Windows process creation does not resolve executables using the child's
+    # custom PATH. Resolve first so portable client installations work there too.
+    result = subprocess.run([executable, *command[1:]], env=environment, stdout=output or subprocess.PIPE,
                             stderr=subprocess.PIPE, check=False)
     if result.returncode:
         # Server/client error strings may contain endpoints, SQL or private rows.

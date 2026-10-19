@@ -24,7 +24,7 @@ RUN apt-get update \
     && echo 'deb [signed-by=/usr/share/keyrings/postgresql.asc] https://apt.postgresql.org/pub/repos/apt bookworm-pgdg main' \
          > /etc/apt/sources.list.d/postgresql.list \
     && apt-get update \
-    && apt-get install -y --no-install-recommends postgresql-client-17 \
+    && apt-get install -y --no-install-recommends postgresql-client-18 \
     && if [ "$INSTALL_HITHINK_FINANCE" = "true" ]; then \
          ln -s /usr/local/lib/node_modules/npm/bin/npm-cli.js /usr/local/bin/npm \
          && ln -s /usr/local/lib/node_modules/npm/bin/npx-cli.js /usr/local/bin/npx \

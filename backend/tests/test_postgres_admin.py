@@ -30,6 +30,7 @@ def test_unknown_url_options_are_rejected():
 
 def test_backup_is_exclusive_checksummed_and_readable(tmp_path, monkeypatch):
     commands = []
+    monkeypatch.setattr(admin.shutil, "which", lambda executable, path=None: executable)
 
     def fake_run(command, *, env, stdout, stderr, check):
         commands.append(command)
@@ -51,8 +52,21 @@ def test_backup_is_exclusive_checksummed_and_readable(tmp_path, monkeypatch):
 
 
 def test_client_failure_does_not_echo_server_secrets(monkeypatch):
+    monkeypatch.setattr(admin.shutil, "which", lambda executable, path=None: executable)
     monkeypatch.setattr(admin.subprocess, "run", lambda *args, **kwargs:
                         SimpleNamespace(returncode=1, stderr=b"password and private rows"))
     with pytest.raises(admin.AdminError, match="pg_dump failed with exit status 1") as captured:
         admin.client(["pg_dump"], {})
     assert "private" not in str(captured.value)
+
+
+def test_client_resolves_custom_path_before_process_creation(monkeypatch):
+    calls = []
+    monkeypatch.setattr(admin.shutil, "which", lambda executable, path=None:
+                        "C:/portable/pg_dump.exe" if path == "C:/portable" else None)
+    monkeypatch.setattr(admin.subprocess, "run", lambda command, **kwargs:
+                        calls.append(command) or SimpleNamespace(returncode=0))
+    admin.client(["pg_dump", "--format=custom"], {"PATH": "C:/portable"})
+    assert calls == [["C:/portable/pg_dump.exe", "--format=custom"]]
+    with pytest.raises(admin.AdminError, match="unavailable"):
+        admin.client(["pg_dump"], {"PATH": "missing"})

@@ -64,7 +64,7 @@ jobs:
     timeout-minutes: 20
     services:
       postgres:
-        image: postgres:17-bookworm
+        image: postgres:18-bookworm
         env:
           POSTGRES_USER: limituplab_test
           POSTGRES_PASSWORD: disposable_ci_password

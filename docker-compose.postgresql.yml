@@ -13,14 +13,14 @@ x-postgres-dependencies: &postgres-dependencies
 
 services:
   postgres:
-    image: postgres:17-bookworm
+    image: postgres:18-bookworm
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-limituplab}
       POSTGRES_USER: ${POSTGRES_USER:-limituplab}
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?Set a unique PostgreSQL password}
     volumes:
-      - limituplab-postgres:/var/lib/postgresql/data
+      - limituplab-postgres:/var/lib/postgresql
     healthcheck:
       test: ["CMD-SHELL", "pg_isready -U \"$$POSTGRES_USER\" -d \"$$POSTGRES_DB\""]
       interval: 5s

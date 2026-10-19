@@ -62,3 +62,18 @@ to the retained SQLite database if necessary. After it receives new writes,
 SQLite is no longer current: stop writes and reconcile those records before any
 rollback. This tool intentionally provides no destructive downgrade or automatic
 reverse synchronization. PostgreSQL backup/restore is a separate operational step.
+
+## Local rehearsal evidence, 2026-10-19
+
+A consistent backup of the retained local SQLite database was imported into the
+separate `limituplab_migration_rehearsal` database on PostgreSQL 18. All 691,526
+business rows matched their source checksums across 41 existing tables; four new
+coordination tables were empty. Five legacy tables containing six rows remained
+in the SQLite source. The source backup's file SHA-256 was unchanged after import.
+
+The custom-format backup was then restored into the separate empty
+`limituplab_migration_restore` database. All 45 tables and 691,526 rows matched
+the import report's checksums. Local generated evidence is retained under ignored
+`output/pg-migration-report.json` and `output/pg-restore-verification.json`; the
+original SQLite database and backup were not switched or removed. Docker image
+build/start and remote CI execution remain separate deployment checks.
