@@ -19,6 +19,7 @@ _test_environment = TemporaryDirectory(prefix="pytest-runtime-", dir=_scratch_ro
 _test_root = Path(_test_environment.name)
 os.environ["LIMITUPLAB_ENV_FILE"] = str(_test_root / "offline-only.env")
 os.environ["LIMITUPLAB_DATABASE_URL"] = ""
+os.environ["LIMITUPLAB_EVAL_DATABASE_URL"] = ""
 os.environ["LIMITUPLAB_DATABASE_PATH"] = str(_test_root / "default.sqlite")
 os.environ["LIMITUPLAB_LLM_ENABLED"] = "false"
 

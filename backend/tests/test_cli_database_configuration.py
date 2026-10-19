@@ -37,5 +37,6 @@ def test_test_collection_uses_isolated_storage():
     # PG integration fixtures explicitly opt into LIMITUPLAB_TEST_DATABASE_URL;
     # ordinary tests always have a scratch SQLite and no project .env loaded.
     assert os.environ["LIMITUPLAB_DATABASE_URL"] == ""
+    assert os.environ["LIMITUPLAB_EVAL_DATABASE_URL"] == ""
     assert not Path(os.environ["LIMITUPLAB_ENV_FILE"]).exists()
     assert "pytest-runtime-" in Path(os.environ["LIMITUPLAB_DATABASE_PATH"]).parent.name
