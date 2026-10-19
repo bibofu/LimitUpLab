@@ -1,5 +1,6 @@
 """Production watchdog regressions using a simulated Docker daemon and clock."""
 from contextlib import contextmanager
+import hashlib
 import importlib.util
 import json
 from pathlib import Path
@@ -106,11 +107,20 @@ class DockerSimulation:
 @pytest.fixture
 def docker(monkeypatch, tmp_path):
     fake = DockerSimulation()
+    repository = tmp_path / "repo"
+    repository.mkdir()
+    (repository / ".env.postgresql").write_text("# simulated configuration\n")
+    (repository / "docker-compose.postgresql.yml").write_text("services: {}\n")
+    monkeypatch.setattr(job, "REPO", repository)
+    monkeypatch.setattr(release, "REPO", repository)
     monkeypatch.setattr(job, "MAINTENANCE", tmp_path / ".maintenance")
     monkeypatch.setattr(job, "deployment_lock", fake.lock)
     monkeypatch.setattr(job.subprocess, "run", fake.run)
     monkeypatch.setattr(job.time, "monotonic", lambda: fake.clock)
     monkeypatch.setattr(job.time, "sleep", fake.sleep)
+    monkeypatch.setattr(job, "database_mode", lambda: "sqlite")
+    monkeypatch.setattr(job, "assert_runtime_database_mode", lambda mode: None)
+    monkeypatch.setattr(job, "POSTGRES_BACKUPS", tmp_path / "postgresql")
     return fake
 
 
@@ -247,3 +257,126 @@ def test_unknown_or_unsafe_arguments_never_launch_containers(docker, argv):
         job.main(argv)
     assert error.value.code == 2
     assert docker.commands == []
+
+
+def test_runtime_database_mismatch_blocks_jobs_without_launch(docker, monkeypatch):
+    def mismatch(mode):
+        assert docker.held and mode == "postgresql"
+        raise RuntimeError("Configured database disagrees with the running application")
+
+    monkeypatch.setattr(job, "database_mode", lambda: "postgresql")
+    monkeypatch.setattr(job, "assert_runtime_database_mode", mismatch)
+    assert job.main(["daily-update"]) == 1
+    assert docker.commands == []
+    assert not job.MAINTENANCE.exists()
+
+
+def test_postgresql_daily_job_uses_both_environment_files_and_overlay(docker, monkeypatch):
+    monkeypatch.setattr(job, "database_mode", lambda: "postgresql")
+    docker.status = "exited"
+    assert job.main(["daily-update"]) == 0
+    command = docker.commands[0]
+    environment_files = [command[index + 1] for index, part in enumerate(command) if part == "--env-file"]
+    compose_files = [command[index + 1] for index, part in enumerate(command) if part == "-f"]
+    assert environment_files == [str(release.REPO / ".env.production"), str(release.REPO / ".env.postgresql")]
+    assert str(job.REPO / "docker-compose.postgresql.yml") in compose_files
+    assert command[-6:] == ["python", "scripts/run_daily_close_loop.py", "--trigger", "scheduled",
+                           "--lock-path", "/tmp/daily_close_loop.lock"]
+
+
+def create_archive(directory, index, *, payload=b"archive", checksum=True):
+    directory.mkdir(parents=True, exist_ok=True)
+    path = directory / f"limituplab-pg-20261019T030000Z-{index:032x}.dump"
+    path.write_bytes(payload)
+    if checksum:
+        path.with_suffix(".dump.sha256").write_text(hashlib.sha256(payload).hexdigest() + "\n", encoding="ascii")
+    return path
+
+
+def test_postgresql_backup_uses_networked_compose_and_prunes_only_after_success(docker, monkeypatch):
+    monkeypatch.setattr(job, "database_mode", lambda: "postgresql")
+    docker.status = "exited"
+    original_run = docker.run
+    retained = []
+
+    def create_successful_backup(command, **kwargs):
+        result = original_run(command, **kwargs)
+        if command[1] == "compose":
+            assert "scripts/postgres_admin.py" in command
+            assert "scripts/backup_database.py" not in command
+            assert "--network" not in command
+            assert f"{job.POSTGRES_BACKUPS}:/backups" in command
+            output = command[command.index("--output") + 1]
+            archive = job.POSTGRES_BACKUPS / Path(output).name
+            archive.write_bytes(b"consistent-pg-archive")
+            archive.with_suffix(".dump.sha256").write_text(hashlib.sha256(archive.read_bytes()).hexdigest())
+        return result
+
+    def retain(archive):
+        assert docker.held and docker.events[-1] == "rm"
+        assert job.verified_postgres_backup(archive)
+        retained.append(archive)
+        return 0
+
+    monkeypatch.setattr(job.subprocess, "run", create_successful_backup)
+    monkeypatch.setattr(job, "retain_postgres_backups", retain)
+    assert job.main(["backup"]) == 0
+    assert len(retained) == 1
+
+
+@pytest.mark.parametrize("exit_code", [1, 7])
+def test_failed_postgresql_backup_never_prunes_existing_archives(docker, monkeypatch, exit_code):
+    monkeypatch.setattr(job, "database_mode", lambda: "postgresql")
+    monkeypatch.setattr(job, "retain_postgres_backups", lambda _: pytest.fail("Do not prune failed backups"))
+    docker.status, docker.exit_code = "exited", exit_code
+    assert job.main(["backup"]) == exit_code
+
+
+def test_successful_container_without_verified_backup_fails_job(docker, monkeypatch):
+    monkeypatch.setattr(job, "database_mode", lambda: "postgresql")
+    docker.status = "exited"
+    assert job.main(["backup"]) == 1
+    assert not job.MAINTENANCE.exists()
+
+
+def test_retention_keeps_14_complete_pairs_and_preserves_foreign_sqlite_or_invalid_files(docker, tmp_path):
+    paths = [create_archive(job.POSTGRES_BACKUPS, index) for index in range(16)]
+    sqlite_backup = tmp_path / "limituplab-20261018.sqlite"
+    sqlite_backup.write_bytes(b"retained original")
+    incomplete = create_archive(job.POSTGRES_BACKUPS, 100, checksum=False)
+    corrupt = create_archive(job.POSTGRES_BACKUPS, 101)
+    corrupt.with_suffix(".dump.sha256").write_text("incorrect")
+    foreign = job.POSTGRES_BACKUPS / "manual-recovery.dump"
+    foreign.write_bytes(b"manual recovery")
+    original_bytes = {path: path.read_bytes() for path in (sqlite_backup, incomplete, corrupt, foreign)}
+
+    assert job.retain_postgres_backups(paths[-1]) == 2
+    assert all(not path.exists() and not path.with_suffix(".dump.sha256").exists() for path in paths[:2])
+    assert all(job.verified_postgres_backup(path) for path in paths[2:])
+    assert all(path.read_bytes() == payload for path, payload in original_bytes.items())
+
+
+def test_unverified_new_archive_prevents_all_retention(docker):
+    old = create_archive(job.POSTGRES_BACKUPS, 1)
+    new = create_archive(job.POSTGRES_BACKUPS, 2, checksum=False)
+    with pytest.raises(RuntimeError, match="verified archive/checksum"):
+        job.retain_postgres_backups(new, retain_count=1)
+    assert old.exists() and old.with_suffix(".dump.sha256").exists()
+
+
+@pytest.mark.parametrize("filename", [
+    "manual.dump", "limituplab-pg-20260230T030000Z-" + "a" * 32 + ".dump",
+    "limituplab-pg-20261019T030000Z-" + "a" * 31 + ".dump",
+    "limituplab-pg-20261019T030000Z-" + "g" * 32 + ".dump",
+    "limituplab-pg-20261019T030000Z-" + "a" * 32 + ".dump.sha256",
+])
+def test_retention_does_not_accept_foreign_filenames(filename):
+    assert not job.is_postgres_backup(Path(filename))
+
+
+def test_command_rejects_unknown_database_and_unsafe_backup_path(docker):
+    with pytest.raises(ValueError, match="database mode"):
+        job.command_for(job.parse_args(["daily-update"]), "example", "unexpected")
+    with pytest.raises(ValueError, match="backup directory"):
+        job.command_for(job.parse_args(["backup"]), "example", "postgresql",
+                        backup_path=job.POSTGRES_BACKUPS.parent / "manual.dump")

@@ -1,5 +1,6 @@
 SHELL=/bin/bash
 PATH=/usr/local/sbin:/usr/local/bin:/usr/sbin:/usr/bin:/sbin:/bin
 
-# Create a consistent SQLite snapshot every day and retain the newest 14 files.
+# Back up the configured database each day; retain 14 verified daily backups.
+# PostgreSQL archives use a separate directory; retained SQLite files stay intact.
 25 3 * * * root /usr/bin/python3 /usr/local/lib/limituplab/job.py backup >> /var/log/limituplab/backup.log 2>&1
