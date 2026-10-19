@@ -9,7 +9,7 @@
 - 后端运行于 `127.0.0.1:8001`，前端运行于 `127.0.0.1:5173`；`/ready` 返回 `status=ok, database=postgresql`。
 - 推荐刷新进程已恢复且确认仅一个实际 worker；`LimitUpLab-DailyCloseLoop` 已恢复启用，工作日 16:00、Limited 权限及原重试配置保留，入口增加 PostgreSQL 就绪检查。没有提前运行收盘采集或伪造当天预测。
 - 原 `backend/data/limituplab.sqlite` 保留。它是切换前的数据，不再接收本地正常业务的新写入；没有双写。
-- `.env`、密码、原配置备份、数据库目录及生成报告均未提交。当前代码分支为 `codex/postgresql-migration`。
+- `.env`、密码、原配置备份、数据库目录及生成报告均未提交。迁移代码已从 `codex/postgresql-migration` 快进合并到本地 `main`，当前工作区已切换到 `main`。
 
 ## 最新数据迁移
 
@@ -61,5 +61,7 @@
 `--skip-data-check` 仅跳过联网更新；省略它可保留原有数据新鲜度检查流程。数据库停启、配置模板及错误处理见 [本地操作手册](../deploy/local-postgresql.md)。
 
 实际任务恢复记录为 `output/local-postgresql-task-after.json`；数据库和后端保持运行。本轮没有扩展多实例功能。
+
+快进合并并切换到 `main` 后，已再次验证 PostgreSQL 连接和 Schema、后端 `/ready` 与 `/health`、前端及 API 代理。14 张关键业务表内容指纹、8 类仓储读取、会话与缓存写入、事务回滚及实际 HTTP 会话增改删均通过，验证数据已清理。原 SQLite 与迁移前一致性备份的 SHA-256 均与切换记录一致。此次复核报告为 `output/local-postgresql-main-verification.json`。
 
 SQLite 只作为保留数据与兼容入口。正式切换后的新会话、缓存、运行记录和日更写入以 PostgreSQL 为准；不得直接删掉 URL 后把旧 SQLite 当作最新库。需要回退时，先停写并处理切换后的新增数据。
