@@ -24,9 +24,11 @@ from app.models import (
 from app.repositories import SQLiteFirstBoardRepository
 from app.services.stock_position import classify_stock_position
 from app.services.market_data_provider import collect_preferred_stock_kline
+from app.services.relay_universe import is_relay_research_security
 
 
-ENRICHMENT_FEATURE_VERSION = "first-board-enrichment-v4-hithink-market"
+ENRICHMENT_FEATURE_VERSION = "first-board-enrichment-v5-no-st-bj-context"
+RELAY_CONTEXT_VERSION_SUFFIX = "+relay-context-v1-no-st-bj"
 MIN_AMOUNT = 100_000_000
 KLineCollector = Callable[[str, int, date | None], list[StockKLineBar]]
 
@@ -205,6 +207,28 @@ def build_enrichment_snapshot(
     )
 
 
+def adapt_enrichment_relay_context(
+    snapshot: FirstBoardEnrichmentSnapshot,
+    *,
+    event: LimitUpEvent,
+    events: list[LimitUpEvent],
+) -> FirstBoardEnrichmentSnapshot:
+    """Recompute legacy context in memory while retaining original source facts."""
+
+    if snapshot.symbol != event.symbol or snapshot.trade_date != event.trade_date:
+        raise ValueError("Enrichment context must match the target stock and date")
+    if (
+        snapshot.feature_version == ENRICHMENT_FEATURE_VERSION
+        or snapshot.feature_version.endswith(RELAY_CONTEXT_VERSION_SUFFIX)
+    ):
+        return snapshot
+    return snapshot.model_copy(update={
+        **_market_context(events, event),
+        # Only context was upgraded; do not relabel older technical/source facts as v5.
+        "feature_version": snapshot.feature_version + RELAY_CONTEXT_VERSION_SUFFIX,
+    })
+
+
 # Select the day's events eligible for first-board enrichment.
 def _candidate_events(events: list[LimitUpEvent], trade_date: date) -> list[LimitUpEvent]:
     return [
@@ -344,7 +368,10 @@ def _recent_limit_up_counts(
 
 # Build the target stock's same-day market and peer context from event facts.
 def _market_context(events: list[LimitUpEvent], target: LimitUpEvent) -> dict[str, object]:
-    same_day = [item for item in events if item.trade_date == target.trade_date]
+    research_events = [
+        item for item in events if is_relay_research_security(item.symbol, item.name)
+    ]
+    same_day = [item for item in research_events if item.trade_date == target.trade_date]
     industry = [item for item in same_day if item.industry == target.industry]
     industry_first = [item for item in industry if item.board_height == 1 and item.closed_limit]
     industry_continued = [item for item in industry if item.board_height >= 2 and item.closed_limit]
@@ -356,7 +383,7 @@ def _market_context(events: list[LimitUpEvent], target: LimitUpEvent) -> dict[st
     previous_date = available_dates[-2] if len(available_dates) >= 2 else None
     previous_first = [
         item
-        for item in events
+        for item in research_events
         if previous_date is not None
         and item.trade_date == previous_date
         and item.board_height == 1

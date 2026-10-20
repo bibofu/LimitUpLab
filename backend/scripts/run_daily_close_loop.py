@@ -552,7 +552,7 @@ def _recommendation_refresh_ready(
 
     if not live_eligible:
         return False
-    if (report.collection_status or report.akshare_status) in {"partial", "error"}:
+    if not report.relay_collection_complete:
         return False
     health = report.health
     if not health.get("raw_events_ready") or not health.get(

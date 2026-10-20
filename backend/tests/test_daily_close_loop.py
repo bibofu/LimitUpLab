@@ -382,6 +382,31 @@ class DailyCloseLoopTest(unittest.TestCase):
         report.collection_status = "ok"
         self.assertTrue(_recommendation_refresh_ready(report, live_eligible=True))
 
+    # Relay publication can succeed while the full raw pool remains incomplete.
+    def test_excluded_raw_gaps_refresh_relay_and_keep_global_partial_alert(self) -> None:
+        day = date(2026, 8, 21)
+        report = self._complete_report(day, live_count=10)
+        report.collection_status = "partial"
+        report.collection_errors = ["missing ST/BSE supplement"]
+        report.relay_inputs_complete = True
+        report.relay_excluded_gaps = ["closed_limit_pool:000639"]
+        execution = self._execute(
+            requested_date=day, now=datetime(2026, 8, 21, 16, 10, tzinfo=CN_TZ),
+            update_runner=lambda **_: report,
+        )
+        self.assertEqual(execution.status, "partial")
+        self.assertTrue(self.alert_path.exists())
+        self.assertIsNotNone(execution.run.report["recommendation_refresh"])
+        self.assertTrue(execution.run.report["pipeline"]["relay_inputs_complete"])
+
+    def test_explicit_incomplete_relay_inputs_block_even_with_ok_raw_status(self) -> None:
+        from scripts.run_daily_close_loop import _recommendation_refresh_ready
+
+        report = self._complete_report(date(2026, 8, 21), live_count=10)
+        report.collection_status = "ok"
+        report.relay_inputs_complete = False
+        self.assertFalse(_recommendation_refresh_ready(report, live_eligible=True))
+
     # Regression scenario: review snapshot failure marks pipeline partial.
     def test_review_snapshot_failure_marks_pipeline_partial(self) -> None:
         target_date = date(2026, 8, 21)

@@ -21,7 +21,9 @@ from app.models import (
 )
 from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
 from app.services.analysis import events_for_date, latest_trade_date, summarize_market
+from app.services.first_board_enrichment import adapt_enrichment_relay_context
 from app.services.limit_up_reason import count_reason_peers
+from app.services.relay_universe import is_relay_research_security
 from app.services.scoring_policy import (
     FACTOR_KEYS_BY_NAME,
     REASON_AWARE_POLICY_PREFIX,
@@ -48,7 +50,11 @@ def build_first_board_ratings(
 
     target_date = trade_date or latest_trade_date(events)
     latest_events = events_for_date(events, target_date)
-    summary = summarize_market(latest_events)
+    research_events = [
+        event for event in latest_events
+        if is_relay_research_security(event.symbol, event.name)
+    ]
+    summary = summarize_market(research_events) if research_events else None
     repository = first_board_repository or SQLiteFirstBoardRepository()
     active_policy = scoring_policy or SQLiteScoringPolicyRepository(
         repository.database_path
@@ -72,9 +78,14 @@ def build_first_board_ratings(
     facts = [
         build_first_board_candidate_facts(
             event=event,
-            same_day_events=latest_events,
+            same_day_events=research_events,
             summary=summary,
-            enrichment=enrichments.get(event.symbol),
+            enrichment=(
+                adapt_enrichment_relay_context(
+                    enrichments[event.symbol], event=event, events=events,
+                )
+                if event.symbol in enrichments else None
+            ),
             data_missing=next(
                 result.data_missing
                 for result in filter_results
@@ -82,7 +93,7 @@ def build_first_board_ratings(
             ),
         )
         for event in latest_events
-        if event.symbol in included_symbols
+        if event.symbol in included_symbols and summary is not None
     ]
 
     # The key compares score (negated for descending order), then confidence (negated for

@@ -66,6 +66,46 @@ class AgentDataHealthTest(unittest.TestCase):
         self.assertFalse(health.raw_events_ready)
         self.assertTrue(health.warnings)
 
+    def test_excluded_only_day_is_ready_for_an_empty_relay_result(self) -> None:
+        database_path = self._database_path()
+        try:
+            repository = SQLiteFirstBoardRepository(database_path=database_path)
+            trade_date = date(2026, 10, 20)
+            events = [
+                self._make_event("000639", "ST西王", trade_date),
+                self._make_event("600302", "*ST标准", trade_date),
+                self._make_event("920096", "嘉晨智能", trade_date),
+                self._make_event("830001", "北交样本", trade_date),
+            ]
+            health = build_agent_data_health(
+                events=events, first_board_repository=repository, trade_date=trade_date,
+            )
+            self.assertTrue(health.raw_events_ready)
+            self.assertTrue(health.first_board_features_ready)
+            self.assertEqual(health.first_board_feature_count, 0)
+            self.assertEqual(health.top_candidates_checked, 0)
+            self.assertFalse(any("features are missing" in item for item in health.warnings))
+        finally:
+            self._cleanup_database(database_path)
+
+    def test_partial_features_do_not_hide_a_missing_eligible_symbol(self) -> None:
+        database_path = self._database_path()
+        try:
+            repository = SQLiteFirstBoardRepository(database_path=database_path)
+            trade_date = date(2026, 10, 20)
+            events = [
+                self._make_event("002491", "通鼎互联", trade_date),
+                self._make_event("600001", "普通样本", trade_date),
+            ]
+            repository.upsert_features(build_first_board_features(events[:1], trade_date))
+            health = build_agent_data_health(
+                events=events, first_board_repository=repository, trade_date=trade_date,
+            )
+            self.assertFalse(health.first_board_features_ready)
+            self.assertEqual(health.status, "missing")
+        finally:
+            self._cleanup_database(database_path)
+
     # Regression scenario: features without enrichment returns partial status.
     def test_features_without_enrichment_returns_partial_status(self) -> None:
         database_path = self._database_path()

@@ -196,7 +196,7 @@ class FirstBoardFeaturesTest(unittest.TestCase):
         self.assertEqual(feature.turnover_bucket, "extreme")
         self.assertEqual(feature.amount_bucket, "medium")
         self.assertEqual(feature.market_failed_rate_bucket, "fragile")
-        self.assertEqual(feature.feature_version, "first-board-feature-v2-no-sentiment")
+        self.assertEqual(feature.feature_version, "first-board-feature-v3-no-st-bj-context")
 
     # Regression scenario: initialize database removes legacy market sentiment column.
     def test_initialize_database_removes_legacy_market_sentiment_column(self) -> None:

@@ -5,9 +5,10 @@ from datetime import date, time
 from pathlib import Path
 from typing import Protocol
 
-from app.database import connect, initialize_database
+from app.database import begin_write, connect, initialize_database
 from app.models import LimitUpEvent
 from app.services.sample_data import SAMPLE_EVENTS
+from app.services.relay_universe import is_relay_research_security
 
 
 class LimitUpRepository(Protocol):
@@ -181,6 +182,33 @@ class SQLiteLimitUpRepository:
                 (value,),
             )
             connection.commit()
+        finally:
+            connection.close()
+
+    def replace_relay_events_for_date(
+        self, trade_date: date, events: list[LimitUpEvent],
+    ) -> None:
+        """Replace a verified relay scope while retaining excluded raw records."""
+
+        if any(event.trade_date != trade_date for event in events):
+            raise ValueError("Relay replacement events must match the target date")
+        connection = connect(self.database_path)
+        try:
+            initialize_database(connection)
+            begin_write(connection)
+            rows = connection.execute(
+                "SELECT symbol, name FROM limit_up_events WHERE trade_date = ?",
+                (trade_date.isoformat(),),
+            ).fetchall()
+            connection.executemany(
+                "DELETE FROM limit_up_events WHERE trade_date = ? AND symbol = ?",
+                [
+                    (trade_date.isoformat(), row["symbol"])
+                    for row in rows
+                    if is_relay_research_security(row["symbol"], row["name"])
+                ],
+            )
+            self.upsert_events(events, connection=connection)
         finally:
             connection.close()
 

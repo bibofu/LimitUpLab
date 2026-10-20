@@ -62,6 +62,7 @@ from app.services.data_health import build_agent_data_health
 from app.services.factor_signal_diagnostic import build_factor_signal_diagnostic
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.first_board_critic import build_first_board_critic
+from app.services.first_board_enrichment import RELAY_CONTEXT_VERSION_SUFFIX
 from app.services.dragon_tiger_review import load_dragon_tiger_review
 from app.services.agent_rate_limit import (
     AgentRateLimitError,
@@ -294,6 +295,7 @@ def get_first_board_ratings(
     return _cached_response(
         scope="first_board_ratings",
         key_parts={
+            "relay_context_version": RELAY_CONTEXT_VERSION_SUFFIX,
             "trade_date": resolved_trade_date.isoformat() if resolved_trade_date else None,
             "full_pool": full_pool,
             "events": _events_signature(events, start_date=resolved_trade_date, end_date=resolved_trade_date),

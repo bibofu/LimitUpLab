@@ -79,6 +79,8 @@ class DailyUpdateReport:
     collection_data_fresh: bool | None = None
     collection_sources: dict[str, str] = field(default_factory=dict)
     collection_errors: list[str] = field(default_factory=list)
+    relay_inputs_complete: bool | None = None
+    relay_excluded_gaps: list[str] = field(default_factory=list)
     # Retained as compatibility aliases for existing report readers.
     akshare_status: str | None = None
     akshare_data_fresh: bool | None = None
@@ -127,6 +129,14 @@ class DailyUpdateReport:
     top_candidate: dict[str, object] | None = None
     health: dict[str, object] = field(default_factory=dict)
     warnings: list[str] = field(default_factory=list)
+
+    @property
+    def relay_collection_complete(self) -> bool:
+        """Use explicit scoped coverage, or the legacy whole-pool check."""
+
+        if self.relay_inputs_complete is not None:
+            return self.relay_inputs_complete
+        return (self.collection_status or self.akshare_status) not in {"partial", "error"}
 
 
 def main() -> None:
@@ -237,11 +247,18 @@ def run_daily_update(
         report.collection_data_fresh = collection.data_fresh
         report.collection_sources = dict(collection.pool_sources)
         report.collection_errors = list(collection.source_errors)
+        report.relay_inputs_complete = collection.relay_inputs_complete
+        report.relay_excluded_gaps = list(collection.relay_excluded_gaps)
         report.akshare_status = collection.status
         report.akshare_data_fresh = collection.data_fresh
         report.akshare_source_errors = list(collection.source_errors)
         report.warnings.extend(collection.source_errors)
         report.warnings.extend(collection.source_warnings)
+        if collection.relay_excluded_gaps:
+            report.warnings.append(
+                "ST/BSE supplement gaps excluded from relay coverage: "
+                + ", ".join(collection.relay_excluded_gaps)
+            )
         imported_events = collection.payload
         report.hithink_reason_enriched_count = collection.reason_enriched_count
         try:
@@ -259,7 +276,12 @@ def run_daily_update(
             report.warnings.append(f"Tonghuashun limit-up verification: {error}")
         if replace_date and collection.status in {"ok", "empty"}:
             limit_repo.delete_events_for_date(trade_date)
-        limit_repo.upsert_events(imported_events)
+        if replace_date and collection.status == "partial" and report.relay_collection_complete:
+            # Do not retain stale eligible rows from an earlier intraday/partial pool,
+            # or delete raw ST/BSE rows merely because their supplement is absent.
+            limit_repo.replace_relay_events_for_date(trade_date, imported_events)
+        else:
+            limit_repo.upsert_events(imported_events)
         report.imported_events = len(imported_events)
         report.closed_limit_events = sum(1 for item in imported_events if item.closed_limit)
         report.failed_limit_events = sum(1 for item in imported_events if not item.closed_limit)
@@ -371,11 +393,11 @@ def run_daily_update(
     )[:6]
     latest_available_date = max(event.trade_date for event in events)
     is_latest_available_date = trade_date == latest_available_date
-    raw_complete = report.collection_status not in {"partial", "error"}
-    if not raw_complete:
-        report.warnings.append("Incomplete raw pools: target-date prediction snapshots deferred")
+    relay_complete = report.relay_collection_complete
+    if not relay_complete:
+        report.warnings.append("Incomplete relay input pools: target-date prediction snapshots deferred")
     should_persist_live = (
-        raw_complete and is_latest_available_date and persist_live_prediction is not False
+        relay_complete and is_latest_available_date and persist_live_prediction is not False
         and not provenance_errors(base_date=trade_date, data_as_of=trade_date,
                                   created_at=now or datetime.now(CN_TZ), provenance=close_provenance())
     )
@@ -388,7 +410,7 @@ def run_daily_update(
         if item < trade_date
         or (
             item == trade_date
-            and raw_complete
+            and relay_complete
             and not should_persist_live
             and not target_has_live_prediction
         )

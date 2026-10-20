@@ -31,6 +31,9 @@ class LimitUpCollectionResult:
     source_warnings: tuple[str, ...] = ()
     hithink_limit_up_snapshot: HithinkLimitUpPoolSnapshot | None = None
     reason_enriched_count: int = 0
+    # None preserves the conservative whole-pool contract of older collectors.
+    relay_inputs_complete: bool | None = None
+    relay_excluded_gaps: tuple[str, ...] = ()
 
 
 def parse_akshare_trade_date(value: str) -> date:

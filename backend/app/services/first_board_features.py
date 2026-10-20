@@ -14,9 +14,10 @@ from app.models import (
     StockDailyBar,
 )
 from app.services.analysis import events_for_date, summarize_market
+from app.services.relay_universe import is_relay_research_security
 
 
-FEATURE_VERSION = "first-board-feature-v2-no-sentiment"
+FEATURE_VERSION = "first-board-feature-v3-no-st-bj-context"
 OUTCOME_VERSION = "first-board-outcome-v2-entry-open"
 
 
@@ -26,7 +27,10 @@ def build_first_board_features(
 ) -> list[FirstBoardFeature]:
     """Build persisted first-board feature rows for one trading date."""
 
-    target_events = events_for_date(events, trade_date)
+    target_events = [
+        event for event in events_for_date(events, trade_date)
+        if is_relay_research_security(event.symbol, event.name)
+    ]
     if not target_events:
         return []
 

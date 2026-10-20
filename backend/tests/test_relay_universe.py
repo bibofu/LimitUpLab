@@ -1,6 +1,6 @@
 import unittest
 
-from app.services.relay_universe import is_relay_candidate_symbol
+from app.services.relay_universe import is_relay_candidate_symbol, is_relay_research_security
 
 
 class RelayUniverseTest(unittest.TestCase):
@@ -11,3 +11,17 @@ class RelayUniverseTest(unittest.TestCase):
         self.assertTrue(is_relay_candidate_symbol("000001"))
         self.assertTrue(is_relay_candidate_symbol("002001"))
         self.assertTrue(is_relay_candidate_symbol("600001"))
+
+    def test_bse_is_not_a_relay_candidate(self) -> None:
+        for symbol in ("430047", "830799", "920096"):
+            self.assertFalse(is_relay_candidate_symbol(symbol))
+
+    def test_research_context_excludes_only_risk_warning_and_bse(self) -> None:
+        for symbol, name in (
+            ("000639", "ST西王"), ("600302", "*ST标准"),
+            ("600001", "退市测试"), ("920096", "嘉晨智能"),
+            ("430047", "测试"), ("830799", "测试"),
+        ):
+            self.assertFalse(is_relay_research_security(symbol, name))
+        for symbol in ("000001", "300001", "688001"):
+            self.assertTrue(is_relay_research_security(symbol, "正常股票"))

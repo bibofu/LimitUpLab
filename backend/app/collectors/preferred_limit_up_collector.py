@@ -13,6 +13,7 @@ from app.collectors.akshare_limit_up_collector import (
 from app.collectors.hithink_finance_collector import HithinkFinanceCollector
 from app.models import LimitUpEvent
 from app.services.limit_up_reason import merge_limit_up_reasons
+from app.services.relay_universe import is_relay_research_security
 
 
 def collect_limit_up_events(trade_date: str) -> LimitUpCollectionResult:
@@ -28,6 +29,8 @@ def collect_limit_up_events(trade_date: str) -> LimitUpCollectionResult:
     complete_pools = 0
     closed_snapshot = None
     enriched_count = 0
+    relay_inputs_complete = True
+    relay_excluded_gaps: list[str] = []
 
     for closed, pool, remote_loader, supplement_loader in (
         (True, "closed_limit_pool", collector.collect_all_limit_up_pool,
@@ -46,6 +49,7 @@ def collect_limit_up_events(trade_date: str) -> LimitUpCollectionResult:
             except Exception as fallback_error:  # noqa: BLE001
                 errors.append(f"{pool}: both providers failed; {error}; {fallback_error}")
                 sources[pool] = "unavailable"
+                relay_inputs_complete = False
                 continue
             sources[pool] = "akshare-eastmoney.fallback"
             complete_pools += 1
@@ -71,6 +75,8 @@ def collect_limit_up_events(trade_date: str) -> LimitUpCollectionResult:
             }
         except Exception as error:  # noqa: BLE001
             errors.append(f"{pool}: Eastmoney required field supplement failed: {error}")
+            # Whole-request failures cannot be attributed to excluded securities.
+            relay_inputs_complete = False
             continue
         sources[pool] = "hithink-finance+akshare-eastmoney.fields"
         missing: list[str] = []
@@ -82,6 +88,10 @@ def collect_limit_up_events(trade_date: str) -> LimitUpCollectionResult:
             base = supplemental.get(item.symbol)
             if base is None:
                 missing.append(item.symbol)
+                if is_relay_research_security(item.symbol, item.name):
+                    relay_inputs_complete = False
+                else:
+                    relay_excluded_gaps.append(f"{pool}:{item.symbol}")
                 continue
             updates: dict[str, object] = {"name": item.name, "closed_limit": closed}
             if closed:
@@ -96,6 +106,7 @@ def collect_limit_up_events(trade_date: str) -> LimitUpCollectionResult:
                             field == "break_count" and int(value) != value
                         ):
                             errors.append(f"{pool}.{item.symbol}: invalid THS {field}")
+                            relay_inputs_complete = False
                             break
                         updates[field] = value
                 else:
@@ -131,4 +142,6 @@ def collect_limit_up_events(trade_date: str) -> LimitUpCollectionResult:
         source_warnings=tuple(warnings),
         hithink_limit_up_snapshot=closed_snapshot,
         reason_enriched_count=enriched_count,
+        relay_inputs_complete=relay_inputs_complete,
+        relay_excluded_gaps=tuple(relay_excluded_gaps),
     )

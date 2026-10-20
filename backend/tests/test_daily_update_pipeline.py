@@ -413,6 +413,54 @@ class DailyUpdatePipelineTest(unittest.TestCase):
         finally:
             self._cleanup_database(database_path)
 
+    # Excluded gaps must not block relay publication or retain stale candidates.
+    @patch("scripts.update_daily_data.collect_limit_up_events")
+    def test_excluded_raw_gaps_publish_relay_without_deleting_excluded_records(
+        self, collect_events,
+    ) -> None:
+        database_path = self._database_path()
+        day = date(2026, 8, 21)
+        previous_day = date(2026, 8, 20)
+        normal = self._make_event("002491", "通鼎互联", day)
+        st = self._make_event("000639", "ST西王", day)
+        bse = self._make_event("920096", "嘉晨智能", day)
+        stale = self._make_event("600001", "已离开今日池", day)
+        older = self._make_event("600001", "历史原始记录", previous_day)
+        collect_events.return_value = LimitUpCollectionResult(
+            status="partial", data_fresh=True,
+            source_errors=("closed_limit_pool: missing excluded ST supplement",),
+            payload=[normal], pool_sources={"closed_limit_pool": "test"},
+            relay_inputs_complete=True,
+            relay_excluded_gaps=("closed_limit_pool:000639",),
+        )
+        try:
+            limit_repo = SQLiteLimitUpRepository(database_path=database_path)
+            first_repo = SQLiteFirstBoardRepository(database_path=database_path)
+            limit_repo.upsert_events([st, bse, stale, older])
+            report = run_daily_update(
+                trade_date=day, top_targets=1, replace_date=True,
+                max_tracked_kline_fetches=0, max_post_limit_kline_fetches=0,
+                refresh_enrichment=False, limit_up_repository=limit_repo,
+                first_board_repository=first_repo, post_bar_collector=lambda *_: [],
+                now=datetime(2026, 8, 21, 8, 10, tzinfo=timezone.utc),
+            )
+            self.assertEqual(report.collection_status, "partial")
+            self.assertTrue(report.relay_inputs_complete)
+            self.assertTrue(report.collection_errors)
+            self.assertEqual(report.relay_excluded_gaps, ["closed_limit_pool:000639"])
+            self.assertEqual(report.persisted_live_predictions, 1)
+            self.assertTrue(report.live_prediction_snapshot_ready)
+            events = limit_repo.list_events()
+            self.assertEqual(
+                {e.symbol for e in events if e.trade_date == day},
+                {"002491", "000639", "920096"},
+            )
+            self.assertIn(older, events)
+            predictions = first_repo.list_predictions_between(day, day)
+            self.assertEqual([p.symbol for p in predictions], ["002491"])
+        finally:
+            self._cleanup_database(database_path)
+
     # Regression scenario: post bar collection includes as of date.
     @patch("scripts.update_daily_data.collect_stock_kline")
     def test_post_bar_collection_includes_as_of_date(self, collect_kline) -> None:

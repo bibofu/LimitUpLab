@@ -15,6 +15,7 @@ from app.repositories import SQLiteFirstBoardRepository
 from app.services.analysis import latest_trade_date
 from app.services.outcome_completeness import build_top10_outcome_completeness
 from app.services.daily_bar_source import daily_bar_source_family
+from app.services.relay_universe import is_relay_research_security
 from app.post_limit_query_contract import PREMARKET_OBSERVATION_RECENT_LIMIT_DAYS
 
 
@@ -102,7 +103,16 @@ def build_agent_data_health(
             )
         )
 
-    first_board_features_ready = len(features) > 0
+    expected_feature_symbols = {
+        event.symbol for event in raw_events
+        if event.closed_limit and event.board_height == 1
+        and is_relay_research_security(event.symbol, event.name)
+    }
+    # An excluded-only day is a valid empty research universe. Conversely, one
+    # cached feature must not conceal another eligible stock's missing feature.
+    first_board_features_ready = expected_feature_symbols <= {
+        feature.symbol for feature in features
+    }
     enrichment_ready = bool(candidate_health) and all(
         item.enrichment_ready for item in candidate_health
     )
