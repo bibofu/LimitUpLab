@@ -24,7 +24,7 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 
 当前阶段为 **V1.5：ReAct 交付与证据契约完善、Golden 粗评基线建立**。[V1.5 阶段里程碑](docs/V1.5_Milestone.md) 汇总 `v1.5.0` 的工作、验证结果、限制和下一步。Golden 已能辅助定位 Agent 问题，裁判可靠性验收仍未通过；自动结果需要保留待复核项。
 
-当前 Windows 工作区和远程单实例生产环境均已正式切换至 PostgreSQL，原 SQLite 文件和备份保留，不再接收正常业务的新写入。生产版本为 `v1.6.2`，发布和实际接口/Agent 验收见 [v1.6.2 发布记录](deploy/incidents/2026-10-19-v1.6.2-release.md)；首次迁移、重启持久化及备份恢复记录见 [生产切换验收](deploy/incidents/2026-10-19-postgresql-cutover.md) 和 [本地切换验收](docs/Local_PostgreSQL_Cutover.md)。其他工作区未配置 `LIMITUPLAB_DATABASE_URL` 时仍可使用 SQLite。操作方式见 [本地手册](deploy/local-postgresql.md) 与 [生产部署恢复手册](deploy/postgresql.md)；多实例部署尚未验收。
+当前 Windows 工作区和远程单实例生产环境均已正式切换至 PostgreSQL，原 SQLite 文件和备份保留，不再接收正常业务的新写入。生产版本为 `v1.6.3`，ST/北交所研究范围修复、当日收盘补跑与实际接口/Agent 验收见 [v1.6.3 发布记录](deploy/incidents/2026-10-20-v1.6.3-relay-refresh.md)；首次迁移、重启持久化及备份恢复记录见 [生产切换验收](deploy/incidents/2026-10-19-postgresql-cutover.md) 和 [本地切换验收](docs/Local_PostgreSQL_Cutover.md)。其他工作区未配置 `LIMITUPLAB_DATABASE_URL` 时仍可使用 SQLite。操作方式见 [本地手册](deploy/local-postgresql.md) 与 [生产部署恢复手册](deploy/postgresql.md)；多实例部署尚未验收。
 
 离线研究、维护备份、质量工单及 Golden 评测的 PostgreSQL 路径已补齐，通过禁止 SQLite 连接的本地验证，并随 `v1.6.2` 发布，见 [SQLite 依赖清理验收](docs/PostgreSQL_Independence.md)。Golden 实时评测仍须单独配置评测库，不使用生产业务库。
 
