@@ -1,131 +1,47 @@
-﻿"""SQLite connection and schema initialization helpers."""
+"""PostgreSQL connections and schema readiness for application storage.
 
-import hashlib
-import json
+Historical SQLite archives are read only by the dedicated migration tools.
+Runtime configuration must select PostgreSQL explicitly; no local file fallback.
+"""
+
 import os
-import sqlite3
-import threading
-import time
 from pathlib import Path
-from typing import Callable, TypeVar
 
-from app.config import env_bool
+from psycopg import IntegrityError
+from sqlalchemy.engine import make_url
+
+from app.storage.postgres import PostgresConnection
 
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
-DEFAULT_DATABASE_PATH = BACKEND_ROOT / "data" / "limituplab.sqlite"
-CURRENT_SCHEMA_VERSION = 12
-DEFAULT_BUSY_TIMEOUT_MS = 5_000
-DEFAULT_LOCK_RETRY_ATTEMPTS = 3
-DEFAULT_LOCK_RETRY_BASE_DELAY_SECONDS = 0.05
-DEFAULT_WAL_AUTOCHECKPOINT_PAGES = 1_000
-_connection_setup_lock = threading.Lock()
-_schema_initialization_lock = threading.Lock()
-Result = TypeVar("Result")
 
 
-class ResilientSQLiteConnection(sqlite3.Connection):
-    """SQLite connection that retries transient lock conflicts safely."""
-
-    lock_retry_attempts: int = DEFAULT_LOCK_RETRY_ATTEMPTS
-    lock_retry_base_delay_seconds: float = DEFAULT_LOCK_RETRY_BASE_DELAY_SECONDS
-
-    # Run one SQL statement through the connection's lock-conflict retry policy.
-    def execute(self, sql: str, parameters=(), /) -> sqlite3.Cursor:
-        return self._retry_locked(super().execute, sql, parameters)
-
-    # Run a batch of SQL bindings through the connection's lock-conflict retry policy.
-    def executemany(self, sql: str, seq_of_parameters, /) -> sqlite3.Cursor:
-        return self._retry_locked(super().executemany, sql, seq_of_parameters)
-
-    # Commit the current transaction through the connection's lock-conflict retry policy.
-    def commit(self) -> None:
-        self._retry_locked(super().commit)
-
-    def _retry_locked(self, operation: Callable[..., Result], *args) -> Result:
-        """Retry only SQLite busy/locked failures with bounded backoff."""
-
-        attempts = max(1, self.lock_retry_attempts)
-        for attempt in range(attempts):
-            try:
-                return operation(*args)
-            except sqlite3.OperationalError as error:
-                if not _is_lock_conflict(error) or attempt + 1 >= attempts:
-                    raise
-                time.sleep(
-                    self.lock_retry_base_delay_seconds * (2**attempt)
-                )
-        raise RuntimeError("unreachable SQLite retry state")
-
-
-def get_database_path() -> Path:
-    """Return the configured SQLite database path."""
-
-    configured_path = os.getenv("LIMITUPLAB_DATABASE_PATH")
-    if configured_path:
-        return Path(configured_path)
-    return DEFAULT_DATABASE_PATH
-
-
-def connect(database_path: Path | None = None, *, database_url: str | None = None) -> sqlite3.Connection:
-    """Open one consistently configured, concurrent-safe SQLite connection."""
-
-    if database_path is not None and database_url is not None:
-        raise ValueError("Choose a database path or URL, not both")
-    url = database_url if database_url is not None else os.getenv("LIMITUPLAB_DATABASE_URL", "").strip()
-    if database_path is None and url:
-        from app.storage.postgres import PostgresConnection
-        return PostgresConnection(url)
-    path = database_path or get_database_path()
-    path.parent.mkdir(parents=True, exist_ok=True)
-    busy_timeout_ms = _bounded_int(
-        "LIMITUPLAB_SQLITE_BUSY_TIMEOUT_MS",
-        DEFAULT_BUSY_TIMEOUT_MS,
-        minimum=100,
-        maximum=60_000,
-    )
-    connection = sqlite3.connect(
-        path,
-        timeout=busy_timeout_ms / 1_000,
-        factory=ResilientSQLiteConnection,
-    )
-    connection.lock_retry_attempts = _bounded_int(
-        "LIMITUPLAB_SQLITE_LOCK_RETRY_ATTEMPTS",
-        DEFAULT_LOCK_RETRY_ATTEMPTS,
-        minimum=1,
-        maximum=10,
-    )
-    connection.lock_retry_base_delay_seconds = _bounded_float(
-        "LIMITUPLAB_SQLITE_LOCK_RETRY_BASE_DELAY_SECONDS",
-        DEFAULT_LOCK_RETRY_BASE_DELAY_SECONDS,
-        minimum=0.0,
-        maximum=2.0,
-    )
-    connection.row_factory = sqlite3.Row
+def get_database_url(database_url: str | None = None) -> str:
+    """Validate configuration without including credentials in error messages."""
+    value = database_url if database_url is not None else os.getenv("LIMITUPLAB_DATABASE_URL", "")
+    if not isinstance(value, str) or not value.strip():
+        raise ValueError("LIMITUPLAB_DATABASE_URL is required and must select PostgreSQL")
     try:
-        connection.execute(f"PRAGMA busy_timeout = {busy_timeout_ms}")
-        connection.execute("PRAGMA foreign_keys = ON")
-        if env_bool("LIMITUPLAB_SQLITE_WAL_ENABLED", True):
-            current_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
-            if str(current_mode).lower() != "wal":
-                # Changing journal mode is persistent and must not race between
-                # first connections to a newly created database.
-                with _connection_setup_lock:
-                    current_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
-                    if str(current_mode).lower() != "wal":
-                        connection.execute("PRAGMA journal_mode = WAL").fetchone()
-        connection.execute("PRAGMA synchronous = NORMAL")
-        wal_checkpoint_pages = _bounded_int(
-            "LIMITUPLAB_SQLITE_WAL_AUTOCHECKPOINT_PAGES",
-            DEFAULT_WAL_AUTOCHECKPOINT_PAGES,
-            minimum=100,
-            maximum=100_000,
-        )
-        connection.execute(f"PRAGMA wal_autocheckpoint = {wal_checkpoint_pages}")
+        parsed = make_url(value.strip())
     except Exception:
-        connection.close()
-        raise
-    return connection
+        raise ValueError("LIMITUPLAB_DATABASE_URL must be a valid PostgreSQL URL") from None
+    if parsed.drivername not in {"postgresql", "postgresql+psycopg"} or not parsed.database:
+        raise ValueError("LIMITUPLAB_DATABASE_URL must select a PostgreSQL database")
+    return value.strip()
+
+
+def get_data_directory() -> Path:
+    """Keep reports and caches independent of database connection settings."""
+    configured = os.getenv("LIMITUPLAB_DATA_DIRECTORY", "").strip()
+    return Path(configured) if configured else BACKEND_ROOT / "data"
+
+
+def connect(database_url: str | None = None) -> PostgresConnection:
+    return PostgresConnection(get_database_url(database_url))
+
+
+def connect_readonly(database_url: str | None = None) -> PostgresConnection:
+    return PostgresConnection(get_database_url(database_url), readonly=True)
 
 
 def is_postgres(connection) -> bool:
@@ -133,86 +49,34 @@ def is_postgres(connection) -> bool:
 
 
 def begin_write(connection, scope: str = "write") -> None:
-    """Protect existing read-modify-write contracts on either backend."""
-    if is_postgres(connection):
-        connection.begin_write(scope)
-    elif not connection.in_transaction:
-        connection.execute("BEGIN IMMEDIATE")
+    connection.begin_write(scope)
 
 
 def table_exists(connection, name: str) -> bool:
-    if is_postgres(connection):
-        return connection.execute(
-            "SELECT 1 FROM information_schema.tables WHERE table_schema=current_schema() AND table_name=?",
-            (name,),
-        ).fetchone() is not None
     return connection.execute(
-        "SELECT 1 FROM sqlite_master WHERE type='table' AND name=?", (name,),
+        "SELECT 1 FROM information_schema.tables WHERE table_schema=current_schema() AND table_name=?",
+        (name,),
     ).fetchone() is not None
 
 
 def is_integrity_error(error) -> bool:
-    if isinstance(error, sqlite3.IntegrityError):
-        return True
-    try:
-        from psycopg import IntegrityError
-        return isinstance(error, IntegrityError)
-    except ImportError:
-        return False
+    return isinstance(error, IntegrityError)
 
 
-def connect_readonly(database_path: Path | None = None):
-    """Open a consistent read snapshot; missing SQLite files stay missing."""
-    if database_path is None and os.getenv("LIMITUPLAB_DATABASE_URL", "").strip():
-        from app.storage.postgres import PostgresConnection
-        return PostgresConnection(readonly=True)
-    path = Path(database_path or get_database_path()).resolve()
-    if not path.is_file():
-        raise FileNotFoundError(path)
-    connection = sqlite3.connect(path.as_uri() + "?mode=ro", uri=True)
-    connection.row_factory = sqlite3.Row
-    connection.execute("PRAGMA query_only=ON")
-    connection.execute("BEGIN")
-    return connection
-
-
-def initialize_database(connection: sqlite3.Connection) -> None:
-    """Apply the schema once using a serialized, cross-process write transaction."""
-
-    if is_postgres(connection):
-        from app.storage.schema import HEAD_REVISION
-        if getattr(connection, "_schema_checked", False):
-            return
-        versions = connection.execute("SELECT version_num FROM alembic_version").fetchall()
-        if [row[0] for row in versions] != [HEAD_REVISION]:
-            raise RuntimeError("PostgreSQL schema is not current; run Alembic upgrade head")
-        connection._schema_checked = True
+def initialize_database(connection: PostgresConnection) -> None:
+    """Reject stale schemas; Alembic alone applies application migrations."""
+    from app.storage.schema import HEAD_REVISION
+    if getattr(connection, "_schema_checked", False):
         return
-    if _database_schema_version(connection) >= CURRENT_SCHEMA_VERSION:
-        return
+    versions = connection.execute("SELECT version_num FROM alembic_version").fetchall()
+    if [row[0] for row in versions] != [HEAD_REVISION]:
+        raise RuntimeError("PostgreSQL schema is not current; run Alembic upgrade head")
+    connection._schema_checked = True
 
-    with _schema_initialization_lock:
-        if _database_schema_version(connection) >= CURRENT_SCHEMA_VERSION:
-            return
-        # Legacy callers may have created pre-versioned tables on this
-        # connection before asking the initializer to migrate them. The old
-        # initializer committed those writes as well, so preserve that contract.
-        if connection.in_transaction:
-            connection.commit()
-        connection.execute("BEGIN IMMEDIATE")
-        try:
-            # Another process may have completed the migration while this
-            # connection waited for the write lock.
-            if _database_schema_version(connection) < CURRENT_SCHEMA_VERSION:
-                _apply_schema(connection)
-                connection.execute(
-                    f"PRAGMA user_version = {CURRENT_SCHEMA_VERSION}"
-                )
-            connection.commit()
-        except Exception:
-            connection.rollback()
-            raise
-
+# Retired helpers removed in the next changeset.
+import hashlib
+import json
+import sqlite3
 
 def _apply_schema(connection: sqlite3.Connection) -> None:
     """Create and migrate all tables inside the caller's schema transaction."""
