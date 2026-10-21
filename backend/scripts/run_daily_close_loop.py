@@ -30,10 +30,10 @@ from app.models import (
     RecommendationIntelligenceResponse,
 )
 from app.repositories import (
-    SQLiteDailyPipelineRepository,
-    SQLiteFirstBoardRepository,
-    SQLiteLimitUpRepository,
-    SQLiteReviewSnapshotRepository,
+    DailyPipelineRepository,
+    FirstBoardRepository,
+    LimitUpRepository,
+    ReviewSnapshotRepository,
 )
 from app.services.daily_review import build_daily_review_snapshot
 from app.services.recommendation_intelligence import refresh_recommendation_intelligence
@@ -79,67 +79,23 @@ class DailyCloseLoopExecution:
 
 
 class DailyCloseLoopLock:
-    """Cross-process file lock with bounded stale-lock recovery."""
+    """Coordinate every close-loop process through a PostgreSQL lease."""
 
-    # Initialize DailyCloseLoopLock with the supplied dependencies and per-instance state.
-    def __init__(self, path: Path, *, stale_after: timedelta = timedelta(hours=6)):
-        self.path = path
-        self.stale_after = stale_after
-        self._owned = False
+    def __init__(self, path: Path, *, database_url: str | None = None,
+                 stale_after: timedelta = timedelta(hours=6)):
+        # Keep historical CLI arguments accepted for installed task definitions.
+        from app.storage.job_context import SharedJobLock
+        self._shared = SharedJobLock("daily-close-loop", database_url)
 
-    # Acquire ownership of the process lock before allowing the guarded loop to run.
     def __enter__(self) -> DailyCloseLoopLock:
-        if os.getenv("LIMITUPLAB_DATABASE_URL", "").strip():
-            from app.storage.job_context import SharedJobLock
-            self._shared = SharedJobLock("daily-close-loop")
-            try:
-                self._shared.__enter__()
-            except RuntimeError as error:
-                raise DailyCloseLoopAlreadyRunning(str(error)) from error
-            return self
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        self._remove_stale_lock()
-        payload = json.dumps(
-            {
-                "pid": os.getpid(),
-                "started_at": datetime.now(timezone.utc).isoformat(),
-            },
-            ensure_ascii=False,
-        )
         try:
-            descriptor = os.open(
-                self.path,
-                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-            )
-        except FileExistsError as error:
-            raise DailyCloseLoopAlreadyRunning(
-                f"Daily close loop is already running; lock={self.path}"
-            ) from error
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(payload)
-        self._owned = True
+            self._shared.__enter__()
+        except RuntimeError as error:
+            raise DailyCloseLoopAlreadyRunning(str(error)) from error
         return self
 
-    # Remove the lock only if this instance acquired it, including when the guarded work raised an
-    # exception.
-    def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
-        if getattr(self, "_shared", None) is not None:
-            self._shared.__exit__(_exc_type, _exc_value, _traceback)
-            return
-        if self._owned:
-            self.path.unlink(missing_ok=True)
-            self._owned = False
-
-    # Remove an existing lock only when its age exceeds this loop's configured stale threshold.
-    def _remove_stale_lock(self) -> None:
-        if not self.path.exists():
-            return
-        modified_at = datetime.fromtimestamp(
-            self.path.stat().st_mtime,
-            tz=timezone.utc,
-        )
-        if datetime.now(timezone.utc) - modified_at > self.stale_after:
-            self.path.unlink(missing_ok=True)
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self._shared.__exit__(exc_type, exc_value, traceback)
 
 
 def main() -> None:
@@ -213,9 +169,9 @@ def execute_daily_close_loop(
     lock_path: Path = DEFAULT_LOCK_PATH,
     report_path: Path = DEFAULT_REPORT_PATH,
     alert_path: Path = DEFAULT_ALERT_PATH,
-    limit_up_repository: SQLiteLimitUpRepository | None = None,
-    first_board_repository: SQLiteFirstBoardRepository | None = None,
-    run_repository: SQLiteDailyPipelineRepository | None = None,
+    limit_up_repository: LimitUpRepository | None = None,
+    first_board_repository: FirstBoardRepository | None = None,
+    run_repository: DailyPipelineRepository | None = None,
     calendar_collector: CalendarCollector = collect_a_share_trade_dates,
     update_runner: UpdateRunner = run_daily_update,
     review_snapshot_builder: ReviewSnapshotBuilder = build_daily_review_snapshot,
@@ -227,10 +183,10 @@ def execute_daily_close_loop(
     current = now or datetime.now(CN_TZ)
     if current.tzinfo is None:
         current = current.replace(tzinfo=CN_TZ)
-    run_repo = run_repository or SQLiteDailyPipelineRepository()
+    run_repo = run_repository or DailyPipelineRepository()
 
     try:
-        with DailyCloseLoopLock(lock_path):
+        with DailyCloseLoopLock(lock_path, database_url=run_repo.database_url):
             target = resolve_target_trade_date(
                 now=current,
                 requested_date=requested_date,
@@ -279,8 +235,8 @@ def execute_daily_close_loop(
             )
             run_repo.save_run(run)
 
-            limit_repo = limit_up_repository or SQLiteLimitUpRepository(seed_if_empty=False)
-            first_repo = first_board_repository or SQLiteFirstBoardRepository()
+            limit_repo = limit_up_repository or LimitUpRepository(seed_if_empty=False)
+            first_repo = first_board_repository or FirstBoardRepository()
             live_eligible = (
                 target.trade_date == current.date()
                 and current.time() >= AFTER_CLOSE_TIME
@@ -366,8 +322,8 @@ def execute_daily_close_loop(
                         events=limit_repo.list_events(),
                         as_of_date=target.trade_date,
                         first_board_repository=first_repo,
-                        snapshot_repository=SQLiteReviewSnapshotRepository(
-                            first_repo.database_path
+                        snapshot_repository=ReviewSnapshotRepository(
+                            first_repo.database_url
                         ),
                     )
                     review_snapshot_payload = {
@@ -569,7 +525,7 @@ def _recommendation_refresh_ready(
 # Save the final pipeline state, including any failure or incomplete-work explanation.
 def _persist_terminal_run(
     *,
-    repository: SQLiteDailyPipelineRepository,
+    repository: DailyPipelineRepository,
     trade_date: date,
     trigger: str,
     status: str,

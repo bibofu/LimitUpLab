@@ -30,8 +30,8 @@ from app.collectors import (
 from app.models import AgentPrediction, LimitUpEvent, StockDailyBar, StockKLineBar
 from app.services.prediction_time import CN_TZ, close_provenance, provenance_errors
 from app.repositories import (
-    SQLiteFirstBoardRepository,
-    SQLiteLimitUpRepository,
+    FirstBoardRepository,
+    LimitUpRepository,
 )
 from app.services.first_board_features import (
     build_first_board_features,
@@ -221,8 +221,8 @@ def run_daily_update(
     refresh_enrichment: bool = True,
     force_enrichment: bool = False,
     replace_date: bool = False,
-    limit_up_repository: SQLiteLimitUpRepository | None = None,
-    first_board_repository: SQLiteFirstBoardRepository | None = None,
+    limit_up_repository: LimitUpRepository | None = None,
+    first_board_repository: FirstBoardRepository | None = None,
     post_bar_collector: PostBarCollector | None = None,
     spot_bar_collector: SpotBarCollector | None = None,
     remote_limit_up_collector: RemoteLimitUpCollector | None = None,
@@ -231,8 +231,8 @@ def run_daily_update(
 ) -> DailyUpdateReport:
     """Update raw events, scoring features, tracked bars and health checks."""
 
-    limit_repo = limit_up_repository or SQLiteLimitUpRepository()
-    first_board_repo = first_board_repository or SQLiteFirstBoardRepository()
+    limit_repo = limit_up_repository or LimitUpRepository()
+    first_board_repo = first_board_repository or FirstBoardRepository()
     active_bar_collector = post_bar_collector or collect_post_first_board_bars
     active_spot_collector = spot_bar_collector or (
         collect_stock_spot_klines if post_bar_collector is None else None
@@ -515,7 +515,7 @@ def warm_latest_intraday_cache(
     *,
     events: list[LimitUpEvent],
     trade_date: date,
-    repository: SQLiteFirstBoardRepository,
+    repository: FirstBoardRepository,
     max_workers: int = 6,
     loader: IntradayLoader = load_stock_intraday_bars,
 ) -> IntradayWarmupResult:
@@ -590,7 +590,7 @@ def collect_hithink_limit_up_snapshot(
 def backfill_recent_daily_top_candidate_bars(
     *,
     events: list[LimitUpEvent],
-    first_board_repository: SQLiteFirstBoardRepository,
+    first_board_repository: FirstBoardRepository,
     trading_days: int,
     top_per_day: int,
     max_kline_fetches: int,
@@ -814,7 +814,7 @@ def backfill_recent_daily_top_candidate_bars(
 
 def sync_recent_features(
     events: list[LimitUpEvent],
-    first_board_repository: SQLiteFirstBoardRepository,
+    first_board_repository: FirstBoardRepository,
     history_days: int,
 ) -> tuple[int, int]:
     """Rebuild first-board feature rows for recent local trading dates."""
@@ -867,7 +867,7 @@ def collect_post_first_board_bars(
 def backfill_recent_post_limit_bars(
     *,
     events: list[LimitUpEvent],
-    repository: SQLiteFirstBoardRepository,
+    repository: FirstBoardRepository,
     as_of_date: date,
     max_kline_fetches: int = 120,
     history_collector: Callable[..., list] = collect_stock_kline,

@@ -1,7 +1,6 @@
 """Import preferred-source events; retain the legacy filename for existing jobs."""
 
 import argparse
-import os
 import sys
 from pathlib import Path
 
@@ -10,8 +9,7 @@ sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.collectors import collect_limit_up_events, parse_akshare_trade_date
 from app.config import configure_runtime_environment
-from app.database import get_database_path
-from app.repositories import SQLiteLimitUpRepository
+from app.repositories import LimitUpRepository
 
 
 def main() -> None:
@@ -31,7 +29,7 @@ def main() -> None:
 
     collection = collect_limit_up_events(args.date)
     events = collection.payload
-    repository = SQLiteLimitUpRepository()
+    repository = LimitUpRepository()
 
     if collection.status == "error":
         raise SystemExit("Collection failed: " + "; ".join(collection.source_errors))
@@ -44,8 +42,7 @@ def main() -> None:
     print(
         f"Imported {len(events)} events with status={collection.status} "
         f"({closed_count} closed, {failed_count} failed) "
-        f"for {args.date} into "
-        f"{'PostgreSQL' if os.getenv('LIMITUPLAB_DATABASE_URL', '').strip() else get_database_path()}"
+        f"for {args.date} into PostgreSQL"
     )
     print(f"Pool sources: {collection.pool_sources}")
     for source_error in (*collection.source_errors, *collection.source_warnings):

@@ -13,7 +13,8 @@ services:
     env_file:
       - .env.production
     environment:
-      LIMITUPLAB_DATABASE_PATH: /app/data/limituplab.sqlite
+      LIMITUPLAB_DATABASE_URL: ${LIMITUPLAB_DATABASE_URL:?Set the PostgreSQL application URL}
+      LIMITUPLAB_DATA_DIRECTORY: /app/data
       TZ: Asia/Shanghai
     volumes:
       - limituplab-data:/app/data
@@ -60,7 +61,8 @@ services:
     env_file:
       - .env.production
     environment:
-      LIMITUPLAB_DATABASE_PATH: /app/data/limituplab.sqlite
+      LIMITUPLAB_DATABASE_URL: ${LIMITUPLAB_DATABASE_URL:?Set the PostgreSQL application URL}
+      LIMITUPLAB_DATA_DIRECTORY: /app/data
       TZ: Asia/Shanghai
     volumes:
       - limituplab-data:/app/data
@@ -86,7 +88,8 @@ services:
     env_file:
       - .env.production
     environment:
-      LIMITUPLAB_DATABASE_PATH: /app/data/limituplab.sqlite
+      LIMITUPLAB_DATABASE_URL: ${LIMITUPLAB_DATABASE_URL:?Set the PostgreSQL application URL}
+      LIMITUPLAB_DATA_DIRECTORY: /app/data
       TZ: Asia/Shanghai
     volumes:
       - limituplab-data:/app/data
@@ -109,7 +112,8 @@ services:
     env_file:
       - .env.production
     environment:
-      LIMITUPLAB_DATABASE_PATH: /app/data/limituplab.sqlite
+      LIMITUPLAB_DATABASE_URL: ${LIMITUPLAB_DATABASE_URL:?Set the PostgreSQL application URL}
+      LIMITUPLAB_DATA_DIRECTORY: /app/data
       TZ: Asia/Shanghai
     volumes:
       - limituplab-data:/app/data
@@ -132,7 +136,8 @@ services:
     env_file:
       - .env.production
     environment:
-      LIMITUPLAB_DATABASE_PATH: /app/data/limituplab.sqlite
+      LIMITUPLAB_DATABASE_URL: ${LIMITUPLAB_DATABASE_URL:?Set the PostgreSQL application URL}
+      LIMITUPLAB_DATA_DIRECTORY: /app/data
       TZ: Asia/Shanghai
     volumes:
       - limituplab-data:/app/data

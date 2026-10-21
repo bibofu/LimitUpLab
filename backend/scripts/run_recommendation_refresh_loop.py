@@ -33,68 +33,22 @@ WORKER_STALE_AFTER = timedelta(hours=30)
 
 
 class RefreshLoopLock:
-    """Prevent duplicate local or container refresh workers."""
+    """Coordinate every refresh worker through a PostgreSQL lease."""
 
-    # Initialize RefreshLoopLock with the supplied dependencies and per-instance state.
     def __init__(self, path: Path, *, stale_after: timedelta):
-        self.path = path
-        self.stale_after = stale_after
-        self._owned = False
+        # Keep historical CLI arguments accepted for installed task definitions.
+        from app.storage.job_context import SharedJobLock
+        self._shared = SharedJobLock("recommendation-refresh")
 
-    # Acquire ownership of the process lock before allowing the guarded loop to run.
     def __enter__(self) -> RefreshLoopLock:
-        if os.getenv("LIMITUPLAB_DATABASE_URL", "").strip():
-            from app.storage.job_context import SharedJobLock
-            self._shared = SharedJobLock("recommendation-refresh")
-            self._shared.__enter__()
-            return self
-        self.path.parent.mkdir(parents=True, exist_ok=True)
-        if self.path.exists():
-            lock_pid = _read_lock_pid(self.path)
-            modified_at = datetime.fromtimestamp(self.path.stat().st_mtime, tz=timezone.utc)
-            if (
-                (lock_pid is not None and not _process_exists(lock_pid))
-                or datetime.now(timezone.utc) - modified_at > self.stale_after
-            ):
-                self.path.unlink(missing_ok=True)
-        try:
-            descriptor = os.open(
-                self.path,
-                os.O_CREAT | os.O_EXCL | os.O_WRONLY,
-            )
-        except FileExistsError as error:
-            raise RuntimeError(
-                f"Recommendation refresh loop is already running: {self.path}"
-            ) from error
-        with os.fdopen(descriptor, "w", encoding="utf-8") as handle:
-            handle.write(
-                json.dumps(
-                    {
-                        "pid": os.getpid(),
-                        "started_at": datetime.now(timezone.utc).isoformat(),
-                    }
-                )
-            )
-        self._owned = True
+        self._shared.__enter__()
         return self
 
-    # Refresh the modification time of the lock owned by this loop as a liveness signal.
     def touch(self) -> None:
-        if getattr(self, "_shared", None) is not None:
-            self._shared.touch()
-            return
-        if self._owned:
-            self.path.touch()
+        self._shared.touch()
 
-    # Remove the lock only if this instance acquired it, including when the guarded work raised an
-    # exception.
-    def __exit__(self, _exc_type, _exc_value, _traceback) -> None:
-        if getattr(self, "_shared", None) is not None:
-            self._shared.__exit__(_exc_type, _exc_value, _traceback)
-            return
-        if self._owned:
-            self.path.unlink(missing_ok=True)
-            self._owned = False
+    def __exit__(self, exc_type, exc_value, traceback) -> None:
+        self._shared.__exit__(exc_type, exc_value, traceback)
 
 
 def main() -> int:
@@ -205,28 +159,6 @@ def _seconds_until_next_premarket_refresh(now: datetime | None = None) -> float:
     if current >= scheduled:
         scheduled += timedelta(days=1)
     return max(1.0, (scheduled - current).total_seconds())
-
-
-# Read the process identity stored in a refresh-loop lock; invalid lock content returns None.
-# A None result represents the unavailable or inapplicable branch; callers must check it before
-# using the value.
-def _read_lock_pid(path: Path) -> int | None:
-    try:
-        payload = json.loads(path.read_text(encoding="utf-8"))
-        return int(payload.get("pid"))
-    except (OSError, ValueError, TypeError, json.JSONDecodeError):
-        return None
-
-
-# Check whether the recorded process ID is still present before reclaiming its lock.
-def _process_exists(pid: int) -> bool:
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    return True
 
 
 # Persist the refresh result through a temporary file so readers see a complete report.

@@ -110,9 +110,27 @@ def main() -> int:
            "LIMITUPLAB_ENVIRONMENT": "development",
            "LIMITUPLAB_ENV_FILE": str(output / "offline-only.env"),
            "LIMITUPLAB_DATABASE_URL": "", "LIMITUPLAB_EVAL_DATABASE_URL": "",
-           "LIMITUPLAB_DATABASE_PATH": str(output / "validation.sqlite"),
            "LIMITUPLAB_TEST_TMP": str(test_tmp), "TMP": str(test_tmp), "TEMP": str(test_tmp)}
+    # Retain only database names before clearing active URLs, so CI with custom
+    # production names has the same isolation guard as a developer's local .env.
+    if args.scope in {"all", "backend"}:
+        from sqlalchemy.engine import make_url
+        try:
+            forbidden = [make_url(value).database for key in
+                         ("LIMITUPLAB_DATABASE_URL", "LIMITUPLAB_EVAL_DATABASE_URL")
+                         if (value := os.environ.get(key, "").strip())]
+        except Exception:
+            print("Setup failed: active database configuration is invalid.", file=sys.stderr)
+            return 1
+        env["LIMITUPLAB_TEST_FORBIDDEN_DATABASES"] = json.dumps(forbidden)
     print(f"Report directory: {output}", flush=True)
+    if args.scope in {"all", "backend"} and not all(
+        os.environ.get(name, "").strip() for name in
+        ("LIMITUPLAB_TEST_DATABASE_URL", "LIMITUPLAB_TEST_EVAL_DATABASE_URL")
+    ):
+        print("Setup failed: configure separate PostgreSQL test and evaluation test databases "
+              "with LIMITUPLAB_TEST_DATABASE_URL and LIMITUPLAB_TEST_EVAL_DATABASE_URL.", file=sys.stderr)
+        return 1
     try:
         checks = build_checks(args.scope, output)
     except RuntimeError as error:

@@ -30,10 +30,10 @@ RESET_TABLES = (
 )
 
 
-def retire_discovery(database_path: Path | None, backup_dir: Path) -> tuple[Path | None, dict[str, int]]:
+def retire_discovery(database_url: str | None, backup_dir: Path) -> tuple[Path | None, dict[str, int]]:
     """Use the selected backend; never reset current recommendations on a rerun."""
 
-    with closing(connect_readonly(database_path)) as connection:
+    with closing(connect_readonly(database_url)) as connection:
         before = {
             table: _row_count(connection, table)
             for table in PRESERVED_TABLES
@@ -41,8 +41,8 @@ def retire_discovery(database_path: Path | None, backup_dir: Path) -> tuple[Path
         }
         if not table_exists(connection, "first_board_discovery_snapshots"):
             return None, before
-    backup = create_configured_backup(backup_dir, database=database_path)
-    with closing(connect(database_path)) as connection, connection:
+    backup = create_configured_backup(backup_dir, database_url=database_url)
+    with closing(connect(database_url)) as connection, connection:
         begin_write(connection)
         # Another maintenance run may already have retired the table while the
         # backup was being created. Never clear subsequently generated results.
@@ -77,11 +77,9 @@ def _row_count(connection, table: str) -> int:
 def main(argv: list[str] | None = None) -> int:
     load_local_env()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--database", type=Path,
-                        help="Explicit historical SQLite file; otherwise use the configured backend")
     parser.add_argument("--backup-dir", type=Path, required=True)
     args = parser.parse_args(argv)
-    backup, protected = retire_discovery(args.database, args.backup_dir)
+    backup, protected = retire_discovery(None, args.backup_dir)
     print(f"status={'retired' if backup else 'already_retired'} backup={backup} protected_rows={protected}")
     return 0
 

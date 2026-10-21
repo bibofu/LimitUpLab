@@ -62,9 +62,9 @@ def case_facts(row, bars, calendar):
 
 
 # Read the frozen research cohort and write the selected case evidence exports.
-def analyze(directory, db):
+def analyze(directory, database_url):
     original = json.loads((directory/'comparison.json').read_text(encoding='utf-8'))
-    bars = focus.load_frozen_bars(db, original)
+    bars = focus.load_frozen_bars(database_url, original)
     calendar = sorted({d for s,d in bars})
     with (directory/'signals.csv').open(encoding='utf-8-sig',newline='') as f:
         rows = [r for r in csv.DictReader(f) if r['strategy']=='consolidation']
@@ -91,10 +91,8 @@ def main() -> None:
     focus.load_local_env()
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--input',type=Path,default=Path('output/research/limit-up-paths-20260907'))
-    parser.add_argument('--db',type=Path,default=None,
-                        help='Explicit SQLite archive; otherwise use the configured database backend')
     args=parser.parse_args()
-    analyze(args.input,args.db)
+    analyze(args.input,None)
 
 
 if __name__=='__main__':

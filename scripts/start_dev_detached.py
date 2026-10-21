@@ -28,7 +28,6 @@ FRONTEND_LOG = FRONTEND / "dev_frontend.log"
 FRONTEND_ERR = FRONTEND / "dev_frontend.err.log"
 REFRESH_LOG = BACKEND / "recommendation_refresh.log"
 REFRESH_ERR = BACKEND / "recommendation_refresh.err.log"
-REFRESH_LOCK = BACKEND / "data" / "recommendation_refresh.lock"
 
 
 def main() -> int:
@@ -51,7 +50,7 @@ def main() -> int:
     if run_database_check(backend_python, env) != 0:
         print("Database startup failed; backend/frontend startup aborted.", file=sys.stderr)
         return 1
-    expected_database = "postgresql" if env.get("LIMITUPLAB_DATABASE_URL", "").strip() else "sqlite"
+    expected_database = "postgresql"
     backend_status = probe("http://127.0.0.1:8001/ready", timeout=1,
                            expected_database=expected_database)
     if not backend_status and probe("http://127.0.0.1:8001/health", timeout=1):
@@ -161,54 +160,18 @@ def run_data_check(backend_python: Path, env: dict[str, str]) -> int:
 
 
 def refresh_worker_running(backend_python: Path, env: dict[str, str]) -> bool:
-    """Treat the daily 08:00 refresh worker lock as active."""
-
-    if env.get("LIMITUPLAB_DATABASE_URL", "").strip():
-        result = subprocess.run(
-            [str(backend_python), "-c",
-             "import sys; from app.services.runtime_coordination import LeaseStore; "
-             "sys.exit(0 if LeaseStore().live('job:recommendation-refresh') else 3)"],
-            cwd=str(BACKEND), env=env, capture_output=True, timeout=20,
-        )
-        if result.returncode not in {0, 3}:
-            raise RuntimeError("Cannot check PostgreSQL refresh worker lease; startup aborted")
-        return result.returncode == 0
-    return worker_lock_active(REFRESH_LOCK, stale_after_seconds=30 * 60 * 60)
-
-
-def worker_lock_active(lock_path: Path, *, stale_after_seconds: int) -> bool:
-    """Return whether a worker lock still looks active."""
-
-    if not lock_path.exists():
-        return False
-    try:
-        age_seconds = time.time() - lock_path.stat().st_mtime
-        payload = json.loads(lock_path.read_text(encoding="utf-8"))
-        pid = int(payload.get("pid"))
-    except OSError:
-        return False
-    except (ValueError, TypeError, json.JSONDecodeError):
-        pid = None
-    active = pid is not None and process_exists(pid)
-    if not active or age_seconds > stale_after_seconds:
-        try:
-            lock_path.unlink(missing_ok=True)
-        except OSError:
-            pass
-        return False
-    return True
-
-
-def process_exists(pid: int) -> bool:
-    """Check that the PID recorded by the lock still exists."""
-
-    if pid <= 0:
-        return False
-    try:
-        os.kill(pid, 0)
-    except OSError:
-        return False
-    return True
+    """Read the authoritative PostgreSQL lease before starting another worker."""
+    if not env.get("LIMITUPLAB_DATABASE_URL", "").strip():
+        raise RuntimeError("LIMITUPLAB_DATABASE_URL is required")
+    result = subprocess.run(
+        [str(backend_python), "-c",
+         "import sys; from app.services.runtime_coordination import LeaseStore; "
+         "sys.exit(0 if LeaseStore().live('job:recommendation-refresh') else 3)"],
+        cwd=str(BACKEND), env=env, capture_output=True, timeout=20,
+    )
+    if result.returncode not in {0, 3}:
+        raise RuntimeError("Cannot check PostgreSQL refresh worker lease; startup aborted")
+    return result.returncode == 0
 
 
 def build_env() -> dict[str, str]:

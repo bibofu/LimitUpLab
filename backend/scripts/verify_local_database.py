@@ -19,11 +19,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 from app.config import configure_runtime_environment
 from app.database import begin_write, connect, connect_readonly, initialize_database, is_postgres
 from app.models import ChatSessionMessage
-from app.repositories.agent_cache_repository import SQLiteAgentCacheRepository
-from app.repositories.chat_session_repository import SQLiteChatSessionRepository
-from app.repositories.first_board_repository import SQLiteFirstBoardRepository
-from app.repositories.limit_up_repository import SQLiteLimitUpRepository
-from app.repositories.scoring_policy_repository import SQLiteScoringPolicyRepository
+from app.repositories.agent_cache_repository import AgentCacheRepository
+from app.repositories.chat_session_repository import ChatSessionRepository
+from app.repositories.first_board_repository import FirstBoardRepository
+from app.repositories.limit_up_repository import LimitUpRepository
+from app.repositories.scoring_policy_repository import ScoringPolicyRepository
 from app.storage.migration import target_fingerprint
 from app.storage.postgres import get_engine
 from app.storage.schema import HEAD_REVISION, assert_schema_current, metadata
@@ -70,15 +70,15 @@ def verify_business_data(migration_report):
     return results
 
 
-def verify_repository_reads(database_path=None):
+def verify_repository_reads(database_url=None):
     """Exercise model conversion and application query contracts on real rows."""
-    first_board = SQLiteFirstBoardRepository(database_path)
+    first_board = FirstBoardRepository(database_url)
     results = {}
-    with closing(connect_readonly(database_path)) as db:
+    with closing(connect_readonly(database_url)) as db:
         latest = db.execute("SELECT MAX(trade_date) FROM limit_up_events").fetchone()[0]
         require(latest is not None, "limit_up_events_empty")
         expected = db.execute("SELECT symbol FROM limit_up_events WHERE trade_date=?", (latest,)).fetchall()
-        events = SQLiteLimitUpRepository(database_path, seed_if_empty=False).list_latest_events()
+        events = LimitUpRepository(database_url, seed_if_empty=False).list_latest_events()
         require(sorted(item.symbol for item in events) == sorted(row[0] for row in expected),
                 "latest_limit_up_events")
         require(all(item.trade_date.isoformat() == latest for item in events), "latest_event_dates")
@@ -130,7 +130,7 @@ def verify_repository_reads(database_path=None):
             require(result is not None and result.trade_date.isoformat() == snapshot, "live_snapshot_read")
         results["live_snapshot"] = {"trade_date": snapshot, "status": "read" if snapshot else "no_source_records"}
 
-        policies = SQLiteScoringPolicyRepository(database_path)
+        policies = ScoringPolicyRepository(database_url)
         champion = policies.get_champion()
         expected = db.execute("SELECT version FROM scoring_policies WHERE status='champion'").fetchall()
         require(len(expected) == 1 and champion is not None and champion.version == expected[0][0], "champion_policy")
@@ -139,14 +139,14 @@ def verify_repository_reads(database_path=None):
     return results
 
 
-def verify_write_paths(database_path=None):
+def verify_write_paths(database_url=None):
     """Commit, reread, update, delete and roll back only UUID-scoped probe data."""
     identity = "database-verification-" + uuid4().hex
     owner = identity + "-owner"
     cache_key = identity + "-cache"
     rollback_key = identity + "-rollback"
-    chats = SQLiteChatSessionRepository(database_path)
-    cache = SQLiteAgentCacheRepository(database_path)
+    chats = ChatSessionRepository(database_url)
+    cache = AgentCacheRepository(database_url)
     now = datetime.now(timezone.utc)
     try:
         chats.create_session(session_id=identity, owner_id=owner, title="Database verification")
@@ -154,7 +154,7 @@ def verify_write_paths(database_path=None):
             session_id=identity, message_id=identity + "-message", role="user",
             content="Database persistence verification; no research output.", created_at=now,
         ), owner_id=owner)
-        independent = SQLiteChatSessionRepository(database_path)
+        independent = ChatSessionRepository(database_url)
         detail = independent.get_session(identity, owner_id=owner)
         require(detail is not None and detail.message_count == 1, "committed_session_read")
         independent.rename_session(identity, "Verified database persistence", owner_id=owner)
@@ -165,19 +165,19 @@ def verify_write_paths(database_path=None):
         for revision in (1, 2):
             cache.set_json(cache_key=cache_key, scope="database-verification", payload={"revision": revision},
                            expires_at=now + timedelta(minutes=5))
-            require(SQLiteAgentCacheRepository(database_path).get_json(cache_key) == {"revision": revision},
+            require(AgentCacheRepository(database_url).get_json(cache_key) == {"revision": revision},
                     "cache_upsert_read")
         cache.set_json(cache_key=cache_key, scope="database-verification", payload={},
                        expires_at=now - timedelta(seconds=1))
         require(cache.get_json(cache_key) is None, "cache_expiry_delete")
 
-        with closing(connect(database_path)) as db:
+        with closing(connect(database_url)) as db:
             initialize_database(db)
             begin_write(db)
             db.execute("INSERT INTO agent_cache (cache_key,scope,payload_json,expires_at,created_at) "
                        "VALUES (?,?,?,?,?)", (rollback_key, "database-verification", "{}", now.isoformat(), now.isoformat()))
             db.rollback()
-        with closing(connect_readonly(database_path)) as db:
+        with closing(connect_readonly(database_url)) as db:
             require(db.execute("SELECT COUNT(*) FROM agent_cache WHERE cache_key=?", (rollback_key,)).fetchone()[0] == 0,
                     "transaction_rollback")
         return {"status": "passed", "session_crud": True, "cache_upsert_expiry": True, "rollback": True,
@@ -185,10 +185,10 @@ def verify_write_paths(database_path=None):
     finally:
         # Never run broad expiry or delete queries: only rows belonging to this probe.
         chats.delete_session(identity, owner_id=owner)
-        with closing(connect(database_path)) as db:
+        with closing(connect(database_url)) as db:
             db.execute("DELETE FROM agent_cache WHERE cache_key IN (?,?)", (cache_key, rollback_key))
             db.commit()
-        with closing(connect_readonly(database_path)) as db:
+        with closing(connect_readonly(database_url)) as db:
             require(db.execute("SELECT COUNT(*) FROM chat_sessions WHERE session_id=?", (identity,)).fetchone()[0] == 0,
                     "probe_session_cleanup")
             require(db.execute("SELECT COUNT(*) FROM chat_messages WHERE session_id=?", (identity,)).fetchone()[0] == 0,

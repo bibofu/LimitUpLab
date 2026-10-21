@@ -110,9 +110,7 @@ def manage(action: str, env=None, *, root: Path = ROOT) -> str:
     env = os.environ if env is None else env
     raw_url = env.get("LIMITUPLAB_DATABASE_URL", "").strip()
     if not raw_url:
-        if action == "stop":
-            raise RuntimeError("No managed PostgreSQL database is configured")
-        return "SQLite selected; no PostgreSQL process managed"
+        raise RuntimeError("LIMITUPLAB_DATABASE_URL is required; configure PostgreSQL before startup")
     try:
         url = make_url(raw_url)
     except Exception:

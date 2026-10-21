@@ -93,11 +93,11 @@ def influence(left, right, field):
 
 # Re-evaluate the frozen consolidation comparison under deduplication, source and sensitivity
 # diagnostics.
-def analyze(directory, db):
+def analyze(directory, database_url):
     original = json.loads((directory / 'comparison.json').read_text(encoding='utf-8'))
     with (directory / 'eligible_pool.csv').open(encoding='utf-8-sig', newline='') as f:
         pool = list(csv.DictReader(f))
-    bars = focus.load_frozen_bars(db, original)
+    bars = focus.load_frozen_bars(database_url, original)
     calendar = sorted({d for symbol, d in bars})
     dates = [d['date'] for d in original['daily_coverage'] if d['date'] <= original['inventory']['mature_end']]
     all_boxes = observations(pool, bars, calendar)
@@ -208,10 +208,8 @@ def main() -> None:
     focus.load_local_env()
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--input',type=Path,default=Path('output/research/limit-up-paths-20260907'))
-    parser.add_argument('--db',type=Path,default=None,
-                        help='Explicit SQLite archive; otherwise use the configured database backend')
     args=parser.parse_args()
-    analyze(args.input,args.db)
+    analyze(args.input,None)
 
 
 if __name__ == '__main__':

@@ -24,7 +24,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.config import load_local_env
-from app.repositories import SQLiteFirstBoardRepository, SQLiteLimitUpRepository
+from app.repositories import FirstBoardRepository, LimitUpRepository
 from app.services.factor_signal_diagnostic import build_factor_signal_diagnostic
 
 
@@ -72,8 +72,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    limit_repo = SQLiteLimitUpRepository(seed_if_empty=False)
-    first_board_repo = SQLiteFirstBoardRepository()
+    limit_repo = LimitUpRepository(seed_if_empty=False)
+    first_board_repo = FirstBoardRepository()
     events = limit_repo.list_events()
     if not events:
         print("No local limit-up events available; run the daily pipeline first.")

@@ -10,7 +10,7 @@ ENV PYTHONDONTWRITEBYTECODE=1 \
     PYTHONUNBUFFERED=1 \
     PIP_NO_CACHE_DIR=1 \
     TZ=Asia/Shanghai \
-    LIMITUPLAB_DATABASE_PATH=/app/data/limituplab.sqlite
+    LIMITUPLAB_DATA_DIRECTORY=/app/data
 
 WORKDIR /app
 

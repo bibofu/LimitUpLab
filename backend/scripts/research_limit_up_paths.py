@@ -25,7 +25,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.config import load_local_env
-from app.database import connect_readonly, get_database_path, is_postgres
+from app.database import connect_readonly
 
 RULES = {
     "first_board": "1进2参照：T日收盘涨停、板高1、前一交易日未收盘涨停。",
@@ -248,11 +248,10 @@ def nonoverlap(rows, calendar):
 
 
 # Build historical post-limit paths and comparison cohorts from the selected local database.
-def analyze(db, start, output):
+def analyze(database_url, start, output):
     query_events = "SELECT * FROM limit_up_events ORDER BY trade_date,symbol"
     query_bars = "SELECT symbol,trade_date,open,high,low,close,volume,source FROM stock_daily_bars ORDER BY trade_date,symbol"
-    with closing(connect_readonly(db)) as con, con:
-        postgres = is_postgres(con)
+    with closing(connect_readonly(database_url)) as con, con:
         event_rows = [dict(r) for r in con.execute(query_events)]
         bar_rows = [dict(r) for r in con.execute(query_bars)]
     events = {(r["symbol"], r["trade_date"]): r for r in event_rows}
@@ -340,8 +339,7 @@ def analyze(db, start, output):
         left = {(r["symbol"], r["anchor_date"]) for r in signals if r["strategy"] == x}
         overlap[x] = {y: len(left & {(r["symbol"], r["anchor_date"]) for r in signals if r["strategy"] == y}) for y in RULES}
     payload = {"generated_at": datetime.now(timezone.utc).isoformat(), "kind": "historical_exploration_not_live",
-               "database_backend": "postgresql" if postgres else "sqlite",
-               "database_path": None if postgres else str((db or get_database_path()).resolve()),
+               "database_backend": "postgresql",
                "input_sha256": hashlib.sha256(json.dumps([event_rows, bar_rows], sort_keys=True, ensure_ascii=True).encode()).hexdigest(),
                "script_sha256": hashlib.sha256(Path(__file__).read_bytes()).hexdigest(),
                "queries": [query_events, query_bars], "rules": RULES,
@@ -372,12 +370,10 @@ def analyze(db, start, output):
 def main() -> None:
     load_local_env()
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--db", type=Path, default=None,
-                        help="Explicit SQLite file; otherwise use the configured database backend")
     parser.add_argument("--start", default="2026-07-20")
     parser.add_argument("--output", type=Path, default=Path("output/research/limit-up-paths-20260907"))
     args = parser.parse_args()
-    analyze(args.db, args.start, args.output)
+    analyze(None, args.start, args.output)
 
 
 if __name__ == "__main__":

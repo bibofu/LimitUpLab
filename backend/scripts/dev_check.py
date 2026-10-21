@@ -14,7 +14,7 @@ if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.config import configure_runtime_environment
-from app.repositories import SQLiteFirstBoardRepository, SQLiteLimitUpRepository
+from app.repositories import FirstBoardRepository, LimitUpRepository
 from app.services.recommendation_intelligence import refresh_recommendation_intelligence
 from app.services.system_health import build_agent_system_health
 from scripts.update_daily_data import DailyUpdateReport, run_daily_update
@@ -37,8 +37,8 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    limit_repo = SQLiteLimitUpRepository(seed_if_empty=False)
-    first_board_repo = SQLiteFirstBoardRepository()
+    limit_repo = LimitUpRepository(seed_if_empty=False)
+    first_board_repo = FirstBoardRepository()
     events = limit_repo.list_events()
     before = build_agent_system_health(
         events=events,
@@ -113,8 +113,8 @@ def main() -> None:
 def refresh_recommendation_after_update(
     *,
     update_report: DailyUpdateReport,
-    limit_up_repository: SQLiteLimitUpRepository,
-    first_board_repository: SQLiteFirstBoardRepository,
+    limit_up_repository: LimitUpRepository,
+    first_board_repository: FirstBoardRepository,
     refresher=refresh_recommendation_intelligence,
 ) -> dict[str, object]:
     """Publish the recommendation draft as soon as close data is ready."""

@@ -1,5 +1,5 @@
-# Opt in with -f docker-compose.yml -f docker-compose.postgresql.yml.
-# The original limituplab-data volume and SQLite database remain retained.
+# Required managed database overlay: -f docker-compose.yml -f docker-compose.postgresql.yml.
+# The limituplab-data volume retains reports and historical migration archives.
 x-postgres-environment: &postgres-environment
   LIMITUPLAB_DATABASE_URL: ${LIMITUPLAB_DATABASE_URL:?Set the PostgreSQL application URL}
   LIMITUPLAB_DB_POOL_SIZE: ${LIMITUPLAB_DB_POOL_SIZE:-5}

@@ -62,9 +62,9 @@ def parse_args(argv: list[str] | None) -> argparse.Namespace:
     return parser.parse_args(argv)
 
 
-def command_for(args: argparse.Namespace, name: str, mode: str = "sqlite", *,
+def command_for(args: argparse.Namespace, name: str, mode: str = "postgresql", *,
                 backup_path: Path | None = None) -> list[str]:
-    if mode not in {"sqlite", "postgresql"}:
+    if mode != "postgresql":
         raise ValueError("Unsupported production database mode")
     if args.job == "daily-update":
         command = [*compose_arguments(REPO, mode), "--profile", "jobs", "run", "--detach",
@@ -79,20 +79,13 @@ def command_for(args: argparse.Namespace, name: str, mode: str = "sqlite", *,
         if args.max_attempts is not None:
             command += ["--max-attempts", str(args.max_attempts)]
         return command
-    if mode == "postgresql":
-        if backup_path is None or backup_path.parent != POSTGRES_BACKUPS or not is_postgres_backup(backup_path):
-            raise ValueError("PostgreSQL backup must use the dedicated backup directory and filename")
-        # Cron runs as root. The backup container needs to write root-only backup
-        # files, while receiving its database credentials through Compose only.
-        return [*compose_arguments(REPO, mode), "--profile", "jobs", "run", "--detach",
-                "--no-deps", "--name", name, "--user", "0:0", "-v", f"{POSTGRES_BACKUPS}:/backups",
-                "daily-update", "python", "scripts/postgres_admin.py", "backup",
-                "--output", f"/backups/{backup_path.name}"]
-    return ["docker", "run", "--detach", "--name", name,
-            "-v", "limituplab-data:/app/data", "-v", "/var/backups/limituplab:/backups",
-            "limituplab-backend:local", "python", "scripts/backup_database.py",
-            "--database", "/app/data/limituplab.sqlite", "--output-dir", "/backups",
-            "--retain-count", "14"]
+    if backup_path is None or backup_path.parent != POSTGRES_BACKUPS or not is_postgres_backup(backup_path):
+        raise ValueError("PostgreSQL backup must use the dedicated backup directory and filename")
+    # Cron runs as root. Credentials are passed through Compose only.
+    return [*compose_arguments(REPO, mode), "--profile", "jobs", "run", "--detach",
+            "--no-deps", "--name", name, "--user", "0:0", "-v", f"{POSTGRES_BACKUPS}:/backups",
+            "daily-update", "python", "scripts/postgres_admin.py", "backup",
+            "--output", f"/backups/{backup_path.name}"]
 
 
 def is_postgres_backup(path: Path) -> bool:

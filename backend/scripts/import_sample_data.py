@@ -9,8 +9,8 @@ BACKEND_ROOT = Path(__file__).resolve().parents[1]
 sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.config import load_local_env
-from app.database import begin_write, connect, initialize_database, is_postgres
-from app.repositories import SQLiteLimitUpRepository
+from app.database import begin_write, connect, initialize_database
+from app.repositories import LimitUpRepository
 from app.services.sample_data import SAMPLE_EVENTS
 
 
@@ -23,8 +23,8 @@ def import_samples(*, replace_existing: bool = False) -> str:
         if not replace_existing and database.execute("SELECT 1 FROM limit_up_events LIMIT 1").fetchone():
             raise RuntimeError("Selected database already has events; use a dedicated demo database "
                                "or explicitly pass --replace-existing.")
-        SQLiteLimitUpRepository().replace_events(SAMPLE_EVENTS, connection=database)
-        return "postgresql" if is_postgres(database) else "sqlite"
+        LimitUpRepository().replace_events(SAMPLE_EVENTS, connection=database)
+        return "postgresql"
 
 
 def main() -> None:

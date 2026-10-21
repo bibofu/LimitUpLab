@@ -1,81 +1,32 @@
-"""Back up the configured database, or an explicitly selected SQLite archive."""
+"""Back up the configured PostgreSQL database and retain verified dump pairs."""
 
 from __future__ import annotations
 
 import argparse
-import os
-import sqlite3
 import sys
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
-from zoneinfo import ZoneInfo
 
 BACKEND_ROOT = Path(__file__).resolve().parents[1]
 if str(BACKEND_ROOT) not in sys.path:
     sys.path.insert(0, str(BACKEND_ROOT))
 
 from app.config import load_local_env
-from app.database import get_database_path
-
-
-CN_TZ = ZoneInfo("Asia/Shanghai")
-BACKUP_PATTERN = "limituplab-*.sqlite"
-
-
-def create_backup(
-    database_path: Path,
-    output_dir: Path,
-    *,
-    now: datetime | None = None,
-) -> Path:
-    """Create a transactionally consistent SQLite backup with restricted permissions."""
-    if not database_path.is_file():
-        raise FileNotFoundError(f"Database does not exist: {database_path}")
-
-    output_dir.mkdir(parents=True, exist_ok=True)
-    timestamp = (now or datetime.now(CN_TZ)).astimezone(CN_TZ)
-    backup_path = output_dir / f"limituplab-{timestamp:%Y%m%d-%H%M%S}.sqlite"
-
-    source_uri = f"file:{database_path.resolve().as_posix()}?mode=ro"
-    with sqlite3.connect(source_uri, uri=True) as source:
-        with sqlite3.connect(backup_path) as destination:
-            source.backup(destination)
-            integrity = destination.execute("PRAGMA integrity_check").fetchone()
-            if not integrity or integrity[0] != "ok":
-                raise RuntimeError(f"Backup integrity check failed: {integrity}")
-
-    backup_path.chmod(0o600)
-    return backup_path
-
-
-def prune_backups(output_dir: Path, *, retain_count: int) -> list[Path]:
-    """Delete older managed backup files while retaining the newest snapshots."""
-    if retain_count < 1:
-        raise ValueError("retain_count must be at least 1")
-
-    backups = sorted(output_dir.glob(BACKUP_PATTERN), reverse=True)
-    removed = backups[retain_count:]
-    for backup_path in removed:
-        backup_path.unlink()
-    return removed
+from app.database import get_database_url
 
 
 def create_configured_backup(
-    output_dir: Path, *, database: Path | None = None, now: datetime | None = None,
+    output_dir: Path, *, database_url: str | None = None, now: datetime | None = None,
 ) -> dict:
-    """Honor the same backend selection as the application without a fallback."""
-    raw_url = os.getenv("LIMITUPLAB_DATABASE_URL", "").strip()
-    if database is None and raw_url:
-        from scripts.postgres_admin import backup_database, connection_environment
+    """Use the application's validated PostgreSQL configuration."""
+    from scripts.postgres_admin import backup_database, connection_environment
 
-        _, environment = connection_environment(raw_url)
-        stamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
-        filename = f"limituplab-pg-{stamp:%Y%m%dT%H%M%SZ}-{uuid4().hex}.dump"
-        result = backup_database(output_dir / filename, environment)
-        return {**result, "database_backend": "postgresql"}
-    backup = create_backup(database or get_database_path(), output_dir, now=now)
-    return {"backup": str(backup), "database_backend": "sqlite"}
+    _, environment = connection_environment(get_database_url(database_url))
+    stamp = (now or datetime.now(timezone.utc)).astimezone(timezone.utc)
+    filename = f"limituplab-pg-{stamp:%Y%m%dT%H%M%SZ}-{uuid4().hex}.dump"
+    result = backup_database(output_dir / filename, environment)
+    return {**result, "database_backend": "postgresql"}
 
 
 def prune_postgres_backups(output_dir: Path, *, retain_count: int) -> list[Path]:
@@ -113,8 +64,6 @@ def prune_postgres_backups(output_dir: Path, *, retain_count: int) -> list[Path]
 def parse_args(argv: list[str] | None = None) -> argparse.Namespace:
     """Parse command-line options for the production backup job."""
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--database", type=Path,
-                        help="Explicit historical SQLite file; otherwise back up the configured backend")
     parser.add_argument("--output-dir", type=Path, required=True)
     parser.add_argument("--retain-count", type=int, default=14)
     args = parser.parse_args(argv)
@@ -127,9 +76,8 @@ def main(argv: list[str] | None = None) -> int:
     """Create one backup, prune stale snapshots, and emit a cron-friendly summary."""
     load_local_env()
     args = parse_args(argv)
-    result = create_configured_backup(args.output_dir, database=args.database)
-    prune = prune_postgres_backups if result["database_backend"] == "postgresql" else prune_backups
-    removed = prune(args.output_dir, retain_count=args.retain_count)
+    result = create_configured_backup(args.output_dir)
+    removed = prune_postgres_backups(args.output_dir, retain_count=args.retain_count)
     print(f"backend={result['database_backend']} backup={result['backup']} removed={len(removed)}")
     return 0
 

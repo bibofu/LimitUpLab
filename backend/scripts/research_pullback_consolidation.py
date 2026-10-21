@@ -118,9 +118,9 @@ def price_box(window):
 
 
 # Load only bars belonging to the previously recorded research snapshot and cutoff.
-def load_frozen_bars(db, original):
+def load_frozen_bars(database_url, original):
     # Verify the exact original snapshot fingerprint before adding any features.
-    with closing(connect_readonly(db)) as c, c:
+    with closing(connect_readonly(database_url)) as c, c:
         inputs=[[dict(r) for r in c.execute(q)] for q in original['queries']]
     digest=hashlib.sha256(json.dumps(inputs,sort_keys=True,ensure_ascii=True).encode()).hexdigest()
     if digest!=original['input_sha256']:
@@ -130,14 +130,14 @@ def load_frozen_bars(db, original):
 
 # Reconstruct pullback/consolidation cohorts from frozen inputs and export their historical
 # comparison.
-def analyze(directory,db):
+def analyze(directory,database_url):
     # Load one named input file from the surrounding research export directory.
     def read(name):
         with (directory/name).open(encoding='utf-8-sig',newline='') as f:
             return list(csv.DictReader(f))
     original=json.loads((directory/'comparison.json').read_text(encoding='utf-8'))
     signals,pool=read('signals.csv'),read('eligible_pool.csv')
-    bars=load_frozen_bars(db,original)
+    bars=load_frozen_bars(database_url,original)
     calendar=sorted({d for s,d in bars})
     dates=[r['date'] for r in original['daily_coverage'] if r['date']<=original['inventory']['mature_end']]
     groups={k:[r for r in signals if r['strategy']==k and r['outcome_status']=='complete'] for k in KEYS}
@@ -237,10 +237,8 @@ def main() -> None:
     load_local_env()
     parser=argparse.ArgumentParser(description=__doc__)
     parser.add_argument('--input',type=Path,default=Path('output/research/limit-up-paths-20260907'))
-    parser.add_argument('--db',type=Path,default=None,
-                        help='Explicit SQLite file; otherwise use the configured database backend')
     args=parser.parse_args()
-    analyze(args.input,args.db)
+    analyze(args.input,None)
 
 
 if __name__=='__main__':

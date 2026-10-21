@@ -1,4 +1,4 @@
-﻿"""Build local first-board history tables for scoring and backtesting.
+"""Build local first-board history tables for scoring and backtesting.
 
 The script can either derive features from already-local limit-up events or
 fetch recent Tonghuashun-preferred limit-up pools before deriving features.
@@ -15,7 +15,7 @@ sys.path.insert(0, str(BACKEND_ROOT))
 from app.collectors import collect_limit_up_events
 from app.config import configure_runtime_environment
 from app.models import LimitUpEvent, StockDailyBar
-from app.repositories import SQLiteFirstBoardRepository, SQLiteLimitUpRepository
+from app.repositories import FirstBoardRepository, LimitUpRepository
 from app.services.market_data_provider import collect_preferred_stock_kline as collect_stock_kline
 from app.services.first_board_features import (
     build_first_board_features,
@@ -75,7 +75,7 @@ def main() -> None:
     )
     args = parser.parse_args()
 
-    limit_up_repository = SQLiteLimitUpRepository()
+    limit_up_repository = LimitUpRepository()
     if args.fetch_limit_up:
         _fetch_recent_limit_up_events(
             repository=limit_up_repository,
@@ -87,7 +87,7 @@ def main() -> None:
 
     events = limit_up_repository.list_events()
     trade_dates = sorted({event.trade_date for event in events}, reverse=True)[: args.days]
-    first_board_repository = SQLiteFirstBoardRepository()
+    first_board_repository = FirstBoardRepository()
     feature_count = 0
     bar_count = 0
     outcome_count = 0
@@ -137,7 +137,7 @@ def main() -> None:
 
 
 def _fetch_recent_limit_up_events(
-    repository: SQLiteLimitUpRepository,
+    repository: LimitUpRepository,
     days: int,
     lookback_calendar_days: int,
     end_date: date,
