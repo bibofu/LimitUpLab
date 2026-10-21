@@ -4,12 +4,11 @@ from __future__ import annotations
 
 import hashlib
 import json
-import sqlite3
+from app.storage.postgres import PostgresConnection
 from collections import Counter, defaultdict
 from datetime import datetime, time, timezone
 from types import SimpleNamespace
 
-from app.database import is_postgres
 from app.services.prediction_time import CN_TZ, assess_prediction_time
 
 
@@ -18,10 +17,8 @@ def content_hash(value: str) -> str:
     return hashlib.sha256(value.encode("utf-8")).hexdigest()
 
 
-def audit_prediction_times(connection: sqlite3.Connection, *, apply: bool = False) -> dict:
+def audit_prediction_times(connection: PostgresConnection, *, apply: bool = False) -> dict:
     """Annotate original artifacts; never rewrite predictions or saved reports."""
-    if not is_postgres(connection):
-        connection.row_factory = sqlite3.Row
     batches = defaultdict(list)
     for row in connection.execute("SELECT * FROM agent_predictions"):
         item = dict(row)

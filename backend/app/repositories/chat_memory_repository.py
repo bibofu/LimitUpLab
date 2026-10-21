@@ -1,20 +1,19 @@
-"""SQLite persistence for owner-scoped rolling chat memory."""
+"""PostgreSQL persistence for owner-scoped rolling chat memory."""
 
 import json
 from datetime import datetime
-from pathlib import Path
 
 from app.database import connect, initialize_database
 from app.models import ChatSessionMemory
 from app.repositories.chat_session_repository import SessionOwnershipError
 
 
-class SQLiteChatMemoryRepository:
+class ChatMemoryRepository:
     """Persist one compact rolling-memory snapshot per chat session."""
 
-    # Initialize SQLiteChatMemoryRepository with the supplied dependencies and per-instance state.
-    def __init__(self, database_path: Path | None = None):
-        self.database_path = database_path
+    # Initialize ChatMemoryRepository with the supplied dependencies and per-instance state.
+    def __init__(self, database_url: str | None = None):
+        self.database_url = database_url
 
     def get_memory(
         self,
@@ -24,7 +23,7 @@ class SQLiteChatMemoryRepository:
     ) -> ChatSessionMemory | None:
         """Return memory only when the session belongs to the requesting owner."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             row = connection.execute(
@@ -47,7 +46,7 @@ class SQLiteChatMemoryRepository:
     def save_memory(self, memory: ChatSessionMemory) -> ChatSessionMemory:
         """Upsert memory after verifying session ownership."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             session = connection.execute(

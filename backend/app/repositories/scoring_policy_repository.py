@@ -1,10 +1,9 @@
-"""SQLite registry for versioned scoring policies and optimization runs."""
+"""PostgreSQL registry for versioned scoring policies and optimization runs."""
 
 from __future__ import annotations
 
 import json
 from datetime import date, datetime, timezone
-from pathlib import Path
 
 from app.database import begin_write, connect, initialize_database
 from app.models import ScoringPolicy, ScoringPolicyOptimizationResponse
@@ -15,13 +14,13 @@ from app.services.scoring_policy import (
 )
 
 
-class SQLiteScoringPolicyRepository:
+class ScoringPolicyRepository:
     """Persist Champion/Challenger policies independently from predictions."""
 
-    # Initialize SQLiteScoringPolicyRepository with the supplied dependencies and per-instance
+    # Initialize ScoringPolicyRepository with the supplied dependencies and per-instance
     # state.
-    def __init__(self, database_path: Path | None = None) -> None:
-        self.database_path = database_path
+    def __init__(self, database_url: str | None = None) -> None:
+        self.database_url = database_url
 
     def ensure_default_policy(self) -> ScoringPolicy:
         """Return a code-compatible Champion, migrating obsolete factor schemas."""
@@ -52,7 +51,7 @@ class SQLiteScoringPolicyRepository:
     def upsert_policy(self, policy: ScoringPolicy) -> None:
         """Insert or update one immutable-version policy record."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             begin_write(connection)
@@ -88,7 +87,7 @@ class SQLiteScoringPolicyRepository:
     def get_champion(self) -> ScoringPolicy | None:
         """Return the active scoring policy, if one has been registered."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             row = connection.execute(
@@ -106,7 +105,7 @@ class SQLiteScoringPolicyRepository:
     def get_policy(self, version: str) -> ScoringPolicy | None:
         """Return one policy by version."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             row = connection.execute(
@@ -120,7 +119,7 @@ class SQLiteScoringPolicyRepository:
     def list_policies(self, limit: int = 20) -> list[ScoringPolicy]:
         """Return Champion first, then recent challengers and archived versions."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             rows = connection.execute(
@@ -146,7 +145,7 @@ class SQLiteScoringPolicyRepository:
         """Atomically archive the current Champion and activate a Challenger."""
 
         timestamp = activated_at or datetime.now(timezone.utc)
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             begin_write(connection)
@@ -181,7 +180,7 @@ class SQLiteScoringPolicyRepository:
     def save_optimization_run(self, report: ScoringPolicyOptimizationResponse) -> None:
         """Persist the complete reproducible optimization report."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             connection.execute(
@@ -213,7 +212,7 @@ class SQLiteScoringPolicyRepository:
     def get_latest_optimization_run(self) -> ScoringPolicyOptimizationResponse | None:
         """Return the most recently persisted optimization report."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             row = connection.execute(

@@ -11,9 +11,9 @@ from app.models import (
     LimitUpEvent,
     ReviewAgentReportResponse,
 )
-from app.repositories.first_board_repository import SQLiteFirstBoardRepository
-from app.repositories.review_snapshot_repository import SQLiteReviewSnapshotRepository
-from app.repositories.scoring_policy_repository import SQLiteScoringPolicyRepository
+from app.repositories.first_board_repository import FirstBoardRepository
+from app.repositories.review_snapshot_repository import ReviewSnapshotRepository
+from app.repositories.scoring_policy_repository import ScoringPolicyRepository
 from app.services.evaluation_agent import select_canonical_prediction_snapshots
 from app.services.prediction_time import assess_prediction_time
 from app.services.llm_provider import LLMProvider
@@ -26,7 +26,7 @@ DAILY_REVIEW_SNAPSHOT_VERSION = "daily-review-snapshot-v1"
 def review_snapshot_matches_current_predictions(
     *,
     report: ReviewAgentReportResponse,
-    first_board_repository: SQLiteFirstBoardRepository,
+    first_board_repository: FirstBoardRepository,
     top_per_day: int = 10,
 ) -> bool:
     """Return whether a persisted report covers the current canonical Top-N."""
@@ -34,8 +34,8 @@ def review_snapshot_matches_current_predictions(
     if report.time_audit_status != "checked":
         return False
 
-    champion = SQLiteScoringPolicyRepository(
-        first_board_repository.database_path
+    champion = ScoringPolicyRepository(
+        first_board_repository.database_url
     ).get_champion()
     preferred_version = (
         champion.version if champion else DEFAULT_SCORING_POLICY_VERSION
@@ -80,8 +80,8 @@ def build_daily_review_snapshot(
     *,
     events: list[LimitUpEvent],
     as_of_date: date,
-    first_board_repository: SQLiteFirstBoardRepository,
-    snapshot_repository: SQLiteReviewSnapshotRepository | None = None,
+    first_board_repository: FirstBoardRepository,
+    snapshot_repository: ReviewSnapshotRepository | None = None,
     provider: LLMProvider | None = None,
     history_dates: int = 6,
     top_per_day: int = 10,
@@ -89,8 +89,8 @@ def build_daily_review_snapshot(
 ) -> DailyReviewSnapshot:
     """Generate and save the review visible at one completed market cutoff."""
 
-    active_snapshot_repository = snapshot_repository or SQLiteReviewSnapshotRepository(
-        first_board_repository.database_path
+    active_snapshot_repository = snapshot_repository or ReviewSnapshotRepository(
+        first_board_repository.database_url
     )
     existing = active_snapshot_repository.get_snapshot(as_of_date)
     if existing is not None:

@@ -8,7 +8,7 @@ from app.models import (
     FirstBoardRating,
     LimitUpEvent,
 )
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import FirstBoardRepository
 
 
 CRITIC_VERSION = "first-board-critic-rule-v2"
@@ -18,11 +18,11 @@ def build_first_board_critic(
     events: list[LimitUpEvent],
     symbol: str,
     trade_date: date | None = None,
-    first_board_repository: SQLiteFirstBoardRepository | None = None,
+    first_board_repository: FirstBoardRepository | None = None,
 ) -> FirstBoardCriticResponse:
     """Review one first-board rating and surface opposing evidence."""
 
-    repository = first_board_repository or SQLiteFirstBoardRepository()
+    repository = first_board_repository or FirstBoardRepository()
     ratings = build_first_board_ratings(
         events=events,
         trade_date=trade_date,

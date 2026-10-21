@@ -46,16 +46,16 @@ from app.models import (
     ScoringPolicyRegistryResponse,
 )
 from app.repositories import (
-    SQLiteAgentCacheRepository,
-    SQLiteAgentRunRepository,
-    SQLiteAgentUsageRepository,
-    SQLiteChatMemoryRepository,
-    SQLiteChatSessionRepository,
-    SQLiteDailyPipelineRepository,
-    SQLiteFirstBoardRepository,
-    SQLiteReviewSnapshotRepository,
-    SQLiteRecommendationIntelligenceRepository,
-    SQLiteScoringPolicyRepository,
+    AgentCacheRepository,
+    AgentRunRepository,
+    AgentUsageRepository,
+    ChatMemoryRepository,
+    ChatSessionRepository,
+    DailyPipelineRepository,
+    FirstBoardRepository,
+    ReviewSnapshotRepository,
+    RecommendationIntelligenceRepository,
+    ScoringPolicyRepository,
     get_limit_up_repository,
 )
 from app.services.data_health import build_agent_data_health
@@ -106,10 +106,10 @@ def _begin_agent_request(
     session_id: str,
     run_id: str,
     started_at: datetime,
-) -> tuple[AgentRequestLease, SQLiteAgentUsageRepository, AgentUsageRecord]:
+) -> tuple[AgentRequestLease, AgentUsageRepository, AgentUsageRecord]:
     """Apply request limits and persist an accepted usage record."""
 
-    usage_repository = SQLiteAgentUsageRepository()
+    usage_repository = AgentUsageRepository()
     today = usage_repository.owner_today(owner_id)
     ip_hash = _agent_client_ip_hash(http_request)
     try:
@@ -167,7 +167,7 @@ def _begin_agent_request(
 
 
 def _finish_agent_request(
-    usage_repository: SQLiteAgentUsageRepository,
+    usage_repository: AgentUsageRepository,
     record: AgentUsageRecord,
     tracker: LLMUsageTracker | None,
     *,
@@ -264,7 +264,7 @@ def get_first_board_ratings(
 
     events = get_limit_up_repository().list_events()
     resolved_trade_date = _resolve_trade_date(events, trade_date)
-    first_board_repository = SQLiteFirstBoardRepository()
+    first_board_repository = FirstBoardRepository()
     if resolved_trade_date is not None and not full_pool:
         live_snapshot = first_board_repository.get_live_prediction_snapshot(
             resolved_trade_date
@@ -280,8 +280,8 @@ def get_first_board_ratings(
             )
         except HithinkFinanceError:
             pass
-    policy_repository = SQLiteScoringPolicyRepository(
-        first_board_repository.database_path
+    policy_repository = ScoringPolicyRepository(
+        first_board_repository.database_url
     )
     scoring_policy = policy_repository.ensure_default_policy()
     enrichment = (
@@ -333,7 +333,7 @@ def get_first_board_ratings(
 def get_recommendation_intelligence() -> RecommendationIntelligenceResponse:
     """Return the latest displayable quote, news and financial snapshot."""
 
-    response = SQLiteRecommendationIntelligenceRepository().get_latest_displayable()
+    response = RecommendationIntelligenceRepository().get_latest_displayable()
     if response is None:
         raise HTTPException(
             status_code=404,
@@ -385,15 +385,15 @@ def optimize_first_board_scoring_policy(
             status_code=422,
             detail="start_date must be on or before end_date.",
         )
-    first_board_repository = SQLiteFirstBoardRepository()
+    first_board_repository = FirstBoardRepository()
     try:
         return optimize_scoring_policy(
             events=events,
             start_date=resolved_start,
             end_date=resolved_end,
             first_board_repository=first_board_repository,
-            policy_repository=SQLiteScoringPolicyRepository(
-                first_board_repository.database_path
+            policy_repository=ScoringPolicyRepository(
+                first_board_repository.database_url
             ),
             top_k=top_k,
             activate_if_eligible=activate_if_eligible,
@@ -412,7 +412,7 @@ def get_agent_data_health(
 
     return build_agent_data_health(
         events=get_limit_up_repository().list_events(),
-        first_board_repository=SQLiteFirstBoardRepository(),
+        first_board_repository=FirstBoardRepository(),
         trade_date=trade_date,
         top_limit=top_limit,
     )
@@ -426,7 +426,7 @@ def get_agent_system_health(
 
     return build_agent_system_health(
         events=get_limit_up_repository().list_events(),
-        first_board_repository=SQLiteFirstBoardRepository(),
+        first_board_repository=FirstBoardRepository(),
     )
 
 
@@ -444,7 +444,7 @@ def get_outcome_completeness(
 
     return build_top10_outcome_completeness(
         events=get_limit_up_repository().list_events(),
-        repository=SQLiteFirstBoardRepository(),
+        repository=FirstBoardRepository(),
         as_of_date=as_of_date,
         tracking_days=tracking_days,
         top_per_day=top_per_day,
@@ -460,7 +460,7 @@ def get_agent_usage(
 
     config = load_agent_rate_limit_config()
     return AgentUsageAdminResponse(
-        usage=SQLiteAgentUsageRepository().summary(days=days),
+        usage=AgentUsageRepository().summary(days=days),
         limits={
             "enabled": config.enabled,
             "requests_per_minute": config.requests_per_minute,
@@ -482,7 +482,7 @@ def get_daily_pipeline_status(
 ) -> DailyPipelineStatusResponse:
     """Return the latest automated after-close pipeline executions."""
 
-    runs = SQLiteDailyPipelineRepository().list_recent(limit=limit)
+    runs = DailyPipelineRepository().list_recent(limit=limit)
     return DailyPipelineStatusResponse(
         latest=runs[0] if runs else None,
         recent=runs,
@@ -522,7 +522,7 @@ def get_prediction_quality_audit(
             events=events,
             start_date=resolved_start,
             end_date=resolved_end,
-            first_board_repository=SQLiteFirstBoardRepository(),
+            first_board_repository=FirstBoardRepository(),
             scoring_version=scoring_version,
             top_k=top_k,
         )
@@ -555,7 +555,7 @@ def get_factor_signal_diagnostic(
             events=events,
             start_date=resolved_start,
             end_date=resolved_end,
-            first_board_repository=SQLiteFirstBoardRepository(),
+            first_board_repository=FirstBoardRepository(),
             outcome_measure=outcome_measure,
         )
     except ValueError as error:
@@ -589,7 +589,7 @@ def get_scoring_error_diagnostic(
             events=events,
             start_date=resolved_start,
             end_date=resolved_end,
-            first_board_repository=SQLiteFirstBoardRepository(),
+            first_board_repository=FirstBoardRepository(),
             top_k=top_k,
         )
     except ValueError as error:
@@ -628,7 +628,7 @@ def get_rating_backtest(
             events=events,
             start_date=resolved_start,
             end_date=resolved_end,
-            first_board_repository=SQLiteFirstBoardRepository(),
+            first_board_repository=FirstBoardRepository(),
             failure_limit=failure_limit,
         ),
     )
@@ -666,7 +666,7 @@ def get_rating_evaluation(
             events=events,
             start_date=resolved_start,
             end_date=resolved_end,
-            first_board_repository=SQLiteFirstBoardRepository(),
+            first_board_repository=FirstBoardRepository(),
             limit=limit,
         ),
     )
@@ -691,7 +691,7 @@ def get_review_agent_report(
     resolved_end = end_date or available_dates[-1]
     end_index = available_dates.index(resolved_end) if resolved_end in available_dates else len(available_dates) - 1
     required_tracking_dates = set(available_dates[max(0, end_index - 5):end_index])
-    first_board_repository = SQLiteFirstBoardRepository()
+    first_board_repository = FirstBoardRepository()
     if (
         not use_llm
         and not refresh_facts
@@ -700,7 +700,7 @@ def get_review_agent_report(
         and top_per_day == 10
         and follow_days == 5
     ):
-        snapshot = SQLiteReviewSnapshotRepository().get_snapshot(resolved_end)
+        snapshot = ReviewSnapshotRepository().get_snapshot(resolved_end)
         snapshot_prediction_dates = {
             item.trade_date for item in snapshot.report.reviewed_picks
         } if snapshot is not None else set()
@@ -739,7 +739,7 @@ def list_daily_review_snapshots(
     """Return persisted review dates for historical playback."""
 
     return DailyReviewSnapshotsResponse(
-        snapshots=SQLiteReviewSnapshotRepository().list_summaries(limit=limit),
+        snapshots=ReviewSnapshotRepository().list_summaries(limit=limit),
         generated_by="daily-review-snapshot-index-v1",
     )
 
@@ -753,7 +753,7 @@ def list_agent_runs(
 ) -> AgentRunsResponse:
     """Return recent Agent runs for the observability panel."""
 
-    runs = SQLiteAgentRunRepository().list_runs(
+    runs = AgentRunRepository().list_runs(
         session_id=session_id,
         limit=limit,
         owner_id=owner_id,
@@ -771,7 +771,7 @@ def create_chat_session(
 ) -> ChatSessionDetail:
     """Create an empty resumable Agent conversation."""
 
-    return SQLiteChatSessionRepository().create_session(
+    return ChatSessionRepository().create_session(
         title=request.title,
         owner_id=owner_id,
     )
@@ -785,7 +785,7 @@ def list_chat_sessions(
     """Return active conversations ordered by latest activity."""
 
     return ChatSessionsResponse(
-        sessions=SQLiteChatSessionRepository().list_sessions(
+        sessions=ChatSessionRepository().list_sessions(
             limit=limit,
             owner_id=owner_id,
         ),
@@ -809,7 +809,7 @@ def bootstrap_chat_sessions(
     """Restore history without a second HTTP request or creating an empty session."""
 
     response.headers["Cache-Control"] = "private, no-store"
-    repository = SQLiteChatSessionRepository()
+    repository = ChatSessionRepository()
     sessions = repository.list_sessions(owner_id=owner_id, limit=limit)
     selected = repository.get_session(session_id, owner_id=owner_id) if session_id else None
     if selected is None and sessions:
@@ -828,7 +828,7 @@ def get_chat_session(
 ) -> ChatSessionDetail:
     """Return one conversation with its persisted messages."""
 
-    session = SQLiteChatSessionRepository().get_session(
+    session = ChatSessionRepository().get_session(
         session_id,
         owner_id=owner_id,
     )
@@ -845,7 +845,7 @@ def update_chat_session(
 ) -> ChatSessionDetail:
     """Rename one active conversation."""
 
-    session = SQLiteChatSessionRepository().rename_session(
+    session = ChatSessionRepository().rename_session(
         session_id,
         request.title,
         owner_id=owner_id,
@@ -864,7 +864,7 @@ def delete_chat_session(
 
     from app.agents.react_runtime.lifecycle import RunConflict
     try:
-        deleted = SQLiteChatSessionRepository().delete_session(session_id, owner_id=owner_id)
+        deleted = ChatSessionRepository().delete_session(session_id, owner_id=owner_id)
     except RunConflict as error:
         raise HTTPException(409, str(error)) from error
     if not deleted:
@@ -884,7 +884,7 @@ def get_first_board_critic(
             events=get_limit_up_repository().list_events(),
             symbol=symbol,
             trade_date=trade_date,
-            first_board_repository=SQLiteFirstBoardRepository(),
+            first_board_repository=FirstBoardRepository(),
         )
     except ValueError as error:
         raise HTTPException(status_code=404, detail=str(error)) from error
@@ -960,7 +960,7 @@ def _cached_response(
     """Return a cached structured response, or build and store it."""
 
     cache_key = _build_cache_key(scope, key_parts)
-    cache_repository = SQLiteAgentCacheRepository()
+    cache_repository = AgentCacheRepository()
     cached_payload = cache_repository.get_json(cache_key)
     if cached_payload is not None:
         return response_model.model_validate(cached_payload)  # type: ignore[attr-defined]

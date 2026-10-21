@@ -11,7 +11,7 @@ from concurrent.futures import Future
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
-from app.database import get_database_path
+from app.database import get_data_directory, get_database_url
 from app.models import FinanceNewsFacts
 from app.services import finance_news
 
@@ -58,8 +58,8 @@ class LatestFinanceNewsStore:
         loader: Callable[[], FinanceNewsFacts] | None = None,
         clock: Callable[[], datetime] = _now,
     ) -> None:
-        self.path = path if path is not None else get_database_path().with_name("finance_news_latest.json")
-        self.database_url = os.getenv("LIMITUPLAB_DATABASE_URL", "").strip() if path is None else ""
+        self.path = path if path is not None else get_data_directory() / "finance_news_latest.json"
+        self.database_url = get_database_url() if path is None else ""
         self._loader = loader or (lambda: _load_latest(clock()))
         self._clock = clock
         self._lock = threading.Lock()
@@ -219,10 +219,10 @@ _store_lock = threading.Lock()
 def get_latest_news() -> NewsReadResult:
     """Lazily create the process store after runtime configuration is loaded."""
     global _store
-    path = get_database_path().with_name("finance_news_latest.json")
-    database_url = os.getenv("LIMITUPLAB_DATABASE_URL", "").strip()
+    path = get_data_directory() / "finance_news_latest.json"
+    database_url = get_database_url()
     with _store_lock:
         if _store is None or _store.path != path or _store.database_url != database_url:
-            _store = LatestFinanceNewsStore(path=None if database_url else path)
+            _store = LatestFinanceNewsStore()
         store = _store
     return store.read()

@@ -1,27 +1,26 @@
-"""SQLite cache for reusable Agent computation results."""
+"""PostgreSQL cache for reusable Agent computation results."""
 
 from __future__ import annotations
 
 import json
 from datetime import datetime, timezone
-from pathlib import Path
 from typing import Any
 
 from app.database import connect, initialize_database
 
 
-class SQLiteAgentCacheRepository:
-    """Small JSON cache backed by SQLite."""
+class AgentCacheRepository:
+    """Small JSON cache backed by PostgreSQL."""
 
-    def __init__(self, database_path: Path | None = None):
-        """Create a cache repository bound to a SQLite database path."""
+    def __init__(self, database_url: str | None = None):
+        """Create a cache repository bound to a PostgreSQL URL."""
 
-        self.database_path = database_path
+        self.database_url = database_url
 
     def get_json(self, cache_key: str) -> dict[str, Any] | list[Any] | None:
         """Return a cached JSON payload when it exists and has not expired."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             row = connection.execute(
@@ -56,7 +55,7 @@ class SQLiteAgentCacheRepository:
         """Persist a JSON payload until the given expiry timestamp."""
 
         now = datetime.now(timezone.utc)
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             connection.execute(
@@ -90,7 +89,7 @@ class SQLiteAgentCacheRepository:
     def delete_expired(self) -> int:
         """Delete expired cache rows and return the deleted row count."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             cursor = connection.execute(

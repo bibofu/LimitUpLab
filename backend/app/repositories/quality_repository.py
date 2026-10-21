@@ -2,7 +2,6 @@
 
 from contextlib import contextmanager
 import json
-from pathlib import Path
 from uuid import uuid4
 
 from app.database import begin_write, connect
@@ -41,14 +40,13 @@ def statuses(row, response, case_status):
 
 
 class QualityRepository(JudgeRepositoryMixin, EvaluationRepositoryMixin):
-    def __init__(self, path=None):
+    def __init__(self, database_url: str | None = None):
         from app.agents.react_runtime.lifecycle import Journal
-        self.path = Path(path) if path else None
-        Journal(self.path)
+        self.database_url = Journal(database_url).database_url
 
     @contextmanager
     def connection(self):
-        db = connect(self.path)
+        db = connect(self.database_url)
         try:
             with db:
                 yield db

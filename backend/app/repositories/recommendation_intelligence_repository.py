@@ -1,9 +1,8 @@
-"""SQLite persistence for half-hour recommendation intelligence snapshots."""
+"""PostgreSQL persistence for half-hour recommendation intelligence snapshots."""
 
 from __future__ import annotations
 
 import json
-from pathlib import Path
 from typing import Any
 
 from app.database import begin_write, connect, initialize_database
@@ -28,13 +27,13 @@ def _load_persisted_response(raw_json: str) -> RecommendationIntelligenceRespons
     return RecommendationIntelligenceResponse.model_validate(payload)
 
 
-class SQLiteRecommendationIntelligenceRepository:
+class RecommendationIntelligenceRepository:
     """Store recent mutable evidence without rewriting prediction snapshots."""
 
-    # Initialize SQLiteRecommendationIntelligenceRepository with the supplied dependencies and
+    # Initialize RecommendationIntelligenceRepository with the supplied dependencies and
     # per-instance state.
-    def __init__(self, database_path: Path | None = None):
-        self.database_path = database_path
+    def __init__(self, database_url: str | None = None):
+        self.database_url = database_url
 
     def save(
         self,
@@ -42,7 +41,7 @@ class SQLiteRecommendationIntelligenceRepository:
     ) -> None:
         """Replace the current draft and append only material field changes."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             begin_write(connection)
@@ -108,7 +107,7 @@ class SQLiteRecommendationIntelligenceRepository:
     def get_latest(self) -> RecommendationIntelligenceResponse | None:
         """Return the newest persisted refresh."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             row = connection.execute(
@@ -144,7 +143,7 @@ class SQLiteRecommendationIntelligenceRepository:
         if current is not None and current.items:
             return current
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             rows = connection.execute(
@@ -184,7 +183,7 @@ class SQLiteRecommendationIntelligenceRepository:
         """Persist one immutable pre-open final and expose it as current."""
 
         validate_final_response(response)
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             cursor = connection.execute(
@@ -214,7 +213,7 @@ class SQLiteRecommendationIntelligenceRepository:
     ) -> RecommendationIntelligenceResponse | None:
         """Return the immutable prediction finalized for one target trading day."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             row = connection.execute(
@@ -244,7 +243,7 @@ class SQLiteRecommendationIntelligenceRepository:
     ) -> list[dict[str, Any]]:
         """Return recorded field changes for one candidate lifecycle."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             rows = connection.execute(

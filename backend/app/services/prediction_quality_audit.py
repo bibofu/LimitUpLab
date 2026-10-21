@@ -17,7 +17,7 @@ from app.models import (
     PredictionQualityCohort,
     PredictionQualityPolicyStatus,
 )
-from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
+from app.repositories import FirstBoardRepository, ScoringPolicyRepository
 from app.services.evaluation_agent import select_canonical_prediction_snapshots
 from app.services.prediction_time import assess_prediction_time, time_cohort_counts
 
@@ -32,8 +32,8 @@ def build_prediction_quality_audit(
     events: list[LimitUpEvent],
     start_date: date,
     end_date: date,
-    first_board_repository: SQLiteFirstBoardRepository | None = None,
-    policy_repository: SQLiteScoringPolicyRepository | None = None,
+    first_board_repository: FirstBoardRepository | None = None,
+    policy_repository: ScoringPolicyRepository | None = None,
     scoring_version: str | None = None,
     top_k: int = 10,
 ) -> PredictionQualityAuditResponse:
@@ -41,9 +41,9 @@ def build_prediction_quality_audit(
 
     if start_date > end_date:
         raise ValueError("start_date must be on or before end_date")
-    repository = first_board_repository or SQLiteFirstBoardRepository()
-    registry = policy_repository or SQLiteScoringPolicyRepository(
-        repository.database_path
+    repository = first_board_repository or FirstBoardRepository()
+    registry = policy_repository or ScoringPolicyRepository(
+        repository.database_url
     )
     champion = registry.ensure_default_policy()
     audited_version = scoring_version or champion.version

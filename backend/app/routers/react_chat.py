@@ -11,7 +11,7 @@ from fastapi.responses import StreamingResponse
 from app.agents.react_runtime.lifecycle import CURRENT_CONTROL, Journal, RunConflict, RunControl
 from app.agents.react_runtime.contracts import VERSION
 from app.models import AgentChatResponse, ChatSessionMessage
-from app.repositories import SQLiteChatSessionRepository, SessionOwnershipError
+from app.repositories import ChatSessionRepository, SessionOwnershipError
 from app.security import current_owner_id
 
 router = APIRouter()
@@ -39,7 +39,7 @@ def owned(journal, run_id, owner_id):
 def start(request, http_request, owner_id):
     """Create once, or reattach to the same active/completed request."""
     from app.routers import agents
-    chats = SQLiteChatSessionRepository()
+    chats = ChatSessionRepository()
     try:
         session = chats.ensure_session(request.session_id, first_message=request.message, owner_id=owner_id)
     except SessionOwnershipError as error:
@@ -114,11 +114,11 @@ def start(request, http_request, owner_id):
                 with agents.capture_llm_usage() as tracker:
                     context, memory = agents.prepare_session_context(
                         session_id=request.session_id, owner_id=owner_id, messages=history,
-                        repository=agents.SQLiteChatMemoryRepository(),
+                        repository=agents.ChatMemoryRepository(),
                     )
                     response = agents.answer_first_board_chat(
                         request=request, events=agents.get_limit_up_repository().list_events(),
-                        repository=agents.SQLiteFirstBoardRepository(), conversation_messages=context,
+                        repository=agents.FirstBoardRepository(), conversation_messages=context,
                         session_memory=memory,
                         progress_callback=progress,
                     )

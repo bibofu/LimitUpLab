@@ -13,7 +13,7 @@ from pydantic import BaseModel, ConfigDict
 
 from app.agents.review_agent import build_review_agent_report
 from app.agents.review_overview import OverviewValidationError, build_overview_facts, generate_overview
-from app.repositories import SQLiteFirstBoardRepository, get_limit_up_repository
+from app.repositories import FirstBoardRepository, get_limit_up_repository
 from app.security import current_owner_id
 from app.services.llm_provider import DisabledLLMProvider, capture_llm_usage, get_llm_provider
 from app.services.promotion_calendar import load_promotion_calendar
@@ -60,7 +60,7 @@ def stream_review_overview(
                 observed = sorted({event.trade_date for event in events})
                 calendar = load_promotion_calendar(observed[0], observed[-1])
                 days = [day for day in calendar.trade_dates if day < payload.end_date][-5:]
-                repository = SQLiteFirstBoardRepository()
+                repository = FirstBoardRepository()
                 report = build_review_agent_report(
                     events=events, start_date=min(days) if days else observed[0], end_date=payload.end_date,
                     repository=repository, min_score=0, top_per_day=10, follow_days=5,

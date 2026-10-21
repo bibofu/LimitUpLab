@@ -20,7 +20,7 @@ from app.models import (
     FirstBoardEnrichmentSnapshot,
     LimitUpEvent,
 )
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import FirstBoardRepository
 
 _MAIN_BOARD_AND_CHINEXT_PREFIXES = (
     "000",
@@ -43,7 +43,7 @@ def load_dragon_tiger_review(
     events: Sequence[LimitUpEvent],
     *,
     trade_date: date,
-    repository: SQLiteFirstBoardRepository | None = None,
+    repository: FirstBoardRepository | None = None,
 ) -> DragonTigerReviewResponse:
     """Load a cached review and synchronize late facts into rating snapshots."""
 
@@ -65,7 +65,7 @@ def load_dragon_tiger_review(
             )
             _review_cache[trade_date] = (monotonic(), response)
 
-        active_repository = repository or SQLiteFirstBoardRepository()
+        active_repository = repository or FirstBoardRepository()
         updates = merge_dragon_tiger_review_enrichments(
             response,
             active_repository.list_enrichment_for_date(response.trade_date),

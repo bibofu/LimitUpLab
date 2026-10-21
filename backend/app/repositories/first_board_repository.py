@@ -1,10 +1,9 @@
-﻿"""SQLite persistence for first-board feature and outcome data."""
+"""PostgreSQL persistence for first-board feature and outcome data."""
 
 import hashlib
 import json
-import sqlite3
+from app.storage.postgres import Record
 from datetime import date, datetime
-from pathlib import Path
 from types import SimpleNamespace
 from typing import Callable
 
@@ -22,18 +21,18 @@ from app.models import (
 )
 
 
-class SQLiteFirstBoardRepository:
+class FirstBoardRepository:
     """Repository for first-board features, outcomes and daily bars."""
 
-    def __init__(self, database_path: Path | None = None):
-        """Create a repository bound to a SQLite database path."""
+    def __init__(self, database_url: str | None = None):
+        """Create a repository bound to a PostgreSQL URL."""
 
-        self.database_path = database_path
+        self.database_url = database_url
 
     def upsert_features(self, features: list[FirstBoardFeature]) -> None:
         """Insert or update derived first-board feature rows."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             connection.executemany(
@@ -98,7 +97,7 @@ class SQLiteFirstBoardRepository:
     def upsert_daily_bars(self, bars: list[StockDailyBar]) -> None:
         """Insert or update local stock daily bars."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             connection.executemany(
@@ -148,7 +147,7 @@ class SQLiteFirstBoardRepository:
         if not bars:
             return
         created_at = datetime.now().astimezone().isoformat()
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             connection.execute(
@@ -191,7 +190,7 @@ class SQLiteFirstBoardRepository:
     def upsert_outcomes(self, outcomes: list[FirstBoardOutcome]) -> None:
         """Insert or update first-board outcome summaries."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             connection.executemany(
@@ -253,7 +252,7 @@ class SQLiteFirstBoardRepository:
     ) -> None:
         """Insert or update point-in-time candidate enrichment snapshots."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             connection.executemany(
@@ -330,7 +329,7 @@ class SQLiteFirstBoardRepository:
     ) -> list[FirstBoardEnrichmentSnapshot]:
         """Return all enrichment snapshots for one rating date."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             rows = connection.execute(
@@ -353,7 +352,7 @@ class SQLiteFirstBoardRepository:
     ) -> FirstBoardEnrichmentSnapshot | None:
         """Return one candidate's enrichment snapshot if it exists."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             row = connection.execute(
@@ -510,7 +509,7 @@ class SQLiteFirstBoardRepository:
     ) -> FirstBoardRatingsResponse | None:
         """Return the exact live rating response first persisted for one date."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             row = connection.execute(
@@ -544,7 +543,7 @@ class SQLiteFirstBoardRepository:
 
         if not predictions:
             return 0
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             cursor = connection.executemany(
@@ -601,7 +600,7 @@ class SQLiteFirstBoardRepository:
         snapshot_json = json.dumps(payload, ensure_ascii=False, sort_keys=True)
         content_hash = hashlib.sha256(snapshot_json.encode("utf-8")).hexdigest()
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             begin_write(connection)
@@ -709,7 +708,7 @@ class SQLiteFirstBoardRepository:
         """Return first-board feature rows for a trading date."""
 
         value = trade_date.isoformat() if isinstance(trade_date, date) else trade_date
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             rows = connection.execute(
@@ -730,7 +729,7 @@ class SQLiteFirstBoardRepository:
         """Return one persisted first-board feature row if it exists."""
 
         value = trade_date.isoformat() if isinstance(trade_date, date) else trade_date
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             row = connection.execute(
@@ -749,7 +748,7 @@ class SQLiteFirstBoardRepository:
     def list_feature_trade_dates_before(self, trade_date: date) -> list[date]:
         """Return persisted feature dates before target date, newest first."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             rows = connection.execute(
@@ -769,7 +768,7 @@ class SQLiteFirstBoardRepository:
     def list_daily_bars(self, symbol: str) -> list[StockDailyBar]:
         """Return persisted daily bars for one stock ordered by date."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             rows = connection.execute(
@@ -792,11 +791,11 @@ class SQLiteFirstBoardRepository:
         *,
         end_date: date | None = None,
     ) -> list[StockDailyBar]:
-        """Return daily bars for a bounded stock set with batched SQLite reads."""
+        """Return daily bars for a bounded stock set with batched PostgreSQL reads."""
 
         if not symbols:
             return []
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             rows = []
@@ -823,7 +822,7 @@ class SQLiteFirstBoardRepository:
     ) -> list[StockIntradayKLineBar]:
         """Return cached intraday bars for one stock and completed trade date."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             rows = connection.execute(
@@ -859,7 +858,7 @@ class SQLiteFirstBoardRepository:
     ) -> list[StockDailyBar]:
         """Return daily bars from a case's first-board date onward."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             rows = connection.execute(
@@ -881,7 +880,7 @@ class SQLiteFirstBoardRepository:
     def has_post_bars(self, symbol: str, base_trade_date: date) -> bool:
         """Return whether local post-first-board bars exist for a case."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             row = connection.execute(
@@ -904,7 +903,7 @@ class SQLiteFirstBoardRepository:
     ) -> FirstBoardOutcome | None:
         """Return the derived outcome for one historical first-board case."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             row = connection.execute(
@@ -927,7 +926,7 @@ class SQLiteFirstBoardRepository:
     ) -> list[FirstBoardOutcome]:
         """Return outcome summaries in an inclusive base-date range."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             rows = connection.execute(
@@ -952,7 +951,7 @@ class SQLiteFirstBoardRepository:
     ) -> list[AgentPrediction]:
         """Return persisted predictions in an inclusive trade-date range."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             sql = """
@@ -974,7 +973,7 @@ class SQLiteFirstBoardRepository:
         return [self._prediction_from_row(row) for row in rows]
 
     def _feature_to_record(self, feature: FirstBoardFeature) -> tuple[object, ...]:
-        """Serialize a first-board feature model for SQLite."""
+        """Serialize a first-board feature model for PostgreSQL."""
 
         return (
             feature.trade_date.isoformat(),
@@ -1004,7 +1003,7 @@ class SQLiteFirstBoardRepository:
         )
 
     def _bar_to_record(self, bar: StockDailyBar) -> tuple[object, ...]:
-        """Serialize a daily bar model for SQLite."""
+        """Serialize a daily bar model for PostgreSQL."""
 
         return (
             bar.symbol,
@@ -1021,7 +1020,7 @@ class SQLiteFirstBoardRepository:
         )
 
     def _outcome_to_record(self, outcome: FirstBoardOutcome) -> tuple[object, ...]:
-        """Serialize an outcome model for SQLite."""
+        """Serialize an outcome model for PostgreSQL."""
 
         return (
             outcome.base_trade_date.isoformat(),
@@ -1051,7 +1050,7 @@ class SQLiteFirstBoardRepository:
         self,
         item: FirstBoardEnrichmentSnapshot,
     ) -> tuple[object, ...]:
-        """Serialize a first-board enrichment snapshot for SQLite."""
+        """Serialize a first-board enrichment snapshot for PostgreSQL."""
 
         return (
             item.trade_date.isoformat(),
@@ -1098,7 +1097,7 @@ class SQLiteFirstBoardRepository:
         )
 
     def _prediction_to_record(self, prediction: AgentPrediction) -> tuple[object, ...]:
-        """Serialize a prediction model for SQLite."""
+        """Serialize a prediction model for PostgreSQL."""
 
         return (
             prediction.prediction_id,
@@ -1118,8 +1117,8 @@ class SQLiteFirstBoardRepository:
             json.dumps(prediction.prediction_provenance, ensure_ascii=False, sort_keys=True),
         )
 
-    def _feature_from_row(self, row: sqlite3.Row) -> FirstBoardFeature:
-        """Deserialize a SQLite row into a feature model."""
+    def _feature_from_row(self, row: Record) -> FirstBoardFeature:
+        """Deserialize a PostgreSQL row into a feature model."""
 
         return FirstBoardFeature(
             trade_date=date.fromisoformat(row["trade_date"]),
@@ -1148,8 +1147,8 @@ class SQLiteFirstBoardRepository:
             created_at=datetime.fromisoformat(row["created_at"]),
         )
 
-    def _bar_from_row(self, row: sqlite3.Row) -> StockDailyBar:
-        """Deserialize a SQLite row into a daily bar model."""
+    def _bar_from_row(self, row: Record) -> StockDailyBar:
+        """Deserialize a PostgreSQL row into a daily bar model."""
 
         return StockDailyBar(
             symbol=row["symbol"],
@@ -1165,8 +1164,8 @@ class SQLiteFirstBoardRepository:
             created_at=datetime.fromisoformat(row["created_at"]),
         )
 
-    def _outcome_from_row(self, row: sqlite3.Row) -> FirstBoardOutcome:
-        """Deserialize a SQLite row into an outcome model."""
+    def _outcome_from_row(self, row: Record) -> FirstBoardOutcome:
+        """Deserialize a PostgreSQL row into an outcome model."""
 
         return FirstBoardOutcome(
             base_trade_date=date.fromisoformat(row["base_trade_date"]),
@@ -1194,8 +1193,8 @@ class SQLiteFirstBoardRepository:
             created_at=datetime.fromisoformat(row["created_at"]),
         )
 
-    def _enrichment_from_row(self, row: sqlite3.Row) -> FirstBoardEnrichmentSnapshot:
-        """Deserialize a first-board enrichment snapshot from SQLite."""
+    def _enrichment_from_row(self, row: Record) -> FirstBoardEnrichmentSnapshot:
+        """Deserialize a first-board enrichment snapshot from PostgreSQL."""
 
         return FirstBoardEnrichmentSnapshot(
             trade_date=date.fromisoformat(row["trade_date"]),
@@ -1247,8 +1246,8 @@ class SQLiteFirstBoardRepository:
             created_at=datetime.fromisoformat(row["created_at"]),
         )
 
-    def _prediction_from_row(self, row: sqlite3.Row) -> AgentPrediction:
-        """Deserialize a SQLite row into a prediction model."""
+    def _prediction_from_row(self, row: Record) -> AgentPrediction:
+        """Deserialize a PostgreSQL row into a prediction model."""
 
         return AgentPrediction(
             prediction_id=row["prediction_id"],

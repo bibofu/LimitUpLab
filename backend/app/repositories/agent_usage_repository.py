@@ -1,9 +1,8 @@
-"""SQLite accounting for public Agent usage and estimated LLM cost."""
+"""PostgreSQL accounting for public Agent usage and estimated LLM cost."""
 
 from __future__ import annotations
 
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 from zoneinfo import ZoneInfo
 
 from app.database import connect, initialize_database
@@ -13,17 +12,17 @@ from app.models import AgentUsageRecord, AgentUsageSummary
 SHANGHAI_TIMEZONE = ZoneInfo("Asia/Shanghai")
 
 
-class SQLiteAgentUsageRepository:
+class AgentUsageRepository:
     """Persist one accounting record per accepted Agent request."""
 
-    # Initialize SQLiteAgentUsageRepository with the supplied dependencies and per-instance state.
-    def __init__(self, database_path: Path | None = None) -> None:
-        self.database_path = database_path
+    # Initialize AgentUsageRepository with the supplied dependencies and per-instance state.
+    def __init__(self, database_url: str | None = None) -> None:
+        self.database_url = database_url
 
     def start(self, record: AgentUsageRecord) -> None:
         """Insert an accepted request before expensive work starts."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             connection.execute(
@@ -46,7 +45,7 @@ class SQLiteAgentUsageRepository:
     def finish(self, record: AgentUsageRecord) -> None:
         """Finalize one request with measured LLM and latency data."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             connection.execute(
@@ -109,7 +108,7 @@ class SQLiteAgentUsageRepository:
         *,
         owner_id: str | None = None,
     ) -> AgentUsageSummary:
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             where = "started_at >= ?"

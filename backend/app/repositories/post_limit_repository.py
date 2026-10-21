@@ -5,7 +5,6 @@ from __future__ import annotations
 from dataclasses import dataclass
 from contextlib import closing
 from datetime import date
-from pathlib import Path
 
 from app.database import connect_readonly
 
@@ -22,14 +21,11 @@ class PostLimitDataset:
 def load_post_limit_dataset(
     as_of: date | None = None,
     *,
-    database_path: Path | None = None,
+    database_url: str | None = None,
 ) -> PostLimitDataset:
     """Load one consistent local snapshot without writing or remote fallback."""
 
-    try:
-        connection = connect_readonly(database_path)
-    except FileNotFoundError:
-        return PostLimitDataset([], [], [], [], None)
+    connection = connect_readonly(database_url)
     with closing(connection), connection:
         latest = connection.execute(
             "SELECT MAX(trade_date) FROM stock_daily_bars"

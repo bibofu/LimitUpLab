@@ -11,7 +11,7 @@ from app.models import (
     LimitUpEvent,
     StockDailyBar,
 )
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import FirstBoardRepository
 from app.services.analysis import latest_trade_date
 from app.services.outcome_completeness import build_top10_outcome_completeness
 from app.services.daily_bar_source import daily_bar_source_family
@@ -37,13 +37,13 @@ class _PostLimitCacheHealth:
 
 def build_agent_data_health(
     events: list[LimitUpEvent],
-    first_board_repository: SQLiteFirstBoardRepository | None = None,
+    first_board_repository: FirstBoardRepository | None = None,
     trade_date: date | None = None,
     top_limit: int = 5,
 ) -> AgentDataHealthResponse:
     """Build health status for raw events and first-board scoring inputs."""
 
-    repository = first_board_repository or SQLiteFirstBoardRepository()
+    repository = first_board_repository or FirstBoardRepository()
     warnings: list[str] = []
     if not events:
         return AgentDataHealthResponse(
@@ -167,7 +167,7 @@ def build_agent_data_health(
 
 def _post_limit_cache_health(
     events: list[LimitUpEvent],
-    repository: SQLiteFirstBoardRepository,
+    repository: FirstBoardRepository,
     target_date: date,
 ) -> _PostLimitCacheHealth:
     """Check recent research candidates against complete, consistent daily-bar history."""

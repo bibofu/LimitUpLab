@@ -19,7 +19,7 @@ from app.models import (
     ScoreBreakdownItem,
     ScoringPolicy,
 )
-from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
+from app.repositories import FirstBoardRepository, ScoringPolicyRepository
 from app.services.analysis import events_for_date, latest_trade_date, summarize_market
 from app.services.first_board_enrichment import adapt_enrichment_relay_context
 from app.services.limit_up_reason import count_reason_peers
@@ -38,7 +38,7 @@ MIN_AMOUNT = 50_000_000
 def build_first_board_ratings(
     events: list[LimitUpEvent],
     trade_date: Optional[date] = None,
-    first_board_repository: SQLiteFirstBoardRepository | None = None,
+    first_board_repository: FirstBoardRepository | None = None,
     scoring_policy: ScoringPolicy | None = None,
 ) -> FirstBoardRatingsResponse:
     """Build first-board ratings for a trade date from persisted events."""
@@ -55,9 +55,9 @@ def build_first_board_ratings(
         if is_relay_research_security(event.symbol, event.name)
     ]
     summary = summarize_market(research_events) if research_events else None
-    repository = first_board_repository or SQLiteFirstBoardRepository()
-    active_policy = scoring_policy or SQLiteScoringPolicyRepository(
-        repository.database_path
+    repository = first_board_repository or FirstBoardRepository()
+    active_policy = scoring_policy or ScoringPolicyRepository(
+        repository.database_url
     ).ensure_default_policy()
     # Fail early if the stored policy refers to unknown factors; silently ignoring
     # a weight would make saved scores impossible to reproduce accurately.

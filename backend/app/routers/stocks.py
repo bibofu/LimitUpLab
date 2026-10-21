@@ -1,4 +1,4 @@
-﻿"""Stock detail API routes used by the review page."""
+"""Stock detail API routes used by the review page."""
 
 from datetime import date
 
@@ -17,8 +17,8 @@ from app.models import (
     StockPositionAssessment,
 )
 from app.repositories import (
-    SQLiteFirstBoardRepository,
-    SQLiteStockNewsRepository,
+    FirstBoardRepository,
+    StockNewsRepository,
     get_limit_up_repository,
 )
 from app.services.analysis import find_stock_event, latest_trade_date
@@ -69,7 +69,7 @@ def get_stock_news(
             name=resolved_name,
             days=days,
             limit=limit,
-            repository=SQLiteStockNewsRepository(),
+            repository=StockNewsRepository(),
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -88,7 +88,7 @@ def get_stock_kline(
             symbol=symbol,
             days=days,
             end_date=latest_trade_date(events),
-            repository=SQLiteFirstBoardRepository(),
+            repository=FirstBoardRepository(),
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -111,7 +111,7 @@ def get_stock_market_data(
             days=days,
             end_date=latest_trade_date(events),
             position_trade_date=position_trade_date,
-            repository=SQLiteFirstBoardRepository(),
+            repository=FirstBoardRepository(),
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -135,7 +135,7 @@ def get_stock_position(
         return load_stock_position_assessment(
             symbol=symbol,
             end_date=target_date,
-            repository=SQLiteFirstBoardRepository(),
+            repository=FirstBoardRepository(),
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -157,7 +157,7 @@ def get_stock_latest_close(symbol: str) -> StockCloseSnapshot:
             symbol=symbol,
             days=2,
             end_date=latest_trade_date(events),
-            repository=SQLiteFirstBoardRepository(),
+            repository=FirstBoardRepository(),
         )
         return build_stock_close_snapshot(
             symbol=symbol,
@@ -185,7 +185,7 @@ def get_stock_trading_day_kline(
             symbol=symbol,
             trade_date=trade_date or latest_trade_date(events),
             period=period,
-            repository=SQLiteFirstBoardRepository(),
+            repository=FirstBoardRepository(),
         )
     except ValueError as error:
         raise HTTPException(status_code=400, detail=str(error)) from error
@@ -208,7 +208,7 @@ def get_stock_intraday_history(
     try:
         events = get_limit_up_repository().list_events()
         target_date = end_date or latest_trade_date(events)
-        repository = SQLiteFirstBoardRepository()
+        repository = FirstBoardRepository()
         daily_bars = load_stock_kline_bars(
             symbol=symbol,
             days=days + 1,

@@ -7,7 +7,7 @@ import hashlib
 import json
 from uuid import uuid4
 
-from app.database import begin_write, connect, initialize_database, is_integrity_error, is_postgres
+from app.database import begin_write, connect, is_integrity_error
 from app.quality_schema import initialize_quality_schema, enqueue_completed
 from app.services.runtime_coordination import LeaseLost, LeaseStore
 
@@ -23,42 +23,15 @@ class RunConflict(ValueError):
 
 
 class Journal:
-    def __init__(self, database_path=None):
-        self.database_path = database_path
-        self.leases = LeaseStore(database_path)
+    def __init__(self, database_url: str | None = None):
+        self.leases = LeaseStore(database_url)
+        self.database_url = self.leases.database_url
         with self.connection() as db:
-            initialize_database(db)
-            if is_postgres(db):
-                # PostgreSQL schema changes are applied by Alembic before startup.
-                return
-            db.executescript("""
-                CREATE TABLE IF NOT EXISTS react_runs (
-                    run_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL, session_id TEXT NOT NULL,
-                    message_key TEXT NOT NULL, request_json TEXT NOT NULL, request_hash TEXT NOT NULL,
-                    active INTEGER NOT NULL DEFAULT 1, cancelled INTEGER NOT NULL DEFAULT 0,
-                    started_at TEXT NOT NULL, checkpoint_json TEXT, response_json TEXT,
-                    UNIQUE(owner_id, session_id, message_key),
-                    FOREIGN KEY(session_id) REFERENCES chat_sessions(session_id) ON DELETE CASCADE
-                );
-                CREATE UNIQUE INDEX IF NOT EXISTS react_active_session
-                    ON react_runs(owner_id, session_id) WHERE active=1;
-                CREATE TABLE IF NOT EXISTS react_events (
-                    seq INTEGER PRIMARY KEY AUTOINCREMENT, run_id TEXT NOT NULL,
-                    event TEXT NOT NULL, payload_json TEXT NOT NULL,
-                    FOREIGN KEY(run_id) REFERENCES react_runs(run_id) ON DELETE CASCADE
-                );
-                CREATE TABLE IF NOT EXISTS react_calls (
-                    run_id TEXT NOT NULL, call_id TEXT NOT NULL, signature TEXT NOT NULL,
-                    result_json TEXT,
-                    PRIMARY KEY(run_id,call_id),
-                    FOREIGN KEY(run_id) REFERENCES react_runs(run_id) ON DELETE CASCADE
-                );
-            """)
             initialize_quality_schema(db)
 
     @contextmanager
     def connection(self):
-        db = connect(self.database_path)
+        db = connect(self.database_url)
         try:
             with db:
                 yield db

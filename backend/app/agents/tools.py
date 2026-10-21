@@ -3,7 +3,6 @@
 import os
 from dataclasses import asdict
 from datetime import date, datetime, time, timedelta, timezone
-from pathlib import Path
 from typing import Any
 
 from app.agents.first_board import build_first_board_ratings
@@ -55,10 +54,10 @@ from app.models import (
     WebSearchFacts,
 )
 from app.repositories import (
-    SQLiteFirstBoardRepository,
-    SQLiteRecommendationIntelligenceRepository,
-    SQLiteScoringPolicyRepository,
-    SQLiteStockNewsRepository,
+    FirstBoardRepository,
+    RecommendationIntelligenceRepository,
+    ScoringPolicyRepository,
+    StockNewsRepository,
 )
 from app.services.analysis import (
     enrich_board_promotion_openings,
@@ -163,14 +162,14 @@ class AgentToolRegistry:
     def __init__(
         self,
         events: list[LimitUpEvent],
-        first_board_repository: SQLiteFirstBoardRepository | None = None,
+        first_board_repository: FirstBoardRepository | None = None,
         hithink_collector: HithinkFinanceCollector | None = None,
         profile: str | None = None,
     ):
         """Create a registry bound to current request data dependencies."""
 
         self.events = events
-        self.first_board_repository = first_board_repository or SQLiteFirstBoardRepository()
+        self.first_board_repository = first_board_repository or FirstBoardRepository()
         self.hithink_collector = hithink_collector or HithinkFinanceCollector()
         self.profile = resolve_agent_profile(profile)
         self._stock_name_directory: dict[str, str] | None = None
@@ -757,8 +756,8 @@ class AgentToolRegistry:
             name=resolved_name,
             days=max(1, min(days, 30)),
             limit=max(1, min(limit, 20)),
-            repository=SQLiteStockNewsRepository(
-                self.first_board_repository.database_path
+            repository=StockNewsRepository(
+                self.first_board_repository.database_url
             ),
         )
         trace_output = response.model_dump(mode="json")
@@ -939,7 +938,7 @@ class AgentToolRegistry:
             else "暂无入池候选"
         )
         intelligence = _recommendation_intelligence_by_symbol(
-            self.first_board_repository.database_path,
+            self.first_board_repository.database_url,
             strategy="relay",
         )
         trace_output = {
@@ -967,7 +966,7 @@ class AgentToolRegistry:
         }
         if trade_date is None:
             recommendation_draft = _recommendation_draft_facts(
-                self.first_board_repository.database_path,
+                self.first_board_repository.database_url,
                 strategy="relay",
                 expected_base_date=ratings.trade_date,
             )
@@ -1314,7 +1313,7 @@ class AgentToolRegistry:
 
         cutoff = end_date or max((event.trade_date for event in self.events), default=None)
         payload = build_recent_limit_up_returns(
-            load_post_limit_dataset(cutoff, database_path=self.first_board_repository.database_path),
+            load_post_limit_dataset(cutoff, database_url=self.first_board_repository.database_url),
             end_date=cutoff, recent_trade_days=recent_trade_days,
             return_trade_days=return_trade_days,
         )
@@ -1385,7 +1384,7 @@ class AgentToolRegistry:
         payload = build_post_limit_screen(
             load_post_limit_dataset(
                 contract.data_as_of,
-                database_path=self.first_board_repository.database_path,
+                database_url=self.first_board_repository.database_url,
             ),
             contract,
         )
@@ -1429,7 +1428,7 @@ class AgentToolRegistry:
         payload = build_post_limit_path(
             load_post_limit_dataset(
                 contract.data_as_of,
-                database_path=self.first_board_repository.database_path,
+                database_url=self.first_board_repository.database_url,
             ),
             contract,
             symbol=resolved_symbol,
@@ -1463,7 +1462,7 @@ class AgentToolRegistry:
         payload = build_post_limit_statistics(
             load_post_limit_dataset(
                 contract.data_as_of,
-                database_path=self.first_board_repository.database_path,
+                database_url=self.first_board_repository.database_url,
             ),
             contract,
         )
@@ -1816,8 +1815,8 @@ class AgentToolRegistry:
     def scoring_policy_status(self) -> ToolResult:
         """Return the current Champion and latest constrained optimization result."""
 
-        repository = SQLiteScoringPolicyRepository(
-            self.first_board_repository.database_path
+        repository = ScoringPolicyRepository(
+            self.first_board_repository.database_url
         )
         registry = build_scoring_policy_registry(repository=repository, limit=10)
         latest = repository.get_latest_optimization_run()
@@ -1857,14 +1856,14 @@ class AgentToolRegistry:
 
 
 def _recommendation_intelligence_by_symbol(
-    database_path: Path | None,
+    database_url: str | None,
     *,
     strategy: str,
 ) -> dict[str, dict[str, Any]]:
     """Return compact latest evidence without expanding full news payloads."""
 
-    response = SQLiteRecommendationIntelligenceRepository(
-        database_path
+    response = RecommendationIntelligenceRepository(
+        database_url
     ).get_latest()
     if response is None:
         return {}
@@ -1931,14 +1930,14 @@ def _recommendation_intelligence_by_symbol(
 
 
 def _recommendation_draft_facts(
-    database_path: Path | None,
+    database_url: str | None,
     *,
     strategy: str,
     expected_base_date: date,
 ) -> dict[str, Any] | None:
     """Return the latest replaceable news and financial research ranking."""
 
-    response = SQLiteRecommendationIntelligenceRepository(database_path).get_latest()
+    response = RecommendationIntelligenceRepository(database_url).get_latest()
     if response is None:
         return None
     # The key compares rank, then symbol.

@@ -6,7 +6,7 @@ import json
 import math
 import os
 
-from app.database import begin_write, initialize_database, is_postgres
+from app.database import begin_write, initialize_database
 from app.repositories.storage_sql import database_clock
 
 
@@ -26,72 +26,8 @@ def answer_hash(response):
 
 
 def initialize_quality_schema(db):
-    """Use individual statements to preserve a caller's active transaction."""
-    if is_postgres(db):
-        initialize_database(db)
-        return
-    if not db.in_transaction:
-        begin_write(db)
-    statements = [
-        """CREATE TABLE IF NOT EXISTS quality_feedback (
-            run_id TEXT PRIMARY KEY REFERENCES react_runs(run_id) ON DELETE CASCADE,
-            owner_id TEXT NOT NULL, vote TEXT, reasons_json TEXT NOT NULL,
-            comment TEXT NOT NULL, created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-        )""",
-        """CREATE TABLE IF NOT EXISTS quality_delivery (
-            run_id TEXT NOT NULL REFERENCES react_runs(run_id) ON DELETE CASCADE,
-            answer_hash TEXT NOT NULL, event TEXT NOT NULL, created_at TEXT NOT NULL,
-            PRIMARY KEY(run_id,answer_hash,event)
-        )""",
-        """CREATE TABLE IF NOT EXISTS quality_cases (
-            case_id TEXT PRIMARY KEY,
-            run_id TEXT NOT NULL UNIQUE REFERENCES react_runs(run_id) ON DELETE CASCADE,
-            status TEXT NOT NULL DEFAULT 'pending', severity TEXT NOT NULL,
-            symptom TEXT NOT NULL DEFAULT '', root_cause TEXT NOT NULL DEFAULT '',
-            assignee TEXT NOT NULL DEFAULT '', fix_version TEXT NOT NULL DEFAULT '',
-            duplicate_of TEXT REFERENCES quality_cases(case_id) ON DELETE SET NULL,
-            version TEXT NOT NULL, revision INTEGER NOT NULL DEFAULT 0,
-            created_at TEXT NOT NULL, updated_at TEXT NOT NULL
-        )""",
-        """CREATE TABLE IF NOT EXISTS quality_signals (
-            signal_id TEXT PRIMARY KEY,
-            case_id TEXT NOT NULL REFERENCES quality_cases(case_id) ON DELETE CASCADE,
-            source TEXT NOT NULL, code TEXT NOT NULL, severity TEXT NOT NULL,
-            summary TEXT NOT NULL, evidence_json TEXT NOT NULL, detector_version TEXT NOT NULL,
-            answer_hash TEXT NOT NULL, created_at TEXT NOT NULL,
-            UNIQUE(case_id,source,code,detector_version,answer_hash)
-        )""",
-        """CREATE TABLE IF NOT EXISTS quality_reviews (
-            review_id TEXT PRIMARY KEY,
-            case_id TEXT NOT NULL REFERENCES quality_cases(case_id) ON DELETE CASCADE,
-            actor_id TEXT NOT NULL, from_status TEXT NOT NULL, to_status TEXT NOT NULL,
-            revision INTEGER NOT NULL, note TEXT NOT NULL, changes_json TEXT NOT NULL,
-            created_at TEXT NOT NULL, UNIQUE(case_id,revision)
-        )""",
-        """CREATE TABLE IF NOT EXISTS quality_jobs (
-            id TEXT PRIMARY KEY,
-            run_id TEXT NOT NULL REFERENCES react_runs(run_id) ON DELETE CASCADE,
-            answer_hash TEXT NOT NULL, detector_version TEXT NOT NULL,
-            status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
-            max_attempts INTEGER NOT NULL DEFAULT 3, available_at REAL NOT NULL,
-            lease_token TEXT, lease_until REAL, worker_id TEXT, last_error TEXT,
-            created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-            UNIQUE(run_id,answer_hash,detector_version)
-        )""",
-        """CREATE TABLE IF NOT EXISTS quality_trace_snapshots (
-            id INTEGER PRIMARY KEY AUTOINCREMENT,
-            run_id TEXT NOT NULL REFERENCES react_runs(run_id) ON DELETE CASCADE,
-            stage TEXT NOT NULL, captured_at TEXT NOT NULL, payload_json TEXT NOT NULL
-        )""",
-        "CREATE INDEX IF NOT EXISTS quality_cases_status ON quality_cases(status,updated_at)",
-        "CREATE INDEX IF NOT EXISTS quality_jobs_ready ON quality_jobs(status,available_at)",
-        "CREATE INDEX IF NOT EXISTS quality_trace_run ON quality_trace_snapshots(run_id,id)",
-        """CREATE TRIGGER IF NOT EXISTS quality_reviews_no_update BEFORE UPDATE ON quality_reviews
-            BEGIN SELECT RAISE(ABORT, 'Review audit is append-only'); END""",
-    ]
-    for statement in statements:
-        db.execute(statement)
-    initialize_evaluation_schema(db)
+    """Check the Alembic schema without applying request-time DDL."""
+    initialize_database(db)
 
 
 def canonical_hash(value):
@@ -112,90 +48,8 @@ def default_config():
 
 
 def initialize_evaluation_schema(db):
-    """Upgrade the v1 outbox atomically, preserving historical job identities."""
-    if is_postgres(db):
-        initialize_database(db)
-        return
-    db.execute("""CREATE TABLE IF NOT EXISTS quality_evidence_bundles (
-        bundle_id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES react_runs(run_id) ON DELETE CASCADE,
-        answer_hash TEXT NOT NULL, content_hash TEXT NOT NULL, capture_mode TEXT NOT NULL,
-        payload_json TEXT NOT NULL, created_at TEXT NOT NULL, UNIQUE(run_id,content_hash))""")
-    if "evaluation_key" not in {row[1] for row in db.execute("PRAGMA table_info(quality_signals)")}:
-        db.execute("ALTER TABLE quality_signals RENAME TO quality_signals_legacy_v1")
-        db.execute("""CREATE TABLE quality_signals (
-            signal_id TEXT PRIMARY KEY, case_id TEXT NOT NULL REFERENCES quality_cases(case_id) ON DELETE CASCADE,
-            source TEXT NOT NULL, code TEXT NOT NULL, severity TEXT NOT NULL, summary TEXT NOT NULL,
-            evidence_json TEXT NOT NULL, detector_version TEXT NOT NULL, answer_hash TEXT NOT NULL,
-            created_at TEXT NOT NULL, evaluation_key TEXT NOT NULL DEFAULT '',
-            UNIQUE(case_id,source,code,detector_version,answer_hash,evaluation_key))""")
-        db.execute("""INSERT INTO quality_signals(signal_id,case_id,source,code,severity,summary,evidence_json,
-            detector_version,answer_hash,created_at) SELECT * FROM quality_signals_legacy_v1""")
-        db.execute("DROP TABLE quality_signals_legacy_v1")
-    legacy = "job_kind" not in {row[1] for row in db.execute("PRAGMA table_info(quality_jobs)")}
-    if legacy:
-        db.execute("ALTER TABLE quality_jobs RENAME TO quality_jobs_legacy_v1")
-        db.execute("""CREATE TABLE quality_jobs (
-            id TEXT PRIMARY KEY, run_id TEXT NOT NULL REFERENCES react_runs(run_id) ON DELETE CASCADE,
-            answer_hash TEXT NOT NULL, detector_version TEXT NOT NULL, job_kind TEXT NOT NULL DEFAULT 'deterministic',
-            config_hash TEXT NOT NULL, config_json TEXT NOT NULL,
-            bundle_id TEXT REFERENCES quality_evidence_bundles(bundle_id) ON DELETE CASCADE,
-            status TEXT NOT NULL DEFAULT 'pending', attempts INTEGER NOT NULL DEFAULT 0,
-            max_attempts INTEGER NOT NULL DEFAULT 3, available_at REAL NOT NULL,
-            lease_token TEXT, lease_until REAL, worker_id TEXT, last_error TEXT,
-            created_at TEXT NOT NULL, updated_at TEXT NOT NULL,
-            UNIQUE(job_kind,detector_version,config_hash,bundle_id))""")
-        db.execute("""INSERT INTO quality_jobs
-            (id,run_id,answer_hash,detector_version,config_hash,config_json,status,attempts,max_attempts,
-             available_at,worker_id,last_error,created_at,updated_at)
-            SELECT id,run_id,answer_hash,detector_version,?,'{}',
-                CASE WHEN status='done' THEN 'done' ELSE 'superseded' END,
-                attempts,max_attempts,available_at,worker_id,last_error,created_at,updated_at
-            FROM quality_jobs_legacy_v1""", (canonical_hash({}),))
-    db.execute("""CREATE TABLE IF NOT EXISTS quality_evaluations (
-        evaluation_id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES quality_jobs(id) ON DELETE CASCADE,
-        run_id TEXT NOT NULL REFERENCES react_runs(run_id) ON DELETE CASCADE,
-        bundle_id TEXT REFERENCES quality_evidence_bundles(bundle_id) ON DELETE CASCADE,
-        attempt INTEGER NOT NULL, evaluator_kind TEXT NOT NULL, evaluator_version TEXT NOT NULL,
-        config_hash TEXT NOT NULL, answer_hash TEXT NOT NULL, execution_status TEXT NOT NULL,
-        verdict TEXT NOT NULL DEFAULT 'unknown', report_json TEXT, error_type TEXT,
-        started_at TEXT NOT NULL, finished_at TEXT, UNIQUE(job_id,attempt))""")
-    if legacy:
-        for job in db.execute("SELECT * FROM quality_jobs_legacy_v1").fetchall():
-            report = {"evaluator_kind": "deterministic", "evaluator_version": job["detector_version"],
-                      "execution_status": "skipped", "verdict": "unknown", "checks": [],
-                      "metadata": {"reason": "legacy_report_unavailable" if job["status"] == "done" else "legacy_evaluator_superseded",
-                                   "legacy_job_status": job["status"], "legacy_attempts": job["attempts"]}}
-            db.execute("""INSERT INTO quality_evaluations
-                (evaluation_id,job_id,run_id,attempt,evaluator_kind,evaluator_version,config_hash,answer_hash,
-                 execution_status,report_json,started_at,finished_at)
-                VALUES(?,?,?,?,?,?,?,?,?,?,?,?)""", ("legacy_" + job["id"], job["id"], job["run_id"],
-                job["attempts"], "deterministic", job["detector_version"], canonical_hash({}), job["answer_hash"],
-                "skipped", encode(report), job["created_at"], now()))
-        db.execute("DROP TABLE quality_jobs_legacy_v1")
-    db.execute("CREATE INDEX IF NOT EXISTS quality_jobs_ready ON quality_jobs(job_kind,status,available_at)")
-    db.execute("CREATE INDEX IF NOT EXISTS quality_evaluations_run ON quality_evaluations(run_id,started_at)")
-    db.execute("""CREATE TABLE IF NOT EXISTS quality_budget_usage (
-        job_kind TEXT NOT NULL, period TEXT NOT NULL, metric TEXT NOT NULL,
-        reserved_units INTEGER NOT NULL DEFAULT 0, PRIMARY KEY(job_kind,period,metric))""")
-    db.execute("""CREATE TABLE IF NOT EXISTS quality_budget_reservations (
-        job_id TEXT NOT NULL REFERENCES quality_jobs(id) ON DELETE CASCADE, attempt INTEGER NOT NULL,
-        reservation_key TEXT NOT NULL, job_kind TEXT NOT NULL, period TEXT NOT NULL,
-        metric TEXT NOT NULL, units INTEGER NOT NULL, created_at TEXT NOT NULL,
-        PRIMARY KEY(job_id,attempt,reservation_key))""")
-    db.execute("""CREATE TABLE IF NOT EXISTS quality_judge_calls (
-        call_id TEXT PRIMARY KEY, job_id TEXT NOT NULL REFERENCES quality_jobs(id) ON DELETE CASCADE,
-        evaluation_id TEXT NOT NULL REFERENCES quality_evaluations(evaluation_id) ON DELETE CASCADE,
-        attempt INTEGER NOT NULL, call_key TEXT NOT NULL, period TEXT NOT NULL,
-        phase TEXT NOT NULL, request_hash TEXT, status TEXT NOT NULL DEFAULT 'reserved',
-        timeout_seconds REAL NOT NULL, expires_at REAL NOT NULL, reserved_at TEXT NOT NULL,
-        started_at TEXT, finished_at TEXT, settled_at TEXT, error_type TEXT,
-        late_status TEXT, late_error_type TEXT, prompt_tokens INTEGER, completion_tokens INTEGER,
-        total_tokens INTEGER, duration_ms REAL, UNIQUE(job_id,call_key))""")
-    db.execute("CREATE INDEX IF NOT EXISTS quality_judge_calls_active ON quality_judge_calls(status,expires_at)")
-    db.execute("""CREATE TRIGGER IF NOT EXISTS quality_bundles_no_update BEFORE UPDATE ON quality_evidence_bundles
-        BEGIN SELECT RAISE(ABORT, 'Evidence bundle is immutable'); END""")
-    db.execute("""CREATE TRIGGER IF NOT EXISTS quality_evaluations_terminal_no_update BEFORE UPDATE ON quality_evaluations
-        WHEN OLD.execution_status != 'running' BEGIN SELECT RAISE(ABORT, 'Evaluation attempt is immutable'); END""")
+    """Check the Alembic schema without applying request-time DDL."""
+    initialize_database(db)
 
 
 def freeze_bundle(db, run_row, response, *, capture_mode="completion"):

@@ -16,7 +16,7 @@ from app.models import (
     RatingBacktestResponse,
     ScoringPolicy,
 )
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import FirstBoardRepository
 
 
 RATING_BACKTEST_VERSION = "rating-backtest-entry-open-v2"
@@ -33,13 +33,13 @@ def build_rating_backtest(
     events: list[LimitUpEvent],
     start_date: date,
     end_date: date,
-    first_board_repository: SQLiteFirstBoardRepository | None = None,
+    first_board_repository: FirstBoardRepository | None = None,
     failure_limit: int = 8,
     scoring_policy: ScoringPolicy | None = None,
 ) -> RatingBacktestResponse:
     """Evaluate first-board rating buckets against persisted outcomes."""
 
-    repository = first_board_repository or SQLiteFirstBoardRepository()
+    repository = first_board_repository or FirstBoardRepository()
     trade_dates = sorted(
         {
             event.trade_date

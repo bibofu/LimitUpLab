@@ -1,8 +1,7 @@
 """Persistence adapters for limit-up events."""
 
-import sqlite3
+from app.storage.postgres import PostgresConnection, Record
 from datetime import date, time
-from pathlib import Path
 from typing import Protocol
 
 from app.database import begin_write, connect, initialize_database
@@ -11,7 +10,7 @@ from app.services.sample_data import SAMPLE_EVENTS
 from app.services.relay_universe import is_relay_research_security
 
 
-class LimitUpRepository(Protocol):
+class LimitUpReader(Protocol):
     """Read interface used by routers and analysis services."""
 
     def list_events(self) -> list[LimitUpEvent]:
@@ -21,17 +20,17 @@ class LimitUpRepository(Protocol):
         """Return only the newest persisted trading day's events."""
 
 
-class SQLiteLimitUpRepository:
-    """SQLite-backed repository for persisted limit-up events."""
+class LimitUpRepository:
+    """PostgreSQL repository for persisted limit-up events."""
 
-    def __init__(self, database_path: Path | None = None, seed_if_empty: bool = False):
-        """Create a repository bound to a database path.
+    def __init__(self, database_url: str | None = None, seed_if_empty: bool = False):
+        """Create a repository bound to a PostgreSQL URL.
 
         When `seed_if_empty` is true, the first read bootstraps bundled sample
         events so a fresh clone can render the dashboard before importing data.
         """
 
-        self.database_path = database_path
+        self.database_url = database_url
         self.seed_if_empty = seed_if_empty
 
     def list_events(self) -> list[LimitUpEvent]:
@@ -45,9 +44,9 @@ class SQLiteLimitUpRepository:
         return self._list_events(latest_only=True)
 
     def _list_events(self, *, latest_only: bool) -> list[LimitUpEvent]:
-        """Read events from one consistent SQLite query."""
+        """Read events from one consistent PostgreSQL query."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             if self.seed_if_empty and self._count_events(connection) == 0:
@@ -92,12 +91,12 @@ class SQLiteLimitUpRepository:
     def replace_events(
         self,
         events: list[LimitUpEvent],
-        connection: sqlite3.Connection | None = None,
+        connection: PostgresConnection | None = None,
     ) -> None:
         """Replace the entire event table with the provided event list."""
 
         owns_connection = connection is None
-        active_connection = connection or connect(self.database_path)
+        active_connection = connection or connect(self.database_url)
 
         try:
             initialize_database(active_connection)
@@ -111,12 +110,12 @@ class SQLiteLimitUpRepository:
     def upsert_events(
         self,
         events: list[LimitUpEvent],
-        connection: sqlite3.Connection | None = None,
+        connection: PostgresConnection | None = None,
     ) -> None:
         """Insert or update events using `(trade_date, symbol)` as the key."""
 
         owns_connection = connection is None
-        active_connection = connection or connect(self.database_path)
+        active_connection = connection or connect(self.database_url)
 
         try:
             initialize_database(active_connection)
@@ -173,7 +172,7 @@ class SQLiteLimitUpRepository:
     def delete_events_for_date(self, trade_date: date | str) -> None:
         """Delete all persisted events for a single trading date."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             value = trade_date.isoformat() if isinstance(trade_date, date) else trade_date
@@ -192,7 +191,7 @@ class SQLiteLimitUpRepository:
 
         if any(event.trade_date != trade_date for event in events):
             raise ValueError("Relay replacement events must match the target date")
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             begin_write(connection)
@@ -212,14 +211,14 @@ class SQLiteLimitUpRepository:
         finally:
             connection.close()
 
-    def _count_events(self, connection: sqlite3.Connection) -> int:
+    def _count_events(self, connection: PostgresConnection) -> int:
         """Return the current number of persisted event rows."""
 
         row = connection.execute("SELECT COUNT(*) AS count FROM limit_up_events").fetchone()
         return int(row["count"])
 
     def _event_to_record(self, event: LimitUpEvent) -> tuple[object, ...]:
-        """Serialize a Pydantic event to a SQLite record tuple."""
+        """Serialize a Pydantic event to a PostgreSQL record tuple."""
 
         return (
             event.symbol,
@@ -243,8 +242,8 @@ class SQLiteLimitUpRepository:
             int(event.continued_next_day),
         )
 
-    def _event_from_row(self, row: sqlite3.Row) -> LimitUpEvent:
-        """Deserialize a SQLite row into a `LimitUpEvent` model."""
+    def _event_from_row(self, row: Record) -> LimitUpEvent:
+        """Deserialize a PostgreSQL row into a `LimitUpEvent` model."""
 
         return LimitUpEvent(
             symbol=row["symbol"],
@@ -269,10 +268,10 @@ class SQLiteLimitUpRepository:
         )
 
 
-_repository = SQLiteLimitUpRepository(seed_if_empty=True)
+_repository = LimitUpRepository(seed_if_empty=True)
 
 
-def get_limit_up_repository() -> LimitUpRepository:
+def get_limit_up_repository() -> LimitUpReader:
     """Return the process-wide repository used by API routes."""
 
     return _repository

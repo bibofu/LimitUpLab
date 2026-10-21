@@ -1,28 +1,27 @@
-"""SQLite cache for normalized stock-specific news."""
+"""PostgreSQL cache for normalized stock-specific news."""
 
 from __future__ import annotations
 
 import hashlib
 from datetime import datetime
-from pathlib import Path
 
 from app.database import connect, initialize_database
 from app.models import StockNewsItem
 
 
-class SQLiteStockNewsRepository:
+class StockNewsRepository:
     """Persist deduplicated stock news and per-source synchronization state."""
 
-    # Initialize SQLiteStockNewsRepository with the supplied dependencies and per-instance state.
-    def __init__(self, database_path: Path | None = None):
-        self.database_path = database_path
+    # Initialize StockNewsRepository with the supplied dependencies and per-instance state.
+    def __init__(self, database_url: str | None = None):
+        self.database_url = database_url
 
     def upsert_items(self, items: list[StockNewsItem]) -> None:
         """Insert or refresh normalized articles without creating duplicates."""
 
         if not items:
             return
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             connection.executemany(
@@ -71,7 +70,7 @@ class SQLiteStockNewsRepository:
     ) -> list[StockNewsItem]:
         """Return recent cached articles in descending publication order."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             rows = connection.execute(
@@ -112,7 +111,7 @@ class SQLiteStockNewsRepository:
     ) -> None:
         """Record one bounded provider attempt while preserving last success."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             connection.execute(
@@ -145,7 +144,7 @@ class SQLiteStockNewsRepository:
     def last_success_at(self, *, symbol: str, source: str) -> datetime | None:
         """Return the provider's most recent successful synchronization time."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             row = connection.execute(

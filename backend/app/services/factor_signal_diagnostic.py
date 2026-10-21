@@ -30,7 +30,7 @@ from app.models import (
     LimitUpEvent,
     ScoringPolicy,
 )
-from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
+from app.repositories import FirstBoardRepository, ScoringPolicyRepository
 from app.services.scoring_policy import FACTOR_KEYS_BY_NAME, FACTOR_NAMES
 
 
@@ -66,8 +66,8 @@ def build_factor_signal_diagnostic(
     events: list[LimitUpEvent],
     start_date: date,
     end_date: date,
-    first_board_repository: SQLiteFirstBoardRepository | None = None,
-    policy_repository: SQLiteScoringPolicyRepository | None = None,
+    first_board_repository: FirstBoardRepository | None = None,
+    policy_repository: ScoringPolicyRepository | None = None,
     scoring_policy: ScoringPolicy | None = None,
     outcome_measure: str = "next_open_to_close_pct",
     lasso_alpha_fraction: float = LASSO_ALPHA_FRACTION,
@@ -84,9 +84,9 @@ def build_factor_signal_diagnostic(
             f"Expected one of {sorted(_OUTCOME_MEASURES)}"
         )
 
-    repository = first_board_repository or SQLiteFirstBoardRepository()
-    registry = policy_repository or SQLiteScoringPolicyRepository(
-        repository.database_path
+    repository = first_board_repository or FirstBoardRepository()
+    registry = policy_repository or ScoringPolicyRepository(
+        repository.database_url
     )
     active_policy = scoring_policy or registry.ensure_default_policy()
 
@@ -155,7 +155,7 @@ def _collect_samples(
     events: list[LimitUpEvent],
     start_date: date,
     end_date: date,
-    repository: SQLiteFirstBoardRepository,
+    repository: FirstBoardRepository,
     scoring_policy: ScoringPolicy,
     outcome_field: str,
     readiness_flag: str,

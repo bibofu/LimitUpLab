@@ -1,11 +1,10 @@
-"""SQLite persistence for immutable daily review artifacts."""
+"""PostgreSQL persistence for immutable daily review artifacts."""
 
 from __future__ import annotations
 
 import json
-import sqlite3
+from app.storage.postgres import Record
 from datetime import date, datetime
-from pathlib import Path
 
 from app.database import connect, initialize_database
 from app.services.prediction_time_audit import content_hash
@@ -16,18 +15,18 @@ from app.models import (
 )
 
 
-class SQLiteReviewSnapshotRepository:
+class ReviewSnapshotRepository:
     """Store one review report per market data cutoff date."""
 
-    # Initialize SQLiteReviewSnapshotRepository with the supplied dependencies and per-instance
+    # Initialize ReviewSnapshotRepository with the supplied dependencies and per-instance
     # state.
-    def __init__(self, database_path: Path | None = None):
-        self.database_path = database_path
+    def __init__(self, database_url: str | None = None):
+        self.database_url = database_url
 
     def save_snapshot(self, snapshot: DailyReviewSnapshot) -> None:
         """Insert a snapshot once and preserve its original contents on reruns."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             connection.execute(
@@ -53,7 +52,7 @@ class SQLiteReviewSnapshotRepository:
     def get_snapshot(self, as_of_date: date) -> DailyReviewSnapshot | None:
         """Return one persisted review artifact by its data cutoff date."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             row = connection.execute(
@@ -78,7 +77,7 @@ class SQLiteReviewSnapshotRepository:
     def list_summaries(self, limit: int = 20) -> list[DailyReviewSnapshotSummary]:
         """Return newest persisted review dates without loading every full report."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             rows = connection.execute(
@@ -112,7 +111,7 @@ class SQLiteReviewSnapshotRepository:
 
     # Reconstruct the repository's domain model from a stored database row.
     @staticmethod
-    def _from_row(row: sqlite3.Row) -> DailyReviewSnapshot:
+    def _from_row(row: Record) -> DailyReviewSnapshot:
         report = ReviewAgentReportResponse.model_validate_json(row["report_json"])
         return DailyReviewSnapshot(
             as_of_date=date.fromisoformat(row["as_of_date"]),
@@ -124,7 +123,7 @@ class SQLiteReviewSnapshotRepository:
 
     # Build the compact review-snapshot representation used by list endpoints.
     @staticmethod
-    def _summary_from_row(row: sqlite3.Row) -> DailyReviewSnapshotSummary:
+    def _summary_from_row(row: Record) -> DailyReviewSnapshotSummary:
         payload = json.loads(row["report_json"])
         return DailyReviewSnapshotSummary(
             as_of_date=date.fromisoformat(row["as_of_date"]),

@@ -21,7 +21,7 @@ from app.models import (
     StockDailyBar,
     StockKLineBar,
 )
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import FirstBoardRepository
 from app.services.stock_position import classify_stock_position
 from app.services.market_data_provider import collect_preferred_stock_kline
 from app.services.relay_universe import is_relay_research_security
@@ -53,7 +53,7 @@ def refresh_first_board_enrichment_snapshots(
     *,
     events: list[LimitUpEvent],
     trade_date: date,
-    repository: SQLiteFirstBoardRepository,
+    repository: FirstBoardRepository,
     kline_collector: KLineCollector = collect_preferred_stock_kline,
     listing_collector: Callable[[], dict[str, date]] = collect_recent_listing_dates,
     listing_detail_collector: Callable[[str], date | None] = collect_listing_date,
@@ -248,7 +248,7 @@ def _candidate_events(events: list[LimitUpEvent], trade_date: date) -> list[Limi
 def _load_candidate_bars(
     *,
     event: LimitUpEvent,
-    repository: SQLiteFirstBoardRepository,
+    repository: FirstBoardRepository,
     collector: KLineCollector,
     warnings: list[str],
 ) -> list[StockDailyBar]:

@@ -1,26 +1,25 @@
-"""SQLite persistence for Agent execution traces."""
+"""PostgreSQL persistence for Agent execution traces."""
 
 import json
-import sqlite3
+from app.storage.postgres import Record
 from datetime import datetime
-from pathlib import Path
 
 from app.database import connect, initialize_database
 from app.models import AgentRun
 
 
-class SQLiteAgentRunRepository:
+class AgentRunRepository:
     """Repository for persisted Agent run records."""
 
-    def __init__(self, database_path: Path | None = None):
-        """Create a repository bound to a SQLite database path."""
+    def __init__(self, database_url: str | None = None):
+        """Create a repository bound to a PostgreSQL URL."""
 
-        self.database_path = database_path
+        self.database_url = database_url
 
     def save_run(self, run: AgentRun) -> None:
         """Insert or replace one Agent execution trace."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             connection.execute(
@@ -81,7 +80,7 @@ class SQLiteAgentRunRepository:
     ) -> list[AgentRun]:
         """Return recent runs, optionally scoped to one session."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             conditions: list[str] = []
@@ -118,7 +117,7 @@ class SQLiteAgentRunRepository:
         return [self._run_from_row(row) for row in rows]
 
     def _run_to_record(self, run: AgentRun) -> tuple[object, ...]:
-        """Serialize an Agent run for SQLite."""
+        """Serialize an Agent run for PostgreSQL."""
 
         return (
             run.run_id,
@@ -136,8 +135,8 @@ class SQLiteAgentRunRepository:
             run.finished_at.isoformat(),
         )
 
-    def _run_from_row(self, row: sqlite3.Row) -> AgentRun:
-        """Deserialize a SQLite row into an Agent run model."""
+    def _run_from_row(self, row: Record) -> AgentRun:
+        """Deserialize a PostgreSQL row into an Agent run model."""
 
         return AgentRun(
             run_id=row["run_id"],

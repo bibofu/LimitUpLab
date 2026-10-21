@@ -9,7 +9,7 @@ from app.models import (
     OutcomeCompletenessDate,
     OutcomeCompletenessReport,
 )
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import FirstBoardRepository
 from app.services.evaluation_agent import select_canonical_prediction_snapshots
 
 
@@ -19,7 +19,7 @@ OUTCOME_COMPLETENESS_VERSION = "top10-outcome-completeness-v1"
 def build_top10_outcome_completeness(
     *,
     events: list[LimitUpEvent],
-    repository: SQLiteFirstBoardRepository,
+    repository: FirstBoardRepository,
     as_of_date: date | None = None,
     tracking_days: int = 6,
     top_per_day: int = 10,

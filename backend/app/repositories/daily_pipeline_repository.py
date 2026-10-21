@@ -1,28 +1,27 @@
-"""SQLite persistence for automated daily close-loop executions."""
+"""PostgreSQL persistence for automated daily close-loop executions."""
 
 from __future__ import annotations
 
 import json
-import sqlite3
+from app.storage.postgres import Record
 from datetime import date, datetime
-from pathlib import Path
 
 from app.database import connect, initialize_database
 from app.models import DailyPipelineRun
 
 
-class SQLiteDailyPipelineRepository:
+class DailyPipelineRepository:
     """Store and query after-close pipeline execution history."""
 
-    # Initialize SQLiteDailyPipelineRepository with the supplied dependencies and per-instance
+    # Initialize DailyPipelineRepository with the supplied dependencies and per-instance
     # state.
-    def __init__(self, database_path: Path | None = None):
-        self.database_path = database_path
+    def __init__(self, database_url: str | None = None):
+        self.database_url = database_url
 
     def save_run(self, run: DailyPipelineRun) -> None:
         """Insert or update one pipeline run as its status changes."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             connection.execute(
@@ -51,7 +50,7 @@ class SQLiteDailyPipelineRepository:
     def list_recent(self, limit: int = 10) -> list[DailyPipelineRun]:
         """Return recent pipeline runs, newest first."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             rows = connection.execute(
@@ -70,7 +69,7 @@ class SQLiteDailyPipelineRepository:
     def latest_for_date(self, trade_date: date) -> DailyPipelineRun | None:
         """Return the newest execution for one target trade date."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             row = connection.execute(
@@ -106,7 +105,7 @@ class SQLiteDailyPipelineRepository:
 
     # Reconstruct the repository's domain model from a stored database row.
     @staticmethod
-    def _from_row(row: sqlite3.Row) -> DailyPipelineRun:
+    def _from_row(row: Record) -> DailyPipelineRun:
         return DailyPipelineRun(
             run_id=row["run_id"],
             trade_date=date.fromisoformat(row["trade_date"]),

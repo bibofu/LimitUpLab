@@ -1,9 +1,8 @@
 """Persistence for resumable Agent chat sessions and messages."""
 
 import json
-import sqlite3
+from app.storage.postgres import Record
 from datetime import datetime, timezone
-from pathlib import Path
 from uuid import uuid4
 
 from app.database import begin_write, connect, initialize_database, table_exists
@@ -25,13 +24,13 @@ class SessionOwnershipError(PermissionError):
     """Raised when a session id already belongs to another owner."""
 
 
-class SQLiteChatSessionRepository:
+class ChatSessionRepository:
     """Store user-facing conversations separately from Agent execution traces."""
 
-    # Initialize SQLiteChatSessionRepository with the supplied dependencies and per-instance
+    # Initialize ChatSessionRepository with the supplied dependencies and per-instance
     # state.
-    def __init__(self, database_path: Path | None = None):
-        self.database_path = database_path
+    def __init__(self, database_url: str | None = None):
+        self.database_url = database_url
 
     def create_session(
         self,
@@ -44,7 +43,7 @@ class SQLiteChatSessionRepository:
 
         resolved_session_id = session_id or f"chat_{uuid4().hex}"
         now = datetime.now(timezone.utc).isoformat()
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             begin_write(connection)
@@ -104,7 +103,7 @@ class SQLiteChatSessionRepository:
     ) -> list[ChatSessionSummary]:
         """Return active conversations ordered by latest message activity."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             rows = connection.execute(
@@ -143,7 +142,7 @@ class SQLiteChatSessionRepository:
     ) -> ChatSessionDetail | None:
         """Return one active conversation and its most recent ordered messages."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             row = connection.execute(
@@ -205,7 +204,7 @@ class SQLiteChatSessionRepository:
             first_message=message.content if message.role == "user" else None,
             owner_id=owner_id,
         )
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             begin_write(connection)
@@ -280,7 +279,7 @@ class SQLiteChatSessionRepository:
     ) -> ChatSessionDetail | None:
         """Rename one active conversation."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             connection.execute(
@@ -309,7 +308,7 @@ class SQLiteChatSessionRepository:
     ) -> bool:
         """Permanently delete one conversation, its messages, and run traces."""
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
             # Serialize deletion with ReAct creation, not just a router precheck.
@@ -366,7 +365,7 @@ def _title_from_message(message: str | None) -> str:
 
 
 # Build the conversation-list representation from an aggregated database row.
-def _session_summary_from_row(row: sqlite3.Row) -> ChatSessionSummary:
+def _session_summary_from_row(row: Record) -> ChatSessionSummary:
     preview = str(row["last_message_preview"] or "").strip()
     return ChatSessionSummary(
         session_id=row["session_id"],
@@ -380,7 +379,7 @@ def _session_summary_from_row(row: sqlite3.Row) -> ChatSessionSummary:
 
 
 # Deserialize a stored chat message and its metadata.
-def _message_from_row(row: sqlite3.Row) -> ChatSessionMessage:
+def _message_from_row(row: Record) -> ChatSessionMessage:
     metadata = json.loads(row["metadata_json"] or "{}")
     if (
         row["role"] == "assistant"

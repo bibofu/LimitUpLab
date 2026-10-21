@@ -21,7 +21,7 @@ from app.models import (
     ReviewPromotionComparison,
     StockDailyBar,
 )
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import FirstBoardRepository
 from app.services.evaluation_agent import build_agent_evaluation
 from app.services.llm_provider import DisabledLLMProvider, LLMProvider, get_llm_provider
 from app.agents.review_narrative import ReviewNarrative, apply_review_narrative, authoritative_review_facts
@@ -77,7 +77,7 @@ class ReviewAgentToolbox:
         self,
         *,
         events: list[LimitUpEvent],
-        repository: SQLiteFirstBoardRepository,
+        repository: FirstBoardRepository,
         start_date: date,
         end_date: date,
         min_score: float,
@@ -378,7 +378,7 @@ def build_review_agent_report(
     events: list[LimitUpEvent],
     start_date: date,
     end_date: date,
-    repository: SQLiteFirstBoardRepository | None = None,
+    repository: FirstBoardRepository | None = None,
     min_score: float = 85,
     top_per_day: int = 10,
     follow_days: int = 5,
@@ -387,7 +387,7 @@ def build_review_agent_report(
 ) -> ReviewAgentReportResponse:
     """Run the Review Agent with LLM-planned tools and return a structured report."""
 
-    active_repository = repository or SQLiteFirstBoardRepository()
+    active_repository = repository or FirstBoardRepository()
     toolbox = ReviewAgentToolbox(
         events=events,
         repository=active_repository,
@@ -607,7 +607,7 @@ def _review_picks_from_toolbox(toolbox: ReviewAgentToolbox) -> list[ReviewAgentP
 
 def enrich_review_position_labels(
     report: ReviewAgentReportResponse,
-    repository: SQLiteFirstBoardRepository,
+    repository: FirstBoardRepository,
 ) -> ReviewAgentReportResponse:
     """Project persisted prediction positions onto legacy immutable review snapshots."""
 

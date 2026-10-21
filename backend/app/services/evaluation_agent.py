@@ -12,7 +12,7 @@ from app.models import (
     FirstBoardRating,
     LimitUpEvent,
 )
-from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
+from app.repositories import FirstBoardRepository, ScoringPolicyRepository
 from app.services.scoring_policy import DEFAULT_SCORING_POLICY_VERSION
 from app.services.relay_universe import is_relay_candidate_symbol
 from app.services.prediction_time import assess_prediction_time, time_cohort_counts
@@ -25,14 +25,14 @@ def build_agent_evaluation(
     events: list[LimitUpEvent],
     start_date: date,
     end_date: date,
-    first_board_repository: SQLiteFirstBoardRepository | None = None,
+    first_board_repository: FirstBoardRepository | None = None,
     limit: int = 30,
     include_time_invalid_live: bool = False,
 ) -> AgentEvaluationResponse:
     """Evaluate existing immutable rating snapshots against ready outcomes."""
 
-    repository = first_board_repository or SQLiteFirstBoardRepository()
-    champion = SQLiteScoringPolicyRepository(repository.database_path).get_champion()
+    repository = first_board_repository or FirstBoardRepository()
+    champion = ScoringPolicyRepository(repository.database_url).get_champion()
     scoring_version = (
         champion.version if champion else DEFAULT_SCORING_POLICY_VERSION
     )
@@ -78,7 +78,7 @@ def persist_agent_predictions_for_dates(
     *,
     events: list[LimitUpEvent],
     trade_dates: list[date],
-    repository: SQLiteFirstBoardRepository,
+    repository: FirstBoardRepository,
     top_per_day: int | None = None,
     prediction_source: Literal["live", "historical_backtest"] = "historical_backtest",
     data_as_of: date | None = None,
