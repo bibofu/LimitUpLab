@@ -1,18 +1,20 @@
+
+from database_support import isolated_database_url, release_database_url
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 from uuid import uuid4
 
 from app.models import AgentUsageRecord
-from app.repositories.agent_usage_repository import SQLiteAgentUsageRepository
+from app.repositories.agent_usage_repository import AgentUsageRepository
 
 
 class AgentUsageRepositoryTest(unittest.TestCase):
     # Regression scenario: started request counts and finished usage is aggregated.
     def test_started_request_counts_and_finished_usage_is_aggregated(self) -> None:
-        database_path = Path(__file__).resolve().parents[1] / f"usage-{uuid4().hex}.sqlite"
+        database_url = isolated_database_url()
         try:
-            repository = SQLiteAgentUsageRepository(database_path)
+            repository = AgentUsageRepository(database_url)
             started_at = datetime.now(timezone.utc)
             running = AgentUsageRecord(
                 usage_id="usage-1",
@@ -72,7 +74,7 @@ class AgentUsageRepositoryTest(unittest.TestCase):
             self.assertEqual(summary.token_measured_request_count, 1)
             self.assertAlmostEqual(summary.estimated_cost_usd, 0.001)
         finally:
-            database_path.unlink(missing_ok=True)
+            release_database_url(database_url)
 
 
 if __name__ == "__main__":

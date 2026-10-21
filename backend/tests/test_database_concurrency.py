@@ -1,55 +1,43 @@
-import os
+
+from database_support import isolated_database_url, release_database_url
 import threading
 import time
 import unittest
 from concurrent.futures import ThreadPoolExecutor
-from pathlib import Path
-from unittest.mock import patch
-from uuid import uuid4
 
-from app.database import CURRENT_SCHEMA_VERSION, connect, initialize_database
+from psycopg import IntegrityError
+
+from app.database import begin_write, connect, initialize_database
+from app.storage.schema import HEAD_REVISION
 
 
 class DatabaseConcurrencyTest(unittest.TestCase):
     # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
-        self.database_path = (
-            Path(__file__).resolve().parents[1]
-            / f"database-concurrency-{uuid4().hex}.sqlite"
-        )
-        self.addCleanup(self._remove_database_files)
-        self.environment = patch.dict(
-            os.environ,
-            {
-                "LIMITUPLAB_SQLITE_WAL_ENABLED": "true",
-                "LIMITUPLAB_SQLITE_BUSY_TIMEOUT_MS": "100",
-                "LIMITUPLAB_SQLITE_LOCK_RETRY_ATTEMPTS": "5",
-                "LIMITUPLAB_SQLITE_LOCK_RETRY_BASE_DELAY_SECONDS": "0.02",
-                "LIMITUPLAB_SQLITE_WAL_AUTOCHECKPOINT_PAGES": "200",
-            },
-            clear=False,
-        )
-        self.environment.start()
-        self.addCleanup(self.environment.stop)
+        self.database_url = isolated_database_url()
+        self.addCleanup(release_database_url, self.database_url)
 
-    # Regression scenario: connection enables wal busy timeout and foreign keys.
-    def test_connection_enables_wal_busy_timeout_and_foreign_keys(self) -> None:
-        connection = connect(self.database_path)
+    # Connection settings and deferred foreign keys remain enforced in PostgreSQL.
+    def test_connection_has_bounded_timeouts_and_foreign_keys(self) -> None:
+        connection = connect(self.database_url)
         try:
             initialize_database(connection)
-            journal_mode = connection.execute("PRAGMA journal_mode").fetchone()[0]
-            foreign_keys = connection.execute("PRAGMA foreign_keys").fetchone()[0]
-            busy_timeout = connection.execute("PRAGMA busy_timeout").fetchone()[0]
-            synchronous = connection.execute("PRAGMA synchronous").fetchone()[0]
-            schema_version = connection.execute("PRAGMA user_version").fetchone()[0]
+            statement_timeout = connection.execute("SHOW statement_timeout").fetchone()[0]
+            lock_timeout = connection.execute("SHOW lock_timeout").fetchone()[0]
+            timezone = connection.execute("SHOW timezone").fetchone()[0]
+            schema_version = connection.execute("SELECT version_num FROM alembic_version").fetchone()[0]
+            connection.execute("INSERT INTO react_events(run_id,event,payload_json) VALUES ('absent','progress','{}')")
+            with self.assertRaises(IntegrityError):
+                connection.commit()
+            connection.rollback()
+            self.assertEqual(connection.execute("SELECT COUNT(*) FROM react_events").fetchone()[0], 0)
         finally:
             connection.close()
 
-        self.assertEqual(journal_mode, "wal")
-        self.assertEqual(foreign_keys, 1)
-        self.assertEqual(busy_timeout, 100)
-        self.assertEqual(synchronous, 1)  # NORMAL
-        self.assertEqual(schema_version, CURRENT_SCHEMA_VERSION)
+        self.assertEqual(statement_timeout, "30s")
+        self.assertEqual(lock_timeout, "10s")
+        self.assertEqual(timezone, "UTC")
+        self.assertEqual(schema_version, HEAD_REVISION)
 
     # Regression scenario: concurrent schema initialization is idempotent.
     def test_concurrent_schema_initialization_is_idempotent(self) -> None:
@@ -57,12 +45,12 @@ class DatabaseConcurrencyTest(unittest.TestCase):
 
         # Prepare the initialize from worker fixture or observation used by the surrounding
         # regression scenario.
-        def initialize_from_worker() -> int:
+        def initialize_from_worker() -> str:
             barrier.wait(timeout=5)
-            connection = connect(self.database_path)
+            connection = connect(self.database_url)
             try:
                 initialize_database(connection)
-                return connection.execute("PRAGMA user_version").fetchone()[0]
+                return connection.execute("SELECT version_num FROM alembic_version").fetchone()[0]
             finally:
                 connection.close()
 
@@ -71,31 +59,31 @@ class DatabaseConcurrencyTest(unittest.TestCase):
             # test; it is evaluated only when the code under test calls it.
             versions = list(executor.map(lambda _index: initialize_from_worker(), range(8)))
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             tables = {
                 row["name"]
                 for row in connection.execute(
-                    "SELECT name FROM sqlite_master WHERE type = 'table'"
+                    "SELECT table_name AS name FROM information_schema.tables WHERE table_schema=current_schema()"
                 ).fetchall()
             }
         finally:
             connection.close()
 
-        self.assertEqual(versions, [CURRENT_SCHEMA_VERSION] * 8)
+        self.assertEqual(versions, [HEAD_REVISION] * 8)
         self.assertIn("limit_up_events", tables)
         self.assertIn("agent_usage_events", tables)
 
-    # Regression scenario: wal reader is not blocked by uncommitted writer.
-    def test_wal_reader_is_not_blocked_by_uncommitted_writer(self) -> None:
-        writer = connect(self.database_path)
+    # A PostgreSQL reader sees committed rows while another transaction is writing.
+    def test_reader_is_not_blocked_by_uncommitted_writer(self) -> None:
+        writer = connect(self.database_url)
         initialize_database(writer)
         writer.execute("CREATE TABLE concurrency_probe (value TEXT PRIMARY KEY)")
         writer.commit()
-        writer.execute("BEGIN IMMEDIATE")
+        begin_write(writer)
         writer.execute("INSERT INTO concurrency_probe VALUES ('uncommitted')")
 
-        reader = connect(self.database_path)
+        reader = connect(self.database_url)
         try:
             started_at = time.monotonic()
             count = reader.execute("SELECT COUNT(*) FROM concurrency_probe").fetchone()[0]
@@ -108,20 +96,20 @@ class DatabaseConcurrencyTest(unittest.TestCase):
         self.assertEqual(count, 0)
         self.assertLess(duration, 0.5)
 
-    # Regression scenario: competing writer retries until lock is released.
-    def test_competing_writer_retries_until_lock_is_released(self) -> None:
-        first = connect(self.database_path)
+    # A competing writer waits for the existing transaction lock.
+    def test_competing_writer_waits_until_lock_is_released(self) -> None:
+        first = connect(self.database_url)
         initialize_database(first)
         first.execute("CREATE TABLE concurrency_probe (value TEXT PRIMARY KEY)")
         first.commit()
-        first.execute("BEGIN IMMEDIATE")
+        begin_write(first)
         first.execute("INSERT INTO concurrency_probe VALUES ('first')")
         attempting_write = threading.Event()
 
         # Prepare the write second fixture or observation used by the surrounding regression
         # scenario.
         def write_second() -> None:
-            second = connect(self.database_path)
+            second = connect(self.database_url)
             try:
                 initialize_database(second)
                 attempting_write.set()
@@ -138,7 +126,7 @@ class DatabaseConcurrencyTest(unittest.TestCase):
             future.result(timeout=3)
         first.close()
 
-        connection = connect(self.database_path)
+        connection = connect(self.database_url)
         try:
             values = [
                 row["value"]
@@ -150,12 +138,6 @@ class DatabaseConcurrencyTest(unittest.TestCase):
             connection.close()
 
         self.assertEqual(values, ["first", "second"])
-
-    # Release the temporary resources owned by this test fixture.
-    def _remove_database_files(self) -> None:
-        for suffix in ("", "-wal", "-shm"):
-            Path(f"{self.database_path}{suffix}").unlink(missing_ok=True)
-
 
 if __name__ == "__main__":
     unittest.main()

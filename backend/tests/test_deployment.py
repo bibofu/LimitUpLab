@@ -197,26 +197,9 @@ def test_postgresql_overlay_keeps_sqlite_volume_and_waits_for_schema():
         assert dependency["postgres-migrate"]["condition"] == "service_completed_successfully"
 
 
-# Regression scenario: SQLite mode=ro still needs a writable volume for WAL/SHM coordination.
-def test_schema_and_backup_use_writable_sqlite_mount(tmp_path, monkeypatch):
-    monkeypatch.setattr(release, "STATE", tmp_path)
-    item = release.Deployment("v1.4.1", "a" * 40)
-    item.previous = {"backend": "old-back"}
-    item.run = Mock(side_effect=[
-        '{"version": 12, "hash": "unchanged"}',
-        "backup=/backups/deployments/test/limituplab-20260913-010000.sqlite removed=0",
-    ])
-
-    assert item.schema() == {"version": 12, "hash": "unchanged"}
-    item.backup()
-
-    schema_args = item.run.call_args_list[0].args
-    backup_args = item.run.call_args_list[1].args
-    assert "limituplab-data:/app/data" in schema_args
-    assert "limituplab-data:/app/data" in backup_args
-    assert "limituplab-data:/app/data:ro" not in schema_args
-    assert "limituplab-data:/app/data:ro" not in backup_args
-    assert any("mode=ro" in argument for argument in schema_args)
+def test_removed_sqlite_deployment_mode_is_rejected(tmp_path):
+    with pytest.raises(RuntimeError, match="Only PostgreSQL"):
+        release.compose_arguments(tmp_path, "sqlite")
 
 
 # Regression scenario: probe distinguishes missing snapshot from broken reader.
@@ -224,6 +207,7 @@ def test_schema_and_backup_use_writable_sqlite_mount(tmp_path, monkeypatch):
 def test_probe_distinguishes_missing_snapshot_from_broken_reader(tmp_path, monkeypatch, status, allowed):
     monkeypatch.setattr(release, "STATE", tmp_path)
     item = release.Deployment("v1.3.2", "a" * 40)
+    item.run = Mock(return_value='{"status":"ok","database":"postgresql"}')
     class Response:
         status = 200
 
@@ -259,9 +243,7 @@ def test_probe_distinguishes_missing_snapshot_from_broken_reader(tmp_path, monke
 
 
 @pytest.mark.parametrize("marker,current,expected", [
-    (None, None, "sqlite"),
-    (None, {"sha": "legacy"}, "sqlite"),
-    ({"engine": "sqlite"}, {"engine": "sqlite"}, "sqlite"),
+    ({"engine": "postgresql"}, None, "postgresql"),
     ({"engine": "postgresql"}, {"engine": "postgresql"}, "postgresql"),
 ])
 def test_database_mode_keeps_explicit_selection(tmp_path, monkeypatch, marker, current, expected):
@@ -274,6 +256,10 @@ def test_database_mode_keeps_explicit_selection(tmp_path, monkeypatch, marker, c
 
 
 @pytest.mark.parametrize("marker,current", [
+    (None, None),
+    (None, {"sha": "legacy"}),
+    ({"engine": "sqlite"}, {"engine": "sqlite"}),
+    ({"engine": "postgresql"}, {"sha": "missing-engine"}),
     (None, {"engine": "postgresql"}),
     ({"engine": "sqlite"}, {"engine": "postgresql"}),
     ({"engine": "postgresql"}, {"engine": "sqlite"}),

@@ -3,6 +3,8 @@ from __future__ import annotations
 import os
 import hashlib
 import sqlite3
+import shutil
+from contextlib import closing
 from datetime import datetime
 from pathlib import Path
 from zoneinfo import ZoneInfo
@@ -10,7 +12,30 @@ from zoneinfo import ZoneInfo
 import pytest
 
 from scripts import backup_database, postgres_admin
-from scripts.backup_database import create_backup, create_configured_backup, prune_backups, prune_postgres_backups
+from scripts.archive_sqlite import create_backup
+from scripts.backup_database import create_configured_backup, prune_postgres_backups
+
+
+def test_real_postgres_backup_contains_committed_isolated_data(postgresql_database, tmp_path):
+    from app.database import connect
+
+    if not all(shutil.which(name) for name in ("pg_dump", "pg_restore")):
+        pytest.skip("Matching PostgreSQL clients are exercised by the CI server/client matrix")
+    _, environment = postgres_admin.connection_environment(postgresql_database)
+    with closing(connect()) as database, database:
+        server_major = int(database.execute("SHOW server_version_num").fetchone()[0]) // 10000
+        for name in ("pg_dump", "pg_restore"):
+            version = postgres_admin.client([name, "--version"], environment).stdout.decode().split()[2]
+            if int(version.split(".")[0]) != server_major:
+                pytest.skip("Backup clients must match the test server; covered by the server/client matrix")
+        database.execute("CREATE TABLE backup_probe (value TEXT NOT NULL)")
+        database.execute("INSERT INTO backup_probe VALUES ('committed-backup-regression-probe')")
+    result = create_configured_backup(tmp_path)
+    archive = postgres_admin.verify_backup(result["backup"], environment)
+    restored_sql = postgres_admin.client(["pg_restore", "--data-only", "--file=-", str(archive)], environment).stdout
+    assert b"committed-backup-regression-probe" in restored_sql
+    assert result["sha256"] == hashlib.sha256(archive.read_bytes()).hexdigest()
+    assert result["archive_readable"] is True
 
 
 # Regression scenario: create backup copies database and restricts permissions.
@@ -26,7 +51,8 @@ def test_create_backup_copies_database_and_restricts_permissions(tmp_path: Path)
         now=datetime(2026, 8, 29, 3, 25, tzinfo=ZoneInfo("Asia/Shanghai")),
     )
 
-    assert backup_path.name == "limituplab-20260829-032500.sqlite"
+    assert backup_path.name.startswith("limituplab-20260829-032500-")
+    assert backup_path.suffix == ".sqlite"
     with sqlite3.connect(backup_path) as connection:
         assert connection.execute("SELECT value FROM samples").fetchone() == ("kept",)
         assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
@@ -35,7 +61,7 @@ def test_create_backup_copies_database_and_restricts_permissions(tmp_path: Path)
 
 
 # Regression scenario: prune backups only removes older managed snapshots.
-def test_prune_backups_only_removes_older_managed_snapshots(tmp_path: Path) -> None:
+def test_postgres_retention_does_not_remove_historical_snapshots(tmp_path: Path) -> None:
     names = [
         "limituplab-20260827-032500.sqlite",
         "limituplab-20260828-032500.sqlite",
@@ -46,10 +72,10 @@ def test_prune_backups_only_removes_older_managed_snapshots(tmp_path: Path) -> N
     unrelated = tmp_path / "manual.sqlite"
     unrelated.touch()
 
-    removed = prune_backups(tmp_path, retain_count=2)
+    removed = prune_postgres_backups(tmp_path, retain_count=2)
 
-    assert [path.name for path in removed] == [names[0]]
-    assert sorted(path.name for path in tmp_path.glob("limituplab-*.sqlite")) == names[1:]
+    assert removed == []
+    assert sorted(path.name for path in tmp_path.glob("limituplab-*.sqlite")) == names
     assert unrelated.exists()
 
 
@@ -73,22 +99,21 @@ def test_configured_postgres_backup_does_not_open_sqlite(monkeypatch, tmp_path):
     assert not missing.exists()
 
 
-def test_explicit_archive_overrides_postgres_for_historical_backup(tmp_path, monkeypatch):
+def test_historical_archive_uses_separate_tool_without_postgres(tmp_path, monkeypatch):
     monkeypatch.setenv("LIMITUPLAB_DATABASE_URL", "postgresql://unavailable/never-connect")
     source = tmp_path / "archive.sqlite"
     with sqlite3.connect(source) as connection:
         connection.execute("CREATE TABLE retired (value TEXT)")
         connection.execute("INSERT INTO retired VALUES ('kept')")
-    result = create_configured_backup(tmp_path / "backups", database=source)
-    assert result["database_backend"] == "sqlite"
-    with sqlite3.connect(result["backup"]) as connection:
+    archive = create_backup(source, tmp_path / "backups")
+    with sqlite3.connect(archive) as connection:
         assert connection.execute("SELECT value FROM retired").fetchone() == ("kept",)
 
 
 def test_invalid_configured_url_fails_without_sqlite_fallback(tmp_path, monkeypatch):
     monkeypatch.setenv("LIMITUPLAB_DATABASE_URL", "sqlite:///do-not-fallback.sqlite")
     monkeypatch.setenv("LIMITUPLAB_DATABASE_PATH", str(tmp_path / "missing.sqlite"))
-    with pytest.raises(postgres_admin.AdminError, match="must select PostgreSQL"):
+    with pytest.raises((RuntimeError, ValueError), match="PostgreSQL"):
         create_configured_backup(tmp_path / "backups")
     assert not (tmp_path / "backups").exists()
     assert not (tmp_path / "missing.sqlite").exists()

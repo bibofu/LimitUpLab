@@ -1,10 +1,16 @@
+
+from database_support import isolated_database_url
 from datetime import date, datetime, timedelta, timezone
-import sqlite3
+from contextlib import closing
 
 import pytest
 
 from app.repositories.consolidation_repository import load_consolidation_pool
+from app.database import connect_readonly
+from app.models import StockDailyBar
+from app.repositories import FirstBoardRepository, LimitUpRepository
 from app.services.consolidation import completed_date_limit, screen_consolidation
+from app.services.sample_data import SAMPLE_EVENTS
 
 
 # Prepare the fixture fixture or observation used by the surrounding regression scenario.
@@ -217,34 +223,46 @@ def test_intraday_cutoff_and_timezone():
 
 
 # Regression scenario: repository is read only and does not use later data.
-def test_repository_is_read_only_and_does_not_use_later_data(tmp_path):
+def test_repository_is_read_only_and_does_not_use_later_data():
     events, bars, dates, end, now = fixture()
-    path = tmp_path / "screen.sqlite"
-    with sqlite3.connect(path) as conn:
-        conn.execute("CREATE TABLE limit_up_events(symbol TEXT,name TEXT,trade_date TEXT,closed_limit INTEGER)")
-        conn.execute("CREATE TABLE stock_daily_bars(symbol TEXT,trade_date TEXT,open REAL,high REAL,low REAL,close REAL,volume REAL,source TEXT)")
-        conn.executemany("INSERT INTO limit_up_events VALUES(:symbol,:name,:trade_date,:closed_limit)", events)
-        conn.executemany("INSERT INTO stock_daily_bars VALUES(:symbol,:trade_date,:open,:high,:low,:close,:volume,:source)", bars)
-    original = path.read_bytes()
-    result = load_consolidation_pool(None, now, path)
+    url = isolated_database_url('screen')
+    LimitUpRepository(url).upsert_events([
+        SAMPLE_EVENTS[0].model_copy(update={**event, 'trade_date': date.fromisoformat(event['trade_date'])})
+        for event in events
+    ])
+    FirstBoardRepository(url).upsert_daily_bars([
+        StockDailyBar(**bar, amount=0, created_at=now) for bar in bars
+    ])
+
+    def snapshot():
+        with closing(connect_readonly(url)) as conn:
+            return [[dict(row) for row in conn.execute(query)] for query in (
+                "SELECT * FROM limit_up_events ORDER BY trade_date,symbol",
+                "SELECT * FROM stock_daily_bars ORDER BY trade_date,symbol",
+                "SELECT table_name,column_name,data_type FROM information_schema.columns "
+                "WHERE table_schema=current_schema() ORDER BY table_name,ordinal_position",
+            )]
+
+    original = snapshot()
+    result = load_consolidation_pool(None, now, url)
     assert result.data_as_of == end
     assert len(result.candidates) == 1
-    historical = load_consolidation_pool(date.fromisoformat(dates[26]), now, path)
+    historical = load_consolidation_pool(date.fromisoformat(dates[26]), now, url)
     assert historical.candidates[0].state == "new"
-    drawdown = load_consolidation_pool(None, now, path, strategy="drawdown")
+    drawdown = load_consolidation_pool(None, now, url, strategy="drawdown")
     assert drawdown.strategy == "drawdown"
     assert drawdown.evaluated_count == 1
     assert drawdown.evaluated_stocks[0].peak_date.isoformat() == dates[26]
-    assert path.read_bytes() == original
+    assert snapshot() == original
     with pytest.raises(ValueError):
-        load_consolidation_pool(date(2026, 10, 1), now, path)
+        load_consolidation_pool(date(2026, 10, 1), now, url)
 
 
-# Regression scenario: absent database is explicit.
-def test_absent_database_is_explicit(tmp_path):
-    result = load_consolidation_pool(None, fixture()[-1], tmp_path / "absent.sqlite")
+# An initialized database without bars reports the exact missing dataset.
+def test_empty_database_reports_missing_daily_bars():
+    result = load_consolidation_pool(None, fixture()[-1], isolated_database_url('empty'))
     assert result.status == "data_missing"
-    assert result.data_missing == ["local_database"]
+    assert result.data_missing == ["daily_bars"]
 
 
 # Regression scenario: drawdown threshold includes boundary without volume filter.

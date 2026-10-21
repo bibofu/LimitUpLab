@@ -1,3 +1,5 @@
+
+from database_support import isolated_database_url, release_database_url
 import os
 import unittest
 from contextlib import contextmanager
@@ -8,7 +10,7 @@ from uuid import uuid4
 from app.agents import build_first_board_ratings
 from app.collectors import DragonTigerFact, PopularityFact
 from app.models import StockKLineBar
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import FirstBoardRepository
 from app.services.first_board_enrichment import (
     ENRICHMENT_FEATURE_VERSION,
     refresh_first_board_enrichment_snapshots,
@@ -22,12 +24,12 @@ TEST_TMP_ROOT = Path(os.getenv("LIMITUPLAB_TEST_TMP", Path(__file__).resolve().p
 # Prepare the temporary database path fixture or observation used by the surrounding regression
 # scenario.
 @contextmanager
-def temporary_database_path():
-    database_path = TEST_TMP_ROOT / f"enrichment-test-{uuid4().hex}.sqlite"
+def temporary_database_url():
+    database_url = isolated_database_url()
     try:
-        yield database_path
+        yield database_url
     finally:
-        database_path.unlink(missing_ok=True)
+        release_database_url(database_url)
 
 
 def fake_kline_collector(
@@ -59,8 +61,8 @@ class FirstBoardEnrichmentTest(unittest.TestCase):
         trade_date = date(2026, 5, 15)
         captured_at = datetime(2026, 5, 15, 8, tzinfo=timezone.utc)
 
-        with temporary_database_path() as database_path:
-            repository = SQLiteFirstBoardRepository(database_path=database_path)
+        with temporary_database_url() as database_url:
+            repository = FirstBoardRepository(database_url=database_url)
             # The inline callback supplies the fixture value or replacement behavior used by this
             # test; it is evaluated only when the code under test calls it.
             report = refresh_first_board_enrichment_snapshots(

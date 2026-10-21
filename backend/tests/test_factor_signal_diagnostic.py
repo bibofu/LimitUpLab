@@ -1,3 +1,5 @@
+
+from database_support import isolated_database_url, release_database_url
 import os
 import unittest
 from datetime import date, datetime, time, timedelta, timezone
@@ -12,7 +14,7 @@ from app.models import (
     FirstBoardOutcome,
     LimitUpEvent,
 )
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import FirstBoardRepository
 from app.services.factor_signal_diagnostic import (
     _average_ranks,
     _build_verdict,
@@ -160,17 +162,12 @@ class FactorSignalDiagnosticIntegrationTest(unittest.TestCase):
 
     # Prepare the database path fixture or observation used by the surrounding regression
     # scenario.
-    def _database_path(self) -> Path:
-        return TEST_TMP_ROOT / f"factor-signal-{uuid4().hex}.sqlite"
+    def _database_url(self) -> str:
+        return isolated_database_url()
 
     # Release the temporary resources owned by this test fixture.
-    def _cleanup_database(self, database_path: Path) -> None:
-        for path in (
-            database_path,
-            database_path.with_name(f"{database_path.name}-wal"),
-            database_path.with_name(f"{database_path.name}-shm"),
-        ):
-            path.unlink(missing_ok=True)
+    def _cleanup_database(self, database_url: str) -> None:
+        release_database_url(database_url)
 
     # Build the LimitUpEvent fixture used by the surrounding regression scenario.
     def _event(
@@ -235,9 +232,9 @@ class FactorSignalDiagnosticIntegrationTest(unittest.TestCase):
 
     # Regression scenario: diagnostic detects planted signal.
     def test_diagnostic_detects_planted_signal(self) -> None:
-        database_path = self._database_path()
+        database_url = self._database_url()
         try:
-            repository = SQLiteFirstBoardRepository(database_path=database_path)
+            repository = FirstBoardRepository(database_url=database_url)
             # 12 trade dates x 10 main-board candidates; only first_limit_time
             # varies, and the outcome is a deterministic monotone function of it,
             # so the 首封时间 factor should dominate every other (constant) factor.
@@ -303,13 +300,13 @@ class FactorSignalDiagnosticIntegrationTest(unittest.TestCase):
             self.assertGreater(response.lasso.blocked_oos_r2 or 0.0, 0.0)
             self.assertEqual(response.verdict_status, "signal_requires_validation")
         finally:
-            self._cleanup_database(database_path)
+            self._cleanup_database(database_url)
 
     # Regression scenario: trade date count excludes dates without ready outcome.
     def test_trade_date_count_excludes_dates_without_ready_outcome(self) -> None:
-        database_path = self._database_path()
+        database_url = self._database_url()
         try:
-            repository = SQLiteFirstBoardRepository(database_path=database_path)
+            repository = FirstBoardRepository(database_url=database_url)
             ready_date = date(2026, 8, 5)
             missing_date = date(2026, 8, 6)
             events = [
@@ -331,13 +328,13 @@ class FactorSignalDiagnosticIntegrationTest(unittest.TestCase):
             self.assertEqual(response.trade_date_count, 1)
             self.assertEqual(response.verdict_status, "insufficient_sample")
         finally:
-            self._cleanup_database(database_path)
+            self._cleanup_database(database_url)
 
     # Regression scenario: diagnostic too few samples is honest.
     def test_diagnostic_too_few_samples_is_honest(self) -> None:
-        database_path = self._database_path()
+        database_url = self._database_url()
         try:
-            repository = SQLiteFirstBoardRepository(database_path=database_path)
+            repository = FirstBoardRepository(database_url=database_url)
             trade_date = date(2026, 8, 5)
             events = [
                 self._event("002001", "样本一", trade_date, time(9, 35)),
@@ -358,7 +355,7 @@ class FactorSignalDiagnosticIntegrationTest(unittest.TestCase):
             self.assertLess(response.sample_size, 10)
             self.assertEqual(response.verdict_status, "insufficient_sample")
         finally:
-            self._cleanup_database(database_path)
+            self._cleanup_database(database_url)
 
 
 if __name__ == "__main__":

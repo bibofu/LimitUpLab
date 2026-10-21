@@ -1,19 +1,21 @@
+
+from database_support import isolated_database_url, release_database_url
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.database import connect
 from app.models import AgentRun, ChatSessionMessage
-from app.repositories import SQLiteAgentRunRepository, SQLiteChatSessionRepository
+from app.repositories import AgentRunRepository, ChatSessionRepository
 from app.repositories.chat_session_repository import SessionOwnershipError
 
 
 class ChatSessionRepositoryTest(unittest.TestCase):
     # Regression scenario: sessions are scoped to their owner.
     def test_sessions_are_scoped_to_their_owner(self) -> None:
-        database_path = Path(__file__).resolve().parents[1] / ".test_owner_sessions.sqlite"
-        database_path.unlink(missing_ok=True)
-        repository = SQLiteChatSessionRepository(database_path)
+        database_url = isolated_database_url('.test_owner_sessions.sqlite')
+        release_database_url(database_url)
+        repository = ChatSessionRepository(database_url)
         owner_a = "visitor_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         owner_b = "visitor_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
         try:
@@ -36,15 +38,14 @@ class ChatSessionRepositoryTest(unittest.TestCase):
             with self.assertRaises(SessionOwnershipError):
                 repository.ensure_session(session.session_id, owner_id=owner_b)
         finally:
-            database_path.unlink(missing_ok=True)
+            release_database_url(database_url)
 
     # Regression scenario: create resume rename and delete session.
     def test_create_resume_rename_and_delete_session(self) -> None:
-        database_path = Path(__file__).resolve().parents[1] / ".test_chat_sessions.sqlite"
-        if database_path.exists():
-            database_path.unlink()
-        repository = SQLiteChatSessionRepository(database_path)
-        run_repository = SQLiteAgentRunRepository(database_path)
+        database_url = isolated_database_url('.test_chat_sessions.sqlite')
+        release_database_url(database_url)
+        repository = ChatSessionRepository(database_url)
+        run_repository = AgentRunRepository(database_url)
         started_at = datetime(2026, 8, 25, 8, 0, tzinfo=timezone.utc)
         try:
             created = repository.create_session(session_id="session-a")
@@ -98,7 +99,7 @@ class ChatSessionRepositoryTest(unittest.TestCase):
             remaining = repository.list_sessions()
             deleted_detail = repository.get_session(created.session_id)
             remaining_runs = run_repository.list_recent_runs(created.session_id)
-            connection = connect(database_path)
+            connection = connect(database_url)
             try:
                 remaining_message_count = connection.execute(
                     "SELECT COUNT(*) FROM chat_messages WHERE session_id = ?",
@@ -107,8 +108,7 @@ class ChatSessionRepositoryTest(unittest.TestCase):
             finally:
                 connection.close()
         finally:
-            if database_path.exists():
-                database_path.unlink()
+            release_database_url(database_url)
 
         self.assertEqual(created.title, "新对话")
         self.assertEqual(len(sessions), 1)
@@ -126,10 +126,9 @@ class ChatSessionRepositoryTest(unittest.TestCase):
 
     # Regression scenario: old agent message backfills grounded stock mentions.
     def test_old_agent_message_backfills_grounded_stock_mentions(self) -> None:
-        database_path = Path(__file__).resolve().parents[1] / ".test_chat_stock_links.sqlite"
-        if database_path.exists():
-            database_path.unlink()
-        repository = SQLiteChatSessionRepository(database_path)
+        database_url = isolated_database_url('.test_chat_stock_links.sqlite')
+        release_database_url(database_url)
+        repository = ChatSessionRepository(database_url)
         created_at = datetime(2026, 8, 27, 8, 0, tzinfo=timezone.utc)
         try:
             repository.create_session(session_id="legacy-stock-links")
@@ -159,8 +158,7 @@ class ChatSessionRepositoryTest(unittest.TestCase):
 
             detail = repository.get_session("legacy-stock-links")
         finally:
-            if database_path.exists():
-                database_path.unlink()
+            release_database_url(database_url)
 
         self.assertIsNotNone(detail)
         mentions = detail.messages[0].metadata["stock_mentions"]

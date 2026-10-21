@@ -1,50 +1,86 @@
-"""Real PostgreSQL integration fixtures; each test owns a disposable schema."""
+"""Every database-using test owns disposable schemas in an explicit test DB."""
 
 import os
+from contextlib import contextmanager
 from pathlib import Path
 from tempfile import TemporaryDirectory
-from uuid import uuid4
 import pytest
-from sqlalchemy import create_engine
-from sqlalchemy.engine import make_url
+import database_support
 
 
-# Test collection imports app.main, which loads runtime settings immediately.
-# Isolate before importing any test module so a developer's active PostgreSQL
-# database and retained SQLite file cannot become the default test database.
+# Validate before replacing runtime settings; no test may inherit a business DB.
+_runtime_database_urls = {
+    key: os.getenv(key, "") for key in database_support.RUNTIME_DATABASE_VARIABLES
+}
+_test_base_url = database_support.test_database_base_url(runtime_urls=_runtime_database_urls)
+_test_eval_url = database_support.test_database_base_url(
+    "LIMITUPLAB_TEST_EVAL_DATABASE_URL", runtime_urls=_runtime_database_urls,
+)
+if _test_base_url.database == _test_eval_url.database:
+    raise pytest.UsageError("Test business and evaluation databases must have different names")
 _scratch_root = Path(os.getenv("LIMITUPLAB_TEST_TMP", Path(__file__).resolve().parents[1] / "tmp"))
 _scratch_root.mkdir(parents=True, exist_ok=True)
 _test_environment = TemporaryDirectory(prefix="pytest-runtime-", dir=_scratch_root,
                                        ignore_cleanup_errors=True)
 _test_root = Path(_test_environment.name)
 os.environ["LIMITUPLAB_ENV_FILE"] = str(_test_root / "offline-only.env")
-os.environ["LIMITUPLAB_DATABASE_URL"] = ""
-os.environ["LIMITUPLAB_EVAL_DATABASE_URL"] = ""
-os.environ["LIMITUPLAB_DATABASE_PATH"] = str(_test_root / "default.sqlite")
+os.environ["LIMITUPLAB_DATABASE_URL"] = "postgresql+psycopg://invalid.invalid/collection_has_no_database"
+os.environ["LIMITUPLAB_EVAL_DATABASE_URL"] = _test_eval_url.render_as_string(hide_password=False)
+os.environ.pop("LIMITUPLAB_DATABASE_PATH", None)
 os.environ["LIMITUPLAB_LLM_ENABLED"] = "false"
 
 
-@pytest.fixture
-def postgresql_database(monkeypatch):
-    raw_url = os.getenv("LIMITUPLAB_TEST_DATABASE_URL")
-    if not raw_url:
-        pytest.skip("Set LIMITUPLAB_TEST_DATABASE_URL to run real PostgreSQL integration tests")
-    from app.storage.schema import upgrade_schema
-    from app.storage.postgres import dispose_engines
-    base = make_url(raw_url).set(drivername="postgresql+psycopg")
-    admin = create_engine(base, isolation_level="AUTOCOMMIT", hide_parameters=True)
-    name = "limituplab_test_" + uuid4().hex
-    with admin.connect() as connection:
-        connection.exec_driver_sql(f'CREATE SCHEMA "{name}"')
-    scoped = base.update_query_dict({"options": f"-csearch_path={name}"})
-    engine = create_engine(scoped, hide_parameters=True)
+@pytest.fixture(autouse=True)
+def isolated_default_database(monkeypatch):
+    """Allocate cheaply; create tables only when a test actually connects."""
+    from app.storage.postgres import PostgresConnection
+    factory = database_support.SchemaFactory(_test_base_url)
+    database_support._factory = factory
+    default_url = factory.allocate("default")
+    monkeypatch.setenv("LIMITUPLAB_DATABASE_URL", default_url)
+    original_init = PostgresConnection.__init__
+
+    def initialize(self, url=None, *, readonly=False):
+        selected = url or os.getenv("LIMITUPLAB_DATABASE_URL", "")
+        factory.ensure(selected)
+        original_init(self, url, readonly=readonly)
+
+    monkeypatch.setattr(PostgresConnection, "__init__", initialize)
+    # Evaluation schemas normally remain as evidence; isolated test evidence is
+    # retained until the test finishes, then removed from the dedicated test DB.
+    from evals.golden import runner
+    original_storage = runner.isolated_session_storage
+    evaluation_schemas = []
+
+    @contextmanager
+    def test_storage(work, configuration):
+        with original_storage(work, configuration) as result:
+            if configuration.url.database == _test_eval_url.database:
+                evaluation_schemas.append(result[1]["schema"])
+            yield result
+
+    monkeypatch.setattr(runner, "isolated_session_storage", test_storage)
     try:
-        upgrade_schema(engine)
-        monkeypatch.setenv("LIMITUPLAB_DATABASE_URL", scoped.render_as_string(hide_password=False))
-        yield scoped.render_as_string(hide_password=False)
+        yield default_url
     finally:
-        dispose_engines()
-        engine.dispose()
-        with admin.connect() as connection:
-            connection.exec_driver_sql(f'DROP SCHEMA "{name}" CASCADE')
-        admin.dispose()
+        factory.close()
+        if evaluation_schemas:
+            from app.storage.postgres import dispose_engines
+            from sqlalchemy import create_engine
+            dispose_engines()
+            engine = create_engine(_test_eval_url, hide_parameters=True)
+            try:
+                with engine.begin() as db:
+                    for schema in evaluation_schemas:
+                        if not schema.startswith("golden_eval_") or not schema.isidentifier():
+                            raise ValueError("Invalid evaluation fixture schema")
+                        db.exec_driver_sql(f'DROP SCHEMA IF EXISTS "{schema}" CASCADE')
+            finally:
+                engine.dispose()
+        database_support._factory = None
+
+
+@pytest.fixture
+def postgresql_database(isolated_default_database):
+    database_support._factory.ensure(isolated_default_database)
+    return isolated_default_database

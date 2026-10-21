@@ -1,3 +1,5 @@
+
+from database_support import isolated_database_url, release_database_url
 import os
 import unittest
 from datetime import date, datetime, time, timezone
@@ -11,7 +13,7 @@ from app.collectors import (
     LimitUpCollectionResult,
 )
 from app.models import LimitUpEvent, StockDailyBar, StockKLineBar
-from app.repositories import SQLiteFirstBoardRepository, SQLiteLimitUpRepository
+from app.repositories import FirstBoardRepository, LimitUpRepository
 from scripts.update_daily_data import (
     backfill_recent_post_limit_bars,
     collect_post_first_board_bars,
@@ -35,17 +37,12 @@ class DailyUpdatePipelineTest(unittest.TestCase):
 
     # Prepare the database path fixture or observation used by the surrounding regression
     # scenario.
-    def _database_path(self) -> Path:
-        return TEST_TMP_ROOT / f"daily-update-test-{uuid4().hex}.sqlite"
+    def _database_url(self) -> str:
+        return isolated_database_url()
 
     # Release the temporary resources owned by this test fixture.
-    def _cleanup_database(self, database_path: Path) -> None:
-        for path in (
-            database_path,
-            database_path.with_name(f"{database_path.name}-wal"),
-            database_path.with_name(f"{database_path.name}-shm"),
-        ):
-            path.unlink(missing_ok=True)
+    def _cleanup_database(self, database_url: str) -> None:
+        release_database_url(database_url)
 
     # Build the LimitUpEvent fixture used by the surrounding regression scenario.
     def _make_event(
@@ -80,10 +77,10 @@ class DailyUpdatePipelineTest(unittest.TestCase):
 
     # Regression scenario: skip import syncs features and health report.
     def test_skip_import_syncs_features_and_health_report(self) -> None:
-        database_path = self._database_path()
+        database_url = self._database_url()
         try:
-            limit_repo = SQLiteLimitUpRepository(database_path=database_path)
-            first_board_repo = SQLiteFirstBoardRepository(database_path=database_path)
+            limit_repo = LimitUpRepository(database_url=database_url)
+            first_board_repo = FirstBoardRepository(database_url=database_url)
             trade_date = date(2026, 8, 10)
             limit_repo.upsert_events(
                 [
@@ -114,11 +111,11 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             self.assertEqual(report.health["status"], "partial")
             self.assertEqual(report.top_candidate["symbol"], "002298")
         finally:
-            self._cleanup_database(database_path)
+            self._cleanup_database(database_url)
 
     # Regression scenario: intraday warmup covers every latest pool symbol.
     def test_intraday_warmup_covers_every_latest_pool_symbol(self) -> None:
-        database_path = self._database_path()
+        database_url = self._database_url()
         trade_date = date(2026, 8, 10)
         events = [
             self._make_event("002298", "first", trade_date),
@@ -139,7 +136,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             report = warm_latest_intraday_cache(
                 events=events,
                 trade_date=trade_date,
-                repository=SQLiteFirstBoardRepository(database_path=database_path),
+                repository=FirstBoardRepository(database_url=database_url),
                 max_workers=2,
                 loader=loader,
             )
@@ -150,32 +147,32 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             self.assertEqual(report["missing_count"], 1)
             self.assertTrue(report["warnings"])
         finally:
-            self._cleanup_database(database_path)
+            self._cleanup_database(database_url)
 
     # Regression scenario: missing raw events reports unhealthy state.
     def test_missing_raw_events_reports_unhealthy_state(self) -> None:
-        database_path = self._database_path()
+        database_url = self._database_url()
         try:
             report = run_daily_update(
                 trade_date=date(2026, 8, 10),
                 skip_import=True,
                 refresh_enrichment=False,
-                limit_up_repository=SQLiteLimitUpRepository(database_path=database_path),
-                first_board_repository=SQLiteFirstBoardRepository(database_path=database_path),
+                limit_up_repository=LimitUpRepository(database_url=database_url),
+                first_board_repository=FirstBoardRepository(database_url=database_url),
             )
 
             self.assertFalse(report.health["raw_events_ready"])
             self.assertFalse(report.health["first_board_features_ready"])
             self.assertTrue(report.warnings)
         finally:
-            self._cleanup_database(database_path)
+            self._cleanup_database(database_url)
 
     # Regression scenario: late target is persisted as historical backtest.
     def test_late_target_is_persisted_as_historical_backtest(self) -> None:
-        database_path = self._database_path()
+        database_url = self._database_url()
         try:
-            limit_repo = SQLiteLimitUpRepository(database_path=database_path)
-            first_board_repo = SQLiteFirstBoardRepository(database_path=database_path)
+            limit_repo = LimitUpRepository(database_url=database_url)
+            first_board_repo = FirstBoardRepository(database_url=database_url)
             trade_date = date(2026, 8, 10)
             limit_repo.upsert_events(
                 [self._make_event("002298", "\u4e2d\u7535\u946b\u9f99", trade_date)]
@@ -204,14 +201,14 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             self.assertEqual(len(predictions), 1)
             self.assertEqual(predictions[0].prediction_source, "historical_backtest")
         finally:
-            self._cleanup_database(database_path)
+            self._cleanup_database(database_url)
 
     # Regression scenario: repeated latest update does not rewrite live predictions.
     def test_repeated_latest_update_does_not_rewrite_live_predictions(self) -> None:
-        database_path = self._database_path()
+        database_url = self._database_url()
         try:
-            limit_repo = SQLiteLimitUpRepository(database_path=database_path)
-            first_board_repo = SQLiteFirstBoardRepository(database_path=database_path)
+            limit_repo = LimitUpRepository(database_url=database_url)
+            first_board_repo = FirstBoardRepository(database_url=database_url)
             trade_date = date(2026, 8, 10)
             limit_repo.upsert_events(
                 [self._make_event("002298", "candidate", trade_date)]
@@ -247,7 +244,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
                 first_board_repo.get_live_prediction_snapshot(trade_date),
             )
         finally:
-            self._cleanup_database(database_path)
+            self._cleanup_database(database_url)
 
     # Regression scenario: import reports tonghuashun limit up count difference.
     @patch("scripts.update_daily_data.collect_limit_up_events")
@@ -255,7 +252,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
         self,
         collect_events,
     ) -> None:
-        database_path = self._database_path()
+        database_url = self._database_url()
         trade_date = date(2026, 8, 21)
         collect_events.return_value = LimitUpCollectionResult(
             status="ok",
@@ -271,8 +268,8 @@ class DailyUpdatePipelineTest(unittest.TestCase):
                 top_targets=0,
                 max_tracked_kline_fetches=0,
                 refresh_enrichment=False,
-                limit_up_repository=SQLiteLimitUpRepository(database_path=database_path),
-                first_board_repository=SQLiteFirstBoardRepository(database_path=database_path),
+                limit_up_repository=LimitUpRepository(database_url=database_url),
+                first_board_repository=FirstBoardRepository(database_url=database_url),
                 post_bar_collector=lambda _symbol, _base_date, _as_of_date: [],
                 remote_limit_up_collector=lambda _date: HithinkLimitUpPoolSnapshot(
                     trade_date=trade_date,
@@ -304,13 +301,13 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             self.assertEqual(report.hithink_limit_up_source, "hithink-finance")
             self.assertEqual(report.hithink_reason_enriched_count, 1)
             self.assertEqual(report.limit_up_count_difference, -1)
-            stored = SQLiteLimitUpRepository(database_path=database_path).list_events()
+            stored = LimitUpRepository(database_url=database_url).list_events()
             self.assertEqual(stored[0].concept, "通信设备+算力")
             self.assertTrue(
                 any("source count mismatch" in item for item in report.warnings)
             )
         finally:
-            self._cleanup_database(database_path)
+            self._cleanup_database(database_url)
 
     # Regression scenario: partial import does not delete existing date rows.
     @patch("scripts.update_daily_data.collect_limit_up_events")
@@ -318,10 +315,10 @@ class DailyUpdatePipelineTest(unittest.TestCase):
         self,
         collect_events,
     ) -> None:
-        database_path = self._database_path()
+        database_url = self._database_url()
         trade_date = date(2026, 8, 21)
-        limit_repo = SQLiteLimitUpRepository(database_path=database_path)
-        first_board_repo = SQLiteFirstBoardRepository(database_path=database_path)
+        limit_repo = LimitUpRepository(database_url=database_url)
+        first_board_repo = FirstBoardRepository(database_url=database_url)
         existing = self._make_event(
             "002050",
             "三花智控",
@@ -365,14 +362,14 @@ class DailyUpdatePipelineTest(unittest.TestCase):
                 report.akshare_source_errors,
             )
         finally:
-            self._cleanup_database(database_path)
+            self._cleanup_database(database_url)
 
     @patch("scripts.update_daily_data.collect_limit_up_events")
     @patch("scripts.update_daily_data.collect_hithink_limit_up_snapshot")
     def test_preferred_collection_reuses_snapshot_and_defers_incomplete_predictions(
         self, remote_probe, collect_events,
     ) -> None:
-        database_path = self._database_path()
+        database_url = self._database_url()
         trade_date = date(2026, 8, 21)
         event = self._make_event("002491", "通鼎互联", trade_date)
         snapshot = HithinkLimitUpPoolSnapshot(
@@ -380,8 +377,8 @@ class DailyUpdatePipelineTest(unittest.TestCase):
         )
         sources = {"closed_limit_pool": "hithink-finance+akshare-eastmoney.fields"}
         try:
-            limit_repo = SQLiteLimitUpRepository(database_path=database_path, seed_if_empty=False)
-            first_repo = SQLiteFirstBoardRepository(database_path=database_path)
+            limit_repo = LimitUpRepository(database_url=database_url, seed_if_empty=False)
+            first_repo = FirstBoardRepository(database_url=database_url)
             kwargs = dict(
                 trade_date=trade_date, top_targets=1, max_tracked_kline_fetches=0,
                 max_post_limit_kline_fetches=0, refresh_enrichment=False,
@@ -411,14 +408,14 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             self.assertIsNotNone(first_repo.get_live_prediction_snapshot(trade_date))
             remote_probe.assert_not_called()
         finally:
-            self._cleanup_database(database_path)
+            self._cleanup_database(database_url)
 
     # Excluded gaps must not block relay publication or retain stale candidates.
     @patch("scripts.update_daily_data.collect_limit_up_events")
     def test_excluded_raw_gaps_publish_relay_without_deleting_excluded_records(
         self, collect_events,
     ) -> None:
-        database_path = self._database_path()
+        database_url = self._database_url()
         day = date(2026, 8, 21)
         previous_day = date(2026, 8, 20)
         normal = self._make_event("002491", "通鼎互联", day)
@@ -434,8 +431,8 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             relay_excluded_gaps=("closed_limit_pool:000639",),
         )
         try:
-            limit_repo = SQLiteLimitUpRepository(database_path=database_path)
-            first_repo = SQLiteFirstBoardRepository(database_path=database_path)
+            limit_repo = LimitUpRepository(database_url=database_url)
+            first_repo = FirstBoardRepository(database_url=database_url)
             limit_repo.upsert_events([st, bse, stale, older])
             report = run_daily_update(
                 trade_date=day, top_targets=1, replace_date=True,
@@ -459,7 +456,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
             predictions = first_repo.list_predictions_between(day, day)
             self.assertEqual([p.symbol for p in predictions], ["002491"])
         finally:
-            self._cleanup_database(database_path)
+            self._cleanup_database(database_url)
 
     # Regression scenario: post bar collection includes as of date.
     @patch("scripts.update_daily_data.collect_stock_kline")
@@ -485,9 +482,9 @@ class DailyUpdatePipelineTest(unittest.TestCase):
 
     # Regression scenario: post limit cache backfills twenty session history.
     def test_post_limit_cache_backfills_twenty_session_history(self) -> None:
-        database_path = self._database_path()
+        database_url = self._database_url()
         try:
-            repository = SQLiteFirstBoardRepository(database_path=database_path)
+            repository = FirstBoardRepository(database_url=database_url)
             trade_dates = []
             item_date = date(2026, 7, 1)
             while len(trade_dates) < 20:
@@ -528,13 +525,13 @@ class DailyUpdatePipelineTest(unittest.TestCase):
                 20,
             )
         finally:
-            self._cleanup_database(database_path)
+            self._cleanup_database(database_url)
 
     # Regression scenario: post limit cache uses seven days and same provider close snapshot.
     def test_post_limit_cache_uses_seven_days_and_same_provider_close_snapshot(self) -> None:
-        database_path = self._database_path()
+        database_url = self._database_url()
         try:
-            repository = SQLiteFirstBoardRepository(database_path=database_path)
+            repository = FirstBoardRepository(database_url=database_url)
             trade_dates = []
             item_date = date(2026, 7, 1)
             while len(trade_dates) < 20:
@@ -596,14 +593,14 @@ class DailyUpdatePipelineTest(unittest.TestCase):
                 {"akshare.stock_zh_a_hist_tx", "tencent.qt.gtimg.cn"},
             )
         finally:
-            self._cleanup_database(database_path)
+            self._cleanup_database(database_url)
 
     # Regression scenario: recent daily top picks cache all available follow up bars.
     def test_recent_daily_top_picks_cache_all_available_follow_up_bars(self) -> None:
-        database_path = self._database_path()
+        database_url = self._database_url()
         try:
-            limit_repo = SQLiteLimitUpRepository(database_path=database_path)
-            first_board_repo = SQLiteFirstBoardRepository(database_path=database_path)
+            limit_repo = LimitUpRepository(database_url=database_url)
+            first_board_repo = FirstBoardRepository(database_url=database_url)
             trade_dates = [
                 date(2026, 8, 6),
                 date(2026, 8, 7),
@@ -695,7 +692,7 @@ class DailyUpdatePipelineTest(unittest.TestCase):
                 1,
             )
         finally:
-            self._cleanup_database(database_path)
+            self._cleanup_database(database_url)
 
 
 if __name__ == "__main__":

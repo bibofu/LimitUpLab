@@ -34,9 +34,10 @@ def test_cli_loads_selected_env_before_dispatch(module_name, tmp_path, monkeypat
 
 
 def test_test_collection_uses_isolated_storage():
-    # PG integration fixtures explicitly opt into LIMITUPLAB_TEST_DATABASE_URL;
-    # ordinary tests always have a scratch SQLite and no project .env loaded.
-    assert os.environ["LIMITUPLAB_DATABASE_URL"] == ""
-    assert os.environ["LIMITUPLAB_EVAL_DATABASE_URL"] == ""
+    from sqlalchemy.engine import make_url
+
+    url = make_url(os.environ["LIMITUPLAB_DATABASE_URL"])
+    test_url = make_url(os.environ["LIMITUPLAB_TEST_DATABASE_URL"])
+    assert url.database == test_url.database
+    assert "search_path" in url.query.get("options", "")
     assert not Path(os.environ["LIMITUPLAB_ENV_FILE"]).exists()
-    assert "pytest-runtime-" in Path(os.environ["LIMITUPLAB_DATABASE_PATH"]).parent.name

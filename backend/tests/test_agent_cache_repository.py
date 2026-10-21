@@ -1,10 +1,12 @@
+
+from database_support import isolated_database_url, release_database_url
 import os
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
-from app.repositories import SQLiteAgentCacheRepository
+from app.repositories import AgentCacheRepository
 
 
 TEST_TMP_ROOT = Path(os.getenv("LIMITUPLAB_TEST_TMP", Path(__file__).resolve().parents[1]))
@@ -14,20 +16,15 @@ class AgentCacheRepositoryTest(unittest.TestCase):
     # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         TEST_TMP_ROOT.mkdir(exist_ok=True)
-        self.database_path = TEST_TMP_ROOT / f"agent-cache-test-{uuid4().hex}.sqlite"
+        self.database_url = isolated_database_url()
 
     # Release the test resources and restore the environment after this test scope.
     def tearDown(self) -> None:
-        for path in (
-            self.database_path,
-            self.database_path.with_name(f"{self.database_path.name}-wal"),
-            self.database_path.with_name(f"{self.database_path.name}-shm"),
-        ):
-            path.unlink(missing_ok=True)
+        release_database_url(self.database_url)
 
     # Regression scenario: set and get json before expiry.
     def test_set_and_get_json_before_expiry(self) -> None:
-        repository = SQLiteAgentCacheRepository(database_path=self.database_path)
+        repository = AgentCacheRepository(database_url=self.database_url)
 
         repository.set_json(
             cache_key="scope:key",
@@ -43,7 +40,7 @@ class AgentCacheRepositoryTest(unittest.TestCase):
 
     # Regression scenario: expired json is removed.
     def test_expired_json_is_removed(self) -> None:
-        repository = SQLiteAgentCacheRepository(database_path=self.database_path)
+        repository = AgentCacheRepository(database_url=self.database_url)
         repository.set_json(
             cache_key="scope:expired",
             scope="scope",

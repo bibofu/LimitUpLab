@@ -1,5 +1,7 @@
 """Single-request chat restore preserves ownership and remains read-only."""
 
+from database_support import isolated_database_url
+
 from datetime import datetime, timezone
 
 import pytest
@@ -7,7 +9,7 @@ from fastapi import FastAPI
 from fastapi.testclient import TestClient
 
 from app.models import ChatSessionMessage
-from app.repositories import SQLiteChatSessionRepository
+from app.repositories import ChatSessionRepository
 from app.routers.agents import router
 from app.security import AnonymousVisitorMiddleware, SESSION_COOKIE_NAME, sign_visitor_owner_id
 
@@ -18,13 +20,13 @@ OTHER = "visitor_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
 
 @pytest.fixture
 def chat_api(tmp_path, monkeypatch):
-    monkeypatch.setenv("LIMITUPLAB_DATABASE_PATH", str(tmp_path / "bootstrap.sqlite"))
+    monkeypatch.setenv("LIMITUPLAB_DATABASE_URL", str(isolated_database_url('bootstrap.sqlite')))
     monkeypatch.setenv("LIMITUPLAB_SESSION_SECRET", "bootstrap-test-secret-at-least-32-characters")
     app = FastAPI()
     app.add_middleware(AnonymousVisitorMiddleware)
     app.include_router(router, prefix="/api/agents")
     with TestClient(app) as client:
-        yield client, SQLiteChatSessionRepository()
+        yield client, ChatSessionRepository()
 
 
 def sign_in(client, owner):

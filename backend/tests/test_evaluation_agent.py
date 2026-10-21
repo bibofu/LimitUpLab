@@ -1,3 +1,5 @@
+
+from database_support import isolated_database_url, release_database_url
 import os
 import unittest
 from datetime import date, datetime, time, timezone
@@ -5,7 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.models import AgentPrediction, FirstBoardOutcome, LimitUpEvent
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import FirstBoardRepository
 from app.services.evaluation_agent import (
     build_agent_evaluation,
     persist_agent_predictions_for_dates,
@@ -23,17 +25,12 @@ class EvaluationAgentTest(unittest.TestCase):
 
     # Prepare the database path fixture or observation used by the surrounding regression
     # scenario.
-    def _database_path(self) -> Path:
-        return TEST_TMP_ROOT / f"evaluation-agent-{uuid4().hex}.sqlite"
+    def _database_url(self) -> str:
+        return isolated_database_url()
 
     # Release the temporary resources owned by this test fixture.
-    def _cleanup_database(self, database_path: Path) -> None:
-        for path in (
-            database_path,
-            database_path.with_name(f"{database_path.name}-wal"),
-            database_path.with_name(f"{database_path.name}-shm"),
-        ):
-            path.unlink(missing_ok=True)
+    def _cleanup_database(self, database_url: str) -> None:
+        release_database_url(database_url)
 
     # Build the LimitUpEvent fixture used by the surrounding regression scenario.
     def _event(
@@ -103,9 +100,9 @@ class EvaluationAgentTest(unittest.TestCase):
 
     # Regression scenario: evaluation agent reads immutable predictions and labels entry returns.
     def test_evaluation_agent_reads_immutable_predictions_and_labels_entry_returns(self) -> None:
-        database_path = self._database_path()
+        database_url = self._database_url()
         try:
-            repository = SQLiteFirstBoardRepository(database_path=database_path)
+            repository = FirstBoardRepository(database_url=database_url)
             trade_date = date(2026, 8, 10)
             events = [
                 self._event("002001", "\u6210\u529f\u6837\u672c", trade_date, time(9, 35), 0),
@@ -154,13 +151,13 @@ class EvaluationAgentTest(unittest.TestCase):
             self.assertTrue(all(item.prediction_source == "live" for item in response.evaluations))
             self.assertEqual(len(repository.list_predictions_between(trade_date, trade_date)), 3)
         finally:
-            self._cleanup_database(database_path)
+            self._cleanup_database(database_url)
 
     # Regression scenario: evaluation keeps live predictions visible after policy upgrade.
     def test_evaluation_keeps_live_predictions_visible_after_policy_upgrade(self) -> None:
-        database_path = self._database_path()
+        database_url = self._database_url()
         try:
-            repository = SQLiteFirstBoardRepository(database_path=database_path)
+            repository = FirstBoardRepository(database_url=database_url)
             trade_date = date(2026, 8, 25)
             created_at = datetime(2026, 8, 25, 8, 0, tzinfo=timezone.utc)
             repository.upsert_predictions(
@@ -211,7 +208,7 @@ class EvaluationAgentTest(unittest.TestCase):
             self.assertEqual(response.source_counts, {"live": 1})
             self.assertEqual(response.evaluations[0].prediction_id, "legacy-live-prediction")
         finally:
-            self._cleanup_database(database_path)
+            self._cleanup_database(database_url)
 
     # Regression scenario: review replay can restore a late saved live batch.
     def test_review_replay_can_restore_a_late_saved_live_batch(self) -> None:

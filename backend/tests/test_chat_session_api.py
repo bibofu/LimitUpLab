@@ -1,3 +1,5 @@
+
+from database_support import isolated_database_url, release_database_url
 import os
 import unittest
 from datetime import datetime, timezone
@@ -13,7 +15,7 @@ from app.models import (
     ChatSessionMessage,
     ChatSessionUpdateRequest,
 )
-from app.repositories import SQLiteAgentRunRepository, SQLiteChatSessionRepository
+from app.repositories import AgentRunRepository, ChatSessionRepository
 from app.routers.agents import (
     create_chat_session,
     delete_chat_session,
@@ -29,14 +31,13 @@ class ChatSessionApiTest(unittest.TestCase):
     def test_session_lifecycle_and_message_restore(self) -> None:
         owner_id = "visitor_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         other_owner_id = "visitor_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb"
-        database_path = (
-            Path(__file__).resolve().parents[1]
-            / f".test_chat_session_api_{uuid4().hex}.sqlite"
+        database_url = (
+            isolated_database_url()
         )
-        self.addCleanup(database_path.unlink, missing_ok=True)
+        self.addCleanup(release_database_url, database_url)
         with patch.dict(
             os.environ,
-            {"LIMITUPLAB_DATABASE_PATH": str(database_path)},
+            {"LIMITUPLAB_DATABASE_URL": database_url},
             clear=False,
         ):
             created = create_chat_session(
@@ -45,7 +46,7 @@ class ChatSessionApiTest(unittest.TestCase):
             )
             session_id = created.session_id
 
-            SQLiteChatSessionRepository(database_path).append_message(
+            ChatSessionRepository(database_url).append_message(
                 ChatSessionMessage(
                     message_id="message-api",
                     session_id=session_id,
@@ -67,7 +68,7 @@ class ChatSessionApiTest(unittest.TestCase):
             with self.assertRaises(HTTPException) as foreign_delete_error:
                 delete_chat_session(session_id, owner_id=other_owner_id)
 
-            run_repository = SQLiteAgentRunRepository(database_path)
+            run_repository = AgentRunRepository(database_url)
             now = datetime.now(timezone.utc)
             run_repository.save_run(
                 AgentRun(

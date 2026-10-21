@@ -1,3 +1,4 @@
+
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timedelta, timezone
 from threading import Event
@@ -256,13 +257,26 @@ def test_disk_failure_keeps_memory_and_does_not_damage_prior_file(tmp_path, monk
     assert "private filesystem path" not in caplog.text
 
 
-def test_get_latest_news_uses_configured_database_directory_lazily(tmp_path, monkeypatch):
+def test_get_latest_news_uses_configured_postgresql_lazily(tmp_path, monkeypatch):
+    from app.services.shared_news_snapshot import read_snapshot
+
     monkeypatch.setattr(latest, "_store", None)
-    monkeypatch.setattr(latest, "get_database_path", lambda: tmp_path / "research.sqlite")
+    monkeypatch.setattr(latest, "get_data_directory", lambda: tmp_path)
     monkeypatch.setattr(latest, "_now", lambda: NOW)
     monkeypatch.setattr(latest, "_load_latest", lambda now: news(now))
     assert not list(tmp_path.iterdir())
     facts, refreshing, stale, error = latest.get_latest_news()
     assert facts.fetched_at.tzinfo is not None
     assert not refreshing and not stale and error is None
-    assert [path.name for path in tmp_path.iterdir()] == ["finance_news_latest.json"]
+    assert not list(tmp_path.iterdir())
+    assert latest._store.database_url == latest.get_database_url()
+    assert read_snapshot(latest._store.database_url) == facts
+
+
+def test_get_latest_news_requires_postgresql_configuration(tmp_path, monkeypatch):
+    monkeypatch.setattr(latest, "_store", None)
+    monkeypatch.setattr(latest, "get_data_directory", lambda: tmp_path)
+    monkeypatch.delenv("LIMITUPLAB_DATABASE_URL")
+    with pytest.raises(ValueError, match="LIMITUPLAB_DATABASE_URL is required"):
+        latest.get_latest_news()
+    assert not list(tmp_path.iterdir())

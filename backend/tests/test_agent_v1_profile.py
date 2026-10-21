@@ -1,3 +1,5 @@
+
+from database_support import isolated_database_url, release_database_url
 import os
 import unittest
 from pathlib import Path
@@ -5,24 +7,23 @@ from unittest.mock import patch
 from uuid import uuid4
 
 from app.agents.tools import EXTENDED_AGENT_PROFILE, V1_AGENT_PROFILE, V1_CLOSED_MARKET_TOOL_NAMES, V1_DEFERRED_REALTIME_TOOL_NAMES, AgentToolRegistry
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import FirstBoardRepository
 from app.services.sample_data import SAMPLE_EVENTS
 
 
 class AgentV1ProfileTest(unittest.TestCase):
     # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
-        self.database_path = (
-            Path(__file__).resolve().parents[1]
-            / f"agent-v1-profile-{uuid4().hex}.sqlite"
+        self.database_url = (
+            isolated_database_url()
         )
-        self.repository = SQLiteFirstBoardRepository(self.database_path)
+        self.repository = FirstBoardRepository(self.database_url)
         self.addCleanup(self._cleanup_database)
 
     # Release the temporary resources owned by this test fixture.
     def _cleanup_database(self) -> None:
         for suffix in ("", "-shm", "-wal"):
-            Path(f"{self.database_path}{suffix}").unlink(missing_ok=True)
+            release_database_url(self.database_url)
 
     # Prepare the empty execution fixture or observation used by the surrounding regression
 

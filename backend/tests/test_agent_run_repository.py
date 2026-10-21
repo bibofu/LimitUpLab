@@ -1,20 +1,21 @@
+
+from database_support import isolated_database_url, release_database_url
 import unittest
 from datetime import datetime, timezone
 from pathlib import Path
 
 from app.models import AgentRun
-from app.repositories import SQLiteAgentRunRepository, SQLiteChatSessionRepository
+from app.repositories import AgentRunRepository, ChatSessionRepository
 
 
 class AgentRunRepositoryTest(unittest.TestCase):
     # Regression scenario: save and list recent runs.
     def test_save_and_list_recent_runs(self) -> None:
-        database_path = Path(__file__).resolve().parents[1] / ".test_agent_runs.sqlite"
-        if database_path.exists():
-            database_path.unlink()
+        database_url = isolated_database_url('.test_agent_runs.sqlite')
+        release_database_url(database_url)
         try:
-            repository = SQLiteAgentRunRepository(database_path)
-            SQLiteChatSessionRepository(database_path).create_session(
+            repository = AgentRunRepository(database_url)
+            ChatSessionRepository(database_url).create_session(
                 session_id="session-a",
                 owner_id="visitor_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa",
             )
@@ -43,8 +44,7 @@ class AgentRunRepositoryTest(unittest.TestCase):
                 owner_id="visitor_bbbbbbbbbbbbbbbbbbbbbbbbbbbbbbbb",
             )
         finally:
-            if database_path.exists():
-                database_path.unlink()
+            release_database_url(database_url)
 
         self.assertEqual(len(rows), 1)
         self.assertEqual(rows[0].run_id, "run_test")

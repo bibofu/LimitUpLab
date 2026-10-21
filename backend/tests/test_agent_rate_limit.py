@@ -1,3 +1,5 @@
+
+from database_support import isolated_database_url, release_database_url
 import os
 import unittest
 from datetime import datetime, timezone
@@ -7,7 +9,7 @@ from uuid import uuid4
 
 from fastapi import HTTPException, Request
 
-from app.repositories import SQLiteAgentUsageRepository
+from app.repositories import AgentUsageRepository
 from app.routers.agents import _begin_agent_request
 from app.services.agent_rate_limit import AgentRateLimitError, AgentRateLimiter
 from app.services.agent_rate_limit import agent_rate_limiter
@@ -97,8 +99,8 @@ class AgentRateLimiterTest(unittest.TestCase):
 class AgentRequestGuardIntegrationTest(unittest.TestCase):
     # Regression scenario: concurrent request returns http 429 and is audited.
     def test_concurrent_request_returns_http_429_and_is_audited(self) -> None:
-        database_path = Path(__file__).resolve().parents[1] / f"rate-{uuid4().hex}.sqlite"
-        self.addCleanup(database_path.unlink, missing_ok=True)
+        database_url = isolated_database_url()
+        self.addCleanup(release_database_url, database_url)
         owner_id = "visitor_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         request = Request(
             {
@@ -114,7 +116,7 @@ class AgentRequestGuardIntegrationTest(unittest.TestCase):
         with patch.dict(
             os.environ,
             {
-                "LIMITUPLAB_DATABASE_PATH": str(database_path),
+                "LIMITUPLAB_DATABASE_URL": database_url,
                 "LIMITUPLAB_AGENT_RATE_LIMIT_ENABLED": "true",
                 "LIMITUPLAB_AGENT_REQUESTS_PER_MINUTE": "8",
                 "LIMITUPLAB_AGENT_REQUESTS_PER_DAY": "60",
@@ -143,7 +145,7 @@ class AgentRequestGuardIntegrationTest(unittest.TestCase):
             finally:
                 lease.release()
 
-            usage = SQLiteAgentUsageRepository(database_path).owner_today(owner_id)
+            usage = AgentUsageRepository(database_url).owner_today(owner_id)
 
         self.assertEqual(blocked.exception.status_code, 429)
         self.assertEqual(blocked.exception.headers["Retry-After"], "2")

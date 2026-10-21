@@ -1,3 +1,5 @@
+
+from database_support import isolated_database_url
 import os
 import unittest
 from datetime import date, datetime, timezone
@@ -8,9 +10,9 @@ from zoneinfo import ZoneInfo
 
 from app.models import DailyPipelineRun
 from app.repositories import (
-    SQLiteDailyPipelineRepository,
-    SQLiteFirstBoardRepository,
-    SQLiteLimitUpRepository,
+    DailyPipelineRepository,
+    FirstBoardRepository,
+    LimitUpRepository,
 )
 from scripts.run_daily_close_loop import (
     DailyCloseLoopLock,
@@ -33,29 +35,20 @@ class DailyCloseLoopTest(unittest.TestCase):
     def setUp(self) -> None:
         TEST_TMP_ROOT.mkdir(exist_ok=True)
         token = uuid4().hex
-        self.database_path = TEST_TMP_ROOT / f"daily-close-loop-{token}.sqlite"
+        self.database_url = isolated_database_url()
         self.lock_path = TEST_TMP_ROOT / f"daily-close-loop-{token}.lock"
         self.report_path = TEST_TMP_ROOT / f"daily-close-loop-{token}.json"
         self.alert_path = TEST_TMP_ROOT / f"daily-close-loop-{token}-alert.json"
-        self.run_repository = SQLiteDailyPipelineRepository(self.database_path)
-        self.limit_repository = SQLiteLimitUpRepository(
-            database_path=self.database_path,
+        self.run_repository = DailyPipelineRepository(self.database_url)
+        self.limit_repository = LimitUpRepository(
+            database_url=self.database_url,
             seed_if_empty=False,
         )
-        self.first_board_repository = SQLiteFirstBoardRepository(self.database_path)
+        self.first_board_repository = FirstBoardRepository(self.database_url)
 
     # Release the test resources and restore the environment after this test scope.
     def tearDown(self) -> None:
-        for path in (
-            self.database_path,
-            self.database_path.with_name(f"{self.database_path.name}-wal"),
-            self.database_path.with_name(f"{self.database_path.name}-shm"),
-            self.lock_path,
-            self.report_path,
-            self.report_path.with_name(f"{self.report_path.name}.tmp"),
-            self.alert_path,
-            self.alert_path.with_name(f"{self.alert_path.name}.tmp"),
-        ):
+        for path in (self.lock_path, self.report_path, self.report_path.with_name(f"{self.report_path.name}.tmp"), self.alert_path, self.alert_path.with_name(f"{self.alert_path.name}.tmp"),):
             path.unlink(missing_ok=True)
 
     # Prepare the calendar fixture or observation used by the surrounding regression scenario.
@@ -549,7 +542,7 @@ class DailyCloseLoopTest(unittest.TestCase):
 
     # Regression scenario: existing lock prevents overlapping run.
     def test_existing_lock_prevents_overlapping_run(self) -> None:
-        with DailyCloseLoopLock(self.lock_path):
+        with DailyCloseLoopLock(self.lock_path, database_url=self.database_url):
             # The inline callback supplies the fixture value or replacement behavior used by this
             # test; it is evaluated only when the code under test calls it.
             execution = self._execute(
