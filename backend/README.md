@@ -14,6 +14,9 @@ cd backend
 python -m venv .venv
 source .venv/bin/activate
 pip install -r requirements.txt
+cp .env.example .env
+# Set LIMITUPLAB_DATABASE_URL to a provisioned PostgreSQL database in .env.
+python scripts/postgres_admin.py upgrade
 uvicorn app.main:app --reload --port 8000
 ```
 
@@ -23,10 +26,18 @@ On Windows PowerShell:
 cd backend
 py -3.13 -m venv .venv
 .\.venv\Scripts\python.exe -m pip install -r requirements.txt
+Copy-Item .env.example .env
+# Set LIMITUPLAB_DATABASE_URL to a provisioned PostgreSQL database in .env.
+.\.venv\Scripts\python.exe scripts/postgres_admin.py upgrade
 .\.venv\Scripts\python.exe -m uvicorn app.main:app --reload --port 8000
 ```
 
-The API will be available at `http://localhost:8000`.
+The API will be available at `http://localhost:8000`. PostgreSQL 18 must already
+be running, and the URL must select an application role that owns its schema.
+Missing configuration, connection failures and stale Alembic revisions fail
+explicitly. See [Windows local PostgreSQL](../deploy/local-postgresql.md) for
+the existing managed local cluster and [deployment](../deploy/postgresql.md)
+for first provisioning. Do not replace an existing private `.env` with a template.
 
 ## LLM and ReAct Runtime
 
@@ -59,7 +70,7 @@ DEEPSEEK_API_KEY=<your-api-key>
 
 The production chat backend uses LangChain messages and
 `ChatOpenAI.bind_tools`. A custom LangGraph `StateGraph` runs one bounded ReAct
-loop; `ToolGateway`, `EvidenceStore` and the SQLite run journal retain financial
+loop; `ToolGateway`, `EvidenceStore` and the PostgreSQL run journal retain financial
 policy, provenance, idempotency and recovery control. The only valid configured
 backend is `LIMITUPLAB_LLM_BACKEND=langchain`; any other value fails during
 startup. The legacy Requests class remains available only through explicit
@@ -125,14 +136,16 @@ Do not commit real API keys to the repository.
 
 ## Local Data
 
-The backend now uses SQLite for local persistence. By default, the database is
-created at:
+The backend uses PostgreSQL for application, research, maintenance and Agent
+persistence. Set `LIMITUPLAB_DATABASE_URL` in `backend/.env` or the process
+environment; runtime code never creates a SQLite file or falls back to SQLite.
+For example, with placeholder credentials:
 
 ```text
-backend/data/limituplab.sqlite
+LIMITUPLAB_DATABASE_URL=postgresql+psycopg://limituplab:REPLACE_WITH_PASSWORD@127.0.0.1:55433/limituplab
 ```
 
-Agent structured responses use a small SQLite cache table (`agent_cache`) to
+Agent structured responses use the PostgreSQL cache table (`agent_cache`) to
 avoid repeated computation under concurrent website usage. The MVP currently
 caches first-board ratings, rating backtests, and rating evaluations for a short
 TTL. Cache keys include request parameters and a local event-data signature, so
@@ -191,11 +204,11 @@ cd backend
 The check writes a local report to `backend/data/dev_check_report.json`, which is
 ignored by git.
 
-Set `LIMITUPLAB_DATABASE_PATH` to use a different SQLite file:
-
-```bash
-LIMITUPLAB_DATABASE_PATH=/tmp/limituplab.sqlite uvicorn app.main:app --reload --port 8000
-```
+`LIMITUPLAB_DATA_DIRECTORY` selects the default directory used by auxiliary
+storage helpers, such as audit backups and explicit news-file caches; individual
+scripts may also provide their own output options. It does not select a database. Historical SQLite archives
+and the read-only importer are retained for migration evidence. See
+[SQLite retirement](../docs/SQLite_Retirement.md) before cleaning old runtime files.
 
 ## Automated Daily Close Loop
 
@@ -284,13 +297,19 @@ endpoint is intended for after-close review of the latest persisted trading day.
 ## Tests
 
 From the project root, use the shared offline acceptance runner after installing
-`backend/requirements-dev.txt` and the frontend dependencies:
+`backend/requirements-dev.txt` and the frontend dependencies. Configure
+`LIMITUPLAB_TEST_DATABASE_URL` to a dedicated PostgreSQL database, such as
+`limituplab_test`, whose role can create and drop test schemas. The test database
+must have a different name from the business database; missing or unsafe
+configuration fails instead of skipping database coverage.
 
 ```powershell
 backend/.venv/Scripts/python.exe scripts/check_project.py
 ```
 
 It writes logs, JUnit and `summary.json` under `output/validation/<run>/`.
+Each database-using test gets disposable PostgreSQL schemas. Historical import
+tests alone construct SQLite source archives; no runtime SQLite backend is used.
 For an isolated backend regression run:
 
 ```bash
@@ -298,9 +317,11 @@ cd backend
 python -m pytest tests -q -p no:cacheprovider
 ```
 
-The former chat evaluation framework has been retired. These checks do not call
-a live model or establish answer quality. The separate prediction Evaluation
-Agent and `rating_evaluation` still review recorded prediction outcomes.
+These checks do not call a live model or establish answer quality. Real Agent
+verification remains a separate acceptance step. Golden model evaluation uses
+its own `LIMITUPLAB_EVAL_DATABASE_URL`; see
+[Golden evaluation](../docs/Agent_Golden_Evaluation.md). The prediction Evaluation
+Agent and `rating_evaluation` review recorded prediction outcomes.
 
 ## Limit-up queries
 

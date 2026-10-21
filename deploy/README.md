@@ -1,6 +1,6 @@
 # LimitUpLab 香港服务器部署
 
-这套配置面向单台 Linux 服务器上的公开 Demo：宿主机 Nginx 负责域名和 HTTPS，Docker 中的 Nginx 提供 React 静态文件并把 `/api` 转发给单 worker FastAPI。PostgreSQL 使用 `docker-compose.postgresql.yml` overlay 和独立命名卷 `limituplab-postgres`；原 SQLite 及应用报告继续保存在 `limituplab-data`，SQLite 兼容部署方式也保留。
+这套配置面向单台 Linux 服务器上的公开 Demo：宿主机 Nginx 负责域名和 HTTPS，Docker 中的 Nginx 提供 React 静态文件并把 `/api` 转发给单 worker FastAPI。应用仅支持 PostgreSQL，使用 `docker-compose.postgresql.yml` overlay 和独立命名卷 `limituplab-postgres`；应用报告及历史迁移归档保存在 `limituplab-data`。
 
 生产发布、日更和备份统一使用已审查安装的 `release.py` / `job.py`，按明确的数据库模式执行。本文是操作手册；一次切换是否完成，应以对应的迁移、读写、恢复和上线验收记录为准。
 
@@ -48,7 +48,7 @@ curl --fail -H "X-LimitUpLab-Admin-Key: $LIMITUPLAB_ADMIN_KEY" \
 
 ## 2. 构建并启动应用
 
-PostgreSQL 首次部署或从 SQLite 切换，按 [PostgreSQL 部署与恢复手册](postgresql.md) 完成独立配置、数据库准备、停写备份、导入与验证，再启动应用。标签发布器不自动导入 SQLite 数据。原 SQLite 文件与卷必须保留。
+PostgreSQL 首次部署或从 SQLite 切换，按 [PostgreSQL 部署与恢复手册](postgresql.md) 完成独立配置、数据库准备、停写备份、导入与验证，再启动应用。标签发布器不自动导入 SQLite 数据。保留至少一份校验过的 SQLite 一致性归档及迁移报告；不要删除仍保存应用报告的数据卷。
 
 PostgreSQL 模式固定加载两份环境文件及两份 Compose 文件；例如查看容器状态：
 
@@ -62,16 +62,16 @@ curl --fail http://127.0.0.1:8080/health
 
 `/ready` 必须返回 `status=ok, database=postgresql`。它由后端容器内访问；前端代理的页面 200 或 `/health` 不能替代数据库就绪检查。数据库端口不映射到宿主机；应用端口只绑定到 `127.0.0.1:8080`，不要把 PostgreSQL 或 FastAPI 的 `8001` 端口直接暴露到公网。
 
-以下基础 Compose 命令仅供**尚未配置 PostgreSQL 的 SQLite 新安装**使用，不是现有 PostgreSQL 生产实例的更新入口：
+新安装也必须配置 PostgreSQL，构建及启动命令为：
 
 ```bash
-docker compose --env-file .env.production build
-docker compose --env-file .env.production up -d backend frontend recommendation-refresh
-docker compose --env-file .env.production ps
+docker compose --env-file .env.production --env-file .env.postgresql -f docker-compose.yml -f docker-compose.postgresql.yml build
+docker compose --env-file .env.production --env-file .env.postgresql -f docker-compose.yml -f docker-compose.postgresql.yml up -d backend frontend recommendation-refresh
+docker compose --env-file .env.production --env-file .env.postgresql -f docker-compose.yml -f docker-compose.postgresql.yml ps
 curl --fail http://127.0.0.1:8080/health
 ```
 
-SQLite 新安装若需要带入开发机数据，只能在尚未启动应用、目标数据库不存在时复制一致性备份；不得覆盖现有卷中的原 SQLite。已有数据迁移到 PostgreSQL 使用上述导入工具，不把文件复制当作 PostgreSQL 导入。
+已有 SQLite 历史数据使用独立归档和导入工具迁移至空 PostgreSQL 库，不把文件复制当作 PostgreSQL 导入。
 
 首次部署缺少行情数据时，完成第 4 节的任务入口安装和数据库选择后，再通过受锁保护的日更入口采集：
 
@@ -121,7 +121,7 @@ sudo chmod 644 /etc/cron.d/limituplab-daily /etc/cron.d/limituplab-backup
 sudo systemctl restart cron
 ```
 
-收盘流水线在工作日北京时间 `16:00` 运行，并再次检查交易日历，因此节假日会跳过。备份任务每天 `03:25` 按所选数据库执行：PostgreSQL 生成 custom-format `pg_dump`、SHA256 校验文件并检查归档可读性，在 `/var/backups/limituplab/postgresql/` 保留最近 14 份通过校验的完整备份；SQLite 模式继续使用在线备份 API 并保留最近 14 份。日志位于 `/var/log/limituplab/`。原 SQLite 和历史备份不参与 PostgreSQL 轮换，发布专属备份也不参与日常轮换。
+收盘流水线在工作日北京时间 `16:00` 运行，并再次检查交易日历，因此节假日会跳过。备份任务每天 `03:25` 生成 PostgreSQL custom-format `pg_dump`、SHA256 校验文件并检查归档可读性，在 `/var/backups/limituplab/postgresql/` 保留最近 14 份通过校验的完整备份。日志位于 `/var/log/limituplab/`。历史 SQLite 归档和发布专属备份不参与日常轮换。
 
 需要实际执行任务时，手动入口与 cron 相同；先备份，再按需运行日更：
 
@@ -144,7 +144,7 @@ docker logs --tail=100 limituplab-frontend-1
 涨停池、炸板池分别在独立子进程中采集，默认每池 60 秒；可通过
 `LIMITUPLAB_AKSHARE_POOL_TIMEOUT_SECONDS` 设置有限正数。超时会终止并回收子进程，
 错误保留在 `source_errors` 中。即使已有缓存足够生成评级，采集失败仍会将日更标记为
-`partial`，避免误报成功。生产容器内的临时文件锁位于 `/tmp`，跨任务互斥由宿主机共享锁保证。
+`partial`，避免误报成功。业务任务使用 PostgreSQL 租约，部署与计划任务还共享宿主机发布锁；旧 `--lock-path` 参数仅兼容既有任务定义，不再建立文件锁。
 
 腾讯日线和东财分时回退也采用独立子进程，默认 60 秒，可通过
 `LIMITUPLAB_AKSHARE_KLINE_TIMEOUT_SECONDS` 调整。新浪分时优先接口保留原有 8 秒请求超时。
@@ -182,8 +182,8 @@ sudo python3 /usr/local/lib/limituplab/job.py daily-update --date 20260923 --max
 
 推荐使用 [标签自动部署流程](Tag_Deployment.md)：推送新的 `vX.Y.Z` 标签，
 Windows、Ubuntu 和 PostgreSQL 验证全部通过后，由服务器发布器持锁备份并上线。
-PostgreSQL 模式的应用与迁移服务使用精确版本镜像、完整 overlay 和 PostgreSQL 就绪检查；
-SQLite 模式仍走原兼容路径。旧安装需先安装经过审查的发布入口，再使用此流程。
+应用与迁移服务使用精确版本镜像、完整 overlay 和 PostgreSQL 就绪检查。
+旧安装需先迁移至 PostgreSQL 并安装经过审查的发布入口，再使用此流程。
 
 不要绕开共享锁直接 `git pull` 后更新生产容器。尤其不能在 PostgreSQL 部署中仅加载
 基础 Compose 并使用 `--remove-orphans`：这会把 PostgreSQL 容器视为未声明服务而移除。

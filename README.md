@@ -24,7 +24,7 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 
 当前阶段为 **V1.5：ReAct 交付与证据契约完善、Golden 粗评基线建立**。[V1.5 阶段里程碑](docs/V1.5_Milestone.md) 汇总 `v1.5.0` 的工作、验证结果、限制和下一步。Golden 已能辅助定位 Agent 问题，裁判可靠性验收仍未通过；自动结果需要保留待复核项。
 
-当前 Windows 工作区和远程单实例生产环境均已正式切换至 PostgreSQL，原 SQLite 文件和备份保留，不再接收正常业务的新写入。生产版本为 `v1.6.3`，ST/北交所研究范围修复、当日收盘补跑与实际接口/Agent 验收见 [v1.6.3 发布记录](deploy/incidents/2026-10-20-v1.6.3-relay-refresh.md)；首次迁移、重启持久化及备份恢复记录见 [生产切换验收](deploy/incidents/2026-10-19-postgresql-cutover.md) 和 [本地切换验收](docs/Local_PostgreSQL_Cutover.md)。其他工作区未配置 `LIMITUPLAB_DATABASE_URL` 时仍可使用 SQLite。操作方式见 [本地手册](deploy/local-postgresql.md) 与 [生产部署恢复手册](deploy/postgresql.md)；多实例部署尚未验收。
+当前 Windows 工作区和远程单实例生产环境均已正式切换至 PostgreSQL。本地旧 SQLite 运行文件已清理，迁移前一致性归档与迁移工具保留；生产原 SQLite 文件未在本次操作中删除。清理与验证见 [SQLite 退役验收](docs/SQLite_Retirement.md)。生产版本为 `v1.6.3`，ST/北交所研究范围修复、当日收盘补跑与实际接口/Agent 验收见 [v1.6.3 发布记录](deploy/incidents/2026-10-20-v1.6.3-relay-refresh.md)；首次迁移、重启持久化及备份恢复记录见 [生产切换验收](deploy/incidents/2026-10-19-postgresql-cutover.md) 和 [本地切换验收](docs/Local_PostgreSQL_Cutover.md)。当前代码要求显式配置 `LIMITUPLAB_DATABASE_URL`，SQLite 仅保留历史归档与迁移读取；本次清理不代表已发布到生产。操作方式见 [本地手册](deploy/local-postgresql.md) 与 [生产部署恢复手册](deploy/postgresql.md)；多实例部署尚未验收。
 
 离线研究、维护备份、质量工单及 Golden 评测的 PostgreSQL 路径已补齐，通过禁止 SQLite 连接的本地验证，并随 `v1.6.2` 发布，见 [SQLite 依赖清理验收](docs/PostgreSQL_Independence.md)。Golden 实时评测仍须单独配置评测库，不使用生产业务库。
 
@@ -113,7 +113,7 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 
 
 
-系统在所选数据库（默认 SQLite，可配置 PostgreSQL）保留原始会话和滚动记忆，但生产 ReAct 默认不重放历史原文或历史回答证据。Input Reviewer 识别为 `follow_up` 时，才提取历史股票名称/代码与上一轮实际工具参数，用于理解省略条件；本轮明确条件优先，事实必须重新查询。
+系统在 PostgreSQL 保留原始会话和滚动记忆，但生产 ReAct 默认不重放历史原文或历史回答证据。Input Reviewer 识别为 `follow_up` 时，才提取历史股票名称/代码与上一轮实际工具参数，用于理解省略条件；本轮明确条件优先，事实必须重新查询。
 
 Memory 按 `owner_id + session_id` 隔离，使用 `last_message_id` 作为增量游标，随会话永久删除。默认只向模型提供偏好约束；追问时再补充研究目标、股票、题材、日期范围和未解问题。这些字段都不能作为市场证据或自动继承为本轮待办，也不会跨会话建立用户画像。
 
@@ -143,7 +143,7 @@ Memory 按 `owner_id + session_id` 隔离，使用 `last_message_id` 作为增�
 ```mermaid
 flowchart LR
     A[AKShare / Tonghuashun / Eastmoney / CNInfo / Tencent / Sina] --> B[Daily Data Pipeline]
-    B --> C[(PostgreSQL / SQLite compatibility)]
+    B --> C[(PostgreSQL)]
 
     C --> D[Facts Builder]
     D --> E[Rating Engine]
@@ -215,7 +215,7 @@ sequenceDiagram
 - Python 3.13
 - FastAPI + Uvicorn
 - Pydantic
-- PostgreSQL 18 + SQLAlchemy / psycopg 3；保留 SQLite 兼容
+- PostgreSQL 18 + SQLAlchemy / psycopg 3；历史 SQLite 归档使用独立迁移工具读取
 - AKShare
 - Requests + BeautifulSoup
 - LangChain Core + LangChain OpenAI（消息、原生工具绑定和模型适配）
@@ -251,7 +251,7 @@ LimitUpLab/
 │   ├── app/
 │   │   ├── agents/          # ReAct runtime、工具/证据契约、评分与 Review
 │   │   ├── collectors/      # 涨停、K 线、板块、指数和扩展数据采集
-│   │   ├── repositories/    # PostgreSQL / SQLite Repository
+│   │   ├── repositories/    # PostgreSQL Repository
 │   │   ├── routers/         # FastAPI 路由
 │   │   └── services/        # 评分、检索、回测、Evaluation 和健康检查
 │   ├── scripts/             # 数据同步、回填和启动脚本
@@ -327,19 +327,18 @@ LIMITUPLAB_AGENT_MAX_CONCURRENT_GLOBAL=4
 
 如需记录估算金额并启用每日成本上限，再按当前模型官方价格填写每百万 token 单价。价格未配置时仍记录供应商返回的真实 token，但成本保持为 0，不会使用不可靠的字符数估算。
 
-### 3. SQLite 单机并发配置
+### 3. PostgreSQL 数据库配置
 
-所有仓储统一通过数据库连接层启用 WAL、外键约束、5 秒忙等待、NORMAL 同步级别和有界锁冲突重试。Schema 使用 `PRAGMA user_version` 管理，并在 `BEGIN IMMEDIATE` 事务中只初始化一次，普通读请求不再重复执行整套 DDL 和修复写入。
+业务、研究、维护与测试统一使用 PostgreSQL。启动必须配置数据库 URL；缺失配置直接失败。Schema 由 Alembic 管理，应用只检查版本，不在请求中建表。历史 SQLite 归档与导入工具独立保留。
 
 ```dotenv
-LIMITUPLAB_SQLITE_WAL_ENABLED=true
-LIMITUPLAB_SQLITE_BUSY_TIMEOUT_MS=5000
-LIMITUPLAB_SQLITE_LOCK_RETRY_ATTEMPTS=3
-LIMITUPLAB_SQLITE_LOCK_RETRY_BASE_DELAY_SECONDS=0.05
-LIMITUPLAB_SQLITE_WAL_AUTOCHECKPOINT_PAGES=1000
+LIMITUPLAB_DATABASE_URL=postgresql+psycopg://limituplab:REPLACE_WITH_PASSWORD@127.0.0.1:55433/limituplab
+LIMITUPLAB_DB_POOL_SIZE=5
+LIMITUPLAB_DB_MAX_OVERFLOW=5
+LIMITUPLAB_DATA_DIRECTORY=backend/data
 ```
 
-该配置适合单机 Docker Volume。数据库繁忙超过等待与重试上限后仍会明确失败，不会无限阻塞请求；需要多实例写入时应迁移 PostgreSQL，不能通过共享 SQLite 文件替代。
+本地初始化与服务启动见 [本地手册](deploy/local-postgresql.md)。回归使用独立的 `LIMITUPLAB_TEST_DATABASE_URL` 与 `LIMITUPLAB_TEST_EVAL_DATABASE_URL`，禁止指向业务库；Golden 实际评测使用独立 `LIMITUPLAB_EVAL_DATABASE_URL`。连接池与事务锁保护现有单实例契约，多实例吞吐仍需独立验收。
 
 如需本地代理：
 
@@ -581,4 +580,4 @@ npm.cmd run build
 - 历史人气和龙虎榜时点数据无法在所有日期完整重建。
 - 日 K 统一使用未复权价格；同花顺历史行情成交量由“股”标准化为“手”，来源和成交额随行持久化。
 - Web 搜索内容被视为外部不可信证据，只用于解释增强，不直接决定评分。
-- 生产采用 PostgreSQL 单实例应用部署；SQLite 兼容仍保留，多 API 副本与并发吞吐需要独立验收。
+- 生产采用 PostgreSQL 单实例应用部署；当前代码已移除 SQLite 运行兼容，多 API 副本与并发吞吐需要独立验收。

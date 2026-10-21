@@ -1,9 +1,9 @@
 # PostgreSQL schema and retained SQLite migration
 
 PostgreSQL schema changes are deploy-time Alembic revisions. Application startup
-checks the revision and never creates or upgrades PostgreSQL tables. SQLite
-remains available through the existing database-path setting; the importer opens
-its source read-only and never changes or deletes that database.
+checks the revision and never creates or upgrades PostgreSQL tables. Runtime
+storage requires a PostgreSQL URL. The retained SQLite importer opens its source
+read-only and never changes or deletes that archive.
 
 The frozen `app/storage/schema_v0001.json` describes all 41 existing business
 tables. Do not regenerate it when application models change: add a new Alembic
@@ -57,11 +57,10 @@ They exercise row order, literal JSON/hash preservation, identity continuation,
 foreign-key rollback, immutable evidence and champion uniqueness.
 
 After import, check the report, run application smoke tests, and only then reopen
-writes. Before PostgreSQL receives new writes, revert application configuration
-to the retained SQLite database if necessary. After it receives new writes,
-SQLite is no longer current: stop writes and reconcile those records before any
-rollback. This tool intentionally provides no destructive downgrade or automatic
-reverse synchronization. PostgreSQL backup/restore is a separate operational step.
+writes. The current application cannot run against SQLite; retained archives are
+historical evidence and exclude later PostgreSQL writes. Recovery uses a
+PostgreSQL backup restored to a separate empty database and independently verified.
+This tool provides no destructive downgrade or automatic reverse synchronization.
 
 ## Local rehearsal evidence, 2026-10-19
 

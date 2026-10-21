@@ -31,17 +31,17 @@ git push origin v1.3.1
 - 北京时间 08:30–09:35 禁止开始切换；构建和任务等待后再次检查。命中窗口时失败，稍后在同一标签工作流选择 Re-run failed jobs，不需要移动标签。
 - 在 `/var/lib/limituplab-deploy/releases/<SHA>` 创建独立 worktree，并使用 SHA 镜像标签构建。只引用服务器原 `.env.production`，构建上下文排除该文件；构建/拉取失败不停止旧应用。
 - 前端镜像将公开静态目录权限固定为 `0755`、文件固定为 `0644`，避免发布进程的 `umask(077)` 经 Vite 复制到图标等 public 资源；前端容器健康检查同时验证 `/health` 和 `/favicon.svg` 可访问。
-- 切换时创建 `/opt/LimitUpLab/.maintenance`，公网 Nginx 返回 503；内部 8080 保留健康检查通道。停止刷新、前端和后端后，按明确的数据库模式创建专属发布备份：SQLite 使用在线备份 API 和完整性校验，PostgreSQL 使用 custom-format `pg_dump`、SHA256 和归档可读性校验。
+- 切换时创建 `/opt/LimitUpLab/.maintenance`，公网 Nginx 返回 503；内部 8080 保留健康检查通道。停止刷新、前端和后端后，创建专属 PostgreSQL 发布备份，使用 custom-format `pg_dump`、SHA256 和归档可读性校验。
 - 发布备份在 `/var/backups/limituplab/deployments/<运行标识>/`，不进入每日最近 14 份备份的轮换集合。生产数据库卷 `limituplab-data` 不删除。
 - 新前后端容器健康、内部代理及页面路由通过，刷新进程启动并保持运行后，更新 local 镜像引用、快进生产 main，记录 `current.json` 并解除维护。日更与定时备份继续使用当前 local 镜像。
-- Schema 检查和备份容器以可写方式挂载数据卷，但 SQLite 连接固定使用 `mode=ro`。这是为了允许 SQLite 创建或读取 WAL/SHM 协调文件；把 Docker volume 标成 `:ro` 会导致数据库文件权限正确时仍报 `unable to open database file`，不得用 `immutable=1` 忽略可能尚未 checkpoint 的 WAL。
+- Schema 检查使用 PostgreSQL 只读结构导出，备份使用数据库客户端。历史 SQLite 归档不参与发布；首次导入保留独立迁移工具。
 - SSH 断开不主动中断服务端部署；客户端失败后先查服务器日志和状态，不立即启动第二次部署。部署中途重启主机、进程被强杀或数据库结构变化后的失败需要人工恢复，不能宣称所有故障都能自动回滚。
 
 ## PostgreSQL 模式
 
 首次迁移按 [PostgreSQL 部署说明](postgresql.md) 单独执行停写、备份、导入与验收。标签发布器只负责后续版本切换，不会自动把 SQLite 业务数据导入 PostgreSQL，也不会删除原数据库卷。
 
-服务器使用 `/var/lib/limituplab-deploy/database.json` 明确选择引擎，切换完成后写入 `{"engine":"postgresql"}`，并同步 `current.json` 的 `engine` 字段。两处更新必须在同一共享发布锁和维护保护下进行。旧 SQLite 部署可以没有这两个字段；已记录 PostgreSQL 后，模式文件缺失、两处记录不一致或运行后端引擎不匹配均阻止发布和计划任务，不能静默回到 SQLite。
+服务器使用 `/var/lib/limituplab-deploy/database.json` 显式记录 `{"engine":"postgresql"}`，并同步 `current.json` 的 `engine` 字段。两处更新必须在同一共享发布锁和维护保护下进行。模式文件缺失、声明 SQLite、两处记录不一致或运行后端引擎不匹配均阻止发布和计划任务。旧 SQLite 安装必须先完成迁移，当前发布器不再支持 SQLite 模式。
 
 PostgreSQL 发布固定加载 `/opt/LimitUpLab/.env.production`、`/opt/LimitUpLab/.env.postgresql` 与目标版本的 `docker-compose.postgresql.yml`；配置或 overlay 缺失时失败。配置不复制进发布目录、不写入日志和 Git。`postgres-migrate` 使用该次发布的精确后端镜像，应用启动前完成 Alembic 迁移。
 

@@ -1,8 +1,9 @@
 # PostgreSQL deployment and recovery
 
-The default `docker-compose.yml` and SQLite release mode remain available.
-PostgreSQL is an explicit overlay and uses a separate named volume. The reviewed
-release and scheduled-job helpers support both modes with an explicit server marker.
+Application, release and scheduled-job helpers require PostgreSQL. The base
+`docker-compose.yml` requires an explicit application URL; combine it with the
+PostgreSQL overlay to run the managed database and migration service using their
+separate named volume. There is no runtime SQLite mode or missing-URL fallback.
 This runbook prepares shared persistence; load-balancer behavior and rolling
 multi-instance deployment still require their own acceptance test.
 
@@ -53,9 +54,11 @@ docker compose --env-file .env.postgresql -f docker-compose.yml -f docker-compos
 ```
 
 PostgreSQL is not exposed on a host port. The `limituplab-postgres` volume stores
-its data; the existing `limituplab-data` volume, original SQLite database and
-SQLite backup files remain intact. Never use `docker compose down -v` during
-migration or recovery.
+its data. The existing `limituplab-data` volume still stores reports and migration
+evidence and must not be removed as part of SQLite cleanup. Retain a verified
+consistent SQLite archive; runtime-file retirement is tracked in
+[SQLite retirement](../docs/SQLite_Retirement.md). Never use
+`docker compose down -v` during migration or recovery.
 
 PostgreSQL 18's official image stores data under `/var/lib/postgresql/18/docker`,
 so the volume is mounted at `/var/lib/postgresql`, following the
@@ -67,15 +70,17 @@ upgrade entry point serializes competing deploy-time migrations. Requests only
 verify the schema revision. Future schema changes should use compatible additive
 migrations before rolling out code that requires them.
 
-## Import and cut over
+## Import retained SQLite archives
 
 Perform a rehearsal against a separate empty PostgreSQL database. Follow
 `backend/migrations/README.md` for table inventory, legacy-table acknowledgments,
 and import verification. For final cutover:
 
 1. Stop public write traffic and all SQLite-writing workers and scheduled jobs.
-2. Wait for active runs to finish or record their checkpoints. Create a consistent
-   SQLite backup using the existing backup command and preserve that backup.
+2. Wait for active runs to finish or record their checkpoints. Preserve a
+   consistent SQLite archive with `scripts/archive_sqlite.py --source <source>
+   --output-dir <archive-directory>`, which uses SQLite's backup API. The general
+   backup command backs up PostgreSQL; it does not open a SQLite runtime database.
 3. Run the importer against the empty PostgreSQL target. The following command
    mounts the retained SQLite volume via the existing backend service:
 
@@ -122,7 +127,7 @@ Keep the real PostgreSQL settings in `/opt/LimitUpLab/.env.postgresql` with
 restricted permissions. The release helpers always load both `.env.production`
 and `.env.postgresql` plus the PostgreSQL overlay in this mode. Missing settings,
 an unsupported release, a conflicting marker or a different running backend
-engine blocks the operation instead of falling back to SQLite.
+engine blocks the operation. SQLite markers are not accepted by current helpers.
 
 Subsequent tag deployments pin `postgres-migrate` to the release's backend image,
 take a verified deployment-specific PostgreSQL archive, compare schema hashes
@@ -163,10 +168,11 @@ sequences, and runs in a single transaction. It uses neither `--clean` nor
 `--create`; it cannot erase an existing deployment. After restore, compare the
 relevant business counts/hashes and run the same Agent/readiness checks.
 
-Before PostgreSQL accepts new writes, rollback can restore the original SQLite
-configuration. Once it accepts writes, retained SQLite is stale: stop writes and
-reconcile the new records before attempting a reverse cutover. Restoring a
-PostgreSQL backup into a new database is the preferred recovery path.
+Retained SQLite is a migration-time archive and excludes subsequent writes.
+Current application code cannot run against it. Recover by restoring a
+PostgreSQL backup into a new empty database, verify its contents and readiness,
+then explicitly switch the application URL. This procedure does not overwrite
+the running database or reinterpret old SQLite as current data.
 
 ## Prepare additional API instances
 

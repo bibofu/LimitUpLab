@@ -177,7 +177,7 @@ K线采用合成的工作日日历，不能用来证明真实交易日历正确�
 
 执行顺序：
 
-1. 在独立 PostgreSQL 评测库中为每个 case/trial 建立新的随机 schema；未选择 PostgreSQL 的离线兼容环境仍可使用独立 SQLite 文件。
+1. 在独立 PostgreSQL 评测库中为每个 case/trial 建立新的随机 schema；不再创建 SQLite 会话文件。
 2. 创建稳定的会话标识；不同 session 分区互不共享消息。
 3. 只为需要的用例加载标准前置消息或记忆。
 4. 通过生产 `prepare_session_context` 读取和压缩上下文。
@@ -315,9 +315,9 @@ v6 两轮合计 48/50 场景、230/232 判项匹配，无未知项。剩余的�
 
 第一次完整运行包含保留集时，会消耗这批题目的独立验证价值。后续针对报告改进时使用开发集；正式发布前应补充由其他维护者保管的保留场景。
 
-使用 PostgreSQL 时，先创建与业务库名称不同的独立评测库，例如 `limituplab_eval`，配置 `LIMITUPLAB_EVAL_DATABASE_URL`（模板见 `backend/.env.example`）。评测账号需要在该库创建 schema 的权限。每个 case/trial 新建 `golden_eval_<uuid>` schema，保留会话与 journal 供复盘；输出目录的 `sessions/.../storage.json` 记录 schema，manifest 记录存储后端及不含凭据的目标指纹。
+运行真实模型评测前，创建与业务库名称不同的独立 PostgreSQL 评测库，例如 `limituplab_eval`，配置 `LIMITUPLAB_EVAL_DATABASE_URL`（模板见 `backend/.env.example`）。评测账号需要在该库创建 schema 的权限。每个 case/trial 新建 `golden_eval_<uuid>` schema，保留会话与 journal 供复盘；输出目录的 `sessions/.../storage.json` 记录 schema，manifest 记录存储后端及不含凭据的目标指纹。
 
-业务已配置 PostgreSQL 却缺少评测 URL 时明确报错，不访问业务库，也不隐式回退 SQLite。评测库与业务库同名时，即使更换主机、用户或 schema 也会拒绝，避免连接别名绕过隔离。旧 SQLite 评测原件继续保留；存储后端或目标数据库变化不能续跑旧 manifest，应另建输出目录。评测 schema 不自动删除，清理前应按对应 `storage.json` 核对归属与保留需求。
+评测 URL 缺失或无效时明确报错，不访问业务库，也不回退 SQLite。评测库与业务库同名时，即使更换主机、用户或 schema 也会拒绝，避免连接别名绕过隔离。旧 SQLite 评测原件继续保留；存储后端或目标数据库变化不能续跑旧 manifest，应另建输出目录。评测 schema 不自动删除，清理前应按对应 `storage.json` 核对归属与保留需求。
 
 命令从仓库根目录执行：
 
@@ -378,7 +378,7 @@ Markdown 报告展示逐 trial 结果、维度表和裁判阶段异常，家族�
 
 记录：数据与代码hash、提交号、模型与依赖版本、时钟、输入、输出、工具轨迹、证据、流式草稿、摘要状态、判分理由、Agent与裁判用量。API Key和环境文件不进入报告。
 
-生成报告与临时数据库放在被 Git 忽略的 `output/golden/` 下，不提交仓库。
+生成报告与存储归属记录放在被 Git 忽略的 `output/golden/` 下，会话数据位于独立评测库的 schema；均不提交仓库。历史 SQLite 评测原件保留在原输出目录。
 
 ## 第十步：建立后续回归流程
 
