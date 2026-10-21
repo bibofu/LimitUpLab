@@ -11,7 +11,7 @@ from zoneinfo import ZoneInfo
 
 from app.collectors.network import without_proxy
 from app.models import StockNewsFacts, StockNewsItem
-from app.repositories.stock_news_repository import SQLiteStockNewsRepository
+from app.repositories.stock_news_repository import StockNewsRepository
 
 
 StockNewsLoader = Callable[[str, str, datetime], list[StockNewsItem]]
@@ -26,7 +26,7 @@ def collect_stock_news(
     name: str,
     days: int = 7,
     limit: int = 10,
-    repository: SQLiteStockNewsRepository | None = None,
+    repository: StockNewsRepository | None = None,
     loaders: Mapping[str, StockNewsLoader] | None = None,
     now: datetime | None = None,
 ) -> StockNewsFacts:
@@ -40,7 +40,7 @@ def collect_stock_news(
     bounded_limit = max(1, min(int(limit), 20))
     current_time = _as_shanghai_time(now or datetime.now(_SHANGHAI))
     published_since = current_time - timedelta(days=bounded_days)
-    active_repository = repository or SQLiteStockNewsRepository()
+    active_repository = repository or StockNewsRepository()
     available = loaders or {_EASTMONEY_SOURCE: _load_eastmoney_stock_news}
 
     if loaders is None and all(

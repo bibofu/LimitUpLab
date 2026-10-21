@@ -10,7 +10,7 @@ from typing import Any
 from app.agents.query_contract import MARKET_SEGMENT_PREFIXES
 from app.config import env_bool
 from app.models import ChatSessionMemory, ChatSessionMessage
-from app.repositories.chat_memory_repository import SQLiteChatMemoryRepository
+from app.repositories.chat_memory_repository import ChatMemoryRepository
 from app.services.llm_provider import (
     LLMProvider,
     NativeFunctionCallingError,
@@ -38,7 +38,7 @@ def prepare_session_context(
     session_id: str,
     owner_id: str,
     messages: list[ChatSessionMessage],
-    repository: SQLiteChatMemoryRepository | None = None,
+    repository: ChatMemoryRepository | None = None,
     llm_provider: LLMProvider | None = None,
 ) -> tuple[list[ChatSessionMessage], ChatSessionMemory | None]:
     """Return bounded raw context and memory without making chat depend on memory."""
@@ -46,7 +46,7 @@ def prepare_session_context(
     # Memory improves continuity but is optional. A summarization/storage failure
     # falls back to existing memory or recent messages instead of blocking chat.
 
-    memory_repository = repository or SQLiteChatMemoryRepository()
+    memory_repository = repository or ChatMemoryRepository()
     try:
         memory = refresh_session_memory(
             session_id=session_id,
@@ -68,12 +68,12 @@ def refresh_session_memory(
     session_id: str,
     owner_id: str,
     messages: list[ChatSessionMessage],
-    repository: SQLiteChatMemoryRepository | None = None,
+    repository: ChatMemoryRepository | None = None,
     llm_provider: LLMProvider | None = None,
 ) -> ChatSessionMemory | None:
     """Refresh the rolling summary when enough messages leave the raw window."""
 
-    memory_repository = repository or SQLiteChatMemoryRepository()
+    memory_repository = repository or ChatMemoryRepository()
     existing = memory_repository.get_memory(session_id, owner_id=owner_id)
     if not env_bool("LIMITUPLAB_SESSION_MEMORY_ENABLED", True):
         return existing

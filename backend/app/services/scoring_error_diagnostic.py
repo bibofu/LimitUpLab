@@ -17,7 +17,7 @@ from app.models import (
     ScoringFactorErrorDiagnostic,
     ScoringPolicy,
 )
-from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
+from app.repositories import FirstBoardRepository, ScoringPolicyRepository
 from app.services.promotion_labels import resolve_first_board_promotion_labels
 from app.services.scoring_policy import FACTOR_KEYS_BY_NAME, FACTOR_NAMES
 
@@ -41,8 +41,8 @@ def build_scoring_error_diagnostic(
     events: list[LimitUpEvent],
     start_date: date,
     end_date: date,
-    first_board_repository: SQLiteFirstBoardRepository | None = None,
-    policy_repository: SQLiteScoringPolicyRepository | None = None,
+    first_board_repository: FirstBoardRepository | None = None,
+    policy_repository: ScoringPolicyRepository | None = None,
     scoring_policy: ScoringPolicy | None = None,
     top_k: int = 10,
     sample_limit: int = 10,
@@ -53,9 +53,9 @@ def build_scoring_error_diagnostic(
         raise ValueError("start_date must be on or before end_date")
     bounded_top_k = max(1, min(top_k, 30))
     bounded_sample_limit = max(0, min(sample_limit, 30))
-    repository = first_board_repository or SQLiteFirstBoardRepository()
-    registry = policy_repository or SQLiteScoringPolicyRepository(
-        repository.database_path
+    repository = first_board_repository or FirstBoardRepository()
+    registry = policy_repository or ScoringPolicyRepository(
+        repository.database_url
     )
     policy = scoring_policy or registry.ensure_default_policy()
     outcomes = {

@@ -22,7 +22,7 @@ from app.models import (
     ScoringPolicyRegistryResponse,
     ScoringWalkForwardFold,
 )
-from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
+from app.repositories import FirstBoardRepository, ScoringPolicyRepository
 from app.services.promotion_labels import resolve_first_board_promotion_labels
 from app.services.scoring_policy import (
     FACTOR_KEYS_BY_NAME,
@@ -57,8 +57,8 @@ def optimize_scoring_policy(
     events: list[LimitUpEvent],
     start_date: date,
     end_date: date,
-    first_board_repository: SQLiteFirstBoardRepository | None = None,
-    policy_repository: SQLiteScoringPolicyRepository | None = None,
+    first_board_repository: FirstBoardRepository | None = None,
+    policy_repository: ScoringPolicyRepository | None = None,
     top_k: int = 10,
     activate_if_eligible: bool = False,
     minimum_trade_dates: int = MIN_TRADE_DATES,
@@ -66,8 +66,8 @@ def optimize_scoring_policy(
 ) -> ScoringPolicyOptimizationResponse:
     """Generate, validate and register one bounded Challenger policy."""
 
-    repository = first_board_repository or SQLiteFirstBoardRepository()
-    registry = policy_repository or SQLiteScoringPolicyRepository(repository.database_path)
+    repository = first_board_repository or FirstBoardRepository()
+    registry = policy_repository or ScoringPolicyRepository(repository.database_url)
     champion = registry.ensure_default_policy()
     validate_policy_factor_keys(champion)
 
@@ -232,7 +232,7 @@ def evaluate_scoring_policy(
     outcomes: dict[tuple[date, str], FirstBoardOutcome],
     promotion_labels: dict[tuple[date, str], bool] | None = None,
     policy: ScoringPolicy,
-    repository: SQLiteFirstBoardRepository,
+    repository: FirstBoardRepository,
     top_k: int = 10,
 ) -> ScoringPolicyMetrics:
     """Evaluate Top-K ranking quality without using future dates for fitting."""
@@ -338,13 +338,13 @@ def evaluate_scoring_policy(
 
 
 def build_scoring_policy_registry(
-    repository: SQLiteScoringPolicyRepository | None = None,
+    repository: ScoringPolicyRepository | None = None,
     *,
     limit: int = 20,
 ) -> ScoringPolicyRegistryResponse:
     """Return the active Champion and recent policy history."""
 
-    registry = repository or SQLiteScoringPolicyRepository()
+    registry = repository or ScoringPolicyRepository()
     champion = registry.ensure_default_policy()
     return ScoringPolicyRegistryResponse(
         champion=champion,
@@ -360,7 +360,7 @@ def _factor_target_correlations(
     outcomes: dict[tuple[date, str], FirstBoardOutcome],
     promotion_labels: dict[tuple[date, str], bool],
     policy: ScoringPolicy,
-    repository: SQLiteFirstBoardRepository,
+    repository: FirstBoardRepository,
 ) -> dict[str, dict[str, float]]:
     """Estimate robust factor direction for return, promotion and downside safety."""
 

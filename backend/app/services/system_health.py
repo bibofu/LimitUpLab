@@ -10,7 +10,7 @@ from zoneinfo import ZoneInfo
 
 from app.config import env_bool
 from app.models import AgentSystemHealthResponse, LimitUpEvent
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import FirstBoardRepository
 from app.services.analysis import latest_trade_date
 from app.services.data_health import build_agent_data_health
 
@@ -22,7 +22,7 @@ CN_TZ = ZoneInfo("Asia/Shanghai")
 def build_agent_system_health(
     events: list[LimitUpEvent],
     *,
-    first_board_repository: SQLiteFirstBoardRepository | None = None,
+    first_board_repository: FirstBoardRepository | None = None,
 ) -> AgentSystemHealthResponse:
     """Build local runtime health status for development and demos."""
 
@@ -34,7 +34,7 @@ def build_agent_system_health(
 
     data_health = build_agent_data_health(
         events=events,
-        first_board_repository=first_board_repository or SQLiteFirstBoardRepository(),
+        first_board_repository=first_board_repository or FirstBoardRepository(),
         trade_date=latest_date or expected_date,
     )
     llm_enabled = env_bool("LIMITUPLAB_LLM_ENABLED")

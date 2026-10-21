@@ -54,8 +54,8 @@ class DatabaseRequestLease:
 class DatabaseAgentRateLimiter:
     """Admission serializes quota reservation, including daily count races."""
 
-    def __init__(self, database_path=None):
-        self.database_path = database_path
+    def __init__(self, database_url=None):
+        self.database_url = database_url
         self._lock = threading.Lock()
         self._leases = {}
 
@@ -66,7 +66,7 @@ class DatabaseAgentRateLimiter:
         config = load_agent_rate_limit_config()
         if not config.enabled:
             return AgentRequestLease(self, owner_id, enabled=False, daily_remaining=config.requests_per_day)
-        store = LeaseStore(self.database_path)
+        store = LeaseStore(self.database_url)
         rejection = None
         token = uuid4().hex
         with store.connection() as db:
@@ -126,7 +126,7 @@ class DatabaseAgentRateLimiter:
         return lease
 
     def snapshot(self):
-        store = LeaseStore(self.database_path)
+        store = LeaseStore(self.database_url)
         with store.connection() as db:
             now = database_now(db)
             row = db.execute("""SELECT COUNT(*),COUNT(DISTINCT owner_id)

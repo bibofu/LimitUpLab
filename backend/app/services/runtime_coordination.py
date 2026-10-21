@@ -5,8 +5,7 @@ from dataclasses import dataclass, field
 import threading
 from uuid import uuid4
 
-from app.database import begin_write, connect, get_database_path, initialize_database, is_postgres
-from app.storage.postgres import configured_url
+from app.database import begin_write, connect, get_database_url, initialize_database
 
 
 class LeaseLost(RuntimeError):
@@ -15,51 +14,23 @@ class LeaseLost(RuntimeError):
 
 def database_now(db):
     """Use the database clock so worker host clock skew cannot extend a lease."""
-    sql = ("SELECT EXTRACT(EPOCH FROM clock_timestamp())" if is_postgres(db)
-           else "SELECT (julianday('now') - 2440587.5) * 86400.0")
-    return float(db.execute(sql).fetchone()[0])
+    return float(db.execute("SELECT EXTRACT(EPOCH FROM clock_timestamp())").fetchone()[0])
 
 
 def initialize_coordination_schema(db):
-    """SQLite compatibility; PostgreSQL tables are created by Alembic only."""
-    if is_postgres(db):
-        return
-    db.executescript("""
-        CREATE TABLE IF NOT EXISTS runtime_leases (
-            name TEXT PRIMARY KEY, owner_token TEXT NOT NULL,
-            fence INTEGER NOT NULL, expires_at REAL NOT NULL
-        );
-        CREATE TABLE IF NOT EXISTS agent_request_attempts (
-            attempt_id TEXT PRIMARY KEY, owner_id TEXT NOT NULL,
-            ip_address TEXT NOT NULL, attempted_at REAL NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS agent_attempt_time ON agent_request_attempts(attempted_at);
-        CREATE INDEX IF NOT EXISTS agent_attempt_owner ON agent_request_attempts(owner_id, attempted_at);
-        CREATE INDEX IF NOT EXISTS agent_attempt_ip ON agent_request_attempts(ip_address, attempted_at);
-        CREATE TABLE IF NOT EXISTS agent_request_slots (
-            token TEXT PRIMARY KEY, owner_id TEXT NOT NULL, expires_at REAL NOT NULL
-        );
-        CREATE INDEX IF NOT EXISTS agent_slot_expiry ON agent_request_slots(expires_at);
-        CREATE INDEX IF NOT EXISTS agent_slot_owner ON agent_request_slots(owner_id);
-        CREATE TABLE IF NOT EXISTS agent_request_days (
-            owner_id TEXT NOT NULL, day_key TEXT NOT NULL, request_count INTEGER NOT NULL,
-            PRIMARY KEY(owner_id, day_key)
-        );
-    """)
+    """Check the Alembic schema without applying request-time DDL."""
+    initialize_database(db)
 
 
 class LeaseStore:
-    def __init__(self, database_path=None):
-        self.database_url = (configured_url() or None) if database_path is None else None
-        self.database_path = database_path if database_path is not None else (
-            None if self.database_url else get_database_path())
+    def __init__(self, database_url: str | None = None):
+        self.database_url = get_database_url(database_url)
         with self.connection() as db:
-            initialize_database(db)
             initialize_coordination_schema(db)
 
     @contextmanager
     def connection(self):
-        db = connect(self.database_path, database_url=self.database_url)
+        db = connect(self.database_url)
         try:
             with db:
                 yield db

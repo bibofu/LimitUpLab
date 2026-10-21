@@ -25,7 +25,7 @@ from app.models import (
     StockKLineFacts,
     StockPositionAssessment,
 )
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import FirstBoardRepository
 from app.services.stock_position import classify_stock_position
 from app.services.market_data_provider import (
     collect_preferred_stock_kline,
@@ -48,7 +48,7 @@ def load_stock_intraday_bars(
     symbol: str,
     trade_date: date,
     period: int,
-    repository: SQLiteFirstBoardRepository | None = None,
+    repository: FirstBoardRepository | None = None,
     collector: IntradayCollector = collect_stock_intraday_kline,
 ) -> list[StockIntradayKLineBar]:
     """Return persistent local intraday bars and coalesce cold cache fills."""
@@ -56,7 +56,7 @@ def load_stock_intraday_bars(
     if not (1 <= period <= 60):
         raise ValueError("period must be between 1 and 60")
     normalized_symbol = _normalize_cache_symbol(symbol)
-    active_repository = repository or SQLiteFirstBoardRepository()
+    active_repository = repository or FirstBoardRepository()
     cached = active_repository.list_intraday_bars(
         symbol=normalized_symbol,
         trade_date=trade_date,
@@ -95,7 +95,7 @@ def load_stock_intraday_history(
     trade_dates: list[date],
     period: int,
     daily_bars: list[StockKLineBar],
-    repository: SQLiteFirstBoardRepository | None = None,
+    repository: FirstBoardRepository | None = None,
     collector: IntradayCollector = collect_stock_intraday_kline,
 ) -> StockIntradayHistoryResponse:
     """Load several completed sessions concurrently while preserving day-level errors."""
@@ -111,7 +111,7 @@ def load_stock_intraday_history(
     requested_dates = sorted(set(trade_dates))
     if len(requested_dates) != len(trade_dates):
         raise ValueError("trade_dates must not contain duplicates")
-    active_repository = repository or SQLiteFirstBoardRepository()
+    active_repository = repository or FirstBoardRepository()
     # The key compares trade date.
     closes = {
         item.trade_date: item.close
@@ -171,7 +171,7 @@ def load_stock_kline_bars(
     symbol: str,
     days: int,
     end_date: date,
-    repository: SQLiteFirstBoardRepository | None = None,
+    repository: FirstBoardRepository | None = None,
     history_collector: HistoryCollector = collect_preferred_stock_kline,
     spot_collector: SpotCollector = collect_preferred_stock_spot_klines,
 ) -> list[StockKLineBar]:
@@ -179,7 +179,7 @@ def load_stock_kline_bars(
 
     if not (1 <= days <= 125):
         raise ValueError("days must be between 1 and 125")
-    active_repository = repository or SQLiteFirstBoardRepository()
+    active_repository = repository or FirstBoardRepository()
     cached = _cached_bars(active_repository, symbol, end_date)
     if _cache_can_serve(cached, days, end_date) or (
         cached and _recent_refresh_covers(symbol, end_date, days)
@@ -240,7 +240,7 @@ def load_stock_detail_market_data(
     days: int,
     end_date: date,
     position_trade_date: date | None = None,
-    repository: SQLiteFirstBoardRepository | None = None,
+    repository: FirstBoardRepository | None = None,
     history_collector: HistoryCollector = collect_preferred_stock_kline,
     spot_collector: SpotCollector = collect_preferred_stock_spot_klines,
 ) -> StockDetailMarketData:
@@ -248,7 +248,7 @@ def load_stock_detail_market_data(
 
     if not (1 <= days <= 60):
         raise ValueError("days must be between 1 and 60")
-    active_repository = repository or SQLiteFirstBoardRepository()
+    active_repository = repository or FirstBoardRepository()
     position = None
     if position_trade_date is not None:
         enrichment = active_repository.get_enrichment(symbol, position_trade_date)
@@ -302,13 +302,13 @@ def load_stock_position_assessment(
     *,
     symbol: str,
     end_date: date,
-    repository: SQLiteFirstBoardRepository | None = None,
+    repository: FirstBoardRepository | None = None,
     history_collector: HistoryCollector = collect_preferred_stock_kline,
     spot_collector: SpotCollector = collect_preferred_stock_spot_klines,
 ) -> StockPositionAssessment:
     """Return a point-in-time position assessment for one stock detail page."""
 
-    active_repository = repository or SQLiteFirstBoardRepository()
+    active_repository = repository or FirstBoardRepository()
     enrichment = active_repository.get_enrichment(symbol, end_date)
     if enrichment and enrichment.position:
         return enrichment.position
@@ -330,7 +330,7 @@ def build_stock_kline_facts(
     symbol: str,
     days: int = 20,
     end_date: date,
-    repository: SQLiteFirstBoardRepository | None = None,
+    repository: FirstBoardRepository | None = None,
     history_collector: HistoryCollector = collect_preferred_stock_kline,
     spot_collector: SpotCollector = collect_preferred_stock_spot_klines,
 ) -> StockKLineFacts:
@@ -339,7 +339,7 @@ def build_stock_kline_facts(
     requested_days = max(1, min(days, 60))
     # Keep the first displayed day's comparison close outside the visible window.
     analysis_days = max(requested_days + 1, 21)
-    active_repository = repository or SQLiteFirstBoardRepository()
+    active_repository = repository or FirstBoardRepository()
     analysis_bars = load_stock_kline_bars(
         symbol=symbol,
         days=analysis_days,
@@ -415,7 +415,7 @@ def _daily_change_bars(bars: list[StockKLineBar]) -> list[StockKLineBar]:
 
 # Read cached stock bars through the requested end date.
 def _cached_bars(
-    repository: SQLiteFirstBoardRepository,
+    repository: FirstBoardRepository,
     symbol: str,
     end_date: date,
 ) -> list[StockDailyBar]:

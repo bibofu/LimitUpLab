@@ -18,7 +18,7 @@ from app.models import (
     SectorStockTrendItem,
     StockKLineFacts,
 )
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import FirstBoardRepository
 from app.services.stock_kline import build_stock_kline_facts
 
 
@@ -37,7 +37,7 @@ def build_sector_stock_ranking(
     days: int = 20,
     limit: int = DEFAULT_RESULT_LIMIT,
     collector: HithinkFinanceCollector | None = None,
-    repository: SQLiteFirstBoardRepository | None = None,
+    repository: FirstBoardRepository | None = None,
     facts_builder: TrendFactsBuilder = build_stock_kline_facts,
     max_workers: int = DEFAULT_WORKERS,
 ) -> SectorStockRankingFacts:
@@ -49,7 +49,7 @@ def build_sector_stock_ranking(
     requested_days = max(5, min(days, 60))
     requested_limit = max(1, min(limit, 20))
     active_collector = collector or HithinkFinanceCollector()
-    active_repository = repository or SQLiteFirstBoardRepository()
+    active_repository = repository or FirstBoardRepository()
 
     catalogs = [
         *active_collector.collect_index_catalog("industry"),

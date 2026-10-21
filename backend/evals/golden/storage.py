@@ -45,16 +45,19 @@ def _identity(url: URL) -> tuple[str, int, str]:
 @dataclass(frozen=True)
 class EvaluationStorage:
     backend: str
-    url: URL | None = field(default=None, repr=False)
+    url: URL = field(repr=False)
+
+    def __post_init__(self):
+        if self.backend != "postgresql" or not isinstance(self.url, URL):
+            raise EvaluationStorageError("Evaluation storage must select PostgreSQL")
+        _postgres_url(self.url.render_as_string(hide_password=False))
 
     def manifest(self) -> dict:
-        result = {"backend": self.backend,
-                  "isolation": "unique_schema_per_case" if self.url else "unique_file_per_case"}
-        if self.url:
-            # Credentials never enter the report or its identity fingerprint.
-            result["target_sha256"] = hashlib.sha256(
-                json.dumps(_identity(self.url)).encode()
-            ).hexdigest()
+        result = {"backend": self.backend, "isolation": "unique_schema_per_case"}
+        # Credentials never enter the report or its identity fingerprint.
+        result["target_sha256"] = hashlib.sha256(
+            json.dumps(_identity(self.url)).encode()
+        ).hexdigest()
         return result
 
 
@@ -62,12 +65,10 @@ def configured_evaluation_storage() -> EvaluationStorage:
     runtime = os.getenv("LIMITUPLAB_DATABASE_URL", "").strip()
     selected = os.getenv("LIMITUPLAB_EVAL_DATABASE_URL", "").strip()
     if not selected:
-        if runtime:
-            raise EvaluationStorageError(
-                "PostgreSQL runtime requires a separate LIMITUPLAB_EVAL_DATABASE_URL; "
-                "the live database and implicit SQLite fallback are forbidden for evaluations"
-            )
-        return EvaluationStorage("sqlite")
+        raise EvaluationStorageError(
+            "Evaluations require a separate LIMITUPLAB_EVAL_DATABASE_URL; "
+            "the live database and implicit local file fallback are forbidden"
+        )
     url = _postgres_url(selected)
     # A different hostname may merely be a DNS/IP alias of the same server.
     # Require a distinct database name even across hosts so aliases cannot bypass
@@ -83,37 +84,33 @@ def configured_evaluation_storage() -> EvaluationStorage:
 
 @contextmanager
 def isolated_session_storage(work: Path, configuration: EvaluationStorage):
-    """Keep case evidence for inspection, creating only a new named schema or file."""
+    """Keep case evidence for inspection in a newly created PostgreSQL schema."""
     from app.storage.schema import upgrade_schema
 
-    database = work / "session.sqlite" if configuration.url is None else None
     metadata = configuration.manifest()
-    scoped = None
-    if configuration.url is not None:
-        schema = "golden_eval_" + uuid4().hex
-        metadata["schema"] = schema
-        engine = None
-        try:
-            engine = create_engine(configuration.url, hide_parameters=True)
-            # CREATE without IF NOT EXISTS must never adopt another run's schema.
-            # DDL and migrations commit atomically; errors leave no partial schema.
-            with engine.begin() as connection:
-                connection.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
-                connection.exec_driver_sql(f'SET LOCAL search_path TO "{schema}"')
-                upgrade_schema(connection)
-            scoped = configuration.url.update_query_dict({"options": f"-csearch_path={schema}"})
-        except Exception as error:
-            raise EvaluationStorageError(
-                "Cannot initialize isolated PostgreSQL evaluation storage "
-                f"({type(error).__name__}); no model call was made"
-            ) from None
-        finally:
-            if engine is not None:
-                engine.dispose()
+    schema = "golden_eval_" + uuid4().hex
+    metadata["schema"] = schema
+    engine = None
+    try:
+        engine = create_engine(configuration.url, hide_parameters=True)
+        # CREATE must never adopt another run's schema. DDL and migrations are atomic.
+        with engine.begin() as connection:
+            connection.exec_driver_sql(f'CREATE SCHEMA "{schema}"')
+            connection.exec_driver_sql(f'SET LOCAL search_path TO "{schema}"')
+            upgrade_schema(connection)
+        scoped = configuration.url.update_query_dict({"options": f"-csearch_path={schema}"})
+    except Exception as error:
+        raise EvaluationStorageError(
+            "Cannot initialize isolated PostgreSQL evaluation storage "
+            f"({type(error).__name__}); no model call was made"
+        ) from None
+    finally:
+        if engine is not None:
+            engine.dispose()
+    database = scoped.render_as_string(hide_password=False)
     (work / "storage.json").write_text(json.dumps(metadata, indent=2), encoding="utf-8")
     environment = {
-        "LIMITUPLAB_DATABASE_URL": scoped.render_as_string(hide_password=False) if scoped else "",
-        "LIMITUPLAB_DATABASE_PATH": str(database or work / "unused.sqlite"),
+        "LIMITUPLAB_DATABASE_URL": database,
         "LIMITUPLAB_SESSION_MEMORY_ENABLED": "true",
         "LIMITUPLAB_SESSION_MEMORY_REFRESH_MESSAGES": "8",
     }
@@ -121,7 +118,6 @@ def isolated_session_storage(work: Path, configuration: EvaluationStorage):
         with patch.dict(os.environ, environment):
             yield database, metadata
     finally:
-        if scoped:
-            # Close only this case's pool; retained schema holds the replay evidence.
-            from app.storage.postgres import get_engine
-            get_engine(scoped.render_as_string(hide_password=False)).dispose()
+        # Close only this case's pool; retained schema holds the replay evidence.
+        from app.storage.postgres import get_engine
+        get_engine(database).dispose()

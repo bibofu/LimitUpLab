@@ -102,5 +102,5 @@ def save_report(report, directory):
                   "|---|---:|---:|---:|---:|---:|"])
     for name, counts in summary["by_dimension"].items():
         lines.append(f"| {name} | {counts['turns']} | {counts['pass']} | {counts['fail']} | {counts['review']} | {counts['harness_error']} |")
-    lines.extend(["", "## Verification boundary", "", "The runner uses production context preparation, chat entry, tool gateway, evidence store and SQLite journal. It does not test HTTP admission, browser rendering or external market providers.", "", "See report.json for every turn, response, evidence, stream revision, oracle, judgement, usage and memory state. Memory families are task scenarios, not isolated measures of memory accuracy."])
+    lines.extend(["", "## Verification boundary", "", "The runner uses production context preparation, chat entry, tool gateway, evidence store and PostgreSQL journal. It does not test HTTP admission, browser rendering or external market providers.", "", "See report.json for every turn, response, evidence, stream revision, oracle, judgement, usage and memory state. Memory families are task scenarios, not isolated measures of memory accuracy."])
     (directory / "report.md").write_text("\n".join(lines) + "\n", encoding="utf-8")

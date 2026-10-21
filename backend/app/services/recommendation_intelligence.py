@@ -35,10 +35,10 @@ from app.models import (
     StockNewsFacts,
 )
 from app.repositories import (
-    SQLiteFirstBoardRepository,
-    SQLiteLimitUpRepository,
-    SQLiteRecommendationIntelligenceRepository,
-    SQLiteScoringPolicyRepository,
+    FirstBoardRepository,
+    LimitUpRepository,
+    RecommendationIntelligenceRepository,
+    ScoringPolicyRepository,
 )
 from app.services.stock_news import collect_stock_news
 from app.services.relay_universe import is_relay_candidate_symbol
@@ -135,9 +135,9 @@ def refresh_recommendation_intelligence(
     interval_minutes: int = DEFAULT_REFRESH_INTERVAL_MINUTES,
     max_workers: int = 6,
     now: datetime | None = None,
-    limit_up_repository: SQLiteLimitUpRepository | None = None,
-    first_board_repository: SQLiteFirstBoardRepository | None = None,
-    snapshot_repository: SQLiteRecommendationIntelligenceRepository | None = None,
+    limit_up_repository: LimitUpRepository | None = None,
+    first_board_repository: FirstBoardRepository | None = None,
+    snapshot_repository: RecommendationIntelligenceRepository | None = None,
     quote_collector: QuoteCollector | None = None,
     news_collector: NewsCollector | None = None,
     financial_collector: FinancialCollector | None = None,
@@ -147,10 +147,10 @@ def refresh_recommendation_intelligence(
     """Rebuild the mutable draft from point-in-time market evidence."""
 
     refreshed_at = _as_shanghai(now or datetime.now(SHANGHAI_TZ))
-    first_repo = first_board_repository or SQLiteFirstBoardRepository()
-    limit_repo = limit_up_repository or SQLiteLimitUpRepository(seed_if_empty=False)
+    first_repo = first_board_repository or FirstBoardRepository()
+    limit_repo = limit_up_repository or LimitUpRepository(seed_if_empty=False)
     intelligence_repo = snapshot_repository or (
-        SQLiteRecommendationIntelligenceRepository(first_repo.database_path)
+        RecommendationIntelligenceRepository(first_repo.database_url)
     )
     candidates, relay_date, warnings = _load_base_candidates(
         limit_up_repository=limit_repo,
@@ -682,9 +682,9 @@ def finalize_recommendation_intelligence(
     response: RecommendationIntelligenceResponse,
     *,
     now: datetime | None = None,
-    limit_up_repository: SQLiteLimitUpRepository | None = None,
-    first_board_repository: SQLiteFirstBoardRepository | None = None,
-    snapshot_repository: SQLiteRecommendationIntelligenceRepository | None = None,
+    limit_up_repository: LimitUpRepository | None = None,
+    first_board_repository: FirstBoardRepository | None = None,
+    snapshot_repository: RecommendationIntelligenceRepository | None = None,
 ) -> RecommendationIntelligenceResponse:
     """Freeze display rankings and replace the relay review baseline once."""
 
@@ -703,9 +703,9 @@ def finalize_recommendation_intelligence(
             "the 09:30 market open on the target trading day."
         )
 
-    first_repo = first_board_repository or SQLiteFirstBoardRepository()
+    first_repo = first_board_repository or FirstBoardRepository()
     intelligence_repo = snapshot_repository or (
-        SQLiteRecommendationIntelligenceRepository(first_repo.database_path)
+        RecommendationIntelligenceRepository(first_repo.database_url)
     )
     existing = intelligence_repo.get_final(response.target_trade_date.isoformat())
     if existing is not None:
@@ -746,7 +746,7 @@ def finalize_recommendation_intelligence(
     # Recheck the publication time window immediately before committing refreshed research
     # records.
     def verify_commit_window() -> None:
-        # Fetching evidence or waiting for SQLite may cross the cutoff. Recheck
+        # Fetching evidence or waiting for the database may cross the cutoff. Recheck
         # inside the persistence workflow, not just at the beginning of this call.
         written_at = _as_shanghai(now or datetime.now(SHANGHAI_TZ))
         if not (written_at.date() == final.target_trade_date
@@ -757,7 +757,7 @@ def finalize_recommendation_intelligence(
         final,
         limit_up_repository=(
             limit_up_repository
-            or SQLiteLimitUpRepository(first_repo.database_path, seed_if_empty=False)
+            or LimitUpRepository(first_repo.database_url, seed_if_empty=False)
         ),
         first_board_repository=first_repo,
         before_commit=verify_commit_window,
@@ -865,8 +865,8 @@ def _missed_cutoff_response(
 def _persist_final_relay_snapshot(
     response: RecommendationIntelligenceResponse,
     *,
-    limit_up_repository: SQLiteLimitUpRepository,
-    first_board_repository: SQLiteFirstBoardRepository,
+    limit_up_repository: LimitUpRepository,
+    first_board_repository: FirstBoardRepository,
     before_commit: Callable[[], None] | None = None,
 ) -> None:
     """Make the pre-open relay Top10 the sole live snapshot used by review."""
@@ -876,8 +876,8 @@ def _persist_final_relay_snapshot(
         return
     existing = first_board_repository.get_live_prediction_snapshot(trade_date)
     scoring_policy = (
-        SQLiteScoringPolicyRepository(
-            first_board_repository.database_path
+        ScoringPolicyRepository(
+            first_board_repository.database_url
         ).get_policy(existing.generated_by)
         if existing is not None
         else None
@@ -975,8 +975,8 @@ def _persist_final_relay_snapshot(
 # Load the base candidate universe and associated persisted first-board evidence.
 def _load_base_candidates(
     *,
-    limit_up_repository: SQLiteLimitUpRepository,
-    first_board_repository: SQLiteFirstBoardRepository,
+    limit_up_repository: LimitUpRepository,
+    first_board_repository: FirstBoardRepository,
 ) -> tuple[list[_BaseCandidate], date | None, list[str]]:
     candidates: list[_BaseCandidate] = []
     warnings: list[str] = []
@@ -990,8 +990,8 @@ def _load_base_candidates(
     relay = None
     if relay_date is not None:
         scoring_policy = (
-            SQLiteScoringPolicyRepository(
-                first_board_repository.database_path
+            ScoringPolicyRepository(
+                first_board_repository.database_url
             ).get_policy(live_relay.generated_by)
             if live_relay is not None
             else None

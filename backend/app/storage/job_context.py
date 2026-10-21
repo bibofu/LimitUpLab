@@ -13,12 +13,12 @@ def assert_job_owner(db):
 
 class SharedJobLock:
     """A renewable cross-host lease; writes are checked within their transaction."""
-    def __init__(self, name, database_path=None, *, ttl=60):
-        self.name, self.database_path, self.ttl = name, database_path, ttl
+    def __init__(self, name, database_url=None, *, ttl=60):
+        self.name, self.database_url, self.ttl = name, database_url, ttl
 
     def __enter__(self):
         from app.services.runtime_coordination import LeaseStore
-        self.lease = LeaseStore(self.database_path).claim("job:" + self.name, ttl=self.ttl)
+        self.lease = LeaseStore(self.database_url).claim("job:" + self.name, ttl=self.ttl)
         if self.lease is None:
             raise RuntimeError("Scheduled job is already running: " + self.name)
         try:

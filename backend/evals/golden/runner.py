@@ -13,8 +13,8 @@ from uuid import uuid4
 from app.agents.chat import answer_first_board_chat
 from app.agents.react_runtime.lifecycle import CURRENT_CONTROL, Journal, RunControl
 from app.models import AgentChatRequest, AgentChatResponse, ChatSessionMemory, ChatSessionMessage
-from app.repositories.chat_memory_repository import SQLiteChatMemoryRepository
-from app.repositories.chat_session_repository import SQLiteChatSessionRepository
+from app.repositories.chat_memory_repository import ChatMemoryRepository
+from app.repositories.chat_session_repository import ChatSessionRepository
 from app.services.llm_provider import capture_llm_usage
 from app.services.execution_diagnostics import exception_diagnostics, mark_execution_origin
 from app.services.session_memory import prepare_session_context
@@ -137,8 +137,8 @@ def run_case(case, *, trial, directory, provider, judge_provider=None, profile="
     error = None
     with ExitStack() as stack:
         database, storage_metadata = stack.enter_context(isolated_session_storage(work, storage_configuration))
-        chats = SQLiteChatSessionRepository(database)
-        memories = SQLiteChatMemoryRepository(database)
+        chats = ChatSessionRepository(database)
+        memories = ChatMemoryRepository(database)
         journal = Journal(database)
         # Each invocation is sequential and isolated; never run this harness in a live server.
         for target in ("app.agents.query_contract.current_query_reference_date",
