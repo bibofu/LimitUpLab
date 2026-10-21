@@ -1,8 +1,11 @@
-"""Judge reservations share real SQLite transactions across workers and retries."""
+"""Judge reservations share real PostgreSQL transactions across workers and retries."""
+
+from database_support import isolated_database_url
 
 from concurrent.futures import ThreadPoolExecutor
 from datetime import datetime, timezone
-import sqlite3
+import psycopg
+from database_support import reject_writes
 import time
 
 import pytest
@@ -10,15 +13,15 @@ import pytest
 from app.agents.react_runtime.lifecycle import Journal
 from app.models import AgentChatRequest
 from app.quality_models import QualityConflict
-from app.repositories.chat_session_repository import SQLiteChatSessionRepository
+from app.repositories.chat_session_repository import ChatSessionRepository
 from app.repositories.quality_judge_repository import JudgeBudgetExceeded
 from app.repositories.quality_repository import QualityRepository
 
 
 @pytest.fixture
 def store(tmp_path):
-    path = tmp_path / "judge.sqlite"
-    chats = SQLiteChatSessionRepository(path)
+    path = isolated_database_url('judge.sqlite')
+    chats = ChatSessionRepository(path)
     chats.ensure_session("session", owner_id="owner")
     journal = Journal(path)
     run, _ = journal.create(AgentChatRequest(session_id="session", message_id="m", message="解释数据"), "owner")
@@ -200,12 +203,12 @@ def test_call_insert_failure_rolls_back_budget_and_delete_does_not_refund(store)
     queue(repo, run_id)
     job = claim(repo)
     with repo.connection() as db:
-        db.execute("CREATE TRIGGER reject_call BEFORE INSERT ON quality_judge_calls BEGIN SELECT RAISE(ABORT,'fixture'); END")
-    with pytest.raises(sqlite3.IntegrityError):
+        reject_writes(db, table="quality_judge_calls", trigger="reject_call", event="INSERT")
+    with pytest.raises(psycopg.IntegrityError):
         reserve(repo, job)
     with repo.connection() as db:
         assert db.execute("SELECT count(*) FROM quality_budget_usage").fetchone()[0] == 0
-        db.execute("DROP TRIGGER reject_call")
+        db.execute("DROP TRIGGER reject_call ON quality_judge_calls")
     call = reserve(repo, job)
     repo.start_judge_call(job, call["call_id"])
     assert chats.delete_session("session", owner_id="owner")

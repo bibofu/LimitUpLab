@@ -1,5 +1,7 @@
 """Failed queries are auditable evidence, not empty market results."""
 
+from database_support import isolated_database_url
+
 import json
 from types import SimpleNamespace
 
@@ -15,7 +17,7 @@ from app.agents.react_runtime.rendering import render_answer
 from app.agents.react_runtime.tools import ToolGateway
 from app.agents.tools import TOOL_SCHEMAS, ToolResult
 from app.models import AgentChatRequest
-from app.repositories import SQLiteChatSessionRepository
+from app.repositories import ChatSessionRepository
 from app.services.prompt_security import PromptInjectionAssessment
 from evals.golden.contracts import Expectation
 from evals.golden.grading import grade_turn
@@ -190,8 +192,8 @@ def test_failed_queries_do_not_prevent_an_independent_successful_query(failure_c
 
 @pytest.mark.parametrize("checkpoint_boundary", ["observe", "agent"])
 def test_failure_journal_replay_and_checkpoint_restore_do_not_repeat_query(tmp_path, checkpoint_boundary):
-    path = tmp_path / "failure.sqlite"
-    SQLiteChatSessionRepository(path).ensure_session("s", owner_id="owner")
+    path = isolated_database_url('failure.sqlite')
+    ChatSessionRepository(path).ensure_session("s", owner_id="owner")
     journal = Journal(path)
     row, _ = journal.create(request(), "owner")
     calls = []

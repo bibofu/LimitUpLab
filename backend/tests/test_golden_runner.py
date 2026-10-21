@@ -2,7 +2,9 @@
 
 import importlib.util
 import json
+import os
 from pathlib import Path
+from sqlalchemy.engine import make_url
 
 from langchain_core.messages import AIMessage, ToolMessage
 import pytest
@@ -63,7 +65,8 @@ def test_real_runtime_journal_and_independent_grader(tmp_path):
     assert all(event["event"] in {"progress", "completed"} for event in turn["events"])
     assert [event["payload"] for event in turn["events"] if event["event"] == "completed"] == [turn["response"]]
     assert turn["response"]["generated_by"].startswith("react-runtime-")
-    assert len(list((tmp_path / "sessions").glob("*/session.sqlite"))) == 1
+    assert len(list((tmp_path / "sessions").glob("*/storage.json"))) == 1
+    assert not list(tmp_path.rglob("*.sqlite"))
 
 
 def test_runtime_metadata_is_captured_from_real_prompt_and_passed_to_each_judge_phase(tmp_path):
@@ -204,9 +207,10 @@ def test_sessions_are_persisted_and_isolated(tmp_path):
     assert result["verdict"] == "pass"
     ids = [item["response"]["session_id"] for item in result["turns"]]
     assert ids[0] == ids[2] and ids[1] != ids[0]
-    from app.repositories.chat_session_repository import SQLiteChatSessionRepository
-    db = next((tmp_path / "sessions").glob("*/session.sqlite"))
-    repository = SQLiteChatSessionRepository(db)
+    from app.repositories.chat_session_repository import ChatSessionRepository
+    db = make_url(os.environ["LIMITUPLAB_EVAL_DATABASE_URL"]).update_query_dict(
+        {"options": f'-csearch_path={result["storage"]["schema"]}'}).render_as_string(hide_password=False)
+    repository = ChatSessionRepository(db)
     assert len(repository.get_session(ids[0], owner_id="golden_owner").messages) == 4
     assert len(repository.get_session(ids[1], owner_id="golden_owner").messages) == 2
     assert repository.get_session(ids[0], owner_id="another_owner") is None
@@ -367,7 +371,8 @@ def test_budget_interrupted_trial_resumes_without_double_counting(tmp_path, monk
     assert resumed["summary"]["execution_complete"] is True
     assert resumed["model_calls_used"] == 15
     assert observed_reservations == list(range(1, 16))
-    assert len(list((tmp_path / "sessions").glob("*/session.sqlite"))) == 2
+    assert len(list((tmp_path / "sessions").glob("*/storage.json"))) == 2
+    assert not list(tmp_path.rglob("*.sqlite"))
     assert module.main([*arguments, "--resume", "--max-model-calls", "30"]) == 0
     assert observed_reservations == list(range(1, 16))  # A completed trial is never paid for again.
 

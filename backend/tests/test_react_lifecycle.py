@@ -1,7 +1,10 @@
-"""ReAct recovery tests use SQLite and native messages, never the old planner."""
+"""ReAct recovery tests use PostgreSQL and native messages, never the old planner."""
+
+from database_support import isolated_database_url
 
 import json
-import sqlite3
+import psycopg
+from database_support import reject_writes
 from types import SimpleNamespace
 
 import pytest
@@ -13,7 +16,7 @@ from app.agents.react_runtime.lifecycle import CURRENT_CONTROL, Journal, RunConf
 from app.agents.react_runtime.runtime import run
 from app.agents.tools import TOOL_SCHEMAS, ToolResult
 from app.models import AgentChatRequest, AgentChatResponse
-from app.repositories import SQLiteChatSessionRepository
+from app.repositories import ChatSessionRepository
 from app.services.prompt_security import PromptInjectionAssessment
 
 
@@ -37,8 +40,8 @@ def allow_compliance_review(monkeypatch):
 
 @pytest.fixture
 def journal(tmp_path):
-    path = tmp_path / "react.sqlite"
-    SQLiteChatSessionRepository(path).ensure_session("s", owner_id="owner")
+    path = isolated_database_url('react.sqlite')
+    ChatSessionRepository(path).ensure_session("s", owner_id="owner")
     return Journal(path)
 
 
@@ -68,11 +71,11 @@ def test_finalization_atomic_immutable_and_task_status_distinct(journal):
     key = row["run_id"]
     # Inject a write failure after agent_runs insert: all writes must roll back.
     with journal.connection() as db:
-        db.execute("CREATE TRIGGER fail_answer BEFORE INSERT ON chat_messages BEGIN SELECT RAISE(ABORT, 'fixture'); END")
-    with pytest.raises(sqlite3.IntegrityError): journal.finish(key, "owner", final())
+        reject_writes(db, table="chat_messages", trigger="fail_answer", event="INSERT")
+    with pytest.raises(psycopg.IntegrityError): journal.finish(key, "owner", final())
     with journal.connection() as db:
         assert db.execute("SELECT count(*) FROM agent_runs").fetchone()[0] == 0
-        db.execute("DROP TRIGGER fail_answer")
+        db.execute("DROP TRIGGER fail_answer ON chat_messages")
     assert journal.get(key, "owner")["active"]
     response = journal.finish(key, "owner", final())
     assert journal.finish(key, "owner", final("complete")) == response
@@ -95,7 +98,7 @@ def test_discard_unstarted_preserves_owned_or_recoverable_work(journal, protecte
         journal.begin_call(key, {"id": "c", "name": "test", "args": {}})
     elif protected == "message":
         from app.models import ChatSessionMessage
-        SQLiteChatSessionRepository(journal.database_path).append_message(
+        ChatSessionRepository(journal.database_url).append_message(
             ChatSessionMessage(message_id="user_" + key, session_id="s", role="user", content="研究事实",
                                run_id=key, created_at=row["started_at"]),
             owner_id="owner",
@@ -118,7 +121,7 @@ def test_discard_unstarted_releases_message_key_and_session(journal):
 def test_cancel_wins_finalization_and_session_deletion_cascades(journal):
     row, _ = journal.create(request(), "owner")
     key = row["run_id"]
-    chats = SQLiteChatSessionRepository(journal.database_path)
+    chats = ChatSessionRepository(journal.database_url)
     with pytest.raises(RunConflict): chats.delete_session("s", owner_id="owner")
     journal.event(key, "progress", {"message": "query"})
     journal.checkpoint(key, "owner", {"evidence": "private"})

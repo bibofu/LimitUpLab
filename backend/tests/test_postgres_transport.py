@@ -29,20 +29,20 @@ def test_escaped_postgres_strings_keep_literal_question_marks():
     assert compiled == r"SELECT E'it\'s ? 50%%', %s, e'\\?', '?' "
 
 
-def test_explicit_sqlite_path_wins_over_postgres_environment(tmp_path, monkeypatch):
+def test_explicit_postgres_url_wins_over_environment(postgresql_database, monkeypatch):
     monkeypatch.setenv("LIMITUPLAB_DATABASE_URL", "postgresql://unreachable.invalid/test")
-    db = connect(tmp_path / "isolated.sqlite")
+    db = connect(postgresql_database)
     try:
         initialize_database(db)
-        assert not is_postgres(db)
+        assert is_postgres(db)
         assert table_exists(db, "chat_sessions")
     finally:
         db.close()
 
 
-def test_missing_readonly_sqlite_is_not_created(tmp_path):
+def test_readonly_sqlite_path_is_rejected_without_creating_file(tmp_path):
     path = tmp_path / "missing.sqlite"
-    with pytest.raises(FileNotFoundError):
+    with pytest.raises((TypeError, ValueError)):
         connect_readonly(path)
     assert not path.exists()
 

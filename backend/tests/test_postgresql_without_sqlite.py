@@ -10,7 +10,7 @@ from app.agents.react_runtime.lifecycle import Journal
 from app.database import connect_readonly
 from app.main import app
 from app.models import AgentChatRequest, AgentChatResponse, StockDailyBar
-from app.repositories import SQLiteChatSessionRepository, SQLiteFirstBoardRepository, SQLiteLimitUpRepository
+from app.repositories import ChatSessionRepository, FirstBoardRepository, LimitUpRepository
 from app.security import SESSION_COOKIE_NAME, sign_visitor_owner_id
 from app.services.sample_data import SAMPLE_EVENTS
 from scripts.verify_local_database import verify_write_paths
@@ -25,15 +25,15 @@ def test_application_http_with_no_sqlite_access(postgresql_database, tmp_path, m
         raise AssertionError("PostgreSQL functionality attempted to open SQLite")
 
     monkeypatch.setattr(sqlite3, "connect", forbid_sqlite)
-    SQLiteLimitUpRepository().upsert_events(SAMPLE_EVENTS)
+    LimitUpRepository().upsert_events(SAMPLE_EVENTS)
     event = max(SAMPLE_EVENTS, key=lambda item: item.trade_date)
-    SQLiteFirstBoardRepository().upsert_daily_bars([StockDailyBar(
+    FirstBoardRepository().upsert_daily_bars([StockDailyBar(
         symbol=event.symbol, trade_date=event.trade_date, open=10, high=11, low=9, close=10.5,
         volume=100, amount=1000, source="synthetic-test", created_at=datetime.now(timezone.utc),
     )])
     assert verify_write_paths()["status"] == "passed"
     owner = "visitor_" + "c" * 32
-    chats = SQLiteChatSessionRepository()
+    chats = ChatSessionRepository()
     chats.create_session(session_id="pg-only-session", owner_id=owner)
     journal = Journal()
     run, _ = journal.create(AgentChatRequest(

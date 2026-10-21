@@ -1,10 +1,12 @@
+
+from database_support import isolated_database_url, release_database_url
 import unittest
 from datetime import date, datetime, time, timezone
 from pathlib import Path
 from uuid import uuid4
 
 from app.models import LimitUpEvent, StockDailyBar
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import FirstBoardRepository
 from app.services.first_board_features import build_first_board_outcome
 from app.services.evaluation_agent import persist_agent_predictions_for_dates
 from app.services.outcome_completeness import build_top10_outcome_completeness
@@ -14,11 +16,10 @@ from scripts.update_daily_data import backfill_recent_daily_top_candidate_bars
 class OutcomeCompletenessTest(unittest.TestCase):
     # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
-        self.database_path = (
-            Path(__file__).resolve().parents[1]
-            / f"outcome-completeness-{uuid4().hex}.sqlite"
+        self.database_url = (
+            isolated_database_url()
         )
-        self.repository = SQLiteFirstBoardRepository(self.database_path)
+        self.repository = FirstBoardRepository(self.database_url)
         self.trade_dates = [
             date(2026, 8, 10),
             date(2026, 8, 11),
@@ -44,12 +45,7 @@ class OutcomeCompletenessTest(unittest.TestCase):
 
     # Release the test resources and restore the environment after this test scope.
     def tearDown(self) -> None:
-        for path in (
-            self.database_path,
-            self.database_path.with_name(f"{self.database_path.name}-wal"),
-            self.database_path.with_name(f"{self.database_path.name}-shm"),
-        ):
-            path.unlink(missing_ok=True)
+        release_database_url(self.database_url)
 
     # Regression scenario: missing exact d1 is not relabelled from later bar.
     def test_missing_exact_d1_is_not_relabelled_from_later_bar(self) -> None:

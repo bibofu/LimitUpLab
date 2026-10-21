@@ -1,10 +1,12 @@
+
+from database_support import isolated_database_url, release_database_url
 import unittest
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
 from app.models import AgentPrediction, FirstBoardOutcome, LimitUpEvent
-from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
+from app.repositories import FirstBoardRepository, ScoringPolicyRepository
 from app.services.prediction_quality_audit import build_prediction_quality_audit
 from app.services.scoring_policy import build_default_scoring_policy
 
@@ -12,24 +14,18 @@ from app.services.scoring_policy import build_default_scoring_policy
 class PredictionQualityAuditTest(unittest.TestCase):
     # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
-        self.database_path = (
-            Path(__file__).resolve().parents[1]
-            / f"prediction-quality-{uuid4().hex}.sqlite"
+        self.database_url = (
+            isolated_database_url()
         )
-        self.repository = SQLiteFirstBoardRepository(self.database_path)
-        self.policy_repository = SQLiteScoringPolicyRepository(self.database_path)
+        self.repository = FirstBoardRepository(self.database_url)
+        self.policy_repository = ScoringPolicyRepository(self.database_url)
         self.policy = build_default_scoring_policy()
         self.policy_repository.upsert_policy(self.policy)
         self.events = self._events(days=4, stocks=3)
 
     # Release the test resources and restore the environment after this test scope.
     def tearDown(self) -> None:
-        for path in (
-            self.database_path,
-            self.database_path.with_name(f"{self.database_path.name}-wal"),
-            self.database_path.with_name(f"{self.database_path.name}-shm"),
-        ):
-            path.unlink(missing_ok=True)
+        release_database_url(self.database_url)
 
     # Regression scenario: audit separates cohorts and reports maturity.
     def test_audit_separates_cohorts_and_reports_maturity(self) -> None:

@@ -1,6 +1,8 @@
+
+from database_support import isolated_database_url, release_database_url
 import unittest
 import json
-import sqlite3
+from app.database import connect
 from contextlib import closing
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -9,7 +11,7 @@ from uuid import uuid4
 
 from app.agents.tools import AgentToolRegistry
 from app.models import AgentPrediction
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import FirstBoardRepository
 from app.routers.agents import get_first_board_ratings
 from app.services.evaluation_agent import (
     persist_agent_predictions_for_dates,
@@ -21,11 +23,10 @@ from app.services.sample_data import SAMPLE_EVENTS
 class PredictionSnapshotContractTest(unittest.TestCase):
     # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
-        self.database_path = (
-            Path(__file__).resolve().parents[1]
-            / f"prediction-snapshot-{uuid4().hex}.sqlite"
+        self.database_url = (
+            isolated_database_url()
         )
-        self.repository = SQLiteFirstBoardRepository(self.database_path)
+        self.repository = FirstBoardRepository(self.database_url)
         self.events = [
             item.model_copy(update={"symbol": "001489"})
             if item.symbol == "301489"
@@ -36,12 +37,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
 
     # Release the test resources and restore the environment after this test scope.
     def tearDown(self) -> None:
-        for path in (
-            self.database_path,
-            self.database_path.with_name(f"{self.database_path.name}-wal"),
-            self.database_path.with_name(f"{self.database_path.name}-shm"),
-        ):
-            path.unlink(missing_ok=True)
+        release_database_url(self.database_url)
 
     # Regression scenario: repeated live generation is idempotent.
     def test_repeated_live_generation_is_idempotent(self) -> None:
@@ -168,7 +164,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
         self.assertEqual(after.generated_by, final_version)
         self.assertEqual(after.data_as_of, final_data_as_of)
         self.assertEqual([item.prediction_id for item in rows], ["canonical-prediction"])
-        with closing(sqlite3.connect(self.database_path)) as connection:
+        with closing(connect(self.database_url)) as connection:
             archived = connection.execute("SELECT snapshot_record_json, prediction_rows_json FROM prediction_snapshot_archive").fetchone()
         self.assertIsNotNone(archived)
         self.assertEqual(json.loads(archived[0])["created_at"], stored.created_at.isoformat())
@@ -262,7 +258,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
         ).first_board_ratings(self.trade_date)
 
         with (
-            patch("app.routers.agents.SQLiteFirstBoardRepository", return_value=self.repository),
+            patch("app.routers.agents.FirstBoardRepository", return_value=self.repository),
             patch("app.routers.agents.get_limit_up_repository") as limit_repository,
         ):
             limit_repository.return_value.list_events.return_value = self.events
@@ -276,7 +272,7 @@ class PredictionSnapshotContractTest(unittest.TestCase):
         self._persist_live()
 
         with (
-            patch("app.routers.agents.SQLiteFirstBoardRepository", return_value=self.repository),
+            patch("app.routers.agents.FirstBoardRepository", return_value=self.repository),
             patch("app.routers.agents.get_limit_up_repository") as limit_repository,
         ):
             limit_repository.return_value.list_events.return_value = self.events

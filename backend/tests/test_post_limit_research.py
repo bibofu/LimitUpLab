@@ -1,3 +1,5 @@
+
+from database_support import isolated_database_url
 from datetime import date, timedelta
 import pytest
 
@@ -5,7 +7,7 @@ from app.post_limit_query_contract import (
     PostLimitQueryContract,
 )
 from app.repositories.post_limit_repository import PostLimitDataset
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import FirstBoardRepository
 from app.services.post_limit import (
     _attach_outcome,
     _matched_shapes,
@@ -83,7 +85,7 @@ def test_post_limit_trace_keeps_all_candidate_names_for_stock_links(
     )
     registry = AgentToolRegistry(
         events=[],
-        first_board_repository=SQLiteFirstBoardRepository(tmp_path / "links.sqlite"),
+        first_board_repository=FirstBoardRepository(isolated_database_url('links.sqlite')),
     )
     contract = PostLimitQueryContract(
         shape="high_drawdown",

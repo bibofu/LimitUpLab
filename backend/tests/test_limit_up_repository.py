@@ -1,10 +1,12 @@
+
+from database_support import isolated_database_url, release_database_url
 import os
 import unittest
 from contextlib import contextmanager
 from pathlib import Path
 from uuid import uuid4
 
-from app.repositories import SQLiteLimitUpRepository
+from app.repositories import LimitUpRepository
 from app.services.sample_data import SAMPLE_EVENTS
 
 
@@ -21,23 +23,18 @@ TEST_TMP_ROOT = Path(
 # Prepare the temporary database path fixture or observation used by the surrounding regression
 # scenario.
 @contextmanager
-def temporary_database_path():
-    database_path = TEST_TMP_ROOT / f"limituplab-test-{uuid4().hex}.sqlite"
+def temporary_database_url():
+    database_url = isolated_database_url()
     try:
-        yield database_path
+        yield database_url
     finally:
-        for path in (
-            database_path,
-            database_path.with_name(f"{database_path.name}-wal"),
-            database_path.with_name(f"{database_path.name}-shm"),
-        ):
-            path.unlink(missing_ok=True)
+        release_database_url(database_url)
 
 
-class SQLiteLimitUpRepositoryTest(unittest.TestCase):
+class LimitUpRepositoryTest(unittest.TestCase):
     def test_latest_events_match_history_filter_and_follow_new_writes(self) -> None:
-        with temporary_database_path() as database_path:
-            repository = SQLiteLimitUpRepository(database_path=database_path)
+        with temporary_database_url() as database_url:
+            repository = LimitUpRepository(database_url=database_url)
             self.assertEqual(repository.list_latest_events(), [])
             repository.replace_events(SAMPLE_EVENTS)
             history = repository.list_events()
@@ -51,8 +48,8 @@ class SQLiteLimitUpRepositoryTest(unittest.TestCase):
             self.assertTrue(all(event.trade_date < latest_date for event in repository.list_latest_events()))
 
     def test_latest_events_preserve_sample_bootstrap(self) -> None:
-        with temporary_database_path() as database_path:
-            repository = SQLiteLimitUpRepository(database_path=database_path, seed_if_empty=True)
+        with temporary_database_url() as database_url:
+            repository = LimitUpRepository(database_url=database_url, seed_if_empty=True)
             events = repository.list_latest_events()
             latest_date = max(event.trade_date for event in SAMPLE_EVENTS)
             self.assertEqual({event.trade_date for event in events}, {latest_date})
@@ -60,8 +57,8 @@ class SQLiteLimitUpRepositoryTest(unittest.TestCase):
 
     # Regression scenario: replace and list events.
     def test_replace_and_list_events(self) -> None:
-        with temporary_database_path() as database_path:
-            repository = SQLiteLimitUpRepository(database_path=database_path)
+        with temporary_database_url() as database_url:
+            repository = LimitUpRepository(database_url=database_url)
 
             repository.replace_events(SAMPLE_EVENTS)
             events = repository.list_events()
@@ -72,8 +69,8 @@ class SQLiteLimitUpRepositoryTest(unittest.TestCase):
 
     # Regression scenario: upsert updates existing event.
     def test_upsert_updates_existing_event(self) -> None:
-        with temporary_database_path() as database_path:
-            repository = SQLiteLimitUpRepository(database_path=database_path)
+        with temporary_database_url() as database_url:
+            repository = LimitUpRepository(database_url=database_url)
             original = SAMPLE_EVENTS[0]
             updated = original.model_copy(update={"name": "科大讯飞测试"})
 
@@ -86,9 +83,9 @@ class SQLiteLimitUpRepositoryTest(unittest.TestCase):
 
     # Regression scenario: seed if empty bootstraps sample events.
     def test_seed_if_empty_bootstraps_sample_events(self) -> None:
-        with temporary_database_path() as database_path:
-            repository = SQLiteLimitUpRepository(
-                database_path=database_path,
+        with temporary_database_url() as database_url:
+            repository = LimitUpRepository(
+                database_url=database_url,
                 seed_if_empty=True,
             )
 
@@ -98,8 +95,8 @@ class SQLiteLimitUpRepositoryTest(unittest.TestCase):
 
     # Regression scenario: delete events for date.
     def test_delete_events_for_date(self) -> None:
-        with temporary_database_path() as database_path:
-            repository = SQLiteLimitUpRepository(database_path=database_path)
+        with temporary_database_url() as database_url:
+            repository = LimitUpRepository(database_url=database_url)
 
             repository.replace_events(SAMPLE_EVENTS)
             repository.delete_events_for_date("2026-05-15")
@@ -109,8 +106,8 @@ class SQLiteLimitUpRepositoryTest(unittest.TestCase):
 
     # Regression scenario: legacy unclosed event does not keep rolling board count.
     def test_legacy_unclosed_event_does_not_keep_rolling_board_count(self) -> None:
-        with temporary_database_path() as database_path:
-            repository = SQLiteLimitUpRepository(database_path=database_path)
+        with temporary_database_url() as database_url:
+            repository = LimitUpRepository(database_url=database_url)
             failed_event = SAMPLE_EVENTS[3].model_copy(
                 update={"closed_limit": False, "board_height": 6}
             )

@@ -1,4 +1,6 @@
-"""Quality case listings work without SQLite access when PostgreSQL is selected."""
+"""Quality case listings always use PostgreSQL with SQLite access prohibited."""
+
+from database_support import isolated_database_url
 
 import sqlite3
 
@@ -6,24 +8,24 @@ import pytest
 
 from app.agents.react_runtime.lifecycle import Journal
 from app.models import AgentChatRequest
-from app.repositories.chat_session_repository import SQLiteChatSessionRepository
+from app.repositories.chat_session_repository import ChatSessionRepository
 from app.repositories.quality_repository import QualityRepository
 
 
-@pytest.fixture(params=["sqlite", "postgresql"])
-def case_store(request, tmp_path, monkeypatch):
-    if request.param == "postgresql":
+@pytest.fixture(params=["configured_url", "explicit_url"])
+def case_store(request, monkeypatch):
+    if request.param == "configured_url":
         request.getfixturevalue("postgresql_database")
-        path = None
-
-        def forbidden_sqlite(*args, **kwargs):
-            raise AssertionError("PostgreSQL quality operations must not open SQLite")
-
-        monkeypatch.setattr(sqlite3, "connect", forbidden_sqlite)
+        url = None
     else:
-        path = tmp_path / "quality-cases.sqlite"
-    SQLiteChatSessionRepository(path).ensure_session("session", owner_id="owner")
-    return QualityRepository(path), Journal(path)
+        url = isolated_database_url('quality-cases')
+
+    def forbidden_sqlite(*args, **kwargs):
+        raise AssertionError("PostgreSQL quality operations must not open SQLite")
+
+    monkeypatch.setattr(sqlite3, "connect", forbidden_sqlite)
+    ChatSessionRepository(url).ensure_session("session", owner_id="owner")
+    return QualityRepository(url), Journal(url)
 
 
 def add_case(store, identity, sources=("feedback",)):

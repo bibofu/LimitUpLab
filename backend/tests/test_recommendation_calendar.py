@@ -1,5 +1,7 @@
 """Offline calendar and restart-boundary regressions for recommendation drafts."""
 
+from database_support import isolated_database_url
+
 import json
 from datetime import date, datetime
 from types import SimpleNamespace
@@ -8,7 +10,7 @@ from unittest.mock import Mock
 import pytest
 
 from app.models import RecommendationIntelligenceItem, RecommendationIntelligenceResponse, StockNewsFacts
-from app.repositories import SQLiteFirstBoardRepository, SQLiteRecommendationIntelligenceRepository
+from app.repositories import FirstBoardRepository, RecommendationIntelligenceRepository
 from app.services import recommendation_intelligence as service
 from scripts import run_recommendation_refresh_loop as worker
 
@@ -63,9 +65,9 @@ def snapshot(*, target=TARGET, stage="draft", with_items=False):
 
 @pytest.fixture
 def isolated_refresh(tmp_path, monkeypatch):
-    database = tmp_path / "recommendations.sqlite"
-    repository = SQLiteRecommendationIntelligenceRepository(database)
-    first = SQLiteFirstBoardRepository(database)
+    database = isolated_database_url('recommendations.sqlite')
+    repository = RecommendationIntelligenceRepository(database)
+    first = FirstBoardRepository(database)
     candidate = service._BaseCandidate("relay", BASE, "600101", "样本", "行业", None, 1, 80)
     monkeypatch.setattr(service, "_load_base_candidates", Mock(return_value=([candidate], BASE, [])))
     monkeypatch.setattr(service, "collect_a_share_trade_dates", Mock(return_value=[BASE, TARGET]))
@@ -136,7 +138,7 @@ def test_wrong_holiday_target_can_be_refreshed_before_real_market_open(isolated_
 
     response = service.refresh_recommendation_intelligence(
         now=now, max_workers=1, snapshot_repository=repository,
-        first_board_repository=SQLiteFirstBoardRepository(repository.database_path),
+        first_board_repository=FirstBoardRepository(repository.database_url),
         limit_up_repository=Mock(), quote_collector=quotes,
         news_collector=lambda symbol, name: StockNewsFacts(
             symbol=symbol, name=name, fetched_at=now, window_days=7, cache_status="fresh",
@@ -200,7 +202,7 @@ def test_calendar_recovery_restores_existing_final_after_open(isolated_refresh, 
     collector.assert_not_called()
 
 
-def test_worker_retries_temporary_calendar_failure_after_recording_unknown(isolated_refresh, monkeypatch):
+def test_worker_retries_temporary_calendar_failure_after_recording_unknown(isolated_refresh, monkeypatch, tmp_path):
     repository, refresh, collector = isolated_refresh
     repository.save(snapshot(with_items=True))
     calendar = Mock(side_effect=[RuntimeError("temporary calendar failure"), [BASE, TARGET]])
@@ -213,7 +215,7 @@ def test_worker_retries_temporary_calendar_failure_after_recording_unknown(isola
     monkeypatch.setattr(worker.time, "sleep", sleep)
     finalize = Mock(side_effect=AssertionError("must not finalize after market open"))
     monkeypatch.setattr(worker, "finalize_recommendation_intelligence", finalize)
-    report_path = repository.database_path.parent / "refresh.json"
+    report_path = tmp_path / "refresh.json"
 
     assert worker._run_refresh_with_retries(1440, report_path) is None
 

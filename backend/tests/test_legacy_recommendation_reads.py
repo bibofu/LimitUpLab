@@ -1,6 +1,8 @@
 """Older production snapshots can contain retired discovery items; never rewrite them on read."""
+
+from database_support import isolated_database_url
 import json
-import sqlite3
+from app.database import connect
 
 import pytest
 from pydantic import ValidationError
@@ -9,7 +11,7 @@ from app.database import connect, initialize_database
 from app.models import RecommendationIntelligenceResponse
 from app.repositories.recommendation_intelligence_repository import (
     RETIRED_DISCOVERY_WARNING,
-    SQLiteRecommendationIntelligenceRepository,
+    RecommendationIntelligenceRepository,
     _load_persisted_response,
 )
 
@@ -27,7 +29,7 @@ def legacy_payload(*, discovery_only=False):
 # Regression scenario: legacy reads preserve original json and expose only relay.
 @pytest.mark.parametrize("table", ["recommendation_intelligence_current", "recommendation_intelligence_snapshots", "recommendation_prediction_finals"])
 def test_legacy_reads_preserve_original_json_and_expose_only_relay(tmp_path, table):
-    path = tmp_path / "legacy.sqlite"
+    path = isolated_database_url('legacy.sqlite')
     raw = json.dumps(legacy_payload())
     with connect(path) as connection:
         initialize_database(connection)
@@ -37,29 +39,29 @@ def test_legacy_reads_preserve_original_json_and_expose_only_relay(tmp_path, tab
             connection.execute(f"INSERT INTO {table} (refresh_id,refreshed_at,status,response_json) VALUES ('legacy','2026-09-07','complete',?)", (raw,))
         else:
             connection.execute(f"INSERT INTO {table} (target_trade_date,finalized_at,response_json) VALUES ('2026-09-08','2026-09-08',?)", (raw,))
-    repository = SQLiteRecommendationIntelligenceRepository(path)
+    repository = RecommendationIntelligenceRepository(path)
     response = repository.get_latest_displayable()
     assert [item.strategy for item in response.items] == ["relay"]
     assert RETIRED_DISCOVERY_WARNING in response.warnings
     if table.endswith("_finals"):
         assert repository.get_final("2026-09-08") == response
-    with sqlite3.connect(path) as connection:
+    with connect(path) as connection:
         assert connection.execute(f"SELECT response_json FROM {table}").fetchone()[0] == raw
 
 
 # Regression scenario: refresh archives original mixed snapshot.
 def test_refresh_archives_original_mixed_snapshot(tmp_path):
-    path = tmp_path / "legacy.sqlite"
+    path = isolated_database_url('legacy.sqlite')
     raw = json.dumps(legacy_payload(discovery_only=True))
     with connect(path) as connection:
         initialize_database(connection)
         connection.execute("INSERT INTO recommendation_intelligence_current (slot,refresh_id,refreshed_at,status,response_json) VALUES (1,'legacy','2026-09-07','complete',?)", (raw,))
-    repository = SQLiteRecommendationIntelligenceRepository(path)
+    repository = RecommendationIntelligenceRepository(path)
     assert repository.get_latest_displayable().items == []
     payload = legacy_payload()
     payload.update(refresh_id="new", items=[payload["items"][1]])
     repository.save(RecommendationIntelligenceResponse.model_validate(payload))
-    with sqlite3.connect(path) as connection:
+    with connect(path) as connection:
         assert connection.execute("SELECT response_json FROM recommendation_intelligence_snapshots WHERE refresh_id='legacy'").fetchone()[0] == raw
     assert repository.get_latest().refresh_id == "new"
 

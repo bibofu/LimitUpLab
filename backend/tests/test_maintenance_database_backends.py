@@ -9,24 +9,17 @@ import pytest
 
 from app.database import connect, initialize_database
 from app.models import StockDailyBar
-from app.repositories.first_board_repository import SQLiteFirstBoardRepository
-from app.repositories.limit_up_repository import SQLiteLimitUpRepository
+from app.repositories.first_board_repository import FirstBoardRepository
+from app.repositories.limit_up_repository import LimitUpRepository
 from app.services.sample_data import SAMPLE_EVENTS
 from scripts.audit_prediction_times import run_audit
 from scripts.research_limit_up_paths import analyze
 from scripts.research_pullback_consolidation import load_frozen_bars
 
 
-@pytest.fixture(params=["sqlite", "postgresql"])
-def source(request, tmp_path):
-    if request.param == "postgresql":
-        request.getfixturevalue("postgresql_database")
-        path = None
-    else:
-        path = tmp_path / "maintenance.sqlite"
-    with closing(connect(path)) as db:
-        initialize_database(db)
-    return path
+@pytest.fixture
+def source(postgresql_database):
+    return None
 
 
 def test_research_scripts_preserve_frozen_input_fingerprint(source, tmp_path, capsys):
@@ -37,18 +30,18 @@ def test_research_scripts_preserve_frozen_input_fingerprint(source, tmp_path, ca
             dates.append(day)
         day += timedelta(days=1)
     events = [SAMPLE_EVENTS[0].model_copy(update={"trade_date": day}) for day in dates]
-    SQLiteLimitUpRepository(source).upsert_events(events)
+    LimitUpRepository(source).upsert_events(events)
     bars = [StockDailyBar(
         symbol=events[0].symbol, trade_date=day, open=10, high=10.5, low=9.5, close=10, volume=100,
         amount=1000, source="synthetic-test", created_at=datetime(2026, 9, 20, tzinfo=timezone.utc),
     ) for day in dates]
-    SQLiteFirstBoardRepository(source).upsert_daily_bars(bars)
+    FirstBoardRepository(source).upsert_daily_bars(bars)
     before = run_audit(source)
     report = analyze(source, dates[0].isoformat(), tmp_path / "research")
     frozen = load_frozen_bars(source, report)
     assert len(frozen) == len(dates)
-    assert report["database_backend"] == ("postgresql" if source is None else "sqlite")
-    assert (report["database_path"] is None) == (source is None)
+    assert report["database_backend"] == "postgresql"
+    assert "database_path" not in report
     assert report["kind"] == "historical_exploration_not_live"
     assert "postgresql://" not in json.dumps(report)
     with closing(connect(source)) as db:

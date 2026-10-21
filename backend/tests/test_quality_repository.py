@@ -1,6 +1,9 @@
-"""Quality persistence exercises real SQLite ownership, transactions and leases."""
+"""Quality persistence exercises real PostgreSQL ownership, transactions and leases."""
 
-import sqlite3
+from database_support import isolated_database_url
+
+import psycopg
+from database_support import reject_writes
 
 import pytest
 
@@ -8,14 +11,14 @@ from app.agents.react_runtime.lifecycle import Journal
 from app.models import AgentChatRequest
 from app.quality_models import QualityConflict
 from app.quality_schema import DETECTOR_VERSION, answer_hash, enqueue_completed
-from app.repositories.chat_session_repository import SQLiteChatSessionRepository
+from app.repositories.chat_session_repository import ChatSessionRepository
 from app.repositories.quality_repository import QualityRepository
 
 
 @pytest.fixture
 def store(tmp_path):
-    path = tmp_path / "quality.sqlite"
-    chats = SQLiteChatSessionRepository(path)
+    path = isolated_database_url('quality.sqlite')
+    chats = ChatSessionRepository(path)
     chats.ensure_session("session", owner_id="owner")
     journal = Journal(path)
     repo = QualityRepository(path)
@@ -67,13 +70,13 @@ def test_atomic_answer_outbox_and_active_feedback_rejected(store):
     with pytest.raises(QualityConflict):
         downvote(repo, row["run_id"])
     with repo.connection() as db:
-        db.execute("CREATE TRIGGER fail_job BEFORE INSERT ON quality_jobs BEGIN SELECT RAISE(ABORT, 'fixture'); END")
-    with pytest.raises(sqlite3.IntegrityError):
+        reject_writes(db, table="quality_jobs", trigger="fail_job", event="INSERT")
+    with pytest.raises(psycopg.IntegrityError):
         journal.finish(row["run_id"], "owner", {"answer": "研究", "intent": "research", "task_status": "complete"})
     assert journal.get(row["run_id"], "owner")["active"] == 1
     with repo.connection() as db:
         assert db.execute("SELECT count(*) FROM chat_messages").fetchone()[0] == 0
-        db.execute("DROP TRIGGER fail_job")
+        db.execute("DROP TRIGGER fail_job ON quality_jobs")
     journal.finish(row["run_id"], "owner", {"answer": "研究", "intent": "research", "task_status": "complete"})
     assert repo.job_health()["counts"]["pending"] == 1
     assert repo.backfill_jobs() == 0
@@ -102,7 +105,7 @@ def test_review_state_revision_audit_and_reopen(store):
             "root_cause": "说明构建遗漏", "fix_version": "commit123"})
     assert len(detail["reviews"]) == 5
     assert detail["reviews"][0]["changes"]["symptom"]["before"] == ""
-    with repo.connection() as db, pytest.raises(sqlite3.IntegrityError):
+    with repo.connection() as db, pytest.raises(psycopg.IntegrityError):
         db.execute("UPDATE quality_reviews SET note='rewritten'")
 
 

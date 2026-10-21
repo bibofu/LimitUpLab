@@ -1,8 +1,11 @@
+
+from database_support import isolated_database_url
 import importlib.util
-import sqlite3
+from contextlib import closing
 from pathlib import Path
 
 import pytest
+from app.database import connect, connect_readonly
 
 spec=importlib.util.spec_from_file_location('focused',Path(__file__).parents[1]/'scripts/research_pullback_consolidation.py')
 m=importlib.util.module_from_spec(spec)
@@ -54,12 +57,15 @@ def test_price_box_ablation_does_not_read_volume():
 
 
 # Regression scenario: changed snapshot refused without writing.
-def test_changed_snapshot_refused_without_writing(tmp_path):
-    db=tmp_path/'test.sqlite'
-    with sqlite3.connect(db) as c:
+def test_changed_snapshot_refused_without_writing():
+    db=isolated_database_url('frozen-study')
+    with closing(connect(db)) as c, c:
         c.execute('CREATE TABLE t (value INTEGER)')
         c.execute('INSERT INTO t VALUES (1)')
-    before=db.read_bytes()
+    def snapshot():
+        with closing(connect_readonly(db)) as c:
+            return [dict(row) for row in c.execute('SELECT * FROM t ORDER BY value')]
+    before=snapshot()
     with pytest.raises(ValueError,match='differs from frozen'):
         m.load_frozen_bars(db,{'queries':['SELECT * FROM t','SELECT * FROM t'],'input_sha256':'incorrect'})
-    assert db.read_bytes()==before
+    assert snapshot()==before==[{'value': 1}]

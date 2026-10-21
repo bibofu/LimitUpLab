@@ -1,4 +1,6 @@
-"""Isolated HTTP and background processing checks, using durable SQLite state."""
+"""Isolated HTTP and background processing checks, using durable PostgreSQL state."""
+
+from database_support import isolated_database_url
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -7,7 +9,7 @@ import pytest
 from app.agents.react_runtime.lifecycle import Journal
 from app.models import AgentChatRequest, AgentChatResponse
 from app.quality_schema import answer_hash
-from app.repositories import SQLiteChatSessionRepository
+from app.repositories import ChatSessionRepository
 from app.repositories.quality_repository import QualityRepository
 from app.routers import quality
 from app.security import AnonymousVisitorMiddleware, SESSION_COOKIE_NAME, sign_visitor_owner_id
@@ -23,8 +25,8 @@ ADMIN = {"X-LimitUpLab-Admin-Key": "quality-test-key"}
 def env(tmp_path, monkeypatch):
     monkeypatch.setenv("LIMITUPLAB_ADMIN_KEY", ADMIN["X-LimitUpLab-Admin-Key"])
     monkeypatch.setenv("LIMITUPLAB_QUALITY_NORMAL_SAMPLE_RATE", "0")
-    path = tmp_path / "quality-http.sqlite"
-    SQLiteChatSessionRepository(path).ensure_session("session", owner_id=OWNER)
+    path = isolated_database_url('quality-http.sqlite')
+    ChatSessionRepository(path).ensure_session("session", owner_id=OWNER)
     journal = Journal(path)
     run, _ = journal.create(AgentChatRequest(session_id="session", message_id="message", message="研究问题"), OWNER)
     response = journal.finish(run["run_id"], OWNER, AgentChatResponse(
@@ -75,7 +77,7 @@ def test_delivery_hash_and_later_success_do_not_claim_user_reading(env):
 
 def test_active_run_accepts_owned_interruption_and_defers_case_until_completion(env):
     client, repo, _, response = env
-    journal = Journal(repo.path)
+    journal = Journal(repo.database_url)
     run, _ = journal.create(AgentChatRequest(session_id="session", message_id="active", message="研究请求"), OWNER)
     run_id = run["run_id"]
     url = f"/api/agents/chat/runs/{run_id}/delivery"
@@ -160,7 +162,7 @@ def test_worker_durable_backfill_recovery_and_no_duplicate_cases(env, monkeypatc
     with repo.connection() as db:
         db.execute("DELETE FROM quality_jobs")  # Simulate a pre-migration finalized run.
         db.execute("DELETE FROM quality_evidence_bundles")
-        db.execute("UPDATE react_runs SET response_json=json_set(response_json,'$.task_status','error') WHERE run_id=?", (run_id,))
+        db.execute("UPDATE react_runs SET response_json=jsonb_set(response_json::jsonb,'{task_status}', '\"error\"')::text WHERE run_id=?", (run_id,))
     result = quality_detection.process_pending(repo)
     assert result["backfilled"] == 1 and result["succeeded"] == 1
     assert quality_detection.process_pending(repo)["processed"] == 0
@@ -235,6 +237,6 @@ def test_evaluation_reports_include_unknown_coverage_without_creating_a_case(env
     assert quality_detection.process_pending(repo)["succeeded"] == 1
     assert repo.list_cases(source="normal_sample")["total"] == 1
     assert client.get(bundle_url, headers=ADMIN).json() == frozen.json()
-    SQLiteChatSessionRepository(repo.path).delete_session("session", owner_id=OWNER)
+    ChatSessionRepository(repo.database_url).delete_session("session", owner_id=OWNER)
     assert client.get(history_url, headers=ADMIN).status_code == 404
     assert client.get(bundle_url, headers=ADMIN).status_code == 404

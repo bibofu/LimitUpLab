@@ -37,7 +37,8 @@ def write_pid(state, *, port=55433, host="127.0.0.1", directory=None):
 def test_sqlite_selection_does_not_touch_postgres(monkeypatch):
     run = Mock()
     monkeypatch.setattr(local, "run_ctl", run)
-    assert "SQLite selected" in local.manage("ensure", {})
+    with pytest.raises(RuntimeError, match="required"):
+        local.manage("ensure", {})
     run.assert_not_called()
 
 

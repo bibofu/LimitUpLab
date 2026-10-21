@@ -55,4 +55,6 @@ def test_acceptance_runner_does_not_inherit_active_database(tmp_path, monkeypatc
     assert captured["LIMITUPLAB_DATABASE_URL"] == ""
     assert captured["LIMITUPLAB_EVAL_DATABASE_URL"] == ""
     assert not Path(captured["LIMITUPLAB_ENV_FILE"]).exists()
-    assert Path(captured["LIMITUPLAB_DATABASE_PATH"]).is_relative_to(tmp_path / "output/validation")
+    assert "LIMITUPLAB_DATABASE_PATH" not in captured
+    assert captured["LIMITUPLAB_TEST_DATABASE_URL"] == os.environ["LIMITUPLAB_TEST_DATABASE_URL"]
+    assert captured["LIMITUPLAB_TEST_EVAL_DATABASE_URL"] == os.environ["LIMITUPLAB_TEST_EVAL_DATABASE_URL"]

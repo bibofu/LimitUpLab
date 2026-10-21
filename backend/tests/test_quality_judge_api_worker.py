@@ -1,5 +1,7 @@
 """Real API/SQLite/engine integration with a bounded fake model transport."""
 
+from database_support import isolated_database_url
+
 import json
 
 from fastapi import FastAPI
@@ -10,7 +12,7 @@ import pytest
 from app.agents.react_runtime.lifecycle import Journal
 from app.models import AgentChatRequest
 from app.quality_judge_models import DIMENSIONS
-from app.repositories.chat_session_repository import SQLiteChatSessionRepository
+from app.repositories.chat_session_repository import ChatSessionRepository
 from app.repositories.quality_repository import QualityRepository
 from app.routers import quality
 from app.services.quality_judge_worker import process_judge_jobs
@@ -29,8 +31,8 @@ def setup(tmp_path, monkeypatch):
     monkeypatch.setenv("LIMITUPLAB_QUALITY_NORMAL_SAMPLE_RATE", "0")
     monkeypatch.setenv("LIMITUPLAB_QUALITY_JUDGE_DAILY_CALL_LIMIT", "50")
     monkeypatch.setenv("LIMITUPLAB_QUALITY_JUDGE_MAX_CALLS_PER_JOB", "2")
-    path = tmp_path / "judge-api.sqlite"
-    SQLiteChatSessionRepository(path).ensure_session("session", owner_id="owner")
+    path = isolated_database_url('judge-api.sqlite')
+    ChatSessionRepository(path).ensure_session("session", owner_id="owner")
     journal = Journal(path)
     row, _ = journal.create(AgentChatRequest(session_id="session", message_id="question",
                            message="请分别说明数据来源和日期。"), "owner")

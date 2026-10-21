@@ -118,7 +118,7 @@ def docker(monkeypatch, tmp_path):
     monkeypatch.setattr(job.subprocess, "run", fake.run)
     monkeypatch.setattr(job.time, "monotonic", lambda: fake.clock)
     monkeypatch.setattr(job.time, "sleep", fake.sleep)
-    monkeypatch.setattr(job, "database_mode", lambda: "sqlite")
+    monkeypatch.setattr(job, "database_mode", lambda: "postgresql")
     monkeypatch.setattr(job, "assert_runtime_database_mode", lambda mode: None)
     monkeypatch.setattr(job, "POSTGRES_BACKUPS", tmp_path / "postgresql")
     return fake

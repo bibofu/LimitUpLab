@@ -30,12 +30,9 @@ def test_readiness_requires_selected_database(monkeypatch, stored, expected, res
 @pytest.mark.parametrize("returncode,running", [(0, True), (3, False)])
 def test_postgresql_worker_uses_database_lease(monkeypatch, returncode, running):
     run = Mock(return_value=subprocess.CompletedProcess([], returncode))
-    file_lock = Mock()
     monkeypatch.setattr(launcher.subprocess, "run", run)
-    monkeypatch.setattr(launcher, "worker_lock_active", file_lock)
     assert launcher.refresh_worker_running(Path("python"), {"LIMITUPLAB_DATABASE_URL": "postgresql://"}) is running
     assert "job:recommendation-refresh" in run.call_args.args[0][-1]
-    file_lock.assert_not_called()
 
 
 def test_failed_worker_query_cannot_trigger_duplicate_worker(monkeypatch):
@@ -44,13 +41,11 @@ def test_failed_worker_query_cannot_trigger_duplicate_worker(monkeypatch):
         launcher.refresh_worker_running(Path("python"), {"LIMITUPLAB_DATABASE_URL": "postgresql://"})
 
 
-def test_sqlite_worker_keeps_existing_file_lock(monkeypatch):
-    file_lock = Mock(return_value=True)
+def test_worker_without_database_url_is_rejected(monkeypatch):
     run = Mock()
-    monkeypatch.setattr(launcher, "worker_lock_active", file_lock)
     monkeypatch.setattr(launcher.subprocess, "run", run)
-    assert launcher.refresh_worker_running(Path("python"), {})
-    file_lock.assert_called_once()
+    with pytest.raises(RuntimeError, match="required"):
+        launcher.refresh_worker_running(Path("python"), {})
     run.assert_not_called()
 
 

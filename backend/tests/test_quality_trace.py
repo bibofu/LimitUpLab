@@ -1,3 +1,5 @@
+
+from database_support import isolated_database_url
 import json
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -6,7 +8,7 @@ from langchain_core.messages import AIMessage, HumanMessage, ToolMessage
 
 from app.agents.react_runtime.lifecycle import Journal, RunControl
 from app.models import AgentChatRequest
-from app.repositories import SQLiteChatSessionRepository
+from app.repositories import ChatSessionRepository
 from app.services.quality_trace import (
     MAX_TEXT_CHARS, bounded_snapshot, prune_trace_snapshots, record_snapshot,
     scrub_private_data, visible_messages,
@@ -41,8 +43,8 @@ def test_visible_messages_do_not_collect_hidden_reasoning_or_provider_metadata()
 
 
 def test_private_snapshot_retention_and_session_deletion(tmp_path):
-    path = tmp_path / "trace.sqlite"
-    chats = SQLiteChatSessionRepository(path)
+    path = isolated_database_url('trace.sqlite')
+    chats = ChatSessionRepository(path)
     chats.ensure_session("s", owner_id="owner")
     journal = Journal(path)
     row, _ = journal.create(AgentChatRequest(session_id="s", message_id="m", message="研究"), "owner")

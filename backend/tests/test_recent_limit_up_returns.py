@@ -39,7 +39,7 @@ def dataset(count=2):
 
 def registry(monkeypatch, data):
     monkeypatch.setattr("app.agents.tools.load_post_limit_dataset", lambda *a, **kw: data)
-    return AgentToolRegistry([], first_board_repository=SimpleNamespace(database_path=Path("unused.sqlite")),
+    return AgentToolRegistry([], first_board_repository=SimpleNamespace(database_url=None),
                              hithink_collector=object(), profile=V1_AGENT_PROFILE)
 
 

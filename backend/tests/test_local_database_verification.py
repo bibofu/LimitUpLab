@@ -10,11 +10,11 @@ import pytest
 
 from app.database import connect, connect_readonly, initialize_database
 from app.models import AgentPrediction, FirstBoardOutcome, StockDailyBar, StockIntradayKLineBar
-from app.repositories.agent_cache_repository import SQLiteAgentCacheRepository
-from app.repositories.chat_session_repository import SQLiteChatSessionRepository
-from app.repositories.first_board_repository import SQLiteFirstBoardRepository
-from app.repositories.limit_up_repository import SQLiteLimitUpRepository
-from app.repositories.scoring_policy_repository import SQLiteScoringPolicyRepository
+from app.repositories.agent_cache_repository import AgentCacheRepository
+from app.repositories.chat_session_repository import ChatSessionRepository
+from app.repositories.first_board_repository import FirstBoardRepository
+from app.repositories.limit_up_repository import LimitUpRepository
+from app.repositories.scoring_policy_repository import ScoringPolicyRepository
 from app.services.first_board_features import build_first_board_features
 from app.services.sample_data import SAMPLE_EVENTS
 from app.services.scoring_policy import build_default_scoring_policy
@@ -29,21 +29,15 @@ verification = importlib.util.module_from_spec(spec)
 spec.loader.exec_module(verification)
 
 
-@pytest.fixture(params=["sqlite", "postgresql"])
-def storage(request, tmp_path):
-    if request.param == "postgresql":
-        request.getfixturevalue("postgresql_database")
-        return None
-    path = tmp_path / "verification.sqlite"
-    with closing(connect(path)) as db:
-        initialize_database(db)
-    return path
+@pytest.fixture
+def storage(postgresql_database):
+    return postgresql_database
 
 
 def keep_user_rows(storage):
-    chats = SQLiteChatSessionRepository(storage)
+    chats = ChatSessionRepository(storage)
     chats.create_session(session_id="user-session", title="Keep this research")
-    cache = SQLiteAgentCacheRepository(storage)
+    cache = AgentCacheRepository(storage)
     cache.set_json(cache_key="user-cache", scope="research", payload={"keep": True},
                    expires_at=datetime.now(timezone.utc) + timedelta(hours=1))
 
@@ -69,13 +63,13 @@ def test_committed_probe_crud_and_rollback_leave_no_probe_rows(storage):
 
 def test_probe_failure_cleans_up_only_its_own_rows(storage, monkeypatch):
     keep_user_rows(storage)
-    original = SQLiteAgentCacheRepository.set_json
+    original = AgentCacheRepository.set_json
 
     def fail_after_commit(self, **kwargs):
         original(self, **kwargs)
         raise RuntimeError("probe failed after its cache write")
 
-    monkeypatch.setattr(SQLiteAgentCacheRepository, "set_json", fail_after_commit)
+    monkeypatch.setattr(AgentCacheRepository, "set_json", fail_after_commit)
     with pytest.raises(RuntimeError, match="probe failed"):
         verification.verify_write_paths(storage)
     assert_only_user_rows_remain(storage)
@@ -89,8 +83,8 @@ def test_empty_business_database_cannot_pass_repository_validation(storage):
 def test_repository_reads_decode_all_required_business_models(storage):
     event = SAMPLE_EVENTS[0].model_copy(update={"board_height": 1})
     now = datetime.now(timezone.utc)
-    SQLiteLimitUpRepository(storage).upsert_events([event])
-    repo = SQLiteFirstBoardRepository(storage)
+    LimitUpRepository(storage).upsert_events([event])
+    repo = FirstBoardRepository(storage)
     repo.upsert_features(build_first_board_features([event]))
     repo.upsert_daily_bars([StockDailyBar(
         symbol=event.symbol, trade_date=event.trade_date, open=10, high=11, low=9, close=10.5,
@@ -108,7 +102,7 @@ def test_repository_reads_decode_all_required_business_models(storage):
         score=80, rating="A", confidence=0.8, scoring_version="synthetic-test", prediction_source="historical_backtest",
         data_as_of=event.trade_date, facts_json={}, reasons=[], risks=[], created_at=now,
     )])
-    SQLiteScoringPolicyRepository(storage).upsert_policy(build_default_scoring_policy())
+    ScoringPolicyRepository(storage).upsert_policy(build_default_scoring_policy())
     result = verification.verify_repository_reads(storage)
     assert result["agent_predictions"]["rows"] == 1
     assert result["stock_intraday_bars"]["rows"] == 1
@@ -118,7 +112,7 @@ def test_repository_reads_decode_all_required_business_models(storage):
 
 @pytest.fixture
 def baseline_report(postgresql_database):
-    SQLiteLimitUpRepository().upsert_events(SAMPLE_EVENTS[:2])
+    LimitUpRepository().upsert_events(SAMPLE_EVENTS[:2])
     with get_engine().connect() as db:
         tables = {name: {**target_fingerprint(db, metadata.tables[name]), "status": "verified"}
                   for name in verification.BUSINESS_TABLES}
@@ -126,7 +120,7 @@ def baseline_report(postgresql_database):
 
 
 def test_business_fingerprints_ignore_new_sessions_but_reject_data_loss(baseline_report):
-    SQLiteChatSessionRepository().create_session(session_id="new-after-cutover")
+    ChatSessionRepository().create_session(session_id="new-after-cutover")
     assert verification.verify_business_data(baseline_report)["limit_up_events"]["rows"] == 2
     with closing(connect()) as db:
         db.execute("DELETE FROM limit_up_events WHERE symbol=?", (SAMPLE_EVENTS[0].symbol,))
@@ -164,9 +158,7 @@ def test_cli_failure_report_never_echoes_driver_credentials(tmp_path, monkeypatc
 
 def test_cutover_verifier_rejects_accidental_sqlite_selection(tmp_path, monkeypatch):
     path = tmp_path / "retained.sqlite"
-    with closing(connect(path)) as db:
-        initialize_database(db)
     monkeypatch.delenv("LIMITUPLAB_DATABASE_URL", raising=False)
     monkeypatch.setenv("LIMITUPLAB_DATABASE_PATH", str(path))
-    with pytest.raises(verification.VerificationError, match="configured_database_must_be_postgresql"):
+    with pytest.raises(ValueError, match="required.*PostgreSQL"):
         verification.verify_local_database({})

@@ -1,13 +1,12 @@
-import os
+
+from database_support import isolated_database_url, release_database_url
 import unittest
 from contextlib import contextmanager
 from datetime import date, datetime, timedelta, timezone
-from pathlib import Path
-from uuid import uuid4
 
 from app.database import connect, initialize_database
-from app.models import StockDailyBar
-from app.repositories import SQLiteFirstBoardRepository
+from app.models import AgentPrediction, StockDailyBar
+from app.repositories import FirstBoardRepository
 from app.services.first_board_features import (
     build_first_board_features,
     build_first_board_outcome,
@@ -15,31 +14,37 @@ from app.services.first_board_features import (
 from app.services.sample_data import SAMPLE_EVENTS
 
 
-TEST_TMP_ROOT = Path(os.getenv("LIMITUPLAB_TEST_TMP", Path(__file__).resolve().parents[1]))
+def historical_prediction():
+    return AgentPrediction(
+        prediction_id="historical", trade_date=date(2026, 8, 10), symbol="002001",
+        name="fixture", score=80, rating="A", confidence=0.8, scoring_version="v-test",
+        prediction_source="historical_backtest", data_as_of=date(2026, 8, 10),
+        facts_json={}, reasons=[], risks=[], created_at=datetime(2026, 8, 10, 10, tzinfo=timezone.utc),
+    )
 
 
-# Prepare the temporary database path fixture or observation used by the surrounding regression
+# Prepare the temporary PostgreSQL schema fixture or observation used by the surrounding regression
 # scenario.
 @contextmanager
-def temporary_database_path():
-    database_path = TEST_TMP_ROOT / f"first-board-test-{uuid4().hex}.sqlite"
+def temporary_database_url():
+    database_url = isolated_database_url()
     try:
-        yield database_path
+        yield database_url
     finally:
-        database_path.unlink(missing_ok=True)
+        release_database_url(database_url)
 
 
 class FirstBoardFeaturesTest(unittest.TestCase):
-    # Regression scenario: initialize database creates feature tables.
-    def test_initialize_database_creates_feature_tables(self) -> None:
-        with temporary_database_path() as database_path:
-            connection = connect(database_path)
+    # Alembic creates the complete current feature schema before runtime checks.
+    def test_alembic_schema_contains_feature_tables(self) -> None:
+        with temporary_database_url() as database_url:
+            connection = connect(database_url)
             try:
                 initialize_database(connection)
                 table_names = {
                     row["name"]
                     for row in connection.execute(
-                        "SELECT name FROM sqlite_master WHERE type = 'table'"
+                        "SELECT table_name AS name FROM information_schema.tables WHERE table_schema=current_schema()"
                     ).fetchall()
                 }
             finally:
@@ -53,136 +58,48 @@ class FirstBoardFeaturesTest(unittest.TestCase):
         self.assertIn("agent_predictions", table_names)
         self.assertIn("agent_live_prediction_snapshots", table_names)
 
-    # Regression scenario: initialize database migrates legacy prediction snapshots.
-    def test_initialize_database_migrates_legacy_prediction_snapshots(self) -> None:
-        with temporary_database_path() as database_path:
-            connection = connect(database_path)
+    # Runtime checks reject stale schemas rather than rewriting old predictions.
+    def test_readiness_rejects_stale_revision_without_rewriting_predictions(self) -> None:
+        with temporary_database_url() as database_url:
+            prediction = historical_prediction()
+            repository = FirstBoardRepository(database_url)
+            repository.upsert_predictions([prediction])
+            connection = connect(database_url)
             try:
-                connection.execute(
-                    """
-                    CREATE TABLE agent_predictions (
-                        prediction_id TEXT PRIMARY KEY,
-                        trade_date TEXT NOT NULL,
-                        symbol TEXT NOT NULL,
-                        name TEXT NOT NULL,
-                        score REAL NOT NULL,
-                        rating TEXT NOT NULL,
-                        confidence REAL NOT NULL,
-                        scoring_version TEXT NOT NULL,
-                        facts_json TEXT NOT NULL,
-                        reasons_json TEXT NOT NULL,
-                        risks_json TEXT NOT NULL,
-                        created_at TEXT NOT NULL,
-                        UNIQUE(trade_date, symbol, scoring_version)
-                    )
-                    """
-                )
-                connection.execute(
-                    """
-                    INSERT INTO agent_predictions VALUES (
-                        'legacy', '2026-08-10', '002001', 'legacy sample',
-                        80, 'A', 0.8, 'v-test', '{}', '[]', '[]',
-                        '2026-08-10T10:00:00+00:00'
-                    )
-                    """
-                )
-                initialize_database(connection)
-
-                migrated = connection.execute(
-                    "SELECT prediction_source, data_as_of FROM agent_predictions"
-                ).fetchone()
-                self.assertEqual(migrated["prediction_source"], "historical_backtest")
-                self.assertEqual(migrated["data_as_of"], "2026-08-10")
-                connection.execute(
-                    """
-                    INSERT INTO agent_predictions VALUES (
-                        'live', '2026-08-10', '002001', 'live sample',
-                        81, 'A', 0.9, 'v-test', 'live', '2026-08-10',
-                        '{}', '[]', '[]', '2026-08-10T11:00:00+00:00', '{}'
-                    )
-                    """
-                )
-                self.assertEqual(
-                    connection.execute("SELECT COUNT(*) FROM agent_predictions").fetchone()[0],
-                    2,
-                )
+                before = dict(connection.execute("SELECT * FROM agent_predictions").fetchone())
+                connection.execute("UPDATE alembic_version SET version_num='old_revision'")
+                connection.commit()
+                with self.assertRaisesRegex(RuntimeError, "schema is not current"):
+                    initialize_database(connection)
+                self.assertEqual(connection.execute("SELECT version_num FROM alembic_version").fetchone()[0], "old_revision")
+                self.assertEqual(dict(connection.execute("SELECT * FROM agent_predictions").fetchone()), before)
+                self.assertEqual(before["prediction_source"], "historical_backtest")
             finally:
                 connection.close()
 
-    # Regression scenario: schema v2 keeps earliest live batch per date.
-    def test_schema_v2_keeps_earliest_live_batch_per_date(self) -> None:
-        with temporary_database_path() as database_path:
-            connection = connect(database_path)
+    # A later policy cannot rewrite the first committed live batch.
+    def test_postgresql_preserves_first_live_batch_when_policy_changes(self) -> None:
+        with temporary_database_url() as database_url:
+            repository = FirstBoardRepository(database_url)
+            first = historical_prediction().model_copy(update={
+                "prediction_id": "original-live", "prediction_source": "live",
+                "scoring_version": "policy-v1",
+            })
+            later = first.model_copy(update={
+                "prediction_id": "rewritten-live", "symbol": "002002", "score": 90,
+                "scoring_version": "policy-v2", "created_at": first.created_at + timedelta(hours=1),
+            })
+            self.assertEqual(repository.upsert_predictions([first]), 1)
+            connection = connect(database_url)
             try:
-                connection.execute(
-                    """
-                    CREATE TABLE agent_predictions (
-                        prediction_id TEXT PRIMARY KEY,
-                        trade_date TEXT NOT NULL,
-                        symbol TEXT NOT NULL,
-                        name TEXT NOT NULL,
-                        score REAL NOT NULL,
-                        rating TEXT NOT NULL,
-                        confidence REAL NOT NULL,
-                        scoring_version TEXT NOT NULL,
-                        prediction_source TEXT NOT NULL,
-                        data_as_of TEXT NOT NULL,
-                        facts_json TEXT NOT NULL,
-                        reasons_json TEXT NOT NULL,
-                        risks_json TEXT NOT NULL,
-                        created_at TEXT NOT NULL,
-                        UNIQUE(trade_date, symbol, scoring_version, prediction_source)
-                    )
-                    """
-                )
-                connection.executemany(
-                    """
-                    INSERT INTO agent_predictions VALUES (
-                        ?, '2026-08-10', ?, ?, ?, 'A', 0.8, ?, 'live',
-                        '2026-08-10', '{}', '[]', '[]', ?
-                    )
-                    """,
-                    [
-                        (
-                            "original-live",
-                            "002001",
-                            "original",
-                            80,
-                            "policy-v1",
-                            "2026-08-10T10:00:00+00:00",
-                        ),
-                        (
-                            "rewritten-live",
-                            "002002",
-                            "rewritten",
-                            90,
-                            "policy-v2",
-                            "2026-08-11T10:00:00+00:00",
-                        ),
-                    ],
-                )
-                connection.execute("PRAGMA user_version = 1")
-                connection.commit()
-
+                original = dict(connection.execute("SELECT * FROM agent_live_prediction_snapshots").fetchone())
+                self.assertEqual(repository.upsert_predictions([later]), 0)
                 initialize_database(connection)
-
-                live_rows = connection.execute(
-                    """
-                    SELECT prediction_id
-                    FROM agent_predictions
-                    WHERE prediction_source = 'live'
-                    """
-                ).fetchall()
-                batch = connection.execute(
-                    """
-                    SELECT scoring_version, prediction_count
-                    FROM agent_live_prediction_snapshots
-                    WHERE trade_date = '2026-08-10'
-                    """
-                ).fetchone()
-                self.assertEqual([row["prediction_id"] for row in live_rows], ["original-live"])
-                self.assertEqual(batch["scoring_version"], "policy-v1")
-                self.assertEqual(batch["prediction_count"], 1)
+                self.assertEqual(dict(connection.execute("SELECT * FROM agent_live_prediction_snapshots").fetchone()), original)
+                ids = [row[0] for row in connection.execute("SELECT prediction_id FROM agent_predictions WHERE prediction_source='live'")]
+                self.assertEqual(ids, ["original-live"])
+                self.assertEqual(original["scoring_version"], "policy-v1")
+                self.assertEqual(original["prediction_count"], 1)
             finally:
                 connection.close()
 
@@ -198,45 +115,32 @@ class FirstBoardFeaturesTest(unittest.TestCase):
         self.assertEqual(feature.market_failed_rate_bucket, "fragile")
         self.assertEqual(feature.feature_version, "first-board-feature-v3-no-st-bj-context")
 
-    # Regression scenario: initialize database removes legacy market sentiment column.
-    def test_initialize_database_removes_legacy_market_sentiment_column(self) -> None:
+    # Runtime readiness leaves records and Alembic-managed columns unchanged.
+    def test_schema_readiness_preserves_feature_records_and_current_columns(self) -> None:
         features = build_first_board_features(SAMPLE_EVENTS, trade_date=date(2026, 5, 15))
-
-        with temporary_database_path() as database_path:
-            connection = connect(database_path)
+        with temporary_database_url() as database_url:
+            repository = FirstBoardRepository(database_url)
+            repository.upsert_features(features)
+            connection = connect(database_url)
             try:
+                before = [dict(row) for row in connection.execute("SELECT * FROM first_board_features ORDER BY trade_date,symbol")]
                 initialize_database(connection)
-                SQLiteFirstBoardRepository(database_path=database_path).upsert_features(features)
-                connection.execute(
-                    "ALTER TABLE first_board_features "
-                    "ADD COLUMN market_sentiment TEXT NOT NULL DEFAULT 'cooling'"
-                )
-                connection.execute("PRAGMA user_version = 0")
-                connection.commit()
-
-                initialize_database(connection)
-
-                columns = {
-                    row["name"]
-                    for row in connection.execute(
-                        "PRAGMA table_info(first_board_features)"
-                    ).fetchall()
-                }
-                row_count = connection.execute(
-                    "SELECT COUNT(*) FROM first_board_features"
-                ).fetchone()[0]
+                columns = {row[0] for row in connection.execute(
+                    "SELECT column_name FROM information_schema.columns WHERE table_schema=current_schema() AND table_name='first_board_features'"
+                )}
+                after = [dict(row) for row in connection.execute("SELECT * FROM first_board_features ORDER BY trade_date,symbol")]
             finally:
                 connection.close()
-
-        self.assertNotIn("market_sentiment", columns)
-        self.assertEqual(row_count, 1)
+            self.assertNotIn("market_sentiment", columns)
+            self.assertEqual(after, before)
+            self.assertEqual(repository.list_features_for_date(date(2026, 5, 15)), features)
 
     # Regression scenario: repository upserts and lists features.
     def test_repository_upserts_and_lists_features(self) -> None:
         features = build_first_board_features(SAMPLE_EVENTS, trade_date=date(2026, 5, 15))
 
-        with temporary_database_path() as database_path:
-            repository = SQLiteFirstBoardRepository(database_path=database_path)
+        with temporary_database_url() as database_url:
+            repository = FirstBoardRepository(database_url=database_url)
             repository.upsert_features(features)
             persisted = repository.list_features_for_date(date(2026, 5, 15))
 

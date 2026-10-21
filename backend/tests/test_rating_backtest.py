@@ -1,3 +1,5 @@
+
+from database_support import isolated_database_url, release_database_url
 import os
 import unittest
 from datetime import date, datetime, time, timezone
@@ -5,7 +7,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.models import FirstBoardOutcome, LimitUpEvent
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import FirstBoardRepository
 from app.services.rating_backtest import build_rating_backtest
 
 
@@ -19,17 +21,12 @@ class RatingBacktestTest(unittest.TestCase):
 
     # Prepare the database path fixture or observation used by the surrounding regression
     # scenario.
-    def _database_path(self) -> Path:
-        return TEST_TMP_ROOT / f"rating-backtest-{uuid4().hex}.sqlite"
+    def _database_url(self) -> str:
+        return isolated_database_url()
 
     # Release the temporary resources owned by this test fixture.
-    def _cleanup_database(self, database_path: Path) -> None:
-        for path in (
-            database_path,
-            database_path.with_name(f"{database_path.name}-wal"),
-            database_path.with_name(f"{database_path.name}-shm"),
-        ):
-            path.unlink(missing_ok=True)
+    def _cleanup_database(self, database_url: str) -> None:
+        release_database_url(database_url)
 
     # Build the LimitUpEvent fixture used by the surrounding regression scenario.
     def _event(
@@ -97,9 +94,9 @@ class RatingBacktestTest(unittest.TestCase):
 
     # Regression scenario: backtest aggregates rating buckets and failures.
     def test_backtest_aggregates_rating_buckets_and_failures(self) -> None:
-        database_path = self._database_path()
+        database_url = self._database_url()
         try:
-            repository = SQLiteFirstBoardRepository(database_path=database_path)
+            repository = FirstBoardRepository(database_url=database_url)
             trade_date = date(2026, 8, 10)
             events = [
                 self._event("002001", "\u9ad8\u5206\u6837\u672c", trade_date, time(9, 35), 0),
@@ -132,7 +129,7 @@ class RatingBacktestTest(unittest.TestCase):
                 any(item.symbol == "002002" for item in response.failure_samples)
             )
         finally:
-            self._cleanup_database(database_path)
+            self._cleanup_database(database_url)
 
 
 if __name__ == "__main__":

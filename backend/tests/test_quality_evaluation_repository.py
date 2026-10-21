@@ -1,8 +1,11 @@
-"""Frozen evaluation persistence and queue migrations use real isolated SQLite."""
+"""Frozen evaluation persistence and historical queues use isolated PostgreSQL."""
+
+from database_support import isolated_database_url
 
 from concurrent.futures import ThreadPoolExecutor
 import json
-import sqlite3
+import psycopg
+from database_support import reject_writes
 import time
 
 import pytest
@@ -12,15 +15,15 @@ from app.database import connect
 from app.models import AgentChatRequest
 from app.quality_models import QualityConflict
 from app.quality_schema import DETECTOR_VERSION, answer_hash, encode, initialize_quality_schema
-from app.repositories.chat_session_repository import SQLiteChatSessionRepository
+from app.repositories.chat_session_repository import ChatSessionRepository
 from app.repositories.quality_repository import QualityRepository
 
 
 @pytest.fixture
 def store(tmp_path, monkeypatch):
     monkeypatch.setenv("LIMITUPLAB_QUALITY_NORMAL_SAMPLE_RATE", "0.05")
-    path = tmp_path / "evaluation.sqlite"
-    chats = SQLiteChatSessionRepository(path)
+    path = isolated_database_url('evaluation.sqlite')
+    chats = ChatSessionRepository(path)
     chats.ensure_session("s", owner_id="owner")
     journal = Journal(path)
     row, _ = journal.create(AgentChatRequest(session_id="s", message_id="m", message="说明数据"), "owner")
@@ -57,7 +60,7 @@ def test_bundle_freezes_at_completion_and_retry_uses_same_material(store):
     assert {(item["execution_status"], item["verdict"]) for item in history["items"]} == {("error", "unknown"), ("succeeded", "pass")}
     assert repo.list_evaluations(verdict="pass")["total"] == 1
     assert repo.list_cases()["total"] == 0
-    with repo.connection() as db, pytest.raises(sqlite3.IntegrityError):
+    with repo.connection() as db, pytest.raises(psycopg.IntegrityError):
         db.execute("UPDATE quality_evidence_bundles SET payload_json='{}'")
 
 
@@ -118,12 +121,12 @@ def test_new_findings_preserve_human_decision_and_attempt_atomicity(store):
     signal = {"source": "deterministic", "code": "new_check", "severity": "critical", "summary": "新检查线索",
               "evidence": {}, "detector_version": DETECTOR_VERSION}
     with repo.connection() as db:
-        db.execute("CREATE TRIGGER reject_attempt BEFORE UPDATE ON quality_evaluations BEGIN SELECT RAISE(ABORT,'fixture'); END")
-    with pytest.raises(sqlite3.IntegrityError):
+        reject_writes(db, table="quality_evaluations", trigger="reject_attempt", event="UPDATE")
+    with pytest.raises(psycopg.IntegrityError):
         repo.complete_job(first, [signal], report(first, "fail"))
     assert len(repo.case_detail(case_id)["signals"]) == 1
     with repo.connection() as db:
-        db.execute("DROP TRIGGER reject_attempt")
+        db.execute("DROP TRIGGER reject_attempt ON quality_evaluations")
     repo.complete_job(first, [signal], report(first, "fail"))
     detail = repo.case_detail(case_id)
     assert detail["case"]["status"] == "not_a_bug" and detail["case"]["severity"] == "medium"
@@ -161,77 +164,65 @@ def test_atomic_quota_idempotency_and_session_delete_does_not_refund(store):
         assert db.execute("SELECT reserved_units FROM quality_budget_usage").fetchone()[0] == 1
 
 
-def legacy_database(path):
-    SQLiteChatSessionRepository(path).ensure_session("s", owner_id="owner")
-    with connect(path) as db:
-        db.execute("""CREATE TABLE react_runs(run_id TEXT PRIMARY KEY,owner_id TEXT,session_id TEXT,message_key TEXT,
-            request_json TEXT,request_hash TEXT,active INTEGER,cancelled INTEGER,started_at TEXT,checkpoint_json TEXT,response_json TEXT)""")
-        response = {"answer": "旧答案", "task_status": "complete"}
-        db.execute("INSERT INTO react_runs VALUES('legacy','owner','s','m','{}','hash',0,0,'2026-10-17T00:00:00+00:00',NULL,?)", (encode(response),))
-        db.execute("""CREATE TABLE quality_jobs(id TEXT PRIMARY KEY,run_id TEXT,answer_hash TEXT,detector_version TEXT,
-            status TEXT,attempts INTEGER,max_attempts INTEGER,available_at REAL,lease_token TEXT,lease_until REAL,
-            worker_id TEXT,last_error TEXT,created_at TEXT,updated_at TEXT,UNIQUE(run_id,answer_hash,detector_version))""")
-        db.execute("INSERT INTO quality_jobs VALUES('old','legacy',?,'deterministic-v1','running',1,3,0,'stale',?,'old-worker',NULL,'old','old')",
-                   (answer_hash(response), time.time() + 1000))
+def historical_database(database_url):
+    ChatSessionRepository(database_url).ensure_session("s", owner_id="owner")
+    response = {"answer": "旧答案", "task_status": "complete"}
+    with connect(database_url) as db:
+        db.execute("""INSERT INTO react_runs
+            (run_id,owner_id,session_id,message_key,request_json,request_hash,active,cancelled,
+             started_at,checkpoint_json,response_json)
+            VALUES('legacy','owner','s','m','{}','hash',0,0,'2026-10-17T00:00:00+00:00',NULL,?)""",
+            (encode(response),))
+    return response
 
 
-def test_v1_migration_is_idempotent_preserves_jobs_and_marks_historical_capture(tmp_path):
-    path = tmp_path / "legacy.sqlite"
-    legacy_database(path)
-    repo = QualityRepository(path)
-    with repo.connection() as db:
-        old = dict(db.execute("SELECT * FROM quality_jobs WHERE id='old'").fetchone())
-        assert old["status"] == "superseded" and old["attempts"] == 1 and old["lease_token"] is None
-        old["lease_token"] = "stale"
-    with pytest.raises(QualityConflict):
-        repo.fail_job(old, "StaleWorker")
-    QualityRepository(path)
-    assert repo.evaluation_history("legacy")["total"] == 1
-    legacy = repo.evaluation_history("legacy")["items"][0]
-    assert legacy["execution_status"] == "skipped" and legacy["verdict"] == "unknown"
-    assert legacy["report"]["metadata"]["legacy_job_status"] == "running"
+def test_historical_backfill_is_idempotent_and_marks_capture_mode():
+    database_url = isolated_database_url()
+    response = historical_database(database_url)
+    repo = QualityRepository(database_url)
+    assert repo.evaluation_history("legacy")["total"] == 0
     assert repo.backfill_jobs() == 1
     job = repo.claim_job("new-worker")
     assert job["detector_version"] == DETECTOR_VERSION
     assert job["bundle"]["manifest"]["capture_mode"] == "historical"
-    assert repo.backfill_jobs() == 0
+    assert job["bundle"]["response"]["answer"] == response["answer"]
+    assert QualityRepository(database_url).backfill_jobs() == 0
+    with repo.connection() as db:
+        assert json.loads(db.execute("SELECT response_json FROM react_runs").fetchone()[0]) == response
 
 
-def test_migration_rollback_preserves_old_outbox(tmp_path, monkeypatch):
-    from app.database import ResilientSQLiteConnection
-    path = tmp_path / "rollback.sqlite"
-    legacy_database(path)
-    original = ResilientSQLiteConnection.execute
-    def failing(self, sql, parameters=()):
-        if "CREATE TABLE IF NOT EXISTS quality_evaluations" in sql:
-            raise sqlite3.OperationalError("migration interrupted")
-        return original(self, sql, parameters)
-    with monkeypatch.context() as patch:
-        patch.setattr(ResilientSQLiteConnection, "execute", failing)
-        with pytest.raises(sqlite3.OperationalError):
-            with connect(path) as db:
-                initialize_quality_schema(db)
-    with connect(path) as db:
-        assert "job_kind" not in {r[1] for r in db.execute("PRAGMA table_info(quality_jobs)")}
-        assert db.execute("SELECT status,lease_token FROM quality_jobs").fetchone()[:] == ("running", "stale")
+def test_failed_historical_backfill_preserves_answer_and_rolls_back_outbox():
+    database_url = isolated_database_url()
+    response = historical_database(database_url)
+    repo = QualityRepository(database_url)
+    with repo.connection() as db:
+        reject_writes(db, table="quality_jobs", trigger="reject_backfill")
+    with pytest.raises(psycopg.IntegrityError):
+        repo.backfill_jobs()
+    with repo.connection() as db:
+        assert db.execute("SELECT count(*) FROM quality_jobs").fetchone()[0] == 0
+        assert db.execute("SELECT count(*) FROM quality_evidence_bundles").fetchone()[0] == 0
+        assert json.loads(db.execute("SELECT response_json FROM react_runs").fetchone()[0]) == response
+        db.execute("DROP TRIGGER reject_backfill ON quality_jobs")
+    assert repo.backfill_jobs() == 1
 
 
-def test_concurrent_initialization_and_backfill_share_one_migration(tmp_path):
-    path = tmp_path / "concurrent.sqlite"
-    legacy_database(path)
+def test_concurrent_repositories_enqueue_historical_answer_once():
+    database_url = isolated_database_url()
+    historical_database(database_url)
     with ThreadPoolExecutor(max_workers=3) as pool:
-        repositories = list(pool.map(lambda _: QualityRepository(path), range(3)))
+        repositories = list(pool.map(lambda _: QualityRepository(database_url), range(3)))
         backfilled = list(pool.map(lambda repo: repo.backfill_jobs(), repositories))
     assert sum(backfilled) == 1
-    assert repositories[0].evaluation_history("legacy")["total"] == 1
     with repositories[0].connection() as db:
-        assert db.execute("SELECT count(*) FROM quality_jobs").fetchone()[0] == 2
+        assert db.execute("SELECT count(*) FROM quality_jobs").fetchone()[0] == 1
+        assert db.execute("SELECT count(*) FROM quality_evidence_bundles").fetchone()[0] == 1
 
 
 def test_capture_failure_preserves_answer_and_freezes_explicit_unknown(store, monkeypatch):
     from app.services import quality_evidence
     repo, _, _ = store
-    journal = Journal(repo.path)
+    journal = Journal(repo.database_url)
     row, _ = journal.create(AgentChatRequest(session_id="s", message_id="second", message="正常请求"), "owner")
     def broken(*args, **kwargs):
         raise RuntimeError("private diagnostic exception body")

@@ -6,7 +6,7 @@ import sqlite3
 import pytest
 
 from app.database import connect_readonly
-from app.repositories.limit_up_repository import SQLiteLimitUpRepository
+from app.repositories.limit_up_repository import LimitUpRepository
 from app.services.sample_data import SAMPLE_EVENTS
 from scripts.import_sample_data import import_samples
 
@@ -20,7 +20,7 @@ def test_postgres_sample_import_needs_no_sqlite(postgresql_database, tmp_path, m
 
     monkeypatch.setattr(sqlite3, "connect", forbid_sqlite)
     assert import_samples() == "postgresql"
-    assert {event.symbol for event in SQLiteLimitUpRepository().list_events()} == {
+    assert {event.symbol for event in LimitUpRepository().list_events()} == {
         event.symbol for event in SAMPLE_EVENTS
     }
     assert not absent.exists()
@@ -28,7 +28,7 @@ def test_postgres_sample_import_needs_no_sqlite(postgresql_database, tmp_path, m
 
 def test_sample_import_preserves_existing_events(postgresql_database):
     original = SAMPLE_EVENTS[0].model_copy(update={"name": "Existing research data"})
-    repository = SQLiteLimitUpRepository()
+    repository = LimitUpRepository()
     repository.upsert_events([original])
     with pytest.raises(RuntimeError, match="already has events"):
         import_samples()

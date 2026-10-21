@@ -9,7 +9,7 @@ import pytest
 
 from app.agents.react_runtime.lifecycle import CURRENT_CONTROL, Journal, RunControl
 from app.models import AgentChatRequest, AgentChatResponse
-from app.repositories import SQLiteChatSessionRepository
+from app.repositories import ChatSessionRepository
 from app.routers import react_chat
 from app.services.runtime_coordination import LeaseLost
 from test_runtime_coordination import lease_store
@@ -19,8 +19,8 @@ from test_runtime_coordination import lease_store
 def shared_run(lease_store):
     session = "shared-" + uuid4().hex
     owner = "owner-" + uuid4().hex
-    SQLiteChatSessionRepository(lease_store.database_path).ensure_session(session, owner_id=owner)
-    journal = Journal(lease_store.database_path)
+    ChatSessionRepository(lease_store.database_url).ensure_session(session, owner_id=owner)
+    journal = Journal(lease_store.database_url)
     request = AgentChatRequest(session_id=session, message_id="m", message="什么是首板？")
     row, _ = journal.create(request, owner)
     return journal, row, owner
@@ -43,7 +43,7 @@ def test_stale_worker_cannot_publish_any_execution_write(shared_run):
         CURRENT_CONTROL.reset(context)
     with journal.connection() as db:
         db.execute("UPDATE runtime_leases SET expires_at=0 WHERE name=?", (old.name,))
-    new = Journal(journal.database_path).claim(key)
+    new = Journal(journal.database_url).claim(key)
     context = CURRENT_CONTROL.set(RunControl(journal, row, old))
     try:
         for operation in (
@@ -73,7 +73,7 @@ def test_duplicate_request_and_claim_have_one_winner(shared_run):
     journal, row, owner = shared_run
     request = AgentChatRequest.model_validate_json(row["request_json"])
     def submit(_):
-        remote = Journal(journal.database_path)
+        remote = Journal(journal.database_url)
         record, fresh = remote.create(request, owner)
         return record["run_id"], fresh, remote.claim(record["run_id"])
     with ThreadPoolExecutor(max_workers=6) as workers:
@@ -89,12 +89,12 @@ def test_remote_status_stream_and_cancel_ignore_local_thread_registry(shared_run
     journal, row, owner = shared_run
     key = row["run_id"]
     execution = journal.claim(key)
-    monkeypatch.setattr(react_chat, "Journal", lambda: Journal(journal.database_path))
+    monkeypatch.setattr(react_chat, "Journal", lambda: Journal(journal.database_url))
     # Model a different API instance: it owns no local worker for this run.
     assert key not in react_chat._workers
     assert not react_chat.get_run(key, owner)["interrupted"]
     async def read():
-        frames = react_chat.stream(Journal(journal.database_path), row, owner).body_iterator
+        frames = react_chat.stream(Journal(journal.database_url), row, owner).body_iterator
         assert "accepted" in await anext(frames)
         assert "heartbeat" in await anext(frames)
         await frames.aclose()
@@ -114,7 +114,7 @@ def test_remote_cancel_finalizes_expired_run_without_model(shared_run, monkeypat
     journal, row, owner = shared_run
     execution = journal.claim(row["run_id"])
     execution.release()
-    monkeypatch.setattr(react_chat, "Journal", lambda: Journal(journal.database_path))
+    monkeypatch.setattr(react_chat, "Journal", lambda: Journal(journal.database_url))
     assert react_chat.get_run(row["run_id"], owner)["interrupted"]
     react_chat.cancel(row["run_id"], owner)
     result = journal.get(row["run_id"], owner)

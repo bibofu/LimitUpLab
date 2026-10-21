@@ -1,5 +1,7 @@
+
+from database_support import isolated_database_url
 import json
-import sqlite3
+from app.database import connect
 import pytest
 from contextlib import closing
 from datetime import date, datetime
@@ -9,8 +11,8 @@ from app.database import initialize_database
 from app.services.prediction_time import assess_prediction_time, close_provenance, provenance_errors
 from app.services.prediction_time_audit import audit_prediction_times
 from app.models import AgentPrediction, FirstBoardRatingsResponse, RecommendationIntelligenceResponse
-from app.repositories.first_board_repository import SQLiteFirstBoardRepository
-from app.repositories.recommendation_intelligence_repository import SQLiteRecommendationIntelligenceRepository
+from app.repositories.first_board_repository import FirstBoardRepository
+from app.repositories.recommendation_intelligence_repository import RecommendationIntelligenceRepository
 from app.services.evaluation_agent import select_canonical_prediction_snapshots
 
 
@@ -70,8 +72,7 @@ def test_close_write_gate_requires_same_day_after_1530():
 
 # Regression scenario: audit keeps originals and marks only matching late review.
 def test_audit_keeps_originals_and_marks_only_matching_late_review():
-    connection = sqlite3.connect(":memory:")
-    connection.row_factory = sqlite3.Row
+    connection = connect(isolated_database_url())
     initialize_database(connection)
     connection.execute("""INSERT INTO agent_predictions
         (prediction_id,trade_date,symbol,name,score,rating,confidence,scoring_version,
@@ -136,7 +137,7 @@ def test_exchange_calendar_handles_weekend_and_rejects_holiday_target():
 # Regression scenario: public upsert rejects backfilled or early live rows.
 @pytest.mark.parametrize("timestamp", ["2026-09-02T15:29:59+08:00", "2026-09-03T16:00:00+08:00"])
 def test_public_upsert_rejects_backfilled_or_early_live_rows(tmp_path, timestamp):
-    repo = SQLiteFirstBoardRepository(tmp_path / "test.sqlite")
+    repo = FirstBoardRepository(isolated_database_url('test.sqlite'))
     with pytest.raises(ValueError, match="Invalid live prediction time"):
         repo.upsert_predictions([stored_prediction(timestamp)])
 
@@ -157,12 +158,12 @@ def test_final_public_save_rejects_late_metadata(tmp_path):
         relay_base_date=date(2026, 9, 2), prediction_provenance=final_provenance("2026-09-03T10:00:00+08:00"),
     )
     with pytest.raises(ValueError, match="final_outside_preopen_window"):
-        SQLiteRecommendationIntelligenceRepository(tmp_path / "test.sqlite").save_final(response)
+        RecommendationIntelligenceRepository(isolated_database_url('test.sqlite')).save_final(response)
 
 
 # Regression scenario: commit window failure rolls back archive replacement and final.
 def test_commit_window_failure_rolls_back_archive_replacement_and_final(tmp_path):
-    repo = SQLiteFirstBoardRepository(tmp_path / "test.sqlite")
+    repo = FirstBoardRepository(isolated_database_url('test.sqlite'))
     repo.upsert_predictions([stored_prediction()])
     created = datetime.fromisoformat("2026-09-03T09:29:59+08:00")
     provenance = final_provenance(created.isoformat())
@@ -181,7 +182,7 @@ def test_commit_window_failure_rolls_back_archive_replacement_and_final(tmp_path
         repo.persist_live_prediction_snapshot(ratings=ratings, predictions=[], top_limit=10,
             data_as_of=date(2026, 9, 3), created_at=created, replace=True,
             final_response=response, before_commit=missed_window)
-    with closing(sqlite3.connect(repo.database_path)) as c:
+    with closing(connect(repo.database_url)) as c:
         assert c.execute("SELECT count(*) FROM agent_predictions").fetchone()[0] == 1
         assert c.execute("SELECT count(*) FROM prediction_snapshot_archive").fetchone()[0] == 0
         assert c.execute("SELECT count(*) FROM recommendation_prediction_finals").fetchone()[0] == 0

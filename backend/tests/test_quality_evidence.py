@@ -1,5 +1,7 @@
 """Frozen evidence remains scoped, reproducible and honest about missing material."""
 
+from database_support import isolated_database_url
+
 from datetime import datetime, timedelta, timezone
 import json
 from types import SimpleNamespace
@@ -8,7 +10,7 @@ import pytest
 
 from app.agents.react_runtime.lifecycle import Journal, RunControl
 from app.models import AgentChatRequest
-from app.repositories import SQLiteChatSessionRepository
+from app.repositories import ChatSessionRepository
 from app.services.quality_evidence import build_evidence_bundle, capture_evidence_bundle, content_hash
 from app.services.quality_trace import record_snapshot, rendering_snapshot
 
@@ -109,8 +111,8 @@ def test_deep_old_diagnostics_do_not_raise_or_rewrite_input():
 
 
 def test_deep_checkpoint_does_not_prevent_atomic_answer_persistence(tmp_path):
-    path = tmp_path / "deep.sqlite"
-    SQLiteChatSessionRepository(path).ensure_session("s", owner_id="owner")
+    path = isolated_database_url('deep.sqlite')
+    ChatSessionRepository(path).ensure_session("s", owner_id="owner")
     journal = Journal(path)
     row, _ = journal.create(AgentChatRequest(session_id="s", message_id="m", message="研究"), "owner")
     # A valid JSON document can be deeper than Python deepcopy safely handles.
@@ -142,8 +144,8 @@ def test_bounds_preserve_omission_hash_and_do_not_present_partial_section_as_com
 
 @pytest.fixture
 def saved(tmp_path):
-    path = tmp_path / "evidence.sqlite"
-    chats = SQLiteChatSessionRepository(path)
+    path = isolated_database_url('evidence.sqlite')
+    chats = ChatSessionRepository(path)
     chats.ensure_session("s", owner_id="owner")
     chats.ensure_session("foreign", owner_id="other")
     journal = Journal(path)

@@ -70,13 +70,12 @@ def test_storage_manifest_does_not_include_or_fingerprint_credentials(monkeypatc
     assert "secret" not in json.dumps(first.manifest()) + repr(first)
 
 
-def test_legacy_offline_sqlite_context_explicitly_clears_ambient_url(tmp_path, monkeypatch):
-    monkeypatch.setenv("LIMITUPLAB_DATABASE_URL", "postgresql://app:secret@host/live")
-    with isolated_session_storage(tmp_path, EvaluationStorage("sqlite")) as (database, metadata):
-        assert database == tmp_path / "session.sqlite"
-        assert os.environ["LIMITUPLAB_DATABASE_URL"] == ""
-        assert metadata["backend"] == "sqlite"
-    assert os.environ["LIMITUPLAB_DATABASE_URL"] == "postgresql://app:secret@host/live"
+def test_missing_evaluation_configuration_never_creates_an_offline_sqlite_fallback(tmp_path, monkeypatch):
+    monkeypatch.setenv("LIMITUPLAB_DATABASE_URL", "")
+    monkeypatch.delenv("LIMITUPLAB_EVAL_DATABASE_URL", raising=False)
+    with pytest.raises(EvaluationStorageError, match="LIMITUPLAB_EVAL_DATABASE_URL"):
+        configured_evaluation_storage()
+    assert not list(tmp_path.iterdir())
 
 
 def test_invalid_engine_configuration_is_sanitized_before_model_execution(tmp_path, monkeypatch):

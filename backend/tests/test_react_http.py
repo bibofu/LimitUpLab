@@ -1,5 +1,7 @@
 """Real loopback HTTP against the production routes, with frozen model/data."""
 
+from database_support import isolated_database_url
+
 import json
 import socket
 import threading
@@ -18,7 +20,7 @@ from app.agents.react_runtime.lifecycle import Journal
 from app.agents.react_runtime.runtime import run
 from app.agents.tools import TOOL_SCHEMAS, ToolResult
 from app.models import AgentChatRequest, AgentChatResponse
-from app.repositories import SQLiteChatSessionRepository
+from app.repositories import ChatSessionRepository
 from app.routers import agents, react_chat
 from app.security import current_owner_id
 from app.services.prompt_security import PromptInjectionAssessment
@@ -45,7 +47,7 @@ def allow_compliance_review(monkeypatch):
 
 @pytest.fixture(params=["react", "legacy", "task"])
 def http_server(tmp_path, monkeypatch, request):
-    monkeypatch.setenv("LIMITUPLAB_DATABASE_PATH", str(tmp_path / "http.sqlite"))
+    monkeypatch.setenv("LIMITUPLAB_DATABASE_URL", str(isolated_database_url('http.sqlite')))
     monkeypatch.setenv("LIMITUPLAB_AGENT_RUNTIME", request.param)
     state = SimpleNamespace(calls=0, block=False, entered=threading.Event(), release=threading.Event())
     def ranking(**args):
@@ -98,20 +100,20 @@ def test_rejected_start_does_not_poison_retry_or_create_a_chat_answer(http_serve
     assert rejected_response.status_code == 429
     assert rejected_response.headers["retry-after"] == "2"
     assert state.calls == 0
-    assert not SQLiteChatSessionRepository().get_session("http-s", owner_id="owner").messages
+    assert not ChatSessionRepository().get_session("http-s", owner_id="owner").messages
     with Journal().connection() as db:
         assert db.execute("SELECT count(*) FROM react_runs").fetchone()[0] == 0
     monkeypatch.setattr(agents, "_begin_agent_request", begin)
     result = client.post("/chat", json=PAYLOAD).json()
     assert result["task_status"] == "partial" and state.calls == 1
     assert client.post("/chat", json=PAYLOAD).json() == result
-    messages = SQLiteChatSessionRepository().get_session("http-s", owner_id="owner").messages
+    messages = ChatSessionRepository().get_session("http-s", owner_id="owner").messages
     assert [message.role for message in messages] == ["user", "assistant"]
 
 
 def test_rejected_resume_preserves_checkpoint_and_completed_tools(http_server, monkeypatch):
     client, state = http_server
-    SQLiteChatSessionRepository().ensure_session("http-s", owner_id="owner")
+    ChatSessionRepository().ensure_session("http-s", owner_id="owner")
     journal = Journal()
     row, _ = journal.create(AgentChatRequest(**PAYLOAD), "owner")
     run_id = row["run_id"]
@@ -128,7 +130,7 @@ def test_rejected_resume_preserves_checkpoint_and_completed_tools(http_server, m
     assert restored["active"] and restored["response_json"] is None
     assert json.loads(restored["checkpoint_json"]) == checkpoint
     assert journal.begin_call(run_id, call) == {"ok": True}
-    assert not SQLiteChatSessionRepository().get_session("http-s", owner_id="owner").messages
+    assert not ChatSessionRepository().get_session("http-s", owner_id="owner").messages
     assert state.calls == 0
 
 
@@ -140,7 +142,7 @@ def test_start_failure_releases_lease_and_allows_original_request_retry(http_ser
         SimpleNamespace(release=lambda: releases.append(True)), None, None,
     ))
     monkeypatch.setattr(agents, "_finish_agent_request", lambda *a, **kw: finished.append(kw))
-    target = SQLiteChatSessionRepository if failure_stage == "message" else threading.Thread
+    target = ChatSessionRepository if failure_stage == "message" else threading.Thread
     method = "append_message" if failure_stage == "message" else "start"
     original = getattr(target, method)
     def fail(*args, **kwargs):
@@ -154,7 +156,7 @@ def test_start_failure_releases_lease_and_allows_original_request_retry(http_ser
     monkeypatch.setattr(target, method, original)
     result = client.post("/chat", json=PAYLOAD).json()
     assert result["task_status"] == "partial" and state.calls == 1
-    messages = SQLiteChatSessionRepository().get_session("http-s", owner_id="owner").messages
+    messages = ChatSessionRepository().get_session("http-s", owner_id="owner").messages
     assert [message.role for message in messages] == ["user", "assistant"]
 
 
@@ -222,7 +224,7 @@ def test_only_progress_is_public_until_the_final_answer_is_saved(http_server, mo
 
 def test_explicit_resume_never_replays_old_persisted_drafts(http_server, monkeypatch):
     client, state = http_server
-    SQLiteChatSessionRepository().ensure_session("http-s", owner_id="owner")
+    ChatSessionRepository().ensure_session("http-s", owner_id="owner")
     journal = Journal()
     row, _ = journal.create(AgentChatRequest(**PAYLOAD), "owner")
     journal.event(row["run_id"], "answer_start", {"revision": 3})
@@ -279,7 +281,7 @@ def test_save_failure_never_publishes_candidate_and_original_request_can_resume(
     assert "event: error" in failed.text and "event: completed" not in failed.text
     assert "仅保存后可见的正文" not in failed.text and "event: answer_" not in failed.text
     assert Journal().get(run_id, "owner")["response_json"] is None
-    assert [m.role for m in SQLiteChatSessionRepository().get_session("http-s", owner_id="owner").messages] == ["user"]
+    assert [m.role for m in ChatSessionRepository().get_session("http-s", owner_id="owner").messages] == ["user"]
     assert recorded[-1]["error"] is not None and recorded[-1]["response"] is None
     monkeypatch.setattr(Journal, "finish", original_finish)
     result = client.post("/chat", json=PAYLOAD).json()
@@ -423,7 +425,7 @@ def test_disconnect_does_not_cancel_and_explicit_cancel_releases_session(http_se
 
 def test_cancel_interrupted_run_does_not_restart_model(http_server):
     client, state = http_server
-    SQLiteChatSessionRepository().ensure_session("http-s", owner_id="owner")
+    ChatSessionRepository().ensure_session("http-s", owner_id="owner")
     journal = Journal()
     row, _ = journal.create(AgentChatRequest(**PAYLOAD), "owner")
     key = row["run_id"]
