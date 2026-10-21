@@ -1,19 +1,21 @@
 """History fallback must preserve both candidate dates and the latest empty state."""
 
+from database_support import isolated_database_url
+
 from datetime import date, datetime
-import sqlite3
+from app.database import connect
 
 import pytest
 
 from app.models import RecommendationIntelligenceItem, RecommendationIntelligenceResponse
 from app.repositories.recommendation_intelligence_repository import (
-    SQLiteRecommendationIntelligenceRepository,
+    RecommendationIntelligenceRepository,
 )
 
 
 def test_history_fallback_exposes_latest_missed_target_without_rewriting_snapshot(tmp_path):
-    path = tmp_path / "recommendations.sqlite"
-    repository = SQLiteRecommendationIntelligenceRepository(path)
+    path = isolated_database_url('recommendations.sqlite')
+    repository = RecommendationIntelligenceRepository(path)
     old = RecommendationIntelligenceResponse(
         refresh_id="old-draft", interval_minutes=1440, status="complete",
         refreshed_at=datetime.fromisoformat("2026-09-29T16:00:00+08:00"),
@@ -33,7 +35,7 @@ def test_history_fallback_exposes_latest_missed_target_without_rewriting_snapsho
         warnings=["盘前固化窗口已错过"],
     )
     repository.save(missed)
-    with sqlite3.connect(path) as connection:
+    with connect(path) as connection:
         original = connection.execute(
             "SELECT response_json FROM recommendation_intelligence_snapshots"
         ).fetchone()[0]
@@ -51,14 +53,14 @@ def test_history_fallback_exposes_latest_missed_target_without_rewriting_snapsho
     assert context.latest_refreshed_at == missed.refreshed_at
     assert context.latest_warnings == missed.warnings
     assert repository.get_latest() == missed
-    with sqlite3.connect(path) as connection:
+    with connect(path) as connection:
         assert connection.execute(
             "SELECT response_json FROM recommendation_intelligence_snapshots"
         ).fetchone()[0] == original
 
 
 def test_current_empty_response_has_no_fabricated_history(tmp_path):
-    repository = SQLiteRecommendationIntelligenceRepository(tmp_path / "empty.sqlite")
+    repository = RecommendationIntelligenceRepository(isolated_database_url('empty.sqlite'))
     current = RecommendationIntelligenceResponse(
         refresh_id="empty", interval_minutes=1440, status="partial",
         stage="missed_cutoff", target_trade_date=date(2026, 10, 8),
@@ -70,8 +72,8 @@ def test_current_empty_response_has_no_fabricated_history(tmp_path):
 
 @pytest.mark.parametrize("current_stage", ["draft", "final", "missed_cutoff"])
 def test_final_history_preserves_current_stage_and_display_context_is_read_only(tmp_path, current_stage):
-    path = tmp_path / "final-history.sqlite"
-    repository = SQLiteRecommendationIntelligenceRepository(path)
+    path = isolated_database_url('final-history.sqlite')
+    repository = RecommendationIntelligenceRepository(path)
     current = RecommendationIntelligenceResponse(
         refresh_id="empty-current", interval_minutes=1440, status="partial",
         stage=current_stage, target_trade_date=date(2026, 10, 8),
@@ -92,7 +94,7 @@ def test_final_history_preserves_current_stage_and_display_context_is_read_only(
         )],
     })
     raw = final.model_dump_json()
-    with sqlite3.connect(path) as connection:
+    with connect(path) as connection:
         connection.execute(
             "INSERT INTO recommendation_prediction_finals "
             "(target_trade_date, finalized_at, response_json) VALUES (?, ?, ?)",
@@ -107,7 +109,7 @@ def test_final_history_preserves_current_stage_and_display_context_is_read_only(
     assert repository.get_final("2026-09-30") == final
     repository.save(displayed)
     assert repository.get_latest().display_context is None
-    with sqlite3.connect(path) as connection:
+    with connect(path) as connection:
         assert connection.execute(
             "SELECT response_json FROM recommendation_prediction_finals"
         ).fetchone()[0] == raw

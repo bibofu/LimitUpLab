@@ -250,7 +250,7 @@ def test_real_sse_route_uses_read_only_facts_tracks_usage_and_issues_owner_cooki
     with (
         patch("app.routers.review_overview.get_llm_provider", return_value=Provider()),
         patch("app.routers.review_overview.get_limit_up_repository", return_value=SimpleNamespace(list_events=lambda: events)),
-        patch("app.routers.review_overview.SQLiteFirstBoardRepository", return_value=repo),
+        patch("app.routers.review_overview.FirstBoardRepository", return_value=repo),
         patch("app.routers.review_overview.load_promotion_calendar", return_value=SimpleNamespace(trade_dates=DAYS, warnings=())),
         patch("app.routers.review_overview.build_review_agent_report", return_value=report) as build,
         patch("app.routers.agents._begin_agent_request", return_value=(lease, usage, Mock())),

@@ -1,10 +1,12 @@
+
+from database_support import isolated_database_url, release_database_url
 import json
 import unittest
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
 
 from app.models import ChatSessionMemory, ChatSessionMessage
-from app.repositories import SQLiteChatMemoryRepository, SQLiteChatSessionRepository
+from app.repositories import ChatMemoryRepository, ChatSessionRepository
 from app.services.llm_provider import DisabledLLMProvider, LLMProvider, LLMResult
 from app.services.session_memory import (
     SESSION_MEMORY_VERSION,
@@ -69,12 +71,12 @@ class MemoryFunctionProvider(LLMProvider):
 class SessionMemoryTest(unittest.TestCase):
     # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
-        self.database_path = (
-            Path(__file__).resolve().parents[1] / ".test_session_memory.sqlite"
+        self.database_url = (
+            isolated_database_url('.test_session_memory.sqlite')
         )
-        self.database_path.unlink(missing_ok=True)
-        self.session_repository = SQLiteChatSessionRepository(self.database_path)
-        self.memory_repository = SQLiteChatMemoryRepository(self.database_path)
+        release_database_url(self.database_url)
+        self.session_repository = ChatSessionRepository(self.database_url)
+        self.memory_repository = ChatMemoryRepository(self.database_url)
         self.owner_id = "visitor_aaaaaaaaaaaaaaaaaaaaaaaaaaaaaaaa"
         self.session_id = "memory-session"
         self.session_repository.create_session(
@@ -84,7 +86,7 @@ class SessionMemoryTest(unittest.TestCase):
 
     # Release the test resources and restore the environment after this test scope.
     def tearDown(self) -> None:
-        self.database_path.unlink(missing_ok=True)
+        release_database_url(self.database_url)
 
     # Regression scenario: refresh persists rolling memory and keeps recent window.
     def test_refresh_persists_rolling_memory_and_keeps_recent_window(self) -> None:

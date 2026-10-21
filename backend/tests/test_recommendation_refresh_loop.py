@@ -93,8 +93,9 @@ class RecommendationRefreshLoopTest(unittest.TestCase):
             )
         )
 
-    # Regression scenario: dead recent pid does not block worker restart.
-    def test_dead_recent_pid_does_not_block_worker_restart(self) -> None:
+    def test_legacy_file_does_not_override_database_lease(self) -> None:
+        from app.services.runtime_coordination import LeaseStore
+
         self.lock_path.write_text(
             json.dumps({"pid": 2_147_483_647}),
             encoding="utf-8",
@@ -104,10 +105,13 @@ class RecommendationRefreshLoopTest(unittest.TestCase):
             self.lock_path,
             stale_after=timedelta(minutes=90),
         ):
-            payload = json.loads(self.lock_path.read_text(encoding="utf-8"))
-            self.assertEqual(payload["pid"], os.getpid())
+            self.assertTrue(LeaseStore().live("job:recommendation-refresh"))
+            with self.assertRaises(RuntimeError):
+                with RefreshLoopLock(self.lock_path, stale_after=timedelta(minutes=90)):
+                    self.fail("A second worker acquired the live lease")
 
-        self.assertFalse(self.lock_path.exists())
+        self.assertFalse(LeaseStore().live("job:recommendation-refresh"))
+        self.assertEqual(json.loads(self.lock_path.read_text(encoding="utf-8")), {"pid": 2_147_483_647})
 
 
 if __name__ == "__main__":

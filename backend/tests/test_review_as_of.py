@@ -15,7 +15,7 @@ from app.agents.review_agent import (
     build_review_agent_report,
 )
 from app.models import AgentPrediction, StockDailyBar
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import FirstBoardRepository
 from app.services.evaluation_agent import _evaluate_prediction
 from app.services.llm_provider import LLMProvider, LLMResult
 from app.services.review_as_of import build_review_post_bars, evaluate_review_prediction_as_of
@@ -205,7 +205,7 @@ class CapturingProvider(LLMProvider):
 def test_model_digest_and_report_use_cutoff_results_instead_of_saved_future_labels(monkeypatch, cutoff):
     saved_prediction = prediction()
     future_evaluation = evaluate(D3)
-    repo = Mock(spec=SQLiteFirstBoardRepository)
+    repo = Mock(spec=FirstBoardRepository)
     repo.list_predictions_between.return_value = [saved_prediction]
     repo.list_post_bars.return_value = bars()
     repo.list_enrichment_for_date.return_value = []
@@ -261,7 +261,7 @@ def test_daily_selection_does_not_drop_a_top_score_after_future_label_ordered_50
         "score": 99 if index == 500 else 70,
     }) for index in range(501)]
     evaluations = [_evaluate_prediction(item, None) for item in predictions]
-    repo = Mock(spec=SQLiteFirstBoardRepository)
+    repo = Mock(spec=FirstBoardRepository)
     repo.list_predictions_between.return_value = predictions
     repo.list_post_bars.side_effect = lambda symbol, base, **kwargs: [
         bars()[0].model_copy(update={"symbol": symbol})
@@ -307,7 +307,7 @@ def test_known_later_observation_keeps_its_calendar_slot_across_a_gap():
 
 
 def review_toolbox(*, observed_bars=None, observed_events=None, calendar=CALENDAR, follow_days=5):
-    repo = Mock(spec=SQLiteFirstBoardRepository)
+    repo = Mock(spec=FirstBoardRepository)
     repo.list_predictions_between.return_value = [prediction()]
     repo.list_post_bars.return_value = bars() if observed_bars is None else observed_bars
     toolbox = ReviewAgentToolbox(

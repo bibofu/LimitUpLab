@@ -1,4 +1,6 @@
-"""Behavioral contracts exercised against SQLite and a real PostgreSQL database."""
+"""Repository contracts use configured and explicit PostgreSQL URLs."""
+
+from database_support import isolated_database_url
 
 from concurrent.futures import ThreadPoolExecutor
 from contextlib import closing
@@ -12,32 +14,32 @@ from app.agents.react_runtime.lifecycle import Journal
 from app.database import connect, connect_readonly, initialize_database
 from app.models import AgentChatRequest, AgentPrediction, ChatSessionMessage, StockDailyBar
 from app.quality_models import QualityConflict
-from app.repositories.chat_session_repository import SQLiteChatSessionRepository, SessionOwnershipError
-from app.repositories.first_board_repository import SQLiteFirstBoardRepository
-from app.repositories.limit_up_repository import SQLiteLimitUpRepository
+from app.repositories.chat_session_repository import ChatSessionRepository, SessionOwnershipError
+from app.repositories.first_board_repository import FirstBoardRepository
+from app.repositories.limit_up_repository import LimitUpRepository
 from app.repositories.consolidation_repository import load_consolidation_pool
 from app.repositories.post_limit_repository import load_post_limit_dataset
 from app.repositories.quality_judge_repository import JudgeBudgetExceeded
 from app.repositories.quality_repository import QualityRepository
-from app.repositories.scoring_policy_repository import SQLiteScoringPolicyRepository
+from app.repositories.scoring_policy_repository import ScoringPolicyRepository
 from app.services.scoring_policy import build_default_scoring_policy
 from app.services.sample_data import SAMPLE_EVENTS
 
 
-@pytest.fixture(params=["sqlite", "postgresql"])
-def storage(request, tmp_path):
-    if request.param == "postgresql":
+@pytest.fixture(params=["configured_url", "explicit_url"])
+def storage(request):
+    if request.param == "configured_url":
         request.getfixturevalue("postgresql_database")
         return None
-    path = tmp_path / "contracts.sqlite"
-    with closing(connect(path)) as db:
+    url = isolated_database_url('contracts')
+    with closing(connect(url)) as db:
         initialize_database(db)
-    return path
+    return url
 
 
 @pytest.fixture
 def completed(storage):
-    chats = SQLiteChatSessionRepository(storage)
+    chats = ChatSessionRepository(storage)
     chats.create_session(session_id="session", owner_id="owner")
     journal = Journal(storage)
     row, _ = journal.create(
@@ -50,7 +52,7 @@ def completed(storage):
 
 
 def test_same_timestamp_messages_preserve_insertion_order_and_idempotency(storage):
-    chats = SQLiteChatSessionRepository(storage)
+    chats = ChatSessionRepository(storage)
     stamp = datetime(2026, 10, 19, 7, tzinfo=timezone.utc)
     for identity in ("z-first", "a-second", "m-third"):
         chats.append_message(ChatSessionMessage(
@@ -72,7 +74,7 @@ def test_simultaneous_session_creation_cannot_change_owner(storage):
     def create(owner):
         barrier.wait(timeout=10)
         try:
-            return SQLiteChatSessionRepository(storage).create_session(session_id="shared", owner_id=owner).owner_id
+            return ChatSessionRepository(storage).create_session(session_id="shared", owner_id=owner).owner_id
         except SessionOwnershipError:
             return None
 
@@ -80,13 +82,13 @@ def test_simultaneous_session_creation_cannot_change_owner(storage):
         results = list(executor.map(create, ["one", "two"]))
     assert sum(result is not None for result in results) == 1
     winner = next(result for result in results if result)
-    chats = SQLiteChatSessionRepository(storage)
+    chats = ChatSessionRepository(storage)
     assert chats.get_session("shared", owner_id=winner).owner_id == winner
     assert chats.get_session("shared", owner_id="two" if winner == "one" else "one") is None
 
 
 def test_message_identity_cannot_expose_another_session(storage):
-    chats = SQLiteChatSessionRepository(storage)
+    chats = ChatSessionRepository(storage)
     chats.create_session(session_id="first", owner_id="first-owner")
     chats.append_message(ChatSessionMessage(
         message_id="same-message", session_id="first", role="user", content="first-owner content",
@@ -103,7 +105,7 @@ def test_message_identity_cannot_expose_another_session(storage):
 
 
 def test_message_write_rechecks_owner_after_session_recreation(storage, monkeypatch):
-    chats = SQLiteChatSessionRepository(storage)
+    chats = ChatSessionRepository(storage)
     chats.create_session(session_id="recreated", owner_id="original")
     original_ensure = chats.ensure_session
 
@@ -208,7 +210,7 @@ def test_diagnostic_sql_failure_does_not_rollback_final_answer(storage, monkeypa
         db.execute("SELECT absent_column FROM quality_evidence_bundles")
 
     monkeypatch.setattr(quality_evidence, "capture_evidence_bundle", broken_capture)
-    chats = SQLiteChatSessionRepository(storage)
+    chats = ChatSessionRepository(storage)
     chats.create_session(session_id="session", owner_id="owner")
     journal = Journal(storage)
     row, _ = journal.create(AgentChatRequest(session_id="session", message="研究", message_id="m"), "owner")
@@ -221,7 +223,7 @@ def test_diagnostic_sql_failure_does_not_rollback_final_answer(storage, monkeypa
 
 
 def test_historical_prediction_insert_count_and_original_content(storage):
-    repository = SQLiteFirstBoardRepository(storage)
+    repository = FirstBoardRepository(storage)
     prediction = AgentPrediction(
         prediction_id="historical", trade_date=date(2026, 10, 16), symbol="000001", name="fixture",
         score=80, rating="A", confidence=0.8, scoring_version="contract-v1", prediction_source="historical_backtest",
@@ -237,14 +239,14 @@ def test_historical_prediction_insert_count_and_original_content(storage):
 
 
 def test_competing_champion_updates_leave_one_active_version(storage):
-    repository = SQLiteScoringPolicyRepository(storage)
+    repository = ScoringPolicyRepository(storage)
     default = build_default_scoring_policy()
     repository.upsert_policy(default)
     barrier = Barrier(2)
 
     def publish(version):
         barrier.wait(timeout=10)
-        SQLiteScoringPolicyRepository(storage).upsert_policy(default.model_copy(update={"version": version}))
+        ScoringPolicyRepository(storage).upsert_policy(default.model_copy(update={"version": version}))
 
     with ThreadPoolExecutor(max_workers=2) as executor:
         list(executor.map(publish, ["policy-one", "policy-two"]))
@@ -254,7 +256,7 @@ def test_competing_champion_updates_leave_one_active_version(storage):
 
 
 def test_readonly_repository_connection_rejects_writes(storage):
-    chats = SQLiteChatSessionRepository(storage)
+    chats = ChatSessionRepository(storage)
     chats.create_session(session_id="retained")
     with closing(connect_readonly(storage)) as db:
         with pytest.raises(Exception):
@@ -266,20 +268,20 @@ def test_research_readers_use_the_selected_database_and_date_cutoff(storage):
     observed = date(2026, 10, 16)
     later = date(2026, 10, 19)
     event = SAMPLE_EVENTS[0].model_copy(update={"trade_date": observed, "closed_limit": True})
-    SQLiteLimitUpRepository(storage).upsert_events([event])
+    LimitUpRepository(storage).upsert_events([event])
     bars = [StockDailyBar(
         symbol=event.symbol, trade_date=day, open=10, high=10.5, low=9.5, close=10, volume=100,
         amount=1000, source="synthetic-test-unadjusted", created_at=datetime(2026, 10, 19, 8, tzinfo=timezone.utc),
     ) for day in (observed, later)]
-    first_board = SQLiteFirstBoardRepository(storage)
+    first_board = FirstBoardRepository(storage)
     first_board.upsert_daily_bars(bars)
-    selected = load_post_limit_dataset(observed, database_path=storage)
+    selected = load_post_limit_dataset(observed, database_url=storage)
     assert selected.calendar == [observed.isoformat()]
     assert selected.event_dates == [observed.isoformat()]
     assert selected.events[0]["symbol"] == event.symbol
     assert selected.bars[0]["close"] == 10
     assert selected.latest_data_date == later
     assert first_board.list_daily_bars_for_symbols([event.symbol], end_date=observed) == bars[:1]
-    pool = load_consolidation_pool(observed, datetime(2026, 10, 19, 8, tzinfo=timezone.utc), database_path=storage)
+    pool = load_consolidation_pool(observed, datetime(2026, 10, 19, 8, tzinfo=timezone.utc), database_url=storage)
     assert pool.latest_data_date == later
     assert pool.available_dates == [later, observed]

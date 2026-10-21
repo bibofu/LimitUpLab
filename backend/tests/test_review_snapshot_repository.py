@@ -1,7 +1,9 @@
+
+from database_support import isolated_database_url, release_database_url
 import os
 import unittest
 import json
-import sqlite3
+from app.database import connect
 from contextlib import closing
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -14,7 +16,7 @@ from app.models import (
     ReviewAgentPick,
     ReviewAgentReportResponse,
 )
-from app.repositories import SQLiteFirstBoardRepository, SQLiteReviewSnapshotRepository
+from app.repositories import FirstBoardRepository, ReviewSnapshotRepository
 from app.services.daily_review import review_snapshot_matches_current_predictions
 
 
@@ -28,9 +30,9 @@ class ReviewSnapshotRepositoryTest(unittest.TestCase):
     def test_audit_annotation_does_not_rewrite_saved_report(self) -> None:
         from app.services.prediction_time_audit import content_hash
         snapshot = self._snapshot(date(2026, 9, 3), finding="original")
-        repository = SQLiteReviewSnapshotRepository(self.database_path)
+        repository = ReviewSnapshotRepository(self.database_url)
         repository.save_snapshot(snapshot)
-        with closing(sqlite3.connect(self.database_path)) as connection, connection:
+        with closing(connect(self.database_url)) as connection, connection:
             original = connection.execute("SELECT report_json FROM daily_review_snapshots").fetchone()[0]
             connection.execute("INSERT INTO prediction_time_audits VALUES ('review', ?, ?, ?, ?)",
                 ("2026-09-03", content_hash(original), json.dumps({"status": "excluded"}), "2026-09-07T01:00:00+08:00"))
@@ -38,23 +40,18 @@ class ReviewSnapshotRepositoryTest(unittest.TestCase):
         self.assertEqual(loaded.report.time_audit_status, "excluded")
         self.assertTrue(loaded.report.warnings)
         self.assertIsNone(repository.list_summaries()[0].top_pick_promotion_rate)
-        with closing(sqlite3.connect(self.database_path)) as connection:
+        with closing(connect(self.database_url)) as connection:
             self.assertEqual(connection.execute("SELECT report_json FROM daily_review_snapshots").fetchone()[0], original)
 
     # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
         TEST_TMP_ROOT.mkdir(exist_ok=True)
-        self.database_path = TEST_TMP_ROOT / f"review-snapshot-{uuid4().hex}.sqlite"
-        self.repository = SQLiteReviewSnapshotRepository(self.database_path)
+        self.database_url = isolated_database_url()
+        self.repository = ReviewSnapshotRepository(self.database_url)
 
     # Release the test resources and restore the environment after this test scope.
     def tearDown(self) -> None:
-        for path in (
-            self.database_path,
-            self.database_path.with_name(f"{self.database_path.name}-wal"),
-            self.database_path.with_name(f"{self.database_path.name}-shm"),
-        ):
-            path.unlink(missing_ok=True)
+        release_database_url(self.database_url)
 
     # Regression scenario: snapshot is immutable and listed as summary.
     def test_snapshot_is_immutable_and_listed_as_summary(self) -> None:
@@ -96,7 +93,7 @@ class ReviewSnapshotRepositoryTest(unittest.TestCase):
             created_at=datetime(2026, 8, 31, 8, 0, tzinfo=timezone.utc),
         )
         report = self._snapshot(data_as_of, finding="快照早于竞价终选").report
-        first_board_repository = SQLiteFirstBoardRepository(self.database_path)
+        first_board_repository = FirstBoardRepository(self.database_url)
 
         with patch.object(
             first_board_repository,

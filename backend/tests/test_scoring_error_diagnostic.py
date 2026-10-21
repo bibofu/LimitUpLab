@@ -1,22 +1,23 @@
+
+from database_support import isolated_database_url, release_database_url
 import unittest
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
 from uuid import uuid4
 
 from app.models import FirstBoardOutcome, LimitUpEvent
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import FirstBoardRepository
 from app.services.scoring_error_diagnostic import build_scoring_error_diagnostic
 
 
 class ScoringErrorDiagnosticTest(unittest.TestCase):
     # Regression scenario: reports top false positives promoted omissions and ablations.
     def test_reports_top_false_positives_promoted_omissions_and_ablations(self) -> None:
-        database_path = (
-            Path(__file__).resolve().parents[1]
-            / f"scoring-error-diagnostic-{uuid4().hex}.sqlite"
+        database_url = (
+            isolated_database_url()
         )
-        self.addCleanup(self._cleanup_database, database_path)
-        repository = SQLiteFirstBoardRepository(database_path)
+        self.addCleanup(self._cleanup_database, database_url)
+        repository = FirstBoardRepository(database_url)
         events, outcomes = self._history(days=6)
         repository.upsert_outcomes(outcomes)
 
@@ -41,13 +42,8 @@ class ScoringErrorDiagnosticTest(unittest.TestCase):
 
     # Release the temporary resources owned by this test fixture.
     @staticmethod
-    def _cleanup_database(database_path: Path) -> None:
-        for path in (
-            database_path,
-            database_path.with_name(f"{database_path.name}-wal"),
-            database_path.with_name(f"{database_path.name}-shm"),
-        ):
-            path.unlink(missing_ok=True)
+    def _cleanup_database(database_url: str) -> None:
+        release_database_url(database_url)
 
     # Prepare the history fixture or observation used by the surrounding regression scenario.
     @staticmethod

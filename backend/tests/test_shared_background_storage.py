@@ -1,5 +1,7 @@
 """Cross-instance scheduled jobs and news snapshots use the selected database."""
 
+from database_support import isolated_database_url
+
 from contextlib import closing
 from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
@@ -56,8 +58,11 @@ def test_readiness_error_does_not_leak_paths_or_create_sqlite(tmp_path, monkeypa
     path = tmp_path / "missing-private.sqlite"
     monkeypatch.delenv("LIMITUPLAB_DATABASE_URL", raising=False)
     monkeypatch.setenv("LIMITUPLAB_DATABASE_PATH", str(path))
-    with TestClient(app) as client:
-        result = client.get("/ready")
+    with pytest.raises(ValueError, match="LIMITUPLAB_DATABASE_URL"):
+        with TestClient(app):
+            pass
+    # Exercise the readiness handler separately from the fail-fast lifespan.
+    result = TestClient(app).get("/ready")
     assert result.status_code == 503
     assert "private" not in result.text and not path.exists()
 

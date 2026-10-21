@@ -1,3 +1,5 @@
+
+from database_support import isolated_database_url, release_database_url
 import unittest
 from datetime import date, datetime, time, timedelta, timezone
 from pathlib import Path
@@ -5,7 +7,7 @@ from uuid import uuid4
 
 from app.agents.first_board import build_first_board_ratings
 from app.models import FirstBoardOutcome, LimitUpEvent, ScoringPolicy
-from app.repositories import SQLiteFirstBoardRepository, SQLiteScoringPolicyRepository
+from app.repositories import FirstBoardRepository, ScoringPolicyRepository
 from app.services.sample_data import SAMPLE_EVENTS
 from app.services.scoring_policy import build_default_scoring_policy
 from app.services.scoring_policy_optimizer import (
@@ -64,12 +66,11 @@ class ScoringPolicyOptimizerTest(unittest.TestCase):
 
     # Regression scenario: legacy default champion migrates to current default.
     def test_legacy_default_champion_migrates_to_current_default(self) -> None:
-        database_path = (
-            Path(__file__).resolve().parents[1]
-            / f"scoring-policy-migration-{uuid4().hex}.sqlite"
+        database_url = (
+            isolated_database_url()
         )
-        self.addCleanup(self._cleanup_database, database_path)
-        repository = SQLiteScoringPolicyRepository(database_path)
+        self.addCleanup(self._cleanup_database, database_url)
+        repository = ScoringPolicyRepository(database_url)
         current = build_default_scoring_policy()
         legacy = current.model_copy(
             update={
@@ -93,13 +94,12 @@ class ScoringPolicyOptimizerTest(unittest.TestCase):
 
     # Regression scenario: walk forward registers but does not promote thin sample.
     def test_walk_forward_registers_but_does_not_promote_thin_sample(self) -> None:
-        database_path = (
-            Path(__file__).resolve().parents[1]
-            / f"scoring-policy-{uuid4().hex}.sqlite"
+        database_url = (
+            isolated_database_url()
         )
-        self.addCleanup(self._cleanup_database, database_path)
-        first_board_repository = SQLiteFirstBoardRepository(database_path)
-        policy_repository = SQLiteScoringPolicyRepository(database_path)
+        self.addCleanup(self._cleanup_database, database_url)
+        first_board_repository = FirstBoardRepository(database_url)
+        policy_repository = ScoringPolicyRepository(database_url)
         events, outcomes = self._history(days=14)
         first_board_repository.upsert_outcomes(outcomes)
 
@@ -155,12 +155,11 @@ class ScoringPolicyOptimizerTest(unittest.TestCase):
 
     # Regression scenario: policy metrics make promotion lift explicit.
     def test_policy_metrics_make_promotion_lift_explicit(self) -> None:
-        database_path = (
-            Path(__file__).resolve().parents[1]
-            / f"scoring-policy-metrics-{uuid4().hex}.sqlite"
+        database_url = (
+            isolated_database_url()
         )
-        self.addCleanup(self._cleanup_database, database_path)
-        repository = SQLiteFirstBoardRepository(database_path)
+        self.addCleanup(self._cleanup_database, database_url)
+        repository = FirstBoardRepository(database_url)
         events, outcomes = self._history(days=1)
         repository.upsert_outcomes(outcomes)
         outcome_map = {
@@ -184,12 +183,11 @@ class ScoringPolicyOptimizerTest(unittest.TestCase):
 
     # Regression scenario: promotion metrics do not depend on return cache coverage.
     def test_promotion_metrics_do_not_depend_on_return_cache_coverage(self) -> None:
-        database_path = (
-            Path(__file__).resolve().parents[1]
-            / f"scoring-policy-event-labels-{uuid4().hex}.sqlite"
+        database_url = (
+            isolated_database_url()
         )
-        self.addCleanup(self._cleanup_database, database_path)
-        repository = SQLiteFirstBoardRepository(database_path)
+        self.addCleanup(self._cleanup_database, database_url)
+        repository = FirstBoardRepository(database_url)
         events, outcomes = self._history(days=1)
         base_date = events[0].trade_date
         events.append(
@@ -221,13 +219,8 @@ class ScoringPolicyOptimizerTest(unittest.TestCase):
 
     # Release the temporary resources owned by this test fixture.
     @staticmethod
-    def _cleanup_database(database_path: Path) -> None:
-        for path in (
-            database_path,
-            database_path.with_name(f"{database_path.name}-wal"),
-            database_path.with_name(f"{database_path.name}-shm"),
-        ):
-            path.unlink(missing_ok=True)
+    def _cleanup_database(database_url: str) -> None:
+        release_database_url(database_url)
 
     # Prepare the history fixture or observation used by the surrounding regression scenario.
     @staticmethod

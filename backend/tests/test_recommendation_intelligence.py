@@ -1,3 +1,5 @@
+
+from database_support import isolated_database_url, release_database_url
 import unittest
 from datetime import date, datetime, timezone
 from pathlib import Path
@@ -16,9 +18,9 @@ from app.models import (
     StockNewsItem,
 )
 from app.repositories import (
-    SQLiteFirstBoardRepository,
-    SQLiteLimitUpRepository,
-    SQLiteRecommendationIntelligenceRepository,
+    FirstBoardRepository,
+    LimitUpRepository,
+    RecommendationIntelligenceRepository,
 )
 from app.services.recommendation_intelligence import (
     _BaseCandidate,
@@ -32,19 +34,14 @@ from app.services.recommendation_intelligence import (
 class RecommendationIntelligenceTest(unittest.TestCase):
     # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
-        self.database_path = Path(__file__).resolve().parents[1] / f"relay-{uuid4().hex}.sqlite"
-        self.first_repo = SQLiteFirstBoardRepository(self.database_path)
-        self.limit_repo = SQLiteLimitUpRepository(self.database_path, seed_if_empty=False)
-        self.snapshot_repo = SQLiteRecommendationIntelligenceRepository(self.database_path)
+        self.database_url = isolated_database_url()
+        self.first_repo = FirstBoardRepository(self.database_url)
+        self.limit_repo = LimitUpRepository(self.database_url, seed_if_empty=False)
+        self.snapshot_repo = RecommendationIntelligenceRepository(self.database_url)
 
     # Release the test resources and restore the environment after this test scope.
     def tearDown(self) -> None:
-        for path in (
-            self.database_path,
-            self.database_path.with_name(f"{self.database_path.name}-wal"),
-            self.database_path.with_name(f"{self.database_path.name}-shm"),
-        ):
-            path.unlink(missing_ok=True)
+        release_database_url(self.database_url)
 
     # Regression scenario: refresh is relay only.
     def test_refresh_is_relay_only(self) -> None:

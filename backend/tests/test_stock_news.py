@@ -1,3 +1,5 @@
+
+from database_support import isolated_database_url, release_database_url
 import unittest
 from datetime import date, datetime, timedelta
 from pathlib import Path
@@ -7,7 +9,7 @@ from zoneinfo import ZoneInfo
 
 from app.agents.tools import AgentToolRegistry, ToolResult
 from app.models import StockKLineFacts, StockNewsFacts, StockNewsItem
-from app.repositories import SQLiteFirstBoardRepository, SQLiteStockNewsRepository
+from app.repositories import FirstBoardRepository, StockNewsRepository
 from app.routers.stocks import get_stock_news
 from app.services.stock_news import collect_stock_news
 from app.services.sample_data import SAMPLE_EVENTS
@@ -16,18 +18,17 @@ from app.services.sample_data import SAMPLE_EVENTS
 class StockNewsTest(unittest.TestCase):
     # Prepare the isolated fixtures and dependencies shared by the tests in this class.
     def setUp(self) -> None:
-        self.database_path = (
-            Path(__file__).resolve().parents[1]
-            / f"stock-news-{uuid4().hex}.sqlite"
+        self.database_url = (
+            isolated_database_url()
         )
-        self.repository = SQLiteStockNewsRepository(self.database_path)
+        self.repository = StockNewsRepository(self.database_url)
         self.now = datetime(2026, 8, 31, 9, 30, tzinfo=ZoneInfo("Asia/Shanghai"))
         self.addCleanup(self._cleanup_database)
 
     # Release the temporary resources owned by this test fixture.
     def _cleanup_database(self) -> None:
         for suffix in ("", "-shm", "-wal"):
-            Path(f"{self.database_path}{suffix}").unlink(missing_ok=True)
+            release_database_url(self.database_url)
 
     # Build the StockNewsItem fixture used by the surrounding regression scenario.
     def _item(self, title: str, *, hours_ago: int, url_suffix: str) -> StockNewsItem:
@@ -138,7 +139,7 @@ class StockNewsTest(unittest.TestCase):
         call = collect_news.call_args.kwargs
         self.assertEqual(call["name"], "思泉新材")
         self.assertEqual(call["limit"], 3)
-        self.assertIsInstance(call["repository"], SQLiteStockNewsRepository)
+        self.assertIsInstance(call["repository"], StockNewsRepository)
 
     # Regression scenario: stock activity combines close facts events and news.
     def test_stock_activity_combines_close_facts_events_and_news(self) -> None:
@@ -166,7 +167,7 @@ class StockNewsTest(unittest.TestCase):
         )
         registry = AgentToolRegistry(
             events=SAMPLE_EVENTS,
-            first_board_repository=SQLiteFirstBoardRepository(self.database_path),
+            first_board_repository=FirstBoardRepository(self.database_url),
         )
         with (
             patch(
@@ -208,7 +209,7 @@ class StockNewsTest(unittest.TestCase):
         directory = SymbolDirectory()
         registry = AgentToolRegistry(
             events=[],
-            first_board_repository=SQLiteFirstBoardRepository(self.database_path),
+            first_board_repository=FirstBoardRepository(self.database_url),
             hithink_collector=directory,  # type: ignore[arg-type]
         )
 

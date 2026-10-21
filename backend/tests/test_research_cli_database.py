@@ -14,8 +14,8 @@ import pytest
 
 from app.database import connect
 from app.models import StockDailyBar
-from app.repositories.first_board_repository import SQLiteFirstBoardRepository
-from app.repositories.limit_up_repository import SQLiteLimitUpRepository
+from app.repositories.first_board_repository import FirstBoardRepository
+from app.repositories.limit_up_repository import LimitUpRepository
 from app.services.sample_data import SAMPLE_EVENTS
 
 
@@ -48,8 +48,9 @@ def test_research_command_loads_env_and_defaults_to_configured_database(
     assert calls[0][db_index] is None
     archive = tmp_path / "explicit-archive.sqlite"
     monkeypatch.setattr(sys, "argv", [module_name, "--db", str(archive)])
-    module.main()
-    assert calls[1][db_index] == archive
+    with pytest.raises(SystemExit):
+        module.main()
+    assert len(calls) == 1
 
 
 def seed_research_cohorts():
@@ -84,8 +85,8 @@ def seed_research_cohorts():
                 amount=1000, source="synthetic-test",
                 created_at=datetime(2026, 9, 20, tzinfo=timezone.utc),
             ))
-    SQLiteLimitUpRepository().upsert_events(events)
-    SQLiteFirstBoardRepository().upsert_daily_bars(bars)
+    LimitUpRepository().upsert_events(events)
+    FirstBoardRepository().upsert_daily_bars(bars)
     return dates
 
 
@@ -113,7 +114,7 @@ def test_all_research_commands_run_on_postgres_without_sqlite(
         importlib.import_module("scripts." + name).main()
     original = json.loads((output / "comparison.json").read_text(encoding="utf-8"))
     assert original["database_backend"] == "postgresql"
-    assert original["database_path"] is None
+    assert "database_path" not in original
     assert original["kind"] == "historical_exploration_not_live"
     assert original["summary"]["consolidation"]["main"]["n"] > 0
     for filename, key in [

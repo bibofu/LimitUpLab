@@ -13,7 +13,7 @@ from langchain_core.messages import AIMessage
 from app.agents.review_agent import REVIEW_AGENT_VERSION, build_review_agent_report
 from app.agents.review_narrative import ReviewNarrative, apply_review_narrative, authoritative_review_facts
 from app.models import AgentEvaluationItem, AgentPrediction, DailyReviewSnapshot, ReviewAgentReportResponse, StockDailyBar
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import FirstBoardRepository
 from app.review_digest_models import DigestObservation
 from app.routers.agents import router
 from app.services.llm_provider import DisabledLLMProvider, LLMProvider, LLMResult
@@ -57,7 +57,7 @@ class ReviewProvider(LLMProvider):
 
 
 def repository():
-    repo = Mock(spec=SQLiteFirstBoardRepository)
+    repo = Mock(spec=FirstBoardRepository)
     repo.list_enrichment_for_date.return_value = []
     repo.list_predictions_between.return_value = [AgentPrediction(
         prediction_id=f"test-{index}", trade_date=BASE, symbol=f"00000{index + 1}",
@@ -204,8 +204,8 @@ def test_api_rebuild_does_not_mutate_daily_snapshot(mode, use_llm, refresh_facts
     app.include_router(router, prefix="/agents")
     with (
         patch("app.routers.agents.get_limit_up_repository", return_value=market),
-        patch("app.routers.agents.SQLiteFirstBoardRepository", return_value=repository()),
-        patch("app.routers.agents.SQLiteReviewSnapshotRepository", return_value=snapshots),
+        patch("app.routers.agents.FirstBoardRepository", return_value=repository()),
+        patch("app.routers.agents.ReviewSnapshotRepository", return_value=snapshots),
         patch("app.routers.agents.build_review_agent_report", return_value=generated) as generate,
         TestClient(app) as client,
     ):

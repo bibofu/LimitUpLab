@@ -1,3 +1,5 @@
+
+from database_support import isolated_database_url, release_database_url
 import os
 import threading
 import unittest
@@ -7,7 +9,7 @@ from pathlib import Path
 from uuid import uuid4
 
 from app.models import StockDailyBar, StockIntradayKLineBar, StockKLineBar
-from app.repositories import SQLiteFirstBoardRepository
+from app.repositories import FirstBoardRepository
 from app.services.stock_kline import (
     build_stock_kline_facts,
     load_stock_detail_market_data,
@@ -24,8 +26,8 @@ TEST_TMP_ROOT = Path(os.getenv("LIMITUPLAB_TEST_TMP", Path(__file__).resolve().p
 class StockKLineServiceTest(unittest.TestCase):
     # Regression scenario: intraday history groups five sessions and preserves partial errors.
     def test_intraday_history_groups_five_sessions_and_preserves_partial_errors(self) -> None:
-        database_path = TEST_TMP_ROOT / f"stock-intraday-history-{uuid4().hex}.sqlite"
-        repository = SQLiteFirstBoardRepository(database_path=database_path)
+        database_url = isolated_database_url()
+        repository = FirstBoardRepository(database_url=database_url)
         trade_dates = [date(2026, 8, 24) + timedelta(days=index) for index in range(5)]
         daily_bars = [
             StockKLineBar(
@@ -83,11 +85,11 @@ class StockKLineServiceTest(unittest.TestCase):
             self.assertEqual(response.days[0].previous_close, 12.2)
             self.assertEqual(response.data_as_of, trade_dates[-1])
         finally:
-            _remove_database_files(database_path)
+            _remove_database_files(database_url)
 
     # Regression scenario: intraday cache survives repository recreation.
     def test_intraday_cache_survives_repository_recreation(self) -> None:
-        database_path = TEST_TMP_ROOT / f"stock-intraday-{uuid4().hex}.sqlite"
+        database_url = isolated_database_url()
         trade_date = date(2026, 8, 31)
         calls = 0
 
@@ -117,14 +119,14 @@ class StockKLineServiceTest(unittest.TestCase):
                 symbol="sz002328",
                 trade_date=trade_date,
                 period=1,
-                repository=SQLiteFirstBoardRepository(database_path=database_path),
+                repository=FirstBoardRepository(database_url=database_url),
                 collector=collector,
             )
             second = load_stock_intraday_bars(
                 symbol="002328",
                 trade_date=trade_date,
                 period=1,
-                repository=SQLiteFirstBoardRepository(database_path=database_path),
+                repository=FirstBoardRepository(database_url=database_url),
                 collector=collector,
             )
 
@@ -132,11 +134,11 @@ class StockKLineServiceTest(unittest.TestCase):
             self.assertEqual(first, second)
             self.assertEqual(second[0].timestamp, datetime(2026, 8, 31, 9, 31))
         finally:
-            _remove_database_files(database_path)
+            _remove_database_files(database_url)
 
     # Regression scenario: concurrent intraday requests share one cache fill.
     def test_concurrent_intraday_requests_share_one_cache_fill(self) -> None:
-        database_path = TEST_TMP_ROOT / f"stock-intraday-lock-{uuid4().hex}.sqlite"
+        database_url = isolated_database_url()
         trade_date = date(2026, 8, 31)
         collector_started = threading.Event()
         release_collector = threading.Event()
@@ -172,7 +174,7 @@ class StockKLineServiceTest(unittest.TestCase):
                 symbol="002328",
                 trade_date=trade_date,
                 period=1,
-                repository=SQLiteFirstBoardRepository(database_path=database_path),
+                repository=FirstBoardRepository(database_url=database_url),
                 collector=collector,
             )
 
@@ -188,12 +190,12 @@ class StockKLineServiceTest(unittest.TestCase):
             self.assertEqual([len(result) for result in results], [1, 1])
         finally:
             release_collector.set()
-            _remove_database_files(database_path)
+            _remove_database_files(database_url)
 
     # Regression scenario: complete current day cache skips external collectors.
     def test_complete_current_day_cache_skips_external_collectors(self) -> None:
-        database_path = TEST_TMP_ROOT / f"stock-kline-current-{uuid4().hex}.sqlite"
-        repository = SQLiteFirstBoardRepository(database_path=database_path)
+        database_url = isolated_database_url()
+        repository = FirstBoardRepository(database_url=database_url)
         end_date = date.today()
         now = datetime.now(timezone.utc)
         repository.upsert_daily_bars(
@@ -252,12 +254,12 @@ class StockKLineServiceTest(unittest.TestCase):
             self.assertEqual(history_calls, 0)
             self.assertEqual(spot_calls, 0)
         finally:
-            _remove_database_files(database_path)
+            _remove_database_files(database_url)
 
     # Regression scenario: partial history refresh is not repeated within ttl.
     def test_partial_history_refresh_is_not_repeated_within_ttl(self) -> None:
-        database_path = TEST_TMP_ROOT / f"stock-kline-partial-{uuid4().hex}.sqlite"
-        repository = SQLiteFirstBoardRepository(database_path=database_path)
+        database_url = isolated_database_url()
+        repository = FirstBoardRepository(database_url=database_url)
         end_date = date(2026, 8, 18)
         history_calls = 0
 
@@ -308,12 +310,12 @@ class StockKLineServiceTest(unittest.TestCase):
             self.assertEqual(len(second), 5)
             self.assertEqual(history_calls, 1)
         finally:
-            _remove_database_files(database_path)
+            _remove_database_files(database_url)
 
     # Regression scenario: concurrent history requests are coalesced.
     def test_concurrent_history_requests_are_coalesced(self) -> None:
-        database_path = TEST_TMP_ROOT / f"stock-kline-concurrent-{uuid4().hex}.sqlite"
-        repository = SQLiteFirstBoardRepository(database_path=database_path)
+        database_url = isolated_database_url()
+        repository = FirstBoardRepository(database_url=database_url)
         end_date = date(2026, 8, 19)
         history_calls = 0
         calls_lock = threading.Lock()
@@ -370,12 +372,12 @@ class StockKLineServiceTest(unittest.TestCase):
             self.assertEqual(history_calls, 1)
         finally:
             release_collector.set()
-            _remove_database_files(database_path)
+            _remove_database_files(database_url)
 
     # Regression scenario: detail bundle reuses one history load for position and chart.
     def test_detail_bundle_reuses_one_history_load_for_position_and_chart(self) -> None:
-        database_path = TEST_TMP_ROOT / f"stock-market-data-{uuid4().hex}.sqlite"
-        repository = SQLiteFirstBoardRepository(database_path=database_path)
+        database_url = isolated_database_url()
+        repository = FirstBoardRepository(database_url=database_url)
         end_date = date(2026, 8, 18)
         requested_days: list[int] = []
 
@@ -423,12 +425,12 @@ class StockKLineServiceTest(unittest.TestCase):
             self.assertIsNotNone(result.position)
             self.assertEqual(result.position.bar_count, 125)
         finally:
-            _remove_database_files(database_path)
+            _remove_database_files(database_url)
 
     # Regression scenario: merges history with latest spot and reuses cache.
     def test_merges_history_with_latest_spot_and_reuses_cache(self) -> None:
-        database_path = TEST_TMP_ROOT / f"stock-kline-test-{uuid4().hex}.sqlite"
-        repository = SQLiteFirstBoardRepository(database_path=database_path)
+        database_url = isolated_database_url()
+        repository = FirstBoardRepository(database_url=database_url)
         end_date = date(2026, 8, 17)
         history_calls = 0
         spot_calls = 0
@@ -500,12 +502,12 @@ class StockKLineServiceTest(unittest.TestCase):
             self.assertEqual(history_calls, 1)
             self.assertEqual(spot_calls, 1)
         finally:
-            _remove_database_files(database_path)
+            _remove_database_files(database_url)
 
     # Regression scenario: loads 125 point in time bars for position assessment.
     def test_loads_125_point_in_time_bars_for_position_assessment(self) -> None:
-        database_path = TEST_TMP_ROOT / f"stock-position-test-{uuid4().hex}.sqlite"
-        repository = SQLiteFirstBoardRepository(database_path=database_path)
+        database_url = isolated_database_url()
+        repository = FirstBoardRepository(database_url=database_url)
         end_date = date(2026, 8, 17)
         requested_days: list[int] = []
 
@@ -545,17 +547,12 @@ class StockKLineServiceTest(unittest.TestCase):
             self.assertNotEqual(position.primary.regime, "unclassified")
             self.assertTrue(position.evidence)
         finally:
-            _remove_database_files(database_path)
+            _remove_database_files(database_url)
 
 
 # Release the temporary resources owned by this test fixture.
-def _remove_database_files(database_path: Path) -> None:
-    for path in (
-        database_path,
-        database_path.with_name(f"{database_path.name}-wal"),
-        database_path.with_name(f"{database_path.name}-shm"),
-    ):
-        path.unlink(missing_ok=True)
+def _remove_database_files(database_url: str) -> None:
+    release_database_url(database_url)
 
 
 if __name__ == "__main__":

@@ -1,3 +1,5 @@
+
+from database_support import isolated_database_url
 from datetime import date, datetime, timezone
 from unittest.mock import Mock, patch
 
@@ -15,7 +17,7 @@ from app.models import (
     ReviewAgentReportResponse,
     ReviewPromotionComparison,
 )
-from app.repositories import SQLiteFirstBoardRepository, SQLiteReviewSnapshotRepository
+from app.repositories import FirstBoardRepository, ReviewSnapshotRepository
 from app.routers.agents import get_review_agent_report
 from app.services.llm_provider import DisabledLLMProvider
 from app.services.promotion_calendar import PromotionCalendar
@@ -51,7 +53,7 @@ def evaluation(day=BASE):
 
 
 def repository():
-    repo = Mock(spec=SQLiteFirstBoardRepository)
+    repo = Mock(spec=FirstBoardRepository)
     repo.list_predictions_between.return_value = []
     repo.list_post_bars.return_value = []
     repo.list_enrichment_for_date.return_value = []
@@ -207,7 +209,7 @@ def stored_report(version, *, pending=False):
     (REVIEW_AGENT_VERSION, True, True),
 ])
 def test_route_only_reuses_current_ready_snapshot_and_preserves_original(tmp_path, version, pending, recompute):
-    snapshots = SQLiteReviewSnapshotRepository(tmp_path / "review.sqlite")
+    snapshots = ReviewSnapshotRepository(isolated_database_url('review.sqlite'))
     original = DailyReviewSnapshot(
         as_of_date=NEXT, start_date=BASE, report=stored_report(version, pending=pending),
         generated_by="daily-review-snapshot-v1", generated_at=datetime(2026, 10, 8, 8, tzinfo=timezone.utc),
@@ -219,8 +221,8 @@ def test_route_only_reuses_current_ready_snapshot_and_preserves_original(tmp_pat
     rebuilt = stored_report(REVIEW_AGENT_VERSION)
     with (
         patch("app.routers.agents.get_limit_up_repository", return_value=event_repo),
-        patch("app.routers.agents.SQLiteFirstBoardRepository", return_value=repository()),
-        patch("app.routers.agents.SQLiteReviewSnapshotRepository", return_value=snapshots),
+        patch("app.routers.agents.FirstBoardRepository", return_value=repository()),
+        patch("app.routers.agents.ReviewSnapshotRepository", return_value=snapshots),
         patch("app.routers.agents.build_review_agent_report", return_value=rebuilt) as build,
         patch.object(snapshots, "save_snapshot", wraps=snapshots.save_snapshot) as save,
     ):

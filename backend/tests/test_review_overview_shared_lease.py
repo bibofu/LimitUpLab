@@ -14,7 +14,7 @@ from test_runtime_coordination import lease_store
 @pytest.mark.parametrize("event", ["delta", "completed"])
 def test_expired_overview_slot_rejects_publication(lease_store, monkeypatch, event):
     monkeypatch.setenv("LIMITUPLAB_AGENT_RATE_LIMIT_ENABLED", "true")
-    limiter = DatabaseAgentRateLimiter(lease_store.database_path)
+    limiter = DatabaseAgentRateLimiter(lease_store.database_url)
     lease = limiter.acquire("overview-owner", "ip", daily_request_count=0)
     report, events, repo = fixtures()
 
@@ -26,7 +26,7 @@ def test_expired_overview_slot_rejects_publication(lease_store, monkeypatch, eve
     with (
         patch("app.routers.review_overview.get_llm_provider", return_value=Provider()),
         patch("app.routers.review_overview.get_limit_up_repository", return_value=SimpleNamespace(list_events=lambda: events)),
-        patch("app.routers.review_overview.SQLiteFirstBoardRepository", return_value=repo),
+        patch("app.routers.review_overview.FirstBoardRepository", return_value=repo),
         patch("app.routers.review_overview.load_promotion_calendar", return_value=SimpleNamespace(trade_dates=DAYS, warnings=())),
         patch("app.routers.review_overview.build_review_agent_report", return_value=report),
         patch("app.routers.review_overview.generate_overview", side_effect=generate),

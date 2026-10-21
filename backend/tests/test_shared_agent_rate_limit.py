@@ -27,7 +27,7 @@ def limits(monkeypatch):
 def test_global_slots_are_atomic_across_instances(lease_store):
     barrier = threading.Barrier(8)
     def attempt(_):
-        limiter = DatabaseAgentRateLimiter(lease_store.database_path)
+        limiter = DatabaseAgentRateLimiter(lease_store.database_url)
         barrier.wait(timeout=10)
         try:
             return limiter.acquire(uuid4().hex, uuid4().hex, daily_request_count=0)
@@ -39,7 +39,7 @@ def test_global_slots_are_atomic_across_instances(lease_store):
     try:
         assert len(accepted) == 2
         assert [item for item in results if isinstance(item, str)] == ["global_concurrency_limit"] * 6
-        assert DatabaseAgentRateLimiter(lease_store.database_path).snapshot()["active_global"] == 2
+        assert DatabaseAgentRateLimiter(lease_store.database_url).snapshot()["active_global"] == 2
     finally:
         for lease in accepted:
             lease.release()
@@ -51,7 +51,7 @@ def test_daily_count_is_reserved_before_usage_record_is_written(lease_store, mon
     owner = uuid4().hex
     barrier = threading.Barrier(6)
     def attempt(_):
-        limiter = DatabaseAgentRateLimiter(lease_store.database_path)
+        limiter = DatabaseAgentRateLimiter(lease_store.database_url)
         barrier.wait(timeout=10)
         try:
             return limiter.acquire(owner, "ip", daily_request_count=0)
@@ -68,15 +68,15 @@ def test_daily_count_is_reserved_before_usage_record_is_written(lease_store, mon
             lease.release()
     # A restart must not erase the daily admission reservation.
     with pytest.raises(AgentRateLimitError, match="今天"):
-        DatabaseAgentRateLimiter(lease_store.database_path).acquire(owner, "ip", daily_request_count=0)
+        DatabaseAgentRateLimiter(lease_store.database_url).acquire(owner, "ip", daily_request_count=0)
 
 
 def test_rejected_attempts_count_across_instances(lease_store, monkeypatch):
     monkeypatch.setenv("LIMITUPLAB_AGENT_REQUESTS_PER_MINUTE", "2")
     monkeypatch.setenv("LIMITUPLAB_AGENT_MAX_CONCURRENT_PER_USER", "1")
     owner = uuid4().hex
-    first = DatabaseAgentRateLimiter(lease_store.database_path)
-    other = DatabaseAgentRateLimiter(lease_store.database_path)
+    first = DatabaseAgentRateLimiter(lease_store.database_url)
+    other = DatabaseAgentRateLimiter(lease_store.database_url)
     lease = first.acquire(owner, "ip", daily_request_count=0)
     try:
         with pytest.raises(AgentRateLimitError) as blocked:
@@ -96,8 +96,8 @@ def test_rejected_attempts_count_across_instances(lease_store, monkeypatch):
 def test_expired_slot_cannot_publish_or_release_replacement(lease_store, monkeypatch):
     monkeypatch.setenv("LIMITUPLAB_AGENT_MAX_CONCURRENT_PER_USER", "1")
     owner = uuid4().hex
-    first = DatabaseAgentRateLimiter(lease_store.database_path)
-    second = DatabaseAgentRateLimiter(lease_store.database_path)
+    first = DatabaseAgentRateLimiter(lease_store.database_url)
+    second = DatabaseAgentRateLimiter(lease_store.database_url)
     old = first.acquire(owner, "ip", daily_request_count=0)
     with lease_store.connection() as db:
         db.execute("UPDATE agent_request_slots SET expires_at=0 WHERE token=?", (old.token,))
