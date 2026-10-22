@@ -1,7 +1,9 @@
 import json
+import os
 import subprocess
 import unittest
 from datetime import date
+from unittest.mock import patch
 
 from app.collectors.hithink_finance_collector import (
     HithinkFinanceCollector,
@@ -25,6 +27,12 @@ class FakeRunner:
             stdout=json.dumps(self.payload),
             stderr="",
         )
+
+
+class TimeoutRunner:
+    # Simulate the collector terminating the CLI once its budget expires.
+    def __call__(self, command: list[str], **kwargs) -> subprocess.CompletedProcess[str]:
+        raise subprocess.TimeoutExpired(cmd=command, timeout=kwargs.get("timeout", 0))
 
 
 class SequenceRunner:
@@ -446,6 +454,40 @@ class HithinkFinanceCollectorTest(unittest.TestCase):
 
         self.assertEqual(context.exception.code, "FUYAO_2003")
         self.assertFalse(context.exception.retryable)
+
+    # Regression scenario: batch runs raise the CLI budget so the CLI can finish its
+    # own 4001/429 backoff instead of being killed mid-retry and reported as a timeout.
+    def test_configured_timeout_follows_environment(self) -> None:
+        runner = FakeRunner({"ok": True, "data": {"item": []}})
+        with patch.dict(os.environ, {"LIMITUPLAB_HITHINK_TIMEOUT_SECONDS": "45"}):
+            collector = HithinkFinanceCollector(
+                executable="hithink-finance", runner=runner,
+            )
+
+        self.assertEqual(collector.timeout_seconds, 45.0)
+
+    # Regression scenario: an unparsable budget keeps the documented 15 second default.
+    def test_configured_timeout_falls_back_to_default_on_invalid_value(self) -> None:
+        runner = FakeRunner({"ok": True, "data": {"item": []}})
+        with patch.dict(os.environ, {"LIMITUPLAB_HITHINK_TIMEOUT_SECONDS": "not-a-number"}):
+            collector = HithinkFinanceCollector(
+                executable="hithink-finance", runner=runner,
+            )
+
+        self.assertEqual(collector.timeout_seconds, 15.0)
+
+    # Regression scenario: a killed CLI surfaces as a retryable, budget-naming error.
+    def test_timeout_error_is_retryable_and_reports_budget(self) -> None:
+        collector = HithinkFinanceCollector(
+            executable="hithink-finance", runner=TimeoutRunner(), timeout_seconds=45,
+        )
+
+        with self.assertRaises(HithinkFinanceError) as context:
+            collector.collect_hot_stocks()
+
+        self.assertEqual(context.exception.code, "timeout")
+        self.assertTrue(context.exception.retryable)
+        self.assertIn("45s", str(context.exception))
 
 
 if __name__ == "__main__":

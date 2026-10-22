@@ -153,11 +153,17 @@ docker logs --tail=100 limituplab-frontend-1
 首页指数和晋级统计使用独立的采集预算：`LIMITUPLAB_MARKET_INDEX_TIMEOUT_SECONDS`
 默认 30 秒，覆盖三个指数及全部来源回退；`LIMITUPLAB_TRADING_CALENDAR_TIMEOUT_SECONDS`
 默认 30 秒，覆盖一次完整交易日历读取。指数的三个 CLI 查询并发执行；单次 CLI 使用
-`LIMITUPLAB_HITHINK_TIMEOUT_SECONDS`（默认 15 秒）且不超过批次预算的一半，为补充来源
+`LIMITUPLAB_HITHINK_TIMEOUT_SECONDS`（交互默认 15 秒）且不超过批次预算的一半，为补充来源
 留出时间。预算包含子进程启动和序列化，超时后终止并回收
 子进程，清理最多另用约 4 秒。配置必须为有限正数。代理环境锁只在子进程内持有；父进程
 缓存成功结果并合并并发查询，失败不缓存、不使用过期数据。指数超时保留本地市场统计，
 日历超时明确提示晋级率暂不可计算。整个指数批次超时后不保证继续尝试其他来源。
+
+逐股历史 K 线在 `daily-update` 批处理中单独把 `LIMITUPLAB_HITHINK_TIMEOUT_SECONDS` 提升到
+45 秒（`LIMITUPLAB_DAILY_HITHINK_TIMEOUT_SECONDS`，默认 45）。CLI 自身单请求超时 30 秒，
+遇到上游 `4001`/429 会指数退避，`Retry-After` 最多再等 30 秒；沿用交互路径的 15 秒会让
+批处理在第一次退避时就强杀子进程，把重试误记成 `hithink-finance request timed out after 15s`
+并立刻降级腾讯源。交互路径（问答、个股详情）保持 15 秒，让慢请求尽快回退，不受批处理放宽影响。
 
 板块快照先用 CLI 目录及批量行情，`LIMITUPLAB_SECTOR_SNAPSHOT_TIMEOUT_SECONDS` 默认
 60 秒，控制最多 4 批并发的快照总预算；不包括目录请求及可选行业字段补充。单次 CLI

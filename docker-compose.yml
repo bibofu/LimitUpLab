@@ -138,6 +138,10 @@ services:
     environment:
       LIMITUPLAB_DATABASE_URL: ${LIMITUPLAB_DATABASE_URL:?Set the PostgreSQL application URL}
       LIMITUPLAB_DATA_DIRECTORY: /app/data
+      # The CLI already retries 4001/429 with backoff and honours Retry-After up to
+      # 30s, so the interactive 15s default kills it mid-retry and reports a fake
+      # timeout. Batch runs wait out one retry budget instead.
+      LIMITUPLAB_HITHINK_TIMEOUT_SECONDS: ${LIMITUPLAB_DAILY_HITHINK_TIMEOUT_SECONDS:-45}
       TZ: Asia/Shanghai
     volumes:
       - limituplab-data:/app/data
