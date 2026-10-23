@@ -1,7 +1,7 @@
 """Versioned PostgreSQL metadata, independent of SQLite initialization code.
 
 The baseline manifest is frozen at SQLite schema version 12 plus the final
-ReAct/quality schemas. JSON and historical dates intentionally remain TEXT.
+runtime and business schemas. JSON and historical dates intentionally remain TEXT.
 """
 
 import json
@@ -14,7 +14,7 @@ from alembic.runtime.migration import MigrationContext
 
 
 BASELINE_REVISION = "0001_postgresql_baseline"
-HEAD_REVISION = "0003_single_champion"
+HEAD_REVISION = "0004_drop_quality_tables"
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 

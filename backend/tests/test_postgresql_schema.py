@@ -46,5 +46,7 @@ def test_alembic_offline_upgrade_is_complete_and_credential_free(monkeypatch):
     assert "WHERE active = 1" in sql
     assert "0003_single_champion" in sql
     assert "one_champion_policy" in sql
+    assert "0004_drop_quality_tables" in sql
+    assert 'DROP TABLE IF EXISTS "quality_cases"' in sql
     assert "secret" not in sql
     assert "PRAGMA" not in sql
