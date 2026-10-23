@@ -103,7 +103,7 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 | `prediction_quality_audit` | 审计预测来源、Outcome 覆盖和基线表现 |
 | `scoring_policy_status` | 查询 Champion、Challenger 和晋级原因 |
 
-生产环境不再区分 Fast Path、Complex Path 或独立 Replanner。依赖上一步名单的查询由模型在观察结果后发起下一轮工具调用；集合交并差、筛选、排序和聚合交给受限 `compute_result`，完整证据按 ID 保存在请求级 EvidenceStore，不允许模型执行任意表达式或猜测隐藏行。
+生产环境依赖上一步名单的查询由模型在观察结果后发起下一轮工具调用；集合交并差、筛选、排序和聚合交给受限 `compute_result`，完整证据按 ID 保存在请求级 EvidenceStore，不允许模型执行任意表达式或猜测隐藏行。
 
 默认 `LIMITUPLAB_AGENT_PROFILE=v1_close_review` 只暴露收盘后与历史研究工具；`remote_limit_up_pool` 和 `web_search` 只在 `extended` 研发 profile 开放。ToolGateway 对每一次调用重新校验 allowlist、JSON Schema、日期能力、单股票约束和空集合边界，未知或未开放工具即使由模型生成也不会执行。
 
