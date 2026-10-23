@@ -12,6 +12,7 @@ from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
 from openai import APIError
 
+from app.services.agent_tracing import get_agent_tracer, usage_details
 from app.services.protocol_diagnostics import response_diagnostics
 
 from app.services.llm_provider import (
@@ -113,6 +114,31 @@ class LangChainChatProvider(LLMProvider):
         on_chunk: Callable[[AIMessageChunk], None] | None = None,
         tool_choice: str | None = None,
     ):
+        """Trace one native turn without changing the provider contract."""
+
+        with get_agent_tracer().generation(
+            name="react_decision",
+            model=self.model,
+            input=_trace_messages(messages),
+            parameters={"max_tokens": max_tokens, "tool_count": len(tools)},
+            metadata={"tool_choice": tool_choice, "streaming": on_chunk is not None},
+        ) as generation:
+            message, usage = self._generate_messages(
+                messages, tools,
+                timeout_seconds=timeout_seconds,
+                max_tokens=max_tokens,
+                on_chunk=on_chunk,
+                tool_choice=tool_choice,
+            )
+            generation.finish(output=_trace_message_output(message), usage=usage)
+            return message
+
+    # Preserve tool messages and optionally report native chunks as they arrive.
+    def _generate_messages(
+        self, messages, tools, *, timeout_seconds=30, max_tokens=4096,
+        on_chunk: Callable[[AIMessageChunk], None] | None = None,
+        tool_choice: str | None = None,
+    ):
         """Preserve tool messages and optionally report native chunks as they arrive."""
         tracker = _usage_tracker.get()
         if tracker:
@@ -192,7 +218,7 @@ class LangChainChatProvider(LLMProvider):
             if any(not value for value in ids) or len(ids) != len(set(ids)):
                 raise NativeFunctionCallingError("Missing or duplicate tool_call_id", diagnostics=
                     response_diagnostics(message, failure_category="tool_ids"))
-            return message
+            return message, usage_details(*tokens)
         except BaseException as error:
             if tracker:
                 tracker.fail_call()
@@ -247,8 +273,39 @@ class LangChainChatProvider(LLMProvider):
             on_delta=on_delta,
         )
 
-    # Execute the LangChain request or stream, normalize usage and return the common LLM result.
     def _run(
+        self,
+        model: Runnable,
+        system_prompt: str,
+        user_prompt: str,
+        *,
+        function_name: str | None = None,
+        contract_chars: int = 0,
+        on_delta: Callable[[str], None] | None = None,
+    ) -> LLMResult:
+        """Trace one text call while preserving the existing result contract."""
+
+        with get_agent_tracer().generation(
+            name=function_name or "grounded_answer",
+            model=self.model,
+            input={"system": _trace_text(system_prompt), "user": _trace_text(user_prompt)},
+            metadata={"streaming": on_delta is not None},
+        ) as generation:
+            result = self._run_model(
+                model, system_prompt, user_prompt,
+                function_name=function_name, contract_chars=contract_chars,
+                on_delta=on_delta,
+            )
+            generation.finish(
+                output=_trace_text(result.content),
+                usage=usage_details(
+                    result.prompt_tokens, result.completion_tokens, result.total_tokens,
+                ),
+            )
+            return result
+
+    # Execute the LangChain request or stream, normalize usage and return the common LLM result.
+    def _run_model(
         self,
         model: Runnable,
         system_prompt: str,
@@ -337,3 +394,52 @@ def _function_arguments(message: AIMessage, function_name: str) -> str:
             response_diagnostics(message, expected_tool=function_name, failure_category="tool_selection"),
         )
     return json.dumps(calls[0]["args"], ensure_ascii=False, separators=(",", ":"))
+
+
+TRACE_TEXT_LIMIT = 6000
+
+
+# Bound one traced string so a large tool result cannot dominate a trace.
+def _trace_text(value: str) -> str:
+    if len(value) <= TRACE_TEXT_LIMIT:
+        return value
+    return value[:TRACE_TEXT_LIMIT] + f"\n...[{len(value) - TRACE_TEXT_LIMIT} chars truncated]"
+
+
+# Convert the conversation into a bounded, JSON-safe trace input.
+def _trace_messages(messages) -> list[dict[str, Any]]:
+    traced: list[dict[str, Any]] = []
+    for message in messages:
+        item: dict[str, Any] = {
+            "role": getattr(message, "type", type(message).__name__),
+            "content": _trace_text(
+                _text_content(message)
+                if isinstance(message, BaseMessage) else str(message)
+            ),
+        }
+        name = getattr(message, "name", None)
+        if name:
+            item["name"] = name
+        calls = getattr(message, "tool_calls", None) or []
+        if calls:
+            item["tool_calls"] = [
+                {"name": call.get("name"), "args": _trace_text(_trace_json(call.get("args")))}
+                for call in calls
+            ]
+        traced.append(item)
+    return traced
+
+
+# Convert one model message into a bounded, JSON-safe trace output.
+def _trace_message_output(message: AIMessage) -> dict[str, Any]:
+    output: dict[str, Any] = {"content": _trace_text(_text_content(message))}
+    if message.tool_calls:
+        output["tool_calls"] = [
+            {"name": call.get("name"), "args": _trace_text(_trace_json(call.get("args")))}
+            for call in message.tool_calls
+        ]
+    return output
+
+
+def _trace_json(value: Any) -> str:
+    return json.dumps(value, ensure_ascii=False, default=str)

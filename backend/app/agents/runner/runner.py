@@ -25,6 +25,7 @@ from app.agents.runner.guardrails import (
 from app.agents.runner.prompt import build_messages
 from app.agents.runner.result import RunnerResult
 from app.agents.runner.tool_view import business_definitions, dump, model_result
+from app.services.agent_tracing import get_agent_tracer
 
 
 class RunnerState(TypedDict, total=False):
@@ -157,6 +158,15 @@ class AgentRunner:
     def execute(self, call: dict[str, Any]) -> dict[str, Any]:
         """Validate and execute one call, returning a model-readable observation."""
 
+        with get_agent_tracer().tool(
+            name=call.get("name", "unknown"), arguments=call.get("args"),
+        ) as span:
+            value = self._execute(call)
+            span.finish(status=value.get("status", "error"), output=value)
+            return value
+
+    # Validate and execute one call; validation and provider failures stay observations.
+    def _execute(self, call: dict[str, Any]) -> dict[str, Any]:
         try:
             arguments = self.gateway.validate(call)
             signature = dump([call["name"], sorted(arguments.items())])

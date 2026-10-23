@@ -1,7 +1,9 @@
 """Durable ReAct HTTP/SSE transport; reconnect only reads, never reruns tools."""
 
 import json
+import os
 import threading
+from contextlib import ExitStack
 from datetime import datetime, timezone
 from typing import Annotated
 
@@ -13,6 +15,7 @@ from app.agents.runtime_version import VERSION
 from app.models import AgentChatResponse, ChatSessionMessage
 from app.repositories import ChatSessionRepository, SessionOwnershipError
 from app.security import current_owner_id
+from app.services.agent_tracing import get_agent_tracer
 
 router = APIRouter()
 _lock = threading.Lock()
@@ -106,6 +109,22 @@ def start(request, http_request, owner_id):
             tracker = response = failure = None
             control = RunControl(journal, row, execution, lease)
             token = CURRENT_CONTROL.set(control)
+            # Tracing starts inside the worker thread: ContextVar/OTel context does
+            # not cross the thread boundary from the HTTP handler.
+            trace_scope = ExitStack()
+            run_span = trace_scope.enter_context(
+                get_agent_tracer().run(
+                    run_id=run_id,
+                    session_id=request.session_id,
+                    owner_id=owner_id,
+                    message=request.message,
+                    metadata={
+                        "model": os.getenv("LIMITUPLAB_LLM_MODEL", ""),
+                        "profile": os.getenv("LIMITUPLAB_AGENT_PROFILE", ""),
+                    },
+                    tags=["chat"],
+                )
+            )
             def progress(stage, message):
                 journal.event(run_id, "progress", {"stage": stage, "message": message})
                 notify_streams()
@@ -158,6 +177,18 @@ def start(request, http_request, owner_id):
                                 if _workers.get(run_id) is threading.current_thread():
                                     _workers.pop(run_id, None)
                             notify_streams()
+                            run_span.finish(
+                                output={
+                                    "status": (
+                                        response.task_status if response is not None else "error"
+                                    ),
+                                    "stop_reason": (
+                                        response.stop_reason if response is not None else None
+                                    ),
+                                },
+                                error=failure,
+                            )
+                            trace_scope.close()
         try:
             thread = threading.Thread(target=worker, daemon=True, name="react-" + run_id)
             _workers[run_id] = thread

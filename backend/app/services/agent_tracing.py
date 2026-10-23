@@ -81,6 +81,7 @@ class AgentTracer(Protocol):
         model: str,
         input: Any = None,
         parameters: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Iterator[GenerationSpan]: ...
 
     def tool(self, *, name: str, arguments: Any = None) -> Iterator[ToolSpan]: ...
@@ -154,6 +155,7 @@ class NullTracer:
         model: str,
         input: Any = None,
         parameters: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Iterator[GenerationSpan]:
         yield _NullGeneration()
 
@@ -292,9 +294,10 @@ class LangfuseTracer:
         metadata: dict[str, Any] | None = None,
         tags: list[str] | None = None,
     ) -> Iterator[RunSpan]:
-        trace_id = self._client.create_trace_id(seed=run_id)
+        trace_id = ""
         with ExitStack() as stack:
             try:
+                trace_id = self._client.create_trace_id(seed=run_id)
                 span = stack.enter_context(
                     self._client.start_as_current_observation(
                         name="agent_run",
@@ -330,6 +333,7 @@ class LangfuseTracer:
         model: str,
         input: Any = None,
         parameters: dict[str, Any] | None = None,
+        metadata: dict[str, Any] | None = None,
     ) -> Iterator[GenerationSpan]:
         with ExitStack() as stack:
             try:
@@ -340,6 +344,7 @@ class LangfuseTracer:
                         model=model,
                         model_parameters=parameters or {},
                         input=input,
+                        metadata=metadata,
                     )
                 )
             except Exception:
@@ -386,6 +391,22 @@ class LangfuseTracer:
 
 def _error_message(error: BaseException) -> str:
     return f"{type(error).__name__}: {error}"[:ERROR_MESSAGE_LIMIT]
+
+
+def usage_details(
+    prompt_tokens: int | None,
+    completion_tokens: int | None,
+    total_tokens: int | None,
+) -> dict[str, int] | None:
+    """Map provider usage to Langfuse only when every count is measured."""
+
+    if prompt_tokens is None or completion_tokens is None or total_tokens is None:
+        return None
+    return {
+        "input": prompt_tokens,
+        "output": completion_tokens,
+        "total": total_tokens,
+    }
 
 
 _tracer: AgentTracer = NullTracer()

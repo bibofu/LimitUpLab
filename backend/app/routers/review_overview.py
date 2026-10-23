@@ -1,6 +1,7 @@
 """On-demand SSE review summary; no cached prose or prediction/outcome writes."""
 
 import json
+from contextlib import ExitStack
 from threading import Event, Thread
 from datetime import date, datetime, timezone
 from queue import Empty, SimpleQueue
@@ -15,6 +16,7 @@ from app.agents.review_agent import build_review_agent_report
 from app.agents.review_overview import OverviewValidationError, build_overview_facts, generate_overview
 from app.repositories import FirstBoardRepository, get_limit_up_repository
 from app.security import current_owner_id
+from app.services.agent_tracing import get_agent_tracer
 from app.services.llm_provider import DisabledLLMProvider, capture_llm_usage, get_llm_provider
 from app.services.promotion_calendar import load_promotion_calendar
 
@@ -36,8 +38,9 @@ def stream_review_overview(
     provider = get_llm_provider()
     if isinstance(provider, DisabledLLMProvider):
         raise HTTPException(503, "总结模型暂不可用，请检查模型配置后重试。")
+    run_id = "overview_" + uuid4().hex
     lease, usage_repository, usage_record = agents._begin_agent_request(
-        request, owner_id=owner_id, session_id="review-overview", run_id="overview_" + uuid4().hex,
+        request, owner_id=owner_id, session_id="review-overview", run_id=run_id,
         started_at=datetime.now(timezone.utc),
     )
     queue = SimpleQueue()
@@ -50,6 +53,17 @@ def stream_review_overview(
 
     def worker():
         tracker = failure = None
+        trace_scope = ExitStack()
+        run_span = trace_scope.enter_context(
+            get_agent_tracer().run(
+                run_id=run_id,
+                session_id="review-overview",
+                owner_id=owner_id,
+                message=f"复盘总结 {payload.end_date.isoformat()}",
+                metadata={"surface": "review_overview"},
+                tags=["review_overview"],
+            )
+        )
         try:
             with capture_llm_usage() as tracker:
                 emit("progress", {"message": "正在核对市场、候选与高标事实"})
@@ -77,7 +91,14 @@ def stream_review_overview(
             try:
                 agents._finish_agent_request(usage_repository, usage_record, tracker, error=failure)
             finally:
-                lease.release()
+                try:
+                    lease.release()
+                finally:
+                    run_span.finish(
+                        output={"status": "error" if failure is not None else "success"},
+                        error=failure,
+                    )
+                    trace_scope.close()
 
     try:
         thread = Thread(target=worker, daemon=True, name="review-overview")

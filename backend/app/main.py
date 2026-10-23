@@ -20,9 +20,15 @@ validate_admin_security()
 @asynccontextmanager
 async def lifespan(application):
     from app.database import connect, initialize_database
-    with closing(connect()) as db:
-        initialize_database(db)
-    yield
+    from app.services.agent_tracing import configure_agent_tracer, shutdown_agent_tracer
+
+    configure_agent_tracer()
+    try:
+        with closing(connect()) as db:
+            initialize_database(db)
+        yield
+    finally:
+        shutdown_agent_tracer()
 
 
 app = FastAPI(
