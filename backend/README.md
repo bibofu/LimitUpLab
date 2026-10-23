@@ -83,7 +83,10 @@ compare it with the legacy runtime without changing production responses. The
 production chat entry always uses this runner. Its input review is
 security-only: task interpretation, output contracts and date scopes remain
 only in the legacy runtime, which is retained for offline Golden and quality
-replay rather than production chat.
+replay rather than production chat. The Golden harness itself still evaluates
+that legacy reference runtime because its scripted models and table graders
+depend on `finish` and evidence IDs; the production runner is validated by the
+shadow harness and runner tests.
 Compliance defaults to the deterministic pattern guard
 (`LIMITUPLAB_AGENT_COMPLIANCE=deterministic`); set `llm` to add the semantic
 review as a post-check.

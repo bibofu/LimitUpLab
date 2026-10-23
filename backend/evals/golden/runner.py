@@ -10,8 +10,8 @@ from time import perf_counter
 from unittest.mock import patch
 from uuid import uuid4
 
-from app.agents.chat import answer_first_board_chat
 from app.agents.react_runtime.lifecycle import CURRENT_CONTROL, Journal, RunControl
+from app.agents.react_runtime.runtime import run as run_legacy
 from app.models import AgentChatRequest, AgentChatResponse, ChatSessionMemory, ChatSessionMessage
 from app.repositories.chat_memory_repository import ChatMemoryRepository
 from app.repositories.chat_session_repository import ChatSessionRepository
@@ -182,10 +182,14 @@ def run_case(case, *, trial, directory, provider, judge_provider=None, profile="
                     context, memory = prepare_session_context(session_id=session_id, owner_id=owner,
                         messages=session.messages, repository=memories, llm_provider=provider)
                     execution_stage = "agent_execution"
-                    response = answer_first_board_chat(request=request, events=registry.events,
-                        conversation_messages=context, session_memory=memory, llm_provider=runtime_metadata,
-                        tool_registry=registry,
-                        progress_callback=lambda stage, message: event("progress", {"stage": stage, "message": message}))
+                    # Golden remains the legacy-contract reference harness. Its
+                    # scripted models and table graders depend on finish/evidence
+                    # IDs; production chat is validated separately by the shadow
+                    # runner and the runner tests.
+                    response = run_legacy(
+                        request, registry, runtime_metadata, context, memory,
+                        progress=lambda stage, message: event("progress", {"stage": stage, "message": message}),
+                    )
                 execution_stage = "journal_finish"
                 response = AgentChatResponse.model_validate(journal.finish(row["run_id"], owner, response.model_dump(mode="json")))
                 # Match HTTP delivery: only the committed response is public.
