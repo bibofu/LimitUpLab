@@ -16,17 +16,15 @@ class AgentChatTest(unittest.TestCase):
         )
         delta_callback, event_callback, progress_callback = Mock(), Mock(), Mock()
 
-        def execute(_request, _registry, _provider, _history, _memory, progress, answer_event=None):
-            if answer_event:
-                answer_event("answer_delta", {"offset": 0, "delta": "候选答案"})
-            progress("checking", "正在核对研究结果")
+        def execute(_request, _events, **kwargs):
+            kwargs["progress_callback"]("checking", "正在核对研究结果")
             return response
 
-        with patch("app.agents.react_runtime.runtime.run", side_effect=execute):
+        with patch("app.agents.runner.adapter.answer_with_runner", side_effect=execute):
             result = answer_first_board_chat(
                 request=request, events=[], tool_registry=Mock(), llm_provider=Mock(),
                 progress_callback=progress_callback, answer_delta_callback=delta_callback,
-                answer_event_callback=event_callback, runner_mode="legacy",
+                answer_event_callback=event_callback,
             )
 
         self.assertIs(result, response)

@@ -80,9 +80,10 @@ where they exist; `EvidenceStore` attaches the resulting
 the data instead of inferring it from names. The Phase 2 shadow runner lives in
 `app/agents/runner/`; run `python scripts/shadow_agent_runner.py --limit 5` to
 compare it with the legacy runtime without changing production responses. The
-production chat entry now defaults to this runner (`LIMITUPLAB_AGENT_RUNNER=new`);
-set `legacy` to roll back. Its input review is security-only: task
-interpretation, output contracts and date scopes stay in the legacy runtime.
+production chat entry always uses this runner. Its input review is
+security-only: task interpretation, output contracts and date scopes remain
+only in the legacy runtime, which is retained for offline Golden and quality
+replay rather than production chat.
 Compliance defaults to the deterministic pattern guard
 (`LIMITUPLAB_AGENT_COMPLIANCE=deterministic`); set `llm` to add the semantic
 review as a post-check.

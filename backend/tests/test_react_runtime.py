@@ -145,19 +145,6 @@ def test_rank_slice_and_difference_preserve_entities():
     assert [r["symbol"] for r in store.get(c)["rows"]] == ["1", "2", "3", "7"]
 
 
-def test_public_entry_defaults_to_react(monkeypatch):
-    from app.agents.chat import answer_first_board_chat
-    monkeypatch.delenv("LIMITUPLAB_AGENT_RUNTIME", raising=False)
-    class Model:
-        def generate_messages(self, *args, **kwargs):
-            return call("finish", {"status": "refuse", "answer": "我可以提供研究事实，不能提供交易指令。"}, "f")
-    response = answer_first_board_chat(AgentChatRequest(session_id="r", message="给我买卖指令"), [],
-                                      llm_provider=Model(), tool_registry=registry(),
-                                      runner_mode="legacy")
-    assert response.generated_by == "react-runtime-v42"
-    assert response.task_status == "refuse"
-
-
 def test_finish_table_is_rendered_before_compliance_and_publication(monkeypatch):
     checked = []
     def review(*args, **kwargs):

@@ -54,7 +54,6 @@ def registry() -> AgentToolRegistry:
 
 
 def ask(provider, monkeypatch, message: str = "最新交易日涨停多少只？"):
-    monkeypatch.setenv("LIMITUPLAB_AGENT_RUNNER", "new")
     return answer_first_board_chat(
         AgentChatRequest(session_id="production-test", message=message),
         SAMPLE_EVENTS,

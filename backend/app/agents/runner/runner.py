@@ -1,8 +1,9 @@
 """Minimal LangGraph tool-use loop for the Phase 2 shadow run.
 
-The production graph remains ``react_runtime``. This runner keeps LangGraph but
-removes evidence IDs, finish/read/compute/update control tools and the input
-compiler; the model receives complete, self-describing tool results directly.
+This is the production graph. It keeps LangGraph but has no evidence IDs,
+finish/read/compute/update control tools or task/date compiler; the model
+receives complete, self-describing tool results directly. The legacy
+``react_runtime`` package is retained only for offline evaluation and replay.
 """
 
 from __future__ import annotations
@@ -15,7 +16,7 @@ from langgraph.graph import END, START, StateGraph
 
 from app.agents.query_contract import current_query_reference_date
 from app.agents.react_runtime.lifecycle import CURRENT_CONTROL
-from app.agents.react_runtime.tools import ToolGateway
+from app.agents.runner.gateway import BusinessToolGateway
 from app.agents.runner.guardrails import (
     DEADLINE_SECONDS,
     MAX_MODEL_ROUNDS,
@@ -59,7 +60,7 @@ class AgentRunner:
     ):
         self.request = request
         self.provider = provider
-        self.gateway = ToolGateway(registry)
+        self.gateway = BusinessToolGateway(registry)
         self.definitions = business_definitions(self.gateway)
         self.messages = build_messages(
             request, history, current_query_reference_date(), memory=memory
