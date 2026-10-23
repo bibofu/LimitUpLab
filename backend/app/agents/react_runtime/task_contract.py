@@ -1,19 +1,19 @@
 """Semantic task interpretation and deterministic presentation validation."""
 
+from datetime import date
 from typing import Literal
 
 from pydantic import BaseModel, ConfigDict, Field, model_validator
 
-from app.agents.react_runtime.display_fields import DISPLAY_FIELD_CATALOG, presentation_aliases
+from app.agents.react_runtime.contracts import Filter
+from app.agents.react_runtime.display_fields import DISPLAY_FIELD_CATALOG, presentation_aliases, evidence_roots, validate_field_sources
 
 
 OutputMode = Literal["freeform", "table_only", "prose_only"]
 OUTPUT_MODE_DESCRIPTION = (
-    "freeform permits the requested explanation and table; table_only delivers only requested table fields. "
-    "prose_only directly answers the requested existence questions, counts, or metrics, with necessary "
-    "object, date, source, uncertainty or missing-data clarification. No tables, other objects, "
-    "unrequested reasons or background, including lists written as prose. Query subjects and metrics "
-    "are not automatically requested display fields."
+    "freeform允许所需解释与表；table_only仅交付要求的表及明确要求的日期/单位；"
+    "prose_only直答存在性、计数或指标，保留对象、日期、来源与缺失，不加表、其他对象、"
+    "原因、背景或伪装成正文的名单。查询对象和指标不自动成为展示列。"
 )
 
 
@@ -21,7 +21,7 @@ class FieldRequest(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     requested: str = Field(min_length=1, max_length=120,
-        description="One explicitly requested table/list column, preserving its meaning and order; not a separate summary or total.")
+        description="用户明确要求的一个表格列，保留含义和顺序；独立汇总或总数不是列。")
     field: str | None = Field(default=None,
         description="Exact catalog field, or null when unknown or ambiguous. Never omit the requested item.")
 
@@ -39,19 +39,41 @@ class RowSelection(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     requested: str = Field(min_length=1, max_length=240,
-        description="The user's explicit row-count or rank-window requirement, preserving its meaning.")
+        description="用户明确的行数或排名窗口，保留原意。")
     limit: int = Field(gt=0, strict=True,
-        description="Maximum final table rows, not a required minimum. A complete smaller collection or a genuine partial result may contain fewer rows.")
+        description="最终表格行数上限；完整小集合或真实部分结果可更少，不凑数。")
     offset: int = Field(default=0, ge=0, strict=True,
-        description="Zero-based start of the requested rank window: ranks 4 through 6 use offset=3, limit=3. Retains intent; a row-count check alone does not prove rank membership.")
+        description="从0计的排名窗口起点；第4至6名为offset=3,limit=3。行数合格不证明排名成员正确。")
 
 
 ROW_SELECTION_DESCRIPTION = (
-    "Explicit final-table row bound for THIS turn, otherwise null. Top N, at most N, or N rows use "
-    "offset=0 and limit=N; ranks m through n use offset=m-1 and limit=n-m+1. Do not derive this "
-    "from a metric value, time window, board height, tool query limit, or a preference only for future "
-    "answers. Per-group limits and requests to include all ties are not a global table-row bound."
+    "仅本轮明确的整表行数/排名窗口，否则null。前N取offset=0,limit=N；第m至n名取"
+    "offset=m-1,limit=n-m+1。不从指标值、时间窗、板高、工具limit或未来偏好推导。"
+    "每组N只、全部并列不是整表上限。"
 )
+
+
+class MetricRequirement(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    label: str = Field(min_length=1, max_length=80)
+    statistic: Literal["count", "sum", "mean", "min", "max"]
+    field: str | None = None
+    filters: list[Filter] = Field(default_factory=list, max_length=8)
+    scope: dict[str, str | int | bool] = Field(default_factory=dict, max_length=8,
+        description="Explicit source dimensions, e.g. event_status=closed; never values or invented facts.")
+
+
+class ComparisonRequest(BaseModel):
+    model_config = ConfigDict(extra="forbid")
+    dates: tuple[date, date]
+    metrics: list[MetricRequirement] = Field(min_length=1, max_length=12)
+    change: bool = True
+
+    @model_validator(mode="after")
+    def unique_dimensions(self):
+        if self.dates[0] == self.dates[1] or len({item.label for item in self.metrics}) != len(self.metrics):
+            raise ValueError("Comparison dates and metric labels must be distinct")
+        return self
 
 
 class OutputContract(BaseModel):
@@ -65,6 +87,8 @@ class OutputContract(BaseModel):
     table_required: bool = Field(default=False,
         description="A table is a deliverable for THIS turn, not merely a preference for future answers.")
     row_selection: RowSelection | None = Field(default=None, description=ROW_SELECTION_DESCRIPTION)
+    comparison: ComparisonRequest | None = None
+    required_metadata: list[Literal["date", "units"]] = Field(default_factory=list, max_length=2)
 
     @property
     def unavailable_fields(self):
@@ -88,6 +112,12 @@ class OutputContract(BaseModel):
 
     @model_validator(mode="after")
     def resolve_fields(self):
+        if self.comparison is not None:
+            self.fields = ["metric", "before", "after"] + (["change"] if self.comparison.change else [])
+            self.field_resolution = FieldResolution(status="resolved", proposed_fields=self.fields,
+                reason="typed_metric_comparison")
+            self.table_required = True
+            return self
         # Only actual requests or legacy fields can establish a hard constraint.
         # A model-supplied diagnostic is never authority to resolve fields.
         active = bool(self.field_requests or self.fields)
@@ -135,10 +165,14 @@ class ReviewOutputContract(BaseModel):
 
     mode: OutputMode = Field(default="freeform", description=OUTPUT_MODE_DESCRIPTION)
     field_requests: list[ReviewFieldRequest] = Field(default_factory=list, max_length=12,
-        description="Only user-explicit table/list columns or applicable inherited column preferences, in order; empty when none exist. Never design columns for an open-ended overview or infer them from the topic/date. Keep separate counts, summary metrics and explanations in current_task. Include unknown requested columns with field=null; mappings never prove data availability.")
+        description="仅按顺序保留用户明确列或适用的历史列偏好，无则[]；不为开放概览或主题日期设计列。独立计数、汇总和解释保留在current_task。未知列保留requested且field=null；映射不证明数据存在。")
     table_required: bool = Field(default=False,
         description="True only when the current turn requires a table; false for prose_only and future display preferences.")
     row_selection: RowSelection | None = Field(default=None, description=ROW_SELECTION_DESCRIPTION)
+    comparison: ComparisonRequest | None = Field(default=None,
+        description="两日期指标表保留每项指标、统计量、筛选及范围；实体名单使用null。")
+    required_metadata: list[Literal["date", "units"]] = Field(default_factory=list, max_length=2,
+        description="仅用户明确要求的日期/单位，从证据渲染，纯表也须保留。")
 
 
 class TaskInterpretation(BaseModel):
@@ -154,17 +188,18 @@ class TaskInterpretation(BaseModel):
 def validate_delivery(final, interpretation, store=None):
     """Reject a draft; never silently remove model text or change its columns."""
     contract = interpretation.output_contract
+    errors = []
     if interpretation.pending_slots and final.status not in {"clarify", "refuse"}:
-        raise ValueError("Required user input is unresolved; clarify: " + ", ".join(interpretation.pending_slots))
+        errors.append("Required user input is unresolved; clarify: " + ", ".join(interpretation.pending_slots))
     if contract.mode == "prose_only" and final.table is not None:
-        raise ValueError("A prose-only answer cannot include an evidence table; deliver only the requested direct answer and necessary scope or missing-data clarification")
+        errors.append("A prose-only answer cannot include an evidence table; deliver only the requested direct answer and necessary scope or missing-data clarification")
     if final.table is not None and contract.row_selection is not None:
         if store is None:
             raise ValueError("Table row-count validation requires the current evidence store")
         row_count = len(store.get(final.table.evidence_id)["rows"])
         limit = contract.row_selection.limit
         if row_count > limit:
-            raise ValueError(
+            errors.append(
                 f"Table row count {row_count} exceeds the requested maximum {limit}; "
                 "select the requested subset with compute_result before submitting, without "
                 "silently truncating the source or dropping other requested conditions"
@@ -177,15 +212,71 @@ def validate_delivery(final, interpretation, store=None):
             for field, requested in zip(actual, contract.fields)
         )
         if not matches:
-            raise ValueError(f"Table fields must match the requested order exactly: {contract.fields}; got {actual}")
+            errors.append(f"Table fields must match the requested order exactly: {contract.fields}; got {actual}")
         for column in final.table.columns:
             label = contract.unavailable_fields.get(column.field)
             if label is not None and column.label != label[:40]:
-                raise ValueError("Unavailable columns must preserve their original requested labels")
+                errors.append("Unavailable columns must preserve their original requested labels")
     if contract.table_required and final.status == "complete" and final.table is None:
-        raise ValueError("The current task requires an evidence table; a prose summary cannot complete it")
+        errors.append("The current task requires an evidence table; a prose summary cannot complete it")
     if contract.mode == "table_only" and final.status == "complete" and final.table is not None:
-        if final.answer.strip() != "{{evidence_table}}":
-            raise ValueError("A complete table-only answer must contain only {{evidence_table}}, without heading or prose")
+        if final.delivery != "table" and final.answer.strip() != "{{evidence_table}}":
+            errors.append("A complete table-only answer must contain only {{evidence_table}}, without heading or prose")
+    if final.table is not None:
+        if not set(contract.required_metadata) <= set(final.table.metadata):
+            errors.append("Table must declare every requested date/unit annotation")
+        if store is not None:
+            record = store.get(final.table.evidence_id)
+            try:
+                validate_field_sources([column.field for column in final.table.columns], record, store,
+                    allow_missing=final.status == "partial" and bool(final.missing))
+                required_source_fields = [field for field in contract.fields
+                    if DISPLAY_FIELD_CATALOG.get(field, {}).get("source_bound")]
+                if (any(row.get(field) is None for row in record["rows"] for field in required_source_fields)
+                        and (final.status != "partial" or not final.missing)):
+                    raise ValueError("Requested source-specific field is unavailable; use partial and name the missing field")
+                if contract.comparison is not None:
+                    validate_comparison(final, contract.comparison, record, store)
+            except ValueError as error:
+                errors.append(str(error))
+    if errors:
+        raise ValueError("\n".join(errors))
     # Partial/empty/clarify/refuse may explain real missing data or safety limits.
     # Their semantic truth remains subject to evidence/status and compliance gates.
+
+
+def validate_comparison(final, requested, record, store):
+    payload = record.get("payload", {})
+    dates = [value.isoformat() for value in requested.dates]
+    labels = [item.label for item in requested.metrics]
+    if (record["tool"] != "compare_metrics" or payload.get("table_kind") != "metric_comparison"
+            or payload.get("comparison") != {"dates": dates, "metrics": labels}
+            or [row.get("metric") for row in record["rows"]] != labels):
+        raise ValueError("Requested metric identities/dates require matching compare_metrics evidence, not entity rows")
+    columns = {column.field: column.label for column in final.table.columns}
+    if columns.get("before") != dates[0] or columns.get("after") != dates[1]:
+        raise ValueError("Metric period column labels must equal their evidence dates")
+    lineage = payload.get("metric_lineage", [])
+    if len(lineage) != len(requested.metrics):
+        raise ValueError("Metric recipes are missing")
+    for requirement, recipe in zip(requested.metrics, lineage):
+        for period in ("before", "after"):
+            value = recipe[period]
+            source = store.get(value["evidence_id"])
+            if source["tool"] == "evidence_view" and requirement.scope.get("view") != source.get("arguments", {}).get("view"):
+                raise ValueError(f"Metric view scope must be explicitly requested: {requirement.label}")
+            statistic, field = value["operation"], value.get("field")
+            if statistic == "scalar" and field in {"matched_count", "total_count", "unique_stock_count"}:
+                statistic, field = "count", "symbol" if field == "unique_stock_count" else None
+            if (statistic != requirement.statistic or field != requirement.field
+                    or value.get("filters", []) != [item.model_dump() for item in requirement.filters]):
+                raise ValueError(f"Metric recipe does not match requested statistic/filter: {requirement.label}")
+            for root in evidence_roots(source, store):
+                dimensions = {**root.get("arguments", {}), **(root.get("payload", {})
+                    if isinstance(root.get("payload"), dict) else {}), "tool": root["tool"]}
+                if source["tool"] == "evidence_view":
+                    dimensions["view"] = source["arguments"]["view"]
+                if any(dimensions.get(key) != expected for key, expected in requirement.scope.items()):
+                    raise ValueError(f"Metric source scope does not match request: {requirement.label}")
+    if payload.get("data_missing") and (final.status != "partial" or not final.missing):
+        raise ValueError("Missing metric values require partial with the explicit gaps")

@@ -4,7 +4,9 @@ from html import escape
 from math import isfinite
 
 from app.agents.react_runtime.evidence import CURRENT_SCOPE
-from app.agents.react_runtime.display_fields import DISPLAY_FIELD_CATALOG, UNMAPPED_COLUMN_LABEL, presentation_aliases
+from app.agents.react_runtime.display_fields import (
+    DISPLAY_FIELD_CATALOG, FIELD_UNITS, UNMAPPED_COLUMN_LABEL, evidence_dates, presentation_aliases,
+)
 
 
 RANK_TREND_LABELS = {"up": "上升", "down": "下降", "flat": "持平"}
@@ -68,13 +70,14 @@ def table_prose(answer, marker):
 
 def render_answer(final, store, output_contract=None):
     marker = "{{evidence_table}}"
+    candidate = marker if final.delivery == "table" else final.answer
     if final.table is None:
-        if marker in final.answer:
+        if marker in candidate:
             raise ValueError("Table placeholder requires evidence table specification")
         return final.answer
-    if final.answer.count(marker) != 1:
+    if candidate.count(marker) != 1:
         raise ValueError("Use exactly one {{evidence_table}} placeholder")
-    before, after = table_prose(final.answer, marker)
+    before, after = table_prose(candidate, marker)
     record = store.get(final.table.evidence_id)
     if store.scope_of(record) != CURRENT_SCOPE or record["result_state"] not in {"ok", "partial", "empty"}:
         raise ValueError("Table requires usable current-run evidence")
@@ -89,7 +92,8 @@ def render_answer(final, store, output_contract=None):
     rows = record["rows"]
     if len(rows) > 1000:
         raise ValueError("Table exceeds 1000 rows; select an explicit range and disclose the limit")
-    lines = ["| " + " | ".join(cell(c.label) for c in columns) + " |",
+    headers, annotations = table_metadata(final.table, record, store)
+    lines = ["| " + " | ".join(cell(label) for label in headers) + " |",
              "| " + " | ".join("---" for _ in columns) + " |"]
     requested_fields = set(output_contract.fields) if output_contract else set()
     unavailable = output_contract.unavailable_fields if output_contract else {}
@@ -108,10 +112,43 @@ def render_answer(final, store, output_contract=None):
             field not in missing_fields for field in absent
         )):
             raise ValueError("Table field missing; use exact evidence row fields, or retain requested missing columns with partial and an explicit missing explanation")
-        lines.append("| " + " | ".join(cell(None if c.field in unavailable else row.get(field), field=c.field,
-            missing_label=UNMAPPED_COLUMN_LABEL if c.field in unavailable else "数据未成功获取")
-            for c, field in zip(columns, fields)) + " |")
-    answer = "\n\n".join(part for part in (before, "\n".join(lines), after) if part)
+        values = []
+        for column, field in zip(columns, fields):
+            value = None if column.field in unavailable else row.get(field)
+            rendered = cell(value, field=column.field,
+                missing_label=UNMAPPED_COLUMN_LABEL if column.field in unavailable else "数据未成功获取")
+            if record["tool"] == "compare_metrics" and field in {"before", "after", "change"} and value is not None and row.get("unit"):
+                rendered += " " + cell(row.get("change_unit") if field == "change" else row["unit"])
+            values.append(rendered)
+        lines.append("| " + " | ".join(values) + " |")
+    answer = "\n\n".join(part for part in (before, annotations, "\n".join(lines), after) if part)
     if len(answer) > 60000:
         raise ValueError("Rendered answer exceeds delivery budget")
     return answer
+
+
+def table_metadata(table, record, store):
+    """Render requested annotations from real evidence; never infer from question text."""
+    headers = [column.label for column in table.columns]
+    notes = []
+    if "date" in table.metadata:
+        dates = evidence_dates(record, store)
+        if not dates:
+            raise ValueError("Requested date annotation is unavailable in evidence")
+        if record["tool"] != "compare_metrics":
+            notes.append("数据日期：" + "、".join(cell(value) for value in dates))
+    if "units" in table.metadata:
+        if record["tool"] == "compare_metrics":
+            if any(not row.get("unit") for row in record["rows"]):
+                raise ValueError("Requested metric units are unavailable")
+        else:
+            numeric = [index for index, column in enumerate(table.columns)
+                       if column.field in FIELD_UNITS or any(type(row.get(column.field)) in (int, float) for row in record["rows"])]
+            for index in numeric:
+                field = table.columns[index].field
+                unit = FIELD_UNITS.get(field)
+                if unit is None:
+                    raise ValueError(f"Requested unit is unavailable for {field}")
+                if not headers[index].endswith((f"（{unit}）", f"({unit})")):
+                    headers[index] += f"（{unit}）"
+    return headers, "\n".join(notes)

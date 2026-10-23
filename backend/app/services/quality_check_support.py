@@ -69,4 +69,9 @@ def ancestry(records, keys, deadline=None):
             if any(not isinstance(parent, str) or not parent for parent in parents):
                 return found, "missing_compute_parent_identity"
             pending.extend((parent, False) for parent in reversed(parents))
+        elif record.get("tool") in {"compare_metrics", "evidence_view"}:
+            parents = record.get("sources", [])
+            if not parents or any(not isinstance(parent, str) or not parent for parent in parents):
+                return found, "missing_derived_parent_identity"
+            pending.extend((parent, False) for parent in reversed(parents))
     return found, None

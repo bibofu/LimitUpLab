@@ -89,6 +89,14 @@ def test_progress_covers_checks_and_actual_query_completions(monkeypatch):
     assert tool_updates[2] == "数据查询已返回 2/2 项，其中 1 项存在缺口"
     assert len(tool_updates) == 3
     assert all("000001" not in message and "internal error" not in message for _, message in updates)
+    timing = result.performance.timing
+    assert timing is not None
+    assert {"runtime", "context", "input_review", "react_round", "business_tool_batch",
+            "business_tool", "control", "compliance"} <= timing.stage_duration_ms.keys()
+    rounds = [span.round for span in timing.spans if span.stage == "react_round"]
+    assert rounds == [1, 2]
+    assert any(span.stage == "business_tool" and span.error_type == "ValueError" for span in timing.spans)
+    assert timing.incomplete_spans == 0
 
 
 def test_react_observes_error_and_selects_next_tool():
@@ -153,7 +161,7 @@ def test_public_entry_defaults_to_react(monkeypatch):
             return call("finish", {"status": "refuse", "answer": "我可以提供研究事实，不能提供交易指令。"}, "f")
     response = answer_first_board_chat(AgentChatRequest(session_id="r", message="给我买卖指令"), [],
                                       llm_provider=Model(), tool_registry=registry())
-    assert response.generated_by == "react-runtime-v41"
+    assert response.generated_by == "react-runtime-v42"
     assert response.task_status == "refuse"
 
 

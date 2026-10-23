@@ -37,11 +37,11 @@ def verified_selection_total(store, record, selection):
                 or any(not isinstance(row, dict) for row in rows)):
             raise ValueError("Range recovery requires complete current inputs")
         if item["tool"] == "compute_result":
-            spec = Compute.model_validate(item["arguments"])
+            spec = Compute.from_record(item["arguments"])
             inputs = [spec.evidence_id]
             if spec.operation in {"intersection", "difference", "union"}:
                 inputs.append(spec.other_id)
-            if (payload.get("operation") != spec.model_dump()
+            if (payload.get("operation") != item["arguments"]
                     or payload.get("source_evidence_ids") != inputs or item.get("sources") != inputs):
                 raise ValueError("Computation lineage is inconsistent")
             if final and (spec.operation != "select" or not spec.sort_by
