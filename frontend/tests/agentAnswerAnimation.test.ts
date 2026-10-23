@@ -123,7 +123,7 @@ test("new approved prose grows monotonically and completes within the display bu
   assert.ok(app.html.includes("立即显示全部"));
   assert.ok(!app.html.includes(text));
   let previous = app.html.split("</p>")[0];
-  for (let frame = 1; frame <= 3; frame++) {
+  for (let frame = 1; frame <= 29; frame++) {
     app.advance(80);
     const current = app.html.split("</p>")[0];
     assert.ok(current.startsWith(previous), "already visible approved text never changes or disappears");
@@ -145,7 +145,7 @@ test("tables reveal whole rows with grounded links and show-all stops the pendin
   assert.ok(app.html.includes('href="/stocks/600101?'));
   assert.ok(app.html.includes(">样例科技</a>"));
   assert.ok(!app.html.includes("样例制造"));
-  app.advance(80);
+  app.advance(150);
   assert.equal(app.linkRenderer, linkRenderer, "already revealed links retain their component identity and focus");
   assert.equal(app.html.split("<tr>").length - 1, 3);
   app.showAll();
