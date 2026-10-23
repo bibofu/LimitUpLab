@@ -191,7 +191,7 @@ def test_postgresql_overlay_keeps_sqlite_volume_and_waits_for_schema():
     assert postgres["volumes"] == ["limituplab-postgres:/var/lib/postgresql"]
     assert "ports" not in postgres
     assert "limituplab-data:/app/data" in base["services"]["backend"]["volumes"]
-    for name in ("backend", "recommendation-refresh", "quality-worker", "quality-judge-worker", "daily-update"):
+    for name in ("backend", "recommendation-refresh", "daily-update"):
         dependency = overlay["services"][name]["depends_on"]
         assert dependency["postgres"]["condition"] == "service_healthy"
         assert dependency["postgres-migrate"]["condition"] == "service_completed_successfully"

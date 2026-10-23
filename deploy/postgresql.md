@@ -110,15 +110,11 @@ docker compose --env-file .env.postgresql -f docker-compose.yml -f docker-compos
 docker compose --env-file .env.postgresql -f docker-compose.yml -f docker-compose.postgresql.yml up -d recommendation-refresh
 ```
 
-`quality-worker` and `quality-judge-worker` are optional model-evaluation services.
-Enable them only when explicitly included in the deployment scope and configured;
-the `v1.6.1` production cutover did not start them.
-
 Install the reviewed `deploy/release.py` and `deploy/job.py` before changing the
 production database mode. These root-owned helpers are not automatically replaced
 by a tag deployment. Hold `/var/lock/limituplab-release.lock` and retain the
 maintenance marker throughout the first cutover; stop all configured database
-writers, including any optional quality workers.
+writers.
 
 After import and single-instance acceptance, write
 `/var/lib/limituplab-deploy/database.json` as `{"engine":"postgresql"}` and set
@@ -177,7 +173,7 @@ the running database or reinterpret old SQLite as current data.
 ## Prepare additional API instances
 
 Use the same PostgreSQL database and session/admin secrets across instances.
-Budget total connections across API processes, collection workers and evaluators:
+Budget total connections across API processes and collection workers:
 each process can open `LIMITUPLAB_DB_POOL_SIZE + LIMITUPLAB_DB_MAX_OVERFLOW`
 connections. Defaults are 5 + 5; increase instance count only within the server's
 connection budget.

@@ -57,18 +57,6 @@ services:
     depends_on:
       <<: *postgres-dependencies
 
-  quality-worker:
-    environment:
-      <<: *postgres-environment
-    depends_on:
-      <<: *postgres-dependencies
-
-  quality-judge-worker:
-    environment:
-      <<: *postgres-environment
-    depends_on:
-      <<: *postgres-dependencies
-
   daily-update:
     environment:
       <<: *postgres-environment

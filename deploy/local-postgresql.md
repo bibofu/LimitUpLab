@@ -39,4 +39,4 @@ Invoke-RestMethod http://127.0.0.1:8001/ready
 
 当前工作区已完成正式切换，数据核对、实际 HTTP 读写、三问、重启及恢复证据见 [本地切换验收](../docs/Local_PostgreSQL_Cutover.md)。保留 `.local/postgresql`，其中包含当前业务数据；不要把它当作可随时删除的测试输出目录。用 `postgres_admin.py backup` 创建独立备份，不能在运行中简单复制数据目录代替一致性备份。
 
-回归使用独立 `LIMITUPLAB_TEST_DATABASE_URL`，真实 Golden 使用独立 `LIMITUPLAB_EVAL_DATABASE_URL`。两个测试用途均不得指向业务库；常规回归会创建并回收自身的临时 schema。审计备份和显式新闻文件缓存等辅助存储的默认目录可通过 `LIMITUPLAB_DATA_DIRECTORY` 配置，其他报告按各脚本的输出参数选择；数据目录设置不再决定数据库类型。
+回归使用独立 `LIMITUPLAB_TEST_DATABASE_URL`，不得指向业务库；常规回归会创建并回收自身的临时 schema。审计备份和显式新闻文件缓存等辅助存储的默认目录可通过 `LIMITUPLAB_DATA_DIRECTORY` 配置，其他报告按各脚本的输出参数选择；数据目录设置不再决定数据库类型。
