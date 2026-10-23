@@ -42,7 +42,8 @@ def test_computation_cannot_refresh_historical_evidence(operation):
     old = add(store, [{"symbol": "000001"}])
     store.get(old)["historical_reference"] = True
     fresh = add(store, [{"symbol": "000002"}])
-    key = store.compute(Compute(evidence_id=old, operation=operation, other_id=fresh))
+    other = {"other_id": fresh} if operation in {"union", "intersection", "difference"} else {}
+    key = store.compute(Compute(evidence_id=old, operation=operation, **other))
     assert store.view(key)["historical_reference"]
     assert store.view(key)["evidence_scope"] == HISTORY_SCOPE
     next_key = store.compute(Compute(evidence_id=key))
@@ -77,7 +78,8 @@ def test_sets_are_unique_and_keep_left_source_order(operation, expected):
     store = EvidenceStore()
     left = add(store, [{"symbol": s, "value": i} for i, s in enumerate(["000001", "000002", "000001"])])
     right = add(store, [{"symbol": "000001", "value": 99}, {"symbol": "000003"}])
-    result = store.get(store.compute(Compute(evidence_id=left, operation=operation, other_id=right)))
+    other = {"other_id": right} if operation != "distinct" else {}
+    result = store.get(store.compute(Compute(evidence_id=left, operation=operation, **other)))
     assert [row["symbol"] for row in result["rows"]] == expected
     if "000001" in expected:
         assert result["rows"][0]["value"] == 0
@@ -90,7 +92,8 @@ def test_invalid_set_keys_rejected_without_creating_evidence(invalid, operation)
     left = add(store, [{"symbol": invalid}])
     right = add(store, [])
     with pytest.raises(ValueError, match="Set key missing or invalid"):
-        store.compute(Compute(evidence_id=left, operation=operation, other_id=right))
+        other = {"other_id": right} if operation != "distinct" else {}
+        store.compute(Compute(evidence_id=left, operation=operation, **other))
     assert len(store.records) == 2
 
 

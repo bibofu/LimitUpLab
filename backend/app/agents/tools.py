@@ -15,7 +15,8 @@ from app.agents.tool_schemas_research import RESEARCH_TOOL_SCHEMAS
 from app.agents.tool_schemas_review import REVIEW_TOOL_SCHEMAS
 from app.agents.event_query import (
     filter_limit_up_events,
-    group_limit_up_events,
+    summarize_event_groups,
+    summarize_event_states,
     sort_limit_up_events as _sort_limit_up_events,
 )
 from app.agents.query_contract import (
@@ -212,6 +213,8 @@ class AgentToolRegistry:
                 pass
         trace_output = {
             "trade_date": summary.trade_date.isoformat(),
+            "state_counts": {"scope": "latest_local_trade_date",
+                             **summarize_event_states(events_for_date(self.events, summary.trade_date))},
             "limit_up_count": summary.limit_up_count,
             "first_board_count": summary.first_board_count,
             "continued_board_count": summary.continued_board_count,
@@ -585,7 +588,9 @@ class AgentToolRegistry:
             collector=self.hithink_collector,
         )
         snapshot_date = snapshot.trade_date.isoformat() if snapshot.trade_date else None
-        items = [{**asdict(item), "trade_date": snapshot_date} for item in snapshot.items]
+        items = [{**asdict(item), "trade_date": snapshot_date,
+                  "listing_reason": item.limit_reason if snapshot.source == "eastmoney" else None}
+                 for item in snapshot.items]
         payload = {
             "source": snapshot.source,
             "trade_date": snapshot_date,
@@ -595,6 +600,10 @@ class AgentToolRegistry:
             "returned_count": len(items),
             "source_truncated": snapshot.source_truncated,
             "items": items,
+            "field_semantics": {
+                "listing_reason": "Eastmoney 上榜原因 only; unavailable for sources that expose only limit_reason.",
+                "limit_reason": "Original provider field; it may describe a market theme and is not universally a listing reason.",
+            },
         }
         payload["overview"] = build_dragon_tiger_overview(payload, query=query)
         names = "、".join(
@@ -1225,9 +1234,10 @@ class AgentToolRegistry:
         )
         matched_count = len(target_events)
         unique_stock_count = len({event.symbol for event in target_events})
-        sector_summary, unclassified_event_count = group_limit_up_events(
+        group_summary = summarize_event_groups(
             target_events, group_by=group_by, limit=limit,
         )
+        state_counts = {"scope": "filtered_events_before_limit", **summarize_event_states(target_events)}
         target_events = target_events[: max(1, min(limit, 100))]
         if effective_recent_days == 1 and trade_date is not None:
             trade_date_text = trade_date.isoformat()
@@ -1257,8 +1267,10 @@ class AgentToolRegistry:
             "matched_count": matched_count,
             "unique_stock_count": unique_stock_count,
             "returned_count": len(target_events),
-            "sector_summary": sector_summary,
-            "unclassified_event_count": unclassified_event_count,
+            "sector_summary": group_summary["groups"],
+            "sector_summary_contract": {key: value for key, value in group_summary.items() if key != "groups"},
+            "state_counts": state_counts,
+            "unclassified_event_count": group_summary["unclassified_event_count"],
             "events": [
                 {
                     "symbol": event.symbol,

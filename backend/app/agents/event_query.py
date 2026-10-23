@@ -76,8 +76,16 @@ def group_limit_up_events(
 ) -> tuple[list[dict[str, Any]], int]:
     """Count every matching event before limiting the displayed sector groups."""
 
+    result = summarize_event_groups(events, group_by=group_by, limit=limit)
+    return result["groups"], result["unclassified_event_count"]
+
+
+def summarize_event_groups(events, *, group_by, limit):
+    """A bounded group collection carries its population and ordering contract."""
+
     if group_by not in {"industry", "concept"}:
-        return [], 0
+        return {"groups": [], "group_count": 0, "returned_group_count": 0,
+                "groups_truncated": False, "unclassified_event_count": 0}
     grouped: dict[str, list[LimitUpEvent]] = {}
     unclassified_event_count = 0
     for event in events:
@@ -118,4 +126,47 @@ def group_limit_up_events(
             item["sector_name"],
         )
     )
-    return sector_summary[: max(1, min(limit, 100))], unclassified_event_count
+    selected = sector_summary[: max(1, min(limit, 100))]
+    return {
+        "groups": selected, "group_by": group_by,
+        "group_count": len(sector_summary), "returned_group_count": len(selected),
+        "groups_truncated": len(selected) < len(sector_summary),
+        "unclassified_event_count": unclassified_event_count,
+        "population_event_count": len(events),
+        "population_unique_stock_count": len({event.symbol for event in events}),
+        "sort_order": ["unique_stock_count desc", "limit_up_event_count desc", "sector_name asc"],
+        "tie_policy": "Order by unique_stock_count descending, then limit_up_event_count descending, then sector_name ascending; a requested top N contains exactly N groups.",
+        "classification": "one whole industry label per event" if group_by == "industry" else "distinct concept labels per event; groups can overlap",
+    }
+
+
+def summarize_event_states(events):
+    """Count intersecting event states without assuming failed rows have a break."""
+    closed = [event for event in events if event.closed_limit]
+    opened = [event for event in events if event.break_count > 0]
+    resealed = sum(event.closed_limit for event in opened)
+    opened_unsealed = len(opened) - resealed
+    unsealed = len(events) - len(closed)
+    first = sum(event.board_height == 1 for event in closed)
+    continued = sum(event.board_height >= 2 for event in closed)
+    return {
+        "population_unit": "events", "population_event_count": len(events),
+        "unique_stock_count": len({event.symbol for event in events}),
+        "closed_count": len(closed), "first_board_count": first,
+        "continued_board_count": continued,
+        "closed_unknown_board_count": len(closed) - first - continued,
+        "intraday_opened_count": len(opened), "resealed_count": resealed,
+        "opened_unsealed_count": opened_unsealed, "unsealed_count": unsealed,
+        "unsealed_without_recorded_open_count": unsealed - opened_unsealed,
+        "relations": {
+            "closed_equals_first_plus_continued": len(closed) == first + continued,
+            "opened_equals_resealed_plus_opened_unsealed": len(opened) == resealed + opened_unsealed,
+            "all_unsealed_have_recorded_open": unsealed == opened_unsealed,
+        },
+        "definitions": {
+            "closed_count": "closed_limit=true; includes resealed events",
+            "intraday_opened_count": "break_count>0, regardless of close state",
+            "resealed_count": "break_count>0 AND closed_limit=true; included in closed_count",
+            "unsealed_count": "closed_limit=false; never presume break_count>0",
+        },
+    }

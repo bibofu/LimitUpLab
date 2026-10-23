@@ -115,6 +115,22 @@ def test_empty_result_is_not_missing_interval_or_zero_institution_data():
     assert overview["windows"] == {}
 
 
+@pytest.mark.parametrize("source,expected", [("eastmoney", "日涨幅偏离值达到7%"), ("hithink-finance", None)])
+def test_listing_reason_is_never_inferred_from_a_provider_theme(monkeypatch, source, expected):
+    reason = "日涨幅偏离值达到7%" if source == "eastmoney" else "算力+机器人"
+    item = HithinkDragonTigerFact(
+        symbol="600001", thscode="600001.SH", name="样本", change_pct=1,
+        buy_amount=200, sell_amount=100, net_buy_amount=100, net_rate=None,
+        organization_net_buy_amount=None, hot_money_net_buy_amount=None,
+        hot_rank=None, range_days=1, limit_reason=reason, concepts=[])
+    snapshot = HithinkDragonTigerSnapshot(date(2026, 10, 21), "all", 1, [item], source=source)
+    monkeypatch.setattr("app.agents.tools.collect_preferred_dragon_tiger_snapshot", lambda **_: snapshot)
+    result = AgentToolRegistry.dragon_tiger_list(SimpleNamespace(hithink_collector=object()))
+    assert result.output["items"][0]["listing_reason"] == expected
+    assert result.output["items"][0]["limit_reason"] == reason
+    assert result.output["items"][0]["net_buy_amount"] == 100
+
+
 def test_full_overview_visible_while_original_records_remain_computable_and_renderable():
     original = payload([row(f"6000{i:02}", net=i * 100) for i in range(1, 13)])
     original["overview"] = build_dragon_tiger_overview(original)
@@ -151,7 +167,8 @@ def test_snapshot_date_can_be_rendered_without_losing_windows_or_inventing_dates
     expected = snapshot_date.isoformat() if snapshot_date else None
     assert [item["trade_date"] for item in result.output["items"]] == [expected, expected]
     for actual, fact in zip(result.output["items"], facts):
-        assert {key: value for key, value in actual.items() if key != "trade_date"} == asdict(fact)
+        assert {key: value for key, value in actual.items() if key not in {"trade_date", "listing_reason"}} == asdict(fact)
+        assert actual["listing_reason"] is None
     if snapshot_date:
         store = EvidenceStore()
         key = store.add(tool=result.name, payload=result.output, state="ok", arguments=result.input)

@@ -49,6 +49,11 @@ def _preview_inputs():
     ], [])
     # The system-message hash is deliberately not part of these view-only fixtures.
     metadata = tuple(item for item in capture.snapshots if item["origin"] == "agent_evidence_view")
+    # Freeze the v8 calibration input when live evidence gains transport metadata.
+    # This rating fixture has no named views; neither addition changes its facts
+    # or the observed preview. Existing calibration hashes remain authoritative.
+    record.pop("source_result_state", None)
+    record.pop("views", None)
     traces = ({"name": "first_board_ratings", "status": "success", "summary": "Synthetic rating preview",
                "input": deepcopy(record["arguments"]), "output": deepcopy(payload)},)
     return deepcopy(store.records), traces, metadata, content
