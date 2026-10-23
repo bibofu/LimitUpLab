@@ -49,9 +49,11 @@ from app.repositories import (
     AgentCacheRepository,
     AgentRunRepository,
     AgentUsageRepository,
+    AnswerFeedbackRepository,
     ChatMemoryRepository,
     ChatSessionRepository,
     DailyPipelineRepository,
+    FeedbackInput,
     FirstBoardRepository,
     ReviewSnapshotRepository,
     RecommendationIntelligenceRepository,
@@ -901,6 +903,31 @@ def chat_with_first_board_agent(
     from app.routers.react_chat import start, synchronous
     journal, row = start(request, http_request, owner_id)
     return synchronous(journal, row, owner_id)
+
+
+@router.put("/chat/runs/{run_id}/feedback")
+def save_answer_feedback(
+    run_id: str,
+    body: FeedbackInput,
+    owner_id: Annotated[str, Depends(current_owner_id)],
+) -> dict:
+    """Save one owner's like/dislike verdict for a completed answer."""
+    try:
+        return {"feedback": AnswerFeedbackRepository().save(run_id, owner_id, body)}
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Run not found") from error
+
+
+@router.get("/chat/runs/{run_id}/feedback")
+def get_answer_feedback(
+    run_id: str,
+    owner_id: Annotated[str, Depends(current_owner_id)],
+) -> dict:
+    """Return this owner's existing verdict, or null when none was saved."""
+    try:
+        return {"feedback": AnswerFeedbackRepository().get(run_id, owner_id)}
+    except KeyError as error:
+        raise HTTPException(status_code=404, detail="Run not found") from error
 
 
 @router.post("/chat/stream")

@@ -3946,3 +3946,81 @@ td span {
   color: #64748b;
   font-size: 12px;
 }
+
+/* Owner-scoped like/dislike feedback on one Agent answer. */
+.answer-feedback {
+  display: flex;
+  flex-direction: column;
+  gap: 6px;
+  margin-top: 8px;
+}
+
+.answer-feedback-actions {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.answer-feedback-actions button {
+  border: 1px solid #d7dee9;
+  border-radius: 6px;
+  background: #fff;
+  color: #5b6678;
+  cursor: pointer;
+  padding: 4px 8px;
+}
+
+.answer-feedback-actions button[aria-pressed="true"] {
+  border-color: #4f6b95;
+  background: #eef3fa;
+  color: #2f4f7a;
+}
+
+.answer-feedback-actions button:disabled {
+  cursor: not-allowed;
+  opacity: .55;
+}
+
+.answer-feedback fieldset {
+  border: 1px solid #e1e7ef;
+  border-radius: 8px;
+  margin: 0;
+  padding: 8px 10px;
+}
+
+.answer-feedback legend {
+  color: #5b6678;
+  font-size: 12px;
+  padding: 0 4px;
+}
+
+.answer-feedback-reasons {
+  display: flex;
+  flex-wrap: wrap;
+  gap: 6px 12px;
+  margin-bottom: 6px;
+}
+
+.answer-feedback-reasons label {
+  align-items: center;
+  color: #445064;
+  display: flex;
+  font-size: 12px;
+  gap: 4px;
+}
+
+.answer-feedback textarea {
+  border: 1px solid #d7dee9;
+  border-radius: 6px;
+  font: inherit;
+  font-size: 12px;
+  margin-bottom: 6px;
+  padding: 6px 8px;
+  resize: vertical;
+  width: 100%;
+}
+
+.answer-feedback [role="alert"] {
+  color: #a33a3a;
+  font-size: 12px;
+}

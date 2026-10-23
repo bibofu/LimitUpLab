@@ -1,6 +1,10 @@
 from app.repositories.agent_cache_repository import AgentCacheRepository
 from app.repositories.agent_run_repository import AgentRunRepository
 from app.repositories.agent_usage_repository import AgentUsageRepository
+from app.repositories.answer_feedback_repository import (
+    AnswerFeedbackRepository,
+    FeedbackInput,
+)
 from app.repositories.chat_session_repository import (
     ChatSessionRepository,
     SessionOwnershipError,
@@ -25,6 +29,8 @@ __all__ = [
     "AgentCacheRepository",
     "AgentRunRepository",
     "AgentUsageRepository",
+    "AnswerFeedbackRepository",
+    "FeedbackInput",
     "ChatSessionRepository",
     "ChatMemoryRepository",
     "SessionOwnershipError",

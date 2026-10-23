@@ -35,6 +35,7 @@ def pg_engine():
 def test_postgresql_drops_retired_quality_tables(pg_engine):
     tables = set(sa.inspect(pg_engine).get_table_names())
     assert not {name for name in tables if name.startswith("quality_")}
+    assert "answer_feedback" in tables
 
 
 def test_postgresql_enforces_single_champion(pg_engine):

@@ -14,7 +14,7 @@ from alembic.runtime.migration import MigrationContext
 
 
 BASELINE_REVISION = "0001_postgresql_baseline"
-HEAD_REVISION = "0004_drop_quality_tables"
+HEAD_REVISION = "0005_answer_feedback"
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 
@@ -72,8 +72,29 @@ def add_coordination_metadata(result: sa.MetaData) -> None:
         sa.Column("request_count", sa.BigInteger, nullable=False))
 
 
+def add_feedback_metadata(result: sa.MetaData) -> None:
+    """Append the owner-scoped like/dislike feedback table."""
+    sa.Table(
+        "answer_feedback",
+        result,
+        sa.Column("run_id", sa.Text, primary_key=True),
+        sa.Column("owner_id", sa.Text, nullable=False),
+        sa.Column("vote", sa.Text, nullable=False),
+        sa.Column("reasons_json", sa.Text, nullable=False, server_default=sa.text("'[]'")),
+        sa.Column("comment", sa.Text, nullable=False, server_default=sa.text("''")),
+        sa.Column("created_at", sa.Text, nullable=False),
+        sa.Column("updated_at", sa.Text, nullable=False),
+        sa.ForeignKeyConstraint(
+            ["run_id"], ["react_runs.run_id"], ondelete="CASCADE",
+            deferrable=True, initially="DEFERRED",
+        ),
+        sa.CheckConstraint("vote IN ('up','down')", name="answer_feedback_vote"),
+    )
+
+
 metadata = baseline_metadata()
 add_coordination_metadata(metadata)
+add_feedback_metadata(metadata)
 sa.Index("one_champion_policy", metadata.tables["scoring_policies"].c.status,
          unique=True, postgresql_where=sa.text("status = 'champion'"))
 
