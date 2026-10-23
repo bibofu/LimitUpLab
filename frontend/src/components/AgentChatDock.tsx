@@ -35,7 +35,6 @@ import type {
 } from "../types";
 import { AgentAnswerMarkdown } from "./AgentAnswerMarkdown";
 import { AgentChatProgress } from "./AgentChatProgress";
-import { AnswerFeedback } from "./AnswerFeedback";
 import { taskStatusLabel } from "../utils/agentChatTransport";
 import { HttpResponseError } from "../utils/jsonRequest";
 import {
@@ -730,7 +729,6 @@ export function AgentChatDock({
                     animate={revealingMessageId === item.id}
                     onRevealProgress={followRevealedAnswer}
                   />
-                  {item.runId ? <AnswerFeedback runId={item.runId} /> : null}
                 </div>
               ) : (
                 <p>{item.content}</p>

@@ -10,9 +10,8 @@ update head metadata instead. Historical JSON, hashes and timestamps remain text
 SQLite REAL becomes double precision, and integer columns become bigint.
 `chat_messages` and `react_calls` preserve SQLite rowid in `legacy_order`; new
 records receive database-generated identity values. Revision 0002 adds shared
-coordination tables, revision 0003 enforces one champion policy, revision 0004
-drops 12 retired answer-quality tables, and revision 0005 adds owner-scoped
-answer feedback.
+coordination tables, revision 0003 enforces one champion policy, and revision
+0004 drops 12 retired answer-quality tables.
 
 SQLite migration scripts and the SQLite importer were removed on 2026-10-24.
 Historical SQLite archives remain read-only evidence; the application does not

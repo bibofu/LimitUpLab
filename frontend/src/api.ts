@@ -370,30 +370,3 @@ export function cancelAgentChatRun(runId: string) {
   );
 }
 
-export type AnswerFeedbackValue = {
-  vote: "up" | "down";
-  reasons: string[];
-  comment: string;
-};
-
-/** Read one answer's existing like/dislike verdict for this visitor. */
-export async function fetchAnswerFeedback(runId: string): Promise<AnswerFeedbackValue | null> {
-  const result = await request<{ feedback: AnswerFeedbackValue | null }>(
-    `/api/agents/chat/runs/${encodeURIComponent(runId)}/feedback`,
-  );
-  return result.feedback;
-}
-
-/** Save or replace one answer's like/dislike verdict. */
-export async function saveAnswerFeedback(runId: string, value: AnswerFeedbackValue) {
-  const result = await request<{ feedback: AnswerFeedbackValue }>(
-    `/api/agents/chat/runs/${encodeURIComponent(runId)}/feedback`,
-    {
-      method: "PUT",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(value),
-    },
-  );
-  return result.feedback;
-}
-
