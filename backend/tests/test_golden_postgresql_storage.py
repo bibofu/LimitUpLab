@@ -138,7 +138,10 @@ def test_scripted_golden_cases_run_only_in_new_postgres_schemas(
                 # Fixture schema came from the evaluation URL and must remain empty.
                 assert db.exec_driver_sql("SELECT count(*) FROM chat_sessions").scalar_one() == 0
                 assert db.exec_driver_sql("SELECT count(*) FROM react_runs").scalar_one() == 0
-            assert base.password not in json.dumps(result)
+            serialized = json.dumps(result)
+            assert postgresql_database not in serialized
+            if base.password:
+                assert base.password not in serialized
         assert len(set(created_schemas)) == 2
         assert not list(tmp_path.rglob("*.sqlite"))
     finally:
