@@ -243,11 +243,11 @@ flowchart LR
 
 ### 公开工具契约只有一个来源
 
-26 个业务工具的公开契约分别定义在 `agents/tool_schemas_market.py`、`tool_schemas_research.py`、`tool_schemas_review.py`、`tool_schemas_news.py`，使用 `tool_contracts.py` 中的共享类型，由 `agents/tools.py` 统一导出。契约包含参数 Schema、时间能力、日期字段、集合语义及适配模式。`react_runtime/catalog.py` 由该契约生成 Pydantic 参数模型和 LangChain `StructuredTool`，并检查直接实现的方法签名是否漂移。
+25 个业务工具的公开契约分别定义在 `agents/tool_schemas_market.py`、`tool_schemas_research.py`、`tool_schemas_review.py`、`tool_schemas_news.py`，使用 `tool_contracts.py` 中的共享类型，由 `agents/tools.py` 统一导出。契约包含参数 Schema、时间能力、日期字段、集合语义及适配模式。`react_runtime/catalog.py` 由该契约生成 Pydantic 参数模型和 LangChain `StructuredTool`，并检查直接实现的方法签名是否漂移。
 
 这里的“唯一来源”指同一工具只有一份契约定义，并不要求所有定义堆在一个文件。按领域拆分后，注册表保留原顺序和对象引用，现有调用方的导入路径不变；修改某个工具仍只需修改所属领域的一份契约。这也是面试中解释重构取舍的具体例子。
 
-默认 `v1_close_review` profile 暴露 24 个业务工具；`remote_limit_up_pool` 和 `web_search` 仅在 `extended` 研发 profile 中开放。此外有 4 个运行时控制工具，不能把它们与 26 个业务工具混计。
+`v1_close_review` 和 `extended` 两个 profile 当前都暴露 25 个业务工具。此外有 4 个运行时控制工具，不能把它们与 25 个业务工具混计。
 
 | 工具类别 | 代表工具 | 使用场景 |
 | --- | --- | --- |

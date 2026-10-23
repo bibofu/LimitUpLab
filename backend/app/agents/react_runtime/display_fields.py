@@ -51,14 +51,6 @@ for key in ("symbol", "name"):
     DISPLAY_FIELD_CATALOG[key]["tools"].append("hot_stock_ranking")
 
 DISPLAY_FIELD_CATALOG.update({
-    key: {"meaning": meaning, "model": "HithinkLimitUpFact", "tools": ["remote_limit_up_pool"]}
-    for key, meaning in {
-        "seal_amount": "封单金额，元；不是当日成交额amount，缺失时不得用成交额代替",
-        "limit_up_reason": "来源提供的涨停原因；不是行业industry或概念标签concept，缺失时不得用行业/题材冒充原因",
-    }.items()
-})
-
-DISPLAY_FIELD_CATALOG.update({
     key: {"meaning": meaning, "model": "StockKLineBar", "tools": ["stock_kline"]}
     for key, meaning in {
         "open": "个股该交易日开盘价，元，沿用工具返回的价格口径",

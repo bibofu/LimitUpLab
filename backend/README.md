@@ -90,27 +90,12 @@ from stored rows when their declaration is complete. Active GET reconnects read
 events after the cursor; completed reconnects return only the final response.
 
 The default `v1_close_review` profile includes on-demand structured market
-tools. `web_search` and `remote_limit_up_pool` require the `extended` development
-profile; every invocation is checked by `ToolGateway`.
+tools; every invocation is checked by `ToolGateway`.
 
 - `market_index_trend` fetches date-aligned 2-20 trading-day performance for
   the Shanghai Composite, Shenzhen Component and ChiNext Index.
 - `sector_performance` fetches industry-sector ranking, change, breadth,
   turnover, fund flow, leader and recent trend through AKShare providers.
-- `web_search` (extended only) retrieves sanitized public search-result titles, URLs and
-  snippets. It uses no-key providers with fallback and treats every snippet as
-  untrusted external evidence.
-
-Optional search settings:
-
-```powershell
-LIMITUPLAB_WEB_SEARCH_PROVIDER=auto
-LIMITUPLAB_WEB_SEARCH_TIMEOUT_SECONDS=12
-```
-
-Search results can be stale or incomplete. Numerical market conclusions should
-come from structured market tools; search is used for news, catalysts and facts
-that are not present in local storage.
 
 If your network requires a local proxy, set `LIMITUPLAB_PROXY_URL` in `.env`.
 The backend will apply it to `HTTP_PROXY`, `HTTPS_PROXY`, and `ALL_PROXY` when

@@ -51,7 +51,6 @@ from app.models import (
     StockActivityFacts,
     StockKLineFacts,
     StockNewsFacts,
-    WebSearchFacts,
 )
 from app.repositories import (
     FirstBoardRepository,
@@ -84,7 +83,6 @@ from app.services.post_limit import (
 )
 from app.services.stock_news import collect_stock_news
 from app.services.scoring_policy_optimizer import build_scoring_policy_registry
-from app.services.web_search import search_web
 from app.agents.review_agent import build_review_agent_report
 
 
@@ -128,12 +126,6 @@ V1_CLOSED_MARKET_TOOL_NAMES = frozenset(
         "rating_evaluation",
         "review_high_score_picks",
         "scoring_policy_status",
-    }
-)
-V1_DEFERRED_REALTIME_TOOL_NAMES = frozenset(
-    {
-        "remote_limit_up_pool",
-        "web_search",
     }
 )
 
@@ -617,103 +609,6 @@ class AgentToolRegistry:
                 f"{f'：{names}' if names else '。'}"
             ),
             trace_output=payload,
-        )
-
-    def remote_limit_up_pool(
-        self,
-        *,
-        trade_date: date | None = None,
-        board_height: int | None = None,
-        query: str | None = None,
-        exclude_st: bool = True,
-        exclude_new: bool = True,
-        limit: int = 100,
-    ) -> ToolResult:
-        """Return a filtered Tonghuashun remote limit-up pool."""
-
-        snapshot = self.hithink_collector.collect_limit_up_pool(
-            trade_date=trade_date,
-            page=1,
-            size=200,
-            sort_field="limit_up_time",
-            sort_direction="asc",
-        )
-        normalized_query = (query or "").strip().lower()
-        filtered = [
-            item
-            for item in snapshot.items
-            if (board_height is None or item.board_height == board_height)
-            and (not exclude_st or not item.is_st)
-            and (not exclude_new or not item.is_new)
-            and (
-                not normalized_query
-                or normalized_query in item.symbol.lower()
-                or normalized_query in item.name.lower()
-                or normalized_query in (item.limit_up_reason or "").lower()
-            )
-        ]
-        items = filtered[: max(1, min(limit, 100))]
-        serialized = [asdict(item) for item in items]
-        upstream_complete = snapshot.page == 1 and snapshot.total <= len(snapshot.items)
-        matched_count = len(filtered) if upstream_complete else None
-        source_truncated = not upstream_complete or len(items) < len(filtered)
-        payload = {
-            "source": snapshot.source,
-            "trade_date": snapshot.trade_date.isoformat() if snapshot.trade_date else None,
-            "upstream_total": snapshot.total,
-            "matched_count": matched_count,
-            "returned_count": len(serialized),
-            "source_truncated": source_truncated,
-            "complete": not source_truncated,
-            "board_height": board_height,
-            "items": serialized,
-        }
-        names = "、".join(
-            f"{item.name}({item.symbol})"
-            for item in items[:5]
-        )
-        board_text = f"{board_height}板" if board_height else "涨停"
-        match_summary = (
-            f"{board_text}筛选共匹配 {matched_count} 只"
-            if matched_count is not None
-            else f"已返回页内{board_text}筛选匹配 {len(filtered)} 只，完整匹配总数未获取"
-        )
-        return ToolResult(
-            name="remote_limit_up_pool",
-            input={
-                "trade_date": trade_date.isoformat() if trade_date else None,
-                "board_height": board_height,
-                "query": query,
-                "exclude_st": exclude_st,
-                "exclude_new": exclude_new,
-                "limit": limit,
-            },
-            output=payload,
-            result_status="partial" if source_truncated else "ok" if items else "empty",
-            summary=(
-                f"同花顺涨停池上游共 {snapshot.total} 只，{match_summary}；本次返回 {len(items)} 只"
-                f"{f'：{names}' if names else '。'}"
-            ),
-            trace_output=payload,
-        )
-
-    def web_search(self, query: str, limit: int = 5) -> ToolResult:
-        """Return sanitized public-web search evidence."""
-
-        response: WebSearchFacts = search_web(query=query, limit=limit)
-        trace_output = response.model_dump(mode="json")
-        domains = "、".join(
-            dict.fromkeys(item.domain for item in response.results[:5])
-        )
-        return ToolResult(
-            name="web_search",
-            input={"query": response.query, "limit": limit},
-            output=response,
-            summary=(
-                f"{response.provider} 搜索到 {len(response.results)} 条结果"
-                f"{f'，来源：{domains}' if domains else ''}。"
-            ),
-            trace_output=trace_output,
         )
 
     def finance_news(

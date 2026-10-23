@@ -22,16 +22,16 @@ v17随后同配置完成两轮真实裁判复验，共240次调用、SDK重试0�
 
 用例由 Agent 根据项目规范、既有 Bad Case 和代码审查整理，尚未经过用户或领域专家逐条签署。合成数据不是实际行情；模型裁判结果也不等于人工复核结果。
 
-当前固定环境覆盖 13 个工具入口：
+当前固定环境覆盖 11 个工具入口：
 
 | 数据范围 | 工具 |
 | --- | --- |
-| 事件与市场统计 | `limit_up_events`、`market_event_pool`、`market_summary`、`market_index_trend`、`remote_limit_up_pool` |
+| 事件与市场统计 | `limit_up_events`、`market_event_pool`、`market_summary`、`market_index_trend` |
 | 首板评级与过滤 | `first_board_ratings`、`first_board_filter` |
-| 个股价格与研究资料 | `stock_kline`、`stock_news`、`stock_activity`、`web_search` |
+| 个股价格与研究资料 | `stock_kline`、`stock_news`、`stock_activity` |
 | 人气与龙虎榜 | `hot_stock_ranking`、`dragon_tiger_list` |
 
-CLI 默认使用生产 `v1_close_review` profile：24 个工具中 11 个有模拟实现；显式 `--profile extended` 时提供完整 26 个工具，其中 13 个有模拟实现。两者均复用生产白名单及真实 Schema，未实现 fixture 的可用工具仍会记录 `harness_error`。profile 写入 manifest，分别运行、保存与比较；不能用扩展 profile 的分数代表默认生产范围。
+当前两个 profile 都提供 25 个工具，其中 11 个有模拟实现。两者均复用生产白名单及真实 Schema，未实现 fixture 的可用工具仍会记录 `harness_error`。profile 写入 manifest，分别运行、保存与比较；不能用扩展 profile 的分数代表默认生产范围。
 
 评测基础设施与生产 Agent 修复分别追踪版本。先冻结评测口径，建立修复前基线，再验证通用 Agent 修复；失败题保留原有标准答案，不为通过评测而放宽要求。评测建设完成与被测 Agent 全部通过是两项不同验收。
 

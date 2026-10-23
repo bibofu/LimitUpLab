@@ -73,7 +73,7 @@ def test_duplicate_unknown_labels_keep_distinct_stable_slots():
 
 
 def test_unmapped_presentation_and_absent_source_value_have_distinct_explanations():
-    task = task_for([("symbol", "代码"), (None, "未定义指标"), ("seal_amount", "封单金额")])
+    task = task_for([("symbol", "代码"), (None, "未定义指标"), ("turnover_rate", "换手率")])
     store = EvidenceStore()
     key = store.add(tool="limit_up_events", state="ok", arguments={}, payload={"events": [
         {"symbol": "000011", "unavailable_requested_2": 123},
@@ -85,13 +85,12 @@ def test_unmapped_presentation_and_absent_source_value_have_distinct_explanation
     answer = render_answer(final, store, task.output_contract)
     assert "| 000011 | 展示映射未支持 | 数据未成功获取 |" in answer
     assert "未定义指标：展示映射未支持，不能据此判断来源是否有数据。" in final.missing
-    assert "封单金额：数据未成功获取。" in final.missing
+    assert "换手率：数据未成功获取。" in final.missing
     assert "123" not in answer and store.records == before
 
 
-@pytest.mark.parametrize("field,wrong", [("seal_amount", "amount"), ("limit_up_reason", "concept")])
-def test_limit_up_metrics_do_not_substitute_turnover_or_concept(field, wrong):
-    task = task_for([("symbol", "代码"), (field, "封单金额" if field == "seal_amount" else "涨停原因")])
+def test_limit_up_turnover_does_not_substitute_amount():
+    task = task_for([("symbol", "代码"), ("turnover_rate", "换手率")])
     store = EvidenceStore()
     key = store.add(tool="limit_up_events", state="ok", arguments={}, payload={"events": [
         {"symbol": "000011", "amount": 900000, "concept": "合成题材"},
@@ -101,7 +100,7 @@ def test_limit_up_metrics_do_not_substitute_turnover_or_concept(field, wrong):
     answer = render_answer(final, store, task.output_contract)
     assert "| 000011 | 数据未成功获取 |" in answer
     assert "900000" not in answer and "合成题材" not in answer
-    final.table.columns[-1].field = wrong
+    final.table.columns[-1].field = "amount"
     with pytest.raises(ValueError, match="Table fields"):
         validate_delivery(final, task, store)
 

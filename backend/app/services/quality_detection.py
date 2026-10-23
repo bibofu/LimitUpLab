@@ -102,7 +102,7 @@ def detect_run(job, *, rate=None):
 
 def _check_rows(evidence, references):
     signals = []
-    count_tools = {"limit_up_events", "market_event_pool", "remote_limit_up_pool", "dragon_tiger_list", "compute_result"}
+    count_tools = {"limit_up_events", "market_event_pool", "dragon_tiger_list", "compute_result"}
     for key in dict.fromkeys(references):
         record = evidence.get(key)
         if not isinstance(record, dict) or record.get("result_state") == "error":

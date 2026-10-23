@@ -303,6 +303,7 @@ def test_validate_cli_never_loads_model(monkeypatch, capsys):
     assert report["smoke_cases"] == 12
     assert report["profile"] == "v1_close_review"
     assert "remote_limit_up_pool" not in report["enabled_tools"]
+    assert "web_search" not in report["enabled_tools"]
     assert "market_index_trend" in report["fixture_tools"]
 
 
@@ -312,13 +313,13 @@ def test_validate_extended_profile_keeps_full_catalog_and_explicit_fixture_gaps(
     assert module.main(["--mode", "validate", "--profile", "extended"]) == 0
     report = json.loads(capsys.readouterr().out)
     assert report["profile"] == "extended"
-    assert "remote_limit_up_pool" in report["fixture_tools"]
-    assert "web_search" in report["fixture_tools"]
+    assert "remote_limit_up_pool" not in report["enabled_tools"]
+    assert "web_search" not in report["enabled_tools"]
     assert "rating_evaluation" in report["uncovered_tools"]
 
 
-@pytest.mark.parametrize("profile,allowed", [("v1_close_review", False), ("extended", True)])
-def test_runner_exposes_selected_profile_to_actual_agent_calls(tmp_path, profile, allowed):
+@pytest.mark.parametrize("profile", ["v1_close_review", "extended"])
+def test_runner_exposes_selected_profile_to_actual_agent_calls(tmp_path, profile):
     class ProfileModel(ScriptedModel):
         observed = []
 
@@ -333,7 +334,8 @@ def test_runner_exposes_selected_profile_to_actual_agent_calls(tmp_path, profile
                       judge_provider=ScriptedModel(), profile=profile)
     assert result["verdict"] == "pass"
     assert model.observed
-    assert all(("remote_limit_up_pool" in names) is allowed for names in model.observed)
+    assert all("remote_limit_up_pool" not in names and "web_search" not in names
+               for names in model.observed)
 
 
 def test_budget_interrupted_trial_resumes_without_double_counting(tmp_path, monkeypatch):

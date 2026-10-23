@@ -156,7 +156,6 @@ def test_indices_truncation_and_missing_flags_survive_computation():
 
 def test_contracts_match_existing_typed_output_collections():
     assert TOOL_COLLECTIONS["sector_stock_ranking"] == "items"
-    assert TOOL_COLLECTIONS["web_search"] == "results"
     assert TOOL_COLLECTIONS["rating_evaluation"] == "evaluations"
     assert TOOL_COLLECTIONS["post_limit_path"] == "path"
     assert TOOL_COLLECTIONS["compute_result"] == "items"

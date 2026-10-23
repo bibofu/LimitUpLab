@@ -16,7 +16,6 @@ from app.agent_presentation import (
     extract_agent_stock_mentions,
 )
 
-
 class LimitUpEvent(BaseModel):
     """One stock's daily limit-up or failed limit-up event."""
 
@@ -180,24 +179,6 @@ class SectorStockRankingFacts(BaseModel):
     items: list[SectorStockTrendItem] = Field(default_factory=list)
     sources: list[str] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
-
-
-class WebSearchResult(BaseModel):
-    """One sanitized result returned by the generic web-search tool."""
-
-    title: str
-    url: str
-    domain: str
-    snippet: str
-
-
-class WebSearchFacts(BaseModel):
-    """Search query, retrieval timestamp and evidence snippets for the Agent."""
-
-    query: str
-    fetched_at: datetime
-    provider: str
-    results: list[WebSearchResult] = Field(default_factory=list)
 
 
 class FinanceNewsItem(BaseModel):

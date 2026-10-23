@@ -230,7 +230,7 @@ def test_normalization_drift_rejected_without_judge_calls(source_fixture, tmp_pa
     source, original, _ = source_fixture
     response = original["results"][0]["turns"][0]["response"]
     if change == "answer":
-        response["answer"] = "来源：remote_limit_up_pool"
+        response["answer"] = "来源：limit_up_events"
     else:
         response["tool_results"][0]["result"]["payload"] = {"different": "payload"}
     source.write_text(json.dumps(original), encoding="utf-8")

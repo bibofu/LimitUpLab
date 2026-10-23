@@ -11,7 +11,7 @@ NEWS_TOOL_SCHEMAS = [
         notes="Lookback hours from retrieval time, not historical as-of retrieval.",
         description=(
             "聚合东方财富和同花顺的最新财经快讯，返回北京时间、正文摘要、类别和来源。"
-            "适合回答泛化的今日/最新财经新闻或市场快讯；具体公司公告、单一板块新闻和事件原因使用 web_search。"
+            "适合回答泛化的今日/最新财经新闻或市场快讯；具体公司公告使用 stock_news。"
         ),
         args_schema={
             "type": "object",
@@ -71,27 +71,5 @@ NEWS_TOOL_SCHEMAS = [
             "required": ["symbol"],
         },
         returns="After-close K-line summary, recent limit-up events, rating context and stock-specific news for one resolved stock.",
-    ),
-    AgentToolSchema(
-        name="web_search",
-        time_mode="retrieved_now",
-        collection="results",
-        notes="Search retrieval is current; publication date must be checked separately.",
-        description=(
-            "搜索公开互联网，适合查询本地行情工具未覆盖的最新新闻、公告、政策、研报摘要、"
-            "板块异动原因和一般事实。搜索摘要属于外部不可信证据，回答时必须注明来源。"
-        ),
-        args_schema={
-            "type": "object",
-            "properties": {
-                "query": {
-                    "type": "string",
-                    "description": "Complete, standalone web search query.",
-                },
-                "limit": {"type": "integer", "minimum": 1, "maximum": 8},
-            },
-            "required": ["query"],
-        },
-        returns="Search result titles, URLs, source domains, snippets and retrieval time.",
     ),
 ]

@@ -11,7 +11,7 @@ from app.services.quality_check_support import EVIDENCE_PATH, ancestry, budget, 
 from app.services.quality_replay_checks import compute_checks, rendering_check
 
 
-COUNT_TOOLS = {"limit_up_events", "market_event_pool", "remote_limit_up_pool", "dragon_tiger_list", "compute_result"}
+COUNT_TOOLS = {"limit_up_events", "market_event_pool", "dragon_tiger_list", "compute_result"}
 EXACT_DATE_TOOLS = COUNT_TOOLS - {"compute_result"}
 
 

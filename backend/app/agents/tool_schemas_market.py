@@ -243,36 +243,4 @@ MARKET_TOOL_SCHEMAS = [
         },
         returns="Returned provider-labeled records plus a deterministic, date/filter/window-scoped overview; completeness is explicit in source_truncated/complete_matching_query. Reuse matching overview metrics; compute only additional requested statistics. For requested lists use finish.table over original/derived rows.",
     ),
-    AgentToolSchema(
-        name="remote_limit_up_pool",
-        time_mode="historical_or_live",
-        dates=("trade_date",),
-        collection="items",
-        description=(
-            "查询同花顺远端涨停池，包含首板/连板高度、封板时间、涨停原因、封单额、"
-            "ST和新股标记。适合当前或指定交易日的实时/权威涨停池核验。"
-        ),
-        args_schema={
-            "type": "object",
-            "properties": {
-                "trade_date": {
-                    "type": ["string", "null"],
-                    "description": "YYYY-MM-DD; omit for current upstream snapshot.",
-                },
-                "board_height": {
-                    "type": ["integer", "null"],
-                    "description": "1 for first-board, 2 for second-board, etc.",
-                },
-                "query": {
-                    "type": ["string", "null"],
-                    "description": "Optional stock name, symbol or limit-up reason keyword.",
-                },
-                "exclude_st": {"type": "boolean"},
-                "exclude_new": {"type": "boolean"},
-                "limit": {"type": "integer", "minimum": 1, "maximum": 100},
-            },
-            "required": [],
-        },
-        returns="Filtered Tonghuashun limit-up pool with board height and seal facts.",
-    ),
 ]

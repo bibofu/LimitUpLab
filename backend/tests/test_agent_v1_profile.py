@@ -6,7 +6,7 @@ from pathlib import Path
 from unittest.mock import patch
 from uuid import uuid4
 
-from app.agents.tools import EXTENDED_AGENT_PROFILE, V1_AGENT_PROFILE, V1_CLOSED_MARKET_TOOL_NAMES, V1_DEFERRED_REALTIME_TOOL_NAMES, AgentToolRegistry
+from app.agents.tools import EXTENDED_AGENT_PROFILE, V1_AGENT_PROFILE, V1_CLOSED_MARKET_TOOL_NAMES, AgentToolRegistry, TOOL_SCHEMAS
 from app.repositories import FirstBoardRepository
 from app.services.sample_data import SAMPLE_EVENTS
 
@@ -39,16 +39,17 @@ class AgentV1ProfileTest(unittest.TestCase):
         schema_names = {schema.name for schema in registry.schemas()}
         self.assertEqual(registry.profile, V1_AGENT_PROFILE)
         self.assertEqual(schema_names, set(V1_CLOSED_MARKET_TOOL_NAMES))
-        self.assertTrue(schema_names.isdisjoint(V1_DEFERRED_REALTIME_TOOL_NAMES))
-        self.assertIn("hot_stock_ranking", {schema.name for schema in registry.schemas()})
-        self.assertIn("finance_news", {schema.name for schema in registry.schemas()})
-        self.assertIn("stock_news", {schema.name for schema in registry.schemas()})
-        self.assertIn("stock_activity", {schema.name for schema in registry.schemas()})
-        self.assertIn("sector_performance", {schema.name for schema in registry.schemas()})
+        self.assertEqual(schema_names, {schema.name for schema in TOOL_SCHEMAS})
+        self.assertIn("hot_stock_ranking", schema_names)
+        self.assertIn("finance_news", schema_names)
+        self.assertIn("stock_news", schema_names)
+        self.assertIn("stock_activity", schema_names)
+        self.assertIn("sector_performance", schema_names)
         self.assertNotIn("web_search", schema_names)
+        self.assertNotIn("remote_limit_up_pool", schema_names)
 
-    # Regression scenario: extended profile preserves deferred v2 tools.
-    def test_extended_profile_preserves_deferred_v2_tools(self) -> None:
+    # Regression scenario: extended profile exposes the same current catalog.
+    def test_extended_profile_exposes_the_current_catalog(self) -> None:
         registry = AgentToolRegistry(
             events=SAMPLE_EVENTS,
             first_board_repository=self.repository,
@@ -56,8 +57,9 @@ class AgentV1ProfileTest(unittest.TestCase):
         )
 
         schema_names = {schema.name for schema in registry.schemas()}
-        self.assertTrue(V1_DEFERRED_REALTIME_TOOL_NAMES.issubset(schema_names))
-        self.assertIn("hot_stock_ranking", {schema.name for schema in registry.schemas()})
+        self.assertEqual(schema_names, {schema.name for schema in TOOL_SCHEMAS})
+        self.assertEqual(schema_names, set(V1_CLOSED_MARKET_TOOL_NAMES))
+        self.assertIn("hot_stock_ranking", schema_names)
 
 if __name__ == "__main__":
     unittest.main()
