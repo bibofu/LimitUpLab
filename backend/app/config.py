@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import os
 import socket
+from dataclasses import dataclass
 from pathlib import Path
 from typing import Iterable
 from urllib.parse import urlparse
@@ -23,6 +24,9 @@ PROXY_ENV_NAMES = (
     "https_proxy",
     "all_proxy",
 )
+LANGFUSE_HOST_ENV_NAMES = ("LANGFUSE_HOST", "LANGFUSE_BASE_URL")
+DEFAULT_LANGFUSE_ENVIRONMENT = "local"
+DEFAULT_LANGFUSE_SAMPLE_RATE = 1.0
 
 
 def load_local_env(path: str | Path | None = None, *, override: bool = False) -> list[Path]:
@@ -80,6 +84,51 @@ def env_bool(name: str, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in TRUE_VALUES
+
+
+@dataclass(frozen=True)
+class LangfuseSettings:
+    """Resolved LLM tracing configuration; tracing must never block chat."""
+
+    enabled: bool
+    host: str
+    public_key: str
+    secret_key: str
+    sample_rate: float
+    environment: str
+
+    # Report whether the endpoint and both credentials are present.
+    @property
+    def configured(self) -> bool:
+        return bool(self.host and self.public_key and self.secret_key)
+
+    # Report whether this process may emit spans at all.
+    @property
+    def active(self) -> bool:
+        return self.enabled and self.configured
+
+
+def langfuse_settings() -> LangfuseSettings:
+    """Read optional tracing settings without making startup depend on them."""
+
+    host = ""
+    for name in LANGFUSE_HOST_ENV_NAMES:
+        host = (os.getenv(name) or "").strip().rstrip("/")
+        if host:
+            break
+    environment = (
+        os.getenv("LIMITUPLAB_LANGFUSE_ENVIRONMENT", "").strip()
+        or os.getenv("LIMITUPLAB_ENVIRONMENT", "").strip()
+        or DEFAULT_LANGFUSE_ENVIRONMENT
+    )
+    return LangfuseSettings(
+        enabled=env_bool("LIMITUPLAB_LANGFUSE_ENABLED"),
+        host=host,
+        public_key=os.getenv("LANGFUSE_PUBLIC_KEY", "").strip(),
+        secret_key=os.getenv("LANGFUSE_SECRET_KEY", "").strip(),
+        sample_rate=_read_sample_rate("LIMITUPLAB_LANGFUSE_SAMPLE_RATE"),
+        environment=environment,
+    )
 
 
 def configured_cors_origins() -> list[str]:
@@ -264,3 +313,15 @@ def _read_windows_environment_value(name: str) -> str:
         if normalized:
             return normalized
     return ""
+
+
+# Read a [0, 1] sampling rate; invalid input falls back to full sampling rather than failing.
+def _read_sample_rate(name: str) -> float:
+    raw_value = os.getenv(name, "").strip()
+    if not raw_value:
+        return DEFAULT_LANGFUSE_SAMPLE_RATE
+    try:
+        value = float(raw_value)
+    except ValueError:
+        return DEFAULT_LANGFUSE_SAMPLE_RATE
+    return min(1.0, max(0.0, value))

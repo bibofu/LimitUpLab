@@ -13,6 +13,7 @@ from app.config import (
     configured_cors_origins,
     configure_runtime_environment,
     hydrate_windows_environment,
+    langfuse_settings,
     load_local_env,
     replace_proxy_environment,
 )
@@ -185,6 +186,70 @@ class ConfigTest(unittest.TestCase):
 
         self.assertFalse(removed)
         self.assertEqual(os.getenv("HTTP_PROXY"), "http://127.0.0.1:7890")
+
+    # Regression scenario: tracing stays off unless the switch is explicitly enabled.
+    def test_langfuse_settings_default_to_disabled(self) -> None:
+        for name in (
+            "LIMITUPLAB_LANGFUSE_ENABLED",
+            "LIMITUPLAB_LANGFUSE_SAMPLE_RATE",
+            "LIMITUPLAB_LANGFUSE_ENVIRONMENT",
+            "LIMITUPLAB_ENVIRONMENT",
+            "LANGFUSE_HOST",
+            "LANGFUSE_BASE_URL",
+            "LANGFUSE_PUBLIC_KEY",
+            "LANGFUSE_SECRET_KEY",
+        ):
+            os.environ.pop(name, None)
+
+        settings = langfuse_settings()
+
+        self.assertFalse(settings.enabled)
+        self.assertFalse(settings.configured)
+        self.assertFalse(settings.active)
+        self.assertEqual(settings.sample_rate, 1.0)
+        self.assertEqual(settings.environment, "local")
+
+    # Regression scenario: the explicit switch plus credentials activates tracing.
+    def test_langfuse_settings_activate_with_complete_credentials(self) -> None:
+        os.environ["LIMITUPLAB_LANGFUSE_ENABLED"] = "true"
+        os.environ["LANGFUSE_HOST"] = "https://us.cloud.langfuse.com/"
+        os.environ["LANGFUSE_PUBLIC_KEY"] = "pk-test"
+        os.environ["LANGFUSE_SECRET_KEY"] = "sk-test"
+
+        settings = langfuse_settings()
+
+        self.assertTrue(settings.enabled)
+        self.assertTrue(settings.configured)
+        self.assertTrue(settings.active)
+        self.assertEqual(settings.host, "https://us.cloud.langfuse.com")
+
+    # Regression scenario: an enabled switch without credentials cannot emit spans.
+    def test_langfuse_settings_require_credentials_when_enabled(self) -> None:
+        os.environ["LIMITUPLAB_LANGFUSE_ENABLED"] = "true"
+        for name in ("LANGFUSE_HOST", "LANGFUSE_BASE_URL", "LANGFUSE_PUBLIC_KEY", "LANGFUSE_SECRET_KEY"):
+            os.environ.pop(name, None)
+
+        settings = langfuse_settings()
+
+        self.assertTrue(settings.enabled)
+        self.assertFalse(settings.active)
+
+    # Regression scenario: base url alias and clamped sampling.
+    def test_langfuse_settings_read_base_url_alias_and_clamp_sampling(self) -> None:
+        os.environ.pop("LANGFUSE_HOST", None)
+        os.environ["LANGFUSE_BASE_URL"] = "https://us.cloud.langfuse.com"
+        os.environ["LIMITUPLAB_LANGFUSE_SAMPLE_RATE"] = "1.5"
+
+        settings = langfuse_settings()
+
+        self.assertEqual(settings.host, "https://us.cloud.langfuse.com")
+        self.assertEqual(settings.sample_rate, 1.0)
+
+        os.environ["LIMITUPLAB_LANGFUSE_SAMPLE_RATE"] = "abc"
+        self.assertEqual(langfuse_settings().sample_rate, 1.0)
+
+        os.environ["LIMITUPLAB_LANGFUSE_SAMPLE_RATE"] = "-0.5"
+        self.assertEqual(langfuse_settings().sample_rate, 0.0)
 
 
 if __name__ == "__main__":
