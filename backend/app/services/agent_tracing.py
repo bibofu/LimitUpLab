@@ -8,6 +8,8 @@ the Langfuse import stays inside the adapter.
 
 from __future__ import annotations
 
+import json
+import re
 from contextlib import ExitStack, contextmanager
 from dataclasses import dataclass, field
 from typing import Any, Iterator, Protocol
@@ -17,6 +19,23 @@ from app.config import LangfuseSettings, langfuse_settings
 DEFAULT_EXPORT_TIMEOUT_SECONDS = 5
 ERROR_MESSAGE_LIMIT = 500
 GENERATION_NAME_LIMIT = 200
+PAYLOAD_CHAR_LIMIT = 60000
+REDACTED = "[redacted]"
+_SECRET_KEY_NAMES = {
+    "api_key",
+    "apikey",
+    "authorization",
+    "cookie",
+    "password",
+    "public_key",
+    "secret",
+    "secret_key",
+    "token",
+}
+_SECRET_VALUE = re.compile(
+    r"(sk-[A-Za-z0-9_-]{8,}|pk-lf-[A-Za-z0-9-]{8,}|"
+    r"Bearer\s+[A-Za-z0-9._-]{8,})"
+)
 
 
 class GenerationSpan(Protocol):
@@ -185,7 +204,7 @@ class _LangfuseGeneration:
         if self.finished:
             return
         self.finished = True
-        payload: dict[str, Any] = {"output": output}
+        payload: dict[str, Any] = {"output": _bounded(output)}
         if usage is not None:
             payload["usage_details"] = usage
         if error is not None:
@@ -215,7 +234,7 @@ class _LangfuseTool:
         failed = error is not None or status == "error"
         try:
             self.span.update(
-                output=output,
+                output=_bounded(output),
                 metadata={"status": status},
                 level="ERROR" if failed else "DEFAULT",
                 status_message=_error_message(error) if error is not None else status,
@@ -278,6 +297,7 @@ class LangfuseTracer:
                 environment=settings.environment,
                 sample_rate=settings.sample_rate,
                 timeout=DEFAULT_EXPORT_TIMEOUT_SECONDS,
+                mask=mask_trace_data,
             )
             propagate = propagate or propagate_attributes
         self._client = client
@@ -343,7 +363,7 @@ class LangfuseTracer:
                         as_type="generation",
                         model=model,
                         model_parameters=parameters or {},
-                        input=input,
+                        input=_bounded(input),
                         metadata=metadata,
                     )
                 )
@@ -363,7 +383,7 @@ class LangfuseTracer:
             try:
                 span = stack.enter_context(
                     self._client.start_as_current_observation(
-                        name=name, as_type="tool", input=arguments,
+                        name=name, as_type="tool", input=_bounded(arguments),
                     )
                 )
             except Exception:
@@ -407,6 +427,46 @@ def usage_details(
         "output": completion_tokens,
         "total": total_tokens,
     }
+
+
+def mask_trace_data(*, data: Any) -> Any:
+    """Redact credential-shaped keys and values before export."""
+
+    return _mask_value(data, depth=0)
+
+
+def _mask_value(value: Any, *, depth: int) -> Any:
+    if depth > 8:
+        return "..."
+    if isinstance(value, dict):
+        masked: dict[Any, Any] = {}
+        for key, item in value.items():
+            if str(key).strip().lower() in _SECRET_KEY_NAMES:
+                masked[key] = REDACTED
+            else:
+                masked[key] = _mask_value(item, depth=depth + 1)
+        return masked
+    if isinstance(value, (list, tuple)):
+        return [_mask_value(item, depth=depth + 1) for item in value]
+    if isinstance(value, str):
+        return _SECRET_VALUE.sub(REDACTED, value[:PAYLOAD_CHAR_LIMIT])
+    return value
+
+
+def _bounded(value: Any) -> Any:
+    """Keep a payload JSON-safe and under the export size budget."""
+
+    if value is None:
+        return None
+    try:
+        serialized = json.dumps(value, ensure_ascii=False, default=str)
+    except Exception:
+        return str(value)[:PAYLOAD_CHAR_LIMIT]
+    if len(serialized) <= PAYLOAD_CHAR_LIMIT:
+        return value
+    return serialized[:PAYLOAD_CHAR_LIMIT] + (
+        f"\n...[{len(serialized) - PAYLOAD_CHAR_LIMIT} chars truncated]"
+    )
 
 
 _tracer: AgentTracer = NullTracer()

@@ -19,6 +19,7 @@ class AgentObservabilityTest(unittest.TestCase):
             input_json={"message": "market mood"},
             output_json={
                 "answer": "A-share limit-up count is 105.",
+                "trace_url": "https://langfuse.example/traces/trace-1",
                 "warnings": ["not investment advice"],
                 "tool_results": [
                     {
@@ -41,6 +42,7 @@ class AgentObservabilityTest(unittest.TestCase):
         self.assertEqual(summary.message, "market mood")
         self.assertEqual(summary.duration_ms, 123)
         self.assertEqual(summary.warnings, ["not investment advice"])
+        self.assertEqual(summary.trace_url, "https://langfuse.example/traces/trace-1")
         self.assertEqual(summary.tool_results[0].name, "market_summary")
         self.assertIn("limit-up count", summary.answer_preview or "")
 

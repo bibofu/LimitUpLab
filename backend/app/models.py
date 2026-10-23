@@ -1652,6 +1652,7 @@ class AgentChatResponse(BaseModel):
 
     session_id: str
     run_id: str | None = None
+    trace_url: str | None = None
     intent: str
     answer: str
     task_status: Literal["complete", "partial", "empty", "clarify", "refuse", "error", "cancelled"] | None = None
@@ -1860,6 +1861,7 @@ class AgentRunSummary(BaseModel):
     tool_results: list[AgentToolTrace] = Field(default_factory=list)
     warnings: list[str] = Field(default_factory=list)
     error_message: str | None = None
+    trace_url: str | None = None
     started_at: datetime
     finished_at: datetime
     duration_ms: int

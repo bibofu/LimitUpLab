@@ -155,6 +155,10 @@ def start(request, http_request, owner_id):
                         # Persist the authoritative answer before publishing completed. Message id is
                         # stable across crash recovery and repeated submissions.
                         progress("checking", "正在保存研究结果")
+                        if run_span.trace_id:
+                            response = response.model_copy(
+                                update={"trace_url": run_span.url()}
+                            )
                         response = AgentChatResponse.model_validate(journal.finish(run_id, owner_id, response.model_dump(mode="json")))
                         notify_streams()
                 except Exception as error:

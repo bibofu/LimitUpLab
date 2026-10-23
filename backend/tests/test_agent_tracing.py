@@ -9,7 +9,9 @@ from app.services.agent_tracing import (
     NullTracer,
     configure_agent_tracer,
     get_agent_tracer,
+    mask_trace_data,
     shutdown_agent_tracer,
+    usage_details,
 )
 
 
@@ -231,6 +233,39 @@ class AgentTracingTest(unittest.TestCase):
 
         self.assertIsInstance(get_agent_tracer(), NullTracer)
         self.assertTrue(client.shutdown_called)
+
+    # Regression scenario: credential-shaped keys and values never reach export.
+    def test_mask_trace_data_redacts_credentials(self) -> None:
+        masked = mask_trace_data(data={
+            "api_key": "sk-live-1234567890",
+            "headers": {"Authorization": "Bearer abcdefghijklmnop"},
+            "note": "key sk-live-1234567890 leaked",
+            "rows": [{"symbol": "000001", "content": "普通文本"}],
+        })
+
+        self.assertEqual(masked["api_key"], "[redacted]")
+        self.assertEqual(masked["headers"]["Authorization"], "[redacted]")
+        self.assertEqual(masked["note"], "key [redacted] leaked")
+        self.assertEqual(masked["rows"][0]["symbol"], "000001")
+        self.assertEqual(masked["rows"][0]["content"], "普通文本")
+
+    # Regression scenario: oversized outputs are bounded before export.
+    def test_generation_output_is_bounded(self) -> None:
+        client = _FakeClient()
+        tracer = LangfuseTracer(ACTIVE_SETTINGS, client=client, propagate=_FakePropagate())
+
+        with tracer.generation(name="g", model="m") as generation:
+            generation.finish(output={"rows": ["x" * 1000] * 100})
+
+        output = client.spans[0].updates[0]["output"]
+        self.assertIsInstance(output, str)
+        self.assertIn("truncated", output)
+
+    # Regression scenario: partial usage is never reported as measured.
+    def test_usage_details_require_every_count(self) -> None:
+        self.assertIsNone(usage_details(None, 1, 2))
+        self.assertIsNone(usage_details(1, None, 2))
+        self.assertEqual(usage_details(1, 2, 3), {"input": 1, "output": 2, "total": 3})
 
 
 if __name__ == "__main__":

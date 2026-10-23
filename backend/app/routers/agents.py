@@ -944,6 +944,7 @@ def _summarize_agent_run(run: AgentRun) -> AgentRunSummary:
             if warning
         ],
         error_message=run.error_message,
+        trace_url=output_json.get("trace_url"),
         started_at=run.started_at,
         finished_at=run.finished_at,
         duration_ms=duration_ms,

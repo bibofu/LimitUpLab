@@ -33,6 +33,7 @@ POST /api/agents/chat/stream
 | `app/agents/tool_output_contracts.py` | 工具输出模型、字段字典生成 |
 | `app/agents/tool_catalog.py` | 从工具契约生成 Pydantic 参数模型和 LangChain StructuredTool |
 | `app/agents/tool_payload.py` | 工具 payload / collection 提取 |
+| `app/services/agent_tracing.py` | 可选 Langfuse trace，fail-open，不参与业务判断 |
 
 ## 工具结果
 
@@ -63,4 +64,5 @@ POST /api/agents/chat/stream
 - 合规：默认确定性模式守卫；可配置 `LIMITUPLAB_AGENT_COMPLIANCE=llm` 增加语义复核。
 - 输入安全：只拒绝提示注入/权限绕过，不生成输出合同。
 - 运行恢复：journal 仍负责幂等、取消、租约和最终答案原子保存；SSE 进度和最终结果保留。
+- 观测：LLM 调用、工具执行与 run 级 trace 见 [Langfuse 接入](Langfuse_Integration.md)。
 - 评测：Golden/quality 评测框架已删除，后续评测集重新设计。
