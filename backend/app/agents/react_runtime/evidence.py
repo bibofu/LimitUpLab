@@ -7,7 +7,6 @@ from uuid import uuid4
 
 from fastapi.encoders import jsonable_encoder
 from app.agents.kline_presentation import kline_agent_view
-from app.agents.react_runtime.metadata_views import PREVIEW_ROWS, metadata_views
 
 from app.agents.tool_schemas_market import MARKET_TOOL_SCHEMAS
 from app.agents.tool_schemas_news import NEWS_TOOL_SCHEMAS
@@ -19,7 +18,7 @@ TOOL_COLLECTIONS = {
     for contract in (*MARKET_TOOL_SCHEMAS, *NEWS_TOOL_SCHEMAS,
                      *RESEARCH_TOOL_SCHEMAS, *REVIEW_TOOL_SCHEMAS)
     if contract.collection
-} | {"compute_result": "items", "compare_metrics": "items", "evidence_view": "items"}
+} | {"compute_result": "items"}
 # Legacy/unregistered evidence keeps its previous generic collection behavior.
 # Declared tools always select their own contract, regardless of payload order.
 COLLECTIONS = tuple(dict.fromkeys((
@@ -132,7 +131,6 @@ class EvidenceStore:
         restored["evidence_id"] = key
         restored["evidence_scope"] = HISTORY_SCOPE
         restored["historical_reference"] = True
-        restored.pop("views", None)
         self.records[key] = restored
 
     def current_records(self):
@@ -140,7 +138,6 @@ class EvidenceStore:
 
     def add(self, *, tool, payload, state, arguments, sources=None):
         key = "ev_" + uuid4().hex[:16]
-        source_result_state = state
         rows = [] if state == "error" else rows_of(payload, tool=tool)
         metadata = payload if isinstance(payload, dict) else {}
         collection = TOOL_COLLECTIONS.get(tool)
@@ -148,7 +145,7 @@ class EvidenceStore:
                               else any(isinstance(metadata.get(name), list) for name in COLLECTIONS))
         # Source truncation is different from the small model preview page.
         truncated = bool(metadata.get("source_truncated") or metadata.get("truncated")) or (
-            tool not in {"compute_result", "compare_metrics"} and has_row_collection
+            tool != "compute_result" and has_row_collection
             and metadata.get("result_mode") != "count"
             and isinstance(metadata.get("matched_count"), int)
             and metadata["matched_count"] > len(rows)
@@ -182,7 +179,6 @@ class EvidenceStore:
             state = "partial"
         self.records[key] = {
             "evidence_id": key, "tool": tool, "payload": payload, "result_state": state,
-            "source_result_state": source_result_state,
             "schema_version": EVIDENCE_VERSION, "retrieved_at": datetime.now(timezone.utc).isoformat(),
             "source_truncated": truncated, "data_missing": source_missing,
             "evidence_scope": CURRENT_SCOPE, "historical_reference": False,
@@ -206,57 +202,8 @@ class EvidenceStore:
             return None
         return deepcopy(self._rank_scopes.get(key))
 
-    def _metadata_views(self, key):
-        source = self.get(key)
-        if source["result_state"] == "error":
-            return {}
-        views = source.setdefault("views", {})
-        for name, definition in metadata_views(source["tool"], source["payload"]).items():
-            if name in views and views[name] in self.records:
-                continue
-            rows = definition["rows"]
-            payload = source["payload"]
-            # Only the tool's complete independent grouping can waive inferred
-            # local row pagination. Explicit truncation and upstream partial
-            # states remain authoritative, including old records without proof.
-            upstream_problem = (source.get("data_missing") or payload.get("source_errors")
-                                or payload.get("data_fresh") is False
-                                or payload.get("source_truncated") or payload.get("truncated"))
-            independent_complete = (
-                definition.get("independent_collection_complete")
-                and source.get("source_result_state") in {"ok", "empty"}
-                and not upstream_problem
-                and source["arguments"].get("group_by") == payload.get("group_by")
-                and payload.get("returned_count") == len(source["rows"])
-            )
-            missing = deepcopy(source.get("data_missing", []))
-            missing.extend(item for item in definition.get("data_missing", []) if item not in missing)
-            state = source["source_result_state"] if independent_complete else source["result_state"]
-            if upstream_problem and state in {"ok", "empty"}:
-                state = "partial"
-            child = self.add(tool="evidence_view", state=state,
-                arguments={"evidence_id": key, "view": name}, sources=[key], payload={
-                    **definition["metadata"], "items": rows, "matched_count": len(rows),
-                    "returned_count": len(rows), "source_evidence_ids": [key], "view": name,
-                    "data_missing": missing,
-                    "source_errors": deepcopy(payload.get("source_errors", [])),
-                    "source_truncated": bool(definition["source_truncated"] or (
-                        source.get("source_truncated") and not independent_complete)),
-                })
-            self.records[child]["evidence_scope"] = self.scope_of(source)
-            self.records[child]["historical_reference"] = self.scope_of(source) == HISTORY_SCOPE
-            views[name] = child
-        return views
-
-    def view(self, key, offset=0, limit=8, *, view=None):
-        if type(offset) is not int or offset < 0 or type(limit) is not int or not 1 <= limit <= 30:
-            raise ValueError("Evidence pages require offset>=0 and 1<=limit<=30")
+    def view(self, key, offset=0, limit=8):
         record = self.get(key)
-        views = self._metadata_views(key)
-        if view is not None:
-            if view not in views:
-                raise ValueError("Unknown evidence view; choose a name from available_views")
-            return self.view(views[view], offset, limit)
         rows = record["rows"]
         metadata = record["payload"] if isinstance(record["payload"], dict) else {}
         metadata = {k: v for k, v in metadata.items() if k not in COLLECTIONS}
@@ -284,21 +231,6 @@ class EvidenceStore:
             # Each deterministic ranking is bounded to five records. Preserve
             # its last row so the model need not re-read/recompute that ranking.
             view["metadata"]["overview"] = compact(metadata["overview"], 5)
-        if views:
-            view["available_views"] = {}
-            for name, child in views.items():
-                child_view = self.view(child, limit=PREVIEW_ROWS)
-                view["available_views"][name] = {
-                    "evidence_id": child, "row_count": child_view["row_count"],
-                    "preview": child_view["rows"], "preview_truncated": child_view["truncated"],
-                    "metadata": child_view["metadata"], "result_state": child_view["result_state"],
-                    "source_truncated": child_view["source_truncated"],
-                }
-            # The named view supplies an explicit five-row preview and a way to
-            # read the remainder; do not also send an inaccessible four-row copy.
-            if "sector_summary" in views:
-                view["metadata"].pop("sector_summary", None)
-            view["display_hint"] += " available_views提供已计算的分组/区间证据及真实ID，可直接引用、compute或按view名称分页；预览行数不代表全集。"
         if record["tool"] == "sector_performance" and metadata.get("ranking_complete") is False:
             view["display_hint"] = (
                 "本次指定交易日的行业排名覆盖不足，工具已在总预算内尝试取齐；空榜没有可翻页补出的排名。"
@@ -316,10 +248,6 @@ class EvidenceStore:
             view["complete_rank_scope"] = self.complete_rank_scope(key)
             view["display_hint"] += " complete_rank_scope仅证明显式排名范围及其后续筛选完整，不代表全市场全集完整。"
         return view
-
-    def compare(self, spec):
-        from app.agents.react_runtime.comparison_evidence import compare_metrics
-        return compare_metrics(self, spec)
 
     def compute(self, spec):
         source = self.get(spec.evidence_id)

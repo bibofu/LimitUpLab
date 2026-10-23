@@ -26,10 +26,7 @@ def _window(rows):
             "start_close": closes[0], "end_close": closes[-1],
             "observations": len(rows), "observed_intervals": len(rows) - 1,
             "return_pct": round((closes[-1] / closes[0] - 1) * 100, 3),
-            "sources": sorted(sources), "price_basis": "as_returned_close_prices",
-            "adjustment": "unadjusted" if sources <= UNADJUSTED_SOURCES else "unknown",
-            "calendar_verified": False,
-            "date_price_binding": "start_date/start_close and end_date/end_close are inseparable observed pairs; do not infer another baseline date"}
+            "sources": sorted(sources), "price_basis": "as_returned_close_prices"}
 
 
 def kline_agent_view(payload):
@@ -42,8 +39,4 @@ def kline_agent_view(payload):
             if window is not None:
                 windows.append(window)
     return {**{key: value for key, value in payload.items() if key not in PERIOD_FIELDS},
-            "display_window_return": _window(bars), "return_windows": windows,
-            "calendar_verification": {
-                "status": "not_verified",
-                "reason": "Windows count available observations; no independent trading-calendar completeness check was performed.",
-            }}
+            "display_window_return": _window(bars), "return_windows": windows}
