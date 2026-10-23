@@ -17,6 +17,7 @@ from app.services.llm_provider import (
     NativeFunctionCallingUnavailable,
     get_llm_provider,
 )
+from app.services.agent_timing import timed
 
 
 SESSION_MEMORY_VERSION = "session-memory-v2"
@@ -156,6 +157,7 @@ def memory_prompt_payload(memory: ChatSessionMemory | None) -> dict[str, Any] | 
 
 
 # Try structured LLM summarization, then the supported fallback path for session memory.
+@timed("session_memory")
 def _generate_memory_draft(
     *,
     existing: ChatSessionMemory | None,

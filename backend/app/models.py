@@ -1613,6 +1613,35 @@ class AgentChatRequest(BaseModel):
     page_context: dict[str, str] = Field(default_factory=dict)
 
 
+class AgentTimingSpan(BaseModel):
+    id: int
+    parent_id: int | None = None
+    stage: str
+    purpose: str = "unspecified"
+    start_ms: float
+    end_ms: float
+    duration_ms: float
+    round: int | None = None
+    tool: str | None = None
+    operation: str | None = None
+    error_type: str | None = None
+
+
+class AgentTimingReport(BaseModel):
+    """Offsets from worker entry (runtime entry for direct calls).
+
+    Completed spans only; nested stage totals must not be added together.
+    """
+
+    version: int = 1
+    started_at: str
+    elapsed_ms: float
+    stage_duration_ms: dict[str, float] = Field(default_factory=dict)
+    spans: list[AgentTimingSpan] = Field(default_factory=list)
+    dropped_spans: int = 0
+    incomplete_spans: int = 0
+
+
 class AgentChatPerformance(BaseModel):
     """Measured latency and prompt sizes for one LLM-backed chat turn."""
 
@@ -1622,6 +1651,9 @@ class AgentChatPerformance(BaseModel):
     total_duration_ms: int = 0
     planner_prompt_chars: int = 0
     answer_prompt_chars: int = 0
+    # Response timing ends before final persistence; the timing trace snapshot
+    # additionally includes final persistence and usage-accounting durations.
+    timing: AgentTimingReport | None = None
 
 
 class AgentEvidenceCard(BaseModel):

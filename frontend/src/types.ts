@@ -604,6 +604,27 @@ export interface AgentChatPerformance {
   total_duration_ms: number;
   planner_prompt_chars: number;
   answer_prompt_chars: number;
+  timing?: {
+    version: number;
+    started_at: string;
+    elapsed_ms: number;
+    stage_duration_ms: Record<string, number>;
+    dropped_spans: number;
+    incomplete_spans: number;
+    spans: Array<{
+      id: number;
+      parent_id: number | null;
+      stage: string;
+      purpose: string;
+      start_ms: number;
+      end_ms: number;
+      duration_ms: number;
+      round: number | null;
+      tool: string | null;
+      operation: string | null;
+      error_type: string | null;
+    }>;
+  } | null;
 }
 
 export type AgentChatStreamStage = "preparing" | "planning" | "tools" | "checking" | "answering";
