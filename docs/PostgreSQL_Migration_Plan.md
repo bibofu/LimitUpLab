@@ -1,5 +1,7 @@
 # PostgreSQL 迁移与多实例基础改造：实施状态
 
+> 架构更新（2026-10-24）：SQLite 迁移/归档脚本和 `app/storage/migration.py` 已删除；本文为历史实施记录，当前运行时只使用 PostgreSQL。
+
 更新日期：2026-10-19。
 
 后续进展：当前 Windows 工作区及 `v1.6.1` 远程单实例生产环境均已正式切换至 PostgreSQL，最新 SQLite 数据导入、真实读写及数据库/后端重启和备份恢复验证已通过，原 SQLite 保留。详见 [本地切换验收](Local_PostgreSQL_Cutover.md) 和 [生产切换验收](../deploy/incidents/2026-10-19-postgresql-cutover.md)。多实例验收仍未执行，本轮未扩展多实例功能。

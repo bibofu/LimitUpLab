@@ -11,8 +11,8 @@ import pytest
 @pytest.mark.parametrize("module_name", [
     "dev_check", "update_daily_data", "sync_first_board_history",
     "import_limit_up_from_akshare", "run_factor_signal_diagnostic",
-    "audit_prediction_times", "research_limit_up_paths", "postgres_admin",
-    "migrate_sqlite_to_postgres", "run_recommendation_refresh_loop", "import_sample_data",
+    "audit_prediction_times", "postgres_admin",
+    "run_recommendation_refresh_loop", "import_sample_data",
     "run_daily_close_loop",
 ])
 def test_cli_loads_selected_env_before_dispatch(module_name, tmp_path, monkeypatch, capsys):

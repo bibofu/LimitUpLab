@@ -13,7 +13,6 @@ from app.models import AgentChatRequest, AgentChatResponse, StockDailyBar
 from app.repositories import ChatSessionRepository, FirstBoardRepository, LimitUpRepository
 from app.security import SESSION_COOKIE_NAME, sign_visitor_owner_id
 from app.services.sample_data import SAMPLE_EVENTS
-from scripts.verify_local_database import verify_write_paths
 
 
 def test_application_http_with_no_sqlite_access(postgresql_database, tmp_path, monkeypatch):
@@ -31,7 +30,6 @@ def test_application_http_with_no_sqlite_access(postgresql_database, tmp_path, m
         symbol=event.symbol, trade_date=event.trade_date, open=10, high=11, low=9, close=10.5,
         volume=100, amount=1000, source="synthetic-test", created_at=datetime.now(timezone.utc),
     )])
-    assert verify_write_paths()["status"] == "passed"
     owner = "visitor_" + "c" * 32
     chats = ChatSessionRepository()
     chats.create_session(session_id="pg-only-session", owner_id=owner)

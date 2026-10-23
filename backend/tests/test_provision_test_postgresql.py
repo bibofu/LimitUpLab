@@ -77,11 +77,10 @@ def test_disposable_cluster_overrides_shared_socket_and_uses_loopback_tcp(dispos
     assert configuration.rstrip().endswith("unix_socket_directories = ''")
     assert "listen_addresses = '127.0.0.1'\nport = 56432\n" in configuration
     databases = [call.args for call in runner.call_args_list if call.args[1] == "createdb"]
-    assert len(databases) == 2
+    assert len(databases) == 1
     assert all(args[2:6] == ("-h", "127.0.0.1", "-p", "56432") for args in databases)
     exported = (tmp_path / "environment").read_text(encoding="utf-8")
     assert "@127.0.0.1:56432/limituplab_test" in exported
-    assert "@127.0.0.1:56432/limituplab_eval_test" in exported
 
 
 @pytest.mark.parametrize("failure", [

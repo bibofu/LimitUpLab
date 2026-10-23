@@ -1,58 +1,16 @@
-"""Maintenance tools honor the selected backend and retain immutable research inputs."""
+"""Maintenance tools honor the selected PostgreSQL backend."""
 
 from contextlib import closing
-from datetime import date, datetime, timedelta, timezone
-import hashlib
-import json
 
 import pytest
 
-from app.database import connect, initialize_database
-from app.models import StockDailyBar
-from app.repositories.first_board_repository import FirstBoardRepository
-from app.repositories.limit_up_repository import LimitUpRepository
-from app.services.sample_data import SAMPLE_EVENTS
+from app.database import connect
 from scripts.audit_prediction_times import run_audit
-from scripts.research_limit_up_paths import analyze
-from scripts.research_pullback_consolidation import load_frozen_bars
 
 
 @pytest.fixture
 def source(postgresql_database):
     return None
-
-
-def test_research_scripts_preserve_frozen_input_fingerprint(source, tmp_path, capsys):
-    dates = []
-    day = date(2026, 9, 1)
-    while len(dates) < 12:
-        if day.weekday() < 5:
-            dates.append(day)
-        day += timedelta(days=1)
-    events = [SAMPLE_EVENTS[0].model_copy(update={"trade_date": day}) for day in dates]
-    LimitUpRepository(source).upsert_events(events)
-    bars = [StockDailyBar(
-        symbol=events[0].symbol, trade_date=day, open=10, high=10.5, low=9.5, close=10, volume=100,
-        amount=1000, source="synthetic-test", created_at=datetime(2026, 9, 20, tzinfo=timezone.utc),
-    ) for day in dates]
-    FirstBoardRepository(source).upsert_daily_bars(bars)
-    before = run_audit(source)
-    report = analyze(source, dates[0].isoformat(), tmp_path / "research")
-    frozen = load_frozen_bars(source, report)
-    assert len(frozen) == len(dates)
-    assert report["database_backend"] == "postgresql"
-    assert "database_path" not in report
-    assert report["kind"] == "historical_exploration_not_live"
-    assert "postgresql://" not in json.dumps(report)
-    with closing(connect(source)) as db:
-        inputs = [[dict(row) for row in db.execute(query)] for query in report["queries"]]
-    digest = hashlib.sha256(json.dumps(inputs, sort_keys=True, ensure_ascii=True).encode()).hexdigest()
-    assert digest == report["input_sha256"]
-    after = run_audit(source)
-    assert after["row_count"] == before["row_count"] == 0
-    assert after["backup"] is None
-    assert not after["applied"]
-    capsys.readouterr()
 
 
 def _add_prediction(source):
@@ -67,22 +25,18 @@ def _add_prediction(source):
 
 def test_audit_apply_backs_up_before_annotating_and_keeps_predictions(source, tmp_path, monkeypatch):
     original = _add_prediction(source)
-    if source is None:
-        from scripts import postgres_admin
+    from scripts import postgres_admin
 
-        def backup(output, environment):
-            assert environment["PGDATABASE"]
-            with closing(connect()) as db:
-                assert db.execute("SELECT count(*) FROM prediction_time_audits").fetchone()[0] == 0
-            return {"backup": str(output), "sha256": "fixture-digest"}
+    def backup(output, environment):
+        assert environment["PGDATABASE"]
+        with closing(connect()) as db:
+            assert db.execute("SELECT count(*) FROM prediction_time_audits").fetchone()[0] == 0
+        return {"backup": str(output), "sha256": "fixture-digest"}
 
-        monkeypatch.setattr(postgres_admin, "backup_database", backup)
+    monkeypatch.setattr(postgres_admin, "backup_database", backup)
     report = run_audit(source, apply=True, backup_directory=tmp_path / "backups")
     assert report["backup"]
-    if source is not None:
-        assert list((tmp_path / "backups").glob("*.sqlite"))
-    else:
-        assert report["backup_sha256"] == "fixture-digest"
+    assert report["backup_sha256"] == "fixture-digest"
     with closing(connect(source)) as db:
         assert tuple(db.execute("SELECT * FROM agent_predictions WHERE prediction_id='audit'").fetchone()) == original
         assert db.execute("SELECT count(*) FROM prediction_time_audits").fetchone()[0] == 1

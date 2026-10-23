@@ -1,18 +1,12 @@
 from __future__ import annotations
 
-import os
 import hashlib
-import sqlite3
 import shutil
 from contextlib import closing
-from datetime import datetime
-from pathlib import Path
-from zoneinfo import ZoneInfo
 
 import pytest
 
 from scripts import backup_database, postgres_admin
-from scripts.archive_sqlite import create_backup
 from scripts.backup_database import create_configured_backup, prune_postgres_backups
 
 
@@ -38,26 +32,6 @@ def test_real_postgres_backup_contains_committed_isolated_data(postgresql_databa
     assert result["archive_readable"] is True
 
 
-# Regression scenario: create backup copies database and restricts permissions.
-def test_create_backup_copies_database_and_restricts_permissions(tmp_path: Path) -> None:
-    source_path = tmp_path / "source.sqlite"
-    with sqlite3.connect(source_path) as connection:
-        connection.execute("CREATE TABLE samples (value TEXT NOT NULL)")
-        connection.execute("INSERT INTO samples VALUES ('kept')")
-
-    backup_path = create_backup(
-        source_path,
-        tmp_path / "backups",
-        now=datetime(2026, 8, 29, 3, 25, tzinfo=ZoneInfo("Asia/Shanghai")),
-    )
-
-    assert backup_path.name.startswith("limituplab-20260829-032500-")
-    assert backup_path.suffix == ".sqlite"
-    with sqlite3.connect(backup_path) as connection:
-        assert connection.execute("SELECT value FROM samples").fetchone() == ("kept",)
-        assert connection.execute("PRAGMA integrity_check").fetchone() == ("ok",)
-    if os.name == "posix":
-        assert backup_path.stat().st_mode & 0o777 == 0o600
 
 
 # Regression scenario: prune backups only removes older managed snapshots.
@@ -97,17 +71,6 @@ def test_configured_postgres_backup_does_not_open_sqlite(monkeypatch, tmp_path):
     assert calls[0][0].suffix == ".dump"
     assert "private" not in str(result)
     assert not missing.exists()
-
-
-def test_historical_archive_uses_separate_tool_without_postgres(tmp_path, monkeypatch):
-    monkeypatch.setenv("LIMITUPLAB_DATABASE_URL", "postgresql://unavailable/never-connect")
-    source = tmp_path / "archive.sqlite"
-    with sqlite3.connect(source) as connection:
-        connection.execute("CREATE TABLE retired (value TEXT)")
-        connection.execute("INSERT INTO retired VALUES ('kept')")
-    archive = create_backup(source, tmp_path / "backups")
-    with sqlite3.connect(archive) as connection:
-        assert connection.execute("SELECT value FROM retired").fetchone() == ("kept",)
 
 
 def test_invalid_configured_url_fails_without_sqlite_fallback(tmp_path, monkeypatch):
