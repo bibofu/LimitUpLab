@@ -19,25 +19,25 @@ from app.agent_presentation import (
 class LimitUpEvent(BaseModel):
     """One stock's daily limit-up or failed limit-up event."""
 
-    symbol: str = Field(examples=["600519"])
-    name: str = Field(examples=["贵州茅台"])
-    trade_date: date
-    first_limit_time: time
-    last_limit_time: time
-    seal_count: int
-    break_count: int
-    closed_limit: bool
-    board_height: int
-    amount: float = Field(description="Turnover amount in CNY.")
-    turnover_rate: float = Field(description="Turnover rate percentage.")
-    industry: str
-    concept: str
-    next_open_pct: float
-    next_high_pct: float
-    next_close_pct: float
-    three_day_return_pct: float
-    five_day_return_pct: float
-    continued_next_day: bool
+    symbol: str = Field(examples=["600519"], description="股票代码")
+    name: str = Field(examples=["贵州茅台"], description="股票名称")
+    trade_date: date = Field(description="涨停事件交易日")
+    first_limit_time: time = Field(description="首次封板时间")
+    last_limit_time: time = Field(description="最后封板时间")
+    seal_count: int = Field(description="封板次数")
+    break_count: int = Field(description="开板/炸板次数；不是连板高度")
+    closed_limit: bool = Field(description="收盘是否封住涨停")
+    board_height: int = Field(description="连板高度，1为首板")
+    amount: float = Field(description="成交金额（元）")
+    turnover_rate: float = Field(description="换手率（%）")
+    industry: str = Field(description="所属行业")
+    concept: str = Field(description="所属概念/题材")
+    next_open_pct: float = Field(description="次日开盘涨跌幅（%）")
+    next_high_pct: float = Field(description="次日最高价涨跌幅（%）")
+    next_close_pct: float = Field(description="次日收盘涨跌幅（%）")
+    three_day_return_pct: float = Field(description="后续3日累计涨跌幅（%）")
+    five_day_return_pct: float = Field(description="后续5日累计涨跌幅（%）")
+    continued_next_day: bool = Field(description="次日是否继续涨停")
 
 
 class MarketIndexSnapshot(BaseModel):
@@ -63,30 +63,30 @@ class MarketIndexTrendPoint(BaseModel):
 class MarketIndexTrendItem(BaseModel):
     """One major index's objective performance over a requested window."""
 
-    name: str
-    symbol: str
-    start_date: date
-    end_date: date
-    start_close: float
-    end_close: float
+    name: str = Field(description="指数名称")
+    symbol: str = Field(description="指数代码")
+    start_date: date = Field(description="区间第一个交易日")
+    end_date: date = Field(description="区间最后一个交易日")
+    start_close: float = Field(description="区间首个收盘点位")
+    end_close: float = Field(description="区间最后收盘点位")
     change_pct: float | None = Field(default=None,
-        description="Latest trading day's close-to-previous-close change, percent; not the window return.")
-    return_pct: float
-    max_drawdown_pct: float
-    positive_days: int
-    negative_days: int
-    points: list[MarketIndexTrendPoint]
-    source: str
+        description="截止交易日相对上一交易日的点位变化（%）；不是区间收益")
+    return_pct: float = Field(description="区间累计点位涨跌幅（%）")
+    max_drawdown_pct: float = Field(description="区间内峰谷最大回撤（%）")
+    positive_days: int = Field(description="区间上涨交易日数")
+    negative_days: int = Field(description="区间下跌交易日数")
+    points: list[MarketIndexTrendPoint] = Field(description="逐日收盘序列，每项含trade_date、close、change_pct")
+    source: str = Field(description="指数数据来源")
 
 
 class MarketIndexTrendFacts(BaseModel):
     """Tool-ready trend facts for the main A-share indices."""
 
-    requested_days: int
-    requested_end_date: date
-    data_as_of: date
-    data_fresh: bool
-    indices: list[MarketIndexTrendItem]
+    requested_days: int = Field(description="请求的交易日窗口长度")
+    requested_end_date: date = Field(description="请求的截止交易日")
+    data_as_of: date = Field(description="实际数据截止交易日")
+    data_fresh: bool = Field(description="数据是否覆盖请求的截止交易日")
+    indices: list[MarketIndexTrendItem] = Field(description="三大指数走势")
 
 
 class SectorHistoryPoint(BaseModel):
@@ -100,107 +100,107 @@ class SectorHistoryPoint(BaseModel):
 class SectorRankingItem(BaseModel):
     """Compact sector ranking row from the latest market snapshot."""
 
-    sector_name: str
-    rank: int
-    change_pct: float
-    amount_yi: float | None = None
-    up_count: int | None = None
-    down_count: int | None = None
-    leader_name: str | None = None
-    leader_change_pct: float | None = None
+    sector_name: str = Field(description="板块名称")
+    rank: int = Field(description="当前目录中的涨跌幅排名")
+    change_pct: float = Field(description="板块涨跌幅（%）")
+    amount_yi: float | None = Field(default=None, description="板块成交额（亿元）")
+    up_count: int | None = Field(default=None, description="板块内上涨家数")
+    down_count: int | None = Field(default=None, description="板块内下跌家数")
+    leader_name: str | None = Field(default=None, description="领涨股名称")
+    leader_change_pct: float | None = Field(default=None, description="领涨股涨跌幅（%）")
 
 
 class SectorPerformanceFacts(BaseModel):
     """Tool-ready industry performance, breadth, ranking and recent trend facts."""
 
-    requested_sector: str | None = None
-    sector_name: str | None = None
-    sector_type: Literal["industry", "concept", "industry_group"] = "industry"
-    trade_date: date
-    data_as_of: date
-    data_fresh: bool
-    previous_trade_date: date | None = None
-    covered_sector_count: int | None = None
-    ranking_complete: bool | None = None
-    ranking_universe: str | None = None
-    data_missing: list[str] = Field(default_factory=list)
-    rank: int | None = None
-    sector_count: int
-    change_pct: float | None = None
-    amount_yi: float | None = None
-    net_inflow_yi: float | None = None
-    up_count: int | None = None
-    down_count: int | None = None
-    leader_name: str | None = None
-    leader_price: float | None = None
-    leader_change_pct: float | None = None
-    return_5d_pct: float | None = None
-    return_20d_pct: float | None = None
-    top_sectors: list[SectorRankingItem] = Field(default_factory=list)
-    bottom_sectors: list[SectorRankingItem] = Field(default_factory=list)
-    matched_sectors: list[SectorRankingItem] = Field(default_factory=list)
-    history: list[SectorHistoryPoint] = Field(default_factory=list)
-    sources: list[str] = Field(default_factory=list)
+    requested_sector: str | None = Field(default=None, description="请求的板块名")
+    sector_name: str | None = Field(default=None, description="解析后的板块名")
+    sector_type: Literal["industry", "concept", "industry_group"] = Field(default="industry", description="板块类型：industry、concept或industry_group")
+    trade_date: date = Field(description="请求的观察交易日")
+    data_as_of: date = Field(description="实际数据截止交易日")
+    data_fresh: bool = Field(description="数据是否覆盖请求日期")
+    previous_trade_date: date | None = Field(default=None, description="用于涨跌对比的前一交易日")
+    covered_sector_count: int | None = Field(default=None, description="本次排名覆盖的板块数")
+    ranking_complete: bool | None = Field(default=None, description="排名目录是否完整覆盖目标日")
+    ranking_universe: str | None = Field(default=None, description="排名目录口径说明")
+    data_missing: list[str] = Field(default_factory=list, description="数据缺口")
+    rank: int | None = Field(default=None, description="指定板块的排名")
+    sector_count: int = Field(description="排名目录板块总数")
+    change_pct: float | None = Field(default=None, description="指定板块涨跌幅（%）")
+    amount_yi: float | None = Field(default=None, description="指定板块成交额（亿元）")
+    net_inflow_yi: float | None = Field(default=None, description="指定板块资金净流入（亿元）")
+    up_count: int | None = Field(default=None, description="指定板块上涨家数")
+    down_count: int | None = Field(default=None, description="指定板块下跌家数")
+    leader_name: str | None = Field(default=None, description="指定板块领涨股")
+    leader_price: float | None = Field(default=None, description="领涨股价格（元）")
+    leader_change_pct: float | None = Field(default=None, description="领涨股涨跌幅（%）")
+    return_5d_pct: float | None = Field(default=None, description="指定板块5日区间收益（%）")
+    return_20d_pct: float | None = Field(default=None, description="指定板块20日区间收益（%）")
+    top_sectors: list[SectorRankingItem] = Field(default_factory=list, description="涨跌幅靠前板块")
+    bottom_sectors: list[SectorRankingItem] = Field(default_factory=list, description="涨跌幅靠后板块")
+    matched_sectors: list[SectorRankingItem] = Field(default_factory=list, description="名称匹配的板块")
+    history: list[SectorHistoryPoint] = Field(default_factory=list, description="指定板块逐日历史，每项含trade_date、close、change_pct")
+    sources: list[str] = Field(default_factory=list, description="数据来源")
 
 
 class SectorStockTrendItem(BaseModel):
     """One sector constituent ranked by deterministic close-based trend facts."""
 
-    rank: int
-    symbol: str
-    name: str
-    trend_score: float
-    trend: Literal["rising", "oscillating", "falling", "insufficient"]
-    data_as_of: date
-    latest_close: float
-    return_5d_pct: float | None = None
-    return_20d_pct: float | None = None
-    ma5: float | None = None
-    ma10: float | None = None
-    ma20: float | None = None
-    volume_ratio_5d: float | None = None
-    max_drawdown_pct: float | None = None
+    rank: int = Field(description="本次趋势比较排名")
+    symbol: str = Field(description="股票代码")
+    name: str = Field(description="股票名称")
+    trend_score: float = Field(description="趋势综合分")
+    trend: Literal["rising", "oscillating", "falling", "insufficient"] = Field(description="趋势标签：rising、oscillating、falling或insufficient")
+    data_as_of: date = Field(description="该股数据截止交易日")
+    latest_close: float = Field(description="最新收盘价（元）")
+    return_5d_pct: float | None = Field(default=None, description="5日区间涨跌幅（%）")
+    return_20d_pct: float | None = Field(default=None, description="20日区间涨跌幅（%）")
+    ma5: float | None = Field(default=None, description="5日均线（元）")
+    ma10: float | None = Field(default=None, description="10日均线（元）")
+    ma20: float | None = Field(default=None, description="20日均线（元）")
+    volume_ratio_5d: float | None = Field(default=None, description="近5日量比")
+    max_drawdown_pct: float | None = Field(default=None, description="区间最大回撤（%）")
 
 
 class SectorStockRankingFacts(BaseModel):
     """A bounded, auditable trend ranking for one industry or concept."""
 
-    requested_sector: str
-    sector_name: str
-    sector_category: Literal["industry", "concept"]
-    sector_thscode: str
-    requested_days: int
-    requested_limit: int
-    data_as_of: date
-    member_count: int
-    analyzed_count: int
-    missing_count: int
-    truncated_count: int
-    items: list[SectorStockTrendItem] = Field(default_factory=list)
-    sources: list[str] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
+    requested_sector: str = Field(description="请求的板块名")
+    sector_name: str = Field(description="解析后的板块名")
+    sector_category: Literal["industry", "concept"] = Field(description="板块类别：industry或concept")
+    sector_thscode: str = Field(description="板块数据源标识")
+    requested_days: int = Field(description="趋势比较窗口")
+    requested_limit: int = Field(description="请求返回数量")
+    data_as_of: date = Field(description="数据截止交易日")
+    member_count: int = Field(description="板块成分股总数")
+    analyzed_count: int = Field(description="完成趋势比较的股票数")
+    missing_count: int = Field(description="因数据缺失未比较的股票数")
+    truncated_count: int = Field(description="因数量上限未返回的股票数")
+    items: list[SectorStockTrendItem] = Field(default_factory=list, description="趋势排名")
+    sources: list[str] = Field(default_factory=list, description="数据来源")
+    warnings: list[str] = Field(default_factory=list, description="覆盖范围说明")
 
 
 class FinanceNewsItem(BaseModel):
     """One timestamped item from a structured financial-news feed."""
 
-    title: str
-    summary: str
-    published_at: datetime
-    source: str
-    url: str
-    category: str
-    relevance_score: float
+    title: str = Field(description="新闻标题")
+    summary: str = Field(description="新闻摘要")
+    published_at: datetime = Field(description="发布时间")
+    source: str = Field(description="来源")
+    url: str = Field(description="原文链接")
+    category: str = Field(description="新闻类别")
+    relevance_score: float = Field(description="与查询主题的相关性分数")
 
 
 class FinanceNewsFacts(BaseModel):
     """Recent financial-news facts aggregated for an Agent answer."""
 
-    query: str | None = None
-    fetched_at: datetime
-    window_hours: int
-    sources: list[str] = Field(default_factory=list)
-    items: list[FinanceNewsItem] = Field(default_factory=list)
+    query: str | None = Field(default=None, description="主题词；仅用于排序加权")
+    fetched_at: datetime = Field(description="抓取时间")
+    window_hours: int = Field(description="按抓取时间回溯的小时数")
+    sources: list[str] = Field(default_factory=list, description="聚合来源")
+    items: list[FinanceNewsItem] = Field(default_factory=list, description="去重后的财经快讯")
 
 
 class FinanceNewsPage(BaseModel):
@@ -222,29 +222,29 @@ class FinanceNewsPage(BaseModel):
 class StockNewsItem(BaseModel):
     """One stock-specific article normalized from a structured provider."""
 
-    symbol: str
-    name: str
-    title: str
-    summary: str
-    published_at: datetime
-    source: str
-    url: str
-    item_type: str
-    relevance_score: float
-    fetched_at: datetime
+    symbol: str = Field(description="股票代码")
+    name: str = Field(description="股票名称")
+    title: str = Field(description="新闻标题")
+    summary: str = Field(description="新闻摘要")
+    published_at: datetime = Field(description="发布时间")
+    source: str = Field(description="来源")
+    url: str = Field(description="原文链接")
+    item_type: str = Field(description="条目类型，如新闻或公告")
+    relevance_score: float = Field(description="相关性分数")
+    fetched_at: datetime = Field(description="抓取时间")
 
 
 class StockNewsFacts(BaseModel):
     """Recent news evidence for one resolved A-share stock."""
 
-    symbol: str
-    name: str
-    fetched_at: datetime
-    window_days: int
-    cache_status: str
-    sources: list[str] = Field(default_factory=list)
-    items: list[StockNewsItem] = Field(default_factory=list)
-    data_missing: list[str] = Field(default_factory=list)
+    symbol: str = Field(description="股票代码")
+    name: str = Field(description="股票名称")
+    fetched_at: datetime = Field(description="抓取时间")
+    window_days: int = Field(description="回溯自然日数")
+    cache_status: str = Field(description="缓存状态")
+    sources: list[str] = Field(default_factory=list, description="新闻来源")
+    items: list[StockNewsItem] = Field(default_factory=list, description="个股新闻")
+    data_missing: list[str] = Field(default_factory=list, description="数据缺口")
 
 
 class RecommendationFinancialReport(BaseModel):
@@ -362,57 +362,57 @@ class RecommendationIntelligenceResponse(BaseModel):
 class StockKLineBar(BaseModel):
     """Daily OHLCV bar for stock detail review."""
 
-    trade_date: date
-    open: float
-    close: float
-    high: float
-    low: float
-    volume: float
-    amount: float = 0
-    source: str = "unknown"
-    change_pct: float | None = None
-    previous_close: float | None = None
-    previous_trade_date: date | None = None
-    change_pct_basis: Literal["source"] | None = None
+    trade_date: date = Field(description="交易日")
+    open: float = Field(description="开盘价（元）")
+    close: float = Field(description="收盘价（元）")
+    high: float = Field(description="最高价（元）")
+    low: float = Field(description="最低价（元）")
+    volume: float = Field(description="成交量，沿用来源单位；不是成交金额")
+    amount: float = Field(default=0, description="成交额（元）")
+    source: str = Field(default="unknown", description="该条K线的数据来源")
+    change_pct: float | None = Field(default=None, description="来源返回的单日涨跌幅；缺失时不得用未复权收盘价变动率代替（%）")
+    previous_close: float | None = Field(default=None, description="前一交易日收盘价（元）")
+    previous_trade_date: date | None = Field(default=None, description="前一交易日")
+    change_pct_basis: Literal["source"] | None = Field(default=None, description="change_pct的来源口径")
     close_to_close_pct: float | None = Field(default=None,
-        description="Unadjusted close-to-close price change, not the provider daily percentage on ex-right dates.")
+        description="相邻有效记录的未复权收盘价变动率（%）；基准见previous_close，不等于来源日涨跌幅change_pct")
 
 
 class StockKLineFacts(BaseModel):
     """Tool-ready K-line facts and derived trend indicators for one stock."""
 
-    symbol: str
-    requested_days: int
-    requested_end_date: date
-    data_as_of: date
-    data_fresh: bool
-    trend: Literal["rising", "falling", "oscillating", "insufficient"]
-    latest_close: float
-    return_5d_pct: float | None = None
-    return_10d_pct: float | None = None
-    return_20d_pct: float | None = None
-    ma5: float | None = None
-    ma10: float | None = None
-    ma20: float | None = None
-    volume_ratio_5d: float | None = None
-    max_drawdown_pct: float | None = None
-    sources: list[str] = Field(default_factory=list)
-    bars: list[StockKLineBar] = Field(default_factory=list)
-    data_missing: list[str] = Field(default_factory=list)
+    symbol: str = Field(description="股票代码")
+    requested_days: int = Field(description="请求的观察交易日数")
+    requested_end_date: date = Field(description="请求的截止交易日")
+    data_as_of: date = Field(description="实际数据截止交易日")
+    data_fresh: bool = Field(description="数据是否覆盖请求截止日")
+    trend: Literal["rising", "falling", "oscillating", "insufficient"] = Field(description="均线排列标签：rising、falling、oscillating或insufficient")
+    latest_close: float = Field(description="最新收盘价（元）")
+    return_5d_pct: float | None = Field(default=None, description="5个交易日区间涨跌幅（%）")
+    return_10d_pct: float | None = Field(default=None, description="10个交易日区间涨跌幅（%）")
+    return_20d_pct: float | None = Field(default=None, description="20个交易日区间涨跌幅（%）")
+    ma5: float | None = Field(default=None, description="5日均线（元）")
+    ma10: float | None = Field(default=None, description="10日均线（元）")
+    ma20: float | None = Field(default=None, description="20日均线（元）")
+    volume_ratio_5d: float | None = Field(default=None, description="近5日量比")
+    max_drawdown_pct: float | None = Field(default=None, description="展示窗口内峰谷最大回撤（%）")
+    sources: list[str] = Field(default_factory=list, description="K线来源")
+    bars: list[StockKLineBar] = Field(default_factory=list, description="日K线")
+    data_missing: list[str] = Field(default_factory=list, description="数据缺口")
 
 
 class StockActivityFacts(BaseModel):
     """After-close activity evidence assembled for one A-share stock."""
 
-    symbol: str
-    name: str
-    fetched_at: datetime
-    data_as_of: date | None = None
-    kline: StockKLineFacts | None = None
-    recent_limit_up_events: list[dict[str, Any]] = Field(default_factory=list)
-    rating_context: dict[str, Any] = Field(default_factory=dict)
-    news: StockNewsFacts
-    data_missing: list[str] = Field(default_factory=list)
+    symbol: str = Field(description="股票代码")
+    name: str = Field(description="股票名称")
+    fetched_at: datetime = Field(description="汇总抓取时间")
+    data_as_of: date | None = Field(default=None, description="K线数据截止交易日")
+    kline: StockKLineFacts | None = Field(default=None, description="K线事实，字段含义同stock_kline")
+    recent_limit_up_events: list[dict[str, Any]] = Field(default_factory=list, description="近期涨停记录，每项含trade_date、board_height、closed_limit、first_limit_time、break_count、industry、concept")
+    rating_context: dict[str, Any] = Field(default_factory=dict, description="首板评分补充事实，含流通市值、量比、20日涨幅、龙虎榜和人氣排名")
+    news: StockNewsFacts = Field(description="个股新闻，字段含义同stock_news")
+    data_missing: list[str] = Field(default_factory=list, description="数据缺口")
 
 
 class StockIntradayKLineBar(BaseModel):
@@ -563,24 +563,24 @@ class BoardPromotionStock(BaseModel):
 class DailyBoardPromotionStat(BaseModel):
     """Daily empirical promotion rates based on two adjacent trading dates."""
 
-    trade_date: date
-    previous_trade_date: date
-    sample_size: int
-    promoted_count: int
-    probability: float
-    first_board_sample_size: int
-    first_board_promoted_count: int
-    first_board_probability: float | None = None
-    continued_board_sample_size: int
-    continued_board_promoted_count: int
-    continued_board_probability: float | None = None
-    buckets: list[BoardPromotionBucket]
-    promoted_stocks: list[BoardPromotionStock]
-    first_board_opening_evaluable_count: int = 0
-    first_board_high_open_count: int = 0
-    first_board_flat_open_count: int = 0
-    first_board_low_open_count: int = 0
-    first_board_opening_missing_symbols: list[str] = Field(default_factory=list)
+    trade_date: date = Field(description="本次晋级观察交易日")
+    previous_trade_date: date = Field(description="用于分母的前一交易日")
+    sample_size: int = Field(description="前一交易日收盘涨停股票数")
+    promoted_count: int = Field(description="本次晋级一板的股票数")
+    probability: float = Field(description="总晋级率（%）")
+    first_board_sample_size: int = Field(description="前一交易日首板样本数")
+    first_board_promoted_count: int = Field(description="首板晋级二板股票数")
+    first_board_probability: float | None = Field(default=None, description="首板到二板晋级率（%）")
+    continued_board_sample_size: int = Field(description="前一交易日连板样本数")
+    continued_board_promoted_count: int = Field(description="连板继续晋级股票数")
+    continued_board_probability: float | None = Field(default=None, description="连板梯队晋级率（%）")
+    buckets: list[BoardPromotionBucket] = Field(description="按板数分组的晋级桶，每项含from_board_height、to_board_height、sample_size、promoted_count、probability")
+    promoted_stocks: list[BoardPromotionStock] = Field(description="晋级成功股票，每项含symbol、name、industry、concept、from_board_height、to_board_height、first_limit_time、break_count及开盘表现")
+    first_board_opening_evaluable_count: int = Field(default=0, description="首板晋级中可评价次日开盘类型的样本数")
+    first_board_high_open_count: int = Field(default=0, description="首板晋级中高开样本数")
+    first_board_flat_open_count: int = Field(default=0, description="首板晋级中平开样本数")
+    first_board_low_open_count: int = Field(default=0, description="首板晋级中低开样本数")
+    first_board_opening_missing_symbols: list[str] = Field(default_factory=list, description="缺少次日开盘数据、未参与开盘类型统计的股票代码")
 
 
 class DailyBoardPromotionReport(BaseModel):
@@ -888,16 +888,16 @@ class FirstBoardRatingsResponse(BaseModel):
 class ScoringPolicy(BaseModel):
     """Versioned first-board scoring weights and promotion metadata."""
 
-    version: str
-    parent_version: str | None = None
-    status: Literal["champion", "challenger", "archived"]
-    factor_weights: dict[str, float]
-    source: Literal["default", "optimizer", "manual"] = "default"
-    rationale: list[str] = Field(default_factory=list)
-    training_start_date: date | None = None
-    training_end_date: date | None = None
-    created_at: datetime
-    activated_at: datetime | None = None
+    version: str = Field(description="策略版本")
+    parent_version: str | None = Field(default=None, description="父策略版本")
+    status: Literal["champion", "challenger", "archived"] = Field(description="策略状态：champion、challenger或archived")
+    factor_weights: dict[str, float] = Field(description="评分因子权重，总和为100")
+    source: Literal["default", "optimizer", "manual"] = Field(default="default", description="策略来源：default、optimizer或manual")
+    rationale: list[str] = Field(default_factory=list, description="策略说明")
+    training_start_date: date | None = Field(default=None, description="训练起始日")
+    training_end_date: date | None = Field(default=None, description="训练截止日")
+    created_at: datetime = Field(description="创建时间")
+    activated_at: datetime | None = Field(default=None, description="启用时间")
 
     @model_validator(mode="after")
     def validate_weights(self) -> "ScoringPolicy":
@@ -1052,33 +1052,33 @@ class PredictionQualityPolicyStatus(BaseModel):
 class PredictionQualityAuditResponse(BaseModel):
     """Auditable prediction coverage, benchmark and policy-readiness report."""
 
-    start_date: date
-    end_date: date
-    latest_trade_date: date
-    audited_scoring_version: str
-    top_k: int
-    raw_prediction_rows: int
-    audited_prediction_rows: int
-    canonical_prediction_count: int
-    cross_cohort_duplicate_rows: int
-    data_as_of_violation_count: int
-    prediction_trade_date_count: int
-    next_day_mature_trade_date_count: int
-    complete_next_day_trade_date_count: int
-    next_day_outcome_coverage_rate: float
-    three_day_outcome_coverage_rate: float
-    cohorts: list[PredictionQualityCohort]
-    date_coverage: list[PredictionDateCoverage]
-    benchmarks: list[PredictionBenchmarkMetrics]
-    benchmark_cohorts: dict[str, list[PredictionBenchmarkMetrics]] = Field(default_factory=dict)
-    time_cohort_counts: dict[str, int] = Field(default_factory=dict)
-    excluded_time_prediction_count: int = 0
-    strict_forward_prediction_count: int = 0
-    policy_status: PredictionQualityPolicyStatus
-    findings: list[str]
-    recommendations: list[str]
-    warnings: list[str] = Field(default_factory=list)
-    generated_by: str
+    start_date: date = Field(description="审计起始日")
+    end_date: date = Field(description="审计截止日")
+    latest_trade_date: date = Field(description="本地最新交易日")
+    audited_scoring_version: str = Field(description="被审计评分版本")
+    top_k: int = Field(description="Top K口径")
+    raw_prediction_rows: int = Field(description="原始预测行数")
+    audited_prediction_rows: int = Field(description="纳入审计的预测行数")
+    canonical_prediction_count: int = Field(description="去重后的预测数")
+    cross_cohort_duplicate_rows: int = Field(description="跨来源/版本重复行数")
+    data_as_of_violation_count: int = Field(description="数据时点违规行数")
+    prediction_trade_date_count: int = Field(description="预测交易日数")
+    next_day_mature_trade_date_count: int = Field(description="次日结果成熟交易日数")
+    complete_next_day_trade_date_count: int = Field(description="次日结果完整交易日数")
+    next_day_outcome_coverage_rate: float = Field(description="次日结果覆盖率（%）")
+    three_day_outcome_coverage_rate: float = Field(description="3日结果覆盖率（%）")
+    cohorts: list[PredictionQualityCohort] = Field(description="按来源或评分版本分组的覆盖")
+    date_coverage: list[PredictionDateCoverage] = Field(description="逐预测日的结果成熟度")
+    benchmarks: list[PredictionBenchmarkMetrics] = Field(description="确定性基线表现")
+    benchmark_cohorts: dict[str, list[PredictionBenchmarkMetrics]] = Field(default_factory=dict, description="按分组拆分的基线")
+    time_cohort_counts: dict[str, int] = Field(default_factory=dict, description="时间分组计数")
+    excluded_time_prediction_count: int = Field(default=0, description="因时间不可验证被排除的预测数")
+    strict_forward_prediction_count: int = Field(default=0, description="严格前向预测数")
+    policy_status: PredictionQualityPolicyStatus = Field(description="Champion/Challenger晋级状态")
+    findings: list[str] = Field(description="审计发现")
+    recommendations: list[str] = Field(description="改进建议")
+    warnings: list[str] = Field(default_factory=list, description="边界警告")
+    generated_by: str = Field(description="生成来源")
 
 
 class RatingBacktestBucket(BaseModel):
@@ -1123,16 +1123,16 @@ class RatingBacktestFailureSample(BaseModel):
 class RatingBacktestResponse(BaseModel):
     """Self-evaluation summary for first-board ratings over a date range."""
 
-    start_date: date
-    end_date: date
-    trade_dates: list[date]
-    sample_size: int
-    outcome_ready_count: int
-    buckets: list[RatingBacktestBucket]
-    failure_samples: list[RatingBacktestFailureSample]
-    observations: list[str]
-    warnings: list[str] = Field(default_factory=list)
-    generated_by: str
+    start_date: date = Field(description="回测起始日")
+    end_date: date = Field(description="回测截止日")
+    trade_dates: list[date] = Field(description="回测交易日")
+    sample_size: int = Field(description="样本数")
+    outcome_ready_count: int = Field(description="后续结果可用样本数")
+    buckets: list[RatingBacktestBucket] = Field(description="按A/B/C/D分桶的表现，含样本数、次日和3日收益、晋级率")
+    failure_samples: list[RatingBacktestFailureSample] = Field(description="高评分但后续表现较弱的样本，含symbol、name、trade_date、rating、score、收益和原因")
+    observations: list[str] = Field(description="评分自我评价")
+    warnings: list[str] = Field(default_factory=list, description="边界警告")
+    generated_by: str = Field(description="生成来源")
 
 
 class FactorSignalDiagnosticRow(BaseModel):
@@ -1257,21 +1257,21 @@ class ScoringErrorDiagnosticResponse(BaseModel):
 class FirstBoardCriticResponse(BaseModel):
     """Critic review for one first-board rating without changing the score."""
 
-    symbol: str
-    name: str
-    trade_date: date
-    rating: str
-    score: float
-    original_confidence: float
-    suggested_confidence: float
-    confidence_delta: float
-    verdict: Literal["supportive", "cautious", "fragile"]
-    support_evidence: list[str]
-    counter_evidence: list[str]
-    missing_data: list[str]
-    critic_warnings: list[str]
-    review_questions: list[str]
-    generated_by: str
+    symbol: str = Field(description="股票代码")
+    name: str = Field(description="股票名称")
+    trade_date: date = Field(description="首板交易日")
+    rating: str = Field(description="原评级")
+    score: float = Field(description="原评分")
+    original_confidence: float = Field(description="原置信度")
+    suggested_confidence: float = Field(description="建议置信度")
+    confidence_delta: float = Field(description="建议置信度变化")
+    verdict: Literal["supportive", "cautious", "fragile"] = Field(description="复核结论：supportive、cautious或fragile")
+    support_evidence: list[str] = Field(description="支持证据")
+    counter_evidence: list[str] = Field(description="反证")
+    missing_data: list[str] = Field(description="缺失数据")
+    critic_warnings: list[str] = Field(description="复核警告")
+    review_questions: list[str] = Field(description="需要继续核实的问题")
+    generated_by: str = Field(description="生成来源")
 
 
 class AgentPrediction(BaseModel):
@@ -1297,17 +1297,17 @@ class AgentPrediction(BaseModel):
 class AgentEvaluationItem(BaseModel):
     """Post-outcome evaluation for one persisted first-board prediction."""
 
-    prediction_id: str
-    trade_date: date
-    symbol: str
-    name: str
-    score: float
-    rating: str
-    confidence: float
-    prediction_source: Literal["live", "historical_backtest"]
-    data_as_of: date
-    time_cohort: str = "unverified"
-    scoring_version: str | None = None
+    prediction_id: str = Field(description="预测记录ID")
+    trade_date: date = Field(description="预测交易日")
+    symbol: str = Field(description="股票代码")
+    name: str = Field(description="股票名称")
+    score: float = Field(description="首板评分")
+    rating: str = Field(description="首板评级")
+    confidence: float = Field(description="评级置信度")
+    prediction_source: Literal["live", "historical_backtest"] = Field(description="预测来源：live或historical_backtest")
+    data_as_of: date = Field(description="预测数据截止日")
+    time_cohort: str = Field(default="unverified", description="时间分组")
+    scoring_version: str | None = Field(default=None, description="评分版本")
     evaluation_label: Literal[
         "success",
         "partial",
@@ -1315,37 +1315,37 @@ class AgentEvaluationItem(BaseModel):
         "avoid_success",
         "false_negative",
         "pending",
-    ]
-    outcome_ready: bool
-    promoted_to_second_board: bool
-    next_high_pct: float | None = None
-    next_close_pct: float | None = None
-    next_open_to_high_pct: float | None = None
-    next_open_to_low_pct: float | None = None
-    next_open_to_close_pct: float | None = None
-    three_day_high_pct: float | None = None
-    three_day_close_pct: float | None = None
-    three_day_open_to_close_pct: float | None = None
-    max_drawdown_from_next_open_3d: float | None = None
-    lesson: str
-    scoring_suggestion: str
+    ] = Field(description="评价标签：success、partial、miss、avoid_success、false_negative或pending")
+    outcome_ready: bool = Field(description="后续结果是否可用")
+    promoted_to_second_board: bool = Field(description="是否晋级二板")
+    next_high_pct: float | None = Field(default=None, description="次日最高价涨跌幅（%）")
+    next_close_pct: float | None = Field(default=None, description="次日收盘涨跌幅（%）")
+    next_open_to_high_pct: float | None = Field(default=None, description="次日开盘到最高涨跌幅（%）")
+    next_open_to_low_pct: float | None = Field(default=None, description="次日开盘到最低涨跌幅（%）")
+    next_open_to_close_pct: float | None = Field(default=None, description="次日开盘到收盘涨跌幅（%）")
+    three_day_high_pct: float | None = Field(default=None, description="3日最高价涨跌幅（%）")
+    three_day_close_pct: float | None = Field(default=None, description="3日收盘涨跌幅（%）")
+    three_day_open_to_close_pct: float | None = Field(default=None, description="3日开盘到收盘涨跌幅（%）")
+    max_drawdown_from_next_open_3d: float | None = Field(default=None, description="次日开盘后3日最大回撤（%）")
+    lesson: str = Field(description="该样本的经验总结")
+    scoring_suggestion: str = Field(description="评分改进建议")
 
 
 class AgentEvaluationResponse(BaseModel):
     """Evaluation Agent summary for persisted first-board predictions."""
 
-    start_date: date
-    end_date: date
-    prediction_count: int
-    outcome_ready_count: int
-    source_counts: dict[str, int]
-    time_cohort_counts: dict[str, int] = Field(default_factory=dict)
-    excluded_time_prediction_count: int = 0
-    label_counts: dict[str, int]
-    evaluations: list[AgentEvaluationItem]
-    summary: list[str]
-    warnings: list[str] = Field(default_factory=list)
-    generated_by: str
+    start_date: date = Field(description="评价起始日")
+    end_date: date = Field(description="评价截止日")
+    prediction_count: int = Field(description="预测记录数")
+    outcome_ready_count: int = Field(description="结果可用记录数")
+    source_counts: dict[str, int] = Field(description="按预测来源计数")
+    time_cohort_counts: dict[str, int] = Field(default_factory=dict, description="按时间分组计数")
+    excluded_time_prediction_count: int = Field(default=0, description="因时间不可验证被排除的记录数")
+    label_counts: dict[str, int] = Field(description="按评价标签计数")
+    evaluations: list[AgentEvaluationItem] = Field(description="逐条评价")
+    summary: list[str] = Field(description="评价摘要")
+    warnings: list[str] = Field(default_factory=list, description="边界警告")
+    generated_by: str = Field(description="生成来源")
 
 
 class ReviewAgentPick(BaseModel):
@@ -1438,42 +1438,42 @@ class ReviewFeatureSummary(BaseModel):
 class ReviewAgentReportResponse(BaseModel):
     """LLM tool-driven review report for high-score first-board picks."""
 
-    generation_mode: Literal["llm", "deterministic", "legacy"] = "legacy"
-    llm_model: str | None = None
-    generation_note: str | None = None
-    review_digest: ReviewDigest | None = None
-    feature_summary: ReviewFeatureSummary | None = None
-    feature_research: ReviewFeatureResearch | None = None
-    summary_insights: list[ReviewInsight] = Field(default_factory=list)
-    summary_headline: str | None = None
-    start_date: date
-    end_date: date
-    sample_size: int
-    time_cohort_counts: dict[str, int] = Field(default_factory=dict)
-    time_audit_status: str = "unverified"
-    excluded_time_prediction_count: int = 0
-    success_count: int
-    failed_count: int
-    pending_count: int
-    promotion_ready_date_count: int = 0
-    top_pick_promotion_sample_size: int = 0
-    top_pick_promoted_count: int = 0
-    top_pick_promotion_rate: float | None = None
-    market_promotion_sample_size: int = 0
-    market_promoted_count: int = 0
-    market_promotion_rate: float | None = None
-    promotion_rate_delta: float | None = None
-    promotion_comparisons: list[ReviewPromotionComparison] = Field(default_factory=list)
-    main_findings: list[str] = Field(default_factory=list)
-    successful_patterns: list[str] = Field(default_factory=list)
-    failed_patterns: list[str] = Field(default_factory=list)
-    scoring_bias: list[str] = Field(default_factory=list)
-    adjustment_suggestions: list[str] = Field(default_factory=list)
-    confidence: float
-    reviewed_picks: list[ReviewAgentPick] = Field(default_factory=list)
-    tool_results: list["AgentToolTrace"] = Field(default_factory=list)
-    warnings: list[str] = Field(default_factory=list)
-    generated_by: str
+    generation_mode: Literal["llm", "deterministic", "legacy"] = Field(default="legacy", description="生成模式：llm、deterministic或legacy")
+    llm_model: str | None = Field(default=None, description="生成使用的模型")
+    generation_note: str | None = Field(default=None, description="生成方式说明")
+    review_digest: ReviewDigest | None = Field(default=None, description="结构化复盘摘要")
+    feature_summary: ReviewFeatureSummary | None = Field(default=None, description="确定性特征对比")
+    feature_research: ReviewFeatureResearch | None = Field(default=None, description="候选与市场特征研究")
+    summary_insights: list[ReviewInsight] = Field(default_factory=list, description="研究摘要要点")
+    summary_headline: str | None = Field(default=None, description="研究摘要标题")
+    start_date: date = Field(description="复盘起始日")
+    end_date: date = Field(description="复盘截止日")
+    sample_size: int = Field(description="复盘样本数")
+    time_cohort_counts: dict[str, int] = Field(default_factory=dict, description="时间分组计数")
+    time_audit_status: str = Field(default="unverified", description="时间审计状态")
+    excluded_time_prediction_count: int = Field(default=0, description="因时间不可验证被排除的预测数")
+    success_count: int = Field(description="成功样本数")
+    failed_count: int = Field(description="失败样本数")
+    pending_count: int = Field(description="结果待定样本数")
+    promotion_ready_date_count: int = Field(default=0, description="可比较晋级率的交易日数")
+    top_pick_promotion_sample_size: int = Field(default=0, description="Top票晋级率分母")
+    top_pick_promoted_count: int = Field(default=0, description="Top票晋级数")
+    top_pick_promotion_rate: float | None = Field(default=None, description="Top票晋级率（%）")
+    market_promotion_sample_size: int = Field(default=0, description="全市场首板晋级率分母")
+    market_promoted_count: int = Field(default=0, description="全市场首板晋级数")
+    market_promotion_rate: float | None = Field(default=None, description="全市场首板晋级率（%）")
+    promotion_rate_delta: float | None = Field(default=None, description="Top票相对全市场晋级率差（%）")
+    promotion_comparisons: list[ReviewPromotionComparison] = Field(default_factory=list, description="逐日晋级率对照")
+    main_findings: list[str] = Field(default_factory=list, description="主要发现")
+    successful_patterns: list[str] = Field(default_factory=list, description="成功模式")
+    failed_patterns: list[str] = Field(default_factory=list, description="失败模式")
+    scoring_bias: list[str] = Field(default_factory=list, description="评分偏差")
+    adjustment_suggestions: list[str] = Field(default_factory=list, description="评分调整建议")
+    confidence: float = Field(description="复盘结论置信度")
+    reviewed_picks: list[ReviewAgentPick] = Field(default_factory=list, description="逐票复盘明细")
+    tool_results: list["AgentToolTrace"] = Field(default_factory=list, description="复盘工具调用轨迹")
+    warnings: list[str] = Field(default_factory=list, description="边界警告")
+    generated_by: str = Field(description="生成来源")
 
 
 class DailyReviewSnapshot(BaseModel):
