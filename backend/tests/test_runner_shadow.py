@@ -108,6 +108,32 @@ def test_runner_stops_at_the_model_round_budget():
     assert result.tool_count <= MAX_MODEL_ROUNDS
 
 
+def test_runner_includes_session_memory_constraints():
+    runner = AgentRunner(
+        request("你好"),
+        registry(),
+        ScriptedProvider([AIMessage(content="好的。")]),
+        memory=SimpleNamespace(constraints=["偏好表格", "只看主板"]),
+    )
+    system = runner.messages[0].content
+    assert "偏好表格" in system and "只看主板" in system
+
+
+def test_runner_bounds_history_text():
+    history = [
+        {"role": "user", "content": "x" * 4000},
+        {"role": "user", "content": "y" * 4000},
+    ]
+    runner = AgentRunner(
+        request("继续"),
+        registry(),
+        ScriptedProvider([]),
+        history=history,
+    )
+    history_text = "".join(message.content for message in runner.messages[1:-1])
+    assert len(history_text) <= 6000
+
+
 def test_business_definitions_exclude_runtime_control_tools():
     runner = AgentRunner(request(), registry(), ScriptedProvider([]))
     names = {item["function"]["name"] for item in runner.definitions}

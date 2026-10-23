@@ -123,6 +123,21 @@ def test_public_entry_fails_closed_on_malformed_security_review(monkeypatch):
     assert response.tool_calls == []
 
 
+def test_public_entry_deterministic_compliance_refuses_advice_without_llm(monkeypatch):
+    monkeypatch.delenv("LIMITUPLAB_AGENT_COMPLIANCE", raising=False)
+    provider = ScriptedProvider([
+        input_review(),
+        AIMessage(content="建议买入该股，仓位三成。"),
+    ])
+    response = ask(provider, monkeypatch, "可以买吗？")
+
+    assert response.generated_by == "agent-runner-v1"
+    assert response.task_status == "refuse"
+    assert response.stop_reason == "compliance_refused"
+    assert response.answer == REFUSAL
+    assert provider.responses == []
+
+
 def test_public_entry_applies_semantic_compliance_review(monkeypatch):
     monkeypatch.setenv("LIMITUPLAB_AGENT_COMPLIANCE", "llm")
     provider = ScriptedProvider([

@@ -14,7 +14,6 @@ from langchain_core.messages import ToolMessage
 from langgraph.graph import END, START, StateGraph
 
 from app.agents.query_contract import current_query_reference_date
-from app.agents.react_runtime.evidence import EvidenceStore
 from app.agents.react_runtime.lifecycle import CURRENT_CONTROL
 from app.agents.react_runtime.tools import ToolGateway
 from app.agents.runner.guardrails import (
@@ -56,12 +55,15 @@ class AgentRunner:
         *,
         deadline_seconds: float = DEADLINE_SECONDS,
         progress=None,
+        memory=None,
     ):
         self.request = request
         self.provider = provider
-        self.gateway = ToolGateway(registry, EvidenceStore())
+        self.gateway = ToolGateway(registry)
         self.definitions = business_definitions(self.gateway)
-        self.messages = build_messages(request, history, current_query_reference_date())
+        self.messages = build_messages(
+            request, history, current_query_reference_date(), memory=memory
+        )
         self.deadline = perf_counter() + deadline_seconds
         self.started = perf_counter()
         self.progress = progress

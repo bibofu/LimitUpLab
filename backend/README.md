@@ -83,8 +83,9 @@ compare it with the legacy runtime without changing production responses. The
 production chat entry now defaults to this runner (`LIMITUPLAB_AGENT_RUNNER=new`);
 set `legacy` to roll back. Its input review is security-only: task
 interpretation, output contracts and date scopes stay in the legacy runtime.
-Compliance defaults to the semantic review (`LIMITUPLAB_AGENT_COMPLIANCE=llm`);
-`deterministic` uses only the pattern guard.
+Compliance defaults to the deterministic pattern guard
+(`LIMITUPLAB_AGENT_COMPLIANCE=deterministic`); set `llm` to add the semantic
+review as a post-check.
 The legacy Requests class remains available only through explicit
 construction and dependency injection for isolated text callers.
 See [integration and verification details](../docs/LangChain_Integration.md).

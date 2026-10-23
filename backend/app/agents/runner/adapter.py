@@ -125,9 +125,10 @@ def answer_with_runner(
         provider,
         conversation_messages,
         progress=progress_callback,
+        memory=session_memory,
     ).run()
 
-    compliance_mode = os.getenv("LIMITUPLAB_AGENT_COMPLIANCE", "llm").strip().lower()
+    compliance_mode = os.getenv("LIMITUPLAB_AGENT_COMPLIANCE", "deterministic").strip().lower()
     if result.answer and result.status != "refuse" and compliance_mode != "deterministic":
         if progress_callback:
             progress_callback("checking", "正在校验回答")

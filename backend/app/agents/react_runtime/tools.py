@@ -16,7 +16,7 @@ from app.agents.react_runtime.date_scope import DateScope
 
 
 class ToolGateway:
-    def __init__(self, registry, evidence):
+    def __init__(self, registry, evidence=None):
         self.registry, self.evidence = registry, evidence
         self.date_scope = DateScope()
         self.contracts = {contract.name: contract for contract in registry.schemas()}
