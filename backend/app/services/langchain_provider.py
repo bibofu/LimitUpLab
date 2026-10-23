@@ -111,6 +111,7 @@ class LangChainChatProvider(LLMProvider):
     def generate_messages(
         self, messages, tools, *, timeout_seconds=30, max_tokens=4096,
         on_chunk: Callable[[AIMessageChunk], None] | None = None,
+        tool_choice: str | None = None,
     ):
         """Preserve tool messages and optionally report native chunks as they arrive."""
         tracker = _usage_tracker.get()
@@ -129,10 +130,12 @@ class LangChainChatProvider(LLMProvider):
             model = self.chat_model.model_copy(update=options)
             choice = {"tool_choice": tools[0]["function"]["name"]} if len(tools) == 1 else {}
             thinking = (model.extra_body or {}).get("thinking")
-            # ReAct needs a structured tool decision, so avoid generating a bare
-            # answer that the runtime must request again as finish arguments.
-            # Required tool choice is unsupported by DeepSeek thinking mode.
-            if len(tools) > 1 and isinstance(thinking, dict) and thinking.get("type") == "disabled":
+            # The legacy ReAct runtime needs a structured tool decision, so it
+            # forces a tool call and ends through finish. A direct-answer runner
+            # explicitly asks for auto so it can stop querying once facts suffice.
+            if tool_choice is not None:
+                choice = {"tool_choice": tool_choice}
+            elif len(tools) > 1 and isinstance(thinking, dict) and thinking.get("type") == "disabled":
                 choice = {"tool_choice": "required"}
             bound = model.bind_tools(tools, temperature=0, max_tokens=max_tokens, **choice) if tools else model.bind(
                 temperature=0, max_tokens=max_tokens,

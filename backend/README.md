@@ -77,7 +77,9 @@ startup. Every Agent tool also declares a Pydantic output contract in
 `app/agents/tool_output_contracts.py`, reusing the annotated DTOs in `app/models.py`
 where they exist; `EvidenceStore` attaches the resulting
 `field_definitions` to each tool result so the model reads field meaning next to
-the data instead of inferring it from names. The legacy Requests class remains available only through explicit
+the data instead of inferring it from names. The Phase 2 shadow runner lives in
+`app/agents/runner/`; run `python scripts/shadow_agent_runner.py --limit 5` to
+compare it with the legacy runtime without changing production responses. The legacy Requests class remains available only through explicit
 construction and dependency injection for isolated text callers.
 See [integration and verification details](../docs/LangChain_Integration.md).
 

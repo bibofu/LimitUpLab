@@ -119,6 +119,7 @@ class LLMProvider:
     def generate_messages(
         self, messages, tools, *, timeout_seconds=30, max_tokens=4096,
         on_chunk: Callable[[Any], None] | None = None,
+        tool_choice: str | None = None,
     ):
         """One native turn; optional chunks are internal, unvalidated model output."""
         raise NativeFunctionCallingUnavailable("Provider does not support conversational tool calling")
