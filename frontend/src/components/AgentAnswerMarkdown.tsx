@@ -68,7 +68,8 @@ export const AgentAnswerMarkdown = memo(function AgentAnswerMarkdown({
       return;
     }
     const total = plan.current.total;
-    const duration = Math.min(2400, Math.max(210, (total - 1) * 70));
+    // The complete answer is already verified; keep this visual transition brief.
+    const duration = Math.min(320, Math.max(120, (total - 1) * 16));
     const started = performance.now();
     let lastUpdate = started;
     let frame = 0;
@@ -86,7 +87,7 @@ export const AgentAnswerMarkdown = memo(function AgentAnswerMarkdown({
         finish();
         return;
       }
-      if (now - lastUpdate >= 70) {
+      if (now - lastUpdate >= 32) {
         lastUpdate = now;
         setRevealed({ content, units: 1 + Math.floor((total - 1) * (now - started) / duration) });
       }
