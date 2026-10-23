@@ -400,13 +400,6 @@ export function AgentChatDock({
     if (sending || sessionLoading) {
       return;
     }
-    const targetSession = sessions.find((item) => item.session_id === targetSessionId);
-    const confirmed = window.confirm(
-      `确定删除会话“${targetSession?.title ?? "未命名会话"}”吗？删除后无法恢复。`,
-    );
-    if (!confirmed) {
-      return;
-    }
     const release = operationLock.current.acquire();
     if (!release) return;
     setSessionLoading(true);
