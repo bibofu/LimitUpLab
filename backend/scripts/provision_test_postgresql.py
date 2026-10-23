@@ -8,6 +8,7 @@ import os
 from pathlib import Path
 import socket
 import subprocess
+import sys
 
 ROOT = Path(__file__).resolve().parents[2]
 CLUSTER = ROOT / "output" / "ci-postgresql"
@@ -55,8 +56,20 @@ def main() -> None:
     run(bin_dir, "initdb", "-D", str(data_dir), "-U", "limituplab_test", "-A", "trust",
         "--encoding=UTF8", "--no-locale")
     with (data_dir / "postgresql.conf").open("a", encoding="utf-8") as config:
-        config.write(f"\nlisten_addresses = '127.0.0.1'\nport = {port}\n")
-    run(bin_dir, "pg_ctl", "-D", str(data_dir), "-l", str(CLUSTER / "postgresql.log"), "-w", "start")
+        # Distribution builds may default to a shared socket directory that the
+        # CI user cannot write. All clients use loopback TCP; empty is also the
+        # normal Windows socket setting, so no platform-specific path is needed.
+        config.write(f"\nlisten_addresses = '127.0.0.1'\nport = {port}\nunix_socket_directories = ''\n")
+    log_path = CLUSTER / "postgresql.log"
+    try:
+        run(bin_dir, "pg_ctl", "-D", str(data_dir), "-l", str(log_path), "-w", "start")
+    except (subprocess.CalledProcessError, subprocess.TimeoutExpired):
+        print("Disposable PostgreSQL startup failed; cluster log follows:", file=sys.stderr, flush=True)
+        try:
+            print(log_path.read_text(encoding="utf-8", errors="replace"), file=sys.stderr, flush=True)
+        except OSError as error:
+            print(f"Cluster log unavailable ({type(error).__name__})", file=sys.stderr, flush=True)
+        raise
     state_path.write_text(json.dumps({"bin_dir": str(bin_dir)}), encoding="utf-8")
     urls = {}
     for variable, database in (("LIMITUPLAB_TEST_DATABASE_URL", "limituplab_test"),
