@@ -109,7 +109,7 @@ def main() -> int:
     env = {**os.environ, "PYTHONUTF8": "1", "LIMITUPLAB_LLM_ENABLED": "false",
            "LIMITUPLAB_ENVIRONMENT": "development",
            "LIMITUPLAB_ENV_FILE": str(output / "offline-only.env"),
-           "LIMITUPLAB_DATABASE_URL": "", "LIMITUPLAB_EVAL_DATABASE_URL": "",
+           "LIMITUPLAB_DATABASE_URL": "",
            "LIMITUPLAB_TEST_TMP": str(test_tmp), "TMP": str(test_tmp), "TEMP": str(test_tmp)}
     # Retain only database names before clearing active URLs, so CI with custom
     # production names has the same isolation guard as a developer's local .env.
@@ -117,7 +117,7 @@ def main() -> int:
         from sqlalchemy.engine import make_url
         try:
             forbidden = [make_url(value).database for key in
-                         ("LIMITUPLAB_DATABASE_URL", "LIMITUPLAB_EVAL_DATABASE_URL")
+                         ("LIMITUPLAB_DATABASE_URL",)
                          if (value := os.environ.get(key, "").strip())]
         except Exception:
             print("Setup failed: active database configuration is invalid.", file=sys.stderr)

@@ -13,7 +13,7 @@ from sqlalchemy import create_engine
 from sqlalchemy.engine import make_url
 
 
-RUNTIME_DATABASE_VARIABLES = ("LIMITUPLAB_DATABASE_URL", "LIMITUPLAB_EVAL_DATABASE_URL")
+RUNTIME_DATABASE_VARIABLES = ("LIMITUPLAB_DATABASE_URL",)
 BACKEND_ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
 
 

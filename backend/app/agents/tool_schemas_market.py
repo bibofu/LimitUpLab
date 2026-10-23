@@ -213,7 +213,7 @@ MARKET_TOOL_SCHEMAS = [
             "返回买卖额、净买额、机构净买、游资净买、热度排名和相关题材。默认返回完整榜单；"
             "查询全榜或汇总统计时 limit 留空，不同 range_days 保留，不按股票代码去重。"
             "overview已确定性计算本次范围的记录数、去重股票数，以及各range_days的已知净买额合计与净买/净卖和机构/游资前5记录。"
-            "普通概览直接引用口径匹配的overview，无需重复compute_result或逐页read_evidence；"
+            "普通概览直接引用口径匹配的overview，无需重复计算或翻页；"
             "用户另有筛选、统计或表格要求时仍基于完整items计算与交付，不用概览替代明细。"
             "回答范围以用户要求为准：指标或概览不自动附名单；请求名单且未指定列时，"
             "默认展示代码、名称、区间天数、涨跌幅、买入额、卖出额、净买额、机构净买额、游资净买额，金额单位为元。"
@@ -241,6 +241,6 @@ MARKET_TOOL_SCHEMAS = [
             },
             "required": [],
         },
-        returns="Returned provider-labeled records plus a deterministic, date/filter/window-scoped overview; completeness is explicit in source_truncated/complete_matching_query. Reuse matching overview metrics; compute only additional requested statistics. For requested lists use finish.table over original/derived rows.",
+        returns="Returned provider-labeled records plus a deterministic, date/filter/window-scoped overview; completeness is explicit in source_truncated/complete_matching_query. Reuse matching overview metrics; compute only additional requested statistics. For requested lists use the returned items directly in the answer.",
     ),
 ]

@@ -213,7 +213,7 @@ RESEARCH_TOOL_SCHEMAS = [
             "不能将任意行业的小样本当作全部可用候选，也不能声称这是全市场名单。"
         ),
         notes=(
-            "All computable candidates are returned; use compute_result to filter return_pct and sort, "
+            "All computable candidates are returned; filter and sort return_pct directly in the answer, "
             "without a limit unless requested. N intervals require N+1 shared daily closes. "
             "Preserve cohort scope, price basis and missing coverage in the answer."
         ),

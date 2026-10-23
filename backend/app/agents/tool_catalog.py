@@ -206,6 +206,3 @@ def _annotation_kinds(annotation: Any) -> set[str]:
 for _contract in TOOL_SCHEMAS:
     _assert_direct_implementation(_contract)
 
-
-# Compatibility name for read-only callers; values are the canonical contracts.
-CATALOG = {contract.name: contract for contract in TOOL_SCHEMAS}

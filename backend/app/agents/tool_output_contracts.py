@@ -185,29 +185,6 @@ def field_definitions_for(
     }
 
 
-def merge_field_definitions(
-    parent_definitions: list[dict[str, dict[str, str]]],
-    *,
-    rows: Any = None,
-) -> dict[str, dict[str, str]]:
-    """Merge parent definitions for a computed result and keep row fields."""
-
-    descriptions: dict[str, str] = {}
-    for definitions in parent_definitions:
-        descriptions.update(definitions.get("rows", {}))
-    if not descriptions:
-        return {}
-    if isinstance(rows, list) and rows:
-        present = set()
-        for row in rows:
-            if isinstance(row, dict):
-                present.update(row)
-        descriptions = {
-            name: text for name, text in descriptions.items() if name in present
-        }
-    return {"rows": descriptions} if descriptions else {}
-
-
 _SCHEMAS = (
     *MARKET_TOOL_SCHEMAS,
     *RESEARCH_TOOL_SCHEMAS,

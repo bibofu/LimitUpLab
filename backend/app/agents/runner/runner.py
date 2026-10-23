@@ -1,7 +1,6 @@
-"""Minimal LangGraph tool-use loop for the Phase 2 shadow run.
+"""Minimal production LangGraph tool-use loop.
 
-This is the production graph. It keeps LangGraph but has no evidence IDs,
-finish/read/compute/update control tools or task/date compiler; the model
+It has no evidence IDs, delivery control tools or task/date compiler; the model
 receives complete, self-describing tool results directly.
 """
 

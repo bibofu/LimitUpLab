@@ -130,9 +130,9 @@ class LangChainChatProvider(LLMProvider):
             model = self.chat_model.model_copy(update=options)
             choice = {"tool_choice": tools[0]["function"]["name"]} if len(tools) == 1 else {}
             thinking = (model.extra_body or {}).get("thinking")
-            # The legacy ReAct runtime needs a structured tool decision, so it
-            # forces a tool call and ends through finish. A direct-answer runner
-            # explicitly asks for auto so it can stop querying once facts suffice.
+            # When multiple tools are available and thinking is disabled, force a
+            # structured tool decision. A direct-answer runner can pass
+            # tool_choice="auto" so it can stop querying once facts suffice.
             if tool_choice is not None:
                 choice = {"tool_choice": tool_choice}
             elif len(tools) > 1 and isinstance(thinking, dict) and thinking.get("type") == "disabled":

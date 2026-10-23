@@ -3,7 +3,6 @@
 from app.agents.tool_output_contracts import (
     TOOL_OUTPUT_SPECS,
     field_definitions_for,
-    merge_field_definitions,
 )
 from app.agents.tools import TOOL_SCHEMAS
 
@@ -33,6 +32,5 @@ def test_field_definitions_are_limited_to_present_fields():
     assert set(definitions["metadata"]) == {"matched_count"}
 
 
-def test_unknown_or_empty_parent_definitions_are_safe():
+def test_unknown_tool_has_no_field_definitions():
     assert field_definitions_for("unknown_tool") == {}
-    assert merge_field_definitions([{}, {}], rows=[{"symbol": "000011"}]) == {}

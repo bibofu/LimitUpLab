@@ -1,8 +1,8 @@
 """Business-only tool validation and execution for the lightweight runner.
 
-Unlike the legacy gateway this has no control tools, no EvidenceStore and no
-DateScope binding. Dates stay explicit in the model's tool arguments; the
-gateway still checks ISO dates and verifies that returned dates echo the request.
+This gateway has no control tools, no evidence store and no date-scope binding.
+Dates stay explicit in the model's tool arguments; the gateway still checks ISO
+dates and verifies that returned dates echo the request.
 """
 
 from __future__ import annotations

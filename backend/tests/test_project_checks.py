@@ -41,7 +41,6 @@ def test_backend_gate_runs_pytest_only(tmp_path):
 def test_acceptance_runner_does_not_inherit_active_database(tmp_path, monkeypatch):
     monkeypatch.setattr(checks, "ROOT", tmp_path)
     monkeypatch.setenv("LIMITUPLAB_DATABASE_URL", "postgresql://local:secret@localhost/live")
-    monkeypatch.setenv("LIMITUPLAB_EVAL_DATABASE_URL", "postgresql://local:secret@localhost/evaluation")
     monkeypatch.setenv("LIMITUPLAB_ENV_FILE", str(tmp_path / "live.env"))
     monkeypatch.setattr(sys, "argv", ["check_project.py", "--scope", "backend"])
     captured = {}
@@ -53,7 +52,6 @@ def test_acceptance_runner_does_not_inherit_active_database(tmp_path, monkeypatc
     monkeypatch.setattr(checks, "run_checks", capture_environment)
     assert checks.main() == 0
     assert captured["LIMITUPLAB_DATABASE_URL"] == ""
-    assert captured["LIMITUPLAB_EVAL_DATABASE_URL"] == ""
     assert not Path(captured["LIMITUPLAB_ENV_FILE"]).exists()
     assert "LIMITUPLAB_DATABASE_PATH" not in captured
     assert captured["LIMITUPLAB_TEST_DATABASE_URL"] == os.environ["LIMITUPLAB_TEST_DATABASE_URL"]

@@ -200,7 +200,6 @@ export function AgentChatDock({
   const failedRequest = useRef<AgentChatRequest | null>(null);
   const [activeRunId, setActiveRunId] = useState<string | null>(null);
   const [cancelRequested, setCancelRequested] = useState(false);
-  const userCancelledRun = useRef<string | null>(null);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [revealingMessageId, setRevealingMessageId] = useState<string | null>(null);
   const [sessions, setSessions] = useState<ChatSessionSummary[]>([]);
@@ -448,7 +447,6 @@ export function AgentChatDock({
 
   async function cancelCurrentRun() {
     if (!activeRunId || cancelRequested) return;
-    userCancelledRun.current = activeRunId;
     setCancelRequested(true);
     try {
       await cancelAgentChatRun(activeRunId);
@@ -502,7 +500,6 @@ export function AgentChatDock({
     setActiveRunId(null);
     setCancelRequested(false);
     const agentMessageId = `agent-${userMessageId}`;
-    userCancelledRun.current = null;
     setMessages(current => current.filter(item => item.id !== agentMessageId));
     try {
       const response = await streamAgentChatMessage(payload, event => {
