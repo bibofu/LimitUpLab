@@ -6,10 +6,10 @@ import os
 from dataclasses import replace
 from typing import Any, Callable
 
-from app.agents.query_contract import current_query_reference_date
 from app.agents.react_runtime.compliance import review_answer
 from app.agents.runner.guardrails import REFUSAL
 from app.agents.runner.runner import AgentRunner
+from app.agents.runner.security import review_input_security
 from app.agents.tools import AgentToolRegistry
 from app.models import (
     AgentChatPerformance,
@@ -20,7 +20,6 @@ from app.models import (
 )
 from app.repositories import FirstBoardRepository
 from app.services.llm_provider import get_llm_provider
-from app.services.prompt_security import review_input
 
 _STATUS_MAP = {
     "answered": "complete",
@@ -85,7 +84,9 @@ def answer_with_runner(
     """Run the Phase 2/3 loop and map its result to the public response contract.
 
     ``session_memory`` is accepted for caller compatibility; recent conversation
-    text is already supplied through ``conversation_messages``.
+    text is already supplied through ``conversation_messages``. The input review
+    is security-only; task interpretation, output contracts and date scopes stay
+    in the legacy rollback runtime.
     """
 
     provider = llm_provider or get_llm_provider()
@@ -96,24 +97,21 @@ def answer_with_runner(
     )
 
     if progress_callback:
-        progress_callback("preparing", "正在检查请求与研究范围")
+        progress_callback("preparing", "正在检查输入安全")
     try:
-        assessment = review_input(
+        assessment = review_input_security(
             provider,
             message=request.message,
-            timeout_seconds=15,
-            anchor_date=current_query_reference_date(),
-            task_context={},
-            page_defaults={"trade_date": request.trade_date, "symbol": request.symbol},
+            timeout_seconds=10,
         )
     except Exception:  # noqa: BLE001 - input review failure fails closed
         return _response(
             request,
-            "输入检查与任务解析未完成，本次未执行数据查询，请稍后重试。",
+            "输入安全检查未完成，本次未执行数据查询，请稍后重试。",
             "error",
             "input_policy_error",
         )
-    if assessment.detected:
+    if assessment.decision == "refuse":
         return _response(
             request,
             "我可以协助查询有来源的股票研究事实，不能执行绕过系统边界的指令。",

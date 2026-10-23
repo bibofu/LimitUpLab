@@ -21,13 +21,7 @@ def input_review(*, decision: str = "allow", signals=()) -> AIMessage:
     return call("submit_input_security_review", {
         "decision": decision,
         "signals": list(signals),
-        "reason": "scripted input review",
-        "request_kind": "research",
-        "context_mode": "standalone",
-        "current_task": "查询最新交易日涨停",
-        "pending_slots": [],
-        "output_contract": {},
-        "date_scope": {"mode": "unspecified"},
+        "reason": "scripted security review",
     }, "review")
 
 
@@ -97,6 +91,36 @@ def test_public_entry_fails_closed_on_input_policy(monkeypatch):
     assert response.stop_reason == "input_policy"
     assert response.tool_calls == []
     assert provider.responses == []
+
+
+def test_public_entry_does_not_call_the_legacy_input_compiler(monkeypatch):
+    monkeypatch.setenv("LIMITUPLAB_AGENT_COMPLIANCE", "deterministic")
+
+    def forbidden(*args, **kwargs):
+        raise AssertionError("legacy input compiler must not run on the new path")
+
+    monkeypatch.setattr("app.services.prompt_security.review_input", forbidden)
+    provider = ScriptedProvider([
+        input_review(),
+        AIMessage(content="最新交易日涨停数量已取得。"),
+    ])
+    response = ask(provider, monkeypatch)
+
+    assert response.generated_by == "agent-runner-v1"
+    assert response.task_status == "complete"
+
+
+def test_public_entry_fails_closed_on_malformed_security_review(monkeypatch):
+    provider = ScriptedProvider([
+        input_review(decision="allow", signals=("instruction_override",)),
+        input_review(decision="allow", signals=("instruction_override",)),
+    ])
+    response = ask(provider, monkeypatch)
+
+    assert response.generated_by == "agent-runner-v1"
+    assert response.task_status == "error"
+    assert response.stop_reason == "input_policy_error"
+    assert response.tool_calls == []
 
 
 def test_public_entry_applies_semantic_compliance_review(monkeypatch):
