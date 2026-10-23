@@ -12,6 +12,10 @@ from app.agents.tool_schemas_market import MARKET_TOOL_SCHEMAS
 from app.agents.tool_schemas_news import NEWS_TOOL_SCHEMAS
 from app.agents.tool_schemas_research import RESEARCH_TOOL_SCHEMAS
 from app.agents.tool_schemas_review import REVIEW_TOOL_SCHEMAS
+from app.agents.tool_output_contracts import (
+    field_definitions_for,
+    merge_field_definitions,
+)
 
 TOOL_COLLECTIONS = {
     contract.name: contract.collection
@@ -25,7 +29,7 @@ COLLECTIONS = tuple(dict.fromkeys((
     "events", "top_candidates", "items", "stocks", "top_sectors", "bars", "candidates",
     *TOOL_COLLECTIONS.values(),
 )))
-EVIDENCE_VERSION = "react-evidence-v4"
+EVIDENCE_VERSION = "react-evidence-v5"
 CURRENT_SCOPE = "current_run"
 HISTORY_SCOPE = "conversation_history"
 
@@ -151,6 +155,23 @@ class EvidenceStore:
             and metadata["matched_count"] > len(rows)
         )
         source_missing = metadata.get("data_missing") or []
+        resolved_sources = sources or (
+            payload.get("sources") or ([payload["source"]] if payload.get("source") else [])
+            if isinstance(payload, dict) else []
+        )
+        if tool == "compute_result":
+            field_definitions = merge_field_definitions(
+                [
+                    self.records[source_id].get("field_definitions", {})
+                    for source_id in resolved_sources
+                    if source_id in self.records
+                ],
+                rows=rows,
+            )
+        else:
+            field_definitions = field_definitions_for(
+                tool, rows=rows, metadata=metadata
+            )
         # This production tool sorts the entire filtered collection before taking
         # its bounded prefix. Matching length alone is NOT proof of a ranking.
         sort_by = metadata.get("sort_by")
@@ -182,10 +203,8 @@ class EvidenceStore:
             "schema_version": EVIDENCE_VERSION, "retrieved_at": datetime.now(timezone.utc).isoformat(),
             "source_truncated": truncated, "data_missing": source_missing,
             "evidence_scope": CURRENT_SCOPE, "historical_reference": False,
-            "arguments": arguments, "sources": sources or (
-                payload.get("sources") or ([payload["source"]] if payload.get("source") else [])
-                if isinstance(payload, dict) else []
-            ), "rows": rows,
+            "arguments": arguments, "sources": resolved_sources,
+            "field_definitions": field_definitions, "rows": rows,
         }
         return key
 
@@ -226,6 +245,7 @@ class EvidenceStore:
             "evidence_scope": self.scope_of(record),
             "historical_reference": record.get("historical_reference", False),
             "retrieved_at": record.get("retrieved_at"),
+            "field_definitions": record.get("field_definitions", {}),
         }
         if record["tool"] == "dragon_tiger_list" and "overview" in metadata:
             # Each deterministic ranking is bounded to five records. Preserve

@@ -133,14 +133,14 @@ def test_v8_only_revises_two_reviewed_factual_labels_and_preserves_all_inputs():
     def digest(items):
         return hashlib.sha256(json.dumps(items, ensure_ascii=False, sort_keys=True).encode()).hexdigest()
     assert len(unchanged) == 59
-    # These hashes were captured from v7 before the reviewed two-cell change.
-    assert digest(unchanged) == "61df13baf66a6f547ed2174636dcc9475af2aefcf93b5914f40f725628e49e48"
+    # Updated for the Phase 1 evidence view (field_definitions and react-evidence-v5).
+    assert digest(unchanged) == "f26dd62f0beede5e745c8598874780443d9476ffa171ee56d0c7c3abed728634"
     restored = deepcopy(records)
     for record in restored:
         if record["id"] in revised:
             assert record["expected"] == (False, True, True, True, None)
             record["expected"] = (*record["expected"][:-1], False)
-    assert digest(restored) == "e3417720ddb4403145d3578819de94f26741d30dbf899450c274413c77d538b3"
+    assert digest(restored) == "3b1e9028409a7b2e00a7c579092c2e744e4356b6890bdbf18bdef0cc3e39b622"
     assert len(records) == 61 and sum(len(record["expected"]) for record in records) == 266
     assert sum(value is None for record in records for value in record["expected"]) == 12
 

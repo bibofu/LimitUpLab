@@ -86,7 +86,7 @@ from app.services.scoring_policy_optimizer import build_scoring_policy_registry
 from app.agents.review_agent import build_review_agent_report
 
 
-TOOL_CONTRACT_VERSION = "agent-tools-v2"
+TOOL_CONTRACT_VERSION = "agent-tools-v3"
 
 
 TOOL_SCHEMAS = [
