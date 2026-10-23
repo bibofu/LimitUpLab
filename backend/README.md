@@ -70,8 +70,8 @@ DEEPSEEK_API_KEY=<your-api-key>
 
 The production chat backend uses LangChain messages and
 `ChatOpenAI.bind_tools`. A custom LangGraph `StateGraph` runs one bounded ReAct
-loop; `ToolGateway`, `EvidenceStore` and the PostgreSQL run journal retain financial
-policy, provenance, idempotency and recovery control. The only valid configured
+loop; `BusinessToolGateway`, durable tool results and the PostgreSQL run journal
+retain financial policy, idempotency and recovery control. The only valid configured
 backend is `LIMITUPLAB_LLM_BACKEND=langchain`; any other value fails during
 startup. Every Agent tool also declares a Pydantic output contract in
 `app/agents/tool_output_contracts.py`, reusing the annotated DTOs in `app/models.py`
