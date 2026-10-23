@@ -88,13 +88,11 @@ def component_fingerprints():
     """Fingerprint replay code plus its local dependencies, never just the entry point."""
     root = Path(__file__).resolve().parents[1]
     shared = ["agents/react_runtime/evidence.py", "agents/react_runtime/contracts.py",
-              "agents/react_runtime/comparison_evidence.py", "agents/react_runtime/metadata_views.py",
-              "agents/react_runtime/display_fields.py",
               "agents/kline_presentation.py", "agents/tool_schemas_market.py",
               "agents/tool_schemas_news.py", "agents/tool_schemas_research.py", "agents/tool_schemas_review.py"]
     components = {"compute_sha256": shared,
                   "renderer_sha256": shared + ["agents/react_runtime/rendering.py",
-                      "agents/react_runtime/task_contract.py"]}
+                      "agents/react_runtime/display_fields.py", "agents/react_runtime/task_contract.py"]}
     result = {}
     for name, paths in components.items():
         digest = hashlib.sha256()

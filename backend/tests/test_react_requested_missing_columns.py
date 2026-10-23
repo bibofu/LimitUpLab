@@ -107,27 +107,6 @@ def test_limit_up_metrics_do_not_substitute_turnover_or_concept(field, wrong):
 
 
 @pytest.mark.parametrize("computed", [False, True])
-@pytest.mark.parametrize("value", [None, "wrong-source value"])
-def test_source_bound_missing_column_survives_selection_without_accepting_provider_collision(computed, value):
-    task = task_for([("symbol", "代码"), ("limit_up_reason", "涨停原因")])
-    store = EvidenceStore()
-    key = store.add(tool="limit_up_events", state="ok", arguments={}, payload={"events": [
-        {"symbol": "000011", "limit_up_reason": value},
-    ]})
-    if computed:
-        key = store.compute(Compute(evidence_id=key, limit=1))
-    final = candidate(key, task)
-    if value is not None:
-        with pytest.raises(ValueError, match="not defined for this evidence source"):
-            validate_delivery(final, task, store)
-        return
-    validate_delivery(final, task, store)
-    assert "| 000011 | 数据未成功获取 |" in render_answer(final, store, task.output_contract)
-    with pytest.raises(ValueError, match="not defined for this evidence source"):
-        validate_delivery(candidate(key, task, "complete"), task, store)
-
-
-@pytest.mark.parametrize("computed", [False, True])
 def test_previous_trade_day_gap_cannot_reuse_valid_source_zero(computed):
     task = task_for([("symbol", "代码"), ("rank", "排名"),
                      ("previous_trade_day_rank_change", "较上一交易日排名变化")])

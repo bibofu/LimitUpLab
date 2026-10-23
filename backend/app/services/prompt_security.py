@@ -91,8 +91,6 @@ basis区分行情/榜单/评级时点observation与后续走势的事件锚点ev
 field_requests按用户明确列及原顺序映射display_field_catalog，保持指标、单位、比较基期，不用相似指标替换（市场最高板数不等于个股board_height）。无等价项时保留requested、field=null和任务原意：映射不支持不等于来源缺失、不能查询或意图不明；有映射也不证明已取得数据。
 未指定列且无适用历史列偏好时，field_requests必须为空，不根据主题替用户设计列。“最新的龙虎榜情况”这类开放概览使用freeform、field_requests=[]、table_required=false，保留概览任务，由回答环节决定必要的展示；“列出完整龙虎榜名单”要求table_required=true但仍不自创列；“只列代码和交易日期”才明确绑定这两列。
 table_required只针对本轮；仅确认未来列偏好可用conversation、table_required=false，保留偏好且不查数。prose_only不生成逐行列或行约束。
-两日期指标对比表使用comparison保留日期顺序及每项指标的statistic、field、filters、scope；标签不能替代计数对象和范围。field_requests用于实体列，不能把日期指标表映射成股票列。计数使用count；元数据计数的读取方式留给工具层。
-用户要求显示数据日期或单位时保留required_metadata；不要因table_only丢弃这些要求。龙虎榜披露上榜原因映射listing_reason，不能映射涨停原因或题材。只限制前三只等行数不等于禁止用户明确要求的说明。
 row_selection按Schema表示本轮最终名单总行数上限/排名窗口，不是工具参数；不足N条不凑数、不掩盖截断。每组N只、全部并列不设整表上限，原意及筛选/排序保留在current_task。追问只改日期/对象时保留窗口，改数量/窗口或要全部时覆盖；独立任务不继承临时上限。行数符合不证明成员或排名正确。"""
 
 
@@ -112,23 +110,6 @@ _PROMPT_LEAK_SIGNATURES = (
 )
 
 
-def _wire_schema(schema):
-    """Omit generated titles while retaining every constraint and semantic description."""
-    if isinstance(schema, list):
-        return [_wire_schema(item) for item in schema]
-    if not isinstance(schema, dict):
-        return schema
-    result = {}
-    for key, value in schema.items():
-        if key == "title":
-            continue
-        if key in {"properties", "$defs", "definitions", "patternProperties"}:
-            result[key] = {name: _wire_schema(child) for name, child in value.items()}
-        else:
-            result[key] = _wire_schema(value)
-    return result
-
-
 def review_input(
     provider,
     *,
@@ -143,7 +124,7 @@ def review_input(
     tool = {"type": "function", "function": {
         "name": "submit_input_security_review",
         "description": "提交用户消息的安全判断及任务解释：请求类型、上下文依赖、日期、待澄清输入和交付合同。",
-        "parameters": _wire_schema(_SecurityWireDecision.model_json_schema()),
+        "parameters": _SecurityWireDecision.model_json_schema(),
     }}
     payload = {
         "user_message": message,

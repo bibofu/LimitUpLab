@@ -212,8 +212,7 @@ def test_renderer_version_source_truncation_and_missing_snapshot_are_unknown():
 def test_pure_compute_replay_matches_all_supported_operations(operation, options):
     store = EvidenceStore()
     left, right = source(store), source(store)
-    spec = Compute(evidence_id=left, operation=operation, **options,
-                   **({"other_id": right} if operation in {"intersection", "difference", "union"} else {}))
+    spec = Compute(evidence_id=left, other_id=right, operation=operation, **options)
     key = store.compute(spec)
     value = cited(store, key)
     assert evaluate(value)["compute_replay:" + key]["verdict"] == "pass"

@@ -2,7 +2,7 @@
 
 from copy import deepcopy
 
-from app.agents.react_runtime.contracts import CompareMetrics, Compute, Finish
+from app.agents.react_runtime.contracts import Compute, Finish
 from app.agents.react_runtime.evidence import EVIDENCE_VERSION, EvidenceStore
 from app.agents.react_runtime.rendering import append_missing_details, render_answer
 from app.agents.react_runtime.task_contract import OutputContract
@@ -39,7 +39,7 @@ def compute_checks(bundle, records, keys, deadline=None):
     for key in keys:
         budget(deadline)
         record = records.get(key)
-        if not isinstance(record, dict) or record.get("tool") not in {"compute_result", "compare_metrics"}:
+        if not isinstance(record, dict) or record.get("tool") != "compute_result":
             continue
         check_id, dimension = "compute_replay:" + key, "computation"
         detail = {"path": EVIDENCE_PATH + "/" + key, "evidence_id": key}
@@ -50,20 +50,15 @@ def compute_checks(bundle, records, keys, deadline=None):
         if reason:
             checks.append(unknown(check_id, dimension, reason, detail))
             continue
-        operation = (record.get("arguments") if record["tool"] == "compare_metrics"
-                     else (record.get("payload") or {}).get("operation"))
+        operation = (record.get("payload") or {}).get("operation")
         if not isinstance(operation, dict):
             checks.append(unknown(check_id, dimension, "missing_compute_operation", detail))
             continue
         try:
-            spec = CompareMetrics.model_validate(operation) if record["tool"] == "compare_metrics" else Compute.from_record(operation)
+            spec = Compute.model_validate(operation)
             store = EvidenceStore()
             store.records = deepcopy({parent: records[parent] for parent in lineage})
-            computed = store.get(store.compare(spec) if record["tool"] == "compare_metrics" else store.compute(spec))
-            if record["tool"] == "compute_result":
-                # Restore the serialized legacy defaults after executing the same select operation.
-                computed["arguments"] = deepcopy(operation)
-                computed["payload"]["operation"] = deepcopy(operation)
+            computed = store.get(store.compute(spec))
             budget(deadline)
         except (ValueError, TypeError, KeyError, ArithmeticError) as error:
             detail["error_type"] = type(error).__name__

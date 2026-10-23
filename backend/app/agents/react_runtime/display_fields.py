@@ -6,13 +6,6 @@ stay unbound; the current task retains the complete request and actual tool
 evidence determines which fields can be delivered.
 """
 
-from typing import TypedDict
-
-
-class ListingReasonField(TypedDict):
-    """Verified disclosure reason added by the tool's source-aware adapter."""
-    listing_reason: str | None
-
 DISPLAY_FIELD_CATALOG = {
     key: {"meaning": meaning, "model": "LimitUpEvent", "tools": ["limit_up_events"]}
     for key, meaning in {
@@ -102,37 +95,10 @@ DISPLAY_FIELD_CATALOG.update({
         "net_buy_amount": "该条龙虎榜记录统计区间内的净买入金额，元；不是成交额或股价涨跌幅",
         "organization_net_buy_amount": "该条龙虎榜记录的机构净买入金额，元；来源未提供时缺失，不等于全部净买入额",
         "hot_money_net_buy_amount": "该条龙虎榜记录的游资净买入金额，元；来源未提供时缺失，不等于机构净买入额",
-        "listing_reason": "龙虎榜披露的上榜条件或原因；来源未提供时缺失，不得用涨停原因limit_reason、题材或概念代替",
     }.items()
 })
 for key in ("symbol", "name"):
     DISPLAY_FIELD_CATALOG[key]["tools"].append("dragon_tiger_list")
-
-for key in ("limit_up_reason", "listing_reason"):
-    DISPLAY_FIELD_CATALOG[key]["source_bound"] = True
-DISPLAY_FIELD_CATALOG["listing_reason"]["model"] = "ListingReasonField"
-
-FIELD_UNITS = {
-    "board_height": "板", "amount": "元", "seal_amount": "元",
-    "buy_amount": "元", "sell_amount": "元", "net_buy_amount": "元",
-    "organization_net_buy_amount": "元", "hot_money_net_buy_amount": "元",
-    "open": "元", "close": "元", "high": "元", "low": "元",
-    "return_pct": "%", "change_pct": "%", "turnover_rate": "%",
-    "break_count": "次", "seal_count": "次", "range_days": "天",
-}
-
-DISPLAY_FIELD_CATALOG.update({
-    key: {"meaning": meaning, "model": "SectorSummaryRow", "tools": ["evidence_view"]}
-    for key, meaning in {
-        "sector_name": "分组行业或概念名称",
-        "unique_stock_count": "当前分组去重股票数量",
-        "limit_up_event_count": "当前分组涨停事件数量，区别于去重股票数",
-        "trade_day_count": "当前分组有记录的交易日数量",
-        "representative_symbols": "来源明确选取的代表股票代码，非完整成分名单",
-        "representative_names": "与代表股票代码对应的名称，非完整成分名单",
-        "representative_count": "明确选取的代表股数量",
-    }.items()
-})
 
 DISPLAY_FIELD_CATALOG.update({
     key: {"meaning": meaning, "model": "RecentLimitUpReturn", "tools": ["recent_limit_up_returns"]}
@@ -168,43 +134,3 @@ def presentation_aliases(record, store):
                if isinstance(key, str) and key in store.records]
     aliases = [presentation_aliases(parent, store) for parent in parents]
     return aliases[0] if aliases and all(item == aliases[0] for item in aliases) else {}
-
-
-def evidence_roots(record, store, visiting=None):
-    """Resolve only runtime-owned derivation edges, never provider source strings."""
-    visiting = set() if visiting is None else set(visiting)
-    key = record["evidence_id"]
-    if key in visiting:
-        raise ValueError("Cyclic evidence lineage")
-    visiting.add(key)
-    if record["tool"] not in {"compute_result", "compare_metrics", "evidence_view"}:
-        return [record]
-    parents = [store.get(key) for key in record.get("sources", []) if key in store.records]
-    return [root for parent in parents for root in evidence_roots(parent, store, visiting)] or [record]
-
-
-def evidence_dates(record, store):
-    dates = set()
-    for root in evidence_roots(record, store):
-        payload = root.get("payload", {})
-        if isinstance(payload, dict) and payload.get("trade_date"):
-            dates.add(str(payload["trade_date"]))
-        for row in root.get("rows", []):
-            if isinstance(row, dict) and row.get("trade_date"):
-                dates.add(str(row["trade_date"]))
-        # A successful empty/count result can carry its date in validated tool args.
-        if not root.get("rows") and root.get("arguments", {}).get("trade_date"):
-            dates.add(str(root["arguments"]["trade_date"]))
-    return sorted(dates)
-
-
-def validate_field_sources(fields, record, store, *, allow_missing=False):
-    tools = {root["tool"] for root in evidence_roots(record, store)}
-    for field in fields:
-        definition = DISPLAY_FIELD_CATALOG.get(field, {})
-        if definition.get("source_bound") and not tools <= set(definition["tools"]):
-            # An explicitly missing requested column asserts no source value.
-            # Non-null provider collisions still cannot acquire a new meaning.
-            if allow_missing and all(row.get(field) is None for row in record["rows"]):
-                continue
-            raise ValueError(f"Field {field} is not defined for this evidence source; preserve its actual meaning")

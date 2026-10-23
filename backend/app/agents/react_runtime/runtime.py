@@ -16,7 +16,7 @@ from app.services.quality_trace import record_snapshot, provenance, rendering_sn
 
 from app.agents.query_contract import current_query_reference_date
 from app.agents.react_runtime.contracts import (
-    CONTROL_MODELS, CompareMetrics, Compute, Finish, MAX_CONCURRENCY, MAX_CONTROL_CALLS,
+    CONTROL_MODELS, Compute, Finish, MAX_CONCURRENCY, MAX_CONTROL_CALLS,
     MAX_MODEL_CALLS, MAX_TOOL_CALLS, ReadEvidence, VERSION,
 )
 from app.agents.react_runtime.compliance import review_answer
@@ -53,14 +53,12 @@ SYSTEM = """你是LimitUpLab收盘研究助手。使用原生工具调用逐轮�
 工具empty是有效空结果，error只证明查询失败。缺失实际数据保留请求字段并显示“数据未成功获取”，不得填0或猜值。交付已取得的具体数值、记录和来源，以missing逐项说明未完成要求，不用“部分完成”或重试建议代替结果。
 展示映射未支持不证明来源缺数据。output_contract.fields中的unavailable_requested_N保留原顺序，以对应field_requests.requested作列名，服务端显示“展示映射未支持”；不得替换字段，以partial和missing说明展示缺口。已支持字段绑定含义一致的实际证据。
 rows可能仅为预览，finish.table会渲染全部实际返回行；仅为检查未预览内容调用read_evidence。source_truncated和data_missing是来源缺口；complete_rank_scope及其后续筛选仅证明对应排名范围完整，不能冒充全市场或靠截断声明将全集交付标为complete。
-范围匹配的state_summary/return_windows可直接引用；日期与价格必须成对沿用，calendar未核验不声称交易日完整。available_views子证据ID可直接compute/finish；分组TopN对完整子视图一次排序切片，不为读取全部行反复分页。
 来源以本轮payload.source、payload.sources或逐条出处为准，缺少时说明未提供；工具品牌、查询入口和缓存不证明供应商。合成、模拟、派生结果照实说明；计算sources的evidence_id须沿父证据追溯。只有血缘支持来源独立才称交叉来源核验。
 说明实际日期、必要口径、来源、缺失和推断；并列指标分别解释，不把相关性说成因果。
 
 交付与结束：
 交付优先级为用户明确要求、output_contract、工具默认展示规则，遵循最小充分原则：只问指标不扩展名单；名单保留所需全部列和记录，不截成代表项。仅请求名单且未指定列时采用默认列。稳定概念解释限于定义、基本计算口径和必要限制，不延伸未取证的资金行为、市场分布或因果判断。
-按output_contract.fields的列顺序交付，table_required不以摘要替代。纯表使用finish.delivery=table且省略answer，服务端生成布局，不先写正文再删除。required_metadata填入table.metadata，真实日期和单位由服务端渲染；partial的missing仍保留。需正文时用delivery=text并保留唯一表占位符。另有总数、解释要求仍须交付；prose_only不附表，仅设置未来偏好不要求当轮交表。
-comparison要求两期指标表时用compare_metrics一次构建全部指标，再引用它的metric/before/after/change列；label、统计量、筛选和来源范围须与comparison.metrics一致，两期列名使用证据日期。count模式证据无明细时读取scalar matched_count，不能把空rows算为零；缺失指标保留行并明确缺失。不把个股明细当指标表。
+按output_contract.fields的列顺序交付，table_required不以摘要替代。table_only且complete时只输出证据表占位符；其他状态只加解释真实缺口或边界的必要文字，不扩展指标、排名或背景。另有总数、解释要求仍须交付；prose_only不附表，仅设置未来偏好不要求当轮交表。
 名单按finish.table的Schema引用证据，不逐行复写或用证据ID代替结果。若单表无法表达多份名单，如实partial说明缺口，不删减要求。
 row_selection约束最终行数和排名窗口，不是工具limit。无完整排名范围证明时先取完整集合，再用compute_result筛选、排序、切片，不降低工具limit绕过截断检查。原榜名次窗口按原排名升序选取并保留排名；实际不足请求数量时不补行。
 finish.status按Schema判断用户交付，不照抄工具状态。故障、过期或截断不能证明不存在；有真实交付缺口才用partial。所问内容都有对象、日期和范围匹配的证据后直接完成，不为背景继续查询。
@@ -371,13 +369,9 @@ class Run:
                         key = self.evidence.compute(Compute.model_validate(args))
                         result = self.evidence.view(key)
                         self.trace("react_compute", {"call_id": call["id"], **result})
-                    elif name == "compare_metrics":
-                        key = self.evidence.compare(CompareMetrics.model_validate(args))
-                        result = self.evidence.view(key)
-                        self.trace("react_compute", {"call_id": call["id"], **result})
                     else:
                         spec = ReadEvidence.model_validate(args)
-                        result = self.evidence.view(spec.evidence_id, spec.offset, spec.limit, view=spec.view)
+                        result = self.evidence.view(spec.evidence_id, spec.offset, spec.limit)
                     observations.append((call, result))
             except Exception as error:
                 observations.append((call, {"execution_status": "rejected", "error": str(error)}))
@@ -434,14 +428,14 @@ class Run:
                     raise ValueError("Empty status requires current-run evidence with result_state=empty")
             validate_delivery(final, self.task_context, self.evidence)
             render_input = final.model_copy(deep=True)
-            rendered_answer = render_answer(final, self.evidence, self.task_context.output_contract)
+            final.answer = render_answer(final, self.evidence, self.task_context.output_contract)
             if final.status == "partial":
-                rendered_answer = append_missing_details(rendered_answer, final.missing)
+                final.answer = append_missing_details(final.answer, final.missing)
             self.field_names.update(field_names(self.evidence.current_records()))
-            validate_public_text(rendered_answer, self.field_names)
+            validate_public_text(final.answer, self.field_names)
             for missing in final.missing:
                 validate_public_text(missing, self.field_names)
-            if contains_prompt_leak(rendered_answer):
+            if contains_prompt_leak(final.answer):
                 raise ValueError("Internal content detected; answer research facts only")
             self.compliance_checks += 1
             remaining = self.deadline - perf_counter()
@@ -450,7 +444,7 @@ class Run:
             review = timed_call("compliance", review_answer,
                 self.provider,
                 user_message=self.request.message,
-                answer=rendered_answer,
+                answer=final.answer,
                 timeout_seconds=min(20, remaining),
             )
             self.trace("react_compliance", review.model_dump(mode="json"))
@@ -458,10 +452,10 @@ class Run:
                 raise ValueError("Compliance review rejected the answer: " + ", ".join(review.violations))
             if self.control and self.control.cancelled():
                 return self.stop("cancelled")
-            self.answer, self.status = rendered_answer, final.status
+            self.answer, self.status = final.answer, final.status
             self.reason = "answered"
             record_snapshot(self.control, "answer_rendering", lambda: rendering_snapshot(
-                render_input, self.evidence, self.task_context.output_contract, rendered_answer, origin="gate"))
+                render_input, self.evidence, self.task_context.output_contract, final.answer, origin="gate"))
             self.trace("react_answer_check", {
                 "passed": True,
                 "status": final.status,
@@ -532,8 +526,7 @@ class Run:
         self.status = "partial" if usable else "error"
         if reason == "cancelled":
             self.status = "cancelled"
-        lines = ["已取得查询证据，但回答未通过完整交付校验。" if reason == "validation_failed" and usable
-                 else "本轮查询已结束，以下所需数据未成功获取。"]
+        lines = ["本轮查询已结束，以下所需数据未成功获取。"]
         lines.extend(self.date_resolution_missing)
         if not usable and reason != "cancelled" and (any(record["result_state"] == "error" for record in current) or any(
             trace.name in self.gateway.structured and trace.status == "error"

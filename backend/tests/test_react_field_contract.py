@@ -8,8 +8,7 @@ from langchain_core.messages import AIMessage
 from pydantic import TypeAdapter
 
 from app.agents.react_runtime.contracts import Finish
-from app.agents.react_runtime.display_fields import DISPLAY_FIELD_CATALOG, ListingReasonField
-from app.agents.react_runtime.metadata_views import SectorSummaryRow
+from app.agents.react_runtime.display_fields import DISPLAY_FIELD_CATALOG
 from app.agents.react_runtime.evidence import EvidenceStore
 from app.agents.react_runtime.rendering import render_answer
 from app.agents.react_runtime.runtime import Run
@@ -83,7 +82,7 @@ def test_review_schema_offers_trusted_raw_field_enum_instead_of_unbounded_string
 def test_catalog_fields_are_scalars_in_the_declared_production_models():
     models = {model.__name__: model for model in
               (LimitUpEvent, FirstBoardRating, MarketIndexTrendItem, StockKLineBar, HithinkHotStockFact,
-               HithinkLimitUpFact, HithinkDragonTigerFact, RecentLimitUpReturn, ListingReasonField, SectorSummaryRow)}
+               HithinkLimitUpFact, HithinkDragonTigerFact, RecentLimitUpReturn)}
     for key, entry in DISPLAY_FIELD_CATALOG.items():
         declaration = TypeAdapter(models[entry["model"]]).json_schema()["properties"][key]
         types = {item.get("type") for item in declaration.get("anyOf", [declaration])}
