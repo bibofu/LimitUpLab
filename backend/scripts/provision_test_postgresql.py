@@ -71,14 +71,10 @@ def main() -> None:
             print(f"Cluster log unavailable ({type(error).__name__})", file=sys.stderr, flush=True)
         raise
     state_path.write_text(json.dumps({"bin_dir": str(bin_dir)}), encoding="utf-8")
-    urls = {}
-    for variable, database in (("LIMITUPLAB_TEST_DATABASE_URL", "limituplab_test"),
-                               ("LIMITUPLAB_TEST_EVAL_DATABASE_URL", "limituplab_eval_test")):
-        run(bin_dir, "createdb", "-h", "127.0.0.1", "-p", str(port), "-U", "limituplab_test", database)
-        urls[variable] = f"postgresql+psycopg://limituplab_test@127.0.0.1:{port}/{database}"
+    run(bin_dir, "createdb", "-h", "127.0.0.1", "-p", str(port), "-U", "limituplab_test", "limituplab_test")
+    url = f"postgresql+psycopg://limituplab_test@127.0.0.1:{port}/limituplab_test"
     with Path(github_env).open("a", encoding="utf-8") as environment:
-        for variable, url in urls.items():
-            environment.write(f"{variable}={url}\n")
+        environment.write(f"LIMITUPLAB_TEST_DATABASE_URL={url}\n")
     with Path(github_path).open("a", encoding="utf-8") as environment:
         environment.write(str(bin_dir) + "\n")
 

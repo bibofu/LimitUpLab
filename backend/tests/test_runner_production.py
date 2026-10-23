@@ -93,12 +93,10 @@ def test_public_entry_fails_closed_on_input_policy(monkeypatch):
 
 
 def test_public_entry_does_not_call_the_legacy_input_compiler(monkeypatch):
+    import importlib.util
+
     monkeypatch.setenv("LIMITUPLAB_AGENT_COMPLIANCE", "deterministic")
-
-    def forbidden(*args, **kwargs):
-        raise AssertionError("legacy input compiler must not run on the new path")
-
-    monkeypatch.setattr("app.services.prompt_security.review_input", forbidden)
+    assert importlib.util.find_spec("app.services.prompt_security") is None
     provider = ScriptedProvider([
         input_review(),
         AIMessage(content="最新交易日涨停数量已取得。"),

@@ -6,7 +6,7 @@ import sqlite3
 
 from fastapi.testclient import TestClient
 
-from app.agents.react_runtime.lifecycle import Journal
+from app.agents.run_lifecycle import Journal
 from app.database import connect_readonly
 from app.main import app
 from app.models import AgentChatRequest, AgentChatResponse, StockDailyBar
@@ -63,13 +63,6 @@ def test_application_http_with_no_sqlite_access(postgresql_database, tmp_path, m
         run_path = "/api/agents/chat/runs/" + run["run_id"]
         assert client.get(run_path).json()["response"] == final
         assert "event: completed" in client.get(run_path + "/stream").text
-        assert client.put(run_path + "/feedback", json={"vote": "down", "reasons": ["data_error"]}).status_code == 200
-        cases = client.get("/api/admin/quality/cases", headers=admin)
-        assert cases.status_code == 200 and cases.json()["total"] == 1
-        case_id = cases.json()["items"][0]["case_id"]
-        assert client.get("/api/admin/quality/cases/" + case_id, headers=admin).status_code == 200
-        assert client.get("/api/admin/quality/evaluations", headers=admin).status_code == 200
-        assert client.get("/api/admin/quality/jobs", headers=admin).status_code == 200
     with closing(connect_readonly()) as database:
         assert database.execute("SELECT COUNT(*) FROM limit_up_events").fetchone()[0] == len(SAMPLE_EVENTS)
     assert not absent.parent.exists()

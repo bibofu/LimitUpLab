@@ -124,12 +124,9 @@ def main() -> int:
             return 1
         env["LIMITUPLAB_TEST_FORBIDDEN_DATABASES"] = json.dumps(forbidden)
     print(f"Report directory: {output}", flush=True)
-    if args.scope in {"all", "backend"} and not all(
-        os.environ.get(name, "").strip() for name in
-        ("LIMITUPLAB_TEST_DATABASE_URL", "LIMITUPLAB_TEST_EVAL_DATABASE_URL")
-    ):
-        print("Setup failed: configure separate PostgreSQL test and evaluation test databases "
-              "with LIMITUPLAB_TEST_DATABASE_URL and LIMITUPLAB_TEST_EVAL_DATABASE_URL.", file=sys.stderr)
+    if args.scope in {"all", "backend"} and not os.environ.get("LIMITUPLAB_TEST_DATABASE_URL", "").strip():
+        print("Setup failed: configure a dedicated PostgreSQL test database with "
+              "LIMITUPLAB_TEST_DATABASE_URL.", file=sys.stderr)
         return 1
     try:
         checks = build_checks(args.scope, output)

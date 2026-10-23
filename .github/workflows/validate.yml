@@ -56,8 +56,6 @@ jobs:
           $pgInit = Get-ChildItem 'C:\Program Files\PostgreSQL\*\bin\initdb.exe' | Sort-Object FullName -Descending | Select-Object -First 1
           if (-not $pgInit) { throw 'PostgreSQL binaries are required by the test matrix' }
           python backend/scripts/provision_test_postgresql.py start --bin-dir $pgInit.Directory.FullName
-      - name: Validate golden case contracts without model calls
-        run: python backend/scripts/run_agent_golden.py --mode validate
       - name: Run shared acceptance gates
         run: python scripts/check_project.py
       - name: Stop isolated PostgreSQL
@@ -95,7 +93,6 @@ jobs:
           --health-interval 5s --health-timeout 3s --health-retries 20
     env:
       LIMITUPLAB_TEST_DATABASE_URL: postgresql+psycopg://limituplab_test:disposable_ci_password@127.0.0.1:5432/limituplab_test
-      LIMITUPLAB_TEST_EVAL_DATABASE_URL: postgresql+psycopg://limituplab_test:disposable_ci_password@127.0.0.1:5432/limituplab_eval_test
     steps:
       - uses: actions/checkout@v7
         with:

@@ -1,7 +1,5 @@
 """Every Agent tool carries a documented, result-scoped output contract."""
 
-from app.agents.react_runtime.contracts import Compute
-from app.agents.react_runtime.evidence import EvidenceStore
 from app.agents.tool_output_contracts import (
     TOOL_OUTPUT_SPECS,
     field_definitions_for,
@@ -33,38 +31,6 @@ def test_field_definitions_are_limited_to_present_fields():
     )
     assert set(definitions["rows"]) == {"symbol"}
     assert set(definitions["metadata"]) == {"matched_count"}
-
-
-def test_evidence_view_carries_field_definitions():
-    store = EvidenceStore()
-    key = store.add(
-        tool="limit_up_events",
-        state="ok",
-        arguments={},
-        payload={
-            "matched_count": 1,
-            "events": [{"symbol": "000011", "name": "测试", "board_height": 1}],
-        },
-    )
-    view = store.view(key)
-    assert view["field_definitions"]["rows"]["board_height"].startswith("连板高度")
-    assert "matched_count" in view["field_definitions"]["metadata"]
-
-
-def test_compute_result_inherits_parent_field_definitions():
-    store = EvidenceStore()
-    key = store.add(
-        tool="limit_up_events",
-        state="ok",
-        arguments={},
-        payload={
-            "matched_count": 1,
-            "events": [{"symbol": "000011", "board_height": 1}],
-        },
-    )
-    computed = store.compute(Compute(evidence_id=key, limit=1))
-    view = store.view(computed)
-    assert "board_height" in view["field_definitions"]["rows"]
 
 
 def test_unknown_or_empty_parent_definitions_are_safe():

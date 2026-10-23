@@ -7,7 +7,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.agents.react_runtime.lifecycle import CURRENT_CONTROL, Journal, RunControl
+from app.agents.run_lifecycle import CURRENT_CONTROL, Journal, RunControl
 from app.models import AgentChatRequest, AgentChatResponse
 from app.repositories import ChatSessionRepository
 from app.routers import react_chat

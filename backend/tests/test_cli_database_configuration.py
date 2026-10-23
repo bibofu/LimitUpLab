@@ -13,7 +13,7 @@ import pytest
     "import_limit_up_from_akshare", "run_factor_signal_diagnostic",
     "audit_prediction_times", "research_limit_up_paths", "postgres_admin",
     "migrate_sqlite_to_postgres", "run_recommendation_refresh_loop", "import_sample_data",
-    "run_daily_close_loop", "run_quality_worker", "run_quality_judge_worker",
+    "run_daily_close_loop",
 ])
 def test_cli_loads_selected_env_before_dispatch(module_name, tmp_path, monkeypatch, capsys):
     env_file = tmp_path / ".env"

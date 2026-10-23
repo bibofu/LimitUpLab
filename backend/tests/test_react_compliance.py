@@ -1,6 +1,6 @@
 from langchain_core.messages import AIMessage
 
-from app.agents.react_runtime.compliance import review_answer
+from app.agents.compliance import review_answer
 
 
 class Provider:
