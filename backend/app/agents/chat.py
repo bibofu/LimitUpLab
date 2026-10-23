@@ -1,5 +1,6 @@
-"""Single public entry for production ReAct chat."""
+"""Single public entry for production Agent chat."""
 
+import os
 from typing import Callable
 
 from app.agents.tools import AgentToolRegistry
@@ -20,14 +21,32 @@ def answer_first_board_chat(
     answer_delta_callback: Callable[[str], None] | None = None,
     tool_registry: AgentToolRegistry | None = None,
     answer_event_callback: Callable[[str, dict], None] | None = None,
+    runner_mode: str | None = None,
 ) -> AgentChatResponse:
-    """Execute the single ReAct runtime for every chat request."""
-    from app.agents.react_runtime.runtime import run
-    # Legacy answer callbacks remain accepted for caller compatibility, but must
-    # not publish text before the HTTP transport has committed Journal.finish.
-    # Progress stays live; the returned response is the sole answer handoff.
-    return run(
-        request, tool_registry or AgentToolRegistry(
-            events=events, first_board_repository=repository or FirstBoardRepository(),
-        ), llm_provider or get_llm_provider(), conversation_messages, session_memory, progress_callback,
+    """Execute the selected production runner for every chat request."""
+
+    mode = (runner_mode or os.getenv("LIMITUPLAB_AGENT_RUNNER", "new")).strip().lower()
+    if mode == "legacy":
+        from app.agents.react_runtime.runtime import run
+        # Legacy answer callbacks remain accepted for caller compatibility, but must
+        # not publish text before the HTTP transport has committed Journal.finish.
+        # Progress stays live; the returned response is the sole answer handoff.
+        return run(
+            request, tool_registry or AgentToolRegistry(
+                events=events, first_board_repository=repository or FirstBoardRepository(),
+            ), llm_provider or get_llm_provider(), conversation_messages, session_memory, progress_callback,
+        )
+    if mode != "new":
+        raise ValueError("LIMITUPLAB_AGENT_RUNNER must be new or legacy")
+
+    from app.agents.runner.adapter import answer_with_runner
+    return answer_with_runner(
+        request,
+        events,
+        repository=repository,
+        conversation_messages=conversation_messages,
+        session_memory=session_memory,
+        llm_provider=llm_provider,
+        progress_callback=progress_callback,
+        tool_registry=tool_registry,
     )

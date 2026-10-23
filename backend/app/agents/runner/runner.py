@@ -15,6 +15,7 @@ from langgraph.graph import END, START, StateGraph
 
 from app.agents.query_contract import current_query_reference_date
 from app.agents.react_runtime.evidence import EvidenceStore
+from app.agents.react_runtime.lifecycle import CURRENT_CONTROL
 from app.agents.react_runtime.tools import ToolGateway
 from app.agents.runner.guardrails import (
     DEADLINE_SECONDS,
@@ -54,6 +55,7 @@ class AgentRunner:
         history: list[Any] | None = None,
         *,
         deadline_seconds: float = DEADLINE_SECONDS,
+        progress=None,
     ):
         self.request = request
         self.provider = provider
@@ -62,13 +64,25 @@ class AgentRunner:
         self.messages = build_messages(request, history, current_query_reference_date())
         self.deadline = perf_counter() + deadline_seconds
         self.started = perf_counter()
+        self.progress = progress
         self.cache: dict[str, dict[str, Any]] = {}
 
     def agent(self, state: RunnerState) -> RunnerState:
         """Ask the model to either call tools or produce the final answer."""
 
+        if state.get("done"):
+            return state
+        if _cancelled():
+            return self._cancelled_stop()
         if state.get("model_rounds", 0) >= MAX_MODEL_ROUNDS or perf_counter() >= self.deadline:
             return self._budget_stop(state)
+        if self.progress and state.get("model_rounds", 0) == 0:
+            self.progress("planning", "正在理解问题并选择查询")
+
+        def on_chunk(_chunk) -> None:
+            if _cancelled() or perf_counter() >= self.deadline:
+                raise InterruptedError("Run cancelled or deadline exceeded")
+
         try:
             response = self.provider.generate_messages(
                 state["messages"],
@@ -76,8 +90,13 @@ class AgentRunner:
                 timeout_seconds=max(1, min(35, self.deadline - perf_counter())),
                 max_tokens=4096,
                 tool_choice="auto",
+                on_chunk=on_chunk,
             )
         except Exception as error:  # noqa: BLE001 - runner boundary reports the failure
+            if _cancelled():
+                return self._cancelled_stop()
+            if perf_counter() >= self.deadline:
+                return self._budget_stop(state)
             return {
                 "answer": "本次研究执行失败，未取得可核验结果。",
                 "status": "error",
@@ -104,11 +123,15 @@ class AgentRunner:
     def tools(self, state: RunnerState) -> RunnerState:
         """Execute every pending call and append one observation per call."""
 
+        if _cancelled():
+            return self._cancelled_stop()
         messages = list(state["messages"])
         tool_calls = list(state.get("tool_calls", []))
         tool_statuses = list(state.get("tool_statuses", []))
         tool_messages = list(state.get("tool_messages", []))
         tool_count = state.get("tool_count", 0)
+        if self.progress:
+            self.progress("tools", f"正在执行 {len(state['pending'])} 项数据查询")
         for call in state["pending"]:
             if tool_count >= MAX_TOOL_CALLS:
                 value = {"status": "error", "error": "Tool execution budget exhausted"}
@@ -148,6 +171,14 @@ class AgentRunner:
                 "error": str(error),
                 "error_type": type(error).__name__,
             }
+
+    def _cancelled_stop(self) -> RunnerState:
+        return {
+            "answer": "任务已取消，未继续执行新的数据查询。",
+            "status": "cancelled",
+            "stop_reason": "cancelled",
+            "done": True,
+        }
 
     def _budget_stop(self, state: RunnerState) -> RunnerState:
         summaries = [
@@ -208,6 +239,11 @@ class AgentRunner:
             duration_ms=round((perf_counter() - self.started) * 1000),
             error=final.get("error"),
         )
+
+
+def _cancelled() -> bool:
+    control = CURRENT_CONTROL.get()
+    return control is not None and control.cancelled()
 
 
 def _node(name: str):

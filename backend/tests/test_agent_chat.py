@@ -26,7 +26,7 @@ class AgentChatTest(unittest.TestCase):
             result = answer_first_board_chat(
                 request=request, events=[], tool_registry=Mock(), llm_provider=Mock(),
                 progress_callback=progress_callback, answer_delta_callback=delta_callback,
-                answer_event_callback=event_callback,
+                answer_event_callback=event_callback, runner_mode="legacy",
             )
 
         self.assertIs(result, response)
