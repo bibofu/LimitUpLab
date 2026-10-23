@@ -862,7 +862,7 @@ def delete_chat_session(
 ) -> dict[str, bool]:
     """Permanently delete one local conversation and its stored data."""
 
-    from app.agents.react_runtime.lifecycle import RunConflict
+    from app.agents.run_lifecycle import RunConflict
     try:
         deleted = ChatSessionRepository().delete_session(session_id, owner_id=owner_id)
     except RunConflict as error:

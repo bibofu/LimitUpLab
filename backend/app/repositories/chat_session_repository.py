@@ -316,7 +316,7 @@ class ChatSessionRepository:
             if table_exists(connection, "react_runs"):
                 active = connection.execute("SELECT 1 FROM react_runs WHERE session_id=? AND owner_id=? AND active=1", (session_id, owner_id)).fetchone()
                 if active:
-                    from app.agents.react_runtime.lifecycle import RunConflict
+                    from app.agents.run_lifecycle import RunConflict
                     raise RunConflict("请先取消并等待当前任务结束，再删除会话")
             session = connection.execute(
                 """

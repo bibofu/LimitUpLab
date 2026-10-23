@@ -28,7 +28,7 @@ from app.agents.review_narrative import ReviewNarrative, apply_review_narrative,
 from app.agents.user_language import PUBLIC_LANGUAGE
 from app.agents.review_features import build_review_feature_summary
 from app.agents.review_digest import build_review_digest
-from app.agents.react_runtime.compliance import review_answer
+from app.agents.compliance import review_answer
 from app.services.outcome_completeness import build_top10_outcome_completeness
 from app.services.review_as_of import (
     build_review_post_bars,

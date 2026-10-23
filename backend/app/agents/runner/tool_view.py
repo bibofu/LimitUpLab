@@ -5,7 +5,7 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.agents.react_runtime.evidence import rows_of
+from app.agents.tool_payload import rows_of
 from app.agents.tool_output_contracts import field_definitions_for
 
 MAX_VISIBLE_ROWS = 50

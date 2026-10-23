@@ -6,7 +6,7 @@ import os
 from dataclasses import replace
 from typing import Any, Callable
 
-from app.agents.react_runtime.compliance import review_answer
+from app.agents.compliance import review_answer
 from app.agents.runner.guardrails import REFUSAL
 from app.agents.runner.runner import AgentRunner
 from app.agents.runner.security import review_input_security
@@ -85,8 +85,7 @@ def answer_with_runner(
 
     ``session_memory`` is accepted for caller compatibility; recent conversation
     text is already supplied through ``conversation_messages``. The input review
-    is security-only; task interpretation, output contracts and date scopes stay
-    in the legacy rollback runtime.
+    is security-only; there is no task/output/date compiler on this path.
     """
 
     provider = llm_provider or get_llm_provider()

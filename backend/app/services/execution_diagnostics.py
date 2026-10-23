@@ -8,13 +8,8 @@ ERROR_TYPES = {"PermissionError", "FileNotFoundError", "OSError", "TimeoutError"
                "ValueError", "TypeError", "ValidationError", "NativeFunctionCallingError",
                "BudgetExceeded", "BudgetPersistenceError", "InterruptedError"}
 LOCATIONS = {
-    "app.agents.react_runtime.runtime": {"run", "Run.agent"},
-    "app.agents.react_runtime.context": {"prepare_task_context"},
-    "app.services.prompt_security": {"review_input"},
     "app.services.langchain_provider": {"LangChainChatProvider.generate_messages", "LangChainChatProvider._run"},
     "app.services.session_memory": {"prepare_session_context"},
-    "evals.golden.runner": {"Budget.take", "BudgetedProvider._invoke", "run_case"},
-    "evals.golden.reporting": {"save_report"},
 }
 
 

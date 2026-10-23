@@ -8,8 +8,8 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from app.agents.react_runtime.lifecycle import CURRENT_CONTROL, Journal, RunConflict, RunControl
-from app.agents.react_runtime.contracts import VERSION
+from app.agents.run_lifecycle import CURRENT_CONTROL, Journal, RunConflict, RunControl
+from app.agents.runtime_version import VERSION
 from app.models import AgentChatResponse, ChatSessionMessage
 from app.repositories import ChatSessionRepository, SessionOwnershipError
 from app.security import current_owner_id
