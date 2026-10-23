@@ -10,11 +10,9 @@ from fastapi.responses import StreamingResponse
 
 from app.agents.react_runtime.lifecycle import CURRENT_CONTROL, Journal, RunConflict, RunControl
 from app.agents.react_runtime.contracts import VERSION
-from app.models import AgentChatResponse, AgentTimingReport, ChatSessionMessage
+from app.models import AgentChatResponse, ChatSessionMessage
 from app.repositories import ChatSessionRepository, SessionOwnershipError
 from app.security import current_owner_id
-from app.services.agent_timing import capture_timings, timed_call, timing_snapshot, timing_stage
-from app.services.quality_trace import record_snapshot
 
 router = APIRouter()
 _lock = threading.Lock()
@@ -104,7 +102,6 @@ def start(request, http_request, owner_id):
             raise HTTPException(503, "消息暂未能保存，请重试原请求。") from error
         history = [m for m in session.messages if m.created_at < started_at]
 
-        @capture_timings()
         def worker():
             tracker = response = failure = None
             control = RunControl(journal, row, execution, lease)
@@ -115,7 +112,7 @@ def start(request, http_request, owner_id):
             try:
                 progress("preparing", "正在准备会话与研究数据")
                 with agents.capture_llm_usage() as tracker:
-                    context, memory = timed_call("context", agents.prepare_session_context,
+                    context, memory = agents.prepare_session_context(
                         session_id=request.session_id, owner_id=owner_id, messages=history,
                         repository=agents.ChatMemoryRepository(),
                     )
@@ -139,9 +136,7 @@ def start(request, http_request, owner_id):
                         # Persist the authoritative answer before publishing completed. Message id is
                         # stable across crash recovery and repeated submissions.
                         progress("checking", "正在保存研究结果")
-                        response.performance.timing = AgentTimingReport.model_validate(timing_snapshot())
-                        with timing_stage("persistence", operation="final_answer"):
-                            response = AgentChatResponse.model_validate(journal.finish(run_id, owner_id, response.model_dump(mode="json")))
+                        response = AgentChatResponse.model_validate(journal.finish(run_id, owner_id, response.model_dump(mode="json")))
                         notify_streams()
                 except Exception as error:
                     # Saving is part of delivery: leave the checkpoint recoverable
@@ -150,12 +145,8 @@ def start(request, http_request, owner_id):
                     response = None
                 finally:
                     try:
-                        with timing_stage("persistence", operation="usage_accounting"):
-                            agents._finish_agent_request(usage_repository, usage_record, tracker, response=response, error=failure)
+                        agents._finish_agent_request(usage_repository, usage_record, tracker, response=response, error=failure)
                     finally:
-                        # One diagnostic write after delivery; do not mutate the
-                        # authoritative response already persisted by finish().
-                        record_snapshot(control, "timing", timing_snapshot)
                         try:
                             try:
                                 lease.release()

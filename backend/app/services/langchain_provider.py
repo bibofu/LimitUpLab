@@ -21,7 +21,6 @@ from app.services.llm_provider import (
     NativeFunctionCallingUnavailable,
     _parse_token_usage,
     _usage_tracker,
-    track_provider_call,
 )
 
 
@@ -109,7 +108,6 @@ class LangChainChatProvider(LLMProvider):
             self._answer_model(system_prompt), system_prompt, user_prompt,
         )
 
-    @track_provider_call
     def generate_messages(
         self, messages, tools, *, timeout_seconds=30, max_tokens=4096,
         on_chunk: Callable[[AIMessageChunk], None] | None = None,
@@ -254,7 +252,6 @@ class LangChainChatProvider(LLMProvider):
         )
 
     # Execute the LangChain request or stream, normalize usage and return the common LLM result.
-    @track_provider_call
     def _run(
         self,
         model: Runnable,

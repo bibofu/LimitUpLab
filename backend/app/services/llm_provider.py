@@ -7,15 +7,13 @@ import json
 import threading
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass, field
-from functools import wraps
+from dataclasses import dataclass
 from time import perf_counter, sleep
 from typing import Any, Callable
 
 import requests
 
 from app.config import configured_llm_backend, env_bool
-from app.services.agent_timing import current_model_purpose, timing_stage
 
 
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
@@ -68,8 +66,6 @@ class LLMUsageTracker:
     completion_tokens: int = 0
     total_tokens: int = 0
     model: str | None = None
-    # Logical calls, including failed calls without a response/usage payload.
-    call_timings: list[dict[str, Any]] = field(default_factory=list)
 
     # Record the start of a model invocation for request-scoped usage accounting.
     def begin_call(self, model: str) -> None:
@@ -115,31 +111,6 @@ def capture_llm_usage():
         yield tracker
     finally:
         _usage_tracker.reset(token)
-
-
-def track_provider_call(function):
-    """Measure provider boundaries without retaining inputs or exception text."""
-    @wraps(function)
-    def wrapped(self, *args, **kwargs):
-        # Disabled native calling is a local capability check, not a model call.
-        if function.__name__ == "generate_function_call" and not self.native_function_calling_enabled:
-            return function(self, *args, **kwargs)
-        started = perf_counter()
-        purpose = current_model_purpose()
-        error_type = None
-        try:
-            with timing_stage("provider_call"):
-                return function(self, *args, **kwargs)
-        except BaseException as error:
-            error_type = type(error.__cause__ or error).__name__
-            raise
-        finally:
-            tracker = _usage_tracker.get()
-            if tracker is not None and len(tracker.call_timings) < 128:
-                tracker.call_timings.append({"purpose": purpose,
-                    "duration_ms": round((perf_counter() - started) * 1000, 3),
-                    "error_type": error_type})
-    return wrapped
 
 
 class LLMProvider:
@@ -234,7 +205,6 @@ class OpenAIChatCompletionsProvider(LLMProvider):
         self.session = session or _get_thread_session()
         self.sleep_fn = sleep_fn
 
-    @track_provider_call
     def generate(self, system_prompt: str, user_prompt: str) -> LLMResult:
         """Call a Chat Completions compatible endpoint."""
 
@@ -268,7 +238,6 @@ class OpenAIChatCompletionsProvider(LLMProvider):
             tracker.complete_call(result)
         return result
 
-    @track_provider_call
     def generate_function_call(
         self,
         system_prompt: str,
@@ -358,7 +327,6 @@ class OpenAIChatCompletionsProvider(LLMProvider):
             tracker.complete_call(result)
         return result
 
-    @track_provider_call
     def stream_generate(
         self,
         system_prompt: str,

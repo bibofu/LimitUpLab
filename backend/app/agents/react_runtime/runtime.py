@@ -34,7 +34,6 @@ from app.services.llm_provider import NativeFunctionCallingError, require_react_
 from app.services.execution_diagnostics import exception_diagnostics
 from app.services.protocol_diagnostics import safe_protocol_metadata
 from app.services.prompt_security import contains_prompt_leak, review_input
-from app.services.agent_timing import timed_call, timed_runtime, timing_stage
 
 # prompt entry
 SYSTEM = """你是LimitUpLab收盘研究助手。使用原生工具调用逐轮解决问题。
@@ -153,8 +152,7 @@ class Run:
             return self.stop("budget_exhausted")
         require_react_provider(self.provider)
         self.models += 1
-        with timing_stage("persistence", operation="checkpoint"):
-            self.save(state, "agent")
+        self.save(state, "agent")
         if self.progress:
             self.progress("planning", "正在根据已有证据决定下一步" if self.tools else "正在理解问题并选择查询")
         definitions = self.gateway.definitions()
@@ -177,12 +175,11 @@ class Run:
                 # partial function-call arguments are never public answer text.
                 if (self.control and self.control.cancelled()) or perf_counter() >= self.deadline:
                     raise InterruptedError("Run cancelled or deadline exceeded")
-            with timing_stage("react_round", round=self.models):
-                response = self.provider.generate_messages(
-                    messages, definitions,
-                    timeout_seconds=max(1, min(35, self.deadline - perf_counter())), max_tokens=4096,
-                    on_chunk=on_chunk,
-                )
+            response = self.provider.generate_messages(
+                messages, definitions,
+                timeout_seconds=max(1, min(35, self.deadline - perf_counter())), max_tokens=4096,
+                on_chunk=on_chunk,
+            )
             record_snapshot(self.control, "model_output", {
                 "model_call_id": model_call_id,
                 "round": self.models, "status": "returned", "content": response.content,
@@ -281,8 +278,7 @@ class Run:
                          "error": "Run cancelled or deadline exceeded before tool execution"}
             else:
                 try:
-                    with timing_stage("business_tool", tool=call["name"], round=self.models):
-                        result, payload, status = self.gateway.execute(call["name"], call["args"])
+                    result, payload, status = self.gateway.execute(call["name"], call["args"])
                     value = {"ok": True, "input": result.input, "payload": payload, "status": status,
                              "summary": result.summary, "duration": round((perf_counter() - started) * 1000)}
                 except Exception as error:
@@ -292,87 +288,85 @@ class Run:
                 self.control.finish_call(call["id"], value)
             return call, value
         if business:
-            with timing_stage("business_tool_batch", round=self.models):
-                if self.progress:
-                    self.progress("tools", f"正在执行 {len(business)} 项数据查询")
-                completed_count = 0
-                failed_count = 0
-                pending = {TOOL_POOL.submit(copy_context().run, execute, call): call for call in business}
-                while pending:
-                    if perf_counter() >= self.deadline or (self.control and self.control.cancelled()):
-                        for future, call in pending.items():
-                            future.cancel()
-                            value = {"execution_status": "cancelled", "result_state": "error", "error": "Run cancelled or deadline exceeded"}
-                            observations.append((call, value))
-                            self.trace(call["name"], value, input=call["args"], status="error")
-                        break
-                    completed, _ = wait(pending, timeout=min(.2, max(0, self.deadline - perf_counter())), return_when=FIRST_COMPLETED)
-                    for future in completed:
-                        call = pending.pop(future)
-                        try:
-                            _, result = future.result()
-                        except Exception as error:
-                            # Journal/worker failures do not establish an upstream query failure.
-                            result = {"execution_status": "unconfirmed", "result_state": "error",
-                                      "error_type": type(error).__name__,
-                                      "error": "Tool outcome could not be confirmed; do not infer an empty result"}
-                        completed_count += 1
-                        if not result.get("ok") or result.get("status") in {"error", "partial"}:
-                            failed_count += 1
-                        if self.progress:
-                            message = f"数据查询已返回 {completed_count}/{len(business)} 项"
-                            if failed_count:
-                                message += f"，其中 {failed_count} 项存在缺口"
-                            self.progress("tools", message)
-                        if not result.get("ok"):
-                            trace_payload = result
-                            if (result.get("execution_status") == "failed"
-                                    and result.get("error_type") != "UncertainExecution"):
-                                # Cite an observed failure without fabricating market rows,
-                                # provider provenance or an actual returned data date.
-                                trace_payload = {**result, "items": [], "business_result_available": False,
-                                                 "data_missing": ["tool_execution_failed"]}
-                                key = self.evidence.add(tool=call["name"], state="error", arguments=call["args"],
-                                                        payload=trace_payload)
-                                self.cache[call["signature"]] = key
-                                result = {**result, **self.evidence.view(key)}
-                            observations.append((call, result))
-                            self.trace(call["name"], trace_payload, input=call["args"], status="error")
-                            continue
-                        payload, status = result["payload"], result["status"]
-                        key = self.evidence.add(tool=call["name"], payload=payload, state=status, arguments=result["input"])
-                        self.traces.append(AgentToolTrace(
-                            name=call["name"], input=result["input"], output=payload if isinstance(payload, dict) else {"items": payload},
-                            summary=result["summary"], duration_ms=result["duration"],
-                            result=AgentToolOutcome(status=status, payload=payload if isinstance(payload, dict) else {"items": payload}),
-                        ))
-                        if status in {"ok", "empty", "error"}:
+            if self.progress:
+                self.progress("tools", f"正在执行 {len(business)} 项数据查询")
+            completed_count = 0
+            failed_count = 0
+            pending = {TOOL_POOL.submit(copy_context().run, execute, call): call for call in business}
+            while pending:
+                if perf_counter() >= self.deadline or (self.control and self.control.cancelled()):
+                    for future, call in pending.items():
+                        future.cancel()
+                        value = {"execution_status": "cancelled", "result_state": "error", "error": "Run cancelled or deadline exceeded"}
+                        observations.append((call, value))
+                        self.trace(call["name"], value, input=call["args"], status="error")
+                    break
+                completed, _ = wait(pending, timeout=min(.2, max(0, self.deadline - perf_counter())), return_when=FIRST_COMPLETED)
+                for future in completed:
+                    call = pending.pop(future)
+                    try:
+                        _, result = future.result()
+                    except Exception as error:
+                        # Journal/worker failures do not establish an upstream query failure.
+                        result = {"execution_status": "unconfirmed", "result_state": "error",
+                                  "error_type": type(error).__name__,
+                                  "error": "Tool outcome could not be confirmed; do not infer an empty result"}
+                    completed_count += 1
+                    if not result.get("ok") or result.get("status") in {"error", "partial"}:
+                        failed_count += 1
+                    if self.progress:
+                        message = f"数据查询已返回 {completed_count}/{len(business)} 项"
+                        if failed_count:
+                            message += f"，其中 {failed_count} 项存在缺口"
+                        self.progress("tools", message)
+                    if not result.get("ok"):
+                        trace_payload = result
+                        if (result.get("execution_status") == "failed"
+                                and result.get("error_type") != "UncertainExecution"):
+                            # Cite an observed failure without fabricating market rows,
+                            # provider provenance or an actual returned data date.
+                            trace_payload = {**result, "items": [], "business_result_available": False,
+                                             "data_missing": ["tool_execution_failed"]}
+                            key = self.evidence.add(tool=call["name"], state="error", arguments=call["args"],
+                                                    payload=trace_payload)
                             self.cache[call["signature"]] = key
-                        observations.append((call, self.evidence.view(key)))
+                            result = {**result, **self.evidence.view(key)}
+                        observations.append((call, result))
+                        self.trace(call["name"], trace_payload, input=call["args"], status="error")
+                        continue
+                    payload, status = result["payload"], result["status"]
+                    key = self.evidence.add(tool=call["name"], payload=payload, state=status, arguments=result["input"])
+                    self.traces.append(AgentToolTrace(
+                        name=call["name"], input=result["input"], output=payload if isinstance(payload, dict) else {"items": payload},
+                        summary=result["summary"], duration_ms=result["duration"],
+                        result=AgentToolOutcome(status=status, payload=payload if isinstance(payload, dict) else {"items": payload}),
+                    ))
+                    if status in {"ok", "empty", "error"}:
+                        self.cache[call["signature"]] = key
+                    observations.append((call, self.evidence.view(key)))
         finish = None
         for call in state["pending"]:
             name, args = call["name"], call["args"]
             if name not in CONTROL_MODELS:
                 continue
             try:
-                with timing_stage("control", tool=name, round=self.models):
-                    if name == "finish":
-                        finish = args
-                        result = {"submitted": True}
-                    elif name == "update_task":
-                        old_ids = {item["id"] for item in self.requirements}
-                        if not old_ids <= {item["id"] for item in args["requirements"]}:
-                            raise ValueError("Cannot remove previously recorded requirements")
-                        self.requirements = args["requirements"]
-                        result = {"requirements": self.requirements}
-                    elif name == "compute_result":
-                        key = self.evidence.compute(Compute.model_validate(args))
-                        result = self.evidence.view(key)
-                        self.trace("react_compute", {"call_id": call["id"], **result})
-                    else:
-                        spec = ReadEvidence.model_validate(args)
-                        result = self.evidence.view(spec.evidence_id, spec.offset, spec.limit)
-                    observations.append((call, result))
+                if name == "finish":
+                    finish = args
+                    result = {"submitted": True}
+                elif name == "update_task":
+                    old_ids = {item["id"] for item in self.requirements}
+                    if not old_ids <= {item["id"] for item in args["requirements"]}:
+                        raise ValueError("Cannot remove previously recorded requirements")
+                    self.requirements = args["requirements"]
+                    result = {"requirements": self.requirements}
+                elif name == "compute_result":
+                    key = self.evidence.compute(Compute.model_validate(args))
+                    result = self.evidence.view(key)
+                    self.trace("react_compute", {"call_id": call["id"], **result})
+                else:
+                    spec = ReadEvidence.model_validate(args)
+                    result = self.evidence.view(spec.evidence_id, spec.offset, spec.limit)
+                observations.append((call, result))
             except Exception as error:
                 observations.append((call, {"execution_status": "rejected", "error": str(error)}))
         return {"observations": observations, "finish": finish}
@@ -441,7 +435,7 @@ class Run:
             remaining = self.deadline - perf_counter()
             if remaining <= 0:
                 raise TimeoutError("Run deadline exceeded before compliance review")
-            review = timed_call("compliance", review_answer,
+            review = review_answer(
                 self.provider,
                 user_message=self.request.message,
                 answer=final.answer,
@@ -491,7 +485,7 @@ class Run:
             if remaining <= 0 or (self.control and self.control.cancelled()):
                 return False
             self.compliance_checks += 1
-            review = timed_call("compliance", review_answer, self.provider, user_message=self.request.message,
+            review = review_answer(self.provider, user_message=self.request.message,
                                    answer=answer, timeout_seconds=min(20, remaining))
             self.trace("react_compliance", {**review.model_dump(mode="json"), "origin": "runtime_recovery"})
             if review.decision != "allow":
@@ -557,11 +551,9 @@ class Run:
 def _node(name):
     def call(state, config):
         runtime = config["configurable"]["run"]
-        with timing_stage("react_node", round=runtime.models + (name == "agent"), operation=name):
-            result = getattr(runtime, name)(state)
+        result = getattr(runtime, name)(state)
         merged = {**state, **result}
-        with timing_stage("persistence", operation="checkpoint"):
-            runtime.save(merged, _next(name, merged))
+        runtime.save(merged, _next(name, merged))
         return result
     return call
 
@@ -590,7 +582,6 @@ def _graph():
 GRAPH = _graph()
 
 
-@timed_runtime
 def run(request, registry, provider, history=None, memory=None, progress=None, answer_event=None):
     """Return a validated result; the compatible answer_event argument stays silent."""
     runtime = Run(request, registry, provider, history or [], progress, answer_event)
@@ -603,9 +594,9 @@ def run(request, registry, provider, history=None, memory=None, progress=None, a
         if remaining <= 0:
             raise TimeoutError("Run deadline exceeded before input security review")
         anchor_date = current_query_reference_date()
-        task_context = timed_call("context", prepare_task_context, request, history or [], memory)
+        task_context = prepare_task_context(request, history or [], memory)
         input_stage = "input_review"
-        input_review = timed_call("input_review", review_input,
+        input_review = review_input(
             provider,
             message=request.message,
             timeout_seconds=min(15, remaining),
@@ -638,7 +629,7 @@ def run(request, registry, provider, history=None, memory=None, progress=None, a
         runtime.date_resolution_missing = input_review.date_resolution_missing
         if input_review.date_scope.basis == "observation":
             runtime.gateway.required_date = input_review.requested_date
-        history_messages, history_refs = timed_call("context", prepare_history,
+        history_messages, history_refs = prepare_history(
             request,
             history or [],
             runtime.evidence,

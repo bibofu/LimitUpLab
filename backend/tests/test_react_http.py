@@ -90,26 +90,6 @@ def http_server(tmp_path, monkeypatch, request):
 PAYLOAD = {"session_id": "http-s", "message_id": "http-m", "message": "查询热榜，缺失时说明缺口"}
 
 
-def test_final_timing_snapshot_does_not_mutate_authoritative_response(http_server):
-    client, _ = http_server
-    result = client.post("/chat", json=PAYLOAD).json()
-    run_id = result["run_id"]
-    for worker in list(react_chat._workers.values()):
-        worker.join(5)
-    assert client.get(f"/chat/runs/{run_id}").json()["response"] == result
-    assert client.post("/chat", json=PAYLOAD).json() == result
-    with Journal().connection() as db:
-        rows = db.execute("SELECT payload_json FROM quality_trace_snapshots WHERE run_id=? AND stage='timing'", (run_id,)).fetchall()
-    assert len(rows) == 1
-    final = json.loads(rows[0][0])["payload"]
-    saved = result["performance"]["timing"]
-    assert final["elapsed_ms"] >= saved["elapsed_ms"]
-    assert not any(span["operation"] == "final_answer" for span in saved["spans"])
-    assert {"final_answer", "usage_accounting"} <= {
-        span["operation"] for span in final["spans"] if span["stage"] == "persistence"}
-    assert final["incomplete_spans"] == 0
-
-
 def test_rejected_start_does_not_poison_retry_or_create_a_chat_answer(http_server, monkeypatch):
     client, state = http_server
     begin = agents._begin_agent_request
