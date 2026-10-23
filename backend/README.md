@@ -74,7 +74,8 @@ loop; `ToolGateway`, `EvidenceStore` and the PostgreSQL run journal retain finan
 policy, provenance, idempotency and recovery control. The only valid configured
 backend is `LIMITUPLAB_LLM_BACKEND=langchain`; any other value fails during
 startup. Every Agent tool also declares a Pydantic output contract in
-`app/agents/tool_output_models.py`; `EvidenceStore` attaches the resulting
+`app/agents/tool_output_contracts.py`, reusing the annotated DTOs in `app/models.py`
+where they exist; `EvidenceStore` attaches the resulting
 `field_definitions` to each tool result so the model reads field meaning next to
 the data instead of inferring it from names. The legacy Requests class remains available only through explicit
 construction and dependency injection for isolated text callers.
