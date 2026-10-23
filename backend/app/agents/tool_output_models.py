@@ -12,6 +12,8 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
+from app.models import LimitUpEvent, ScoringPolicy
+
 
 class OutputModel(BaseModel):
     """Base for documentation models; provider extensions must not break them."""
@@ -53,78 +55,6 @@ class MarketSummaryPayload(OutputModel):
     hot_industries: list[str] = Field(description="涨停股集中的行业")
     hot_concepts: list[HotConceptRow] = Field(
         description="涨停概念热度，每项含name、limit_up_count、intraday_opened_count"
-    )
-
-
-class MarketIndexRow(OutputModel):
-    name: str = Field(description="指数名称")
-    symbol: str = Field(description="指数代码")
-    start_date: date = Field(description="区间第一个交易日")
-    end_date: date = Field(description="区间最后一个交易日")
-    start_close: float = Field(description="区间首个收盘点位")
-    end_close: float = Field(description="区间最后收盘点位")
-    change_pct: float | None = Field(
-        default=None,
-        description="截止交易日相对上一交易日的点位变化；不是区间收益",
-        json_schema_extra={"unit": "%"},
-    )
-    return_pct: float = Field(
-        description="区间累计点位涨跌幅", json_schema_extra={"unit": "%"}
-    )
-    max_drawdown_pct: float = Field(
-        description="区间内峰谷最大回撤", json_schema_extra={"unit": "%"}
-    )
-    positive_days: int = Field(description="区间上涨交易日数")
-    negative_days: int = Field(description="区间下跌交易日数")
-    points: list[dict[str, Any]] = Field(
-        description="逐日收盘序列，每项含trade_date、close、change_pct"
-    )
-    source: str = Field(description="指数数据来源")
-
-
-class MarketIndexPayload(OutputModel):
-    requested_days: int = Field(description="请求的交易日窗口长度")
-    requested_end_date: date = Field(description="请求的截止交易日")
-    data_as_of: date = Field(description="实际数据截止交易日")
-    data_fresh: bool = Field(description="数据是否覆盖请求的截止交易日")
-    indices: list[MarketIndexRow] = Field(description="三大指数走势")
-
-
-# ---------------------------------------------------------------------------
-# Daily promotion and post-limit research
-# ---------------------------------------------------------------------------
-
-
-class DailyBoardPromotionRow(OutputModel):
-    trade_date: date = Field(description="本次晋级观察交易日")
-    previous_trade_date: date = Field(description="用于分母的前一交易日")
-    sample_size: int = Field(description="前一交易日收盘涨停股票数")
-    promoted_count: int = Field(description="本次晋级一板的股票数")
-    probability: float = Field(description="总晋级率", json_schema_extra={"unit": "%"})
-    first_board_sample_size: int = Field(description="前一交易日首板样本数")
-    first_board_promoted_count: int = Field(description="首板晋级二板股票数")
-    first_board_probability: float | None = Field(
-        default=None, description="首板到二板晋级率", json_schema_extra={"unit": "%"}
-    )
-    continued_board_sample_size: int = Field(description="前一交易日连板样本数")
-    continued_board_promoted_count: int = Field(description="连板继续晋级股票数")
-    continued_board_probability: float | None = Field(
-        default=None, description="连板梯队晋级率", json_schema_extra={"unit": "%"}
-    )
-    buckets: list[dict[str, Any]] = Field(
-        description="按板数分组的晋级桶，每项含from_board_height、to_board_height、sample_size、promoted_count、probability"
-    )
-    promoted_stocks: list[dict[str, Any]] = Field(
-        description="晋级成功股票，每项含symbol、name、industry、concept、from_board_height、to_board_height、first_limit_time、break_count及开盘表现"
-    )
-    first_board_opening_evaluable_count: int = Field(
-        description="首板晋级中可评价次日开盘类型的样本数"
-    )
-    first_board_high_open_count: int = Field(description="首板晋级中高开样本数")
-    first_board_flat_open_count: int = Field(description="首板晋级中平开样本数")
-    first_board_low_open_count: int = Field(description="首板晋级中低开样本数")
-    first_board_opening_missing_symbols: list[str] = Field(
-        description="缺少次日开盘数据、未参与开盘类型统计的股票代码"
     )
 
 
@@ -284,118 +214,6 @@ class PostLimitStatisticsPayload(OutputModel):
 # ---------------------------------------------------------------------------
 
 
-class SectorRankingRow(OutputModel):
-    sector_name: str = Field(description="板块名称")
-    rank: int = Field(description="当前目录中的涨跌幅排名")
-    change_pct: float = Field(description="板块涨跌幅", json_schema_extra={"unit": "%"})
-    amount_yi: float | None = Field(
-        default=None, description="板块成交额", json_schema_extra={"unit": "亿元"}
-    )
-    up_count: int | None = Field(default=None, description="板块内上涨家数")
-    down_count: int | None = Field(default=None, description="板块内下跌家数")
-    leader_name: str | None = Field(default=None, description="领涨股名称")
-    leader_change_pct: float | None = Field(
-        default=None, description="领涨股涨跌幅", json_schema_extra={"unit": "%"}
-    )
-
-
-class SectorPerformancePayload(OutputModel):
-    requested_sector: str | None = Field(default=None, description="请求的板块名")
-    sector_name: str | None = Field(default=None, description="解析后的板块名")
-    sector_type: str = Field(description="板块类型：industry、concept或industry_group")
-    trade_date: date = Field(description="请求的观察交易日")
-    data_as_of: date = Field(description="实际数据截止交易日")
-    data_fresh: bool = Field(description="数据是否覆盖请求日期")
-    previous_trade_date: date | None = Field(
-        default=None, description="用于涨跌对比的前一交易日"
-    )
-    covered_sector_count: int | None = Field(
-        default=None, description="本次排名覆盖的板块数"
-    )
-    ranking_complete: bool | None = Field(
-        default=None, description="排名目录是否完整覆盖目标日"
-    )
-    ranking_universe: str | None = Field(
-        default=None, description="排名目录口径说明"
-    )
-    data_missing: list[str] = Field(description="数据缺口")
-    rank: int | None = Field(default=None, description="指定板块的排名")
-    sector_count: int = Field(description="排名目录板块总数")
-    change_pct: float | None = Field(
-        default=None, description="指定板块涨跌幅", json_schema_extra={"unit": "%"}
-    )
-    amount_yi: float | None = Field(
-        default=None, description="指定板块成交额", json_schema_extra={"unit": "亿元"}
-    )
-    net_inflow_yi: float | None = Field(
-        default=None, description="指定板块资金净流入", json_schema_extra={"unit": "亿元"}
-    )
-    up_count: int | None = Field(default=None, description="指定板块上涨家数")
-    down_count: int | None = Field(default=None, description="指定板块下跌家数")
-    leader_name: str | None = Field(default=None, description="指定板块领涨股")
-    leader_price: float | None = Field(
-        default=None, description="领涨股价格", json_schema_extra={"unit": "元"}
-    )
-    leader_change_pct: float | None = Field(
-        default=None, description="领涨股涨跌幅", json_schema_extra={"unit": "%"}
-    )
-    return_5d_pct: float | None = Field(
-        default=None, description="指定板块5日区间收益", json_schema_extra={"unit": "%"}
-    )
-    return_20d_pct: float | None = Field(
-        default=None, description="指定板块20日区间收益", json_schema_extra={"unit": "%"}
-    )
-    top_sectors: list[SectorRankingRow] = Field(description="涨跌幅靠前板块")
-    bottom_sectors: list[SectorRankingRow] = Field(description="涨跌幅靠后板块")
-    matched_sectors: list[SectorRankingRow] = Field(description="名称匹配的板块")
-    history: list[dict[str, Any]] = Field(
-        description="指定板块逐日历史，每项含trade_date、close、change_pct"
-    )
-    sources: list[str] = Field(description="数据来源")
-
-
-class SectorStockRow(OutputModel):
-    rank: int = Field(description="本次趋势比较排名")
-    symbol: str = Field(description="股票代码")
-    name: str = Field(description="股票名称")
-    trend_score: float = Field(description="趋势综合分")
-    trend: str = Field(description="趋势标签：rising、oscillating、falling或insufficient")
-    data_as_of: date = Field(description="该股数据截止交易日")
-    latest_close: float = Field(description="最新收盘价", json_schema_extra={"unit": "元"})
-    return_5d_pct: float | None = Field(
-        default=None, description="5日区间涨跌幅", json_schema_extra={"unit": "%"}
-    )
-    return_20d_pct: float | None = Field(
-        default=None, description="20日区间涨跌幅", json_schema_extra={"unit": "%"}
-    )
-    ma5: float | None = Field(default=None, description="5日均线", json_schema_extra={"unit": "元"})
-    ma10: float | None = Field(default=None, description="10日均线", json_schema_extra={"unit": "元"})
-    ma20: float | None = Field(default=None, description="20日均线", json_schema_extra={"unit": "元"})
-    volume_ratio_5d: float | None = Field(
-        default=None, description="近5日量比"
-    )
-    max_drawdown_pct: float | None = Field(
-        default=None, description="区间最大回撤", json_schema_extra={"unit": "%"}
-    )
-
-
-class SectorStockRankingPayload(OutputModel):
-    requested_sector: str = Field(description="请求的板块名")
-    sector_name: str = Field(description="解析后的板块名")
-    sector_category: str = Field(description="板块类别：industry或concept")
-    sector_thscode: str = Field(description="板块数据源标识")
-    requested_days: int = Field(description="趋势比较窗口")
-    requested_limit: int = Field(description="请求返回数量")
-    data_as_of: date = Field(description="数据截止交易日")
-    member_count: int = Field(description="板块成分股总数")
-    analyzed_count: int = Field(description="完成趋势比较的股票数")
-    missing_count: int = Field(description="因数据缺失未比较的股票数")
-    truncated_count: int = Field(description="因数量上限未返回的股票数")
-    items: list[SectorStockRow] = Field(description="趋势排名")
-    sources: list[str] = Field(description="数据来源")
-    warnings: list[str] = Field(description="覆盖范围说明")
-
-
 class HotStockRow(OutputModel):
     symbol: str = Field(description="股票代码")
     thscode: str = Field(description="数据源带市场后缀的股票标识")
@@ -502,40 +320,6 @@ class DragonTigerPayload(OutputModel):
 # ---------------------------------------------------------------------------
 
 
-class LimitUpEventRow(OutputModel):
-    symbol: str = Field(description="股票代码")
-    name: str = Field(description="股票名称")
-    trade_date: date = Field(description="涨停事件交易日")
-    first_limit_time: str = Field(description="首次封板时间")
-    last_limit_time: str = Field(description="最后封板时间")
-    seal_count: int = Field(description="封板次数")
-    break_count: int = Field(description="开板/炸板次数；不是连板高度")
-    closed_limit: bool = Field(description="收盘是否封住涨停")
-    board_height: int = Field(description="连板高度，1为首板")
-    amount: float = Field(description="成交金额", json_schema_extra={"unit": "元"})
-    turnover_rate: float = Field(
-        description="换手率", json_schema_extra={"unit": "%"}
-    )
-    industry: str = Field(description="所属行业")
-    concept: str = Field(description="所属概念/题材")
-    next_open_pct: float = Field(
-        description="次日开盘涨跌幅", json_schema_extra={"unit": "%"}
-    )
-    next_high_pct: float = Field(
-        description="次日最高价涨跌幅", json_schema_extra={"unit": "%"}
-    )
-    next_close_pct: float = Field(
-        description="次日收盘涨跌幅", json_schema_extra={"unit": "%"}
-    )
-    three_day_return_pct: float = Field(
-        description="后续3日累计涨跌幅", json_schema_extra={"unit": "%"}
-    )
-    five_day_return_pct: float = Field(
-        description="后续5日累计涨跌幅", json_schema_extra={"unit": "%"}
-    )
-    continued_next_day: bool = Field(description="次日是否继续涨停")
-
-
 class LimitUpEventsPayload(OutputModel):
     trade_date: str = Field(description="查询日期或最近选中交易日")
     start_trade_date: str | None = Field(default=None, description="多日查询的首个交易日")
@@ -555,7 +339,7 @@ class LimitUpEventsPayload(OutputModel):
         description="按行业或题材聚合的命中数量"
     )
     unclassified_event_count: int = Field(description="无法归入聚合维度的事件数")
-    events: list[LimitUpEventRow] = Field(description="涨停事件")
+    events: list[LimitUpEvent] = Field(description="涨停事件")
 
 
 class MarketEventRow(OutputModel):
@@ -709,121 +493,15 @@ class RecentReturnsPayload(OutputModel):
     data_missing: list[str] = Field(description="数据缺口")
 
 
+class ScoringPolicyStatusPayload(OutputModel):
+    champion: ScoringPolicy = Field(description="当前Champion策略")
+    policy_count: int = Field(description="已注册策略数")
+    challengers: list[ScoringPolicy] = Field(description="近期Challenger策略")
+    latest_optimization: dict[str, Any] | None = Field(
+        default=None, description="最近一次样本外优化结果，含比较指标和晋级门槛"
+    )
+
+
 # ---------------------------------------------------------------------------
 # Stock K-line, news and activity
 # ---------------------------------------------------------------------------
-
-
-class StockKLineBarRow(OutputModel):
-    trade_date: date = Field(description="交易日")
-    open: float = Field(description="开盘价", json_schema_extra={"unit": "元"})
-    close: float = Field(description="收盘价", json_schema_extra={"unit": "元"})
-    high: float = Field(description="最高价", json_schema_extra={"unit": "元"})
-    low: float = Field(description="最低价", json_schema_extra={"unit": "元"})
-    volume: float = Field(description="成交量，沿用来源单位；不是成交金额")
-    amount: float = Field(description="成交额", json_schema_extra={"unit": "元"})
-    source: str = Field(description="该条K线的数据来源")
-    change_pct: float | None = Field(
-        default=None,
-        description="来源返回的单日涨跌幅；缺失时不得用未复权收盘价变动率代替",
-        json_schema_extra={"unit": "%"},
-    )
-    previous_close: float | None = Field(
-        default=None, description="前一交易日收盘价", json_schema_extra={"unit": "元"}
-    )
-    previous_trade_date: date | None = Field(default=None, description="前一交易日")
-    change_pct_basis: str | None = Field(default=None, description="change_pct的来源口径")
-    close_to_close_pct: float | None = Field(
-        default=None,
-        description="相邻有效记录的未复权收盘价变动率；基准见previous_close",
-        json_schema_extra={"unit": "%"},
-    )
-
-
-class StockKLinePayload(OutputModel):
-    symbol: str = Field(description="股票代码")
-    requested_days: int = Field(description="请求的观察交易日数")
-    requested_end_date: date = Field(description="请求的截止交易日")
-    data_as_of: date = Field(description="实际数据截止交易日")
-    data_fresh: bool = Field(description="数据是否覆盖请求截止日")
-    trend: str = Field(description="均线排列标签：rising、falling、oscillating或insufficient")
-    latest_close: float = Field(description="最新收盘价", json_schema_extra={"unit": "元"})
-    return_5d_pct: float | None = Field(
-        default=None, description="5个交易日区间涨跌幅", json_schema_extra={"unit": "%"}
-    )
-    return_10d_pct: float | None = Field(
-        default=None, description="10个交易日区间涨跌幅", json_schema_extra={"unit": "%"}
-    )
-    return_20d_pct: float | None = Field(
-        default=None, description="20个交易日区间涨跌幅", json_schema_extra={"unit": "%"}
-    )
-    ma5: float | None = Field(default=None, description="5日均线", json_schema_extra={"unit": "元"})
-    ma10: float | None = Field(default=None, description="10日均线", json_schema_extra={"unit": "元"})
-    ma20: float | None = Field(default=None, description="20日均线", json_schema_extra={"unit": "元"})
-    volume_ratio_5d: float | None = Field(default=None, description="近5日量比")
-    max_drawdown_pct: float | None = Field(
-        default=None, description="展示窗口内峰谷最大回撤", json_schema_extra={"unit": "%"}
-    )
-    sources: list[str] = Field(description="K线来源")
-    bars: list[StockKLineBarRow] = Field(description="日K线")
-    data_missing: list[str] = Field(description="数据缺口")
-
-
-class FinanceNewsRow(OutputModel):
-    title: str = Field(description="新闻标题")
-    summary: str = Field(description="新闻摘要")
-    published_at: datetime = Field(description="发布时间")
-    source: str = Field(description="来源")
-    url: str = Field(description="原文链接")
-    category: str = Field(description="新闻类别")
-    relevance_score: float = Field(description="与查询主题的相关性分数")
-
-
-class FinanceNewsPayload(OutputModel):
-    query: str | None = Field(default=None, description="主题词；仅用于排序加权")
-    fetched_at: datetime = Field(description="抓取时间")
-    window_hours: int = Field(description="按抓取时间回溯的小时数")
-    sources: list[str] = Field(description="聚合来源")
-    items: list[FinanceNewsRow] = Field(description="去重后的财经快讯")
-
-
-class StockNewsRow(OutputModel):
-    symbol: str = Field(description="股票代码")
-    name: str = Field(description="股票名称")
-    title: str = Field(description="新闻标题")
-    summary: str = Field(description="新闻摘要")
-    published_at: datetime = Field(description="发布时间")
-    source: str = Field(description="来源")
-    url: str = Field(description="原文链接")
-    item_type: str = Field(description="条目类型，如新闻或公告")
-    relevance_score: float = Field(description="相关性分数")
-    fetched_at: datetime = Field(description="抓取时间")
-
-
-class StockNewsPayload(OutputModel):
-    symbol: str = Field(description="股票代码")
-    name: str = Field(description="股票名称")
-    fetched_at: datetime = Field(description="抓取时间")
-    window_days: int = Field(description="回溯自然日数")
-    cache_status: str = Field(description="缓存状态")
-    sources: list[str] = Field(description="新闻来源")
-    items: list[StockNewsRow] = Field(description="个股新闻")
-    data_missing: list[str] = Field(description="数据缺口")
-
-
-class StockActivityPayload(OutputModel):
-    symbol: str = Field(description="股票代码")
-    name: str = Field(description="股票名称")
-    fetched_at: datetime = Field(description="汇总抓取时间")
-    data_as_of: date | None = Field(default=None, description="K线数据截止交易日")
-    kline: dict[str, Any] | None = Field(
-        default=None, description="K线事实，字段含义同stock_kline"
-    )
-    recent_limit_up_events: list[dict[str, Any]] = Field(
-        description="近期涨停记录，每项含trade_date、board_height、closed_limit、first_limit_time、break_count、industry、concept"
-    )
-    rating_context: dict[str, Any] = Field(
-        description="首板评分补充事实，含流通市值、量比、20日涨幅、龙虎榜和人氣排名"
-    )
-    news: dict[str, Any] = Field(description="个股新闻，字段含义同stock_news")
-    data_missing: list[str] = Field(description="数据缺口")

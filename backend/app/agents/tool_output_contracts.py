@@ -8,22 +8,16 @@ from typing import Any
 from pydantic import BaseModel
 
 from app.agents.tool_output_models import (
-    DailyBoardPromotionRow,
     DragonTigerPayload,
     DragonTigerRow,
-    FinanceNewsPayload,
-    FinanceNewsRow,
     FirstBoardFilterPayload,
     FirstBoardRatingRow,
     FirstBoardRatingsPayload,
     HotStockPayload,
     HotStockRow,
-    LimitUpEventRow,
     LimitUpEventsPayload,
     MarketEventPoolPayload,
     MarketEventRow,
-    MarketIndexPayload,
-    MarketIndexRow,
     MarketSummaryPayload,
     PostLimitCandidateRow,
     PostLimitPathPayload,
@@ -32,24 +26,30 @@ from app.agents.tool_output_models import (
     PostLimitStatisticsPayload,
     RecentLimitUpReturnRow,
     RecentReturnsPayload,
-    SectorPerformancePayload,
-    SectorRankingRow,
-    SectorStockRankingPayload,
-    SectorStockRow,
-    StockActivityPayload,
-    StockKLineBarRow,
-    StockKLinePayload,
-    StockNewsPayload,
-    StockNewsRow,
-)
-from app.agents.tool_output_review_models import (
-    AgentEvaluationPayload,
-    AgentEvaluationRow,
-    FirstBoardCriticPayload,
-    PredictionQualityAuditPayload,
-    RatingBacktestPayload,
-    ReviewHighScorePicksPayload,
     ScoringPolicyStatusPayload,
+)
+from app.models import (
+    AgentEvaluationItem,
+    AgentEvaluationResponse,
+    DailyBoardPromotionStat,
+    FinanceNewsFacts,
+    FinanceNewsItem,
+    FirstBoardCriticResponse,
+    LimitUpEvent,
+    MarketIndexTrendFacts,
+    MarketIndexTrendItem,
+    PredictionQualityAuditResponse,
+    RatingBacktestResponse,
+    ReviewAgentReportResponse,
+    SectorPerformanceFacts,
+    SectorRankingItem,
+    SectorStockRankingFacts,
+    SectorStockTrendItem,
+    StockActivityFacts,
+    StockKLineBar,
+    StockKLineFacts,
+    StockNewsFacts,
+    StockNewsItem,
 )
 from app.agents.tool_schemas_market import MARKET_TOOL_SCHEMAS
 from app.agents.tool_schemas_news import NEWS_TOOL_SCHEMAS
@@ -68,14 +68,14 @@ class OutputSpec:
 TOOL_OUTPUT_SPECS: dict[str, OutputSpec] = {
     "market_summary": OutputSpec(payload_model=MarketSummaryPayload),
     "market_index_trend": OutputSpec(
-        row_model=MarketIndexRow, payload_model=MarketIndexPayload
+        row_model=MarketIndexTrendItem, payload_model=MarketIndexTrendFacts
     ),
-    "daily_board_promotion": OutputSpec(row_model=DailyBoardPromotionRow),
+    "daily_board_promotion": OutputSpec(row_model=DailyBoardPromotionStat),
     "sector_performance": OutputSpec(
-        row_model=SectorRankingRow, payload_model=SectorPerformancePayload
+        row_model=SectorRankingItem, payload_model=SectorPerformanceFacts
     ),
     "sector_stock_ranking": OutputSpec(
-        row_model=SectorStockRow, payload_model=SectorStockRankingPayload
+        row_model=SectorStockTrendItem, payload_model=SectorStockRankingFacts
     ),
     "hot_stock_ranking": OutputSpec(
         row_model=HotStockRow, payload_model=HotStockPayload
@@ -90,7 +90,7 @@ TOOL_OUTPUT_SPECS: dict[str, OutputSpec] = {
         row_model=MarketEventRow, payload_model=MarketEventPoolPayload
     ),
     "limit_up_events": OutputSpec(
-        row_model=LimitUpEventRow, payload_model=LimitUpEventsPayload
+        row_model=LimitUpEvent, payload_model=LimitUpEventsPayload
     ),
     "first_board_filter": OutputSpec(
         row_model=FirstBoardRatingRow, payload_model=FirstBoardFilterPayload
@@ -99,7 +99,7 @@ TOOL_OUTPUT_SPECS: dict[str, OutputSpec] = {
         row_model=RecentLimitUpReturnRow, payload_model=RecentReturnsPayload
     ),
     "stock_kline": OutputSpec(
-        row_model=StockKLineBarRow, payload_model=StockKLinePayload
+        row_model=StockKLineBar, payload_model=StockKLineFacts
     ),
     "post_limit_screen": OutputSpec(
         row_model=PostLimitCandidateRow, payload_model=PostLimitScreenPayload
@@ -108,21 +108,21 @@ TOOL_OUTPUT_SPECS: dict[str, OutputSpec] = {
         row_model=PostLimitPathRow, payload_model=PostLimitPathPayload
     ),
     "post_limit_statistics": OutputSpec(payload_model=PostLimitStatisticsPayload),
-    "prediction_quality_audit": OutputSpec(payload_model=PredictionQualityAuditPayload),
-    "rating_backtest": OutputSpec(payload_model=RatingBacktestPayload),
-    "first_board_critic": OutputSpec(payload_model=FirstBoardCriticPayload),
+    "prediction_quality_audit": OutputSpec(payload_model=PredictionQualityAuditResponse),
+    "rating_backtest": OutputSpec(payload_model=RatingBacktestResponse),
+    "first_board_critic": OutputSpec(payload_model=FirstBoardCriticResponse),
     "rating_evaluation": OutputSpec(
-        row_model=AgentEvaluationRow, payload_model=AgentEvaluationPayload
+        row_model=AgentEvaluationItem, payload_model=AgentEvaluationResponse
     ),
-    "review_high_score_picks": OutputSpec(payload_model=ReviewHighScorePicksPayload),
+    "review_high_score_picks": OutputSpec(payload_model=ReviewAgentReportResponse),
     "scoring_policy_status": OutputSpec(payload_model=ScoringPolicyStatusPayload),
     "finance_news": OutputSpec(
-        row_model=FinanceNewsRow, payload_model=FinanceNewsPayload
+        row_model=FinanceNewsItem, payload_model=FinanceNewsFacts
     ),
     "stock_news": OutputSpec(
-        row_model=StockNewsRow, payload_model=StockNewsPayload
+        row_model=StockNewsItem, payload_model=StockNewsFacts
     ),
-    "stock_activity": OutputSpec(payload_model=StockActivityPayload),
+    "stock_activity": OutputSpec(payload_model=StockActivityFacts),
 }
 
 
