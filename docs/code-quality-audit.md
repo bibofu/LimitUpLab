@@ -1,5 +1,7 @@
 # Agent 应用质量审查
 
+> 架构更新（2026-10-24）：本文为历史审计记录。旧 `react_runtime`、EvidenceStore、`finish`、`compute_result` 和 Golden/quality 评测代码已删除；当前架构见 [LangChain 集成](LangChain_Integration.md)。
+
 ## 2026-10-12：Judge v20 / v21 分类与校准验证，整体门槛未通过
 
 - 分离交付要求范围与可见断言审查，按断言类型选择证据后再给关系。修复query_semantics可独立证明world_fact的校验漏洞；五类元数据固定对照均由错误放行变为拒绝，保留有业务证据时的辅助用途。不改target、引用ID或旧判定，不改v8标签。

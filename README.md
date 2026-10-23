@@ -22,11 +22,11 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 
 当前代码以 **LangChain 原生工具调用 + LangGraph 有界 ReAct** 为聊天主链路，支持持久化运行、实时进度、校验并保存后渐进展示正式答案和服务端证据表。旧 Planner/Capability/Policy/模板执行器、Task DAG、Complex Graph 和 Claim Ledger 已退出生产调用图。现行实现见 [LangChain + LangGraph 集成](docs/LangChain_Integration.md)。
 
-当前阶段为 **V1.5：ReAct 交付与证据契约完善、Golden 粗评基线建立**。[V1.5 阶段里程碑](docs/V1.5_Milestone.md) 汇总 `v1.5.0` 的工作、验证结果、限制和下一步。Golden 已能辅助定位 Agent 问题，裁判可靠性验收仍未通过；自动结果需要保留待复核项。
+当前阶段为 **V1.5：轻量 LangGraph Agent 与工具输出契约完善**。[V1.5 阶段里程碑](docs/V1.5_Milestone.md) 汇总 `v1.5.0` 的工作、验证结果、限制和下一步。
 
 当前 Windows 工作区和远程单实例生产环境均已正式切换至 PostgreSQL。本地旧 SQLite 运行文件已清理，迁移前一致性归档与迁移工具保留；生产原 SQLite 文件未在本次操作中删除。清理与验证见 [SQLite 退役验收](docs/SQLite_Retirement.md)。生产版本为 `v1.6.3`，ST/北交所研究范围修复、当日收盘补跑与实际接口/Agent 验收见 [v1.6.3 发布记录](deploy/incidents/2026-10-20-v1.6.3-relay-refresh.md)；首次迁移、重启持久化及备份恢复记录见 [生产切换验收](deploy/incidents/2026-10-19-postgresql-cutover.md) 和 [本地切换验收](docs/Local_PostgreSQL_Cutover.md)。当前代码要求显式配置 `LIMITUPLAB_DATABASE_URL`，SQLite 仅保留历史归档与迁移读取；本次清理不代表已发布到生产。操作方式见 [本地手册](deploy/local-postgresql.md) 与 [生产部署恢复手册](deploy/postgresql.md)；多实例部署尚未验收。
 
-离线研究、维护备份、质量工单及 Golden 评测的 PostgreSQL 路径已补齐，通过禁止 SQLite 连接的本地验证，并随 `v1.6.2` 发布，见 [SQLite 依赖清理验收](docs/PostgreSQL_Independence.md)。Golden 实时评测仍须单独配置评测库，不使用生产业务库。
+离线研究、维护备份和 PostgreSQL 路径已补齐，通过禁止 SQLite 连接的本地验证，并随 `v1.6.2` 发布，见 [SQLite 依赖清理验收](docs/PostgreSQL_Independence.md)。
 
 当前版本已经具备可本地运行和单机部署的完整 MVP：
 
@@ -39,7 +39,6 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 - 来源感知的预测质量审计、确定性基线和多目标评分 v3
 - 每日连板晋级率、首板到二板率和各板高梯队统计
 - 数据健康、Agent 运行轨迹和缓存
-- Golden 问答粗评：61 场景、84 回合，冻结合成环境、确定性检查与独立模型裁判
 - 盘前推荐页并列提供“一进二接力”“缩量整理”“高位回撤”三个入口，后两者支持固定条件筛选、历史日期查看和缺失原因解释，并独立于一进二前向统计，见 [第一版说明](docs/Consolidation_Strategy_V1.md)
 
 当前代码基线：
@@ -50,7 +49,6 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 | 本地数据健康检查 | 已实现 |
 | LLM 流式问答 | 已实现 |
 | Agent 限流与成本审计 | 单访客/IP/全局限制、真实 token 账本已实现 |
-| Golden 评测 | 可运行主要场景粗评；部分工具未覆盖，裁判边界仍需人工复核 |
 | 评分 v3 工程实现 | 已完成，影子验证中 |
 | 单机生产部署基线 | Docker、Nginx、HTTPS、持久化卷、备份和日更任务已部署 |
 
@@ -71,14 +69,12 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 ```text
 用户问题
   -> Durable Run 创建任务、绑定 owner/session/message_id
-  -> Input Reviewer 判断请求类型、追问范围和明确日期
-  -> ReAct Agent 根据当前问题及受控上下文选择一批原生工具调用
-  -> ToolGateway 校验 profile、Schema、日期能力和参数边界
-  -> 工具并发执行，完整结果进入 EvidenceStore，模型只接收有界预览
-  -> 模型观察 ToolMessage，按需继续查询、读取/计算证据或单独调用 finish
-  -> 候选 finish.answer 留在服务端；名单由服务端渲染证据表，前端继续显示进度
-  -> Answer Gate 校验证据范围、表格和状态，独立 Critic 检查投资合规
-  -> 校验失败允许一次内部修复；Journal.finish 原子保存后通过 completed 一次交付正式答案，前端渐进展示
+  -> 轻量输入安全审查（只判断是否试图绕过系统边界）
+  -> AgentRunner（LangGraph agent -> tools -> agent）选择原生工具调用
+  -> BusinessToolGateway 校验 profile、Schema、日期回显和参数边界
+  -> 工具并发执行，完整结果连同 field_definitions 直接返回模型
+  -> 模型基于已取得事实直接回答；继续查询或结束由模型决定
+  -> 可选语义合规复核；Journal.finish 原子保存后通过 completed 交付正式答案
 ```
 
 当前主要工具：
@@ -103,13 +99,13 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 | `prediction_quality_audit` | 审计预测来源、Outcome 覆盖和基线表现 |
 | `scoring_policy_status` | 查询 Champion、Challenger 和晋级原因 |
 
-生产环境依赖上一步名单的查询由模型在观察结果后发起下一轮工具调用；集合交并差、筛选、排序和聚合交给受限 `compute_result`，完整证据按 ID 保存在请求级 EvidenceStore，不允许模型执行任意表达式或猜测隐藏行。
+生产环境依赖上一步名单的查询由模型在观察结果后发起下一轮工具调用；筛选、排序和聚合直接基于工具返回的结构化 rows 与字段说明，模型不再维护 evidence ID 或表达式 DSL。
 
-默认 `LIMITUPLAB_AGENT_PROFILE=v1_close_review` 只暴露收盘后与历史研究工具。ToolGateway 对每一次调用重新校验 allowlist、JSON Schema、日期能力、单股票约束和空集合边界，未知或未开放工具即使由模型生成也不会执行。
+默认 `LIMITUPLAB_AGENT_PROFILE=v1_close_review` 只暴露收盘后与历史研究工具。BusinessToolGateway 对每一次调用重新校验 allowlist、JSON Schema、日期回显、单股票约束和空集合边界，未知或未开放工具即使由模型生成也不会执行。
 
-自然语言 Query Contract 编译器已经退役。业务查询由原生 tool call 发起；Input Reviewer 解析本轮明确日期，ToolGateway 用它补齐调用中省略的单日期字段或 `requested_as_of`，再校验类型、时态及返回日期。生产执行事实以 ReAct decision、ToolMessage、EvidenceStore 和最终 trace 为准。
+业务查询由原生 tool call 发起；日期由模型显式写入工具参数，工具返回的 `data_as_of` 必须与请求日期一致。生产执行事实以 ToolMessage、工具返回的 rows/field_definitions 和最终 trace 为准。
 
-名单通过 `finish.table` 声明本轮证据及字段，由服务端输出实际返回的行。预览省略与数据源截断分别记录，返回行数不能自动代表全市场完整名单；当前每条回答最多一张证据表。开放式解释仍需结合原始证据审阅，证据引用本身不能证明因果关系。
+名单由模型基于实际返回的 rows 直接输出 Markdown 表格；截断、来源缺失和覆盖率由工具结果显式标记，返回行数不能自动代表全市场完整名单。开放式解释仍需结合原始证据审阅，引用本身不能证明因果关系。
 
 
 
@@ -153,13 +149,13 @@ flowchart LR
     U[User] --> I[React Agent Workspace]
     I --> J[FastAPI Chat / SSE]
     J --> S[(Sessions + Run Journal)]
-    J --> K[LangGraph ReAct]
-    K --> L[ToolGateway + Policy]
-    L --> M[Tool Registry + EvidenceStore]
+    J --> K[LangGraph AgentRunner]
+    K --> L[BusinessToolGateway]
+    L --> M[Tool Registry]
     M --> C
-    M --> N[Sector / Web Search]
+    M --> N[Sector / News]
     M --> O[Critic / Review / Evaluation]
-    M --> P[Observe + Finish Gate]
+    M --> P[Direct Answer + Compliance]
     P --> J
     S -->|Persisted completed| I
 
@@ -176,10 +172,9 @@ sequenceDiagram
     participant UI as React UI
     participant API as FastAPI
     participant Journal as Run Journal
-    participant Graph as LangGraph ReAct
-    participant Gateway as ToolGateway
+    participant Graph as LangGraph AgentRunner
+    participant Gateway as BusinessToolGateway
     participant Tools as Tool Registry
-    participant Evidence as EvidenceStore
 
     User->>UI: 输入自然语言问题
     UI->>API: POST /api/agents/chat/stream
@@ -189,9 +184,8 @@ sequenceDiagram
     Graph->>Gateway: 原生 tool calls
     Gateway->>Gateway: Schema、时态、权限和预算校验
     Gateway->>Tools: 有界并发执行
-    Tools-->>Evidence: 完整结构化结果与来源
-    Evidence-->>Graph: ToolMessage 有界预览
-    Graph->>Graph: 继续行动或单独调用 finish
+    Tools-->>Graph: ToolMessage 完整结果、来源与 field_definitions
+    Graph->>Graph: 继续查询或直接回答
     loop 查询、生成与校验期间
         Graph-->>API: progress 阶段信息
         API->>Journal: 保存进度事件
@@ -249,13 +243,12 @@ sequenceDiagram
 LimitUpLab/
 ├── backend/
 │   ├── app/
-│   │   ├── agents/          # ReAct runtime、工具/证据契约、评分与 Review
+│   │   ├── agents/          # 轻量 LangGraph runner、工具契约、评分与 Review
 │   │   ├── collectors/      # 涨停、K 线、板块、指数和扩展数据采集
 │   │   ├── repositories/    # PostgreSQL Repository
 │   │   ├── routers/         # FastAPI 路由
 │   │   └── services/        # 评分、检索、回测、Evaluation 和健康检查
 │   ├── scripts/             # 数据同步、回填和启动脚本
-│   ├── evals/golden/        # 隔离评测、固定世界、用例与独立裁判
 │   └── tests/               # 单元测试
 ├── frontend/
 │   └── src/                 # React 工作台、独立 Agent 会话面板、API 类型和样式
@@ -338,7 +331,7 @@ LIMITUPLAB_DB_MAX_OVERFLOW=5
 LIMITUPLAB_DATA_DIRECTORY=backend/data
 ```
 
-本地初始化与服务启动见 [本地手册](deploy/local-postgresql.md)。回归使用独立的 `LIMITUPLAB_TEST_DATABASE_URL` 与 `LIMITUPLAB_TEST_EVAL_DATABASE_URL`，禁止指向业务库；Golden 实际评测使用独立 `LIMITUPLAB_EVAL_DATABASE_URL`。连接池与事务锁保护现有单实例契约，多实例吞吐仍需独立验收。
+本地初始化与服务启动见 [本地手册](deploy/local-postgresql.md)。回归使用独立的 `LIMITUPLAB_TEST_DATABASE_URL`，禁止指向业务库。连接池与事务锁保护现有单实例契约，多实例吞吐仍需独立验收。
 
 如需本地代理：
 
@@ -531,17 +524,7 @@ Linux 使用对应虚拟环境的 `python scripts/check_project.py`。也可通�
 
 该入口依次运行完整 pytest、全部前端逻辑测试以及 TypeScript/Vite 生产构建。每次使用独立数据库和测试目录，关闭真实 LLM，并在 `output/validation/<运行标识>/` 保存各步骤日志、JUnit 和 `summary.json`。任一步失败都会使整体退出码非零，但其余独立检查仍会执行。它不替代浏览器端业务验收、部署检查或压力测试。
 
-旧聊天评测框架已退役；离线回归不代表真实模型回答质量或稳定性已验收。预测结果复盘使用的 Evaluation Agent 和 `rating_evaluation` 仍保留，两者用途不同。
-
-现行聊天回归使用 [Agent Golden 评测](docs/Agent_Golden_Evaluation.md)：v1.7 包含 61 个场景、84 个回合，支持生产默认与扩展工具 profile。历史[v16验证](docs/Agent_Golden_Judge_v16_Protocol.md)完成全量 Agent 基线（52通过、1失败、8待复核）及8项真人抽样标注；[v17裁判修复与实测](docs/Agent_Golden_Judge_v17_Repair.md)改善了引用用途判定，但可靠性与全量人工签核仍未通过。
-
-最新 [Judge v20 / v21 固定验证](docs/Agent_Golden_Judge_v21_Validation.md)分离交付要求与可见断言审查，调整断言分类和证据选择顺序，并修复查询口径元数据可独立证明业务事实的校验漏洞。新增27项回归与BC-142至BC-145，950项Golden相关测试通过。本轮只重评旧答案与校准集，未运行新的完整Golden。
-
-同一61场景/84个旧答案由v19的 **55通过/6待复核 → 57通过/4待复核**，s19、s20恢复，原v19通过回合无新增退化；另一批5个旧review回合恢复3个、保留2个。校准却由 **53/61 → 52/61** 匹配，整体改善门槛未通过。v20中间失败结果50/61同样保留；不能把固定答案的分数变化说成生产Agent能力提升。
-
-最近一次完整Agent Golden仍是 [Judge v19完整轮](docs/Agent_Golden_Judge_v19_Repair.md)：**56通过、0失败、5待复核**，s13/s18/r02/r03/r10均通过，s25/s26/m04/r05/r09待复核。没有改校准标签或回填历史原判，Judge可靠性与全量人工签核仍未通过。
-
-此前的 [r02 / s13 / r10](docs/Agent_Golden_Results_20261012_protocol_topn_recovery.md)与 [s18 / r03](docs/Agent_Golden_Results_20261012_s18_r03.md)记录生产修复及历史比较；新Judge没有回填旧成绩。
+聊天评测框架已删除；离线回归不代表真实模型回答质量或稳定性已验收。预测结果复盘使用的 Evaluation Agent 和 `rating_evaluation` 仍保留，两者用途不同。
 
 GitHub Actions 配置在 `.github/workflows/validate.yml`，对 PR、main、codex 分支及 `v*` 标签推送运行 Windows/Linux 两套检查，使用相同验收入口，不需要行情或模型密钥。标签检查通过后触发生产部署，流程见 [标签自动部署说明](deploy/Tag_Deployment.md)。失败日志保留 7 天；测试数据库不上传，分支保护需在仓库设置中配置。
 

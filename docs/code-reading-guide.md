@@ -1,133 +1,27 @@
-# Reading the LimitUpLab code
+# 代码阅读指南
 
-This guide is a starting point for following the English comments in the code.
-The project is a research workbench. Scores, filters and historical statistics
-come from deterministic code and recorded data; the model plans and explains.
+当前生产 Agent 链路是轻量 LangGraph 工具循环；旧 `react_runtime`、EvidenceStore、`finish`、`compute_result` 和 Golden/quality 评测代码已删除。
 
-## Start with one user question
+## 推荐阅读顺序
 
-1. `frontend/src/components/AgentChatDock.tsx`: sends the question and session
-   context, displays live progress, then presents the persisted `completed`
-   response with its table and metadata in one message. `AgentAnswerMarkdown`
-   progressively reveals only newly received answers from the complete parsed
-   Markdown tree; table rows and links stay intact. History is shown in full.
-2. `frontend/src/utils/agentChatTransport.ts`: parses SSE, reconnects once with
-   the event cursor, and preserves request identity for an in-page retry.
-   Legacy draft events are ignored; reconnects reuse progress or the persisted
-   final response without replaying candidate text.
-3. `backend/app/routers/react_chat.py`: owns authenticated request admission,
-   workers, cancellation, reconnect and atomic completion persistence.
-4. `backend/app/agents/react_runtime/lifecycle.py`: stores run identity,
-   checkpoints, call results and events, with owner isolation and idempotency.
-5. `backend/app/agents/chat.py`: the small public ReAct entry. There is no
-   separate capability Planner, legacy routing or template-mode switch.
-6. `backend/app/agents/react_runtime/runtime.py`: the single compiled StateGraph
-   performs model decisions, Policy checks, tool calls, observation and final
-   validation. Model/tool/deadline limits bound the same loop.
-7. `react_runtime/catalog.py` derives strict Pydantic arguments and LangChain
-   tools from the public registry in `agents/tools.py`. Contracts live in
-   `tool_schemas_market.py`, `tool_schemas_research.py`, `tool_schemas_review.py`
-   and `tool_schemas_news.py`, using the shared `tool_contracts.py` type;
-   `react_runtime/tools.py` validates and dispatches calls.
-8. `react_runtime/contracts.py` and `evidence.py`: define control tools,
-   controlled computation, full result references and provenance.
-   `task_contract.py` and `display_fields.py` preserve the interpreted task,
-   pending slots, explicit output fields and unresolved display requirements.
-9. `react_runtime/context.py`: provides no history by default. For a classified
-   follow-up, it extracts entity names/codes and the last answer's actual tool
-   arguments, without replaying old tasks, prose or evidence. `runtime.py` passes
-   memory constraints by default and adds research context only for follow-ups.
-   `tools.py` fills an omitted date from the input review's `requested_date`,
-   then checks tool date support and the actual response date.
-10. `services/langchain_provider.py`: receives native tool-call chunks while
-    the runtime checks cancellation and deadlines. `rendering.py` fills the
-    declared evidence table before the final compliance review; candidate
-    answers remain internal until `Journal.finish` commits the response.
-11. `models.py`: defines response types and normalizes historical stored traces.
-    `agent_presentation.py` derives grounded stock links and follow-up questions;
-    `agent_evidence_cards.py` builds evidence cards and legacy policy summaries.
-    The existing public builders remain importable from `models.py`.
-    `react_chat.py` persists the final response once.
+1. `backend/app/agents/chat.py`：唯一公开聊天入口。
+2. `backend/app/agents/runner/adapter.py`：输入安全、Runner 调用、合规和响应映射。
+3. `backend/app/agents/runner/runner.py`：LangGraph `agent -> tools -> agent` 循环、预算和取消。
+4. `backend/app/agents/runner/gateway.py`：业务工具校验与执行。
+5. `backend/app/agents/runner/tool_view.py`：工具结果与 `field_definitions`。
+6. `backend/app/agents/runner/prompt.py`：系统提示。
+7. `backend/app/agents/tool_output_contracts.py`：工具输出模型和字段字典。
+8. `backend/app/agents/tool_catalog.py`：从契约生成 Pydantic 参数模型和 LangChain StructuredTool。
+9. `backend/app/agents/tool_payload.py`：payload / collection 提取。
+10. `backend/app/agents/run_lifecycle.py`：durable run journal、取消和租约。
+11. `backend/app/agents/tools.py`：25 个业务工具实现。
+12. `backend/app/routers/react_chat.py`：HTTP/SSE、owner、幂等和 worker。
 
-## Follow the data behind an answer
+## 关键边界
 
-| Code area | Responsibility | What to look for in the comments |
-| --- | --- | --- |
-| `collectors/` | Adapt remote providers to local typed records | Source fields, units, timezones, timeouts, unavailable data |
-| `repositories/` | Read/write SQLite records | Keys, transactions, ownership, immutable snapshots |
-| `services/` | Calculate and combine domain facts | Trading-day windows, denominators, eligibility, missing values |
-| `agents/first_board.py` | Filter candidates, build Facts and score | Exclusions versus missing data, policy version, confidence |
-| `agents/query_contract.py` | Shared argument types and event normalization | The natural-language query compiler has been retired |
-| `post_limit_query_contract.py` | Interpret post-limit shape research | Anchor, cutoff, shape thresholds and statistical windows |
-| `agents/tools.py` | Expose domain operations to chat | Tool inputs, full output, compact trace, active profile |
-| `agents/event_query.py` | Filter, sort and group local events | Stable ordering, event scope and count before display limits |
-| `agents/tool_result.py` | Convert domain results to traces | Full output, normalized outcome and compact summaries |
-| `models.py` | Define API and stored data shapes | Optional fields, validators and uniform result states |
-| `backend/scripts/` | Run collection and backfill workflows | Step order, restart behavior, reports and failure states |
-| `frontend/src/` | Fetch, format and render facts | State updates, stale requests, empty states and source links |
-| `backend/tests/`, `frontend/tests/` | Explain expected behavior with controlled cases | Regression scenario, fixtures and assertions |
-| `backend/evals/golden/` | Run the production Agent against a frozen synthetic world | Independent expected answers, budgets, provenance, judge references and review states |
-| `deploy/`, `scripts/` | Start, verify and deploy the system | Process ownership, locks, backups and recovery |
-
-For the workbench, `frontend/src/App.tsx` owns routing and page orchestration;
-`pages/PremarketPage.tsx` owns the URL-selected premarket strategy workspace.
-`components/StockResearchPanels.tsx` renders stock position and rating details;
-`components/RecommendationNewsBoard.tsx` renders intelligence cards, while
-`hooks/useRecommendationIntelligence.ts` owns their refresh state. The
-recommendation service separates collection and persistence from per-candidate
-calculation and ranking so time boundaries and source failures can be tested
-through the public refresh entry.
-
-## Terms used in function comments
-
-- **Facts**: structured evidence from tools or deterministic calculations, used
-  by the answer writer. Facts are distinct from the conversation summary.
-- **Trace**: the inspectable record of native model decisions, Policy allow/reject,
-  tool inputs/outcomes, evidence references and the final answer check.
-- **Final answer delivery**: progress is streamed while candidate answers are
-  validated and repaired internally. Only `completed`, emitted after
-  `Journal.finish` commits, publishes answer text and metadata. Reconnects skip
-  legacy draft events and reuse the persisted response. The frontend reveals
-  this same final answer progressively without changing stored content;
-  this presentation step does not reduce generation or validation latency.
-- **Evidence table**: a single table rendered from stored current-run rows via
-  `finish.table`. Preview omission and source truncation are distinct; returned
-  rows are not automatically the complete market universe.
-- **Query contract**: a deterministic domain parameter contract used inside
-  specific tools. Production chat semantics come
-  from the ReAct message/tool loop rather than one global regex parser.
-- **Profile**: the configured set of capabilities/tools allowed for this Agent.
-- **Fallback**: an explicit source- or role-specific alternate path. The retired
-  general chat template and Requests chat-runtime rollback are not current
-  production fallbacks; provider failure must remain visible as error/partial.
-- **Anchor date**: the reference event's date, such as a stock's limit-up day.
-- **Data cutoff / data_as_of**: the latest data boundary allowed for a query or
-  recorded prediction. It is different from the report's generation time.
-- **Outcome**: what was observed after a recorded signal/prediction. Missing
-  future bars do not count as zero returns or failed promotions.
-- **Live snapshot**: a recorded published cohort with provenance. A recalculated
-  historical observation does not become live merely because it has a score.
-- **Cohort / denominator**: the exact set of eligible observations behind a rate.
-  Check maturity, missing data and deduplication before interpreting a statistic.
-- **Test double / fixture**: controlled data or a replacement dependency used by
-  a test. A passing fixture test is not a claim about a live provider's accuracy.
-
-The former chat evaluation framework and Claim Ledger are retired. The current
-[Golden suite](Agent_Golden_Evaluation.md) runs separately under
-`backend/evals/golden/`; distinguish full Agent runs from judge-only diagnostics.
-Follow the runtime tests and `badCase.md` for regression history, and the
-[V1.5 milestone](V1.5_Milestone.md) for verified results and remaining limits.
-The separate prediction Evaluation Agent still classifies recorded market outcomes.
-
-## Reading a function
-
-Read its purpose comment/docstring first, then its inputs and return type. Follow
-early-return conditions before the main calculation: these usually explain
-unsupported input, missing history, cached results or safety boundaries. In long
-functions, the step comments describe why operations occur in that order. Read
-the returned model and the calling function together to see how errors and None
-values become a visible UI state.
-
-Existing runtime docstrings are retained. New Python comments do not change
-`__doc__`, generated API descriptions, prompt text or SQL. Frontend callback
-comments are code comments, including inside JSX expressions, and are not UI copy.
+- 生产只依赖轻量 Runner；不存在生产可切换的 legacy runtime。
+- 工具结果直接进入模型上下文，不再有 evidence ID / 预览分页 / compute DSL。
+- 日期由模型显式传入，工具返回日期必须与请求一致。
+- 输入审查是安全分类，不再生成 `TaskInterpretation` / `OutputContract` / `DateScope`。
+- 合规默认确定性守卫，可选语义复核。
+- 评测框架已删除，后续重新设计评测集。

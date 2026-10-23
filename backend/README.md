@@ -75,19 +75,12 @@ policy, provenance, idempotency and recovery control. The only valid configured
 backend is `LIMITUPLAB_LLM_BACKEND=langchain`; any other value fails during
 startup. Every Agent tool also declares a Pydantic output contract in
 `app/agents/tool_output_contracts.py`, reusing the annotated DTOs in `app/models.py`
-where they exist; `EvidenceStore` attaches the resulting
-`field_definitions` to each tool result so the model reads field meaning next to
-the data instead of inferring it from names. The Phase 2 shadow runner lives in
-`app/agents/runner/`; run `python scripts/shadow_agent_runner.py --limit 5` to
-compare it with the legacy runtime without changing production responses. The
-production chat entry always uses this runner. Its input review is
-security-only: task interpretation, output contracts and date scopes remain
-only in the legacy runtime, which is retained for offline Golden and quality
-replay rather than production chat. The Golden harness itself still evaluates
-that legacy reference runtime because its scripted models and table graders
-depend on `finish` and evidence IDs; the production runner is validated by the
-shadow harness and runner tests.
-Compliance defaults to the deterministic pattern guard
+where they exist; the runner attaches the resulting `field_definitions` to each
+tool result so the model reads field meaning next to the data instead of
+inferring it from names. Production chat uses the lightweight LangGraph runner
+in `app/agents/runner/`; the legacy `react_runtime` and the Golden/quality
+evaluation harness have been removed. Input review is security-only, and
+compliance defaults to the deterministic pattern guard
 (`LIMITUPLAB_AGENT_COMPLIANCE=deterministic`); set `llm` to add the semantic
 review as a post-check.
 The legacy Requests class remains available only through explicit
@@ -320,9 +313,7 @@ python -m pytest tests -q -p no:cacheprovider
 ```
 
 These checks do not call a live model or establish answer quality. Real Agent
-verification remains a separate acceptance step. Golden model evaluation uses
-its own `LIMITUPLAB_EVAL_DATABASE_URL`; see
-[Golden evaluation](../docs/Agent_Golden_Evaluation.md). The prediction Evaluation
+verification remains a separate acceptance step. The prediction Evaluation
 Agent and `rating_evaluation` review recorded prediction outcomes.
 
 ## Limit-up queries

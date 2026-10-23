@@ -1,5 +1,7 @@
 # LimitUpLab 项目实现与 Agent 开发面试准备
 
+> 架构更新（2026-10-24）：生产聊天已切换为轻量 LangGraph Runner，旧 `react_runtime`、EvidenceStore、`finish`、`compute_result`、输入任务编译器和 Golden/quality 评测代码已删除。本文部分章节仍描述重构前架构，作为历史演进记录；当前实现以 [README](../README.md)、[LangChain 集成](LangChain_Integration.md) 和 [代码阅读指南](code-reading-guide.md) 为准。
+
 更新日期：2026-10-10。面向 Agent／LLM 应用开发岗位，源码整体核对基线为 `a6ef29b`，复盘总结与相关索引更新至 `5e4021f`。本文描述已实现能力；历史评测、故障与发布记录保留各自日期，不能代替当前线上验收。
 
 LimitUpLab 是面向 A 股收盘后研究的工作台：先采集、保存和计算市场事实，再让 Agent 调用受控工具完成查询、解释与追问，最后通过不可变预测记录和后续结果复盘形成闭环。项目的主要价值是把 Agent 的语义决策与可审计的数据工程连接起来。评分有效性仍在验证，系统不输出买卖、仓位、目标价、收益承诺或确定性预测。

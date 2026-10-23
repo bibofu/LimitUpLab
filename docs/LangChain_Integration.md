@@ -1,147 +1,66 @@
-# LangChain + LangGraph ReAct 集成
+# LangChain + LangGraph 集成
 
-> 当前源码标识：`react-runtime-v39` / `agent-tools-v2` / `react-evidence-v4`
-> 本文描述工作树实现；当前阶段工作与验证见 [V1.5 里程碑](V1.5_Milestone.md)，历史 V1.4 发布范围见 [V1.4 里程碑](V1.4_Milestone.md)。
+当前生产聊天链路是**轻量 LangGraph 工具循环**，不再使用 `finish`、evidence ID、`compute_result`、`read_evidence` 或输入任务编译器。
 
-## 当前生产链路
-
-聊天入口已经统一为一个有界 ReAct 循环，不再使用独立 Planner、Capability 路由、Tool Policy 补计划、Fast/Complex 分流或通用模板回答。
+## 请求链路
 
 ```text
-POST /api/agents/chat 或 /chat/stream
-  -> react_chat.start：owner/session/message_id 隔离、限流、幂等 run
-  -> agents.chat.answer_first_board_chat：唯一聊天入口
-  -> react_runtime.runtime.run：Input Reviewer 判定安全、请求类型、追问范围和明确日期
-  -> react_runtime.runtime.GRAPH：Agent -> Policy -> Tools -> Observe -> Gate
-  -> LangChain ChatOpenAI.bind_tools：保留 AIMessage / ToolMessage / tool_call_id
-  -> StructuredTool / ToolGateway：类型化参数、profile、时态和调用预算校验
-  -> AgentToolRegistry：执行结构化市场、评分、复盘和资讯工具
-  -> EvidenceStore：保存完整结果，向模型返回有界预览和 evidence_id
-  -> finish：提交 status、answer、可选 table、evidence_ids 和 missing
-  -> 候选正文保留在服务端，SSE progress 实时传递查询与校验进度
-  -> Answer Gate：本轮证据与状态检查、服务端表格渲染
-  -> Compliance Critic：独立结构化投资合规判定
-  -> Journal.finish：原子持久化最终回答、run 和消息
-  -> SSE completed 一次发布正式答案 / 只读 reconnect / cancel
+POST /api/agents/chat
+POST /api/agents/chat/stream
+  -> app/routers/react_chat.py：创建 durable run、绑定 owner/session、写入 journal
+  -> app/agents/chat.py：唯一公开入口
+  -> app/agents/runner/adapter.py：
+       轻量输入安全审查
+       AgentRunner
+       可选语义合规复核
+       映射为 AgentChatResponse
+  -> app/agents/runner/runner.py：LangGraph agent -> tools -> agent
+  -> app/agents/runner/gateway.py：BusinessToolGateway 校验和执行业务工具
+  -> app/agents/tools.py：工具实现与真实数据源
 ```
 
-模型每轮可以同时调用互相独立的工具；依赖上一步名单或状态的动作必须等待对应 ToolMessage。集合筛选、排序、交并差和聚合由受限 `compute_result` 完成，不允许模型执行任意 Python、SQL 或表达式。完整行保存在 EvidenceStore：深入分析可通过 `read_evidence` 分页读取，名单交付则直接引用 `finish.table`，无需模型逐行重写或读完所有分页。
+## 生产模块
 
-热榜排名、排名变化、趋势和逐日价量保留常用展示字段提示；字段未映射不会阻止正确答案完成，实际可用字段由本轮证据决定。指数单日涨跌幅与区间收益仍由工具提供不同指标，不混用含义。K 线的来源日涨跌幅与未复权收盘价变动分开保存，缺失原始日涨跌幅时显式声明，不能用除权前后的价格比值冒充。
-
-Agent 的 K 线收益证据按起止日期、首尾价格及交易间隔数成组提供，并直接计算可见行的首尾变动；五行观察只有四个间隔。模型不再收到没有基准日期的孤立 N 日收益，当前证据不足以构造所需窗口时应补查或说明缺口。底层行情接口的既有指标保持兼容。
-
-“上一交易日”等比较由输入审查提交锚点和交易日偏移，再由交易日历解析为模型可用的比较日期提示；日历缺口不能通过猜日期掩盖。查询参考时间统一为北京时间。未来日期、尚未收盘及收盘数据准备期间的事件数量返回未知与缺口，不能把空行当作已经确认的零。原榜第 M 至 N 名通过原榜排序与位置切片取得，保留来源排名。
-
-## 组件职责
-
-| 组件 | 当前职责 |
+| 模块 | 职责 |
 | --- | --- |
-| `services/langchain_provider.py` | `ChatOpenAI.bind_tools`、原生消息流、完整工具参数校验、请求级 timeout/retry 配置、usage 归一 |
-| `agents/react_runtime/runtime.py` | 唯一 StateGraph、预算、节点路由、工具观察和最终门禁 |
-| `agents/tools.py`、`agents/tool_schemas_*.py` | 26 个工具的唯一公开注册表；契约按市场、研究、复盘、资讯分文件，包含参数 Schema、时态、集合语义和显式适配模式 |
-| `agents/react_runtime/catalog.py` | 从唯一契约生成严格 Pydantic 参数模型和 LangChain `StructuredTool`，启动时检查直接实现签名漂移 |
-| `agents/react_runtime/tools.py` | 消费类型化工具，执行 profile、时态、身份解析、调用和证据接入 |
-| `agents/react_runtime/evidence.py` | 请求级完整证据、预览、来源、缺失、截断和确定性计算 |
-| `agents/react_runtime/contracts.py` | `finish`、`update_task`、`read_evidence`、`compute_result` 类型契约及预算 |
-| `agents/react_runtime/task_contract.py`、`display_fields.py` | 当前任务、待补信息及基础展示约束；完整内容要求留在 current_task，列映射仅指导表格展示 |
-| `agents/react_runtime/rendering.py` | 从本轮证据渲染单张表格，检查字段、行数、截断与范围 |
-| `agents/react_runtime/partial_delivery.py` | 累计模型失败触发 provider_error 后构造受限的部分交付候选，仍由运行时执行证据和合规校验 |
-| `agents/react_runtime/compliance.py` | 独立语义合规 Critic；结构化返回交易指令、仓位、目标价、承诺和确定性预测违规 |
-| `agents/react_runtime/lifecycle.py` | SQLite run journal、checkpoint、call replay record 和取消标记 |
-| `routers/react_chat.py` | worker、同步等待、SSE、重连、取消和原子发布 |
-| `services/session_memory.py` | owner/session 隔离的滚动摘要；只用于上下文，不作为市场证据 |
+| `app/agents/runner/runner.py` | 两节点 LangGraph 循环、预算、取消、直接回答 |
+| `app/agents/runner/gateway.py` | 业务工具 Schema、日期回显、单股票约束和执行 |
+| `app/agents/runner/tool_view.py` | 把工具结果转成模型可读的 rows + field_definitions |
+| `app/agents/runner/security.py` | 轻量输入安全审查，不解析任务/日期/交付合同 |
+| `app/agents/runner/prompt.py` | 约 10 条规则的精简系统提示 |
+| `app/agents/runner/guardrails.py` | 预算、状态映射和确定性合规守卫 |
+| `app/agents/run_lifecycle.py` | durable run journal、取消和租约 |
+| `app/agents/tool_output_contracts.py` | 工具输出模型、字段字典生成 |
+| `app/agents/tool_catalog.py` | 从工具契约生成 Pydantic 参数模型和 LangChain StructuredTool |
+| `app/agents/tool_payload.py` | 工具 payload / collection 提取 |
 
-## 为什么使用自定义 StateGraph
+## 工具结果
 
-本项目需要在每次工具调用前后保留 profile allowlist、历史时点能力、完整集合语义、证据裁剪、受限计算、调用幂等、取消和原子回答持久化，因此当前使用自定义 `StateGraph`。
+模型直接看到：
 
-这不表示现有实现已经是框架最佳实践。当前图没有直接采用 `MessagesState + ToolNode + LangGraph checkpointer/thread_id`；预算、证据和 durable journal 由项目代码维护。是否迁移应以能否完整保留上述金融语义为判断标准，而不是只追求 API 形式一致。相关技术债和优先级见 [代码质量审查](code-quality-audit.md)。
-
-## 模型与配置
-
-生产聊天必须使用：
-
-```dotenv
-LIMITUPLAB_LLM_ENABLED=true
-LIMITUPLAB_LLM_BACKEND=langchain
-LIMITUPLAB_LLM_BASE_URL=https://api.deepseek.com
-LIMITUPLAB_LLM_MODEL=deepseek-v4-flash
-LIMITUPLAB_LLM_NATIVE_FUNCTION_CALLING=true
-LIMITUPLAB_LLM_MAX_ATTEMPTS=2
-LIMITUPLAB_LLM_TIMEOUT_SECONDS=30
+```json
+{
+  "status": "ok",
+  "data_as_of": "2026-10-23",
+  "source": "local-limit-up-events",
+  "rows": [],
+  "row_count": 12,
+  "truncated": false,
+  "field_definitions": {
+    "rows": {"board_height": "连板高度，1为首板"},
+    "metadata": {"matched_count": "过滤后命中事件数"}
+  },
+  "data_missing": []
+}
 ```
 
-配置入口只接受 `LIMITUPLAB_LLM_BACKEND=langchain`，其他值会在服务启动时失败，不会进入 ReAct 后连续产生 provider error。旧 `OpenAIChatCompletionsProvider` 类仍保留给明确的文本消费者直接构造和依赖注入，但不再能通过全局环境配置成为生产聊天 Provider；ReAct 入口还会按是否真正实现 `generate_messages` 做第二层能力校验。关闭 LLM 或缺少 API Key 时，确定性数据、评分、回测和独立 Explanation 功能仍可运行；聊天任务不会通过旧通用模板伪装成功。
+完整结果直接进入 ToolMessage，不再裁剪成 evidence 预览。模型基于 rows 直接筛选、排序、汇总和输出 Markdown 表格。
 
-`AuditedChatOpenAI` 对兼容服务保留两项窄适配：将 SDK 的 `max_completion_tokens` 转回目标服务支持的 `max_tokens`；从流式 chunk 保存原始 usage。升级 `langchain-openai` 时必须运行线协议测试，不能只验证 import。
+## 边界
 
-原生工具参数必须是合法 JSON；`finish.missing` 明确为字符串数组。首次原生协议异常后，既有修复机会会收到安全的格式反馈，并保留当前证据。Provider 不修补非法参数，运行时不增加重试预算；错误 trace 只记录白名单结构诊断，不保存原参数或异常正文。
-
-## 证据、状态与安全边界
-
-- 工具结果区分 `ok`、`empty`、`partial`、`error`；空结果不是异常，缺失或截断不能冒充完整集合。
-- 业务证据行按工具契约的 `collection` 提取，指数使用 `indices`、网页检索使用 `results`、评级评估使用 `evaluations`。声明集合缺失、类型错误或含非对象行进入工具失败链路；失败证据没有可交付的业务行，不能伪装成有效空集合。
-- 输入审查用结构化 `date_scope` 解释日期。运行时仅将单一 observation 日期接入原有 `required_date`，多日期、区间与事件日要求留在当前任务；交易日历解析出的比较日期进入 `comparison_dates` 提示，不建立额外的范围完成门禁。当前新闻与最近收盘行情等混合时点按各来源实际日期展示。
-- 统计、概况、比较、解释等要求统一保留在 `current_task`；`field_requests` 仅记录表格/名单列。多指标正文不生成列约束，表外总数不作为重复行列。完整映射的明确列仍核对顺序；未解析映射不阻止完成，不凭目录缺项认定数据不可用。
-- `update_task` 是进度记录工具，不再以清单 pending/unavailable 或证据绑定作为回答完成门禁；原有不删除已登记 ID 的检查保留。移除排名窗口证明检查，保留原有最终表格行数上限、实际字段渲染及完整集合检查。模型仍须根据实际证据回答全部用户要求，程序检查不等于正文事实已全部正确。
-- checkpoint 保存证据记录和单观察日，不保存已删除的排名选择证明。旧 envelope 只解包实际 records，退休的内容清单及排序契约字段仅在读取旧会话时忽略，不重新启用对应门禁。
-- 默认不向 ReAct 重放历史原文或答案证据。仅在 Input Reviewer 判定为 `follow_up` 时，`context.py` 提取历史实体名称/代码及上一轮实际工具参数用于消歧，所有事实仍需本轮重新查询。
-- Memory 默认只传偏好约束；追问时再传研究目标、股票、题材、日期范围和未解问题，均不能作为事实或自动继承的任务。EvidenceStore 的历史域兼容检查仍保留，历史引用及其派生结果不能进入最终引用。
-- 输入审查保留现有会话窗口内尚未压缩的用户要求，不再额外缩短为四轮，避免滚动记忆更新前丢失长期偏好。仍按字符预算保留完整条目、优先近期要求，超预算显式标记；历史意图只供语义审查，当前要求覆盖旧偏好，旧市场回答不进入事实证据。
-- 工具由原生 tool call 选择。单一 observation 的 `requested_date` 成为 `required_date`，只补齐调用中缺省的单日期字段或 `requested_as_of`，再按工具能力及实际返回日期校验；事件发生日不会误绑成后续行情截止日，不补造额外查询。
-- 最终回答必须单独调用 `finish`，给出真实状态和用户交付缺口。研究请求的 `complete / partial / empty` 必须引用本轮证据；`empty` 需要真实空结果，工具失败或部分证据不能伪装为空。
-- 已确认的工具异常形成无业务行的错误证据，可引用以说明 `partial` 缺口，不能计算、交表或证明完整成功。取消、执行结果未知和 journal 持久化异常不构造确定失败证据；同一运行中后续相同参数的确定失败可复用，工具显式返回 partial 时可补查，独立查询仍可继续。
-- 有无、计数、单指标请求可使用 `prose_only`，只回答所问结果及必要口径与缺口；本轮明确要求名单或解释时重新解释契约。门禁拒绝额外表格，正文语义范围仍需模型遵循约束和真实评测，不通过正则裁剪实现。
-- 名单通过 `finish.table` 指定证据和字段，并在正文放置一次 `{{evidence_table}}`。服务端输出实际返回的行，最多一张表、12 列、1000 行；无表时不允许残留占位符。源数据截断且无完整排名范围证明时，不能把该表声明为 `complete`。
-- 表格占位符须独占无缩进的一行且位于代码围栏外；服务端以真实空行隔开表格和正文。同一行拼接或字面量反斜杠换行导致的结构错误进入既有一次修复流程，不二次解码或全局替换正文。`rank_trend` 在表格展示层映射为“上升 / 下降 / 持平”，未知值标记为未识别，缺失仍显示缺失，证据原值不变。
-- 本轮明确 TopN 或排名窗口由 Input Reviewer 写入 `output_contract.row_selection`；交付门禁检查完整证据行数不超过 `limit`，超限拒绝后由模型通过 `compute_result` 选取，服务端不静默截表。完整集合不足 N 可如实交付；该门禁不证明排序、`offset` 或成员正确，也不能通过降低业务查询 limit 绕过来源截断检查。
-- Claim Ledger 已退役，旧 checkpoint 的 `claims` 字段仅兼容忽略。当前 gate 不对每句正文做标量绑定校验；证据引用和表格约束不能证明开放式解释或因果关系。
-- 输入安全与最终投资合规分别使用独立强制 tool call 的结构化语义 Reviewer；失败时关闭，不通过补关键词正则扩展语义边界。
-- 外部网页、新闻和历史消息均视为不可信内容，不能修改工具权限或系统边界。
-- 系统只做研究解释，不输出买卖、仓位、目标价、收益承诺或确定性预测。
-
-## 实时进度与正式答案交付
-
-`LangChainChatProvider.generate_messages` 继续使用原生 `AIMessageChunk`，用于收集完整工具调用并及时检查取消和截止时间。候选 `finish.answer` 留在服务端；完整 JSON 参数到齐后才执行结构、证据、展示和独立合规校验。普通文本、未校验正文、工具参数和思维过程不直接展示。
-
-| SSE 事件 | 语义 |
-| --- | --- |
-| `accepted` | 返回 `run_id` 和会话标识 |
-| `progress` | 更新准备、规划、查询、校验等阶段 |
-| `completed` | `Journal.finish` 原子保存后一次返回正式正文、表格和消息元数据，前端渐进展开 |
-
-服务端根据完整 `finish.table` 声明渲染表格，候选答案在校验失败后可内部修复一次，期间前端继续展示进度。HTTP 层仅在 `Journal.finish` 保存成功后发布 `completed`；保存失败不发布正文。前端使用同一消息容器一次接收完整正式答案，再渐进展开，不替换待校验草稿。旧 `answer_start / answer_delta / answer_reset` 不再向聊天界面转发，公共聊天入口的旧答案回调参数仅保留签名兼容。
-
-渐进展示只作用于视图：完整 Markdown 先解析、绑定股票链接，再按解析后的节点控制可见内容。正文按字素片段、表格按完整行展开，链接及代码保持完整。展示约在 2.4 秒内结束，可点击“立即显示全部”；历史消息、错误或取消结果，以及减少动态效果偏好均直接完整显示。超过 20,000 字符或 400 行的正文直接完整显示，避免每帧解析大型答案阻塞主线程。开始下一问或切换会话结束上一条展示动画。此机制恢复阅读节奏，不提前公开未校验内容，也不缩短模型生成和校验的等待时间。
-
-## 运行恢复
-
-每次请求以 `owner_id + session_id + message_id` 建立 durable run。同一请求重复提交会复用已有运行；不同内容复用同一 message ID 会返回冲突。每个 tool call 以 `run_id + call_id + signature` 记录，已知成功结果可恢复，执行结果不确定的远端调用不会自动重发。
-
-SSE GET 重连只读取事件和最终响应，不启动模型或工具。运行中从 `after` 游标继续读进度事件，旧 journal 中的草稿事件也会被过滤；已完成的运行只返回已保存的最终响应。前端断线后自动尝试一次 GET 重连。显式再次 POST 同一请求可以从保存的 checkpoint 恢复，正式答案仍等待原子保存后发布。
-
-取消是协作式的：不再启动新调用，但已经进入底层网络库的请求可能稍后结束。当前 worker 和锁是单进程设计，多 Uvicorn 进程部署前需要数据库租约或外部队列。
-
-累计两次模型调用失败触发 `provider_error` 时，只有本轮唯一可用数据集、明确展示字段、没有待澄清输入且未被标记为过期的表格任务可尝试保留数据；带 `row_selection` 的任务不自动交表。这里沿用 `data_fresh` 标志，没有额外 TTL 检查。恢复候选经过证据渲染、交付和独立合规审核，并在审核前后检查取消与 deadline。最终状态仍为 `partial / provider_error`，明确范围与完整性尚未核验；`react_fallback_delivery` 单独记录 `origin=runtime`，不伪造模型 finish 或正常完成。审核失败后不再通过通用兜底回显被拒绝的单元格。
-
-## 验证
-
-```powershell
-# 完整离线项目验收
-backend/.venv/Scripts/python.exe scripts/check_project.py
-```
-
-项目验收命令验证代码、前端和构建，不会自动调用真实模型；当次数量、退出码和日志保存在 `output/validation/<运行标识>/`，不使用历史标签的测试数代表当前验收。
-
-交付协议重点参考后端的 `test_langchain_provider.py`、`test_react_live_answer.py`、`test_react_http.py`、`test_agent_chat.py`，以及前端的聊天传输和最终答案展示测试，覆盖候选不外发、校验修复、保存失败和重连。旧聊天评测框架已退役；当前 [Golden 评测](Agent_Golden_Evaluation.md) 在隔离的合成工具环境中运行生产 Agent，并独立检查交付和可见回答；历史报告中已展示过的草稿继续保留审计。完整 Agent 基线与裁判专项诊断分开统计，离线契约回归不等同于真实模型质量验收；预测 Outcome 的 Evaluation Agent 仍保留。
-
-数量契约与失败恢复的专项回归见 `test_react_row_selection.py`、`test_react_protocol_recovery.py`；真实模型前后对照见 [r02 / s13 / r10 复验](Agent_Golden_Results_20261012_protocol_topn_recovery.md)。
-
-## 面试讲法
-
-> LimitUpLab 的聊天主链路不是“Planner 生成整张计划再由规则补工具”，而是 LangChain 原生 tool calling 驱动的 LangGraph 有界 ReAct。模型每轮根据用户问题和已有 ToolMessage 决定下一步；后端在每次调用前校验工具权限、参数和历史时点能力，完整结果进入带来源与缺失标记的 EvidenceStore，模型通过 evidence ID 读取或确定性计算。运行过程用 SQLite journal 做幂等、恢复、取消和原子发布。LLM 负责语义决策与解释，评分、集合计算和审计统计仍由确定性代码完成。
-
-同时需要诚实说明：工具公开契约已经收敛并派生为 LangChain `StructuredTool`，但 LangGraph 状态和 checkpoint 仍不是官方 checkpointer 范式，评分分箱仍有硬编码，开放式因果/定性回答也还缺少通用语义门禁。V1.5 已建立可重复的 Golden 粗评和独立裁判诊断，仍有 Agent 失败场景与裁判语义误判，具体结果和下一步见 [阶段里程碑](V1.5_Milestone.md)。
-
-官方参考：[LangGraph v1](https://docs.langchain.com/oss/python/releases/langgraph-v1)、[LangChain Tools / ToolNode](https://docs.langchain.com/oss/python/langchain/tools)、[LangGraph Persistence](https://docs.langchain.com/oss/python/langgraph/persistence)。
+- 日期：模型显式写入工具参数；工具返回 `data_as_of`，与请求不一致时拒绝。
+- 数据缺失：`data_missing`、`source_truncated`、`truncated` 由工具显式返回。
+- 合规：默认确定性模式守卫；可配置 `LIMITUPLAB_AGENT_COMPLIANCE=llm` 增加语义复核。
+- 输入安全：只拒绝提示注入/权限绕过，不生成输出合同。
+- 运行恢复：journal 仍负责幂等、取消、租约和最终答案原子保存；SSE 进度和最终结果保留。
+- 评测：Golden/quality 评测框架已删除，后续评测集重新设计。
