@@ -16,6 +16,7 @@ from langgraph.graph import END, START, StateGraph
 from app.agents.compliance import review_answer
 from app.agents.query_contract import current_query_reference_date
 from app.agents.run_lifecycle import CURRENT_CONTROL
+from app.agents.runner.definitions import DefinitionDeduplicator
 from app.agents.runner.gateway import BusinessToolGateway
 from app.agents.runner.guardrails import (
     DEADLINE_SECONDS,
@@ -80,6 +81,7 @@ class AgentRunner:
         self.progress = progress
         self.review_all_answers = review_all_answers
         self.cache: dict[str, dict[str, Any]] = {}
+        self.definition_dedup = DefinitionDeduplicator()
         # One stable payload per request; the provider resends it every round.
         self.definition_chars = len(json.dumps(
             self.definitions, ensure_ascii=False, separators=(",", ":"),
@@ -218,6 +220,7 @@ class AgentRunner:
             ),
             tool_results=len(state.get("tool_messages", [])),
             pending_tools=len(state.get("pending", [])),
+            definition_reuse_saved_chars=self.definition_dedup.saved_chars,
         )
 
     def tools(self, state: RunnerState) -> RunnerState:
@@ -241,8 +244,11 @@ class AgentRunner:
             tool_calls.append(call["name"])
             tool_statuses.append(value.get("status", "error"))
             tool_messages.append({**value, "name": call["name"]})
+            # Compact only the model-facing view; traces keep complete evidence.
             messages.append(ToolMessage(
-                content=dump(value), tool_call_id=call["id"], name=call["name"],
+                content=dump(self.definition_dedup.compact(call["name"], value)),
+                tool_call_id=call["id"],
+                name=call["name"],
             ))
         return {
             "messages": messages,

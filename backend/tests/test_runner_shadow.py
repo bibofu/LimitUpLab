@@ -99,6 +99,29 @@ def test_runner_calls_one_tool_and_returns_model_readable_result():
     assert "summary" in payload
 
 
+def test_runner_deduplicates_repeated_field_definitions_for_the_model():
+    provider = ScriptedProvider([
+        call("limit_up_events", {"recent_trade_days": 1}, "call_1"),
+        call("limit_up_events", {"recent_trade_days": 2}, "call_2"),
+        AIMessage(content="两次查询均已完成。"),
+    ])
+    result = AgentRunner(request(), registry(), provider).run()
+
+    assert result.status == "answered"
+    # Public traces keep complete evidence for both calls.
+    assert result.tool_messages[0]["field_definitions"]
+    assert result.tool_messages[1]["field_definitions"]
+
+    observations = [item for item in provider.calls[-1] if isinstance(item, ToolMessage)]
+    assert len(observations) == 2
+    first = json.loads(observations[0].content)
+    second = json.loads(observations[1].content)
+    assert first["field_definitions"]
+    assert "field_definitions" not in second
+    assert "limit_up_events" in second["field_definitions_ref"]
+    assert second["rows"] == result.tool_messages[1]["rows"]
+
+
 def test_runner_records_round_context_and_definition_cost():
     provider = MeteredProvider([
         call("market_summary", {}),
