@@ -65,6 +65,7 @@ from app.services.finance_news import collect_finance_news
 from app.services.sector_performance import build_sector_performance
 from app.services.sector_stock_ranking import build_sector_stock_ranking
 from app.services.stock_kline import build_stock_kline_facts
+from app.services.stock_financials import build_stock_financials_facts
 from app.services.recent_limit_up_returns import build_recent_limit_up_returns
 from app.agents.kline_presentation import kline_agent_view
 from app.post_limit_query_contract import PostLimitQueryContract
@@ -1411,6 +1412,42 @@ class AgentToolRegistry:
                 f"displayed observations={len(response.bars)}. Return scopes are in display_window_return/return_windows."
             ),
             trace_output=trace_output,
+        )
+
+    def stock_financials(
+        self,
+        symbol: str,
+        statement: str,
+        period: str = "quarterly",
+        limit: int = 6,
+    ) -> ToolResult:
+        """Return normalized financial statements for one stock."""
+
+        resolved_symbol, stock_name = self.resolve_stock_identity(symbol)
+        if stock_name == resolved_symbol:
+            stock_name = None
+        payload = build_stock_financials_facts(
+            symbol=resolved_symbol,
+            statement=statement,
+            period=period,
+            limit=limit,
+            stock_name=stock_name,
+            collector=self.hithink_collector,
+        )
+        summary = payload.pop("summary")
+        rows = payload.get("rows") or []
+        return ToolResult(
+            name="stock_financials",
+            input={
+                "symbol": resolved_symbol,
+                "statement": statement,
+                "period": period,
+                "limit": limit,
+            },
+            output=payload,
+            summary=summary,
+            trace_output=payload,
+            result_status="ok" if rows else "empty",
         )
 
     def post_limit_screen(self, contract: PostLimitQueryContract) -> ToolResult:

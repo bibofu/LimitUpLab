@@ -44,6 +44,15 @@ def test_market_rates_document_the_actual_denominator_and_ratio_unit():
         assert "0至1比例" in definitions[field]
 
 
+def test_stock_financials_documents_cumulative_and_single_quarter_bases():
+    definitions = field_definitions_for("stock_financials")
+    assert "年初至今累计" in definitions["rows"]["operating_income"]
+    assert "单季推算值" in definitions["rows"]["operating_income_single_quarter"]
+    assert "元" in definitions["rows"]["operating_income"]
+    assert "累计" in definitions["metadata"]["period_basis"]
+    assert "金额单位" in definitions["metadata"]["unit"]
+
+
 def test_daily_promotion_contract_uses_ratio_units_for_all_three_cohorts():
     definitions = field_definitions_for("daily_board_promotion")["rows"]
     for field in ("probability", "first_board_probability", "continued_board_probability"):

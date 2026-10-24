@@ -39,7 +39,8 @@ class AgentV1ProfileTest(unittest.TestCase):
         schema_names = {schema.name for schema in registry.schemas()}
         self.assertEqual(registry.profile, V1_AGENT_PROFILE)
         self.assertEqual(schema_names, set(V1_CLOSED_MARKET_TOOL_NAMES))
-        self.assertEqual(schema_names, {schema.name for schema in TOOL_SCHEMAS})
+        self.assertNotEqual(schema_names, {schema.name for schema in TOOL_SCHEMAS})
+        self.assertNotIn("stock_financials", schema_names)
         self.assertIn("hot_stock_ranking", schema_names)
         self.assertIn("finance_news", schema_names)
         self.assertIn("stock_news", schema_names)
@@ -58,7 +59,8 @@ class AgentV1ProfileTest(unittest.TestCase):
 
         schema_names = {schema.name for schema in registry.schemas()}
         self.assertEqual(schema_names, {schema.name for schema in TOOL_SCHEMAS})
-        self.assertEqual(schema_names, set(V1_CLOSED_MARKET_TOOL_NAMES))
+        self.assertTrue(set(V1_CLOSED_MARKET_TOOL_NAMES).issubset(schema_names))
+        self.assertIn("stock_financials", schema_names)
         self.assertIn("hot_stock_ranking", schema_names)
 
 if __name__ == "__main__":

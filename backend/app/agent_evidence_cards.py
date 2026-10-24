@@ -23,6 +23,7 @@ def _evidence_title_kind(tool_name: str) -> tuple[str, str]:
         "finance_news": ("财经快讯聚合", "tool"),
         "stock_news": ("个股资讯", "tool"),
         "stock_activity": ("个股近期动态", "tool"),
+        "stock_financials": ("个股财报", "tool"),
         "first_board_ratings": ("首板候选池与评分", "candidate_pool"),
         "market_event_pool": ("市场事件查询", "limit_up_events"),
         "limit_up_events": ("涨停事件查询", "limit_up_events"),

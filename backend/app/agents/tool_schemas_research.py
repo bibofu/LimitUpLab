@@ -260,6 +260,55 @@ RESEARCH_TOOL_SCHEMAS = [
         returns="Daily OHLCV bars, data freshness, trend, returns, moving averages, volume ratio and drawdown.",
     ),
     AgentToolSchema(
+        name="stock_financials",
+        time_mode="retrieved_now",
+        collection="rows",
+        notes=(
+            "Provider quarterly values are year-to-date cumulative, not single-quarter. "
+            "single_quarter fields are derived server-side and absent when the previous quarter is missing. "
+            "report_date is the provider's report/update date and may differ from the original announcement. "
+            "Returns the most recent disclosed reports; it is not an arbitrary historical as-of query."
+        ),
+        description=(
+            "查询单只A股最近若干期已披露的利润表、资产负债表或现金流量表。"
+            "适合回答营收、净利润、归母净利润、费用、营业利润、资产总额、负债、现金流等问题。"
+            "一次只查一只股票；多只需要分别调用。"
+            "quarterly报表同时返回年初至今累计值和单季推算值，回答“某季度”时必须先确认用户指单季还是累计。"
+            "返回最近N期，不承诺任意历史截止日；data_as_of为最近报告期截止日。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "symbol": {
+                    "type": "string",
+                    "description": "单只A股代码或名称，如600519或贵州茅台；多只需要分别调用。",
+                },
+                "statement": {
+                    "type": "string",
+                    "enum": ["income", "balance", "cash_flow"],
+                    "description": "报表类型：income利润表、balance资产负债表、cash_flow现金流量表。",
+                },
+                "period": {
+                    "type": "string",
+                    "enum": ["quarterly", "annual"],
+                    "description": "报告频率，默认quarterly；年度请显式传annual。",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 20,
+                    "description": "返回最近N期，默认6期。",
+                },
+            },
+            "required": ["symbol", "statement"],
+        },
+        returns=(
+            "Symbol identity, statement type, period basis, currency/unit, source and fetch time, "
+            "latest report period, and rows with fiscal period identity plus statement-specific "
+            "cumulative and derived single-quarter fields."
+        ),
+    ),
+    AgentToolSchema(
         name="post_limit_screen",
         time_mode="historical",
         dates=("data_as_of",),

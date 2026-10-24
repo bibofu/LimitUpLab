@@ -26,6 +26,8 @@ from app.agents.tool_output_models import (
     PostLimitStatisticsPayload,
     RecentLimitUpReturnRow,
     RecentReturnsPayload,
+    StockFinancialRow,
+    StockFinancialsPayload,
 )
 from app.models import (
     DailyBoardPromotionStat,
@@ -96,6 +98,9 @@ TOOL_OUTPUT_SPECS: dict[str, OutputSpec] = {
     ),
     "stock_kline": OutputSpec(
         row_model=StockKLineBar, payload_model=StockKLineFacts
+    ),
+    "stock_financials": OutputSpec(
+        row_model=StockFinancialRow, payload_model=StockFinancialsPayload
     ),
     "post_limit_screen": OutputSpec(
         row_model=PostLimitCandidateRow, payload_model=PostLimitScreenPayload

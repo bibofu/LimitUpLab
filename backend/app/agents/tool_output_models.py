@@ -512,5 +512,153 @@ class RecentReturnsPayload(OutputModel):
 
 
 # ---------------------------------------------------------------------------
+# Stock financial statements
+# ---------------------------------------------------------------------------
+
+
+class StockFinancialRow(OutputModel):
+    """One normalized financial-statement row.
+
+    Provider quarterly values are year-to-date cumulative. Single-quarter fields
+    are derived server-side and are absent when the previous quarter is missing.
+    """
+
+    thscode: str = Field(description="数据源带市场后缀的股票标识")
+    fiscal_year: int = Field(description="财年")
+    fiscal_period: str = Field(description="报告期：Q1、Q2、Q3、Q4或FY")
+    report_date: date = Field(description="来源记录的报告日期；可能与原始公告日不同")
+    period_end: date = Field(description="报告期截止日")
+    operating_income: float | None = Field(default=None, description="营业总收入，年初至今累计（元）")
+    operating_income_single_quarter: float | None = Field(
+        default=None, description="营业总收入，单季推算值（元）；本期累计减上期累计"
+    )
+    operating_costs: float | None = Field(default=None, description="营业成本，年初至今累计（元）")
+    operating_costs_single_quarter: float | None = Field(
+        default=None, description="营业成本，单季推算值（元）；本期累计减上期累计"
+    )
+    operating_expenses: float | None = Field(
+        default=None, description="营业总成本或费用合计，年初至今累计（元）"
+    )
+    operating_expenses_single_quarter: float | None = Field(
+        default=None, description="营业总成本或费用合计，单季推算值（元）；本期累计减上期累计"
+    )
+    sales_fee: float | None = Field(default=None, description="销售费用，年初至今累计（元）")
+    sales_fee_single_quarter: float | None = Field(
+        default=None, description="销售费用，单季推算值（元）；本期累计减上期累计"
+    )
+    manage_fee: float | None = Field(default=None, description="管理费用，年初至今累计（元）")
+    manage_fee_single_quarter: float | None = Field(
+        default=None, description="管理费用，单季推算值（元）；本期累计减上期累计"
+    )
+    research_and_development_expenses: float | None = Field(
+        default=None, description="研发费用，年初至今累计（元）"
+    )
+    research_and_development_expenses_single_quarter: float | None = Field(
+        default=None, description="研发费用，单季推算值（元）；本期累计减上期累计"
+    )
+    operating_profit: float | None = Field(default=None, description="营业利润，年初至今累计（元）")
+    operating_profit_single_quarter: float | None = Field(
+        default=None, description="营业利润，单季推算值（元）；本期累计减上期累计"
+    )
+    interest_expenses: float | None = Field(default=None, description="利息费用，年初至今累计（元）")
+    interest_expenses_single_quarter: float | None = Field(
+        default=None, description="利息费用，单季推算值（元）；本期累计减上期累计"
+    )
+    profit_total: float | None = Field(default=None, description="利润总额，年初至今累计（元）")
+    profit_total_single_quarter: float | None = Field(
+        default=None, description="利润总额，单季推算值（元）；本期累计减上期累计"
+    )
+    income_tax_expense: float | None = Field(default=None, description="所得税费用，年初至今累计（元）")
+    income_tax_expense_single_quarter: float | None = Field(
+        default=None, description="所得税费用，单季推算值（元）；本期累计减上期累计"
+    )
+    net_profit: float | None = Field(default=None, description="净利润，年初至今累计（元）")
+    net_profit_single_quarter: float | None = Field(
+        default=None, description="净利润，单季推算值（元）；本期累计减上期累计"
+    )
+    parent_holder_net_profit: float | None = Field(
+        default=None, description="归属于母公司股东的净利润，年初至今累计（元）"
+    )
+    parent_holder_net_profit_single_quarter: float | None = Field(
+        default=None, description="归属于母公司股东的净利润，单季推算值（元）；本期累计减上期累计"
+    )
+    basic_eps: float | None = Field(default=None, description="基本每股收益，年初至今累计（元/股）")
+    basic_eps_single_quarter: float | None = Field(
+        default=None, description="基本每股收益，单季推算值（元/股）；本期累计减上期累计"
+    )
+    assets_total: float | None = Field(default=None, description="资产总计，期末时点值（元）")
+    total_current_assets: float | None = Field(default=None, description="流动资产合计，期末时点值（元）")
+    non_current_nets_total: float | None = Field(
+        default=None, description="非流动资产净额合计，期末时点值（元）"
+    )
+    cash: float | None = Field(default=None, description="货币资金，期末时点值（元）")
+    accounts_receivable: float | None = Field(default=None, description="应收账款，期末时点值（元）")
+    total_debt: float | None = Field(default=None, description="负债合计，期末时点值（元）")
+    holder_equity_total: float | None = Field(
+        default=None, description="所有者权益合计，期末时点值（元）"
+    )
+    act_cash_flow_net: float | None = Field(
+        default=None, description="经营活动产生的现金流量净额，年初至今累计（元）"
+    )
+    act_cash_flow_net_single_quarter: float | None = Field(
+        default=None, description="经营活动产生的现金流量净额，单季推算值（元）；本期累计减上期累计"
+    )
+    invest_cash_flow_net: float | None = Field(
+        default=None, description="投资活动产生的现金流量净额，年初至今累计（元）"
+    )
+    invest_cash_flow_net_single_quarter: float | None = Field(
+        default=None, description="投资活动产生的现金流量净额，单季推算值（元）；本期累计减上期累计"
+    )
+    financing_cash_flow_net: float | None = Field(
+        default=None, description="筹资活动产生的现金流量净额，年初至今累计（元）"
+    )
+    financing_cash_flow_net_single_quarter: float | None = Field(
+        default=None, description="筹资活动产生的现金流量净额，单季推算值（元）；本期累计减上期累计"
+    )
+    pay_fixed_assets_etc_cash: float | None = Field(
+        default=None, description="购建固定资产、无形资产和其他长期资产支付的现金，年初至今累计（元）"
+    )
+    pay_fixed_assets_etc_cash_single_quarter: float | None = Field(
+        default=None,
+        description="购建固定资产、无形资产和其他长期资产支付的现金，单季推算值（元）；本期累计减上期累计",
+    )
+    pay_dividends_profits_interest_cash: float | None = Field(
+        default=None, description="分配股利、利润或偿付利息支付的现金，年初至今累计（元）"
+    )
+    pay_dividends_profits_interest_cash_single_quarter: float | None = Field(
+        default=None,
+        description="分配股利、利润或偿付利息支付的现金，单季推算值（元）；本期累计减上期累计",
+    )
+    cash_equivalents_net_addition: float | None = Field(
+        default=None, description="现金及现金等价物净增加额，年初至今累计（元）"
+    )
+    cash_equivalents_net_addition_single_quarter: float | None = Field(
+        default=None, description="现金及现金等价物净增加额，单季推算值（元）；本期累计减上期累计"
+    )
+
+
+class StockFinancialsPayload(OutputModel):
+    """Metadata for one stock financial-statement query."""
+
+    symbol: str = Field(description="六位股票代码")
+    stock_name: str | None = Field(default=None, description="股票名称；无法解析时为null")
+    thscode: str = Field(description="数据源带市场后缀的股票标识")
+    statement: str = Field(description="报表类型：income、balance或cash_flow")
+    statement_label: str = Field(description="报表类型中文名")
+    period: str = Field(description="报告频率：quarterly或annual")
+    period_basis: str = Field(description="累计与单季口径说明")
+    currency: str = Field(description="币种")
+    unit: str = Field(description="金额单位；basic_eps为元/股")
+    source: str = Field(description="数据来源")
+    fetched_at: str = Field(description="本次取数时间（ISO 8601）")
+    data_as_of: date | None = Field(default=None, description="最近报告期截止日；无数据时为null")
+    requested_limit: int = Field(description="请求返回的最近报告期数")
+    returned_count: int = Field(description="实际返回报告期数")
+    complete: bool = Field(description="本次是否取得可用报表；false不代表科目金额为零")
+    data_missing: list[str] = Field(description="数据缺口代码")
+    warnings: list[str] = Field(description="口径与来源边界说明")
+
+
+# ---------------------------------------------------------------------------
 # Stock K-line, news and activity
 # ---------------------------------------------------------------------------
