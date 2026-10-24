@@ -141,6 +141,35 @@ class HithinkIndexConstituentFact:
 
 
 @dataclass(frozen=True)
+class HithinkIndexSearchFact:
+    """One A-share index returned by the symbol directory search."""
+
+    thscode: str
+    ticker: str
+    name: str
+    exchange: str
+    asset_type: str
+    list_date: date | None
+
+
+@dataclass(frozen=True)
+class HithinkIndexSnapshotQuoteFact:
+    """One current index quote with its capture time."""
+
+    thscode: str
+    last_price: float | None
+    price_change: float | None
+    change_pct: float | None
+    open_price: float | None
+    high_price: float | None
+    low_price: float | None
+    prev_price: float | None
+    volume: float | None
+    turnover: float | None
+    captured_at: datetime
+
+
+@dataclass(frozen=True)
 class HithinkIncomeStatementFact:
     """One normalized income-statement row.
 
@@ -523,10 +552,10 @@ class HithinkFinanceCollector:
         )
 
     def collect_index_catalog(self, category: str) -> list[HithinkIndexCatalogFact]:
-        """Return the complete Tonghuashun industry or concept index directory."""
+        """Return one complete Tonghuashun index category directory."""
 
-        if category not in {"industry", "cn_concept"}:
-            raise ValueError("category must be industry or cn_concept")
+        if category not in {"industry", "cn_concept", "region", "tszs"}:
+            raise ValueError("category must be industry, cn_concept, region or tszs")
         envelope = self._invoke("index", "catalog", "--tag", category)
         rows = _complete_items(envelope, "index catalog")
         items = [
@@ -630,17 +659,109 @@ class HithinkFinanceCollector:
                 )
         return results
 
+    def collect_index_search(
+        self,
+        query: str,
+        *,
+        limit: int = 20,
+    ) -> list[HithinkIndexSearchFact]:
+        """Resolve an index name or code through the A-share index directory."""
+
+        normalized = query.strip()
+        if not normalized:
+            raise ValueError("query is required")
+        envelope = self._invoke(
+            "symbol",
+            "search",
+            "--q",
+            normalized,
+            "--asset-type",
+            "a-share-index",
+            "--limit",
+            str(max(1, min(limit, 50))),
+        )
+        items: list[HithinkIndexSearchFact] = []
+        for row in _list(_dict(envelope.get("data")).get("item")):
+            thscode = str(row.get("thscode") or "").strip().upper()
+            name = str(row.get("name") or "").strip()
+            if not thscode or not name:
+                continue
+            items.append(
+                HithinkIndexSearchFact(
+                    thscode=thscode,
+                    ticker=str(row.get("ticker") or ""),
+                    name=name,
+                    exchange=str(row.get("exchange") or ""),
+                    asset_type=str(row.get("asset_type") or "a-share-index"),
+                    list_date=_date(row.get("list_date")),
+                )
+            )
+        return items
+
+    def collect_index_snapshot(
+        self,
+        thscode: str,
+    ) -> HithinkIndexSnapshotQuoteFact | None:
+        """Return one current index quote, preserving its capture time."""
+
+        normalized = thscode.strip().upper()
+        if not normalized:
+            raise ValueError("thscode is required")
+        envelope = self._invoke("index", "snapshot", "--thscodes", normalized)
+        rows = _complete_items(envelope, "index snapshot")
+        row = next(
+            (
+                item
+                for item in rows
+                if str(item.get("thscode") or "").strip().upper() == normalized
+            ),
+            None,
+        )
+        if row is None:
+            return None
+        data = _dict(envelope.get("data"))
+        captured_at = (
+            _shanghai_timestamp(data.get("timestamp"))
+            or _shanghai_timestamp(row.get("timestamp"))
+        )
+        if captured_at is None:
+            raise HithinkFinanceError("index snapshot: missing capture timestamp")
+        return HithinkIndexSnapshotQuoteFact(
+            thscode=normalized,
+            last_price=_number(row.get("last_price")),
+            price_change=_number(row.get("price_change")),
+            change_pct=_number(row.get("price_change_ratio_pct")),
+            open_price=_number(row.get("open_price")),
+            high_price=_number(row.get("high_price")),
+            low_price=_number(row.get("low_price")),
+            prev_price=_number(row.get("prev_price")),
+            volume=_number(row.get("volume")),
+            turnover=_number(row.get("turnover")),
+            captured_at=captured_at,
+        )
+
     def collect_index_constituents(
         self,
         index: HithinkIndexCatalogFact | HithinkIndexSnapshotFact,
     ) -> list[HithinkIndexConstituentFact]:
-        """Return all A-share constituents for one industry or concept index."""
+        """Return all A-share constituents for one resolved index."""
 
+        return self.collect_index_constituents_by_code(index.thscode)
+
+    def collect_index_constituents_by_code(
+        self,
+        thscode: str,
+    ) -> list[HithinkIndexConstituentFact]:
+        """Return all A-share constituents for one index code."""
+
+        normalized = thscode.strip().upper()
+        if not normalized:
+            raise ValueError("thscode is required")
         envelope = self._invoke(
             "index",
             "constituents",
             "--thscode",
-            index.thscode,
+            normalized,
         )
         return [
             HithinkIndexConstituentFact(
@@ -1292,7 +1413,7 @@ def _timestamp_date(value: object) -> date | None:
 # Interpret a timestamp in the Shanghai timezone before taking its calendar date.
 # A None result represents the unavailable or inapplicable branch; callers must check it before
 # using the value.
-def _shanghai_timestamp_date(value: object) -> date | None:
+def _shanghai_timestamp(value: object) -> datetime | None:
     timestamp = _integer(value)
     if timestamp is None:
         return None
@@ -1300,9 +1421,14 @@ def _shanghai_timestamp_date(value: object) -> date | None:
         return datetime.fromtimestamp(
             timestamp / 1000,
             tz=SHANGHAI_TIMEZONE,
-        ).date()
+        )
     except (OSError, OverflowError, ValueError):
         return None
+
+
+def _shanghai_timestamp_date(value: object) -> date | None:
+    timestamp = _shanghai_timestamp(value)
+    return timestamp.date() if timestamp is not None else None
 
 
 # Extract the shared identity and period fields from one financial-statement row.

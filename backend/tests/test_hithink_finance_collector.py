@@ -601,6 +601,103 @@ class HithinkFinanceCollectorTest(unittest.TestCase):
         self.assertIn("balance-sheet", runner.commands[0])
         self.assertIn("cash-flow", runner.commands[1])
 
+    # Regression scenario: index search, snapshot and constituent-by-code share the
+    # same normalized identity contract.
+    def test_index_search_snapshot_and_constituents_by_code_are_normalized(self) -> None:
+        runner = SequenceRunner([
+            {
+                "ok": True,
+                "data": {
+                    "item": [
+                        {
+                            "thscode": "000300.SH",
+                            "ticker": "1B0300",
+                            "name": "沪深300",
+                            "exchange": "SH",
+                            "asset_type": "a-share-index",
+                            "list_date": "2005-04-08",
+                        },
+                        {
+                            "thscode": "399300.SZ",
+                            "ticker": "399300",
+                            "name": "沪深300",
+                            "exchange": "SZ",
+                            "asset_type": "a-share-index",
+                            "list_date": "2005-04-08",
+                        },
+                    ]
+                },
+            },
+            {
+                "ok": True,
+                "data": {
+                    "item": [
+                        {
+                            "thscode": "000300.SH",
+                            "last_price": 4105.33,
+                            "price_change": 69.03,
+                            "price_change_ratio_pct": 1.71023,
+                            "open_price": 3992.9,
+                            "high_price": 4109.52,
+                            "low_price": 3958.14,
+                            "prev_price": 4036.3,
+                            "volume": 23_132_521_000,
+                            "turnover": 558_204_980_000,
+                        }
+                    ],
+                    "timestamp": 1_792_863_970_000,
+                },
+            },
+            {
+                "ok": True,
+                "data": {
+                    "item": [
+                        {"thscode": "601077.SH", "ticker": "601077", "name": "渝农商行"}
+                    ]
+                },
+            },
+        ])
+        collector = HithinkFinanceCollector(
+            executable="hithink-finance",
+            runner=runner,
+        )
+
+        search = collector.collect_index_search("沪深300")
+        snapshot = collector.collect_index_snapshot("000300.SH")
+        constituents = collector.collect_index_constituents_by_code("000300.SH")
+
+        self.assertEqual([item.thscode for item in search], ["000300.SH", "399300.SZ"])
+        self.assertEqual(search[0].name, "沪深300")
+        self.assertEqual(search[0].list_date, date(2005, 4, 8))
+        self.assertEqual(snapshot.last_price, 4105.33)
+        self.assertEqual(snapshot.change_pct, 1.71023)
+        self.assertEqual(snapshot.captured_at.date(), date(2026, 10, 25))
+        self.assertEqual(constituents[0].symbol, "601077")
+        self.assertIn("a-share-index", runner.commands[0])
+        self.assertIn("snapshot", runner.commands[1])
+        self.assertIn("constituents", runner.commands[2])
+
+    # Regression scenario: catalog browsing now accepts region and tszs categories.
+    def test_index_catalog_accepts_region_and_tszs(self) -> None:
+        runner = FakeRunner(
+            {
+                "ok": True,
+                "data": {"item": [{"thscode": "882001.TI", "name": "安徽"}]},
+            }
+        )
+        collector = HithinkFinanceCollector(
+            executable="hithink-finance",
+            runner=runner,
+        )
+
+        region = collector.collect_index_catalog("region")
+        tszs = collector.collect_index_catalog("tszs")
+
+        self.assertEqual(region[0].category, "region")
+        self.assertEqual(tszs[0].category, "tszs")
+        self.assertIn("region", runner.commands[0])
+        self.assertIn("tszs", runner.commands[1])
+
     # Regression scenario: annual requests preserve the provider's FY label.
     def test_annual_income_statement_keeps_fy_period(self) -> None:
         runner = FakeRunner(
