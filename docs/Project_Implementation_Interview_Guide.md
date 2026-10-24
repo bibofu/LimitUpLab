@@ -1,6 +1,6 @@
 # LimitUpLab 项目实现与 Agent 开发面试准备
 
-> 架构更新（2026-10-24）：生产聊天已切换为轻量 LangGraph Runner，旧 `react_runtime`、EvidenceStore、`finish`、`compute_result`、输入任务编译器和 Golden/quality 评测代码已删除。本文部分章节仍描述重构前架构，作为历史演进记录；当前实现以 [README](../README.md)、[LangChain 集成](LangChain_Integration.md) 和 [代码阅读指南](code-reading-guide.md) 为准。
+> 架构更新（2026-10-24）：生产聊天已切换为轻量 LangGraph Runner，旧 `react_runtime`、EvidenceStore、`finish`、`compute_result`、输入任务编译器和 Golden/quality 评测代码已删除；随旧 runtime 一起删除的还包括自建 checkpoint、逐 tool-call 回放和 `UncertainExecution` 恢复。本文部分章节仍描述重构前架构，作为历史演进记录；当前实现以 [README](../README.md)、[LangChain 集成](LangChain_Integration.md) 和 [代码阅读指南](code-reading-guide.md) 为准。
 
 更新日期：2026-10-10。面向 Agent／LLM 应用开发岗位，源码整体核对基线为 `a6ef29b`，复盘总结与相关索引更新至 `5e4021f`。本文描述已实现能力；历史评测、故障与发布记录保留各自日期，不能代替当前线上验收。
 
@@ -372,7 +372,7 @@ Reviewer 使用有界近期用户意图、偏好、上一任务及澄清信息�
 
 ### 为什么 SSE 之外还需要 Journal
 
-网络连接只是交付通道，不能承担任务唯一性和最终状态。Journal 保存 run、事件、checkpoint、工具调用记录与取消标记，使浏览器断线和任务执行解耦。
+网络连接只是交付通道，不能承担任务唯一性和最终状态。Journal 保存 run、进度事件、取消标记与最终答案，使浏览器断线和任务执行解耦；`checkpoint_json` 和 `react_calls` 字段仍在 schema 中，但当前 runner 不写。
 
 | 情形 | 当前行为 |
 | --- | --- |
@@ -382,14 +382,13 @@ Reviewer 使用有界近期用户意图、偏好、上一任务及澄清信息�
 | GET 重连 | 只读已有事件与最终结果，不启动模型或工具 |
 | 运行中重连 | 从 `after` 游标继续读取进度事件，过滤旧 journal 的草稿事件 |
 | 已完成运行重连 | 复用已保存的最终响应，不重播答案生成过程 |
-| 显式重复 POST 恢复 | 利用保存的 checkpoint，最终响应仍在原子保存后发布 |
-| 已登记调用但结果未保存 | 标记 `UncertainExecution`，不盲目重发远端请求 |
+| 显式重复 POST（worker 丢失后） | 复用同一 run 记录，从第一轮重新执行；最终响应仍在原子保存后发布 |
 
-工具调用以 run、call ID 和参数 signature 记录，已知完成结果可回放；同一运行的相同业务调用还可复用已获得的 ok/empty 证据，partial 不按完整成功缓存。最终聊天消息、运行记录与 `react_runs.response_json` 在同一事务中保存；提交后，SSE 读取已持久化响应并生成 `completed`，该事件本身不写入 `react_events`。
+同一运行内，相同工具和解析后参数会命中进程内缓存，不重复执行；缓存不落库，进程重启即失效。最终聊天消息、运行记录与 `react_runs.response_json` 在同一事务中保存；提交后，SSE 读取已持久化响应并生成 `completed`，该事件本身不写入 `react_events`。
 
 ### 不能夸大成什么
 
-这不是分布式 exactly-once。请求幂等、工具结果复用、数据库原子提交分别解决不同问题；外部工具已经执行而结果尚未落库的窗口仍存在。GET 重连不会自动恢复中断计算，恢复需显式重新提交同一请求，且仍受最初运行的总时间预算约束。
+这不是分布式 exactly-once。请求幂等、run 级单一答案和数据库原子提交分别解决不同问题。GET 重连不会自动恢复中断计算；显式重新提交同一请求会从头重跑，工具结果不跨进程复用，截止时间和轮次预算也按新一次执行重新计算。已完成的工具调用会因此重复查询——当前业务工具均为只读研究查询，不会产生外部写副作用，但会重复消耗时间和 token。
 
 worker、线程池和部分锁属于单进程设计。取消是协作式的，可以阻止新调用；`Journal.finish` 会在原子提交时优先保存取消结果，已经进入底层网络库的请求可能稍后结束。多进程、多实例部署需要额外的租约、队列和共享协调机制。
 

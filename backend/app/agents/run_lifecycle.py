@@ -1,4 +1,9 @@
-"""Durable run journal with scoped idempotency and fenced execution writes."""
+"""Durable run journal with scoped idempotency and fenced execution writes.
+
+``checkpoint``, ``begin_call`` and ``finish_call`` remain from the legacy
+runtime. The current lightweight runner never calls them, so they are not
+resume support: an interrupted run is restarted from its first round.
+"""
 
 from contextlib import contextmanager
 from contextvars import ContextVar

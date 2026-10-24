@@ -67,6 +67,8 @@ POST /api/agents/chat/stream
 - 输入安全：语义审查提示注入、权限绕过与直接交易指令；正常历史研究允许，拒绝发生在业务工具查询之前，不生成输出合同。
 - 历史复盘：候选 start_date/end_date 与后续观察 as_of_date 分开；聊天工具默认观察到本地最新交易日，显式历史截止仍可复现。报告分别标注候选表现分类、特征分组和实际来源/阶段。
 - 输出完整性：读取模型 finish_reason；length 仅允许一次同证据、禁止新增工具的精简重写，仍失败则明确未完成并返回 partial/error，不能把半句作为 complete。恢复仍受原有轮次和时限预算约束。
-- 运行恢复：journal 仍负责幂等、取消、租约和最终答案原子保存；SSE 进度和最终结果保留。
+- 运行恢复：journal 负责幂等、取消、租约和最终答案原子保存；SSE 进度和最终结果可重连读取。
+  worker 丢失后重新提交同一 `message_id` 会复用 run 记录，但从第一轮重跑，工具结果不跨进程复用；
+  `checkpoint_json` / `react_calls` 当前没有写入方，不构成断点续跑。
 - 观测：LLM 调用、工具执行与 run 级 trace 见 [Langfuse 接入](Langfuse_Integration.md)。
 - 评测：Golden/quality 评测框架已删除，后续评测集重新设计。

@@ -66,8 +66,10 @@ def start(request, http_request, owner_id):
         if not row["active"]:
             execution.release()
             return journal, row
-        # Explicit POST of the same request may resume a saved checkpoint after
-        # worker loss. GET/reconnect never starts a worker or pays for a model.
+        # An explicit POST with the same message_id may take over an interrupted
+        # run once its lease expires. There is no checkpoint replay: the worker
+        # restarts the ReAct loop from its first round. GET/reconnect never
+        # starts a worker or pays for a model.
         started_at = datetime.fromisoformat(row["started_at"])
         try:
             execution.start_heartbeat()
@@ -77,7 +79,7 @@ def start(request, http_request, owner_id):
             )
         except Exception:
             # Admission failures are retryable, not completed chat answers. Keep
-            # an existing checkpoint intact, and release a brand-new reservation
+            # an existing run record intact, and release a brand-new reservation
             # so it cannot strand the conversation behind an unknown active run.
             try:
                 if fresh:
@@ -162,7 +164,7 @@ def start(request, http_request, owner_id):
                         response = AgentChatResponse.model_validate(journal.finish(run_id, owner_id, response.model_dump(mode="json")))
                         notify_streams()
                 except Exception as error:
-                    # Saving is part of delivery: leave the checkpoint recoverable
+                    # Saving is part of delivery: leave the run record retryable
                     # and let the stream report interruption, never publish a candidate.
                     failure = RuntimeError(type(error).__name__)
                     response = None
@@ -243,7 +245,7 @@ def stream(journal, row, owner_id, after=0):
                 if finished:
                     # Re-read completion on the next poll.
                     continue
-                yield "event: error\ndata: " + json.dumps({"run_id": run_id, "message": "运行已中断；重新提交同一请求可恢复，已完成工具不会重复执行。"}, ensure_ascii=False) + "\n\n"
+                yield "event: error\ndata: " + json.dumps({"run_id": run_id, "message": "运行已中断；重新提交同一请求会从头重新执行，已完成的工具结果不会被复用。"}, ensure_ascii=False) + "\n\n"
                 return
             yield ": heartbeat\n\n"
             with _updates:
@@ -260,7 +262,7 @@ def synchronous(journal, row, owner_id):
             finished = owned(journal, row["run_id"], owner_id)["response_json"]
             if finished:
                 return AgentChatResponse.model_validate_json(finished)
-            raise HTTPException(503, "Run interrupted; resubmit the same message_id to recover")
+            raise HTTPException(503, "Run interrupted; resubmit the same message_id to rerun from the start")
         with _updates:
             _updates.wait(timeout=.5)
 
