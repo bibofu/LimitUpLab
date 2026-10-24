@@ -168,6 +168,7 @@ def test_balance_sheet_has_no_single_quarter_fields():
     assert row["total_debt"] == 46_954_432_394.95
     assert not any(key.endswith("_single_quarter") for key in row)
     assert payload["period_basis"].startswith("资产负债表为期末时点值")
+    assert not any("单季" in warning for warning in payload["warnings"])
 
 
 def test_annual_request_does_not_derive_single_quarter():
@@ -194,6 +195,7 @@ def test_annual_request_does_not_derive_single_quarter():
     assert payload["rows"][0]["fiscal_period"] == "FY"
     assert not any(key.endswith("_single_quarter") for key in payload["rows"][0])
     assert payload["period_basis"].startswith("FY为全年累计")
+    assert not any("单季" in warning for warning in payload["warnings"])
 
 
 def test_cash_flow_derives_single_quarter_for_all_additive_fields():

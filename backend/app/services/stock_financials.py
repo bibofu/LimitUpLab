@@ -124,10 +124,14 @@ def build_stock_financials_facts(
     warnings: list[str] = []
     if not rows:
         data_missing.append("hithink_finance:no_disclosed_reports")
-    if any(
-        row.get("fiscal_period") in PREVIOUS_PERIOD
-        and _missing_all_single_quarter(row, normalized_statement)
-        for row in rows
+    if (
+        normalized_statement in SINGLE_QUARTER_STATEMENTS
+        and normalized_period == "quarterly"
+        and any(
+            row.get("fiscal_period") in PREVIOUS_PERIOD
+            and _missing_all_single_quarter(row, normalized_statement)
+            for row in rows
+        )
     ):
         warnings.append("返回窗口内最早季度缺少上一季度累计值，无法推算该季度单季值。")
     warnings.append(report_date_warning)
