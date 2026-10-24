@@ -193,6 +193,7 @@ class FinanceNewsTest(unittest.TestCase):
         # test; it is evaluated only when the code under test calls it.
         expected = collect_finance_news(
             limit=200,
+            hours=12,
             loaders={
                 "东方财富": lambda: [
                     self._item(
@@ -213,11 +214,12 @@ class FinanceNewsTest(unittest.TestCase):
 
         self.assertEqual(response.page, 2)
         self.assertEqual(response.page_size, 5)
+        self.assertEqual(response.window_hours, 12)
         self.assertEqual(response.total, 12)
         self.assertEqual(response.total_pages, 3)
         self.assertEqual(len(response.items), 5)
         self.assertGreater(response.items[0].published_at, response.items[-1].published_at)
-        loader.assert_called_once_with(limit=2000, hours=24)
+        loader.assert_called_once_with(limit=2000, hours=12)
 
     # Regression scenario: market news route hides upstream error.
     def test_market_news_route_hides_upstream_error(self) -> None:

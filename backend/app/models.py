@@ -245,7 +245,7 @@ class FinanceNewsFacts(BaseModel):
 
 
 class FinanceNewsPage(BaseModel):
-    """One page from the latest 24-hour structured financial-news feed."""
+    """One page from a structured financial-news feed."""
 
     fetched_at: datetime
     window_hours: int = 24

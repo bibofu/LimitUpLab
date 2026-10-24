@@ -62,7 +62,7 @@ function render(kind: "news" | "premarket", state: Record<string, unknown>) {
   };
 }
 
-test("24-hour news keeps source cutoff and content visible while describing the refresh", () => {
+test("12-hour news keeps source cutoff and content visible while describing the refresh", () => {
   const ready = render("news", { news }).html;
   for (const state of [{ loading: true }, { loading: true, fromCache: true }, { news: { ...news, refreshing: true, stale: true } }]) {
     const updating = render("news", { news, ...state }).html;
@@ -71,7 +71,7 @@ test("24-hour news keeps source cutoff and content visible while describing the 
     assert.ok(updating.includes("显示上次快讯，正在更新"));
   }
   assert.ok(ready.includes("来源抓取：2026-10-12 18:30:00（上海时间）"));
-  assert.ok(ready.includes("近 24 小时（以来源抓取为截止）"));
+  assert.ok(ready.includes("近 12 小时（以来源抓取为截止）"));
   assert.ok(ready.includes("共 1 条"));
   assert.ok(!ready.includes("查看最新快讯"));
   assert.ok(!ready.includes("recommendation-news-navigation"));
@@ -79,16 +79,16 @@ test("24-hour news keeps source cutoff and content visible while describing the 
   assert.ok(ready.includes("已保存的市场快讯"));
 });
 
-test("unknown 24-hour news has an explicit loading state and verified empty results stay distinct", () => {
+test("unknown 12-hour news has an explicit loading state and verified empty results stay distinct", () => {
   const unknown = render("news", { news: null, loading: true }).html;
   assert.ok(unknown.includes("来源抓取：—"));
   assert.ok(!unknown.includes("没有市场快讯"));
   assert.ok(!unknown.includes("共 0 条"));
-  assert.ok(unknown.includes("正在获取近24小时新闻"));
+  assert.ok(unknown.includes("正在获取近12小时新闻"));
   const empty = { ...news, total: 0, items: [] };
   const ready = render("news", { news: empty }).html;
-  assert.ok(render("news", { news: empty, loading: true, fromCache: true }).html.includes("该次抓取的近 24 小时范围内没有市场快讯"));
-  assert.ok(ready.includes("该次抓取的近 24 小时范围内没有市场快讯"));
+  assert.ok(render("news", { news: empty, loading: true, fromCache: true }).html.includes("该次抓取的近 12 小时范围内没有市场快讯"));
+  assert.ok(ready.includes("该次抓取的近 12 小时范围内没有市场快讯"));
 });
 
 test("news errors retain dated content and expose a working retry", () => {
@@ -148,7 +148,7 @@ test("the news board keeps every page in the 24-hour feed without a latest-batch
   };
   let html = renderBoard();
   assert.ok(html.includes("历史第1页"));
-  assert.ok(html.includes("近 24 小时（以来源抓取为截止）"));
+  assert.ok(html.includes("近 12 小时（以来源抓取为截止）"));
   assert.ok(html.includes("共 30 条"));
   assert.ok(html.includes("市场快讯分页"));
   buttons.get("2")!();
@@ -161,7 +161,7 @@ test("the news board keeps every page in the 24-hour feed without a latest-batch
   html = renderBoard();
   assert.ok(html.includes("历史第2页"));
   assert.equal(buttons.has("查看最新快讯"), false);
-  assert.equal(buttons.has("查看近24小时新闻"), false);
+  assert.equal(buttons.has("查看近12小时新闻"), false);
   buttons.get("1")!();
   html = renderBoard();
   assert.ok(html.includes("历史第1页"));

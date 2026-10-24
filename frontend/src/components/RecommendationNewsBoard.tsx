@@ -16,6 +16,8 @@ interface RecommendationNewsViewItem {
   category: string;
 }
 
+const NEWS_WINDOW_HOURS = 12;
+
 
 /**
  * Show paginated research news with its fetch state and source links.
@@ -23,6 +25,7 @@ interface RecommendationNewsViewItem {
 export function RecommendationNewsBoard() {
   const [page, setPage] = useState(1);
   const { news, loading, error, reload, waitingTooLong } = useFinanceNews(page, "history");
+  const windowHours = news?.window_hours ?? NEWS_WINDOW_HOURS;
   const refreshError = error || news?.refresh_error;
   const updating = !refreshError && !waitingTooLong && (loading || news?.refreshing);
 
@@ -44,8 +47,8 @@ export function RecommendationNewsBoard() {
           <span>
             <strong>实时新闻</strong>
             <small>
-              {news ? `近 24 小时（以来源抓取为截止） · ${news.sources.join(" · ")} · 共 ${news.total} 条`
-                : "近 24 小时（以来源抓取为截止）"}
+              {news ? `近 ${windowHours} 小时（以来源抓取为截止） · ${news.sources.join(" · ")} · 共 ${news.total} 条`
+                : `近 ${windowHours} 小时（以来源抓取为截止）`}
             </small>
           </span>
         </div>
@@ -55,7 +58,7 @@ export function RecommendationNewsBoard() {
       </header>
       {!news && !refreshError ? (
         <div className="recommendation-news-state" role="status">
-          正在获取近24小时新闻
+          正在获取近{NEWS_WINDOW_HOURS}小时新闻
         </div>
       ) : null}
       {refreshError ? (
@@ -72,7 +75,7 @@ export function RecommendationNewsBoard() {
       ) : null}
       {news && visibleNews.length === 0 ? (
         <div className="recommendation-news-state">
-          该次抓取的近 24 小时范围内没有市场快讯。
+          该次抓取的近 {windowHours} 小时范围内没有市场快讯。
         </div>
       ) : null}
       {visibleNews.length > 0 ? (

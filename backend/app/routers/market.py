@@ -152,6 +152,7 @@ def get_latest_finance_news(
     )[:page_size]
     return FinanceNewsPage(
         fetched_at=facts.fetched_at, sources=facts.sources,
+        window_hours=facts.window_hours,
         page=1, page_size=page_size, total=len(ordered), total_pages=1, items=ordered,
         refreshing=refreshing, stale=stale, refresh_error=refresh_error,
     )
@@ -162,10 +163,10 @@ def get_finance_news(
     page: int = Query(default=1, ge=1),
     page_size: int = Query(default=10, ge=5, le=20),
 ) -> FinanceNewsPage:
-    """Return one page of the latest 24-hour structured market-news feed."""
+    """Return one page of the latest 12-hour structured market-news feed."""
 
     try:
-        facts = collect_finance_news(limit=2000, hours=24)
+        facts = collect_finance_news(limit=2000, hours=12)
     except Exception as exc:  # noqa: BLE001
         raise HTTPException(
             status_code=502,
@@ -184,6 +185,7 @@ def get_finance_news(
     return FinanceNewsPage(
         fetched_at=facts.fetched_at,
         sources=facts.sources,
+        window_hours=facts.window_hours,
         page=bounded_page,
         page_size=page_size,
         total=total,

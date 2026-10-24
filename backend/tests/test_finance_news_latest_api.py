@@ -19,13 +19,14 @@ def snapshot():
 
 def test_latest_and_history_routes_use_independent_delivery_paths(monkeypatch):
     facts, calls = snapshot(), []
+    history_facts = facts.model_copy(update={"window_hours": 12})
     def latest():
         calls.append("latest")
         return facts, True, True, None
     def history(**kwargs):
-        assert kwargs == {"limit": 2000, "hours": 24}
+        assert kwargs == {"limit": 2000, "hours": 12}
         calls.append("history")
-        return facts
+        return history_facts
     monkeypatch.setattr(market, "get_latest_news", latest)
     monkeypatch.setattr(market, "collect_finance_news", history)
     app = FastAPI()
@@ -36,10 +37,12 @@ def test_latest_and_history_routes_use_independent_delivery_paths(monkeypatch):
         body = response.json()
         assert body["total"] == 10 and body["total_pages"] == 1 and body["page"] == 1
         assert body["items"][0]["title"] == "A股快讯0"
+        assert body["window_hours"] == 24
         assert body["refreshing"] and body["stale"] and body["refresh_error"] is None
         assert datetime.fromisoformat(body["fetched_at"]) == facts.fetched_at
         response = client.get("/api/market/news?page=2&page_size=10")
         assert calls == ["latest", "history"]
+        assert response.json()["window_hours"] == 12
         assert response.json()["total"] == 30 and response.json()["total_pages"] == 3
         assert response.json()["items"][0]["title"] == "A股快讯10"
         assert not response.json()["refreshing"]
