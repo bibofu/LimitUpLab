@@ -92,31 +92,33 @@ test("stock names inside code stay code and explicit links keep their destinatio
   assert.ok(!html.includes('href="/stocks/'));
 });
 
-// Frontend-only installs remain usable; full checkouts also verify the Python renderer contract.
+// Full checkouts verify the current backend response contract preserves model Markdown.
 const backendDirectory = fileURLToPath(new URL("../../backend/", import.meta.url));
 const backendPython = process.env.LIMITUPLAB_TEST_PYTHON || [
   new URL("../../backend/.venv/Scripts/python.exe", import.meta.url),
   new URL("../../backend/.venv/bin/python", import.meta.url),
 ].map(fileURLToPath).find(existsSync);
 
-test("backend evidence output renders as a real table without changing raw ranking values", {
+test("backend public answer preserves Markdown tables and raw tool facts", {
   skip: backendPython ? false : "backend Python environment is not installed",
 }, () => {
   const script = `
 import json
 import sys
-from app.agents.react_runtime.contracts import Finish
-from app.agents.react_runtime.evidence import EvidenceStore
-from app.agents.react_runtime.rendering import render_answer
+from app.agents.runner.adapter import _response
+from app.agents.tool_result import ToolResult
+from app.models import AgentChatRequest
 
 fixture = json.load(sys.stdin)
-store = EvidenceStore()
-key = store.add(tool="hot_stock_ranking", state="ok", arguments={"limit": 2}, payload={"items": fixture["rows"]})
-final = Finish(status="complete", answer=fixture["answer"], table={"evidence_id": key, "columns": fixture["columns"]})
-answer = render_answer(final, store)
-code_answer = render_answer(final.model_copy(update={"answer": fixture["code_answer"]}), store)
-print(json.dumps({"answer": answer, "code_answer": code_answer,
-                  "raw_trends": [row["rank_trend"] for row in store.get(key)["rows"]]}, ensure_ascii=False))
+request = AgentChatRequest(session_id="markdown-contract", message="查询研究样例")
+trace = ToolResult(name="hot_stock_ranking", input={"limit": 2},
+                   output={"items": fixture["rows"]}, trace_output={"items": fixture["rows"]},
+                   summary="合成样例").trace()
+answer = _response(request, fixture["answer"], "answered", "model_answer", tool_results=[trace])
+code_answer = _response(request, fixture["code_answer"], "answered", "model_answer")
+print(json.dumps({"answer": answer.answer, "code_answer": code_answer.answer,
+                  "status": answer.task_status,
+                  "raw_trends": [row["rank_trend"] for row in answer.tool_results[0].output["items"]]}, ensure_ascii=False))
 `;
   const path = String.raw`C:\new\reports`;
   const literalNewline = String.raw`\n`;
@@ -125,23 +127,17 @@ print(json.dumps({"answer": answer, "code_answer": code_answer,
     encoding: "utf8",
     timeout: 20_000,
     input: JSON.stringify({
-      // One real newline is a valid model layout; the server must isolate the final table.
-      answer: [introduction, "{{evidence_table}}", caveat].join("\n"),
-      code_answer: ["{{evidence_table}}", `    ${path}`, `    ${literalNewline}`].join("\n"),
+      answer: [introduction, table, caveat].join("\n\n"),
+      code_answer: [table, `    ${path}\n    ${literalNewline}`].join("\n\n"),
       rows: stockMentions.map((stock, index) => ({ ...stock, rank: index + 1, rank_trend: index ? "up" : "flat" })),
-      columns: [
-        { field: "rank", label: "排名" },
-        { field: "symbol", label: "代码" },
-        { field: "name", label: "名称" },
-        { field: "rank_trend", label: "排名变化" },
-      ],
     }),
   });
   const result = JSON.parse(output);
+  assert.equal(result.status, "complete");
   assert.deepEqual(result.raw_trends, ["flat", "up"]);
   assertEvidenceTable(render(result.answer));
   const codeHtml = render(result.code_answer);
   assert.ok(codeHtml.startsWith("<table>"));
   assert.ok(codeHtml.endsWith(`</table>\n<pre><code>${path}\n${literalNewline}\n</code></pre>`),
-    "server block separation must retain the following code block's indentation and literal backslashes");
+    "the response contract must preserve code indentation and literal backslashes");
 });

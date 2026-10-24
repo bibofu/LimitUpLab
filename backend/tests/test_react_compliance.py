@@ -1,4 +1,5 @@
 from langchain_core.messages import AIMessage
+import pytest
 
 from app.agents.compliance import review_answer
 
@@ -38,3 +39,17 @@ def test_structured_compliance_review_rejects_implicit_trade_instruction():
         timeout_seconds=10,
     )
     assert result.violations == ["trade_instruction"]
+
+
+def test_truncated_compliance_verdict_cannot_authorize_publication():
+    class TruncatedReview(Provider):
+        def generate_messages(self, messages, tools, **kwargs):
+            result = super().generate_messages(messages, tools, **kwargs)
+            result.response_metadata["finish_reason"] = "length"
+            return result
+
+    with pytest.raises(ValueError, match="did not finish"):
+        review_answer(
+            TruncatedReview({"decision": "allow", "violations": [], "reason": "partial"}),
+            user_message="解释历史事实", answer="不构成任何仓位建议。", timeout_seconds=10,
+        )

@@ -10,9 +10,9 @@ POST /api/agents/chat/stream
   -> app/routers/react_chat.py：创建 durable run、绑定 owner/session、写入 journal
   -> app/agents/chat.py：唯一公开入口
   -> app/agents/runner/adapter.py：
-       轻量输入安全审查
+       轻量输入安全及交易指令审查
        AgentRunner
-       可选语义合规复核
+       配置条件/全量语义复核模式（实际复核统一在 AgentRunner 内）
        映射为 AgentChatResponse
   -> app/agents/runner/runner.py：LangGraph agent -> tools -> agent
   -> app/agents/runner/gateway.py：BusinessToolGateway 校验和执行业务工具
@@ -55,14 +55,16 @@ POST /api/agents/chat/stream
 }
 ```
 
-完整结果直接进入 ToolMessage，不再裁剪成 evidence 预览。模型基于 rows 直接筛选、排序、汇总和输出 Markdown 表格。
+完整结果直接进入 ToolMessage，Runner 不再额外截取前 50 行。集合只保留一份 rows，均线、回撤、筛选规则、覆盖率等元数据同步保留；非集合报告保持完整结构。来源截断与关键缺口会传播为 partial。工具层提供带峰谷日期的收盘回撤与高低价回撤、候选统计，模型优先引用确定性结果并输出 Markdown 表格。
 
 ## 边界
 
 - 日期：模型显式写入工具参数；工具返回 `data_as_of`，与请求不一致时拒绝。
 - 数据缺失：`data_missing`、`source_truncated`、`truncated` 由工具显式返回。
-- 合规：默认确定性模式守卫；可配置 `LIMITUPLAB_AGENT_COMPLIANCE=llm` 增加语义复核。
-- 输入安全：只拒绝提示注入/权限绕过，不生成输出合同。
+- 合规：关键词仅触发条件语义复核，不直接拒绝否定声明或历史引用；真实违规或复核失败不发布候选回答。可配置 `LIMITUPLAB_AGENT_COMPLIANCE=llm` 对未复核的其余回答也做语义复核。
+- 输入安全：语义审查提示注入、权限绕过与直接交易指令；正常历史研究允许，拒绝发生在业务工具查询之前，不生成输出合同。
+- 历史复盘：候选 start_date/end_date 与后续观察 as_of_date 分开；聊天工具默认观察到本地最新交易日，显式历史截止仍可复现。报告分别标注候选表现分类、特征分组和实际来源/阶段。
+- 输出完整性：读取模型 finish_reason；length 仅允许一次同证据、禁止新增工具的精简重写，仍失败则明确未完成并返回 partial/error，不能把半句作为 complete。恢复仍受原有轮次和时限预算约束。
 - 运行恢复：journal 仍负责幂等、取消、租约和最终答案原子保存；SSE 进度和最终结果保留。
 - 观测：LLM 调用、工具执行与 run 级 trace 见 [Langfuse 接入](Langfuse_Integration.md)。
 - 评测：Golden/quality 评测框架已删除，后续评测集重新设计。

@@ -6,9 +6,9 @@ MAX_MODEL_ROUNDS = 6
 MAX_TOOL_CALLS = 8
 DEADLINE_SECONDS = 90
 
-# Conservative Phase 2 baseline. It only catches explicit advice; the legacy
-# semantic reviewer remains the production boundary until Phase 3.
-FORBIDDEN_ADVICE = (
+# These phrases are review signals, not verdicts: negatives, quotations and
+# historical disclosures can legitimately contain exactly the same words.
+ADVICE_REVIEW_SIGNALS = (
     "建议买入",
     "建议卖出",
     "可以买入",
@@ -29,13 +29,10 @@ FORBIDDEN_ADVICE = (
 REFUSAL = "我只提供有来源的研究事实，不提供买卖、仓位、目标价、收益承诺或确定性预测。"
 
 
-def compliance_guard(answer: str) -> tuple[str, bool]:
-    """Replace explicit trading advice with a conservative refusal."""
+def requires_compliance_review(answer: str) -> bool:
+    """Escalate potentially actionable wording to the semantic reviewer."""
 
-    text = answer or ""
-    if any(phrase in text for phrase in FORBIDDEN_ADVICE):
-        return REFUSAL, True
-    return text, False
+    return any(phrase in (answer or "") for phrase in ADVICE_REVIEW_SIGNALS)
 
 
 def derived_status(answer: str, tool_statuses: list[str], error: str | None = None) -> str:

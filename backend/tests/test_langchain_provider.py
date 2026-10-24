@@ -457,6 +457,28 @@ def test_native_protocol_diagnostics_retain_duplicate_id_status_without_id_value
     assert caught.value.diagnostics["tool_call_count"] == 2
 
 
+@pytest.mark.parametrize("finish_reason", ["stop", "length"])
+def test_successful_generation_trace_retains_safe_finish_reason(monkeypatch, finish_reason):
+    from types import SimpleNamespace
+    from app.services.agent_tracing import NullTracer
+
+    outputs = []
+
+    class RecordingTracer(NullTracer):
+        @contextmanager
+        def generation(self, **kwargs):
+            yield SimpleNamespace(finish=lambda **result: outputs.append(result["output"]))
+
+    monkeypatch.setattr("app.services.langchain_provider.get_agent_tracer", lambda: RecordingTracer())
+    payload = completion({"role": "assistant", "content": "SECRET_CANARY"})
+    payload["choices"][0]["finish_reason"] = finish_reason
+    with provider_for(lambda _: httpx.Response(200, json=payload)) as provider:
+        message = provider.generate_messages([], [])
+    assert message.response_metadata["finish_reason"] == finish_reason
+    assert outputs[0]["protocol"]["finish_reason"] == finish_reason
+    assert "SECRET_CANARY" not in json.dumps(outputs[0]["protocol"])
+
+
 # Regression scenario: missing usage is never invented.
 @pytest.mark.parametrize("streaming", [False, True])
 @pytest.mark.parametrize("usage", [USAGE, None, {"prompt_tokens": 12}, {}])

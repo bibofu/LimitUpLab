@@ -432,7 +432,10 @@ def _trace_messages(messages) -> list[dict[str, Any]]:
 
 # Convert one model message into a bounded, JSON-safe trace output.
 def _trace_message_output(message: AIMessage) -> dict[str, Any]:
-    output: dict[str, Any] = {"content": _trace_text(_text_content(message))}
+    output: dict[str, Any] = {
+        "content": _trace_text(_text_content(message)),
+        "protocol": response_diagnostics(message),
+    }
     if message.tool_calls:
         output["tool_calls"] = [
             {"name": call.get("name"), "args": _trace_text(_trace_json(call.get("args")))}

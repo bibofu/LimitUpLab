@@ -5,6 +5,7 @@ from __future__ import annotations
 import json
 from types import SimpleNamespace
 
+import pytest
 from langchain_core.messages import AIMessage, ToolMessage
 
 from app.agents.runner import AgentRunner
@@ -18,16 +19,29 @@ def call(name: str, args: dict, call_id: str = "call_1") -> AIMessage:
     return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": call_id}])
 
 
+def compliance(decision="allow"):
+    return call("submit_compliance_review", {
+        "decision": decision,
+        "violations": [] if decision == "allow" else ["trade_instruction"],
+        "reason": "historical facts or explicit trading instruction",
+    })
+
+
 class ScriptedProvider:
     model = "scripted-shadow-fixture"
 
     def __init__(self, responses):
         self.responses = list(responses)
         self.calls = []
+        self.options = []
 
     def generate_messages(self, messages, tools, **kwargs):
         self.calls.append(messages)
-        return self.responses.pop(0)
+        self.options.append({"tools": tools, **kwargs})
+        response = self.responses.pop(0)
+        if isinstance(response, Exception):
+            raise response
+        return response
 
 
 def registry() -> AgentToolRegistry:
@@ -69,6 +83,7 @@ def test_runner_answers_without_a_tool():
     assert result.status == "answered"
     assert result.tool_calls == []
     assert result.tool_count == 0
+    assert len(provider.calls) == 1
 
 
 def test_runner_reports_validation_errors_to_the_model():
@@ -86,13 +101,101 @@ def test_runner_reports_validation_errors_to_the_model():
     assert "symbol" in payload["error"].lower()
 
 
-def test_runner_refuses_explicit_trading_advice():
-    provider = ScriptedProvider([AIMessage(content="建议买入该股，仓位三成。")])
+@pytest.mark.parametrize("answer", [
+    "建议买入该股，仓位三成。",
+    "建议买入该股，仓位三成。以上不构成任何买卖或仓位建议。",
+])
+def test_runner_refuses_explicit_trading_advice(answer):
+    provider = ScriptedProvider([AIMessage(content=answer), compliance("reject")])
     result = AgentRunner(request("可以买吗？"), registry(), provider).run()
 
     assert result.status == "refuse"
     assert result.answer == REFUSAL
     assert result.stop_reason == "compliance_refused"
+    assert result.compliance_reviewed is True
+
+
+@pytest.mark.parametrize("answer", [
+    "以上为历史行情与评分事实的客观梳理，不构成任何买卖或仓位建议。",
+    "公开历史公告记载：股东于2026年10月12日减仓，公告来源为公司披露；这只是历史事实。",
+])
+def test_runner_keeps_approved_negative_or_historical_statements_intact(answer):
+    provider = ScriptedProvider([AIMessage(content=answer), compliance()])
+    result = AgentRunner(request("解释历史事实与风险"), registry(), provider).run()
+    assert result.status == "answered" and result.answer == answer
+    assert result.compliance_reviewed is True and result.model_rounds == 2
+    assert provider.options[1]["tools"][0]["function"]["name"] == "submit_compliance_review"
+    assert provider.options[1]["timeout_seconds"] <= 10
+    assert result.tool_count == 0
+
+
+@pytest.mark.parametrize("review", [AIMessage(content="review failed"), RuntimeError("timeout")])
+def test_runner_withholds_candidate_when_triggered_review_fails(review):
+    provider = ScriptedProvider([AIMessage(content="不构成任何仓位建议。"), review])
+    result = AgentRunner(request(), registry(), provider).run()
+    assert result.status == "error" and result.stop_reason == "compliance_error"
+    assert result.answer == "回答合规检查未完成，本次结果未发布。"
+    assert result.compliance_reviewed is False
+
+
+@pytest.mark.parametrize("review_all", [False, True])
+def test_runner_does_not_spend_an_extra_review_after_the_model_round_budget(review_all):
+    provider = ScriptedProvider([
+        *(call("market_summary", {}, f"budget_{index}") for index in range(MAX_MODEL_ROUNDS - 1)),
+        AIMessage(content="历史研究事实。" if review_all else "不构成任何仓位建议。"),
+    ])
+    result = AgentRunner(request(), registry(), provider, review_all_answers=review_all).run()
+    assert result.status == "error" and result.stop_reason == "compliance_error"
+    assert result.error == "ReviewBudgetExhausted"
+    assert result.model_rounds == MAX_MODEL_ROUNDS and len(provider.calls) == MAX_MODEL_ROUNDS
+
+
+@pytest.mark.parametrize("review_all", [False, True])
+def test_runner_does_not_publish_an_allowed_review_after_deadline(monkeypatch, review_all):
+    clock = [0.0]
+    monkeypatch.setattr("app.agents.runner.runner.perf_counter", lambda: clock[0])
+
+    class SlowReviewProvider(ScriptedProvider):
+        def generate_messages(self, messages, tools, **kwargs):
+            response = super().generate_messages(messages, tools, **kwargs)
+            if len(self.calls) == 2:
+                clock[0] = 6
+            return response
+
+    provider = SlowReviewProvider([
+        AIMessage(content="历史研究事实。" if review_all else "不构成任何仓位建议。"), compliance(),
+    ])
+    result = AgentRunner(request(), registry(), provider, deadline_seconds=5,
+                         review_all_answers=review_all).run()
+    assert provider.options[1]["timeout_seconds"] == 5
+    assert result.status == "error" and result.error == "ReviewDeadlineExceeded"
+
+
+def test_full_review_mode_checks_unflagged_answer_once_inside_runner():
+    provider = ScriptedProvider([AIMessage(content="完整历史研究事实。"), compliance()])
+    result = AgentRunner(request(), registry(), provider, review_all_answers=True).run()
+    assert result.status == "answered" and result.answer == "完整历史研究事实。"
+    assert result.compliance_reviewed is True and result.model_rounds == 2
+    assert len(provider.calls) == 2
+
+
+@pytest.mark.parametrize("cancel_on_call", [1, 2])
+def test_full_review_mode_never_publishes_a_cancelled_candidate(monkeypatch, cancel_on_call):
+    cancelled = [False]
+    monkeypatch.setattr("app.agents.runner.runner._cancelled", lambda: cancelled[0])
+
+    class CancellingReviewProvider(ScriptedProvider):
+        def generate_messages(self, messages, tools, **kwargs):
+            response = super().generate_messages(messages, tools, **kwargs)
+            if len(self.calls) == cancel_on_call:
+                cancelled[0] = True
+            return response
+
+    provider = CancellingReviewProvider([AIMessage(content="尚未获准的研究回答。"), compliance()])
+    result = AgentRunner(request(), registry(), provider, review_all_answers=True).run()
+    assert result.status == "cancelled" and result.stop_reason == "cancelled"
+    assert "尚未获准的研究回答" not in result.answer
+    assert len(provider.calls) == cancel_on_call
 
 
 def test_runner_stops_at_the_model_round_budget():
@@ -142,3 +245,68 @@ def test_business_definitions_exclude_runtime_control_tools():
     assert "compute_result" not in names
     assert "read_evidence" not in names
     assert "update_task" not in names
+
+
+def interrupted_answer():
+    return AIMessage(content="其余19个交易日的 amount", response_metadata={"finish_reason": "length"})
+
+
+def test_runner_rewrites_truncated_answer_once_using_existing_evidence():
+    provider = ScriptedProvider([
+        call("market_summary", {}), interrupted_answer(),
+        AIMessage(content="完整的紧凑研究回答。", response_metadata={"finish_reason": "stop"}),
+    ])
+    result = AgentRunner(request(), registry(), provider).run()
+
+    assert result.status == "answered"
+    assert result.stop_reason == "answered_after_length_recovery"
+    assert result.answer == "完整的紧凑研究回答。"
+    assert result.model_rounds == 3 and result.tool_count == 1
+    repair_context = provider.calls[2]
+    assert any(isinstance(message, ToolMessage) for message in repair_context)
+    assert all(message.content != interrupted_answer().content for message in repair_context)
+    assert provider.options[2]["tools"] == [] and provider.options[2]["tool_choice"] == "none"
+
+
+@pytest.mark.parametrize("repair_response", [
+    interrupted_answer(), AIMessage(content=""), RuntimeError("upstream unavailable"),
+    call("market_summary", {}, "unexpected_repair_tool"),
+])
+def test_runner_never_publishes_interrupted_answer_as_complete(repair_response):
+    provider = ScriptedProvider([call("market_summary", {}), interrupted_answer(), repair_response])
+    result = AgentRunner(request(), registry(), provider).run()
+
+    assert result.status == "partial"
+    assert result.stop_reason == "output_incomplete"
+    assert "未能完成全部问题" in result.answer
+    assert result.tool_messages[0]["summary"] in result.answer
+    assert interrupted_answer().content not in result.answer
+    assert result.tool_count == 1 and len(provider.calls) == 3
+
+
+def test_runner_does_not_invent_evidence_when_both_text_attempts_are_truncated():
+    provider = ScriptedProvider([interrupted_answer(), interrupted_answer()])
+    result = AgentRunner(request(), registry(), provider).run()
+    assert result.status == "error" and result.stop_reason == "output_incomplete"
+    assert "尚无可核验的工具结果" in result.answer
+    assert result.tool_calls == [] and result.model_rounds == 2
+
+
+def test_runner_length_recovery_cannot_exceed_existing_round_budget():
+    provider = ScriptedProvider([
+        *(call("market_summary", {}, f"call_{index}") for index in range(MAX_MODEL_ROUNDS - 1)),
+        interrupted_answer(),
+    ])
+    result = AgentRunner(request(), registry(), provider).run()
+    assert result.status == "partial" and result.stop_reason == "output_incomplete"
+    assert result.model_rounds == MAX_MODEL_ROUNDS
+    assert len(provider.calls) == MAX_MODEL_ROUNDS
+
+
+def test_runner_does_not_execute_tool_calls_from_length_interrupted_turn():
+    truncated_call = call("market_summary", {})
+    truncated_call.response_metadata["finish_reason"] = "length"
+    provider = ScriptedProvider([truncated_call, interrupted_answer()])
+    result = AgentRunner(request(), registry(), provider).run()
+    assert result.status == "error" and result.tool_count == 0
+    assert result.tool_calls == [] and result.stop_reason == "output_incomplete"

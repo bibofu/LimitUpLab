@@ -73,7 +73,6 @@ function renderApp(path: string, states: unknown[], overrides: Record<string, un
     "./components/ReviewDashboard": review,
     "./components/StockResearchPanels": stockResearch,
     "./pages/PremarketPage": premarket,
-    "./pages/QualityReviewPage": { QualityReviewPage: () => createElement("section", null, "回答质量审核") },
     "./hooks/useRecommendationIntelligence": recommendationIntelligence,
     "./hooks/useReviewReport": reviewReport,
     "./components/MarketKLineChart": {},
@@ -107,7 +106,8 @@ test("routes activate only their visible resources and necessary date dependenci
   const routes: [string, boolean[]][] = [
     ["/", [true, false, false, false, false, false, false]],
     ["/recommendations", [false, false, false, false, false, false, false]],
-    ["/admin/quality", [false, false, false, false, false, false, false]],
+    // The retired quality route follows the same overview fallback as unknown URLs.
+    ["/admin/quality", [true, false, false, false, false, false, false]],
     ["/stocks/limit-up-pool", [false, true, true, true, true, false, false]],
     ["/stocks/first-board", [false, true, false, false, false, true, false]],
     ["/stocks/continued-board", [false, false, true, false, false, false, false]],
@@ -118,8 +118,12 @@ test("routes activate only their visible resources and necessary date dependenci
   ];
   for (const [path, expected] of routes) {
     const activations: boolean[] = [];
-    renderApp(path, Array(7).fill(pending), {}, activations);
+    const html = renderApp(path, Array(7).fill(pending), {}, activations);
     assert.deepEqual(activations, expected, path);
+    if (path === "/admin/quality") {
+      assert.ok(html.includes("市场概览"));
+      assert.ok(!html.includes("回答质量审核"));
+    }
   }
 });
 

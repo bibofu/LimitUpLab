@@ -17,3 +17,4 @@ class RunnerResult:
     tool_count: int = 0
     duration_ms: int = 0
     error: str | None = None
+    compliance_reviewed: bool = False

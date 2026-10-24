@@ -97,10 +97,6 @@ function mount(t: TestContext, overrides: Record<string, any> = {}, savedSession
     "../utils/jsonRequest": jsonRequest,
     "./AgentAnswerMarkdown": markdownModule.exports,
     "./AgentChatProgress": { AgentChatProgress: () => null },
-    "./AnswerFeedback": { AnswerFeedback: () => null },
-    "../hooks/useAnswerQuality": { useAnswerQuality: () => ({ runs: {}, ready: true, error: false }), useAnswerDelivery: () => () => {} },
-    "../qualityApi": { qualityApi: { delivery: overrides.qualityDelivery ?? (async () => {}) } },
-    "../utils/agentQuality": { answerHash: async () => null },
   };
   const module = { exports: {} as any };
   new Function("require", "module", "exports", compiled)((id: string) => imports[id] ?? require(id), module, module.exports);
@@ -327,34 +323,46 @@ test("stream failure restores send, retries the original request, and preserves 
   assert.equal(app.has(node => node.props.role === "alert"), false);
 });
 
-test("disconnect receipts bind only to this submission's accepted run across session switches", async t => {
-  const receipts: unknown[][] = [];
+test("disconnect clears accepted run state before cancellation in another session", async t => {
+  const pending = [deferred<any>(), deferred<any>(), deferred<any>()];
+  const cancelled: string[] = [];
+  const sessions: string[] = [];
   let requests = 0;
   const app = mount(t, {
-    qualityDelivery: async (...values: unknown[]) => { receipts.push(values); throw new Error("receipt offline"); },
-    streamAgentChatMessage: async (_payload: unknown, event: any) => {
+    cancelAgentChatRun: async (runId: string) => { cancelled.push(runId); },
+    streamAgentChatMessage: (payload: any, event: any) => {
       requests++;
+      sessions.push(payload.session_id);
       if (requests !== 2) event({ event: "accepted", data: { run_id: requests === 1 ? "run-a" : "run-b" } });
-      throw new Error("连接中断");
+      return pending[requests - 1].promise;
     },
   });
   await app.settle(); app.type("问题 A"); app.submit(); await app.settle();
-  assert.deepEqual(receipts, [["run-a", "interrupted", null]]);
+  assert.equal(app.has(node => node.props["aria-label"] === "取消任务"), true);
+  pending[0].reject(new Error("连接中断")); await app.settle();
+  assert.equal(app.has(node => node.props["aria-label"] === "取消任务"), false);
   app.find(node => node.type === "button" && node.props.className === "chat-session-select" && node.props.children[0].props.children[0].props.children === "会话 b").onClick();
   await app.settle(); app.type("问题 B"); app.submit(); await app.settle();
-  assert.equal(receipts.length, 1, "a rejected request without accepted cannot reuse another session's run ID");
+  assert.equal(app.has(node => node.props["aria-label"] === "取消任务"), false,
+    "a submission without accepted cannot reuse another session's run ID");
+  pending[1].reject(new Error("连接中断")); await app.settle();
   app.type("问题 B2"); app.submit(); await app.settle();
-  assert.deepEqual(receipts, [["run-a", "interrupted", null], ["run-b", "interrupted", null]]);
-  assert.equal(app.input().disabled, false, "best-effort receipt errors never block chat recovery");
+  app.find(node => node.props["aria-label"] === "取消任务").onClick(); await app.settle();
+  assert.deepEqual(cancelled, ["run-b"]);
+  assert.deepEqual(sessions, ["a", "b", "b"]);
+  pending[2].resolve({ ...final, task_status: "cancelled" }); await app.settle();
+  assert.equal(app.input().disabled, false, "disconnects and cancellation release the chat lock");
 });
 
-test("user cancellation is not reported as a transport interruption", async t => {
+test("user cancellation targets the accepted run and restores send after completion", async t => {
   const pending = deferred<any>();
-  const receipts: unknown[][] = [];
+  const cancelled: string[] = [];
   const app = mount(t, {
-    qualityDelivery: async (...values: unknown[]) => { receipts.push(values); },
     streamAgentChatMessage: (_payload: unknown, event: any) => { event({ event: "accepted", data: { run_id: "cancelled-run" } }); return pending.promise; },
-    cancelAgentChatRun: async () => { pending.reject(new Error("cancelled stream")); },
+    cancelAgentChatRun: async (runId: string) => {
+      cancelled.push(runId);
+      pending.resolve({ ...final, task_status: "cancelled" });
+    },
   });
   await app.settle(); app.type("可取消的问题"); app.submit(); await app.settle();
   const cancel = app.find(node => node.props["aria-label"] === "取消任务");
@@ -362,7 +370,10 @@ test("user cancellation is not reported as a transport interruption", async t =>
   assert.equal(cancel.title, "取消任务");
   assert.equal(cancel.children.props["aria-hidden"], "true");
   cancel.onClick(); await app.settle();
-  assert.deepEqual(receipts, []);
+  assert.deepEqual(cancelled, ["cancelled-run"]);
+  assert.equal(app.input().disabled, false);
+  assert.equal(app.has(node => node.props["aria-label"] === "取消任务"), false);
+  assert.equal(app.has(node => node.props.children === "任务已取消，可重新提问。"), true);
 });
 
 test("the real input keeps IME confirmation and Shift+Enter from submitting", async t => {

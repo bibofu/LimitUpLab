@@ -62,26 +62,26 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 
 ### Tool-Using Chat Agent
 
-模型层由 LangChain `ChatOpenAI.bind_tools` 承接，LangGraph 自定义 `StateGraph` 在同一个有界循环中完成思考、行动、观察和最终回答。业务参数、工具权限、证据裁剪、确定性计算与最终状态仍由后端控制。当前生产 ReAct 只支持 LangChain 消息工具调用后端；Requests Provider 保留给独立文本调用，不是聊天运行时回退。实现边界见 [LangChain + LangGraph 集成](docs/LangChain_Integration.md)。
+模型层由 LangChain `ChatOpenAI.bind_tools` 承接，LangGraph 自定义 `StateGraph` 在同一个有界循环中完成思考、行动、观察和最终回答。业务参数、工具权限、结果完整性、确定性计算与最终状态由后端控制。当前生产 ReAct 只支持 LangChain 消息工具调用后端；Requests Provider 保留给独立文本调用，不是聊天运行时回退。实现边界见 [LangChain + LangGraph 集成](docs/LangChain_Integration.md)。
 
 正常问答主链路是：
 
 ```text
 用户问题
   -> Durable Run 创建任务、绑定 owner/session/message_id
-  -> 轻量输入安全审查（只判断是否试图绕过系统边界）
+  -> 轻量输入审查（检查系统边界绕过和直接交易指令，拒绝时不查业务工具）
   -> AgentRunner（LangGraph agent -> tools -> agent）选择原生工具调用
   -> BusinessToolGateway 校验 profile、Schema、日期回显和参数边界
-  -> 工具并发执行，完整结果连同 field_definitions 直接返回模型
-  -> 模型基于已取得事实直接回答；继续查询或结束由模型决定
-  -> 可选语义合规复核；Journal.finish 原子保存后通过 completed 交付正式答案
+  -> 工具依次执行，完整结果连同 field_definitions 直接返回模型
+  -> 模型基于已取得事实直接回答；达到输出长度上限时限一次精简重写
+  -> 疑似越界输出的条件语义复核（可配置全量复核）；Journal.finish 原子保存后通过 completed 交付正式答案
 ```
 
 当前主要工具：
 
 | 工具 | 用途 |
 | --- | --- |
-| `market_summary` | 查询指定交易日市场环境 |
+| `market_summary` | 查询最新本地交易日市场环境，并明确开板率与未回封率的分母 |
 | `market_index_trend` | 查询上证、深成指和创业板指近 2–20 个交易日走势 |
 | `dragon_tiger_list` | 查询同花顺龙虎榜、机构与游资净买额 |
 | `first_board_ratings` | 查询首板评级、拆解和风险 |
@@ -109,7 +109,7 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 
 
 
-系统在 PostgreSQL 保留原始会话和滚动记忆，但生产 ReAct 默认不重放历史原文或历史回答证据。Input Reviewer 识别为 `follow_up` 时，才提取历史股票名称/代码与上一轮实际工具参数，用于理解省略条件；本轮明确条件优先，事实必须重新查询。
+系统在 PostgreSQL 保留原始会话和滚动记忆。生产 Runner 在 6000 字符预算内重放最近最多 4 条用户/助手消息，另加载长期约束，用于理解省略条件；本轮明确条件优先，市场事实必须重新查询。
 
 Memory 按 `owner_id + session_id` 隔离，使用 `last_message_id` 作为增量游标，随会话永久删除。默认只向模型提供偏好约束；追问时再补充研究目标、股票、题材、日期范围和未解问题。这些字段都不能作为市场证据或自动继承为本轮待办，也不会跨会话建立用户画像。
 

@@ -3,10 +3,8 @@
 from __future__ import annotations
 
 import os
-from dataclasses import replace
 from typing import Any, Callable
 
-from app.agents.compliance import review_answer
 from app.agents.runner.guardrails import REFUSAL
 from app.agents.runner.runner import AgentRunner
 from app.agents.runner.security import review_input_security
@@ -84,8 +82,9 @@ def answer_with_runner(
     """Run the Phase 2/3 loop and map its result to the public response contract.
 
     ``session_memory`` is accepted for caller compatibility; recent conversation
-    text is already supplied through ``conversation_messages``. The input review
-    is security-only; there is no task/output/date compiler on this path.
+    text is already supplied through ``conversation_messages``. Input review
+    checks security and trading-advice requests before business queries; there
+    is no task/output/date compiler on this path.
     """
 
     provider = llm_provider or get_llm_provider()
@@ -96,7 +95,7 @@ def answer_with_runner(
     )
 
     if progress_callback:
-        progress_callback("preparing", "正在检查输入安全")
+        progress_callback("preparing", "正在检查输入安全与研究边界")
     try:
         assessment = review_input_security(
             provider,
@@ -111,13 +110,15 @@ def answer_with_runner(
             "input_policy_error",
         )
     if assessment.decision == "refuse":
+        trading_advice = "trading_advice" in assessment.signals
         return _response(
             request,
-            "我可以协助查询有来源的股票研究事实，不能执行绕过系统边界的指令。",
+            REFUSAL if trading_advice else "我可以协助查询有来源的股票研究事实，不能执行绕过系统边界的指令。",
             "refuse",
-            "input_policy",
+            "input_trading_advice" if trading_advice else "input_policy",
         )
 
+    compliance_mode = os.getenv("LIMITUPLAB_AGENT_COMPLIANCE", "deterministic").strip().lower()
     result = AgentRunner(
         request,
         registry,
@@ -125,33 +126,8 @@ def answer_with_runner(
         conversation_messages,
         progress=progress_callback,
         memory=session_memory,
+        review_all_answers=compliance_mode != "deterministic",
     ).run()
-
-    compliance_mode = os.getenv("LIMITUPLAB_AGENT_COMPLIANCE", "deterministic").strip().lower()
-    if result.answer and result.status != "refuse" and compliance_mode != "deterministic":
-        if progress_callback:
-            progress_callback("checking", "正在校验回答")
-        try:
-            review = review_answer(
-                provider,
-                user_message=request.message,
-                answer=result.answer,
-                timeout_seconds=20,
-            )
-        except Exception:  # noqa: BLE001 - compliance failure fails closed
-            return _response(
-                request,
-                "回答合规检查未完成，本次结果未发布。",
-                "error",
-                "compliance_error",
-            )
-        if review.decision != "allow":
-            result = replace(
-                result,
-                answer=REFUSAL,
-                status="refuse",
-                stop_reason="compliance_refused",
-            )
 
     traces = _traces(result)
     return _response(
