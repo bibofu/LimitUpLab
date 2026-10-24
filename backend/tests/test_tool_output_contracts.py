@@ -34,3 +34,18 @@ def test_field_definitions_are_limited_to_present_fields():
 
 def test_unknown_tool_has_no_field_definitions():
     assert field_definitions_for("unknown_tool") == {}
+
+
+def test_market_rates_document_the_actual_denominator_and_ratio_unit():
+    definitions = field_definitions_for("market_summary")["metadata"]
+    assert "收盘涨停数加收盘未回封数" in definitions["touched_limit_count"]
+    for field in ("intraday_opened_rate", "unsealed_rate"):
+        assert "当日触及涨停总数" in definitions[field]
+        assert "0至1比例" in definitions[field]
+
+
+def test_daily_promotion_contract_uses_ratio_units_for_all_three_cohorts():
+    definitions = field_definitions_for("daily_board_promotion")["rows"]
+    for field in ("probability", "first_board_probability", "continued_board_probability"):
+        assert "0至1比例" in definitions[field]
+        assert "乘100" in definitions[field]

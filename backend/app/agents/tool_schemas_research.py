@@ -9,10 +9,11 @@ RESEARCH_TOOL_SCHEMAS = [
         time_mode="historical",
         dates=("trade_date",),
         collection="top_candidates",
-        notes="Rating candidate pool is not all limit-up stocks.",
+        notes="Prefer persisted prediction snapshot; its saved candidates are not necessarily the full eligible rating pool. Read selection_scope and candidate_pool_complete.",
         description=(
             "读取某个交易日的首板评级候选池、可解释评分、行业分布和基于首板前 K 线的"
             "位置分类（如低位启动、超跌反弹、V形反转、高位突破、二波启动）；"
+            "优先返回历史固化批次，可能仅保存Top候选而非完整合格池。返回数、硬筛排除数与未入快照数分别说明；"
             "未传 trade_date 时使用本地最新交易日，并返回由收盘基础分、最新新闻和"
             "季度财报持续重排的盘前研究排序。"
         ),
@@ -33,8 +34,8 @@ RESEARCH_TOOL_SCHEMAS = [
             "required": [],
         },
         returns=(
-            "First-board candidate ratings, filters, industry distribution and complete "
-            "K-line position groups for the rated candidate pool."
+            "First-board ratings and K-line position groups for returned candidates, with explicit "
+            "saved snapshot scope, recorded eligibility counts, source completeness and symbol-filter boundaries."
         ),
     ),
     AgentToolSchema(
@@ -159,6 +160,7 @@ RESEARCH_TOOL_SCHEMAS = [
                 "sort_by": {
                     "type": ["string", "null"],
                     "enum": [
+                        "symbol",
                         "board_height",
                         "first_limit_time",
                         "amount",
@@ -166,10 +168,12 @@ RESEARCH_TOOL_SCHEMAS = [
                         "break_count",
                         None,
                     ],
+                    "description": "Sort key; symbol sorts by the six-digit stock code. Omit for board_height. Existing numeric and time keys retain their meanings.",
                 },
                 "sort_order": {
                     "type": ["string", "null"],
                     "enum": ["asc", "desc", None],
+                    "description": "Omit for ascending symbol/first_limit_time, descending other keys. Explicit asc/desc overrides that default.",
                 },
                 "limit": {"type": "integer", "minimum": 1, "maximum": 100},
             },

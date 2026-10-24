@@ -207,10 +207,12 @@ class AgentToolRegistry:
             "limit_up_count": summary.limit_up_count,
             "first_board_count": summary.first_board_count,
             "continued_board_count": summary.continued_board_count,
+            "touched_limit_count": summary.limit_up_count + summary.unsealed_count,
             "intraday_opened_count": summary.failed_count,
             "intraday_opened_rate": summary.failed_limit_up_rate,
             "unsealed_count": summary.unsealed_count,
             "unsealed_rate": summary.unsealed_rate,
+            "rate_basis": "intraday_opened_count / touched_limit_count; unsealed_count / touched_limit_count; ratios are 0..1",
             "limit_down_count": summary.limit_down_count,
             "limit_down_source": summary.limit_down_source,
             "max_board_height": summary.max_board_height,
@@ -803,6 +805,7 @@ class AgentToolRegistry:
             if target_date is not None
             else None
         )
+        persisted_snapshot = ratings is not None
         if ratings is None:
             ratings = build_first_board_ratings(
                 events=self.events,
@@ -814,6 +817,18 @@ class AgentToolRegistry:
                     "data_as_of": target_date,
                 }
             )
+        snapshot_candidate_count = len(ratings.candidates)
+        filtered_out_count = len(ratings.filtered_out)
+        recorded_eligible_count = ratings.universe_count - filtered_out_count
+        if recorded_eligible_count < snapshot_candidate_count:
+            recorded_eligible_count = None
+        not_selected_count = (recorded_eligible_count - snapshot_candidate_count
+                              if recorded_eligible_count is not None else None)
+        source_truncated = (True if not_selected_count and not_selected_count > 0 else None)
+        if not persisted_snapshot:
+            recorded_eligible_count = snapshot_candidate_count
+            not_selected_count = 0
+            source_truncated = False
         requested_symbols = list(dict.fromkeys(symbols or []))[:20]
         if requested_symbols:
             allowed_symbols = set(requested_symbols)
@@ -841,7 +856,25 @@ class AgentToolRegistry:
             "snapshot_source": ratings.snapshot_source,
             "data_as_of": ratings.data_as_of.isoformat() if ratings.data_as_of else None,
             "candidate_count": len(ratings.candidates),
-            "filtered_out_count": len(ratings.filtered_out),
+            "returned_candidate_count": len(ratings.candidates),
+            "snapshot_candidate_count": snapshot_candidate_count,
+            "snapshot_top_limit": ratings.snapshot_top_limit,
+            "selection_scope": "persisted_snapshot" if persisted_snapshot else "calculated_full_pool",
+            "requested_symbols": requested_symbols,
+            "universe_count": ratings.universe_count,
+            "filtered_out_count": filtered_out_count,
+            "recorded_eligible_candidate_count": recorded_eligible_count,
+            "not_selected_count": not_selected_count,
+            "source_truncated": source_truncated,
+            "candidate_pool_complete": (False if requested_symbols or source_truncated
+                                        else None if persisted_snapshot else True),
+            "scope_note": (
+                "返回历史已固化候选快照，不能称为完整评级合格池。snapshot_top_limit来自固化批次记录；"
+                "recorded_eligible_candidate_count是快照记录的universe_count减filtered_out_count，"
+                "not_selected_count是其中未保存为候选的数量，不是硬筛排除数。"
+                "完整池覆盖无法证明时为null；truncated=false仅说明本次传输未裁切，不证明源快照完整。"
+                if persisted_snapshot else "返回按本地当日全部事件重新计算的完整评级候选池；若指定symbols，返回范围再限制为所选标的。"
+            ),
             "top_candidates": [
                 {
                     "symbol": item.facts.symbol,
@@ -875,7 +908,8 @@ class AgentToolRegistry:
             },
             output=ratings,
             summary=(
-                f"{ratings.trade_date.isoformat()} 首板评级入池{len(ratings.candidates)}只，"
+                f"{ratings.trade_date.isoformat()} {'已固化首板评级快照' if persisted_snapshot else '重新计算的首板评级候选'}"
+                f"返回{len(ratings.candidates)}只，"
                 f"{top_summary}。"
             ),
             trace_output=trace_output,
@@ -1111,7 +1145,7 @@ class AgentToolRegistry:
 
         effective_sort_by = normalize_sort_field(sort_by) or "board_height"
         effective_sort_order = normalize_sort_order(sort_order) or (
-            "asc" if effective_sort_by == "first_limit_time" else "desc"
+            "asc" if effective_sort_by in {"first_limit_time", "symbol"} else "desc"
         )
         target_events = _sort_limit_up_events(
             target_events,

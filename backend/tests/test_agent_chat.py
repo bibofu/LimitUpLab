@@ -93,7 +93,12 @@ class AgentChatTest(unittest.TestCase):
         ).market_summary()
 
         self.assertEqual(result.output["intraday_opened_count"], 2)
+        self.assertEqual(result.output["limit_up_count"], 2)
+        self.assertEqual(result.output["touched_limit_count"], 3)
+        self.assertEqual(result.output["intraday_opened_rate"], round(2 / 3, 4))
         self.assertEqual(result.output["unsealed_count"], 1)
+        self.assertEqual(result.output["unsealed_rate"], round(1 / 3, 4))
+        self.assertIn("touched_limit_count", result.output["rate_basis"])
         self.assertNotIn("failed_count", result.output)
         self.assertNotIn("failed_limit_up_rate", result.output)
 

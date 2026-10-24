@@ -514,7 +514,7 @@ class FirstBoardRepository:
             initialize_database(connection)
             row = connection.execute(
                 """
-                SELECT snapshot_json
+                SELECT snapshot_json, top_limit
                 FROM agent_live_prediction_snapshots
                 WHERE trade_date = ?
                 """,
@@ -524,7 +524,9 @@ class FirstBoardRepository:
             connection.close()
         if row is None:
             return None
-        snapshot = FirstBoardRatingsResponse.model_validate_json(row["snapshot_json"])
+        snapshot = FirstBoardRatingsResponse.model_validate_json(row["snapshot_json"]).model_copy(
+            update={"snapshot_top_limit": row["top_limit"]},
+        )
         if snapshot.snapshot_created_at is None or snapshot.data_as_of is None:
             return None
         verdict = assess_prediction_time(SimpleNamespace(

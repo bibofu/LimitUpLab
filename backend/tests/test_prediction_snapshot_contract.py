@@ -55,10 +55,29 @@ class PredictionSnapshotContractTest(unittest.TestCase):
         self.assertIsNotNone(snapshot)
         assert snapshot is not None
         self.assertEqual(snapshot.snapshot_source, "live")
+        self.assertEqual(snapshot.snapshot_top_limit, 10)  # Persisted cap, despite only one saved candidate.
         self.assertEqual(snapshot.data_as_of, self.trade_date)
         self.assertTrue(snapshot.candidates[0].score_breakdown)
 
     # Regression scenario: later scoring version cannot replace live snapshot.
+    def test_legacy_snapshot_json_recovers_top_limit_from_the_batch_column(self) -> None:
+        self._persist_live()
+        with closing(connect(self.database_url)) as connection:
+            row = connection.execute(
+                "SELECT snapshot_json FROM agent_live_prediction_snapshots WHERE trade_date = ?",
+                (self.trade_date.isoformat(),),
+            ).fetchone()
+            payload = json.loads(row["snapshot_json"])
+            payload.pop("snapshot_top_limit", None)
+            connection.execute(
+                "UPDATE agent_live_prediction_snapshots SET snapshot_json = ? WHERE trade_date = ?",
+                (json.dumps(payload), self.trade_date.isoformat()),
+            )
+            connection.commit()
+        snapshot = self.repository.get_live_prediction_snapshot(self.trade_date)
+        self.assertEqual(snapshot.snapshot_top_limit, 10)
+        self.assertEqual(len(snapshot.candidates), 1)
+
     def test_later_scoring_version_cannot_replace_live_snapshot(self) -> None:
         self._persist_live()
         original = self.repository.get_live_prediction_snapshot(self.trade_date)

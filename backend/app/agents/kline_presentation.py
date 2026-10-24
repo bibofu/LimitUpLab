@@ -18,7 +18,7 @@ def _window(rows):
             or (len(sources) > 1 and not sources <= UNADJUSTED_SOURCES)):
         return None
     closes = [row.get("close") for row in rows]
-    dates = [str(row.get("trade_date", "")) for row in rows]
+    dates = [str(row.get("trade_date") or "") for row in rows]
     if (any(type(value) not in (int, float) or not isfinite(value) or value <= 0 for value in closes)
             or any(not day for day in dates) or dates != sorted(set(dates))):
         return None
@@ -27,6 +27,32 @@ def _window(rows):
             "observations": len(rows), "observed_intervals": len(rows) - 1,
             "return_pct": round((closes[-1] / closes[0] - 1) * 100, 3),
             "sources": sorted(sources), "price_basis": "as_returned_close_prices"}
+
+
+def _drawdown(rows, *, peak_field, trough_field):
+    """Keep the running peak in time order, never pair a later peak with an earlier low."""
+    if any(type(row.get(field)) not in (int, float)
+           or not isfinite(row[field]) or row[field] <= 0
+           for row in rows for field in (peak_field, trough_field)):
+        return None
+    peak = rows[0]
+    peak_at_loss = peak
+    trough = peak
+    worst = 0.0
+    for row in rows:
+        if row[peak_field] > peak[peak_field]:
+            peak = row
+        loss = (row[trough_field] / peak[peak_field] - 1) * 100
+        if loss < worst:
+            worst, peak_at_loss, trough = loss, peak, row
+    return {
+        "start_date": str(rows[0]["trade_date"]), "end_date": str(rows[-1]["trade_date"]),
+        "observations": len(rows), "drawdown_pct": round(worst, 3),
+        "peak_date": str(peak_at_loss["trade_date"]), "peak_price": peak_at_loss[peak_field],
+        "trough_date": str(trough["trade_date"]), "trough_price": trough[trough_field],
+        "peak_field": peak_field, "trough_field": trough_field,
+        "price_basis": "as_returned_prices",
+    }
 
 
 def kline_agent_view(payload):
@@ -38,5 +64,17 @@ def kline_agent_view(payload):
             window = _window(bars[-intervals - 1:])
             if window is not None:
                 windows.append(window)
+    window = _window(bars)
+    close_drawdown = _drawdown(bars, peak_field="close", trough_field="close") if window else None
+    high_low_drawdown = _drawdown(bars, peak_field="high", trough_field="low") if window else None
+    missing = list(payload.get("data_missing") or [])
+    for key, value in (("close_max_drawdown", close_drawdown), ("high_low_max_drawdown", high_low_drawdown)):
+        if value is None and key not in missing:
+            missing.append(key)
     return {**{key: value for key, value in payload.items() if key not in PERIOD_FIELDS},
-            "display_window_return": _window(bars), "return_windows": windows}
+            "display_window_return": window, "return_windows": windows,
+            "close_max_drawdown": close_drawdown, "high_low_max_drawdown": high_low_drawdown,
+            # This view validates the supplied observations, not the exchange's
+            # trading calendar. Row counts and freshness never prove no gaps.
+            "calendar_coverage_status": "unverified",
+            "data_missing": missing}

@@ -34,13 +34,23 @@ def payload_of(result):
     if outcome is not None and outcome.status == "error":
         return raw if isinstance(raw, (dict, list)) else trace
     if result.name == "first_board_ratings" and isinstance(raw, dict):
+        # Scope belongs to the tool invocation; keep the typed snapshot output
+        # intact while exposing its saved-pool and optional-symbol boundaries.
+        scope_keys = (
+            "selection_scope", "scope_note", "requested_symbols", "candidate_count",
+            "returned_candidate_count", "snapshot_candidate_count", "snapshot_top_limit",
+            "universe_count", "filtered_out_count", "recorded_eligible_candidate_count",
+            "not_selected_count", "source_truncated", "candidate_pool_complete",
+            "position_classification",
+        )
+        raw = {**raw, **{key: trace[key] for key in scope_keys if key in trace}}
         candidates = raw.get("candidates")
         if not isinstance(candidates, list) or any(
             not isinstance(item, dict) or not isinstance(item.get("facts", {}), dict)
             for item in candidates
         ):
             raise ValueError("Invalid first_board_ratings collection: candidates must be object rows")
-        raw = {**raw, "top_candidates": [
+        raw = {**{key: value for key, value in raw.items() if key != "candidates"}, "top_candidates": [
             {**item.get("facts", {}), **{key: value for key, value in item.items() if key != "facts"}}
             for item in candidates
         ]}
@@ -49,9 +59,12 @@ def payload_of(result):
             "change_pct": "Provider daily percentage only; null when unavailable. Do not replace with unadjusted close-to-close changes, especially on ex-right dates.",
             "close_to_close_pct": "(close / previous_close - 1)*100 using known unadjusted prices; comparison date is previous_trade_date. A price-change statistic, not the provider/ex-right daily change_pct.",
             "display_window_return": "Return over the displayed bars only, with explicit first/last date and close. N observations contain N-1 observed intervals; this does not prove calendar completeness.",
+            "calendar_coverage_status": "unverified: returned dates have not been reconciled against an authoritative trading calendar. A full requested row count, freshness or neighboring dates cannot prove no missing trading days. Do not attribute gaps to weekends, holidays, suspensions or source omissions without supporting tool evidence.",
             "return_windows": "Only windows backed by visible first/last closes. Each entry states observations and observed_intervals. Missing observations require a longer query; never infer a start date from an unscoped percentage.",
             "trend": "Moving-average alignment label; not consecutive daily increases.",
-            "max_drawdown_pct": "Peak-to-subsequent-trough in displayed bars, percent.",
+            "max_drawdown_pct": "Existing high-to-low daily-bar drawdown, percent; current or later day low versus running high, not close-to-close drawdown. Intraday ordering is unknown.",
+            "close_max_drawdown": "Deterministic running-close-peak to subsequent close trough, with dated endpoints; use this for close-price maximum drawdown, never global max/min in reverse date order.",
+            "high_low_max_drawdown": "Deterministic running-high to current-or-later-day low drawdown, with dated endpoints. This preserves max_drawdown_pct's daily-bar basis; same-day high/low ordering is unknown.",
         }}
     payload = raw if isinstance(raw, (dict, list)) else trace
     if collection:
@@ -69,10 +82,12 @@ def rows_of(payload, *, tool=None):
         if not isinstance(payload, dict) or not isinstance(payload.get(collection), list):
             raise ValueError(f"Invalid {tool} collection: {collection} must be an array")
         rows = payload[collection]
-    else:
+    elif tool is None and isinstance(payload, dict):
         for key in COLLECTIONS:
             if isinstance(payload.get(key), list):
                 return payload[key]
+        return [payload] if payload else []
+    else:
         return [payload] if payload else []
     if collection and any(not isinstance(row, dict) for row in rows):
         raise ValueError(f"Invalid {tool} collection: {collection} must contain object rows")

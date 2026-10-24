@@ -18,6 +18,7 @@ MarketSegment = Literal["main_board", "chinext", "star_market", "beijing"]
 EventStatus = Literal["closed", "failed", "broken_intraday", "all"]
 MarketEventType = Literal["limit_up", "limit_down", "broken_board"]
 SortField = Literal[
+    "symbol",
     "board_height",
     "first_limit_time",
     "amount",
@@ -57,6 +58,7 @@ _MARKET_EVENT_TYPE_ALIASES: dict[str, MarketEventType] = {
     "broken_board": "broken_board", "failed_limit_up": "broken_board", "炸板": "broken_board",
 }
 _SORT_ALIASES: dict[str, SortField] = {
+    "symbol": "symbol", "code": "symbol", "股票代码": "symbol", "代码": "symbol",
     "board_height": "board_height", "height": "board_height", "板数": "board_height",
     "first_limit_time": "first_limit_time", "seal_time": "first_limit_time", "封板时间": "first_limit_time",
     "amount": "amount", "成交额": "amount",

@@ -342,6 +342,8 @@ def _screen_loaded(
         "pending_data_count": sum(quality_missing.values()),
         "matched_count": matched_count,
         "returned_count": len(displayed),
+        "truncated": len(displayed) < matched_count,
+        "candidate_statistics": _candidate_statistics(candidates),
         "candidates": displayed,
         "exclusions": dict(sorted(exclusions.items())),
         "data_missing": sorted(quality_missing),
@@ -349,6 +351,35 @@ def _screen_loaded(
             "仅使用已完成交易日的本地数据重算观察结果，不代表历史上发布过该名单。",
             *( [f"可评价覆盖率为 {coverage:.1%}，结果不能代表完整涨停池。"] if coverage < 1 else []),
         ],
+    }
+
+
+def _candidate_statistics(candidates: list[dict[str, Any]]) -> dict[str, Any]:
+    """Aggregate all matched candidates before the presentation limit is applied."""
+    drawdowns = [
+        row["peak_drawdown_pct"] for row in candidates
+        if type(row.get("peak_drawdown_pct")) in (int, float)
+        and math.isfinite(row["peak_drawdown_pct"])
+    ]
+    ages = Counter(str(row["anchor_age"]) for row in candidates if row.get("anchor_age") is not None)
+    sources = Counter(row["source"] for row in candidates if row.get("source"))
+    return {
+        "scope": "all_matched_candidates_before_limit",
+        "sample_count": len(candidates),
+        "peak_drawdown_observations": len(drawdowns),
+        "median_peak_drawdown_pct": round(median(drawdowns), 6) if drawdowns else None,
+        "anchor_age_counts": dict(sorted(ages.items(), key=lambda item: int(item[0]))),
+        "source_counts": dict(sorted(sources.items())),
+        "data_missing_counts": {
+            "peak_drawdown_pct": len(candidates) - len(drawdowns),
+            "anchor_age": len(candidates) - sum(ages.values()),
+            "source": len(candidates) - sum(sources.values()),
+        },
+        "definitions": {
+            "median_peak_drawdown_pct": "Median of available candidate peak_drawdown_pct values; positive percent, pre-observation peak high to latest close; no missing-value imputation.",
+            "anchor_age_counts": "Number of matched candidates by trading-day distance from their latest limit-up anchor.",
+            "source_counts": "Number of matched candidates by their recorded daily-bar source; not counts of bars or events.",
+        },
     }
 
 

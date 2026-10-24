@@ -5,22 +5,8 @@ from __future__ import annotations
 import json
 from typing import Any
 
-from app.agents.tool_payload import rows_of
+from app.agents.tool_payload import TOOL_COLLECTIONS, rows_of
 from app.agents.tool_output_contracts import field_definitions_for
-
-MAX_VISIBLE_ROWS = 50
-_METADATA_KEYS = (
-    "data_as_of",
-    "trade_date",
-    "source",
-    "sources",
-    "source_truncated",
-    "complete",
-    "returned_count",
-    "matched_count",
-    "total_count",
-    "data_missing",
-)
 
 
 def dump(value: Any) -> str:
@@ -45,25 +31,45 @@ def business_definitions(gateway) -> list[dict[str, Any]]:
 
 
 def model_result(name: str, result, payload: Any, status: str) -> dict[str, Any]:
-    """Build the compact result the model reads in a ToolMessage."""
+    """Expose every contracted fact once, without applying another row limit."""
 
     try:
         rows = rows_of(payload, tool=name)
     except ValueError:
+        if status != "error":
+            raise
         rows = []
-    visible = rows[:MAX_VISIBLE_ROWS]
+    metadata = payload if isinstance(payload, dict) else {}
+    truncated = bool(metadata.get("truncated") or metadata.get("source_truncated"))
+    incomplete = (
+        truncated or metadata.get("complete") is False
+        or metadata.get("complete_matching_query") is False
+        or bool(metadata.get("data_missing"))
+        or metadata.get("status") == "data_missing"
+    )
+    if status in {"ok", "empty"} and incomplete:
+        status = "partial"
     message: dict[str, Any] = {
+        "name": name,
         "status": status,
         "summary": result.summary,
-        "rows": visible,
+        "rows": rows,
         "row_count": len(rows),
-        "truncated": len(rows) > MAX_VISIBLE_ROWS,
+        "truncated": truncated,
         "field_definitions": field_definitions_for(
-            name, rows=visible, metadata=payload if isinstance(payload, dict) else None
+            name, rows=rows, metadata=metadata
         ),
     }
-    if isinstance(payload, dict):
-        for key in _METADATA_KEYS:
-            if key in payload:
-                message[key] = payload[key]
+    collection = TOOL_COLLECTIONS.get(name)
+    if collection:
+        conflicts = {}
+        for key, value in metadata.items():
+            if key == collection:
+                continue
+            if key in message or key == "payload_metadata":
+                conflicts[key] = value
+            else:
+                message[key] = value
+        if conflicts:
+            message["payload_metadata"] = conflicts
     return message

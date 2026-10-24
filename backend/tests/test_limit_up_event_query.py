@@ -1,10 +1,11 @@
 """Event-query regression cases use synthetic rows and no data providers."""
 
-from datetime import date
+from datetime import date, time
 
 import pytest
 
 from app.agents.tools import AgentToolRegistry
+from app.agents.runner.gateway import BusinessToolGateway
 from app.services.sample_data import SAMPLE_EVENTS
 
 
@@ -99,3 +100,44 @@ def test_explicit_status_precedes_legacy_flags(arguments, expected, status):
     ]).limit_up_events(trade_date=NEXT, **arguments)
     assert [row.symbol for row in result.output] == expected
     assert result.input["event_status"] == status
+
+
+@pytest.mark.parametrize("order,expected", [
+    (None, ["000002", "300001"]),
+    ("asc", ["000002", "300001"]),
+    ("desc", ["600003", "300001"]),
+])
+def test_gateway_accepts_symbol_sort_on_first_call_before_limiting_rows(order, expected):
+    tool_registry = registry([
+        event("600003", board_height=1), event("000002", board_height=2),
+        event("300001", board_height=3),
+    ])
+    tool_registry.profile = "v1_close_review"
+    gateway = BusinessToolGateway(tool_registry)
+    args = gateway.validate({"name": "limit_up_events", "args": {
+        "trade_date": NEXT.isoformat(), "sort_by": "symbol", "sort_order": order, "limit": 2,
+    }})
+    _, payload, status = gateway.execute("limit_up_events", args)
+    assert status == "ok"
+    assert [row["symbol"] for row in payload["events"]] == expected
+    assert payload["matched_count"] == 3 and payload["returned_count"] == 2
+    assert payload["sort_by"] == "symbol"
+    assert payload["sort_order"] == (order or "asc")
+
+
+@pytest.mark.parametrize("sort_by,expected,order", [
+    (None, ["300001", "000002", "600003"], "desc"),
+    ("height", ["300001", "000002", "600003"], "desc"),
+    ("first_limit_time", ["600003", "000002", "300001"], "asc"),
+    ("封板时间", ["600003", "000002", "300001"], "asc"),
+    ("code", ["000002", "300001", "600003"], "asc"),
+    ("股票代码", ["000002", "300001", "600003"], "asc"),
+])
+def test_symbol_support_preserves_existing_sort_defaults_and_normalized_names(sort_by, expected, order):
+    result = registry([
+        event("000002", board_height=2, first_limit_time=time(10)),
+        event("600003", board_height=1, first_limit_time=time(9, 30)),
+        event("300001", board_height=3, first_limit_time=time(11)),
+    ]).limit_up_events(trade_date=NEXT, sort_by=sort_by)
+    assert [row.symbol for row in result.output] == expected
+    assert result.input["sort_order"] == order

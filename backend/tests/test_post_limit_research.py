@@ -10,6 +10,7 @@ from app.repositories.post_limit_repository import PostLimitDataset
 from app.repositories import FirstBoardRepository
 from app.services.post_limit import (
     _attach_outcome,
+    _candidate_statistics,
     _matched_shapes,
     build_post_limit_path,
     build_post_limit_screen,
@@ -189,6 +190,46 @@ def test_screen_uses_peak_before_observation_day_and_preserves_overlap():
     assert item["peak_date"] == dataset.calendar[33]
     assert item["peak_drawdown_pct"] == 12.5
     assert item["matched_shapes"] == ["high_drawdown", "pullback_stabilizing"]
+
+
+def test_candidate_statistics_compute_even_median_age_and_source_counts():
+    drawdowns = [22.23, 21.03, 19.97, 18.13, 17.57, 16.0267, 15.83, 14.46, 12.71, 11.75, 11.10, 10.52]
+    ages = [3, 4, 3, 3, 2, 4, 2, 2, 2, 2, 2, 2]
+    candidates = [{"peak_drawdown_pct": value, "anchor_age": age,
+                   "source": "hithink" if index < 7 else "akshare"}
+                  for index, (value, age) in enumerate(zip(drawdowns, ages))]
+    statistics = _candidate_statistics(candidates)
+    assert statistics["sample_count"] == statistics["peak_drawdown_observations"] == 12
+    assert statistics["median_peak_drawdown_pct"] == 15.92835
+    assert statistics["anchor_age_counts"] == {"2": 7, "3": 3, "4": 2}
+    assert statistics["source_counts"] == {"akshare": 5, "hithink": 7}
+    assert not any(statistics["data_missing_counts"].values())
+
+
+def test_screen_statistics_cover_all_matches_before_display_limit():
+    dataset = _dataset()
+    day = dataset.calendar[35]
+    for bar in dataset.bars:
+        if bar["symbol"] == "600002" and bar["trade_date"] == day:
+            bar.update(open=9.95, close=9.9, high=10, low=9.8)
+    result = build_post_limit_screen(dataset, PostLimitQueryContract(
+        shape="high_drawdown", data_as_of=date.fromisoformat(day), limit=1,
+    ))
+    assert result["matched_count"] == 2 and result["returned_count"] == 1
+    assert result["truncated"] is True
+    assert result["candidate_statistics"]["scope"] == "all_matched_candidates_before_limit"
+    assert result["candidate_statistics"]["sample_count"] == 2
+    assert result["candidate_statistics"]["anchor_age_counts"] == {"3": 2}
+    assert "1–4" in result["rules"]["high_drawdown"]
+
+
+def test_candidate_statistics_do_not_treat_missing_values_as_zero():
+    result = _candidate_statistics([{"peak_drawdown_pct": 12, "anchor_age": 2, "source": "test"}, {}])
+    assert result["median_peak_drawdown_pct"] == 12
+    assert result["peak_drawdown_observations"] == 1
+    assert result["data_missing_counts"] == {"peak_drawdown_pct": 1, "anchor_age": 1, "source": 1}
+    empty = _candidate_statistics([])
+    assert empty["median_peak_drawdown_pct"] is None and empty["sample_count"] == 0
 
 
 # Regression scenario: seven day agent window reports a sixth day event gap.

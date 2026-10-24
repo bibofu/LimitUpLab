@@ -57,6 +57,7 @@ def sort_limit_up_events(
     """Sort event rows deterministically while preserving a symbol tie-breaker."""
 
     key_getters = {
+        "symbol": lambda event: event.symbol,
         "board_height": lambda event: event.board_height,
         "first_limit_time": lambda event: event.first_limit_time,
         "amount": lambda event: event.amount,

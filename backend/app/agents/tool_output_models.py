@@ -37,14 +37,16 @@ class MarketSummaryPayload(OutputModel):
     limit_up_count: int = Field(description="收盘封住涨停的股票数")
     first_board_count: int = Field(description="收盘封住的首板股票数")
     continued_board_count: int = Field(description="收盘封住的连板股票数")
-    intraday_opened_count: int = Field(description="盘中曾开板的涨停股数")
+    touched_limit_count: int = Field(description="当日触及涨停的股票总数，等于收盘涨停数加收盘未回封数；两个比例的共同分母")
+    intraday_opened_count: int = Field(description="盘中曾开板的股票数，包含最终回封和未回封股票")
     intraday_opened_rate: float = Field(
-        description="盘中曾开板股数占涨停总数的比例", json_schema_extra={"unit": "%"}
+        description="盘中曾开板数 / 当日触及涨停总数；不是除以收盘涨停数", json_schema_extra={"unit": "0至1比例"}
     )
     unsealed_count: int = Field(description="收盘未回封的炸板股数")
     unsealed_rate: float = Field(
-        description="收盘未回封股数占涨停总数的比例", json_schema_extra={"unit": "%"}
+        description="收盘未回封数 / 当日触及涨停总数", json_schema_extra={"unit": "0至1比例"}
     )
+    rate_basis: str = Field(description="开板率与未回封率的分子、分母及数值单位")
     limit_down_count: int | None = Field(
         default=None, description="跌停股数；未查询跌停池时为null"
     )
@@ -400,7 +402,7 @@ class FirstBoardRatingRow(OutputModel):
     market_limit_up_count: int = Field(description="全市场涨停家数")
     market_first_board_count: int = Field(description="全市场首板家数")
     market_failed_limit_up_rate: float = Field(
-        description="全市场炸板率", json_schema_extra={"unit": "%"}
+        description="全市场盘中曾开板数 / 当日触及涨停总数；包含最终回封股票，不是收盘未回封率", json_schema_extra={"unit": "0至1比例"}
     )
     market_max_board_height: int = Field(description="全市场最高连板高度")
     enrichment: dict[str, Any] | None = Field(
@@ -422,11 +424,23 @@ class FirstBoardRatingsPayload(OutputModel):
     trade_date: date = Field(description="评级日期")
     snapshot_source: str = Field(description="评级来源：live、historical_backtest或calculated")
     data_as_of: date | None = Field(default=None, description="评级数据截止日")
-    candidate_count: int = Field(description="入池候选数")
-    filtered_out_count: int = Field(description="被过滤掉的候选数")
+    selection_scope: str = Field(description="persisted_snapshot仅为历史固化批次；calculated_full_pool为重新计算的完整评级池；另受requested_symbols限制")
+    scope_note: str = Field(description="固化批次、完整候选池与本次返回范围的证据边界")
+    requested_symbols: list[str] = Field(description="本次额外选择的股票；非空时不能将返回数量称为整个候选池")
+    candidate_count: int = Field(description="本次返回候选数，兼容旧字段；不代表全部评级合格数")
+    returned_candidate_count: int = Field(description="本次实际返回候选数，已应用symbols选择")
+    snapshot_candidate_count: int = Field(description="来源评分池或固化批次保存的候选数，应用symbols选择之前")
+    snapshot_top_limit: int | None = Field(default=None, description="固化批次实际记录的候选保留上限；null表示无此证据，不得根据返回10条推断Top10")
+    universe_count: int = Field(description="来源快照记录的评分输入事件数，包含被硬筛排除的非首板等事件；不是入池数")
+    filtered_out_count: int = Field(description="来源快照记录的硬筛排除数；不包含评级合格但未选入固化批次的记录")
+    filtered_out: list[dict[str, Any]] = Field(description="来源快照保存的硬筛排除记录及原因，范围独立于symbols选择")
+    recorded_eligible_candidate_count: int | None = Field(default=None, description="来源记录的universe_count减filtered_out_count；重新计算分支为完整合格池大小，旧快照仅证明其记录范围")
+    not_selected_count: int | None = Field(default=None, description="来源记录的合格数减固化候选数；未保留进快照，不是硬筛排除")
+    source_truncated: bool | None = Field(default=None, description="true为已证明固化候选少于来源记录的合格池；null表示源完整性未知；false仅重新计算完整池可确认")
+    candidate_pool_complete: bool | None = Field(default=None, description="本次是否覆盖全部评级合格池；false表示已知不完整，null表示固化来源无法证明完整，不能把未知当完整")
     top_candidates: list[FirstBoardRatingRow] = Field(description="评分候选")
     position_classification: dict[str, Any] = Field(
-        description="按首板前K线位置分组的候选，含低位启动、超跌反弹等"
+        description="仅对本次返回候选按首板前K线位置分组，含低位启动、超跌反弹等；不代表完整市场或被省略的合格候选"
     )
     recommendation_draft: dict[str, Any] | None = Field(
         default=None, description="盘前研究排序草稿；仅最新日期返回"

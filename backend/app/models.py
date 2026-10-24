@@ -566,14 +566,14 @@ class DailyBoardPromotionStat(BaseModel):
     trade_date: date = Field(description="本次晋级观察交易日")
     previous_trade_date: date = Field(description="用于分母的前一交易日")
     sample_size: int = Field(description="前一交易日收盘涨停股票数")
-    promoted_count: int = Field(description="本次晋级一板的股票数")
-    probability: float = Field(description="总晋级率（%）")
+    promoted_count: int = Field(description="本次连板高度增加一板的股票数")
+    probability: float = Field(description="总晋级率，0至1比例；展示百分数时乘100")
     first_board_sample_size: int = Field(description="前一交易日首板样本数")
     first_board_promoted_count: int = Field(description="首板晋级二板股票数")
-    first_board_probability: float | None = Field(default=None, description="首板到二板晋级率（%）")
+    first_board_probability: float | None = Field(default=None, description="首板到二板晋级率，0至1比例；展示百分数时乘100")
     continued_board_sample_size: int = Field(description="前一交易日连板样本数")
     continued_board_promoted_count: int = Field(description="连板继续晋级股票数")
-    continued_board_probability: float | None = Field(default=None, description="连板梯队晋级率（%）")
+    continued_board_probability: float | None = Field(default=None, description="连板梯队晋级率，0至1比例；展示百分数时乘100")
     buckets: list[BoardPromotionBucket] = Field(description="按板数分组的晋级桶，每项含from_board_height、to_board_height、sample_size、promoted_count、probability")
     promoted_stocks: list[BoardPromotionStock] = Field(description="晋级成功股票，每项含symbol、name、industry、concept、from_board_height、to_board_height、first_limit_time、break_count及开盘表现")
     first_board_opening_evaluable_count: int = Field(default=0, description="首板晋级中可评价次日开盘类型的样本数")
@@ -882,6 +882,7 @@ class FirstBoardRatingsResponse(BaseModel):
     snapshot_source: Literal["live", "historical_backtest", "calculated"] = "calculated"
     data_as_of: date | None = None
     snapshot_created_at: datetime | None = None
+    snapshot_top_limit: int | None = Field(default=None, description="固化批次记录的候选保留上限；从快照表读取，不根据候选数量猜测")
     prediction_provenance: dict[str, Any] = Field(default_factory=dict)
 
 
