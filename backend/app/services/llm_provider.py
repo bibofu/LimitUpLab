@@ -5,15 +5,17 @@ from __future__ import annotations
 import os
 import json
 import threading
+import uuid
 from contextlib import contextmanager
 from contextvars import ContextVar
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from time import perf_counter, sleep
 from typing import Any, Callable
 
 import requests
 
 from app.config import configured_llm_backend, env_bool
+from app.services.llm_usage_log import LLMCallUsage, log_llm_call
 
 
 DEFAULT_OPENAI_BASE_URL = "https://api.openai.com/v1"
@@ -38,6 +40,7 @@ class LLMResult:
     prompt_tokens: int | None = None
     completion_tokens: int | None = None
     total_tokens: int | None = None
+    cached_tokens: int | None = None
     response_mode: str = "text"
     function_name: str | None = None
 
@@ -66,14 +69,36 @@ class LLMUsageTracker:
     completion_tokens: int = 0
     total_tokens: int = 0
     model: str | None = None
+    scope_id: str = field(default_factory=lambda: uuid.uuid4().hex)
+    calls: list[LLMCallUsage] = field(default_factory=list)
+    _context: dict[str, Any] = field(default_factory=dict)
+    _current_call: int | None = None
+
+    # Attach request-local facts to the next provider call; never accumulates.
+    def set_context(self, **context: Any) -> None:
+        self._context = dict(context)
 
     # Record the start of a model invocation for request-scoped usage accounting.
     def begin_call(self, model: str) -> None:
         self.call_count += 1
         self.model = model
+        self.calls.append(LLMCallUsage(model=model, context=self._context))
+        self._current_call = len(self.calls) - 1
+        self._context = {}
 
     # Accumulate a completed model invocation's usage, preserving unknown token counts.
     def complete_call(self, result: LLMResult) -> None:
+        record = self._active_call()
+        if record is not None:
+            record.prompt_tokens = result.prompt_tokens
+            record.completion_tokens = result.completion_tokens
+            record.total_tokens = result.total_tokens
+            record.cached_tokens = result.cached_tokens
+            record.duration_ms = result.duration_ms
+            record.response_mode = result.response_mode
+            record.status = "complete"
+            log_llm_call(self.scope_id, record)
+        self._current_call = None
         if (
             result.prompt_tokens is None
             or result.completion_tokens is None
@@ -88,6 +113,17 @@ class LLMUsageTracker:
     # Increment failed-call accounting for the current request.
     def fail_call(self) -> None:
         self.failed_call_count += 1
+        record = self._active_call()
+        if record is not None:
+            record.status = "failed"
+            log_llm_call(self.scope_id, record)
+        self._current_call = None
+
+    # Return the in-flight call record, if a provider began one.
+    def _active_call(self) -> LLMCallUsage | None:
+        if self._current_call is None:
+            return None
+        return self.calls[self._current_call]
 
     # Report whether token counts are known for the tracked calls.
     @property
@@ -111,6 +147,12 @@ def capture_llm_usage():
         yield tracker
     finally:
         _usage_tracker.reset(token)
+
+
+def current_llm_usage() -> LLMUsageTracker | None:
+    """Return the request-local tracker, or None outside a capture scope."""
+
+    return _usage_tracker.get()
 
 
 class LLMProvider:
@@ -234,6 +276,7 @@ class OpenAIChatCompletionsProvider(LLMProvider):
             prompt_tokens=usage[0],
             completion_tokens=usage[1],
             total_tokens=usage[2],
+            cached_tokens=_parse_cached_tokens(data.get("usage")),
         )
         if tracker is not None:
             tracker.complete_call(result)
@@ -321,6 +364,7 @@ class OpenAIChatCompletionsProvider(LLMProvider):
             prompt_tokens=usage[0],
             completion_tokens=usage[1],
             total_tokens=usage[2],
+            cached_tokens=_parse_cached_tokens(data.get("usage")),
             response_mode="function_call",
             function_name=function_name,
         )
@@ -344,6 +388,7 @@ class OpenAIChatCompletionsProvider(LLMProvider):
         response = None
         chunks: list[str] = []
         usage: tuple[int | None, int | None, int | None] = (None, None, None)
+        cached_tokens: int | None = None
         try:
             response = self.session.post(
                 f"{self.base_url}/chat/completions",
@@ -372,6 +417,7 @@ class OpenAIChatCompletionsProvider(LLMProvider):
                 event = json.loads(data)
                 if event.get("usage") is not None:
                     usage = _parse_token_usage(event.get("usage"))
+                    cached_tokens = _parse_cached_tokens(event.get("usage"))
                 choices = event.get("choices") or []
                 if not choices:
                     continue
@@ -403,6 +449,7 @@ class OpenAIChatCompletionsProvider(LLMProvider):
             prompt_tokens=usage[0],
             completion_tokens=usage[1],
             total_tokens=usage[2],
+            cached_tokens=cached_tokens,
         )
         if tracker is not None:
             tracker.complete_call(result)
@@ -597,6 +644,29 @@ def _parse_token_usage(
     except (KeyError, TypeError, ValueError):
         return None, None, None
     return prompt_tokens, completion_tokens, total_tokens
+
+
+def _parse_cached_tokens(usage: object) -> int | None:
+    """Read provider-specific prompt-cache hits without inventing values."""
+
+    if not isinstance(usage, dict):
+        return None
+    for key in ("prompt_cache_hit_tokens", "cache_read_input_tokens"):
+        value = _token_count(usage.get(key))
+        if value is not None:
+            return value
+    details = usage.get("prompt_tokens_details")
+    if isinstance(details, dict):
+        value = _token_count(details.get("cached_tokens"))
+        if value is not None:
+            return value
+    return None
+
+
+def _token_count(value: object) -> int | None:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value)
 
 
 def _matching_function_call(

@@ -129,6 +129,33 @@ def test_react_native_stream_delivers_chunks_before_completion_and_merges_argume
     assert (tracker.prompt_tokens, tracker.completion_tokens, tracker.total_tokens) == (12, 4, 16)
 
 
+@pytest.mark.parametrize(("usage", "expected"), [
+    ({**USAGE, "prompt_tokens_details": {"cached_tokens": 8}}, 8),
+    ({**USAGE, "prompt_cache_hit_tokens": 9}, 9),
+    ({**USAGE, "cache_read_input_tokens": 7}, 7),
+    (USAGE, None),
+])
+def test_prompt_cache_hits_are_read_without_inventing(usage, expected):
+    payload = completion(usage=usage)
+    with provider_for(lambda _: httpx.Response(200, json=payload)) as provider, \
+            capture_llm_usage() as tracker:
+        provider.generate_messages([], [])
+
+    assert tracker.calls[0].cached_tokens == expected
+    assert tracker.prompt_tokens == USAGE["prompt_tokens"]
+
+
+def test_native_stream_prompt_cache_hits_are_recorded():
+    usage = {**USAGE, "prompt_tokens_details": {"cached_tokens": 8}}
+    body = NativeToolStream(('{}',), usage=usage)
+    with provider_for(
+        lambda _: httpx.Response(200, stream=body, headers={"content-type": "text/event-stream"})
+    ) as provider, capture_llm_usage() as tracker:
+        provider.generate_messages([], [], on_chunk=lambda _: None)
+
+    assert tracker.calls[0].cached_tokens == 8
+
+
 @pytest.mark.parametrize("usage", [None, {}, {"prompt_tokens": 12}])
 def test_react_native_stream_preserves_missing_usage(usage):
     body = NativeToolStream(('{}',), usage=usage)

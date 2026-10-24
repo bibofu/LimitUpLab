@@ -20,6 +20,7 @@ from app.services.llm_provider import (
     LLMResult,
     NativeFunctionCallingError,
     NativeFunctionCallingUnavailable,
+    _parse_cached_tokens,
     _parse_token_usage,
     _usage_tracker,
 )
@@ -192,10 +193,14 @@ class LangChainChatProvider(LLMProvider):
             tokens = _parse_token_usage(raw) if raw else (
                 usage.get("input_tokens"), usage.get("output_tokens"), usage.get("total_tokens"),
             )
+            cached = _parse_cached_tokens(raw)
+            if cached is None:
+                cached = _metadata_cached_tokens(usage)
             result = LLMResult(
                 content=_text_content(message), model=self.model, provider="langchain-openai",
                 duration_ms=round((perf_counter() - started) * 1000),
                 prompt_tokens=tokens[0], completion_tokens=tokens[1], total_tokens=tokens[2],
+                cached_tokens=cached,
             )
             if tracker:
                 tracker.complete_call(result)
@@ -344,7 +349,11 @@ class LangChainChatProvider(LLMProvider):
             )
             if not content:
                 raise RuntimeError("LLM response did not contain text")
-            usage = _parse_token_usage(message.response_metadata.get("token_usage"))
+            raw_usage = message.response_metadata.get("token_usage")
+            usage = _parse_token_usage(raw_usage)
+            cached = _parse_cached_tokens(raw_usage)
+            if cached is None:
+                cached = _metadata_cached_tokens(message.usage_metadata or {})
             result = LLMResult(
                 content=content, model=self.model, provider="langchain-openai",
                 duration_ms=round((perf_counter() - started) * 1000),
@@ -353,6 +362,7 @@ class LangChainChatProvider(LLMProvider):
                 prompt_tokens=usage[0],
                 completion_tokens=usage[1],
                 total_tokens=usage[2],
+                cached_tokens=cached,
                 response_mode="function_call" if function_name else "text",
                 function_name=function_name,
             )
@@ -368,6 +378,17 @@ class LangChainChatProvider(LLMProvider):
         if tracker is not None:
             tracker.complete_call(result)
         return result
+
+
+# Read LangChain's normalized cache-read count when the raw usage is unavailable.
+def _metadata_cached_tokens(usage: dict[str, Any]) -> int | None:
+    details = usage.get("input_token_details")
+    if not isinstance(details, dict):
+        return None
+    value = details.get("cache_read")
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    return int(value)
 
 
 # Extract textual content from a LangChain message, including structured content blocks.

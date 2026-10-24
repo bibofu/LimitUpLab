@@ -12,6 +12,7 @@ from app.agents.runner import AgentRunner
 from app.agents.runner.guardrails import MAX_MODEL_ROUNDS, REFUSAL
 from app.agents.tools import AgentToolRegistry
 from app.models import AgentChatRequest
+from app.services.llm_provider import LLMResult, capture_llm_usage, current_llm_usage
 from app.services.sample_data import SAMPLE_EVENTS
 
 
@@ -41,6 +42,28 @@ class ScriptedProvider:
         response = self.responses.pop(0)
         if isinstance(response, Exception):
             raise response
+        return response
+
+
+class MeteredProvider(ScriptedProvider):
+    """Scripted provider that participates in request-local usage accounting."""
+
+    def generate_messages(self, messages, tools, **kwargs):
+        tracker = current_llm_usage()
+        if tracker is not None:
+            tracker.begin_call(self.model)
+        try:
+            response = super().generate_messages(messages, tools, **kwargs)
+        except BaseException:
+            if tracker is not None:
+                tracker.fail_call()
+            raise
+        if tracker is not None:
+            tracker.complete_call(LLMResult(
+                content="", model=self.model, provider="scripted",
+                prompt_tokens=1000, completion_tokens=20, total_tokens=1020,
+                cached_tokens=600, duration_ms=5,
+            ))
         return response
 
 
@@ -74,6 +97,30 @@ def test_runner_calls_one_tool_and_returns_model_readable_result():
     assert payload["status"] == "ok"
     assert payload["field_definitions"]
     assert "summary" in payload
+
+
+def test_runner_records_round_context_and_definition_cost():
+    provider = MeteredProvider([
+        call("market_summary", {}),
+        AIMessage(content="最新交易日涨停数量已取得。"),
+    ])
+    with capture_llm_usage() as tracker:
+        result = AgentRunner(request(), registry(), provider).run()
+
+    assert result.status == "answered"
+    assert len(tracker.calls) == 2
+    first, second = tracker.calls
+    assert first.context["stage"] == "agent"
+    assert first.context["round"] == 1
+    assert first.context["tool_count"] > 0
+    assert first.context["tool_definition_chars"] > 0
+    assert first.context["message_chars"] > 0
+    assert first.context["tool_results"] == 0
+    assert first.cached_tokens == 600
+    assert second.context["round"] == 2
+    assert second.context["tool_results"] == 1
+    assert second.context["message_chars"] > first.context["message_chars"]
+    assert second.cached_tokens == 600
 
 
 def test_runner_answers_without_a_tool():

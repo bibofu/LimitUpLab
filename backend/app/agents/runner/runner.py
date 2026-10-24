@@ -6,6 +6,7 @@ receives complete, self-describing tool results directly.
 
 from __future__ import annotations
 
+import json
 from time import perf_counter
 from typing import Any, TypedDict
 
@@ -28,6 +29,7 @@ from app.agents.runner.prompt import build_messages
 from app.agents.runner.result import RunnerResult
 from app.agents.runner.tool_view import business_definitions, dump, model_result
 from app.services.agent_tracing import get_agent_tracer
+from app.services.llm_provider import current_llm_usage
 
 
 class RunnerState(TypedDict, total=False):
@@ -74,6 +76,10 @@ class AgentRunner:
         self.progress = progress
         self.review_all_answers = review_all_answers
         self.cache: dict[str, dict[str, Any]] = {}
+        # One stable payload per request; the provider resends it every round.
+        self.definition_chars = len(json.dumps(
+            self.definitions, ensure_ascii=False, separators=(",", ":"),
+        ))
 
     def agent(self, state: RunnerState) -> RunnerState:
         """Ask the model to either call tools or produce the final answer."""
@@ -93,6 +99,7 @@ class AgentRunner:
 
         try:
             repairing = state.get("answer_repair", False)
+            self._record_usage_context(state, repairing)
             response = self.provider.generate_messages(
                 state["messages"],
                 [] if repairing else self.definitions,
@@ -156,6 +163,13 @@ class AgentRunner:
             if self.progress:
                 self.progress("checking", "正在核验回答是否包含交易指令")
             rounds += 1
+            tracker = current_llm_usage()
+            if tracker is not None:
+                tracker.set_context(
+                    stage="compliance_review",
+                    round=rounds,
+                    answer_chars=len(content),
+                )
             try:
                 review = review_answer(
                     self.provider, user_message=self.request.message, answer=content,
@@ -183,6 +197,24 @@ class AgentRunner:
             "compliance_reviewed": reviewed,
             "done": True,
         }
+
+    def _record_usage_context(self, state: RunnerState, repairing: bool) -> None:
+        """Attach the context cost of this round to the next provider call."""
+
+        tracker = current_llm_usage()
+        if tracker is None:
+            return
+        tracker.set_context(
+            stage="length_repair" if repairing else "agent",
+            round=state.get("model_rounds", 0) + 1,
+            tool_count=0 if repairing else len(self.definitions),
+            tool_definition_chars=0 if repairing else self.definition_chars,
+            message_chars=sum(
+                _message_chars(item) for item in state.get("messages", [])
+            ),
+            tool_results=len(state.get("tool_messages", [])),
+            pending_tools=len(state.get("pending", [])),
+        )
 
     def tools(self, state: RunnerState) -> RunnerState:
         """Execute every pending call and append one observation per call."""
@@ -340,6 +372,17 @@ class AgentRunner:
             error=final.get("error"),
             compliance_reviewed=final.get("compliance_reviewed", False),
         )
+
+
+def _message_chars(message: Any) -> int:
+    """Approximate one resent message's text size, including tool-call arguments."""
+
+    content = getattr(message, "content", "")
+    characters = len(content) if isinstance(content, str) else len(dump(content))
+    calls = getattr(message, "tool_calls", None) or []
+    if calls:
+        characters += len(dump(calls))
+    return characters
 
 
 def _cancelled() -> bool:
