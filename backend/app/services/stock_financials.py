@@ -96,10 +96,14 @@ def build_stock_financials_facts(
     thscode = _to_thscode(symbol)
     active_collector = collector or HithinkFinanceCollector()
     method_name = STATEMENT_COLLECTORS[normalized_statement]
-    facts = getattr(active_collector, method_name)(
-        thscode,
-        period=normalized_period,
-        limit=normalized_limit,
+    facts = sorted(
+        getattr(active_collector, method_name)(
+            thscode,
+            period=normalized_period,
+            limit=normalized_limit,
+        ),
+        key=lambda item: (item.period_end, item.report_date),
+        reverse=True,
     )
     rows = [
         _row_payload(
