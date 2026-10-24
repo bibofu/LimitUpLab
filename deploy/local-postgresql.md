@@ -22,7 +22,7 @@
 
 `scripts/start_local.cmd`、`scripts/start_dev_detached.py` 和 `backend/scripts/start_backend.cmd` 均先执行数据库就绪检查。原先的数据新鲜度检查与刷新仍可正常运行；`--skip-data-check` 仅跳过联网数据更新，不跳过数据库检查。直接运行 `uvicorn` 或后台任务前，需要先执行 `ensure`。这些脚本不注册 Windows 服务，也不自动初始化、导入数据或升级 schema。
 
-Windows 每日收盘计划任务使用 `backend/scripts/run_scheduled_close_loop.py --trigger scheduled`。它先执行 `ensure`，成功后才调用原收盘脚本，保留参数和退出码；数据库不可用时阻断任务。当前已有 `LimitUpLab-DailyCloseLoop` 已更新为此入口并恢复启用，工作日 16:00、原权限与重试设置保持。电脑重启后即使没有先启动网页应用，计划任务也会准备项目本地数据库。
+Windows 每日收盘计划任务使用 `backend/scripts/run_scheduled_close_loop.py --trigger scheduled`。它先执行 `ensure`，成功后才调用原收盘脚本，保留参数和退出码；数据库不可用时阻断任务。当前已有 `LimitUpLab-DailyCloseLoop` 已更新为此入口并恢复启用，工作日 15:30、原权限与重试设置保持。电脑重启后即使没有先启动网页应用，计划任务也会准备项目本地数据库。
 
 `start_dev_detached.py` 使用 `/ready` 确认后端返回 PostgreSQL。端口 8001 上已有的服务未通过该检查时，必须先确认并退出旧进程。推荐刷新任务通过数据库租约检查存活。
 

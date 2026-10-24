@@ -121,7 +121,7 @@ sudo chmod 644 /etc/cron.d/limituplab-daily /etc/cron.d/limituplab-backup
 sudo systemctl restart cron
 ```
 
-收盘流水线在工作日北京时间 `16:00` 运行，并再次检查交易日历，因此节假日会跳过。备份任务每天 `03:25` 生成 PostgreSQL custom-format `pg_dump`、SHA256 校验文件并检查归档可读性，在 `/var/backups/limituplab/postgresql/` 保留最近 14 份通过校验的完整备份。日志位于 `/var/log/limituplab/`。历史 SQLite 归档和发布专属备份不参与日常轮换。
+收盘流水线在工作日北京时间 `15:30` 运行，并再次检查交易日历，因此节假日会跳过。备份任务每天 `03:25` 生成 PostgreSQL custom-format `pg_dump`、SHA256 校验文件并检查归档可读性，在 `/var/backups/limituplab/postgresql/` 保留最近 14 份通过校验的完整备份。日志位于 `/var/log/limituplab/`。历史 SQLite 归档和发布专属备份不参与日常轮换。
 
 需要实际执行任务时，手动入口与 cron 相同；先备份，再按需运行日更：
 
