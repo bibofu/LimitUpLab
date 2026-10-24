@@ -89,6 +89,47 @@ class MarketIndexTrendFacts(BaseModel):
     indices: list[MarketIndexTrendItem] = Field(description="三大指数走势")
 
 
+class MarketCalendarFacts(BaseModel):
+    """Current A-share trading-calendar status for Agent tools."""
+
+    as_of: datetime = Field(description="上海时区当前时间（ISO 8601，含时区）")
+    today: date = Field(description="上海时区当前日期")
+    latest_closed_trade_date: date | None = Field(
+        description=(
+            "最新已收盘交易日；交易日历覆盖不足时为今天之前最近一个已知交易日，"
+            "并需结合calendar_verified和data_missing解释"
+        )
+    )
+    previous_trade_date: date | None = Field(
+        default=None, description="latest_closed_trade_date之前的最近交易日"
+    )
+    next_trade_date: date | None = Field(
+        default=None,
+        description="latest_closed_trade_date之后的最近交易日；日历未验证未来日期时为null",
+    )
+    session_status: Literal[
+        "pre_open", "open", "closed", "non_trading_day", "unverified"
+    ] = Field(description="今天状态：未开盘、开市中、已收盘、非交易日或无法验证")
+    close_time: str = Field(description="收盘时间，固定为15:00")
+    calendar_source: str = Field(description="交易日历数据来源")
+    calendar_verified: bool = Field(
+        description="今天是否为交易日以及是否已收盘的结论是否已由日历验证"
+    )
+    calendar_coverage_start: date | None = Field(
+        default=None, description="本次交易日历覆盖的首个日期"
+    )
+    calendar_coverage_end: date | None = Field(
+        default=None, description="本次交易日历覆盖的最后一个日期"
+    )
+    local_data_through: date | None = Field(
+        default=None,
+        description="本地涨停事件数据最新日期；仅表示数据覆盖，不是交易日历结论",
+    )
+    data_missing: list[str] = Field(
+        default_factory=list, description="交易日历缺口或验证警告"
+    )
+
+
 class SectorHistoryPoint(BaseModel):
     """One completed daily point for an industry sector."""
 

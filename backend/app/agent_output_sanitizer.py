@@ -2,6 +2,7 @@
 
 
 INTERNAL_TOOL_LABELS: dict[str, str] = {
+    "trading_calendar": "交易日历",
     "market_summary": "市场概况",
     "market_index_trend": "大盘指数走势",
     "daily_board_promotion": "连板晋级统计",

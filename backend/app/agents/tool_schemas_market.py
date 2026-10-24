@@ -5,6 +5,26 @@ from app.agents.tool_contracts import AgentToolSchema
 
 MARKET_TOOL_SCHEMAS = [
     AgentToolSchema(
+        name="trading_calendar",
+        time_mode="current",
+        notes=(
+            "Current calendar status only; does not serve arbitrary historical ranges. "
+            "local_data_through is data coverage, not a trading-calendar conclusion."
+        ),
+        description=(
+            "以A股交易日历为准，返回当前时点最新已收盘交易日、上一交易日、"
+            "下一交易日和今日交易状态。适合回答‘今天收盘了吗’、‘最新交易日是哪天’、"
+            "‘今天是交易日吗’、‘上一交易日是哪天’。15:00为收盘边界；"
+            "calendar_verified=false时不得把latest_closed_trade_date表述为已确认结论。"
+            "local_data_through只表示本地涨停事件数据覆盖，不等于交易日历。"
+        ),
+        args_schema={"type": "object", "properties": {}, "required": []},
+        returns=(
+            "Latest closed trading day, previous/next session, today's session status, "
+            "calendar source and verification, local data coverage and explicit missing-data warnings."
+        ),
+    ),
+    AgentToolSchema(
         name="market_summary",
         time_mode="latest_local",
         notes="Only the latest local market date; not historical.",

@@ -245,15 +245,15 @@ flowchart LR
 
 ### 公开工具契约只有一个来源
 
-20 个业务工具的公开契约分别定义在 `agents/tool_schemas_market.py`、`tool_schemas_research.py`、`tool_schemas_review.py`、`tool_schemas_news.py`，使用 `tool_contracts.py` 中的共享类型，由 `agents/tools.py` 统一导出。契约包含参数 Schema、时间能力、日期字段、集合语义及适配模式。`react_runtime/catalog.py` 由该契约生成 Pydantic 参数模型和 LangChain `StructuredTool`，并检查直接实现的方法签名是否漂移。
+21 个业务工具的公开契约分别定义在 `agents/tool_schemas_market.py`、`tool_schemas_research.py`、`tool_schemas_review.py`、`tool_schemas_news.py`，使用 `tool_contracts.py` 中的共享类型，由 `agents/tools.py` 统一导出。契约包含参数 Schema、时间能力、日期字段、集合语义及适配模式。`react_runtime/catalog.py` 由该契约生成 Pydantic 参数模型和 LangChain `StructuredTool`，并检查直接实现的方法签名是否漂移。
 
 这里的“唯一来源”指同一工具只有一份契约定义，并不要求所有定义堆在一个文件。按领域拆分后，注册表保留原顺序和对象引用，现有调用方的导入路径不变；修改某个工具仍只需修改所属领域的一份契约。这也是面试中解释重构取舍的具体例子。
 
-`v1_close_review` 和 `extended` 两个 profile 当前都暴露 20 个业务工具。此外有 4 个运行时控制工具，不能把它们与 20 个业务工具混计。
+`v1_close_review` 和 `extended` 两个 profile 当前都暴露 21 个业务工具。此外有 4 个运行时控制工具，不能把它们与 21 个业务工具混计。
 
 | 工具类别 | 代表工具 | 使用场景 |
 | --- | --- | --- |
-| 市场与事件 | `market_summary`、`market_event_pool`、`limit_up_events`、`daily_board_promotion` | 概览、名单、数量、事件条件和晋级 |
+| 市场与事件 | `trading_calendar`、`market_summary`、`market_event_pool`、`limit_up_events`、`daily_board_promotion` | 收盘日判定、概览、名单、数量、事件条件和晋级 |
 | 行业与人气 | `sector_performance`、`sector_stock_ranking`、`hot_stock_ranking` | 板块及股票横向观察 |
 | 个股与资讯 | `stock_kline`、`stock_news`、`stock_activity`、`dragon_tiger_list` | 个股走势、近期事件与来源资讯 |
 | 评级与复盘 | `first_board_ratings`、`review_high_score_picks` | 解释评分并追踪高分候选结果 |

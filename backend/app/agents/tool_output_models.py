@@ -378,6 +378,10 @@ class MarketEventPoolPayload(OutputModel):
     checked_at: str | None = Field(default=None, description="可用性检查时间")
     data_missing: list[str] = Field(description="数据缺口")
     complete: bool | None = Field(default=None, description="结果是否完整")
+    calendar: dict[str, Any] | None = Field(
+        default=None,
+        description="本次可用性判断使用的交易日历状态；历史日期不查询日历时为null",
+    )
 
 
 class FirstBoardRatingRow(OutputModel):

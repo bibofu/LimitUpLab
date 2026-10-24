@@ -188,7 +188,7 @@ def test_calendar_waiter_range_fallback_keeps_original_deadline(monkeypatch):
     run = Mock(return_value=(older, START, END))
     monkeypatch.setattr(calendar, "run_in_killable_process", run)
     assert calendar.collect_a_share_trade_dates(older, END) == [older, START, END]
-    run.assert_called_once_with(calendar._fetch_trade_dates, older, END, 10.0, timeout_seconds=10.0)
+    run.assert_called_once_with(calendar._fetch_trade_calendar, older, END, 10.0, timeout_seconds=10.0)
 
 
 def test_reversed_calendar_range_never_starts_provider(monkeypatch):

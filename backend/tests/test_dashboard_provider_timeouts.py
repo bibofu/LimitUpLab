@@ -57,13 +57,13 @@ def test_calendar_full_history_uses_one_worker_and_filters_requested_range(monke
     monkeypatch.setattr(calendar, "run_in_killable_process", run)
     assert calendar.collect_a_share_trade_dates(START, END) == [START, END]
     assert calendar.collect_a_share_trade_dates(END, END) == [END]
-    run.assert_called_once_with(calendar._fetch_trade_dates, START, END, 30.0, timeout_seconds=30.0)
+    run.assert_called_once_with(calendar._fetch_trade_calendar, START, END, 30.0, timeout_seconds=30.0)
 
 
 @pytest.mark.parametrize("kind", ["indices", "calendar"])
 def test_public_collector_kills_blocked_worker_with_configured_budget(monkeypatch, kind):
     module = indices if kind == "indices" else calendar
-    worker_name = "_collect_market_indices" if kind == "indices" else "_fetch_trade_dates"
+    worker_name = "_collect_market_indices" if kind == "indices" else "_fetch_trade_calendar"
     config_name = "LIMITUPLAB_MARKET_INDEX_TIMEOUT_SECONDS" if kind == "indices" else "LIMITUPLAB_TRADING_CALENDAR_TIMEOUT_SECONDS"
     monkeypatch.setattr(module, worker_name, _blocked_provider)
     monkeypatch.setattr(module, "run_in_killable_process", run_in_killable_process)

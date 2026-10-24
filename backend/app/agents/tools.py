@@ -42,6 +42,7 @@ from app.models import (
     FinanceNewsFacts,
     FirstBoardRating,
     LimitUpEvent,
+    MarketCalendarFacts,
     MarketIndexTrendFacts,
     SectorPerformanceFacts,
     SectorStockRankingFacts,
@@ -74,6 +75,7 @@ from app.services.post_limit import (
     build_post_limit_statistics,
 )
 from app.services.stock_news import collect_stock_news
+from app.services.trading_calendar import build_market_calendar_facts
 from app.agents.review_agent import build_review_agent_report
 
 
@@ -92,6 +94,7 @@ V1_AGENT_PROFILE = "v1_close_review"
 EXTENDED_AGENT_PROFILE = "extended"
 V1_CLOSED_MARKET_TOOL_NAMES = frozenset(
     {
+        "trading_calendar",
         "market_summary",
         "market_index_trend",
         "sector_performance",
@@ -114,6 +117,38 @@ V1_CLOSED_MARKET_TOOL_NAMES = frozenset(
         "review_high_score_picks",
     }
 )
+
+_SESSION_STATUS_LABELS = {
+    "pre_open": "今日未开盘",
+    "open": "今日开市中",
+    "closed": "今日已收盘",
+    "non_trading_day": "今日非交易日",
+    "unverified": "今天是否为交易日尚未验证",
+}
+
+_AVAILABILITY_LABELS = {
+    "requested_date_in_future": "请求日期在未来",
+    "market_not_closed": "今日尚未收盘",
+    "closing_data_pending": "收盘数据尚未落定",
+    "non_trading_day": "该日期不是交易日",
+}
+
+
+def _calendar_trace(facts: MarketCalendarFacts | None) -> dict[str, Any] | None:
+    """Keep the event-pool availability decision traceable without full payload."""
+
+    if facts is None:
+        return None
+    return {
+        "source": facts.calendar_source,
+        "verified": facts.calendar_verified,
+        "session_status": facts.session_status,
+        "latest_closed_trade_date": (
+            facts.latest_closed_trade_date.isoformat()
+            if facts.latest_closed_trade_date is not None
+            else None
+        ),
+    }
 
 
 def resolve_agent_profile(profile: str | None = None) -> str:
@@ -172,6 +207,40 @@ class AgentToolRegistry:
             schema for schema in TOOL_SCHEMAS if self.is_enabled(schema.name)
         ]
 
+
+    def trading_calendar(self) -> ToolResult:
+        """Return the latest closed trading day from the verified calendar."""
+
+        local_data_through = max(
+            (event.trade_date for event in self.events),
+            default=None,
+        )
+        response: MarketCalendarFacts = build_market_calendar_facts(
+            local_data_through=local_data_through,
+        )
+        trace_output = response.model_dump(mode="json")
+        latest = (
+            response.latest_closed_trade_date.isoformat()
+            if response.latest_closed_trade_date is not None
+            else "未知"
+        )
+        summary = (
+            f"上海时间 {response.as_of.isoformat()}；"
+            f"{_SESSION_STATUS_LABELS[response.session_status]}；"
+            f"最新已收盘交易日 {latest}。"
+        )
+        if response.local_data_through is not None:
+            summary += f" 本地涨停事件数据截至 {response.local_data_through.isoformat()}。"
+        if response.data_missing:
+            summary += " " + "；".join(response.data_missing)
+        return ToolResult(
+            name="trading_calendar",
+            input={},
+            output=response,
+            summary=summary,
+            trace_output=trace_output,
+            result_status="partial" if response.data_missing else "ok",
+        )
 
     def market_summary(self, *, include_limit_down: bool = False) -> ToolResult:
         """Return the latest objective local market facts."""
@@ -928,16 +997,53 @@ class AgentToolRegistry:
         source = "local-limit-up-events"
 
         # A completed-day question cannot treat an unobserved future session
-        # as a verified zero. The 15:30 cutoff matches daily consolidation.
+        # as a verified zero. Today's status comes from the trading calendar;
+        # the 15:30 cutoff still reflects daily data consolidation readiness.
+        today = reference_time.date()
+        calendar_facts: MarketCalendarFacts | None = None
+        calendar_warning: str | None = None
         unavailable_reason = None
-        if target_date > reference_time.date():
+        if target_date > today:
             unavailable_reason = "requested_date_in_future"
-        elif target_date == reference_time.date():
-            if reference_time.time() < time(15, 0):
+        elif target_date == today:
+            try:
+                calendar_facts = build_market_calendar_facts(
+                    now=reference_time,
+                    local_data_through=max(
+                        (event.trade_date for event in self.events),
+                        default=None,
+                    ),
+                )
+            except Exception as error:  # noqa: BLE001 - fall back without guessing
+                calendar_warning = (
+                    f"交易日历不可用：{type(error).__name__}；按本地时间判断收盘状态。"
+                )
+            if calendar_facts is not None:
+                if calendar_facts.session_status == "non_trading_day":
+                    unavailable_reason = "non_trading_day"
+                elif calendar_facts.session_status == "unverified":
+                    calendar_warning = (
+                        "交易日历未确认今天是否为交易日；按本地时间判断收盘状态。"
+                    )
+                    if reference_time.time() < time(15, 0):
+                        unavailable_reason = "market_not_closed"
+                    elif reference_time.time() < time(15, 30):
+                        unavailable_reason = "closing_data_pending"
+                elif calendar_facts.session_status in {"pre_open", "open"}:
+                    unavailable_reason = "market_not_closed"
+                elif (
+                    calendar_facts.session_status == "closed"
+                    and reference_time.time() < time(15, 30)
+                ):
+                    unavailable_reason = "closing_data_pending"
+            elif reference_time.time() < time(15, 0):
                 unavailable_reason = "market_not_closed"
             elif reference_time.time() < time(15, 30):
                 unavailable_reason = "closing_data_pending"
         if unavailable_reason is not None:
+            data_missing = [unavailable_reason]
+            if calendar_warning:
+                data_missing.append(calendar_warning)
             payload = {
                 "trade_date": target_date.isoformat(),
                 "event_type": effective_type,
@@ -949,10 +1055,17 @@ class AgentToolRegistry:
                 "items": [],
                 "availability": unavailable_reason,
                 "checked_at": reference_time.isoformat(),
-                "data_missing": [unavailable_reason],
+                "data_missing": data_missing,
+                "calendar": _calendar_trace(calendar_facts),
                 "complete": False,
                 "source": "completed-day-availability",
             }
+            summary = (
+                f"{target_date.isoformat()} 收盘事件数据尚不可用，数量未知："
+                f"{_AVAILABILITY_LABELS.get(unavailable_reason, unavailable_reason)}。"
+            )
+            if calendar_warning:
+                summary += " " + calendar_warning
             return ToolResult(
                 name="market_event_pool",
                 input={
@@ -966,7 +1079,7 @@ class AgentToolRegistry:
                 output=payload,
                 trace_output=payload,
                 result_status="partial",
-                summary=f"{target_date.isoformat()} 收盘事件数据尚不可用，数量未知：{unavailable_reason}。",
+                summary=summary,
             )
 
         if effective_type == "limit_down":
@@ -1044,6 +1157,7 @@ class AgentToolRegistry:
             "broken_board": "炸板未回封",
         }
         event_label = labels[effective_type]
+        data_missing = [calendar_warning] if calendar_warning else []
         trace_output = {
             "trade_date": target_date.isoformat(),
             "event_type": effective_type,
@@ -1056,7 +1170,12 @@ class AgentToolRegistry:
             "returned_count": len(visible_items),
             "items": visible_items,
             "source": source,
+            "data_missing": data_missing,
+            "calendar": _calendar_trace(calendar_facts),
         }
+        summary = f"{target_date.isoformat()} {event_label}查询命中 {matched_count} 只。"
+        if calendar_warning:
+            summary += " " + calendar_warning
         return ToolResult(
             name="market_event_pool",
             input={
@@ -1068,8 +1187,9 @@ class AgentToolRegistry:
                 "limit": effective_limit,
             },
             output=trace_output,
-            summary=f"{target_date.isoformat()} {event_label}查询命中 {matched_count} 只。",
+            summary=summary,
             trace_output=trace_output,
+            result_status="partial" if calendar_warning else "ok",
         )
 
     def limit_up_events(

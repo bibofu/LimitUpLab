@@ -81,6 +81,7 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 
 | 工具 | 用途 |
 | --- | --- |
+| `trading_calendar` | 以交易日历返回最新已收盘交易日、上一/下一交易日和今日交易状态 |
 | `market_summary` | 查询最新本地交易日市场环境，并明确开板率与未回封率的分母 |
 | `market_index_trend` | 查询上证、深成指和创业板指近 2–20 个交易日走势 |
 | `dragon_tiger_list` | 查询同花顺龙虎榜、机构与游资净买额 |
@@ -336,7 +337,7 @@ LIMITUPLAB_PROXY_URL=http://127.0.0.1:17891
 
 ### 4. 配置同花顺结构化数据
 
-项目通过官方 `hithink-finance` CLI 获取未复权个股日 K、最新行情、热股榜、龙虎榜和远端涨停池。凭据保存在 CLI 系统凭据库，不写入项目 `.env`：
+项目通过官方 `hithink-finance` CLI 获取未复权个股日 K、最新行情、热股榜、龙虎榜、交易日历和远端涨停池。凭据保存在 CLI 系统凭据库，不写入项目 `.env`：
 
 ```powershell
 npm.cmd install -g @hithink-tech/hithink-finance-cli

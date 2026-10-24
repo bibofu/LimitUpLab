@@ -14,6 +14,7 @@ def _evidence_title_kind(tool_name: str) -> tuple[str, str]:
     mapping: dict[str, tuple[str, str]] = {
         "agent_plan": ("问题理解与工具计划", "execution"),
         "llm_tool_planner": ("LLM 工具规划", "execution"),
+        "trading_calendar": ("交易日历与收盘状态", "data_availability"),
         "market_summary": ("市场环境事实", "market"),
         "sector_performance": ("行业板块行情", "market"),
         "sector_stock_ranking": ("板块成分股走势", "market"),
