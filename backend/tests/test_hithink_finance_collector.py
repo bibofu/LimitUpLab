@@ -490,5 +490,151 @@ class HithinkFinanceCollectorTest(unittest.TestCase):
         self.assertIn("45s", str(context.exception))
 
 
+    # Regression scenario: financial report dates use Shanghai time, not UTC, and
+    # the full income-statement payload survives normalization.
+    def test_income_statements_use_shanghai_dates_and_full_fields(self) -> None:
+        runner = FakeRunner(
+            {
+                "ok": True,
+                "data": {
+                    "item": [
+                        {
+                            "thscode": "600519.SH",
+                            "fiscal_year": 2026,
+                            "fiscal_period": "Q2",
+                            "report_date_ms": 1_787_328_000_000,
+                            "period_end_ms": 1_782_748_800_000,
+                            "operating_income": 90_703_260_964.48,
+                            "operating_costs": 9_473_762_565.88,
+                            "operating_expenses": 30_946_044_878.08,
+                            "sales_fee": 3_206_308_341.53,
+                            "manage_fee": 3_635_355_263.82,
+                            "research_and_development_expenses": 114_926_219.60,
+                            "operating_profit": 61_411_291_686.27,
+                            "interest_expenses": 76_587_662.57,
+                            "profit_total": 61_438_419_177.29,
+                            "income_tax_expense": 15_405_088_610.51,
+                            "net_profit": 46_033_330_566.78,
+                            "parent_holder_net_profit": 44_516_880_421.86,
+                            "basic_eps": 35.57,
+                        }
+                    ]
+                },
+            }
+        )
+        collector = HithinkFinanceCollector(
+            executable="hithink-finance",
+            runner=runner,
+        )
+
+        statements = collector.collect_income_statements(
+            "600519.SH", period="quarterly", limit=6,
+        )
+
+        statement = statements[0]
+        self.assertEqual(statement.period_end, date(2026, 6, 30))
+        self.assertEqual(statement.report_date, date(2026, 8, 22))
+        self.assertEqual(statement.operating_costs, 9_473_762_565.88)
+        self.assertEqual(statement.operating_profit, 61_411_291_686.27)
+        self.assertEqual(statement.income_tax_expense, 15_405_088_610.51)
+        self.assertIn("quarterly", runner.commands[0])
+        self.assertIn("--limit", runner.commands[0])
+
+    # Regression scenario: balance-sheet and cash-flow commands are normalized with
+    # the same period identity and source fields.
+    def test_balance_sheet_and_cash_flow_are_normalized(self) -> None:
+        runner = SequenceRunner([
+            {
+                "ok": True,
+                "data": {
+                    "item": [
+                        {
+                            "thscode": "600519.SH",
+                            "fiscal_year": 2026,
+                            "fiscal_period": "Q2",
+                            "report_date_ms": 1_787_328_000_000,
+                            "period_end_ms": 1_782_748_800_000,
+                            "assets_total": 309_050_784_569.31,
+                            "total_current_assets": 260_724_668_103.40,
+                            "non_current_nets_total": 48_326_116_465.91,
+                            "cash": 53_518_798_979.08,
+                            "accounts_receivable": 570_895.04,
+                            "total_debt": 46_954_432_394.95,
+                            "holder_equity_total": 262_096_352_174.36,
+                        }
+                    ]
+                },
+            },
+            {
+                "ok": True,
+                "data": {
+                    "item": [
+                        {
+                            "thscode": "600519.SH",
+                            "fiscal_year": 2026,
+                            "fiscal_period": "Q2",
+                            "report_date_ms": 1_787_328_000_000,
+                            "period_end_ms": 1_782_748_800_000,
+                            "act_cash_flow_net": 70_690_750_119.06,
+                            "invest_cash_flow_net": 25_640_543_520.60,
+                            "financing_cash_flow_net": -37_944_297_802.12,
+                            "pay_fixed_assets_etc_cash": 832_142_752.28,
+                            "pay_dividends_profits_interest_cash": 35_044_145_842.75,
+                            "cash_equivalents_net_addition": 58_385_486_034.90,
+                        }
+                    ]
+                },
+            },
+        ])
+        collector = HithinkFinanceCollector(
+            executable="hithink-finance",
+            runner=runner,
+        )
+
+        balance = collector.collect_balance_sheets("600519.SH")
+        cash_flow = collector.collect_cash_flow_statements("600519.SH")
+
+        self.assertEqual(balance[0].assets_total, 309_050_784_569.31)
+        self.assertEqual(balance[0].holder_equity_total, 262_096_352_174.36)
+        self.assertEqual(cash_flow[0].act_cash_flow_net, 70_690_750_119.06)
+        self.assertEqual(cash_flow[0].financing_cash_flow_net, -37_944_297_802.12)
+        self.assertIn("balance-sheet", runner.commands[0])
+        self.assertIn("cash-flow", runner.commands[1])
+
+    # Regression scenario: annual requests preserve the provider's FY label.
+    def test_annual_income_statement_keeps_fy_period(self) -> None:
+        runner = FakeRunner(
+            {
+                "ok": True,
+                "data": {
+                    "item": [
+                        {
+                            "thscode": "600519.SH",
+                            "fiscal_year": 2025,
+                            "fiscal_period": "FY",
+                            "report_date_ms": 1_776_355_200_000,
+                            "period_end_ms": 1_767_110_400_000,
+                            "operating_income": 168_838_102_514.79,
+                            "net_profit": 85_310_324_833.67,
+                            "parent_holder_net_profit": 82_320_067_101.68,
+                            "basic_eps": 65.66,
+                        }
+                    ]
+                },
+            }
+        )
+        collector = HithinkFinanceCollector(
+            executable="hithink-finance",
+            runner=runner,
+        )
+
+        statements = collector.collect_income_statements(
+            "600519.SH", period="annual", limit=2,
+        )
+
+        self.assertEqual(statements[0].fiscal_period, "FY")
+        self.assertIn("annual", runner.commands[0])
+
+
 if __name__ == "__main__":
     unittest.main()

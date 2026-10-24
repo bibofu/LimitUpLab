@@ -142,7 +142,13 @@ class HithinkIndexConstituentFact:
 
 @dataclass(frozen=True)
 class HithinkIncomeStatementFact:
-    """One normalized quarterly income-statement row."""
+    """One normalized income-statement row.
+
+    ``fiscal_period`` is Q1-Q4 for quarterly requests and FY for annual
+    requests. Provider values are year-to-date cumulative, not single-quarter.
+    ``report_date`` is the provider's report/update date and may differ from the
+    original announcement date after a restatement.
+    """
 
     thscode: str
     fiscal_year: int
@@ -153,6 +159,50 @@ class HithinkIncomeStatementFact:
     net_profit: float | None
     parent_holder_net_profit: float | None
     basic_eps: float | None
+    operating_costs: float | None = None
+    operating_expenses: float | None = None
+    sales_fee: float | None = None
+    manage_fee: float | None = None
+    research_and_development_expenses: float | None = None
+    operating_profit: float | None = None
+    interest_expenses: float | None = None
+    profit_total: float | None = None
+    income_tax_expense: float | None = None
+
+
+@dataclass(frozen=True)
+class HithinkBalanceSheetFact:
+    """One normalized point-in-time balance-sheet row."""
+
+    thscode: str
+    fiscal_year: int
+    fiscal_period: str
+    report_date: date
+    period_end: date
+    assets_total: float | None
+    total_current_assets: float | None
+    non_current_nets_total: float | None
+    cash: float | None
+    accounts_receivable: float | None
+    total_debt: float | None
+    holder_equity_total: float | None
+
+
+@dataclass(frozen=True)
+class HithinkCashFlowStatementFact:
+    """One normalized cumulative cash-flow row."""
+
+    thscode: str
+    fiscal_year: int
+    fiscal_period: str
+    report_date: date
+    period_end: date
+    act_cash_flow_net: float | None
+    invest_cash_flow_net: float | None
+    financing_cash_flow_net: float | None
+    pay_fixed_assets_etc_cash: float | None
+    pay_dividends_profits_interest_cash: float | None
+    cash_equivalents_net_addition: float | None
 
 
 @dataclass(frozen=True)
@@ -606,34 +656,20 @@ class HithinkFinanceCollector:
         self,
         thscode: str,
         *,
+        period: str = "quarterly",
         limit: int = 6,
     ) -> list[HithinkIncomeStatementFact]:
-        """Return recent quarterly income statements for one A-share stock."""
+        """Return recent income statements for one A-share stock."""
 
-        normalized_code = thscode.strip().upper()
-        if not normalized_code:
-            raise ValueError("thscode is required")
-        envelope = self._invoke(
-            "financials",
-            "income",
-            "--thscode",
-            normalized_code,
-            "--period",
-            "quarterly",
-            "--limit",
-            str(max(2, min(limit, 20))),
-        )
         items: list[HithinkIncomeStatementFact] = []
-        for row in _list(_dict(envelope.get("data")).get("item")):
-            report_date = _timestamp_date(row.get("report_date_ms"))
-            period_end = _timestamp_date(row.get("period_end_ms"))
-            fiscal_year = _integer(row.get("fiscal_year"))
-            fiscal_period = str(row.get("fiscal_period") or "").strip()
-            if report_date is None or period_end is None or fiscal_year is None or not fiscal_period:
+        for row in self._financial_statement_rows("income", thscode, period=period, limit=limit):
+            identity = _financial_statement_identity(row, thscode)
+            if identity is None:
                 continue
+            row_thscode, fiscal_year, fiscal_period, report_date, period_end = identity
             items.append(
                 HithinkIncomeStatementFact(
-                    thscode=str(row.get("thscode") or normalized_code),
+                    thscode=row_thscode,
                     fiscal_year=fiscal_year,
                     fiscal_period=fiscal_period,
                     report_date=report_date,
@@ -644,15 +680,129 @@ class HithinkFinanceCollector:
                         row.get("parent_holder_net_profit")
                     ),
                     basic_eps=_number(row.get("basic_eps")),
+                    operating_costs=_number(row.get("operating_costs")),
+                    operating_expenses=_number(row.get("operating_expenses")),
+                    sales_fee=_number(row.get("sales_fee")),
+                    manage_fee=_number(row.get("manage_fee")),
+                    research_and_development_expenses=_number(
+                        row.get("research_and_development_expenses")
+                    ),
+                    operating_profit=_number(row.get("operating_profit")),
+                    interest_expenses=_number(row.get("interest_expenses")),
+                    profit_total=_number(row.get("profit_total")),
+                    income_tax_expense=_number(row.get("income_tax_expense")),
                 )
             )
-        # The key compares period end, then report date. reverse=True reverses the resulting
-        # order.
         return sorted(
             items,
             key=lambda item: (item.period_end, item.report_date),
             reverse=True,
         )
+
+    def collect_balance_sheets(
+        self,
+        thscode: str,
+        *,
+        period: str = "quarterly",
+        limit: int = 6,
+    ) -> list[HithinkBalanceSheetFact]:
+        """Return recent balance sheets for one A-share stock."""
+
+        items: list[HithinkBalanceSheetFact] = []
+        for row in self._financial_statement_rows("balance-sheet", thscode, period=period, limit=limit):
+            identity = _financial_statement_identity(row, thscode)
+            if identity is None:
+                continue
+            row_thscode, fiscal_year, fiscal_period, report_date, period_end = identity
+            items.append(
+                HithinkBalanceSheetFact(
+                    thscode=row_thscode,
+                    fiscal_year=fiscal_year,
+                    fiscal_period=fiscal_period,
+                    report_date=report_date,
+                    period_end=period_end,
+                    assets_total=_number(row.get("assets_total")),
+                    total_current_assets=_number(row.get("total_current_assets")),
+                    non_current_nets_total=_number(row.get("non_current_nets_total")),
+                    cash=_number(row.get("cash")),
+                    accounts_receivable=_number(row.get("accounts_receivable")),
+                    total_debt=_number(row.get("total_debt")),
+                    holder_equity_total=_number(row.get("holder_equity_total")),
+                )
+            )
+        return sorted(
+            items,
+            key=lambda item: (item.period_end, item.report_date),
+            reverse=True,
+        )
+
+    def collect_cash_flow_statements(
+        self,
+        thscode: str,
+        *,
+        period: str = "quarterly",
+        limit: int = 6,
+    ) -> list[HithinkCashFlowStatementFact]:
+        """Return recent cash-flow statements for one A-share stock."""
+
+        items: list[HithinkCashFlowStatementFact] = []
+        for row in self._financial_statement_rows("cash-flow", thscode, period=period, limit=limit):
+            identity = _financial_statement_identity(row, thscode)
+            if identity is None:
+                continue
+            row_thscode, fiscal_year, fiscal_period, report_date, period_end = identity
+            items.append(
+                HithinkCashFlowStatementFact(
+                    thscode=row_thscode,
+                    fiscal_year=fiscal_year,
+                    fiscal_period=fiscal_period,
+                    report_date=report_date,
+                    period_end=period_end,
+                    act_cash_flow_net=_number(row.get("act_cash_flow_net")),
+                    invest_cash_flow_net=_number(row.get("invest_cash_flow_net")),
+                    financing_cash_flow_net=_number(row.get("financing_cash_flow_net")),
+                    pay_fixed_assets_etc_cash=_number(row.get("pay_fixed_assets_etc_cash")),
+                    pay_dividends_profits_interest_cash=_number(
+                        row.get("pay_dividends_profits_interest_cash")
+                    ),
+                    cash_equivalents_net_addition=_number(
+                        row.get("cash_equivalents_net_addition")
+                    ),
+                )
+            )
+        return sorted(
+            items,
+            key=lambda item: (item.period_end, item.report_date),
+            reverse=True,
+        )
+
+    def _financial_statement_rows(
+        self,
+        command: str,
+        thscode: str,
+        *,
+        period: str,
+        limit: int,
+    ) -> list[dict[str, Any]]:
+        """Invoke one financial-statement command with validated period bounds."""
+
+        normalized_code = thscode.strip().upper()
+        if not normalized_code:
+            raise ValueError("thscode is required")
+        normalized_period = period.strip().lower()
+        if normalized_period not in {"annual", "quarterly"}:
+            raise ValueError("period must be annual or quarterly")
+        envelope = self._invoke(
+            "financials",
+            command,
+            "--thscode",
+            normalized_code,
+            "--period",
+            normalized_period,
+            "--limit",
+            str(max(1, min(limit, 20))),
+        )
+        return _list(_dict(envelope.get("data")).get("item"))
 
     def collect_dragon_tiger(
         self,
@@ -1153,3 +1303,23 @@ def _shanghai_timestamp_date(value: object) -> date | None:
         ).date()
     except (OSError, OverflowError, ValueError):
         return None
+
+
+# Extract the shared identity and period fields from one financial-statement row.
+def _financial_statement_identity(
+    row: dict[str, Any],
+    default_thscode: str,
+) -> tuple[str, int, str, date, date] | None:
+    report_date = _shanghai_timestamp_date(row.get("report_date_ms"))
+    period_end = _shanghai_timestamp_date(row.get("period_end_ms"))
+    fiscal_year = _integer(row.get("fiscal_year"))
+    fiscal_period = str(row.get("fiscal_period") or "").strip()
+    if report_date is None or period_end is None or fiscal_year is None or not fiscal_period:
+        return None
+    return (
+        str(row.get("thscode") or default_thscode.strip().upper()),
+        fiscal_year,
+        fiscal_period,
+        report_date,
+        period_end,
+    )
