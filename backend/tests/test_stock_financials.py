@@ -94,6 +94,52 @@ def test_income_service_keeps_cumulative_and_derives_single_quarter():
     assert "单季" in payload["summary"]
 
 
+class RecordingCollector(FakeCollector):
+    def __init__(self, *, income=None) -> None:
+        super().__init__(income=income)
+        self.requested_limits: list[int] = []
+
+    def collect_income_statements(self, thscode, *, period="quarterly", limit=6):
+        self.requested_limits.append(limit)
+        return self.income[:limit]
+
+
+def test_service_fetches_one_extra_quarter_so_the_oldest_returned_row_is_derivable():
+    q2, q1 = income_rows()
+    q3 = HithinkIncomeStatementFact(
+        thscode="600519.SH",
+        fiscal_year=2026,
+        fiscal_period="Q3",
+        report_date=date(2026, 10, 25),
+        period_end=date(2026, 9, 30),
+        operating_income=130_000_000_000.00,
+        net_profit=65_000_000_000.00,
+        parent_holder_net_profit=63_000_000_000.00,
+        basic_eps=50.00,
+        operating_costs=13_000_000_000.00,
+        operating_profit=88_000_000_000.00,
+    )
+    collector = RecordingCollector(income=[q3, q2, q1])
+
+    payload = build_stock_financials_facts(
+        symbol="600519",
+        statement="income",
+        limit=2,
+        collector=collector,
+        now=NOW,
+    )
+
+    assert collector.requested_limits == [3]
+    assert len(payload["rows"]) == 2
+    assert payload["rows"][0]["operating_income_single_quarter"] == pytest.approx(
+        130_000_000_000.00 - 90_703_260_964.48
+    )
+    assert payload["rows"][1]["operating_income_single_quarter"] == pytest.approx(
+        36_794_008_743.97
+    )
+    assert not any("最早季度" in warning for warning in payload["warnings"])
+
+
 def test_balance_sheet_has_no_single_quarter_fields():
     payload = build_stock_financials_facts(
         symbol="600519",

@@ -93,6 +93,11 @@ def build_stock_financials_facts(
     if normalized_period not in {"quarterly", "annual"}:
         raise ValueError("period must be quarterly or annual")
     normalized_limit = max(1, min(limit, 20))
+    fetch_limit = normalized_limit
+    if normalized_statement in SINGLE_QUARTER_STATEMENTS and normalized_period == "quarterly":
+        # One extra report keeps the oldest returned quarter derivable; the extra
+        # row is dropped after single-quarter values are calculated.
+        fetch_limit = min(normalized_limit + 1, 20)
     thscode = _to_thscode(symbol)
     active_collector = collector or HithinkFinanceCollector()
     method_name = STATEMENT_COLLECTORS[normalized_statement]
@@ -100,7 +105,7 @@ def build_stock_financials_facts(
         getattr(active_collector, method_name)(
             thscode,
             period=normalized_period,
-            limit=normalized_limit,
+            limit=fetch_limit,
         ),
         key=lambda item: (item.period_end, item.report_date),
         reverse=True,
@@ -113,7 +118,7 @@ def build_stock_financials_facts(
             peer_rows=facts,
         )
         for fact in facts
-    ]
+    ][:normalized_limit]
     latest = facts[0] if facts else None
     data_missing: list[str] = []
     warnings: list[str] = []
@@ -124,7 +129,7 @@ def build_stock_financials_facts(
         and _missing_all_single_quarter(row, normalized_statement)
         for row in rows
     ):
-        warnings.append("部分季度缺少上一季度累计值，无法推算单季值。")
+        warnings.append("返回窗口内最早季度缺少上一季度累计值，无法推算该季度单季值。")
     warnings.append(report_date_warning)
     return {
         "symbol": _plain_symbol(symbol),
