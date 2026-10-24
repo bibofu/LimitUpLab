@@ -38,14 +38,11 @@ from app.collectors.first_board_enrichment_collector import (
     collect_preferred_dragon_tiger_snapshot,
 )
 from app.models import (
-    AgentEvaluationResponse,
     DailyBoardPromotionStat,
     FinanceNewsFacts,
-    FirstBoardCriticResponse,
     FirstBoardRating,
     LimitUpEvent,
     MarketIndexTrendFacts,
-    PredictionQualityAuditResponse,
     SectorPerformanceFacts,
     SectorStockRankingFacts,
     StockActivityFacts,
@@ -55,7 +52,6 @@ from app.models import (
 from app.repositories import (
     FirstBoardRepository,
     RecommendationIntelligenceRepository,
-    ScoringPolicyRepository,
     StockNewsRepository,
 )
 from app.services.analysis import (
@@ -64,11 +60,7 @@ from app.services.analysis import (
     summarize_market,
 )
 from app.services.daily_promotion import build_daily_promotion_report
-from app.services.evaluation_agent import build_agent_evaluation
 from app.services.finance_news import collect_finance_news
-from app.services.first_board_critic import build_first_board_critic
-from app.services.prediction_quality_audit import build_prediction_quality_audit
-from app.services.rating_backtest import build_rating_backtest
 from app.services.sector_performance import build_sector_performance
 from app.services.sector_stock_ranking import build_sector_stock_ranking
 from app.services.stock_kline import build_stock_kline_facts
@@ -82,7 +74,6 @@ from app.services.post_limit import (
     build_post_limit_statistics,
 )
 from app.services.stock_news import collect_stock_news
-from app.services.scoring_policy_optimizer import build_scoring_policy_registry
 from app.agents.review_agent import build_review_agent_report
 
 
@@ -120,12 +111,7 @@ V1_CLOSED_MARKET_TOOL_NAMES = frozenset(
         "post_limit_screen",
         "post_limit_path",
         "post_limit_statistics",
-        "prediction_quality_audit",
-        "rating_backtest",
-        "first_board_critic",
-        "rating_evaluation",
         "review_high_score_picks",
-        "scoring_policy_status",
     }
 )
 
@@ -1504,188 +1490,6 @@ class AgentToolRegistry:
             self._stock_name_directory = {}
         return self._stock_name_directory
 
-    def rating_backtest(
-        self,
-        start_date: date,
-        end_date: date,
-        failure_limit: int = 8,
-    ) -> ToolResult:
-        """Return rating backtest and self-evaluation facts."""
-
-        response = build_rating_backtest(
-            events=self.events,
-            start_date=start_date,
-            end_date=end_date,
-            first_board_repository=self.first_board_repository,
-            failure_limit=failure_limit,
-        )
-        trace_output = {
-            "start_date": response.start_date.isoformat(),
-            "end_date": response.end_date.isoformat(),
-            "sample_size": response.sample_size,
-            "outcome_ready_count": response.outcome_ready_count,
-            "buckets": [bucket.model_dump(mode="json") for bucket in response.buckets],
-            "failure_sample_count": len(response.failure_samples),
-        }
-        return ToolResult(
-            name="rating_backtest",
-            input={
-                "start_date": start_date.isoformat(),
-                "end_date": end_date.isoformat(),
-                "failure_limit": failure_limit,
-            },
-            output=response,
-            summary=(
-                f"{response.start_date.isoformat()} 至 {response.end_date.isoformat()} "
-                f"回测 {response.sample_size} 个首板评分样本，"
-                f"{response.outcome_ready_count} 个次日介入结果可用。"
-            ),
-            trace_output=trace_output,
-        )
-
-    def prediction_quality_audit(
-        self,
-        start_date: date,
-        end_date: date,
-        scoring_version: str | None = None,
-        top_k: int = 10,
-    ) -> ToolResult:
-        """Return prediction coverage, baselines and v3 readiness facts."""
-
-        response: PredictionQualityAuditResponse = build_prediction_quality_audit(
-            events=self.events,
-            start_date=start_date,
-            end_date=end_date,
-            first_board_repository=self.first_board_repository,
-            scoring_version=scoring_version,
-            top_k=top_k,
-        )
-        trace_output = {
-            "start_date": response.start_date.isoformat(),
-            "end_date": response.end_date.isoformat(),
-            "audited_scoring_version": response.audited_scoring_version,
-            "raw_prediction_rows": response.raw_prediction_rows,
-            "canonical_prediction_count": response.canonical_prediction_count,
-            "complete_next_day_trade_date_count": (
-                response.complete_next_day_trade_date_count
-            ),
-            "next_day_outcome_coverage_rate": (
-                response.next_day_outcome_coverage_rate
-            ),
-            "benchmarks": [
-                item.model_dump(mode="json") for item in response.benchmarks
-            ],
-            "policy_status": response.policy_status.model_dump(mode="json"),
-        }
-        return ToolResult(
-            name="prediction_quality_audit",
-            input={
-                "start_date": start_date.isoformat(),
-                "end_date": end_date.isoformat(),
-                "scoring_version": scoring_version,
-                "top_k": top_k,
-            },
-            output=response,
-            summary=(
-                f"审计 {response.prediction_trade_date_count} 个预测日，"
-                f"{response.complete_next_day_trade_date_count} 日 Top{response.top_k} "
-                f"结果完整，次日覆盖率 {response.next_day_outcome_coverage_rate:.1%}。"
-            ),
-            trace_output=trace_output,
-        )
-
-    def first_board_critic(
-        self,
-        symbol: str,
-        trade_date: date | None = None,
-    ) -> ToolResult:
-        """Return critic review facts for one first-board rating."""
-
-        response: FirstBoardCriticResponse = build_first_board_critic(
-            events=self.events,
-            symbol=symbol,
-            trade_date=trade_date,
-            first_board_repository=self.first_board_repository,
-        )
-        trace_output = {
-            "symbol": response.symbol,
-            "name": response.name,
-            "trade_date": response.trade_date.isoformat(),
-            "verdict": response.verdict,
-            "rating": response.rating,
-            "score": response.score,
-            "original_confidence": response.original_confidence,
-            "suggested_confidence": response.suggested_confidence,
-            "counter_evidence_count": len(response.counter_evidence),
-            "missing_data_count": len(response.missing_data),
-        }
-        return ToolResult(
-            name="first_board_critic",
-            input={
-                "symbol": symbol,
-                "trade_date": trade_date.isoformat() if trade_date else None,
-            },
-            output=response,
-            summary=(
-                f"{response.name}({response.symbol}) Critic verdict={response.verdict}, "
-                f"confidence {response.original_confidence:.0%}->{response.suggested_confidence:.0%}."
-            ),
-            trace_output=trace_output,
-        )
-
-    def rating_evaluation(
-        self,
-        start_date: date,
-        end_date: date,
-        limit: int = 30,
-    ) -> ToolResult:
-        """Return Evaluation Agent facts for persisted first-board predictions."""
-
-        response: AgentEvaluationResponse = build_agent_evaluation(
-            events=self.events,
-            start_date=start_date,
-            end_date=end_date,
-            first_board_repository=self.first_board_repository,
-            limit=limit,
-        )
-        trace_output = {
-            "start_date": response.start_date.isoformat(),
-            "end_date": response.end_date.isoformat(),
-            "prediction_count": response.prediction_count,
-            "outcome_ready_count": response.outcome_ready_count,
-            "source_counts": response.source_counts,
-            "label_counts": response.label_counts,
-            "top_evaluations": [
-                {
-                    "symbol": item.symbol,
-                    "name": item.name,
-                    "trade_date": item.trade_date.isoformat(),
-                    "rating": item.rating,
-                    "score": item.score,
-                    "prediction_source": item.prediction_source,
-                    "evaluation_label": item.evaluation_label,
-                    "next_open_to_close_pct": item.next_open_to_close_pct,
-                    "next_open_to_low_pct": item.next_open_to_low_pct,
-                }
-                for item in response.evaluations[:5]
-            ],
-        }
-        return ToolResult(
-            name="rating_evaluation",
-            input={
-                "start_date": start_date.isoformat(),
-                "end_date": end_date.isoformat(),
-                "limit": limit,
-            },
-            output=response,
-            summary=(
-                f"Evaluation {response.start_date.isoformat()} to "
-                f"{response.end_date.isoformat()}: {response.prediction_count} predictions, "
-                f"{response.outcome_ready_count} ready outcomes."
-            ),
-            trace_output=trace_output,
-        )
-
     def review_high_score_picks(
         self,
         start_date: date,
@@ -1753,48 +1557,6 @@ class AgentToolRegistry:
                 f"Review Agent checked {response.sample_size} high-score picks "
                 f"from {response.start_date.isoformat()} to {response.end_date.isoformat()}, "
                 f"with observations through {observation_date.isoformat()}."
-            ),
-            trace_output=trace_output,
-        )
-
-    def scoring_policy_status(self) -> ToolResult:
-        """Return the current Champion and latest constrained optimization result."""
-
-        repository = ScoringPolicyRepository(
-            self.first_board_repository.database_url
-        )
-        registry = build_scoring_policy_registry(repository=repository, limit=10)
-        latest = repository.get_latest_optimization_run()
-        payload = {
-            "champion": registry.champion.model_dump(mode="json"),
-            "policy_count": len(registry.policies),
-            "challengers": [
-                item.model_dump(mode="json")
-                for item in registry.policies
-                if item.status == "challenger"
-            ][:5],
-            "latest_optimization": latest.model_dump(mode="json") if latest else None,
-        }
-        latest_comparison = latest.comparison if latest else None
-        trace_output = {
-            "champion_version": registry.champion.version,
-            "policy_count": len(registry.policies),
-            "challenger_count": len(payload["challengers"]),
-            "latest_challenger": (
-                latest.challenger_policy.version if latest else None
-            ),
-            "promotion_eligible": (
-                latest_comparison.promotion_eligible if latest_comparison else None
-            ),
-            "activated": latest.activated if latest else None,
-        }
-        return ToolResult(
-            name="scoring_policy_status",
-            input={},
-            output=payload,
-            summary=(
-                f"Champion {registry.champion.version}; "
-                f"{len(payload['challengers'])} recent challengers registered."
             ),
             trace_output=trace_output,
         )

@@ -92,12 +92,7 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 | `stock_kline` | 查询个股近期 K 线和衍生指标 |
 | `stock_news` | 查询指定股票近 1 至 30 天的结构化个股资讯，保留来源、时间和链接 |
 | `stock_activity` | 汇总指定股票的收盘走势、近期涨停记录、评分补充事实和个股资讯 |
-| `first_board_critic` | 复核评分是否过度乐观或证据不足 |
-| `rating_backtest` | 查看评分分桶历史表现 |
-| `rating_evaluation` | 评价历史预测结果和错误样本 |
 | `review_high_score_picks` | 追踪每日评分 Top10 后续走势，并对比同期全部首板的1进2成功率 |
-| `prediction_quality_audit` | 审计预测来源、Outcome 覆盖和基线表现 |
-| `scoring_policy_status` | 查询 Champion、Challenger 和晋级原因 |
 
 生产环境依赖上一步名单的查询由模型在观察结果后发起下一轮工具调用；筛选、排序和聚合直接基于工具返回的结构化 rows 与字段说明，模型不再维护 evidence ID 或表达式 DSL。
 
@@ -524,7 +519,7 @@ Linux 使用对应虚拟环境的 `python scripts/check_project.py`。也可通�
 
 该入口依次运行完整 pytest、全部前端逻辑测试以及 TypeScript/Vite 生产构建。每次使用独立数据库和测试目录，关闭真实 LLM，并在 `output/validation/<运行标识>/` 保存各步骤日志、JUnit 和 `summary.json`。任一步失败都会使整体退出码非零，但其余独立检查仍会执行。它不替代浏览器端业务验收、部署检查或压力测试。
 
-聊天评测框架已删除；离线回归不代表真实模型回答质量或稳定性已验收。预测结果复盘使用的 Evaluation Agent 和 `rating_evaluation` 仍保留，两者用途不同。
+聊天评测框架已删除；离线回归不代表真实模型回答质量或稳定性已验收。预测结果复盘使用的 Evaluation Agent 及其 HTTP 接口仍保留，两者用途不同；该能力不再作为 Agent 工具暴露。
 
 GitHub Actions 配置在 `.github/workflows/validate.yml`，对 PR、main、codex 分支及 `v*` 标签推送运行 Windows/Linux 两套检查，使用相同验收入口，不需要行情或模型密钥。标签检查通过后触发生产部署，流程见 [标签自动部署说明](deploy/Tag_Deployment.md)。失败日志保留 7 天；测试数据库不上传，分支保护需在仓库设置中配置。
 

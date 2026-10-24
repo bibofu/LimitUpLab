@@ -118,11 +118,6 @@ def build_agent_suggested_questions(
             "最近 5 日连板晋级率如何变化？",
             "对照一进二 Top10 的实际晋级表现",
         ),
-        "prediction_quality_audit": (
-            "当前预测样本和 Outcome 完整度如何？",
-            "Top10 与全市场基线的差异是什么？",
-            "哪些结论仍然因为样本不足不能成立？",
-        ),
         "data_availability": (
             "本地最新可用交易日是哪天？",
             "总结本地最新交易日的首板结构",

@@ -348,30 +348,4 @@ RESEARCH_TOOL_SCHEMAS = [
         },
         returns="Versioned recomputed historical cohorts, outcome statistics, grouping, coverage and sample-quality warning.",
     ),
-    AgentToolSchema(
-        name="prediction_quality_audit",
-        time_mode="historical",
-        dates=("start_date", "end_date"),
-        description=(
-            "审计首板预测的数据覆盖、版本/来源重复、时间成熟度、Top10 表现和简单基线，"
-            "用于回答预测质量、准确率可信度和评分 v3 准备度问题。"
-        ),
-        args_schema={
-            "type": "object",
-            "properties": {
-                "start_date": {"type": "string", "description": "YYYY-MM-DD inclusive start date."},
-                "end_date": {"type": "string", "description": "YYYY-MM-DD inclusive end date."},
-                "scoring_version": {
-                    "type": ["string", "null"],
-                    "description": "Scoring version; omit for current Champion.",
-                },
-                "top_k": {"type": "integer", "minimum": 3, "maximum": 30},
-            },
-            "required": ["start_date", "end_date"],
-        },
-        returns=(
-            "Source-aware prediction coverage, date maturity, deterministic "
-            "baselines, findings and v3 promotion readiness."
-        ),
-    ),
 ]

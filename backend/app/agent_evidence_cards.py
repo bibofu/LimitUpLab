@@ -30,10 +30,6 @@ def _evidence_title_kind(tool_name: str) -> tuple[str, str]:
         "post_limit_path": ("涨停后逐日走势", "tool"),
         "post_limit_statistics": ("涨停后历史统计", "evaluation"),
         "first_board_filter": ("首板条件筛选", "candidate_pool"),
-        "first_board_critic": ("评分反证与风险", "critic"),
-        "rating_backtest": ("评分历史回测", "evaluation"),
-        "rating_evaluation": ("Agent 自我评价", "evaluation"),
-        "scoring_policy_status": ("评分策略迭代", "evaluation"),
         "limit_up_event_dates": ("本地数据日期", "data_availability"),
     }
     return mapping.get(tool_name, (tool_name, "tool"))
@@ -383,7 +379,6 @@ def _repair_reason(
 
     reasons = {
         "first_board_ratings": "用户问题需要评分或候选池事实，planner 未覆盖，后端补充 first_board_ratings。",
-        "first_board_critic": "用户要求反证、风险或可靠性检查，后端补充 first_board_critic。",
         "limit_up_event_dates": "用户询问本地是否有某日数据，后端补充 limit_up_event_dates。",
         "market_event_pool": "用户询问涨停、跌停或炸板明细，后端补充对应市场事件。",
         "limit_up_events": "用户询问当天涨停/连板/炸板明细，后端补充 limit_up_events。",
@@ -395,9 +390,6 @@ def _repair_reason(
         "finance_news": "用户询问最新财经快讯，后端补充 finance_news。",
         "stock_news": "用户询问指定股票的近期资讯，后端补充 stock_news。",
         "stock_activity": "用户询问指定股票的近期动态，后端补充 stock_activity。",
-        "rating_backtest": "用户询问评分效果或回测，后端补充 rating_backtest。",
-        "rating_evaluation": "用户询问模型复盘或错判样本，后端补充 rating_evaluation。",
-        "scoring_policy_status": "用户询问评分策略或权重迭代，后端补充 scoring_policy_status。",
     }
     return reasons.get(tool_name, f"后端补充 {tool_name} 以满足问题所需事实。")
 

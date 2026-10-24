@@ -14,7 +14,7 @@
 8. `backend/app/agents/tool_catalog.py`：从契约生成 Pydantic 参数模型和 LangChain StructuredTool。
 9. `backend/app/agents/tool_payload.py`：payload / collection 提取。
 10. `backend/app/agents/run_lifecycle.py`：durable run journal、取消和租约。
-11. `backend/app/agents/tools.py`：25 个业务工具实现。
+11. `backend/app/agents/tools.py`：20 个业务工具实现。
 12. `backend/app/routers/react_chat.py`：HTTP/SSE、owner、幂等和 worker。
 
 ## 关键边界

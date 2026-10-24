@@ -12,7 +12,7 @@ from typing import Any
 
 from pydantic import BaseModel, ConfigDict, Field
 
-from app.models import LimitUpEvent, ScoringPolicy
+from app.models import LimitUpEvent
 
 
 class OutputModel(BaseModel):
@@ -505,15 +505,6 @@ class RecentReturnsPayload(OutputModel):
     items: list[RecentLimitUpReturnRow] = Field(description="可计算收益的候选")
     missing_items: list[dict[str, Any]] = Field(description="未计算股票及逐项原因")
     data_missing: list[str] = Field(description="数据缺口")
-
-
-class ScoringPolicyStatusPayload(OutputModel):
-    champion: ScoringPolicy = Field(description="当前Champion策略")
-    policy_count: int = Field(description="已注册策略数")
-    challengers: list[ScoringPolicy] = Field(description="近期Challenger策略")
-    latest_optimization: dict[str, Any] | None = Field(
-        default=None, description="最近一次样本外优化结果，含比较指标和晋级门槛"
-    )
 
 
 # ---------------------------------------------------------------------------

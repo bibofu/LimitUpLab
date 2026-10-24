@@ -26,20 +26,14 @@ from app.agents.tool_output_models import (
     PostLimitStatisticsPayload,
     RecentLimitUpReturnRow,
     RecentReturnsPayload,
-    ScoringPolicyStatusPayload,
 )
 from app.models import (
-    AgentEvaluationItem,
-    AgentEvaluationResponse,
     DailyBoardPromotionStat,
     FinanceNewsFacts,
     FinanceNewsItem,
-    FirstBoardCriticResponse,
     LimitUpEvent,
     MarketIndexTrendFacts,
     MarketIndexTrendItem,
-    PredictionQualityAuditResponse,
-    RatingBacktestResponse,
     ReviewAgentReportResponse,
     SectorPerformanceFacts,
     SectorRankingItem,
@@ -108,14 +102,7 @@ TOOL_OUTPUT_SPECS: dict[str, OutputSpec] = {
         row_model=PostLimitPathRow, payload_model=PostLimitPathPayload
     ),
     "post_limit_statistics": OutputSpec(payload_model=PostLimitStatisticsPayload),
-    "prediction_quality_audit": OutputSpec(payload_model=PredictionQualityAuditResponse),
-    "rating_backtest": OutputSpec(payload_model=RatingBacktestResponse),
-    "first_board_critic": OutputSpec(payload_model=FirstBoardCriticResponse),
-    "rating_evaluation": OutputSpec(
-        row_model=AgentEvaluationItem, payload_model=AgentEvaluationResponse
-    ),
     "review_high_score_picks": OutputSpec(payload_model=ReviewAgentReportResponse),
-    "scoring_policy_status": OutputSpec(payload_model=ScoringPolicyStatusPayload),
     "finance_news": OutputSpec(
         row_model=FinanceNewsItem, payload_model=FinanceNewsFacts
     ),

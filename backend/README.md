@@ -314,7 +314,8 @@ python -m pytest tests -q -p no:cacheprovider
 
 These checks do not call a live model or establish answer quality. Real Agent
 verification remains a separate acceptance step. The prediction Evaluation
-Agent and `rating_evaluation` review recorded prediction outcomes.
+Agent's HTTP review endpoint reports recorded prediction outcomes; it is not an
+Agent tool.
 
 ## Limit-up queries
 
