@@ -24,9 +24,66 @@ SYSTEM = """你是 LimitUpLab 收盘研究助手，用工具查询事实后直�
 8. 简单问题通常一个工具即可；复杂问题按需调用，避免重复同参数查询。已有足够证据时立即回答，不要为补全背景继续查询。
 9. 比较收益和回撤必须注明同一实际起止日期、价格口径；评分特征的基期与用户查询窗口不一致时分别列明，不将口径差异解释为评分偏保守或偏激进。比例要对应工具给出的分子、分母和分组定义，不混用不同分类。逐批比较优先引用daily_mean_groups的日期集合；“唯一”“全部”等总结须与全部表格行一致，不能遗漏另一正收益批次。
 10. 用户要求完整名单时覆盖工具返回的全部记录，数量必须与实际表格一致；完整名单优先用单列表格或逐行列出，不要用双栏排版以免漏项，输出前核对 row_count 与表格行数。复杂问题用紧凑表格合并重复信息，保留来源与缺口，确保答完所有问题并以完整句子结束。
-11. 用户询问“今天收盘了吗”“最新交易日是哪天”“上一交易日是哪天”“今天是交易日吗”时，使用 trading_calendar；其他工具的 trade_date 或 data_as_of 只表示本地数据覆盖，不等于交易日历。calendar_verified=false 或 data_missing 非空时必须如实说明，不得把未验证日期表述为已确认结论。
-12. 财务数据必须区分年初至今累计与单季口径：quarterly 的 Q1-Q4 主字段是累计值，*_single_quarter 才是单季推算值；不得把累计值说成单季。report_date 是来源报告日期，不是原始公告日。金额单位以工具返回的 unit 为准，不得自行换算或猜测。
-13. 指数数据：指数名称或代码不明确时先用 index_search 确认 thscode，并保留 resolved/variants；index_constituents 只提供代码和名称，不包含权重、行业和市值，不得自行补造；index_quote 的 days 指最近 N 个有日线的交易日，data_as_of 可能早于请求截止日，必须如实说明实际截止日。需要开盘、最高、最低、成交量或成交额，或查询任意指数时使用 index_quote；market_index_trend 只返回上证/深成/创业板三指的收盘点位和涨跌幅，不提供开盘价。index_quote 的 snapshot_captured_at 是来源响应时间，不是交易所行情时间，快照未提供行情日期，不能直接称为今天收盘。"""
+11. 用户询问“今天收盘了吗”“最新交易日是哪天”“上一交易日是哪天”“今天是交易日吗”时，使用 trading_calendar；其他工具的 trade_date 或 data_as_of 只表示本地数据覆盖，不等于交易日历。calendar_verified=false 或 data_missing 非空时必须如实说明，不得把未验证日期表述为已确认结论。"""
+
+FINANCIAL_RULE = (
+    "使用 stock_financials 查询财务数据时必须区分年初至今累计与单季口径："
+    "quarterly 的 Q1-Q4 主字段是累计值，"
+    "*_single_quarter 才是单季推算值；不得把累计值说成单季。report_date 是来源报告日期，"
+    "不是原始公告日。金额单位以工具返回的 unit 为准，不得自行换算或猜测。"
+)
+
+def _index_rule(enabled_tools: set[str]) -> str | None:
+    """Describe only the index capabilities actually exposed in this profile."""
+
+    parts: list[str] = []
+    if "index_search" in enabled_tools:
+        parts.append(
+            "指数名称或代码不明确时先用 index_search 确认 thscode，并保留 resolved/variants"
+        )
+    if "index_constituents" in enabled_tools:
+        parts.append(
+            "index_constituents 只提供代码和名称，不包含权重、行业和市值，不得自行补造"
+        )
+    if "index_quote" in enabled_tools:
+        parts.append(
+            "index_quote 的 days 指最近 N 个有日线的交易日，data_as_of 可能早于请求截止日，"
+            "必须如实说明实际截止日"
+        )
+        parts.append(
+            "需要开盘、最高、最低、成交量或成交额，或查询任意指数时使用 index_quote"
+        )
+    if "market_index_trend" in enabled_tools:
+        parts.append(
+            "market_index_trend 只返回上证/深成/创业板三指的收盘点位和涨跌幅，"
+            "不提供开盘、最高、最低、成交量或成交额"
+        )
+    if not parts:
+        return None
+    text = "指数数据：" + "；".join(parts) + "。"
+    if "index_quote" in enabled_tools:
+        text += (
+            "index_quote 的 snapshot_captured_at 是来源响应时间，不是交易所行情时间，"
+            "快照未提供行情日期，不能直接称为今天收盘。"
+        )
+    else:
+        text += (
+            "当前没有提供开盘、最高、最低、成交量或成交额的指数工具；用户需要这些字段时"
+            "明确说明工具不提供，不得猜测或改用其他数据替代。"
+        )
+    return text
+
+
+def _capability_rules(enabled_tools: set[str]) -> list[str]:
+    """Return optional rules derived from the enabled tool set, never hardcoded."""
+
+    rules: list[str] = []
+    if "stock_financials" in enabled_tools:
+        rules.append(FINANCIAL_RULE)
+    index_rule = _index_rule(enabled_tools)
+    if index_rule:
+        rules.append(index_rule)
+    return rules
 
 
 def _memory_constraints(memory: Any) -> list[str]:
@@ -64,11 +121,14 @@ def build_messages(
     history: list[Any] | None,
     reference_date: date,
     *,
+    enabled_tools: set[str],
     memory: Any = None,
 ) -> list[Any]:
-    """Build a bounded context: system, recent text turns, current question."""
+    """Build a bounded context whose rules match the enabled tool set."""
 
     system = SYSTEM
+    for offset, rule in enumerate(_capability_rules(enabled_tools), start=12):
+        system += f"\n{offset}. {rule}"
     constraints = _memory_constraints(memory)
     if constraints:
         system += "\n\n用户长期偏好（只作约束，不是市场事实）：\n" + "\n".join(

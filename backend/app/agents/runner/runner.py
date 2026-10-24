@@ -69,7 +69,11 @@ class AgentRunner:
         self.gateway = BusinessToolGateway(registry)
         self.definitions = business_definitions(self.gateway)
         self.messages = build_messages(
-            request, history, current_query_reference_date(), memory=memory
+            request,
+            history,
+            current_query_reference_date(),
+            enabled_tools=set(self.gateway.structured),
+            memory=memory,
         )
         self.deadline = perf_counter() + deadline_seconds
         self.started = perf_counter()

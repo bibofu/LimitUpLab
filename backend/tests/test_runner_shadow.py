@@ -10,7 +10,7 @@ from langchain_core.messages import AIMessage, ToolMessage
 
 from app.agents.runner import AgentRunner
 from app.agents.runner.guardrails import MAX_MODEL_ROUNDS, REFUSAL
-from app.agents.tools import AgentToolRegistry
+from app.agents.tools import EXTENDED_AGENT_PROFILE, AgentToolRegistry
 from app.models import AgentChatRequest
 from app.services.llm_provider import LLMResult, capture_llm_usage, current_llm_usage
 from app.services.sample_data import SAMPLE_EVENTS
@@ -121,6 +121,26 @@ def test_runner_records_round_context_and_definition_cost():
     assert second.context["tool_results"] == 1
     assert second.context["message_chars"] > first.context["message_chars"]
     assert second.cached_tokens == 600
+
+
+def test_runner_prompt_matches_the_enabled_tool_set():
+    provider = ScriptedProvider([AIMessage(content="你好。")])
+    AgentRunner(request("你好"), registry(), provider).run()
+    system = provider.calls[0][0].content
+
+    assert "index_quote" in system
+    assert "stock_financials" not in system
+
+    extended = ScriptedProvider([AIMessage(content="你好。")])
+    extended_registry = AgentToolRegistry(
+        events=SAMPLE_EVENTS,
+        first_board_repository=SimpleNamespace(database_url=None),
+        hithink_collector=SimpleNamespace(),
+        profile=EXTENDED_AGENT_PROFILE,
+    )
+    AgentRunner(request("你好"), extended_registry, extended).run()
+
+    assert "stock_financials" in extended.calls[0][0].content
 
 
 def test_runner_answers_without_a_tool():

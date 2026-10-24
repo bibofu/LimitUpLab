@@ -1,5 +1,13 @@
 # Agent 问答回归记录
 
+## 2026-10-25：提示词引用未开放工具，指数开盘价问题无法完成
+
+- 问题：上证指数最近3个交易日每天的开盘和收盘点位分别是多少？
+- 原表现：回答只给出收盘点位，明确说当前工具不提供开盘价，但 `task_status` 仍为 complete；另一次运行尝试调用 `index_quote`，因默认 profile 未开放而失败，结果降为 partial。此前“上证50成分股有多少只”也只能回答“没有该工具”。
+- 原因：默认 `v1_close_review` 的 allowlist 不含 `index_search`、`index_quote`、`index_constituents`，但系统提示第 13 条仍要求“需要开盘/最高/最低时使用 `index_quote`”；财报规则同样指向未开放的 `stock_financials`。工具白名单和提示词是两份手写清单，新增工具时没有同步。
+- 修复：三个指数工具加入 v1 allowlist（v1 开放 24 个，财报仍只在 extended）；财务和指数规则改为按当前启用工具集生成，未开放 `index_quote` 时要求明确说明“当前没有提供开盘价的指数工具”，不再引用不可用工具。新增 `test_runner_prompt.py` 与 runner 级断言，覆盖 v1、extended、仅 search 三种工具集。
+- 回归：真实问答复测指数开盘+收盘题应调用 `index_quote` 并给出开盘价；`test_agent_v1_profile.py` 验证 v1 含三个指数工具且不含 `stock_financials`。
+
 ## 2026-10-25：完整成分股名单用双栏表格漏掉一只
 
 - 问题：上证50的成分股有哪些，请给出完整名单。
