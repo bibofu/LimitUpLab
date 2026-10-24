@@ -512,6 +512,123 @@ class RecentReturnsPayload(OutputModel):
 
 
 # ---------------------------------------------------------------------------
+# Index search, quotes and constituents
+# ---------------------------------------------------------------------------
+
+
+class IndexSearchRow(OutputModel):
+    """One A-share index candidate returned by the index directory."""
+
+    thscode: str = Field(description="指数代码，带市场后缀")
+    ticker: str = Field(description="数据源返回的指数 ticker")
+    name: str = Field(description="指数名称")
+    exchange: str = Field(description="交易所代码；同花顺指数可能为空")
+    asset_type: str = Field(description="数据源资产类型，当前为a-share-index")
+    category: str = Field(description="指数类别：ths_index、exchange_index或csi_index")
+    list_date: date | None = Field(default=None, description="指数发布日期；来源未提供时为null")
+
+
+class IndexSearchPayload(OutputModel):
+    """Search metadata and the deterministic preferred index match."""
+
+    query: str = Field(description="用户查询的名称或代码")
+    category: str = Field(description="本次过滤类别")
+    category_label: str = Field(description="过滤类别中文名")
+    matched_count: int = Field(description="匹配的指数数量")
+    returned_count: int = Field(description="本次返回的候选数量")
+    resolved: dict[str, Any] | None = Field(
+        default=None, description="优先解析的指数；无匹配时为null"
+    )
+    variants: list[dict[str, Any]] = Field(description="同名但代码不同的指数变体")
+    complete: bool = Field(description="是否返回了全部匹配候选")
+    data_missing: list[str] = Field(description="数据缺口代码")
+    warnings: list[str] = Field(description="消歧与来源边界说明")
+
+
+class IndexQuoteRow(OutputModel):
+    """One index daily bar in the requested window."""
+
+    trade_date: date = Field(description="交易日")
+    open: float = Field(description="开盘点位")
+    high: float = Field(description="最高点位")
+    low: float = Field(description="最低点位")
+    close: float = Field(description="收盘点位")
+    volume: float = Field(description="成交量，沿用来源单位")
+    turnover: float = Field(description="成交额，沿用来源单位")
+    change_pct: float | None = Field(
+        default=None, description="相对上一交易日收盘的涨跌幅（%）；首行为null"
+    )
+
+
+class IndexQuotePayload(OutputModel):
+    """One index snapshot and optional bounded daily-history window."""
+
+    index_name: str = Field(description="解析后的指数名称")
+    thscode: str = Field(description="解析后的指数代码")
+    category: str = Field(description="指数类别：ths_index、exchange_index或csi_index")
+    variants: list[dict[str, Any]] = Field(description="同名但代码不同的指数变体")
+    requested_days: int | None = Field(
+        default=None, description="请求的最近交易日数；仅查快照时为null"
+    )
+    requested_end_date: date = Field(description="请求的截止日期")
+    start_date: date | None = Field(default=None, description="日线窗口起始日期")
+    data_as_of: date | None = Field(default=None, description="实际数据截止日期")
+    data_fresh: bool = Field(description="数据是否覆盖请求的截止日期")
+    snapshot_last_price: float | None = Field(default=None, description="最新快照点位")
+    snapshot_change_pct: float | None = Field(default=None, description="最新快照涨跌幅（%）")
+    snapshot_open: float | None = Field(default=None, description="最新快照开盘点位")
+    snapshot_high: float | None = Field(default=None, description="最新快照最高点位")
+    snapshot_low: float | None = Field(default=None, description="最新快照最低点位")
+    snapshot_prev_close: float | None = Field(default=None, description="最新快照前收盘点位")
+    snapshot_volume: float | None = Field(default=None, description="最新快照成交量")
+    snapshot_turnover: float | None = Field(default=None, description="最新快照成交额")
+    snapshot_captured_at: str | None = Field(
+        default=None, description="最新快照抓取时间（ISO 8601，含时区）"
+    )
+    start_close: float | None = Field(default=None, description="窗口首个收盘点位")
+    end_close: float | None = Field(default=None, description="窗口最后收盘点位")
+    return_pct: float | None = Field(default=None, description="窗口累计点位涨跌幅（%）")
+    change_pct: float | None = Field(default=None, description="窗口最后一日相对前一日的涨跌幅（%）")
+    max_drawdown_pct: float | None = Field(default=None, description="窗口内收盘点位峰谷最大回撤（%）")
+    max_drawdown_peak_date: date | None = Field(default=None, description="最大回撤的峰值日期")
+    max_drawdown_trough_date: date | None = Field(default=None, description="最大回撤的谷值日期")
+    positive_days: int = Field(description="窗口内上涨交易日数")
+    negative_days: int = Field(description="窗口内下跌交易日数")
+    flat_days: int = Field(description="窗口内持平交易日数")
+    complete: bool = Field(description="是否取得请求的快照或完整日线窗口")
+    source: str = Field(description="数据来源")
+    fetched_at: str = Field(description="本次取数时间（ISO 8601）")
+    data_missing: list[str] = Field(description="数据缺口代码")
+    warnings: list[str] = Field(description="日期与来源边界说明")
+
+
+class IndexConstituentRow(OutputModel):
+    """One A-share constituent of a resolved index."""
+
+    symbol: str = Field(description="六位股票代码")
+    thscode: str = Field(description="带市场后缀的股票标识")
+    name: str = Field(description="股票名称")
+
+
+class IndexConstituentsPayload(OutputModel):
+    """Constituent list metadata with explicit coverage boundaries."""
+
+    index_name: str = Field(description="解析后的指数名称")
+    thscode: str = Field(description="解析后的指数代码")
+    category: str = Field(description="指数类别：ths_index、exchange_index或csi_index")
+    variants: list[dict[str, Any]] = Field(description="同名但代码不同的指数变体")
+    member_count: int = Field(description="来源返回的成分股总数")
+    returned_count: int = Field(description="本次返回的成分股数量")
+    complete: bool = Field(description="是否返回了来源的全部成分股")
+    truncated: bool = Field(description="是否因请求上限截断")
+    has_weights: bool = Field(description="来源是否提供权重；当前固定为false")
+    source: str = Field(description="数据来源")
+    fetched_at: str = Field(description="本次取数时间（ISO 8601）")
+    data_missing: list[str] = Field(description="数据缺口代码")
+    warnings: list[str] = Field(description="权重、行业和截断边界说明")
+
+
+# ---------------------------------------------------------------------------
 # Stock financial statements
 # ---------------------------------------------------------------------------
 

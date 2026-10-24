@@ -10,6 +10,12 @@ from pydantic import BaseModel
 from app.agents.tool_output_models import (
     DragonTigerPayload,
     DragonTigerRow,
+    IndexConstituentRow,
+    IndexConstituentsPayload,
+    IndexQuotePayload,
+    IndexQuoteRow,
+    IndexSearchPayload,
+    IndexSearchRow,
     FirstBoardFilterPayload,
     FirstBoardRatingRow,
     FirstBoardRatingsPayload,
@@ -101,6 +107,15 @@ TOOL_OUTPUT_SPECS: dict[str, OutputSpec] = {
     ),
     "stock_financials": OutputSpec(
         row_model=StockFinancialRow, payload_model=StockFinancialsPayload
+    ),
+    "index_search": OutputSpec(
+        row_model=IndexSearchRow, payload_model=IndexSearchPayload
+    ),
+    "index_quote": OutputSpec(
+        row_model=IndexQuoteRow, payload_model=IndexQuotePayload
+    ),
+    "index_constituents": OutputSpec(
+        row_model=IndexConstituentRow, payload_model=IndexConstituentsPayload
     ),
     "post_limit_screen": OutputSpec(
         row_model=PostLimitCandidateRow, payload_model=PostLimitScreenPayload

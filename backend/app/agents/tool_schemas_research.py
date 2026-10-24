@@ -309,6 +309,113 @@ RESEARCH_TOOL_SCHEMAS = [
         ),
     ),
     AgentToolSchema(
+        name="index_search",
+        time_mode="retrieved_now",
+        collection="rows",
+        notes=(
+            "Tonghuashun category indices come from index catalog; broad exchange indices "
+            "come from symbol search. 沪深300 has both 000300.SH and 399300.SZ; read resolved "
+            "together with variants. Constituents never include weights."
+        ),
+        description=(
+            "把指数名称或代码解析为可查询的 thscode，支持宽基、行业、概念、地域和特色指数。"
+            "当用户问沪深300、上证50、中证500、科创50、创业板指、半导体、新能源汽车、安徽等指数时，先用本工具确认代码。"
+            "返回 resolved、同名 variants 和候选列表；存在多个同等匹配时必须结合 category 或 thscode 再查行情或成分股。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "query": {
+                    "type": "string",
+                    "description": "指数名称或代码，如沪深300、000300.SH、半导体。",
+                },
+                "category": {
+                    "type": ["string", "null"],
+                    "enum": [
+                        "industry", "cn_concept", "region", "tszs", "broad", "all", None,
+                    ],
+                    "description": "可选过滤：同花顺行业/概念/地域/特色，或宽基交易所指数。",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 50,
+                    "description": "返回候选数，默认20。",
+                },
+            },
+            "required": ["query"],
+        },
+        returns="Resolved index identity, same-name variants, candidate rows and ambiguity warnings.",
+    ),
+    AgentToolSchema(
+        name="index_quote",
+        time_mode="historical_or_live",
+        collection="rows",
+        notes=(
+            "days returns the last N trading days with daily bars; omit days for snapshot only. "
+            "data_as_of may be earlier than requested_end_date when that date has no bar. "
+            "return_pct and max_drawdown are computed from the returned close series."
+        ),
+        description=(
+            "查询一个指数的当前快照和/或最近若干交易日日线，返回点位、涨跌幅、成交额、区间涨跌、"
+            "上涨/下跌天数和最大回撤。适合回答沪深300今天涨跌、上证50最近一个月走势、半导体指数近期表现等问题。"
+            "days省略时只返回当前快照；指数不明确时先用 index_search。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "index": {
+                    "type": "string",
+                    "description": "指数名称或thscode。",
+                },
+                "days": {
+                    "type": ["integer", "null"],
+                    "minimum": 2,
+                    "maximum": 250,
+                    "description": "最近N个交易日；省略则只返回快照。",
+                },
+                "end_date": {
+                    "type": ["string", "null"],
+                    "description": "YYYY-MM-DD，日线窗口截止日；省略用最新快照日期。",
+                },
+            },
+            "required": ["index"],
+        },
+        returns="Resolved index identity, snapshot fields, daily bars and deterministic window statistics.",
+    ),
+    AgentToolSchema(
+        name="index_constituents",
+        time_mode="retrieved_now",
+        collection="rows",
+        notes=(
+            "The provider returns only symbol/thscode/name. It does not provide weights, industry "
+            "or market cap; never invent them. member_count is the source total; complete=false "
+            "means the requested limit truncated the list."
+        ),
+        description=(
+            "查询一个指数的完整成分股名单，支持沪深300、上证50、中证500、科创50及行业/概念/地域/特色指数。"
+            "返回代码、名称、总成分股数和是否截断；来源不提供权重、行业和市值，不得自行补造。"
+            "指数不明确时先用 index_search。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "index": {
+                    "type": "string",
+                    "description": "指数名称或thscode。",
+                },
+                "limit": {
+                    "type": "integer",
+                    "minimum": 1,
+                    "maximum": 2000,
+                    "description": "返回上限，默认1000；超过来源总数时返回全部。",
+                },
+            },
+            "required": ["index"],
+        },
+        returns="Resolved index identity, constituent rows, total/returned counts, truncation and weight-availability boundary.",
+    ),
+    AgentToolSchema(
         name="post_limit_screen",
         time_mode="historical",
         dates=("data_as_of",),

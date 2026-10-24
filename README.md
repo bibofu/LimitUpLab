@@ -92,6 +92,9 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 | `daily_board_promotion` | 统计近 5 日总晋级率、首板到二板率、连板梯队及成功股票明细 |
 | `stock_kline` | 查询个股近期 K 线和衍生指标 |
 | `stock_financials` | 查询个股利润表、资产负债表、现金流量表，区分年初至今累计与单季推算口径（仅 `extended` profile 开放） |
+| `index_search` | 将指数名称或代码解析为 thscode，支持宽基、行业、概念、地域和特色指数 |
+| `index_quote` | 查询任意指数的当前快照和最近 N 个交易日走势 |
+| `index_constituents` | 查询任意指数的成分股名单；来源不含权重、行业和市值 |
 | `stock_news` | 查询指定股票近 1 至 30 天的结构化个股资讯，保留来源、时间和链接 |
 | `stock_activity` | 汇总指定股票的收盘走势、近期涨停记录、评分补充事实和个股资讯 |
 | `review_high_score_picks` | 追踪每日评分 Top10 后续走势，并对比同期全部首板的1进2成功率 |

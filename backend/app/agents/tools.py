@@ -66,6 +66,11 @@ from app.services.sector_performance import build_sector_performance
 from app.services.sector_stock_ranking import build_sector_stock_ranking
 from app.services.stock_kline import build_stock_kline_facts
 from app.services.stock_financials import build_stock_financials_facts
+from app.services.index_research import (
+    build_index_constituents,
+    build_index_quote,
+    search_indices,
+)
 from app.services.recent_limit_up_returns import build_recent_limit_up_returns
 from app.agents.kline_presentation import kline_agent_view
 from app.post_limit_query_contract import PostLimitQueryContract
@@ -1444,6 +1449,82 @@ class AgentToolRegistry:
                 "period": period,
                 "limit": limit,
             },
+            output=payload,
+            summary=summary,
+            trace_output=payload,
+            result_status="ok" if rows else "empty",
+        )
+
+    def index_search(
+        self,
+        query: str,
+        category: str | None = None,
+        limit: int = 20,
+    ) -> ToolResult:
+        """Resolve index names or codes to a deterministic thscode."""
+
+        payload = search_indices(
+            query=query,
+            category=category,
+            limit=limit,
+            collector=self.hithink_collector,
+        )
+        summary = payload.pop("summary")
+        rows = payload.get("rows") or []
+        return ToolResult(
+            name="index_search",
+            input={"query": query, "category": category, "limit": limit},
+            output=payload,
+            summary=summary,
+            trace_output=payload,
+            result_status="ok" if rows else "empty",
+        )
+
+    def index_quote(
+        self,
+        index: str,
+        days: int | None = None,
+        end_date: str | None = None,
+    ) -> ToolResult:
+        """Return one index snapshot and optional daily-history facts."""
+
+        payload = build_index_quote(
+            index=index,
+            days=days,
+            end_date=end_date,
+            collector=self.hithink_collector,
+        )
+        summary = payload.pop("summary")
+        has_data = (
+            payload.get("snapshot_last_price") is not None
+            or bool(payload.get("rows"))
+        )
+        return ToolResult(
+            name="index_quote",
+            input={"index": index, "days": days, "end_date": end_date},
+            output=payload,
+            summary=summary,
+            trace_output=payload,
+            result_status="ok" if has_data else "empty",
+        )
+
+    def index_constituents(
+        self,
+        index: str,
+        limit: int = 1000,
+    ) -> ToolResult:
+        """Return one index's constituent list with explicit coverage."""
+
+        payload = build_index_constituents(
+            index=index,
+            limit=limit,
+            collector=self.hithink_collector,
+        )
+        summary = payload.pop("summary")
+        rows = payload.get("rows") or []
+        return ToolResult(
+            name="index_constituents",
+            input={"index": index, "limit": limit},
             output=payload,
             summary=summary,
             trace_output=payload,
