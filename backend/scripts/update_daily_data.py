@@ -47,6 +47,10 @@ from app.services.outcome_completeness import build_top10_outcome_completeness
 from app.services.limit_up_reason import merge_limit_up_reasons
 from app.services.relay_universe import is_relay_candidate_symbol
 from app.services.stock_kline import load_stock_intraday_bars
+from app.services.intraday_retention import (
+    INTRADAY_RETENTION_TRADE_DAYS,
+    prune_intraday_bars,
+)
 from app.services.market_data_provider import (
     collect_preferred_stock_kline as collect_stock_kline,
     collect_preferred_stock_spot_klines as collect_stock_spot_klines,
@@ -118,6 +122,11 @@ class DailyUpdateReport:
     intraday_cache_targets: int = 0
     intraday_cache_ready: int = 0
     intraday_cache_missing: int = 0
+    intraday_retention_keep_days: int = INTRADAY_RETENTION_TRADE_DAYS
+    intraday_retention_cutoff: str | None = None
+    intraday_retention_dates: list[str] = field(default_factory=list)
+    intraday_pruned_rows: int = 0
+    intraday_retention_warnings: list[str] = field(default_factory=list)
     backfilled_bars: int = 0
     backfilled_outcomes: int = 0
     post_limit_cache_targets: int = 0
@@ -502,6 +511,22 @@ def run_daily_update(
         report.intraday_cache_ready = intraday_cache["ready_count"]
         report.intraday_cache_missing = intraday_cache["missing_count"]
         report.warnings.extend(intraday_cache["warnings"])
+        retention = prune_intraday_bars(
+            repository=first_board_repo,
+            trade_date=trade_date,
+        )
+        report.intraday_retention_keep_days = retention.keep_trade_days
+        report.intraday_retention_cutoff = (
+            retention.cutoff_date.isoformat()
+            if retention.cutoff_date is not None
+            else None
+        )
+        report.intraday_retention_dates = [
+            day.isoformat() for day in retention.retained_trade_dates
+        ]
+        report.intraday_pruned_rows = retention.deleted_rows
+        report.intraday_retention_warnings = list(retention.warnings)
+        report.warnings.extend(retention.warnings)
     report.health = build_agent_data_health(
         events=events,
         first_board_repository=first_board_repo,

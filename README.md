@@ -500,7 +500,7 @@ powershell -ExecutionPolicy Bypass -File .\scripts\daily_close_loop_task.ps1 -Mo
 | `GET` | `/api/analysis/daily-promotion-report` | 晋级率、最新事件日期及交易日历/收盘数据缺口 |
 | `GET` | `/api/stocks/{symbol}/kline` | 个股日 K 线 |
 | `GET` | `/api/stocks/{symbol}/market-data` | 个股详情聚合行情、最新收盘和位置判断 |
-| `GET` | `/api/stocks/{symbol}/intraday-history` | 最近 2-10 个交易日的分钟分时，默认五日一分钟周期 |
+| `GET` | `/api/stocks/{symbol}/intraday-history` | 最近 2-10 个交易日的分钟分时，默认五日一分钟周期；本地分钟线仅保留最近 7 个交易日 |
 
 完整接口定义以 Swagger 为准。
 

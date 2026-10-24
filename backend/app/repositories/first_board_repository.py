@@ -187,6 +187,22 @@ class FirstBoardRepository:
         finally:
             connection.close()
 
+    def delete_intraday_bars_before(self, cutoff: date) -> int:
+        """Delete persisted minute bars older than cutoff and return removed rows."""
+
+        connection = connect(self.database_url)
+        try:
+            initialize_database(connection)
+            cursor = connection.execute(
+                "DELETE FROM stock_intraday_bars WHERE trade_date < ?",
+                (cutoff.isoformat(),),
+            )
+            deleted = cursor.rowcount
+            connection.commit()
+            return max(0, int(deleted))
+        finally:
+            connection.close()
+
     def upsert_outcomes(self, outcomes: list[FirstBoardOutcome]) -> None:
         """Insert or update first-board outcome summaries."""
 

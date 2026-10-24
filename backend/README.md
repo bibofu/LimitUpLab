@@ -288,6 +288,9 @@ provider interfaces:
 
 The product is not designed for live intraday monitoring. The trading-day K-line
 endpoint is intended for after-close review of the latest persisted trading day.
+Persisted minute bars are pruned after each successful latest-day update, keeping
+the latest seven verified trading sessions for the five-day chart plus a repair
+buffer.
 
 ## Tests
 
