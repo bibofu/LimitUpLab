@@ -142,7 +142,7 @@ def build_index_quote(
     warnings: list[str] = []
     rows: list[dict[str, Any]] = []
     start_date = requested_end_date
-    data_as_of = snapshot.captured_at.date() if snapshot is not None else None
+    data_as_of = None
     data_fresh = False
     start_close = end_close = return_pct = change_pct = None
     max_drawdown_pct = None
@@ -151,7 +151,13 @@ def build_index_quote(
     if snapshot is None:
         data_missing.append("hithink_finance:no_index_snapshot")
     else:
-        data_fresh = snapshot.captured_at.date() == requested_end_date
+        warnings.append(
+            "snapshot_captured_at为来源响应时间，不是交易所行情时间。"
+        )
+        warnings.append(
+            "快照未提供行情日期，不能直接称为今天收盘；"
+            "需要确认收盘日期时请使用days查询日线并以data_as_of为准。"
+        )
     if requested_days is not None:
         start_date = requested_end_date - timedelta(days=max(requested_days * 3, 30))
         history = active_collector.collect_index_history(
@@ -264,6 +270,7 @@ def build_index_constituents(
     data_missing = [] if returned else ["hithink_finance:no_constituents"]
     warnings = [
         "来源仅返回成分股代码和名称，不含权重、行业分类和市值；不得自行补造。",
+        "来源名称可能是简称；XD前缀表示除息日，名称可能被来源截断，不能据此补全全称。",
     ]
     if truncated:
         warnings.append(
@@ -491,8 +498,9 @@ def _quote_summary(
             if snapshot.change_pct is not None else "涨跌幅未知"
         )
         parts.append(
-            f"最新快照{snapshot.last_price}（{change}，"
-            f"{snapshot.captured_at.isoformat()}）"
+            f"最新快照{snapshot.last_price}（{change}；"
+            f"来源响应时间{snapshot.captured_at.isoformat()}，"
+            "快照未提供行情日期）"
         )
     else:
         parts.append("未取得最新快照")

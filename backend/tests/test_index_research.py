@@ -160,9 +160,11 @@ def test_quote_snapshot_only_has_no_history_rows():
     assert payload["rows"] == []
     assert payload["snapshot_last_price"] == 4105.33
     assert payload["snapshot_change_pct"] == 1.71023
-    assert payload["data_as_of"] == "2026-10-25"
+    assert payload["data_as_of"] is None
     assert payload["requested_days"] is None
     assert payload["complete"] is True
+    assert any("来源响应时间" in warning for warning in payload["warnings"])
+    assert any("不能直接称为今天收盘" in warning for warning in payload["warnings"])
 
 
 def test_quote_marks_requested_end_date_without_bar_explicitly():
@@ -193,6 +195,7 @@ def test_constituents_truncation_and_weight_boundary():
     assert payload["truncated"] is True
     assert payload["has_weights"] is False
     assert any("权重" in warning for warning in payload["warnings"])
+    assert any("名称可能是简称" in warning for warning in payload["warnings"])
 
 
 def test_empty_constituents_report_missing_instead_of_zero():

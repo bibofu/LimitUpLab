@@ -49,8 +49,14 @@ MARKET_TOOL_SCHEMAS = [
         time_mode="historical",
         dates=("end_date",),
         collection="indices",
+        notes=(
+            "Only closes and daily change_pct; no open/high/low/volume/turnover. "
+            "Use index_quote for OHLC/volume, for arbitrary indices, or when the user asks for open prices."
+        ),
         description=(
             "查询上证指数、深证成指和创业板指最近一段交易日的客观走势。"
+            "只返回收盘点位和涨跌幅，不返回开盘、最高、最低、成交量或成交额；"
+            "需要这些字段或查询其他指数时使用 index_quote。"
             "返回区间涨跌、每日收盘点位、上涨/下跌天数和最大回撤；"
             "适合回答大盘、指数、沪指近一周或近期走势问题。"
         ),

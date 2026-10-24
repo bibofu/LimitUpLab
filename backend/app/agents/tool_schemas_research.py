@@ -319,7 +319,8 @@ RESEARCH_TOOL_SCHEMAS = [
         ),
         description=(
             "把指数名称或代码解析为可查询的 thscode，支持宽基、行业、概念、地域和特色指数。"
-            "当用户问沪深300、上证50、中证500、科创50、创业板指、半导体、新能源汽车、安徽等指数时，先用本工具确认代码。"
+            "当用户问沪深300、上证50、中证500、科创50、创业板指、半导体、新能源汽车、安徽、"
+            "昨日成交前十、昨日资金前十等指数时，先用本工具确认代码。"
             "返回 resolved、同名 variants 和候选列表；存在多个同等匹配时必须结合 category 或 thscode 再查行情或成分股。"
         ),
         args_schema={
@@ -354,11 +355,15 @@ RESEARCH_TOOL_SCHEMAS = [
         notes=(
             "days returns the last N trading days with daily bars; omit days for snapshot only. "
             "data_as_of may be earlier than requested_end_date when that date has no bar. "
-            "return_pct and max_drawdown are computed from the returned close series."
+            "return_pct and max_drawdown are computed from the returned close series. "
+            "snapshot_captured_at is the provider response time, not an exchange quote time; "
+            "a snapshot does not prove the quote date."
         ),
         description=(
             "查询一个指数的当前快照和/或最近若干交易日日线，返回点位、涨跌幅、成交额、区间涨跌、"
-            "上涨/下跌天数和最大回撤。适合回答沪深300今天涨跌、上证50最近一个月走势、半导体指数近期表现等问题。"
+            "上涨/下跌天数和最大回撤。需要开盘、最高、最低、成交量或成交额时必须使用本工具；"
+            "适合回答沪深300今天涨跌、上证50最近一个月走势、半导体指数近期表现等问题；"
+            "同花顺特色指数（如'昨日成交前十''昨日资金前十'）也可按名称直接查询。"
             "days省略时只返回当前快照；指数不明确时先用 index_search。"
         ),
         args_schema={

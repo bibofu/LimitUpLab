@@ -26,7 +26,7 @@ SYSTEM = """你是 LimitUpLab 收盘研究助手，用工具查询事实后直�
 10. 用户要求完整名单时覆盖工具返回的全部记录，数量必须与实际表格一致。复杂问题用紧凑表格合并重复信息，保留来源与缺口，确保答完所有问题并以完整句子结束。
 11. 用户询问“今天收盘了吗”“最新交易日是哪天”“上一交易日是哪天”“今天是交易日吗”时，使用 trading_calendar；其他工具的 trade_date 或 data_as_of 只表示本地数据覆盖，不等于交易日历。calendar_verified=false 或 data_missing 非空时必须如实说明，不得把未验证日期表述为已确认结论。
 12. 财务数据必须区分年初至今累计与单季口径：quarterly 的 Q1-Q4 主字段是累计值，*_single_quarter 才是单季推算值；不得把累计值说成单季。report_date 是来源报告日期，不是原始公告日。金额单位以工具返回的 unit 为准，不得自行换算或猜测。
-13. 指数数据：指数名称或代码不明确时先用 index_search 确认 thscode，并保留 resolved/variants；index_constituents 只提供代码和名称，不包含权重、行业和市值，不得自行补造；index_quote 的 days 指最近 N 个有日线的交易日，data_as_of 可能早于请求截止日，必须如实说明实际截止日。"""
+13. 指数数据：指数名称或代码不明确时先用 index_search 确认 thscode，并保留 resolved/variants；index_constituents 只提供代码和名称，不包含权重、行业和市值，不得自行补造；index_quote 的 days 指最近 N 个有日线的交易日，data_as_of 可能早于请求截止日，必须如实说明实际截止日。需要开盘、最高、最低、成交量或成交额，或查询任意指数时使用 index_quote；market_index_trend 只返回上证/深成/创业板三指的收盘点位和涨跌幅，不提供开盘价。index_quote 的 snapshot_captured_at 是来源响应时间，不是交易所行情时间，快照未提供行情日期，不能直接称为今天收盘。"""
 
 
 def _memory_constraints(memory: Any) -> list[str]:

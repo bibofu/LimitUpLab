@@ -572,7 +572,10 @@ class IndexQuotePayload(OutputModel):
     )
     requested_end_date: date = Field(description="请求的截止日期")
     start_date: date | None = Field(default=None, description="日线窗口起始日期")
-    data_as_of: date | None = Field(default=None, description="实际数据截止日期")
+    data_as_of: date | None = Field(
+        default=None,
+        description="实际数据截止日期；仅查快照且来源未提供行情日期时为null",
+    )
     data_fresh: bool = Field(description="数据是否覆盖请求的截止日期")
     snapshot_last_price: float | None = Field(default=None, description="最新快照点位")
     snapshot_change_pct: float | None = Field(default=None, description="最新快照涨跌幅（%）")
@@ -583,7 +586,8 @@ class IndexQuotePayload(OutputModel):
     snapshot_volume: float | None = Field(default=None, description="最新快照成交量")
     snapshot_turnover: float | None = Field(default=None, description="最新快照成交额")
     snapshot_captured_at: str | None = Field(
-        default=None, description="最新快照抓取时间（ISO 8601，含时区）"
+        default=None,
+        description="来源快照响应时间（ISO 8601，含时区）；不是交易所行情时间",
     )
     start_close: float | None = Field(default=None, description="窗口首个收盘点位")
     end_close: float | None = Field(default=None, description="窗口最后收盘点位")
