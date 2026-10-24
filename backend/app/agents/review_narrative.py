@@ -60,6 +60,10 @@ def authoritative_review_facts(report, picks, feature_comparison, evaluation_sco
     """One concise, authoritative evidence set, independent of planner selection."""
     digest = report.review_digest
     return {
+        "grouping_definitions": report.grouping_definitions,
+        "prediction_source_counts": report.prediction_source_counts,
+        "evaluation_label_counts": report.evaluation_label_counts,
+        "horizon_coverage": report.horizon_coverage,
         "review_digest": digest.model_dump(mode="json", exclude={
             "excellent": {"stocks"}, "weak": {"stocks"}, "leaders": {"stocks"},
         }) if digest else None,

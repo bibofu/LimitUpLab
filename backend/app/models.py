@@ -1359,9 +1359,9 @@ class ReviewAgentPick(BaseModel):
     score: float
     rating: str
     confidence: float
-    prediction_source: Literal["live", "historical_backtest"]
+    prediction_source: Literal["live", "historical_backtest"] = Field(description="记录生成来源：live为日常运行固化，不能据此认定盘前终选；historical_backtest为历史补算。前向资格单独看time_cohort。")
     data_as_of: date
-    time_cohort: str = "unverified"
+    time_cohort: str = Field(default="unverified", description="独立时间审计分组；只有premarket_final具有盘前终选前向验证资格，close_baseline仅为收盘基线。")
     scoring_version: str | None = None
     evaluation_label: str
     outcome_ready: bool
@@ -1446,14 +1446,20 @@ class ReviewAgentReportResponse(BaseModel):
     feature_research: ReviewFeatureResearch | None = Field(default=None, description="候选与市场特征研究")
     summary_insights: list[ReviewInsight] = Field(default_factory=list, description="研究摘要要点")
     summary_headline: str | None = Field(default=None, description="研究摘要标题")
-    start_date: date = Field(description="复盘起始日")
-    end_date: date = Field(description="复盘截止日")
+    start_date: date = Field(description="固化候选批次起始日，包含当日")
+    end_date: date = Field(description="固化候选批次结束日，包含当日；后续观察截止另见as_of_date")
+    as_of_date: date | None = Field(default=None, description="后续走势观察截止日，独立于候选批次范围；旧快照未保存时为null")
     sample_size: int = Field(description="复盘样本数")
+    prediction_source_counts: dict[str, int] = Field(default_factory=dict, description="记录生成来源计数；live不等于盘前终选，与time_cohort_counts独立")
+    evaluation_label_counts: dict[str, int] = Field(default_factory=dict, description="全部评价标签的互斥计数，合计等于sample_size；不与收益画像分组交叉相加")
+    grouping_definitions: dict[str, str] = Field(default_factory=dict, description="评价标签、观察窗收益画像、摘要截止收益三套独立分组的定义，不得合并计数或相互套用阈值")
+    horizon_coverage: dict[str, Any] = Field(default_factory=dict, description="固定候选范围内逐日及整体D+1/3/5覆盖、成熟/缺价/未成熟/未知日历数量与精确收盘收益；只包含requested_follow_days以内的期限，未请求的期限不计缺价")
     time_cohort_counts: dict[str, int] = Field(default_factory=dict, description="时间分组计数")
     time_audit_status: str = Field(default="unverified", description="时间审计状态")
     excluded_time_prediction_count: int = Field(default=0, description="因时间不可验证被排除的预测数")
-    success_count: int = Field(description="成功样本数")
-    failed_count: int = Field(description="失败样本数")
+    success_count: int = Field(description="评价标签success数量：A/B评级且次日开盘到收盘收益>0；不是摘要优秀组")
+    failed_count: int = Field(description="评价标签miss数量：A/B评级且次日开盘到收盘收益<0；不是摘要较差组")
+    partial_count: int = Field(default=0, description="评价标签partial数量：A/B评级且次日开盘到收盘收益=0；不与其他分组相加")
     pending_count: int = Field(description="结果待定样本数")
     promotion_ready_date_count: int = Field(default=0, description="可比较晋级率的交易日数")
     top_pick_promotion_sample_size: int = Field(default=0, description="Top票晋级率分母")

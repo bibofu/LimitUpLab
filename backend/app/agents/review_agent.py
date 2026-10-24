@@ -28,6 +28,7 @@ from app.agents.review_narrative import ReviewNarrative, apply_review_narrative,
 from app.agents.user_language import PUBLIC_LANGUAGE
 from app.agents.review_features import build_review_feature_summary
 from app.agents.review_digest import build_review_digest
+from app.agents.review_horizons import build_horizon_coverage
 from app.agents.compliance import review_answer
 from app.services.outcome_completeness import build_top10_outcome_completeness
 from app.services.review_as_of import (
@@ -84,24 +85,32 @@ class ReviewAgentToolbox:
         top_per_day: int,
         follow_days: int,
         trade_dates: Iterable[date] | None = None,
+        as_of_date: date | None = None,
     ):
         self.events = events
         self.repository = repository
         self.start_date = start_date
         self.end_date = end_date
+        self.as_of_date = as_of_date or end_date
+        if start_date > end_date or self.as_of_date < end_date:
+            raise ValueError("候选起始日不得晚于结束日，观察截止日不得早于候选结束日。")
         self.min_score = min_score
         self.top_per_day = top_per_day
         self.follow_days = follow_days
         self._evaluations: list[AgentEvaluationItem] | None = None
         self._predictions: dict[str, AgentPrediction] | None = None
         self._post_bars: dict[tuple[str, date], list[StockDailyBar]] = {}
-        self.evaluation_scope: dict[str, Any] = {"as_of_date": end_date.isoformat()}
+        self.evaluation_scope: dict[str, Any] = {
+            "start_date": start_date.isoformat(), "end_date": end_date.isoformat(),
+            "as_of_date": self.as_of_date.isoformat(),
+            "definition": "start_date/end_date选择固化候选批次；as_of_date独立限制后续观察。",
+        }
         if trade_dates is not None:
             self.promotion_calendar = PromotionCalendar(tuple(sorted(set(trade_dates))), ())
         else:
             observed_dates = sorted({
                 event.trade_date for event in events
-                if event.trade_date <= end_date
+                if event.trade_date <= self.as_of_date
             })
             self.promotion_calendar = (
                 load_promotion_calendar(observed_dates[0], observed_dates[-1])
@@ -141,6 +150,7 @@ class ReviewAgentToolbox:
                 "min_score": self.min_score,
                 "top_per_day": self.top_per_day,
                 "follow_days": self.follow_days,
+                "as_of_date": self.as_of_date.isoformat(),
             },
             output={
                 "sample_size": len(picks),
@@ -148,6 +158,8 @@ class ReviewAgentToolbox:
                 "success_count": sum(1 for item in picks if item.evaluation_label == "success"),
                 "failed_count": sum(1 for item in picks if item.evaluation_label == "miss"),
                 "pending_count": sum(1 for item in picks if item.evaluation_label == "pending"),
+                "evaluation_label_counts": dict(Counter(item.evaluation_label for item in picks)),
+                "grouping_definition": "按评级与次日开盘到收盘收益评价；与首板收盘到观察截止日的收益画像分组独立。",
                 "promotion_ready_count": len(promotions),
                 "promotion_unknown_count": len(picks) - len(promotions),
                 "outcomes": [
@@ -177,8 +189,8 @@ class ReviewAgentToolbox:
             },
             output=comparison,
             summary=(
-                f"Compared {comparison['success_count']} successful and "
-                f"{comparison['failed_count']} failed high-score picks."
+                f"Compared {comparison['success_count']} positive-return and "
+                f"{comparison['failed_count']} negative-return picks in the follow-up window."
             ),
         )
 
@@ -188,7 +200,7 @@ class ReviewAgentToolbox:
         comparisons = _build_promotion_comparisons(
             events=self.events,
             picks=self._high_score_evaluations(),
-            end_date=self.end_date,
+            end_date=self.as_of_date,
             trade_dates=self.promotion_calendar.trade_dates,
         )
         aggregate = _aggregate_promotion_comparisons(comparisons)
@@ -218,18 +230,18 @@ class ReviewAgentToolbox:
         """Explain unavailable comparisons without replacing missing outcomes with zero rates."""
 
         warnings = [f"1进2晋级日历：{warning}" for warning in self.promotion_calendar.warnings]
-        observed_dates = {event.trade_date for event in self.events if event.trade_date <= self.end_date}
+        observed_dates = {event.trade_date for event in self.events if event.trade_date <= self.as_of_date}
         for item in comparisons:
             if item.outcome_ready:
                 continue
-            if item.trade_date >= self.end_date and item.trade_date in observed_dates:
+            if item.trade_date >= self.as_of_date and item.trade_date in observed_dates:
                 # A cohort formed at the cutoff naturally awaits a future close.
                 continue
             if item.trade_date not in observed_dates:
                 reason = "基准日行情事件缺失"
             elif item.next_trade_date is None:
                 reason = "交易日历未提供可确认的下一交易日"
-            elif item.next_trade_date > self.end_date:
+            elif item.next_trade_date > self.as_of_date:
                 reason = f"下一交易日 {item.next_trade_date} 超出本次复盘截至日期"
             else:
                 reason = f"缺少下一交易日 {item.next_trade_date} 的行情事件，未跨过缺失日计算"
@@ -250,7 +262,7 @@ class ReviewAgentToolbox:
                 bar for bar in self.repository.list_post_bars(
                     symbol, base_date, limit=max(self.follow_days, 3) + 1,
                 )
-                if bar.trade_date <= self.end_date
+                if bar.trade_date <= self.as_of_date
             ]
         return self._post_bars[key]
 
@@ -282,6 +294,7 @@ class ReviewAgentToolbox:
             group_labels=performance_groups,
             tracked_returns=tracked_returns,
             promotion_results=promotion_results,
+            follow_days=self.follow_days,
         )
 
     def promotion_results(self) -> dict[str, bool]:
@@ -291,7 +304,7 @@ class ReviewAgentToolbox:
         ready_next_dates = {
             item.trade_date: item.next_trade_date
             for item in _build_promotion_comparisons(
-                events=self.events, picks=evaluations, end_date=self.end_date,
+                events=self.events, picks=evaluations, end_date=self.as_of_date,
                 trade_dates=self.promotion_calendar.trade_dates,
             )
             if item.outcome_ready
@@ -342,7 +355,7 @@ class ReviewAgentToolbox:
             })
             events_by_case = {
                 (event.trade_date, event.symbol): event for event in self.events
-                if event.trade_date <= self.end_date
+                if event.trade_date <= self.as_of_date
             }
             by_date: dict[date, list[AgentEvaluationItem]] = {}
             for item in response.evaluations:
@@ -357,7 +370,7 @@ class ReviewAgentToolbox:
                     bars=self.post_bars_for(item.symbol, item.trade_date),
                     events=self.events,
                     trade_dates=self.promotion_calendar.trade_dates,
-                    as_of_date=self.end_date,
+                    as_of_date=self.as_of_date,
                 )
                 by_date.setdefault(item.trade_date, []).append(as_of_item)
             selected: list[AgentEvaluationItem] = []
@@ -384,8 +397,9 @@ def build_review_agent_report(
     follow_days: int = 5,
     provider: LLMProvider | None = None,
     trade_dates: Iterable[date] | None = None,
+    as_of_date: date | None = None,
 ) -> ReviewAgentReportResponse:
-    """Run the Review Agent with LLM-planned tools and return a structured report."""
+    """Review fixed candidate dates; omitted observation cutoff preserves snapshot callers."""
 
     active_repository = repository or FirstBoardRepository()
     toolbox = ReviewAgentToolbox(
@@ -397,6 +411,7 @@ def build_review_agent_report(
         top_per_day=top_per_day,
         follow_days=follow_days,
         trade_dates=trade_dates,
+        as_of_date=as_of_date,
     )
     active_provider = provider or get_llm_provider()
     tool_names = _plan_review_tools(active_provider, start_date, end_date, min_score)
@@ -406,38 +421,53 @@ def build_review_agent_report(
     promotion_comparisons = _build_promotion_comparisons(
         events=events,
         picks=picks,
-        end_date=end_date,
+        end_date=toolbox.as_of_date,
         trade_dates=toolbox.promotion_calendar.trade_dates,
     )
     promotion_warnings = toolbox.promotion_warnings(promotion_comparisons)
     feature_comparison = toolbox.feature_comparison()
     excluded_time_count = sum(not assess_prediction_time(p).research_eligible
                               for p in toolbox._prediction_lookup().values())
-    completeness = build_top10_outcome_completeness(
-        events=events,
-        repository=active_repository,
-        as_of_date=end_date,
-        tracking_days=max(follow_days, 0) + 1,
-        top_per_day=top_per_day,
+    horizon_coverage = build_horizon_coverage(
+        picks, trade_dates=toolbox.promotion_calendar.trade_dates, as_of_date=toolbox.as_of_date,
+        follow_days=follow_days,
     )
+    # Snapshot pages retain their recent-window health check. A historical cohort
+    # must disclose its own gaps, not warnings from an unrelated latest cohort.
+    completeness_warnings = (build_top10_outcome_completeness(
+        events=events, repository=active_repository, as_of_date=toolbox.as_of_date,
+        tracking_days=max(follow_days, 0) + 1, top_per_day=top_per_day,
+    ).warnings if as_of_date is None else [
+        f"{horizon}已成熟但精确收盘缺失{values['missing_count']}只；交易日历未确认{values['calendar_unknown_count']}只。"
+        for horizon, values in horizon_coverage["horizons"].items()
+        if values["missing_count"] or values["calendar_unknown_count"]
+    ])
     fallback = _fallback_report(
         start_date=start_date,
         end_date=end_date,
         picks=picks,
         tool_results=[result.trace() for result in tool_results],
-        warnings=[*completeness.warnings, *promotion_warnings],
+        warnings=[*completeness_warnings, *promotion_warnings],
         feature_comparison=feature_comparison,
         promotion_comparisons=promotion_comparisons,
         excluded_time_count=excluded_time_count,
+        follow_days=follow_days,
     )
+    fallback.as_of_date = toolbox.as_of_date
+    fallback.horizon_coverage = horizon_coverage
     fallback.review_digest = build_review_digest(
         picks=picks, predictions={
             (item.trade_date, item.symbol): toolbox.prediction_for(item.prediction_id)
             for item in toolbox._high_score_evaluations()
         },
         promotion_comparisons=promotion_comparisons, events=events,
-        repository=active_repository, end_date=end_date,
+        repository=active_repository, end_date=toolbox.as_of_date,
         trade_dates=toolbox.promotion_calendar.trade_dates,
+        candidate_dates=(
+            sorted({day for day in toolbox.promotion_calendar.trade_dates if start_date <= day <= end_date}
+                   | {pick.trade_date for pick in picks})
+            if as_of_date is not None else None
+        ),
     )
     if toolbox.evaluation_scope.get("candidates_truncated"):
         fallback.warnings.append("上游评估未返回完整区间候选，本报告只描述入选样本，不代表完整区间或全市场。")
@@ -565,7 +595,7 @@ def _review_picks_from_toolbox(toolbox: ReviewAgentToolbox) -> list[ReviewAgentP
         post_bars = _post_bars_for_pick(toolbox, item)
         expected_dates = review_window_dates(
             toolbox.promotion_calendar.trade_dates, base_date=item.trade_date,
-            as_of_date=toolbox.end_date, follow_days=toolbox.follow_days,
+            as_of_date=toolbox.as_of_date, follow_days=toolbox.follow_days,
         )
         picks.append(
             ReviewAgentPick(
@@ -664,7 +694,7 @@ def _post_bars_for_pick(
         toolbox.post_bars_for(item.symbol, item.trade_date),
         symbol=item.symbol,
         base_date=item.trade_date,
-        as_of_date=toolbox.end_date,
+        as_of_date=toolbox.as_of_date,
         follow_days=toolbox.follow_days,
         trade_dates=toolbox.promotion_calendar.trade_dates,
     )
@@ -798,6 +828,7 @@ def _fallback_report(
     feature_comparison: dict[str, Any] | None = None,
     promotion_comparisons: list[ReviewPromotionComparison] | None = None,
     excluded_time_count: int = 0,
+    follow_days: int = 5,
 ) -> ReviewAgentReportResponse:
     ready = [item for item in picks if item.outcome_ready]
     successes = [item for item in picks if item.evaluation_label == "success"]
@@ -845,19 +876,30 @@ def _fallback_report(
         start_date=start_date,
         end_date=end_date,
         sample_size=len(picks),
+        prediction_source_counts=dict(Counter(item.prediction_source for item in picks)),
+        evaluation_label_counts=dict(Counter(item.evaluation_label for item in picks)),
+        grouping_definitions={
+            "evaluation_labels": "success/miss/partial仅表示A/B评级候选次日开盘到收盘收益正/负/零；pending为次日评价数据不足。C/D评级对应false_negative或avoid_success。各标签互斥，合计等于sample_size。",
+            "feature_return_groups": f"feature_summary及特征比较工具按首板收盘到已到期观察窗最后可用收盘的正/负收益分组（最多D+{follow_days}）；零收益或缺价不入两组。其success_count/failed_count为旧字段名，只代表正/负收益画像数。",
+            "digest_groups": "review_digest按同一观察截止日精确收盘相对首板收盘的收益分组：优秀≥9.8%、较差<-5%、其余普通、精确价格缺失则未分组；四组合计等于digest候选数。不得套用到评价标签或特征画像。",
+            "prediction_source": "live表示日常运行固化记录，historical_backtest表示历史补算；来源与时间分组独立，live不能解释为盘前终选。",
+            "time_cohort": "只有premarket_final具有盘前终选前向验证资格；close_baseline为收盘基线，其他时间分组不代表该资格。",
+        },
         time_cohort_counts=dict(Counter(item.time_cohort for item in picks)),
         time_audit_status="checked",
         excluded_time_prediction_count=excluded_time_count,
         success_count=len(successes),
         failed_count=len(failures),
+        partial_count=sum(item.evaluation_label == "partial" for item in picks),
         pending_count=len(pending),
         **promotion_summary,
         promotion_comparisons=promotion_items,
         feature_summary=comparison.get("feature_summary"),
         main_findings=[
             f"高分首板样本 {len(picks)} 只，其中 {len(ready)} 只有后续走势可复盘。",
-            f"成功 {len(successes)} 只，失败 {len(failures)} 只，待观察 {len(pending)} 只。",
-            f"其余评价 {len(picks) - len(successes) - len(failures) - len(pending)} 只（持平或低评级分类），不并入失败或待观察。",
+            f"次日开盘至收盘评价标签：success {len(successes)} 只，miss {len(failures)} 只，pending {len(pending)} 只。",
+            f"其余评价 {len(picks) - len(successes) - len(failures) - len(pending)} 只（持平或低评级分类），以上标签互斥；与后面的收益画像分组独立。",
+            "预测来源live只表示日常运行固化记录，不能据此推断为盘前终选；前向资格以时间审计分组为准。",
             f"本组具有现行盘前终选前向验证资格的样本 {sum(item.time_cohort == 'premarket_final' for item in picks)} 只；收盘基线和历史补算均不计作该口径的前向验证。",
             *promotion_finding,
             *comparison_findings,
@@ -927,6 +969,7 @@ def _pick_summary(item: AgentEvaluationItem) -> dict[str, Any]:
         "rating": item.rating,
         "confidence": item.confidence,
         "prediction_source": item.prediction_source,
+        "time_cohort": item.time_cohort,
         "data_as_of": item.data_as_of.isoformat(),
         "label": item.evaluation_label,
     }
@@ -957,6 +1000,7 @@ def _build_feature_comparison(
     group_labels: dict[str, str] | None = None,
     tracked_returns: dict[str, float] | None = None,
     promotion_results: dict[str, bool] | None = None,
+    follow_days: int = 5,
 ) -> dict[str, Any]:
     """Build descriptive statistics for the selected performance grouping."""
 
@@ -989,6 +1033,10 @@ def _build_feature_comparison(
     success_counts = _profile_sample_counts(success)
     failed_counts = _profile_sample_counts(failed)
     result: dict[str, Any] = {
+        "grouping_definition": (
+            f"观察窗正/负收益画像：首板收盘到最多D+{follow_days}的最后可用收盘收益正/负；零收益与缺价不入组。success_count/failed_count仅为旧字段名，不是评价标签或摘要优秀/较差组。"
+            if group_labels is not None else "按评价标签success/miss比较原始特征。"
+        ),
         "success_count": len(success),
         "failed_count": len(failed),
         "feature_summary": build_review_feature_summary(success, failed).model_dump(mode="json"),
@@ -1001,14 +1049,14 @@ def _build_feature_comparison(
     }
     if len(success) < 3 or len(failed) < 3:
         result["main_findings"] = [
-            "成功组或失败组少于 3 只，暂不提炼数值特征，避免把个例误当规律。"
+            "观察窗正收益组或负收益组少于 3 只，暂不提炼数值特征，避免把个例误当规律。"
         ]
         return result
 
     success_avg = _profile_averages(success)
     failed_avg = _profile_averages(failed)
     result["main_findings"] = [
-        f"以下对比基于成功组 {len(success)} 只、失败组 {len(failed)} 只，"
+        f"以下收益画像对比基于观察窗正收益组 {len(success)} 只、负收益组 {len(failed)} 只，"
         "各指标仅使用自身有效数据，分母可能不同；属于近期样本的描述性统计，不代表稳定因果。"
     ]
 
@@ -1019,22 +1067,22 @@ def _build_feature_comparison(
     if failed_selection:
         result["failed_patterns"].append(f"选股画像：{failed_selection}。")
 
-    seal_success = _seal_pattern("成功组", success_avg, success_counts)
-    seal_failed = _seal_pattern("失败组", failed_avg, failed_counts)
+    seal_success = _seal_pattern("观察窗正收益组", success_avg, success_counts)
+    seal_failed = _seal_pattern("观察窗负收益组", failed_avg, failed_counts)
     if seal_success and seal_failed:
         result["successful_patterns"].append(f"封板结构：{seal_success}。")
         result["failed_patterns"].append(f"封板结构：{seal_failed}。")
 
-    structure_success = _structure_pattern("成功组", success_avg, success_counts)
-    structure_failed = _structure_pattern("失败组", failed_avg, failed_counts)
+    structure_success = _structure_pattern("观察窗正收益组", success_avg, success_counts)
+    structure_failed = _structure_pattern("观察窗负收益组", failed_avg, failed_counts)
     if structure_success and structure_failed:
         result["successful_patterns"].append(
             f"趋势与扩散：{structure_success}。"
         )
         result["failed_patterns"].append(f"趋势与扩散：{structure_failed}。")
 
-    outcome_success = _outcome_pattern("成功组", success_avg, success_counts)
-    outcome_failed = _outcome_pattern("失败组", failed_avg, failed_counts)
+    outcome_success = _outcome_pattern("观察窗正收益组", success_avg, success_counts)
+    outcome_failed = _outcome_pattern("观察窗负收益组", failed_avg, failed_counts)
     if outcome_success and outcome_failed:
         result["successful_patterns"].append(f"后续兑现：{outcome_success}。")
         result["failed_patterns"].append(f"风险表现：{outcome_failed}。")
@@ -1043,8 +1091,8 @@ def _build_feature_comparison(
     failed_score = failed_avg.get("score")
     if success_score is not None and failed_score is not None:
         result["scoring_bias"].append(
-            f"成功组平均评分 {success_score:.1f}{_sample_note(success_counts, 'score')}，"
-            f"失败组 {failed_score:.1f}{_sample_note(failed_counts, 'score')}；"
+            f"观察窗正收益组平均评分 {success_score:.1f}{_sample_note(success_counts, 'score')}，"
+            f"负收益组 {failed_score:.1f}{_sample_note(failed_counts, 'score')}；"
             "两组都进入每日 Top10，说明现有总分仍需增强对结构差异的区分。"
         )
     result["adjustment_suggestions"] = [

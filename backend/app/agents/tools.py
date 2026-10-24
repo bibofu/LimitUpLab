@@ -1658,9 +1658,16 @@ class AgentToolRegistry:
         end_date: date,
         min_score: float = 0,
         top_per_day: int = 10,
+        as_of_date: date | None = None,
     ) -> ToolResult:
         """Run Review Agent over high-score picks and post-board outcomes."""
 
+        latest_local_date = max((item.trade_date for item in self.events), default=None)
+        observation_date = as_of_date or latest_local_date or end_date
+        if observation_date < end_date:
+            raise ValueError("观察截止日不得早于候选结束日；请确认候选日期范围和本地数据覆盖。")
+        if latest_local_date is not None and observation_date > latest_local_date:
+            raise ValueError(f"观察截止日超出本地已完成数据覆盖，最晚可用日期为{latest_local_date.isoformat()}。")
         response = build_review_agent_report(
             events=self.events,
             start_date=start_date,
@@ -1668,10 +1675,17 @@ class AgentToolRegistry:
             repository=self.first_board_repository,
             min_score=min_score,
             top_per_day=max(1, min(top_per_day, 20)),
+            as_of_date=observation_date,
         )
         trace_output = {
             "start_date": response.start_date.isoformat(),
             "end_date": response.end_date.isoformat(),
+            "as_of_date": observation_date.isoformat(),
+            "horizon_coverage": response.horizon_coverage,
+            "grouping_definitions": response.grouping_definitions,
+            "prediction_source_counts": response.prediction_source_counts,
+            "time_cohort_counts": response.time_cohort_counts,
+            "evaluation_label_counts": response.evaluation_label_counts,
             "sample_size": response.sample_size,
             "success_count": response.success_count,
             "failed_count": response.failed_count,
@@ -1698,11 +1712,13 @@ class AgentToolRegistry:
                 "end_date": end_date.isoformat(),
                 "min_score": min_score,
                 "top_per_day": top_per_day,
+                "as_of_date": as_of_date.isoformat() if as_of_date else None,
             },
             output=response,
             summary=(
                 f"Review Agent checked {response.sample_size} high-score picks "
-                f"from {response.start_date.isoformat()} to {response.end_date.isoformat()}."
+                f"from {response.start_date.isoformat()} to {response.end_date.isoformat()}, "
+                f"with observations through {observation_date.isoformat()}."
             ),
             trace_output=trace_output,
         )

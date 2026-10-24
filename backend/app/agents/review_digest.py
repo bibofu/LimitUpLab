@@ -13,9 +13,12 @@ from app.review_digest_models import DigestOverview, DigestStock, ReviewDigest
 
 
 def build_review_digest(*, picks, predictions, promotion_comparisons, events,
-                        repository, end_date: date, trade_dates: Iterable[date]) -> ReviewDigest:
+                        repository, end_date: date, trade_dates: Iterable[date],
+                        candidate_dates: Iterable[date] | None = None) -> ReviewDigest:
     calendar = sorted({day for day in trade_dates if day <= end_date})
-    candidate_dates = [day for day in calendar if day < end_date][-5:]
+    explicit_candidates = candidate_dates is not None
+    candidate_dates = (sorted(set(candidate_dates)) if explicit_candidates
+                       else [day for day in calendar if day < end_date][-5:])
     selected = {}
     for pick in picks:
         if pick.trade_date in candidate_dates:
@@ -45,14 +48,16 @@ def build_review_digest(*, picks, predictions, promotion_comparisons, events,
         len(excellent), len(weak), len(ordinary), len(missing),
     )
     notes = [
-        "候选取截止日前5个交易日的历史每日Top10；每只股票在同一首板日只计一次，缺日不以更早批次替换。",
+        ("候选取请求日期范围内的历史每日Top10；观察截止日独立指定，不移动候选日期范围。"
+         if explicit_candidates else "候选取截止日前5个交易日的历史每日Top10；缺日不以更早批次替换。")
+        + "每只股票在同一首板日只计一次。",
         "优秀：截止日收盘相对首板收盘上涨≥9.8%；较差：下跌>5%；两者之间为普通表现。缺任一精确日期收盘不分组。",
         "同一截止日下各批候选观察天数不同；画像是当前样本分布，不能据此认定因果或未来走强概率。",
         "画像的参照为全部候选，包含普通表现和收盘数据不足的候选；每项比例只使用该项特征有效的样本。",
         f"本期候选具有盘前终选前向验证资格的记录{sum(pick.time_cohort == 'premarket_final' for pick in selected_picks)}条；收盘基线与历史补算不计入该资格。",
         *market_notes,
     ]
-    if len(candidate_dates) < 5:
+    if not explicit_candidates and len(candidate_dates) < 5:
         notes.append(f"交易日历仅提供{len(candidate_dates)}个首板日，本期不足5日。")
     missing_dates = sorted(set(candidate_dates) - {pick.trade_date for pick in selected_picks})
     if missing_dates:
