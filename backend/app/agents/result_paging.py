@@ -51,13 +51,14 @@ READ_RESULT_DEFINITION = {"type": "function", "function": {
     "name": READ_RESULT_TOOL,
     "description": ("只读本轮已持久化的工具结果，不重新查询市场。大结果 manifest 给出 result_id 和 content_hash；"
                     "按 offset/limit 分页，fields 仅投影确实需要的字段，section=metadata 可读取来源/汇总/口径字段。"
-                    "必须使用原结果的 content_hash，依据返回的 next_offset 继续读取；不能把一页当成完整名单。"),
+                    "把原结果的 content_hash 填入 expected_hash，依据返回的 next_offset 继续读取；不能把一页当成完整名单。"),
     "parameters": ReadModelResultRequest.model_json_schema(),
 }}
 
 RESULT_READING_RULE = (
     "\n工具大结果可能返回 result_view.kind=manifest；这表示完整原始结果已持久化，但当前模型尚未读取股票行。"
-    "可用 read_tool_result 按需读取已保存的行或元数据，不要重新查询市场来分页。传入 result_id 和 content_hash；"
+    "可用 read_tool_result 按需读取已保存的行或元数据，不要重新查询市场来分页。传入 result_id，"
+    "并将 manifest 的 content_hash 填入 expected_hash；"
     "每页保留原始顺序、总行数、next_offset及来源。用户要完整名单时必须读取覆盖全部所需行和字段，"
     "不能把预览、单页或未读部分说成完整名单；预算不够时明确哪些部分未完成。"
     "字段未投影、字段缺失和明确null是不同状态，均不能补造数值。"
