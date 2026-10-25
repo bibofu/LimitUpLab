@@ -3,18 +3,12 @@
 from __future__ import annotations
 
 import os
-import json
-from pathlib import Path
 from threading import RLock
 from uuid import uuid4
 
 import pytest
 from sqlalchemy import create_engine
-from sqlalchemy.engine import make_url
-
-
-RUNTIME_DATABASE_VARIABLES = ("LIMITUPLAB_DATABASE_URL",)
-BACKEND_ENV_PATH = Path(__file__).resolve().parents[1] / ".env"
+from app.storage.isolated import BACKEND_ENV_PATH, RUNTIME_DATABASE_VARIABLES, isolated_database_url as validate_isolated_url
 
 
 def test_database_base_url(variable="LIMITUPLAB_TEST_DATABASE_URL", *, runtime_urls=None):
@@ -28,33 +22,9 @@ def test_database_base_url(variable="LIMITUPLAB_TEST_DATABASE_URL", *, runtime_u
     if not raw:
         raise pytest.UsageError(f"Set {variable} to a dedicated PostgreSQL test database")
     try:
-        selected = make_url(raw)
-        if (selected.drivername not in {"postgresql", "postgresql+psycopg"}
-                or not selected.host or not selected.database or "," in selected.host
-                or set(selected.query) & {"host", "hostaddr", "port", "dbname", "database", "service"}):
-            raise ValueError
-        business_names = {"limituplab", "postgres", "template0", "template1"}
-        forbidden = json.loads(os.getenv("LIMITUPLAB_TEST_FORBIDDEN_DATABASES", "[]"))
-        if not isinstance(forbidden, list) or not all(isinstance(name, str) for name in forbidden):
-            raise ValueError
-        business_names.update(forbidden)
-        runtime_urls = os.environ if runtime_urls is None else runtime_urls
-        for key in RUNTIME_DATABASE_VARIABLES:
-            configured = runtime_urls.get(key, "").strip()
-            if configured:
-                business_names.add(make_url(configured).database)
-        if BACKEND_ENV_PATH.exists():
-            for line in BACKEND_ENV_PATH.read_text(encoding="utf-8-sig").splitlines():
-                key, separator, value = line.strip().partition("=")
-                if separator and key in RUNTIME_DATABASE_VARIABLES and value.strip():
-                    business_names.add(make_url(value.strip().strip("\"'")).database)
-        if selected.database in business_names:
-            raise pytest.UsageError("The test database must be separate from configured business and evaluation databases")
-        return selected.set(drivername="postgresql+psycopg").difference_update_query(["options"])
-    except pytest.UsageError:
-        raise
-    except Exception:
-        raise pytest.UsageError(f"{variable} must be a valid PostgreSQL URL without routing overrides") from None
+        return validate_isolated_url(raw, runtime_urls=runtime_urls, env_path=BACKEND_ENV_PATH)
+    except ValueError as error:
+        raise pytest.UsageError(str(error)) from None
 
 
 class SchemaFactory:
