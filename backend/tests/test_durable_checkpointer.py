@@ -13,7 +13,7 @@ from uuid import uuid4
 from langgraph.checkpoint.base import empty_checkpoint
 import pytest
 
-from app.agents.run_lifecycle import CURRENT_CONTROL, Journal, RunConflict, RunControl
+from app.agents.run_lifecycle import CURRENT_CONTROL, RunConflict, RunControl, RunLifecycle
 from app.models import AgentChatRequest, AgentChatResponse
 from app.repositories import ChatSessionRepository
 from app.repositories.tool_result_repository import ToolResultRepository
@@ -26,7 +26,7 @@ def durable_run(postgresql_database):
     owner = "owner-" + uuid4().hex
     chats = ChatSessionRepository(postgresql_database)
     session = chats.create_session(owner_id=owner)
-    journal = Journal(postgresql_database)
+    journal = RunLifecycle(postgresql_database)
     request = AgentChatRequest(session_id=session.session_id, message_id="message-1", message="固定数据研究")
     row, fresh = journal.create(request, owner)
     assert fresh
@@ -126,6 +126,8 @@ def test_real_process_kill_restores_committed_superstep(durable_run, tmp_path):
             process.kill()
         process.communicate(timeout=5)
     assert ready.with_suffix(".calls").read_text(encoding="utf-8") == "1"
+    replacement = replace_lease(journal, lease, row["run_id"])
+    config = execution_config(row, replacement)
 
     def forbidden_query(_state):
         pytest.fail("completed query must not be replayed after process death")
@@ -137,7 +139,10 @@ def test_real_process_kill_restores_committed_superstep(durable_run, tmp_path):
             assert result["answer"] == "resumed"
             assert result["observations"][0]["source"] == "fixture://frozen"
 
-    run_async(resume())
+    try:
+        run_async(resume())
+    finally:
+        replacement.release()
 
 
 def test_takeover_rejects_both_stale_checkpoint_and_pending_writes(durable_run):
@@ -222,7 +227,7 @@ def test_completed_tool_receipt_survives_checkpoint_failure(durable_run):
                 await save(saver, config, observed)
 
     run_async(fail_checkpoint())
-    recovered = ToolResultRepository(RunControl(Journal(journal.database_url), row, lease))
+    recovered = ToolResultRepository(RunControl(RunLifecycle(journal.database_url), row, lease))
     assert recovered.execute(call, lambda: calls.append(2) or {"close": 99}) == observed
     assert calls == [1]
     with pytest.raises(RunConflict):
