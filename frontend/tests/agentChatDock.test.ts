@@ -292,6 +292,76 @@ test("a lost resume response retries the same operation ID instead of applying a
   assert.equal(app.answers().length, 1);
 });
 
+test("an accepted interrupted request still retries the exact original POST payload", async t => {
+  const requests: any[] = [];
+  const app = mount(t, {
+    streamAgentChatMessage: async (payload: any, event: any) => {
+      requests.push(payload);
+      event({ event: "run_state", data: run("running", 1) });
+      if (requests.length === 1) throw new Error("执行中断");
+      return { ...final, run_id: "owned-run" };
+    },
+    fetchAgentChatRun: async () => ({ ...run("interrupted", 1), can_resume: false }),
+  });
+  await app.settle(); app.type("原始问题"); app.submit(); await app.settle();
+  app.type("保留草稿");
+  app.find(node => node.type === "button" && Array.isArray(node.props.children) && node.props.children.includes("重试上一个问题")).onClick();
+  await app.settle();
+  assert.equal(requests.length, 2);
+  assert.deepEqual(requests[1], requests[0]);
+  assert.equal(app.answers().length, 1);
+  assert.equal(app.input().value, "保留草稿");
+});
+
+test("paused bootstrap with pending cancellation subscribes until the formal result arrives", async t => {
+  const pending = deferred<any>();
+  let subscriptions = 0;
+  const app = mount(t, {
+    fetchChatSession: async () => ({ ...session("a"), active_run: {
+      ...run(), cancel_requested: true, can_resume: false, can_cancel: false,
+    } }),
+    streamAgentChatRun: () => { subscriptions++; return pending.promise; },
+  });
+  await app.settle();
+  assert.equal(subscriptions, 1);
+  assert.equal(app.has(node => node.props["aria-label"] === "继续任务"), false);
+  pending.resolve({ ...final, run_id: "owned-run", task_status: "cancelled" }); await app.settle();
+  assert.equal(app.answers().length, 1);
+  assert.equal(app.has(node => node.props["aria-label"] === "结束任务"), false);
+});
+
+test("late pausing acknowledgement at the same revision cannot undo an observed pause", async t => {
+  const original = deferred<any>();
+  const command = deferred<any>();
+  let handler: any;
+  const app = mount(t, {
+    streamAgentChatMessage: (_payload: any, event: any) => { handler = event; event({ event: "run_state", data: run("running", 1) }); return original.promise; },
+    controlAgentChatRun: () => command.promise,
+    streamAgentChatRun: () => { throw new Error("a settled pause must not reconnect for an older acknowledgement"); },
+  });
+  await app.settle(); app.type("查询"); app.submit(); await app.settle();
+  app.find(node => node.props["aria-label"] === "暂停任务").onClick(); await app.settle();
+  handler({ event: "run_state", data: run("paused", 2) });
+  original.resolve({ paused: true, run: run("paused", 2) }); await app.settle();
+  command.resolve(run("pausing", 2)); await app.settle();
+  assert.equal(app.find(node => node.props["aria-label"] === "继续任务").disabled, false);
+  assert.equal(app.has(node => node.props["aria-label"] === "暂停任务"), false);
+  assert.equal(app.answers().length, 0);
+});
+
+test("running cannot regress to resuming within one control revision", async t => {
+  const original = deferred<any>();
+  let handler: any;
+  const app = mount(t, {
+    streamAgentChatMessage: (_payload: any, event: any) => { handler = event; event({ event: "run_state", data: run("running", 3) }); return original.promise; },
+  });
+  await app.settle(); app.type("查询"); app.submit(); await app.settle();
+  handler({ event: "run_state", data: run("resuming", 3) }); await app.settle();
+  assert.equal(app.find(node => node.props["aria-label"] === "暂停任务").disabled, false);
+  assert.equal(app.has(node => node.props["aria-label"] === "继续任务"), false);
+  original.resolve({ ...final, run_id: "owned-run" }); await app.settle();
+});
+
 test("reload restores verified history with one bootstrap call and no list/detail waterfall", async t => {
   const pending = deferred<any>();
   const calls: string[] = [];

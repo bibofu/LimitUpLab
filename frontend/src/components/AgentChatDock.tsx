@@ -296,7 +296,7 @@ export function AgentChatDock({
     commandRetry.current = null;
     setControlAction(null);
     setCancelRequested(false);
-    if (detail.active_run && detail.active_run.run_status !== "paused") void watchRun(detail.active_run);
+    if (detail.active_run && (detail.active_run.run_status !== "paused" || detail.active_run.cancel_requested)) void watchRun(detail.active_run);
   }
 
   /**
@@ -500,14 +500,24 @@ export function AgentChatDock({
 
   function applyRunState(run: AgentRunState) {
     if (run.session_id !== selectedSession.current || settledRuns.current.has(run.run_id)) return false;
-    if (runRef.current?.run_id === run.run_id && run.state_revision < runRef.current.state_revision) return false;
+    const previous = runRef.current;
+    if (previous?.run_id === run.run_id) {
+      if (run.state_revision < previous.state_revision) return false;
+      if (["completed", "cancelled", "failed"].includes(previous.run_status) && run.run_status !== previous.run_status) return false;
+      // The revision orders control intents; acknowledgement within an intent
+      // advances pausing->paused and resuming->running without incrementing it.
+      if (run.state_revision === previous.state_revision &&
+        ((previous.run_status === "paused" && run.run_status === "pausing") ||
+          (previous.run_status === "running" && run.run_status === "resuming"))) return false;
+    }
     runRef.current = run;
     setActiveRun(run);
     const labels: Partial<Record<AgentRunState["run_status"], string>> = {
       pausing: "正在暂停，当前步骤保存后生效", paused: "已暂停，可从保存的进度继续",
       resuming: "正在恢复已保存的进度", interrupted: "任务已中断，可继续原任务",
     };
-    if (labels[run.run_status]) setStreamStatus(labels[run.run_status]!);
+    if (run.cancel_requested) setStreamStatus("正在结束任务，等待正式结果");
+    else if (labels[run.run_status]) setStreamStatus(labels[run.run_status]!);
     return true;
   }
 
@@ -569,13 +579,18 @@ export function AgentChatDock({
       setError(caught instanceof Error ? caught.message : "连接中断，请重新连接原任务");
       const run = runRef.current;
       if (run) {
-        setFailedPrompt(null);
+        setFailedPrompt(request ? prompt ?? null : null);
+        if (request) failedRequest.current = request;
         try {
           const latest = await fetchAgentChatRun(run.run_id);
           if (!current()) return;
           if (!applyRunState(latest)) return;
           if (latest.response) publishResponse(latest.response, prompt, request?.message_id);
-          else if (latest.run_status === "paused") setError(null);
+          else if (["pausing", "paused", "resuming"].includes(latest.run_status)) {
+            setFailedPrompt(null);
+            failedRequest.current = null;
+            if (latest.run_status === "paused" && !latest.cancel_requested) setError(null);
+          }
         } catch { /* Keep the owned run available for read-only reconnection. */ }
       } else if (request) {
         setFailedPrompt(prompt ?? null);
@@ -593,7 +608,7 @@ export function AgentChatDock({
   async function watchRun(run: AgentRunState) {
     if (settledRuns.current.has(run.run_id)) return;
     if (run.response) { publishResponse(run.response); return; }
-    if (run.run_status === "paused") return;
+    if (run.run_status === "paused" && !run.cancel_requested) return;
     setError(null);
     await receiveRun((handler, options) => streamAgentChatRun(run, handler, options),
       run.session_id, undefined, undefined, run.last_event_id);
@@ -618,7 +633,7 @@ export function AgentChatDock({
       if (!applyRunState(result)) return;
       setError(null);
       if (result.response) { detachSubscription(); publishResponse(result.response); }
-      else if (result.run_status === "paused") detachSubscription();
+      else if (result.run_status === "paused" && !result.cancel_requested) detachSubscription();
       else if (action === "resume" || !subscription.current.controller) void watchRun(result);
     } catch (caught) {
       if (targetSession !== selectedSession.current) return;
@@ -639,15 +654,16 @@ export function AgentChatDock({
   /** Preserve failed requests for retry; publish the verified response exactly once. */
   async function sendMessage(prompt?: string) {
     const trimmed = (prompt ?? message).trim();
-    if (!trimmed || sending || subscription.current.controller || runRef.current || sessionLoading || !sessionId) {
+    const retry = failedRequest.current?.session_id === sessionId && failedRequest.current.message === trimmed
+      ? failedRequest.current : null;
+    const retriesOriginalRun = retry && !["pausing", "paused", "resuming"].includes(runRef.current?.run_status ?? "");
+    if (!trimmed || sending || subscription.current.controller || (runRef.current && !retriesOriginalRun) || sessionLoading || !sessionId) {
       return;
     }
     const release = operationLock.current.acquire();
     if (!release) return;
     setRevealingMessageId(null);
 
-    const retry = failedRequest.current?.session_id === sessionId && failedRequest.current.message === trimmed
-      ? failedRequest.current : null;
     const userMessageId = retry?.message_id ?? `msg_${Date.now()}_${Math.random().toString(16).slice(2)}`;
     const payload: AgentChatRequest = retry ?? {
       session_id: sessionId, message_id: userMessageId, message: trimmed,
@@ -878,10 +894,11 @@ export function AgentChatDock({
           ) : null}
           {activeRun && !sending ? (
             <div className="chat-state chat-retry-state" role="status" aria-label="任务状态">
-              <span>{activeRun.run_status === "paused" ? "任务已暂停，可继续原任务；结束任务后可发送新问题。"
+              <span>{activeRun.cancel_requested ? "正在结束任务，等待正式结果。"
+                : activeRun.run_status === "paused" ? "任务已暂停，可继续原任务；结束任务后可发送新问题。"
                 : activeRun.run_status === "interrupted" ? "任务已中断，已保存的进度仍然保留。"
                   : "当前任务尚未结束，可以重新连接查看进度。"}</span>
-              {!activeRun.can_resume && activeRun.run_status !== "paused" ? (
+              {!activeRun.can_resume && (activeRun.run_status !== "paused" || activeRun.cancel_requested) ? (
                 <button type="button" onClick={() => void watchRun(activeRun)} disabled={sessionLoading}>
                   <RefreshCcw aria-hidden="true" size={13} />重新连接
                 </button>

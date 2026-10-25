@@ -617,6 +617,7 @@ export interface AgentRunState {
   can_pause: boolean;
   can_resume: boolean;
   can_cancel: boolean;
+  cancel_requested?: boolean;
   last_event_id: number;
   response?: AgentChatResponse | null;
 }

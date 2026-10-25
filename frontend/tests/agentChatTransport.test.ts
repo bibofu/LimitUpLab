@@ -157,3 +157,14 @@ test("detaching a view aborts its subscription without another GET or a control 
   }, { signal: controller.signal }));
   assert.equal(calls, 1);
 });
+
+test("paused with cancellation requested keeps streaming until the formal cancelled result", async () => {
+  const cancelling = { ...paused, cancel_requested: true, can_resume: false, can_cancel: false };
+  const terminal = { ...final, task_status: "cancelled" };
+  const events: string[] = [];
+  const result = await streamExistingRun("", cancelling, event => events.push(event.event), async () => response(
+    frame("run_state", cancelling) + frame("completed", terminal),
+  ));
+  assert.deepEqual(result, terminal);
+  assert.deepEqual(events, ["accepted", "run_state", "completed"]);
+});

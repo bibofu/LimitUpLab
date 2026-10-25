@@ -73,7 +73,7 @@ async function consumeStream(baseUrl: string, sessionId: string, initialRun: Age
           return;
         }
         stateRevision = data.state_revision;
-        if (data.run_status === "paused") completed = { paused: true, run: data };
+        if (data.run_status === "paused" && !data.cancel_requested) completed = { paused: true, run: data };
       }
       if (["accepted", "run_state", "progress", "status", "tool_start", "tool_end", "warning", "completed"].includes(name)) {
         onEvent({ event: name, data, id } as AgentChatStreamEvent);
