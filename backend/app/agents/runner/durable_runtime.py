@@ -150,6 +150,7 @@ class DurableRuntime:
         self.loop = asyncio.get_running_loop()
         self.saver = FencedPostgresSaver(pool)
         self.graph = build_graph(self.saver)
+        self.active_tasks = set()
 
     @classmethod
     async def open(cls, database_url):
@@ -171,6 +172,8 @@ class DurableRuntime:
         return asyncio.run_coroutine_threadsafe(self.run(runner, control), self.loop).result()
 
     async def run(self, runner, control):
+        task = asyncio.current_task()
+        self.active_tasks.add(task)
         try:
             return await self._run(runner, control)
         except (LeaseLost, RecoverableRunError):
@@ -178,6 +181,8 @@ class DurableRuntime:
         except Exception as error:
             logger.exception("Durable state preparation interrupted run_id=%s", control.row["run_id"])
             raise RecoverableRunError("执行状态暂时无法读取，原任务可恢复。") from error
+        finally:
+            self.active_tasks.discard(task)
 
     async def _run(self, runner, control):
         from app.agents.runtime_errors import RecoverableRunError

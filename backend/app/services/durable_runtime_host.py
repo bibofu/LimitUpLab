@@ -32,13 +32,20 @@ class DurableRuntimeHost:
                 self.ready.set_exception(error)
         finally:
             durable_runtime._runtime = None
+            # Let the pool stop its own workers. Cancelling them first causes
+            # pool.close() to re-raise CancelledError during application shutdown.
+            if hasattr(self, "runtime"):
+                running = list(self.runtime.active_tasks)
+                for task in running:
+                    task.cancel()
+                if running:
+                    loop.run_until_complete(asyncio.gather(*running, return_exceptions=True))
+                loop.run_until_complete(self.runtime.pool.close())
             pending = asyncio.all_tasks(loop)
             for task in pending:
                 task.cancel()
             if pending:
                 loop.run_until_complete(asyncio.gather(*pending, return_exceptions=True))
-            if hasattr(self, "runtime"):
-                loop.run_until_complete(self.runtime.pool.close())
             loop.run_until_complete(loop.shutdown_asyncgens())
             loop.close()
 
