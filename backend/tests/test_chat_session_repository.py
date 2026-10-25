@@ -2,12 +2,12 @@
 from database_support import isolated_database_url, release_database_url
 import unittest
 from datetime import datetime, timedelta, timezone
-from pathlib import Path
 
 from app.database import connect
 from app.models import AgentRun, ChatSessionMessage
 from app.repositories import AgentRunRepository, ChatSessionRepository
 from app.repositories.chat_session_repository import SessionOwnershipError
+from agent_ledger_fixtures import insert_historical_run
 
 
 class ChatSessionRepositoryTest(unittest.TestCase):
@@ -58,7 +58,7 @@ class ChatSessionRepositoryTest(unittest.TestCase):
                     created_at=started_at,
                 )
             )
-            run_repository.save_run(
+            insert_historical_run(database_url,
                 AgentRun(
                     run_id="run-1",
                     session_id=created.session_id,

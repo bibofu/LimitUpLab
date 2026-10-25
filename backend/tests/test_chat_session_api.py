@@ -3,9 +3,7 @@ from database_support import isolated_database_url, release_database_url
 import os
 import unittest
 from datetime import datetime, timezone
-from pathlib import Path
 from unittest.mock import patch
-from uuid import uuid4
 
 from fastapi import HTTPException
 
@@ -15,7 +13,8 @@ from app.models import (
     ChatSessionMessage,
     ChatSessionUpdateRequest,
 )
-from app.repositories import AgentRunRepository, ChatSessionRepository
+from app.repositories import ChatSessionRepository
+from agent_ledger_fixtures import insert_historical_run
 from app.routers.agents import (
     create_chat_session,
     delete_chat_session,
@@ -68,9 +67,8 @@ class ChatSessionApiTest(unittest.TestCase):
             with self.assertRaises(HTTPException) as foreign_delete_error:
                 delete_chat_session(session_id, owner_id=other_owner_id)
 
-            run_repository = AgentRunRepository(database_url)
             now = datetime.now(timezone.utc)
-            run_repository.save_run(
+            insert_historical_run(database_url,
                 AgentRun(
                     run_id="owner-run",
                     session_id=session_id,

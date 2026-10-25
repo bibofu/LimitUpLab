@@ -2,15 +2,14 @@
 from database_support import isolated_database_url, release_database_url
 import unittest
 from datetime import datetime, timezone
-from pathlib import Path
 
 from app.models import AgentRun
 from app.repositories import AgentRunRepository, ChatSessionRepository
+from agent_ledger_fixtures import insert_historical_run
 
 
 class AgentRunRepositoryTest(unittest.TestCase):
-    # Regression scenario: save and list recent runs.
-    def test_save_and_list_recent_runs(self) -> None:
+    def test_list_historical_runs_scoped_to_owner(self) -> None:
         database_url = isolated_database_url('.test_agent_runs.sqlite')
         release_database_url(database_url)
         try:
@@ -32,7 +31,7 @@ class AgentRunRepositoryTest(unittest.TestCase):
                 finished_at=datetime.now(timezone.utc),
             )
 
-            repository.save_run(run)
+            insert_historical_run(database_url, run)
             rows = repository.list_recent_runs("session-a")
             all_rows = repository.list_runs(limit=5)
             owned_rows = repository.list_runs(

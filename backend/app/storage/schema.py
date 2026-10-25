@@ -1,7 +1,8 @@
-"""Versioned PostgreSQL metadata, independent of SQLite initialization code.
+"""Frozen revision builders and readiness checks for hand-written migrations.
 
-The baseline manifest is frozen at SQLite schema version 12 plus the final
-runtime and business schemas. JSON and historical dates intentionally remain TEXT.
+The baseline manifest describes revision 0001, not today's schema. Later
+revisions are authoritative; no incomplete current metadata model is exposed.
+JSON and historical dates intentionally remain TEXT.
 """
 
 import json
@@ -70,12 +71,6 @@ def add_coordination_metadata(result: sa.MetaData) -> None:
         sa.Column("owner_id", sa.Text, primary_key=True),
         sa.Column("day_key", sa.Text, primary_key=True),
         sa.Column("request_count", sa.BigInteger, nullable=False))
-
-
-metadata = baseline_metadata()
-add_coordination_metadata(metadata)
-sa.Index("one_champion_policy", metadata.tables["scoring_policies"].c.status,
-         unique=True, postgresql_where=sa.text("status = 'champion'"))
 
 
 def assert_schema_current(engine_or_connection) -> None:

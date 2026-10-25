@@ -3,16 +3,17 @@
 import io
 
 import sqlalchemy as sa
+import pytest
 from alembic import command
 from alembic.config import Config
+from alembic.util import CommandError
 
-from app.storage.schema import BACKEND_ROOT, baseline_metadata, metadata
+from app.storage.schema import BACKEND_ROOT, add_coordination_metadata, baseline_metadata
 
 
 def test_frozen_baseline_preserves_history_types_and_order():
     baseline = baseline_metadata()
     assert len(baseline.tables) == 41
-    assert len(metadata.tables) == 45
     for name in ("chat_messages", "react_calls"):
         assert baseline.tables[name].c.legacy_order.identity is not None
     for name, column in (
@@ -25,7 +26,10 @@ def test_frozen_baseline_preserves_history_types_and_order():
 
 
 def test_frozen_schema_has_deferrable_foreign_keys_and_complete_metadata():
-    for table in metadata.tables.values():
+    historical = baseline_metadata()
+    add_coordination_metadata(historical)
+    assert len(historical.tables) == 45
+    for table in historical.tables.values():
         assert len(table.primary_key.columns) > 0
         for constraint in table.foreign_key_constraints:
             assert constraint.deferrable
@@ -54,3 +58,21 @@ def test_alembic_offline_upgrade_is_complete_and_credential_free(monkeypatch):
     assert 'DROP TABLE IF EXISTS "quality_cases"' in sql
     assert "secret" not in sql
     assert "PRAGMA" not in sql
+
+
+@pytest.mark.parametrize("operation", ["revision", "check"])
+def test_autogeneration_is_explicitly_rejected_without_writing_revisions(postgresql_database, operation):
+    engine = sa.create_engine(postgresql_database, poolclass=sa.pool.NullPool)
+    before = set((BACKEND_ROOT / "migrations" / "versions").iterdir())
+    try:
+        with engine.connect() as connection:
+            config = Config(str(BACKEND_ROOT / "alembic.ini"))
+            config.attributes["connection"] = connection
+            with pytest.raises(CommandError, match="hand-written Alembic revisions"):
+                if operation == "revision":
+                    command.revision(config, message="must not be generated", autogenerate=True)
+                else:
+                    command.check(config)
+    finally:
+        engine.dispose()
+    assert set((BACKEND_ROOT / "migrations" / "versions").iterdir()) == before

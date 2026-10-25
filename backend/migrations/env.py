@@ -4,8 +4,18 @@ import os
 
 import sqlalchemy as sa
 from alembic import context
+from alembic.util import CommandError
 
-from app.storage.schema import metadata
+
+def require_manual_revisions():
+    """Block CLI and Python autogenerate/check before schema comparison."""
+    revision = context.get_context().opts.get("revision_context")
+    if revision is not None and revision.command_args.get("autogenerate"):
+        raise CommandError(
+            "LimitUpLab uses hand-written Alembic revisions; autogenerate and check "
+            "are disabled because frozen baseline metadata is not the current schema. "
+            "Use 'alembic revision -m <description>', edit upgrade(), and run migration tests."
+        )
 
 
 def database_url():
@@ -18,13 +28,15 @@ def database_url():
 
 
 def migrate(connection):
-    context.configure(connection=connection, target_metadata=metadata)
+    context.configure(connection=connection, target_metadata=None)
+    require_manual_revisions()
     with context.begin_transaction():
         context.run_migrations()
 
 
 if context.is_offline_mode():
-    context.configure(url=database_url(), target_metadata=metadata, literal_binds=True)
+    context.configure(url=database_url(), target_metadata=None, literal_binds=True)
+    require_manual_revisions()
     with context.begin_transaction():
         context.run_migrations()
 elif context.config.attributes.get("connection") is not None:

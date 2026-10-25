@@ -1,4 +1,4 @@
-"""PostgreSQL persistence for Agent execution traces."""
+"""Read-only access to delivered and historical Agent execution records."""
 
 import json
 from app.storage.postgres import Record
@@ -9,52 +9,12 @@ from app.models import AgentRun
 
 
 class AgentRunRepository:
-    """Repository for persisted Agent run records."""
+    """Read persisted runs; RunDelivery alone publishes new chat run records."""
 
     def __init__(self, database_url: str | None = None):
         """Create a repository bound to a PostgreSQL URL."""
 
         self.database_url = database_url
-
-    def save_run(self, run: AgentRun) -> None:
-        """Insert or replace one Agent execution trace."""
-
-        connection = connect(self.database_url)
-        try:
-            initialize_database(connection)
-            connection.execute(
-                """
-                INSERT INTO agent_runs (
-                    run_id,
-                    session_id,
-                    run_type,
-                    status,
-                    intent,
-                    tool_calls_json,
-                    input_json,
-                    output_json,
-                    error_message,
-                    started_at,
-                    finished_at
-                )
-                VALUES (?, ?, ?, ?, ?, ?, ?, ?, ?, ?, ?)
-                ON CONFLICT(run_id) DO UPDATE SET
-                    session_id = excluded.session_id,
-                    run_type = excluded.run_type,
-                    status = excluded.status,
-                    intent = excluded.intent,
-                    tool_calls_json = excluded.tool_calls_json,
-                    input_json = excluded.input_json,
-                    output_json = excluded.output_json,
-                    error_message = excluded.error_message,
-                    started_at = excluded.started_at,
-                    finished_at = excluded.finished_at
-                """,
-                self._run_to_record(run),
-            )
-            connection.commit()
-        finally:
-            connection.close()
 
     def list_recent_runs(
         self,
@@ -115,25 +75,6 @@ class AgentRunRepository:
             connection.close()
 
         return [self._run_from_row(row) for row in rows]
-
-    def _run_to_record(self, run: AgentRun) -> tuple[object, ...]:
-        """Serialize an Agent run for PostgreSQL."""
-
-        return (
-            run.run_id,
-            run.session_id,
-            run.run_type,
-            run.status,
-            run.intent,
-            json.dumps(run.tool_calls, ensure_ascii=False),
-            json.dumps(run.input_json, ensure_ascii=False, default=str),
-            json.dumps(run.output_json, ensure_ascii=False, default=str)
-            if run.output_json is not None
-            else None,
-            run.error_message,
-            run.started_at.isoformat(),
-            run.finished_at.isoformat(),
-        )
 
     def _run_from_row(self, row: Record) -> AgentRun:
         """Deserialize a PostgreSQL row into an Agent run model."""
