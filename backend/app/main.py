@@ -4,7 +4,7 @@ from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
 from app.config import configure_runtime_environment, configured_cors_origins
-from app.routers import agents, analysis, consolidation, limit_up, market, stocks
+from app.routers import agents, analysis, consolidation, limit_up, market, memories, stocks
 from app.security import (
     AnonymousVisitorMiddleware,
     is_production_environment,
@@ -88,4 +88,5 @@ app.include_router(limit_up.router, prefix="/api/limit-up", tags=["limit-up"])
 app.include_router(analysis.router, prefix="/api/analysis", tags=["analysis"])
 app.include_router(stocks.router, prefix="/api/stocks", tags=["stocks"])
 app.include_router(agents.router, prefix="/api/agents", tags=["agents"])
+app.include_router(memories.router, prefix="/api/agents", tags=["memories"])
 app.include_router(consolidation.router, prefix="/api/strategies", tags=["strategies"])
