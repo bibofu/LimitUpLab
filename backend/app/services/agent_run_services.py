@@ -12,6 +12,7 @@ from uuid import uuid4
 
 from app.database import begin_write, connect, is_integrity_error
 from app.models import AgentChatResponse
+from app.agents.runtime_errors import RunPauseRequested
 from app.services.runtime_coordination import LeaseLost, LeaseStore
 
 
@@ -140,7 +141,9 @@ class RunRegistry:
             self.coordinator.assert_current(db, run_id, execution, admission)
             if not row["active"] or row["response_json"]:
                 raise RunConflict("Run is already terminal")
-            recovery = int(row["run_status"] != "pending")
+            if not row["cancelled"] and row["run_status"] in {"pausing", "paused"}:
+                raise RunPauseRequested(row)
+            recovery = int(row["run_status"] not in {"pending", "resuming"})
             db.execute("""UPDATE react_runs SET run_status='running', updated_at=?,
                 recovery_count=recovery_count+? WHERE run_id=? AND owner_id=?""",
                 (datetime.now(timezone.utc).isoformat(), recovery, run_id, owner_id))
@@ -154,6 +157,8 @@ class RunRegistry:
             if row["response_json"] or not row["active"]:
                 return False
             self.coordinator.assert_current(db, run_id, execution, admission)
+            if row["run_status"] in {"pausing", "paused", "resuming"} and not row["cancelled"]:
+                return False
             db.execute("""UPDATE react_runs SET run_status='interrupted', updated_at=?
                 WHERE run_id=? AND owner_id=?""",
                 (datetime.now(timezone.utc).isoformat(), run_id, owner_id))
@@ -167,7 +172,8 @@ class RunRegistry:
                 LEFT JOIN runtime_leases AS lease ON lease.name='react:' || run.run_id
                 WHERE run.active=1 AND run.response_json IS NULL
                   AND run.runtime_version='durable-v1'
-                  AND (run.recovery_count<? OR run.cancelled=1)
+                  AND (run.run_status!='paused' OR run.cancelled=1)
+                  AND (run.recovery_count<? OR run.cancelled=1 OR run.run_status IN ('pausing','resuming'))
                   AND (lease.expires_at IS NULL OR lease.expires_at<=EXTRACT(EPOCH FROM clock_timestamp()))
                 ORDER BY run.updated_at,run.started_at LIMIT ?
             """, (max_recoveries, limit))]
@@ -182,6 +188,7 @@ class RunRegistry:
             deleted = db.execute("""
                 DELETE FROM react_runs
                 WHERE run_id=? AND owner_id=? AND active=1 AND cancelled=0
+                  AND control_revision=0
                   AND checkpoint_json IS NULL AND response_json IS NULL
                   AND NOT EXISTS (SELECT 1 FROM react_events WHERE run_id=react_runs.run_id)
                   AND NOT EXISTS (SELECT 1 FROM react_calls WHERE run_id=react_runs.run_id)
@@ -194,7 +201,8 @@ class RunRegistry:
             begin_write(db)
             self.owned_row(db, run_id, owner_id)
             db.execute(
-                "UPDATE react_runs SET cancelled=1,updated_at=? WHERE run_id=? AND owner_id=? AND active=1",
+                """UPDATE react_runs SET cancelled=1,control_revision=control_revision+1,updated_at=?
+                    WHERE run_id=? AND owner_id=? AND active=1 AND cancelled=0""",
                 (datetime.now(timezone.utc).isoformat(), run_id, owner_id),
             )
 
@@ -237,6 +245,8 @@ class RunDelivery:
             self.coordinator.assert_current(db, run_id, execution, admission)
             if not row["active"]:
                 raise RunConflict("Run is already terminal")
+            if not row["cancelled"] and row["run_status"] in {"pausing", "paused"}:
+                raise RunPauseRequested(row)
             response = {**response, "run_id": run_id, "session_id": row["session_id"]}
             if row["cancelled"]:
                 response.update(task_status="cancelled", stop_reason="cancelled",
@@ -303,3 +313,5 @@ class AgentRunServices:
         self.registry = RunRegistry(self.storage, self.coordinator)
         self.delivery = RunDelivery(self.storage, self.coordinator)
         self.events = RunEventStore(self.storage, self.coordinator)
+        from app.services.agent_run_control import RunControlService
+        self.controls = RunControlService(self.storage, self.coordinator)

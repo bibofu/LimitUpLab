@@ -44,7 +44,9 @@ def test_alembic_offline_upgrade_is_complete_and_credential_free(monkeypatch):
     config = Config(str(BACKEND_ROOT / "alembic.ini"), output_buffer=output)
     command.upgrade(config, "head", sql=True)
     sql = output.getvalue()
-    assert sql.count("CREATE TABLE ") == 54  # Native checkpoints, observations and owner memory.
+    assert sql.count("CREATE TABLE ") == 55  # Includes user run-control operation receipts.
+    assert "CREATE TABLE run_control_operations " in sql
+    assert "control_revision BIGINT NOT NULL DEFAULT 0" in sql
     for table in ("checkpoints", "checkpoint_blobs", "checkpoint_writes", "agent_tool_results"):
         assert f"CREATE TABLE {table} " in sql
     for table in ("long_term_memories", "memory_owner_versions", "memory_operation_receipts"):
