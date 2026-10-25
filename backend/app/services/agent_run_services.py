@@ -1,0 +1,219 @@
+"""Business run registration, fenced delivery and replayable progress events.
+
+These services persist business records only. LangGraph owns execution state;
+neither the registry nor the event stream is an execution checkpoint.
+"""
+
+from contextlib import contextmanager
+from datetime import datetime, timezone
+import hashlib
+import json
+from uuid import uuid4
+
+from app.database import begin_write, connect, is_integrity_error
+from app.models import AgentChatResponse
+from app.services.runtime_coordination import LeaseLost, LeaseStore
+
+
+def encode(value):
+    return json.dumps(value, ensure_ascii=False, default=str, separators=(",", ":"))
+
+
+class RunConflict(ValueError):
+    """The request conflicts with an existing request or active conversation."""
+
+
+class RunStorage:
+    def __init__(self, database_url=None):
+        self.leases = LeaseStore(database_url)
+        self.database_url = self.leases.database_url
+
+    @contextmanager
+    def connection(self):
+        db = connect(self.database_url)
+        try:
+            with db:
+                yield db
+        finally:
+            db.close()
+
+
+class RunCoordinator:
+    """Coordinate workers without using process-local worker bookkeeping."""
+
+    def __init__(self, storage):
+        self.storage = storage
+
+    def claim(self, run_id):
+        return self.storage.leases.claim("react:" + run_id)
+
+    def executing(self, run_id):
+        return self.storage.leases.live("react:" + run_id)
+
+    def assert_current(self, db, run_id, execution=None, admission=None):
+        self.storage.leases.assert_current(db, "react:" + run_id, execution)
+        if admission is not None and hasattr(admission, "assert_current"):
+            admission.assert_current(db)
+
+
+class RunRegistry:
+    """Own immutable request identity and public run lifecycle records."""
+
+    def __init__(self, storage, coordinator):
+        self.storage, self.coordinator = storage, coordinator
+
+    def create(self, request, owner_id):
+        payload = request.model_dump(mode="json")
+        fingerprint = hashlib.sha256(encode(payload).encode()).hexdigest()
+        key = request.message_id or uuid4().hex
+        with self.storage.connection() as db:
+            begin_write(db)
+            existing = db.execute(
+                "SELECT * FROM react_runs WHERE owner_id=? AND session_id=? AND message_key=?",
+                (owner_id, request.session_id, key),
+            ).fetchone()
+            if existing:
+                if existing["request_hash"] != fingerprint:
+                    raise RunConflict("同一 message_id 不能用于不同请求")
+                return dict(existing), False
+            identity = db.execute(
+                "SELECT 1 FROM chat_sessions WHERE session_id=? AND owner_id=?",
+                (request.session_id, owner_id),
+            ).fetchone()
+            if identity is None:
+                raise KeyError("Session not found")
+            run_id = "run_" + uuid4().hex
+            try:
+                db.execute(
+                    """INSERT INTO react_runs
+                    (run_id,owner_id,session_id,message_key,request_json,request_hash,started_at)
+                    VALUES(?,?,?,?,?,?,?)""",
+                    (run_id, owner_id, request.session_id, key, encode(payload), fingerprint,
+                     datetime.now(timezone.utc).isoformat()),
+                )
+            except Exception as error:
+                if not is_integrity_error(error):
+                    raise
+                raise RunConflict("该会话已有任务执行中，请等待或取消后再发送") from error
+            return dict(db.execute("SELECT * FROM react_runs WHERE run_id=?", (run_id,)).fetchone()), True
+
+    @staticmethod
+    def owned_row(db, run_id, owner_id):
+        row = db.execute(
+            "SELECT * FROM react_runs WHERE run_id=? AND owner_id=?", (run_id, owner_id),
+        ).fetchone()
+        if row is None:
+            raise KeyError("Run not found")
+        return dict(row)
+
+    def get(self, run_id, owner_id):
+        with self.storage.connection() as db:
+            return self.owned_row(db, run_id, owner_id)
+
+    def delivered_response(self, run_id, owner_id):
+        """Read the authoritative result before resuming or redelivering a run."""
+        row = self.get(run_id, owner_id)
+        return json.loads(row["response_json"]) if row["response_json"] else None
+
+    def discard_unstarted(self, run_id, owner_id, execution=None):
+        with self.storage.connection() as db:
+            begin_write(db)
+            try:
+                self.coordinator.assert_current(db, run_id, execution)
+            except LeaseLost:
+                return False
+            deleted = db.execute("""
+                DELETE FROM react_runs
+                WHERE run_id=? AND owner_id=? AND active=1 AND cancelled=0
+                  AND checkpoint_json IS NULL AND response_json IS NULL
+                  AND NOT EXISTS (SELECT 1 FROM react_events WHERE run_id=react_runs.run_id)
+                  AND NOT EXISTS (SELECT 1 FROM react_calls WHERE run_id=react_runs.run_id)
+                  AND NOT EXISTS (SELECT 1 FROM chat_messages WHERE run_id=react_runs.run_id)
+            """, (run_id, owner_id))
+            return deleted.rowcount == 1
+
+    def cancel(self, run_id, owner_id):
+        with self.storage.connection() as db:
+            begin_write(db)
+            self.owned_row(db, run_id, owner_id)
+            db.execute(
+                "UPDATE react_runs SET cancelled=1 WHERE run_id=? AND owner_id=? AND active=1",
+                (run_id, owner_id),
+            )
+
+
+class RunEventStore:
+    """Persist replay cursors independently of graph persistence."""
+
+    def __init__(self, storage, coordinator):
+        self.storage, self.coordinator = storage, coordinator
+
+    def append(self, run_id, event, payload, *, execution=None, admission=None):
+        with self.storage.connection() as db:
+            begin_write(db)
+            self.coordinator.assert_current(db, run_id, execution, admission)
+            db.execute(
+                "INSERT INTO react_events(run_id,event,payload_json) VALUES(?,?,?)",
+                (run_id, event, encode(payload)),
+            )
+
+    def list(self, run_id, owner_id, after=0):
+        with self.storage.connection() as db:
+            RunRegistry.owned_row(db, run_id, owner_id)
+            return [dict(row) for row in db.execute(
+                "SELECT * FROM react_events WHERE run_id=? AND seq>? ORDER BY seq", (run_id, after),
+            )]
+
+
+class RunDelivery:
+    """Commit one validated public answer before the transport can publish it."""
+
+    def __init__(self, storage, coordinator):
+        self.storage, self.coordinator = storage, coordinator
+
+    def commit(self, run_id, owner_id, response, *, execution=None, admission=None):
+        with self.storage.connection() as db:
+            begin_write(db)
+            row = RunRegistry.owned_row(db, run_id, owner_id)
+            if row["response_json"]:
+                return json.loads(row["response_json"])
+            self.coordinator.assert_current(db, run_id, execution, admission)
+            response = {**response, "run_id": run_id, "session_id": row["session_id"]}
+            if row["cancelled"]:
+                response.update(task_status="cancelled", stop_reason="cancelled",
+                                answer="任务已取消，未继续生成研究结论。")
+            # Graph final validation owns evidence/compliance checks. This boundary
+            # validates and normalizes the exact public document before committing.
+            response = AgentChatResponse.model_validate(response).model_dump(mode="json")
+            now = datetime.now(timezone.utc).isoformat()
+            status = "error" if response["task_status"] == "error" else "success"
+            serialized = encode(response)
+            db.execute("""INSERT INTO agent_runs
+                (run_id,session_id,run_type,status,intent,tool_calls_json,input_json,output_json,started_at,finished_at)
+                VALUES(?,?,?,?,?,?,?,?,?,?)""", (run_id, row["session_id"], "agent_chat", status,
+                response["intent"], encode(response.get("tool_calls", [])), row["request_json"],
+                serialized, row["started_at"], now))
+            db.execute("""INSERT INTO chat_messages
+                (message_id,session_id,role,content,status,run_id,metadata_json,created_at)
+                VALUES(?,?,?,?,?,?,?,?)""", ("answer_" + run_id, row["session_id"], "assistant",
+                response["answer"], status, run_id, serialized, now))
+            db.execute(
+                "UPDATE chat_sessions SET updated_at=? WHERE session_id=? AND owner_id=?",
+                (now, row["session_id"], owner_id),
+            )
+            db.execute(
+                "UPDATE react_runs SET response_json=?,active=0 WHERE run_id=? AND owner_id=?",
+                (serialized, run_id, owner_id),
+            )
+            return response
+
+
+class AgentRunServices:
+    """One shared storage boundary, with explicit independently testable roles."""
+
+    def __init__(self, database_url=None):
+        self.storage = RunStorage(database_url)
+        self.coordinator = RunCoordinator(self.storage)
+        self.registry = RunRegistry(self.storage, self.coordinator)
+        self.delivery = RunDelivery(self.storage, self.coordinator)
+        self.events = RunEventStore(self.storage, self.coordinator)
