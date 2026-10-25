@@ -44,6 +44,14 @@ def clean_conversation_for_memory_revision(conversation: dict, retrieval) -> dic
     """
     state = copy.deepcopy(conversation)
     recent = filter_memory_control_turns(state.get("recent_messages", []))
+    # Loading committed history can append an older assistant turn after the
+    # conversation itself has already been rebuilt for the current identity.
+    # Check each message's provenance even when the conversation did not change.
+    recent = [item for item in recent if not (
+        _value(item, "role") == "assistant"
+        and _metadata(item).get("memory_context_fingerprint")
+        and _metadata(item)["memory_context_fingerprint"] != retrieval.context_fingerprint
+    )]
     previous = state.get("memory_context_fingerprint")
     changed = previous != retrieval.context_fingerprint and (previous is not None or retrieval.owner_revision > 0)
     if changed:

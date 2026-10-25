@@ -44,6 +44,30 @@ def test_current_memory_is_ephemeral_and_lower_priority_than_current_query():
     assert built.messages[-1].content == "这次详细解释"
 
 
+def test_old_committed_assistant_cannot_reenter_already_clean_conversation():
+    current = retrieve(SnapshotRepository([], revision=2, fingerprint="new"))
+    state = clean_conversation_for_memory_revision({"memory_context_fingerprint": "old"}, current)
+    # The graph now appends committed history after its first invalidation pass.
+    state = compress_conversation(state, control_history(),
+                                  summary_trigger_tokens=1000, recent_window_tokens=500)
+    assert state["memory_context_fingerprint"] == "new"
+    assert any(item["role"] == "assistant" for item in state["recent_messages"])
+    cleaned = clean_conversation_for_memory_revision(state, current)
+    assert "简洁" not in json.dumps(cleaned, ensure_ascii=False)
+    assert [item["message_id"] for item in cleaned["recent_messages"]] == ["u-query"]
+    assert not cleaned["memory_scope_rebuilt"]
+
+
+def test_same_snapshot_keeps_assistant_fact_history():
+    current = retrieve(SnapshotRepository([], revision=2, fingerprint="new"))
+    answer = {"message_id": "a-facts", "role": "assistant", "content": "本轮有来源的研究事实",
+              "metadata": {"memory_context_fingerprint": "new", "memory_context_used": False}}
+    cleaned = clean_conversation_for_memory_revision(
+        {"memory_context_fingerprint": "new", "recent_messages": [answer]}, current,
+    )
+    assert cleaned["recent_messages"] == [answer]
+
+
 def test_expired_memory_resumption_clears_old_ai_text_but_keeps_calls_and_evidence():
     retrieved = retrieve(SnapshotRepository([], revision=1, fingerprint="expired"))
     working = [AIMessage(content="我按已删除偏好回答", tool_calls=[{"id": "q", "name": "quote", "args": {}}]),
