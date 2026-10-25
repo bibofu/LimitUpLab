@@ -98,7 +98,7 @@ summary_generation_mode, summary_triggered
 
 读取用同一只读事务返回记录、owner revision、全 owner 有效集合 fingerprint 和数据库时钟。fingerprint 与本次 key/topic 过滤无关；到期即使没有新写入也改变有效集合。更新采用记录版本和可选 owner 版本比较，管理节点再使用运行租约 fencing。相同 operation ID 重试复用操作回执，并读取当前记录，不能用旧保存回执复活后来的删除；重新保存删除项必须显式允许恢复。
 
-记忆管理的用户消息和助手响应带可信来源标记，整轮不进入普通模型历史或摘要。检测到集合变化后，清除旧自由摘要和无法证明作用域的约束，从仍有效的用户会话消息重建；带旧 fingerprint 的助手文本也会被排除。摘要模型调用之前先清理，本轮工作消息保留成对工具调用/结果但移除过时的模型文字。市场工具证据与已验证股票引用可以继续使用原有来源边界。
+记忆管理的用户消息和助手响应带可信来源标记，整轮不进入普通模型历史或摘要。取消、失败和拒绝轮次同样按正式结局整体排除，覆盖记忆写入后、checkpoint 保存前被取消而缺少管理标记的情况；先判断整轮结局，再过滤消息状态，并保留原始历史游标。检测到集合变化后，清除旧自由摘要和无法证明作用域的约束，从仍有效的用户会话消息重建；带旧 fingerprint 的助手文本也会被排除。摘要模型调用之前先清理，本轮工作消息保留成对工具调用/结果但移除过时的模型文字。市场工具证据与已验证股票引用可以继续使用原有来源边界。
 
 恢复最终 checkpoint、生成管理确认，以及正式交付事务都检查生成内容所属的记忆身份。若中途删除、更新或到期，旧候选答案变为 `partial / memory_changed`，要求重新查询，不发布已撤回内容。管理查询和写入确认绑定生成它们的同一事务快照，不能用后续新 fingerprint 给旧正文重新贴标。
 
@@ -191,7 +191,18 @@ summary_generation_mode, summary_triggered
 
 固定 Tool World 消融采用相同九个输入场景与预算，分别关闭全部记忆、仅保留短期记忆、启用短期加长期记忆。对应上下文契约通过数为 4/9、4/9、9/9，报告记录召回数和估算输入 tokens；这衡量实体/约束/记忆是否以正确作用域抵达上下文，不是模型答题准确率或收益指标，也不能据此宣称长期记忆普遍提高任务成功率。复现时可设置 `LIMITUPLAB_MEMORY_ABLATION_REPORT` 到项目忽略目录后运行 `tests/test_long_term_memory_ablation.py`；本次报告为 `output/long-term-memory-ablation.json`。
 
-第二轮真实 `deepseek-v4-flash` 经 FastAPI HTTP 路由完成 13 次问答，均为 HTTP 200、`task_status=complete`。覆盖保存偏好、应用重启后新会话查看、当前详细要求覆盖简洁偏好、修改、删除、否定/临时请求不写入、首板三问和跨会话主动查看历史档案；“第二只”再次返回 000559 万向钱潮。核对 owner 隔离与档案 as_of/source run，报告为 `output/memory-refactoring/round2-live.json`。这是一次真实模型冒烟验收，不替代稳定性或性能评测。第二轮最终全量结果另在本节追加。
+第二轮真实 `deepseek-v4-flash` 经 FastAPI HTTP 路由完成两轮各 13 次问答，最后一轮在功能提交 `5600746` 对应代码上执行，13 次均为 HTTP 200、`task_status=complete`。覆盖保存偏好、应用重启后新会话查看、当前详细要求覆盖简洁偏好、修改、删除、否定/临时请求不写入、首板三问和跨会话主动查看历史档案；“第二只”再次返回 000559 万向钱潮。核对 owner 隔离与档案 as_of/source run，最终报告为 `output/memory-refactoring/round2-live.json`。这是实际模型冒烟验收，不替代稳定性、完整语义正确性或性能评测。
+
+第二轮最终验收（2026-10-25）：
+
+| 验证集 | 最终结果 | 报告与边界 |
+| --- | --- | --- |
+| 后端全量，功能版本 `5600746` | 1711 passed、22 subtests passed，0 failed、0 skipped | 独立 PostgreSQL；线程异常视为失败；165.99 秒；`output/validation/20261025T070946Z-867a6cc0/` |
+| 前端测试与生产构建 | 224 passed；tsc + Vite build 成功 | `output/validation/20261025T070315Z-8f8f02b8/` |
+| 最终真实模型问答 | 13 次均完整交付 | 新建独立验收会话，保留当前请求覆盖、跨会话及市场名单核对记录 |
+| 正式交付与档案审计 | 13 个 run 各有且仅有 1 条正式 assistant 消息；删除值清空；档案正文匹配已提交源报告；证据 SHA-256 一致 | `output/memory-refactoring/round2-audit.json`；所有测试会话均有原生 checkpoint |
+
+全部模块测试包含在后端全量数字中，不重复相加。最后的取消修复增加 8 项测试，包括实际 PostgreSQL Graph 的写入前/写入后故障再取消边界。后端只保留既有 LangChain 弃用提示，前端保留既有大 bundle 非阻断提示。原始问答、测试日志、备份与消融输出均位于 Git 忽略目录，未提交凭据、数据库或生成报告。
 
 ## 明确未完成的范围
 
