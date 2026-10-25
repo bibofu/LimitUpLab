@@ -1,7 +1,7 @@
-"""Minimal production LangGraph tool-use loop.
+"""Request-scoped business nodes hosted by the application durable graph.
 
-It has no evidence IDs, delivery control tools or task/date compiler; the model
-receives complete, self-describing tool results directly.
+Small observations are lossless; large observations expose immutable receipts
+for bounded reads. Registration and final delivery belong to business services.
 """
 
 from __future__ import annotations
@@ -65,7 +65,7 @@ class RunnerState(TypedDict, total=False):
 
 
 class AgentRunner:
-    """One request-scoped LangGraph loop over business tools only."""
+    """Per-request model and tool dependencies, never a separate compiled graph."""
 
     def __init__(
         self,
@@ -289,7 +289,7 @@ class AgentRunner:
                 if control is None:
                     raise ValueError("Saved result reads require an owned durable run")
                 request = ReadModelResultRequest.model_validate(call["args"])
-                return read_owned_result(control.journal.database_url, owner_id=control.row["owner_id"],
+                return read_owned_result(control.lifecycle.database_url, owner_id=control.row["owner_id"],
                                          run_id=control.row["run_id"], request=request, max_tokens=PAGE_TOKEN_BUDGET)
             arguments = self.gateway.validate(call)
             signature = dump([call["name"], sorted(arguments.items())])

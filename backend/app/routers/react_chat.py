@@ -36,9 +36,9 @@ def notify_streams():
         _updates.notify_all()
 
 
-def owned(journal, run_id, owner_id):
+def owned(lifecycle, run_id, owner_id):
     try:
-        return journal.get(run_id, owner_id)
+        return lifecycle.get(run_id, owner_id)
     except KeyError as error:
         raise HTTPException(404, "Agent run not found") from error
 
@@ -48,35 +48,35 @@ def start(request, http_request, owner_id):
     from app.routers import agents
     from app.agents.runner.durable_runtime import get_runtime
     chats = ChatSessionRepository()
-    journal = RunLifecycle()
+    lifecycle = RunLifecycle()
     with _lock:
         try:
-            existing = journal.services.registry.find_request(request, owner_id)
+            existing = lifecycle.services.registry.find_request(request, owner_id)
             if existing and not existing["active"]:
-                return journal, existing
+                return lifecycle, existing
             if existing and existing["runtime_version"] != "durable-v1":
                 raise HTTPException(409, "旧版未完成任务无法恢复。请先取消该任务，再以新 message_id 重新提交。")
             if get_runtime() is None:
                 raise HTTPException(503, "持久化运行时暂不可用，请稍后重试；已有任务已保留。")
             session = chats.ensure_session(request.session_id, first_message=request.message, owner_id=owner_id)
-            row, fresh = journal.create(request, owner_id)
+            row, fresh = lifecycle.create(request, owner_id)
         except RunConflict as error:
             raise HTTPException(409, str(error)) from error
         except (KeyError, SessionOwnershipError) as error:
             raise HTTPException(404, "Chat session not found") from error
         run_id = row["run_id"]
         if not row["active"]:
-            return journal, row
+            return lifecycle, row
         if row["runtime_version"] != "durable-v1":
             raise HTTPException(409, "旧版未完成任务无法恢复。请先取消该任务，再以新 message_id 重新提交。")
-        execution = journal.claim(run_id)
+        execution = lifecycle.claim(run_id)
         if execution is None:
-            return journal, row
+            return lifecycle, row
         # A remote worker may have finished after create() returned its snapshot.
-        row = journal.get(run_id, owner_id)
+        row = lifecycle.get(run_id, owner_id)
         if not row["active"]:
             execution.release()
-            return journal, row
+            return lifecycle, row
         # POST may resume the saved graph; GET/reconnect remains read-only.
         started_at = datetime.fromisoformat(row["started_at"])
         try:
@@ -92,7 +92,7 @@ def start(request, http_request, owner_id):
             # so it cannot strand the conversation behind an unknown active run.
             try:
                 if fresh:
-                    journal.discard_unstarted(run_id, owner_id, execution)
+                    lifecycle.discard_unstarted(run_id, owner_id, execution)
             finally:
                 execution.release()
             raise
@@ -104,7 +104,7 @@ def start(request, http_request, owner_id):
         except Exception as error:
             try:
                 if fresh:
-                    journal.discard_unstarted(run_id, owner_id, execution)
+                    lifecycle.discard_unstarted(run_id, owner_id, execution)
             finally:
                 try:
                     agents._finish_agent_request(usage_repository, usage_record, None, error=error)
@@ -118,7 +118,7 @@ def start(request, http_request, owner_id):
 
         def worker():
             tracker = response = failure = None
-            control = RunControl(journal, row, execution, lease)
+            control = RunControl(lifecycle, row, execution, lease)
             control.notify = notify_streams
             token = CURRENT_CONTROL.set(control)
             # Tracing starts inside the worker thread: ContextVar/OTel context does
@@ -148,10 +148,10 @@ def start(request, http_request, owner_id):
                 )
             )
             def progress(stage, message):
-                journal.event(run_id, "progress", {"stage": stage, "message": message})
+                lifecycle.event(run_id, "progress", {"stage": stage, "message": message})
                 notify_streams()
             try:
-                control.row = journal.services.registry.mark_running(
+                control.row = lifecycle.services.registry.mark_running(
                     run_id, owner_id, execution=execution, admission=lease,
                 )
                 progress("preparing", "正在准备会话与研究数据")
@@ -183,7 +183,7 @@ def start(request, http_request, owner_id):
                                 update={"trace_url": run_span.url()}
                             )
                         with trace_stage("final_delivery"):
-                            response = AgentChatResponse.model_validate(journal.finish(run_id, owner_id, response.model_dump(mode="json")))
+                            response = AgentChatResponse.model_validate(lifecycle.finish(run_id, owner_id, response.model_dump(mode="json")))
                         notify_streams()
                 except Exception as error:
                     # Saving is part of delivery: leave the run record retryable
@@ -194,7 +194,7 @@ def start(request, http_request, owner_id):
                     try:
                         if response is None:
                             try:
-                                journal.services.registry.mark_interrupted(
+                                lifecycle.services.registry.mark_interrupted(
                                     run_id, owner_id, execution=execution,
                                 )
                             except Exception:
@@ -246,7 +246,7 @@ def start(request, http_request, owner_id):
                 finally:
                     notify_streams()
             raise HTTPException(503, "任务暂未能启动，请重试原请求以恢复。") from error
-    return journal, row
+    return lifecycle, row
 
 
 def failed_response(row, reason):
@@ -260,7 +260,7 @@ def interruption_message(row):
     return "旧版任务无法恢复。请先取消该任务，再以新 message_id 重新提交。"
 
 
-def stream(journal, row, owner_id, after=0):
+def stream(lifecycle, row, owner_id, after=0):
     run_id = row["run_id"]
     def frames():
         cursor = after
@@ -268,20 +268,20 @@ def stream(journal, row, owner_id, after=0):
         while True:
             with _updates:
                 revision = _update_revision
-            latest = owned(journal, run_id, owner_id)
+            latest = owned(lifecycle, run_id, owner_id)
             if latest["response_json"]:
                 # Completed reconnects skip withdrawn drafts and publish only the authoritative answer.
                 yield "event: completed\ndata: " + latest["response_json"] + "\n\n"
                 return
-            for event in journal.events(run_id, owner_id, cursor):
+            for event in lifecycle.events(run_id, owner_id, cursor):
                 cursor = event["seq"]
                 # Old interrupted runs may contain draft events. Advance the
                 # cursor without replaying them; only committed answers are public.
                 if event["event"] in PUBLIC_PROGRESS_EVENTS:
                     yield f"id: {cursor}\nevent: {event['event']}\ndata: {event['payload_json']}\n\n"
-            if not journal.executing(run_id):
+            if not lifecycle.executing(run_id):
                 # Completion may have committed since the first poll above.
-                finished = owned(journal, run_id, owner_id)["response_json"]
+                finished = owned(lifecycle, run_id, owner_id)["response_json"]
                 if finished:
                     # Re-read completion on the next poll.
                     continue
@@ -293,13 +293,13 @@ def stream(journal, row, owner_id, after=0):
     return StreamingResponse(frames(), media_type="text/event-stream", headers={"Cache-Control": "no-cache", "X-Accel-Buffering": "no", "X-Agent-Run-Id": run_id})
 
 
-def synchronous(journal, row, owner_id):
+def synchronous(lifecycle, row, owner_id):
     while True:
-        latest = owned(journal, row["run_id"], owner_id)
+        latest = owned(lifecycle, row["run_id"], owner_id)
         if latest["response_json"]:
             return AgentChatResponse.model_validate_json(latest["response_json"])
-        if not journal.executing(row["run_id"]):
-            finished = owned(journal, row["run_id"], owner_id)["response_json"]
+        if not lifecycle.executing(row["run_id"]):
+            finished = owned(lifecycle, row["run_id"], owner_id)["response_json"]
             if finished:
                 return AgentChatResponse.model_validate_json(finished)
             raise HTTPException(503, interruption_message(latest))
@@ -309,31 +309,31 @@ def synchronous(journal, row, owner_id):
 
 @router.get("/chat/runs/{run_id}")
 def get_run(run_id: str, owner_id: Annotated[str, Depends(current_owner_id)]):
-    journal = RunLifecycle()
-    row = owned(journal, run_id, owner_id)
+    lifecycle = RunLifecycle()
+    row = owned(lifecycle, run_id, owner_id)
     return {"run_id": run_id, "active": bool(row["active"]), "cancel_requested": bool(row["cancelled"]),
-            "interrupted": bool(row["active"] and not journal.executing(run_id)),
+            "interrupted": bool(row["active"] and not lifecycle.executing(run_id)),
             "run_status": row["run_status"], "recovery_count": row["recovery_count"],
             "response": json.loads(row["response_json"]) if row["response_json"] else None}
 
 
 @router.get("/chat/runs/{run_id}/stream")
 def reconnect(run_id: str, owner_id: Annotated[str, Depends(current_owner_id)], after: int = Query(0, ge=0)):
-    journal = RunLifecycle()
-    return stream(journal, owned(journal, run_id, owner_id), owner_id, after)
+    lifecycle = RunLifecycle()
+    return stream(lifecycle, owned(lifecycle, run_id, owner_id), owner_id, after)
 
 
 @router.post("/chat/runs/{run_id}/cancel")
 def cancel(run_id: str, owner_id: Annotated[str, Depends(current_owner_id)]):
-    journal = RunLifecycle()
+    lifecycle = RunLifecycle()
     with _lock:
-        row = owned(journal, run_id, owner_id)
-        journal.cancel(run_id, owner_id)
-        execution = journal.claim(run_id) if row["active"] else None
+        row = owned(lifecycle, run_id, owner_id)
+        lifecycle.cancel(run_id, owner_id)
+        execution = lifecycle.claim(run_id) if row["active"] else None
         if execution is not None:
-            token = CURRENT_CONTROL.set(RunControl(journal, row, execution))
+            token = CURRENT_CONTROL.set(RunControl(lifecycle, row, execution))
             try:
-                journal.finish(run_id, owner_id, failed_response(row, "cancelled").model_dump(mode="json"))
+                lifecycle.finish(run_id, owner_id, failed_response(row, "cancelled").model_dump(mode="json"))
             finally:
                 CURRENT_CONTROL.reset(token)
                 execution.release()

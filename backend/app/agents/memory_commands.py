@@ -9,7 +9,7 @@ from app.services.memory_retrieval import retrieve_memories
 
 
 def repository_for(control):
-    return LongTermMemoryRepository(control.journal.database_url)
+    return LongTermMemoryRepository(control.lifecycle.database_url)
 
 
 def retrieve_for_run(control, query):
@@ -32,7 +32,7 @@ def prepare_memory_request(intent, control, owner_revision):
                   memory_id=current.memory_id if current else None,
                   restore_deleted=bool(current and current.deleted_at))
     if intent.action == "save" and intent.memory_type == "research_archive" and not intent.source_run_id:
-        with control.journal.connection() as db:
+        with control.lifecycle.connection() as db:
             previous = db.execute("""SELECT run_id FROM react_runs WHERE owner_id=? AND session_id=?
                 AND run_id<>? AND response_json IS NOT NULL
                 AND response_json::jsonb->>'task_status' IN ('complete','partial','empty')

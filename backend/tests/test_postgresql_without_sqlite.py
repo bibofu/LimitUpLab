@@ -33,11 +33,11 @@ def test_application_http_with_no_sqlite_access(postgresql_database, tmp_path, m
     owner = "visitor_" + "c" * 32
     chats = ChatSessionRepository()
     chats.create_session(session_id="pg-only-session", owner_id=owner)
-    journal = RunLifecycle()
-    run, _ = journal.create(AgentChatRequest(
+    lifecycle = RunLifecycle()
+    run, _ = lifecycle.create(AgentChatRequest(
         session_id="pg-only-session", message_id="question", message="解释已有研究数据",
     ), owner)
-    final = journal.finish(run["run_id"], owner, AgentChatResponse(
+    final = lifecycle.finish(run["run_id"], owner, AgentChatResponse(
         session_id="pg-only-session", intent="react_research", answer="隔离测试的研究记录。",
         task_status="complete", stop_reason="answered", generated_by="synthetic-test",
     ).model_dump(mode="json"))

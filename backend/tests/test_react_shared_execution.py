@@ -20,10 +20,10 @@ def shared_run(lease_store):
     session = "shared-" + uuid4().hex
     owner = "owner-" + uuid4().hex
     ChatSessionRepository(lease_store.database_url).ensure_session(session, owner_id=owner)
-    journal = RunLifecycle(lease_store.database_url)
+    lifecycle = RunLifecycle(lease_store.database_url)
     request = AgentChatRequest(session_id=session, message_id="m", message="什么是首板？")
-    row, _ = journal.create(request, owner)
-    return journal, row, owner
+    row, _ = lifecycle.create(request, owner)
+    return lifecycle, row, owner
 
 
 def answer(row):
@@ -32,35 +32,35 @@ def answer(row):
 
 
 def test_stale_worker_cannot_publish_any_execution_write(shared_run):
-    journal, row, owner = shared_run
+    lifecycle, row, owner = shared_run
     key = row["run_id"]
-    old = journal.claim(key)
-    context = CURRENT_CONTROL.set(RunControl(journal, row, old))
+    old = lifecycle.claim(key)
+    context = CURRENT_CONTROL.set(RunControl(lifecycle, row, old))
     try:
-        journal.services.registry.mark_running(key, owner, execution=old)
+        lifecycle.services.registry.mark_running(key, owner, execution=old)
     finally:
         CURRENT_CONTROL.reset(context)
-    with journal.connection() as db:
+    with lifecycle.connection() as db:
         db.execute("UPDATE runtime_leases SET expires_at=0 WHERE name=?", (old.name,))
-    new = RunLifecycle(journal.database_url).claim(key)
-    context = CURRENT_CONTROL.set(RunControl(journal, row, old))
+    new = RunLifecycle(lifecycle.database_url).claim(key)
+    context = CURRENT_CONTROL.set(RunControl(lifecycle, row, old))
     try:
         for operation in (
-            lambda: journal.event(key, "progress", {"stale": True}),
-            lambda: journal.services.registry.mark_running(key, owner, execution=old),
-            lambda: journal.services.registry.mark_interrupted(key, owner, execution=old),
-            lambda: journal.finish(key, owner, answer(row)),
+            lambda: lifecycle.event(key, "progress", {"stale": True}),
+            lambda: lifecycle.services.registry.mark_running(key, owner, execution=old),
+            lambda: lifecycle.services.registry.mark_interrupted(key, owner, execution=old),
+            lambda: lifecycle.finish(key, owner, answer(row)),
         ):
             with pytest.raises(LeaseLost):
                 operation()
-        assert RunControl(journal, row, old).cancelled()
+        assert RunControl(lifecycle, row, old).cancelled()
     finally:
         CURRENT_CONTROL.reset(context)
-    assert not journal.events(key, owner)
-    assert journal.get(key, owner)["checkpoint_json"] is None
-    context = CURRENT_CONTROL.set(RunControl(journal, row, new))
+    assert not lifecycle.events(key, owner)
+    assert lifecycle.get(key, owner)["checkpoint_json"] is None
+    context = CURRENT_CONTROL.set(RunControl(lifecycle, row, new))
     try:
-        assert journal.finish(key, owner, answer(row))["task_status"] == "complete"
+        assert lifecycle.finish(key, owner, answer(row))["task_status"] == "complete"
     finally:
         CURRENT_CONTROL.reset(context)
         old.release()
@@ -68,10 +68,10 @@ def test_stale_worker_cannot_publish_any_execution_write(shared_run):
 
 
 def test_duplicate_request_and_claim_have_one_winner(shared_run):
-    journal, row, owner = shared_run
+    lifecycle, row, owner = shared_run
     request = AgentChatRequest.model_validate_json(row["request_json"])
     def submit(_):
-        remote = RunLifecycle(journal.database_url)
+        remote = RunLifecycle(lifecycle.database_url)
         record, fresh = remote.create(request, owner)
         return record["run_id"], fresh, remote.claim(record["run_id"])
     with ThreadPoolExecutor(max_workers=6) as workers:
@@ -84,24 +84,24 @@ def test_duplicate_request_and_claim_have_one_winner(shared_run):
 
 
 def test_remote_status_stream_and_cancel_ignore_local_thread_registry(shared_run, monkeypatch):
-    journal, row, owner = shared_run
+    lifecycle, row, owner = shared_run
     key = row["run_id"]
-    execution = journal.claim(key)
-    monkeypatch.setattr(react_chat, "RunLifecycle", lambda: RunLifecycle(journal.database_url))
+    execution = lifecycle.claim(key)
+    monkeypatch.setattr(react_chat, "RunLifecycle", lambda: RunLifecycle(lifecycle.database_url))
     # Model a different API instance: it owns no local worker for this run.
     assert key not in react_chat._workers
     assert not react_chat.get_run(key, owner)["interrupted"]
     async def read():
-        frames = react_chat.stream(RunLifecycle(journal.database_url), row, owner).body_iterator
+        frames = react_chat.stream(RunLifecycle(lifecycle.database_url), row, owner).body_iterator
         assert "accepted" in await anext(frames)
         assert "heartbeat" in await anext(frames)
         await frames.aclose()
     asyncio.run(read())
     assert react_chat.cancel(key, owner)["cancel_requested"]
-    assert journal.get(key, owner)["response_json"] is None
-    context = CURRENT_CONTROL.set(RunControl(journal, row, execution))
+    assert lifecycle.get(key, owner)["response_json"] is None
+    context = CURRENT_CONTROL.set(RunControl(lifecycle, row, execution))
     try:
-        assert journal.finish(key, owner, answer(row))["task_status"] == "cancelled"
+        assert lifecycle.finish(key, owner, answer(row))["task_status"] == "cancelled"
     finally:
         CURRENT_CONTROL.reset(context)
         execution.release()
@@ -109,11 +109,11 @@ def test_remote_status_stream_and_cancel_ignore_local_thread_registry(shared_run
 
 
 def test_remote_cancel_finalizes_expired_run_without_model(shared_run, monkeypatch):
-    journal, row, owner = shared_run
-    execution = journal.claim(row["run_id"])
+    lifecycle, row, owner = shared_run
+    execution = lifecycle.claim(row["run_id"])
     execution.release()
-    monkeypatch.setattr(react_chat, "RunLifecycle", lambda: RunLifecycle(journal.database_url))
+    monkeypatch.setattr(react_chat, "RunLifecycle", lambda: RunLifecycle(lifecycle.database_url))
     assert react_chat.get_run(row["run_id"], owner)["interrupted"]
     react_chat.cancel(row["run_id"], owner)
-    result = journal.get(row["run_id"], owner)
+    result = lifecycle.get(row["run_id"], owner)
     assert not result["active"] and json.loads(result["response_json"])["task_status"] == "cancelled"

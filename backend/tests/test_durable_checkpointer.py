@@ -26,16 +26,16 @@ def durable_run(postgresql_database):
     owner = "owner-" + uuid4().hex
     chats = ChatSessionRepository(postgresql_database)
     session = chats.create_session(owner_id=owner)
-    journal = RunLifecycle(postgresql_database)
+    lifecycle = RunLifecycle(postgresql_database)
     request = AgentChatRequest(session_id=session.session_id, message_id="message-1", message="固定数据研究")
-    row, fresh = journal.create(request, owner)
+    row, fresh = lifecycle.create(request, owner)
     assert fresh
-    lease = journal.claim(row["run_id"])
+    lease = lifecycle.claim(row["run_id"])
     assert lease is not None
-    control = RunControl(journal, row, lease)
+    control = RunControl(lifecycle, row, lease)
     token = CURRENT_CONTROL.set(control)
     try:
-        yield journal, row, lease, control
+        yield lifecycle, row, lease, control
     finally:
         CURRENT_CONTROL.reset(token)
         lease.release()
@@ -55,10 +55,10 @@ async def save(saver, config, value, step=0):
     return {"configurable": {**config["configurable"], **result["configurable"]}}
 
 
-def replace_lease(journal, lease, run_id):
-    with journal.connection() as db:
+def replace_lease(lifecycle, lease, run_id):
+    with lifecycle.connection() as db:
         db.execute("UPDATE runtime_leases SET expires_at=0 WHERE name=?", (lease.name,))
-    replacement = journal.claim(run_id)
+    replacement = lifecycle.claim(run_id)
     assert replacement is not None and replacement.fence > lease.fence
     return replacement
 
@@ -70,7 +70,7 @@ def public_answer(row):
 
 
 def test_native_state_and_history_survive_new_pool_without_repeating_tool(durable_run):
-    journal, row, lease, _ = durable_run
+    lifecycle, row, lease, _ = durable_run
     calls = []
     config = execution_config(row, lease)
 
@@ -82,14 +82,14 @@ def test_native_state_and_history_survive_new_pool_without_repeating_tool(durabl
         raise ConnectionError("injected model interruption")
 
     async def scenario():
-        async with native_saver(journal.database_url) as saver:
+        async with native_saver(lifecycle.database_url) as saver:
             graph = fixture_graph(saver, query, fail_answer)
             with pytest.raises(ConnectionError, match="model interruption"):
                 await graph.ainvoke({}, config, durability="sync")
             state = await graph.aget_state(config)
             assert state.next == ("answer",)
             assert state.values["observations"][0]["symbol"] == "600001"
-        async with native_saver(journal.database_url) as saver:
+        async with native_saver(lifecycle.database_url) as saver:
             graph = fixture_graph(saver, query, lambda state: {"answer": state["observations"][0]["symbol"]})
             result = await graph.ainvoke(None, config, durability="sync")
             history = [state async for state in graph.aget_state_history(config)]
@@ -102,11 +102,11 @@ def test_native_state_and_history_survive_new_pool_without_repeating_tool(durabl
 
 
 def test_real_process_kill_restores_committed_superstep(durable_run, tmp_path):
-    journal, row, lease, _ = durable_run
+    lifecycle, row, lease, _ = durable_run
     ready = tmp_path / "checkpoint.ready"
     config = execution_config(row, lease)
     env = {**os.environ, "PYTHONPATH": str(Path(__file__).resolve().parents[1]),
-           "DURABLE_FIXTURE_URL": journal.database_url,
+           "DURABLE_FIXTURE_URL": lifecycle.database_url,
            "DURABLE_FIXTURE_READY": str(ready), "DURABLE_FIXTURE_CONFIG": json.dumps(config)}
     worker = Path(__file__).with_name("durable_runtime_fixtures.py")
     process = subprocess.Popen(
@@ -126,14 +126,14 @@ def test_real_process_kill_restores_committed_superstep(durable_run, tmp_path):
             process.kill()
         process.communicate(timeout=5)
     assert ready.with_suffix(".calls").read_text(encoding="utf-8") == "1"
-    replacement = replace_lease(journal, lease, row["run_id"])
+    replacement = replace_lease(lifecycle, lease, row["run_id"])
     config = execution_config(row, replacement)
 
     def forbidden_query(_state):
         pytest.fail("completed query must not be replayed after process death")
 
     async def resume():
-        async with native_saver(journal.database_url) as saver:
+        async with native_saver(lifecycle.database_url) as saver:
             graph = fixture_graph(saver, forbidden_query, lambda _: {"answer": "resumed"})
             result = await graph.ainvoke(None, config, durability="sync")
             assert result["answer"] == "resumed"
@@ -146,13 +146,13 @@ def test_real_process_kill_restores_committed_superstep(durable_run, tmp_path):
 
 
 def test_takeover_rejects_both_stale_checkpoint_and_pending_writes(durable_run):
-    journal, row, lease, _ = durable_run
+    lifecycle, row, lease, _ = durable_run
     old = execution_config(row, lease)
 
     async def scenario():
-        async with native_saver(journal.database_url) as saver:
+        async with native_saver(lifecycle.database_url) as saver:
             saved = await save(saver, old, "original")
-            replacement = replace_lease(journal, lease, row["run_id"])
+            replacement = replace_lease(lifecycle, lease, row["run_id"])
             try:
                 current = execution_config(row, replacement)
                 await save(saver, current, "new-worker", 1)
@@ -162,7 +162,7 @@ def test_takeover_rejects_both_stale_checkpoint_and_pending_writes(durable_run):
                     await saver.aput_writes(saved, [("answer", "stale-worker")], "old-task")
                 history = [item async for item in saver.alist(current)]
                 assert [item.checkpoint["channel_values"]["observation"] for item in history] == ["new-worker", "original"]
-                with journal.connection() as db:
+                with lifecycle.connection() as db:
                     assert db.execute("SELECT count(*) FROM checkpoint_writes").fetchone()[0] == 0
             finally:
                 replacement.release()
@@ -175,36 +175,36 @@ def test_takeover_rejects_both_stale_checkpoint_and_pending_writes(durable_run):
     ("thread_id", "another-thread"), ("lease_token", "stale-token"), ("fence", -1),
 ])
 def test_wrong_execution_identity_cannot_write_checkpoint(durable_run, field, value):
-    journal, row, lease, _ = durable_run
+    lifecycle, row, lease, _ = durable_run
     config = execution_config(row, lease)
     config["configurable"][field] = value
 
     async def scenario():
-        async with native_saver(journal.database_url) as saver:
+        async with native_saver(lifecycle.database_url) as saver:
             with pytest.raises(LeaseLost):
                 await save(saver, config, "forbidden")
-        with journal.connection() as db:
+        with lifecycle.connection() as db:
             assert db.execute("SELECT count(*) FROM checkpoints").fetchone()[0] == 0
 
     run_async(scenario())
 
 
 def test_owner_checked_session_deletion_cascades_native_checkpoint_tables(durable_run):
-    journal, row, lease, _ = durable_run
+    lifecycle, row, lease, _ = durable_run
 
     async def scenario():
-        async with native_saver(journal.database_url) as saver:
+        async with native_saver(lifecycle.database_url) as saver:
             config = await save(saver, execution_config(row, lease), [{"symbol": "600001"}])
             await saver.aput_writes(config, [("answer", "saved-write")], "fixture-task")
-            chats = ChatSessionRepository(journal.database_url)
+            chats = ChatSessionRepository(lifecycle.database_url)
             with pytest.raises(RunConflict):
                 chats.delete_session(row["session_id"], owner_id=row["owner_id"])
-            journal.finish(row["run_id"], row["owner_id"], public_answer(row))
+            lifecycle.finish(row["run_id"], row["owner_id"], public_answer(row))
             assert not chats.delete_session(row["session_id"], owner_id="other-owner")
             assert await saver.aget_tuple(config) is not None
             assert chats.delete_session(row["session_id"], owner_id=row["owner_id"])
             assert await saver.aget_tuple(config) is None
-        with journal.connection() as db:
+        with lifecycle.connection() as db:
             for table in ("checkpoints", "checkpoint_blobs", "checkpoint_writes"):
                 assert db.execute(f"SELECT count(*) FROM {table}").fetchone()[0] == 0
 
@@ -212,7 +212,7 @@ def test_owner_checked_session_deletion_cascades_native_checkpoint_tables(durabl
 
 
 def test_completed_tool_receipt_survives_checkpoint_failure(durable_run):
-    journal, row, lease, control = durable_run
+    lifecycle, row, lease, control = durable_run
     results = ToolResultRepository(control)
     call = {"id": "tool-1", "name": "fixture_quote", "args": {"symbol": "600001"}}
     observed = {"status": "ok", "rows": [{"symbol": "600001", "close": 12.5}], "source": "fixture://frozen"}
@@ -220,14 +220,14 @@ def test_completed_tool_receipt_survives_checkpoint_failure(durable_run):
     assert results.execute(call, lambda: calls.append(1) or observed) == observed
 
     async def fail_checkpoint():
-        async with native_saver(journal.database_url) as saver:
+        async with native_saver(lifecycle.database_url) as saver:
             config = execution_config(row, lease)
             config["configurable"]["fence"] = -1
             with pytest.raises(LeaseLost):
                 await save(saver, config, observed)
 
     run_async(fail_checkpoint())
-    recovered = ToolResultRepository(RunControl(RunLifecycle(journal.database_url), row, lease))
+    recovered = ToolResultRepository(RunControl(RunLifecycle(lifecycle.database_url), row, lease))
     assert recovered.execute(call, lambda: calls.append(2) or {"close": 99}) == observed
     assert calls == [1]
     with pytest.raises(RunConflict):
@@ -254,18 +254,18 @@ def test_unknown_tool_receipt_never_automatically_repeats_operation(durable_run)
 
 
 def test_tool_receipt_cannot_be_committed_by_worker_that_lost_lease(durable_run):
-    journal, row, lease, control = durable_run
+    lifecycle, row, lease, control = durable_run
     replacement = None
 
     def operation():
         nonlocal replacement
-        replacement = replace_lease(journal, lease, row["run_id"])
+        replacement = replace_lease(lifecycle, lease, row["run_id"])
         return {"status": "ok", "source": "fixture://late"}
 
     try:
         with pytest.raises(LeaseLost):
             ToolResultRepository(control).execute({"id": "late", "name": "fixture", "args": {}}, operation)
-        with journal.connection() as db:
+        with lifecycle.connection() as db:
             receipt = db.execute("SELECT status,payload_json FROM agent_tool_results").fetchone()
             assert receipt["status"] == "started" and receipt["payload_json"] is None
     finally:

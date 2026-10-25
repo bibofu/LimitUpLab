@@ -130,21 +130,21 @@ def test_worker_interruption_keeps_no_answer_and_same_post_can_finish(postgresql
     monkeypatch.setattr(agents, "answer_first_board_chat", answer)
     request = AgentChatRequest(session_id="recover-session", message_id="m", message="什么是首板？")
     http = Request({"type": "http", "client": ("192.0.2.1", 5000), "headers": []})
-    journal, row = react_chat.start(request, http, "owner")
+    lifecycle, row = react_chat.start(request, http, "owner")
     def wait_for_release():
         deadline = time.monotonic() + 5
-        while journal.executing(row["run_id"]) and time.monotonic() < deadline:
+        while lifecycle.executing(row["run_id"]) and time.monotonic() < deadline:
             time.sleep(.01)
-        assert not journal.executing(row["run_id"])
+        assert not lifecycle.executing(row["run_id"])
     wait_for_release()
-    interrupted = journal.get(row["run_id"], "owner")
+    interrupted = lifecycle.get(row["run_id"], "owner")
     assert interrupted["run_status"] == "interrupted" and interrupted["response_json"] is None
     assert "恢复" in react_chat.interruption_message(interrupted)
     react_chat.start(request, None, "owner")
     wait_for_release()
-    final = journal.services.registry.delivered_response(row["run_id"], "owner")
+    final = lifecycle.services.registry.delivered_response(row["run_id"], "owner")
     assert final["task_status"] == "complete"
-    assert journal.get(row["run_id"], "owner")["recovery_count"] == 1
+    assert lifecycle.get(row["run_id"], "owner")["recovery_count"] == 1
     messages = ChatSessionRepository().get_session("recover-session", owner_id="owner").messages
     assert [message.role for message in messages] == ["user", "assistant"]
 

@@ -10,7 +10,7 @@ import pytest
 from app.services import agent_tracing
 import app.main as main_module
 from app.agents.runner import adapter
-from app.agents.runner.durable_runtime import execution_context
+from app.agents.runner.durable_runtime import execution_context, PROMPT_VERSION
 from app.repositories.tool_result_repository import ToolResultRepository
 from app.routers import agents
 from app.services.agent_tracing import LangfuseTracer, trace_context, trace_metadata, trace_stage
@@ -39,9 +39,11 @@ def test_native_runtime_phase_spans_follow_same_run_through_worker_threads(world
     for span in tracer.stages:
         assert span.kwargs["metadata"]["run_id"] == control.row["run_id"]
         assert span.kwargs["metadata"]["thread_id"] == world.session_id
+        assert span.kwargs["metadata"]["context_version"] == "context-v2"
+        assert span.kwargs["metadata"]["prompt_version"] == PROMPT_VERSION
         assert span.finished["output"]["latency_ms"] >= 0
     prepared = [span.finished["output"] for span in tracer.stages if span.kwargs["name"] == "context_preparation"]
-    assert any(item.get("context_version") == "context-v2" and item["estimated_input_tokens"] > 0 for item in prepared)
+    assert any(item.get("context_version") == "context-v2" and item.get("estimated_input_tokens", 0) > 0 for item in prepared)
     tool = next(span for span in tracer.stages if span.kwargs["name"] == "tool_execution")
     assert tool.kwargs["metadata"]["tool_call_id"] == "tool-1"
     assert trace_metadata() == {}, "per-run observability context must be restored"

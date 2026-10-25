@@ -130,7 +130,7 @@ def test_http_page_is_readonly_and_owner_scoped(world):
     assert response.headers["Cache-Control"] == "private, no-store"
     app.dependency_overrides[current_owner_id] = lambda: "other-owner"
     assert client.get(path).status_code == 404
-    with world.journal.connection() as db:
+    with world.lifecycle.connection() as db:
         assert db.execute("SELECT count(*) FROM agent_tool_results").fetchone()[0] == 1
         assert db.execute("SELECT count(*) FROM chat_messages WHERE role='assistant'").fetchone()[0] == 0
 

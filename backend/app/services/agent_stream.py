@@ -77,7 +77,7 @@ class NativeStreamBridge:
                 payload["status"] = raw["status"]
         if kind == "warning":
             payload["message"] = "部分查询未能完成，正在检查可用证据"
-        await asyncio.to_thread(self.control.journal.services.events.append,
+        await asyncio.to_thread(self.control.lifecycle.services.events.append,
             row["run_id"], kind, payload, execution=self.control.execution, admission=self.control.admission)
         notify = getattr(self.control, "notify", None)
         if notify:

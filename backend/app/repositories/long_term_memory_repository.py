@@ -142,7 +142,7 @@ class LongTermMemoryRepository:
             return
         if control.execution is None or control.row["owner_id"] != owner_id:
             raise LeaseLost("Memory write requires the owner's current execution")
-        control.journal.services.coordinator.assert_current(
+        control.lifecycle.services.coordinator.assert_current(
             db, control.row["run_id"], control.execution, control.admission,
         )
         row = db.execute("""SELECT request_json FROM react_runs WHERE run_id=? AND owner_id=?

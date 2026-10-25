@@ -905,8 +905,8 @@ def chat_with_first_board_agent(
 ) -> AgentChatResponse:
     """Run chat through the durable ReAct transport."""
     from app.routers.react_chat import start, synchronous
-    journal, row = start(request, http_request, owner_id)
-    return synchronous(journal, row, owner_id)
+    lifecycle, row = start(request, http_request, owner_id)
+    return synchronous(lifecycle, row, owner_id)
 
 
 @router.post("/chat/stream")
@@ -917,8 +917,8 @@ def stream_first_board_agent_chat(
 ) -> StreamingResponse:
     """Run chat through the durable ReAct transport."""
     from app.routers.react_chat import start, stream
-    journal, row = start(request, http_request, owner_id)
-    return stream(journal, row, owner_id)
+    lifecycle, row = start(request, http_request, owner_id)
+    return stream(lifecycle, row, owner_id)
 
 
 def _summarize_agent_run(run: AgentRun) -> AgentRunSummary:

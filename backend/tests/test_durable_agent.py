@@ -33,14 +33,14 @@ class SessionWorld:
     def __post_init__(self):
         self.chats = ChatSessionRepository(self.url)
         self.session_id = self.chats.create_session(owner_id=self.owner).session_id
-        self.journal = RunLifecycle(self.url)
+        self.lifecycle = RunLifecycle(self.url)
 
     def start(self, query="查询固定首板名单"):
         history = self.chats.get_session(self.session_id, owner_id=self.owner).messages
         request = AgentChatRequest(session_id=self.session_id, message_id=uuid4().hex, message=query)
-        row, _ = self.journal.create(request, self.owner, runtime_version="durable-v1")
-        lease = self.journal.claim(row["run_id"])
-        control = RunControl(self.journal, row, lease)
+        row, _ = self.lifecycle.create(request, self.owner, runtime_version="durable-v1")
+        lease = self.lifecycle.claim(row["run_id"])
+        control = RunControl(self.lifecycle, row, lease)
         self.controls.append(control)
         self.chats.append_message(ChatSessionMessage(
             message_id="user_" + row["run_id"], session_id=self.session_id, role="user",
@@ -51,7 +51,7 @@ class SessionWorld:
     def deliver(self, request, control, result):
         response = _response(request, result.answer, result.status, result.stop_reason,
                              tool_calls=result.tool_calls, tool_results=_traces(result))
-        return self.journal.services.delivery.commit(
+        return self.lifecycle.services.delivery.commit(
             control.row["run_id"], self.owner, response.model_dump(mode="json"), execution=control.execution,
         )
 
@@ -118,7 +118,7 @@ def test_input_review_tool_and_answer_have_native_checkpoints_before_delivery(wo
             assert state.next == () and state.values["done"]
             assert not state.values["conversation"].get("active_references")
             assert {"input_review", "agent", "tool"}.issubset({node for item in history for node in item.next})
-            assert world.journal.get(control.row["run_id"], world.owner)["response_json"] is None
+            assert world.lifecycle.get(control.row["run_id"], world.owner)["response_json"] is None
             delivered = world.deliver(request, control, result)
             assert delivered["task_status"] == "complete"
 
@@ -218,14 +218,14 @@ def test_graph_complete_delivery_failure_reuses_result_without_more_model_calls(
     async def scenario():
         async with runtime_for(world) as runtime:
             result = await runtime.run(execution, control)
-            with world.journal.connection() as db:
+            with world.lifecycle.connection() as db:
                 reject_writes(db, table="chat_messages", trigger="reject_delivery")
             with pytest.raises(Exception):
                 world.deliver(request, control, result)
-            with world.journal.connection() as db:
+            with world.lifecycle.connection() as db:
                 assert db.execute("SELECT count(*) FROM agent_runs").fetchone()[0] == 0
                 db.execute("DROP TRIGGER reject_delivery ON chat_messages")
-            assert world.journal.get(control.row["run_id"], world.owner)["response_json"] is None
+            assert world.lifecycle.get(control.row["run_id"], world.owner)["response_json"] is None
         never_called = ScriptedProvider([])
         retry, retry_calls = runner(request, never_called, history=history)
         async with runtime_for(world) as runtime:
@@ -234,7 +234,7 @@ def test_graph_complete_delivery_failure_reuses_result_without_more_model_calls(
             assert never_called.calls == [] and retry_calls == []
             world.deliver(request, control, recovered)
             world.deliver(request, control, recovered)
-        with world.journal.connection() as db:
+        with world.lifecycle.connection() as db:
             assert db.execute("SELECT count(*) FROM chat_messages WHERE role='assistant'").fetchone()[0] == 1
             assert db.execute("SELECT count(*) FROM agent_runs").fetchone()[0] == 1
         assert len(calls) == 1
@@ -261,7 +261,7 @@ def test_incompatible_state_version_blocks_resume_without_model_call(world):
 
 def test_cancelled_run_executes_no_model_or_tools(world):
     request, control, history = world.start()
-    world.journal.cancel(control.row["run_id"], world.owner)
+    world.lifecycle.cancel(control.row["run_id"], world.owner)
     provider = ScriptedProvider([])
     execution, calls = runner(request, provider, history=history)
 
@@ -325,7 +325,7 @@ def test_large_tool_result_returns_explicit_partial_without_losing_evidence(worl
             assert len(result.tool_messages[0]["rows"]) == 3000
             assert result.tool_messages[0]["row_count"] == 3000
             assert len(provider.calls) >= 3 and len(calls) == 1
-            with world.journal.connection() as db:
+            with world.lifecycle.connection() as db:
                 stored = json.loads(db.execute("SELECT payload_json FROM agent_tool_results WHERE call_id='tool-1'").fetchone()[0])
                 assert len(stored["rows"]) == 3000
 

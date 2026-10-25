@@ -67,18 +67,18 @@ class RunLifecycle:
 
 
 class RunControl:
-    def __init__(self, journal, row, execution=None, admission=None):
-        self.journal, self.row = journal, row
+    def __init__(self, lifecycle, row, execution=None, admission=None):
+        self.lifecycle, self.row = lifecycle, row
         self.execution = execution
         self.admission = admission
 
     def cancelled(self):
         try:
             if self.execution is not None:
-                with self.journal.connection() as db:
-                    self.journal.services.coordinator.assert_current(
+                with self.lifecycle.connection() as db:
+                    self.lifecycle.services.coordinator.assert_current(
                         db, self.row["run_id"], self.execution, self.admission,
                     )
-            return bool(self.journal.get(self.row["run_id"], self.row["owner_id"])["cancelled"])
+            return bool(self.lifecycle.get(self.row["run_id"], self.row["owner_id"])["cancelled"])
         except (KeyError, LeaseLost):
             return True

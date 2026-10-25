@@ -26,7 +26,7 @@ def test_tool_budget_exhaustion_has_no_nonexistent_receipt(world):
             assert result.tool_messages[-1]["status"] == "error"
             assert "budget" in result.tool_messages[-1]["error"].lower()
             assert all("result_ref" not in item for item in result.tool_messages)
-            with world.journal.connection() as db:
+            with world.lifecycle.connection() as db:
                 assert db.execute("SELECT count(*) FROM agent_tool_results").fetchone()[0] == 8
     run_async(scenario())
 

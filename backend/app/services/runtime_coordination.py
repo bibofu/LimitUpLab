@@ -78,7 +78,7 @@ class LeaseStore:
     def assert_current(db, name, lease=None):
         """Call inside the same serialized transaction as the protected write."""
         row = db.execute("SELECT * FROM runtime_leases WHERE name=?", (name,)).fetchone()
-        # Pre-migration runs and direct/offline journal users have no lease row.
+        # Pre-migration runs and direct/offline lifecycle callers have no lease row.
         if row is None and lease is None:
             return
         if (row is None or lease is None or lease.lost.is_set()

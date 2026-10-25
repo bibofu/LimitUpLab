@@ -97,8 +97,8 @@ def test_crash_before_memory_checkpoint_then_cancel_never_revives_intent(world, 
 
         # This is the same public terminal document used by the cancel endpoint
         # when the interrupted worker no longer owns a live task.
-        world.journal.cancel(control.row["run_id"], world.owner)
-        delivered = world.journal.services.delivery.commit(control.row["run_id"], world.owner,
+        world.lifecycle.cancel(control.row["run_id"], world.owner)
+        delivered = world.lifecycle.services.delivery.commit(control.row["run_id"], world.owner,
             failed_response(control.row, "cancelled").model_dump(mode="json"), execution=control.execution)
         assert delivered["task_status"] == "cancelled" and not delivered["memory_action"]
         ledger = world.chats.get_session(world.session_id, owner_id=world.owner).messages

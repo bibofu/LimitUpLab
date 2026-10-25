@@ -30,7 +30,7 @@ def deliver(world, request, control, result):
         "memory_context_fingerprint": result.memory_context_fingerprint,
         "memory_context_used": result.memory_context_used,
     })
-    return world.journal.services.delivery.commit(control.row["run_id"], world.owner,
+    return world.lifecycle.services.delivery.commit(control.row["run_id"], world.owner,
         response.model_dump(mode="json"), execution=control.execution)
 
 

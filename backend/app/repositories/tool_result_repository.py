@@ -11,7 +11,7 @@ from app.services.agent_tracing import trace_stage
 class ToolResultRepository:
     def __init__(self, control):
         self.control = control
-        self.store = control.journal
+        self.store = control.lifecycle
         self.run_id = control.row["run_id"]
 
     def read(self, call_id):

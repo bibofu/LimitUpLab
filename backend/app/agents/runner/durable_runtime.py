@@ -14,6 +14,7 @@ from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from app.agents.run_lifecycle import CURRENT_CONTROL
+from app.agents.context_builder import CONTEXT_VERSION
 from app.agents.runtime_errors import RecoverableRunError
 from app.agents.runner.runner import RunnerState
 from app.agents.runner.result import RunnerResult
@@ -26,6 +27,7 @@ from app.services.agent_stream import NativeStreamBridge, emit_status, emit_tool
 from app.services.agent_tracing import trace_context, trace_stage
 
 SCHEMA_VERSION = 1
+PROMPT_VERSION = "durable-react-v3-results"
 logger = logging.getLogger(__name__)
 _runtime = None
 
@@ -115,7 +117,7 @@ def _agent(state, deps):
             return {"answer": built.clarification, "status": "clarify", "stop_reason": "reference_ambiguous",
                     "done": True, "context_diagnostics": built.diagnostics}
         diagnostics = {**built.diagnostics, "thread_id": deps.control.row["session_id"],
-                       "run_id": deps.control.row["run_id"], "prompt_version": "durable-react-v2-memory",
+                       "run_id": deps.control.row["run_id"], "prompt_version": PROMPT_VERSION,
                        "summary_triggered": bool(conversation.get("summary_triggered")),
                        "recovery_count": deps.control.row.get("recovery_count", 0)}
         with trace_context(**diagnostics):
@@ -239,7 +241,7 @@ class DurableRuntime:
             with trace_context(run_id=control.row["run_id"], thread_id=control.row["session_id"],
                                session_id=control.row["session_id"], runtime_version="durable-v1",
                                model_version=getattr(runner.provider, "model", "unknown"),
-                               prompt_version="durable-react-v2-memory",
+                               prompt_version=PROMPT_VERSION, context_version=CONTEXT_VERSION,
                                recovery_count=control.row.get("recovery_count", 0)):
                 return await self._run(runner, control)
         except (LeaseLost, RecoverableRunError):
@@ -323,7 +325,7 @@ class DurableRuntime:
         from app.services.memory_scope import clean_conversation_for_memory_revision
         conversation = dict(state.get("conversation", {})) if state else {}
         if not state:
-            old = ChatMemoryRepository(control.journal.database_url).get_memory(
+            old = ChatMemoryRepository(control.lifecycle.database_url).get_memory(
                 control.row["session_id"], owner_id=control.row["owner_id"])
             if old:
                 payload = summary_payload(old)
@@ -346,7 +348,7 @@ class DurableRuntime:
         if messages:
             conversation = compress_conversation(conversation, messages, provider=runner.provider)
         if state and state.get("run_id"):
-            previous = control.journal.get(state["run_id"], control.row["owner_id"])
+            previous = control.lifecycle.get(state["run_id"], control.row["owner_id"])
             if not previous.get("response_json"):
                 raise RecoverableRunError("上一轮尚未正式交付，无法开始下一轮。")
             response = json.loads(previous["response_json"])
