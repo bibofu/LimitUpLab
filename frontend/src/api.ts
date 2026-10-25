@@ -1,12 +1,14 @@
-import { streamChat } from "./utils/agentChatTransport";
+import { streamChat, streamExistingRun, type AgentStreamOptions } from "./utils/agentChatTransport";
 import { streamReviewOverview, type ReviewOverviewEvent } from "./utils/reviewOverviewStream";
 import { loadChatBootstrap } from "./utils/chatBootstrap";
 import { DASHBOARD_TIMEOUT_MS, GET_TIMEOUT_MS, requestJson } from "./utils/jsonRequest";
 import type { ConsolidationPool } from "./consolidation";
 import type {
   AgentChatRequest,
-  AgentChatResponse,
   AgentChatStreamEvent,
+  AgentChatStreamResult,
+  AgentRunCommand,
+  AgentRunState,
   ChatSessionDetail,
   ChatSessionsResponse,
   DailyBoardPromotionReport,
@@ -360,8 +362,24 @@ export function deleteChatSession(sessionId: string) {
 export async function streamAgentChatMessage(
   payload: AgentChatRequest,
   onEvent: (event: AgentChatStreamEvent) => void,
-): Promise<AgentChatResponse> {
-  return streamChat(API_BASE_URL, payload, onEvent);
+  options: AgentStreamOptions = {},
+): Promise<AgentChatStreamResult> {
+  return streamChat(API_BASE_URL, payload, onEvent, fetch, options);
+}
+
+export function streamAgentChatRun(run: AgentRunState, onEvent: (event: AgentChatStreamEvent) => void,
+  options: AgentStreamOptions = {}) {
+  return streamExistingRun(API_BASE_URL, run, onEvent, fetch, options);
+}
+
+export function fetchAgentChatRun(runId: string) {
+  return request<AgentRunState>(`/api/agents/chat/runs/${encodeURIComponent(runId)}`, { cache: "no-store" });
+}
+
+export function controlAgentChatRun(runId: string, action: "pause" | "resume", command: AgentRunCommand) {
+  return request<AgentRunState>(`/api/agents/chat/runs/${encodeURIComponent(runId)}/${action}`, {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify(command),
+  });
 }
 
 export function cancelAgentChatRun(runId: string) {

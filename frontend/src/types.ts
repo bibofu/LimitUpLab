@@ -571,6 +571,7 @@ export interface ChatSessionSummary {
 
 export interface ChatSessionDetail extends ChatSessionSummary {
   messages: ChatSessionMessage[];
+  active_run?: AgentRunState | null;
 }
 
 export interface ChatSessionsResponse {
@@ -608,10 +609,33 @@ export interface AgentChatPerformance {
 
 export type AgentChatStreamStage = "preparing" | "planning" | "tools" | "checking" | "answering";
 
-export type AgentChatStreamEvent =
+export interface AgentRunState {
+  run_id: string;
+  session_id: string;
+  run_status: "pending" | "running" | "pausing" | "paused" | "resuming" | "interrupted" | "completed" | "cancelled" | "failed";
+  state_revision: number;
+  can_pause: boolean;
+  can_resume: boolean;
+  can_cancel: boolean;
+  last_event_id: number;
+  response?: AgentChatResponse | null;
+}
+
+export interface AgentRunCommand {
+  operation_id: string;
+  expected_state_revision: number;
+}
+
+export type AgentChatStreamResult = AgentChatResponse | { paused: true; run: AgentRunState };
+
+export type AgentChatStreamEvent = (
   | {
       event: "accepted";
-      data: { run_id: string; session_id: string };
+      data: { run_id: string; session_id: string; state_revision?: number };
+    }
+  | {
+      event: "run_state";
+      data: AgentRunState;
     }
   | {
       event: "progress" | "status" | "tool_start" | "tool_end" | "warning";
@@ -636,7 +660,7 @@ export type AgentChatStreamEvent =
   | {
       event: "error";
       data: { message: string; run_id?: string };
-    };
+    }) & { id?: number };
 
 export interface AgentToolTrace {
   name: string;

@@ -1031,6 +1031,16 @@ td span {
   transform: none;
 }
 
+.chat-run-controls {
+  display: flex;
+  align-items: center;
+  gap: 6px;
+}
+
+.chat-run-controls > .icon-button {
+  transform: none;
+}
+
 .agent-chat-input textarea {
   min-width: 0;
   min-height: 42px;

@@ -1,6 +1,8 @@
-import type { AgentChatRequest, AgentChatResponse, AgentChatStreamEvent } from "../types";
+import type { AgentChatRequest, AgentChatStreamEvent, AgentChatStreamResult, AgentRunState } from "../types";
 
 class ServerStreamError extends Error {}
+
+export interface AgentStreamOptions { signal?: AbortSignal; after?: number }
 
 /** One POST; a broken connection may reconnect once through the read-only GET. */
 export async function streamChat(
@@ -8,10 +10,29 @@ export async function streamChat(
   payload: AgentChatRequest,
   onEvent: (event: AgentChatStreamEvent) => void,
   fetcher: typeof fetch = fetch,
-): Promise<AgentChatResponse> {
-  let runId: string | null = null;
-  let cursor = 0;
-  async function read(response: Response): Promise<AgentChatResponse> {
+  options: AgentStreamOptions = {},
+): Promise<AgentChatStreamResult> {
+  return consumeStream(baseUrl, payload.session_id, null, onEvent, fetcher, options, {
+    method: "POST", headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
+    body: JSON.stringify(payload),
+  });
+}
+
+/** Subscribe to an owned run without creating or resuming execution. */
+export function streamExistingRun(baseUrl: string, run: AgentRunState,
+  onEvent: (event: AgentChatStreamEvent) => void, fetcher: typeof fetch = fetch,
+  options: AgentStreamOptions = {}): Promise<AgentChatStreamResult> {
+  return consumeStream(baseUrl, run.session_id, run, onEvent, fetcher, options);
+}
+
+async function consumeStream(baseUrl: string, sessionId: string, initialRun: AgentRunState | null,
+  onEvent: (event: AgentChatStreamEvent) => void, fetcher: typeof fetch,
+  options: AgentStreamOptions, submission?: RequestInit): Promise<AgentChatStreamResult> {
+  let runId = initialRun?.run_id ?? null;
+  let cursor = options.after ?? 0;
+  let stateRevision = initialRun?.state_revision ?? -1;
+  const reconnectUrl = () => `${baseUrl}/api/agents/chat/runs/${encodeURIComponent(runId!)}/stream?after=${cursor}`;
+  async function read(response: Response): Promise<AgentChatStreamResult> {
     if (!response.ok || !response.body) {
       let detail = "Agent 请求失败";
       try {
@@ -23,12 +44,12 @@ export async function streamChat(
     const headerId = response.headers.get("X-Agent-Run-Id");
     if (headerId) {
       runId = headerId;
-      onEvent({ event: "accepted", data: { run_id: headerId, session_id: payload.session_id } });
+      onEvent({ event: "accepted", data: { run_id: headerId, session_id: sessionId } });
     }
     const reader = response.body.getReader();
     const decoder = new TextDecoder();
     let buffer = "";
-    let completed: AgentChatResponse | null = null;
+    let completed: AgentChatStreamResult | null = null;
     function consume(record: string) {
       if (completed) return;
       let name = "message";
@@ -45,8 +66,17 @@ export async function streamChat(
       if (name === "error") throw new ServerStreamError(data.message || "任务已中断，可重试恢复");
       if (name === "accepted") runId = data.run_id;
       if (name === "completed") completed = data;
-      if (["accepted", "progress", "status", "tool_start", "tool_end", "warning", "completed"].includes(name)) {
-        onEvent({ event: name, data } as AgentChatStreamEvent);
+      if (name === "run_state") {
+        if (data.run_id !== runId || data.session_id !== sessionId) throw new ServerStreamError("任务状态与当前会话不一致");
+        if (data.state_revision < stateRevision) {
+          if (id !== undefined && Number.isSafeInteger(id)) cursor = id;
+          return;
+        }
+        stateRevision = data.state_revision;
+        if (data.run_status === "paused") completed = { paused: true, run: data };
+      }
+      if (["accepted", "run_state", "progress", "status", "tool_start", "tool_end", "warning", "completed"].includes(name)) {
+        onEvent({ event: name, data, id } as AgentChatStreamEvent);
       }
       // Old servers/replays may include candidate-answer events. Consume their IDs
       // without exposing drafts, so read-only reconnection still resumes correctly.
@@ -75,16 +105,15 @@ export async function streamChat(
     }
   }
   try {
-    return await read(await fetcher(`${baseUrl}/api/agents/chat/stream`, {
-      method: "POST", credentials: "include",
-      headers: { Accept: "text/event-stream", "Content-Type": "application/json" },
-      body: JSON.stringify(payload),
+    return await read(await fetcher(submission ? `${baseUrl}/api/agents/chat/stream` : reconnectUrl(), {
+      credentials: "include", headers: { Accept: "text/event-stream" }, ...submission,
+      signal: options.signal,
     }));
   } catch (error) {
-    if (!runId || error instanceof ServerStreamError) throw error;
+    if (options.signal?.aborted || !runId || error instanceof ServerStreamError) throw error;
     onEvent({ event: "progress", data: { stage: "tools", message: "连接已断开，正在读取原任务进度" } });
-    return read(await fetcher(`${baseUrl}/api/agents/chat/runs/${encodeURIComponent(runId)}/stream?after=${cursor}`, {
-      credentials: "include", headers: { Accept: "text/event-stream" },
+    return read(await fetcher(reconnectUrl(), {
+      credentials: "include", headers: { Accept: "text/event-stream" }, signal: options.signal,
     }));
   }
 }

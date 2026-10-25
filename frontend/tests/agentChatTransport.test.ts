@@ -1,6 +1,7 @@
 import assert from "node:assert/strict";
 import test from "node:test";
-import { streamChat, taskStatusLabel } from "../src/utils/agentChatTransport.ts";
+import { streamChat, streamExistingRun, taskStatusLabel } from "../src/utils/agentChatTransport.ts";
+import type { AgentRunState } from "../src/types.ts";
 
 const payload = { session_id: "s", message_id: "same", message: "查询" };
 const final = { session_id: "s", run_id: "r", task_status: "partial", answer: "缺少部分来源" };
@@ -106,4 +107,53 @@ test("unknown and historical execution status are not labelled complete", () => 
   assert.equal(taskStatusLabel("error"), "执行失败");
   assert.equal(taskStatusLabel("success"), undefined);
   assert.equal(taskStatusLabel("toString"), undefined);
+});
+
+const paused: AgentRunState = { run_id: "r", session_id: "s", run_status: "paused", state_revision: 2,
+  can_pause: false, can_resume: true, can_cancel: true, last_event_id: 9 };
+
+test("paused is a successful stream outcome without a completed answer or automatic resume", async () => {
+  const events: string[] = [];
+  let calls = 0;
+  const result = await streamChat("", payload, event => events.push(event.event), async () => {
+    calls++;
+    return response(frame("run_state", { ...paused, run_status: "pausing", state_revision: 1 })
+      + "id: 9\r\n" + frame("run_state", paused));
+  });
+  assert.deepEqual(result, { paused: true, run: paused });
+  assert.deepEqual(events, ["accepted", "run_state", "run_state"]);
+  assert.equal(calls, 1);
+});
+
+test("resubscribing after resume is read-only and skips stale pause state", async () => {
+  const events: string[] = [];
+  const requests: { url: string; method: string }[] = [];
+  const result = await streamExistingRun("", { ...paused, run_status: "resuming", state_revision: 3 },
+    event => events.push(event.event), async (url, options) => {
+      requests.push({ url: String(url), method: options?.method ?? "GET" });
+      return response("id: 9\r\n" + frame("run_state", paused)
+        + "id: 10\r\n" + frame("run_state", { ...paused, run_status: "running", state_revision: 4 })
+        + frame("completed", final));
+    }, { after: 8 });
+  assert.deepEqual(result, final);
+  assert.deepEqual(requests, [{ url: "/api/agents/chat/runs/r/stream?after=8", method: "GET" }]);
+  assert.deepEqual(events, ["accepted", "run_state", "completed"]);
+});
+
+test("run state from another session is rejected instead of pausing the selected conversation", async () => {
+  await assert.rejects(streamExistingRun("", paused, () => {}, async () => response(
+    frame("run_state", { ...paused, session_id: "other" }),
+  )), /当前会话不一致/);
+});
+
+test("detaching a view aborts its subscription without another GET or a control mutation", async () => {
+  const controller = new AbortController();
+  let calls = 0;
+  await assert.rejects(streamExistingRun("", paused, () => {}, async (_url, init) => {
+    calls++;
+    assert.equal(init?.signal, controller.signal);
+    controller.abort();
+    throw new DOMException("Aborted", "AbortError");
+  }, { signal: controller.signal }));
+  assert.equal(calls, 1);
 });

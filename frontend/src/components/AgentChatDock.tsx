@@ -4,8 +4,10 @@ import {
   LoaderCircle,
   MessageCircle,
   PanelLeft,
+  Pause,
   Pencil,
   Plus,
+  Play,
   RefreshCcw,
   Send,
   Square,
@@ -16,19 +18,26 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   cancelAgentChatRun,
+  controlAgentChatRun,
   createChatSession,
   deleteChatSession,
   fetchChatBootstrap,
+  fetchAgentChatRun,
   fetchChatSession,
   fetchChatSessions,
   renameChatSession,
   streamAgentChatMessage,
+  streamAgentChatRun,
 } from "../api";
 import type {
   AgentChatRequest,
   AgentChatResponse,
+  AgentChatStreamEvent,
+  AgentChatStreamResult,
   AgentChatStreamStage,
   AgentStockMention,
+  AgentRunCommand,
+  AgentRunState,
   ChatSessionDetail,
   ChatSessionMessage,
   ChatSessionSummary,
@@ -198,7 +207,14 @@ export function AgentChatDock({
   const [error, setError] = useState<string | null>(null);
   const [failedPrompt, setFailedPrompt] = useState<string | null>(null);
   const failedRequest = useRef<AgentChatRequest | null>(null);
-  const [activeRunId, setActiveRunId] = useState<string | null>(null);
+  const [activeRun, setActiveRun] = useState<AgentRunState | null>(null);
+  const runRef = useRef<AgentRunState | null>(null);
+  const selectedSession = useRef<string | null>(null);
+  const subscription = useRef({ generation: 0, controller: null as AbortController | null, cursor: 0 });
+  const commandBusy = useRef<string | null>(null);
+  const settledRuns = useRef(new Set<string>());
+  const commandRetry = useRef<{ runId: string; action: "pause" | "resume"; command: AgentRunCommand } | null>(null);
+  const [controlAction, setControlAction] = useState<"pause" | "resume" | null>(null);
   const [cancelRequested, setCancelRequested] = useState(false);
   const [messages, setMessages] = useState<ChatMessage[]>([]);
   const [revealingMessageId, setRevealingMessageId] = useState<string | null>(null);
@@ -221,6 +237,12 @@ export function AgentChatDock({
   const followAnswerRef = useRef(true);
   const [showLatest, setShowLatest] = useState(false);
   const isConversationActive = sending || messages.length > 0;
+  const activeRunId = activeRun?.run_id;
+
+  useEffect(() => () => {
+    subscription.current.generation++;
+    subscription.current.controller?.abort();
+  }, []);
 
   useEffect(() => {
     if (initializedSessions.current) {
@@ -257,6 +279,8 @@ export function AgentChatDock({
    * Replace the active conversation with the fetched detail and remember its ID for reloads.
    */
   function applyChatSession(detail: ChatSessionDetail) {
+    detachSubscription();
+    selectedSession.current = detail.session_id;
     setRevealingMessageId(null);
     followAnswerRef.current = true;
     setShowLatest(false);
@@ -267,8 +291,12 @@ export function AgentChatDock({
     setError(null);
     setFailedPrompt(null);
     failedRequest.current = null;
-    setActiveRunId(null);
+    runRef.current = detail.active_run ?? null;
+    setActiveRun(detail.active_run ?? null);
+    commandRetry.current = null;
+    setControlAction(null);
     setCancelRequested(false);
+    if (detail.active_run && detail.active_run.run_status !== "paused") void watchRun(detail.active_run);
   }
 
   /**
@@ -318,16 +346,17 @@ export function AgentChatDock({
   }
 
   /**
-   * Load the chosen conversation while preventing a switch during an active submission.
+   * Switch the visible subscription without changing a background run's execution intent.
    */
   async function openChatSession(targetSessionId: string) {
-    if (sending || sessionLoading) return;
+    if (sessionLoading) return;
     if (targetSessionId === sessionId) {
       setSessionPanelOpen(false);
       return;
     }
     const release = operationLock.current.acquire();
     if (!release) return;
+    detachSubscription();
     setRevealingMessageId(null);
     setSessionLoading(true);
     setSessionError(null);
@@ -351,9 +380,10 @@ export function AgentChatDock({
    * Create and select a new server-backed conversation.
    */
   async function startNewChatSession() {
-    if (sending || sessionLoading) return;
+    if (sessionLoading) return;
     const release = operationLock.current.acquire();
     if (!release) return;
+    detachSubscription();
     setRevealingMessageId(null);
     setSessionLoading(true);
     setSessionError(null);
@@ -439,21 +469,177 @@ export function AgentChatDock({
   }
 
   async function cancelCurrentRun() {
-    if (!activeRunId || cancelRequested) return;
+    if (!activeRunId || cancelRequested || commandBusy.current === activeRunId) return;
+    const targetSession = selectedSession.current;
+    commandBusy.current = activeRunId;
     setCancelRequested(true);
     try {
       await cancelAgentChatRun(activeRunId);
+      if (targetSession !== selectedSession.current || runRef.current?.run_id !== activeRunId) return;
       setStreamStatus("已请求取消，等待任务收尾");
+      // A paused or disconnected run has no open stream to deliver cancellation.
+      if (!subscription.current.controller) {
+        const current = await fetchAgentChatRun(activeRunId);
+        if (targetSession === selectedSession.current && applyRunState(current)) void watchRun(current);
+      }
     } catch (caught) {
+      if (targetSession !== selectedSession.current) return;
       setCancelRequested(false);
       setError(caught instanceof Error ? caught.message : "取消请求失败");
+    } finally {
+      if (commandBusy.current === activeRunId) commandBusy.current = null;
+    }
+  }
+
+  function detachSubscription() {
+    subscription.current.generation++;
+    subscription.current.controller?.abort();
+    subscription.current.controller = null;
+    setSending(false);
+  }
+
+  function applyRunState(run: AgentRunState) {
+    if (run.session_id !== selectedSession.current || settledRuns.current.has(run.run_id)) return false;
+    if (runRef.current?.run_id === run.run_id && run.state_revision < runRef.current.state_revision) return false;
+    runRef.current = run;
+    setActiveRun(run);
+    const labels: Partial<Record<AgentRunState["run_status"], string>> = {
+      pausing: "正在暂停，当前步骤保存后生效", paused: "已暂停，可从保存的进度继续",
+      resuming: "正在恢复已保存的进度", interrupted: "任务已中断，可继续原任务",
+    };
+    if (labels[run.run_status]) setStreamStatus(labels[run.run_status]!);
+    return true;
+  }
+
+  function publishResponse(response: AgentChatResponse, prompt?: string, messageId?: string) {
+    const completedRun = response.run_id ?? runRef.current?.run_id;
+    if (completedRun) settledRuns.current.add(completedRun);
+    const id = response.run_id ? `assistant_${response.run_id}` : `agent-${messageId}`;
+    setMessages(current => {
+      const index = current.findIndex(item => item.role === "agent" &&
+        (item.id === id || Boolean(response.run_id && item.runId === response.run_id)));
+      const result: ChatMessage = { id, role: "agent", content: response.answer,
+        stockMentions: response.stock_mentions, ...responseMessageMetadata(response) };
+      return index < 0 ? [...current, result] : current.map((item, position) => position === index ? result : item);
+    });
+    runRef.current = null;
+    setActiveRun(null);
+    failedRequest.current = null;
+    commandRetry.current = null;
+    setCancelRequested(false);
+    const canRestart = response.task_status === "error" || response.task_status === "cancelled";
+    setRevealingMessageId(canRestart ? null : id);
+    setFailedPrompt(canRestart ? prompt ?? null : null);
+    setError(canRestart ? (response.task_status === "cancelled" ? "任务已取消，可重新提问。" : "本次研究未完成，可重新提问。") : null);
+    void refreshChatSessions().catch(() => { /* History can be refreshed separately from committed delivery. */ });
+  }
+
+  async function receiveRun(start: (handler: (event: AgentChatStreamEvent) => void,
+    options: { signal: AbortSignal; after: number }) => Promise<AgentChatStreamResult>,
+    targetSession: string, prompt?: string, request?: AgentChatRequest, after = 0) {
+    detachSubscription();
+    const generation = subscription.current.generation;
+    const controller = new AbortController();
+    subscription.current.controller = controller;
+    subscription.current.cursor = after;
+    const current = () => generation === subscription.current.generation && targetSession === selectedSession.current;
+    runStartedAt.current = Date.now();
+    setSending(true);
+    try {
+      const response = await start(event => {
+        if (!current()) return;
+        if (event.id !== undefined) subscription.current.cursor = Math.max(subscription.current.cursor, event.id);
+        if (event.event === "accepted" && !runRef.current) applyRunState({
+          run_id: event.data.run_id, session_id: targetSession, run_status: "running",
+          state_revision: event.data.state_revision ?? 0, last_event_id: 0,
+          can_pause: false, can_resume: false, can_cancel: true,
+        });
+        if (event.event === "run_state") applyRunState(event.data);
+        if (event.event === "progress" || event.event === "status" || event.event === "tool_start"
+          || event.event === "tool_end" || event.event === "warning") {
+          setStreamStage(event.data.stage);
+          if (!["pausing", "resuming"].includes(runRef.current?.run_status ?? "")) setStreamStatus(event.data.message);
+        }
+      }, { signal: controller.signal, after });
+      if (!current()) return;
+      if ("paused" in response) { applyRunState(response.run); setError(null); }
+      else publishResponse(response, prompt, request?.message_id);
+    } catch (caught) {
+      if (!current() || controller.signal.aborted) return;
+      setError(caught instanceof Error ? caught.message : "连接中断，请重新连接原任务");
+      const run = runRef.current;
+      if (run) {
+        setFailedPrompt(null);
+        try {
+          const latest = await fetchAgentChatRun(run.run_id);
+          if (!current()) return;
+          if (!applyRunState(latest)) return;
+          if (latest.response) publishResponse(latest.response, prompt, request?.message_id);
+          else if (latest.run_status === "paused") setError(null);
+        } catch { /* Keep the owned run available for read-only reconnection. */ }
+      } else if (request) {
+        setFailedPrompt(prompt ?? null);
+        failedRequest.current = request;
+      }
+    } finally {
+      if (current()) {
+        subscription.current.controller = null;
+        setSending(false);
+        setCancelRequested(false);
+      }
+    }
+  }
+
+  async function watchRun(run: AgentRunState) {
+    if (settledRuns.current.has(run.run_id)) return;
+    if (run.response) { publishResponse(run.response); return; }
+    if (run.run_status === "paused") return;
+    setError(null);
+    await receiveRun((handler, options) => streamAgentChatRun(run, handler, options),
+      run.session_id, undefined, undefined, run.last_event_id);
+  }
+
+  async function controlRun(action: "pause" | "resume") {
+    const run = runRef.current;
+    if (!run || commandBusy.current === run.run_id) return;
+    const targetSession = selectedSession.current;
+    commandBusy.current = run.run_id;
+    setControlAction(action);
+    const retry = commandRetry.current;
+    const command = retry?.runId === run.run_id && retry.action === action ? retry.command : {
+      operation_id: globalThis.crypto?.randomUUID?.() ?? `operation_${Date.now()}_${Math.random().toString(16).slice(2)}`,
+      expected_state_revision: run.state_revision,
+    };
+    commandRetry.current = { runId: run.run_id, action, command };
+    try {
+      const result = await controlAgentChatRun(run.run_id, action, command);
+      if (targetSession !== selectedSession.current) return;
+      commandRetry.current = null;
+      if (!applyRunState(result)) return;
+      setError(null);
+      if (result.response) { detachSubscription(); publishResponse(result.response); }
+      else if (result.run_status === "paused") detachSubscription();
+      else if (action === "resume" || !subscription.current.controller) void watchRun(result);
+    } catch (caught) {
+      if (targetSession !== selectedSession.current) return;
+      if (caught instanceof HttpResponseError) commandRetry.current = null;
+      setError(caught instanceof Error ? caught.message : "任务控制请求失败，请重试");
+      try {
+        const latest = await fetchAgentChatRun(run.run_id);
+        if (targetSession !== selectedSession.current) return;
+        if (!applyRunState(latest)) return;
+        if (latest.response) { detachSubscription(); publishResponse(latest.response); }
+      } catch { /* An uncertain command keeps its operation_id for the next explicit retry. */ }
+    } finally {
+      if (commandBusy.current === run.run_id) commandBusy.current = null;
+      if (targetSession === selectedSession.current) setControlAction(null);
     }
   }
 
   /** Preserve failed requests for retry; publish the verified response exactly once. */
   async function sendMessage(prompt?: string) {
     const trimmed = (prompt ?? message).trim();
-    if (!trimmed || sending || sessionLoading || !sessionId) {
+    if (!trimmed || sending || subscription.current.controller || runRef.current || sessionLoading || !sessionId) {
       return;
     }
     const release = operationLock.current.acquire();
@@ -490,53 +676,11 @@ export function AgentChatDock({
     setStreamStatus("正在连接研究助手");
     setError(null);
     setFailedPrompt(null);
-    setActiveRunId(null);
     setCancelRequested(false);
     const agentMessageId = `agent-${userMessageId}`;
     setMessages(current => current.filter(item => item.id !== agentMessageId));
-    try {
-      const response = await streamAgentChatMessage(payload, event => {
-        if (event.event === "accepted") {
-          setActiveRunId(event.data.run_id);
-        }
-        if (event.event === "progress" || event.event === "status" || event.event === "tool_start"
-            || event.event === "tool_end" || event.event === "warning") {
-          setStreamStage(event.data.stage);
-          setStreamStatus(event.data.message);
-        }
-      });
-      setMessages(current => {
-        const finalMessage: ChatMessage = {
-          id: agentMessageId, role: "agent", content: response.answer,
-          stockMentions: response.stock_mentions, ...responseMessageMetadata(response),
-        };
-        const existing = current.findIndex(item => item.id === agentMessageId);
-        if (existing < 0) return [...current, finalMessage];
-        return current.map((item, index) => index === existing ? finalMessage : item);
-      });
-      failedRequest.current = null;
-      setActiveRunId(null);
-      const canRestart = response.task_status === "error" || response.task_status === "cancelled";
-      setRevealingMessageId(canRestart ? null : agentMessageId);
-      setFailedPrompt(canRestart ? trimmed : null);
-      setError(canRestart
-        ? (response.task_status === "cancelled" ? "任务已取消，可重新提问。" : "本次研究未完成，可重新提问。")
-        : null);
-      void refreshChatSessions().catch(caught => setSessionError({
-        message: sessionErrorMessage(caught, "会话列表更新失败"),
-        retry: initializeChatSessions,
-      }));
-    } catch (caught) {
-      const errorMessage = caught instanceof Error ? caught.message : "Agent 回答失败";
-      setError(errorMessage);
-      setFailedPrompt(trimmed);
-      failedRequest.current = payload;
-    } finally {
-      setActiveRunId(null);
-      setCancelRequested(false);
-      release();
-      setSending(false);
-    }
+    release();
+    await receiveRun((handler, options) => streamAgentChatMessage(payload, handler, options), sessionId, trimmed, payload);
   }
 
   const activeSession = sessions.find((item) => item.session_id === sessionId);
@@ -555,7 +699,7 @@ export function AgentChatDock({
             <button
               aria-label="新建会话"
               className="icon-button compact"
-              disabled={sending || sessionLoading}
+              disabled={sessionLoading}
               onClick={() => void startNewChatSession()}
               title="新建会话"
               type="button"
@@ -607,7 +751,7 @@ export function AgentChatDock({
                   <>
                     <button
                       className="chat-session-select"
-                      disabled={sending || sessionLoading}
+                      disabled={sessionLoading}
                       onClick={() => void openChatSession(session.session_id)}
                       type="button"
                     >
@@ -701,7 +845,7 @@ export function AgentChatDock({
               </button>
             </div>
           ) : null}
-          {sessionId && messages.length === 0 && !sending && !sessionLoading && !sessionError && !error ? (
+          {sessionId && messages.length === 0 && !activeRun && !sending && !sessionLoading && !sessionError && !error ? (
             <div className="chat-state" role="status" aria-label="新会话提示">
               <strong>开始一段研究对话</strong>
               <p>在下方输入问题，开始研究。</p>
@@ -732,6 +876,18 @@ export function AgentChatDock({
           {sending ? (
             <AgentChatProgress stage={streamStage} message={streamStatus} startedAt={runStartedAt.current} />
           ) : null}
+          {activeRun && !sending ? (
+            <div className="chat-state chat-retry-state" role="status" aria-label="任务状态">
+              <span>{activeRun.run_status === "paused" ? "任务已暂停，可继续原任务；结束任务后可发送新问题。"
+                : activeRun.run_status === "interrupted" ? "任务已中断，已保存的进度仍然保留。"
+                  : "当前任务尚未结束，可以重新连接查看进度。"}</span>
+              {!activeRun.can_resume && activeRun.run_status !== "paused" ? (
+                <button type="button" onClick={() => void watchRun(activeRun)} disabled={sessionLoading}>
+                  <RefreshCcw aria-hidden="true" size={13} />重新连接
+                </button>
+              ) : null}
+            </div>
+          ) : null}
           {error ? (
             <div className="chat-state error chat-retry-state" role="alert">
               <span>{error}</span>
@@ -759,7 +915,7 @@ export function AgentChatDock({
         {promptSuggestions.length > 0 ? <div className="agent-chat-prompts">
           {promptSuggestions.slice(0, 3).map((prompt) => (
             <button
-              disabled={sending || sessionLoading || !sessionId}
+              disabled={sending || Boolean(activeRun) || sessionLoading || !sessionId}
               key={prompt}
               type="button"
               onClick={() => void sendMessage(prompt)}
@@ -796,21 +952,41 @@ export function AgentChatDock({
             }}
             placeholder="问今日市场情况、个股详情等"
           />
-          {sending && activeRunId ? (
+          {activeRun ? <div className="chat-run-controls">
+            {activeRun.can_pause || activeRun.run_status === "pausing" ? (
+              <button aria-label="暂停任务" title="暂停任务" className="icon-button" type="button"
+                disabled={!activeRun.can_pause || controlAction !== null || cancelRequested}
+                aria-busy={controlAction === "pause" || activeRun.run_status === "pausing"}
+                onClick={() => void controlRun("pause")}>
+                {controlAction === "pause" || activeRun.run_status === "pausing"
+                  ? <LoaderCircle aria-hidden="true" className="chat-cancel-spinner" size={18} />
+                  : <Pause aria-hidden="true" size={18} />}
+              </button>
+            ) : null}
+            {activeRun.can_resume || activeRun.run_status === "resuming" ? (
+              <button aria-label="继续任务" title="继续任务" className="icon-button" type="button"
+                disabled={!activeRun.can_resume || controlAction !== null || cancelRequested}
+                aria-busy={controlAction === "resume" || activeRun.run_status === "resuming"}
+                onClick={() => void controlRun("resume")}>
+                {controlAction === "resume" || activeRun.run_status === "resuming"
+                  ? <LoaderCircle aria-hidden="true" className="chat-cancel-spinner" size={18} />
+                  : <Play aria-hidden="true" size={18} />}
+              </button>
+            ) : null}
             <button
-              aria-label={cancelRequested ? "正在取消任务" : "取消任务"}
+              aria-label={cancelRequested ? "正在结束任务" : "结束任务"}
               aria-busy={cancelRequested}
               className="icon-button chat-cancel"
-              title={cancelRequested ? "正在取消任务" : "取消任务"}
+              title={cancelRequested ? "正在结束任务" : "结束任务"}
               type="button"
-              disabled={cancelRequested}
+              disabled={cancelRequested || !activeRun.can_cancel || controlAction !== null}
               onClick={() => void cancelCurrentRun()}
             >
               {cancelRequested
                 ? <LoaderCircle aria-hidden="true" className="chat-cancel-spinner" size={18} />
                 : <Square aria-hidden="true" fill="currentColor" size={18} strokeWidth={0} />}
             </button>
-          ) : (
+          </div> : (
             <button
               aria-label="发送问题"
               className="icon-button"

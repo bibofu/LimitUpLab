@@ -30,6 +30,9 @@ const compiled = ts.transpileModule(readFileSync(new URL("../src/components/Agen
 }).outputText;
 const session = (id: string) => ({ session_id: id, title: `会话 ${id}`, updated_at: "2026-10-13T10:00:00", messages: [] });
 const final = { answer: "研究回答", stock_mentions: [], suggested_questions: [], task_status: "complete" };
+const run = (status = "paused", revision = 2) => ({ run_id: "owned-run", session_id: "a", run_status: status,
+  state_revision: revision, can_pause: status === "running", can_resume: status === "paused" || status === "interrupted",
+  can_cancel: true, last_event_id: revision + 10 });
 
 function deferred<T>() {
   let resolve!: (value: T) => void;
@@ -150,6 +153,143 @@ test("the compact composer grows with the draft and shrinks after clearing witho
   input.scrollHeight = 40;
   app.type("");
   assert.equal(input.style.height, "42px");
+});
+
+test("reload restores a paused task and resumes the same run without a new user message", async t => {
+  const commands: any[] = [];
+  const subscriptions: any[] = [];
+  let submissions = 0;
+  const app = mount(t, {
+    fetchChatSession: async () => ({ ...session("a"), active_run: run() }),
+    streamAgentChatMessage: async () => { submissions++; return final; },
+    controlAgentChatRun: async (...args: any[]) => { commands.push(args); return run("resuming", 3); },
+    streamAgentChatRun: async (state: any, _event: any, options: any) => {
+      subscriptions.push({ state, options });
+      return { ...final, run_id: "owned-run" };
+    },
+  });
+  await app.settle();
+  assert.equal(app.answers().length, 0);
+  assert.equal(subscriptions.length, 0, "loading a pause must not resume or subscribe automatically");
+  app.type("保存为下一条草稿"); app.submit(); await app.settle();
+  assert.equal(submissions, 0, "an unfinished run retains the conversation slot");
+  app.find(node => node.props["aria-label"] === "继续任务").onClick(); await app.settle();
+  assert.equal(commands[0][0], "owned-run");
+  assert.equal(commands[0][1], "resume");
+  assert.equal(commands[0][2].expected_state_revision, 2);
+  assert.ok(commands[0][2].operation_id);
+  assert.equal(subscriptions[0].state.run_id, "owned-run");
+  assert.equal(subscriptions[0].options.after, 13);
+  assert.equal(submissions, 0);
+  assert.equal(app.answers().length, 1);
+  assert.equal(app.input().value, "保存为下一条草稿");
+  assert.equal(app.has(node => node.props["aria-label"] === "继续任务"), false);
+});
+
+test("pause acknowledgements do not create answers and repeated clicks send one command", async t => {
+  const original = deferred<any>();
+  const pausing = deferred<any>();
+  const commands: any[] = [];
+  let handler: any;
+  const app = mount(t, {
+    streamAgentChatMessage: (_payload: any, onEvent: any) => {
+      handler = onEvent;
+      onEvent({ event: "accepted", data: { run_id: "owned-run", session_id: "a" } });
+      onEvent({ event: "run_state", data: run("running", 1) });
+      return original.promise;
+    },
+    controlAgentChatRun: (...args: any[]) => { commands.push(args); return pausing.promise; },
+  });
+  await app.settle(); app.type("查询"); app.submit(); await app.settle();
+  const pause = app.find(node => node.props["aria-label"] === "暂停任务");
+  pause.onClick(); pause.onClick(); await app.settle();
+  assert.equal(commands.length, 1);
+  assert.equal(commands[0][2].expected_state_revision, 1);
+  pausing.resolve(run("pausing", 2)); await app.settle();
+  assert.equal(app.answers().length, 0);
+  handler({ event: "run_state", data: run("paused", 3), id: 13 });
+  original.resolve({ paused: true, run: run("paused", 3) }); await app.settle();
+  assert.equal(app.answers().length, 0);
+  assert.equal(app.find(node => node.props["aria-label"] === "继续任务").disabled, false);
+  assert.equal(app.has(node => node.props.role === "alert"), false);
+});
+
+test("running bootstrap subscribes by GET and navigating away aborts only its subscription", async t => {
+  const pending = deferred<any>();
+  let signal: AbortSignal | undefined;
+  let controls = 0;
+  const app = mount(t, {
+    fetchChatSession: async (id: string) => ({ ...session(id), active_run: id === "a" ? run("running", 1) : null }),
+    streamAgentChatMessage: () => { throw new Error("must not POST the old prompt"); },
+    streamAgentChatRun: (_state: any, _event: any, options: any) => { signal = options.signal; return pending.promise; },
+    controlAgentChatRun: async () => { controls++; },
+    cancelAgentChatRun: async () => { controls++; },
+  });
+  await app.settle();
+  assert.ok(signal);
+  const select = app.find(node => node.props.className === "chat-session-select" && node.props.children[0].props.children[0].props.children === "会话 b");
+  assert.equal(select.disabled, false);
+  select.onClick(); await app.settle();
+  assert.equal(signal.aborted, true);
+  pending.resolve({ ...final, run_id: "owned-run", answer: "旧会话迟到答案" }); await app.settle();
+  assert.equal(controls, 0);
+  assert.equal(app.answers().length, 0, "late callbacks cannot write into another conversation");
+});
+
+test("ending a paused run reads its terminal result and never resumes the graph", async t => {
+  const actions: string[] = [];
+  const app = mount(t, {
+    fetchChatSession: async () => ({ ...session("a"), active_run: run() }),
+    cancelAgentChatRun: async (id: string) => { actions.push(id); },
+    fetchAgentChatRun: async () => ({ ...run("cancelled", 3), response: { ...final, run_id: "owned-run", task_status: "cancelled" } }),
+    streamAgentChatRun: () => { throw new Error("terminal response must not start a stream"); },
+    controlAgentChatRun: () => { throw new Error("cancel must not resume"); },
+  });
+  await app.settle();
+  app.find(node => node.props["aria-label"] === "结束任务").onClick(); await app.settle();
+  assert.deepEqual(actions, ["owned-run"]);
+  assert.equal(app.answers().length, 1);
+  assert.equal(app.has(node => node.props["aria-label"] === "继续任务"), false);
+  assert.equal(app.has(node => node.props.children === "任务已取消，可重新提问。"), true);
+});
+
+test("a delayed pause response cannot resurrect a task whose answer already committed", async t => {
+  const original = deferred<any>();
+  const command = deferred<any>();
+  const app = mount(t, {
+    streamAgentChatMessage: (_payload: any, onEvent: any) => {
+      onEvent({ event: "run_state", data: run("running", 1) });
+      return original.promise;
+    },
+    controlAgentChatRun: () => command.promise,
+  });
+  await app.settle(); app.type("查询"); app.submit(); await app.settle();
+  app.find(node => node.props["aria-label"] === "暂停任务").onClick(); await app.settle();
+  original.resolve({ ...final, run_id: "owned-run" }); await app.settle();
+  command.resolve(run("pausing", 2)); await app.settle();
+  assert.equal(app.answers().length, 1);
+  assert.equal(app.has(node => node.props["aria-label"] === "暂停任务"), false);
+  assert.equal(app.has(node => node.props["aria-label"] === "结束任务"), false);
+});
+
+test("a lost resume response retries the same operation ID instead of applying a new command", async t => {
+  const commands: any[] = [];
+  const app = mount(t, {
+    fetchChatSession: async () => ({ ...session("a"), active_run: run() }),
+    controlAgentChatRun: async (_run: string, _action: string, command: any) => {
+      commands.push(command);
+      if (commands.length === 1) throw new Error("网络中断");
+      return run("resuming", 3);
+    },
+    fetchAgentChatRun: async () => { throw new Error("网络中断"); },
+    streamAgentChatRun: async () => ({ ...final, run_id: "owned-run" }),
+  });
+  await app.settle();
+  app.find(node => node.props["aria-label"] === "继续任务").onClick(); await app.settle();
+  app.find(node => node.props["aria-label"] === "继续任务").onClick(); await app.settle();
+  assert.equal(commands.length, 2);
+  assert.deepEqual(commands[1], commands[0]);
+  assert.equal(app.answers().length, 1);
 });
 
 test("reload restores verified history with one bootstrap call and no list/detail waterfall", async t => {
@@ -300,11 +440,10 @@ test("rapid session selections cannot overlap or send into a loading conversatio
   assert.equal(app.input().value, "保留在会话 A 的草稿");
 });
 
-test("stream failure restores send, retries the original request, and preserves the next draft", async t => {
+test("failure before accepted retries the original request and preserves the next draft", async t => {
   const requests: any[] = [];
-  const app = mount(t, { streamAgentChatMessage: async (payload: any, event: any) => {
+  const app = mount(t, { streamAgentChatMessage: async (payload: any) => {
     requests.push(payload);
-    event({ event: "accepted", data: { run_id: "run-1" } });
     if (requests.length === 1) throw new Error("连接中断");
     return final;
   } });
@@ -323,7 +462,7 @@ test("stream failure restores send, retries the original request, and preserves 
   assert.equal(app.has(node => node.props.role === "alert"), false);
 });
 
-test("disconnect clears accepted run state before cancellation in another session", async t => {
+test("disconnect retains the owned run while switching sessions detaches its controls", async t => {
   const pending = [deferred<any>(), deferred<any>(), deferred<any>()];
   const cancelled: string[] = [];
   const sessions: string[] = [];
@@ -338,16 +477,16 @@ test("disconnect clears accepted run state before cancellation in another sessio
     },
   });
   await app.settle(); app.type("问题 A"); app.submit(); await app.settle();
-  assert.equal(app.has(node => node.props["aria-label"] === "取消任务"), true);
+  assert.equal(app.has(node => node.props["aria-label"] === "结束任务"), true);
   pending[0].reject(new Error("连接中断")); await app.settle();
-  assert.equal(app.has(node => node.props["aria-label"] === "取消任务"), false);
+  assert.equal(app.has(node => node.props["aria-label"] === "结束任务"), true);
   app.find(node => node.type === "button" && node.props.className === "chat-session-select" && node.props.children[0].props.children[0].props.children === "会话 b").onClick();
   await app.settle(); app.type("问题 B"); app.submit(); await app.settle();
-  assert.equal(app.has(node => node.props["aria-label"] === "取消任务"), false,
+  assert.equal(app.has(node => node.props["aria-label"] === "结束任务"), false,
     "a submission without accepted cannot reuse another session's run ID");
   pending[1].reject(new Error("连接中断")); await app.settle();
   app.type("问题 B2"); app.submit(); await app.settle();
-  app.find(node => node.props["aria-label"] === "取消任务").onClick(); await app.settle();
+  app.find(node => node.props["aria-label"] === "结束任务").onClick(); await app.settle();
   assert.deepEqual(cancelled, ["run-b"]);
   assert.deepEqual(sessions, ["a", "b", "b"]);
   pending[2].resolve({ ...final, task_status: "cancelled" }); await app.settle();
@@ -365,14 +504,14 @@ test("user cancellation targets the accepted run and restores send after complet
     },
   });
   await app.settle(); app.type("可取消的问题"); app.submit(); await app.settle();
-  const cancel = app.find(node => node.props["aria-label"] === "取消任务");
+  const cancel = app.find(node => node.props["aria-label"] === "结束任务");
   assert.equal(cancel.type, "button");
-  assert.equal(cancel.title, "取消任务");
+  assert.equal(cancel.title, "结束任务");
   assert.equal(cancel.children.props["aria-hidden"], "true");
   cancel.onClick(); await app.settle();
   assert.deepEqual(cancelled, ["cancelled-run"]);
   assert.equal(app.input().disabled, false);
-  assert.equal(app.has(node => node.props["aria-label"] === "取消任务"), false);
+  assert.equal(app.has(node => node.props["aria-label"] === "结束任务"), false);
   assert.equal(app.has(node => node.props.children === "任务已取消，可重新提问。"), true);
 });
 
@@ -615,12 +754,12 @@ for (const failure of ["server-error", "disconnect", "cancelled"] as const) {
     stream.send(3, "progress", { stage: "tools", message: "正在查询数据" });
     await app.settle();
     assert.equal(app.answers().length, 0);
-    if (failure === "cancelled") app.find(node => node.props["aria-label"] === "取消任务").onClick();
+    if (failure === "cancelled") app.find(node => node.props["aria-label"] === "结束任务").onClick();
     else if (failure === "server-error") stream.send(4, "error", { message: "任务中断，请重试恢复" });
     else stream.close();
     await app.settle();
     assert.ok(!app.answerHtml().includes("不能显示的候选榜单"));
-    assert.equal(app.has(node => node.props.className === "icon-button chat-cancel"), false);
+    assert.equal(app.has(node => node.props.className === "icon-button chat-cancel"), failure !== "cancelled");
     assert.equal(app.answers().length, failure === "cancelled" ? 1 : 0);
     assert.equal(app.has(node => node.props.role === "alert"), true);
     assert.equal(calls, failure === "disconnect" ? 2 : 1);
