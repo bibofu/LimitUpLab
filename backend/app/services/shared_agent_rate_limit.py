@@ -59,7 +59,7 @@ class DatabaseAgentRateLimiter:
         self._lock = threading.Lock()
         self._leases = {}
 
-    def acquire(self, owner_id, ip_address, *, daily_request_count, daily_cost_usd=0.0):
+    def acquire(self, owner_id, ip_address, *, daily_request_count, daily_cost_usd=0.0, resume=False):
         from app.services.agent_rate_limit import (
             AgentRateLimitError, AgentRequestLease, load_agent_rate_limit_config,
         )
@@ -89,7 +89,8 @@ class DatabaseAgentRateLimiter:
                 # Commit rejected concurrency/quota attempts too, matching the existing guard.
                 db.execute("""INSERT INTO agent_request_attempts(attempt_id,owner_id,ip_address,attempted_at)
                     VALUES(?,?,?,?)""", (token, owner_id, ip_address, now))
-                usage = db.execute("""SELECT COUNT(*), COALESCE(SUM(estimated_cost_usd),0)
+                usage = db.execute("""SELECT COUNT(DISTINCT COALESCE(run_id,usage_id)),
+                    COALESCE(SUM(estimated_cost_usd),0)
                     FROM agent_usage_events WHERE owner_id=? AND started_at>=? AND status!='rejected'""",
                     (owner_id, day_start)).fetchone()
                 reserved = db.execute("""SELECT request_count FROM agent_request_days
@@ -98,7 +99,7 @@ class DatabaseAgentRateLimiter:
                 cost = max(daily_cost_usd, float(usage[1]))
                 active_owner = db.execute("SELECT COUNT(*) FROM agent_request_slots WHERE owner_id=?", (owner_id,)).fetchone()[0]
                 active_global = db.execute("SELECT COUNT(*) FROM agent_request_slots").fetchone()[0]
-                if used >= config.requests_per_day:
+                if not resume and used >= config.requests_per_day:
                     rejection = ("owner_daily_limit", "今天的 Agent 使用次数已达上限，请明天再试。", 3600)
                 elif config.daily_cost_budget_usd > 0 and cost >= config.daily_cost_budget_usd:
                     rejection = ("owner_daily_cost_limit", "今天的 Agent 成本额度已用完，请明天再试。", 3600)
@@ -107,15 +108,16 @@ class DatabaseAgentRateLimiter:
                 elif active_global >= config.max_concurrent_global:
                     rejection = ("global_concurrency_limit", "Agent 当前任务较多，请稍后再试。", 3)
                 else:
-                    db.execute("""INSERT INTO agent_request_days(owner_id,day_key,request_count)
-                        VALUES(?,?,?) ON CONFLICT(owner_id,day_key)
-                        DO UPDATE SET request_count=excluded.request_count""", (owner_id, day_key, used + 1))
+                    if not resume:
+                        db.execute("""INSERT INTO agent_request_days(owner_id,day_key,request_count)
+                            VALUES(?,?,?) ON CONFLICT(owner_id,day_key)
+                            DO UPDATE SET request_count=excluded.request_count""", (owner_id, day_key, used + 1))
                     db.execute("INSERT INTO agent_request_slots(token,owner_id,expires_at) VALUES(?,?,?)",
                                (token, owner_id, now + 60))
         # Raising outside the transaction preserves short-window rejected attempts.
         if rejection:
             raise AgentRateLimitError(*rejection)
-        lease = DatabaseRequestLease(self, store, token, config.requests_per_day - used - 1)
+        lease = DatabaseRequestLease(self, store, token, config.requests_per_day - used - int(not resume))
         with self._lock:
             self._leases[token] = lease
         try:

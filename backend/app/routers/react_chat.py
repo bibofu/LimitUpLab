@@ -83,6 +83,7 @@ def start(request, http_request, owner_id):
             lease, usage_repository, usage_record = agents._begin_agent_request(
                 http_request, owner_id=owner_id, session_id=request.session_id,
                 run_id=run_id, started_at=datetime.now(timezone.utc),
+                resume_run_id=run_id if not fresh and row["runtime_version"] == "durable-v1" else None,
             )
         except Exception:
             # Admission failures are retryable, not completed chat answers. Keep

@@ -100,24 +100,32 @@ CHAT_SESSIONS_VERSION = "chat-sessions-v1"
 
 
 def _begin_agent_request(
-    http_request: Request,
+    http_request: Request | None,
     *,
     owner_id: str,
     session_id: str,
     run_id: str,
     started_at: datetime,
+    resume_run_id: str | None = None,
 ) -> tuple[AgentRequestLease, AgentUsageRepository, AgentUsageRecord]:
     """Apply request limits and persist an accepted usage record."""
 
+    if resume_run_id is not None and resume_run_id != run_id:
+        raise ValueError("Recovery must retain the original run identity")
     usage_repository = AgentUsageRepository()
     today = usage_repository.owner_today(owner_id)
-    ip_hash = _agent_client_ip_hash(http_request)
+    prior_ip_hash = usage_repository.recovery_ip_hash(resume_run_id, owner_id) if resume_run_id else None
+    if http_request is None and prior_ip_hash is None:
+        raise HTTPException(503, "原任务尚无已接受的请求记录，请重新提交原请求。")
+    ip_hash = prior_ip_hash or _agent_client_ip_hash(http_request)
+    admission_options = {"resume": True} if prior_ip_hash is not None else {}
     try:
         lease = agent_rate_limiter.acquire(
             owner_id,
             ip_hash,
             daily_request_count=today.request_count,
             daily_cost_usd=today.estimated_cost_usd,
+            **admission_options,
         )
     except AgentRateLimitError as error:
         rejected_at = datetime.now(timezone.utc)

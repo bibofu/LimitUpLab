@@ -95,6 +95,7 @@ class AgentRateLimiter:
         *,
         daily_request_count: int,
         daily_cost_usd: float = 0.0,
+        resume: bool = False,
     ) -> AgentRequestLease:
         """Consume request capacity and reserve one execution slot."""
 
@@ -132,7 +133,7 @@ class AgentRateLimiter:
             owner_attempts.append(now)
             ip_attempts.append(now)
 
-            if daily_request_count >= config.requests_per_day:
+            if not resume and daily_request_count >= config.requests_per_day:
                 raise AgentRateLimitError(
                     "owner_daily_limit",
                     "今天的 Agent 使用次数已达上限，请明天再试。",
@@ -166,7 +167,7 @@ class AgentRateLimiter:
                 self,
                 owner_id,
                 enabled=True,
-                daily_remaining=config.requests_per_day - daily_request_count - 1,
+                daily_remaining=config.requests_per_day - daily_request_count - int(not resume),
             )
 
     def release(self, owner_id: str) -> None:

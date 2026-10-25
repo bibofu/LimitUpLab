@@ -95,6 +95,18 @@ class AgentUsageRepository:
         start = _shanghai_day_start_utc()
         return self._summary(start, owner_id=owner_id)
 
+    def recovery_ip_hash(self, run_id: str, owner_id: str) -> str | None:
+        """Reuse the accepted request identity for a server-initiated recovery."""
+        connection = connect(self.database_url)
+        try:
+            initialize_database(connection)
+            row = connection.execute("""SELECT ip_hash FROM agent_usage_events
+                WHERE run_id=? AND owner_id=? AND status!='rejected'
+                ORDER BY started_at DESC LIMIT 1""", (run_id, owner_id)).fetchone()
+            return str(row["ip_hash"]) if row else None
+        finally:
+            connection.close()
+
     def summary(self, days: int = 1) -> AgentUsageSummary:
         """Return aggregate usage for an administrator-selected period."""
 
@@ -119,7 +131,8 @@ class AgentUsageRepository:
             row = connection.execute(
                 f"""
                 SELECT
-                    SUM(CASE WHEN status != 'rejected' THEN 1 ELSE 0 END)
+                    COUNT(DISTINCT CASE WHEN status != 'rejected'
+                        THEN COALESCE(run_id, usage_id) END)
                         AS request_count,
                     SUM(CASE WHEN status = 'success' THEN 1 ELSE 0 END) AS success_count,
                     SUM(CASE WHEN status = 'error' THEN 1 ELSE 0 END) AS error_count,
