@@ -27,6 +27,10 @@ from app.agents.runner.guardrails import (
 from app.agents.runner.prompt import build_system_prompt
 from app.agents.runner.result import RunnerResult
 from app.agents.runner.tool_view import business_definitions, dump, model_result
+from app.agents.result_paging import (
+    PAGE_TOKEN_BUDGET, READ_RESULT_DEFINITION, READ_RESULT_TOOL, RESULT_READING_RULE,
+    ReadResultRequest, ResultPageError, model_observation,
+)
 from app.services.agent_tracing import get_agent_tracer
 from app.services.llm_provider import current_llm_usage
 
@@ -78,11 +82,11 @@ class AgentRunner:
         self.history = history or []
         self.provider = provider
         self.gateway = BusinessToolGateway(registry)
-        self.definitions = business_definitions(self.gateway)
+        self.definitions = [*business_definitions(self.gateway), READ_RESULT_DEFINITION]
         self.system_prompt = build_system_prompt(
             current_query_reference_date(),
             enabled_tools=set(self.gateway.structured),
-        )
+        ) + RESULT_READING_RULE
         self.deadline = perf_counter() + deadline_seconds
         self.started = perf_counter()
         self.progress = progress
@@ -243,8 +247,14 @@ class AgentRunner:
             tool_calls.append(call["name"])
             tool_statuses.append(value.get("status", "error"))
             tool_messages.append({**value, "name": call["name"]})
-            from app.agents.tool_context import format_tool_observation
-            model_value = format_tool_observation(value)
+            try:
+                model_value = model_observation(value, call["id"])
+            except ResultPageError:
+                # Do not claim a partial or cut field is the full observation.
+                return {"answer": "工具结果的字段说明超出上下文预算，请缩小查询范围；完整证据仍保留。",
+                        "status": "partial", "stop_reason": "context_budget", "done": True,
+                        "tool_calls": tool_calls, "tool_statuses": tool_statuses,
+                        "tool_messages": tool_messages, "tool_count": tool_count}
             messages.append(ToolMessage(
                 content=dump(model_value),
                 tool_call_id=call["id"],
@@ -273,12 +283,21 @@ class AgentRunner:
     # Validate and execute one call; validation and provider failures stay observations.
     def _execute(self, call: dict[str, Any]) -> dict[str, Any]:
         try:
+            if call["name"] == READ_RESULT_TOOL:
+                from app.services.agent_result_reader import read_owned_result
+                control = CURRENT_CONTROL.get()
+                if control is None:
+                    raise ValueError("Saved result reads require an owned durable run")
+                request = ReadResultRequest.model_validate(call["args"])
+                return read_owned_result(control.journal.database_url, owner_id=control.row["owner_id"],
+                                         run_id=control.row["run_id"], request=request, max_tokens=PAGE_TOKEN_BUDGET)
             arguments = self.gateway.validate(call)
             signature = dump([call["name"], sorted(arguments.items())])
             if signature in self.cache:
                 return self.cache[signature]
             result, payload, status = self.gateway.execute(call["name"], arguments)
-            value = model_result(call["name"], result, payload, status)
+            value = model_result(call["name"], result, payload, status, arguments=arguments,
+                                 allowed_arguments=self.gateway.structured[call["name"]].args_schema.model_fields)
             self.cache[signature] = value
             return value
         except Exception as error:  # noqa: BLE001 - validation/provider failures are observations

@@ -30,7 +30,7 @@ def business_definitions(gateway) -> list[dict[str, Any]]:
     return definitions
 
 
-def model_result(name: str, result, payload: Any, status: str) -> dict[str, Any]:
+def model_result(name: str, result, payload: Any, status: str, *, arguments=None, allowed_arguments=None) -> dict[str, Any]:
     """Expose every contracted fact once, without applying another row limit."""
 
     try:
@@ -60,6 +60,13 @@ def model_result(name: str, result, payload: Any, status: str) -> dict[str, Any]
             name, rows=rows, metadata=metadata
         ),
     }
+    if arguments is not None:
+        allowed = set(allowed_arguments if allowed_arguments is not None else arguments)
+        effective = {**arguments, **{key: value for key, value in (getattr(result, "input", {}) or {}).items()
+                                    if key in allowed and value is not None}}
+        message["query_scope"] = json.loads(dump({
+            "scope_version": 1, "tool": name, "arguments": effective, "explicit_arguments": arguments,
+        }))
     collection = TOOL_COLLECTIONS.get(name)
     if collection:
         conflicts = {}

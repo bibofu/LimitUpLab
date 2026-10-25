@@ -301,18 +301,24 @@ def test_input_refusal_resets_previous_turn_reference_and_context_diagnostics(wo
 
 def test_large_tool_result_returns_explicit_partial_without_losing_evidence(world):
     request, control, history = world.start("完整列出全部固定样本")
-    provider = ScriptedProvider([input_review(), tool_call()])
+    # Paging avoids an immediate context overflow, but cannot silently turn the
+    # first few pages of a 3000-row request into a complete answer.
+    provider = ScriptedProvider([input_review(), tool_call(), *[
+        call("read_tool_result", {"result_id": "tool-1", "offset": index * 100, "limit": 100,
+                                  "fields": ["symbol", "name"]}, f"page-{index}")
+        for index in range(5)
+    ]])
     execution, calls = runner(request, provider, history=history, row_multiplier=1000)
 
     async def scenario():
         async with runtime_for(world) as runtime:
             result = await runtime.run(execution, control)
-            assert result.status == "partial" and result.stop_reason == "context_budget"
+            assert result.status == "partial" and result.stop_reason in {"context_budget", "budget_exhausted"}
             assert len(result.tool_messages[0]["rows"]) == 3000
             assert result.tool_messages[0]["row_count"] == 3000
-            assert len(provider.calls) == 2 and len(calls) == 1
+            assert len(provider.calls) >= 3 and len(calls) == 1
             with world.journal.connection() as db:
-                stored = json.loads(db.execute("SELECT payload_json FROM agent_tool_results").fetchone()[0])
+                stored = json.loads(db.execute("SELECT payload_json FROM agent_tool_results WHERE call_id='tool-1'").fetchone()[0])
                 assert len(stored["rows"]) == 3000
 
     run_async(scenario())
