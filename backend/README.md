@@ -74,8 +74,12 @@ loop with native PostgreSQL checkpoints; `BusinessToolGateway`, immutable tool
 receipts and separate run/delivery services retain policy, idempotency and recovery.
 Thread state holds short-term memory, and a per-call Context Builder applies a
 token estimate budget without splitting tool-call/result groups. Model-facing
-columnar encoding preserves every returned row and field; long-term memory is
-deferred. See [runtime and memory migration](../docs/Memory_Runtime_Refactoring.md).
+columnar encoding preserves every returned row and field. Explicit owner-scoped
+long-term memory supports typed response preferences, research topics and
+provenance-checked historical archives. Each model call reloads active memory;
+updates, deletion and expiry invalidate stale context before delivery. Ordinary
+chat does not automatically save preferences. See
+[runtime and memory migration](../docs/Memory_Runtime_Refactoring.md).
 The only valid configured
 backend is `LIMITUPLAB_LLM_BACKEND=langchain`; any other value fails during
 startup. Every Agent tool also declares a Pydantic output contract in

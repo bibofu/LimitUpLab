@@ -1,6 +1,6 @@
 # LangChain + LangGraph 集成
 
-当前聊天链路是**LangGraph 持久化工具循环**，不再使用 `finish` 控制工具、evidence ID、`compute_result`、`read_evidence` 或输入任务编译器。Runtime 与短期 Memory 的状态契约、迁移和验证边界见 [首轮重构记录](Memory_Runtime_Refactoring.md)。
+当前聊天链路是**LangGraph 持久化工具循环**，不再使用 `finish` 控制工具、evidence ID、`compute_result`、`read_evidence` 或输入任务编译器。Runtime、短期与显式长期 Memory 的状态契约、迁移和验证边界见 [重构记录](Memory_Runtime_Refactoring.md)。
 
 ## 请求链路
 

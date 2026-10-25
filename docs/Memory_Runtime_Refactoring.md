@@ -1,6 +1,6 @@
-# Agent Runtime 与短期 Memory 首轮重构
+# Agent Runtime 与 Memory 重构
 
-记录日期：2026-10-25。本文描述 `memory_refactoring` 分支的首轮实现与验收边界，不表示已发布到生产。首轮覆盖持久化 ReAct、交付/恢复、短期记忆和上下文管理；跨会话长期记忆留到下一轮。
+记录日期：2026-10-25。本文描述 `memory_refactoring` 分支的两轮实现与验收边界，不表示已发布到远程生产环境。首轮覆盖持久化 ReAct、交付/恢复、短期记忆和上下文管理；第二轮增加显式、可撤回的跨会话长期记忆。
 
 ## 目标与职责
 
@@ -9,6 +9,7 @@ FastAPI / SSE
   → RunRegistry：请求幂等、运行状态、owner/session
   → PostgreSQL Lease / Fencing：单一执行所有者
   → LangGraph：input_review → agent ↔ tool → END
+      ├─ 显式记忆管理：input_review → memory → END
       ├─ FencedPostgresSaver / AsyncPostgresSaver：唯一执行状态
       ├─ Context Builder：会话上下文、引用、工具消息和预算
       └─ ToolResultRepository：不可变工具结果回执
@@ -32,6 +33,9 @@ Langfuse：记录运行、模型、工具与上下文诊断，不承担恢复状
 | `backend/app/agents/structured_references.py` | 从已提交答案及真实工具行验证显示顺序，解析序号或要求澄清 |
 | `backend/app/agents/tool_context.py` | 仅对模型视图做无损列式编码，原始证据不变 |
 | `backend/app/services/agent_run_recovery.py` | 有界扫描中断任务，复用正常限流、计费和执行租约流程 |
+| `backend/app/agents/memory_policy.py`、`memory_commands.py` | 有限类型策略、显式管理意图、独立 Graph 管理节点 |
+| `backend/app/repositories/long_term_memory_repository.py` | owner 隔离、版本比较、操作回执、过期、删除墓碑和历史档案 |
+| `backend/app/services/memory_retrieval.py`、`memory_scope.py` | 每次调用重新检索、相关性预算、旧上下文撤回隔离 |
 
 旧 Journal 类及自定义 checkpoint 写入接口退出当前运行链路。历史 `react_runs.checkpoint_json`、`react_calls` 数据仍保留以便审计，不转换成 LangGraph checkpoint。业务运行表和事件表继续承担请求与交付职责，不是第二套执行状态。
 
@@ -74,6 +78,45 @@ summary_generation_mode, summary_triggered
 
 工具列式编码把重复键名转成 `rows_table.columns/values`，保留全部行、顺序、字段值、来源、日期和完整字段定义；缺失字段单独记录索引，区别于明确返回的 `null`。只有编码后更小时才使用，恢复过程无需字段去重缓存。公共 trace 与不可变回执仍保留完整原始结构。
 
+## 第二轮：显式长期记忆
+
+长期记忆独立存入 PostgreSQL repository，不把 LangGraph checkpoint 或聊天摘要当成跨会话偏好的权威来源。普通问答不会自动抽取、推断或保存偏好。现有输入安全审核的一次结构化模型调用增加可选 `MemoryIntent`；明确的保存、修改、删除或查询进入独立 `memory` 节点，业务工具没有记忆写入权限。当前请求与有效会话约束优先于持久偏好，记忆不授予工具权限，也不是当前市场证据。
+
+| 类型 | 当前支持 | 约束 |
+| --- | --- | --- |
+| `preference` | `response_style`：concise/balanced/detailed；`output_format`：paragraphs/bullets/table | 只存枚举值，不接受附加指令或自由事实 |
+| `research_context` | `research_topic`：首板、连板、涨停、炸板、行业、市场情绪 | 不存交易授权、预测、未经核实的新闻 |
+| `research_archive` | 用户主动保存自己已正式交付且有来源的研究报告 | 服务端从原 run 构造正文、as_of、报告版本与证据快照，拒绝客户端伪造正文来源 |
+
+可以分别提出：“请长期记住以后回答简洁”“把长期回答偏好改为详细”“查看我已保存的长期记忆”“删除已保存的回答详略偏好”。“这次用表格，只对本次生效”不写长期记忆。每次只执行一项管理请求；不支持的内容或混合业务请求会澄清。语义判断仍由模型完成，精确原文引用和类型校验只能约束输出，不能证明任意自然语言意图都识别正确。
+
+档案示例：“把上一份有工具证据的研究报告保存为历史研究档案，名称为首板复盘”“查看历史研究档案首板复盘”。未给 source run 时，只在当前会话寻找最近有证据的已交付研究报告；有明确 source run 时仍校验 owner。档案不会默认进入普通研究调用，主动查看时明确标记历史日期，不能替代本轮行情查询。证据快照与档案一起保留，删除源会话不删除档案；档案本身可以单独删除。
+
+每次业务模型调用从 runtime 依赖重新读取有效记忆，按 owner、类型、精确 key、主题、相关性、去重和估算 Token 预算处理，首版不使用 embedding。长期记忆默认预算 1,200 tokens，并受总输入预算约束；超限先移除低优先级整条记忆。检索内容只进入当次模型视图，checkpoint 保存 owner revision、有效集合 fingerprint 及是否实际使用的标记，不保存召回列表。普通模型回答本身可能提及偏好，因此还需下面的撤回规则。
+
+### 撤回、恢复与交付一致性
+
+读取用同一只读事务返回记录、owner revision、全 owner 有效集合 fingerprint 和数据库时钟。fingerprint 与本次 key/topic 过滤无关；到期即使没有新写入也改变有效集合。更新采用记录版本和可选 owner 版本比较，管理节点再使用运行租约 fencing。相同 operation ID 重试复用操作回执，并读取当前记录，不能用旧保存回执复活后来的删除；重新保存删除项必须显式允许恢复。
+
+记忆管理的用户消息和助手响应带可信来源标记，整轮不进入普通模型历史或摘要。检测到集合变化后，清除旧自由摘要和无法证明作用域的约束，从仍有效的用户会话消息重建；带旧 fingerprint 的助手文本也会被排除。摘要模型调用之前先清理，本轮工作消息保留成对工具调用/结果但移除过时的模型文字。市场工具证据与已验证股票引用可以继续使用原有来源边界。
+
+恢复最终 checkpoint、生成管理确认，以及正式交付事务都检查生成内容所属的记忆身份。若中途删除、更新或到期，旧候选答案变为 `partial / memory_changed`，要求重新查询，不发布已撤回内容。管理查询和写入确认绑定生成它们的同一事务快照，不能用后续新 fingerprint 给旧正文重新贴标。
+
+这一策略会保守丢弃仅存在于旧自由摘要、尚无逐项来源的会话约束；后续可用 `source_message_id/scope` 的结构化约束减少损失。删除长期记忆会擦除该记录的值和内容元数据并留下不含正文的墓碑/操作回执；它不追溯删除原始聊天、已正式交付答案、历史 checkpoint 或审计记录。旧记录继续可审计，但不作为新的偏好来源。当前 owner 来自签名 visitor cookie，同一 owner 可跨会话，尚无跨设备账号同步。
+
+### 管理 API
+
+均位于 `/api/agents/chat/memories`，由服务端确定当前 owner；查询响应使用 `Cache-Control: private, no-store`。
+
+| 方法与路径 | 用途 |
+| --- | --- |
+| `GET /` | 列出有效记忆，可按 `memory_type`、`key` 和 `limit` 过滤 |
+| `GET /by-key/{memory_type}/{key}`、`GET /{memory_id}` | 查看自己的单条记录；可显式请求 inactive 状态 |
+| `PUT /{memory_type}/{key}` | 新增/修改，必须带 `Idempotency-Key`，正文含 `source_user_message`、`value` 与 `expected_revision` |
+| `DELETE /{memory_id}?expected_revision=N` | 删除，必须带 `Idempotency-Key`；版本冲突返回 409，其他 owner 记录返回 404 |
+
+`PUT` 可带 `expires_at`，更新必须使用刚读取的版本；archive 必须带 `source_run_id`。当前 UI 通过对话操作，尚无独立记忆设置面板。API 与 Agent 共用类型策略，不允许通过直接 HTTP 写入绕过枚举或证据校验。
+
 ## 数据库与部署迁移
 
 依赖锁定 `langgraph==1.0.5`、`langgraph-checkpoint==3.0.1`、`langgraph-checkpoint-postgres==3.0.5`、`psycopg-pool==3.3.3`。`0005_durable_runtime` 在现有 PostgreSQL 中增加运行状态字段、`agent_tool_results` 和原生 `checkpoints/checkpoint_blobs/checkpoint_writes/checkpoint_migrations`。原生 DDL 固化自 Saver 3.0.5 的迁移 0–9，运行时不会调用 `setup()`。
@@ -102,9 +145,11 @@ summary_generation_mode, summary_triggered
 
 2026-10-25 已实际升级本机 `127.0.0.1:55433` 的开发业务库至 `0005_durable_runtime`。升级前确认无有效 Agent 执行租约，使用 `pg_dump` 生成备份、校验 SHA-256 与归档可读性；升级后原有 192 个会话、542 条消息计数均未变化，再创建独立验收会话。备份位于忽略目录 `output/memory-refactoring/backups/`。未发布或迁移远程生产环境。
 
+第二轮迁移 `0006_long_term_memory` 在此基础上新增 `long_term_memories`、`memory_owner_versions`、`memory_operation_receipts`，不自动把旧聊天摘要变为长期偏好。部署沿用上述备份、升级和验证顺序，增加显式保存→重启→新会话召回→删除→再次查询，以及过期/回执重试的检查。2026-10-25 本机开发库已在备份验证后升级至 0006，升级前后均为 194 个会话、554 条消息、200 条 run；迁移报告为 `output/memory-refactoring/round2-migration.json`。备份不提交 Git，长期记忆迁移禁止破坏性 downgrade。
+
 ## 已完成验证
 
-截至本记录，已实际执行：
+首轮已实际执行以下验证；这是首轮基线，不是第二轮最终全量结果：
 
 | 验证集 | 结果 | 证据边界 |
 | --- | --- | --- |
@@ -142,12 +187,18 @@ summary_generation_mode, summary_triggered
 
 另外只读核对了 checkpoint 中的有序引用、来源 run、解析结果、每个 run 的唯一正式消息，以及完成后 GET 重连答复一致。三问延迟仅为单次冒烟观测，不作为 P50/P95 或版本性能对比。原始对话报告存于忽略目录 `output/memory-refactoring/`，不提交 Git。
 
+第二轮已实际通过独立 PostgreSQL 的 owner 隔离、CAS/回执、删除墓碑、数据库到期时钟、档案来源与源会话删除、Context 失效、Graph 重启和 HTTP 管理测试；包含 44 条固定 Tool World 长期记忆 Golden。`test_memory_command_races.py` 另外验证列表读取后、写入回执返回前的并发更新/删除，以及摘要模型调用前旧摘要已清除；这些场景与 scope/durable LTM 联合运行 18 passed。
+
+固定 Tool World 消融采用相同九个输入场景与预算，分别关闭全部记忆、仅保留短期记忆、启用短期加长期记忆。对应上下文契约通过数为 4/9、4/9、9/9，报告记录召回数和估算输入 tokens；这衡量实体/约束/记忆是否以正确作用域抵达上下文，不是模型答题准确率或收益指标，也不能据此宣称长期记忆普遍提高任务成功率。复现时可设置 `LIMITUPLAB_MEMORY_ABLATION_REPORT` 到项目忽略目录后运行 `tests/test_long_term_memory_ablation.py`；本次报告为 `output/long-term-memory-ablation.json`。
+
+第二轮真实 `deepseek-v4-flash` 经 FastAPI HTTP 路由完成 13 次问答，均为 HTTP 200、`task_status=complete`。覆盖保存偏好、应用重启后新会话查看、当前详细要求覆盖简洁偏好、修改、删除、否定/临时请求不写入、首板三问和跨会话主动查看历史档案；“第二只”再次返回 000559 万向钱潮。核对 owner 隔离与档案 as_of/source run，报告为 `output/memory-refactoring/round2-live.json`。这是一次真实模型冒烟验收，不替代稳定性或性能评测。第二轮最终全量结果另在本节追加。
+
 ## 明确未完成的范围
 
-- 长期 Memory 的显式保存/更新/删除、跨会话检索、过期和消融评测尚未实现；当前匿名 visitor 也不等同于跨设备账号。
+- 长期记忆仅覆盖上述有限类型；自动偏好抽取、向量/语义检索、自由事实记忆、跨设备账号与独立设置面板尚未实现。
 - 没有对模型自然语言回答做全面的语义事实证明；保留工具 Schema、数据缺口、输入安全、合规复核与输出长度检查，开放式解释仍需审阅证据。
 - 尚无生产全量 P50/P95、数据库写放大、任务成功率和真实 token 成本对比，不据代码结构宣称性能提升。
 - 大结果先做无损编码；仍超预算时显式 partial。按需分页/展开工具不在首轮范围。
 - 多实例压测、跨版本 Graph State 自动迁移、长期 checkpoint 保留策略和人机审批恢复需要后续单独验收。
 
-设计依据：[LangGraph 持久化](https://docs.langchain.com/oss/python/langgraph/persistence)、[Checkpointers 与恢复边界](https://docs.langchain.com/oss/python/langgraph/checkpointers)、[Memory 与消息裁剪](https://docs.langchain.com/oss/python/langgraph/add-memory)。实际 API 与恢复边界以锁定版本源码及集成测试为准。
+设计依据：[LangGraph 持久化](https://docs.langchain.com/oss/python/langgraph/persistence)、[Checkpointers 与恢复边界](https://docs.langchain.com/oss/python/langgraph/checkpointers)、[Memory 与消息裁剪](https://docs.langchain.com/oss/python/langgraph/add-memory)、[PostgreSQL 事务隔离](https://www.postgresql.org/docs/current/transaction-iso.html)。采用 thread 内状态与跨会话用户存储分离、同快照读取和交付时复核；项目的类型策略、撤回和操作回执由自己的 PostgreSQL repository 实现，不宣称由通用 Store 自动提供。实际 API 与恢复边界以锁定版本源码及集成测试为准。
