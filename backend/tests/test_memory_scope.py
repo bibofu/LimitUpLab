@@ -68,6 +68,22 @@ def test_same_snapshot_keeps_assistant_fact_history():
     assert cleaned["recent_messages"] == [answer]
 
 
+def test_memory_revocation_keeps_only_typed_conditions_supported_by_active_reference():
+    from app.agents.structured_references import constraints_from_references, references_from_committed_result
+    from test_structured_references import scoped_response
+
+    refs = references_from_committed_result("run-1", scoped_response())
+    conditions = constraints_from_references(refs)
+    tampered = {**conditions[0], "value": "unsupported-old-preference"}
+    current = retrieve(SnapshotRepository([], revision=2, fingerprint="new"))
+    state = {"active_references": refs, "active_constraints": [*conditions, tampered],
+             "memory_context_fingerprint": "old", "conversation_summary": "旧偏好简洁"}
+    clean = clean_conversation_for_memory_revision(state, current)
+    assert clean["active_constraints"] == conditions
+    assert "旧偏好" not in clean["conversation_summary"]
+    assert all(item["application"] == "reference_followup" for item in clean["active_constraints"])
+
+
 def test_expired_memory_resumption_clears_old_ai_text_but_keeps_calls_and_evidence():
     retrieved = retrieve(SnapshotRepository([], revision=1, fingerprint="expired"))
     working = [AIMessage(content="我按已删除偏好回答", tool_calls=[{"id": "q", "name": "quote", "args": {}}]),

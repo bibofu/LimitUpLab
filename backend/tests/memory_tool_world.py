@@ -27,6 +27,9 @@ def committed_response(*, run_id="run-old", order=None, answer=None, **updates):
             "tool_results": [{"name": "fixture_ratings", "status": "success", "output": {
                 "status": "ok", "rows": deepcopy(ROWS), "trade_date": OLD_DATE,
                 "source": SOURCE, "filters": {"board_height": 1}, "sort_rules": "fixture_score_desc",
+                "query_scope": {"scope_version": 1, "tool": "fixture_ratings",
+                                "arguments": {"board_height": 1, "sort_by": "score", "sort_order": "desc"},
+                                "explicit_arguments": {"board_height": 1, "sort_by": "score"}},
             }}], **updates}
 
 

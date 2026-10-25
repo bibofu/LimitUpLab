@@ -73,6 +73,7 @@ def clean_conversation_for_memory_revision(conversation: dict, retrieval) -> dic
                   or _metadata(item).get("memory_context_fingerprint") == retrieval.context_fingerprint]
         from app.models import ChatSessionMessage
         from app.services.conversation_summary import deterministic_summary
+        from app.agents.structured_references import supported_session_constraints
 
         safe = [ChatSessionMessage.model_validate({"session_id": "graph-thread",
                 "created_at": datetime.now(timezone.utc), **item})
@@ -81,7 +82,8 @@ def clean_conversation_for_memory_revision(conversation: dict, retrieval) -> dic
         state["conversation_summary"] = draft.get("summary", "")
         state["research_context"] = {key: draft.get(key) for key in (
             "research_goal", "stock_symbols", "topics", "date_scope", "unresolved_questions") if key in draft}
-        state["active_constraints"] = draft.get("constraints", [])
+        supported = supported_session_constraints(state.get("active_constraints"), state.get("active_references", []))
+        state["active_constraints"] = supported or draft.get("constraints", [])
         state["summary_revision"] = int(state.get("summary_revision", 0)) + 1
         state["summary_generation_mode"] = "deterministic_memory_scope_rebuild"
         state["memory_scope_rebuilt"] = True

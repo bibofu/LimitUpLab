@@ -1,6 +1,10 @@
 import pytest
 
-from app.agents.structured_references import references_from_committed_result, resolve_reference
+from copy import deepcopy
+
+from app.agents.structured_references import (
+    constraints_from_references, references_from_committed_result, resolve_reference, supported_session_constraints,
+)
 
 
 def response(answer="| 股票 | 代码 |\n|---|---|\n|乙公司|000002|\n|甲公司|600001|", **updates):
@@ -83,3 +87,85 @@ def test_source_is_not_mutated_and_reference_has_content_identity():
 def test_unknown_middle_row_cannot_shift_displayed_ordinals(answer):
     refs = references_from_committed_result("run-1", response(answer))
     assert resolve_reference("第二只", refs)["status"] == "clarify"
+
+
+def scoped_response(**arguments):
+    result = response()
+    result["tool_results"][0]["output"]["query_scope"] = {
+        "scope_version": 1, "tool": "ratings",
+        "arguments": {"trade_date": "2026-10-23", "board_height": 1, "market": "main",
+                      "event_status": "closed_limit", "sort_by": "symbol", "sort_order": "asc", **arguments},
+        "explicit_arguments": {"board_height": 1, "market": "main", **arguments},
+    }
+    return result
+
+
+def test_conditions_and_sorting_come_from_the_committed_invocation_scope():
+    source = scoped_response()
+    source["tool_results"][0]["output"]["filters"] = {"market": "fabricated-output-filter"}
+    refs = references_from_committed_result("run-1", source)
+    resolved = resolve_reference("继续按上次条件", refs)
+    assert resolved["status"] == "resolved" and resolved["query_scope_status"] == "known"
+    assert resolved["filters"] == {"board_height": 1, "market": "main", "event_status": "closed_limit"}
+    assert resolved["sort_rules"] == {"sort_by": "symbol", "sort_order": "asc"}
+    assert resolved["query_scope"]["arguments"]["trade_date"] == "2026-10-23"
+
+
+def test_legacy_output_filters_cannot_prove_conditions_but_ordinals_still_work():
+    source = response()
+    source["tool_results"][0]["output"]["filters"] = {"board_height": 1}
+    refs = references_from_committed_result("run-1", source)
+    assert refs[0]["query_scope_status"] == "unknown" and refs[0]["filters"] is None
+    assert resolve_reference("第二只", refs)["symbols"] == ["600001"]
+    assert resolve_reference("继续按上次条件", refs)["status"] == "clarify"
+    assert constraints_from_references(refs) == []
+
+
+@pytest.mark.parametrize("change", [{"scope_version": 2}, {"tool": "another_tool"},
+                                    {"arguments": None}, {"explicit_arguments": []}])
+def test_malformed_or_foreign_invocation_scope_cannot_authorize_inheritance(change):
+    source = scoped_response()
+    source["tool_results"][0]["output"]["query_scope"].update(change)
+    refs = references_from_committed_result("run-1", source)
+    assert resolve_reference("继续按上次条件", refs)["status"] == "clarify"
+    assert constraints_from_references(refs) == []
+
+
+def test_identical_lists_with_different_conditions_require_condition_clarification():
+    source = scoped_response()
+    source["tool_results"].append(scoped_response(market="growth")["tool_results"][0])
+    refs = references_from_committed_result("run-1", source)
+    assert resolve_reference("继续按上次条件", refs)["status"] == "clarify"
+    assert resolve_reference("第二只", refs)["symbols"] == ["600001"]
+
+
+def test_equal_effective_conditions_do_not_conflict_when_explicit_keys_differ():
+    source = scoped_response()
+    duplicate = deepcopy(source["tool_results"][0])
+    duplicate["output"]["query_scope"]["explicit_arguments"] = {"board_height": 1}
+    source["tool_results"].append(duplicate)
+    refs = references_from_committed_result("run-1", source)
+    assert resolve_reference("继续按上次条件", refs)["status"] == "resolved"
+
+
+def test_paged_receipt_view_never_creates_an_extra_source_reference():
+    source = scoped_response()
+    page = deepcopy(source["tool_results"][0])
+    page["name"] = "read_tool_result"
+    source["tool_results"].append(page)
+    refs = references_from_committed_result("run-1", source)
+    assert len(refs) == 1 and refs[0]["source_tool"] == "ratings"
+
+
+def test_typed_conditions_keep_source_scope_and_do_not_alias_original_values():
+    source = scoped_response(symbols=["600001", "000002"])
+    refs = references_from_committed_result("run-1", source)
+    constraints = constraints_from_references(refs)
+    market = next(item for item in constraints if item["key"] == "market")
+    assert market == {"scope": "session", "key": "market", "value": "main", "tool": "ratings",
+        "source_run_id": "run-1", "source_message_id": "user_run-1", "reference_id": refs[0]["reference_id"],
+        "origin": "committed_tool_scope", "application": "reference_followup"}
+    symbols = next(item for item in constraints if item["key"] == "symbols")
+    symbols["value"].reverse()
+    assert source["tool_results"][0]["output"]["query_scope"]["arguments"]["symbols"] == ["600001", "000002"]
+    assert supported_session_constraints([market, {**market, "value": "growth"}], refs) == [market]

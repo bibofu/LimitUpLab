@@ -18,6 +18,7 @@ from app.services.conversation_summary import (
     generate_summary, successful_messages,
 )
 from app.services.memory_scope import filter_memory_control_turns, summary_source_messages
+from app.agents.structured_references import supported_session_constraints
 
 
 class MemoryRevisionConflict(ValueError):
@@ -55,10 +56,14 @@ def _existing_summary(state: dict) -> ConversationSummary | None:
     summary = state.get("conversation_summary", "")
     research = state.get("research_context", {})
     constraints = state.get("active_constraints", [])
-    if not summary and not research and not constraints:
-        return None
     if isinstance(constraints, dict):
         constraints = [f"{key}: {value}" for key, value in constraints.items()]
+    else:
+        # Provenance-bound query conditions are separate Graph State, not prose
+        # for the summary model to reinterpret or rewrite.
+        constraints = [item for item in constraints if isinstance(item, str)]
+    if not summary and not research and not constraints:
+        return None
     return ConversationSummary(
         summary=str(summary), research_goal=str(research.get("research_goal") or ""),
         stock_symbols=research.get("stock_symbols", []), topics=research.get("topics", []),
@@ -154,7 +159,10 @@ def compress_conversation(
         summary_generation_mode=mode, summary_model=model,
         summary_schema_version=SUMMARY_SCHEMA_VERSION, summary_triggered=True,
     )
-    if not isinstance(state.get("active_constraints"), dict):
+    active = state.get("active_constraints", [])
+    if isinstance(active, list) and any(isinstance(item, dict) for item in active):
+        state["active_constraints"] = supported_session_constraints(active, state.get("active_references", []))
+    elif not isinstance(active, dict):
         state["active_constraints"] = summary.constraints
     state["conversation_token_estimate"] = used + estimate_tokens(summary.summary)
     state.pop("summary_deferred_reason", None)

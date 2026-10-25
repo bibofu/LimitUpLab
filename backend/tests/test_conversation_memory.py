@@ -114,3 +114,16 @@ def test_rejected_input_turn_does_not_enter_summary_or_recent_context():
     state = compress({}, messages)
     assert state["recent_messages"] == []
     assert state["last_committed_message_id"] == "a"
+
+
+def test_summary_cannot_rewrite_provenance_bound_query_conditions():
+    from app.agents.structured_references import constraints_from_references, references_from_committed_result
+    from test_structured_references import scoped_response
+
+    refs = references_from_committed_result("run-1", scoped_response(market="growth"))
+    conditions = constraints_from_references(refs)
+    state = compress({"active_references": refs, "active_constraints": conditions}, turns(), SummaryProvider())
+    assert state["summary_triggered"]
+    assert state["active_constraints"] == conditions
+    assert next(item["value"] for item in conditions if item["key"] == "market") == "growth"
+    assert "只看主板" in state["conversation_summary"]
