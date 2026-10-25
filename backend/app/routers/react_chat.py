@@ -46,27 +46,28 @@ def start(request, http_request, owner_id):
     """Create once, or reattach to the same active/completed request."""
     from app.routers import agents
     from app.agents.runner.durable_runtime import get_runtime
-    runtime = get_runtime()
     chats = ChatSessionRepository()
-    try:
-        session = chats.ensure_session(request.session_id, first_message=request.message, owner_id=owner_id)
-    except SessionOwnershipError as error:
-        raise HTTPException(404, "Chat session not found") from error
     journal = RunLifecycle()
     with _lock:
         try:
-            row, fresh = journal.create(
-                request, owner_id, runtime_version="durable-v1" if runtime is not None else "legacy",
-            )
+            existing = journal.services.registry.find_request(request, owner_id)
+            if existing and not existing["active"]:
+                return journal, existing
+            if existing and existing["runtime_version"] != "durable-v1":
+                raise HTTPException(409, "旧版未完成任务无法恢复。请先取消该任务，再以新 message_id 重新提交。")
+            if get_runtime() is None:
+                raise HTTPException(503, "持久化运行时暂不可用，请稍后重试；已有任务已保留。")
+            session = chats.ensure_session(request.session_id, first_message=request.message, owner_id=owner_id)
+            row, fresh = journal.create(request, owner_id)
         except RunConflict as error:
             raise HTTPException(409, str(error)) from error
-        except KeyError as error:
+        except (KeyError, SessionOwnershipError) as error:
             raise HTTPException(404, "Chat session not found") from error
         run_id = row["run_id"]
         if not row["active"]:
             return journal, row
-        if row["runtime_version"] == "durable-v1" and runtime is None:
-            raise HTTPException(503, "持久化运行时暂不可用，原任务已保留。")
+        if row["runtime_version"] != "durable-v1":
+            raise HTTPException(409, "旧版未完成任务无法恢复。请先取消该任务，再以新 message_id 重新提交。")
         execution = journal.claim(run_id)
         if execution is None:
             return journal, row
@@ -75,15 +76,14 @@ def start(request, http_request, owner_id):
         if not row["active"]:
             execution.release()
             return journal, row
-        # POST may claim an interrupted run. Durable requests resume the saved
-        # graph; legacy requests restart. GET/reconnect remains strictly read-only.
+        # POST may resume the saved graph; GET/reconnect remains read-only.
         started_at = datetime.fromisoformat(row["started_at"])
         try:
             execution.start_heartbeat()
             lease, usage_repository, usage_record = agents._begin_agent_request(
                 http_request, owner_id=owner_id, session_id=request.session_id,
                 run_id=run_id, started_at=datetime.now(timezone.utc),
-                resume_run_id=run_id if not fresh and row["runtime_version"] == "durable-v1" else None,
+                resume_run_id=run_id if not fresh else None,
             )
         except Exception:
             # Admission failures are retryable, not completed chat answers. Keep
@@ -144,17 +144,9 @@ def start(request, http_request, owner_id):
                 )
                 progress("preparing", "正在准备会话与研究数据")
                 with agents.capture_llm_usage() as tracker:
-                    if row["runtime_version"] == "durable-v1":
-                        context, memory = history, None
-                    else:
-                        context, memory = agents.prepare_session_context(
-                            session_id=request.session_id, owner_id=owner_id, messages=history,
-                            repository=agents.ChatMemoryRepository(),
-                        )
                     response = agents.answer_first_board_chat(
                         request=request, events=agents.get_limit_up_repository().list_events(),
-                        repository=agents.FirstBoardRepository(), conversation_messages=context,
-                        session_memory=memory,
+                        repository=agents.FirstBoardRepository(), conversation_messages=history,
                         progress_callback=progress,
                     )
                 response.run_id = run_id
@@ -248,7 +240,7 @@ def failed_response(row, reason):
 def interruption_message(row):
     if row.get("runtime_version") == "durable-v1":
         return "运行已中断；原任务和已保存的执行进度已保留，可重试同一请求恢复。"
-    return "运行已中断；重新提交同一请求会从头重新执行，已完成的工具结果不会被复用。"
+    return "旧版任务无法恢复。请先取消该任务，再以新 message_id 重新提交。"
 
 
 def stream(journal, row, owner_id, after=0):

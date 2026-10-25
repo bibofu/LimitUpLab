@@ -23,7 +23,7 @@ class RunLifecycle:
     def connection(self):
         return self.services.storage.connection()
 
-    def create(self, request, owner_id, *, runtime_version="legacy"):
+    def create(self, request, owner_id, *, runtime_version="durable-v1"):
         return self.services.registry.create(request, owner_id, runtime_version=runtime_version)
 
     def get(self, run_id, owner_id):

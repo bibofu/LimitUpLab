@@ -1,15 +1,8 @@
-"""Compact prompt for the lightweight tool-use loop."""
+"""System instructions derived from enabled tools; context is built separately."""
 
 from __future__ import annotations
 
 from datetime import date
-from typing import Any
-
-from langchain_core.messages import AIMessage, HumanMessage, SystemMessage
-
-MAX_HISTORY_MESSAGES = 4
-HISTORY_CHAR_BUDGET = 6000
-MAX_MEMORY_CONSTRAINTS = 8
 
 SYSTEM = """你是 LimitUpLab 收盘研究助手，用工具查询事实后直接回答。
 
@@ -86,58 +79,14 @@ def _capability_rules(enabled_tools: set[str]) -> list[str]:
     return rules
 
 
-def _memory_constraints(memory: Any) -> list[str]:
-    if memory is None:
-        return []
-    values = memory.get("constraints") if isinstance(memory, dict) else getattr(memory, "constraints", None)
-    if not values:
-        return []
-    return [
-        str(value).strip()[:500]
-        for value in values[-MAX_MEMORY_CONSTRAINTS:]
-        if str(value).strip()
-    ]
-
-
-def _recent_history(history: list[Any] | None) -> list[tuple[str, str]]:
-    """Keep the newest text turns under one character budget."""
-
-    selected: list[tuple[str, str]] = []
-    used = 0
-    for item in reversed((history or [])[-MAX_HISTORY_MESSAGES:]):
-        role = item.get("role") if isinstance(item, dict) else getattr(item, "role", None)
-        content = item.get("content") if isinstance(item, dict) else getattr(item, "content", None)
-        if role not in {"user", "assistant"} or not isinstance(content, str) or not content.strip():
-            continue
-        if used + len(content) > HISTORY_CHAR_BUDGET:
-            break
-        selected.append((role, content.strip()))
-        used += len(content)
-    return list(reversed(selected))
-
-
-def build_messages(
-    request: Any,
-    history: list[Any] | None,
+def build_system_prompt(
     reference_date: date,
     *,
     enabled_tools: set[str],
-    memory: Any = None,
-) -> list[Any]:
-    """Build a bounded context whose rules match the enabled tool set."""
+) -> str:
+    """Build trusted instructions without embedding history or mutable memory."""
 
     system = SYSTEM
     for offset, rule in enumerate(_capability_rules(enabled_tools), start=12):
         system += f"\n{offset}. {rule}"
-    constraints = _memory_constraints(memory)
-    if constraints:
-        system += "\n\n用户长期偏好（只作约束，不是市场事实）：\n" + "\n".join(
-            f"- {value}" for value in constraints
-        )
-    messages: list[Any] = [
-        SystemMessage(content=f"{system}\n\n当前服务端日期：{reference_date.isoformat()}"),
-    ]
-    for role, content in _recent_history(history):
-        messages.append(HumanMessage(content=content) if role == "user" else AIMessage(content=content))
-    messages.append(HumanMessage(content=request.message))
-    return messages
+    return f"{system}\n\n当前服务端日期：{reference_date.isoformat()}"

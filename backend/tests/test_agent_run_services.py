@@ -143,7 +143,7 @@ def test_run_status_tracks_recovery_without_storing_graph_state(registered_run):
     services, row, owner, _ = registered_run
     run_id = row["run_id"]
     assert row["thread_id"] == row["session_id"]
-    assert row["runtime_version"] == "legacy"
+    assert row["runtime_version"] == "durable-v1"
     assert row["run_status"] == "pending"
     first = services.coordinator.claim(run_id)
     started = services.registry.mark_running(run_id, owner, execution=first)
@@ -167,6 +167,8 @@ def test_run_status_tracks_recovery_without_storing_graph_state(registered_run):
 
 def test_recovery_scan_excludes_legacy_active_leases_and_exhausted_attempts(registered_run):
     services, row, owner, request = registered_run
+    with services.storage.connection() as db:
+        db.execute("UPDATE react_runs SET runtime_version='legacy' WHERE run_id=?", (row["run_id"],))
     assert services.registry.recoverable_runs() == []
     services.delivery.commit(row["run_id"], owner, response(row))
     durable, _ = services.registry.create(

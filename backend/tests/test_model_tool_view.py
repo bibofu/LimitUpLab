@@ -112,7 +112,6 @@ def test_error_details_survive_without_becoming_successful_empty_rows():
 
 def test_stock_news_identity_cannot_override_tool_name_in_model_or_trace():
     from app.agents.runner.adapter import _traces
-    from app.agents.runner.definitions import DefinitionDeduplicator
     from app.agents.runner.runner import AgentRunner
 
     value = view("stock_news", {
@@ -120,10 +119,8 @@ def test_stock_news_identity_cannot_override_tool_name_in_model_or_trace():
         "payload_metadata": {"provider_scope": "stock"},
     })
     runner = SimpleNamespace(
-        durable=False,
         progress=None,
         execute=lambda call: value,
-        definition_dedup=DefinitionDeduplicator(),
     )
     state = AgentRunner.tools(runner, {"messages": [], "pending": [{
         "name": "stock_news", "args": {"symbol": "002322"}, "id": "news_1",

@@ -3,9 +3,7 @@
 from __future__ import annotations
 
 from datetime import date
-from types import SimpleNamespace
-
-from app.agents.runner.prompt import build_messages
+from app.agents.runner.prompt import build_system_prompt
 
 
 V1_TOOLS = {
@@ -24,13 +22,10 @@ EXTENDED_TOOLS = V1_TOOLS | {
 
 
 def system_prompt(enabled_tools: set[str]) -> str:
-    messages = build_messages(
-        SimpleNamespace(message="问题"),
-        [],
+    return build_system_prompt(
         date(2026, 10, 25),
         enabled_tools=enabled_tools,
     )
-    return messages[0].content
 
 
 def test_trend_only_profile_never_promises_unavailable_index_tools():

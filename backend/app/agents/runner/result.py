@@ -1,4 +1,4 @@
-"""Result envelope for the lightweight runner."""
+"""Result envelope produced by the durable Agent graph."""
 
 from dataclasses import dataclass, field
 from typing import Any
@@ -6,7 +6,7 @@ from typing import Any
 
 @dataclass(frozen=True)
 class RunnerResult:
-    """One shadow-run answer plus the facts needed to compare it with the legacy runtime."""
+    """One validated graph outcome awaiting atomic business delivery."""
 
     answer: str
     status: str

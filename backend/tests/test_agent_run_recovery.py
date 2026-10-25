@@ -117,7 +117,6 @@ def test_worker_interruption_keeps_no_answer_and_same_post_can_finish(postgresql
     monkeypatch.setattr(durable_runtime, "get_runtime", lambda: object())
     monkeypatch.setenv("LIMITUPLAB_AGENT_RATE_LIMIT_ENABLED", "false")
     monkeypatch.setattr(agents, "get_limit_up_repository", lambda: SimpleNamespace(list_events=lambda: []))
-    monkeypatch.setattr(agents, "prepare_session_context", lambda **kwargs: pytest.fail("durable run wrote legacy memory"))
     attempts = []
     def answer(**kwargs):
         from app.agents.run_lifecycle import CURRENT_CONTROL

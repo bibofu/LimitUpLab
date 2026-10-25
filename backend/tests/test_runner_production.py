@@ -1,4 +1,4 @@
-"""Production adapter tests for the Phase 3 lightweight runner."""
+"""Public adapter tests using real owned PostgreSQL graph execution."""
 
 from __future__ import annotations
 
@@ -12,6 +12,8 @@ from app.agents.runner.guardrails import REFUSAL
 from app.agents.tools import AgentToolRegistry
 from app.models import AgentChatRequest
 from app.services.sample_data import SAMPLE_EVENTS
+from app.agents.runtime_errors import RecoverableRunError
+from runner_node_harness import durable_request
 
 
 def call(name: str, args: dict, call_id: str = "call") -> AIMessage:
@@ -56,16 +58,14 @@ def registry() -> AgentToolRegistry:
 
 
 def ask(provider, monkeypatch, message: str = "最新交易日涨停多少只？"):
-    return answer_first_board_chat(
-        AgentChatRequest(session_id="production-test", message=message),
-        SAMPLE_EVENTS,
-        repository=SimpleNamespace(database_url=None),
-        llm_provider=provider,
-        tool_registry=registry(),
-    )
+    with durable_request(AgentChatRequest(session_id="production-test", message=message)) as request:
+        return answer_first_board_chat(
+            request, SAMPLE_EVENTS, repository=SimpleNamespace(database_url=None),
+            llm_provider=provider, tool_registry=registry(),
+        )
 
 
-def test_public_entry_runs_lightweight_runner(monkeypatch):
+def test_public_entry_runs_durable_graph(monkeypatch):
     monkeypatch.setenv("LIMITUPLAB_AGENT_COMPLIANCE", "deterministic")
     provider = ScriptedProvider([
         input_review(),
@@ -114,12 +114,9 @@ def test_public_entry_fails_closed_on_malformed_security_review(monkeypatch):
         input_review(decision="allow", signals=("instruction_override",)),
         input_review(decision="allow", signals=("instruction_override",)),
     ])
-    response = ask(provider, monkeypatch)
-
-    assert response.generated_by == "agent-runner-v1"
-    assert response.task_status == "error"
-    assert response.stop_reason == "input_policy_error"
-    assert response.tool_calls == []
+    with pytest.raises(RecoverableRunError):
+        ask(provider, monkeypatch)
+    assert provider.responses == []
 
 
 def test_public_entry_reviews_signaled_advice_and_refuses_actual_trade_instruction(monkeypatch):
@@ -229,6 +226,6 @@ def test_unrepairable_trading_assessment_fails_closed_without_business_queries(m
         input_review(decision="refuse", signals=("trading_advice",)),
         input_review(decision="refuse", signals=("trading_advice",)),
     ])
-    response = ask(provider, monkeypatch, "比较历史评分与风险。")
-    assert response.task_status == "error" and response.stop_reason == "input_policy_error"
-    assert response.tool_calls == [] and len(provider.calls) == 2
+    with pytest.raises(RecoverableRunError):
+        ask(provider, monkeypatch, "比较历史评分与风险。")
+    assert len(provider.calls) == 2

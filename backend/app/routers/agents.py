@@ -49,7 +49,6 @@ from app.repositories import (
     AgentCacheRepository,
     AgentRunRepository,
     AgentUsageRepository,
-    ChatMemoryRepository,
     ChatSessionRepository,
     DailyPipelineRepository,
     FirstBoardRepository,
@@ -75,7 +74,6 @@ from app.services.llm_provider import (
     LLMUsageTracker,
     capture_llm_usage,
 )
-from app.services.session_memory import prepare_session_context
 from app.config import env_bool
 from app.services.prediction_quality_audit import build_prediction_quality_audit
 from app.services.outcome_completeness import build_top10_outcome_completeness

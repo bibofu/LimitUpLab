@@ -11,12 +11,10 @@ from time import perf_counter
 from typing import Any, TypedDict
 
 from langchain_core.messages import HumanMessage, ToolMessage
-from langgraph.graph import END, START, StateGraph
 
 from app.agents.compliance import review_answer
 from app.agents.query_contract import current_query_reference_date
 from app.agents.run_lifecycle import CURRENT_CONTROL
-from app.agents.runner.definitions import DefinitionDeduplicator
 from app.agents.runner.gateway import BusinessToolGateway
 from app.agents.runner.guardrails import (
     DEADLINE_SECONDS,
@@ -26,7 +24,7 @@ from app.agents.runner.guardrails import (
     derived_status,
     requires_compliance_review,
 )
-from app.agents.runner.prompt import build_messages
+from app.agents.runner.prompt import build_system_prompt
 from app.agents.runner.result import RunnerResult
 from app.agents.runner.tool_view import business_definitions, dump, model_result
 from app.services.agent_tracing import get_agent_tracer
@@ -75,28 +73,21 @@ class AgentRunner:
         deadline_seconds: float = DEADLINE_SECONDS,
         review_all_answers: bool = False,
         progress=None,
-        memory=None,
     ):
         self.request = request
         self.history = history or []
-        self.memory = memory
-        self.durable = False
         self.provider = provider
         self.gateway = BusinessToolGateway(registry)
         self.definitions = business_definitions(self.gateway)
-        self.messages = build_messages(
-            request,
-            history,
+        self.system_prompt = build_system_prompt(
             current_query_reference_date(),
             enabled_tools=set(self.gateway.structured),
-            memory=memory,
         )
         self.deadline = perf_counter() + deadline_seconds
         self.started = perf_counter()
         self.progress = progress
         self.review_all_answers = review_all_answers
         self.cache: dict[str, dict[str, Any]] = {}
-        self.definition_dedup = DefinitionDeduplicator()
         # One stable payload per request; the provider resends it every round.
         self.definition_chars = len(json.dumps(
             self.definitions, ensure_ascii=False, separators=(",", ":"),
@@ -134,18 +125,8 @@ class AgentRunner:
                 return self._cancelled_stop()
             if perf_counter() >= self.deadline:
                 return self._budget_stop(state)
-            if self.durable:
-                from app.agents.runtime_errors import RecoverableRunError
-                raise RecoverableRunError("模型调用暂时失败，可恢复原任务。") from error
-            if state.get("answer_repair"):
-                return {**self._incomplete_stop(state), "error": type(error).__name__}
-            return {
-                "answer": "本次研究执行失败，未取得可核验结果。",
-                "status": "error",
-                "stop_reason": "provider_error",
-                "error": type(error).__name__,
-                "done": True,
-            }
+            from app.agents.runtime_errors import RecoverableRunError
+            raise RecoverableRunError("模型调用暂时失败，可恢复原任务。") from error
         messages = [*state["messages"], response]
         rounds = state.get("model_rounds", 0) + 1
         tool_calls = getattr(response, "tool_calls", None) or []
@@ -238,7 +219,6 @@ class AgentRunner:
             ),
             tool_results=len(state.get("tool_messages", [])),
             pending_tools=len(state.get("pending", [])),
-            definition_reuse_saved_chars=self.definition_dedup.saved_chars,
             **state.get("context_diagnostics", {}),
         )
 
@@ -263,12 +243,8 @@ class AgentRunner:
             tool_calls.append(call["name"])
             tool_statuses.append(value.get("status", "error"))
             tool_messages.append({**value, "name": call["name"]})
-            # Compact only the model-facing view; traces keep complete evidence.
-            if self.durable:
-                from app.agents.tool_context import format_tool_observation
-                model_value = format_tool_observation(value)
-            else:
-                model_value = self.definition_dedup.compact(call["name"], value)
+            from app.agents.tool_context import format_tool_observation
+            model_value = format_tool_observation(value)
             messages.append(ToolMessage(
                 content=dump(model_value),
                 tool_call_id=call["id"],
@@ -289,11 +265,8 @@ class AgentRunner:
         with get_agent_tracer().tool(
             name=call.get("name", "unknown"), arguments=call.get("args"),
         ) as span:
-            if self.durable:
-                from app.repositories.tool_result_repository import ToolResultRepository
-                value = ToolResultRepository(CURRENT_CONTROL.get()).execute(call, lambda: self._execute(call))
-            else:
-                value = self._execute(call)
+            from app.repositories.tool_result_repository import ToolResultRepository
+            value = ToolResultRepository(CURRENT_CONTROL.get()).execute(call, lambda: self._execute(call))
             span.finish(status=value.get("status", "error"), output=value)
             return value
 
@@ -372,53 +345,17 @@ class AgentRunner:
         }
 
     def run(self) -> RunnerResult:
-        """Execute the durable production graph or the isolated direct-call graph."""
+        """Execute only through the application-owned durable graph."""
 
         from app.agents.runner.durable_runtime import get_runtime
         runtime = get_runtime()
         control = CURRENT_CONTROL.get()
-        if control is not None and control.row.get("runtime_version") == "durable-v1":
-            if runtime is None:
-                from app.agents.runtime_errors import RecoverableRunError
-                raise RecoverableRunError("持久化运行时暂不可用，请恢复原任务。")
-            return runtime.run_sync(self, control)
-
-        initial: RunnerState = {
-            "messages": self.messages,
-            "pending": [],
-            "tool_calls": [],
-            "tool_statuses": [],
-            "tool_messages": [],
-            "model_rounds": 0,
-            "tool_count": 0,
-            "done": False,
-        }
-        try:
-            final = GRAPH.invoke(
-                initial,
-                config={"configurable": {"runner": self}, "recursion_limit": 40},
-            )
-        except Exception as error:  # noqa: BLE001 - graph boundary
-            final = {
-                **initial,
-                "answer": "本次研究执行失败，未取得可核验结果。",
-                "status": "error",
-                "stop_reason": "runner_error",
-                "error": type(error).__name__,
-                "done": True,
-            }
-        return RunnerResult(
-            answer=final.get("answer", ""),
-            status=final.get("status", "error"),
-            stop_reason=final.get("stop_reason", "unknown"),
-            tool_calls=final.get("tool_calls", []),
-            tool_messages=final.get("tool_messages", []),
-            model_rounds=final.get("model_rounds", 0),
-            tool_count=final.get("tool_count", 0),
-            duration_ms=round((perf_counter() - self.started) * 1000),
-            error=final.get("error"),
-            compliance_reviewed=final.get("compliance_reviewed", False),
-        )
+        if control is None or control.row.get("runtime_version") != "durable-v1":
+            raise RuntimeError("Agent execution requires a durable run and execution owner")
+        if runtime is None:
+            from app.agents.runtime_errors import RecoverableRunError
+            raise RecoverableRunError("持久化运行时暂不可用，请恢复原任务。")
+        return runtime.run_sync(self, control)
 
 
 def _message_chars(message: Any) -> int:
@@ -435,26 +372,3 @@ def _message_chars(message: Any) -> int:
 def _cancelled() -> bool:
     control = CURRENT_CONTROL.get()
     return control is not None and control.cancelled()
-
-
-def _node(name: str):
-    def call(state, config):
-        return getattr(config["configurable"]["runner"], name)(state)
-
-    return call
-
-
-def _graph():
-    graph = StateGraph(RunnerState)
-    graph.add_node("agent", _node("agent"))
-    graph.add_node("tools", _node("tools"))
-    graph.add_edge(START, "agent")
-    graph.add_conditional_edges(
-        "agent",
-        lambda state: END if state.get("done") else "tools" if state.get("pending") else "agent",
-    )
-    graph.add_edge("tools", "agent")
-    return graph.compile()
-
-
-GRAPH = _graph()

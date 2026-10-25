@@ -62,7 +62,23 @@ class RunRegistry:
     def __init__(self, storage, coordinator):
         self.storage, self.coordinator = storage, coordinator
 
-    def create(self, request, owner_id, *, runtime_version="legacy"):
+    def find_request(self, request, owner_id):
+        """Resolve idempotent replay without creating a session or run."""
+        if not request.message_id:
+            return None
+        with self.storage.connection() as db:
+            row = db.execute(
+                "SELECT * FROM react_runs WHERE owner_id=? AND session_id=? AND message_key=?",
+                (owner_id, request.session_id, request.message_id),
+            ).fetchone()
+        if row is None:
+            return None
+        fingerprint = hashlib.sha256(encode(request.model_dump(mode="json")).encode()).hexdigest()
+        if row["request_hash"] != fingerprint:
+            raise RunConflict("同一 message_id 不能用于不同请求")
+        return dict(row)
+
+    def create(self, request, owner_id, *, runtime_version="durable-v1"):
         payload = request.model_dump(mode="json")
         fingerprint = hashlib.sha256(encode(payload).encode()).hexdigest()
         key = request.message_id or uuid4().hex
