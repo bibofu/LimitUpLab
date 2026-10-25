@@ -93,6 +93,8 @@ Graph 通过 `astream(stream_mode=["custom", "updates"], durability="sync")` 驱
 
 大结果在无损编码后仍超过 6,000 估算 tokens 时，模型收到明确的 manifest，包含 result_id、content_hash、总行数及可读取字段，而不是静默截短的股票列表。本轮 `read_tool_result` 只读取已保存回执，支持 offset/limit、字段投影和 metadata；每页最多 100 行并受 5,000 估算 tokens 约束，不拆开单行。next_offset/has_more、来源、字段定义、null/缺失语义和原始顺序均保留。业务工具只执行一次，页面超限或总上下文仍不足会显式返回错误/partial。分页元数据与提示规则要求模型说明未读部分，尚无对自然语言“完整名单”声明的全面语义证明。
 
+模型分页视图另外包含由服务端计算的全局行号（offset + 页内位置 + 1），通过 `row_position.field` 指明控制列并避开业务字段名。按原结果第 N 条定位时优先读取 offset=N-1、limit=1，不让模型自行数页内行。序号只添加到模型视图，原回执、HTTP 原始行、证据哈希不变；分页预算计入该列和说明。
+
 外部只读入口为 `GET /api/agents/chat/runs/{run_id}/results/{result_id}`，支持 section、offset、limit、fields 和 expected_hash，服务端同时校验 owner、run 和完成回执，响应禁止缓存。GET 不创建回执、不重跑业务工具，也不提交答案。
 
 ## 第二轮：显式长期记忆
@@ -220,6 +222,28 @@ Graph 通过 `astream(stream_mode=["custom", "updates"], durability="sync")` 驱
 | 正式交付与档案审计 | 13 个 run 各有且仅有 1 条正式 assistant 消息；删除值清空；档案正文匹配已提交源报告；证据 SHA-256 一致 | `output/memory-refactoring/round2-audit.json`；所有测试会话均有原生 checkpoint |
 
 全部模块测试包含在后端全量数字中，不重复相加。最后的取消修复增加 8 项测试，包括实际 PostgreSQL Graph 的写入前/写入后故障再取消边界。后端只保留既有 LangChain 弃用提示，前端保留既有大 bundle 非阻断提示。原始问答、测试日志、备份与消融输出均位于 Git 忽略目录，未提交凭据、数据库或生成报告。
+
+## 第三轮验收与清理收口
+
+最终功能提交为 `0bc1cf0`，模型提示版本为 `durable-react-v5-row-positions`。本轮没有数据库 DDL 变更，继续使用已验收的 `0006_long_term_memory`；旧表保留历史数据，旧摘要只读导入，旧执行状态不强转原生 checkpoint。旧 Graph、摘要写 API、无效配置/测试和覆盖式 run 写入均已清理，文档保留原方案逐项状态及未完成边界。
+
+| 验证项 | 结果 | 报告与含义 |
+| --- | --- | --- |
+| 最终后端全量 | 1801 passed、22 subtests passed，0 failed、0 skipped | `output/validation/20261025T080244Z-9ba03f92/`；170.61 秒；独立 PostgreSQL；线程异常按失败处理，仅既有 LangChain 弃用提示 |
+| 前端测试及生产构建 | 225 passed，tsc + Vite 成功 | `output/validation/20261025T074356Z-1a4a00f7/`；随后修改只涉及后端 |
+| 固定世界 Runtime 评测 | 5 轮共 25/25 契约与交付通过，恢复 5/5；恢复未重复业务工具 | `output/memory-refactoring/round3-runtime-evaluation-verified.json`；独立 PostgreSQL 随机 schema，结束后清理；无外部模型 |
+| 最终真实 DeepSeek 问答 | 7/7 完整完成，全部经过 POST SSE | `round3-verified.json`；概念、首板名单、第二只、新查询第40只、保存偏好、新会话召回、删除 |
+| 正式交付及证据审计 | 7 个 run 各恰好 1 条正式 assistant；原生 checkpoint 存在；旧摘要表零新增 | `round3-verified-audit.json`；页面与原回执逐行/哈希一致，错误 hash 返回 422，其他 owner 返回 404 |
+
+本轮真实模型共执行 30 个问题请求，其中 20 个通过 SSE；不能把它们写成“30 次全部通过”。最初的 13 项长期记忆回归全部通过，包含重启跨会话、更新、覆盖、删除、否定不写入和档案来源。条件继承实测保留 main_board、board_height=1，并把原 symbol 升序前3改为降序前2；结构化条件解析的 symbols 为空，不把旧名单缩成新筛选范围。
+
+补充验收保留两次真实失败及修复证据：首次新查询第40只被历史序号规则提前澄清，使用结构化引用意图修复（`412266a`）；之后分页数据正确但模型把原第44条误作第40条，增加服务端全局行号修复（`0bc1cf0`）。最终使用原问法“查询2026-10-23全部首板名单，按股票代码升序排列，仅告诉我第40只股票的代码和名称”，实际读取 offset=39、limit=1，回答 **301660 粤芯半导-U**，与68条原始结果的第40条一致。基础追问“第二只”仍准确回答 **000559 万向钱潮**。最终删除偏好后 value 与来源文本清空；未用覆盖答案或更换问法掩盖失败。
+
+原始首次失败、修复后结果和只读审计均保留在忽略目录；总索引为 `output/memory-refactoring/round3-acceptance-summary.json`。真实模型通过是有限问答验收，不代表任意自然语言问题都已获得语义事实证明。
+
+固定脚本每类5个样本的端到端 P50/P95（毫秒）为：概念96.670/115.475、名单99.176/104.610、序号139.131/149.921、跨会话记忆115.579/166.859、中断恢复236.915/308.318。指标含场景准备、连接池、Graph、交付与清理，不含迁移；运行时与测试有并发，仅用于小样本描述，不是线上模型延迟或前后版本速度提升。
+
+同一180行合成回执的估算 tokens 为原始 JSON 8,556、无损编码5,714、manifest首包202；读取全部4页（含全局行号）与首包合计8,253。分页收益取决于实际读取范围，不宣称完整阅读永远更省。报告同时记录工具调用数、逐次输入估算、记忆检索探针延迟及 PostgreSQL 行数/逻辑行字节/关系分配大小增长；它们不是供应商计费、真实IO次数或WAL写放大。仍没有匹配重构前真实模型流量的受控生产性能基线。
 
 ## 原始方案对照
 
