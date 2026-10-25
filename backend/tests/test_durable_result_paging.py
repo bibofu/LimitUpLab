@@ -25,6 +25,7 @@ def test_graph_can_read_a_large_immutable_result_without_requerying_market(world
             if len(self.calls) == 3:
                 page = expand_tool_observation(json.loads(messages[-1].content))
                 assert page["offset"] == 1000 and page["row_count"] == 1
+                assert page["rows"][0][page["row_position"]["field"]] == 1001
                 self.responses[0] = AIMessage(content=f"第1001行代码为 {page['rows'][0]['symbol']}。")
             return super().generate_messages(messages, tools, **kwargs)
 

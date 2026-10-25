@@ -235,7 +235,8 @@ def representation_comparison():
             "rows": 180, "full_json_tokens": estimate_tokens(value),
             "lossless_tokens": estimate_tokens(format_tool_observation(value)),
             "paged_initial_tokens": estimate_tokens(manifest), "page_count": len(pages),
-            "paged_all_rows_tokens_sum": estimate_tokens(manifest) + sum(estimate_tokens(format_tool_observation(p)) for p in pages),
+            "paged_all_rows_tokens_sum": estimate_tokens(manifest) + sum(
+                estimate_tokens(model_observation(page, f"page-{index}")) for index, page in enumerate(pages)),
             "all_rows_roundtrip": [row for page in pages for row in page["rows"]] == value["rows"]}
 
 

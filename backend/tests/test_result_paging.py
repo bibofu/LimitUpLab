@@ -68,8 +68,40 @@ def test_projection_and_model_budget_never_cut_a_row_or_reorder():
     assert page["rows"] == [{key: row[key] for key in ("symbol", "name")}
                              for row in value["rows"][42:42 + page["row_count"]]]
     assert page["next_offset"] == 42 + page["row_count"]
-    assert estimate_tokens(format_tool_observation(page)) <= 1600
+    assert estimate_tokens(model_observation(page, "page-call")) <= 1600
     assert page["trade_date"] == value["trade_date"]
+
+
+def test_model_page_global_positions_identify_exact_row_without_mutating_receipts():
+    source = large_result()
+    # A source field with the same name, even if projected out, is never shadowed.
+    source["rows"][0]["_source_row_number"] = "business-value"
+    source["rows"][39]["name"] = None
+    source["rows"][40].pop("name")
+    before = deepcopy(source)
+    page = read_result_page(source, ReadResultRequest(result_id="saved", offset=35, limit=10,
+        fields=["symbol", "name"]), max_tokens=5000)
+    raw_page = deepcopy(page)
+    view = expand_tool_observation(model_observation(page, "page-call"))
+    field = view["row_position"]["field"]
+    assert field != "_source_row_number"
+    assert [row[field] for row in view["rows"]] == list(range(36, 46))
+    fortieth = next(row for row in view["rows"] if row[field] == 40)
+    assert fortieth["symbol"] == source["rows"][39]["symbol"] and fortieth["name"] is None
+    assert "name" not in view["rows"][5]
+    assert [{key: value for key, value in row.items() if key != field} for row in view["rows"]] == page["rows"]
+    assert source == before and page == raw_page
+    assert page["content_hash"] == content_hash(source)
+
+
+@pytest.mark.parametrize("offset", [0, 67, 68])
+def test_one_row_and_empty_page_positions_preserve_boundaries(offset):
+    source = stock_list()
+    page = read_result_page(source, ReadResultRequest(result_id="saved", offset=offset, limit=1))
+    view = expand_tool_observation(model_observation(page, "page-call"))
+    assert [row[view["row_position"]["field"]] for row in view["rows"]] == (
+        [offset + 1] if offset < len(source["rows"]) else [])
+    assert page["next_offset"] == (offset + 1 if offset + 1 < len(source["rows"]) else None)
 
 
 @pytest.mark.parametrize("kwargs", [

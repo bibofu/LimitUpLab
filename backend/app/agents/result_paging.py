@@ -51,6 +51,7 @@ READ_RESULT_DEFINITION = {"type": "function", "function": {
     "name": READ_RESULT_TOOL,
     "description": ("只读本轮已持久化的工具结果，不重新查询市场。大结果 manifest 给出 result_id 和 content_hash；"
                     "按 offset/limit 分页，fields 仅投影确实需要的字段，section=metadata 可读取来源/汇总/口径字段。"
+                    "定位原结果第N条时用offset=N-1、limit=1；按返回行的全局序号列核对，不能自行数页内行。"
                     "把原结果的 content_hash 填入 expected_hash，依据返回的 next_offset 继续读取；不能把一页当成完整名单。"),
     "parameters": ReadModelResultRequest.model_json_schema(),
 }}
@@ -62,6 +63,8 @@ RESULT_READING_RULE = (
     "每页保留原始顺序、总行数、next_offset及来源。用户要完整名单时必须读取覆盖全部所需行和字段，"
     "不能把预览、单页或未读部分说成完整名单；预算不够时明确哪些部分未完成。"
     "字段未投影、字段缺失和明确null是不同状态，均不能补造数值。"
+    "查询排序后第N条时优先用offset=N-1、limit=1精确读取。分页视图的row_position.field指明"
+    "服务端计算的全局行号列，从1开始；按该列定位，不自行数页内行，也不把该列当作业务排名指标。"
 )
 
 
@@ -84,9 +87,28 @@ def _columns(rows):
     return list(dict.fromkeys(key for row in rows for key in row))
 
 
+def format_result_observation(value):
+    """Give each model-visible page row its source position without editing evidence."""
+    if value.get("name") != READ_RESULT_TOOL or value.get("section") != "rows":
+        return format_tool_observation(value)
+    view = deepcopy(value)
+    rows = view["rows"]
+    occupied = set(_columns(rows)) | set(view.get("fields_available", []))
+    position_field = "_source_row_number"
+    while position_field in occupied:
+        position_field = "_" + position_field
+    view["rows"] = [{position_field: view["offset"] + index + 1, **row}
+                    for index, row in enumerate(rows)]
+    view["row_position"] = {
+        "field": position_field, "numbering": "one_based_source_order",
+        "description": "原始已保存结果中的全局第几条，由offset计算；仅用于定位，不是评分或市场排名字段。",
+    }
+    return format_tool_observation(view)
+
+
 def model_observation(value, result_id, *, max_tokens=INLINE_TOKEN_BUDGET):
     """Keep small evidence lossless; replace oversized views with an explicit manifest."""
-    compact = format_tool_observation(value)
+    compact = format_result_observation(value)
     if estimate_tokens(compact) <= max_tokens:
         return compact
     rows = value.get("rows", [])
@@ -149,11 +171,11 @@ def read_result_page(value, request: ReadResultRequest, *, max_tokens=None):
         candidate = {**result, "rows": [*result["rows"], projected], "row_count": result["row_count"] + 1}
         end = request.offset + candidate["row_count"]
         candidate.update(next_offset=end if end < len(rows) else None, has_more=end < len(rows))
-        if max_tokens is not None and estimate_tokens(format_tool_observation(candidate)) > max_tokens:
+        if max_tokens is not None and estimate_tokens(format_result_observation(candidate)) > max_tokens:
             if not result["rows"]:
                 raise ResultPageError("A whole row and its source metadata exceed context budget; select fewer fields")
             break
         result = candidate
-    if max_tokens is not None and estimate_tokens(format_tool_observation(result)) > max_tokens:
+    if max_tokens is not None and estimate_tokens(format_result_observation(result)) > max_tokens:
         raise ResultPageError("Page metadata exceeds context budget; narrow the original query")
     return result
