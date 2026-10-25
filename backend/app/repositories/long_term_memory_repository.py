@@ -1,0 +1,311 @@
+"""Explicit owner memories with CAS, tombstones and fenced operation receipts."""
+
+from contextlib import contextmanager
+from datetime import date, datetime, timezone
+from hashlib import sha256
+import json
+from uuid import uuid4
+
+from app.database import begin_write, connect, connect_readonly, initialize_database
+from app.memory_models import MemoryMutationResult, MemoryRecord, MemoryWrite
+from app.services.runtime_coordination import LeaseLost
+
+MEMORY_TYPES = {"preference", "research_context", "research_archive"}
+
+
+class MemoryConflict(ValueError):
+    """A revision or operation identity conflicts with the current record."""
+
+
+class MemoryNotFound(KeyError):
+    """The requested memory is unavailable to this owner."""
+
+
+def _encode(value):
+    return json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False, separators=(",", ":"))
+
+
+def _record(row):
+    item = dict(row)
+    item["key"] = item.pop("memory_key")
+    item["topics"] = json.loads(item.pop("topics_json"))
+    item["metadata"] = json.loads(item.pop("metadata_json"))
+    return MemoryRecord.model_validate(item)
+
+
+def context_identity_in_connection(db, owner_id, now=None):
+    """Reuse the caller's snapshot/write lock when validating recalled memory."""
+    timestamp = now or datetime.now(timezone.utc)
+    if timestamp.tzinfo is None:
+        raise ValueError("Memory time must include a timezone")
+    version = db.execute("SELECT revision FROM memory_owner_versions WHERE owner_id=?", (owner_id,)).fetchone()
+    active = db.execute("""SELECT memory_id,revision FROM long_term_memories WHERE owner_id=?
+        AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at>?) ORDER BY memory_id""",
+        (owner_id, timestamp)).fetchall()
+    return {"owner_revision": int(version[0]) if version else 0,
+            "context_fingerprint": sha256(_encode([[row[0], row[1]] for row in active]).encode()).hexdigest()}
+
+
+class LongTermMemoryRepository:
+    def __init__(self, database_url=None):
+        self.database_url = database_url
+
+    @contextmanager
+    def _connection(self, *, readonly=False):
+        db = (connect_readonly if readonly else connect)(self.database_url)
+        try:
+            initialize_database(db)
+            with db:
+                yield db
+        finally:
+            db.close()
+
+    @staticmethod
+    def _owned(db, owner_id, memory_id):
+        return db.execute("""SELECT *,COALESCE(expires_at<=clock_timestamp(),FALSE) AS expired
+            FROM long_term_memories WHERE owner_id=? AND memory_id=?""", (owner_id, memory_id)).fetchone()
+
+    @staticmethod
+    def _owner_revision(db, owner_id):
+        row = db.execute("SELECT revision FROM memory_owner_versions WHERE owner_id=?", (owner_id,)).fetchone()
+        return int(row[0]) if row else 0
+
+    def get_owner_revision(self, owner_id):
+        with self._connection(readonly=True) as db:
+            return self._owner_revision(db, owner_id)
+
+    def get(self, owner_id, memory_id, *, include_inactive=False):
+        with self._connection(readonly=True) as db:
+            row = self._owned(db, owner_id, memory_id)
+            if row is None or (not include_inactive and (row["deleted_at"] or row["expired"])):
+                return None
+            return _record(row)
+
+    def get_by_key(self, owner_id, memory_type, key, *, include_inactive=False):
+        with self._connection(readonly=True) as db:
+            row = db.execute("""SELECT *,COALESCE(expires_at<=clock_timestamp(),FALSE) AS expired
+                FROM long_term_memories WHERE owner_id=? AND memory_type=? AND memory_key=?""",
+                (owner_id, memory_type, key)).fetchone()
+            if row is None or (not include_inactive and (row["deleted_at"] or row["expired"])):
+                return None
+            return _record(row)
+
+    def read_context(self, owner_id, *, memory_types=None, exact_keys=None, topics=None, limit=100, now=None):
+        """Read the revision and active memories in one repeatable-read snapshot."""
+        selected = tuple(memory_types) if memory_types is not None else tuple(sorted(MEMORY_TYPES))
+        if not set(selected).issubset(MEMORY_TYPES) or not 1 <= limit <= 200:
+            raise ValueError("Invalid memory filter or limit")
+        timestamp = now or datetime.now(timezone.utc)
+        if timestamp.tzinfo is None:
+            raise ValueError("Memory time must include a timezone")
+        conditions = ["owner_id=?", "deleted_at IS NULL", "(expires_at IS NULL OR expires_at>?)"]
+        params = [owner_id, timestamp]
+        if selected:
+            conditions.append("memory_type IN (" + ",".join("?" for _ in selected) + ")")
+            params.extend(selected)
+        else:
+            conditions.append("FALSE")
+        if exact_keys is not None:
+            keys = tuple(exact_keys)
+            conditions.append("memory_key IN (" + ",".join("?" for _ in keys) + ")" if keys else "FALSE")
+            params.extend(keys)
+        if topics:
+            conditions.append("EXISTS (SELECT 1 FROM jsonb_array_elements_text(topics_json::jsonb) AS topic(value) "
+                              "WHERE topic.value IN (" + ",".join("?" for _ in topics) + "))")
+            params.extend(topics)
+        with self._connection(readonly=True) as db:
+            identity = context_identity_in_connection(db, owner_id, timestamp)
+            rows = db.execute("SELECT *,FALSE AS expired FROM long_term_memories WHERE " +
+                              " AND ".join(conditions) + " ORDER BY updated_at DESC,memory_id LIMIT ?",
+                              (*params, limit)).fetchall()
+            return {**identity, "items": [_record(row).model_dump(mode="json") for row in rows]}
+
+    def list_active(self, owner_id, *, memory_types=None, exact_keys=None, topics=None, limit=100, now=None):
+        return self.read_context(owner_id, memory_types=memory_types, exact_keys=exact_keys,
+                                 topics=topics, limit=limit, now=now)["items"]
+
+    @staticmethod
+    def _assert_control(db, owner_id, control, source_user_message=None):
+        if control is None:
+            return
+        if control.execution is None or control.row["owner_id"] != owner_id:
+            raise LeaseLost("Memory write requires the owner's current execution")
+        control.journal.services.coordinator.assert_current(
+            db, control.row["run_id"], control.execution, control.admission,
+        )
+        row = db.execute("""SELECT request_json FROM react_runs WHERE run_id=? AND owner_id=?
+            AND active=1 AND cancelled=0""", (control.row["run_id"], owner_id)).fetchone()
+        if row is None:
+            raise LeaseLost("Memory write run is no longer active")
+        if source_user_message is not None and source_user_message != json.loads(row["request_json"])["message"].strip():
+            raise ValueError("Memory source must be the current user's explicit message")
+
+    def _receipt(self, db, owner_id, operation_id, fingerprint):
+        row = db.execute("SELECT * FROM memory_operation_receipts WHERE owner_id=? AND operation_id=?",
+                         (owner_id, operation_id)).fetchone()
+        if row is None:
+            return None
+        if row["request_hash"] != fingerprint:
+            raise MemoryConflict("Idempotency key was already used for a different memory operation")
+        current = self._owned(db, owner_id, row["memory_id"])
+        return MemoryMutationResult(current=_record(current), operation_revision=row["result_revision"],
+                                    owner_revision=self._owner_revision(db, owner_id), replayed=True)
+
+    @staticmethod
+    def _source(db, owner_id, write):
+        if write.source_run_id:
+            source = db.execute("SELECT request_json,response_json FROM react_runs WHERE run_id=? AND owner_id=?",
+                                (write.source_run_id, owner_id)).fetchone()
+            if source is None:
+                raise ValueError("Memory source run is unavailable to this owner")
+        else:
+            source = None
+        if write.memory_type == "research_archive":
+            if not source or not source["response_json"]:
+                raise ValueError("Research archives require a committed source run")
+            return _archive_from_response(write, json.loads(source["request_json"]), json.loads(source["response_json"]))
+        return write
+
+    @staticmethod
+    def _fingerprint(operation, payload, operation_id):
+        if not isinstance(operation_id, str) or not operation_id.strip() or len(operation_id) > 200:
+            raise ValueError("A bounded explicit operation id is required")
+        return sha256(_encode([operation, payload]).encode()).hexdigest()
+
+    def _finish(self, db, owner_id, operation_id, fingerprint, operation, memory_id, *, changed=True):
+        if changed:
+            db.execute("""INSERT INTO memory_owner_versions(owner_id,revision) VALUES(?,1)
+                ON CONFLICT(owner_id) DO UPDATE SET revision=memory_owner_versions.revision+1""", (owner_id,))
+        current = _record(self._owned(db, owner_id, memory_id))
+        db.execute("""INSERT INTO memory_operation_receipts
+            (owner_id,operation_id,request_hash,memory_id,operation,result_revision) VALUES(?,?,?,?,?,?)""",
+            (owner_id, operation_id, fingerprint, memory_id, operation, current.revision))
+        return MemoryMutationResult(current=current, operation_revision=current.revision,
+                                    owner_revision=self._owner_revision(db, owner_id))
+
+    def put(self, owner_id, write, operation_id, *, control=None, expected_owner_revision=None):
+        from app.agents.memory_policy import validate_memory_write
+        write = MemoryWrite.model_validate(write)
+        write = validate_memory_write(write, owner_id=owner_id, source="agent" if control else "api")
+        fingerprint = self._fingerprint("put", [write.model_dump(mode="json"), expected_owner_revision], operation_id)
+        with self._connection() as db:
+            begin_write(db)
+            self._assert_control(db, owner_id, control, write.source_user_message)
+            replay = self._receipt(db, owner_id, operation_id, fingerprint)
+            if replay is not None:
+                return replay
+            self._check_owner_revision(db, owner_id, expected_owner_revision)
+            write = self._source(db, owner_id, write)
+            row = db.execute("SELECT * FROM long_term_memories WHERE owner_id=? AND memory_type=? AND memory_key=?",
+                             (owner_id, write.memory_type, write.key)).fetchone()
+            if (row is None and write.expected_revision != 0) or (row and row["revision"] != write.expected_revision):
+                raise MemoryConflict("Memory revision changed; reload the current record")
+            if row and row["deleted_at"] and not write.restore_deleted:
+                raise MemoryConflict("Deleted memory requires an explicit restore and its current revision")
+            if row is None and write.restore_deleted:
+                raise MemoryConflict("Only a deleted memory can be restored")
+            memory_id = row["memory_id"] if row else "memory_" + uuid4().hex
+            values = (write.value, _encode(write.topics), _encode(write.metadata), write.expires_at,
+                      write.source_run_id, write.source_user_message)
+            if row:
+                same = (not row["deleted_at"] and row["value"] == write.value
+                        and json.loads(row["topics_json"]) == write.topics
+                        and json.loads(row["metadata_json"]) == write.metadata and row["expires_at"] == write.expires_at)
+                if same:
+                    return self._finish(db, owner_id, operation_id, fingerprint, "put", memory_id, changed=False)
+                db.execute("""UPDATE long_term_memories SET value=?,topics_json=?,metadata_json=?,expires_at=?,
+                    source_run_id=?,source_user_message=?,deleted_at=NULL,revision=revision+1,updated_at=clock_timestamp()
+                    WHERE owner_id=? AND memory_id=? AND revision=?""", (*values, owner_id, memory_id, write.expected_revision))
+            else:
+                db.execute("""INSERT INTO long_term_memories
+                    (memory_id,owner_id,memory_type,memory_key,revision,value,topics_json,metadata_json,
+                     expires_at,source_run_id,source_user_message) VALUES(?,?,?,?,1,?,?,?,?,?,?)""",
+                    (memory_id, owner_id, write.memory_type, write.key, *values))
+            return self._finish(db, owner_id, operation_id, fingerprint, "put", memory_id)
+
+    def delete(self, owner_id, memory_id, expected_revision, operation_id, *, control=None, expected_owner_revision=None):
+        if not isinstance(expected_revision, int) or expected_revision < 1:
+            raise ValueError("Deletion requires a positive expected revision")
+        fingerprint = self._fingerprint("delete", [memory_id, expected_revision, expected_owner_revision], operation_id)
+        with self._connection() as db:
+            begin_write(db)
+            self._assert_control(db, owner_id, control)
+            replay = self._receipt(db, owner_id, operation_id, fingerprint)
+            if replay is not None:
+                return replay
+            self._check_owner_revision(db, owner_id, expected_owner_revision)
+            row = self._owned(db, owner_id, memory_id)
+            if row is None:
+                raise MemoryNotFound("Memory not found")
+            if row["revision"] != expected_revision:
+                raise MemoryConflict("Memory revision changed; reload the current record")
+            if row["deleted_at"]:
+                return self._finish(db, owner_id, operation_id, fingerprint, "delete", memory_id, changed=False)
+            db.execute("""UPDATE long_term_memories SET value=NULL,topics_json='[]',metadata_json='{}',
+                source_run_id=NULL,source_user_message='',expires_at=NULL,deleted_at=clock_timestamp(),
+                updated_at=clock_timestamp(),revision=revision+1 WHERE owner_id=? AND memory_id=? AND revision=?""",
+                (owner_id, memory_id, expected_revision))
+            return self._finish(db, owner_id, operation_id, fingerprint, "delete", memory_id)
+
+    def _check_owner_revision(self, db, owner_id, expected):
+        if expected is not None and (not isinstance(expected, int) or expected < 0
+                                     or self._owner_revision(db, owner_id) != expected):
+            raise MemoryConflict("Owner memory changed; the pending operation must be confirmed again")
+
+
+def _archive_from_response(write, request, response):
+    if response.get("task_status") not in {"complete", "partial", "empty"} or not response.get("answer"):
+        raise ValueError("Research archive source must be a completed research response")
+    references, sources, dates, cutoffs = [], set(), set(), set()
+    def inspect(value):
+        if isinstance(value, dict):
+            for key, item in value.items():
+                if key in {"trade_date", "as_of", "end_date"} and isinstance(item, str):
+                    try:
+                        parsed = date.fromisoformat(item).isoformat()
+                        dates.add(parsed)
+                        if key in {"as_of", "end_date"}:
+                            cutoffs.add(parsed)
+                    except ValueError:
+                        pass
+                if key == "source" and isinstance(item, str) and item.strip():
+                    sources.add(item)
+                if key == "sources" and isinstance(item, list):
+                    sources.update(source for source in item if isinstance(source, str) and source.strip())
+                inspect(item)
+        elif isinstance(value, list):
+            for item in value:
+                inspect(item)
+    for index, trace in enumerate(response.get("tool_results", [])):
+        if not isinstance(trace, dict) or trace.get("status") != "success":
+            continue
+        result = trace.get("result") or {}
+        if result.get("status") == "error":
+            continue
+        payload = result.get("payload") or trace.get("output")
+        if not isinstance(payload, dict) or not payload:
+            continue
+        references.append(f"run://{write.source_run_id}/tool/{index}")
+        inspect(payload)
+        if trace.get("name"):
+            sources.add("tool:" + trace["name"])
+    if not references:
+        raise ValueError("Research archive source has no committed structured evidence")
+    requested_date = request.get("trade_date")
+    if requested_date:
+        try:
+            as_of = date.fromisoformat(requested_date).isoformat()
+        except ValueError:
+            raise ValueError("Research archive source has no valid date") from None
+        if dates and as_of not in dates:
+            raise ValueError("Research archive request date conflicts with its evidence")
+    elif len(cutoffs) == 1:
+        as_of = next(iter(cutoffs))
+    elif len(dates) == 1:
+        as_of = next(iter(dates))
+    else:
+        raise ValueError("Research archive source has no unambiguous as_of date")
+    return write.model_copy(update={"value": response["answer"], "metadata": {
+        "as_of": as_of, "report_version": "archive-v1", "source_references": sorted(sources),
+        "evidence_references": references, "source_generated_by": response.get("generated_by"),
+    }})
