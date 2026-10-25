@@ -17,7 +17,7 @@ from app.agents.runtime_version import VERSION
 from app.models import AgentChatResponse, ChatSessionMessage
 from app.repositories import ChatSessionRepository, SessionOwnershipError
 from app.security import current_owner_id
-from app.services.agent_tracing import get_agent_tracer
+from app.services.agent_tracing import get_agent_tracer, trace_context, trace_stage
 from app.services.agent_stream import PUBLIC_PROGRESS_EVENTS
 
 router = APIRouter()
@@ -124,6 +124,11 @@ def start(request, http_request, owner_id):
             # Tracing starts inside the worker thread: ContextVar/OTel context does
             # not cross the thread boundary from the HTTP handler.
             trace_scope = ExitStack()
+            trace_scope.enter_context(trace_context(
+                run_id=run_id, session_id=request.session_id, thread_id=request.session_id,
+                runtime_version=row["runtime_version"],
+                recovery_count=row.get("recovery_count", 0) + int(row["run_status"] != "pending"),
+            ))
             run_span = trace_scope.enter_context(
                 get_agent_tracer().run(
                     run_id=run_id,
@@ -133,6 +138,11 @@ def start(request, http_request, owner_id):
                     metadata={
                         "model": os.getenv("LIMITUPLAB_LLM_MODEL", ""),
                         "profile": os.getenv("LIMITUPLAB_AGENT_PROFILE", ""),
+                        "thread_id": request.session_id,
+                        "session_id": request.session_id,
+                        "runtime_version": row["runtime_version"],
+                        "recovery_count": row.get("recovery_count", 0) + int(row["run_status"] != "pending"),
+                        "model_version": os.getenv("LIMITUPLAB_LLM_MODEL", ""),
                     },
                     tags=["chat"],
                 )
@@ -172,7 +182,8 @@ def start(request, http_request, owner_id):
                             response = response.model_copy(
                                 update={"trace_url": run_span.url()}
                             )
-                        response = AgentChatResponse.model_validate(journal.finish(run_id, owner_id, response.model_dump(mode="json")))
+                        with trace_stage("final_delivery"):
+                            response = AgentChatResponse.model_validate(journal.finish(run_id, owner_id, response.model_dump(mode="json")))
                         notify_streams()
                 except Exception as error:
                     # Saving is part of delivery: leave the run record retryable
@@ -210,6 +221,10 @@ def start(request, http_request, owner_id):
                                     "stop_reason": (
                                         response.stop_reason if response is not None else None
                                     ),
+                                    "input_tokens": tracker.prompt_tokens if tracker and tracker.token_usage_complete else None,
+                                    "output_tokens": tracker.completion_tokens if tracker and tracker.token_usage_complete else None,
+                                    "tool_calls": len(response.tool_calls) if response is not None else None,
+                                    "recovery_count": control.row.get("recovery_count", 0),
                                 },
                                 error=failure,
                             )

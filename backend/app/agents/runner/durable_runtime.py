@@ -23,6 +23,7 @@ from app.agents.runner.guardrails import MAX_TOOL_CALLS
 from app.services.durable_checkpointer import FencedPostgresSaver, psycopg_url
 from app.services.runtime_coordination import LeaseLost
 from app.services.agent_stream import NativeStreamBridge, emit_status, emit_tool_event
+from app.services.agent_tracing import trace_context, trace_stage
 
 SCHEMA_VERSION = 1
 logger = logging.getLogger(__name__)
@@ -48,12 +49,20 @@ def execution_context(deps):
         CURRENT_CONTROL.reset(token)
 
 
+def _retrieve(control, query):
+    from app.agents.memory_commands import retrieve_for_run
+    with trace_stage("memory_retrieval") as details:
+        result = retrieve_for_run(control, query)
+        details.update(result.diagnostics)
+        return result
+
+
 def _review(state, deps):
-    from app.agents.memory_commands import prepare_memory_request, retrieve_for_run
-    with execution_context(deps):
+    from app.agents.memory_commands import prepare_memory_request
+    with execution_context(deps), trace_stage("input_review", {"node": "input_review"}):
         if deps.control.cancelled():
             return deps.runner._cancelled_stop()
-        retrieved = retrieve_for_run(deps.control, state["current_query"])
+        retrieved = _retrieve(deps.control, state["current_query"])
         try:
             decision = review_input_security(deps.runner.provider, message=state["current_query"], timeout_seconds=10)
         except Exception as error:
@@ -73,7 +82,6 @@ def _review(state, deps):
 
 def _agent(state, deps):
     from app.agents.context_builder import build_context, ContextBudgetExceeded, ContextMessageError
-    from app.agents.memory_commands import retrieve_for_run
     from app.services.memory_scope import clean_conversation_for_memory_revision, sanitize_working_messages_for_memory_revision
     with execution_context(deps):
         runner = deps.runner
@@ -84,17 +92,19 @@ def _agent(state, deps):
             page["symbol"] = runner.request.symbol
         if runner.request.trade_date:
             page["trade_date"] = runner.request.trade_date.isoformat()
-        retrieved = retrieve_for_run(deps.control, state["current_query"])
+        retrieved = _retrieve(deps.control, state["current_query"])
         conversation = clean_conversation_for_memory_revision(state["conversation"], retrieved)
         working = sanitize_working_messages_for_memory_revision(
             state.get("messages", []), retrieved, state.get("memory_context_fingerprint"),
         )
         try:
-            built = build_context(
-                system_prompt=runner.system_prompt, query=state["current_query"],
-                conversation=conversation, working_messages=working, long_term_memory=retrieved,
-                page_context=page, tool_definitions=runner.definitions,
-            )
+            with trace_stage("context_preparation", {"node": "agent"}) as details:
+                built = build_context(
+                    system_prompt=runner.system_prompt, query=state["current_query"],
+                    conversation=conversation, working_messages=working, long_term_memory=retrieved,
+                    page_context=page, tool_definitions=runner.definitions,
+                )
+                details.update(built.diagnostics)
         except ContextBudgetExceeded:
             return {"answer": "本次查询结果超出上下文预算，请缩小日期范围或分批查询；完整工具结果仍保留在证据中。",
                     "status": "partial", "stop_reason": "context_budget", "done": True}
@@ -108,7 +118,8 @@ def _agent(state, deps):
                        "run_id": deps.control.row["run_id"], "prompt_version": "durable-react-v2-memory",
                        "summary_triggered": bool(conversation.get("summary_triggered")),
                        "recovery_count": deps.control.row.get("recovery_count", 0)}
-        update = runner.agent({**state, "messages": built.messages, "context_diagnostics": diagnostics})
+        with trace_context(**diagnostics):
+            update = runner.agent({**state, "messages": built.messages, "context_diagnostics": diagnostics})
         if "messages" in update:
             update["messages"] = [*working, *update["messages"][len(built.messages):]]
         update.update(conversation=conversation, memory_owner_revision=retrieved.owner_revision,
@@ -121,7 +132,10 @@ def _agent(state, deps):
 
 
 def _tool(state, deps):
-    with execution_context(deps):
+    call = state["pending"][0]
+    with execution_context(deps), trace_stage("tool_execution", {
+        "node": "tool", "tool_call_id": call["id"], "tool_name": call["name"],
+    }):
         started = perf_counter()
         runner = deps.runner
         if state["remaining_seconds"] <= 0:
@@ -222,7 +236,12 @@ class DurableRuntime:
         task = asyncio.current_task()
         self.active_tasks.add(task)
         try:
-            return await self._run(runner, control)
+            with trace_context(run_id=control.row["run_id"], thread_id=control.row["session_id"],
+                               session_id=control.row["session_id"], runtime_version="durable-v1",
+                               model_version=getattr(runner.provider, "model", "unknown"),
+                               prompt_version="durable-react-v2-memory",
+                               recovery_count=control.row.get("recovery_count", 0)):
+                return await self._run(runner, control)
         except (LeaseLost, RecoverableRunError):
             raise
         except Exception as error:
@@ -240,7 +259,10 @@ class DurableRuntime:
                     "owner_id": control.row["owner_id"], "lease_token": lease.token, "fence": lease.fence},
                   "recursion_limit": 40}
         bridge = NativeStreamBridge(control, [item.get("function", {}).get("name") for item in runner.definitions])
-        snapshot = await self.graph.aget_state(config)
+        with trace_stage("checkpoint_resume", {"operation": "read"}) as details:
+            snapshot = await self.graph.aget_state(config)
+            details["checkpoint_id"] = (snapshot.config or {}).get("configurable", {}).get("checkpoint_id")
+            details["resume_mode"] = "resume" if snapshot.values.get("run_id") == control.row["run_id"] else "new_turn"
         state = snapshot.values
         if state and state.get("schema_version") != SCHEMA_VERSION:
             raise RecoverableRunError("会话状态版本不兼容，需要迁移后恢复。")
@@ -252,9 +274,12 @@ class DurableRuntime:
                 if not state.get("done"):
                     raise RecoverableRunError("执行状态尚未完整提交，原任务可恢复。")
                 await bridge.publish({"kind": "status", "stage": "checking", "phase": "delivery_retry"})
-                return await asyncio.to_thread(result_from_state, state, runner, control)
+                with trace_stage("final_validation", {"resume_mode": "delivery_retry"}):
+                    return await asyncio.to_thread(result_from_state, state, runner, control)
         else:
-            conversation = await asyncio.to_thread(self._conversation, state, runner, control)
+            with trace_stage("context_preparation", {"operation": "conversation"}) as details:
+                conversation = await asyncio.to_thread(self._conversation, state, runner, control)
+                details["summary_triggered"] = bool(conversation.get("summary_triggered"))
             initial = {"schema_version": SCHEMA_VERSION, "run_id": control.row["run_id"],
                        "current_query": runner.request.message, "conversation": conversation,
                        "messages": [], "pending": [], "tool_calls": [], "tool_statuses": [],
@@ -273,7 +298,9 @@ class DurableRuntime:
             async for mode, chunk in self.graph.astream(initial, config, context=RunDependencies(runner, control),
                                                         stream_mode=["custom", "updates"], durability="sync"):
                 await bridge.consume(mode, chunk)
-            completed = await self.graph.aget_state(config)
+            with trace_stage("checkpoint_read", {"operation": "verify_final"}) as details:
+                completed = await self.graph.aget_state(config)
+                details["checkpoint_id"] = (completed.config or {}).get("configurable", {}).get("checkpoint_id")
             final = completed.values
             if completed.next or final.get("run_id") != control.row["run_id"] or not final.get("done"):
                 raise RecoverableRunError("执行状态尚未完整提交，原任务可恢复。")
@@ -284,14 +311,15 @@ class DurableRuntime:
             raise RecoverableRunError("执行暂时中断，已保存可恢复进度。") from error
         finally:
             runner.progress = previous_progress
-        return await asyncio.to_thread(result_from_state, final, runner, control)
+        with trace_stage("final_validation", {"tool_count": final.get("tool_count", 0),
+                                               "model_rounds": final.get("model_rounds", 0)}):
+            return await asyncio.to_thread(result_from_state, final, runner, control)
 
     def _conversation(self, state, runner, control):
         from app.agents.conversation_memory import compress_conversation
-        from app.agents.structured_references import references_from_committed_result
+        from app.agents.structured_references import references_from_committed_result, constraints_from_references
         from app.repositories.chat_memory_repository import ChatMemoryRepository
         from app.services.conversation_summary import summary_payload
-        from app.agents.memory_commands import retrieve_for_run
         from app.services.memory_scope import clean_conversation_for_memory_revision
         conversation = dict(state.get("conversation", {})) if state else {}
         if not state:
@@ -313,7 +341,7 @@ class DurableRuntime:
         # Revoke stale derived text BEFORE any summarizer model call. Cleaning
         # only after compression would already have sent deleted preferences.
         conversation = clean_conversation_for_memory_revision(
-            conversation, retrieve_for_run(control, runner.request.message),
+            conversation, _retrieve(control, runner.request.message),
         )
         if messages:
             conversation = compress_conversation(conversation, messages, provider=runner.provider)
@@ -326,13 +354,14 @@ class DurableRuntime:
                 references = references_from_committed_result(state["run_id"], response)
                 if references:
                     conversation["active_references"] = references
-        return clean_conversation_for_memory_revision(conversation, retrieve_for_run(control, runner.request.message))
+                    conversation["active_constraints"] = constraints_from_references(references)
+        return clean_conversation_for_memory_revision(conversation, _retrieve(control, runner.request.message))
 
 
 def result_from_state(state, runner, control):
+    from app.agents.result_paging import attach_result_reference
     from app.repositories.tool_result_repository import ToolResultRepository
-    from app.agents.memory_commands import retrieve_for_run
-    retrieved = retrieve_for_run(control, state["current_query"])
+    retrieved = _retrieve(control, state["current_query"])
     # A final checkpoint may outlive a deletion/update/expiry during downtime.
     # Never hand its obsolete draft to the delivery transaction after recovery.
     if (state.get("memory_context_fingerprint")
@@ -343,7 +372,8 @@ def result_from_state(state, runner, control):
                             memory_owner_revision=retrieved.owner_revision,
                             memory_context_fingerprint=retrieved.context_fingerprint)
     repository = ToolResultRepository(control)
-    observations = [{**repository.read(item["result_ref"]), "name": item["name"]}
+    observations = [{**attach_result_reference(repository.read(item["result_ref"]), item["result_ref"], control.row["run_id"]),
+                     "name": item["name"]}
                     if item.get("result_ref") else item for item in state.get("tool_messages", [])]
     return RunnerResult(answer=state.get("answer", ""), status=state.get("status", "error"),
                         stop_reason=state.get("stop_reason", "unknown"), tool_calls=state.get("tool_calls", []),

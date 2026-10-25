@@ -12,7 +12,7 @@ from langchain_core.runnables import Runnable
 from langchain_openai import ChatOpenAI
 from openai import APIError
 
-from app.services.agent_tracing import get_agent_tracer, usage_details
+from app.services.agent_tracing import get_agent_tracer, usage_details, trace_metadata
 from app.services.protocol_diagnostics import response_diagnostics
 
 from app.services.llm_provider import (
@@ -122,7 +122,7 @@ class LangChainChatProvider(LLMProvider):
             model=self.model,
             input=_trace_messages(messages),
             parameters={"max_tokens": max_tokens, "tool_count": len(tools)},
-            metadata={"tool_choice": tool_choice, "streaming": on_chunk is not None},
+            metadata=trace_metadata({"tool_choice": tool_choice, "streaming": on_chunk is not None}),
         ) as generation:
             message, usage = self._generate_messages(
                 messages, tools,
@@ -294,7 +294,7 @@ class LangChainChatProvider(LLMProvider):
             name=function_name or "grounded_answer",
             model=self.model,
             input={"system": _trace_text(system_prompt), "user": _trace_text(user_prompt)},
-            metadata={"streaming": on_delta is not None},
+            metadata=trace_metadata({"streaming": on_delta is not None}),
         ) as generation:
             result = self._run_model(
                 model, system_prompt, user_prompt,

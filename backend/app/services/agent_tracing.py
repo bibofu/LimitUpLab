@@ -9,9 +9,12 @@ the Langfuse import stays inside the adapter.
 from __future__ import annotations
 
 import json
+import logging
 import re
 from contextlib import ExitStack, contextmanager
+from contextvars import ContextVar
 from dataclasses import dataclass, field
+from time import perf_counter
 from typing import Any, Iterator, Protocol
 
 from app.config import LangfuseSettings, langfuse_settings
@@ -21,6 +24,76 @@ ERROR_MESSAGE_LIMIT = 500
 GENERATION_NAME_LIMIT = 200
 PAYLOAD_CHAR_LIMIT = 60000
 REDACTED = "[redacted]"
+logger = logging.getLogger(__name__)
+_trace_context = ContextVar("agent_trace_context", default={})
+TRACE_FIELDS = frozenset({
+    "run_id", "thread_id", "session_id", "runtime_version", "context_version", "prompt_version",
+    "model_version", "recovery_count", "checkpoint_id", "resume_mode", "node", "operation",
+    "memory_hit_count", "memory_tokens", "long_term_memory_tokens", "summary_triggered",
+    "estimated_input_tokens", "tool_call_id", "tool_name", "receipt_reused", "tool_count",
+    "tool_results", "model_rounds", "tool_choice", "streaming", "input_token_budget",
+})
+
+
+def _trace_failure(phase, error):
+    # Exception messages can contain credentials, URLs or provider payloads.
+    logger.warning("agent_tracing_failure phase=%s error_type=%s", phase, type(error).__name__)
+
+
+class _TraceStack(ExitStack):
+    def __init__(self, phase):
+        super().__init__()
+        self.phase = phase
+
+    def __exit__(self, *details):
+        try:
+            super().__exit__(*details)
+        except Exception as error:
+            _trace_failure(self.phase + ".close", error)
+        # Exporter cleanup cannot suppress an exception from the business body.
+        return False
+
+
+def trace_metadata(extra=None):
+    values = {**_trace_context.get(), **(extra or {})}
+    return {key: value[:200] if isinstance(value, str) else value for key, value in values.items()
+            if key in TRACE_FIELDS and (value is None or isinstance(value, (str, bool, int, float)))}
+
+
+@contextmanager
+def trace_context(**metadata):
+    token = _trace_context.set(trace_metadata(metadata))
+    try:
+        yield
+    finally:
+        _trace_context.reset(token)
+
+
+@contextmanager
+def trace_stage(name, metadata=None):
+    """Observe one execution phase without making tracing a business dependency."""
+    with trace_context(**(metadata or {})), _TraceStack("stage") as stack:
+        handle = _NullGeneration()
+        factory = getattr(get_agent_tracer(), "stage", None)
+        if factory:
+            try:
+                handle = stack.enter_context(factory(name=name, metadata=trace_metadata()))
+            except Exception as error:
+                _trace_failure("stage.enter", error)
+        started = perf_counter()
+        failure = None
+        details = {}
+        try:
+            yield details
+        except BaseException as error:
+            failure = error
+            raise
+        finally:
+            try:
+                handle.finish(output={**trace_metadata(details), "latency_ms": round((perf_counter() - started) * 1000, 3),
+                                      "status": "error" if failure else "ok"}, error=failure)
+            except Exception as error:
+                _trace_failure("stage.finish", error)
 _SECRET_KEY_NAMES = {
     "api_key",
     "apikey",
@@ -105,6 +178,8 @@ class AgentTracer(Protocol):
 
     def tool(self, *, name: str, arguments: Any = None) -> Iterator[ToolSpan]: ...
 
+    def stage(self, *, name: str, metadata: dict[str, Any] | None = None) -> Iterator[GenerationSpan]: ...
+
     def flush(self) -> None: ...
 
     def shutdown(self) -> None: ...
@@ -182,6 +257,10 @@ class NullTracer:
     def tool(self, *, name: str, arguments: Any = None) -> Iterator[ToolSpan]:
         yield _NullTool()
 
+    @contextmanager
+    def stage(self, *, name: str, metadata: dict[str, Any] | None = None):
+        yield _NullGeneration()
+
     def flush(self) -> None:
         return None
 
@@ -212,8 +291,8 @@ class _LangfuseGeneration:
             payload["status_message"] = _error_message(error)
         try:
             self.span.update(**payload)
-        except Exception:
-            return None
+        except Exception as failure:
+            _trace_failure("generation.finish", failure)
 
 
 @dataclass
@@ -235,12 +314,12 @@ class _LangfuseTool:
         try:
             self.span.update(
                 output=_bounded(output),
-                metadata={"status": status},
+                metadata={**trace_metadata(), "status": status},
                 level="ERROR" if failed else "DEFAULT",
                 status_message=_error_message(error) if error is not None else status,
             )
-        except Exception:
-            return None
+        except Exception as failure:
+            _trace_failure("tool.finish", failure)
 
 
 @dataclass
@@ -253,7 +332,8 @@ class _LangfuseRun:
     def url(self) -> str | None:
         try:
             return self.client.get_trace_url(trace_id=self.trace_id)
-        except Exception:
+        except Exception as error:
+            _trace_failure("run.url", error)
             return None
 
     def finish(
@@ -271,8 +351,8 @@ class _LangfuseRun:
                 level="ERROR" if error is not None else "DEFAULT",
                 status_message=_error_message(error) if error is not None else None,
             )
-        except Exception:
-            return None
+        except Exception as failure:
+            _trace_failure("run.finish", failure)
 
 
 class LangfuseTracer:
@@ -315,7 +395,7 @@ class LangfuseTracer:
         tags: list[str] | None = None,
     ) -> Iterator[RunSpan]:
         trace_id = ""
-        with ExitStack() as stack:
+        with _TraceStack("run") as stack:
             try:
                 trace_id = self._client.create_trace_id(seed=run_id)
                 span = stack.enter_context(
@@ -323,7 +403,7 @@ class LangfuseTracer:
                         name="agent_run",
                         as_type="agent",
                         input={"message": message},
-                        metadata={"run_id": run_id, **(metadata or {})},
+                        metadata={**trace_metadata(), "run_id": run_id, **(metadata or {})},
                         trace_context={"trace_id": trace_id},
                     )
                 )
@@ -335,7 +415,8 @@ class LangfuseTracer:
                         tags=tags,
                     )
                 )
-            except Exception:
+            except Exception as error:
+                _trace_failure("run.enter", error)
                 yield _NullRun()
                 return
             handle = _LangfuseRun(self._client, span, trace_id)
@@ -355,7 +436,7 @@ class LangfuseTracer:
         parameters: dict[str, Any] | None = None,
         metadata: dict[str, Any] | None = None,
     ) -> Iterator[GenerationSpan]:
-        with ExitStack() as stack:
+        with _TraceStack("generation") as stack:
             try:
                 span = stack.enter_context(
                     self._client.start_as_current_observation(
@@ -364,10 +445,11 @@ class LangfuseTracer:
                         model=model,
                         model_parameters=parameters or {},
                         input=_bounded(input),
-                        metadata=metadata,
+                        metadata={**trace_metadata(), **(metadata or {})},
                     )
                 )
-            except Exception:
+            except Exception as error:
+                _trace_failure("generation.enter", error)
                 yield _NullGeneration()
                 return
             handle = _LangfuseGeneration(span)
@@ -379,14 +461,15 @@ class LangfuseTracer:
 
     @contextmanager
     def tool(self, *, name: str, arguments: Any = None) -> Iterator[ToolSpan]:
-        with ExitStack() as stack:
+        with _TraceStack("tool") as stack:
             try:
                 span = stack.enter_context(
                     self._client.start_as_current_observation(
-                        name=name, as_type="tool", input=_bounded(arguments),
+                        name=name, as_type="tool", input=_bounded(arguments), metadata=trace_metadata(),
                     )
                 )
-            except Exception:
+            except Exception as error:
+                _trace_failure("tool.enter", error)
                 yield _NullTool()
                 return
             handle = _LangfuseTool(span)
@@ -396,17 +479,36 @@ class LangfuseTracer:
                 handle.finish(status="error", error=error)
                 raise
 
+    @contextmanager
+    def stage(self, *, name: str, metadata: dict[str, Any] | None = None):
+        with _TraceStack("stage") as stack:
+            try:
+                span = stack.enter_context(self._client.start_as_current_observation(
+                    name=name[:GENERATION_NAME_LIMIT], as_type="span",
+                    metadata={**trace_metadata(), **(metadata or {})},
+                ))
+            except Exception as error:
+                _trace_failure("stage.enter", error)
+                yield _NullGeneration()
+                return
+            handle = _LangfuseGeneration(span)
+            try:
+                yield handle
+            except BaseException as error:
+                handle.finish(error=error)
+                raise
+
     def flush(self) -> None:
         try:
             self._client.flush()
-        except Exception:
-            return None
+        except Exception as error:
+            _trace_failure("flush", error)
 
     def shutdown(self) -> None:
         try:
             self._client.shutdown()
-        except Exception:
-            return None
+        except Exception as error:
+            _trace_failure("shutdown", error)
 
 
 def _error_message(error: BaseException) -> str:
@@ -484,7 +586,8 @@ def configure_agent_tracer(
         return _tracer
     try:
         _tracer = LangfuseTracer(resolved)
-    except Exception:
+    except Exception as error:
+        _trace_failure("configure", error)
         _tracer = NullTracer()
     return _tracer
 
@@ -497,4 +600,7 @@ def shutdown_agent_tracer() -> None:
     global _tracer
     tracer = _tracer
     _tracer = NullTracer()
-    tracer.shutdown()
+    try:
+        tracer.shutdown()
+    except Exception as error:
+        _trace_failure("shutdown", error)

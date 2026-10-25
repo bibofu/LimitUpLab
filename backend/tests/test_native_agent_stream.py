@@ -146,7 +146,7 @@ def test_update_with_done_cannot_substitute_for_final_persisted_snapshot(world, 
     async def scenario():
         async with runtime_for(world) as runtime:
             async def snapshot(*args, **kwargs):
-                return SimpleNamespace(values={}, next=())
+                return SimpleNamespace(values={}, next=(), config={})
             async def premature(*args, **kwargs):
                 yield "updates", {"agent": {"done": True, "answer": "uncheckpointed-draft"}}
             monkeypatch.setattr(runtime.graph, "aget_state", snapshot)

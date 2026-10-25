@@ -7,11 +7,13 @@ from langchain_core.messages import AIMessage, HumanMessage
 from langchain_core.runnables import RunnableLambda
 
 from app.agents.runner.runner import AgentRunner
+from app.agents.runner.durable_runtime import execution_context
 from app.agents.runner.tool_view import dump
 from app.services import agent_tracing
 from app.services.langchain_provider import LangChainChatProvider
 
 from tracing_support import RecordingTracer
+from test_durable_agent import world
 
 
 USAGE = {"prompt_tokens": 12, "completion_tokens": 4, "total_tokens": 16}
@@ -114,19 +116,21 @@ def test_native_turn_reports_tool_calls_as_generation_output():
     assert result.tool_calls[0]["id"] == "call_1"
 
 
-def test_tool_execution_reports_empty_status_from_cache():
+def test_tool_execution_reports_empty_status_from_cache(world):
     tracer = RecordingTracer()
     agent_tracing._tracer = tracer
     cached = {"status": "empty", "summary": "当日无事件", "rows": []}
     signature = dump(["limit_up_events", sorted({"trade_date": "2026-10-23"}.items())])
     runner = SimpleNamespace(
-        gateway=_Gateway(), cache={signature: cached}, durable=False,
+        gateway=_Gateway(), cache={signature: cached},
     )
     runner._execute = lambda call: AgentRunner._execute(runner, call)
 
-    value = AgentRunner.execute(
-        runner, {"name": "limit_up_events", "args": {"trade_date": "2026-10-23"}}
-    )
+    _, control, _ = world.start()
+    with execution_context(SimpleNamespace(control=control)):
+        value = AgentRunner.execute(
+            runner, {"id": "cached-call", "name": "limit_up_events", "args": {"trade_date": "2026-10-23"}}
+        )
 
     assert value is cached
     span = tracer.tools[0]
@@ -136,15 +140,17 @@ def test_tool_execution_reports_empty_status_from_cache():
     assert span.finished["output"] is cached
 
 
-def test_tool_validation_failure_is_recorded_and_not_raised():
+def test_tool_validation_failure_is_recorded_and_not_raised(world):
     tracer = RecordingTracer()
     agent_tracing._tracer = tracer
     runner = SimpleNamespace(
-        gateway=_Gateway(error=ValueError("Tool not registered")), cache={}, durable=False,
+        gateway=_Gateway(error=ValueError("Tool not registered")), cache={},
     )
     runner._execute = lambda call: AgentRunner._execute(runner, call)
 
-    value = AgentRunner.execute(runner, {"name": "unknown_tool", "args": {}})
+    _, control, _ = world.start()
+    with execution_context(SimpleNamespace(control=control)):
+        value = AgentRunner.execute(runner, {"id": "invalid-call", "name": "unknown_tool", "args": {}})
 
     assert value["status"] == "error"
     assert value["error"] == "Tool not registered"
