@@ -120,9 +120,11 @@ def test_worker_interruption_keeps_no_answer_and_same_post_can_finish(postgresql
     monkeypatch.setattr(agents, "prepare_session_context", lambda **kwargs: pytest.fail("durable run wrote legacy memory"))
     attempts = []
     def answer(**kwargs):
+        from app.agents.run_lifecycle import CURRENT_CONTROL
         attempts.append(kwargs["request"])
         if len(attempts) == 1:
             raise RecoverableRunError("fixture checkpoint interruption")
+        assert CURRENT_CONTROL.get().row["recovery_count"] == 1
         return AgentChatResponse(session_id="recover-session", intent="react_research",
                                  answer="首板是该轮连续涨停中的第一个涨停板。", task_status="complete",
                                  stop_reason="answered", generated_by="fixture")
@@ -145,4 +147,37 @@ def test_worker_interruption_keeps_no_answer_and_same_post_can_finish(postgresql
     assert final["task_status"] == "complete"
     assert journal.get(row["run_id"], "owner")["recovery_count"] == 1
     messages = ChatSessionRepository().get_session("recover-session", owner_id="owner").messages
+    assert [message.role for message in messages] == ["user", "assistant"]
+
+
+def test_accounting_failure_after_delivery_does_not_rerun_or_republish(postgresql_database, monkeypatch):
+    from app.agents.runner import durable_runtime
+    monkeypatch.setattr(durable_runtime, "get_runtime", lambda: object())
+    monkeypatch.setenv("LIMITUPLAB_AGENT_RATE_LIMIT_ENABLED", "false")
+    monkeypatch.setattr(agents, "get_limit_up_repository", lambda: SimpleNamespace(list_events=lambda: []))
+    answers, accounting = [], []
+    def answer(**kwargs):
+        answers.append(kwargs["request"])
+        return AgentChatResponse(session_id="delivered-session", intent="react_research",
+                                 answer="这是已保存的研究说明。", task_status="complete",
+                                 stop_reason="answered", generated_by="fixture")
+    def unavailable_accounting(self, record):
+        accounting.append(record)
+        raise RuntimeError("fixture usage storage unavailable")
+    monkeypatch.setattr(agents, "answer_first_board_chat", answer)
+    monkeypatch.setattr(AgentUsageRepository, "finish", unavailable_accounting)
+    request = AgentChatRequest(session_id="delivered-session", message_id="m", message="什么是首板？")
+    http = Request({"type": "http", "client": ("192.0.2.1", 5000), "headers": []})
+    lifecycle, row = react_chat.start(request, http, "owner")
+    deadline = time.monotonic() + 5
+    while lifecycle.executing(row["run_id"]) and time.monotonic() < deadline:
+        time.sleep(.01)
+    assert not lifecycle.executing(row["run_id"])
+    assert len(accounting) == 1
+    final = lifecycle.services.registry.delivered_response(row["run_id"], "owner")
+    repeated, repeated_row = react_chat.start(request, http, "owner")
+    assert repeated_row["run_status"] == "completed"
+    assert repeated.services.registry.delivered_response(row["run_id"], "owner") == final
+    assert len(answers) == 1 and len(accounting) == 1
+    messages = ChatSessionRepository().get_session("delivered-session", owner_id="owner").messages
     assert [message.role for message in messages] == ["user", "assistant"]

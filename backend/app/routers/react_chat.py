@@ -11,7 +11,7 @@ from typing import Annotated
 from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
-from app.agents.run_lifecycle import CURRENT_CONTROL, Journal, RunConflict, RunControl
+from app.agents.run_lifecycle import CURRENT_CONTROL, RunLifecycle, RunConflict, RunControl
 from app.agents.runtime_errors import RecoverableRunError
 from app.agents.runtime_version import VERSION
 from app.models import AgentChatResponse, ChatSessionMessage
@@ -52,7 +52,7 @@ def start(request, http_request, owner_id):
         session = chats.ensure_session(request.session_id, first_message=request.message, owner_id=owner_id)
     except SessionOwnershipError as error:
         raise HTTPException(404, "Chat session not found") from error
-    journal = Journal()
+    journal = RunLifecycle()
     with _lock:
         try:
             row, fresh = journal.create(
@@ -139,7 +139,7 @@ def start(request, http_request, owner_id):
                 journal.event(run_id, "progress", {"stage": stage, "message": message})
                 notify_streams()
             try:
-                journal.services.registry.mark_running(
+                control.row = journal.services.registry.mark_running(
                     run_id, owner_id, execution=execution, admission=lease,
                 )
                 progress("preparing", "正在准备会话与研究数据")
@@ -300,7 +300,7 @@ def synchronous(journal, row, owner_id):
 
 @router.get("/chat/runs/{run_id}")
 def get_run(run_id: str, owner_id: Annotated[str, Depends(current_owner_id)]):
-    journal = Journal()
+    journal = RunLifecycle()
     row = owned(journal, run_id, owner_id)
     return {"run_id": run_id, "active": bool(row["active"]), "cancel_requested": bool(row["cancelled"]),
             "interrupted": bool(row["active"] and not journal.executing(run_id)),
@@ -310,13 +310,13 @@ def get_run(run_id: str, owner_id: Annotated[str, Depends(current_owner_id)]):
 
 @router.get("/chat/runs/{run_id}/stream")
 def reconnect(run_id: str, owner_id: Annotated[str, Depends(current_owner_id)], after: int = Query(0, ge=0)):
-    journal = Journal()
+    journal = RunLifecycle()
     return stream(journal, owned(journal, run_id, owner_id), owner_id, after)
 
 
 @router.post("/chat/runs/{run_id}/cancel")
 def cancel(run_id: str, owner_id: Annotated[str, Depends(current_owner_id)]):
-    journal = Journal()
+    journal = RunLifecycle()
     with _lock:
         row = owned(journal, run_id, owner_id)
         journal.cancel(run_id, owner_id)

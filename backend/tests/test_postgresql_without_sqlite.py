@@ -6,7 +6,7 @@ import sqlite3
 
 from fastapi.testclient import TestClient
 
-from app.agents.run_lifecycle import Journal
+from app.agents.run_lifecycle import RunLifecycle
 from app.database import connect_readonly
 from app.main import app
 from app.models import AgentChatRequest, AgentChatResponse, StockDailyBar
@@ -33,7 +33,7 @@ def test_application_http_with_no_sqlite_access(postgresql_database, tmp_path, m
     owner = "visitor_" + "c" * 32
     chats = ChatSessionRepository()
     chats.create_session(session_id="pg-only-session", owner_id=owner)
-    journal = Journal()
+    journal = RunLifecycle()
     run, _ = journal.create(AgentChatRequest(
         session_id="pg-only-session", message_id="question", message="解释已有研究数据",
     ), owner)
