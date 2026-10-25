@@ -1,6 +1,6 @@
 # Agent Runtime 与 Memory 重构
 
-记录日期：2026-10-25。本文描述 `memory_refactoring` 分支的两轮实现与验收边界，不表示已发布到远程生产环境。首轮覆盖持久化 ReAct、交付/恢复、短期记忆和上下文管理；第二轮增加显式、可撤回的跨会话长期记忆。
+记录日期：2026-10-25。本文描述 `memory_refactoring` 分支的实现与验收边界，不表示已发布到远程生产环境。首轮覆盖持久化 ReAct、交付/恢复、短期记忆和上下文管理；第二轮增加显式、可撤回的跨会话长期记忆；第三轮清理旧执行与摘要写入链路，补充原生 Streaming、查询条件来源和大结果分页。
 
 ## 目标与职责
 
@@ -30,14 +30,19 @@ Langfuse：记录运行、模型、工具与上下文诊断，不承担恢复状
 | `backend/app/repositories/tool_result_repository.py` | 按 run/call/参数签名持久化完整结果，恢复不读取可变缓存 |
 | `backend/app/agents/context_builder.py` | 每次模型调用重建有限上下文，检查工具消息配对并输出预算诊断 |
 | `backend/app/agents/conversation_memory.py` | Token 触发摘要、整轮近期窗口、消息游标与版本 |
+| `backend/app/services/conversation_summary.py` | 无数据库依赖的摘要生成与降级；不管理 owner、会话、游标或写入 |
 | `backend/app/agents/structured_references.py` | 从已提交答案及真实工具行验证显示顺序，解析序号或要求澄清 |
 | `backend/app/agents/tool_context.py` | 仅对模型视图做无损列式编码，原始证据不变 |
+| `backend/app/agents/result_paging.py`、`services/agent_result_reader.py` | 不可变工具回执的 manifest、分页、字段投影及 owner/run 读取边界 |
+| `backend/app/services/agent_stream.py` | 原生 Graph custom/updates 到公开进度事件的白名单映射 |
 | `backend/app/services/agent_run_recovery.py` | 有界扫描中断任务，复用正常限流、计费和执行租约流程 |
 | `backend/app/agents/memory_policy.py`、`memory_commands.py` | 有限类型策略、显式管理意图、独立 Graph 管理节点 |
 | `backend/app/repositories/long_term_memory_repository.py` | owner 隔离、版本比较、操作回执、过期、删除墓碑和历史档案 |
 | `backend/app/services/memory_retrieval.py`、`memory_scope.py` | 每次调用重新检索、相关性预算、旧上下文撤回隔离 |
 
 旧 Journal 类及自定义 checkpoint 写入接口退出当前运行链路。历史 `react_runs.checkpoint_json`、`react_calls` 数据仍保留以便审计，不转换成 LangGraph checkpoint。业务运行表和事件表继续承担请求与交付职责，不是第二套执行状态。
+
+第三轮删除 HTTP 的 legacy 执行回退和 direct-call Graph。运行时不可用返回 503，不创建新的 legacy run；旧未完成任务重试返回 409，需取消后以新 message_id 提交；旧已交付结果仍可读取。`services/session_memory.py` 的旧 prepare/refresh 写 API、`ChatMemoryRepository.save_memory`、按消息条数触发的配置及旧写入测试均已移除。旧 `chat_session_memories` 表保留，只通过只读连接在首次建立 Graph 会话时导入，之后不能覆盖 Graph 的摘要进度。`ChatSessionMemory` 仅作为旧记录读取 DTO，新摘要使用不含持久化身份的 `ConversationSummary`。
 
 ## Graph State 与恢复边界
 
@@ -64,6 +69,8 @@ summary_generation_mode, summary_triggered
 
 自动恢复默认每 30 秒扫描，单次最多 20 条、每 run 最多 3 次自动接管；缺少原请求准入身份的预留任务留给原 POST 重试。该机制不等同于无限自动重试或已验收的多实例吞吐能力。
 
+Graph 通过 `astream(stream_mode=["custom", "updates"], durability="sync")` 驱动。Stream Bridge 只公开允许的 status、tool_start、tool_end、warning 及固定状态文字，独立 Event Store 保留游标；不公开原始 Graph State、工具参数、模型中间文字或候选答案。传输层提供 error；completed 仍只能来自正式交付后的数据库响应，不能把某个 node 的 done 当成交付完成。旧 progress 事件保持读取兼容。
+
 ## 短期记忆和上下文
 
 原始聊天历史继续保存在业务表。新会话状态读取已提交历史；已有旧摘要只在初次建立 Graph 会话时导入，并携带来源及摘要游标。取消、失败或尚未交付的结果不晋升为股票引用。摘要写回由同一 Graph 执行所有者控制；计算接口支持 `expected_revision`，缺失上次已提交游标时显式报错，避免旧窗口覆盖新进度。
@@ -76,7 +83,15 @@ summary_generation_mode, summary_triggered
 
 有序引用保留 `source_run_id/trade_date/ordered_symbols/filters/sort_rules/result_hash`。只有答案中的单一 Markdown 表格或逐行名单能与工具股票行唯一匹配时，才支持“第二只”。未知中间行、重复实体、多组名单、越界序号或页面股票冲突都会要求澄清。普通 `stock_mentions` 仍用于展示链接，不承担排名语义。引用解析不建立整轮股票白名单，允许用户明确增加比较对象。
 
+第三轮新增 `query_scope`：从已校验调用参数和工具实际归一化输入构造有效 arguments，并保留 explicit_arguments；它随不可变回执保存。引用的 filters 和 sort_rules 从这个来源产生，保留排序方向；旧结果缺少 scope 时明确标记 unknown，“继续按上次条件”会澄清，不从摘要猜参数。同名单、同日期但不同查询范围也不能默默合并。分页读取只是原回执视图，不生成第二份股票引用。
+
+会话中另外保存带 `source_run_id/source_message_id/reference_id/tool/key/value` 的结构化条件。其 origin 为 committed_tool_scope、application 为 reference_followup：它描述上一查询范围，只在继续该查询或明确沿用条件时使用，不把模型工具参数或默认值冒称为用户偏好。摘要不能重写这些条件；长期记忆撤回时，仍被 active references 精确支撑的条件会保留，无法证明来源的旧自由文本仍保守重建。本轮明确要求优先。
+
 工具列式编码把重复键名转成 `rows_table.columns/values`，保留全部行、顺序、字段值、来源、日期和完整字段定义；缺失字段单独记录索引，区别于明确返回的 `null`。只有编码后更小时才使用，恢复过程无需字段去重缓存。公共 trace 与不可变回执仍保留完整原始结构。
+
+大结果在无损编码后仍超过 6,000 估算 tokens 时，模型收到明确的 manifest，包含 result_id、content_hash、总行数及可读取字段，而不是静默截短的股票列表。本轮 `read_tool_result` 只读取已保存回执，支持 offset/limit、字段投影和 metadata；每页最多 100 行并受 5,000 估算 tokens 约束，不拆开单行。next_offset/has_more、来源、字段定义、null/缺失语义和原始顺序均保留。业务工具只执行一次，页面超限或总上下文仍不足会显式返回错误/partial。分页元数据与提示规则要求模型说明未读部分，尚无对自然语言“完整名单”声明的全面语义证明。
+
+外部只读入口为 `GET /api/agents/chat/runs/{run_id}/results/{result_id}`，支持 section、offset、limit、fields 和 expected_hash，服务端同时校验 owner、run 和完成回执，响应禁止缓存。GET 不创建回执、不重跑业务工具，也不提交答案。
 
 ## 第二轮：显式长期记忆
 
@@ -102,7 +117,7 @@ summary_generation_mode, summary_triggered
 
 恢复最终 checkpoint、生成管理确认，以及正式交付事务都检查生成内容所属的记忆身份。若中途删除、更新或到期，旧候选答案变为 `partial / memory_changed`，要求重新查询，不发布已撤回内容。管理查询和写入确认绑定生成它们的同一事务快照，不能用后续新 fingerprint 给旧正文重新贴标。
 
-这一策略会保守丢弃仅存在于旧自由摘要、尚无逐项来源的会话约束；后续可用 `source_message_id/scope` 的结构化约束减少损失。删除长期记忆会擦除该记录的值和内容元数据并留下不含正文的墓碑/操作回执；它不追溯删除原始聊天、已正式交付答案、历史 checkpoint 或审计记录。旧记录继续可审计，但不作为新的偏好来源。当前 owner 来自签名 visitor cookie，同一 owner 可跨会话，尚无跨设备账号同步。
+这一策略会保守丢弃仅存在于旧自由摘要、尚无逐项来源的会话约束；第三轮的查询条件来源记录避免已验证范围随摘要一起丢失。删除长期记忆会擦除该记录的值和内容元数据并留下不含正文的墓碑/操作回执；它不追溯删除原始聊天、已正式交付答案、历史 checkpoint 或审计记录。旧记录继续可审计，但不作为新的偏好来源。当前 owner 来自签名 visitor cookie，同一 owner 可跨会话，尚无跨设备账号同步。
 
 ### 管理 API
 
@@ -204,12 +219,47 @@ summary_generation_mode, summary_triggered
 
 全部模块测试包含在后端全量数字中，不重复相加。最后的取消修复增加 8 项测试，包括实际 PostgreSQL Graph 的写入前/写入后故障再取消边界。后端只保留既有 LangChain 弃用提示，前端保留既有大 bundle 非阻断提示。原始问答、测试日志、备份与消融输出均位于 Git 忽略目录，未提交凭据、数据库或生成报告。
 
+## 原始方案对照
+
+状态含义：**Implemented** 表示当前代码有实现和相应测试；**Explicit optional** 表示原方案明确允许按需采用或“如适用”，本轮未启用；**Deferred** 表示尚未完成，不能用相近的测试指标替代。最终全量和真实模型验收以各轮记录为准。
+
+| 原方案条目 | 状态 | 当前实现与边界 |
+| --- | --- | --- |
+| ReAct 动态工具循环、应用生命周期 Graph 与依赖注入 | Implemented | 单一 durable Graph；客户端/连接/registry 不进入 State，无额外 Planner 或多 Agent 框架 |
+| Conversation / Run / Control 状态隔离 | Implemented | conversation、每轮工作消息/计数/预算、run/schema/status 分开；新 run 重置临时字段 |
+| AsyncPostgresSaver 唯一执行状态、同步 checkpoint | Implemented | 原生 Saver 加事务内 fencing；不宣称 exactly-once |
+| Node/模型/工具中断、崩溃、重启、取消、旧 worker 拒写 | Implemented | 固定模型、真实 PostgreSQL 和子进程终止场景；不确定工具结果不自动重放 |
+| 等待人工审批后恢复 | Explicit optional | 原文为“如适用”；当前业务没有审批节点 |
+| Journal 职责迁移、请求幂等、同 Thread 并发 | Implemented | Registry/Coordinator/EventStore/Delivery 分工；自定义 checkpoint 与 legacy 执行回退退出 |
+| 正式交付事务、幂等补交、先提交再 completed | Implemented | Graph 和业务提交分开；交付失败可恢复且只产生一条正式回答 |
+| 原生 Streaming 与 SSE 游标重连 | Implemented | custom/updates 白名单映射，status/tool_start/tool_end/warning/error/completed；GET 不执行任务 |
+| 统一 Context Builder、预算、优先级、完整工具消息组 | Implemented | 每次业务模型调用重建视图；估算 tokens，不把计费精度或任意语义冲突检查冒充已实现 |
+| 股票序号/批次引用与真实查询条件继承 | Implemented | 展示顺序经真实行验证；query_scope 支撑条件和排序；关键歧义或旧 scope 缺失时澄清 |
+| Recent Window + Rolling Summary + Structured Context | Implemented | Token 触发、消息游标/版本；纯摘要计算；查询条件独立于自然语言摘要 |
+| 当前行情证据隔离、Schema/输入/合规/输出校验 | Implemented | 当前数据来自本轮工具；记忆与档案不自动成为当前事实；没有全面语义事实证明 |
+| 无损工具压缩与按需展开 | Implemented | 小结果列式编码，大结果 manifest + 不可变回执分页/字段投影；超预算显式说明 |
+| 独立长期 Store、显式保存/更新/查询/删除/过期 | Implemented | PostgreSQL 自有 repository，owner/CAS/回执/墓碑/来源与撤回处理 |
+| User Preference、Research Context、Research Archive 首版 | Implemented | 支持有限回答格式/详略、六种主题、有已交付来源的历史档案，类型共用策略校验 |
+| 研究主题之外的长期关注板块、任意跨会话筛选条件示例 | Deferred | 未扩大本轮有限枚举；本轮有来源的会话查询条件不等于跨会话保存条件 |
+| 自动抽取所有长期记忆 | Explicit optional | 原文明示首版不要求；只有明确用户管理请求写入 |
+| pgvector/复杂语义检索、外部向量库或知识图谱 | Explicit optional | 原文要求出现实际复杂需求后再评估；当前精确 key/类型/主题/排序/预算检索 |
+| 记忆过滤、去重、冲突、删除后旧 checkpoint 失效 | Implemented | 每次读取有效集合身份；最终状态与交付事务复核；旧管理轮不进入摘要 |
+| Context/Memory/LLM/Tool/Checkpoint/Final Delivery Tracing | Implemented | 复用现有 tracer，增加阶段和关联版本/计数/时间；trace 故障有可观测记录，不作为恢复数据库 |
+| Persistence、Delivery、Tool-use 回归与 Memory Golden | Implemented | 真实 PostgreSQL 集成；40 条短期与 44 条长期固定世界 Golden，以及新增来源/分页/流事件回归 |
+| No / Short / Short+Long Memory 消融 | Implemented | 相同固定世界和预算的上下文契约评测；不得把契约通过率称为真实 LLM 答题提升 |
+| 可复现运行评测入口与当前版本指标 | Implemented | `scripts/evaluate_agent_runtime.py` 使用独立 PostgreSQL 随机 schema 和固定模型；原始报告单独保存 |
+| 重构前后真实模型任务成功率、成本与生产 P50/P95 比较 | Deferred | 真实问答仅冒烟；没有匹配旧版本/真实流量的受控性能基线，不据固定脚本宣称质量或性能提升 |
+| Alembic、备份、旧会话/摘要/未完成 run 迁移策略 | Implemented | 0005/0006 与已记录开发库备份；旧摘要只读一次导入，旧执行状态不强转原生 checkpoint |
+| 删除旧实现、配置、无效测试并更新前后端协议文档 | Implemented | 旧 summary writer/direct Graph/字段去重缓存退出；保留历史 schema/data，非静默丢弃 |
+
+当前开发者还可以独立评估跨设备账号、设置面板、生产多实例压测和保留策略；这些不是已经交付的能力。跨设备账号与设置面板也不是原始方案明确要求的交付项。
+
 ## 明确未完成的范围
 
 - 长期记忆仅覆盖上述有限类型；自动偏好抽取、向量/语义检索、自由事实记忆、跨设备账号与独立设置面板尚未实现。
 - 没有对模型自然语言回答做全面的语义事实证明；保留工具 Schema、数据缺口、输入安全、合规复核与输出长度检查，开放式解释仍需审阅证据。
 - 尚无生产全量 P50/P95、数据库写放大、任务成功率和真实 token 成本对比，不据代码结构宣称性能提升。
-- 大结果先做无损编码；仍超预算时显式 partial。按需分页/展开工具不在首轮范围。
+- 大结果已支持分页/展开；超过单行或总上下文预算仍会显式失败/partial，不承诺任意规模名单都能在一次问答中完整展开。
 - 多实例压测、跨版本 Graph State 自动迁移、长期 checkpoint 保留策略和人机审批恢复需要后续单独验收。
 
 设计依据：[LangGraph 持久化](https://docs.langchain.com/oss/python/langgraph/persistence)、[Checkpointers 与恢复边界](https://docs.langchain.com/oss/python/langgraph/checkpointers)、[Memory 与消息裁剪](https://docs.langchain.com/oss/python/langgraph/add-memory)、[PostgreSQL 事务隔离](https://www.postgresql.org/docs/current/transaction-iso.html)。采用 thread 内状态与跨会话用户存储分离、同快照读取和交付时复核；项目的类型策略、撤回和操作回执由自己的 PostgreSQL repository 实现，不宣称由通用 Store 自动提供。实际 API 与恢复边界以锁定版本源码及集成测试为准。

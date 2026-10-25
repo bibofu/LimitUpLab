@@ -74,7 +74,10 @@ loop with native PostgreSQL checkpoints; `BusinessToolGateway`, immutable tool
 receipts and separate run/delivery services retain policy, idempotency and recovery.
 Thread state holds short-term memory, and a per-call Context Builder applies a
 token estimate budget without splitting tool-call/result groups. Model-facing
-columnar encoding preserves every returned row and field. Explicit owner-scoped
+columnar encoding preserves every returned row and field; oversized observations
+use manifests and read-only paging of immutable receipts. Legacy summaries are
+read-only imports, and typed session query conditions retain their committed
+source independently of summaries. Explicit owner-scoped
 long-term memory supports typed response preferences, research topics and
 provenance-checked historical archives. Each model call reloads active memory;
 updates, deletion and expiry invalidate stale context before delivery. Ordinary
@@ -327,6 +330,44 @@ These checks do not call a live model or establish answer quality. Real Agent
 verification remains a separate acceptance step. The prediction Evaluation
 Agent's HTTP review endpoint reports recorded prediction outcomes; it is not an
 Agent tool.
+
+## Deterministic runtime evaluation
+
+`scripts/evaluate_agent_runtime.py` runs the production PostgreSQL graph with a
+fixed synthetic tool world and scripted model. Set
+`LIMITUPLAB_EVALUATION_DATABASE_URL` to a dedicated database whose role can create
+and drop schemas. The shared test/evaluation validator rejects configured
+business database names, reserved databases and URL routing overrides. Each run
+creates a random private schema and removes only that schema on exit; it never
+changes the configured business connection.
+
+```powershell
+cd backend
+.venv/Scripts/python.exe scripts/evaluate_agent_runtime.py --trials 3 --output tmp/runtime-evaluation.json
+```
+
+Create the output directory first and choose a new filename. The command refuses
+to overwrite a report. Keep generated reports out of Git. Exit codes are 0 for
+all contracts passing, 1 for a failed scenario, and 2 for setup/configuration failure.
+
+The versioned JSON reports concept, list, ordinal follow-up, cross-session memory
+and interrupted-runtime recovery cases. Metrics include delivery/recovery success,
+actual fixed tool executions, estimated model input tokens, per-case P50/P95
+latency, a measured memory retrieval probe, and row/byte growth of native
+checkpoints, blobs, pending writes, receipts, chat messages and stream events.
+`pg_column_size` and allocated relation bytes are **storage growth proxies**, not
+disk I/O operation counts or WAL bytes. The retrieval probe is one separate
+repository call after each case, not a measurement of every graph retrieval.
+
+Representation comparisons use one fixed payload: full JSON, lossless columns,
+and a manifest plus every page. Initial manifest cost does not mean all rows
+were read. A separate no-memory/short-term/short-and-long-term comparison checks
+context availability. These deterministic contracts do not measure real LLM
+accuracy, provider billing or investment outcomes. No same-environment historical
+production baseline exists, so the report makes no production speedup claim.
+
+For a small repeatable sample and isolation checks:
+`python -m pytest tests/test_runtime_evaluation.py -q -p no:cacheprovider`.
 
 ## Limit-up queries
 
