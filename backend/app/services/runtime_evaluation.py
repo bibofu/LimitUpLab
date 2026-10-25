@@ -46,8 +46,9 @@ def call(name, args, call_id="call-one"):
     return AIMessage(content="", tool_calls=[{"id": call_id, "name": name, "args": args}])
 
 
-def review(query=None):
-    arguments = {"decision": "allow", "signals": [], "reason": "固定评测研究请求"}
+def review(query=None, *, reference_intent=None):
+    arguments = {"decision": "allow", "signals": [], "reason": "固定评测研究请求",
+                 "reference_intent": reference_intent or {"kind": "none"}}
     if query:
         arguments["memory_intent"] = {"action": "save", "quote": query, "memory_type": "preference",
                                       "key": "response_style", "value": "concise"}
@@ -181,7 +182,8 @@ async def scenario(url, case):
             await trial.turn(runtime, "列出固定样本", [review(), call("limit_up_events", {"recent_trade_days": 1}), AIMessage(content=LIST_ANSWER)])
             contract = trial.tools.actual_calls == 1
             if case == "ordinal":
-                await trial.turn(runtime, "第二只股票代码是什么", [review(), AIMessage(content="第二只为600001样本甲。")])
+                await trial.turn(runtime, "第二只股票代码是什么", [review(reference_intent={
+                    "kind": "entities", "quote": "第二只", "ordinal": 2}), AIMessage(content="第二只为600001样本甲。")])
                 contract = contract and context_payload(trial.models[-1].inputs[-1])["resolved_reference"]["symbols"] == ["600001"]
         elif case == "memory_cross_session":
             query = "请长期记住：回答保持简洁"

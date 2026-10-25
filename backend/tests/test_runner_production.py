@@ -20,12 +20,13 @@ def call(name: str, args: dict, call_id: str = "call") -> AIMessage:
     return AIMessage(content="", tool_calls=[{"name": name, "args": args, "id": call_id}])
 
 
-def input_review(*, decision: str = "allow", signals=(), trading_action_quote=None) -> AIMessage:
+def input_review(*, decision: str = "allow", signals=(), trading_action_quote=None, reference_intent=None) -> AIMessage:
     return call("submit_input_security_review", {
         "decision": decision,
         "signals": list(signals),
         "reason": "scripted security review",
         "trading_action_quote": trading_action_quote,
+        "reference_intent": reference_intent or {"kind": "none"},
     }, "review")
 
 

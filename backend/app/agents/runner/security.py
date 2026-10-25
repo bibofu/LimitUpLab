@@ -14,6 +14,7 @@ from langchain_core.messages import HumanMessage, SystemMessage
 from pydantic import BaseModel, ConfigDict, Field, ValidationError, model_validator
 
 from app.agents.memory_policy import MEMORY_REVIEW_RULES, MemoryIntent
+from app.agents.reference_intent import REFERENCE_REVIEW_RULES, ReferenceIntent, validated_reference_intent
 
 SecuritySignal = Literal[
     "instruction_override",
@@ -34,6 +35,7 @@ class SecurityDecision(BaseModel):
     decision: Literal["allow", "refuse"]
     signals: list[SecuritySignal] = Field(default_factory=list, max_length=7)
     reason: str = Field(min_length=1, max_length=300)
+    reference_intent: ReferenceIntent
     memory_intent: MemoryIntent | None = None
     trading_action_quote: str | None = Field(
         default=None, min_length=1, max_length=240,
@@ -63,6 +65,7 @@ trading_advice 的必要条件：用户明确要求系统替其作出未来实�
 allow 时 signals 为空；refuse 时至少给出一个枚举信号。不输出思维链。"""
 
 SYSTEM += MEMORY_REVIEW_RULES
+SYSTEM += REFERENCE_REVIEW_RULES
 
 TOOL = {
     "type": "function",
@@ -97,6 +100,7 @@ def review_input_security(
         else:
             try:
                 decision = SecurityDecision.model_validate(response.tool_calls[0]["args"])
+                validated_reference_intent(decision.reference_intent, message)
                 if decision.decision == "allow" and decision.signals:
                     raise ValueError("Allowed input review cannot contain signals")
                 if decision.decision == "refuse" and not decision.signals:

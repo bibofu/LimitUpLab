@@ -27,7 +27,7 @@ from app.services.agent_stream import NativeStreamBridge, emit_status, emit_tool
 from app.services.agent_tracing import trace_context, trace_stage
 
 SCHEMA_VERSION = 1
-PROMPT_VERSION = "durable-react-v3-results"
+PROMPT_VERSION = "durable-react-v4-reference-intent"
 logger = logging.getLogger(__name__)
 _runtime = None
 
@@ -78,6 +78,7 @@ def _review(state, deps):
         proposal = prepare_memory_request(decision.memory_intent, deps.control, retrieved.owner_revision) \
             if decision.memory_intent else {}
         return {"done": False, "memory_request": proposal,
+                "reference_intent": decision.reference_intent.model_dump(),
                 "memory_owner_revision": retrieved.owner_revision,
                 "memory_context_fingerprint": retrieved.context_fingerprint}
 
@@ -89,6 +90,16 @@ def _agent(state, deps):
         runner = deps.runner
         runner.deadline = perf_counter() + state["remaining_seconds"]
         started = perf_counter()
+        # Pre-v4 pending checkpoints have no reviewed reference meaning. Review
+        # once before another model call; never restore the old ordinal heuristic.
+        if state.get("reference_intent") is None:
+            reviewed = _review(state, deps)
+            if reviewed.get("done"):
+                return reviewed
+            if reviewed.get("memory_request"):
+                return {"answer": "旧任务的上下文协议已升级，请重新提交记忆管理请求。",
+                        "status": "partial", "stop_reason": "context_upgrade", "done": True}
+            state = {**state, **reviewed}
         page = {**runner.request.page_context}
         if runner.request.symbol:
             page["symbol"] = runner.request.symbol
@@ -105,6 +116,7 @@ def _agent(state, deps):
                     system_prompt=runner.system_prompt, query=state["current_query"],
                     conversation=conversation, working_messages=working, long_term_memory=retrieved,
                     page_context=page, tool_definitions=runner.definitions,
+                    reference_intent=state["reference_intent"],
                 )
                 details.update(built.diagnostics)
         except ContextBudgetExceeded:
@@ -129,6 +141,7 @@ def _agent(state, deps):
                       memory_context_used=bool(built.diagnostics.get("memory_hit_count", 0)))
         update["context_diagnostics"] = diagnostics
         update["resolved_reference"] = built.resolved_reference or {}
+        update["reference_intent"] = state["reference_intent"]
         update["remaining_seconds"] = max(0, state["remaining_seconds"] - (perf_counter() - started))
         return update
 
@@ -288,7 +301,7 @@ class DurableRuntime:
                        "tool_messages": [], "model_rounds": 0, "tool_count": 0, "done": False,
                        "answer": "", "status": "", "stop_reason": "", "error": "",
                        "answer_repair": False, "compliance_reviewed": False,
-                       "context_diagnostics": {}, "resolved_reference": {},
+                       "context_diagnostics": {}, "resolved_reference": {}, "reference_intent": None,
                        "memory_request": {}, "memory_action": {}, "memory_owner_revision": 0,
                        "memory_context_fingerprint": "", "memory_context_used": False,
                        "remaining_seconds": max(0, runner.deadline - perf_counter())}

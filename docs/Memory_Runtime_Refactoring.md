@@ -85,6 +85,8 @@ Graph 通过 `astream(stream_mode=["custom", "updates"], durability="sync")` 驱
 
 第三轮新增 `query_scope`：从已校验调用参数和工具实际归一化输入构造有效 arguments，并保留 explicit_arguments；它随不可变回执保存。引用的 filters 和 sort_rules 从这个来源产生，保留排序方向；旧结果缺少 scope 时明确标记 unknown，“继续按上次条件”会澄清，不从摘要猜参数。同名单、同日期但不同查询范围也不能默默合并。分页读取只是原回执视图，不生成第二份股票引用。
 
+最终复核移除了按“第N只”词面直接触发历史引用的规则。既有输入审查同轮必须生成 `ReferenceIntent(kind=none/entities/conditions)`，回指附本轮逐字引用，缺字段走已有有界 schema 修复，正常请求不增加模型轮数。新查询的排名序号不要求先有历史名单；历史实体按已提交展示顺序解析，明确整批需 `all_entities=true`，未知单体先澄清。conditions 只继承可核验 query_scope，不把上次结果中的股票转为 symbols 筛选，本轮新日期/股票/排序/条件优先。旧待执行 checkpoint 缺该字段时在后续业务模型调用前重新审查一次，已交付历史答案保持可读取。
+
 会话中另外保存带 `source_run_id/source_message_id/reference_id/tool/key/value` 的结构化条件。其 origin 为 committed_tool_scope、application 为 reference_followup：它描述上一查询范围，只在继续该查询或明确沿用条件时使用，不把模型工具参数或默认值冒称为用户偏好。摘要不能重写这些条件；长期记忆撤回时，仍被 active references 精确支撑的条件会保留，无法证明来源的旧自由文本仍保守重建。本轮明确要求优先。
 
 工具列式编码把重复键名转成 `rows_table.columns/values`，保留全部行、顺序、字段值、来源、日期和完整字段定义；缺失字段单独记录索引，区别于明确返回的 `null`。只有编码后更小时才使用，恢复过程无需字段去重缓存。公共 trace 与不可变回执仍保留完整原始结构。
@@ -234,7 +236,7 @@ Graph 通过 `astream(stream_mode=["custom", "updates"], durability="sync")` 驱
 | 正式交付事务、幂等补交、先提交再 completed | Implemented | Graph 和业务提交分开；交付失败可恢复且只产生一条正式回答 |
 | 原生 Streaming 与 SSE 游标重连 | Implemented | custom/updates 白名单映射，status/tool_start/tool_end/warning/error/completed；GET 不执行任务 |
 | 统一 Context Builder、预算、优先级、完整工具消息组 | Implemented | 每次业务模型调用重建视图；估算 tokens，不把计费精度或任意语义冲突检查冒充已实现 |
-| 股票序号/批次引用与真实查询条件继承 | Implemented | 展示顺序经真实行验证；query_scope 支撑条件和排序；关键歧义或旧 scope 缺失时澄清 |
+| 股票序号/批次引用与真实查询条件继承 | Implemented | 输入审查同轮区分新排名/旧实体/旧条件；展示顺序经真实行验证；query_scope 支撑条件重查，旧名单不自动成为筛选范围 |
 | Recent Window + Rolling Summary + Structured Context | Implemented | Token 触发、消息游标/版本；纯摘要计算；查询条件独立于自然语言摘要 |
 | 当前行情证据隔离、Schema/输入/合规/输出校验 | Implemented | 当前数据来自本轮工具；记忆与档案不自动成为当前事实；没有全面语义事实证明 |
 | 无损工具压缩与按需展开 | Implemented | 小结果列式编码，大结果 manifest + 不可变回执分页/字段投影；超预算显式说明 |

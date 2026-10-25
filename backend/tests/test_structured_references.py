@@ -3,8 +3,20 @@ import pytest
 from copy import deepcopy
 
 from app.agents.structured_references import (
-    constraints_from_references, references_from_committed_result, resolve_reference, supported_session_constraints,
+    constraints_from_references, references_from_committed_result,
+    resolve_reference as resolve_reviewed_reference, supported_session_constraints,
 )
+
+
+def resolve_reference(query, refs, page_context=None):
+    """Explicit reviewed intents for this frozen fixture, not a production parser."""
+    ordinals = {"第二只最近5日走势怎么样？": 2, "第2只走势": 2, "第二只走势": 2,
+                "第2名情况": 2, "第二只": 2, "第一只": 1, "第三只": 3}
+    intent = ({"kind": "entities", "quote": query, "ordinal": ordinals[query]} if query in ordinals
+              else {"kind": "conditions", "quote": query} if query == "继续按上次条件"
+              else {"kind": "entities", "quote": query, "all_entities": True} if query == "刚才那批走势"
+              else {"kind": "none"})
+    return resolve_reviewed_reference(query, refs, page_context, intent=intent)
 
 
 def response(answer="| 股票 | 代码 |\n|---|---|\n|乙公司|000002|\n|甲公司|600001|", **updates):
@@ -106,6 +118,7 @@ def test_conditions_and_sorting_come_from_the_committed_invocation_scope():
     refs = references_from_committed_result("run-1", source)
     resolved = resolve_reference("继续按上次条件", refs)
     assert resolved["status"] == "resolved" and resolved["query_scope_status"] == "known"
+    assert resolved["kind"] == "conditions" and resolved["symbols"] == []
     assert resolved["filters"] == {"board_height": 1, "market": "main", "event_status": "closed_limit"}
     assert resolved["sort_rules"] == {"sort_by": "symbol", "sort_order": "asc"}
     assert resolved["query_scope"]["arguments"]["trade_date"] == "2026-10-23"

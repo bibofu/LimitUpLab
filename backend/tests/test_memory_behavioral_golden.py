@@ -41,18 +41,22 @@ def test_golden_ordinal_resolves_to_exact_fresh_tool_argument(query, expected):
     assert payload["rows"][0]["close"] != next(row["close"] for row in ROWS if row["symbol"] == expected)
 
 
-@pytest.mark.parametrize("query", [
-    pytest.param("刚才那批走势", id="G09-prior-batch"),
-    pytest.param("这批股票的缺口", id="G10-current-batch"),
-    pytest.param("上面那批的来源", id="G11-previous-batch"),
-    pytest.param("继续按上次条件", id="G12-inherit-filters"),
+@pytest.mark.parametrize("query,expected_symbols", [
+    pytest.param("刚才那批走势", ORDER, id="G09-prior-batch"),
+    pytest.param("这批股票的缺口", ORDER, id="G10-current-batch"),
+    pytest.param("上面那批的来源", ORDER, id="G11-previous-batch"),
+    pytest.param("继续按上次条件", [], id="G12-inherit-filters"),
 ])
-def test_golden_batch_preserves_all_symbols_and_filters(query):
+def test_golden_batch_preserves_entities_or_explicit_condition_scope(query, expected_symbols):
     resolution = context(query).diagnostics["reference_resolution"]
-    assert resolution["symbols"] == ORDER
+    assert resolution["symbols"] == expected_symbols
     assert resolution["filters"] == {"board_height": 1}
-    world = FixedToolWorld()
-    assert [row["symbol"] for row in world.query(resolution["symbols"])["rows"]] == ORDER
+    if expected_symbols:
+        world = FixedToolWorld()
+        assert [row["symbol"] for row in world.query(resolution["symbols"])["rows"]] == ORDER
+    else:
+        assert resolution["query_scope"]["arguments"]["board_height"] == 1
+        assert resolution["kind"] == "conditions"
 
 
 @pytest.mark.parametrize("query,variant", [

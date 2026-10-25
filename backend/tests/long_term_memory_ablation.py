@@ -30,6 +30,7 @@ class ContextCase:
     check: object
     expected: tuple[bool, bool, bool]
     working: tuple = ()
+    reference_intent: dict | None = None
 
 
 def payload(result):
@@ -104,7 +105,7 @@ def build_cases(world, repository):
     return [
         ContextCase("same_session_ordinal", "第二只是什么", {"active_references": references}, current,
                     lambda result: bool(result.resolved_reference and result.resolved_reference["symbols"] == ["600002"]),
-                    (False, True, True)),
+                    (False, True, True), reference_intent={"kind": "entities", "quote": "第二只", "ordinal": 2}),
         ContextCase("same_session_date_constraint", "延续当前研究日期", {
                     "active_constraints": {"trade_date": OLD_DATE}, "memory_context_fingerprint": current.context_fingerprint}, current,
                     lambda result: payload(result)["active_constraints"] == {"trade_date": OLD_DATE}, (False, True, True)),
@@ -132,6 +133,7 @@ def run_ablation(world, repository):
                                    conversation={} if mode == "no_memory" else case.conversation,
                                    working_messages=[HumanMessage(content=case.query), *case.working],
                                    long_term_memory=case.retrieval if mode == "short_and_long_term" else None,
+                                   reference_intent=case.reference_intent or {"kind": "none"},
                                    max_input_tokens=8000)
             passed = bool(case.check(result))
             assert passed is case.expected[index], (case.name, mode, result.messages)

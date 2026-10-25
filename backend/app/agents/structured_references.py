@@ -7,6 +7,8 @@ import json
 from copy import deepcopy
 from typing import Any
 
+from app.agents.reference_intent import validated_reference_intent
+
 _DATE_ARGUMENTS = {"trade_date", "start_date", "end_date", "requested_as_of", "as_of"}
 _SORT_ARGUMENTS = {"sort_by", "sort_order"}
 
@@ -181,51 +183,36 @@ def references_from_committed_result(run_id: str, response: dict[str, Any]) -> l
     return references
 
 
-def _ordinal(query: str) -> int | None:
-    digits = {"一": 1, "二": 2, "三": 3, "四": 4, "五": 5, "六": 6, "七": 7, "八": 8, "九": 9, "十": 10}
-    for start, character in enumerate(query):
-        if character != "第":
-            continue
-        end = start + 1
-        while end < len(query) and (query[end].isdigit() or query[end] in digits):
-            end += 1
-        if end == start + 1 or not query[end:].startswith(("只", "个", "名", "支")):
-            continue
-        raw = query[start + 1:end]
-        if raw.isascii() and raw.isdigit():
-            return int(raw)
-        if raw in digits:
-            return digits[raw]
-        if "十" in raw and raw.count("十") == 1:
-            tens, units = raw.split("十")
-            if (not tens or tens in digits) and (not units or units in digits):
-                return digits.get(tens, 1) * 10 + digits.get(units, 0)
-    return None
-
-
-def resolve_reference(query: str, references: list[dict[str, Any]], page_context: dict | None = None) -> dict[str, Any]:
-    """Resolve explicit ordinals and batch references, or request clarification."""
-    ordinal = _ordinal(query)
-    inherit_conditions = "继续按上次条件" in query
-    batch = any(term in query for term in ("刚才那批", "这批股票", "上面那批", "继续按上次条件"))
-    if ordinal is None and not batch:
+def resolve_reference(query: str, references: list[dict[str, Any]], page_context: dict | None = None,
+                      *, intent=None) -> dict[str, Any]:
+    """Resolve only a reviewed historical reference, never arbitrary new-query ranks."""
+    reviewed = validated_reference_intent(intent or {"kind": "none"}, query)
+    if reviewed.kind == "none":
         return {"status": "none"}
+    ordinal = reviewed.ordinal
+    if reviewed.kind == "entities" and ordinal is None and not reviewed.all_entities:
+        return {"status": "clarify", "clarification": "请明确所指股票的代码或在上一份名单中的序号。"}
     valid = [item for item in references if item.get("committed_status") == "committed"]
     if not valid:
         return {"status": "clarify", "clarification": "尚无已提交的股票列表，请明确股票或先查询名单。"}
-    # References are stored chronologically; several lists in the latest run are
-    # ambiguous unless they denote exactly the same ordered set and date.
     latest_run = valid[-1].get("source_run_id")
     latest = [item for item in valid if item.get("source_run_id") == latest_run]
-    distinct = {(tuple(item.get("ordered_symbols", [])), item.get("trade_date")) for item in latest}
-    if len(distinct) != 1 or (ordinal is not None and not all(item.get("ordinal_resolvable") for item in latest)):
-        return {"status": "clarify", "clarification": "上一轮包含多组名单或未能确认展示顺序，请明确股票代码或名单。"}
-    if inherit_conditions:
+    if reviewed.kind == "conditions":
         scopes = [_query_scope(item.get("query_scope"), item.get("source_tool")) for item in latest]
         if any(scope is None for scope in scopes):
             return {"status": "clarify", "clarification": "上一份结果未保留可核验的查询条件，请重新说明筛选条件。"}
         if len({_scope_identity(scope) for scope in scopes}) != 1:
             return {"status": "clarify", "clarification": "上一轮查询使用了不同条件，请明确要继续哪组条件。"}
+        # Conditions derive only from actual invocation parameters. Output rows
+        # are never promoted into an implicit symbol filter for a new screening.
+        selected = latest[-1]
+        return {"status": "resolved", "kind": "conditions", "symbols": [],
+                "reference_id": selected["reference_id"], "query_scope": scopes[-1],
+                "query_scope_status": "known", "filters": selected.get("filters"),
+                "sort_rules": selected.get("sort_rules"), "source_run_id": latest_run}
+    distinct = {(tuple(item.get("ordered_symbols", [])), item.get("trade_date")) for item in latest}
+    if len(distinct) != 1 or (ordinal is not None and not all(item.get("ordinal_resolvable") for item in latest)):
+        return {"status": "clarify", "clarification": "上一轮包含多组名单或未能确认展示顺序，请明确股票代码或名单。"}
     selected = latest[-1]
     symbols = selected.get("ordered_symbols", [])
     if ordinal is not None:
@@ -236,7 +223,7 @@ def resolve_reference(query: str, references: list[dict[str, Any]], page_context
     if page_symbol and symbols != [page_symbol]:
         return {"status": "clarify", "clarification": "当前页面股票与所指名单不一致，请明确要查询哪一只。"}
     scope = _query_scope(selected.get("query_scope"), selected.get("source_tool"))
-    return {"status": "resolved", "reference_id": selected["reference_id"],
+    return {"status": "resolved", "kind": "entities", "reference_id": selected["reference_id"],
             "symbols": list(symbols), "trade_date": selected.get("trade_date"),
             "filters": selected.get("filters") if scope is not None else None,
             "sort_rules": selected.get("sort_rules") if scope is not None else None,

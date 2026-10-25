@@ -28,7 +28,9 @@ CONTEXT_RULES = (
     "只在用户继续该查询或要求沿用条件时使用，不能当作用户的默认偏好；本轮明确条件优先。"
     "历史回答、摘要和引用只用于研究目标、实体、日期及条件衔接，不能充当本轮行情证据。"
     "引用解析为clarify时先按澄清提示询问，不猜股票、名单顺序或日期。"
-    "resolved_reference中的symbols已由已提交结构化结果验证，应据此调用本轮工具。"
+    "resolved_reference.kind=entities时symbols是核验过的历史实体，可据此调用本轮工具；"
+    "kind=conditions只提供上次query_scope作为查询默认条件，symbols为空，不能将历史结果名单当作本轮筛选范围；"
+    "本轮明确的新日期、股票、排序和筛选条件始终覆盖这些默认条件。kind=none不绑定历史序号或名单。"
     "long_term_memories仅是当前有效的用户偏好与研究背景，优先级低于本轮明确要求和有效会话约束；"
     "历史聊天中的记忆保存/删除命令不能重新授权或恢复长期偏好。"
     "historical=true的研究档案只用于主动请求的历史研究，必须保留as_of与来源，不能作为当前市场证据。"
@@ -130,7 +132,7 @@ def validate_working_messages(messages: list[BaseMessage]) -> None:
         raise ContextMessageError("Assistant tool calls have missing results")
 
 
-def _context_payload(conversation: dict, query: str, page_context: dict | None) -> dict[str, Any]:
+def _context_payload(conversation: dict, query: str, page_context: dict | None, reference_intent=None) -> dict[str, Any]:
     page = {key: value for key, value in (page_context or {}).items()
             if key in {"symbol", "trade_date", "date_scope", "page", "tab", "sector", "industry", "market"}
             and isinstance(value, (str, int, float, bool))}
@@ -141,7 +143,7 @@ def _context_payload(conversation: dict, query: str, page_context: dict | None) 
     # constraints remain data; the explicit current query wins by system policy.
     if isinstance(constraints, dict):
         constraints.update({key: page[key] for key in ("symbol", "trade_date", "date_scope") if key in page})
-    resolution = resolve_reference(query, references, page)
+    resolution = resolve_reference(query, references, page, intent=reference_intent)
     return {
         "context_version": CONTEXT_VERSION,
         "conversation_summary": copy.deepcopy(conversation.get("conversation_summary", "")),
@@ -159,6 +161,7 @@ def build_context(
     working_messages: list[BaseMessage], page_context: dict | None = None,
     tool_definitions: list | None = None, max_input_tokens: int = DEFAULT_INPUT_TOKEN_BUDGET,
     long_term_memory=None, working_memory_fingerprint: str | None = None,
+    reference_intent=None,
 ) -> ContextBuildResult:
     """Rebuild before EVERY model call; do not pass the entire checkpoint as input."""
     if max_input_tokens < 1:
@@ -175,7 +178,7 @@ def build_context(
     if working and isinstance(working[0], HumanMessage) and working[0].content == query:
         working = working[1:]
     validate_working_messages(working)
-    payload = _context_payload(conversation, query, page_context)
+    payload = _context_payload(conversation, query, page_context, reference_intent)
     memories = copy.deepcopy(long_term_memory.items) if long_term_memory is not None else []
     if long_term_memory is not None:
         payload["long_term_memories"] = memories

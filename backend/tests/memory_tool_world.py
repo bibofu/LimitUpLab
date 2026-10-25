@@ -18,6 +18,21 @@ ROWS = [
 ]
 ORDER = ["000002", "600001", "300003"]
 
+# Scripted semantic classifications for this fixed world only. Production does
+# not infer these intents from wording; its input reviewer supplies the schema.
+REFERENCE_INTENTS = {
+    "第一只最近走势": ("entities", 1), "第二只最近5日走势": ("entities", 2),
+    "第三只的来源": ("entities", 3), "第2只换手率": ("entities", 2),
+    "第2名是什么股票": ("entities", 2), "第二个的成交额": ("entities", 2),
+    "第3支历史行情": ("entities", 3), "请解释第一名的数据缺口": ("entities", 1),
+    "刚才那批走势": ("entities", None), "这批股票的缺口": ("entities", None),
+    "上面那批的来源": ("entities", None), "继续按上次条件": ("conditions", None),
+    "第四只走势": ("entities", 4), "第0只走势": ("entities", 0),
+    "第二只走势": ("entities", 2), "第二只最近5日走势怎么样？": ("entities", 2),
+    "第一只": ("entities", 1), "刚才那批": ("entities", None),
+    "完整列出刚才那批": ("entities", None),
+}
+
 
 def committed_response(*, run_id="run-old", order=None, answer=None, **updates):
     order = ORDER if order is None else order
@@ -38,10 +53,16 @@ def references(**kwargs):
     return references_from_committed_result(result["run_id"], result)
 
 
-def context(query="第二只最近5日走势怎么样？", refs=None, conversation=None, working=None, **options):
+def context(query="第二只最近5日走势怎么样？", refs=None, conversation=None, working=None, reference_intent=None, **options):
     state = {"active_references": references() if refs is None else refs, **(conversation or {})}
+    if reference_intent is None:
+        scripted = REFERENCE_INTENTS.get(query)
+        reference_intent = ({"kind": scripted[0], "quote": query, "ordinal": scripted[1]}
+                            if scripted else {"kind": "none"})
+        if scripted and scripted[0] == "entities" and scripted[1] is None:
+            reference_intent["all_entities"] = True
     return build_context(system_prompt="只用本轮工具事实做研究。", query=query,
-                         conversation=state, working_messages=working or [], **options)
+                         conversation=state, working_messages=working or [], reference_intent=reference_intent, **options)
 
 
 def context_data(result):

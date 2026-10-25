@@ -19,6 +19,7 @@ from test_runner_shadow import ScriptedProvider
 def review_memory(query, action="save", value="concise", key="response_style"):
     return AIMessage(content="", tool_calls=[{"id": "review", "name": "submit_input_security_review", "args": {
         "decision": "allow", "signals": [], "reason": "用户明确管理长期记忆",
+        "reference_intent": {"kind": "none"},
         "memory_intent": {"action": action, "quote": query, "memory_type": "preference",
                           "key": key, "value": value if action == "save" else None},
     }}])
