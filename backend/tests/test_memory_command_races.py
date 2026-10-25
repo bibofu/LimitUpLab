@@ -105,13 +105,14 @@ def test_new_turn_revokes_summary_before_invoking_summarizer(world, monkeypatch)
 
     def summarize(*, existing, messages, llm_provider):
         captured.append((existing, messages))
-        assert existing is None or marker not in existing.model_dump_json()
-        assert all(marker not in message.content for message in messages)
         return {"summary": "用户研究首板", "constraints": []}, "llm_function_call", "fixture"
 
     monkeypatch.setattr("app.agents.conversation_memory._generate_memory_draft", summarize)
     execution = SimpleNamespace(request=request, history=history, provider=object())
     result = DurableRuntime._conversation(None, state, execution, control)
     assert len(captured) == 1
+    existing, sent_messages = captured[0]
+    assert existing is None or marker not in existing.model_dump_json()
+    assert all(marker not in message.content for message in sent_messages)
     assert result["summary_triggered"]
     assert marker not in str(result)
