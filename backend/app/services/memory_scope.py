@@ -24,9 +24,23 @@ def is_memory_control_message(item) -> bool:
 
 
 def filter_memory_control_turns(messages: list[Any]) -> list[Any]:
+    """Keep only completed conversational intent, using persisted provenance.
+
+    A canceled memory command can commit its write before the graph records its
+    memory_action. Its terminal response still identifies the entire failed
+    turn, so neither side may later authorize a preference through history.
+    """
+    def excluded(item):
+        return is_memory_control_message(item) or (
+            _value(item, "role") == "assistant" and (
+                _metadata(item).get("task_status") in {"cancelled", "error", "refuse"}
+                or _value(item, "status") == "error"
+            )
+        )
+
     controlled_runs = {_value(item, "run_id") for item in messages
-                       if _value(item, "run_id") and is_memory_control_message(item)}
-    return [item for item in messages if not is_memory_control_message(item)
+                       if _value(item, "run_id") and excluded(item)}
+    return [item for item in messages if not excluded(item)
             and _value(item, "run_id") not in controlled_runs]
 
 

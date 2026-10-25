@@ -102,10 +102,12 @@ def compress_conversation(
     known = {item["message_id"] for item in recent}
     if any(item["message_id"] in known for item in incoming):
         raise MemoryCursorError("Committed window replays a message before the previous cursor")
-    successful = _successful_messages([_model(item) for item in incoming])
+    # Inspect complete turns before dropping failed assistant rows, including
+    # a user already in recent when its terminal response arrives later.
+    candidates = filter_memory_control_turns([*recent, *incoming])
+    successful = _successful_messages([_model(item) for item in candidates])
     eligible_ids = {item.message_id for item in successful}
-    recent.extend(item for item in incoming if item["message_id"] in eligible_ids)
-    recent = filter_memory_control_turns(recent)
+    recent = [item for item in candidates if item["message_id"] in eligible_ids]
     state.update(recent_messages=recent, last_committed_message_id=incoming[-1]["message_id"],
                  revision=revision + 1, summary_triggered=False)
     context_size = sum(estimate_tokens(item.get("content", "")) for item in recent)
