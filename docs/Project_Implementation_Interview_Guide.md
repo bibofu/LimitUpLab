@@ -1,5 +1,7 @@
 # LimitUpLab 项目实现与 Agent 开发面试准备
 
+> 架构更新（2026-10-25）：`memory_refactoring` 已采用应用生命周期内的单一持久化 Graph、AsyncPostgresSaver、PostgreSQL 业务交付和独立长期记忆；旧同步 Graph、Journal 执行机制与摘要写 API 均已退役。当前代码入口、恢复语义、测试和未完成范围见 [Runtime 与 Memory 重构说明](Memory_Runtime_Refactoring.md)。下文旧源码路径、SQLite、无原生 checkpointer、无恢复能力等描述均为历史记录，不能作为当前实现或面试结论。
+
 > 架构更新（2026-10-24）：生产聊天已切换为轻量 LangGraph Runner，旧 `react_runtime`、EvidenceStore、`finish`、`compute_result`、输入任务编译器和 Golden/quality 评测代码已删除；随旧 runtime 一起删除的还包括自建 checkpoint、逐 tool-call 回放和 `UncertainExecution` 恢复。本文部分章节仍描述重构前架构，作为历史演进记录；当前实现以 [README](../README.md)、[LangChain 集成](LangChain_Integration.md) 和 [代码阅读指南](code-reading-guide.md) 为准。
 
 更新日期：2026-10-10。面向 Agent／LLM 应用开发岗位，源码整体核对基线为 `a6ef29b`，复盘总结与相关索引更新至 `5e4021f`。本文描述已实现能力；历史评测、故障与发布记录保留各自日期，不能代替当前线上验收。
