@@ -1701,6 +1701,10 @@ class AgentChatResponse(BaseModel):
     session_id: str
     run_id: str | None = None
     trace_url: str | None = None
+    memory_action: dict[str, Any] | None = None
+    memory_owner_revision: int | None = None
+    memory_context_fingerprint: str | None = None
+    memory_context_used: bool = False
     intent: str
     answer: str
     task_status: Literal["complete", "partial", "empty", "clarify", "refuse", "error", "cancelled"] | None = None

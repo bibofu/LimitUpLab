@@ -17,6 +17,7 @@ from app.services.session_memory import (
     SESSION_MEMORY_VERSION, _build_memory, _deterministic_memory_draft,
     _generate_memory_draft, _successful_messages,
 )
+from app.services.memory_scope import filter_memory_control_turns, summary_source_messages
 
 
 class MemoryRevisionConflict(ValueError):
@@ -104,6 +105,7 @@ def compress_conversation(
     successful = _successful_messages([_model(item) for item in incoming])
     eligible_ids = {item.message_id for item in successful}
     recent.extend(item for item in incoming if item["message_id"] in eligible_ids)
+    recent = filter_memory_control_turns(recent)
     state.update(recent_messages=recent, last_committed_message_id=incoming[-1]["message_id"],
                  revision=revision + 1, summary_triggered=False)
     context_size = sum(estimate_tokens(item.get("content", "")) for item in recent)
@@ -123,7 +125,14 @@ def compress_conversation(
     if not older:
         state["summary_deferred_reason"] = "latest_turn_exceeds_recent_window"
         return state
-    models = [_model(item) for item in older]
+    models = [_model(item) for item in summary_source_messages(older)]
+    if not models:
+        # Advance only the compression cursor; no revoked or preference-shaped
+        # assistant text is allowed into the next summary.
+        state.update(recent_messages=[item for group in groups[-keep_count:] for item in group],
+                     summary_cursor=older[-1]["message_id"], summary_triggered=False,
+                     summary_deferred_reason="no_session_scoped_summary_sources")
+        return state
     now = datetime.now(timezone.utc)
     existing = _existing_memory(state, now)
     try:

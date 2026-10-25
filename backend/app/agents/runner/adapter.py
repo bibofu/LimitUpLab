@@ -138,7 +138,7 @@ def answer_with_runner(
     ).run()
 
     traces = _traces(result)
-    return _response(
+    response = _response(
         request,
         result.answer,
         result.status,
@@ -147,3 +147,9 @@ def answer_with_runner(
         tool_results=traces,
         duration_ms=result.duration_ms,
     )
+    return response.model_copy(update={
+        "memory_action": result.memory_action,
+        "memory_owner_revision": result.memory_owner_revision,
+        "memory_context_fingerprint": result.memory_context_fingerprint,
+        "memory_context_used": result.memory_context_used,
+    })

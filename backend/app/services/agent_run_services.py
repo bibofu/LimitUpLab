@@ -225,6 +225,20 @@ class RunDelivery:
             if row["cancelled"]:
                 response.update(task_status="cancelled", stop_reason="cancelled",
                                 answer="任务已取消，未继续生成研究结论。")
+            if not row["cancelled"] and (response.get("memory_owner_revision") is not None
+                                        or response.get("memory_context_fingerprint") is not None):
+                from app.repositories.long_term_memory_repository import context_identity_in_connection
+
+                identity = context_identity_in_connection(db, owner_id)
+                if (response.get("memory_owner_revision") != identity["owner_revision"]
+                        or response.get("memory_context_fingerprint") != identity["context_fingerprint"]):
+                    # A preference may have been deleted while the model was
+                    # generating. Never deliver the old draft after that change.
+                    response.update(task_status="partial", stop_reason="memory_changed",
+                                    answer="长期记忆在本次生成期间发生变化，旧候选答案未发布。请重新发起查询。",
+                                    memory_owner_revision=identity["owner_revision"],
+                                    memory_context_fingerprint=identity["context_fingerprint"],
+                                    memory_context_used=False, stock_mentions=[], suggested_questions=[])
             # Graph final validation owns evidence/compliance checks. This boundary
             # validates and normalizes the exact public document before committing.
             response = AgentChatResponse.model_validate(response).model_dump(mode="json")
@@ -233,6 +247,16 @@ class RunDelivery:
             run_status = ("failed" if response["task_status"] == "error" else
                           "cancelled" if response["task_status"] == "cancelled" else "completed")
             serialized = encode(response)
+            if response.get("memory_action"):
+                # Both halves of a memory command remain visible in the chat
+                # ledger, but neither can later become a session preference.
+                user = db.execute("SELECT metadata_json FROM chat_messages WHERE message_id=? AND run_id=?",
+                                  ("user_" + run_id, run_id)).fetchone()
+                if user:
+                    metadata = json.loads(user["metadata_json"] or "{}")
+                    metadata.update(memory_scope="long_term", memory_action=response["memory_action"])
+                    db.execute("UPDATE chat_messages SET metadata_json=? WHERE message_id=? AND run_id=?",
+                               (encode(metadata), "user_" + run_id, run_id))
             db.execute("""INSERT INTO agent_runs
                 (run_id,session_id,run_type,status,intent,tool_calls_json,input_json,output_json,started_at,finished_at)
                 VALUES(?,?,?,?,?,?,?,?,?,?)""", (run_id, row["session_id"], "agent_chat", status,
