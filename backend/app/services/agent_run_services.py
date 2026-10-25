@@ -62,7 +62,7 @@ class RunRegistry:
     def __init__(self, storage, coordinator):
         self.storage, self.coordinator = storage, coordinator
 
-    def create(self, request, owner_id):
+    def create(self, request, owner_id, *, runtime_version="legacy"):
         payload = request.model_dump(mode="json")
         fingerprint = hashlib.sha256(encode(payload).encode()).hexdigest()
         key = request.message_id or uuid4().hex
@@ -83,13 +83,15 @@ class RunRegistry:
             if identity is None:
                 raise KeyError("Session not found")
             run_id = "run_" + uuid4().hex
+            now = datetime.now(timezone.utc).isoformat()
             try:
                 db.execute(
                     """INSERT INTO react_runs
-                    (run_id,owner_id,session_id,message_key,request_json,request_hash,started_at)
-                    VALUES(?,?,?,?,?,?,?)""",
+                    (run_id,owner_id,session_id,message_key,request_json,request_hash,started_at,
+                     thread_id,runtime_version,run_status,updated_at)
+                    VALUES(?,?,?,?,?,?,?,?,?,?,?)""",
                     (run_id, owner_id, request.session_id, key, encode(payload), fingerprint,
-                     datetime.now(timezone.utc).isoformat()),
+                     now, request.session_id, runtime_version, "pending", now),
                 )
             except Exception as error:
                 if not is_integrity_error(error):
@@ -115,6 +117,45 @@ class RunRegistry:
         row = self.get(run_id, owner_id)
         return json.loads(row["response_json"]) if row["response_json"] else None
 
+    def mark_running(self, run_id, owner_id, *, execution, admission=None):
+        with self.storage.connection() as db:
+            begin_write(db)
+            row = self.owned_row(db, run_id, owner_id)
+            self.coordinator.assert_current(db, run_id, execution, admission)
+            if not row["active"] or row["response_json"]:
+                raise RunConflict("Run is already terminal")
+            recovery = int(row["run_status"] != "pending")
+            db.execute("""UPDATE react_runs SET run_status='running', updated_at=?,
+                recovery_count=recovery_count+? WHERE run_id=? AND owner_id=?""",
+                (datetime.now(timezone.utc).isoformat(), recovery, run_id, owner_id))
+            return self.owned_row(db, run_id, owner_id)
+
+    def mark_interrupted(self, run_id, owner_id, *, execution, admission=None):
+        """Record resumability without replacing the last graph checkpoint."""
+        with self.storage.connection() as db:
+            begin_write(db)
+            row = self.owned_row(db, run_id, owner_id)
+            if row["response_json"] or not row["active"]:
+                return False
+            self.coordinator.assert_current(db, run_id, execution, admission)
+            db.execute("""UPDATE react_runs SET run_status='interrupted', updated_at=?
+                WHERE run_id=? AND owner_id=?""",
+                (datetime.now(timezone.utc).isoformat(), run_id, owner_id))
+            return True
+
+    def recoverable_runs(self, *, limit=20, max_recoveries=3):
+        """Find bounded durable work with no live execution owner."""
+        with self.storage.connection() as db:
+            return [dict(row) for row in db.execute("""
+                SELECT run.* FROM react_runs AS run
+                LEFT JOIN runtime_leases AS lease ON lease.name='react:' || run.run_id
+                WHERE run.active=1 AND run.response_json IS NULL
+                  AND run.runtime_version='durable-v1'
+                  AND (run.recovery_count<? OR run.cancelled=1)
+                  AND (lease.expires_at IS NULL OR lease.expires_at<=EXTRACT(EPOCH FROM clock_timestamp()))
+                ORDER BY run.updated_at,run.started_at LIMIT ?
+            """, (max_recoveries, limit))]
+
     def discard_unstarted(self, run_id, owner_id, execution=None):
         with self.storage.connection() as db:
             begin_write(db)
@@ -137,8 +178,8 @@ class RunRegistry:
             begin_write(db)
             self.owned_row(db, run_id, owner_id)
             db.execute(
-                "UPDATE react_runs SET cancelled=1 WHERE run_id=? AND owner_id=? AND active=1",
-                (run_id, owner_id),
+                "UPDATE react_runs SET cancelled=1,updated_at=? WHERE run_id=? AND owner_id=? AND active=1",
+                (datetime.now(timezone.utc).isoformat(), run_id, owner_id),
             )
 
 
@@ -178,6 +219,8 @@ class RunDelivery:
             if row["response_json"]:
                 return json.loads(row["response_json"])
             self.coordinator.assert_current(db, run_id, execution, admission)
+            if not row["active"]:
+                raise RunConflict("Run is already terminal")
             response = {**response, "run_id": run_id, "session_id": row["session_id"]}
             if row["cancelled"]:
                 response.update(task_status="cancelled", stop_reason="cancelled",
@@ -187,6 +230,8 @@ class RunDelivery:
             response = AgentChatResponse.model_validate(response).model_dump(mode="json")
             now = datetime.now(timezone.utc).isoformat()
             status = "error" if response["task_status"] == "error" else "success"
+            run_status = ("failed" if response["task_status"] == "error" else
+                          "cancelled" if response["task_status"] == "cancelled" else "completed")
             serialized = encode(response)
             db.execute("""INSERT INTO agent_runs
                 (run_id,session_id,run_type,status,intent,tool_calls_json,input_json,output_json,started_at,finished_at)
@@ -202,8 +247,9 @@ class RunDelivery:
                 (now, row["session_id"], owner_id),
             )
             db.execute(
-                "UPDATE react_runs SET response_json=?,active=0 WHERE run_id=? AND owner_id=?",
-                (serialized, run_id, owner_id),
+                """UPDATE react_runs SET response_json=?,active=0,run_status=?,updated_at=?,finished_at=?
+                WHERE run_id=? AND owner_id=?""",
+                (serialized, run_status, now, now, run_id, owner_id),
             )
             return response
 

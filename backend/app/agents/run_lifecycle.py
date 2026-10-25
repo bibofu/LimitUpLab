@@ -26,8 +26,8 @@ class Journal:
     def connection(self):
         return self.services.storage.connection()
 
-    def create(self, request, owner_id):
-        return self.services.registry.create(request, owner_id)
+    def create(self, request, owner_id, *, runtime_version="legacy"):
+        return self.services.registry.create(request, owner_id, runtime_version=runtime_version)
 
     def get(self, run_id, owner_id):
         return self.services.registry.get(run_id, owner_id)

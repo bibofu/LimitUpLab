@@ -1,6 +1,7 @@
 """Durable ReAct HTTP/SSE transport; reconnect only reads, never reruns tools."""
 
 import json
+import logging
 import os
 import threading
 from contextlib import ExitStack
@@ -11,6 +12,7 @@ from fastapi import APIRouter, Depends, HTTPException, Query
 from fastapi.responses import StreamingResponse
 
 from app.agents.run_lifecycle import CURRENT_CONTROL, Journal, RunConflict, RunControl
+from app.agents.runtime_errors import RecoverableRunError
 from app.agents.runtime_version import VERSION
 from app.models import AgentChatResponse, ChatSessionMessage
 from app.repositories import ChatSessionRepository, SessionOwnershipError
@@ -22,6 +24,7 @@ _lock = threading.Lock()
 _workers: dict[str, threading.Thread] = {}
 _updates = threading.Condition()
 _update_revision = 0
+logger = logging.getLogger(__name__)
 
 
 def notify_streams():
@@ -42,6 +45,8 @@ def owned(journal, run_id, owner_id):
 def start(request, http_request, owner_id):
     """Create once, or reattach to the same active/completed request."""
     from app.routers import agents
+    from app.agents.runner.durable_runtime import get_runtime
+    runtime = get_runtime()
     chats = ChatSessionRepository()
     try:
         session = chats.ensure_session(request.session_id, first_message=request.message, owner_id=owner_id)
@@ -50,7 +55,9 @@ def start(request, http_request, owner_id):
     journal = Journal()
     with _lock:
         try:
-            row, fresh = journal.create(request, owner_id)
+            row, fresh = journal.create(
+                request, owner_id, runtime_version="durable-v1" if runtime is not None else "legacy",
+            )
         except RunConflict as error:
             raise HTTPException(409, str(error)) from error
         except KeyError as error:
@@ -58,6 +65,8 @@ def start(request, http_request, owner_id):
         run_id = row["run_id"]
         if not row["active"]:
             return journal, row
+        if row["runtime_version"] == "durable-v1" and runtime is None:
+            raise HTTPException(503, "持久化运行时暂不可用，原任务已保留。")
         execution = journal.claim(run_id)
         if execution is None:
             return journal, row
@@ -66,10 +75,8 @@ def start(request, http_request, owner_id):
         if not row["active"]:
             execution.release()
             return journal, row
-        # An explicit POST with the same message_id may take over an interrupted
-        # run once its lease expires. There is no checkpoint replay: the worker
-        # restarts the ReAct loop from its first round. GET/reconnect never
-        # starts a worker or pays for a model.
+        # POST may claim an interrupted run. Durable requests resume the saved
+        # graph; legacy requests restart. GET/reconnect remains strictly read-only.
         started_at = datetime.fromisoformat(row["started_at"])
         try:
             execution.start_heartbeat()
@@ -131,12 +138,18 @@ def start(request, http_request, owner_id):
                 journal.event(run_id, "progress", {"stage": stage, "message": message})
                 notify_streams()
             try:
+                journal.services.registry.mark_running(
+                    run_id, owner_id, execution=execution, admission=lease,
+                )
                 progress("preparing", "正在准备会话与研究数据")
                 with agents.capture_llm_usage() as tracker:
-                    context, memory = agents.prepare_session_context(
-                        session_id=request.session_id, owner_id=owner_id, messages=history,
-                        repository=agents.ChatMemoryRepository(),
-                    )
+                    if row["runtime_version"] == "durable-v1":
+                        context, memory = history, None
+                    else:
+                        context, memory = agents.prepare_session_context(
+                            session_id=request.session_id, owner_id=owner_id, messages=history,
+                            repository=agents.ChatMemoryRepository(),
+                        )
                     response = agents.answer_first_board_chat(
                         request=request, events=agents.get_limit_up_repository().list_events(),
                         repository=agents.FirstBoardRepository(), conversation_messages=context,
@@ -144,6 +157,9 @@ def start(request, http_request, owner_id):
                         progress_callback=progress,
                     )
                 response.run_id = run_id
+            except RecoverableRunError as error:
+                failure = RuntimeError(type(error).__name__)
+                response = None
             except Exception as error:
                 failure = RuntimeError(type(error).__name__)
                 response = AgentChatResponse(
@@ -170,6 +186,14 @@ def start(request, http_request, owner_id):
                     response = None
                 finally:
                     try:
+                        if response is None:
+                            try:
+                                journal.services.registry.mark_interrupted(
+                                    run_id, owner_id, execution=execution,
+                                )
+                            except Exception:
+                                # An expired owner must not overwrite a successor.
+                                logger.warning("Unable to mark interrupted run %s", run_id, exc_info=True)
                         agents._finish_agent_request(usage_repository, usage_record, tracker, response=response, error=failure)
                     finally:
                         try:
@@ -220,6 +244,12 @@ def failed_response(row, reason):
         answer="本次研究未能完成，请稍后重试。", task_status="error", stop_reason=reason, generated_by=VERSION)
 
 
+def interruption_message(row):
+    if row.get("runtime_version") == "durable-v1":
+        return "运行已中断；原任务和已保存的执行进度已保留，可重试同一请求恢复。"
+    return "运行已中断；重新提交同一请求会从头重新执行，已完成的工具结果不会被复用。"
+
+
 def stream(journal, row, owner_id, after=0):
     run_id = row["run_id"]
     def frames():
@@ -245,7 +275,7 @@ def stream(journal, row, owner_id, after=0):
                 if finished:
                     # Re-read completion on the next poll.
                     continue
-                yield "event: error\ndata: " + json.dumps({"run_id": run_id, "message": "运行已中断；重新提交同一请求会从头重新执行，已完成的工具结果不会被复用。"}, ensure_ascii=False) + "\n\n"
+                yield "event: error\ndata: " + json.dumps({"run_id": run_id, "message": interruption_message(latest)}, ensure_ascii=False) + "\n\n"
                 return
             yield ": heartbeat\n\n"
             with _updates:
@@ -262,7 +292,7 @@ def synchronous(journal, row, owner_id):
             finished = owned(journal, row["run_id"], owner_id)["response_json"]
             if finished:
                 return AgentChatResponse.model_validate_json(finished)
-            raise HTTPException(503, "Run interrupted; resubmit the same message_id to rerun from the start")
+            raise HTTPException(503, interruption_message(latest))
         with _updates:
             _updates.wait(timeout=.5)
 
@@ -273,6 +303,7 @@ def get_run(run_id: str, owner_id: Annotated[str, Depends(current_owner_id)]):
     row = owned(journal, run_id, owner_id)
     return {"run_id": run_id, "active": bool(row["active"]), "cancel_requested": bool(row["cancelled"]),
             "interrupted": bool(row["active"] and not journal.executing(run_id)),
+            "run_status": row["run_status"], "recovery_count": row["recovery_count"],
             "response": json.loads(row["response_json"]) if row["response_json"] else None}
 
 
