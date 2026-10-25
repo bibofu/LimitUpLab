@@ -40,7 +40,6 @@ def _displayed_order(answer: str, identities: dict[str, str]) -> list[str] | Non
     """Validate one visible list/table against structured source identities."""
     blocks: list[list[str]] = []
     block: list[str] = []
-    ambiguous = False
     for line in [*answer.splitlines(), ""]:
         line = line.strip()
         if not _list_line(line):
@@ -48,14 +47,29 @@ def _displayed_order(answer: str, identities: dict[str, str]) -> list[str] | Non
                 blocks.append(block)
                 block = []
             continue
-        matched = [symbol for symbol, name in identities.items() if _mentions(line, symbol, name)]
-        if len(matched) > 1:
-            ambiguous = True
-        elif matched:
-            block.extend(matched)
-    if ambiguous or len(blocks) != 1:
+        block.append(line)
+    candidates: list[list[str]] = []
+    for lines in blocks:
+        matches = [[symbol for symbol, name in identities.items() if _mentions(line, symbol, name)]
+                   for line in lines]
+        if not any(matches):
+            continue
+        order = []
+        for index, (line, matched) in enumerate(zip(lines, matches)):
+            separator = "|" in line and bool(line.strip("| :-")) is False
+            header = (index + 1 < len(lines) and "|" in lines[index + 1]
+                      and not lines[index + 1].strip("| :-"))
+            if separator or header:
+                continue
+            # An unrecognized middle row cannot be silently skipped: doing so
+            # would change what "the second stock" means in the displayed list.
+            if len(matched) != 1:
+                return None
+            order.extend(matched)
+        candidates.append(order)
+    if len(candidates) != 1:
         return None
-    order = blocks[0]
+    order = candidates[0]
     return order if len(order) == len(set(order)) else None
 
 

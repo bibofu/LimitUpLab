@@ -74,3 +74,12 @@ def test_source_is_not_mutated_and_reference_has_content_identity():
     refs[0]["ordered_symbols"].reverse()
     assert original["tool_results"][0]["output"]["rows"][0]["symbol"] == "600001"
     assert len(refs[0]["result_hash"]) == 64
+
+
+@pytest.mark.parametrize("answer", [
+    "- 甲公司\n- 丙公司\n- 乙公司",
+    "| 股票 | 代码 |\n|---|---|\n|甲公司|600001|\n|丙公司|600003|\n|乙公司|000002|",
+])
+def test_unknown_middle_row_cannot_shift_displayed_ordinals(answer):
+    refs = references_from_committed_result("run-1", response(answer))
+    assert resolve_reference("第二只", refs)["status"] == "clarify"
