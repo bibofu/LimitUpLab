@@ -41,6 +41,11 @@ class RunnerState(TypedDict, total=False):
     remaining_seconds: float
     context_diagnostics: dict
     resolved_reference: dict
+    memory_request: dict
+    memory_action: dict
+    memory_owner_revision: int
+    memory_context_fingerprint: str
+    memory_context_used: bool
     messages: list
     pending: list
     answer: str
