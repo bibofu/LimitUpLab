@@ -39,6 +39,7 @@ backend/data/*_diagnostic.json
 backend/data/*_latest.json
 backend/data/*.lock
 backend/data/backups/
+backend/data-gym-cache/
 backend/data/pytest-*/
 output/
 .local/

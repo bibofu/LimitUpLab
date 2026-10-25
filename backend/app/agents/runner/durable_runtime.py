@@ -1,6 +1,7 @@
 """Application-lifetime durable ReAct graph with a synchronous worker bridge."""
 
 import asyncio
+from concurrent.futures import CancelledError as FutureCancelledError
 from contextlib import contextmanager
 from dataclasses import dataclass
 import json
@@ -18,6 +19,7 @@ from app.agents.runner.runner import RunnerState
 from app.agents.runner.result import RunnerResult
 from app.agents.runner.security import review_input_security
 from app.agents.runner.guardrails import REFUSAL
+from app.agents.runner.guardrails import MAX_TOOL_CALLS
 from app.services.durable_checkpointer import FencedPostgresSaver, psycopg_url
 from app.services.runtime_coordination import LeaseLost
 
@@ -87,16 +89,14 @@ def _agent(state, deps):
         if built.clarification:
             return {"answer": built.clarification, "status": "clarify", "stop_reason": "reference_ambiguous",
                     "done": True, "context_diagnostics": built.diagnostics}
-        runner._record_usage_context({**state, "messages": built.messages}, False)
-        from app.services.llm_provider import current_llm_usage
-        tracker = current_llm_usage()
-        if tracker is not None:
-            tracker.set_context(**built.diagnostics, thread_id=deps.control.row["session_id"],
-                                recovery_count=deps.control.row.get("recovery_count", 0))
-        update = runner.agent({**state, "messages": built.messages})
+        diagnostics = {**built.diagnostics, "thread_id": deps.control.row["session_id"],
+                       "run_id": deps.control.row["run_id"], "prompt_version": "durable-react-v1",
+                       "summary_triggered": bool(state["conversation"].get("summary_triggered")),
+                       "recovery_count": deps.control.row.get("recovery_count", 0)}
+        update = runner.agent({**state, "messages": built.messages, "context_diagnostics": diagnostics})
         if "messages" in update:
             update["messages"] = [*state.get("messages", []), *update["messages"][len(built.messages):]]
-        update["context_diagnostics"] = built.diagnostics
+        update["context_diagnostics"] = diagnostics
         update["resolved_reference"] = built.resolved_reference or {}
         update["remaining_seconds"] = max(0, state["remaining_seconds"] - (perf_counter() - started))
         return update
@@ -106,13 +106,16 @@ def _tool(state, deps):
     with execution_context(deps):
         started = perf_counter()
         runner = deps.runner
+        if state["remaining_seconds"] <= 0:
+            return runner._budget_stop(state)
         runner.deadline = perf_counter() + state["remaining_seconds"]
         # Each call has its own super-step. Its durable receipt is committed
         # before the checkpoint; a crash between them reuses the exact receipt.
         update = runner.tools({**state, "pending": state["pending"][:1]})
         if update.get("tool_messages") and not update.get("done"):
             value = update["tool_messages"][-1]
-            if value.get("error_type") != "UncertainExecution":
+            if (state.get("tool_count", 0) < MAX_TOOL_CALLS
+                    and value.get("error_type") != "UncertainExecution"):
                 update["tool_messages"][-1] = {
                     "result_ref": state["pending"][0]["id"], "name": state["pending"][0]["name"],
                     "status": value.get("status"), "summary": value.get("summary"),
@@ -169,7 +172,10 @@ class DurableRuntime:
             raise
 
     def run_sync(self, runner, control):
-        return asyncio.run_coroutine_threadsafe(self.run(runner, control), self.loop).result()
+        try:
+            return asyncio.run_coroutine_threadsafe(self.run(runner, control), self.loop).result()
+        except FutureCancelledError as error:
+            raise RecoverableRunError("服务正在重启，原任务将在恢复后继续。") from error
 
     async def run(self, runner, control):
         task = asyncio.current_task()

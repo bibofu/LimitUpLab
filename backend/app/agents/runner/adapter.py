@@ -100,8 +100,10 @@ def answer_with_runner(
     from app.agents.runner.durable_runtime import get_runtime
     # Durable input review is a checkpointed node. Its result survives retries.
     control = CURRENT_CONTROL.get()
-    durable = (control is not None and get_runtime() is not None
-               and control.row.get("runtime_version") == "durable-v1")
+    durable = control is not None and control.row.get("runtime_version") == "durable-v1"
+    if durable and get_runtime() is None:
+        from app.agents.runtime_errors import RecoverableRunError
+        raise RecoverableRunError("持久化运行时暂不可用，请恢复原任务。")
     try:
         assessment = None if durable else review_input_security(
             provider,

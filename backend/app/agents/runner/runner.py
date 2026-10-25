@@ -234,6 +234,7 @@ class AgentRunner:
             tool_results=len(state.get("tool_messages", [])),
             pending_tools=len(state.get("pending", [])),
             definition_reuse_saved_chars=self.definition_dedup.saved_chars,
+            **state.get("context_diagnostics", {}),
         )
 
     def tools(self, state: RunnerState) -> RunnerState:
@@ -371,8 +372,10 @@ class AgentRunner:
         from app.agents.runner.durable_runtime import get_runtime
         runtime = get_runtime()
         control = CURRENT_CONTROL.get()
-        if (control is not None and runtime is not None
-                and control.row.get("runtime_version") == "durable-v1"):
+        if control is not None and control.row.get("runtime_version") == "durable-v1":
+            if runtime is None:
+                from app.agents.runtime_errors import RecoverableRunError
+                raise RecoverableRunError("持久化运行时暂不可用，请恢复原任务。")
             return runtime.run_sync(self, control)
 
         initial: RunnerState = {
