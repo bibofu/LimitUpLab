@@ -120,6 +120,7 @@ def test_stock_news_identity_cannot_override_tool_name_in_model_or_trace():
         "payload_metadata": {"provider_scope": "stock"},
     })
     runner = SimpleNamespace(
+        durable=False,
         progress=None,
         execute=lambda call: value,
         definition_dedup=DefinitionDeduplicator(),

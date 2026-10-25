@@ -120,7 +120,7 @@ def test_tool_execution_reports_empty_status_from_cache():
     cached = {"status": "empty", "summary": "当日无事件", "rows": []}
     signature = dump(["limit_up_events", sorted({"trade_date": "2026-10-23"}.items())])
     runner = SimpleNamespace(
-        gateway=_Gateway(), cache={signature: cached},
+        gateway=_Gateway(), cache={signature: cached}, durable=False,
     )
     runner._execute = lambda call: AgentRunner._execute(runner, call)
 
@@ -140,7 +140,7 @@ def test_tool_validation_failure_is_recorded_and_not_raised():
     tracer = RecordingTracer()
     agent_tracing._tracer = tracer
     runner = SimpleNamespace(
-        gateway=_Gateway(error=ValueError("Tool not registered")), cache={},
+        gateway=_Gateway(error=ValueError("Tool not registered")), cache={}, durable=False,
     )
     runner._execute = lambda call: AgentRunner._execute(runner, call)
 
