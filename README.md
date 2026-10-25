@@ -20,7 +20,7 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 
 ## 项目状态
 
-当前代码以 **LangChain 原生工具调用 + LangGraph 有界 ReAct** 为聊天主链路，支持持久化运行、实时进度、校验并保存后渐进展示正式答案和服务端证据表。旧 Planner/Capability/Policy/模板执行器、Task DAG、Complex Graph 和 Claim Ledger 已退出生产调用图。现行实现见 [LangChain + LangGraph 集成](docs/LangChain_Integration.md)。
+当前代码以 **LangChain 原生工具调用 + LangGraph 持久化 ReAct** 为聊天主链路：原生 PostgreSQL Checkpoint 保存执行状态，业务事务提交正式答案，SSE 提供进度与重连。首轮 Runtime 与短期 Memory 重构的设计、迁移和验收边界见 [重构记录](docs/Memory_Runtime_Refactoring.md)；分支改动不表示已发布到生产。
 
 当前阶段为 **V1.5：轻量 LangGraph Agent 与工具输出契约完善**。[V1.5 阶段里程碑](docs/V1.5_Milestone.md) 汇总 `v1.5.0` 的工作、验证结果、限制和下一步。
 
@@ -70,11 +70,11 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 用户问题
   -> Durable Run 创建任务、绑定 owner/session/message_id
   -> 轻量输入审查（检查系统边界绕过和直接交易指令，拒绝时不查业务工具）
-  -> AgentRunner（LangGraph agent -> tools -> agent）选择原生工具调用
+  -> LangGraph（input_review -> agent <-> tool）选择原生工具调用，同步保存 Checkpoint
   -> BusinessToolGateway 校验 profile、Schema、日期回显和参数边界
-  -> 工具依次执行，完整结果连同 field_definitions 直接返回模型
+  -> 工具依次执行，持久化完整回执；模型读取保留全部行与字段定义的无损编码
   -> 模型基于已取得事实直接回答；达到输出长度上限时限一次精简重写
-  -> 疑似越界输出的条件语义复核（可配置全量复核）；Journal.finish 原子保存后通过 completed 交付正式答案
+  -> 疑似越界输出的条件语义复核（可配置全量复核）；RunDelivery 事务提交后通过 completed 交付正式答案
 ```
 
 当前主要工具：
@@ -109,9 +109,9 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 
 
 
-系统在 PostgreSQL 保留原始会话和滚动记忆。生产 Runner 在 6000 字符预算内重放最近最多 4 条用户/助手消息，另加载长期约束，用于理解省略条件；本轮明确条件优先，市场事实必须重新查询。
+系统在 PostgreSQL 保留原始会话，短期 Memory 由 LangGraph Thread State 管理。每次模型调用统一组合摘要、近期整轮消息、研究目标、页面上下文、约束及已提交股票引用，并按估算 Token 预算裁剪历史。无法确认“第二只”的显示顺序时先澄清；本轮市场事实必须重新查询。
 
-Memory 按 `owner_id + session_id` 隔离，使用 `last_message_id` 作为增量游标，随会话永久删除。默认只向模型提供偏好约束；追问时再补充研究目标、股票、题材、日期范围和未解问题。这些字段都不能作为市场证据或自动继承为本轮待办，也不会跨会话建立用户画像。
+Memory 按会话所有者隔离，采用消息游标和版本防止重复摘要。工具结果只做无损编码，仍超预算则明确返回 partial，完整证据保留。跨会话长期 Memory 尚未实现，旧会话约束不会自动升级为长期偏好。
 
 
 
@@ -148,8 +148,9 @@ flowchart LR
 
     U[User] --> I[React Agent Workspace]
     I --> J[FastAPI Chat / SSE]
-    J --> S[(Sessions + Run Journal)]
+    J --> S[(Sessions + Run Registry + Events)]
     J --> K[LangGraph AgentRunner]
+    K --> CP[(Native PostgreSQL Checkpoints)]
     K --> L[BusinessToolGateway]
     L --> M[Tool Registry]
     M --> C
@@ -171,33 +172,34 @@ sequenceDiagram
     participant User
     participant UI as React UI
     participant API as FastAPI
-    participant Journal as Run Journal
+    participant Runs as Run Registry / Events / Delivery
     participant Graph as LangGraph AgentRunner
     participant Gateway as BusinessToolGateway
     participant Tools as Tool Registry
 
     User->>UI: 输入自然语言问题
     UI->>API: POST /api/agents/chat/stream
-    API->>Journal: 创建幂等 run，保存用户消息
+    API->>Runs: 创建幂等 run，保存用户消息
     API-->>UI: accepted + run_id
     API->>Graph: 消息、记忆、profile、截止时间
     Graph->>Gateway: 原生 tool calls
     Gateway->>Gateway: Schema、时态、权限和预算校验
-    Gateway->>Tools: 有界并发执行
-    Tools-->>Graph: ToolMessage 完整结果、来源与 field_definitions
+    Gateway->>Tools: 逐调用执行并保存不可变回执
+    Tools-->>Graph: ToolMessage 无损编码、来源与完整字段定义
+    Graph->>Graph: sync checkpoint；中断后恢复未完成步骤
     Graph->>Graph: 继续查询或直接回答
     loop 查询、生成与校验期间
         Graph-->>API: progress 阶段信息
-        API->>Journal: 保存进度事件
+        API->>Runs: 独立保存进度事件
         API-->>UI: SSE progress
     end
-    Graph->>Graph: 渲染候选答案并完成结构、证据和合规校验
-    opt 校验失败后修正
-        Graph->>Graph: 内部修复一次并重新校验
+    Graph->>Graph: 输出长度检查与条件合规复核
+    opt 输出达到长度上限
+        Graph->>Graph: 同证据精简重写一次
     end
     Graph-->>API: 正式响应
-    API->>Journal: Journal.finish 原子保存最终回答
-    Journal-->>API: 已提交响应
+    API->>Runs: RunDelivery 原子保存最终回答
+    Runs-->>API: 已提交响应
     API-->>UI: SSE completed；一次交付正文、表格与元数据
     UI->>UI: 渐进展示正式答案，表格按完整行展开
 ```
@@ -230,7 +232,7 @@ sequenceDiagram
 - Native Tool-Calling ReAct
 - LangGraph StateGraph
 - Tool Schema + Temporal Policy Gateway
-- Evidence IDs + Controlled Compute
+- Structured References + Tool Output Contracts
 - Durable SSE Task / Reconnect / Cancel
 - Controlled Conversation Context
 - Persistent Chat Sessions
@@ -301,8 +303,6 @@ LIMITUPLAB_LLM_MODEL=deepseek-v4-flash
 LIMITUPLAB_LLM_THINKING_ENABLED=false
 LIMITUPLAB_LLM_NATIVE_FUNCTION_CALLING=true
 DEEPSEEK_API_KEY=<your-api-key>
-LIMITUPLAB_SESSION_MEMORY_ENABLED=true
-LIMITUPLAB_SESSION_MEMORY_REFRESH_MESSAGES=8
 ```
 
 真实 API Key 不应提交到 Git。未配置 LLM 时，结构化评分、数据检索等确定性接口仍可运行；生产聊天 ReAct 会明确报配置错误，不会伪装成正常回答。

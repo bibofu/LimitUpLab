@@ -70,8 +70,13 @@ DEEPSEEK_API_KEY=<your-api-key>
 
 The production chat backend uses LangChain messages and
 `ChatOpenAI.bind_tools`. A custom LangGraph `StateGraph` runs one bounded ReAct
-loop; `BusinessToolGateway`, durable tool results and the PostgreSQL run journal
-retain financial policy, idempotency and recovery control. The only valid configured
+loop with native PostgreSQL checkpoints; `BusinessToolGateway`, immutable tool
+receipts and separate run/delivery services retain policy, idempotency and recovery.
+Thread state holds short-term memory, and a per-call Context Builder applies a
+token estimate budget without splitting tool-call/result groups. Model-facing
+columnar encoding preserves every returned row and field; long-term memory is
+deferred. See [runtime and memory migration](../docs/Memory_Runtime_Refactoring.md).
+The only valid configured
 backend is `LIMITUPLAB_LLM_BACKEND=langchain`; any other value fails during
 startup. Every Agent tool also declares a Pydantic output contract in
 `app/agents/tool_output_contracts.py`, reusing the annotated DTOs in `app/models.py`
@@ -91,13 +96,12 @@ Chat uses non-thinking mode by default because each ReAct decision is a
 latency-sensitive structured tool-calling turn. Model/tool counts, final task
 status and tool traces are persisted with the run.
 
-Chat streams the model's `finish.answer` text while generation is still in
-progress. SSE `answer_start` declares a provisional revision; `answer_delta`
-uses Unicode code-point offsets. Validation failure withdraws that draft via
-`answer_reset`, and `completed` supplies the authoritative persisted response.
-Tool arguments and reasoning are not displayed. Evidence tables are rendered
-from stored rows when their declaration is complete. Active GET reconnects read
-events after the cursor; completed reconnects return only the final response.
+Chat publishes progress while executing and sends `completed` only after the
+formal response and chat message commit together. The frontend progressively
+displays that committed answer. Tool arguments and reasoning are not displayed.
+GET reconnects read events after the cursor or return the saved final response;
+they never restart tools. Interrupted durable runs resume native checkpoints
+through an original-request retry or the bounded recovery supervisor.
 
 The default `v1_close_review` profile includes on-demand structured market
 tools; every invocation is checked by `ToolGateway`.
