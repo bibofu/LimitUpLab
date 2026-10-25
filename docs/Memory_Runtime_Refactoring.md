@@ -268,6 +268,66 @@ Graph 通过 `astream(stream_mode=["custom", "updates"], durability="sync")` 驱
 
 本次证明的是“工具回执和 checkpoint 已提交后的进程死亡，能够从该点自动恢复并唯一交付”。它不证明尚在进行的远端模型请求能够接着半段输出继续，也不覆盖工具回执提交与 checkpoint 提交之间的另一故障窗口；后者已有独立自动化测试。本次未修改生产Agent代码，无需重复此前全量测试。
 
+## 用户主动暂停与继续
+
+2026-10-25 在 `memory_refactoring` 上增加持久化用户控制。实现提交为 `990641b`（控制与迁移）、`852fa6a`（Runtime）、`e7ee465`/`9214e49`（前端）、`ef4b7f3`（HTTP/恢复）。采用固定版本 LangGraph 的 `interrupt()` / `Command(resume=...)`，继续复用原生 PostgreSQL Saver、同步 checkpoint、执行租约和工具回执。
+
+### 行为与接口
+
+- 状态流转为 running → pausing → paused → resuming → running；取消仍是终态。暂停是非终态，保留原 run/thread/message/request 和会话占位，不创建正式 assistant 或 agent_runs 完成记录。
+- 当前模型、工具或记忆节点结束并持久化后才确认暂停。独立 pause 节点无业务副作用；释放执行租约及 admission 名额。关闭页面只断开订阅；刷新通过会话详情的 active_run 恢复操作。
+- `POST /api/agents/chat/runs/{run_id}/pause` 与 `/resume` 接收 operation_id、expected_state_revision。操作回执保证重试不重施旧意图；版本校验防止旧按钮解除新暂停。owner 不匹配返回404，不接受客户端提供问题、任意 checkpoint 或状态覆盖。
+- GET run 返回 run_status、state_revision、can_pause/can_resume/can_cancel、last_event_id 等安全摘要。SSE run_state 表示控制状态；paused 正常结束订阅但不产生 completed。暂停后已接受的取消请求仍等待正式 cancelled 交付。
+- 普通重复聊天 POST 不能解除主动暂停。继续沿用原请求与剩余预算，不增加故障恢复次数；请求日期按首次执行的上海日期冻结，长期记忆继续使用当前有效版本及最终交付校验。
+
+### 恢复和并发边界
+
+继续前由服务端取得执行租约，校验已确认的 checkpoint ID、interrupt ID 和恢复模式。原生暂停使用 Command(resume)；普通待执行 checkpoint 使用 None；图已完成而暂停拦住交付时仅补交付。增加字段采用兼容默认值，原业务节点名和 schema version 保持兼容；未知版本仍明确阻止恢复，不静默重建问题。
+
+恢复扫描排除 paused。pausing 遇到进程故障只核对并冻结最后保存的 checkpoint，不为了到达暂停点执行新业务。resuming 尚无首次 admission 身份时回到 paused，等待用户重新提交带身份的继续请求。暂停确认与租约释放之间收到继续或取消，会在释放后直接调度，正常用户操作不依赖30秒恢复扫描。暂停与最终交付以同一数据库事务锁决定先后。
+
+已经完整保存的工具回执不重执行；远端操作可能发生、回执尚未落盘时仍保留 UncertainExecution，不删除记录后盲目重试。暂停不撤销已提交的长期记忆写入，也不恢复半个 Python 调用栈或远端模型的半段输出。
+
+### 真实三问验收
+
+使用 `deepseek-v4-flash`、完整 FastAPI HTTP/lifespan 和独立 PostgreSQL 随机 schema。只读复制真实2026-10-23行情92行；测试不迁移业务库、不停止业务服务。问法依次为“什么是首板”“2026-10-23首板按代码升序前三只”“第二只的代码和名称”。三个问题均完整完成，名单为000156华数传媒、000559万向钱潮、000700模塑科技，追问返回000559万向钱潮。
+
+第二问在实际工具完成后通过正式 pause 接口暂停，待回执与 checkpoint 保存后退出应用进程；新进程启动后观察65秒，覆盖至少两个原30秒恢复扫描周期，然后通过正式 resume 接口继续。
+
+| 核验项 | 实际结果 |
+| --- | --- |
+| 暂停状态跨进程保留 | PID 28864退出，PID 29932启动；65秒内保持paused，无业务模型/工具调用 |
+| 原任务与检查点 | run_ddabd71b66be4dcc960c013a08081ddc；继续入口实际载入原checkpoint `1f1d051c-f831-644d-8008-6bb4272ad7c9`，run/thread/owner/request hash一致 |
+| 已完成工具去重 | 暂停前实际执行1次，重启继续后0次；工具回执内容与签名不变 |
+| 唯一正式交付 | 三个问题各1条user、1条正式assistant、1条agent_runs；暂停时第二问正式记录为0 |
+| 继续时延 | 控制确认约0.025秒，剩余回答约1.507秒；单次观测，不是P50/P95或服务承诺 |
+| 恢复计数 | resume_count=1，recovery_count=0；正常继续不消费故障恢复额度 |
+| 请求重放 | 重复resume及原POST返回同一正式响应，没有新增模型/工具调用、checkpoint或答案；SSE重连只有1个completed |
+| 收尾 | 独立schema已删除、临时cookie文件已删除、测试子进程正常退出；复制的行情快照哈希未变化 |
+
+报告位于忽略目录 `output/memory-refactoring/pause-resume-20261025T085512Z-c6e28950/report.json`，调用记录为同目录 execution.jsonl。验收脚本仅在工具返回与回执提交之间设置同步闸门，以稳定发出暂停请求；工具本体、模型、HTTP控制、Saver、恢复扫描均使用实际实现。原始问答、日志、私密配置和生成报告不提交Git。
+
+### 最终自动测试
+
+| 验证集 | 结果 |
+| --- | --- |
+| 最终后端全量 | 1836 passed、22 subtests passed、1 skipped；196.99秒；独立PostgreSQL临时schema |
+| 跳过项补跑 | 将项目已安装且匹配的pg_dump/pg_restore加入进程PATH后，真实备份测试1 passed；未留下未验证的跳过项 |
+| 前端全量及生产构建 | 240 passed，TypeScript和Vite build成功 |
+| 真实模型验收 | 3个问题全部complete，14项持久化/恢复/去重/数据核对全部通过 |
+
+后端日志及JUnit为 `output/memory-refactoring/pause-resume-final-pytest.log` / `pause-resume-final-pytest.xml`；保留既有LangChain序列化配置弃用提示。前端保留既有大chunk提示。本次前端验收为组件/协议自动测试与构建，未将其称为人工浏览器验收。独立收尾报告 postrun-audit.json 确认测试schema与cookie删除、原业务行情哈希不变，业务库仍为0006。
+
+### 数据库升级
+
+新迁移为 `0007_run_pause_control`，为 react_runs 增加控制版本、继续计数和暂停绑定信息，并增加 run_control_operations 操作回执表。它不改写旧原生checkpoint。启动新版本前应备份目标库、停止旧执行者并完成 Alembic 升级；本轮迁移只在隔离测试库执行，既有业务库未自动升级或重启。
+
+```powershell
+backend/.venv/Scripts/python.exe -m alembic -c backend/alembic.ini upgrade head
+```
+
+上述命令需由部署环境显式配置目标 PostgreSQL URL。迁移禁止直接 downgrade，避免丢失用户暂停状态；回退使用已验证备份。
+
 ## 原始方案对照
 
 状态含义：**Implemented** 表示当前代码有实现和相应测试；**Explicit optional** 表示原方案明确允许按需采用或“如适用”，本轮未启用；**Deferred** 表示尚未完成，不能用相近的测试指标替代。最终全量和真实模型验收以各轮记录为准。
@@ -278,10 +338,11 @@ Graph 通过 `astream(stream_mode=["custom", "updates"], durability="sync")` 驱
 | Conversation / Run / Control 状态隔离 | Implemented | conversation、每轮工作消息/计数/预算、run/schema/status 分开；新 run 重置临时字段 |
 | AsyncPostgresSaver 唯一执行状态、同步 checkpoint | Implemented | 原生 Saver 加事务内 fencing；不宣称 exactly-once |
 | Node/模型/工具中断、崩溃、重启、取消、旧 worker 拒写 | Implemented | 固定模型、真实 PostgreSQL 和子进程终止场景；不确定工具结果不自动重放 |
+| 用户主动暂停/继续 | Implemented | 原生interrupt、持久控制意图、同checkpoint恢复、重启保持暂停；三个真实问答及唯一交付验收通过 |
 | 等待人工审批后恢复 | Explicit optional | 原文为“如适用”；当前业务没有审批节点 |
 | Journal 职责迁移、请求幂等、同 Thread 并发 | Implemented | Registry/Coordinator/EventStore/Delivery 分工；自定义 checkpoint 与 legacy 执行回退退出 |
 | 正式交付事务、幂等补交、先提交再 completed | Implemented | Graph 和业务提交分开；交付失败可恢复且只产生一条正式回答 |
-| 原生 Streaming 与 SSE 游标重连 | Implemented | custom/updates 白名单映射，status/tool_start/tool_end/warning/error/completed；GET 不执行任务 |
+| 原生 Streaming 与 SSE 游标重连 | Implemented | custom/updates 白名单映射及run_state控制事件；status/tool_start/tool_end/warning/error/completed；GET 不执行任务 |
 | 统一 Context Builder、预算、优先级、完整工具消息组 | Implemented | 每次业务模型调用重建视图；估算 tokens，不把计费精度或任意语义冲突检查冒充已实现 |
 | 股票序号/批次引用与真实查询条件继承 | Implemented | 输入审查同轮区分新排名/旧实体/旧条件；展示顺序经真实行验证；query_scope 支撑条件重查，旧名单不自动成为筛选范围 |
 | Recent Window + Rolling Summary + Structured Context | Implemented | Token 触发、消息游标/版本；纯摘要计算；查询条件独立于自然语言摘要 |
@@ -298,7 +359,7 @@ Graph 通过 `astream(stream_mode=["custom", "updates"], durability="sync")` 驱
 | No / Short / Short+Long Memory 消融 | Implemented | 相同固定世界和预算的上下文契约评测；不得把契约通过率称为真实 LLM 答题提升 |
 | 可复现运行评测入口与当前版本指标 | Implemented | `scripts/evaluate_agent_runtime.py` 使用独立 PostgreSQL 随机 schema 和固定模型；原始报告单独保存 |
 | 重构前后真实模型任务成功率、成本与生产 P50/P95 比较 | Deferred | 真实问答仅冒烟；没有匹配旧版本/真实流量的受控性能基线，不据固定脚本宣称质量或性能提升 |
-| Alembic、备份、旧会话/摘要/未完成 run 迁移策略 | Implemented | 0005/0006 与已记录开发库备份；旧摘要只读一次导入，旧执行状态不强转原生 checkpoint |
+| Alembic、备份、旧会话/摘要/未完成 run 迁移策略 | Implemented | 0005/0006与已记录开发库备份；新增0007暂停控制迁移已在隔离库验证；旧摘要只读一次导入，旧执行状态不强转原生checkpoint |
 | 删除旧实现、配置、无效测试并更新前后端协议文档 | Implemented | 旧 summary writer/direct Graph/字段去重缓存退出；保留历史 schema/data，非静默丢弃 |
 
 当前开发者还可以独立评估跨设备账号、设置面板、生产多实例压测和保留策略；这些不是已经交付的能力。跨设备账号与设置面板也不是原始方案明确要求的交付项。
