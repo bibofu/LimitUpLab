@@ -27,6 +27,10 @@ PROXY_ENV_NAMES = (
 LANGFUSE_HOST_ENV_NAMES = ("LANGFUSE_HOST", "LANGFUSE_BASE_URL")
 DEFAULT_LANGFUSE_ENVIRONMENT = "local"
 DEFAULT_LANGFUSE_SAMPLE_RATE = 1.0
+# Estimated-token budget for one model input. The production tool catalog and
+# system rules already consume about 20k estimate units, so the previous 24k
+# default left too little room for current-run evidence.
+DEFAULT_AGENT_INPUT_TOKEN_BUDGET = 40000
 
 
 def load_local_env(path: str | Path | None = None, *, override: bool = False) -> list[Path]:
@@ -84,6 +88,25 @@ def env_bool(name: str, default: bool = False) -> bool:
     if value is None:
         return default
     return value.strip().lower() in TRUE_VALUES
+
+
+def agent_input_token_budget() -> int:
+    """Read the context-budget estimate without making chat startup fragile.
+
+    The value is expressed in the conservative units used by
+    ``app.agents.context_builder.estimate_tokens``, not provider billing tokens.
+    Invalid or non-positive values fall back to the documented default so a
+    typo cannot silently disable the guard or reject every request.
+    """
+
+    raw_value = os.getenv("LIMITUPLAB_AGENT_INPUT_TOKEN_BUDGET", "").strip()
+    if not raw_value:
+        return DEFAULT_AGENT_INPUT_TOKEN_BUDGET
+    try:
+        value = int(raw_value)
+    except ValueError:
+        return DEFAULT_AGENT_INPUT_TOKEN_BUDGET
+    return value if value > 0 else DEFAULT_AGENT_INPUT_TOKEN_BUDGET
 
 
 @dataclass(frozen=True)

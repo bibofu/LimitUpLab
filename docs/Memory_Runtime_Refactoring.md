@@ -77,7 +77,9 @@ Graph 通过 `astream(stream_mode=["custom", "updates"], durability="sync")` 驱
 
 每次模型调用组合系统规则、当前问题、页面信息、有效约束/引用、摘要、近期整轮对话和本轮工具观察。历史上下文作为数据输入，不作为新的系统授权。优先级为：当前明确要求、页面上下文、已提交引用、摘要。当前行情和统计事实必须重新取自本轮工具。
 
-当前预算采用显式标注的估算：ASCII 每 3 字符约 1 token，非 ASCII 每字符约 2 tokens，并计入工具 schema 与消息开销；默认输入预算 24,000。这是保守预算方法，不是供应商计费 token。历史按整轮裁剪，不拆开 assistant tool calls 与对应 tool results；必需上下文或本轮结果仍超限时返回明确 partial，不默默删掉股票。
+当前预算采用显式标注的估算：ASCII 每 3 字符约 1 token，非 ASCII 每字符约 2 tokens，并计入工具 schema 与消息开销；默认输入预算 40,000，可通过 `LIMITUPLAB_AGENT_INPUT_TOKEN_BUDGET` 调整。提高默认值是因生产工具 schema 与系统规则已约占 20,000 估算单位，旧 24,000 预算只给本轮证据留下约 4,000，单条完整首板名单即可触发 `partial/context_budget`。这是保守预算方法，不是供应商计费 token；预算单位与模型实际分词仍需单独校准。历史按整轮裁剪，不拆开 assistant tool calls 与对应 tool results；必需上下文或本轮结果仍超限时返回明确 partial，不默默删掉股票。
+
+2026-10-25 预算调整已用真实 DeepSeek、独立随机 PostgreSQL schema 和真实 2026-10-23 行情完成四问验收：概念解释、首板前三只、第二只、完整 68 行名单第 40 只全部 `complete`，第 40 只返回 301660 粤芯半导-U；业务库行情哈希未变化。报告位于忽略目录 `output/memory-refactoring/context-budget-40k-20261025T124110Z/`。同版本后端全量为 1839 passed、22 subtests passed、1 skipped（230.17 秒，独立 PostgreSQL 临时 schema）。该验收证明 40k 预算覆盖上述场景，不代表 40k 已与模型分词或供应商上下文窗口精确对齐。
 
 滚动摘要默认在会话估算超过 6,000 tokens 时触发，保留约 2,400 tokens 的完整近期轮次。摘要复用已有结构化生成与安全降级逻辑；LLM 不可用时降级状态可见。单个最新轮次过大时完整保留并记录延后原因。研究目标、股票、日期、未解问题和约束均进入 Context Builder，不再只加载 `constraints`。
 

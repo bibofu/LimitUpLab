@@ -1,5 +1,12 @@
 # Agent 问答回归记录
 
+## 2026-10-25：生产工具 schema 占满输入预算，完整首板名单被拒答
+
+- 问题：应用默认输入预算为 24,000 估算 token，但 v1 的 24 个工具 schema、system prompt 和上下文规则已约占 19,700–20,800；再加上一条 68 行的首板名单（约 3,612）后，`build_context` 在模型调用前抛出 `ContextBudgetExceeded`，问答被记为 `partial / context_budget`。
+- 原因：静态工具定义与动态证据共用同一个预算且没有预留；`INLINE_TOKEN_BUDGET=6000`、`PAGE_TOKEN_BUDGET=5000` 都大于剩余空间；估算器对中文按 2 token/字，使 24k 估算预算实际只相当于约 14k cl100k。测试只用了玩具 schema，未使用生产工具目录。
+- 修复：默认输入预算提高到 40,000，并新增 `LIMITUPLAB_AGENT_INPUT_TOKEN_BUDGET` 供部署调整；无效或非正数配置回退默认值。新增真实 `business_definitions` 的预算回归，验证 v1 与 extended 都能容纳一条 68 行结果，同时保留旧 24k 预算会失败的断言。
+- 验证：真实 DeepSeek 经 FastAPI/TestClient、独立随机 PostgreSQL schema 和真实 2026-10-23 行情完成四问：概念解释、首板前三只、第二只、完整 68 行名单第 40 只，全部 HTTP 200、`task_status=complete`；第 40 只准确返回 301660 粤芯半导-U，原始业务库行情哈希未变化。报告位于忽略目录 `output/memory-refactoring/context-budget-40k-20261025T124110Z/`。同版本后端全量 1839 passed、22 subtests passed、1 skipped。
+
 ## 2026-10-25：主动停止不能保留可继续任务，重启可能自动恢复
 
 - 原表现：界面停止调用取消并终结任务；异常中断由租约与恢复扫描自动接管，无法表达“用户暂停，重启后仍等待继续”。

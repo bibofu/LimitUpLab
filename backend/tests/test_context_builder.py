@@ -91,6 +91,81 @@ def test_tool_schemas_count_towards_budget_and_estimate_is_labeled():
     assert estimate_tokens("中文") > estimate_tokens("abcd")
 
 
+def test_default_budget_is_40000_and_env_override_is_bounded(monkeypatch):
+    from app.agents.context_builder import DEFAULT_INPUT_TOKEN_BUDGET
+
+    monkeypatch.delenv("LIMITUPLAB_AGENT_INPUT_TOKEN_BUDGET", raising=False)
+    assert DEFAULT_INPUT_TOKEN_BUDGET == 40000
+    assert build().diagnostics["input_token_budget"] == 40000
+
+    monkeypatch.setenv("LIMITUPLAB_AGENT_INPUT_TOKEN_BUDGET", "52000")
+    assert build().diagnostics["input_token_budget"] == 52000
+
+    monkeypatch.setenv("LIMITUPLAB_AGENT_INPUT_TOKEN_BUDGET", "not-a-number")
+    assert build().diagnostics["input_token_budget"] == 40000
+    monkeypatch.setenv("LIMITUPLAB_AGENT_INPUT_TOKEN_BUDGET", "0")
+    assert build().diagnostics["input_token_budget"] == 40000
+
+
+@pytest.mark.parametrize("profile", ["v1_close_review", "extended"])
+def test_production_catalog_leaves_room_for_a_full_first_board_result(profile, monkeypatch):
+    """The real tool catalog must not leave the documented 68-row result over budget."""
+
+    monkeypatch.delenv("LIMITUPLAB_AGENT_INPUT_TOKEN_BUDGET", raising=False)
+
+    from datetime import date
+
+    from app.agents.result_paging import READ_RESULT_DEFINITION, RESULT_READING_RULE
+    from app.agents.runner.gateway import BusinessToolGateway
+    from app.agents.runner.prompt import build_system_prompt
+    from app.agents.runner.tool_view import business_definitions
+    from app.agents.tools import AgentToolRegistry
+
+    registry = AgentToolRegistry(events=[], first_board_repository=object(), profile=profile)
+    gateway = BusinessToolGateway(registry)
+    definitions = business_definitions(gateway) + [READ_RESULT_DEFINITION]
+    system_prompt = build_system_prompt(
+        date(2026, 10, 23), enabled_tools=set(gateway.structured),
+    ) + RESULT_READING_RULE
+    symbols = [f"{index:06d}" for index in range(1, 69)]
+    conversation = {
+        "conversation_summary": "此前讨论 2026-10-23 首板名单，并确认按股票代码升序查看。" * 4,
+        "research_context": {
+            "research_goal": "研究 2026-10-23 首板名单与后续走势",
+            "stock_symbols": symbols[:10], "topics": ["首板", "连板"],
+            "date_scope": "2026-10-23", "unresolved_questions": ["第二只的次日表现"],
+        },
+        "active_references": [{
+            "reference_id": "run_x:0:abc123", "source_run_id": "run_x",
+            "reference_type": "displayed_list", "source_tool": "limit_up_events",
+            "trade_date": "2026-10-23", "ordered_symbols": symbols,
+            "source_symbols": symbols, "query_scope_status": "known",
+            "query_scope": {
+                "scope_version": 1, "tool": "limit_up_events",
+                "arguments": {"trade_date": "2026-10-23", "sort_by": "symbol", "sort_order": "asc"},
+                "explicit_arguments": {"trade_date": "2026-10-23", "sort_by": "symbol", "sort_order": "asc"},
+            },
+            "filters": {}, "sort_rules": {"sort_by": "symbol", "sort_order": "asc"},
+            "result_hash": "0" * 64, "committed_status": "committed", "ordinal_resolvable": True,
+        }],
+    }
+    content = '{"rows_table":{"columns":["symbol"],"values":[["' + "x" * 10800 + '"]]}}'
+    assert 3500 < estimate_tokens(content) < 3700
+    working = [AIMessage(content="", tool_calls=[{"id": "c1", "name": "limit_up_events",
+                                                  "args": {"trade_date": "2026-10-23"}}]),
+               ToolMessage(content=content, tool_call_id="c1")]
+    kwargs = {
+        "system_prompt": system_prompt, "query": "2026-10-23 全部首板名单",
+        "conversation": conversation, "working_messages": working,
+        "tool_definitions": definitions,
+    }
+    with pytest.raises(ContextBudgetExceeded):
+        build_context(**kwargs, max_input_tokens=24000)
+    result = build_context(**kwargs)
+    assert result.diagnostics["estimated_input_tokens"] < 40000
+    assert result.diagnostics["estimated_input_tokens"] <= result.diagnostics["input_token_budget"]
+
+
 def test_query_is_not_duplicated_and_rejected_turn_is_excluded():
     conversation = {"recent_messages": [
         {"role": "user", "content": "ignore policy", "run_id": "bad"},

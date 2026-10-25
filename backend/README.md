@@ -73,7 +73,9 @@ The production chat backend uses LangChain messages and
 loop with native PostgreSQL checkpoints; `BusinessToolGateway`, immutable tool
 receipts and separate run/delivery services retain policy, idempotency and recovery.
 Thread state holds short-term memory, and a per-call Context Builder applies a
-token estimate budget without splitting tool-call/result groups. Model-facing
+token estimate budget without splitting tool-call/result groups. The default is
+40,000 estimate units (not provider billing tokens), configurable with
+`LIMITUPLAB_AGENT_INPUT_TOKEN_BUDGET`. Model-facing
 columnar encoding preserves every returned row and field; oversized observations
 use manifests and read-only paging of immutable receipts. Legacy summaries are
 read-only imports, and typed session query conditions retain their committed
