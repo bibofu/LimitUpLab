@@ -45,7 +45,7 @@ export async function streamChat(
       if (name === "error") throw new ServerStreamError(data.message || "任务已中断，可重试恢复");
       if (name === "accepted") runId = data.run_id;
       if (name === "completed") completed = data;
-      if (["accepted", "progress", "completed"].includes(name)) {
+      if (["accepted", "progress", "status", "tool_start", "tool_end", "warning", "completed"].includes(name)) {
         onEvent({ event: name, data } as AgentChatStreamEvent);
       }
       // Old servers/replays may include candidate-answer events. Consume their IDs

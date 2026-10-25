@@ -22,6 +22,7 @@ from app.agents.runner.guardrails import REFUSAL
 from app.agents.runner.guardrails import MAX_TOOL_CALLS
 from app.services.durable_checkpointer import FencedPostgresSaver, psycopg_url
 from app.services.runtime_coordination import LeaseLost
+from app.services.agent_stream import NativeStreamBridge, emit_status, emit_tool_event
 
 SCHEMA_VERSION = 1
 logger = logging.getLogger(__name__)
@@ -59,9 +60,10 @@ def _review(state, deps):
             from app.agents.runtime_errors import RecoverableRunError
             raise RecoverableRunError("输入审核暂时中断，尚未执行工具。") from error
         if decision.decision == "refuse":
-            return {"answer": REFUSAL if "trading_advice" in decision.signals else
+            trading_advice = "trading_advice" in decision.signals
+            return {"answer": REFUSAL if trading_advice else
                     "我可以协助查询有来源的股票研究事实，不能执行绕过系统边界的指令。",
-                    "status": "refuse", "stop_reason": "input_policy", "done": True}
+                    "status": "refuse", "stop_reason": "input_trading_advice" if trading_advice else "input_policy", "done": True}
         proposal = prepare_memory_request(decision.memory_intent, deps.control, retrieved.owner_revision) \
             if decision.memory_intent else {}
         return {"done": False, "memory_request": proposal,
@@ -89,7 +91,7 @@ def _agent(state, deps):
         )
         try:
             built = build_context(
-                system_prompt=runner.messages[0].content, query=state["current_query"],
+                system_prompt=runner.system_prompt, query=state["current_query"],
                 conversation=conversation, working_messages=working, long_term_memory=retrieved,
                 page_context=page, tool_definitions=runner.definitions,
             )
@@ -145,17 +147,30 @@ def build_graph(saver):
     graph = StateGraph(RunnerState, context_schema=RunDependencies)
 
     async def review(state, runtime: Runtime[RunDependencies]):
+        emit_status("planning")
         return await asyncio.to_thread(_review, state, runtime.context)
 
     async def agent(state, runtime: Runtime[RunDependencies]):
         return await asyncio.to_thread(_agent, state, runtime.context)
 
     async def tool(state, runtime: Runtime[RunDependencies]):
-        return await asyncio.to_thread(_tool, state, runtime.context)
+        if (state["remaining_seconds"] <= 0 or state.get("tool_count", 0) >= MAX_TOOL_CALLS
+                or await asyncio.to_thread(runtime.context.control.cancelled)):
+            return await asyncio.to_thread(_tool, state, runtime.context)
+        call = state["pending"][0]
+        emit_tool_event("tool_start", call)
+        update = await asyncio.to_thread(_tool, state, runtime.context)
+        observations = update.get("tool_messages", [])
+        status = observations[-1].get("status") if observations else None
+        emit_tool_event("tool_end", call, status=status)
+        if status in {"partial", "error"}:
+            runtime.stream_writer({"kind": "warning", "stage": "tools", "node": "tool"})
+        return update
 
     async def memory(state, runtime: Runtime[RunDependencies]):
         from app.agents.memory_commands import execute_memory_request
         deps = runtime.context
+        emit_status("checking")
         with execution_context(deps):
             if deps.control.cancelled():
                 return deps.runner._cancelled_stop()
@@ -224,7 +239,7 @@ class DurableRuntime:
         config = {"configurable": {"thread_id": control.row["session_id"], "run_id": control.row["run_id"],
                     "owner_id": control.row["owner_id"], "lease_token": lease.token, "fence": lease.fence},
                   "recursion_limit": 40}
-        runner.durable = True
+        bridge = NativeStreamBridge(control, [item.get("function", {}).get("name") for item in runner.definitions])
         snapshot = await self.graph.aget_state(config)
         state = snapshot.values
         if state and state.get("schema_version") != SCHEMA_VERSION:
@@ -232,7 +247,11 @@ class DurableRuntime:
         if state and state.get("run_id") == control.row["run_id"]:
             if snapshot.next:
                 initial = None
+                await bridge.publish({"kind": "status", "stage": "preparing", "phase": "resume"})
             else:
+                if not state.get("done"):
+                    raise RecoverableRunError("执行状态尚未完整提交，原任务可恢复。")
+                await bridge.publish({"kind": "status", "stage": "checking", "phase": "delivery_retry"})
                 return await asyncio.to_thread(result_from_state, state, runner, control)
         else:
             conversation = await asyncio.to_thread(self._conversation, state, runner, control)
@@ -246,21 +265,32 @@ class DurableRuntime:
                        "memory_request": {}, "memory_action": {}, "memory_owner_revision": 0,
                        "memory_context_fingerprint": "", "memory_context_used": False,
                        "remaining_seconds": max(0, runner.deadline - perf_counter())}
+        previous_progress = runner.progress
+        runner.progress = emit_status
         try:
-            final = await self.graph.ainvoke(initial, config, context=RunDependencies(runner, control),
-                                             durability="sync")
+            # In pinned LangGraph 1.0.5 multiple stream modes yield (mode, data).
+            # Updates can precede their sync checkpoint: never deliver from them.
+            async for mode, chunk in self.graph.astream(initial, config, context=RunDependencies(runner, control),
+                                                        stream_mode=["custom", "updates"], durability="sync"):
+                await bridge.consume(mode, chunk)
+            completed = await self.graph.aget_state(config)
+            final = completed.values
+            if completed.next or final.get("run_id") != control.row["run_id"] or not final.get("done"):
+                raise RecoverableRunError("执行状态尚未完整提交，原任务可恢复。")
         except (LeaseLost, RecoverableRunError):
             raise
         except Exception as error:
             logger.exception("Durable graph interrupted run_id=%s", control.row["run_id"])
             raise RecoverableRunError("执行暂时中断，已保存可恢复进度。") from error
+        finally:
+            runner.progress = previous_progress
         return await asyncio.to_thread(result_from_state, final, runner, control)
 
     def _conversation(self, state, runner, control):
         from app.agents.conversation_memory import compress_conversation
         from app.agents.structured_references import references_from_committed_result
         from app.repositories.chat_memory_repository import ChatMemoryRepository
-        from app.services.session_memory import memory_prompt_payload
+        from app.services.conversation_summary import summary_payload
         from app.agents.memory_commands import retrieve_for_run
         from app.services.memory_scope import clean_conversation_for_memory_revision
         conversation = dict(state.get("conversation", {})) if state else {}
@@ -268,7 +298,7 @@ class DurableRuntime:
             old = ChatMemoryRepository(control.journal.database_url).get_memory(
                 control.row["session_id"], owner_id=control.row["owner_id"])
             if old:
-                payload = memory_prompt_payload(old)
+                payload = summary_payload(old)
                 conversation = {"conversation_summary": payload["summary"],
                                 "active_constraints": payload["constraints"], "research_context": payload,
                                 "imported_from": old.memory_version}

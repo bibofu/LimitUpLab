@@ -499,7 +499,8 @@ export function AgentChatDock({
         if (event.event === "accepted") {
           setActiveRunId(event.data.run_id);
         }
-        if (event.event === "progress") {
+        if (event.event === "progress" || event.event === "status" || event.event === "tool_start"
+            || event.event === "tool_end" || event.event === "warning") {
           setStreamStage(event.data.stage);
           setStreamStatus(event.data.message);
         }

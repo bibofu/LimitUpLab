@@ -18,6 +18,7 @@ from app.models import AgentChatResponse, ChatSessionMessage
 from app.repositories import ChatSessionRepository, SessionOwnershipError
 from app.security import current_owner_id
 from app.services.agent_tracing import get_agent_tracer
+from app.services.agent_stream import PUBLIC_PROGRESS_EVENTS
 
 router = APIRouter()
 _lock = threading.Lock()
@@ -118,6 +119,7 @@ def start(request, http_request, owner_id):
         def worker():
             tracker = response = failure = None
             control = RunControl(journal, row, execution, lease)
+            control.notify = notify_streams
             token = CURRENT_CONTROL.set(control)
             # Tracing starts inside the worker thread: ContextVar/OTel context does
             # not cross the thread boundary from the HTTP handler.
@@ -260,8 +262,8 @@ def stream(journal, row, owner_id, after=0):
                 cursor = event["seq"]
                 # Old interrupted runs may contain draft events. Advance the
                 # cursor without replaying them; only committed answers are public.
-                if event["event"] == "progress":
-                    yield f"id: {cursor}\nevent: progress\ndata: {event['payload_json']}\n\n"
+                if event["event"] in PUBLIC_PROGRESS_EVENTS:
+                    yield f"id: {cursor}\nevent: {event['event']}\ndata: {event['payload_json']}\n\n"
             if not journal.executing(run_id):
                 # Completion may have committed since the first poll above.
                 finished = owned(journal, run_id, owner_id)["response_json"]

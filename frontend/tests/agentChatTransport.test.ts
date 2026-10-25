@@ -40,6 +40,20 @@ test("the first completed frame is terminal even when duplicate completion or er
   assert.deepEqual(events, ["accepted", "completed"]);
 });
 
+test("native graph status and tool metadata update progress without becoming an answer", async () => {
+  const events: string[] = [];
+  const result = await streamChat("", payload, event => events.push(event.event), async () => response(
+    frame("status", { stage: "planning", message: "正在理解问题", event_version: 1 })
+    + frame("tool_start", { stage: "tools", message: "正在执行数据查询", tool_call_id: "call-1" })
+    + frame("tool_end", { stage: "tools", message: "数据查询已结束", status: "partial" })
+    + frame("warning", { stage: "tools", message: "部分查询未能完成" })
+    + frame("updates", { answer: "private-node-output" })
+    + frame("completed", final), true,
+  ));
+  assert.equal(result.answer, final.answer);
+  assert.deepEqual(events, ["accepted", "status", "tool_start", "tool_end", "warning", "completed"]);
+});
+
 test("disconnect reconnects once with cursor through GET, never another POST", async () => {
   const calls: { url: string; method: string }[] = [];
   const fetcher: typeof fetch = async (url, init) => {

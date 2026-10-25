@@ -614,8 +614,20 @@ export type AgentChatStreamEvent =
       data: { run_id: string; session_id: string };
     }
   | {
-      event: "progress";
-      data: { stage: AgentChatStreamStage; message: string };
+      event: "progress" | "status" | "tool_start" | "tool_end" | "warning";
+      data: {
+        stage: AgentChatStreamStage;
+        message: string;
+        event_version?: number;
+        run_id?: string;
+        thread_id?: string;
+        recovery_count?: number;
+        node?: string;
+        phase?: string;
+        tool_call_id?: string;
+        tool_name?: string;
+        status?: string;
+      };
     }
   | {
       event: "completed";
