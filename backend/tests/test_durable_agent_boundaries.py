@@ -60,7 +60,7 @@ def test_context_diagnostics_reach_model_usage_record(world):
                 await runtime.run(execution, control)
             context = tracker.calls[-1].context
             assert context["stage"] == "agent"
-            assert context["context_version"] == "context-v1"
+            assert context["context_version"] == "context-v2"
             assert context["run_id"] == control.row["run_id"]
             assert context["estimated_input_tokens"] > 0
             assert context["recovery_count"] == 0
