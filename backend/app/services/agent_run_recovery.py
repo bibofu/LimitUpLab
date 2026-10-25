@@ -15,7 +15,8 @@ logger = logging.getLogger(__name__)
 def recover_once():
     """Request recovery; the database execution lease elects the only worker."""
     from app.agents.runner.durable_runtime import get_runtime
-    from app.routers.react_chat import cancel, start
+    from app.agents.run_lifecycle import RunLifecycle
+    from app.routers.react_chat import cancel, settle_pause, start
 
     if get_runtime() is None:
         return 0
@@ -28,10 +29,23 @@ def recover_once():
             if row["cancelled"]:
                 cancel(run_id, owner_id)
                 continue
+            if row["run_status"] == "pausing":
+                settle_pause(RunLifecycle(services.storage.database_url), row)
+                continue
             # A crash before admission has no accepted network identity to reuse.
             # Leave that reservation for the user's original POST, rather than
             # inventing an IP or skipping normal request admission.
             if usage.recovery_ip_hash(run_id, owner_id) is None:
+                if row["run_status"] == "resuming":
+                    execution = services.coordinator.claim(run_id)
+                    if execution is not None:
+                        try:
+                            services.controls.defer_resume(run_id, owner_id,
+                                expected_revision=row["control_revision"], execution=execution)
+                        finally:
+                            execution.release()
+                        from app.routers.react_chat import notify_streams
+                        notify_streams()
                 continue
             request = AgentChatRequest.model_validate_json(row["request_json"])
             start(request, None, owner_id)

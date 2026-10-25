@@ -94,6 +94,7 @@ def test_remote_status_stream_and_cancel_ignore_local_thread_registry(shared_run
     async def read():
         frames = react_chat.stream(RunLifecycle(lifecycle.database_url), row, owner).body_iterator
         assert "accepted" in await anext(frames)
+        assert "run_state" in await anext(frames)
         assert "heartbeat" in await anext(frames)
         await frames.aclose()
     asyncio.run(read())

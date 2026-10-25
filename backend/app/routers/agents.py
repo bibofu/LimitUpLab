@@ -820,9 +820,10 @@ def bootstrap_chat_sessions(
     selected = repository.get_session(session_id, owner_id=owner_id) if session_id else None
     if selected is None and sessions:
         selected = repository.get_session(sessions[0].session_id, owner_id=owner_id)
+    from app.services.agent_run_state import with_active_run
     return ChatSessionBootstrapResponse(
         sessions=sessions,
-        selected_session=selected,
+        selected_session=with_active_run(selected, owner_id),
         generated_by=CHAT_SESSIONS_VERSION,
     )
 
@@ -840,7 +841,8 @@ def get_chat_session(
     )
     if session is None:
         raise HTTPException(status_code=404, detail="Chat session not found.")
-    return session
+    from app.services.agent_run_state import with_active_run
+    return with_active_run(session, owner_id)
 
 
 @router.patch("/chat/sessions/{session_id}", response_model=ChatSessionDetail)

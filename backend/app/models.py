@@ -1609,6 +1609,7 @@ class ChatSessionDetail(ChatSessionSummary):
     """One chat session with messages ordered from oldest to newest."""
 
     messages: list[ChatSessionMessage] = Field(default_factory=list)
+    active_run: dict[str, Any] | None = None
 
 
 class ChatSessionsResponse(BaseModel):

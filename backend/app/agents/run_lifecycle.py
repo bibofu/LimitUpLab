@@ -72,6 +72,11 @@ class RunControl:
         self.execution = execution
         self.admission = admission
 
+    def pause_state(self):
+        row = self.lifecycle.get(self.row["run_id"], self.row["owner_id"])
+        return {"requested": not row["cancelled"] and row["run_status"] in {"pausing", "paused"},
+                "revision": row.get("control_revision", 0)}
+
     def cancelled(self):
         try:
             if self.execution is not None:
