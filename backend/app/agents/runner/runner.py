@@ -29,7 +29,7 @@ from app.agents.runner.result import RunnerResult
 from app.agents.runner.tool_view import business_definitions, dump, model_result
 from app.agents.result_paging import (
     PAGE_TOKEN_BUDGET, READ_RESULT_DEFINITION, READ_RESULT_TOOL, RESULT_READING_RULE,
-    ReadResultRequest, ResultPageError, model_observation,
+    ReadModelResultRequest, ResultPageError, model_observation,
 )
 from app.services.agent_tracing import get_agent_tracer
 from app.services.llm_provider import current_llm_usage
@@ -288,7 +288,7 @@ class AgentRunner:
                 control = CURRENT_CONTROL.get()
                 if control is None:
                     raise ValueError("Saved result reads require an owned durable run")
-                request = ReadResultRequest.model_validate(call["args"])
+                request = ReadModelResultRequest.model_validate(call["args"])
                 return read_owned_result(control.journal.database_url, owner_id=control.row["owner_id"],
                                          run_id=control.row["run_id"], request=request, max_tokens=PAGE_TOKEN_BUDGET)
             arguments = self.gateway.validate(call)

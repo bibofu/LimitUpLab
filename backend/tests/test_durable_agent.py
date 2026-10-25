@@ -303,7 +303,15 @@ def test_large_tool_result_returns_explicit_partial_without_losing_evidence(worl
     request, control, history = world.start("完整列出全部固定样本")
     # Paging avoids an immediate context overflow, but cannot silently turn the
     # first few pages of a 3000-row request into a complete answer.
-    provider = ScriptedProvider([input_review(), tool_call(), *[
+    class PagingProvider(ScriptedProvider):
+        def generate_messages(self, messages, tools, **kwargs):
+            if len(self.calls) >= 2:
+                manifest = next(json.loads(item.content)["result_view"] for item in messages
+                                if isinstance(item, ToolMessage) and "result_view" in json.loads(item.content))
+                self.responses[0].tool_calls[0]["args"]["expected_hash"] = manifest["content_hash"]
+            return super().generate_messages(messages, tools, **kwargs)
+
+    provider = PagingProvider([input_review(), tool_call(), *[
         call("read_tool_result", {"result_id": "tool-1", "offset": index * 100, "limit": 100,
                                   "fields": ["symbol", "name"]}, f"page-{index}")
         for index in range(5)

@@ -9,7 +9,7 @@ from fastapi.testclient import TestClient
 import pytest
 
 from app.agents.context_builder import estimate_tokens
-from app.agents.result_paging import ReadResultRequest, ResultPageError, content_hash, model_observation, read_result_page
+from app.agents.result_paging import ReadModelResultRequest, ReadResultRequest, ResultPageError, content_hash, model_observation, read_result_page
 from app.agents.runner.durable_runtime import execution_context
 from app.agents.tool_context import expand_tool_observation, format_tool_observation
 from app.repositories.tool_result_repository import ToolResultRepository
@@ -79,6 +79,12 @@ def test_projection_and_model_budget_never_cut_a_row_or_reorder():
 def test_invalid_or_changed_views_fail_explicitly(kwargs):
     with pytest.raises(ResultPageError):
         read_result_page(large_result(), ReadResultRequest(result_id="saved", **kwargs))
+
+
+def test_model_reader_requires_manifest_hash_but_first_http_read_may_omit_it():
+    with pytest.raises(ValueError):
+        ReadModelResultRequest(result_id="saved")
+    assert ReadResultRequest(result_id="saved").expected_hash is None
 
 
 def test_metadata_is_explicitly_selected_and_oversized_values_are_not_cut():

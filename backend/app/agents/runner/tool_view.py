@@ -64,6 +64,7 @@ def model_result(name: str, result, payload: Any, status: str, *, arguments=None
         allowed = set(allowed_arguments if allowed_arguments is not None else arguments)
         effective = {**arguments, **{key: value for key, value in (getattr(result, "input", {}) or {}).items()
                                     if key in allowed and value is not None}}
+        effective = {key: value for key, value in effective.items() if value is not None}
         message["query_scope"] = json.loads(dump({
             "scope_version": 1, "tool": name, "arguments": effective, "explicit_arguments": arguments,
         }))

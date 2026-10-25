@@ -41,12 +41,18 @@ class ReadResultRequest(BaseModel):
         return list(dict.fromkeys(values)) if values else values
 
 
+class ReadModelResultRequest(ReadResultRequest):
+    # The model already received the manifest, unlike an initial human HTTP
+    # reader. Require it to bind the page to that exact saved content.
+    expected_hash: str = Field(min_length=64, max_length=64)
+
+
 READ_RESULT_DEFINITION = {"type": "function", "function": {
     "name": READ_RESULT_TOOL,
     "description": ("只读本轮已持久化的工具结果，不重新查询市场。大结果 manifest 给出 result_id 和 content_hash；"
                     "按 offset/limit 分页，fields 仅投影确实需要的字段，section=metadata 可读取来源/汇总/口径字段。"
                     "必须使用原结果的 content_hash，依据返回的 next_offset 继续读取；不能把一页当成完整名单。"),
-    "parameters": ReadResultRequest.model_json_schema(),
+    "parameters": ReadModelResultRequest.model_json_schema(),
 }}
 
 RESULT_READING_RULE = (
