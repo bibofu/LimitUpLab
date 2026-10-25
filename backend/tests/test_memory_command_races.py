@@ -107,7 +107,7 @@ def test_new_turn_revokes_summary_before_invoking_summarizer(world, monkeypatch)
         captured.append((existing, messages))
         return {"summary": "用户研究首板", "constraints": []}, "llm_function_call", "fixture"
 
-    monkeypatch.setattr("app.agents.conversation_memory._generate_memory_draft", summarize)
+    monkeypatch.setattr("app.agents.conversation_memory.generate_summary", summarize)
     execution = SimpleNamespace(request=request, history=history, provider=object())
     result = DurableRuntime._conversation(None, state, execution, control)
     assert len(captured) == 1

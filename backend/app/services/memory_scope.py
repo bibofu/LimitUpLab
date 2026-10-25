@@ -72,12 +72,12 @@ def clean_conversation_for_memory_revision(conversation: dict, retrieval) -> dic
         recent = [item for item in recent if _value(item, "role") != "assistant"
                   or _metadata(item).get("memory_context_fingerprint") == retrieval.context_fingerprint]
         from app.models import ChatSessionMessage
-        from app.services.session_memory import _deterministic_memory_draft
+        from app.services.conversation_summary import deterministic_summary
 
         safe = [ChatSessionMessage.model_validate({"session_id": "graph-thread",
                 "created_at": datetime.now(timezone.utc), **item})
                 for item in summary_source_messages(recent) if isinstance(item, dict)]
-        draft = _deterministic_memory_draft(None, safe) if safe else {}
+        draft = deterministic_summary(None, safe) if safe else {}
         state["conversation_summary"] = draft.get("summary", "")
         state["research_context"] = {key: draft.get(key) for key in (
             "research_goal", "stock_symbols", "topics", "date_scope", "unresolved_questions") if key in draft}

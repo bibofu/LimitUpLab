@@ -409,7 +409,7 @@ def test_lcel_prompt_preserves_json_and_usage():
 
 
 # Regression scenario: bind tools forces named function and preserves schema.
-@pytest.mark.parametrize("function_name", ["submit_agent_plan", "update_session_memory"])
+@pytest.mark.parametrize("function_name", ["submit_agent_plan", "update_conversation_summary"])
 def test_bind_tools_forces_named_function_and_preserves_schema(function_name):
     payloads = []
     schema = {"type": "object", "properties": {"capabilities": {"type": "array", "items": {"type": "string"}}}}

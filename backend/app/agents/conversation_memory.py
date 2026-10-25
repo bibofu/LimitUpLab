@@ -12,10 +12,10 @@ from datetime import datetime, timezone
 from typing import Any
 
 from app.agents.context_builder import estimate_tokens
-from app.models import ChatSessionMemory, ChatSessionMessage
-from app.services.session_memory import (
-    SESSION_MEMORY_VERSION, _build_memory, _deterministic_memory_draft,
-    _generate_memory_draft, _successful_messages,
+from app.models import ChatSessionMessage
+from app.services.conversation_summary import (
+    SUMMARY_SCHEMA_VERSION, ConversationSummary, build_summary, deterministic_summary,
+    generate_summary, successful_messages,
 )
 from app.services.memory_scope import filter_memory_control_turns, summary_source_messages
 
@@ -51,22 +51,19 @@ def _groups(messages: list[dict[str, Any]]) -> list[list[dict[str, Any]]]:
     return groups
 
 
-def _existing_memory(state: dict, now: datetime) -> ChatSessionMemory | None:
+def _existing_summary(state: dict) -> ConversationSummary | None:
     summary = state.get("conversation_summary", "")
     research = state.get("research_context", {})
-    if not summary and not research:
-        return None
     constraints = state.get("active_constraints", [])
+    if not summary and not research and not constraints:
+        return None
     if isinstance(constraints, dict):
         constraints = [f"{key}: {value}" for key, value in constraints.items()]
-    return ChatSessionMemory(
-        session_id="graph-thread", owner_id="graph-owned", memory_version=SESSION_MEMORY_VERSION,
+    return ConversationSummary(
         summary=str(summary), research_goal=str(research.get("research_goal") or ""),
         stock_symbols=research.get("stock_symbols", []), topics=research.get("topics", []),
         date_scope=research.get("date_scope"), constraints=constraints,
         unresolved_questions=research.get("unresolved_questions", []),
-        summarized_message_count=state.get("summarized_message_count", 0),
-        last_message_id=state.get("summary_cursor"), created_at=now, updated_at=now,
     )
 
 
@@ -105,7 +102,7 @@ def compress_conversation(
     # Inspect complete turns before dropping failed assistant rows, including
     # a user already in recent when its terminal response arrives later.
     candidates = filter_memory_control_turns([*recent, *incoming])
-    successful = _successful_messages([_model(item) for item in candidates])
+    successful = successful_messages([_model(item) for item in candidates])
     eligible_ids = {item.message_id for item in successful}
     recent = [item for item in candidates if item["message_id"] in eligible_ids]
     state.update(recent_messages=recent, last_committed_message_id=incoming[-1]["message_id"],
@@ -135,35 +132,30 @@ def compress_conversation(
                      summary_cursor=older[-1]["message_id"], summary_triggered=False,
                      summary_deferred_reason="no_session_scoped_summary_sources")
         return state
-    now = datetime.now(timezone.utc)
-    existing = _existing_memory(state, now)
+    existing = _existing_summary(state)
     try:
         if provider is None:
-            draft, mode, model = _deterministic_memory_draft(existing, models), "deterministic", None
+            draft, mode, model = deterministic_summary(existing, models), "deterministic", None
         else:
-            draft, mode, model = _generate_memory_draft(existing=existing, messages=models, llm_provider=provider)
+            draft, mode, model = generate_summary(existing=existing, messages=models, llm_provider=provider)
     except Exception as error:  # summary is optional; facts remain in the chat ledger
-        draft, mode, model = _deterministic_memory_draft(existing, models), "deterministic", None
+        draft, mode, model = deterministic_summary(existing, models), "deterministic", None
         state["summary_error"] = type(error).__name__
-    memory = _build_memory(
-        session_id="graph-thread", owner_id="graph-owned", existing=existing, draft=draft,
-        messages=models, summarized_message_count=state.get("summarized_message_count", 0) + len(models),
-        generation_mode=mode, model=model, now=now,
-    )
+    summary = build_summary(existing=existing, draft=draft, messages=models)
     state.update(
-        conversation_summary=memory.summary,
-        research_context={"research_goal": memory.research_goal, "stock_symbols": memory.stock_symbols,
-                          "topics": memory.topics, "date_scope": memory.date_scope,
-                          "unresolved_questions": memory.unresolved_questions},
+        conversation_summary=summary.summary,
+        research_context={"research_goal": summary.research_goal, "stock_symbols": summary.stock_symbols,
+                          "topics": summary.topics, "date_scope": summary.date_scope,
+                          "unresolved_questions": summary.unresolved_questions},
         recent_messages=[item for group in groups[-keep_count:] for item in group],
         summary_cursor=older[-1]["message_id"],
         summary_revision=int(state.get("summary_revision", 0)) + 1,
-        summarized_message_count=memory.summarized_message_count,
+        summarized_message_count=state.get("summarized_message_count", 0) + len(models),
         summary_generation_mode=mode, summary_model=model,
-        summary_schema_version=SESSION_MEMORY_VERSION, summary_triggered=True,
+        summary_schema_version=SUMMARY_SCHEMA_VERSION, summary_triggered=True,
     )
     if not isinstance(state.get("active_constraints"), dict):
-        state["active_constraints"] = memory.constraints
-    state["conversation_token_estimate"] = used + estimate_tokens(memory.summary)
+        state["active_constraints"] = summary.constraints
+    state["conversation_token_estimate"] = used + estimate_tokens(summary.summary)
     state.pop("summary_deferred_reason", None)
     return state
