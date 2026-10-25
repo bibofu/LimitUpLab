@@ -23,6 +23,7 @@ class BusinessToolGateway:
 
     def __init__(self, registry):
         self.registry = registry
+        self.reference_date = current_query_reference_date()
         self.contracts = {contract.name: contract for contract in registry.schemas()}
         self.structured = structured_tools(registry, self._invoke)
 
@@ -54,8 +55,8 @@ class BusinessToolGateway:
         if requested_as_of:
             mode = contract.time_mode
             effective = (
-                max((item.trade_date for item in self.registry.events), default=current_query_reference_date())
-                if mode == "latest_local" else current_query_reference_date()
+                max((item.trade_date for item in self.registry.events), default=self.reference_date)
+                if mode == "latest_local" else self.reference_date
             )
             if requested_as_of != effective.isoformat():
                 raise ValueError(f"This tool cannot serve that historical scope; supported as-of: {effective}")

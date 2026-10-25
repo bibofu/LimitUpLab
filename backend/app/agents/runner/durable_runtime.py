@@ -4,18 +4,22 @@ import asyncio
 from concurrent.futures import CancelledError as FutureCancelledError
 from contextlib import contextmanager
 from dataclasses import dataclass
+from datetime import date, datetime
 import json
 import logging
 from time import perf_counter
+from zoneinfo import ZoneInfo
 
 from langgraph.graph import END, START, StateGraph
 from langgraph.runtime import Runtime
+from langgraph.types import Command, interrupt
 from psycopg.rows import dict_row
 from psycopg_pool import AsyncConnectionPool
 
 from app.agents.run_lifecycle import CURRENT_CONTROL
 from app.agents.context_builder import CONTEXT_VERSION
-from app.agents.runtime_errors import RecoverableRunError
+from app.agents.runtime_errors import RecoverableRunError, RunPauseRequested
+from app.agents.run_pause import PausedRunError, PausedRunOutcome
 from app.agents.runner.runner import RunnerState
 from app.agents.runner.result import RunnerResult
 from app.agents.runner.security import review_input_security
@@ -36,10 +40,53 @@ def get_runtime():
     return _runtime
 
 
+def _config(control):
+    lease = control.execution
+    return {"configurable": {"thread_id": control.row["session_id"], "run_id": control.row["run_id"],
+                "owner_id": control.row["owner_id"], "lease_token": lease.token if lease else None,
+                "fence": lease.fence if lease else None}, "recursion_limit": 40}
+
+
+def _reference_date(state, control):
+    if state.get("reference_date"):
+        return date.fromisoformat(state["reference_date"])
+    started = control.row["started_at"]
+    if isinstance(started, str):
+        started = datetime.fromisoformat(started)
+    if started.tzinfo is None:
+        started = started.replace(tzinfo=ZoneInfo("UTC"))
+    return started.astimezone(ZoneInfo("Asia/Shanghai")).date()
+
+
+def _pause_interrupt(snapshot, run_id):
+    interruptions = snapshot.interrupts
+    if not interruptions:
+        return None
+    if (len(interruptions) != 1 or snapshot.values.get("run_id") != run_id
+            or not isinstance(interruptions[0].value, dict)
+            or interruptions[0].value.get("kind") != "run_pause"
+            or interruptions[0].value.get("run_id") != run_id):
+        raise RecoverableRunError("存在无法识别的暂停检查点，原任务仍可恢复。")
+    return interruptions[0]
+
+
+def _paused_outcome(snapshot, control, revision):
+    if snapshot.values.get("run_id") != control.row["run_id"]:
+        return PausedRunOutcome(control.row["run_id"], None, revision, "checkpoint")
+    checkpoint_id = (snapshot.config or {}).get("configurable", {}).get("checkpoint_id")
+    if not checkpoint_id:
+        raise RecoverableRunError("暂停检查点尚未确认写入，原任务仍可恢复。")
+    paused = _pause_interrupt(snapshot, control.row["run_id"])
+    mode = "interrupt" if paused else "delivery" if snapshot.values.get("done") and not snapshot.next else "checkpoint"
+    return PausedRunOutcome(control.row["run_id"], checkpoint_id, revision, mode,
+                            paused.id if paused else None)
+
+
 @dataclass
 class RunDependencies:
     runner: object
     control: object
+    resume_pause_revision: int | None = None
 
 
 @contextmanager
@@ -175,14 +222,45 @@ def _tool(state, deps):
 def build_graph(saver):
     graph = StateGraph(RunnerState, context_schema=RunDependencies)
 
+    async def gate(name, runtime):
+        # The DB control read is the start boundary. An already-started call is
+        # allowed to finish and checkpoint; the following node checks again.
+        signal = await asyncio.to_thread(runtime.context.control.pause_state)
+        if signal["requested"]:
+            return {"pause_next_node": name, "pause_revision": signal["revision"]}
+        return None
+
+    def pause(state, runtime: Runtime[RunDependencies]):
+        # LangGraph replays this node on resume. Keep it free of model calls,
+        # tools, business writes, progress events, and mutable control reads.
+        # A process can die after the gate's checkpoint but before interrupt().
+        # Explicitly resumed ordinary checkpoints must not require a second click.
+        resumed = {"pause_revision": state["pause_revision"]} if (
+            runtime.context.resume_pause_revision == state["pause_revision"]
+        ) else interrupt({"kind": "run_pause", "run_id": state["run_id"],
+                          "revision": state["pause_revision"]})
+        if resumed != {"pause_revision": state["pause_revision"]}:
+            raise RecoverableRunError("暂停恢复标识不匹配，原任务仍可恢复。")
+        return Command(goto=state["pause_next_node"],
+                       update={"pause_next_node": "", "pause_revision": 0})
+
     async def review(state, runtime: Runtime[RunDependencies]):
+        paused = await gate("input_review", runtime)
+        if paused:
+            return paused
         emit_status("planning")
         return await asyncio.to_thread(_review, state, runtime.context)
 
     async def agent(state, runtime: Runtime[RunDependencies]):
+        paused = await gate("agent", runtime)
+        if paused:
+            return paused
         return await asyncio.to_thread(_agent, state, runtime.context)
 
     async def tool(state, runtime: Runtime[RunDependencies]):
+        paused = await gate("tool", runtime)
+        if paused:
+            return paused
         if (state["remaining_seconds"] <= 0 or state.get("tool_count", 0) >= MAX_TOOL_CALLS
                 or await asyncio.to_thread(runtime.context.control.cancelled)):
             return await asyncio.to_thread(_tool, state, runtime.context)
@@ -197,6 +275,9 @@ def build_graph(saver):
         return update
 
     async def memory(state, runtime: Runtime[RunDependencies]):
+        paused = await gate("memory", runtime)
+        if paused:
+            return paused
         from app.agents.memory_commands import execute_memory_request
         deps = runtime.context
         emit_status("checking")
@@ -209,11 +290,15 @@ def build_graph(saver):
     graph.add_node("agent", agent)
     graph.add_node("tool", tool)
     graph.add_node("memory", memory)
+    graph.add_node("pause", pause)
     graph.add_edge(START, "input_review")
-    graph.add_conditional_edges("input_review", lambda s: END if s.get("done") else "memory" if s.get("memory_request") else "agent")
-    graph.add_edge("memory", END)
-    graph.add_conditional_edges("agent", lambda s: END if s.get("done") else "tool" if s.get("pending") else "agent")
-    graph.add_conditional_edges("tool", lambda s: END if s.get("done") else "tool" if s.get("pending") else "agent")
+    graph.add_conditional_edges("input_review", lambda s: "pause" if s.get("pause_next_node") else
+                                END if s.get("done") else "memory" if s.get("memory_request") else "agent")
+    graph.add_conditional_edges("memory", lambda s: "pause" if s.get("pause_next_node") else END)
+    graph.add_conditional_edges("agent", lambda s: "pause" if s.get("pause_next_node") else
+                                END if s.get("done") else "tool" if s.get("pending") else "agent")
+    graph.add_conditional_edges("tool", lambda s: "pause" if s.get("pause_next_node") else
+                                END if s.get("done") else "tool" if s.get("pending") else "agent")
     return graph.compile(checkpointer=saver)
 
 
@@ -247,6 +332,38 @@ class DurableRuntime:
         except FutureCancelledError as error:
             raise RecoverableRunError("服务正在重启，原任务将在恢复后继续。") from error
 
+    def pause_sync(self, control):
+        """Reconcile a pause without starting or resuming any graph node."""
+        return asyncio.run_coroutine_threadsafe(self.pause(control), self.loop).result()
+
+    async def pause(self, control):
+        snapshot = await self.graph.aget_state(_config(control))
+        signal = await asyncio.to_thread(control.pause_state)
+        return _paused_outcome(snapshot, control, signal["revision"])
+
+    def validate_resume_sync(self, control):
+        try:
+            return asyncio.run_coroutine_threadsafe(self.validate_resume(control), self.loop).result()
+        except RecoverableRunError:
+            raise
+        except Exception as error:
+            raise RecoverableRunError("继续检查点暂时无法核验，暂停状态已保留。") from error
+
+    async def validate_resume(self, control):
+        """Verify the user-confirmed location before marking resuming as running.
+
+        This is a one-time dispatch check. Crash recovery after that transition
+        may legitimately have advanced past the formerly paused checkpoint.
+        """
+        if control.row["run_status"] != "resuming":
+            raise RecoverableRunError("任务尚未授权继续，暂停状态已保留。")
+        actual = _paused_outcome(await self.graph.aget_state(_config(control)), control,
+                                 control.row["control_revision"])
+        expected = (control.row.get("pause_checkpoint_id"), control.row.get("pause_mode"),
+                    control.row.get("pause_interrupt_id"))
+        if (actual.checkpoint_id, actual.resume_mode, actual.interrupt_id) != expected:
+            raise RecoverableRunError("继续位置与已确认的暂停检查点不一致，原任务已保留。")
+
     async def run(self, runner, control):
         task = asyncio.current_task()
         self.active_tasks.add(task)
@@ -257,7 +374,9 @@ class DurableRuntime:
                                prompt_version=PROMPT_VERSION, context_version=CONTEXT_VERSION,
                                recovery_count=control.row.get("recovery_count", 0)):
                 return await self._run(runner, control)
-        except (LeaseLost, RecoverableRunError):
+        except RunPauseRequested:
+            raise PausedRunError(await self.pause(control)) from None
+        except (LeaseLost, RecoverableRunError, PausedRunError):
             raise
         except Exception as error:
             logger.exception("Durable state preparation interrupted run_id=%s", control.row["run_id"])
@@ -270,9 +389,7 @@ class DurableRuntime:
         lease = control.execution
         if lease is None:
             raise LeaseLost("Durable execution requires a lease")
-        config = {"configurable": {"thread_id": control.row["session_id"], "run_id": control.row["run_id"],
-                    "owner_id": control.row["owner_id"], "lease_token": lease.token, "fence": lease.fence},
-                  "recursion_limit": 40}
+        config = _config(control)
         bridge = NativeStreamBridge(control, [item.get("function", {}).get("name") for item in runner.definitions])
         with trace_stage("checkpoint_resume", {"operation": "read"}) as details:
             snapshot = await self.graph.aget_state(config)
@@ -281,9 +398,18 @@ class DurableRuntime:
         state = snapshot.values
         if state and state.get("schema_version") != SCHEMA_VERSION:
             raise RecoverableRunError("会话状态版本不兼容，需要迁移后恢复。")
+        signal = await asyncio.to_thread(control.pause_state)
+        if signal["requested"]:
+            raise PausedRunError(_paused_outcome(snapshot, control, signal["revision"]))
+        same_run = state.get("run_id") == control.row["run_id"]
+        runner.freeze_reference_date(_reference_date(state if same_run else {}, control))
+        resume_pause_revision = None
         if state and state.get("run_id") == control.row["run_id"]:
             if snapshot.next:
-                initial = None
+                paused = _pause_interrupt(snapshot, control.row["run_id"])
+                initial = Command(resume={"pause_revision": paused.value["revision"]}) if paused else None
+                if not paused and snapshot.next == ("pause",):
+                    resume_pause_revision = state["pause_revision"]
                 await bridge.publish({"kind": "status", "stage": "preparing", "phase": "resume"})
             else:
                 if not state.get("done"):
@@ -296,6 +422,7 @@ class DurableRuntime:
                 conversation = await asyncio.to_thread(self._conversation, state, runner, control)
                 details["summary_triggered"] = bool(conversation.get("summary_triggered"))
             initial = {"schema_version": SCHEMA_VERSION, "run_id": control.row["run_id"],
+                       "reference_date": runner.reference_date.isoformat(), "pause_next_node": "", "pause_revision": 0,
                        "current_query": runner.request.message, "conversation": conversation,
                        "messages": [], "pending": [], "tool_calls": [], "tool_statuses": [],
                        "tool_messages": [], "model_rounds": 0, "tool_count": 0, "done": False,
@@ -310,16 +437,20 @@ class DurableRuntime:
         try:
             # In pinned LangGraph 1.0.5 multiple stream modes yield (mode, data).
             # Updates can precede their sync checkpoint: never deliver from them.
-            async for mode, chunk in self.graph.astream(initial, config, context=RunDependencies(runner, control),
+            async for mode, chunk in self.graph.astream(initial, config, context=RunDependencies(runner, control, resume_pause_revision),
                                                         stream_mode=["custom", "updates"], durability="sync"):
                 await bridge.consume(mode, chunk)
             with trace_stage("checkpoint_read", {"operation": "verify_final"}) as details:
                 completed = await self.graph.aget_state(config)
                 details["checkpoint_id"] = (completed.config or {}).get("configurable", {}).get("checkpoint_id")
             final = completed.values
+            paused = _pause_interrupt(completed, control.row["run_id"])
+            signal = await asyncio.to_thread(control.pause_state)
+            if paused or signal["requested"]:
+                raise PausedRunError(_paused_outcome(completed, control, signal["revision"]))
             if completed.next or final.get("run_id") != control.row["run_id"] or not final.get("done"):
                 raise RecoverableRunError("执行状态尚未完整提交，原任务可恢复。")
-        except (LeaseLost, RecoverableRunError):
+        except (LeaseLost, RecoverableRunError, PausedRunError, RunPauseRequested):
             raise
         except Exception as error:
             logger.exception("Durable graph interrupted run_id=%s", control.row["run_id"])

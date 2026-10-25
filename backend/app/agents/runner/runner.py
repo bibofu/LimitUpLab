@@ -39,6 +39,9 @@ class RunnerState(TypedDict, total=False):
     schema_version: int
     run_id: str
     current_query: str
+    reference_date: str
+    pause_next_node: str
+    pause_revision: int
     conversation: dict
     remaining_seconds: float
     context_diagnostics: dict
@@ -84,10 +87,7 @@ class AgentRunner:
         self.provider = provider
         self.gateway = BusinessToolGateway(registry)
         self.definitions = [*business_definitions(self.gateway), READ_RESULT_DEFINITION]
-        self.system_prompt = build_system_prompt(
-            current_query_reference_date(),
-            enabled_tools=set(self.gateway.structured),
-        ) + RESULT_READING_RULE
+        self.freeze_reference_date(current_query_reference_date())
         self.deadline = perf_counter() + deadline_seconds
         self.started = perf_counter()
         self.progress = progress
@@ -97,6 +97,14 @@ class AgentRunner:
         self.definition_chars = len(json.dumps(
             self.definitions, ensure_ascii=False, separators=(",", ":"),
         ))
+
+    def freeze_reference_date(self, reference_date):
+        """A resumed request keeps the date against which its intent was read."""
+        self.reference_date = reference_date
+        self.gateway.reference_date = reference_date
+        self.system_prompt = build_system_prompt(
+            reference_date, enabled_tools=set(self.gateway.structured),
+        ) + RESULT_READING_RULE
 
     def agent(self, state: RunnerState) -> RunnerState:
         """Ask the model to either call tools or produce the final answer."""
