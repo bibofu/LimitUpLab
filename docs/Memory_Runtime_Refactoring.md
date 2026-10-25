@@ -98,7 +98,9 @@ summary_generation_mode, summary_triggered
 .venv/Scripts/python.exe scripts/postgres_admin.py status
 ```
 
-备份文件使用新名称，不提交数据库、报告或凭据。本轮自动化测试在独立 PostgreSQL 测试库及临时 schema 执行，不表示已对业务库完成迁移。
+备份文件使用新名称，不提交数据库、报告或凭据。自动化测试在独立 PostgreSQL 测试库及临时 schema 执行。
+
+2026-10-25 已实际升级本机 `127.0.0.1:55433` 的开发业务库至 `0005_durable_runtime`。升级前确认无有效 Agent 执行租约，使用 `pg_dump` 生成备份、校验 SHA-256 与归档可读性；升级后原有 192 个会话、542 条消息计数均未变化，再创建独立验收会话。备份位于忽略目录 `output/memory-refactoring/backups/`。未发布或迁移远程生产环境。
 
 ## 已完成验证
 
@@ -106,11 +108,15 @@ summary_generation_mode, summary_triggered
 
 | 验证集 | 结果 | 证据边界 |
 | --- | --- | --- |
+| 最终功能提交 `1434c72` 后端全量 | 1619 passed、22 subtests passed，0 failed、0 skipped | 独立 PostgreSQL；线程异常视为失败；130.87 秒；仅有 LangChain 弃用警告 |
+| 前端测试与生产构建 | 224 tests passed；tsc + Vite build 成功 | 存在既有 bundle 超过 500 kB 的非阻断提示 |
 | Context Builder、摘要、有序引用、无损编码、Memory Golden 联合测试 | 87 passed | 47 条模块测试与 40 条固定 Tool World 场景 |
 | 生产 Durable Graph、原生 Saver、Memory Golden 联合测试 | 61 passed，1 warning | 9 条 Graph、12 条 Saver、同一组 40 条 Golden；不可与上一行直接相加 |
 | 真实 Python 子进程终止后接管 | 已通过 Saver 集成测试 | 已提交 super-step 恢复、旧 fence 写入拒绝 |
 | Graph 完成后交付事务故障 | 已通过 Graph 集成测试 | 恢复后无需再次调用模型/工具，正式答案只保存一次 |
 | 多工具中断与下一轮隔离 | 已通过 Graph 集成测试 | 只续未完成调用，计数/待执行调用/诊断不污染下一轮 |
+
+上述模块测试均包含在最终全量中，不相加计数。最终后端日志/JUnit 位于忽略目录 `output/validation/20261025T063821Z-464da1ba/`；前端报告位于 `output/validation/20261025T062857Z-d190227a/`。应用 lifespan、同步 worker 桥、原生 Saver、SSE 重连、host 重启与真实关闭时的中断保留均有固定模型的端到端集成测试。
 
 复现（先将 `LIMITUPLAB_TEST_DATABASE_URL` 设为独立测试库，禁止指向业务库）：
 
@@ -126,7 +132,15 @@ summary_generation_mode, summary_triggered
 | 68 只股票 | 5,516 | 3,612 | 34.5% |
 | 60 条 K 线 | 4,636 | 2,972 | 35.9% |
 
-两类样本都验证了 JSON 往返还原、全部行、顺序和 `null`/字段缺失的区别。这是编码尺寸测量，不是生产端到端成本、延迟或模型回答质量提升。Golden 采用脚本模型和固定工具事实，不能代替真实 LLM 验收。真实服务至少三个问题的完整回答结果由主流程验收后补记；本节不先宣称通过。
+两类样本都验证了 JSON 往返还原、全部行、顺序和 `null`/字段缺失的区别。这是编码尺寸测量，不是生产端到端成本、延迟或模型回答质量提升。Golden 采用脚本模型和固定工具事实，不能代替真实 LLM 验收。
+
+用户明确授权外部模型验收后，通过真实 FastAPI lifespan/HTTP 路由、开发 PostgreSQL 与已配置的 `deepseek-v4-flash` 完成两轮三问；最后一轮使用最终功能代码，三问全部 HTTP 200、`task_status=complete`：
+
+1. “什么是首板”：概念解释完整结束。
+2. “2026-10-23 首板名单按代码升序列出前三只”：实际工具行与回答均为 000156 华数传媒、000559 万向钱潮、000700 模塑科技。
+3. “第二只的代码和名称”：准确返回 000559 万向钱潮，没有把历史行情当作当前事实。
+
+另外只读核对了 checkpoint 中的有序引用、来源 run、解析结果、每个 run 的唯一正式消息，以及完成后 GET 重连答复一致。三问延迟仅为单次冒烟观测，不作为 P50/P95 或版本性能对比。原始对话报告存于忽略目录 `output/memory-refactoring/`，不提交 Git。
 
 ## 明确未完成的范围
 
