@@ -8,6 +8,9 @@ langchain-core==1.6.2
 langchain-openai==1.6.2
 openai==3.26.0
 langgraph==1.0.5
+langgraph-checkpoint==3.0.1
+langgraph-checkpoint-postgres==3.0.5
+psycopg-pool==3.3.3
 langfuse==5.0.4
 SQLAlchemy==2.1.5
 psycopg[binary]==3.3.6
