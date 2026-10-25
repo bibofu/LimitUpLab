@@ -1,7 +1,7 @@
 """Explicit owner memories with CAS, tombstones and fenced operation receipts."""
 
 from contextlib import contextmanager
-from datetime import date, datetime, timezone
+from datetime import date
 from hashlib import sha256
 import json
 from uuid import uuid4
@@ -11,6 +11,8 @@ from app.memory_models import MemoryMutationResult, MemoryRecord, MemoryWrite
 from app.services.runtime_coordination import LeaseLost
 
 MEMORY_TYPES = {"preference", "research_context", "research_archive"}
+ARCHIVE_ANSWER_MAX_BYTES = 64 * 1024
+ARCHIVE_METADATA_MAX_BYTES = 1024 * 1024
 
 
 class MemoryConflict(ValueError):
@@ -35,15 +37,21 @@ def _record(row):
 
 def context_identity_in_connection(db, owner_id, now=None):
     """Reuse the caller's snapshot/write lock when validating recalled memory."""
-    timestamp = now or datetime.now(timezone.utc)
-    if timestamp.tzinfo is None:
-        raise ValueError("Memory time must include a timezone")
+    timestamp = _effective_now(db, now)
     version = db.execute("SELECT revision FROM memory_owner_versions WHERE owner_id=?", (owner_id,)).fetchone()
     active = db.execute("""SELECT memory_id,revision FROM long_term_memories WHERE owner_id=?
         AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at>?) ORDER BY memory_id""",
         (owner_id, timestamp)).fetchall()
     return {"owner_revision": int(version[0]) if version else 0,
             "context_fingerprint": sha256(_encode([[row[0], row[1]] for row in active]).encode()).hexdigest()}
+
+
+def _effective_now(db, now=None):
+    if now is not None:
+        if now.tzinfo is None:
+            raise ValueError("Memory time must include a timezone")
+        return now
+    return db.execute("SELECT clock_timestamp()").fetchone()[0]
 
 
 class LongTermMemoryRepository:
@@ -61,9 +69,10 @@ class LongTermMemoryRepository:
             db.close()
 
     @staticmethod
-    def _owned(db, owner_id, memory_id):
-        return db.execute("""SELECT *,COALESCE(expires_at<=clock_timestamp(),FALSE) AS expired
-            FROM long_term_memories WHERE owner_id=? AND memory_id=?""", (owner_id, memory_id)).fetchone()
+    def _owned(db, owner_id, memory_id, now=None):
+        timestamp = _effective_now(db, now)
+        return db.execute("""SELECT *,COALESCE(expires_at<=?,FALSE) AS expired
+            FROM long_term_memories WHERE owner_id=? AND memory_id=?""", (timestamp, owner_id, memory_id)).fetchone()
 
     @staticmethod
     def _owner_revision(db, owner_id):
@@ -95,11 +104,10 @@ class LongTermMemoryRepository:
         selected = tuple(memory_types) if memory_types is not None else tuple(sorted(MEMORY_TYPES))
         if not set(selected).issubset(MEMORY_TYPES) or not 1 <= limit <= 200:
             raise ValueError("Invalid memory filter or limit")
-        timestamp = now or datetime.now(timezone.utc)
-        if timestamp.tzinfo is None:
+        if now is not None and now.tzinfo is None:
             raise ValueError("Memory time must include a timezone")
-        conditions = ["owner_id=?", "deleted_at IS NULL", "(expires_at IS NULL OR expires_at>?)"]
-        params = [owner_id, timestamp]
+        conditions = ["owner_id=?", "deleted_at IS NULL"]
+        params = [owner_id]
         if selected:
             conditions.append("memory_type IN (" + ",".join("?" for _ in selected) + ")")
             params.extend(selected)
@@ -114,11 +122,15 @@ class LongTermMemoryRepository:
                               "WHERE topic.value IN (" + ",".join("?" for _ in topics) + "))")
             params.extend(topics)
         with self._connection(readonly=True) as db:
+            timestamp = _effective_now(db, now)
             identity = context_identity_in_connection(db, owner_id, timestamp)
+            conditions.append("(expires_at IS NULL OR expires_at>?)")
+            params.append(timestamp)
             rows = db.execute("SELECT *,FALSE AS expired FROM long_term_memories WHERE " +
                               " AND ".join(conditions) + " ORDER BY updated_at DESC,memory_id LIMIT ?",
                               (*params, limit)).fetchall()
-            return {**identity, "items": [_record(row).model_dump(mode="json") for row in rows]}
+            return {**identity, "as_of": timestamp.isoformat(),
+                    "items": [_record(row).model_dump(mode="json") for row in rows]}
 
     def list_active(self, owner_id, *, memory_types=None, exact_keys=None, topics=None, limit=100, now=None):
         return self.read_context(owner_id, memory_types=memory_types, exact_keys=exact_keys,
@@ -147,9 +159,11 @@ class LongTermMemoryRepository:
             return None
         if row["request_hash"] != fingerprint:
             raise MemoryConflict("Idempotency key was already used for a different memory operation")
-        current = self._owned(db, owner_id, row["memory_id"])
+        now = _effective_now(db)
+        current = self._owned(db, owner_id, row["memory_id"], now)
+        identity = context_identity_in_connection(db, owner_id, now)
         return MemoryMutationResult(current=_record(current), operation_revision=row["result_revision"],
-                                    owner_revision=self._owner_revision(db, owner_id), replayed=True)
+                                    **identity, replayed=True)
 
     @staticmethod
     def _source(db, owner_id, write):
@@ -176,12 +190,14 @@ class LongTermMemoryRepository:
         if changed:
             db.execute("""INSERT INTO memory_owner_versions(owner_id,revision) VALUES(?,1)
                 ON CONFLICT(owner_id) DO UPDATE SET revision=memory_owner_versions.revision+1""", (owner_id,))
-        current = _record(self._owned(db, owner_id, memory_id))
+        now = _effective_now(db)
+        current = _record(self._owned(db, owner_id, memory_id, now))
+        identity = context_identity_in_connection(db, owner_id, now)
         db.execute("""INSERT INTO memory_operation_receipts
             (owner_id,operation_id,request_hash,memory_id,operation,result_revision) VALUES(?,?,?,?,?,?)""",
             (owner_id, operation_id, fingerprint, memory_id, operation, current.revision))
         return MemoryMutationResult(current=current, operation_revision=current.revision,
-                                    owner_revision=self._owner_revision(db, owner_id))
+                                    **identity)
 
     def put(self, owner_id, write, operation_id, *, control=None, expected_owner_revision=None):
         from app.agents.memory_policy import validate_memory_write
@@ -256,7 +272,9 @@ class LongTermMemoryRepository:
 def _archive_from_response(write, request, response):
     if response.get("task_status") not in {"complete", "partial", "empty"} or not response.get("answer"):
         raise ValueError("Research archive source must be a completed research response")
-    references, sources, dates, cutoffs = [], set(), set(), set()
+    if not isinstance(response["answer"], str) or len(response["answer"].encode("utf-8")) > ARCHIVE_ANSWER_MAX_BYTES:
+        raise ValueError("Research archive answer exceeds the 64 KiB storage limit")
+    references, snapshots, sources, dates, cutoffs = [], [], set(), set(), set()
     def inspect(value):
         if isinstance(value, dict):
             for key, item in value.items():
@@ -285,7 +303,10 @@ def _archive_from_response(write, request, response):
         payload = result.get("payload") or trace.get("output")
         if not isinstance(payload, dict) or not payload:
             continue
-        references.append(f"run://{write.source_run_id}/tool/{index}")
+        reference = f"run://{write.source_run_id}/tool/{index}"
+        references.append(reference)
+        snapshots.append({"reference": reference, "name": trace.get("name"),
+                          "status": result.get("status") or "ok", "payload": payload})
         inspect(payload)
         if trace.get("name"):
             sources.add("tool:" + trace["name"])
@@ -305,7 +326,12 @@ def _archive_from_response(write, request, response):
         as_of = next(iter(dates))
     else:
         raise ValueError("Research archive source has no unambiguous as_of date")
-    return write.model_copy(update={"value": response["answer"], "metadata": {
+    metadata = {
         "as_of": as_of, "report_version": "archive-v1", "source_references": sorted(sources),
         "evidence_references": references, "source_generated_by": response.get("generated_by"),
-    }})
+        "evidence_snapshot": snapshots,
+        "evidence_sha256": sha256(_encode(snapshots).encode("utf-8")).hexdigest(),
+    }
+    if len(_encode(metadata).encode("utf-8")) > ARCHIVE_METADATA_MAX_BYTES:
+        raise ValueError("Research archive evidence exceeds the 1 MiB storage limit")
+    return write.model_copy(update={"value": response["answer"], "metadata": metadata})

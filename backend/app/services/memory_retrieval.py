@@ -80,9 +80,12 @@ def retrieve_memories(
         raise ValueError("An owner and a non-negative memory budget are required")
     requested = tuple(dict.fromkeys(kind for kind in memory_types if kind in MEMORY_TYPES
                                    and (kind != "research_archive" or allow_archives)))
-    clock = _datetime(now or datetime.now(timezone.utc))
+    clock = _datetime(now) if now is not None else None
     snapshot = repository.read_context(owner_id=owner_id, memory_types=requested,
                                        exact_keys=exact_keys, topics=topics, limit=100, now=clock)
+    clock = _datetime(snapshot.get("as_of")) or clock
+    if clock is None:
+        raise ValueError("Memory repository must provide its snapshot time")
     revision = int(snapshot.get("owner_revision", 0))
     keys = {str(key).casefold() for key in exact_keys} if exact_keys is not None else None
     requested_topics = {str(topic).casefold() for topic in topics} if topics else None

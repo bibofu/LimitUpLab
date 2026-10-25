@@ -78,4 +78,5 @@ class MemoryMutationResult(BaseModel):
     current: MemoryRecord
     operation_revision: int
     owner_revision: int
+    context_fingerprint: str
     replayed: bool = False

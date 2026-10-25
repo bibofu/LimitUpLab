@@ -44,6 +44,18 @@ def test_retrieval_is_fresh_per_call_and_owner_scoped():
     assert len(repo.calls) == 2
 
 
+def test_default_expiry_uses_repository_snapshot_clock_instead_of_host_time():
+    class DatabaseClockRepository(SnapshotRepository):
+        def read_context(self, **kwargs):
+            snapshot = super().read_context(**kwargs)
+            snapshot["as_of"] = "2099-01-01T00:00:00+00:00"
+            return snapshot
+    repo = DatabaseClockRepository([record(expires_at="2098-12-31T23:59:59+00:00")])
+    result = retrieve_memories(repo, owner_id="owner-a", query="研究首板")
+    assert repo.calls[0]["now"] is None
+    assert result.items == []
+
+
 def test_exact_key_topic_type_and_relevance_filters():
     repo = SnapshotRepository([
         record(), record("output_format", value="table"),

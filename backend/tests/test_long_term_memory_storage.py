@@ -1,6 +1,10 @@
 """Storage transaction, authorization and HTTP contracts for explicit memory."""
 
 from contextlib import closing
+from datetime import date
+from hashlib import sha256
+import json
+from uuid import uuid4
 
 from fastapi import FastAPI
 from fastapi.testclient import TestClient
@@ -9,7 +13,7 @@ import pytest
 from app.agents.run_lifecycle import RunControl, RunLifecycle
 from app.database import connect
 from app.memory_models import MemoryWrite
-from app.models import AgentChatRequest
+from app.models import AgentChatRequest, AgentChatResponse, AgentToolOutcome, AgentToolTrace
 from app.repositories import ChatSessionRepository
 from app.repositories.long_term_memory_repository import LongTermMemoryRepository
 from app.routers.memories import router
@@ -66,6 +70,66 @@ def test_fenced_memory_mutation_requires_live_owner_and_exact_user_source(postgr
         assert repository.get(OWNER, saved.current.memory_id).value == "concise"
     finally:
         replacement.release()
+
+
+def test_mutation_receipt_returns_current_state_and_identity_from_one_transaction(postgresql_database):
+    repository = LongTermMemoryRepository()
+    first = repository.put(OWNER, preference(), "put")
+    snapshot = repository.read_context(OWNER)
+    assert first.context_fingerprint == snapshot["context_fingerprint"]
+    assert first.owner_revision == snapshot["owner_revision"]
+    deleted = repository.delete(OWNER, first.current.memory_id, 1, "delete")
+    replayed = repository.put(OWNER, preference(), "put")
+    assert replayed.current.deleted_at and replayed.current.value is None
+    assert replayed.context_fingerprint == deleted.context_fingerprint
+    assert replayed.owner_revision == deleted.owner_revision
+    assert replayed.context_fingerprint != first.context_fingerprint
+
+
+def _committed_archive_source(*, answer="本次固定样本共有两条研究记录。", extra_payload=None):
+    session = "archive-" + uuid4().hex
+    ChatSessionRepository().ensure_session(session, owner_id=OWNER)
+    lifecycle = RunLifecycle()
+    row, _ = lifecycle.create(AgentChatRequest(
+        session_id=session, message_id="report", message="查询固定样本", trade_date=date(2026, 10, 23),
+    ), OWNER)
+    payload = {"trade_date": "2026-10-23", "source": "fixture://verified-market",
+               "rows": [{"symbol": "000001", "name": "样本甲"}, {"symbol": "000002", "name": "样本乙"}],
+               **(extra_payload or {})}
+    lifecycle.finish(row["run_id"], OWNER, AgentChatResponse(
+        session_id=session, intent="react_research", answer=answer, task_status="complete",
+        generated_by="fixture", tool_results=[AgentToolTrace(name="fixture_market", summary="固定样本",
+            status="success", output=payload, result=AgentToolOutcome(status="ok", payload=payload))],
+    ).model_dump(mode="json"))
+    return session, row["run_id"], payload
+
+
+def test_archive_evidence_remains_verifiable_after_source_conversation_is_deleted(postgresql_database):
+    session, run_id, payload = _committed_archive_source()
+    repository = LongTermMemoryRepository()
+    saved = repository.put(OWNER, MemoryWrite(memory_type="research_archive", key="固定样本报告",
+        source_run_id=run_id, source_user_message="保存刚才的研究报告"), "archive-put")
+    assert ChatSessionRepository().delete_session(session, owner_id=OWNER)
+    restored = repository.get(OWNER, saved.current.memory_id)
+    evidence = restored.metadata["evidence_snapshot"]
+    assert evidence[0]["payload"] == payload
+    canonical = json.dumps(evidence, ensure_ascii=False, sort_keys=True, allow_nan=False, separators=(",", ":"))
+    assert sha256(canonical.encode("utf-8")).hexdigest() == restored.metadata["evidence_sha256"]
+    assert restored.value == saved.current.value
+    assert restored.metadata["as_of"] == "2026-10-23"
+
+
+@pytest.mark.parametrize("oversized", ["answer", "evidence"])
+def test_archive_storage_limits_reject_without_truncation(postgresql_database, oversized):
+    session, run_id, _ = _committed_archive_source(
+        answer="x" * (64 * 1024 + 1) if oversized == "answer" else "固定研究报告。",
+        extra_payload={"large_data": "x" * (1024 * 1024)} if oversized == "evidence" else None,
+    )
+    repository = LongTermMemoryRepository()
+    with pytest.raises(ValueError, match="storage limit"):
+        repository.put(OWNER, MemoryWrite(memory_type="research_archive", key="too-large",
+            source_run_id=run_id, source_user_message="保存研究报告"), "oversized-put")
+    assert repository.list_active(OWNER) == []
 
 
 @pytest.fixture
