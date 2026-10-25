@@ -328,6 +328,31 @@ backend/.venv/Scripts/python.exe -m alembic -c backend/alembic.ini upgrade head
 
 上述命令需由部署环境显式配置目标 PostgreSQL URL。迁移禁止直接 downgrade，避免丢失用户暂停状态；回退使用已验证备份。
 
+## 当前业务服务0007部署验收
+
+2026-10-25 经用户明确授权，在业务库 `127.0.0.1:55433/limituplab` 上完成备份、0007迁移及当前工作台后端重启。本节更新上一节“只在隔离库验证、尚未部署”的状态；本次没有修改生产源码。
+
+### 备份与迁移
+
+- 备份文件：`output/memory-refactoring/deploy-pause-20261025T090538Z-e3b0c241/business-before-0007.dump`，23,505,024字节；校验文件在同目录，SHA-256为 `0f2871ad8e783bbfea51e1b83e80b9a122388141be140f790d9c4a314b238776`。
+- 备份不仅通过归档目录和哈希检查，还实际恢复到本机测试集群中的唯一空数据库。恢复出的版本为0006，聊天、运行、工具回执、原生checkpoint、行情及记忆操作记录的指纹与维护窗口数据一致；恢复临时库随后清理。备份保留，不提交Git。
+- 迁移前没有活动问答。确认进程身份后停止8001后端及共享业务库的刷新worker；执行事务升级并核对41张旧表的旧列内容哈希全部不变，原任务集合不变。新计数字段均为0，其余暂停绑定列为NULL，操作回执新表为空。
+- 版本已由 `0006_long_term_memory` 升至 `0007_run_pause_control`。新后端与原刷新worker已启动；最终后端PID为29024，前端原PID10040保持运行，刷新worker租约有效且fence为11。`/ready`返回PostgreSQL正常，5173工作台的/api代理返回200。
+
+### 当前服务实测
+
+使用实际 `http://127.0.0.1:5173` 工作台代理和已配置模型，不创建测试替代服务、不插桩、不修改租约时间。独立验收会话为 `chat_e8fe432ea4104439ae07473fd3812ece`。
+
+“查询2026-10-23全部首板名单，按股票代码升序排列，仅告诉我第40只股票的代码和名称。”完成第一个工具后，只读确认原生checkpoint已有工具结果，再调用正式pause接口。任务 `run_9e3c06c6c04b4db6a50c3115a6783695` 进入原生interrupt暂停，绑定checkpoint为 `1f1d0549-9ea5-6cd9-8005-f179c2e227a8`，正式答案为0。
+
+在此状态再次重启真实8001后端，观察65秒后仍为paused，checkpoint、工具回执及模型用量记录未变化。通过正式resume接口继续，约0.036秒返回控制确认、约1.345秒完成剩余任务；准确回答301660粤芯半导-U。第一个已完成工具的回执、签名和哈希保持不变，tool_start仅1次，继续处理剩余步骤。最终user、正式assistant及agent_runs各1条，resume_count=1、recovery_count=0；重复resume和原POST没有新增执行或答案。耗时为本次观测，不是性能承诺。
+
+随后实际完成首板代码升序前三只查询，结果为000156华数传媒、000559万向钱潮、000700模塑科技。浏览器另建会话 `chat_19de66c0fb8b4a8dbf95cf36f48e6312`，完成“什么是首板”及“请解释首板与连板的区别，仅作概念研究”。后一个问题实际点击暂停，确认已暂停后刷新页面，“继续任务”按钮及暂停提示仍在；点击继续后完整显示答案。四个最终验收问题全部complete，各只有1条正式assistant与1条agent_runs。
+
+首次HTTP验收脚本在应用成功暂停后，因自身审计查询误用了不存在的用量表名退出；生产实现没有修改。错误证据保留，核对固定run/session后取消并清理了仅该脚本创建的会话，再修正脚本完成上述验收。不能将首次脚本退出称为完整通过。
+
+证据位于同一忽略目录：`backup-restore-verification.json`、`before-migration.json`、`migration-verification.json`、`deployed-paused.json`、`deployed-acceptance.json`、`ui-acceptance-audit.json`、`deployment-final-audit.json`。界面截图为 `ui-paused-after-refresh.png`、`ui-resumed-complete.png`。验收cookie文件已删除，最终没有遗留活动问答；当前后端、前端与刷新worker保持运行。生成报告、原始问答、备份及配置均不提交Git。
+
 ## 原始方案对照
 
 状态含义：**Implemented** 表示当前代码有实现和相应测试；**Explicit optional** 表示原方案明确允许按需采用或“如适用”，本轮未启用；**Deferred** 表示尚未完成，不能用相近的测试指标替代。最终全量和真实模型验收以各轮记录为准。
