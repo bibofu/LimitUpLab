@@ -280,6 +280,11 @@ class DurableRuntime:
                 messages = messages[ids.index(old.last_message_id) + 1:]
             conversation.update(summary_cursor=old.last_message_id,
                                 summarized_message_count=old.summarized_message_count)
+        # Revoke stale derived text BEFORE any summarizer model call. Cleaning
+        # only after compression would already have sent deleted preferences.
+        conversation = clean_conversation_for_memory_revision(
+            conversation, retrieve_for_run(control, runner.request.message),
+        )
         if messages:
             conversation = compress_conversation(conversation, messages, provider=runner.provider)
         if state and state.get("run_id"):

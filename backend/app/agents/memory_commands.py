@@ -34,7 +34,11 @@ def prepare_memory_request(intent, control, owner_revision):
     if intent.action == "save" and intent.memory_type == "research_archive" and not intent.source_run_id:
         with control.journal.connection() as db:
             previous = db.execute("""SELECT run_id FROM react_runs WHERE owner_id=? AND session_id=?
-                AND run_id<>? AND response_json IS NOT NULL ORDER BY started_at DESC LIMIT 1""",
+                AND run_id<>? AND response_json IS NOT NULL
+                AND response_json::jsonb->>'task_status' IN ('complete','partial','empty')
+                AND jsonb_array_length(COALESCE(response_json::jsonb->'tool_results','[]'::jsonb))>0
+                AND COALESCE(response_json::jsonb->>'memory_action','')=''
+                ORDER BY started_at DESC LIMIT 1""",
                 (control.row["owner_id"], control.row["session_id"], control.row["run_id"])).fetchone()
         result["intent"]["source_run_id"] = previous["run_id"] if previous else None
     return result
@@ -50,7 +54,7 @@ def _listing(repository, owner_id, intent):
                                        exact_keys=[intent.key] if intent.key else None, limit=100)
     items = snapshot["items"]
     if not items:
-        return "当前没有符合条件的有效长期记忆。"
+        return "当前没有符合条件的有效长期记忆。", snapshot
     lines = ["当前有效的长期记忆："]
     for item in items[:10]:
         if item["memory_type"] == "research_archive":
@@ -64,7 +68,7 @@ def _listing(repository, owner_id, intent):
             lines.append(f"- {_label(item['key'])}：{_label(item['value'])}（版本 {item['revision']}）。")
     if len(items) > 10:
         lines.append("其余记忆可按类型或档案名称查询。")
-    return "\n".join(lines)
+    return "\n".join(lines), snapshot
 
 
 def execute_memory_request(state, control):
@@ -75,14 +79,19 @@ def execute_memory_request(state, control):
     operation_id = control.row["run_id"] + ":memory"
     action = {"action": intent.action, "memory_type": intent.memory_type,
               "key": intent.key, "operation_id": operation_id}
+    before = retrieve_for_run(control, state["current_query"])
+    source_identity = {"owner_revision": before.owner_revision,
+                       "context_fingerprint": before.context_fingerprint}
     try:
         if intent.action == "unsupported":
             answer = ("目前长期记忆支持回答详略、展示格式、研究主题和有来源的历史报告。"
                       "请一次明确提出一项保存、修改或删除请求；当前没有执行任何记忆变更。")
         elif intent.action == "list":
-            answer = _listing(repository, owner_id, intent)
+            answer, source_identity = _listing(repository, owner_id, intent)
         elif intent.action == "delete" and not request["memory_id"]:
-            answer = "这项长期记忆不存在，无需删除。"
+            answer = "本轮读取时没有找到这项长期记忆，未执行删除。"
+            if before.owner_revision != request["expected_owner_revision"]:
+                raise MemoryConflict("Memory changed after review")
         else:
             if intent.action == "save":
                 write = MemoryWrite(
@@ -98,6 +107,8 @@ def execute_memory_request(state, control):
                                            operation_id, control=control,
                                            expected_owner_revision=request["expected_owner_revision"])
             current = result.current
+            source_identity = {"owner_revision": result.owner_revision,
+                               "context_fingerprint": result.context_fingerprint}
             action["memory_id"] = current.memory_id
             if current.deleted_at:
                 answer = "这项长期记忆已删除，之后的问答不会再使用它。"
@@ -121,6 +132,10 @@ def execute_memory_request(state, control):
         answer = "这项内容暂不能保存为长期记忆。历史报告需要已完成的研究结果、明确日期及可核验来源；本次未保存。"
         status, reason = "clarify", "memory_policy"
     retrieved = retrieve_for_run(control, state["current_query"])
+    if (retrieved.owner_revision != source_identity["owner_revision"]
+            or retrieved.context_fingerprint != source_identity["context_fingerprint"]):
+        answer = "长期记忆在本次操作后发生变化，旧内容未发布；请重新查询当前有效的记忆。"
+        status, reason = "partial", "memory_changed"
     return {"answer": answer, "status": status, "stop_reason": reason, "done": True,
             "memory_action": action, "memory_owner_revision": retrieved.owner_revision,
             "memory_context_fingerprint": retrieved.context_fingerprint, "memory_context_used": False,
