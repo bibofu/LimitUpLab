@@ -1,4 +1,5 @@
-from contextlib import asynccontextmanager, closing
+from contextlib import asynccontextmanager, closing, suppress
+import asyncio
 from fastapi import FastAPI, HTTPException
 from fastapi.middleware.cors import CORSMiddleware
 
@@ -21,13 +22,26 @@ validate_admin_security()
 async def lifespan(application):
     from app.database import connect, initialize_database
     from app.services.agent_tracing import configure_agent_tracer, shutdown_agent_tracer
+    from app.services.durable_runtime_host import DurableRuntimeHost
+    from app.database import get_database_url
+    from app.services.agent_run_recovery import supervise_run_recovery
 
     configure_agent_tracer()
+    host = None
+    recovery = None
     try:
         with closing(connect()) as db:
             initialize_database(db)
+        host = await asyncio.to_thread(lambda: DurableRuntimeHost(get_database_url()).start())
+        recovery = asyncio.create_task(supervise_run_recovery())
         yield
     finally:
+        if recovery is not None:
+            recovery.cancel()
+            with suppress(asyncio.CancelledError):
+                await recovery
+        if host is not None:
+            await asyncio.to_thread(host.close)
         shutdown_agent_tracer()
 
 

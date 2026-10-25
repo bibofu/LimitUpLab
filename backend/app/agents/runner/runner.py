@@ -34,6 +34,13 @@ from app.services.llm_provider import current_llm_usage
 
 
 class RunnerState(TypedDict, total=False):
+    schema_version: int
+    run_id: str
+    current_query: str
+    conversation: dict
+    remaining_seconds: float
+    context_diagnostics: dict
+    resolved_reference: dict
     messages: list
     pending: list
     answer: str
@@ -66,6 +73,9 @@ class AgentRunner:
         memory=None,
     ):
         self.request = request
+        self.history = history or []
+        self.memory = memory
+        self.durable = False
         self.provider = provider
         self.gateway = BusinessToolGateway(registry)
         self.definitions = business_definitions(self.gateway)
@@ -119,6 +129,9 @@ class AgentRunner:
                 return self._cancelled_stop()
             if perf_counter() >= self.deadline:
                 return self._budget_stop(state)
+            if self.durable:
+                from app.agents.runtime_errors import RecoverableRunError
+                raise RecoverableRunError("模型调用暂时失败，可恢复原任务。") from error
             if state.get("answer_repair"):
                 return {**self._incomplete_stop(state), "error": type(error).__name__}
             return {
@@ -245,8 +258,13 @@ class AgentRunner:
             tool_statuses.append(value.get("status", "error"))
             tool_messages.append({**value, "name": call["name"]})
             # Compact only the model-facing view; traces keep complete evidence.
+            if self.durable:
+                from app.agents.tool_context import format_tool_observation
+                model_value = format_tool_observation(value)
+            else:
+                model_value = self.definition_dedup.compact(call["name"], value)
             messages.append(ToolMessage(
-                content=dump(self.definition_dedup.compact(call["name"], value)),
+                content=dump(model_value),
                 tool_call_id=call["id"],
                 name=call["name"],
             ))
@@ -265,7 +283,11 @@ class AgentRunner:
         with get_agent_tracer().tool(
             name=call.get("name", "unknown"), arguments=call.get("args"),
         ) as span:
-            value = self._execute(call)
+            if self.durable:
+                from app.repositories.tool_result_repository import ToolResultRepository
+                value = ToolResultRepository(CURRENT_CONTROL.get()).execute(call, lambda: self._execute(call))
+            else:
+                value = self._execute(call)
             span.finish(status=value.get("status", "error"), output=value)
             return value
 
@@ -344,7 +366,14 @@ class AgentRunner:
         }
 
     def run(self) -> RunnerResult:
-        """Execute one bounded shadow run."""
+        """Execute the durable production graph or the isolated direct-call graph."""
+
+        from app.agents.runner.durable_runtime import get_runtime
+        runtime = get_runtime()
+        control = CURRENT_CONTROL.get()
+        if (control is not None and runtime is not None
+                and control.row.get("runtime_version") == "durable-v1"):
+            return runtime.run_sync(self, control)
 
         initial: RunnerState = {
             "messages": self.messages,

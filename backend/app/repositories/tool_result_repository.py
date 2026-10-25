@@ -13,6 +13,14 @@ class ToolResultRepository:
         self.store = control.journal
         self.run_id = control.row["run_id"]
 
+    def read(self, call_id):
+        with self.store.connection() as db:
+            row = db.execute("""SELECT payload_json FROM agent_tool_results
+                WHERE run_id=? AND call_id=? AND status='complete'""", (self.run_id, call_id)).fetchone()
+        if row is None:
+            raise RuntimeError("Persisted tool observation is missing")
+        return json.loads(row["payload_json"])
+
     def execute(self, call, operation):
         signature = hashlib.sha256(json.dumps(
             [call["name"], call.get("args", {})], sort_keys=True, ensure_ascii=False,

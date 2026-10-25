@@ -96,8 +96,14 @@ def answer_with_runner(
 
     if progress_callback:
         progress_callback("preparing", "正在检查输入安全与研究边界")
+    from app.agents.run_lifecycle import CURRENT_CONTROL
+    from app.agents.runner.durable_runtime import get_runtime
+    # Durable input review is a checkpointed node. Its result survives retries.
+    control = CURRENT_CONTROL.get()
+    durable = (control is not None and get_runtime() is not None
+               and control.row.get("runtime_version") == "durable-v1")
     try:
-        assessment = review_input_security(
+        assessment = None if durable else review_input_security(
             provider,
             message=request.message,
             timeout_seconds=10,
@@ -109,7 +115,7 @@ def answer_with_runner(
             "error",
             "input_policy_error",
         )
-    if assessment.decision == "refuse":
+    if assessment is not None and assessment.decision == "refuse":
         trading_advice = "trading_advice" in assessment.signals
         return _response(
             request,
