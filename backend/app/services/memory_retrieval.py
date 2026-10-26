@@ -21,6 +21,7 @@ class MemoryRetrievalResult:
     diagnostics: dict[str, Any]
     owner_revision: int
     context_fingerprint: str
+    dependencies: tuple[dict[str, Any], ...] = ()
 
 
 def _datetime(value: Any) -> datetime | None:
@@ -195,10 +196,16 @@ def retrieve_memories(
     fingerprint = snapshot.get("context_fingerprint")
     if not isinstance(fingerprint, str) or not fingerprint:
         raise ValueError("Memory repository must provide the full owner snapshot fingerprint")
+    dependencies = tuple({
+        "memory_id": item["memory_id"],
+        "effective_revision": int(item["revision"]),
+        "scope_key": item.get("scope_key", "global"),
+    } for item in selected)
     return MemoryRetrievalResult(selected, {
         "memory_hit_count": len(selected), "long_term_memory_tokens": used,
         "memory_token_budget": max_tokens, "memory_candidate_count": len(candidates),
         "memory_budget_omitted_count": budget_omitted, "memory_rejected_count": rejected,
         "memory_owner_revision": revision, "memory_context_fingerprint": fingerprint,
+        "memory_dependency_count": len(dependencies),
         "memory_retrieval_mode": "typed_exact_topic_v1",
-    }, revision, fingerprint)
+    }, revision, fingerprint, dependencies)

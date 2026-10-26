@@ -15,7 +15,9 @@ def preference(repo, owner, **changes):
 
 def with_memory(response, retrieval, action=None):
     return {**response, "memory_action": action, "memory_owner_revision": retrieval.owner_revision,
-            "memory_context_fingerprint": retrieval.context_fingerprint, "memory_context_used": bool(retrieval.items)}
+            "memory_context_fingerprint": retrieval.context_fingerprint,
+            "memory_dependencies": list(retrieval.dependencies),
+            "memory_context_used": bool(retrieval.items)}
 
 
 def test_deletion_after_generation_blocks_old_candidate_inside_delivery_transaction(registered_run):
@@ -75,3 +77,52 @@ def test_unchanged_snapshot_preserves_normal_delivery(registered_run):
     delivered = services.delivery.commit(row["run_id"], owner, with_memory(response(row), recalled))
     assert delivered["task_status"] == "complete"
     assert delivered["memory_context_used"] is False
+
+
+def test_unrelated_memory_change_does_not_invalidate_a_dependent_answer(registered_run):
+    services, row, owner, _ = registered_run
+    repo = LongTermMemoryRepository(services.storage.database_url)
+    preference(repo, owner)
+    recalled = retrieve_memories(repo, owner_id=owner, query="研究首板")
+    assert recalled.dependencies
+    repo.put(owner, {"memory_type": "preference", "key": "output_format",
+                     "value": "table", "source_user_message": "以后使用表格"},
+             "save-format")
+    delivered = services.delivery.commit(row["run_id"], owner, with_memory(response(row), recalled))
+    assert delivered["task_status"] == "complete"
+    assert delivered["stop_reason"] == "answered"
+
+
+def test_used_memory_update_invalidates_even_when_owner_fingerprint_is_current(registered_run):
+    services, row, owner, _ = registered_run
+    repo = LongTermMemoryRepository(services.storage.database_url)
+    memory = preference(repo, owner)
+    recalled = retrieve_memories(repo, owner_id=owner, query="研究首板")
+    repo.put(owner, {"memory_type": "preference", "key": "response_style", "value": "detailed",
+                     "expected_revision": memory.current.revision,
+                     "source_user_message": "以后详细回答"}, "update-style")
+    delivered = services.delivery.commit(row["run_id"], owner, with_memory(response(row), recalled))
+    assert delivered["task_status"] == "partial"
+    assert delivered["stop_reason"] == "memory_changed"
+
+
+def test_management_revision_change_does_not_invalidate_answer(registered_run):
+    services, row, owner, _ = registered_run
+    repo = LongTermMemoryRepository(services.storage.database_url)
+    memory = preference(repo, owner)
+    recalled = retrieve_memories(repo, owner_id=owner, query="研究首板")
+    with services.storage.connection() as db:
+        db.execute("""UPDATE long_term_memories SET management_revision=management_revision+1
+            WHERE memory_id=?""", (memory.current.memory_id,))
+    delivered = services.delivery.commit(row["run_id"], owner, with_memory(response(row), recalled))
+    assert delivered["task_status"] == "complete"
+
+
+def test_empty_dependency_set_is_not_invalidated_by_new_memory(registered_run):
+    services, row, owner, _ = registered_run
+    repo = LongTermMemoryRepository(services.storage.database_url)
+    recalled = retrieve_memories(repo, owner_id=owner, query="研究首板")
+    assert recalled.dependencies == ()
+    preference(repo, owner)
+    delivered = services.delivery.commit(row["run_id"], owner, with_memory(response(row), recalled))
+    assert delivered["task_status"] == "complete"

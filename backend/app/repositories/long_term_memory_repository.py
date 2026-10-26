@@ -66,6 +66,53 @@ def _effective_now(db, now=None):
     return db.execute("SELECT clock_timestamp()").fetchone()[0]
 
 
+def dependencies_unchanged_in_connection(db, owner_id, dependencies, now=None):
+    """Check only the effective memories actually used by one answer.
+
+    Management counters, candidates and unrelated memories are intentionally
+    absent from this check.
+    """
+
+    if not dependencies:
+        return True
+    if not isinstance(dependencies, (list, tuple)) or len(dependencies) > 200:
+        return False
+    normalized = []
+    for dependency in dependencies:
+        if not isinstance(dependency, dict):
+            return False
+        memory_id = dependency.get("memory_id")
+        revision = dependency.get("effective_revision")
+        if not isinstance(memory_id, str) or not memory_id:
+            return False
+        if not isinstance(revision, int) or revision < 1:
+            return False
+        normalized.append((
+            memory_id,
+            revision,
+            str(dependency.get("scope_key") or "global"),
+        ))
+    if len({item[0] for item in normalized}) != len(normalized):
+        return False
+    timestamp = _effective_now(db, now)
+    placeholders = ",".join("?" for _ in normalized)
+    rows = db.execute(f"""SELECT memory_id,revision,scope_key,status,deleted_at,expires_at
+        FROM long_term_memories WHERE owner_id=? AND memory_id IN ({placeholders})""",
+        (owner_id, *(item[0] for item in normalized))).fetchall()
+    current = {row["memory_id"]: row for row in rows}
+    for memory_id, revision, scope_key in normalized:
+        row = current.get(memory_id)
+        if row is None:
+            return False
+        if row["status"] != "active" or row["deleted_at"] is not None:
+            return False
+        if row["expires_at"] is not None and row["expires_at"] <= timestamp:
+            return False
+        if int(row["revision"]) != revision or row["scope_key"] != scope_key:
+            return False
+    return True
+
+
 class LongTermMemoryRepository:
     def __init__(self, database_url=None):
         self.database_url = database_url
@@ -94,6 +141,12 @@ class LongTermMemoryRepository:
     def get_owner_revision(self, owner_id):
         with self._connection(readonly=True) as db:
             return self._owner_revision(db, owner_id)
+
+    def dependencies_unchanged(self, owner_id, dependencies, now=None):
+        with self._connection(readonly=True) as db:
+            return dependencies_unchanged_in_connection(
+                db, owner_id, dependencies, now,
+            )
 
     def get(self, owner_id, memory_id, *, include_inactive=False):
         with self._connection(readonly=True) as db:

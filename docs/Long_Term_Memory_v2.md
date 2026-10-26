@@ -25,10 +25,17 @@
   - 自由文本增加中文 bigram/ASCII 词法匹配；
   - 返回 `scope`、`canonical_key`、`structured`、`scope_verified`；
   - 仍使用有界 token 预算。
+- 依赖级交付失效：
+  - 检索返回实际使用的 `(memory_id, effective_revision, scope_key)`；
+  - Graph 状态和公开响应保存 `memory_dependencies`；
+  - 交付只校验这组依赖，无关记忆变化不会阻止回答；
+  - 被使用记忆修改/删除/过期仍返回 `memory_changed`；
+  - `management_revision` 变化不影响交付；
+  - 空依赖集不会被后续新增记忆误判失效。
 - 写入与删除：
   - 保留 owner revision、record revision、operation receipt、tombstone；
   - 删除清空正文、结构化字段、来源引用和 source quote，保留 scope/canonical identity、内容哈希和状态；
-  - 交付前 fingerprint 校验保持不变。
+  - 交付前 fingerprint 校验仅作为旧 checkpoint/旧响应的兼容路径。
 - 真实验收：
   - 保存“以后展示龙虎榜只显示股票名称”；
   - 新会话列出该偏好；
@@ -42,8 +49,8 @@
 
 1. pgvector 语义检索与同义改写召回；
 2. 后台 Memory Extractor / Judge / Consolidator 和 candidate inbox；
-3. `effective_revision` 与 `management_revision` 的完整运行时失效分离；
-4. 按实际依赖记忆版本失效，而不是整个 owner fingerprint；
+3. `management_revision` 的写入方（候选、使用统计、embedding 回填）尚未接入；
+4. 对话清理仍使用全量 context fingerprint，尚未按依赖清理旧 assistant 文本；
 5. 工具级展示偏好的确定性 `display_blocks` 与服务端投影；
 6. 结构化展示顺序与短期引用顺序的统一；
 7. 旧数据迁移到新表后的长期双读/回滚演练；

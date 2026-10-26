@@ -251,15 +251,34 @@ class RunDelivery:
             if row["cancelled"]:
                 response.update(task_status="cancelled", stop_reason="cancelled",
                                 answer="任务已取消，未继续生成研究结论。")
-            if not row["cancelled"] and (response.get("memory_owner_revision") is not None
-                                        or response.get("memory_context_fingerprint") is not None):
+            dependencies = response.get("memory_dependencies") or []
+            has_dependencies = "memory_dependencies" in response
+            if not row["cancelled"] and has_dependencies:
+                from app.repositories.long_term_memory_repository import (
+                    context_identity_in_connection,
+                    dependencies_unchanged_in_connection,
+                )
+
+                if dependencies and not dependencies_unchanged_in_connection(
+                    db, owner_id, dependencies,
+                ):
+                    identity = context_identity_in_connection(db, owner_id)
+                    # A used preference may have been deleted or updated while
+                    # the model was generating. Unrelated memories do not block
+                    # delivery because they were not dependencies of this answer.
+                    response.update(task_status="partial", stop_reason="memory_changed",
+                                    answer="长期记忆在本次生成期间发生变化，旧候选答案未发布。请重新发起查询。",
+                                    memory_owner_revision=identity["owner_revision"],
+                                    memory_context_fingerprint=identity["context_fingerprint"],
+                                    memory_context_used=False, stock_mentions=[], suggested_questions=[])
+            elif not row["cancelled"] and (response.get("memory_owner_revision") is not None
+                                          or response.get("memory_context_fingerprint") is not None):
+                # Compatibility for responses queued before dependency tracking.
                 from app.repositories.long_term_memory_repository import context_identity_in_connection
 
                 identity = context_identity_in_connection(db, owner_id)
                 if (response.get("memory_owner_revision") != identity["owner_revision"]
                         or response.get("memory_context_fingerprint") != identity["context_fingerprint"]):
-                    # A preference may have been deleted while the model was
-                    # generating. Never deliver the old draft after that change.
                     response.update(task_status="partial", stop_reason="memory_changed",
                                     answer="长期记忆在本次生成期间发生变化，旧候选答案未发布。请重新发起查询。",
                                     memory_owner_revision=identity["owner_revision"],

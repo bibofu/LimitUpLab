@@ -112,5 +112,6 @@ def answer_with_runner(
         "memory_action": result.memory_action,
         "memory_owner_revision": result.memory_owner_revision,
         "memory_context_fingerprint": result.memory_context_fingerprint,
+        "memory_dependencies": result.memory_dependencies,
         "memory_context_used": result.memory_context_used,
     })

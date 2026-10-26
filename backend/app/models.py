@@ -1705,6 +1705,7 @@ class AgentChatResponse(BaseModel):
     memory_action: dict[str, Any] | None = None
     memory_owner_revision: int | None = None
     memory_context_fingerprint: str | None = None
+    memory_dependencies: list[dict[str, Any]] = Field(default_factory=list)
     memory_context_used: bool = False
     intent: str
     answer: str

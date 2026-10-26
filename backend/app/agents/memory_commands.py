@@ -145,5 +145,7 @@ def execute_memory_request(state, control):
         status, reason = "partial", "memory_changed"
     return {"answer": answer, "status": status, "stop_reason": reason, "done": True,
             "memory_action": action, "memory_owner_revision": retrieved.owner_revision,
-            "memory_context_fingerprint": retrieved.context_fingerprint, "memory_context_used": False,
+            "memory_context_fingerprint": retrieved.context_fingerprint,
+            "memory_dependencies": list(retrieved.dependencies),
+            "memory_context_used": False,
             "context_diagnostics": retrieved.diagnostics}

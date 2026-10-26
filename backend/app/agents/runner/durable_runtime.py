@@ -131,7 +131,8 @@ def _review(state, deps):
         return {"done": False, "memory_request": proposal,
                 "reference_intent": decision.reference_intent.model_dump(),
                 "memory_owner_revision": retrieved.owner_revision,
-                "memory_context_fingerprint": retrieved.context_fingerprint}
+                "memory_context_fingerprint": retrieved.context_fingerprint,
+                "memory_dependencies": list(retrieved.dependencies)}
 
 
 def _agent(state, deps):
@@ -189,6 +190,7 @@ def _agent(state, deps):
             update["messages"] = [*working, *update["messages"][len(built.messages):]]
         update.update(conversation=conversation, memory_owner_revision=retrieved.owner_revision,
                       memory_context_fingerprint=retrieved.context_fingerprint,
+                      memory_dependencies=list(retrieved.dependencies),
                       memory_context_used=bool(built.diagnostics.get("memory_hit_count", 0)))
         update["context_diagnostics"] = diagnostics
         update["resolved_reference"] = built.resolved_reference or {}
@@ -434,7 +436,8 @@ class DurableRuntime:
                        "answer_repair": False, "compliance_reviewed": False,
                        "context_diagnostics": {}, "resolved_reference": {}, "reference_intent": None,
                        "memory_request": {}, "memory_action": {}, "memory_owner_revision": 0,
-                       "memory_context_fingerprint": "", "memory_context_used": False,
+                       "memory_context_fingerprint": "", "memory_dependencies": [],
+                       "memory_context_used": False,
                        "remaining_seconds": max(0, runner.deadline - perf_counter())}
         previous_progress = runner.progress
         runner.progress = emit_status
@@ -521,17 +524,34 @@ class DurableRuntime:
 
 def result_from_state(state, runner, control):
     from app.agents.result_paging import attach_result_reference
+    from app.repositories.long_term_memory_repository import LongTermMemoryRepository
     from app.repositories.tool_result_repository import ToolResultRepository
-    retrieved = _retrieve(control, state["current_query"])
-    # A final checkpoint may outlive a deletion/update/expiry during downtime.
-    # Never hand its obsolete draft to the delivery transaction after recovery.
-    if (state.get("memory_context_fingerprint")
-            and retrieved.context_fingerprint != state["memory_context_fingerprint"]):
-        return RunnerResult(answer="长期记忆在本次回答生成后发生变化，请重新提问以使用当前有效的记忆。",
-                            status="partial", stop_reason="memory_changed",
-                            memory_action=state.get("memory_action") or None,
-                            memory_owner_revision=retrieved.owner_revision,
-                            memory_context_fingerprint=retrieved.context_fingerprint)
+    dependencies = list(state.get("memory_dependencies") or [])
+    changed = False
+    if dependencies:
+        changed = not LongTermMemoryRepository(
+            control.lifecycle.database_url,
+        ).dependencies_unchanged(control.row["owner_id"], dependencies)
+    elif state.get("memory_context_fingerprint"):
+        # Compatibility for checkpoints created before dependency tracking.
+        retrieved = _retrieve(control, state["current_query"])
+        changed = retrieved.context_fingerprint != state["memory_context_fingerprint"]
+        if changed:
+            return RunnerResult(
+                answer="长期记忆在本次回答生成后发生变化，请重新提问以使用当前有效的记忆。",
+                status="partial", stop_reason="memory_changed",
+                memory_action=state.get("memory_action") or None,
+                memory_owner_revision=retrieved.owner_revision,
+                memory_context_fingerprint=retrieved.context_fingerprint,
+            )
+    if changed:
+        # A final checkpoint may outlive a deletion/update/expiry during downtime.
+        # Never hand its obsolete draft to the delivery transaction after recovery.
+        return RunnerResult(
+            answer="长期记忆在本次回答生成后发生变化，请重新提问以使用当前有效的记忆。",
+            status="partial", stop_reason="memory_changed",
+            memory_action=state.get("memory_action") or None,
+        )
     repository = ToolResultRepository(control)
     observations = [{**attach_result_reference(repository.read(item["result_ref"]), item["result_ref"], control.row["run_id"]),
                      "name": item["name"]}
@@ -544,5 +564,6 @@ def result_from_state(state, runner, control):
                         memory_action=state.get("memory_action") or None,
                         memory_owner_revision=state.get("memory_owner_revision"),
                         memory_context_fingerprint=state.get("memory_context_fingerprint") or None,
+                        memory_dependencies=dependencies,
                         memory_context_used=state.get("memory_context_used", False),
                         duration_ms=round((perf_counter() - runner.started) * 1000))
