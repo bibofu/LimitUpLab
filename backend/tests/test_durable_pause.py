@@ -321,12 +321,10 @@ def test_user_resume_is_bound_to_confirmed_checkpoint_and_interrupt(world, field
 
 def test_pause_before_memory_write_keeps_intent_unapplied_until_resume(world):
     from app.agents.memory_commands import repository_for
-    from test_durable_long_term_memory import review_memory, review_scope
+    from test_durable_long_term_memory import review_memory
     query = "请长期记住：回答保持简洁"
     request, control, history = world.start(query)
-    execution, _ = runner(request, PauseAfterResponse(
-        [review_memory(query), review_scope(query)], control, after=2,
-    ), history=history)
+    execution, _ = runner(request, PauseAfterResponse([review_memory(query)], control, after=1), history=history)
     async def scenario():
         async with runtime_for(world) as runtime:
             with pytest.raises(PausedRunError) as error:

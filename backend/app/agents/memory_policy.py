@@ -67,8 +67,6 @@ MEMORY_REVIEW_RULES = """
 还需识别显式长期记忆管理请求，放入 memory_intent；普通问答、临时要求、否定、引用、假设、
 讨论记忆系统的技术问题均填 null，不能从用户行为自动推断偏好。只有用户明确要求今后/跨会话
 记住、保存、改为、忘记某项偏好，或明确查询已保存的长期记忆时才填写。
-回忆当前会话中的临时代号、数字、研究对象、前一句话，以及更新本次约定，均为普通问答，
-memory_intent=null；“刚才/之前/记得”不等于长期记忆。即使历史中出现长期管理请求也不能继承该操作。
 quote 必须逐字引用当前用户肯定提出该记忆操作的完整原文片段，不得删掉否定或条件语。
 支持 save/delete/list/unsupported。save 是新增或修改；delete 必须指定一个明确的 type/key。
 preference: response_style=concise/balanced/detailed，output_format=paragraphs/bullets/table。
@@ -76,9 +74,6 @@ research_context: research_topic=首板/连板/涨停/炸板/行业/市场情绪
 research_archive: 仅明确保存上一份已交付研究报告，key 使用用户指定的档案名称，未命名用 last_report；
 source_run_id 只可填用户给出的真实 ID，否则 null，服务端解析上一份报告。
 list 可不指定类型表示列出全部长期记忆；单独查看档案必须用 research_archive。
-用户只查询某项时，list 必须填写该项的 memory_type/key，不能扩成全量查询：
-“是否保存了展示格式偏好”对应 preference/output_format；“回答详略偏好”对应 preference/response_style。
-查询某个类型的全部记录只填 memory_type；只有明确查询全部长期记忆才将类型和 key 都留空。
 明确要记住其他内容、交易授权、预测、未经核实的新闻或同时要求多个记忆操作/另做业务查询，
 用 unsupported，不能隐式保存其中一部分。安全拒绝时 memory_intent=null。
 这些字段不能授权交易、扩大工具权限或把历史数据变成当前事实。

@@ -13,7 +13,7 @@ from app.routers.react_chat import failed_response
 from app.services.memory_scope import clean_conversation_for_memory_revision
 from durable_runtime_fixtures import execution_config, run_async
 from test_durable_agent import runner, runtime_for, world
-from test_durable_long_term_memory import review_memory, review_scope
+from test_durable_long_term_memory import review_memory
 from test_memory_retrieval import SnapshotRepository, retrieve
 from test_runner_production import input_review
 from test_runner_shadow import ScriptedProvider
@@ -77,7 +77,7 @@ def test_delete_rebuild_cannot_promote_canceled_command_to_session_constraint():
 def test_crash_before_memory_checkpoint_then_cancel_never_revives_intent(world, monkeypatch, write_committed):
     async def scenario():
         request, control, history = world.start(COMMAND)
-        provider = ScriptedProvider([review_memory(COMMAND), review_scope(COMMAND)])
+        provider = ScriptedProvider([review_memory(COMMAND)])
         execution, _ = runner(request, provider, history=history)
         original = memory_commands.execute_memory_request
 
