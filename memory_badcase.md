@@ -304,3 +304,130 @@
   - [durable_runtime.py](backend/app/agents/runner/durable_runtime.py)
   - [context_builder.py](backend/app/agents/context_builder.py)
   - [tools.py](backend/app/agents/tools.py)（`stock_activity` 的 `rating_context`）
+
+---
+
+## 2026-10-26：统计指标追问“那上一个交易日呢”，被误判为股票列表条件
+
+- 状态：**待修复**（本次只分析，未改代码）
+- 影响范围：上一轮是统计/聚合类工具（如 1进2 成功率、晋级率、市场统计），下一轮用“那上一个交易日呢/那昨天呢”等省略式追问同一指标、只换日期。
+- 与前两条的区别：不是单股票“它”，也不是多股票“他们”；本次上一轮根本没有股票列表引用，追问的对象是**上一轮的分析指标 + 新日期**。
+
+### 现象
+
+同一会话先问“今天市场1进2成功率是多少，有多少只股票1进2成功了”，再问“那上一个交易日呢”：
+
+- 第一问 `complete`，使用 `trading_calendar` 和 `daily_board_promotion`，正确回答 2026-10-26 的 1进2 为 8/68 = 11.76%；
+- 第二问直接返回 `clarify / reference_ambiguous`：“尚无已提交的股票列表，请明确股票或先查询名单。”；
+- 第二问没有调用任何工具，模型也没有被调用。
+
+### 复现
+
+- 会话：`chat_62462392562d48a5ae5760e5c9921273`
+- 第一问：`run_3d1d2694883a4418aa3f53024a1ce25c`
+- 第二问：`run_b61ebf3fe51641f387fce1fb9e7abd38`
+
+### 证据
+
+第一问工具结果：
+
+- `trading_calendar`：`rows[0]` 包含 `previous_trade_date="2026-10-23"`，但没有 `symbol`；
+- `daily_board_promotion`：`rows` 只有 1 行，行内没有 `symbol`；真正的股票列表在 `rows[0].promoted_stocks` 中（15 只），每只才有 `symbol/name`；
+- 响应 `references=[]`、`active_references=null`；
+- 但 `stock_mentions` 有 8 只——说明工具数据里确实有股票，只是引用提取没有看到嵌套列表。
+
+第二问 checkpoint：
+
+```json
+"reference_intent": {
+  "kind": "conditions",
+  "quote": "那上一个交易日呢",
+  "ordinal": null,
+  "all_entities": false
+},
+"resolved_reference": {},
+"active_references": null,
+"context_diagnostics": {
+  "history_turns_included": 1,
+  "estimated_input_tokens": 20572,
+  "input_token_budget": 40000,
+  "reference_resolution": {
+    "status": "clarify",
+    "clarification": "尚无已提交的股票列表，请明确股票或先查询名单。"
+  }
+}
+```
+
+### 根因
+
+1. **引用提取只看 `payload.rows[].symbol`。**
+   [structured_references.py:142-160](backend/app/agents/structured_references.py#L142-L160) 对每个工具结果检查 `rows` 里的 `symbol`。`daily_board_promotion` 的行是统计汇总，股票在嵌套的 `promoted_stocks` 里；`trading_calendar` 则完全没有股票。两者都被跳过，`active_references` 为空。
+
+2. **没有“查询范围引用”或“上一次分析”引用。**
+   当前引用模型把“可回指对象”限定为股票列表。`conditions` 分支需要至少一条带 `query_scope` 的 `valid` 引用（[structured_references.py:195-200](backend/app/agents/structured_references.py#L195-L200)），但统计工具没有生成任何引用，于是直接落到“尚无已提交的股票列表”。
+
+3. **“那上一个交易日呢”被分类为 `conditions`，但错误信息按股票列表语义解释。**
+   [reference_intent.py:40](backend/app/agents/reference_intent.py#L40) 把“沿用上次查询条件再查询”归为 `conditions`。本次用户确实是“同一个指标、换一个日期”，分类本身不算错；错在解析器只支持股票列表的 `query_scope`，没有“上一次分析指标 + 日期覆盖”的表示。返回“尚无已提交的股票列表”对用户是答非所问。
+
+4. **`daily_board_promotion` 的 `query_scope` 只有 `{days:1}`，并不包含实际使用的日期。**
+   即使把 `{days:1}` 作为条件继承，也不能自动得到“上一个交易日 = 2026-10-23”。需要模型读取第一问 `trading_calendar` 的 `previous_trade_date` 并重新查询；但澄清在模型调用前短路，模型看不到这些历史。
+
+5. **澄清在模型调用前短路。**
+   [durable_runtime.py:175-177](backend/app/agents/runner/durable_runtime.py#L175-L177) 直接返回澄清；[context_builder.py:30](backend/app/agents/context_builder.py#L30) 的规则又要求按澄清提示询问。`recent_messages` 已包含上一轮的指标、8/68、`previous_trade_date=2026-10-23`，但模型没有机会使用。
+
+6. **本质问题：引用系统缺少“分析型追问”这一层。**
+   “那上一个交易日呢”不是股票实体回指，也不是股票列表条件继承；它是**同一分析指标的省略式追问 + 新日期**。当前 `entities/conditions/none` 三分类里没有合适的语义。
+
+### 已排除项
+
+- **不是上下文预算问题**：`estimated_input_tokens=20572`，预算 `40000`。
+- **不是短期记忆未保存**：`history_turns_included=1`，`recent_messages` 包含上一轮完整问答。
+- **不是股票提及提取问题**：`stock_mentions` 已提取 8 只晋级股票。
+- **不是长期记忆问题**：`memory_hit_count=0`。
+- **不是第一问数据错误**：第一问 8/68=11.76% 与工具 `daily_board_promotion` 返回一致。
+
+### 解决方案
+
+按优先级：
+
+1. **P1：为统计/聚合工具保留可核验的查询范围。**
+   - 即使工具结果没有股票 `symbol`，只要 payload 有合法 `query_scope`，也生成 `query_scope` 引用（`reference_type="query_scope"`）；
+   - 或在 `conversation` 中单独保存 `last_tool_scope`，不要求同时存在股票列表；
+   - `conditions` 分支应能使用这种引用，而不是要求股票列表。
+
+2. **P1：增加“分析型追问”语义。**
+   - 在 `ReferenceIntent` 中区分“沿用上次查询条件”和“沿用上次分析指标 + 新日期”；
+   - 后者应携带上一轮工具、指标名称和日期覆盖信息，允许模型用 `trading_calendar.previous_trade_date` 解析“上一个交易日”，再调用同一工具；
+   - 无法解析日期或指标时才澄清。
+
+3. **P1：修正错误提示。**
+   `conditions` 找不到任何可核验范围时，不应返回“尚无已提交的股票列表”；应返回“上一轮未保留可核验的查询条件，请重新说明指标或日期”，避免把统计追问误导成股票选择。
+
+4. **P2：引用提取递归处理嵌套股票列表。**
+   `daily_board_promotion.promoted_stocks` 这类嵌套列表可以递归提取，至少用于 `stock_mentions` 或可选的实体引用；但本问题的关键仍是查询范围，而不是股票列表。
+
+5. **P3：补回归测试。**
+   - 统计工具（1进2/晋级率）后问“那上一个交易日呢” → 应重新查询上一交易日并完整回答，不要求股票列表；
+   - 同一指标换日期、换市场等明确覆盖条件；
+   - 股票列表条件继承（“继续上次条件，改为降序”）仍正常；
+   - 多组不同名单/不同日期的股票追问仍澄清；
+   - 单股票“它”和多股票“他们”两条回归不退化。
+
+### 验证计划
+
+修复后至少验证：
+
+1. 复现同样两问：第二问 `complete`，回答 2026-10-23 的 1进2 成功率与成功数量，或明确说明数据缺失；
+2. 第二问 checkpoint 中 `reference_intent` 不再被当成股票列表条件，或 `resolved_reference` 能提供可核验的上一次分析范围；
+3. 股票列表条件继承、单股票“它”、多股票“他们”回归通过；
+4. 多组名单/不同日期仍能正确澄清。
+
+### 关联材料
+
+- 证据文件：`output/ningde-analysis/session_messages_3.json`、`output/ningde-analysis/session_runs_3.json`（Git 忽略目录）
+- 相关实现：
+  - [structured_references.py](backend/app/agents/structured_references.py)
+  - [reference_intent.py](backend/app/agents/reference_intent.py)
+  - [durable_runtime.py](backend/app/agents/runner/durable_runtime.py)
+  - [context_builder.py](backend/app/agents/context_builder.py)
+  - [tools.py](backend/app/agents/tools.py)（`daily_board_promotion` 的嵌套 `promoted_stocks`）
