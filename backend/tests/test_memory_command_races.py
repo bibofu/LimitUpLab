@@ -1,6 +1,5 @@
 """Content must stay bound to the exact memory snapshot that produced it."""
 
-from datetime import datetime, timedelta, timezone
 from types import SimpleNamespace
 
 import pytest
@@ -9,7 +8,6 @@ from app.agents import memory_commands
 from app.agents.memory_policy import MemoryIntent
 from app.agents.runner.durable_runtime import DurableRuntime
 from app.memory_models import MemoryWrite
-from app.models import ChatSessionMessage
 from app.repositories.long_term_memory_repository import LongTermMemoryRepository
 from test_durable_agent import world
 
@@ -94,8 +92,7 @@ def test_new_turn_revokes_summary_before_invoking_summarizer(world, monkeypatch)
     previous = repository.read_context(world.owner)
     repository.delete(world.owner, record.memory_id, record.revision, "delete-before-summary")
     marker = "已撤回的长期简洁偏好"
-    state = {"conversation": {"conversation_summary": marker, "summary_cursor": "a-old",
-                              "active_constraints": [marker],
+    state = {"conversation": {"conversation_summary": marker, "active_constraints": [marker],
                               "memory_context_fingerprint": previous["context_fingerprint"]}}
     history = [
         {"message_id": "u-large", "role": "user", "content": "研究首板" * 1000},
@@ -103,13 +100,7 @@ def test_new_turn_revokes_summary_before_invoking_summarizer(world, monkeypatch)
          "metadata": {"memory_context_used": True,
                       "memory_context_fingerprint": previous["context_fingerprint"]}},
         {"message_id": "u-latest", "role": "user", "content": "只看主板"},
-        {"message_id": "a-latest", "role": "assistant", "content": "已按主板范围完成说明。"},
     ]
-    started = datetime(2026, 10, 23, tzinfo=timezone.utc)
-    for index, message in enumerate(history):
-        world.chats.append_message(ChatSessionMessage(
-            session_id=world.session_id, created_at=started + timedelta(seconds=index), **message,
-        ), owner_id=world.owner)
     captured = []
 
     def summarize(*, existing, messages, llm_provider):
@@ -124,6 +115,4 @@ def test_new_turn_revokes_summary_before_invoking_summarizer(world, monkeypatch)
     assert existing is None or marker not in existing.model_dump_json()
     assert all(marker not in message.content for message in sent_messages)
     assert result["summary_triggered"]
-    assert result["summary_recovered_from_ledger"]
-    assert result["summary_recovery_source_count"] == 2
     assert marker not in str(result)

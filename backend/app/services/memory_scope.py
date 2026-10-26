@@ -8,13 +8,6 @@ from typing import Any
 
 from langchain_core.messages import AIMessage, BaseMessage, ToolMessage
 
-SESSION_SUMMARY_SCOPE_VERSION = 1
-
-
-def has_session_summary_lineage(state: dict) -> bool:
-    """Only the server's filtered summary pipeline may issue this marker."""
-    return state.get("summary_scope_version") == SESSION_SUMMARY_SCOPE_VERSION
-
 
 def _value(item, key, default=None):
     return item.get(key, default) if isinstance(item, dict) else getattr(item, key, default)
@@ -60,8 +53,8 @@ def summary_source_messages(messages: list[Any]) -> list[Any]:
 def clean_conversation_for_memory_revision(conversation: dict, retrieval) -> dict:
     """Return an isolated view; the runtime may persist ONLY this cleaned state.
 
-    Keep summaries whose entire lineage excludes cross-session preferences.
-    Unknown historical summaries still require ledger recovery at runtime.
+    On revocation, drop derived free text wholesale and rebuild from safe recent
+    user/session turns. Do not patch remembered sentences by string replacement.
     """
     state = copy.deepcopy(conversation)
     recent = filter_memory_control_turns(state.get("recent_messages", []))
@@ -78,8 +71,6 @@ def clean_conversation_for_memory_revision(conversation: dict, retrieval) -> dic
     if changed:
         recent = [item for item in recent if _value(item, "role") != "assistant"
                   or _metadata(item).get("memory_context_fingerprint") == retrieval.context_fingerprint]
-    if changed and not has_session_summary_lineage(state):
-        had_summary_source = bool(state.get("conversation_summary") or state.get("summary_cursor"))
         from app.models import ChatSessionMessage
         from app.services.conversation_summary import deterministic_summary
         from app.agents.structured_references import supported_session_constraints
@@ -96,9 +87,6 @@ def clean_conversation_for_memory_revision(conversation: dict, retrieval) -> dic
         state["summary_revision"] = int(state.get("summary_revision", 0)) + 1
         state["summary_generation_mode"] = "deterministic_memory_scope_rebuild"
         state["memory_scope_rebuilt"] = True
-        if not had_summary_source:
-            # A short session has no discarded compressed sources to recover.
-            state["summary_scope_version"] = SESSION_SUMMARY_SCOPE_VERSION
     else:
         state["memory_scope_rebuilt"] = False
     state["recent_messages"] = recent

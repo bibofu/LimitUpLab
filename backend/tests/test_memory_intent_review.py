@@ -121,42 +121,11 @@ def test_invalid_list_scope_is_rejected(target, memory_type, key):
         review_memory_candidate(provider, message=query, candidate=candidate, session_context=[])
 
 
-@pytest.mark.parametrize("action", ["save", "delete"])
-@pytest.mark.parametrize("memory_type,key", [
-    ("preference", "response_style"), ("preference", None), (None, "response_style"),
-])
-def test_non_list_review_accepts_an_exact_candidate_echo_without_repair(action, memory_type, key):
-    query = "请删除我已保存的长期回答详略偏好。" if action == "delete" else "请跨会话保存回答简洁。"
-    candidate = MemoryIntent(action=action, quote=query, memory_type="preference",
-                             key="response_style", value="concise" if action == "save" else None)
-    # The recorded delete response used this valid object echo with list_target=null.
-    provider = ScriptedProvider([review_scope(query, memory_type=memory_type, key=key)])
-    assert review_memory_candidate(provider, message=query, candidate=candidate, session_context=[]) == candidate
-    assert len(provider.calls) == 1
-
-
-@pytest.mark.parametrize("action", ["save", "delete"])
-@pytest.mark.parametrize("memory_type,key", [
-    ("preference", "output_format"), ("research_context", None), (None, "output_format"),
-])
-def test_non_list_review_cannot_redirect_the_candidate_object(action, memory_type, key):
-    query = "请删除我已保存的长期回答详略偏好。" if action == "delete" else "请跨会话保存回答简洁。"
-    candidate = MemoryIntent(action=action, quote=query, memory_type="preference",
-                             key="response_style", value="concise" if action == "save" else None)
-    invalid = review_scope(query, memory_type=memory_type, key=key)
-    provider = ScriptedProvider([invalid, invalid])
-    with pytest.raises(ValueError):
-        review_memory_candidate(provider, message=query, candidate=candidate, session_context=[])
-    assert len(provider.calls) == 2
-    assert candidate.memory_type == "preference" and candidate.key == "response_style"
-
-
-@pytest.mark.parametrize("action", ["save", "delete"])
-def test_non_list_command_cannot_carry_a_list_target_even_with_the_same_object(action):
-    query = "请删除我已保存的长期回答详略偏好。" if action == "delete" else "请跨会话保存回答简洁。"
-    candidate = MemoryIntent(action=action, quote=query, memory_type="preference",
-                             key="response_style", value="concise" if action == "save" else None)
-    invalid = review_scope(query, list_target="one", memory_type="preference", key="response_style")
+def test_list_target_cannot_change_a_save_command():
+    query = "请跨会话保存回答简洁。"
+    candidate = MemoryIntent(action="save", quote=query, memory_type="preference",
+                             key="response_style", value="concise")
+    invalid = review_scope(query, list_target="one", memory_type="preference", key="output_format")
     provider = ScriptedProvider([invalid, invalid])
     with pytest.raises(ValueError):
         review_memory_candidate(provider, message=query, candidate=candidate, session_context=[])

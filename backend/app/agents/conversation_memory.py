@@ -17,10 +17,7 @@ from app.services.conversation_summary import (
     SUMMARY_SCHEMA_VERSION, ConversationSummary, build_summary, deterministic_summary,
     generate_summary, successful_messages,
 )
-from app.services.memory_scope import (
-    SESSION_SUMMARY_SCOPE_VERSION, filter_memory_control_turns,
-    has_session_summary_lineage, summary_source_messages,
-)
+from app.services.memory_scope import filter_memory_control_turns, summary_source_messages
 from app.agents.structured_references import supported_session_constraints
 
 
@@ -30,10 +27,6 @@ class MemoryRevisionConflict(ValueError):
 
 class MemoryCursorError(ValueError):
     """The supplied window cannot prove its ordering after the durable cursor."""
-
-
-class MemorySummaryError(ValueError):
-    """Recovery cannot publish a lossy fallback as a recovered summary."""
 
 
 def _record(item: Any) -> dict[str, Any]:
@@ -82,7 +75,7 @@ def _existing_summary(state: dict) -> ConversationSummary | None:
 def compress_conversation(
     conversation: dict[str, Any], committed_messages: list[Any], provider=None, *,
     expected_revision: int | None = None, summary_trigger_tokens: int = 6000,
-    recent_window_tokens: int = 2400, require_summary_success: bool = False,
+    recent_window_tokens: int = 2400,
 ) -> dict[str, Any]:
     """Append committed turns once, then summarize older whole turns if needed.
 
@@ -145,7 +138,6 @@ def compress_conversation(
                      summary_deferred_reason="no_session_scoped_summary_sources")
         return state
     existing = _existing_summary(state)
-    trusted_lineage = existing is None or has_session_summary_lineage(state)
     try:
         if provider is None:
             draft, mode, model = deterministic_summary(existing, models), "deterministic", None
@@ -154,8 +146,6 @@ def compress_conversation(
     except Exception as error:  # summary is optional; facts remain in the chat ledger
         draft, mode, model = deterministic_summary(existing, models), "deterministic", None
         state["summary_error"] = type(error).__name__
-    if require_summary_success and mode == "deterministic":
-        raise MemorySummaryError("Session summary recovery needs a successful semantic summary")
     summary = build_summary(existing=existing, draft=draft, messages=models)
     state.update(
         conversation_summary=summary.summary,
@@ -169,11 +159,6 @@ def compress_conversation(
         summary_generation_mode=mode, summary_model=model,
         summary_schema_version=SUMMARY_SCHEMA_VERSION, summary_triggered=True,
     )
-    # Never trust a model-supplied marker, or launder an unknown previous summary.
-    if trusted_lineage:
-        state["summary_scope_version"] = SESSION_SUMMARY_SCOPE_VERSION
-    else:
-        state.pop("summary_scope_version", None)
     active = state.get("active_constraints", [])
     if isinstance(active, list) and any(isinstance(item, dict) for item in active):
         state["active_constraints"] = supported_session_constraints(active, state.get("active_references", []))
