@@ -158,6 +158,8 @@ def _agent(state, deps):
         if runner.request.trade_date:
             page["trade_date"] = runner.request.trade_date.isoformat()
         retrieved = _retrieve(deps.control, state["current_query"])
+        from app.services.memory_display import display_policies_for
+        display_policies = display_policies_for(retrieved.items, state["current_query"])
         conversation = clean_conversation_for_memory_revision(state["conversation"], retrieved)
         working = sanitize_working_messages_for_memory_revision(
             state.get("messages", []), retrieved, state.get("memory_context_fingerprint"),
@@ -191,6 +193,7 @@ def _agent(state, deps):
         update.update(conversation=conversation, memory_owner_revision=retrieved.owner_revision,
                       memory_context_fingerprint=retrieved.context_fingerprint,
                       memory_dependencies=list(retrieved.dependencies),
+                      display_policies=display_policies,
                       memory_context_used=bool(built.diagnostics.get("memory_hit_count", 0)))
         update["context_diagnostics"] = diagnostics
         update["resolved_reference"] = built.resolved_reference or {}
@@ -437,7 +440,7 @@ class DurableRuntime:
                        "context_diagnostics": {}, "resolved_reference": {}, "reference_intent": None,
                        "memory_request": {}, "memory_action": {}, "memory_owner_revision": 0,
                        "memory_context_fingerprint": "", "memory_dependencies": [],
-                       "memory_context_used": False,
+                       "display_policies": [], "memory_context_used": False,
                        "remaining_seconds": max(0, runner.deadline - perf_counter())}
         previous_progress = runner.progress
         runner.progress = emit_status
@@ -556,9 +559,14 @@ def result_from_state(state, runner, control):
     observations = [{**attach_result_reference(repository.read(item["result_ref"]), item["result_ref"], control.row["run_id"]),
                      "name": item["name"]}
                     if item.get("result_ref") else item for item in state.get("tool_messages", [])]
+    from app.services.memory_display import build_display_blocks
+    display_blocks = build_display_blocks(
+        observations, list(state.get("display_policies") or []),
+    )
     return RunnerResult(answer=state.get("answer", ""), status=state.get("status", "error"),
                         stop_reason=state.get("stop_reason", "unknown"), tool_calls=state.get("tool_calls", []),
-                        tool_messages=observations, model_rounds=state.get("model_rounds", 0),
+                        tool_messages=observations, display_blocks=display_blocks,
+                        model_rounds=state.get("model_rounds", 0),
                         tool_count=state.get("tool_count", 0), error=state.get("error"),
                         compliance_reviewed=state.get("compliance_reviewed", False),
                         memory_action=state.get("memory_action") or None,

@@ -11,6 +11,7 @@ from app.models import (
     AgentChatPerformance,
     AgentChatRequest,
     AgentChatResponse,
+    AgentDisplayBlock,
     AgentToolOutcome,
     AgentToolTrace,
 )
@@ -113,5 +114,8 @@ def answer_with_runner(
         "memory_owner_revision": result.memory_owner_revision,
         "memory_context_fingerprint": result.memory_context_fingerprint,
         "memory_dependencies": result.memory_dependencies,
+        "display_blocks": [
+            AgentDisplayBlock.model_validate(item) for item in result.display_blocks
+        ],
         "memory_context_used": result.memory_context_used,
     })

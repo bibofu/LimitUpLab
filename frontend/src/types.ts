@@ -579,6 +579,21 @@ export interface ChatSessionsResponse {
   generated_by: string;
 }
 
+export interface AgentDisplayBlock {
+  kind: "table";
+  source_tool: string;
+  source_tool_index: number;
+  columns: string[];
+  column_labels: Record<string, string>;
+  rows: Array<Record<string, unknown>>;
+  row_count: number;
+  displayed_count: number;
+  ordered_symbols: string[];
+  missing_columns: string[];
+  truncated: boolean;
+  display_policy_id: string | null;
+}
+
 export interface AgentChatResponse {
   session_id: string;
   run_id: string | null;
@@ -587,6 +602,7 @@ export interface AgentChatResponse {
   stock_mentions: AgentStockMention[];
   tool_calls: string[];
   tool_results: AgentToolTrace[];
+  display_blocks: AgentDisplayBlock[];
   evidence_cards: AgentEvidenceCard[];
   tool_policy: AgentToolPolicyAudit;
   references: string[];

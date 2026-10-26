@@ -32,6 +32,12 @@
   - 被使用记忆修改/删除/过期仍返回 `memory_changed`；
   - `management_revision` 变化不影响交付；
   - 空依赖集不会被后续新增记忆误判失效。
+- 确定性展示块：
+  - `tool_display` 记忆可从 `structured.display_columns` 或“只显示股票名称”等稳定表达推导展示列；
+  - 服务端从完整工具 rows 生成 `display_blocks`，保留 `row_count`、`ordered_symbols`、缺失列和截断标记；
+  - 前端确定性渲染展示块；
+  - 当前问题明确要求其他字段时覆盖长期展示偏好；
+  - 短期引用优先使用展示块的 `ordered_symbols`，而不是从模型正文猜顺序。
 - 写入与删除：
   - 保留 owner revision、record revision、operation receipt、tombstone；
   - 删除清空正文、结构化字段、来源引用和 source quote，保留 scope/canonical identity、内容哈希和状态；
@@ -51,8 +57,8 @@
 2. 后台 Memory Extractor / Judge / Consolidator 和 candidate inbox；
 3. `management_revision` 的写入方（候选、使用统计、embedding 回填）尚未接入；
 4. 对话清理仍使用全量 context fingerprint，尚未按依赖清理旧 assistant 文本；
-5. 工具级展示偏好的确定性 `display_blocks` 与服务端投影；
-6. 结构化展示顺序与短期引用顺序的统一；
+5. 展示块尚未抑制模型正文中的重复 Markdown 表格；当前是“确定性块 + 模型正文”并存；
+6. 只有 `ordered_symbols` 唯一时才能用展示块解析“第二只”；重复股票的榜单仍不可按序号引用；
 7. 旧数据迁移到新表后的长期双读/回滚演练；
 8. 记忆评测集与自动激活校准。
 

@@ -144,6 +144,27 @@ def _displayed_order(answer: str, identities: dict[str, str]) -> list[str] | Non
     return order if len(order) == len(set(order)) else None
 
 
+def _display_block_order(
+    response: dict[str, Any], offset: int, identities: dict[str, str],
+) -> list[str] | None:
+    """Use the deterministic display projection before parsing answer prose."""
+
+    for block in response.get("display_blocks") or []:
+        if not isinstance(block, dict) or block.get("kind") != "table":
+            continue
+        if block.get("source_tool_index") != offset:
+            continue
+        symbols = block.get("ordered_symbols")
+        if not isinstance(symbols, list) or not symbols:
+            return None
+        if any(symbol not in identities for symbol in symbols):
+            return None
+        if len(set(symbols)) != len(symbols):
+            return None
+        return symbols
+    return None
+
+
 def references_from_committed_result(run_id: str, response: dict[str, Any]) -> list[dict[str, Any]]:
     """Call only AFTER delivery commit; cancelled/failed results never become references.
 
@@ -174,14 +195,19 @@ def references_from_committed_result(run_id: str, response: dict[str, Any]) -> l
             identities[symbol] = str(row.get("name") or "")
         if not identities:
             continue
-        displayed = None if duplicate else _displayed_order(str(response.get("answer") or ""), identities)
+        block_order = _display_block_order(response, offset, identities)
+        displayed = block_order if block_order else (
+            None if duplicate else _displayed_order(str(response.get("answer") or ""), identities)
+        )
         scope = _query_scope(payload.get("query_scope"), trace.get("name"))
         arguments = scope["arguments"] if scope is not None else {}
         digest = hashlib.sha256(json.dumps(payload, ensure_ascii=False, sort_keys=True, default=str).encode()).hexdigest()
         references.append({
             "reference_id": f"{run_id}:{offset}:{digest[:12]}",
             "source_run_id": run_id,
-            "reference_type": "displayed_list" if displayed else "tool_result",
+            "reference_type": "display_block" if block_order else (
+                "displayed_list" if displayed else "tool_result"
+            ),
             "source_tool": trace.get("name"),
             "trade_date": payload.get("trade_date") or payload.get("data_as_of"),
             "ordered_symbols": displayed or list(identities),

@@ -30,6 +30,7 @@ def deliver(world, request, control, result):
         "memory_action": result.memory_action, "memory_owner_revision": result.memory_owner_revision,
         "memory_context_fingerprint": result.memory_context_fingerprint,
         "memory_dependencies": result.memory_dependencies,
+        "display_blocks": result.display_blocks,
         "memory_context_used": result.memory_context_used,
     })
     return world.lifecycle.services.delivery.commit(control.row["run_id"], world.owner,

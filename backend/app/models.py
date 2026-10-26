@@ -1696,6 +1696,23 @@ class AgentStockMention(BaseModel):
     trade_date: date | None = None
 
 
+class AgentDisplayBlock(BaseModel):
+    """A deterministic table projection derived from tool evidence and memory."""
+
+    kind: Literal["table"] = "table"
+    source_tool: str
+    source_tool_index: int
+    columns: list[str] = Field(default_factory=list)
+    column_labels: dict[str, str] = Field(default_factory=dict)
+    rows: list[dict[str, Any]] = Field(default_factory=list)
+    row_count: int = 0
+    displayed_count: int = 0
+    ordered_symbols: list[str] = Field(default_factory=list)
+    missing_columns: list[str] = Field(default_factory=list)
+    truncated: bool = False
+    display_policy_id: str | None = None
+
+
 class AgentChatResponse(BaseModel):
     """Tool-grounded chat response from the first-board Agent."""
 
@@ -1714,6 +1731,7 @@ class AgentChatResponse(BaseModel):
     stock_mentions: list[AgentStockMention] = Field(default_factory=list)
     tool_calls: list[str] = Field(default_factory=list)
     tool_results: list["AgentToolTrace"] = Field(default_factory=list)
+    display_blocks: list[AgentDisplayBlock] = Field(default_factory=list)
     evidence_cards: list[AgentEvidenceCard] = Field(default_factory=list)
     tool_policy: AgentToolPolicyAudit = Field(default_factory=AgentToolPolicyAudit)
     references: list[str] = Field(default_factory=list)

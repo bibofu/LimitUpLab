@@ -51,6 +51,8 @@ class RunnerState(TypedDict, total=False):
     memory_action: dict
     memory_owner_revision: int
     memory_context_fingerprint: str
+    memory_dependencies: list[dict[str, Any]]
+    display_policies: list[dict[str, Any]]
     memory_context_used: bool
     messages: list
     pending: list

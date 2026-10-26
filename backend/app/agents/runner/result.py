@@ -13,6 +13,7 @@ class RunnerResult:
     stop_reason: str
     tool_calls: list[str] = field(default_factory=list)
     tool_messages: list[dict[str, Any]] = field(default_factory=list)
+    display_blocks: list[dict[str, Any]] = field(default_factory=list)
     model_rounds: int = 0
     tool_count: int = 0
     duration_ms: int = 0

@@ -119,6 +119,9 @@ memory_type 用 preference 或 research_context；key 使用 preference:...、to
 research:...；value 填有界用户偏好文本；scope_type/scope 标注 tool/intent/topic/entity/condition。
 tool scope 使用公开工具 id，例如 scope={"tool_name":"dragon_tiger_list"}；
 龙虎榜=dragon_tiger_list，K线=stock_kline，财报=stock_financials，个股新闻=stock_news。
+tool_display 偏好应在 structured 中给出展示列，例如
+{"display_columns":["name"]} 或 {"display_columns":["symbol","name"]}；
+列名使用工具字段 id（如 name、symbol），不要填无法验证的字段。
 只有“以后/每次/默认/始终/我习惯”等稳定表达才保存；“这次/先/今天/如果”等临时或条件性表达
 只有在用户明确要求长期保存时才保存。
 交易授权、仓位、目标价、收益承诺、密码/密钥、他人观点、未经核实的新闻、讨论记忆系统本身，

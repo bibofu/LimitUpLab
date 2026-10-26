@@ -99,6 +99,7 @@ function mount(t: TestContext, overrides: Record<string, any> = {}, savedSession
     "../utils/agentChatTransport": transport,
     "../utils/jsonRequest": jsonRequest,
     "./AgentAnswerMarkdown": markdownModule.exports,
+    "./AgentDisplayBlocks": { AgentDisplayBlocks: () => null },
     "./AgentChatProgress": { AgentChatProgress: () => null },
   };
   const module = { exports: {} as any };

@@ -35,6 +35,7 @@ import type {
   AgentChatStreamEvent,
   AgentChatStreamResult,
   AgentChatStreamStage,
+  AgentDisplayBlock,
   AgentStockMention,
   AgentRunCommand,
   AgentRunState,
@@ -44,6 +45,7 @@ import type {
 } from "../types";
 import { AgentAnswerMarkdown } from "./AgentAnswerMarkdown";
 import { AgentChatProgress } from "./AgentChatProgress";
+import { AgentDisplayBlocks } from "./AgentDisplayBlocks";
 import { taskStatusLabel } from "../utils/agentChatTransport";
 import { HttpResponseError } from "../utils/jsonRequest";
 import {
@@ -60,6 +62,7 @@ interface ChatMessage {
   role: "user" | "agent";
   content: string;
   stockMentions: AgentStockMention[];
+  displayBlocks?: AgentDisplayBlock[];
   status?: "success" | "error";
   suggestedQuestions?: string[];
   taskLabel?: string;
@@ -111,6 +114,18 @@ function sessionErrorMessage(error: unknown, fallback: string): string {
   return `${fallback}，请稍后重试。`;
 }
 
+function displayBlocksFromMetadata(value: unknown): AgentDisplayBlock[] {
+  if (!Array.isArray(value)) return [];
+  return value.filter((item): item is AgentDisplayBlock => {
+    if (!item || typeof item !== "object") return false;
+    const block = item as Partial<AgentDisplayBlock>;
+    return block.kind === "table"
+      && Array.isArray(block.columns)
+      && Array.isArray(block.rows)
+      && typeof block.source_tool === "string";
+  });
+}
+
 /**
  * Convert a persisted message and its metadata back into the chat UI representation.
  */
@@ -121,6 +136,7 @@ function restoredChatMessage(message: ChatSessionMessage): ChatMessage {
     role: message.role === "assistant" ? "agent" : "user",
     content: message.content,
     stockMentions: stockMentionsFromMetadata(message.metadata),
+    displayBlocks: displayBlocksFromMetadata(message.metadata.display_blocks),
     status: message.status,
     suggestedQuestions: stringArray(message.metadata.suggested_questions),
     taskLabel: taskStatusLabel(message.metadata.task_status),
@@ -134,6 +150,7 @@ function responseMessageMetadata(response: AgentChatResponse): Partial<ChatMessa
   return {
     runId: response.run_id,
     stockMentions: response.stock_mentions,
+    displayBlocks: response.display_blocks,
     suggestedQuestions: response.suggested_questions,
     status: response.task_status === "error" ? "error" : "success",
     taskLabel: taskStatusLabel(response.task_status),
@@ -883,6 +900,7 @@ export function AgentChatDock({
                     animate={revealingMessageId === item.id}
                     onRevealProgress={followRevealedAnswer}
                   />
+                  <AgentDisplayBlocks blocks={item.displayBlocks} />
                 </div>
               ) : (
                 <p>{item.content}</p>
