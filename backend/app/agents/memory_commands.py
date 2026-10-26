@@ -78,7 +78,8 @@ def execute_memory_request(state, control):
     owner_id = control.row["owner_id"]
     operation_id = control.row["run_id"] + ":memory"
     action = {"action": intent.action, "memory_type": intent.memory_type,
-              "key": intent.key, "operation_id": operation_id}
+              "key": intent.key, "scope_type": intent.scope_type,
+              "scope": intent.scope, "operation_id": operation_id}
     before = retrieve_for_run(control, state["current_query"])
     source_identity = {"owner_revision": before.owner_revision,
                        "context_fingerprint": before.context_fingerprint}
@@ -96,8 +97,11 @@ def execute_memory_request(state, control):
             if intent.action == "save":
                 write = MemoryWrite(
                     memory_type=intent.memory_type, key=intent.key, value=intent.value or "source report",
+                    scope_type=intent.scope_type, scope=intent.scope,
+                    structured=intent.structured,
                     expected_revision=request["expected_revision"], restore_deleted=request["restore_deleted"],
                     source_run_id=intent.source_run_id,
+                    source_quote=intent.quote,
                     source_user_message=json.loads(control.row["request_json"])["message"],
                 )
                 result = repository.put(owner_id, write, operation_id, control=control,
@@ -110,6 +114,9 @@ def execute_memory_request(state, control):
             source_identity = {"owner_revision": result.owner_revision,
                                "context_fingerprint": result.context_fingerprint}
             action["memory_id"] = current.memory_id
+            action["key"] = current.key
+            action["scope_type"] = current.scope_type
+            action["scope"] = current.scope
             if current.deleted_at:
                 answer = "这项长期记忆已删除，之后的问答不会再使用它。"
             elif current.expired:

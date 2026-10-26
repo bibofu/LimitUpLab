@@ -9,6 +9,7 @@ from __future__ import annotations
 import copy
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
+import re
 from typing import Any
 
 MEMORY_TYPES = frozenset({"preference", "research_context", "research_archive"})
@@ -45,21 +46,63 @@ def _archive_valid(item: dict) -> bool:
                 and metadata.get("evidence_references") and metadata.get("report_version"))
 
 
+def _tokens(value: str) -> set[str]:
+    """Cheap lexical tokens shared by Chinese bigrams and ASCII words."""
+
+    text = value.casefold()
+    words = set(re.findall(r"[a-z0-9]{2,}", text))
+    chinese = re.findall(r"[一-鿿]", text)
+    bigrams = {"".join(chinese[index:index + 2]) for index in range(len(chinese) - 1)}
+    return words | bigrams
+
+
+def _scope_matches(item: dict, hint: dict | None) -> tuple[bool, bool]:
+    """Return (allowed, verified) for a scoped memory.
+
+    Unknown scope dimensions stay eligible but unverified so a later tool
+    selection can validate them instead of silently dropping useful memories.
+    """
+
+    scope_type = str(item.get("scope_type") or "global")
+    if scope_type == "global":
+        return True, True
+    scope = item.get("scope") or {}
+    if not isinstance(scope, dict):
+        return False, False
+    required = {
+        "tool": "tool_name",
+        "intent": "intent",
+        "topic": "topic",
+        "entity": "symbol",
+        "condition": "condition",
+    }.get(scope_type)
+    if not required:
+        return True, False
+    expected = str(scope.get(required) or "").strip().casefold()
+    if not hint or not hint.get(required):
+        return True, False
+    actual = str(hint.get(required) or "").strip().casefold()
+    return (expected == actual), True
+
+
 def _rank(item: dict, query: str, exact_keys: set | None, topics: set | None) -> int:
     key = str(item.get("key") or "").casefold()
     item_topics = {str(topic).casefold() for topic in item.get("topics", [])}
     if exact_keys is not None:
         return 100 if key in exact_keys else 0
+    query_tokens = _tokens(query)
+    content_tokens = _tokens(str(item.get("value") or ""))
+    content_matches = len(query_tokens & content_tokens)
     matches = sum(topic in query for topic in item_topics if topic)
     if topics:
         matches += len(item_topics & topics) * 2
     if item.get("memory_type") == "preference":
-        return 20 + matches
+        return 20 + matches + content_matches * 3
     if key and key in query:
         matches += 3
-    if not item_topics:
-        return 1
-    return matches * 10
+    if not item_topics and not content_matches:
+        return 0
+    return matches * 10 + content_matches * 3
 
 
 def retrieve_memories(
@@ -67,7 +110,7 @@ def retrieve_memories(
     memory_types: tuple[str, ...] = ("preference", "research_context"),
     exact_keys: list[str] | None = None, topics: list[str] | None = None,
     allow_archives: bool = False, max_tokens: int = 1200,
-    now: datetime | None = None,
+    now: datetime | None = None, scope_hint: dict | None = None,
 ) -> MemoryRetrievalResult:
     """Read current valid records, apply typed relevance, deduplicate and budget.
 
@@ -100,16 +143,23 @@ def retrieve_memories(
                 or not isinstance(item.get("value"), str) or not item.get("memory_id")):
             rejected += 1
             continue
+        if item.get("status", "active") != "active":
+            rejected += 1
+            continue
+        allowed, verified = _scope_matches(item, scope_hint)
+        if not allowed:
+            rejected += 1
+            continue
         item_topics = {str(topic).casefold() for topic in item.get("topics", [])}
         if requested_topics and not item_topics.intersection(requested_topics):
             continue
         score = _rank(item, query.casefold(), keys, requested_topics)
         if score:
-            candidates.append((score, item))
+            candidates.append((score, item, verified))
     candidates.sort(key=lambda pair: (pair[0], int(pair[1].get("revision", 0)),
                                      str(pair[1].get("updated_at") or ""), pair[1]["memory_id"]), reverse=True)
     selected, seen_keys, seen_content, budget_omitted, used = [], set(), set(), 0, 0
-    for _, item in candidates:
+    for _, item, verified in candidates:
         kind = item["memory_type"]
         identity = (kind, str(item.get("key") or "").casefold())
         metadata = item.get("metadata") or {}
@@ -120,6 +170,12 @@ def retrieve_memories(
         # user commands and arbitrary repository metadata remain out of context.
         view = {"memory_id": item["memory_id"], "key": item.get("key"), "memory_type": kind,
                 "value": item["value"], "topics": item.get("topics", []),
+                "scope_type": item.get("scope_type", "global"),
+                "scope": item.get("scope", {}),
+                "scope_key": item.get("scope_key", "global"),
+                "canonical_key": item.get("canonical_key"),
+                "structured": item.get("structured", {}),
+                "scope_verified": verified,
                 "revision": int(item.get("revision", 0)), "expires_at": expires,
                 "source_run_id": item.get("source_run_id"), "current_market_evidence": False,
                 "historical": kind == "research_archive"}

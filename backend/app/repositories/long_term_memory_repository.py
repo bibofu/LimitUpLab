@@ -7,7 +7,12 @@ import json
 from uuid import uuid4
 
 from app.database import begin_write, connect, connect_readonly, initialize_database
-from app.memory_models import MemoryMutationResult, MemoryRecord, MemoryWrite
+from app.memory_models import (
+    MemoryMutationResult,
+    MemoryRecord,
+    MemoryWrite,
+    memory_scope_key,
+)
 from app.services.runtime_coordination import LeaseLost
 
 MEMORY_TYPES = {"preference", "research_context", "research_archive"}
@@ -27,11 +32,17 @@ def _encode(value):
     return json.dumps(value, ensure_ascii=False, sort_keys=True, allow_nan=False, separators=(",", ":"))
 
 
+def _content_hash(value):
+    return sha256(value.encode("utf-8")).hexdigest() if value else None
+
+
 def _record(row):
     item = dict(row)
     item["key"] = item.pop("memory_key")
     item["topics"] = json.loads(item.pop("topics_json"))
     item["metadata"] = json.loads(item.pop("metadata_json"))
+    item["scope"] = json.loads(item.pop("scope_json", "{}") or "{}")
+    item["structured"] = json.loads(item.pop("structured_json", "{}") or "{}")
     return MemoryRecord.model_validate(item)
 
 
@@ -40,7 +51,8 @@ def context_identity_in_connection(db, owner_id, now=None):
     timestamp = _effective_now(db, now)
     version = db.execute("SELECT revision FROM memory_owner_versions WHERE owner_id=?", (owner_id,)).fetchone()
     active = db.execute("""SELECT memory_id,revision FROM long_term_memories WHERE owner_id=?
-        AND deleted_at IS NULL AND (expires_at IS NULL OR expires_at>?) ORDER BY memory_id""",
+        AND status='active' AND deleted_at IS NULL
+        AND (expires_at IS NULL OR expires_at>?) ORDER BY memory_id""",
         (owner_id, timestamp)).fetchall()
     return {"owner_revision": int(version[0]) if version else 0,
             "context_fingerprint": sha256(_encode([[row[0], row[1]] for row in active]).encode()).hexdigest()}
@@ -86,7 +98,10 @@ class LongTermMemoryRepository:
     def get(self, owner_id, memory_id, *, include_inactive=False):
         with self._connection(readonly=True) as db:
             row = self._owned(db, owner_id, memory_id)
-            if row is None or (not include_inactive and (row["deleted_at"] or row["expired"])):
+            if row is None or (
+                not include_inactive
+                and (row["deleted_at"] or row["expired"] or row["status"] != "active")
+            ):
                 return None
             return _record(row)
 
@@ -95,7 +110,10 @@ class LongTermMemoryRepository:
             row = db.execute("""SELECT *,COALESCE(expires_at<=clock_timestamp(),FALSE) AS expired
                 FROM long_term_memories WHERE owner_id=? AND memory_type=? AND memory_key=?""",
                 (owner_id, memory_type, key)).fetchone()
-            if row is None or (not include_inactive and (row["deleted_at"] or row["expired"])):
+            if row is None or (
+                not include_inactive
+                and (row["deleted_at"] or row["expired"] or row["status"] != "active")
+            ):
                 return None
             return _record(row)
 
@@ -106,7 +124,7 @@ class LongTermMemoryRepository:
             raise ValueError("Invalid memory filter or limit")
         if now is not None and now.tzinfo is None:
             raise ValueError("Memory time must include a timezone")
-        conditions = ["owner_id=?", "deleted_at IS NULL"]
+        conditions = ["owner_id=?", "status='active'", "deleted_at IS NULL"]
         params = [owner_id]
         if selected:
             conditions.append("memory_type IN (" + ",".join("?" for _ in selected) + ")")
@@ -221,22 +239,49 @@ class LongTermMemoryRepository:
             if row is None and write.restore_deleted:
                 raise MemoryConflict("Only a deleted memory can be restored")
             memory_id = row["memory_id"] if row else "memory_" + uuid4().hex
-            values = (write.value, _encode(write.topics), _encode(write.metadata), write.expires_at,
-                      write.source_run_id, write.source_user_message)
+            scope_json = _encode(write.scope)
+            scope_key = memory_scope_key(write.scope_type, write.scope)
+            canonical_key = write.canonical_key or write.key
+            structured_json = _encode(write.structured)
+            source_quote = write.source_quote
+            content_hash = _content_hash(write.value)
+            values = (
+                write.value, _encode(write.topics), _encode(write.metadata),
+                scope_json, scope_key, canonical_key, structured_json,
+                source_quote, content_hash, write.expires_at,
+                write.source_run_id, write.source_user_message,
+            )
             if row:
-                same = (not row["deleted_at"] and row["value"] == write.value
-                        and json.loads(row["topics_json"]) == write.topics
-                        and json.loads(row["metadata_json"]) == write.metadata and row["expires_at"] == write.expires_at)
+                same = (
+                    not row["deleted_at"]
+                    and row["status"] == "active"
+                    and row["value"] == write.value
+                    and json.loads(row["topics_json"]) == write.topics
+                    and json.loads(row["metadata_json"]) == write.metadata
+                    and json.loads(row["scope_json"]) == write.scope
+                    and row["scope_type"] == write.scope_type
+                    and row["canonical_key"] == canonical_key
+                    and json.loads(row["structured_json"]) == write.structured
+                    and row["source_quote"] == source_quote
+                    and row["expires_at"] == write.expires_at
+                )
                 if same:
                     return self._finish(db, owner_id, operation_id, fingerprint, "put", memory_id, changed=False)
-                db.execute("""UPDATE long_term_memories SET value=?,topics_json=?,metadata_json=?,expires_at=?,
-                    source_run_id=?,source_user_message=?,deleted_at=NULL,revision=revision+1,updated_at=clock_timestamp()
-                    WHERE owner_id=? AND memory_id=? AND revision=?""", (*values, owner_id, memory_id, write.expected_revision))
+                db.execute("""UPDATE long_term_memories SET value=?,topics_json=?,metadata_json=?,
+                    scope_json=?,scope_key=?,canonical_key=?,structured_json=?,source_quote=?,
+                    content_hash=?,expires_at=?,source_run_id=?,source_user_message=?,
+                    status='active',source_kind='explicit',deleted_at=NULL,
+                    revision=revision+1,updated_at=clock_timestamp()
+                    WHERE owner_id=? AND memory_id=? AND revision=?""",
+                    (*values, owner_id, memory_id, write.expected_revision))
             else:
                 db.execute("""INSERT INTO long_term_memories
                     (memory_id,owner_id,memory_type,memory_key,revision,value,topics_json,metadata_json,
-                     expires_at,source_run_id,source_user_message) VALUES(?,?,?,?,1,?,?,?,?,?,?)""",
-                    (memory_id, owner_id, write.memory_type, write.key, *values))
+                     scope_json,scope_key,canonical_key,structured_json,source_quote,content_hash,
+                     expires_at,source_run_id,source_user_message,scope_type,status,source_kind)
+                    VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,'active','explicit')""",
+                    (memory_id, owner_id, write.memory_type, write.key, *values,
+                     write.scope_type))
             return self._finish(db, owner_id, operation_id, fingerprint, "put", memory_id)
 
     def delete(self, owner_id, memory_id, expected_revision, operation_id, *, control=None, expected_owner_revision=None):
@@ -258,7 +303,8 @@ class LongTermMemoryRepository:
             if row["deleted_at"]:
                 return self._finish(db, owner_id, operation_id, fingerprint, "delete", memory_id, changed=False)
             db.execute("""UPDATE long_term_memories SET value=NULL,topics_json='[]',metadata_json='{}',
-                source_run_id=NULL,source_user_message='',expires_at=NULL,deleted_at=clock_timestamp(),
+                structured_json='{}',source_quote=NULL,source_run_id=NULL,source_user_message='',
+                expires_at=NULL,status='deleted',deleted_at=clock_timestamp(),
                 updated_at=clock_timestamp(),revision=revision+1 WHERE owner_id=? AND memory_id=? AND revision=?""",
                 (owner_id, memory_id, expected_revision))
             return self._finish(db, owner_id, operation_id, fingerprint, "delete", memory_id)

@@ -162,3 +162,56 @@ def test_security_rejects_fabricated_memory_consent_quote():
     provider = ScriptedProvider([response, response])
     with pytest.raises(ValueError, match="exact current-user request quote"):
         review_input_security(provider, message="解释长期记忆系统")
+
+
+def review_free_text(query):
+    return AIMessage(content="", tool_calls=[{"id": "review", "name": "submit_input_security_review", "args": {
+        "decision": "allow", "signals": [], "reason": "用户明确保存展示偏好",
+        "reference_intent": {"kind": "none"},
+        "memory_intent": {
+            "action": "save", "quote": query, "memory_type": "preference",
+            "key": "tool_display:龙虎榜",
+            "value": "展示龙虎榜时只显示股票名称",
+            "scope_type": "tool", "scope": {"tool": "龙虎榜"},
+        },
+    }}])
+
+
+def test_free_text_scoped_preference_saves_and_recalls_in_a_new_session(world):
+    async def scenario():
+        query = "以后展示龙虎榜只显示股票名称"
+        request, control, history = world.start(query)
+        provider = ScriptedProvider([review_free_text(query)])
+        execution, calls = runner(request, provider, history=history)
+        async with runtime_for(world) as runtime:
+            result = await runtime.run(execution, control)
+            assert result.status == "answered" and "已保存长期记忆" in result.answer
+            assert calls == [] and len(provider.calls) == 1
+            deliver(world, request, control, result)
+
+        repository = repository_for(control)
+        saved = repository.get_by_key(
+            world.owner, "preference", "tool_display:dragon_tiger_list",
+        )
+        assert saved is not None
+        assert saved.value == "展示龙虎榜时只显示股票名称"
+        assert saved.scope_type == "tool"
+        assert saved.scope == {"tool_name": "dragon_tiger_list"}
+        assert saved.source_quote == query
+
+        world.session_id = world.chats.create_session(owner_id=world.owner).session_id
+        request, control, history = world.start("展示最新的龙虎榜")
+        provider = ScriptedProvider([input_review(), AIMessage(content="已按偏好只展示股票名称。")])
+        execution, _ = runner(request, provider, history=history)
+        async with runtime_for(world) as runtime:
+            result = await runtime.run(execution, control)
+            context = json.loads(provider.calls[1][1].content.split("\n", 1)[1])
+            memory = context["long_term_memories"][0]
+            assert memory["value"] == "展示龙虎榜时只显示股票名称"
+            assert memory["scope_type"] == "tool"
+            assert memory["scope"] == {"tool_name": "dragon_tiger_list"}
+            assert memory["scope_verified"] is False
+            assert result.memory_context_used
+            deliver(world, request, control, result)
+
+    run_async(scenario())

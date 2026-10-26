@@ -15,7 +15,7 @@ from alembic.runtime.migration import MigrationContext
 
 
 BASELINE_REVISION = "0001_postgresql_baseline"
-HEAD_REVISION = "0007_run_pause_control"
+HEAD_REVISION = "0008_memory_scopes"
 BACKEND_ROOT = Path(__file__).resolve().parents[2]
 
 
