@@ -36,6 +36,33 @@ def _content_hash(value):
     return sha256(value.encode("utf-8")).hexdigest() if value else None
 
 
+def _normalized_memory_text(value):
+    return " ".join((value or "").strip().split()).casefold()
+
+
+def _same_effective_content(row, write):
+    """Compare the behavior a candidate would activate, not its wording.
+
+    Structured display policies are authoritative: a rephrased sentence with
+    the same columns and scope is a no-op. Free-text memories without
+    structured fields compare normalized prose.
+    """
+
+    if row["scope_type"] != write.scope_type:
+        return False
+    if (row["canonical_key"] or row["memory_key"]) != (write.canonical_key or write.key):
+        return False
+    if json.loads(row["scope_json"]) != write.scope:
+        return False
+    if json.loads(row["structured_json"]) != write.structured:
+        return False
+    if row["expires_at"] != write.expires_at:
+        return False
+    if write.structured:
+        return True
+    return _normalized_memory_text(row["value"]) == _normalized_memory_text(write.value)
+
+
 def _record(row):
     item = dict(row)
     item["key"] = item.pop("memory_key")
@@ -138,6 +165,13 @@ class LongTermMemoryRepository:
         row = db.execute("SELECT revision FROM memory_owner_versions WHERE owner_id=?", (owner_id,)).fetchone()
         return int(row[0]) if row else 0
 
+    @staticmethod
+    def _lock_identity(db, owner_id, memory_type, canonical_key, scope_key):
+        """Serialize consolidation, confirmation and explicit writes for one identity."""
+
+        db.execute("""SELECT pg_advisory_xact_lock(hashtextextended(?,0))""",
+                   (f"{owner_id}\x1f{memory_type}\x1f{canonical_key}\x1f{scope_key}",))
+
     def get_owner_revision(self, owner_id):
         with self._connection(readonly=True) as db:
             return self._owner_revision(db, owner_id)
@@ -161,7 +195,10 @@ class LongTermMemoryRepository:
     def get_by_key(self, owner_id, memory_type, key, *, include_inactive=False):
         with self._connection(readonly=True) as db:
             row = db.execute("""SELECT *,COALESCE(expires_at<=clock_timestamp(),FALSE) AS expired
-                FROM long_term_memories WHERE owner_id=? AND memory_type=? AND memory_key=?""",
+                FROM long_term_memories WHERE owner_id=? AND memory_type=? AND memory_key=?
+                ORDER BY CASE status
+                    WHEN 'active' THEN 0 WHEN 'candidate' THEN 1 WHEN 'deleted' THEN 2
+                    ELSE 3 END,updated_at DESC,memory_id LIMIT 1""",
                 (owner_id, memory_type, key)).fetchone()
             if row is None or (
                 not include_inactive
@@ -283,18 +320,32 @@ class LongTermMemoryRepository:
                 return replay
             self._check_owner_revision(db, owner_id, expected_owner_revision)
             write = self._source(db, owner_id, write)
-            row = db.execute("SELECT * FROM long_term_memories WHERE owner_id=? AND memory_type=? AND memory_key=?",
-                             (owner_id, write.memory_type, write.key)).fetchone()
+            scope_json = _encode(write.scope)
+            scope_key = memory_scope_key(write.scope_type, write.scope)
+            canonical_key = write.canonical_key or write.key
+            self._lock_identity(db, owner_id, write.memory_type, canonical_key, scope_key)
+            row = db.execute("""SELECT * FROM long_term_memories
+                WHERE owner_id=? AND memory_type=? AND scope_key=?
+                  AND COALESCE(canonical_key,memory_key)=?
+                  AND status IN ('active','deleted','expired','revoked')
+                ORDER BY CASE status WHEN 'active' THEN 0 WHEN 'deleted' THEN 1 ELSE 2 END,
+                    updated_at DESC,memory_id LIMIT 1 FOR UPDATE""",
+                (owner_id, write.memory_type, scope_key, canonical_key)).fetchone()
             if (row is None and write.expected_revision != 0) or (row and row["revision"] != write.expected_revision):
                 raise MemoryConflict("Memory revision changed; reload the current record")
             if row and row["deleted_at"] and not write.restore_deleted:
                 raise MemoryConflict("Deleted memory requires an explicit restore and its current revision")
             if row is None and write.restore_deleted:
                 raise MemoryConflict("Only a deleted memory can be restored")
+            # An explicit write supersedes any pending automatic proposal for the
+            # same identity. Candidate rows are not effective memories.
+            db.execute("""UPDATE long_term_memories SET status='superseded',
+                revision=revision+1,updated_at=clock_timestamp()
+                WHERE owner_id=? AND memory_type=? AND scope_key=?
+                  AND COALESCE(canonical_key,memory_key)=?
+                  AND status='candidate' AND deleted_at IS NULL""",
+                (owner_id, write.memory_type, scope_key, canonical_key))
             memory_id = row["memory_id"] if row else "memory_" + uuid4().hex
-            scope_json = _encode(write.scope)
-            scope_key = memory_scope_key(write.scope_type, write.scope)
-            canonical_key = write.canonical_key or write.key
             structured_json = _encode(write.structured)
             source_quote = write.source_quote
             content_hash = _content_hash(write.value)
@@ -308,6 +359,7 @@ class LongTermMemoryRepository:
                 same = (
                     not row["deleted_at"]
                     and row["status"] == "active"
+                    and row["memory_key"] == write.key
                     and row["value"] == write.value
                     and json.loads(row["topics_json"]) == write.topics
                     and json.loads(row["metadata_json"]) == write.metadata
@@ -320,13 +372,14 @@ class LongTermMemoryRepository:
                 )
                 if same:
                     return self._finish(db, owner_id, operation_id, fingerprint, "put", memory_id, changed=False)
-                db.execute("""UPDATE long_term_memories SET value=?,topics_json=?,metadata_json=?,
-                    scope_json=?,scope_key=?,canonical_key=?,structured_json=?,source_quote=?,
-                    content_hash=?,expires_at=?,source_run_id=?,source_user_message=?,
+                db.execute("""UPDATE long_term_memories SET memory_key=?,value=?,topics_json=?,
+                    metadata_json=?,scope_json=?,scope_key=?,canonical_key=?,structured_json=?,
+                    source_quote=?,content_hash=?,expires_at=?,source_run_id=?,source_user_message=?,
                     status='active',source_kind='explicit',deleted_at=NULL,
+                    supersedes_memory_id=NULL,supersedes_revision=NULL,
                     revision=revision+1,updated_at=clock_timestamp()
                     WHERE owner_id=? AND memory_id=? AND revision=?""",
-                    (*values, owner_id, memory_id, write.expected_revision))
+                    (write.key, *values, owner_id, memory_id, write.expected_revision))
             else:
                 db.execute("""INSERT INTO long_term_memories
                     (memory_id,owner_id,memory_type,memory_key,revision,value,topics_json,metadata_json,
@@ -337,40 +390,128 @@ class LongTermMemoryRepository:
                      write.scope_type))
             return self._finish(db, owner_id, operation_id, fingerprint, "put", memory_id)
 
-    def create_candidate(self, owner_id, write, operation_id, *, source_kind="auto"):
-        """Persist one background memory candidate without changing effective state."""
+    def consolidate_candidate(self, owner_id, write, operation_id, *, source_kind="auto"):
+        """Merge one automatic proposal with the active identity and open candidate.
+
+        The candidate is never activated here. A changed active identity produces
+        an ``update`` candidate carrying the exact target revision; a repeated
+        proposal is a no-op, and a newer differing proposal supersedes the prior
+        pending candidate.
+        """
 
         from app.agents.memory_policy import validate_memory_write
         write = MemoryWrite.model_validate(write)
         write = validate_memory_write(write, owner_id=owner_id, source="agent")
         fingerprint = self._fingerprint("put", [write.model_dump(mode="json"), None], operation_id)
+        scope_json = _encode(write.scope)
+        scope_key = memory_scope_key(write.scope_type, write.scope)
+        canonical_key = write.canonical_key or write.key
         with self._connection() as db:
             begin_write(db)
             replay = self._receipt(db, owner_id, operation_id, fingerprint)
             if replay is not None:
-                return replay
-            existing = db.execute("""SELECT memory_id FROM long_term_memories
-                WHERE owner_id=? AND memory_type=? AND memory_key=?""",
-                (owner_id, write.memory_type, write.key)).fetchone()
-            if existing is not None:
-                raise MemoryConflict("Candidate identity already exists")
+                return {
+                    "decision": "replay",
+                    "candidate_id": None,
+                    "target_memory_id": replay.current.memory_id,
+                    "superseded_candidate_id": None,
+                }
+            self._lock_identity(db, owner_id, write.memory_type, canonical_key, scope_key)
+            now = _effective_now(db)
+            active = db.execute("""SELECT * FROM long_term_memories
+                WHERE owner_id=? AND memory_type=? AND scope_key=?
+                  AND COALESCE(canonical_key,memory_key)=?
+                  AND status='active' AND deleted_at IS NULL
+                ORDER BY updated_at DESC,memory_id LIMIT 1 FOR UPDATE""",
+                (owner_id, write.memory_type, scope_key, canonical_key)).fetchone()
+            if active is not None and active["expires_at"] is not None and active["expires_at"] <= now:
+                db.execute("""UPDATE long_term_memories SET status='expired',
+                    revision=revision+1,updated_at=clock_timestamp()
+                    WHERE owner_id=? AND memory_id=?""",
+                    (owner_id, active["memory_id"]))
+                active = None
+            pending = db.execute("""SELECT * FROM long_term_memories
+                WHERE owner_id=? AND memory_type=? AND scope_key=?
+                  AND COALESCE(canonical_key,memory_key)=?
+                  AND status='candidate' AND deleted_at IS NULL
+                ORDER BY created_at DESC,memory_id LIMIT 1 FOR UPDATE""",
+                (owner_id, write.memory_type, scope_key, canonical_key)).fetchone()
+            if active is not None and _same_effective_content(active, write):
+                superseded_candidate = None
+                if pending is not None:
+                    superseded_candidate = pending["memory_id"]
+                    self._supersede_candidate(db, owner_id, pending["memory_id"])
+                self._finish(db, owner_id, operation_id, fingerprint, "put",
+                             active["memory_id"], changed=False)
+                return {
+                    "decision": "noop",
+                    "candidate_id": None,
+                    "target_memory_id": active["memory_id"],
+                    "superseded_candidate_id": superseded_candidate,
+                }
+            target_id = active["memory_id"] if active is not None else None
+            target_revision = int(active["revision"]) if active is not None else None
+            if pending is not None and _same_effective_content(pending, write):
+                changed_target = (
+                    pending["supersedes_memory_id"] != target_id
+                    or pending["supersedes_revision"] != target_revision
+                )
+                if changed_target:
+                    db.execute("""UPDATE long_term_memories
+                        SET supersedes_memory_id=?,supersedes_revision=?,
+                            revision=revision+1,updated_at=clock_timestamp()
+                        WHERE owner_id=? AND memory_id=? AND status='candidate'""",
+                        (target_id, target_revision, owner_id, pending["memory_id"]))
+                self._finish(db, owner_id, operation_id, fingerprint, "put",
+                             pending["memory_id"], changed=False)
+                return {
+                    "decision": "refresh" if changed_target else "noop",
+                    "candidate_id": pending["memory_id"],
+                    "target_memory_id": target_id,
+                    "superseded_candidate_id": None,
+                }
+            replaced_candidate = pending["memory_id"] if pending is not None else None
+            if replaced_candidate is not None:
+                self._supersede_candidate(db, owner_id, replaced_candidate)
             memory_id = "memory_" + uuid4().hex
-            scope_json = _encode(write.scope)
-            scope_key = memory_scope_key(write.scope_type, write.scope)
-            canonical_key = write.canonical_key or write.key
             db.execute("""INSERT INTO long_term_memories
                 (memory_id,owner_id,memory_type,memory_key,revision,value,topics_json,metadata_json,
                  scope_json,scope_key,canonical_key,structured_json,source_quote,content_hash,
-                 expires_at,source_run_id,source_user_message,scope_type,status,source_kind)
-                VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,'candidate',?)""",
+                 expires_at,source_run_id,source_user_message,scope_type,status,source_kind,
+                 supersedes_memory_id,supersedes_revision)
+                VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,'candidate',?,?,?)""",
                 (memory_id, owner_id, write.memory_type, write.key, write.value,
                  _encode(write.topics), _encode(write.metadata), scope_json, scope_key,
                  canonical_key, _encode(write.structured), write.source_quote,
                  _content_hash(write.value), write.expires_at, write.source_run_id,
-                 write.source_user_message, write.scope_type, source_kind))
-            return self._finish(
-                db, owner_id, operation_id, fingerprint, "put", memory_id, changed=False,
-            )
+                 write.source_user_message, write.scope_type, source_kind,
+                 target_id, target_revision))
+            if replaced_candidate is not None:
+                self._relation(db, owner_id, memory_id, replaced_candidate, "supersedes",
+                               "newer automatic candidate replaced an older proposal")
+            self._finish(db, owner_id, operation_id, fingerprint, "put",
+                         memory_id, changed=False)
+            return {
+                "decision": "update" if active is not None else "add",
+                "candidate_id": memory_id,
+                "target_memory_id": target_id,
+                "superseded_candidate_id": replaced_candidate,
+            }
+
+    @staticmethod
+    def _supersede_candidate(db, owner_id, memory_id):
+        db.execute("""UPDATE long_term_memories SET status='superseded',
+            revision=revision+1,updated_at=clock_timestamp()
+            WHERE owner_id=? AND memory_id=? AND status='candidate'""",
+            (owner_id, memory_id))
+
+    @staticmethod
+    def _relation(db, owner_id, from_memory_id, to_memory_id, relation, reason):
+        db.execute("""INSERT INTO memory_relations
+            (relation_id,owner_id,from_memory_id,to_memory_id,relation,reason)
+            VALUES(?,?,?,?,?,?) ON CONFLICT DO NOTHING""",
+            ("relation_" + uuid4().hex, owner_id, from_memory_id, to_memory_id,
+             relation, reason))
 
     def list_candidates(self, owner_id, *, limit=100):
         with self._connection(readonly=True) as db:
@@ -381,18 +522,70 @@ class LongTermMemoryRepository:
             return [_record(row).model_dump(mode="json") for row in rows]
 
     def confirm_candidate(self, owner_id, memory_id, operation_id):
-        row = self.get(owner_id, memory_id, include_inactive=True)
-        if row is None or row.status != "candidate" or row.value is None:
-            raise MemoryNotFound("Candidate not found")
-        write = MemoryWrite(
-            memory_type=row.memory_type, key=row.key, value=row.value,
-            scope_type=row.scope_type, scope=row.scope,
-            canonical_key=row.canonical_key, structured=row.structured,
-            source_quote=row.source_quote, source_run_id=row.source_run_id,
-            source_user_message=row.source_user_message or "确认自动记忆候选",
-            expected_revision=row.revision,
-        )
-        return self.put(owner_id, write, operation_id)
+        """Atomically activate a candidate and supersede its exact target."""
+
+        fingerprint = self._fingerprint("put", [memory_id, None], operation_id)
+        with self._connection() as db:
+            begin_write(db)
+            replay = self._receipt(db, owner_id, operation_id, fingerprint)
+            if replay is not None:
+                return replay
+            initial = self._owned(db, owner_id, memory_id)
+            if initial is None or initial["status"] != "candidate" or initial["value"] is None:
+                raise MemoryNotFound("Candidate not found")
+            canonical_key = initial["canonical_key"] or initial["memory_key"]
+            self._lock_identity(
+                db, owner_id, initial["memory_type"], canonical_key, initial["scope_key"],
+            )
+            row = db.execute("""SELECT * FROM long_term_memories
+                WHERE owner_id=? AND memory_id=? FOR UPDATE""",
+                (owner_id, memory_id)).fetchone()
+            if row is None or row["status"] != "candidate" or row["value"] is None:
+                raise MemoryNotFound("Candidate not found")
+            target_id = row["supersedes_memory_id"]
+            target_revision = row["supersedes_revision"]
+            if target_id is not None:
+                target = db.execute("""SELECT * FROM long_term_memories
+                    WHERE owner_id=? AND memory_id=? FOR UPDATE""",
+                    (owner_id, target_id)).fetchone()
+                if (target is None or target["status"] != "active"
+                        or target["deleted_at"] is not None
+                        or int(target["revision"]) != int(target_revision)
+                        or target["scope_key"] != row["scope_key"]
+                        or (target["canonical_key"] or target["memory_key"]) != canonical_key):
+                    raise MemoryConflict(
+                        "Target memory changed since this candidate was created; refresh candidates"
+                    )
+                db.execute("""UPDATE long_term_memories SET status='superseded',
+                    revision=revision+1,updated_at=clock_timestamp()
+                    WHERE owner_id=? AND memory_id=? AND revision=? AND status='active'""",
+                    (owner_id, target_id, target_revision))
+                self._relation(db, owner_id, memory_id, target_id, "supersedes",
+                               "explicit candidate confirmation")
+            else:
+                existing = db.execute("""SELECT * FROM long_term_memories
+                    WHERE owner_id=? AND memory_type=? AND scope_key=?
+                      AND (memory_key=? OR COALESCE(canonical_key,memory_key)=?)
+                      AND status='active' AND deleted_at IS NULL
+                    ORDER BY updated_at DESC,memory_id LIMIT 1 FOR UPDATE""",
+                    (owner_id, row["memory_type"], row["scope_key"],
+                     row["memory_key"], canonical_key)).fetchone()
+                if (existing is not None and existing["expires_at"] is not None
+                        and existing["expires_at"] <= _effective_now(db)):
+                    db.execute("""UPDATE long_term_memories SET status='expired',
+                        revision=revision+1,updated_at=clock_timestamp()
+                        WHERE owner_id=? AND memory_id=?""",
+                        (owner_id, existing["memory_id"]))
+                    existing = None
+                if existing is not None:
+                    raise MemoryConflict(
+                        "An active memory already exists for this identity; refresh candidates"
+                    )
+            db.execute("""UPDATE long_term_memories SET status='active',
+                revision=revision+1,updated_at=clock_timestamp()
+                WHERE owner_id=? AND memory_id=? AND revision=? AND status='candidate'""",
+                (owner_id, memory_id, row["revision"]))
+            return self._finish(db, owner_id, operation_id, fingerprint, "put", memory_id)
 
     def reject_candidate(self, owner_id, memory_id, expected_revision, operation_id):
         if not isinstance(expected_revision, int) or expected_revision < 1:
@@ -433,10 +626,25 @@ class LongTermMemoryRepository:
             row = self._owned(db, owner_id, memory_id)
             if row is None:
                 raise MemoryNotFound("Memory not found")
+            canonical_key = row["canonical_key"] or row["memory_key"]
+            self._lock_identity(
+                db, owner_id, row["memory_type"], canonical_key, row["scope_key"],
+            )
+            row = db.execute("""SELECT * FROM long_term_memories
+                WHERE owner_id=? AND memory_id=? FOR UPDATE""",
+                (owner_id, memory_id)).fetchone()
+            if row is None:
+                raise MemoryNotFound("Memory not found")
             if row["revision"] != expected_revision:
                 raise MemoryConflict("Memory revision changed; reload the current record")
             if row["deleted_at"]:
                 return self._finish(db, owner_id, operation_id, fingerprint, "delete", memory_id, changed=False)
+            db.execute("""UPDATE long_term_memories SET status='superseded',
+                revision=revision+1,updated_at=clock_timestamp()
+                WHERE owner_id=? AND memory_type=? AND scope_key=?
+                  AND COALESCE(canonical_key,memory_key)=?
+                  AND status='candidate' AND memory_id<>?""",
+                (owner_id, row["memory_type"], row["scope_key"], canonical_key, memory_id))
             db.execute("""UPDATE long_term_memories SET value=NULL,topics_json='[]',metadata_json='{}',
                 structured_json='{}',source_quote=NULL,source_run_id=NULL,source_user_message='',
                 expires_at=NULL,status='deleted',deleted_at=clock_timestamp(),

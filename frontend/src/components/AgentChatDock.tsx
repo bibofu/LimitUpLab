@@ -1049,6 +1049,7 @@ export function AgentChatDock({
                         <span>{MEMORY_TYPE_LABELS[candidate.memory_type]}</span>
                         <span>{memoryScopeLabel(candidate)}</span>
                         <span>{candidate.source_kind === "auto" ? "自动提取" : "候选"}</span>
+                        {candidate.supersedes_memory_id ? <span>确认后替换现有记忆</span> : null}
                       </div>
                       <p className="memory-candidate-value">{candidate.value}</p>
                       {candidate.source_quote ? (

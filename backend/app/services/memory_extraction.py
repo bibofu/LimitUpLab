@@ -325,29 +325,31 @@ class MemoryExtractionWorker:
             self.provider, message=message, existing=existing,
         )
         created, skipped = [], 0
+        decisions = {"add": 0, "update": 0, "refresh": 0, "noop": 0, "replay": 0}
         for index, candidate in enumerate(candidates):
             if (candidate.confidence < MIN_CANDIDATE_CONFIDENCE
                     or candidate.stability == "other"):
                 skipped += 1
                 continue
             write = candidate_write(candidate, message=message, run_id=job["run_id"])
-            key = write.key
-            prior = repository.get_by_key(
-                job["owner_id"], write.memory_type, key, include_inactive=True,
-            )
-            if prior is not None:
-                skipped += 1
-                continue
             try:
-                result = repository.create_candidate(
+                result = repository.consolidate_candidate(
                     job["owner_id"], write, f"{job['job_id']}:candidate:{index}",
                 )
-                created.append(result.current.memory_id)
+                decision = result["decision"]
+                decisions[decision] = decisions.get(decision, 0) + 1
+                if result["superseded_candidate_id"] in created:
+                    created.remove(result["superseded_candidate_id"])
+                if decision in {"add", "update"}:
+                    created.append(result["candidate_id"])
+                else:
+                    skipped += 1
             except (MemoryConflict, MemoryNotFound, ValueError):
                 skipped += 1
         self._finish(job, "succeeded", {
             "candidate_ids": created, "created_count": len(created),
             "skipped_count": skipped, "candidate_count": len(candidates),
+            "decisions": decisions,
         })
 
     def _finish(self, job, status, result):

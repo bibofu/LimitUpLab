@@ -1,8 +1,8 @@
 # 长期记忆 v2：基础契约层
 
-更新日期：2026-10-26。
+更新日期：2026-10-27。
 
-本文件记录长期记忆重构第一阶段已经落地的边界。它不是完整 v2；向量检索、后台自动学习和确定性展示块仍按后续阶段推进。
+本文件记录长期记忆重构已经落地的边界。它不是完整 v2；向量检索、候选删除和低风险自动激活仍按后续阶段推进。
 
 ## 已落地
 
@@ -12,6 +12,10 @@
   - 状态、管理版本、来源类型、逐字来源引用、内容哈希；
   - `memory_relations` 关系表；
   - 旧记录按 active/expired/deleted 回填，不统一设为 active。
+- 迁移 `0010_candidate_consolidation`：
+  - 移除旧的 key-only 唯一约束，改为 active 记忆按 `(owner, type, key, scope)` 唯一；
+  - 同一 key 的不同 scope 不再互相覆盖；
+  - 候选增加 `supersedes_memory_id`、`supersedes_revision`，记录它要替换的确切目标版本。
 - 自由文本偏好：
   - `preference` / `research_context` 支持 `preference:`、`tool_display:`、`research:` 前缀；
   - 保留 typed 设置（回答详略、展示格式、研究主题）的封闭值校验；
@@ -50,11 +54,18 @@
   - worker 使用 `FOR UPDATE SKIP LOCKED` 领取任务，校验 owner、来源消息、开关和已有记忆；
   - Memory Extractor 只读取用户消息，输出结构化候选；
   - 候选以 `status='candidate'` 保存，不进入 active 检索，不改变 owner 有效版本；
-  - 已存在同 key 的记忆或候选时跳过，当前不做自动 UPDATE/覆盖；
+  - Consolidator 以 `(owner, type, canonical_key, scope)` 为身份：
+    - active 行为等价（结构化字段与 scope 相同，或自由文本归一化后相同）时为 NOOP，不生成重复候选；
+    - active 内容不同时生成 UPDATE 候选，并记录目标 `memory_id + revision`；
+    - 同身份已有不同候选时，旧候选标记 superseded，新候选通过 `memory_relations.supersedes` 关联；
+    - 同身份候选内容相同时只刷新目标版本，不重复插入；
+  - 确认候选时在单事务内校验目标版本；目标被显式改动或已被占用时拒绝，不会覆盖更新的记忆；
+  - 更新候选确认后旧 active 变为 superseded，新候选变为 active，并写 `supersedes` 关系；
+  - 显式写入会先把同身份待确认候选标记 superseded，避免后续确认覆盖用户刚写入的内容；
   - `POST /api/agents/chat/memories/candidates/{id}/confirm` 显式激活；
   - `POST .../reject` 清空候选正文并标记 revoked；
   - `GET .../candidates` 列出待确认候选；
-  - 会话面板提供“记忆候选”工作台：显示作用域、候选正文和逐字来源，确认后立即进入 active，忽略后从列表移除；操作失败保留候选并给出可重试提示；
+  - 会话面板提供“记忆候选”工作台：显示作用域、候选正文和逐字来源；更新候选标记“确认后替换现有记忆”；确认或忽略后更新列表，操作失败保留候选并给出可重试提示；
   - worker 命令：`python backend/scripts/run_memory_extraction.py --once`；
   - `LIMITUPLAB_MEMORY_AUTO_LEARN=off|candidate`；`safe_auto` 尚未实现。
 - 写入与删除：
@@ -66,14 +77,15 @@
   - 新会话列出该偏好；
   - 龙虎榜回答按偏好只展示股票名称；
   - 删除后不再召回；
-  - 真实 DeepSeek 四问全部 `complete`。
+  - 真实 DeepSeek 四问全部 `complete`；
+  - 更新候选验收：已有展示偏好 + 新候选“显示代码和名称”，工作台显示“确认后替换现有记忆”；确认后旧记忆 superseded、新记忆 active，`memory_relations` 写入 `supersedes`，列表不再有候选。
 
 ## 尚未落地
 
 以下能力明确未完成，不能对外宣称：
 
 1. pgvector 语义检索与同义改写召回；
-2. 自动学习的 Consolidator（UPDATE/DELETE/NOOP/SUPERSEDED）和 merge 审批尚未完成；
+2. 候选 DELETE 动作与“例外于某条记忆”的提取/审批尚未实现；
 3. `safe_auto` 自动激活尚未实现；当前候选必须显式确认；
 4. `management_revision` 的写入方（候选、使用统计、embedding 回填）尚未接入；
 5. 展示块目前只抑制 Markdown 表格；模型正文中的列表或普通文字仍可能与展示块重复；
@@ -89,7 +101,8 @@
 scope_type, scope_json, scope_key,
 canonical_key, structured_json,
 status, management_revision,
-source_kind, source_quote, content_hash
+source_kind, source_quote, content_hash,
+supersedes_memory_id, supersedes_revision
 ```
 
 `revision` 继续作为有效内容版本；`management_revision` 预留给候选、使用统计和 embedding 回填，当前不会影响 fingerprint。
@@ -104,7 +117,17 @@ source_kind, source_quote, content_hash
 → long_term_memories（active）
 ```
 
-自动学习尚未接入；当前不会因为普通对话自动写入。
+普通对话自动学习走独立候选路径：
+
+```text
+正式回答提交
+→ memory_extraction_jobs（outbox）
+→ worker 读取用户消息
+→ Extractor 输出候选
+→ Consolidator 对比 active / pending candidate
+→ add / update / noop / supersede
+→ status='candidate'（显式确认后才 active）
+```
 
 ## 检索路径
 
@@ -120,7 +143,7 @@ owner + active + 未过期 + 未删除
 
 ## 下一步
 
-1. 候选 Consolidator：同 key 的 UPDATE/NOOP/SUPERSEDED、例外关系和合并审批；
+1. 候选 DELETE 提取、例外关系和批量合并审批；
 2. 接入 pgvector 混合检索与中文评测；
 3. `management_revision` 写入方、`safe_auto` 低风险自动激活；
 4. 抑制展示块与正文列表/文字的重复，并解析重复股票榜单的序号；

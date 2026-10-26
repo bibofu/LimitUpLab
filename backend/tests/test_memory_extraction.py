@@ -137,11 +137,13 @@ def test_candidate_api_lists_confirms_and_rejects(postgresql_database):
         structured={"display_columns": ["name"]},
         source_quote=MESSAGE, source_user_message=MESSAGE,
     )
-    first = repository.create_candidate(owner, write, "candidate-1")
-    second = repository.create_candidate(
+    first = repository.consolidate_candidate(owner, write, "candidate-1")
+    second = repository.consolidate_candidate(
         owner, write.model_copy(update={"key": "preference:second", "value": "以后优先看换手率"}),
         "candidate-2",
     )
+    first_record = repository.get(owner, first["candidate_id"], include_inactive=True)
+    second_record = repository.get(owner, second["candidate_id"], include_inactive=True)
 
     app = FastAPI()
     app.add_middleware(AnonymousVisitorMiddleware)
@@ -152,19 +154,66 @@ def test_candidate_api_lists_confirms_and_rejects(postgresql_database):
         assert listed.status_code == 200
         assert len(listed.json()["items"]) == 2
         confirmed = client.post(
-            f"/api/agents/chat/memories/candidates/{first.current.memory_id}/confirm",
+            f"/api/agents/chat/memories/candidates/{first_record.memory_id}/confirm",
             headers={"Idempotency-Key": "api-confirm"},
         )
         assert confirmed.status_code == 200, confirmed.text
         assert confirmed.json()["current"]["status"] == "active"
         rejected = client.post(
-            f"/api/agents/chat/memories/candidates/{second.current.memory_id}/reject",
-            params={"expected_revision": second.current.revision},
+            f"/api/agents/chat/memories/candidates/{second_record.memory_id}/reject",
+            params={"expected_revision": second_record.revision},
             headers={"Idempotency-Key": "api-reject"},
         )
         assert rejected.status_code == 200, rejected.text
         assert rejected.json()["current"]["status"] == "revoked"
         assert client.get("/api/agents/chat/memories/candidates").json()["items"] == []
+
+
+def test_worker_creates_an_update_candidate_against_the_exact_active_revision(
+    postgresql_database, monkeypatch,
+):
+    monkeypatch.setenv("LIMITUPLAB_MEMORY_AUTO_LEARN", "candidate")
+    owner, _, _, job_id = seed_job()
+    active = LongTermMemoryRepository().put(owner, MemoryWrite(
+        memory_type="preference", key="tool_display:dragon_tiger_list",
+        value="展示龙虎榜时显示代码和名称", scope_type="tool",
+        scope={"tool_name": "dragon_tiger_list"},
+        structured={"display_columns": ["symbol", "name"]},
+        source_user_message=MESSAGE,
+    ), "active-display")
+
+    assert MemoryExtractionWorker(provider=CandidateProvider([draft()])).run_once(limit=1) == 1
+    candidates = LongTermMemoryRepository().list_candidates(owner)
+    assert len(candidates) == 1
+    assert candidates[0]["supersedes_memory_id"] == active.current.memory_id
+    assert candidates[0]["supersedes_revision"] == active.current.revision
+    with closing(connect()) as db:
+        result = json.loads(db.execute(
+            "SELECT result_json FROM memory_extraction_jobs WHERE job_id=?", (job_id,),
+        ).fetchone()["result_json"])
+    assert result["decisions"]["update"] == 1
+
+
+def test_worker_does_not_create_a_candidate_when_active_content_already_matches(
+    postgresql_database, monkeypatch,
+):
+    monkeypatch.setenv("LIMITUPLAB_MEMORY_AUTO_LEARN", "candidate")
+    owner, _, _, job_id = seed_job()
+    LongTermMemoryRepository().put(owner, MemoryWrite(
+        memory_type="preference", key="tool_display:dragon_tiger_list",
+        value="展示龙虎榜时只显示名称", scope_type="tool",
+        scope={"tool_name": "dragon_tiger_list"},
+        structured={"display_columns": ["name"]},
+        source_user_message=MESSAGE,
+    ), "active-display")
+
+    assert MemoryExtractionWorker(provider=CandidateProvider([draft()])).run_once(limit=1) == 1
+    assert LongTermMemoryRepository().list_candidates(owner) == []
+    with closing(connect()) as db:
+        result = json.loads(db.execute(
+            "SELECT result_json FROM memory_extraction_jobs WHERE job_id=?", (job_id,),
+        ).fetchone()["result_json"])
+    assert result["decisions"]["noop"] == 1
 
 
 def test_worker_normalizes_tool_id_and_skips_low_confidence_candidates(postgresql_database, monkeypatch):

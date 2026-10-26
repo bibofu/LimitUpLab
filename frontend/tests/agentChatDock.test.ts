@@ -179,13 +179,19 @@ test("memory candidate inbox only changes state after explicit confirm or reject
     source_kind: "auto",
     source_quote: "以后展示龙虎榜只显示股票名称",
     source_user_message: "以后展示龙虎榜只显示股票名称",
+    supersedes_memory_id: null,
+    supersedes_revision: null,
     created_at: "2026-10-27T10:00:00",
     updated_at: "2026-10-27T10:00:00",
   });
   const app = mount(t, {
     fetchMemoryCandidates: async () => ({
       items: [
-        candidate("memory_1", "展示龙虎榜时只显示股票名称", 2),
+        {
+          ...candidate("memory_1", "展示龙虎榜时只显示股票名称", 2),
+          supersedes_memory_id: "memory_active",
+          supersedes_revision: 1,
+        },
         candidate("memory_2", "龙虎榜优先看净买入", 1),
       ],
     }),
@@ -199,6 +205,7 @@ test("memory candidate inbox only changes state after explicit confirm or reject
   assert.deepEqual(app.all(node => node.props.className === "memory-candidate-value").map(
     node => node.children,
   ), ["展示龙虎榜时只显示股票名称", "龙虎榜优先看净买入"]);
+  assert.equal(app.has(node => node.props.children === "确认后替换现有记忆"), true);
   assert.equal(confirmed.length, 0, "opening the inbox must not activate a candidate");
 
   app.all(node => node.props.className === "memory-candidate-confirm")[0].onClick(); await app.settle();
