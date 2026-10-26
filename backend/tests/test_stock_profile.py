@@ -282,3 +282,81 @@ def test_numeric_suffixes_are_normalized_without_losing_units():
     assert payload["float_market_cap"] == pytest.approx(850_000_000_000)
     assert payload["total_shares"] == pytest.approx(1_250_000_000)
     assert payload["float_shares"] == pytest.approx(1_000_000_000)
+
+
+def test_tencent_market_cap_fallback_parses_yuan_and_shares():
+    from app.collectors.stock_profile_collector import (
+        TENCENT_SOURCE,
+        _parse_tencent_market_cap,
+        load_market_cap,
+    )
+
+    fields = [""] * 77
+    fields[1] = "贵州茅台"
+    fields[2] = "600519"
+    fields[44] = "16875.85"
+    fields[45] = "16875.85"
+    fields[72] = "1250081601"
+    fields[73] = "1256197800"
+    fields[76] = "1250081601"
+    payload = 'v_sh600519="' + "~".join(fields) + '";'
+    parsed = _parse_tencent_market_cap(payload, "600519")
+    assert parsed["总市值"] == pytest.approx(1_687_585_000_000)
+    assert parsed["流通市值"] == pytest.approx(1_687_585_000_000)
+    assert parsed["总股本"] == pytest.approx(1_256_197_800)
+    assert parsed["流通股"] == pytest.approx(1_250_081_601)
+    assert parsed["__source"] == TENCENT_SOURCE
+
+    def eastmoney_failure(symbol):
+        raise RuntimeError("eastmoney unavailable")
+
+    def tencent_success(symbol):
+        return parsed
+
+    merged = load_market_cap(
+        "600519",
+        eastmoney_loader=eastmoney_failure,
+        tencent_loader=tencent_success,
+    )
+    assert merged["总市值"] == parsed["总市值"]
+    assert merged["__source"] == TENCENT_SOURCE
+
+
+def test_tencent_parse_rejects_a_different_stock():
+    from app.collectors.stock_profile_collector import _parse_tencent_market_cap
+
+    fields = [""] * 77
+    fields[1] = "平安银行"
+    fields[2] = "000001"
+    fields[44] = "2192.84"
+    fields[45] = "2192.87"
+    with pytest.raises(ValueError, match="SymbolMismatch"):
+        _parse_tencent_market_cap(
+            'v_sz000001="' + "~".join(fields) + '";', "600519",
+        )
+
+
+def test_market_cap_fallback_uses_tencent_source_and_keeps_status_ok():
+    from app.collectors.stock_profile_collector import TENCENT_SOURCE
+
+    tencent = {
+        "股票代码": "600519",
+        "股票简称": "贵州茅台",
+        "总市值": 1_687_585_000_000,
+        "流通市值": 1_687_585_000_000,
+        "总股本": 1_256_197_800,
+        "流通股": 1_250_081_601,
+        "__source": TENCENT_SOURCE,
+    }
+    payload = build_stock_profile(
+        "600519",
+        profile_loader=loader(cninfo_profile()),
+        market_cap_loader=loader(tencent),
+        now=NOW,
+    )
+
+    assert payload["status"] == "ok"
+    assert payload["sources"]["market_cap"] == TENCENT_SOURCE
+    assert payload["total_market_cap"] == pytest.approx(1_687_585_000_000)
+    assert payload["total_shares"] == pytest.approx(1_256_197_800)
+    assert payload["data_missing"] == []

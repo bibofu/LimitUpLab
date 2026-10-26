@@ -68,7 +68,7 @@ POST /api/agents/chat/stream
 `stock_profile` 只面向单只 A 股的公司资料，不提供行情或投资建议：
 
 - 公司名称、所属行业、主营业务、经营范围、上市日期、成立日期、注册资金、法人、地址和官网来自巨潮资讯 `stock_profile_cninfo`；
-- 当前总市值、流通市值、总股本和流通股来自东方财富 `stock_individual_info_em`；
+- 当前总市值、流通市值、总股本和流通股优先来自东方财富 `stock_individual_info_em`；东方财富不可用时，用腾讯行情 `qt.gtimg.cn` 的市值/股本字段兜底，`sources.market_cap` 标明实际来源；
 - 市值是取数时的当前快照，不是历史市值；`profile_as_of` 和 `market_cap_as_of` 分开记录；
 - 行业按 `industry_source` 标注，东方财富行业只作为 `industry_alternatives`，不覆盖巨潮口径；
 - 任一来源失败时，仍返回另一来源的可用字段，并把失败字段写入 `data_missing` / `source_errors`；`partial` 不代表 0；

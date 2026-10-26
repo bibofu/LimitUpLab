@@ -16,8 +16,9 @@ from zoneinfo import ZoneInfo
 from app.collectors.stock_profile_collector import (
     CNINFO_SOURCE,
     EASTMONEY_SOURCE,
+    TENCENT_SOURCE,
     load_cninfo_profile,
-    load_eastmoney_info,
+    load_market_cap,
 )
 
 
@@ -130,7 +131,7 @@ def build_stock_profile(
     include_market_cap: bool = True,
     fallback_name: str | None = None,
     profile_loader: ProfileLoader = load_cninfo_profile,
-    market_cap_loader: MarketCapLoader = load_eastmoney_info,
+    market_cap_loader: MarketCapLoader = load_market_cap,
     now: datetime | None = None,
 ) -> dict[str, Any]:
     """Return a normalized company profile with explicit provider gaps."""
@@ -209,6 +210,13 @@ def build_stock_profile(
     float_market_cap = _number(market_cap.get("流通市值"))
     total_shares = _number(market_cap.get("总股本"))
     float_shares = _number(market_cap.get("流通股"))
+    market_cap_source = market_cap.get("__source") or EASTMONEY_SOURCE
+    if market_cap_source == TENCENT_SOURCE:
+        market_cap_source_label = "tencent"
+    elif market_cap_source == EASTMONEY_SOURCE:
+        market_cap_source_label = "eastmoney"
+    else:
+        market_cap_source_label = "market_cap"
 
     profile_has_data = bool(profile)
     market_cap_has_data = any(
@@ -249,7 +257,10 @@ def build_stock_profile(
         _append_missing(data_missing, "listing_date:missing")
 
     if include_market_cap and not market_cap_has_data:
-        reason = "eastmoney_unavailable" if market_cap_error else "eastmoney_missing"
+        reason = (
+            f"{market_cap_source_label}_unavailable"
+            if market_cap_error else f"{market_cap_source_label}_missing"
+        )
         for field in (
             "total_market_cap", "float_market_cap", "total_shares", "float_shares",
         ):
@@ -262,7 +273,9 @@ def build_stock_profile(
             ("float_shares", float_shares),
         ):
             if value is None:
-                _append_missing(data_missing, f"{field}:eastmoney_missing")
+                _append_missing(
+                    data_missing, f"{field}:{market_cap_source_label}_missing",
+                )
 
     if not include_market_cap:
         if profile_status == "unavailable":
@@ -298,7 +311,7 @@ def build_stock_profile(
     if profile_has_data:
         sources["profile"] = CNINFO_SOURCE
     if market_cap_has_data:
-        sources["market_cap"] = EASTMONEY_SOURCE
+        sources["market_cap"] = market_cap_source
     if industry_source:
         sources["industry"] = industry_source
     if listing_date_source:
