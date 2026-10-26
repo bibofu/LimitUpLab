@@ -1,5 +1,12 @@
 # Agent 问答回归记录
 
+## 2026-10-26：市值来源失败把只问公司资料的回答误标为 partial
+
+- 原表现：新增 `stock_profile` 首次真实三问“主营业务/行业与上市日期/注册地址与法人”内容全部正确，但 `task_status` 均为 `partial`；原因是工具无条件调用东方财富市值接口，该来源连接失败后整个工具被标为 `partial`，即使公司资料字段完整。
+- 原因：市值是可选补充字段，却被当成每次公司资料查询的必需字段；工具状态直接传播为运行状态，导致用户只问主营业务时也被判为未完成。
+- 修复：`stock_profile` 增加 `include_market_cap`，默认 `false`；只有用户询问总市值、流通市值、总股本或流通股时才请求东方财富。公司资料查询不再因市值来源失败而降级；市值问题仍返回 `partial`，并明确 `eastmoney_unavailable`，不得填零或用注册资金替代。
+- 验证：真实 DeepSeek 复验四问，前三问均 HTTP 200、`task_status=complete` 且只调用 `stock_profile`；市值问题为 `partial/answered`，回答明确“缺失、不是 0”，并说明注册资金 125008.1601 万元不能当市值。报告位于忽略目录 `output/memory-refactoring/stock-profile-live-818c7023.json`。同版本后端全量 1933 passed、22 subtests passed、1 skipped。提交 `6b663ba`、`88bc3e1`。
+
 ## 2026-10-26：同一会话的“它/他们/上一个交易日呢”追问无法回指
 
 - 原表现：同一会话先问“宁德时代的股票代码是多少”再问“它近期走势怎么样”，第二问返回 `clarify / reference_ambiguous`；两只股票后问“他们的最新市值”返回“上一轮包含多组名单”；1进2 统计后问“那上一个交易日呢”返回“尚无已提交的股票列表”。三个案例的上一轮历史都已进入上下文（`history_turns_included=1`），预算 40k 未超，模型均未获得调用机会。
