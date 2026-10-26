@@ -232,10 +232,11 @@ class RecommendationIntelligenceTest(unittest.TestCase):
         self.assertEqual(item.dragon_tiger_source, "stored-dragon-tiger")
         self.assertEqual((item.dragon_tiger_adjustment, item.popularity_adjustment, item.draft_score), (0, 0, 80))
         self.assertEqual(item.data_missing, [
-            "新闻刷新失败：offline", "财报源未返回季度利润表", "最新行情不可用", "最近 7 日无直接相关新闻",
+            "新闻刷新失败：数据源暂不可用，本轮未取得新数据。", "财报源未返回季度利润表", "最新行情不可用", "最近 7 日无直接相关新闻",
             "最新季度财报不可用", "最新龙虎榜刷新不可用", "最新人气榜刷新不可用",
         ])
-        self.assertIn("1 只股票的新闻或财报刷新发生错误，已保留可用缓存。", response.warnings)
+        self.assertIn("1 只股票的新闻刷新失败；0 只沿用已有缓存，1 只无可用缓存。", response.warnings)
+        self.assertIn("1 只股票的财报刷新失败；0 只沿用已有缓存，1 只无可用缓存。", response.warnings)
 
     def test_dynamic_cap_keeps_component_scores_and_their_explanations(self) -> None:
         base_date = date(2026, 8, 31)

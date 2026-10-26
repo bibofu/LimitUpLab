@@ -353,6 +353,10 @@ hithink-finance symbol search --q 600519 --limit 1 --format json
 
 项目的同花顺 CLI 调用固定使用 `--source remote`，不读取或创建本地 DuckDB。为兼容 CLI 0.1.5 在选源前打开默认库的问题，每次请求以 `--db` 指向独占临时目录下未创建的文件路径，覆盖 CLI 默认路径及 `HITHINK_FINANCE_DB_PATH`；请求完成或失败后清理临时目录。如果 CLI 创建本地文件或返回 `meta.source=local`，采集器明确报错。此兼容处理保留 CLI 的凭据管理和远端重试机制，无须初始化 DuckDB，也不改动已有个人数据库。修改后需重启已运行的后端或更新进程，新启动的任务才会加载修复。
 
+同一 PostgreSQL 业务库的后端与任务共用同花顺调用节流，默认两次 CLI 启动至少相隔 1 秒，可通过 `LIMITUPLAB_HITHINK_MIN_INTERVAL_SECONDS` 调整。429 会触发共享冷却和有限退避，一次采集最多启动 3 次 CLI，排队、退避及执行共同受 `LIMITUPLAB_HITHINK_TIMEOUT_SECONDS` 预算限制；4001 已由 CLI 重试，项目只共享冷却，不叠加重试。CLI 自身的分页/重试仍由 CLI 管理，此设置不等于上游公布的 HTTP 配额。错误信封从 stdout/stderr 结构化解析，保留错误码与 request ID；不凭错误文本猜测可重试状态。
+
+盘前页的 partial 草稿在 5 分钟冷却后允许补刷新，后台最多追加 5/10/20 分钟三轮恢复，随后恢复 08:00 调度。完整草稿、已固化结果和 09:30 截止边界保持原规则；采集跨过截止时间会丢弃本轮新证据。新闻与财报失败分别统计，并明确哪些股票沿用了缓存、哪些没有可用缓存；页面只读保存的快照，刷新网页不会直接重跑采集。
+
 ### 5. 安装前端
 
 ```powershell

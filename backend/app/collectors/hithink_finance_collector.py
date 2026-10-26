@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+import logging
 import math
 import os
+import random
 import shutil
 import subprocess
+import time
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
@@ -17,6 +20,8 @@ from typing import Any, Callable, Sequence
 HITHINK_SOURCE = "hithink-finance"
 SHANGHAI_TIMEZONE = timezone(timedelta(hours=8))
 Runner = Callable[..., subprocess.CompletedProcess[str]]
+RATE_LIMIT_CODES = {"429", "4001", "FUYAO_429", "FUYAO_4001"}
+logger = logging.getLogger(__name__)
 
 
 class HithinkFinanceError(RuntimeError):
@@ -29,10 +34,14 @@ class HithinkFinanceError(RuntimeError):
         *,
         code: str | None = None,
         retryable: bool = False,
+        request_id: str | None = None,
+        retry_after_seconds: float | None = None,
     ) -> None:
         super().__init__(message)
         self.code = code
         self.retryable = retryable
+        self.request_id = request_id
+        self.retry_after_seconds = retry_after_seconds
 
 
 @dataclass(frozen=True)
@@ -348,10 +357,19 @@ class HithinkFinanceCollector:
         executable: str | None = None,
         timeout_seconds: float | None = None,
         runner: Runner = subprocess.run,
+        rate_limiter: Any = None,
+        clock: Callable[[], float] = time.monotonic,
+        sleep: Callable[[float], None] = time.sleep,
+        random_number: Callable[[], float] = random.random,
     ) -> None:
         self.executable = executable
         self.timeout_seconds = timeout_seconds or _configured_timeout()
         self.runner = runner
+        self.rate_limiter = rate_limiter
+        # Custom runners own their scheduling; the production subprocess path
+        # always coordinates with the other API/worker processes in PostgreSQL.
+        self._shared_rate_limit = runner is subprocess.run
+        self.clock, self.sleep, self.random_number = clock, sleep, random_number
 
     def collect_hot_stocks(
         self,
@@ -1129,9 +1147,53 @@ class HithinkFinanceCollector:
         raise HithinkFinanceError(f"{pool}: pagination exceeded the safety limit")
 
     def _invoke(self, *arguments: str) -> dict[str, Any]:
-        """Run a remote-only CLI request without accessing its user's local DB."""
+        """Bound queueing, rate-limit recovery and CLI IO by one deadline."""
 
         executable = self.executable or _find_executable()
+        limiter = self.rate_limiter
+        if limiter is None and self._shared_rate_limit:
+            from app.services.hithink_rate_limit import HithinkRateLimiter
+            limiter = HithinkRateLimiter()
+        deadline = self.clock() + self.timeout_seconds
+        last_error: HithinkFinanceError | None = None
+        for attempt in range(3):
+            try:
+                if limiter is not None:
+                    limiter.wait(deadline)
+                remaining = deadline - self.clock()
+                if remaining <= 0:
+                    raise TimeoutError
+            except TimeoutError:
+                raise last_error or HithinkFinanceError(
+                    f"hithink-finance request timed out after {self.timeout_seconds:g}s waiting for rate limit",
+                    code="timeout", retryable=True,
+                ) from None
+            try:
+                return self._invoke_once(executable, arguments, timeout=remaining)
+            except HithinkFinanceError as error:
+                if error.code not in RATE_LIMIT_CODES:
+                    raise
+                error.retryable = True
+                last_error = error
+                delay = max(error.retry_after_seconds or 0,
+                            (2 ** (attempt + 1)) * (1 + 0.2 * self.random_number()))
+                # Attempt shared cooldown even on the final retry, within budget.
+                if limiter is not None:
+                    try:
+                        limiter.cooldown(delay, deadline=deadline)
+                    except Exception as cooldown_error:  # Preserve the actionable upstream failure.
+                        logger.warning("Cannot share hithink cooldown within request budget: %s",
+                                       type(cooldown_error).__name__)
+                        raise error from None
+                # CLI already retries 4001 itself; do not multiply its attempts.
+                if error.code in {"4001", "FUYAO_4001"} or attempt == 2 or delay >= deadline - self.clock():
+                    raise
+                self.sleep(delay)
+        raise AssertionError("Unreachable hithink-finance retry state")
+
+    def _invoke_once(self, executable: str, arguments: Sequence[str], *, timeout: float) -> dict[str, Any]:
+        """Execute one remote-only attempt, without opening the user's local DB."""
+
         try:
             # CLI 0.1.5 checks an existing DuckDB before honoring --source remote.
             # An explicit, absent path bypasses that check and overrides both the
@@ -1149,7 +1211,7 @@ class HithinkFinanceCollector:
                     text=True,
                     encoding="utf-8",
                     errors="replace",
-                    timeout=self.timeout_seconds,
+                    timeout=timeout,
                     check=False,
                 )
                 if any(remote_directory.iterdir()):
@@ -1166,7 +1228,7 @@ class HithinkFinanceCollector:
                 retryable=True,
             ) from error
 
-        envelope = _parse_envelope(completed.stdout)
+        envelope = _cli_envelope(completed)
         if _dict(envelope.get("meta")).get("source") == "local":
             raise HithinkFinanceError(
                 "Remote-only hithink-finance request returned local data",
@@ -1174,11 +1236,16 @@ class HithinkFinanceCollector:
             )
         if completed.returncode != 0 or not envelope.get("ok"):
             error_payload = _dict(envelope.get("error"))
+            metadata = _dict(envelope.get("meta"))
             message = _text(error_payload.get("message")) or _text(completed.stderr)
+            code = _text(error_payload.get("code"))
             raise HithinkFinanceError(
                 message or f"hithink-finance exited with code {completed.returncode}",
-                code=_text(error_payload.get("code")),
-                retryable=bool(error_payload.get("retryable")),
+                code=code,
+                retryable=code in RATE_LIMIT_CODES or bool(error_payload.get("retryable")),
+                request_id=_text(metadata.get("request_id") or error_payload.get("request_id")
+                                 or envelope.get("request_id")),
+                retry_after_seconds=_retry_after_seconds(error_payload, metadata),
             )
         return envelope
 
@@ -1317,6 +1384,36 @@ def _configured_timeout() -> float:
 
 
 # Decode the CLI JSON envelope and surface its error response to the collector.
+def _cli_envelope(completed: subprocess.CompletedProcess[str]) -> dict[str, Any]:
+    """CLI successes use stdout; structured failures may be mixed into stderr."""
+    if completed.stdout.strip():
+        return _parse_envelope(completed.stdout)
+    # Do not infer an error code from free text, including update notices.
+    for candidate in [completed.stderr.strip(), *reversed(completed.stderr.splitlines())]:
+        try:
+            payload = json.loads(candidate)
+        except (json.JSONDecodeError, TypeError):
+            continue
+        if isinstance(payload, dict) and payload.get("ok") is False and isinstance(payload.get("error"), dict):
+            return payload
+    return {}
+
+
+def _retry_after_seconds(error: dict[str, Any], metadata: dict[str, Any]) -> float | None:
+    """Honor explicit structured retry hints without guessing from messages."""
+    for payload in (error, metadata):
+        value = payload.get("retry_after_seconds")
+        if isinstance(value, bool):
+            continue
+        try:
+            seconds = float(value)
+        except (ValueError, TypeError):
+            continue
+        if math.isfinite(seconds) and seconds >= 0:
+            return seconds
+    return None
+
+
 def _parse_envelope(stdout: str) -> dict[str, Any]:
     text = stdout.strip()
     if not text:

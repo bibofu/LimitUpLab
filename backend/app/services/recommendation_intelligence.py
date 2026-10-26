@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import logging
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from contextvars import copy_context
 from dataclasses import dataclass
@@ -21,6 +22,7 @@ from app.collectors.first_board_enrichment_collector import (
 )
 from app.collectors.hithink_finance_collector import (
     HithinkFinanceCollector,
+    HithinkFinanceError,
     HithinkIncomeStatementFact,
     HithinkMarketSnapshot,
     HithinkMarketSnapshotFact,
@@ -49,6 +51,7 @@ SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 DEFAULT_REFRESH_INTERVAL_MINUTES = 1440
 RELAY_DISPLAY_LIMIT = 10
 FINANCIAL_CACHE_TTL = timedelta(hours=24)
+PARTIAL_REFRESH_RETRY_DELAY = timedelta(minutes=5)
 MARKET_CLOSE_TIME = time(15, 0)
 FINALIZATION_TIME = time(8, 0)
 MARKET_OPEN_TIME = time(9, 30)
@@ -63,6 +66,7 @@ NewsCollector = Callable[[str, str], StockNewsFacts]
 FinancialCollector = Callable[[str], list[HithinkIncomeStatementFact]]
 DragonTigerCollector = Callable[[date], dict[str, DragonTigerFact]]
 PopularityCollector = Callable[[], dict[str, PopularityFact]]
+logger = logging.getLogger(__name__)
 
 
 class RecommendationCalendarUnavailableError(RuntimeError):
@@ -94,6 +98,10 @@ class _CandidateEvidence:
     news: StockNewsFacts | None
     financial_report: RecommendationFinancialReport | None
     errors: list[str]
+    news_failed: bool = False
+    financial_failed: bool = False
+    news_cached: bool = False
+    financial_cached: bool = False
 
 
 @dataclass(frozen=True)
@@ -196,6 +204,10 @@ def refresh_recommendation_intelligence(
             FINALIZATION_TIME,
             tzinfo=SHANGHAI_TZ,
         )
+        and (
+            previous.status != "partial"
+            or refreshed_at - _as_shanghai(previous.refreshed_at) < PARTIAL_REFRESH_RETRY_DELAY
+        )
     ):
         return previous
     if (
@@ -256,7 +268,7 @@ def refresh_recommendation_intelligence(
             quote_by_symbol = {item.symbol: item for item in market.items}
             quote_captured_at = market.captured_at
         except Exception as error:  # noqa: BLE001
-            warnings.append(f"最新行情刷新失败：{error}")
+            warnings.append(f"最新行情刷新失败：{_provider_error_message(error)}")
 
     relay_candidates = [item for item in candidates if item.strategy == "relay"]
     dragon_tiger_by_symbol: dict[str, DragonTigerFact] = {}
@@ -266,7 +278,7 @@ def refresh_recommendation_intelligence(
             dragon_tiger_by_symbol = active_dragon_tiger_collector(relay_date)
             dragon_tiger_ready = True
         except Exception as error:  # noqa: BLE001
-            warnings.append(f"龙虎榜刷新失败：{error}")
+            warnings.append(f"龙虎榜刷新失败：{_provider_error_message(error)}")
 
     popularity_by_symbol: dict[str, PopularityFact] = {}
     popularity_captured_at: datetime | None = None
@@ -281,7 +293,7 @@ def refresh_recommendation_intelligence(
             )
             popularity_ready = True
         except Exception as error:  # noqa: BLE001
-            warnings.append(f"人气榜刷新失败：{error}")
+            warnings.append(f"人气榜刷新失败：{_provider_error_message(error)}")
 
     previous_financials = {
         item.symbol: item.financial_report
@@ -315,6 +327,17 @@ def refresh_recommendation_intelligence(
         financial_collector=active_financial_collector,
         max_workers=max_workers,
     )
+    # Slow provider calls may cross the opening cutoff. Discard that new evidence
+    # instead of dating it with the request's earlier start time.
+    finished_at = _as_shanghai(now or datetime.now(SHANGHAI_TZ))
+    if _premarket_refresh_window_closed(target_trade_date=target_trade_date, now=finished_at):
+        missed = _missed_cutoff_response(
+            previous=previous if same_basis else None, refreshed_at=finished_at,
+            interval_minutes=interval_minutes, target_trade_date=target_trade_date,
+            relay_base_date=relay_date,
+        )
+        intelligence_repo.save(missed)
+        return missed
 
     context = _CandidateRefreshContext(
         refreshed_at=refreshed_at,
@@ -327,7 +350,6 @@ def refresh_recommendation_intelligence(
         popularity_ready=popularity_ready,
     )
     items: list[RecommendationIntelligenceItem] = []
-    provider_error_count = 0
     for candidate in candidates:
         previous_item = previous_items.get(
             (candidate.strategy, candidate.base_trade_date, candidate.symbol)
@@ -336,14 +358,9 @@ def refresh_recommendation_intelligence(
             candidate.symbol,
             _CandidateEvidence(None, None, ["情报刷新未返回结果"]),
         )
-        if evidence.errors:
-            provider_error_count += 1
         items.append(_build_candidate_item(candidate, evidence, previous_item, context))
     ranked_items = _rank_relay_items(items)
-    if provider_error_count:
-        warnings.append(
-            f"{provider_error_count} 只股票的新闻或财报刷新发生错误，已保留可用缓存。"
-        )
+    warnings.extend(_evidence_failure_warnings(evidence_by_symbol))
     response = RecommendationIntelligenceResponse(
         refresh_id=f"recommendation_{uuid4().hex}",
         refreshed_at=refreshed_at,
@@ -1297,6 +1314,40 @@ def _market_close(trade_date: date) -> datetime:
     return datetime.combine(trade_date, MARKET_CLOSE_TIME, tzinfo=SHANGHAI_TZ)
 
 
+def _provider_error_message(error: Exception) -> str:
+    """Keep transport envelopes out of user-facing refresh warnings."""
+    logger.warning("Recommendation provider refresh failed: %s", error)
+    if isinstance(error, HithinkFinanceError):
+        if error.code in {"FUYAO_429", "FUYAO_4001"}:
+            return "同花顺请求触发限流，本轮未取得新数据。"
+        if error.code == "timeout":
+            return "同花顺请求超时，本轮未取得新数据。"
+        return "同花顺数据服务暂不可用，本轮未取得新数据。"
+    return "数据源暂不可用，本轮未取得新数据。"
+
+
+def _evidence_failure_warnings(evidence: dict[str, _CandidateEvidence]) -> list[str]:
+    """Count unique symbols and report only caches actually used after failure."""
+    warnings = []
+    for label, failed, cached in (
+        ("新闻", "news_failed", "news_cached"),
+        ("财报", "financial_failed", "financial_cached"),
+    ):
+        failures = [item for item in evidence.values() if getattr(item, failed)]
+        if not failures:
+            continue
+        retained = sum(bool(getattr(item, cached)) for item in failures)
+        warnings.append(
+            f"{len(failures)} 只股票的{label}刷新失败；"
+            f"{retained} 只沿用已有缓存，{len(failures) - retained} 只无可用缓存。"
+        )
+    unknown = sum(bool(item.errors) and not item.news_failed and not item.financial_failed
+                  for item in evidence.values())
+    if unknown:
+        warnings.append(f"{unknown} 只股票的情报处理失败，请查看数据缺失说明。")
+    return warnings
+
+
 # Collect candidate news and financial evidence with bounded worker concurrency.
 def _collect_candidate_evidence(
     candidates: list[_BaseCandidate],
@@ -1331,7 +1382,7 @@ def _collect_candidate_evidence(
                 results[symbol] = _CandidateEvidence(
                     news=None,
                     financial_report=previous_financials.get(symbol),
-                    errors=[str(error)],
+                    errors=[f"情报处理失败：{_provider_error_message(error)}"],
                 )
     return results
 
@@ -1348,13 +1399,18 @@ def _load_candidate_evidence(
     financial_collector: FinancialCollector,
 ) -> _CandidateEvidence:
     errors: list[str] = []
+    news_failed = financial_failed = news_cached = financial_cached = False
     try:
         news = news_collector(candidate.symbol, candidate.name)
-        if news.cache_status == "stale" and news.data_missing:
-            errors.extend(news.data_missing[:1])
+        if news.cache_status == "stale":
+            news_failed = True
+            news_cached = bool(news.items)
+            errors.append("新闻刷新失败，沿用已有缓存" if news_cached else "新闻刷新失败，无可用缓存")
     except Exception as error:  # noqa: BLE001
         news = previous_news
-        errors.append(f"新闻刷新失败：{error}")
+        news_failed = True
+        news_cached = bool(news and news.items)
+        errors.append(f"新闻刷新失败：{_provider_error_message(error)}")
 
     financial = previous_financial
     financial_is_fresh = (
@@ -1366,10 +1422,16 @@ def _load_candidate_evidence(
             statements = financial_collector(_to_thscode(candidate.symbol))
             financial = _build_financial_report(statements, refreshed_at)
             if financial is None:
+                financial_failed = True
+                financial = previous_financial
+                financial_cached = financial is not None
                 errors.append("财报源未返回季度利润表")
         except Exception as error:  # noqa: BLE001
-            errors.append(f"财报刷新失败：{error}")
-    return _CandidateEvidence(news, financial, errors)
+            financial_failed = True
+            financial_cached = financial is not None
+            errors.append(f"财报刷新失败：{_provider_error_message(error)}")
+    return _CandidateEvidence(news, financial, errors, news_failed, financial_failed,
+                              news_cached, financial_cached)
 
 
 # Build the candidate's financial-evidence summary from the supplied income statements.

@@ -19,10 +19,13 @@ if str(BACKEND_ROOT) not in sys.path:
 from app.config import configure_runtime_environment
 from app.services.recommendation_intelligence import (
     DEFAULT_REFRESH_INTERVAL_MINUTES,
+    MARKET_OPEN_TIME,
+    PARTIAL_REFRESH_RETRY_DELAY,
     finalize_recommendation_intelligence,
     refresh_recommendation_intelligence,
     should_finalize_recommendation_intelligence,
 )
+from app.models import RecommendationIntelligenceResponse
 
 
 DEFAULT_LOCK_PATH = BACKEND_ROOT / "data" / "recommendation_refresh.lock"
@@ -30,6 +33,7 @@ DEFAULT_REPORT_PATH = BACKEND_ROOT / "data" / "recommendation_refresh_latest.jso
 SHANGHAI_TZ = ZoneInfo("Asia/Shanghai")
 PREMARKET_REFRESH_TIME = datetime_time(8, 0)
 WORKER_STALE_AFTER = timedelta(hours=30)
+MAX_RECOVERY_ROUNDS = 3
 
 
 class RefreshLoopLock:
@@ -82,27 +86,31 @@ def main() -> int:
     with RefreshLoopLock(args.lock_path, stale_after=WORKER_STALE_AFTER) as lock:
         # Reconcile persisted state on every start. The refresh service enforces
         # the target day's cutoff before collecting new evidence.
-        run_immediately = True
+        next_wait = 0.0
+        recovery_rounds = 0
         while True:
-            if not run_immediately:
-                time.sleep(_seconds_until_next_premarket_refresh())
-            error = _run_refresh_with_retries(interval, args.report_path)
-            if error is not None:
+            if next_wait:
+                time.sleep(next_wait)
+            result = _run_refresh_with_retries(interval, args.report_path)
+            if isinstance(result, Exception):
                 _write_report(
                     args.report_path,
                     {
                         "status": "error",
                         "refreshed_at": datetime.now(timezone.utc).isoformat(),
-                        "error": str(error),
+                        "error": str(result),
                     },
                 )
-                print(f"Recommendation refresh failed: {error}", flush=True)
+                print(f"Recommendation refresh failed: {result}", flush=True)
             lock.touch()
-            run_immediately = False
+            recovery_rounds = recovery_rounds + 1 if _needs_recovery(result) else 0
+            next_wait = _next_refresh_wait(result, recovery_rounds)
+            if recovery_rounds > MAX_RECOVERY_ROUNDS:
+                recovery_rounds = 0
 
 
 # Refresh candidate intelligence, finalize it when eligible and persist the iteration report.
-def _run_refresh(interval: int, report_path: Path) -> None:
+def _run_refresh(interval: int, report_path: Path) -> RecommendationIntelligenceResponse:
     response = refresh_recommendation_intelligence(interval_minutes=interval)
     if should_finalize_recommendation_intelligence(response):
         response = finalize_recommendation_intelligence(response)
@@ -126,6 +134,7 @@ def _run_refresh(interval: int, report_path: Path) -> None:
         ),
         flush=True,
     )
+    return response
 
 
 def _run_refresh_with_retries(
@@ -133,18 +142,37 @@ def _run_refresh_with_retries(
     report_path: Path,
     *,
     attempts: int = 3,
-) -> Exception | None:
+) -> RecommendationIntelligenceResponse | Exception | None:
     """Retry transient provider failures so the 08:00 finalization is not skipped."""
 
     for attempt in range(1, max(attempts, 1) + 1):
         try:
-            _run_refresh(interval, report_path)
-            return None
+            return _run_refresh(interval, report_path)
         except Exception as error:  # noqa: BLE001
             if attempt >= max(attempts, 1):
                 return error
             time.sleep(5)
     return None
+
+
+def _needs_recovery(result, now: datetime | None = None) -> bool:
+    if isinstance(result, Exception):
+        return True
+    if result is None or result.stage != "draft" or result.status != "partial":
+        return False
+    current = (now or datetime.now(SHANGHAI_TZ)).astimezone(SHANGHAI_TZ)
+    return result.target_trade_date is None or current < datetime.combine(
+        result.target_trade_date, MARKET_OPEN_TIME, tzinfo=SHANGHAI_TZ,
+    )
+
+
+def _next_refresh_wait(result, recovery_rounds: int, now: datetime | None = None) -> float:
+    """Bound recovery traffic while never delaying the regular 08:00 run."""
+    scheduled = _seconds_until_next_premarket_refresh(now)
+    if _needs_recovery(result, now) and 0 < recovery_rounds <= MAX_RECOVERY_ROUNDS:
+        backoff = PARTIAL_REFRESH_RETRY_DELAY.total_seconds() * 2 ** (recovery_rounds - 1)
+        return min(scheduled, backoff)
+    return scheduled
 
 
 def _seconds_until_next_premarket_refresh(now: datetime | None = None) -> float:

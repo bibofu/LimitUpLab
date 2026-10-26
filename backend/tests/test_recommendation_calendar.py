@@ -217,7 +217,7 @@ def test_worker_retries_temporary_calendar_failure_after_recording_unknown(isola
     monkeypatch.setattr(worker, "finalize_recommendation_intelligence", finalize)
     report_path = tmp_path / "refresh.json"
 
-    assert worker._run_refresh_with_retries(1440, report_path) is None
+    assert worker._run_refresh_with_retries(1440, report_path).stage == "missed_cutoff"
 
     assert observed_targets == [None]
     assert calendar.call_count == 2
