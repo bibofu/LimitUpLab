@@ -82,10 +82,13 @@ def review_input_security(
     *,
     message: str,
     timeout_seconds: float = 10,
+    referent_hint: dict | None = None,
 ) -> SecurityDecision:
     """Classify one user message, with one bounded schema repair."""
 
     payload: dict = {"message": message}
+    if referent_hint:
+        payload["recent_referents"] = referent_hint
     last_error: Exception | None = None
     for attempt in range(2):
         response = provider.generate_messages(

@@ -87,7 +87,9 @@ Graph 通过 `astream(stream_mode=["custom", "updates"], durability="sync")` 驱
 
 第三轮新增 `query_scope`：从已校验调用参数和工具实际归一化输入构造有效 arguments，并保留 explicit_arguments；它随不可变回执保存。引用的 filters 和 sort_rules 从这个来源产生，保留排序方向；旧结果缺少 scope 时明确标记 unknown，“继续按上次条件”会澄清，不从摘要猜参数。同名单、同日期但不同查询范围也不能默默合并。分页读取只是原回执视图，不生成第二份股票引用。
 
-最终复核移除了按“第N只”词面直接触发历史引用的规则。既有输入审查同轮必须生成 `ReferenceIntent(kind=none/entities/conditions)`，回指附本轮逐字引用，缺字段走已有有界 schema 修复，正常请求不增加模型轮数。新查询的排名序号不要求先有历史名单；历史实体按已提交展示顺序解析，明确整批需 `all_entities=true`，未知单体先澄清。conditions 只继承可核验 query_scope，不把上次结果中的股票转为 symbols 筛选，本轮新日期/股票/排序/条件优先。旧待执行 checkpoint 缺该字段时在后续业务模型调用前重新审查一次，已交付历史答案保持可读取。
+最终复核移除了按“第N只”词面直接触发历史引用的规则。既有输入审查同轮必须生成 `ReferenceIntent`，回指附本轮逐字引用，缺字段走已有有界 schema 修复，正常请求不增加模型轮数。新查询的排名序号不要求先有历史名单；历史实体按已提交展示顺序解析，明确整批需 `all_entities=true`。conditions 只继承可核验 query_scope，不把上次结果中的股票转为 symbols 筛选，本轮新日期/股票/排序/条件优先。旧待执行 checkpoint 缺该字段时在后续业务模型调用前重新审查一次，已交付历史答案保持可读取。
+
+2026-10-26 增加按整轮构建的 `ConversationReferents`，把“用户指什么”和“当前事实是什么”分开。它保存 `stocks`（支持 payload 级 `symbol`、`rows[].symbol` 和嵌套 `promoted_stocks`）、`stock_set`（single/set/ordered_list/multiple）、`analysis`（tool/query_scope/metric_keys/as_of/previous_trade_date）和 `date_scope`，不保存原始工具行。多个单股票工具结果合并为一个实体集合；只有真正多组名单/多日期冲突才澄清。`ReferenceIntent` 增加 `analysis` 和 `date_override`；输入审查只接收有界的 `recent_referents` 提示，不接收完整历史。唯一实体、明确整批和单一最近分析范围可以直接解析；没有工具结果的唯一历史股票生成 `verified=false` 指针，必须由本轮工具核验；`resolved_reference` 始终只是指针，不是行情证据。单股票工具的 `symbol` 只描述对象，不再进入会话筛选条件。该版本后端全量 1911 passed、22 subtests passed、1 skipped；真实模型三组两轮验收（单股票“它”、双股票“他们”、1进2“上一个交易日”）全部通过，报告位于 `output/memory-referents/acceptance-20261026T110140Z/`。两只股票的市值追问仍受限于当前工具没有稳定总市值字段，会明确返回数据缺失，而不是误判引用歧义。
 
 会话中另外保存带 `source_run_id/source_message_id/reference_id/tool/key/value` 的结构化条件。其 origin 为 committed_tool_scope、application 为 reference_followup：它描述上一查询范围，只在继续该查询或明确沿用条件时使用，不把模型工具参数或默认值冒称为用户偏好。摘要不能重写这些条件；长期记忆撤回时，仍被 active references 精确支撑的条件会保留，无法证明来源的旧自由文本仍保守重建。本轮明确要求优先。
 

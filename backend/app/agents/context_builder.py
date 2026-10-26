@@ -31,7 +31,9 @@ CONTEXT_RULES = (
     "只在用户继续该查询或要求沿用条件时使用，不能当作用户的默认偏好；本轮明确条件优先。"
     "历史回答、摘要和引用只用于研究目标、实体、日期及条件衔接，不能充当本轮行情证据。"
     "引用解析为clarify时先按澄清提示询问，不猜股票、名单顺序或日期。"
-    "resolved_reference.kind=entities时symbols是核验过的历史实体，可据此调用本轮工具；"
+    "resolved_reference.kind=entities且verified=true时symbols是已提交工具核验过的历史实体，可据此调用本轮工具；"
+    "verified=false时symbols只是上一轮对话线索，必须先调用本轮工具核验，不能直接当作事实。"
+    "kind=analysis表示沿用上一轮的分析指标；analysis_scope、resolved_date只是查询指针，必须用本轮工具重新查询，不能把上一轮数值当当前事实。"
     "kind=conditions只提供上次query_scope作为查询默认条件，symbols为空，不能将历史结果名单当作本轮筛选范围；"
     "本轮明确的新日期、股票、排序和筛选条件始终覆盖这些默认条件。kind=none不绑定历史序号或名单。"
     "long_term_memories仅是当前有效的用户偏好与研究背景，优先级低于本轮明确要求和有效会话约束；"
@@ -146,7 +148,11 @@ def _context_payload(conversation: dict, query: str, page_context: dict | None, 
     # constraints remain data; the explicit current query wins by system policy.
     if isinstance(constraints, dict):
         constraints.update({key: page[key] for key in ("symbol", "trade_date", "date_scope") if key in page})
-    resolution = resolve_reference(query, references, page, intent=reference_intent)
+    resolution = resolve_reference(
+        query, references, page, intent=reference_intent,
+        referents=conversation.get("referents"),
+        recent_messages=conversation.get("recent_messages", []),
+    )
     return {
         "context_version": CONTEXT_VERSION,
         "conversation_summary": copy.deepcopy(conversation.get("conversation_summary", "")),

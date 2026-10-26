@@ -108,12 +108,16 @@ def _retrieve(control, query):
 
 def _review(state, deps):
     from app.agents.memory_commands import prepare_memory_request
+    from app.agents.structured_references import compact_referent_hint
     with execution_context(deps), trace_stage("input_review", {"node": "input_review"}):
         if deps.control.cancelled():
             return deps.runner._cancelled_stop()
         retrieved = _retrieve(deps.control, state["current_query"])
         try:
-            decision = review_input_security(deps.runner.provider, message=state["current_query"], timeout_seconds=10)
+            decision = review_input_security(
+                deps.runner.provider, message=state["current_query"], timeout_seconds=10,
+                referent_hint=compact_referent_hint(state.get("conversation", {})),
+            )
         except Exception as error:
             from app.agents.runtime_errors import RecoverableRunError
             raise RecoverableRunError("输入审核暂时中断，尚未执行工具。") from error
@@ -463,7 +467,10 @@ class DurableRuntime:
 
     def _conversation(self, state, runner, control):
         from app.agents.conversation_memory import compress_conversation
-        from app.agents.structured_references import references_from_committed_result, constraints_from_references
+        from app.agents.structured_references import (
+            build_conversation_referents, constraints_from_references,
+            references_from_committed_result,
+        )
         from app.repositories.chat_memory_repository import ChatMemoryRepository
         from app.services.conversation_summary import summary_payload
         from app.services.memory_scope import clean_conversation_for_memory_revision
@@ -501,6 +508,14 @@ class DurableRuntime:
                 if references:
                     conversation["active_references"] = references
                     conversation["active_constraints"] = constraints_from_references(references)
+                # Referents are pointers for follow-up questions, not market
+                # evidence. Build them at run level so several single-stock
+                # tool calls form one coherent entity set.
+                conversation["referents"] = build_conversation_referents(
+                    state["run_id"], response,
+                )
+            else:
+                conversation["referents"] = {}
         return clean_conversation_for_memory_revision(conversation, _retrieve(control, runner.request.message))
 
 

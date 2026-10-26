@@ -1,5 +1,12 @@
 # Agent 问答回归记录
 
+## 2026-10-26：同一会话的“它/他们/上一个交易日呢”追问无法回指
+
+- 原表现：同一会话先问“宁德时代的股票代码是多少”再问“它近期走势怎么样”，第二问返回 `clarify / reference_ambiguous`；两只股票后问“他们的最新市值”返回“上一轮包含多组名单”；1进2 统计后问“那上一个交易日呢”返回“尚无已提交的股票列表”。三个案例的上一轮历史都已进入上下文（`history_turns_included=1`），预算 40k 未超，模型均未获得调用机会。
+- 原因：引用只从单条工具结果的 `rows[].symbol` 提取；单股票 payload、嵌套 `promoted_stocks` 和统计工具查询范围都表达不了。多个单股票调用被当成多组名单；无引用时所有 `entities/conditions` 追问在模型调用前直接澄清。指代解析层只读 `active_references`，不读上一轮历史，把“历史不能作为事实证据”错误扩展成“历史不能用于理解指代”。
+- 修复：新增按整轮构建的 `ConversationReferents`（单股票/集合/有序列表/嵌套名单 + analysis scope + date scope）；`ReferenceIntent` 增加 `analysis` 与 `date_override`，输入审查只接收有界 `recent_referents`；解析器对唯一实体、明确整批和单一最近分析范围直接解析，只有真实多组/多日期冲突才澄清；无工具的唯一历史股票生成 `verified=false` 指针，必须由本轮工具核验；单股票 `symbol` 不再进入会话筛选条件。
+- 验证：后端全量 1911 passed、22 subtests passed、1 skipped。真实 DeepSeek 三组两轮验收全部通过：单股票“它”解析到 300750 并调用 `stock_kline`；两只股票“他们”解析到 300750/600519，不再误判多组名单；1进2 追问识别为 `analysis`，解析上一交易日 2026-10-23 并调用 `daily_board_promotion`。详细证据和仍未解决的市值数据源问题见 [memory_badcase.md](memory_badcase.md)；报告位于 `output/memory-referents/`。
+
 ## 2026-10-25：生产工具 schema 占满输入预算，完整首板名单被拒答
 
 - 问题：应用默认输入预算为 24,000 估算 token，但 v1 的 24 个工具 schema、system prompt 和上下文规则已约占 19,700–20,800；再加上一条 68 行的首板名单（约 3,612）后，`build_context` 在模型调用前抛出 `ContextBudgetExceeded`，问答被记为 `partial / context_budget`。

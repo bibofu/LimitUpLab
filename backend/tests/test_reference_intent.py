@@ -69,10 +69,39 @@ def test_conditions_requery_cannot_inherit_output_symbols_or_override_current_da
     {"kind": "entities", "quote": "第二只", "ordinal": "2"},
     {"kind": "entities", "quote": "第二只", "ordinal": 2, "all_entities": True},
     {"kind": "conditions", "quote": "沿用条件", "all_entities": True},
+    {"kind": "analysis"},
+    {"kind": "analysis", "quote": "上一个交易日", "ordinal": 2},
+    {"kind": "analysis", "quote": "上一个交易日", "date_override": "yesterday"},
+    {"kind": "none", "date_override": "previous_trade_date"},
+    {"kind": "entities", "quote": "第二只", "date_override": "previous_trade_date"},
 ])
 def test_intent_schema_rejects_missing_or_contradictory_meaning(intent):
     with pytest.raises(ValueError):
         ReferenceIntent.model_validate(intent)
+
+
+def test_analysis_intent_carries_a_typed_date_override():
+    intent = ReferenceIntent.model_validate({
+        "kind": "analysis", "quote": "那上一个交易日呢",
+        "date_override": "previous_trade_date",
+    })
+    assert intent.kind == "analysis" and intent.date_override == "previous_trade_date"
+    assert intent.ordinal is None and intent.all_entities is False
+
+
+def test_input_review_receives_only_the_compact_referent_hint():
+    hint = {"stocks": [{"symbol": "300750", "name": "宁德时代"}],
+            "analysis": {"tool": "daily_board_promotion", "metric_keys": ["first_board_probability"]}}
+    review = input_review(reference_intent={
+        "kind": "analysis", "quote": "那上一个交易日呢",
+        "date_override": "previous_trade_date",
+    })
+    provider = ScriptedProvider([review])
+    decision = review_input_security(provider, message="那上一个交易日呢", referent_hint=hint)
+    assert decision.reference_intent.kind == "analysis"
+    payload = json.loads(provider.calls[0][1].content)
+    assert payload["recent_referents"] == hint
+    assert "messages" not in payload
 
 
 def test_nonverbatim_reference_quote_is_rejected():
