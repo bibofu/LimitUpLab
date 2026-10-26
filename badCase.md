@@ -1,5 +1,12 @@
 # Agent 问答回归记录
 
+## 2026-10-26：东方财富直连断连，市值字段增加腾讯兜底并重试
+
+- 原表现：`stock_profile` 开启市值查询时，东方财富 `stock_individual_info_em` 返回 `RemoteDisconnected`；关闭系统代理、`trust_env=False`、显式 `NO_PROXY=*` 后直连仍然断连，说明不是单纯代理配置问题。市值问题只能返回 `partial`。
+- 原因：东方财富在当前网络/上游侧关闭连接，代码层绕过本地代理无法保证其可用；此前只依赖单一市值来源，没有独立兜底。
+- 修复：`load_market_cap` 保持东方财富优先；失败或空响应时降级到腾讯 `qt.gtimg.cn`，解析字段 44/45（流通/总市值，亿元转元）和 72/73/76（流通/总股本），并在 `sources.market_cap` 标注实际来源。腾讯请求使用 `trust_env=False`、`NO_PROXY=*`，失败后最多重试一次。
+- 验证：真实服务返回 `status=ok`，总市值/流通市值 1,687,585,000,000 元，总股本/流通股 1,250,081,601 股，来源为 `tencent.qt.gtimg.cn`。真实 DeepSeek 四问全部 HTTP 200、`task_status=complete`；市值回答注明当前快照、来源腾讯、不是历史市值。报告位于忽略目录 `output/memory-refactoring/stock-profile-live-a0168db6.json`。同版本后端全量 1936 passed、22 subtests passed、1 skipped。提交 `54aae76`、`45d90af`。
+
 ## 2026-10-26：市值来源失败把只问公司资料的回答误标为 partial
 
 - 原表现：新增 `stock_profile` 首次真实三问“主营业务/行业与上市日期/注册地址与法人”内容全部正确，但 `task_status` 均为 `partial`；原因是工具无条件调用东方财富市值接口，该来源连接失败后整个工具被标为 `partial`，即使公司资料字段完整。
