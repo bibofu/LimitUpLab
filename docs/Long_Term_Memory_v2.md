@@ -2,7 +2,7 @@
 
 更新日期：2026-10-27。
 
-本文件记录长期记忆重构已经落地的边界。它不是完整 v2；向量检索、候选删除和低风险自动激活仍按后续阶段推进。
+本文件记录长期记忆重构已经落地的边界。它不是完整 v2；向量检索和低风险自动激活仍按后续阶段推进。
 
 ## 已落地
 
@@ -16,6 +16,10 @@
   - 移除旧的 key-only 唯一约束，改为 active 记忆按 `(owner, type, key, scope)` 唯一；
   - 同一 key 的不同 scope 不再互相覆盖；
   - 候选增加 `supersedes_memory_id`、`supersedes_revision`，记录它要替换的确切目标版本。
+- 迁移 `0011_memory_candidate_actions`：
+  - 候选增加 `candidate_action=upsert|delete`；
+  - DELETE 候选必须携带 active 目标，未找到目标时不生成候选；
+  - 增加 `exception_to` 关系索引。
 - 自由文本偏好：
   - `preference` / `research_context` 支持 `preference:`、`tool_display:`、`research:` 前缀；
   - 保留 typed 设置（回答详略、展示格式、研究主题）的封闭值校验；
@@ -29,6 +33,11 @@
   - 自由文本增加中文 bigram/ASCII 词法匹配；
   - 返回 `scope`、`canonical_key`、`structured`、`scope_verified`；
   - 仍使用有界 token 预算。
+- 作用域例外：
+  - 同 `memory_type / canonical_key` 的 scoped 记忆与 global 记忆并存时，scoped 记忆写入 `exception_to` 关系；
+  - 只有 scope hint 命中、`scope_verified=true` 时，检索才抑制 global 同 key 记忆；
+  - scope 未验证或 scope 不匹配时保留 global 设置，避免未知工具下误删通用偏好；
+  - 预算不足未选入 scoped 例外时，不抑制 global 设置。
 - 依赖级交付失效：
   - 检索返回实际使用的 `(memory_id, effective_revision, scope_key)`；
   - Graph 状态和公开响应保存 `memory_dependencies`；
@@ -59,8 +68,10 @@
     - active 内容不同时生成 UPDATE 候选，并记录目标 `memory_id + revision`；
     - 同身份已有不同候选时，旧候选标记 superseded，新候选通过 `memory_relations.supersedes` 关联；
     - 同身份候选内容相同时只刷新目标版本，不重复插入；
+    - 用户明确“忘记/删除/不要再记住”某条已有记忆时生成 DELETE 候选；没有 active 目标时为 NOOP；
   - 确认候选时在单事务内校验目标版本；目标被显式改动或已被占用时拒绝，不会覆盖更新的记忆；
   - 更新候选确认后旧 active 变为 superseded，新候选变为 active，并写 `supersedes` 关系；
+  - 删除候选确认后目标写入 tombstone，候选本身也标记 deleted，并写 `supersedes` 关系；
   - 显式写入会先把同身份待确认候选标记 superseded，避免后续确认覆盖用户刚写入的内容；
   - `POST /api/agents/chat/memories/candidates/{id}/confirm` 显式激活；
   - `POST .../reject` 清空候选正文并标记 revoked；
@@ -78,14 +89,16 @@
   - 龙虎榜回答按偏好只展示股票名称；
   - 删除后不再召回；
   - 真实 DeepSeek 四问全部 `complete`；
-  - 更新候选验收：已有展示偏好 + 新候选“显示代码和名称”，工作台显示“确认后替换现有记忆”；确认后旧记忆 superseded、新记忆 active，`memory_relations` 写入 `supersedes`，列表不再有候选。
+  - 更新候选验收：已有展示偏好 + 新候选“显示代码和名称”，工作台显示“确认后替换现有记忆”；确认后旧记忆 superseded、新记忆 active，`memory_relations` 写入 `supersedes`，列表不再有候选；
+  - 删除候选验收：对已有 `response_style` 生成 DELETE 候选，确认后目标与候选均进入 tombstone，active 列表为空；
+  - 例外关系验收：global `response_style=concise` + tool `stock_financials` `response_style=detailed`，财报 scope 命中时只召回 detailed，并记录 `exception_to` 关系。
 
 ## 尚未落地
 
 以下能力明确未完成，不能对外宣称：
 
 1. pgvector 语义检索与同义改写召回；
-2. 候选 DELETE 动作与“例外于某条记忆”的提取/审批尚未实现；
+2. 多条冲突候选的批量合并/冲突工作台尚未实现；
 3. `safe_auto` 自动激活尚未实现；当前候选必须显式确认；
 4. `management_revision` 的写入方（候选、使用统计、embedding 回填）尚未接入；
 5. 展示块目前只抑制 Markdown 表格；模型正文中的列表或普通文字仍可能与展示块重复；
@@ -102,7 +115,8 @@ scope_type, scope_json, scope_key,
 canonical_key, structured_json,
 status, management_revision,
 source_kind, source_quote, content_hash,
-supersedes_memory_id, supersedes_revision
+supersedes_memory_id, supersedes_revision,
+candidate_action
 ```
 
 `revision` 继续作为有效内容版本；`management_revision` 预留给候选、使用统计和 embedding 回填，当前不会影响 fingerprint。
@@ -123,10 +137,10 @@ supersedes_memory_id, supersedes_revision
 正式回答提交
 → memory_extraction_jobs（outbox）
 → worker 读取用户消息
-→ Extractor 输出候选
+→ Extractor 输出 upsert / delete 候选
 → Consolidator 对比 active / pending candidate
-→ add / update / noop / supersede
-→ status='candidate'（显式确认后才 active）
+→ add / update / delete / noop / supersede
+→ status='candidate'（显式确认后才 active 或删除目标）
 ```
 
 ## 检索路径
@@ -143,7 +157,7 @@ owner + active + 未过期 + 未删除
 
 ## 下一步
 
-1. 候选 DELETE 提取、例外关系和批量合并审批；
+1. 多条冲突候选的批量合并/冲突工作台；
 2. 接入 pgvector 混合检索与中文评测；
 3. `management_revision` 写入方、`safe_auto` 低风险自动激活；
 4. 抑制展示块与正文列表/文字的重复，并解析重复股票榜单的序号；

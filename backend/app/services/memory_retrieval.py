@@ -161,10 +161,18 @@ def retrieve_memories(
             candidates.append((score, item, verified))
     candidates.sort(key=lambda pair: (pair[0], int(pair[1].get("revision", 0)),
                                      str(pair[1].get("updated_at") or ""), pair[1]["memory_id"]), reverse=True)
+    exception_groups = {
+        (item["memory_type"],
+         str(item.get("canonical_key") or item.get("key") or "").casefold())
+        for _, item, verified in candidates
+        if verified and str(item.get("scope_type") or "global") != "global"
+    }
     selected, seen_keys, seen_content, budget_omitted, used = [], set(), set(), 0, 0
     for _, item, verified in candidates:
         kind = item["memory_type"]
-        identity = (kind, str(item.get("key") or "").casefold())
+        group = (kind, str(item.get("canonical_key") or item.get("key") or "").casefold())
+        scope_identity = str(item.get("scope_key") or "global") if group in exception_groups else "global"
+        identity = (kind, str(item.get("key") or "").casefold(), scope_identity)
         metadata = item.get("metadata") or {}
         content_key = (kind, " ".join(item["value"].split()).casefold(), metadata.get("as_of"))
         if identity in seen_keys or content_key in seen_content:
@@ -193,6 +201,27 @@ def retrieve_memories(
             continue
         selected.append(view)
         used += cost
+    exception_suppressed = 0
+    verified_exception_groups = {
+        (view["memory_type"],
+         str(view.get("canonical_key") or view.get("key") or "").casefold())
+        for view in selected
+        if view.get("scope_verified") and view.get("scope_type") != "global"
+    }
+    if verified_exception_groups:
+        filtered = [
+            view for view in selected
+            if not (
+                view.get("scope_type") == "global"
+                and (view["memory_type"],
+                     str(view.get("canonical_key") or view.get("key") or "").casefold())
+                in verified_exception_groups
+            )
+        ]
+        exception_suppressed = len(selected) - len(filtered)
+        if exception_suppressed:
+            selected = filtered
+            used = sum(estimate_tokens(view) for view in selected)
     # The active selection fingerprint changes after expiry even without a write
     # to owner_revision. Values are deliberately absent from this state marker.
     fingerprint = snapshot.get("context_fingerprint")
@@ -212,6 +241,7 @@ def retrieve_memories(
         "memory_hit_count": len(selected), "long_term_memory_tokens": used,
         "memory_token_budget": max_tokens, "memory_candidate_count": len(candidates),
         "memory_budget_omitted_count": budget_omitted, "memory_rejected_count": rejected,
+        "memory_exception_suppressed_count": exception_suppressed,
         "memory_owner_revision": revision, "memory_context_fingerprint": fingerprint,
         "memory_dependency_count": len(dependencies),
         "memory_retrieval_mode": "typed_exact_topic_v1",

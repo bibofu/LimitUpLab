@@ -74,6 +74,24 @@ class MemoryIntent(BaseModel):
         return self
 
 
+def validate_memory_delete_target(memory_type: MemoryType, key: str) -> None:
+    """Validate a proposal to remove an existing memory identity.
+
+    Deletion has no new content, so it checks the target key rather than the
+    value vocabulary used by writes. The user must still confirm the candidate.
+    """
+
+    if not isinstance(key, str) or not key.strip():
+        raise ValueError("Memory deletion requires a target key")
+    if memory_type == "research_archive":
+        return
+    if (memory_type, key) in MEMORY_VALUES:
+        return
+    if memory_type in {"preference", "research_context"} and key.startswith(FREE_TEXT_PREFIXES):
+        return
+    raise ValueError("Unsupported memory delete target")
+
+
 def validate_memory_write(write: MemoryWrite, *, owner_id: str, source: str = "api") -> MemoryWrite:
     """Enforce the same non-LLM policy for HTTP, agent and direct repository writes."""
     write = MemoryWrite.model_validate(write)

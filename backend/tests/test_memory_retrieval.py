@@ -60,6 +60,24 @@ def test_default_expiry_uses_repository_snapshot_clock_instead_of_host_time():
     assert result.items == []
 
 
+def test_verified_scoped_exception_suppresses_the_global_same_key_setting():
+    repo = SnapshotRepository([
+        record(value="concise", scope_type="global", scope_key="global",
+               canonical_key="response_style"),
+        record(memory_id="scoped", value="detailed", scope_type="tool",
+               scope={"tool_name": "stock_financials"},
+               scope_key='tool:{"tool_name":"stock_financials"}',
+               canonical_key="response_style"),
+    ])
+    matching = retrieve(repo, scope_hint={"tool_name": "stock_financials"})
+    assert [item["value"] for item in matching.items] == ["detailed"]
+    assert matching.diagnostics["memory_exception_suppressed_count"] == 1
+
+    other = retrieve(repo, scope_hint={"tool_name": "stock_kline"})
+    assert [item["value"] for item in other.items] == ["concise"]
+    assert other.diagnostics["memory_exception_suppressed_count"] == 0
+
+
 def test_exact_key_topic_type_and_relevance_filters():
     repo = SnapshotRepository([
         record(), record("output_format", value="table"),

@@ -601,6 +601,7 @@ export interface AgentMemoryRecord {
   source_kind: "legacy" | "explicit" | "auto" | "import";
   source_quote: string | null;
   source_user_message: string;
+  candidate_action: "upsert" | "delete";
   supersedes_memory_id: string | null;
   supersedes_revision: number | null;
   created_at: string;

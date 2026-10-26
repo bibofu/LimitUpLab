@@ -8,6 +8,7 @@ import pytest
 from app.database import connect
 from app.memory_models import MemoryWrite
 from app.repositories.long_term_memory_repository import LongTermMemoryRepository, MemoryNotFound
+from app.services.memory_retrieval import retrieve_memories
 
 
 def owner():
@@ -142,6 +143,138 @@ def test_explicit_write_supersedes_a_pending_candidate_for_the_same_identity(pos
     with pytest.raises(MemoryNotFound):
         repository.confirm_candidate(user, pending["candidate_id"], "confirm-stale")
     assert repository.get(user, active.current.memory_id).status == "active"
+
+
+def test_delete_candidate_targets_the_exact_active_revision_and_removes_it_on_confirm(
+    postgresql_database,
+):
+    repository = LongTermMemoryRepository()
+    user = owner()
+    active = repository.put(user, MemoryWrite(
+        memory_type="preference", key="response_style", value="concise",
+        source_user_message="以后回答简洁",
+    ), "active-style")
+    deletion = MemoryWrite(
+        memory_type="preference", key="response_style",
+        value="不要再记住回答要简洁",
+        source_user_message="以后不要再记住回答要简洁",
+    )
+    decision = repository.consolidate_candidate(
+        user, deletion, "candidate-delete", action="delete",
+    )
+
+    assert decision["decision"] == "delete"
+    candidate = repository.get(user, decision["candidate_id"], include_inactive=True)
+    assert candidate.candidate_action == "delete"
+    assert candidate.supersedes_memory_id == active.current.memory_id
+    assert candidate.supersedes_revision == active.current.revision
+    assert repository.get(user, active.current.memory_id).status == "active"
+
+    confirmed = repository.confirm_candidate(user, candidate.memory_id, "confirm-delete")
+    assert confirmed.current.status == "deleted"
+    assert confirmed.owner_revision == 2
+    old = repository.get(user, active.current.memory_id, include_inactive=True)
+    assert old.status == "deleted" and old.value is None
+    assert repository.list_active(user) == []
+    with closing(connect()) as db:
+        relation = db.execute("""SELECT relation FROM memory_relations
+            WHERE owner_id=? AND from_memory_id=? AND to_memory_id=?""",
+            (user, candidate.memory_id, active.current.memory_id)).fetchone()
+    assert relation["relation"] == "supersedes"
+
+
+def test_delete_without_an_active_target_creates_no_candidate(postgresql_database):
+    repository = LongTermMemoryRepository()
+    user = owner()
+    decision = repository.consolidate_candidate(
+        user,
+        MemoryWrite(
+            memory_type="preference", key="response_style",
+            value="不要再记住回答要简洁",
+            source_user_message="以后不要再记住回答要简洁",
+        ),
+        "candidate-delete-missing",
+        action="delete",
+    )
+    assert decision["decision"] == "noop"
+    assert repository.list_candidates(user) == []
+
+
+def test_new_delete_proposal_supersedes_a_pending_update_candidate(postgresql_database):
+    repository = LongTermMemoryRepository()
+    user = owner()
+    repository.put(user, display_memory(), "active-display")
+    pending_update = repository.consolidate_candidate(
+        user, display_memory(columns=("symbol", "name")), "candidate-update",
+    )
+    deletion = repository.consolidate_candidate(
+        user,
+        MemoryWrite(
+            memory_type="preference", key="tool_display:dragon_tiger_list",
+            value="不要再记住龙虎榜展示偏好",
+            scope_type="tool", scope={"tool_name": "dragon_tiger_list"},
+            source_user_message="以后不要再记住龙虎榜展示偏好",
+        ),
+        "candidate-delete",
+        action="delete",
+    )
+    assert deletion["decision"] == "delete"
+    old = repository.get(user, pending_update["candidate_id"], include_inactive=True)
+    assert old.status == "superseded"
+    assert [item["memory_id"] for item in repository.list_candidates(user)] == [
+        deletion["candidate_id"],
+    ]
+
+
+def test_scoped_setting_is_an_exception_to_the_global_setting(postgresql_database):
+    repository = LongTermMemoryRepository()
+    user = owner()
+    global_setting = repository.put(user, MemoryWrite(
+        memory_type="preference", key="response_style", value="concise",
+        source_user_message="以后回答简洁",
+    ), "global-style")
+    scoped = repository.put(user, MemoryWrite(
+        memory_type="preference", key="response_style", value="detailed",
+        scope_type="tool", scope={"tool_name": "stock_financials"},
+        source_user_message="看财报时详细一点",
+    ), "scoped-style")
+
+    with closing(connect()) as db:
+        relation = db.execute("""SELECT relation FROM memory_relations
+            WHERE owner_id=? AND from_memory_id=? AND to_memory_id=?""",
+            (user, scoped.current.memory_id, global_setting.current.memory_id)).fetchone()
+    assert relation["relation"] == "exception_to"
+
+    matching = retrieve_memories(
+        repository, owner_id=user, query="研究财报", scope_hint={"tool_name": "stock_financials"},
+    )
+    assert [item["value"] for item in matching.items] == ["detailed"]
+    assert matching.diagnostics["memory_exception_suppressed_count"] == 1
+
+    other = retrieve_memories(
+        repository, owner_id=user, query="研究财报", scope_hint={"tool_name": "stock_kline"},
+    )
+    assert [item["value"] for item in other.items] == ["concise"]
+
+
+def test_global_setting_added_later_links_existing_scoped_exception(postgresql_database):
+    repository = LongTermMemoryRepository()
+    user = owner()
+    scoped = repository.put(user, MemoryWrite(
+        memory_type="preference", key="response_style", value="detailed",
+        scope_type="tool", scope={"tool_name": "stock_financials"},
+        source_user_message="看财报时详细一点",
+    ), "scoped-style")
+    global_setting = repository.put(user, MemoryWrite(
+        memory_type="preference", key="response_style", value="concise",
+        source_user_message="以后回答简洁",
+    ), "global-style")
+
+    with closing(connect()) as db:
+        relation = db.execute("""SELECT relation FROM memory_relations
+            WHERE owner_id=? AND from_memory_id=? AND to_memory_id=?""",
+            (user, scoped.current.memory_id, global_setting.current.memory_id)).fetchone()
+    assert relation["relation"] == "exception_to"
 
 
 def test_same_key_can_coexist_across_scopes_instead_of_overwriting(postgresql_database):

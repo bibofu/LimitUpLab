@@ -371,12 +371,16 @@ class LongTermMemoryRepository:
                     and row["expires_at"] == write.expires_at
                 )
                 if same:
+                    self._link_exception_relations(
+                        db, owner_id, memory_id, write.memory_type,
+                        canonical_key, write.scope_type,
+                    )
                     return self._finish(db, owner_id, operation_id, fingerprint, "put", memory_id, changed=False)
                 db.execute("""UPDATE long_term_memories SET memory_key=?,value=?,topics_json=?,
                     metadata_json=?,scope_json=?,scope_key=?,canonical_key=?,structured_json=?,
                     source_quote=?,content_hash=?,expires_at=?,source_run_id=?,source_user_message=?,
-                    status='active',source_kind='explicit',deleted_at=NULL,
-                    supersedes_memory_id=NULL,supersedes_revision=NULL,
+                    status='active',source_kind='explicit',candidate_action='upsert',
+                    deleted_at=NULL,supersedes_memory_id=NULL,supersedes_revision=NULL,
                     revision=revision+1,updated_at=clock_timestamp()
                     WHERE owner_id=? AND memory_id=? AND revision=?""",
                     (write.key, *values, owner_id, memory_id, write.expected_revision))
@@ -384,25 +388,48 @@ class LongTermMemoryRepository:
                 db.execute("""INSERT INTO long_term_memories
                     (memory_id,owner_id,memory_type,memory_key,revision,value,topics_json,metadata_json,
                      scope_json,scope_key,canonical_key,structured_json,source_quote,content_hash,
-                     expires_at,source_run_id,source_user_message,scope_type,status,source_kind)
-                    VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,'active','explicit')""",
+                     expires_at,source_run_id,source_user_message,scope_type,status,source_kind,
+                     candidate_action)
+                    VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,'active','explicit','upsert')""",
                     (memory_id, owner_id, write.memory_type, write.key, *values,
                      write.scope_type))
+            self._link_exception_relations(
+                db, owner_id, memory_id, write.memory_type, canonical_key, write.scope_type,
+            )
             return self._finish(db, owner_id, operation_id, fingerprint, "put", memory_id)
 
-    def consolidate_candidate(self, owner_id, write, operation_id, *, source_kind="auto"):
+    def consolidate_candidate(
+        self, owner_id, write, operation_id, *, source_kind="auto", action="upsert",
+    ):
         """Merge one automatic proposal with the active identity and open candidate.
 
         The candidate is never activated here. A changed active identity produces
         an ``update`` candidate carrying the exact target revision; a repeated
-        proposal is a no-op, and a newer differing proposal supersedes the prior
-        pending candidate.
+        proposal is a no-op, a newer differing proposal supersedes the prior
+        pending candidate, and an explicit deletion becomes a targeted remove
+        candidate.
         """
 
-        from app.agents.memory_policy import validate_memory_write
+        from app.agents.memory_policy import (
+            FORBIDDEN_MEMORY_TERMS,
+            validate_memory_delete_target,
+            validate_memory_write,
+        )
+        if action not in {"upsert", "delete"}:
+            raise ValueError("Unsupported candidate action")
         write = MemoryWrite.model_validate(write)
-        write = validate_memory_write(write, owner_id=owner_id, source="agent")
-        fingerprint = self._fingerprint("put", [write.model_dump(mode="json"), None], operation_id)
+        if action == "upsert":
+            write = validate_memory_write(write, owner_id=owner_id, source="agent")
+        else:
+            validate_memory_delete_target(write.memory_type, write.key)
+            if not write.value or any(
+                term in write.value.casefold() for term in FORBIDDEN_MEMORY_TERMS
+            ):
+                raise ValueError("Deletion candidate contains forbidden content")
+            write = write.model_copy(update={"structured": {}})
+        fingerprint = self._fingerprint(
+            "put", [action, write.model_dump(mode="json"), None], operation_id,
+        )
         scope_json = _encode(write.scope)
         scope_key = memory_scope_key(write.scope_type, write.scope)
         canonical_key = write.canonical_key or write.key
@@ -436,6 +463,60 @@ class LongTermMemoryRepository:
                   AND status='candidate' AND deleted_at IS NULL
                 ORDER BY created_at DESC,memory_id LIMIT 1 FOR UPDATE""",
                 (owner_id, write.memory_type, scope_key, canonical_key)).fetchone()
+            if action == "delete":
+                if active is None:
+                    return {
+                        "decision": "noop",
+                        "candidate_id": None,
+                        "target_memory_id": None,
+                        "superseded_candidate_id": None,
+                    }
+                target_id = active["memory_id"]
+                target_revision = int(active["revision"])
+                if (pending is not None and pending["candidate_action"] == "delete"
+                        and pending["supersedes_memory_id"] == target_id):
+                    changed_target = pending["supersedes_revision"] != target_revision
+                    if changed_target:
+                        db.execute("""UPDATE long_term_memories
+                            SET supersedes_revision=?,revision=revision+1,
+                                updated_at=clock_timestamp()
+                            WHERE owner_id=? AND memory_id=? AND status='candidate'""",
+                            (target_revision, owner_id, pending["memory_id"]))
+                    self._finish(db, owner_id, operation_id, fingerprint, "put",
+                                 pending["memory_id"], changed=False)
+                    return {
+                        "decision": "refresh" if changed_target else "noop",
+                        "candidate_id": pending["memory_id"],
+                        "target_memory_id": target_id,
+                        "superseded_candidate_id": None,
+                    }
+                replaced_candidate = pending["memory_id"] if pending is not None else None
+                if replaced_candidate is not None:
+                    self._supersede_candidate(db, owner_id, replaced_candidate)
+                memory_id = "memory_" + uuid4().hex
+                db.execute("""INSERT INTO long_term_memories
+                    (memory_id,owner_id,memory_type,memory_key,revision,value,topics_json,
+                     metadata_json,scope_json,scope_key,canonical_key,structured_json,
+                     source_quote,content_hash,expires_at,source_run_id,source_user_message,
+                     scope_type,status,source_kind,candidate_action,
+                     supersedes_memory_id,supersedes_revision)
+                    VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,'candidate',?,'delete',?,?)""",
+                    (memory_id, owner_id, write.memory_type, write.key, write.value,
+                     _encode(write.topics), _encode(write.metadata), scope_json, scope_key,
+                     canonical_key, "{}", write.source_quote, _content_hash(write.value),
+                     write.expires_at, write.source_run_id, write.source_user_message,
+                     write.scope_type, source_kind, target_id, target_revision))
+                if replaced_candidate is not None:
+                    self._relation(db, owner_id, memory_id, replaced_candidate, "supersedes",
+                                   "deletion proposal replaced an older candidate")
+                self._finish(db, owner_id, operation_id, fingerprint, "put",
+                             memory_id, changed=False)
+                return {
+                    "decision": "delete",
+                    "candidate_id": memory_id,
+                    "target_memory_id": target_id,
+                    "superseded_candidate_id": replaced_candidate,
+                }
             if active is not None and _same_effective_content(active, write):
                 superseded_candidate = None
                 if pending is not None:
@@ -451,7 +532,8 @@ class LongTermMemoryRepository:
                 }
             target_id = active["memory_id"] if active is not None else None
             target_revision = int(active["revision"]) if active is not None else None
-            if pending is not None and _same_effective_content(pending, write):
+            if (pending is not None and pending["candidate_action"] == "upsert"
+                    and _same_effective_content(pending, write)):
                 changed_target = (
                     pending["supersedes_memory_id"] != target_id
                     or pending["supersedes_revision"] != target_revision
@@ -478,8 +560,8 @@ class LongTermMemoryRepository:
                 (memory_id,owner_id,memory_type,memory_key,revision,value,topics_json,metadata_json,
                  scope_json,scope_key,canonical_key,structured_json,source_quote,content_hash,
                  expires_at,source_run_id,source_user_message,scope_type,status,source_kind,
-                 supersedes_memory_id,supersedes_revision)
-                VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,'candidate',?,?,?)""",
+                 candidate_action,supersedes_memory_id,supersedes_revision)
+                VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,'candidate',?,'upsert',?,?)""",
                 (memory_id, owner_id, write.memory_type, write.key, write.value,
                  _encode(write.topics), _encode(write.metadata), scope_json, scope_key,
                  canonical_key, _encode(write.structured), write.source_quote,
@@ -512,6 +594,32 @@ class LongTermMemoryRepository:
             VALUES(?,?,?,?,?,?) ON CONFLICT DO NOTHING""",
             ("relation_" + uuid4().hex, owner_id, from_memory_id, to_memory_id,
              relation, reason))
+
+    @classmethod
+    def _link_exception_relations(
+        cls, db, owner_id, memory_id, memory_type, canonical_key, scope_type,
+    ):
+        """Record a scoped memory as an exception to its global same-key setting."""
+
+        if scope_type == "global":
+            children = db.execute("""SELECT memory_id FROM long_term_memories
+                WHERE owner_id=? AND memory_type=? AND scope_type<>'global'
+                  AND COALESCE(canonical_key,memory_key)=?
+                  AND status='active' AND deleted_at IS NULL AND memory_id<>?""",
+                (owner_id, memory_type, canonical_key, memory_id)).fetchall()
+            for child in children:
+                cls._relation(db, owner_id, child["memory_id"], memory_id,
+                              "exception_to", "scoped memory overrides the global setting")
+            return
+        parent = db.execute("""SELECT memory_id FROM long_term_memories
+            WHERE owner_id=? AND memory_type=? AND scope_type='global'
+              AND COALESCE(canonical_key,memory_key)=?
+              AND status='active' AND deleted_at IS NULL AND memory_id<>?
+            ORDER BY updated_at DESC,memory_id LIMIT 1""",
+            (owner_id, memory_type, canonical_key, memory_id)).fetchone()
+        if parent is not None:
+            cls._relation(db, owner_id, memory_id, parent["memory_id"],
+                          "exception_to", "scoped memory overrides the global setting")
 
     def list_candidates(self, owner_id, *, limit=100):
         with self._connection(readonly=True) as db:
@@ -556,6 +664,26 @@ class LongTermMemoryRepository:
                     raise MemoryConflict(
                         "Target memory changed since this candidate was created; refresh candidates"
                     )
+                if row["candidate_action"] == "delete":
+                    db.execute("""UPDATE long_term_memories SET value=NULL,topics_json='[]',
+                        metadata_json='{}',structured_json='{}',source_quote=NULL,
+                        source_run_id=NULL,source_user_message='',expires_at=NULL,
+                        status='deleted',deleted_at=clock_timestamp(),
+                        updated_at=clock_timestamp(),revision=revision+1
+                        WHERE owner_id=? AND memory_id=? AND revision=? AND status='active'""",
+                        (owner_id, target_id, target_revision))
+                    db.execute("""UPDATE long_term_memories SET value=NULL,topics_json='[]',
+                        metadata_json='{}',structured_json='{}',source_quote=NULL,
+                        source_run_id=NULL,source_user_message='',expires_at=NULL,
+                        status='deleted',deleted_at=clock_timestamp(),
+                        updated_at=clock_timestamp(),revision=revision+1
+                        WHERE owner_id=? AND memory_id=? AND revision=? AND status='candidate'""",
+                        (owner_id, memory_id, row["revision"]))
+                    self._relation(db, owner_id, memory_id, target_id, "supersedes",
+                                   "explicit deletion candidate confirmation")
+                    return self._finish(
+                        db, owner_id, operation_id, fingerprint, "put", memory_id,
+                    )
                 db.execute("""UPDATE long_term_memories SET status='superseded',
                     revision=revision+1,updated_at=clock_timestamp()
                     WHERE owner_id=? AND memory_id=? AND revision=? AND status='active'""",
@@ -585,6 +713,9 @@ class LongTermMemoryRepository:
                 revision=revision+1,updated_at=clock_timestamp()
                 WHERE owner_id=? AND memory_id=? AND revision=? AND status='candidate'""",
                 (owner_id, memory_id, row["revision"]))
+            self._link_exception_relations(
+                db, owner_id, memory_id, row["memory_type"], canonical_key, row["scope_type"],
+            )
             return self._finish(db, owner_id, operation_id, fingerprint, "put", memory_id)
 
     def reject_candidate(self, owner_id, memory_id, expected_revision, operation_id):

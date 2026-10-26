@@ -167,6 +167,7 @@ class MemoryRecord(BaseModel):
     content_hash: str | None = None
     source_run_id: str | None
     source_user_message: str
+    candidate_action: Literal["upsert", "delete"] = "upsert"
     supersedes_memory_id: str | None = None
     supersedes_revision: int | None = None
     created_at: datetime

@@ -475,10 +475,13 @@ export function AgentChatDock({
     setMemoryBusyId(candidate.memory_id);
     setMemoryError(null);
     setMemoryNotice(null);
+    const deleting = candidate.candidate_action === "delete";
     try {
       if (action === "confirm") {
         await confirmMemoryCandidate(candidate.memory_id, candidate.revision);
-        setMemoryNotice("已确认，将在后续对话中生效。");
+        setMemoryNotice(deleting
+          ? "已删除该记忆，后续对话不再使用。"
+          : "已确认，将在后续对话中生效。");
       } else {
         await rejectMemoryCandidate(candidate.memory_id, candidate.revision);
         setMemoryNotice("已忽略该候选。");
@@ -487,7 +490,9 @@ export function AgentChatDock({
     } catch (caught) {
       setMemoryError(memoryCandidateMessage(
         caught,
-        action === "confirm" ? "确认记忆失败，请稍后重试。" : "忽略记忆失败，请稍后重试。",
+        action === "confirm"
+          ? (deleting ? "删除记忆失败，请稍后重试。" : "确认记忆失败，请稍后重试。")
+          : "忽略记忆失败，请稍后重试。",
       ));
       if (caught instanceof HttpResponseError && (caught.status === 404 || caught.status === 409)) {
         void loadMemoryCandidates({ quiet: true });
@@ -1043,13 +1048,17 @@ export function AgentChatDock({
               <div className="memory-candidate-list">
                 {memoryCandidates.map(candidate => {
                   const busy = memoryBusyId === candidate.memory_id;
+                  const deleting = candidate.candidate_action === "delete";
                   return (
                     <article className="memory-candidate" key={candidate.memory_id}>
                       <div className="memory-candidate-meta">
                         <span>{MEMORY_TYPE_LABELS[candidate.memory_type]}</span>
                         <span>{memoryScopeLabel(candidate)}</span>
                         <span>{candidate.source_kind === "auto" ? "自动提取" : "候选"}</span>
-                        {candidate.supersedes_memory_id ? <span>确认后替换现有记忆</span> : null}
+                        {deleting ? <span>确认后删除现有记忆</span> : null}
+                        {!deleting && candidate.supersedes_memory_id
+                          ? <span>确认后替换现有记忆</span>
+                          : null}
                       </div>
                       <p className="memory-candidate-value">{candidate.value}</p>
                       {candidate.source_quote ? (
@@ -1064,8 +1073,12 @@ export function AgentChatDock({
                           onClick={() => void actOnMemoryCandidate(candidate, "confirm")}
                           type="button"
                         >
-                          {busy ? <LoaderCircle aria-hidden="true" size={13} /> : <Check aria-hidden="true" size={13} />}
-                          确认
+                          {busy
+                            ? <LoaderCircle aria-hidden="true" size={13} />
+                            : deleting
+                              ? <Trash2 aria-hidden="true" size={13} />
+                              : <Check aria-hidden="true" size={13} />}
+                          {deleting ? "确认删除" : "确认"}
                         </button>
                         <button
                           className="memory-candidate-reject"

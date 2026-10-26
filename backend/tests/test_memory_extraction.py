@@ -216,6 +216,45 @@ def test_worker_does_not_create_a_candidate_when_active_content_already_matches(
     assert result["decisions"]["noop"] == 1
 
 
+def test_worker_creates_a_delete_candidate_against_an_existing_memory(
+    postgresql_database, monkeypatch,
+):
+    monkeypatch.setenv("LIMITUPLAB_MEMORY_AUTO_LEARN", "candidate")
+    owner, _, _, job_id = seed_job()
+    active = LongTermMemoryRepository().put(owner, MemoryWrite(
+        memory_type="preference", key="response_style", value="concise",
+        source_user_message="以后回答简洁",
+    ), "active-style")
+    deletion = draft(
+        candidate_action="delete",
+        memory_type="preference",
+        canonical_key="response_style",
+        content_text="不要再记住回答要简洁",
+        scope_type="global",
+        scope={},
+        structured={},
+        source_quote=MESSAGE,
+        stability="explicit_correction",
+    )
+
+    assert MemoryExtractionWorker(provider=CandidateProvider([deletion])).run_once(limit=1) == 1
+    candidates = LongTermMemoryRepository().list_candidates(owner)
+    assert len(candidates) == 1
+    assert candidates[0]["candidate_action"] == "delete"
+    assert candidates[0]["supersedes_memory_id"] == active.current.memory_id
+    with closing(connect()) as db:
+        result = json.loads(db.execute(
+            "SELECT result_json FROM memory_extraction_jobs WHERE job_id=?", (job_id,),
+        ).fetchone()["result_json"])
+    assert result["decisions"]["delete"] == 1
+
+    confirmed = LongTermMemoryRepository().confirm_candidate(
+        owner, candidates[0]["memory_id"], "confirm-delete-candidate",
+    )
+    assert confirmed.current.status == "deleted"
+    assert LongTermMemoryRepository().list_active(owner) == []
+
+
 def test_worker_normalizes_tool_id_and_skips_low_confidence_candidates(postgresql_database, monkeypatch):
     monkeypatch.setenv("LIMITUPLAB_MEMORY_AUTO_LEARN", "candidate")
     owner, _, _, _ = seed_job()

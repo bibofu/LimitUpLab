@@ -18,7 +18,12 @@ from pydantic import BaseModel, ConfigDict, Field, model_validator
 
 from app.agents.memory_policy import FORBIDDEN_MEMORY_TERMS
 from app.database import begin_write, connect
-from app.memory_models import MemoryScopeType, MemoryWrite, normalize_memory_scope
+from app.memory_models import (
+    TOOL_NAME_ALIASES,
+    MemoryScopeType,
+    MemoryWrite,
+    normalize_memory_scope,
+)
 from app.repositories.long_term_memory_repository import (
     LongTermMemoryRepository,
     MemoryConflict,
@@ -32,7 +37,7 @@ from app.services.llm_provider import (
 )
 
 
-EXTRACTOR_VERSION = "memory-extractor-v1"
+EXTRACTOR_VERSION = "memory-extractor-v2"
 AUTO_LEARN_ENV = "LIMITUPLAB_MEMORY_AUTO_LEARN"
 AUTO_LEARN_MODES = {"off", "candidate"}
 DEFAULT_AUTO_LEARN_MODE = "candidate"
@@ -51,6 +56,7 @@ class MemoryCandidateDraft(BaseModel):
     model_config = ConfigDict(extra="forbid")
 
     memory_type: Literal["preference", "research_context"]
+    candidate_action: Literal["upsert", "delete"] = "upsert"
     content_text: str = Field(min_length=1, max_length=4000)
     canonical_key: str | None = Field(default=None, max_length=120)
     scope_type: MemoryScopeType = "global"
@@ -68,8 +74,15 @@ class MemoryCandidateDraft(BaseModel):
         if any(term in self.content_text.casefold() for term in FORBIDDEN_MEMORY_TERMS):
             raise ValueError("Candidate contains forbidden content")
         self.scope = normalize_memory_scope(self.scope_type, self.scope)
+        if self.canonical_key and self.canonical_key.startswith("tool_display:"):
+            label = self.canonical_key.split(":", 1)[1].strip()
+            self.canonical_key = "tool_display:" + TOOL_NAME_ALIASES.get(label, label)
         if self.scope_type == "tool" and not str(self.scope.get("tool_name") or "").strip():
             raise ValueError("Tool candidate requires scope.tool_name")
+        if self.candidate_action == "delete":
+            if not str(self.canonical_key or "").strip():
+                raise ValueError("Delete candidate requires the existing canonical key")
+            self.structured = {}
         return self
 
 
@@ -125,6 +138,7 @@ def _parameters() -> dict[str, Any]:
         "type": "object",
         "properties": {
             "memory_type": {"type": "string", "enum": ["preference", "research_context"]},
+            "candidate_action": {"type": "string", "enum": ["upsert", "delete"]},
             "content_text": {"type": "string", "maxLength": 4000},
             "canonical_key": {"type": ["string", "null"], "maxLength": 120},
             "scope_type": {
@@ -165,7 +179,7 @@ def _parameters() -> dict[str, Any]:
 
 SYSTEM_PROMPT = """你是 LimitUpLab 的长期记忆候选提取器。
 
-任务：从当前用户消息中提取未来会话值得使用的稳定偏好或研究背景。
+任务：从当前用户消息中提取未来会话值得使用的稳定偏好、研究背景，或明确的删除请求。
 只使用用户明确表达的内容，不看也不推断 assistant 或工具输出。
 每条候选必须：
 1. 对未来研究有帮助，而不是一次性行情问题；
@@ -177,6 +191,11 @@ SYSTEM_PROMPT = """你是 LimitUpLab 的长期记忆候选提取器。
 7. 不确定时返回空数组。
 tool 作用域使用公开工具 id，如 dragon_tiger_list、stock_kline；
 展示偏好放入 structured.display_columns，如 ["name"]。
+新增或修改使用 candidate_action="upsert"。
+只有用户明确说“忘记/删除/不要再记住”某条 existing_memories 中的记忆时，才使用
+candidate_action="delete"；必须逐字复制该记忆的 memory_type、canonical_key、
+scope_type 和 scope，content_text 描述删除请求，不能猜测或删除未列出的记忆。
+普通否定、临时不要、行情条件不构成删除。
 不要激活记忆，只提交候选。"""
 
 
@@ -192,7 +211,9 @@ def extract_memory_candidates(
         "message": message,
         "existing_memories": [
             {"memory_type": item.get("memory_type"), "key": item.get("key"),
-             "value": item.get("value")}
+             "canonical_key": item.get("canonical_key"),
+             "value": item.get("value"), "scope_type": item.get("scope_type"),
+             "scope": item.get("scope")}
             for item in (existing or [])[:50]
         ],
     }, ensure_ascii=False)
@@ -325,7 +346,7 @@ class MemoryExtractionWorker:
             self.provider, message=message, existing=existing,
         )
         created, skipped = [], 0
-        decisions = {"add": 0, "update": 0, "refresh": 0, "noop": 0, "replay": 0}
+        decisions = {"add": 0, "update": 0, "delete": 0, "refresh": 0, "noop": 0, "replay": 0}
         for index, candidate in enumerate(candidates):
             if (candidate.confidence < MIN_CANDIDATE_CONFIDENCE
                     or candidate.stability == "other"):
@@ -335,12 +356,13 @@ class MemoryExtractionWorker:
             try:
                 result = repository.consolidate_candidate(
                     job["owner_id"], write, f"{job['job_id']}:candidate:{index}",
+                    action=candidate.candidate_action,
                 )
                 decision = result["decision"]
                 decisions[decision] = decisions.get(decision, 0) + 1
                 if result["superseded_candidate_id"] in created:
                     created.remove(result["superseded_candidate_id"])
-                if decision in {"add", "update"}:
+                if decision in {"add", "update", "delete"}:
                     created.append(result["candidate_id"])
                 else:
                     skipped += 1

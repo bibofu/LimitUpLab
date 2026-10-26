@@ -179,6 +179,7 @@ test("memory candidate inbox only changes state after explicit confirm or reject
     source_kind: "auto",
     source_quote: "以后展示龙虎榜只显示股票名称",
     source_user_message: "以后展示龙虎榜只显示股票名称",
+    candidate_action: "upsert",
     supersedes_memory_id: null,
     supersedes_revision: null,
     created_at: "2026-10-27T10:00:00",
@@ -216,6 +217,50 @@ test("memory candidate inbox only changes state after explicit confirm or reject
   assert.deepEqual(rejected, [["memory_2", 1]]);
   assert.equal(app.all(node => node.props.className === "memory-candidate").length, 0);
   assert.equal(app.has(node => node.props.children === "暂无待确认记忆。明确、稳定的长期偏好会先出现在这里。"), true);
+});
+
+test("delete candidate uses removal wording and confirms once", async t => {
+  const confirmed: string[] = [];
+  const app = mount(t, {
+    fetchMemoryCandidates: async () => ({
+      items: [{
+        memory_id: "memory_delete",
+        memory_type: "preference",
+        key: "response_style",
+        value: "不要再记住回答要简洁",
+        topics: [],
+        metadata: {},
+        scope_type: "global",
+        scope: {},
+        scope_key: "global",
+        canonical_key: "response_style",
+        structured: {},
+        status: "candidate",
+        revision: 1,
+        expires_at: null,
+        source_kind: "auto",
+        source_quote: "以后不要再记住回答要简洁",
+        source_user_message: "以后不要再记住回答要简洁",
+        candidate_action: "delete",
+        supersedes_memory_id: "memory_active",
+        supersedes_revision: 1,
+        created_at: "2026-10-27T10:00:00",
+        updated_at: "2026-10-27T10:00:00",
+      }],
+    }),
+    confirmMemoryCandidate: async (id: string) => { confirmed.push(id); },
+  });
+  await app.settle();
+  app.find(node => node.type === "button"
+    && String(node.props["aria-label"]).startsWith("打开记忆候选，1 条待确认")).onClick();
+  await app.settle();
+  assert.equal(app.has(node => node.props.children === "确认后删除现有记忆"), true);
+  const confirm = app.find(node => node.props.className === "memory-candidate-confirm");
+  assert.equal(confirm.children.includes("确认删除"), true);
+
+  confirm.onClick(); await app.settle();
+  assert.deepEqual(confirmed, ["memory_delete"]);
+  assert.equal(app.has(node => node.props.children === "已删除该记忆，后续对话不再使用。"), true);
 });
 
 test("reload restores a paused task and resumes the same run without a new user message", async t => {
