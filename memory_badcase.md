@@ -152,3 +152,155 @@
   - [durable_runtime.py](backend/app/agents/runner/durable_runtime.py)
   - [context_builder.py](backend/app/agents/context_builder.py)
   - [tool_schemas_research.py](backend/app/agents/tool_schemas_research.py)
+
+---
+
+## 2026-10-26：双股票后用“他们”追问，多工具引用聚合失败
+
+- 状态：**待修复**（本次只分析，未改代码）
+- 影响范围：一次回答涉及多只股票，且每只股票通过独立工具调用获取；随后用“他们/这两只”等整批指代追问。
+- 同类问题：上一条记录的单股票“它”指代。
+
+### 现象
+
+同一会话先问“宁德时代和贵州茅台分别属于什么行业”，再问“他们的最新市值分别是多少”：
+
+- 第一问 `partial`，实际调用两次 `stock_activity`，回答表格包含两只股票，`stock_mentions` 包含 300750 和 600519；
+- 第二问直接返回 `clarify / reference_ambiguous`：“上一轮包含多组名单或未能确认展示顺序，请明确股票代码或名单。”；
+- 第二问没有调用任何工具，模型也没有被调用。
+
+### 复现
+
+- 会话：`chat_fbe4075568b2437ba5d43dd06cc7f9ea`
+- 第一问：`run_aabf6c7fb7c5438c879243774c698fc9`
+- 第二问：`run_e8d99c3b62b341728c03dda63d334e41`
+
+### 证据
+
+第一问实际生成了 **两条各自只有一只股票的引用**：
+
+```json
+[
+  {
+    "reference_id": "run_aabf6c...:0:31da6132b75b",
+    "reference_type": "tool_result",
+    "source_tool": "stock_activity",
+    "ordered_symbols": ["300750"],
+    "source_symbols": ["300750"],
+    "ordinal_resolvable": false
+  },
+  {
+    "reference_id": "run_aabf6c...:1:6a731b92b800",
+    "reference_type": "tool_result",
+    "source_tool": "stock_activity",
+    "ordered_symbols": ["600519"],
+    "source_symbols": ["600519"],
+    "ordinal_resolvable": false
+  }
+]
+```
+
+第二问 checkpoint：
+
+```json
+"reference_intent": {
+  "kind": "entities",
+  "quote": "他们",
+  "ordinal": null,
+  "all_entities": true
+},
+"resolved_reference": {},
+"active_references": [
+  {"ordered_symbols": ["300750"], "ordinal_resolvable": false},
+  {"ordered_symbols": ["600519"], "ordinal_resolvable": false}
+],
+"context_diagnostics": {
+  "history_turns_included": 1,
+  "estimated_input_tokens": 21719,
+  "input_token_budget": 40000,
+  "reference_resolution": {
+    "status": "clarify",
+    "clarification": "上一轮包含多组名单或未能确认展示顺序，请明确股票代码或名单。"
+  }
+}
+```
+
+### 根因
+
+1. **引用按单个工具结果生成。**
+   [structured_references.py:142](backend/app/agents/structured_references.py#L142) 对每个 `tool_result` 分别建立引用；两次单股票 `stock_activity` 调用因此产生两条单符号引用。
+
+2. **展示顺序按单条引用校验，无法覆盖整张两行表格。**
+   [structured_references.py:161](backend/app/agents/structured_references.py#L161) 对每条引用只传入该引用自己的 `identities` 调用 `_displayed_order`。第一问的回答表格同时有 300750 和 600519，但在校验 300750 这条引用时，600519 行无法匹配任何符号，`_displayed_order` 返回 `None`；两条引用都变成 `tool_result`，`ordinal_resolvable=false`。
+
+3. **`all_entities` 解析要求所有最新引用完全一致。**
+   [structured_references.py:213-215](backend/app/agents/structured_references.py#L213-L215)：
+
+   ```python
+   distinct = {(tuple(item.get("ordered_symbols", [])), item.get("trade_date"))
+               for item in latest}
+   if len(distinct) != 1 or (ordinal is not None and not all(
+           item.get("ordinal_resolvable") for item in latest)):
+       return clarify("上一轮包含多组名单或未能确认展示顺序...")
+   ```
+
+   两条引用分别是 `(["300750"], null)` 和 `(["600519"], null)`，`len(distinct)==2`，于是被判定为“多组名单”，整批指代失败。**它们其实来自同一轮、同一种工具、同一张回答表格，只是被拆成了两次单股票调用。**
+
+4. **澄清仍然在模型调用前短路。**
+   [durable_runtime.py:175-177](backend/app/agents/runner/durable_runtime.py#L175-L177) 直接返回澄清；[context_builder.py:30](backend/app/agents/context_builder.py#L30) 的上下文规则也要求按澄清提示询问。上一轮历史已进入上下文（`history_turns_included=1`），但模型没有机会使用。
+
+5. **第一问的工具结果本身是可信的。**
+   与上一条“单股票 `stock_kline` 没有行级 symbol”不同，`stock_activity` 的 `rows` 同时包含 `symbol` 和 `name`，所以 `stock_mentions` 成功生成了两只股票。问题不在工具结果缺失，而在**多工具结果的引用聚合**。
+
+6. **修复引用后仍可能缺少“最新总市值”数据源。**
+   当前 v1 工具集没有稳定的最新总市值工具；`stock_activity` 只在可选的 `rating_context` 中提供 `float_market_cap`，而本次两只股票的 `rating_context` 都为空并记录了 `data_missing`。因此即使引用解析修好，第二问仍可能只能回答“数据缺失”，除非增加估值/市值工具或接入 hithink valuation 能力。
+
+### 已排除项
+
+- **不是上下文预算问题**：`estimated_input_tokens=21719`，预算 `40000`。
+- **不是短期记忆未保存**：`recent_messages` 包含上一轮问答，`history_turns_included=1`。
+- **不是股票提及提取问题**：`stock_mentions` 已包含 300750 和 600519。
+- **不是长期记忆问题**：`memory_hit_count=0`。
+
+### 解决方案
+
+按优先级：
+
+1. **P1：按整轮聚合单股票引用。**
+   - 在 `references_from_committed_result` 中先汇总同一轮、同一工具、同一日期的单股票结果，再统一用回答表格校验展示顺序；
+   - 或者新增 `single_stock` 引用类型，在解析 `all_entities` 时合并同一轮的单股票引用；
+   - 合并后应得到类似 `ordered_symbols=["300750","600519"]` 的批次引用，而不是两条互不相认的单符号引用。
+
+2. **P1：让 `all_entities` 支持“单股票引用集合”。**
+   - 当最新一轮的所有引用都是单符号、来源工具/日期一致时，求并集并去重；
+   - 明确合并后的顺序来源（回答表格顺序优先，其次工具调用顺序）；
+   - 只有出现多个不同名单、不同日期、顺序冲突或无法确认时才澄清。
+
+3. **P2：补齐“最新市值”数据源。**
+   - 如果这是产品要支持的问题，增加估值/市值工具，或在 `stock_activity` 中稳定返回总市值/流通市值及其日期；
+   - 否则在回答中明确 `data_missing`，不要用历史快照冒充最新市值。
+
+4. **P3：补回归测试。**
+   - 同一轮两次单股票 `stock_activity` → “他们”应解析出两只股票；
+   - 两条不同名单/不同日期 → 仍应澄清；
+   - “第一只/第二只”的顺序语义不能被合并逻辑破坏；
+   - 单股票“它”场景（上一条记录）也要覆盖；
+   - 市值问题要么调用真实数据工具，要么明确返回数据缺失。
+
+### 验证计划
+
+修复后至少验证：
+
+1. 复现同样两问：第二问 `complete`，包含 300750 和 600519，或明确说明市值数据缺失；
+2. checkpoint 中 `active_references` 形成可解析的批次引用，不再返回“上一轮包含多组名单”；
+3. 多组不同名单/不同日期的回归仍返回澄清；
+4. “第二只的代码和名称”与单股票“它”回归通过。
+
+### 关联材料
+
+- 证据文件：`output/ningde-analysis/session_messages_2.json`、`output/ningde-analysis/session_runs_2.json`（Git 忽略目录）
+- 相关实现：
+  - [structured_references.py](backend/app/agents/structured_references.py)
+  - [durable_runtime.py](backend/app/agents/runner/durable_runtime.py)
+  - [context_builder.py](backend/app/agents/context_builder.py)
+  - [tools.py](backend/app/agents/tools.py)（`stock_activity` 的 `rating_context`）
