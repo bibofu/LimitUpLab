@@ -18,7 +18,7 @@ from app.main import app
 from app.routers import agents
 from app.security import SESSION_COOKIE_NAME, sign_visitor_owner_id
 from test_durable_agent import fixed_registry
-from test_durable_long_term_memory import review_memory
+from test_durable_long_term_memory import review_memory, review_scope
 from test_runner_production import input_review
 from test_runner_shadow import ScriptedProvider
 
@@ -46,7 +46,7 @@ def question(client, session_id, message_id, message):
 def test_http_memory_survives_restart_cross_session_and_revokes_checkpoint_context(postgresql_database, monkeypatch):
     save_query = "请长期记住：以后回答保持简洁"
     provider = ScriptedProvider([
-        review_memory(save_query),
+        review_memory(save_query), review_scope(save_query),
         input_review(), AIMessage(content="简洁说明：首板是首次涨停。"),
         input_review(), AIMessage(content="连板表示连续交易日涨停；这是研究术语。"),
         input_review(), AIMessage(content="涨停是价格达到当日涨幅限制。"),
@@ -62,7 +62,7 @@ def test_http_memory_survives_restart_cross_session_and_revokes_checkpoint_conte
     with TestClient(app) as client:
         source_session = new_session(client)
         saved = question(client, source_session, "save-memory", save_query)
-        assert "已保存长期记忆" in saved["answer"] and len(provider.calls) == 1
+        assert "已保存长期记忆" in saved["answer"] and len(provider.calls) == 2
         snapshot = client.get(BASE + "/memories").json()
         assert [(item["key"], item["value"]) for item in snapshot["items"]] == [("response_style", "concise")]
         memory = snapshot["items"][0]
@@ -74,7 +74,7 @@ def test_http_memory_survives_restart_cross_session_and_revokes_checkpoint_conte
         fresh_session = new_session(client)
         assert fresh_session != source_session
         recalled = question(client, fresh_session, "recall", "解释首板")
-        assert model_context(provider.calls[2])["long_term_memories"][0]["value"] == "concise"
+        assert model_context(provider.calls[3])["long_term_memories"][0]["value"] == "concise"
         assert recalled["memory_context_used"]
 
         updated = client.put(BASE + "/memories/preference/response_style", json={
@@ -83,15 +83,15 @@ def test_http_memory_survives_restart_cross_session_and_revokes_checkpoint_conte
         assert updated.status_code == 200, updated.text
         memory = updated.json()["current"]
         question(client, fresh_session, "updated", "解释连板")
-        assert model_context(provider.calls[4])["long_term_memories"][0]["value"] == "detailed"
-        assert all(message.content != "简洁说明：首板是首次涨停。" for message in provider.calls[4])
+        assert model_context(provider.calls[5])["long_term_memories"][0]["value"] == "detailed"
+        assert all(message.content != "简洁说明：首板是首次涨停。" for message in provider.calls[5])
 
         deleted = client.delete(BASE + "/memories/" + memory["memory_id"],
             params={"expected_revision": memory["revision"]}, headers={"Idempotency-Key": "http-delete"})
         assert deleted.status_code == 200 and deleted.json()["current"]["value"] is None
         after_delete = question(client, fresh_session, "revoked", "解释涨停")
-        assert model_context(provider.calls[6])["long_term_memories"] == []
-        assert all(message.content != "连板表示连续交易日涨停；这是研究术语。" for message in provider.calls[6])
+        assert model_context(provider.calls[7])["long_term_memories"] == []
+        assert all(message.content != "连板表示连续交易日涨停；这是研究术语。" for message in provider.calls[7])
         assert not after_delete["memory_context_used"]
         assert client.get(BASE + "/memories").json()["items"] == []
 
@@ -99,7 +99,7 @@ def test_http_memory_survives_restart_cross_session_and_revokes_checkpoint_conte
         # must never execute its saved write again after the explicit deletion.
         assert question(client, source_session, "save-memory", save_query) == saved
         assert client.get(BASE + "/memories").json()["items"] == []
-        assert len(provider.calls) == 7 and market_calls == []
+        assert len(provider.calls) == 8 and market_calls == []
         runtime = get_runtime()
         state = asyncio.run_coroutine_threadsafe(runtime.graph.aget_state({
             "configurable": {"thread_id": fresh_session}}), runtime.loop).result(timeout=5)

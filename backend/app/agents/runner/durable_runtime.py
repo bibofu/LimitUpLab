@@ -31,7 +31,7 @@ from app.services.agent_stream import NativeStreamBridge, emit_status, emit_tool
 from app.services.agent_tracing import trace_context, trace_stage
 
 SCHEMA_VERSION = 1
-PROMPT_VERSION = "durable-react-v5-row-positions"
+PROMPT_VERSION = "durable-react-v6-memory-scope"
 logger = logging.getLogger(__name__)
 _runtime = None
 
@@ -108,12 +108,35 @@ def _retrieve(control, query):
 
 def _review(state, deps):
     from app.agents.memory_commands import prepare_memory_request
+    from app.agents.memory_intent_review import (
+        MEMORY_REVIEW_VERSION, bounded_session_context, review_memory_candidate,
+    )
+    from app.services.memory_scope import clean_conversation_for_memory_revision
     with execution_context(deps), trace_stage("input_review", {"node": "input_review"}):
+        started = perf_counter()
+        deadline = started + state["remaining_seconds"]
         if deps.control.cancelled():
             return deps.runner._cancelled_stop()
+        if state["remaining_seconds"] <= 0:
+            return deps.runner._budget_stop(state)
         retrieved = _retrieve(deps.control, state["current_query"])
+        conversation = clean_conversation_for_memory_revision(state["conversation"], retrieved)
+        session_context = bounded_session_context(conversation)
         try:
-            decision = review_input_security(deps.runner.provider, message=state["current_query"], timeout_seconds=10)
+            decision = review_input_security(
+                deps.runner.provider, message=state["current_query"],
+                session_context=session_context, timeout_seconds=min(10, deadline - perf_counter()),
+            )
+            intent = decision.memory_intent
+            if intent and decision.decision == "allow":
+                with trace_stage("memory_scope_review") as details:
+                    confirmed = review_memory_candidate(
+                        deps.runner.provider, message=state["current_query"], candidate=intent,
+                        session_context=session_context, timeout_seconds=min(10, deadline - perf_counter()),
+                    )
+                    details.update(candidate_action=intent.action, confirmed=confirmed is not None,
+                                   review_version=MEMORY_REVIEW_VERSION)
+                    intent = confirmed
         except Exception as error:
             from app.agents.runtime_errors import RecoverableRunError
             raise RecoverableRunError("输入审核暂时中断，尚未执行工具。") from error
@@ -122,9 +145,14 @@ def _review(state, deps):
             return {"answer": REFUSAL if trading_advice else
                     "我可以协助查询有来源的股票研究事实，不能执行绕过系统边界的指令。",
                     "status": "refuse", "stop_reason": "input_trading_advice" if trading_advice else "input_policy", "done": True}
-        proposal = prepare_memory_request(decision.memory_intent, deps.control, retrieved.owner_revision) \
-            if decision.memory_intent else {}
+        if perf_counter() >= deadline:
+            return deps.runner._budget_stop(state)
+        proposal = prepare_memory_request(intent, deps.control, retrieved.owner_revision) if intent else {}
+        if proposal:
+            proposal["scope_review_version"] = MEMORY_REVIEW_VERSION
         return {"done": False, "memory_request": proposal,
+                "conversation": conversation,
+                "remaining_seconds": max(0, state["remaining_seconds"] - (perf_counter() - started)),
                 "reference_intent": decision.reference_intent.model_dump(),
                 "memory_owner_revision": retrieved.owner_revision,
                 "memory_context_fingerprint": retrieved.context_fingerprint}
@@ -147,6 +175,8 @@ def _agent(state, deps):
                 return {"answer": "旧任务的上下文协议已升级，请重新提交记忆管理请求。",
                         "status": "partial", "stop_reason": "context_upgrade", "done": True}
             state = {**state, **reviewed}
+            started = perf_counter()
+            runner.deadline = started + state["remaining_seconds"]
         page = {**runner.request.page_context}
         if runner.request.symbol:
             page["symbol"] = runner.request.symbol
@@ -279,11 +309,18 @@ def build_graph(saver):
         if paused:
             return paused
         from app.agents.memory_commands import execute_memory_request
+        from app.agents.memory_intent_review import MEMORY_REVIEW_VERSION
         deps = runtime.context
         emit_status("checking")
         with execution_context(deps):
             if deps.control.cancelled():
                 return deps.runner._cancelled_stop()
+            if state.get("memory_request", {}).get("scope_review_version") != MEMORY_REVIEW_VERSION:
+                # Never refresh the old proposal's CAS expectations on resume.
+                # Requiring a new request preserves existing operation receipts.
+                return {"answer": "记忆请求的作用域校验已升级，本次未继续执行；请重新提交该请求。",
+                        "status": "clarify", "stop_reason": "context_upgrade", "done": True,
+                        "memory_action": {"action": "unsupported", "reason": "unreviewed_legacy_request"}}
             return await asyncio.to_thread(execute_memory_request, state, deps.control)
 
     graph.add_node("input_review", review)

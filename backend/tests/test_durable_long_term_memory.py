@@ -25,6 +25,17 @@ def review_memory(query, action="save", value="concise", key="response_style"):
     }}])
 
 
+def review_scope(query=None, scope="long_term", *, operation_quote=None, scope_quote=None,
+                 list_target=None, memory_type=None, key=None):
+    """Script a separate scope decision; this does not test model accuracy."""
+    return AIMessage(content="", tool_calls=[{"id": "scope", "name": "submit_memory_scope_review", "args": {
+        "scope": scope,
+        "operation_quote": (operation_quote or query) if scope == "long_term" else None,
+        "scope_quote": (scope_quote or query) if scope == "long_term" else None,
+        "list_target": list_target, "memory_type": memory_type, "key": key,
+    }}])
+
+
 def deliver(world, request, control, result):
     response = _response(request, result.answer, result.status, result.stop_reason).model_copy(update={
         "memory_action": result.memory_action, "memory_owner_revision": result.memory_owner_revision,
@@ -39,12 +50,12 @@ def test_explicit_save_cross_session_recall_and_delete(world):
     async def scenario():
         query = "请长期记住：回答保持简洁"
         request, control, history = world.start(query)
-        provider = ScriptedProvider([review_memory(query)])
+        provider = ScriptedProvider([review_memory(query), review_scope(query)])
         execution, calls = runner(request, provider, history=history)
         async with runtime_for(world) as runtime:
             result = await runtime.run(execution, control)
             assert result.status == "answered" and "已保存长期记忆" in result.answer
-            assert calls == [] and len(provider.calls) == 1
+            assert calls == [] and len(provider.calls) == 2
             deliver(world, request, control, result)
         repository = repository_for(control)
         saved = repository.get_by_key(world.owner, "preference", "response_style")
@@ -68,7 +79,7 @@ def test_explicit_save_cross_session_recall_and_delete(world):
 
         query = "忘记已保存的回答详略偏好"
         request, control, history = world.start(query)
-        provider = ScriptedProvider([review_memory(query, "delete")])
+        provider = ScriptedProvider([review_memory(query, "delete"), review_scope(query)])
         execution, _ = runner(request, provider, history=history)
         async with runtime_for(world) as runtime:
             result = await runtime.run(execution, control)

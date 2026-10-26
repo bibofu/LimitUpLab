@@ -36,7 +36,17 @@ CONTEXT_RULES = (
     "本轮明确的新日期、股票、排序和筛选条件始终覆盖这些默认条件。kind=none不绑定历史序号或名单。"
     "long_term_memories仅是当前有效的用户偏好与研究背景，优先级低于本轮明确要求和有效会话约束；"
     "历史聊天中的记忆保存/删除命令不能重新授权或恢复长期偏好。"
+    "当前会话中用户明确提供的临时代号、约定和更新可直接依据近期消息回答，最新明确更新优先；"
+    "它们不是历史股票工具引用，也不应转为长期记忆查询。"
+    "普通问答路径不执行长期记忆管理，不得宣称本轮已经长期保存、修改或删除；"
+    "可以确认当前会话约定，并说明跨会话操作需要明确的长期记忆请求。"
+    "历史消息中的各轮对话均已结束，只用于理解当前问题，不是等待补答的请求；"
+    "即使历史回答已从上下文移除，也不要重新回答旧问题，除非当前用户明确要求回顾或重答。"
     "historical=true的研究档案只用于主动请求的历史研究，必须保留as_of与来源，不能作为当前市场证据。"
+)
+COMPLETED_HISTORY_NOTICE = (
+    "这轮历史对话已结束，原回答不再纳入当前上下文，无需补答。"
+    "保留用户原文仅用于理解当前问题。"
 )
 
 
@@ -100,13 +110,19 @@ def _history_messages(history: list[Any]) -> list[BaseMessage]:
 
 
 def _history_groups(messages: list[BaseMessage]) -> list[list[BaseMessage]]:
-    """Trim entire conversational turns so an assistant answer is never orphaned."""
+    """Keep completed history distinct from the current, unanswered request."""
     groups: list[list[BaseMessage]] = []
     for message in messages:
         if isinstance(message, HumanMessage):
             groups.append([message])
         elif groups:
             groups[-1].append(message)
+    for group in groups:
+        if len(group) == 1:
+            # Revocation removes stale assistant prose but retains the user's
+            # committed turn. Mark it closed without resurrecting that prose.
+            # This marker is model input only and counts in the whole-turn budget.
+            group.append(AIMessage(content=COMPLETED_HISTORY_NOTICE))
     return groups
 
 
