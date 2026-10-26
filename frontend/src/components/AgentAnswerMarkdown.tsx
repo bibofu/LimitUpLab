@@ -8,6 +8,7 @@ import { revealVerifiedTree, type RevealNode } from "../utils/verifiedAnswerReve
 
 interface MarkdownNode {
   type: string;
+  tagName?: string;
   value?: string;
   url?: string;
   children?: MarkdownNode[];
@@ -40,12 +41,14 @@ export const AgentAnswerMarkdown = memo(function AgentAnswerMarkdown({
   content,
   stockMentions,
   animate = false,
+  suppressTables = false,
   onRevealProgress,
   onRevealComplete,
 }: {
   content: string;
   stockMentions: AgentStockMention[];
   animate?: boolean;
+  suppressTables?: boolean;
   onRevealProgress?: () => void;
   onRevealComplete?: () => void;
 }) {
@@ -114,7 +117,10 @@ export const AgentAnswerMarkdown = memo(function AgentAnswerMarkdown({
         remarkGfm,
         [remarkStockLinks, { stockMentions }],
       ]}
-      rehypePlugins={[[rehypeVerifiedReveal, { visibleUnits, plan }]]}
+      rehypePlugins={[
+        ...(suppressTables ? [rehypeSuppressTables] : []),
+        [rehypeVerifiedReveal, { visibleUnits, plan }],
+      ]}
     >
       {content}
     </ReactMarkdown>
@@ -126,6 +132,21 @@ export const AgentAnswerMarkdown = memo(function AgentAnswerMarkdown({
     </>
   );
 });
+
+/** Remove model-written tables when the server has an authoritative display block. */
+function rehypeSuppressTables() {
+  return (tree: MarkdownNode) => {
+    stripTableNodes(tree);
+  };
+}
+
+function stripTableNodes(parent: MarkdownNode) {
+  if (!parent.children) return;
+  parent.children = parent.children.filter(child => (
+    child.type !== "table" && !(child.type === "element" && child.tagName === "table")
+  ));
+  parent.children.forEach(stripTableNodes);
+}
 
 /** Parse the complete approved Markdown first, then reveal stable rendered nodes. */
 function rehypeVerifiedReveal({ visibleUnits, plan }: { visibleUnits: number; plan: { current: { total: number } } }) {

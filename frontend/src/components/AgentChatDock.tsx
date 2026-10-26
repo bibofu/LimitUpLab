@@ -898,6 +898,7 @@ export function AgentChatDock({
                     content={item.content}
                     stockMentions={item.stockMentions}
                     animate={revealingMessageId === item.id}
+                    suppressTables={Boolean(item.displayBlocks?.length)}
                     onRevealProgress={followRevealedAnswer}
                   />
                   <AgentDisplayBlocks blocks={item.displayBlocks} />

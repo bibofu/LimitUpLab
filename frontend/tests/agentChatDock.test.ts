@@ -920,3 +920,35 @@ test("reveal height updates follow the bottom only until the reader scrolls away
   assert.equal(container.scrollTop, 1600);
   assert.equal(app.has(node => node.props.className === "chat-scroll-latest"), false);
 });
+
+test("server display blocks replace duplicate model markdown tables", () => {
+  const html = renderToStaticMarkup(createElement(MemoryRouter, {}, createElement(
+    markdownModule.exports.AgentAnswerMarkdown,
+    {
+      content: "说明\n\n|名称|代码|\n|---|---|\n|样本甲|000001|",
+      stockMentions: [],
+      suppressTables: true,
+    },
+  )));
+  assert.match(html, /说明/);
+  assert.doesNotMatch(html, /<table/);
+});
+
+test("display block responses suppress model tables in chat messages", async t => {
+  const candidate = {
+    ...final,
+    display_blocks: [{
+      kind: "table", source_tool: "dragon_tiger_list", source_tool_index: 0,
+      columns: ["name"], column_labels: { name: "股票名称" },
+      rows: [{ name: "样本甲" }], row_count: 1, displayed_count: 1,
+      ordered_symbols: ["000001"], missing_columns: [], truncated: false,
+      display_policy_id: "memory-display",
+    }],
+  };
+  const app = mount(t, { streamAgentChatMessage: async () => candidate });
+  await app.settle();
+  app.type("展示最新的龙虎榜");
+  app.submit();
+  await app.settle();
+  assert.equal(app.answers()[0].props.suppressTables, true);
+});
