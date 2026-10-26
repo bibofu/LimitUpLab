@@ -63,6 +63,18 @@ POST /api/agents/chat/stream
 
 完整结果持久化为不可变回执和公共 trace。小结果可将 rows 无损转换为 columns/values，保留顺序、全部字段及明确的 null/缺失区别。大结果返回零行 manifest，模型通过 `read_tool_result` 将其 content_hash 填入 expected_hash，再按页/字段读取原回执；不重新查询市场缓存。用户侧 GET 分页同样校验 owner 和 run。预算不足明确 partial，不能把单页称为完整名单；工具层提供确定性统计，模型据此输出 Markdown 表格。
 
+## 个股公司资料
+
+`stock_profile` 只面向单只 A 股的公司资料，不提供行情或投资建议：
+
+- 公司名称、所属行业、主营业务、经营范围、上市日期、成立日期、注册资金、法人、地址和官网来自巨潮资讯 `stock_profile_cninfo`；
+- 当前总市值、流通市值、总股本和流通股来自东方财富 `stock_individual_info_em`；
+- 市值是取数时的当前快照，不是历史市值；`profile_as_of` 和 `market_cap_as_of` 分开记录；
+- 行业按 `industry_source` 标注，东方财富行业只作为 `industry_alternatives`，不覆盖巨潮口径；
+- 任一来源失败时，仍返回另一来源的可用字段，并把失败字段写入 `data_missing` / `source_errors`；`partial` 不代表 0；
+- 注册资金单位是万元，不能当总市值；主营业务和经营范围会截断并写入 `truncated_fields`；
+- 两个来源都在独立子进程中调用并设置硬超时，CNInfo 不暴露超时参数也受进程截止时间约束。
+
 ## 边界
 
 - 日期：模型显式写入工具参数；工具返回 `data_as_of`，与请求不一致时拒绝。

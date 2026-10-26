@@ -509,4 +509,44 @@ RESEARCH_TOOL_SCHEMAS = [
         },
         returns="Versioned recomputed historical cohorts, outcome statistics, grouping, coverage and sample-quality warning.",
     ),
+    AgentToolSchema(
+        name="stock_profile",
+        time_mode="retrieved_now",
+        notes=(
+            "Company profile is current retrieved CNInfo data, not a historical as-of snapshot. "
+            "Market cap/shares are a current Eastmoney snapshot, not a historical market value. "
+            "Industry sources can differ. Missing fields are explicit; never substitute registered "
+            "capital, assets or turnover for market cap."
+        ),
+        description=(
+            "查询单只 A 股的公司资料：公司全称、股票简称、所属行业、主营业务、经营范围、"
+            "上市日期、成立日期、注册资金、法人代表、注册地址、办公地址和官网；"
+            "当用户询问总市值、流通市值、总股本或流通股时，设置 include_market_cap=true，"
+            "由东方财富补充这些当前快照字段。公司资料来自巨潮资讯；行业口径按 industry_source 标注。"
+            "市值是当前快照，不提供历史市值或实时行情；来源失败时对应字段进入 data_missing，"
+            "不会用注册资金、总资产或成交额替代。不提供买入、卖出、仓位或目标价建议。"
+        ),
+        args_schema={
+            "type": "object",
+            "properties": {
+                "symbol": {
+                    "type": "string",
+                    "description": "Six-digit A-share symbol or exact stock name.",
+                },
+                "include_market_cap": {
+                    "type": "boolean",
+                    "description": (
+                        "Set true only when the user asks for current total/float market cap "
+                        "or total/float shares. Leave false for company-profile-only questions."
+                    ),
+                },
+            },
+            "required": ["symbol"],
+        },
+        returns=(
+            "One company profile with CNInfo industry/main business/listing fields, "
+            "Eastmoney current total/float market cap and shares, source attribution, "
+            "explicit data_missing and truncation flags."
+        ),
+    ),
 ]

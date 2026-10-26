@@ -48,6 +48,7 @@ class AgentV1ProfileTest(unittest.TestCase):
         self.assertIn("finance_news", schema_names)
         self.assertIn("stock_news", schema_names)
         self.assertIn("stock_activity", schema_names)
+        self.assertIn("stock_profile", schema_names)
         self.assertIn("sector_performance", schema_names)
         self.assertNotIn("web_search", schema_names)
         self.assertNotIn("remote_limit_up_pool", schema_names)

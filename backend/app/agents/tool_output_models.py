@@ -781,5 +781,91 @@ class StockFinancialsPayload(OutputModel):
 
 
 # ---------------------------------------------------------------------------
-# Stock K-line, news and activity
+# Stock company profile and current market cap
 # ---------------------------------------------------------------------------
+
+
+class StockProfilePayload(OutputModel):
+    """Company profile from CNInfo plus current market-cap fields from Eastmoney."""
+
+    status: str = Field(
+        description="整体状态：ok、partial、empty或error；partial表示至少一个声明字段缺失"
+    )
+    symbol: str = Field(description="六位A股代码")
+    name: str = Field(description="股票简称；资料缺失时回退到本地名称或代码")
+    company_name: str | None = Field(
+        default=None, description="公司全称；CNInfo未返回时为null"
+    )
+    market: str | None = Field(default=None, description="所属市场")
+    industry: str | None = Field(
+        default=None, description="所属行业；口径由industry_source说明"
+    )
+    industry_source: str | None = Field(
+        default=None, description="行业来源：cninfo或eastmoney"
+    )
+    industry_alternatives: list[dict[str, Any]] = Field(
+        description="其他来源的行业口径，每项含value和source；不覆盖industry"
+    )
+    main_business: str | None = Field(
+        default=None, description="主营业务，来自CNInfo；可能截断，截断字段见truncated_fields"
+    )
+    business_scope: str | None = Field(
+        default=None, description="经营范围，来自CNInfo；可能截断，截断字段见truncated_fields"
+    )
+    listing_date: str | None = Field(
+        default=None, description="上市日期，YYYY-MM-DD；来源见listing_date_source"
+    )
+    listing_date_source: str | None = Field(
+        default=None, description="上市日期来源：cninfo或eastmoney"
+    )
+    established_date: str | None = Field(
+        default=None, description="成立日期，YYYY-MM-DD；仅CNInfo提供"
+    )
+    registered_capital: float | None = Field(
+        default=None, description="注册资金；单位见registered_capital_unit，不是总市值"
+    )
+    registered_capital_unit: str | None = Field(
+        default=None, description="注册资金单位；CNInfo口径为万元"
+    )
+    legal_representative: str | None = Field(default=None, description="法人代表")
+    registered_address: str | None = Field(default=None, description="注册地址")
+    office_address: str | None = Field(default=None, description="办公地址")
+    website: str | None = Field(default=None, description="公司官方网站")
+    total_market_cap: float | None = Field(
+        default=None, description="当前总市值（元）；东方财富失败时为null，不是0"
+    )
+    float_market_cap: float | None = Field(
+        default=None, description="当前流通市值（元）；东方财富失败时为null，不是0"
+    )
+    total_shares: float | None = Field(
+        default=None, description="总股本（股）；东方财富失败时为null，不是0"
+    )
+    float_shares: float | None = Field(
+        default=None, description="流通股（股）；东方财富失败时为null，不是0"
+    )
+    profile_status: str = Field(
+        description="公司资料状态：ok、empty或unavailable"
+    )
+    market_cap_status: str = Field(
+        description="市值资料状态：not_requested、ok、empty或unavailable"
+    )
+    profile_as_of: str = Field(
+        description="公司资料获取日期，YYYY-MM-DD；不是行情日期"
+    )
+    market_cap_as_of: str | None = Field(
+        default=None,
+        description="当前市值快照获取时间（ISO 8601）；不是历史行情日期",
+    )
+    sources: dict[str, str] = Field(
+        description="各字段实际来源，如profile、market_cap、industry、listing_date"
+    )
+    source_errors: list[str] = Field(
+        description="来源级错误；失败字段同时写入data_missing"
+    )
+    data_missing: list[str] = Field(
+        description="字段级缺失代码；缺失字段不得填零或由其他字段替代"
+    )
+    truncated: bool = Field(description="主营业务或经营范围是否被截断")
+    truncated_fields: list[str] = Field(
+        description="被截断的字段名，如main_business、business_scope"
+    )

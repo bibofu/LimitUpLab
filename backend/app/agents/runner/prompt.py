@@ -26,6 +26,15 @@ FINANCIAL_RULE = (
     "不是原始公告日。金额单位以工具返回的 unit 为准，不得自行换算或猜测。"
 )
 
+STOCK_PROFILE_RULE = (
+    "公司资料：stock_profile 返回巨潮资讯的公司资料、主营业务、行业、上市信息和注册资金。"
+    "只有用户询问总市值、流通市值、总股本或流通股时，才设置 include_market_cap=true "
+    "让东方财富补充这些当前快照字段；只问主营业务、行业或上市信息时不要请求市值。"
+    "市值是当前快照，不是历史市值，market_cap_status=unavailable 或 data_missing 非空时"
+    "必须说明缺失，不得用注册资金、总资产或成交额替代市值。industry_source 说明行业口径，"
+    "不把不同来源的行业混为一个；不提供买卖、仓位或目标价建议。"
+)
+
 def _index_rule(enabled_tools: set[str]) -> str | None:
     """Describe only the index capabilities actually exposed in this profile."""
 
@@ -76,6 +85,8 @@ def _capability_rules(enabled_tools: set[str]) -> list[str]:
     index_rule = _index_rule(enabled_tools)
     if index_rule:
         rules.append(index_rule)
+    if "stock_profile" in enabled_tools:
+        rules.append(STOCK_PROFILE_RULE)
     return rules
 
 

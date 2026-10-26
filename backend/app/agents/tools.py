@@ -66,6 +66,7 @@ from app.services.sector_performance import build_sector_performance
 from app.services.sector_stock_ranking import build_sector_stock_ranking
 from app.services.stock_kline import build_stock_kline_facts
 from app.services.stock_financials import build_stock_financials_facts
+from app.services.stock_profile import build_stock_profile
 from app.services.index_research import (
     build_index_constituents,
     build_index_quote,
@@ -85,7 +86,7 @@ from app.services.trading_calendar import build_market_calendar_facts
 from app.agents.review_agent import build_review_agent_report
 
 
-TOOL_CONTRACT_VERSION = "agent-tools-v3"
+TOOL_CONTRACT_VERSION = "agent-tools-v4"
 
 
 TOOL_SCHEMAS = [
@@ -116,6 +117,7 @@ V1_CLOSED_MARKET_TOOL_NAMES = frozenset(
         "limit_up_events",
         "first_board_filter",
         "stock_kline",
+        "stock_profile",
         "index_search",
         "index_quote",
         "index_constituents",
@@ -847,6 +849,53 @@ class AgentToolRegistry:
                 f"{len(recent_events)} 条涨停记录和 {len(news.items)} 条个股资讯。"
             ),
             trace_output=trace_output,
+        )
+
+    def stock_profile(
+        self,
+        symbol: str,
+        include_market_cap: bool = False,
+    ) -> ToolResult:
+        """Return one stock's company profile and optional current market-cap snapshot."""
+
+        resolved_symbol, resolved_name = self.resolve_stock_identity(symbol)
+        payload = build_stock_profile(
+            resolved_symbol,
+            include_market_cap=include_market_cap,
+            fallback_name=resolved_name,
+        )
+        missing = list(payload.get("data_missing") or [])
+        summary_parts = [f"{payload.get('name')}({resolved_symbol}) 公司资料"]
+        if payload.get("industry"):
+            summary_parts.append(
+                f"行业 {payload['industry']}（{payload.get('industry_source') or '来源未标注'}）"
+            )
+        if payload.get("main_business"):
+            summary_parts.append("主营业务已返回")
+        if payload.get("total_market_cap") is not None:
+            summary_parts.append("总市值已返回")
+        if payload.get("float_market_cap") is not None:
+            summary_parts.append("流通市值已返回")
+        if missing:
+            shown = "；".join(missing[:4])
+            if len(missing) > 4:
+                shown += f" 等 {len(missing)} 项"
+            summary_parts.append(f"数据缺口：{shown}")
+        status = str(payload.get("status") or "error")
+        source_errors = tuple(payload.get("source_errors") or [])
+        return ToolResult(
+            name="stock_profile",
+            input={
+                "symbol": resolved_symbol,
+                "include_market_cap": include_market_cap,
+            },
+            output=payload,
+            summary="；".join(summary_parts) + "。",
+            trace_output=payload,
+            status="error" if status == "error" else "success",
+            error="；".join(source_errors) if status == "error" else None,
+            result_status=status,
+            source_errors=source_errors,
         )
 
     def first_board_ratings(

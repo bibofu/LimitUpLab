@@ -34,6 +34,7 @@ from app.agents.tool_output_models import (
     RecentReturnsPayload,
     StockFinancialRow,
     StockFinancialsPayload,
+    StockProfilePayload,
 )
 from app.models import (
     DailyBoardPromotionStat,
@@ -108,6 +109,7 @@ TOOL_OUTPUT_SPECS: dict[str, OutputSpec] = {
     "stock_financials": OutputSpec(
         row_model=StockFinancialRow, payload_model=StockFinancialsPayload
     ),
+    "stock_profile": OutputSpec(payload_model=StockProfilePayload),
     "index_search": OutputSpec(
         row_model=IndexSearchRow, payload_model=IndexSearchPayload
     ),

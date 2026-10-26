@@ -18,6 +18,7 @@ EXTENDED_TOOLS = V1_TOOLS | {
     "index_search",
     "index_quote",
     "index_constituents",
+    "stock_profile",
 }
 
 
@@ -48,6 +49,7 @@ def test_extended_profile_documents_every_enabled_capability():
         assert name in prompt
     assert "\n12. 使用 stock_financials" in prompt
     assert "\n13. 指数数据：" in prompt
+    assert "\n14. 公司资料：" in prompt
     assert "snapshot_captured_at" in prompt
     assert "当前没有提供开盘、最高、最低、成交量或成交额的指数工具" not in prompt
 
@@ -65,3 +67,20 @@ def test_no_index_tools_means_no_index_rule():
 
     assert "指数数据：" not in prompt
     assert "\n12. " not in prompt
+
+
+def test_stock_profile_rule_documents_current_market_cap_and_missing_fields():
+    prompt = system_prompt({"stock_profile"})
+
+    assert "\n12. 公司资料：" in prompt
+    assert "市值是当前快照" in prompt
+    assert "不得用注册资金、总资产或成交额替代市值" in prompt
+    assert "industry_source" in prompt
+    assert "不提供买卖、仓位或目标价建议" in prompt
+
+
+def test_stock_profile_rule_is_absent_when_tool_is_not_enabled():
+    prompt = system_prompt({"stock_kline"})
+
+    assert "stock_profile" not in prompt
+    assert "公司资料：" not in prompt
