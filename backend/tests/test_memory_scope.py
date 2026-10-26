@@ -109,3 +109,47 @@ def test_optional_memory_is_removed_before_current_run_context_overflows():
     assert built.diagnostics["memory_hit_count"] == 0
     assert built.diagnostics["memory_context_budget_dropped"] == 1
     assert built.messages[-1].content == "当前问题"
+
+
+def _dependency_history(dependencies):
+    return [
+        {"message_id": "u", "role": "user", "content": "解释首板", "run_id": "r1"},
+        {"message_id": "a", "role": "assistant", "content": "按偏好生成的研究回答", "run_id": "r1",
+         "metadata": {"memory_dependencies": dependencies,
+                      "memory_context_fingerprint": "old", "memory_context_used": True}},
+    ]
+
+
+def test_unrelated_memory_change_keeps_dependency_scoped_assistant_prose():
+    dependencies = [{"memory_id": "m1", "effective_revision": 1, "scope_key": "global"}]
+    current = retrieve(SnapshotRepository([], revision=2, fingerprint="new", dependency_valid=True))
+    cleaned = clean_conversation_for_memory_revision(
+        {"recent_messages": _dependency_history(dependencies),
+         "memory_context_fingerprint": "old"},
+        current,
+    )
+    assert [item["message_id"] for item in cleaned["recent_messages"]] == ["u", "a"]
+    assert cleaned["memory_scope_rebuilt"] is False
+
+
+def test_used_memory_change_clears_dependent_assistant_and_rebuilds_summary():
+    dependencies = [{"memory_id": "m1", "effective_revision": 1, "scope_key": "global"}]
+    current = retrieve(SnapshotRepository([], revision=2, fingerprint="new", dependency_valid=False))
+    cleaned = clean_conversation_for_memory_revision(
+        {"recent_messages": _dependency_history(dependencies),
+         "memory_context_fingerprint": "old"},
+        current,
+    )
+    assert [item["message_id"] for item in cleaned["recent_messages"]] == ["u"]
+    assert cleaned["memory_scope_rebuilt"] is True
+
+
+def test_empty_dependency_message_survives_unrelated_memory_changes():
+    current = retrieve(SnapshotRepository([], revision=2, fingerprint="new", dependency_valid=False))
+    cleaned = clean_conversation_for_memory_revision(
+        {"recent_messages": _dependency_history([]),
+         "memory_context_fingerprint": "old"},
+        current,
+    )
+    assert [item["message_id"] for item in cleaned["recent_messages"]] == ["u", "a"]
+    assert cleaned["memory_scope_rebuilt"] is False

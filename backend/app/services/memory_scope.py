@@ -50,27 +50,56 @@ def summary_source_messages(messages: list[Any]) -> list[Any]:
             if not (_value(item, "role") == "assistant" and _metadata(item).get("memory_context_used"))]
 
 
+def _assistant_memory_changed(item, retrieval) -> bool:
+    """A message is stale only when a memory it actually used changed."""
+
+    meta = _metadata(item)
+    dependencies = meta.get("memory_dependencies")
+    checker = getattr(retrieval, "dependency_validator", None)
+    if isinstance(dependencies, list) and callable(checker):
+        try:
+            return not bool(checker(dependencies))
+        except Exception:
+            # A failed dependency check must not publish stale preference-shaped prose.
+            return True
+    stored = meta.get("memory_context_fingerprint")
+    return bool(stored and stored != retrieval.context_fingerprint)
+
+
 def clean_conversation_for_memory_revision(conversation: dict, retrieval) -> dict:
     """Return an isolated view; the runtime may persist ONLY this cleaned state.
 
-    On revocation, drop derived free text wholesale and rebuild from safe recent
-    user/session turns. Do not patch remembered sentences by string replacement.
+    New messages carry the exact memory dependencies used to generate them.
+    Unrelated memory changes therefore leave their prose intact. Legacy messages
+    without dependency metadata fall back to the old whole-snapshot behavior.
     """
     state = copy.deepcopy(conversation)
     recent = filter_memory_control_turns(state.get("recent_messages", []))
-    # Loading committed history can append an older assistant turn after the
-    # conversation itself has already been rebuilt for the current identity.
-    # Check each message's provenance even when the conversation did not change.
-    recent = [item for item in recent if not (
+    has_dependency_metadata = any(
         _value(item, "role") == "assistant"
-        and _metadata(item).get("memory_context_fingerprint")
-        and _metadata(item)["memory_context_fingerprint"] != retrieval.context_fingerprint
-    )]
+        and isinstance(_metadata(item).get("memory_dependencies"), list)
+        for item in recent
+    )
     previous = state.get("memory_context_fingerprint")
-    changed = previous != retrieval.context_fingerprint and (previous is not None or retrieval.owner_revision > 0)
+    removed = False
+    kept = []
+    for item in recent:
+        if _value(item, "role") == "assistant":
+            if has_dependency_metadata:
+                if _assistant_memory_changed(item, retrieval):
+                    removed = True
+                    continue
+            elif (_metadata(item).get("memory_context_fingerprint")
+                  and _metadata(item)["memory_context_fingerprint"] != retrieval.context_fingerprint):
+                removed = True
+                continue
+        kept.append(item)
+    recent = kept
+    changed = removed if has_dependency_metadata else (
+        previous != retrieval.context_fingerprint
+        and (previous is not None or retrieval.owner_revision > 0)
+    )
     if changed:
-        recent = [item for item in recent if _value(item, "role") != "assistant"
-                  or _metadata(item).get("memory_context_fingerprint") == retrieval.context_fingerprint]
         from app.models import ChatSessionMessage
         from app.services.conversation_summary import deterministic_summary
         from app.agents.structured_references import supported_session_constraints
@@ -97,9 +126,21 @@ def clean_conversation_for_memory_revision(conversation: dict, retrieval) -> dic
 
 def sanitize_working_messages_for_memory_revision(
     messages: list[BaseMessage], retrieval, previous_fingerprint: str | None,
+    dependencies: list[dict[str, Any]] | None = None,
 ) -> list[BaseMessage]:
     """Preserve tool protocol/evidence while removing stale model prose on resume."""
-    if previous_fingerprint is None or previous_fingerprint == retrieval.context_fingerprint:
+    checker = getattr(retrieval, "dependency_validator", None)
+    if isinstance(dependencies, list) and callable(checker):
+        try:
+            changed = not bool(checker(dependencies))
+        except Exception:
+            changed = True
+    else:
+        changed = (
+            previous_fingerprint is not None
+            and previous_fingerprint != retrieval.context_fingerprint
+        )
+    if not changed:
         return [item.model_copy(deep=True) for item in messages]
     result = []
     for message in messages:

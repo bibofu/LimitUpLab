@@ -15,8 +15,9 @@ def record(key="response_style", kind="preference", value="简洁", **changes):
 
 
 class SnapshotRepository:
-    def __init__(self, items, revision=1, fingerprint=None):
+    def __init__(self, items, revision=1, fingerprint=None, dependency_valid=True):
         self.items, self.revision, self.fingerprint = items, revision, fingerprint
+        self.dependency_valid = dependency_valid
         self.calls = []
 
     def read_context(self, **kwargs):
@@ -25,6 +26,9 @@ class SnapshotRepository:
                     if item.get("owner_id") == kwargs["owner_id"] and not item.get("deleted_at")]
         return {"items": deepcopy(self.items), "owner_revision": self.revision,
                 "context_fingerprint": self.fingerprint or sha256(json.dumps(sorted(identity)).encode()).hexdigest()}
+
+    def dependencies_unchanged(self, owner_id, dependencies, now=None):
+        return True if not dependencies else self.dependency_valid
 
 
 def retrieve(repo, **changes):

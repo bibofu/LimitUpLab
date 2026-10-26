@@ -163,6 +163,7 @@ def _agent(state, deps):
         conversation = clean_conversation_for_memory_revision(state["conversation"], retrieved)
         working = sanitize_working_messages_for_memory_revision(
             state.get("messages", []), retrieved, state.get("memory_context_fingerprint"),
+            state.get("memory_dependencies"),
         )
         try:
             with trace_stage("context_preparation", {"node": "agent"}) as details:
@@ -170,6 +171,7 @@ def _agent(state, deps):
                     system_prompt=runner.system_prompt, query=state["current_query"],
                     conversation=conversation, working_messages=working, long_term_memory=retrieved,
                     page_context=page, tool_definitions=runner.definitions,
+                    working_memory_dependencies=state.get("memory_dependencies"),
                     reference_intent=state["reference_intent"],
                 )
                 details.update(built.diagnostics)

@@ -32,6 +32,12 @@
   - 被使用记忆修改/删除/过期仍返回 `memory_changed`；
   - `management_revision` 变化不影响交付；
   - 空依赖集不会被后续新增记忆误判失效。
+- 对话清理按依赖判断：
+  - assistant 消息保存生成时的 `memory_dependencies`；
+  - 只有它实际使用过的记忆变化时才移除该 assistant 文本并重建摘要；
+  - 无关记忆变化保留历史回答；
+  - 旧消息没有依赖元数据时，才回退到全量 fingerprint；
+  - 恢复执行时，working messages 也按当前依赖校验，而不是全量 owner 变化。
 - 确定性展示块：
   - `tool_display` 记忆可从 `structured.display_columns` 或“只显示股票名称”等稳定表达推导展示列；
   - 服务端从完整工具 rows 生成 `display_blocks`，保留 `row_count`、`ordered_symbols`、缺失列和截断标记；
@@ -57,11 +63,10 @@
 1. pgvector 语义检索与同义改写召回；
 2. 后台 Memory Extractor / Judge / Consolidator 和 candidate inbox；
 3. `management_revision` 的写入方（候选、使用统计、embedding 回填）尚未接入；
-4. 对话清理仍使用全量 context fingerprint，尚未按依赖清理旧 assistant 文本；
-5. 展示块目前只抑制 Markdown 表格；模型正文中的列表或普通文字仍可能与展示块重复；
-6. 只有 `ordered_symbols` 唯一时才能用展示块解析“第二只”；重复股票的榜单仍不可按序号引用；
-7. 旧数据迁移到新表后的长期双读/回滚演练；
-8. 记忆评测集与自动激活校准。
+4. 展示块目前只抑制 Markdown 表格；模型正文中的列表或普通文字仍可能与展示块重复；
+5. 只有 `ordered_symbols` 唯一时才能用展示块解析“第二只”；重复股票的榜单仍不可按序号引用；
+6. 旧数据迁移到新表后的长期双读/回滚演练；
+7. 记忆评测集与自动激活校准。
 
 ## 当前数据字段
 

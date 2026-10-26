@@ -7,6 +7,7 @@ in graph state, never its values. Read a fresh snapshot before each model call.
 from __future__ import annotations
 
 import copy
+from collections.abc import Callable
 from dataclasses import dataclass
 from datetime import date, datetime, timezone
 import re
@@ -22,6 +23,7 @@ class MemoryRetrievalResult:
     owner_revision: int
     context_fingerprint: str
     dependencies: tuple[dict[str, Any], ...] = ()
+    dependency_validator: Callable[[list[dict[str, Any]]], bool] | None = None
 
 
 def _datetime(value: Any) -> datetime | None:
@@ -201,6 +203,11 @@ def retrieve_memories(
         "effective_revision": int(item["revision"]),
         "scope_key": item.get("scope_key", "global"),
     } for item in selected)
+    checker = getattr(repository, "dependencies_unchanged", None)
+    validator = (
+        (lambda deps: bool(checker(owner_id, deps)))
+        if callable(checker) else None
+    )
     return MemoryRetrievalResult(selected, {
         "memory_hit_count": len(selected), "long_term_memory_tokens": used,
         "memory_token_budget": max_tokens, "memory_candidate_count": len(candidates),
@@ -208,4 +215,4 @@ def retrieve_memories(
         "memory_owner_revision": revision, "memory_context_fingerprint": fingerprint,
         "memory_dependency_count": len(dependencies),
         "memory_retrieval_mode": "typed_exact_topic_v1",
-    }, revision, fingerprint, dependencies)
+    }, revision, fingerprint, dependencies, validator)

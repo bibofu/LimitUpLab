@@ -172,6 +172,7 @@ def build_context(
     working_messages: list[BaseMessage], page_context: dict | None = None,
     tool_definitions: list | None = None, max_input_tokens: int | None = None,
     long_term_memory=None, working_memory_fingerprint: str | None = None,
+    working_memory_dependencies: list[dict[str, Any]] | None = None,
     reference_intent=None,
 ) -> ContextBuildResult:
     """Rebuild before EVERY model call; do not pass the entire checkpoint as input."""
@@ -185,7 +186,9 @@ def build_context(
         )
 
         previous = working_memory_fingerprint or conversation.get("memory_context_fingerprint")
-        working = sanitize_working_messages_for_memory_revision(working, long_term_memory, previous)
+        working = sanitize_working_messages_for_memory_revision(
+            working, long_term_memory, previous, working_memory_dependencies,
+        )
         conversation = clean_conversation_for_memory_revision(conversation, long_term_memory)
     if working and isinstance(working[0], HumanMessage) and working[0].content == query:
         working = working[1:]
