@@ -86,6 +86,7 @@ function mount(t: TestContext, overrides: Record<string, any> = {}, savedSession
     fetchChatSessions: async () => ({ sessions: [session("a"), session("b")] }),
     fetchChatSession: async (id: string) => session(id),
     createChatSession: async () => session("new"),
+    fetchMemoryCandidates: async () => ({ items: [] }),
     streamAgentChatMessage: async () => final,
     ...overrides,
   };
@@ -126,6 +127,7 @@ function mount(t: TestContext, overrides: Record<string, any> = {}, savedSession
       assert.ok(node, "expected a matching rendered control");
       return node.props;
     },
+    all(predicate: (node: any) => boolean) { return nodes.filter(predicate).map(node => node.props); },
     has(predicate: (node: any) => boolean) { return nodes.some(predicate); },
     answers() { return nodes.filter(node => node.type === markdownModule.exports.AgentAnswerMarkdown); },
     answerHtml() {
@@ -154,6 +156,59 @@ test("the compact composer grows with the draft and shrinks after clearing witho
   input.scrollHeight = 40;
   app.type("");
   assert.equal(input.style.height, "42px");
+});
+
+test("memory candidate inbox only changes state after explicit confirm or reject", async t => {
+  const confirmed: string[] = [];
+  const rejected: Array<[string, number]> = [];
+  const candidate = (id: string, value: string, revision: number) => ({
+    memory_id: id,
+    memory_type: "preference",
+    key: "tool_display:dragon_tiger_list",
+    value,
+    topics: [],
+    metadata: {},
+    scope_type: "tool",
+    scope: { tool_name: "dragon_tiger_list" },
+    scope_key: 'tool:{"tool_name":"dragon_tiger_list"}',
+    canonical_key: "tool_display:dragon_tiger_list",
+    structured: { display_columns: ["name"] },
+    status: "candidate",
+    revision,
+    expires_at: null,
+    source_kind: "auto",
+    source_quote: "以后展示龙虎榜只显示股票名称",
+    source_user_message: "以后展示龙虎榜只显示股票名称",
+    created_at: "2026-10-27T10:00:00",
+    updated_at: "2026-10-27T10:00:00",
+  });
+  const app = mount(t, {
+    fetchMemoryCandidates: async () => ({
+      items: [
+        candidate("memory_1", "展示龙虎榜时只显示股票名称", 2),
+        candidate("memory_2", "龙虎榜优先看净买入", 1),
+      ],
+    }),
+    confirmMemoryCandidate: async (id: string) => { confirmed.push(id); },
+    rejectMemoryCandidate: async (id: string, revision: number) => { rejected.push([id, revision]); },
+  });
+  await app.settle();
+  const toggle = app.find(node => node.type === "button"
+    && String(node.props["aria-label"]).startsWith("打开记忆候选，2 条待确认"));
+  toggle.onClick(); await app.settle();
+  assert.deepEqual(app.all(node => node.props.className === "memory-candidate-value").map(
+    node => node.children,
+  ), ["展示龙虎榜时只显示股票名称", "龙虎榜优先看净买入"]);
+  assert.equal(confirmed.length, 0, "opening the inbox must not activate a candidate");
+
+  app.all(node => node.props.className === "memory-candidate-confirm")[0].onClick(); await app.settle();
+  assert.deepEqual(confirmed, ["memory_1"]);
+  assert.equal(app.has(node => node.props.children === "已确认，将在后续对话中生效。"), true);
+
+  app.all(node => node.props.className === "memory-candidate-reject")[0].onClick(); await app.settle();
+  assert.deepEqual(rejected, [["memory_2", 1]]);
+  assert.equal(app.all(node => node.props.className === "memory-candidate").length, 0);
+  assert.equal(app.has(node => node.props.children === "暂无待确认记忆。明确、稳定的长期偏好会先出现在这里。"), true);
 });
 
 test("reload restores a paused task and resumes the same run without a new user message", async t => {

@@ -7,6 +7,8 @@ import type {
   AgentChatRequest,
   AgentChatStreamEvent,
   AgentChatStreamResult,
+  AgentMemoryCandidatesResponse,
+  AgentMemoryMutationResult,
   AgentRunCommand,
   AgentRunState,
   ChatSessionDetail,
@@ -353,6 +355,49 @@ export function deleteChatSession(sessionId: string) {
   return request<{ deleted: boolean }>(`/api/agents/chat/sessions/${sessionId}`, {
     method: "DELETE",
   });
+}
+
+/** List background memory candidates; only explicit confirmation activates them. */
+export function fetchMemoryCandidates(limit = 50) {
+  return request<AgentMemoryCandidatesResponse>(
+    `/api/agents/chat/memories/candidates?limit=${limit}`,
+    { cache: "no-store" },
+  );
+}
+
+/**
+ * Stable operation identity for one candidate revision. A retry after a lost
+ * response reuses the server receipt instead of mutating a second time.
+ */
+function memoryOperationKey(prefix: string, memoryId: string, revision: number) {
+  return `${prefix}:${memoryId}:${revision}`;
+}
+
+/** Explicitly activate one candidate; the server still validates ownership. */
+export function confirmMemoryCandidate(memoryId: string, expectedRevision: number) {
+  return request<AgentMemoryMutationResult>(
+    `/api/agents/chat/memories/candidates/${encodeURIComponent(memoryId)}/confirm`,
+    {
+      method: "POST",
+      headers: {
+        "Idempotency-Key": memoryOperationKey("confirm_candidate", memoryId, expectedRevision),
+      },
+    },
+  );
+}
+
+/** Reject one candidate with the revision shown to the user. */
+export function rejectMemoryCandidate(memoryId: string, expectedRevision: number) {
+  const query = new URLSearchParams({ expected_revision: String(expectedRevision) });
+  return request<AgentMemoryMutationResult>(
+    `/api/agents/chat/memories/candidates/${encodeURIComponent(memoryId)}/reject?${query}`,
+    {
+      method: "POST",
+      headers: {
+        "Idempotency-Key": memoryOperationKey("reject_candidate", memoryId, expectedRevision),
+      },
+    },
+  );
 }
 
 /**

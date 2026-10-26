@@ -579,6 +579,44 @@ export interface ChatSessionsResponse {
   generated_by: string;
 }
 
+export type AgentMemoryType = "preference" | "research_context" | "research_archive";
+export type AgentMemoryScopeType = "global" | "tool" | "intent" | "topic" | "entity" | "condition";
+
+/** One owner-scoped long-term memory or unconfirmed background candidate. */
+export interface AgentMemoryRecord {
+  memory_id: string;
+  memory_type: AgentMemoryType;
+  key: string;
+  value: string | null;
+  topics: string[];
+  metadata: Record<string, unknown>;
+  scope_type: AgentMemoryScopeType;
+  scope: Record<string, unknown>;
+  scope_key: string;
+  canonical_key: string | null;
+  structured: Record<string, unknown>;
+  status: "candidate" | "active" | "superseded" | "revoked" | "expired" | "deleted";
+  revision: number;
+  expires_at: string | null;
+  source_kind: "legacy" | "explicit" | "auto" | "import";
+  source_quote: string | null;
+  source_user_message: string;
+  created_at: string;
+  updated_at: string;
+}
+
+export interface AgentMemoryCandidatesResponse {
+  items: AgentMemoryRecord[];
+}
+
+export interface AgentMemoryMutationResult {
+  current: AgentMemoryRecord;
+  operation_revision: number;
+  owner_revision: number;
+  context_fingerprint: string;
+  replayed: boolean;
+}
+
 export interface AgentDisplayBlock {
   kind: "table";
   source_tool: string;

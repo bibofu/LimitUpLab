@@ -54,6 +54,7 @@
   - `POST /api/agents/chat/memories/candidates/{id}/confirm` 显式激活；
   - `POST .../reject` 清空候选正文并标记 revoked；
   - `GET .../candidates` 列出待确认候选；
+  - 会话面板提供“记忆候选”工作台：显示作用域、候选正文和逐字来源，确认后立即进入 active，忽略后从列表移除；操作失败保留候选并给出可重试提示；
   - worker 命令：`python backend/scripts/run_memory_extraction.py --once`；
   - `LIMITUPLAB_MEMORY_AUTO_LEARN=off|candidate`；`safe_auto` 尚未实现。
 - 写入与删除：
@@ -74,12 +75,11 @@
 1. pgvector 语义检索与同义改写召回；
 2. 自动学习的 Consolidator（UPDATE/DELETE/NOOP/SUPERSEDED）和 merge 审批尚未完成；
 3. `safe_auto` 自动激活尚未实现；当前候选必须显式确认；
-4. candidate inbox 目前只有 API，没有前端工作台；
-5. `management_revision` 的写入方（候选、使用统计、embedding 回填）尚未接入；
-6. 展示块目前只抑制 Markdown 表格；模型正文中的列表或普通文字仍可能与展示块重复；
-7. 只有 `ordered_symbols` 唯一时才能用展示块解析“第二只”；重复股票的榜单仍不可按序号引用；
-8. 旧数据迁移到新表后的长期双读/回滚演练；
-9. 记忆评测集与自动激活校准。
+4. `management_revision` 的写入方（候选、使用统计、embedding 回填）尚未接入；
+5. 展示块目前只抑制 Markdown 表格；模型正文中的列表或普通文字仍可能与展示块重复；
+6. 只有 `ordered_symbols` 唯一时才能用展示块解析“第二只”；重复股票的榜单仍不可按序号引用；
+7. 旧数据迁移到新表后的长期双读/回滚演练；
+8. 记忆评测集与自动激活校准。
 
 ## 当前数据字段
 
@@ -120,8 +120,8 @@ owner + active + 未过期 + 未删除
 
 ## 下一步
 
-1. 补齐 effective/management 版本分离和依赖级失效；
+1. 候选 Consolidator：同 key 的 UPDATE/NOOP/SUPERSEDED、例外关系和合并审批；
 2. 接入 pgvector 混合检索与中文评测；
-3. 后台候选提取/合并 outbox；
-4. 确定性展示块和引用顺序；
+3. `management_revision` 写入方、`safe_auto` 低风险自动激活；
+4. 抑制展示块与正文列表/文字的重复，并解析重复股票榜单的序号；
 5. 记忆评测集、自动激活校准和迁移演练。
