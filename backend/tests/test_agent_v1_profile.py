@@ -39,8 +39,7 @@ class AgentV1ProfileTest(unittest.TestCase):
         schema_names = {schema.name for schema in registry.schemas()}
         self.assertEqual(registry.profile, V1_AGENT_PROFILE)
         self.assertEqual(schema_names, set(V1_CLOSED_MARKET_TOOL_NAMES))
-        self.assertNotEqual(schema_names, {schema.name for schema in TOOL_SCHEMAS})
-        self.assertNotIn("stock_financials", schema_names)
+        self.assertIn("stock_financials", schema_names)
         self.assertIn("index_search", schema_names)
         self.assertIn("index_quote", schema_names)
         self.assertIn("index_constituents", schema_names)

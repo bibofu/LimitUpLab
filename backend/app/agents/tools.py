@@ -117,6 +117,7 @@ V1_CLOSED_MARKET_TOOL_NAMES = frozenset(
         "limit_up_events",
         "first_board_filter",
         "stock_kline",
+        "stock_financials",
         "stock_profile",
         "index_search",
         "index_quote",

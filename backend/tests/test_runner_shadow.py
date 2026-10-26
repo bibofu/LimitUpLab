@@ -154,7 +154,7 @@ def test_runner_prompt_matches_the_enabled_tool_set():
     system = provider.calls[0][0].content
 
     assert "index_quote" in system
-    assert "stock_financials" not in system
+    assert "stock_financials" in system
 
     extended = ScriptedProvider([AIMessage(content="你好。")])
     extended_registry = AgentToolRegistry(

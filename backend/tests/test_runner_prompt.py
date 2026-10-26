@@ -84,3 +84,12 @@ def test_stock_profile_rule_is_absent_when_tool_is_not_enabled():
 
     assert "stock_profile" not in prompt
     assert "公司资料：" not in prompt
+
+
+def test_financial_rule_is_included_when_stock_financials_is_enabled():
+    prompt = system_prompt({"stock_financials", "market_index_trend"})
+
+    assert "\n12. 使用 stock_financials" in prompt
+    assert "\n13. 指数数据：" in prompt
+    assert "年初至今累计" in prompt
+    assert "单季推算值" in prompt

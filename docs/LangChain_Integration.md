@@ -79,8 +79,8 @@ POST /api/agents/chat/stream
 
 - 日期：模型显式写入工具参数；工具返回 `data_as_of`，与请求不一致时拒绝。
 - 数据缺失：`data_missing`、`source_truncated`、`truncated` 由工具显式返回。
-- 财务口径：`stock_financials` 的 quarterly 主字段是年初至今累计，`*_single_quarter` 是服务端推算的单季值；上一季度缺失时不推算。`report_date` 是来源报告日期，不等同于原始公告日。该工具当前只在 `extended` profile 开放。
-- 指数数据：`index_search` 负责名称/代码消歧，宽基指数保留 `resolved` 与同名 `variants`；`index_quote` 的 `days` 指最近 N 个有日线的交易日，`data_as_of` 可能早于请求截止日；`index_constituents` 只返回代码和名称，不含权重、行业和市值，不得自行补造。三个指数工具当前只在 `extended` profile 开放。
+- 财务口径：`stock_financials` 的 quarterly 主字段是年初至今累计，`*_single_quarter` 是服务端推算的单季值；上一季度缺失时不推算。`report_date` 是来源报告日期，不等同于原始公告日。该工具在 `v1_close_review` 与 `extended` 均开放。
+- 指数数据：`index_search` 负责名称/代码消歧，宽基指数保留 `resolved` 与同名 `variants`；`index_quote` 的 `days` 指最近 N 个有日线的交易日，`data_as_of` 可能早于请求截止日；`index_constituents` 只返回代码和名称，不含权重、行业和市值，不得自行补造。三个指数工具在 `v1_close_review` 与 `extended` 均开放。
 - 合规：关键词仅触发条件语义复核，不直接拒绝否定声明或历史引用；真实违规或复核失败不发布候选回答。可配置 `LIMITUPLAB_AGENT_COMPLIANCE=llm` 对未复核的其余回答也做语义复核。
 - 输入安全：语义审查提示注入、权限绕过与直接交易指令；正常历史研究允许，拒绝发生在业务工具查询之前，不生成输出合同。
 - 历史复盘：候选 start_date/end_date 与后续观察 as_of_date 分开；聊天工具默认观察到本地最新交易日，显式历史截止仍可复现。报告分别标注候选表现分类、特征分组和实际来源/阶段。
