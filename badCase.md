@@ -1,5 +1,12 @@
 # Agent 问答回归记录
 
+## 2026-10-26：v1 未开放 stock_financials，财报问题被路由到 stock_news
+
+- 原表现：同一会话先问“介绍一下贵州茅台”，再问“它最新的财务数据怎么样”。第三问 `run_888220b5fab84f7cadd1e7c5fe319f46` 返回 `task_status=complete`，但 `tool_calls=["stock_news"]`，回答只能说明“最近30天没有结构化财报”；追问“查之前问的财报呢”`run_4a62f9cfb08b4e8abf631254180d4960` 也没有调用工具。
+- 原因：运行 profile 为默认 `v1_close_review`，其 allowlist 未包含 `stock_financials`；`FINANCIAL_RULE` 也只在工具启用时注入。模型看不到财报工具，只能调用可用的 `stock_news`。这不是网关拒绝、网络错误或模型幻觉；`react_events` 中没有 `stock_financials` 调用。
+- 修复：将 `stock_financials` 加入 `V1_CLOSED_MARKET_TOOL_NAMES`；v1 与 extended 当前都开放财报工具。同步更新 profile、prompt、shadow 测试和当前文档。财报工具本身已实现，无需新增数据接口。
+- 验证：真实 DeepSeek 三问“最新营业收入和归母净利润 / 资产负债情况 / 经营活动现金流净额”全部 HTTP 200、`task_status=complete`，均调用 `stock_financials`；报告位于忽略目录 `output/memory-refactoring/stock-financials-live-16fab413.json`。重启后端后按原会话顺序复验，“介绍一下贵州茅台”调用 `stock_profile`，“它最新的财务数据怎么样”调用 `stock_financials`，两问均 complete。同版本后端全量 1937 passed、22 subtests passed、1 skipped。提交 `e6ce24d`。
+
 ## 2026-10-26：东方财富直连断连，市值字段增加腾讯兜底并重试
 
 - 原表现：`stock_profile` 开启市值查询时，东方财富 `stock_individual_info_em` 返回 `RemoteDisconnected`；关闭系统代理、`trust_env=False`、显式 `NO_PROXY=*` 后直连仍然断连，说明不是单纯代理配置问题。市值问题只能返回 `partial`。
