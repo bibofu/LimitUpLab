@@ -10,6 +10,7 @@ import subprocess
 from dataclasses import dataclass, replace
 from datetime import date, datetime, timedelta, timezone
 from pathlib import Path
+from tempfile import TemporaryDirectory
 from typing import Any, Callable, Sequence
 
 
@@ -1128,23 +1129,34 @@ class HithinkFinanceCollector:
         raise HithinkFinanceError(f"{pool}: pagination exceeded the safety limit")
 
     def _invoke(self, *arguments: str) -> dict[str, Any]:
-        """Run one CLI command and require a successful JSON envelope."""
+        """Run a remote-only CLI request without accessing its user's local DB."""
 
         executable = self.executable or _find_executable()
-        command = _build_command(
-            executable,
-            ["--source", "remote", *arguments, "--format", "json"],
-        )
         try:
-            completed = self.runner(
-                command,
-                capture_output=True,
-                text=True,
-                encoding="utf-8",
-                errors="replace",
-                timeout=self.timeout_seconds,
-                check=False,
-            )
+            # CLI 0.1.5 checks an existing DuckDB before honoring --source remote.
+            # An explicit, absent path bypasses that check and overrides both the
+            # user's default DB and HITHINK_FINANCE_DB_PATH. Never create this DB.
+            with TemporaryDirectory(prefix="limituplab-hithink-remote-") as directory:
+                remote_directory = Path(directory)
+                command = _build_command(
+                    executable,
+                    ["--source", "remote", "--db", str(remote_directory / "unused.duckdb"),
+                     *arguments, "--format", "json"],
+                )
+                completed = self.runner(
+                    command,
+                    capture_output=True,
+                    text=True,
+                    encoding="utf-8",
+                    errors="replace",
+                    timeout=self.timeout_seconds,
+                    check=False,
+                )
+                if any(remote_directory.iterdir()):
+                    raise HithinkFinanceError(
+                        "Remote-only hithink-finance request attempted local database storage",
+                        code="local_database_forbidden",
+                    )
         except FileNotFoundError as error:
             raise HithinkFinanceError("hithink-finance CLI is not installed or not on PATH") from error
         except subprocess.TimeoutExpired as error:
@@ -1155,6 +1167,11 @@ class HithinkFinanceCollector:
             ) from error
 
         envelope = _parse_envelope(completed.stdout)
+        if _dict(envelope.get("meta")).get("source") == "local":
+            raise HithinkFinanceError(
+                "Remote-only hithink-finance request returned local data",
+                code="local_database_forbidden",
+            )
         if completed.returncode != 0 or not envelope.get("ok"):
             error_payload = _dict(envelope.get("error"))
             message = _text(error_payload.get("message")) or _text(completed.stderr)

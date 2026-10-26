@@ -351,6 +351,8 @@ hithink-finance symbol search --q 600519 --limit 1 --format json
 
 业务读取仍以项目所选数据库中的快照为先；缺少日线或当日收盘时统一经过 MarketDataProvider 调用 CLI，固定使用 `adjust=none`，并把 CLI 的“股”转换为项目统一的“手”。CLI 不可用或请求失败时，日线和收盘快照显式回退腾讯行情并保留真实来源；分钟 K 继续使用新浪、东方财富。V1 Agent 不暴露同花顺实时工具；这些工具仅在 `extended` 研发配置中用于 V2 开发，请求失败时会明确返回错误，不会伪造结果。
 
+项目的同花顺 CLI 调用固定使用 `--source remote`，不读取或创建本地 DuckDB。为兼容 CLI 0.1.5 在选源前打开默认库的问题，每次请求以 `--db` 指向独占临时目录下未创建的文件路径，覆盖 CLI 默认路径及 `HITHINK_FINANCE_DB_PATH`；请求完成或失败后清理临时目录。如果 CLI 创建本地文件或返回 `meta.source=local`，采集器明确报错。此兼容处理保留 CLI 的凭据管理和远端重试机制，无须初始化 DuckDB，也不改动已有个人数据库。修改后需重启已运行的后端或更新进程，新启动的任务才会加载修复。
+
 ### 5. 安装前端
 
 ```powershell
