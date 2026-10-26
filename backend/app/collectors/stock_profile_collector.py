@@ -14,6 +14,7 @@ from contextlib import contextmanager
 from datetime import date, datetime
 import math
 import os
+import time
 from typing import Any, Iterator
 
 import requests
@@ -221,23 +222,34 @@ def load_tencent_market_cap(
         DEFAULT_TENCENT_TIMEOUT_SECONDS,
     )
     tencent_symbol = _tencent_symbol(symbol)
-    session = requests.Session()
-    session.trust_env = False
-    session.headers.update({
-        "User-Agent": (
-            "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
-            "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
-        ),
-        "Referer": "https://gu.qq.com/",
-    })
-    with _direct_network():
-        response = session.get(
-            f"https://qt.gtimg.cn/q={tencent_symbol}", timeout=timeout,
-        )
-    response.raise_for_status()
-    return _parse_tencent_market_cap(
-        response.content.decode("gbk", errors="replace"), symbol,
-    )
+    last_error: Exception | None = None
+    for attempt in range(2):
+        session = requests.Session()
+        session.trust_env = False
+        session.headers.update({
+            "User-Agent": (
+                "Mozilla/5.0 (Windows NT 10.0; Win64; x64) "
+                "AppleWebKit/537.36 (KHTML, like Gecko) Chrome/124.0 Safari/537.36"
+            ),
+            "Referer": "https://gu.qq.com/",
+        })
+        try:
+            with _direct_network():
+                response = session.get(
+                    f"https://qt.gtimg.cn/q={tencent_symbol}", timeout=timeout,
+                )
+            response.raise_for_status()
+            return _parse_tencent_market_cap(
+                response.content.decode("gbk", errors="replace"), symbol,
+            )
+        except Exception as error:  # noqa: BLE001 - retry transient provider drops
+            last_error = error
+            if attempt == 0:
+                time.sleep(0.4)
+        finally:
+            session.close()
+    assert last_error is not None
+    raise last_error
 
 
 def load_market_cap(
