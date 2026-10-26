@@ -500,6 +500,7 @@ class DurableRuntime:
 
     def _conversation(self, state, runner, control):
         from app.agents.conversation_memory import compress_conversation
+        from app.agents.conversation_recovery import needs_summary_recovery, recover_session_summary
         from app.agents.structured_references import references_from_committed_result, constraints_from_references
         from app.repositories.chat_memory_repository import ChatMemoryRepository
         from app.services.conversation_summary import summary_payload
@@ -516,11 +517,18 @@ class DurableRuntime:
         # Only committed business messages can enter the next turn's context.
         messages = [m.model_dump(mode="json") if hasattr(m, "model_dump") else m for m in runner.history]
         if not state and old and old.last_message_id:
-            ids = [item["message_id"] for item in messages]
-            if old.last_message_id in ids:
-                messages = messages[ids.index(old.last_message_id) + 1:]
             conversation.update(summary_cursor=old.last_message_id,
                                 summarized_message_count=old.summarized_message_count)
+        if needs_summary_recovery(conversation):
+            conversation = recover_session_summary(
+                conversation, database_url=control.lifecycle.database_url,
+                session_id=control.row["session_id"], owner_id=control.row["owner_id"],
+                current_run_id=control.row["run_id"], provider=runner.provider,
+                deadline=getattr(runner, "deadline", perf_counter() + 90),
+            )
+            # Recovery already consumed the entire delivered ledger, including
+            # anything present in the caller's bounded UI history.
+            messages = []
         # Revoke stale derived text BEFORE any summarizer model call. Cleaning
         # only after compression would already have sent deleted preferences.
         conversation = clean_conversation_for_memory_revision(

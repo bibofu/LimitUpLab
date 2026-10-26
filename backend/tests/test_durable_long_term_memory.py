@@ -77,13 +77,17 @@ def test_explicit_save_cross_session_recall_and_delete(world):
             assert result.memory_context_used
             deliver(world, request, control, result)
 
-        query = "忘记已保存的回答详略偏好"
+        query = "请删除我已保存的长期回答详略偏好。"
         request, control, history = world.start(query)
-        provider = ScriptedProvider([review_memory(query, "delete"), review_scope(query)])
+        provider = ScriptedProvider([
+            review_memory(query, "delete"),
+            review_scope(query, memory_type="preference", key="response_style"),
+        ])
         execution, _ = runner(request, provider, history=history)
         async with runtime_for(world) as runtime:
             result = await runtime.run(execution, control)
             assert "已删除" in result.answer
+            assert len(provider.calls) == 2
             deliver(world, request, control, result)
         assert repository.get_by_key(world.owner, "preference", "response_style") is None
 

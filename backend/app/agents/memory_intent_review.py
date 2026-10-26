@@ -73,7 +73,7 @@ class MemoryScopeReview(BaseModel):
         elif self.list_target == "type":
             if not self.memory_type or self.key is not None:
                 raise ValueError("A typed memory query requires only its type")
-        elif self.memory_type is not None or self.key is not None:
+        elif self.list_target == "all" and (self.memory_type is not None or self.key is not None):
             raise ValueError("A complete memory listing cannot carry a narrower target")
         return self
 
@@ -101,7 +101,8 @@ list_target=type 表示列出指定类型，填写 memory_type、key=null；list
 memory_type/key 均为 null。不要因为 candidate 漏填目标，就把指定某项的查询扩成全部记录。
 “我还保存着长期展示格式偏好吗，查询当前记录”必须 one/preference/output_format，无论是否存在该项。
 单个研究档案用 one/research_archive/档案名，所有研究档案用 type/research_archive。
-其余 action 或 scope 时 list_target/memory_type/key 均为 null。
+save/delete/unsupported 的 list_target 为 null，memory_type/key 可为 null，或逐字回显 candidate 的相同对象，
+不得借复核修改候选的操作对象。conversation/unclear 时这三个字段均为 null。
 不输出解释或思维链。"""
 
 TOOL = {"type": "function", "function": {
@@ -140,6 +141,9 @@ def review_memory_candidate(provider, *, message, candidate: MemoryIntent,
                                     memory_type=review.memory_type, key=review.key)
             if review.list_target is not None:
                 raise ValueError("Only list operations may select a query target")
+            if any(value is not None and value != getattr(candidate, field)
+                   for field, value in (("memory_type", review.memory_type), ("key", review.key))):
+                raise ValueError("Scope confirmation cannot change the proposed memory operation target")
             return candidate
         except (ValidationError, ValueError) as error:
             last_error = error
