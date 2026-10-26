@@ -45,6 +45,17 @@
   - 展示块存在时，前端移除模型正文中的 Markdown 表格，避免同源表格重复；
   - 当前问题明确要求其他字段时覆盖长期展示偏好；
   - 短期引用优先使用展示块的 `ordered_symbols`，而不是从模型正文猜顺序。
+- 后台候选学习（candidate 模式）：
+  - 正式交付事务写入 `memory_extraction_jobs` outbox，失败/取消/记忆管理轮不入队；
+  - worker 使用 `FOR UPDATE SKIP LOCKED` 领取任务，校验 owner、来源消息、开关和已有记忆；
+  - Memory Extractor 只读取用户消息，输出结构化候选；
+  - 候选以 `status='candidate'` 保存，不进入 active 检索，不改变 owner 有效版本；
+  - 已存在同 key 的记忆或候选时跳过，当前不做自动 UPDATE/覆盖；
+  - `POST /api/agents/chat/memories/candidates/{id}/confirm` 显式激活；
+  - `POST .../reject` 清空候选正文并标记 revoked；
+  - `GET .../candidates` 列出待确认候选；
+  - worker 命令：`python backend/scripts/run_memory_extraction.py --once`；
+  - `LIMITUPLAB_MEMORY_AUTO_LEARN=off|candidate`；`safe_auto` 尚未实现。
 - 写入与删除：
   - 保留 owner revision、record revision、operation receipt、tombstone；
   - 删除清空正文、结构化字段、来源引用和 source quote，保留 scope/canonical identity、内容哈希和状态；
@@ -61,12 +72,14 @@
 以下能力明确未完成，不能对外宣称：
 
 1. pgvector 语义检索与同义改写召回；
-2. 后台 Memory Extractor / Judge / Consolidator 和 candidate inbox；
-3. `management_revision` 的写入方（候选、使用统计、embedding 回填）尚未接入；
-4. 展示块目前只抑制 Markdown 表格；模型正文中的列表或普通文字仍可能与展示块重复；
-5. 只有 `ordered_symbols` 唯一时才能用展示块解析“第二只”；重复股票的榜单仍不可按序号引用；
-6. 旧数据迁移到新表后的长期双读/回滚演练；
-7. 记忆评测集与自动激活校准。
+2. 自动学习的 Consolidator（UPDATE/DELETE/NOOP/SUPERSEDED）和 merge 审批尚未完成；
+3. `safe_auto` 自动激活尚未实现；当前候选必须显式确认；
+4. candidate inbox 目前只有 API，没有前端工作台；
+5. `management_revision` 的写入方（候选、使用统计、embedding 回填）尚未接入；
+6. 展示块目前只抑制 Markdown 表格；模型正文中的列表或普通文字仍可能与展示块重复；
+7. 只有 `ordered_symbols` 唯一时才能用展示块解析“第二只”；重复股票的榜单仍不可按序号引用；
+8. 旧数据迁移到新表后的长期双读/回滚演练；
+9. 记忆评测集与自动激活校准。
 
 ## 当前数据字段
 

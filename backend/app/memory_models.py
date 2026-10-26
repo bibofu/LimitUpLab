@@ -30,11 +30,16 @@ def normalize_memory_scope(
     if scope_type != "tool" or not isinstance(scope, dict):
         return scope
     normalized = dict(scope)
-    tool = normalized.get("tool_name") or normalized.get("tool")
+    tool = (
+        normalized.get("tool_name")
+        or normalized.get("tool_id")
+        or normalized.get("tool")
+    )
     if tool is not None:
         text = str(tool).strip()
         normalized["tool_name"] = TOOL_NAME_ALIASES.get(text, text)
         normalized.pop("tool", None)
+        normalized.pop("tool_id", None)
     return normalized
 
 

@@ -337,6 +337,88 @@ class LongTermMemoryRepository:
                      write.scope_type))
             return self._finish(db, owner_id, operation_id, fingerprint, "put", memory_id)
 
+    def create_candidate(self, owner_id, write, operation_id, *, source_kind="auto"):
+        """Persist one background memory candidate without changing effective state."""
+
+        from app.agents.memory_policy import validate_memory_write
+        write = MemoryWrite.model_validate(write)
+        write = validate_memory_write(write, owner_id=owner_id, source="agent")
+        fingerprint = self._fingerprint("put", [write.model_dump(mode="json"), None], operation_id)
+        with self._connection() as db:
+            begin_write(db)
+            replay = self._receipt(db, owner_id, operation_id, fingerprint)
+            if replay is not None:
+                return replay
+            existing = db.execute("""SELECT memory_id FROM long_term_memories
+                WHERE owner_id=? AND memory_type=? AND memory_key=?""",
+                (owner_id, write.memory_type, write.key)).fetchone()
+            if existing is not None:
+                raise MemoryConflict("Candidate identity already exists")
+            memory_id = "memory_" + uuid4().hex
+            scope_json = _encode(write.scope)
+            scope_key = memory_scope_key(write.scope_type, write.scope)
+            canonical_key = write.canonical_key or write.key
+            db.execute("""INSERT INTO long_term_memories
+                (memory_id,owner_id,memory_type,memory_key,revision,value,topics_json,metadata_json,
+                 scope_json,scope_key,canonical_key,structured_json,source_quote,content_hash,
+                 expires_at,source_run_id,source_user_message,scope_type,status,source_kind)
+                VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,'candidate',?)""",
+                (memory_id, owner_id, write.memory_type, write.key, write.value,
+                 _encode(write.topics), _encode(write.metadata), scope_json, scope_key,
+                 canonical_key, _encode(write.structured), write.source_quote,
+                 _content_hash(write.value), write.expires_at, write.source_run_id,
+                 write.source_user_message, write.scope_type, source_kind))
+            return self._finish(
+                db, owner_id, operation_id, fingerprint, "put", memory_id, changed=False,
+            )
+
+    def list_candidates(self, owner_id, *, limit=100):
+        with self._connection(readonly=True) as db:
+            rows = db.execute("""SELECT *,COALESCE(expires_at<=clock_timestamp(),FALSE) AS expired
+                FROM long_term_memories WHERE owner_id=? AND status='candidate'
+                AND deleted_at IS NULL ORDER BY created_at DESC,memory_id LIMIT ?""",
+                (owner_id, max(1, min(limit, 200)))).fetchall()
+            return [_record(row).model_dump(mode="json") for row in rows]
+
+    def confirm_candidate(self, owner_id, memory_id, operation_id):
+        row = self.get(owner_id, memory_id, include_inactive=True)
+        if row is None or row.status != "candidate" or row.value is None:
+            raise MemoryNotFound("Candidate not found")
+        write = MemoryWrite(
+            memory_type=row.memory_type, key=row.key, value=row.value,
+            scope_type=row.scope_type, scope=row.scope,
+            canonical_key=row.canonical_key, structured=row.structured,
+            source_quote=row.source_quote, source_run_id=row.source_run_id,
+            source_user_message=row.source_user_message or "确认自动记忆候选",
+            expected_revision=row.revision,
+        )
+        return self.put(owner_id, write, operation_id)
+
+    def reject_candidate(self, owner_id, memory_id, expected_revision, operation_id):
+        if not isinstance(expected_revision, int) or expected_revision < 1:
+            raise ValueError("Rejection requires a positive expected revision")
+        fingerprint = self._fingerprint("delete", [memory_id, expected_revision, None], operation_id)
+        with self._connection() as db:
+            begin_write(db)
+            replay = self._receipt(db, owner_id, operation_id, fingerprint)
+            if replay is not None:
+                return replay
+            row = self._owned(db, owner_id, memory_id)
+            if row is None or row["status"] != "candidate":
+                raise MemoryNotFound("Candidate not found")
+            if row["revision"] != expected_revision:
+                raise MemoryConflict("Candidate revision changed; reload the current record")
+            db.execute("""UPDATE long_term_memories SET value=NULL,topics_json='[]',
+                metadata_json='{}',structured_json='{}',source_quote=NULL,
+                source_user_message='',expires_at=NULL,status='revoked',
+                deleted_at=clock_timestamp(),updated_at=clock_timestamp(),
+                revision=revision+1
+                WHERE owner_id=? AND memory_id=? AND revision=?""",
+                (owner_id, memory_id, expected_revision))
+            return self._finish(
+                db, owner_id, operation_id, fingerprint, "delete", memory_id, changed=False,
+            )
+
     def delete(self, owner_id, memory_id, expected_revision, operation_id, *, control=None, expected_owner_revision=None):
         if not isinstance(expected_revision, int) or expected_revision < 1:
             raise ValueError("Deletion requires a positive expected revision")

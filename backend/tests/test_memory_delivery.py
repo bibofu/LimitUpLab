@@ -126,3 +126,15 @@ def test_empty_dependency_set_is_not_invalidated_by_new_memory(registered_run):
     preference(repo, owner)
     delivered = services.delivery.commit(row["run_id"], owner, with_memory(response(row), recalled))
     assert delivered["task_status"] == "complete"
+
+
+def test_delivery_enqueues_candidate_extraction_for_normal_answer(registered_run, monkeypatch):
+    monkeypatch.setenv("LIMITUPLAB_MEMORY_AUTO_LEARN", "candidate")
+    services, row, owner, _ = registered_run
+    services.delivery.commit(row["run_id"], owner, response(row))
+    with services.storage.connection() as db:
+        jobs = db.execute("""SELECT status,source_message_id FROM memory_extraction_jobs
+            WHERE run_id=?""", (row["run_id"],)).fetchall()
+    assert len(jobs) == 1
+    assert jobs[0]["status"] == "pending"
+    assert jobs[0]["source_message_id"] == "user_" + row["run_id"]

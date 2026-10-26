@@ -34,6 +34,42 @@ def list_memories(
     )
 
 
+@router.get("/candidates")
+def list_memory_candidates(
+    owner_id: Owner, response: Response,
+    limit: int = Query(default=100, ge=1, le=200),
+):
+    """List background candidates awaiting explicit confirmation."""
+
+    response.headers["Cache-Control"] = "private, no-store"
+    return {"items": LongTermMemoryRepository().list_candidates(owner_id, limit=limit)}
+
+
+@router.post("/candidates/{memory_id}/confirm", response_model=MemoryMutationResult)
+def confirm_memory_candidate(
+    memory_id: str, owner_id: Owner, operation_id: OperationId,
+):
+    try:
+        return LongTermMemoryRepository().confirm_candidate(
+            owner_id, memory_id, operation_id,
+        )
+    except (MemoryConflict, MemoryNotFound, ValueError) as error:
+        _raise_http(error)
+
+
+@router.post("/candidates/{memory_id}/reject", response_model=MemoryMutationResult)
+def reject_memory_candidate(
+    memory_id: str, owner_id: Owner, operation_id: OperationId,
+    expected_revision: int = Query(ge=1),
+):
+    try:
+        return LongTermMemoryRepository().reject_candidate(
+            owner_id, memory_id, expected_revision, operation_id,
+        )
+    except (MemoryConflict, MemoryNotFound, ValueError) as error:
+        _raise_http(error)
+
+
 @router.get("/by-key/{memory_type}/{key}", response_model=MemoryRecord)
 def get_memory_by_key(memory_type: MemoryType, key: str, owner_id: Owner, response: Response,
                       include_inactive: bool = False):

@@ -320,6 +320,14 @@ class RunDelivery:
                 WHERE run_id=? AND owner_id=?""",
                 (serialized, run_status, now, now, run_id, owner_id),
             )
+            from app.services.memory_extraction import enqueue_memory_extraction_in_connection
+
+            enqueue_memory_extraction_in_connection(
+                db, run_id=run_id, owner_id=owner_id, session_id=row["session_id"],
+                source_message_id="user_" + run_id,
+                task_status=response.get("task_status"),
+                memory_action=response.get("memory_action"),
+            )
             return response
 
 
