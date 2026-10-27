@@ -3,7 +3,7 @@ from datetime import datetime, timezone
 from hashlib import sha256
 import json
 
-from app.services.memory_retrieval import retrieve_memories
+from app.services.memory_retrieval import infer_memory_scope_hint, retrieve_memories
 
 NOW = datetime(2026, 10, 25, 9, tzinfo=timezone.utc)
 
@@ -76,6 +76,16 @@ def test_verified_scoped_exception_suppresses_the_global_same_key_setting():
     other = retrieve(repo, scope_hint={"tool_name": "stock_kline"})
     assert [item["value"] for item in other.items] == ["concise"]
     assert other.diagnostics["memory_exception_suppressed_count"] == 0
+
+
+def test_scope_hints_are_inferred_only_when_unambiguous():
+    assert infer_memory_scope_hint("分析600519财报") == {
+        "tool_name": "stock_financials", "symbol": "600519",
+    }
+    assert infer_memory_scope_hint("最近首板怎么样") == {"topic": "首板"}
+    assert infer_memory_scope_hint("比较财报和新闻") is None
+    assert infer_memory_scope_hint("今天市场怎么样") is None
+    assert infer_memory_scope_hint("订单123456怎么样") is None
 
 
 def test_exact_key_topic_type_and_relevance_filters():

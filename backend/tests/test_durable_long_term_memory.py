@@ -212,7 +212,7 @@ def test_free_text_scoped_preference_saves_and_recalls_in_a_new_session(world):
             assert memory["value"] == "展示龙虎榜时只显示股票名称"
             assert memory["scope_type"] == "tool"
             assert memory["scope"] == {"tool_name": "dragon_tiger_list"}
-            assert memory["scope_verified"] is False
+            assert memory["scope_verified"] is True
             assert result.memory_context_used
             deliver(world, request, control, result)
 

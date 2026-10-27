@@ -14,6 +14,49 @@ import re
 from typing import Any
 
 MEMORY_TYPES = frozenset({"preference", "research_context", "research_archive"})
+TOOL_SCOPE_TERMS = {
+    "财报": "stock_financials",
+    "财务": "stock_financials",
+    "k线": "stock_kline",
+    "龙虎榜": "dragon_tiger_list",
+    "个股新闻": "stock_news",
+    "新闻": "stock_news",
+    "公司资料": "stock_profile",
+    "热股榜": "hot_stock_ranking",
+    "涨停池": "limit_up_pool",
+    "炸板池": "failed_limit_up_pool",
+    "跌停池": "limit_down_pool",
+}
+TOPIC_SCOPE_TERMS = ("首板", "连板", "涨停", "炸板", "行业", "市场情绪")
+SYMBOL_PATTERN = re.compile(r"(?<!\d)(\d{6})(?!\d)")
+A_SHARE_PREFIXES = frozenset({
+    "000", "001", "002", "003", "300", "301",
+    "600", "601", "603", "605", "688", "689",
+    "430", "830", "831", "832", "833", "834", "835", "836", "837",
+    "838", "839", "870", "871", "872", "873",
+})
+
+
+def infer_memory_scope_hint(query: str) -> dict[str, str] | None:
+    """Infer one unambiguous scope dimension from the current user question."""
+
+    text = (query or "").casefold()
+    tools = {
+        tool for term, tool in TOOL_SCOPE_TERMS.items() if term in text
+    }
+    hints = {}
+    if len(tools) == 1:
+        hints["tool_name"] = next(iter(tools))
+    topics = [topic for topic in TOPIC_SCOPE_TERMS if topic in query]
+    if len(topics) == 1:
+        hints["topic"] = topics[0]
+    symbols = {
+        value for value in SYMBOL_PATTERN.findall(query or "")
+        if value[:3] in A_SHARE_PREFIXES
+    }
+    if len(symbols) == 1:
+        hints["symbol"] = next(iter(symbols))
+    return hints or None
 
 
 @dataclass(frozen=True)

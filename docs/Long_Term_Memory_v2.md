@@ -35,6 +35,8 @@
 - 检索：
   - owner、active、有效期、删除状态硬过滤；
   - 自由文本增加中文 bigram/ASCII 词法匹配；
+  - Agent 实际检索会从当前问题推断唯一无歧义的 tool/topic/symbol scope hint；
+  - 多个工具、多个主题或多个股票代码时不做猜测，保留未验证状态；
   - 返回 `scope`、`canonical_key`、`structured`、`scope_verified`；
   - 仍使用有界 token 预算。
 - 作用域例外：
@@ -111,13 +113,14 @@
   - 例外关系验收：global `response_style=concise` + tool `stock_financials` `response_style=detailed`，财报 scope 命中时只召回 detailed，并记录 `exception_to` 关系；
   - `safe_auto` 验收：真实 LLM 从“以后展示龙虎榜只显示股票名称”提取候选，在 `safe_auto` 模式下直接 active；`activation_kind=safe_auto`、候选队列为空、worker 结果记录自动激活 ID；
   - typed 自动激活验收：模型输出的 `structured.style/display_format` 与 dotted key 被规范化为 `response_style/output_format` 封闭值；全局“回答简洁”和 scoped“分析财报时详细”均自动激活，后者写入 `stock_financials` 作用域及 `exception_to`（存在 global 时）。
+  - 运行时 scope 验收：真实 Graph 在“展示最新的龙虎榜”问题中把 scoped tool 记忆标记为 `scope_verified=true`，而不是只在单元测试中验证。
 
 ## 尚未落地
 
 以下能力明确未完成，不能对外宣称：
 
 1. pgvector 语义检索与同义改写召回；
-2. 自动激活覆盖 `tool_display`、全局封闭 typed，以及工具作用域的 `response_style/output_format` 例外；entity/condition 作用域和边界 Judge 尚未接入；
+2. 自动激活覆盖 `tool_display`、全局封闭 typed，以及工具作用域的 `response_style/output_format` 例外；entity/condition 作用域和边界 Judge 尚未接入；scope hint 仍是词法推断，名称同义词不一定识别；
 3. 非自动候选没有前端入口，也没有 TTL/清理任务；需要运维 API 处理；
 4. `management_revision` 的写入方（候选、使用统计、embedding 回填）尚未接入；
 5. 展示块目前只抑制 Markdown 表格；模型正文中的列表或普通文字仍可能与展示块重复；

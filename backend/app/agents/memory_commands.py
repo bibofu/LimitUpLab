@@ -5,7 +5,7 @@ import json
 from app.agents.memory_policy import MEMORY_LABELS, MemoryIntent
 from app.memory_models import MemoryWrite
 from app.repositories.long_term_memory_repository import LongTermMemoryRepository, MemoryConflict, MemoryNotFound
-from app.services.memory_retrieval import retrieve_memories
+from app.services.memory_retrieval import infer_memory_scope_hint, retrieve_memories
 
 
 def repository_for(control):
@@ -13,7 +13,12 @@ def repository_for(control):
 
 
 def retrieve_for_run(control, query):
-    return retrieve_memories(repository_for(control), owner_id=control.row["owner_id"], query=query)
+    return retrieve_memories(
+        repository_for(control),
+        owner_id=control.row["owner_id"],
+        query=query,
+        scope_hint=infer_memory_scope_hint(query),
+    )
 
 
 def prepare_memory_request(intent, control, owner_revision):
