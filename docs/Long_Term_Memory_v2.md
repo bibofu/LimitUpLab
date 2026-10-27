@@ -44,14 +44,26 @@
   - `LIMITUPLAB_MEMORY_EMBEDDING_MODEL` 覆盖模型名；
   - 缓存目录默认 `backend/data/memory_embeddings`，不提交 Git；
   - 嵌入文本由 `key + value + scope + structured` 确定性拼接，源哈希用于判断是否需要重算。
+- 词法 token 过滤：
+  - 中文 bigram 词法匹配会排除 `研究`、`关注`、`哪些`、`什么`、`怎么`、`如何`、`情况` 等泛化词；
+  - 避免不同研究主题仅因共享“研究/关注”而被误召回；
+  - 真实研究主题仍通过专有 bigram 和 topics 命中。
 - 混合检索：
   - owner、active、有效期、删除状态、memory type 和作用域过滤仍在 SQL 中先行执行；
   - SQL 对每条候选计算 `embedding <=> query_embedding`，Python 合并词法分数与 cosine 相似度；
-  - 相似度低于 0.25 不贡献分数，避免弱相关向量把无关记忆带进上下文；
+  - 相似度低于 `0.50` 不贡献分数；该阈值由离线评测校准，避免弱相关研究主题被注入；
+  - 向量最多贡献 `6` 分，低于一个 topic 词法匹配的 `10` 分，保持词法精确命中的优先级；
   - 词法精确 key / topic 仍优先；向量分用于扩展召回，不绕过作用域例外和 token 预算；
   - 返回 `vector_similarity` 诊断字段，并记录 `memory_vector_status=ready|disabled|unavailable`、`memory_vector_hit_count`；
   - embedding 模型不可用时 fail closed 到原有词法检索，不阻断回答；
   - 当前候选集按 owner 的 active 记忆上限读取并精确计算距离，HNSW 索引为后续规模增长预留；尚未做 ANN 分页或跨 owner 全局向量检索。
+- 检索评测：
+  - 固定数据集 `backend/evals/memory_retrieval_cases.json`，当前 25 个查询、覆盖精确词法、同义改写、作用域例外、负例、过期、删除和跨 owner；
+  - 评测脚本 `backend/scripts/evaluate_memory_retrieval.py` 使用生产 `retrieve_memories` 和真实本地 BGE，不复制排序逻辑；
+  - 支持 `--grid` 扫描阈值/权重，输出 exact、recall、MRR、false injection 和 token 成本；
+  - 当前校准结果：词法基线 exact `20/25`、recall `0.783`、MRR `0.609`、误注入 `0/23`；`sim>=0.50, weight=6` 时 exact `22/25`、recall `0.913`、MRR `0.707`、误注入 `1/23`；
+  - 提升主要来自无词法重叠的研究主题改写；仍有两个同义查询受 BGE-small 语义区分能力限制未召回；
+  - 阈值与权重常量由 `test_default_vector_policy_matches_calibrated_evaluation` 固定，调整参数必须同时更新评测记录。
 - embedding 回填 worker：
   - `python backend/scripts/run_memory_embeddings.py` 支持 `--once`、`--limit`、`--interval`；
   - 只处理 active、未删除记忆；缺失向量、源哈希变化或模型名变化时重新嵌入；
@@ -128,7 +140,7 @@
   - 前端不展示记忆候选、确认、忽略或管理入口；长期记忆只作为问答上下文使用；
   - 非自动候选只通过 owner-scoped API / 后台 CLI 供运维流程处理，不进入用户界面；
   - 运维 CLI：`python backend/scripts/review_memory_candidates.py --owner <owner> list|confirm|reject`；
-  - 健康检查：`python backend/scripts/check_memory_health.py --json`，检查重复 active identity、候选 TTL、legacy canonical、悬空关系、usage 计数和过期状态；
+  - 健康检查：`python backend/scripts/check_memory_health.py --json`，检查重复 active identity、候选 TTL、legacy canonical、悬空关系、usage 计数、过期状态，以及 active 记忆的缺失向量、模型不匹配和源哈希陈旧；向量缺口作为非致命告警，不改变结构健康结论；
   - 未确认候选默认 TTL 30 天，可通过 `LIMITUPLAB_MEMORY_CANDIDATE_TTL_DAYS` 调整；
   - worker 每次运行先清理过期候选，清空正文并标记 expired；
   - worker 同时把已过期的 active 记忆落成 expired，不改变内容 `revision` 或 owner revision；
@@ -179,7 +191,7 @@
   - 真实 Agent 验证（2026-10-27）：“最新的龙虎榜情况”“最新的财经新闻”“今天市场怎么样”“贵州茅台公司资料”均 `complete`；“贵州茅台近期走势怎么样”为 `partial`，原因是 `stock_kline` 数据源部分不可用，不是记忆链路问题。
   - candidate TTL 验收：候选写入 30 天 TTL，过期为 expired、正文清空、从候选 API 隐藏；确认后 active 的 `candidate_expires_at` 为空。
   - usage 验收：回答交付使用一条长期记忆后，`use_count=1`、`last_used_at` 写入、`management_revision` 增加，但内容 `revision` 不变。
-  - 健康检查验收：本地库返回 `ok=true`、`critical_issues=0`，并报告 active/candidate 数量。
+  - 健康检查验收：本地库返回 `ok=true`、`critical_issues=0`，并报告 active/candidate 数量；active 向量的缺失、模型不匹配和源哈希陈旧分别计数，作为非致命告警。
   - active 过期清扫验收：过期记忆在 retrieval 已不可见，worker 清扫后状态变为 expired、内容 revision 和 owner revision 不变。
   - 恢复演练验收（2026-10-27）：备份当前库到 `memory-restore-drill.dump`，用本地管理员角色恢复到临时数据库，`schema_current=true`，健康检查 `ok=true`、active=17、candidate=6，随后删除临时库；备份文件不提交。
   - safe_auto 校准验收：10 条 live 用例覆盖 tool/global/tool-exception/entity/topic/临时/delete/行情/交易/condition，结果为 TP=5、TN=5、FP=0、FN=0。
@@ -187,7 +199,8 @@
   - pgvector 验收（2026-10-28）：本地 Docker 使用 `pgvector/pgvector:pg18`，`vector=0.8.7`，业务库升级到 `0015_memory_embeddings`；17 条 active 记忆全部回填 512 维 BGE 向量。
   - 混合检索验收：`memory_vector_status=ready`，`stock_kline` scoped `response_style=detailed` 在“贵州茅台最近K线走势”查询中通过 `exception_to` 抑制 global concise，`vector_similarity=0.3195`，`memory_vector_hit_count=1`。
   - 真实 Agent 验证（2026-10-28）：在 Docker pgvector 业务库和 embedding worker 运行时，“2026-10-27 的涨停池有哪些股票？”“贵州茅台的主营业务是什么？”“2026-10-27 的龙虎榜有哪些股票？”均 `complete`，且 `memory_context_used=true`；“贵州茅台最近K线走势怎么样？”仍为 `partial`，原因是 `stock_kline` 数据源部分字段缺失，不是记忆或向量检索链路问题。
-  - 回归验收（2026-10-28）：使用 Docker `limituplab_test` 数据库运行完整后端测试，`2039 passed, 1 skipped, 22 subtests passed`；前端 243 项测试通过，生产构建通过。
+  - 回归验收（2026-10-28）：使用 Docker `limituplab_test` 数据库运行完整后端测试，`2046 passed, 1 skipped, 22 subtests passed`；前端 243 项测试通过，生产构建通过。
+  - 检索评测验收（2026-10-28）：25 个固定查询上，词法基线 exact `20/25`、recall `0.783`；校准后混合检索 exact `22/25`、recall `0.913`，误注入从 `0/23` 增至 `1/23`，平均 token 从 621 增至 722；阈值由 0.25 提升到 0.50，向量权重由 12 降到 6。
 
 ## 尚未落地
 
@@ -199,7 +212,7 @@
 4. 重复股票行已保留展示顺序并支持序号引用；但同一 symbol 的多个行无法区分具体是哪一条记录；
 5. 向量候选目前按 owner 的 active 集合精确计算 cosine，HNSW 索引尚未接入 ANN 查询；跨 owner 或其他大规模向量检索未验收；
 6. 生产级双读/回滚演练；本地备份恢复演练已完成；
-7. 记忆评测集与自动激活校准；中文语义召回的离线质量评测尚未建立。
+7. 检索评测集目前是 25 条合成用例，仍需扩充真实匿名查询、更多改写和跨主题负例；自动激活校准仍待完成；BGE-small 对部分近义研究主题区分不足，尚未验证更大模型或 reranker。
 
 ## 当前数据字段
 
@@ -256,10 +269,19 @@ owner + active + 未过期 + 未删除
 
 `scope_verified=false` 表示当前工具/意图尚未确定，模型只能把它当作候选，不能当作全局偏好。向量相似度只调整召回和排序，不改变作用域验证、有效期或 owner 隔离。embedding 模型不可用时自动退回纯词法检索。
 
+评测命令：
+
+```powershell
+& backend/.venv/Scripts/python.exe backend/scripts/evaluate_memory_retrieval.py
+& backend/.venv/Scripts/python.exe backend/scripts/evaluate_memory_retrieval.py --grid
+```
+
+评测集是合成测试数据，不代表真实市场事实；脚本只读内存快照，不连接业务库，也不会写入记忆。
+
 ## 下一步
 
 1. 运行 `safe_auto_judge_shadow` 校准，评估边界 Judge 的误放行率；
 2. 后台候选运维的批量审计与权限边界；
-3. 建立中文记忆检索评测集，校准向量权重、相似度阈值和 HNSW ANN 路径；
+3. 扩充中文记忆检索评测集，加入真实匿名查询、更多改写和跨主题负例，继续校准权重/阈值并评估 HNSW ANN 路径；
 4. 展示块正文的硬性去重；
 5. 记忆评测集、自动激活校准和生产级回滚演练。

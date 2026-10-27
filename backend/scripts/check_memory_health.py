@@ -12,6 +12,11 @@ sys.path.insert(0, str(Path(__file__).resolve().parents[1]))
 
 from app.config import configure_runtime_environment
 from app.database import connect_readonly, initialize_database
+from app.services.memory_embeddings import (
+    embedding_model_name,
+    embedding_source_hash,
+    memory_embedding_text,
+)
 
 
 def collect_health(db) -> dict:
@@ -45,13 +50,38 @@ def collect_health(db) -> dict:
         WHERE source.memory_id IS NULL OR target.memory_id IS NULL""").fetchone()["count"]
     checks["negative_use_count"] = db.execute("""SELECT count(*) AS count
         FROM long_term_memories WHERE use_count<0""").fetchone()["count"]
+    embedding_rows = db.execute("""SELECT memory_key,value,scope_type,scope_json,structured_json,
+            embedding IS NOT NULL AS has_embedding,embedding_model,embedding_source_hash
+        FROM long_term_memories WHERE status='active' AND deleted_at IS NULL""").fetchall()
+    model = embedding_model_name()
+    checks["active_missing_embedding"] = sum(
+        1 for row in embedding_rows if not row["has_embedding"]
+    )
+    checks["active_embedding_model_mismatch"] = sum(
+        1 for row in embedding_rows
+        if row["has_embedding"] and row["embedding_model"] != model
+    )
+    checks["active_embedding_source_mismatch"] = sum(
+        1 for row in embedding_rows
+        if row["has_embedding"] and row["embedding_source_hash"] != embedding_source_hash(
+            memory_embedding_text(
+                key=row["memory_key"], value=row["value"] or "",
+                scope_type=row["scope_type"],
+                scope=json.loads(row["scope_json"] or "{}"),
+                structured=json.loads(row["structured_json"] or "{}"),
+            )
+        )
+    )
     checks["active_count"] = db.execute("""SELECT count(*) AS count
         FROM long_term_memories WHERE status='active' AND deleted_at IS NULL""").fetchone()["count"]
     checks["candidate_count"] = db.execute("""SELECT count(*) AS count
         FROM long_term_memories WHERE status='candidate' AND deleted_at IS NULL""").fetchone()["count"]
-    critical = sum(value for name, value in checks.items()
-                   if name not in {"active_count", "candidate_count", "active_expired_pending",
-                                   "candidates_expired_pending"})
+    non_critical = {
+        "active_count", "candidate_count", "active_expired_pending",
+        "candidates_expired_pending", "active_missing_embedding",
+        "active_embedding_model_mismatch", "active_embedding_source_mismatch",
+    }
+    critical = sum(value for name, value in checks.items() if name not in non_critical)
     return {
         "ok": critical == 0,
         "critical_issues": critical,

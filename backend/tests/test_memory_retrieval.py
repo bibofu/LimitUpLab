@@ -7,7 +7,11 @@ from unittest.mock import Mock
 
 from app.agents.memory_commands import scope_hint_for_run
 
-from app.services.memory_retrieval import infer_memory_scope_hint, retrieve_memories
+from app.services.memory_retrieval import (
+    VectorRankingPolicy,
+    infer_memory_scope_hint,
+    retrieve_memories,
+)
 
 NOW = datetime(2026, 10, 25, 9, tzinfo=timezone.utc)
 
@@ -168,7 +172,7 @@ def test_budget_omits_whole_values_and_does_not_fall_back_to_old_key_version():
 
 
 def test_archive_requires_explicit_retrieval_and_preserves_historical_source():
-    archive = record("archive-1", "research_archive", "历史研究记录：样本数3", metadata={
+    archive = record("archive-1", "research_archive", "历史研究记录：首板样本数3", metadata={
         "as_of": "2026-10-23", "report_version": "v1",
         "source_references": ["fixture://market"], "evidence_references": ["run-source:call1"],
     })
@@ -211,3 +215,38 @@ def test_embedding_failure_falls_back_to_lexical_retrieval(monkeypatch):
     assert result.diagnostics["memory_vector_status"] == "unavailable"
     assert result.diagnostics["memory_vector_hit_count"] == 0
     assert repo.calls[0]["query_embedding"] is None
+
+
+def test_generic_research_words_do_not_create_lexical_matches():
+    repo = SnapshotRepository([
+        record("research:news", "research_context", "财经新闻研究关注政策发布",
+               topics=["财经新闻"]),
+    ])
+    result = retrieve_memories(
+        repo, owner_id="owner-a", query="首板晋级情况怎么研究", now=NOW,
+    )
+    assert result.items == []
+
+
+def test_vector_policy_controls_weak_semantic_matches():
+    repo = SnapshotRepository([
+        record("research:news", "research_context", "财经新闻研究",
+               vector_distance=0.55),
+    ])
+    strict = retrieve_memories(
+        repo, owner_id="owner-a", query="市场表现", now=NOW,
+        vector_policy=VectorRankingPolicy(min_similarity=0.50, weight=6),
+    )
+    loose = retrieve_memories(
+        repo, owner_id="owner-a", query="市场表现", now=NOW,
+        vector_policy=VectorRankingPolicy(min_similarity=0.40, weight=6),
+    )
+    assert strict.items == []
+    assert [item["value"] for item in loose.items] == ["财经新闻研究"]
+    assert loose.items[0]["vector_similarity"] == 0.45
+
+
+def test_default_vector_policy_matches_calibrated_evaluation():
+    policy = VectorRankingPolicy()
+    assert policy.min_similarity == 0.50
+    assert policy.weight == 6

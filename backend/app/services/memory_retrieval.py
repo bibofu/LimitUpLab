@@ -18,6 +18,17 @@ from typing import Any
 from app.memory_terms import symbols_in_text, tools_in_text, topics_in_text
 
 MEMORY_TYPES = frozenset({"preference", "research_context", "research_archive"})
+VECTOR_MIN_SIMILARITY = 0.50
+VECTOR_WEIGHT = 6
+_LEXICAL_STOPWORDS = frozenset({"研究", "关注", "哪些", "什么", "怎么", "如何", "情况"})
+
+
+@dataclass(frozen=True)
+class VectorRankingPolicy:
+    """Bounded contribution of cosine similarity to lexical retrieval scores."""
+
+    min_similarity: float = VECTOR_MIN_SIMILARITY
+    weight: int = VECTOR_WEIGHT
 
 
 def infer_memory_scope_hint(query: str) -> dict[str, str] | None:
@@ -76,7 +87,7 @@ def _tokens(value: str) -> set[str]:
     words = set(re.findall(r"[a-z0-9]{2,}", text))
     chinese = re.findall(r"[一-鿿]", text)
     bigrams = {"".join(chinese[index:index + 2]) for index in range(len(chinese) - 1)}
-    return words | bigrams
+    return (words | bigrams) - _LEXICAL_STOPWORDS
 
 
 def _scope_matches(item: dict, hint: dict | None, query: str = "") -> tuple[bool, bool]:
@@ -110,7 +121,8 @@ def _scope_matches(item: dict, hint: dict | None, query: str = "") -> tuple[bool
     return (expected == actual), True
 
 
-def _rank(item: dict, query: str, exact_keys: set | None, topics: set | None) -> int:
+def _rank(item: dict, query: str, exact_keys: set | None, topics: set | None,
+          vector_policy: VectorRankingPolicy = VectorRankingPolicy()) -> int:
     key = str(item.get("key") or "").casefold()
     item_topics = {str(topic).casefold() for topic in item.get("topics", [])}
     if exact_keys is not None:
@@ -125,8 +137,8 @@ def _rank(item: dict, query: str, exact_keys: set | None, topics: set | None) ->
     distance = item.get("vector_distance")
     if isinstance(distance, (int, float)) and 0 <= distance <= 2:
         similarity = max(0.0, 1.0 - float(distance))
-        if similarity >= 0.25:
-            vector_score = int(round(similarity * 12))
+        if similarity >= vector_policy.min_similarity:
+            vector_score = int(round(similarity * vector_policy.weight))
     if item.get("memory_type") == "preference":
         return 20 + matches + content_matches * 3 + vector_score
     if key and key in query:
@@ -142,6 +154,7 @@ def retrieve_memories(
     exact_keys: list[str] | None = None, topics: list[str] | None = None,
     allow_archives: bool = False, max_tokens: int = 1200,
     now: datetime | None = None, scope_hint: dict | None = None,
+    vector_policy: VectorRankingPolicy | None = None,
 ) -> MemoryRetrievalResult:
     """Read current valid records, apply typed relevance, deduplicate and budget.
 
@@ -154,6 +167,7 @@ def retrieve_memories(
         raise ValueError("An owner and a non-negative memory budget are required")
     requested = tuple(dict.fromkeys(kind for kind in memory_types if kind in MEMORY_TYPES
                                    and (kind != "research_archive" or allow_archives)))
+    ranking_policy = vector_policy or VectorRankingPolicy()
     clock = _datetime(now) if now is not None else None
     query_embedding = None
     vector_status = "disabled"
@@ -201,7 +215,7 @@ def retrieve_memories(
         item_topics = {str(topic).casefold() for topic in item.get("topics", [])}
         if requested_topics and not item_topics.intersection(requested_topics):
             continue
-        score = _rank(item, query.casefold(), keys, requested_topics)
+        score = _rank(item, query.casefold(), keys, requested_topics, ranking_policy)
         if score:
             candidates.append((score, item, verified))
     candidates.sort(key=lambda pair: (pair[0], int(pair[1].get("revision", 0)),

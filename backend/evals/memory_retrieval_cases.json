@@ -1,0 +1,425 @@
+{
+  "version": 1,
+  "description": "Synthetic long-term memory retrieval cases. Values are test fixtures, not market facts or investment advice.",
+  "owner": "visitor_eeeeeeeeeeeeeeeeeeeeeeeeeeeeeeee",
+  "foreign_owner": "visitor_ffffffffffffffffffffffffffffffff",
+  "pools": {
+    "standard": [
+      {
+        "memory_id": "pref_global_concise",
+        "memory_type": "preference",
+        "key": "response_style",
+        "value": "concise",
+        "scope_type": "global",
+        "scope": {},
+        "canonical_key": "response_style",
+        "structured": {},
+        "topics": [],
+        "revision": 1,
+        "updated_at": "2026-10-01T00:00:00+00:00"
+      },
+      {
+        "memory_id": "pref_kline_detailed",
+        "memory_type": "preference",
+        "key": "response_style",
+        "value": "detailed",
+        "scope_type": "tool",
+        "scope": {"tool_name": "stock_kline"},
+        "canonical_key": "response_style",
+        "structured": {},
+        "topics": [],
+        "revision": 2,
+        "updated_at": "2026-10-02T00:00:00+00:00"
+      },
+      {
+        "memory_id": "pref_financial_detailed",
+        "memory_type": "preference",
+        "key": "response_style",
+        "value": "detailed",
+        "scope_type": "tool",
+        "scope": {"tool_name": "stock_financials"},
+        "canonical_key": "response_style",
+        "structured": {},
+        "topics": [],
+        "revision": 3,
+        "updated_at": "2026-10-03T00:00:00+00:00"
+      },
+      {
+        "memory_id": "pref_output_table",
+        "memory_type": "preference",
+        "key": "output_format",
+        "value": "table",
+        "scope_type": "global",
+        "scope": {},
+        "canonical_key": "output_format",
+        "structured": {},
+        "topics": [],
+        "revision": 1,
+        "updated_at": "2026-10-04T00:00:00+00:00"
+      },
+      {
+        "memory_id": "display_lhb_name",
+        "memory_type": "preference",
+        "key": "tool_display:dragon_tiger_list",
+        "value": "龙虎榜只显示股票名称",
+        "scope_type": "tool",
+        "scope": {"tool_name": "dragon_tiger_list"},
+        "canonical_key": "tool_display:dragon_tiger_list",
+        "structured": {"display_columns": ["name"]},
+        "topics": [],
+        "revision": 4,
+        "updated_at": "2026-10-05T00:00:00+00:00"
+      },
+      {
+        "memory_id": "display_pool_name_height",
+        "memory_type": "preference",
+        "key": "tool_display:limit_up_pool",
+        "value": "涨停池显示名称和连板高度",
+        "scope_type": "tool",
+        "scope": {"tool_name": "limit_up_pool"},
+        "canonical_key": "tool_display:limit_up_pool",
+        "structured": {"display_columns": ["name", "board_height"]},
+        "topics": [],
+        "revision": 5,
+        "updated_at": "2026-10-06T00:00:00+00:00"
+      },
+      {
+        "memory_id": "research_first_board",
+        "memory_type": "research_context",
+        "key": "research:first_board",
+        "value": "首板接力研究关注二板晋级率和炸板率",
+        "scope_type": "global",
+        "scope": {},
+        "canonical_key": "research:first_board",
+        "structured": {},
+        "topics": ["首板接力"],
+        "revision": 1,
+        "updated_at": "2026-10-07T00:00:00+00:00"
+      },
+      {
+        "memory_id": "research_theme",
+        "memory_type": "research_context",
+        "key": "research:theme_diffusion",
+        "value": "题材扩散研究关注板块涨停家数、龙头高度和跟风强度",
+        "scope_type": "global",
+        "scope": {},
+        "canonical_key": "research:theme_diffusion",
+        "structured": {},
+        "topics": ["题材扩散"],
+        "revision": 1,
+        "updated_at": "2026-10-08T00:00:00+00:00"
+      },
+      {
+        "memory_id": "research_sentiment",
+        "memory_type": "research_context",
+        "key": "research:sentiment",
+        "value": "市场情绪研究关注涨停家数、跌停家数、连板高度和封板率",
+        "scope_type": "global",
+        "scope": {},
+        "canonical_key": "research:sentiment",
+        "structured": {},
+        "topics": ["市场情绪"],
+        "revision": 1,
+        "updated_at": "2026-10-09T00:00:00+00:00"
+      },
+      {
+        "memory_id": "research_risk",
+        "memory_type": "research_context",
+        "key": "research:risk_events",
+        "value": "风险事件研究关注减持公告、问询函和业绩预告下修",
+        "scope_type": "global",
+        "scope": {},
+        "canonical_key": "research:risk_events",
+        "structured": {},
+        "topics": ["风险事件"],
+        "revision": 1,
+        "updated_at": "2026-10-10T00:00:00+00:00"
+      },
+      {
+        "memory_id": "research_lhb_funds",
+        "memory_type": "research_context",
+        "key": "research:lhb_funds",
+        "value": "龙虎榜资金研究区分游资席位、机构席位和净买卖方向",
+        "scope_type": "global",
+        "scope": {},
+        "canonical_key": "research:lhb_funds",
+        "structured": {},
+        "topics": ["龙虎榜"],
+        "revision": 1,
+        "updated_at": "2026-10-11T00:00:00+00:00"
+      },
+      {
+        "memory_id": "research_news",
+        "memory_type": "research_context",
+        "key": "research:news",
+        "value": "财经新闻研究优先看政策发布、产业催化和公司公告",
+        "scope_type": "global",
+        "scope": {},
+        "canonical_key": "research:news",
+        "structured": {},
+        "topics": ["财经新闻"],
+        "revision": 1,
+        "updated_at": "2026-10-12T00:00:00+00:00"
+      }
+    ],
+    "expiry": [
+      {
+        "memory_id": "research_risk_active",
+        "memory_type": "research_context",
+        "key": "research:risk_events",
+        "value": "风险公告研究关注减持和问询函",
+        "scope_type": "global",
+        "scope": {},
+        "canonical_key": "research:risk_events",
+        "structured": {},
+        "topics": ["风险事件"],
+        "revision": 2,
+        "updated_at": "2026-10-10T00:00:00+00:00"
+      },
+      {
+        "memory_id": "research_risk_expired",
+        "memory_type": "research_context",
+        "key": "research:risk_events",
+        "value": "风险公告研究关注减持和问询函",
+        "scope_type": "global",
+        "scope": {},
+        "canonical_key": "research:risk_events",
+        "structured": {},
+        "topics": ["风险事件"],
+        "revision": 1,
+        "updated_at": "2026-09-01T00:00:00+00:00",
+        "expires_at": "2026-09-02T00:00:00+00:00"
+      }
+    ],
+    "deleted": [
+      {
+        "memory_id": "research_financial_active",
+        "memory_type": "research_context",
+        "key": "research:financials",
+        "value": "财报研究关注营收增速、利润率和现金流",
+        "scope_type": "global",
+        "scope": {},
+        "canonical_key": "research:financials",
+        "structured": {},
+        "topics": ["财报研究"],
+        "revision": 2,
+        "updated_at": "2026-10-10T00:00:00+00:00"
+      },
+      {
+        "memory_id": "research_financial_deleted",
+        "memory_type": "research_context",
+        "key": "research:financials",
+        "value": "财报研究关注营收增速、利润率和现金流",
+        "scope_type": "global",
+        "scope": {},
+        "canonical_key": "research:financials",
+        "structured": {},
+        "topics": ["财报研究"],
+        "revision": 3,
+        "updated_at": "2026-10-11T00:00:00+00:00",
+        "deleted_at": "2026-10-12T00:00:00+00:00"
+      }
+    ],
+    "foreign": [
+      {
+        "memory_id": "research_foreign_first_board",
+        "owner": "foreign",
+        "memory_type": "research_context",
+        "key": "research:first_board",
+        "value": "首板接力研究关注二板晋级率和炸板率",
+        "scope_type": "global",
+        "scope": {},
+        "canonical_key": "research:first_board",
+        "structured": {},
+        "topics": ["首板接力"],
+        "revision": 1,
+        "updated_at": "2026-10-07T00:00:00+00:00"
+      }
+    ]
+  },
+  "cases": [
+    {
+      "id": "display-lhb-exact",
+      "pool": "standard",
+      "query": "以后展示龙虎榜只显示股票名称",
+      "scope_hint": {"tool_name": "dragon_tiger_list"},
+      "expect": ["display_lhb_name"]
+    },
+    {
+      "id": "display-lhb-paraphrase",
+      "pool": "standard",
+      "query": "看龙虎榜的时候别贴整张表，只要股票名字",
+      "scope_hint": {"tool_name": "dragon_tiger_list"},
+      "expect": ["display_lhb_name"],
+      "forbid": ["research_risk"]
+    },
+    {
+      "id": "display-pool-exact",
+      "pool": "standard",
+      "query": "涨停池展示名称和连板高度",
+      "scope_hint": {"tool_name": "limit_up_pool"},
+      "expect": ["display_pool_name_height"]
+    },
+    {
+      "id": "display-pool-paraphrase",
+      "pool": "standard",
+      "query": "看涨停池时把连板高度一起带上",
+      "scope_hint": {"tool_name": "limit_up_pool"},
+      "expect": ["display_pool_name_height"],
+      "forbid": ["research_risk"]
+    },
+    {
+      "id": "style-kline-exception",
+      "pool": "standard",
+      "query": "分析贵州茅台K线时详细一点",
+      "scope_hint": {"tool_name": "stock_kline"},
+      "expect": ["pref_kline_detailed"],
+      "forbid": ["pref_global_concise"]
+    },
+    {
+      "id": "style-financial-exception",
+      "pool": "standard",
+      "query": "分析贵州茅台财报时详细一点",
+      "scope_hint": {"tool_name": "stock_financials"},
+      "expect": ["pref_financial_detailed"],
+      "forbid": ["pref_global_concise"]
+    },
+    {
+      "id": "style-scope-isolation",
+      "pool": "standard",
+      "query": "分析贵州茅台K线走势",
+      "scope_hint": {"tool_name": "stock_kline"},
+      "expect": ["pref_kline_detailed"],
+      "forbid": ["pref_global_concise", "pref_financial_detailed"]
+    },
+    {
+      "id": "research-first-board-paraphrase",
+      "pool": "standard",
+      "query": "首板晋级和炸板情况该怎么研究",
+      "expect": ["research_first_board"],
+      "forbid": ["research_news"]
+    },
+    {
+      "id": "research-theme-paraphrase",
+      "pool": "standard",
+      "query": "题材扩散看哪些指标",
+      "expect": ["research_theme"],
+      "forbid": ["research_risk"]
+    },
+    {
+      "id": "research-sentiment-paraphrase",
+      "pool": "standard",
+      "query": "市场情绪温度看哪些数据",
+      "expect": ["research_sentiment"],
+      "forbid": ["research_theme"]
+    },
+    {
+      "id": "research-risk-paraphrase",
+      "pool": "standard",
+      "query": "哪些公告风险需要留意",
+      "expect": ["research_risk"],
+      "forbid": ["research_lhb_funds"]
+    },
+    {
+      "id": "research-lhb-funds-paraphrase",
+      "pool": "standard",
+      "query": "龙虎榜里游资和机构席位怎么看",
+      "scope_hint": {"tool_name": "dragon_tiger_list"},
+      "expect": ["research_lhb_funds"],
+      "forbid": ["research_risk"]
+    },
+    {
+      "id": "research-news-exact",
+      "pool": "standard",
+      "query": "财经新闻研究",
+      "expect": ["research_news"],
+      "forbid": ["research_theme"]
+    },
+    {
+      "id": "semantic-first-board",
+      "pool": "standard",
+      "query": "打板后第二天还能不能继续走强看什么",
+      "expect": ["research_first_board"],
+      "forbid": ["research_news"]
+    },
+    {
+      "id": "semantic-theme-diffusion",
+      "pool": "standard",
+      "query": "一个热点怎么判断能不能带动更多股票",
+      "expect": ["research_theme"],
+      "forbid": ["research_risk"]
+    },
+    {
+      "id": "semantic-sentiment",
+      "pool": "standard",
+      "query": "现在短线赚钱效应冷不冷",
+      "expect": ["research_sentiment"],
+      "forbid": ["research_theme"]
+    },
+    {
+      "id": "semantic-risk",
+      "pool": "standard",
+      "query": "哪些消息可能让个股突然大跌",
+      "expect": ["research_risk"],
+      "forbid": ["research_news"]
+    },
+    {
+      "id": "semantic-lhb-funds",
+      "pool": "standard",
+      "query": "这些大资金是谁在操作",
+      "expect": ["research_lhb_funds"],
+      "forbid": ["research_risk"]
+    },
+    {
+      "id": "semantic-news",
+      "pool": "standard",
+      "query": "消息面有什么值得跟踪",
+      "expect": ["research_news"],
+      "forbid": ["research_theme"]
+    },
+    {
+      "id": "negative-kline",
+      "pool": "standard",
+      "query": "贵州茅台最近K线走势",
+      "scope_hint": {"tool_name": "stock_kline"},
+      "expect": ["pref_kline_detailed"],
+      "forbid": ["research_sentiment", "research_risk", "research_theme"]
+    },
+    {
+      "id": "negative-pool",
+      "pool": "standard",
+      "query": "2026-10-27 涨停池有哪些股票",
+      "scope_hint": {"tool_name": "limit_up_pool"},
+      "expect": ["display_pool_name_height"],
+      "forbid": ["research_risk", "research_news"]
+    },
+    {
+      "id": "negative-unrelated",
+      "pool": "standard",
+      "query": "今天天气怎么样",
+      "expect": [],
+      "forbid": ["research_first_board", "research_theme", "research_sentiment", "research_risk", "research_lhb_funds", "research_news"]
+    },
+    {
+      "id": "expired-record",
+      "pool": "expiry",
+      "query": "风险公告怎么看",
+      "expect": ["research_risk_active"],
+      "forbid": ["research_risk_expired"]
+    },
+    {
+      "id": "deleted-record",
+      "pool": "deleted",
+      "query": "财报研究关注什么",
+      "expect": ["research_financial_active"],
+      "forbid": ["research_financial_deleted"]
+    },
+    {
+      "id": "foreign-owner",
+      "pool": "foreign",
+      "query": "首板接力研究关注什么",
+      "expect": [],
+      "forbid": ["research_foreign_first_board"]
+    }
+  ]
+}
