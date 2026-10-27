@@ -284,6 +284,17 @@ class RunDelivery:
                                     memory_owner_revision=identity["owner_revision"],
                                     memory_context_fingerprint=identity["context_fingerprint"],
                                     memory_context_used=False, stock_mentions=[], suggested_questions=[])
+            if (not row["cancelled"] and dependencies
+                    and response.get("memory_context_used")
+                    and response.get("stop_reason") != "memory_changed"
+                    and response.get("task_status") in {"complete", "partial", "empty"}):
+                from app.repositories.long_term_memory_repository import (
+                    record_usage_in_connection,
+                )
+
+                # Usage counters are management metadata: they do not change the
+                # effective revision or invalidate this answer.
+                record_usage_in_connection(db, owner_id, dependencies)
             # Graph final validation owns evidence/compliance checks. This boundary
             # validates and normalizes the exact public document before committing.
             response = AgentChatResponse.model_validate(response).model_dump(mode="json")

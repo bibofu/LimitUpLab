@@ -138,3 +138,17 @@ def test_delivery_enqueues_candidate_extraction_for_normal_answer(registered_run
     assert len(jobs) == 1
     assert jobs[0]["status"] == "pending"
     assert jobs[0]["source_message_id"] == "user_" + row["run_id"]
+
+def test_delivery_records_usage_without_changing_effective_revision(registered_run):
+    services, row, owner, _ = registered_run
+    repo = LongTermMemoryRepository(services.storage.database_url)
+    memory = preference(repo, owner)
+    recalled = retrieve_memories(repo, owner_id=owner, query="研究首板")
+    delivered = services.delivery.commit(row["run_id"], owner,
+                                         with_memory(response(row, "按你的简洁偏好回答。"), recalled))
+    assert delivered["task_status"] == "complete"
+    current = repo.get(owner, memory.current.memory_id)
+    assert current.use_count == 1
+    assert current.last_used_at is not None
+    assert current.management_revision == 1
+    assert current.revision == memory.current.revision

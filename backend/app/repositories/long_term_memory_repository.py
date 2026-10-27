@@ -140,6 +140,28 @@ def dependencies_unchanged_in_connection(db, owner_id, dependencies, now=None):
     return True
 
 
+def record_usage_in_connection(db, owner_id, dependencies):
+    """Increment management usage counters; never change effective revision."""
+
+    normalized = []
+    for dependency in dependencies or []:
+        if not isinstance(dependency, dict):
+            continue
+        memory_id = dependency.get("memory_id")
+        revision = dependency.get("effective_revision")
+        if isinstance(memory_id, str) and memory_id and isinstance(revision, int) and revision >= 1:
+            normalized.append((memory_id, revision))
+    updated = 0
+    for memory_id, revision in sorted(set(normalized)):
+        result = db.execute("""UPDATE long_term_memories SET
+            management_revision=management_revision+1,use_count=use_count+1,
+            last_used_at=clock_timestamp()
+            WHERE owner_id=? AND memory_id=? AND revision=? AND status='active'
+              AND deleted_at IS NULL""", (owner_id, memory_id, revision))
+        updated += result.rowcount or 0
+    return updated
+
+
 class LongTermMemoryRepository:
     def __init__(self, database_url=None):
         self.database_url = database_url

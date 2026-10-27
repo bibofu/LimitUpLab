@@ -188,6 +188,8 @@ class MemoryRecord(BaseModel):
     activation_kind: Literal["none", "manual", "safe_auto"] = "none"
     activation_reason: str | None = None
     candidate_expires_at: datetime | None = None
+    use_count: int = 0
+    last_used_at: datetime | None = None
     supersedes_memory_id: str | None = None
     supersedes_revision: int | None = None
     created_at: datetime

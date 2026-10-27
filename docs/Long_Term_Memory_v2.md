@@ -28,6 +28,10 @@
   - 候选增加 `candidate_expires_at`；
   - 旧候选按 `created_at + 30 days` 回填；
   - 未确认候选默认 30 天过期，worker 每次运行时清理并清空正文。
+- 迁移 `0014_memory_usage`：
+  - 增加 `use_count`、`last_used_at`；
+  - 正式交付记录实际使用的记忆时，增加 `management_revision` 和 usage 计数；
+  - usage 更新不影响内容 `revision`、owner fingerprint 或本轮答案。
 - 自由文本偏好：
   - `preference` / `research_context` 支持 `preference:`、`tool_display:`、`research:` 前缀；
   - 保留 typed 设置（回答详略、展示格式、研究主题）的封闭值校验；
@@ -142,6 +146,7 @@
   - 请求上下文验收：股票详情追问“它近期走势怎么样”时，使用请求 `symbol` 作为 entity scope 兜底；问题内出现其他代码时以问题代码为准。
   - 重复榜单验收：三行展示块包含重复 symbol 时，`ordered_symbols` 保留重复顺序，`ordinal_resolvable=true`，reference 类型为 `display_block`。
   - candidate TTL 验收：候选写入 30 天 TTL，过期为 expired、正文清空、从候选 API 隐藏；确认后 active 的 `candidate_expires_at` 为空。
+  - usage 验收：回答交付使用一条长期记忆后，`use_count=1`、`last_used_at` 写入、`management_revision` 增加，但内容 `revision` 不变。
   - safe_auto 校准验收：10 条 live 用例覆盖 tool/global/tool-exception/entity/topic/临时/delete/行情/交易/condition，结果为 TP=5、TN=5、FP=0、FN=0。
   - Judge 验收：真实 DeepSeek 对 `confidence=0.75` 的 condition 候选返回 `approve + low risk`；单元测试验证 Judge 只能复核 scoped 边界，全局 typed 和结构不合格候选不会进入 Judge。
 
@@ -152,7 +157,7 @@
 1. pgvector 语义检索与同义改写召回；
 2. 自动激活覆盖 `tool_display`、全局封闭 typed，以及 tool/entity/精确 condition 作用域的 `response_style/output_format` 例外；`safe_auto_judge` 是可选边界复核；condition 仍不支持语义匹配；scope hint 仍是词法推断，名称同义词不一定识别；
 3. 非自动候选没有前端入口，只能由运维 API 处理；TTL 已清理过期候选；
-4. `management_revision` 的写入方（候选、使用统计、embedding 回填）尚未接入；
+4. embedding 回填尚未接入；候选和使用统计已接入 `management_revision`；
 5. 展示块已移除 Markdown 表格并增加 prompt 去重约束，但模型正文中的列表或普通文字仍可能重复；尚未做硬性正文裁剪；
 6. 重复股票行已保留展示顺序并支持序号引用；但同一 symbol 的多个行无法区分具体是哪一条记录；
 7. 旧数据迁移到新表后的长期双读/回滚演练；
@@ -169,10 +174,10 @@ status, management_revision,
 source_kind, source_quote, content_hash,
 supersedes_memory_id, supersedes_revision,
 candidate_action, activation_kind, activation_reason,
-candidate_expires_at
+candidate_expires_at, use_count, last_used_at
 ```
 
-`revision` 继续作为有效内容版本；`management_revision` 预留给候选、使用统计和 embedding 回填，当前不会影响 fingerprint。
+`revision` 继续作为有效内容版本；`management_revision` 记录使用等管理变更，当前不会影响 fingerprint。`use_count`/`last_used_at` 记录被回答实际使用的次数和最近时间。
 
 ## 写入路径
 
@@ -216,6 +221,5 @@ owner + active + 未过期 + 未删除
 1. 运行 `safe_auto_judge_shadow` 校准，评估边界 Judge 的误放行率；
 2. 后台候选运维的批量审计与权限边界；
 3. 接入 pgvector 混合检索与中文评测；
-4. `management_revision` 写入方；
-5. 抑制展示块与正文列表/文字的重复，并解析重复股票榜单的序号；
-6. 记忆评测集、自动激活校准和迁移演练。
+4. 展示块正文的硬性去重；
+5. 记忆评测集、自动激活校准和迁移演练。
