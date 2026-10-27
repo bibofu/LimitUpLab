@@ -35,6 +35,8 @@
 - 作用域：
   - tool scope 使用公开工具 id，例如 `dragon_tiger_list`；
   - 中文常见工具名在服务端规范化为 canonical id；
+  - entity aliases（`entity_id`/`stock_symbol`/`code`）统一为 `symbol`；
+  - topic aliases（`research_topic`/`subject`）统一为 `topic`；
   - scope 不匹配的 scoped 记忆在检索时被排除；未知 scope 仍可作为未验证候选进入上下文。
 - 检索：
   - owner、active、有效期、删除状态硬过滤；
@@ -110,6 +112,7 @@
   - worker 的 `result_json.auto_decisions` 记录每个候选的 outcome、policy reasons 和 risk，不保存记忆正文；
   - 影子/自动决策汇总：`python backend/scripts/report_memory_auto.py --days 7`；
   - 安全自动激活边界由 `tests/test_memory_auto_golden.py` 的固定用例覆盖；
+  - live 校准：`python backend/scripts/evaluate_memory_auto.py --live`，输出 TP/TN/FP/FN 与逐案决策；
   - worker 命令：`python backend/scripts/run_memory_extraction.py --once`，或在本地启动脚本中自动拉起；
   - `LIMITUPLAB_MEMORY_AUTO_LEARN=off|candidate|safe_auto_shadow|safe_auto`；默认 `safe_auto`。
 - 写入与删除：
@@ -130,6 +133,7 @@
   - 运行时 scope 验收：真实 Graph 在“展示最新的龙虎榜”问题中把 scoped tool 记忆标记为 `scope_verified=true`，而不是只在单元测试中验证；
   - 请求上下文验收：股票详情追问“它近期走势怎么样”时，使用请求 `symbol` 作为 entity scope 兜底；问题内出现其他代码时以问题代码为准。
   - candidate TTL 验收：候选写入 30 天 TTL，过期为 expired、正文清空、从候选 API 隐藏；确认后 active 的 `candidate_expires_at` 为空。
+  - safe_auto 校准验收：10 条 live 用例覆盖 tool/global/tool-exception/entity/topic/临时/delete/行情/交易/condition，结果为 TP=5、TN=5、FP=0、FN=0。
 
 ## 尚未落地
 

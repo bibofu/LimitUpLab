@@ -121,6 +121,20 @@ def test_model_typed_hints_are_normalized_to_closed_settings():
     )
     assert (topic.scope_type, topic.scope, topic.structured) == ("global", {}, {})
 
+    topic_alias = MemoryCandidateDraft.model_validate({
+        **draft(),
+        "memory_type": "research_context",
+        "canonical_key": "research_topic",
+        "content_text": "首板",
+        "scope_type": "topic",
+        "scope": {"research_topic": "首板"},
+        "structured": {},
+        "source_quote": "以后研究主题只看首板",
+    })
+    assert (topic_alias.canonical_key, topic_alias.scope_type, topic_alias.scope) == (
+        "research_topic", "global", {},
+    )
+
     dotted = MemoryCandidateDraft.model_validate({
         **draft(),
         "canonical_key": "preference.response_style",

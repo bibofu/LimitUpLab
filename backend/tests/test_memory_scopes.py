@@ -144,3 +144,13 @@ def test_entity_scope_aliases_are_normalized_to_symbol():
     )
     assert write.scope == {"symbol": "600519"}
     assert memory_scope_key(write.scope_type, write.scope) == 'entity:{"symbol":"600519"}'
+
+
+def test_topic_scope_aliases_are_normalized_to_topic():
+    write = free_text(
+        memory_type="research_context", key="research_topic", value="首板",
+        scope_type="topic", scope={"research_topic": "首板"},
+        source_user_message="以后研究主题只看首板",
+    )
+    assert write.scope == {"topic": "首板"}
+    assert memory_scope_key(write.scope_type, write.scope) == 'topic:{"topic":"首板"}'

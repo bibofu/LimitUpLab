@@ -39,6 +39,11 @@ def normalize_memory_scope(
         if symbol is not None and str(symbol).strip():
             return {"symbol": str(symbol).strip()}
         return scope
+    if scope_type == "topic":
+        topic = scope.get("topic") or scope.get("research_topic") or scope.get("subject")
+        if topic is not None and str(topic).strip():
+            return {"topic": str(topic).strip()}
+        return scope
     if scope_type != "tool":
         return scope
     normalized = dict(scope)
