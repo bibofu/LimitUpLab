@@ -149,6 +149,7 @@
   - 请求上下文验收：股票详情追问“它近期走势怎么样”时，使用请求 `symbol` 作为 entity scope 兜底；问题内出现其他代码时以问题代码为准。
   - 重复榜单验收：三行展示块包含重复 symbol 时，`ordered_symbols` 保留重复顺序，`ordinal_resolvable=true`，reference 类型为 `display_block`。
   - 列表去重验收：纯名称/代码列表被移除，带“换手率/成交额”等分析文字的列表保留。
+  - 真实 Agent 验证（2026-10-27）：“最新的龙虎榜情况”“最新的财经新闻”“今天市场怎么样”“贵州茅台公司资料”均 `complete`；“贵州茅台近期走势怎么样”为 `partial`，原因是 `stock_kline` 数据源部分不可用，不是记忆链路问题。
   - candidate TTL 验收：候选写入 30 天 TTL，过期为 expired、正文清空、从候选 API 隐藏；确认后 active 的 `candidate_expires_at` 为空。
   - usage 验收：回答交付使用一条长期记忆后，`use_count=1`、`last_used_at` 写入、`management_revision` 增加，但内容 `revision` 不变。
   - 健康检查验收：本地库返回 `ok=true`、`critical_issues=0`，并报告 active/candidate 数量。
