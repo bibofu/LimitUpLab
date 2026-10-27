@@ -1,6 +1,5 @@
 import {
   ArrowDown,
-  Brain,
   Check,
   LoaderCircle,
   MessageCircle,
@@ -19,7 +18,6 @@ import { useCallback, useEffect, useRef, useState } from "react";
 
 import {
   cancelAgentChatRun,
-  confirmMemoryCandidate,
   controlAgentChatRun,
   createChatSession,
   deleteChatSession,
@@ -27,8 +25,6 @@ import {
   fetchAgentChatRun,
   fetchChatSession,
   fetchChatSessions,
-  fetchMemoryCandidates,
-  rejectMemoryCandidate,
   renameChatSession,
   streamAgentChatMessage,
   streamAgentChatRun,
@@ -40,7 +36,6 @@ import type {
   AgentChatStreamResult,
   AgentChatStreamStage,
   AgentDisplayBlock,
-  AgentMemoryRecord,
   AgentStockMention,
   AgentRunCommand,
   AgentRunState,
@@ -98,62 +93,6 @@ function currentPromptSuggestions(message: ChatMessage | undefined): string[] {
     }
   }
   return matches(SAVED_DEFAULT_PROMPT_SUGGESTIONS) ? DEFAULT_PROMPT_SUGGESTIONS : saved;
-}
-
-const MEMORY_TYPE_LABELS: Record<AgentMemoryRecord["memory_type"], string> = {
-  preference: "偏好",
-  research_context: "研究背景",
-  research_archive: "研究档案",
-};
-const MEMORY_SCOPE_LABELS: Record<Exclude<AgentMemoryRecord["scope_type"], "global">, string> = {
-  tool: "工具",
-  intent: "意图",
-  topic: "主题",
-  entity: "标的",
-  condition: "条件",
-};
-const MEMORY_TOOL_LABELS: Record<string, string> = {
-  dragon_tiger_list: "龙虎榜",
-  stock_kline: "K线",
-  stock_financials: "财报",
-  stock_profile: "公司资料",
-  stock_news: "个股新闻",
-  hot_stock_ranking: "热股榜",
-  limit_up_pool: "涨停池",
-  failed_limit_up_pool: "炸板池",
-  limit_down_pool: "跌停池",
-  market_overview: "市场概览",
-};
-
-/** Describe where an automatically extracted candidate would apply. */
-function memoryScopeLabel(candidate: AgentMemoryRecord): string {
-  if (candidate.scope_type === "global") return "全局";
-  const scopeKey = {
-    tool: "tool_name",
-    intent: "intent",
-    topic: "topic",
-    entity: "symbol",
-    condition: "condition",
-  }[candidate.scope_type];
-  const raw = candidate.scope?.[scopeKey];
-  const value = raw === null || raw === undefined ? "" : String(raw).trim();
-  if (!value) return MEMORY_SCOPE_LABELS[candidate.scope_type];
-  const label = candidate.scope_type === "tool"
-    ? MEMORY_TOOL_LABELS[value] ?? value
-    : value;
-  return `${MEMORY_SCOPE_LABELS[candidate.scope_type]} · ${label}`;
-}
-
-/** Keep candidate service failures actionable without exposing response internals. */
-function memoryCandidateMessage(error: unknown, fallback: string): string {
-  if (error instanceof HttpResponseError) {
-    if (error.status === 404) return "候选已不存在，已刷新列表。";
-    if (error.status === 409) return "候选状态已变化，已刷新列表，请重新确认。";
-    if (error.status === 401 || error.status === 403) return "无法访问当前记忆，请刷新页面。";
-    if (error.status === 429) return "记忆操作较多，请稍后重试。";
-    if (error.status >= 500) return "记忆服务暂时异常，请稍后重试。";
-  }
-  return fallback;
 }
 
 /** Keep HTTP diagnostics out of the conversation while retaining a useful recovery action. */
@@ -306,13 +245,6 @@ export function AgentChatDock({
   const [sessionPanelOpen, setSessionPanelOpen] = useState(false);
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
-  const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
-  const [memoryCandidates, setMemoryCandidates] = useState<AgentMemoryRecord[]>([]);
-  const [memoryLoading, setMemoryLoading] = useState(false);
-  const [memoryError, setMemoryError] = useState<string | null>(null);
-  const [memoryNotice, setMemoryNotice] = useState<string | null>(null);
-  const [memoryBusyId, setMemoryBusyId] = useState<string | null>(null);
-  const memoryRequest = useRef(0);
   const initializedSessions = useRef(false);
   const operationLock = useRef(createChatOperationLock());
   const drafts = useRef(new Map<string, string>());
@@ -335,11 +267,6 @@ export function AgentChatDock({
     }
     initializedSessions.current = true;
     void initializeChatSessions();
-  }, []);
-
-  useEffect(() => {
-    // Load once for the header count; failures stay quiet until the panel is opened.
-    void loadMemoryCandidates({ quiet: true });
   }, []);
 
   useEffect(() => {
@@ -433,73 +360,6 @@ export function AgentChatDock({
     const response = await fetchChatSessions();
     setSessions(response.sessions);
     return response.sessions;
-  }
-
-  /** Load owner-scoped candidates without activating them or changing the conversation. */
-  async function loadMemoryCandidates({ quiet = false }: { quiet?: boolean } = {}) {
-    const requestId = ++memoryRequest.current;
-    setMemoryLoading(true);
-    if (!quiet) {
-      setMemoryError(null);
-      setMemoryNotice(null);
-    }
-    try {
-      const response = await fetchMemoryCandidates();
-      if (requestId !== memoryRequest.current) return;
-      setMemoryCandidates(response.items);
-    } catch (caught) {
-      if (requestId !== memoryRequest.current) return;
-      if (!quiet) setMemoryError(memoryCandidateMessage(caught, "记忆候选加载失败，请稍后重试。"));
-    } finally {
-      if (requestId === memoryRequest.current) setMemoryLoading(false);
-    }
-  }
-
-  function toggleMemoryPanel() {
-    if (memoryPanelOpen) {
-      setMemoryPanelOpen(false);
-      return;
-    }
-    setMemoryPanelOpen(true);
-    void loadMemoryCandidates();
-  }
-
-  /** Confirm or reject one candidate; the server revalidates revision and ownership. */
-  async function actOnMemoryCandidate(
-    candidate: AgentMemoryRecord,
-    action: "confirm" | "reject",
-  ) {
-    if (memoryBusyId) return;
-    memoryRequest.current += 1;
-    setMemoryLoading(false);
-    setMemoryBusyId(candidate.memory_id);
-    setMemoryError(null);
-    setMemoryNotice(null);
-    const deleting = candidate.candidate_action === "delete";
-    try {
-      if (action === "confirm") {
-        await confirmMemoryCandidate(candidate.memory_id, candidate.revision);
-        setMemoryNotice(deleting
-          ? "已删除该记忆，后续对话不再使用。"
-          : "已确认，将在后续对话中生效。");
-      } else {
-        await rejectMemoryCandidate(candidate.memory_id, candidate.revision);
-        setMemoryNotice("已忽略该候选。");
-      }
-      setMemoryCandidates(current => current.filter(item => item.memory_id !== candidate.memory_id));
-    } catch (caught) {
-      setMemoryError(memoryCandidateMessage(
-        caught,
-        action === "confirm"
-          ? (deleting ? "删除记忆失败，请稍后重试。" : "确认记忆失败，请稍后重试。")
-          : "忽略记忆失败，请稍后重试。",
-      ));
-      if (caught instanceof HttpResponseError && (caught.status === 404 || caught.status === 409)) {
-        void loadMemoryCandidates({ quiet: true });
-      }
-    } finally {
-      setMemoryBusyId(null);
-    }
   }
 
   /**
@@ -699,8 +559,6 @@ export function AgentChatDock({
     setFailedPrompt(canRestart ? prompt ?? null : null);
     setError(canRestart ? (response.task_status === "cancelled" ? "任务已取消，可重新提问。" : "本次研究未完成，可重新提问。") : null);
     void refreshChatSessions().catch(() => { /* History can be refreshed separately from committed delivery. */ });
-    // A committed answer may enqueue extraction; keep the badge current without blocking delivery.
-    void loadMemoryCandidates({ quiet: true });
   }
 
   async function receiveRun(start: (handler: (event: AgentChatStreamEvent) => void,
@@ -977,23 +835,6 @@ export function AgentChatDock({
           </div>
           <div className="agent-chat-header-actions">
             <button
-              aria-label={memoryPanelOpen
-                ? "关闭记忆候选"
-                : `打开记忆候选${memoryCandidates.length ? `，${memoryCandidates.length} 条待确认` : ""}`}
-              aria-expanded={memoryPanelOpen}
-              className={`icon-button compact memory-candidate-toggle${memoryCandidates.length ? " has-candidates" : ""}`}
-              onClick={toggleMemoryPanel}
-              title={memoryCandidates.length ? `${memoryCandidates.length} 条待确认记忆` : "记忆候选"}
-              type="button"
-            >
-              <Brain size={16} />
-              {memoryCandidates.length ? (
-                <span className="memory-candidate-badge" aria-hidden="true">
-                  {memoryCandidates.length > 99 ? "99+" : memoryCandidates.length}
-                </span>
-              ) : null}
-            </button>
-            <button
               aria-label={sessionPanelOpen ? "关闭历史会话" : "打开历史会话"}
               className="icon-button compact session-history-toggle"
               onClick={() => setSessionPanelOpen((current) => !current)}
@@ -1004,99 +845,6 @@ export function AgentChatDock({
             </button>
           </div>
         </header>
-
-        {memoryPanelOpen ? (
-          <section className="memory-candidate-panel" aria-label="待确认记忆">
-            <div className="memory-candidate-panel-head">
-              <div>
-                <strong>待确认记忆</strong>
-                <small>后台从对话中提取，确认后才进入长期记忆。</small>
-              </div>
-              <button
-                aria-label="刷新记忆候选"
-                className="icon-button compact"
-                disabled={memoryLoading || Boolean(memoryBusyId)}
-                onClick={() => void loadMemoryCandidates()}
-                title="刷新"
-                type="button"
-              >
-                <RefreshCcw
-                  aria-hidden="true"
-                  className={memoryLoading ? "memory-candidate-spin" : undefined}
-                  size={14}
-                />
-              </button>
-            </div>
-            {memoryError ? (
-              <p className="memory-candidate-feedback is-error" role="alert">{memoryError}</p>
-            ) : null}
-            {memoryNotice ? (
-              <p className="memory-candidate-feedback" role="status">{memoryNotice}</p>
-            ) : null}
-            {memoryLoading && memoryCandidates.length === 0 ? (
-              <div className="chat-session-loading" role="status">
-                <LoaderCircle aria-hidden="true" size={16} />
-                <span>正在加载记忆候选</span>
-              </div>
-            ) : null}
-            {!memoryLoading && memoryCandidates.length === 0 ? (
-              <p className="memory-candidate-empty">
-                暂无待确认记忆。明确、稳定的长期偏好会先出现在这里。
-              </p>
-            ) : null}
-            {memoryCandidates.length ? (
-              <div className="memory-candidate-list">
-                {memoryCandidates.map(candidate => {
-                  const busy = memoryBusyId === candidate.memory_id;
-                  const deleting = candidate.candidate_action === "delete";
-                  return (
-                    <article className="memory-candidate" key={candidate.memory_id}>
-                      <div className="memory-candidate-meta">
-                        <span>{MEMORY_TYPE_LABELS[candidate.memory_type]}</span>
-                        <span>{memoryScopeLabel(candidate)}</span>
-                        <span>{candidate.source_kind === "auto" ? "自动提取" : "候选"}</span>
-                        {deleting ? <span>确认后删除现有记忆</span> : null}
-                        {!deleting && candidate.supersedes_memory_id
-                          ? <span>确认后替换现有记忆</span>
-                          : null}
-                      </div>
-                      <p className="memory-candidate-value">{candidate.value}</p>
-                      {candidate.source_quote ? (
-                        <blockquote className="memory-candidate-quote">
-                          “{candidate.source_quote}”
-                        </blockquote>
-                      ) : null}
-                      <div className="memory-candidate-actions">
-                        <button
-                          className="memory-candidate-confirm"
-                          disabled={Boolean(memoryBusyId)}
-                          onClick={() => void actOnMemoryCandidate(candidate, "confirm")}
-                          type="button"
-                        >
-                          {busy
-                            ? <LoaderCircle aria-hidden="true" size={13} />
-                            : deleting
-                              ? <Trash2 aria-hidden="true" size={13} />
-                              : <Check aria-hidden="true" size={13} />}
-                          {deleting ? "确认删除" : "确认"}
-                        </button>
-                        <button
-                          className="memory-candidate-reject"
-                          disabled={Boolean(memoryBusyId)}
-                          onClick={() => void actOnMemoryCandidate(candidate, "reject")}
-                          type="button"
-                        >
-                          <X aria-hidden="true" size={13} />
-                          忽略
-                        </button>
-                      </div>
-                    </article>
-                  );
-                })}
-              </div>
-            ) : null}
-          </section>
-        ) : null}
 
         <div className="agent-chat-viewport">
         <div

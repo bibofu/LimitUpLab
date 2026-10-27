@@ -76,7 +76,8 @@
   - `POST /api/agents/chat/memories/candidates/{id}/confirm` 显式激活；
   - `POST .../reject` 清空候选正文并标记 revoked；
   - `GET .../candidates` 列出待确认候选；
-  - 会话面板提供“记忆候选”工作台：显示作用域、候选正文和逐字来源；更新候选标记“确认后替换现有记忆”；确认或忽略后更新列表，操作失败保留候选并给出可重试提示；
+  - 前端不展示记忆候选、确认、忽略或管理入口；长期记忆只作为问答上下文使用；
+  - 候选只通过 owner-scoped API 供后台/运维流程处理，不进入用户界面；
   - worker 命令：`python backend/scripts/run_memory_extraction.py --once`；
   - `LIMITUPLAB_MEMORY_AUTO_LEARN=off|candidate`；`safe_auto` 尚未实现。
 - 写入与删除：
@@ -89,7 +90,7 @@
   - 龙虎榜回答按偏好只展示股票名称；
   - 删除后不再召回；
   - 真实 DeepSeek 四问全部 `complete`；
-  - 更新候选验收：已有展示偏好 + 新候选“显示代码和名称”，工作台显示“确认后替换现有记忆”；确认后旧记忆 superseded、新记忆 active，`memory_relations` 写入 `supersedes`，列表不再有候选；
+  - 更新候选验收：已有展示偏好 + 新候选“显示代码和名称”，通过后台 API 确认后旧记忆 superseded、新记忆 active，`memory_relations` 写入 `supersedes`，候选列表清空；
   - 删除候选验收：对已有 `response_style` 生成 DELETE 候选，确认后目标与候选均进入 tombstone，active 列表为空；
   - 例外关系验收：global `response_style=concise` + tool `stock_financials` `response_style=detailed`，财报 scope 命中时只召回 detailed，并记录 `exception_to` 关系。
 
@@ -98,8 +99,8 @@
 以下能力明确未完成，不能对外宣称：
 
 1. pgvector 语义检索与同义改写召回；
-2. 多条冲突候选的批量合并/冲突工作台尚未实现；
-3. `safe_auto` 自动激活尚未实现；当前候选必须显式确认；
+2. 候选确认没有用户界面；需要确认时只能由后台/运维 API 处理；
+3. `safe_auto` 自动激活尚未实现；当前候选不会自动生效；
 4. `management_revision` 的写入方（候选、使用统计、embedding 回填）尚未接入；
 5. 展示块目前只抑制 Markdown 表格；模型正文中的列表或普通文字仍可能与展示块重复；
 6. 只有 `ordered_symbols` 唯一时才能用展示块解析“第二只”；重复股票的榜单仍不可按序号引用；
@@ -157,7 +158,7 @@ owner + active + 未过期 + 未删除
 
 ## 下一步
 
-1. 多条冲突候选的批量合并/冲突工作台；
+1. 后台候选运维策略与低风险自动激活；
 2. 接入 pgvector 混合检索与中文评测；
 3. `management_revision` 写入方、`safe_auto` 低风险自动激活；
 4. 抑制展示块与正文列表/文字的重复，并解析重复股票榜单的序号；
