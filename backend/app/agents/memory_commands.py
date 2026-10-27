@@ -5,6 +5,7 @@ import json
 from app.agents.memory_policy import MEMORY_LABELS, MemoryIntent
 from app.memory_models import MemoryWrite
 from app.repositories.long_term_memory_repository import LongTermMemoryRepository, MemoryConflict, MemoryNotFound
+from app.memory_terms import is_a_share_symbol, symbols_in_text
 from app.services.memory_retrieval import infer_memory_scope_hint, retrieve_memories
 
 
@@ -12,12 +13,32 @@ def repository_for(control):
     return LongTermMemoryRepository(control.lifecycle.database_url)
 
 
+def scope_hint_for_run(control, query):
+    """Prefer symbols in the question, then the current stock detail request."""
+
+    hint = infer_memory_scope_hint(query) or {}
+    if symbols_in_text(query):
+        return hint or None
+    try:
+        request = control.row.get("request_json")
+        request = json.loads(request) if isinstance(request, str) else (request or {})
+        page_context = request.get("page_context") or {}
+        symbol = request.get("symbol") or (
+            page_context.get("symbol") if isinstance(page_context, dict) else None
+        )
+    except (TypeError, ValueError):
+        symbol = None
+    if is_a_share_symbol(symbol):
+        hint["symbol"] = str(symbol).strip()
+    return hint or None
+
+
 def retrieve_for_run(control, query):
     return retrieve_memories(
         repository_for(control),
         owner_id=control.row["owner_id"],
         query=query,
-        scope_hint=infer_memory_scope_hint(query),
+        scope_hint=scope_hint_for_run(control, query),
     )
 
 

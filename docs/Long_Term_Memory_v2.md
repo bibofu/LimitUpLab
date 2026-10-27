@@ -40,6 +40,8 @@
   - owner、active、有效期、删除状态硬过滤；
   - 自由文本增加中文 bigram/ASCII 词法匹配；
   - Agent 实际检索会从当前问题推断唯一无歧义的 tool/topic/symbol scope hint；
+  - 问题不含代码时，股票详情请求的 `symbol` / `page_context.symbol` 可作为兜底；
+  - 问题明确包含其他代码时优先使用问题中的代码，不被页面标的覆盖；
   - 多个工具、多个主题或多个股票代码时不做猜测，保留未验证状态；
   - 返回 `scope`、`canonical_key`、`structured`、`scope_verified`；
   - 仍使用有界 token 预算。
@@ -123,7 +125,8 @@
   - 例外关系验收：global `response_style=concise` + tool `stock_financials` `response_style=detailed`，财报 scope 命中时只召回 detailed，并记录 `exception_to` 关系；
   - `safe_auto` 验收：真实 LLM 从“以后展示龙虎榜只显示股票名称”提取候选，在 `safe_auto` 模式下直接 active；`activation_kind=safe_auto`、候选队列为空、worker 结果记录自动激活 ID；
   - typed 自动激活验收：模型输出的 `structured.style/display_format` 与 dotted key 被规范化为 `response_style/output_format` 封闭值；全局“回答简洁”、tool-scoped“分析财报时详细”和 entity-scoped“分析600519时详细”均自动激活，scoped 版本分别写入 tool/symbol 作用域及 `exception_to`（存在 global 时）。
-  - 运行时 scope 验收：真实 Graph 在“展示最新的龙虎榜”问题中把 scoped tool 记忆标记为 `scope_verified=true`，而不是只在单元测试中验证。
+  - 运行时 scope 验收：真实 Graph 在“展示最新的龙虎榜”问题中把 scoped tool 记忆标记为 `scope_verified=true`，而不是只在单元测试中验证；
+  - 请求上下文验收：股票详情追问“它近期走势怎么样”时，使用请求 `symbol` 作为 entity scope 兜底；问题内出现其他代码时以问题代码为准。
   - candidate TTL 验收：候选写入 30 天 TTL，过期为 expired、正文清空、从候选 API 隐藏；确认后 active 的 `candidate_expires_at` 为空。
 
 ## 尚未落地

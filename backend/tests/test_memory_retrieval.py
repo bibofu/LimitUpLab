@@ -2,6 +2,9 @@ from copy import deepcopy
 from datetime import datetime, timezone
 from hashlib import sha256
 import json
+from types import SimpleNamespace
+
+from app.agents.memory_commands import scope_hint_for_run
 
 from app.services.memory_retrieval import infer_memory_scope_hint, retrieve_memories
 
@@ -76,6 +79,27 @@ def test_verified_scoped_exception_suppresses_the_global_same_key_setting():
     other = retrieve(repo, scope_hint={"tool_name": "stock_kline"})
     assert [item["value"] for item in other.items] == ["concise"]
     assert other.diagnostics["memory_exception_suppressed_count"] == 0
+
+
+def run_control(**request):
+    return SimpleNamespace(row={"request_json": json.dumps(request)})
+
+
+def test_request_symbol_is_a_scope_fallback_only_when_the_question_has_no_symbol():
+    assert scope_hint_for_run(run_control(symbol="600519"), "它近期走势怎么样") == {
+        "symbol": "600519",
+    }
+    assert scope_hint_for_run(
+        run_control(symbol="600519", page_context={"symbol": "000001"}),
+        "财报怎么样",
+    ) == {"tool_name": "stock_financials", "symbol": "600519"}
+    assert scope_hint_for_run(run_control(symbol="600519"), "分析000001财报") == {
+        "tool_name": "stock_financials", "symbol": "000001",
+    }
+    assert scope_hint_for_run(
+        run_control(symbol="600519"), "比较600519和000001",
+    ) is None
+    assert scope_hint_for_run(run_control(symbol="not-a-symbol"), "它怎么样") is None
 
 
 def test_scope_hints_are_inferred_only_when_unambiguous():
