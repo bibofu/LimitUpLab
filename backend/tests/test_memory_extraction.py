@@ -482,6 +482,34 @@ def test_worker_safe_auto_activates_an_entity_scoped_typed_exception(
     assert repository.list_candidates(owner) == []
 
 
+def test_worker_safe_auto_activates_a_condition_scoped_typed_exception(
+    postgresql_database, monkeypatch,
+):
+    monkeypatch.setenv("LIMITUPLAB_MEMORY_AUTO_LEARN", "safe_auto")
+    message = "以后市场大跌时详细一点"
+    owner, _, _, _ = seed_job(message=message)
+    scoped = draft(
+        canonical_key="preference.response_style",
+        content_text="detailed",
+        scope_type="condition",
+        scope={"condition": "市场大跌时"},
+        structured={},
+        source_quote=message,
+        confidence=0.85,
+        stability="conditional_scope",
+    )
+    assert MemoryExtractionWorker(provider=CandidateProvider([scoped])).run_once(limit=1) == 1
+
+    repository = LongTermMemoryRepository()
+    active = repository.list_active(owner)
+    assert len(active) == 1
+    assert (active[0]["key"], active[0]["value"], active[0]["scope"]) == (
+        "response_style", "detailed", {"condition": "市场大跌时"},
+    )
+    assert active[0]["activation_kind"] == "safe_auto"
+    assert repository.list_candidates(owner) == []
+
+
 def test_worker_safe_auto_shadow_records_eligibility_without_activation(
     postgresql_database, monkeypatch,
 ):

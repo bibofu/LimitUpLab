@@ -77,7 +77,7 @@ def _tokens(value: str) -> set[str]:
     return words | bigrams
 
 
-def _scope_matches(item: dict, hint: dict | None) -> tuple[bool, bool]:
+def _scope_matches(item: dict, hint: dict | None, query: str = "") -> tuple[bool, bool]:
     """Return (allowed, verified) for a scoped memory.
 
     Unknown scope dimensions stay eligible but unverified so a later tool
@@ -100,6 +100,8 @@ def _scope_matches(item: dict, hint: dict | None) -> tuple[bool, bool]:
     if not required:
         return True, False
     expected = str(scope.get(required) or "").strip().casefold()
+    if scope_type == "condition" and expected and expected in (query or "").casefold():
+        return True, True
     if not hint or not hint.get(required):
         return True, False
     actual = str(hint.get(required) or "").strip().casefold()
@@ -167,7 +169,7 @@ def retrieve_memories(
         if item.get("status", "active") != "active":
             rejected += 1
             continue
-        allowed, verified = _scope_matches(item, scope_hint)
+        allowed, verified = _scope_matches(item, scope_hint, query)
         if not allowed:
             rejected += 1
             continue

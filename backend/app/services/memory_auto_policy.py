@@ -168,6 +168,15 @@ def evaluate_safe_auto_candidate(
         if message_tools or message_symbols != {symbol}:
             return _ineligible("ambiguous_typed_entity_scope")
         scope_reason = f"typed_entity_exception_add:{key}:{symbol}"
+    elif scope_type == "condition" and key in {"response_style", "output_format"}:
+        if not isinstance(scope, dict) or set(scope) != {"condition"}:
+            return _ineligible("ambiguous_typed_condition_scope")
+        condition = str(scope.get("condition") or "").strip()
+        if not condition or len(condition) > 80 or condition not in message:
+            return _ineligible("condition_not_verbatim")
+        if message_tools or message_symbols:
+            return _ineligible("ambiguous_typed_condition_scope")
+        scope_reason = f"typed_condition_exception_add:{key}:{condition}"
     else:
         return _ineligible("unsupported_typed_scope")
     if not isinstance(structured, dict) or structured:

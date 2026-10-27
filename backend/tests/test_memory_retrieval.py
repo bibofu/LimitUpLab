@@ -112,6 +112,22 @@ def test_scope_hints_are_inferred_only_when_unambiguous():
     assert infer_memory_scope_hint("订单123456怎么样") is None
 
 
+def test_condition_scope_is_verified_only_by_exact_query_phrase():
+    repo = SnapshotRepository([
+        record(value="concise", scope_type="global", scope_key="global",
+               canonical_key="response_style"),
+        record(memory_id="condition", value="detailed", scope_type="condition",
+               scope={"condition": "市场大跌时"},
+               scope_key='condition:{"condition":"市场大跌时"}',
+               canonical_key="response_style"),
+    ])
+    matching = retrieve_memories(
+        repo, owner_id="owner-a", query="市场大跌时怎么应对", now=NOW,
+    )
+    assert [item["value"] for item in matching.items] == ["detailed"]
+    assert matching.diagnostics["memory_exception_suppressed_count"] == 1
+
+
 def test_exact_key_topic_type_and_relevance_filters():
     repo = SnapshotRepository([
         record(), record("output_format", value="table"),

@@ -158,6 +158,25 @@ def test_typed_auto_accepts_tool_exceptions_and_rejects_ambiguous_scopes():
             "source_quote": "以后分析600519财报时详细一点",
         },
     ).eligible
+    condition_message = "以后市场大跌时详细一点"
+    assert evaluate(
+        message=condition_message, key="response_style",
+        candidate_changes={
+            **base, "content_text": "detailed", "scope_type": "condition",
+            "scope": {"condition": "市场大跌时"},
+            "source_quote": condition_message,
+            "confidence": 0.85, "stability": "conditional_scope",
+        },
+    ).eligible
+    assert not evaluate(
+        message="以后财报大跌时详细一点", key="response_style",
+        candidate_changes={
+            **base, "content_text": "detailed", "scope_type": "condition",
+            "scope": {"condition": "大跌时"},
+            "source_quote": "以后财报大跌时详细一点",
+            "confidence": 0.85, "stability": "conditional_scope",
+        },
+    ).eligible
     assert not evaluate(
         message=message, key="response_style",
         candidate_changes={

@@ -102,6 +102,18 @@ CASES = [
         "eligible": True,
     },
     {
+        "name": "condition_scoped_style_exception",
+        "message": "以后市场大跌时详细一点",
+        "key": "response_style",
+        "candidate": candidate(
+            content_text="detailed", scope_type="condition",
+            scope={"condition": "市场大跌时"}, structured={},
+            source_quote="以后市场大跌时详细一点",
+            confidence=0.85, stability="conditional_scope",
+        ),
+        "eligible": True,
+    },
+    {
         "name": "entity_and_tool_scope_ambiguous",
         "message": "以后分析600519财报时详细一点",
         "key": "response_style",
