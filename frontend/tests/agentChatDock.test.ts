@@ -86,7 +86,7 @@ function mount(t: TestContext, overrides: Record<string, any> = {}, savedSession
     fetchChatSessions: async () => ({ sessions: [session("a"), session("b")] }),
     fetchChatSession: async (id: string) => session(id),
     createChatSession: async () => session("new"),
-    fetchMemoryCandidates: async () => ({ items: [] }),
+    fetchMemoryCandidateWorkbench: async () => ({ groups: [] }),
     streamAgentChatMessage: async () => final,
     ...overrides,
   };
@@ -185,19 +185,48 @@ test("memory candidate inbox only changes state after explicit confirm or reject
     created_at: "2026-10-27T10:00:00",
     updated_at: "2026-10-27T10:00:00",
   });
+  const target = {
+    ...candidate("memory_active", "旧展示设置", 1),
+    status: "active",
+  };
+  let contexts = [
+    {
+      candidate: {
+        ...candidate("memory_1", "展示龙虎榜时只显示股票名称", 2),
+        supersedes_memory_id: "memory_active",
+        supersedes_revision: 1,
+      },
+      target,
+      exception_parent: null,
+      stale: false,
+    },
+    {
+      candidate: candidate("memory_2", "龙虎榜优先看净买入", 1),
+      target: null,
+      exception_parent: null,
+      stale: false,
+    },
+  ];
+  const workbench = async () => ({
+    groups: contexts.length ? [{
+      group_key: "preference:tool_display:dragon_tiger_list",
+      memory_type: "preference",
+      canonical_key: "tool_display:dragon_tiger_list",
+      active: [target],
+      candidates: contexts,
+      exception_relations: [],
+    }] : [],
+  });
   const app = mount(t, {
-    fetchMemoryCandidates: async () => ({
-      items: [
-        {
-          ...candidate("memory_1", "展示龙虎榜时只显示股票名称", 2),
-          supersedes_memory_id: "memory_active",
-          supersedes_revision: 1,
-        },
-        candidate("memory_2", "龙虎榜优先看净买入", 1),
-      ],
-    }),
-    confirmMemoryCandidate: async (id: string) => { confirmed.push(id); },
-    rejectMemoryCandidate: async (id: string, revision: number) => { rejected.push([id, revision]); },
+    fetchMemoryCandidateWorkbench: workbench,
+    confirmMemoryCandidate: async (id: string) => {
+      confirmed.push(id);
+      contexts = contexts.filter(item => item.candidate.memory_id !== id);
+    },
+    rejectMemoryCandidate: async (id: string, revision: number) => {
+      rejected.push([id, revision]);
+      contexts = contexts.filter(item => item.candidate.memory_id !== id);
+    },
   });
   await app.settle();
   const toggle = app.find(node => node.type === "button"
@@ -206,7 +235,8 @@ test("memory candidate inbox only changes state after explicit confirm or reject
   assert.deepEqual(app.all(node => node.props.className === "memory-candidate-value").map(
     node => node.children,
   ), ["展示龙虎榜时只显示股票名称", "龙虎榜优先看净买入"]);
-  assert.equal(app.has(node => node.props.children === "确认后替换现有记忆"), true);
+  assert.equal(app.has(node => node.props.children === "确认后替换"), true);
+  assert.equal(app.has(node => node.props.children === "将替换现有记忆"), true);
   assert.equal(confirmed.length, 0, "opening the inbox must not activate a candidate");
 
   app.all(node => node.props.className === "memory-candidate-confirm")[0].onClick(); await app.settle();
@@ -221,46 +251,135 @@ test("memory candidate inbox only changes state after explicit confirm or reject
 
 test("delete candidate uses removal wording and confirms once", async t => {
   const confirmed: string[] = [];
+  const target = {
+    memory_id: "memory_active",
+    memory_type: "preference",
+    key: "response_style",
+    value: "concise",
+    topics: [],
+    metadata: {},
+    scope_type: "global",
+    scope: {},
+    scope_key: "global",
+    canonical_key: "response_style",
+    structured: {},
+    status: "active",
+    revision: 1,
+    expires_at: null,
+    source_kind: "explicit",
+    source_quote: null,
+    source_user_message: "以后回答简洁",
+    candidate_action: "upsert",
+    supersedes_memory_id: null,
+    supersedes_revision: null,
+    created_at: "2026-10-27T10:00:00",
+    updated_at: "2026-10-27T10:00:00",
+  };
+  let contexts: any[] = [{
+    candidate: {
+      memory_id: "memory_delete",
+      memory_type: "preference",
+      key: "response_style",
+      value: "不要再记住回答要简洁",
+      topics: [],
+      metadata: {},
+      scope_type: "global",
+      scope: {},
+      scope_key: "global",
+      canonical_key: "response_style",
+      structured: {},
+      status: "candidate",
+      revision: 1,
+      expires_at: null,
+      source_kind: "auto",
+      source_quote: "以后不要再记住回答要简洁",
+      source_user_message: "以后不要再记住回答要简洁",
+      candidate_action: "delete",
+      supersedes_memory_id: "memory_active",
+      supersedes_revision: 1,
+      created_at: "2026-10-27T10:00:00",
+      updated_at: "2026-10-27T10:00:00",
+    },
+    target,
+    exception_parent: null,
+    stale: false,
+  }];
   const app = mount(t, {
-    fetchMemoryCandidates: async () => ({
-      items: [{
-        memory_id: "memory_delete",
+    fetchMemoryCandidateWorkbench: async () => ({
+      groups: contexts.length ? [{
+        group_key: "preference:response_style",
         memory_type: "preference",
-        key: "response_style",
-        value: "不要再记住回答要简洁",
-        topics: [],
-        metadata: {},
-        scope_type: "global",
-        scope: {},
-        scope_key: "global",
         canonical_key: "response_style",
-        structured: {},
-        status: "candidate",
-        revision: 1,
-        expires_at: null,
-        source_kind: "auto",
-        source_quote: "以后不要再记住回答要简洁",
-        source_user_message: "以后不要再记住回答要简洁",
-        candidate_action: "delete",
-        supersedes_memory_id: "memory_active",
-        supersedes_revision: 1,
-        created_at: "2026-10-27T10:00:00",
-        updated_at: "2026-10-27T10:00:00",
-      }],
+        active: [target],
+        candidates: contexts,
+        exception_relations: [],
+      }] : [],
     }),
-    confirmMemoryCandidate: async (id: string) => { confirmed.push(id); },
+    confirmMemoryCandidate: async (id: string) => {
+      confirmed.push(id);
+      contexts = [];
+    },
   });
   await app.settle();
   app.find(node => node.type === "button"
     && String(node.props["aria-label"]).startsWith("打开记忆候选，1 条待确认")).onClick();
   await app.settle();
-  assert.equal(app.has(node => node.props.children === "确认后删除现有记忆"), true);
+  assert.equal(app.has(node => node.props.children === "确认后删除"), true);
+  assert.equal(app.has(node => node.props.children === "将删除现有记忆"), true);
   const confirm = app.find(node => node.props.className === "memory-candidate-confirm");
   assert.equal(confirm.children.includes("确认删除"), true);
 
   confirm.onClick(); await app.settle();
   assert.deepEqual(confirmed, ["memory_delete"]);
   assert.equal(app.has(node => node.props.children === "已删除该记忆，后续对话不再使用。"), true);
+});
+
+test("workbench batch confirm skips a stale target and keeps the remaining candidate", async t => {
+  const confirmed: string[] = [];
+  const record = (id: string, value: string, stale: boolean) => ({
+    memory_id: id, memory_type: "preference", key: "response_style", value,
+    topics: [], metadata: {}, scope_type: "global", scope: {}, scope_key: "global",
+    canonical_key: "response_style", structured: {}, status: "candidate", revision: 1,
+    expires_at: null, source_kind: "auto", source_quote: value, source_user_message: value,
+    candidate_action: "upsert", supersedes_memory_id: null, supersedes_revision: null,
+    created_at: "2026-10-27T10:00:00", updated_at: "2026-10-27T10:00:00",
+    stale,
+  });
+  let contexts = [
+    { candidate: record("memory_1", "以后回答适中", false), target: null, exception_parent: null, stale: false },
+    { candidate: record("memory_2", "以后回答详细", true), target: null, exception_parent: null, stale: true },
+  ];
+  const app = mount(t, {
+    fetchMemoryCandidateWorkbench: async () => ({
+      groups: contexts.length ? [{
+        group_key: "preference:response_style",
+        memory_type: "preference",
+        canonical_key: "response_style",
+        active: [],
+        candidates: contexts,
+        exception_relations: [],
+      }] : [],
+    }),
+    confirmMemoryCandidate: async (id: string) => {
+      confirmed.push(id);
+      contexts = contexts.filter(item => item.candidate.memory_id !== id);
+    },
+  });
+  await app.settle();
+  app.find(node => node.type === "button"
+    && String(node.props["aria-label"]).startsWith("打开记忆候选，2 条待确认")).onClick();
+  await app.settle();
+  app.find(node => node.type === "input"
+    && node.props["aria-label"] === "选择 response_style 组全部候选")
+    .onChange({ target: { checked: true } });
+  await app.settle();
+  const batch = app.find(node => node.type === "button"
+    && Array.isArray(node.props.children) && node.props.children.includes("确认选中"));
+  batch.onClick(); await app.settle(); await app.settle();
+  assert.deepEqual(confirmed, ["memory_1"]);
+  assert.equal(app.has(node => node.props.children === "已确认 1 条，1 条目标已变化。"), true);
+  assert.equal(app.all(node => String(node.props.className).split(" ").includes("memory-candidate")).length, 1);
+  assert.equal(app.has(node => node.props.children === "目标已变化，确认已禁用；可忽略后等待重新提取。"), true);
 });
 
 test("reload restores a paused task and resumes the same run without a new user message", async t => {

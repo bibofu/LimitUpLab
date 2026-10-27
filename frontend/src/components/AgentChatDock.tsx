@@ -27,7 +27,7 @@ import {
   fetchAgentChatRun,
   fetchChatSession,
   fetchChatSessions,
-  fetchMemoryCandidates,
+  fetchMemoryCandidateWorkbench,
   rejectMemoryCandidate,
   renameChatSession,
   streamAgentChatMessage,
@@ -40,6 +40,7 @@ import type {
   AgentChatStreamResult,
   AgentChatStreamStage,
   AgentDisplayBlock,
+  AgentMemoryCandidateGroup,
   AgentMemoryRecord,
   AgentStockMention,
   AgentRunCommand,
@@ -124,6 +125,13 @@ const MEMORY_TOOL_LABELS: Record<string, string> = {
   limit_down_pool: "跌停池",
   market_overview: "市场概览",
 };
+
+/** Keep long active values glanceable in the workbench. */
+function memoryValuePreview(value: string | null | undefined, limit = 180) {
+  const text = (value || "").trim();
+  if (!text) return "（内容已清空）";
+  return text.length > limit ? `${text.slice(0, limit)}…` : text;
+}
 
 /** Describe where an automatically extracted candidate would apply. */
 function memoryScopeLabel(candidate: AgentMemoryRecord): string {
@@ -307,8 +315,10 @@ export function AgentChatDock({
   const [editingSessionId, setEditingSessionId] = useState<string | null>(null);
   const [editingTitle, setEditingTitle] = useState("");
   const [memoryPanelOpen, setMemoryPanelOpen] = useState(false);
-  const [memoryCandidates, setMemoryCandidates] = useState<AgentMemoryRecord[]>([]);
+  const [memoryGroups, setMemoryGroups] = useState<AgentMemoryCandidateGroup[]>([]);
+  const [selectedMemoryCandidates, setSelectedMemoryCandidates] = useState<Set<string>>(new Set());
   const [memoryLoading, setMemoryLoading] = useState(false);
+  const [memoryBatchBusy, setMemoryBatchBusy] = useState(false);
   const [memoryError, setMemoryError] = useState<string | null>(null);
   const [memoryNotice, setMemoryNotice] = useState<string | null>(null);
   const [memoryBusyId, setMemoryBusyId] = useState<string | null>(null);
@@ -323,6 +333,8 @@ export function AgentChatDock({
   const [showLatest, setShowLatest] = useState(false);
   const isConversationActive = sending || messages.length > 0;
   const activeRunId = activeRun?.run_id;
+  const memoryCandidateContexts = memoryGroups.flatMap(group => group.candidates);
+  const memoryCandidateCount = memoryCandidateContexts.length;
 
   useEffect(() => () => {
     subscription.current.generation++;
@@ -444,9 +456,15 @@ export function AgentChatDock({
       setMemoryNotice(null);
     }
     try {
-      const response = await fetchMemoryCandidates();
+      const response = await fetchMemoryCandidateWorkbench();
       if (requestId !== memoryRequest.current) return;
-      setMemoryCandidates(response.items);
+      setMemoryGroups(response.groups);
+      const currentIds = new Set(response.groups.flatMap(
+        group => group.candidates.map(item => item.candidate.memory_id),
+      ));
+      setSelectedMemoryCandidates(current => (
+        new Set([...current].filter(memoryId => currentIds.has(memoryId)))
+      ));
     } catch (caught) {
       if (requestId !== memoryRequest.current) return;
       if (!quiet) setMemoryError(memoryCandidateMessage(caught, "记忆候选加载失败，请稍后重试。"));
@@ -464,12 +482,63 @@ export function AgentChatDock({
     void loadMemoryCandidates();
   }
 
+  function removeMemoryCandidatesLocally(memoryIds: string[]) {
+    if (!memoryIds.length) return;
+    const removed = new Set(memoryIds);
+    setMemoryGroups(current => current
+      .map(group => ({
+        ...group,
+        candidates: group.candidates.filter(
+          context => !removed.has(context.candidate.memory_id),
+        ),
+      }))
+      .filter(group => group.candidates.length > 0));
+  }
+
+  function toggleMemoryCandidateSelection(memoryId: string, selected: boolean) {
+    setSelectedMemoryCandidates(current => {
+      const next = new Set(current);
+      if (selected) next.add(memoryId);
+      else next.delete(memoryId);
+      return next;
+    });
+  }
+
+  function toggleMemoryGroupSelection(group: AgentMemoryCandidateGroup, selected: boolean) {
+    setSelectedMemoryCandidates(current => {
+      const next = new Set(current);
+      for (const context of group.candidates) {
+        if (selected) next.add(context.candidate.memory_id);
+        else next.delete(context.candidate.memory_id);
+      }
+      return next;
+    });
+  }
+
+  async function requestMemoryCandidateAction(
+    candidate: AgentMemoryRecord,
+    action: "confirm" | "reject",
+  ) {
+    if (action === "confirm") {
+      await confirmMemoryCandidate(candidate.memory_id, candidate.revision);
+    } else {
+      await rejectMemoryCandidate(candidate.memory_id, candidate.revision);
+    }
+  }
+
+  function rememberCandidateActionFailure(caught: unknown, action: "confirm" | "reject") {
+    setMemoryError(memoryCandidateMessage(
+      caught,
+      action === "confirm" ? "确认记忆失败，请稍后重试。" : "忽略记忆失败，请稍后重试。",
+    ));
+  }
+
   /** Confirm or reject one candidate; the server revalidates revision and ownership. */
   async function actOnMemoryCandidate(
     candidate: AgentMemoryRecord,
     action: "confirm" | "reject",
   ) {
-    if (memoryBusyId) return;
+    if (memoryBusyId || memoryBatchBusy) return;
     memoryRequest.current += 1;
     setMemoryLoading(false);
     setMemoryBusyId(candidate.memory_id);
@@ -477,29 +546,61 @@ export function AgentChatDock({
     setMemoryNotice(null);
     const deleting = candidate.candidate_action === "delete";
     try {
-      if (action === "confirm") {
-        await confirmMemoryCandidate(candidate.memory_id, candidate.revision);
-        setMemoryNotice(deleting
-          ? "已删除该记忆，后续对话不再使用。"
-          : "已确认，将在后续对话中生效。");
-      } else {
-        await rejectMemoryCandidate(candidate.memory_id, candidate.revision);
-        setMemoryNotice("已忽略该候选。");
-      }
-      setMemoryCandidates(current => current.filter(item => item.memory_id !== candidate.memory_id));
+      await requestMemoryCandidateAction(candidate, action);
+      setMemoryNotice(action === "confirm"
+        ? (deleting ? "已删除该记忆，后续对话不再使用。" : "已确认，将在后续对话中生效。")
+        : "已忽略该候选。");
+      removeMemoryCandidatesLocally([candidate.memory_id]);
+      void loadMemoryCandidates({ quiet: true });
     } catch (caught) {
-      setMemoryError(memoryCandidateMessage(
-        caught,
-        action === "confirm"
-          ? (deleting ? "删除记忆失败，请稍后重试。" : "确认记忆失败，请稍后重试。")
-          : "忽略记忆失败，请稍后重试。",
-      ));
+      rememberCandidateActionFailure(caught, action);
       if (caught instanceof HttpResponseError && (caught.status === 404 || caught.status === 409)) {
         void loadMemoryCandidates({ quiet: true });
       }
     } finally {
       setMemoryBusyId(null);
     }
+  }
+
+  /** Operate on selected candidates sequentially; each item keeps its own CAS/idempotency check. */
+  async function actOnSelectedMemoryCandidates(action: "confirm" | "reject") {
+    if (memoryBusyId || memoryBatchBusy) return;
+    const selected = memoryCandidateContexts.filter(
+      context => selectedMemoryCandidates.has(context.candidate.memory_id),
+    );
+    if (!selected.length) return;
+    const operable = action === "confirm"
+      ? selected.filter(context => !context.stale)
+      : selected;
+    const skipped = selected.length - operable.length;
+    memoryRequest.current += 1;
+    setMemoryLoading(false);
+    setMemoryBatchBusy(true);
+    setMemoryError(null);
+    setMemoryNotice(null);
+    const succeededIds: string[] = [];
+    let failed = 0;
+    let lastError: unknown = null;
+    for (const context of operable) {
+      try {
+        await requestMemoryCandidateAction(context.candidate, action);
+        succeededIds.push(context.candidate.memory_id);
+      } catch (caught) {
+        failed += 1;
+        lastError = caught;
+      }
+    }
+    setSelectedMemoryCandidates(new Set());
+    removeMemoryCandidatesLocally(succeededIds);
+    const succeeded = succeededIds.length;
+    const verb = action === "confirm" ? "确认" : "忽略";
+    const details = [`已${verb} ${succeeded} 条`];
+    if (failed) details.push(`${failed} 条失败`);
+    if (skipped && action === "confirm") details.push(`${skipped} 条目标已变化`);
+    setMemoryNotice(`${details.join("，")}。`);
+    if (lastError) rememberCandidateActionFailure(lastError, action);
+    await loadMemoryCandidates({ quiet: true });
+    setMemoryBatchBusy(false);
   }
 
   /**
@@ -979,17 +1080,17 @@ export function AgentChatDock({
             <button
               aria-label={memoryPanelOpen
                 ? "关闭记忆候选"
-                : `打开记忆候选${memoryCandidates.length ? `，${memoryCandidates.length} 条待确认` : ""}`}
+                : `打开记忆候选${memoryCandidateCount ? `，${memoryCandidateCount} 条待确认` : ""}`}
               aria-expanded={memoryPanelOpen}
-              className={`icon-button compact memory-candidate-toggle${memoryCandidates.length ? " has-candidates" : ""}`}
+              className={`icon-button compact memory-candidate-toggle${memoryCandidateCount ? " has-candidates" : ""}`}
               onClick={toggleMemoryPanel}
-              title={memoryCandidates.length ? `${memoryCandidates.length} 条待确认记忆` : "记忆候选"}
+              title={memoryCandidateCount ? `${memoryCandidateCount} 条待确认记忆` : "记忆候选"}
               type="button"
             >
               <Brain size={16} />
-              {memoryCandidates.length ? (
+              {memoryCandidateCount ? (
                 <span className="memory-candidate-badge" aria-hidden="true">
-                  {memoryCandidates.length > 99 ? "99+" : memoryCandidates.length}
+                  {memoryCandidateCount > 99 ? "99+" : memoryCandidateCount}
                 </span>
               ) : null}
             </button>
@@ -1009,13 +1110,13 @@ export function AgentChatDock({
           <section className="memory-candidate-panel" aria-label="待确认记忆">
             <div className="memory-candidate-panel-head">
               <div>
-                <strong>待确认记忆</strong>
-                <small>后台从对话中提取，确认后才进入长期记忆。</small>
+                <strong>冲突候选工作台</strong>
+                <small>按记忆身份分组；批量操作会逐条校验，可能部分成功。</small>
               </div>
               <button
                 aria-label="刷新记忆候选"
                 className="icon-button compact"
-                disabled={memoryLoading || Boolean(memoryBusyId)}
+                disabled={memoryLoading || Boolean(memoryBusyId) || memoryBatchBusy}
                 onClick={() => void loadMemoryCandidates()}
                 title="刷新"
                 type="button"
@@ -1033,64 +1134,170 @@ export function AgentChatDock({
             {memoryNotice ? (
               <p className="memory-candidate-feedback" role="status">{memoryNotice}</p>
             ) : null}
-            {memoryLoading && memoryCandidates.length === 0 ? (
+            {selectedMemoryCandidates.size ? (
+              <div className="memory-candidate-batch" role="group" aria-label="批量记忆操作">
+                <span>已选 {selectedMemoryCandidates.size} 条</span>
+                <button
+                  disabled={memoryBatchBusy || Boolean(memoryBusyId)}
+                  onClick={() => void actOnSelectedMemoryCandidates("confirm")}
+                  type="button"
+                >
+                  <Check aria-hidden="true" size={13} />确认选中
+                </button>
+                <button
+                  disabled={memoryBatchBusy || Boolean(memoryBusyId)}
+                  onClick={() => void actOnSelectedMemoryCandidates("reject")}
+                  type="button"
+                >
+                  <X aria-hidden="true" size={13} />忽略选中
+                </button>
+                <button
+                  disabled={memoryBatchBusy}
+                  onClick={() => setSelectedMemoryCandidates(new Set())}
+                  type="button"
+                >
+                  取消选择
+                </button>
+              </div>
+            ) : null}
+            {memoryLoading && memoryCandidateCount === 0 ? (
               <div className="chat-session-loading" role="status">
                 <LoaderCircle aria-hidden="true" size={16} />
                 <span>正在加载记忆候选</span>
               </div>
             ) : null}
-            {!memoryLoading && memoryCandidates.length === 0 ? (
+            {!memoryLoading && memoryCandidateCount === 0 ? (
               <p className="memory-candidate-empty">
                 暂无待确认记忆。明确、稳定的长期偏好会先出现在这里。
               </p>
             ) : null}
-            {memoryCandidates.length ? (
-              <div className="memory-candidate-list">
-                {memoryCandidates.map(candidate => {
-                  const busy = memoryBusyId === candidate.memory_id;
-                  const deleting = candidate.candidate_action === "delete";
+            {memoryGroups.length ? (
+              <div className="memory-candidate-groups">
+                {memoryGroups.map(group => {
+                  const selectedCount = group.candidates.filter(
+                    context => selectedMemoryCandidates.has(context.candidate.memory_id),
+                  ).length;
                   return (
-                    <article className="memory-candidate" key={candidate.memory_id}>
-                      <div className="memory-candidate-meta">
-                        <span>{MEMORY_TYPE_LABELS[candidate.memory_type]}</span>
-                        <span>{memoryScopeLabel(candidate)}</span>
-                        <span>{candidate.source_kind === "auto" ? "自动提取" : "候选"}</span>
-                        {deleting ? <span>确认后删除现有记忆</span> : null}
-                        {!deleting && candidate.supersedes_memory_id
-                          ? <span>确认后替换现有记忆</span>
-                          : null}
+                    <section className="memory-candidate-group" key={group.group_key}>
+                      <div className="memory-candidate-group-head">
+                        <label className="memory-candidate-group-select">
+                          <input
+                            aria-label={`选择 ${group.canonical_key} 组全部候选`}
+                            checked={selectedCount === group.candidates.length}
+                            disabled={memoryBatchBusy || Boolean(memoryBusyId)}
+                            onChange={event => toggleMemoryGroupSelection(group, event.target.checked)}
+                            type="checkbox"
+                          />
+                          全选
+                        </label>
+                        <div>
+                          <strong>
+                            {MEMORY_TYPE_LABELS[group.memory_type]} · {group.canonical_key}
+                          </strong>
+                          <small>
+                            现有 {group.active.length} 条 · 候选 {group.candidates.length} 条
+                          </small>
+                        </div>
                       </div>
-                      <p className="memory-candidate-value">{candidate.value}</p>
-                      {candidate.source_quote ? (
-                        <blockquote className="memory-candidate-quote">
-                          “{candidate.source_quote}”
-                        </blockquote>
+                      {group.active.length ? (
+                        <details className="memory-candidate-existing">
+                          <summary>查看现有设置</summary>
+                          <ul>
+                            {group.active.map(item => (
+                              <li key={item.memory_id}>
+                                <span>{memoryScopeLabel(item)}</span>
+                                <p>{memoryValuePreview(item.value)}</p>
+                              </li>
+                            ))}
+                          </ul>
+                        </details>
                       ) : null}
-                      <div className="memory-candidate-actions">
-                        <button
-                          className="memory-candidate-confirm"
-                          disabled={Boolean(memoryBusyId)}
-                          onClick={() => void actOnMemoryCandidate(candidate, "confirm")}
-                          type="button"
-                        >
-                          {busy
-                            ? <LoaderCircle aria-hidden="true" size={13} />
-                            : deleting
-                              ? <Trash2 aria-hidden="true" size={13} />
-                              : <Check aria-hidden="true" size={13} />}
-                          {deleting ? "确认删除" : "确认"}
-                        </button>
-                        <button
-                          className="memory-candidate-reject"
-                          disabled={Boolean(memoryBusyId)}
-                          onClick={() => void actOnMemoryCandidate(candidate, "reject")}
-                          type="button"
-                        >
-                          <X aria-hidden="true" size={13} />
-                          忽略
-                        </button>
+                      <div className="memory-candidate-list">
+                        {group.candidates.map(context => {
+                          const candidate = context.candidate;
+                          const busy = memoryBusyId === candidate.memory_id;
+                          const deleting = candidate.candidate_action === "delete";
+                          const selected = selectedMemoryCandidates.has(candidate.memory_id);
+                          return (
+                            <article
+                              className={`memory-candidate${context.stale ? " is-stale" : ""}`}
+                              key={candidate.memory_id}
+                            >
+                              <div className="memory-candidate-select-row">
+                                <input
+                                  aria-label={`选择候选 ${candidate.memory_id}`}
+                                  checked={selected}
+                                  disabled={memoryBatchBusy || Boolean(memoryBusyId)}
+                                  onChange={event => toggleMemoryCandidateSelection(
+                                    candidate.memory_id, event.target.checked,
+                                  )}
+                                  type="checkbox"
+                                />
+                                <div className="memory-candidate-meta">
+                                  <span>{MEMORY_TYPE_LABELS[candidate.memory_type]}</span>
+                                  <span>{memoryScopeLabel(candidate)}</span>
+                                  <span>{candidate.source_kind === "auto" ? "自动提取" : "候选"}</span>
+                                  {deleting ? <span>确认后删除</span> : null}
+                                  {!deleting && candidate.supersedes_memory_id
+                                    ? <span>确认后替换</span>
+                                    : null}
+                                  {context.stale ? <span className="is-warning">目标已变化</span> : null}
+                                </div>
+                              </div>
+                              <p className="memory-candidate-value">{candidate.value}</p>
+                              {context.target ? (
+                                <div className="memory-candidate-target">
+                                  <span>{deleting ? "将删除现有记忆" : "将替换现有记忆"}</span>
+                                  <p>{memoryValuePreview(context.target.value)}</p>
+                                  <small>
+                                    {memoryScopeLabel(context.target)} · revision {context.target.revision}
+                                  </small>
+                                </div>
+                              ) : null}
+                              {context.exception_parent ? (
+                                <p className="memory-candidate-relation">
+                                  将作为全局设置的例外：{memoryValuePreview(context.exception_parent.value)}
+                                </p>
+                              ) : null}
+                              {candidate.source_quote ? (
+                                <blockquote className="memory-candidate-quote">
+                                  “{candidate.source_quote}”
+                                </blockquote>
+                              ) : null}
+                              {context.stale ? (
+                                <p className="memory-candidate-feedback is-error">
+                                  目标已变化，确认已禁用；可忽略后等待重新提取。
+                                </p>
+                              ) : null}
+                              <div className="memory-candidate-actions">
+                                <button
+                                  className="memory-candidate-confirm"
+                                  disabled={Boolean(memoryBusyId) || memoryBatchBusy || context.stale}
+                                  onClick={() => void actOnMemoryCandidate(candidate, "confirm")}
+                                  type="button"
+                                >
+                                  {busy
+                                    ? <LoaderCircle aria-hidden="true" size={13} />
+                                    : deleting
+                                      ? <Trash2 aria-hidden="true" size={13} />
+                                      : <Check aria-hidden="true" size={13} />}
+                                  {deleting ? "确认删除" : "确认"}
+                                </button>
+                                <button
+                                  className="memory-candidate-reject"
+                                  disabled={Boolean(memoryBusyId) || memoryBatchBusy}
+                                  onClick={() => void actOnMemoryCandidate(candidate, "reject")}
+                                  type="button"
+                                >
+                                  <X aria-hidden="true" size={13} />
+                                  忽略
+                                </button>
+                              </div>
+                            </article>
+                          );
+                        })}
                       </div>
-                    </article>
+                    </section>
                   );
                 })}
               </div>

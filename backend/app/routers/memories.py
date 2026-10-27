@@ -45,6 +45,21 @@ def list_memory_candidates(
     return {"items": LongTermMemoryRepository().list_candidates(owner_id, limit=limit)}
 
 
+@router.get("/candidates/workbench")
+def list_memory_candidate_workbench(
+    owner_id: Owner, response: Response,
+    limit: int = Query(default=100, ge=1, le=200),
+):
+    """Group candidate conflicts with active families and exact targets."""
+
+    response.headers["Cache-Control"] = "private, no-store"
+    return {
+        "groups": LongTermMemoryRepository().list_candidate_workbench(
+            owner_id, limit=limit,
+        ),
+    }
+
+
 @router.post("/candidates/{memory_id}/confirm", response_model=MemoryMutationResult)
 def confirm_memory_candidate(
     memory_id: str, owner_id: Owner, operation_id: OperationId,
