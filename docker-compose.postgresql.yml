@@ -13,7 +13,7 @@ x-postgres-dependencies: &postgres-dependencies
 
 services:
   postgres:
-    image: postgres:18-bookworm
+    image: pgvector/pgvector:pg18
     restart: unless-stopped
     environment:
       POSTGRES_DB: ${POSTGRES_DB:-limituplab}

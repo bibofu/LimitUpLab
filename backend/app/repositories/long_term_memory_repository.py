@@ -229,7 +229,8 @@ class LongTermMemoryRepository:
                 return None
             return _record(row)
 
-    def read_context(self, owner_id, *, memory_types=None, exact_keys=None, topics=None, limit=100, now=None):
+    def read_context(self, owner_id, *, memory_types=None, exact_keys=None, topics=None,
+                     limit=100, now=None, query_embedding=None):
         """Read the revision and active memories in one repeatable-read snapshot."""
         selected = tuple(memory_types) if memory_types is not None else tuple(sorted(MEMORY_TYPES))
         if not set(selected).issubset(MEMORY_TYPES) or not 1 <= limit <= 200:
@@ -256,11 +257,48 @@ class LongTermMemoryRepository:
             identity = context_identity_in_connection(db, owner_id, timestamp)
             conditions.append("(expires_at IS NULL OR expires_at>?)")
             params.append(timestamp)
-            rows = db.execute("SELECT *,FALSE AS expired FROM long_term_memories WHERE " +
+            if query_embedding is not None:
+                distance_sql = (",CASE WHEN embedding IS NULL THEN NULL "
+                                "ELSE embedding <=> CAST(? AS public.vector) END AS vector_distance")
+                select_params = (json.dumps([float(value) for value in query_embedding]),)
+            else:
+                distance_sql = ",NULL::double precision AS vector_distance"
+                select_params = ()
+            rows = db.execute("SELECT *,FALSE AS expired" + distance_sql +
+                              " FROM long_term_memories WHERE " +
                               " AND ".join(conditions) + " ORDER BY updated_at DESC,memory_id LIMIT ?",
-                              (*params, limit)).fetchall()
+                              (*select_params, *params, limit)).fetchall()
             return {**identity, "as_of": timestamp.isoformat(),
                     "items": [_record(row).model_dump(mode="json") for row in rows]}
+
+    def embedding_backfill_rows(self, *, limit=100):
+        """Return active rows whose embedding may be missing or stale."""
+
+        with self._connection(readonly=True) as db:
+            rows = db.execute("""SELECT memory_id,owner_id,memory_key,value,scope_type,
+                    scope_json,structured_json,canonical_key,embedding_source_hash,
+                    embedding_model,embedding IS NOT NULL AS has_embedding
+                FROM long_term_memories
+                WHERE status='active' AND deleted_at IS NULL
+                ORDER BY CASE WHEN embedding IS NULL THEN 0 ELSE 1 END,
+                    updated_at DESC,memory_id LIMIT ?""",
+                (max(1, min(limit, 500)),)).fetchall()
+            return [dict(row) for row in rows]
+
+    def save_embedding(self, owner_id, memory_id, vector, model, source_hash):
+        """Persist a derived vector without changing the content revision."""
+
+        values = json.dumps([float(value) for value in vector], separators=(",", ":"))
+        with self._connection() as db:
+            begin_write(db)
+            result = db.execute("""UPDATE long_term_memories SET
+                embedding=CAST(? AS public.vector),embedding_model=?,embedding_source_hash=?,
+                embedding_updated_at=clock_timestamp(),
+                management_revision=management_revision+1
+                WHERE owner_id=? AND memory_id=? AND status='active' AND deleted_at IS NULL""",
+                (values, model, source_hash, owner_id, memory_id))
+            db.commit()
+            return bool(result.rowcount)
 
     def list_active(self, owner_id, *, memory_types=None, exact_keys=None, topics=None, limit=100, now=None):
         return self.read_context(owner_id, memory_types=memory_types, exact_keys=exact_keys,

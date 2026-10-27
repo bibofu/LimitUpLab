@@ -176,7 +176,7 @@ def test_workflow_gates_production_on_matrix_success_and_tag_push():
     workflow = yaml.safe_load(text)
     assert 'tags: ["v*"]' in text
     assert set(workflow["jobs"]["deploy"]["needs"]) == {"validate", "postgresql"}
-    assert workflow["jobs"]["postgresql"]["services"]["postgres"]["image"] == "postgres:18-bookworm"
+    assert workflow["jobs"]["postgresql"]["services"]["postgres"]["image"] == "pgvector/pgvector:pg18"
     assert "github.event_name == 'push' && startsWith(github.ref, 'refs/tags/v')" in text
     assert "group: limituplab-production\n      cancel-in-progress: false" in text
     assert "DEPLOY_SSH_KEY: ${{ secrets.DEPLOY_SSH_KEY }}" in text
@@ -187,7 +187,7 @@ def test_postgresql_overlay_keeps_sqlite_volume_and_waits_for_schema():
     base = yaml.safe_load((ROOT / "docker-compose.yml").read_text())
     overlay = yaml.safe_load((ROOT / "docker-compose.postgresql.yml").read_text())
     postgres = overlay["services"]["postgres"]
-    assert postgres["image"] == "postgres:18-bookworm"
+    assert postgres["image"] == "pgvector/pgvector:pg18"
     assert postgres["volumes"] == ["limituplab-postgres:/var/lib/postgresql"]
     assert "ports" not in postgres
     assert "limituplab-data:/app/data" in base["services"]["backend"]["volumes"]

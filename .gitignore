@@ -66,6 +66,9 @@ frontend/*.log
 !.env.production.example
 !.env.postgresql.example
 !.env.local-postgresql.example
+!.env.docker-postgresql.example
 
 # Local job search materials
 /workPre/
+backend/fastembed_cache/
+backend/data/memory_embeddings/

@@ -40,7 +40,7 @@ class SchemaFactory:
             if label is not None and label in self.labels:
                 return self.labels[label]
             schema = "limituplab_test_" + uuid4().hex
-            url = self.base.update_query_dict({"options": f"-csearch_path={schema}"}).render_as_string(hide_password=False)
+            url = self.base.update_query_dict({"options": f"-csearch_path={schema},public"}).render_as_string(hide_password=False)
             self.schemas[url] = [schema, False]
             if label is not None:
                 self.labels[label] = url

@@ -112,7 +112,7 @@ LimitUpLab 面向收盘后的短线研究场景：支持查询个股行情，最
 
 系统在 PostgreSQL 保留原始会话，短期 Memory 由 LangGraph Thread State 管理。每次模型调用统一组合摘要、近期整轮消息、研究目标、页面上下文、约束及已提交股票引用，并按估算 Token 预算裁剪历史。无法确认“第二只”的显示顺序时先澄清；本轮市场事实必须重新查询。
 
-Memory 按会话所有者隔离，采用消息游标和版本防止重复摘要；旧摘要表仅供首次只读导入。工具结果先做无损编码，大结果可从不可变回执按需分页和选择字段，仍超预算则明确返回 partial，完整证据保留。查询条件与已提交来源绑定，不能从旧摘要猜测“上次条件”。用户可以显式保存、修改、查询和删除回答详略、展示格式、有限研究主题偏好，也可以保存带作用域的自由文本偏好（如 `tool_display:*`、`research:*`）；同一 owner 的新会话可使用，当前问题的明确要求优先。长期记忆每次调用重新读取，删除或到期会使旧上下文失效；服务端生成展示块时会提示模型不要重复完整表格或逐行名单；前端移除 Markdown 表格和纯行标签列表，保留含分析文字的列表；重复股票行保留展示顺序，可按序引用；交付和历史回答清理只校验本轮实际使用过的记忆版本，无关记忆变化不会打断回答或清空历史文本；实际使用的记忆会记录 usage 计数和最近使用时间，但不改变内容版本。普通对话可由后台提取候选；低风险 `tool_display`、封闭 typed 与 tool/entity/精确 condition 作用域 typed 例外由 `safe_auto` 自动生效，其他候选必须显式确认，不会把旧聊天约束直接升级为长期偏好；同身份重复候选会合并为 NOOP，内容变化会生成带目标版本的 UPDATE 候选，明确的遗忘请求会生成 DELETE 候选；确认时原子替换或删除旧记忆，显式写入则会使待确认候选失效。带作用域的偏好作为 global 同 key 设置的例外；Agent 从当前问题词法推断唯一无歧义的 tool/topic/symbol 作用域；问题无代码时可用股票详情请求的 symbol 兜底，多义时保留未验证状态。长期记忆对用户无感：前端不展示候选、确认、忽略或记忆管理入口；未确认候选默认 30 天过期并由 worker 清理；worker 也会把到期 active 记忆落成 expired；高置信度 `tool_display`、封闭 typed 和 tool/entity/精确 condition 作用域 typed 例外可由 `safe_auto` 策略在后台直接生效；可选的 `safe_auto_judge` 只复核边界候选，`safe_auto_judge_shadow` 保留确定性安全激活但只影子化 Judge 决策；两者默认不启用，其他候选仅通过后台 API / review_memory_candidates.py CLI 供运维流程处理。历史研究档案只在主动保存/查看时使用，并保留日期和证据来源，不替代当前市场数据。当前基础层已支持作用域、自由文本、内容哈希、状态迁移、工具级确定性展示块、待确认候选和 safe_auto；影子决策可用 `backend/scripts/report_memory_auto.py` 汇总，记忆库可用 `backend/scripts/check_memory_health.py` 检查，自动激活边界可用 `backend/scripts/evaluate_memory_auto.py --live` 做 live 校准；pgvector 语义召回仍按独立阶段推进。
+Memory 按会话所有者隔离，采用消息游标和版本防止重复摘要；旧摘要表仅供首次只读导入。工具结果先做无损编码，大结果可从不可变回执按需分页和选择字段，仍超预算则明确返回 partial，完整证据保留。查询条件与已提交来源绑定，不能从旧摘要猜测“上次条件”。用户可以显式保存、修改、查询和删除回答详略、展示格式、有限研究主题偏好，也可以保存带作用域的自由文本偏好（如 `tool_display:*`、`research:*`）；同一 owner 的新会话可使用，当前问题的明确要求优先。长期记忆每次调用重新读取，删除或到期会使旧上下文失效；服务端生成展示块时会提示模型不要重复完整表格或逐行名单；前端移除 Markdown 表格和纯行标签列表，保留含分析文字的列表；重复股票行保留展示顺序，可按序引用；交付和历史回答清理只校验本轮实际使用过的记忆版本，无关记忆变化不会打断回答或清空历史文本；实际使用的记忆会记录 usage 计数和最近使用时间，但不改变内容版本。普通对话可由后台提取候选；低风险 `tool_display`、封闭 typed 与 tool/entity/精确 condition 作用域 typed 例外由 `safe_auto` 自动生效，其他候选必须显式确认，不会把旧聊天约束直接升级为长期偏好；同身份重复候选会合并为 NOOP，内容变化会生成带目标版本的 UPDATE 候选，明确的遗忘请求会生成 DELETE 候选；确认时原子替换或删除旧记忆，显式写入则会使待确认候选失效。带作用域的偏好作为 global 同 key 设置的例外；Agent 从当前问题词法推断唯一无歧义的 tool/topic/symbol 作用域；问题无代码时可用股票详情请求的 symbol 兜底，多义时保留未验证状态。长期记忆对用户无感：前端不展示候选、确认、忽略或记忆管理入口；未确认候选默认 30 天过期并由 worker 清理；worker 也会把到期 active 记忆落成 expired；高置信度 `tool_display`、封闭 typed 和 tool/entity/精确 condition 作用域 typed 例外可由 `safe_auto` 策略在后台直接生效；可选的 `safe_auto_judge` 只复核边界候选，`safe_auto_judge_shadow` 保留确定性安全激活但只影子化 Judge 决策；两者默认不启用，其他候选仅通过后台 API / review_memory_candidates.py CLI 供运维流程处理。检索在词法匹配之外使用本地 `BAAI/bge-small-zh-v1.5`（fastembed，512 维）和 pgvector cosine 相似度扩大召回；作用域、有效期和 owner 过滤不变，模型不可用时自动退回纯词法检索；后台 embedding worker 使用 PostgreSQL 租约回填或重算向量。历史研究档案只在主动保存/查看时使用，并保留日期和证据来源，不替代当前市场数据。当前基础层已支持作用域、自由文本、内容哈希、状态迁移、工具级确定性展示块、待确认候选、safe_auto 和混合检索；影子决策可用 `backend/scripts/report_memory_auto.py` 汇总，记忆库可用 `backend/scripts/check_memory_health.py` 检查，自动激活边界可用 `backend/scripts/evaluate_memory_auto.py --live` 做 live 校准；中文语义召回的离线评测和生产级回滚仍未完成。
 
 
 
@@ -212,7 +212,8 @@ sequenceDiagram
 - Python 3.13
 - FastAPI + Uvicorn
 - Pydantic
-- PostgreSQL 18 + SQLAlchemy / psycopg 3；历史 SQLite 归档使用独立迁移工具读取
+- PostgreSQL 18 + pgvector + SQLAlchemy / psycopg 3；历史 SQLite 归档使用独立迁移工具读取
+- fastembed + 本地 `BAAI/bge-small-zh-v1.5`（512 维，仅用于长期记忆召回）
 - AKShare
 - Requests + BeautifulSoup
 - LangChain Core + LangChain OpenAI（消息、原生工具绑定和模型适配）
@@ -270,7 +271,8 @@ LimitUpLab/
 - Python 3.13，Windows 下不建议使用尚未完全兼容依赖的 Python 3.14
 - Node.js 18+
 - npm
-- 能访问所配置行情源和 LLM 服务的网络环境
+- Docker Desktop（本地 PostgreSQL 使用官方 `pgvector/pgvector:pg18` 镜像）
+- 能访问所配置行情源和 LLM 服务的网络环境；首次启用长期记忆向量时需下载 `BAAI/bge-small-zh-v1.5` 模型到本地缓存
 
 ### 1. 安装后端
 
@@ -323,14 +325,18 @@ LIMITUPLAB_AGENT_MAX_CONCURRENT_GLOBAL=4
 
 ### 3. PostgreSQL 数据库配置
 
-业务、研究、维护与测试统一使用 PostgreSQL。启动必须配置数据库 URL；缺失配置直接失败。Schema 由 Alembic 管理，应用只检查版本，不在请求中建表。历史 SQLite 归档与导入工具独立保留。
+业务、研究、维护与测试统一使用 PostgreSQL。启动必须配置数据库 URL；缺失配置直接失败。Schema 由 Alembic 管理，应用只检查版本，不在请求中建表。长期记忆需要 pgvector 扩展；本地默认使用官方 Docker 镜像 `pgvector/pgvector:pg18`，原生 PostgreSQL 18 集群保留为回滚路径。历史 SQLite 归档与导入工具独立保留。
 
 ```dotenv
-LIMITUPLAB_DATABASE_URL=postgresql+psycopg://limituplab:REPLACE_WITH_PASSWORD@127.0.0.1:55433/limituplab
+LIMITUPLAB_DATABASE_URL=postgresql+psycopg://limituplab:REPLACE_WITH_PASSWORD@127.0.0.1:55434/limituplab
 LIMITUPLAB_DB_POOL_SIZE=5
 LIMITUPLAB_DB_MAX_OVERFLOW=5
 LIMITUPLAB_DATA_DIRECTORY=backend/data
+LIMITUPLAB_MEMORY_EMBEDDINGS=on
+LIMITUPLAB_MEMORY_EMBEDDING_MODEL=BAAI/bge-small-zh-v1.5
 ```
+
+迁移 `0015_memory_embeddings` 会创建 `public.vector` 扩展、512 维 embedding 列和 HNSW 索引；测试库同样需要能访问 `public.vector`。关闭 `LIMITUPLAB_MEMORY_EMBEDDINGS` 时检索退回词法匹配，但 schema 仍要求 pgvector。本地 Docker 模板为 `backend/.env.docker-postgresql.example`，原生集群回滚模板为 `backend/.env.local-postgresql.example`。
 
 本地初始化与服务启动见 [本地手册](deploy/local-postgresql.md)。回归使用独立的 `LIMITUPLAB_TEST_DATABASE_URL`，禁止指向业务库。连接池与事务锁保护现有单实例契约，多实例吞吐仍需独立验收。
 
@@ -380,7 +386,7 @@ npm install
 .\scripts\start_local.cmd
 ```
 
-脚本会先检查最新完整交易日和 Agent 数据健康状态；本地数据过期时会尝试执行日更，再启动前后端、推荐刷新和记忆提取 worker。
+脚本会先检查最新完整交易日和 Agent 数据健康状态；本地数据过期时会尝试执行日更，再启动前后端、推荐刷新、记忆提取和记忆向量回填 worker。启动前需确保 Docker Desktop 和 `limituplab-pgvector` 容器已运行；外部数据库只检查连接，不由启动脚本创建。
 
 - 前端：<http://127.0.0.1:5173>
 - 后端 API：<http://127.0.0.1:8001>
@@ -402,7 +408,7 @@ cd frontend
 npm.cmd run dev -- --host 127.0.0.1 --port 5173
 ```
 
-手动启动不包含推荐刷新和记忆提取 worker；需要时运行 `backend\.venv\Scripts\python.exe backend\scripts\run_memory_extraction.py`。macOS / Linux 将 Python 和 npm 命令替换为对应虚拟环境命令即可。
+手动启动不包含推荐刷新、记忆提取和向量回填 worker；需要时分别运行 `backend\.venv\Scripts\python.exe backend\scripts\run_memory_extraction.py` 和 `backend\.venv\Scripts\python.exe backend\scripts\run_memory_embeddings.py`。macOS / Linux 将 Python 和 npm 命令替换为对应虚拟环境命令即可。
 
 
 
@@ -441,7 +447,7 @@ cd backend
 .\.venv\Scripts\python.exe scripts\run_recommendation_refresh_loop.py --once
 ```
 
-本地一键启动和 Docker Compose 会自动启动每日固化进程。进程启动时先检查当前候选状态，随后按每日 08:00 调度；08:00 至 09:30 间可以补做当日固化，09:30 后只记录错过窗口，不采集开盘后证据补算。单独启动 Uvicorn 和 Vite 不包含该后台进程；本地可运行 `python scripts/start_dev_detached.py --skip-data-check`，复用已运行的前后端并补启推荐刷新和记忆提取进程。
+本地一键启动和 Docker Compose 会自动启动每日固化进程。进程启动时先检查当前候选状态，随后按每日 08:00 调度；08:00 至 09:30 间可以补做当日固化，09:30 后只记录错过窗口，不采集开盘后证据补算。单独启动 Uvicorn 和 Vite 不包含该后台进程；本地可运行 `python scripts/start_dev_detached.py --skip-data-check`，复用已运行的前后端并补启推荐刷新、记忆提取和向量回填进程。
 
 候选目标日通过实际 A 股交易日历确定，跨周末和节假日均取基准日之后的首个交易日。日历缺失或查询失败时，目标日保持未确认并展示数据缺口，不按工作日猜测。页面同时展示候选基准日、目标日和完整快照时间；旧候选标记为历史快照。最新刷新为空时，保留历史名单供参考，并单独说明最新目标及未固化状态，不把旧名单改成新目标日。
 

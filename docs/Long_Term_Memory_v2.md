@@ -1,8 +1,8 @@
 # 长期记忆 v2：基础契约层
 
-更新日期：2026-10-27。
+更新日期：2026-10-28。
 
-本文件记录长期记忆重构已经落地的边界。它不是完整 v2；向量检索和低风险自动激活仍按后续阶段推进。
+本文件记录长期记忆重构已经落地的边界。它仍不是完整 v2；混合检索已接入本地向量召回，低风险自动激活、评测和生产级回滚仍按后续阶段推进。
 
 ## 已落地
 
@@ -32,6 +32,33 @@
   - 增加 `use_count`、`last_used_at`；
   - 正式交付记录实际使用的记忆时，增加 `management_revision` 和 usage 计数；
   - usage 更新不影响内容 `revision`、owner fingerprint 或本轮答案。
+- 迁移 `0015_memory_embeddings`：
+  - 创建 pgvector 扩展 `vector`，固定安装在 `public` schema；
+  - `long_term_memories` 增加 `embedding vector(512)`、`embedding_model`、`embedding_source_hash`、`embedding_updated_at`；
+  - 建立只覆盖 active、未删除且有向量的 HNSW 部分索引 `memory_embedding_hnsw`（`vector_cosine_ops`）；
+  - 向量是派生数据，downgrade 明确拒绝，避免直接丢弃可回填的语义索引状态。
+- 本地向量模型：
+  - 使用 `fastembed==0.9.1` 加载 `BAAI/bge-small-zh-v1.5`，输出 512 维向量；
+  - 模型和缓存均在本机运行，不调用第三方 embedding API；
+  - `LIMITUPLAB_MEMORY_EMBEDDINGS=on|off` 控制是否启用，默认 `on`；
+  - `LIMITUPLAB_MEMORY_EMBEDDING_MODEL` 覆盖模型名；
+  - 缓存目录默认 `backend/data/memory_embeddings`，不提交 Git；
+  - 嵌入文本由 `key + value + scope + structured` 确定性拼接，源哈希用于判断是否需要重算。
+- 混合检索：
+  - owner、active、有效期、删除状态、memory type 和作用域过滤仍在 SQL 中先行执行；
+  - SQL 对每条候选计算 `embedding <=> query_embedding`，Python 合并词法分数与 cosine 相似度；
+  - 相似度低于 0.25 不贡献分数，避免弱相关向量把无关记忆带进上下文；
+  - 词法精确 key / topic 仍优先；向量分用于扩展召回，不绕过作用域例外和 token 预算；
+  - 返回 `vector_similarity` 诊断字段，并记录 `memory_vector_status=ready|disabled|unavailable`、`memory_vector_hit_count`；
+  - embedding 模型不可用时 fail closed 到原有词法检索，不阻断回答；
+  - 当前候选集按 owner 的 active 记忆上限读取并精确计算距离，HNSW 索引为后续规模增长预留；尚未做 ANN 分页或跨 owner 全局向量检索。
+- embedding 回填 worker：
+  - `python backend/scripts/run_memory_embeddings.py` 支持 `--once`、`--limit`、`--interval`；
+  - 只处理 active、未删除记忆；缺失向量、源哈希变化或模型名变化时重新嵌入；
+  - 使用 PostgreSQL 租约 `job:memory-embeddings` 防止重复 worker，TTL 300 秒并心跳续约；
+  - 保存向量只增加 `management_revision`，不改变内容 `revision`、owner revision 或 fingerprint；
+  - `scripts/start_dev_detached.py` 在 embedding 启用且无 live lease 时自动拉起该 worker；
+  - 本地 PostgreSQL 测试库需要允许临时 schema 看到 `public.vector`，测试 schema 的 `search_path` 为 `<schema>,public`。
 - 自由文本偏好：
   - `preference` / `research_context` 支持 `preference:`、`tool_display:`、`research:` 前缀；
   - 保留 typed 设置（回答详略、展示格式、研究主题）的封闭值校验；
@@ -157,19 +184,22 @@
   - 恢复演练验收（2026-10-27）：备份当前库到 `memory-restore-drill.dump`，用本地管理员角色恢复到临时数据库，`schema_current=true`，健康检查 `ok=true`、active=17、candidate=6，随后删除临时库；备份文件不提交。
   - safe_auto 校准验收：10 条 live 用例覆盖 tool/global/tool-exception/entity/topic/临时/delete/行情/交易/condition，结果为 TP=5、TN=5、FP=0、FN=0。
   - Judge 验收：真实 DeepSeek 对 `confidence=0.75` 的 condition 候选返回 `approve + low risk`；单元测试验证 Judge 只能复核 scoped 边界，全局 typed 和结构不合格候选不会进入 Judge。
+  - pgvector 验收（2026-10-28）：本地 Docker 使用 `pgvector/pgvector:pg18`，`vector=0.8.7`，业务库升级到 `0015_memory_embeddings`；17 条 active 记忆全部回填 512 维 BGE 向量。
+  - 混合检索验收：`memory_vector_status=ready`，`stock_kline` scoped `response_style=detailed` 在“贵州茅台最近K线走势”查询中通过 `exception_to` 抑制 global concise，`vector_similarity=0.3195`，`memory_vector_hit_count=1`。
+  - 真实 Agent 验证（2026-10-28）：在 Docker pgvector 业务库和 embedding worker 运行时，“2026-10-27 的涨停池有哪些股票？”“贵州茅台的主营业务是什么？”“2026-10-27 的龙虎榜有哪些股票？”均 `complete`，且 `memory_context_used=true`；“贵州茅台最近K线走势怎么样？”仍为 `partial`，原因是 `stock_kline` 数据源部分字段缺失，不是记忆或向量检索链路问题。
+  - 回归验收（2026-10-28）：使用 Docker `limituplab_test` 数据库运行完整后端测试，`2039 passed, 1 skipped, 22 subtests passed`；前端 243 项测试通过，生产构建通过。
 
 ## 尚未落地
 
 以下能力明确未完成，不能对外宣称：
 
-1. pgvector 语义检索与同义改写召回；
-2. 自动激活覆盖 `tool_display`、全局封闭 typed，以及 tool/entity/精确 condition 作用域的 `response_style/output_format` 例外；`safe_auto_judge` 是可选边界复核；condition 仍不支持语义匹配；scope hint 仍是词法推断，名称同义词不一定识别；
-3. 非自动候选没有前端入口，只能由运维 API 处理；TTL 已清理过期候选；
-4. embedding 回填尚未接入；候选和使用统计已接入 `management_revision`；
-5. 展示块已移除 Markdown 表格和纯行标签列表，并增加 prompt 去重约束；含分析文字的列表或普通文字仍可能重复；尚未做语义级正文裁剪；
-6. 重复股票行已保留展示顺序并支持序号引用；但同一 symbol 的多个行无法区分具体是哪一条记录；
-7. 生产级双读/回滚演练；本地备份恢复演练已完成；
-8. 记忆评测集与自动激活校准。
+1. 自动激活覆盖 `tool_display`、全局封闭 typed，以及 tool/entity/精确 condition 作用域的 `response_style/output_format` 例外；`safe_auto_judge` 是可选边界复核；condition 仍不支持语义匹配；scope hint 仍是词法推断，名称同义词不一定识别；
+2. 非自动候选没有前端入口，只能由运维 API 处理；TTL 已清理过期候选；
+3. 展示块已移除 Markdown 表格和纯行标签列表，并增加 prompt 去重约束；含分析文字的列表或普通文字仍可能重复；尚未做语义级正文裁剪；
+4. 重复股票行已保留展示顺序并支持序号引用；但同一 symbol 的多个行无法区分具体是哪一条记录；
+5. 向量候选目前按 owner 的 active 集合精确计算 cosine，HNSW 索引尚未接入 ANN 查询；跨 owner 或其他大规模向量检索未验收；
+6. 生产级双读/回滚演练；本地备份恢复演练已完成；
+7. 记忆评测集与自动激活校准；中文语义召回的离线质量评测尚未建立。
 
 ## 当前数据字段
 
@@ -182,10 +212,11 @@ status, management_revision,
 source_kind, source_quote, content_hash,
 supersedes_memory_id, supersedes_revision,
 candidate_action, activation_kind, activation_reason,
-candidate_expires_at, use_count, last_used_at
+candidate_expires_at, use_count, last_used_at,
+embedding, embedding_model, embedding_source_hash, embedding_updated_at
 ```
 
-`revision` 继续作为有效内容版本；`management_revision` 记录使用等管理变更，当前不会影响 fingerprint。`use_count`/`last_used_at` 记录被回答实际使用的次数和最近时间。
+`revision` 继续作为有效内容版本；`management_revision` 记录使用、向量回填等管理变更，当前不会影响 fingerprint。`use_count`/`last_used_at` 记录被回答实际使用的次数和最近时间。`embedding` 是 `public.vector(512)` 派生字段，可由源哈希和模型名回填。
 
 ## 写入路径
 
@@ -217,17 +248,18 @@ candidate_expires_at, use_count, last_used_at
 ```text
 owner + active + 未过期 + 未删除
 → 作用域可验证/待验证
-→ 自由文本词法匹配 + typed 偏好
+→ pgvector cosine（可用时）+ 自由文本词法匹配 + typed 偏好
+→ 作用域例外抑制
 → token 预算
 → 上下文
 ```
 
-`scope_verified=false` 表示当前工具/意图尚未确定，模型只能把它当作候选，不能当作全局偏好。
+`scope_verified=false` 表示当前工具/意图尚未确定，模型只能把它当作候选，不能当作全局偏好。向量相似度只调整召回和排序，不改变作用域验证、有效期或 owner 隔离。embedding 模型不可用时自动退回纯词法检索。
 
 ## 下一步
 
 1. 运行 `safe_auto_judge_shadow` 校准，评估边界 Judge 的误放行率；
 2. 后台候选运维的批量审计与权限边界；
-3. 接入 pgvector 混合检索与中文评测；
+3. 建立中文记忆检索评测集，校准向量权重、相似度阈值和 HNSW ANN 路径；
 4. 展示块正文的硬性去重；
 5. 记忆评测集、自动激活校准和生产级回滚演练。

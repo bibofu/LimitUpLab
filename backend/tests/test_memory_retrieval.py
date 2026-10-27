@@ -3,6 +3,7 @@ from datetime import datetime, timezone
 from hashlib import sha256
 import json
 from types import SimpleNamespace
+from unittest.mock import Mock
 
 from app.agents.memory_commands import scope_hint_for_run
 
@@ -192,3 +193,21 @@ def test_context_excludes_original_control_text_and_unapproved_metadata():
     assert "source_user_message" not in result.items[0]
     assert "metadata" not in result.items[0]
     assert result.diagnostics["long_term_memory_tokens"] <= 1200
+
+
+def test_embedding_failure_falls_back_to_lexical_retrieval(monkeypatch):
+    import app.services.memory_embeddings as embeddings
+
+    monkeypatch.setenv("LIMITUPLAB_MEMORY_EMBEDDINGS", "on")
+    monkeypatch.setattr(
+        embeddings, "embed_query",
+        Mock(side_effect=embeddings.MemoryEmbeddingUnavailable("model_missing")),
+    )
+    repo = SnapshotRepository([
+        record("research:first_board", "research_context", "研究首板"),
+    ])
+    result = retrieve(repo)
+    assert [item["value"] for item in result.items] == ["研究首板"]
+    assert result.diagnostics["memory_vector_status"] == "unavailable"
+    assert result.diagnostics["memory_vector_hit_count"] == 0
+    assert repo.calls[0]["query_embedding"] is None

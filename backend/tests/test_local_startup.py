@@ -81,10 +81,62 @@ def test_existing_postgres_backend_and_refresh_worker_are_reused(monkeypatch):
     monkeypatch.setattr(launcher, "run_database_check", lambda *_: 0)
     monkeypatch.setattr(launcher, "probe", Mock(return_value=True))
     monkeypatch.setattr(launcher, "refresh_worker_running", Mock(return_value=True))
+    monkeypatch.setattr(launcher, "memory_embeddings_worker_running", Mock(return_value=True))
     monkeypatch.setattr(launcher, "wait_for", Mock(return_value=True))
     spawn = Mock()
     monkeypatch.setattr(launcher, "spawn_detached", spawn)
     assert launcher.main() == 0
+    spawn.assert_not_called()
+
+
+def test_embedding_worker_is_spawned_when_no_live_lease_exists(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["start_dev_detached.py", "--skip-data-check"])
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+    monkeypatch.setattr(launcher, "build_env", lambda: {"LIMITUPLAB_DATABASE_URL": "postgresql://"})
+    monkeypatch.setattr(launcher, "run_database_check", lambda *_: 0)
+    monkeypatch.setattr(launcher, "probe", Mock(return_value=True))
+    monkeypatch.setattr(launcher, "refresh_worker_running", Mock(return_value=True))
+    monkeypatch.setattr(launcher, "memory_embeddings_worker_running", Mock(return_value=False))
+    monkeypatch.setattr(launcher, "wait_for", Mock(return_value=True))
+    spawn = Mock()
+    monkeypatch.setattr(launcher, "spawn_detached", spawn)
+    assert launcher.main() == 0
+    spawn.assert_called_once()
+    assert "scripts/run_memory_embeddings.py" in spawn.call_args.args[0]
+
+
+def test_embedding_worker_is_skipped_when_disabled(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["start_dev_detached.py", "--skip-data-check"])
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+    monkeypatch.setattr(launcher, "build_env", lambda: {
+        "LIMITUPLAB_DATABASE_URL": "postgresql://",
+        "LIMITUPLAB_MEMORY_EMBEDDINGS": "off",
+    })
+    monkeypatch.setattr(launcher, "run_database_check", lambda *_: 0)
+    monkeypatch.setattr(launcher, "probe", Mock(return_value=True))
+    monkeypatch.setattr(launcher, "refresh_worker_running", Mock(return_value=True))
+    embedding_check = Mock()
+    monkeypatch.setattr(launcher, "memory_embeddings_worker_running", embedding_check)
+    monkeypatch.setattr(launcher, "wait_for", Mock(return_value=True))
+    spawn = Mock()
+    monkeypatch.setattr(launcher, "spawn_detached", spawn)
+    assert launcher.main() == 0
+    embedding_check.assert_not_called()
+    spawn.assert_not_called()
+
+
+def test_failed_embedding_worker_lease_check_aborts_startup(monkeypatch):
+    monkeypatch.setattr(sys, "argv", ["start_dev_detached.py", "--skip-data-check"])
+    monkeypatch.setattr(Path, "exists", lambda self: True)
+    monkeypatch.setattr(launcher, "build_env", lambda: {"LIMITUPLAB_DATABASE_URL": "postgresql://"})
+    monkeypatch.setattr(launcher, "run_database_check", lambda *_: 0)
+    monkeypatch.setattr(launcher, "probe", Mock(return_value=True))
+    monkeypatch.setattr(launcher, "refresh_worker_running", Mock(return_value=True))
+    monkeypatch.setattr(launcher, "memory_embeddings_worker_running",
+                        Mock(side_effect=RuntimeError("Cannot check PostgreSQL embedding worker lease")))
+    spawn = Mock()
+    monkeypatch.setattr(launcher, "spawn_detached", spawn)
+    assert launcher.main() == 1
     spawn.assert_not_called()
 
 

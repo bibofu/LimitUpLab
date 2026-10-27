@@ -30,6 +30,8 @@ REFRESH_LOG = BACKEND / "recommendation_refresh.log"
 REFRESH_ERR = BACKEND / "recommendation_refresh.err.log"
 MEMORY_LOG = BACKEND / "memory_extraction.log"
 MEMORY_ERR = BACKEND / "memory_extraction.err.log"
+EMBEDDING_LOG = BACKEND / "memory_embeddings.log"
+EMBEDDING_ERR = BACKEND / "memory_embeddings.err.log"
 
 
 def main() -> int:
@@ -145,6 +147,29 @@ def main() -> int:
             )
             memory_worker_started = True
 
+    embeddings_enabled = (env.get("LIMITUPLAB_MEMORY_EMBEDDINGS") or "on").strip().lower() not in {
+        "0", "false", "off", "no",
+    }
+    embedding_worker_started = False
+    if embeddings_enabled:
+        try:
+            embedding_running = memory_embeddings_worker_running(backend_python, env)
+        except RuntimeError as error:
+            print(str(error), file=sys.stderr)
+            return 1
+        if not embedding_running:
+            spawn_detached(
+                [
+                    str(backend_python),
+                    "scripts/run_memory_embeddings.py",
+                ],
+                cwd=BACKEND,
+                stdout_path=EMBEDDING_LOG,
+                stderr_path=EMBEDDING_ERR,
+                env=env,
+            )
+            embedding_worker_started = True
+
     backend_ok = wait_for("http://127.0.0.1:8001/ready", seconds=12,
                           expected_database=expected_database)
     frontend_ok = wait_for("http://127.0.0.1:5173/", seconds=12)
@@ -162,6 +187,11 @@ def main() -> int:
         print(f"Memory extraction worker: {'started' if memory_worker_started else 'already running'}"
               f" ({memory_mode})")
         print(f"Memory extraction log: {MEMORY_LOG}")
+    if not embeddings_enabled:
+        print("Memory embedding worker: disabled")
+    else:
+        print(f"Memory embedding worker: {'started' if embedding_worker_started else 'already running'}")
+        print(f"Memory embedding log: {EMBEDDING_LOG}")
     return 0 if backend_ok and frontend_ok else 1
 
 
@@ -221,6 +251,22 @@ def memory_extraction_worker_running(backend_python: Path, env: dict[str, str]) 
     )
     if result.returncode not in {0, 3}:
         raise RuntimeError("Cannot check PostgreSQL memory worker lease; startup aborted")
+    return result.returncode == 0
+
+
+def memory_embeddings_worker_running(backend_python: Path, env: dict[str, str]) -> bool:
+    """Read the embedding worker's PostgreSQL lease before starting a duplicate."""
+
+    if not env.get("LIMITUPLAB_DATABASE_URL", "").strip():
+        raise RuntimeError("LIMITUPLAB_DATABASE_URL is required")
+    result = subprocess.run(
+        [str(backend_python), "-c",
+         "import sys; from app.services.runtime_coordination import LeaseStore; "
+         "sys.exit(0 if LeaseStore().live('job:memory-embeddings') else 3)"],
+        cwd=str(BACKEND), env=env, capture_output=True, timeout=20,
+    )
+    if result.returncode not in {0, 3}:
+        raise RuntimeError("Cannot check PostgreSQL embedding worker lease; startup aborted")
     return result.returncode == 0
 
 

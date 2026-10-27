@@ -1,7 +1,9 @@
-"""Owner-scoped, bounded long-term memory retrieval without embeddings.
+"""Owner-scoped, bounded long-term memory retrieval with optional local embeddings.
 
-The result is ephemeral model input. Only its revision/fingerprint may be stored
-in graph state, never its values. Read a fresh snapshot before each model call.
+Lexical scoring stays authoritative for exact keys; pgvector cosine similarity
+widens recall without overriding scope or validity filters. The result is
+ephemeral model input. Only its revision/fingerprint may be stored in graph
+state, never its values. Read a fresh snapshot before each model call.
 """
 
 from __future__ import annotations
@@ -119,13 +121,19 @@ def _rank(item: dict, query: str, exact_keys: set | None, topics: set | None) ->
     matches = sum(topic in query for topic in item_topics if topic)
     if topics:
         matches += len(item_topics & topics) * 2
+    vector_score = 0
+    distance = item.get("vector_distance")
+    if isinstance(distance, (int, float)) and 0 <= distance <= 2:
+        similarity = max(0.0, 1.0 - float(distance))
+        if similarity >= 0.25:
+            vector_score = int(round(similarity * 12))
     if item.get("memory_type") == "preference":
-        return 20 + matches + content_matches * 3
+        return 20 + matches + content_matches * 3 + vector_score
     if key and key in query:
         matches += 3
-    if not item_topics and not content_matches:
+    if not item_topics and not content_matches and not vector_score:
         return 0
-    return matches * 10 + content_matches * 3
+    return matches * 10 + content_matches * 3 + vector_score
 
 
 def retrieve_memories(
@@ -147,8 +155,25 @@ def retrieve_memories(
     requested = tuple(dict.fromkeys(kind for kind in memory_types if kind in MEMORY_TYPES
                                    and (kind != "research_archive" or allow_archives)))
     clock = _datetime(now) if now is not None else None
-    snapshot = repository.read_context(owner_id=owner_id, memory_types=requested,
-                                       exact_keys=exact_keys, topics=topics, limit=100, now=clock)
+    query_embedding = None
+    vector_status = "disabled"
+    from app.services.memory_embeddings import (
+        MemoryEmbeddingUnavailable,
+        embed_query,
+        embeddings_enabled,
+    )
+
+    if embeddings_enabled():
+        try:
+            query_embedding = embed_query(query)
+            vector_status = "ready"
+        except MemoryEmbeddingUnavailable:
+            vector_status = "unavailable"
+    snapshot = repository.read_context(
+        owner_id=owner_id, memory_types=requested,
+        exact_keys=exact_keys, topics=topics, limit=100, now=clock,
+        query_embedding=query_embedding,
+    )
     clock = _datetime(snapshot.get("as_of")) or clock
     if clock is None:
         raise ValueError("Memory repository must provide its snapshot time")
@@ -207,6 +232,10 @@ def retrieve_memories(
                 "canonical_key": item.get("canonical_key"),
                 "structured": item.get("structured", {}),
                 "scope_verified": verified,
+                "vector_similarity": (
+                    round(max(0.0, 1.0 - float(item["vector_distance"])), 4)
+                    if isinstance(item.get("vector_distance"), (int, float)) else None
+                ),
                 "revision": int(item.get("revision", 0)), "expires_at": expires,
                 "source_run_id": item.get("source_run_id"), "current_market_evidence": False,
                 "historical": kind == "research_archive"}
@@ -262,6 +291,10 @@ def retrieve_memories(
         "memory_token_budget": max_tokens, "memory_candidate_count": len(candidates),
         "memory_budget_omitted_count": budget_omitted, "memory_rejected_count": rejected,
         "memory_exception_suppressed_count": exception_suppressed,
+        "memory_vector_status": vector_status,
+        "memory_vector_hit_count": sum(
+            1 for item in selected if item.get("vector_similarity") is not None
+        ),
         "memory_owner_revision": revision, "memory_context_fingerprint": fingerprint,
         "memory_dependency_count": len(dependencies),
         "memory_retrieval_mode": "typed_exact_topic_v1",

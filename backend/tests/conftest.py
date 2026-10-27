@@ -21,6 +21,8 @@ os.environ["LIMITUPLAB_ENV_FILE"] = str(_test_root / "offline-only.env")
 os.environ["LIMITUPLAB_DATABASE_URL"] = "postgresql+psycopg://invalid.invalid/collection_has_no_database"
 os.environ.pop("LIMITUPLAB_DATABASE_PATH", None)
 os.environ["LIMITUPLAB_LLM_ENABLED"] = "false"
+# Offline tests must not download or load an embedding model.
+os.environ["LIMITUPLAB_MEMORY_EMBEDDINGS"] = "off"
 
 
 @pytest.fixture(autouse=True)
