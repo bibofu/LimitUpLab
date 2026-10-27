@@ -25,6 +25,7 @@ from app.services.memory_extraction import (
     EXTRACTOR_VERSION,
     MemoryCandidateDraft,
     MemoryExtractionWorker,
+    candidate_ttl_days,
     enqueue_memory_extraction_in_connection,
 )
 
@@ -58,6 +59,15 @@ def draft(**changes):
     }
     value.update(changes)
     return value
+
+
+def test_candidate_ttl_environment_is_bounded(monkeypatch):
+    monkeypatch.setenv("LIMITUPLAB_MEMORY_CANDIDATE_TTL_DAYS", "7")
+    assert candidate_ttl_days() == 7
+    monkeypatch.setenv("LIMITUPLAB_MEMORY_CANDIDATE_TTL_DAYS", "0")
+    assert candidate_ttl_days() == 30
+    monkeypatch.setenv("LIMITUPLAB_MEMORY_CANDIDATE_TTL_DAYS", "abc")
+    assert candidate_ttl_days() == 30
 
 
 def test_tool_display_canonical_key_uses_the_public_tool_identity():

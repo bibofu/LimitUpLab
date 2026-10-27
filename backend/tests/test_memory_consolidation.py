@@ -5,7 +5,7 @@ from uuid import uuid4
 
 import pytest
 
-from app.database import connect
+from app.database import begin_write, connect
 from app.memory_models import MemoryWrite
 from app.repositories.long_term_memory_repository import LongTermMemoryRepository, MemoryNotFound
 from app.services.memory_retrieval import retrieve_memories
@@ -275,6 +275,37 @@ def test_global_setting_added_later_links_existing_scoped_exception(postgresql_d
             WHERE owner_id=? AND from_memory_id=? AND to_memory_id=?""",
             (user, scoped.current.memory_id, global_setting.current.memory_id)).fetchone()
     assert relation["relation"] == "exception_to"
+
+
+def test_candidate_ttl_is_set_hidden_and_cleared_on_expiry(postgresql_database):
+    repository = LongTermMemoryRepository()
+    user = owner()
+    decision = repository.consolidate_candidate(
+        user, display_memory(), "ttl-candidate", candidate_ttl_days=30,
+    )
+    candidate = repository.get(user, decision["candidate_id"], include_inactive=True)
+    assert candidate.candidate_expires_at is not None
+    with closing(connect()) as db:
+        begin_write(db)
+        db.execute("""UPDATE long_term_memories SET candidate_expires_at=clock_timestamp()-interval '1 second'
+            WHERE memory_id=?""", (candidate.memory_id,))
+        db.commit()
+    assert repository.list_candidates(user) == []
+    assert repository.expire_candidates() >= 1
+    expired = repository.get(user, candidate.memory_id, include_inactive=True)
+    assert expired.status == "expired"
+    assert expired.value is None
+    assert expired.candidate_expires_at is None
+    assert repository.expire_candidates() == 0
+
+
+def test_confirming_a_candidate_clears_its_review_expiry(postgresql_database):
+    repository = LongTermMemoryRepository()
+    user = owner()
+    decision = repository.consolidate_candidate(user, display_memory(), "ttl-confirm")
+    confirmed = repository.confirm_candidate(user, decision["candidate_id"], "ttl-confirm-op")
+    assert confirmed.current.status == "active"
+    assert confirmed.current.candidate_expires_at is None
 
 
 def test_same_key_can_coexist_across_scopes_instead_of_overwriting(postgresql_database):

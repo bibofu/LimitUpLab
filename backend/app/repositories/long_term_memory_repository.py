@@ -380,7 +380,7 @@ class LongTermMemoryRepository:
                     metadata_json=?,scope_json=?,scope_key=?,canonical_key=?,structured_json=?,
                     source_quote=?,content_hash=?,expires_at=?,source_run_id=?,source_user_message=?,
                     status='active',source_kind='explicit',candidate_action='upsert',
-                    activation_kind='manual',activation_reason=NULL,
+                    activation_kind='manual',activation_reason=NULL,candidate_expires_at=NULL,
                     deleted_at=NULL,supersedes_memory_id=NULL,supersedes_revision=NULL,
                     revision=revision+1,updated_at=clock_timestamp()
                     WHERE owner_id=? AND memory_id=? AND revision=?""",
@@ -402,6 +402,7 @@ class LongTermMemoryRepository:
 
     def consolidate_candidate(
         self, owner_id, write, operation_id, *, source_kind="auto", action="upsert",
+        candidate_ttl_days=30,
     ):
         """Merge one automatic proposal with the active identity and open candidate.
 
@@ -419,6 +420,8 @@ class LongTermMemoryRepository:
         )
         if action not in {"upsert", "delete"}:
             raise ValueError("Unsupported candidate action")
+        if not isinstance(candidate_ttl_days, int) or not 1 <= candidate_ttl_days <= 365:
+            raise ValueError("Candidate TTL must be between 1 and 365 days")
         write = MemoryWrite.model_validate(write)
         if action == "upsert":
             write = validate_memory_write(write, owner_id=owner_id, source="agent")
@@ -501,13 +504,15 @@ class LongTermMemoryRepository:
                      metadata_json,scope_json,scope_key,canonical_key,structured_json,
                      source_quote,content_hash,expires_at,source_run_id,source_user_message,
                      scope_type,status,source_kind,candidate_action,
-                     supersedes_memory_id,supersedes_revision)
-                    VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,'candidate',?,'delete',?,?)""",
+                     candidate_expires_at,supersedes_memory_id,supersedes_revision)
+                    VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,'candidate',?,'delete',
+                           clock_timestamp()+? * interval '1 day',?,?)""",
                     (memory_id, owner_id, write.memory_type, write.key, write.value,
                      _encode(write.topics), _encode(write.metadata), scope_json, scope_key,
                      canonical_key, "{}", write.source_quote, _content_hash(write.value),
                      write.expires_at, write.source_run_id, write.source_user_message,
-                     write.scope_type, source_kind, target_id, target_revision))
+                     write.scope_type, source_kind, candidate_ttl_days,
+                     target_id, target_revision))
                 if replaced_candidate is not None:
                     self._relation(db, owner_id, memory_id, replaced_candidate, "supersedes",
                                    "deletion proposal replaced an older candidate")
@@ -562,14 +567,15 @@ class LongTermMemoryRepository:
                 (memory_id,owner_id,memory_type,memory_key,revision,value,topics_json,metadata_json,
                  scope_json,scope_key,canonical_key,structured_json,source_quote,content_hash,
                  expires_at,source_run_id,source_user_message,scope_type,status,source_kind,
-                 candidate_action,supersedes_memory_id,supersedes_revision)
-                VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,'candidate',?,'upsert',?,?)""",
+                 candidate_action,candidate_expires_at,supersedes_memory_id,supersedes_revision)
+                VALUES(?,?,?,?,1,?,?,?,?,?,?,?,?,?,?,?,?,?,'candidate',?,'upsert',
+                       clock_timestamp()+? * interval '1 day',?,?)""",
                 (memory_id, owner_id, write.memory_type, write.key, write.value,
                  _encode(write.topics), _encode(write.metadata), scope_json, scope_key,
                  canonical_key, _encode(write.structured), write.source_quote,
                  _content_hash(write.value), write.expires_at, write.source_run_id,
                  write.source_user_message, write.scope_type, source_kind,
-                 target_id, target_revision))
+                 candidate_ttl_days, target_id, target_revision))
             if replaced_candidate is not None:
                 self._relation(db, owner_id, memory_id, replaced_candidate, "supersedes",
                                "newer automatic candidate replaced an older proposal")
@@ -627,9 +633,33 @@ class LongTermMemoryRepository:
         with self._connection(readonly=True) as db:
             rows = db.execute("""SELECT *,COALESCE(expires_at<=clock_timestamp(),FALSE) AS expired
                 FROM long_term_memories WHERE owner_id=? AND status='candidate'
-                AND deleted_at IS NULL ORDER BY created_at DESC,memory_id LIMIT ?""",
+                AND deleted_at IS NULL
+                AND (candidate_expires_at IS NULL OR candidate_expires_at>clock_timestamp())
+                ORDER BY created_at DESC,memory_id LIMIT ?""",
                 (owner_id, max(1, min(limit, 200)))).fetchall()
             return [_record(row).model_dump(mode="json") for row in rows]
+
+    def expire_candidates(self, *, limit=200):
+        """Clear and tombstone candidates whose review window has elapsed."""
+
+        with self._connection() as db:
+            begin_write(db)
+            rows = db.execute("""WITH expired AS (
+                SELECT memory_id FROM long_term_memories
+                WHERE status='candidate' AND candidate_expires_at IS NOT NULL
+                  AND candidate_expires_at<=clock_timestamp()
+                ORDER BY candidate_expires_at LIMIT ? FOR UPDATE SKIP LOCKED
+            )
+            UPDATE long_term_memories AS memory
+            SET value=NULL,topics_json='[]',metadata_json='{}',structured_json='{}',
+                source_quote=NULL,source_run_id=NULL,source_user_message='',
+                content_hash=NULL,expires_at=NULL,candidate_expires_at=NULL,
+                status='expired',deleted_at=clock_timestamp(),
+                updated_at=clock_timestamp(),revision=memory.revision+1
+            FROM expired WHERE memory.memory_id=expired.memory_id
+            RETURNING memory.memory_id""", (max(1, min(limit, 500)),)).fetchall()
+            db.commit()
+            return len(rows)
 
     def confirm_candidate(
         self, owner_id, memory_id, operation_id, *,
@@ -685,7 +715,7 @@ class LongTermMemoryRepository:
                         metadata_json='{}',structured_json='{}',source_quote=NULL,
                         source_run_id=NULL,source_user_message='',expires_at=NULL,
                         status='deleted',deleted_at=clock_timestamp(),
-                        activation_kind=?,activation_reason=?,
+                        activation_kind=?,activation_reason=?,candidate_expires_at=NULL,
                         updated_at=clock_timestamp(),revision=revision+1
                         WHERE owner_id=? AND memory_id=? AND revision=? AND status='candidate'""",
                         (activation_kind, activation_reason,
@@ -721,7 +751,7 @@ class LongTermMemoryRepository:
                         "An active memory already exists for this identity; refresh candidates"
                     )
             db.execute("""UPDATE long_term_memories SET status='active',
-                activation_kind=?,activation_reason=?,
+                activation_kind=?,activation_reason=?,candidate_expires_at=NULL,
                 revision=revision+1,updated_at=clock_timestamp()
                 WHERE owner_id=? AND memory_id=? AND revision=? AND status='candidate'""",
                 (activation_kind, activation_reason, owner_id, memory_id, row["revision"]))
@@ -746,9 +776,9 @@ class LongTermMemoryRepository:
                 raise MemoryConflict("Candidate revision changed; reload the current record")
             db.execute("""UPDATE long_term_memories SET value=NULL,topics_json='[]',
                 metadata_json='{}',structured_json='{}',source_quote=NULL,
-                source_user_message='',expires_at=NULL,status='revoked',
-                deleted_at=clock_timestamp(),updated_at=clock_timestamp(),
-                revision=revision+1
+                source_user_message='',expires_at=NULL,candidate_expires_at=NULL,
+                status='revoked',deleted_at=clock_timestamp(),
+                updated_at=clock_timestamp(),revision=revision+1
                 WHERE owner_id=? AND memory_id=? AND revision=?""",
                 (owner_id, memory_id, expected_revision))
             return self._finish(

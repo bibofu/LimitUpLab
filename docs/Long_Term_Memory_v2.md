@@ -24,6 +24,10 @@
   - 增加 `activation_kind=none|manual|safe_auto` 和 `activation_reason`；
   - 旧的非候选记忆回填为 manual；
   - 自动激活只由 `safe_auto` 策略写入。
+- 迁移 `0013_candidate_ttl`：
+  - 候选增加 `candidate_expires_at`；
+  - 旧候选按 `created_at + 30 days` 回填；
+  - 未确认候选默认 30 天过期，worker 每次运行时清理并清空正文。
 - 自由文本偏好：
   - `preference` / `research_context` 支持 `preference:`、`tool_display:`、`research:` 前缀；
   - 保留 typed 设置（回答详略、展示格式、研究主题）的封闭值校验；
@@ -84,6 +88,9 @@
   - `GET .../candidates` 列出待确认候选；
   - 前端不展示记忆候选、确认、忽略或管理入口；长期记忆只作为问答上下文使用；
   - 非自动候选只通过 owner-scoped API 供后台/运维流程处理，不进入用户界面；
+  - 未确认候选默认 TTL 30 天，可通过 `LIMITUPLAB_MEMORY_CANDIDATE_TTL_DAYS` 调整；
+  - worker 每次运行先清理过期候选，清空正文并标记 expired；
+  - 过期候选从 `GET /candidates` 隐藏，确认时清空 `candidate_expires_at`；
   - `safe_auto` 只自动激活低风险 ADD：
     - `tool_display:*`；
     - 全局封闭 typed 设置 `response_style` / `output_format` / `research_topic`；
@@ -114,6 +121,7 @@
   - `safe_auto` 验收：真实 LLM 从“以后展示龙虎榜只显示股票名称”提取候选，在 `safe_auto` 模式下直接 active；`activation_kind=safe_auto`、候选队列为空、worker 结果记录自动激活 ID；
   - typed 自动激活验收：模型输出的 `structured.style/display_format` 与 dotted key 被规范化为 `response_style/output_format` 封闭值；全局“回答简洁”、tool-scoped“分析财报时详细”和 entity-scoped“分析600519时详细”均自动激活，scoped 版本分别写入 tool/symbol 作用域及 `exception_to`（存在 global 时）。
   - 运行时 scope 验收：真实 Graph 在“展示最新的龙虎榜”问题中把 scoped tool 记忆标记为 `scope_verified=true`，而不是只在单元测试中验证。
+  - candidate TTL 验收：候选写入 30 天 TTL，过期为 expired、正文清空、从候选 API 隐藏；确认后 active 的 `candidate_expires_at` 为空。
 
 ## 尚未落地
 
@@ -121,7 +129,7 @@
 
 1. pgvector 语义检索与同义改写召回；
 2. 自动激活覆盖 `tool_display`、全局封闭 typed，以及 tool/entity 作用域的 `response_style/output_format` 例外；condition 作用域和边界 Judge 尚未接入；scope hint 仍是词法推断，名称同义词不一定识别；
-3. 非自动候选没有前端入口，也没有 TTL/清理任务；需要运维 API 处理；
+3. 非自动候选没有前端入口，只能由运维 API 处理；TTL 已清理过期候选；
 4. `management_revision` 的写入方（候选、使用统计、embedding 回填）尚未接入；
 5. 展示块目前只抑制 Markdown 表格；模型正文中的列表或普通文字仍可能与展示块重复；
 6. 只有 `ordered_symbols` 唯一时才能用展示块解析“第二只”；重复股票的榜单仍不可按序号引用；
@@ -138,7 +146,8 @@ canonical_key, structured_json,
 status, management_revision,
 source_kind, source_quote, content_hash,
 supersedes_memory_id, supersedes_revision,
-candidate_action, activation_kind, activation_reason
+candidate_action, activation_kind, activation_reason,
+candidate_expires_at
 ```
 
 `revision` 继续作为有效内容版本；`management_revision` 预留给候选、使用统计和 embedding 回填，当前不会影响 fingerprint。
@@ -183,7 +192,7 @@ owner + active + 未过期 + 未删除
 ## 下一步
 
 1. 将安全自动激活扩展到 condition scoped 例外；
-2. 增加非自动候选 TTL、清理任务和后台运维接口；
+2. 增加后台候选运维接口；
 3. 接入 pgvector 混合检索与中文评测；
 4. `management_revision` 写入方和边界 Judge LLM；
 5. 抑制展示块与正文列表/文字的重复，并解析重复股票榜单的序号；

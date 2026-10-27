@@ -43,6 +43,8 @@ EXTRACTOR_VERSION = "memory-extractor-v2"
 AUTO_LEARN_ENV = "LIMITUPLAB_MEMORY_AUTO_LEARN"
 AUTO_LEARN_MODES = {"off", "candidate", "safe_auto", "safe_auto_shadow"}
 DEFAULT_AUTO_LEARN_MODE = "safe_auto"
+CANDIDATE_TTL_ENV = "LIMITUPLAB_MEMORY_CANDIDATE_TTL_DAYS"
+DEFAULT_CANDIDATE_TTL_DAYS = 30
 JOB_LEASE_SECONDS = 300
 MAX_ATTEMPTS = 3
 RETRY_DELAY_SECONDS = 60
@@ -189,6 +191,15 @@ class MemoryCandidateDraft(BaseModel):
 def auto_learn_mode() -> str:
     raw = (os.getenv(AUTO_LEARN_ENV) or DEFAULT_AUTO_LEARN_MODE).strip().lower()
     return raw if raw in AUTO_LEARN_MODES else DEFAULT_AUTO_LEARN_MODE
+
+
+def candidate_ttl_days() -> int:
+    raw = (os.getenv(CANDIDATE_TTL_ENV) or str(DEFAULT_CANDIDATE_TTL_DAYS)).strip()
+    try:
+        value = int(raw)
+    except ValueError:
+        return DEFAULT_CANDIDATE_TTL_DAYS
+    return value if 1 <= value <= 365 else DEFAULT_CANDIDATE_TTL_DAYS
 
 
 def enqueue_memory_extraction_in_connection(
@@ -398,10 +409,14 @@ class MemoryExtractionWorker:
         self.database_url = database_url
         self.provider = provider or get_llm_provider()
         self.worker_id = worker_id or "memory-worker-" + uuid4().hex[:12]
+        self.last_expired_candidates = 0
 
     def run_once(self, *, limit: int = 5) -> int:
         if auto_learn_mode() == "off":
             return 0
+        self.last_expired_candidates = LongTermMemoryRepository(
+            self.database_url,
+        ).expire_candidates()
         processed = 0
         for _ in range(max(1, min(limit, 50))):
             job = self._claim()
@@ -467,6 +482,7 @@ class MemoryExtractionWorker:
                 result = repository.consolidate_candidate(
                     job["owner_id"], write, f"{job['job_id']}:candidate:{index}",
                     action=candidate.candidate_action,
+                    candidate_ttl_days=candidate_ttl_days(),
                 )
                 decision = result["decision"]
                 decisions[decision] = decisions.get(decision, 0) + 1
