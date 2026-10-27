@@ -612,26 +612,6 @@ export interface AgentMemoryCandidatesResponse {
   items: AgentMemoryRecord[];
 }
 
-export interface AgentMemoryCandidateContext {
-  candidate: AgentMemoryRecord;
-  target: AgentMemoryRecord | null;
-  exception_parent: AgentMemoryRecord | null;
-  stale: boolean;
-}
-
-export interface AgentMemoryCandidateGroup {
-  group_key: string;
-  memory_type: AgentMemoryType;
-  canonical_key: string;
-  active: AgentMemoryRecord[];
-  candidates: AgentMemoryCandidateContext[];
-  exception_relations: Array<{ from_memory_id: string; to_memory_id: string }>;
-}
-
-export interface AgentMemoryCandidateWorkbenchResponse {
-  groups: AgentMemoryCandidateGroup[];
-}
-
 export interface AgentMemoryMutationResult {
   current: AgentMemoryRecord;
   operation_revision: number;

@@ -7,7 +7,6 @@ import type {
   AgentChatRequest,
   AgentChatStreamEvent,
   AgentChatStreamResult,
-  AgentMemoryCandidateWorkbenchResponse,
   AgentMemoryCandidatesResponse,
   AgentMemoryMutationResult,
   AgentRunCommand,
@@ -362,14 +361,6 @@ export function deleteChatSession(sessionId: string) {
 export function fetchMemoryCandidates(limit = 50) {
   return request<AgentMemoryCandidatesResponse>(
     `/api/agents/chat/memories/candidates?limit=${limit}`,
-    { cache: "no-store" },
-  );
-}
-
-/** Group candidates with active targets and exception context for batch review. */
-export function fetchMemoryCandidateWorkbench(limit = 50) {
-  return request<AgentMemoryCandidateWorkbenchResponse>(
-    `/api/agents/chat/memories/candidates/workbench?limit=${limit}`,
     { cache: "no-store" },
   );
 }

@@ -76,14 +76,7 @@
   - `POST /api/agents/chat/memories/candidates/{id}/confirm` 显式激活；
   - `POST .../reject` 清空候选正文并标记 revoked；
   - `GET .../candidates` 列出待确认候选；
-  - `GET .../candidates/workbench` 按 `(memory_type, canonical_key)` 聚组，返回：
-    - 同组 active 记忆（global 与 scoped 例外）；
-    - 每个候选的被替换/删除目标快照；
-    - scoped 候选对应的全局父设置；
-    - 目标 revision 已变化的 stale 标记；
-  - 会话面板提供“冲突候选工作台”：集中展示现有设置、候选、替换/删除目标和例外关系；支持逐条确认/忽略，也支持多选批量操作；
-  - 批量操作逐条调用各自的 CAS + 幂等确认接口，不是跨身份原子事务；界面明确显示成功、失败和目标已变化数量；
-  - stale 候选禁用确认，仍可忽略，避免反复提交已失效目标；
+  - 会话面板提供“记忆候选”工作台：显示作用域、候选正文和逐字来源；更新候选标记“确认后替换现有记忆”；确认或忽略后更新列表，操作失败保留候选并给出可重试提示；
   - worker 命令：`python backend/scripts/run_memory_extraction.py --once`；
   - `LIMITUPLAB_MEMORY_AUTO_LEARN=off|candidate`；`safe_auto` 尚未实现。
 - 写入与删除：
@@ -98,15 +91,14 @@
   - 真实 DeepSeek 四问全部 `complete`；
   - 更新候选验收：已有展示偏好 + 新候选“显示代码和名称”，工作台显示“确认后替换现有记忆”；确认后旧记忆 superseded、新记忆 active，`memory_relations` 写入 `supersedes`，列表不再有候选；
   - 删除候选验收：对已有 `response_style` 生成 DELETE 候选，确认后目标与候选均进入 tombstone，active 列表为空；
-  - 例外关系验收：global `response_style=concise` + tool `stock_financials` `response_style=detailed`，财报 scope 命中时只召回 detailed，并记录 `exception_to` 关系；
-  - 冲突工作台验收：同组 active、替换目标、例外父设置、stale 标记均返回；批量确认跳过 stale 目标，逐条结果可见。
+  - 例外关系验收：global `response_style=concise` + tool `stock_financials` `response_style=detailed`，财报 scope 命中时只召回 detailed，并记录 `exception_to` 关系。
 
 ## 尚未落地
 
 以下能力明确未完成，不能对外宣称：
 
 1. pgvector 语义检索与同义改写召回；
-2. 批量审批目前逐条校验，不是跨多个记忆身份的单事务；
+2. 多条冲突候选的批量合并/冲突工作台尚未实现；
 3. `safe_auto` 自动激活尚未实现；当前候选必须显式确认；
 4. `management_revision` 的写入方（候选、使用统计、embedding 回填）尚未接入；
 5. 展示块目前只抑制 Markdown 表格；模型正文中的列表或普通文字仍可能与展示块重复；
@@ -165,7 +157,7 @@ owner + active + 未过期 + 未删除
 
 ## 下一步
 
-1. 跨身份原子批量审批与冲突合并建议；
+1. 多条冲突候选的批量合并/冲突工作台；
 2. 接入 pgvector 混合检索与中文评测；
 3. `management_revision` 写入方、`safe_auto` 低风险自动激活；
 4. 抑制展示块与正文列表/文字的重复，并解析重复股票榜单的序号；

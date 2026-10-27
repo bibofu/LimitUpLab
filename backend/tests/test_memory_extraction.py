@@ -255,57 +255,6 @@ def test_worker_creates_a_delete_candidate_against_an_existing_memory(
     assert LongTermMemoryRepository().list_active(owner) == []
 
 
-def test_candidate_workbench_groups_targets_exceptions_and_stale_state(postgresql_database):
-    owner = "visitor_" + "e" * 32
-    repository = LongTermMemoryRepository()
-    global_setting = repository.put(owner, MemoryWrite(
-        memory_type="preference", key="response_style", value="concise",
-        source_user_message="以后回答简洁",
-    ), "workbench-global")
-    repository.put(owner, MemoryWrite(
-        memory_type="preference", key="response_style", value="detailed",
-        scope_type="tool", scope={"tool_name": "stock_financials"},
-        source_user_message="看财报时详细一点",
-    ), "workbench-scoped")
-    update = repository.consolidate_candidate(owner, MemoryWrite(
-        memory_type="preference", key="response_style", value="balanced",
-        source_user_message="以后回答适中",
-    ), "workbench-update")
-    scoped_candidate = repository.consolidate_candidate(owner, MemoryWrite(
-        memory_type="preference", key="response_style", value="detailed",
-        scope_type="tool", scope={"tool_name": "stock_kline"},
-        source_user_message="看K线时详细一点",
-    ), "workbench-scoped-candidate")
-    with closing(connect()) as db:
-        begin_write(db)
-        db.execute("""UPDATE long_term_memories SET revision=revision+1
-            WHERE memory_id=?""", (global_setting.current.memory_id,))
-        db.commit()
-
-    app = FastAPI()
-    app.add_middleware(AnonymousVisitorMiddleware)
-    app.include_router(router, prefix="/api/agents")
-    with TestClient(app) as client:
-        client.cookies.set(SESSION_COOKIE_NAME, sign_visitor_owner_id(owner))
-        response = client.get("/api/agents/chat/memories/candidates/workbench")
-        assert response.status_code == 200, response.text
-        assert response.headers["cache-control"] == "private, no-store"
-        groups = response.json()["groups"]
-    assert len(groups) == 1
-    group = groups[0]
-    assert group["group_key"] == "preference:response_style"
-    assert len(group["active"]) == 2
-    assert len(group["candidates"]) == 2
-    contexts = {item["candidate"]["memory_id"]: item for item in group["candidates"]}
-    assert contexts[update["candidate_id"]]["target"]["memory_id"] == global_setting.current.memory_id
-    assert contexts[update["candidate_id"]]["stale"] is True
-    assert contexts[scoped_candidate["candidate_id"]]["target"] is None
-    assert contexts[scoped_candidate["candidate_id"]]["exception_parent"]["memory_id"] == (
-        global_setting.current.memory_id
-    )
-    assert group["exception_relations"]
-
-
 def test_worker_normalizes_tool_id_and_skips_low_confidence_candidates(postgresql_database, monkeypatch):
     monkeypatch.setenv("LIMITUPLAB_MEMORY_AUTO_LEARN", "candidate")
     owner, _, _, _ = seed_job()
