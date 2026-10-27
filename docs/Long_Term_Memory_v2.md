@@ -100,6 +100,7 @@
   - 前端不展示记忆候选、确认、忽略或管理入口；长期记忆只作为问答上下文使用；
   - 非自动候选只通过 owner-scoped API / 后台 CLI 供运维流程处理，不进入用户界面；
   - 运维 CLI：`python backend/scripts/review_memory_candidates.py --owner <owner> list|confirm|reject`；
+  - 健康检查：`python backend/scripts/check_memory_health.py --json`，检查重复 active identity、候选 TTL、legacy canonical、悬空关系、usage 计数和过期状态；
   - 未确认候选默认 TTL 30 天，可通过 `LIMITUPLAB_MEMORY_CANDIDATE_TTL_DAYS` 调整；
   - worker 每次运行先清理过期候选，清空正文并标记 expired；
   - 过期候选从 `GET /candidates` 隐藏，确认时清空 `candidate_expires_at`；
@@ -147,6 +148,7 @@
   - 重复榜单验收：三行展示块包含重复 symbol 时，`ordered_symbols` 保留重复顺序，`ordinal_resolvable=true`，reference 类型为 `display_block`。
   - candidate TTL 验收：候选写入 30 天 TTL，过期为 expired、正文清空、从候选 API 隐藏；确认后 active 的 `candidate_expires_at` 为空。
   - usage 验收：回答交付使用一条长期记忆后，`use_count=1`、`last_used_at` 写入、`management_revision` 增加，但内容 `revision` 不变。
+  - 健康检查验收：本地库返回 `ok=true`、`critical_issues=0`，并报告 active/candidate 数量。
   - safe_auto 校准验收：10 条 live 用例覆盖 tool/global/tool-exception/entity/topic/临时/delete/行情/交易/condition，结果为 TP=5、TN=5、FP=0、FN=0。
   - Judge 验收：真实 DeepSeek 对 `confidence=0.75` 的 condition 候选返回 `approve + low risk`；单元测试验证 Judge 只能复核 scoped 边界，全局 typed 和结构不合格候选不会进入 Judge。
 
