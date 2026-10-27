@@ -118,7 +118,7 @@
   - `safe_auto_judge` 仅对通过结构安全检查、但因置信度或条件稳定性被拒绝的 scoped typed/display 候选调用 Judge；
   - Judge 只能输出 approve/hold/reject，必须 `approve + low risk` 才生效，错误或非法输出一律 hold；
   - Judge 不能覆盖结构、作用域、目标或删除边界；激活记录 `activation_kind=safe_auto`，`activation_reason` 带 `judge_auto` 前缀；
-  - `safe_auto_judge_shadow` 只运行 Judge 并记录批准/拒绝，不写 active；
+  - `safe_auto_judge_shadow` 保留确定性 safe_auto 激活，只把边界 Judge 的批准/拒绝影子化，不让 Judge 写 active；
   - `result_json.auto_decisions` 记录 judge decision、risk、reason 和版本；
   - `judge_shadow_approved_ids` 单独记录影子批准候选；
 - 写入与删除：

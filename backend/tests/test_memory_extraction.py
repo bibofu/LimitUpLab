@@ -589,6 +589,27 @@ def test_worker_judge_activates_a_borderline_condition_candidate(
     assert provider.judge_calls == 1
 
 
+def test_worker_judge_shadow_still_activates_deterministic_safe_candidates(
+    postgresql_database, monkeypatch,
+):
+    monkeypatch.setenv("LIMITUPLAB_MEMORY_AUTO_LEARN", "safe_auto_judge_shadow")
+    owner, _, _, job_id = seed_job()
+    provider = JudgeCandidateProvider(
+        [draft()], {"decision": "approve", "risk": "low", "reason": "无关"},
+    )
+    assert MemoryExtractionWorker(provider=provider).run_once(limit=1) == 1
+
+    repository = LongTermMemoryRepository()
+    assert len(repository.list_active(owner)) == 1
+    assert repository.list_candidates(owner) == []
+    assert provider.judge_calls == 0
+    with closing(connect()) as db:
+        result = json.loads(db.execute(
+            "SELECT result_json FROM memory_extraction_jobs WHERE job_id=?", (job_id,),
+        ).fetchone()["result_json"])
+    assert len(result["auto_activated_ids"]) == 1
+
+
 def test_worker_judge_shadow_records_approval_without_activation(
     postgresql_database, monkeypatch,
 ):

@@ -529,7 +529,7 @@ class MemoryExtractionWorker:
                         "risk": evaluation.risk,
                     }
                     if evaluation.eligible:
-                        if mode in {"safe_auto_shadow", "safe_auto_judge_shadow"}:
+                        if mode == "safe_auto_shadow":
                             auto_shadow.append(audit)
                             auto_decisions.append({**audit, "outcome": "shadow"})
                         else:
