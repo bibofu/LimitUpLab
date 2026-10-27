@@ -2,8 +2,8 @@
 
 The extractor proposes candidates. This module decides whether a candidate is
 safe enough to activate without a human review screen. It allows structured
-tool-display additions and closed global typed settings; updates, deletes,
-free text, scoped typed values and ambiguous scopes remain review/operator work.
+tool-display additions, closed global typed settings and tool-scoped typed
+exceptions; updates, deletes, free text and ambiguous scopes remain review work.
 """
 
 from __future__ import annotations
@@ -16,6 +16,7 @@ from app.services.memory_display import COLUMN_LABELS, normalize_display_columns
 
 
 MIN_AUTO_CONFIDENCE = 0.9
+MIN_SCOPED_TYPED_CONFIDENCE = 0.85
 MAX_AUTO_DISPLAY_COLUMNS = 8
 PERSISTENCE_MARKERS = (
     "以后", "今后", "后续", "从此", "每次", "默认", "始终", "一直",
@@ -82,10 +83,12 @@ def evaluate_safe_auto_candidate(
     memory_type = getattr(candidate, "memory_type", None)
     if memory_type not in {"preference", "research_context"}:
         return _ineligible("unsupported_memory_type")
-    if float(getattr(candidate, "confidence", 0)) < MIN_AUTO_CONFIDENCE:
+    confidence = float(getattr(candidate, "confidence", 0))
+    stability = getattr(candidate, "stability", None)
+    if confidence < MIN_SCOPED_TYPED_CONFIDENCE:
         return _ineligible("low_confidence")
-    if getattr(candidate, "stability", None) not in {
-        "explicit_future", "explicit_correction",
+    if stability not in {
+        "explicit_future", "explicit_correction", "conditional_scope",
     }:
         return _ineligible("unstable_expression")
     quote = str(getattr(candidate, "source_quote", "") or "")
@@ -123,6 +126,10 @@ def evaluate_safe_auto_candidate(
             return _ineligible("too_many_display_columns")
         if any(column not in DISPLAY_COLUMN_IDS for column in columns):
             return _ineligible("unknown_display_column")
+        if confidence < MIN_AUTO_CONFIDENCE:
+            return _ineligible("low_confidence_for_display")
+        if stability not in {"explicit_future", "explicit_correction"}:
+            return _ineligible("unstable_display_expression")
         return SafeAutoDecision(
             True,
             ("structured_tool_display_add",),
@@ -133,17 +140,32 @@ def evaluate_safe_auto_candidate(
     allowed_values = TYPED_AUTO_VALUES.get((memory_type, key))
     if allowed_values is None:
         return _ineligible("unsupported_memory_identity")
-    if scope_type != "global" or scope:
-        return _ineligible("typed_setting_is_scoped")
+    if scope_type == "global":
+        if scope:
+            return _ineligible("typed_setting_has_scope_object")
+        if any(marker in message for marker in TYPED_SCOPE_MARKERS):
+            return _ineligible("typed_setting_has_unmapped_scope")
+        if confidence < MIN_AUTO_CONFIDENCE:
+            return _ineligible("low_confidence_for_global_typed")
+        if stability not in {"explicit_future", "explicit_correction"}:
+            return _ineligible("unstable_global_typed_expression")
+        scope_reason = f"typed_setting_add:{key}"
+    elif scope_type == "tool" and key in {"response_style", "output_format"}:
+        if not isinstance(scope, dict) or set(scope) != {"tool_name"}:
+            return _ineligible("ambiguous_typed_exception_scope")
+        tool = str(scope.get("tool_name") or "").strip()
+        if tool not in SAFE_AUTO_DISPLAY_TOOLS:
+            return _ineligible("unsupported_typed_exception_tool")
+        scope_reason = f"typed_exception_add:{key}:{tool}"
+    else:
+        return _ineligible("unsupported_typed_scope")
     if not isinstance(structured, dict) or structured:
         return _ineligible("typed_setting_has_extra_structure")
     if content not in allowed_values:
         return _ineligible("typed_setting_value_not_closed")
-    if any(marker in message for marker in TYPED_SCOPE_MARKERS):
-        return _ineligible("typed_setting_has_unmapped_scope")
     return SafeAutoDecision(
         True,
-        (f"typed_setting_add:{key}",),
+        (scope_reason,),
         "low",
         "safe_auto: closed typed setting add with explicit future intent",
     )

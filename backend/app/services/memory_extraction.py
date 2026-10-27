@@ -62,6 +62,20 @@ TYPED_FORMAT_VALUES = {
 TYPED_TOPIC_VALUES = {
     value: value for value in ("首板", "连板", "涨停", "炸板", "行业", "市场情绪")
 }
+TOOL_SCOPE_TERMS = {
+    "财报": "stock_financials", "财务": "stock_financials",
+    "k线": "stock_kline", "龙虎榜": "dragon_tiger_list",
+    "个股新闻": "stock_news", "新闻": "stock_news",
+    "公司资料": "stock_profile", "热股榜": "hot_stock_ranking",
+}
+
+
+def _tool_from_text(value: Any) -> str | None:
+    text = str(value or "").casefold()
+    for term, tool in TOOL_SCOPE_TERMS.items():
+        if term in text:
+            return tool
+    return None
 
 
 def _typed_value(value: Any, aliases: dict[str, str]) -> str | None:
@@ -85,7 +99,14 @@ def _typed_override(candidate: "MemoryCandidateDraft") -> tuple[str, str, str, s
         return None
     canonical = str(candidate.canonical_key or "").strip()
     canonical_key = _typed_canonical_key(canonical)
-    style_hint = structured.get("style") or structured.get("response_style")
+    nested_preference = structured.get("preference")
+    nested_preference = nested_preference if isinstance(nested_preference, dict) else {}
+    nested_research = structured.get("research_context")
+    nested_research = nested_research if isinstance(nested_research, dict) else {}
+    style_hint = (
+        structured.get("style") or structured.get("response_style")
+        or nested_preference.get("response_style")
+    )
     if style_hint is None and canonical_key == "response_style":
         style_hint = candidate.content_text
     style = _typed_value(style_hint, TYPED_STYLE_VALUES)
@@ -93,7 +114,7 @@ def _typed_override(candidate: "MemoryCandidateDraft") -> tuple[str, str, str, s
         return "preference", "response_style", style, candidate.scope_type
     format_hint = (
         structured.get("display_format") or structured.get("format")
-        or structured.get("output_format")
+        or structured.get("output_format") or nested_preference.get("output_format")
     )
     if format_hint is None and canonical_key == "output_format":
         format_hint = candidate.content_text
@@ -102,7 +123,7 @@ def _typed_override(candidate: "MemoryCandidateDraft") -> tuple[str, str, str, s
         return "preference", "output_format", output_format, candidate.scope_type
     topic_hint = (
         structured.get("filter") or structured.get("research_topic")
-        or structured.get("topic")
+        or structured.get("topic") or nested_research.get("research_topic")
     )
     if topic_hint is None and canonical_key == "research_topic":
         topic_hint = candidate.content_text
@@ -145,6 +166,12 @@ class MemoryCandidateDraft(BaseModel):
         if self.canonical_key and self.canonical_key.startswith("tool_display:"):
             label = self.canonical_key.split(":", 1)[1].strip()
             self.canonical_key = "tool_display:" + TOOL_NAME_ALIASES.get(label, label)
+        if self.candidate_action == "upsert" and self.scope_type == "condition":
+            condition = str(self.scope.get("condition") or "").strip()
+            tool = _tool_from_text(condition) or _tool_from_text(self.source_quote)
+            if tool:
+                self.scope_type = "tool"
+                self.scope = {"tool_name": tool}
         tool_name = str(self.scope.get("tool_name") or "").strip()
         if self.scope_type == "tool" and not tool_name:
             raise ValueError("Tool candidate requires scope.tool_name")

@@ -105,7 +105,7 @@ def test_closed_global_typed_setting_add_is_auto_eligible():
     ).eligible is True
 
 
-def test_typed_auto_requires_global_scope_closed_value_and_no_extra_structure():
+def test_typed_auto_accepts_tool_exceptions_and_rejects_ambiguous_scopes():
     message = "以后回答简洁一点"
     base = {
         "content_text": "concise",
@@ -122,11 +122,37 @@ def test_typed_auto_requires_global_scope_closed_value_and_no_extra_structure():
         message=message, key="response_style",
         candidate_changes={**base, "structured": {"style": "concise"}},
     ).eligible
-    assert not evaluate(
+    assert evaluate(
         message=message, key="response_style",
         candidate_changes={
             **base, "scope_type": "tool",
             "scope": {"tool_name": "stock_financials"},
+        },
+    ).eligible
+    assert evaluate(
+        message=message, key="response_style",
+        candidate_changes={
+            **base, "scope_type": "tool",
+            "scope": {"tool_name": "stock_financials"},
+            "confidence": 0.85, "stability": "conditional_scope",
+        },
+    ).eligible
+    assert not evaluate(
+        message=message, key="response_style",
+        candidate_changes={
+            **base, "scope_type": "condition",
+            "scope": {"condition": "分析财报时"},
+        },
+    ).eligible
+    assert not evaluate(
+        message=message, key="research_topic",
+        candidate_changes={
+            "memory_type": "research_context",
+            "content_text": "首板",
+            "scope_type": "tool",
+            "scope": {"tool_name": "stock_financials"},
+            "structured": {},
+            "source_quote": message,
         },
     ).eligible
     scoped_message = "以后分析财报时详细一点"

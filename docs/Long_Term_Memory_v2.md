@@ -83,11 +83,13 @@
   - 前端不展示记忆候选、确认、忽略或管理入口；长期记忆只作为问答上下文使用；
   - 非自动候选只通过 owner-scoped API 供后台/运维流程处理，不进入用户界面；
   - `safe_auto` 只自动激活低风险 ADD：
-    - `tool_display:*`，或全局封闭 typed 设置 `response_style` / `output_format` / `research_topic`；
+    - `tool_display:*`；
+    - 全局封闭 typed 设置 `response_style` / `output_format` / `research_topic`；
+    - 工具作用域的 `response_style` / `output_format` 例外；
     - 无 active/pending 目标；
-    - `confidence>=0.9` 且 `stability` 为明确未来/明确纠正；
+    - 默认 `confidence>=0.9` 且 `stability` 为明确未来/明确纠正；工具作用域 typed 例外允许 `conditional_scope` 且 `confidence>=0.85`；
     - tool scope 与 key 一致；
-    - `structured` 只包含已知 `display_columns`；
+    - `tool_display` 的 `structured` 只包含已知 `display_columns`；typed 设置 `structured` 必须为空；
     - `source_quote` 逐字出现在用户消息且包含持续表达；
     - UPDATE / DELETE / 自由文本 / 未知列 / 无目标冲突候选不自动激活；
   - 激活来源写入 `activation_kind=manual|safe_auto` 和 `activation_reason`；
@@ -108,14 +110,14 @@
   - 删除候选验收：对已有 `response_style` 生成 DELETE 候选，确认后目标与候选均进入 tombstone，active 列表为空；
   - 例外关系验收：global `response_style=concise` + tool `stock_financials` `response_style=detailed`，财报 scope 命中时只召回 detailed，并记录 `exception_to` 关系；
   - `safe_auto` 验收：真实 LLM 从“以后展示龙虎榜只显示股票名称”提取候选，在 `safe_auto` 模式下直接 active；`activation_kind=safe_auto`、候选队列为空、worker 结果记录自动激活 ID；
-  - typed 自动激活验收：模型输出的 `structured.style/display_format` 被规范化为 `response_style/output_format` 封闭值，全局 ADD 自动激活，scoped typed 保留候选。
+  - typed 自动激活验收：模型输出的 `structured.style/display_format` 与 dotted key 被规范化为 `response_style/output_format` 封闭值；全局“回答简洁”和 scoped“分析财报时详细”均自动激活，后者写入 `stock_financials` 作用域及 `exception_to`（存在 global 时）。
 
 ## 尚未落地
 
 以下能力明确未完成，不能对外宣称：
 
 1. pgvector 语义检索与同义改写召回；
-2. 自动激活覆盖 `tool_display` 与全局封闭 typed 的 ADD；scoped typed 例外和边界 Judge 尚未接入；
+2. 自动激活覆盖 `tool_display`、全局封闭 typed，以及工具作用域的 `response_style/output_format` 例外；entity/condition 作用域和边界 Judge 尚未接入；
 3. 非自动候选没有前端入口，也没有 TTL/清理任务；需要运维 API 处理；
 4. `management_revision` 的写入方（候选、使用统计、embedding 回填）尚未接入；
 5. 展示块目前只抑制 Markdown 表格；模型正文中的列表或普通文字仍可能与展示块重复；
@@ -158,7 +160,7 @@ candidate_action, activation_kind, activation_reason
 → Consolidator 对比 active / pending candidate
 → add / update / delete / noop / supersede
 → safe_auto 策略
-   → 低风险 tool_display / 封闭 typed global ADD：直接 active，activation_kind=safe_auto
+   → 低风险 tool_display / 封闭 typed ADD / tool-scoped typed 例外：直接 active，activation_kind=safe_auto
    → UPDATE / DELETE / 其他：status='candidate'
 → 非自动候选由后台/运维 API 处理，前端不展示
 ```
@@ -177,7 +179,7 @@ owner + active + 未过期 + 未删除
 
 ## 下一步
 
-1. 将安全自动激活扩展到 scoped typed 例外；
+1. 将安全自动激活扩展到 entity/condition scoped 例外；
 2. 增加非自动候选 TTL、清理任务和后台运维接口；
 3. 接入 pgvector 混合检索与中文评测；
 4. `management_revision` 写入方和边界 Judge LLM；

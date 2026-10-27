@@ -138,6 +138,19 @@ def test_model_typed_hints_are_normalized_to_closed_settings():
         "research_topic", "tool",
     )
 
+    conditional = MemoryCandidateDraft.model_validate({
+        **draft(),
+        "canonical_key": "preference.response_style",
+        "content_text": "detailed",
+        "scope_type": "condition",
+        "scope": {"condition": "分析财报时"},
+        "structured": {},
+        "source_quote": "以后分析财报时详细一点",
+    })
+    assert (conditional.canonical_key, conditional.scope_type, conditional.scope) == (
+        "response_style", "tool", {"tool_name": "stock_financials"},
+    )
+
 
 def seed_job(owner=None, message=MESSAGE):
     user = owner or "visitor_" + uuid4().hex
@@ -380,26 +393,41 @@ def test_worker_safe_auto_activates_a_closed_global_typed_add(
     assert repository.list_candidates(owner) == []
 
 
-def test_worker_safe_auto_does_not_activate_a_scoped_typed_setting(
+def test_worker_safe_auto_activates_a_tool_scoped_typed_exception(
     postgresql_database, monkeypatch,
 ):
     monkeypatch.setenv("LIMITUPLAB_MEMORY_AUTO_LEARN", "safe_auto")
     message = "以后分析财报时详细一点"
     owner, _, _, _ = seed_job(message=message)
+    global_setting = LongTermMemoryRepository().put(owner, MemoryWrite(
+        memory_type="preference", key="response_style", value="concise",
+        source_user_message="以后回答简洁",
+    ), "global-style-before-scoped-auto")
     scoped = draft(
         canonical_key="response_style",
         content_text="detailed",
         scope_type="tool",
         scope={"tool_name": "stock_financials"},
-        structured={},
+        structured={"preference": {"response_style": "detailed"}},
         source_quote=message,
-        stability="explicit_future",
+        confidence=0.85,
+        stability="conditional_scope",
     )
     assert MemoryExtractionWorker(provider=CandidateProvider([scoped])).run_once(limit=1) == 1
 
     repository = LongTermMemoryRepository()
-    assert repository.list_active(owner) == []
-    assert len(repository.list_candidates(owner)) == 1
+    active = repository.list_active(owner)
+    assert len(active) == 2
+    scoped_active = next(item for item in active if item["scope"])
+    assert (scoped_active["key"], scoped_active["value"]) == ("response_style", "detailed")
+    assert scoped_active["scope"] == {"tool_name": "stock_financials"}
+    assert scoped_active["activation_kind"] == "safe_auto"
+    assert repository.list_candidates(owner) == []
+    with closing(connect()) as db:
+        relation = db.execute("""SELECT relation FROM memory_relations
+            WHERE owner_id=? AND from_memory_id=? AND to_memory_id=?""",
+            (owner, scoped_active["memory_id"], global_setting.current.memory_id)).fetchone()
+    assert relation["relation"] == "exception_to"
 
 
 def test_worker_safe_auto_shadow_records_eligibility_without_activation(
